@@ -7,6 +7,7 @@
 
 pub mod db;
 pub mod provider;
+pub mod tools;
 pub mod trace;
 
 /// IPC 链路自检：核 → 壳 → WebView 的最小证明。

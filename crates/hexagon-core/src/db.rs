@@ -68,6 +68,25 @@ impl Db {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+
+    /// 项目内短 id：`{prefix}{n}`，n 按 prefix 单调递增（存 id_counters）。
+    pub fn next_id(&self, prefix: &str) -> Result<i64, DbError> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS id_counters (prefix TEXT PRIMARY KEY, n INTEGER NOT NULL)",
+            [],
+        )?;
+        self.conn.execute(
+            "INSERT INTO id_counters (prefix, n) VALUES (?1, 1)
+             ON CONFLICT(prefix) DO UPDATE SET n = n + 1",
+            [prefix],
+        )?;
+        let n: i64 = self.conn.query_row(
+            "SELECT n FROM id_counters WHERE prefix = ?1",
+            [prefix],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
