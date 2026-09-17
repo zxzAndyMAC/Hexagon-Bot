@@ -16,6 +16,7 @@ pub mod scenario;
 pub mod tools;
 pub mod trace;
 pub mod turn;
+pub mod usage;
 
 /// IPC 链路自检：核 → 壳 → WebView 的最小证明。
 pub fn ping() -> String {

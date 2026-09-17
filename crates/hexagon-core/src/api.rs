@@ -383,21 +383,19 @@ impl Workbench {
         Ok(rows)
     }
 
-    /// 用量：票 12 填账本，先给表读数。
+    /// 用量：账本多维汇总 + 项目总计/上限。
     pub fn usage(&self) -> Result<Vec<Value>, ApiError> {
-        let mut st = self.db.conn().prepare(
-            "SELECT agent_id, prompt_tokens, completion_tokens, tool_output_bytes, cost_milli
-             FROM usage WHERE project_id=?1",
+        let mut rows = crate::usage::summarize(&self.db, &self.project_id)?;
+        let limit: Option<i64> = self.db.conn().query_row(
+            "SELECT usage_limit_cents FROM projects WHERE id=?1",
+            [&self.project_id],
+            |r| r.get(0),
         )?;
-        let rows = st
-            .query_map([&self.project_id], |r| {
-                Ok(json!({"agent_id": r.get::<_,String>(0)?,
-                          "prompt_tokens": r.get::<_,i64>(1)?,
-                          "completion_tokens": r.get::<_,i64>(2)?,
-                          "tool_output_bytes": r.get::<_,i64>(3)?,
-                          "cost_milli": r.get::<_,i64>(4)?}))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        rows.push(json!({
+            "_total": true,
+            "spent_mc": crate::usage::spent_mc(&self.db, &self.project_id)?,
+            "limit_cents": limit,
+        }));
         Ok(rows)
     }
 

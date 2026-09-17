@@ -222,6 +222,8 @@ pub enum TurnOutcome {
     Failed(String),
     /// 休眠：零调用直接返回
     SkippedSleeping,
+    /// 用量触顶：硬闸，零调用（票 12）
+    SkippedCap,
 }
 
 /// 跑一个回合。provider 是接缝（测试给 ScriptedProvider）。
@@ -244,6 +246,10 @@ pub fn run_turn(
         .map_err(|_| TurnError::NoAgent(ctx.agent_id.clone()))?;
     if status == "sleeping" {
         return Ok(TurnOutcome::SkippedSleeping);
+    }
+    // 用量上限硬闸：触顶即全员休眠，压过自治档位与进行中的激活
+    if crate::usage::enforce_cap(db, &ctx.project_id)? {
+        return Ok(TurnOutcome::SkippedCap);
     }
 
     db.append_event(
@@ -290,6 +296,7 @@ pub fn run_turn(
                 messages: messages.clone(),
                 ..req_base.clone()
             })?;
+            crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
             messages.push(Message {
                 role: Role::Assistant,
                 content: resp.content.clone(),
@@ -349,6 +356,20 @@ pub fn run_turn(
                     }
                 }
             }
+            let tool_bytes: usize = results
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::ToolResult { content, .. } => content.len(),
+                    _ => 0,
+                })
+                .sum();
+            crate::usage::record(
+                db,
+                ctx,
+                &req_base.model_slot,
+                &Default::default(),
+                tool_bytes,
+            )?;
             messages.push(Message {
                 role: Role::Tool,
                 content: results,
@@ -365,6 +386,7 @@ pub fn run_turn(
             Ok(TurnOutcome::Finished) => EventKind::TurnFinished,
             Ok(TurnOutcome::AwaitingPermission(_)) => EventKind::TurnFinished,
             Ok(TurnOutcome::SkippedSleeping) => EventKind::TurnFinished,
+            Ok(TurnOutcome::SkippedCap) => EventKind::TurnFinished,
             Ok(TurnOutcome::Failed(_)) | Err(_) => EventKind::TurnFailed,
         },
         json!({ "agent": ctx.agent_id, "outcome": format!("{outcome:?}") }),
@@ -478,6 +500,45 @@ mod tests {
         // 供应商收到 2 次调用：第一次带工具清单
         assert_eq!(provider.recorded().len(), 2);
         assert!(!provider.recorded()[0].tools.is_empty());
+    }
+
+    #[test]
+    fn usage_cap_blocks_scheduling() {
+        let (db, reg, ctx, dir) = setup();
+        // 设 1 分上限 + 高价表，先记一笔超限账
+        std::fs::create_dir_all(dir.path().join(".hexagon")).unwrap();
+        std::fs::write(
+            dir.path().join(".hexagon/prices.json"),
+            r#"{"default":{"prompt_per_1k_mc":2000,"completion_per_1k_mc":0}}"#,
+        )
+        .unwrap();
+        db.conn()
+            .execute("UPDATE projects SET usage_limit_cents=1 WHERE id='p1'", [])
+            .unwrap();
+        crate::usage::record(
+            &db,
+            &ctx,
+            "chat",
+            &crate::provider::Usage {
+                prompt_tokens: 1000,
+                completion_tokens: 0,
+            },
+            0,
+        )
+        .unwrap();
+        let provider = ScriptedProvider::new(vec![text_response("不该被调用")]);
+        let out = run_turn(&db, &provider, &reg, &ctx, vec![], "继续").unwrap();
+        assert_eq!(out, TurnOutcome::SkippedCap);
+        assert!(provider.recorded().is_empty());
+        // 触顶事件 + 全员休眠已落
+        let kinds: Vec<_> = db
+            .timeline("p1", None, 50, None)
+            .unwrap()
+            .iter()
+            .map(|i| i.event.kind)
+            .collect();
+        assert!(kinds.contains(&EventKind::UsageCapHit));
+        assert!(kinds.contains(&EventKind::TeamSlept));
     }
 
     #[test]
