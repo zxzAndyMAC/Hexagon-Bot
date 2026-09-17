@@ -1,0 +1,19 @@
+[package]
+name = "hexagon-bot"
+description = "Hexagon-Bot 桌面壳：只做 IPC 转发与窗口，不含业务逻辑"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "hexagon_bot_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hexagon-core = { path = "../crates/hexagon-core" }

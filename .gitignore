@@ -1,0 +1,18 @@
+.scratch/
+.docs/
+.DS_Store
+
+# Rust
+/target
+**/*.rs.bk
+
+# Tauri
+src-tauri/gen/
+
+# Node / Vite
+node_modules/
+ui/dist/
+
+# Hexagon 运行时（产物 .hexagon/ 属项目仓内容，由项目自身 git 管理；本仓库开发目录不入）
+*.log
+.devin/config.local.json

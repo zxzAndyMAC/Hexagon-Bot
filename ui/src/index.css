@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: "Inter Variable", -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+  font-feature-settings: "cv01", "ss03";
+  background: #08090a;
+  color: #f7f8f8;
+}
