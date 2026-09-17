@@ -56,6 +56,11 @@ pub enum FlagRoute {
     Escalated { reason: String, question_id: String },
     /// 回填边命中 + L1+：自动同意拨回
     AutoAdjudicated { to_seq: i64 },
+    /// L2 协调自治：复审者被唤醒直接裁决，不等负责人
+    AutoWoken {
+        reviewer_role: String,
+        agent_id: String,
+    },
 }
 
 fn role_of(db: &Db, agent_id: &str) -> Result<String, ReviewError> {
@@ -67,16 +72,7 @@ fn role_of(db: &Db, agent_id: &str) -> Result<String, ReviewError> {
 }
 
 fn autonomy_rank(db: &Db, project_id: &str) -> Result<u8, ReviewError> {
-    let a: String = db.conn().query_row(
-        "SELECT autonomy FROM projects WHERE id=?1",
-        [project_id],
-        |r| r.get(0),
-    )?;
-    Ok(match a.as_str() {
-        "L1" => 1,
-        "L2" => 2,
-        _ => 0,
-    })
+    Ok(crate::autonomy::rank(db, project_id)?)
 }
 
 fn escalate(
@@ -290,8 +286,33 @@ pub fn submit_flag(
         return Ok(FlagRoute::AutoAdjudicated { to_seq });
     }
 
+    // L2 协调自治：打回路由裁决自动跑——复审者直接唤醒进入裁决，
+    // 不等负责人（盖章点/安全网/新权限不受影响，照常在别处排队）。
+    let reviewer = reviewer_role.unwrap();
+    if autonomy_rank(db, &ctx.project_id)? >= 2 {
+        if let Ok(agent_id) = db.conn().query_row(
+            "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
+            rusqlite::params![ctx.project_id, reviewer],
+            |r| r.get::<_, String>(0),
+        ) {
+            db.conn()
+                .execute("UPDATE agents SET status='active' WHERE id=?1", [&agent_id])?;
+            db.append_event(
+                &ctx.project_id,
+                EventKind::ConsultWakeup,
+                json!({"agent": agent_id, "role": reviewer, "reason": "flag adjudication", "flag_id": flag_id}),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+            )?;
+            return Ok(FlagRoute::AutoWoken {
+                reviewer_role: reviewer,
+                agent_id,
+            });
+        }
+    }
+
     Ok(FlagRoute::ToReviewer {
-        reviewer_role: reviewer_role.unwrap(),
+        reviewer_role: reviewer,
     })
 }
 
@@ -382,29 +403,6 @@ pub fn reject_stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, 
     let prev = (seq - 1).max(0) as usize;
     let (new_rid, _) = orchestra::open_stage(db, project_id, pack, prev)?;
     Ok(json!({"action": "stamp_rejected", "reopened_seq": prev, "run_id": new_rid}))
-}
-
-/// 自治档位读写（票 17 的完整语义在此只占存取位）。
-pub fn set_autonomy(db: &Db, project_id: &str, level: &str) -> Result<(), ReviewError> {
-    db.conn().execute(
-        "UPDATE projects SET autonomy=?1 WHERE id=?2",
-        rusqlite::params![level, project_id],
-    )?;
-    db.append_event(
-        project_id,
-        EventKind::AutonomyChanged,
-        json!({"level": level}),
-        None,
-        None,
-    )?;
-    Ok(())
-}
-pub fn get_autonomy(db: &Db, project_id: &str) -> Result<String, ReviewError> {
-    Ok(db.conn().query_row(
-        "SELECT autonomy FROM projects WHERE id=?1",
-        [project_id],
-        |r| r.get(0),
-    )?)
 }
 
 #[cfg(test)]
@@ -564,7 +562,7 @@ mod tests {
     #[test]
     fn backfill_edge_auto_adjudicates_at_l1() {
         let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
-        set_autonomy(&db, "p1", "L1").unwrap();
+        crate::autonomy::set_level(&db, "p1", "L1").unwrap();
         let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
         // 当前阶段 = 接口(seq1)：声明了回填边 前端→UI
         db.conn()
@@ -596,6 +594,33 @@ mod tests {
             .timeline("p1", None, 50, Some(&[EventKind::FlagAdjudicated]))
             .unwrap();
         assert_eq!(items[0].event.payload["agree"], true);
+    }
+
+    #[test]
+    fn flag_at_l2_auto_wakes_reviewer() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        crate::autonomy::set_level(&db, "p1", "L2").unwrap();
+        let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        // 架构师(a2) 质疑界面稿：架构师→UI 不在回填边里 → 不自动裁决，走 L2 唤醒
+        let c = ctx("p1", "a2", dir.path(), Some(&_r0));
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "规范冲突").unwrap();
+        assert_eq!(
+            route,
+            FlagRoute::AutoWoken {
+                reviewer_role: "架构师".into(),
+                agent_id: "a2".into()
+            }
+        );
+        // 复审者被激活 + ConsultWakeup 事件
+        let st: String = db
+            .conn()
+            .query_row("SELECT status FROM agents WHERE id='a2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(st, "active");
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::ConsultWakeup]))
+            .unwrap();
+        assert_eq!(items[0].event.payload["reason"], "flag adjudication");
     }
 
     #[test]

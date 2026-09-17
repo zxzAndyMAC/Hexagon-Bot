@@ -31,6 +31,8 @@ pub enum ApiError {
     Artifact(#[from] crate::artifacts::ArtifactError),
     #[error(transparent)]
     Publish(#[from] crate::publish::PublishError),
+    #[error(transparent)]
+    Autonomy(#[from] crate::autonomy::AutonomyError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
@@ -127,6 +129,28 @@ impl Workbench {
     /// 测试/桌面端注入凭据实现（默认内存库；生产壳换成 OsKeychain）。
     pub fn set_credential_store(&mut self, store: Arc<dyn crate::credentials::CredentialStore>) {
         self.creds = store;
+    }
+
+    /// 自治档位变更（L0/L1/L2），落 AutonomyChanged 事件。
+    pub fn set_autonomy(&self, level: &str) -> Result<(), ApiError> {
+        crate::autonomy::set_level(&self.db, &self.project_id, level)?;
+        Ok(())
+    }
+
+    /// 当前自治档位。
+    pub fn autonomy(&self) -> Result<String, ApiError> {
+        Ok(crate::autonomy::level(&self.db, &self.project_id)?)
+    }
+
+    /// 负责人离开：打标记事件。
+    pub fn owner_away(&self) -> Result<(), ApiError> {
+        crate::autonomy::leave(&self.db, &self.project_id)?;
+        Ok(())
+    }
+
+    /// 负责人归来：模板化摘要 + ReturnSummary 事件。
+    pub fn owner_back(&self) -> Result<Value, ApiError> {
+        Ok(crate::autonomy::back(&self.db, &self.project_id)?)
     }
 
     /// 远程发布：发起确认卡（kind='publish'）。
