@@ -7,6 +7,7 @@
 
 pub mod api;
 pub mod artifacts;
+pub mod credentials;
 pub mod db;
 pub mod git;
 pub mod mcp;
