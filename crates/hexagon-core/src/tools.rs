@@ -553,15 +553,29 @@ impl Tool for ArtifactWrite {
         FsWrite.builtin_deny(input, ctx)
     }
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let content = str_arg(input, "content")?;
         let id = crate::artifacts::deliver(
             db,
             ctx,
             &ctx.tiers,
             str_arg(input, "path")?,
-            str_arg(input, "content")?,
+            content,
             input["kind"].as_str(),
         )
         .map_err(Box::new)?;
+        // 改进提案：交付即入提案队列（校验不过只拒提案不拒产物）
+        if crate::artifacts::parse_header(content)
+            .map(|(m, _)| m.kind.as_str() == "改进提案")
+            .unwrap_or(false)
+        {
+            match crate::proposals::submit(db, ctx, &id, content) {
+                Ok(pid) => return Ok(json!({"artifact_id": id, "proposal_id": pid})),
+                Err(e) => {
+                    log::info!("proposal submit rejected for {id}: {e}");
+                    return Ok(json!({"artifact_id": id, "proposal_rejected": e.to_string()}));
+                }
+            }
+        }
         Ok(json!({"artifact_id": id}))
     }
 }

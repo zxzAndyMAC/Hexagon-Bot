@@ -56,8 +56,8 @@ impl Tier {
 /// 内置 kind → 档位映射（常量，不可降级）。
 fn builtin_tier(kind: &str) -> Option<Tier> {
     Some(match kind {
-        "复审意见" | "测试记录" | "打回" => Tier::Parse,
-        "规格" | "接口说明" | "技术裁定记录" | "改进提案" => Tier::Skeleton,
+        "复审意见" | "测试记录" | "打回" | "改进提案" => Tier::Parse,
+        "规格" | "接口说明" | "技术裁定记录" => Tier::Skeleton,
         "结构说明" | "界面稿" | "代码" => Tier::Freeform,
         _ => return None,
     })
@@ -96,7 +96,6 @@ fn required_sections(kind: &str) -> &'static [&'static str] {
         "规格" => &["目标", "范围", "验收"],
         "接口说明" => &["资源", "端点", "错误码"],
         "技术裁定记录" => &["背景", "决定", "后果"],
-        "改进提案" => &["动机", "变更", "验证"],
         _ => &[],
     }
 }
@@ -108,6 +107,8 @@ pub struct ArtifactMeta {
     pub author: String,
     pub upstream: Option<String>,
     pub handoff: Option<String>,
+    /// 头里的其余键（surface/target 等，提案等 parse 档消费）
+    pub extra: std::collections::HashMap<String, String>,
 }
 
 /// 解析 front matter：`---\nkey: value\n...\n---\n<body>`。
@@ -121,6 +122,12 @@ pub fn parse_header(content: &str) -> Option<(ArtifactMeta, &str)> {
             m.insert(k.trim().to_string(), v.trim().to_string());
         }
     }
+    let known = ["kind", "stage", "author", "upstream", "handoff"];
+    let extra: std::collections::HashMap<String, String> = m
+        .iter()
+        .filter(|(k, _)| !known.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     Some((
         ArtifactMeta {
             kind: m.get("kind").cloned().unwrap_or_default(),
@@ -128,6 +135,7 @@ pub fn parse_header(content: &str) -> Option<(ArtifactMeta, &str)> {
             author: m.get("author").cloned().unwrap_or_default(),
             upstream: m.get("upstream").cloned(),
             handoff: m.get("handoff").cloned(),
+            extra,
         },
         body,
     ))
@@ -147,6 +155,7 @@ fn validate(
             author: fallback_author.into(),
             upstream: None,
             handoff: None,
+            extra: Default::default(),
         }));
     }
     let (meta, body) = parsed.ok_or(ArtifactError::MissingHeader)?;

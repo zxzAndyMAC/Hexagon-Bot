@@ -33,6 +33,8 @@ pub enum ApiError {
     Publish(#[from] crate::publish::PublishError),
     #[error(transparent)]
     Autonomy(#[from] crate::autonomy::AutonomyError),
+    #[error(transparent)]
+    Proposal(#[from] crate::proposals::PropError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
@@ -151,6 +153,37 @@ impl Workbench {
     /// 负责人归来：模板化摘要 + ReturnSummary 事件。
     pub fn owner_back(&self) -> Result<Value, ApiError> {
         Ok(crate::autonomy::back(&self.db, &self.project_id)?)
+    }
+
+    /// 提案队列。
+    pub fn proposals(&self) -> Result<Vec<Value>, ApiError> {
+        Ok(crate::proposals::list(&self.db, &self.project_id)?)
+    }
+
+    /// 上级复审提案：pass → 进盖章卡；reject → 带原因驳回。
+    pub fn review_proposal(
+        &self,
+        proposal_id: &str,
+        pass: bool,
+        reason: &str,
+        reviewer_agent: &str,
+    ) -> Result<(), ApiError> {
+        let ctx = self.ctx_for(reviewer_agent, None);
+        crate::proposals::review(&self.db, &ctx, proposal_id, pass, reason)?;
+        Ok(())
+    }
+
+    /// 提案盖章确认：快照 + 应用 + active。
+    pub fn confirm_proposal(&self, qid: &str) -> Result<String, ApiError> {
+        let ctx = self.ctx_for("owner", None);
+        Ok(crate::proposals::activate(&self.db, &ctx, qid)?)
+    }
+
+    /// 提案回滚。
+    pub fn rollback_proposal(&self, proposal_id: &str) -> Result<(), ApiError> {
+        let ctx = self.ctx_for("owner", None);
+        crate::proposals::rollback(&self.db, &ctx, proposal_id)?;
+        Ok(())
     }
 
     /// 远程发布：发起确认卡（kind='publish'）。
