@@ -7,10 +7,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 /// 迁移清单：(版本名, SQL)。追加新迁移 = 往数组尾部加一行，禁止改已发布的项。
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_init",
-    include_str!("../migrations/0001_init.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[("0001_init", include_str!("../migrations/0001_init.sql"))];
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {

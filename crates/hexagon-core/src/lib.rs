@@ -6,6 +6,7 @@
 //! 该边界同时是全项目唯一的测试主接缝（见 spec「Testing Decisions」）。
 
 pub mod db;
+pub mod provider;
 
 /// IPC 链路自检：核 → 壳 → WebView 的最小证明。
 pub fn ping() -> String {
