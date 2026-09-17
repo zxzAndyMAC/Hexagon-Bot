@@ -5,6 +5,8 @@
 //! Tauri/WebView 只是薄壳，经进程内 API 边界（本 crate 的公开面）与核交互。
 //! 该边界同时是全项目唯一的测试主接缝（见 spec「Testing Decisions」）。
 
+pub mod db;
+
 /// IPC 链路自检：核 → 壳 → WebView 的最小证明。
 pub fn ping() -> String {
     format!("hexagon-core v{} ok", env!("CARGO_PKG_VERSION"))
