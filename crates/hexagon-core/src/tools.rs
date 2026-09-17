@@ -27,6 +27,8 @@ pub enum ToolError {
     Db(#[from] crate::db::DbError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("artifact: {0}")]
+    Artifact(#[from] Box<crate::artifacts::ArtifactError>),
     #[error("unknown question: {0}")]
     UnknownQuestion(String),
 }
@@ -40,6 +42,8 @@ pub struct ToolContext {
     /// 路径归属 glob：非空时 fs 写入必须命中其一，否则转必问。
     /// 由编排内核按阶段注入；空 = 未限定（开发早期）。
     pub owned_globs: Vec<String>,
+    /// 产物档位注册表（自定义类型挂档用；内置映射不可降级）。
+    pub tiers: crate::artifacts::TierMap,
 }
 
 /// 一次工具调用的结局。
@@ -57,7 +61,7 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn input_schema(&self) -> Value;
-    fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError>;
+    fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError>;
     /// 求值占位：true = 默认转必问（安全网类操作）。票 11 换成五层管线。
     fn needs_ask(&self, _input: &Value, _ctx: &ToolContext) -> bool {
         false
@@ -253,7 +257,7 @@ impl Registry {
             .tools
             .get(name)
             .ok_or_else(|| ToolError::BadInput(format!("unknown tool: {name}")))?;
-        let result = tool.exec(&input, ctx);
+        let result = tool.exec(db, &input, ctx);
         let (ok, payload) = match &result {
             Ok(v) => (true, json!({ "tool": name, "output": v })),
             Err(e) => (false, json!({ "tool": name, "error": e.to_string() })),
@@ -320,7 +324,7 @@ fn scrub_input(tool: &str, input: &Value) -> Value {
 }
 
 /// 仓内路径归一化：拒绝越出 repo_root。
-fn repo_path(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
+pub fn repo_path(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
     let joined = if Path::new(rel).is_absolute() {
         PathBuf::from(rel)
     } else {
@@ -401,7 +405,7 @@ impl Tool for FsRead {
         let p = input["path"].as_str().unwrap_or("");
         is_credential_path(p).then(|| "credential content never enters context".into())
     }
-    fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         let bytes = std::fs::read(&p)?;
         if bytes.len() > FS_READ_CAP {
@@ -431,7 +435,7 @@ impl Tool for FsWrite {
         }
         is_credential_path(p).then(|| "credential files are not writable by agents".into())
     }
-    fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
@@ -455,7 +459,7 @@ impl Tool for FsPatch {
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         FsWrite.builtin_deny(input, ctx)
     }
-    fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         let old = str_arg(input, "old")?;
         let content = std::fs::read_to_string(&p)?;
@@ -486,7 +490,7 @@ impl Tool for Bash {
     fn needs_ask(&self, _input: &Value, _ctx: &ToolContext) -> bool {
         true
     }
-    fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let out = std::process::Command::new("sh")
             .arg("-c")
             .arg(str_arg(input, "cmd")?)
@@ -510,32 +514,32 @@ impl Tool for Bash {
     }
 }
 
-/// 产物写入：文件落 artifacts/ 并登记 artifacts 行（完整管道在票 07）。
+/// 产物写入：走产物管道（元数据头校验 + `.hexagon/` 落盘 + 版本取代 + 登记）。
 pub struct ArtifactWrite;
 impl Tool for ArtifactWrite {
     fn name(&self) -> &'static str {
         "artifact_write"
     }
     fn description(&self) -> &'static str {
-        "Deliver an artifact file under artifacts/ and register it"
+        "Deliver an artifact under .hexagon/ (metadata header required for enforced tiers)"
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string"},"summary":{"type":"string"}},"required":["path","content","kind"]})
+        json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string"}},"required":["path","content"]})
     }
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         FsWrite.builtin_deny(input, ctx)
     }
-    fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let rel = format!(
-            "artifacts/{}",
-            str_arg(input, "path")?.trim_start_matches('/')
-        );
-        let p = repo_path(&ctx.repo_root, &rel)?;
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&p, str_arg(input, "content")?)?;
-        Ok(json!({"path": rel, "kind": input["kind"]}))
+    fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let id = crate::artifacts::deliver(
+            db,
+            ctx,
+            &ctx.tiers,
+            str_arg(input, "path")?,
+            str_arg(input, "content")?,
+            input["kind"].as_str(),
+        )
+        .map_err(Box::new)?;
+        Ok(json!({"artifact_id": id}))
     }
 }
 
@@ -553,9 +557,9 @@ impl Tool for ArtifactRead {
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         FsRead.builtin_deny(input, ctx)
     }
-    fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let rel = format!(
-            "artifacts/{}",
+            ".hexagon/{}",
             str_arg(input, "path")?.trim_start_matches('/')
         );
         let p = repo_path(&ctx.repo_root, &rel)?;
@@ -590,6 +594,7 @@ mod tests {
             repo_root: dir.path().to_path_buf(),
             stage_run_id: None,
             owned_globs: vec![],
+            tiers: crate::artifacts::TierMap::new(),
         };
         (db, Registry::builtin(), ctx, dir)
     }

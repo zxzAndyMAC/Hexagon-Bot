@@ -427,6 +427,7 @@ mod tests {
                 repo_root: dir.path().to_path_buf(),
                 stage_run_id: None,
                 owned_globs: vec![],
+                tiers: crate::artifacts::TierMap::new(),
             },
             dir,
         )
@@ -455,13 +456,13 @@ mod tests {
             tool_response(vec![(
                 "t1",
                 "artifact_write",
-                json!({"path":"impl/plan.md","content":"# 方案","kind":"规格"}),
+                json!({"path":"impl/plan.md","content":"# 方案\n自由档产物"}),
             )]),
             text_response("已交付实现方案"),
         ]);
         let out = run_turn(&db, &provider, &reg, &ctx, vec![], "写个方案").unwrap();
         assert_eq!(out, TurnOutcome::Finished);
-        assert!(dir.path().join("artifacts/impl/plan.md").exists());
+        assert!(dir.path().join(".hexagon/impl/plan.md").exists());
         // 全程事件可回放
         let items = db.timeline("p1", None, 50, None).unwrap();
         let kinds: Vec<_> = items.iter().map(|i| i.event.kind).collect();

@@ -26,6 +26,7 @@ pub enum EventKind {
     Resumed,
     // 产物与复审
     ArtifactDelivered,
+    ArtifactRejected,
     ReviewPassed,
     ReviewRejected,
     FlagSubmitted,
