@@ -9,6 +9,7 @@ pub mod api;
 pub mod artifacts;
 pub mod db;
 pub mod orchestra;
+pub mod permissions;
 pub mod provider;
 pub mod review;
 pub mod scenario;

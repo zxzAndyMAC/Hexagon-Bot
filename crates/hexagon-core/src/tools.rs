@@ -137,46 +137,59 @@ impl Registry {
             ctx.stage_run_id.as_deref(),
         )?;
 
-        if let Some(reason) = tool.builtin_deny(&input, ctx) {
-            db.append_event(
-                &ctx.project_id,
-                EventKind::PermissionDenied,
-                json!({ "tool": name, "layer": "builtin_deny", "reason": reason }),
-                Some(&ctx.agent_id),
-                ctx.stage_run_id.as_deref(),
-            )?;
-            return Ok(CallOutcome::Denied(reason));
-        }
-
-        if tool.needs_ask(&input, ctx) || violates_ownership(name, &input, ctx) {
-            let qid = format!("q{}", db.next_id("q")?);
-            db.conn().execute(
-                "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-                 VALUES (?1, ?2, ?3, 'permission', ?4)",
-                rusqlite::params![
-                    qid,
-                    ctx.project_id,
-                    ctx.agent_id,
-                    json!({ "tool": name, "input": scrub_input(name, &input), "raw_input": input })
+        match crate::permissions::evaluate(db, ctx, tool.as_ref(), name, &input)? {
+            crate::permissions::Decision::Deny { reason, layer } => {
+                db.append_event(
+                    &ctx.project_id,
+                    EventKind::PermissionDenied,
+                    json!({ "tool": name, "layer": layer, "reason": reason }),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                )?;
+                Ok(CallOutcome::Denied(reason))
+            }
+            crate::permissions::Decision::Ask { reason, safety_net } => {
+                let qid = format!("q{}", db.next_id("q")?);
+                db.conn().execute(
+                    "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
+                     VALUES (?1, ?2, ?3, 'permission', ?4)",
+                    rusqlite::params![
+                        qid,
+                        ctx.project_id,
+                        ctx.agent_id,
+                        json!({ "tool": name, "input": scrub_input(name, &input),
+                                "raw_input": input, "reason": reason, "safety_net": safety_net })
                         .to_string()
-                ],
-            )?;
-            db.append_event(
-                &ctx.project_id,
-                EventKind::PermissionAsked,
-                json!({ "tool": name, "question_id": qid }),
-                Some(&ctx.agent_id),
-                ctx.stage_run_id.as_deref(),
-            )?;
-            return Ok(CallOutcome::Asked(qid));
+                    ],
+                )?;
+                db.append_event(
+                    &ctx.project_id,
+                    EventKind::PermissionAsked,
+                    json!({ "tool": name, "question_id": qid, "reason": reason, "safety_net": safety_net }),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                )?;
+                Ok(CallOutcome::Asked(qid))
+            }
+            crate::permissions::Decision::Allow { via } => {
+                if let crate::permissions::AllowVia::Remembered { shape, scope } = via {
+                    db.append_event(
+                        &ctx.project_id,
+                        EventKind::PermissionAllowed,
+                        json!({ "tool": name, "layer": "remembered", "shape": shape, "scope": scope }),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                    )?;
+                }
+                self.exec_and_log(db, ctx, name, input)
+                    .map(CallOutcome::Done)
+            }
         }
-
-        self.exec_and_log(db, ctx, name, input)
-            .map(CallOutcome::Done)
     }
 
     /// 必问裁决：批准则执行并落结果，拒绝则落 PermissionDenied。
     /// `remember_shape` 形如 "npm install *"，写入 permission_rules（票 11 消费）。
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve(
         &self,
         db: &Db,
@@ -185,6 +198,7 @@ impl Registry {
         allow: bool,
         remember_shape: Option<&str>,
         scope: &str,
+        pack: Option<&crate::orchestra::PackDef>,
     ) -> Result<CallOutcome, ToolError> {
         let row = db
             .conn()
@@ -227,16 +241,22 @@ impl Registry {
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
-        if let Some(shape) = remember_shape {
-            db.conn().execute(
-                "INSERT INTO permission_rules (id, project_id, tool, shape, effect, scope)
-                 VALUES (?1, ?2, ?3, ?4, 'allow', ?5)",
-                rusqlite::params![db.next_id("pr")?, ctx.project_id, tool_name, shape, scope],
-            )?;
+        // 记形：显式 shape 或检验命令自动沉淀；安全网永不进记忆（persist_rule 内拦）
+        if crate::permissions::persist_rule(
+            db,
+            ctx,
+            &tool_name,
+            &raw_input,
+            remember_shape,
+            scope,
+            pack,
+        )? {
             db.append_event(
                 &ctx.project_id,
                 EventKind::PermissionShapeRemembered,
-                json!({ "tool": tool_name, "shape": shape, "scope": scope }),
+                json!({ "tool": tool_name,
+                        "shape": remember_shape.or(raw_input["cmd"].as_str()),
+                        "scope": scope }),
                 Some(&ctx.agent_id),
                 ctx.stage_run_id.as_deref(),
             )?;
@@ -353,23 +373,17 @@ pub fn repo_path(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
     Ok(norm)
 }
 
-/// 路径归属挂点：fs 写入/修补在 owned_globs 非空时必须命中，否则转必问。
-fn violates_ownership(tool: &str, input: &Value, ctx: &ToolContext) -> bool {
-    if !matches!(tool, "fs_write" | "fs_patch" | "artifact_write") || ctx.owned_globs.is_empty() {
-        return false;
-    }
-    let path = input["path"].as_str().unwrap_or("");
-    !ctx.owned_globs.iter().any(|g| glob_match(g, path))
-}
-
 /// 极简 glob：`*` 匹配任意段内字符，`**` 跨段。
-fn glob_match(pat: &str, path: &str) -> bool {
+pub fn glob_match(pat: &str, path: &str) -> bool {
     fn inner(p: &[u8], s: &[u8]) -> bool {
         if p.is_empty() {
             return s.is_empty();
         }
         if p.starts_with(b"**/") {
             return inner(&p[3..], s) || (!s.is_empty() && inner(p, &s[1..]));
+        }
+        if p.starts_with(b"**") {
+            return inner(&p[2..], s) || (!s.is_empty() && inner(p, &s[1..]));
         }
         match p[0] {
             b'*' => {
@@ -690,7 +704,7 @@ mod tests {
         // 未执行
         assert!(!dir.path().join("out.txt").exists());
         let out = reg
-            .resolve(&db, &ctx, &qid, true, None, "activation")
+            .resolve(&db, &ctx, &qid, true, None, "activation", None)
             .unwrap();
         let CallOutcome::Done(v) = out else { panic!() };
         assert_eq!(v["exit_code"], 0);
@@ -716,7 +730,7 @@ mod tests {
         else {
             panic!()
         };
-        reg.resolve(&db, &ctx, &qid, false, None, "activation")
+        reg.resolve(&db, &ctx, &qid, false, None, "activation", None)
             .unwrap();
         assert!(!dir.path().join("nope").exists());
     }
@@ -730,8 +744,16 @@ mod tests {
         else {
             panic!()
         };
-        reg.resolve(&db, &ctx, &qid, true, Some("npm install *"), "project")
-            .unwrap();
+        reg.resolve(
+            &db,
+            &ctx,
+            &qid,
+            true,
+            Some("npm install *"),
+            "project",
+            None,
+        )
+        .unwrap();
         let n: i64 = db
             .conn()
             .query_row(

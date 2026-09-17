@@ -166,8 +166,15 @@ impl Workbench {
             |r| r.get(0),
         )?;
         let ctx = self.ctx_for(&payload, None);
-        self.registry
-            .resolve(&self.db, &ctx, question_id, allow, remember_shape, scope)?;
+        self.registry.resolve(
+            &self.db,
+            &ctx,
+            question_id,
+            allow,
+            remember_shape,
+            scope,
+            self.pack.as_ref(),
+        )?;
         Ok(())
     }
 
