@@ -95,6 +95,7 @@ impl Registry {
         r.register(Bash);
         r.register(ArtifactWrite);
         r.register(ArtifactRead);
+        r.register(crate::git::GitBaselineMerge);
         r
     }
 

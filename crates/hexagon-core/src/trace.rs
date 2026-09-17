@@ -59,6 +59,7 @@ pub enum EventKind {
     ProposalRolledBack,
     // 发布与系统
     PublishConfirmed,
+    BaselineMerged,
     UsageCapHit,
     TeamSlept,
     ReturnSummary,
