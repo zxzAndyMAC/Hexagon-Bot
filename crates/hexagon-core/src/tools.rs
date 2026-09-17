@@ -21,6 +21,8 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
     #[error("bad input: {0}")]
     BadInput(String),
+    #[error("exec: {0}")]
+    Exec(String),
     #[error(transparent)]
     Trace(#[from] TraceError),
     #[error(transparent)]
@@ -58,8 +60,8 @@ pub enum CallOutcome {
 }
 
 pub trait Tool: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn description(&self) -> &'static str;
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError>;
     /// 求值占位：true = 默认转必问（安全网类操作）。票 11 换成五层管线。
@@ -73,7 +75,7 @@ pub trait Tool: Send + Sync {
 }
 
 pub struct Registry {
-    tools: HashMap<&'static str, Box<dyn Tool>>,
+    tools: HashMap<String, Box<dyn Tool>>,
 }
 
 impl Default for Registry {
@@ -97,7 +99,7 @@ impl Registry {
     }
 
     pub fn register(&mut self, tool: impl Tool + 'static) {
-        self.tools.insert(tool.name(), Box::new(tool));
+        self.tools.insert(tool.name().to_string(), Box::new(tool));
     }
 
     /// 供供应商请求用的工具清单（名字 + 描述 + schema）。
@@ -406,10 +408,10 @@ fn str_arg<'a>(input: &'a Value, key: &str) -> Result<&'a str, ToolError> {
 
 pub struct FsRead;
 impl Tool for FsRead {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "fs_read"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Read a file inside the repo"
     }
     fn input_schema(&self) -> Value {
@@ -433,10 +435,10 @@ impl Tool for FsRead {
 
 pub struct FsWrite;
 impl Tool for FsWrite {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "fs_write"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Write a file inside the repo (ownership-gated)"
     }
     fn input_schema(&self) -> Value {
@@ -461,10 +463,10 @@ impl Tool for FsWrite {
 
 pub struct FsPatch;
 impl Tool for FsPatch {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "fs_patch"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Replace an exact string in a repo file"
     }
     fn input_schema(&self) -> Value {
@@ -487,10 +489,10 @@ impl Tool for FsPatch {
 
 pub struct Bash;
 impl Tool for Bash {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "bash"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Run a shell command in the repo (always asks)"
     }
     fn input_schema(&self) -> Value {
@@ -531,10 +533,10 @@ impl Tool for Bash {
 /// 产物写入：走产物管道（元数据头校验 + `.hexagon/` 落盘 + 版本取代 + 登记）。
 pub struct ArtifactWrite;
 impl Tool for ArtifactWrite {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "artifact_write"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Deliver an artifact under .hexagon/ (metadata header required for enforced tiers)"
     }
     fn input_schema(&self) -> Value {
@@ -559,10 +561,10 @@ impl Tool for ArtifactWrite {
 
 pub struct ArtifactRead;
 impl Tool for ArtifactRead {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "artifact_read"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Read a registered artifact by path"
     }
     fn input_schema(&self) -> Value {

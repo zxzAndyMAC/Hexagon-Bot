@@ -8,6 +8,7 @@
 pub mod api;
 pub mod artifacts;
 pub mod db;
+pub mod mcp;
 pub mod orchestra;
 pub mod permissions;
 pub mod provider;

@@ -123,6 +123,29 @@ pub fn evaluate(
     tool_name: &str,
     input: &Value,
 ) -> Result<Decision, crate::tools::ToolError> {
+    // L0 授权闸门：mcp:<service>:<tool> 调用方必须在 grants 表里有该服务授权，
+    // 缺席即硬拒（授权注册表是边界，不走规则、不可记忆）。
+    if let Some(service) = tool_name
+        .strip_prefix("mcp:")
+        .and_then(|s| s.split(':').next())
+    {
+        let granted: bool = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM grants g JOIN agents a ON a.id = g.agent_id
+                 WHERE a.project_id=?1 AND g.agent_id=?2 AND g.kind='mcp' AND g.name=?3",
+                rusqlite::params![ctx.project_id, ctx.agent_id, service],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if !granted {
+            return Ok(Decision::Deny {
+                reason: format!("no grant for mcp service: {service}"),
+                layer: "grant",
+            });
+        }
+    }
     // L1 内置 deny
     if let Some(reason) = tool.builtin_deny(input, ctx) {
         return Ok(Decision::Deny {
