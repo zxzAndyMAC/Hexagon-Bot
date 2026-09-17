@@ -12,7 +12,10 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
-    // 生命周期与调度
+    // 回合与生命周期
+    TurnStarted,
+    TurnFinished,
+    TurnFailed,
     AgentActivated,
     AgentSlept,
     StageStarted,
