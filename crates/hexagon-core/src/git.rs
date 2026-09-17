@@ -25,6 +25,11 @@ pub enum GitError {
 
 /// 跑一次 git，成功返回 stdout。失败带 stderr 报错。
 pub fn run(repo: &Path, args: &[&str]) -> Result<String, GitError> {
+    log::debug!(
+        "git -C {:?} {}",
+        repo.file_name().unwrap_or_default(),
+        args.join(" ")
+    );
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -33,10 +38,9 @@ pub fn run(repo: &Path, args: &[&str]) -> Result<String, GitError> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        Err(GitError::Cli(
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ))
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        log::warn!("git {} failed: {err}", args.join(" "));
+        Err(GitError::Cli(args.join(" "), err))
     }
 }
 

@@ -108,6 +108,7 @@ pub fn enforce_cap(db: &Db, project_id: &str) -> Result<bool, crate::trace::Trac
         "UPDATE agents SET status='sleeping' WHERE project_id=?1",
         [project_id],
     )?;
+    log::warn!("usage cap hit: project={project_id} limit={limit_cents}¢ — team slept");
     db.append_event(
         project_id,
         EventKind::UsageCapHit,

@@ -60,6 +60,7 @@ impl Db {
             if applied {
                 continue;
             }
+            log::info!("applying migration {version}");
             let tx = self.conn.unchecked_transaction()?;
             tx.execute_batch(sql)?;
             tx.execute(

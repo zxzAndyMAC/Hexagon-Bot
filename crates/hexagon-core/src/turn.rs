@@ -249,8 +249,14 @@ pub fn run_turn(
     }
     // 用量上限硬闸：触顶即全员休眠，压过自治档位与进行中的激活
     if crate::usage::enforce_cap(db, &ctx.project_id)? {
+        log::warn!("turn blocked by usage cap: agent={}", ctx.agent_id);
         return Ok(TurnOutcome::SkippedCap);
     }
+    log::info!(
+        "turn start: agent={} run={:?}",
+        ctx.agent_id,
+        ctx.stage_run_id
+    );
 
     db.append_event(
         &ctx.project_id,
@@ -291,11 +297,22 @@ pub fn run_turn(
     };
 
     let outcome = (|| -> Result<TurnOutcome, TurnError> {
-        for _round in 0..MAX_TOOL_ROUNDS {
+        for round in 0..MAX_TOOL_ROUNDS {
+            log::debug!(
+                "model call round={round} agent={} slot={}",
+                ctx.agent_id,
+                req_base.model_slot
+            );
             let resp = provider.complete(&ChatRequest {
                 messages: messages.clone(),
                 ..req_base.clone()
             })?;
+            log::debug!(
+                "model resp: stop={:?} prompt_tok={} completion_tok={}",
+                resp.stop,
+                resp.usage.prompt_tokens,
+                resp.usage.completion_tokens
+            );
             crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
             messages.push(Message {
                 role: Role::Assistant,

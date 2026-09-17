@@ -192,6 +192,28 @@ pub fn evaluate(
     })
 }
 
+/// 带日志的求值入口包装：管线内部分支自带 return，这里统一记结论。
+pub fn evaluate_logged(
+    db: &Db,
+    ctx: &ToolContext,
+    tool: &dyn Tool,
+    tool_name: &str,
+    input: &Value,
+) -> Result<Decision, crate::tools::ToolError> {
+    let d = evaluate(db, ctx, tool, tool_name, input)?;
+    match &d {
+        Decision::Deny { layer, reason } => {
+            log::info!("perm deny [{layer}] {tool_name}: {reason}")
+        }
+        Decision::Ask { reason, safety_net } => log::info!(
+            "perm ask{} {tool_name}: {reason}",
+            if *safety_net { " (safety-net)" } else { "" }
+        ),
+        Decision::Allow { via } => log::debug!("perm allow {tool_name} via {via:?}"),
+    }
+    Ok(d)
+}
+
 fn violates_ownership(tool: &str, input: &Value, ctx: &ToolContext) -> bool {
     if !matches!(tool, "fs_write" | "fs_patch" | "artifact_write") || ctx.owned_globs.is_empty() {
         return false;

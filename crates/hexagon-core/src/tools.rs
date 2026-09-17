@@ -140,7 +140,13 @@ impl Registry {
             ctx.stage_run_id.as_deref(),
         )?;
 
-        match crate::permissions::evaluate(db, ctx, tool.as_ref(), name, &input)? {
+        log::debug!(
+            "tool call: {} agent={} input={}",
+            name,
+            ctx.agent_id,
+            scrub_input(name, &input)
+        );
+        match crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)? {
             crate::permissions::Decision::Deny { reason, layer } => {
                 db.append_event(
                     &ctx.project_id,

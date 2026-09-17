@@ -4,6 +4,7 @@
 use hexagon_core::api::Workbench;
 use serde_json::Value;
 use std::sync::Mutex;
+use tauri::Manager;
 
 struct AppState {
     wb: Mutex<Option<Workbench>>,
@@ -128,9 +129,73 @@ fn usage(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
     with_wb(&state, |wb| wb.usage())
 }
 
+/// 日志开关：app 级设置持久化在 config 目录，开发期默认开（Debug），release 默认 Info。
+fn log_enabled_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("settings.json"))
+}
+
+fn load_log_enabled(app: &tauri::AppHandle) -> bool {
+    log_enabled_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["log_enabled"].as_bool())
+        .unwrap_or(cfg!(debug_assertions)) // dev 默认开，release 默认关
+}
+
+#[tauri::command]
+fn set_log_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let level = if enabled {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Warn
+    };
+    log::set_max_level(level);
+    let p = log_enabled_path(&app).ok_or("no config dir")?;
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, serde_json::json!({"log_enabled": enabled}).to_string())
+        .map_err(|e| e.to_string())?;
+    log::info!("log level set to {level}");
+    Ok(())
+}
+
+#[tauri::command]
+fn log_enabled(app: tauri::AppHandle) -> bool {
+    load_log_enabled(&app)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("hexagon".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .max_file_size(5_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
+                .level(log::LevelFilter::Debug)
+                .build(),
+        )
+        .setup(|app| {
+            // 启动时按持久化设置收口级别（plugin 初始给 Debug 以便捕获启动日志）
+            let enabled = load_log_enabled(app.handle());
+            log::set_max_level(if enabled {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Warn
+            });
+            log::info!("hexagon-bot starting, log_enabled={enabled}");
+            Ok(())
+        })
         .manage(AppState {
             wb: Mutex::new(None),
         })
@@ -154,6 +219,8 @@ pub fn run() {
             stage_status,
             pending_questions,
             usage,
+            set_log_enabled,
+            log_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

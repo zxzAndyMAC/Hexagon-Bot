@@ -62,6 +62,7 @@ struct Conn {
 
 impl Conn {
     fn spawn(spec: &McpSpec) -> Result<Self, ToolError> {
+        log::info!("mcp spawn: {} {} {:?}", spec.name, spec.command, spec.args);
         let mut child = Command::new(&spec.command)
             .args(&spec.args)
             .stdin(Stdio::piped())
@@ -189,6 +190,10 @@ impl Server {
                 if e.to_string().contains("mcp error:") {
                     return Err(e);
                 }
+                log::warn!(
+                    "mcp transport failed for {}, respawning: {e}",
+                    self.spec.name
+                );
                 let _ = conn.child.kill();
                 *conn = Conn::spawn(&self.spec)?;
                 // 重启后要重新握手，否则服务端不认 tools/call
@@ -244,6 +249,7 @@ impl McpHost {
         let mut servers = Vec::new();
         for spec in specs {
             let Ok(conn) = Conn::spawn(&spec) else {
+                log::warn!("mcp service {} failed to spawn, skipped", spec.name);
                 continue;
             };
             let server = Arc::new(Server {
@@ -251,8 +257,10 @@ impl McpHost {
                 conn: Mutex::new(conn),
             });
             let Ok(tools) = server.handshake() else {
+                log::warn!("mcp service {} handshake failed, skipped", spec.name);
                 continue;
             };
+            log::info!("mcp service {} up: {} tools", spec.name, tools.len());
             for t in tools {
                 let Some(name) = t["name"].as_str() else {
                     continue;
