@@ -7,6 +7,7 @@
 
 pub mod artifacts;
 pub mod db;
+pub mod orchestra;
 pub mod provider;
 pub mod tools;
 pub mod trace;
