@@ -388,26 +388,39 @@ fn finish_stage(
         None,
         Some(&run.id),
     )?;
-    let next = run.seq as usize + 1;
-    if next >= pack.stages.len() {
-        // 全程跑完：全员休眠
-        db.conn().execute(
-            "UPDATE agents SET status='sleeping' WHERE project_id=?1",
-            [project_id],
-        )?;
-        db.append_event(
-            project_id,
-            EventKind::TeamSlept,
-            json!({"reason": "pack finished"}),
-            None,
-            None,
-        )?;
-        return Ok(json!({"action": "pack_finished"}));
+    open_next(db, project_id, pack, run.seq as usize + 1)
+}
+
+/// 开下一个阶段；跳过是即时的——连续穿到第一个非跳过阶段或跑完。
+fn open_next(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    from_seq: usize,
+) -> Result<Value, OrchError> {
+    let mut seq = from_seq;
+    loop {
+        if seq >= pack.stages.len() {
+            // 全程跑完：全员休眠
+            db.conn().execute(
+                "UPDATE agents SET status='sleeping' WHERE project_id=?1",
+                [project_id],
+            )?;
+            db.append_event(
+                project_id,
+                EventKind::TeamSlept,
+                json!({"reason": "pack finished"}),
+                None,
+                None,
+            )?;
+            return Ok(json!({"action": "pack_finished"}));
+        }
+        let (rid, skipped) = open_stage(db, project_id, pack, seq)?;
+        if !skipped {
+            return Ok(json!({"action": "stage_opened", "run_id": rid, "seq": seq}));
+        }
+        seq += 1;
     }
-    let (rid, skipped) = open_stage(db, project_id, pack, next)?;
-    Ok(
-        json!({"action": if skipped { "stage_skipped" } else { "stage_opened" }, "run_id": rid, "seq": next}),
-    )
 }
 
 /// 盖章确认：waiting_stamp → done → 推进。
@@ -429,12 +442,7 @@ pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchErr
         None,
         Some(&run.id),
     )?;
-    let next = run.seq as usize + 1;
-    if next >= pack.stages.len() {
-        return Ok(json!({"action": "pack_finished"}));
-    }
-    let (rid, skipped) = open_stage(db, project_id, pack, next)?;
-    Ok(json!({"action": if skipped { "stage_skipped" } else { "stage_opened" }, "run_id": rid}))
+    open_next(db, project_id, pack, run.seq as usize + 1)
 }
 
 /// 退回：当前 run 标 rejected，目标 seq 开新 run。
@@ -481,12 +489,7 @@ pub fn skip(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchErro
         None,
         Some(&run.id),
     )?;
-    let next = run.seq as usize + 1;
-    if next >= pack.stages.len() {
-        return Ok(json!({"action": "pack_finished"}));
-    }
-    let (rid, skipped) = open_stage(db, project_id, pack, next)?;
-    Ok(json!({"action": if skipped { "stage_skipped" } else { "stage_opened" }, "run_id": rid}))
+    open_next(db, project_id, pack, run.seq as usize + 1)
 }
 
 pub fn pause(db: &Db, project_id: &str) -> Result<(), OrchError> {
@@ -622,9 +625,15 @@ mod tests {
         // 再 advance 不会动
         let r2 = advance(&db, "p1", &p).unwrap();
         assert_eq!(r2["action"], "waiting_stamp");
-        // 盖章 → 下一阶段（团队没 UI，「界面」按声明被跳过）
+        // 盖章 → 「界面」无 UI 被跳过 → 穿透到「接口」
         let r3 = stamp(&db, "p1", &p).unwrap();
-        assert_eq!(r3["action"], "stage_skipped");
+        assert_eq!(r3["action"], "stage_opened");
+        assert_eq!(r3["seq"], 2);
+        let st: String = db
+            .conn()
+            .query_row("SELECT state FROM stage_runs WHERE seq=1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(st, "skipped");
     }
 
     #[test]
