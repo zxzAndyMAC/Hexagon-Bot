@@ -39,6 +39,8 @@ pub enum EventKind {
     PermissionDenied,
     PermissionShapeRemembered,
     Stamped,
+    StampRejected,
+    Escalated,
     // 检验与工具
     ToolCalled,
     ToolResult,

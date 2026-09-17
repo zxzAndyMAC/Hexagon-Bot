@@ -1,0 +1,661 @@
+//! 复审与打回：裁决回路。
+//!
+//! - 复审：复审意见产物（parse 档）→ pass/reject；reject = 本阶段返工不退阶段。
+//!   复审不实现、不盖章、不自行推进——它只是阶段成功判定的输入。
+//! - 打回：结构化异议（目标产物+小节+理由）→ 路由给该产物的声明复审者裁决。
+//!   同意 → 指针拨回产物所在阶段、产出 Agent 重激活（打回内容进其简报）。
+//!   驳回 → 本阶段继续。
+//! - 升级（直给负责人）：产物已盖章 / 复审者缺席 / 同 Agent 对同产物第 2 次打回。
+//! - 自动路径：声明回填边命中且自治 ≥L1 → 无需等复审者，直接拨回。
+//! - 盖章点驳回：退上一阶段——与打回是两个通道，事件分开。
+
+use crate::artifacts::{self, TierMap};
+use crate::db::Db;
+use crate::orchestra::{self, OrchError, PackDef};
+use crate::tools::ToolContext;
+use crate::trace::{EventKind, TraceError};
+use serde_json::{json, Value};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewError {
+    #[error(transparent)]
+    Artifact(#[from] Box<artifacts::ArtifactError>),
+    #[error(transparent)]
+    Trace(#[from] TraceError),
+    #[error(transparent)]
+    Db(#[from] crate::db::DbError),
+    #[error(transparent)]
+    Orch(#[from] OrchError),
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("artifact not found: {0}")]
+    NoArtifact(String),
+    #[error("flag not found: {0}")]
+    NoFlag(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Pass,
+    Reject,
+}
+impl Verdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FlagRoute {
+    /// 路由给复审者裁决
+    ToReviewer { reviewer_role: String },
+    /// 升级负责人（pending_questions kind=escalation）
+    Escalated { reason: String, question_id: String },
+    /// 回填边命中 + L1+：自动同意拨回
+    AutoAdjudicated { to_seq: i64 },
+}
+
+fn role_of(db: &Db, agent_id: &str) -> Result<String, ReviewError> {
+    Ok(db
+        .conn()
+        .query_row("SELECT role FROM agents WHERE id=?1", [agent_id], |r| {
+            r.get(0)
+        })?)
+}
+
+fn autonomy_rank(db: &Db, project_id: &str) -> Result<u8, ReviewError> {
+    let a: String = db.conn().query_row(
+        "SELECT autonomy FROM projects WHERE id=?1",
+        [project_id],
+        |r| r.get(0),
+    )?;
+    Ok(match a.as_str() {
+        "L1" => 1,
+        "L2" => 2,
+        _ => 0,
+    })
+}
+
+fn escalate(
+    db: &Db,
+    ctx: &ToolContext,
+    reason: &str,
+    flag_payload: Value,
+) -> Result<FlagRoute, ReviewError> {
+    let qid = format!("q{}", db.next_id("q")?);
+    db.conn().execute(
+        "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
+         VALUES (?1,?2,?3,'escalation',?4)",
+        rusqlite::params![qid, ctx.project_id, ctx.agent_id, flag_payload.to_string()],
+    )?;
+    db.append_event(
+        &ctx.project_id,
+        EventKind::Escalated,
+        json!({"reason": reason, "question_id": qid, "flag": flag_payload}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )?;
+    Ok(FlagRoute::Escalated {
+        reason: reason.into(),
+        question_id: qid,
+    })
+}
+
+/// 提交复审：复审意见产物 + ReviewPassed/ReviewRejected 事件。
+/// `verdict` 写进产物头，事件带 artifact_kind 供阶段判定消费。
+pub fn submit_review(
+    db: &Db,
+    ctx: &ToolContext,
+    target_artifact_id: &str,
+    verdict: Verdict,
+    body: &str,
+) -> Result<String, ReviewError> {
+    let (tpath, tkind, trun): (String, String, Option<String>) = db
+        .conn()
+        .query_row(
+            "SELECT path, kind, stage_run_id FROM artifacts WHERE id=?1",
+            [target_artifact_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|_| ReviewError::NoArtifact(target_artifact_id.into()))?;
+    let reviewer = role_of(db, &ctx.agent_id)?;
+    let content = format!(
+        "---\nkind: 复审意见\nauthor: {}\ntarget: {}\nverdict: {}\n---\n{}",
+        ctx.agent_id,
+        tpath,
+        verdict.as_str(),
+        body
+    );
+    let n: i64 = db.conn().query_row(
+        "SELECT COUNT(*)+1 FROM artifacts WHERE project_id=?1 AND kind='复审意见'",
+        [&ctx.project_id],
+        |r| r.get(0),
+    )?;
+    let path = format!("reviews/{}-{}.md", tpath.replace('/', "_"), n);
+    let aid =
+        artifacts::deliver(db, ctx, &TierMap::new(), &path, &content, None).map_err(Box::new)?;
+    db.append_event(
+        &ctx.project_id,
+        match verdict {
+            Verdict::Pass => EventKind::ReviewPassed,
+            Verdict::Reject => EventKind::ReviewRejected,
+        },
+        json!({"artifact_kind": tkind, "artifact_id": target_artifact_id,
+               "artifact_path": tpath, "reviewer": reviewer,
+               "review_artifact": aid, "stage_run_id": trun}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref().or(trun.as_deref()),
+    )?;
+    Ok(aid)
+}
+
+/// 提交打回：登记打回产物 + 路由（复审者 / 自动 / 升级）。
+pub fn submit_flag(
+    db: &Db,
+    ctx: &ToolContext,
+    pack: &PackDef,
+    target_path: &str,
+    section: &str,
+    reason: &str,
+) -> Result<FlagRoute, ReviewError> {
+    // 目标产物（最新版）
+    let (_art_id, art_kind, art_status, art_run, art_author): (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) = db
+        .conn()
+        .query_row(
+            "SELECT id, kind, status, stage_run_id, author_agent_id FROM artifacts
+             WHERE project_id=?1 AND path=?2 ORDER BY version DESC LIMIT 1",
+            rusqlite::params![ctx.project_id, target_path],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .map_err(|_| ReviewError::NoArtifact(target_path.into()))?;
+
+    let flagger = role_of(db, &ctx.agent_id)?;
+    let content = format!(
+        "---\nkind: 打回\nauthor: {}\ntarget: {}\nsection: {}\n---\n{}",
+        ctx.agent_id, target_path, section, reason
+    );
+    let n: i64 = db.conn().query_row(
+        "SELECT COUNT(*)+1 FROM artifacts WHERE project_id=?1 AND kind='打回'",
+        [&ctx.project_id],
+        |r| r.get(0),
+    )?;
+    let flag_path = format!("flags/flag-{n}.md");
+    let flag_id = artifacts::deliver(db, ctx, &TierMap::new(), &flag_path, &content, None)
+        .map_err(Box::new)?;
+
+    db.append_event(
+        &ctx.project_id,
+        EventKind::FlagSubmitted,
+        json!({"flag_id": flag_id, "flagger": flagger, "target": target_path,
+               "target_kind": art_kind, "section": section, "reason": reason}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )?;
+
+    // ---- 升级判定 ----
+    if art_status == "stamped" {
+        return escalate(
+            db,
+            ctx,
+            "target artifact already stamped",
+            json!({"flag_id": flag_id, "target": target_path}),
+        );
+    }
+    // 找声明复审者：全包搜 reviews 声明（复审可声明在后续阶段，如「接口」阶段复审「界面稿」）
+    let reviewer_role: Option<String> = pack.stages.iter().find_map(|st| {
+        st.reviews
+            .iter()
+            .find(|r| r.artifact_kind == art_kind)
+            .map(|r| r.reviewer.clone())
+    });
+    match reviewer_role {
+        None => {
+            return escalate(
+                db,
+                ctx,
+                "no declared reviewer for artifact kind",
+                json!({"flag_id": flag_id, "target": target_path}),
+            );
+        }
+        Some(ref rr) => {
+            let present: bool = db.conn().query_row(
+                "SELECT EXISTS(SELECT 1 FROM agents WHERE project_id=?1 AND role=?2)",
+                rusqlite::params![ctx.project_id, rr],
+                |r| r.get(0),
+            )?;
+            if !present {
+                return escalate(
+                    db,
+                    ctx,
+                    "declared reviewer absent from team",
+                    json!({"flag_id": flag_id, "target": target_path}),
+                );
+            }
+        }
+    }
+    // 重复打回：同 Agent 对同产物第 2 次起 → 升级
+    let prior: i64 = db.conn().query_row(
+        "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='flag_submitted'
+         AND json_extract(payload,'$.flagger')=?2 AND json_extract(payload,'$.target')=?3",
+        rusqlite::params![ctx.project_id, flagger, target_path],
+        |r| r.get(0),
+    )?;
+    if prior > 1 {
+        return escalate(
+            db,
+            ctx,
+            "repeat flag on same artifact",
+            json!({"flag_id": flag_id, "target": target_path}),
+        );
+    }
+
+    // ---- 自动路径：回填边命中 + 自治 ≥L1 ----
+    let author_role = art_author.as_deref().and_then(|a| role_of(db, a).ok());
+    let cur_run = ctx.stage_run_id.as_deref().and_then(|rid| {
+        db.conn()
+            .query_row("SELECT seq FROM stage_runs WHERE id=?1", [rid], |r| {
+                r.get::<_, i64>(0)
+            })
+            .ok()
+    });
+    let edge_hit = cur_run
+        .and_then(|seq| pack.stages.get(seq as usize))
+        .map(|st| {
+            st.backfill_edges
+                .iter()
+                .any(|(f, t)| f == &flagger && Some(t) == author_role.as_ref())
+        })
+        .unwrap_or(false);
+    if edge_hit && autonomy_rank(db, &ctx.project_id)? >= 1 {
+        let to_seq = art_run
+            .as_deref()
+            .and_then(|rid| {
+                db.conn()
+                    .query_row("SELECT seq FROM stage_runs WHERE id=?1", [rid], |r| {
+                        r.get(0)
+                    })
+                    .ok()
+            })
+            .unwrap_or(0);
+        adjudicate_flag(db, ctx, pack, &flag_id, true)?;
+        return Ok(FlagRoute::AutoAdjudicated { to_seq });
+    }
+
+    Ok(FlagRoute::ToReviewer {
+        reviewer_role: reviewer_role.unwrap(),
+    })
+}
+
+/// 裁决打回：同意 → 指针拨回产物所在阶段（产出 Agent 经激活名单重激活，
+/// 打回内容进其简报的 notices）；驳回 → 本阶段继续。
+pub fn adjudicate_flag(
+    db: &Db,
+    ctx: &ToolContext,
+    pack: &PackDef,
+    flag_id: &str,
+    agree: bool,
+) -> Result<Value, ReviewError> {
+    // flag 产物 → 目标产物 → 目标阶段 seq
+    let target: String = db
+        .conn()
+        .query_row(
+            "SELECT json_extract(
+                (SELECT payload FROM events WHERE json_extract(payload,'$.flag_id')=?1
+                  AND kind='flag_submitted' LIMIT 1), '$.target')",
+            [flag_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| ReviewError::NoFlag(flag_id.into()))?;
+    let art_run: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT stage_run_id FROM artifacts WHERE project_id=?1 AND path=?2
+             ORDER BY version DESC LIMIT 1",
+            rusqlite::params![ctx.project_id, target],
+            |r| r.get(0),
+        )
+        .map_err(|_| ReviewError::NoArtifact(target.clone()))?;
+
+    if agree {
+        let to_seq: i64 = art_run
+            .as_deref()
+            .and_then(|rid| {
+                db.conn()
+                    .query_row("SELECT seq FROM stage_runs WHERE id=?1", [rid], |r| {
+                        r.get(0)
+                    })
+                    .ok()
+            })
+            .unwrap_or(0);
+        db.append_event(
+            &ctx.project_id,
+            EventKind::FlagAdjudicated,
+            json!({"flag_id": flag_id, "agree": true, "to_seq": to_seq, "target": target}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        let r = orchestra::rewind(db, &ctx.project_id, pack, to_seq as usize)?;
+        Ok(json!({"adjudicated": "agreed", "rewind": r}))
+    } else {
+        db.append_event(
+            &ctx.project_id,
+            EventKind::FlagAdjudicated,
+            json!({"flag_id": flag_id, "agree": false, "target": target}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        Ok(json!({"adjudicated": "rejected"}))
+    }
+}
+
+/// 盖章点驳回：退上一阶段——与打回不同通道（事件分开）。
+pub fn reject_stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, ReviewError> {
+    let (rid, seq, name): (String, i64, String) = db
+        .conn()
+        .query_row(
+            "SELECT id, seq, stage_name FROM stage_runs
+             WHERE project_id=?1 AND state='waiting_stamp' ORDER BY seq DESC LIMIT 1",
+            [project_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|_| OrchError::NoActiveStage(project_id.into()))?;
+    db.conn().execute(
+        "UPDATE stage_runs SET state='rejected', finished_at=datetime('now') WHERE id=?1",
+        [&rid],
+    )?;
+    db.append_event(
+        project_id,
+        EventKind::StampRejected,
+        json!({"stage": name, "seq": seq}),
+        None,
+        Some(&rid),
+    )?;
+    let prev = (seq - 1).max(0) as usize;
+    let (new_rid, _) = orchestra::open_stage(db, project_id, pack, prev)?;
+    Ok(json!({"action": "stamp_rejected", "reopened_seq": prev, "run_id": new_rid}))
+}
+
+/// 自治档位读写（票 17 的完整语义在此只占存取位）。
+pub fn set_autonomy(db: &Db, project_id: &str, level: &str) -> Result<(), ReviewError> {
+    db.conn().execute(
+        "UPDATE projects SET autonomy=?1 WHERE id=?2",
+        rusqlite::params![level, project_id],
+    )?;
+    db.append_event(
+        project_id,
+        EventKind::AutonomyChanged,
+        json!({"level": level}),
+        None,
+        None,
+    )?;
+    Ok(())
+}
+pub fn get_autonomy(db: &Db, project_id: &str) -> Result<String, ReviewError> {
+    Ok(db.conn().query_row(
+        "SELECT autonomy FROM projects WHERE id=?1",
+        [project_id],
+        |r| r.get(0),
+    )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artifacts::TierMap;
+
+    fn setup(roles: &[&str]) -> (Db, tempfile::TempDir, PackDef) {
+        let db = Db::open_in_memory().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p1','/tmp/x','x','pack','L0')",
+                [],
+            )
+            .unwrap();
+        for (i, r) in roles.iter().enumerate() {
+            db.conn()
+                .execute(
+                    "INSERT INTO agents (id, project_id, role) VALUES (?1,'p1',?2)",
+                    rusqlite::params![format!("a{i}"), r],
+                )
+                .unwrap();
+        }
+        let pack: PackDef = serde_json::from_value(json!({
+        "name":"t","version":1,"stages":[
+            {"name":"界面","roles":["UI"],"due":["界面稿"]},
+            {"name":"接口","roles":["前端","架构师"],"due":["接口说明"],
+             "reviews":[{"artifact_kind":"界面稿","reviewer":"架构师"}],
+             "backfill_edges":[["前端","UI"]]}
+        ]}))
+        .unwrap();
+        (db, tempfile::tempdir().unwrap(), pack)
+    }
+
+    fn ctx(project: &str, agent: &str, dir: &std::path::Path, run: Option<&str>) -> ToolContext {
+        ToolContext {
+            project_id: project.into(),
+            agent_id: agent.into(),
+            repo_root: dir.to_path_buf(),
+            stage_run_id: run.map(str::to_string),
+            owned_globs: vec![],
+            tiers: TierMap::new(),
+        }
+    }
+
+    /// 在 seq0 交付一个界面稿（由 a_ui 产出），返回 (run0_id, artifact_id)
+    fn seed_artifact(
+        db: &Db,
+        dir: &std::path::Path,
+        pack: &PackDef,
+        ui_id: &str,
+    ) -> (String, String) {
+        let (r0, _) = orchestra::open_stage(db, "p1", pack, 0).unwrap();
+        let c = ctx("p1", ui_id, dir, Some(&r0));
+        let aid = artifacts::deliver(
+            db,
+            &c,
+            &TierMap::new(),
+            "ui/screens.md",
+            "---\nkind: 界面稿\nauthor: x\n---\nbody",
+            None,
+        )
+        .unwrap();
+        (r0, aid)
+    }
+
+    #[test]
+    fn review_pass_and_reject_events() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        let (r0, art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        let c = ctx("p1", "a2", dir.path(), Some(&r0));
+        submit_review(&db, &c, &art, Verdict::Pass, "可以").unwrap();
+        submit_review(&db, &c, &art, Verdict::Reject, "分页不一致").unwrap();
+        let items = db
+            .timeline(
+                "p1",
+                None,
+                50,
+                Some(&[EventKind::ReviewPassed, EventKind::ReviewRejected]),
+            )
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].event.kind, EventKind::ReviewRejected);
+        // 复审产物本身是 parse 档登记件
+        let revs = artifacts::query(&db, "p1", Some("复审意见"), None, None, None).unwrap();
+        assert_eq!(revs.len(), 2);
+    }
+
+    #[test]
+    fn flag_routes_to_declared_reviewer() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        // 推进到接口阶段（前端在里面）：先关 seq0 run
+        db.conn()
+            .execute("UPDATE stage_runs SET state='done' WHERE seq=0", [])
+            .unwrap();
+        orchestra::open_next(&db, "p1", &pack, 1).unwrap();
+        let r1: String = db
+            .conn()
+            .query_row(
+                "SELECT id FROM stage_runs WHERE seq=1 AND state='active'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let _ = r0;
+        let c = ctx("p1", "a1", dir.path(), Some(&r1));
+        let route =
+            submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "折叠屏无布局规范").unwrap();
+        assert_eq!(
+            route,
+            FlagRoute::ToReviewer {
+                reviewer_role: "架构师".into()
+            }
+        );
+    }
+
+    #[test]
+    fn flag_escalates_when_stamped() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        let (r0, art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        db.conn()
+            .execute("UPDATE artifacts SET status='stamped' WHERE id=?1", [&art])
+            .unwrap();
+        let c = ctx("p1", "a1", dir.path(), Some(&r0));
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "s", "r").unwrap();
+        assert!(matches!(route, FlagRoute::Escalated { .. }));
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::Escalated]))
+            .unwrap();
+        assert_eq!(
+            items[0].event.payload["reason"],
+            "target artifact already stamped"
+        );
+    }
+
+    #[test]
+    fn flag_escalates_when_reviewer_absent() {
+        let (db, dir, pack) = setup(&["UI", "前端"]); // 无架构师
+        let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        let c = ctx("p1", "a1", dir.path(), Some(&r0));
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "s", "r").unwrap();
+        assert!(matches!(route, FlagRoute::Escalated { .. }));
+    }
+
+    #[test]
+    fn repeat_flag_escalates() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        let c = ctx("p1", "a1", dir.path(), Some(&r0));
+        let r1 = submit_flag(&db, &c, &pack, "ui/screens.md", "s", "r1").unwrap();
+        assert!(matches!(r1, FlagRoute::ToReviewer { .. }));
+        let r2 = submit_flag(&db, &c, &pack, "ui/screens.md", "s", "r2").unwrap();
+        assert!(matches!(r2, FlagRoute::Escalated { .. }));
+    }
+
+    #[test]
+    fn backfill_edge_auto_adjudicates_at_l1() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        set_autonomy(&db, "p1", "L1").unwrap();
+        let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        // 当前阶段 = 接口(seq1)：声明了回填边 前端→UI
+        db.conn()
+            .execute("UPDATE stage_runs SET state='done' WHERE seq=0", [])
+            .unwrap();
+        orchestra::open_next(&db, "p1", &pack, 1).unwrap();
+        let r1: String = db
+            .conn()
+            .query_row(
+                "SELECT id FROM stage_runs WHERE seq=1 AND state='active'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let _ = r0;
+        let c = ctx("p1", "a1", dir.path(), Some(&r1)); // a1=前端
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "无法实现").unwrap();
+        assert_eq!(route, FlagRoute::AutoAdjudicated { to_seq: 0 });
+        // 指针已拨回 seq0：新 active run 是界面
+        let cur: i64 = db
+            .conn()
+            .query_row("SELECT seq FROM stage_runs WHERE state='active'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(cur, 0);
+        // 裁决事件留痕
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::FlagAdjudicated]))
+            .unwrap();
+        assert_eq!(items[0].event.payload["agree"], true);
+    }
+
+    #[test]
+    fn flag_at_l0_waits_for_reviewer_then_rewinds() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        db.conn()
+            .execute("UPDATE stage_runs SET state='done' WHERE seq=0", [])
+            .unwrap();
+        orchestra::open_next(&db, "p1", &pack, 1).unwrap();
+        let r1: String = db
+            .conn()
+            .query_row(
+                "SELECT id FROM stage_runs WHERE seq=1 AND state='active'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // L0：回填边命中也不自动 → 路由复审者
+        let c = ctx("p1", "a1", dir.path(), Some(&r1));
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "无法实现").unwrap();
+        assert!(matches!(route, FlagRoute::ToReviewer { .. }));
+        // 架构师裁决同意 → 拨回
+        let flag_id = db
+            .conn()
+            .query_row(
+                "SELECT json_extract(payload,'$.flag_id') FROM events WHERE kind='flag_submitted'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+        let c_rev = ctx("p1", "a2", dir.path(), Some(&r1));
+        adjudicate_flag(&db, &c_rev, &pack, &flag_id, true).unwrap();
+        let cur: i64 = db
+            .conn()
+            .query_row("SELECT seq FROM stage_runs WHERE state='active'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(cur, 0);
+    }
+
+    #[test]
+    fn stamp_reject_reopens_previous_stage() {
+        let (db, _dir, _pack) = setup(&["UI", "前端"]);
+        let pack: PackDef = serde_json::from_value(json!({
+        "name":"t","version":1,"stages":[
+            {"name":"规格","roles":["UI"],"due":[]},
+            {"name":"合入","roles":["前端"],"due":[],"stamp_point":true}
+        ]}))
+        .unwrap();
+        orchestra::open_stage(&db, "p1", &pack, 0).unwrap();
+        orchestra::advance(&db, "p1", &pack).unwrap(); // seq0 done→seq1
+        orchestra::advance(&db, "p1", &pack).unwrap(); // seq1 ready→awaiting_stamp
+        let r = reject_stamp(&db, "p1", &pack).unwrap();
+        assert_eq!(r["action"], "stamp_rejected");
+        assert_eq!(r["reopened_seq"], 0);
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::StampRejected]))
+            .unwrap();
+        assert_eq!(items.len(), 1);
+    }
+}

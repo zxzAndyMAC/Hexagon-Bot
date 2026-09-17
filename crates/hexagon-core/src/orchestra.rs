@@ -392,7 +392,7 @@ fn finish_stage(
 }
 
 /// 开下一个阶段；跳过是即时的——连续穿到第一个非跳过阶段或跑完。
-fn open_next(
+pub fn open_next(
     db: &Db,
     project_id: &str,
     pack: &PackDef,
