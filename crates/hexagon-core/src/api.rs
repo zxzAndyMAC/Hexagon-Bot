@@ -230,12 +230,52 @@ impl Workbench {
 
     // ---------- 命令 ----------
 
-    /// 发消息：解析 @/# 成结构化 token。
+    /// 发消息：解析 @/# 成结构化 token；文本指令与按钮走同一命令通道。
+    /// 「退回[N]/回退[N]」「跳过」「盖章」「暂停」「休眠/全员休眠」「恢复」
+    /// 命中则分发到对应命令（事件形状与按钮完全一致），消息本体照常入档。
     pub fn send_message(&self, body: &str) -> Result<i64, ApiError> {
         let tokens = parse_tokens(body);
-        Ok(self
+        let id = self
             .db
-            .append_message(&self.project_id, "owner", body, &tokens, None, None)?)
+            .append_message(&self.project_id, "owner", body, &tokens, None, None)?;
+        if let Some(cmd) = parse_command(body) {
+            log::info!("owner text command: {cmd:?}");
+            // 命令失败不吞消息——记日志，消息已入档
+            if let Err(e) = self.dispatch_command(&cmd) {
+                log::warn!("text command {cmd:?} failed: {e}");
+            }
+        }
+        Ok(id)
+    }
+
+    fn dispatch_command(&self, cmd: &TextCommand) -> Result<(), ApiError> {
+        match cmd {
+            TextCommand::Rewind(to) => {
+                let to_seq = match to {
+                    Some(s) => *s,
+                    None => {
+                        // 默认退回上一阶段
+                        let seq: i64 = self.db.conn().query_row(
+                            "SELECT seq FROM stage_runs WHERE project_id=?1 AND state='active'",
+                            [&self.project_id],
+                            |r| r.get(0),
+                        )?;
+                        (seq - 1).max(0) as usize
+                    }
+                };
+                self.rewind(to_seq)?;
+            }
+            TextCommand::Skip => {
+                self.skip()?;
+            }
+            TextCommand::Stamp => {
+                self.stamp()?;
+            }
+            TextCommand::Pause => self.pause()?,
+            TextCommand::Resume => self.resume()?,
+            TextCommand::SleepAll => self.sleep_all()?,
+        }
+        Ok(())
     }
 
     /// 必问裁决。
@@ -518,11 +558,86 @@ pub fn parse_tokens(body: &str) -> Vec<MessageToken> {
     out
 }
 
+/// 文本指令（与按钮同权同痕）：只认整句命令，防普通语句被劫持。
+#[derive(Debug, PartialEq)]
+enum TextCommand {
+    Rewind(Option<usize>),
+    Skip,
+    Stamp,
+    Pause,
+    Resume,
+    SleepAll,
+}
+
+/// 整句匹配：命令词 + 可选数字参数，多余文本一律不算命令。
+fn parse_command(body: &str) -> Option<TextCommand> {
+    let b = body.trim();
+    match b {
+        "跳过" => return Some(TextCommand::Skip),
+        "盖章" | "通过" => return Some(TextCommand::Stamp),
+        "暂停" => return Some(TextCommand::Pause),
+        "恢复" => return Some(TextCommand::Resume),
+        "休眠" | "全员休眠" => return Some(TextCommand::SleepAll),
+        "退回" | "回退" | "退回上一阶段" | "回退上一阶段" => {
+            return Some(TextCommand::Rewind(None))
+        }
+        _ => {}
+    }
+    // 「退回 2」「回退到 1」：前缀 + 纯数字尾巴才算命令，其他尾巴不劫持
+    for prefix in ["退回", "回退"] {
+        if let Some(rest) = b.strip_prefix(prefix) {
+            let rest = rest.trim().trim_start_matches('到').trim();
+            if let Ok(n) = rest.parse::<usize>() {
+                return Some(TextCommand::Rewind(Some(n)));
+            }
+            return None; // 「退回」打头但尾巴不是数字 → 普通消息
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::provider::ScriptedProvider;
     use crate::turn::{text_response, tool_response};
+
+    #[test]
+    fn text_command_same_shape_as_button() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"t","version":1,
+            "stages":[{"name":"s0","roles":[],"due":[]},{"name":"s1","roles":["后端"],"due":[]}]
+        }))
+        .unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], Some(pack)).unwrap();
+        wb.open_stage(0).unwrap(); // 无角色 → skipped
+        wb.open_stage(1).unwrap(); // s1 active
+                                   // 文本指令「退回」应与按钮 rewind 产生同样事件
+        wb.send_message("退回").unwrap();
+        let kinds: Vec<String> = wb
+            .events(Some(&[EventKind::StageRewound]))
+            .unwrap()
+            .iter()
+            .map(|e| format!("{:?}", e.kind))
+            .collect();
+        assert_eq!(kinds, vec!["StageRewound"]);
+        // 普通消息不触发命令
+        let before = wb.events(None).unwrap().len();
+        wb.send_message("退回这个事情我们再想想").unwrap();
+        assert_eq!(wb.events(None).unwrap().len(), before + 1); // 只多一条消息
+    }
+
+    #[test]
+    fn mention_and_path_reach_sleeping_agent_brief() {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        // a0(后端) 默认 sleeping；负责人点名 + 路径指针
+        wb.send_message("@后端 参考 #src/api.rs 重写鉴权").unwrap();
+        let brief = crate::turn::build_brief_context(&wb.db, "a0", None).unwrap();
+        assert_eq!(brief.mentions, vec!["@后端 参考 #src/api.rs 重写鉴权"]);
+        assert_eq!(brief.paths, vec!["src/api.rs"]);
+    }
 
     #[test]
     fn token_parsing() {

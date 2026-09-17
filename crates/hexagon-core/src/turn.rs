@@ -119,6 +119,8 @@ pub struct BriefContext {
     pub upstream: Vec<Value>,
     /// 点名/回复该 Agent 的消息
     pub mentions: Vec<String>,
+    /// `#` 路径指针：随点名消息携带的仓内路径，Agent 经工具层去读（非全文注入）
+    pub paths: Vec<String>,
     /// 唤醒/打回通知
     pub notices: Vec<Value>,
 }
@@ -166,7 +168,7 @@ pub fn build_brief_context(
     };
 
     // 点名消息：tokens JSON 里含该角色 mention
-    let mentions = {
+    let (mentions, paths) = {
         let mut st = db
             .conn()
             .prepare("SELECT body, tokens FROM messages WHERE project_id = ?1 ORDER BY id")?;
@@ -175,15 +177,26 @@ pub fn build_brief_context(
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter()
+        let mut paths = Vec::new();
+        let mentions = rows
+            .into_iter()
             .filter(|(_, tokens)| {
-                serde_json::from_str::<Vec<MessageToken>>(tokens)
-                .unwrap_or_default()
-                .iter()
-                .any(|t| matches!(t, MessageToken::Mention { agent_role } if agent_role == &role))
+                let toks: Vec<MessageToken> = serde_json::from_str(tokens).unwrap_or_default();
+                let named = toks.iter().any(
+                    |t| matches!(t, MessageToken::Mention { agent_role } if agent_role == &role),
+                );
+                if named {
+                    for t in toks {
+                        if let MessageToken::PathRef { path } = t {
+                            paths.push(path);
+                        }
+                    }
+                }
+                named
             })
             .map(|(body, _)| body)
-            .collect()
+            .collect();
+        (mentions, paths)
     };
 
     // 唤醒/打回通知：指向该 Agent 的裁决/唤醒事件
@@ -206,6 +219,7 @@ pub fn build_brief_context(
         artifacts,
         upstream,
         mentions,
+        paths,
         notices,
     })
 }
@@ -282,6 +296,7 @@ pub fn run_turn(
                         "artifacts": brief.artifacts,
                         "upstream": brief.upstream,
                         "mentions": brief.mentions,
+                        "paths": brief.paths,
                         "notices": brief.notices,
                     }
                 })
