@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod orchestra;
 pub mod permissions;
 pub mod provider;
+pub mod publish;
 pub mod review;
 pub mod scenario;
 pub mod tools;

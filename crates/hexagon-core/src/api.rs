@@ -29,6 +29,8 @@ pub enum ApiError {
     Tool(#[from] crate::tools::ToolError),
     #[error(transparent)]
     Artifact(#[from] crate::artifacts::ArtifactError),
+    #[error(transparent)]
+    Publish(#[from] crate::publish::PublishError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
@@ -48,6 +50,7 @@ pub struct Workbench {
     pub db: Db,
     pub registry: Registry,
     pub providers: HashMap<String, Arc<dyn ModelProvider>>,
+    pub creds: Arc<dyn crate::credentials::CredentialStore>,
     pub project_id: String,
     pub repo_root: PathBuf,
     pub pack: Option<PackDef>,
@@ -83,6 +86,7 @@ impl Workbench {
             db,
             registry: Registry::builtin(),
             providers: HashMap::new(),
+            creds: Arc::new(crate::credentials::OsKeychain),
             project_id,
             repo_root: dir,
             pack,
@@ -109,6 +113,7 @@ impl Workbench {
             db,
             registry: Registry::builtin(),
             providers: HashMap::new(),
+            creds: Arc::new(crate::credentials::MemoryStore::default()),
             project_id: "p1".into(),
             repo_root: dir.to_path_buf(),
             pack,
@@ -117,6 +122,31 @@ impl Workbench {
 
     pub fn register_provider(&mut self, slot: &str, p: Arc<dyn ModelProvider>) {
         self.providers.insert(slot.into(), p);
+    }
+
+    /// 测试/桌面端注入凭据实现（默认内存库；生产壳换成 OsKeychain）。
+    pub fn set_credential_store(&mut self, store: Arc<dyn crate::credentials::CredentialStore>) {
+        self.creds = store;
+    }
+
+    /// 远程发布：发起确认卡（kind='publish'）。
+    pub fn request_publish(&self, remote: &str) -> Result<String, ApiError> {
+        Ok(crate::publish::request(&self.db, &self.project_id, remote)?)
+    }
+
+    /// 确认发布：凭据闸 + push。
+    pub fn confirm_publish(&self, qid: &str) -> Result<Value, ApiError> {
+        Ok(crate::publish::confirm(
+            &self.db,
+            &self.project_id,
+            qid,
+            self.creds.as_ref(),
+        )?)
+    }
+
+    /// 拒绝发布。
+    pub fn reject_publish(&self, qid: &str) -> Result<(), ApiError> {
+        Ok(crate::publish::reject(&self.db, &self.project_id, qid)?)
     }
 
     fn agent_by_role(&self, role: &str) -> Result<String, ApiError> {
