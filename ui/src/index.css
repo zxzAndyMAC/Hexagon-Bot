@@ -134,7 +134,8 @@ input[type='checkbox'], input[type='radio'] {
 }
 input[type='checkbox'] { border-radius: var(--r-xs); }
 input[type='radio'] { border-radius: 50%; }
-input[type='checkbox']:hover:not(:disabled), input[type='radio']:hover:not(:disabled) { background: var(--bg-3); }
+input[type='checkbox']:hover:not(:disabled):not(:checked),
+input[type='radio']:hover:not(:disabled):not(:checked) { background: var(--bg-3); }
 input[type='checkbox']:checked { background: var(--accent); border-color: var(--accent); }
 input[type='checkbox']:checked::after {
   content: ''; width: 8px; height: 4.5px;
