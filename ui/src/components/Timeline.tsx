@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import ReactMarkdown from 'react-markdown'
 import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
+import { Md } from './Md'
 import { useUiStore } from '../store'
 import { buildRows, nodeMarks, type Filter, type NodeMark } from '../timelineModel'
 import { Avatar } from './Avatar'
@@ -93,23 +93,42 @@ export function EventRow({ item }: { item: TimelineItem }) {
       >
         <div className="sysline" />
         <span className="syslabel" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {path}
+          <span className="mono" style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: 3 }}>
+            {path}
+          </span>
           <span className={`chip ${chipCls(status)}`}>{status}</span>
         </span>
       </div>
     )
   }
-  if (k === 'flag_submitted' || k === 'flag_adjudicated') {
+  if (k === 'flag_submitted') {
     const ev = item.event
     const severity = String(ev.payload.severity ?? '')
     return (
-      <div className="card card-flag" style={{ margin: '4px 14px' }}>
+      <div className="card card-flag" style={{ margin: '4px 14px', padding: '8px 12px' }}>
         <div style={{ fontSize: 12 }}>
           <span className={`chip ${chipCls(severity)}`} style={{ marginRight: 8 }}>{severity}</span>
           {String(ev.payload.target ?? '')}
           {ev.payload.section ? ` · ${String(ev.payload.section)}` : ''}
         </div>
         <div className="dim" style={{ marginTop: 4, fontSize: 12 }}>{String(ev.payload.reason ?? '')}</div>
+      </div>
+    )
+  }
+  if (k === 'flag_adjudicated') {
+    const ev = item.event
+    const agree = Boolean(ev.payload.agree)
+    return (
+      <div className="sysrow">
+        <div className="sysline" />
+        <span className="syslabel" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <Icon name="flag" size={9} />
+          <span className={`chip ${agree ? 'ok' : 'err'}`}>
+            {agree ? t('cards.agreeContinue') : t('cards.rejectContinue')}
+          </span>
+          <span className="mono">{String(ev.payload.flag_id ?? '')}</span>
+          <span className="dim3">· {String(ev.payload.by ?? '')}</span>
+        </span>
       </div>
     )
   }
@@ -121,23 +140,34 @@ export function EventRow({ item }: { item: TimelineItem }) {
     const time = fmtTime(item.event.created_at)
     if (isOwner) {
       return (
-        <div className="msg" style={{ alignItems: 'flex-end' }}>
-          <div className="msg-author dim" style={{ textAlign: 'right' }}>
-            {title}{time && <span className="dim3" style={{ marginLeft: 6 }}>{time}</span>}
+        <div className="msg" style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-start', gap: 9 }}>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+            <div className="msg-author dim" style={{ textAlign: 'right' }}>
+              {title}{time && <span className="dim3" style={{ marginLeft: 6 }}>{time}</span>}
+            </div>
+            <div className="msg-body"><Md>{m.body}</Md></div>
           </div>
-          <div className="msg-body"><ReactMarkdown>{m.body}</ReactMarkdown></div>
+          <Avatar agentId="owner" role={title} size={34} />
         </div>
       )
     }
     return (
       <div className="msg" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
-        {member && <Avatar agentId={m.author} role={member.role} size={34} />}
+        {member && (
+          <span
+            style={{ cursor: 'pointer', flexShrink: 0 }}
+            title={t('agent.openTab')}
+            onClick={() => openTab({ id: `agent:${member.id}`, kind: 'agent', title: member.role, agentId: member.id, role: member.role })}
+          >
+            <Avatar agentId={m.author} role={member.role} size={34} />
+          </span>
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
             <span style={{ fontWeight: 560, fontSize: 12 }}>{title}</span>
             {time && <span className="dim3" style={{ fontSize: 10 }}>{time}</span>}
           </div>
-          <div className="msg-body"><ReactMarkdown>{m.body}</ReactMarkdown></div>
+          <div className="msg-body"><Md>{m.body}</Md></div>
         </div>
       </div>
     )
@@ -173,6 +203,25 @@ export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineIte
           </span>
         </div>
       ))}
+    </div>
+  )
+}
+
+export function SysGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; expanded: boolean; onToggle: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <div>
+      <div
+        className="sysrow"
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={onToggle}
+      >
+        <div className="sysline" />
+        <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name="list" size={10} /> {t('timeline.sysEvents', { count: items.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
+        </span>
+      </div>
+      {expanded && items.map((it) => <SystemRow key={it.event.id} item={it} />)}
     </div>
   )
 }
@@ -293,6 +342,19 @@ export function Timeline() {
             if (row.type === 'toolgroup') {
               return (
                 <ToolGroupRow
+                  items={row.items}
+                  expanded={expanded.has(row.idx)}
+                  onToggle={() => setExpanded((s) => {
+                    const n = new Set(s)
+                    if (n.has(row.idx)) n.delete(row.idx); else n.add(row.idx)
+                    return n
+                  })}
+                />
+              )
+            }
+            if (row.type === 'sysgroup') {
+              return (
+                <SysGroupRow
                   items={row.items}
                   expanded={expanded.has(row.idx)}
                   onToggle={() => setExpanded((s) => {

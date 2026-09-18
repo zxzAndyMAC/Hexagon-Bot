@@ -4,6 +4,8 @@ import { api, type ArtifactRow } from '../api'
 import { useUiStore } from '../store'
 import { CodeView, DiffView } from './DiffView'
 import { diffLines } from '../diff'
+import { langFor } from '../highlight'
+import { Md } from './Md'
 
 const chipCls = (s: string) =>
   s === 'stamped' ? 'amber' : s === 'valid' ? 'ok' : s === 'pending' ? 'warn' : ''
@@ -23,6 +25,9 @@ export function ArtifactTab({ path }: { path: string }) {
   const [mode, setMode] = useState<'content' | 'diff'>('content')
   const [textA, setTextA] = useState<string | null>(null)
   const [textB, setTextB] = useState<string | null>(null)
+
+  const isMd = path.toLowerCase().endsWith('.md')
+  const [mdView, setMdView] = useState<'preview' | 'source'>('preview')
 
   const selB = vB ?? latest?.version ?? 1
   const selA = vA ?? (versions.length > 1 ? versions[versions.length - 2]?.version ?? 1 : 1)
@@ -58,6 +63,24 @@ export function ArtifactTab({ path }: { path: string }) {
           </span>
         )}
         <div style={{ flex: 1 }} />
+        {isMd && mode === 'content' && (
+          <>
+            <button
+              className={`btn ${mdView === 'preview' ? 'primary' : ''}`}
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={() => setMdView('preview')}
+            >
+              {t('art.preview')}
+            </button>
+            <button
+              className={`btn ${mdView === 'source' ? 'primary' : ''}`}
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={() => setMdView('source')}
+            >
+              {t('art.source')}
+            </button>
+          </>
+        )}
         {versions.length > 1 && (
           <>
             <button
@@ -87,7 +110,15 @@ export function ArtifactTab({ path }: { path: string }) {
         <VersionPicker versions={versions} value={selB} onChange={setVB} />
       </div>
       {mode === 'content'
-        ? (textB != null ? <CodeView text={textB} /> : <div className="dim3" style={{ padding: 14 }}>{t('art.unavailable')}</div>)
+        ? (textB != null
+            ? (isMd && mdView === 'preview'
+                ? (
+                  <div className="msg-body" style={{ flex: 1, overflowY: 'auto', maxWidth: 'none', maxHeight: 'none', margin: 14 }}>
+                    <Md>{textB}</Md>
+                  </div>
+                )
+                : <CodeView text={textB} lang={langFor(path)} />)
+            : <div className="dim3" style={{ padding: 14 }}>{t('art.unavailable')}</div>)
         : (textA != null && textB != null ? <DiffView ops={ops} /> : <div className="dim3" style={{ padding: 14 }}>{t('art.unavailable')}</div>)}
     </div>
   )

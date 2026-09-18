@@ -1,12 +1,81 @@
 import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api'
+import { api, type TimelineItem } from '../api'
 import { useUiStore } from '../store'
+import { CodeBlock, Md } from './Md'
 import { Avatar } from './Avatar'
-import { EventRow, ToolGroupRow } from './Timeline'
-import { buildRows } from '../timelineModel'
+import { Icon, type IconName } from './Icon'
 
-/** Agent 活动视图：头卡 + 按 agent_id 过滤的事件流。 */
+type Step = {
+  id: number
+  kind: string
+  icon: IconName
+  tone: string
+  label: string
+  summary?: string
+  detail?: string
+  ok?: boolean
+  message?: string
+  path?: string
+  divider?: boolean
+  time: string
+}
+
+const STEP_META: Record<string, { icon: IconName; tone: string }> = {
+  turn_finished: { icon: 'check', tone: 'var(--ok)' },
+  turn_failed: { icon: 'warn', tone: 'var(--err)' },
+  agent_activated: { icon: 'bolt', tone: 'var(--ok)' },
+  agent_slept: { icon: 'sleep', tone: 'var(--text-3)' },
+  consult_wakeup: { icon: 'sleep', tone: 'var(--warn)' },
+  stage_finished: { icon: 'stamp', tone: 'var(--accent)' },
+  artifact_delivered: { icon: 'artifact', tone: 'var(--ok)' },
+  artifact_rejected: { icon: 'artifact', tone: 'var(--err)' },
+  review_passed: { icon: 'check', tone: 'var(--ok)' },
+  review_rejected: { icon: 'warn', tone: 'var(--err)' },
+  review_skipped: { icon: 'arrow-right', tone: 'var(--text-3)' },
+  flag_submitted: { icon: 'flag', tone: 'var(--flag)' },
+  flag_adjudicated: { icon: 'flag', tone: 'var(--flag)' },
+  permission_asked: { icon: 'help', tone: 'var(--warn)' },
+  permission_allowed: { icon: 'check', tone: 'var(--ok)' },
+  permission_denied: { icon: 'close', tone: 'var(--err)' },
+  permission_shape_remembered: { icon: 'check', tone: 'var(--text-3)' },
+  escalated: { icon: 'escalate', tone: 'var(--err)' },
+  test_ran: { icon: 'check', tone: 'var(--ok)' },
+  proposal_queued: { icon: 'diff', tone: 'var(--accent)' },
+  proposal_reviewed: { icon: 'diff', tone: 'var(--warn)' },
+  proposal_stamped: { icon: 'stamp', tone: 'var(--accent)' },
+  proposal_rejected: { icon: 'diff', tone: 'var(--err)' },
+  proposal_activated: { icon: 'bolt', tone: 'var(--ok)' },
+  proposal_rolled_back: { icon: 'arrow-left', tone: 'var(--err)' },
+  publish_requested: { icon: 'publish', tone: 'var(--warn)' },
+  publish_confirmed: { icon: 'publish', tone: 'var(--ok)' },
+  publish_rejected: { icon: 'publish', tone: 'var(--err)' },
+  publish_failed: { icon: 'publish', tone: 'var(--err)' },
+  backfill_executed: { icon: 'refresh', tone: 'var(--text-2)' },
+  usage_cap_hit: { icon: 'yen', tone: 'var(--err)' },
+  owner_command: { icon: 'send', tone: 'var(--accent)' },
+  fastpath_dispatched: { icon: 'bolt', tone: 'var(--accent)' },
+  system: { icon: 'list', tone: 'var(--text-3)' },
+}
+
+const TOOL_LABEL: Record<string, string> = {
+  'fs.read': 'stepRead', 'fs.write': 'stepWrite', 'fs.edit': 'stepWrite',
+  'fs.list': 'stepList', 'fs.search': 'stepSearch', bash: 'stepBash',
+}
+
+const TOOL_ICON: Record<string, IconName> = {
+  'fs.read': 'artifact', 'fs.write': 'diff', 'fs.edit': 'diff',
+  'fs.list': 'folder', 'fs.search': 'list', bash: 'tool',
+}
+
+function fmtTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+/** Agent 活动视图：头卡 + 执行链路（步骤按序，可展开看 payload）。 */
 export function AgentTab({ agentId }: { agentId: string }) {
   const { t } = useTranslation()
   const { team, timeline, refresh, openTab } = useUiStore()
@@ -14,14 +83,61 @@ export function AgentTab({ agentId }: { agentId: string }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
 
-  const rows = useMemo(() => {
+  const steps = useMemo(() => {
     const items = timeline.filter((it) => it.event.agent_id === agentId)
-    return buildRows(items, 'all')
-  }, [timeline, agentId])
+    const evLabel = (k: string) => t(`ev.${k}`, { defaultValue: k.replace(/_/g, ' ') })
+    const out: Step[] = []
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]
+      const ev = it.event
+      const p = ev.payload as Record<string, unknown>
+      const time = fmtTime(ev.created_at)
+      const base = { id: ev.id, kind: ev.kind, time }
+      if (it.message) {
+        out.push({ ...base, icon: 'agent', tone: 'var(--accent)', label: evLabel('agent_message'), message: it.message.body })
+        continue
+      }
+      if (ev.kind === 'turn_started') {
+        out.push({ ...base, icon: 'bolt', tone: 'var(--accent)', label: `${evLabel('turn_started')} · ${String(p.stage ?? '')}`, divider: true })
+        continue
+      }
+      if (ev.kind === 'tool_called') {
+        const tool = String(p.tool ?? '')
+        const res: TimelineItem | undefined = items[i + 1]?.event.kind === 'tool_result' ? items[++i] : undefined
+        out.push({
+          ...base,
+          icon: TOOL_ICON[tool] ?? 'tool',
+          tone: 'var(--text-2)',
+          label: t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool }),
+          summary: String(p.path ?? p.input ?? ''),
+          detail: JSON.stringify({ ...p, ...(res ? { result: res.event.payload } : {}) }, null, 2),
+          ok: res ? res.event.payload.ok !== false : undefined,
+          path: p.path ? String(p.path) : undefined,
+        })
+        continue
+      }
+      if (ev.kind === 'tool_result') continue // 已被 tool_called 吸收
+      const meta = STEP_META[ev.kind] ?? { icon: 'list' as IconName, tone: 'var(--text-3)' }
+      out.push({
+        ...base,
+        ...meta,
+        label: evLabel(ev.kind),
+        summary: String(p.path ?? p.stage ?? p.flag_id ?? p.proposal_id ?? p.reason ?? p.tool ?? ''),
+        detail: Object.keys(p).length ? JSON.stringify(p, null, 2) : undefined,
+        path: ev.kind === 'artifact_delivered' ? String(p.path ?? '') : undefined,
+      })
+    }
+    return out
+  }, [timeline, agentId, t])
 
   if (!member) return <div className="dim3" style={{ padding: 14 }}>{agentId}</div>
 
   const sleeping = member.status === 'sleeping'
+  const toggle = (id: number) => setExpanded((s) => {
+    const n = new Set(s)
+    if (n.has(id)) n.delete(id); else n.add(id)
+    return n
+  })
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -72,43 +188,55 @@ export function AgentTab({ agentId }: { agentId: string }) {
           {sleeping ? t('agent.wake') : t('agent.sleep')}
         </button>
       </div>
-      {/* 过滤事件流 */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      {/* 执行链路 */}
+      <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 8 }}>
         <div className="dim3" style={{ padding: '6px 14px', fontSize: 10, fontWeight: 560 }}>
-          {t('agent.activity')}
+          {t('agent.chain')}
         </div>
-        {rows.length === 0 && <div className="dim3" style={{ padding: '4px 14px' }}>{t('agent.noEvents')}</div>}
-        {rows.map((row) => {
-          if (row.type === 'toolgroup') {
-            return (
-              <ToolGroupRow
-                key={row.idx}
-                items={row.items}
-                expanded={expanded.has(row.idx)}
-                onToggle={() => setExpanded((s) => {
-                  const n = new Set(s)
-                  if (n.has(row.idx)) n.delete(row.idx); else n.add(row.idx)
-                  return n
-                })}
-              />
-            )
-          }
-          const isArt = row.item.event.kind === 'artifact_delivered'
-          return (
-            <div
-              key={row.idx}
-              style={isArt ? { cursor: 'pointer' } : undefined}
-              onClick={isArt
-                ? () => {
-                    const p = String(row.item.event.payload.path ?? '')
-                    if (p) openTab({ id: `art:${p}`, kind: 'artifact', title: p, path: p })
-                  }
-                : undefined}
-            >
-              <EventRow item={row.item} />
+        {steps.length === 0 && <div className="dim3" style={{ padding: '4px 14px' }}>{t('agent.noEvents')}</div>}
+        {steps.map((s) => s.divider ? (
+          <div key={s.id} style={{ padding: '12px 14px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: s.tone, display: 'inline-flex' }}><Icon name={s.icon} size={10} /></span>
+            <span style={{ fontWeight: 560, fontSize: 11, color: 'var(--text-2)' }}>{s.label}</span>
+            <span className="dim3" style={{ fontSize: 10 }}>{s.time}</span>
+            <div className="sysline" style={{ flex: 1 }} />
+          </div>
+        ) : (
+          <div
+            key={s.id}
+            className="row-line"
+            style={{ padding: '5px 14px 5px 24px', fontSize: 12, cursor: s.detail ? 'pointer' : undefined }}
+            onClick={() => { if (s.detail) toggle(s.id) }}
+          >
+            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+              <span style={{ color: s.tone, display: 'inline-flex', alignSelf: 'center' }}><Icon name={s.icon} size={11} /></span>
+              <span style={{ fontWeight: 510 }}>{s.label}</span>
+              {s.summary && (
+                <span
+                  className={`mono ${s.path ? 'file-link' : 'dim'}`}
+                  style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}
+                  title={s.path ?? undefined}
+                  onClick={s.path ? (e) => { e.stopPropagation(); openTab({ id: `art:${s.path}`, kind: 'artifact', title: s.path!, path: s.path! }) } : undefined}
+                >
+                  {s.summary}
+                </span>
+              )}
+              {s.ok != null && <span className={`chip ${s.ok ? 'ok' : 'err'}`}>{s.ok ? 'ok' : 'err'}</span>}
+              {s.detail && <span className="dim3" style={{ display: 'inline-flex' }}><Icon name={expanded.has(s.id) ? 'chevron-down' : 'chevron-right'} size={9} /></span>}
+              <span className="dim3" style={{ marginLeft: 'auto', fontSize: 10, flexShrink: 0 }}>{s.time}</span>
             </div>
-          )
-        })}
+            {s.message && (
+              <div className="msg-body" style={{ maxWidth: '82%', marginTop: 4 }}>
+                <Md>{s.message}</Md>
+              </div>
+            )}
+            {s.detail && expanded.has(s.id) && (
+              <div style={{ margin: '4px 0 2px', padding: '6px 8px', background: 'var(--bg-1)', borderRadius: 6, overflowX: 'auto', fontSize: 11 }}>
+                <CodeBlock code={s.detail} lang="json" />
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )

@@ -15,9 +15,20 @@ export const DECISION_KINDS = new Set([
 
 export const TOOL_KINDS = new Set(['tool_called', 'tool_result'])
 
+// EventRow 里有专门渲染的 kind；其余无消息事件落入 SystemRow，连续成片时折叠。
+const SPECIAL_KINDS = new Set([
+  'stage_started', 'return_summary', 'artifact_delivered', 'flag_submitted', 'flag_adjudicated',
+])
+
+const isSysItem = (it: TimelineItem) =>
+  !TOOL_KINDS.has(it.event.kind) && !SPECIAL_KINDS.has(it.event.kind) && it.message == null
+
+const SYS_GROUP_MIN = 3
+
 export type Row =
   | { type: 'item'; item: TimelineItem; idx: number }
   | { type: 'toolgroup'; items: TimelineItem[]; idx: number }
+  | { type: 'sysgroup'; items: TimelineItem[]; idx: number }
 
 export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
   const vis = timeline.filter((it) =>
@@ -36,7 +47,25 @@ export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
       rows.push({ type: 'item', item: it, idx: it.event.id })
     }
   }
-  return rows
+  const out: Row[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    if (r.type === 'item' && isSysItem(r.item)) {
+      let j = i
+      while (j < rows.length) {
+        const x = rows[j]
+        if (x.type !== 'item' || !isSysItem(x.item)) break
+        j++
+      }
+      if (j - i >= SYS_GROUP_MIN) {
+        out.push({ type: 'sysgroup', items: rows.slice(i, j).map((x) => (x as { item: TimelineItem }).item), idx: r.item.event.id })
+        i = j - 1
+        continue
+      }
+    }
+    out.push(r)
+  }
+  return out
 }
 
 export type NodeMark = { rowIdx: number; icon: IconName; label: string; pending?: boolean }
