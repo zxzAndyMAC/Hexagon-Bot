@@ -7,6 +7,7 @@ const KIND_ICON: Record<WorkTab['kind'], string> = {
   artifact: '□',
   diff: '±',
   agent: '◍',
+  usage: '◔',
 }
 
 export function TabBar() {

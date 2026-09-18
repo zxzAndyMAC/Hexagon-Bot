@@ -75,10 +75,15 @@ export interface UsageRow {
   calls?: number
   spent_mc?: number
   limit_cents?: number | null
+  tokens?: number
 }
 
-export interface UsagePoint {
-  day: string
+export interface UsageBucket {
+  bucket: string // "YYYY-MM-DD" | "YYYY-MM-DD HH:00"
+  agent_id?: string | null
+  prompt_tokens: number
+  completion_tokens: number
+  tool_output_tokens: number
   cost_mc: number
 }
 
@@ -115,7 +120,8 @@ export const api = {
     return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload || '{}') }))
   },
   usage: () => call<UsageRow[]>('usage'),
-  usageSeries: () => call<UsagePoint[]>('usage_series'),
+  usageSeries: (granularity: 'day' | 'hour' = 'day', days?: number | null) =>
+    call<UsageBucket[]>('usage_series', { granularity, days: days ?? null }),
   setUsageLimit: (limitCents: number | null) =>
     call<void>('set_usage_limit', { limitCents }),
   setLogEnabled: (enabled: boolean) => call<void>('set_log_enabled', { enabled }),
@@ -190,14 +196,30 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { agent_id: 'a0', model: 'mock-chat', stage: '接口', prompt_tokens: 18000, completion_tokens: 4200, tool_output_tokens: 0, cost_mc: 7400, calls: 8 },
         { agent_id: 'a0', model: 'mock-chat', stage: '实现', prompt_tokens: 14000, completion_tokens: 3900, tool_output_tokens: 0, cost_mc: 5000, calls: 6 },
         { agent_id: 'a1', model: 'mock-chat', stage: '实现', prompt_tokens: 61000, completion_tokens: 20400, tool_output_tokens: 3000, cost_mc: 25800, calls: 22 },
-        { _total: true, spent_mc: 38200, limit_cents: 20000 },
+        { _total: true, spent_mc: 38200, limit_cents: 20000, tokens: 124500 },
       ] as T
-    case 'usage_series':
+    case 'usage_series': {
+      // 按 bucket × agent 的 mock 序列（粒度/范围参数在 mock 里不强模拟过滤）
+      const mk = (bucket: string, agent: string, p: number, c: number, t: number, cost: number) =>
+        ({ bucket, agent_id: agent, prompt_tokens: p, completion_tokens: c, tool_output_tokens: t, cost_mc: cost })
+      if (args?.granularity === 'hour') {
+        return [
+          mk('2026-07-07 08:00', 'a0', 3200, 900, 0, 1500),
+          mk('2026-07-07 08:00', 'a1', 5400, 1800, 400, 2600),
+          mk('2026-07-07 09:00', 'a0', 6100, 2100, 0, 2400),
+          mk('2026-07-07 09:00', 'a1', 9800, 3400, 800, 4200),
+          mk('2026-07-07 10:00', 'a1', 7200, 2600, 600, 3100),
+        ] as T
+      }
       return [
-        { day: '2026-07-05', cost_mc: 8000 },
-        { day: '2026-07-06', cost_mc: 14200 },
-        { day: '2026-07-07', cost_mc: 16000 },
+        mk('2026-07-05', 'a0', 5200, 1400, 0, 2400),
+        mk('2026-07-05', 'a1', 8800, 2900, 600, 5600),
+        mk('2026-07-06', 'a0', 6900, 1500, 0, 2800),
+        mk('2026-07-06', 'a1', 19400, 6300, 900, 11400),
+        mk('2026-07-07', 'a0', 5900, 1300, 0, 2200),
+        mk('2026-07-07', 'a1', 32800, 11200, 1500, 13800),
       ] as T
+    }
     case 'set_usage_limit':
       return null as T
     case 'autonomy':

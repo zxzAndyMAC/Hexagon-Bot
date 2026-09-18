@@ -6,6 +6,7 @@ import { Timeline } from './components/Timeline'
 import { TabBar } from './components/TabBar'
 import { ArtifactTab } from './components/ArtifactTab'
 import { AgentTab } from './components/AgentTab'
+import { UsageDetailTab } from './components/UsageDetailTab'
 import { DiffView } from './components/DiffView'
 import { parseUnifiedDiff } from './diff'
 import { SidePanel } from './components/SidePanel'
@@ -78,6 +79,8 @@ function TabContent({ tab }: { tab: ReturnType<typeof useUiStore.getState>['tabs
       return <ArtifactTab path={tab.path!} />
     case 'agent':
       return <AgentTab agentId={tab.agentId!} />
+    case 'usage':
+      return <UsageDetailTab />
     case 'diff':
       return (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>

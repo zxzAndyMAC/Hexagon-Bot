@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { api } from '../api'
-import { capReached, centsToMc } from '../usage'
+import { capReached, centsToMc, fmtTok } from '../usage'
 
 export function TopBar({ onSettings }: { onSettings: () => void }) {
   const { t } = useTranslation()
@@ -31,8 +31,8 @@ export function TopBar({ onSettings }: { onSettings: () => void }) {
           if (!railOpen) setRailOpen(true)
         }}
       >
-        {capped ? `⚠ ${t('usage.capHit')}` : t('topbar.usage')}{' '}
-        {usageTotal ? `${fmt(usageTotal.spent_mc)}${limitMc != null ? ` / ¥${usageTotal!.limit_cents! / 100}` : ''}` : '—'}
+        {capped ? `⚠ ${t('usage.capHit')}` : `${t('topbar.usage')} ${usageTotal ? fmtTok(usageTotal.tokens) : '—'}`}
+        {usageTotal && limitMc != null && ` · ${fmt(usageTotal.spent_mc)}/¥${usageTotal.limit_cents! / 100}`}
       </button>
       <div style={{ flex: 1 }} />
       {pending.length > 0 && (

@@ -258,9 +258,14 @@ fn set_usage_limit(state: tauri::State<AppState>, limit_cents: Option<i64>) -> R
 }
 
 #[tauri::command]
-fn usage_series(state: tauri::State<AppState>) -> Result<Value, String> {
+fn usage_series(
+    state: tauri::State<AppState>,
+    granularity: String,
+    days: Option<i64>,
+) -> Result<Value, String> {
     with_wb(&state, |wb| {
-        wb.usage_series().map(|v| serde_json::to_value(v).unwrap())
+        wb.usage_series(&granularity, days)
+            .map(|v| serde_json::to_value(v).unwrap())
     })
 }
 

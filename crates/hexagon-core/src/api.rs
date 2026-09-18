@@ -687,10 +687,17 @@ impl Workbench {
             [&self.project_id],
             |r| r.get(0),
         )?;
+        let tokens: i64 = self.db.conn().query_row(
+            "SELECT COALESCE(SUM(prompt_tokens+completion_tokens+tool_output_tokens),0)
+             FROM usage WHERE project_id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?;
         rows.push(json!({
             "_total": true,
             "spent_mc": crate::usage::spent_mc(&self.db, &self.project_id)?,
             "limit_cents": limit,
+            "tokens": tokens,
         }));
         Ok(rows)
     }
@@ -704,17 +711,38 @@ impl Workbench {
         Ok(())
     }
 
-    /// 按日成本序列（用量 tab 时间曲线）。
-    pub fn usage_series(&self) -> Result<Vec<Value>, ApiError> {
-        let mut st = self.db.conn().prepare(
-            "SELECT date(created_at), SUM(cost_millicents)
-             FROM usage WHERE project_id=?1 GROUP BY date(created_at) ORDER BY 1",
-        )?;
+    /// 用量时间序列：按 bucket × Agent 分组，带三类 token 与成本。
+    /// `granularity`: "day"（YYYY-MM-DD）| "hour"（YYYY-MM-DD HH:00）。
+    /// `days`：只取最近 N 天（None = 全部）。
+    pub fn usage_series(
+        &self,
+        granularity: &str,
+        days: Option<i64>,
+    ) -> Result<Vec<Value>, ApiError> {
+        let bucket = if granularity == "hour" {
+            "strftime('%Y-%m-%d %H:00', u.created_at)"
+        } else {
+            "date(u.created_at)"
+        };
+        let sql = format!(
+            "SELECT {bucket}, u.agent_id,
+                    SUM(u.prompt_tokens), SUM(u.completion_tokens),
+                    SUM(u.tool_output_tokens), SUM(u.cost_millicents)
+             FROM usage u
+             WHERE u.project_id=?1
+               AND (?2 IS NULL OR u.created_at >= datetime('now', '-' || ?2 || ' days'))
+             GROUP BY 1, u.agent_id ORDER BY 1"
+        );
+        let mut st = self.db.conn().prepare(&sql)?;
         let rows = st
-            .query_map([&self.project_id], |r| {
+            .query_map(rusqlite::params![self.project_id, days], |r| {
                 Ok(json!({
-                    "day": r.get::<_, String>(0)?,
-                    "cost_mc": r.get::<_, i64>(1)?,
+                    "bucket": r.get::<_, String>(0)?,
+                    "agent_id": r.get::<_, Option<String>>(1)?,
+                    "prompt_tokens": r.get::<_, i64>(2)?,
+                    "completion_tokens": r.get::<_, i64>(3)?,
+                    "tool_output_tokens": r.get::<_, i64>(4)?,
+                    "cost_mc": r.get::<_, i64>(5)?,
                 }))
             })?
             .collect::<Result<Vec<_>, _>>()?;

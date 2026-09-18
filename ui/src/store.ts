@@ -12,7 +12,7 @@ import {
 export type ThemePref = 'light' | 'dark' | 'system'
 
 // 中栏选项卡（ADR 0051）：timeline 固定主 tab，其余可关。
-export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent'
+export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent' | 'usage'
 
 export interface WorkTab {
   id: string // timeline | art:<path> | diff:<path>:<a>-<b> | agent:<id> | patch:<proposalId>
@@ -49,7 +49,7 @@ interface UiState {
   artifacts: ArtifactRow[]
   timeline: TimelineItem[]
   pending: PendingQuestion[]
-  usageTotal: { spent_mc: number; limit_cents: number | null } | null
+  usageTotal: { spent_mc: number; limit_cents: number | null; tokens: number } | null
   autonomy: string
   projectName: string
   railOpen: boolean
@@ -134,7 +134,9 @@ export const useUiStore = create<UiState>((set) => ({
       artifacts,
       timeline,
       pending,
-      usageTotal: total ? { spent_mc: total.spent_mc ?? 0, limit_cents: total.limit_cents ?? null } : null,
+      usageTotal: total
+        ? { spent_mc: total.spent_mc ?? 0, limit_cents: total.limit_cents ?? null, tokens: total.tokens ?? 0 }
+        : null,
       usageRows: usage,
       autonomy: autonomy || 'L0',
       avatars,
