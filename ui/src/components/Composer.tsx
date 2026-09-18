@@ -87,6 +87,7 @@ export function Composer() {
       )}
       <div style={{ display: 'flex', gap: 8 }}>
         <input
+          id="composer-input"
           ref={inputRef}
           value={text}
           onChange={(e) => onChange(e.target.value)}

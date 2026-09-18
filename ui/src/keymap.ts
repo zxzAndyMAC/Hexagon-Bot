@@ -24,8 +24,47 @@ const DEFAULTS: Record<ActionId, string> = {
 
 export const isMac = navigator.platform.toUpperCase().includes('MAC')
 
+/** 设置页「键盘」分区的全量动作表（顺序 = 展示顺序） */
+export const ACTIONS: { id: ActionId; labelKey: string }[] = [
+  { id: 'commandPalette', labelKey: 'keys.palette' },
+  { id: 'toggleRail', labelKey: 'keys.rail' },
+  { id: 'splitEditor', labelKey: 'keys.split' },
+  { id: 'closeTab', labelKey: 'keys.closeTab' },
+  { id: 'settings', labelKey: 'keys.settings' },
+  { id: 'focusComposer', labelKey: 'keys.composer' },
+  { id: 'approve', labelKey: 'keys.approve' },
+  { id: 'reject', labelKey: 'keys.reject' },
+]
+
 export function bindingFor(a: ActionId): string {
   return localStorage.getItem(`hexagon.key.${a}`) ?? DEFAULTS[a]
+}
+
+export function setBinding(a: ActionId, b: string) {
+  localStorage.setItem(`hexagon.key.${a}`, b)
+}
+
+export function resetBinding(a: ActionId) {
+  localStorage.removeItem(`hexagon.key.${a}`)
+}
+
+/** KeyboardEvent → 规范形 `mod+x`；纯修饰键返回 null（继续等下一个键） */
+export function normalizeEvent(e: KeyboardEvent | React.KeyboardEvent): string | null {
+  if (['Meta', 'Control', 'Shift', 'Alt'].includes(e.key)) return null
+  const mods: string[] = []
+  if (e.metaKey || e.ctrlKey) mods.push('mod')
+  if (e.altKey) mods.push('alt')
+  if (e.shiftKey) mods.push('shift')
+  const key = e.key === ' ' ? 'space' : e.key.length === 1 ? e.key.toLowerCase() : e.key
+  return [...mods, key].join('+')
+}
+
+/** 绑定冲突检测：b 已被别的 action 占用则返回那个 action id */
+export function conflictFor(a: ActionId, b: string): ActionId | null {
+  for (const { id } of ACTIONS) {
+    if (id !== a && bindingFor(id) === b) return id
+  }
+  return null
 }
 
 /** `mod+Enter` → `⌘↵`（mac）/ `Ctrl+Enter`（其他） */
@@ -49,5 +88,6 @@ export function matches(e: KeyboardEvent | React.KeyboardEvent, binding: string)
   if ((e.metaKey || e.ctrlKey) !== wantMod) return false
   if (e.shiftKey !== wantShift) return false
   if (e.altKey !== wantAlt) return false
-  return e.key.toLowerCase() === key || (key === 'enter' && e.key === 'Enter')
+  const evKey = e.key === ' ' ? 'space' : e.key.toLowerCase()
+  return evKey === key.toLowerCase()
 }

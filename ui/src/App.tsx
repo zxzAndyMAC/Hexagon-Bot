@@ -11,8 +11,9 @@ import { DiffView } from './components/DiffView'
 import { parseUnifiedDiff } from './diff'
 import { SidePanel } from './components/SidePanel'
 import { Composer } from './components/Composer'
-import { SettingsDrawer } from './components/SettingsDrawer'
-import { Wizard } from './components/Wizard'
+import { SettingsPage } from './components/SettingsPage'
+import { Launcher } from './components/Launcher'
+import { CommandPalette } from './components/CommandPalette'
 import { api } from './api'
 import { useUiStore } from './store'
 import { PendingCards } from './components/PendingCards'
@@ -22,7 +23,8 @@ import { bindingFor, matches } from './keymap'
 export default function App() {
   const refresh = useUiStore((s) => s.refresh)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 项目向导闸：null=未查，false=未开项目→向导，true=工作台。mock 恒 true。
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
   const [projectOpen, setProjectOpen] = useState<boolean | null>(null)
   const { onKey } = usePendingKeys()
 
@@ -40,6 +42,21 @@ export default function App() {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (matches(e, bindingFor('commandPalette'))) {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+        return
+      }
+      if (matches(e, bindingFor('settings'))) {
+        e.preventDefault()
+        setSettingsOpen((v) => !v)
+        return
+      }
+      if (matches(e, bindingFor('focusComposer'))) {
+        e.preventDefault()
+        document.getElementById('composer-input')?.focus()
+        return
+      }
       if (matches(e, bindingFor('toggleRail'))) {
         e.preventDefault()
         useUiStore.getState().setRailOpen(!useUiStore.getState().railOpen)
@@ -64,12 +81,24 @@ export default function App() {
 
   if (projectOpen === null) return null // 查项目状态中
   if (!projectOpen) {
-    return <Wizard onDone={() => setProjectOpen(true)} />
+    return <Launcher onOpen={() => setProjectOpen(true)} />
+  }
+  // 设置整页：工作台整体换掉（票 29），◀ 返回
+  if (settingsOpen) {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <SettingsPage onBack={() => setSettingsOpen(false)} />
+        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+      </div>
+    )
   }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <TopBar onSettings={() => setSettingsOpen(true)} />
+      <TopBar
+        onSettings={() => setSettingsOpen(true)}
+        onProjectClosed={() => setProjectOpen(false)}
+      />
       <StageBar />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 10, padding: '10px 14px' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -82,7 +111,7 @@ export default function App() {
         </div>
         <SidePanel />
       </div>
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </div>
   )
 }

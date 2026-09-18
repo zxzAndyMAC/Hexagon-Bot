@@ -54,6 +54,7 @@ interface UiState {
   projectName: string
   mode: 'pack' | 'fastpath'
   fastRole: string | null
+  packName: string | null
   railOpen: boolean
   sideTab: 'artifacts' | 'team' | 'usage'
   usageRows: UsageRow[]
@@ -83,6 +84,7 @@ export const useUiStore = create<UiState>((set) => ({
   projectName: '食谱 App',
   mode: 'pack',
   fastRole: null,
+  packName: null,
   railOpen: localStorage.getItem('hexagon.rail') !== '0',
   sideTab: 'artifacts',
   usageRows: [],
@@ -147,6 +149,7 @@ export const useUiStore = create<UiState>((set) => ({
       avatars,
       mode: info?.mode ?? 'pack',
       fastRole: info?.fastpath_role ?? null,
+      packName: info?.pack_name ?? null,
       projectName: info?.name ?? useUiStore.getState().projectName,
     })
   },

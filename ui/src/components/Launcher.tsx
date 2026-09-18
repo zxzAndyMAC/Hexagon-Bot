@@ -1,0 +1,93 @@
+// 启动页（票 29）：最近项目列表 + 打开目录/新建项目入口。
+// 未开项目时的全屏界面；「新建项目」→ 项目向导 Wizard。
+import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { api, isTauri } from '../api'
+import { Wizard } from './Wizard'
+
+interface Recent {
+  dir: string
+  name: string
+  mode: string
+  opened_at: number
+}
+
+export function Launcher({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation()
+  const [recents, setRecents] = useState<Recent[]>([])
+  const [wizard, setWizard] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    api.recentProjects().then(setRecents).catch(() => {})
+  }, [])
+
+  const openDir = async (dir?: string) => {
+    setErr('')
+    try {
+      let d = dir
+      if (!d) {
+        if (!isTauri) return
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const picked = await open({ directory: true })
+        if (typeof picked !== 'string') return
+        d = picked
+      }
+      await api.openRecent(d)
+      onOpen()
+    } catch (e) {
+      setErr(String(e))
+    }
+  }
+
+  if (wizard) return <Wizard onDone={onOpen} />
+
+  return (
+    <div
+      data-tauri-drag-region
+      style={{
+        position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', background: 'var(--bg-0)',
+      }}
+    >
+      <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Hexagon-Bot</div>
+      <div className="dim3" style={{ fontSize: 12, marginBottom: 28 }}>{t('launch.title')}</div>
+
+      <div className="panel" style={{ width: 520, padding: '14px 16px' }}>
+        <div style={{ fontWeight: 510, fontSize: 13, marginBottom: 8 }}>{t('launch.recents')}</div>
+        {recents.length === 0 && (
+          <div className="dim3" style={{ fontSize: 12, padding: '12px 0' }}>{t('launch.empty')}</div>
+        )}
+        {recents.map((r) => (
+          <div
+            key={r.dir}
+            onClick={() => openDir(r.dir)}
+            className="recent-row"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+              borderRadius: 8, cursor: 'pointer',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 510 }}>{r.name}</div>
+              <div
+                className="dim3 mono"
+                style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {r.dir}
+              </div>
+            </div>
+            <span className="chip mono">{t(`launch.mode_${r.mode}`)}</span>
+          </div>
+        ))}
+        {err && <div style={{ color: '#f87171', fontSize: 12, marginTop: 8 }}>{err}</div>}
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          {isTauri && (
+            <button className="btn" onClick={() => openDir()}>{t('launch.openDir')}</button>
+          )}
+          <button className="btn primary" onClick={() => setWizard(true)}>{t('launch.newProject')}</button>
+        </div>
+      </div>
+    </div>
+  )
+}

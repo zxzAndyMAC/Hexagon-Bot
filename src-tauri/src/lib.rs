@@ -35,6 +35,7 @@ fn core_ping() -> String {
 
 #[tauri::command]
 fn open_project(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     dir: String,
     name: String,
@@ -47,6 +48,7 @@ fn open_project(
         .map_err(|e: serde_json::Error| e.to_string())?;
     let wb = Workbench::open(&dir, &name, &roles, pack).map_err(|e| e.to_string())?;
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
+    remember_recent(&app, &dir, &name, "pack");
     Ok(())
 }
 
@@ -287,6 +289,88 @@ fn log_enabled_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         .map(|d| d.join("settings.json"))
 }
 
+// ---------- 启动页 / 最近项目（票 29）：app 级 JSON，不进项目库 ----------
+
+fn recents_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("recent_projects.json"))
+}
+
+fn read_recents(app: &tauri::AppHandle) -> Vec<Value> {
+    recents_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
+        .unwrap_or_default()
+}
+
+fn remember_recent(app: &tauri::AppHandle, dir: &str, name: &str, mode: &str) {
+    let mut rs = read_recents(app);
+    rs.retain(|r| r["dir"] != dir);
+    rs.insert(
+        0,
+        serde_json::json!({
+            "dir": dir, "name": name, "mode": mode,
+            "opened_at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        }),
+    );
+    rs.truncate(10);
+    if let Some(p) = recents_path(app) {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&p, serde_json::to_string(&rs).unwrap_or_default());
+    }
+}
+
+#[tauri::command]
+fn recent_projects(app: tauri::AppHandle) -> Vec<Value> {
+    read_recents(&app)
+        .into_iter()
+        .filter(|r| r["dir"].as_str().map(|d| std::path::Path::new(d).is_dir()) == Some(true))
+        .collect()
+}
+
+/// 重新打开已有项目：钉住的包副本恢复 pack，fastpath 项目无副本即 None。
+#[tauri::command]
+fn open_recent(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    dir: String,
+) -> Result<(), String> {
+    let d = std::path::Path::new(&dir);
+    if !d.join(".hexagon/state.db").exists() {
+        return Err(format!("不是 Hexagon 项目目录: {dir}"));
+    }
+    let pack = hexagon_core::orchestra::PackDef::pinned(d).ok();
+    let name = d
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| dir.clone());
+    // OR IGNORE 保住库里的真实 name/mode；project_info 读库得真值
+    let wb = Workbench::open(&dir, &name, &[], pack).map_err(|e| e.to_string())?;
+    let info = wb.project_info().map_err(|e| e.to_string())?;
+    *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
+    remember_recent(
+        &app,
+        &dir,
+        info["name"].as_str().unwrap_or(&name),
+        info["mode"].as_str().unwrap_or("pack"),
+    );
+    Ok(())
+}
+
+/// 关闭当前项目回启动页（不删任何数据）。
+#[tauri::command]
+fn close_project(state: tauri::State<AppState>) -> Result<(), String> {
+    *state.wb.lock().map_err(|e| e.to_string())? = None;
+    Ok(())
+}
+
 fn load_log_enabled(app: &tauri::AppHandle) -> bool {
     log_enabled_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -378,7 +462,11 @@ struct CreateProjectOpts {
 }
 
 #[tauri::command]
-fn create_project(state: tauri::State<AppState>, opts: CreateProjectOpts) -> Result<(), String> {
+fn create_project(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    opts: CreateProjectOpts,
+) -> Result<(), String> {
     use hexagon_core::credentials::OsKeychain;
     use hexagon_core::setup;
     // 负责人已确认的说明文件先落盘（已存在会被 write_agents_md 拒绝，不覆盖）
@@ -387,6 +475,7 @@ fn create_project(state: tauri::State<AppState>, opts: CreateProjectOpts) -> Res
     }
     let pack = opts
         .pack_name
+        .as_deref()
         .map(|n| {
             hexagon_core::presets::preset_packs()
                 .map_err(|e| e.to_string())?
@@ -406,6 +495,16 @@ fn create_project(state: tauri::State<AppState>, opts: CreateProjectOpts) -> Res
     )
     .map_err(|e| e.to_string())?;
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
+    remember_recent(
+        &app,
+        &opts.dir,
+        &opts.name,
+        if opts.pack_name.is_some() {
+            "pack"
+        } else {
+            "fastpath"
+        },
+    );
     Ok(())
 }
 
@@ -525,6 +624,9 @@ pub fn run() {
             project_info,
             dispatch,
             upgrade_to_pack,
+            recent_projects,
+            open_recent,
+            close_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

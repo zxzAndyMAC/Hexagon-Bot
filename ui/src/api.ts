@@ -173,6 +173,11 @@ export const api = {
   setAgentAvatar: (agentId: string, dataUrl: string) =>
     call<void>('set_agent_avatar', { agentId, dataUrl }),
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
+  // ---- 启动页 / 最近项目（票 29）----
+  recentProjects: () =>
+    call<{ dir: string; name: string; mode: string; opened_at: number }[]>('recent_projects'),
+  openRecent: (dir: string) => call<void>('open_recent', { dir }),
+  closeProject: () => call<void>('close_project'),
   // ---- 快速通道（票 26）----
   projectInfo: () =>
     call<{
@@ -321,6 +326,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     // ---- 项目向导 mock：浏览器 dev 始终「已有项目」，向导只在 Tauri 真开时出现 ----
     case 'project_open':
       return true as T
+    case 'recent_projects':
+      return [] as T
+    case 'open_recent':
+    case 'close_project':
+      return null as T
     case 'project_info':
       return { name: '食谱 App', mode: 'pack', pack_name: '规格驱动', fastpath_agent_id: null, fastpath_role: null } as T
     case 'dispatch':

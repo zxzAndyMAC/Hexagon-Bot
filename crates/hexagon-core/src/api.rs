@@ -870,8 +870,37 @@ enum TextCommand {
 }
 
 /// 整句匹配：命令词 + 可选数字参数，多余文本一律不算命令。
+/// 双轨（ADR 0051）：`/verb` 规范式全语言通用；本地化斜杠别名（/退回 /盖章）也收；
+/// 裸词（退回/盖章…）保留为过渡形态。
 fn parse_command(body: &str) -> Option<TextCommand> {
     let b = body.trim();
+    // /verb 规范式 + 本地化斜杠别名（退回参数走同一数字尾巴规则）
+    if let Some(rest) = b.strip_prefix('/') {
+        let (verb, arg) = match rest.split_once(' ') {
+            Some((v, a)) => (v, a.trim()),
+            None => (rest, ""),
+        };
+        return match verb {
+            "rewind" | "退回" | "回退" => {
+                if arg.is_empty() {
+                    Some(TextCommand::Rewind(None))
+                } else {
+                    arg.trim_start_matches('到')
+                        .parse::<usize>()
+                        .ok()
+                        .map(|n| TextCommand::Rewind(Some(n)))
+                }
+            }
+            "skip" | "跳过" if arg.is_empty() => Some(TextCommand::Skip),
+            "stamp" | "盖章" | "通过" if arg.is_empty() => Some(TextCommand::Stamp),
+            "pause" | "暂停" if arg.is_empty() => Some(TextCommand::Pause),
+            "resume" | "恢复" if arg.is_empty() => Some(TextCommand::Resume),
+            "sleep" | "sleep_all" | "休眠" | "全员休眠" if arg.is_empty() => {
+                Some(TextCommand::SleepAll)
+            }
+            _ => None, // 未知 /verb 或多余参数 → 普通消息，不吞
+        };
+    }
     match b {
         "跳过" => return Some(TextCommand::Skip),
         "盖章" | "通过" => return Some(TextCommand::Stamp),
@@ -901,6 +930,28 @@ mod tests {
     use super::*;
     use crate::provider::ScriptedProvider;
     use crate::turn::{text_response, tool_response};
+
+    #[test]
+    fn slash_commands_parse_both_rails() {
+        // /verb 规范式 + 本地化斜杠别名，与裸词同权
+        assert_eq!(parse_command("/skip"), Some(TextCommand::Skip));
+        assert_eq!(parse_command("/stamp"), Some(TextCommand::Stamp));
+        assert_eq!(parse_command("/pause"), Some(TextCommand::Pause));
+        assert_eq!(parse_command("/resume"), Some(TextCommand::Resume));
+        assert_eq!(parse_command("/sleep"), Some(TextCommand::SleepAll));
+        assert_eq!(parse_command("/rewind"), Some(TextCommand::Rewind(None)));
+        assert_eq!(
+            parse_command("/rewind 2"),
+            Some(TextCommand::Rewind(Some(2)))
+        );
+        assert_eq!(parse_command("/盖章"), Some(TextCommand::Stamp));
+        assert_eq!(parse_command("/跳过"), Some(TextCommand::Skip));
+        assert_eq!(parse_command("/退回 1"), Some(TextCommand::Rewind(Some(1))));
+        // 未知 verb 与非法参数不劫持——算普通消息
+        assert_eq!(parse_command("/dance"), None);
+        assert_eq!(parse_command("/rewind abc"), None);
+        assert_eq!(parse_command("/skip 多余尾巴"), None);
+    }
 
     #[test]
     fn text_command_same_shape_as_button() {

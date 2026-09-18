@@ -15,7 +15,9 @@
         "label": "main",
         "title": "Hexagon-Bot",
         "width": 1440,
-        "height": 900
+        "height": 900,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
