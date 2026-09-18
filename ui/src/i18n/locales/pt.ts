@@ -123,6 +123,7 @@ export default {
     pending: 'pendente',
     sleeping: 'dormindo',
     active: 'ativo',
+    avatarTip: 'Trocar avatar',
     model: 'modelo',
   },
   composer: {

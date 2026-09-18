@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
 import { useUiStore } from '../store'
 import { buildRows, nodeMarks, type Filter, type NodeMark } from '../timelineModel'
+import { Avatar } from './Avatar'
 
 // ---- 渲染 ----
 
@@ -67,6 +68,7 @@ function ReturnSummaryRow({ item }: { item: TimelineItem }) {
 
 function EventRow({ item }: { item: TimelineItem }) {
   const { t } = useTranslation()
+  const team = useUiStore((s) => s.team)
   const k = item.event.kind
   if (k === 'stage_started') return <StageHeader item={item} />
   if (k === 'return_summary') return <ReturnSummaryRow item={item} />
@@ -99,10 +101,14 @@ function EventRow({ item }: { item: TimelineItem }) {
   if (item.message) {
     const m = item.message
     const isOwner = item.event.kind === 'owner_message' || m.author === 'owner'
-    const title = isOwner ? t('timeline.owner') : m.author
+    const member = team.find((x) => x.id === m.author)
+    const title = isOwner ? t('timeline.owner') : (member?.role ?? m.author)
     return (
       <div className="msg" style={{ alignItems: isOwner ? 'flex-end' : 'flex-start' }}>
-        <div className="msg-author dim" style={{ textAlign: isOwner ? 'right' : 'left' }}>{title}</div>
+        <div className="msg-author dim" style={{ textAlign: isOwner ? 'right' : 'left', display: 'flex', alignItems: 'center', gap: 6, justifyContent: isOwner ? 'flex-end' : 'flex-start' }}>
+          {!isOwner && member && <Avatar agentId={m.author} role={member.role} size={16} />}
+          {title}
+        </div>
         <div className="msg-body"><ReactMarkdown>{m.body}</ReactMarkdown></div>
       </div>
     )
@@ -112,6 +118,9 @@ function EventRow({ item }: { item: TimelineItem }) {
 
 function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; expanded: boolean; onToggle: () => void }) {
   const { t } = useTranslation()
+  const team = useUiStore((s) => s.team)
+  const agentId = items[0]?.event.agent_id
+  const member = agentId ? team.find((x) => x.id === agentId) : undefined
   return (
     <div>
       <div
@@ -120,7 +129,8 @@ function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; ex
         onClick={onToggle}
       >
         <div className="sysline" />
-        <span className="syslabel dim">
+        <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          {member && <Avatar agentId={member.id} role={member.role} size={14} />}
           ⚙ {t('timeline.toolCalls', { count: items.length })} {expanded ? '▾' : '▸'}
         </span>
       </div>

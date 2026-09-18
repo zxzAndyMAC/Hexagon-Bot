@@ -123,6 +123,7 @@ export default {
     pending: '審査中',
     sleeping: 'スリープ',
     active: 'アクティブ',
+    avatarTip: 'アバターを変更',
     model: 'モデル',
   },
   composer: {

@@ -7,7 +7,7 @@ export const isTauri = '__TAURI_INTERNALS__' in window || '__TAURI__' in window
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri) return invoke<T>(cmd, args)
-  return mock<T>(cmd)
+  return mock<T>(cmd, args)
 }
 
 // ---- 与核侧 JSON 形状对齐 ----
@@ -113,10 +113,15 @@ export const api = {
   requestPublish: (remote: string) => call<string>('request_publish', { remote }),
   confirmPublish: (qid: string) => call<unknown>('confirm_publish', { qid }),
   rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
+  // ---- 头像 ----
+  setAgentAvatar: (agentId: string, dataUrl: string) =>
+    call<void>('set_agent_avatar', { agentId, dataUrl }),
+  agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
 }
 
 // ---- 浏览器 dev mock：参照 hexagon-main-mock.html 的场景，形状同核侧 ----
-function mock<T>(cmd: string): T {
+const mockAvatars: Record<string, string> = {}
+function mock<T>(cmd: string, args?: Record<string, unknown>): T {
   switch (cmd) {
     case 'core_ping':
       return 'hexagon-core ok' as T
@@ -159,6 +164,11 @@ function mock<T>(cmd: string): T {
       return 'L0' as T
     case 'log_enabled':
       return true as T
+    case 'set_agent_avatar':
+      mockAvatars[String(args?.agentId)] = String(args?.dataUrl)
+      return null as T
+    case 'agent_avatar':
+      return (mockAvatars[String(args?.agentId)] ?? null) as T
     default:
       return null as T
   }

@@ -220,6 +220,20 @@ fn reject_publish(state: tauri::State<AppState>, qid: String) -> Result<(), Stri
     with_wb(&state, |wb| wb.reject_publish(&qid))
 }
 
+#[tauri::command]
+fn set_agent_avatar(
+    state: tauri::State<AppState>,
+    agent_id: String,
+    data_url: String,
+) -> Result<(), String> {
+    with_wb(&state, |wb| wb.set_agent_avatar(&agent_id, &data_url))
+}
+
+#[tauri::command]
+fn agent_avatar(state: tauri::State<AppState>, agent_id: String) -> Result<Option<String>, String> {
+    with_wb(&state, |wb| wb.agent_avatar(&agent_id))
+}
+
 /// 日志开关：app 级设置持久化在 config 目录，开发期默认开（Debug），release 默认 Info。
 fn log_enabled_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path()
@@ -325,6 +339,8 @@ pub fn run() {
             request_publish,
             confirm_publish,
             reject_publish,
+            set_agent_avatar,
+            agent_avatar,
             set_log_enabled,
             log_enabled,
         ])

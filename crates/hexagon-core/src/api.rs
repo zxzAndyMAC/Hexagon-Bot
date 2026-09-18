@@ -236,6 +236,68 @@ impl Workbench {
         Ok(v)
     }
 
+    /// 设置 agent 头像：UI 传 data URL（data:image/png;base64,…），
+    /// 落盘 `<root>/.hexagon/avatars/<agent>.<ext>`，换扩展名时清旧文件。
+    pub fn set_agent_avatar(&self, agent_id: &str, data_url: &str) -> Result<(), ApiError> {
+        use base64::Engine;
+        let (mime, b64) = data_url
+            .strip_prefix("data:")
+            .and_then(|s| s.split_once(";base64,"))
+            .ok_or_else(|| {
+                ApiError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "expected data:<mime>;base64,<payload>",
+                ))
+            })?;
+        let ext = match mime {
+            "image/jpeg" | "image/jpg" => "jpg",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            _ => "png",
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| ApiError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+        if bytes.len() > 2 * 1024 * 1024 {
+            return Err(ApiError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "avatar >2MB",
+            )));
+        }
+        let dir = self.repo_root.join(".hexagon/avatars");
+        std::fs::create_dir_all(&dir)?;
+        for e in ["png", "jpg", "webp", "gif"] {
+            let p = dir.join(format!("{agent_id}.{e}"));
+            if e != ext && p.exists() {
+                std::fs::remove_file(p)?;
+            }
+        }
+        std::fs::write(dir.join(format!("{agent_id}.{ext}")), bytes)?;
+        Ok(())
+    }
+
+    /// 读头像 → data URL（前端直接 <img src>）；未设置回 None。
+    pub fn agent_avatar(&self, agent_id: &str) -> Result<Option<String>, ApiError> {
+        use base64::Engine;
+        let dir = self.repo_root.join(".hexagon/avatars");
+        for (ext, mime) in [
+            ("png", "image/png"),
+            ("jpg", "image/jpeg"),
+            ("webp", "image/webp"),
+            ("gif", "image/gif"),
+        ] {
+            let p = dir.join(format!("{agent_id}.{ext}"));
+            if p.exists() {
+                let b = std::fs::read(&p)?;
+                return Ok(Some(format!(
+                    "data:{mime};base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(b)
+                )));
+            }
+        }
+        Ok(None)
+    }
+
     /// 盖章点驳回：退上一阶段（与打回不同通道）。
     pub fn reject_stamp(&self) -> Result<Value, ApiError> {
         Ok(crate::review::reject_stamp(
@@ -743,5 +805,29 @@ mod tests {
         let qs = wb.pending_questions().unwrap();
         assert_eq!(qs.len(), 1);
         assert_eq!(qs[0]["id"], "qb");
+    }
+    #[test]
+    fn avatar_roundtrip_and_ext_switch() {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        let aid = "a0";
+        assert!(wb.agent_avatar(aid).unwrap().is_none());
+        // 伪 PNG：若干字节即可，读写只认 data URL 包装
+        use base64::Engine;
+        let url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b"fakepng")
+        );
+        wb.set_agent_avatar(aid, &url).unwrap();
+        assert_eq!(wb.agent_avatar(aid).unwrap().unwrap(), url);
+        assert!(dir.path().join(".hexagon/avatars/a0.png").exists());
+        // 换 jpg：旧 png 应被清掉
+        let url2 = format!(
+            "data:image/jpeg;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b"fakejpg")
+        );
+        wb.set_agent_avatar(aid, &url2).unwrap();
+        assert_eq!(wb.agent_avatar(aid).unwrap().unwrap(), url2);
+        assert!(!dir.path().join(".hexagon/avatars/a0.png").exists());
     }
 }

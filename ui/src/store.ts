@@ -34,6 +34,7 @@ interface UiState {
   autonomy: string
   projectName: string
   railOpen: boolean
+  avatars: Record<string, string>
   setThemePref: (p: ThemePref) => void
   setRailOpen: (v: boolean) => void
   refresh: () => Promise<void>
@@ -50,6 +51,7 @@ export const useUiStore = create<UiState>((set) => ({
   autonomy: 'L0',
   projectName: '食谱 App',
   railOpen: localStorage.getItem('hexagon.rail') !== '0',
+  avatars: {},
   setRailOpen: (v) => {
     localStorage.setItem('hexagon.rail', v ? '1' : '0')
     set({ railOpen: v })
@@ -70,6 +72,13 @@ export const useUiStore = create<UiState>((set) => ({
       api.autonomy(),
     ])
     const total = usage.find((r) => r._total)
+    const avatars: Record<string, string> = {}
+    await Promise.all(
+      team.map(async (m) => {
+        const u = await api.agentAvatar(m.id).catch(() => null)
+        if (u) avatars[m.id] = u
+      }),
+    )
     set({
       stages,
       team,
@@ -78,6 +87,7 @@ export const useUiStore = create<UiState>((set) => ({
       pending,
       usageTotal: total ? { spent_mc: total.spent_mc, limit_cents: total.limit_cents } : null,
       autonomy: autonomy || 'L0',
+      avatars,
     })
   },
 }))

@@ -123,6 +123,7 @@ export default {
     pending: '待审',
     sleeping: '休眠',
     active: '激活',
+    avatarTip: '更换头像',
     model: '模型',
   },
   composer: {

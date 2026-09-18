@@ -1,9 +1,49 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { api } from '../api'
 import { useUiStore } from '../store'
+import { Avatar } from './Avatar'
 import { bindingFor, formatBinding } from '../keymap'
 
 type Tab = 'artifacts' | 'team' | 'usage'
+
+function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | null; status: string } }) {
+  const { t } = useTranslation()
+  const refresh = useUiStore((s) => s.refresh)
+  const fileRef = useRef<HTMLInputElement>(null)
+  return (
+    <div style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'center', opacity: m.status === 'sleeping' ? 0.5 : 1 }}>
+      <button
+        className="icon-btn"
+        style={{ padding: 0, borderRadius: '50%', lineHeight: 0 }}
+        title={t('side.avatarTip')}
+        onClick={() => fileRef.current?.click()}
+      >
+        <Avatar agentId={m.id} role={m.role} size={22} />
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (!f) return
+          const r = new FileReader()
+          r.onload = async () => {
+            await api.setAgentAvatar(m.id, String(r.result))
+            await refresh()
+          }
+          r.readAsDataURL(f)
+          e.target.value = ''
+        }}
+      />
+      <span className={`dot ${m.status === 'active' ? 'on' : 'off'}`} />
+      <span>{m.role}</span>
+      <span className="dim3 mono" style={{ fontSize: 10, marginLeft: 'auto' }}>{m.model_slot || '—'}</span>
+    </div>
+  )
+}
 
 export function SidePanel() {
   const { t } = useTranslation()
@@ -61,11 +101,7 @@ export function SidePanel() {
       {tab === 'team' && (
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {team.map((m) => (
-            <div key={m.id} style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'center', opacity: m.status === 'sleeping' ? 0.5 : 1 }}>
-              <span className={`dot ${m.status === 'active' ? 'on' : 'off'}`} />
-              <span>{m.role}</span>
-              <span className="dim3 mono" style={{ fontSize: 10, marginLeft: 'auto' }}>{m.model_slot || '—'}</span>
-            </div>
+            <TeamRow key={m.id} m={m} />
           ))}
         </div>
       )}
