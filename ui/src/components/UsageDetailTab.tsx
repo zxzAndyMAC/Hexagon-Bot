@@ -318,7 +318,7 @@ function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) =
     <div ref={wrap} style={{ position: 'relative' }}>
       <button className="btn" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6 }}
         onClick={() => setOpen((v) => !v)}>
-        {label} <span className="dim3" style={{ fontSize: 9 }}>▾</span>
+        {label} <span className="dim3" style={{ fontSize: 10 }}>▾</span>
       </button>
       {open && (
         <div className="u-card" style={{

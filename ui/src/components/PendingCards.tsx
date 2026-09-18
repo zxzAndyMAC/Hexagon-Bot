@@ -12,7 +12,7 @@ function CardShell({ tone, icon, title, children }: {
   title: React.ReactNode
   children: React.ReactNode
 }) {
-  const cls = { ask: 'card-ask', stamp: 'card-stamp', flag: 'card-flag', danger: 'card-flag' }[tone]
+  const cls = { ask: 'card-ask', stamp: 'card-stamp', flag: 'card-flag', danger: 'card-danger' }[tone]
   const color = { ask: 'var(--accent)', stamp: 'var(--accent)', flag: 'var(--flag)', danger: 'var(--err)' }[tone]
   return (
     <div className={cls} style={{ padding: '10px 14px', margin: '6px 14px 0', ...(tone === 'danger' ? { borderColor: 'var(--err)' } : {}) }}>

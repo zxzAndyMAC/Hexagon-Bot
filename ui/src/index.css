@@ -9,19 +9,31 @@
   --border: rgba(0, 0, 0, 0.07);
   --border-strong: rgba(0, 0, 0, 0.12);
   --text: #1a1b1e;
-  --text-2: rgba(0, 0, 0, 0.55);
-  --text-3: rgba(0, 0, 0, 0.38);
-  --accent: #c07a1a;
-  --accent-soft: rgba(192, 122, 26, 0.10);
-  --accent-border: rgba(192, 122, 26, 0.35);
+  --text-2: rgba(0, 0, 0, 0.62);
+  --text-3: rgba(0, 0, 0, 0.55);
+  --accent: #9d6210;
+  --accent-soft: rgba(157, 98, 16, 0.10);
+  --accent-border: rgba(157, 98, 16, 0.35);
   --ok: #2e7d46;
   --ok-soft: rgba(46, 125, 70, 0.10);
+  --ok-border: rgba(46, 125, 70, 0.35);
   --err: #b3382e;
   --err-soft: rgba(179, 56, 46, 0.08);
+  --err-border: rgba(179, 56, 46, 0.35);
   --flag: #7c5cd6;
   --flag-soft: rgba(124, 92, 214, 0.08);
+  --flag-border: rgba(124, 92, 214, 0.35);
+  --warn: #2b6cb0;
+  --warn-soft: rgba(43, 108, 176, 0.10);
+  --warn-border: rgba(43, 108, 176, 0.35);
   --popover: #ffffff;
   --mono: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --r-xs: 4px;
+  --r-sm: 5px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
+  --r-pill: 999px;
 }
 
 [data-theme='dark'] {
@@ -33,16 +45,22 @@
   --border-strong: rgba(255, 255, 255, 0.10);
   --text: #eceef0;
   --text-2: rgba(255, 255, 255, 0.55);
-  --text-3: rgba(255, 255, 255, 0.35);
+  --text-3: rgba(255, 255, 255, 0.48);
   --accent: #e8a33d;
   --accent-soft: rgba(232, 163, 61, 0.10);
   --accent-border: rgba(232, 163, 61, 0.35);
   --ok: #4cae6a;
   --ok-soft: rgba(76, 174, 106, 0.12);
+  --ok-border: rgba(76, 174, 106, 0.35);
   --err: #d9554c;
   --err-soft: rgba(217, 85, 76, 0.10);
+  --err-border: rgba(217, 85, 76, 0.35);
   --flag: #9a82e0;
   --flag-soft: rgba(154, 130, 224, 0.10);
+  --flag-border: rgba(154, 130, 224, 0.35);
+  --warn: #6ba5f8;
+  --warn-soft: rgba(107, 165, 248, 0.12);
+  --warn-border: rgba(107, 165, 248, 0.35);
   --popover: #16181b;
 }
 
@@ -57,7 +75,20 @@ body {
   font-family: "Inter Variable", Inter, -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   font-feature-settings: "cv01", "ss03";
   font-size: 13px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 .mono { font-family: var(--mono); font-size: 12px; }
@@ -65,23 +96,24 @@ body {
 .dim3 { color: var(--text-3); }
 .accent { color: var(--accent); }
 
-.panel { background: var(--bg-1); border: 1px solid var(--border); border-radius: 8px; }
+.panel { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-lg); }
 .row-line { border-bottom: 1px solid var(--border); }
 .sys-row { color: var(--text-3); font-size: 12px; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
-  padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  padding: 1px 8px; border-radius: var(--r-pill); font-size: 11px;
   border: 1px solid var(--border); color: var(--text-2);
 }
 .chip.amber { color: var(--accent); border-color: var(--accent-border); background: var(--accent-soft); }
-.chip.ok { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
-.chip.err { color: var(--err); border-color: var(--err); background: var(--err-soft); }
-.chip.flag { color: var(--flag); border-color: var(--flag); background: var(--flag-soft); }
+.chip.ok { color: var(--ok); border-color: var(--ok-border); background: var(--ok-soft); }
+.chip.err { color: var(--err); border-color: var(--err-border); background: var(--err-soft); }
+.chip.flag { color: var(--flag); border-color: var(--flag-border); background: var(--flag-soft); }
+.chip.warn { color: var(--warn); border-color: var(--warn-border); background: var(--warn-soft); }
 
 button.btn {
   font: inherit; color: var(--text-2); background: var(--bg-2);
-  border: 1px solid var(--border); border-radius: 6px;
+  border: 1px solid var(--border); border-radius: var(--r-md);
   padding: 3px 10px; cursor: pointer;
 }
 button.btn:hover { background: var(--bg-3); color: var(--text); }
@@ -89,24 +121,21 @@ button.btn.primary { color: #fff; background: var(--accent); border-color: trans
 button.btn.danger { color: var(--err); }
 button.btn:disabled { opacity: 0.4; cursor: default; }
 
-.card-ask { border: 1px solid var(--accent-border); background: var(--accent-soft); border-radius: 8px; }
-.card-stamp { border: 1px solid var(--accent-border); border-radius: 8px; background: var(--bg-1); }
-.card-flag { border: 1px solid var(--flag); border-left-width: 3px; border-radius: 8px; background: var(--flag-soft); }
-.card-review-ok { border-left: 3px solid var(--ok); background: var(--ok-soft); border-radius: 6px; }
-.card-review-err { border-left: 3px solid var(--err); background: var(--err-soft); border-radius: 6px; }
+.card-ask { border: 1px solid var(--accent-border); background: var(--accent-soft); border-radius: var(--r-lg); }
+.card-stamp { border: 1px solid var(--accent-border); border-radius: var(--r-lg); background: var(--bg-1); }
+.card-flag { border: 1px solid var(--flag); border-left-width: 3px; border-radius: var(--r-lg); background: var(--flag-soft); }
+.card-danger { border: 1px solid var(--err); border-left-width: 3px; border-radius: var(--r-lg); background: var(--err-soft); }
+.card-review-ok { border-left: 3px solid var(--ok); background: var(--ok-soft); border-radius: var(--r-md); }
+.card-review-err { border-left: 3px solid var(--err); background: var(--err-soft); border-radius: var(--r-md); }
 
 .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .dot.on { background: var(--ok); }
-.dot.off { background: var(--text-3); }
+.dot.off { background: transparent; border: 1px solid var(--text-3); box-sizing: border-box; }
 
 input, textarea { font: inherit; color: var(--text); }
 ::placeholder { color: var(--text-3); }
 
 /* 时间线密度与语义节点（票 21） */
-:root { --warn: #c07a1a; }
-[data-theme='dark'] { --warn: #e8a33d; }
-.chip.warn { color: var(--warn); border-color: var(--accent-border); background: var(--accent-soft); }
-
 .sysrow { display: flex; align-items: center; gap: 10px; padding: 3px 14px; }
 .sysline { flex: 0 0 40px; height: 1px; background: var(--border); }
 .syslabel { color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -114,7 +143,7 @@ input, textarea { font: inherit; color: var(--text); }
 .msg { display: flex; flex-direction: column; padding: 6px 14px; }
 .msg-author { font-size: 11px; margin-bottom: 2px; }
 .msg-body {
-  max-width: 78%; padding: 7px 12px; border-radius: 10px;
+  max-width: 78%; padding: 7px 12px; border-radius: var(--r-xl);
   background: var(--bg-1); border: 1px solid var(--border);
   max-height: 240px; overflow-y: auto; font-size: 13px;
 }
@@ -122,7 +151,7 @@ input, textarea { font: inherit; color: var(--text); }
 
 .icon-btn {
   font: inherit; color: var(--text-3); background: none; border: none;
-  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  cursor: pointer; padding: 2px 6px; border-radius: var(--r-xs);
 }
 .icon-btn:hover { color: var(--text); background: var(--bg-3); }
 
@@ -131,7 +160,7 @@ input, textarea { font: inherit; color: var(--text); }
   100% { background: transparent; }
 }
 .flash-row { animation: flash-row 1.4s ease-out; }
-.flash-zone { outline: 2px solid var(--accent-border); outline-offset: -2px; border-radius: 8px; transition: outline .2s; }
+.flash-zone { outline: 2px solid var(--accent-border); outline-offset: -2px; border-radius: var(--r-lg); transition: outline .2s; }
 
 @keyframes pulse-amber {
   0%, 100% { opacity: 1; }
@@ -141,7 +170,7 @@ input, textarea { font: inherit; color: var(--text); }
 /* 用量详情（票 23）：仪表盘卡片 / 分段控件 / 统计图标 */
 .u-card {
   background: var(--bg-1); border: 1px solid var(--border);
-  border-radius: 10px; padding: 14px 16px;
+  border-radius: var(--r-xl); padding: 14px 16px;
 }
 .u-card-title { font-size: 13px; font-weight: 560; }
 
@@ -151,7 +180,7 @@ input, textarea { font: inherit; color: var(--text); }
 }
 .seg button {
   font: inherit; font-size: 11px; border: none; cursor: pointer;
-  padding: 3px 10px; border-radius: 5px;
+  padding: 3px 10px; border-radius: var(--r-sm);
   color: var(--text-3); background: transparent;
 }
 .seg button:hover { color: var(--text-2); }
@@ -162,6 +191,6 @@ input, textarea { font: inherit; color: var(--text); }
 [data-theme='light'] .seg button.on { background: #fff; border: 1px solid var(--border); box-shadow: none; }
 
 .stat-ic {
-  width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  width: 30px; height: 30px; border-radius: var(--r-lg); flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center; font-size: 14px;
 }

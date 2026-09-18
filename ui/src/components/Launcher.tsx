@@ -80,7 +80,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
             <span className="chip mono">{t(`launch.mode_${r.mode}`)}</span>
           </div>
         ))}
-        {err && <div style={{ color: '#f87171', fontSize: 12, marginTop: 8 }}>{err}</div>}
+        {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
         <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
           {isTauri && (
             <button className="btn" onClick={() => openDir()}>{t('launch.openDir')}</button>

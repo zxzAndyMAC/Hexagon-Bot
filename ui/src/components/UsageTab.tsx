@@ -161,13 +161,13 @@ function MultiLine({ labels, series, roleOf }: {
       </svg>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
         {series.map((s) => (
-          <span key={s.agentId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9 }} className="dim3">
+          <span key={s.agentId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10 }} className="dim3">
             <span style={{ width: 8, height: 2, background: agentColor(s.agentId, 55), borderRadius: 1 }} />
             {roleOf(s.agentId)}
           </span>
         ))}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginTop: 2 }} className="dim3">
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginTop: 2 }} className="dim3">
         <span>{labels[0]?.slice(5)}</span>
         <span className="mono">{fmtTok(max)}</span>
         <span>{labels[labels.length - 1]?.slice(5)}</span>

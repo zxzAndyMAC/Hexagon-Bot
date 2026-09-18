@@ -101,7 +101,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
         )}
       </div>
       <span className="chip mono">{mode === 'fastpath' ? t('topbar.fastpath') : packName ?? t('topbar.pack')}</span>
-      <span className="chip amber">{t(`autonomy.${autonomy}`)}</span>
+      <span className="chip">{t(`autonomy.${autonomy}`)}</span>
       <button
         className={`chip ${capped ? 'err' : 'mono'}`}
         style={{ cursor: 'pointer', fontSize: 11, ...(capped ? { animation: 'pulse-amber 1.6s infinite' } : {}) }}

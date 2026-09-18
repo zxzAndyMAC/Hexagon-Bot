@@ -39,8 +39,8 @@ function Chip({ ok, warn, children }: { ok?: boolean; warn?: boolean; children: 
     <span
       style={{
         fontSize: 11, padding: '2px 8px', borderRadius: 8,
-        background: warn ? 'rgba(245,158,11,.15)' : ok ? 'rgba(16,185,129,.15)' : 'var(--bg-2)',
-        color: warn ? '#f59e0b' : ok ? '#10b981' : 'var(--fg-2)',
+        background: warn ? 'var(--accent-soft)' : ok ? 'var(--ok-soft)' : 'var(--bg-2)',
+        color: warn ? 'var(--accent)' : ok ? 'var(--ok)' : 'var(--text-2)',
       }}
     >
       {children}
@@ -209,7 +209,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           </div>
         )}
         {report?.dirty && (
-          <div style={{ color: '#f59e0b', fontSize: 12, marginTop: 8 }}>{t('wizard.dirtyHint')}</div>
+          <div style={{ color: 'var(--accent)', fontSize: 12, marginTop: 8 }}>{t('wizard.dirtyHint')}</div>
         )}
         {report && !report.is_git && (
           <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10, fontSize: 12 }}>
@@ -377,7 +377,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           )
         })}
         {missingKeys.length > 0 && (
-          <div style={{ color: '#f59e0b', fontSize: 12, marginTop: 8 }}>{t('wizard.keysBlocked')}</div>
+          <div style={{ color: 'var(--accent)', fontSize: 12, marginTop: 8 }}>{t('wizard.keysBlocked')}</div>
         )}
       </>
     ),
@@ -404,11 +404,11 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           </div>
         </div>
         {existingRepoAlign && (
-          <div className="panel" style={{ marginTop: 12, padding: '8px 10px', fontSize: 12, color: '#9d8cff' }}>
+          <div className="panel" style={{ marginTop: 12, padding: '8px 10px', fontSize: 12, color: 'var(--flag)' }}>
             {t('wizard.alignHint')}
           </div>
         )}
-        {err && <div style={{ color: '#f87171', fontSize: 12, marginTop: 10 }}>{err}</div>}
+        {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 10 }}>{err}</div>}
       </>
     ),
   }

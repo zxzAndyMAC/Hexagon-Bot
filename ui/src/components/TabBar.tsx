@@ -43,7 +43,7 @@ export function TabBar() {
             {tab.kind !== 'timeline' && (
               <button
                 className="icon-btn"
-                style={{ fontSize: 9, padding: '0 3px' }}
+                style={{ fontSize: 10, padding: '0 3px' }}
                 title={closeTip}
                 onClick={(e) => { e.stopPropagation(); closeTab(tab.id) }}
               >

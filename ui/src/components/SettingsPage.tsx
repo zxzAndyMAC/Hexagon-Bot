@@ -64,7 +64,7 @@ function KeyRow({ id, onChanged }: { id: ActionId; onChanged: () => void }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
       <div style={{ flex: 1, fontSize: 13 }}>{t(label)}</div>
       {conflict && (
-        <span style={{ color: '#f59e0b', fontSize: 11 }}>
+        <span style={{ color: 'var(--accent)', fontSize: 11 }}>
           {t('settings.keyConflict', {
             action: t(ACTIONS.find((a) => a.id === conflict)?.labelKey ?? conflict),
           })}
