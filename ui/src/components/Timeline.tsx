@@ -123,13 +123,13 @@ function EventRow({ item }: { item: TimelineItem }) {
     }
     return (
       <div className="msg" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
-        {member && <Avatar agentId={m.author} role={member.role} size={34} square />}
+        {member && <Avatar agentId={m.author} role={member.role} size={34} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
             <span style={{ fontWeight: 560, fontSize: 12 }}>{title}</span>
             {time && <span className="dim3" style={{ fontSize: 10 }}>{time}</span>}
           </div>
-          <div style={{ fontSize: 13, maxWidth: '78%' }}><ReactMarkdown>{m.body}</ReactMarkdown></div>
+          <div className="msg-body"><ReactMarkdown>{m.body}</ReactMarkdown></div>
         </div>
       </div>
     )

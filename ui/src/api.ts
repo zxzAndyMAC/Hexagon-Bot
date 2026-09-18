@@ -145,13 +145,13 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'timeline':
       return [
-        { event: { id: 1, kind: 'stage_started', agent_id: null, stage_run_id: 'r2', payload: { stage: '接口' }, created_at: '' }, message: null },
-        { event: { id: 2, kind: 'tool_called', agent_id: 'a1', stage_run_id: 'r2', payload: { tool: 'fs.read' }, created_at: '' }, message: null },
-        { event: { id: 3, kind: 'tool_result', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: null },
-        { event: { id: 4, kind: 'tool_called', agent_id: 'a1', stage_run_id: 'r2', payload: { tool: 'fs.write' }, created_at: '' }, message: null },
-        { event: { id: 5, kind: 'agent_message', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: { id: 1, author: 'a1', body: '接口说明 v1 已交付，见产物。', tokens: [] } },
-        { event: { id: 6, kind: 'artifact_delivered', agent_id: 'a1', stage_run_id: 'r2', payload: { path: 'api/spec.md', kind: '接口说明', version: 1 }, created_at: '' }, message: null },
-        { event: { id: 7, kind: 'permission_asked', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: null },
+        { event: { id: 1, kind: 'stage_started', agent_id: null, stage_run_id: 'r2', payload: { stage: '接口' }, created_at: '2026-07-07T09:13:00Z' }, message: null },
+        { event: { id: 2, kind: 'tool_called', agent_id: 'a1', stage_run_id: 'r2', payload: { tool: 'fs.read' }, created_at: '2026-07-07T09:16:00Z' }, message: null },
+        { event: { id: 3, kind: 'tool_result', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '2026-07-07T09:19:00Z' }, message: null },
+        { event: { id: 4, kind: 'tool_called', agent_id: 'a1', stage_run_id: 'r2', payload: { tool: 'fs.write' }, created_at: '2026-07-07T09:22:00Z' }, message: null },
+        { event: { id: 5, kind: 'agent_message', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '2026-07-07T09:25:00Z' }, message: { id: 1, author: 'a1', body: '接口说明 v1 已交付，见产物。', tokens: [] } },
+        { event: { id: 6, kind: 'artifact_delivered', agent_id: 'a1', stage_run_id: 'r2', payload: { path: 'api/spec.md', kind: '接口说明', version: 1 }, created_at: '2026-07-07T09:28:00Z' }, message: null },
+        { event: { id: 7, kind: 'permission_asked', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '2026-07-07T09:31:00Z' }, message: null },
       ] as T
     case 'pending_questions':
       return [
