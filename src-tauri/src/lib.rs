@@ -154,6 +154,72 @@ fn owner_back(state: tauri::State<AppState>) -> Result<Value, String> {
     with_wb(&state, |wb| wb.owner_back())
 }
 
+#[tauri::command]
+fn reject_stamp(state: tauri::State<AppState>) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.reject_stamp())
+}
+
+#[tauri::command]
+fn adjudicate_flag(
+    state: tauri::State<AppState>,
+    qid: String,
+    agree: bool,
+) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.adjudicate_flag(&qid, agree))
+}
+
+#[tauri::command]
+fn proposals(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
+    with_wb(&state, |wb| wb.proposals())
+}
+
+#[tauri::command]
+fn review_proposal(
+    state: tauri::State<AppState>,
+    proposal_id: String,
+    pass: bool,
+    reason: String,
+    reviewer_agent: String,
+) -> Result<(), String> {
+    with_wb(&state, |wb| {
+        wb.review_proposal(&proposal_id, pass, &reason, &reviewer_agent)
+    })
+}
+
+#[tauri::command]
+fn confirm_proposal(state: tauri::State<AppState>, qid: String) -> Result<String, String> {
+    with_wb(&state, |wb| wb.confirm_proposal(&qid))
+}
+
+#[tauri::command]
+fn reject_proposal(
+    state: tauri::State<AppState>,
+    qid: String,
+    reason: String,
+) -> Result<(), String> {
+    with_wb(&state, |wb| wb.reject_proposal(&qid, &reason))
+}
+
+#[tauri::command]
+fn rollback_proposal(state: tauri::State<AppState>, proposal_id: String) -> Result<(), String> {
+    with_wb(&state, |wb| wb.rollback_proposal(&proposal_id))
+}
+
+#[tauri::command]
+fn request_publish(state: tauri::State<AppState>, remote: String) -> Result<String, String> {
+    with_wb(&state, |wb| wb.request_publish(&remote))
+}
+
+#[tauri::command]
+fn confirm_publish(state: tauri::State<AppState>, qid: String) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.confirm_publish(&qid))
+}
+
+#[tauri::command]
+fn reject_publish(state: tauri::State<AppState>, qid: String) -> Result<(), String> {
+    with_wb(&state, |wb| wb.reject_publish(&qid))
+}
+
 /// 日志开关：app 级设置持久化在 config 目录，开发期默认开（Debug），release 默认 Info。
 fn log_enabled_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path()
@@ -249,6 +315,16 @@ pub fn run() {
             set_autonomy,
             owner_away,
             owner_back,
+            reject_stamp,
+            adjudicate_flag,
+            proposals,
+            review_proposal,
+            confirm_proposal,
+            reject_proposal,
+            rollback_proposal,
+            request_publish,
+            confirm_publish,
+            reject_publish,
             set_log_enabled,
             log_enabled,
         ])

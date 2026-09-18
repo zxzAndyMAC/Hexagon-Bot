@@ -7,10 +7,14 @@ import { SidePanel } from './components/SidePanel'
 import { Composer } from './components/Composer'
 import { SettingsDrawer } from './components/SettingsDrawer'
 import { useUiStore } from './store'
+import { PendingCards } from './components/PendingCards'
+import { usePendingKeys } from './decisions'
+import { bindingFor, matches } from './keymap'
 
 export default function App() {
   const refresh = useUiStore((s) => s.refresh)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const { onKey } = usePendingKeys()
 
   useEffect(() => {
     refresh()
@@ -18,12 +22,29 @@ export default function App() {
     return () => clearInterval(iv)
   }, [refresh])
 
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (matches(e, bindingFor('toggleRail'))) {
+        e.preventDefault()
+        useUiStore.getState().setRailOpen(!useUiStore.getState().railOpen)
+        return
+      }
+      void onKey(e)
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [onKey])
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <TopBar onSettings={() => setSettingsOpen(true)} />
       <StageBar />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 10, padding: '10px 14px' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <div id="pending-zone" style={{ maxHeight: 220, overflowY: 'auto', flexShrink: 0 }}>
+            <PendingCards />
+          </div>
           <Timeline />
           <Composer />
         </div>

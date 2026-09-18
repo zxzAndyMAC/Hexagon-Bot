@@ -332,6 +332,44 @@ fn artifact_proposal_parts(
     parse_proposal(&content)
 }
 
+/// 提案盖章驳回：qid 定位提案 → rejected + 原因 + 问题已答。与复审驳回同事件类。
+pub fn reject_at_stamp(
+    db: &Db,
+    ctx: &ToolContext,
+    qid: &str,
+    reason: &str,
+) -> Result<(), PropError> {
+    let payload: String = db
+        .conn()
+        .query_row(
+            "SELECT payload FROM pending_questions
+             WHERE id=?1 AND project_id=?2 AND kind='stamp' AND state='queued'",
+            params![qid, ctx.project_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| PropError::NotFound(format!("question {qid}")))?;
+    let pid = serde_json::from_str::<Value>(&payload).unwrap_or(json!({}))["proposal_id"]
+        .as_str()
+        .ok_or_else(|| PropError::Rejected("question is not a proposal stamp".into()))?
+        .to_string();
+    db.conn().execute(
+        "UPDATE pending_questions SET state='answered' WHERE id=?1",
+        [qid],
+    )?;
+    db.conn().execute(
+        "UPDATE proposals SET status='rejected', decided_at=datetime('now') WHERE id=?1",
+        [&pid],
+    )?;
+    db.append_event(
+        &ctx.project_id,
+        EventKind::ProposalRejected,
+        json!({"proposal_id": pid, "pass": false, "reason": reason, "question_id": qid}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )?;
+    Ok(())
+}
+
 /// 盖章确认：快照 → 应用 diff → active。qid 是 kind='stamp' 且 payload 带 proposal_id 的卡。
 pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropError> {
     let payload: String = db

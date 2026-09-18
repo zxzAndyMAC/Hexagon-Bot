@@ -35,6 +35,8 @@ pub enum ApiError {
     Autonomy(#[from] crate::autonomy::AutonomyError),
     #[error(transparent)]
     Proposal(#[from] crate::proposals::PropError),
+    #[error(transparent)]
+    Review(#[from] crate::review::ReviewError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
@@ -204,6 +206,43 @@ impl Workbench {
     /// 拒绝发布。
     pub fn reject_publish(&self, qid: &str) -> Result<(), ApiError> {
         Ok(crate::publish::reject(&self.db, &self.project_id, qid)?)
+    }
+
+    /// 提案盖章驳回：qid → proposal_id → rejected + 原因。
+    pub fn reject_proposal(&self, qid: &str, reason: &str) -> Result<(), ApiError> {
+        let ctx = self.ctx_for("owner", None);
+        crate::proposals::reject_at_stamp(&self.db, &ctx, qid, reason)?;
+        Ok(())
+    }
+
+    /// 升级卡裁决：payload 取 flag_id → review::adjudicate_flag；标记问题已答。
+    pub fn adjudicate_flag(&self, qid: &str, agree: bool) -> Result<Value, ApiError> {
+        let payload: String = self.db.conn().query_row(
+            "SELECT payload FROM pending_questions
+             WHERE id=?1 AND project_id=?2 AND kind='escalation' AND state='queued'",
+            rusqlite::params![qid, self.project_id],
+            |r| r.get(0),
+        )?;
+        let flag_id = serde_json::from_str::<Value>(&payload)?["flag_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let ctx = self.ctx_for("owner", None);
+        let v = crate::review::adjudicate_flag(&self.db, &ctx, self.pack()?, &flag_id, agree)?;
+        self.db.conn().execute(
+            "UPDATE pending_questions SET state='answered' WHERE id=?1",
+            [qid],
+        )?;
+        Ok(v)
+    }
+
+    /// 盖章点驳回：退上一阶段（与打回不同通道）。
+    pub fn reject_stamp(&self) -> Result<Value, ApiError> {
+        Ok(crate::review::reject_stamp(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+        )?)
     }
 
     fn agent_by_role(&self, role: &str) -> Result<String, ApiError> {
@@ -497,7 +536,8 @@ impl Workbench {
 
     pub fn pending_questions(&self) -> Result<Vec<Value>, ApiError> {
         let mut st = self.db.conn().prepare(
-            "SELECT id, kind, payload, state FROM pending_questions WHERE project_id=?1",
+            "SELECT id, kind, payload, state FROM pending_questions
+             WHERE project_id=?1 AND state='queued' ORDER BY created_at",
         )?;
         let rows = st
             .query_map([&self.project_id], |r| {
@@ -689,5 +729,19 @@ mod tests {
         assert!(tl.iter().any(|i| i.message.is_some()));
         let arts = wb.artifacts().unwrap();
         assert_eq!(arts.len(), 1);
+    }
+    #[test]
+    fn pending_questions_filters_answered_and_reject_at_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        // 手工造一条已答问题 + 一条排队问题：列表只回排队的
+        wb.db.conn().execute(
+            "INSERT INTO pending_questions (id, project_id, kind, payload, state)
+             VALUES ('qa','p1','permission','{}','answered'), ('qb','p1','permission','{}','queued')",
+            [],
+        ).unwrap();
+        let qs = wb.pending_questions().unwrap();
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0]["id"], "qb");
     }
 }

@@ -33,7 +33,9 @@ interface UiState {
   usageTotal: { spent_mc: number; limit_cents: number | null } | null
   autonomy: string
   projectName: string
+  railOpen: boolean
   setThemePref: (p: ThemePref) => void
+  setRailOpen: (v: boolean) => void
   refresh: () => Promise<void>
 }
 
@@ -47,6 +49,11 @@ export const useUiStore = create<UiState>((set) => ({
   usageTotal: null,
   autonomy: 'L0',
   projectName: '食谱 App',
+  railOpen: localStorage.getItem('hexagon.rail') !== '0',
+  setRailOpen: (v) => {
+    localStorage.setItem('hexagon.rail', v ? '1' : '0')
+    set({ railOpen: v })
+  },
   setThemePref: (p) => {
     localStorage.setItem('hexagon.theme', p)
     document.documentElement.dataset.theme = resolve(p)

@@ -98,6 +98,21 @@ export const api = {
   setAutonomy: (level: string) => call<void>('set_autonomy', { level }),
   ownerAway: () => call<void>('owner_away'),
   ownerBack: () => call<unknown>('owner_back'),
+  // ---- 决策卡动作 ----
+  rejectStamp: () => call<unknown>('reject_stamp'),
+  adjudicateFlag: (qid: string, agree: boolean) =>
+    call<unknown>('adjudicate_flag', { qid, agree }),
+  proposals: () => call<Record<string, unknown>[]>('proposals'),
+  reviewProposal: (proposalId: string, pass: boolean, reason: string, reviewerAgent: string) =>
+    call<void>('review_proposal', { proposalId, pass, reason, reviewerAgent }),
+  confirmProposal: (qid: string) => call<string>('confirm_proposal', { qid }),
+  rejectProposal: (qid: string, reason: string) =>
+    call<void>('reject_proposal', { qid, reason }),
+  rollbackProposal: (proposalId: string) =>
+    call<void>('rollback_proposal', { proposalId }),
+  requestPublish: (remote: string) => call<string>('request_publish', { remote }),
+  confirmPublish: (qid: string) => call<unknown>('confirm_publish', { qid }),
+  rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
 }
 
 // ---- 浏览器 dev mock：参照 hexagon-main-mock.html 的场景，形状同核侧 ----
@@ -126,11 +141,18 @@ function mock<T>(cmd: string): T {
     case 'timeline':
       return [
         { event: { id: 1, kind: 'stage_started', agent_id: null, stage_run_id: 'r2', payload: { stage: '接口' }, created_at: '' }, message: null },
-        { event: { id: 2, kind: 'agent_message', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: { id: 1, author: 'a1', body: '接口说明 v1 已交付，见产物。', tokens: [] } },
-        { event: { id: 3, kind: 'artifact_delivered', agent_id: 'a1', stage_run_id: 'r2', payload: { path: 'api/spec.md', kind: '接口说明', version: 1 }, created_at: '' }, message: null },
+        { event: { id: 2, kind: 'tool_called', agent_id: 'a1', stage_run_id: 'r2', payload: { tool: 'fs.read' }, created_at: '' }, message: null },
+        { event: { id: 3, kind: 'tool_result', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: null },
+        { event: { id: 4, kind: 'tool_called', agent_id: 'a1', stage_run_id: 'r2', payload: { tool: 'fs.write' }, created_at: '' }, message: null },
+        { event: { id: 5, kind: 'agent_message', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: { id: 1, author: 'a1', body: '接口说明 v1 已交付，见产物。', tokens: [] } },
+        { event: { id: 6, kind: 'artifact_delivered', agent_id: 'a1', stage_run_id: 'r2', payload: { path: 'api/spec.md', kind: '接口说明', version: 1 }, created_at: '' }, message: null },
+        { event: { id: 7, kind: 'permission_asked', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: null },
       ] as T
     case 'pending_questions':
-      return [] as T
+      return [
+        { id: 'q-pub', kind: 'publish', payload: JSON.stringify({ remote: 'origin', baseline: 'main', warning: 'Irreversible: code and artifacts leave the machine' }), state: 'queued' },
+        { id: 'q-perm', kind: 'permission', payload: JSON.stringify({ tool: 'bash', input: { command: 'cargo test' }, reason: 'run test suite', safety_net: false }), state: 'queued' },
+      ] as T
     case 'usage':
       return [{ _total: true, spent_mc: 38200, limit_cents: 20000 }] as T
     case 'autonomy':

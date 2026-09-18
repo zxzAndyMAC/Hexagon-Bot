@@ -99,3 +99,39 @@ button.btn:disabled { opacity: 0.4; cursor: default; }
 
 input, textarea { font: inherit; color: var(--text); }
 ::placeholder { color: var(--text-3); }
+
+/* 时间线密度与语义节点（票 21） */
+:root { --warn: #c07a1a; }
+[data-theme='dark'] { --warn: #e8a33d; }
+.chip.warn { color: var(--warn); border-color: var(--accent-border); background: var(--accent-soft); }
+
+.sysrow { display: flex; align-items: center; gap: 10px; padding: 3px 14px; }
+.sysline { flex: 0 0 40px; height: 1px; background: var(--border); }
+.syslabel { color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.msg { display: flex; flex-direction: column; padding: 6px 14px; }
+.msg-author { font-size: 11px; margin-bottom: 2px; }
+.msg-body {
+  max-width: 78%; padding: 7px 12px; border-radius: 10px;
+  background: var(--bg-1); border: 1px solid var(--border);
+  max-height: 240px; overflow-y: auto; font-size: 13px;
+}
+.msg-body p { margin: 4px 0; }
+
+.icon-btn {
+  font: inherit; color: var(--text-3); background: none; border: none;
+  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+}
+.icon-btn:hover { color: var(--text); background: var(--bg-3); }
+
+@keyframes flash-row {
+  0% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+.flash-row { animation: flash-row 1.4s ease-out; }
+.flash-zone { outline: 2px solid var(--accent-border); outline-offset: -2px; border-radius: 8px; transition: outline .2s; }
+
+@keyframes pulse-amber {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
