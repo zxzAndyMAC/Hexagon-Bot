@@ -9,6 +9,7 @@ use crate::trace::{EventKind, TraceError};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 pub const BASH_OUTPUT_CAP: usize = 64 * 1024;
 pub const FS_READ_CAP: usize = 256 * 1024;
@@ -75,7 +76,8 @@ pub trait Tool: Send + Sync {
 }
 
 pub struct Registry {
-    tools: HashMap<String, Box<dyn Tool>>,
+    /// Arc 共享：只读视图（研究助手嵌套回合）按名拷 mcp:* 而不起新进程。
+    tools: HashMap<String, Arc<dyn Tool>>,
 }
 
 impl Default for Registry {
@@ -90,6 +92,7 @@ impl Registry {
             tools: HashMap::new(),
         };
         r.register(FsRead);
+        r.register(Research);
         r.register(FsWrite);
         r.register(FsPatch);
         r.register(Bash);
@@ -100,7 +103,24 @@ impl Registry {
     }
 
     pub fn register(&mut self, tool: impl Tool + 'static) {
-        self.tools.insert(tool.name().to_string(), Box::new(tool));
+        self.tools.insert(tool.name().to_string(), Arc::new(tool));
+    }
+
+    /// 只读视图（US36 研究助手嵌套回合）：fs_read/artifact_read + 共享 mcp:*
+    /// —— 无写/bash/git/research → 结构性不可写、不可再派生；
+    /// mcp:* 走 L0 授权闸门按调用方 agent_id 判 → 用不了父未授权服务。
+    pub fn readonly(&self) -> Self {
+        let mut r = Self {
+            tools: HashMap::new(),
+        };
+        r.register(FsRead);
+        r.register(ArtifactRead);
+        for (name, t) in &self.tools {
+            if name.starts_with("mcp:") {
+                r.tools.insert(name.clone(), t.clone());
+            }
+        }
+        r
     }
 
     /// 供供应商请求用的工具清单（名字 + 描述 + schema）。
@@ -412,6 +432,29 @@ fn str_arg<'a>(input: &'a Value, key: &str) -> Result<&'a str, ToolError> {
 }
 
 // ---------- 内置工具 ----------
+
+/// 研究助手入口（US36）：模型可见的 `research` 工具；实际执行由 turn 层
+/// 截获跑嵌套只读回合（`research::call_nested`），exec 走到即未接截获的 bug。
+pub struct Research;
+impl Tool for Research {
+    fn name(&self) -> &str {
+        "research"
+    }
+    fn description(&self) -> &str {
+        "spawn a read-only nested research pass: search/read/compare and return observations with citations. Cannot write files, run commands, or use git."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object",
+               "properties": {"question": {"type": "string",
+                 "description": "what to research"}},
+               "required": ["question"]})
+    }
+    fn exec(&self, _db: &Db, _input: &Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
+        Err(ToolError::Exec(
+            "research is intercepted by the turn layer".into(),
+        ))
+    }
+}
 
 pub struct FsRead;
 impl Tool for FsRead {

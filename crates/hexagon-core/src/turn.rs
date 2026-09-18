@@ -685,7 +685,14 @@ fn run_turn_impl(
             // 执行工具调用，结果回喂；同工具同错连 BREAKER_STREAK 次熔断（US57）
             let mut results = Vec::new();
             for (id, name, input) in tool_uses {
-                match registry.call(db, ctx, &name, input) {
+                // US36 研究助手：research 由 turn 层截获跑嵌套只读回合
+                // （provider/只读注册表都在这里才够得着，exec 层拿不到）
+                let called = if name == "research" {
+                    crate::research::call_nested(db, provider, registry, ctx, input)
+                } else {
+                    registry.call(db, ctx, &name, input)
+                };
+                match called {
                     Ok(CallOutcome::Done(v)) => {
                         last_fail = None;
                         streak = 0;

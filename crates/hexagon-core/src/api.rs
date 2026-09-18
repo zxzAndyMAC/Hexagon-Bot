@@ -1734,6 +1734,92 @@ mod tests {
     }
 
     /// US33 余量（票 40）：检验红默认挡推进；负责人显式覆盖留痕放行。
+    /// US36：只读研究助手——嵌套回合结构性不可写、引用进回包、用量记父。
+    #[test]
+    fn us36_research_nested_readonly() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.md"), "fact A").unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["研究"], None).unwrap();
+        wb.db
+            .conn()
+            .execute("UPDATE agents SET status='active' WHERE id='a0'", [])
+            .unwrap();
+        // 脚本序：父→research；嵌套→fs_read → 试写（只读注册表无此工具）
+        //         → 文本作答；父→收尾
+        let prov = Arc::new(ScriptedProvider::new(vec![
+            tool_response(vec![(
+                "t1",
+                "research",
+                json!({"question": "notes.md 里写了什么"}),
+            )]),
+            tool_response(vec![("t2", "fs_read", json!({"path": "notes.md"}))]),
+            tool_response(vec![(
+                "t3",
+                "fs_write",
+                json!({"path": "x.md", "content": "hack"}),
+            )]),
+            text_response("观察：notes.md 记录 fact A"),
+            text_response("done"),
+        ]));
+        wb.register_provider("default", prov.clone());
+        let out = wb.run_turn("研究", "查资料").unwrap();
+        assert_eq!(out, TurnOutcome::Finished);
+        // 嵌套不可写（结构性：fs_write 不在只读注册表）
+        assert!(!dir.path().join("x.md").exists());
+        // 只读注册表清单断言：只有读类 + 无 research（不可再派生）
+        let ro_names: Vec<String> = wb
+            .registry
+            .readonly()
+            .defs()
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        assert!(ro_names.contains(&"fs_read".to_string()));
+        assert!(ro_names.contains(&"artifact_read".to_string()));
+        assert!(!ro_names
+            .iter()
+            .any(|n| n == "fs_write" || n == "bash" || n == "research"));
+        // 回包：answer + 真实引用（嵌套段读过的路径）
+        let evs = wb.events(Some(&[EventKind::ToolResult])).unwrap();
+        let res = evs
+            .iter()
+            .find(|e| e.payload["result"]["tool"] == "research")
+            .expect("research tool_result missing");
+        assert_eq!(res.payload["ok"], true);
+        assert!(res.payload["result"]["output"]["answer"]
+            .as_str()
+            .unwrap()
+            .contains("fact A"));
+        assert!(res.payload["result"]["output"]["citations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["ref"] == "notes.md"));
+        // 用量记父：嵌套回合的 usage 行也落在 a0 名下
+        let n: i64 = wb
+            .db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM usage WHERE agent_id='a0'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(n >= 2, "nested usage must bill parent, got {n}");
+        // 父休眠嵌套不跑：直接截获调用也拒
+        wb.db
+            .conn()
+            .execute("UPDATE agents SET status='sleeping' WHERE id='a0'", [])
+            .unwrap();
+        let ctx = wb.ctx_for("a0", None);
+        let r = crate::research::call_nested(
+            &wb.db,
+            prov.as_ref(),
+            &wb.registry,
+            &ctx,
+            json!({"question": "x"}),
+        );
+        assert!(r.is_err());
+    }
+
     #[test]
     fn us47_install_assistant_owner_gated() {
         let dir = tempfile::tempdir().unwrap();

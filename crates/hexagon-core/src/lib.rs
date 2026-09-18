@@ -19,6 +19,7 @@ pub mod presets;
 pub mod proposals;
 pub mod provider;
 pub mod publish;
+pub mod research;
 pub mod review;
 pub mod scenario;
 pub mod setup;
