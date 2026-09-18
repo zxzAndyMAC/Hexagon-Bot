@@ -1,0 +1,45 @@
+{
+  "name": "阶段门",
+  "version": 1,
+  "stages": [
+    {
+      "name": "需求",
+      "roles": ["产品策划"],
+      "due": ["规格"],
+      "stamp_point": true
+    },
+    {
+      "name": "设计",
+      "roles": ["UX", "UI"],
+      "due": ["结构说明", "界面稿"],
+      "reviews": [{ "artifact_kind": "界面稿", "reviewer": "UX" }],
+      "consult_wake": ["UX"],
+      "stamp_point": true
+    },
+    {
+      "name": "实现",
+      "roles": ["前端", "后端", "运维"],
+      "due": ["代码", "接口说明", "部署产物"],
+      "reviews": [
+        { "artifact_kind": "接口说明", "reviewer": "架构师" },
+        { "artifact_kind": "代码", "reviewer": "后端技术负责人" }
+      ],
+      "consult_wake": ["架构师", "前端技术负责人", "后端技术负责人"],
+      "backfill_edges": [["前端", "后端"], ["运维", "后端"], ["QA", "前端"], ["QA", "后端"]],
+      "stamp_point": true
+    },
+    {
+      "name": "检验",
+      "roles": ["QA"],
+      "due": ["测试记录"],
+      "backfill_edges": [["QA", "前端"], ["QA", "后端"]],
+      "stamp_point": true
+    },
+    {
+      "name": "合入",
+      "roles": ["后端"],
+      "due": [],
+      "stamp_point": true
+    }
+  ]
+}

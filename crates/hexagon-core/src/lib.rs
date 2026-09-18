@@ -14,6 +14,7 @@ pub mod git;
 pub mod mcp;
 pub mod orchestra;
 pub mod permissions;
+pub mod presets;
 pub mod proposals;
 pub mod provider;
 pub mod publish;

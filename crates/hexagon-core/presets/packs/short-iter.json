@@ -1,0 +1,32 @@
+{
+  "name": "短迭代",
+  "version": 1,
+  "stages": [
+    {
+      "name": "范围",
+      "roles": ["产品策划"],
+      "due": ["范围说明"],
+      "stamp_point": true
+    },
+    {
+      "name": "实现",
+      "roles": ["前端", "后端"],
+      "due": ["代码"],
+      "reviews": [{ "artifact_kind": "代码", "reviewer": "前端技术负责人" }],
+      "consult_wake": ["前端技术负责人", "后端技术负责人", "架构师"],
+      "backfill_edges": [["QA", "前端"], ["QA", "后端"]]
+    },
+    {
+      "name": "检验",
+      "roles": ["QA"],
+      "due": ["测试记录"],
+      "backfill_edges": [["QA", "前端"], ["QA", "后端"]]
+    },
+    {
+      "name": "合入",
+      "roles": ["后端"],
+      "due": [],
+      "stamp_point": true
+    }
+  ]
+}

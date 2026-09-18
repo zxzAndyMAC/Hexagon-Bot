@@ -1,0 +1,82 @@
+[
+  {
+    "name": "产品策划",
+    "duty": "写出做什么、不做什么、怎么算验收；产物是规格",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": ["specs/**", "docs/**", ".hexagon/**"],
+    "skills": ["spec-writing", "handoff-note"]
+  },
+  {
+    "name": "UX",
+    "duty": "信息结构与关键路径；产物是结构说明和用户流程",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": ["docs/**", "ux/**", ".hexagon/**"],
+    "skills": ["ia-outline", "handoff-note"]
+  },
+  {
+    "name": "UI",
+    "duty": "界面视觉与组件外观；产物是界面稿和标注",
+    "reviewer": "UX",
+    "model_slot": "chat",
+    "globs": ["docs/**", "ux/**", "ui/**", "design/**", ".hexagon/**"],
+    "skills": ["ui-annotation", "handoff-note"]
+  },
+  {
+    "name": "前端",
+    "duty": "实现界面与交互；产物是可运行的界面代码",
+    "reviewer": "前端技术负责人",
+    "model_slot": "chat",
+    "globs": ["ui/**", "web/**", "src/**", "app/**", "public/**", ".hexagon/**"],
+    "skills": ["handoff-note"]
+  },
+  {
+    "name": "后端",
+    "duty": "实现数据与接口；产物是接口说明和可运行的服务",
+    "reviewer": "后端技术负责人",
+    "model_slot": "chat",
+    "globs": ["src/**", "crates/**", "server/**", "api/**", "services/**", ".hexagon/**"],
+    "skills": ["api-contract", "handoff-note"]
+  },
+  {
+    "name": "QA",
+    "duty": "设计测试并用命令真正执行；产物是带工具输出的测试记录",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": ["tests/**", "e2e/**", "**/*.test.*", "**/*.spec.*", ".hexagon/**"],
+    "skills": ["test-plan", "handoff-note"]
+  },
+  {
+    "name": "前端技术负责人",
+    "duty": "复审前端产物；产物是复审意见，不盖章",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": ["docs/**", ".hexagon/**"],
+    "skills": ["code-review"]
+  },
+  {
+    "name": "后端技术负责人",
+    "duty": "复审后端产物；产物是复审意见，不盖章",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": ["docs/**", ".hexagon/**"],
+    "skills": ["code-review"]
+  },
+  {
+    "name": "运维",
+    "duty": "产出部署类产物：部署脚本、CI 配置、Dockerfile、IaC、运行手册；不拥有部署动作",
+    "reviewer": "后端技术负责人",
+    "model_slot": "chat",
+    "globs": ["deploy/**", "infra/**", "scripts/**", ".github/**", "Dockerfile*", "docker-compose*.yml", ".hexagon/**"],
+    "skills": ["runbook", "handoff-note"]
+  },
+  {
+    "name": "架构师",
+    "duty": "跨端技术一致性复审者：复审接口说明与跨模块技术方案，产物是复审意见和技术裁定记录；不盖章、不写实现",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": ["docs/**", "adr/**", ".hexagon/**"],
+    "skills": ["code-review", "adr-writing"]
+  }
+]
