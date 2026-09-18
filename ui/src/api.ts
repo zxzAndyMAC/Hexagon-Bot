@@ -172,6 +172,8 @@ export const api = {
   rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
+  // ---- 检验覆盖（票 40）：显式覆盖留痕，composer /override <理由> 同权 ----
+  overrideChecks: (reason: string) => call<unknown>('override_checks', { reason }),
   // ---- 头像 ----
   setAgentAvatar: (agentId: string, dataUrl: string) =>
     call<void>('set_agent_avatar', { agentId, dataUrl }),

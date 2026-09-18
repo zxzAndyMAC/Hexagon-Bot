@@ -155,6 +155,11 @@ fn recover_run(state: tauri::State<AppState>, run_id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+fn override_checks(state: tauri::State<AppState>, reason: String) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.override_checks(&reason))
+}
+
+#[tauri::command]
 fn autonomy(state: tauri::State<AppState>) -> Result<String, String> {
     with_wb(&state, |wb| wb.autonomy())
 }
@@ -602,6 +607,7 @@ pub fn run() {
             usage,
             open_stage,
             recover_run,
+            override_checks,
             autonomy,
             set_autonomy,
             owner_away,

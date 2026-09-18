@@ -35,6 +35,8 @@ pub enum OrchError {
     Paused,
     #[error("stage run not interrupted: {0}")]
     NotInterrupted(String),
+    #[error("no failing checks to override on run {0}")]
+    NothingToOverride(String),
 }
 
 // ---------- 流程包定义 ----------
@@ -248,22 +250,9 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
         }
     }
 
-    // 检验命令全过：最近一次 TestRan 里每条命令 exit=0
-    for cmd in &stage.checks {
-        let passed: Option<i64> = db
-            .conn()
-            .query_row(
-                "SELECT CAST(json_extract(payload,'$.exit_code') AS INTEGER) FROM events
-                 WHERE project_id=?1 AND stage_run_id=?2 AND kind='test_ran'
-                 AND json_extract(payload,'$.cmd')=?3
-                 ORDER BY id DESC LIMIT 1",
-                rusqlite::params![project_id, run.id, cmd],
-                |r| r.get(0),
-            )
-            .ok();
-        if passed != Some(0) {
-            missing.push(format!("check:{cmd}"));
-        }
+    // 检验命令全过：最近一次 TestRan exit=0，或负责人已显式覆盖（票 40）
+    for cmd in failing_checks(db, project_id, &run.id, stage)? {
+        missing.push(format!("check:{cmd}"));
     }
 
     // 声明复审全过：每条声明最新复审事件为 passed
@@ -291,6 +280,71 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
     } else {
         StageEval::Incomplete { missing }
     })
+}
+
+/// 未满足的检验命令：最近一次 TestRan 非 0（含未跑），且没有
+/// 覆盖到该命令的 check_overridden 事件（票 40：覆盖是留痕事实，评估认账）。
+fn failing_checks(
+    db: &Db,
+    project_id: &str,
+    run_id: &str,
+    stage: &StageDef,
+) -> Result<Vec<String>, OrchError> {
+    let mut failing = Vec::new();
+    for cmd in &stage.checks {
+        let passed: Option<i64> = db
+            .conn()
+            .query_row(
+                "SELECT CAST(json_extract(payload,'$.exit_code') AS INTEGER) FROM events
+                 WHERE project_id=?1 AND stage_run_id=?2 AND kind='test_ran'
+                 AND json_extract(payload,'$.cmd')=?3
+                 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![project_id, run_id, cmd],
+                |r| r.get(0),
+            )
+            .ok();
+        if passed == Some(0) {
+            continue;
+        }
+        let covered: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM events e, json_each(json_extract(e.payload,'$.cmds')) j
+             WHERE e.project_id=?1 AND e.stage_run_id=?2
+               AND e.kind='check_overridden' AND j.value=?3",
+            rusqlite::params![project_id, run_id, cmd],
+            |r| r.get(0),
+        )?;
+        if covered == 0 {
+            failing.push(cmd.clone());
+        }
+    }
+    Ok(failing)
+}
+
+/// 负责人显式覆盖检验失败（票 40）：落 check_overridden 留痕（谁/哪些命令/理由），
+/// 之后 evaluate 把这些命令记为满足——stamp/合入随既有闸门自然放行。
+/// 只覆盖检验项；缺产物/未过复审不在覆盖范围。
+pub fn override_checks(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    reason: &str,
+) -> Result<Value, OrchError> {
+    let run = db
+        .active_stage_run(project_id)?
+        .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
+    let stage = &pack.stages[run.seq as usize];
+    let failing = failing_checks(db, project_id, &run.id, stage)?;
+    if failing.is_empty() {
+        return Err(OrchError::NothingToOverride(run.id));
+    }
+    db.append_event(
+        project_id,
+        EventKind::CheckOverridden,
+        json!({"cmds": failing, "reason": reason, "by": "owner"}),
+        None,
+        Some(&run.id),
+    )?;
+    Ok(json!({"overridden": failing, "stage": run.stage_name}))
 }
 
 /// 跑本阶段的检验命令（包内声明 = 预授权，直跑不过权限管线）。

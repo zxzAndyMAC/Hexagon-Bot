@@ -69,6 +69,7 @@ export default {
     tool_called: 'chamada de ferramenta',
     tool_result: 'resultado de ferramenta',
     test_ran: 'verificações',
+    check_overridden: 'verificações sobrepostas',
     owner_message: 'mensagem do responsável',
     agent_message: 'mensagem do agente',
     owner_command: 'comando',

@@ -382,6 +382,9 @@ impl Workbench {
             TextCommand::Pause => self.pause()?,
             TextCommand::Resume => self.resume()?,
             TextCommand::SleepAll => self.sleep_all()?,
+            TextCommand::Override(reason) => {
+                self.override_checks(reason)?;
+            }
         }
         Ok(())
     }
@@ -631,6 +634,16 @@ impl Workbench {
     pub fn recover_run(&self, run_id: &str) -> Result<(), ApiError> {
         orchestra::recover_run(&self.db, &self.project_id, run_id)?;
         Ok(())
+    }
+
+    /// 显式覆盖检验失败（票 40）：留痕 check_overridden（谁/哪些命令/理由）。
+    pub fn override_checks(&self, reason: &str) -> Result<Value, ApiError> {
+        Ok(orchestra::override_checks(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+            reason,
+        )?)
     }
 
     pub fn resume(&self) -> Result<(), ApiError> {
@@ -929,6 +942,7 @@ enum TextCommand {
     Pause,
     Resume,
     SleepAll,
+    Override(String),
 }
 
 /// 整句匹配：命令词 + 可选数字参数，多余文本一律不算命令。
@@ -959,6 +973,10 @@ fn parse_command(body: &str) -> Option<TextCommand> {
             "resume" | "恢复" if arg.is_empty() => Some(TextCommand::Resume),
             "sleep" | "sleep_all" | "休眠" | "全员休眠" if arg.is_empty() => {
                 Some(TextCommand::SleepAll)
+            }
+            // /override <理由>：理由必填，空理由不算指令（落普通消息）
+            "override" | "覆盖" if !arg.is_empty() => {
+                Some(TextCommand::Override(arg.to_string()))
             }
             _ => None, // 未知 /verb 或多余参数 → 普通消息，不吞
         };
@@ -1461,5 +1479,39 @@ mod tests {
             .unwrap()
             .iter()
             .all(|q| q["kind"] != "recovery"));
+    }
+
+    /// US33 余量（票 40）：检验红默认挡推进；负责人显式覆盖留痕放行。
+    #[test]
+    fn us33_check_override_lets_stage_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"t","version":1,
+            "stages":[{"name":"实现","roles":["后端"],"due":[],"checks":["false"]}]
+        }))
+        .unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], Some(pack)).unwrap();
+        wb.open_stage(0).unwrap();
+        wb.run_checks().unwrap(); // `false` → exit 1，检验红
+                                  // 无覆盖：检验红挡推进
+        let r = wb.advance().unwrap();
+        assert_eq!(r["action"], "incomplete");
+        assert!(r["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m.as_str() == Some("check:false")));
+        // 显式覆盖：留痕 cmds + reason + by
+        wb.override_checks("CI 环境缺依赖，本地已过").unwrap();
+        let evs = wb.events(Some(&[EventKind::CheckOverridden])).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].payload["cmds"], json!(["false"]));
+        assert_eq!(evs[0].payload["reason"], "CI 环境缺依赖，本地已过");
+        assert_eq!(evs[0].payload["by"], "owner");
+        // 覆盖后推进放行（阶段收尾）
+        let r = wb.advance().unwrap();
+        assert_ne!(r["action"], "incomplete");
+        // 无红可覆 → 报错（防无痕迹空覆盖）
+        assert!(wb.override_checks("again").is_err());
     }
 }

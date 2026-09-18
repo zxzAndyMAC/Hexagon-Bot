@@ -69,6 +69,7 @@ export default {
     tool_called: '工具调用',
     tool_result: '工具结果',
     test_ran: '检验',
+    check_overridden: '检验覆盖',
     owner_message: '负责人消息',
     agent_message: 'Agent 消息',
     owner_command: '指令',

@@ -48,6 +48,7 @@ const NODE_ICONS: Record<string, IconName> = {
   flag_submitted: 'flag',
   flag_adjudicated: 'flag',
   escalated: 'warn',
+  check_overridden: 'warn',
 }
 
 export function nodeMarks(timeline: TimelineItem[], rows: Row[], pendingCount: number): NodeMark[] {

@@ -69,6 +69,7 @@ export default {
     tool_called: 'ツール呼び出し',
     tool_result: 'ツール結果',
     test_ran: 'チェック実行',
+    check_overridden: 'チェックオーバーライド',
     owner_message: 'オーナーメッセージ',
     agent_message: 'エージェントメッセージ',
     owner_command: 'コマンド',

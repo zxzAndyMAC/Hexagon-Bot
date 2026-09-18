@@ -46,6 +46,7 @@ pub enum EventKind {
     ToolCalled,
     ToolResult,
     TestRan,
+    CheckOverridden,
     // 消息与控制
     OwnerMessage,
     AgentMessage,

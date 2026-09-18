@@ -69,6 +69,7 @@ export default {
     tool_called: 'tool call',
     tool_result: 'tool result',
     test_ran: 'checks',
+    check_overridden: 'checks overridden',
     owner_message: 'owner message',
     agent_message: 'agent message',
     owner_command: 'command',
