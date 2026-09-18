@@ -307,7 +307,7 @@ impl Workbench {
         )?)
     }
 
-    fn agent_by_role(&self, role: &str) -> Result<String, ApiError> {
+    pub(crate) fn agent_by_role(&self, role: &str) -> Result<String, ApiError> {
         self.db
             .conn()
             .query_row(
@@ -318,7 +318,7 @@ impl Workbench {
             .map_err(|_| ApiError::NoRole(role.into()))
     }
 
-    fn ctx_for(&self, agent_id: &str, stage_run_id: Option<String>) -> ToolContext {
+    pub(crate) fn ctx_for(&self, agent_id: &str, stage_run_id: Option<String>) -> ToolContext {
         ToolContext {
             project_id: self.project_id.clone(),
             agent_id: agent_id.into(),
@@ -619,7 +619,7 @@ impl Workbench {
         self.pack.as_ref().ok_or(ApiError::NoStage)
     }
 
-    fn active_run(&self) -> Result<Option<orchestra::StageRun>, ApiError> {
+    pub(crate) fn active_run(&self) -> Result<Option<orchestra::StageRun>, ApiError> {
         let mut st = self.db.conn().prepare(
             "SELECT id, seq, stage_name, state FROM stage_runs
              WHERE project_id=?1 AND state IN ('active','waiting_stamp')
@@ -1234,5 +1234,83 @@ mod tests {
         assert_eq!(runs[0]["state"], "active");
         let tl = wb.timeline(None, 50).unwrap();
         assert!(tl.iter().any(|i| i.event.kind == EventKind::PackUpgraded));
+    }
+
+    /// US4：Agent 的模型槽决定消费哪个供应商脚本（BYOK 槽位路由）。
+    #[test]
+    fn us04_model_slot_binds_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"t","version":1,
+            "stages":[{"name":"实现","roles":["后端"],"due":[]}]
+        }))
+        .unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["后端"], Some(pack)).unwrap();
+        // 该 Agent 绑 chat 槽：register 两个供应商，脚本只被 chat 消费
+        wb.db
+            .conn()
+            .execute("UPDATE agents SET model_slot='chat' WHERE id='a0'", [])
+            .unwrap();
+        let chat = Arc::new(ScriptedProvider::new(vec![text_response("chat said")]));
+        let other = Arc::new(ScriptedProvider::new(vec![text_response("wrong")]));
+        wb.register_provider("chat", chat.clone());
+        wb.register_provider("vision", other.clone());
+        wb.open_stage(0).unwrap();
+        wb.run_turn("后端", "go").unwrap();
+        assert_eq!(chat.recorded().len(), 1);
+        assert!(other.recorded().is_empty());
+    }
+
+    /// US71：关闭再打开只恢复文件真相——阶段/产物/团队/用量原样在，无重放。
+    #[test]
+    fn us71_reopen_restores_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"t","version":1,
+            "stages":[{"name":"规格","roles":["产品策划"],"due":["规格"]}]
+        }))
+        .unwrap();
+        // 第一轮：开项目、开阶段、交一份产物
+        {
+            let mut wb = Workbench::open(
+                dir.path(),
+                "t",
+                &[("a0".into(), "产品策划".into())],
+                Some(pack.clone()),
+            )
+            .unwrap();
+            wb.set_credential_store(Arc::new(crate::credentials::MemoryStore::default()));
+            wb.register_provider(
+                "default",
+                Arc::new(ScriptedProvider::new(vec![
+                    tool_response(vec![("t0", "artifact_write", json!({
+                        "path":"specs/prd.md",
+                        "content":"---\nkind: 规格\nauthor: a0\n---\n## 目标\nx\n## 范围\nx\n## 验收\nx"
+                    }))]),
+                    text_response("done"),
+                ])),
+            );
+            wb.open_stage(0).unwrap();
+            wb.run_turn("产品策划", "go").unwrap();
+            assert_eq!(wb.artifacts().unwrap().len(), 1);
+        }
+        // 第二轮：重开——状态原样，零模型调用
+        let mut wb = Workbench::open(
+            dir.path(),
+            "t",
+            &[("a0".into(), "产品策划".into())],
+            Some(pack),
+        )
+        .unwrap();
+        let prov = Arc::new(ScriptedProvider::new(vec![text_response("replay?")]));
+        wb.register_provider("default", prov.clone());
+        assert_eq!(wb.stage_status().unwrap()[0]["state"], "active");
+        assert_eq!(wb.artifacts().unwrap().len(), 1);
+        assert_eq!(wb.team().unwrap().len(), 1);
+        assert!(!wb.events(None).unwrap().is_empty());
+        assert!(
+            prov.recorded().is_empty(),
+            "reopen must not replay model calls"
+        );
     }
 }

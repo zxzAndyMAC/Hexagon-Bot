@@ -145,10 +145,21 @@ pub enum StepDef {
         remember: Option<String>,
         scope: Option<String>,
     },
+    /// 以 role 身份对 path 产物提交复审（pass/reject）。
+    SubmitReview {
+        role: String,
+        artifact: String,
+        verdict: String,
+        body: Option<String>,
+    },
     // ---- 断言 ----
     AssertEvent {
         kind: EventKind,
         contains: Option<Value>,
+    },
+    /// 黄金轨迹：期望的 kind 序列是实际事件流的有序子序列（允许穿插其他事件）。
+    AssertEventSeq {
+        kinds: Vec<EventKind>,
     },
     AssertNoEvent {
         kind: EventKind,
@@ -242,6 +253,34 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
                 scope.as_deref().unwrap_or("activation"),
             )?;
         }
+        StepDef::SubmitReview {
+            role,
+            artifact,
+            verdict,
+            body,
+        } => {
+            let aid = wb.agent_by_role(role)?;
+            let run = wb.active_run()?.map(|r| r.id);
+            let ctx = wb.ctx_for(&aid, run);
+            let art_id: String = wb
+                .artifacts()?
+                .iter()
+                .find(|a| a["path"] == *artifact)
+                .and_then(|a| a["id"].as_str().map(str::to_string))
+                .ok_or_else(|| ApiError::NoRole(format!("no artifact {artifact}")))?;
+            let v = match verdict.as_str() {
+                "pass" | "通过" => crate::review::Verdict::Pass,
+                _ => crate::review::Verdict::Reject,
+            };
+            crate::review::submit_review(
+                &wb.db,
+                &ctx,
+                &art_id,
+                v,
+                body.as_deref().unwrap_or("scenario review"),
+            )
+            .map_err(|e| ApiError::NoRole(e.to_string()))?;
+        }
         StepDef::AssertEvent { kind, contains } => {
             let evs = wb.events(Some(&[*kind]))?;
             let hit = match contains {
@@ -253,6 +292,16 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
         StepDef::AssertNoEvent { kind } => {
             let evs = wb.events(Some(&[*kind]))?;
             assert!(evs.is_empty(), "unexpected event {kind:?} present");
+        }
+        StepDef::AssertEventSeq { kinds } => {
+            let evs = wb.events(None)?;
+            let mut it = evs.iter().map(|e| e.kind);
+            for want in kinds {
+                assert!(
+                    it.any(|k| k == *want),
+                    "golden trace: missing {want:?} in event stream"
+                );
+            }
         }
         StepDef::AssertStage { seq, state } => {
             let stages = wb.stage_status()?;
@@ -349,6 +398,97 @@ mod tests {
                 {"do":"assert_event","kind":"permission_allowed"},
                 {"do":"assert_event","kind":"permission_shape_remembered","contains":{"shape":"npm install *"}},
                 {"do":"assert_event","kind":"tool_result"}
+            ]
+        }))
+        .unwrap();
+        run_scenario(dir.path(), &sc).unwrap();
+    }
+
+    /// 黄金轨迹（票 28）：盖章点流程全走一遍，断言事件序列本身。
+    #[test]
+    fn golden_trace_stamp_gate_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let sc: Scenario = serde_json::from_value(serde_json::json!({
+            "roles": ["产品策划", "架构师"],
+            "pack": {"name":"g","version":1,"stages":[
+                {"name":"规格","roles":["产品策划"],"due":["规格"],
+                 "checks":["true"],"stamp_point":true,
+                 "reviews":[{"artifact_kind":"规格","reviewer":"架构师"}]}
+            ]},
+            "scripts": {"default": [
+                {"tool_calls": [{"name":"artifact_write","input":{
+                    "path":"specs/prd.md",
+                    "content":"---\nkind: 规格\nauthor: a0\n---\n## 目标\nx\n## 范围\nx\n## 验收\nx"}}]},
+                {"text": "done"}
+            ]},
+            "steps": [
+                {"do":"open_stage","seq":0},
+                {"do":"run_all_active"},
+                {"do":"submit_review","role":"架构师","artifact":"specs/prd.md","verdict":"pass"},
+                {"do":"run_checks"},
+                {"do":"advance"},
+                {"do":"assert_stage","seq":0,"state":"waiting_stamp"},
+                {"do":"stamp"},
+                {"do":"assert_stage","seq":0,"state":"done"},
+                {"do":"assert_event_seq","kinds":[
+                    "stage_started","agent_activated","artifact_delivered",
+                    "review_passed","test_ran","stamped","team_slept"]}
+            ]
+        }))
+        .unwrap();
+        run_scenario(dir.path(), &sc).unwrap();
+    }
+
+    /// US25：复审驳回只产生驳回事件与本阶段返工语义——上游阶段不退回。
+    #[test]
+    fn us25_review_reject_does_not_rewind() {
+        let dir = tempfile::tempdir().unwrap();
+        let sc: Scenario = serde_json::from_value(serde_json::json!({
+            "roles": ["产品策划", "架构师", "后端"],
+            "pack": {"name":"t","version":1,"stages":[
+                {"name":"规格","roles":["产品策划"],"due":["规格"]},
+                {"name":"实现","roles":["后端"],"due":[]}
+            ]},
+            "scripts": {"default": [
+                {"tool_calls": [{"name":"artifact_write","input":{
+                    "path":"specs/prd.md",
+                    "content":"---\nkind: 规格\nauthor: a0\n---\n## 目标\nx\n## 范围\nx\n## 验收\nx"}}]},
+                {"text": "done"}
+            ]},
+            "steps": [
+                {"do":"open_stage","seq":0},
+                {"do":"run_all_active"},
+                {"do":"advance"},
+                {"do":"assert_stage","seq":0,"state":"done"},
+                {"do":"open_stage","seq":1},
+                {"do":"submit_review","role":"架构师","artifact":"specs/prd.md","verdict":"reject","body":"目标不清"},
+                {"do":"assert_event","kind":"review_rejected"},
+                {"do":"assert_no_event","kind":"stage_rewound"},
+                {"do":"assert_stage","seq":0,"state":"done"}
+            ]
+        }))
+        .unwrap();
+        run_scenario(dir.path(), &sc).unwrap();
+    }
+
+    /// US33：检验红 → 阶段评估不过（合入盖章的默认挡路在 git::stamp_gate_blocks_merge）。
+    #[test]
+    fn us33_failed_check_blocks_eval() {
+        let dir = tempfile::tempdir().unwrap();
+        let sc: Scenario = serde_json::from_value(serde_json::json!({
+            "roles": ["后端"],
+            "pack": {"name":"t","version":1,"stages":[
+                {"name":"实现","roles":["后端"],"due":[],"checks":["false"]}
+            ]},
+            "scripts": {"default": [{"text": "done"}]},
+            "steps": [
+                {"do":"open_stage","seq":0},
+                {"do":"run_all_active"},
+                {"do":"run_checks"},
+                {"do":"assert_event","kind":"test_ran","contains":{"exit_code":1}},
+                {"do":"advance"},
+                {"do":"assert_stage","seq":0,"state":"active"},
+                {"do":"assert_no_event","kind":"stage_finished"}
             ]
         }))
         .unwrap();

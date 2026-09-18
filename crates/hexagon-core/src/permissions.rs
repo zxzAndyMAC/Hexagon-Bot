@@ -625,4 +625,146 @@ mod tests {
             &json!({"path":"src/a/b.rs"})
         ));
     }
+
+    // ---------- 票 28：权限不变量属性测试 ----------
+    //
+    // 规格 Testing Decisions：proptest 生成规则组合，断言三条不变量
+    // 在任意 allow/deny/作用域组合下恒成立。
+
+    mod prop_tests {
+        use super::tests::setup;
+        use super::*;
+        use crate::tools::{Bash, FsRead, FsWrite};
+        use proptest::prelude::*;
+        use proptest::{collection, sample};
+        use serde_json::json;
+
+        /// 规则 (tool, shape, effect, scope) 生成器——形状取自真实惯用形。
+        fn rule() -> impl Strategy<Value = (&'static str, &'static str, &'static str, &'static str)>
+        {
+            (
+                sample::select(vec!["bash", "fs_read", "fs_write"]),
+                sample::select(vec![
+                    "npm *",
+                    "cargo *",
+                    "git *",
+                    "src/**",
+                    "**",
+                    "npm install *",
+                ]),
+                sample::select(vec!["allow", "deny"]),
+                sample::select(vec!["project", "activation"]),
+            )
+        }
+
+        fn insert_rule(db: &Db, i: usize, tool: &str, shape: &str, effect: &str, scope: &str) {
+            let srid = if scope == "activation" {
+                Some("sr1")
+            } else {
+                None
+            };
+            db.conn()
+                .execute(
+                    "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope,stage_run_id)
+                     VALUES (?1,'p1',?2,?3,?4,?5,?6)",
+                    rusqlite::params![format!("r{i}"), tool, shape, effect, scope, srid],
+                )
+                .unwrap();
+        }
+
+        /// 安全网命令：不触凭据词（否则 L1 先拦，测不到 L2 语义）。
+        const NET: &[&str] = &[
+            "rm -rf build/",
+            "git push origin main",
+            "git merge feature",
+            "git reset --hard HEAD~1",
+            "git clean -fd",
+        ];
+
+        /// deny/allow 双向命中对：非安全网、非凭据、仓内路径。
+        fn pairs() -> Vec<(&'static str, &'static str, serde_json::Value)> {
+            vec![
+                ("bash", "npm *", json!({"cmd":"npm install zod"})),
+                ("bash", "cargo *", json!({"cmd":"cargo test"})),
+                ("bash", "echo *", json!({"cmd":"echo hi"})),
+                (
+                    "fs_write",
+                    "src/**",
+                    json!({"path":"src/a.rs","content":"x"}),
+                ),
+                ("fs_read", "src/**", json!({"path":"src/lib.rs"})),
+            ]
+        }
+
+        proptest! {
+            /// 不变量①：任意规则组合下安全网永远必问（记忆 allow 不能豁免）。
+            #[test]
+            fn safety_net_always_asks(
+                rules in collection::vec(rule(), 0..8),
+                idx in 0..NET.len(),
+            ) {
+                let (db, ctx, _d) = setup();
+                for (i, (t, s, e, sc)) in rules.iter().enumerate() {
+                    insert_rule(&db, i, t, s, e, sc);
+                }
+                let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": NET[idx]})).unwrap();
+                prop_assert!(
+                    matches!(d, Decision::Ask { safety_net: true, .. }),
+                    "expected safety-net ask, got {d:?}"
+                );
+            }
+
+            /// 不变量②：内置 deny 永不被任何规则覆盖。
+            #[test]
+            fn builtin_deny_uncoverable(
+                rules in collection::vec(rule(), 0..8),
+                pick in 0..3usize,
+            ) {
+                let (db, ctx, _d) = setup();
+                for (i, (t, s, e, sc)) in rules.iter().enumerate() {
+                    insert_rule(&db, i, t, s, e, sc);
+                }
+                let d = match pick {
+                    0 => evaluate(&db, &ctx, &FsRead, "fs_read", &json!({"path":".env"})).unwrap(),
+                    1 => evaluate(
+                        &db,
+                        &ctx,
+                        &FsWrite,
+                        "fs_write",
+                        &json!({"path":"keys/id_rsa","content":"x"}),
+                    )
+                    .unwrap(),
+                    _ => evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd":"cat .env"})).unwrap(),
+                };
+                prop_assert!(
+                    matches!(d, Decision::Deny { layer: "builtin_deny", .. }),
+                    "expected builtin deny, got {d:?}"
+                );
+            }
+
+            /// 不变量③：同一输入同中 allow+deny 时 deny 恒胜（与插入顺序无关）。
+            #[test]
+            fn deny_beats_allow(order in proptest::bool::ANY, idx in 0..5usize) {
+                let (db, ctx, _d) = setup();
+                let pairs = pairs();
+                let (tool, shape, input) = &pairs[idx];
+                let (first, second) = if order {
+                    ("allow", "deny")
+                } else {
+                    ("deny", "allow")
+                };
+                insert_rule(&db, 0, tool, shape, first, "project");
+                insert_rule(&db, 1, tool, shape, second, "project");
+                let d = match *tool {
+                    "bash" => evaluate(&db, &ctx, &Bash, "bash", input).unwrap(),
+                    "fs_write" => evaluate(&db, &ctx, &FsWrite, "fs_write", input).unwrap(),
+                    _ => evaluate(&db, &ctx, &FsRead, "fs_read", input).unwrap(),
+                };
+                prop_assert!(
+                    matches!(d, Decision::Deny { layer: "project_deny", .. }),
+                    "expected project deny, got {d:?}"
+                );
+            }
+        }
+    }
 }

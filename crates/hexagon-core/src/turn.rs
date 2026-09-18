@@ -663,4 +663,29 @@ mod tests {
         assert!(ctx_text.contains("看一下规格"));
         assert!(!ctx_text.contains("无关消息"));
     }
+
+    /// US35：工具循环有硬顶（MAX_TOOL_ROUNDS ≤ 规格上限 32）——超顶结束回合不空转。
+    #[test]
+    fn us35_tool_loop_capped() {
+        let (db, reg, ctx, dir) = setup();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "fn main() {}").unwrap();
+        // 脚本给 9 轮 tool_use（> 8 轮上限）：回合必须报错收场
+        let provider = ScriptedProvider::new(
+            (0..9)
+                .map(|i| {
+                    tool_response(vec![(
+                        &format!("t{i}"),
+                        "fs_read",
+                        json!({"path":"src/lib.rs"}),
+                    )])
+                })
+                .collect(),
+        );
+        match run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap() {
+            TurnOutcome::Failed(e) => assert!(e.contains("tool-loop"), "got {e}"),
+            o => panic!("expected Failed, got {o:?}"),
+        }
+        assert_eq!(provider.recorded().len(), 8);
+    }
 }
