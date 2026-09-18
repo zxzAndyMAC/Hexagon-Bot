@@ -49,6 +49,8 @@ pub enum ApiError {
     NoProvider(String),
     #[error("no active stage")]
     NoStage,
+    #[error("stage run interrupted; recover first: {0}")]
+    Interrupted(String),
 }
 
 /// 工作台实例：一个打开的项目。
@@ -87,6 +89,11 @@ impl Workbench {
         }
         if let Some(p) = &pack {
             p.pin(&dir)?;
+        }
+        // 票 37：检出上次被杀留下的中断回合（无收束的 turn_started）。
+        let interrupted = orchestra::detect_interrupted(&db, &project_id)?;
+        if interrupted > 0 {
+            log::warn!("recovered {interrupted} interrupted run(s)");
         }
         Ok(Self {
             db,
@@ -417,8 +424,16 @@ impl Workbench {
             .ok())
     }
 
-    /// 跑某角色一回合（若激活）。
+    /// 跑某角色一回合（若激活）。有 interrupted run 未恢复时硬挡（票 37 恢复闸）。
     pub fn run_turn(&self, role: &str, input: &str) -> Result<TurnOutcome, ApiError> {
+        if let Ok(rid) = self.db.conn().query_row(
+            "SELECT id FROM stage_runs
+             WHERE project_id=?1 AND state='interrupted' LIMIT 1",
+            [&self.project_id],
+            |r| r.get::<_, String>(0),
+        ) {
+            return Err(ApiError::Interrupted(rid));
+        }
         let aid = self.agent_by_role(role)?;
         let run = self.active_run()?;
         let ctx = self.ctx_for(&aid, run.as_ref().map(|r| r.id.clone()));
@@ -612,6 +627,12 @@ impl Workbench {
     pub fn pause(&self) -> Result<(), ApiError> {
         Ok(orchestra::pause(&self.db, &self.project_id)?)
     }
+    /// 恢复中断的阶段 run（票 37）：负责人按「继续」才重激活，不重放模型调用。
+    pub fn recover_run(&self, run_id: &str) -> Result<(), ApiError> {
+        orchestra::recover_run(&self.db, &self.project_id, run_id)?;
+        Ok(())
+    }
+
     pub fn resume(&self) -> Result<(), ApiError> {
         Ok(orchestra::resume(&self.db, &self.project_id)?)
     }
@@ -1353,5 +1374,92 @@ mod tests {
             prov.recorded().is_empty(),
             "reopen must not replay model calls"
         );
+    }
+
+    /// US59：崩溃后重开检出中断回合——run 标 interrupted、出恢复卡、
+    /// 不按恢复不发模型调用；按继续后恢复 active 且可正常跑回合。
+    #[test]
+    fn us59_interrupted_run_recovers_by_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"t","version":1,
+            "stages":[{"name":"规格","roles":["产品策划"],"due":[]}]
+        }))
+        .unwrap();
+        // 第一轮：开阶段，然后落一条无收束的 turn_started——模拟进程被杀时的盘上痕迹
+        let run_id;
+        {
+            let wb = Workbench::open(
+                dir.path(),
+                "t",
+                &[("a0".into(), "产品策划".into())],
+                Some(pack.clone()),
+            )
+            .unwrap();
+            wb.open_stage(0).unwrap();
+            let run = wb.active_run().unwrap().unwrap();
+            run_id = run.id.clone();
+            wb.db
+                .append_event(
+                    "p1",
+                    EventKind::TurnStarted,
+                    json!({"agent": "a0"}),
+                    Some("a0"),
+                    Some(&run.id),
+                )
+                .unwrap();
+        }
+        // 第二轮：重开——检出中断痕迹
+        let mut wb = Workbench::open(
+            dir.path(),
+            "t",
+            &[("a0".into(), "产品策划".into())],
+            Some(pack.clone()),
+        )
+        .unwrap();
+        let prov = Arc::new(ScriptedProvider::new(vec![text_response("go")]));
+        wb.register_provider("default", prov.clone());
+        assert_eq!(wb.stage_status().unwrap()[0]["state"], "interrupted");
+        let qs = wb.pending_questions().unwrap();
+        let rec = qs
+            .iter()
+            .find(|q| q["kind"] == "recovery")
+            .expect("recovery pending card");
+        let rp: Value = serde_json::from_str(rec["payload"].as_str().unwrap()).unwrap();
+        assert_eq!(rp["run_id"], run_id);
+        assert!(prov.recorded().is_empty(), "reopen must not replay");
+        // 恢复闸：不按继续，回合不发
+        assert!(wb.run_turn("产品策划", "go").is_err());
+        assert!(prov.recorded().is_empty());
+        // 中断痕迹已闭环：轨迹里补了 turn_failed(interrupted_shutdown)
+        let evs = wb.events(Some(&[EventKind::TurnFailed])).unwrap();
+        assert_eq!(evs.len(), 1);
+        // 负责人按继续——恢复 active、卡销、零模型调用
+        wb.recover_run(&run_id).unwrap();
+        assert_eq!(wb.stage_status().unwrap()[0]["state"], "active");
+        assert!(wb
+            .pending_questions()
+            .unwrap()
+            .iter()
+            .all(|q| q["kind"] != "recovery"));
+        assert_eq!(wb.events(Some(&[EventKind::Resumed])).unwrap().len(), 1);
+        assert!(prov.recorded().is_empty());
+        // 恢复后回合正常
+        wb.run_turn("产品策划", "go").unwrap();
+        assert_eq!(prov.recorded().len(), 1);
+        // 第三轮：再重开——幂等，不重复出卡
+        let wb = Workbench::open(
+            dir.path(),
+            "t",
+            &[("a0".into(), "产品策划".into())],
+            Some(pack),
+        )
+        .unwrap();
+        assert_eq!(wb.stage_status().unwrap()[0]["state"], "active");
+        assert!(wb
+            .pending_questions()
+            .unwrap()
+            .iter()
+            .all(|q| q["kind"] != "recovery"));
     }
 }

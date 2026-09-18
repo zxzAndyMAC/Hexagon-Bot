@@ -66,7 +66,7 @@ export function Composer() {
   return (
     <div style={{ position: 'relative', padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--bg-1)' }}>
       {popup && popup.items.length > 0 && (
-        <div className="panel" style={{ position: 'absolute', bottom: '100%', left: 14, right: 14, marginBottom: 4, overflow: 'hidden', zIndex: 10 }}>
+        <div className="panel" style={{ position: 'absolute', bottom: '100%', left: 14, right: 14, marginBottom: 4, overflow: 'hidden', zIndex: 10, background: 'var(--popover)', boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
           <div className="sys-row" style={{ padding: '4px 10px' }}>
             {popup.kind === '@' ? t('composer.mentionHint') : t('composer.pathHint')}
           </div>

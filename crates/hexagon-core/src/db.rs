@@ -25,6 +25,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0005_agent_globs",
         include_str!("../migrations/0005_agent_globs.sql"),
     ),
+    (
+        "0006_interrupted",
+        include_str!("../migrations/0006_interrupted.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +67,8 @@ impl Db {
                 applied_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )?;
+        // 表重建类迁移（如 0006）要求迁移期外键关闭——PRAGMA 在事务外才生效。
+        self.conn.pragma_update(None, "foreign_keys", "OFF")?;
         for (version, sql) in MIGRATIONS {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
@@ -81,6 +87,7 @@ impl Db {
             )?;
             tx.commit()?;
         }
+        self.conn.pragma_update(None, "foreign_keys", "ON")?;
         Ok(())
     }
 

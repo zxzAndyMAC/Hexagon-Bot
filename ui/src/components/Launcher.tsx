@@ -48,7 +48,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
       data-tauri-drag-region
       style={{
         position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', background: 'var(--bg-0)',
+        alignItems: 'center', justifyContent: 'center', background: 'var(--bg)',
       }}
     >
       <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Hexagon-Bot</div>

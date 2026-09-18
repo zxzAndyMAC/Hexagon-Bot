@@ -33,6 +33,8 @@ pub enum OrchError {
     BadSeq(i64),
     #[error("project paused")]
     Paused,
+    #[error("stage run not interrupted: {0}")]
+    NotInterrupted(String),
 }
 
 // ---------- 流程包定义 ----------
@@ -499,6 +501,101 @@ pub fn pause(db: &Db, project_id: &str) -> Result<(), OrchError> {
 }
 pub fn resume(db: &Db, project_id: &str) -> Result<(), OrchError> {
     db.append_event(project_id, EventKind::Resumed, json!({}), None, None)?;
+    Ok(())
+}
+
+// ---------- 崩溃恢复（票 37） ----------
+
+/// 重开检出中断回合：每个 (run, agent) 看最后一条回合边界事件——
+/// 若是 turn_started 即进程被杀时的盘上痕迹。闭环轨迹（补 turn_failed）、
+/// run 标 interrupted、恢复卡入队。幂等：边界已闭，再开零检出。
+pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
+    let mut st = db.conn().prepare(
+        "SELECT stage_run_id, agent_id FROM events e
+         WHERE e.project_id = ?1 AND e.stage_run_id IS NOT NULL
+           AND e.kind = 'turn_started'
+           AND e.id = (
+             SELECT MAX(id) FROM events
+             WHERE project_id = e.project_id
+               AND stage_run_id IS e.stage_run_id
+               AND agent_id IS e.agent_id
+               AND kind IN ('turn_started','turn_finished','turn_failed'))",
+    )?;
+    let dangling: Vec<(String, Option<String>)> = st
+        .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut n = 0;
+    for (run_id, agent_id) in dangling {
+        // 只收编仍 active 的 run；waiting_stamp/done 等已收束态不动
+        let state: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT state FROM stage_runs WHERE id=?1 AND project_id=?2",
+                rusqlite::params![run_id, project_id],
+                |r| r.get(0),
+            )
+            .ok();
+        if state.as_deref() != Some("active") {
+            continue;
+        }
+        let stage: String = db.conn().query_row(
+            "SELECT stage_name FROM stage_runs WHERE id=?1",
+            [&run_id],
+            |r| r.get(0),
+        )?;
+        db.append_event(
+            project_id,
+            EventKind::TurnFailed,
+            json!({"reason": "interrupted_shutdown"}),
+            agent_id.as_deref(),
+            Some(&run_id),
+        )?;
+        db.conn().execute(
+            "UPDATE stage_runs SET state='interrupted' WHERE id=?1",
+            [&run_id],
+        )?;
+        let qid = format!("q{}", db.next_id("q")?);
+        db.conn().execute(
+            "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
+             VALUES (?1, ?2, ?3, 'recovery', ?4)",
+            rusqlite::params![
+                qid,
+                project_id,
+                agent_id,
+                json!({"run_id": run_id, "stage": stage}).to_string()
+            ],
+        )?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// 负责人按「继续」：interrupted run 回 active、恢复卡销、落 Resumed。
+/// 不重放模型调用——回合上下文已随进程死，下一步由人发起。
+pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchError> {
+    let state: String = db.conn().query_row(
+        "SELECT state FROM stage_runs WHERE id=?1 AND project_id=?2",
+        rusqlite::params![run_id, project_id],
+        |r| r.get(0),
+    )?;
+    if state != "interrupted" {
+        return Err(OrchError::NotInterrupted(run_id.into()));
+    }
+    db.conn()
+        .execute("UPDATE stage_runs SET state='active' WHERE id=?1", [run_id])?;
+    db.conn().execute(
+        "UPDATE pending_questions SET state='answered', answered_at=datetime('now')
+         WHERE project_id=?1 AND kind='recovery' AND state='queued'
+           AND json_extract(payload, '$.run_id')=?2",
+        rusqlite::params![project_id, run_id],
+    )?;
+    db.append_event(
+        project_id,
+        EventKind::Resumed,
+        json!({"run_id": run_id, "reason": "crash_recovery"}),
+        None,
+        Some(run_id),
+    )?;
     Ok(())
 }
 

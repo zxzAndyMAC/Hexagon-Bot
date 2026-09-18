@@ -23,6 +23,7 @@ export default {
     skip: 'スキップ',
     pause: '一時停止',
     resume: '再開',
+    interrupted: '中断',
     done: '完了',
     skipped: 'スキップ済',
     active: '実行中',
@@ -122,6 +123,9 @@ export default {
     reject: '否認',
     rollback: 'ロールバック',
     handoff: '引き継ぎ',
+    recovery: '中断',
+        recoveryHint: '前回終了時にターンが中断され、完了しませんでした。続行するとステージが復旧します（モデル呼び出しは再生しません）。',
+        recover: '続行',
   },
   side: {
     usage: '使用量',

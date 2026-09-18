@@ -23,6 +23,7 @@ export default {
     skip: 'Omitir',
     pause: 'Pausar',
     resume: 'Reanudar',
+    interrupted: 'Interrumpido',
     done: 'Hecho',
     skipped: 'Omitido',
     active: 'En curso',
@@ -122,6 +123,9 @@ export default {
     reject: 'Rechazar',
     rollback: 'Revertir',
     handoff: 'entrega',
+    recovery: 'Interrumpido',
+        recoveryHint: 'Un turno quedó interrumpido al salir y nunca terminó. Continuar restaura la etapa sin repetir llamadas al modelo.',
+        recover: 'Continuar',
   },
   side: {
     usage: 'Uso',

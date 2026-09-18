@@ -23,6 +23,7 @@ export default {
     skip: '略過',
     pause: '暫停',
     resume: '恢復',
+    interrupted: '中斷',
     done: '完成',
     skipped: '略過',
     active: '進行中',
@@ -122,6 +123,9 @@ export default {
     reject: '駁回',
     rollback: '回滾',
     handoff: '交接',
+    recovery: '中斷',
+        recoveryHint: '上次退出時回合被中止，未完成。按繼續恢復階段，不重放模型呼叫。',
+        recover: '繼續',
   },
   side: {
     usage: '用量',

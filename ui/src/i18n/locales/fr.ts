@@ -23,6 +23,7 @@ export default {
     skip: 'Sauter',
     pause: 'Pause',
     resume: 'Reprendre',
+    interrupted: 'Interrompu',
     done: 'Terminé',
     skipped: 'Sauté',
     active: 'En cours',
@@ -122,6 +123,9 @@ export default {
     reject: 'Rejeter',
     rollback: 'Restaurer',
     handoff: 'passation',
+    recovery: 'Interrompu',
+        recoveryHint: 'Un tour a été tué à la fermeture et jamais terminé. Continuer restaure l’étape sans rejouer les appels au modèle.',
+        recover: 'Continuer',
   },
   side: {
     usage: 'Usage',

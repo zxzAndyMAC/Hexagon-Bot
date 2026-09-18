@@ -7,6 +7,7 @@ export function StageBar() {
   const { t } = useTranslation()
   const { stages, refresh } = useUiStore()
   const active = stages.find((s) => s.state === 'active' || s.state === 'waiting_stamp')
+  const interrupted = stages.some((s) => s.state === 'interrupted')
   const nextPending = stages.find((s) => s.state === 'pending')
 
   const act = async (f: () => Promise<unknown>) => { await f(); await refresh() }
@@ -18,7 +19,7 @@ export function StageBar() {
           key={s.run_id}
           className="chip"
           style={
-            s.state === 'active' || s.state === 'waiting_stamp'
+            s.state === 'active' || s.state === 'waiting_stamp' || s.state === 'interrupted'
               ? { color: 'var(--accent)', borderColor: 'var(--accent-border)', background: 'var(--accent-soft)' }
               : s.state === 'done'
                 ? { color: 'var(--ok)' }
@@ -29,6 +30,7 @@ export function StageBar() {
         >
           {s.state === 'done' && <Icon name="check" size={9} />}
           {s.state === 'waiting_stamp' && <><Icon name="stamp" size={9} /> {t('stage.stampPoint')} </>}
+          {s.state === 'interrupted' && <><Icon name="warn" size={9} /> {t('stage.interrupted')} </>}
           {s.stage}
         </span>
       ))}
@@ -43,12 +45,12 @@ export function StageBar() {
           )}
         </>
       )}
-      {!active && nextPending && (
+      {!active && nextPending && !interrupted && (
         <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={() => act(() => api.openStage(nextPending.seq))}>
           <Icon name="chevron-right" size={11} /> {nextPending.stage}
         </button>
       )}
-      {!active && !nextPending && stages.length > 0 && (
+      {!active && !nextPending && stages.length > 0 && !interrupted && (
         <button className="btn" onClick={() => act(api.resume)}>{t('stage.resume')}</button>
       )}
     </div>

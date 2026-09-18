@@ -418,7 +418,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       style={{
         position: 'fixed', inset: 0, zIndex: 60, display: 'flex',
         alignItems: 'center', justifyContent: 'center',
-        background: 'var(--bg-0)',
+        background: 'var(--bg)',
       }}
     >
       <div className="panel" style={{ width: 560, maxHeight: '86vh', display: 'flex', flexDirection: 'column', padding: '20px 22px' }}>
@@ -438,7 +438,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         <div style={{ fontSize: 12, fontWeight: 510, marginBottom: 8 }}>
           {t(`wizard.step.${step}`)}
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>{body[step]}</div>
+        {/* 滚动体留 4px 呼吸位：focus 环(2+2)与选中描边在滚口边缘不被裁 */}
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 4, margin: -4 }}>{body[step]}</div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
           {idx > 0 && (
             <button className="btn" onClick={() => setStep(STEPS[idx - 1])}>

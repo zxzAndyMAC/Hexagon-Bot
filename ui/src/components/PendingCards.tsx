@@ -148,6 +148,19 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     )
   }
 
+  if (q.kind === 'recovery') {
+    return (
+      <CardShell tone="ask" icon="warn" title={`${t('cards.recovery')} · ${String(p.stage ?? '')}`}>
+        <div className="dim3" style={{ fontSize: 11, margin: '4px 0 8px' }}>
+          {t('cards.recoveryHint')}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Btn primary onClick={() => api.recoverRun(String(p.run_id))}>{t('cards.recover')}{top && ` ${approveTip}`}</Btn>
+        </div>
+      </CardShell>
+    )
+  }
+
   if (q.kind === 'escalation') {
     return (
       <CardShell tone="flag" icon="escalate" title={t('cards.escalation')}>

@@ -23,6 +23,7 @@ export default {
     skip: 'Skip',
     pause: 'Pause',
     resume: 'Resume',
+    interrupted: 'Interrupted',
     done: 'Done',
     skipped: 'Skipped',
     active: 'Running',
@@ -122,6 +123,9 @@ export default {
     reject: 'Reject',
     rollback: 'Rollback',
     handoff: 'handoff',
+    recovery: 'Interrupted',
+        recoveryHint: 'A turn was killed on last exit and never finished. Continue restores the stage without replaying model calls.',
+        recover: 'Continue',
   },
   side: {
     usage: 'Usage',

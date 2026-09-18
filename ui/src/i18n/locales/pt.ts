@@ -23,6 +23,7 @@ export default {
     skip: 'Pular',
     pause: 'Pausar',
     resume: 'Retomar',
+    interrupted: 'Interrompido',
     done: 'Concluído',
     skipped: 'Pulado',
     active: 'Em curso',
@@ -122,6 +123,9 @@ export default {
     reject: 'Rejeitar',
     rollback: 'Reverter',
     handoff: 'entrega',
+    recovery: 'Interrompido',
+        recoveryHint: 'Um turno foi interrompido na última saída e nunca terminou. Continuar restaura o estágio sem repetir chamadas ao modelo.',
+        recover: 'Continuar',
   },
   side: {
     usage: 'Uso',

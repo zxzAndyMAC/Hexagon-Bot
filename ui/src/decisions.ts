@@ -3,8 +3,9 @@ import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, matches } from './keymap'
 
-// 严重度序：发布 > 阶段盖章 > 升级 > 权限 > 提案盖章
+// 严重度序：恢复/发布 > 阶段盖章 > 升级 > 权限 > 提案盖章
 const SEVERITY: Record<string, number> = {
+  recovery: 0,
   publish: 0,
   stamp_stage: 1,
   escalation: 2,
@@ -24,6 +25,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
   if (q.kind === 'publish') return api.confirmPublish(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
+  if (q.kind === 'recovery') return api.recoverRun(String(p.run_id))
 }
 
 export async function rejectQuestion(q: PendingQuestion) {

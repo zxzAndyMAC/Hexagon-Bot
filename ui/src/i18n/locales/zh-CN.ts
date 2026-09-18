@@ -23,6 +23,7 @@ export default {
     skip: '跳过',
     pause: '暂停',
     resume: '恢复',
+    interrupted: '中断',
     done: '完成',
     skipped: '跳过',
     active: '进行中',
@@ -122,6 +123,9 @@ export default {
     reject: '驳回',
     rollback: '回滚',
     handoff: '交接',
+    recovery: '中断',
+        recoveryHint: '上次退出时回合被杀，未完成。按继续恢复阶段，不重放模型调用。',
+        recover: '继续',
   },
   side: {
     usage: '用量',

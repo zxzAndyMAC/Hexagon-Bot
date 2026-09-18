@@ -150,6 +150,11 @@ fn open_stage(state: tauri::State<AppState>, seq: usize) -> Result<Value, String
 }
 
 #[tauri::command]
+fn recover_run(state: tauri::State<AppState>, run_id: String) -> Result<(), String> {
+    with_wb(&state, |wb| wb.recover_run(&run_id))
+}
+
+#[tauri::command]
 fn autonomy(state: tauri::State<AppState>) -> Result<String, String> {
     with_wb(&state, |wb| wb.autonomy())
 }
@@ -596,6 +601,7 @@ pub fn run() {
             pending_questions,
             usage,
             open_stage,
+            recover_run,
             autonomy,
             set_autonomy,
             owner_away,
