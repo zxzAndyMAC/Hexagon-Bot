@@ -52,6 +52,8 @@ interface UiState {
   usageTotal: { spent_mc: number; limit_cents: number | null; tokens: number } | null
   autonomy: string
   projectName: string
+  mode: 'pack' | 'fastpath'
+  fastRole: string | null
   railOpen: boolean
   sideTab: 'artifacts' | 'team' | 'usage'
   usageRows: UsageRow[]
@@ -79,6 +81,8 @@ export const useUiStore = create<UiState>((set) => ({
   usageTotal: null,
   autonomy: 'L0',
   projectName: '食谱 App',
+  mode: 'pack',
+  fastRole: null,
   railOpen: localStorage.getItem('hexagon.rail') !== '0',
   sideTab: 'artifacts',
   usageRows: [],
@@ -111,7 +115,7 @@ export const useUiStore = create<UiState>((set) => ({
     set({ themePref: p })
   },
   refresh: async () => {
-    const [stages, team, artifacts, timeline, pending, usage, autonomy] = await Promise.all([
+    const [stages, team, artifacts, timeline, pending, usage, autonomy, info] = await Promise.all([
       api.stageStatus(),
       api.team(),
       api.artifacts(),
@@ -119,6 +123,7 @@ export const useUiStore = create<UiState>((set) => ({
       api.pendingQuestions(),
       api.usage(),
       api.autonomy(),
+      api.projectInfo().catch(() => null),
     ])
     const total = usage.find((r) => r._total)
     const avatars: Record<string, string> = {}
@@ -140,6 +145,9 @@ export const useUiStore = create<UiState>((set) => ({
       usageRows: usage,
       autonomy: autonomy || 'L0',
       avatars,
+      mode: info?.mode ?? 'pack',
+      fastRole: info?.fastpath_role ?? null,
+      projectName: info?.name ?? useUiStore.getState().projectName,
     })
   },
 }))

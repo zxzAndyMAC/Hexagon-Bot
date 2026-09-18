@@ -10,7 +10,7 @@ const MOCK_PATHS = [
 
 export function Composer() {
   const { t } = useTranslation()
-  const { team, refresh } = useUiStore()
+  const { team, refresh, mode, fastRole } = useUiStore()
   const [text, setText] = useState('')
   const [popup, setPopup] = useState<{ kind: '@' | '#'; items: { label: string; hint: string }[] } | null>(null)
   const [sel, setSel] = useState(0)
@@ -52,7 +52,12 @@ export function Composer() {
 
   const send = async () => {
     if (!text.trim()) return
-    await api.sendMessage(text)
+    const body = text
+    await api.sendMessage(body)
+    // 快速通道：消息即任务——发完直接派给通道角色跑一回合（票 26）
+    if (mode === 'fastpath' && fastRole) {
+      await api.dispatch(fastRole, body).catch(() => {})
+    }
     setText('')
     await refresh()
   }

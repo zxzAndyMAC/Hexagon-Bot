@@ -79,6 +79,8 @@ export default {
     baseline_merged: 'ベースラインマージ',
     usage_cap_hit: '使用量上限',
     team_slept: 'チームスリープ',
+    fastpath_dispatched: 'ファストパス指派',
+    pack_upgraded: 'パックへアップグレード',
     return_summary: '復帰サマリー',
     system: 'システム',
   },

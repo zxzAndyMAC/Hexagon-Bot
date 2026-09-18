@@ -79,6 +79,8 @@ export default {
     baseline_merged: 'base mesclada',
     usage_cap_hit: 'limite de uso atingido',
     team_slept: 'equipe dormiu',
+    fastpath_dispatched: 'despacho via rápida',
+    pack_upgraded: 'atualizado para pack',
     return_summary: 'resumo de retorno',
     system: 'sistema',
   },

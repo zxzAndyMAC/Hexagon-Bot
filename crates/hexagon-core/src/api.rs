@@ -443,6 +443,81 @@ impl Workbench {
         )?)
     }
 
+    /// 快速通道派发（票 26）：负责人直接把任务派给一个已勾选角色，
+    /// 不走阶段——产物/事件落同一 .hexagon/，stage_runs 不产生行。
+    /// 休眠角色被点名即唤醒（会诊唤醒同款语义）；未勾选角色 → NoRole。
+    pub fn dispatch(&self, role: &str, input: &str) -> Result<TurnOutcome, ApiError> {
+        let aid = self.agent_by_role(role)?;
+        let status: String =
+            self.db
+                .conn()
+                .query_row("SELECT status FROM agents WHERE id=?1", [&aid], |r| {
+                    r.get(0)
+                })?;
+        if status == "sleeping" {
+            self.db
+                .conn()
+                .execute("UPDATE agents SET status='active' WHERE id=?1", [&aid])?;
+            self.db.append_event(
+                &self.project_id,
+                EventKind::AgentActivated,
+                json!({"by": "dispatch"}),
+                Some(&aid),
+                None,
+            )?;
+        }
+        self.db.append_event(
+            &self.project_id,
+            EventKind::FastpathDispatched,
+            json!({"role": role}),
+            Some(&aid),
+            None,
+        )?;
+        self.run_turn(role, input)
+    }
+
+    /// 升级为流程包（票 26）：不换目录——钉包副本 + mode='pack' + PackUpgraded 事件。
+    /// 已在 pack 模式视为换包重钉，同样允许。
+    pub fn upgrade_to_pack(&mut self, pack: PackDef) -> Result<(), ApiError> {
+        pack.pin(&self.repo_root)?;
+        self.db.conn().execute(
+            "UPDATE projects SET mode='pack', pack_name=?1, pack_copy_version=?2 WHERE id=?3",
+            rusqlite::params![pack.name, pack.version as i64, self.project_id],
+        )?;
+        self.db.append_event(
+            &self.project_id,
+            EventKind::PackUpgraded,
+            json!({"pack": pack.name, "version": pack.version}),
+            None,
+            None,
+        )?;
+        self.pack = Some(pack);
+        Ok(())
+    }
+
+    /// 项目标识：mode / pack_name / 快速通道角色（UI 与测试用）。
+    pub fn project_info(&self) -> Result<Value, ApiError> {
+        let (name, mode, pack_name, fast_aid): (String, String, Option<String>, Option<String>) =
+            self.db.conn().query_row(
+                "SELECT name, mode, pack_name, fastpath_agent_id FROM projects WHERE id=?1",
+                [&self.project_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+        let fast_role: Option<String> = fast_aid.as_ref().and_then(|a| {
+            self.db
+                .conn()
+                .query_row("SELECT role FROM agents WHERE id=?1", [a], |r| r.get(0))
+                .ok()
+        });
+        Ok(json!({
+            "name": name,
+            "mode": mode,
+            "pack_name": pack_name,
+            "fastpath_agent_id": fast_aid,
+            "fastpath_role": fast_role,
+        }))
+    }
+
     /// 当前激活阶段所有 active Agent 各跑一回合。
     pub fn run_all_active(&self, input: &str) -> Result<Vec<(String, TurnOutcome)>, ApiError> {
         let roles: Vec<String> = {
@@ -988,5 +1063,125 @@ mod tests {
         );
         assert!(wb.artifact_content_at("docs/x.md", 9).unwrap().is_none());
         assert_eq!(wb.artifact_content("docs/x.md").unwrap(), "v2 body");
+    }
+
+    // ---------- 票 26 快速通道 ----------
+
+    fn fastpath_wb(dir: &Path) -> Workbench {
+        let wb = Workbench::for_test(dir, &["后端", "产品策划"], None).unwrap();
+        wb.db
+            .conn()
+            .execute(
+                "UPDATE projects SET mode='fastpath', fastpath_agent_id='a0' WHERE id='p1'",
+                [],
+            )
+            .unwrap();
+        wb
+    }
+
+    #[test]
+    fn fastpath_dispatch_runs_without_stages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = fastpath_wb(dir.path());
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![
+                tool_response(vec![(
+                    "t1",
+                    "artifact_write",
+                    json!({"path":"notes/fix.md","content":"---\nkind: 笔记\nauthor: a0\n---\n## 记\n修好了"}),
+                )]),
+                text_response("done"),
+            ])),
+        );
+        wb.dispatch("后端", "直接修登录 bug").unwrap();
+        // 无 stage_runs 行——快速通道不占阶段
+        let n: i64 = wb
+            .db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM stage_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+        // 产物落同一 .hexagon/，事件打标记
+        assert!(dir.path().join(".hexagon/notes/fix.md").exists());
+        let tl = wb.timeline(None, 50).unwrap();
+        assert!(tl
+            .iter()
+            .any(|i| i.event.kind == EventKind::FastpathDispatched));
+        assert!(tl
+            .iter()
+            .any(|i| i.event.kind == EventKind::ArtifactDelivered));
+        assert_eq!(wb.project_info().unwrap()["mode"], "fastpath");
+    }
+
+    #[test]
+    fn dispatch_coexists_with_pack() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"t","version":1,
+            "stages":[{"name":"规格","roles":["产品策划"],"due":["规格"]}]
+        }))
+        .unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["产品策划", "后端"], Some(pack)).unwrap();
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![
+                text_response("fast fix"),
+                text_response("spec done"),
+            ])),
+        );
+        wb.open_stage(0).unwrap();
+        // 阶段跑着的同时直接派后端干活——互不干扰
+        wb.dispatch("后端", "顺手修个错别字").unwrap();
+        let runs = wb.stage_status().unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0]["state"], "active");
+        // 阶段照常推进
+        wb.run_turn("产品策划", "写规格").unwrap();
+    }
+
+    #[test]
+    fn dispatch_wakes_sleeping_and_rejects_unchecked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = fastpath_wb(dir.path());
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![text_response("ok")])),
+        );
+        wb.set_agent_sleeping("a0", true).unwrap();
+        wb.dispatch("后端", "活来了").unwrap();
+        let st: String = wb
+            .db
+            .conn()
+            .query_row("SELECT status FROM agents WHERE id='a0'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(st, "active");
+        // 未勾选角色 → NoRole
+        assert!(matches!(wb.dispatch("运维", "x"), Err(ApiError::NoRole(_))));
+    }
+
+    #[test]
+    fn upgrade_to_pack_pins_and_opens_stages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = fastpath_wb(dir.path());
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![text_response("ok")])),
+        );
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"规格驱动","version":1,
+            "stages":[{"name":"规格","roles":["产品策划"],"due":["规格"],"stamp_point":true}]
+        }))
+        .unwrap();
+        wb.upgrade_to_pack(pack).unwrap();
+        assert!(dir.path().join(".hexagon/pack.active.json").exists());
+        assert_eq!(wb.project_info().unwrap()["mode"], "pack");
+        assert_eq!(wb.project_info().unwrap()["pack_name"], "规格驱动");
+        // 钉完能开阶段
+        wb.open_stage(0).unwrap();
+        let runs = wb.stage_status().unwrap();
+        assert_eq!(runs[0]["state"], "active");
+        let tl = wb.timeline(None, 50).unwrap();
+        assert!(tl.iter().any(|i| i.event.kind == EventKind::PackUpgraded));
     }
 }

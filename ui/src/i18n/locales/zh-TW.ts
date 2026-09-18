@@ -79,6 +79,8 @@ export default {
     baseline_merged: '基線合併',
     usage_cap_hit: '用量觸頂',
     team_slept: '團隊休眠',
+    fastpath_dispatched: '快速通道派發',
+    pack_upgraded: '升級為流程包',
     return_summary: '歸來摘要',
     system: '系統',
   },

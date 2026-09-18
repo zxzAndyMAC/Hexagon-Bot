@@ -19,6 +19,15 @@ fn with_wb<R>(
     f(wb).map_err(|e| e.to_string())
 }
 
+fn with_wb_mut<R>(
+    state: &AppState,
+    f: impl FnOnce(&mut Workbench) -> Result<R, hexagon_core::api::ApiError>,
+) -> Result<R, String> {
+    let mut g = state.wb.lock().map_err(|e| e.to_string())?;
+    let wb = g.as_mut().ok_or_else(|| "no project open".to_string())?;
+    f(wb).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn core_ping() -> String {
     hexagon_core::ping()
@@ -405,6 +414,31 @@ fn project_open(state: tauri::State<AppState>) -> bool {
     state.wb.lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
+// ---------- 快速通道（票 26）----------
+
+#[tauri::command]
+fn project_info(state: tauri::State<AppState>) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.project_info())
+}
+
+#[tauri::command]
+fn dispatch(state: tauri::State<AppState>, role: String, input: String) -> Result<Value, String> {
+    with_wb(&state, |wb| {
+        wb.dispatch(&role, &input)
+            .map(|o| serde_json::to_value(o).unwrap())
+    })
+}
+
+#[tauri::command]
+fn upgrade_to_pack(state: tauri::State<AppState>, pack_name: String) -> Result<(), String> {
+    let pack = hexagon_core::presets::preset_packs()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|p| p.name == pack_name)
+        .ok_or_else(|| format!("未知流程包: {pack_name}"))?;
+    with_wb_mut(&state, |wb| wb.upgrade_to_pack(pack))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -488,6 +522,9 @@ pub fn run() {
             agents_md_draft,
             create_project,
             project_open,
+            project_info,
+            dispatch,
+            upgrade_to_pack,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

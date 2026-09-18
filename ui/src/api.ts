@@ -173,6 +173,17 @@ export const api = {
   setAgentAvatar: (agentId: string, dataUrl: string) =>
     call<void>('set_agent_avatar', { agentId, dataUrl }),
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
+  // ---- 快速通道（票 26）----
+  projectInfo: () =>
+    call<{
+      name: string
+      mode: 'pack' | 'fastpath'
+      pack_name: string | null
+      fastpath_agent_id: string | null
+      fastpath_role: string | null
+    }>('project_info'),
+  dispatch: (role: string, input: string) => call<unknown>('dispatch', { role, input }),
+  upgradeToPack: (packName: string) => call<void>('upgrade_to_pack', { packName }),
   // ---- 项目向导（票 24）----
   projectOpen: () => call<boolean>('project_open'),
   inspectDir: (dir: string) => call<DirReport>('inspect_dir', { dir }),
@@ -310,6 +321,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     // ---- 项目向导 mock：浏览器 dev 始终「已有项目」，向导只在 Tauri 真开时出现 ----
     case 'project_open':
       return true as T
+    case 'project_info':
+      return { name: '食谱 App', mode: 'pack', pack_name: '规格驱动', fastpath_agent_id: null, fastpath_role: null } as T
+    case 'dispatch':
+    case 'upgrade_to_pack':
+      return null as T
     case 'inspect_dir':
       return { exists: true, empty: false, is_git: true, dirty: false, instructions: 'AGENTS.md' } as T
     case 'preset_roles':

@@ -79,6 +79,8 @@ export default {
     baseline_merged: 'baseline merged',
     usage_cap_hit: 'usage cap hit',
     team_slept: 'team slept',
+    fastpath_dispatched: 'fast-path dispatch',
+    pack_upgraded: 'upgraded to pack',
     return_summary: 'return summary',
     system: 'system',
   },

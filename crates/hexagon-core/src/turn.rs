@@ -226,7 +226,8 @@ pub fn build_brief_context(
 
 // ---------- 回合执行 ----------
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TurnOutcome {
     /// EndTurn：文本已上时间线
     Finished,

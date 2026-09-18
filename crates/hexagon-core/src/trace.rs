@@ -49,6 +49,9 @@ pub enum EventKind {
     OwnerMessage,
     AgentMessage,
     OwnerCommand,
+    // 快速通道
+    FastpathDispatched,
+    PackUpgraded,
     // 自治与提案
     AutonomyChanged,
     ProposalQueued,
