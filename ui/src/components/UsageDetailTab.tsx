@@ -19,22 +19,33 @@ const cssVar = (name: string) =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
 type Granularity = 'day' | 'hour'
-const RANGES = [7, 14, 30, 0] as const // 0 = 全部
 type Board = 'team' | 'model'
+
+interface Range {
+  from: string | null // YYYY-MM-DD
+  to: string | null
+  preset: string // 'today'|'yesterday'|'7d'|'14d'|'30d'|'month'|'lastMonth'|'all'|'custom'
+}
+
+const isoDay = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 864e5))
 
 export function UsageDetailTab() {
   const { t } = useTranslation()
   const { usageRows, usageTotal, team, themePref, refresh } = useUiStore()
   const [granularity, setGranularity] = useState<Granularity>('day')
-  const [days, setDays] = useState<number>(30)
+  const [range, setRange] = useState<Range>(() => ({
+    from: daysAgo(29), to: daysAgo(0), preset: '30d',
+  }))
   const [board, setBoard] = useState<Board>('team')
   const [series, setSeries] = useState<UsageBucket[]>([])
   const [editLimit, setEditLimit] = useState('')
   const [editing, setEditing] = useState(false)
 
   const load = useCallback(() => {
-    api.usageSeries(granularity, days || null).then(setSeries).catch(() => setSeries([]))
-  }, [granularity, days])
+    api.usageSeries(granularity, range.from, range.to).then(setSeries).catch(() => setSeries([]))
+  }, [granularity, range.from, range.to])
   useEffect(load, [load])
 
   const rows = breakdownRows(usageRows)
@@ -185,13 +196,7 @@ export function UsageDetailTab() {
             </div>
           </Filter>
           <Filter label={t('usage.range')}>
-            <div className="seg">
-              {RANGES.map((d) => (
-                <button key={d} className={days === d ? 'on' : ''} onClick={() => setDays(d)}>
-                  {d === 0 ? t('usage.rAll') : t('usage.rDays', { n: d })}
-                </button>
-              ))}
-            </div>
+            <RangePicker range={range} onChange={setRange} />
           </Filter>
           <div style={{ flex: 1 }} />
           <button className="btn" style={{ fontSize: 11 }} onClick={async () => { load(); await refresh() }}>
@@ -258,6 +263,105 @@ function Stat({ icon, tint, tintBg, label, value, sub }: {
         <div className="mono" style={{ fontSize: 17, fontWeight: 560, marginTop: 2 }}>{value}</div>
         {sub && <div className="dim3" style={{ fontSize: 10, marginTop: 2 }}>{sub}</div>}
       </div>
+    </div>
+  )
+}
+
+/** 时间范围弹层：预设即点即生效，自定义起止需「应用」。 */
+function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) => void }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [custom, setCustom] = useState({ from: '', to: '' })
+  const wrap = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const presets: [string, () => Range][] = [
+    ['today', () => ({ from: daysAgo(0), to: daysAgo(0), preset: 'today' })],
+    ['yesterday', () => ({ from: daysAgo(1), to: daysAgo(1), preset: 'yesterday' })],
+    ['7d', () => ({ from: daysAgo(6), to: daysAgo(0), preset: '7d' })],
+    ['14d', () => ({ from: daysAgo(13), to: daysAgo(0), preset: '14d' })],
+    ['30d', () => ({ from: daysAgo(29), to: daysAgo(0), preset: '30d' })],
+    ['month', () => {
+      const d = new Date()
+      return { from: isoDay(new Date(d.getFullYear(), d.getMonth(), 1)), to: daysAgo(0), preset: 'month' }
+    }],
+    ['lastMonth', () => {
+      const d = new Date()
+      const first = new Date(d.getFullYear(), d.getMonth() - 1, 1)
+      const last = new Date(d.getFullYear(), d.getMonth(), 0)
+      return { from: isoDay(first), to: isoDay(last), preset: 'lastMonth' }
+    }],
+    ['all', () => ({ from: null, to: null, preset: 'all' })],
+  ]
+
+  const label = range.preset === 'custom'
+    ? `${range.from?.slice(5) ?? '…'} ~ ${range.to?.slice(5) ?? '…'}`
+    : t(`usage.p_${range.preset}`)
+
+  return (
+    <div ref={wrap} style={{ position: 'relative' }}>
+      <button className="btn" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        onClick={() => setOpen((v) => !v)}>
+        {label} <span className="dim3" style={{ fontSize: 9 }}>▾</span>
+      </button>
+      {open && (
+        <div className="u-card" style={{
+          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 40,
+          width: 300, padding: '10px 12px', boxShadow: '0 8px 24px rgba(0,0,0,.28)',
+        }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+            {presets.map(([key, mk]) => (
+              <button key={key} className="icon-btn"
+                style={{
+                  textAlign: 'center', fontSize: 11, padding: '6px 4px', borderRadius: 6,
+                  color: range.preset === key ? 'var(--accent)' : 'var(--text-2)',
+                  background: range.preset === key ? 'var(--accent-soft)' : 'transparent',
+                }}
+                onClick={() => { onChange(mk()); setOpen(false) }}>
+                {t(`usage.p_${key}`)}
+              </button>
+            ))}
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', margin: '8px -4px 0', paddingTop: 10, paddingLeft: 4, paddingRight: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div className="dim3" style={{ fontSize: 10, marginBottom: 3 }}>{t('usage.startDate')}</div>
+                <input type="date" value={custom.from} onChange={(e) => setCustom((c) => ({ ...c, from: e.target.value }))}
+                  className="mono" style={{ width: '100%', fontSize: 11, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 6px', outline: 'none', colorScheme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light' }} />
+              </div>
+              <span className="dim3" style={{ marginTop: 14 }}>→</span>
+              <div style={{ flex: 1 }}>
+                <div className="dim3" style={{ fontSize: 10, marginBottom: 3 }}>{t('usage.endDate')}</div>
+                <input type="date" value={custom.to} onChange={(e) => setCustom((c) => ({ ...c, to: e.target.value }))}
+                  className="mono" style={{ width: '100%', fontSize: 11, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 6px', outline: 'none', colorScheme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light' }} />
+              </div>
+            </div>
+            <button className="btn primary" style={{ width: '100%', marginTop: 10, fontSize: 11 }}
+              disabled={!custom.from || !custom.to}
+              onClick={() => {
+                if (!custom.from || !custom.to) return
+                const [lo, hi] = custom.from <= custom.to ? [custom.from, custom.to] : [custom.to, custom.from]
+                onChange({ from: lo, to: hi, preset: 'custom' })
+                setOpen(false)
+              }}>
+              {t('usage.apply')}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

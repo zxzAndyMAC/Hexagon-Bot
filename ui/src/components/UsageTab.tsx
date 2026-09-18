@@ -16,7 +16,8 @@ export function UsageTab() {
   const [editing, setEditing] = useState(false)
 
   useEffect(() => {
-    api.usageSeries('day', 30).then(setSeries).catch(() => setSeries([]))
+    const from = new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10)
+    api.usageSeries('day', from).then(setSeries).catch(() => setSeries([]))
   }, [usageRows])
 
   const spent = usageTotal?.spent_mc ?? 0

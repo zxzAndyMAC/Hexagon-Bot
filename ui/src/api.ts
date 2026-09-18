@@ -120,8 +120,8 @@ export const api = {
     return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload || '{}') }))
   },
   usage: () => call<UsageRow[]>('usage'),
-  usageSeries: (granularity: 'day' | 'hour' = 'day', days?: number | null) =>
-    call<UsageBucket[]>('usage_series', { granularity, days: days ?? null }),
+  usageSeries: (granularity: 'day' | 'hour' = 'day', from?: string | null, to?: string | null) =>
+    call<UsageBucket[]>('usage_series', { granularity, from: from ?? null, to: to ?? null }),
   setUsageLimit: (limitCents: number | null) =>
     call<void>('set_usage_limit', { limitCents }),
   setLogEnabled: (enabled: boolean) => call<void>('set_log_enabled', { enabled }),

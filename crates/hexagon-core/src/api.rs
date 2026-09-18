@@ -713,11 +713,12 @@ impl Workbench {
 
     /// 用量时间序列：按 bucket × Agent 分组，带三类 token 与成本。
     /// `granularity`: "day"（YYYY-MM-DD）| "hour"（YYYY-MM-DD HH:00）。
-    /// `days`：只取最近 N 天（None = 全部）。
+    /// `from`/`to`：日期串 YYYY-MM-DD（含当天，`to` 含整日）；None = 不限。
     pub fn usage_series(
         &self,
         granularity: &str,
-        days: Option<i64>,
+        from: Option<&str>,
+        to: Option<&str>,
     ) -> Result<Vec<Value>, ApiError> {
         let bucket = if granularity == "hour" {
             "strftime('%Y-%m-%d %H:00', u.created_at)"
@@ -730,12 +731,13 @@ impl Workbench {
                     SUM(u.tool_output_tokens), SUM(u.cost_millicents)
              FROM usage u
              WHERE u.project_id=?1
-               AND (?2 IS NULL OR u.created_at >= datetime('now', '-' || ?2 || ' days'))
+               AND (?2 IS NULL OR u.created_at >= ?2)
+               AND (?3 IS NULL OR u.created_at < date(?3, '+1 day'))
              GROUP BY 1, u.agent_id ORDER BY 1"
         );
         let mut st = self.db.conn().prepare(&sql)?;
         let rows = st
-            .query_map(rusqlite::params![self.project_id, days], |r| {
+            .query_map(rusqlite::params![self.project_id, from, to], |r| {
                 Ok(json!({
                     "bucket": r.get::<_, String>(0)?,
                     "agent_id": r.get::<_, Option<String>>(1)?,
