@@ -13,6 +13,7 @@ use crate::provider::{
 use crate::tools::{CallOutcome, Registry, ToolContext, ToolError};
 use crate::trace::{EventKind, MessageToken, TraceError};
 use serde_json::{json, Value};
+use std::path::Path;
 
 const MAX_TOOL_ROUNDS: usize = 8;
 
@@ -106,6 +107,43 @@ pub fn build_system_prompt(layers: Vec<PromptLayer>) -> String {
         .map(|l| format!("## {}\n{}", l.level.label(), l.text))
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// 项目说明注入上限：超 ~32KB 降级「头部+节标题目录+必读指引」并提醒负责人（US72）。
+const INSTRUCTIONS_CAP: usize = 32 * 1024;
+/// 降级时保留的头部字节数。
+const INSTRUCTIONS_HEAD: usize = 4 * 1024;
+
+/// 读项目说明（AGENTS.md 优先，CLAUDE.md 次）供激活注入。
+/// 返回 (注入文本, 是否降级)；无说明文件返回 None。
+pub fn load_instructions(repo_root: &Path) -> Option<(String, bool)> {
+    let (name, full) = ["AGENTS.md", "CLAUDE.md"].iter().find_map(|n| {
+        std::fs::read_to_string(repo_root.join(n))
+            .ok()
+            .map(|c| (*n, c))
+    })?;
+    if full.len() <= INSTRUCTIONS_CAP {
+        return Some((format!("{name} 全文：\n{full}"), false));
+    }
+    // 降级：头部 + 节标题目录 + 必读指引（不做自动全量摘要——影响语义的决策不自动做）
+    let mut end = INSTRUCTIONS_HEAD.min(full.len());
+    while !full.is_char_boundary(end) {
+        end -= 1;
+    }
+    let headings: Vec<&str> = full
+        .lines()
+        .filter(|l| l.starts_with('#'))
+        .map(|l| l.trim())
+        .collect();
+    let text = format!(
+        "{name}（全文 {} 字节 > 32KB，已降级）\n\
+         必读指引：下面是文件头与节标题目录；需要某节细节时用 fs_read 读 {name} 对应位置。\n\
+         --- 文件头 ---\n{}\n--- 节标题目录 ---\n{}",
+        full.len(),
+        &full[..end],
+        headings.join("\n")
+    );
+    Some((text, true))
 }
 
 // ---------- 窄上下文 ----------
@@ -282,6 +320,22 @@ pub fn run_turn(
     )?;
 
     let brief = build_brief_context(db, &ctx.agent_id, ctx.stage_run_id.as_deref())?;
+    // US72：项目说明全文进激活首条消息（AgentsMd 层，优先级链位 2）。
+    // 超 ~32KB 降级为头部+节标题目录+必读指引，并提醒负责人。
+    let mut layers = layers;
+    if let Some((text, degraded)) = load_instructions(&ctx.repo_root) {
+        layers.push(PromptLayer::new(LayerLevel::AgentsMd, text));
+        if degraded {
+            db.append_event(
+                &ctx.project_id,
+                EventKind::System,
+                json!({"kind": "instructions_degraded",
+                       "note": "项目说明超 32KB，已降级为头部+节标题目录注入"}),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+            )?;
+        }
+    }
     let system = build_system_prompt(layers);
     let mut messages = vec![
         Message {
@@ -687,5 +741,66 @@ mod tests {
             o => panic!("expected Failed, got {o:?}"),
         }
         assert_eq!(provider.recorded().len(), 8);
+    }
+
+    /// US72：项目说明全文进激活首条消息；超 32KB 降级为目录+指引并提醒负责人。
+    #[test]
+    fn us72_agents_md_enters_first_message() {
+        let (db, reg, ctx, dir) = setup();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "# 项目约束\n永远先跑测试再提交。",
+        )
+        .unwrap();
+        let provider = ScriptedProvider::new(vec![text_response("ok")]);
+        run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        let sys = match &provider.recorded()[0].messages[0].content[0] {
+            ContentBlock::Text { text } => text.clone(),
+            _ => panic!(),
+        };
+        assert!(sys.contains("agents.md"), "layer label missing: {sys}");
+        assert!(sys.contains("永远先跑测试再提交"));
+    }
+
+    #[test]
+    fn us72_oversized_instructions_degrade_and_remind() {
+        let (db, reg, ctx, dir) = setup();
+        let mut big = String::from("# 头部\n");
+        for i in 0..900 {
+            big.push_str(&format!("## 第{i}节\n{}\n", "x".repeat(64)));
+        }
+        assert!(big.len() > 32 * 1024);
+        std::fs::write(dir.path().join("AGENTS.md"), &big).unwrap();
+        let provider = ScriptedProvider::new(vec![text_response("ok")]);
+        run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        let sys = match &provider.recorded()[0].messages[0].content[0] {
+            ContentBlock::Text { text } => text.clone(),
+            _ => panic!(),
+        };
+        assert!(sys.contains("已降级"), "no degrade marker: {}", &sys[..200]);
+        assert!(sys.contains("节标题目录"));
+        assert!(sys.contains("## 第899节"), "outline truncated wrongly");
+        assert!(!sys.contains(&"x".repeat(200)));
+        // 负责人提醒事件已落
+        let evs = db
+            .timeline("p1", None, 50, Some(&[EventKind::System]))
+            .unwrap();
+        assert!(evs.iter().any(|i| i
+            .event
+            .payload
+            .to_string()
+            .contains("instructions_degraded")));
+    }
+
+    #[test]
+    fn us72_no_instructions_no_empty_layer() {
+        let (db, reg, ctx, _dir) = setup();
+        let provider = ScriptedProvider::new(vec![text_response("ok")]);
+        run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        let sys = match &provider.recorded()[0].messages[0].content[0] {
+            ContentBlock::Text { text } => text.clone(),
+            _ => panic!(),
+        };
+        assert!(!sys.contains("agents.md"));
     }
 }
