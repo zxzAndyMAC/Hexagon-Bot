@@ -174,6 +174,10 @@ export const api = {
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   // ---- 检验覆盖（票 40）：显式覆盖留痕，composer /override <理由> 同权 ----
   overrideChecks: (reason: string) => call<unknown>('override_checks', { reason }),
+  // ---- 安装助手（票 36）：NL 请求 → 确认卡 → 负责人确认才执行；grants 永不动 ----
+  requestInstall: (desc: string) => call<string>('request_install', { desc }),
+  resolveInstall: (qid: string, allow: boolean) =>
+    call<unknown>('resolve_install', { qid, allow }),
   exportEvents: (args: { path: string; stageRunId?: string; agentId?: string; kinds?: string[] }) =>
     call<number>('export_events', {
       path: args.path,
@@ -733,6 +737,10 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return [] as T
     case 'export_events':
       return 42 as T // mock：导出条数
+    case 'request_install':
+      return 'q-mock-install' as T // mock：待决卡 id
+    case 'resolve_install':
+      return { installed: args?.allow === true } as T
     case 'set_model_key':
     case 'create_project':
       return null as T

@@ -11,6 +11,7 @@ pub mod autonomy;
 pub mod credentials;
 pub mod db;
 pub mod git;
+pub mod install;
 pub mod mcp;
 pub mod orchestra;
 pub mod permissions;

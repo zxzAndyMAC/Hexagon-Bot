@@ -160,6 +160,20 @@ fn override_checks(state: tauri::State<AppState>, reason: String) -> Result<Valu
 }
 
 #[tauri::command]
+fn request_install(state: tauri::State<AppState>, desc: String) -> Result<String, String> {
+    with_wb(&state, |wb| wb.request_install(&desc))
+}
+
+#[tauri::command]
+fn resolve_install(
+    state: tauri::State<AppState>,
+    qid: String,
+    allow: bool,
+) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.resolve_install(&qid, allow))
+}
+
+#[tauri::command]
 fn export_events(
     state: tauri::State<AppState>,
     path: String,
@@ -638,6 +652,8 @@ pub fn run() {
             open_stage,
             recover_run,
             override_checks,
+            request_install,
+            resolve_install,
             export_events,
             autonomy,
             set_autonomy,

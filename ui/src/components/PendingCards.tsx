@@ -161,6 +161,31 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     )
   }
 
+  if (q.kind === 'install') {
+    const net = p.net === true
+    const creds = p.creds === true
+    return (
+      <CardShell tone="flag" icon="install" title={`${t('cards.install')} · ${String(p.name ?? '')}`}>
+        <div className="dim" style={{ fontSize: 12 }}>
+          <div className="mono">{String(p.source ?? '')}</div>
+          <div className="mono dim3" style={{ marginTop: 2 }}>
+            {String(p.command ?? '')}
+            {Array.isArray(p.args) ? ` ${(p.args as unknown[]).join(' ')}` : ''}
+          </div>
+          <div style={{ marginTop: 4, display: 'flex', gap: 8 }}>
+            <span className="chip">{net ? t('cards.installNet') : t('cards.installLocal')}</span>
+            {creds && <span className="chip">{t('cards.installCreds')}</span>}
+          </div>
+          <div className="dim3" style={{ marginTop: 4 }}>{t('cards.installHint')}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <Btn primary onClick={() => api.resolveInstall(q.id, true)}>{t('cards.installRun')}{top && ` ${approveTip}`}</Btn>
+          <Btn danger onClick={() => api.resolveInstall(q.id, false)}>{t('cards.rejectContinue')}{top && ` ${rejectTip}`}</Btn>
+        </div>
+      </CardShell>
+    )
+  }
+
   if (q.kind === 'escalation') {
     const isContext = p.sub === 'context_overflow'
     return (

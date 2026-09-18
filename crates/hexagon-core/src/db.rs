@@ -29,6 +29,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0006_interrupted",
         include_str!("../migrations/0006_interrupted.sql"),
     ),
+    (
+        "0007_install",
+        include_str!("../migrations/0007_install.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

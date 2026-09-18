@@ -3,10 +3,11 @@ import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, matches } from './keymap'
 
-// 严重度序：恢复/发布 > 阶段盖章 > 升级 > 权限 > 提案盖章
+// 严重度序：恢复/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章
 const SEVERITY: Record<string, number> = {
   recovery: 0,
   publish: 0,
+  install: 0,
   stamp_stage: 1,
   escalation: 2,
   permission: 3,
@@ -26,6 +27,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'publish') return api.confirmPublish(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
   if (q.kind === 'recovery') return api.recoverRun(String(p.run_id))
+  if (q.kind === 'install') return api.resolveInstall(q.id, true)
 }
 
 export async function rejectQuestion(q: PendingQuestion) {
@@ -35,6 +37,7 @@ export async function rejectQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp') return api.rejectProposal(q.id, 'owner rejected')
   if (q.kind === 'publish') return api.rejectPublish(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, false)
+  if (q.kind === 'install') return api.resolveInstall(q.id, false)
 }
 
 /** 全局待决快捷键：最高严重度卡的 批准/驳回（mod+↵ / mod+⌫） */

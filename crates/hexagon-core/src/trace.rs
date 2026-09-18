@@ -47,6 +47,10 @@ pub enum EventKind {
     ToolResult,
     TestRan,
     CheckOverridden,
+    // 安装助手
+    InstallRequested,
+    InstallCompleted,
+    InstallRejected,
     // 消息与控制
     OwnerMessage,
     AgentMessage,
