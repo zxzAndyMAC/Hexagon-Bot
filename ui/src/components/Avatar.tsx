@@ -9,14 +9,15 @@ function hashHue(s: string): number {
   return h % 360
 }
 
-export function Avatar({ agentId, role, size = 20 }: {
+export function Avatar({ agentId, role, size = 20, square = false }: {
   agentId: string
   role: string
   size?: number
+  square?: boolean
 }) {
   const url = useUiStore((s) => s.avatars[agentId])
   const common: React.CSSProperties = {
-    width: size, height: size, borderRadius: '50%', flexShrink: 0,
+    width: size, height: size, borderRadius: square ? '26%' : '50%', flexShrink: 0,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     fontSize: size * 0.55, fontWeight: 560, color: '#fff',
     background: `hsl(${hashHue(agentId)}, 45%, 42%)`,

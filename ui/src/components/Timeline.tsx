@@ -9,6 +9,13 @@ import { Avatar } from './Avatar'
 
 // ---- 渲染 ----
 
+function fmtTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 const chipCls = (s: string) =>
   s === 'passed' ? 'ok' : s === 'queued' ? 'warn' : s === 'rejected' || s === 'failed' ? 'err' : 'err'
 
@@ -103,13 +110,27 @@ function EventRow({ item }: { item: TimelineItem }) {
     const isOwner = item.event.kind === 'owner_message' || m.author === 'owner'
     const member = team.find((x) => x.id === m.author)
     const title = isOwner ? t('timeline.owner') : (member?.role ?? m.author)
-    return (
-      <div className="msg" style={{ alignItems: isOwner ? 'flex-end' : 'flex-start' }}>
-        <div className="msg-author dim" style={{ textAlign: isOwner ? 'right' : 'left', display: 'flex', alignItems: 'center', gap: 6, justifyContent: isOwner ? 'flex-end' : 'flex-start' }}>
-          {!isOwner && member && <Avatar agentId={m.author} role={member.role} size={16} />}
-          {title}
+    const time = fmtTime(item.event.created_at)
+    if (isOwner) {
+      return (
+        <div className="msg" style={{ alignItems: 'flex-end' }}>
+          <div className="msg-author dim" style={{ textAlign: 'right' }}>
+            {title}{time && <span className="dim3" style={{ marginLeft: 6 }}>{time}</span>}
+          </div>
+          <div className="msg-body"><ReactMarkdown>{m.body}</ReactMarkdown></div>
         </div>
-        <div className="msg-body"><ReactMarkdown>{m.body}</ReactMarkdown></div>
+      )
+    }
+    return (
+      <div className="msg" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
+        {member && <Avatar agentId={m.author} role={member.role} size={34} square />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 2 }}>
+            <span style={{ fontWeight: 560, fontSize: 12 }}>{title}</span>
+            {time && <span className="dim3" style={{ fontSize: 10 }}>{time}</span>}
+          </div>
+          <div style={{ fontSize: 13, maxWidth: '78%' }}><ReactMarkdown>{m.body}</ReactMarkdown></div>
+        </div>
       </div>
     )
   }
