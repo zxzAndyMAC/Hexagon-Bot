@@ -20,6 +20,7 @@
   --err-soft: rgba(179, 56, 46, 0.08);
   --flag: #7c5cd6;
   --flag-soft: rgba(124, 92, 214, 0.08);
+  --popover: #ffffff;
   --mono: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -42,6 +43,7 @@
   --err-soft: rgba(217, 85, 76, 0.10);
   --flag: #9a82e0;
   --flag-soft: rgba(154, 130, 224, 0.10);
+  --popover: #16181b;
 }
 
 html, body, #root {

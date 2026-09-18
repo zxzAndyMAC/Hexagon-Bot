@@ -135,10 +135,13 @@ export function UsageDetailTab() {
     tooltip: tip, legend: { ...legend, top: 0 }, grid,
     xAxis: { type: 'category', boundaryGap: false, data: perAgent.labels.map(short), ...axis, splitLine: { show: false } },
     yAxis: { type: 'value', ...axis, axisLabel: { ...axis.axisLabel, formatter: (v: number) => fmtTok(v) } },
-    series: perAgent.series.map((s) => ({
-      name: roleOf(s.agentId), ...lineBase, data: s.points,
-      itemStyle: { color: agentColor(s.agentId, 55) },
-    })),
+    series: perAgent.series.map((s) => {
+      const c = agentColor(s.agentId, 55)
+      return {
+        name: roleOf(s.agentId), ...lineBase, data: s.points,
+        itemStyle: { color: c }, lineStyle: { width: 1.5, color: c },
+      }
+    }),
   }
 
   return (
@@ -321,6 +324,7 @@ function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) =
         <div className="u-card" style={{
           position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 40,
           width: 300, padding: '10px 12px', boxShadow: '0 8px 24px rgba(0,0,0,.28)',
+          background: 'var(--popover)',
         }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
             {presets.map(([key, mk]) => (
