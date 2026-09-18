@@ -4,7 +4,9 @@
 export function hashHue(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
-  return h % 360
+  // 黄金角扩散：a0/a1 这类相邻 id 的哈希只差 1，直接 %360 全撞色；
+  // ×137.508° 后相邻输入错开约三分之一色环。
+  return (h * 137.508) % 360
 }
 
 export const agentColor = (agentId: string, light = 42) =>
