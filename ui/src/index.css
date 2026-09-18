@@ -124,6 +124,28 @@ button.btn.primary.danger { color: #fff; background: var(--err); }
 button.btn.danger { color: var(--err); }
 button.btn:disabled { opacity: 0.4; cursor: default; }
 
+/* 表单原语：checkbox/radio 全局 token 化（无需 class）。对号吃 --on-accent，与 primary 钮同一反向前景逻辑 */
+input[type='checkbox'], input[type='radio'] {
+  appearance: none; -webkit-appearance: none;
+  width: 14px; height: 14px; flex-shrink: 0; margin: 0; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong); background: var(--bg-2);
+  cursor: pointer; transition: background .12s, border-color .12s;
+}
+input[type='checkbox'] { border-radius: var(--r-xs); }
+input[type='radio'] { border-radius: 50%; }
+input[type='checkbox']:hover:not(:disabled), input[type='radio']:hover:not(:disabled) { background: var(--bg-3); }
+input[type='checkbox']:checked { background: var(--accent); border-color: var(--accent); }
+input[type='checkbox']:checked::after {
+  content: ''; width: 8px; height: 4.5px;
+  border-left: 1.8px solid var(--on-accent);
+  border-bottom: 1.8px solid var(--on-accent);
+  transform: rotate(-45deg) translate(.5px, -1px);
+}
+input[type='radio']:checked { border-color: var(--accent); }
+input[type='radio']:checked::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+input[type='checkbox']:disabled, input[type='radio']:disabled { opacity: .4; cursor: default; }
+
 .card-ask { border: 1px solid var(--accent-border); background: var(--accent-soft); border-radius: var(--r-lg); }
 .card-stamp { border: 1px solid var(--accent-border); border-radius: var(--r-lg); background: var(--bg-1); }
 .card-flag { border: 1px solid var(--flag); border-left-width: 3px; border-radius: var(--r-lg); background: var(--flag-soft); }
