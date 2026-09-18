@@ -35,6 +35,8 @@ export default {
     filterDecisions: 'Décisions',
     toolCalls: '{{count}} appels',
     sysEvents: '{{count}} événements système',
+    export: 'Exporter la trace',
+    exported: '{{count}} événements exportés',
     newEvents: '{{count}} nouveaux événements',
     owner: 'responsable',
     empty: 'Aucun événement. Ouvrez une étape ou envoyez un message.',

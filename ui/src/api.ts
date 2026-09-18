@@ -174,6 +174,13 @@ export const api = {
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   // ---- 检验覆盖（票 40）：显式覆盖留痕，composer /override <理由> 同权 ----
   overrideChecks: (reason: string) => call<unknown>('override_checks', { reason }),
+  exportEvents: (args: { path: string; stageRunId?: string; agentId?: string; kinds?: string[] }) =>
+    call<number>('export_events', {
+      path: args.path,
+      stageRunId: args.stageRunId ?? null,
+      agentId: args.agentId ?? null,
+      kinds: args.kinds ?? null,
+    }),
   // ---- 头像 ----
   setAgentAvatar: (agentId: string, dataUrl: string) =>
     call<void>('set_agent_avatar', { agentId, dataUrl }),
@@ -724,6 +731,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'check_model_keys':
       return [] as T
+    case 'export_events':
+      return 42 as T // mock：导出条数
     case 'set_model_key':
     case 'create_project':
       return null as T

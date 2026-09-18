@@ -125,6 +125,16 @@ pub enum TraceError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// 轨迹导出过滤（US54）：阶段 / Agent / kind 三维，None = 不过滤。
+#[derive(Debug, Default, Clone)]
+pub struct ExportFilter {
+    pub stage_run_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub kinds: Option<Vec<EventKind>>,
 }
 
 impl Db {
@@ -262,6 +272,75 @@ impl Db {
         }
         Ok(out)
     }
+
+    /// 轨迹导出（US54）：过滤后事件集写 JSON 文件供回放核对。
+    /// 提示词全文从不落库，导出天然不含提示词/凭据正文。
+    /// 返回导出条数。
+    pub fn export_events(
+        &self,
+        project_id: &str,
+        dest: &std::path::Path,
+        filter: &ExportFilter,
+    ) -> Result<usize, TraceError> {
+        let kind_filter = filter.kinds.as_ref().map(|ks| {
+            ks.iter()
+                .map(|k| format!("'{}'", serde_json::to_string(k).unwrap().trim_matches('"')))
+                .collect::<Vec<_>>()
+                .join(",")
+        });
+        let sql = format!(
+            "SELECT e.id, e.stage_run_id, e.agent_id, e.kind, e.payload, e.created_at,
+                    m.id, m.author, m.body, m.tokens
+             FROM events e
+             LEFT JOIN messages m
+               ON m.id = json_extract(e.payload, '$.message_id')
+             WHERE e.project_id = ?1
+               AND (?2 IS NULL OR e.stage_run_id = ?2)
+               AND (?3 IS NULL OR e.agent_id = ?3)
+               {}
+             ORDER BY e.id ASC",
+            kind_filter
+                .map(|f| format!("AND e.kind IN ({f})"))
+                .unwrap_or_default()
+        );
+        let mut st = self.conn().prepare(&sql)?;
+        let rows = st.query_map(
+            rusqlite::params![project_id, filter.stage_run_id, filter.agent_id],
+            |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "stage_run_id": r.get::<_, Option<String>>(1)?,
+                    "agent_id": r.get::<_, Option<String>>(2)?,
+                    "kind": r.get::<_, String>(3)?,
+                    "payload": serde_json::from_str::<Value>(&r.get::<_, String>(4)?)
+                        .unwrap_or(Value::Null),
+                    "created_at": r.get::<_, String>(5)?,
+                    "message": match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
+                        (Some(mid), Some(author), Some(body)) => serde_json::json!({
+                            "id": mid, "author": author, "body": body,
+                            "tokens": serde_json::from_str::<Value>(
+                                &r.get::<_, Option<String>>(9)?.unwrap_or_else(|| "[]".into())
+                            ).unwrap_or(Value::Null),
+                        }),
+                        _ => Value::Null,
+                    },
+                }))
+            },
+        )?;
+        let events: Vec<Value> = rows.collect::<Result<_, _>>()?;
+        let doc = serde_json::json!({
+            "format": "hexagon-trace-export",
+            "version": 1,
+            "project_id": project_id,
+            "exported_at": self.conn().query_row(
+                "SELECT datetime('now')", [], |r| r.get::<_, String>(0)
+            )?,
+            "count": events.len(),
+            "events": events,
+        });
+        std::fs::write(dest, serde_json::to_string_pretty(&doc)?)?;
+        Ok(doc["count"].as_u64().unwrap() as usize)
+    }
 }
 
 #[cfg(test)]
@@ -360,5 +439,122 @@ mod tests {
         let page = db.timeline("p1", Some(2), 2, None).unwrap();
         assert_eq!(page.len(), 2);
         assert_eq!(page[0].event.id, 3);
+    }
+
+    /// US54：轨迹导出——过滤维度（阶段/Agent/kind）生效，文件可回放核对。
+    #[test]
+    fn us54_export_events_filters_and_replays() {
+        let db = Db::open_in_memory().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute_batch(
+                "INSERT INTO stage_runs (id, project_id, seq, stage_name, state) VALUES ('r1','p1',0,'规格','active'),('r2','p1',1,'实现','active');
+                 INSERT INTO agents (id, project_id, role, status) VALUES ('a1','p1','后端','active'),('a2','p1','前端','active');",
+            )
+            .unwrap();
+        db.append_event(
+            "p1",
+            EventKind::StageStarted,
+            json!({"stage":0}),
+            None,
+            Some("r1"),
+        )
+        .unwrap();
+        db.append_event(
+            "p1",
+            EventKind::TurnStarted,
+            json!({}),
+            Some("a1"),
+            Some("r1"),
+        )
+        .unwrap();
+        db.append_event(
+            "p1",
+            EventKind::TurnFinished,
+            json!({}),
+            Some("a1"),
+            Some("r1"),
+        )
+        .unwrap();
+        db.append_event(
+            "p1",
+            EventKind::TurnStarted,
+            json!({}),
+            Some("a2"),
+            Some("r2"),
+        )
+        .unwrap();
+        db.append_event("p1", EventKind::Stamped, json!({}), None, Some("r2"))
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("trace.json");
+
+        // 无过滤：全量 5 条，按 id 升序可回放
+        let n = db
+            .export_events("p1", &dest, &ExportFilter::default())
+            .unwrap();
+        assert_eq!(n, 5);
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&dest).unwrap()).unwrap();
+        assert_eq!(doc["format"], "hexagon-trace-export");
+        assert_eq!(doc["count"], 5);
+        let kinds: Vec<&str> = doc["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "stage_started",
+                "turn_started",
+                "turn_finished",
+                "turn_started",
+                "stamped"
+            ]
+        );
+
+        // 过滤：阶段 r1 → 3 条
+        let n = db
+            .export_events(
+                "p1",
+                &dest,
+                &ExportFilter {
+                    stage_run_id: Some("r1".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(n, 3);
+        // 过滤：Agent a2 → 1 条
+        let n = db
+            .export_events(
+                "p1",
+                &dest,
+                &ExportFilter {
+                    agent_id: Some("a2".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        // 过滤：kind=turn_started → 2 条
+        let n = db
+            .export_events(
+                "p1",
+                &dest,
+                &ExportFilter {
+                    kinds: Some(vec![EventKind::TurnStarted]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(n, 2);
     }
 }

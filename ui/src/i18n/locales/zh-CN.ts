@@ -35,6 +35,8 @@ export default {
     filterDecisions: '决策',
     toolCalls: '{{count}} 次工具调用',
     sysEvents: '{{count}} 条系统事件',
+    export: '导出轨迹',
+    exported: '已导出 {{count}} 条',
     newEvents: '{{count}} 条新事件',
     owner: '负责人',
     empty: '还没有事件。开一个阶段或发条消息。',

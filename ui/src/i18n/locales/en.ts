@@ -35,6 +35,8 @@ export default {
     filterDecisions: 'Decisions',
     toolCalls: '{{count}} tool calls',
     sysEvents: '{{count}} system events',
+    export: 'Export trace',
+    exported: 'Exported {{count}} events',
     newEvents: '{{count}} new events',
     owner: 'owner',
     empty: 'No events yet. Start a stage or send a message.',

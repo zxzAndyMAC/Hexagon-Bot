@@ -35,6 +35,8 @@ export default {
     filterDecisions: '決定',
     toolCalls: '{{count}} 回のツール呼び出し',
     sysEvents: 'システムイベント {{count}} 件',
+    export: 'トレースをエクスポート',
+    exported: '{{count}} 件をエクスポート',
     newEvents: '新着 {{count}} 件',
     owner: 'オーナー',
     empty: 'イベントはまだありません。ステージを開始するかメッセージを送ってください。',

@@ -160,6 +160,36 @@ fn override_checks(state: tauri::State<AppState>, reason: String) -> Result<Valu
 }
 
 #[tauri::command]
+fn export_events(
+    state: tauri::State<AppState>,
+    path: String,
+    stage_run_id: Option<String>,
+    agent_id: Option<String>,
+    kinds: Option<Vec<String>>,
+) -> Result<usize, String> {
+    let kinds = kinds
+        .map(|ks| {
+            ks.iter()
+                .map(|k| {
+                    serde_json::from_value::<hexagon_core::trace::EventKind>(serde_json::json!(k))
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .transpose()?;
+    with_wb(&state, |wb| {
+        wb.export_events(
+            std::path::Path::new(&path),
+            &hexagon_core::trace::ExportFilter {
+                stage_run_id,
+                agent_id,
+                kinds,
+            },
+        )
+    })
+}
+
+#[tauri::command]
 fn autonomy(state: tauri::State<AppState>) -> Result<String, String> {
     with_wb(&state, |wb| wb.autonomy())
 }
@@ -608,6 +638,7 @@ pub fn run() {
             open_stage,
             recover_run,
             override_checks,
+            export_events,
             autonomy,
             set_autonomy,
             owner_away,

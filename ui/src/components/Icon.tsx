@@ -8,6 +8,7 @@ const ICONS = {
   'arrow-left': <path d="M10.5 8h-7M6.5 4.5 3 8l3.5 3.5" />,
   'arrow-right': <path d="M5.5 8h7M9.5 4.5 13 8l-3.5 3.5" />,
   'arrow-down': <path d="M8 3v10M4.5 9.5 8 13l3.5-3.5" />,
+  export: <path d="M8 2.5v7M4.8 6.3 8 9.5l3.2-3.2M2.7 10.7v2.1a1.33 1.33 0 0 0 1.33 1.34h7.94a1.33 1.33 0 0 0 1.33-1.34v-2.1" />,
   'chevron-down': <path d="M4 6l4 4 4-4" />,
   'chevron-right': <path d="M6 4l4 4-4 4" />,
   refresh: <path d="M14 8a6 6 0 1 1-6-6c1.68 0 3.29.67 4.5 1.83L14 5.33M14 2v3.33h-3.33" />,

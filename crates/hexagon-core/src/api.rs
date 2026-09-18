@@ -721,6 +721,16 @@ impl Workbench {
         Ok(self.db.timeline(&self.project_id, after, limit, None)?)
     }
 
+    /// 轨迹导出（US54）：过滤后事件集写 JSON 文件供回放核对，返回条数。
+    /// 提示词全文从不落库，导出天然不含提示词/凭据正文。
+    pub fn export_events(
+        &self,
+        dest: &std::path::Path,
+        filter: &crate::trace::ExportFilter,
+    ) -> Result<usize, ApiError> {
+        Ok(self.db.export_events(&self.project_id, dest, filter)?)
+    }
+
     pub fn artifacts(&self) -> Result<Vec<Value>, ApiError> {
         Ok(artifacts::query(
             &self.db,

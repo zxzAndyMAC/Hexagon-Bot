@@ -35,6 +35,8 @@ export default {
     filterDecisions: 'Decisiones',
     toolCalls: '{{count}} llamadas',
     sysEvents: '{{count}} eventos de sistema',
+    export: 'Exportar traza',
+    exported: '{{count}} eventos exportados',
     newEvents: '{{count}} eventos nuevos',
     owner: 'responsable',
     empty: 'Sin eventos aún. Inicia una etapa o envía un mensaje.',

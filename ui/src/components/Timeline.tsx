@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
+import { api, isTauri } from '../api'
 import { Md } from './Md'
 import { useUiStore } from '../store'
-import { buildRows, nodeMarks, type Filter, type NodeMark } from '../timelineModel'
+import { buildRows, nodeMarks, DECISION_KINDS, type Filter, type NodeMark } from '../timelineModel'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 
@@ -293,6 +294,7 @@ export function Timeline() {
   const [atBottom, setAtBottom] = useState(true)
   const [unseen, setUnseen] = useState(0)
   const [flash, setFlash] = useState<number | null>(null)
+  const [exported, setExported] = useState<number | null>(null)
   const ref = useRef<VirtuosoHandle>(null)
   const prevLen = useRef(0)
 
@@ -318,6 +320,34 @@ export function Timeline() {
     setTimeout(() => setFlash(null), 1400)
   }
 
+  // 轨迹导出（US54）：kind 过滤随当前筛选档；Tauri 走保存对话框，浏览器 dev 合成 Blob 下载
+  const doExport = async () => {
+    const kinds = filter === 'messages' ? ['owner_message', 'agent_message']
+      : filter === 'decisions' ? [...DECISION_KINDS]
+      : undefined
+    let count: number
+    if (isTauri) {
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const path = await save({
+        defaultPath: 'hexagon-trace.json',
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      })
+      if (!path) return
+      count = await api.exportEvents({ path, kinds })
+    } else {
+      const items = timeline.filter((it) => !kinds || kinds.includes(it.event.kind))
+      const doc = { format: 'hexagon-trace-export', version: 1, count: items.length, events: items.map((i) => i.event) }
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
+      a.download = 'hexagon-trace.json'
+      a.click()
+      URL.revokeObjectURL(a.href)
+      count = items.length
+    }
+    setExported(count)
+    setTimeout(() => setExported(null), 2500)
+  }
+
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
       <div style={{ display: 'flex', gap: 4, padding: '6px 14px 0', alignItems: 'center' }}>
@@ -331,6 +361,18 @@ export function Timeline() {
             {t(`timeline.filter${f[0].toUpperCase()}${f.slice(1)}`)}
           </button>
         ))}
+        <div style={{ flex: 1 }} />
+        {exported != null && (
+          <span className="chip ok" style={{ fontSize: 10 }}>{t('timeline.exported', { count: exported })}</span>
+        )}
+        <button
+          className="icon-btn"
+          style={{ padding: '2px 6px', display: 'inline-flex', alignItems: 'center' }}
+          title={t('timeline.export')}
+          onClick={doExport}
+        >
+          <Icon name="export" size={12} />
+        </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <Virtuoso

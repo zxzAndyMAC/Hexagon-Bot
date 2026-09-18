@@ -35,6 +35,8 @@ export default {
     filterDecisions: '決策',
     toolCalls: '{{count}} 次工具呼叫',
     sysEvents: '{{count}} 條系統事件',
+    export: '匯出軌跡',
+    exported: '已匯出 {{count}} 條',
     newEvents: '{{count}} 條新事件',
     owner: '負責人',
     empty: '還沒有事件。開一個階段或發條訊息。',
