@@ -108,6 +108,7 @@ export default {
     stageStamp: 'Tampon d’étape',
     proposalStamp: 'Tampon de proposition',
     publishConfirm: 'Publier',
+    viewDiff: 'Voir le diff',
     confirm: 'Confirmer',
     reject: 'Rejeter',
     rollback: 'Restaurer',
@@ -134,6 +135,9 @@ export default {
     file: 'fichier',
     send: 'Envoyer',
   },
+  tabs: { timeline: 'Chronologie', close: 'Fermer', split: 'Éditeur divisé' },
+  art: { content: 'Contenu', compare: 'Comparer', version: 'v{{n}}', vs: '↔', unavailable: 'contenu indisponible' },
+  agent: { activity: 'Activité', sleep: 'Suspendre', wake: 'Réveiller', noEvents: "Cet agent n'a pas encore d'événements", changeAvatar: 'Changer d’avatar' },
   rail: { nodes: 'Nœuds' },
   settings: {
     title: 'Réglages',

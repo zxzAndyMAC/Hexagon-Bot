@@ -108,6 +108,7 @@ export default {
     stageStamp: 'Carimbo de etapa',
     proposalStamp: 'Carimbo de proposta',
     publishConfirm: 'Publicar',
+    viewDiff: 'Ver diff',
     confirm: 'Confirmar',
     reject: 'Rejeitar',
     rollback: 'Reverter',
@@ -134,6 +135,9 @@ export default {
     file: 'arquivo',
     send: 'Enviar',
   },
+  tabs: { timeline: 'Linha do tempo', close: 'Fechar', split: 'Editor dividido' },
+  art: { content: 'Conteúdo', compare: 'Comparar', version: 'v{{n}}', vs: '↔', unavailable: 'conteúdo indisponível' },
+  agent: { activity: 'Atividade', sleep: 'Suspender', wake: 'Acordar', noEvents: 'Este agente ainda não tem eventos', changeAvatar: 'Trocar avatar' },
   rail: { nodes: 'Nós' },
   settings: {
     title: 'Ajustes',

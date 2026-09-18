@@ -83,6 +83,10 @@ export const api = {
   sleepAll: () => call<void>('sleep_all'),
   artifacts: () => call<ArtifactRow[]>('artifacts'),
   artifactContent: (path: string) => call<string>('artifact_content', { path }),
+  artifactContentAt: (path: string, version: number) =>
+    call<string | null>('artifact_content_at', { path, version }),
+  setAgentSleeping: (agentId: string, sleeping: boolean) =>
+    call<void>('set_agent_sleeping', { agentId, sleeping }),
   team: () => call<TeamRow[]>('team'),
   stageStatus: () => call<StageRow[]>('stage_status'),
   pendingQuestions: async (): Promise<PendingQuestion[]> => {
@@ -141,7 +145,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'artifacts':
       return [
         { id: 'art1', path: 'specs/prd.md', kind: '规格', tier: 'parse', stage_run_id: 'r0', author: 'a0', version: 2, status: 'stamped', upstream_id: null },
-        { id: 'art2', path: 'ui/screens.md', kind: '界面稿', tier: 'header', stage_run_id: 'r1', author: 'a1', version: 1, status: 'valid', upstream_id: null },
+        { id: 'art2', path: 'ui/screens.md', kind: '界面稿', tier: 'header', stage_run_id: 'r1', author: 'a1', version: 1, status: 'superseded', upstream_id: null },
+        { id: 'art3', path: 'ui/screens.md', kind: '界面稿', tier: 'header', stage_run_id: 'r1', author: 'a1', version: 2, status: 'valid', upstream_id: null },
       ] as T
     case 'timeline':
       return [
@@ -169,6 +174,29 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'agent_avatar':
       return (mockAvatars[String(args?.agentId)] ?? null) as T
+    case 'artifact_content':
+      return '# 接口说明 v1\n\nGET /api/recipes — 列表\nPOST /api/recipes — 新建\n' as T
+    case 'artifact_content_at':
+      return (Number(args?.version) <= 1
+        ? '# 接口说明 v1\n\nGET /api/recipes\n'
+        : '# 接口说明 v1\n\nGET /api/recipes — 列表\nPOST /api/recipes — 新建\n') as T
+    case 'set_agent_sleeping':
+    case 'review_proposal':
+    case 'confirm_proposal':
+    case 'reject_proposal':
+    case 'rollback_proposal':
+    case 'request_publish':
+    case 'confirm_publish':
+    case 'reject_publish':
+    case 'reject_stamp':
+    case 'adjudicate_flag':
+    case 'answer_permission':
+    case 'stamp':
+    case 'sleep_all':
+    case 'send_message':
+      return null as T
+    case 'proposals':
+      return [] as T
     default:
       return null as T
   }

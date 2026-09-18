@@ -74,3 +74,35 @@ describe('severityOf', () => {
     expect(severityOf(q('a', 'stamp', { run_id: 'r' }))).toBeLessThan(severityOf(q('b', 'stamp', { proposal_id: 'x' })))
   })
 })
+
+import { diffLines, parseUnifiedDiff, extractDiffBlock } from './diff'
+
+describe('diffLines', () => {
+  it('marks inserts and deletes around shared context', () => {
+    const ops = diffLines(['a', 'b', 'c'], ['a', 'x', 'c'])
+    expect(ops).toEqual([
+      { type: 'eq', text: 'a' },
+      { type: 'del', text: 'b' },
+      { type: 'ins', text: 'x' },
+      { type: 'eq', text: 'c' },
+    ])
+  })
+
+  it('handles pure append', () => {
+    const ops = diffLines(['a'], ['a', 'b'])
+    expect(ops.filter((o) => o.type === 'ins')).toHaveLength(1)
+    expect(ops.filter((o) => o.type === 'del')).toHaveLength(0)
+  })
+})
+
+describe('parseUnifiedDiff / extractDiffBlock', () => {
+  it('parses +/- prefixed lines', () => {
+    const ops = parseUnifiedDiff('-old\n+new\n same')
+    expect(ops.map((o) => o.type)).toEqual(['del', 'ins', 'eq'])
+  })
+  it('extracts fenced diff block from artifact body', () => {
+    const body = '# 提案\n\n```diff\n-a\n+b\n```\n\nend'
+    expect(extractDiffBlock(body)).toBe('-a\n+b')
+    expect(extractDiffBlock('no block')).toBeNull()
+  })
+})

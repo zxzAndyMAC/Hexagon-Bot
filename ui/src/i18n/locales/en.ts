@@ -108,6 +108,7 @@ export default {
     stageStamp: 'Stage stamp',
     proposalStamp: 'Proposal stamp',
     publishConfirm: 'Publish',
+    viewDiff: 'View diff',
     confirm: 'Confirm',
     reject: 'Reject',
     rollback: 'Rollback',
@@ -134,6 +135,9 @@ export default {
     file: 'file',
     send: 'Send',
   },
+  tabs: { timeline: 'Timeline', close: 'Close', split: 'Split editor' },
+  art: { content: 'Content', compare: 'Compare', version: 'v{{n}}', vs: 'vs', unavailable: 'content unavailable' },
+  agent: { activity: 'Activity', sleep: 'Sleep', wake: 'Wake', noEvents: 'No events for this agent yet', changeAvatar: 'Change avatar' },
   rail: { nodes: 'Nodes' },
   settings: {
     title: 'Settings',

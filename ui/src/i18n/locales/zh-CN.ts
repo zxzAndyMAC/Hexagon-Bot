@@ -108,6 +108,7 @@ export default {
     stageStamp: '阶段盖章',
     proposalStamp: '提案盖章',
     publishConfirm: '确认发布',
+    viewDiff: '查看 diff',
     confirm: '确认',
     reject: '驳回',
     rollback: '回滚',
@@ -134,6 +135,9 @@ export default {
     file: '文件',
     send: '发送',
   },
+  tabs: { timeline: '时间线', close: '关闭', split: '分屏对照' },
+  art: { content: '内容', compare: '对比', version: 'v{{n}}', vs: '↔', unavailable: '内容不可用' },
+  agent: { activity: '活动', sleep: '休眠', wake: '唤醒', noEvents: '该 Agent 还没有事件', changeAvatar: '更换头像' },
   rail: { nodes: '节点' },
   settings: {
     title: '设置',

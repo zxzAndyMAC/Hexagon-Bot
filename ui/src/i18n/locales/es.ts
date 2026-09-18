@@ -108,6 +108,7 @@ export default {
     stageStamp: 'Sello de etapa',
     proposalStamp: 'Sello de propuesta',
     publishConfirm: 'Publicar',
+    viewDiff: 'Ver diff',
     confirm: 'Confirmar',
     reject: 'Rechazar',
     rollback: 'Revertir',
@@ -134,6 +135,9 @@ export default {
     file: 'archivo',
     send: 'Enviar',
   },
+  tabs: { timeline: 'Cronología', close: 'Cerrar', split: 'Editor dividido' },
+  art: { content: 'Contenido', compare: 'Comparar', version: 'v{{n}}', vs: '↔', unavailable: 'contenido no disponible' },
+  agent: { activity: 'Actividad', sleep: 'Suspender', wake: 'Despertar', noEvents: 'Este agente aún no tiene eventos', changeAvatar: 'Cambiar avatar' },
   rail: { nodes: 'Nodos' },
   settings: {
     title: 'Ajustes',

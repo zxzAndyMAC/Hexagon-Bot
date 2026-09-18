@@ -487,8 +487,9 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
 /// 待审/在途提案队列（UI 提案卡数据源）。
 pub fn list(db: &Db, project_id: &str) -> Result<Vec<Value>, PropError> {
     let mut st = db.conn().prepare(
-        "SELECT id, surface, effective_path, status, author_agent_id
-         FROM proposals WHERE project_id=?1 ORDER BY created_at",
+        "SELECT p.id, p.surface, p.effective_path, p.status, p.author_agent_id, a.path
+         FROM proposals p LEFT JOIN artifacts a ON a.id = p.artifact_id
+         WHERE p.project_id=?1 ORDER BY p.created_at",
     )?;
     let rows = st
         .query_map([project_id], |r| {
@@ -498,6 +499,7 @@ pub fn list(db: &Db, project_id: &str) -> Result<Vec<Value>, PropError> {
                 "target": r.get::<_, String>(2)?,
                 "status": r.get::<_, String>(3)?,
                 "author": r.get::<_, String>(4)?,
+                "artifact_path": r.get::<_, Option<String>>(5)?,
             }))
         })?
         .collect::<Result<_, _>>()?;

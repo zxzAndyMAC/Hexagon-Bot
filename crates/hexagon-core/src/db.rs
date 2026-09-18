@@ -13,6 +13,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0002_rule_stage",
         include_str!("../migrations/0002_rule_stage.sql"),
     ),
+    (
+        "0003_artifact_content",
+        include_str!("../migrations/0003_artifact_content.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

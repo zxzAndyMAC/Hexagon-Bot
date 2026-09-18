@@ -108,6 +108,7 @@ export default {
     stageStamp: 'ステージスタンプ',
     proposalStamp: '提案スタンプ',
     publishConfirm: '公開する',
+    viewDiff: 'diff を見る',
     confirm: '確認',
     reject: '否認',
     rollback: 'ロールバック',
@@ -134,6 +135,9 @@ export default {
     file: 'ファイル',
     send: '送信',
   },
+  tabs: { timeline: 'タイムライン', close: '閉じる', split: '分割エディタ' },
+  art: { content: '内容', compare: '比較', version: 'v{{n}}', vs: '↔', unavailable: '内容がありません' },
+  agent: { activity: 'アクティビティ', sleep: 'スリープ', wake: '起こす', noEvents: 'このエージェントのイベントはまだありません', changeAvatar: 'アバターを変更' },
   rail: { nodes: 'ノード' },
   settings: {
     title: '設定',

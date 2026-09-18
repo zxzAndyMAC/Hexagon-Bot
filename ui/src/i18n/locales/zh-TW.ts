@@ -108,6 +108,7 @@ export default {
     stageStamp: '階段蓋章',
     proposalStamp: '提案蓋章',
     publishConfirm: '確認發布',
+    viewDiff: '查看 diff',
     confirm: '確認',
     reject: '駁回',
     rollback: '回滾',
@@ -134,6 +135,9 @@ export default {
     file: '檔案',
     send: '送出',
   },
+  tabs: { timeline: '時間線', close: '關閉', split: '分屏對照' },
+  art: { content: '內容', compare: '對比', version: 'v{{n}}', vs: '↔', unavailable: '內容不可用' },
+  agent: { activity: '活動', sleep: '休眠', wake: '喚醒', noEvents: '該 Agent 還沒有事件', changeAvatar: '更換頭像' },
   rail: { nodes: '節點' },
   settings: {
     title: '設定',

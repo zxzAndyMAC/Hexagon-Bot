@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
+import { extractDiffBlock } from '../diff'
 import { bindingFor, formatBinding } from '../keymap'
 import { severityOf } from '../decisions'
 
@@ -42,6 +43,7 @@ function Btn({ onClick, primary, danger, children }: {
 
 export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
+  const openTab = useUiStore((s) => s.openTab)
   const [shape, setShape] = useState('')
   const p = q.payload
   const approveTip = formatBinding(bindingFor('approve'))
@@ -108,6 +110,19 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <Btn primary onClick={() => api.confirmProposal(q.id)}>{t('cards.confirm')}{top && ` ${approveTip}`}</Btn>
           <Btn danger onClick={() => api.rejectProposal(q.id, 'owner rejected')}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
+          <Btn onClick={async () => {
+            const props = await api.proposals()
+            const pr = props.find((x) => String(x.id) === String(p.proposal_id))
+            const ap = pr?.artifact_path ? String(pr.artifact_path) : null
+            if (!ap) return
+            const body = await api.artifactContent(ap)
+            const diff = extractDiffBlock(body)
+            if (diff) {
+              openTab({ id: `patch:${String(p.proposal_id)}`, kind: 'diff', title: `${String(p.proposal_id)} diff`, patchText: diff })
+            } else {
+              openTab({ id: `art:${ap}`, kind: 'artifact', title: ap, path: ap })
+            }
+          }}>{t('cards.viewDiff')}</Btn>
         </div>
       </CardShell>
     )

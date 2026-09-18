@@ -73,19 +73,26 @@ function ReturnSummaryRow({ item }: { item: TimelineItem }) {
   )
 }
 
-function EventRow({ item }: { item: TimelineItem }) {
+export function EventRow({ item }: { item: TimelineItem }) {
   const { t } = useTranslation()
   const team = useUiStore((s) => s.team)
+  const openTab = useUiStore((s) => s.openTab)
   const k = item.event.kind
   if (k === 'stage_started') return <StageHeader item={item} />
   if (k === 'return_summary') return <ReturnSummaryRow item={item} />
   if (k === 'artifact_delivered') {
     const status = String(item.event.payload.status ?? '')
+    const path = String(item.event.payload.path ?? '')
     return (
-      <div className="sysrow">
+      <div
+        className="sysrow"
+        style={{ cursor: 'pointer' }}
+        title={path}
+        onClick={() => path && openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}
+      >
         <div className="sysline" />
         <span className="syslabel" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {String(item.event.payload.path ?? '')}
+          {path}
           <span className={`chip ${chipCls(status)}`}>{status}</span>
         </span>
       </div>
@@ -137,7 +144,7 @@ function EventRow({ item }: { item: TimelineItem }) {
   return <SystemRow item={item} />
 }
 
-function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; expanded: boolean; onToggle: () => void }) {
+export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; expanded: boolean; onToggle: () => void }) {
   const { t } = useTranslation()
   const team = useUiStore((s) => s.team)
   const agentId = items[0]?.event.agent_id

@@ -516,6 +516,30 @@ impl Workbench {
         Ok(())
     }
 
+    /// 单个 Agent 休眠/唤醒（Agent tab 头卡用）。
+    pub fn set_agent_sleeping(&self, agent_id: &str, sleeping: bool) -> Result<(), ApiError> {
+        self.db.conn().execute(
+            "UPDATE agents SET status=?1 WHERE id=?2 AND project_id=?3",
+            rusqlite::params![
+                if sleeping { "sleeping" } else { "active" },
+                agent_id,
+                self.project_id
+            ],
+        )?;
+        self.db.append_event(
+            &self.project_id,
+            if sleeping {
+                EventKind::AgentSlept
+            } else {
+                EventKind::AgentActivated
+            },
+            json!({"by": "owner"}),
+            Some(agent_id),
+            None,
+        )?;
+        Ok(())
+    }
+
     fn pack(&self) -> Result<&PackDef, ApiError> {
         self.pack.as_ref().ok_or(ApiError::NoStage)
     }
@@ -559,8 +583,51 @@ impl Workbench {
     }
 
     pub fn artifact_content(&self, path: &str) -> Result<String, ApiError> {
+        // 优先读 DB 最新版内容（0003 起随行存）；老行 content=NULL 回退读盘
+        let c: Option<String> = self.db.conn().query_row(
+            "SELECT content FROM artifacts WHERE project_id=?1 AND path=?2
+             ORDER BY version DESC LIMIT 1",
+            rusqlite::params![self.project_id, path],
+            |r| r.get(0),
+        )?;
+        if let Some(s) = c {
+            return Ok(s);
+        }
         Ok(std::fs::read_to_string(
             self.repo_root.join(".hexagon").join(path),
+        )?)
+    }
+
+    /// 指定版本内容（版本 diff / Agent 活动 tab 用）；版本不存在回 None。
+    pub fn artifact_content_at(
+        &self,
+        path: &str,
+        version: i64,
+    ) -> Result<Option<String>, ApiError> {
+        let c: Option<Option<String>> = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT content FROM artifacts WHERE project_id=?1 AND path=?2 AND version=?3",
+                rusqlite::params![self.project_id, path, version],
+                |r| r.get(0),
+            )
+            .ok();
+        match c {
+            Some(Some(s)) => Ok(Some(s)),
+            // 老行无 content：只有「最新版=盘上文件」这一条路
+            Some(None) if version == self.latest_artifact_version(path)? => Ok(Some(
+                std::fs::read_to_string(self.repo_root.join(".hexagon").join(path))?,
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    fn latest_artifact_version(&self, path: &str) -> Result<i64, ApiError> {
+        Ok(self.db.conn().query_row(
+            "SELECT COALESCE(MAX(version),0) FROM artifacts WHERE project_id=?1 AND path=?2",
+            rusqlite::params![self.project_id, path],
+            |r| r.get(0),
         )?)
     }
 
@@ -829,5 +896,41 @@ mod tests {
         wb.set_agent_avatar(aid, &url2).unwrap();
         assert_eq!(wb.agent_avatar(aid).unwrap().unwrap(), url2);
         assert!(!dir.path().join(".hexagon/avatars/a0.png").exists());
+    }
+    #[test]
+    fn artifact_content_at_reads_each_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        let ctx = crate::tools::ToolContext {
+            project_id: "p1".into(),
+            agent_id: "a0".into(),
+            repo_root: dir.path().to_path_buf(),
+            stage_run_id: None,
+            owned_globs: vec![],
+            tiers: crate::artifacts::TierMap::new(),
+        };
+        let d = |c: &str| {
+            crate::artifacts::deliver(
+                &wb.db,
+                &ctx,
+                &crate::artifacts::TierMap::new(),
+                "docs/x.md",
+                c,
+                None,
+            )
+            .unwrap()
+        };
+        d("v1 body");
+        d("v2 body");
+        assert_eq!(
+            wb.artifact_content_at("docs/x.md", 1).unwrap().unwrap(),
+            "v1 body"
+        );
+        assert_eq!(
+            wb.artifact_content_at("docs/x.md", 2).unwrap().unwrap(),
+            "v2 body"
+        );
+        assert!(wb.artifact_content_at("docs/x.md", 9).unwrap().is_none());
+        assert_eq!(wb.artifact_content("docs/x.md").unwrap(), "v2 body");
     }
 }

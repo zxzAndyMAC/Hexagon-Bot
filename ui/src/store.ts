@@ -10,6 +10,24 @@ import {
 
 export type ThemePref = 'light' | 'dark' | 'system'
 
+// 中栏选项卡（ADR 0051）：timeline 固定主 tab，其余可关。
+export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent'
+
+export interface WorkTab {
+  id: string // timeline | art:<path> | diff:<path>:<a>-<b> | agent:<id> | patch:<proposalId>
+  kind: TabKind
+  title: string
+  path?: string
+  version?: number
+  agentId?: string
+  role?: string
+  diffFrom?: number
+  diffTo?: number
+  patchText?: string
+}
+
+const TIMELINE_TAB: WorkTab = { id: 'timeline', kind: 'timeline', title: '' } // title 渲染时走 i18n
+
 function resolve(pref: ThemePref): 'light' | 'dark' {
   if (pref !== 'system') return pref
   return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -35,8 +53,15 @@ interface UiState {
   projectName: string
   railOpen: boolean
   avatars: Record<string, string>
+  tabs: WorkTab[]
+  activeTab: string
+  splitOpen: boolean
   setThemePref: (p: ThemePref) => void
   setRailOpen: (v: boolean) => void
+  openTab: (t: WorkTab) => void
+  closeTab: (id: string) => void
+  setActiveTab: (id: string) => void
+  setSplitOpen: (v: boolean) => void
   refresh: () => Promise<void>
 }
 
@@ -52,6 +77,23 @@ export const useUiStore = create<UiState>((set) => ({
   projectName: '食谱 App',
   railOpen: localStorage.getItem('hexagon.rail') !== '0',
   avatars: {},
+  tabs: [TIMELINE_TAB],
+  activeTab: 'timeline',
+  splitOpen: false,
+  openTab: (t) =>
+    set((s) => ({
+      tabs: s.tabs.some((x) => x.id === t.id) ? s.tabs : [...s.tabs, t],
+      activeTab: t.id,
+    })),
+  closeTab: (id) =>
+    set((s) => {
+      if (id === 'timeline') return {}
+      const tabs = s.tabs.filter((t) => t.id !== id)
+      const activeTab = s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? 'timeline') : s.activeTab
+      return { tabs, activeTab }
+    }),
+  setActiveTab: (id) => set({ activeTab: id }),
+  setSplitOpen: (v) => set({ splitOpen: v }),
   setRailOpen: (v) => {
     localStorage.setItem('hexagon.rail', v ? '1' : '0')
     set({ railOpen: v })

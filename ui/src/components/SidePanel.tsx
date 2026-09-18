@@ -1,6 +1,5 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api'
 import { useUiStore } from '../store'
 import { Avatar } from './Avatar'
 import { bindingFor, formatBinding } from '../keymap'
@@ -8,36 +7,13 @@ import { bindingFor, formatBinding } from '../keymap'
 type Tab = 'artifacts' | 'team' | 'usage'
 
 function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | null; status: string } }) {
-  const { t } = useTranslation()
-  const refresh = useUiStore((s) => s.refresh)
-  const fileRef = useRef<HTMLInputElement>(null)
+  const openTab = useUiStore((s) => s.openTab)
   return (
-    <div style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'center', opacity: m.status === 'sleeping' ? 0.5 : 1 }}>
-      <button
-        className="icon-btn"
-        style={{ padding: 0, borderRadius: '50%', lineHeight: 0 }}
-        title={t('side.avatarTip')}
-        onClick={() => fileRef.current?.click()}
-      >
-        <Avatar agentId={m.id} role={m.role} size={22} />
-      </button>
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp,image/gif"
-        style={{ display: 'none' }}
-        onChange={(e) => {
-          const f = e.target.files?.[0]
-          if (!f) return
-          const r = new FileReader()
-          r.onload = async () => {
-            await api.setAgentAvatar(m.id, String(r.result))
-            await refresh()
-          }
-          r.readAsDataURL(f)
-          e.target.value = ''
-        }}
-      />
+    <div
+      style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'center', opacity: m.status === 'sleeping' ? 0.5 : 1, cursor: 'pointer' }}
+      onClick={() => openTab({ id: `agent:${m.id}`, kind: 'agent', title: m.role, agentId: m.id, role: m.role })}
+    >
+      <Avatar agentId={m.id} role={m.role} size={22} />
       <span className={`dot ${m.status === 'active' ? 'on' : 'off'}`} />
       <span>{m.role}</span>
       <span className="dim3 mono" style={{ fontSize: 10, marginLeft: 'auto' }}>{m.model_slot || '—'}</span>
@@ -47,7 +23,7 @@ function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | nu
 
 export function SidePanel() {
   const { t } = useTranslation()
-  const { artifacts, team, usageTotal, railOpen, setRailOpen } = useUiStore()
+  const { artifacts, team, usageTotal, railOpen, setRailOpen, openTab } = useUiStore()
   const [tab, setTab] = useState<Tab>('artifacts')
   const tip = formatBinding(bindingFor('toggleRail'))
 
@@ -88,7 +64,11 @@ export function SidePanel() {
       {tab === 'artifacts' && (
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {artifacts.map((a) => (
-            <div key={a.id} style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'baseline' }}>
+            <div
+              key={a.id}
+              style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'baseline', cursor: 'pointer' }}
+              onClick={() => openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })}
+            >
               <span className="mono" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.path}</span>
               <span className={`chip ${a.status === 'stamped' ? 'amber' : a.status === 'superseded' ? '' : 'ok'}`} style={{ fontSize: 10, marginLeft: 'auto' }}>
                 {t(`side.${a.status}`, a.status)}

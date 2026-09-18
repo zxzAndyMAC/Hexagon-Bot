@@ -234,6 +234,24 @@ fn agent_avatar(state: tauri::State<AppState>, agent_id: String) -> Result<Optio
     with_wb(&state, |wb| wb.agent_avatar(&agent_id))
 }
 
+#[tauri::command]
+fn artifact_content_at(
+    state: tauri::State<AppState>,
+    path: String,
+    version: i64,
+) -> Result<Option<String>, String> {
+    with_wb(&state, |wb| wb.artifact_content_at(&path, version))
+}
+
+#[tauri::command]
+fn set_agent_sleeping(
+    state: tauri::State<AppState>,
+    agent_id: String,
+    sleeping: bool,
+) -> Result<(), String> {
+    with_wb(&state, |wb| wb.set_agent_sleeping(&agent_id, sleeping))
+}
+
 /// 日志开关：app 级设置持久化在 config 目录，开发期默认开（Debug），release 默认 Info。
 fn log_enabled_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path()
@@ -341,6 +359,8 @@ pub fn run() {
             reject_publish,
             set_agent_avatar,
             agent_avatar,
+            artifact_content_at,
+            set_agent_sleeping,
             set_log_enabled,
             log_enabled,
         ])

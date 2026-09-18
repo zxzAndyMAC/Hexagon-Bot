@@ -243,8 +243,8 @@ pub fn deliver(
     let aid = format!("art{}", db.next_id("art")?);
     db.conn().execute(
         "INSERT INTO artifacts
-         (id, project_id, path, kind, tier, stage_run_id, author_agent_id, version, status, upstream_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'valid',?9)",
+         (id, project_id, path, kind, tier, stage_run_id, author_agent_id, version, status, upstream_id, content)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'valid',?9,?10)",
         rusqlite::params![
             aid,
             ctx.project_id,
@@ -254,7 +254,8 @@ pub fn deliver(
             ctx.stage_run_id,
             ctx.agent_id,
             version,
-            upstream_id
+            upstream_id,
+            content
         ],
     )?;
     db.append_event(
