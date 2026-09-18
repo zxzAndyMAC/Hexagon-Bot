@@ -20,6 +20,7 @@ pub mod provider;
 pub mod publish;
 pub mod review;
 pub mod scenario;
+pub mod setup;
 pub mod tools;
 pub mod trace;
 pub mod turn;

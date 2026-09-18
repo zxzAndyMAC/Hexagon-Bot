@@ -9,7 +9,7 @@
 //! 落在预置名单内、阶段名唯一、至少一个盖章点。坏包报出具体位置。
 
 use crate::orchestra::PackDef;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PresetError {
@@ -39,7 +39,7 @@ pub enum PresetError {
 }
 
 /// 预置角色定义。`reviewer` = 上级链（复审路由的默认上级），空 = 直达负责人。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleDef {
     pub name: String,
     /// 一句话职责（进激活简报与团队说明）

@@ -324,7 +324,7 @@ impl Workbench {
             agent_id: agent_id.into(),
             repo_root: self.repo_root.clone(),
             stage_run_id,
-            owned_globs: vec![],
+            owned_globs: crate::permissions::agent_globs(&self.db, agent_id).unwrap_or_default(),
             tiers: TierMap::new(),
         }
     }

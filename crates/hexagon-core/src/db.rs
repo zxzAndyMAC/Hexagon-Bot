@@ -21,6 +21,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0004_usage_stage",
         include_str!("../migrations/0004_usage_stage.sql"),
     ),
+    (
+        "0005_agent_globs",
+        include_str!("../migrations/0005_agent_globs.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

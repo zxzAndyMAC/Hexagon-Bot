@@ -87,6 +87,30 @@ export interface UsageBucket {
   cost_mc: number
 }
 
+// ---- 项目向导（票 24）----
+export interface DirReport {
+  exists: boolean
+  empty: boolean
+  is_git: boolean
+  dirty: boolean
+  instructions: string | null // "AGENTS.md" | "CLAUDE.md" | null
+}
+
+export interface RoleDef {
+  name: string
+  duty: string
+  reviewer: string | null
+  model_slot: string
+  globs: string[]
+  skills: string[]
+}
+
+export interface PackDef {
+  name: string
+  version: number
+  stages: { name: string; roles: string[]; due?: string[]; stamp_point?: boolean }[]
+}
+
 export const api = {
   ping: () => call<string>('core_ping'),
   openProject: (dir: string, name: string, roles: [string, string][], packJson?: string) =>
@@ -149,6 +173,35 @@ export const api = {
   setAgentAvatar: (agentId: string, dataUrl: string) =>
     call<void>('set_agent_avatar', { agentId, dataUrl }),
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
+  // ---- 项目向导（票 24）----
+  projectOpen: () => call<boolean>('project_open'),
+  inspectDir: (dir: string) => call<DirReport>('inspect_dir', { dir }),
+  presetRoles: () => call<RoleDef[]>('preset_roles'),
+  presetPacks: () => call<PackDef[]>('preset_packs'),
+  checkModelKeys: (slots: string[]) => call<string[]>('check_model_keys', { slots }),
+  setModelKey: (slot: string, secret: string) =>
+    call<void>('set_model_key', { slot, secret }),
+  agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
+  createProject: (opts: {
+    dir: string
+    name: string
+    roles: string[]
+    packName?: string | null
+    fastpathRole?: string | null
+    initGit: boolean
+    agentsMd?: string | null
+  }) =>
+    call<void>('create_project', {
+      opts: {
+        dir: opts.dir,
+        name: opts.name,
+        roles: opts.roles,
+        packName: opts.packName ?? null,
+        fastpathRole: opts.fastpathRole ?? null,
+        initGit: opts.initGit,
+        agentsMd: opts.agentsMd ?? null,
+      },
+    }),
 }
 
 // ---- 浏览器 dev mock：参照 hexagon-main-mock.html 的场景，形状同核侧 ----
@@ -254,6 +307,27 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'proposals':
       return [] as T
+    // ---- 项目向导 mock：浏览器 dev 始终「已有项目」，向导只在 Tauri 真开时出现 ----
+    case 'project_open':
+      return true as T
+    case 'inspect_dir':
+      return { exists: true, empty: false, is_git: true, dirty: false, instructions: 'AGENTS.md' } as T
+    case 'preset_roles':
+      return [
+        { name: '产品策划', duty: '需求与规格', reviewer: null, model_slot: 'chat', globs: [], skills: ['spec-writing'] },
+        { name: '后端', duty: '服务端实现', reviewer: '后端技术负责人', model_slot: 'chat', globs: [], skills: [] },
+      ] as T
+    case 'preset_packs':
+      return [
+        { name: '规格驱动', version: 1, stages: [{ name: '规格', roles: ['产品策划'], due: ['规格'], stamp_point: true }] },
+      ] as T
+    case 'check_model_keys':
+      return [] as T
+    case 'set_model_key':
+    case 'create_project':
+      return null as T
+    case 'agents_md_draft':
+      return `# ${args?.name ?? 'project'}\n\n## Commands\n` as T
     default:
       return null as T
   }

@@ -309,9 +309,106 @@ fn log_enabled(app: tauri::AppHandle) -> bool {
     load_log_enabled(&app)
 }
 
+// ---------- 项目向导（票 24）：开项目前的检查/选择/建项目，不需要 wb ----------
+
+#[tauri::command]
+fn inspect_dir(dir: String) -> Value {
+    serde_json::to_value(hexagon_core::setup::inspect_dir(&dir)).unwrap()
+}
+
+#[tauri::command]
+fn preset_roles() -> Result<Value, String> {
+    hexagon_core::presets::preset_roles()
+        .map(|v| serde_json::to_value(v).unwrap())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn preset_packs() -> Result<Value, String> {
+    hexagon_core::presets::preset_packs()
+        .map(|v| serde_json::to_value(v).unwrap())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn check_model_keys(slots: Vec<String>) -> Result<Vec<String>, String> {
+    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
+    let mut missing = Vec::new();
+    for s in slots {
+        let name = model_key_name(&s);
+        if OsKeychain.get(&name).map_err(|e| e.to_string())?.is_none() {
+            missing.push(name);
+        }
+    }
+    Ok(missing)
+}
+
+#[tauri::command]
+fn set_model_key(slot: String, secret: String) -> Result<(), String> {
+    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
+    OsKeychain
+        .set(&model_key_name(&slot), &secret)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn agents_md_draft(name: String) -> String {
+    hexagon_core::setup::agents_md_draft(&name)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateProjectOpts {
+    dir: String,
+    name: String,
+    roles: Vec<String>,
+    pack_name: Option<String>,
+    fastpath_role: Option<String>,
+    init_git: bool,
+    agents_md: Option<String>,
+}
+
+#[tauri::command]
+fn create_project(state: tauri::State<AppState>, opts: CreateProjectOpts) -> Result<(), String> {
+    use hexagon_core::credentials::OsKeychain;
+    use hexagon_core::setup;
+    // 负责人已确认的说明文件先落盘（已存在会被 write_agents_md 拒绝，不覆盖）
+    if let Some(md) = &opts.agents_md {
+        setup::write_agents_md(&opts.dir, md).map_err(|e| e.to_string())?;
+    }
+    let pack = opts
+        .pack_name
+        .map(|n| {
+            hexagon_core::presets::preset_packs()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|p| p.name == n)
+                .ok_or_else(|| format!("未知流程包: {n}"))
+        })
+        .transpose()?;
+    let wb = setup::create_project(
+        &opts.dir,
+        &opts.name,
+        &opts.roles,
+        pack.as_ref(),
+        opts.fastpath_role.as_deref(),
+        opts.init_git,
+        &OsKeychain,
+    )
+    .map_err(|e| e.to_string())?;
+    *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
+    Ok(())
+}
+
+#[tauri::command]
+fn project_open(state: tauri::State<AppState>) -> bool {
+    state.wb.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -383,6 +480,14 @@ pub fn run() {
             usage_series,
             set_log_enabled,
             log_enabled,
+            inspect_dir,
+            preset_roles,
+            preset_packs,
+            check_model_keys,
+            set_model_key,
+            agents_md_draft,
+            create_project,
+            project_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

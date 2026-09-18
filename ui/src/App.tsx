@@ -12,6 +12,8 @@ import { parseUnifiedDiff } from './diff'
 import { SidePanel } from './components/SidePanel'
 import { Composer } from './components/Composer'
 import { SettingsDrawer } from './components/SettingsDrawer'
+import { Wizard } from './components/Wizard'
+import { api } from './api'
 import { useUiStore } from './store'
 import { PendingCards } from './components/PendingCards'
 import { usePendingKeys } from './decisions'
@@ -20,13 +22,20 @@ import { bindingFor, matches } from './keymap'
 export default function App() {
   const refresh = useUiStore((s) => s.refresh)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 项目向导闸：null=未查，false=未开项目→向导，true=工作台。mock 恒 true。
+  const [projectOpen, setProjectOpen] = useState<boolean | null>(null)
   const { onKey } = usePendingKeys()
 
   useEffect(() => {
+    api.projectOpen().then(setProjectOpen)
+  }, [])
+
+  useEffect(() => {
+    if (projectOpen !== true) return
     refresh()
     const iv = setInterval(refresh, 2000) // 事件推送落地前的轮询占位
     return () => clearInterval(iv)
-  }, [refresh])
+  }, [refresh, projectOpen])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -52,6 +61,11 @@ export default function App() {
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [onKey])
+
+  if (projectOpen === null) return null // 查项目状态中
+  if (!projectOpen) {
+    return <Wizard onDone={() => setProjectOpen(true)} />
+  }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

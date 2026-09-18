@@ -214,6 +214,20 @@ pub fn evaluate_logged(
     Ok(d)
 }
 
+/// Agent 的路径归属 glob 列表（agent_globs 表；空 = 不做归属检查）。
+pub fn agent_globs(
+    db: &crate::db::Db,
+    agent_id: &str,
+) -> Result<Vec<String>, crate::tools::ToolError> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT glob FROM agent_globs WHERE agent_id=?1")?;
+    let rows = st
+        .query_map([agent_id], |r| r.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(rows)
+}
+
 fn violates_ownership(tool: &str, input: &Value, ctx: &ToolContext) -> bool {
     if !matches!(tool, "fs_write" | "fs_patch" | "artifact_write") || ctx.owned_globs.is_empty() {
         return false;
