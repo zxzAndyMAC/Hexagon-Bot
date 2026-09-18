@@ -63,6 +63,25 @@ export interface UsageTotal {
   limit_cents: number | null
 }
 
+export interface UsageRow {
+  _total?: boolean
+  agent_id?: string | null
+  model?: string | null
+  stage?: string | null
+  prompt_tokens?: number
+  completion_tokens?: number
+  tool_output_tokens?: number
+  cost_mc?: number
+  calls?: number
+  spent_mc?: number
+  limit_cents?: number | null
+}
+
+export interface UsagePoint {
+  day: string
+  cost_mc: number
+}
+
 export const api = {
   ping: () => call<string>('core_ping'),
   openProject: (dir: string, name: string, roles: [string, string][], packJson?: string) =>
@@ -95,7 +114,10 @@ export const api = {
     )
     return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload || '{}') }))
   },
-  usage: () => call<UsageTotal[]>('usage'),
+  usage: () => call<UsageRow[]>('usage'),
+  usageSeries: () => call<UsagePoint[]>('usage_series'),
+  setUsageLimit: (limitCents: number | null) =>
+    call<void>('set_usage_limit', { limitCents }),
   setLogEnabled: (enabled: boolean) => call<void>('set_log_enabled', { enabled }),
   logEnabled: () => call<boolean>('log_enabled'),
   autonomy: () => call<string>('autonomy'),
@@ -164,7 +186,20 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'q-perm', kind: 'permission', payload: JSON.stringify({ tool: 'bash', input: { command: 'cargo test' }, reason: 'run test suite', safety_net: false }), state: 'queued' },
       ] as T
     case 'usage':
-      return [{ _total: true, spent_mc: 38200, limit_cents: 20000 }] as T
+      return [
+        { agent_id: 'a0', model: 'mock-chat', stage: '接口', prompt_tokens: 18000, completion_tokens: 4200, tool_output_tokens: 0, cost_mc: 7400, calls: 8 },
+        { agent_id: 'a0', model: 'mock-chat', stage: '实现', prompt_tokens: 14000, completion_tokens: 3900, tool_output_tokens: 0, cost_mc: 5000, calls: 6 },
+        { agent_id: 'a1', model: 'mock-chat', stage: '实现', prompt_tokens: 61000, completion_tokens: 20400, tool_output_tokens: 3000, cost_mc: 25800, calls: 22 },
+        { _total: true, spent_mc: 38200, limit_cents: 20000 },
+      ] as T
+    case 'usage_series':
+      return [
+        { day: '2026-07-05', cost_mc: 8000 },
+        { day: '2026-07-06', cost_mc: 14200 },
+        { day: '2026-07-07', cost_mc: 16000 },
+      ] as T
+    case 'set_usage_limit':
+      return null as T
     case 'autonomy':
       return 'L0' as T
     case 'log_enabled':

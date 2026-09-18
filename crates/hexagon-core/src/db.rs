@@ -17,6 +17,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0003_artifact_content",
         include_str!("../migrations/0003_artifact_content.sql"),
     ),
+    (
+        "0004_usage_stage",
+        include_str!("../migrations/0004_usage_stage.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

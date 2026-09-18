@@ -1,10 +1,8 @@
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { Avatar } from './Avatar'
+import { UsageTab } from './UsageTab'
 import { bindingFor, formatBinding } from '../keymap'
-
-type Tab = 'artifacts' | 'team' | 'usage'
 
 function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | null; status: string } }) {
   const openTab = useUiStore((s) => s.openTab)
@@ -23,8 +21,7 @@ function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | nu
 
 export function SidePanel() {
   const { t } = useTranslation()
-  const { artifacts, team, usageTotal, railOpen, setRailOpen, openTab } = useUiStore()
-  const [tab, setTab] = useState<Tab>('artifacts')
+  const { artifacts, team, railOpen, setRailOpen, openTab, sideTab: tab, setSideTab: setTab } = useUiStore()
   const tip = formatBinding(bindingFor('toggleRail'))
 
   if (!railOpen) {
@@ -86,14 +83,7 @@ export function SidePanel() {
         </div>
       )}
 
-      {tab === 'usage' && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', fontSize: 12 }}>
-          <div className="dim" style={{ marginBottom: 6 }}>{t('topbar.usage')}</div>
-          <div className="mono">
-            {usageTotal ? `¥${(usageTotal.spent_mc / 100000).toFixed(2)}${usageTotal.limit_cents ? ` / ¥${(usageTotal.limit_cents / 100).toFixed(2)}` : ''}` : '—'}
-          </div>
-        </div>
-      )}
+      {tab === 'usage' && <UsageTab />}
     </aside>
   )
 }

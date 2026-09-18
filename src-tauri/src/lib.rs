@@ -252,6 +252,18 @@ fn set_agent_sleeping(
     with_wb(&state, |wb| wb.set_agent_sleeping(&agent_id, sleeping))
 }
 
+#[tauri::command]
+fn set_usage_limit(state: tauri::State<AppState>, limit_cents: Option<i64>) -> Result<(), String> {
+    with_wb(&state, |wb| wb.set_usage_limit(limit_cents))
+}
+
+#[tauri::command]
+fn usage_series(state: tauri::State<AppState>) -> Result<Value, String> {
+    with_wb(&state, |wb| {
+        wb.usage_series().map(|v| serde_json::to_value(v).unwrap())
+    })
+}
+
 /// 日志开关：app 级设置持久化在 config 目录，开发期默认开（Debug），release 默认 Info。
 fn log_enabled_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path()
@@ -361,6 +373,8 @@ pub fn run() {
             agent_avatar,
             artifact_content_at,
             set_agent_sleeping,
+            set_usage_limit,
+            usage_series,
             set_log_enabled,
             log_enabled,
         ])

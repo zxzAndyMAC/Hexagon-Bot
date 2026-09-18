@@ -695,6 +695,32 @@ impl Workbench {
         Ok(rows)
     }
 
+    /// 设/清项目用量上限（分）；None = 不限。
+    pub fn set_usage_limit(&self, limit_cents: Option<i64>) -> Result<(), ApiError> {
+        self.db.conn().execute(
+            "UPDATE projects SET usage_limit_cents=?1 WHERE id=?2",
+            rusqlite::params![limit_cents, self.project_id],
+        )?;
+        Ok(())
+    }
+
+    /// 按日成本序列（用量 tab 时间曲线）。
+    pub fn usage_series(&self) -> Result<Vec<Value>, ApiError> {
+        let mut st = self.db.conn().prepare(
+            "SELECT date(created_at), SUM(cost_millicents)
+             FROM usage WHERE project_id=?1 GROUP BY date(created_at) ORDER BY 1",
+        )?;
+        let rows = st
+            .query_map([&self.project_id], |r| {
+                Ok(json!({
+                    "day": r.get::<_, String>(0)?,
+                    "cost_mc": r.get::<_, i64>(1)?,
+                }))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// 事件断言原料：DSL/验收套件直接消费。
     pub fn events(&self, kinds: Option<&[EventKind]>) -> Result<Vec<Event>, ApiError> {
         Ok(self

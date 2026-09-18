@@ -58,8 +58,9 @@ pub fn record(
         / 1000;
     db.conn().execute(
         "INSERT INTO usage (project_id, agent_id, model, prompt_tokens,
-                            completion_tokens, tool_output_tokens, cost_millicents)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                            completion_tokens, tool_output_tokens, cost_millicents,
+                            stage_run_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             ctx.project_id,
             ctx.agent_id,
@@ -68,6 +69,7 @@ pub fn record(
             usage.completion_tokens as i64,
             (tool_output_bytes / 4) as i64,
             cost,
+            ctx.stage_run_id,
         ],
     )?;
     Ok(())
@@ -126,24 +128,29 @@ pub fn enforce_cap(db: &Db, project_id: &str) -> Result<bool, crate::trace::Trac
     Ok(true)
 }
 
-/// 多维汇总：按 Agent × 模型分组，附项目总计与上限。
+/// 多维汇总：按 Agent × 模型 × 阶段分组，附项目总计与上限。
+/// `stage` 为阶段名；NULL = 未分阶段的历史/非阶段账。
 pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite::Error> {
     let mut st = db.conn().prepare(
-        "SELECT agent_id, model, SUM(prompt_tokens), SUM(completion_tokens),
-                SUM(tool_output_tokens), SUM(cost_millicents), COUNT(*)
-         FROM usage WHERE project_id=?1
-         GROUP BY agent_id, model ORDER BY SUM(cost_millicents) DESC",
+        "SELECT u.agent_id, u.model, sr.stage_name,
+                SUM(u.prompt_tokens), SUM(u.completion_tokens),
+                SUM(u.tool_output_tokens), SUM(u.cost_millicents), COUNT(*)
+         FROM usage u LEFT JOIN stage_runs sr ON sr.id = u.stage_run_id
+         WHERE u.project_id=?1
+         GROUP BY u.agent_id, u.model, u.stage_run_id
+         ORDER BY SUM(u.cost_millicents) DESC",
     )?;
     let rows = st
         .query_map([project_id], |r| {
             Ok(json!({
                 "agent_id": r.get::<_, Option<String>>(0)?,
                 "model": r.get::<_, Option<String>>(1)?,
-                "prompt_tokens": r.get::<_, i64>(2)?,
-                "completion_tokens": r.get::<_, i64>(3)?,
-                "tool_output_tokens": r.get::<_, i64>(4)?,
-                "cost_mc": r.get::<_, i64>(5)?,
-                "calls": r.get::<_, i64>(6)?,
+                "stage": r.get::<_, Option<String>>(2)?,
+                "prompt_tokens": r.get::<_, i64>(3)?,
+                "completion_tokens": r.get::<_, i64>(4)?,
+                "tool_output_tokens": r.get::<_, i64>(5)?,
+                "cost_mc": r.get::<_, i64>(6)?,
+                "calls": r.get::<_, i64>(7)?,
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -197,6 +204,38 @@ mod tests {
         assert_eq!(rows[0]["prompt_tokens"], 2000);
         assert_eq!(rows[0]["tool_output_tokens"], 100); // 400B / 4
         assert_eq!(rows[0]["calls"], 2);
+    }
+
+    #[test]
+    fn summarize_groups_by_stage() {
+        let (db, ctx, _d) = setup(None);
+        db.conn()
+            .execute(
+                "INSERT INTO stage_runs (id, project_id, stage_name, seq)
+                 VALUES ('sr1','p','接口',1),('sr2','p','实现',2)",
+                [],
+            )
+            .unwrap();
+        let u = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 0,
+        };
+        let mut ctx2 = ToolContext {
+            stage_run_id: Some("sr1".into()),
+            ..ctx
+        };
+        record(&db, &ctx2, "chat", &u, 0).unwrap();
+        ctx2.stage_run_id = Some("sr2".into());
+        record(&db, &ctx2, "chat", &u, 0).unwrap();
+        record(&db, &ctx2, "chat", &u, 0).unwrap(); // sr2 两笔
+        let rows = summarize(&db, "p").unwrap();
+        assert_eq!(rows.len(), 2);
+        let stages: std::collections::BTreeSet<_> =
+            rows.iter().map(|r| r["stage"].as_str().unwrap()).collect();
+        assert_eq!(stages.iter().copied().collect::<Vec<_>>(), ["实现", "接口"]);
+        let impl_row = rows.iter().find(|r| r["stage"] == "实现").unwrap();
+        assert_eq!(impl_row["calls"], 2);
+        assert_eq!(impl_row["prompt_tokens"], 200);
     }
 
     #[test]

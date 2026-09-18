@@ -6,6 +6,7 @@ import {
   type StageRow,
   type TeamRow,
   type TimelineItem,
+  type UsageRow,
 } from './api'
 
 export type ThemePref = 'light' | 'dark' | 'system'
@@ -52,12 +53,15 @@ interface UiState {
   autonomy: string
   projectName: string
   railOpen: boolean
+  sideTab: 'artifacts' | 'team' | 'usage'
+  usageRows: UsageRow[]
   avatars: Record<string, string>
   tabs: WorkTab[]
   activeTab: string
   splitOpen: boolean
   setThemePref: (p: ThemePref) => void
   setRailOpen: (v: boolean) => void
+  setSideTab: (t: 'artifacts' | 'team' | 'usage') => void
   openTab: (t: WorkTab) => void
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
@@ -76,6 +80,8 @@ export const useUiStore = create<UiState>((set) => ({
   autonomy: 'L0',
   projectName: '食谱 App',
   railOpen: localStorage.getItem('hexagon.rail') !== '0',
+  sideTab: 'artifacts',
+  usageRows: [],
   avatars: {},
   tabs: [TIMELINE_TAB],
   activeTab: 'timeline',
@@ -98,6 +104,7 @@ export const useUiStore = create<UiState>((set) => ({
     localStorage.setItem('hexagon.rail', v ? '1' : '0')
     set({ railOpen: v })
   },
+  setSideTab: (t) => set({ sideTab: t }),
   setThemePref: (p) => {
     localStorage.setItem('hexagon.theme', p)
     document.documentElement.dataset.theme = resolve(p)
@@ -127,7 +134,8 @@ export const useUiStore = create<UiState>((set) => ({
       artifacts,
       timeline,
       pending,
-      usageTotal: total ? { spent_mc: total.spent_mc, limit_cents: total.limit_cents } : null,
+      usageTotal: total ? { spent_mc: total.spent_mc ?? 0, limit_cents: total.limit_cents ?? null } : null,
+      usageRows: usage,
       autonomy: autonomy || 'L0',
       avatars,
     })
