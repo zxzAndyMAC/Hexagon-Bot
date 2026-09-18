@@ -5,6 +5,7 @@ import { useUiStore } from '../store'
 import { CodeBlock, Md } from './Md'
 import { Avatar } from './Avatar'
 import { Icon, type IconName } from './Icon'
+import { RoleEditor } from './RoleEditor'
 
 type Step = {
   id: number
@@ -82,6 +83,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
   const member = team.find((m) => m.id === agentId)
   const fileRef = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [editing, setEditing] = useState(false)
 
   const steps = useMemo(() => {
     const items = timeline.filter((it) => it.event.agent_id === agentId)
@@ -187,7 +189,15 @@ export function AgentTab({ agentId }: { agentId: string }) {
         >
           {sleeping ? t('agent.wake') : t('agent.sleep')}
         </button>
+        <button
+          className="icon-btn"
+          title={t('agent.editRole')}
+          onClick={() => setEditing((v) => !v)}
+        >
+          <Icon name="edit" size={13} />
+        </button>
       </div>
+      {editing && <RoleEditor agentId={agentId} onClose={() => setEditing(false)} />}
       {/* 执行链路 */}
       <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 8 }}>
         <div className="dim3" style={{ padding: '6px 14px', fontSize: 10, fontWeight: 560 }}>

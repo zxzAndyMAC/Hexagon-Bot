@@ -212,6 +212,17 @@ export default {
     noEvents: 'No events for this agent yet', changeAvatar: 'Change avatar', openTab: 'Open agent tab',
     stepRead: 'Read file', stepWrite: 'Write file', stepBash: 'Run command',
     stepList: 'List dir', stepSearch: 'Search', stepTool: 'Tool',
+    editRole: 'Edit role', duty: 'Duty', reviewer: 'Reviewer', noReviewer: '— direct to owner',
+    modelSlot: 'Model slot', globs: 'Owned paths (one per line)', skills: 'Skills (comma-separated)',
+    grantsMcp: 'Granted MCP services', grantsSkill: 'Granted skills',
+    saveRole: 'Save', draftAi: 'Draft with AI', cancel: 'Cancel', saved: 'Saved',
+    customRole: 'Custom role', createRole: 'New role', roleName: 'Role name',
+    editHint: 'Changes apply on next activation; permissions update immediately.',
+  },
+  pack: {
+    editor: 'Pack editor', hint: 'Edits write to .hexagon/pack.json — the pinned running copy is untouched.',
+    saveDraft: 'Validate & save draft', saveTemplate: 'Save as template', exportYaml: 'Export YAML',
+    draftSaved: 'Draft saved', templateSaved: 'Template saved', exported: 'Exported',
   },
   rail: { nodes: 'Nodes' },
   settings: {

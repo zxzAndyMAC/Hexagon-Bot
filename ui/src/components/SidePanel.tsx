@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next'
+import { useState } from 'react'
 import { useUiStore } from '../store'
+import { CreateRoleForm } from './RoleEditor'
 import { Avatar } from './Avatar'
 import { UsageTab } from './UsageTab'
 import { bindingFor, formatBinding } from '../keymap'
@@ -22,6 +24,8 @@ function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | nu
 
 export function SidePanel() {
   const { t } = useTranslation()
+  const { refresh } = useUiStore()
+  const [creating, setCreating] = useState(false)
   const { artifacts, team, railOpen, setRailOpen, openTab, sideTab: tab, setSideTab: setTab } = useUiStore()
   const tip = formatBinding(bindingFor('toggleRail'))
 
@@ -77,10 +81,20 @@ export function SidePanel() {
       )}
 
       {tab === 'team' && (
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {team.map((m) => (
-            <TeamRow key={m.id} m={m} />
-          ))}
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1 }}>
+            {team.map((m) => (
+              <TeamRow key={m.id} m={m} />
+            ))}
+          </div>
+          <button
+            className="btn"
+            style={{ margin: '8px 12px', fontSize: 11 }}
+            onClick={() => setCreating((v) => !v)}
+          >
+            {creating ? '−' : '+'} {t('agent.createRole')}
+          </button>
+          {creating && <CreateRoleForm onDone={() => { setCreating(false); refresh() }} />}
         </div>
       )}
 

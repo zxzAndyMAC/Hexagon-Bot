@@ -212,6 +212,17 @@ export default {
     noEvents: "Cet agent n'a pas encore d'événements", changeAvatar: 'Changer d’avatar', openTab: 'Ouvrir l’activité',
     stepRead: 'Lire fichier', stepWrite: 'Modifier fichier', stepBash: 'Exécuter commande',
     stepList: 'Lister dossier', stepSearch: 'Rechercher', stepTool: 'Outil',
+    editRole: 'Modifier le rôle', duty: 'Fonction', reviewer: 'Supérieur', noReviewer: '— direct au responsable',
+    modelSlot: 'Slot de modèle', globs: 'Chemins possédés (un par ligne)', skills: 'Skills (séparées par virgule)',
+    grantsMcp: 'Services MCP autorisés', grantsSkill: 'Skills autorisées',
+    saveRole: 'Enregistrer', draftAi: 'Rédiger avec l’IA', cancel: 'Annuler', saved: 'Enregistré',
+    customRole: 'Rôle personnalisé', createRole: 'Nouveau rôle', roleName: 'Nom du rôle',
+    editHint: 'Les changements s’appliquent à la prochaine activation ; les permissions changent aussitôt.',
+  },
+  pack: {
+    editor: 'Éditeur de pack', hint: 'Les modifications écrivent dans .hexagon/pack.json — la copie épinglée reste intacte.',
+    saveDraft: 'Valider et enregistrer le brouillon', saveTemplate: 'Enregistrer comme modèle', exportYaml: 'Exporter en YAML',
+    draftSaved: 'Brouillon enregistré', templateSaved: 'Modèle enregistré', exported: 'Exporté',
   },
   rail: { nodes: 'Nœuds' },
   settings: {

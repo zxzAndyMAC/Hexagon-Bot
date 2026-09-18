@@ -165,6 +165,73 @@ fn request_install(state: tauri::State<AppState>, desc: String) -> Result<String
 }
 
 #[tauri::command]
+fn agent_detail(state: tauri::State<AppState>, agent_id: String) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.agent_detail(&agent_id))
+}
+
+#[tauri::command]
+fn update_agent(
+    state: tauri::State<AppState>,
+    agent_id: String,
+    patch: Value,
+) -> Result<(), String> {
+    let patch: hexagon_core::roles::AgentPatch =
+        serde_json::from_value(patch).map_err(|e| e.to_string())?;
+    with_wb(&state, |wb| wb.update_agent(&agent_id, patch))
+}
+
+#[tauri::command]
+fn create_role(state: tauri::State<AppState>, def: Value) -> Result<String, String> {
+    let def: hexagon_core::presets::RoleDef =
+        serde_json::from_value(def).map_err(|e| e.to_string())?;
+    with_wb(&state, |wb| wb.create_role(def))
+}
+
+#[tauri::command]
+fn set_agent_grants(
+    state: tauri::State<AppState>,
+    agent_id: String,
+    kind: String,
+    names: Vec<String>,
+) -> Result<(), String> {
+    with_wb(&state, |wb| wb.set_agent_grants(&agent_id, &kind, names))
+}
+
+#[tauri::command]
+fn draft_role_def(
+    state: tauri::State<AppState>,
+    agent_id: String,
+    hint: String,
+) -> Result<String, String> {
+    with_wb(&state, |wb| wb.draft_role_def(&agent_id, &hint))
+}
+
+#[tauri::command]
+fn pack_draft(state: tauri::State<AppState>) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.pack_draft())
+}
+
+#[tauri::command]
+fn save_pack_draft(state: tauri::State<AppState>, pack_json: String) -> Result<(), String> {
+    with_wb(&state, |wb| wb.save_pack_draft(&pack_json))
+}
+
+#[tauri::command]
+fn save_pack_template(state: tauri::State<AppState>, pack_json: String) -> Result<String, String> {
+    with_wb(&state, |wb| wb.save_pack_template(&pack_json))
+}
+
+#[tauri::command]
+fn pack_templates(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
+    with_wb(&state, |wb| wb.pack_templates())
+}
+
+#[tauri::command]
+fn export_pack_yaml(state: tauri::State<AppState>, dest: String) -> Result<(), String> {
+    with_wb(&state, |wb| wb.export_pack_yaml(&dest))
+}
+
+#[tauri::command]
 fn resolve_install(
     state: tauri::State<AppState>,
     qid: String,
@@ -652,6 +719,16 @@ pub fn run() {
             open_stage,
             recover_run,
             override_checks,
+            agent_detail,
+            update_agent,
+            create_role,
+            set_agent_grants,
+            draft_role_def,
+            pack_draft,
+            save_pack_draft,
+            save_pack_template,
+            pack_templates,
+            export_pack_yaml,
             request_install,
             resolve_install,
             export_events,

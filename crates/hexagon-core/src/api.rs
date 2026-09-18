@@ -53,6 +53,10 @@ pub enum ApiError {
     Interrupted(String),
     #[error(transparent)]
     Install(#[from] crate::install::InstallError),
+    #[error(transparent)]
+    Roles(#[from] crate::roles::RoleError),
+    #[error(transparent)]
+    PackEdit(#[from] crate::packedit::PackEditError),
 }
 
 /// 工作台实例：一个打开的项目。
@@ -715,6 +719,128 @@ impl Workbench {
             &self.repo_root,
             qid,
             allow,
+        )?)
+    }
+
+    /// 角色编辑面板数据（票 30）：有效定义 + 实例字段 + 授权名单。
+    pub fn agent_detail(&self, agent_id: &str) -> Result<Value, ApiError> {
+        Ok(crate::roles::agent_detail(
+            &self.db,
+            &self.project_id,
+            agent_id,
+        )?)
+    }
+
+    /// 编辑 Agent 定义（票 30）：项目覆盖行 + 实例字段同步。
+    /// globs/grants 改后权限即时按新值判；model_slot/duty 下次激活生效。
+    pub fn update_agent(
+        &self,
+        agent_id: &str,
+        patch: crate::roles::AgentPatch,
+    ) -> Result<(), ApiError> {
+        Ok(crate::roles::update_agent_def(
+            &self.db,
+            &self.project_id,
+            agent_id,
+            &patch,
+        )?)
+    }
+
+    /// 自建自定义角色（票 30）：校验 → role_defs(custom) + agents 行 + globs 种子。
+    /// 角色定义永不进提案面（ADR 0045）——本方法是人手编辑面。
+    pub fn create_role(&self, def: crate::presets::RoleDef) -> Result<String, ApiError> {
+        Ok(crate::roles::create_role(&self.db, &self.project_id, &def)?)
+    }
+
+    /// 授权名单整表替换（票 30）：显式人手授权，与安装助手无关路径。
+    pub fn set_agent_grants(
+        &self,
+        agent_id: &str,
+        kind: &str,
+        names: Vec<String>,
+    ) -> Result<(), ApiError> {
+        Ok(crate::roles::set_grants(&self.db, agent_id, kind, &names)?)
+    }
+
+    /// 角色设定起草（票 30）：模型起草 duty/定位，人确认才写回（update_agent）。
+    /// 单发无工具调用；走该 Agent 的模型槽。
+    pub fn draft_role_def(&self, agent_id: &str, hint: &str) -> Result<String, ApiError> {
+        let slot: Option<String> = self.db.conn().query_row(
+            "SELECT model_slot FROM agents WHERE id=?1",
+            [agent_id],
+            |r| r.get(0),
+        )?;
+        let provider = self
+            .providers
+            .get(slot.as_deref().unwrap_or("default"))
+            .or_else(|| self.providers.get("default"))
+            .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        let role: String =
+            self.db
+                .conn()
+                .query_row("SELECT role FROM agents WHERE id=?1", [agent_id], |r| {
+                    r.get(0)
+                })?;
+        let req = crate::provider::ChatRequest {
+            model_slot: slot.unwrap_or_else(|| "default".into()),
+            messages: vec![crate::provider::Message {
+                role: crate::provider::Role::User,
+                content: vec![crate::provider::ContentBlock::Text {
+                    text: format!(
+                        "为虚拟团队角色「{role}」起草一段中文职责描述（≤80字，只输出职责正文）。补充要求：{hint}"
+                    ),
+                }],
+            }],
+            tools: vec![],
+        };
+        let resp = provider.complete(&req).map_err(turn::TurnError::from)?;
+        let text = resp
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                crate::provider::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(text)
+    }
+
+    /// 包ドラフト読込（票 31）：.hexagon/pack.json → 无ければ钉住副本を複製源に。
+    pub fn pack_draft(&self) -> Result<Value, ApiError> {
+        let pack = crate::packedit::load_draft(&self.repo_root)?;
+        Ok(serde_json::to_value(&pack)?)
+    }
+
+    /// 包ドラフト保存（票 31）：チーム名簿で検証 → pack.json へ。
+    /// pack.active.json には触れない（走行中インスタンスは钉版本で隔離済み）。
+    pub fn save_pack_draft(&self, pack_json: &str) -> Result<(), ApiError> {
+        let pack = crate::packedit::parse_draft(pack_json)?;
+        Ok(crate::packedit::save_draft(
+            &self.db,
+            &self.repo_root,
+            &self.project_id,
+            &pack,
+        )?)
+    }
+
+    /// ドラフトを個人テンプレートに保存（票 31）：~/.config/hexagon/templates/。
+    pub fn save_pack_template(&self, pack_json: &str) -> Result<String, ApiError> {
+        let pack = crate::packedit::parse_draft(pack_json)?;
+        let path = crate::packedit::save_template(&pack)?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    /// 個人テンプレート一覧。
+    pub fn pack_templates(&self) -> Result<Vec<String>, ApiError> {
+        Ok(crate::packedit::list_templates()?)
+    }
+
+    /// 包を YAML でエクスポート（票 31）：ドラフト優先、無ければ钉住副本。
+    pub fn export_pack_yaml(&self, dest: &str) -> Result<(), ApiError> {
+        Ok(crate::packedit::export_yaml(
+            &self.repo_root,
+            std::path::Path::new(dest),
         )?)
     }
 
@@ -1734,6 +1860,188 @@ mod tests {
     }
 
     /// US33 余量（票 40）：检验红默认挡推进；负责人显式覆盖留痕放行。
+    /// US11：包編集——ドラフト複製 → 検証保存 → テンプレ化 → YAML エクスポート。
+    #[test]
+    fn us11_pack_editing_draft_template_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let tdir = tempfile::tempdir().unwrap();
+        std::env::set_var("HEXAGON_TEMPLATES_DIR", tdir.path());
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"规格驱动","version":1,
+            "stages":[{"name":"规格","roles":["产品策划"],"due":["规格"],"stamp_point":true}]
+        }))
+        .unwrap();
+        let wb = Workbench::for_test(dir.path(), &["产品策划", "架构师"], Some(pack)).unwrap();
+        // ドラフト読込：pack.json 不在 → 钉住副本を複製源に
+        let d = wb.pack_draft().unwrap();
+        assert_eq!(d["name"], "规格驱动");
+        assert_eq!(d["stages"].as_array().unwrap().len(), 1);
+        // 編集保存：段追加 + 会診名簿 → pack.json へ（active.json は不変）
+        let edited = r#"{"name":"规格驱动","version":2,"stages":[
+            {"name":"规格","roles":["产品策划"],"due":["规格"],"stamp_point":true},
+            {"name":"実装","roles":["架构师"],"due":["接口说明"],"checks":["cargo test"],"reviews":[{"artifact_kind":"接口说明","reviewer":"架构师"}],"consult_wake":["产品策划"]}
+        ]}"#;
+        wb.save_pack_draft(edited).unwrap();
+        assert!(dir.path().join(".hexagon/pack.json").exists());
+        let active = std::fs::read_to_string(dir.path().join(".hexagon/pack.active.json")).unwrap();
+        assert!(active.contains("\"version\": 1")); // 走行中インスタンスの钉版本は不変
+                                                    // 非法包は保存拒否：幽灵角色・零阶段・重複阶段
+        assert!(wb
+            .save_pack_draft(
+                r#"{"name":"x","version":1,"stages":[{"name":"s","roles":["幽灵"],"due":[]}]}"#
+            )
+            .is_err());
+        assert!(wb
+            .save_pack_draft(r#"{"name":"x","version":1,"stages":[]}"#)
+            .is_err());
+        assert!(wb
+            .save_pack_draft(r#"{"name":"x","version":1,"stages":[{"name":"s","roles":["架构师"],"due":[]},{"name":"s","roles":["架构师"],"due":[]}]}"#)
+            .is_err());
+        // 個人テンプレート保存 → 一覧に出る（次のプロジェクトで再利用可能）
+        let path = wb.save_pack_template(edited).unwrap();
+        assert!(std::path::Path::new(&path).exists());
+        assert_eq!(wb.pack_templates().unwrap(), vec!["规格驱动".to_string()]);
+        // YAML エクスポート：段構造が YAML 形で出力
+        let dest = dir.path().join("pack.yaml");
+        wb.export_pack_yaml(dest.to_str().unwrap()).unwrap();
+        let yaml = std::fs::read_to_string(&dest).unwrap();
+        assert!(yaml.contains("name: 规格驱动"));
+        assert!(yaml.contains("- name: 実装"));
+        assert!(yaml.contains("stamp_point: true"));
+        assert!(yaml.contains("reviewer: 架构师"));
+        assert!(yaml.contains("checks: [cargo test]"));
+        std::env::remove_var("HEXAGON_TEMPLATES_DIR");
+    }
+
+    /// US6：角色编辑——覆盖行 + 实例字段同期、即時権限、上級即時反映。
+    #[test]
+    fn us6_role_editing_takes_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端", "架构师"], None).unwrap();
+        // 编辑：duty/model_slot/reviewer/globs 一回更新
+        wb.update_agent(
+            "a0",
+            crate::roles::AgentPatch {
+                duty: Some("服务端与支付".into()),
+                reviewer: Some("架构师".into()),
+                model_slot: Some("vision".into()),
+                skills: Some(vec!["code-review".into()]),
+                globs: Some(vec!["src/**".into(), "docs/**".into()]),
+            },
+        )
+        .unwrap();
+        // 实例字段：model_slot 更新
+        let slot: String = wb
+            .db
+            .conn()
+            .query_row("SELECT model_slot FROM agents WHERE id='a0'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(slot, "vision");
+        // globs 整表替换 → 权限管线即时生效
+        let mut globs = crate::permissions::agent_globs(&wb.db, "a0").unwrap();
+        globs.sort();
+        assert_eq!(globs, vec!["docs/**", "src/**"]);
+        // 上级变更 → 提案路由即按新值判
+        assert_eq!(
+            crate::roles::superior_of(&wb.db, "p1", "后端"),
+            Some("架构师".to_string())
+        );
+        // 幽灵上级拒绝
+        assert!(wb
+            .update_agent(
+                "a0",
+                crate::roles::AgentPatch {
+                    reviewer: Some("幽灵".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err());
+        // detail 面板数据反映覆盖
+        let d = wb.agent_detail("a0").unwrap();
+        assert_eq!(d["def"]["duty"], "服务端与支付");
+        // 授权整表替换：kind 维独立
+        wb.set_agent_grants("a0", "mcp", vec!["fake".to_string()])
+            .unwrap();
+        wb.set_agent_grants("a0", "skill", vec!["spec-writing".to_string()])
+            .unwrap();
+        let d = wb.agent_detail("a0").unwrap();
+        assert_eq!(d["grants"].as_array().unwrap().len(), 2);
+        wb.set_agent_grants("a0", "mcp", vec![]).unwrap();
+        let d = wb.agent_detail("a0").unwrap();
+        let kinds: Vec<&str> = d["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["skill"]); // mcp 清空、skill 保留
+    }
+
+    /// US7：自建自定义角色——校验 → 入团队 → 跑通一回合。
+    #[test]
+    fn us7_custom_role_runs_a_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        // 空名/重复/幽灵上级 全部拒
+        assert!(wb
+            .create_role(crate::presets::RoleDef {
+                name: " ".into(),
+                duty: "x".into(),
+                reviewer: None,
+                model_slot: "default".into(),
+                globs: vec![],
+                skills: vec![],
+            })
+            .is_err());
+        assert!(wb
+            .create_role(crate::presets::RoleDef {
+                name: "后端".into(),
+                duty: "x".into(),
+                reviewer: None,
+                model_slot: "default".into(),
+                globs: vec![],
+                skills: vec![],
+            })
+            .is_err());
+        assert!(wb
+            .create_role(crate::presets::RoleDef {
+                name: "翻译".into(),
+                duty: "x".into(),
+                reviewer: Some("幽灵".into()),
+                model_slot: "default".into(),
+                globs: vec![],
+                skills: vec![],
+            })
+            .is_err());
+        // 正常创建：custom=1 + agents 行 + globs 种子
+        let aid = wb
+            .create_role(crate::presets::RoleDef {
+                name: "翻译".into(),
+                duty: "日英互译与本地化审校".into(),
+                reviewer: None,
+                model_slot: "default".into(),
+                globs: vec!["docs/i18n/**".into()],
+                skills: vec![],
+            })
+            .unwrap();
+        let d = wb.agent_detail(&aid).unwrap();
+        assert_eq!(d["custom"], true);
+        assert_eq!(d["globs"], json!(["docs/i18n/**"]));
+        // 激活 → 跑通一回合（自定义角色与预置同权）
+        wb.db
+            .conn()
+            .execute("UPDATE agents SET status='active' WHERE id=?1", [&aid])
+            .unwrap();
+        let prov = Arc::new(ScriptedProvider::new(vec![text_response("翻訳完了")]));
+        wb.register_provider("default", prov.clone());
+        let out = wb.run_turn("翻译", "README を翻訳").unwrap();
+        assert_eq!(out, TurnOutcome::Finished);
+        let calls = prov.recorded();
+        assert_eq!(calls.len(), 1); // 自定义角色正常消耗模型调用
+    }
+
     /// US36：只读研究助手——嵌套回合结构性不可写、引用进回包、用量记父。
     #[test]
     fn us36_research_nested_readonly() {

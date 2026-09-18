@@ -69,7 +69,8 @@ const REQUIRED_SECTIONS: &[&str] = &["动机", "改动面", "预期收益", "验
 
 /// 上级映射：复审者 = 声明上级；无上级/上级缺席 → 直达负责人。
 /// v1 静态表：技术线归架构师，其余（含架构师本人）直达负责人。
-fn superior_of(role: &str) -> Option<&'static str> {
+/// 内置上级映射（预置底稿的兜底；项目 role_defs 行优先，见 roles::superior_of）。
+pub fn builtin_superior(role: &str) -> Option<&'static str> {
     match role {
         "前端" | "后端" | "QA" | "UI" | "UX" | "运维" => Some("架构师"),
         _ => None,
@@ -209,7 +210,7 @@ pub fn submit(
         [&ctx.agent_id],
         |r| r.get(0),
     )?;
-    let reviewer = superior_of(&author_role).and_then(|r| {
+    let reviewer = crate::roles::superior_of(db, &ctx.project_id, &author_role).and_then(|r| {
         db.conn()
             .query_row(
                 "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
@@ -648,11 +649,11 @@ mod tests {
 
     #[test]
     fn review_path_and_inflight_cap() {
-        let (db, d, ctx) = setup(&["前端", "架构师"]); // 上级在场
+        let (db, d, ctx) = setup(&["前端", "前端技术负责人"]); // 上级在场（preset 链：前端→前端技术负责人）
         let c1 = proposal_md("agents_md", "AGENTS.md", DIFF);
         mkart(&db, d.path(), "art1", &c1);
         let pid = submit(&db, &ctx, "art1", &c1).unwrap();
-        // 路由给架构师复审
+        // 路由给前端技术负责人复审
         let status: String = db
             .conn()
             .query_row("SELECT status FROM proposals WHERE id=?1", [&pid], |r| {

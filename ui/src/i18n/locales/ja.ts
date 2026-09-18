@@ -212,6 +212,17 @@ export default {
     noEvents: 'このエージェントのイベントはまだありません', changeAvatar: 'アバターを変更', openTab: 'アクティビティを開く',
     stepRead: 'ファイル読込', stepWrite: 'ファイル変更', stepBash: 'コマンド実行',
     stepList: 'ディレクトリ一覧', stepSearch: '検索', stepTool: 'ツール',
+    editRole: '役割を編集', duty: '職務', reviewer: '上長', noReviewer: '— 責任者直通',
+    modelSlot: 'モデルスロット', globs: '担当パス（1行1件）', skills: 'スキル（カンマ区切り）',
+    grantsMcp: '許可済み MCP サービス', grantsSkill: '許可済みスキル',
+    saveRole: '保存', draftAi: 'AI で起草', cancel: 'キャンセル', saved: '保存しました',
+    customRole: 'カスタムロール', createRole: '新規ロール', roleName: 'ロール名',
+    editHint: '設定は次回起動時に反映。権限と担当パスは即時反映されます。',
+  },
+  pack: {
+    editor: 'パックエディタ', hint: '編集は .hexagon/pack.json に書き込みます——実行中の固定コピーは無変更。',
+    saveDraft: '検証して下書き保存', saveTemplate: 'テンプレートとして保存', exportYaml: 'YAML エクスポート',
+    draftSaved: '下書きを保存しました', templateSaved: 'テンプレートを保存しました', exported: 'エクスポートしました',
   },
   rail: { nodes: 'ノード' },
   settings: {

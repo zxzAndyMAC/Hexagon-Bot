@@ -105,10 +105,40 @@ export interface RoleDef {
   skills: string[]
 }
 
+export interface PackStage {
+  name: string
+  roles: string[]
+  due?: string[]
+  checks?: string[]
+  reviews?: { artifact_kind: string; reviewer: string }[]
+  stamp_point?: boolean
+  backfill_edges?: [string, string][]
+  consult_wake?: string[]
+}
+
 export interface PackDef {
   name: string
   version: number
-  stages: { name: string; roles: string[]; due?: string[]; stamp_point?: boolean }[]
+  stages: PackStage[]
+}
+
+export interface AgentPatch {
+  duty?: string
+  reviewer?: string
+  model_slot?: string
+  skills?: string[]
+  globs?: string[]
+}
+
+export interface AgentDetail {
+  agent_id: string
+  role: string
+  status: string
+  model_slot: string | null
+  custom: boolean
+  def: { duty: string; reviewer: string | null; model_slot: string; skills: string[] }
+  globs: string[]
+  grants: { kind: string; name: string }[]
 }
 
 export const api = {
@@ -178,6 +208,21 @@ export const api = {
   requestInstall: (desc: string) => call<string>('request_install', { desc }),
   resolveInstall: (qid: string, allow: boolean) =>
     call<unknown>('resolve_install', { qid, allow }),
+  // ---- 角色编辑（票 30）：项目覆盖行 + 实例字段 + 授权名单（人手编辑面，非提案）----
+  agentDetail: (agentId: string) => call<AgentDetail>('agent_detail', { agentId }),
+  updateAgent: (agentId: string, patch: AgentPatch) =>
+    call<void>('update_agent', { agentId, patch }),
+  createRole: (def: RoleDef) => call<string>('create_role', { def }),
+  setAgentGrants: (agentId: string, kind: string, names: string[]) =>
+    call<void>('set_agent_grants', { agentId, kind, names }),
+  draftRoleDef: (agentId: string, hint: string) =>
+    call<string>('draft_role_def', { agentId, hint }),
+  // ---- 流程包编辑（票 31）：draft=pack.json / active=钉住副本，编辑只碰 draft ----
+  packDraft: () => call<PackDef>('pack_draft'),
+  savePackDraft: (packJson: string) => call<void>('save_pack_draft', { packJson }),
+  savePackTemplate: (packJson: string) => call<string>('save_pack_template', { packJson }),
+  packTemplates: () => call<string[]>('pack_templates'),
+  exportPackYaml: (dest: string) => call<void>('export_pack_yaml', { dest }),
   exportEvents: (args: { path: string; stageRunId?: string; agentId?: string; kinds?: string[] }) =>
     call<number>('export_events', {
       path: args.path,
@@ -741,6 +786,26 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return 'q-mock-install' as T // mock：待决卡 id
     case 'resolve_install':
       return { installed: args?.allow === true } as T
+    case 'agent_detail':
+      return {
+        agent_id: 'a0', role: '后端', status: 'active', model_slot: 'chat', custom: false,
+        def: { duty: '服务端实现', reviewer: '后端技术负责人', model_slot: 'chat', skills: [] },
+        globs: ['src/**'], grants: [{ kind: 'skill', name: 'spec-writing' }],
+      } as T
+    case 'pack_draft':
+      return { name: '规格驱动', version: 1, stages: [{ name: '规格', roles: ['产品策划'], due: ['规格'], stamp_point: true }] } as T
+    case 'pack_templates':
+      return ['规格驱动'] as T
+    case 'draft_role_def':
+      return '负责服务端实现与代码质量，向技术负责人汇报。' as T
+    case 'update_agent':
+    case 'create_role':
+    case 'set_agent_grants':
+    case 'save_pack_draft':
+    case 'export_pack_yaml':
+      return null as T
+    case 'save_pack_template':
+      return '/home/user/.config/hexagon/templates/规格驱动.json' as T
     case 'set_model_key':
     case 'create_project':
       return null as T

@@ -212,6 +212,17 @@ export default {
     noEvents: '该 Agent 还没有事件', changeAvatar: '更换头像', openTab: '打开活动页',
     stepRead: '读文件', stepWrite: '改文件', stepBash: '跑命令',
     stepList: '列目录', stepSearch: '搜索', stepTool: '工具',
+    editRole: '编辑角色', duty: '职责', reviewer: '上级', noReviewer: '— 直达负责人',
+    modelSlot: '模型槽', globs: '归属路径（每行一条）', skills: '技能（逗号分隔）',
+    grantsMcp: '已授权 MCP 服务', grantsSkill: '已授权技能',
+    saveRole: '保存', draftAi: 'AI 起草', cancel: '取消', saved: '已保存',
+    customRole: '自建角色', createRole: '新建角色', roleName: '角色名',
+    editHint: '设定下次激活生效；授权与归属路径即时生效。',
+  },
+  pack: {
+    editor: '流程包编辑器', hint: '编辑写入 .hexagon/pack.json——钉住的运行副本不受影响。',
+    saveDraft: '校验并保存草稿', saveTemplate: '存为模板', exportYaml: '导出 YAML',
+    draftSaved: '草稿已保存', templateSaved: '模板已保存', exported: '已导出',
   },
   rail: { nodes: '节点' },
   settings: {

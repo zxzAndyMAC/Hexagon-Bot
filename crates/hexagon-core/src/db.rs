@@ -33,6 +33,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0007_install",
         include_str!("../migrations/0007_install.sql"),
     ),
+    (
+        "0008_role_defs",
+        include_str!("../migrations/0008_role_defs.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

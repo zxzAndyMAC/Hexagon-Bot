@@ -212,6 +212,17 @@ export default {
     noEvents: 'Este agente ainda não tem eventos', changeAvatar: 'Trocar avatar', openTab: 'Abrir atividade',
     stepRead: 'Ler arquivo', stepWrite: 'Editar arquivo', stepBash: 'Executar comando',
     stepList: 'Listar diretório', stepSearch: 'Buscar', stepTool: 'Ferramenta',
+    editRole: 'Editar papel', duty: 'Função', reviewer: 'Superior', noReviewer: '— direto ao responsável',
+    modelSlot: 'Slot de modelo', globs: 'Caminhos próprios (um por linha)', skills: 'Skills (separadas por vírgula)',
+    grantsMcp: 'Serviços MCP autorizados', grantsSkill: 'Skills autorizadas',
+    saveRole: 'Salvar', draftAi: 'Redigir com IA', cancel: 'Cancelar', saved: 'Salvo',
+    customRole: 'Papel personalizado', createRole: 'Novo papel', roleName: 'Nome do papel',
+    editHint: 'As alterações valem na próxima ativação; permissões mudam já.',
+  },
+  pack: {
+    editor: 'Editor de pack', hint: 'As edições gravam em .hexagon/pack.json — a cópia fixada não é tocada.',
+    saveDraft: 'Validar e salvar rascunho', saveTemplate: 'Salvar como modelo', exportYaml: 'Exportar YAML',
+    draftSaved: 'Rascunho salvo', templateSaved: 'Modelo salvo', exported: 'Exportado',
   },
   rail: { nodes: 'Nós' },
   settings: {

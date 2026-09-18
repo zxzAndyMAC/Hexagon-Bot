@@ -1,11 +1,14 @@
 import { useTranslation } from 'react-i18next'
+import { useState } from 'react'
 import { useUiStore } from '../store'
+import { PackEditor } from './PackEditor'
 import { api } from '../api'
 import { Icon } from './Icon'
 
 export function StageBar() {
   const { t } = useTranslation()
   const { stages, refresh } = useUiStore()
+  const [editingPack, setEditingPack] = useState(false)
   const active = stages.find((s) => s.state === 'active' || s.state === 'waiting_stamp')
   const interrupted = stages.some((s) => s.state === 'interrupted')
   const nextPending = stages.find((s) => s.state === 'pending')
@@ -53,6 +56,16 @@ export function StageBar() {
       {!active && !nextPending && stages.length > 0 && !interrupted && (
         <button className="btn" onClick={() => act(api.resume)}>{t('stage.resume')}</button>
       )}
+      {stages.length > 0 && (
+        <button
+          className="icon-btn"
+          title={t('pack.editor')}
+          onClick={() => setEditingPack(true)}
+        >
+          <Icon name="edit" size={12} />
+        </button>
+      )}
+      {editingPack && <PackEditor onClose={() => setEditingPack(false)} />}
     </div>
   )
 }

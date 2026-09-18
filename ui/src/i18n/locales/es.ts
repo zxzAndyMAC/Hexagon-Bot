@@ -212,6 +212,17 @@ export default {
     noEvents: 'Este agente aún no tiene eventos', changeAvatar: 'Cambiar avatar', openTab: 'Abrir actividad',
     stepRead: 'Leer archivo', stepWrite: 'Editar archivo', stepBash: 'Ejecutar comando',
     stepList: 'Listar directorio', stepSearch: 'Buscar', stepTool: 'Herramienta',
+    editRole: 'Editar rol', duty: 'Función', reviewer: 'Superior', noReviewer: '— directo al responsable',
+    modelSlot: 'Slot de modelo', globs: 'Rutas propias (una por línea)', skills: 'Skills (separadas por coma)',
+    grantsMcp: 'Servicios MCP autorizados', grantsSkill: 'Skills autorizadas',
+    saveRole: 'Guardar', draftAi: 'Redactar con IA', cancel: 'Cancelar', saved: 'Guardado',
+    customRole: 'Rol personalizado', createRole: 'Nuevo rol', roleName: 'Nombre del rol',
+    editHint: 'Los cambios aplican en la próxima activación; los permisos cambian al instante.',
+  },
+  pack: {
+    editor: 'Editor de pack', hint: 'Los cambios escriben en .hexagon/pack.json — la copia fijada no se toca.',
+    saveDraft: 'Validar y guardar borrador', saveTemplate: 'Guardar como plantilla', exportYaml: 'Exportar YAML',
+    draftSaved: 'Borrador guardado', templateSaved: 'Plantilla guardada', exported: 'Exportado',
   },
   rail: { nodes: 'Nodos' },
   settings: {
