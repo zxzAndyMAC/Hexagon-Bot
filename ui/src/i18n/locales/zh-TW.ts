@@ -151,6 +151,7 @@ export default {
     budget: '預算',
     totalTokens: '總 Token',
     totalCalls: '總呼叫',
+    activeAgents: '活躍 Agent',
     todayTokens: '今日 Token',
     granularity: '粒度',
     gDay: '按天',

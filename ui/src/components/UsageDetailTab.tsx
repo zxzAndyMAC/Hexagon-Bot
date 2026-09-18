@@ -10,7 +10,7 @@ import { useUiStore } from '../store'
 import { agentColor } from '../colors'
 import {
   breakdownRows, capReached, centsToMc, fmtTok, fmtYuan,
-  groupTokens, parseLimitInput, perAgentSeries, tokenTypeSeries, tokensOf,
+  groupTokens, parseLimitInput, perAgentSeries, tokenTypeSeries,
 } from '../usage'
 
 echarts.use([LineChart, PieChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
@@ -20,7 +20,7 @@ const cssVar = (name: string) =>
 
 type Granularity = 'day' | 'hour'
 const RANGES = [7, 14, 30, 0] as const // 0 = 全部
-type Board = 'model' | 'team'
+type Board = 'team' | 'model'
 
 export function UsageDetailTab() {
   const { t } = useTranslation()
@@ -35,198 +35,239 @@ export function UsageDetailTab() {
   const load = useCallback(() => {
     api.usageSeries(granularity, days || null).then(setSeries).catch(() => setSeries([]))
   }, [granularity, days])
-
   useEffect(load, [load])
 
   const rows = breakdownRows(usageRows)
   const roleOf = (id?: string | null) => team.find((m) => m.id === id)?.role ?? id ?? '—'
-  const colorOf = (id: string) => agentColor(id)
 
   const spent = usageTotal?.spent_mc ?? 0
   const limitMc = usageTotal?.limit_cents != null ? centsToMc(usageTotal.limit_cents) : null
   const capped = capReached(spent, usageTotal?.limit_cents)
+  const pct = limitMc ? Math.min(100, (spent / limitMc) * 100) : 0
   const totalCalls = rows.reduce((s, r) => s + (r.calls ?? 0), 0)
-  const totalTok = usageTotal?.tokens ?? rows.reduce((s, r) => s + tokensOfRow(r), 0)
+  const totalTok = usageTotal?.tokens ?? 0
   const today = new Date().toISOString().slice(0, 10)
-  const todayTok = series.filter((b) => b.bucket.startsWith(today)).reduce((s, b) => s + tokensOf(b), 0)
+  const todayTok = series.filter((b) => b.bucket.startsWith(today)).reduce((s, b) => s + tokOf(b), 0)
 
   const byModel = groupTokens(rows, (r) => r.model || '—')
   const byAgent = groupTokens(rows, (r) => r.agent_id ?? '—')
   const byStage = groupTokens(rows, (r) => r.stage || t('usage.noStage'))
+  const tokSum = Math.max(1, byModel.reduce((s, [, v]) => s + v, 0))
 
   const trend = useMemo(() => tokenTypeSeries(series), [series])
   const perAgent = useMemo(() => perAgentSeries(series), [series])
 
   // 主题变量换肤后重建 option
   void themePref
-  const ax = { axisLine: { lineStyle: { color: cssVar('--border') } }, axisLabel: { color: cssVar('--text-3'), fontSize: 10 }, splitLine: { lineStyle: { color: cssVar('--bg-3') || 'rgba(128,128,128,.15)' } } }
-  const tip = { trigger: 'axis' as const, textStyle: { fontSize: 11 }, backgroundColor: cssVar('--bg-1'), borderColor: cssVar('--border'), valueFormatter: (v: number) => fmtTok(v) }
+  const text2 = cssVar('--text-2')
+  const text3 = cssVar('--text-3')
+  const axis = {
+    axisLine: { lineStyle: { color: cssVar('--border') } },
+    axisTick: { show: false },
+    axisLabel: { color: text3, fontSize: 10 },
+    splitLine: { lineStyle: { color: cssVar('--border'), type: 'dashed' as const } },
+  }
+  const tip = {
+    trigger: 'axis' as const,
+    backgroundColor: cssVar('--bg-1'), borderColor: cssVar('--border'),
+    textStyle: { color: cssVar('--text'), fontSize: 11 },
+    valueFormatter: (v: number) => fmtTok(v),
+  }
+  const legend = { textStyle: { color: text2, fontSize: 11 }, itemWidth: 14, itemHeight: 8, icon: 'roundRect' }
+  const grid = { left: 8, right: 16, top: 32, bottom: 4, containLabel: true }
+  const palette = [cssVar('--accent'), cssVar('--ok'), cssVar('--flag'), cssVar('--err')]
   const short = (b: string) => (granularity === 'hour' ? b.slice(11) : b.slice(5))
 
   const boardOption: EChartsCoreOption = board === 'model'
     ? {
-        tooltip: { trigger: 'item', valueFormatter: (v: number) => fmtTok(v) },
-        legend: { textStyle: { color: cssVar('--text-2'), fontSize: 11 }, bottom: 0 },
+        color: palette,
+        tooltip: { ...tip, trigger: 'item' },
+        legend: { ...legend, orient: 'vertical', right: 8, top: 'middle',
+          formatter: (name: string) => `${name}  ${fmtTok(byModel.find(([n]) => n === name)?.[1] ?? 0)}` },
         series: [{
-          type: 'pie', radius: ['45%', '70%'], center: ['50%', '44%'],
-          label: { color: cssVar('--text-2'), fontSize: 11, formatter: '{b}\n{d}%' },
-          data: byModel.map(([name, cost]) => ({ name, value: cost })),
+          type: 'pie', radius: ['52%', '74%'], center: ['34%', '50%'],
+          itemStyle: { borderColor: cssVar('--bg-1'), borderWidth: 2 },
+          label: { show: false },
+          emphasis: { label: { show: true, fontSize: 12, color: text2, formatter: '{b}\n{d}%' } },
+          data: byModel.map(([name, v]) => ({ name, value: v })),
+        }],
+        graphic: [{
+          type: 'text', left: '29%', top: '46%',
+          style: { text: fmtTok(tokSum === 1 ? 0 : tokSum), fontSize: 16, fontWeight: 560, fill: cssVar('--text'), fontFamily: 'ui-monospace, Menlo, monospace', textAlign: 'center' },
         }],
       }
     : {
         tooltip: { ...tip, trigger: 'item' },
-        grid: { left: 8, right: 24, top: 8, bottom: 8, containLabel: true },
-        xAxis: { type: 'value', ...ax, axisLabel: { ...ax.axisLabel, formatter: (v: number) => fmtTok(v) } },
-        yAxis: { type: 'category', data: byAgent.map(([id]) => roleOf(id)).reverse(), ...ax },
+        grid: { left: 8, right: 48, top: 8, bottom: 4, containLabel: true },
+        xAxis: { type: 'value', ...axis, axisLabel: { ...axis.axisLabel, formatter: (v: number) => fmtTok(v) }, splitLine: { show: false } },
+        yAxis: { type: 'category', data: byAgent.map(([id]) => roleOf(id)).reverse(), ...axis, splitLine: { show: false } },
         series: [{
-          type: 'bar', barWidth: 12,
-          data: byAgent.map(([id, cost]) => ({ value: cost, itemStyle: { color: colorOf(id) } })).reverse(),
-          label: { show: true, position: 'right', color: cssVar('--text-3'), fontSize: 10, formatter: (p: { value: number }) => fmtTok(p.value) },
+          type: 'bar', barWidth: 14,
+          itemStyle: { borderRadius: [0, 4, 4, 0] },
+          data: byAgent.map(([id, v]) => ({ value: v, itemStyle: { color: agentColor(id, 50) } })).reverse(),
+          label: { show: true, position: 'right', color: text3, fontSize: 10, fontFamily: 'ui-monospace, Menlo, monospace', formatter: (p: { value: number }) => fmtTok(p.value) },
         }],
       }
 
+  const lineBase = { type: 'line' as const, smooth: true, showSymbol: false, symbolSize: 5, lineStyle: { width: 1.5 } }
   const trendOption: EChartsCoreOption = {
-    tooltip: tip,
-    legend: { textStyle: { color: cssVar('--text-2'), fontSize: 11 }, top: 0 },
-    grid: { left: 8, right: 12, top: 28, bottom: 8, containLabel: true },
-    xAxis: { type: 'category', data: trend.labels.map(short), ...ax },
-    yAxis: { type: 'value', ...ax, axisLabel: { ...ax.axisLabel, formatter: (v: number) => fmtTok(v) } },
+    color: palette,
+    tooltip: tip, legend: { ...legend, top: 0 }, grid,
+    xAxis: { type: 'category', boundaryGap: false, data: trend.labels.map(short), ...axis, splitLine: { show: false } },
+    yAxis: { type: 'value', ...axis, axisLabel: { ...axis.axisLabel, formatter: (v: number) => fmtTok(v) } },
     series: ([t('usage.tokPrompt'), t('usage.tokCompletion'), t('usage.tokToolOutput')] as const).map((name, i) => ({
-      name, type: 'line', smooth: true, showSymbol: false, data: trend.series[i],
-      lineStyle: { width: 1.5 },
+      name, ...lineBase, data: trend.series[i],
     })),
   }
 
   const agentOption: EChartsCoreOption = {
-    tooltip: tip,
-    legend: { textStyle: { color: cssVar('--text-2'), fontSize: 11 }, top: 0 },
-    grid: { left: 8, right: 12, top: 28, bottom: 8, containLabel: true },
-    xAxis: { type: 'category', data: perAgent.labels.map(short), ...ax },
-    yAxis: { type: 'value', ...ax, axisLabel: { ...ax.axisLabel, formatter: (v: number) => fmtTok(v) } },
+    tooltip: tip, legend: { ...legend, top: 0 }, grid,
+    xAxis: { type: 'category', boundaryGap: false, data: perAgent.labels.map(short), ...axis, splitLine: { show: false } },
+    yAxis: { type: 'value', ...axis, axisLabel: { ...axis.axisLabel, formatter: (v: number) => fmtTok(v) } },
     series: perAgent.series.map((s) => ({
-      name: roleOf(s.agentId), type: 'line', smooth: true, showSymbol: false,
-      data: s.points, lineStyle: { width: 1.5 }, itemStyle: { color: colorOf(s.agentId) },
+      name: roleOf(s.agentId), ...lineBase, data: s.points,
+      itemStyle: { color: agentColor(s.agentId, 55) },
     })),
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* 总览卡 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-        <Stat label={t('usage.totalTokens')} value={fmtTok(totalTok)} />
-        <Stat label={t('usage.totalCalls')} value={String(totalCalls)} />
-        <Stat label={t('usage.todayTokens')} value={fmtTok(todayTok)} />
-        <Stat
-          label={t('topbar.usage')}
-          value={`${fmtYuan(spent)}${limitMc != null ? ` / ${fmtYuan(limitMc)}` : ''}`}
-          alert={capped ? t('usage.capHit') : undefined}
-        />
-      </div>
-      {capped && <div className="chip err" style={{ padding: '6px 10px' }}>⚠ {t('usage.capHit')}</div>}
+    <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', fontSize: 12 }}>
+      <div style={{ maxWidth: 880, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-      {/* 筛选条 */}
-      <div className="row-line" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px' }}>
-        <span className="dim3" style={{ fontSize: 10 }}>{t('usage.granularity')}</span>
-        <Seg value={granularity} onChange={(v) => setGranularity(v as Granularity)}
-          options={[['day', t('usage.gDay')], ['hour', t('usage.gHour')]]} />
-        <span className="dim3" style={{ fontSize: 10, marginLeft: 8 }}>{t('usage.range')}</span>
-        <Seg value={String(days)} onChange={(v) => setDays(Number(v))}
-          options={RANGES.map((d) => [String(d), d === 0 ? t('usage.rAll') : t('usage.rDays', { n: d })])} />
-        <div style={{ flex: 1 }} />
-        <button className="btn" style={{ fontSize: 11 }} onClick={async () => { load(); await refresh() }}>
-          {t('usage.refresh')}
-        </button>
-      </div>
-
-      {/* 消费榜单：模型分布 ⇄ 团队榜 */}
-      <Card title={t('usage.leaderboard')}
-        extra={<Seg value={board} onChange={(v) => setBoard(v as Board)}
-          options={[['team', t('usage.teamRank')], ['model', t('usage.modelDist')]]} />}>
-        <Chart option={boardOption} height={200} />
-      </Card>
-
-      {/* token 使用趋势（三类 token） */}
-      <Card title={t('usage.tokenTrend')}>
-        <Chart option={trendOption} height={220} />
-      </Card>
-
-      {/* 最近使用：按 Agent 日 token */}
-      <Card title={t('usage.recentTop')}>
-        <Chart option={agentOption} height={220} />
-      </Card>
-
-      {/* 分解 + 上限 */}
-      <Card title={t('usage.byStage')}>
-        {byStage.map(([stage, cost]) => (
-          <div key={stage} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-            <span>{stage}</span><span className="mono dim">{fmtTok(cost)}</span>
+        {/* 总览卡 */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+          <Stat icon="◔" tint="var(--accent)" tintBg="var(--accent-soft)"
+            label={t('usage.totalTokens')} value={fmtTok(totalTok)} sub={`${totalCalls} ${t('usage.calls')}`} />
+          <Stat icon="↯" tint="var(--flag)" tintBg="var(--flag-soft)"
+            label={t('usage.todayTokens')} value={fmtTok(todayTok)} sub={today} />
+          <Stat icon="◍" tint="var(--ok)" tintBg="var(--ok-soft)"
+            label={t('usage.activeAgents')}
+            value={`${team.filter((m) => m.status === 'active').length}/${team.length}`}
+            sub={capped ? t('usage.capHit') : undefined} />
+          {/* 预算卡：唯一钱口径 + 进度条 + 上限编辑 */}
+          <div className="u-card" style={{ padding: '12px 14px', display: 'flex', gap: 10 }}>
+            <span className="stat-ic" style={{ color: capped ? 'var(--err)' : 'var(--accent)', background: capped ? 'var(--err-soft)' : 'var(--accent-soft)' }}>¥</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="dim3" style={{ fontSize: 10 }}>{t('usage.budget')}</div>
+              <div className="mono" style={{ fontSize: 15, fontWeight: 560, marginTop: 2 }}>
+                {fmtYuan(spent)}{limitMc != null && <span className="dim3" style={{ fontSize: 12 }}> / {fmtYuan(limitMc)}</span>}
+              </div>
+              <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', marginTop: 6, overflow: 'hidden' }}>
+                <div style={{ width: `${pct}%`, height: '100%', background: capped ? 'var(--err)' : 'var(--accent)' }} />
+              </div>
+              {editing ? (
+                <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+                  <input value={editLimit} onChange={(e) => setEditLimit(e.target.value)} placeholder={t('usage.limitHint')}
+                    className="mono" style={{ flex: 1, minWidth: 0, fontSize: 10, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 6px', outline: 'none' }} />
+                  <button className="btn primary" style={{ fontSize: 10, padding: '2px 8px' }} onClick={async () => {
+                    await api.setUsageLimit(parseLimitInput(editLimit)); setEditing(false); await refresh()
+                  }}>{t('cards.confirm')}</button>
+                </div>
+              ) : (
+                <button className="icon-btn" style={{ fontSize: 10, padding: '2px 4px', marginTop: 4 }}
+                  onClick={() => { setEditLimit(usageTotal?.limit_cents ? String(usageTotal.limit_cents / 100) : ''); setEditing(true) }}>
+                  {capped ? `⚠ ${t('usage.capHit')}` : t('usage.setLimit')}
+                </button>
+              )}
+            </div>
           </div>
-        ))}
-        <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-          {editing ? (
-            <>
-              <input value={editLimit} onChange={(e) => setEditLimit(e.target.value)} placeholder={t('usage.limitHint')}
-                className="mono" style={{ flex: 1, fontSize: 11, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px', outline: 'none' }} />
-              <button className="btn primary" style={{ fontSize: 11 }} onClick={async () => {
-                await api.setUsageLimit(parseLimitInput(editLimit)); setEditing(false); await refresh()
-              }}>{t('cards.confirm')}</button>
-              <button className="btn" style={{ fontSize: 11 }} onClick={() => setEditing(false)}>✕</button>
-            </>
-          ) : (
-            <button className="btn" style={{ fontSize: 11 }} onClick={() => {
-              setEditLimit(usageTotal?.limit_cents ? String(usageTotal.limit_cents / 100) : ''); setEditing(true)
-            }}>{t('usage.setLimit')}</button>
-          )}
         </div>
-      </Card>
+
+        {/* 筛选条 */}
+        <div className="u-card" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '8px 14px' }}>
+          <Filter label={t('usage.granularity')}>
+            <div className="seg">
+              {(['day', 'hour'] as const).map((g) => (
+                <button key={g} className={granularity === g ? 'on' : ''} onClick={() => setGranularity(g)}>
+                  {t(g === 'day' ? 'usage.gDay' : 'usage.gHour')}
+                </button>
+              ))}
+            </div>
+          </Filter>
+          <Filter label={t('usage.range')}>
+            <div className="seg">
+              {RANGES.map((d) => (
+                <button key={d} className={days === d ? 'on' : ''} onClick={() => setDays(d)}>
+                  {d === 0 ? t('usage.rAll') : t('usage.rDays', { n: d })}
+                </button>
+              ))}
+            </div>
+          </Filter>
+          <div style={{ flex: 1 }} />
+          <button className="btn" style={{ fontSize: 11 }} onClick={async () => { load(); await refresh() }}>
+            ⟳ {t('usage.refresh')}
+          </button>
+        </div>
+
+        {/* 消费榜单 + 阶段分解 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 14 }}>
+          <div className="u-card">
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+              <span className="u-card-title">{t('usage.leaderboard')}</span>
+              <div style={{ flex: 1 }} />
+              <div className="seg">
+                {(['team', 'model'] as const).map((b) => (
+                  <button key={b} className={board === b ? 'on' : ''} onClick={() => setBoard(b)}>
+                    {t(b === 'team' ? 'usage.teamRank' : 'usage.modelDist')}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <Chart option={boardOption} height={210} />
+          </div>
+          <div className="u-card">
+            <div className="u-card-title" style={{ marginBottom: 10 }}>{t('usage.byStage')}</div>
+            {byStage.map(([stage, tok]) => (
+              <div key={stage} style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}>
+                  <span>{stage}</span>
+                  <span className="mono dim3">{fmtTok(tok)}</span>
+                </div>
+                <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
+                  <div style={{ width: `${(tok / (byStage[0]?.[1] || 1)) * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 2 }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 趋势两图 */}
+        <div className="u-card">
+          <div className="u-card-title" style={{ marginBottom: 6 }}>{t('usage.tokenTrend')}</div>
+          <Chart option={trendOption} height={230} />
+        </div>
+        <div className="u-card">
+          <div className="u-card-title" style={{ marginBottom: 6 }}>{t('usage.recentTop')}</div>
+          <Chart option={agentOption} height={230} />
+        </div>
+      </div>
     </div>
   )
 }
 
-function tokensOfRow(r: { prompt_tokens?: number; completion_tokens?: number; tool_output_tokens?: number }) {
-  return (r.prompt_tokens ?? 0) + (r.completion_tokens ?? 0) + (r.tool_output_tokens ?? 0)
-}
+const tokOf = (b: UsageBucket) => b.prompt_tokens + b.completion_tokens + b.tool_output_tokens
 
-function Stat({ label, value, alert }: { label: string; value: string; alert?: string }) {
-  return (
-    <div className="row-line" style={{ padding: '10px 12px', borderRadius: 8 }}>
-      <div className="dim3" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div className="mono" style={{ fontSize: 16, fontWeight: 560 }}>{value}</div>
-      {alert && <div className="dim" style={{ fontSize: 10, marginTop: 3, color: 'var(--err)' }}>{alert}</div>}
-    </div>
-  )
-}
-
-function Seg({ value, onChange, options }: {
-  value: string
-  onChange: (v: string) => void
-  options: [string, string][]
+function Stat({ icon, tint, tintBg, label, value, sub }: {
+  icon: string; tint: string; tintBg: string; label: string; value: string; sub?: string
 }) {
   return (
-    <span style={{ display: 'inline-flex', gap: 2 }}>
-      {options.map(([v, label]) => (
-        <button key={v} className="btn" onClick={() => onChange(v)}
-          style={{
-            padding: '2px 8px', fontSize: 10, border: 'none',
-            background: value === v ? 'var(--accent-soft)' : 'none',
-            color: value === v ? 'var(--accent)' : 'var(--text-3)',
-            fontWeight: value === v ? 560 : 400,
-          }}>{label}</button>
-      ))}
-    </span>
+    <div className="u-card" style={{ padding: '12px 14px', display: 'flex', gap: 10 }}>
+      <span className="stat-ic" style={{ color: tint, background: tintBg }}>{icon}</span>
+      <div style={{ minWidth: 0 }}>
+        <div className="dim3" style={{ fontSize: 10 }}>{label}</div>
+        <div className="mono" style={{ fontSize: 17, fontWeight: 560, marginTop: 2 }}>{value}</div>
+        {sub && <div className="dim3" style={{ fontSize: 10, marginTop: 2 }}>{sub}</div>}
+      </div>
+    </div>
   )
 }
 
-function Card({ title, extra, children }: { title: string; extra?: React.ReactNode; children: React.ReactNode }) {
+function Filter({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="row-line" style={{ padding: '10px 12px', borderRadius: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 560 }}>{title}</span>
-        <div style={{ flex: 1 }} />
-        {extra}
-      </div>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <span className="dim3" style={{ fontSize: 10 }}>{label}</span>
       {children}
-    </div>
+    </span>
   )
 }
 

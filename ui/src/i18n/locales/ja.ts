@@ -151,6 +151,7 @@ export default {
     budget: '予算',
     totalTokens: '総 Token',
     totalCalls: '総呼出',
+    activeAgents: 'アクティブなエージェント',
     todayTokens: '今日の Token',
     granularity: '粒度',
     gDay: '日別',

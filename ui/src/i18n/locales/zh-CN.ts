@@ -151,6 +151,7 @@ export default {
     budget: '预算',
     totalTokens: '总 Token',
     totalCalls: '总调用',
+    activeAgents: '活跃 Agent',
     todayTokens: '今日 Token',
     granularity: '粒度',
     gDay: '按天',

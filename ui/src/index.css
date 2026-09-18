@@ -135,3 +135,31 @@ input, textarea { font: inherit; color: var(--text); }
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* 用量详情（票 23）：仪表盘卡片 / 分段控件 / 统计图标 */
+.u-card {
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px;
+}
+.u-card-title { font-size: 13px; font-weight: 560; }
+
+.seg {
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--bg-3); border-radius: 7px;
+}
+.seg button {
+  font: inherit; font-size: 11px; border: none; cursor: pointer;
+  padding: 3px 10px; border-radius: 5px;
+  color: var(--text-3); background: transparent;
+}
+.seg button:hover { color: var(--text-2); }
+.seg button.on {
+  color: var(--text); background: var(--bg-1);
+  box-shadow: 0 1px 2px rgba(0,0,0,.18);
+}
+[data-theme='light'] .seg button.on { background: #fff; border: 1px solid var(--border); box-shadow: none; }
+
+.stat-ic {
+  width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 14px;
+}

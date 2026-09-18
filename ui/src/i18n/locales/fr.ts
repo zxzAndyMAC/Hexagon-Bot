@@ -151,6 +151,7 @@ export default {
     budget: 'Budget',
     totalTokens: 'Tokens totaux',
     totalCalls: 'Appels totaux',
+    activeAgents: 'Agents actifs',
     todayTokens: 'Tokens du jour',
     granularity: 'Granularité',
     gDay: 'Par jour',
