@@ -129,6 +129,31 @@ fn usage(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
     with_wb(&state, |wb| wb.usage())
 }
 
+#[tauri::command]
+fn open_stage(state: tauri::State<AppState>, seq: usize) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.open_stage(seq))
+}
+
+#[tauri::command]
+fn autonomy(state: tauri::State<AppState>) -> Result<String, String> {
+    with_wb(&state, |wb| wb.autonomy())
+}
+
+#[tauri::command]
+fn set_autonomy(state: tauri::State<AppState>, level: String) -> Result<(), String> {
+    with_wb(&state, |wb| wb.set_autonomy(&level))
+}
+
+#[tauri::command]
+fn owner_away(state: tauri::State<AppState>) -> Result<(), String> {
+    with_wb(&state, |wb| wb.owner_away())
+}
+
+#[tauri::command]
+fn owner_back(state: tauri::State<AppState>) -> Result<Value, String> {
+    with_wb(&state, |wb| wb.owner_back())
+}
+
 /// 日志开关：app 级设置持久化在 config 目录，开发期默认开（Debug），release 默认 Info。
 fn log_enabled_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path()
@@ -219,6 +244,11 @@ pub fn run() {
             stage_status,
             pending_questions,
             usage,
+            open_stage,
+            autonomy,
+            set_autonomy,
+            owner_away,
+            owner_back,
             set_log_enabled,
             log_enabled,
         ])

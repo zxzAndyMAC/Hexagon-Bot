@@ -1,0 +1,143 @@
+// 核 API 接缝：Tauri 环境走 invoke；浏览器开发环境用内置 mock 数据。
+// UI 的唯一通道 = 这些命令 + 事件推送，没有旁路。类型对齐 api.rs 的 JSON 形状。
+
+import { invoke } from '@tauri-apps/api/core'
+
+export const isTauri = '__TAURI_INTERNALS__' in window || '__TAURI__' in window
+
+async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (isTauri) return invoke<T>(cmd, args)
+  return mock<T>(cmd)
+}
+
+// ---- 与核侧 JSON 形状对齐 ----
+
+export interface StageRow {
+  run_id: string
+  stage: string
+  seq: number
+  state: 'pending' | 'active' | 'done' | 'skipped' | 'waiting_stamp' | 'rejected'
+}
+
+export interface TimelineItem {
+  event: {
+    id: number
+    kind: string // snake_case EventKind
+    agent_id: string | null
+    stage_run_id: string | null
+    payload: Record<string, unknown>
+    created_at: string
+  }
+  message: { id: number; author: string; body: string; tokens: unknown[] } | null
+}
+
+export interface PendingQuestion {
+  id: string
+  kind: string // permission / stamp / publish / proposal_confirm …
+  payload: Record<string, unknown>
+  state: string
+}
+
+export interface TeamRow {
+  id: string
+  role: string
+  model_slot: string | null
+  status: 'active' | 'sleeping'
+}
+
+export interface ArtifactRow {
+  id: string
+  path: string
+  kind: string
+  tier: string
+  stage_run_id: string | null
+  author: string | null
+  version: number
+  status: string
+  upstream_id: string | null
+}
+
+export interface UsageTotal {
+  _total: boolean
+  spent_mc: number
+  limit_cents: number | null
+}
+
+export const api = {
+  ping: () => call<string>('core_ping'),
+  openProject: (dir: string, name: string, roles: [string, string][], packJson?: string) =>
+    call<void>('open_project', { dir, name, roles, packJson: packJson ?? null }),
+  timeline: (after?: number, limit = 500) =>
+    call<TimelineItem[]>('timeline', { after: after ?? null, limit }),
+  sendMessage: (body: string) => call<number>('send_message', { body }),
+  answerPermission: (questionId: string, allow: boolean, rememberShape?: string, scope = 'activation') =>
+    call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
+  advance: () => call<unknown>('advance'),
+  openStage: (seq: number) => call<unknown>('open_stage', { seq }),
+  runChecks: () => call<unknown>('run_checks'),
+  stamp: () => call<unknown>('stamp'),
+  rewind: (toSeq: number) => call<unknown>('rewind', { toSeq }),
+  skip: () => call<unknown>('skip'),
+  pause: () => call<void>('pause'),
+  resume: () => call<void>('resume'),
+  sleepAll: () => call<void>('sleep_all'),
+  artifacts: () => call<ArtifactRow[]>('artifacts'),
+  artifactContent: (path: string) => call<string>('artifact_content', { path }),
+  team: () => call<TeamRow[]>('team'),
+  stageStatus: () => call<StageRow[]>('stage_status'),
+  pendingQuestions: async (): Promise<PendingQuestion[]> => {
+    const rows = await call<{ id: string; kind: string; payload: string; state: string }[]>(
+      'pending_questions',
+    )
+    return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload || '{}') }))
+  },
+  usage: () => call<UsageTotal[]>('usage'),
+  setLogEnabled: (enabled: boolean) => call<void>('set_log_enabled', { enabled }),
+  logEnabled: () => call<boolean>('log_enabled'),
+  autonomy: () => call<string>('autonomy'),
+  setAutonomy: (level: string) => call<void>('set_autonomy', { level }),
+  ownerAway: () => call<void>('owner_away'),
+  ownerBack: () => call<unknown>('owner_back'),
+}
+
+// ---- 浏览器 dev mock：参照 hexagon-main-mock.html 的场景，形状同核侧 ----
+function mock<T>(cmd: string): T {
+  switch (cmd) {
+    case 'core_ping':
+      return 'hexagon-core ok' as T
+    case 'stage_status':
+      return [
+        { run_id: 'r0', stage: '需求', seq: 0, state: 'done' },
+        { run_id: 'r1', stage: '界面稿', seq: 1, state: 'done' },
+        { run_id: 'r2', stage: '接口', seq: 2, state: 'active' },
+        { run_id: 'r3', stage: '实现', seq: 3, state: 'pending' },
+      ] as T
+    case 'team':
+      return [
+        { id: 'a0', role: '产品策划', status: 'active', model_slot: 'chat' },
+        { id: 'a1', role: '架构师', status: 'active', model_slot: 'chat' },
+        { id: 'a2', role: '前端', status: 'sleeping', model_slot: null },
+      ] as T
+    case 'artifacts':
+      return [
+        { id: 'art1', path: 'specs/prd.md', kind: '规格', tier: 'parse', stage_run_id: 'r0', author: 'a0', version: 2, status: 'stamped', upstream_id: null },
+        { id: 'art2', path: 'ui/screens.md', kind: '界面稿', tier: 'header', stage_run_id: 'r1', author: 'a1', version: 1, status: 'valid', upstream_id: null },
+      ] as T
+    case 'timeline':
+      return [
+        { event: { id: 1, kind: 'stage_started', agent_id: null, stage_run_id: 'r2', payload: { stage: '接口' }, created_at: '' }, message: null },
+        { event: { id: 2, kind: 'agent_message', agent_id: 'a1', stage_run_id: 'r2', payload: {}, created_at: '' }, message: { id: 1, author: 'a1', body: '接口说明 v1 已交付，见产物。', tokens: [] } },
+        { event: { id: 3, kind: 'artifact_delivered', agent_id: 'a1', stage_run_id: 'r2', payload: { path: 'api/spec.md', kind: '接口说明', version: 1 }, created_at: '' }, message: null },
+      ] as T
+    case 'pending_questions':
+      return [] as T
+    case 'usage':
+      return [{ _total: true, spent_mc: 38200, limit_cents: 20000 }] as T
+    case 'autonomy':
+      return 'L0' as T
+    case 'log_enabled':
+      return true as T
+    default:
+      return null as T
+  }
+}

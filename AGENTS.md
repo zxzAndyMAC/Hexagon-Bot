@@ -11,6 +11,11 @@
 - `src-tauri/`：Tauri 2 壳，只转发 IPC
 - `ui/`：Vite + React + TS + Tailwind v4 + zustand
 
+## UI 约定（ADR 0051）
+
+- 新功能注册的 action 必须进 keymap（`mod+X` 规范形，双平台渲染 ⌘/Ctrl）；按钮 tooltip 必须显示当前绑定
+- 界面文案全走 i18next key（七语言）；Agent 产物/项目内容不翻译
+
 ## Agent skills
 
 ### Issue tracker
