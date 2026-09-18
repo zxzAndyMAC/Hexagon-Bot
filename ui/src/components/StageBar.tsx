@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { api } from '../api'
+import { Icon } from './Icon'
 
 export function StageBar() {
   const { t } = useTranslation()
@@ -26,8 +27,8 @@ export function StageBar() {
                   : {}
           }
         >
-          {s.state === 'done' && '✓ '}
-          {s.state === 'waiting_stamp' && `◆ ${t('stage.stampPoint')} `}
+          {s.state === 'done' && <Icon name="check" size={9} />}
+          {s.state === 'waiting_stamp' && <><Icon name="stamp" size={9} /> {t('stage.stampPoint')} </>}
           {s.stage}
         </span>
       ))}
@@ -43,8 +44,8 @@ export function StageBar() {
         </>
       )}
       {!active && nextPending && (
-        <button className="btn primary" onClick={() => act(() => api.openStage(nextPending.seq))}>
-          ▸ {nextPending.stage}
+        <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={() => act(() => api.openStage(nextPending.seq))}>
+          <Icon name="chevron-right" size={11} /> {nextPending.stage}
         </button>
       )}
       {!active && !nextPending && stages.length > 0 && (

@@ -12,6 +12,7 @@ import {
   breakdownRows, capReached, centsToMc, fmtTok, fmtYuan,
   groupTokens, parseLimitInput, perAgentSeries, tokenTypeSeries,
 } from '../usage'
+import { Icon, type IconName } from './Icon'
 
 echarts.use([LineChart, PieChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -150,17 +151,17 @@ export function UsageDetailTab() {
 
         {/* 总览卡 */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-          <Stat icon="◔" tint="var(--accent)" tintBg="var(--accent-soft)"
+          <Stat icon="usage" tint="var(--accent)" tintBg="var(--accent-soft)"
             label={t('usage.totalTokens')} value={fmtTok(totalTok)} sub={`${totalCalls} ${t('usage.calls')}`} />
-          <Stat icon="↯" tint="var(--flag)" tintBg="var(--flag-soft)"
+          <Stat icon="bolt" tint="var(--flag)" tintBg="var(--flag-soft)"
             label={t('usage.todayTokens')} value={fmtTok(todayTok)} sub={today} />
-          <Stat icon="◍" tint="var(--ok)" tintBg="var(--ok-soft)"
+          <Stat icon="agent" tint="var(--ok)" tintBg="var(--ok-soft)"
             label={t('usage.activeAgents')}
             value={`${team.filter((m) => m.status === 'active').length}/${team.length}`}
             sub={capped ? t('usage.capHit') : undefined} />
           {/* 预算卡：唯一钱口径 + 进度条 + 上限编辑 */}
           <div className="u-card" style={{ padding: '12px 14px', display: 'flex', gap: 10 }}>
-            <span className="stat-ic" style={{ color: capped ? 'var(--err)' : 'var(--accent)', background: capped ? 'var(--err-soft)' : 'var(--accent-soft)' }}>¥</span>
+            <span className="stat-ic" style={{ color: capped ? 'var(--err)' : 'var(--accent)', background: capped ? 'var(--err-soft)' : 'var(--accent-soft)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="yen" size={15} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="dim3" style={{ fontSize: 10 }}>{t('usage.budget')}</div>
               <div className="mono" style={{ fontSize: 15, fontWeight: 560, marginTop: 2 }}>
@@ -178,9 +179,9 @@ export function UsageDetailTab() {
                   }}>{t('cards.confirm')}</button>
                 </div>
               ) : (
-                <button className="icon-btn" style={{ fontSize: 10, padding: '2px 4px', marginTop: 4 }}
+                <button className="icon-btn" style={{ fontSize: 10, padding: '2px 4px', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 4 }}
                   onClick={() => { setEditLimit(usageTotal?.limit_cents ? String(usageTotal.limit_cents / 100) : ''); setEditing(true) }}>
-                  {capped ? `⚠ ${t('usage.capHit')}` : t('usage.setLimit')}
+                  {capped ? <><Icon name="warn" size={10} /> {t('usage.capHit')}</> : t('usage.setLimit')}
                 </button>
               )}
             </div>
@@ -202,8 +203,8 @@ export function UsageDetailTab() {
             <RangePicker range={range} onChange={setRange} />
           </Filter>
           <div style={{ flex: 1 }} />
-          <button className="btn" style={{ fontSize: 11 }} onClick={async () => { load(); await refresh() }}>
-            ⟳ {t('usage.refresh')}
+          <button className="btn" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={async () => { load(); await refresh() }}>
+            <Icon name="refresh" size={11} /> {t('usage.refresh')}
           </button>
         </div>
 
@@ -256,11 +257,11 @@ export function UsageDetailTab() {
 const tokOf = (b: UsageBucket) => b.prompt_tokens + b.completion_tokens + b.tool_output_tokens
 
 function Stat({ icon, tint, tintBg, label, value, sub }: {
-  icon: string; tint: string; tintBg: string; label: string; value: string; sub?: string
+  icon: IconName; tint: string; tintBg: string; label: string; value: string; sub?: string
 }) {
   return (
     <div className="u-card" style={{ padding: '12px 14px', display: 'flex', gap: 10 }}>
-      <span className="stat-ic" style={{ color: tint, background: tintBg }}>{icon}</span>
+      <span className="stat-ic" style={{ color: tint, background: tintBg, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={icon} size={15} /></span>
       <div style={{ minWidth: 0 }}>
         <div className="dim3" style={{ fontSize: 10 }}>{label}</div>
         <div className="mono" style={{ fontSize: 17, fontWeight: 560, marginTop: 2 }}>{value}</div>
@@ -318,7 +319,7 @@ function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) =
     <div ref={wrap} style={{ position: 'relative' }}>
       <button className="btn" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6 }}
         onClick={() => setOpen((v) => !v)}>
-        {label} <span className="dim3" style={{ fontSize: 10 }}>▾</span>
+        {label} <span className="dim3" style={{ display: 'inline-flex' }}><Icon name="chevron-down" size={9} /></span>
       </button>
       {open && (
         <div className="u-card" style={{
@@ -346,7 +347,7 @@ function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) =
                 <input type="date" value={custom.from} onChange={(e) => setCustom((c) => ({ ...c, from: e.target.value }))}
                   className="mono" style={{ width: '100%', fontSize: 11, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 6px', outline: 'none', colorScheme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light' }} />
               </div>
-              <span className="dim3" style={{ marginTop: 14 }}>→</span>
+              <span className="dim3" style={{ marginTop: 14, display: 'inline-flex' }}><Icon name="arrow-right" size={11} /></span>
               <div style={{ flex: 1 }}>
                 <div className="dim3" style={{ fontSize: 10, marginBottom: 3 }}>{t('usage.endDate')}</div>
                 <input type="date" value={custom.to} onChange={(e) => setCustom((c) => ({ ...c, to: e.target.value }))}

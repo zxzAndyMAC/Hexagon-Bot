@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { api } from '../api'
+import { Icon } from './Icon'
 
 // 仓库路径补全的占位数据源——真实实现走核 API 列目录（票 21+ 接）
 const MOCK_PATHS = [
@@ -79,7 +80,10 @@ export function Composer() {
                 color: popup.kind === '@' ? 'var(--accent)' : 'var(--flag)',
               }}
             >
-              <span className="mono">{it.label}</span>
+              <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                {popup.kind === '#' && <Icon name={it.label.endsWith('/') ? 'folder' : 'artifact'} size={11} />}
+                {it.label}
+              </span>
               <span className="dim3" style={{ fontSize: 11 }}>{it.hint}</span>
             </div>
           ))}
@@ -103,7 +107,9 @@ export function Composer() {
           placeholder={t('composer.placeholder')}
           style={{ flex: 1, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', outline: 'none' }}
         />
-        <button className="btn primary" onClick={send}>{t('composer.send')}</button>
+        <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={send}>
+          <Icon name="send" size={12} /> {t('composer.send')}
+        </button>
       </div>
     </div>
   )

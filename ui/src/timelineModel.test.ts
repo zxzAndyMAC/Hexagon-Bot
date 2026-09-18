@@ -52,7 +52,7 @@ describe('nodeMarks', () => {
     const marks = nodeMarks(tl, rows, 2)
     expect(marks[0].pending).toBe(true)
     expect(marks[0].rowIdx).toBe(-1)
-    expect(marks.map((m) => m.icon)).toEqual(['⚠', '◆', '□', '✓', '⚑'])
+    expect(marks.map((m) => m.icon)).toEqual(['warn', 'stamp', 'artifact', 'check', 'flag'])
     expect(marks[1].label).toBe('实现')
     // tool_called 不进刻度
     expect(marks).toHaveLength(5)

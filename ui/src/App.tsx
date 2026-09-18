@@ -17,6 +17,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { api } from './api'
 import { useUiStore } from './store'
 import { PendingCards } from './components/PendingCards'
+import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
 
@@ -83,7 +84,7 @@ export default function App() {
   if (!projectOpen) {
     return <Launcher onOpen={() => setProjectOpen(true)} />
   }
-  // 设置整页：工作台整体换掉（票 29），◀ 返回
+  // 设置整页：工作台整体换掉（票 29），arrow-left 返回
   if (settingsOpen) {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -127,8 +128,8 @@ function TabContent({ tab }: { tab: ReturnType<typeof useUiStore.getState>['tabs
     case 'diff':
       return (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div className="row-line mono" style={{ padding: '8px 14px', fontSize: 12, fontWeight: 560 }}>
-            ± {tab.title}
+          <div className="row-line mono" style={{ padding: '8px 14px', fontSize: 12, fontWeight: 560, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="diff" size={12} /> {tab.title}
           </div>
           <DiffView ops={parseUnifiedDiff(tab.patchText ?? '')} />
         </div>
@@ -164,7 +165,7 @@ function CenterPanes() {
                 style={{ cursor: 'pointer', fontSize: 10 }}
                 onClick={() => setSplitId(t.id)}
               >
-                {t.kind === 'agent' ? (t.role ?? t.title) : t.kind === 'timeline' ? '≣' : t.title}
+                {t.kind === 'agent' ? (t.role ?? t.title) : t.kind === 'timeline' ? <Icon name="list" size={10} /> : t.title}
               </button>
             ))}
           </div>

@@ -3,6 +3,7 @@ import { useUiStore } from '../store'
 import { Avatar } from './Avatar'
 import { UsageTab } from './UsageTab'
 import { bindingFor, formatBinding } from '../keymap'
+import { Icon } from './Icon'
 
 function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | null; status: string } }) {
   const openTab = useUiStore((s) => s.openTab)
@@ -27,8 +28,8 @@ export function SidePanel() {
   if (!railOpen) {
     return (
       <aside className="panel" style={{ width: 36, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 8, gap: 10 }}>
-        <button className="icon-btn" title={`${t('side.artifacts')} · ${tip}`} onClick={() => setRailOpen(true)} style={{ fontSize: 14 }}>
-          ◧
+        <button className="icon-btn" title={`${t('side.artifacts')} · ${tip}`} onClick={() => setRailOpen(true)} style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <Icon name="panel-right" size={14} />
         </button>
         <span className="chip ok" style={{ fontSize: 10 }}>{artifacts.length}</span>
       </aside>
@@ -53,8 +54,8 @@ export function SidePanel() {
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <button className="icon-btn" title={tip} onClick={() => setRailOpen(false)} style={{ fontSize: 12 }}>
-          ◨
+        <button className="icon-btn" title={tip} onClick={() => setRailOpen(false)} style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <Icon name="panel-right" size={12} />
         </button>
       </div>
 

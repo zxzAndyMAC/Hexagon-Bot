@@ -5,10 +5,11 @@ import { useUiStore } from '../store'
 import { extractDiffBlock } from '../diff'
 import { bindingFor, formatBinding } from '../keymap'
 import { severityOf } from '../decisions'
+import { Icon, type IconName } from './Icon'
 
 function CardShell({ tone, icon, title, children }: {
   tone: 'ask' | 'stamp' | 'flag' | 'danger'
-  icon: string
+  icon: IconName
   title: React.ReactNode
   children: React.ReactNode
 }) {
@@ -16,7 +17,9 @@ function CardShell({ tone, icon, title, children }: {
   const color = { ask: 'var(--accent)', stamp: 'var(--accent)', flag: 'var(--flag)', danger: 'var(--err)' }[tone]
   return (
     <div className={cls} style={{ padding: '10px 14px', margin: '6px 14px 0', ...(tone === 'danger' ? { borderColor: 'var(--err)' } : {}) }}>
-      <div style={{ fontWeight: 510, color, marginBottom: 4 }}>{icon} {title}</div>
+      <div style={{ fontWeight: 510, color, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Icon name={icon} size={13} /> {title}
+      </div>
       {children}
     </div>
   )
@@ -55,7 +58,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     const summary = input ? Object.entries(input).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 60) : JSON.stringify(v)}`).join(' ') : ''
     const safety = Boolean(p.safety_net)
     return (
-      <CardShell tone="ask" icon="⚠" title={t('cards.ask')}>
+      <CardShell tone="ask" icon="warn" title={t('cards.ask')}>
         <div className="mono" style={{ fontSize: 12 }}>
           <strong>{tool}</strong> <span className="dim">{summary}</span>
         </div>
@@ -85,7 +88,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
 
   if (q.kind === 'stamp' && !p.proposal_id) {
     return (
-      <CardShell tone="stamp" icon="◆" title={`${t('cards.stageStamp')} · ${String(p.stage ?? '')}`}>
+      <CardShell tone="stamp" icon="stamp" title={`${t('cards.stageStamp')} · ${String(p.stage ?? '')}`}>
         <StageArtifacts runId={String(p.run_id ?? '')} />
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <Btn primary onClick={() => api.stamp()}>{t('cards.confirm')}{top && ` ${approveTip}`}</Btn>
@@ -98,13 +101,13 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   if (q.kind === 'stamp' && p.proposal_id) {
     const warnings = (p.warnings as string[] | undefined) ?? []
     return (
-      <CardShell tone="stamp" icon="⬡" title={`${t('cards.proposalStamp')} · ${String(p.proposal_id)}`}>
+      <CardShell tone="stamp" icon="hex" title={`${t('cards.proposalStamp')} · ${String(p.proposal_id)}`}>
         <div className="dim" style={{ fontSize: 12 }}>
           {t('cards.proposal')} · {String(p.surface ?? '')}
         </div>
         {warnings.length > 0 && (
-          <div className="accent" style={{ fontSize: 12, margin: '4px 0' }}>
-            ⚠ {String(p.warning_text ?? warnings.join(' + '))}
+          <div className="accent" style={{ fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <Icon name="warn" size={11} /> {String(p.warning_text ?? warnings.join(' + '))}
           </div>
         )}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -130,7 +133,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
 
   if (q.kind === 'publish') {
     return (
-      <CardShell tone="danger" icon="⬆" title={t('cards.publish')}>
+      <CardShell tone="danger" icon="publish" title={t('cards.publish')}>
         <div className="mono" style={{ fontSize: 12 }}>
           {String(p.baseline ?? 'main')} → <strong>{String(p.remote ?? 'origin')}</strong>
         </div>
@@ -147,7 +150,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
 
   if (q.kind === 'escalation') {
     return (
-      <CardShell tone="flag" icon="⤺" title={t('cards.escalation')}>
+      <CardShell tone="flag" icon="escalate" title={t('cards.escalation')}>
         <div className="dim" style={{ fontSize: 12 }}>
           flag <span className="mono">{String(p.flag_id ?? '')}</span> → <span className="mono">{String(p.target ?? '')}</span>
         </div>
@@ -160,7 +163,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   }
 
   return (
-    <CardShell tone="ask" icon="?" title={q.kind}>
+    <CardShell tone="ask" icon="help" title={q.kind}>
       <pre className="mono dim" style={{ fontSize: 11, margin: 0 }}>{JSON.stringify(p)}</pre>
     </CardShell>
   )

@@ -7,6 +7,7 @@ import i18n, { SUPPORTED, setLang, type Locale } from '../i18n'
 import { useUiStore, type ThemePref } from '../store'
 import { api } from '../api'
 import { ACTIONS, bindingFor, conflictFor, formatBinding, normalizeEvent, resetBinding, setBinding, type ActionId } from '../keymap'
+import { Icon } from './Icon'
 
 const LANG_NAMES: Record<string, string> = {
   'zh-CN': '简体中文',
@@ -157,7 +158,9 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
         className="row-line"
         style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', background: 'var(--bg-1)', paddingLeft: '84px' }}
       >
-        <button className="btn" onClick={onBack}>◀ {t('settings.back')}</button>
+        <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={onBack}>
+          <Icon name="arrow-left" size={12} /> {t('settings.back')}
+        </button>
         <strong style={{ fontWeight: 510 }}>{t('settings.title')}</strong>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -169,7 +172,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
               style={{
                 textAlign: 'left', border: 'none',
                 background: section === s ? 'var(--bg-2)' : 'transparent',
-                color: section === s ? 'var(--fg-0)' : 'var(--fg-2)',
+                color: section === s ? 'var(--text)' : 'var(--text-2)',
               }}
               onClick={() => setSection(s)}
             >

@@ -1,13 +1,14 @@
 import { useTranslation } from 'react-i18next'
 import { useUiStore, type WorkTab } from '../store'
 import { bindingFor, formatBinding } from '../keymap'
+import { Icon, type IconName } from './Icon'
 
-const KIND_ICON: Record<WorkTab['kind'], string> = {
-  timeline: '≣',
-  artifact: '□',
-  diff: '±',
-  agent: '◍',
-  usage: '◔',
+const KIND_ICON: Record<WorkTab['kind'], IconName> = {
+  timeline: 'list',
+  artifact: 'artifact',
+  diff: 'diff',
+  agent: 'agent',
+  usage: 'usage',
 }
 
 export function TabBar() {
@@ -36,18 +37,18 @@ export function TabBar() {
               maxWidth: 200,
             }}
           >
-            <span style={{ fontSize: 11 }}>{KIND_ICON[tab.kind]}</span>
+            <Icon name={KIND_ICON[tab.kind]} size={11} />
             <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
               {title}
             </span>
             {tab.kind !== 'timeline' && (
               <button
                 className="icon-btn"
-                style={{ fontSize: 10, padding: '0 3px' }}
+                style={{ padding: '0 3px', display: 'inline-flex', alignItems: 'center' }}
                 title={closeTip}
                 onClick={(e) => { e.stopPropagation(); closeTab(tab.id) }}
               >
-                ✕
+                <Icon name="close" size={10} />
               </button>
             )}
           </div>
@@ -56,11 +57,11 @@ export function TabBar() {
       <div style={{ flex: 1 }} />
       <button
         className={`icon-btn ${splitOpen ? 'accent' : ''}`}
-        style={{ fontSize: 13, padding: '2px 8px' }}
+        style={{ padding: '2px 8px', display: 'inline-flex', alignItems: 'center' }}
         title={splitTip}
         onClick={() => setSplitOpen(!splitOpen)}
       >
-        ◫
+        <Icon name="split" size={13} />
       </button>
     </div>
   )

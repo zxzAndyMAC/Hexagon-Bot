@@ -4,6 +4,7 @@ import { useUiStore } from '../store'
 import { api } from '../api'
 import { capReached, centsToMc, fmtTok } from '../usage'
 import { bindingFor, formatBinding } from '../keymap'
+import { Icon } from './Icon'
 
 interface Recent {
   dir: string
@@ -65,11 +66,11 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
       <div ref={menuRef} style={{ position: 'relative' }}>
         <button
           className="btn"
-          style={{ border: 'none', background: 'transparent', fontWeight: 510, fontSize: 13, padding: '2px 6px' }}
+          style={{ border: 'none', background: 'transparent', fontWeight: 510, fontSize: 13, padding: '2px 6px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
           onClick={() => setMenuOpen(!menuOpen)}
           title={t('topbar.projectMenu')}
         >
-          {projectName} ▾
+          {projectName} <Icon name="chevron-down" size={10} />
         </button>
         {menuOpen && (
           <div className="panel" style={{ position: 'absolute', top: '100%', left: 0, zIndex: 40, minWidth: 240, padding: 6, boxShadow: '0 8px 30px rgba(0,0,0,.35)' }}>
@@ -111,7 +112,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
           if (!railOpen) setRailOpen(true)
         }}
       >
-        {capped ? `⚠ ${t('usage.capHit')}` : `${t('topbar.usage')} ${usageTotal ? fmtTok(usageTotal.tokens) : '—'}`}
+        {capped ? <><Icon name="warn" size={10} /> {t('usage.capHit')}</> : `${t('topbar.usage')} ${usageTotal ? fmtTok(usageTotal.tokens) : '—'}`}
         {usageTotal && limitMc != null && ` · ${fmt(usageTotal.spent_mc)}/¥${usageTotal.limit_cents! / 100}`}
       </button>
       <div data-tauri-drag-region style={{ flex: 1, alignSelf: 'stretch' }} />
@@ -122,11 +123,12 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
           onClick={locatePending}
           title={`${formatBinding(bindingFor('approve'))} / ${formatBinding(bindingFor('reject'))}`}
         >
-          ⚠ {t('cards.pending', { count: pending.length })}
+          <Icon name="warn" size={11} /> {t('cards.pending', { count: pending.length })}
         </button>
       )}
       <button
         className="btn danger"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
         title={t('topbar.sleepAllHint')}
         onClick={async () => {
           if (confirm(t('topbar.sleepAllConfirm'))) {
@@ -135,7 +137,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
           }
         }}
       >
-        {t('topbar.sleepAll')}
+        <Icon name="sleep" size={11} /> {t('topbar.sleepAll')}
       </button>
       <button
         className="btn"

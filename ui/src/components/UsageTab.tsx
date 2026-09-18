@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api, type UsageBucket } from '../api'
 import { useUiStore } from '../store'
 import { agentColor } from '../colors'
+import { Icon } from './Icon'
 import {
   breakdownRows, capReached, centsToMc, fmtTok, fmtYuan as fmtY,
   groupTokens, parseLimitInput, perAgentSeries,
@@ -35,7 +36,7 @@ export function UsageTab() {
     <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
       {capped && (
         <div className="chip err" style={{ padding: '6px 10px', fontSize: 12 }}>
-          ⚠ {t('usage.capHit')}
+          <Icon name="warn" size={11} /> {t('usage.capHit')}
         </div>
       )}
 
@@ -75,7 +76,7 @@ export function UsageTab() {
               >
                 {t('cards.confirm')}
               </button>
-              <button className="btn" style={{ fontSize: 11 }} onClick={() => setEditing(false)}>✕</button>
+              <button className="btn" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center' }} onClick={() => setEditing(false)}><Icon name="close" size={11} /></button>
             </>
           ) : (
             <>

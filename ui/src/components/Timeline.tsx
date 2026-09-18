@@ -6,6 +6,7 @@ import type { TimelineItem } from '../api'
 import { useUiStore } from '../store'
 import { buildRows, nodeMarks, type Filter, type NodeMark } from '../timelineModel'
 import { Avatar } from './Avatar'
+import { Icon } from './Icon'
 
 // ---- 渲染 ----
 
@@ -39,7 +40,7 @@ function StageHeader({ item }: { item: TimelineItem }) {
   const n = runId ? artifacts.filter((a) => a.stage_run_id === runId).length : 0
   return (
     <div style={{ padding: '18px 14px 6px', display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ color: 'var(--accent)', fontSize: 11 }}>◆</span>
+      <span style={{ color: 'var(--accent)', display: 'inline-flex' }}><Icon name="stamp" size={11} /></span>
       <span style={{ fontWeight: 560, fontSize: 13 }}>{String(p.stage ?? '')}</span>
       {n > 0 && <span className="chip ok">{n} {t('side.artifacts').toLowerCase()}</span>}
       <div className="sysline" style={{ flex: 1 }} />
@@ -60,8 +61,8 @@ function ReturnSummaryRow({ item }: { item: TimelineItem }) {
   })
   return (
     <div className="card-ask" style={{ margin: '6px 14px', padding: '8px 14px', cursor: 'pointer' }} onClick={() => setOpen(!open)}>
-      <div style={{ fontWeight: 510, color: 'var(--accent)', fontSize: 12 }}>
-        ☰ {t('cards.returnSummary')} · {events} {open ? '▾' : '▸'}
+      <div style={{ fontWeight: 510, color: 'var(--accent)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
+        <Icon name="list" size={11} /> {t('cards.returnSummary')} · {events} <Icon name={open ? 'chevron-down' : 'chevron-right'} size={9} />
         {pending > 0 && <span className="chip amber" style={{ marginLeft: 8 }}>{t('cards.pending', { count: pending })}</span>}
       </div>
       {open && (
@@ -159,16 +160,16 @@ export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineIte
         <div className="sysline" />
         <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           {member && <Avatar agentId={member.id} role={member.role} size={14} />}
-          ⚙ {t('timeline.toolCalls', { count: items.length })} {expanded ? '▾' : '▸'}
+          <Icon name="tool" size={10} /> {t('timeline.toolCalls', { count: items.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
         </span>
       </div>
       {expanded && items.map((it) => (
         <div key={it.event.id} className="sysrow" style={{ paddingLeft: 24 }}>
           <div className="sysline" />
-          <span className="syslabel dim3" style={{ fontSize: 10 }}>
+          <span className="syslabel dim3" style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             {it.event.kind === 'tool_called'
-              ? `→ ${String(it.event.payload.tool ?? '')}`
-              : `← ${it.event.kind}`}
+              ? <><Icon name="arrow-right" size={9} /> {String(it.event.payload.tool ?? '')}</>
+              : <><Icon name="arrow-left" size={9} /> {it.event.kind}</>}
           </span>
         </div>
       ))}
@@ -201,27 +202,29 @@ function NodeRail({ marks, onJump }: { marks: NodeMark[]; onJump: (m: NodeMark) 
       {!open ? (
         <div style={{ width: 14, height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, paddingTop: 40, overflow: 'hidden' }}>
           {marks.map((m, i) => (
-            <span key={i} style={{ fontSize: 8, color: m.pending ? 'var(--warn)' : 'var(--fg-3)' }}>{m.icon}</span>
+            <span key={i} style={{ color: m.pending ? 'var(--warn)' : 'var(--text-3)', display: 'inline-flex' }}>
+              <Icon name={m.icon} size={8} />
+            </span>
           ))}
         </div>
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <span className="dim3" style={{ fontSize: 10, fontWeight: 560 }}>{t('rail.nodes')}</span>
-            <button className="icon-btn" style={{ fontSize: 10 }} onClick={() => setOpen(false)}>✕</button>
+            <button className="icon-btn" style={{ display: 'inline-flex', alignItems: 'center' }} onClick={() => setOpen(false)}><Icon name="close" size={9} /></button>
           </div>
           {marks.map((m, i) => (
             <div
               key={i}
               onClick={() => { onJump(m); setOpen(false) }}
               style={{
-                display: 'flex', gap: 6, alignItems: 'baseline', padding: '3px 4px', borderRadius: 4,
+                display: 'flex', gap: 6, alignItems: 'center', padding: '3px 4px', borderRadius: 4,
                 cursor: 'pointer', fontSize: 11,
-                color: m.pending ? 'var(--warn)' : 'var(--fg-1)',
+                color: m.pending ? 'var(--warn)' : 'var(--text)',
                 animation: m.pending ? 'pulse-amber 1.6s infinite' : undefined,
               }}
             >
-              <span style={{ flexShrink: 0 }}>{m.icon}</span>
+              <Icon name={m.icon} size={11} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.label}</span>
             </div>
           ))}
@@ -313,7 +316,7 @@ export function Timeline() {
             style={{ position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 30, fontSize: 11 }}
             onClick={() => { ref.current?.scrollToIndex({ index: rows.length - 1, behavior: 'smooth' }); setUnseen(0) }}
           >
-            ↓ {t('timeline.newEvents', { count: unseen })}
+            <Icon name="arrow-down" size={11} /> {t('timeline.newEvents', { count: unseen })}
           </button>
         )}
         <NodeRail marks={marks} onJump={jump} />

@@ -1,5 +1,6 @@
 // 时间线密度变换与语义节点的纯函数层（ADR 0051）：过滤、tool call 折叠、节点刻度。
 import type { TimelineItem } from './api'
+import type { IconName } from './components/Icon'
 
 export type Filter = 'all' | 'messages' | 'decisions'
 
@@ -38,20 +39,20 @@ export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
   return rows
 }
 
-export type NodeMark = { rowIdx: number; icon: string; label: string; pending?: boolean }
+export type NodeMark = { rowIdx: number; icon: IconName; label: string; pending?: boolean }
 
-const NODE_ICONS: Record<string, string> = {
-  stage_started: '◆',
-  stamped: '✓',
-  artifact_delivered: '□',
-  flag_submitted: '⚑',
-  flag_adjudicated: '⚑',
-  escalated: '⚠',
+const NODE_ICONS: Record<string, IconName> = {
+  stage_started: 'stamp',
+  stamped: 'check',
+  artifact_delivered: 'artifact',
+  flag_submitted: 'flag',
+  flag_adjudicated: 'flag',
+  escalated: 'warn',
 }
 
 export function nodeMarks(timeline: TimelineItem[], rows: Row[], pendingCount: number): NodeMark[] {
   const marks: NodeMark[] = []
-  if (pendingCount > 0) marks.push({ rowIdx: -1, icon: '⚠', label: `${pendingCount}`, pending: true })
+  if (pendingCount > 0) marks.push({ rowIdx: -1, icon: 'warn', label: `${pendingCount}`, pending: true })
   const rowIndexByItem = new Map<number, number>()
   rows.forEach((r, i) => {
     if (r.type === 'item') rowIndexByItem.set(r.item.event.id, i)

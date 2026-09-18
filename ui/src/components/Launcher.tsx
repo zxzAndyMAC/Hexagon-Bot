@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, isTauri } from '../api'
 import { Wizard } from './Wizard'
+import { Icon } from './Icon'
 
 interface Recent {
   dir: string
@@ -83,9 +84,13 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
         {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
         <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
           {isTauri && (
-            <button className="btn" onClick={() => openDir()}>{t('launch.openDir')}</button>
+            <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={() => openDir()}>
+              <Icon name="folder" size={12} /> {t('launch.openDir')}
+            </button>
           )}
-          <button className="btn primary" onClick={() => setWizard(true)}>{t('launch.newProject')}</button>
+          <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={() => setWizard(true)}>
+            <Icon name="plus" size={12} /> {t('launch.newProject')}
+          </button>
         </div>
       </div>
     </div>
