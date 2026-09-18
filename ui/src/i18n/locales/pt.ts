@@ -116,6 +116,8 @@ export default {
     remember: 'Lembrar forma',
     pending: '{{count}} pendentes',
     escalation: 'Escalado — o responsável decide',
+    contextOverflow: 'Limite de contexto',
+    contextHint: 'Agente pausado no teto de contexto. Aprovar para retomar (contexto reconstruído e podado).',
     agreeContinue: 'Aceitar e retroceder',
     rejectContinue: 'Rejeitar e continuar',
     shapeHint: 'forma, ex. cargo build *',

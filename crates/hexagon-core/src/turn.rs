@@ -21,6 +21,10 @@ const MAX_TOOL_ROUNDS: usize = 8;
 const RETRY_DELAYS_MS: [u64; 3] = [100, 250, 500];
 /// 同工具同错熔断（US57）：连续 N 次相同失败结束回合等负责人。
 const BREAKER_STREAK: usize = 3;
+/// 上下文估算上限（US37）：~120k tok；超了轻量裁剪后仍超 → 暂停问负责人。
+const CONTEXT_CAP_TOKENS: usize = 120_000;
+/// 轻量裁剪的单块上限（字符）：超长 tool_result 截断带标记，其余不动。
+const TRIM_BLOCK_CHARS: usize = 4_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TurnError {
@@ -322,7 +326,82 @@ fn model_visible(e: &ToolError) -> bool {
     )
 }
 
-/// 同工具同错连击计数：相同 (tool, 错误签名) 连续出现才累加，换错/成功清零。
+/// 上下文估算（US37）：按 ~4 字符/tok 粗算，只用于撞限判断不用于计费。
+fn estimate_tokens(messages: &[Message]) -> usize {
+    let chars: usize = messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .map(|b| match b {
+            ContentBlock::Text { text } => text.len(),
+            ContentBlock::ToolUse { input, .. } => input.to_string().len(),
+            ContentBlock::ToolResult { content, .. } => content.len(),
+        })
+        .sum();
+    chars / 4
+}
+
+/// 轻量裁剪（US37）：超长 tool_result 截到 TRIM_BLOCK_CHARS + 标记，其余原样。
+fn trim_context(mut messages: Vec<Message>) -> Vec<Message> {
+    for m in &mut messages {
+        for b in &mut m.content {
+            if let ContentBlock::ToolResult { content, .. } = b {
+                if content.len() > TRIM_BLOCK_CHARS {
+                    let cut = content.len() - TRIM_BLOCK_CHARS;
+                    let mut end = TRIM_BLOCK_CHARS;
+                    while !content.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    content.truncate(end);
+                    content.push_str(&format!("\n…[{cut} chars trimmed]"));
+                }
+            }
+        }
+    }
+    messages
+}
+
+/// 撞限升级（US37）：escalation 待决卡（sub=context_overflow）问负责人。
+fn context_overflow(
+    db: &Db,
+    ctx: &ToolContext,
+    est_tokens: usize,
+    reason: &str,
+) -> Result<TurnOutcome, TurnError> {
+    let role: String = db
+        .conn()
+        .query_row(
+            "SELECT role FROM agents WHERE id=?1",
+            [&ctx.agent_id],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|_| ctx.agent_id.clone());
+    let qid = format!("q{}", db.next_id("q")?);
+    db.conn().execute(
+        "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
+         VALUES (?1,?2,?3,'escalation',?4)",
+        rusqlite::params![
+            qid,
+            ctx.project_id,
+            ctx.agent_id,
+            json!({
+                "sub": "context_overflow",
+                "role": role,
+                "est_tokens": est_tokens,
+                "cap": CONTEXT_CAP_TOKENS,
+                "reason": reason,
+            })
+            .to_string()
+        ],
+    )?;
+    db.append_event(
+        &ctx.project_id,
+        EventKind::Escalated,
+        json!({"reason": "context_overflow", "question_id": qid, "est_tokens": est_tokens, "cap": CONTEXT_CAP_TOKENS}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )?;
+    Ok(TurnOutcome::AwaitingPermission(qid))
+}
 fn bump_streak(
     state: &mut Option<(String, String)>,
     streak: &mut usize,
@@ -532,6 +611,12 @@ fn run_turn_impl(
             if crate::orchestra::is_paused(db, &ctx.project_id)? {
                 return Ok(TurnOutcome::Failed("paused by owner mid-turn".into()));
             }
+            // US37：轻量裁剪始终做；仍超上限 → 暂停问负责人（不做自动全量摘要）
+            messages = trim_context(messages);
+            let est = estimate_tokens(&messages);
+            if est > CONTEXT_CAP_TOKENS {
+                return context_overflow(db, ctx, est, "estimate");
+            }
             log::debug!(
                 "model call round={round} agent={} slot={}",
                 ctx.agent_id,
@@ -553,6 +638,10 @@ fn run_turn_impl(
                 resp.usage.completion_tokens
             );
             crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
+            // US37：模型输出被截（stop=max_tokens）= 上下文已顶，同一路径问负责人
+            if resp.stop == StopReason::MaxTokens {
+                return context_overflow(db, ctx, est, "max_tokens");
+            }
             messages.push(Message {
                 role: Role::Assistant,
                 content: resp.content.clone(),
@@ -1117,5 +1206,84 @@ mod tests {
         let out = run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
         assert_eq!(out, TurnOutcome::Finished);
         assert_eq!(system_events(&db, "tool_breaker"), 0);
+    }
+
+    // ---- US37：上下文撞停问负责人 ----
+
+    /// 估算 prompt 仍超上限 → 升级卡问负责人，不做自动全量摘要，模型零调用。
+    #[test]
+    fn us37_context_overflow_escalates() {
+        let (db, reg, ctx, _dir) = setup();
+        // 600KB 系统层 ≈ 150k tok > 120k 上限——轻量裁剪救不回系统层
+        let big = PromptLayer::new(LayerLevel::Brief, "x".repeat(600_000));
+        let provider = ScriptedProvider::new(vec![text_response("不该被调用")]);
+        let out = run_turn(&db, &provider, &reg, &ctx, vec![big], "go").unwrap();
+        match out {
+            TurnOutcome::AwaitingPermission(qid) => {
+                let (kind, payload): (String, String) = db
+                    .conn()
+                    .query_row(
+                        "SELECT kind, payload FROM pending_questions WHERE id=?1",
+                        [&qid],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!(kind, "escalation");
+                assert!(payload.contains("context_overflow"), "payload {payload}");
+            }
+            o => panic!("expected AwaitingPermission, got {o:?}"),
+        }
+        assert!(provider.recorded().is_empty(), "撞限在模型调用前");
+    }
+
+    /// 模型 stop=max_tokens 走同一路径（输出被截=上下文已顶）。
+    #[test]
+    fn us37_max_tokens_escalates() {
+        let (db, reg, ctx, _dir) = setup();
+        let provider = ScriptedProvider::new(vec![ChatResponse {
+            content: vec![ContentBlock::Text {
+                text: "半句话".into(),
+            }],
+            stop: StopReason::MaxTokens,
+            usage: Default::default(),
+        }]);
+        let out = run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        assert!(
+            matches!(out, TurnOutcome::AwaitingPermission(_)),
+            "got {out:?}"
+        );
+    }
+
+    /// 轻量裁剪：超长 tool_result 截断带标记；小消息不动。
+    #[test]
+    fn us37_trim_truncates_tool_results() {
+        let msgs = vec![
+            Message {
+                role: Role::Tool,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "y".repeat(9000),
+                    is_error: false,
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "short".into(),
+                }],
+            },
+        ];
+        let out = trim_context(msgs);
+        match &out[0].content[0] {
+            ContentBlock::ToolResult { content, .. } => {
+                assert!(content.len() < 5000, "still {} chars", content.len());
+                assert!(content.contains("trimmed"), "marker missing: {content}");
+            }
+            _ => panic!(),
+        }
+        match &out[1].content[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "short"),
+            _ => panic!(),
+        }
     }
 }

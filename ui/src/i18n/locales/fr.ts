@@ -116,6 +116,8 @@ export default {
     remember: 'Mémoriser la forme',
     pending: '{{count}} en attente',
     escalation: 'Escaladé — le responsable décide',
+    contextOverflow: 'Limite de contexte',
+    contextHint: 'Agent en pause au plafond de contexte. Approuver pour reprendre (contexte reconstruit et élagué).',
     agreeContinue: 'Accepter et reculer',
     rejectContinue: 'Rejeter et continuer',
     shapeHint: 'forme, ex. cargo build *',

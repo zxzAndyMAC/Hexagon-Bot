@@ -116,6 +116,8 @@ export default {
     remember: 'Remember shape',
     pending: '{{count}} pending',
     escalation: 'Escalated — needs owner',
+    contextOverflow: 'Context limit hit',
+    contextHint: 'Agent paused at context cap. Approve to resume (context rebuilt + trimmed).',
     agreeContinue: 'Agree & rewind',
     rejectContinue: 'Reject & continue',
     shapeHint: 'shape, e.g. cargo build *',

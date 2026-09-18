@@ -223,6 +223,7 @@ impl Workbench {
     }
 
     /// 升级卡裁决：payload 取 flag_id → review::adjudicate_flag；标记问题已答。
+    /// sub=context_overflow（US37）走撞限语义：放行=续跑回合，驳回=回合收场。
     pub fn adjudicate_flag(&self, qid: &str, agree: bool) -> Result<Value, ApiError> {
         let payload: String = self.db.conn().query_row(
             "SELECT payload FROM pending_questions
@@ -230,6 +231,36 @@ impl Workbench {
             rusqlite::params![qid, self.project_id],
             |r| r.get(0),
         )?;
+        let pv: Value = serde_json::from_str(&payload)?;
+        if pv["sub"].as_str() == Some("context_overflow") {
+            self.db.conn().execute(
+                "UPDATE pending_questions SET state='answered', answered_at=datetime('now') WHERE id=?1",
+                [qid],
+            )?;
+            self.db.append_event(
+                &self.project_id,
+                EventKind::System,
+                json!({
+                    "kind": if agree { "context_resumed" } else { "context_denied" },
+                    "question_id": qid,
+                    "est_tokens": pv["est_tokens"],
+                    "by": "owner",
+                }),
+                None,
+                None,
+            )?;
+            if !agree {
+                return Ok(json!({"resumed": false}));
+            }
+            // 放行：以「继续」指令续跑一回合（上下文重建自带轻量裁剪）
+            let role = pv["role"].as_str().unwrap_or_default().to_string();
+            let out = self.run_turn_opts(
+                &role,
+                "上下文撞限已由负责人放行。请接着完成未竟任务（上下文已重建+裁剪）。",
+                false,
+            )?;
+            return Ok(json!({"resumed": true, "outcome": format!("{out:?}")}));
+        }
         let flag_id = serde_json::from_str::<Value>(&payload)?["flag_id"]
             .as_str()
             .unwrap_or_default()
@@ -1443,6 +1474,42 @@ mod tests {
         );
         // 只跑了方案 + 一轮工具：第 3 次模型调用没发生
         assert!(!dir.path().join("src/b.rs").exists());
+    }
+
+    /// US37：上下文撞限升级卡——放行则续跑回合，驳回则收场。
+    #[test]
+    fn us37_context_resume_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = fastpath_wb(dir.path());
+        let prov = Arc::new(ScriptedProvider::new(vec![text_response("续跑完成")]));
+        wb.register_provider("default", prov.clone());
+        wb.db
+            .conn()
+            .execute("UPDATE agents SET status='active' WHERE id='a0'", [])
+            .unwrap();
+        // 手工塞一张 context_overflow 升级卡（等价于回合撞限挂起态）
+        wb.db.conn().execute(
+            "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
+             VALUES ('qcx','p1','a0','escalation',
+                     '{\"sub\":\"context_overflow\",\"role\":\"后端\",\"est_tokens\":130000,\"cap\":120000,\"reason\":\"estimate\"}')",
+            [],
+        ).unwrap();
+        // 放行 → 卡销 + context_resumed 事件 + 模型被再召续跑
+        wb.adjudicate_flag("qcx", true).unwrap();
+        let st: String = wb
+            .db
+            .conn()
+            .query_row(
+                "SELECT state FROM pending_questions WHERE id='qcx'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(st, "answered");
+        assert_eq!(prov.recorded().len(), 1, "放行须续跑一回合");
+        let tl = wb.timeline(None, 50).unwrap();
+        assert!(tl.iter().any(|i| i.event.kind == EventKind::System
+            && i.event.payload.to_string().contains("context_resumed")));
     }
 
     #[test]

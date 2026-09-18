@@ -116,6 +116,8 @@ export default {
     remember: '形を記憶',
     pending: '{{count}} 件待決',
     escalation: 'エスカレーション——オーナー裁定',
+    contextOverflow: 'コンテキスト上限',
+    contextHint: 'コンテキスト上限で一時停止。承認で再開（再構成+軽量裁剪）。',
     agreeContinue: '同意して巻き戻し',
     rejectContinue: '否認して続行',
     shapeHint: '形、例: cargo build *',

@@ -162,11 +162,19 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   }
 
   if (q.kind === 'escalation') {
+    const isContext = p.sub === 'context_overflow'
     return (
-      <CardShell tone="flag" icon="escalate" title={t('cards.escalation')}>
-        <div className="dim" style={{ fontSize: 12 }}>
-          flag <span className="mono">{String(p.flag_id ?? '')}</span> → <span className="mono">{String(p.target ?? '')}</span>
-        </div>
+      <CardShell tone="flag" icon="escalate" title={isContext ? t('cards.contextOverflow') : t('cards.escalation')}>
+        {isContext ? (
+          <div className="dim" style={{ fontSize: 12 }}>
+            <span className="mono">{String(p.role ?? '')}</span> · ~{String(p.est_tokens ?? '?')}/{String(p.cap ?? '?')} tok
+            <div style={{ marginTop: 4 }}>{t('cards.contextHint')}</div>
+          </div>
+        ) : (
+          <div className="dim" style={{ fontSize: 12 }}>
+            flag <span className="mono">{String(p.flag_id ?? '')}</span> → <span className="mono">{String(p.target ?? '')}</span>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <Btn primary onClick={() => api.adjudicateFlag(q.id, true)}>{t('cards.agreeContinue')}{top && ` ${approveTip}`}</Btn>
           <Btn danger onClick={() => api.adjudicateFlag(q.id, false)}>{t('cards.rejectContinue')}{top && ` ${rejectTip}`}</Btn>

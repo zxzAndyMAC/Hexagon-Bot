@@ -116,6 +116,8 @@ export default {
     remember: '記住形狀',
     pending: '{{count}} 項待決',
     escalation: '升級——需負責人裁決',
+    contextOverflow: '上下文撞限',
+    contextHint: '上下文到頂暫停中。放行則以重建+裁剪的上下文續跑。',
     agreeContinue: '同意撥回',
     rejectContinue: '駁回繼續',
     shapeHint: '形狀，如 cargo build *',
