@@ -38,6 +38,8 @@ pub enum TurnError {
     Json(#[from] serde_json::Error),
     #[error("agent not found: {0}")]
     NoAgent(String),
+    #[error(transparent)]
+    Orch(#[from] crate::orchestra::OrchError),
 }
 
 // ---------- 提示词装配：优先级链 ----------
@@ -360,6 +362,32 @@ pub fn run_turn(
     layers: Vec<PromptLayer>,
     user_input: &str,
 ) -> Result<TurnOutcome, TurnError> {
+    run_turn_impl(db, provider, registry, ctx, layers, user_input, false)
+}
+
+/// 方案先行回合（US15 快速通道）：工具循环前先发一段不阻塞方案消息，
+/// 负责人有打断窗口；方案进执行上下文。
+pub fn run_turn_planned(
+    db: &Db,
+    provider: &dyn ModelProvider,
+    registry: &Registry,
+    ctx: &ToolContext,
+    layers: Vec<PromptLayer>,
+    user_input: &str,
+) -> Result<TurnOutcome, TurnError> {
+    run_turn_impl(db, provider, registry, ctx, layers, user_input, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_turn_impl(
+    db: &Db,
+    provider: &dyn ModelProvider,
+    registry: &Registry,
+    ctx: &ToolContext,
+    layers: Vec<PromptLayer>,
+    user_input: &str,
+    plan_first: bool,
+) -> Result<TurnOutcome, TurnError> {
     // 休眠语义：不调度、不召模型
     let (status, model_slot): (String, Option<String>) = db
         .conn()
@@ -439,6 +467,51 @@ pub fn run_turn(
     };
 
     let outcome = (|| -> Result<TurnOutcome, TurnError> {
+        // US15 方案预告：剥掉工具要一段方案，落群聊（不阻塞），方案进执行上下文
+        if plan_first {
+            let plan_req = ChatRequest {
+                messages: vec![
+                    messages[0].clone(),
+                    Message {
+                        role: Role::User,
+                        content: vec![ContentBlock::Text {
+                            text: json!({
+                                "instruction": "用一段话给出执行方案（本轮不要调用工具），随后进入执行",
+                                "task": user_input
+                            })
+                            .to_string(),
+                        }],
+                    },
+                ],
+                tools: vec![],
+                ..req_base.clone()
+            };
+            let resp = complete_with_retry(db, ctx, provider, &plan_req)?;
+            crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
+            let text: String = resp
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.is_empty() {
+                db.append_message(
+                    &ctx.project_id,
+                    &ctx.agent_id,
+                    &text,
+                    &[],
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                )?;
+            }
+            messages.push(Message {
+                role: Role::Assistant,
+                content: resp.content,
+            });
+        }
         // 同工具同错熔断状态：跨 round 连击计数（US57）
         let mut last_fail: Option<(String, String)> = None;
         let mut streak = 0usize;
@@ -455,6 +528,10 @@ pub fn run_turn(
             )))
         };
         for round in 0..MAX_TOOL_ROUNDS {
+            // 负责人在工具循环期间可暂停（US15）：每轮顶检，叫停即收回合
+            if crate::orchestra::is_paused(db, &ctx.project_id)? {
+                return Ok(TurnOutcome::Failed("paused by owner mid-turn".into()));
+            }
             log::debug!(
                 "model call round={round} agent={} slot={}",
                 ctx.agent_id,

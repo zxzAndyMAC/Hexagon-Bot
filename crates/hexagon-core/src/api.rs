@@ -429,6 +429,16 @@ impl Workbench {
 
     /// 跑某角色一回合（若激活）。有 interrupted run 未恢复时硬挡（票 37 恢复闸）。
     pub fn run_turn(&self, role: &str, input: &str) -> Result<TurnOutcome, ApiError> {
+        self.run_turn_opts(role, input, false)
+    }
+
+    /// plan_first=true 时回合先发不阻塞方案消息再进工具循环（US15 快速通道）。
+    fn run_turn_opts(
+        &self,
+        role: &str,
+        input: &str,
+        plan_first: bool,
+    ) -> Result<TurnOutcome, ApiError> {
         if let Ok(rid) = self.db.conn().query_row(
             "SELECT id FROM stage_runs
              WHERE project_id=?1 AND state='interrupted' LIMIT 1",
@@ -451,14 +461,26 @@ impl Workbench {
             .get(slot.as_deref().unwrap_or("default"))
             .or_else(|| self.providers.get("default"))
             .ok_or_else(|| ApiError::NoProvider(slot.unwrap_or_default()))?;
-        Ok(turn::run_turn(
-            &self.db,
-            provider.as_ref(),
-            &self.registry,
-            &ctx,
-            vec![],
-            input,
-        )?)
+        let run = if plan_first {
+            turn::run_turn_planned(
+                &self.db,
+                provider.as_ref(),
+                &self.registry,
+                &ctx,
+                vec![],
+                input,
+            )
+        } else {
+            turn::run_turn(
+                &self.db,
+                provider.as_ref(),
+                &self.registry,
+                &ctx,
+                vec![],
+                input,
+            )
+        };
+        Ok(run?)
     }
 
     /// 快速通道派发（票 26）：负责人直接把任务派给一个已勾选角色，
@@ -491,7 +513,8 @@ impl Workbench {
             Some(&aid),
             None,
         )?;
-        self.run_turn(role, input)
+        // US15：动手前先发不阻塞方案消息，负责人有打断窗口
+        self.run_turn_opts(role, input, true)
     }
 
     /// 升级为流程包（票 26）：不换目录——钉包副本 + mode='pack' + PackUpgraded 事件。
@@ -1227,6 +1250,7 @@ mod tests {
         wb.register_provider(
             "default",
             Arc::new(ScriptedProvider::new(vec![
+                text_response("方案：定位登录态校验后修过期判断"),
                 tool_response(vec![(
                     "t1",
                     "artifact_write",
@@ -1267,6 +1291,7 @@ mod tests {
         wb.register_provider(
             "default",
             Arc::new(ScriptedProvider::new(vec![
+                text_response("方案：改错别字"),
                 text_response("fast fix"),
                 text_response("spec done"),
             ])),
@@ -1287,7 +1312,10 @@ mod tests {
         let mut wb = fastpath_wb(dir.path());
         wb.register_provider(
             "default",
-            Arc::new(ScriptedProvider::new(vec![text_response("ok")])),
+            Arc::new(ScriptedProvider::new(vec![
+                text_response("方案：先看一遍"),
+                text_response("ok"),
+            ])),
         );
         wb.set_agent_sleeping("a0", true).unwrap();
         wb.dispatch("后端", "活来了").unwrap();
@@ -1299,6 +1327,122 @@ mod tests {
         assert_eq!(st, "active");
         // 未勾选角色 → NoRole
         assert!(matches!(wb.dispatch("运维", "x"), Err(ApiError::NoRole(_))));
+    }
+
+    /// US15：快速通道动手前先发方案——方案消息先于首个工具调用落时间线，不阻塞等确认。
+    #[test]
+    fn us15_dispatch_posts_plan_before_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = fastpath_wb(dir.path());
+        let prov = Arc::new(ScriptedProvider::new(vec![
+            text_response("方案：先读 auth.rs 定位登录态校验，再修过期判断"),
+            tool_response(vec![(
+                "t1",
+                "artifact_write",
+                json!({"path":"notes/fix.md","content":"---\nkind: 笔记\nauthor: a0\n---\n## 记\nx"}),
+            )]),
+            text_response("done"),
+        ]));
+        wb.register_provider("default", prov.clone());
+        wb.dispatch("后端", "修登录 bug").unwrap();
+        let tl = wb.timeline(None, 50).unwrap();
+        let plan_idx = tl
+            .iter()
+            .position(|i| {
+                i.message
+                    .as_ref()
+                    .map(|m| m.body.contains("方案"))
+                    .unwrap_or(false)
+            })
+            .expect("plan message missing");
+        let tool_idx = tl
+            .iter()
+            .position(|i| i.event.kind == EventKind::ToolCalled)
+            .expect("tool call missing");
+        assert!(plan_idx < tool_idx, "plan must land before first tool call");
+        assert_eq!(prov.recorded().len(), 3); // 方案 1 + 执行 2，不阻塞
+        assert!(dir.path().join(".hexagon/notes/fix.md").exists());
+    }
+
+    /// US15：负责人在工具循环期间可暂停——循环每轮顶检 paused 状态。
+    #[test]
+    fn us15_owner_pauses_mid_tool_loop() {
+        // 第 2 次模型调用时经第二库句柄落 paused 事件，模拟工具循环中被叫停
+        struct PauseOnNth {
+            script: std::sync::Mutex<std::collections::VecDeque<crate::provider::ChatResponse>>,
+            db2: std::sync::Mutex<Db>,
+            pid: String,
+            nth: usize,
+            calls: std::sync::Mutex<usize>,
+        }
+        impl crate::provider::ModelProvider for PauseOnNth {
+            fn complete(
+                &self,
+                _req: &crate::provider::ChatRequest,
+            ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+                let n = {
+                    let mut c = self.calls.lock().unwrap();
+                    *c += 1;
+                    *c
+                };
+                if n == self.nth {
+                    self.db2
+                        .lock()
+                        .unwrap()
+                        .append_event(&self.pid, EventKind::Paused, json!({}), None, None)
+                        .unwrap();
+                }
+                self.script
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .ok_or(crate::provider::ProviderError::ScriptExhausted)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb =
+            Workbench::open(dir.path(), "t", &[("a0".into(), "后端".into())], None).unwrap();
+        wb.db
+            .conn()
+            .execute(
+                "UPDATE projects SET mode='fastpath', fastpath_agent_id='a0' WHERE id='p1'",
+                [],
+            )
+            .unwrap();
+        let db2 = Db::open(dir.path().join(".hexagon/state.db")).unwrap();
+        wb.register_provider(
+            "default",
+            Arc::new(PauseOnNth {
+                script: std::sync::Mutex::new(
+                    vec![
+                        text_response("方案：两步走"),
+                        tool_response(vec![(
+                            "t1",
+                            "fs_write",
+                            json!({"path":"src/a.rs","content":"x"}),
+                        )]),
+                        tool_response(vec![(
+                            "t2",
+                            "fs_write",
+                            json!({"path":"src/b.rs","content":"x"}),
+                        )]),
+                        text_response("done"),
+                    ]
+                    .into(),
+                ),
+                db2: std::sync::Mutex::new(db2),
+                pid: "p1".into(),
+                nth: 2,
+                calls: std::sync::Mutex::new(0),
+            }),
+        );
+        let out = wb.dispatch("后端", "干活").unwrap();
+        assert!(
+            matches!(out, TurnOutcome::Failed(ref e) if e.contains("paused")),
+            "got {out:?}"
+        );
+        // 只跑了方案 + 一轮工具：第 3 次模型调用没发生
+        assert!(!dir.path().join("src/b.rs").exists());
     }
 
     #[test]
