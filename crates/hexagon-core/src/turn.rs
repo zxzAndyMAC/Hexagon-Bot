@@ -16,6 +16,11 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 const MAX_TOOL_ROUNDS: usize = 8;
+/// 瞬时重试（US57）：Transport 类抖动按 100/250/500ms 指数退避，最多 3 次；
+/// Refused（4xx/权限拒绝）、MissingCredential、ScriptExhausted 不重试直接上报。
+const RETRY_DELAYS_MS: [u64; 3] = [100, 250, 500];
+/// 同工具同错熔断（US57）：连续 N 次相同失败结束回合等负责人。
+const BREAKER_STREAK: usize = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TurnError {
@@ -264,6 +269,73 @@ pub fn build_brief_context(
 
 // ---------- 回合执行 ----------
 
+/// 可重试的供应商错：只有 Transport 类瞬时抖动；4xx/拒绝/缺凭据/脚本耗尽直传。
+fn retryable(e: &crate::provider::ProviderError) -> bool {
+    matches!(e, crate::provider::ProviderError::Transport(_))
+}
+
+/// 模型调用 + 瞬时重试（US57）。重试全程落 System 事件留痕。
+fn complete_with_retry(
+    db: &Db,
+    ctx: &ToolContext,
+    provider: &dyn ModelProvider,
+    req: &ChatRequest,
+) -> Result<ChatResponse, TurnError> {
+    let mut attempt = 0usize;
+    loop {
+        match provider.complete(req) {
+            Ok(resp) => return Ok(resp),
+            Err(e) if retryable(&e) && attempt < RETRY_DELAYS_MS.len() => {
+                attempt += 1;
+                log::warn!(
+                    "provider transient error, retry {attempt}/{}: {e}",
+                    RETRY_DELAYS_MS.len()
+                );
+                db.append_event(
+                    &ctx.project_id,
+                    EventKind::System,
+                    json!({"kind": "provider_retry", "attempt": attempt, "err": e.to_string()}),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                )?;
+                std::thread::sleep(std::time::Duration::from_millis(
+                    RETRY_DELAYS_MS[attempt - 1],
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// 模型可自救的工具错 → is_error 回喂；基建错（trace/db/sqlite）上抛。
+fn model_visible(e: &ToolError) -> bool {
+    matches!(
+        e,
+        ToolError::PathEscape(_)
+            | ToolError::Io(_)
+            | ToolError::BadInput(_)
+            | ToolError::Exec(_)
+            | ToolError::Artifact(_)
+            | ToolError::UnknownQuestion(_)
+    )
+}
+
+/// 同工具同错连击计数：相同 (tool, 错误签名) 连续出现才累加，换错/成功清零。
+fn bump_streak(
+    state: &mut Option<(String, String)>,
+    streak: &mut usize,
+    tool: &str,
+    sig: &str,
+) -> usize {
+    if state.as_ref() == Some(&(tool.to_string(), sig.to_string())) {
+        *streak += 1;
+    } else {
+        *state = Some((tool.to_string(), sig.to_string()));
+        *streak = 1;
+    }
+    *streak
+}
+
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnOutcome {
@@ -367,16 +439,36 @@ pub fn run_turn(
     };
 
     let outcome = (|| -> Result<TurnOutcome, TurnError> {
+        // 同工具同错熔断状态：跨 round 连击计数（US57）
+        let mut last_fail: Option<(String, String)> = None;
+        let mut streak = 0usize;
+        let breaker = |db: &Db, tool: &str, sig: &str| -> Result<TurnOutcome, TurnError> {
+            db.append_event(
+                &ctx.project_id,
+                EventKind::System,
+                json!({"kind": "tool_breaker", "tool": tool, "streak": BREAKER_STREAK, "err": sig}),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+            )?;
+            Ok(TurnOutcome::Failed(format!(
+                "tool breaker: {tool} failed {BREAKER_STREAK}x consecutively: {sig}"
+            )))
+        };
         for round in 0..MAX_TOOL_ROUNDS {
             log::debug!(
                 "model call round={round} agent={} slot={}",
                 ctx.agent_id,
                 req_base.model_slot
             );
-            let resp = provider.complete(&ChatRequest {
-                messages: messages.clone(),
-                ..req_base.clone()
-            })?;
+            let resp = complete_with_retry(
+                db,
+                ctx,
+                provider,
+                &ChatRequest {
+                    messages: messages.clone(),
+                    ..req_base.clone()
+                },
+            )?;
             log::debug!(
                 "model resp: stop={:?} prompt_tok={} completion_tok={}",
                 resp.stop,
@@ -424,23 +516,46 @@ pub fn run_turn(
                 return Ok(TurnOutcome::Finished);
             }
 
-            // 执行工具调用，结果回喂
+            // 执行工具调用，结果回喂；同工具同错连 BREAKER_STREAK 次熔断（US57）
             let mut results = Vec::new();
             for (id, name, input) in tool_uses {
-                match registry.call(db, ctx, &name, input)? {
-                    CallOutcome::Done(v) => results.push(ContentBlock::ToolResult {
-                        tool_use_id: id,
-                        content: v.to_string(),
-                        is_error: false,
-                    }),
-                    CallOutcome::Denied(reason) => results.push(ContentBlock::ToolResult {
-                        tool_use_id: id,
-                        content: format!("denied: {reason}"),
-                        is_error: true,
-                    }),
-                    CallOutcome::Asked(qid) => {
+                match registry.call(db, ctx, &name, input) {
+                    Ok(CallOutcome::Done(v)) => {
+                        last_fail = None;
+                        streak = 0;
+                        results.push(ContentBlock::ToolResult {
+                            tool_use_id: id,
+                            content: v.to_string(),
+                            is_error: false,
+                        })
+                    }
+                    Ok(CallOutcome::Denied(reason)) => {
+                        let sig = format!("denied: {reason}");
+                        if bump_streak(&mut last_fail, &mut streak, &name, &sig) >= BREAKER_STREAK {
+                            return breaker(db, &name, &sig);
+                        }
+                        results.push(ContentBlock::ToolResult {
+                            tool_use_id: id,
+                            content: sig,
+                            is_error: true,
+                        })
+                    }
+                    Ok(CallOutcome::Asked(qid)) => {
                         return Ok(TurnOutcome::AwaitingPermission(qid));
                     }
+                    Err(e) if model_visible(&e) => {
+                        // 模型可自救的错回喂，下轮换参/换法；同错连击熔断
+                        let sig = e.to_string();
+                        if bump_streak(&mut last_fail, &mut streak, &name, &sig) >= BREAKER_STREAK {
+                            return breaker(db, &name, &sig);
+                        }
+                        results.push(ContentBlock::ToolResult {
+                            tool_use_id: id,
+                            content: format!("error: {sig}"),
+                            is_error: true,
+                        })
+                    }
+                    Err(e) => return Err(e.into()), // 基建错（trace/db/sqlite）上抛
                 }
             }
             let tool_bytes: usize = results
@@ -802,5 +917,128 @@ mod tests {
             _ => panic!(),
         };
         assert!(!sys.contains("agents.md"));
+    }
+
+    // ---- US57：瞬时重试与同错熔断 ----
+
+    /// 可回放错误的假供应商：脚本条目是 Result，记录调用次数。
+    struct FlakyProvider {
+        script: std::sync::Mutex<
+            std::collections::VecDeque<Result<ChatResponse, crate::provider::ProviderError>>,
+        >,
+        calls: std::sync::Mutex<usize>,
+    }
+    impl FlakyProvider {
+        fn new(script: Vec<Result<ChatResponse, crate::provider::ProviderError>>) -> Self {
+            Self {
+                script: std::sync::Mutex::new(script.into()),
+                calls: std::sync::Mutex::new(0),
+            }
+        }
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+    impl ModelProvider for FlakyProvider {
+        fn complete(
+            &self,
+            _req: &ChatRequest,
+        ) -> Result<ChatResponse, crate::provider::ProviderError> {
+            *self.calls.lock().unwrap() += 1;
+            self.script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Err(crate::provider::ProviderError::ScriptExhausted))
+        }
+    }
+
+    fn system_events(db: &Db, marker: &str) -> usize {
+        db.timeline("p1", None, 200, None)
+            .unwrap()
+            .iter()
+            .filter(|i| {
+                i.event.kind == EventKind::System && i.event.payload.to_string().contains(marker)
+            })
+            .count()
+    }
+
+    #[test]
+    fn us57_transient_retry_recovers() {
+        let (db, reg, ctx, _dir) = setup();
+        let provider = FlakyProvider::new(vec![
+            Err(crate::provider::ProviderError::Transport("timeout".into())),
+            Err(crate::provider::ProviderError::Transport("reset".into())),
+            Ok(text_response("好了")),
+        ]);
+        let out = run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        assert_eq!(out, TurnOutcome::Finished);
+        assert_eq!(provider.calls(), 3); // 1 初调 + 2 重试
+        assert_eq!(system_events(&db, "provider_retry"), 2);
+    }
+
+    #[test]
+    fn us57_retry_exhausted_fails_turn() {
+        let (db, reg, ctx, _dir) = setup();
+        // 4 次全 Transport：初调 + 3 次重试用尽仍败 → 回合失败
+        let provider = FlakyProvider::new(vec![
+            Err(crate::provider::ProviderError::Transport("t".into())),
+            Err(crate::provider::ProviderError::Transport("t".into())),
+            Err(crate::provider::ProviderError::Transport("t".into())),
+            Err(crate::provider::ProviderError::Transport("t".into())),
+            Ok(text_response("不该到")),
+        ]);
+        assert!(run_turn(&db, &provider, &reg, &ctx, vec![], "go").is_err());
+        assert_eq!(provider.calls(), 4); // 最多 3 次重试
+        assert_eq!(system_events(&db, "provider_retry"), 3);
+    }
+
+    #[test]
+    fn us57_refused_never_retried() {
+        let (db, reg, ctx, _dir) = setup();
+        // Refused（4xx/权限拒绝类）：不重试，一次即败
+        let provider = FlakyProvider::new(vec![
+            Err(crate::provider::ProviderError::Refused("403".into())),
+            Ok(text_response("不该到")),
+        ]);
+        assert!(run_turn(&db, &provider, &reg, &ctx, vec![], "go").is_err());
+        assert_eq!(provider.calls(), 1);
+        assert_eq!(system_events(&db, "provider_retry"), 0);
+    }
+
+    #[test]
+    fn us57_same_tool_same_error_breaker() {
+        let (db, reg, ctx, _dir) = setup();
+        // 同一 fs_read 读不存在的文件连错：第 3 次熔断结束回合
+        let provider = ScriptedProvider::new(vec![
+            tool_response(vec![("t1", "fs_read", json!({"path": "nope.md"}))]),
+            tool_response(vec![("t2", "fs_read", json!({"path": "nope.md"}))]),
+            tool_response(vec![("t3", "fs_read", json!({"path": "nope.md"}))]),
+            text_response("不该到"),
+        ]);
+        match run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap() {
+            TurnOutcome::Failed(e) => assert!(e.contains("tool breaker"), "got {e}"),
+            o => panic!("expected breaker Failed, got {o:?}"),
+        }
+        assert_eq!(provider.recorded().len(), 3); // 熔断在第 3 次错，第 4 次模型调用不发生
+        assert_eq!(system_events(&db, "tool_breaker"), 1);
+    }
+
+    #[test]
+    fn us57_streak_resets_on_success() {
+        let (db, reg, ctx, dir) = setup();
+        std::fs::write(dir.path().join("ok.md"), "hi").unwrap();
+        // 错、错、成、错、错、完：连击从未到 3，不熔断
+        let provider = ScriptedProvider::new(vec![
+            tool_response(vec![("t1", "fs_read", json!({"path": "nope.md"}))]),
+            tool_response(vec![("t2", "fs_read", json!({"path": "nope.md"}))]),
+            tool_response(vec![("t3", "fs_read", json!({"path": "ok.md"}))]),
+            tool_response(vec![("t4", "fs_read", json!({"path": "nope.md"}))]),
+            tool_response(vec![("t5", "fs_read", json!({"path": "nope.md"}))]),
+            text_response("done"),
+        ]);
+        let out = run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        assert_eq!(out, TurnOutcome::Finished);
+        assert_eq!(system_events(&db, "tool_breaker"), 0);
     }
 }
