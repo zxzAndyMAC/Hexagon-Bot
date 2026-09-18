@@ -53,6 +53,7 @@ export default {
     artifact_rejected: 'artefact rejeté',
     review_passed: 'revue acceptée',
     review_rejected: 'revue rejetée',
+    review_skipped: 'revue ignorée',
     flag_submitted: 'retour en amont',
     flag_adjudicated: 'retour arbitré',
     backfill_executed: 'remplissage auto',

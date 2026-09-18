@@ -53,6 +53,7 @@ export default {
     artifact_rejected: 'artifact rejected',
     review_passed: 'review passed',
     review_rejected: 'review rejected',
+    review_skipped: 'review skipped',
     flag_submitted: 'flag-back',
     flag_adjudicated: 'flag adjudicated',
     backfill_executed: 'backfill',

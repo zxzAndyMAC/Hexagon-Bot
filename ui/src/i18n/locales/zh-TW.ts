@@ -53,6 +53,7 @@ export default {
     artifact_rejected: '產物被拒',
     review_passed: '複審通過',
     review_rejected: '複審駁回',
+    review_skipped: '複審跳過',
     flag_submitted: '打回',
     flag_adjudicated: '打回裁決',
     backfill_executed: '自動回填',

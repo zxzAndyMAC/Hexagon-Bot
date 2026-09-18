@@ -29,6 +29,7 @@ pub enum EventKind {
     ArtifactRejected,
     ReviewPassed,
     ReviewRejected,
+    ReviewSkipped,
     FlagSubmitted,
     FlagAdjudicated,
     BackfillExecuted,

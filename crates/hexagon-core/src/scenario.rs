@@ -145,6 +145,10 @@ pub enum StepDef {
         remember: Option<String>,
         scope: Option<String>,
     },
+    /// 负责人跳过某次声明复审（留 review_skipped 事件）。
+    SkipReview {
+        artifact_kind: String,
+    },
     /// 以 role 身份对 path 产物提交复审（pass/reject）。
     SubmitReview {
         role: String,
@@ -252,6 +256,9 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
                 remember.as_deref(),
                 scope.as_deref().unwrap_or("activation"),
             )?;
+        }
+        StepDef::SkipReview { artifact_kind } => {
+            wb.skip_review(artifact_kind)?;
         }
         StepDef::SubmitReview {
             role,
@@ -469,6 +476,75 @@ mod tests {
         }))
         .unwrap();
         run_scenario(dir.path(), &sc).unwrap();
+    }
+
+    /// US26：跳过复审留痕——review_skipped 进轨迹且阶段评估视作满足；
+    /// 已通过的复审不可跳（章后无后门）。
+    #[test]
+    fn us26_skip_review_leaves_trace_and_satisfies() {
+        let dir = tempfile::tempdir().unwrap();
+        let sc: Scenario = serde_json::from_value(serde_json::json!({
+            "roles": ["产品策划", "架构师"],
+            "pack": {"name":"t","version":1,"stages":[
+                {"name":"规格","roles":["产品策划"],"due":["规格"],
+                 "reviews":[{"artifact_kind":"规格","reviewer":"架构师"}]}
+            ]},
+            "scripts": {"default": [
+                {"tool_calls": [{"name":"artifact_write","input":{
+                    "path":"specs/prd.md",
+                    "content":"---\nkind: 规格\nauthor: a0\n---\n## 目标\nx\n## 范围\nx\n## 验收\nx"}}]},
+                {"text": "done"}
+            ]},
+            "steps": [
+                {"do":"open_stage","seq":0},
+                {"do":"run_all_active"},
+                {"do":"advance"},
+                {"do":"assert_stage","seq":0,"state":"active"},   // 复审未过挡评估
+                {"do":"skip_review","artifact_kind":"规格"},
+                {"do":"assert_event","kind":"review_skipped","contains":{"artifact_kind":"规格","reviewer":"架构师","by":"owner"}},
+                {"do":"advance"},
+                {"do":"assert_stage","seq":0,"state":"done"}
+            ]
+        }))
+        .unwrap();
+        run_scenario(dir.path(), &sc).unwrap();
+
+        // 已通过不可跳
+        let dir2 = tempfile::tempdir().unwrap();
+        let sc2: Scenario = serde_json::from_value(serde_json::json!({
+            "roles": ["产品策划", "架构师"],
+            "pack": {"name":"t","version":1,"stages":[
+                {"name":"规格","roles":["产品策划"],"due":["规格"],
+                 "reviews":[{"artifact_kind":"规格","reviewer":"架构师"}]}
+            ]},
+            "scripts": {"default": [
+                {"tool_calls": [{"name":"artifact_write","input":{
+                    "path":"specs/prd.md",
+                    "content":"---\nkind: 规格\nauthor: a0\n---\n## 目标\nx\n## 范围\nx\n## 验收\nx"}}]},
+                {"text": "done"}
+            ]},
+            "steps": [
+                {"do":"open_stage","seq":0},
+                {"do":"run_all_active"},
+                {"do":"submit_review","role":"架构师","artifact":"specs/prd.md","verdict":"pass"}
+            ]
+        }))
+        .unwrap();
+        // 手动补 skip：run_scenario 没有 expect-error 步，直接借 Workbench 断言
+        let roles: Vec<&str> = sc2.roles.iter().map(|s| s.as_str()).collect();
+        let mut wb = Workbench::for_test(dir2.path(), &roles, sc2.pack.clone()).unwrap();
+        for (slot, steps) in &sc2.scripts {
+            let resps: Vec<ChatResponse> = steps
+                .iter()
+                .enumerate()
+                .map(|(i, s)| s.to_response(i))
+                .collect();
+            wb.register_provider(slot, Arc::new(ScriptedProvider::new(resps)));
+        }
+        for step in &sc2.steps {
+            run_step(&wb, step).unwrap();
+        }
+        assert!(wb.skip_review("规格").is_err());
     }
 
     /// US33：检验红 → 阶段评估不过（合入盖章的默认挡路在 git::stamp_gate_blocks_merge）。

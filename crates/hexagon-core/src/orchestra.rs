@@ -271,14 +271,15 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
             .query_row(
                 "SELECT kind FROM events
                  WHERE project_id=?1 AND stage_run_id=?2
-                 AND kind IN ('review_passed','review_rejected')
+                 AND kind IN ('review_passed','review_rejected','review_skipped')
                  AND json_extract(payload,'$.artifact_kind')=?3
                  ORDER BY id DESC LIMIT 1",
                 rusqlite::params![project_id, run.id, rev.artifact_kind],
                 |r| r.get(0),
             )
             .ok();
-        if k.as_deref() != Some("review_passed") {
+        // passed 或负责人显式跳过都算满足；rejected 仍是缺口
+        if !matches!(k.as_deref(), Some("review_passed") | Some("review_skipped")) {
             missing.push(format!("review:{}", rev.artifact_kind));
         }
     }

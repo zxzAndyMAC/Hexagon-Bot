@@ -53,6 +53,7 @@ export default {
     artifact_rejected: '成果物却下',
     review_passed: 'レビュー通過',
     review_rejected: 'レビュー差戻し',
+    review_skipped: 'レビュースキップ',
     flag_submitted: '差戻し',
     flag_adjudicated: '差戻し裁定',
     backfill_executed: '自動バックフィル',

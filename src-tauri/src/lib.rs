@@ -103,6 +103,10 @@ fn skip(state: tauri::State<AppState>) -> Result<Value, String> {
     with_wb(&state, |wb| wb.skip())
 }
 #[tauri::command]
+fn skip_review(state: tauri::State<AppState>, artifact_kind: String) -> Result<(), String> {
+    with_wb(&state, |wb| wb.skip_review(&artifact_kind))
+}
+#[tauri::command]
 fn pause(state: tauri::State<AppState>) -> Result<(), String> {
     with_wb(&state, |wb| wb.pause())
 }
@@ -581,6 +585,7 @@ pub fn run() {
             stamp,
             rewind,
             skip,
+            skip_review,
             pause,
             resume,
             sleep_all,

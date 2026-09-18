@@ -126,6 +126,7 @@ export const api = {
   stamp: () => call<unknown>('stamp'),
   rewind: (toSeq: number) => call<unknown>('rewind', { toSeq }),
   skip: () => call<unknown>('skip'),
+  skipReview: (artifactKind: string) => call<void>('skip_review', { artifactKind }),
   pause: () => call<void>('pause'),
   resume: () => call<void>('resume'),
   sleepAll: () => call<void>('sleep_all'),

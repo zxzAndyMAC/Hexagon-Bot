@@ -557,6 +557,47 @@ impl Workbench {
     pub fn stamp(&self) -> Result<Value, ApiError> {
         Ok(orchestra::stamp(&self.db, &self.project_id, self.pack()?)?)
     }
+
+    /// 跳过某次声明复审（票 33 / US26）：留 review_skipped 事件，
+    /// 阶段评估视为该复审满足。已通过的复审不可跳——章后无后门。
+    pub fn skip_review(&self, artifact_kind: &str) -> Result<(), ApiError> {
+        let run = self.active_run()?.ok_or(ApiError::NoStage)?;
+        let pack = self.pack()?;
+        let stage = pack.stages.get(run.seq as usize).ok_or(ApiError::NoStage)?;
+        let decl = stage
+            .reviews
+            .iter()
+            .find(|r| r.artifact_kind == artifact_kind)
+            .ok_or_else(|| ApiError::NoRole(format!("no declared review for {artifact_kind}")))?;
+        let latest: Option<String> = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT kind FROM events
+                 WHERE project_id=?1 AND stage_run_id=?2
+                 AND kind IN ('review_passed','review_rejected','review_skipped')
+                 AND json_extract(payload,'$.artifact_kind')=?3
+                 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![self.project_id, run.id, artifact_kind],
+                |r| r.get(0),
+            )
+            .ok();
+        if latest.as_deref() == Some("review_passed") {
+            return Err(ApiError::NoRole(format!(
+                "review for {artifact_kind} already passed"
+            )));
+        }
+        self.db.append_event(
+            &self.project_id,
+            EventKind::ReviewSkipped,
+            json!({"artifact_kind": artifact_kind, "reviewer": decl.reviewer,
+                   "stage_run_id": run.id, "by": "owner"}),
+            None,
+            Some(&run.id),
+        )?;
+        Ok(())
+    }
+
     pub fn rewind(&self, to_seq: usize) -> Result<Value, ApiError> {
         Ok(orchestra::rewind(
             &self.db,
