@@ -26,6 +26,7 @@
   --warn: #2b6cb0;
   --warn-soft: rgba(43, 108, 176, 0.10);
   --warn-border: rgba(43, 108, 176, 0.35);
+  --on-accent: #ffffff;
   --popover: #ffffff;
   --mono: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --r-xs: 4px;
@@ -61,6 +62,7 @@
   --warn: #6ba5f8;
   --warn-soft: rgba(107, 165, 248, 0.12);
   --warn-border: rgba(107, 165, 248, 0.35);
+  --on-accent: #1a1b1e;
   --popover: #16181b;
 }
 
@@ -117,7 +119,8 @@ button.btn {
   padding: 3px 10px; cursor: pointer;
 }
 button.btn:hover { background: var(--bg-3); color: var(--text); }
-button.btn.primary { color: #fff; background: var(--accent); border-color: transparent; }
+button.btn.primary { color: var(--on-accent); background: var(--accent); border-color: transparent; }
+button.btn.primary.danger { color: #fff; background: var(--err); }
 button.btn.danger { color: var(--err); }
 button.btn:disabled { opacity: 0.4; cursor: default; }
 

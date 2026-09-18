@@ -138,7 +138,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           {String(p.warning ?? t('cards.publishWarn'))}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Btn primary onClick={() => api.confirmPublish(q.id)}>{t('cards.publishConfirm')}{top && ` ${approveTip}`}</Btn>
+          <Btn primary danger onClick={() => api.confirmPublish(q.id)}>{t('cards.publishConfirm')}{top && ` ${approveTip}`}</Btn>
           <Btn danger onClick={() => api.rejectPublish(q.id)}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
         </div>
       </CardShell>
