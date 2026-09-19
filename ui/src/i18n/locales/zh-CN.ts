@@ -283,6 +283,9 @@ export default {
     keySave: '存入钥匙串',
     keyOk: '已就绪',
     keysBlocked: '缺密钥无法开跑',
+    viaDefault: '走 default 槽',
+    noProvider: "槽位 {{slot}} 还没有供应商配置——在此补齐即可放行",
+    keysSettingsHint: '也可以在启动页右上角「设置」里统一管理供应商。',
     sumDir: '目录',
     sumName: '项目名',
     sumRoles: '团队',
@@ -303,6 +306,16 @@ export default {
     newProject: '新建项目',
     mode_pack: '流程包',
     mode_fastpath: '快速通道',
+    settings: '设置',
+  },
+
+  providers: {
+    hint: '模型供应商是全局配置：每个槽位对应一个端点；API key 只写进系统钥匙串（永不回读）。配一个 default 槽可兜底所有角色槽。',
+    empty: '还没有供应商——加一个，Agent 才能调模型',
+    keySet: '已存 key', keyMissing: '缺 key',
+    slot: '槽位', kind: '类型', baseUrl: '端点', model: '模型', key: 'API key',
+    keyKeep: '已存·留空不改',
+    edit: '编辑', delete: '删除', save: '保存供应商', cancel: '取消', add: '添加供应商',
   },
   palette: {
     placeholder: '输入指令或搜索…',

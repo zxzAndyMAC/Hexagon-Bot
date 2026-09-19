@@ -283,6 +283,9 @@ export default {
     keySave: 'Guardar en llavero',
     keyOk: 'Listo',
     keysBlocked: 'Faltan claves para arrancar',
+    viaDefault: 'vía slot default',
+    noProvider: "Sin proveedor para el slot {{slot}} — complétalo aquí para continuar",
+    keysSettingsHint: 'O gestiona proveedores en los ajustes del inicio (engranaje, arriba a la derecha).',
     sumDir: 'Directorio',
     sumName: 'Nombre',
     sumRoles: 'Equipo',
@@ -303,6 +306,16 @@ export default {
     newProject: 'Nuevo proyecto',
     mode_pack: 'pack de proceso',
     mode_fastpath: 'vía rápida',
+    settings: 'Ajustes',
+  },
+
+  providers: {
+    hint: 'Los proveedores son globales: cada slot apunta a un endpoint; las API keys viven en el llavero del SO (solo escritura). Un slot "default" cubre cualquier slot de rol sin configurar.',
+    empty: 'Sin proveedores aún — añade uno para que los agentes llamen al modelo',
+    keySet: 'clave guardada', keyMissing: 'falta clave',
+    slot: 'Slot', kind: 'Tipo', baseUrl: 'Endpoint', model: 'Modelo', key: 'API key',
+    keyKeep: 'guardada — vacío para conservar',
+    edit: 'Editar', delete: 'Eliminar', save: 'Guardar proveedor', cancel: 'Cancelar', add: 'Añadir proveedor',
   },
   palette: {
     placeholder: 'Escribe un comando o busca…',

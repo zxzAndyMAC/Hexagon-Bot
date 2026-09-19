@@ -283,6 +283,9 @@ export default {
     keySave: 'Salvar no keychain',
     keyOk: 'Pronto',
     keysBlocked: 'Faltam chaves para iniciar',
+    viaDefault: 'via slot default',
+    noProvider: "Sem provedor para o slot {{slot}} — preencha aqui para desbloquear",
+    keysSettingsHint: 'Ou gerencie provedores nos ajustes do launcher (engrenagem, canto superior direito).',
     sumDir: 'Diretório',
     sumName: 'Nome',
     sumRoles: 'Equipe',
@@ -303,6 +306,16 @@ export default {
     newProject: 'Novo projeto',
     mode_pack: 'pack de processo',
     mode_fastpath: 'via rápida',
+    settings: 'Ajustes',
+  },
+
+  providers: {
+    hint: 'Os provedores são globais: cada slot aponta para um endpoint; as API keys ficam no chaveiro do SO (somente escrita). Um slot "default" cobre qualquer slot de papel não configurado.',
+    empty: 'Sem provedores ainda — adicione um para os agentes chamarem o modelo',
+    keySet: 'chave salva', keyMissing: 'falta chave',
+    slot: 'Slot', kind: 'Tipo', baseUrl: 'Endpoint', model: 'Modelo', key: 'API key',
+    keyKeep: 'salva — vazio para manter',
+    edit: 'Editar', delete: 'Excluir', save: 'Salvar provedor', cancel: 'Cancelar', add: 'Adicionar provedor',
   },
   palette: {
     placeholder: 'Digite um comando ou busque…',

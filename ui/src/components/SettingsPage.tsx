@@ -8,6 +8,7 @@ import { useUiStore, type ThemePref } from '../store'
 import { api } from '../api'
 import { ACTIONS, bindingFor, conflictFor, formatBinding, normalizeEvent, resetBinding, setBinding, type ActionId } from '../keymap'
 import { Icon } from './Icon'
+import { ProviderManager } from './ProviderManager'
 
 const LANG_NAMES: Record<string, string> = {
   'zh-CN': '简体中文',
@@ -139,7 +140,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
         ))}
       </>
     ),
-    models: <div className="dim3" style={{ fontSize: 12, padding: '20px 0' }}>{t('settings.comingSoon')}</div>,
+    models: <ProviderManager />,
     perms: <div className="dim3" style={{ fontSize: 12, padding: '20px 0' }}>{t('settings.comingSoon')}</div>,
     mcp: <div className="dim3" style={{ fontSize: 12, padding: '20px 0' }}>{t('settings.comingSoon')}</div>,
     usage: <div className="dim3" style={{ fontSize: 12, padding: '20px 0' }}>{t('settings.comingSoon')}</div>,

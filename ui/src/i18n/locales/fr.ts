@@ -283,6 +283,9 @@ export default {
     keySave: 'Enregistrer au trousseau',
     keyOk: 'Prêt',
     keysBlocked: 'Clés manquantes : lancement bloqué',
+    viaDefault: 'via slot default',
+    noProvider: "Aucun fournisseur pour le slot {{slot}} — complétez ici pour débloquer",
+    keysSettingsHint: 'Ou gérez les fournisseurs depuis les réglages du lanceur (rouage, en haut à droite).',
     sumDir: 'Dossier',
     sumName: 'Nom',
     sumRoles: 'Équipe',
@@ -303,6 +306,16 @@ export default {
     newProject: 'Nouveau projet',
     mode_pack: 'pack de processus',
     mode_fastpath: 'voie rapide',
+    settings: 'Réglages',
+  },
+
+  providers: {
+    hint: 'Les fournisseurs sont globaux : chaque slot pointe vers un endpoint ; les clés API vivent dans le trousseau système (écriture seule). Un slot « default » couvre tout slot de rôle non configuré.',
+    empty: 'Aucun fournisseur — ajoutez-en un pour que les agents appellent le modèle',
+    keySet: 'clé enregistrée', keyMissing: 'clé manquante',
+    slot: 'Slot', kind: 'Type', baseUrl: 'Endpoint', model: 'Modèle', key: 'Clé API',
+    keyKeep: 'enregistrée — vide pour conserver',
+    edit: 'Modifier', delete: 'Supprimer', save: 'Enregistrer', cancel: 'Annuler', add: 'Ajouter un fournisseur',
   },
   palette: {
     placeholder: 'Tapez une commande ou recherchez…',

@@ -2,7 +2,7 @@
 // 草稿存 localStorage `hexagon.wizard`，中途退出可续；缺密钥 fail-closed 不能开跑。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, isTauri, type DirReport, type PackDef, type RoleDef } from '../api'
+import { api, isTauri, type DirReport, type PackDef, type ProviderCfg, type RoleDef } from '../api'
 
 const DRAFT_KEY = 'hexagon.wizard'
 
@@ -34,6 +34,15 @@ function loadDraft(): Draft {
 const STEPS = ['dir', 'roles', 'mode', 'instructions', 'keys', 'confirm'] as const
 type Step = (typeof STEPS)[number]
 
+/// 向导 keys 步的内联供应商表单（无配置槽补全用，与启动页设置同一份数据）。
+interface ProvForm {
+  kind: 'anthropic' | 'openai'
+  base_url: string
+  model: string
+  secret: string
+}
+const EMPTY_PROV: ProvForm = { kind: 'openai', base_url: '', model: '', secret: '' }
+
 function Chip({ ok, warn, children }: { ok?: boolean; warn?: boolean; children: React.ReactNode }) {
   return (
     <span
@@ -55,8 +64,9 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [report, setReport] = useState<DirReport | null>(null)
   const [roles, setRoles] = useState<RoleDef[]>([])
   const [packs, setPacks] = useState<PackDef[]>([])
-  const [missingKeys, setMissingKeys] = useState<string[]>([])
+  const [providers, setProviders] = useState<ProviderCfg[]>([])
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
+  const [provForms, setProvForms] = useState<Record<string, ProvForm>>({})
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -100,16 +110,25 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     [pickedRoles],
   )
 
-  // 进入密钥步 / 所选角色变化 → 查缺钥
+  // 进入密钥步 / 所选角色变化 → 查各槽供应商就绪度（配置 + key 双要件）
   const recheckKeys = useCallback(() => {
-    if (!slots.length) { setMissingKeys([]); return }
-    api.checkModelKeys(slots).then(setMissingKeys).catch(() => {})
-  }, [slots])
+    api.listProviders().then(setProviders).catch(() => {})
+  }, [])
   useEffect(() => {
     if (step !== 'keys') return
     const id = setTimeout(recheckKeys, 0)
     return () => clearTimeout(id)
   }, [step, recheckKeys])
+
+  // 槽就绪 = 有供应商配置且 key 已存；default 槽兜底角色槽（同回合内核解析序）
+  const slotReady = useCallback(
+    (slot: string) =>
+      [slot, 'default'].some(
+        (k) => providers.find((p) => p.slot === k)?.key_set === true,
+      ),
+    [providers],
+  )
+  const unready = slots.filter((s) => !slotReady(s))
 
   const dirBlocked =
     !report || !report.exists || report.dirty || (!report.is_git && !draft.initGit)
@@ -121,9 +140,9 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         return draft.mode === 'pack' ? !!draft.packName : !!draft.fastRole
       case 'instructions':
       case 'confirm': return true
-      case 'keys': return missingKeys.length === 0 && slots.length > 0
+      case 'keys': return unready.length === 0 && slots.length > 0
     }
-  }, [step, draft, dirBlocked, missingKeys, slots])
+  }, [step, draft, dirBlocked, unready, slots])
 
   const existingRepoAlign =
     !!report?.is_git && !report?.empty && draft.roles.includes('产品策划')
@@ -146,6 +165,22 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       await api.setModelKey(slot, secret)
       setKeyInputs((k) => ({ ...k, [slot]: '' }))
       recheckKeys()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /// 无配置槽的内联补全：一条 saveProvider 同时落配置与 key。
+  async function saveProviderFor(slot: string) {
+    const f = provForms[slot]
+    if (!f || !f.base_url.trim() || !f.model.trim() || !f.secret.trim()) return
+    setBusy(true)
+    try {
+      await api.saveProvider(slot, f.kind, f.base_url.trim(), f.model.trim(), f.secret.trim())
+      setProvForms((m) => ({ ...m, [slot]: { ...EMPTY_PROV } }))
+      recheckKeys()
+    } catch (e) {
+      setErr(String(e))
     } finally {
       setBusy(false)
     }
@@ -344,40 +379,97 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       <>
         <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.keysHint')}</div>
         {slots.map((slot) => {
-          const keyName = `model/${slot}`
-          const missing = missingKeys.includes(keyName)
+          const cfg = providers.find((p) => p.slot === slot)
+          const fallback = providers.find((p) => p.slot === 'default')
+          const ready = slotReady(slot)
+          const pf = provForms[slot] ?? EMPTY_PROV
           return (
-            <div key={slot} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0' }}>
-              <div style={{ flex: 1 }}>
-                <code style={{ fontSize: 12 }}>{keyName}</code>
-                <div className="dim3" style={{ fontSize: 11 }}>
-                  {pickedRoles.filter((r) => r.model_slot === slot).map((r) => r.name).join('、')}
+            <div key={slot} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ flex: 1 }}>
+                  <code style={{ fontSize: 12 }}>model/{slot}</code>
+                  <div className="dim3" style={{ fontSize: 11 }}>
+                    {pickedRoles.filter((r) => r.model_slot === slot).map((r) => r.name).join('、')}
+                    {cfg && ` · ${cfg.model}`}
+                    {!cfg && fallback?.key_set && ` · ${t('wizard.viaDefault')}`}
+                  </div>
                 </div>
+                {ready && <Chip ok>{t('wizard.keyOk')}</Chip>}
+                {!ready && cfg && (
+                  <>
+                    <input
+                      className="btn"
+                      type="password"
+                      style={{ width: 180 }}
+                      placeholder={t('wizard.keyPlaceholder')}
+                      value={keyInputs[slot] ?? ''}
+                      onChange={(e) =>
+                        setKeyInputs((k) => ({ ...k, [slot]: e.target.value }))
+                      }
+                    />
+                    <button className="btn" disabled={busy} onClick={() => saveKey(slot)}>
+                      {t('wizard.keySave')}
+                    </button>
+                  </>
+                )}
               </div>
-              {missing ? (
-                <>
-                  <input
-                    className="btn"
-                    type="password"
-                    style={{ width: 180 }}
-                    placeholder={t('wizard.keyPlaceholder')}
-                    value={keyInputs[slot] ?? ''}
-                    onChange={(e) =>
-                      setKeyInputs((k) => ({ ...k, [slot]: e.target.value }))
-                    }
-                  />
-                  <button className="btn" disabled={busy} onClick={() => saveKey(slot)}>
-                    {t('wizard.keySave')}
+              {!ready && !cfg && (
+                <div className="panel" style={{ marginTop: 8, padding: '10px 12px' }}>
+                  <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>
+                    {t('wizard.noProvider', { slot })}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '88px 1fr', gap: '6px 8px', alignItems: 'center', fontSize: 12 }}>
+                    <label className="dim3">{t('providers.kind')}</label>
+                    <select
+                      className="btn"
+                      value={pf.kind}
+                      onChange={(e) => {
+                        const kind = e.target.value as ProvForm['kind']
+                        setProvForms((m) => ({
+                          ...m,
+                          [slot]: {
+                            ...pf, kind,
+                            base_url: pf.base_url || (kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'),
+                          },
+                        }))
+                      }}
+                    >
+                      <option value="openai">OpenAI 兼容</option>
+                      <option value="anthropic">Anthropic</option>
+                    </select>
+                    <label className="dim3">{t('providers.baseUrl')}</label>
+                    <input
+                      className="btn mono" value={pf.base_url}
+                      placeholder={pf.kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'}
+                      onChange={(e) => setProvForms((m) => ({ ...m, [slot]: { ...pf, base_url: e.target.value } }))}
+                    />
+                    <label className="dim3">{t('providers.model')}</label>
+                    <input
+                      className="btn mono" value={pf.model} placeholder="gpt-4o / claude-sonnet-4-6 …"
+                      onChange={(e) => setProvForms((m) => ({ ...m, [slot]: { ...pf, model: e.target.value } }))}
+                    />
+                    <label className="dim3">{t('providers.key')}</label>
+                    <input
+                      className="btn mono" type="password" value={pf.secret} placeholder="sk-…"
+                      onChange={(e) => setProvForms((m) => ({ ...m, [slot]: { ...pf, secret: e.target.value } }))}
+                    />
+                  </div>
+                  <button
+                    className="btn primary" style={{ marginTop: 10 }}
+                    disabled={busy || !pf.base_url.trim() || !pf.model.trim() || !pf.secret.trim()}
+                    onClick={() => saveProviderFor(slot)}
+                  >
+                    {t('providers.save')}
                   </button>
-                </>
-              ) : (
-                <Chip ok>{t('wizard.keyOk')}</Chip>
+                </div>
               )}
             </div>
           )
         })}
-        {missingKeys.length > 0 && (
-          <div style={{ color: 'var(--accent)', fontSize: 12, marginTop: 8 }}>{t('wizard.keysBlocked')}</div>
+        {unready.length > 0 && (
+          <div style={{ color: 'var(--accent)', fontSize: 12, marginTop: 8 }}>
+            {t('wizard.keysBlocked')} {t('wizard.keysSettingsHint')}
+          </div>
         )}
       </>
     ),

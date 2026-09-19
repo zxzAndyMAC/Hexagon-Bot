@@ -3,7 +3,7 @@
 
 use hexagon_core::api::Workbench;
 use serde_json::Value;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 struct AppState {
@@ -46,7 +46,8 @@ fn open_project(
         .map(|s| serde_json::from_str(&s))
         .transpose()
         .map_err(|e: serde_json::Error| e.to_string())?;
-    let wb = Workbench::open(&dir, &name, &roles, pack).map_err(|e| e.to_string())?;
+    let mut wb = Workbench::open(&dir, &name, &roles, pack).map_err(|e| e.to_string())?;
+    hexagon_core::providers::register_all(&mut wb, Arc::new(hexagon_core::credentials::OsKeychain));
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(&app, &dir, &name, "pack");
     Ok(())
@@ -477,7 +478,8 @@ fn open_recent(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| dir.clone());
     // OR IGNORE 保住库里的真实 name/mode；project_info 读库得真值
-    let wb = Workbench::open(&dir, &name, &[], pack).map_err(|e| e.to_string())?;
+    let mut wb = Workbench::open(&dir, &name, &[], pack).map_err(|e| e.to_string())?;
+    hexagon_core::providers::register_all(&mut wb, Arc::new(hexagon_core::credentials::OsKeychain));
     let info = wb.project_info().map_err(|e| e.to_string())?;
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(
@@ -569,6 +571,78 @@ fn set_model_key(slot: String, secret: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ---------- 供应商配置（启动页设置）----------
+
+/// 供应商配置列表：非密字段 + 各槽 key 是否已存（key 明文永不回传）。
+#[tauri::command]
+fn list_providers() -> Result<Value, String> {
+    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
+    let cfgs = hexagon_core::providers::list().map_err(|e| e.to_string())?;
+    let out: Vec<Value> = cfgs
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "slot": c.slot, "kind": c.kind, "base_url": c.base_url,
+                "model": c.model,
+                "key_set": OsKeychain
+                    .get(&model_key_name(&c.slot))
+                    .ok()
+                    .flatten()
+                    .is_some(),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!(out))
+}
+
+/// 保存供应商配置 + 可选 key；开着的项目热注册（不用重开）。
+#[tauri::command]
+fn save_provider(
+    state: tauri::State<AppState>,
+    slot: String,
+    kind: String,
+    base_url: String,
+    model: String,
+    secret: Option<String>,
+) -> Result<(), String> {
+    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
+    let kind: hexagon_core::provider::ProviderKind =
+        serde_json::from_value(serde_json::Value::String(kind.clone()))
+            .map_err(|_| format!("kind 须为 anthropic 或 openai: {kind}"))?;
+    let cfg = hexagon_core::providers::ProviderConfig {
+        slot,
+        kind,
+        base_url,
+        model,
+    };
+    hexagon_core::providers::save(&cfg).map_err(|e| e.to_string())?;
+    if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
+        OsKeychain
+            .set(&model_key_name(&cfg.slot), s.trim())
+            .map_err(|e| e.to_string())?;
+    }
+    // 热注册：当前项目立刻可用新配置
+    let mut g = state.wb.lock().map_err(|e| e.to_string())?;
+    if let Some(wb) = g.as_mut() {
+        wb.register_provider(
+            &cfg.slot,
+            hexagon_core::providers::make_provider(&cfg, Arc::new(OsKeychain)),
+        );
+    }
+    Ok(())
+}
+
+/// 删供应商配置 + 热注销；keychain 不动（key 可能还被别处用）。
+#[tauri::command]
+fn delete_provider(state: tauri::State<AppState>, slot: String) -> Result<(), String> {
+    hexagon_core::providers::delete(&slot).map_err(|e| e.to_string())?;
+    let mut g = state.wb.lock().map_err(|e| e.to_string())?;
+    if let Some(wb) = g.as_mut() {
+        wb.providers.remove(&slot);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn agents_md_draft(name: String) -> String {
     hexagon_core::setup::agents_md_draft(&name)
@@ -609,7 +683,7 @@ fn create_project(
                 .ok_or_else(|| format!("未知流程包: {n}"))
         })
         .transpose()?;
-    let wb = setup::create_project(
+    let mut wb = setup::create_project(
         &opts.dir,
         &opts.name,
         &opts.roles,
@@ -619,6 +693,7 @@ fn create_project(
         &OsKeychain,
     )
     .map_err(|e| e.to_string())?;
+    hexagon_core::providers::register_all(&mut wb, Arc::new(OsKeychain));
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(
         &app,
@@ -759,6 +834,9 @@ pub fn run() {
             preset_packs,
             check_model_keys,
             set_model_key,
+            list_providers,
+            save_provider,
+            delete_provider,
             agents_md_draft,
             create_project,
             project_open,

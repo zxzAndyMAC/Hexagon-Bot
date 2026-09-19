@@ -283,6 +283,9 @@ export default {
     keySave: '存入鑰匙圈',
     keyOk: '已就緒',
     keysBlocked: '缺金鑰無法開跑',
+    viaDefault: '走 default 槽',
+    noProvider: "槽位 {{slot}} 還沒有供應商配置——在此補齊即可放行",
+    keysSettingsHint: '也可以在啟動頁右上角「設定」裡統一管理供應商。',
     sumDir: '目錄',
     sumName: '專案名',
     sumRoles: '團隊',
@@ -303,6 +306,16 @@ export default {
     newProject: '新建專案',
     mode_pack: '流程包',
     mode_fastpath: '快速通道',
+    settings: '設定',
+  },
+
+  providers: {
+    hint: '模型供應商是全域配置：每個槽位對應一個端點；API key 只寫進系統鑰匙圈（永不回讀）。配一個 default 槽可兜底所有角色槽。',
+    empty: '還沒有供應商——加一個，Agent 才能調模型',
+    keySet: '已存 key', keyMissing: '缺 key',
+    slot: '槽位', kind: '類型', baseUrl: '端點', model: '模型', key: 'API key',
+    keyKeep: '已存·留空不改',
+    edit: '編輯', delete: '刪除', save: '儲存供應商', cancel: '取消', add: '新增供應商',
   },
   palette: {
     placeholder: '輸入指令或搜尋…',

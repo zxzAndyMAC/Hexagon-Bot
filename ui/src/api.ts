@@ -141,6 +141,15 @@ export interface AgentDetail {
   grants: { kind: string; name: string }[]
 }
 
+/// 供应商配置（非密）：slot→端点；key_set 只报是否已存，明文永不回传。
+export interface ProviderCfg {
+  slot: string
+  kind: 'anthropic' | 'openai'
+  base_url: string
+  model: string
+  key_set: boolean
+}
+
 export const api = {
   ping: () => call<string>('core_ping'),
   openProject: (dir: string, name: string, roles: [string, string][], packJson?: string) =>
@@ -258,6 +267,11 @@ export const api = {
   checkModelKeys: (slots: string[]) => call<string[]>('check_model_keys', { slots }),
   setModelKey: (slot: string, secret: string) =>
     call<void>('set_model_key', { slot, secret }),
+  // ---- 供应商配置（启动页设置 / 设置页模型区共享）----
+  listProviders: () => call<ProviderCfg[]>('list_providers'),
+  saveProvider: (slot: string, kind: string, baseUrl: string, model: string, secret?: string) =>
+    call<void>('save_provider', { slot, kind, baseUrl, model, secret: secret ?? null }),
+  deleteProvider: (slot: string) => call<void>('delete_provider', { slot }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   createProject: (opts: {
     dir: string
@@ -808,6 +822,14 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return '/home/user/.config/hexagon/templates/规格驱动.json' as T
     case 'set_model_key':
     case 'create_project':
+      return null as T
+    case 'list_providers':
+      return [
+        { slot: 'chat', kind: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-4o', key_set: true },
+        { slot: 'default', kind: 'anthropic', base_url: 'https://api.anthropic.com', model: 'claude-sonnet-4-6', key_set: false },
+      ] as T
+    case 'save_provider':
+    case 'delete_provider':
       return null as T
     case 'agents_md_draft':
       return `# ${args?.name ?? 'project'}\n\n## Commands\n` as T

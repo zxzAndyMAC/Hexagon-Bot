@@ -283,6 +283,9 @@ export default {
     keySave: 'キーチェーンに保存',
     keyOk: '準備完了',
     keysBlocked: 'キー不足のため起動不可',
+    viaDefault: 'default スロット経由',
+    noProvider: "スロット {{slot}} のプロバイダ未設定——ここで補完すれば進めます",
+    keysSettingsHint: '起動ページ右上の「設定」からプロバイダをまとめて管理も可。',
     sumDir: 'ディレクトリ',
     sumName: '名前',
     sumRoles: 'チーム',
@@ -303,6 +306,16 @@ export default {
     newProject: '新規プロジェクト',
     mode_pack: 'プロセスパック',
     mode_fastpath: 'ファストパス',
+    settings: '設定',
+  },
+
+  providers: {
+    hint: 'モデルプロバイダはグローバル設定：各スロットにエンドポイントを割当。APIキーはOSキーチェーンへの書込専用（読出し不可）。default スロットで全ロールをカバー可。',
+    empty: 'プロバイダ未登録——追加すればエージェントがモデルを呼べます',
+    keySet: 'キー保存済', keyMissing: 'キー未設定',
+    slot: 'スロット', kind: '種別', baseUrl: 'エンドポイント', model: 'モデル', key: 'APIキー',
+    keyKeep: '保存済·空欄で維持',
+    edit: '編集', delete: '削除', save: 'プロバイダを保存', cancel: 'キャンセル', add: 'プロバイダを追加',
   },
   palette: {
     placeholder: 'コマンドまたは検索を入力…',

@@ -19,6 +19,7 @@ pub mod permissions;
 pub mod presets;
 pub mod proposals;
 pub mod provider;
+pub mod providers;
 pub mod publish;
 pub mod research;
 pub mod review;

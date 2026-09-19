@@ -283,6 +283,9 @@ export default {
     keySave: 'Save to keychain',
     keyOk: 'Ready',
     keysBlocked: 'Missing keys block launch',
+    viaDefault: 'via default slot',
+    noProvider: "No provider configured for slot {{slot}} — fill in to unblock",
+    keysSettingsHint: 'Or manage providers from launcher settings (gear, top right).',
     sumDir: 'Directory',
     sumName: 'Name',
     sumRoles: 'Team',
@@ -303,6 +306,16 @@ export default {
     newProject: 'New project',
     mode_pack: 'process pack',
     mode_fastpath: 'fast path',
+    settings: 'Settings',
+  },
+
+  providers: {
+    hint: 'Model providers are global — each slot maps to an endpoint; API keys live in the OS keychain (write-only). A "default" slot covers any unconfigured role slot.',
+    empty: 'No providers yet — add one so agents can call a model',
+    keySet: 'key saved', keyMissing: 'key missing',
+    slot: 'Slot', kind: 'Kind', baseUrl: 'Base URL', model: 'Model', key: 'API key',
+    keyKeep: 'saved — leave empty to keep',
+    edit: 'Edit', delete: 'Delete', save: 'Save provider', cancel: 'Cancel', add: 'Add provider',
   },
   palette: {
     placeholder: 'Type a command or search…',
