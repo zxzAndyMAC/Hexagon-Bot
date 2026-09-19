@@ -6,7 +6,7 @@
 //! - 建项目把 RoleDef 落成实例：model_slot、agent_globs 归属、grants 技能授权。
 
 use crate::api::Workbench;
-use crate::credentials::{model_key_name, CredentialStore};
+use crate::credentials::CredentialStore;
 use crate::db::Db;
 use crate::git;
 use crate::orchestra::PackDef;
@@ -95,10 +95,13 @@ pub fn write_agents_md(dir: impl AsRef<Path>, content: &str) -> Result<(), Setup
     Ok(())
 }
 
-/// 所选角色的模型槽里缺哪些 key（按凭据名 `model/<slot>` 返回，去重排序）。
+/// 所选角色的模型槽里哪些不就绪（返回槽位名，去重排序）。
+/// 就绪 = 槽位有绑定 + 供应商存在且启用 + key 已存（default 槽兜底）——
+/// 语义已从「缺 key」升级为「缺可用供应商」，见 providers.rs。
 pub fn missing_model_keys(
     store: &dyn CredentialStore,
     roles: &[RoleDef],
+    doc: &crate::providers::ProviderDoc,
 ) -> Result<Vec<String>, SetupError> {
     let mut missing = Vec::new();
     for slot in {
@@ -107,9 +110,8 @@ pub fn missing_model_keys(
         s.dedup();
         s
     } {
-        let name = model_key_name(slot);
-        if store.get(&name)?.is_none() {
-            missing.push(name);
+        if !crate::providers::slot_ready(doc, store, slot) {
+            missing.push(slot.to_string());
         }
     }
     Ok(missing)
@@ -118,6 +120,7 @@ pub fn missing_model_keys(
 /// 建项目（向导最后一步）。`roles` 是预置角色名子集；`pack` 为 None 时
 /// `fastpath_role` 必须给（快速通道）；`init_git` = 负责人确认了「无 git 则初始化」。
 /// 全程 fail-closed：脏树停、缺密钥停、未知角色停。
+#[allow(clippy::too_many_arguments)]
 pub fn create_project(
     dir: impl AsRef<Path>,
     name: &str,
@@ -126,6 +129,7 @@ pub fn create_project(
     fastpath_role: Option<&str>,
     init_git: bool,
     store: &dyn CredentialStore,
+    doc: &crate::providers::ProviderDoc,
 ) -> Result<Workbench, SetupError> {
     let dir = dir.as_ref();
     std::fs::create_dir_all(dir)?;
@@ -161,6 +165,7 @@ pub fn create_project(
     let missing = missing_model_keys(
         store,
         &picked.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
+        doc,
     )?;
     if !missing.is_empty() {
         return Err(SetupError::MissingKeys(missing));
@@ -223,8 +228,29 @@ mod tests {
 
     fn store_with_key() -> MemoryStore {
         let s = MemoryStore::default();
-        s.set("model/chat", "sk-test").unwrap();
+        s.set("provider/test-prov", "sk-test").unwrap();
         s
+    }
+
+    /// 测试用供应商档：test-prov + chat 槽绑定（新就绪语义=绑定+启用+key）。
+    fn doc_with_provider() -> crate::providers::ProviderDoc {
+        let mut doc = crate::providers::ProviderDoc::default();
+        doc.providers.push(crate::providers::ProviderDef {
+            id: "test-prov".into(),
+            name: "Test".into(),
+            kind: crate::provider::ProviderKind::OpenAi,
+            base_url: "http://localhost".into(),
+            models: vec![],
+            enabled: true,
+        });
+        doc.slots.insert(
+            "chat".into(),
+            crate::providers::SlotBinding {
+                provider_id: "test-prov".into(),
+                model: "m".into(),
+            },
+        );
+        doc
     }
 
     fn pack() -> PackDef {
@@ -258,6 +284,7 @@ mod tests {
             None,
             true, // 确认初始化
             &store_with_key(),
+            &doc_with_provider(),
         )
         .unwrap();
         assert!(git::is_repo(&sub));
@@ -308,6 +335,7 @@ mod tests {
             None,
             false,
             &store_with_key(),
+            &doc_with_provider(),
         )
         .unwrap();
         // 弄脏 → 拒绝
@@ -320,7 +348,8 @@ mod tests {
                 Some(&pack()),
                 None,
                 false,
-                &store_with_key()
+                &store_with_key(),
+                &doc_with_provider()
             ),
             Err(SetupError::DirtyTree(_))
         ));
@@ -338,7 +367,8 @@ mod tests {
                 Some(&pack()),
                 None,
                 false,
-                &store_with_key()
+                &store_with_key(),
+                &doc_with_provider()
             ),
             Err(SetupError::NoGit(_))
         ));
@@ -356,12 +386,13 @@ mod tests {
             None,
             true,
             &MemoryStore::default(), // 没有任何 key
+            &crate::providers::ProviderDoc::default(),
         ) {
             Ok(_) => panic!("missing key should block"),
             Err(e) => e,
         };
         match err {
-            SetupError::MissingKeys(keys) => assert_eq!(keys, vec!["model/chat"]),
+            SetupError::MissingKeys(keys) => assert_eq!(keys, vec!["chat"]),
             e => panic!("expected MissingKeys, got {e}"),
         }
         // 项目没建起来
@@ -380,7 +411,8 @@ mod tests {
                 None,
                 Some("后端"), // 未勾选
                 true,
-                &store_with_key()
+                &store_with_key(),
+                &doc_with_provider()
             ),
             Err(SetupError::NoFastRole)
         ));
@@ -393,6 +425,7 @@ mod tests {
             Some("后端"),
             true,
             &store_with_key(),
+            &doc_with_provider(),
         )
         .unwrap();
         let db = Db::open(d.path().join("q/.hexagon/state.db")).unwrap();

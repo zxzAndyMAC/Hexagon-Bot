@@ -141,13 +141,29 @@ export interface AgentDetail {
   grants: { kind: string; name: string }[]
 }
 
-/// 供应商配置（非密）：slot→端点；key_set 只报是否已存，明文永不回传。
-export interface ProviderCfg {
-  slot: string
+/// 模型目录条目（供应商名下）：caps 词表 web/vision/reasoning/tools/free。
+export interface ModelEntry {
+  id: string
+  name?: string | null
+  group?: string | null
+  caps: string[]
+}
+
+/// 供应商配置（非密）：id→端点+模型目录；key_set 只报是否已存，明文永不回传。
+export interface ProviderDef {
+  id: string
+  name: string
   kind: 'anthropic' | 'openai'
   base_url: string
-  model: string
+  models: ModelEntry[]
+  enabled: boolean
   key_set: boolean
+}
+
+/// providers.json 文档面：供应商表 + 槽位绑定表。
+export interface ProviderDoc {
+  providers: ProviderDef[]
+  slots: Record<string, { provider_id: string; model: string }>
 }
 
 export const api = {
@@ -264,14 +280,24 @@ export const api = {
   inspectDir: (dir: string) => call<DirReport>('inspect_dir', { dir }),
   presetRoles: () => call<RoleDef[]>('preset_roles'),
   presetPacks: () => call<PackDef[]>('preset_packs'),
+  /// UI 内部路由：请求打开共享设置页（启动页齿轮 / 向导 keys 步 / 后续任意入口）。
+  /// 不走 IPC——广播 hexagon:open-settings，App/Launcher 各自挂监听。
+  openSettings: () => {
+    window.dispatchEvent(new CustomEvent('hexagon:open-settings'))
+    return Promise.resolve()
+  },
   checkModelKeys: (slots: string[]) => call<string[]>('check_model_keys', { slots }),
   setModelKey: (slot: string, secret: string) =>
     call<void>('set_model_key', { slot, secret }),
-  // ---- 供应商配置（启动页设置 / 设置页模型区共享）----
-  listProviders: () => call<ProviderCfg[]>('list_providers'),
-  saveProvider: (slot: string, kind: string, baseUrl: string, model: string, secret?: string) =>
-    call<void>('save_provider', { slot, kind, baseUrl, model, secret: secret ?? null }),
-  deleteProvider: (slot: string) => call<void>('delete_provider', { slot }),
+  // ---- 供应商配置（设置页模型区 / 启动页设置共用；ProviderDoc=供应商+槽位绑定）----
+  listProviders: () => call<ProviderDoc>('list_providers'),
+  saveProvider: (provider: Partial<ProviderDef>, secret?: string) =>
+    call<void>('save_provider', { provider, secret: secret ?? null }),
+  deleteProvider: (id: string) => call<void>('delete_provider', { id }),
+  setSlotBinding: (slot: string, providerId: string, model: string) =>
+    call<void>('set_slot_binding', { slot, providerId, model }),
+  removeSlotBinding: (slot: string) => call<void>('remove_slot_binding', { slot }),
+  fetchProviderModels: (id: string) => call<ModelEntry[]>('fetch_provider_models', { id }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   createProject: (opts: {
     dir: string
@@ -824,13 +850,35 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'create_project':
       return null as T
     case 'list_providers':
-      return [
-        { slot: 'chat', kind: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-4o', key_set: true },
-        { slot: 'default', kind: 'anthropic', base_url: 'https://api.anthropic.com', model: 'claude-sonnet-4-6', key_set: false },
-      ] as T
+      return {
+        providers: [
+          {
+            id: 'openrouter', name: 'OpenRouter', kind: 'openai',
+            base_url: 'https://openrouter.ai/api/v1', enabled: true, key_set: true,
+            models: [
+              { id: 'deepseek/deepseek-chat', caps: ['tools'] },
+              { id: 'google/gemini-2.5-flash', caps: ['vision', 'tools'] },
+              { id: 'deepseek/deepseek-r1:free', caps: ['free', 'reasoning', 'tools'] },
+            ],
+          },
+          {
+            id: 'anthropic', name: 'Anthropic', kind: 'anthropic',
+            base_url: 'https://api.anthropic.com', enabled: false, key_set: false, models: [],
+          },
+        ],
+        slots: { chat: { provider_id: 'openrouter', model: 'deepseek/deepseek-chat' } },
+      } as T
     case 'save_provider':
     case 'delete_provider':
+    case 'set_slot_binding':
+    case 'remove_slot_binding':
       return null as T
+    case 'fetch_provider_models':
+      return [
+        { id: 'deepseek/deepseek-chat', group: 'deepseek', caps: ['tools'] },
+        { id: 'google/gemini-2.5-flash', group: 'google', caps: ['vision', 'tools'] },
+        { id: 'qwen/qwen-2.5-72b', group: 'qwen', caps: ['tools', 'free'] },
+      ] as T
     case 'agents_md_draft':
       return `# ${args?.name ?? 'project'}\n\n## Commands\n` as T
     default:

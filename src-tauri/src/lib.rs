@@ -571,76 +571,115 @@ fn set_model_key(slot: String, secret: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-// ---------- 供应商配置（启动页设置）----------
+// ---------- 供应商配置（设置页模型区 / 启动页共用）----------
 
-/// 供应商配置列表：非密字段 + 各槽 key 是否已存（key 明文永不回传）。
+/// 供应商文档：非密字段 + 各供应商 key 是否已存（key 明文永不回传）+ 槽位绑定表。
 #[tauri::command]
 fn list_providers() -> Result<Value, String> {
-    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
-    let cfgs = hexagon_core::providers::list().map_err(|e| e.to_string())?;
-    let out: Vec<Value> = cfgs
+    use hexagon_core::credentials::{provider_key_name, CredentialStore, OsKeychain};
+    let doc = hexagon_core::providers::load().map_err(|e| e.to_string())?;
+    let providers: Vec<Value> = doc
+        .providers
         .iter()
-        .map(|c| {
-            serde_json::json!({
-                "slot": c.slot, "kind": c.kind, "base_url": c.base_url,
-                "model": c.model,
-                "key_set": OsKeychain
-                    .get(&model_key_name(&c.slot))
-                    .ok()
-                    .flatten()
-                    .is_some(),
-            })
+        .map(|p| {
+            let mut v = serde_json::to_value(p).unwrap();
+            v["key_set"] = serde_json::json!(OsKeychain
+                .get(&provider_key_name(&p.id))
+                .ok()
+                .flatten()
+                .is_some());
+            v
         })
         .collect();
-    Ok(serde_json::json!(out))
+    Ok(serde_json::json!({
+        "providers": providers,
+        "slots": doc.slots,
+    }))
 }
 
-/// 保存供应商配置 + 可选 key；开着的项目热注册（不用重开）。
+/// 刷新运行中 Workbench 的供应商注册（保存/删除/绑定变更后热生效）。
+fn refresh_providers(state: &AppState) {
+    let mut g = match state.wb.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if let Some(wb) = g.as_mut() {
+        // 清掉 HTTP 供应商注册再按当前绑定重挂（ScriptedProvider 是测试件，生产不会有）
+        let doc = hexagon_core::providers::load().unwrap_or_default();
+        for slot in doc.slots.keys() {
+            wb.providers.remove(slot);
+        }
+        hexagon_core::providers::register_all(wb, Arc::new(hexagon_core::credentials::OsKeychain));
+    }
+}
+
+/// 保存供应商 + 可选 key；开着的项目热刷新。
 #[tauri::command]
 fn save_provider(
     state: tauri::State<AppState>,
-    slot: String,
-    kind: String,
-    base_url: String,
-    model: String,
+    provider: Value,
     secret: Option<String>,
 ) -> Result<(), String> {
-    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
-    let kind: hexagon_core::provider::ProviderKind =
-        serde_json::from_value(serde_json::Value::String(kind.clone()))
-            .map_err(|_| format!("kind 须为 anthropic 或 openai: {kind}"))?;
-    let cfg = hexagon_core::providers::ProviderConfig {
-        slot,
-        kind,
-        base_url,
-        model,
-    };
-    hexagon_core::providers::save(&cfg).map_err(|e| e.to_string())?;
+    use hexagon_core::credentials::{provider_key_name, CredentialStore, OsKeychain};
+    let def: hexagon_core::providers::ProviderDef =
+        serde_json::from_value(provider).map_err(|e| e.to_string())?;
+    hexagon_core::providers::save_provider(&def).map_err(|e| e.to_string())?;
     if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
         OsKeychain
-            .set(&model_key_name(&cfg.slot), s.trim())
+            .set(&provider_key_name(&def.id), s.trim())
             .map_err(|e| e.to_string())?;
     }
-    // 热注册：当前项目立刻可用新配置
-    let mut g = state.wb.lock().map_err(|e| e.to_string())?;
-    if let Some(wb) = g.as_mut() {
-        wb.register_provider(
-            &cfg.slot,
-            hexagon_core::providers::make_provider(&cfg, Arc::new(OsKeychain)),
-        );
-    }
+    refresh_providers(&state);
     Ok(())
 }
 
-/// 删供应商配置 + 热注销；keychain 不动（key 可能还被别处用）。
+/// 删供应商（级联解绑槽位）+ 热刷新；keychain 不动。
 #[tauri::command]
-fn delete_provider(state: tauri::State<AppState>, slot: String) -> Result<(), String> {
-    hexagon_core::providers::delete(&slot).map_err(|e| e.to_string())?;
-    let mut g = state.wb.lock().map_err(|e| e.to_string())?;
-    if let Some(wb) = g.as_mut() {
-        wb.providers.remove(&slot);
-    }
+fn delete_provider(state: tauri::State<AppState>, id: String) -> Result<(), String> {
+    hexagon_core::providers::delete_provider(&id).map_err(|e| e.to_string())?;
+    refresh_providers(&state);
     Ok(())
+}
+
+/// 槽位绑定（供应商必须存在）+ 热刷新。
+#[tauri::command]
+fn set_slot_binding(
+    state: tauri::State<AppState>,
+    slot: String,
+    provider_id: String,
+    model: String,
+) -> Result<(), String> {
+    hexagon_core::providers::set_binding(&slot, &provider_id, &model).map_err(|e| e.to_string())?;
+    refresh_providers(&state);
+    Ok(())
+}
+
+/// 解绑槽位 + 热刷新。
+#[tauri::command]
+fn remove_slot_binding(state: tauri::State<AppState>, slot: String) -> Result<(), String> {
+    hexagon_core::providers::remove_binding(&slot).map_err(|e| e.to_string())?;
+    refresh_providers(&state);
+    Ok(())
+}
+
+/// 拉取/检测供应商模型目录：GET /models；key 从 keychain 现取，缺 key 直报。
+/// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置。
+#[tauri::command]
+fn fetch_provider_models(id: String) -> Result<Value, String> {
+    use hexagon_core::credentials::{provider_key_name, CredentialStore, OsKeychain};
+    let doc = hexagon_core::providers::load().map_err(|e| e.to_string())?;
+    let def = doc
+        .providers
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| format!("未知供应商: {id}"))?;
+    let key = OsKeychain
+        .get(&provider_key_name(&def.id))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("缺 API key: provider/{}", def.id))?;
+    hexagon_core::providers::fetch_models(def, &key)
+        .map(|m| serde_json::to_value(m).unwrap())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -683,6 +722,7 @@ fn create_project(
                 .ok_or_else(|| format!("未知流程包: {n}"))
         })
         .transpose()?;
+    let pdoc = hexagon_core::providers::load().unwrap_or_default();
     let mut wb = setup::create_project(
         &opts.dir,
         &opts.name,
@@ -691,6 +731,7 @@ fn create_project(
         opts.fastpath_role.as_deref(),
         opts.init_git,
         &OsKeychain,
+        &pdoc,
     )
     .map_err(|e| e.to_string())?;
     hexagon_core::providers::register_all(&mut wb, Arc::new(OsKeychain));
@@ -837,6 +878,9 @@ pub fn run() {
             list_providers,
             save_provider,
             delete_provider,
+            set_slot_binding,
+            remove_slot_binding,
+            fetch_provider_models,
             agents_md_draft,
             create_project,
             project_open,

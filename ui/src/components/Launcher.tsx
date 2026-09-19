@@ -2,66 +2,16 @@
 // 未开项目时的全屏界面；「新建项目」→ 项目向导 Wizard。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import i18n, { SUPPORTED, setLang, type Locale } from '../i18n'
 import { api, isTauri } from '../api'
-import { useUiStore, type ThemePref } from '../store'
 import { Wizard } from './Wizard'
 import { Icon } from './Icon'
-import { ProviderManager } from './ProviderManager'
+import { SettingsPage } from './SettingsPage'
 
 interface Recent {
   dir: string
   name: string
   mode: string
   opened_at: number
-}
-
-const LANG_NAMES: Record<string, string> = {
-  'zh-CN': '简体中文', 'zh-TW': '繁體中文', en: 'English', ja: '日本語',
-  es: 'Español', pt: 'Português', fr: 'Français',
-}
-
-/// 启动页设置层（不进向导就能配供应商/语言/主题）：
-/// 向导 keys 步的供应商缺口在此补齐——这是修「卡在模型步」的正路。
-function LauncherSettings({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation()
-  const { themePref, setThemePref } = useUiStore()
-  return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 70, display: 'flex',
-        alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.35)',
-      }}
-      onClick={onClose}
-    >
-      <div
-        className="panel"
-        style={{ width: 560, maxHeight: '84vh', overflowY: 'auto', padding: '18px 20px' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
-          <strong style={{ fontWeight: 560, fontSize: 15, flex: 1 }}>{t('launch.settings')}</strong>
-          <button className="btn" onClick={onClose}><Icon name="close" size={12} /></button>
-        </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6 }}>
-          <span className="dim3" style={{ fontSize: 12, width: 90 }}>{t('settings.language')}</span>
-          <select className="btn" value={i18n.language} onChange={(e) => setLang(e.target.value as Locale)}>
-            {SUPPORTED.map((l) => (
-              <option key={l} value={l}>{LANG_NAMES[l]}</option>
-            ))}
-          </select>
-          <span className="dim3" style={{ fontSize: 12, marginLeft: 12 }}>{t('settings.theme')}</span>
-          {(['light', 'dark', 'system'] as ThemePref[]).map((p) => (
-            <button key={p} className={`btn ${themePref === p ? 'primary' : ''}`} style={{ fontSize: 11 }} onClick={() => setThemePref(p)}>
-              {t(`settings.theme_${p}`)}
-            </button>
-          ))}
-        </div>
-        <div style={{ borderTop: '1px solid var(--border)', margin: '10px 0 12px' }} />
-        <ProviderManager />
-      </div>
-    </div>
-  )
 }
 
 export function Launcher({ onOpen }: { onOpen: () => void }) {
@@ -73,6 +23,10 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
 
   useEffect(() => {
     api.recentProjects().then(setRecents).catch(() => {})
+    // 向导 keys 步等处的「去设置」走 hexagon:open-settings 广播
+    const h = () => setSettings(true)
+    window.addEventListener('hexagon:open-settings', h)
+    return () => window.removeEventListener('hexagon:open-settings', h)
   }, [])
 
   const openDir = async (dir?: string) => {
@@ -93,9 +47,11 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
     }
   }
 
-  if (wizard) return <Wizard onDone={onOpen} />
-
-  return (
+  // 设置与工作台内同一个 SettingsPage——不另开一套（术语表：设置页 §19）。
+  // 盖在向导上而不替换：向导保持挂载，步序与草稿不丢；返回时 keys 步轮询自刷新。
+  const body = wizard ? (
+    <Wizard onDone={onOpen} />
+  ) : (
     <div
       data-tauri-drag-region
       style={{
@@ -111,8 +67,6 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
       >
         <Icon name="settings" size={13} /> {t('launch.settings')}
       </button>
-      {settings && <LauncherSettings onClose={() => setSettings(false)} />}
-
       <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Hexagon-Bot</div>
       <div className="dim3" style={{ fontSize: 12, marginBottom: 28 }}>{t('launch.title')}</div>
 
@@ -156,5 +110,16 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
         </div>
       </div>
     </div>
+  )
+
+  return (
+    <>
+      {body}
+      {settings && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)' }}>
+          <SettingsPage onBack={() => setSettings(false)} />
+        </div>
+      )}
+    </>
   )
 }

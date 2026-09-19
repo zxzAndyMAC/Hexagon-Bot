@@ -34,6 +34,11 @@ pub fn model_key_name(slot: &str) -> String {
     format!("model/{slot}")
 }
 
+/// 供应商 → 凭据名：key 按供应商存（一键喂其名下全部模型/槽位）。
+pub fn provider_key_name(provider_id: &str) -> String {
+    format!("provider/{provider_id}")
+}
+
 /// OS 钥匙串实现（service = "dev.hexagon.bot"）。
 pub struct OsKeychain;
 
