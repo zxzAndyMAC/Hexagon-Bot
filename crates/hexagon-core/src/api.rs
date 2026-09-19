@@ -57,6 +57,8 @@ pub enum ApiError {
     Roles(#[from] crate::roles::RoleError),
     #[error(transparent)]
     PackEdit(#[from] crate::packedit::PackEditError),
+    #[error("bad input: {0}")]
+    BadInput(String),
 }
 
 /// 工作台实例：一个打开的项目。
@@ -159,6 +161,28 @@ impl Workbench {
         Ok(crate::autonomy::level(&self.db, &self.project_id)?)
     }
 
+    /// 审查者档位变更（shadow/live，票 05）。live 只在 autonomy ≥ L1 生效；
+    /// 这里不强制档位组合——L0+live 退化为 shadow 判定（adjudicate 内拦）。
+    pub fn set_reviewer_mode(&self, mode: &str) -> Result<(), ApiError> {
+        if !matches!(mode, "shadow" | "live") {
+            return Err(ApiError::BadInput(format!("invalid reviewer mode: {mode}")));
+        }
+        self.db.conn().execute(
+            "UPDATE projects SET reviewer_mode=?1 WHERE id=?2",
+            rusqlite::params![mode, self.project_id],
+        )?;
+        Ok(())
+    }
+
+    /// 当前审查者档位。
+    pub fn reviewer_mode(&self) -> Result<String, ApiError> {
+        Ok(self.db.conn().query_row(
+            "SELECT reviewer_mode FROM projects WHERE id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?)
+    }
+
     /// 负责人离开：打标记事件。
     pub fn owner_away(&self) -> Result<(), ApiError> {
         crate::autonomy::leave(&self.db, &self.project_id)?;
@@ -240,7 +264,7 @@ impl Workbench {
         let pv: Value = serde_json::from_str(&payload)?;
         if pv["sub"].as_str() == Some("context_overflow") {
             self.db.conn().execute(
-                "UPDATE pending_questions SET state='answered', answered_at=datetime('now') WHERE id=?1",
+                "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by='owner' WHERE id=?1",
                 [qid],
             )?;
             self.db.append_event(
@@ -274,7 +298,7 @@ impl Workbench {
         let ctx = self.ctx_for("owner", None);
         let v = crate::review::adjudicate_flag(&self.db, &ctx, self.pack()?, &flag_id, agree)?;
         self.db.conn().execute(
-            "UPDATE pending_questions SET state='answered' WHERE id=?1",
+            "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
             [qid],
         )?;
         Ok(v)
@@ -452,6 +476,7 @@ impl Workbench {
             remember_shape,
             scope,
             self.pack.as_ref(),
+            "owner",
         )?;
         Ok(())
     }

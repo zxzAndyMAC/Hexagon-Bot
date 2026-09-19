@@ -125,6 +125,27 @@ const INSTRUCTIONS_CAP: usize = 32 * 1024;
 /// 降级时保留的头部字节数。
 const INSTRUCTIONS_HEAD: usize = 4 * 1024;
 
+/// 截断续推指令（票 13）：不重复推理，直接下一步。
+const TRUNCATION_NUDGE: &str = "输出被截断。不要重复推理，直接给下一步。";
+
+/// 动态尾部块（票 14，OPE `_trailing_block`）：易变内容（时间戳、轮次）
+/// 独立成末尾 user 消息、发送时才拼——系统提示与历史前缀逐字节稳定，
+/// provider prompt cache 才能命中。时间戳这类易变值别塞进系统层。
+fn with_dynamic_tail(messages: &[Message], round: usize) -> Vec<Message> {
+    let mut out = messages.to_vec();
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    out.push(Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: json!({"env": {"unix_time": secs, "round": round}}).to_string(),
+        }],
+    });
+    out
+}
+
 /// 读项目说明（AGENTS.md 优先，CLAUDE.md 次）供激活注入。
 /// 返回 (注入文本, 是否降级)；无说明文件返回 None。
 pub fn load_instructions(repo_root: &Path) -> Option<(String, bool)> {
@@ -172,6 +193,9 @@ pub struct BriefContext {
     pub paths: Vec<String>,
     /// 唤醒/打回通知
     pub notices: Vec<Value>,
+    /// 事件高水位（票 10）：brief 组装时库里的最大事件 id。
+    /// 首个 provider 响应到手后推进 agent_cursors 至此——推进早于送达就丢增量。
+    pub watermark: i64,
 }
 
 pub fn build_brief_context(
@@ -216,13 +240,31 @@ pub fn build_brief_context(
         rows
     };
 
-    // 点名消息：tokens JSON 里含该角色 mention
+    // 票 10：per-agent 事件游标——brief 只增量读「上次读到位置之后」的事件，
+    // 不再全表扫 mentions/notices。游标在首个 provider 响应到手后推进
+    // （调用方负责 advance_cursor）——推进早了丢增量，晚了只是重送。
+    let cursor = db.cursor(agent_id);
+    let watermark: i64 = db
+        .conn()
+        .query_row(
+            "SELECT COALESCE(MAX(id),0) FROM events WHERE project_id=?1",
+            [&project_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    // 点名消息：tokens JSON 里含该角色 mention；走事件表（消息都有配对事件）
+    // 才能用游标过滤——messages.id 与 events.id 不共享序列。
     let (mentions, paths) = {
-        let mut st = db
-            .conn()
-            .prepare("SELECT body, tokens FROM messages WHERE project_id = ?1 ORDER BY id")?;
+        let mut st = db.conn().prepare(
+            "SELECT m.body, m.tokens FROM events e
+             JOIN messages m ON m.id = json_extract(e.payload,'$.message_id')
+             WHERE e.project_id = ?1 AND e.id > ?2
+             AND e.kind IN ('owner_message','agent_message')
+             ORDER BY e.id",
+        )?;
         let rows = st
-            .query_map([project_id.clone()], |r| {
+            .query_map(rusqlite::params![project_id.clone(), cursor], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -248,16 +290,16 @@ pub fn build_brief_context(
         (mentions, paths)
     };
 
-    // 唤醒/打回通知：指向该 Agent 的裁决/唤醒事件
+    // 唤醒/打回通知：指向该 Agent 的裁决/唤醒事件——同样按游标取增量。
     let notices = {
         let mut st = db.conn().prepare(
             "SELECT kind, payload FROM events
-             WHERE project_id = ?1 AND agent_id = ?2
+             WHERE project_id = ?1 AND agent_id = ?2 AND id > ?3
              AND kind IN ('flag_adjudicated','consult_wakeup','review_rejected')
              ORDER BY id",
         )?;
         let rows = st
-            .query_map(rusqlite::params![project_id, agent_id], |r| {
+            .query_map(rusqlite::params![project_id, agent_id, cursor], |r| {
                 Ok(json!({"kind": r.get::<_,String>(0)?, "payload": r.get::<_,String>(1)?}))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -270,7 +312,71 @@ pub fn build_brief_context(
         mentions,
         paths,
         notices,
+        watermark,
     })
+}
+
+/// 悬空 tool_use 修复（票 13，OPE `_repair_dangling_tool_calls`）：
+/// assistant 消息里没等到结果的每个 ToolUse，紧跟其后补 error
+/// tool_result stub——Anthropic 形状 provider 拒收孤儿 tool_use。
+/// stub 如实写「中断无结果」，模型需要可自行重发。
+/// 截断续推路径的配对保证也走这里：截断回复里的 tool_use 不执行。
+/// 返回补的 stub 数。
+pub fn repair_dangling_tool_uses(messages: &mut Vec<Message>) -> usize {
+    let answered: std::collections::HashSet<String> = messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut stubs_made = 0usize;
+    let mut i = 0;
+    while i < messages.len() {
+        let dangling: Vec<String> = if matches!(messages[i].role, Role::Assistant) {
+            messages[i]
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, .. } if !answered.contains(id) => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        if !dangling.is_empty() {
+            stubs_made += dangling.len();
+            let stubs: Vec<ContentBlock> = dangling
+                .into_iter()
+                .map(|id| ContentBlock::ToolResult {
+                    tool_use_id: id,
+                    content: "{\"error\":\"tool call interrupted — no result recorded; \
+                              re-issue the call if it is still needed\"}"
+                        .into(),
+                    is_error: true,
+                })
+                .collect();
+            // 后续已有 Tool 消息则并入其头部，否则插一条新 Tool 消息——
+            // 保持「assistant → tool_result」紧邻序。
+            if i + 1 < messages.len() && matches!(messages[i + 1].role, Role::Tool) {
+                let mut merged = stubs;
+                merged.append(&mut messages[i + 1].content);
+                messages[i + 1].content = merged;
+            } else {
+                messages.insert(
+                    i + 1,
+                    Message {
+                        role: Role::Tool,
+                        content: stubs,
+                    },
+                );
+            }
+        }
+        i += 1;
+    }
+    stubs_made
 }
 
 // ---------- 回合执行 ----------
@@ -340,24 +446,108 @@ fn estimate_tokens(messages: &[Message]) -> usize {
     chars / 4
 }
 
-/// 轻量裁剪（US37）：超长 tool_result 截到 TRIM_BLOCK_CHARS + 标记，其余原样。
-fn trim_context(mut messages: Vec<Message>) -> Vec<Message> {
+/// 轻量裁剪（US37 + openworker-borrow 票 02）：超长 tool_result 走 spill——
+/// 完整内容落 `.hexagon/spill/`，上下文留 head+marker+tail；被裁部分可读回，
+/// 不再永久丢失。spill 失败时 spill_trim 内部退回旧式纯截断。
+fn trim_context(ctx: &ToolContext, mut messages: Vec<Message>) -> Vec<Message> {
     for m in &mut messages {
         for b in &mut m.content {
             if let ContentBlock::ToolResult { content, .. } = b {
                 if content.len() > TRIM_BLOCK_CHARS {
-                    let cut = content.len() - TRIM_BLOCK_CHARS;
-                    let mut end = TRIM_BLOCK_CHARS;
-                    while !content.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    content.truncate(end);
-                    content.push_str(&format!("\n…[{cut} chars trimmed]"));
+                    *content = crate::tools::spill_trim(ctx, content, TRIM_BLOCK_CHARS);
                 }
             }
         }
     }
     messages
+}
+
+/// 撞限前的机械降级（openworker-borrow 票 06）：最旧轮次逐字落 transcript
+/// 文件，出站视图换机械状态块（trace 派生）+ 首条负责人指令指引。
+/// 零模型参与——守 US37「影响语义的决策不自动做」，compaction.py 的
+/// LLM 摘要部分刻意不搬。
+fn mechanical_compact(db: &Db, ctx: &ToolContext, mut messages: Vec<Message>) -> Vec<Message> {
+    // 保留 [0]=system、[1]=首条负责人指令；切 [2..k) 移出。
+    if messages.len() <= 3 {
+        return messages;
+    }
+    let mut k = messages.len() / 2;
+    // 切点不能落在 Tool 消息上：那会把它和（已移出的）tool_use 拆开，
+    // 出站历史出现孤儿 tool_result，Anthropic 类供应商直接 400。
+    while k < messages.len() && messages[k].role == Role::Tool {
+        k += 1;
+    }
+    if k <= 2 || k >= messages.len() {
+        return messages;
+    }
+    let removed: Vec<Message> = messages.drain(2..k).collect();
+    let Some(transcript) = write_transcript(ctx, &removed) else {
+        // transcript 落不了盘就不悄悄丢消息——原样返回走升级路径
+        return messages;
+    };
+    let block = format!(
+        "[机械降级] 最旧 {} 条消息已逐字移到 {transcript}，需要细节用 fs_read 读。\n\
+         {}\n\
+         负责人首条指令见上文首条消息（逐字保留）。\n\
+         续写契约：不重复已答问题、不复盘已交付内容。",
+        removed.len(),
+        crate::provenance::state_block(db, ctx),
+    );
+    messages.insert(
+        2,
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: block }],
+        },
+    );
+    let _ = db.append_event(
+        &ctx.project_id,
+        EventKind::System,
+        json!({"kind": "context_compacted", "removed": k - 2, "transcript": transcript}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    );
+    messages
+}
+
+/// 逐字 transcript：消息与块原样落盘（tool_use/tool_result 含全部字段）。
+fn write_transcript(ctx: &ToolContext, removed: &[Message]) -> Option<String> {
+    let dir = ctx.repo_root.join(crate::tools::SPILL_DIR);
+    std::fs::create_dir_all(&dir).ok()?;
+    let n = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("transcript-"))
+        .count()
+        + 1;
+    let rel = format!("{}/transcript-{n}.md", crate::tools::SPILL_DIR);
+    let mut s = String::new();
+    for m in removed {
+        s.push_str(&format!("## {:?}\n", m.role));
+        for b in &m.content {
+            match b {
+                ContentBlock::Text { text } => {
+                    s.push_str(text);
+                    s.push('\n');
+                }
+                ContentBlock::ToolUse { id, name, input } => {
+                    s.push_str(&format!("[tool_use {name} #{id}] {input}\n"));
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
+                    s.push_str(&format!(
+                        "[tool_result #{tool_use_id} err={is_error}] {content}\n"
+                    ));
+                }
+            }
+        }
+        s.push('\n');
+    }
+    std::fs::write(ctx.repo_root.join(&rel), s).ok()?;
+    Some(rel)
 }
 
 /// 撞限升级（US37）：escalation 待决卡（sub=context_overflow）问负责人。
@@ -426,6 +616,9 @@ pub enum TurnOutcome {
     AwaitingPermission(String),
     /// 失败（供应商错/限步/工具错）
     Failed(String),
+    /// 截断终态（票 13）：续推一次后仍 max_tokens——与 Finished 区分，
+    /// 让上层看得出「给了机会还是没说完」。
+    Truncated,
     /// 休眠：零调用直接返回
     SkippedSleeping,
     /// 用量触顶：硬闸，零调用（票 12）
@@ -515,6 +708,19 @@ fn run_turn_impl(
             )?;
         }
     }
+    // 票 09：技能 catalog 一行式注入（AgentsMd 族——仓提供的说明类内容）。
+    // 全文不进提示词，agent 按需 load_skill 取；会话 mute 生效于过滤。
+    {
+        let session = ctx
+            .stage_run_id
+            .clone()
+            .unwrap_or_else(|| ctx.agent_id.clone());
+        let muted = crate::skills::SkillMutes::load(&ctx.repo_root).muted_set(&session);
+        let loader = crate::skills::SkillLoader::new(crate::skills::skill_dirs(&ctx.repo_root));
+        if let Some(text) = loader.catalog_text(&muted) {
+            layers.push(PromptLayer::new(LayerLevel::AgentsMd, text));
+        }
+    }
     let system = build_system_prompt(layers);
     let mut messages = vec![
         Message {
@@ -594,6 +800,8 @@ fn run_turn_impl(
         // 同工具同错熔断状态：跨 round 连击计数（US57）
         let mut last_fail: Option<(String, String)> = None;
         let mut streak = 0usize;
+        // 票 13：截断续推只给一次（OPE-171 连败防循环）
+        let mut trunc_continued = false;
         let breaker = |db: &Db, tool: &str, sig: &str| -> Result<TurnOutcome, TurnError> {
             db.append_event(
                 &ctx.project_id,
@@ -611,9 +819,15 @@ fn run_turn_impl(
             if crate::orchestra::is_paused(db, &ctx.project_id)? {
                 return Ok(TurnOutcome::Failed("paused by owner mid-turn".into()));
             }
-            // US37：轻量裁剪始终做；仍超上限 → 暂停问负责人（不做自动全量摘要）
-            messages = trim_context(messages);
-            let est = estimate_tokens(&messages);
+            // US37：轻量裁剪始终做；仍超上限先走机械降级（票 06），
+            // 降级后仍超才暂停问负责人（不做自动全量摘要）
+            messages = trim_context(ctx, messages);
+            let mut est = estimate_tokens(&messages);
+            if est > CONTEXT_CAP_TOKENS {
+                messages = mechanical_compact(db, ctx, messages);
+                messages = trim_context(ctx, messages);
+                est = estimate_tokens(&messages);
+            }
             if est > CONTEXT_CAP_TOKENS {
                 return context_overflow(db, ctx, est, "estimate");
             }
@@ -622,12 +836,15 @@ fn run_turn_impl(
                 ctx.agent_id,
                 req_base.model_slot
             );
+            // 票 13：发送前修复悬空 tool_use——截断/中断留下的未配对
+            // tool_use 会让 Anthropic 形状 provider 拒收整段历史。
+            repair_dangling_tool_uses(&mut messages);
             let resp = complete_with_retry(
                 db,
                 ctx,
                 provider,
                 &ChatRequest {
-                    messages: messages.clone(),
+                    messages: with_dynamic_tail(&messages, round),
                     ..req_base.clone()
                 },
             )?;
@@ -638,10 +855,34 @@ fn run_turn_impl(
                 resp.usage.completion_tokens
             );
             crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
-            // US37：模型输出被截（stop=max_tokens）= 上下文已顶，同一路径问负责人
-            if resp.stop == StopReason::MaxTokens {
-                return context_overflow(db, ctx, est, "max_tokens");
+            // 票 10：首个响应到手 = brief 送达模型——推进游标到组装水位。
+            // 早了丢增量（下次激活漏读），晚了只是重送——这个点是正确侧。
+            if round == 0 {
+                db.advance_cursor(&ctx.agent_id, brief.watermark)?;
             }
+            // 票 13（OPE-171）：stop=max_tokens 不再直接升级负责人——先续推
+            // 一次（截断回复入史 + nudge），仍截断才以 truncated 收场。
+            // 旧写法（票 06 前）把输出截断误判成上下文满，直接弹升级卡——
+            // 后果是每次长输出都打断负责人。est>cap 的输入侧撞限仍在
+            // 循环顶的机械降级+升级路径。
+            if resp.stop == StopReason::MaxTokens {
+                messages.push(Message {
+                    role: Role::Assistant,
+                    content: resp.content.clone(),
+                });
+                if !trunc_continued {
+                    trunc_continued = true;
+                    messages.push(Message {
+                        role: Role::User,
+                        content: vec![ContentBlock::Text {
+                            text: TRUNCATION_NUDGE.into(),
+                        }],
+                    });
+                    continue;
+                }
+                return Ok(TurnOutcome::Truncated);
+            }
+            trunc_continued = false;
             messages.push(Message {
                 role: Role::Assistant,
                 content: resp.content.clone(),
@@ -684,13 +925,16 @@ fn run_turn_impl(
 
             // 执行工具调用，结果回喂；同工具同错连 BREAKER_STREAK 次熔断（US57）
             let mut results = Vec::new();
-            for (id, name, input) in tool_uses {
+            // 票 11：位置序 r{round}i{idx} 作幂等序号——provider 的 tool_use id
+            // 跨进程不复现，位置序在「同会话重放」中稳定，中断恢复命中既有卡。
+            for (idx, (id, name, input)) in tool_uses.into_iter().enumerate() {
+                let seq = format!("r{round}i{idx}");
                 // US36 研究助手：research 由 turn 层截获跑嵌套只读回合
                 // （provider/只读注册表都在这里才够得着，exec 层拿不到）
                 let called = if name == "research" {
                     crate::research::call_nested(db, provider, registry, ctx, input)
                 } else {
-                    registry.call(db, ctx, &name, input)
+                    registry.call_with_seq(db, ctx, &name, input, Some(&seq))
                 };
                 match called {
                     Ok(CallOutcome::Done(v)) => {
@@ -714,6 +958,57 @@ fn run_turn_impl(
                         })
                     }
                     Ok(CallOutcome::Asked(qid)) => {
+                        // 票 04/05 审查者：shadow 记录判定；live+allow 放行。
+                        // deny/unsure/未咨询 → 卡照出（理由已注进卡载荷）。
+                        if let crate::reviewer::ReviewOutcome::Allow = crate::reviewer::adjudicate(
+                            db,
+                            ctx,
+                            provider,
+                            &req_base.model_slot,
+                            &qid,
+                            user_input,
+                        ) {
+                            // 复用必问卡裁决路径：标 answered + 落事件 + 执行。
+                            // pack=None —— reviewer 放行永不沉淀形状记忆：
+                            // 机器判定是一次性的，不是负责人同意（票 05）。
+                            match registry.resolve(
+                                db,
+                                ctx,
+                                &qid,
+                                true,
+                                None,
+                                "activation",
+                                None,
+                                "reviewer",
+                            ) {
+                                Ok(CallOutcome::Done(result)) => {
+                                    results.push(ContentBlock::ToolResult {
+                                        tool_use_id: id,
+                                        content: result.to_string(),
+                                        is_error: false,
+                                    });
+                                    continue;
+                                }
+                                Ok(CallOutcome::Denied(r)) => {
+                                    results.push(ContentBlock::ToolResult {
+                                        tool_use_id: id,
+                                        content: format!("denied: {r}"),
+                                        is_error: true,
+                                    });
+                                    continue;
+                                }
+                                Ok(CallOutcome::Asked(_)) => unreachable!(),
+                                Err(e) if model_visible(&e) => {
+                                    results.push(ContentBlock::ToolResult {
+                                        tool_use_id: id,
+                                        content: format!("error: {e}"),
+                                        is_error: true,
+                                    });
+                                    continue;
+                                }
+                                Err(e) => return Err(e.into()),
+                            }
+                        }
                         return Ok(TurnOutcome::AwaitingPermission(qid));
                     }
                     Err(e) if model_visible(&e) => {
@@ -762,7 +1057,10 @@ fn run_turn_impl(
             Ok(TurnOutcome::AwaitingPermission(_)) => EventKind::TurnFinished,
             Ok(TurnOutcome::SkippedSleeping) => EventKind::TurnFinished,
             Ok(TurnOutcome::SkippedCap) => EventKind::TurnFinished,
-            Ok(TurnOutcome::Failed(_)) | Err(_) => EventKind::TurnFailed,
+            // 票 13：截断终态=没说完——归 TurnFailed，轨迹里与正常完成可区分
+            Ok(TurnOutcome::Truncated) | Ok(TurnOutcome::Failed(_)) | Err(_) => {
+                EventKind::TurnFailed
+            }
         },
         json!({ "agent": ctx.agent_id, "outcome": format!("{outcome:?}") }),
         Some(&ctx.agent_id),
@@ -1092,6 +1390,114 @@ mod tests {
         assert!(!sys.contains("agents.md"));
     }
 
+    /// 票 02：撞限裁剪走 spill——超长 tool_result 全文落盘，上下文留
+    /// head+marker+tail；重复裁剪同内容幂等（文件名取内容哈希）。
+    #[test]
+    fn spill_trim_keeps_tail_and_spills_full() {
+        let (_db, _reg, ctx, dir) = setup();
+        let big = format!("{}{}", "h".repeat(6000), "FATAL_TAIL");
+        let out = trim_context(
+            &ctx,
+            vec![Message {
+                role: Role::Tool,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: big.clone(),
+                    is_error: false,
+                }],
+            }],
+        );
+        let ContentBlock::ToolResult { content, .. } = &out[0].content[0] else {
+            panic!()
+        };
+        assert!(content.contains("full output: .hexagon/spill/"));
+        assert!(content.ends_with("FATAL_TAIL"));
+        let rel = content
+            .split("full output: ")
+            .nth(1)
+            .unwrap()
+            .split(']')
+            .next()
+            .unwrap()
+            .trim();
+        assert_eq!(std::fs::read_to_string(dir.path().join(rel)).unwrap(), big);
+    }
+
+    /// 票 06：撞限机械降级——最旧轮次逐字落 transcript，机械状态块入队，
+    /// 切点不拆 tool_use/tool_result 对。
+    #[test]
+    fn mechanical_compact_spills_and_keeps_boundaries() {
+        let (db, _reg, ctx, dir) = setup();
+        let mut msgs = vec![
+            Message {
+                role: Role::System,
+                content: vec![ContentBlock::Text { text: "sys".into() }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "首条指令".into(),
+                }],
+            },
+        ];
+        for i in 0..8 {
+            msgs.push(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: format!("t{i}"),
+                    name: "fs_read".into(),
+                    input: json!({"path": format!("f{i}")}),
+                }],
+            });
+            msgs.push(Message {
+                role: Role::Tool,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: format!("t{i}"),
+                    content: "x".repeat(100),
+                    is_error: false,
+                }],
+            });
+        }
+        msgs.push(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "latest".into(),
+            }],
+        });
+        let out = mechanical_compact(&db, &ctx, msgs);
+        // [0]sys [1]首条指令原样；[2] 是机械块 User
+        assert_eq!(out[1].role, Role::User);
+        assert_eq!(out[2].role, Role::User);
+        let ContentBlock::Text { text } = &out[2].content[0] else {
+            panic!()
+        };
+        assert!(text.contains("机械降级") && text.contains("transcript-"));
+        assert!(text.contains("首条指令") || text.contains("续写契约"));
+        // 保留段首不是孤儿 tool_result
+        assert_ne!(out[3].role, Role::Tool);
+        // transcript 落盘且逐字
+        let t = std::fs::read_to_string(dir.path().join(".hexagon/spill/transcript-1.md")).unwrap();
+        assert!(t.contains("tool_use fs_read"));
+        assert!(t.contains("tool_result"));
+    }
+
+    /// 票 06：没东西可切（或切点跑穿）→ 原样返回，升级路径不变。
+    #[test]
+    fn mechanical_compact_noop_when_nothing_to_cut() {
+        let (db, _reg, ctx, _dir) = setup();
+        let msgs = vec![
+            Message {
+                role: Role::System,
+                content: vec![ContentBlock::Text { text: "s".into() }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "u".into() }],
+            },
+        ];
+        assert_eq!(mechanical_compact(&db, &ctx, msgs).len(), 2);
+    }
+
     // ---- US57：瞬时重试与同错熔断 ----
 
     /// 可回放错误的假供应商：脚本条目是 Result，记录调用次数。
@@ -1243,27 +1649,169 @@ mod tests {
         assert!(provider.recorded().is_empty(), "撞限在模型调用前");
     }
 
-    /// 模型 stop=max_tokens 走同一路径（输出被截=上下文已顶）。
+    /// 票 13：stop=max_tokens 续推一次——后续正常响应则回合完成。
     #[test]
-    fn us37_max_tokens_escalates() {
+    fn t13_max_tokens_continuation_finishes() {
         let (db, reg, ctx, _dir) = setup();
-        let provider = ScriptedProvider::new(vec![ChatResponse {
-            content: vec![ContentBlock::Text {
-                text: "半句话".into(),
-            }],
-            stop: StopReason::MaxTokens,
-            usage: Default::default(),
-        }]);
+        let provider = ScriptedProvider::new(vec![
+            ChatResponse {
+                content: vec![ContentBlock::Text {
+                    text: "半句话".into(),
+                }],
+                stop: StopReason::MaxTokens,
+                usage: Default::default(),
+            },
+            text_response("说完的后半句"),
+        ]);
         let out = run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
         assert!(
-            matches!(out, TurnOutcome::AwaitingPermission(_)),
-            "got {out:?}"
+            matches!(out, TurnOutcome::Finished),
+            "续推成功应 Finished，got {out:?}"
         );
+        let calls = provider.recorded();
+        assert_eq!(calls.len(), 2, "截断+续推=两次调用");
+        // 续推注入 nudge 用户消息而非重发原题（末条是票 14 动态块，
+        // nudge 在倒数第二）
+        let msgs = &calls[1].messages;
+        let nudge = msgs.get(msgs.len().saturating_sub(2)).expect("nudge msg");
+        assert!(
+            matches!(&nudge.content[0], ContentBlock::Text { text } if text.contains("截断")),
+            "续推应带 nudge"
+        );
+    }
+
+    /// 票 13：续推后仍截断 → truncated 终态（与 Finished 区分），零升级卡。
+    #[test]
+    fn t13_still_truncated_terminal() {
+        let (db, reg, ctx, _dir) = setup();
+        let provider = ScriptedProvider::new(vec![
+            ChatResponse {
+                content: vec![ContentBlock::Text {
+                    text: "半句".into(),
+                }],
+                stop: StopReason::MaxTokens,
+                usage: Default::default(),
+            },
+            ChatResponse {
+                content: vec![ContentBlock::Text {
+                    text: "又是半句".into(),
+                }],
+                stop: StopReason::MaxTokens,
+                usage: Default::default(),
+            },
+        ]);
+        let out = run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        assert!(
+            matches!(out, TurnOutcome::Truncated),
+            "仍截断应 Truncated，got {out:?}"
+        );
+    }
+
+    /// 票 14：易变内容（时间/轮次）独立成末尾块；系统提示+首条指令
+    /// 跨回合逐字节一致——provider prompt cache 命中的前提。
+    #[test]
+    fn t14_dynamic_tail_keeps_prefix_stable() {
+        let (db, reg, ctx, _dir) = setup();
+        let provider = ScriptedProvider::new(vec![text_response("done")]);
+        run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+        let provider2 = ScriptedProvider::new(vec![text_response("done")]);
+        run_turn(&db, &provider2, &reg, &ctx, vec![], "go").unwrap();
+        let c1 = provider.recorded();
+        let c2 = provider2.recorded();
+        let tail = c1[0].messages.last().expect("dynamic tail");
+        assert!(
+            matches!(&tail.content[0], ContentBlock::Text { text } if text.contains("\"env\"")),
+            "末条应是动态块"
+        );
+        // 前缀逐字节稳定：系统提示与首条指令跨回合相同
+        // （Message 无 PartialEq，序列化后比对）
+        assert_eq!(
+            serde_json::to_value(&c1[0].messages[0]).unwrap(),
+            serde_json::to_value(&c2[0].messages[0]).unwrap(),
+            "system 前缀漂移"
+        );
+        assert_eq!(
+            serde_json::to_value(&c1[0].messages[1]).unwrap(),
+            serde_json::to_value(&c2[0].messages[1]).unwrap(),
+            "首条指令漂移"
+        );
+    }
+
+    /// 票 13：悬空 tool_use 补 error stub——provider 形状配对恢复。
+    #[test]
+    fn t13_dangling_tool_use_repaired() {
+        let mut messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "t1".into(),
+                        name: "fs_read".into(),
+                        input: serde_json::json!({}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "t2".into(),
+                        name: "fs_read".into(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+            },
+            Message {
+                role: Role::Tool,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "ok".into(),
+                    is_error: false,
+                }],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "t3".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({}),
+                }],
+            },
+        ];
+        let n = repair_dangling_tool_uses(&mut messages);
+        assert_eq!(n, 2, "t2、t3 悬空");
+        // 每个 ToolUse 后都有配对 ToolResult
+        let uses: Vec<&str> = messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let results: Vec<&str> = messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        for u in &uses {
+            assert!(results.contains(u), "{u} 无配对结果");
+        }
+        // stub 如实标注中断
+        assert!(messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .any(|b| matches!(
+                b,
+                ContentBlock::ToolResult { content, is_error: true, .. }
+                    if content.contains("interrupted")
+            )));
+        // 幂等：再修一遍无新增
+        assert_eq!(repair_dangling_tool_uses(&mut messages), 0);
     }
 
     /// 轻量裁剪：超长 tool_result 截断带标记；小消息不动。
     #[test]
     fn us37_trim_truncates_tool_results() {
+        let (_db, _reg, ctx, _dir) = setup();
         let msgs = vec![
             Message {
                 role: Role::Tool,
@@ -1280,7 +1828,7 @@ mod tests {
                 }],
             },
         ];
-        let out = trim_context(msgs);
+        let out = trim_context(&ctx, msgs);
         match &out[0].content[0] {
             ContentBlock::ToolResult { content, .. } => {
                 assert!(content.len() < 5000, "still {} chars", content.len());
@@ -1292,5 +1840,91 @@ mod tests {
             ContentBlock::Text { text } => assert_eq!(text, "short"),
             _ => panic!(),
         }
+    }
+
+    // ---- 票 10：事件游标 + taint ----
+
+    fn owner_mention(db: &Db, body: &str) {
+        db.append_message(
+            "p1",
+            "owner",
+            body,
+            &[crate::trace::MessageToken::Mention {
+                agent_role: "后端开发".into(),
+            }],
+            None,
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cursor_scopes_brief_to_incremental_events() {
+        let (db, _reg, _ctx, _d) = setup();
+        owner_mention(&db, "第一条点名");
+        let b1 = build_brief_context(&db, "a1", None).unwrap();
+        assert_eq!(b1.mentions, vec!["第一条点名"]);
+        assert!(b1.watermark > 0);
+        // 游标推进后再来消息 → 第二次组装只见增量
+        db.advance_cursor("a1", b1.watermark).unwrap();
+        owner_mention(&db, "第二条点名");
+        let b2 = build_brief_context(&db, "a1", None).unwrap();
+        assert_eq!(b2.mentions, vec!["第二条点名"], "不重读游标前的消息");
+        // 不推进 → 再读仍是同一条增量（休眠唤醒不漏不重）
+        let b3 = build_brief_context(&db, "a1", None).unwrap();
+        assert_eq!(b3.mentions, vec!["第二条点名"]);
+    }
+
+    #[test]
+    fn cursor_advances_only_after_first_response() {
+        let (db, _reg, ctx, _d) = setup();
+        owner_mention(&db, "点1");
+        // provider 第一轮就失败：游标不该推进
+        let failing = ScriptedProvider::new(vec![]);
+        let _ = run_turn(&db, &failing, &_reg, &ctx, vec![], "干活");
+        assert_eq!(db.cursor("a1"), 0, "brief 没送达模型前游标不动");
+        // 成功的回合推进到组装水位
+        let ok = ScriptedProvider::new(vec![text_response("done")]);
+        run_turn(&db, &ok, &_reg, &ctx, vec![], "干活").unwrap();
+        assert!(db.cursor("a1") > 0, "首个响应到手后游标推进");
+    }
+
+    #[test]
+    fn external_results_taint_subsequent_outputs() {
+        let (db, _reg, _ctx, _d) = setup();
+        db.conn()
+            .execute(
+                "INSERT INTO stage_runs (id, project_id, stage_name, seq, state)
+                 VALUES ('sr1','p1','实现',0,'active')",
+                [],
+            )
+            .unwrap();
+        // 外部内容回喂前：消息不带标
+        db.append_message("p1", "a1", "之前的话", &[], Some("a1"), Some("sr1"))
+            .unwrap();
+        // mcp 结果回喂（tool_result 事件）
+        db.append_event(
+            "p1",
+            EventKind::ToolResult,
+            json!({"tool":"mcp:gh:list","output":{}}),
+            Some("a1"),
+            Some("sr1"),
+        )
+        .unwrap();
+        db.append_message("p1", "a1", "读完外部后的判断", &[], Some("a1"), Some("sr1"))
+            .unwrap();
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::AgentMessage]))
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items[0].event.payload.get("after_external").is_none());
+        assert_eq!(items[1].event.payload["after_external"], true);
+        // 负责人消息永不打标
+        db.append_message("p1", "owner", "负责人说的", &[], None, Some("sr1"))
+            .unwrap();
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::OwnerMessage]))
+            .unwrap();
+        assert!(items[0].event.payload.get("after_external").is_none());
     }
 }

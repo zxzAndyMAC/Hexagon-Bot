@@ -150,6 +150,7 @@ fn run_nested(
         TurnOutcome::AwaitingPermission(_) => Err(ToolError::Exec(
             "research layer may not escalate — denied by structure".into(),
         )),
+        TurnOutcome::Truncated => Err(ToolError::Exec("research output truncated".into())),
         TurnOutcome::Failed(e) => Err(ToolError::Exec(format!("research failed: {e}"))),
     }
 }

@@ -354,7 +354,7 @@ pub fn reject_at_stamp(
         .ok_or_else(|| PropError::Rejected("question is not a proposal stamp".into()))?
         .to_string();
     db.conn().execute(
-        "UPDATE pending_questions SET state='answered' WHERE id=?1",
+        "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
         [qid],
     )?;
     db.conn().execute(
@@ -388,7 +388,7 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
         .ok_or_else(|| PropError::Rejected("question is not a proposal stamp".into()))?
         .to_string();
     db.conn().execute(
-        "UPDATE pending_questions SET state='answered' WHERE id=?1",
+        "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
         [qid],
     )?;
     db.append_event(

@@ -37,6 +37,18 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0008_role_defs",
         include_str!("../migrations/0008_role_defs.sql"),
     ),
+    (
+        "0009_reviewer_mode",
+        include_str!("../migrations/0009_reviewer_mode.sql"),
+    ),
+    (
+        "0010_agent_cursors",
+        include_str!("../migrations/0010_agent_cursors.sql"),
+    ),
+    (
+        "0011_question_idem",
+        include_str!("../migrations/0011_question_idem.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

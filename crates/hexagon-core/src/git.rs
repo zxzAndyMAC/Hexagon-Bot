@@ -255,7 +255,7 @@ mod tests {
         };
         // 批准 → 执行合入
         let out = reg
-            .resolve(&db, &c, &qid, true, None, "activation", None)
+            .resolve(&db, &c, &qid, true, None, "activation", None, "owner")
             .unwrap();
         assert!(matches!(out, CallOutcome::Done(_)));
         assert!(run(
@@ -284,7 +284,7 @@ mod tests {
         };
         // 批准了也执行不了——盖章闸在 exec 内
         assert!(reg
-            .resolve(&db, &c, &qid, true, None, "activation", None)
+            .resolve(&db, &c, &qid, true, None, "activation", None, "owner")
             .is_err());
     }
 

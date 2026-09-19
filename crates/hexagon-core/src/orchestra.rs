@@ -205,6 +205,9 @@ pub fn open_stage(
         None,
         Some(&rid),
     )?;
+    // 票 03：激活冻结 known world——必问卡/reviewer 拿「会话开始时」的
+    // remote 基线比对，防 agent 先 remote add 再 push 显得目的地本就熟悉
+    crate::provenance::snapshot_known_world(db, project_id, &rid);
 
     // 激活/休眠
     for (aid, role) in &team {
@@ -638,7 +641,7 @@ pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchEr
     db.conn()
         .execute("UPDATE stage_runs SET state='active' WHERE id=?1", [run_id])?;
     db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_at=datetime('now')
+        "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by='owner'
          WHERE project_id=?1 AND kind='recovery' AND state='queued'
            AND json_extract(payload, '$.run_id')=?2",
         rusqlite::params![project_id, run_id],

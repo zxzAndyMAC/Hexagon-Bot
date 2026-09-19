@@ -228,9 +228,11 @@ impl Tool for McpTool {
     fn input_schema(&self) -> Value {
         self.schema.clone()
     }
-    /// MCP 出网/副作用可能性高：无记忆规则命中时默认必问（走 L5）。
-    fn needs_ask(&self, _input: &Value, _ctx: &ToolContext) -> bool {
-        true
+    /// mcp:* 焊死 External 地板（票 08）：第三方服务器语义自定——名字叫
+    /// "sync_records" 的工具能做任何事。永远逐次必问，记忆 allow 在
+    /// evaluate 的 L4 对本类不生效，persist_rule 拒写 mcp 规则。
+    fn risk(&self) -> crate::tools::RiskClass {
+        crate::tools::RiskClass::External
     }
     fn exec(&self, _db: &Db, input: &Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
         self.server.call_tool(&self.tool_name, input.clone())
@@ -378,7 +380,7 @@ while True:
             panic!("expected ask, got {out:?}");
         };
         let out = reg
-            .resolve(&db, &ctx, &qid, true, None, "activation", None)
+            .resolve(&db, &ctx, &qid, true, None, "activation", None, "owner")
             .unwrap();
         let crate::tools::CallOutcome::Done(v) = out else {
             panic!("expected done, got {out:?}");

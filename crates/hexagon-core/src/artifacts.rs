@@ -262,7 +262,10 @@ pub fn deliver(
         &ctx.project_id,
         EventKind::ArtifactDelivered,
         json!({"path": path, "kind": meta.kind, "tier": tier.as_str(), "version": version,
-               "handoff": meta.handoff}),
+               "handoff": meta.handoff,
+               // 票 10 taint：读过外部内容（research/mcp:*）后的产出打标——
+               // 下游消费者看得出交付物来源纯度。
+               "after_external": crate::provenance::tainted(db, &ctx.agent_id, ctx.stage_run_id.as_deref())}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;

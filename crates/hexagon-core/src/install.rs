@@ -210,7 +210,7 @@ pub fn resolve_install(
     }
     let plan: Value = serde_json::from_str(&payload)?;
     db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_at=datetime('now') WHERE id=?1",
+        "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by='owner' WHERE id=?1",
         [qid],
     )?;
     if !allow {

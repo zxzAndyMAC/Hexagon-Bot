@@ -6,7 +6,9 @@
 //! 3. 项目级 deny —— permission_rules effect='deny'，压过一切记忆 allow；
 //! 4. 形状化记忆 allow —— tool + 命令/路径/域形 + 作用域（activation 绑授予时的
 //!    stage_run / project 长效）；网络规则绑域名；
-//! 5. 默认 ask 负责人 —— 必问卡通道（批准一次/拒绝/记住形状）。
+//! 5. 类级默认 —— 按 Tool::risk() 分：Read/WriteLocal 放行，
+//!    Egress/Exec/External 必问（必问卡通道：批准一次/拒绝/记住形状）。
+//!    External（mcp:*）焊死地板：L4 记忆 allow 不生效、规则写不进。
 //!
 //! 负责人离开时请求挂起排队，不自动拒绝。
 //! 确认的检验命令沉淀为 Bash 形状授权（两本账合一）。
@@ -80,39 +82,326 @@ pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
         }
         _ => return false,
     };
-    // @域名 绑定：shape 里 `*@dom` → 目标必须含该域
-    if let Some((head, dom)) = shape.split_once('@') {
-        if !target.contains(dom) {
-            return false;
-        }
-        return token_match(head.trim_end_matches('*').trim_end(), target, true);
-    }
     match tool {
-        "bash" => token_match(shape, target, false),
+        "bash" => bash_shape_matches(shape, target),
         _ => glob_match(shape, target),
     }
 }
 
-/// 命令形匹配：按空白分词，`*` 匹配任意单段（含空）。
-fn token_match(shape: &str, target: &str, shape_is_prefix: bool) -> bool {
-    let sp: Vec<&str> = shape.split_whitespace().collect();
-    let tp: Vec<&str> = target.split_whitespace().collect();
-    fn m(s: &[&str], t: &[&str]) -> bool {
+// ---------- bash 复合命令拆段（openworker-borrow 票 01）----------
+//
+// 出处：OpenWorker coworker/permissions.py::_command_allowed/_split_commands。
+// 记忆授权形状只担保它匹配到的词——旧实现把整条命令当一个 token 序列，
+// `cargo *` 会放行 `cargo test && rm -rf x`（`*` 吃掉 `&&` 后的全部段），
+// 复合命令是任意命令后门。修复：每段独立匹配，全中才放行。
+// 不对称代价：判错方向是「多一次人工问」与「一次未审副作用」——本模块所有
+// 存疑路径（词法失败、空段、不透明构造）都返回 false 即转必问，fail closed。
+
+/// 前缀形状无法担保其内容的构造：命令/进程替换、重定向（写向授权没审过的地方）、
+/// 变量展开（值在授权视野外）。出现即整命令失格。
+const CMD_OPAQUE: &[&str] = &["`", "$(", "$", ">", "<", "("];
+/// 参数里点名另一个程序来执行的程序：外层前缀担保不了内层。
+const ARG_EXECUTORS: &[&str] = &[
+    "xargs", "env", "nohup", "nice", "stdbuf", "timeout", "watch", "sudo", "doas", "ssh", "docker",
+    "podman", "kubectl", "npx", "pnpx", "bunx", "uvx",
+];
+/// 可带内联代码的解释器（`python -c`、`node -e`、`powershell -Command`）。
+const INTERPRETERS: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish",
+    "powershell",
+    "pwsh",
+    "cmd",
+    "python",
+    "python3",
+    "node",
+    "deno",
+    "bun",
+    "ruby",
+    "perl",
+    "php",
+];
+const INLINE_CODE_FLAGS: &[&str] = &[
+    "-c",
+    "-e",
+    "--eval",
+    "--command",
+    "-Command",
+    "-EncodedCommand",
+];
+/// 把搜索/列举工具变成执行或删除工具的标志（`find . -exec rm {} +`）。
+const DANGEROUS_FLAGS: &[&str] = &["-exec", "-execdir", "-delete", "-ok", "-okdir", "-fprintf"];
+
+/// 复合命令按分隔符拆段。引号内的分隔符不切——词法与 shell_words 同一套规则；
+/// 词法失败的段不落段表，由调用处统一 fail closed。
+pub(crate) fn split_commands(command: &str) -> Vec<String> {
+    let mut parts = vec![String::new()];
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        if escaped {
+            parts.last_mut().unwrap().push('\\');
+            parts.last_mut().unwrap().push(c);
+            escaped = false;
+            continue;
+        }
+        match quote {
+            Some('\'') => {
+                parts.last_mut().unwrap().push(c);
+                if c == '\'' {
+                    quote = None;
+                }
+            }
+            Some('"') => {
+                parts.last_mut().unwrap().push(c);
+                if c == '"' {
+                    quote = None;
+                } else if c == '\\' {
+                    escaped = true;
+                }
+            }
+            _ => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    parts.last_mut().unwrap().push(c);
+                }
+                '\\' => escaped = true,
+                '&' | '|' | ';' => {
+                    let next = chars.peek().copied();
+                    // 双字符分隔符整体消费：&& || |&
+                    if (c == '&' || c == '|') && next == Some(c) || (c == '|' && next == Some('&'))
+                    {
+                        chars.next();
+                    }
+                    parts.push(String::new());
+                }
+                '\n' | '\r' => parts.push(String::new()),
+                c => parts.last_mut().unwrap().push(c),
+            },
+        }
+    }
+    parts
+        .into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// 极简 shell 词法：空白分词 + 单双引号 + 反斜杠转义。
+/// 引号不闭合/悬挂转义 → Err——调用处 fail closed 转必问。
+pub(crate) fn shell_words(s: &str) -> Result<Vec<String>, ()> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut has = false; // 当前 token 已开始（区分空引号 token）
+    for c in s.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+            has = true;
+            continue;
+        }
+        match quote {
+            Some('\'') => {
+                if c == '\'' {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+                has = true;
+            }
+            Some('"') => {
+                match c {
+                    '"' => quote = None,
+                    '\\' => escaped = true,
+                    c => cur.push(c),
+                }
+                has = true;
+            }
+            _ => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    has = true;
+                }
+                '\\' => escaped = true,
+                c if c.is_whitespace() => {
+                    if has {
+                        out.push(std::mem::take(&mut cur));
+                        has = false;
+                    }
+                }
+                c => {
+                    cur.push(c);
+                    has = true;
+                }
+            },
+        }
+    }
+    if escaped || quote.is_some() {
+        return Err(());
+    }
+    if has {
+        out.push(cur);
+    }
+    Ok(out)
+}
+
+/// 该段是否可被前缀形状担保。false = 段执行的代码规则没见过：
+/// 参数里点名的程序、解释器内联代码、执行/删除标志。
+fn prefix_eligible(argv: &[String]) -> bool {
+    let prog = argv[0]
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(&argv[0])
+        .to_lowercase();
+    let prog = prog.strip_suffix(".exe").unwrap_or(&prog);
+    if ARG_EXECUTORS.contains(&prog) {
+        return false;
+    }
+    if INTERPRETERS.contains(&prog)
+        && argv[1..]
+            .iter()
+            .any(|a| INLINE_CODE_FLAGS.contains(&a.as_str()))
+    {
+        return false;
+    }
+    if argv[1..]
+        .iter()
+        .any(|a| DANGEROUS_FLAGS.contains(&a.to_lowercase().as_str()))
+    {
+        return false;
+    }
+    true
+}
+
+/// 从 token 提取 host：URL 取 netloc（去 userinfo/端口），裸 token 原样小写。
+/// 出处：openworker `permissions._host_of`——`https://docs.python.org/x` 与
+/// `docs.python.org` 两种形态都收；认不出的形态返回空串（永不命中 → fail closed）。
+fn host_of(token: &str) -> String {
+    let t = token.trim().to_lowercase();
+    let rest = t.split_once("://").map(|(_, r)| r).unwrap_or(&t);
+    let rest = rest.rsplit('@').next().unwrap_or(rest);
+    let netloc = rest.split('/').next().unwrap_or("");
+    netloc.split(':').next().unwrap_or("").to_string()
+}
+
+/// host 边界匹配：`host == dom` 或 `*.dom`——`registry.npmjs.org.evil.com`
+/// 与 `evil-registry.npmjs.org` 都不命中（旧实现 contains 两条都放）。
+fn host_matches_dom(token: &str, dom: &str) -> bool {
+    let host = host_of(token);
+    !host.is_empty() && (host == dom || host.ends_with(&format!(".{dom}")))
+}
+
+/// 段 token 序列与形状 token 序列匹配：`*` 至少吃一段
+/// （「cargo *」不匹配裸「cargo」——宽松面是安全隐患）。
+fn seg_tokens_match(shape: &[&str], argv: &[String]) -> bool {
+    fn m(s: &[&str], t: &[String]) -> bool {
         if s.is_empty() {
             return t.is_empty();
         }
         if s[0] == "*" {
-            // `*` 至少吃一段：「cargo *」不匹配裸「cargo」（宽松面是安全隐患）
             return (1..=t.len()).any(|i| m(&s[1..], &t[i..]));
         }
         !t.is_empty() && s[0] == t[0] && m(&s[1..], &t[1..])
     }
-    if shape_is_prefix {
-        // 已剥掉 *@dom 的头部：只要目标是 shape 前缀的延续即可
-        sp.len() <= tp.len() && m(&sp, &tp[..sp.len()])
-    } else {
-        m(&sp, &tp)
+    m(shape, argv)
+}
+
+/// bash 目标的形状匹配：复合命令每段独立判定，全部命中才放行。
+/// 任何一段词法失败/不合格/不命中 → 整条不命中（转必问，不转 deny——
+/// deny 语义是 L3 的事，形状匹配只负责「这条授权不覆盖它」）。
+fn bash_shape_matches(shape: &str, cmd: &str) -> bool {
+    if cmd.trim().is_empty() || CMD_OPAQUE.iter().any(|t| cmd.contains(t)) {
+        return false;
     }
+    let parts = split_commands(cmd);
+    if parts.is_empty() {
+        return false;
+    }
+    // @域名绑定：头部前缀 + 同段内含 host 命中该域的 token。
+    // 域必须在同一段——跨段引用（`npm i x && curl https://dom`）不算数。
+    let (head, dom) = match shape.split_once('@') {
+        Some((h, d)) => (h.trim_end_matches('*').trim_end(), Some(d.to_lowercase())),
+        None => (shape, None),
+    };
+    let shape_toks: Vec<&str> = head.split_whitespace().collect();
+    for part in &parts {
+        let Ok(argv) = shell_words(part) else {
+            return false;
+        };
+        if argv.is_empty() || !prefix_eligible(&argv) {
+            return false;
+        }
+        let seg_ok = match &dom {
+            Some(d) => {
+                argv.len() >= shape_toks.len()
+                    && shape_toks
+                        .iter()
+                        .zip(argv.iter())
+                        .all(|(s, a)| *s == "*" || s == a)
+                    && argv.iter().any(|t| host_matches_dom(t, d))
+            }
+            None => seg_tokens_match(&shape_toks, &argv),
+        };
+        if !seg_ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// bash 命令里 path 形态的操作数是否越出 repo_root（票 07）。
+/// 参照 `coworker/readonly.py::read_targets` 但提取更粗：不做按命令的
+/// 操作数表，凡 path 形态 token 都判——少一张表换的是更保守的覆盖。
+fn bash_operand_escapes(input: &Value, ctx: &ToolContext) -> bool {
+    let cmd = input["cmd"].as_str().unwrap_or("");
+    for part in split_commands(cmd) {
+        // 词法失败按越界处理：宁可多问一次
+        let Ok(argv) = shell_words(&part) else {
+            return true;
+        };
+        for tok in &argv {
+            // `--flag=/path`、`ENV=/path`：`=` 右侧同样是操作数候选
+            let mut candidates = vec![tok.as_str()];
+            if let Some((_, v)) = tok.split_once('=') {
+                candidates.push(v);
+            }
+            for cand in candidates {
+                if looks_like_operand_path(cand) && operand_escapes(cand, ctx) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// token 是否 path 形态：含分隔符、家目录、相对游走，或绝对路径。
+/// `-` 开头的是 flag 不是操作数。
+fn looks_like_operand_path(tok: &str) -> bool {
+    if tok.is_empty() || tok.starts_with('-') {
+        return false;
+    }
+    tok.starts_with('~')
+        || tok == "."
+        || tok == ".."
+        || tok.contains('/')
+        || tok.contains('\\')
+        || std::path::Path::new(tok).is_absolute()
+}
+
+fn operand_escapes(tok: &str, ctx: &ToolContext) -> bool {
+    // `~` 词法上是相对路径但实际指家目录——一定在 repo 外
+    if tok.starts_with('~') {
+        return true;
+    }
+    crate::tools::repo_path(&ctx.repo_root, tok).is_err()
 }
 
 /// 五层求值。`tool` 用于第 1 层内置 deny。
@@ -169,6 +458,25 @@ pub fn evaluate(
     }
     // L4 形状化记忆 allow
     if let Some((shape, scope)) = matching_rule_scoped(db, ctx, tool_name, input, "allow")? {
+        // External 地板（票 08）：mcp:* 语义由第三方服务器自定，名字只是
+        // 标签不是证据——记忆 allow 对本类永不生效，每次调用都是一次外发
+        // 判定。（persist_rule 侧同样拒写 mcp 规则，双保险。）
+        if tool.risk() == crate::tools::RiskClass::External {
+            return Ok(Decision::Ask {
+                reason: "external tool: per-call approval".into(),
+                safety_net: false,
+            });
+        }
+        // 票 07（OPE-130 同类）：形状只担保匹配到的词——`cat *` 的授权意图是
+        // 「项目文件随便读」，不该覆盖 `cat ~/.aws/credentials`。凡 path 形态
+        // 操作数越出 repo_root 的转必问。不对称代价：多报一个操作数 = 多一次
+        // 人工；漏报 = 一次越权读——提取宁可偏多（fail closed）。
+        if tool_name == "bash" && bash_operand_escapes(input, ctx) {
+            return Ok(Decision::Ask {
+                reason: "bash operand outside repo root".into(),
+                safety_net: false,
+            });
+        }
         return Ok(Decision::Allow {
             via: AllowVia::Remembered { shape, scope },
         });
@@ -180,16 +488,21 @@ pub fn evaluate(
             safety_net: false,
         });
     }
-    // L5：必问类工具（bash 等）默认问负责人
-    if tool.needs_ask(input, ctx) {
-        return Ok(Decision::Ask {
+    // L5 类级默认（票 08 数据驱动）：读/本地写默认放行，
+    // 执行/外发/外部服务默认必问。
+    match tool.risk() {
+        crate::tools::RiskClass::Read | crate::tools::RiskClass::WriteLocal => {
+            Ok(Decision::Allow {
+                via: AllowVia::Default,
+            })
+        }
+        crate::tools::RiskClass::Egress
+        | crate::tools::RiskClass::Exec
+        | crate::tools::RiskClass::External => Ok(Decision::Ask {
             reason: "default ask".into(),
             safety_net: false,
-        });
+        }),
     }
-    Ok(Decision::Allow {
-        via: AllowVia::Default,
-    })
 }
 
 /// 带日志的求值入口包装：管线内部分支自带 return，这里统一记结论。
@@ -288,6 +601,11 @@ pub fn persist_rule(
     pack: Option<&PackDef>,
 ) -> Result<bool, crate::tools::ToolError> {
     if is_safety_net(tool, input).is_some() {
+        return Ok(false);
+    }
+    // External 地板另一半（票 08）：mcp:* 规则根本写不进记忆层——
+    // 名字是服务器自己的话，持久豁免等于把判定外包给标签。
+    if tool.starts_with("mcp:") {
         return Ok(false);
     }
     let (shape, scope) = if let Some(s) = shape {
@@ -561,6 +879,92 @@ mod tests {
         ));
     }
 
+    // ---- 票 08：RiskClass ----
+
+    /// 无法注册的 McpTool 替身：evaluate 只看 risk()，用 stub 声明 External。
+    struct ExternalStub;
+    impl Tool for ExternalStub {
+        fn name(&self) -> &str {
+            "mcp:svc:t"
+        }
+        fn description(&self) -> &str {
+            "stub"
+        }
+        fn input_schema(&self) -> Value {
+            json!({})
+        }
+        fn risk(&self) -> crate::tools::RiskClass {
+            crate::tools::RiskClass::External
+        }
+        fn exec(
+            &self,
+            _db: &Db,
+            _i: &Value,
+            _c: &ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            Ok(json!({}))
+        }
+    }
+
+    #[test]
+    fn builtin_tools_declare_expected_risk() {
+        use crate::tools::RiskClass::*;
+        assert_eq!(crate::tools::FsRead.risk(), Read);
+        assert_eq!(crate::tools::FsWrite.risk(), WriteLocal);
+        assert_eq!(crate::tools::FsPatch.risk(), WriteLocal);
+        assert_eq!(crate::tools::ArtifactWrite.risk(), WriteLocal);
+        assert_eq!(crate::tools::ArtifactRead.risk(), Read);
+        assert_eq!(crate::tools::Research.risk(), Read);
+        assert_eq!(crate::tools::Bash.risk(), Exec);
+    }
+
+    #[test]
+    fn external_floor_beats_remembered_allow() {
+        let (db, ctx, _d) = setup();
+        // 先喂 grants 让 L0 闸门放行（External 地板测的是 L4，不是 L0）
+        db.conn()
+            .execute(
+                "INSERT INTO grants (id, agent_id, kind, name) VALUES ('g1','a1','mcp','svc')",
+                [],
+            )
+            .unwrap();
+        // 写入一条能命中 mcp 工具名的 allow 规则——External 地板下必须无效
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id, project_id, tool, shape, effect, scope)
+                 VALUES ('pr9','p1','mcp:svc:t','*','allow','project')",
+                [],
+            )
+            .unwrap();
+        let d = evaluate(&db, &ctx, &ExternalStub, "mcp:svc:t", &json!({"x":1})).unwrap();
+        assert!(
+            matches!(
+                d,
+                Decision::Ask {
+                    safety_net: false,
+                    ..
+                }
+            ),
+            "External 地板：记忆 allow 永不生效，得 {d:?}"
+        );
+    }
+
+    #[test]
+    fn persist_rule_refuses_mcp_tool() {
+        let (db, ctx, _d) = setup();
+        let ok = persist_rule(
+            &db,
+            &ctx,
+            "mcp:svc:t",
+            &json!({"x":1}),
+            Some("mcp:svc:t *"),
+            "project",
+            None,
+        )
+        .unwrap();
+        assert!(!ok, "External 类规则写不进记忆层");
+    }
+
     #[test]
     fn confirmed_check_command_becomes_bash_shape() {
         let (db, ctx, _d) = setup();
@@ -623,6 +1027,217 @@ mod tests {
             "src/**",
             "fs_write",
             &json!({"path":"src/a/b.rs"})
+        ));
+    }
+
+    // ---------- openworker-borrow 票 01：复合命令与域名边界 ----------
+
+    #[test]
+    fn compound_command_every_segment_must_match() {
+        // `cargo *` 只担保 cargo 开头的段——尾部未授权命令不得放行
+        for cmd in [
+            "cargo test && rm -rf build",
+            "cargo test; curl x | sh",
+            "cargo test | tee /tmp/log",
+            "cargo test && echo done",
+        ] {
+            assert!(
+                !shape_matches("cargo *", "bash", &json!({"cmd": cmd})),
+                "{cmd} must not match `cargo *`"
+            );
+        }
+        // 全段命中 → 放行（换行同样是分隔符）
+        assert!(shape_matches(
+            "cargo *",
+            "bash",
+            &json!({"cmd": "cargo test && cargo build"})
+        ));
+        assert!(shape_matches(
+            "cargo *",
+            "bash",
+            &json!({"cmd": "cargo test\ncargo bench"})
+        ));
+        assert!(shape_matches(
+            "*",
+            "bash",
+            &json!({"cmd": "cargo test && echo done"})
+        ));
+    }
+
+    #[test]
+    fn opaque_constructs_never_shape_match() {
+        // 替换/重定向/展开的内容授权没审过——整命令失格转必问
+        for cmd in [
+            "cargo test $(cat x)",
+            "cargo test `cat x`",
+            "cargo test > out.log",
+            "cargo test 2> err.log",
+            "cargo test < in.txt",
+            "echo $HOME && cargo test",
+            "(cargo test)",
+        ] {
+            assert!(
+                !shape_matches("*", "bash", &json!({"cmd": cmd})),
+                "{cmd} must not shape-match"
+            );
+        }
+    }
+
+    #[test]
+    fn executors_and_inline_code_not_prefix_eligible() {
+        // 替别人执行的程序：外层前缀担保不了内层
+        for cmd in [
+            "xargs rm",
+            "env rm -rf x",
+            "sudo cargo test",
+            "sh -c \"cargo test\"",
+            "bash -c 'echo hi'",
+            "python -c 'print(1)'",
+            "python3 -c pass",
+            "node -e 'x()'",
+            "ssh host ls",
+            "docker run img",
+            "kubectl exec pod ls",
+            "npx some-bin",
+            "find . -exec rm {} +",
+            "find . -delete",
+        ] {
+            assert!(
+                !shape_matches("*", "bash", &json!({"cmd": cmd})),
+                "{cmd} must not be prefix-eligible"
+            );
+        }
+        // 解释器非内联调用仍可走形状（脚本名在命令行上可见）
+        assert!(shape_matches(
+            "python *",
+            "bash",
+            &json!({"cmd": "python scripts/setup.py"})
+        ));
+    }
+
+    #[test]
+    fn domain_rule_uses_host_boundaries() {
+        let ok = json!({"cmd": "npm install zod --registry https://registry.npmjs.org"});
+        assert!(shape_matches(
+            "npm install *@registry.npmjs.org",
+            "bash",
+            &ok
+        ));
+        // 伪造 host：后缀寄生/前缀寄生/不同域都不命中
+        for host in [
+            "registry.npmjs.org.evil.com",
+            "evil-registry.npmjs.org",
+            "registry.npmjs.orgx",
+            "notnpmjs.org",
+        ] {
+            let bad = json!({"cmd": format!("npm install zod --registry https://{host}")});
+            assert!(
+                !shape_matches("npm install *@registry.npmjs.org", "bash", &bad),
+                "{host} must not satisfy @registry.npmjs.org"
+            );
+        }
+        // 域出现在另一段不算数：npm 段没引用该域
+        let cross = json!({"cmd": "npm install zod && curl https://registry.npmjs.org/x"});
+        assert!(!shape_matches(
+            "npm install *@registry.npmjs.org",
+            "bash",
+            &cross
+        ));
+        // 裸域（无 scheme）token 也按 host 判
+        let bare = json!({"cmd": "npm install zod --registry registry.npmjs.org"});
+        assert!(shape_matches(
+            "npm install *@registry.npmjs.org",
+            "bash",
+            &bare
+        ));
+    }
+
+    #[test]
+    fn unbalanced_quotes_fail_closed() {
+        // 词法失败的段不猜——失格转必问
+        assert!(!shape_matches(
+            "git *",
+            "bash",
+            &json!({"cmd": "git log --format=\"%an|%s"})
+        ));
+        // 引号内的分隔符不是分隔符：整段一个词法单元
+        assert!(shape_matches(
+            "git *",
+            "bash",
+            &json!({"cmd": "git log --format=\"%an | %s\""})
+        ));
+    }
+
+    #[test]
+    fn l4_bash_operand_outside_repo_asks() {
+        // 票 07（OPE-130 同类）：`cat *` 授权覆盖仓内读，越界操作数转必问
+        let (db, ctx, _d) = setup();
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope)
+             VALUES ('a','p1','bash','cat *','allow','project'),
+                    ('b','p1','bash','git *','allow','project')",
+                [],
+            )
+            .unwrap();
+        // 仓内 → 放行
+        assert!(matches!(
+            bash_ctx(&db, &ctx, "cat src/a.rs"),
+            Decision::Allow { .. }
+        ));
+        assert!(matches!(
+            bash_ctx(&db, &ctx, "cat a.md && cat b.md"),
+            Decision::Allow { .. }
+        ));
+        // 越界 → 必问（绝对/游走/家目录/-C/内嵌 flag 值各一例）
+        for cmd in [
+            "cat /etc/hostname",
+            "cat ../sibling/x",
+            "cat ~/.zshrc",
+            "cat a.md && cat /var/log/syslog",
+            "git -C /tmp status",
+            "git log --output=/tmp/x",
+        ] {
+            assert!(
+                matches!(bash_ctx(&db, &ctx, cmd), Decision::Ask { .. }),
+                "{cmd} must ask (operand escapes repo)"
+            );
+        }
+        // deny 语义不变：deny `cat *` 对越界读仍是 Deny 不是 Ask
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope)
+             VALUES ('d','p1','bash','cat *','deny','project')",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            bash_ctx(&db, &ctx, "cat /etc/hostname"),
+            Decision::Deny {
+                layer: "project_deny",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn l4_compound_bypass_now_asks() {
+        // 端到端：记忆 `cargo *` 后复合命令仍必问（票 01 的洞）
+        let (db, ctx, _d) = setup();
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope)
+             VALUES ('a','p1','bash','cargo *','allow','project')",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            bash_ctx(&db, &ctx, "cargo test && echo hi"),
+            Decision::Ask { .. }
+        ));
+        assert!(matches!(
+            bash_ctx(&db, &ctx, "cargo test && cargo build"),
+            Decision::Allow { .. }
         ));
     }
 
@@ -763,6 +1378,45 @@ mod tests {
                 prop_assert!(
                     matches!(d, Decision::Deny { layer: "project_deny", .. }),
                     "expected project deny, got {d:?}"
+                );
+            }
+
+            /// 不变量④（openworker-borrow 票 01）：含分隔符的复合命令
+            /// 永不被 `prefix *` 形状放行——`cargo *` 不得覆盖 `cargo test && rm`。
+            #[test]
+            fn compound_never_allowed_by_prefix_shape(
+                sep in sample::select(vec!["&&", "||", ";", "|", "&", "\n"]),
+                tail in sample::select(vec!["echo hi", "ls -la", "cat x.md"]),
+            ) {
+                let (db, ctx, _d) = setup();
+                insert_rule(&db, 0, "bash", "cargo *", "allow", "project");
+                let cmd = format!("cargo test {sep} {tail}");
+                let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
+                prop_assert!(
+                    !matches!(d, Decision::Allow { .. }),
+                    "compound {cmd} must not be shape-allowed, got {d:?}"
+                );
+            }
+
+            /// 不变量⑤（票 01）：@域规则只认 host 边界——前缀/后缀寄生域不命中。
+            #[test]
+            fn domain_rules_require_host_boundary(
+                host in sample::select(vec![
+                    "registry.npmjs.org.evil.com",
+                    "evil-registry.npmjs.org",
+                    "registry.npmjs.orgx",
+                ]),
+            ) {
+                let (db, ctx, _d) = setup();
+                insert_rule(
+                    &db, 0, "bash",
+                    "npm install *@registry.npmjs.org", "allow", "project",
+                );
+                let cmd = format!("npm install zod --registry https://{host}");
+                let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
+                prop_assert!(
+                    matches!(d, Decision::Ask { .. }),
+                    "{host} must not satisfy the domain rule, got {d:?}"
                 );
             }
         }

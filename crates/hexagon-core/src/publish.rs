@@ -83,7 +83,7 @@ pub fn confirm(
     let baseline = p["baseline"].as_str().unwrap_or("main").to_string();
 
     db.conn().execute(
-        "UPDATE pending_questions SET state='answered' WHERE id=?1",
+        "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
         [qid],
     )?;
 
@@ -132,7 +132,7 @@ pub fn confirm(
 /// 拒绝发布：标记已答 + 轨迹。
 pub fn reject(db: &Db, project_id: &str, qid: &str) -> Result<(), PublishError> {
     let n = db.conn().execute(
-        "UPDATE pending_questions SET state='answered'
+        "UPDATE pending_questions SET state='answered', answered_by='owner'
          WHERE id=?1 AND project_id=?2 AND kind='publish' AND state='queued'",
         rusqlite::params![qid, project_id],
     )?;

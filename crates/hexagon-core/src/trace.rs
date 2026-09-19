@@ -35,6 +35,8 @@ pub enum EventKind {
     BackfillExecuted,
     ConsultWakeup,
     // 权限与盖章
+    ReviewerVerdict,
+    ReviewerTripped,
     PermissionAsked,
     PermissionAllowed,
     PermissionDenied,
@@ -143,6 +145,10 @@ pub struct ExportFilter {
 
 impl Db {
     /// 追加事件。events.id 自增即全序。
+    /// 事件载荷上限（票 12）：超限完整落 spill 文件、库里留指针——
+    /// 对齐工具结果 spill 设施，事件表不被巨型 meta 撑爆。
+    const EVENT_PAYLOAD_CAP: usize = 64 * 1024;
+
     pub fn append_event(
         &self,
         project_id: &str,
@@ -151,18 +157,60 @@ impl Db {
         agent_id: Option<&str>,
         stage_run_id: Option<&str>,
     ) -> Result<i64, TraceError> {
+        let mut text = serde_json::to_string(&payload)?;
+        if text.len() > Self::EVENT_PAYLOAD_CAP {
+            text = self.spill_payload(project_id, &text);
+        }
         self.conn().execute(
             "INSERT INTO events (project_id, stage_run_id, agent_id, kind, payload)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![
-                project_id,
-                stage_run_id,
-                agent_id,
-                kind_str(kind),
-                serde_json::to_string(&payload)?,
-            ],
+            rusqlite::params![project_id, stage_run_id, agent_id, kind_str(kind), text,],
         )?;
         Ok(self.conn().last_insert_rowid())
+    }
+
+    /// 超限载荷落 .hexagon/spill/event-<hash>.json，返回指针 JSON 文本。
+    /// 项目目录不可得 → 截断保指针信息（fail toward 留痕不丢事件）。
+    fn spill_payload(&self, project_id: &str, text: &str) -> String {
+        let dir: Option<String> = self
+            .conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
+                r.get(0)
+            })
+            .ok();
+        if let Some(dir) = dir {
+            // 内容寻址文件名：同载荷幂等重写、无时间戳。
+            let mut h: u64 = 0xcbf29ce484222325;
+            for b in text.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            let spill = std::path::Path::new(&dir).join(".hexagon/spill");
+            if std::fs::create_dir_all(&spill).is_ok() {
+                let gi = spill.join(".gitignore");
+                if !gi.exists() {
+                    let _ = std::fs::write(&gi, "*\n");
+                }
+                let file = spill.join(format!("event-{h:016x}.json"));
+                if std::fs::write(&file, text).is_ok() {
+                    return serde_json::to_string(&serde_json::json!({
+                        "spilled": file.to_string_lossy(),
+                        "bytes": text.len(),
+                    }))
+                    .unwrap_or_default();
+                }
+            }
+        }
+        // spill 写不动：截断 + 标记，事件本身不丢
+        let mut end = Self::EVENT_PAYLOAD_CAP.min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{{\"truncated_payload\":{:?},\"bytes\":{}}}",
+            &text[..end],
+            text.len()
+        )
     }
 
     /// 写消息：messages 行 + 一个配对事件（时间线序因此只需 events.id）。
@@ -186,6 +234,14 @@ impl Db {
         } else {
             EventKind::AgentMessage
         };
+        let mut payload = serde_json::json!({ "message_id": msg_id });
+        // 票 10 taint：外部内容（research/mcp:* 结果）回喂过该 agent 后，
+        // 其产出的消息事件打 after_external——下游看得出「读了外部内容后写的」。
+        if author != "owner"
+            && crate::provenance::tainted(self, agent_id.unwrap_or(""), stage_run_id)
+        {
+            payload["after_external"] = serde_json::json!(true);
+        }
         tx.execute(
             "INSERT INTO events (project_id, stage_run_id, agent_id, kind, payload)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -194,11 +250,33 @@ impl Db {
                 stage_run_id,
                 agent_id,
                 kind_str(kind),
-                serde_json::to_string(&serde_json::json!({ "message_id": msg_id }))?,
+                serde_json::to_string(&payload)?,
             ],
         )?;
         tx.commit()?;
         Ok(msg_id)
+    }
+
+    /// 读游标（票 10）：无记录视为 0——首次激活全量读。
+    pub fn cursor(&self, agent_id: &str) -> i64 {
+        self.conn()
+            .query_row(
+                "SELECT last_event_id FROM agent_cursors WHERE agent_id=?1",
+                [agent_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+    }
+
+    /// 推进游标（票 10）：单调只前进。在「brief 真的喂给了模型」之后调——
+    /// 推进早于模型收到就丢增量，宁多送不丢（fail toward redelivery）。
+    pub fn advance_cursor(&self, agent_id: &str, watermark: i64) -> Result<(), TraceError> {
+        self.conn().execute(
+            "INSERT INTO agent_cursors (agent_id, last_event_id) VALUES (?1, ?2)
+             ON CONFLICT(agent_id) DO UPDATE SET last_event_id=MAX(last_event_id, ?2)",
+            rusqlite::params![agent_id, watermark],
+        )?;
+        Ok(())
     }
 
     /// 时间线投影：按 events.id 归并事件与消息。`after_id` 分页，`kinds` 过滤。

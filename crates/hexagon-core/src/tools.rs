@@ -6,6 +6,7 @@
 
 use crate::db::Db;
 use crate::trace::{EventKind, TraceError};
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -60,14 +61,39 @@ pub enum CallOutcome {
     Asked(String),
 }
 
+/// 工具风险类（openworker-borrow 票 08）：权限求值的单一声明轴，取代
+/// `needs_ask` 零散布尔——加新工具只声明类，不碰 evaluate 管线。
+/// `builtin_deny` 保留不动：它是带理由的「输入级」硬拒（凭据路径、权限
+/// 规则文件），与类级声明不同轴。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiskClass {
+    /// 仓内纯读：默认放行（L1 deny/安全网/项目规则照常先跑）。
+    Read,
+    /// 出网/外发：域名绑定规则可记忆放行，其余必问。
+    Egress,
+    /// 本地写入：ownership globs 圈内默认放行。
+    WriteLocal,
+    /// 任意命令执行：形状记忆可放行，其余必问。
+    Exec,
+    /// 外部服务调用（mcp:*）：语义由第三方服务器自定，永远逐次必问，
+    /// 不可被授权/层级/形状记忆降级——焊死的地板，不对称代价：
+    /// 多问一次花一次点击，漏问一次是语义不明的副作用外发。
+    External,
+}
+
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
+    /// 参数命名约定（票 14 备忘）：参数名别撞宿主模板/语言方法名——
+    /// OpenWorker 真实事故：todo 工具参数叫 `items`，minijinja 把它
+    /// 解析成 dict.items() 方法调用，直接 400。`items`/`keys`/`values`/
+    /// `get`/`update` 这类名字禁用；宁可 `entries`/`todo_list`。
     fn input_schema(&self) -> Value;
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError>;
-    /// 求值占位：true = 默认转必问（安全网类操作）。票 11 换成五层管线。
-    fn needs_ask(&self, _input: &Value, _ctx: &ToolContext) -> bool {
-        false
+    /// 风险类声明（票 08）。默认 Exec——最保守的「默认必问」档，
+    /// 新工具忘了声明也不会意外变成免问。
+    fn risk(&self) -> RiskClass {
+        RiskClass::Exec
     }
     /// 内置 deny 检查：Some(reason) = 拦下。最高优先，不可覆盖。
     fn builtin_deny(&self, _input: &Value, _ctx: &ToolContext) -> Option<String> {
@@ -98,6 +124,7 @@ impl Registry {
         r.register(Bash);
         r.register(ArtifactWrite);
         r.register(ArtifactRead);
+        r.register(LoadSkill);
         r.register(crate::git::GitBaselineMerge);
         r
     }
@@ -115,6 +142,7 @@ impl Registry {
         };
         r.register(FsRead);
         r.register(ArtifactRead);
+        r.register(LoadSkill);
         for (name, t) in &self.tools {
             if name.starts_with("mcp:") {
                 r.tools.insert(name.clone(), t.clone());
@@ -146,16 +174,31 @@ impl Registry {
         name: &str,
         input: Value,
     ) -> Result<CallOutcome, ToolError> {
+        self.call_with_seq(db, ctx, name, input, None)
+    }
+
+    /// 带幂等序号的调用（票 11）。`call_seq` 形如 "r{round}:i{index}"——
+    /// 回合内位置在重放中稳定；只有模型回合的工具循环传它，
+    /// 其余调用点（owner resolve/git/mcp 测试）不经重放，传 None。
+    pub fn call_with_seq(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        name: &str,
+        input: Value,
+        call_seq: Option<&str>,
+    ) -> Result<CallOutcome, ToolError> {
         let tool = self
             .tools
             .get(name)
             .ok_or_else(|| ToolError::BadInput(format!("unknown tool: {name}")))?;
 
         // 调用事件：敏感入参（fs_write 的 content 等）只记元信息。
+        // seq 入载荷（票 11）：中断重放时同一调用可被指认。
         db.append_event(
             &ctx.project_id,
             EventKind::ToolCalled,
-            json!({ "tool": name, "input": scrub_input(name, &input) }),
+            json!({ "tool": name, "input": scrub_input(name, &input), "seq": call_seq }),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
@@ -178,17 +221,43 @@ impl Registry {
                 Ok(CallOutcome::Denied(reason))
             }
             crate::permissions::Decision::Ask { reason, safety_net } => {
+                // 票 11 幂等键：(激活,位置序,工具,入参指纹)。中断重放同一调用
+                // 命中既有卡——queued 复用不弹新卡；answered 沿用裁决。
+                let idem_key = call_seq.map(|seq| {
+                    format!(
+                        "{}:{seq}:{name}:{:016x}",
+                        ctx.stage_run_id.as_deref().unwrap_or("-"),
+                        fnv64(&input.to_string())
+                    )
+                });
+                if let Some(idem) = &idem_key {
+                    if let Some(outcome) = self.idem_reuse(db, ctx, idem)? {
+                        return Ok(outcome);
+                    }
+                }
                 let qid = format!("q{}", db.next_id("q")?);
+                // 票 03：必问卡附溯源注记 + 激活冻结的 known world——
+                // 负责人能看到「这文件是 agent N 步前写的」「这 remote 不在初始列表」
+                let prov = crate::provenance::note(db, ctx, name, &input);
+                let world = crate::provenance::known_world(
+                    db,
+                    &ctx.project_id,
+                    ctx.stage_run_id.as_deref(),
+                );
+                let delta = crate::provenance::remote_delta(name, &input, world.as_ref());
                 db.conn().execute(
-                    "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-                     VALUES (?1, ?2, ?3, 'permission', ?4)",
+                    "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload, idem_key)
+                     VALUES (?1, ?2, ?3, 'permission', ?4, ?5)",
                     rusqlite::params![
                         qid,
                         ctx.project_id,
                         ctx.agent_id,
                         json!({ "tool": name, "input": scrub_input(name, &input),
-                                "raw_input": input, "reason": reason, "safety_net": safety_net })
-                        .to_string()
+                                "raw_input": input, "reason": reason, "safety_net": safety_net,
+                                "provenance": prov, "known_world": world,
+                                "remote_delta": delta })
+                        .to_string(),
+                        idem_key,
                     ],
                 )?;
                 db.append_event(
@@ -218,6 +287,8 @@ impl Registry {
 
     /// 必问裁决：批准则执行并落结果，拒绝则落 PermissionDenied。
     /// `remember_shape` 形如 "npm install *"，写入 permission_rules（票 11 消费）。
+    /// `origin` 是裁决人（"owner"/"reviewer"），落进事件载荷——回放
+    /// 「为什么这么放行」的唯一凭据（票 12 裁决人落账的前置）。
     #[allow(clippy::too_many_arguments)]
     pub fn resolve(
         &self,
@@ -228,6 +299,7 @@ impl Registry {
         remember_shape: Option<&str>,
         scope: &str,
         pack: Option<&crate::orchestra::PackDef>,
+        origin: &str,
     ) -> Result<CallOutcome, ToolError> {
         let row = db
             .conn()
@@ -248,25 +320,33 @@ impl Registry {
         let raw_input = payload["raw_input"].clone();
 
         db.conn().execute(
-            "UPDATE pending_questions SET state='answered', answered_at=datetime('now') WHERE id=?1",
-            [question_id],
+            "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by=?2 WHERE id=?1",
+            rusqlite::params![question_id, origin],
         )?;
 
         if !allow {
             db.append_event(
                 &ctx.project_id,
                 EventKind::PermissionDenied,
-                json!({ "tool": tool_name, "layer": "owner", "question_id": question_id }),
+                json!({ "tool": tool_name, "layer": origin, "question_id": question_id }),
                 Some(&ctx.agent_id),
                 ctx.stage_run_id.as_deref(),
             )?;
-            return Ok(CallOutcome::Denied("owner denied".into()));
+            // 票 05：reviewer 判过 deny 的卡被负责人确认拒绝时，agent 只收到
+            // 无信息量回执——reviewer 的具体理由永不进 agent 上下文，防
+            // oracle-retry 试探（理由已进负责人卡 + trace）。
+            let msg = if payload["reviewer_denied"].is_string() {
+                crate::reviewer::AGENT_DENY_MESSAGE
+            } else {
+                "owner denied"
+            };
+            return Ok(CallOutcome::Denied(msg.into()));
         }
 
         db.append_event(
             &ctx.project_id,
             EventKind::PermissionAllowed,
-            json!({ "tool": tool_name, "question_id": question_id }),
+            json!({ "tool": tool_name, "question_id": question_id, "via": origin }),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
@@ -293,6 +373,101 @@ impl Registry {
 
         self.exec_and_log(db, ctx, &tool_name, raw_input)
             .map(CallOutcome::Done)
+    }
+
+    /// 票 11：同幂等键的既有卡复用（对照 OpenWorker `inbox.for_tool_call`）。
+    /// 返回 Some = 本次调用已按既有卡处理；None = 无命中，走新卡。
+    /// - queued   → 复用同一张卡，不重复弹（带 deduped 标记事件留痕）
+    /// - answered → 沿用裁决：allow 看执行痕迹（执行过→Done 标记，崩在
+    ///   允许后执行前的窄窗→此刻补执行）；deny → 同样的无信息量回执
+    /// - expired  → 不算命中，走新卡
+    ///
+    /// 不对称性：漏查重 = 同一动作弹两次卡；错沿用 = 跳过一次人工。
+    /// 故指纹含完整 canonical 入参——同名不同参绝不共享一张卡。
+    fn idem_reuse(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        idem_key: &str,
+    ) -> Result<Option<CallOutcome>, ToolError> {
+        let row = db
+            .conn()
+            .query_row(
+                "SELECT id, state, payload FROM pending_questions
+                 WHERE agent_id=?1 AND idem_key=?2
+                 AND kind='permission' ORDER BY id DESC LIMIT 1",
+                rusqlite::params![ctx.agent_id, idem_key],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((qid, state, payload)) = row else {
+            return Ok(None);
+        };
+        if state == "queued" {
+            db.append_event(
+                &ctx.project_id,
+                EventKind::PermissionAsked,
+                json!({ "question_id": qid, "deduped": true, "idem_key": idem_key }),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+            )?;
+            return Ok(Some(CallOutcome::Asked(qid)));
+        }
+        if state != "answered" {
+            return Ok(None);
+        }
+        // 已答：找裁决事件（allow 记 PermissionAllowed，deny 记 PermissionDenied）
+        let verdict = db
+            .conn()
+            .query_row(
+                "SELECT id, kind FROM events
+                 WHERE project_id=?1 AND kind IN ('permission_allowed','permission_denied')
+                 AND json_extract(payload,'$.question_id')=?2 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![ctx.project_id, qid],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let Some((eid, kind)) = verdict else {
+            return Ok(None);
+        };
+        if kind == "permission_denied" {
+            let p: Value = serde_json::from_str(&payload).unwrap_or_default();
+            let msg = if p["reviewer_denied"].is_string() {
+                crate::reviewer::AGENT_DENY_MESSAGE
+            } else {
+                "owner denied"
+            };
+            return Ok(Some(CallOutcome::Denied(msg.into())));
+        }
+        // allowed：执行过吗？allow 事件之后同 agent 有 tool_result → 已执行
+        let ran: bool = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND agent_id=?2
+                 AND kind='tool_result' AND id > ?3",
+                rusqlite::params![ctx.project_id, ctx.agent_id, eid],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if ran {
+            return Ok(Some(CallOutcome::Done(json!({
+                "duplicate_of": qid,
+                "note": "该调用已批准并执行过；结果见 trace，不要重复执行"
+            }))));
+        }
+        // 允许后崩在 exec 前：负责人已同意，此刻补执行（不再弹卡）
+        let p: Value = serde_json::from_str(&payload).unwrap_or_default();
+        let tool_name = p["tool"].as_str().unwrap_or("").to_string();
+        let raw_input = p["raw_input"].clone();
+        self.exec_and_log(db, ctx, &tool_name, raw_input)
+            .map(|v| Some(CallOutcome::Done(v)))
     }
 
     fn exec_and_log(
@@ -348,6 +523,15 @@ fn is_permission_rule_path(p: &str) -> bool {
     lower.contains("permission_rules") || lower.ends_with(".hexagon/permissions.toml")
 }
 
+/// agent 自授策略面（票 09）：skills 定义与本地会话偏好是负责人管理的
+/// 提示词内容——写进 SKILL.md = 给自己追加指令，与 permission_rules 同类。
+/// bash 侧不设防（bash 本就逐次必问/形状记忆，路径语义管不了）；
+/// 这里的守卫只针对结构化写工具。
+pub fn is_agent_policy_path(p: &str) -> bool {
+    let lower = p.to_lowercase();
+    lower.starts_with(".hexagon/skills/") || lower.starts_with(".hexagon/local/")
+}
+
 /// bash 命令里的凭据探测模式。
 fn bash_hits_credentials(cmd: &str) -> bool {
     let c = cmd.to_lowercase();
@@ -361,6 +545,55 @@ fn bash_hits_credentials(cmd: &str) -> bool {
 }
 
 /// 事件载荷里不落 fs_write 正文等敏感字段。
+/// FNV-1a 64：幂等键入参指纹（票 11）。选它而非 DefaultHasher——后者
+/// 种子随版本/进程不定，幂等键要跨重启稳定（重放查重正是崩溃后场景）。
+fn fnv64(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// 参数递归脱敏（票 12，搬 audit.py::_sanitize_args）：键名含机密词
+/// → `[redacted]`；body/content/html 及 `*_body` 等后缀 → `[redacted body]`
+/// （消息体可能含机密）。不对称性：脱狠了丢一行审计细节，漏脱了密钥
+/// 进持久存储——宁可脱狠。
+fn redact(v: &Value) -> Value {
+    const SECRET_KEYS: &[&str] = &[
+        "token",
+        "secret",
+        "password",
+        "api_key",
+        "access_token",
+        "bot_token",
+        "app_token",
+    ];
+    const BODY_KEYS: &[&str] = &["body", "content", "html"];
+    match v {
+        Value::Object(m) => m
+            .iter()
+            .map(|(k, val)| {
+                let kl = k.to_lowercase();
+                let redacted = if SECRET_KEYS.iter().any(|s| kl.contains(s)) {
+                    json!("[redacted]")
+                } else if BODY_KEYS
+                    .iter()
+                    .any(|b| kl == *b || kl.ends_with(&format!("_{b}")))
+                {
+                    json!("[redacted body]")
+                } else {
+                    redact(val)
+                };
+                (k.clone(), redacted)
+            })
+            .collect(),
+        Value::Array(a) => a.iter().map(redact).collect(),
+        _ => v.clone(),
+    }
+}
+
 fn scrub_input(tool: &str, input: &Value) -> Value {
     match tool {
         "fs_write" | "artifact_write" => json!({
@@ -368,8 +601,117 @@ fn scrub_input(tool: &str, input: &Value) -> Value {
             "bytes": input["content"].as_str().map(|s| s.len()).unwrap_or(0),
         }),
         "fs_patch" => json!({ "path": input["path"] }),
-        _ => input.clone(),
+        _ => redact(input),
     }
+}
+
+// ---------- 工具结果 spill（openworker-borrow 票 02）----------
+//
+// 出处：OpenWorker coworker/toolresult.py。超长结果完整落盘，上下文里只留
+// head+marker+tail——纯 head 截断丢的恰是末尾的错误输出（事故教训：截断点
+// 之后才是死因）。文件名取内容哈希：trim_context 每轮重跑同一结果幂等不重写，
+// 且路径无时间戳、对 prompt cache 前缀稳定。模型要全文走 fs_read——
+// spill 落在仓内正是为此。
+
+/// spill 目录（仓内相对路径）。
+pub const SPILL_DIR: &str = ".hexagon/spill";
+
+/// FNV-1a 64：内容寻址文件名，无需引入哈希依赖。
+fn fnv1a(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// 完整结果落 spill 文件，返回仓内相对路径。IO 失败 → None：
+/// spill 是上下文优化不是安全门，失败退回旧式纯截断，不拖垮工具调用。
+pub fn spill_result(ctx: &ToolContext, full: &str) -> Option<String> {
+    let dir = ctx.repo_root.join(SPILL_DIR);
+    std::fs::create_dir_all(&dir).ok()?;
+    ensure_gitignore(ctx);
+    let base = fnv1a(full);
+    for i in 0u32.. {
+        let name = if i == 0 {
+            base.clone()
+        } else {
+            format!("{base}-{i}")
+        };
+        let rel = format!("{SPILL_DIR}/{name}.txt");
+        let p = ctx.repo_root.join(&rel);
+        match std::fs::read(&p) {
+            // 同内容同文件名 → 幂等命中，不重写
+            Ok(existing) if existing == full.as_bytes() => return Some(rel),
+            // 哈希碰撞：换名再来
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::write(&p, full).ok()?;
+                return Some(rel);
+            }
+            Err(_) => return None,
+        }
+    }
+    unreachable!()
+}
+
+/// `.hexagon/spill/` 是上下文缓存不是产物——进 .gitignore 防 `git add -A` 提交。
+fn ensure_gitignore(ctx: &ToolContext) {
+    const ENTRY: &str = ".hexagon/spill/";
+    let p = ctx.repo_root.join(".gitignore");
+    let cur = std::fs::read_to_string(&p).unwrap_or_default();
+    if cur.lines().any(|l| l.trim() == ENTRY) {
+        return;
+    }
+    let mut new = cur;
+    if !new.is_empty() && !new.ends_with('\n') {
+        new.push('\n');
+    }
+    new.push_str(ENTRY);
+    new.push('\n');
+    if let Err(e) = std::fs::write(&p, new) {
+        log::warn!("gitignore update failed: {e}");
+    }
+}
+
+/// head+marker+tail 三段式截断：完整内容 spill 落盘，显示段保留尾部
+/// （错误输出通常在末尾）。cap 为显示段总预算。
+pub fn spill_trim(ctx: &ToolContext, content: &str, cap: usize) -> String {
+    if content.len() <= cap {
+        return content.to_string();
+    }
+    let Some(path) = spill_result(ctx, content) else {
+        let mut end = cap.min(content.len());
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut s = content[..end].to_string();
+        s.push_str(&format!("\n…[{} chars trimmed]", content.len() - end));
+        return s;
+    };
+    // 预算分配：尾部 1/4（错误位），头部拿余量；marker 预留 96 字符。
+    let tail_len = cap / 4;
+    let head_len = cap.saturating_sub(tail_len + 96);
+    let mut head_end = head_len.min(content.len());
+    while !content.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = content.len() - tail_len.min(content.len());
+    while !content.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    if tail_start < head_end {
+        tail_start = head_end;
+    }
+    let cut = tail_start - head_end;
+    let marker = format!("\n…[{cut} chars trimmed; full output: {path}]\n");
+    format!(
+        "{}{}{}",
+        &content[..head_end],
+        marker,
+        &content[tail_start..]
+    )
 }
 
 /// 仓内路径归一化：拒绝越出 repo_root。
@@ -449,6 +791,9 @@ impl Tool for Research {
                  "description": "what to research"}},
                "required": ["question"]})
     }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Read
+    }
     fn exec(&self, _db: &Db, _input: &Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
         Err(ToolError::Exec(
             "research is intercepted by the turn layer".into(),
@@ -467,6 +812,9 @@ impl Tool for FsRead {
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})
     }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Read
+    }
     fn builtin_deny(&self, input: &Value, _ctx: &ToolContext) -> Option<String> {
         let p = input["path"].as_str().unwrap_or("");
         is_credential_path(p).then(|| "credential content never enters context".into())
@@ -475,9 +823,9 @@ impl Tool for FsRead {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         let bytes = std::fs::read(&p)?;
         if bytes.len() > FS_READ_CAP {
-            return Ok(
-                json!({"truncated": true, "content": String::from_utf8_lossy(&bytes[..FS_READ_CAP])}),
-            );
+            let full = String::from_utf8_lossy(&bytes).into_owned();
+            let content = spill_trim(ctx, &full, FS_READ_CAP);
+            return Ok(json!({"truncated": true, "content": content}));
         }
         Ok(json!({"content": String::from_utf8_lossy(&bytes)}))
     }
@@ -489,15 +837,21 @@ impl Tool for FsWrite {
         "fs_write"
     }
     fn description(&self) -> &str {
-        "Write a file inside the repo (ownership-gated)"
+        "Write a whole file inside the repo (ownership-gated). For partial edits prefer fs_patch — rewriting an entire file when only a few lines change doubles context cost (OpenWorker incident: 1812 full rewrites)"
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::WriteLocal
     }
     fn builtin_deny(&self, input: &Value, _ctx: &ToolContext) -> Option<String> {
         let p = input["path"].as_str().unwrap_or("");
         if is_permission_rule_path(p) {
             return Some("agents cannot modify permission rules".into());
+        }
+        if is_agent_policy_path(p) {
+            return Some("skill/policy files are owner-managed".into());
         }
         is_credential_path(p).then(|| "credential files are not writable by agents".into())
     }
@@ -517,10 +871,13 @@ impl Tool for FsPatch {
         "fs_patch"
     }
     fn description(&self) -> &str {
-        "Replace an exact string in a repo file"
+        "Replace an exact string in a repo file — the preferred way to make partial edits. `old` must match uniquely; read the file first if unsure"
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}},"required":["path","old","new"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::WriteLocal
     }
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         FsWrite.builtin_deny(input, ctx)
@@ -548,13 +905,12 @@ impl Tool for Bash {
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]})
     }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Exec
+    }
     fn builtin_deny(&self, input: &Value, _ctx: &ToolContext) -> Option<String> {
         let cmd = input["cmd"].as_str().unwrap_or("");
         bash_hits_credentials(cmd).then(|| "command touches credential material".into())
-    }
-    // 占位求值：bash 永远走必问（安全网），票 11 接入规则形匹配。
-    fn needs_ask(&self, _input: &Value, _ctx: &ToolContext) -> bool {
-        true
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let out = std::process::Command::new("sh")
@@ -565,12 +921,10 @@ impl Tool for Bash {
         let mut stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let mut stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         if stdout.len() > BASH_OUTPUT_CAP {
-            stdout.truncate(BASH_OUTPUT_CAP);
-            stdout.push_str("…[truncated]");
+            stdout = spill_trim(ctx, &stdout, BASH_OUTPUT_CAP);
         }
         if stderr.len() > BASH_OUTPUT_CAP {
-            stderr.truncate(BASH_OUTPUT_CAP);
-            stderr.push_str("…[truncated]");
+            stderr = spill_trim(ctx, &stderr, BASH_OUTPUT_CAP);
         }
         Ok(json!({
             "exit_code": out.status.code().unwrap_or(-1),
@@ -587,12 +941,24 @@ impl Tool for ArtifactWrite {
         "artifact_write"
     }
     fn description(&self) -> &str {
-        "Deliver an artifact under .hexagon/ (metadata header required for enforced tiers)"
+        "Deliver an artifact under .hexagon/ (metadata header required for enforced tiers). For partial edits prefer fs_patch over re-writing the whole artifact"
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string"}},"required":["path","content"]})
     }
+    fn risk(&self) -> RiskClass {
+        RiskClass::WriteLocal
+    }
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
+        // 产物落在 .hexagon/<path>——守卫看的是生效路径，
+        // "skills/x/SKILL.md" 不能借产物管道写进策略面（票 09）。
+        let eff = format!(
+            ".hexagon/{}",
+            input["path"].as_str().unwrap_or("").trim_start_matches('/')
+        );
+        if is_agent_policy_path(&eff) {
+            return Some("skill/policy files are owner-managed".into());
+        }
         FsWrite.builtin_deny(input, ctx)
     }
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
@@ -634,6 +1000,9 @@ impl Tool for ArtifactRead {
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})
     }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Read
+    }
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         FsRead.builtin_deny(input, ctx)
     }
@@ -645,6 +1014,49 @@ impl Tool for ArtifactRead {
         let p = repo_path(&ctx.repo_root, &rel)?;
         let bytes = std::fs::read(&p)?;
         Ok(json!({"content": String::from_utf8_lossy(&bytes[..bytes.len().min(FS_READ_CAP)])}))
+    }
+}
+
+/// 技能按需加载（票 09）：catalog 在系统提示里是一行式指针，
+/// 全文从这里取。每次调用重扫目录——会话中新建的技能也能取到。
+pub struct LoadSkill;
+impl Tool for LoadSkill {
+    fn name(&self) -> &str {
+        "load_skill"
+    }
+    fn description(&self) -> &str {
+        "Load a skill's full instructions by name (see the skills catalog in your brief)"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Read
+    }
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let name =
+            crate::skills::validate_name(str_arg(input, "name")?).map_err(ToolError::BadInput)?;
+        let mut loader = crate::skills::SkillLoader::new(crate::skills::skill_dirs(&ctx.repo_root));
+        let session = ctx
+            .stage_run_id
+            .clone()
+            .unwrap_or_else(|| ctx.agent_id.clone());
+        let muted = crate::skills::SkillMutes::load(&ctx.repo_root).muted_set(&session);
+        if loader.get(&name).is_none() {
+            loader.rescan();
+        }
+        let skill = loader.get(&name).filter(|_| !muted.contains(&name));
+        match skill {
+            Some(s) => Ok(json!({
+                "name": s.name,
+                "instructions": s.instructions,
+                "resources_path": s.path,
+            })),
+            None => Err(ToolError::BadInput(format!(
+                "unknown skill: {name}; available: {:?}",
+                loader.visible_names(&muted)
+            ))),
+        }
     }
 }
 
@@ -770,7 +1182,7 @@ mod tests {
         // 未执行
         assert!(!dir.path().join("out.txt").exists());
         let out = reg
-            .resolve(&db, &ctx, &qid, true, None, "activation", None)
+            .resolve(&db, &ctx, &qid, true, None, "activation", None, "owner")
             .unwrap();
         let CallOutcome::Done(v) = out else { panic!() };
         assert_eq!(v["exit_code"], 0);
@@ -796,7 +1208,7 @@ mod tests {
         else {
             panic!()
         };
-        reg.resolve(&db, &ctx, &qid, false, None, "activation", None)
+        reg.resolve(&db, &ctx, &qid, false, None, "activation", None, "owner")
             .unwrap();
         assert!(!dir.path().join("nope").exists());
     }
@@ -818,6 +1230,7 @@ mod tests {
             Some("npm install *"),
             "project",
             None,
+            "owner",
         )
         .unwrap();
         let n: i64 = db
@@ -857,6 +1270,65 @@ mod tests {
         assert!(matches!(out, CallOutcome::Asked(_)));
     }
 
+    // ---------- openworker-borrow 票 02：工具结果 spill ----------
+
+    #[test]
+    fn bash_oversize_output_spills_head_marker_tail() {
+        let (db, _reg, ctx, dir) = setup();
+        // stdout 超 BASH_OUTPUT_CAP：直接调 exec 贴近断言面
+        // （权限管线已在 bash_asks_then_executes_on_allow 覆盖）
+        let head = "H".repeat(BASH_OUTPUT_CAP);
+        let tail = "TAIL_ERROR_MARKER";
+        let body = format!("{head}{}{tail}", "x".repeat(1024));
+        let v = Bash
+            .exec(
+                &db,
+                &json!({"cmd": format!("printf '%s' '{}'", body)}),
+                &ctx,
+            )
+            .unwrap();
+        let out = v["stdout"].as_str().unwrap();
+        assert!(out.contains("full output: .hexagon/spill/"), "{out:?}");
+        assert!(out.starts_with("HHH"), "head kept");
+        assert!(out.ends_with(tail), "tail kept: {}", &out[out.len() - 80..]);
+        // spill 文件可经 fs_read 读回完整内容
+        let spill_rel = out
+            .split("full output: ")
+            .nth(1)
+            .unwrap()
+            .split(']')
+            .next()
+            .unwrap()
+            .trim();
+        let full = std::fs::read_to_string(dir.path().join(spill_rel)).unwrap();
+        assert_eq!(full, body);
+        // .gitignore 已登记
+        assert!(std::fs::read_to_string(dir.path().join(".gitignore"))
+            .unwrap()
+            .contains(".hexagon/spill/"));
+    }
+
+    #[test]
+    fn fs_read_oversize_spills_and_is_idempotent() {
+        let (_db, _reg, ctx, dir) = setup();
+        let big = "a".repeat(FS_READ_CAP + 4096) + "END";
+        std::fs::write(dir.path().join("big.txt"), &big).unwrap();
+        let v = FsRead
+            .exec(&_db, &json!({"path": "big.txt"}), &ctx)
+            .unwrap();
+        assert_eq!(v["truncated"], true);
+        let content = v["content"].as_str().unwrap();
+        assert!(content.contains("full output:"));
+        assert!(content.ends_with("END"), "tail preserved");
+        // 幂等：同内容再 spill 不产生第二个文件
+        let again = spill_result(&ctx, &big).unwrap();
+        assert!(dir.path().join(&again).exists());
+        let n = std::fs::read_dir(dir.path().join(SPILL_DIR))
+            .unwrap()
+            .count();
+        assert_eq!(n, 1);
+    }
+
     #[test]
     fn write_content_not_logged_in_events() {
         let (db, reg, ctx, _dir) = setup();
@@ -876,5 +1348,184 @@ mod tests {
             fs::read_to_string(_dir.path().join("a.txt")).unwrap(),
             "SUPERSECRET"
         );
+    }
+
+    // ---- 票 11：必问卡幂等键 ----
+
+    #[test]
+    fn queued_question_reused_on_same_call_seq() {
+        let (db, reg, ctx, _d) = setup();
+        let inp = || json!({"cmd": "rm -rf build"});
+        let o1 = reg
+            .call_with_seq(&db, &ctx, "bash", inp(), Some("r0i0"))
+            .unwrap();
+        let CallOutcome::Asked(q1) = o1 else { panic!() };
+        // 同 seq+同参重放 → 同一张卡，队列不增
+        let o2 = reg
+            .call_with_seq(&db, &ctx, "bash", inp(), Some("r0i0"))
+            .unwrap();
+        assert!(matches!(o2, CallOutcome::Asked(ref q) if *q == q1));
+        let n: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM pending_questions WHERE kind='permission'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        // deduped 事件留痕
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::PermissionAsked]))
+            .unwrap();
+        assert_eq!(
+            items[1].event.payload["deduped"], true,
+            "第二次命中应有 deduped 标记"
+        );
+        // 不同 seq 或不同参 → 各自独立新卡
+        let o3 = reg
+            .call_with_seq(&db, &ctx, "bash", inp(), Some("r0i1"))
+            .unwrap();
+        assert!(matches!(o3, CallOutcome::Asked(ref q) if *q != q1));
+        let o4 = reg
+            .call_with_seq(&db, &ctx, "bash", json!({"cmd":"ls"}), Some("r0i0"))
+            .unwrap();
+        assert!(matches!(o4, CallOutcome::Asked(ref q) if *q != q1));
+    }
+
+    #[test]
+    fn answered_deny_replays_as_denied_without_new_card() {
+        let (db, reg, ctx, _d) = setup();
+        let CallOutcome::Asked(qid) = reg
+            .call_with_seq(&db, &ctx, "bash", json!({"cmd":"rm -rf x"}), Some("r0i0"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        reg.resolve(&db, &ctx, &qid, false, None, "activation", None, "owner")
+            .unwrap();
+        // 重放同调用 → 沿用 deny 裁决，不弹新卡；answered_by 落账
+        let out = reg
+            .call_with_seq(&db, &ctx, "bash", json!({"cmd":"rm -rf x"}), Some("r0i0"))
+            .unwrap();
+        assert!(matches!(out, CallOutcome::Denied(ref r) if r == "owner denied"));
+        let n: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM pending_questions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        let by: String = db
+            .conn()
+            .query_row(
+                "SELECT answered_by FROM pending_questions WHERE id=?1",
+                [&qid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(by, "owner");
+    }
+
+    #[test]
+    fn answered_allow_with_result_replays_as_done_marker() {
+        let (db, reg, ctx, _d) = setup();
+        let CallOutcome::Asked(qid) = reg
+            .call_with_seq(&db, &ctx, "bash", json!({"cmd":"echo hi"}), Some("r0i0"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        // owner 批准 → resolve 内已执行
+        let out = reg
+            .resolve(&db, &ctx, &qid, true, None, "activation", None, "owner")
+            .unwrap();
+        assert!(matches!(out, CallOutcome::Done(_)));
+        // 重放 → Done 标记，不再执行（副作用不双跑）
+        let out = reg
+            .call_with_seq(&db, &ctx, "bash", json!({"cmd":"echo hi"}), Some("r0i0"))
+            .unwrap();
+        let CallOutcome::Done(v) = out else { panic!() };
+        assert_eq!(v["duplicate_of"], qid);
+        let execs: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='tool_result' AND json_extract(payload,'$.tool')='bash'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(execs, 1, "副作用只跑一次");
+    }
+
+    // ---- 票 12：审计脱敏 ----
+
+    #[test]
+    fn secret_keys_redacted_in_trace_payload() {
+        let (db, reg, ctx, _d) = setup();
+        // bash 走 Ask → 卡；入参里带机密字段
+        let _ = reg.call(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd":"x","api_key":"AKIA123","nested":{"password":"p@ss","note":"ok"},
+                   "reply_body":"<机密正文>","safe":"visible"}),
+        );
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::ToolCalled]))
+            .unwrap();
+        let inp = &items[0].event.payload["input"];
+        assert_eq!(inp["api_key"], "[redacted]");
+        assert_eq!(inp["nested"]["password"], "[redacted]");
+        assert_eq!(inp["nested"]["note"], "ok");
+        assert_eq!(inp["reply_body"], "[redacted body]");
+        assert_eq!(inp["safe"], "visible");
+        // 整个事件文本里不能出现机密值
+        let raw = items[0].event.payload.to_string();
+        assert!(!raw.contains("AKIA123"));
+        assert!(!raw.contains("p@ss"));
+        assert!(!raw.contains("机密正文"));
+    }
+
+    #[test]
+    fn oversized_event_payload_spills_to_file() {
+        let (db, _reg, _ctx, dir) = setup();
+        db.conn()
+            .execute(
+                "UPDATE projects SET dir=?1 WHERE id='p1'",
+                [dir.path().to_str().unwrap()],
+            )
+            .unwrap();
+        let big = "x".repeat(200 * 1024);
+        db.append_event(
+            "p1",
+            EventKind::System,
+            json!({"kind":"big","blob": big}),
+            Some("a1"),
+            None,
+        )
+        .unwrap();
+        let (payload,): (String,) = db
+            .conn()
+            .query_row(
+                "SELECT payload FROM events WHERE kind='system' AND json_extract(payload,'$.kind') IS NULL",
+                [],
+                |r| Ok((r.get(0)?,)),
+            )
+            .unwrap_or_else(|_| {
+                db.conn()
+                    .query_row(
+                        "SELECT payload FROM events ORDER BY id DESC LIMIT 1",
+                        [],
+                        |r| Ok((r.get(0)?,)),
+                    )
+                    .unwrap()
+            });
+        let p: Value = serde_json::from_str(&payload).unwrap();
+        assert!(p["spilled"].is_string(), "超限载荷应落 spill 指针: {p}");
+        let spilled_path = p["spilled"].as_str().unwrap().to_string();
+        let full = std::fs::read_to_string(&spilled_path).unwrap();
+        assert!(full.contains(&"x".repeat(1000)), "spill 文件存全量");
+        assert!(std::path::Path::new(&spilled_path)
+            .to_string_lossy()
+            .contains(".hexagon/spill"));
     }
 }
