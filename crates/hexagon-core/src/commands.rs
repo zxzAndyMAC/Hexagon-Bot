@@ -1,0 +1,199 @@
+//! 文本指令与 composer token 解析（中立模块）。
+//!
+//! 被门面（api.rs）与回合内核（turn.rs 流中过滤控制消息）共用；
+//! 本模块只依赖 db/trace，不依赖 api——arch-review 票 01 前这些函数住在
+//! api.rs 里，导致 turn.rs 反向依赖门面（诊断卡 D08）。
+
+use crate::db::Db;
+use crate::trace::{MessageToken, TraceError};
+
+/// composer 的 @/# 解析：[@名字]→mention，[#路径]→path 指针。
+pub fn parse_tokens(body: &str) -> Vec<MessageToken> {
+    let mut out = Vec::new();
+    for word in body.split_whitespace() {
+        if let Some(name) = word.strip_prefix('@') {
+            if !name.is_empty() {
+                out.push(MessageToken::Mention {
+                    agent_role: name.to_string(),
+                });
+            }
+        } else if let Some(p) = word.strip_prefix('#') {
+            if !p.is_empty() {
+                out.push(MessageToken::PathRef {
+                    path: p.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// 回合期旁路写入（turn-streaming 票 04/05）：dispatch 持 wb 锁跑回合时，
+/// owner 消息经独立的第二条 Db 连接落库——不然干预永远排在回合后面，
+/// steering 与流中叫停只剩空壳。指令只解析不分发，分发归调用方选通道
+/// （Pause/Resume 可以走同一条旁路 db；其余指令仍该排队等 wb）。
+pub fn send_message_side(
+    db: &Db,
+    project_id: &str,
+    body: &str,
+) -> Result<(i64, Option<TextCommand>), TraceError> {
+    let tokens = parse_tokens(body);
+    let id = db.append_message(project_id, "owner", body, &tokens, None, None)?;
+    Ok((id, parse_command(body)))
+}
+
+/// 文本指令（与按钮同权同痕）：只认整句命令，防普通语句被劫持。
+/// pub：壳层旁路写入路径（票 05 send_message_side）要按变体分流。
+#[derive(Debug, PartialEq)]
+pub enum TextCommand {
+    Rewind(Option<usize>),
+    Skip,
+    Stamp,
+    Pause,
+    Resume,
+    SleepAll,
+    Override(String),
+    Install(String),
+}
+
+/// 整句匹配：命令词 + 可选数字参数，多余文本一律不算命令。
+/// 双轨（ADR 0051）：`/verb` 规范式全语言通用；本地化斜杠别名（/退回 /盖章）也收；
+/// 裸词（退回/盖章…）保留为过渡形态。pub：壳层旁路写入要复用同一解析。
+pub fn parse_command(body: &str) -> Option<TextCommand> {
+    let b = body.trim();
+    // /verb 规范式 + 本地化斜杠别名（退回参数走同一数字尾巴规则）
+    if let Some(rest) = b.strip_prefix('/') {
+        let (verb, arg) = match rest.split_once(' ') {
+            Some((v, a)) => (v, a.trim()),
+            None => (rest, ""),
+        };
+        return match verb {
+            "rewind" | "退回" | "回退" => {
+                if arg.is_empty() {
+                    Some(TextCommand::Rewind(None))
+                } else {
+                    arg.trim_start_matches('到')
+                        .parse::<usize>()
+                        .ok()
+                        .map(|n| TextCommand::Rewind(Some(n)))
+                }
+            }
+            "skip" | "跳过" if arg.is_empty() => Some(TextCommand::Skip),
+            "stamp" | "盖章" | "通过" if arg.is_empty() => Some(TextCommand::Stamp),
+            "pause" | "暂停" if arg.is_empty() => Some(TextCommand::Pause),
+            "resume" | "恢复" if arg.is_empty() => Some(TextCommand::Resume),
+            "sleep" | "sleep_all" | "休眠" | "全员休眠" if arg.is_empty() => {
+                Some(TextCommand::SleepAll)
+            }
+            // /override <理由>：理由必填，空理由不算指令（落普通消息）
+            "override" | "覆盖" if !arg.is_empty() => {
+                Some(TextCommand::Override(arg.to_string()))
+            }
+            // /install <描述>：描述必填，空描述落普通消息
+            "install" | "安装" if !arg.is_empty() => Some(TextCommand::Install(arg.to_string())),
+            _ => None, // 未知 /verb 或多余参数 → 普通消息，不吞
+        };
+    }
+    match b {
+        "跳过" => return Some(TextCommand::Skip),
+        "盖章" | "通过" => return Some(TextCommand::Stamp),
+        "暂停" => return Some(TextCommand::Pause),
+        "恢复" => return Some(TextCommand::Resume),
+        "休眠" | "全员休眠" => return Some(TextCommand::SleepAll),
+        "退回" | "回退" | "退回上一阶段" | "回退上一阶段" => {
+            return Some(TextCommand::Rewind(None))
+        }
+        _ => {}
+    }
+    // 「退回 2」「回退到 1」：前缀 + 纯数字尾巴才算命令，其他尾巴不劫持
+    for prefix in ["退回", "回退"] {
+        if let Some(rest) = b.strip_prefix(prefix) {
+            let rest = rest.trim().trim_start_matches('到').trim();
+            if let Ok(n) = rest.parse::<usize>() {
+                return Some(TextCommand::Rewind(Some(n)));
+            }
+            return None; // 「退回」打头但尾巴不是数字 → 普通消息
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slash_commands_parse_both_rails() {
+        // /verb 规范式 + 本地化斜杠别名，与裸词同权
+        assert_eq!(parse_command("/skip"), Some(TextCommand::Skip));
+        assert_eq!(parse_command("/stamp"), Some(TextCommand::Stamp));
+        assert_eq!(parse_command("/pause"), Some(TextCommand::Pause));
+        assert_eq!(parse_command("/resume"), Some(TextCommand::Resume));
+        assert_eq!(parse_command("/sleep"), Some(TextCommand::SleepAll));
+        assert_eq!(parse_command("/rewind"), Some(TextCommand::Rewind(None)));
+        assert_eq!(
+            parse_command("/rewind 2"),
+            Some(TextCommand::Rewind(Some(2)))
+        );
+        assert_eq!(parse_command("/盖章"), Some(TextCommand::Stamp));
+        assert_eq!(parse_command("/跳过"), Some(TextCommand::Skip));
+        assert_eq!(parse_command("/退回 1"), Some(TextCommand::Rewind(Some(1))));
+        // 未知 verb 与非法参数不劫持——算普通消息
+        assert_eq!(parse_command("/dance"), None);
+        assert_eq!(parse_command("/rewind abc"), None);
+        assert_eq!(parse_command("/skip 多余尾巴"), None);
+    }
+
+    /// 票 05：旁路写入——回合持有的主连接之外，壳层开第二条 Db 连接落
+    /// owner 消息并解析指令；WAL 下主连接立即可读（send_message_side 是
+    /// src-tauri send_message/pause/resume 在回合进行中的真实通道）。
+    #[test]
+    fn send_message_side_visible_from_main_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let main = Db::open(&path).unwrap();
+        main.conn()
+            .execute(
+                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                [],
+            )
+            .unwrap();
+        // 第二条连接 = 壳层旁路；写 /pause 与普通消息
+        let side = Db::open(&path).unwrap();
+        let (id, cmd) = send_message_side(&side, "p1", "/pause").unwrap();
+        assert_eq!(cmd, Some(TextCommand::Pause));
+        let body: String = main
+            .conn()
+            .query_row("SELECT body FROM messages WHERE id=?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(body, "/pause");
+        let (_id2, cmd2) = send_message_side(&side, "p1", "普通插话").unwrap();
+        assert_eq!(cmd2, None);
+        // owner_message 事件也随 append_message 落了——主连接看得到
+        let n: i64 = main
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='owner_message'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn token_parsing() {
+        let t = parse_tokens("继续 @后端 参考 #src/main.rs 谢谢");
+        assert_eq!(
+            t,
+            vec![
+                MessageToken::Mention {
+                    agent_role: "后端".into()
+                },
+                MessageToken::PathRef {
+                    path: "src/main.rs".into()
+                }
+            ]
+        );
+    }
+}

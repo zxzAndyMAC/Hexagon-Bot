@@ -66,7 +66,10 @@ fn open_project(
         .transpose()
         .map_err(|e: serde_json::Error| e.to_string())?;
     let mut wb = Workbench::open(&dir, &name, &roles, pack).map_err(|e| e.to_string())?;
-    hexagon_core::providers::register_all(&mut wb, Arc::new(hexagon_core::credentials::OsKeychain));
+    hexagon_core::providers::register_all(
+        &mut wb.providers,
+        Arc::new(hexagon_core::credentials::OsKeychain),
+    );
     attach_delta_hook(&app, &wb);
     *state.db_path.lock().map_err(|e| e.to_string())? =
         Some(std::path::Path::new(&dir).join(".hexagon/state.db"));
@@ -95,14 +98,17 @@ fn send_message(state: tauri::State<AppState>, body: String) -> Result<i64, Stri
     // 回合中途本来也不该执行它们。
     if let Some(db) = side_db(&state)? {
         let (id, cmd) =
-            hexagon_core::api::send_message_side(&db, "p1", &body).map_err(|e| e.to_string())?;
-        use hexagon_core::api::TextCommand;
+            hexagon_core::commands::send_message_side(&db, hexagon_core::PROJECT_ID, &body)
+                .map_err(|e| e.to_string())?;
+        use hexagon_core::commands::TextCommand;
         match cmd {
             Some(TextCommand::Pause) => {
-                hexagon_core::orchestra::pause(&db, "p1").map_err(|e| e.to_string())?;
+                hexagon_core::orchestra::pause(&db, hexagon_core::PROJECT_ID)
+                    .map_err(|e| e.to_string())?;
             }
             Some(TextCommand::Resume) => {
-                hexagon_core::orchestra::resume(&db, "p1").map_err(|e| e.to_string())?;
+                hexagon_core::orchestra::resume(&db, hexagon_core::PROJECT_ID)
+                    .map_err(|e| e.to_string())?;
             }
             Some(other) => with_wb(&state, |wb| wb.dispatch_command(&other))?,
             None => {}
@@ -153,14 +159,16 @@ fn skip_review(state: tauri::State<AppState>, artifact_kind: String) -> Result<(
 fn pause(state: tauri::State<AppState>) -> Result<(), String> {
     // 票 04：暂停按钮是回合中的叫停通道——必须走旁路，wb 锁正被回合占着
     if let Some(db) = side_db(&state)? {
-        return hexagon_core::orchestra::pause(&db, "p1").map_err(|e| e.to_string());
+        return hexagon_core::orchestra::pause(&db, hexagon_core::PROJECT_ID)
+            .map_err(|e| e.to_string());
     }
     with_wb(&state, |wb| wb.pause())
 }
 #[tauri::command]
 fn resume(state: tauri::State<AppState>) -> Result<(), String> {
     if let Some(db) = side_db(&state)? {
-        return hexagon_core::orchestra::resume(&db, "p1").map_err(|e| e.to_string());
+        return hexagon_core::orchestra::resume(&db, hexagon_core::PROJECT_ID)
+            .map_err(|e| e.to_string());
     }
     with_wb(&state, |wb| wb.resume())
 }
@@ -550,7 +558,10 @@ fn open_recent(
         .unwrap_or_else(|| dir.clone());
     // OR IGNORE 保住库里的真实 name/mode；project_info 读库得真值
     let mut wb = Workbench::open(&dir, &name, &[], pack).map_err(|e| e.to_string())?;
-    hexagon_core::providers::register_all(&mut wb, Arc::new(hexagon_core::credentials::OsKeychain));
+    hexagon_core::providers::register_all(
+        &mut wb.providers,
+        Arc::new(hexagon_core::credentials::OsKeychain),
+    );
     attach_delta_hook(&app, &wb);
     *state.db_path.lock().map_err(|e| e.to_string())? =
         Some(std::path::Path::new(&dir).join(".hexagon/state.db"));
@@ -684,7 +695,10 @@ fn refresh_providers(state: &AppState) {
         for slot in doc.slots.keys() {
             wb.providers.remove(slot);
         }
-        hexagon_core::providers::register_all(wb, Arc::new(hexagon_core::credentials::OsKeychain));
+        hexagon_core::providers::register_all(
+            &mut wb.providers,
+            Arc::new(hexagon_core::credentials::OsKeychain),
+        );
     }
 }
 
@@ -809,7 +823,7 @@ fn create_project(
         &pdoc,
     )
     .map_err(|e| e.to_string())?;
-    hexagon_core::providers::register_all(&mut wb, Arc::new(OsKeychain));
+    hexagon_core::providers::register_all(&mut wb.providers, Arc::new(OsKeychain));
     attach_delta_hook(&app, &wb);
     *state.db_path.lock().map_err(|e| e.to_string())? =
         Some(std::path::Path::new(&opts.dir).join(".hexagon/state.db"));

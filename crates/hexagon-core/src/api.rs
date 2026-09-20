@@ -4,11 +4,12 @@
 //! UI（Tauri command 层）和场景 DSL 都只过这层，没有旁路通道。
 
 use crate::artifacts::{self, TierMap};
+use crate::commands::{send_message_side, TextCommand};
 use crate::db::Db;
 use crate::orchestra::{self, OrchError, PackDef};
 use crate::provider::ModelProvider;
 use crate::tools::{Registry, ToolContext};
-use crate::trace::{Event, EventKind, MessageToken, TimelineItem, TraceError};
+use crate::trace::{Event, EventKind, TimelineItem, TraceError};
 use crate::turn::{self, TurnOutcome};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -94,16 +95,16 @@ impl Workbench {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(dir.join(".hexagon"))?;
         let db = Db::open(dir.join(".hexagon/state.db"))?;
-        let project_id = "p1".to_string();
+        let project_id = crate::PROJECT_ID.to_string();
         db.conn().execute(
             "INSERT OR IGNORE INTO projects (id, dir, name, mode)
-             VALUES ('p1', ?1, ?2, 'pack')",
-            rusqlite::params![dir.to_string_lossy(), name],
+             VALUES (?1, ?2, ?3, 'pack')",
+            rusqlite::params![crate::PROJECT_ID, dir.to_string_lossy(), name],
         )?;
         for (aid, role) in roles {
             db.conn().execute(
-                "INSERT OR IGNORE INTO agents (id, project_id, role) VALUES (?1,'p1',?2)",
-                rusqlite::params![aid, role],
+                "INSERT OR IGNORE INTO agents (id, project_id, role) VALUES (?1,?2,?3)",
+                rusqlite::params![aid, crate::PROJECT_ID, role],
             )?;
         }
         if let Some(p) = &pack {
@@ -130,13 +131,13 @@ impl Workbench {
     pub fn for_test(dir: &Path, roles: &[&str], pack: Option<PackDef>) -> Result<Self, ApiError> {
         let db = Db::open_in_memory()?;
         db.conn().execute(
-            "INSERT INTO projects (id, dir, name, mode) VALUES ('p1',?1,'t','pack')",
-            [dir.to_string_lossy().to_string()],
+            "INSERT INTO projects (id, dir, name, mode) VALUES (?1,?2,'t','pack')",
+            rusqlite::params![crate::PROJECT_ID, dir.to_string_lossy().to_string()],
         )?;
         for (i, r) in roles.iter().enumerate() {
             db.conn().execute(
-                "INSERT INTO agents (id, project_id, role) VALUES (?1,'p1',?2)",
-                rusqlite::params![format!("a{i}"), r],
+                "INSERT INTO agents (id, project_id, role) VALUES (?1,?2,?3)",
+                rusqlite::params![format!("a{i}"), crate::PROJECT_ID, r],
             )?;
         }
         if let Some(p) = &pack {
@@ -147,7 +148,7 @@ impl Workbench {
             registry: Registry::builtin(),
             providers: HashMap::new(),
             creds: Arc::new(crate::credentials::MemoryStore::default()),
-            project_id: "p1".into(),
+            project_id: crate::PROJECT_ID.into(),
             repo_root: dir.to_path_buf(),
             pack,
             delta_hook: Mutex::new(None),
@@ -518,13 +519,13 @@ impl Workbench {
         remember_shape: Option<&str>,
         scope: &str,
     ) -> Result<(), ApiError> {
-        // payload 里有 agent_id
-        let payload: String = self.db.conn().query_row(
+        // 列里存的是 agent_id（变量曾误名 payload——arch-review 票 01 订正）
+        let agent_id: String = self.db.conn().query_row(
             "SELECT agent_id FROM pending_questions WHERE id=?1",
             [question_id],
             |r| r.get(0),
         )?;
-        let ctx = self.ctx_for(&payload, None);
+        let ctx = self.ctx_for(&agent_id, None);
         self.registry.resolve(
             &self.db,
             &ctx,
@@ -578,11 +579,9 @@ impl Workbench {
                 .query_row("SELECT model_slot FROM agents WHERE id=?1", [&aid], |r| {
                     r.get(0)
                 })?;
-        let provider = self
-            .providers
-            .get(slot.as_deref().unwrap_or("default"))
-            .or_else(|| self.providers.get("default"))
-            .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        let provider =
+            crate::providers::resolve_slot(&self.providers, slot.as_deref().unwrap_or("default"))
+                .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
         // 票 03：delta hook 锁跨整个回合——hook 一旦挂上，所有走
         // run_turn_opts 的入口（run_turn/dispatch/撞限放行）自动流式。
         let mut guard = self.delta_hook.lock().unwrap();
@@ -870,11 +869,9 @@ impl Workbench {
             [agent_id],
             |r| r.get(0),
         )?;
-        let provider = self
-            .providers
-            .get(slot.as_deref().unwrap_or("default"))
-            .or_else(|| self.providers.get("default"))
-            .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        let provider =
+            crate::providers::resolve_slot(&self.providers, slot.as_deref().unwrap_or("default"))
+                .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
         let role: String =
             self.db
                 .conn()
@@ -906,14 +903,14 @@ impl Workbench {
         Ok(text)
     }
 
-    /// 包ドラフト読込（票 31）：.hexagon/pack.json → 无ければ钉住副本を複製源に。
+    /// 读包草稿（票 31）：.hexagon/pack.json，没有则以钉住副本为复制源。
     pub fn pack_draft(&self) -> Result<Value, ApiError> {
         let pack = crate::packedit::load_draft(&self.repo_root)?;
         Ok(serde_json::to_value(&pack)?)
     }
 
-    /// 包ドラフト保存（票 31）：チーム名簿で検証 → pack.json へ。
-    /// pack.active.json には触れない（走行中インスタンスは钉版本で隔離済み）。
+    /// 存包草稿（票 31）：按团队名册校验后写 pack.json。
+    /// 不动 pack.active.json（运行中的实例已被钉版本隔离）。
     pub fn save_pack_draft(&self, pack_json: &str) -> Result<(), ApiError> {
         let pack = crate::packedit::parse_draft(pack_json)?;
         Ok(crate::packedit::save_draft(
@@ -924,19 +921,19 @@ impl Workbench {
         )?)
     }
 
-    /// ドラフトを個人テンプレートに保存（票 31）：~/.config/hexagon/templates/。
+    /// 草稿存为个人模板（票 31）：~/.config/hexagon/templates/。
     pub fn save_pack_template(&self, pack_json: &str) -> Result<String, ApiError> {
         let pack = crate::packedit::parse_draft(pack_json)?;
         let path = crate::packedit::save_template(&pack)?;
         Ok(path.to_string_lossy().to_string())
     }
 
-    /// 個人テンプレート一覧。
+    /// 个人模板列表。
     pub fn pack_templates(&self) -> Result<Vec<String>, ApiError> {
         Ok(crate::packedit::list_templates()?)
     }
 
-    /// 包を YAML でエクスポート（票 31）：ドラフト優先、無ければ钉住副本。
+    /// 包导出为 YAML（票 31）：草稿优先，没有则用钉住副本。
     pub fn export_pack_yaml(&self, dest: &str) -> Result<(), ApiError> {
         Ok(crate::packedit::export_yaml(
             &self.repo_root,
@@ -1230,181 +1227,14 @@ impl Workbench {
     }
 }
 
-/// composer 的 @/# 解析：[@名字]→mention，[#路径]→path 指针。
-pub fn parse_tokens(body: &str) -> Vec<MessageToken> {
-    let mut out = Vec::new();
-    for word in body.split_whitespace() {
-        if let Some(name) = word.strip_prefix('@') {
-            if !name.is_empty() {
-                out.push(MessageToken::Mention {
-                    agent_role: name.to_string(),
-                });
-            }
-        } else if let Some(p) = word.strip_prefix('#') {
-            if !p.is_empty() {
-                out.push(MessageToken::PathRef {
-                    path: p.to_string(),
-                });
-            }
-        }
-    }
-    out
-}
-
-/// 回合期旁路写入（turn-streaming 票 04/05）：dispatch 持 wb 锁跑回合时，
-/// owner 消息经独立的第二条 Db 连接落库——不然干预永远排在回合后面，
-/// steering 与流中叫停只剩空壳。指令只解析不分发，分发归调用方选通道
-/// （Pause/Resume 可以走同一条旁路 db；其余指令仍该排队等 wb）。
-pub fn send_message_side(
-    db: &Db,
-    project_id: &str,
-    body: &str,
-) -> Result<(i64, Option<TextCommand>), ApiError> {
-    let tokens = parse_tokens(body);
-    let id = db.append_message(project_id, "owner", body, &tokens, None, None)?;
-    Ok((id, parse_command(body)))
-}
-
-/// 文本指令（与按钮同权同痕）：只认整句命令，防普通语句被劫持。
-/// pub：壳层旁路写入路径（票 05 send_message_side）要按变体分流。
-#[derive(Debug, PartialEq)]
-pub enum TextCommand {
-    Rewind(Option<usize>),
-    Skip,
-    Stamp,
-    Pause,
-    Resume,
-    SleepAll,
-    Override(String),
-    Install(String),
-}
-
-/// 整句匹配：命令词 + 可选数字参数，多余文本一律不算命令。
-/// 双轨（ADR 0051）：`/verb` 规范式全语言通用；本地化斜杠别名（/退回 /盖章）也收；
-/// 裸词（退回/盖章…）保留为过渡形态。pub：壳层旁路写入要复用同一解析。
-pub fn parse_command(body: &str) -> Option<TextCommand> {
-    let b = body.trim();
-    // /verb 规范式 + 本地化斜杠别名（退回参数走同一数字尾巴规则）
-    if let Some(rest) = b.strip_prefix('/') {
-        let (verb, arg) = match rest.split_once(' ') {
-            Some((v, a)) => (v, a.trim()),
-            None => (rest, ""),
-        };
-        return match verb {
-            "rewind" | "退回" | "回退" => {
-                if arg.is_empty() {
-                    Some(TextCommand::Rewind(None))
-                } else {
-                    arg.trim_start_matches('到')
-                        .parse::<usize>()
-                        .ok()
-                        .map(|n| TextCommand::Rewind(Some(n)))
-                }
-            }
-            "skip" | "跳过" if arg.is_empty() => Some(TextCommand::Skip),
-            "stamp" | "盖章" | "通过" if arg.is_empty() => Some(TextCommand::Stamp),
-            "pause" | "暂停" if arg.is_empty() => Some(TextCommand::Pause),
-            "resume" | "恢复" if arg.is_empty() => Some(TextCommand::Resume),
-            "sleep" | "sleep_all" | "休眠" | "全员休眠" if arg.is_empty() => {
-                Some(TextCommand::SleepAll)
-            }
-            // /override <理由>：理由必填，空理由不算指令（落普通消息）
-            "override" | "覆盖" if !arg.is_empty() => {
-                Some(TextCommand::Override(arg.to_string()))
-            }
-            // /install <描述>：描述必填，空描述落普通消息
-            "install" | "安装" if !arg.is_empty() => Some(TextCommand::Install(arg.to_string())),
-            _ => None, // 未知 /verb 或多余参数 → 普通消息，不吞
-        };
-    }
-    match b {
-        "跳过" => return Some(TextCommand::Skip),
-        "盖章" | "通过" => return Some(TextCommand::Stamp),
-        "暂停" => return Some(TextCommand::Pause),
-        "恢复" => return Some(TextCommand::Resume),
-        "休眠" | "全员休眠" => return Some(TextCommand::SleepAll),
-        "退回" | "回退" | "退回上一阶段" | "回退上一阶段" => {
-            return Some(TextCommand::Rewind(None))
-        }
-        _ => {}
-    }
-    // 「退回 2」「回退到 1」：前缀 + 纯数字尾巴才算命令，其他尾巴不劫持
-    for prefix in ["退回", "回退"] {
-        if let Some(rest) = b.strip_prefix(prefix) {
-            let rest = rest.trim().trim_start_matches('到').trim();
-            if let Ok(n) = rest.parse::<usize>() {
-                return Some(TextCommand::Rewind(Some(n)));
-            }
-            return None; // 「退回」打头但尾巴不是数字 → 普通消息
-        }
-    }
-    None
-}
+// 文本指令与 token 解析已迁往 `commands.rs`（中立模块，arch-review 票 01）：
+// turn.rs 曾为此反向依赖本门面（诊断卡 D08）。
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::provider::ScriptedProvider;
     use crate::turn::{text_response, tool_response};
-
-    #[test]
-    fn slash_commands_parse_both_rails() {
-        // /verb 规范式 + 本地化斜杠别名，与裸词同权
-        assert_eq!(parse_command("/skip"), Some(TextCommand::Skip));
-        assert_eq!(parse_command("/stamp"), Some(TextCommand::Stamp));
-        assert_eq!(parse_command("/pause"), Some(TextCommand::Pause));
-        assert_eq!(parse_command("/resume"), Some(TextCommand::Resume));
-        assert_eq!(parse_command("/sleep"), Some(TextCommand::SleepAll));
-        assert_eq!(parse_command("/rewind"), Some(TextCommand::Rewind(None)));
-        assert_eq!(
-            parse_command("/rewind 2"),
-            Some(TextCommand::Rewind(Some(2)))
-        );
-        assert_eq!(parse_command("/盖章"), Some(TextCommand::Stamp));
-        assert_eq!(parse_command("/跳过"), Some(TextCommand::Skip));
-        assert_eq!(parse_command("/退回 1"), Some(TextCommand::Rewind(Some(1))));
-        // 未知 verb 与非法参数不劫持——算普通消息
-        assert_eq!(parse_command("/dance"), None);
-        assert_eq!(parse_command("/rewind abc"), None);
-        assert_eq!(parse_command("/skip 多余尾巴"), None);
-    }
-
-    /// 票 05：旁路写入——回合持有的主连接之外，壳层开第二条 Db 连接落
-    /// owner 消息并解析指令；WAL 下主连接立即可读（send_message_side 是
-    /// src-tauri send_message/pause/resume 在回合进行中的真实通道）。
-    #[test]
-    fn send_message_side_visible_from_main_connection() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state.db");
-        let main = Db::open(&path).unwrap();
-        main.conn()
-            .execute(
-                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
-                [],
-            )
-            .unwrap();
-        // 第二条连接 = 壳层旁路；写 /pause 与普通消息
-        let side = Db::open(&path).unwrap();
-        let (id, cmd) = send_message_side(&side, "p1", "/pause").unwrap();
-        assert_eq!(cmd, Some(TextCommand::Pause));
-        let body: String = main
-            .conn()
-            .query_row("SELECT body FROM messages WHERE id=?1", [id], |r| r.get(0))
-            .unwrap();
-        assert_eq!(body, "/pause");
-        let (_id2, cmd2) = send_message_side(&side, "p1", "普通插话").unwrap();
-        assert_eq!(cmd2, None);
-        // owner_message 事件也随 append_message 落了——主连接看得到
-        let n: i64 = main
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM events WHERE kind='owner_message'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(n, 2);
-    }
 
     #[test]
     fn text_command_same_shape_as_button() {
@@ -1441,22 +1271,6 @@ mod tests {
         let brief = crate::turn::build_brief_context(&wb.db, "a0", None).unwrap();
         assert_eq!(brief.mentions, vec!["@后端 参考 #src/api.rs 重写鉴权"]);
         assert_eq!(brief.paths, vec!["src/api.rs"]);
-    }
-
-    #[test]
-    fn token_parsing() {
-        let t = parse_tokens("继续 @后端 参考 #src/main.rs 谢谢");
-        assert_eq!(
-            t,
-            vec![
-                MessageToken::Mention {
-                    agent_role: "后端".into()
-                },
-                MessageToken::PathRef {
-                    path: "src/main.rs".into()
-                }
-            ]
-        );
     }
 
     #[test]
@@ -2010,7 +1824,7 @@ mod tests {
     }
 
     /// US33 余量（票 40）：检验红默认挡推进；负责人显式覆盖留痕放行。
-    /// US11：包編集——ドラフト複製 → 検証保存 → テンプレ化 → YAML エクスポート。
+    /// US11：包编辑——草稿复制 → 校验保存 → 模板化 → YAML 导出。
     #[test]
     fn us11_pack_editing_draft_template_export() {
         let dir = tempfile::tempdir().unwrap();
@@ -2022,11 +1836,11 @@ mod tests {
         }))
         .unwrap();
         let wb = Workbench::for_test(dir.path(), &["产品策划", "架构师"], Some(pack)).unwrap();
-        // ドラフト読込：pack.json 不在 → 钉住副本を複製源に
+        // 读草稿：pack.json 不在 → 以钉住副本为源
         let d = wb.pack_draft().unwrap();
         assert_eq!(d["name"], "规格驱动");
         assert_eq!(d["stages"].as_array().unwrap().len(), 1);
-        // 編集保存：段追加 + 会診名簿 → pack.json へ（active.json は不変）
+        // 编辑保存：加阶段 + 会诊名册 → 写 pack.json（active.json 不变）
         let edited = r#"{"name":"规格驱动","version":2,"stages":[
             {"name":"规格","roles":["产品策划"],"due":["规格"],"stamp_point":true},
             {"name":"実装","roles":["架构师"],"due":["接口说明"],"checks":["cargo test"],"reviews":[{"artifact_kind":"接口说明","reviewer":"架构师"}],"consult_wake":["产品策划"]}
@@ -2034,8 +1848,8 @@ mod tests {
         wb.save_pack_draft(edited).unwrap();
         assert!(dir.path().join(".hexagon/pack.json").exists());
         let active = std::fs::read_to_string(dir.path().join(".hexagon/pack.active.json")).unwrap();
-        assert!(active.contains("\"version\": 1")); // 走行中インスタンスの钉版本は不変
-                                                    // 非法包は保存拒否：幽灵角色・零阶段・重複阶段
+        assert!(active.contains("\"version\": 1")); // 运行中实例的钉版本不变
+                                                    // 非法包拒绝保存：幽灵角色、零阶段、重复阶段
         assert!(wb
             .save_pack_draft(
                 r#"{"name":"x","version":1,"stages":[{"name":"s","roles":["幽灵"],"due":[]}]}"#
@@ -2047,11 +1861,11 @@ mod tests {
         assert!(wb
             .save_pack_draft(r#"{"name":"x","version":1,"stages":[{"name":"s","roles":["架构师"],"due":[]},{"name":"s","roles":["架构师"],"due":[]}]}"#)
             .is_err());
-        // 個人テンプレート保存 → 一覧に出る（次のプロジェクトで再利用可能）
+        // 存个人模板 → 出现在列表（下个项目可复用）
         let path = wb.save_pack_template(edited).unwrap();
         assert!(std::path::Path::new(&path).exists());
         assert_eq!(wb.pack_templates().unwrap(), vec!["规格驱动".to_string()]);
-        // YAML エクスポート：段構造が YAML 形で出力
+        // YAML 导出：阶段结构以 YAML 形输出
         let dest = dir.path().join("pack.yaml");
         wb.export_pack_yaml(dest.to_str().unwrap()).unwrap();
         let yaml = std::fs::read_to_string(&dest).unwrap();
@@ -2186,7 +2000,7 @@ mod tests {
             .unwrap();
         let prov = Arc::new(ScriptedProvider::new(vec![text_response("翻訳完了")]));
         wb.register_provider("default", prov.clone());
-        let out = wb.run_turn("翻译", "README を翻訳").unwrap();
+        let out = wb.run_turn("翻译", "翻译 README").unwrap();
         assert_eq!(out, TurnOutcome::Finished);
         let calls = prov.recorded();
         assert_eq!(calls.len(), 1); // 自定义角色正常消耗模型调用

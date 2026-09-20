@@ -1029,7 +1029,7 @@ fn run_turn_impl(
                     // 票 05：文本指令（"/pause"、"退回" 等）是控制面不是内容——
                     // 水位照进（不重读）但不进模型上下文，不然 "/pause" 会被
                     // 当成业务插话喂给模型。
-                    if crate::api::parse_command(&body).is_some() {
+                    if crate::commands::parse_command(&body).is_some() {
                         continue;
                     }
                     messages.push(Message {

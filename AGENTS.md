@@ -25,6 +25,18 @@
 - **fail-closed 不对称性显式声明**：分类器/判定器注释里写清代价模型——"false negative 花一次人工，false positive 花一次未审副作用"——并说明实现偏向哪边
 - **修复即文档**：修 bug 时在代码里留"这个写法曾经怎么坏的"，不只留在 commit message 里（commit 会被遗忘，注释跟着代码走）
 
+## 架构接缝规则
+
+arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊断卡）。每条附可执行的检查面；检查只剩人工评审的规则不进本节。
+
+- **core 内部模块不得 `use crate::api`**——门面只被壳层调用。白名单：`scenario.rs`、`setup.rs`（回放/向导是门面上方的驱动方，用真门面是设计；叶子模块一律不摸）。已知残留：`judge.rs`、`replay.rs` 的 `ApiError` 依赖属 D08 后半待清，不得新增同类。检查：`rg "use crate::api|crate::api::" crates/hexagon-core/src` 命中只落白名单+残留清单+api.rs 自身（D08）
+- **`pending_questions` 与 `agents.status` 的写路径只出现在属主模块**（`cards.rs` / `orchestra.rs`）。检查：`rg "pending_questions|UPDATE agents SET status" crates/hexagon-core/src` 只命中属主清单（D04/D09）
+- **IPC 返回值必须是 serde 结构体**：禁止 `Vec<Value>`/`json!` 逐行拼装响应，payload 字段不得嵌字符串化 JSON。检查：`rg 'Result<Vec<Value>|Result<Value' crates/hexagon-core/src/api.rs` 白名单收敛（D06）
+- **Tauri command 分 read/control/turn 三组注册，read 组禁止触碰 `state.wb`**。检查：`rg "state.wb" src-tauri/src/lib.rs` 命中只落 turn/mutation 组（D01）
+- **模型槽回退链只在 `providers::resolve_slot` 一处实现**。检查：`rg 'or_else.*"default"' crates/hexagon-core/src` 归零（D13）
+- **`System` 事件的 `payload.kind` 子类词表集中登记于 `trace.rs`**，新增子类须同改词表与 `docs/glossary.html`。检查：`rg 'json!\(\{"kind":' crates/hexagon-core/src` 字面量只来自词表常量（D10）
+- **新判定器（judge/invariant/权限类判定面）必须配 proptest 属性测试**，不只样例测试；回归种子入 `proptest-regressions/`。检查：评审清单——新判定面 PR 必须含 `proptest!` 块钉不变量（D12）
+
 ## Agent skills
 
 ### Issue tracker

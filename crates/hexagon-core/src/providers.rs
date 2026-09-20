@@ -4,7 +4,8 @@
 //! - **供应商** `ProviderDef`：市面常见供应商或自定义实例——kind/base_url/模型目录/
 //!   启用开关；API key 按供应商存 keychain（`provider/<id>`，一键喂全部槽位）。
 //! - **槽位绑定** `slots`：模型槽 → {provider_id, model}；回合内核按槽找供应商。
-//!   `default` 槽兜底所有未绑定槽（同 `providers.get(slot).or(get("default"))`）。
+//!   `default` 槽兜底所有未绑定槽（统一经 `resolve_slot`，全仓唯一实现——
+//!   回退链曾手写复制四处，arch-review 票 01 / 诊断卡 D13）。
 //!
 //! 文件 `~/.config/hexagon/providers.json`（`HEXAGON_PROVIDERS_PATH` 可覆盖）只放
 //! 非密字段；key 永不落盘、永不回传 UI。
@@ -164,10 +165,16 @@ pub fn remove_binding(slot: &str) -> Result<(), ProvidersError> {
     write_doc(&doc)
 }
 
+/// 槽位回退链（全仓唯一实现，arch-review 票 01 / 诊断卡 D13）：
+/// 绑定槽缺失时回退 `default` 槽。调用方不得再手写 `.or_else(get("default"))`。
+pub fn resolve_slot<'a, V>(map: &'a HashMap<String, V>, slot: &str) -> Option<&'a V> {
+    map.get(slot).or_else(|| map.get("default"))
+}
+
 /// 槽位就绪判定（给向导/创建闸）：有绑定 + 供应商存在且启用 + key 已存。
 /// `default` 槽的绑定兜底任何槽。
 pub fn slot_ready(doc: &ProviderDoc, store: &dyn CredentialStore, slot: &str) -> bool {
-    let bound = doc.slots.get(slot).or_else(|| doc.slots.get("default"));
+    let bound = resolve_slot(&doc.slots, slot);
     let Some(b) = bound else { return false };
     let Some(p) = doc.providers.iter().find(|p| p.id == b.provider_id) else {
         return false;
@@ -197,12 +204,17 @@ pub fn make_provider(
 
 /// 按槽位绑定注册进 Workbench（壳层 open 后调用）：
 /// 每个绑定槽 → 其供应商的 HttpProvider；未绑定/供应商缺失/停用 = 不注册（fail-closed）。
-pub fn register_all(wb: &mut crate::api::Workbench, creds: Arc<dyn CredentialStore>) {
+/// 按配置把启用的供应商实例化进槽位 map。收 `&mut` 槽位表而非 `&mut Workbench`——
+/// 本模块是叶子（配置+工厂），不得摸门面类型（arch-review 票 01 / 诊断卡 D08）。
+pub fn register_all(
+    providers: &mut HashMap<String, Arc<dyn ModelProvider>>,
+    creds: Arc<dyn CredentialStore>,
+) {
     let Ok(doc) = load() else { return };
     for (slot, b) in &doc.slots {
         if let Some(p) = doc.providers.iter().find(|p| p.id == b.provider_id) {
             if p.enabled {
-                wb.register_provider(slot, make_provider(p, &b.model, creds.clone()));
+                providers.insert(slot.clone(), make_provider(p, &b.model, creds.clone()));
             }
         }
     }

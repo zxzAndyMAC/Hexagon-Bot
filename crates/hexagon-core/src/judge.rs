@@ -229,7 +229,7 @@ impl JudgeBackend for LlmJudge<'_> {
                 None,
             );
         }
-        // 超时由 provider 层 timeout_global 兜底（providers.rs:30s）——
+        // 超时由 provider 层 timeout_global 兜底（provider.rs:767，180s）——
         // 同步调用不另起超时机制,超了走 Err → needs-human。
         let mut sink = |_d: &crate::provider::StreamDelta| true;
         let resp = match self.provider.stream(&req, &mut sink) {
@@ -338,7 +338,7 @@ pub fn backend_for<'a>(
         "off" => None,
         "mechanical" => Some(Box::new(MechanicalJudge)),
         "llm" => {
-            if let Some(p) = providers.get(slot).or_else(|| providers.get("default")) {
+            if let Some(p) = crate::providers::resolve_slot(providers, slot) {
                 Some(Box::new(LlmJudge {
                     provider: p.as_ref(),
                     slot,

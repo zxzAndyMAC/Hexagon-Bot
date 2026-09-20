@@ -8,6 +8,7 @@
 pub mod api;
 pub mod artifacts;
 pub mod autonomy;
+pub mod commands;
 pub mod credentials;
 pub mod db;
 pub mod git;
@@ -37,6 +38,11 @@ pub mod tools;
 pub mod trace;
 pub mod turn;
 pub mod usage;
+
+/// 单库单项目约定：每个项目目录一个 state.db，项目 id 恒为 "p1"。
+/// 壳层旁路写入（send_message_side/pause/resume）与 core 共用此常量——
+/// 两侧曾各自硬编码 "p1" 共 8 处（arch-review 票 01 / 诊断卡 D17）。
+pub const PROJECT_ID: &str = "p1";
 
 /// IPC 链路自检：核 → 壳 → WebView 的最小证明。
 pub fn ping() -> String {

@@ -1,12 +1,11 @@
-//! 流程包編集（US11/US12）：預置包の複製 → ドラフト編集 → 保存/テンプレ化/YAML エクスポート。
+//! 流程包编辑（US11/US12）：预置包复制 → 草稿编辑 → 保存/模板化/YAML 导出。
 //!
-//! 核心の分離（既存の釘付け機構を守る）：
-//! - `.hexagon/pack.json`      = 編集可能なドラフト（次回開跑に効く）
-//! - `.hexagon/pack.active.json` = 走行中インスタンスが釘付けした読み取り専用スナップ
+//! 核心分离（守住既有钉住机制）：
+//! - `.hexagon/pack.json`        = 可编辑草稿（下次开跑生效）
+//! - `.hexagon/pack.active.json` = 运行中实例钉住的只读快照
 //!
-//! 編集は必ず pack.json に書き、pack.active.json には絶対触れない
-//! —— 走行中インスタンスは钉版本で隔離済み。
-//! 保存は `presets::validate_pack`（零阶段/重複阶段/幽灵角色参照を拒否）通過時のみ。
+//! 编辑永远写 pack.json，绝不碰 pack.active.json——运行中实例已被钉版本隔离。
+//! 保存仅在经过 `presets::validate_pack`（拒绝零阶段/重复阶段/幽灵角色引用）后发生。
 
 use crate::db::Db;
 use crate::orchestra::PackDef;
@@ -35,7 +34,7 @@ fn draft_path(repo_root: &Path) -> PathBuf {
     repo_root.join(".hexagon/pack.json")
 }
 
-/// 編集用ドラフトを読む：`.hexagon/pack.json` 優先、無ければ钉住副本を複製源に。
+/// 读编辑草稿：`.hexagon/pack.json` 优先，没有则以钉住副本为复制源。
 pub fn load_draft(repo_root: &Path) -> Result<PackDef, PackEditError> {
     let draft = draft_path(repo_root);
     if draft.exists() {
@@ -48,8 +47,8 @@ pub fn load_draft(repo_root: &Path) -> Result<PackDef, PackEditError> {
     Err(PackEditError::NoDraft)
 }
 
-/// ドラフト保存：チーム名簿で検証してから pack.json に書く。
-/// pack.active.json には触れない（走行中インスタンス隔離）。
+/// 存草稿：按团队名册校验后写 pack.json。
+/// 不碰 pack.active.json（运行中实例已隔离）。
 pub fn save_draft(
     db: &Db,
     repo_root: &Path,
@@ -69,8 +68,8 @@ pub fn save_draft(
     Ok(())
 }
 
-/// ユーザーテンプレート置き場：~/.config/hexagon/templates/（無ければ ~/.hexagon/templates/）
-/// テストでは HEXAGON_TEMPLATES_DIR で差し替え可能。
+/// 用户模板目录：~/.config/hexagon/templates/（没有则 ~/.hexagon/templates/）
+/// 测试可用 HEXAGON_TEMPLATES_DIR 覆盖。
 fn templates_dir() -> PathBuf {
     if let Ok(d) = std::env::var("HEXAGON_TEMPLATES_DIR") {
         return PathBuf::from(d);
@@ -86,7 +85,7 @@ fn templates_dir() -> PathBuf {
     }
 }
 
-/// 個人テンプレートとして保存（検証済みドラフト前提だが念のため再検証は呼び出し側）。
+/// 存为个人模板（前提是已校验草稿；保险起见由调用方复检）。
 pub fn save_template(pack: &PackDef) -> Result<PathBuf, PackEditError> {
     let dir = templates_dir();
     std::fs::create_dir_all(&dir)?;
@@ -95,7 +94,7 @@ pub fn save_template(pack: &PackDef) -> Result<PathBuf, PackEditError> {
     Ok(path)
 }
 
-/// 保存済み個人テンプレート名一覧。
+/// 已存个人模板名列表。
 pub fn list_templates() -> Result<Vec<String>, PackEditError> {
     let dir = templates_dir();
     if !dir.is_dir() {
@@ -114,7 +113,7 @@ pub fn list_templates() -> Result<Vec<String>, PackEditError> {
     Ok(names)
 }
 
-/// PackDef → YAML（手書きエミッタ：固定形なので serde_yaml 依存を足さない）。
+/// PackDef → YAML（手写发射器：形状固定，不为它引入 serde_yaml 依赖）。
 pub fn to_yaml(pack: &PackDef) -> String {
     let mut y = String::new();
     let list = |v: &[String]| -> String {
@@ -180,7 +179,7 @@ pub fn to_yaml(pack: &PackDef) -> String {
     y
 }
 
-/// YAML エクスポート：ドラフト（無ければ钉住副本）を指定先に書く。
+/// YAML 导出：把草稿（没有则钉住副本）写到指定位置。
 pub fn export_yaml(repo_root: &Path, dest: &Path) -> Result<(), PackEditError> {
     let pack = load_draft(repo_root)?;
     if let Some(parent) = dest.parent() {
@@ -190,12 +189,12 @@ pub fn export_yaml(repo_root: &Path, dest: &Path) -> Result<(), PackEditError> {
     Ok(())
 }
 
-/// JSON 文字列 → PackDef（UI の JSON 編集面用のパース+検証入口）。
+/// JSON 字符串 → PackDef（UI JSON 编辑面的解析+校验入口）。
 pub fn parse_draft(json_text: &str) -> Result<PackDef, PackEditError> {
     Ok(serde_json::from_str::<PackDef>(json_text)?)
 }
 
-/// ドラフトのサマリ（UI 表示用）：段名リストと主要統計。
+/// 草稿摘要（UI 展示用）：阶段名列表与主要统计。
 pub fn draft_summary(pack: &PackDef) -> Value {
     serde_json::json!({
         "name": pack.name,
