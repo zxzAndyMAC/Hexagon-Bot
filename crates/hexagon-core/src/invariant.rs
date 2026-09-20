@@ -296,4 +296,203 @@ mod tests {
         let vs = check(&db, "p1").unwrap();
         assert!(vs.iter().any(|v| v["check"] == "decision_shape"));
     }
+
+    // ---------- 生成式事件流（arch 票 08）----------
+    //
+    // 误报 = 一条告警事件；漏报 = 坏轨迹冒充证据——实现偏向多报，所以
+    // 属性测试钉两头：良构流必须零误报，注入违规必须报对检查名。
+
+    mod prop_tests {
+        use super::tests::setup;
+        use super::*;
+        use crate::provider::{ChatRequest, ContentBlock, Message, Role};
+        use proptest::collection;
+        use proptest::prelude::*;
+
+        /// 良构信封：走与生产同一构造函数——指纹必然自洽。
+        fn good_envelope(call: usize) -> Value {
+            let req = ChatRequest {
+                model_slot: "default".into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Text { text: "hi".into() }],
+                }],
+                tools: vec![],
+            };
+            crate::turn::prompt::request_envelope(call, &req, &req.messages, &[])
+        }
+
+        /// 良构事件流构件：信封/配对回合/合法决策/无关事件。
+        /// 用量账按「每派发一账」约束——条数 ≤ 该 agent 的信封数。
+        #[derive(Debug, Clone)]
+        enum Op {
+            Envelope,
+            TurnPair,
+            Decision(bool), // true: chosen 为数组（roster 形）
+            Misc(usize),
+        }
+
+        fn op() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                3 => Just(Op::Envelope),
+                2 => Just(Op::TurnPair),
+                2 => any::<bool>().prop_map(Op::Decision),
+                3 => (0..5usize).prop_map(Op::Misc),
+            ]
+        }
+
+        /// 按 ops 落事件流；返回 (信封数,)。
+        fn emit(db: &Db, ops: &[Op]) -> usize {
+            let misc_kinds = [
+                EventKind::AgentActivated,
+                EventKind::FlagSubmitted,
+                EventKind::TestRan,
+                EventKind::ArtifactDelivered,
+                EventKind::Stamped,
+            ];
+            let mut envs = 0usize;
+            for op in ops {
+                match op {
+                    Op::Envelope => {
+                        db.append_event(
+                            "p1",
+                            EventKind::System,
+                            good_envelope(envs),
+                            Some("a1"),
+                            None,
+                        )
+                        .unwrap();
+                        envs += 1;
+                    }
+                    Op::TurnPair => {
+                        for k in [EventKind::TurnStarted, EventKind::TurnFinished] {
+                            db.append_event("p1", k, json!({}), Some("a1"), None)
+                                .unwrap();
+                        }
+                    }
+                    Op::Decision(array) => {
+                        let chosen = if *array {
+                            json!(["后端"])
+                        } else {
+                            json!("后端")
+                        };
+                        db.append_event(
+                            "p1",
+                            EventKind::StageStarted,
+                            json!({"decision": {"kind": "roster", "chosen": chosen,
+                                   "eligible": ["后端", "前端"]}}),
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                    }
+                    Op::Misc(i) => {
+                        db.append_event(
+                            "p1",
+                            misc_kinds[i % misc_kinds.len()],
+                            json!({"i": i}),
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+            envs
+        }
+
+        proptest! {
+            /// 良构流零误报：任意组合的合法信封/配对回合/合法决策/
+            /// 无关事件/配对用量 → check 恒为空。
+            #[test]
+            fn clean_streams_never_flag(ops in collection::vec(op(), 0..14)) {
+                let (db, _reg, _ctx, _dir) = setup();
+                let envs = emit(&db, &ops);
+                // 用量账合法：条数 ≤ 信封数
+                for _ in 0..envs {
+                    db.conn()
+                        .execute(
+                            "INSERT INTO usage (project_id, agent_id, model)
+                             VALUES ('p1','a1','default')",
+                            [],
+                        )
+                        .unwrap();
+                }
+                let vs = check(&db, "p1").unwrap();
+                prop_assert!(vs.is_empty(), "良构流误报: {vs:?}");
+            }
+
+            /// 注入必报：每类破坏落进对应检查名（不错报别家）。
+            #[test]
+            fn injected_violations_always_caught(
+                ops in collection::vec(op(), 0..10),
+                inject in 0..4usize,
+            ) {
+                let (db, _reg, _ctx, _dir) = setup();
+                emit(&db, &ops);
+                let expect = match inject {
+                    // 信封被改：指纹重算对不上
+                    0 => {
+                        db.append_event(
+                            "p1", EventKind::System, good_envelope(99), Some("a1"), None,
+                        )
+                        .unwrap();
+                        db.conn()
+                            .execute(
+                                "UPDATE events SET payload =
+                                 json_set(payload,'$.fingerprint','deadbeef')
+                                 WHERE id = (SELECT MAX(id) FROM events
+                                     WHERE json_extract(payload,'$.kind')='request_envelope')",
+                                [],
+                            )
+                            .unwrap();
+                        "envelope_self_consistent"
+                    }
+                    // 悬挂回合：started 为最新事件且无收尾
+                    1 => {
+                        db.append_event(
+                            "p1", EventKind::TurnStarted, json!({}), Some("a1"), None,
+                        )
+                        .unwrap();
+                        "dangling_turn"
+                    }
+                    // 决策缺 eligible
+                    2 => {
+                        db.append_event(
+                            "p1",
+                            EventKind::StageStarted,
+                            json!({"decision": {"kind": "roster", "chosen": "后端"}}),
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                        "decision_shape"
+                    }
+                    // 用量无信封：派发绕过落盘点
+                    _ => {
+                        db.conn()
+                            .execute(
+                                "INSERT INTO agents (id, project_id, role, status)
+                                 VALUES ('a2','p1','前端','active')",
+                                [],
+                            )
+                            .unwrap();
+                        db.conn()
+                            .execute(
+                                "INSERT INTO usage (project_id, agent_id, model)
+                                 VALUES ('p1','a2','default')",
+                                [],
+                            )
+                            .unwrap();
+                        "dispatch_pairing"
+                    }
+                };
+                let vs = check(&db, "p1").unwrap();
+                prop_assert!(
+                    vs.iter().any(|v| v["check"] == expect),
+                    "注入 {expect} 未报: {vs:?}"
+                );
+            }
+        }
+    }
 }

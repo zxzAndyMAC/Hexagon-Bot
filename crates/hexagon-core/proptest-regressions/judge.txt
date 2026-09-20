@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 89b21ec95b5153c1ca4ab6dc5da2e9103a0417e78b7d42e3c16ccf386118907c # shrinks to mut r = ReplayReport { schema: 1, scenario_fingerprint: "fp", baseline_pack: "t@v1", candidate_pack: "t@v2", policy_diff: [], non_policy_changes: [], baseline: Metrics { turns: 0, model_calls: 0, flags: 0, escalations: 0, backfills: 0, consult_wakes: 0, review_rejects: 0, failures_by_code: {}, checks_run: 0, checks_failed: 0, decisions: 0, stages_done: 0, stamps: 0, tokens_in: 0, tokens_out: 0, cost_mc: 0, wall_ms: 0, invariant_violations: 0 }, candidate: Metrics { turns: 0, model_calls: 0, flags: 0, escalations: 0, backfills: 0, consult_wakes: 0, review_rejects: 1, failures_by_code: {}, checks_run: 0, checks_failed: 0, decisions: 0, stages_done: 0, stamps: 0, tokens_in: 0, tokens_out: 0, cost_mc: 0, wall_ms: 0, invariant_violations: 0 }, decision_diffs: [], signals: [] }, side = false, n = 1
+cc 2e79cda0b537d19bc08b9b04fd687bd005d869eac825d4982fd0b97bad29facf # shrinks to text = "}Σ{"

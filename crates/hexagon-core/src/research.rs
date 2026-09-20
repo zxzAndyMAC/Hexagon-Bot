@@ -157,3 +157,99 @@ fn run_nested(
         TurnOutcome::Interrupted => Err(ToolError::Exec("interrupted by owner".into())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::ScriptedProvider;
+    use crate::turn::{text_response, tool_response};
+
+    fn setup() -> (crate::api::Workbench, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = crate::api::Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        (wb, dir)
+    }
+
+    fn ctx(wb: &crate::api::Workbench) -> ToolContext {
+        ToolContext {
+            project_id: wb.project_id.clone(),
+            agent_id: "a0".into(),
+            repo_root: wb.repo_root.clone(),
+            stage_run_id: None,
+            owned_globs: vec![],
+            tiers: crate::artifacts::TierMap::new(),
+        }
+    }
+
+    /// 空问题连回合都不起——BadInput，且不留嵌套段事件。
+    #[test]
+    fn empty_question_rejected_before_turn() {
+        let (wb, _d) = setup();
+        let provider = ScriptedProvider::new(vec![text_response("x")]);
+        let r = call_nested(&wb.db, &provider, &wb.registry, &ctx(&wb), json!({}));
+        assert!(matches!(r, Err(ToolError::BadInput(_))));
+        assert!(provider.recorded().is_empty(), "空问题不许召模型");
+    }
+
+    /// 父休眠 → 前置闸拒跑（run_turn 内第二道闸也兜得住）。
+    #[test]
+    fn sleeping_parent_rejected() {
+        let (wb, _d) = setup();
+        wb.db
+            .conn()
+            .execute("UPDATE agents SET status='sleeping' WHERE id='a0'", [])
+            .unwrap();
+        let provider = ScriptedProvider::new(vec![text_response("x")]);
+        let r = call_nested(
+            &wb.db,
+            &provider,
+            &wb.registry,
+            &ctx(&wb),
+            json!({"question": "查一下"}),
+        );
+        assert!(matches!(r, Err(ToolError::Exec(_))));
+        assert!(provider.recorded().is_empty());
+    }
+
+    /// 正常嵌套：answer=末条 agent 消息；citations=嵌套段读类工具入参。
+    /// 嵌套段事件/消息照常落库（记父 agent 头上）。
+    #[test]
+    fn nested_turn_collects_answer_and_citations() {
+        let (wb, _d) = setup();
+        // for_test 的 agent 默认 sleeping（schema 默认）——激活才可跑回合。
+        wb.db
+            .conn()
+            .execute("UPDATE agents SET status='active' WHERE id='a0'", [])
+            .unwrap();
+        std::fs::write(wb.repo_root.join("note.md"), "hello").unwrap();
+        let provider = ScriptedProvider::new(vec![
+            tool_response(vec![("t1", "fs_read", json!({"path": "note.md"}))]),
+            tool_response(vec![(
+                "t2",
+                "fs_write",
+                json!({"path": "x", "content": "y"}),
+            )]),
+            text_response("结论是42"),
+        ]);
+        let out = call_nested(
+            &wb.db,
+            &provider,
+            &wb.registry,
+            &ctx(&wb),
+            json!({"question": "note.md 里写了什么"}),
+        )
+        .unwrap();
+        let CallOutcome::Done(v) = out else {
+            panic!("expected Done: {out:?}")
+        };
+        assert_eq!(v["answer"], "结论是42");
+        let cites = v["citations"].as_array().unwrap();
+        assert!(
+            cites.iter().any(|c| c["ref"] == "note.md"),
+            "fs_read 入参应进引用: {cites:?}"
+        );
+        // 只读注册表：fs_write 不在其中——写调用不产生引用/落盘
+        assert!(!cites.iter().any(|c| c["ref"] == "x"));
+        assert!(!wb.repo_root.join("x").exists(), "只读嵌套不许写盘");
+    }
+}

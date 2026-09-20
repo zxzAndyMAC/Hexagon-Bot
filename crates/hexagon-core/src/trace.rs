@@ -679,4 +679,219 @@ mod tests {
             .unwrap();
         assert_eq!(n, 2);
     }
+
+    // ---------- timeline 属性测试 + System 子 kind 词表（arch 票 08）----------
+
+    /// D10 登记表落地前的 de-facto 词表钉死：System 事件 payload.kind
+    /// 的全部合法二级分类。新增 System 子事件的纪律是「先加这里再写
+    /// 入点」——漏登会让本测试在生产路径上观测到词表外 kind 时变红。
+    const SYSTEM_SUBKINDS: &[&str] = &[
+        "context_compacted",
+        "context_denied",
+        "context_resumed",
+        "flag_routed",
+        "instructions_degraded",
+        "invariant_violation",
+        "judge_verdict",
+        "known_world",
+        "provider_retry",
+        "request_envelope",
+        "steering_injected",
+        "tool_breaker",
+    ];
+
+    /// 词表钉死：跑真实回合（脚本化 provider + 超限 AGENTS.md 触发
+    /// instructions_degraded + Transport 抖动触发 provider_retry），
+    /// 落库的全部 System 子 kind 必须在登记表内。
+    #[test]
+    fn system_subkinds_stay_registered() {
+        struct Flaky(std::sync::atomic::AtomicUsize);
+        impl crate::provider::ModelProvider for Flaky {
+            fn complete(
+                &self,
+                _r: &crate::provider::ChatRequest,
+            ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+                Ok(crate::turn::text_response("x"))
+            }
+            fn stream(
+                &self,
+                _r: &crate::provider::ChatRequest,
+                sink: &mut crate::provider::StreamSink<'_>,
+            ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+                if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(crate::provider::ProviderError::Transport("blip".into()));
+                }
+                sink(&crate::provider::StreamDelta::Text("ok".into()));
+                Ok(crate::turn::text_response("ok"))
+            }
+        }
+
+        let db = Db::open_in_memory().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO agents (id, project_id, role, status) VALUES ('a1','p1','后端','active')",
+                [],
+            )
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // >32KB 的 AGENTS.md → instructions_degraded 子 kind
+        std::fs::write(dir.path().join("AGENTS.md"), "# h\n".repeat(9000)).unwrap();
+        let ctx = crate::tools::ToolContext {
+            project_id: "p1".into(),
+            agent_id: "a1".into(),
+            repo_root: dir.path().to_path_buf(),
+            stage_run_id: None,
+            owned_globs: vec![],
+            tiers: crate::artifacts::TierMap::new(),
+        };
+        crate::turn::run_turn(
+            &db,
+            &Flaky(0.into()),
+            &crate::tools::Registry::builtin(),
+            &ctx,
+            vec![],
+            "干活",
+        )
+        .unwrap();
+
+        let mut st = db
+            .conn()
+            .prepare(
+                "SELECT payload FROM events WHERE kind='system'
+                 AND json_extract(payload,'$.kind') IS NOT NULL",
+            )
+            .unwrap();
+        let kinds: Vec<String> = st
+            .query_map([], |r| {
+                let p: Value = serde_json::from_str(&r.get::<_, String>(0)?).unwrap_or_default();
+                Ok(p["kind"].as_str().unwrap_or("").to_string())
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(!kinds.is_empty(), "回合应产出 System 子事件");
+        for k in &kinds {
+            assert!(
+                SYSTEM_SUBKINDS.contains(&k.as_str()),
+                "词表外 System 子 kind 出库: {k}（先登记 SYSTEM_SUBKINDS 再写入点）"
+            );
+        }
+        // 本回合至少覆盖 request_envelope/provider_retry/instructions_degraded
+        for want in [
+            "request_envelope",
+            "provider_retry",
+            "instructions_degraded",
+        ] {
+            assert!(kinds.iter().any(|k| k == want), "未覆盖 {want}: {kinds:?}");
+        }
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+        use proptest::{collection, sample};
+
+        fn db() -> Db {
+            let db = Db::open_in_memory().unwrap();
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                    [],
+                )
+                .unwrap();
+            db
+        }
+
+        fn kind() -> impl Strategy<Value = EventKind> {
+            sample::select(vec![
+                EventKind::TurnStarted,
+                EventKind::AgentActivated,
+                EventKind::System,
+                EventKind::Stamped,
+                EventKind::FlagSubmitted,
+                EventKind::StageStarted,
+            ])
+        }
+
+        proptest! {
+            /// 分页无损：任意事件数 × 任意页长，翻页串起来 == 全集，
+            /// id 严格递增，每页不超 limit。
+            #[test]
+            fn pagination_is_lossless(
+                n in 0..60usize,
+                page in 1..17usize,
+            ) {
+                let db = db();
+                for i in 0..n {
+                    db.append_event("p1", EventKind::System, json!({"i": i}), None, None)
+                        .unwrap();
+                }
+                let mut got = Vec::new();
+                let mut after = None;
+                loop {
+                    let items = db.timeline("p1", after, page, None).unwrap();
+                    prop_assert!(items.len() <= page);
+                    if items.is_empty() {
+                        break;
+                    }
+                    after = items.last().map(|i| i.event.id);
+                    got.extend(items.into_iter().map(|i| i.event.id));
+                }
+                let want: Vec<i64> = (1..=n as i64).collect();
+                prop_assert_eq!(got, want);
+            }
+
+            /// kind 过滤不漏不混：返回值恒为过滤子集且保持序。
+            #[test]
+            fn kind_filter_is_exact_subset(
+                kinds in collection::vec(kind(), 0..40),
+                pick in collection::hash_set(0..6usize, 1..4),
+            ) {
+                let db = db();
+                for k in &kinds {
+                    db.append_event("p1", *k, json!({}), None, None).unwrap();
+                }
+                let all = [
+                    EventKind::TurnStarted,
+                    EventKind::AgentActivated,
+                    EventKind::System,
+                    EventKind::Stamped,
+                    EventKind::FlagSubmitted,
+                    EventKind::StageStarted,
+                ];
+                let filter: Vec<EventKind> =
+                    pick.iter().map(|i| all[i % all.len()]).collect();
+                let items = db.timeline("p1", None, 200, Some(&filter)).unwrap();
+                let want: Vec<i64> = kinds
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, k)| filter.contains(k))
+                    .map(|(i, _)| i as i64 + 1)
+                    .collect();
+                let got: Vec<i64> = items.iter().map(|i| i.event.id).collect();
+                prop_assert_eq!(got, want);
+            }
+
+            /// after_id 严格排他：timeline(k) == 第 k 条之后的全集。
+            #[test]
+            fn after_id_is_exclusive_prefix(n in 0..40usize, k in 0..40usize) {
+                let db = db();
+                for i in 0..n {
+                    db.append_event("p1", EventKind::System, json!({"i": i}), None, None)
+                        .unwrap();
+                }
+                let items = db.timeline("p1", Some(k as i64), 500, None).unwrap();
+                let got: Vec<i64> = items.iter().map(|i| i.event.id).collect();
+                let want: Vec<i64> =
+                    (1..=n as i64).filter(|id| *id > k as i64).collect();
+                prop_assert_eq!(got, want);
+            }
+        }
+    }
 }

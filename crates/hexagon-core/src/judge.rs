@@ -255,11 +255,13 @@ impl JudgeBackend for LlmJudge<'_> {
                 _ => None,
             })
             .collect();
-        // 抽取首个 JSON 对象——模型多说的话不进判定
+        // 抽取首个 JSON 对象——模型多说的话不进判定。
+        // 「}…{」形状（} 在 { 前）曾让 text[start..=end] 越界 panic——
+        // fail-closed 被绕过；arch 票 08 属性测试抓到，guard 归 needs-human。
         let Some(start) = text.find('{') else {
             return needs_human("no json");
         };
-        let Some(end) = text.rfind('}') else {
+        let Some(end) = text.rfind('}').filter(|e| *e > start) else {
             return needs_human("no json");
         };
         let Ok(v) = serde_json::from_str::<Value>(&text[start..=end]) else {
@@ -686,5 +688,182 @@ mod tests {
         };
         let line = plain_line(&v);
         assert!(line.contains("需要你定") && line.contains("盖章"));
+    }
+
+    // ---------- 判定面属性测试（arch 票 08）----------
+    //
+    // 打法照 permissions.rs prop_tests：任意 ReplayReport → 判定三条不变量
+    // 恒成立（fail-closed 不对称：judge 说「过」只是建议，说不出「过」不伤
+    // 安全，说错「过」才危险——所有疑点路径必须归 needs-human）。
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+        use proptest::{collection, sample};
+
+        /// 任意指标侧：judge 只读 flags/escalations/checks_failed/
+        /// review_rejects/failures_by_code/invariant_violations。
+        fn metrics() -> impl Strategy<Value = Metrics> {
+            (
+                0..20u32,
+                0..10u32,
+                0..10u32,
+                0..10u32,
+                0..2u32,
+                collection::btree_map(sample::select(vec!["x", "y", "z"]), 0..10u32, 0..3),
+            )
+                .prop_map(|(flags, esc, cf, rr, inv, fails)| Metrics {
+                    flags,
+                    escalations: esc,
+                    checks_failed: cf,
+                    review_rejects: rr,
+                    invariant_violations: inv,
+                    failures_by_code: fails.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+                    ..Default::default()
+                })
+        }
+
+        fn arb_report() -> impl Strategy<Value = ReplayReport> {
+            (
+                metrics(),
+                metrics(),
+                0..3usize,
+                collection::vec(0..5i64, 0..3),
+            )
+                .prop_map(|(baseline, candidate, npc, sig)| ReplayReport {
+                    schema: crate::replay::REPLAY_SCHEMA,
+                    scenario_fingerprint: "fp".into(),
+                    baseline_pack: "t@v1".into(),
+                    candidate_pack: "t@v2".into(),
+                    policy_diff: vec![],
+                    non_policy_changes: vec!["".into(); npc],
+                    baseline,
+                    candidate,
+                    decision_diffs: vec![],
+                    signals: sig
+                        .into_iter()
+                        .map(|d| json!({"metric":"m","baseline":0,"candidate":d,"delta":d}))
+                        .collect(),
+                })
+        }
+
+        /// 失败码总数差（机械判定口径）。
+        fn fail_delta(r: &ReplayReport) -> i64 {
+            r.candidate
+                .failures_by_code
+                .values()
+                .map(|v| *v as i64)
+                .sum::<i64>()
+                - r.baseline
+                    .failures_by_code
+                    .values()
+                    .map(|v| *v as i64)
+                    .sum::<i64>()
+        }
+
+        fn regressed(r: &ReplayReport) -> bool {
+            let (b, c) = (&r.baseline, &r.candidate);
+            c.escalations > b.escalations
+                || c.checks_failed > b.checks_failed
+                || c.review_rejects > b.review_rejects
+                || c.flags > b.flags
+                || fail_delta(r) > 0
+        }
+
+        proptest! {
+            /// 不变量①：任一側证据被标违规 → 恒 needs-human（证据不可信，
+            /// 改善/退步结论都立不住）。
+            #[test]
+            fn violations_always_needs_human(
+                mut r in arb_report(),
+                side in any::<bool>(),
+                n in 1..10u32,
+            ) {
+                if side { r.baseline.invariant_violations = n }
+                else { r.candidate.invariant_violations = n }
+                let v = MechanicalJudge.evaluate(&input(r));
+                prop_assert_eq!(v.verdict, Judgement::NeedsHuman);
+            }
+
+            /// 不变量②：动了流程定义（non_policy_changes 非空）→ 恒
+            /// needs-human——机械不审语义，人逐条看。
+            #[test]
+            fn non_policy_always_needs_human(
+                mut r in arb_report(),
+                extra in 1..4usize,
+            ) {
+                r.baseline.invariant_violations = 0;
+                r.candidate.invariant_violations = 0;
+                r.non_policy_changes = vec!["p".into(); extra];
+                let v = MechanicalJudge.evaluate(&input(r));
+                prop_assert_eq!(v.verdict, Judgement::NeedsHuman);
+            }
+
+            /// 不变量③：证据干净且未动流程时——任一盯防指标退步或失败码
+            /// 总数变差 → 恒 reject。
+            #[test]
+            fn regression_always_rejects(mut r in arb_report()) {
+                r.baseline.invariant_violations = 0;
+                r.candidate.invariant_violations = 0;
+                r.non_policy_changes = vec![];
+                prop_assume!(regressed(&r));
+                let v = MechanicalJudge.evaluate(&input(r));
+                prop_assert_eq!(v.verdict, Judgement::Reject);
+            }
+
+            /// 不变量④（事后条件）：恒不 panic、verdict 恒在闭集、
+            /// stamp 只在「零退步」下出现——改善证据不足时永不放行。
+            #[test]
+            fn verdict_closed_and_stamp_needs_no_regression(r in arb_report()) {
+                let stampable = !regressed(&r);
+                let v = MechanicalJudge.evaluate(&input(r));
+                prop_assert!(matches!(
+                    v.verdict,
+                    Judgement::Stamp | Judgement::Reject | Judgement::NeedsHuman
+                ));
+                prop_assert!(v.deterministic);
+                prop_assert_eq!(v.backend, "mechanical");
+                if v.verdict == Judgement::Stamp {
+                    prop_assert!(stampable, "stamp 出现在退步报告上");
+                }
+            }
+
+            /// LLM 面 fail-closed：任意响应文本 → verdict 恒在闭集；
+            /// 词表外/非 JSON 一律 needs-human，不放行。
+            #[test]
+            fn llm_verdict_closed_set(text in prop_oneof![
+                // 多数：纯噪声文本（无 JSON / 词表外）
+                any::<String>(),
+                // 少数：合法 JSON + 混合词表（合法别名 + 杜撰词）
+                (sample::select(vec![
+                    "stamp", "reject", "needs-human", "needs_human",
+                    "needsHuman", "definitely_ship_it", "STAMP", "",
+                ])).prop_map(|w| format!("{{\"verdict\":\"{w}\",\"rationale\":\"r\"}}")),
+            ]) {
+                let provider = crate::provider::ScriptedProvider::new(vec![
+                    crate::turn::text_response(&text),
+                ]);
+                let j = LlmJudge { provider: &provider, slot: "default", obs: None };
+                let v = j.evaluate(&input(report(5, 1, 0)));
+                prop_assert!(matches!(
+                    v.verdict,
+                    Judgement::Stamp | Judgement::Reject | Judgement::NeedsHuman
+                ));
+                prop_assert!(!v.deterministic);
+                prop_assert!(v.backend.starts_with("llm:"));
+                // 闭集词正常翻译；词表外/畸形恒 needs-human
+                let parsed = text
+                    .find('{')
+                    .and_then(|s| {
+                        text.rfind('}').filter(|e| *e > s).map(|e| &text[s..=e])
+                    })
+                    .and_then(|j| serde_json::from_str::<Value>(j).ok())
+                    .and_then(|v| v["verdict"].as_str().and_then(Judgement::parse));
+                match parsed {
+                    Some(w) => prop_assert_eq!(v.verdict, w),
+                    None => prop_assert_eq!(v.verdict, Judgement::NeedsHuman),
+                }
+            }
+        }
     }
 }

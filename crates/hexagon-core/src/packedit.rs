@@ -209,3 +209,95 @@ pub fn draft_summary(pack: &PackDef) -> Value {
         })).collect::<Vec<_>>(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::orchestra::PackDef;
+    use serde_json::json;
+
+    fn pack() -> PackDef {
+        serde_json::from_value(json!({
+            "name": "t-pack", "version": 2,
+            "knobs": {"judge": "mechanical"},
+            "stages": [{"name": "做", "roles": ["后端"], "due": [],
+                        "stamp_point": true}]
+        }))
+        .unwrap()
+    }
+
+    /// 草稿读取顺序：无 → NoDraft；钉住副本兜底；pack.json 草稿最优先。
+    /// save_draft 校验团队名册（未知角色拒写）。
+    #[test]
+    fn draft_fallback_and_save_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let wb = crate::api::Workbench::for_test(root, &["后端"], None).unwrap();
+
+        assert!(matches!(load_draft(root), Err(PackEditError::NoDraft)));
+
+        // 只有钉住副本时以它为源
+        pack().pin(root).unwrap();
+        assert_eq!(load_draft(root).unwrap().name, "t-pack");
+
+        // 草稿优先于钉住副本
+        let mut draft = pack();
+        draft.name = "draft-pack".into();
+        save_draft(&wb.db, root, &wb.project_id, &draft).unwrap();
+        assert_eq!(load_draft(root).unwrap().name, "draft-pack");
+
+        // 角色不在团队名册 → 校验拒写
+        let bad: PackDef = serde_json::from_value(json!({
+            "name": "bad", "version": 1,
+            "stages": [{"name": "s", "roles": ["幽灵"], "due": []}]
+        }))
+        .unwrap();
+        assert!(save_draft(&wb.db, root, &wb.project_id, &bad).is_err());
+    }
+
+    /// YAML 发射器：旋钮/阶段/盖章点都进导出；export_yaml 落盘；
+    /// parse_draft 走 JSON 解析面。
+    #[test]
+    fn yaml_export_and_parse_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        save_draft(
+            &crate::api::Workbench::for_test(root, &["后端"], None)
+                .unwrap()
+                .db,
+            root,
+            crate::PROJECT_ID,
+            &pack(),
+        )
+        .unwrap();
+
+        let dest = root.join("out/pack.yaml");
+        export_yaml(root, &dest).unwrap();
+        let y = std::fs::read_to_string(&dest).unwrap();
+        assert!(y.contains("name: t-pack"));
+        assert!(y.contains("judge: mechanical"));
+        assert!(y.contains("stamp_point: true"));
+
+        let p = parse_draft(&serde_json::to_string(&pack()).unwrap()).unwrap();
+        assert_eq!(p.name, "t-pack");
+        let s = draft_summary(&p);
+        assert_eq!(s["name"], "t-pack");
+        assert!(s["stages"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
+    }
+
+    /// 个人模板：HEXAGON_TEMPLATES_DIR 隔离（不碰真用户目录）；
+    /// 存取同名 roundtrip。
+    #[test]
+    fn templates_roundtrip_in_isolated_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // 本 crate 无其他测试并发读该环境变量——串行断言窗内安全。
+        std::env::set_var("HEXAGON_TEMPLATES_DIR", dir.path());
+        let path = save_template(&pack()).unwrap();
+        assert!(path.starts_with(dir.path()));
+        assert!(list_templates().unwrap().contains(&"t-pack".to_string()));
+        std::env::remove_var("HEXAGON_TEMPLATES_DIR");
+    }
+}

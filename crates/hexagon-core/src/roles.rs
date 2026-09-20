@@ -284,3 +284,106 @@ pub struct AgentPatch {
     pub skills: Option<Vec<String>>,
     pub globs: Option<Vec<String>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presets::RoleDef;
+
+    fn def(name: &str, reviewer: Option<&str>) -> RoleDef {
+        RoleDef {
+            name: name.into(),
+            duty: format!("{name}的活"),
+            reviewer: reviewer.map(|r| r.into()),
+            model_slot: "default".into(),
+            globs: vec!["src/**".into()],
+            skills: vec![],
+        }
+    }
+
+    /// create_role 三道闸：空名/重名/上级不在团队——全拒；
+    /// 通过则落 role_defs（custom=1）+ agents + agent_globs。
+    #[test]
+    fn create_role_validates_then_creates() {
+        let dir = tempfile::tempdir().unwrap();
+        // 单角色：for_test 的 a0 不占 id_counters——create_role 的
+        // next_id("a") 从 1 起（a1），预置两个 agent 会撞上 a1。
+        let wb = crate::api::Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        let db = &wb.db;
+        let pid = &wb.project_id;
+
+        assert!(matches!(
+            create_role(db, pid, &def("  ", None)),
+            Err(RoleError::EmptyName)
+        ));
+        assert!(matches!(
+            create_role(db, pid, &def("后端", None)),
+            Err(RoleError::Duplicate(_))
+        ));
+        assert!(matches!(
+            create_role(db, pid, &def("测试", Some("不存在的人"))),
+            Err(RoleError::UnknownReviewer(_))
+        ));
+
+        let aid = create_role(db, pid, &def("测试", Some("后端"))).unwrap();
+        assert!(team_roles(db, pid).unwrap().contains(&"测试".to_string()));
+        // globs 落实例表
+        let g = crate::permissions::agent_globs(db, &aid).unwrap();
+        assert_eq!(g, vec!["src/**".to_string()]);
+    }
+
+    /// 有效定义：项目 role_defs 覆盖行赢预置底稿；无名角色报错。
+    #[test]
+    fn role_def_project_row_beats_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = crate::api::Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        let db = &wb.db;
+
+        // 预置底稿：「后端」存在且 duty 来自预置
+        let preset = role_def(db, &wb.project_id, "后端").unwrap();
+        assert!(!preset.duty.is_empty());
+
+        // 项目覆盖行：同名不同 duty → 以项目为准
+        db.conn()
+            .execute(
+                "INSERT INTO role_defs (project_id, name, duty, reviewer, model_slot, skills, custom)
+                 VALUES (?1,'后端','项目定制职责',NULL,'fast','[]',1)",
+                [&wb.project_id],
+            )
+            .unwrap();
+        let d = role_def(db, &wb.project_id, "后端").unwrap();
+        assert_eq!(d.duty, "项目定制职责");
+
+        assert!(matches!(
+            role_def(db, &wb.project_id, "没这个角色"),
+            Err(RoleError::UnknownRole(_))
+        ));
+    }
+
+    /// set_grants 是整表替换非追加；agent_detail 反映 grants/custom。
+    #[test]
+    fn grants_replace_and_detail_reflects() {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = crate::api::Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        let db = &wb.db;
+        let aid = "a0";
+
+        set_grants(db, aid, "mcp", &["svc-a".into(), "svc-b".into()]).unwrap();
+        set_grants(db, aid, "mcp", &["svc-c".into()]).unwrap();
+        let d = agent_detail(db, &wb.project_id, aid).unwrap();
+        let names: Vec<&str> = d["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|g| g["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["svc-c"], "set_grants 应整表替换而非追加");
+        assert_eq!(d["role"], "后端");
+        assert_eq!(d["custom"], false); // 预置角色非项目自定义
+
+        // 自定义角色 → custom=true
+        let aid2 = create_role(db, &wb.project_id, &def("自定义", None)).unwrap();
+        let d = agent_detail(db, &wb.project_id, &aid2).unwrap();
+        assert_eq!(d["custom"], true);
+    }
+}
