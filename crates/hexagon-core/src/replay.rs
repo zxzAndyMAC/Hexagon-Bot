@@ -77,7 +77,7 @@ pub struct ReplayReport {
 }
 
 /// 事件流 → 指标。口径即本函数——改这里必须 bump REPLAY_SCHEMA。
-pub fn metrics_from_events(events: &[Event], usage: &[Value]) -> Metrics {
+pub fn metrics_from_events(events: &[Event], usage: &[crate::usage::UsageRow]) -> Metrics {
     let mut m = Metrics::default();
     for e in events {
         let p = &e.payload;
@@ -116,9 +116,9 @@ pub fn metrics_from_events(events: &[Event], usage: &[Value]) -> Metrics {
         }
     }
     for u in usage {
-        m.tokens_in += u["prompt_tokens"].as_i64().unwrap_or(0);
-        m.tokens_out += u["completion_tokens"].as_i64().unwrap_or(0);
-        m.cost_mc += u["cost_mc"].as_i64().unwrap_or(0);
+        m.tokens_in += u.prompt_tokens;
+        m.tokens_out += u.completion_tokens;
+        m.cost_mc += u.cost_mc;
     }
     m
 }
@@ -246,10 +246,10 @@ pub fn replay(
         .map(|p| orchestra::non_policy_changes(p, candidate))
         .unwrap_or_default();
 
-    let mut baseline = metrics_from_events(&ra.events, &ra.usage);
+    let mut baseline = metrics_from_events(&ra.events, &ra.usage.rows);
     baseline.wall_ms = t_a.as_millis() as u64;
     baseline.invariant_violations = ra.violations as u32;
-    let mut candidate_m = metrics_from_events(&rb.events, &rb.usage);
+    let mut candidate_m = metrics_from_events(&rb.events, &rb.usage.rows);
     candidate_m.wall_ms = t_b.as_millis() as u64;
     candidate_m.invariant_violations = rb.violations as u32;
     Ok(ReplayReport {
@@ -312,7 +312,16 @@ mod tests {
             ev(EventKind::TestRan, json!({"ok": false})),
             ev(EventKind::Stamped, json!({})),
         ];
-        let usage = vec![json!({"prompt_tokens": 10, "completion_tokens": 4, "cost_mc": 7})];
+        let usage = vec![crate::usage::UsageRow {
+            agent_id: None,
+            model: None,
+            stage: None,
+            prompt_tokens: 10,
+            completion_tokens: 4,
+            tool_output_tokens: 0,
+            cost_mc: 7,
+            calls: 1,
+        }];
         let m = metrics_from_events(&events, &usage);
         assert_eq!(m.turns, 2);
         assert_eq!(m.model_calls, 2);

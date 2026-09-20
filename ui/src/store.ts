@@ -146,7 +146,6 @@ export const useUiStore = create<UiState>((set) => ({
       api.autonomy(),
       api.projectInfo().catch(() => null),
     ])
-    const total = usage.find((r) => r._total)
     const avatars: Record<string, string> = {}
     await Promise.all(
       team.map(async (m) => {
@@ -160,10 +159,8 @@ export const useUiStore = create<UiState>((set) => ({
       artifacts,
       timeline,
       pending,
-      usageTotal: total
-        ? { spent_mc: total.spent_mc ?? 0, limit_cents: total.limit_cents ?? null, tokens: total.tokens ?? 0 }
-        : null,
-      usageRows: usage,
+      usageTotal: usage.total,
+      usageRows: usage.rows,
       autonomy: autonomy || 'L0',
       avatars,
       mode: info?.mode ?? 'pack',

@@ -11,7 +11,7 @@ use crate::provider::ModelProvider;
 use crate::tools::{Registry, ToolContext};
 use crate::trace::{EventKind, TraceError};
 use crate::turn::{self, TurnOutcome};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,6 +19,28 @@ use std::sync::Mutex;
 
 /// 回合 delta 外发钩子类型（票 03）：壳层注入，emit 到 webview。
 pub type TurnDeltaHook = Box<dyn FnMut(&turn::TurnDelta) + Send>;
+
+/// 升级卡裁决回执（ADR 0054）：两个子型共享一条命令，serde(untagged)
+/// 平铺——wire 形状与旧 json! 一致（{resumed:...} 或 {adjudicated:...}）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum AdjudicateOutcome {
+    /// context_overflow 子型（US37）：放行=续跑一回合。
+    Resumed {
+        resumed: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+    },
+    /// 普通打回卡：agree→退回重跑 / reject→留痕。
+    Flag(crate::review::FlagOutcome),
+}
+
+/// open_stage 回执（ADR 0054）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OpenStageOutcome {
+    pub run_id: String,
+    pub skipped: bool,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -207,7 +229,7 @@ impl Workbench {
     }
 
     /// 确认发布：凭据闸 + push。
-    pub fn confirm_publish(&self, qid: &str) -> Result<Value, ApiError> {
+    pub fn confirm_publish(&self, qid: &str) -> Result<crate::publish::PublishOutcome, ApiError> {
         Ok(crate::publish::confirm(
             &self.db,
             &self.project_id,
@@ -218,7 +240,7 @@ impl Workbench {
 
     /// 升级卡裁决：payload 取 flag_id → review::adjudicate_flag；标记问题已答。
     /// sub=context_overflow（US37）走撞限语义：放行=续跑回合，驳回=回合收场。
-    pub fn adjudicate_flag(&self, qid: &str, agree: bool) -> Result<Value, ApiError> {
+    pub fn adjudicate_flag(&self, qid: &str, agree: bool) -> Result<AdjudicateOutcome, ApiError> {
         // 卡表读写归 cards.rs（arch-review 票 04）；sub 分发也归它（票 05）
         let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Escalation)?;
         let pv = &card.payload;
@@ -237,7 +259,10 @@ impl Workbench {
                 None,
             )?;
             if !agree {
-                return Ok(json!({"resumed": false}));
+                return Ok(AdjudicateOutcome::Resumed {
+                    resumed: false,
+                    outcome: None,
+                });
             }
             // 放行：以「继续」指令续跑一回合（上下文重建自带轻量裁剪）
             let role = pv["role"].as_str().unwrap_or_default().to_string();
@@ -246,18 +271,21 @@ impl Workbench {
                 "上下文撞限已由负责人放行。请接着完成未竟任务（上下文已重建+裁剪）。",
                 false,
             )?;
-            return Ok(json!({"resumed": true, "outcome": format!("{out:?}")}));
+            return Ok(AdjudicateOutcome::Resumed {
+                resumed: true,
+                outcome: Some(format!("{out:?}")),
+            });
         }
         let flag_id = pv["flag_id"].as_str().unwrap_or_default().to_string();
         let ctx = self.ctx_for("owner", None);
         let v = crate::review::adjudicate_flag(&self.db, &ctx, self.pack()?, &flag_id, agree)?;
         crate::cards::answer(&self.db, qid, "owner")?;
-        Ok(v)
+        Ok(AdjudicateOutcome::Flag(v))
     }
 
     /// 设置 agent 头像：UI 传 data URL（data:image/png;base64,…），
     /// 盖章点驳回：退上一阶段（与打回不同通道）。
-    pub fn reject_stamp(&self) -> Result<Value, ApiError> {
+    pub fn reject_stamp(&self) -> Result<orchestra::StageAction, ApiError> {
         Ok(crate::review::reject_stamp(
             &self.db,
             &self.project_id,
@@ -528,24 +556,27 @@ impl Workbench {
         Ok(out)
     }
 
-    pub fn open_stage(&self, seq: usize) -> Result<Value, ApiError> {
+    pub fn open_stage(&self, seq: usize) -> Result<OpenStageOutcome, ApiError> {
         let pack = self.pack()?;
         let (rid, skipped) = orchestra::open_stage(&self.db, &self.project_id, pack, seq)?;
-        Ok(json!({"run_id": rid, "skipped": skipped}))
+        Ok(OpenStageOutcome {
+            run_id: rid,
+            skipped,
+        })
     }
 
-    pub fn advance(&self) -> Result<Value, ApiError> {
+    pub fn advance(&self) -> Result<orchestra::StageAction, ApiError> {
         Ok(orchestra::advance(
             &self.db,
             &self.project_id,
             self.pack()?,
         )?)
     }
-    pub fn run_checks(&self) -> Result<Value, ApiError> {
+    pub fn run_checks(&self) -> Result<orchestra::CheckOutcome, ApiError> {
         let r = orchestra::run_checks(&self.db, &self.project_id, &self.repo_root, self.pack()?)?;
-        Ok(json!({"results": r}))
+        Ok(orchestra::CheckOutcome { results: r })
     }
-    pub fn stamp(&self) -> Result<Value, ApiError> {
+    pub fn stamp(&self) -> Result<orchestra::StageAction, ApiError> {
         Ok(orchestra::stamp(&self.db, &self.project_id, self.pack()?)?)
     }
 
@@ -589,7 +620,7 @@ impl Workbench {
         Ok(())
     }
 
-    pub fn rewind(&self, to_seq: usize) -> Result<Value, ApiError> {
+    pub fn rewind(&self, to_seq: usize) -> Result<orchestra::StageAction, ApiError> {
         Ok(orchestra::rewind(
             &self.db,
             &self.project_id,
@@ -597,7 +628,7 @@ impl Workbench {
             to_seq,
         )?)
     }
-    pub fn skip(&self) -> Result<Value, ApiError> {
+    pub fn skip(&self) -> Result<orchestra::StageAction, ApiError> {
         Ok(orchestra::skip(&self.db, &self.project_id, self.pack()?)?)
     }
 
@@ -650,7 +681,7 @@ impl Workbench {
     }
 
     /// 显式覆盖检验失败（票 40）：留痕 check_overridden（谁/哪些命令/理由）。
-    pub fn override_checks(&self, reason: &str) -> Result<Value, ApiError> {
+    pub fn override_checks(&self, reason: &str) -> Result<orchestra::OverrideOutcome, ApiError> {
         Ok(orchestra::override_checks(
             &self.db,
             &self.project_id,

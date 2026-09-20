@@ -8,7 +8,6 @@
 use crate::db::Db;
 use crate::presets::{preset_roles, RoleDef};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RoleError {
@@ -238,8 +237,37 @@ pub fn team_roles(db: &Db, project_id: &str) -> Result<Vec<String>, RoleError> {
     Ok(rows)
 }
 
+/// 授权名单行（ADR 0054）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GrantRow {
+    pub kind: String,
+    pub name: String,
+}
+
+/// 编辑面板数据：有效定义段（RoleDef 子集）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentDetailDef {
+    pub duty: String,
+    pub reviewer: Option<String>,
+    pub model_slot: String,
+    pub skills: Vec<String>,
+}
+
+/// Agent 详情（ADR 0054）：有效定义 + 实例字段 + globs + 授权名单。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentDetail {
+    pub agent_id: String,
+    pub role: String,
+    pub status: String,
+    pub model_slot: Option<String>,
+    pub custom: bool,
+    pub def: AgentDetailDef,
+    pub globs: Vec<String>,
+    pub grants: Vec<GrantRow>,
+}
+
 /// 编辑面板数据：有效定义 + 实例字段 + 授权名单。
-pub fn agent_detail(db: &Db, project_id: &str, agent_id: &str) -> Result<Value, RoleError> {
+pub fn agent_detail(db: &Db, project_id: &str, agent_id: &str) -> Result<AgentDetail, RoleError> {
     let (role, model_slot, status): (String, Option<String>, String) = db
         .conn()
         .query_row(
@@ -262,18 +290,29 @@ pub fn agent_detail(db: &Db, project_id: &str, agent_id: &str) -> Result<Value, 
     let mut st = db
         .conn()
         .prepare("SELECT kind, name FROM grants WHERE agent_id=?1")?;
-    let grants: Vec<Value> = st
+    let grants: Vec<GrantRow> = st
         .query_map([agent_id], |r| {
-            Ok(json!({"kind": r.get::<_,String>(0)?, "name": r.get::<_,String>(1)?}))
+            Ok(GrantRow {
+                kind: r.get(0)?,
+                name: r.get(1)?,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(json!({
-        "agent_id": agent_id, "role": role, "status": status,
-        "model_slot": model_slot, "custom": custom,
-        "def": {"duty": def.duty, "reviewer": def.reviewer,
-                "model_slot": def.model_slot, "skills": def.skills},
-        "globs": globs, "grants": grants,
-    }))
+    Ok(AgentDetail {
+        agent_id: agent_id.into(),
+        role,
+        status,
+        model_slot,
+        custom,
+        def: AgentDetailDef {
+            duty: def.duty,
+            reviewer: def.reviewer,
+            model_slot: def.model_slot,
+            skills: def.skills,
+        },
+        globs,
+        grants,
+    })
 }
 
 /// 读头像 → data URL（前端直接 <img src>）；未设置回 None。
@@ -443,7 +482,7 @@ mod tests {
 
         set_grants(db, aid, "mcp", &["svc-a".into(), "svc-b".into()]).unwrap();
         set_grants(db, aid, "mcp", &["svc-c".into()]).unwrap();
-        let d = agent_detail(db, &wb.project_id, aid).unwrap();
+        let d = serde_json::to_value(agent_detail(db, &wb.project_id, aid).unwrap()).unwrap();
         let names: Vec<&str> = d["grants"]
             .as_array()
             .unwrap()
@@ -456,7 +495,7 @@ mod tests {
 
         // 自定义角色 → custom=true
         let aid2 = create_role(db, &wb.project_id, &def("自定义", None)).unwrap();
-        let d = agent_detail(db, &wb.project_id, &aid2).unwrap();
+        let d = serde_json::to_value(agent_detail(db, &wb.project_id, &aid2).unwrap()).unwrap();
         assert_eq!(d["custom"], true);
     }
 }

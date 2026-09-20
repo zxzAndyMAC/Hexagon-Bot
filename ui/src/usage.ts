@@ -13,9 +13,6 @@ export const centsToMc = (cents: number) => cents * MC_PER_CENT
 export const capReached = (spentMc: number, limitCents: number | null | undefined) =>
   limitCents != null && spentMc >= centsToMc(limitCents)
 
-/** 分解行：滤掉 _total 汇总行。 */
-export const breakdownRows = (rows: UsageRow[]) => rows.filter((r) => !r._total)
-
 /** 按键聚合成本（模型分解用），按成本降序。 */
 export function groupCost(rows: UsageRow[], key: (r: UsageRow) => string): [string, number][] {
   const out = new Map<string, number>()

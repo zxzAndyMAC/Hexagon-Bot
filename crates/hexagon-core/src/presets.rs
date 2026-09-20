@@ -462,10 +462,12 @@ mod tests {
                     .unwrap();
                 }
                 // 推进：可能是下一阶段直接开，也可能停在盖章点
-                let a = orchestra::advance(&db, "p1", &pack).unwrap();
+                let a =
+                    serde_json::to_value(orchestra::advance(&db, "p1", &pack).unwrap()).unwrap();
                 match a["action"].as_str().unwrap() {
                     "awaiting_stamp" => {
-                        let s = orchestra::stamp(&db, "p1", &pack).unwrap();
+                        let s = serde_json::to_value(orchestra::stamp(&db, "p1", &pack).unwrap())
+                            .unwrap();
                         finished = s["action"] == "pack_finished";
                     }
                     "pack_finished" => finished = true,

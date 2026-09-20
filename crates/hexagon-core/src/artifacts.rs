@@ -13,7 +13,7 @@
 use crate::db::Db;
 use crate::tools::{repo_path, ToolContext, ToolError};
 use crate::trace::{EventKind, TraceError};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
@@ -273,6 +273,20 @@ pub fn deliver(
 }
 
 /// 产物浏览器查询：类型/阶段/状态/产出者可组合过滤。
+/// 产物行（ADR 0054）：artifacts 读模型，IPC 直出。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ArtifactRow {
+    pub id: String,
+    pub path: String,
+    pub kind: String,
+    pub tier: String,
+    pub stage_run_id: Option<String>,
+    pub author: Option<String>,
+    pub version: i64,
+    pub status: String,
+    pub upstream_id: Option<String>,
+}
+
 pub fn query(
     db: &Db,
     project_id: &str,
@@ -280,7 +294,7 @@ pub fn query(
     stage_run_id: Option<&str>,
     status: Option<&str>,
     author: Option<&str>,
-) -> Result<Vec<Value>, ArtifactError> {
+) -> Result<Vec<ArtifactRow>, ArtifactError> {
     let mut st = db.conn().prepare(
         "SELECT id, path, kind, tier, stage_run_id, author_agent_id, version, status, upstream_id
          FROM artifacts WHERE project_id=?1
@@ -292,14 +306,17 @@ pub fn query(
         .query_map(
             rusqlite::params![project_id, kind, stage_run_id, status, author],
             |r| {
-                Ok(json!({
-                    "id": r.get::<_,String>(0)?, "path": r.get::<_,String>(1)?,
-                    "kind": r.get::<_,String>(2)?, "tier": r.get::<_,String>(3)?,
-                    "stage_run_id": r.get::<_,Option<String>>(4)?,
-                    "author": r.get::<_,Option<String>>(5)?,
-                    "version": r.get::<_,i64>(6)?, "status": r.get::<_,String>(7)?,
-                    "upstream_id": r.get::<_,Option<String>>(8)?,
-                }))
+                Ok(ArtifactRow {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    kind: r.get(2)?,
+                    tier: r.get(3)?,
+                    stage_run_id: r.get(4)?,
+                    author: r.get(5)?,
+                    version: r.get(6)?,
+                    status: r.get(7)?,
+                    upstream_id: r.get(8)?,
+                })
             },
         )?
         .collect::<Result<Vec<_>, _>>()?;
@@ -403,7 +420,11 @@ mod tests {
         let tiers = TierMap::new();
         let aid = deliver(&db, &ctx, &tiers, "specs/prd.md", SPEC, None).unwrap();
         assert!(dir.path().join(".hexagon/specs/prd.md").exists());
-        let rows = query(&db, "p1", Some("规格"), None, None, None).unwrap();
+        let rows: Vec<serde_json::Value> = query(&db, "p1", Some("规格"), None, None, None)
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["id"], aid);
         assert_eq!(rows[0]["status"], "valid");
@@ -465,7 +486,11 @@ mod tests {
         deliver(&db, &ctx, &tiers, "specs/prd.md", SPEC, None).unwrap();
         let v2 = SPEC.replace("范围已收敛", "v2 修订");
         deliver(&db, &ctx, &tiers, "specs/prd.md", &v2, None).unwrap();
-        let rows = query(&db, "p1", None, None, None, None).unwrap();
+        let rows: Vec<serde_json::Value> = query(&db, "p1", None, None, None, None)
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["version"], 1);
         assert_eq!(rows[0]["status"], "superseded");
@@ -488,7 +513,11 @@ mod tests {
         .unwrap();
         let api = "---\nkind: 接口说明\nauthor: a1\nupstream: ui/screens.md\n---\n## 资源\nx\n## 端点\nx\n## 错误码\nx\n";
         deliver(&db, &ctx, &tiers, "specs/api.md", api, None).unwrap();
-        let rows = query(&db, "p1", Some("接口说明"), None, None, None).unwrap();
+        let rows: Vec<serde_json::Value> = query(&db, "p1", Some("接口说明"), None, None, None)
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
         assert_eq!(rows[0]["upstream_id"], up);
     }
 }

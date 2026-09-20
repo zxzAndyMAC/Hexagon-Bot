@@ -130,7 +130,47 @@ pub fn enforce_cap(db: &Db, project_id: &str) -> Result<bool, crate::trace::Trac
 
 /// 多维汇总：按 Agent × 模型 × 阶段分组，附项目总计与上限。
 /// `stage` 为阶段名；NULL = 未分阶段的历史/非阶段账。
-pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite::Error> {
+/// 用量汇总行（ADR 0054）：agent×model×stage 账本维。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageRow {
+    pub agent_id: Option<String>,
+    pub model: Option<String>,
+    pub stage: Option<String>,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub tool_output_tokens: i64,
+    pub cost_mc: i64,
+    pub calls: i64,
+}
+
+/// 项目总计：spent/limit/tokens。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageTotal {
+    pub spent_mc: i64,
+    pub limit_cents: Option<i64>,
+    pub tokens: i64,
+}
+
+/// 用量面返回体：明细行 + 总计（原 `_total` 哨兵行已拆——哨兵行正是
+/// 本票要消的类型盲区，UI 曾靠 `r._total` 可选字段辨认它）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageSummary {
+    pub rows: Vec<UsageRow>,
+    pub total: UsageTotal,
+}
+
+/// 时间序列行：bucket × agent。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageBucket {
+    pub bucket: String,
+    pub agent_id: Option<String>,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub tool_output_tokens: i64,
+    pub cost_mc: i64,
+}
+
+pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<UsageRow>, rusqlite::Error> {
     let mut st = db.conn().prepare(
         "SELECT u.agent_id, u.model, sr.stage_name,
                 SUM(u.prompt_tokens), SUM(u.completion_tokens),
@@ -142,16 +182,16 @@ pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite::Erro
     )?;
     let rows = st
         .query_map([project_id], |r| {
-            Ok(json!({
-                "agent_id": r.get::<_, Option<String>>(0)?,
-                "model": r.get::<_, Option<String>>(1)?,
-                "stage": r.get::<_, Option<String>>(2)?,
-                "prompt_tokens": r.get::<_, i64>(3)?,
-                "completion_tokens": r.get::<_, i64>(4)?,
-                "tool_output_tokens": r.get::<_, i64>(5)?,
-                "cost_mc": r.get::<_, i64>(6)?,
-                "calls": r.get::<_, i64>(7)?,
-            }))
+            Ok(UsageRow {
+                agent_id: r.get(0)?,
+                model: r.get(1)?,
+                stage: r.get(2)?,
+                prompt_tokens: r.get(3)?,
+                completion_tokens: r.get(4)?,
+                tool_output_tokens: r.get(5)?,
+                cost_mc: r.get(6)?,
+                calls: r.get(7)?,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
@@ -159,8 +199,8 @@ pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite::Erro
 
 /// 项目用量总览（ADR 0052 读组）：summarize 多维汇总 + 总计/上限/tokens 尾行。
 /// 壳层经控制连接直调，不占 wb 锁。
-pub fn project_summary(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite::Error> {
-    let mut rows = summarize(db, project_id)?;
+pub fn project_summary(db: &Db, project_id: &str) -> Result<UsageSummary, rusqlite::Error> {
+    let rows = summarize(db, project_id)?;
     let limit: Option<i64> = db.conn().query_row(
         "SELECT usage_limit_cents FROM projects WHERE id=?1",
         [project_id],
@@ -172,13 +212,14 @@ pub fn project_summary(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite
         [project_id],
         |r| r.get(0),
     )?;
-    rows.push(json!({
-        "_total": true,
-        "spent_mc": spent_mc(db, project_id)?,
-        "limit_cents": limit,
-        "tokens": tokens,
-    }));
-    Ok(rows)
+    Ok(UsageSummary {
+        rows,
+        total: UsageTotal {
+            spent_mc: spent_mc(db, project_id)?,
+            limit_cents: limit,
+            tokens,
+        },
+    })
 }
 
 /// 用量时间序列：按 bucket × Agent 分组，带三类 token 与成本。
@@ -190,7 +231,7 @@ pub fn series(
     granularity: &str,
     from: Option<&str>,
     to: Option<&str>,
-) -> Result<Vec<Value>, rusqlite::Error> {
+) -> Result<Vec<UsageBucket>, rusqlite::Error> {
     let bucket = if granularity == "hour" {
         "strftime('%Y-%m-%d %H:00', u.created_at)"
     } else {
@@ -209,14 +250,14 @@ pub fn series(
     let mut st = db.conn().prepare(&sql)?;
     let rows = st
         .query_map(params![project_id, from, to], |r| {
-            Ok(json!({
-                "bucket": r.get::<_, String>(0)?,
-                "agent_id": r.get::<_, Option<String>>(1)?,
-                "prompt_tokens": r.get::<_, i64>(2)?,
-                "completion_tokens": r.get::<_, i64>(3)?,
-                "tool_output_tokens": r.get::<_, i64>(4)?,
-                "cost_mc": r.get::<_, i64>(5)?,
-            }))
+            Ok(UsageBucket {
+                bucket: r.get(0)?,
+                agent_id: r.get(1)?,
+                prompt_tokens: r.get(2)?,
+                completion_tokens: r.get(3)?,
+                tool_output_tokens: r.get(4)?,
+                cost_mc: r.get(5)?,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
@@ -277,7 +318,11 @@ mod tests {
         };
         record(&db, &ctx, "chat", &u, 400).unwrap();
         record(&db, &ctx, "chat", &u, 0).unwrap();
-        let rows = summarize(&db, "p").unwrap();
+        let rows: Vec<serde_json::Value> = summarize(&db, "p")
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["prompt_tokens"], 2000);
         assert_eq!(rows[0]["tool_output_tokens"], 100); // 400B / 4
@@ -306,7 +351,11 @@ mod tests {
         ctx2.stage_run_id = Some("sr2".into());
         record(&db, &ctx2, "chat", &u, 0).unwrap();
         record(&db, &ctx2, "chat", &u, 0).unwrap(); // sr2 两笔
-        let rows = summarize(&db, "p").unwrap();
+        let rows: Vec<serde_json::Value> = summarize(&db, "p")
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
         assert_eq!(rows.len(), 2);
         let stages: std::collections::BTreeSet<_> =
             rows.iter().map(|r| r["stage"].as_str().unwrap()).collect();

@@ -482,6 +482,13 @@ fn failing_checks(
 }
 
 /// 负责人显式覆盖检验失败（票 40）：落 check_overridden 留痕（谁/哪些命令/理由），
+/// 覆盖检验回执（ADR 0054）。
+#[derive(Debug, Clone, Serialize)]
+pub struct OverrideOutcome {
+    pub overridden: Vec<String>,
+    pub stage: String,
+}
+
 /// 之后 evaluate 把这些命令记为满足——stamp/合入随既有闸门自然放行。
 /// 只覆盖检验项；缺产物/未过复审不在覆盖范围。
 pub fn override_checks(
@@ -489,7 +496,7 @@ pub fn override_checks(
     project_id: &str,
     pack: &PackDef,
     reason: &str,
-) -> Result<Value, OrchError> {
+) -> Result<OverrideOutcome, OrchError> {
     let run = db
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
@@ -505,7 +512,23 @@ pub fn override_checks(
         None,
         Some(&run.id),
     )?;
-    Ok(json!({"overridden": failing, "stage": run.stage_name}))
+    Ok(OverrideOutcome {
+        overridden: failing,
+        stage: run.stage_name,
+    })
+}
+
+/// 检验结果行（ADR 0054）：cmd + 退出码。
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckResult {
+    pub cmd: String,
+    pub exit_code: i32,
+}
+
+/// run_checks 回执（ADR 0054）。
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckOutcome {
+    pub results: Vec<CheckResult>,
 }
 
 /// 跑本阶段的检验命令（包内声明 = 预授权，直跑不过权限管线）。
@@ -514,7 +537,7 @@ pub fn run_checks(
     project_id: &str,
     repo_root: &Path,
     pack: &PackDef,
-) -> Result<Vec<(String, i32)>, OrchError> {
+) -> Result<Vec<CheckResult>, OrchError> {
     let run = db
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
@@ -535,14 +558,38 @@ pub fn run_checks(
             None,
             Some(&run.id),
         )?;
-        out.push((cmd.clone(), code));
+        out.push(CheckResult {
+            cmd: cmd.clone(),
+            exit_code: code,
+        });
     }
     Ok(out)
 }
 
+/// 阶段动作回执（ADR 0054）：serde(tag="action") 标号联合——
+/// wire 形状与旧 json!({"action":...}) 完全一致。
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum StageAction {
+    /// 就绪但卡在盖章点（已发 stamp 卡）。
+    AwaitingStamp { stage: String, question_id: String },
+    /// 已 waiting_stamp——重复推进的幂等回执。
+    WaitingStamp { stage: String },
+    /// 就绪条件不齐：缺产物/检验/复审。
+    Incomplete { stage: String, missing: Vec<String> },
+    /// 开了下一阶段。
+    StageOpened { run_id: String, seq: usize },
+    /// 包全部跑完。
+    PackFinished,
+    /// 退回到指定 seq 并开新 run。
+    Rewound { to_seq: usize, run_id: String },
+    /// 盖章点驳回：退上一阶段（review::reject_stamp 同回执）。
+    StampRejected { reopened_seq: usize, run_id: String },
+}
+
 /// 推进：评估当前阶段 → ready 则盖章点停 or done+开下一阶段。
 /// 返回发生了什么的描述。
-pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchError> {
+pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
     if is_paused(db, project_id)? {
         return Err(OrchError::Paused);
     }
@@ -550,12 +597,15 @@ pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchE
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
     if run.state == "waiting_stamp" {
-        return Ok(json!({"action": "waiting_stamp", "stage": run.stage_name}));
+        return Ok(StageAction::WaitingStamp {
+            stage: run.stage_name,
+        });
     }
     match evaluate(db, project_id, pack)? {
-        StageEval::Incomplete { missing } => {
-            Ok(json!({"action": "incomplete", "stage": run.stage_name, "missing": missing}))
-        }
+        StageEval::Incomplete { missing } => Ok(StageAction::Incomplete {
+            stage: run.stage_name,
+            missing,
+        }),
         StageEval::Ready => {
             let stage = &pack.stages[run.seq as usize];
             if stage.stamp_point {
@@ -579,9 +629,10 @@ pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchE
                     None,
                     Some(&run.id),
                 )?;
-                return Ok(
-                    json!({"action": "awaiting_stamp", "stage": stage.name, "question_id": qid}),
-                );
+                return Ok(StageAction::AwaitingStamp {
+                    stage: stage.name.clone(),
+                    question_id: qid,
+                });
             }
             finish_stage(db, project_id, pack, &run)
         }
@@ -593,7 +644,7 @@ fn finish_stage(
     project_id: &str,
     pack: &PackDef,
     run: &StageRun,
-) -> Result<Value, OrchError> {
+) -> Result<StageAction, OrchError> {
     db.conn().execute(
         "UPDATE stage_runs SET state='done', finished_at=datetime('now') WHERE id=?1",
         [&run.id],
@@ -614,7 +665,7 @@ pub fn open_next(
     project_id: &str,
     pack: &PackDef,
     from_seq: usize,
-) -> Result<Value, OrchError> {
+) -> Result<StageAction, OrchError> {
     let mut seq = from_seq;
     loop {
         if seq >= pack.stages.len() {
@@ -627,18 +678,18 @@ pub fn open_next(
                 None,
                 None,
             )?;
-            return Ok(json!({"action": "pack_finished"}));
+            return Ok(StageAction::PackFinished);
         }
         let (rid, skipped) = open_stage(db, project_id, pack, seq)?;
         if !skipped {
-            return Ok(json!({"action": "stage_opened", "run_id": rid, "seq": seq}));
+            return Ok(StageAction::StageOpened { run_id: rid, seq });
         }
         seq += 1;
     }
 }
 
 /// 盖章确认：waiting_stamp → done → 推进。
-pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchError> {
+pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
     let run = db
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
@@ -665,7 +716,7 @@ pub fn rewind(
     project_id: &str,
     pack: &PackDef,
     to_seq: usize,
-) -> Result<Value, OrchError> {
+) -> Result<StageAction, OrchError> {
     let run = db
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
@@ -684,11 +735,14 @@ pub fn rewind(
         Some(&run.id),
     )?;
     let (rid, _) = open_stage(db, project_id, pack, to_seq)?;
-    Ok(json!({"action": "rewound", "to_seq": to_seq, "run_id": rid}))
+    Ok(StageAction::Rewound {
+        to_seq,
+        run_id: rid,
+    })
 }
 
 /// 跳过当前阶段。
-pub fn skip(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchError> {
+pub fn skip(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
     let run = db
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
@@ -719,40 +773,70 @@ pub fn resume(db: &Db, project_id: &str) -> Result<(), OrchError> {
 // 这组函数只吃 &Db：壳层读组/控制组命令经第二条连接直调，不占 wb 锁。
 
 /// 团队名册（agents 表读模型）。
-pub fn team(db: &Db, project_id: &str) -> Result<Vec<Value>, OrchError> {
+/// 团队花名册行（ADR 0054）：agents 读模型，IPC 直出。
+#[derive(Debug, Clone, Serialize)]
+pub struct TeamRow {
+    pub id: String,
+    pub role: String,
+    pub model_slot: Option<String>,
+    pub status: String,
+}
+
+pub fn team(db: &Db, project_id: &str) -> Result<Vec<TeamRow>, OrchError> {
     let mut st = db
         .conn()
         .prepare("SELECT id, role, model_slot, status FROM agents WHERE project_id=?1")?;
     let rows = st
         .query_map([project_id], |r| {
-            Ok(
-                json!({"id": r.get::<_,String>(0)?, "role": r.get::<_,String>(1)?,
-                      "model_slot": r.get::<_,Option<String>>(2)?,
-                      "status": r.get::<_,String>(3)?}),
-            )
+            Ok(TeamRow {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                model_slot: r.get(2)?,
+                status: r.get(3)?,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
+/// 阶段运行状态行（stage_runs 读模型）。
+#[derive(Debug, Clone, Serialize)]
+pub struct StageRow {
+    pub run_id: String,
+    pub stage: String,
+    pub seq: i64,
+    pub state: String,
+}
+
 /// 阶段运行状态表（stage_runs 读模型）。
-pub fn stage_status(db: &Db, project_id: &str) -> Result<Vec<Value>, OrchError> {
+pub fn stage_status(db: &Db, project_id: &str) -> Result<Vec<StageRow>, OrchError> {
     let mut st = db.conn().prepare(
         "SELECT id, stage_name, seq, state FROM stage_runs WHERE project_id=?1 ORDER BY seq, id",
     )?;
     let rows = st
         .query_map([project_id], |r| {
-            Ok(
-                json!({"run_id": r.get::<_,String>(0)?, "stage": r.get::<_,String>(1)?,
-                      "seq": r.get::<_,i64>(2)?, "state": r.get::<_,String>(3)?}),
-            )
+            Ok(StageRow {
+                run_id: r.get(0)?,
+                stage: r.get(1)?,
+                seq: r.get(2)?,
+                state: r.get(3)?,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 /// 项目元信息（projects 行 + fastpath 角色名解析）。
-pub fn project_info(db: &Db, project_id: &str) -> Result<Value, OrchError> {
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectInfo {
+    pub name: String,
+    pub mode: String,
+    pub pack_name: Option<String>,
+    pub fastpath_agent_id: Option<String>,
+    pub fastpath_role: Option<String>,
+}
+
+pub fn project_info(db: &Db, project_id: &str) -> Result<ProjectInfo, OrchError> {
     let (name, mode, pack_name, fast_aid): (String, String, Option<String>, Option<String>) =
         db.conn().query_row(
             "SELECT name, mode, pack_name, fastpath_agent_id FROM projects WHERE id=?1",
@@ -764,13 +848,13 @@ pub fn project_info(db: &Db, project_id: &str) -> Result<Value, OrchError> {
             .query_row("SELECT role FROM agents WHERE id=?1", [a], |r| r.get(0))
             .ok()
     });
-    Ok(json!({
-        "name": name,
-        "mode": mode,
-        "pack_name": pack_name,
-        "fastpath_agent_id": fast_aid,
-        "fastpath_role": fast_role,
-    }))
+    Ok(ProjectInfo {
+        name,
+        mode,
+        pack_name,
+        fastpath_agent_id: fast_aid,
+        fastpath_role: fast_role,
+    })
 }
 
 /// agents.status 的唯一写口（arch-review 票 04）：裸状态迁移，**不附事件**——
@@ -1034,7 +1118,7 @@ mod tests {
         .unwrap();
         assert_eq!(evaluate(&db, "p1", &p).unwrap(), StageEval::Ready);
         // advance → done + 开实现阶段
-        let r = advance(&db, "p1", &p).unwrap();
+        let r = serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap();
         assert_eq!(r["action"], "stage_opened");
         assert_eq!(r["seq"], 3);
         let _ = dir;
@@ -1052,13 +1136,13 @@ mod tests {
                 [&rid],
             )
             .unwrap();
-        let r = advance(&db, "p1", &p).unwrap();
+        let r = serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap();
         assert_eq!(r["action"], "awaiting_stamp");
         // 再 advance 不会动
-        let r2 = advance(&db, "p1", &p).unwrap();
+        let r2 = serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap();
         assert_eq!(r2["action"], "waiting_stamp");
         // 盖章 → 「界面」无 UI 被跳过 → 穿透到「接口」
-        let r3 = stamp(&db, "p1", &p).unwrap();
+        let r3 = serde_json::to_value(stamp(&db, "p1", &p).unwrap()).unwrap();
         assert_eq!(r3["action"], "stage_opened");
         assert_eq!(r3["seq"], 2);
         let st: String = db
@@ -1073,7 +1157,7 @@ mod tests {
         let (db, _d) = setup(&["产品策划", "后端", "架构师"]);
         let p = pack();
         open_stage(&db, "p1", &p, 2).unwrap();
-        let r = rewind(&db, "p1", &p, 0).unwrap();
+        let r = serde_json::to_value(rewind(&db, "p1", &p, 0).unwrap()).unwrap();
         assert_eq!(r["action"], "rewound");
         let st: String = db
             .conn()
@@ -1193,9 +1277,15 @@ mod tests {
             run_turn(&db, &provider, &reg, &ctx_for("a0", &r0), vec![], "写规格").unwrap(),
             TurnOutcome::Finished
         );
-        assert_eq!(advance(&db, "p1", &p).unwrap()["action"], "awaiting_stamp");
+        assert_eq!(
+            serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap()["action"],
+            "awaiting_stamp"
+        );
         // 盖章 → 接口阶段（架构师同激活，无交付义务）
-        assert_eq!(stamp(&db, "p1", &p).unwrap()["action"], "stage_opened");
+        assert_eq!(
+            serde_json::to_value(stamp(&db, "p1", &p).unwrap()).unwrap()["action"],
+            "stage_opened"
+        );
 
         // 阶段 1：后端交付 → 架构师复审通过 → 推进
         let r1 = db.active_stage_run("p1").unwrap().unwrap().id;
@@ -1214,9 +1304,18 @@ mod tests {
         )
         .unwrap();
         // 推进 → 合入（盖章点）
-        assert_eq!(advance(&db, "p1", &p).unwrap()["action"], "stage_opened");
-        assert_eq!(advance(&db, "p1", &p).unwrap()["action"], "awaiting_stamp");
-        assert_eq!(stamp(&db, "p1", &p).unwrap()["action"], "pack_finished");
+        assert_eq!(
+            serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap()["action"],
+            "stage_opened"
+        );
+        assert_eq!(
+            serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap()["action"],
+            "awaiting_stamp"
+        );
+        assert_eq!(
+            serde_json::to_value(stamp(&db, "p1", &p).unwrap()).unwrap()["action"],
+            "pack_finished"
+        );
 
         // 回放：事件面完整
         let items = db.timeline("p1", None, 200, None).unwrap();

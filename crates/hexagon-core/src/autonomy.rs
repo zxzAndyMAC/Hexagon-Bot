@@ -11,7 +11,7 @@
 //! 可折叠块进时间线；内容只来自事件表，与实际发生严格一致。
 
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::db::Db;
 use crate::trace::EventKind;
@@ -28,6 +28,60 @@ pub enum AutonomyError {
     Db(#[from] crate::db::DbError),
     #[error("invalid autonomy level: {0}")]
     BadLevel(String),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+/// 归来摘要（ADR 0054）：模板化计数表 + 待办 + 交付清单。
+/// 同一形状既作 IPC 返回也作 ReturnSummary 事件载荷。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReturnSummary {
+    pub since_event: i64,
+    pub deliveries: Vec<DeliveryRow>,
+    pub reviews: ReviewCounts,
+    pub flags: FlagCounts,
+    pub permissions: PermCounts,
+    pub stages: StageCounts,
+    pub pending_todos: Vec<TodoCount>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeliveryRow {
+    pub path: Option<String>,
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReviewCounts {
+    pub passed: i64,
+    pub rejected: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FlagCounts {
+    pub submitted: i64,
+    pub adjudicated: i64,
+    pub escalated: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PermCounts {
+    pub asked: i64,
+    pub allowed: i64,
+    pub denied: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StageCounts {
+    pub finished: i64,
+    pub skipped: i64,
+    pub rewound: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TodoCount {
+    pub kind: String,
+    pub count: i64,
 }
 
 /// L0/L1/L2 → 0/1/2。
@@ -112,7 +166,7 @@ pub fn leave(db: &Db, project_id: &str) -> Result<i64, AutonomyError> {
 
 /// 负责人归来：自上次离开标记以来的事件 → 模板化摘要 → ReturnSummary 事件。
 /// 无离开标记则汇总全部事件。
-pub fn back(db: &Db, project_id: &str) -> Result<Value, AutonomyError> {
+pub fn back(db: &Db, project_id: &str) -> Result<ReturnSummary, AutonomyError> {
     let since: i64 = db
         .conn()
         .query_row(
@@ -134,9 +188,9 @@ pub fn back(db: &Db, project_id: &str) -> Result<Value, AutonomyError> {
     };
 
     // 待办：仍排队的必问/盖章/升级/发布卡
-    let todos: Vec<Value> = crate::cards::queued_kind_counts(db, project_id)?
+    let todos: Vec<TodoCount> = crate::cards::queued_kind_counts(db, project_id)?
         .into_iter()
-        .map(|(kind, count)| json!({"kind": kind, "count": count}))
+        .map(|(kind, count)| TodoCount { kind, count })
         .collect();
 
     // 离开期间交付的产物（带 kind）
@@ -144,42 +198,44 @@ pub fn back(db: &Db, project_id: &str) -> Result<Value, AutonomyError> {
         "SELECT json_extract(payload,'$.path'), json_extract(payload,'$.kind')
          FROM events WHERE project_id=?1 AND kind='artifact_delivered' AND id>?2",
     )?;
-    let deliveries: Vec<Value> = st
+    let deliveries: Vec<DeliveryRow> = st
         .query_map(params![project_id, since], |r| {
-            Ok(json!({"path": r.get::<_, Option<String>>(0)?,
-                      "kind": r.get::<_, Option<String>>(1)?}))
+            Ok(DeliveryRow {
+                path: r.get(0)?,
+                kind: r.get(1)?,
+            })
         })?
         .collect::<Result<_, _>>()?;
 
-    let summary = json!({
-        "since_event": since,
-        "deliveries": deliveries,
-        "reviews": {
-            "passed": count("review_passed"),
-            "rejected": count("review_rejected"),
+    let summary = ReturnSummary {
+        since_event: since,
+        deliveries,
+        reviews: ReviewCounts {
+            passed: count("review_passed"),
+            rejected: count("review_rejected"),
         },
-        "flags": {
-            "submitted": count("flag_submitted"),
-            "adjudicated": count("flag_adjudicated"),
-            "escalated": count("escalated"),
+        flags: FlagCounts {
+            submitted: count("flag_submitted"),
+            adjudicated: count("flag_adjudicated"),
+            escalated: count("escalated"),
         },
-        "permissions": {
-            "asked": count("permission_asked"),
-            "allowed": count("permission_allowed"),
-            "denied": count("permission_denied"),
+        permissions: PermCounts {
+            asked: count("permission_asked"),
+            allowed: count("permission_allowed"),
+            denied: count("permission_denied"),
         },
-        "stages": {
-            "finished": count("stage_finished"),
-            "skipped": count("stage_skipped"),
-            "rewound": count("stage_rewound"),
+        stages: StageCounts {
+            finished: count("stage_finished"),
+            skipped: count("stage_skipped"),
+            rewound: count("stage_rewound"),
         },
-        "pending_todos": todos,
-    });
+        pending_todos: todos,
+    };
 
     db.append_event(
         project_id,
         EventKind::ReturnSummary,
-        summary.clone(),
+        serde_json::to_value(&summary)?,
         None,
         None,
     )?;
@@ -271,7 +327,7 @@ mod tests {
         )
         .unwrap();
 
-        let s = back(&db, "p").unwrap();
+        let s = serde_json::to_value(back(&db, "p").unwrap()).unwrap();
         assert_eq!(s["deliveries"].as_array().unwrap().len(), 1); // 只有 b.md
         assert_eq!(s["reviews"]["passed"], 1);
         assert_eq!(s["reviews"]["rejected"], 1);
@@ -291,7 +347,7 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1);
         // 再次 back：since 仍是同一个 away 标记
-        let s2 = back(&db, "p").unwrap();
+        let s2 = serde_json::to_value(back(&db, "p").unwrap()).unwrap();
         assert_eq!(s2["reviews"]["passed"], 1);
     }
 }

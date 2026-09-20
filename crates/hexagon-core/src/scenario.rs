@@ -193,7 +193,7 @@ pub struct ScenarioReport {
 /// 证据自带完整性校验,坏轨迹不能冒充证据）。
 pub struct CapturedRun {
     pub events: Vec<Event>,
-    pub usage: Vec<Value>,
+    pub usage: crate::usage::UsageSummary,
     pub violations: usize,
 }
 
@@ -300,8 +300,8 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             let art_id: String =
                 crate::artifacts::query(&wb.db, &wb.project_id, None, None, None, None)?
                     .iter()
-                    .find(|a| a["path"] == *artifact)
-                    .and_then(|a| a["id"].as_str().map(str::to_string))
+                    .find(|a| a.path == *artifact)
+                    .map(|a| a.id.clone())
                     .ok_or_else(|| ApiError::NoRole(format!("no artifact {artifact}")))?;
             let v = match verdict.as_str() {
                 "pass" | "通过" => crate::review::Verdict::Pass,
@@ -340,9 +340,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
         }
         StepDef::AssertStage { seq, state } => {
             let stages = crate::orchestra::stage_status(&wb.db, &wb.project_id)?;
-            let hit = stages
-                .iter()
-                .any(|s| s["seq"] == *seq && s["state"] == *state);
+            let hit = stages.iter().any(|s| s.seq == *seq && s.state == *state);
             assert!(
                 hit,
                 "expected stage seq={seq} state={state}, got {stages:?}"
@@ -351,9 +349,9 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
         StepDef::AssertArtifact { path, kind, status } => {
             let arts = crate::artifacts::query(&wb.db, &wb.project_id, None, None, None, None)?;
             let hit = arts.iter().any(|a| {
-                a["path"] == *path
-                    && kind.as_ref().is_none_or(|k| a["kind"] == *k)
-                    && status.as_ref().is_none_or(|s| a["status"] == *s)
+                a.path == *path
+                    && kind.as_ref().is_none_or(|k| a.kind == *k)
+                    && status.as_ref().is_none_or(|s| a.status == *s)
             });
             assert!(
                 hit,
@@ -362,9 +360,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
         }
         StepDef::AssertAgentStatus { role, status } => {
             let team = crate::orchestra::team(&wb.db, &wb.project_id)?;
-            let hit = team
-                .iter()
-                .any(|m| m["role"] == *role && m["status"] == *status);
+            let hit = team.iter().any(|m| m.role == *role && m.status == *status);
             assert!(hit, "expected agent {role} status={status}");
         }
     }

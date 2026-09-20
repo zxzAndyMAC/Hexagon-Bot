@@ -392,13 +392,23 @@ pub fn submit_flag(
 
 /// 裁决打回：同意 → 指针拨回产物所在阶段（产出 Agent 经激活名单重激活，
 /// 打回内容进其简报的 notices）；驳回 → 本阶段继续。
+/// 打回裁决回执（ADR 0054）：serde(tag="adjudicated") 标号联合。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "adjudicated", rename_all = "snake_case")]
+pub enum FlagOutcome {
+    /// 同意：回退到目标产物所属阶段重跑。
+    Agreed { rewind: orchestra::StageAction },
+    /// 驳回：仅留痕，本阶段继续。
+    Rejected,
+}
+
 pub fn adjudicate_flag(
     db: &Db,
     ctx: &ToolContext,
     pack: &PackDef,
     flag_id: &str,
     agree: bool,
-) -> Result<Value, ReviewError> {
+) -> Result<FlagOutcome, ReviewError> {
     // flag 产物 → 目标产物 → 目标阶段 seq
     let target: String = db
         .conn()
@@ -449,7 +459,7 @@ pub fn adjudicate_flag(
             ctx.stage_run_id.as_deref(),
         )?;
         let r = orchestra::rewind(db, &ctx.project_id, pack, to_seq as usize)?;
-        Ok(json!({"adjudicated": "agreed", "rewind": r}))
+        Ok(FlagOutcome::Agreed { rewind: r })
     } else {
         db.append_event(
             &ctx.project_id,
@@ -460,12 +470,16 @@ pub fn adjudicate_flag(
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
-        Ok(json!({"adjudicated": "rejected"}))
+        Ok(FlagOutcome::Rejected)
     }
 }
 
 /// 盖章点驳回：退上一阶段——与打回不同通道（事件分开）。
-pub fn reject_stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, ReviewError> {
+pub fn reject_stamp(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+) -> Result<orchestra::StageAction, ReviewError> {
     let (rid, seq, name): (String, i64, String) = db
         .conn()
         .query_row(
@@ -488,7 +502,10 @@ pub fn reject_stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, 
     )?;
     let prev = (seq - 1).max(0) as usize;
     let (new_rid, _) = orchestra::open_stage(db, project_id, pack, prev)?;
-    Ok(json!({"action": "stamp_rejected", "reopened_seq": prev, "run_id": new_rid}))
+    Ok(orchestra::StageAction::StampRejected {
+        reopened_seq: prev,
+        run_id: new_rid,
+    })
 }
 
 #[cfg(test)]
@@ -761,7 +778,7 @@ mod tests {
         orchestra::open_stage(&db, "p1", &pack, 0).unwrap();
         orchestra::advance(&db, "p1", &pack).unwrap(); // seq0 done→seq1
         orchestra::advance(&db, "p1", &pack).unwrap(); // seq1 ready→awaiting_stamp
-        let r = reject_stamp(&db, "p1", &pack).unwrap();
+        let r = serde_json::to_value(reject_stamp(&db, "p1", &pack).unwrap()).unwrap();
         assert_eq!(r["action"], "stamp_rejected");
         assert_eq!(r["reopened_seq"], 0);
         let items = db

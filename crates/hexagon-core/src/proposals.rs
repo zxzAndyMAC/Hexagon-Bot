@@ -580,7 +580,18 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
 }
 
 /// 待审/在途提案队列（UI 提案卡数据源）。
-pub fn list(db: &Db, project_id: &str) -> Result<Vec<Value>, PropError> {
+/// 提案队列行（ADR 0054）：proposals×artifacts 联表读模型。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProposalRow {
+    pub id: String,
+    pub surface: String,
+    pub target: String,
+    pub status: String,
+    pub author: String,
+    pub artifact_path: Option<String>,
+}
+
+pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
     let mut st = db.conn().prepare(
         "SELECT p.id, p.surface, p.effective_path, p.status, p.author_agent_id, a.path
          FROM proposals p LEFT JOIN artifacts a ON a.id = p.artifact_id
@@ -588,14 +599,14 @@ pub fn list(db: &Db, project_id: &str) -> Result<Vec<Value>, PropError> {
     )?;
     let rows = st
         .query_map([project_id], |r| {
-            Ok(json!({
-                "id": r.get::<_, String>(0)?,
-                "surface": r.get::<_, String>(1)?,
-                "target": r.get::<_, String>(2)?,
-                "status": r.get::<_, String>(3)?,
-                "author": r.get::<_, String>(4)?,
-                "artifact_path": r.get::<_, Option<String>>(5)?,
-            }))
+            Ok(ProposalRow {
+                id: r.get(0)?,
+                surface: r.get(1)?,
+                target: r.get(2)?,
+                status: r.get(3)?,
+                author: r.get(4)?,
+                artifact_path: r.get(5)?,
+            })
         })?
         .collect::<Result<_, _>>()?;
     Ok(rows)

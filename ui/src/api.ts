@@ -79,34 +79,126 @@ export interface ArtifactRow {
 }
 
 export interface UsageTotal {
-  _total: boolean
   spent_mc: number
   limit_cents: number | null
+  tokens: number
 }
 
 export interface UsageRow {
-  _total?: boolean
-  agent_id?: string | null
-  model?: string | null
-  stage?: string | null
-  prompt_tokens?: number
-  completion_tokens?: number
-  tool_output_tokens?: number
-  cost_mc?: number
-  calls?: number
-  spent_mc?: number
-  limit_cents?: number | null
-  tokens?: number
+  agent_id: string | null
+  model: string | null
+  stage: string | null
+  prompt_tokens: number
+  completion_tokens: number
+  tool_output_tokens: number
+  cost_mc: number
+  calls: number
+}
+
+/// 用量汇总（ADR 0054）：明细行 + 总计——原 _total 哨兵行已拆。
+export interface UsageSummary {
+  rows: UsageRow[]
+  total: UsageTotal
 }
 
 export interface UsageBucket {
   bucket: string // "YYYY-MM-DD" | "YYYY-MM-DD HH:00"
-  agent_id?: string | null
+  agent_id: string | null
   prompt_tokens: number
   completion_tokens: number
   tool_output_tokens: number
   cost_mc: number
 }
+
+// ---- 动作回执（ADR 0054）：serde 标号/平铺联合，与 core DTO 同形 ----
+
+/// 阶段动作（serde tag="action"）：advance/stamp/rewind/skip/reject_stamp 共用。
+export type StageAction =
+  | { action: 'awaiting_stamp'; stage: string; question_id: string }
+  | { action: 'waiting_stamp'; stage: string }
+  | { action: 'incomplete'; stage: string; missing: string[] }
+  | { action: 'stage_opened'; run_id: string; seq: number }
+  | { action: 'pack_finished' }
+  | { action: 'rewound'; to_seq: number; run_id: string }
+  | { action: 'stamp_rejected'; reopened_seq: number; run_id: string }
+
+export interface OpenStageOutcome {
+  run_id: string
+  skipped: boolean
+}
+export interface CheckResult {
+  cmd: string
+  exit_code: number
+}
+export interface CheckOutcome {
+  results: CheckResult[]
+}
+export interface OverrideOutcome {
+  overridden: string[]
+  stage: string
+}
+export interface InstallOutcome {
+  installed: boolean
+  plan?: string
+}
+export interface PublishOutcome {
+  remote: string
+  baseline: string
+  output: string
+}
+
+/// 打回裁决（serde tag="adjudicated"）。
+export type FlagOutcome =
+  | { adjudicated: 'agreed'; rewind: StageAction }
+  | { adjudicated: 'rejected' }
+
+/// 升级卡裁决（serde untagged）：撞限续跑 or 打回裁决。
+export type AdjudicateOutcome = { resumed: boolean; outcome?: string } | FlagOutcome
+
+/// 负责人归来摘要（ReturnSummary 事件载荷同形）。
+export interface ReturnSummary {
+  since_event: number
+  deliveries: { path: string | null; kind: string | null }[]
+  reviews: { passed: number; rejected: number }
+  flags: { submitted: number; adjudicated: number; escalated: number }
+  permissions: { asked: number; allowed: number; denied: number }
+  stages: { finished: number; skipped: number; rewound: number }
+  pending_todos: { kind: string; count: number }[]
+}
+
+export interface ProposalRow {
+  id: string
+  surface: string
+  target: string
+  status: string
+  author: string
+  artifact_path: string | null
+}
+
+export interface ProjectInfo {
+  name: string
+  mode: 'pack' | 'fastpath'
+  pack_name: string | null
+  fastpath_agent_id: string | null
+  fastpath_role: string | null
+}
+
+export interface RecentProject {
+  dir: string
+  name: string
+  mode: string
+  opened_at: number
+}
+
+/// dispatch/run_turn 终态（serde snake_case 枚举）。
+export type TurnOutcome =
+  | 'finished'
+  | 'truncated'
+  | 'skipped_sleeping'
+  | 'skipped_cap'
+  | 'interrupted'
+  | { awaiting_permission: string }
+  | { failed: string }
 
 // ---- 项目向导（票 24）----
 export interface DirReport {
@@ -196,12 +288,12 @@ export const api = {
   sendMessage: (body: string) => call<number>('send_message', { body }),
   answerPermission: (questionId: string, allow: boolean, rememberShape?: string, scope = 'activation') =>
     call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
-  advance: () => call<unknown>('advance'),
-  openStage: (seq: number) => call<unknown>('open_stage', { seq }),
-  runChecks: () => call<unknown>('run_checks'),
-  stamp: () => call<unknown>('stamp'),
-  rewind: (toSeq: number) => call<unknown>('rewind', { toSeq }),
-  skip: () => call<unknown>('skip'),
+  advance: () => call<StageAction>('advance'),
+  openStage: (seq: number) => call<OpenStageOutcome>('open_stage', { seq }),
+  runChecks: () => call<CheckOutcome>('run_checks'),
+  stamp: () => call<StageAction>('stamp'),
+  rewind: (toSeq: number) => call<StageAction>('rewind', { toSeq }),
+  skip: () => call<StageAction>('skip'),
   skipReview: (artifactKind: string) => call<void>('skip_review', { artifactKind }),
   pause: () => call<void>('pause'),
   resume: () => call<void>('resume'),
@@ -215,7 +307,7 @@ export const api = {
   team: () => call<TeamRow[]>('team'),
   stageStatus: () => call<StageRow[]>('stage_status'),
   pendingQuestions: () => call<PendingQuestion[]>('pending_questions'),
-  usage: () => call<UsageRow[]>('usage'),
+  usage: () => call<UsageSummary>('usage'),
   usageSeries: (granularity: 'day' | 'hour' = 'day', from?: string | null, to?: string | null) =>
     call<UsageBucket[]>('usage_series', { granularity, from: from ?? null, to: to ?? null }),
   setUsageLimit: (limitCents: number | null) =>
@@ -225,12 +317,12 @@ export const api = {
   autonomy: () => call<string>('autonomy'),
   setAutonomy: (level: string) => call<void>('set_autonomy', { level }),
   ownerAway: () => call<void>('owner_away'),
-  ownerBack: () => call<unknown>('owner_back'),
+  ownerBack: () => call<ReturnSummary>('owner_back'),
   // ---- 决策卡动作 ----
-  rejectStamp: () => call<unknown>('reject_stamp'),
+  rejectStamp: () => call<StageAction>('reject_stamp'),
   adjudicateFlag: (qid: string, agree: boolean) =>
-    call<unknown>('adjudicate_flag', { qid, agree }),
-  proposals: () => call<Record<string, unknown>[]>('proposals'),
+    call<AdjudicateOutcome>('adjudicate_flag', { qid, agree }),
+  proposals: () => call<ProposalRow[]>('proposals'),
   reviewProposal: (proposalId: string, pass: boolean, reason: string, reviewerAgent: string) =>
     call<void>('review_proposal', { proposalId, pass, reason, reviewerAgent }),
   confirmProposal: (qid: string) => call<string>('confirm_proposal', { qid }),
@@ -245,16 +337,16 @@ export const api = {
   rollbackProposal: (proposalId: string) =>
     call<void>('rollback_proposal', { proposalId }),
   requestPublish: (remote: string) => call<string>('request_publish', { remote }),
-  confirmPublish: (qid: string) => call<unknown>('confirm_publish', { qid }),
+  confirmPublish: (qid: string) => call<PublishOutcome>('confirm_publish', { qid }),
   rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   // ---- 检验覆盖（票 40）：显式覆盖留痕，composer /override <理由> 同权 ----
-  overrideChecks: (reason: string) => call<unknown>('override_checks', { reason }),
+  overrideChecks: (reason: string) => call<OverrideOutcome>('override_checks', { reason }),
   // ---- 安装助手（票 36）：NL 请求 → 确认卡 → 负责人确认才执行；grants 永不动 ----
   requestInstall: (desc: string) => call<string>('request_install', { desc }),
   resolveInstall: (qid: string, allow: boolean) =>
-    call<unknown>('resolve_install', { qid, allow }),
+    call<InstallOutcome>('resolve_install', { qid, allow }),
   // ---- 角色编辑（票 30）：项目覆盖行 + 实例字段 + 授权名单（人手编辑面，非提案）----
   agentDetail: (agentId: string) => call<AgentDetail>('agent_detail', { agentId }),
   updateAgent: (agentId: string, patch: AgentPatch) =>
@@ -282,20 +374,12 @@ export const api = {
     call<void>('set_agent_avatar', { agentId, dataUrl }),
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
   // ---- 启动页 / 最近项目（票 29）----
-  recentProjects: () =>
-    call<{ dir: string; name: string; mode: string; opened_at: number }[]>('recent_projects'),
+  recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => call<void>('open_recent', { dir }),
   closeProject: () => call<void>('close_project'),
   // ---- 快速通道（票 26）----
-  projectInfo: () =>
-    call<{
-      name: string
-      mode: 'pack' | 'fastpath'
-      pack_name: string | null
-      fastpath_agent_id: string | null
-      fastpath_role: string | null
-    }>('project_info'),
-  dispatch: (role: string, input: string) => call<unknown>('dispatch', { role, input }),
+  projectInfo: () => call<ProjectInfo>('project_info'),
+  dispatch: (role: string, input: string) => call<TurnOutcome>('dispatch', { role, input }),
   upgradeToPack: (packName: string) => call<void>('upgrade_to_pack', { packName }),
   // ---- 项目向导（票 24）----
   projectOpen: () => call<boolean>('project_open'),
@@ -742,16 +826,18 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'q-prop', kind: 'stamp', agent_id: 'a1', payload: { proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }, state: 'queued' },
       ] as T
     case 'usage':
-      return [
-        { agent_id: 'a0', model: 'mock-chat', stage: '需求', prompt_tokens: 18000, completion_tokens: 4200, tool_output_tokens: 0, cost_mc: 7400, calls: 8 },
-        { agent_id: 'a1', model: 'mock-chat', stage: '接口', prompt_tokens: 42000, completion_tokens: 12800, tool_output_tokens: 2100, cost_mc: 19600, calls: 17 },
-        { agent_id: 'a1', model: 'mock-chat', stage: '实现', prompt_tokens: 19000, completion_tokens: 5600, tool_output_tokens: 900, cost_mc: 8200, calls: 7 },
-        { agent_id: 'a2', model: 'mock-chat', stage: '界面稿', prompt_tokens: 22000, completion_tokens: 9100, tool_output_tokens: 0, cost_mc: 10400, calls: 9 },
-        { agent_id: 'a3', model: 'mock-code', stage: '实现', prompt_tokens: 36000, completion_tokens: 14200, tool_output_tokens: 3200, cost_mc: 17800, calls: 14 },
-        { agent_id: 'a4', model: 'mock-code', stage: '实现', prompt_tokens: 28000, completion_tokens: 9800, tool_output_tokens: 2600, cost_mc: 13500, calls: 11 },
-        { agent_id: 'a5', model: 'mock-chat', stage: '实现', prompt_tokens: 6400, completion_tokens: 1800, tool_output_tokens: 0, cost_mc: 2900, calls: 3 },
-        { _total: true, spent_mc: 81400, limit_cents: 20000, tokens: 286400 },
-      ] as T
+      return {
+        rows: [
+          { agent_id: 'a0', model: 'mock-chat', stage: '需求', prompt_tokens: 18000, completion_tokens: 4200, tool_output_tokens: 0, cost_mc: 7400, calls: 8 },
+          { agent_id: 'a1', model: 'mock-chat', stage: '接口', prompt_tokens: 42000, completion_tokens: 12800, tool_output_tokens: 2100, cost_mc: 19600, calls: 17 },
+          { agent_id: 'a1', model: 'mock-chat', stage: '实现', prompt_tokens: 19000, completion_tokens: 5600, tool_output_tokens: 900, cost_mc: 8200, calls: 7 },
+          { agent_id: 'a2', model: 'mock-chat', stage: '界面稿', prompt_tokens: 22000, completion_tokens: 9100, tool_output_tokens: 0, cost_mc: 10400, calls: 9 },
+          { agent_id: 'a3', model: 'mock-code', stage: '实现', prompt_tokens: 36000, completion_tokens: 14200, tool_output_tokens: 3200, cost_mc: 17800, calls: 14 },
+          { agent_id: 'a4', model: 'mock-code', stage: '实现', prompt_tokens: 28000, completion_tokens: 9800, tool_output_tokens: 2600, cost_mc: 13500, calls: 11 },
+          { agent_id: 'a5', model: 'mock-chat', stage: '实现', prompt_tokens: 6400, completion_tokens: 1800, tool_output_tokens: 0, cost_mc: 2900, calls: 3 },
+        ],
+        total: { spent_mc: 81400, limit_cents: 20000, tokens: 286400 },
+      } as T
     case 'usage_series': {
       // 按 bucket × agent 的 mock 序列（粒度/范围参数在 mock 里不强模拟过滤）
       const mk = (bucket: string, agent: string, p: number, c: number, t: number, cost: number) =>
@@ -814,7 +900,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'proposals':
       return [
-        { id: 'p2', artifact_path: 'proposals/p2.md', surface: '工具白名单', status: 'queued' },
+        { id: 'p2', artifact_path: 'proposals/p2.md', surface: '工具白名单', target: 'grants', status: 'queued', author: 'a4' },
       ] as T
     // ---- 项目向导 mock：浏览器 dev 始终「已有项目」，向导只在 Tauri 真开时出现 ----
     case 'project_open':

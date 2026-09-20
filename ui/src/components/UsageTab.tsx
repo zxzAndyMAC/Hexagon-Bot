@@ -5,7 +5,7 @@ import { useUiStore } from '../store'
 import { agentColor } from '../colors'
 import { Icon } from './Icon'
 import {
-  breakdownRows, capReached, centsToMc, fmtTok, fmtYuan as fmtY,
+  capReached, centsToMc, fmtTok, fmtYuan as fmtY,
   groupTokens, parseLimitInput, perAgentSeries,
 } from '../usage'
 
@@ -26,7 +26,7 @@ export function UsageTab() {
   const capped = capReached(spent, usageTotal?.limit_cents)
   const pct = limitMc ? Math.min(100, (spent / limitMc) * 100) : 0
 
-  const rows = breakdownRows(usageRows)
+  const rows = usageRows
   const roleOf = (id?: string | null) => team.find((m) => m.id === id)?.role ?? id ?? '—'
   const byAgent = groupTokens(rows, (r) => roleOf(r.agent_id))
   const byStage = groupTokens(rows, (r) => r.stage || t('usage.noStage'))

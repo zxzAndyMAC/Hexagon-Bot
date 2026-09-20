@@ -193,6 +193,14 @@ pub fn request_install(
     Ok(qid)
 }
 
+/// 安装裁决回执（ADR 0054）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InstallOutcome {
+    pub installed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+}
+
 /// 安装卡裁决：放行才执行计划；驳回仅留痕。grants 永不动（授权默认空）。
 pub fn resolve_install(
     db: &Db,
@@ -200,7 +208,7 @@ pub fn resolve_install(
     repo_root: &Path,
     qid: &str,
     allow: bool,
-) -> Result<Value, InstallError> {
+) -> Result<InstallOutcome, InstallError> {
     let plan = crate::cards::get_queued(db, qid, crate::cards::CardKind::Install)
         .map_err(|_| InstallError::UnknownQuestion(qid.into()))?
         .payload;
@@ -213,7 +221,10 @@ pub fn resolve_install(
             None,
             None,
         )?;
-        return Ok(json!({"installed": false}));
+        return Ok(InstallOutcome {
+            installed: false,
+            plan: None,
+        });
     }
 
     let skills_dir = repo_root.join(".hexagon/skills");
@@ -264,7 +275,10 @@ pub fn resolve_install(
         None,
         None,
     )?;
-    Ok(json!({"installed": true, "plan": plan["name"]}))
+    Ok(InstallOutcome {
+        installed: true,
+        plan: plan["name"].as_str().map(String::from),
+    })
 }
 
 /// mcp.json 加/换一条服务规格（name 相同则替换）。
@@ -378,7 +392,10 @@ mod tests {
         assert_eq!(crate::cards::get(&wb.db, &qid).unwrap().kind, "install");
 
         // 驳回：不执行、留 install_rejected、卡已回答
-        let out = resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, false).unwrap();
+        let out = serde_json::to_value(
+            resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(out["installed"], false);
         assert!(!wb.repo_root.join(".hexagon/mcp.json").exists());
         assert!(
@@ -394,7 +411,10 @@ mod tests {
             "{\"name\":\"cfg2\",\"command\":\"npx\",\"args\":[\"-y\",\"pkg\"]}",
         )
         .unwrap();
-        let out = resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, true).unwrap();
+        let out = serde_json::to_value(
+            resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, true).unwrap(),
+        )
+        .unwrap();
         assert_eq!(out["installed"], true);
         assert!(wb.repo_root.join(".hexagon/mcp.json").exists());
     }

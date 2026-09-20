@@ -4,8 +4,7 @@
 //! 运行中实例的热挂接走 `Workbench::reload_providers`，不在此列。
 
 use crate::credentials::{provider_key_name, CredentialStore};
-use crate::providers::{self, ProviderDef};
-use serde_json::Value;
+use crate::providers::{self};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdminError {
@@ -21,29 +20,52 @@ pub enum AdminError {
     MissingKey(String),
 }
 
+// 壳层供应商面的类型出口也在这里——providers:: 直名只许出现在本模块
+// 与 create_project 建档校验（票 05 收口约定，rg 闸=1 针对逻辑直调）。
+pub use crate::providers::{ModelEntry, ProviderDef};
+
+/// 供应商的对外视图（ADR 0054）：非密字段平铺 + key_set 只报是否已存
+/// （key 明文永不回传）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderView {
+    #[serde(flatten)]
+    pub def: ProviderDef,
+    pub key_set: bool,
+}
+
+/// providers.json 文档的对外视图：供应商表 + 槽位绑定表。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProvidersView {
+    pub providers: Vec<ProviderView>,
+    pub slots: std::collections::HashMap<String, providers::SlotBinding>,
+}
+
 /// 供应商文档的对外视图：非密字段 + 各供应商 key 是否已存
 /// （key 明文永不回传）+ 槽位绑定表。
-pub fn list(store: &dyn CredentialStore) -> Result<Value, AdminError> {
+pub fn list(store: &dyn CredentialStore) -> Result<ProvidersView, AdminError> {
     let doc = providers::load()?;
-    let providers: Vec<Value> = doc
+    let providers: Vec<ProviderView> = doc
         .providers
         .iter()
         .map(|p| {
-            let mut v = serde_json::to_value(p).unwrap_or_default();
-            v["key_set"] = serde_json::json!(store.get(&provider_key_name(&p.id))?.is_some());
-            Ok(v)
+            Ok(ProviderView {
+                def: p.clone(),
+                key_set: store.get(&provider_key_name(&p.id))?.is_some(),
+            })
         })
         .collect::<Result<_, AdminError>>()?;
-    Ok(serde_json::json!({"providers": providers, "slots": doc.slots}))
+    Ok(ProvidersView {
+        providers,
+        slots: doc.slots,
+    })
 }
 
 /// 保存供应商 + 可选 key（空 key 不写）。热刷新由调用方（壳）另行触发。
 pub fn save(
-    def_json: Value,
+    def: ProviderDef,
     secret: Option<String>,
     store: &dyn CredentialStore,
 ) -> Result<(), AdminError> {
-    let def: ProviderDef = serde_json::from_value(def_json)?;
     providers::save_provider(&def)?;
     if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
         store.set(&provider_key_name(&def.id), s.trim())?;
@@ -67,7 +89,10 @@ pub fn remove_binding(slot: &str) -> Result<(), AdminError> {
 }
 
 /// 拉取/检测供应商模型目录：GET /models；key 从凭据库现取，缺 key 直报。
-pub fn fetch_models(id: &str, store: &dyn CredentialStore) -> Result<Value, AdminError> {
+pub fn fetch_models(
+    id: &str,
+    store: &dyn CredentialStore,
+) -> Result<Vec<providers::ModelEntry>, AdminError> {
     let doc = providers::load()?;
     let def = doc
         .providers
@@ -78,5 +103,5 @@ pub fn fetch_models(id: &str, store: &dyn CredentialStore) -> Result<Value, Admi
         .get(&provider_key_name(&def.id))?
         .ok_or_else(|| AdminError::MissingKey(def.id.clone()))?;
     let models = providers::fetch_models(def, &key)?;
-    Ok(serde_json::to_value(models)?)
+    Ok(models)
 }

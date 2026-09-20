@@ -9,7 +9,7 @@ import { api, type UsageBucket } from '../api'
 import { useUiStore } from '../store'
 import { agentColor } from '../colors'
 import {
-  breakdownRows, capReached, centsToMc, fmtTok, fmtYuan,
+  capReached, centsToMc, fmtTok, fmtYuan,
   groupTokens, parseLimitInput, perAgentSeries, tokenTypeSeries,
 } from '../usage'
 import { Icon, type IconName } from './Icon'
@@ -49,7 +49,7 @@ export function UsageDetailTab() {
   }, [granularity, range.from, range.to])
   useEffect(load, [load])
 
-  const rows = breakdownRows(usageRows)
+  const rows = usageRows
   const roleOf = (id?: string | null) => team.find((m) => m.id === id)?.role ?? id ?? '—'
 
   const spent = usageTotal?.spent_mc ?? 0

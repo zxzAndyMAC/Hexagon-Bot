@@ -6,7 +6,7 @@
 //!   + 钥匙串发布凭据 `publish/<remote>`，缺凭据即明确失败。
 //! - 执行走 git 管道短命令；确认人、时间、目标、结果全落轨迹。
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::credentials::CredentialStore;
 use crate::db::Db;
@@ -61,13 +61,21 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
     Ok(qid)
 }
 
+/// 发布回执（ADR 0054）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PublishOutcome {
+    pub remote: String,
+    pub baseline: String,
+    pub output: String,
+}
+
 /// 确认发布：凭据闸 + git push。确认事实先落轨迹，失败单独落 PublishFailed。
 pub fn confirm(
     db: &Db,
     project_id: &str,
     qid: &str,
     store: &dyn CredentialStore,
-) -> Result<Value, PublishError> {
+) -> Result<PublishOutcome, PublishError> {
     // 卡表读写归 cards.rs（arch-review 票 04）
     let p = crate::cards::get_queued(db, qid, crate::cards::CardKind::Publish)
         .map_err(|_| PublishError::UnknownQuestion(qid.into()))?
@@ -83,14 +91,18 @@ pub fn confirm(
                 r.get(0)
             })?;
     let repo = std::path::Path::new(&dir);
-    let result = (|| -> Result<Value, PublishError> {
+    let result = (|| -> Result<PublishOutcome, PublishError> {
         // 凭据闸：publish/<remote> 必须存在于钥匙串（值只验证存在，不进命令行/日志）
         let cred_name = format!("publish/{remote}");
         store
             .get(&cred_name)?
             .ok_or(crate::credentials::CredError::Missing(cred_name))?;
         let out = crate::git::run(repo, &["push", "-u", &remote, &baseline])?;
-        Ok(json!({"remote": remote, "baseline": baseline, "output": out}))
+        Ok(PublishOutcome {
+            remote: remote.clone(),
+            baseline: baseline.clone(),
+            output: out,
+        })
     })();
 
     match result {
@@ -179,7 +191,7 @@ mod tests {
         let store = MemoryStore::default();
         store.set("publish/origin", "token-x").unwrap();
         let qid = request(&db, "p", "origin").unwrap();
-        let v = confirm(&db, "p", &qid, &store).unwrap();
+        let v = serde_json::to_value(confirm(&db, "p", &qid, &store).unwrap()).unwrap();
         assert_eq!(v["remote"], "origin");
         // 远端确实收到了 main
         let remote_head = crate::git::run(r.path(), &["rev-parse", "main"]).unwrap();

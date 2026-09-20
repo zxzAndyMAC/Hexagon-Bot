@@ -2,6 +2,7 @@ use super::*;
 use crate::provider::ScriptedProvider;
 use crate::trace::{Event, TimelineItem};
 use crate::turn::{text_response, tool_response};
+use serde_json::Value;
 
 // ---- 票 05：门面读委托已删，测试直连模块函数（老 wb.* 形状由这组 helper 保持） ----
 
@@ -21,8 +22,15 @@ fn events(wb: &Workbench, kinds: Option<&[EventKind]>) -> Result<Vec<Event>, Str
         .map_err(|e| e.to_string())
 }
 
+/// DTO → Value：测试断言仍按 wire 形状写（字段名即 IPC 契约）。
+fn to_values<T: serde::Serialize>(v: Vec<T>) -> Vec<Value> {
+    v.iter().map(|r| serde_json::to_value(r).unwrap()).collect()
+}
+
 fn stage_status(wb: &Workbench) -> Result<Vec<Value>, String> {
-    orchestra::stage_status(&wb.db, &wb.project_id).map_err(|e| e.to_string())
+    orchestra::stage_status(&wb.db, &wb.project_id)
+        .map(to_values)
+        .map_err(|e| e.to_string())
 }
 
 fn pending_questions(wb: &Workbench) -> Result<Vec<Value>, String> {
@@ -40,15 +48,20 @@ fn timeline(wb: &Workbench, after: Option<i64>, limit: usize) -> Result<Vec<Time
 }
 
 fn project_info(wb: &Workbench) -> Result<Value, String> {
-    orchestra::project_info(&wb.db, &wb.project_id).map_err(|e| e.to_string())
+    orchestra::project_info(&wb.db, &wb.project_id)
+        .and_then(|v| serde_json::to_value(v).map_err(Into::into))
+        .map_err(|e| e.to_string())
 }
 
 fn team(wb: &Workbench) -> Result<Vec<Value>, String> {
-    orchestra::team(&wb.db, &wb.project_id).map_err(|e| e.to_string())
+    orchestra::team(&wb.db, &wb.project_id)
+        .map(to_values)
+        .map_err(|e| e.to_string())
 }
 
 fn artifacts(wb: &Workbench) -> Result<Vec<Value>, String> {
     crate::artifacts::query(&wb.db, &wb.project_id, None, None, None, None)
+        .map(to_values)
         .map_err(|e| e.to_string())
 }
 
@@ -71,7 +84,9 @@ fn set_agent_avatar(wb: &Workbench, agent_id: &str, data_url: &str) -> Result<()
 }
 
 fn agent_detail(wb: &Workbench, agent_id: &str) -> Result<Value, String> {
-    crate::roles::agent_detail(&wb.db, &wb.project_id, agent_id).map_err(|e| e.to_string())
+    crate::roles::agent_detail(&wb.db, &wb.project_id, agent_id)
+        .and_then(|v| serde_json::to_value(v).map_err(Into::into))
+        .map_err(|e| e.to_string())
 }
 
 fn update_agent(
@@ -108,6 +123,7 @@ fn request_install(wb: &Workbench, desc: &str) -> Result<String, String> {
 
 fn resolve_install(wb: &Workbench, qid: &str, allow: bool) -> Result<Value, String> {
     crate::install::resolve_install(&wb.db, &wb.project_id, &wb.repo_root, qid, allow)
+        .and_then(|v| serde_json::to_value(v).map_err(Into::into))
         .map_err(|e| e.to_string())
 }
 
@@ -198,7 +214,7 @@ fn end_to_end_open_project_to_timeline() {
     send(&wb, "开工 @产品策划").unwrap();
     wb.open_stage(0).unwrap();
     wb.run_turn("产品策划", "写规格").unwrap();
-    let r = wb.advance().unwrap();
+    let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
     assert_eq!(r["action"], "pack_finished");
     // 产物 + 时间线可读
     assert!(dir.path().join(".hexagon/specs/prd.md").exists());
@@ -1076,7 +1092,7 @@ fn us33_check_override_lets_stage_pass() {
     wb.open_stage(0).unwrap();
     wb.run_checks().unwrap(); // `false` → exit 1，检验红
                               // 无覆盖：检验红挡推进
-    let r = wb.advance().unwrap();
+    let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
     assert_eq!(r["action"], "incomplete");
     assert!(r["missing"]
         .as_array()
@@ -1091,7 +1107,7 @@ fn us33_check_override_lets_stage_pass() {
     assert_eq!(evs[0].payload["reason"], "CI 环境缺依赖，本地已过");
     assert_eq!(evs[0].payload["by"], "owner");
     // 覆盖后推进放行（阶段收尾）
-    let r = wb.advance().unwrap();
+    let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
     assert_ne!(r["action"], "incomplete");
     // 无红可覆 → 报错（防无痕迹空覆盖）
     assert!(wb.override_checks("again").is_err());

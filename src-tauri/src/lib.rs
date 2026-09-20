@@ -109,10 +109,9 @@ fn timeline(
     state: tauri::State<AppState>,
     after: Option<i64>,
     limit: usize,
-) -> Result<Value, String> {
+) -> Result<Vec<hexagon_core::trace::TimelineItem>, String> {
     with_conn(&state, |db, _| {
         db.timeline(PROJECT_ID, after, limit, None)
-            .map(|v| serde_json::to_value(v).unwrap())
             .map_err(|e| e.to_string())
     })
 }
@@ -145,23 +144,28 @@ fn answer_permission(
 }
 
 #[tauri::command]
-fn advance(state: tauri::State<AppState>) -> Result<Value, String> {
+fn advance(state: tauri::State<AppState>) -> Result<hexagon_core::orchestra::StageAction, String> {
     with_wb(&state, |wb| wb.advance())
 }
 #[tauri::command]
-fn run_checks(state: tauri::State<AppState>) -> Result<Value, String> {
+fn run_checks(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::orchestra::CheckOutcome, String> {
     with_wb(&state, |wb| wb.run_checks())
 }
 #[tauri::command]
-fn stamp(state: tauri::State<AppState>) -> Result<Value, String> {
+fn stamp(state: tauri::State<AppState>) -> Result<hexagon_core::orchestra::StageAction, String> {
     with_wb(&state, |wb| wb.stamp())
 }
 #[tauri::command]
-fn rewind(state: tauri::State<AppState>, to_seq: usize) -> Result<Value, String> {
+fn rewind(
+    state: tauri::State<AppState>,
+    to_seq: usize,
+) -> Result<hexagon_core::orchestra::StageAction, String> {
     with_wb(&state, |wb| wb.rewind(to_seq))
 }
 #[tauri::command]
-fn skip(state: tauri::State<AppState>) -> Result<Value, String> {
+fn skip(state: tauri::State<AppState>) -> Result<hexagon_core::orchestra::StageAction, String> {
     with_wb(&state, |wb| wb.skip())
 }
 #[tauri::command]
@@ -190,7 +194,9 @@ fn sleep_all(state: tauri::State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn artifacts(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
+fn artifacts(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::artifacts::ArtifactRow>, String> {
     with_conn(&state, |db, _| {
         hexagon_core::artifacts::query(db, PROJECT_ID, None, None, None, None)
             .map_err(|e| e.to_string())
@@ -203,13 +209,15 @@ fn artifact_content(state: tauri::State<AppState>, path: String) -> Result<Strin
     })
 }
 #[tauri::command]
-fn team(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
+fn team(state: tauri::State<AppState>) -> Result<Vec<hexagon_core::orchestra::TeamRow>, String> {
     with_conn(&state, |db, _| {
         hexagon_core::orchestra::team(db, PROJECT_ID).map_err(|e| e.to_string())
     })
 }
 #[tauri::command]
-fn stage_status(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
+fn stage_status(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::orchestra::StageRow>, String> {
     with_conn(&state, |db, _| {
         hexagon_core::orchestra::stage_status(db, PROJECT_ID).map_err(|e| e.to_string())
     })
@@ -223,14 +231,17 @@ fn pending_questions(
     })
 }
 #[tauri::command]
-fn usage(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
+fn usage(state: tauri::State<AppState>) -> Result<hexagon_core::usage::UsageSummary, String> {
     with_conn(&state, |db, _| {
         hexagon_core::usage::project_summary(db, PROJECT_ID).map_err(|e| e.to_string())
     })
 }
 
 #[tauri::command]
-fn open_stage(state: tauri::State<AppState>, seq: usize) -> Result<Value, String> {
+fn open_stage(
+    state: tauri::State<AppState>,
+    seq: usize,
+) -> Result<hexagon_core::api::OpenStageOutcome, String> {
     with_wb(&state, |wb| wb.open_stage(seq))
 }
 
@@ -240,7 +251,10 @@ fn recover_run(state: tauri::State<AppState>, run_id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn override_checks(state: tauri::State<AppState>, reason: String) -> Result<Value, String> {
+fn override_checks(
+    state: tauri::State<AppState>,
+    reason: String,
+) -> Result<hexagon_core::orchestra::OverrideOutcome, String> {
     with_wb(&state, |wb| wb.override_checks(&reason))
 }
 
@@ -254,7 +268,10 @@ fn request_install(state: tauri::State<AppState>, desc: String) -> Result<String
 }
 
 #[tauri::command]
-fn agent_detail(state: tauri::State<AppState>, agent_id: String) -> Result<Value, String> {
+fn agent_detail(
+    state: tauri::State<AppState>,
+    agent_id: String,
+) -> Result<hexagon_core::roles::AgentDetail, String> {
     with_conn(&state, |db, _| {
         hexagon_core::roles::agent_detail(db, PROJECT_ID, &agent_id).map_err(|e| e.to_string())
     })
@@ -264,10 +281,8 @@ fn agent_detail(state: tauri::State<AppState>, agent_id: String) -> Result<Value
 fn update_agent(
     state: tauri::State<AppState>,
     agent_id: String,
-    patch: Value,
+    patch: hexagon_core::roles::AgentPatch,
 ) -> Result<(), String> {
-    let patch: hexagon_core::roles::AgentPatch =
-        serde_json::from_value(patch).map_err(|e| e.to_string())?;
     // 纯 DB 变更——控制通道直落（票 05：不占 wb 锁）
     with_conn(&state, |db, _| {
         hexagon_core::roles::update_agent_def(db, PROJECT_ID, &agent_id, &patch)
@@ -276,9 +291,10 @@ fn update_agent(
 }
 
 #[tauri::command]
-fn create_role(state: tauri::State<AppState>, def: Value) -> Result<String, String> {
-    let def: hexagon_core::presets::RoleDef =
-        serde_json::from_value(def).map_err(|e| e.to_string())?;
+fn create_role(
+    state: tauri::State<AppState>,
+    def: hexagon_core::presets::RoleDef,
+) -> Result<String, String> {
     with_conn(&state, |db, _| {
         hexagon_core::roles::create_role(db, PROJECT_ID, &def).map_err(|e| e.to_string())
     })
@@ -306,11 +322,9 @@ fn draft_role_def(
 }
 
 #[tauri::command]
-fn pack_draft(state: tauri::State<AppState>) -> Result<Value, String> {
+fn pack_draft(state: tauri::State<AppState>) -> Result<hexagon_core::orchestra::PackDef, String> {
     with_conn(&state, |_, root| {
-        hexagon_core::packedit::load_draft(root)
-            .and_then(|p| serde_json::to_value(&p).map_err(|e| e.into()))
-            .map_err(|e| e.to_string())
+        hexagon_core::packedit::load_draft(root).map_err(|e| e.to_string())
     })
 }
 
@@ -351,7 +365,7 @@ fn resolve_install(
     state: tauri::State<AppState>,
     qid: String,
     allow: bool,
-) -> Result<Value, String> {
+) -> Result<hexagon_core::install::InstallOutcome, String> {
     // 放行/驳回 + 落盘执行全在 Db+repo_root——控制通道直落（票 05）
     with_conn(&state, |db, root| {
         hexagon_core::install::resolve_install(db, PROJECT_ID, root, &qid, allow)
@@ -416,14 +430,18 @@ fn owner_away(state: tauri::State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn owner_back(state: tauri::State<AppState>) -> Result<Value, String> {
+fn owner_back(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::autonomy::ReturnSummary, String> {
     with_conn(&state, |db, _| {
         hexagon_core::autonomy::back(db, PROJECT_ID).map_err(|e| e.to_string())
     })
 }
 
 #[tauri::command]
-fn reject_stamp(state: tauri::State<AppState>) -> Result<Value, String> {
+fn reject_stamp(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::orchestra::StageAction, String> {
     with_wb(&state, |wb| wb.reject_stamp())
 }
 
@@ -434,12 +452,14 @@ fn adjudicate_flag(
     state: tauri::State<AppState>,
     qid: String,
     agree: bool,
-) -> Result<Value, String> {
+) -> Result<hexagon_core::api::AdjudicateOutcome, String> {
     with_wb(&state, |wb| wb.adjudicate_flag(&qid, agree))
 }
 
 #[tauri::command]
-fn proposals(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
+fn proposals(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::proposals::ProposalRow>, String> {
     with_conn(&state, |db, _| {
         hexagon_core::proposals::list(db, PROJECT_ID).map_err(|e| e.to_string())
     })
@@ -526,7 +546,10 @@ fn request_publish(state: tauri::State<AppState>, remote: String) -> Result<Stri
 }
 
 #[tauri::command]
-fn confirm_publish(state: tauri::State<AppState>, qid: String) -> Result<Value, String> {
+fn confirm_publish(
+    state: tauri::State<AppState>,
+    qid: String,
+) -> Result<hexagon_core::publish::PublishOutcome, String> {
     with_wb(&state, |wb| wb.confirm_publish(&qid))
 }
 
@@ -594,10 +617,9 @@ fn usage_series(
     granularity: String,
     from: Option<String>,
     to: Option<String>,
-) -> Result<Value, String> {
+) -> Result<Vec<hexagon_core::usage::UsageBucket>, String> {
     with_conn(&state, |db, _| {
         hexagon_core::usage::series(db, PROJECT_ID, &granularity, from.as_deref(), to.as_deref())
-            .map(|v| serde_json::to_value(v).unwrap())
             .map_err(|e| e.to_string())
     })
 }
@@ -619,25 +641,36 @@ fn recents_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         .map(|d| d.join("recent_projects.json"))
 }
 
-fn read_recents(app: &tauri::AppHandle) -> Vec<Value> {
+/// 最近项目条目（ADR 0054）：recents.json 行与 IPC 返回同一形状。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RecentProject {
+    dir: String,
+    name: String,
+    mode: String,
+    opened_at: u64,
+}
+
+fn read_recents(app: &tauri::AppHandle) -> Vec<RecentProject> {
     recents_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
 }
 
 fn remember_recent(app: &tauri::AppHandle, dir: &str, name: &str, mode: &str) {
     let mut rs = read_recents(app);
-    rs.retain(|r| r["dir"] != dir);
+    rs.retain(|r| r.dir != dir);
     rs.insert(
         0,
-        serde_json::json!({
-            "dir": dir, "name": name, "mode": mode,
-            "opened_at": std::time::SystemTime::now()
+        RecentProject {
+            dir: dir.into(),
+            name: name.into(),
+            mode: mode.into(),
+            opened_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
-        }),
+        },
     );
     rs.truncate(10);
     if let Some(p) = recents_path(app) {
@@ -649,10 +682,10 @@ fn remember_recent(app: &tauri::AppHandle, dir: &str, name: &str, mode: &str) {
 }
 
 #[tauri::command]
-fn recent_projects(app: tauri::AppHandle) -> Vec<Value> {
+fn recent_projects(app: tauri::AppHandle) -> Vec<RecentProject> {
     read_recents(&app)
         .into_iter()
-        .filter(|r| r["dir"].as_str().map(|d| std::path::Path::new(d).is_dir()) == Some(true))
+        .filter(|r| std::path::Path::new(&r.dir).is_dir())
         .collect()
 }
 
@@ -686,12 +719,7 @@ fn open_recent(
     let info =
         hexagon_core::orchestra::project_info(&wb.db, PROJECT_ID).map_err(|e| e.to_string())?;
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
-    remember_recent(
-        &app,
-        &dir,
-        info["name"].as_str().unwrap_or(&name),
-        info["mode"].as_str().unwrap_or("pack"),
-    );
+    remember_recent(&app, &dir, &info.name, &info.mode);
     Ok(())
 }
 
@@ -737,22 +765,18 @@ fn log_enabled(app: tauri::AppHandle) -> bool {
 // ---------- 项目向导（票 24）：开项目前的检查/选择/建项目，不需要 wb ----------
 
 #[tauri::command]
-fn inspect_dir(dir: String) -> Value {
-    serde_json::to_value(hexagon_core::setup::inspect_dir(&dir)).unwrap()
+fn inspect_dir(dir: String) -> hexagon_core::setup::DirReport {
+    hexagon_core::setup::inspect_dir(&dir)
 }
 
 #[tauri::command]
-fn preset_roles() -> Result<Value, String> {
-    hexagon_core::presets::preset_roles()
-        .map(|v| serde_json::to_value(v).unwrap())
-        .map_err(|e| e.to_string())
+fn preset_roles() -> Result<Vec<hexagon_core::presets::RoleDef>, String> {
+    hexagon_core::presets::preset_roles().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn preset_packs() -> Result<Value, String> {
-    hexagon_core::presets::preset_packs()
-        .map(|v| serde_json::to_value(v).unwrap())
-        .map_err(|e| e.to_string())
+fn preset_packs() -> Result<Vec<hexagon_core::orchestra::PackDef>, String> {
+    hexagon_core::presets::preset_packs().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -781,7 +805,7 @@ fn set_model_key(slot: String, secret: String) -> Result<(), String> {
 /// 供应商文档：非密字段 + 各供应商 key 是否已存（key 明文永不回传）+ 槽位绑定表。
 /// 实现归 provider_admin（票 05）——壳层只转发。
 #[tauri::command]
-fn list_providers() -> Result<Value, String> {
+fn list_providers() -> Result<hexagon_core::provider_admin::ProvidersView, String> {
     hexagon_core::provider_admin::list(&hexagon_core::credentials::OsKeychain)
         .map_err(|e| e.to_string())
 }
@@ -801,7 +825,7 @@ fn refresh_providers(state: &AppState) {
 #[tauri::command]
 fn save_provider(
     state: tauri::State<AppState>,
-    provider: Value,
+    provider: hexagon_core::provider_admin::ProviderDef,
     secret: Option<String>,
 ) -> Result<(), String> {
     hexagon_core::provider_admin::save(provider, secret, &hexagon_core::credentials::OsKeychain)
@@ -843,7 +867,9 @@ fn remove_slot_binding(state: tauri::State<AppState>, slot: String) -> Result<()
 /// 拉取/检测供应商模型目录：GET /models；key 从 keychain 现取，缺 key 直报。
 /// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置。
 #[tauri::command]
-fn fetch_provider_models(id: String) -> Result<Value, String> {
+fn fetch_provider_models(
+    id: String,
+) -> Result<Vec<hexagon_core::provider_admin::ModelEntry>, String> {
     hexagon_core::provider_admin::fetch_models(&id, &hexagon_core::credentials::OsKeychain)
         .map_err(|e| e.to_string())
 }
@@ -927,18 +953,21 @@ fn project_open(state: tauri::State<AppState>) -> bool {
 // ---------- 快速通道（票 26）----------
 
 #[tauri::command]
-fn project_info(state: tauri::State<AppState>) -> Result<Value, String> {
+fn project_info(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::orchestra::ProjectInfo, String> {
     with_conn(&state, |db, _| {
         hexagon_core::orchestra::project_info(db, PROJECT_ID).map_err(|e| e.to_string())
     })
 }
 
 #[tauri::command]
-fn dispatch(state: tauri::State<AppState>, role: String, input: String) -> Result<Value, String> {
-    with_wb(&state, |wb| {
-        wb.dispatch(&role, &input)
-            .map(|o| serde_json::to_value(o).unwrap())
-    })
+fn dispatch(
+    state: tauri::State<AppState>,
+    role: String,
+    input: String,
+) -> Result<hexagon_core::turn::TurnOutcome, String> {
+    with_wb(&state, |wb| wb.dispatch(&role, &input))
 }
 
 #[tauri::command]
