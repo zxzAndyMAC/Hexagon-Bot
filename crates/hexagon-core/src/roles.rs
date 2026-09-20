@@ -238,14 +238,17 @@ pub fn team_roles(db: &Db, project_id: &str) -> Result<Vec<String>, RoleError> {
 }
 
 /// 授权名单行（ADR 0054）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct GrantRow {
+    #[ts(type = "'mcp' | 'skill'")] // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,
     pub name: String,
 }
 
 /// 编辑面板数据：有效定义段（RoleDef 子集）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct AgentDetailDef {
     pub duty: String,
     pub reviewer: Option<String>,
@@ -254,10 +257,13 @@ pub struct AgentDetailDef {
 }
 
 /// Agent 详情（ADR 0054）：有效定义 + 实例字段 + globs + 授权名单。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct AgentDetail {
     pub agent_id: String,
     pub role: String,
+    #[ts(type = "'active' | 'sleeping'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub status: String,
     pub model_slot: Option<String>,
     pub custom: bool,
@@ -387,13 +393,19 @@ pub fn set_agent_avatar(
 }
 
 /// 编辑补丁：None=不动。
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct AgentPatch {
+    #[ts(optional)]
     pub duty: Option<String>,
     /// Some("")=清掉上级直达负责人；Some(name)=设上级；None=不动
+    #[ts(optional)]
     pub reviewer: Option<String>,
+    #[ts(optional)]
     pub model_slot: Option<String>,
+    #[ts(optional)]
     pub skills: Option<Vec<String>>,
+    #[ts(optional)]
     pub globs: Option<Vec<String>>,
 }
 

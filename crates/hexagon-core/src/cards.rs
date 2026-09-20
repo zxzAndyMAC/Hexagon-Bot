@@ -200,12 +200,19 @@ pub fn annotate_queued_where(
 
 /// 待决卡读模型行（ADR 0054）：payload 出列即解析成对象——IPC 面消灭
 /// SQL TEXT→String→`JSON.parse` 三层编码，字段漂移由类型兜住。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct QueuedCard {
     pub id: String,
+    #[ts(type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,
     pub agent_id: Option<String>,
+    /// 票 06：payload 出列即嵌套对象，不再是 JSON 字符串。
+    #[ts(type = "Record<string, unknown>")]
     pub payload: Value,
+    #[ts(type = "'queued' | 'answered' | 'expired'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub state: String,
 }
 

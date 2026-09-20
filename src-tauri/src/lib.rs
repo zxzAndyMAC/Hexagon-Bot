@@ -17,7 +17,8 @@ use tauri::{Emitter, Manager};
 /// `{code, message}` 对象，UI 对已知 code 走 `errors.<code>` i18n、未知
 /// code 渲染 message。code 取 `ErrorCode`（变体稳定标识）；壳层自身错误
 /// 一律 `internal`，不混进 core 词表。
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../ui/src/gen/")]
 struct CmdError {
     code: String,
     message: String,
@@ -716,11 +717,13 @@ fn recents_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 }
 
 /// 最近项目条目（ADR 0054）：recents.json 行与 IPC 返回同一形状。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../ui/src/gen/")]
 struct RecentProject {
     dir: String,
     name: String,
     mode: String,
+    #[ts(type = "number")] // JS number 域
     opened_at: u64,
 }
 
@@ -963,13 +966,18 @@ fn agents_md_draft(name: String) -> String {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../ui/src/gen/")]
 struct CreateProjectOpts {
     dir: String,
     name: String,
     roles: Vec<String>,
+    #[ts(optional)]
     pack_name: Option<String>,
+    #[ts(optional)]
     fastpath_role: Option<String>,
     init_git: bool,
+    #[ts(optional)]
     agents_md: Option<String>,
 }
 

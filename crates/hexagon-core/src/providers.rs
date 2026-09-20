@@ -35,7 +35,8 @@ pub enum ProvidersError {
 
 /// 模型目录条目：拉取/手添的模型 + 能力标记。
 /// caps 词表：web（联网）vision（视觉）reasoning（推理）tools（工具调用）free（免费）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ModelEntry {
     pub id: String,
     /// 展示名（空 = 显示 id）。
@@ -49,7 +50,8 @@ pub struct ModelEntry {
 }
 
 /// 一个供应商实例。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProviderDef {
     /// 稳定 id（slug）：key 名 `provider/<id>`、槽位绑定都按它引用。
     pub id: String,
@@ -69,14 +71,16 @@ fn default_true() -> bool {
 }
 
 /// 槽位 → 供应商+模型。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct SlotBinding {
     pub provider_id: String,
     pub model: String,
 }
 
 /// providers.json 文档。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProviderDoc {
     #[serde(default)]
     pub providers: Vec<ProviderDef>,

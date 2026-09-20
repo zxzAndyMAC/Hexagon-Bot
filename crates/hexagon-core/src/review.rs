@@ -395,6 +395,8 @@ pub fn submit_flag(
 /// 打回裁决回执（ADR 0054）：serde(tag="adjudicated") 标号联合。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "adjudicated", rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub enum FlagOutcome {
     /// 同意：回退到目标产物所属阶段重跑。
     Agreed { rewind: orchestra::StageAction },

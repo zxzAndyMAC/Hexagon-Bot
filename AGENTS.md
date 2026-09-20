@@ -32,6 +32,7 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 - **core 内部模块不得 `use crate::api`**——门面只被壳层调用。白名单：`scenario.rs`、`setup.rs`（回放/向导是门面上方的驱动方，用真门面是设计；叶子模块一律不摸）。已知残留：`judge.rs`、`replay.rs` 的 `ApiError` 依赖属 D08 后半待清，不得新增同类。检查：`rg "use crate::api|crate::api::" crates/hexagon-core/src` 命中只落白名单+残留清单+api.rs 自身（D08）
 - **`pending_questions` 与 `agents.status` 的写路径只出现在属主模块**（`cards.rs` / `orchestra.rs`）。检查：`rg "pending_questions|UPDATE agents SET status" crates/hexagon-core/src` 只命中属主清单（D04/D09）
 - **IPC 返回值必须是 serde 结构体**：禁止 `Vec<Value>`/`json!` 逐行拼装响应，payload 字段不得嵌字符串化 JSON。检查：`rg 'Result<Vec<Value>|Result<Value' crates/hexagon-core/src/api.rs` 白名单收敛（D06）
+- **跨 IPC 的 DTO 必须 `#[derive(ts_rs::TS)]` + `#[ts(export, export_to = ...)]`**，`export_to` 相对 crate 根：hexagon-core 用 `../../../ui/src/gen/`、src-tauri 用 `../../ui/src/gen/`。重生：`cargo test export_bindings`；64 位整数字段必须钉 `#[ts(type = "number")]`（ts-rs v11 默认 i64/u64→bigint，与 JSON number 不符）。`ui/src/gen/` 入 git，UI 不得手写同名 DTO（D06/ADR 0054）
 - **Tauri command 分 read/control/turn 三组注册，read 组禁止触碰 `state.wb`**。检查：`rg "state.wb" src-tauri/src/lib.rs` 命中只落 turn/mutation 组（D01）
 - **模型槽回退链只在 `providers::resolve_slot` 一处实现**。检查：`rg 'or_else.*"default"' crates/hexagon-core/src` 归零（D13）
 - **`System` 事件的 `payload.kind` 子类词表集中登记于 `trace.rs`**，新增子类须同改词表与 `docs/glossary.html`。检查：`rg 'json!\(\{"kind":' crates/hexagon-core/src` 字面量只来自词表常量（D10）

@@ -62,7 +62,8 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
 }
 
 /// 发布回执（ADR 0054）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct PublishOutcome {
     pub remote: String,
     pub baseline: String,

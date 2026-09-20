@@ -131,42 +131,58 @@ pub fn enforce_cap(db: &Db, project_id: &str) -> Result<bool, crate::trace::Trac
 /// 多维汇总：按 Agent × 模型 × 阶段分组，附项目总计与上限。
 /// `stage` 为阶段名；NULL = 未分阶段的历史/非阶段账。
 /// 用量汇总行（ADR 0054）：agent×model×stage 账本维。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct UsageRow {
     pub agent_id: Option<String>,
     pub model: Option<String>,
     pub stage: Option<String>,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub prompt_tokens: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub completion_tokens: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub tool_output_tokens: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub cost_mc: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub calls: i64,
 }
 
 /// 项目总计：spent/limit/tokens。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct UsageTotal {
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub spent_mc: i64,
+    #[ts(type = "number | null")]
     pub limit_cents: Option<i64>,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub tokens: i64,
 }
 
 /// 用量面返回体：明细行 + 总计（原 `_total` 哨兵行已拆——哨兵行正是
 /// 本票要消的类型盲区，UI 曾靠 `r._total` 可选字段辨认它）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct UsageSummary {
     pub rows: Vec<UsageRow>,
     pub total: UsageTotal,
 }
 
 /// 时间序列行：bucket × agent。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct UsageBucket {
     pub bucket: String,
     pub agent_id: Option<String>,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub prompt_tokens: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub completion_tokens: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub tool_output_tokens: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub cost_mc: i64,
 }
 

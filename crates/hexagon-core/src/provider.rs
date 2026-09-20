@@ -738,6 +738,8 @@ pub mod anthropic_shape {
 /// 供应商类型：决定请求路径、鉴权头与消息形状。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub enum ProviderKind {
     /// Anthropic /v1/messages（x-api-key + anthropic-version）。
     Anthropic,

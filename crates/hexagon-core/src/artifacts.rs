@@ -274,15 +274,21 @@ pub fn deliver(
 
 /// 产物浏览器查询：类型/阶段/状态/产出者可组合过滤。
 /// 产物行（ADR 0054）：artifacts 读模型，IPC 直出。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ArtifactRow {
     pub id: String,
     pub path: String,
     pub kind: String,
+    #[ts(type = "'parse' | 'skeleton' | 'freeform'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub tier: String,
     pub stage_run_id: Option<String>,
     pub author: Option<String>,
+    #[ts(type = "number")] // JS number 域（wire 上是 JSON number，ts-rs 默认 bigint 不符 wire）
     pub version: i64,
+    #[ts(type = "'valid' | 'superseded' | 'stamped' | 'pending'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub status: String,
     pub upstream_id: Option<String>,
 }

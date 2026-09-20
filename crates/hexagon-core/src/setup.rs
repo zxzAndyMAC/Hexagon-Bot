@@ -45,7 +45,8 @@ pub enum SetupError {
 }
 
 /// 目录体检报告：向导每一步的判定依据。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct DirReport {
     pub exists: bool,
     /// 目录存在且没有条目（.hexagon 等隐藏项也算条目）

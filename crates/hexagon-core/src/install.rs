@@ -194,7 +194,8 @@ pub fn request_install(
 }
 
 /// 安装裁决回执（ADR 0054）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct InstallOutcome {
     pub installed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

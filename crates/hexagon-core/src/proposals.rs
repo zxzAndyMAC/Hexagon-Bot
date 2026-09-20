@@ -581,11 +581,17 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
 
 /// 待审/在途提案队列（UI 提案卡数据源）。
 /// 提案队列行（ADR 0054）：proposals×artifacts 联表读模型。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProposalRow {
     pub id: String,
+    #[ts(type = "'skill' | 'pack_copy' | 'agents_md'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub surface: String,
     pub target: String,
+    #[ts(
+        type = "'queued' | 'in_review' | 'rejected' | 'awaiting_stamp' | 'active' | 'rolled_back'"
+    )] // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub status: String,
     pub author: String,
     pub artifact_path: Option<String>,

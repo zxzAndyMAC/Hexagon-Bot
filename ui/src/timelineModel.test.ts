@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { buildRows, nodeMarks } from './timelineModel'
 import { severityOf } from './decisions'
-import type { PendingQuestion, TimelineItem } from './api'
+import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api'
 
-const ev = (id: number, kind: string, payload: Record<string, unknown> = {}, author?: string): TimelineItem => ({
-  event: { id, kind, agent_id: author ?? null, stage_run_id: null, payload, created_at: '' },
-  message: author ? { id, author, body: 'hi', tokens: [] } : null,
+const ev = (id: number, kind: EventKind, payload: Record<string, unknown> = {}, author?: string): TimelineItem => ({
+  event: { id, project_id: 'p1', kind, agent_id: author ?? null, stage_run_id: null, payload, created_at: '' },
+  message: author ? { id, author, body: 'hi', tokens: [], created_at: '' } : null,
 })
 
-const q = (id: string, kind: string, payload: Record<string, unknown> = {}): PendingQuestion => ({
+const q = (id: string, kind: QueuedCard['kind'], payload: Record<string, unknown> = {}): PendingQuestion => ({
   id, kind, agent_id: null, payload, state: 'queued',
 })
 

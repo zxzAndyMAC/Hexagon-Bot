@@ -2,7 +2,7 @@
 // 草稿存 localStorage `hexagon.wizard`，中途退出可续；缺密钥 fail-closed 不能开跑。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, isTauri, type DirReport, type PackDef, type ProviderDoc, type RoleDef } from '../api'
+import { api, errText, isTauri, type DirReport, type PackDef, type ProvidersView, type RoleDef } from '../api'
 
 const DRAFT_KEY = 'hexagon.wizard'
 
@@ -55,7 +55,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [report, setReport] = useState<DirReport | null>(null)
   const [roles, setRoles] = useState<RoleDef[]>([])
   const [packs, setPacks] = useState<PackDef[]>([])
-  const [doc, setDoc] = useState<ProviderDoc>({ providers: [], slots: {} })
+  const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)

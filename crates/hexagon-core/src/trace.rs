@@ -11,6 +11,8 @@ use serde_json::Value;
 /// 事件类型枚举。新增类型 = 加变体；spec「轨迹」列出的事件面逐项在此。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub enum EventKind {
     // 回合与生命周期
     TurnStarted,
@@ -108,19 +110,25 @@ impl FailureCode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct Event {
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub id: i64,
     pub project_id: String,
     pub stage_run_id: Option<String>,
     pub agent_id: Option<String>,
     pub kind: EventKind,
+    /// wire 上恒为对象（append_event 序列化点兜底 {}）；导出类型定死。
+    #[ts(type = "Record<string, unknown>")]
     pub payload: Value,
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct MessageRow {
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub id: i64,
     pub author: String, // "owner" 或 agent_id
     pub body: String,
@@ -131,13 +139,16 @@ pub struct MessageRow {
 /// composer 解析出的结构化 token：@点名 / #路径指针。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub enum MessageToken {
     Mention { agent_role: String },
     PathRef { path: String },
 }
 
 /// 时间线条目：事件行，若是消息事件则带消息体。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct TimelineItem {
     pub event: Event,
     pub message: Option<MessageRow>,
@@ -166,10 +177,14 @@ pub enum TraceError {
 }
 
 /// 轨迹导出过滤（US54）：阶段 / Agent / kind 三维，None = 不过滤。
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ExportFilter {
+    #[ts(optional)]
     pub stage_run_id: Option<String>,
+    #[ts(optional)]
     pub agent_id: Option<String>,
+    #[ts(optional)]
     pub kinds: Option<Vec<EventKind>>,
 }
 

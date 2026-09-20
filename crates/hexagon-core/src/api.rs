@@ -24,6 +24,8 @@ pub type TurnDeltaHook = Box<dyn FnMut(&turn::TurnDelta) + Send>;
 /// 平铺——wire 形状与旧 json! 一致（{resumed:...} 或 {adjudicated:...}）。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(untagged)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub enum AdjudicateOutcome {
     /// context_overflow 子型（US37）：放行=续跑一回合。
     Resumed {
@@ -36,7 +38,8 @@ pub enum AdjudicateOutcome {
 }
 
 /// open_stage 回执（ADR 0054）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct OpenStageOutcome {
     pub run_id: String,
     pub skipped: bool,

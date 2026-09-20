@@ -26,7 +26,8 @@ pub use crate::providers::{ModelEntry, ProviderDef};
 
 /// 供应商的对外视图（ADR 0054）：非密字段平铺 + key_set 只报是否已存
 /// （key 明文永不回传）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProviderView {
     #[serde(flatten)]
     pub def: ProviderDef,
@@ -34,7 +35,8 @@ pub struct ProviderView {
 }
 
 /// providers.json 文档的对外视图：供应商表 + 槽位绑定表。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProvidersView {
     pub providers: Vec<ProviderView>,
     pub slots: std::collections::HashMap<String, providers::SlotBinding>,

@@ -5,7 +5,7 @@
 // 数据语义：非密配置存 providers.json；key 只写 keychain（provider/<id>）。
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type ModelEntry, type ProviderDef, type ProviderDoc, type RoleDef } from '../api'
+import { api, errText, type ModelEntry, type ProviderView, type ProvidersView, type RoleDef } from '../api'
 import { Icon, type IconName } from './Icon'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。
@@ -33,16 +33,16 @@ const CAPS = ['web', 'vision', 'reasoning', 'tools', 'free'] as const
 const slug = (s: string) =>
   s.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-').replace(/^-+|-+$/g, '') || `p${Date.now()}`
 
-function emptyDef(): ProviderDef {
+function emptyDef(): ProviderView {
   return { id: '', name: '', kind: 'openai', base_url: '', models: [], enabled: true, key_set: false }
 }
 
 export function ProviderManager() {
   const { t } = useTranslation()
-  const [doc, setDoc] = useState<ProviderDoc>({ providers: [], slots: {} })
+  const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [roles, setRoles] = useState<RoleDef[]>([])
   const [sel, setSel] = useState<string>('') // provider id / 'preset:<name>' / 'new'
-  const [draft, setDraft] = useState<ProviderDef | null>(null)
+  const [draft, setDraft] = useState<ProviderView | null>(null)
   const [secret, setSecret] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null)
@@ -106,7 +106,7 @@ export function ProviderManager() {
     }
   }
 
-  const toggleEnabled = async (p: ProviderDef) => {
+  const toggleEnabled = async (p: ProviderView) => {
     await api.saveProvider({ ...p, enabled: !p.enabled }).catch((e) => setErr(errText(e)))
     await reload()
   }
@@ -292,7 +292,7 @@ export function ProviderManager() {
               <select
                 className="btn" style={{ margin: '4px 0 10px', display: 'block' }}
                 value={draft.kind}
-                onChange={(e) => setDraft({ ...draft, kind: e.target.value as ProviderDef['kind'] })}
+                onChange={(e) => setDraft({ ...draft, kind: e.target.value as ProviderView['kind'] })}
               >
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic</option>
@@ -437,7 +437,7 @@ function SlotRow({
 }: {
   slot: string
   binding?: { provider_id: string; model: string }
-  providers: ProviderDef[]
+  providers: ProviderView[]
   ready: boolean
   onBind: (slot: string, providerId: string, model: string) => void
   onUnbind: (slot: string) => void

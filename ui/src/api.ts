@@ -4,6 +4,68 @@
 import { invoke } from '@tauri-apps/api/core'
 import i18n from './i18n'
 
+// ---- IPC DTO（ADR 0054，票 06）：ui/src/gen/* 由 ts-rs 从 Rust DTO 生成 ----
+// 手改禁地——字段要改改 Rust 侧，`cargo test` 重出声明，字段漂移由 tsc 抓。
+// 词表字段（status/state/kind/mode）在 Rust 侧按 schema CHECK 钉了字面量联合。
+import type { CmdError } from './gen/CmdError'
+import type { QueuedCard } from './gen/QueuedCard'
+import type { TurnDelta } from './gen/TurnDelta'
+import type { StageRow } from './gen/StageRow'
+import type { TimelineItem } from './gen/TimelineItem'
+import type { TeamRow } from './gen/TeamRow'
+import type { ArtifactRow } from './gen/ArtifactRow'
+import type { UsageTotal } from './gen/UsageTotal'
+import type { UsageRow } from './gen/UsageRow'
+import type { UsageSummary } from './gen/UsageSummary'
+import type { UsageBucket } from './gen/UsageBucket'
+import type { StageAction } from './gen/StageAction'
+import type { OpenStageOutcome } from './gen/OpenStageOutcome'
+import type { CheckResult } from './gen/CheckResult'
+import type { CheckOutcome } from './gen/CheckOutcome'
+import type { OverrideOutcome } from './gen/OverrideOutcome'
+import type { InstallOutcome } from './gen/InstallOutcome'
+import type { PublishOutcome } from './gen/PublishOutcome'
+import type { FlagOutcome } from './gen/FlagOutcome'
+import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
+import type { ReturnSummary } from './gen/ReturnSummary'
+import type { ProposalRow } from './gen/ProposalRow'
+import type { ProjectInfo } from './gen/ProjectInfo'
+import type { RecentProject } from './gen/RecentProject'
+import type { TurnOutcome } from './gen/TurnOutcome'
+import type { DirReport } from './gen/DirReport'
+import type { RoleDef } from './gen/RoleDef'
+import type { PackDef } from './gen/PackDef'
+import type { StageDef } from './gen/StageDef'
+import type { AgentPatch } from './gen/AgentPatch'
+import type { AgentDetail } from './gen/AgentDetail'
+import type { ModelEntry } from './gen/ModelEntry'
+import type { ProviderDef } from './gen/ProviderDef'
+import type { ProviderView } from './gen/ProviderView'
+import type { ProvidersView } from './gen/ProvidersView'
+import type { SlotBinding } from './gen/SlotBinding'
+import type { CreateProjectOpts } from './gen/CreateProjectOpts'
+import type { Event } from './gen/Event'
+import type { EventKind } from './gen/EventKind'
+import type { MessageRow } from './gen/MessageRow'
+import type { MessageToken } from './gen/MessageToken'
+import type { ExportFilter } from './gen/ExportFilter'
+
+/** 旧名薄壳——新代码直接用 QueuedCard。 */
+export type PendingQuestion = QueuedCard
+/** 旧名薄壳——新代码直接用 StageDef。 */
+export type PackStage = StageDef
+
+export type {
+  CmdError, TurnDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
+  UsageTotal, UsageRow, UsageSummary, UsageBucket, StageAction, OpenStageOutcome,
+  CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PublishOutcome,
+  FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
+  RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
+  AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
+  CreateProjectOpts, Event, EventKind, MessageRow, MessageToken, ExportFilter,
+}
+
+
 export const isTauri = '__TAURI_INTERNALS__' in window || '__TAURI__' in window
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -17,11 +79,6 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 // `errors.<code>` i18n key，未知 code 渲染 message——i18n 表只覆盖
 // 高频可修码，长尾直通（被否替代：全码表七语翻译——维护面爆炸且
 // 长尾文案价值低）。
-
-export interface CmdError {
-  code: string
-  message: string
-}
 
 /// 任意 invoke 拒绝值 → 信封。旧串/非信封对象兜底 code:"unknown"。
 export function asCmdError(e: unknown): CmdError {
@@ -48,269 +105,11 @@ export function errText(e: unknown): string {
 // 瞬时增量通道：payload 不落库；done=true 是流终信号（成败都发），
 // reset=true 表示瞬时重试、本轮已收文本作废重起。
 
-export interface TurnDelta {
-  agent_id: string
-  stage_run_id: string | null
-  call: number // 本回合第几次模型调用（方案调用=0，工具循环轮 1..）
-  reset: boolean
-  done: boolean
-  text: string
-}
-
 /// 订阅回合 delta；浏览器 dev 无推送通道，返回 no-op 退订。
 export async function onTurnDelta(cb: (d: TurnDelta) => void): Promise<() => void> {
   if (!isTauri) return () => {}
   const { listen } = await import('@tauri-apps/api/event')
   return listen<TurnDelta>('turn-delta', (e) => cb(e.payload))
-}
-
-// ---- 与核侧 JSON 形状对齐 ----
-
-export interface StageRow {
-  run_id: string
-  stage: string
-  seq: number
-  state: 'pending' | 'active' | 'done' | 'skipped' | 'waiting_stamp' | 'rejected' | 'interrupted'
-}
-
-export interface TimelineItem {
-  event: {
-    id: number
-    kind: string // snake_case EventKind
-    agent_id: string | null
-    stage_run_id: string | null
-    payload: Record<string, unknown>
-    created_at: string
-  }
-  message: { id: number; author: string; body: string; tokens: unknown[] } | null
-}
-
-export interface PendingQuestion {
-  id: string
-  kind: string // permission / stamp / publish / proposal_confirm …
-  agent_id: string | null
-  payload: Record<string, unknown>
-  state: string
-}
-
-export interface TeamRow {
-  id: string
-  role: string
-  model_slot: string | null
-  status: 'active' | 'sleeping'
-}
-
-export interface ArtifactRow {
-  id: string
-  path: string
-  kind: string
-  tier: string
-  stage_run_id: string | null
-  author: string | null
-  version: number
-  status: string
-  upstream_id: string | null
-}
-
-export interface UsageTotal {
-  spent_mc: number
-  limit_cents: number | null
-  tokens: number
-}
-
-export interface UsageRow {
-  agent_id: string | null
-  model: string | null
-  stage: string | null
-  prompt_tokens: number
-  completion_tokens: number
-  tool_output_tokens: number
-  cost_mc: number
-  calls: number
-}
-
-/// 用量汇总（ADR 0054）：明细行 + 总计——原 _total 哨兵行已拆。
-export interface UsageSummary {
-  rows: UsageRow[]
-  total: UsageTotal
-}
-
-export interface UsageBucket {
-  bucket: string // "YYYY-MM-DD" | "YYYY-MM-DD HH:00"
-  agent_id: string | null
-  prompt_tokens: number
-  completion_tokens: number
-  tool_output_tokens: number
-  cost_mc: number
-}
-
-// ---- 动作回执（ADR 0054）：serde 标号/平铺联合，与 core DTO 同形 ----
-
-/// 阶段动作（serde tag="action"）：advance/stamp/rewind/skip/reject_stamp 共用。
-export type StageAction =
-  | { action: 'awaiting_stamp'; stage: string; question_id: string }
-  | { action: 'waiting_stamp'; stage: string }
-  | { action: 'incomplete'; stage: string; missing: string[] }
-  | { action: 'stage_opened'; run_id: string; seq: number }
-  | { action: 'pack_finished' }
-  | { action: 'rewound'; to_seq: number; run_id: string }
-  | { action: 'stamp_rejected'; reopened_seq: number; run_id: string }
-
-export interface OpenStageOutcome {
-  run_id: string
-  skipped: boolean
-}
-export interface CheckResult {
-  cmd: string
-  exit_code: number
-}
-export interface CheckOutcome {
-  results: CheckResult[]
-}
-export interface OverrideOutcome {
-  overridden: string[]
-  stage: string
-}
-export interface InstallOutcome {
-  installed: boolean
-  plan?: string
-}
-export interface PublishOutcome {
-  remote: string
-  baseline: string
-  output: string
-}
-
-/// 打回裁决（serde tag="adjudicated"）。
-export type FlagOutcome =
-  | { adjudicated: 'agreed'; rewind: StageAction }
-  | { adjudicated: 'rejected' }
-
-/// 升级卡裁决（serde untagged）：撞限续跑 or 打回裁决。
-export type AdjudicateOutcome = { resumed: boolean; outcome?: string } | FlagOutcome
-
-/// 负责人归来摘要（ReturnSummary 事件载荷同形）。
-export interface ReturnSummary {
-  since_event: number
-  deliveries: { path: string | null; kind: string | null }[]
-  reviews: { passed: number; rejected: number }
-  flags: { submitted: number; adjudicated: number; escalated: number }
-  permissions: { asked: number; allowed: number; denied: number }
-  stages: { finished: number; skipped: number; rewound: number }
-  pending_todos: { kind: string; count: number }[]
-}
-
-export interface ProposalRow {
-  id: string
-  surface: string
-  target: string
-  status: string
-  author: string
-  artifact_path: string | null
-}
-
-export interface ProjectInfo {
-  name: string
-  mode: 'pack' | 'fastpath'
-  pack_name: string | null
-  fastpath_agent_id: string | null
-  fastpath_role: string | null
-}
-
-export interface RecentProject {
-  dir: string
-  name: string
-  mode: string
-  opened_at: number
-}
-
-/// dispatch/run_turn 终态（serde snake_case 枚举）。
-export type TurnOutcome =
-  | 'finished'
-  | 'truncated'
-  | 'skipped_sleeping'
-  | 'skipped_cap'
-  | 'interrupted'
-  | { awaiting_permission: string }
-  | { failed: string }
-
-// ---- 项目向导（票 24）----
-export interface DirReport {
-  exists: boolean
-  empty: boolean
-  is_git: boolean
-  dirty: boolean
-  instructions: string | null // "AGENTS.md" | "CLAUDE.md" | null
-}
-
-export interface RoleDef {
-  name: string
-  duty: string
-  reviewer: string | null
-  model_slot: string
-  globs: string[]
-  skills: string[]
-}
-
-export interface PackStage {
-  name: string
-  roles: string[]
-  due?: string[]
-  checks?: string[]
-  reviews?: { artifact_kind: string; reviewer: string }[]
-  stamp_point?: boolean
-  backfill_edges?: [string, string][]
-  consult_wake?: string[]
-}
-
-export interface PackDef {
-  name: string
-  version: number
-  stages: PackStage[]
-}
-
-export interface AgentPatch {
-  duty?: string
-  reviewer?: string
-  model_slot?: string
-  skills?: string[]
-  globs?: string[]
-}
-
-export interface AgentDetail {
-  agent_id: string
-  role: string
-  status: string
-  model_slot: string | null
-  custom: boolean
-  def: { duty: string; reviewer: string | null; model_slot: string; skills: string[] }
-  globs: string[]
-  grants: { kind: string; name: string }[]
-}
-
-/// 模型目录条目（供应商名下）：caps 词表 web/vision/reasoning/tools/free。
-export interface ModelEntry {
-  id: string
-  name?: string | null
-  group?: string | null
-  caps: string[]
-}
-
-/// 供应商配置（非密）：id→端点+模型目录；key_set 只报是否已存，明文永不回传。
-export interface ProviderDef {
-  id: string
-  name: string
-  kind: 'anthropic' | 'openai'
-  base_url: string
-  models: ModelEntry[]
-  enabled: boolean
-  key_set: boolean
-}
-
-/// providers.json 文档面：供应商表 + 槽位绑定表。
-export interface ProviderDoc {
-  providers: ProviderDef[]
-  slots: Record<string, { provider_id: string; model: string }>
 }
 
 export const api = {
@@ -430,7 +229,7 @@ export const api = {
   setModelKey: (slot: string, secret: string) =>
     call<void>('set_model_key', { slot, secret }),
   // ---- 供应商配置（设置页模型区 / 启动页设置共用；ProviderDoc=供应商+槽位绑定）----
-  listProviders: () => call<ProviderDoc>('list_providers'),
+  listProviders: () => call<ProvidersView>('list_providers'),
   saveProvider: (provider: Partial<ProviderDef>, secret?: string) =>
     call<void>('save_provider', { provider, secret: secret ?? null }),
   deleteProvider: (id: string) => call<void>('delete_provider', { id }),
@@ -478,18 +277,18 @@ const mockAvatars: Record<string, string> = {
 const T0 = '2026-09-18T'
 type Payload = Record<string, unknown>
 const mkEv = (
-  id: number, kind: string, agent_id: string | null, stage_run_id: string | null,
+  id: number, kind: EventKind, agent_id: string | null, stage_run_id: string | null,
   payload: Payload, hhmm: string,
 ): TimelineItem => ({
-  event: { id, kind, agent_id, stage_run_id, payload, created_at: `${T0}${hhmm}:00Z` },
+  event: { id, project_id: 'p1', kind, agent_id, stage_run_id, payload, created_at: `${T0}${hhmm}:00Z` },
   message: null,
 })
 const mkMsg = (
-  id: number, kind: string, agent_id: string | null, stage_run_id: string | null,
+  id: number, kind: EventKind, agent_id: string | null, stage_run_id: string | null,
   author: string, body: string, hhmm: string,
 ): TimelineItem => ({
-  event: { id, kind, agent_id, stage_run_id, payload: {}, created_at: `${T0}${hhmm}:00Z` },
-  message: { id, author, body, tokens: [] },
+  event: { id, project_id: 'p1', kind, agent_id, stage_run_id, payload: {}, created_at: `${T0}${hhmm}:00Z` },
+  message: { id, author, body, tokens: [], created_at: `${T0}${hhmm}:00Z` },
 })
 
 const ART_CONTENT: Record<string, Record<number, string>> = {

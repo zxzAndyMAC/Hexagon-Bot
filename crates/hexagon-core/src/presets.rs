@@ -39,7 +39,8 @@ pub enum PresetError {
 }
 
 /// 预置角色定义。`reviewer` = 上级链（复审路由的默认上级），空 = 直达负责人。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct RoleDef {
     pub name: String,
     /// 一句话职责（进激活简报与团队说明）

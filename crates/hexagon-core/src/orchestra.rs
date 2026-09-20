@@ -43,7 +43,8 @@ pub enum OrchError {
 
 // ---------- 流程包定义 ----------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ReviewDecl {
     /// 复审对象：产物 kind
     pub artifact_kind: String,
@@ -51,7 +52,8 @@ pub struct ReviewDecl {
     pub reviewer: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct StageDef {
     pub name: String,
     /// 本阶段激活的角色名单（与团队交集为空则整阶段跳过）
@@ -79,7 +81,8 @@ pub struct StageDef {
 /// 与「流程定义」（角色/阶段/验收/检验）分开——前者是回放评估与
 /// policy-dev 可改的旋钮集，后者动它们等于改流程本身。
 /// 全部 Option：缺席 = 内核默认。词表见 docs/glossary.html「策略旋钮」。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct Knobs {
     /// 判定后端选择："mechanical" / "llm" / "off"（默认 off——
     /// 未声明的包不跑判定，judge 输出只服务盖章建议不授权）。
@@ -111,7 +114,8 @@ impl Knobs {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct PackDef {
     pub name: String,
     pub version: u32,
@@ -483,7 +487,8 @@ fn failing_checks(
 
 /// 负责人显式覆盖检验失败（票 40）：落 check_overridden 留痕（谁/哪些命令/理由），
 /// 覆盖检验回执（ADR 0054）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct OverrideOutcome {
     pub overridden: Vec<String>,
     pub stage: String,
@@ -519,14 +524,16 @@ pub fn override_checks(
 }
 
 /// 检验结果行（ADR 0054）：cmd + 退出码。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct CheckResult {
     pub cmd: String,
     pub exit_code: i32,
 }
 
 /// run_checks 回执（ADR 0054）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct CheckOutcome {
     pub results: Vec<CheckResult>,
 }
@@ -570,6 +577,8 @@ pub fn run_checks(
 /// wire 形状与旧 json!({"action":...}) 完全一致。
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub enum StageAction {
     /// 就绪但卡在盖章点（已发 stamp 卡）。
     AwaitingStamp { stage: String, question_id: String },
@@ -578,13 +587,25 @@ pub enum StageAction {
     /// 就绪条件不齐：缺产物/检验/复审。
     Incomplete { stage: String, missing: Vec<String> },
     /// 开了下一阶段。
-    StageOpened { run_id: String, seq: usize },
+    StageOpened {
+        run_id: String,
+        #[ts(type = "number")]
+        seq: usize,
+    },
     /// 包全部跑完。
     PackFinished,
     /// 退回到指定 seq 并开新 run。
-    Rewound { to_seq: usize, run_id: String },
+    Rewound {
+        #[ts(type = "number")]
+        to_seq: usize,
+        run_id: String,
+    },
     /// 盖章点驳回：退上一阶段（review::reject_stamp 同回执）。
-    StampRejected { reopened_seq: usize, run_id: String },
+    StampRejected {
+        #[ts(type = "number")]
+        reopened_seq: usize,
+        run_id: String,
+    },
 }
 
 /// 推进：评估当前阶段 → ready 则盖章点停 or done+开下一阶段。
@@ -774,11 +795,14 @@ pub fn resume(db: &Db, project_id: &str) -> Result<(), OrchError> {
 
 /// 团队名册（agents 表读模型）。
 /// 团队花名册行（ADR 0054）：agents 读模型，IPC 直出。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct TeamRow {
     pub id: String,
     pub role: String,
     pub model_slot: Option<String>,
+    #[ts(type = "'active' | 'sleeping'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub status: String,
 }
 
@@ -800,11 +824,16 @@ pub fn team(db: &Db, project_id: &str) -> Result<Vec<TeamRow>, OrchError> {
 }
 
 /// 阶段运行状态行（stage_runs 读模型）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct StageRow {
     pub run_id: String,
     pub stage: String,
+    #[ts(type = "number")] // JS number 域（wire 上是 JSON number，ts-rs 默认 bigint 不符 wire）
     pub seq: i64,
+    #[ts(
+        type = "'pending' | 'active' | 'done' | 'skipped' | 'waiting_stamp' | 'rejected' | 'interrupted'"
+    )] // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub state: String,
 }
 
@@ -827,9 +856,12 @@ pub fn stage_status(db: &Db, project_id: &str) -> Result<Vec<StageRow>, OrchErro
 }
 
 /// 项目元信息（projects 行 + fastpath 角色名解析）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProjectInfo {
     pub name: String,
+    #[ts(type = "'pack' | 'fastpath'")]
+    // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub mode: String,
     pub pack_name: Option<String>,
     pub fastpath_agent_id: Option<String>,
