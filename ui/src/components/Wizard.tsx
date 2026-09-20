@@ -2,7 +2,7 @@
 // 草稿存 localStorage `hexagon.wizard`，中途退出可续；缺密钥 fail-closed 不能开跑。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, isTauri, type DirReport, type PackDef, type ProviderDoc, type RoleDef } from '../api'
+import { api, errText, isTauri, type DirReport, type PackDef, type ProviderDoc, type RoleDef } from '../api'
 
 const DRAFT_KEY = 'hexagon.wizard'
 
@@ -191,7 +191,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       localStorage.removeItem(DRAFT_KEY)
       onDone()
     } catch (e) {
-      setErr(String(e))
+      setErr(errText(e))
     } finally {
       setBusy(false)
     }

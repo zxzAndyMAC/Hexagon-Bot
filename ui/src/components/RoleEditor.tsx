@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type AgentDetail, type RoleDef } from '../api'
+import { api, errText, type AgentDetail, type RoleDef } from '../api'
 import { useUiStore } from '../store'
 
 const input: React.CSSProperties = {
@@ -37,7 +37,7 @@ export function RoleEditor({ agentId, onClose }: { agentId: string; onClose: () 
       setSkills(v.def.skills.join(', '))
       setMcpG(v.grants.filter((g) => g.kind === 'mcp').map((g) => g.name).join(', '))
       setSkillG(v.grants.filter((g) => g.kind === 'skill').map((g) => g.name).join(', '))
-    }).catch((e) => setErr(String(e)))
+    }).catch((e) => setErr(errText(e)))
   }, [agentId])
 
   const draft = async () => {
@@ -45,7 +45,7 @@ export function RoleEditor({ agentId, onClose }: { agentId: string; onClose: () 
     try {
       const text = await api.draftRoleDef(agentId, duty || ' ')
       if (text) setDuty(text)
-    } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+    } catch (e) { setErr(errText(e)) } finally { setBusy(false) }
   }
 
   const save = async () => {
@@ -63,7 +63,7 @@ export function RoleEditor({ agentId, onClose }: { agentId: string; onClose: () 
       await refresh()
       setMsg(t('agent.saved'))
       setTimeout(() => setMsg(null), 2500)
-    } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+    } catch (e) { setErr(errText(e)) } finally { setBusy(false) }
   }
 
   if (!d && !err) return <div className="dim3" style={{ padding: 12, fontSize: 11 }}>…</div>
@@ -132,7 +132,7 @@ export function CreateRoleForm({ onDone }: { onDone: () => void }) {
       }
       await api.createRole(def)
       onDone()
-    } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+    } catch (e) { setErr(errText(e)) } finally { setBusy(false) }
   }
 
   return (

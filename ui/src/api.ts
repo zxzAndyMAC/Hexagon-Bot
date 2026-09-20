@@ -2,12 +2,46 @@
 // UI 的唯一通道 = 这些命令 + 事件推送，没有旁路。类型对齐 api.rs 的 JSON 形状。
 
 import { invoke } from '@tauri-apps/api/core'
+import i18n from './i18n'
 
 export const isTauri = '__TAURI_INTERNALS__' in window || '__TAURI__' in window
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri) return invoke<T>(cmd, args)
   return mock<T>(cmd, args)
+}
+
+// ---- 错误信封（ADR 0054，arch-review 票 06）----
+// 命令 Err 面出列即 {code,message}：code 是 core 侧变体稳定标识，
+// message 透传含参数的 Display 原文。渲染规则：已知 code 走
+// `errors.<code>` i18n key，未知 code 渲染 message——i18n 表只覆盖
+// 高频可修码，长尾直通（被否替代：全码表七语翻译——维护面爆炸且
+// 长尾文案价值低）。
+
+export interface CmdError {
+  code: string
+  message: string
+}
+
+/// 任意 invoke 拒绝值 → 信封。旧串/非信封对象兜底 code:"unknown"。
+export function asCmdError(e: unknown): CmdError {
+  if (typeof e === 'object' && e !== null) {
+    const o = e as { code?: unknown; message?: unknown }
+    if (typeof o.message === 'string') {
+      return {
+        code: typeof o.code === 'string' ? o.code : 'unknown',
+        message: o.message,
+      }
+    }
+  }
+  return { code: 'unknown', message: String(e) }
+}
+
+/// 面向用户的错误文案唯一出口：组件一律用它，不再 `String(e)`。
+export function errText(e: unknown): string {
+  const { code, message } = asCmdError(e)
+  const key = `errors.${code}`
+  return i18n.exists(key) ? i18n.t(key) : message
 }
 
 // ---- 回合流式 delta（turn-streaming 票 03）----

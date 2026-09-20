@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, isTauri } from '../api'
+import { api, errText, isTauri } from '../api'
 import { useUiStore } from '../store'
 
 /** 流程包编辑器（票 31）：draft(pack.json) 的 JSON 编辑 → 校验保存/存模板/导出 YAML。
@@ -16,7 +16,7 @@ export function PackEditor({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     api.packDraft()
       .then((v) => setText(JSON.stringify(v, null, 2)))
-      .catch((e) => setErr(String(e)))
+      .catch((e) => setErr(errText(e)))
   }, [])
 
   const validJson = (): string | null => {
@@ -31,7 +31,7 @@ export function PackEditor({ onClose }: { onClose: () => void }) {
       const r = await f()
       setMsg(typeof r === 'string' ? `${ok}: ${r}` : ok)
       await refresh()
-    } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+    } catch (e) { setErr(errText(e)) } finally { setBusy(false) }
   }
 
   const exportYaml = async () => {
@@ -72,7 +72,7 @@ export function PackEditor({ onClose }: { onClose: () => void }) {
         URL.revokeObjectURL(a.href)
         setMsg(t('pack.exported'))
       }
-    } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+    } catch (e) { setErr(errText(e)) } finally { setBusy(false) }
   }
 
   return (

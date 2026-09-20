@@ -5,7 +5,7 @@
 // 数据语义：非密配置存 providers.json；key 只写 keychain（provider/<id>）。
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type ModelEntry, type ProviderDef, type ProviderDoc, type RoleDef } from '../api'
+import { api, errText, type ModelEntry, type ProviderDef, type ProviderDoc, type RoleDef } from '../api'
 import { Icon, type IconName } from './Icon'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。
@@ -100,20 +100,20 @@ export function ProviderManager() {
       setSecret('')
       await reload(def.id)
     } catch (e) {
-      setErr(String(e))
+      setErr(errText(e))
     } finally {
       setBusy(false)
     }
   }
 
   const toggleEnabled = async (p: ProviderDef) => {
-    await api.saveProvider({ ...p, enabled: !p.enabled }).catch((e) => setErr(String(e)))
+    await api.saveProvider({ ...p, enabled: !p.enabled }).catch((e) => setErr(errText(e)))
     await reload()
   }
 
   const del = async () => {
     if (!draft) return
-    await api.deleteProvider(draft.id).catch((e) => setErr(String(e)))
+    await api.deleteProvider(draft.id).catch((e) => setErr(errText(e)))
     setSel('')
     setDraft(null)
     await reload('')
@@ -138,7 +138,7 @@ export function ProviderManager() {
       setProbe({ ok: true, text: t('providers.checkOk', { count: ids.length }) })
       await reload(def.id)
     } catch (e) {
-      setProbe({ ok: false, text: String(e) })
+      setProbe({ ok: false, text: errText(e) })
     } finally {
       setBusy(false)
     }
@@ -151,7 +151,7 @@ export function ProviderManager() {
     setDraft(def)
     setEditModel(null)
     if (selConfigured) {
-      await api.saveProvider(def).catch((e) => setErr(String(e)))
+      await api.saveProvider(def).catch((e) => setErr(errText(e)))
       await reload(def.id)
     }
   }
@@ -161,7 +161,7 @@ export function ProviderManager() {
     const def = { ...draft, models: draft.models.filter((x) => x.id !== id) }
     setDraft(def)
     if (selConfigured) {
-      await api.saveProvider(def).catch((e) => setErr(String(e)))
+      await api.saveProvider(def).catch((e) => setErr(errText(e)))
       await reload(def.id)
     }
   }
@@ -185,7 +185,7 @@ export function ProviderManager() {
   }, [roles, doc.slots])
 
   const bind = async (slot: string, providerId: string, model: string) => {
-    await api.setSlotBinding(slot, providerId, model).catch((e) => setErr(String(e)))
+    await api.setSlotBinding(slot, providerId, model).catch((e) => setErr(errText(e)))
     await reload()
   }
 

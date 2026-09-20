@@ -2,7 +2,7 @@
 // 未开项目时的全屏界面；「新建项目」→ 项目向导 Wizard。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, isTauri } from '../api'
+import { api, errText, isTauri } from '../api'
 import { Wizard } from './Wizard'
 import { Icon } from './Icon'
 import { SettingsPage } from './SettingsPage'
@@ -43,7 +43,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
       await api.openRecent(d)
       onOpen()
     } catch (e) {
-      setErr(String(e))
+      setErr(errText(e))
     }
   }
 
