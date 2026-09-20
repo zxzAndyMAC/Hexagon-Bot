@@ -73,6 +73,30 @@ pub fn set_level(db: &Db, project_id: &str, lv: &str) -> Result<(), AutonomyErro
     Ok(())
 }
 
+/// 审查者档位（shadow/live，票 05）。live 只在 autonomy ≥ L1 生效；
+/// 这里不强制档位组合——L0+live 退化为 shadow 判定（adjudicate 内拦）。
+pub fn set_reviewer_mode(db: &Db, project_id: &str, mode: &str) -> Result<(), AutonomyError> {
+    if !matches!(mode, "shadow" | "live") {
+        return Err(AutonomyError::BadLevel(format!(
+            "invalid reviewer mode: {mode}"
+        )));
+    }
+    db.conn().execute(
+        "UPDATE projects SET reviewer_mode=?1 WHERE id=?2",
+        params![mode, project_id],
+    )?;
+    Ok(())
+}
+
+/// 当前审查者档位。
+pub fn reviewer_mode(db: &Db, project_id: &str) -> Result<String, rusqlite::Error> {
+    db.conn().query_row(
+        "SELECT reviewer_mode FROM projects WHERE id=?1",
+        [project_id],
+        |r| r.get(0),
+    )
+}
+
 /// 负责人离开：打标记事件（挂起语义 = 必问类照常排队，无人裁决而已）。
 pub fn leave(db: &Db, project_id: &str) -> Result<i64, AutonomyError> {
     let id = db.append_event(

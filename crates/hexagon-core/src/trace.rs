@@ -403,6 +403,20 @@ impl Db {
         Ok(crate::cards::queued(self, project_id)?)
     }
 
+    /// 事件断言原料（arch-review 票 05）：scenario/验收套件与测试直接消费
+    /// ——timeline 全窗 + kind 过滤，剥壳取 Event。
+    pub fn events(
+        &self,
+        project_id: &str,
+        kinds: Option<&[EventKind]>,
+    ) -> Result<Vec<Event>, TraceError> {
+        Ok(self
+            .timeline(project_id, None, 10000, kinds)?
+            .into_iter()
+            .map(|i| i.event)
+            .collect())
+    }
+
     /// 轨迹导出（US54）：过滤后事件集写 JSON 文件供回放核对。
     /// 提示词全文从不落库，导出天然不含提示词/凭据正文。
     /// 返回导出条数。

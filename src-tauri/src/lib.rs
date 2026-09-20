@@ -88,11 +88,15 @@ fn open_project(
         .map(|s| serde_json::from_str(&s))
         .transpose()
         .map_err(|e: serde_json::Error| e.to_string())?;
-    let mut wb = Workbench::open(&dir, &name, &roles, pack).map_err(|e| e.to_string())?;
-    hexagon_core::providers::register_all(
-        &mut wb.providers,
+    // open_with（票 05）：open → 凭据库 → 供应商注册，三处 open 序列同一入口
+    let wb = Workbench::open_with(
+        &dir,
+        &name,
+        &roles,
+        pack,
         Arc::new(hexagon_core::credentials::OsKeychain),
-    );
+    )
+    .map_err(|e| e.to_string())?;
     attach_delta_hook(&app, &wb);
     *state.conn.lock().map_err(|e| e.to_string())? = Some(open_control(&dir)?);
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
@@ -115,26 +119,13 @@ fn timeline(
 
 #[tauri::command]
 fn send_message(state: tauri::State<AppState>, body: String) -> Result<i64, String> {
-    // 控制通道（ADR 0052）：消息落库与 暂停/恢复 指令走第二连接——
-    // 回合占着 wb 锁时 steering 与流中叫停照常生效。
-    // 其余指令（rewind/stamp/skip/override/install）仍排 wb 队列——
-    // 回合中途本来也不该执行它们。两段分开拿锁：conn→wb 不嵌套。
-    use hexagon_core::commands::TextCommand;
+    // 控制通道（ADR 0052）：路由表归 commands::send_via_control——消息落库 +
+    // 暂停/恢复 就地生效；其余指令（rewind/stamp/skip/override/install）
+    // 返回上来排 wb 队列。两段分开拿锁：conn→wb 不嵌套。
     let (id, cmd) = with_conn(&state, |db, _| {
-        let (id, cmd) = hexagon_core::commands::send_message_side(db, PROJECT_ID, &body)
-            .map_err(|e| e.to_string())?;
-        match cmd {
-            Some(TextCommand::Pause) => {
-                hexagon_core::orchestra::pause(db, PROJECT_ID).map_err(|e| e.to_string())?;
-            }
-            Some(TextCommand::Resume) => {
-                hexagon_core::orchestra::resume(db, PROJECT_ID).map_err(|e| e.to_string())?;
-            }
-            _ => {}
-        }
-        Ok((id, cmd))
+        hexagon_core::commands::send_via_control(db, PROJECT_ID, &body).map_err(|e| e.to_string())
     })?;
-    if let Some(other) = cmd.filter(|c| !matches!(c, TextCommand::Pause | TextCommand::Resume)) {
+    if let Some(other) = cmd {
         with_wb(&state, |wb| wb.dispatch_command(&other))?;
     }
     Ok(id)
@@ -275,14 +266,20 @@ fn update_agent(
 ) -> Result<(), String> {
     let patch: hexagon_core::roles::AgentPatch =
         serde_json::from_value(patch).map_err(|e| e.to_string())?;
-    with_wb(&state, |wb| wb.update_agent(&agent_id, patch))
+    // 纯 DB 变更——控制通道直落（票 05：不占 wb 锁）
+    with_conn(&state, |db, _| {
+        hexagon_core::roles::update_agent_def(db, PROJECT_ID, &agent_id, &patch)
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn create_role(state: tauri::State<AppState>, def: Value) -> Result<String, String> {
     let def: hexagon_core::presets::RoleDef =
         serde_json::from_value(def).map_err(|e| e.to_string())?;
-    with_wb(&state, |wb| wb.create_role(def))
+    with_conn(&state, |db, _| {
+        hexagon_core::roles::create_role(db, PROJECT_ID, &def).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -292,7 +289,9 @@ fn set_agent_grants(
     kind: String,
     names: Vec<String>,
 ) -> Result<(), String> {
-    with_wb(&state, |wb| wb.set_agent_grants(&agent_id, &kind, names))
+    with_conn(&state, |db, _| {
+        hexagon_core::roles::set_grants(db, &agent_id, &kind, &names).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -351,7 +350,11 @@ fn resolve_install(
     qid: String,
     allow: bool,
 ) -> Result<Value, String> {
-    with_wb(&state, |wb| wb.resolve_install(&qid, allow))
+    // 放行/驳回 + 落盘执行全在 Db+repo_root——控制通道直落（票 05）
+    with_conn(&state, |db, root| {
+        hexagon_core::install::resolve_install(db, PROJECT_ID, root, &qid, allow)
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -482,7 +485,10 @@ fn reject_proposal(
 /// ADR 0052 wb 组：回合中段跑会把在途回合误报成悬挂回合——要静止态。
 #[tauri::command]
 fn invariant_check(state: tauri::State<AppState>) -> Result<usize, String> {
-    with_wb(&state, |wb| wb.invariant_check_and_log())
+    // 独立路径重校验 trace——纯 Db 读+违规事件写，走控制通道（票 05 移出 wb 组）
+    with_conn(&state, |db, _| {
+        hexagon_core::invariant::check_and_log(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 
 /// 票 10：政策研发提案的确定性入口——旋钮编辑 JSON + 场景 JSON →
@@ -665,14 +671,18 @@ fn open_recent(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| dir.clone());
     // OR IGNORE 保住库里的真实 name/mode；project_info 读库得真值
-    let mut wb = Workbench::open(&dir, &name, &[], pack).map_err(|e| e.to_string())?;
-    hexagon_core::providers::register_all(
-        &mut wb.providers,
+    let wb = Workbench::open_with(
+        &dir,
+        &name,
+        &[],
+        pack,
         Arc::new(hexagon_core::credentials::OsKeychain),
-    );
+    )
+    .map_err(|e| e.to_string())?;
     attach_delta_hook(&app, &wb);
     *state.conn.lock().map_err(|e| e.to_string())? = Some(open_control(&dir)?);
-    let info = wb.project_info().map_err(|e| e.to_string())?;
+    let info =
+        hexagon_core::orchestra::project_info(&wb.db, PROJECT_ID).map_err(|e| e.to_string())?;
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(
         &app,
@@ -767,27 +777,11 @@ fn set_model_key(slot: String, secret: String) -> Result<(), String> {
 // ---------- 供应商配置（设置页模型区 / 启动页共用）----------
 
 /// 供应商文档：非密字段 + 各供应商 key 是否已存（key 明文永不回传）+ 槽位绑定表。
+/// 实现归 provider_admin（票 05）——壳层只转发。
 #[tauri::command]
 fn list_providers() -> Result<Value, String> {
-    use hexagon_core::credentials::{provider_key_name, CredentialStore, OsKeychain};
-    let doc = hexagon_core::providers::load().map_err(|e| e.to_string())?;
-    let providers: Vec<Value> = doc
-        .providers
-        .iter()
-        .map(|p| {
-            let mut v = serde_json::to_value(p).unwrap();
-            v["key_set"] = serde_json::json!(OsKeychain
-                .get(&provider_key_name(&p.id))
-                .ok()
-                .flatten()
-                .is_some());
-            v
-        })
-        .collect();
-    Ok(serde_json::json!({
-        "providers": providers,
-        "slots": doc.slots,
-    }))
+    hexagon_core::provider_admin::list(&hexagon_core::credentials::OsKeychain)
+        .map_err(|e| e.to_string())
 }
 
 /// 刷新运行中 Workbench 的供应商注册（保存/删除/绑定变更后热生效）。
@@ -797,15 +791,7 @@ fn refresh_providers(state: &AppState) {
         Err(_) => return,
     };
     if let Some(wb) = g.as_mut() {
-        // 清掉 HTTP 供应商注册再按当前绑定重挂（ScriptedProvider 是测试件，生产不会有）
-        let doc = hexagon_core::providers::load().unwrap_or_default();
-        for slot in doc.slots.keys() {
-            wb.providers.remove(slot);
-        }
-        hexagon_core::providers::register_all(
-            &mut wb.providers,
-            Arc::new(hexagon_core::credentials::OsKeychain),
-        );
+        wb.reload_providers();
     }
 }
 
@@ -816,15 +802,8 @@ fn save_provider(
     provider: Value,
     secret: Option<String>,
 ) -> Result<(), String> {
-    use hexagon_core::credentials::{provider_key_name, CredentialStore, OsKeychain};
-    let def: hexagon_core::providers::ProviderDef =
-        serde_json::from_value(provider).map_err(|e| e.to_string())?;
-    hexagon_core::providers::save_provider(&def).map_err(|e| e.to_string())?;
-    if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
-        OsKeychain
-            .set(&provider_key_name(&def.id), s.trim())
-            .map_err(|e| e.to_string())?;
-    }
+    hexagon_core::provider_admin::save(provider, secret, &hexagon_core::credentials::OsKeychain)
+        .map_err(|e| e.to_string())?;
     refresh_providers(&state);
     Ok(())
 }
@@ -832,7 +811,7 @@ fn save_provider(
 /// 删供应商（级联解绑槽位）+ 热刷新；keychain 不动。
 #[tauri::command]
 fn delete_provider(state: tauri::State<AppState>, id: String) -> Result<(), String> {
-    hexagon_core::providers::delete_provider(&id).map_err(|e| e.to_string())?;
+    hexagon_core::provider_admin::delete(&id).map_err(|e| e.to_string())?;
     refresh_providers(&state);
     Ok(())
 }
@@ -845,7 +824,8 @@ fn set_slot_binding(
     provider_id: String,
     model: String,
 ) -> Result<(), String> {
-    hexagon_core::providers::set_binding(&slot, &provider_id, &model).map_err(|e| e.to_string())?;
+    hexagon_core::provider_admin::set_binding(&slot, &provider_id, &model)
+        .map_err(|e| e.to_string())?;
     refresh_providers(&state);
     Ok(())
 }
@@ -853,7 +833,7 @@ fn set_slot_binding(
 /// 解绑槽位 + 热刷新。
 #[tauri::command]
 fn remove_slot_binding(state: tauri::State<AppState>, slot: String) -> Result<(), String> {
-    hexagon_core::providers::remove_binding(&slot).map_err(|e| e.to_string())?;
+    hexagon_core::provider_admin::remove_binding(&slot).map_err(|e| e.to_string())?;
     refresh_providers(&state);
     Ok(())
 }
@@ -862,19 +842,7 @@ fn remove_slot_binding(state: tauri::State<AppState>, slot: String) -> Result<()
 /// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置。
 #[tauri::command]
 fn fetch_provider_models(id: String) -> Result<Value, String> {
-    use hexagon_core::credentials::{provider_key_name, CredentialStore, OsKeychain};
-    let doc = hexagon_core::providers::load().map_err(|e| e.to_string())?;
-    let def = doc
-        .providers
-        .iter()
-        .find(|p| p.id == id)
-        .ok_or_else(|| format!("未知供应商: {id}"))?;
-    let key = OsKeychain
-        .get(&provider_key_name(&def.id))
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("缺 API key: provider/{}", def.id))?;
-    hexagon_core::providers::fetch_models(def, &key)
-        .map(|m| serde_json::to_value(m).unwrap())
+    hexagon_core::provider_admin::fetch_models(&id, &hexagon_core::credentials::OsKeychain)
         .map_err(|e| e.to_string())
 }
 
@@ -918,6 +886,7 @@ fn create_project(
                 .ok_or_else(|| format!("未知流程包: {n}"))
         })
         .transpose()?;
+    // 壳层唯一保留的 providers:: 直调：create_project 建档校验要文档现状
     let pdoc = hexagon_core::providers::load().unwrap_or_default();
     let mut wb = setup::create_project(
         &opts.dir,
@@ -930,7 +899,8 @@ fn create_project(
         &pdoc,
     )
     .map_err(|e| e.to_string())?;
-    hexagon_core::providers::register_all(&mut wb.providers, Arc::new(OsKeychain));
+    // 接线尾步归 Workbench：凭据库 + 按文档注册运行槽位（票 05）
+    wb.attach_providers(Arc::new(OsKeychain));
     attach_delta_hook(&app, &wb);
     *state.conn.lock().map_err(|e| e.to_string())? = Some(open_control(&opts.dir)?);
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);

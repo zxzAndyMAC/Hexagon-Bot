@@ -222,10 +222,10 @@ pub fn run_scenario_capture(dir: &std::path::Path, sc: &Scenario) -> Result<Capt
     for (i, step) in sc.steps.iter().enumerate() {
         run_step(&wb, step).map_err(|e| ApiError::NoRole(format!("step {i} {step:?}: {e}")))?;
     }
-    let violations = wb.invariant_check_and_log()?;
+    let violations = crate::invariant::check_and_log(&wb.db, &wb.project_id)?;
     Ok(CapturedRun {
-        events: wb.events(None)?,
-        usage: wb.usage()?,
+        events: wb.db.events(&wb.project_id, None)?,
+        usage: crate::usage::project_summary(&wb.db, &wb.project_id)?,
         violations,
     })
 }
@@ -242,7 +242,12 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             wb.run_all_active(input.as_deref().unwrap_or(""))?;
         }
         StepDef::OwnerMessage { text } => {
-            wb.send_message(text)?;
+            // 与壳层 send_message 同路由：控制面落库+即时指令，余下交 wb 分发
+            let (_id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, text)
+                .map_err(|e| ApiError::BadInput(e.to_string()))?;
+            if let Some(c) = cmd {
+                wb.dispatch_command(&c)?;
+            }
         }
         StepDef::Advance => {
             wb.advance()?;
@@ -259,17 +264,20 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
         StepDef::Skip => {
             wb.skip()?;
         }
-        StepDef::Pause => wb.pause()?,
-        StepDef::Resume => wb.resume()?,
-        StepDef::SleepAll => wb.sleep_all()?,
+        StepDef::Pause => crate::orchestra::pause(&wb.db, &wb.project_id)?,
+        StepDef::Resume => crate::orchestra::resume(&wb.db, &wb.project_id)?,
+        StepDef::SleepAll => crate::orchestra::sleep_all(&wb.db, &wb.project_id)?,
         StepDef::AnswerPermission {
             allow,
             remember,
             scope,
         } => {
-            let qid = wb
-                .first_pending_question("permission")?
-                .ok_or_else(|| ApiError::NoRole("no queued permission question".into()))?;
+            let qid = crate::cards::first_queued(
+                &wb.db,
+                &wb.project_id,
+                crate::cards::CardKind::Permission,
+            )?
+            .ok_or_else(|| ApiError::NoRole("no queued permission question".into()))?;
             wb.answer_permission(
                 &qid,
                 *allow,
@@ -289,12 +297,12 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             let aid = wb.agent_by_role(role)?;
             let run = wb.active_run()?.map(|r| r.id);
             let ctx = wb.ctx_for(&aid, run);
-            let art_id: String = wb
-                .artifacts()?
-                .iter()
-                .find(|a| a["path"] == *artifact)
-                .and_then(|a| a["id"].as_str().map(str::to_string))
-                .ok_or_else(|| ApiError::NoRole(format!("no artifact {artifact}")))?;
+            let art_id: String =
+                crate::artifacts::query(&wb.db, &wb.project_id, None, None, None, None)?
+                    .iter()
+                    .find(|a| a["path"] == *artifact)
+                    .and_then(|a| a["id"].as_str().map(str::to_string))
+                    .ok_or_else(|| ApiError::NoRole(format!("no artifact {artifact}")))?;
             let v = match verdict.as_str() {
                 "pass" | "通过" => crate::review::Verdict::Pass,
                 _ => crate::review::Verdict::Reject,
@@ -309,7 +317,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             .map_err(|e| ApiError::NoRole(e.to_string()))?;
         }
         StepDef::AssertEvent { kind, contains } => {
-            let evs = wb.events(Some(&[*kind]))?;
+            let evs = wb.db.events(&wb.project_id, Some(&[*kind]))?;
             let hit = match contains {
                 None => !evs.is_empty(),
                 Some(sub) => evs.iter().any(|e| json_contains(&e.payload, sub)),
@@ -317,11 +325,11 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             assert!(hit, "expected event {kind:?} matching {contains:?}");
         }
         StepDef::AssertNoEvent { kind } => {
-            let evs = wb.events(Some(&[*kind]))?;
+            let evs = wb.db.events(&wb.project_id, Some(&[*kind]))?;
             assert!(evs.is_empty(), "unexpected event {kind:?} present");
         }
         StepDef::AssertEventSeq { kinds } => {
-            let evs = wb.events(None)?;
+            let evs = wb.db.events(&wb.project_id, None)?;
             let mut it = evs.iter().map(|e| e.kind);
             for want in kinds {
                 assert!(
@@ -331,7 +339,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             }
         }
         StepDef::AssertStage { seq, state } => {
-            let stages = wb.stage_status()?;
+            let stages = crate::orchestra::stage_status(&wb.db, &wb.project_id)?;
             let hit = stages
                 .iter()
                 .any(|s| s["seq"] == *seq && s["state"] == *state);
@@ -341,7 +349,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             );
         }
         StepDef::AssertArtifact { path, kind, status } => {
-            let arts = wb.artifacts()?;
+            let arts = crate::artifacts::query(&wb.db, &wb.project_id, None, None, None, None)?;
             let hit = arts.iter().any(|a| {
                 a["path"] == *path
                     && kind.as_ref().is_none_or(|k| a["kind"] == *k)
@@ -353,7 +361,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             );
         }
         StepDef::AssertAgentStatus { role, status } => {
-            let team = wb.team()?;
+            let team = crate::orchestra::team(&wb.db, &wb.project_id)?;
             let hit = team
                 .iter()
                 .any(|m| m["role"] == *role && m["status"] == *status);

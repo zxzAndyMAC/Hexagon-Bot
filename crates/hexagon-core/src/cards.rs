@@ -28,6 +28,8 @@ pub enum CardsError {
     NotFound(String),
     #[error("question {qid} not queued (state={state})")]
     NotQueued { qid: String, state: String },
+    #[error("bad input: {0}")]
+    BadInput(String),
 }
 
 /// 卡种（schema CHECK 词表）。提案确认卡搭 Stamp——见模块文档过载注记。
@@ -50,6 +52,19 @@ impl CardKind {
             Self::Recovery => "recovery",
             Self::Install => "install",
             Self::Publish => "publish",
+        }
+    }
+
+    /// 名字 → 卡种（API/DSL 边界的字符串入参在此解析，未知名直报）。
+    pub fn from_name(s: &str) -> Result<Self, CardsError> {
+        match s {
+            "permission" => Ok(Self::Permission),
+            "stamp" => Ok(Self::Stamp),
+            "escalation" => Ok(Self::Escalation),
+            "recovery" => Ok(Self::Recovery),
+            "install" => Ok(Self::Install),
+            "publish" => Ok(Self::Publish),
+            other => Err(CardsError::BadInput(format!("unknown card kind: {other}"))),
         }
     }
 }
@@ -250,6 +265,24 @@ pub fn get_queued(db: &Db, qid: &str, kind: CardKind) -> Result<Card, CardsError
         });
     }
     Ok(card)
+}
+
+/// 升级卡（kind='escalation'）的 sub 分发型（payload.sub）：
+/// 默认=打回裁决（flag_id 进 review::adjudicate_flag）；
+/// context_overflow=上下文撞限挂起（US37），放行=续跑、驳回=收场。
+/// 分发决定归本模块——payload 形状知识不外泄（arch-review 票 05）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscalationSub {
+    Flag,
+    ContextOverflow,
+}
+
+/// 读升级卡的 sub 分发位。
+pub fn escalation_sub(card: &Card) -> EscalationSub {
+    match card.payload["sub"].as_str() {
+        Some("context_overflow") => EscalationSub::ContextOverflow,
+        _ => EscalationSub::Flag,
+    }
 }
 
 /// 队列里某 kind 的第一张待决卡（按 created_at）。

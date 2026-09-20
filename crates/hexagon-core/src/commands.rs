@@ -42,6 +42,38 @@ pub fn send_message_side(
     Ok((id, parse_command(body)))
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RouteError {
+    #[error(transparent)]
+    Trace(#[from] TraceError),
+    #[error(transparent)]
+    Orch(#[from] crate::orchestra::OrchError),
+}
+
+/// 控制通道发消息（ADR 0052 路由表，arch-review 票 05）：消息落库 +
+/// 即时指令（Pause/Resume）在控制连接就地生效——回合占着 wb 锁时
+/// steering 与叫停照常落。其余指令（rewind/stamp/skip/override/install）
+/// 返回给调用方走 wb 组分发。壳层因此只剩「conn 调本函数 → 余下给 wb」。
+pub fn send_via_control(
+    db: &Db,
+    project_id: &str,
+    body: &str,
+) -> Result<(i64, Option<TextCommand>), RouteError> {
+    let (id, cmd) = send_message_side(db, project_id, body)?;
+    let rest = match cmd {
+        Some(TextCommand::Pause) => {
+            crate::orchestra::pause(db, project_id)?;
+            None
+        }
+        Some(TextCommand::Resume) => {
+            crate::orchestra::resume(db, project_id)?;
+            None
+        }
+        other => other,
+    };
+    Ok((id, rest))
+}
+
 /// 文本指令（与按钮同权同痕）：只认整句命令，防普通语句被劫持。
 /// pub：壳层旁路写入路径（票 05 send_message_side）要按变体分流。
 #[derive(Debug, PartialEq)]
