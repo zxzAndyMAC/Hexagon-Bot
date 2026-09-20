@@ -79,7 +79,7 @@ function fmtTime(iso: string): string {
 /** Agent 活动视图：头卡 + 执行链路（步骤按序，可展开看 payload）。 */
 export function AgentTab({ agentId }: { agentId: string }) {
   const { t } = useTranslation()
-  const { team, timeline, refresh, openTab } = useUiStore()
+  const { team, timeline, invalidate, openTab } = useUiStore()
   const member = team.find((m) => m.id === agentId)
   const fileRef = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
@@ -164,7 +164,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
             const r = new FileReader()
             r.onload = async () => {
               await api.setAgentAvatar(agentId, String(r.result))
-              await refresh()
+              await invalidate('team')
             }
             r.readAsDataURL(f)
             e.target.value = ''
@@ -185,7 +185,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
         <div style={{ flex: 1 }} />
         <button
           className={`btn ${sleeping ? 'primary' : ''}`}
-          onClick={async () => { await api.setAgentSleeping(agentId, !sleeping); await refresh() }}
+          onClick={async () => { await api.setAgentSleeping(agentId, !sleeping); await invalidate('team') }}
         >
           {sleeping ? t('agent.wake') : t('agent.sleep')}
         </button>

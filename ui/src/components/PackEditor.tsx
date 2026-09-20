@@ -7,7 +7,7 @@ import { useUiStore } from '../store'
  *  编辑只碰 pack.json——pack.active.json（钉住副本）不动，走行中实例隔离。 */
 export function PackEditor({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
-  const { refresh } = useUiStore()
+  const { invalidate } = useUiStore()
   const [text, setText] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -30,7 +30,7 @@ export function PackEditor({ onClose }: { onClose: () => void }) {
     try {
       const r = await f()
       setMsg(typeof r === 'string' ? `${ok}: ${r}` : ok)
-      await refresh()
+      await invalidate()
     } catch (e) { setErr(errText(e)) } finally { setBusy(false) }
   }
 

@@ -14,7 +14,7 @@ interface Recent {
 
 export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void; onProjectClosed: () => void }) {
   const { t } = useTranslation()
-  const { projectName, packName, mode, autonomy, usageTotal, pending, refresh, setRailOpen, setSideTab, railOpen } = useUiStore()
+  const { projectName, packName, mode, autonomy, usageTotal, pending, refresh, invalidate, setRailOpen, setSideTab, railOpen } = useUiStore()
   const [menuOpen, setMenuOpen] = useState(false)
   const [recents, setRecents] = useState<Recent[]>([])
   const menuRef = useRef<HTMLDivElement>(null)
@@ -133,7 +133,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
         onClick={async () => {
           if (confirm(t('topbar.sleepAllConfirm'))) {
             await api.sleepAll()
-            await refresh()
+            await invalidate('team')
           }
         }}
       >

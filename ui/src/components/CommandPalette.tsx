@@ -17,7 +17,7 @@ interface Item {
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
-  const { stages, team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, tabs, activeTab, closeTab, refresh } = useUiStore()
+  const { stages, team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, tabs, activeTab, closeTab, invalidate } = useUiStore()
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -77,7 +77,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const runItem = async (i: Item) => {
     onClose()
     await i.run()
-    await refresh()
+    await invalidate()
   }
 
   const groups: { key: Item['group']; title: string }[] = [

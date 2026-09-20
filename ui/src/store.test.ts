@@ -102,3 +102,54 @@ describe('refreshFast 增量归并（arch-review 票 07）', () => {
     expect(tl.some((i) => i.event.id === 9999)).toBe(false)
   })
 })
+
+describe('invalidate 失效标签（arch-review 票 07）', () => {
+  beforeEach(() => useUiStore.setState({ timeline: [], stages: [], pending: [] }))
+  afterEach(() => vi.restoreAllMocks())
+
+  it('refreshFast 稳态只打 3 个端点', async () => {
+    const calls: string[] = []
+    for (const k of ['stageStatus', 'pendingQuestions', 'timeline', 'usage', 'artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
+      const orig = api[k]
+      vi.spyOn(api, k).mockImplementation((...a: never[]) => {
+        calls.push(k)
+        return (orig as (...x: never[]) => unknown)(...a)
+      })
+    }
+    await useUiStore.getState().refreshFast()
+    expect(calls.sort()).toEqual(['pendingQuestions', 'stageStatus', 'timeline'])
+  })
+
+  it('invalidate() 无参 = 全切片；带标签只拉对应域', async () => {
+    const calls: string[] = []
+    for (const k of ['usage', 'artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
+      const orig = api[k]
+      vi.spyOn(api, k).mockImplementation((...a: never[]) => {
+        calls.push(k)
+        return (orig as (...x: never[]) => unknown)(...a)
+      })
+    }
+
+    await useUiStore.getState().invalidate()
+    for (const k of ['usage', 'artifacts', 'team', 'autonomy', 'projectInfo']) {
+      expect(calls).toContain(k)
+    }
+
+    calls.length = 0
+    await useUiStore.getState().invalidate('usage')
+    expect(calls).toEqual(['usage'])
+  })
+
+  it('invalidate 同时补快通道一拍（写后 pending/stages 立即一致）', async () => {
+    const fast: string[] = []
+    for (const k of ['stageStatus', 'pendingQuestions', 'timeline'] as const) {
+      const orig = api[k]
+      vi.spyOn(api, k).mockImplementation((...a: never[]) => {
+        fast.push(k)
+        return (orig as (...x: never[]) => unknown)(...a)
+      })
+    }
+    await useUiStore.getState().invalidate('usage')
+    expect(fast.sort()).toEqual(['pendingQuestions', 'stageStatus', 'timeline'])
+  })
+})

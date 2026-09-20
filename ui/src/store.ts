@@ -12,6 +12,10 @@ import {
 
 export type ThemePref = 'light' | 'dark' | 'system'
 
+/// 慢通道切片（arch-review 票 07）：invalidate 的失效标签。
+/// usage=账本；artifacts=产物表；team=花名册+头像；info=项目元信息+autonomy。
+export type SlowSlice = 'usage' | 'artifacts' | 'team' | 'info'
+
 // 中栏选项卡（ADR 0051）：timeline 固定主 tab，其余可关。
 export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent' | 'usage'
 
@@ -78,6 +82,12 @@ interface UiState {
   /// 快通道（arch-review 票 07）：2s 轮询面 = stages+pending+timeline 增量
   /// （3 invoke 稳态）。timeline 走 after 游标追加；空时间线=首拉全量。
   refreshFast: () => Promise<void>
+  /// 慢通道：usage/artifacts/team(+avatars)/info，仅失效标签驱动，不轮询。
+  /// tags 缺省 = 全切片。
+  refreshSlow: (tags?: SlowSlice[]) => Promise<void>
+  /// 组件写操作后统一入口（取代散点 await refresh()）：
+  /// 快通道补一拍 + 按标签拉慢切片。`invalidate()` = 全失效。
+  invalidate: (...tags: SlowSlice[]) => Promise<void>
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -139,38 +149,48 @@ export const useUiStore = create<UiState>((set) => ({
     set({ themePref: p })
   },
   refresh: async () => {
-    const [stages, team, artifacts, timeline, pending, usage, autonomy, info] = await Promise.all([
-      api.stageStatus(),
-      api.team(),
-      api.artifacts(),
-      api.timeline(),
-      api.pendingQuestions(),
-      api.usage(),
-      api.autonomy(),
-      api.projectInfo().catch(() => null),
+    // 全量重置边界（挂载/项目切换）：时间线游标归零 → 快通道首拉全量。
+    // 切项目必须走这里——invalidate 的增量归并会把两个项目的事件缝一起。
+    set({ timeline: [] })
+    await useUiStore.getState().invalidate()
+  },
+  refreshSlow: async (tags) => {
+    const want = (t: SlowSlice) => !tags || tags.length === 0 || tags.includes(t)
+    const [usage, artifacts, team, autonomy, info] = await Promise.all([
+      want('usage') ? api.usage() : Promise.resolve(undefined),
+      want('artifacts') ? api.artifacts() : Promise.resolve(undefined),
+      want('team') ? api.team() : Promise.resolve(undefined),
+      want('info') ? api.autonomy() : Promise.resolve(undefined),
+      want('info') ? api.projectInfo().catch(() => null) : Promise.resolve(undefined),
     ])
-    const avatars: Record<string, string> = {}
-    await Promise.all(
-      team.map(async (m) => {
-        const u = await api.agentAvatar(m.id).catch(() => null)
-        if (u) avatars[m.id] = u
-      }),
-    )
-    set({
-      stages,
-      team,
-      artifacts,
-      timeline,
-      pending,
-      usageTotal: usage.total,
-      usageRows: usage.rows,
-      autonomy: autonomy || 'L0',
-      avatars,
-      mode: info?.mode ?? 'pack',
-      fastRole: info?.fastpath_role ?? null,
-      packName: info?.pack_name ?? null,
-      projectName: info?.name ?? useUiStore.getState().projectName,
-    })
+    let avatars: Record<string, string> | undefined
+    if (team) {
+      avatars = {}
+      await Promise.all(
+        team.map(async (m) => {
+          const u = await api.agentAvatar(m.id).catch(() => null)
+          if (u) avatars![m.id] = u
+        }),
+      )
+    }
+    set((s) => ({
+      ...(usage ? { usageTotal: usage.total, usageRows: usage.rows } : {}),
+      ...(artifacts ? { artifacts } : {}),
+      ...(team ? { team, avatars: avatars! } : {}),
+      ...(autonomy !== undefined ? { autonomy: autonomy || 'L0' } : {}),
+      ...(info !== undefined
+        ? {
+            mode: info?.mode ?? ('pack' as const),
+            fastRole: info?.fastpath_role ?? null,
+            packName: info?.pack_name ?? null,
+            projectName: info?.name ?? s.projectName,
+          }
+        : {}),
+    }))
+  },
+  invalidate: async (...tags) => {
+    const s = useUiStore.getState()
+    await Promise.all([s.refreshFast(), s.refreshSlow(tags)])
   },
   refreshFast: async () => {
     // 游标=末条 event.id（events 表 append-only、查询 ASC + after 排他）。

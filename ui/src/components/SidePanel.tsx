@@ -24,7 +24,7 @@ function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | nu
 
 export function SidePanel() {
   const { t } = useTranslation()
-  const { refresh } = useUiStore()
+  const { invalidate } = useUiStore()
   const [creating, setCreating] = useState(false)
   const { artifacts, team, railOpen, setRailOpen, openTab, sideTab: tab, setSideTab: setTab } = useUiStore()
   const tip = formatBinding(bindingFor('toggleRail'))
@@ -94,7 +94,7 @@ export function SidePanel() {
           >
             {creating ? '−' : '+'} {t('agent.createRole')}
           </button>
-          {creating && <CreateRoleForm onDone={() => { setCreating(false); refresh() }} />}
+          {creating && <CreateRoleForm onDone={() => { setCreating(false); invalidate('team') }} />}
         </div>
       )}
 

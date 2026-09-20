@@ -14,7 +14,7 @@ const label: React.CSSProperties = { fontSize: 10, fontWeight: 560, color: 'var(
  *  编辑后下次激活生效；globs/grants 即时按新值判。 */
 export function RoleEditor({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const { t } = useTranslation()
-  const { team, refresh } = useUiStore()
+  const { team, invalidate } = useUiStore()
   const [d, setD] = useState<AgentDetail | null>(null)
   const [duty, setDuty] = useState('')
   const [reviewer, setReviewer] = useState('')
@@ -60,7 +60,7 @@ export function RoleEditor({ agentId, onClose }: { agentId: string; onClose: () 
       })
       await api.setAgentGrants(agentId, 'mcp', mcpG.split(',').map((s) => s.trim()).filter(Boolean))
       await api.setAgentGrants(agentId, 'skill', skillG.split(',').map((s) => s.trim()).filter(Boolean))
-      await refresh()
+      await invalidate('team')
       setMsg(t('agent.saved'))
       setTimeout(() => setMsg(null), 2500)
     } catch (e) { setErr(errText(e)) } finally { setBusy(false) }

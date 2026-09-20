@@ -11,7 +11,7 @@ const MOCK_PATHS = [
 
 export function Composer() {
   const { t } = useTranslation()
-  const { team, refresh, mode, fastRole } = useUiStore()
+  const { team, invalidate, mode, fastRole } = useUiStore()
   const [text, setText] = useState('')
   const [popup, setPopup] = useState<{ kind: '@' | '#'; items: { label: string; hint: string }[] } | null>(null)
   const [sel, setSel] = useState(0)
@@ -60,7 +60,7 @@ export function Composer() {
       await api.dispatch(fastRole, body).catch(() => {})
     }
     setText('')
-    await refresh()
+    await invalidate()
   }
 
   return (

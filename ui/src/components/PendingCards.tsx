@@ -29,14 +29,14 @@ function Btn({ onClick, primary, danger, children }: {
   onClick: () => Promise<unknown>; primary?: boolean; danger?: boolean; children: React.ReactNode
 }) {
   const [busy, setBusy] = useState(false)
-  const refresh = useUiStore((s) => s.refresh)
+  const invalidate = useUiStore((s) => s.invalidate)
   return (
     <button
       className={`btn ${primary ? 'primary' : ''} ${danger ? 'danger' : ''}`}
       disabled={busy}
       onClick={async () => {
         setBusy(true)
-        try { await onClick(); await refresh() } finally { setBusy(false) }
+        try { await onClick(); await invalidate() } finally { setBusy(false) }
       }}
     >
       {children}

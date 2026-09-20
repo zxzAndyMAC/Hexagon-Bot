@@ -7,13 +7,13 @@ import { Icon } from './Icon'
 
 export function StageBar() {
   const { t } = useTranslation()
-  const { stages, refresh } = useUiStore()
+  const { stages, invalidate } = useUiStore()
   const [editingPack, setEditingPack] = useState(false)
   const active = stages.find((s) => s.state === 'active' || s.state === 'waiting_stamp')
   const interrupted = stages.some((s) => s.state === 'interrupted')
   const nextPending = stages.find((s) => s.state === 'pending')
 
-  const act = async (f: () => Promise<unknown>) => { await f(); await refresh() }
+  const act = async (f: () => Promise<unknown>) => { await f(); await invalidate() }
 
   return (
     <div className="row-line" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', overflowX: 'auto' }}>

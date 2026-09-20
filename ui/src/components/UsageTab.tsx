@@ -11,7 +11,7 @@ import {
 
 export function UsageTab() {
   const { t } = useTranslation()
-  const { usageRows, usageTotal, team, refresh, openTab } = useUiStore()
+  const { usageRows, usageTotal, team, invalidate, openTab } = useUiStore()
   const [series, setSeries] = useState<UsageBucket[]>([])
   const [editLimit, setEditLimit] = useState('')
   const [editing, setEditing] = useState(false)
@@ -71,7 +71,7 @@ export function UsageTab() {
                 onClick={async () => {
                   await api.setUsageLimit(parseLimitInput(editLimit))
                   setEditing(false)
-                  await refresh()
+                  await invalidate('usage')
                 }}
               >
                 {t('cards.confirm')}

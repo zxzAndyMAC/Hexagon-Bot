@@ -34,7 +34,7 @@ const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 864e5))
 
 export function UsageDetailTab() {
   const { t } = useTranslation()
-  const { usageRows, usageTotal, team, themePref, refresh } = useUiStore()
+  const { usageRows, usageTotal, team, themePref, invalidate } = useUiStore()
   const [granularity, setGranularity] = useState<Granularity>('day')
   const [range, setRange] = useState<Range>(() => ({
     from: daysAgo(29), to: daysAgo(0), preset: '30d',
@@ -175,7 +175,7 @@ export function UsageDetailTab() {
                   <input value={editLimit} onChange={(e) => setEditLimit(e.target.value)} placeholder={t('usage.limitHint')}
                     className="mono" style={{ flex: 1, minWidth: 0, fontSize: 10, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 6px', outline: 'none' }} />
                   <button className="btn primary" style={{ fontSize: 10, padding: '2px 8px' }} onClick={async () => {
-                    await api.setUsageLimit(parseLimitInput(editLimit)); setEditing(false); await refresh()
+                    await api.setUsageLimit(parseLimitInput(editLimit)); setEditing(false); await invalidate('usage')
                   }}>{t('cards.confirm')}</button>
                 </div>
               ) : (
@@ -203,7 +203,7 @@ export function UsageDetailTab() {
             <RangePicker range={range} onChange={setRange} />
           </Filter>
           <div style={{ flex: 1 }} />
-          <button className="btn" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={async () => { load(); await refresh() }}>
+          <button className="btn" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={async () => { load(); await invalidate() }}>
             <Icon name="refresh" size={11} /> {t('usage.refresh')}
           </button>
         </div>
