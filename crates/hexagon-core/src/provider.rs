@@ -80,6 +80,18 @@ pub struct ChatResponse {
     pub usage: Usage,
 }
 
+/// 流式增量（turn-streaming 票 01）：先只有文本——tool_use 增量不进
+/// delta 通道，由最终 ChatResponse 统一承载（拼装正确性归折叠器，
+/// UI 不该面对 partial tool_call）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamDelta {
+    Text(String),
+}
+
+/// sink 返回 false = 叫停（票 04 的唯一反压通道：流循环阻塞在读上，
+/// 外部唯一能说「停」的时刻就是两次 delta 之间）。
+pub type StreamSink<'a> = dyn FnMut(&StreamDelta) -> bool + 'a;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
     #[error("scripted provider: script exhausted")]
@@ -90,10 +102,141 @@ pub enum ProviderError {
     Refused(String),
     #[error("missing credential: {0}")]
     MissingCredential(String),
+    /// 流被 sink 叫停（票 04）：显式终态——不是传输故障不可重试，
+    /// 也不是拒绝；turn 层映射为 Interrupted 终态。
+    #[error("interrupted")]
+    Interrupted,
 }
 
 pub trait ModelProvider: Send + Sync {
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
+
+    /// 流式完成（票 01）。默认实现 = complete + 一次性发全文 delta——
+    /// 没实现真流式的 provider 零改动兼容（aisuite Provider 基类同款
+    /// 「默认兜底」先例：能力缺口走诚实路径，不造假流）。
+    /// sink 返回 false → Err(Interrupted)（票 04：叫停是显式终态不算失败）。
+    fn stream(
+        &self,
+        req: &ChatRequest,
+        sink: &mut StreamSink<'_>,
+    ) -> Result<ChatResponse, ProviderError> {
+        let resp = self.complete(req)?;
+        if !emit_text_deltas(
+            resp.content.iter().filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            }),
+            usize::MAX,
+            sink,
+        ) {
+            return Err(ProviderError::Interrupted);
+        }
+        Ok(resp)
+    }
+}
+
+/// 按字符数把文本切成 ≤n 字符的 delta 发给 sink（n=usize::MAX 整段一次发）。
+/// 按 char 不按 byte——中文一字符一 delta 的切法对测试断言不直观。
+/// 返回 false = sink 叫停（上游据此返回 Interrupted 而不是吞掉当成功）。
+fn emit_text_deltas<'a>(
+    texts: impl Iterator<Item = &'a str>,
+    n: usize,
+    sink: &mut StreamSink<'_>,
+) -> bool {
+    for text in texts {
+        if text.is_empty() {
+            continue;
+        }
+        if n == usize::MAX {
+            if !sink(&StreamDelta::Text(text.to_string())) {
+                return false;
+            }
+            continue;
+        }
+        let mut buf = String::new();
+        for (i, ch) in text.chars().enumerate() {
+            buf.push(ch);
+            if (i + 1) % n == 0 && !sink(&StreamDelta::Text(std::mem::take(&mut buf))) {
+                return false;
+            }
+        }
+        if !buf.is_empty() && !sink(&StreamDelta::Text(buf)) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---------- SSE（turn-streaming 票 02）----------
+
+/// SSE 块读取器：逐行读，空行派发一块（event 名 + data 负载）。
+/// 注释行（`:` 开头）与畸形行跳过不崩——fail toward 完整性（spec 约定）：
+/// 宁可丢一行噪声，不让一行畸形文本掐断整个流。
+struct SseBlocks<R: std::io::BufRead> {
+    r: R,
+    event: String,
+    data: String,
+}
+
+impl<R: std::io::BufRead> SseBlocks<R> {
+    fn new(r: R) -> Self {
+        Self {
+            r,
+            event: String::new(),
+            data: String::new(),
+        }
+    }
+
+    /// 下一块：(event 名, data 负载)；None = EOF。块间状态自复。
+    fn next_block(&mut self) -> Result<Option<(String, String)>, ProviderError> {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = self
+                .r
+                .read_line(&mut line)
+                .map_err(|e| ProviderError::Transport(e.to_string()))?;
+            if n == 0 {
+                // EOF：手里有半块也派发（不少端点末块后不补空行）
+                if !self.data.is_empty() {
+                    let out = (
+                        std::mem::take(&mut self.event),
+                        std::mem::take(&mut self.data),
+                    );
+                    return Ok(Some(out));
+                }
+                return Ok(None);
+            }
+            let l = line.trim_end_matches(['\r', '\n']);
+            if l.is_empty() {
+                if !self.data.is_empty() {
+                    let out = (
+                        std::mem::take(&mut self.event),
+                        std::mem::take(&mut self.data),
+                    );
+                    return Ok(Some(out));
+                }
+                self.event.clear();
+                continue;
+            }
+            if l.starts_with(':') {
+                continue; // 注释/心跳行
+            }
+            if let Some(rest) = l.strip_prefix("data:") {
+                let rest = rest.strip_prefix(' ').unwrap_or(rest);
+                if !self.data.is_empty() {
+                    self.data.push('\n');
+                }
+                self.data.push_str(rest);
+                continue;
+            }
+            if let Some(rest) = l.strip_prefix("event:") {
+                self.event = rest.strip_prefix(' ').unwrap_or(rest).to_string();
+                continue;
+            }
+            // id:/retry:/畸形行：跳过
+        }
+    }
 }
 
 /// 模型槽：角色绑定的模型配置。凭据只按名字引用，明文永不出现。
@@ -109,6 +252,8 @@ pub struct ModelSlot {
 pub struct ScriptedProvider {
     script: Mutex<VecDeque<ChatResponse>>,
     calls: Mutex<Vec<ChatRequest>>,
+    /// >0 时 stream() 把文本按该字符数切块发 delta（0=整块，票 01 测试驱动）。
+    chunk_chars: usize,
 }
 
 impl ScriptedProvider {
@@ -116,6 +261,16 @@ impl ScriptedProvider {
         Self {
             script: Mutex::new(script.into()),
             calls: Mutex::new(Vec::new()),
+            chunk_chars: 0,
+        }
+    }
+
+    /// 分块回放：delta 切块只是展示节奏，最终 ChatResponse 与 complete 一致。
+    pub fn chunked(script: Vec<ChatResponse>, chunk_chars: usize) -> Self {
+        Self {
+            script: Mutex::new(script.into()),
+            calls: Mutex::new(Vec::new()),
+            chunk_chars,
         }
     }
 
@@ -132,6 +287,30 @@ impl ModelProvider for ScriptedProvider {
             .unwrap()
             .pop_front()
             .ok_or(ProviderError::ScriptExhausted)
+    }
+
+    fn stream(
+        &self,
+        req: &ChatRequest,
+        sink: &mut StreamSink<'_>,
+    ) -> Result<ChatResponse, ProviderError> {
+        let resp = self.complete(req)?;
+        let n = if self.chunk_chars == 0 {
+            usize::MAX
+        } else {
+            self.chunk_chars
+        };
+        if !emit_text_deltas(
+            resp.content.iter().filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            }),
+            n,
+            sink,
+        ) {
+            return Err(ProviderError::Interrupted);
+        }
+        Ok(resp)
     }
 }
 
@@ -234,9 +413,94 @@ pub mod openai_shape {
             },
         })
     }
-}
 
-/// Anthropic Messages 形状的请求/响应映射（纯函数，同 openai_shape 的接缝）。
+    /// SSE 流折叠器（票 02）：增量收 choices[].delta——content 即文本；
+    /// tool_calls 按 index 累积 id/name/arguments 字符串片段；
+    /// `data: [DONE]` 终；usage 走末块（需请求带 stream_options.include_usage）。
+    /// sink 叫停 → Err(Interrupted)（票 04 通道）。
+    #[derive(Default)]
+    pub struct SseFold {
+        text: String,
+        /// index → (id, name, arguments 片段缓冲)。BTreeMap 保 index 序。
+        tools: std::collections::BTreeMap<usize, (String, String, String)>,
+        finish: Option<String>,
+        usage: Usage,
+    }
+
+    impl SseFold {
+        /// 喂一块 data 负载；true = 流终（[DONE]）。
+        pub fn data(
+            &mut self,
+            data: &str,
+            sink: &mut StreamSink<'_>,
+        ) -> Result<bool, ProviderError> {
+            if data.trim() == "[DONE]" {
+                return Ok(true);
+            }
+            let v: Value = serde_json::from_str(data)
+                .map_err(|e| ProviderError::Transport(format!("sse json: {e}")))?;
+            if v["usage"].is_object() {
+                self.usage.prompt_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+                self.usage.completion_tokens =
+                    v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+            }
+            for ch in v["choices"].as_array().into_iter().flatten() {
+                let d = &ch["delta"];
+                if let Some(t) = d["content"].as_str() {
+                    if !t.is_empty() {
+                        self.text.push_str(t);
+                        if !sink(&StreamDelta::Text(t.to_string())) {
+                            return Err(ProviderError::Interrupted);
+                        }
+                    }
+                }
+                if let Some(calls) = d["tool_calls"].as_array() {
+                    for c in calls {
+                        let idx = c["index"].as_u64().unwrap_or(0) as usize;
+                        let e = self.tools.entry(idx).or_default();
+                        if let Some(id) = c["id"].as_str() {
+                            e.0 = id.into();
+                        }
+                        if let Some(n) = c["function"]["name"].as_str() {
+                            e.1.push_str(n);
+                        }
+                        if let Some(a) = c["function"]["arguments"].as_str() {
+                            e.2.push_str(a);
+                        }
+                    }
+                }
+                if let Some(f) = ch["finish_reason"].as_str() {
+                    self.finish = Some(f.into());
+                }
+            }
+            Ok(false)
+        }
+
+        /// 流终折叠成 ChatResponse。arguments 片段拼不出 JSON = 完整性
+        /// 问题 → Transport（不是丢一半静默收场）。
+        pub fn finish(self) -> Result<ChatResponse, ProviderError> {
+            let mut content = Vec::new();
+            if !self.text.is_empty() {
+                content.push(ContentBlock::Text { text: self.text });
+            }
+            for (_i, (id, name, args)) in self.tools {
+                let input: Value = serde_json::from_str(if args.is_empty() { "{}" } else { &args })
+                    .map_err(|e| ProviderError::Transport(format!("tool args json: {e}")))?;
+                content.push(ContentBlock::ToolUse { id, name, input });
+            }
+            let stop = match self.finish.as_deref() {
+                Some("tool_calls") => StopReason::ToolUse,
+                Some("length") => StopReason::MaxTokens,
+                _ => StopReason::EndTurn,
+            };
+            Ok(ChatResponse {
+                content,
+                stop,
+                usage: self.usage,
+            })
+        }
+    }
+}
 pub mod anthropic_shape {
     use super::*;
 
@@ -336,6 +600,139 @@ pub mod anthropic_shape {
             },
         })
     }
+
+    /// content_block 生命周期中的一块：text 累积文本；tool_use 的
+    /// partial_json 片段持续拼接，stop 时才解析成 Value。
+    enum ABlock {
+        Text(String),
+        ToolUse {
+            id: String,
+            name: String,
+            args: String,
+        },
+    }
+
+    /// Anthropic SSE 折叠器（票 02）：content_block_start/delta/stop
+    /// 三段式生命周期；input_json_delta 的 partial_json 片段拼接是
+    /// 本协议真实复杂度（aisuite convert_stream_event 的 state dict 同款）。
+    /// 事件名优先取 SSE `event:` 行，缺省回落 data 里的 type 字段。
+    #[derive(Default)]
+    pub struct SseFold {
+        blocks: Vec<ABlock>,
+        stop: Option<String>,
+        usage: Usage,
+    }
+
+    impl SseFold {
+        /// 喂一块（event, data）；true = message_stop 流终。
+        /// sink 叫停 → Err(Interrupted)；`event: error` → Transport。
+        pub fn event(
+            &mut self,
+            event: &str,
+            data: &str,
+            sink: &mut StreamSink<'_>,
+        ) -> Result<bool, ProviderError> {
+            if data.is_empty() {
+                return Ok(false);
+            }
+            let v: Value = serde_json::from_str(data)
+                .map_err(|e| ProviderError::Transport(format!("sse json: {e}")))?;
+            let kind = if event.is_empty() {
+                v["type"].as_str().unwrap_or("")
+            } else {
+                event
+            };
+            match kind {
+                "message_start" => {
+                    self.usage.prompt_tokens =
+                        v["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0);
+                }
+                "content_block_start" => {
+                    let b = &v["content_block"];
+                    self.blocks.push(match b["type"].as_str() {
+                        Some("tool_use") => ABlock::ToolUse {
+                            id: b["id"].as_str().unwrap_or_default().into(),
+                            name: b["name"].as_str().unwrap_or_default().into(),
+                            args: String::new(),
+                        },
+                        _ => ABlock::Text(String::new()),
+                    });
+                }
+                "content_block_delta" => {
+                    let idx = v["index"].as_u64().unwrap_or(0) as usize;
+                    let d = &v["delta"];
+                    match (self.blocks.get_mut(idx), d["type"].as_str()) {
+                        (Some(ABlock::Text(t)), Some("text_delta")) => {
+                            if let Some(s) = d["text"].as_str() {
+                                if !s.is_empty() {
+                                    t.push_str(s);
+                                    if !sink(&StreamDelta::Text(s.to_string())) {
+                                        return Err(ProviderError::Interrupted);
+                                    }
+                                }
+                            }
+                        }
+                        (Some(ABlock::ToolUse { args, .. }), Some("input_json_delta")) => {
+                            if let Some(p) = d["partial_json"].as_str() {
+                                args.push_str(p);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                "message_delta" => {
+                    if let Some(s) = v["delta"]["stop_reason"].as_str() {
+                        self.stop = Some(s.into());
+                    }
+                    if let Some(o) = v["usage"]["output_tokens"].as_u64() {
+                        self.usage.completion_tokens = o;
+                    }
+                }
+                "message_stop" => return Ok(true),
+                // Anthropic 流内 error 事件（如 overloaded_error）：完整性优先直传
+                "error" => {
+                    return Err(ProviderError::Transport(format!(
+                        "sse error event: {}",
+                        v["error"]["message"].as_str().unwrap_or("unknown")
+                    )))
+                }
+                // ping / content_block_stop / message_start 余项 / 未知事件：跳过
+                _ => {}
+            }
+            Ok(false)
+        }
+
+        /// 流终折叠：tool_use 的 args 缓冲 parse 成 input（空={}，坏 JSON=Transport）。
+        pub fn finish(self) -> Result<ChatResponse, ProviderError> {
+            let mut content = Vec::new();
+            for b in self.blocks {
+                match b {
+                    ABlock::Text(t) if !t.is_empty() => {
+                        content.push(ContentBlock::Text { text: t })
+                    }
+                    ABlock::ToolUse { id, name, args } => {
+                        let input: Value =
+                            serde_json::from_str(if args.is_empty() { "{}" } else { &args })
+                                .map_err(|e| {
+                                    ProviderError::Transport(format!("tool input json: {e}"))
+                                })?;
+                        content.push(ContentBlock::ToolUse { id, name, input });
+                    }
+                    _ => {}
+                }
+            }
+            let stop = match self.stop.as_deref() {
+                Some("tool_use") => StopReason::ToolUse,
+                Some("max_tokens") => StopReason::MaxTokens,
+                _ => StopReason::EndTurn,
+            };
+            Ok(ChatResponse {
+                content,
+                stop,
+                usage: self.usage,
+            })
+        }
+    }
 }
 
 /// 供应商类型：决定请求路径、鉴权头与消息形状。
@@ -389,15 +786,46 @@ impl HttpProvider {
             other => ProviderError::Transport(other.to_string()),
         }
     }
+
+    fn api_key(&self) -> Result<String, ProviderError> {
+        self.creds
+            .get(&self.key_name)
+            .map_err(|e| ProviderError::Transport(e.to_string()))?
+            .ok_or_else(|| ProviderError::MissingCredential(self.key_name.clone()))
+    }
+
+    /// 响应是否 SSE 流（回退判据：不流式的兼容端点直接回 JSON 全量）。
+    fn is_sse(resp: &ureq::http::Response<ureq::Body>) -> bool {
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|t| t.contains("text/event-stream"))
+            .unwrap_or(false)
+    }
+}
+
+/// 非流式端点回退（票 02）：整段文本一发——delta 通道语义不变，
+/// 只少「逐字」节奏（spec：不回退是错的，兼容端点不支持流式）。
+fn emit_fallback(
+    resp: ChatResponse,
+    sink: &mut StreamSink<'_>,
+) -> Result<ChatResponse, ProviderError> {
+    if !emit_text_deltas(
+        resp.content.iter().filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        }),
+        usize::MAX,
+        sink,
+    ) {
+        return Err(ProviderError::Interrupted);
+    }
+    Ok(resp)
 }
 
 impl ModelProvider for HttpProvider {
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
-        let key = self
-            .creds
-            .get(&self.key_name)
-            .map_err(|e| ProviderError::Transport(e.to_string()))?
-            .ok_or_else(|| ProviderError::MissingCredential(self.key_name.clone()))?;
+        let key = self.api_key()?;
         match self.kind {
             ProviderKind::Anthropic => {
                 let url = format!("{}/v1/messages", self.base_url);
@@ -427,11 +855,77 @@ impl ModelProvider for HttpProvider {
             }
         }
     }
+
+    /// 真流式（票 02）：请求带 stream:true；响应是 event-stream 走
+    /// SSE 折叠器逐块发 delta，否则回退整段单 delta（兼容端点不流式）。
+    fn stream(
+        &self,
+        req: &ChatRequest,
+        sink: &mut StreamSink<'_>,
+    ) -> Result<ChatResponse, ProviderError> {
+        let key = self.api_key()?;
+        match self.kind {
+            ProviderKind::Anthropic => {
+                let url = format!("{}/v1/messages", self.base_url);
+                let mut body = anthropic_shape::to_request(req, &self.model, 8192);
+                body["stream"] = serde_json::json!(true);
+                let mut resp = self
+                    .agent
+                    .post(&url)
+                    .header("x-api-key", &key)
+                    .header("anthropic-version", "2023-06-01")
+                    .send_json(&body)
+                    .map_err(Self::map_err)?;
+                if !Self::is_sse(&resp) {
+                    let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
+                    return emit_fallback(anthropic_shape::from_response(&v)?, sink);
+                }
+                let mut blocks =
+                    SseBlocks::new(std::io::BufReader::new(resp.body_mut().as_reader()));
+                let mut fold = anthropic_shape::SseFold::default();
+                while let Some((ev, data)) = blocks.next_block()? {
+                    if fold.event(&ev, &data, sink)? {
+                        break;
+                    }
+                }
+                fold.finish()
+            }
+            ProviderKind::OpenAi => {
+                let url = format!("{}/chat/completions", self.base_url);
+                let mut body = openai_shape::to_request(req);
+                body["model"] = serde_json::json!(self.model);
+                body["stream"] = serde_json::json!(true);
+                // 末块带 usage（OpenAI 系端点通用支持；不识别的端点忽略字段）
+                body["stream_options"] = serde_json::json!({"include_usage": true});
+                let mut resp = self
+                    .agent
+                    .post(&url)
+                    .header("Authorization", &format!("Bearer {key}"))
+                    .send_json(&body)
+                    .map_err(Self::map_err)?;
+                if !Self::is_sse(&resp) {
+                    let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
+                    return emit_fallback(openai_shape::from_response(&v)?, sink);
+                }
+                let mut blocks =
+                    SseBlocks::new(std::io::BufReader::new(resp.body_mut().as_reader()));
+                let mut fold = openai_shape::SseFold::default();
+                while let Some((ev, data)) = blocks.next_block()? {
+                    let _ = ev; // OpenAI 无 event 行，只有 data
+                    if fold.data(&data, sink)? {
+                        break;
+                    }
+                }
+                fold.finish()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials::CredentialStore;
     use serde_json::json;
 
     fn text(s: &str) -> ChatResponse {
@@ -481,6 +975,41 @@ mod tests {
         ));
     }
 
+    /// 票 01：分块回放——delta 序拼回完整文本，最终响应与 complete 一致。
+    #[test]
+    fn scripted_stream_chunks_and_matches_complete() {
+        let p = ScriptedProvider::chunked(vec![text("你好世界abcde")], 3);
+        let mut deltas: Vec<String> = Vec::new();
+        let resp = p
+            .stream(&empty_req(), &mut |d| {
+                let StreamDelta::Text(t) = d;
+                deltas.push(t.clone());
+                true
+            })
+            .unwrap();
+        // "你好世" / "界ab" / "cde" —— 3 字符一块（多字节不劈开）
+        assert_eq!(deltas, vec!["你好世", "界ab", "cde"]);
+        assert_eq!(deltas.concat(), "你好世界abcde");
+        assert!(matches!(resp.content[0], ContentBlock::Text { .. }));
+    }
+
+    /// 票 01：默认实现 = complete + 单段全文 delta（HttpProvider 未覆写前走这条）。
+    #[test]
+    fn default_stream_emits_whole_text_once() {
+        let p = ScriptedProvider::new(vec![text("一整段")]);
+        let mut count = 0;
+        let mut got = String::new();
+        p.stream(&empty_req(), &mut |d| {
+            count += 1;
+            let StreamDelta::Text(t) = d;
+            got.push_str(t);
+            true
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(got, "一整段");
+    }
+
     #[test]
     fn openai_shape_roundtrips_tool_calls() {
         let req = ChatRequest {
@@ -499,12 +1028,26 @@ mod tests {
                 input_schema: json!({"type":"object"}),
             }],
         };
+        // 输入不变断言（aisuite 教训：anthropic provider 曾 pop(0) 原地删
+        // 调用方 system 消息——converter 吃 &ChatRequest，这条钉死契约）。
+        let before = (
+            serde_json::to_value(&req.messages).unwrap(),
+            serde_json::to_value(&req.tools).unwrap(),
+        );
         let out = openai_shape::to_request(&req);
         assert_eq!(
             out["messages"][0]["tool_calls"][0]["function"]["name"],
             "fs_read"
         );
         assert_eq!(out["tools"][0]["function"]["name"], "fs_read");
+        assert_eq!(
+            before,
+            (
+                serde_json::to_value(&req.messages).unwrap(),
+                serde_json::to_value(&req.tools).unwrap()
+            ),
+            "converter 不得修改输入"
+        );
 
         let resp = json!({
             "choices": [{"message": {"tool_calls": [{
@@ -548,6 +1091,10 @@ mod tests {
                 input_schema: json!({"type":"object"}),
             }],
         };
+        let before = (
+            serde_json::to_value(&req.messages).unwrap(),
+            serde_json::to_value(&req.tools).unwrap(),
+        );
         let out = anthropic_shape::to_request(&req, "claude-test", 8192);
         assert_eq!(out["model"], "claude-test");
         assert_eq!(out["max_tokens"], 8192);
@@ -556,6 +1103,14 @@ mod tests {
         assert_eq!(out["messages"][1]["role"], "user");
         assert_eq!(out["messages"][1]["content"][0]["type"], "tool_result");
         assert_eq!(out["tools"][0]["name"], "fs_read");
+        assert_eq!(
+            before,
+            (
+                serde_json::to_value(&req.messages).unwrap(),
+                serde_json::to_value(&req.tools).unwrap()
+            ),
+            "converter 不得修改输入"
+        );
 
         let resp = json!({
             "content": [
@@ -583,5 +1138,206 @@ mod tests {
         );
         let err = p.complete(&empty_req()).unwrap_err();
         assert!(matches!(err, ProviderError::MissingCredential(_)));
+    }
+
+    // ---------- 票 02：SSE ----------
+
+    /// 预录 OpenAI SSE：文本 delta 序 + tool_calls 片段拼装 + usage 末块。
+    #[test]
+    fn openai_sse_folds_text_tools_usage() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"世界\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"fs_read\",\"arguments\":\"{\\\"pa\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"a.md\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":9}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut fold = openai_shape::SseFold::default();
+        let mut got: Vec<String> = Vec::new();
+        let mut blocks = SseBlocks::new(std::io::BufReader::new(sse.as_bytes()));
+        while let Some((_, data)) = blocks.next_block().unwrap() {
+            if fold
+                .data(&data, &mut |d| {
+                    let StreamDelta::Text(t) = d;
+                    got.push(t.clone());
+                    true
+                })
+                .unwrap()
+            {
+                break;
+            }
+        }
+        let resp = fold.finish().unwrap();
+        assert_eq!(got, vec!["你好", "世界"]);
+        assert_eq!(resp.stop, StopReason::ToolUse);
+        assert_eq!(resp.usage.prompt_tokens, 11);
+        match &resp.content[1] {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "c1");
+                assert_eq!(name, "fs_read");
+                assert_eq!(input["path"], "a.md");
+            }
+            other => panic!("expected tool_use, got {other:?}"),
+        }
+    }
+
+    /// 预录 Anthropic SSE：text_delta + input_json_delta 分片拼装 +
+    /// stop_reason/usage 从 message_delta 来。
+    #[test]
+    fn anthropic_sse_folds_partial_json() {
+        let sse = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":21}}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"先读\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t9\",\"name\":\"fs_read\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"b.md\\\"}\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":14}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let mut fold = anthropic_shape::SseFold::default();
+        let mut got: Vec<String> = Vec::new();
+        let mut blocks = SseBlocks::new(std::io::BufReader::new(sse.as_bytes()));
+        while let Some((ev, data)) = blocks.next_block().unwrap() {
+            if fold
+                .event(&ev, &data, &mut |d| {
+                    let StreamDelta::Text(t) = d;
+                    got.push(t.clone());
+                    true
+                })
+                .unwrap()
+            {
+                break;
+            }
+        }
+        let resp = fold.finish().unwrap();
+        assert_eq!(got, vec!["先读"]);
+        assert_eq!(resp.stop, StopReason::ToolUse);
+        assert_eq!(
+            (resp.usage.prompt_tokens, resp.usage.completion_tokens),
+            (21, 14)
+        );
+        match &resp.content[1] {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!((id.as_str(), name.as_str()), ("t9", "fs_read"));
+                assert_eq!(input["path"], "b.md");
+            }
+            other => panic!("expected tool_use, got {other:?}"),
+        }
+    }
+
+    /// 畸形行/注释/心跳跳过不崩；sink 叫停 → Interrupted。
+    #[test]
+    fn sse_skips_noise_and_aborts_on_sink() {
+        let sse = concat!(
+            ": heartbeat\n",
+            "garbage line without colon\n",
+            "retry: 3000\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n",
+        );
+        let mut fold = openai_shape::SseFold::default();
+        let mut n = 0;
+        let mut blocks = SseBlocks::new(std::io::BufReader::new(sse.as_bytes()));
+        let mut aborted = false;
+        while let Some((_, data)) = blocks.next_block().unwrap() {
+            match fold.data(&data, &mut |_| {
+                n += 1;
+                n < 2 // 第二个 delta 叫停
+            }) {
+                Err(ProviderError::Interrupted) => {
+                    aborted = true;
+                    break;
+                }
+                other => {
+                    other.unwrap();
+                }
+            }
+        }
+        assert!(aborted);
+        assert_eq!(n, 2);
+    }
+
+    /// 一次性 canned HTTP 端点：读完整请求后回固定响应，返回 base_url。
+    fn serve_once(status: u16, content_type: &'static str, body: &'static str) -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, Read, Write};
+            let (mut s, _) = l.accept().unwrap();
+            let mut br = std::io::BufReader::new(s.try_clone().unwrap());
+            let mut line = String::new();
+            let mut clen = 0usize;
+            loop {
+                line.clear();
+                br.read_line(&mut line).unwrap();
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    clen = v.trim().parse().unwrap_or(0);
+                }
+                if line.trim().is_empty() {
+                    break;
+                }
+            }
+            let mut req = vec![0u8; clen];
+            br.read_exact(&mut req).unwrap();
+            let head = format!(
+                "HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(body.as_bytes()).unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    fn http_provider(kind: ProviderKind, base: &str) -> HttpProvider {
+        let creds = Arc::new(crate::credentials::MemoryStore::default());
+        creds.set("k", "test-key").unwrap();
+        HttpProvider::new(kind, base.into(), "m".into(), "k".into(), creds)
+    }
+
+    /// HttpProvider::stream 全链路：真 HTTP + SSE 响应 → 增量 delta + 终值响应。
+    #[test]
+    fn http_stream_reads_sse_end_to_end() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"一\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"二\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = serve_once(200, "text/event-stream", sse);
+        let p = http_provider(ProviderKind::OpenAi, &base);
+        let mut got: Vec<String> = Vec::new();
+        let resp = p
+            .stream(&empty_req(), &mut |d| {
+                let StreamDelta::Text(t) = d;
+                got.push(t.clone());
+                true
+            })
+            .unwrap();
+        assert_eq!(got, vec!["一", "二"]);
+        assert_eq!(resp.usage.completion_tokens, 2);
+        assert_eq!(resp.stop, StopReason::EndTurn);
+    }
+
+    /// 非流式端点回退：响应是 JSON 非 event-stream → 单 delta 全量。
+    #[test]
+    fn http_stream_falls_back_on_plain_json() {
+        let body = "{\"choices\":[{\"message\":{\"content\":\"整段\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}";
+        let base = serve_once(200, "application/json", body);
+        let p = http_provider(ProviderKind::OpenAi, &base);
+        let mut got: Vec<String> = Vec::new();
+        let resp = p
+            .stream(&empty_req(), &mut |d| {
+                let StreamDelta::Text(t) = d;
+                got.push(t.clone());
+                true
+            })
+            .unwrap();
+        assert_eq!(got, vec!["整段"]);
+        assert_eq!(resp.stop, StopReason::EndTurn);
     }
 }

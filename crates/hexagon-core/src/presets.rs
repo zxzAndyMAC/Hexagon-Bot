@@ -1,6 +1,6 @@
 //! 预置内容包：随包数据文件（`presets/`）+ 载入校验。
 //!
-//! - 十预置角色 `presets/roles.json`：职责、上级链、默认模型槽、默认路径归属、默认技能。
+//! - 十一预置角色 `presets/roles.json`：职责、上级链、默认模型槽、默认路径归属、默认技能。
 //! - 四预置流程包 `presets/packs/*.json`：PackDef 数据；项目内改的是钉住的副本
 //!   （`PackDef::pin` 写 `.hexagon/pack.active.json`），源文件只读。
 //! - 预置技能 `presets/skills/<name>/SKILL.md`：Agent Skills 格式，角色按名引用。
@@ -110,6 +110,10 @@ const SKILL_FILES: &[(&str, &str)] = &[
         "handoff-note",
         include_str!("../presets/skills/handoff-note/SKILL.md"),
     ),
+    (
+        "policy-tuning",
+        include_str!("../presets/skills/policy-tuning/SKILL.md"),
+    ),
 ];
 
 /// 预置技能名 → SKILL.md 正文（激活时先给名称摘要，用到再读正文）。
@@ -124,7 +128,7 @@ pub fn preset_skill_names() -> Vec<&'static str> {
     SKILL_FILES.iter().map(|(n, _)| *n).collect()
 }
 
-/// 十预置角色（载入即校验）。
+/// 十一预置角色（载入即校验）。
 pub fn preset_roles() -> Result<Vec<RoleDef>, PresetError> {
     let roles: Vec<RoleDef> =
         serde_json::from_str(ROLES_JSON).map_err(|src| PresetError::Json {
@@ -247,7 +251,7 @@ mod tests {
     #[test]
     fn preset_roles_load_and_validate() {
         let roles = preset_roles().unwrap();
-        assert_eq!(roles.len(), 10);
+        assert_eq!(roles.len(), 11);
         assert!(roles.iter().all(|r| !r.duty.is_empty()));
         assert!(roles.iter().all(|r| !r.model_slot.is_empty()));
         // CONTEXT.md 钉的四条上级链

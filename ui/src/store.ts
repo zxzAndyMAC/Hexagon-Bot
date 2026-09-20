@@ -6,6 +6,7 @@ import {
   type StageRow,
   type TeamRow,
   type TimelineItem,
+  type TurnDelta,
   type UsageRow,
 } from './api'
 
@@ -62,6 +63,9 @@ interface UiState {
   tabs: WorkTab[]
   activeTab: string
   splitOpen: boolean
+  /// 流式增量缓冲（票 03）：agent → 调用序号 → 累计文本。
+  /// 瞬时态——不落盘；done 信号到达即清对应 agent。
+  streams: Record<string, Record<number, string>>
   setThemePref: (p: ThemePref) => void
   setRailOpen: (v: boolean) => void
   setSideTab: (t: 'artifacts' | 'team' | 'usage') => void
@@ -69,6 +73,7 @@ interface UiState {
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
   setSplitOpen: (v: boolean) => void
+  applyDelta: (d: TurnDelta) => void
   refresh: () => Promise<void>
 }
 
@@ -106,6 +111,20 @@ export const useUiStore = create<UiState>((set) => ({
     }),
   setActiveTab: (id) => set({ activeTab: id }),
   setSplitOpen: (v) => set({ splitOpen: v }),
+  streams: {},
+  applyDelta: (d) =>
+    set((s) => {
+      const streams = { ...s.streams }
+      if (d.done) {
+        delete streams[d.agent_id]
+        return { streams }
+      }
+      const cur = { ...(streams[d.agent_id] ?? {}) }
+      // reset=瞬时重试：本次调用的已收文本作废（重试会重吐全文）
+      cur[d.call] = d.reset ? '' : (cur[d.call] ?? '') + d.text
+      streams[d.agent_id] = cur
+      return { streams }
+    }),
   setRailOpen: (v) => {
     localStorage.setItem('hexagon.rail', v ? '1' : '0')
     set({ railOpen: v })

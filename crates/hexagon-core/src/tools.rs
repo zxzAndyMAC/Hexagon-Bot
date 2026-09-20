@@ -547,7 +547,7 @@ fn bash_hits_credentials(cmd: &str) -> bool {
 /// 事件载荷里不落 fs_write 正文等敏感字段。
 /// FNV-1a 64：幂等键入参指纹（票 11）。选它而非 DefaultHasher——后者
 /// 种子随版本/进程不定，幂等键要跨重启稳定（重放查重正是崩溃后场景）。
-fn fnv64(s: &str) -> u64 {
+pub(crate) fn fnv64(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.as_bytes() {
         h ^= *b as u64;
@@ -616,14 +616,10 @@ fn scrub_input(tool: &str, input: &Value) -> Value {
 /// spill 目录（仓内相对路径）。
 pub const SPILL_DIR: &str = ".hexagon/spill";
 
-/// FNV-1a 64：内容寻址文件名，无需引入哈希依赖。
+/// FNV-1a 64：内容寻址文件名，无需引入哈希依赖。委托 fnv64——
+/// 两份 FNV 实现曾并存（review 发现），单源防配方漂移。
 fn fnv1a(s: &str) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{h:016x}")
+    format!("{:016x}", fnv64(s))
 }
 
 /// 完整结果落 spill 文件，返回仓内相对路径。IO 失败 → None：
@@ -1527,5 +1523,67 @@ mod tests {
         assert!(std::path::Path::new(&spilled_path)
             .to_string_lossy()
             .contains(".hexagon/spill"));
+    }
+
+    // ---- rsi-research 票 05：裁决器不对称不变量 ----
+
+    #[test]
+    fn allow_once_does_not_persist_next_call_asks_again() {
+        // 授权一次性：批准一次（不记形）只执行那一发；同形状新调用再弹卡。
+        // （idem 复用只担保「同一调用重放不双弹」,不同 call_seq = 新调用。）
+        let (db, reg, ctx, dir) = setup();
+        let CallOutcome::Asked(q1) = reg
+            .call(&db, &ctx, "bash", json!({"cmd": "touch once1"}))
+            .unwrap()
+        else {
+            panic!()
+        };
+        reg.resolve(&db, &ctx, &q1, true, None, "activation", None, "owner")
+            .unwrap();
+        assert!(dir.path().join("once1").exists());
+        // 无规则沉淀
+        let n: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM permission_rules", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+        // 新 seq 的同形状调用 → 再必问
+        let out = reg
+            .call_with_seq(
+                &db,
+                &ctx,
+                "bash",
+                json!({"cmd": "touch once2"}),
+                Some("r7:i0"),
+            )
+            .unwrap();
+        assert!(matches!(out, CallOutcome::Asked(_)));
+        assert!(!dir.path().join("once2").exists());
+    }
+
+    #[test]
+    fn safety_net_ask_survives_any_memory() {
+        // 安全网永不进记忆且永远必问——即使规则表被手工塞进匹配 allow。
+        let (db, reg, ctx, _dir) = setup();
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id, project_id, tool, shape, effect, scope)
+                 VALUES ('prX','p1','bash','git push *','allow','project')",
+                [],
+            )
+            .unwrap();
+        let out = reg
+            .call(&db, &ctx, "bash", json!({"cmd": "git push origin main"}))
+            .unwrap();
+        assert!(matches!(out, CallOutcome::Asked(_)));
+        let n: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='permission_allowed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }

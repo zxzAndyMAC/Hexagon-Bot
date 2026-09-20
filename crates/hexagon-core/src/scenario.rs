@@ -19,13 +19,13 @@
 use crate::api::{ApiError, Workbench};
 use crate::orchestra::PackDef;
 use crate::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason};
-use crate::trace::EventKind;
-use serde::Deserialize;
+use crate::trace::{Event, EventKind};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scenario {
     pub roles: Vec<String>,
     pub pack: Option<PackDef>,
@@ -36,7 +36,7 @@ pub struct Scenario {
     pub steps: Vec<StepDef>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ScriptedStep {
     Text { text: String },
@@ -44,13 +44,13 @@ pub enum ScriptedStep {
     Resp { response: Box<RespSpec> },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallSpec {
     pub name: String,
     pub input: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RespSpec {
     #[serde(default)]
     pub text: Option<String>,
@@ -113,7 +113,7 @@ impl ScriptedStep {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "do", rename_all = "snake_case")]
 pub enum StepDef {
     OpenStage {
@@ -188,7 +188,27 @@ pub struct ScenarioReport {
     pub events_len: usize,
 }
 
+/// 回放用跑法（票 06）：报告带事件流与用量账,调用方做指标抽取。
+/// violations = 不变量伴随件在收尾时的违规数（票 07 挂接点：回放
+/// 证据自带完整性校验,坏轨迹不能冒充证据）。
+pub struct CapturedRun {
+    pub events: Vec<Event>,
+    pub usage: Vec<Value>,
+    pub violations: usize,
+}
+
 pub fn run_scenario(dir: &std::path::Path, sc: &Scenario) -> Result<ScenarioReport, ApiError> {
+    // 与 capture 同一条执行路径——曾经各写一份,两边 step 报错格式
+    // 还漂移过(eprintln vs ApiError),review 后收成单源。
+    let cap = run_scenario_capture(dir, sc)?;
+    Ok(ScenarioReport {
+        events_len: cap.events.len(),
+    })
+}
+
+/// 与 run_scenario 同路,但返回事件流+用量——回放/验收的证据出口。
+/// 收尾前先跑不变量伴随件：违规事件也进流,违规数单独带出。
+pub fn run_scenario_capture(dir: &std::path::Path, sc: &Scenario) -> Result<CapturedRun, ApiError> {
     let roles: Vec<&str> = sc.roles.iter().map(|s| s.as_str()).collect();
     let mut wb = Workbench::for_test(dir, &roles, sc.pack.clone())?;
     for (slot, steps) in &sc.scripts {
@@ -200,13 +220,13 @@ pub fn run_scenario(dir: &std::path::Path, sc: &Scenario) -> Result<ScenarioRepo
         wb.register_provider(slot, Arc::new(ScriptedProvider::new(resps)));
     }
     for (i, step) in sc.steps.iter().enumerate() {
-        run_step(&wb, step).map_err(|e| {
-            eprintln!("step {i} failed: {step:?} → {e}");
-            e
-        })?;
+        run_step(&wb, step).map_err(|e| ApiError::NoRole(format!("step {i} {step:?}: {e}")))?;
     }
-    Ok(ScenarioReport {
-        events_len: wb.events(None)?.len(),
+    let violations = wb.invariant_check_and_log()?;
+    Ok(CapturedRun {
+        events: wb.events(None)?,
+        usage: wb.usage()?,
+        violations,
     })
 }
 

@@ -28,6 +28,31 @@ pub enum Decision {
     Deny { reason: String, layer: &'static str },
 }
 
+/// 守卫判定闭集（rsi-research 票 05 裁决器不对称）：
+/// 守卫只允许产出三值——拒止、转人工、无意见。**类型层不存在
+/// force-allow**：放行只能来自记忆命中/类级默认（机械层）或负责人
+/// 裁决（人），守卫想说「没问题」只能 Pass 把判定上推。
+/// 代价模型：守卫错放 = 一次未审副作用；多转人工 = 多一张卡。
+/// 实现偏向后者——所有存疑路径归 ReferHuman 或 Deny。
+enum GuardVerdict {
+    /// 终局拒止
+    Deny { reason: String, layer: &'static str },
+    /// 不担保,转必问卡
+    ReferHuman { reason: String, safety_net: bool },
+    /// 本守卫无意见（不等于放行）
+    Pass,
+}
+
+impl GuardVerdict {
+    fn into_decision(self) -> Option<Decision> {
+        match self {
+            Self::Pass => None,
+            Self::Deny { reason, layer } => Some(Decision::Deny { reason, layer }),
+            Self::ReferHuman { reason, safety_net } => Some(Decision::Ask { reason, safety_net }),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AllowVia {
     /// 无规则命中、非安全网、非必问类工具（如仓内读）
@@ -404,14 +429,16 @@ fn operand_escapes(tok: &str, ctx: &ToolContext) -> bool {
     crate::tools::repo_path(&ctx.repo_root, tok).is_err()
 }
 
-/// 五层求值。`tool` 用于第 1 层内置 deny。
-pub fn evaluate(
+/// 记忆层之前的守卫序列（严格顺序，首个非 Pass 即终局）：
+/// L0 授权闸门 → L1 内置 deny → L2 安全网必问 → L3 项目级 deny。
+/// 全部只能输出 GuardVerdict——没有任何一个能替下层「放行」。
+fn pre_memory_guards(
     db: &Db,
     ctx: &ToolContext,
     tool: &dyn Tool,
     tool_name: &str,
     input: &Value,
-) -> Result<Decision, crate::tools::ToolError> {
+) -> Result<GuardVerdict, crate::tools::ToolError> {
     // L0 授权闸门：mcp:<service>:<tool> 调用方必须在 grants 表里有该服务授权，
     // 缺席即硬拒（授权注册表是边界，不走规则、不可记忆）。
     if let Some(service) = tool_name
@@ -429,7 +456,7 @@ pub fn evaluate(
             .map(|n| n > 0)
             .unwrap_or(false);
         if !granted {
-            return Ok(Decision::Deny {
+            return Ok(GuardVerdict::Deny {
                 reason: format!("no grant for mcp service: {service}"),
                 layer: "grant",
             });
@@ -437,24 +464,41 @@ pub fn evaluate(
     }
     // L1 内置 deny
     if let Some(reason) = tool.builtin_deny(input, ctx) {
-        return Ok(Decision::Deny {
+        return Ok(GuardVerdict::Deny {
             reason,
             layer: "builtin_deny",
         });
     }
     // L2 安全网必问（永不进记忆）
     if let Some(label) = is_safety_net(tool_name, input) {
-        return Ok(Decision::Ask {
+        return Ok(GuardVerdict::ReferHuman {
             reason: format!("safety net: {label}"),
             safety_net: true,
         });
     }
     // L3 项目级 deny（压过记忆 allow）
     if let Some(shape) = matching_rule(db, ctx, tool_name, input, "deny")? {
-        return Ok(Decision::Deny {
+        return Ok(GuardVerdict::Deny {
             reason: format!("project deny rule: {shape}"),
             layer: "project_deny",
         });
+    }
+    Ok(GuardVerdict::Pass)
+}
+
+/// 五层求值。`tool` 用于第 1 层内置 deny。
+/// 封印约定（票 05）：本函数与执行共用同一 `&input` 借用——裁决看到的
+/// 字节就是执行的字节；必问卡路径更硬：resolve 从持久化的 pending_question
+/// 载荷取 raw_input 执行,调用方根本没有再传参的入口。
+pub fn evaluate(
+    db: &Db,
+    ctx: &ToolContext,
+    tool: &dyn Tool,
+    tool_name: &str,
+    input: &Value,
+) -> Result<Decision, crate::tools::ToolError> {
+    if let Some(d) = pre_memory_guards(db, ctx, tool, tool_name, input)?.into_decision() {
+        return Ok(d);
     }
     // L4 形状化记忆 allow
     if let Some((shape, scope)) = matching_rule_scoped(db, ctx, tool_name, input, "allow")? {
@@ -481,7 +525,7 @@ pub fn evaluate(
             via: AllowVia::Remembered { shape, scope },
         });
     }
-    // 路径归属：写入越界 → 必问
+    // 记忆层之后的守卫：路径归属
     if violates_ownership(tool_name, input, ctx) {
         return Ok(Decision::Ask {
             reason: "path outside ownership".into(),

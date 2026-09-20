@@ -78,7 +78,7 @@ pub fn builtin_superior(role: &str) -> Option<&'static str> {
 }
 
 /// 从产物内容解析 (surface, target, diff)。
-fn parse_proposal(content: &str) -> Result<(String, String, String), PropError> {
+pub(crate) fn parse_proposal(content: &str) -> Result<(String, String, String), PropError> {
     let (meta, body) = crate::artifacts::parse_header(content)
         .ok_or_else(|| PropError::Rejected("missing header".into()))?;
     let surface = meta
@@ -114,8 +114,77 @@ fn extract_fenced(body: &str, lang: &str) -> Option<String> {
     Some(rest[..end].trim().to_string())
 }
 
+/// 回放证据块（rsi-research 票 06）：提案「验证方法」节里的
+/// `replay` 语言围栏 JSON——版本化 ReplayReport 序列化体。
+/// 证据不参与生效面校验（授权仍是盖章的事）；它只回答
+/// 「凭什么信这改动」——畸形证据按 Rejected fail-closed,不许
+/// 「看起来像有证据」的脏数据混进盖章卡。
+pub fn attach_replay_evidence(body: &str, report: &crate::replay::ReplayReport) -> String {
+    let block = format!(
+        "\n```replay\n{}\n```\n",
+        serde_json::to_string_pretty(report).unwrap_or_default()
+    );
+    // 插进「验证方法」节末尾（下一个 ## 节前）
+    if let Some(pos) = body.find("## 验证方法") {
+        let rest = &body[pos..];
+        if let Some(next) = rest[2..].find("\n## ") {
+            let at = pos + 2 + next;
+            return format!("{}{}{}", &body[..at], block, &body[at..]);
+        }
+        return format!("{body}{block}");
+    }
+    format!("{body}\n## 验证方法\n{block}")
+}
+
+/// 从提案正文提取 judge 判定块（票 10：policy-dev 提案必附）。
+/// ```judge {verdict,rationale,backend} ```——机械判定产物;
+/// verdict 词表外的块视为畸形证据。
+pub(crate) fn judge_evidence(body: &str) -> Option<Result<Value, String>> {
+    extract_fenced(body, "judge").map(|raw| {
+        let v: Value =
+            serde_json::from_str(&raw).map_err(|e| format!("malformed judge block: {e}"))?;
+        match v["verdict"].as_str() {
+            Some("stamp") | Some("reject") | Some("needs-human") => Ok(v),
+            _ => Err("judge verdict outside closed set".into()),
+        }
+    })
+}
+
+/// 从提案正文提取回放证据：无块 → None；有块 → 解析结果。
+/// 调用方把 Err 映射成 Rejected——脏证据不许过。
+pub(crate) fn replay_evidence(body: &str) -> Option<Result<crate::replay::ReplayReport, String>> {
+    extract_fenced(body, "replay").map(|raw| {
+        serde_json::from_str::<crate::replay::ReplayReport>(&raw)
+            .map_err(|e| format!("malformed replay evidence: {e}"))
+            .and_then(|r| {
+                if r.schema != crate::replay::REPLAY_SCHEMA {
+                    Err(format!(
+                        "replay schema {} != supported {}",
+                        r.schema,
+                        crate::replay::REPLAY_SCHEMA
+                    ))
+                } else {
+                    Ok(r)
+                }
+            })
+    })
+}
+
+/// 证据摘要：进事件载荷与盖章卡的轻量形（不带全量指标）。
+fn evidence_summary(r: &crate::replay::ReplayReport) -> Value {
+    json!({
+        "kind": "replay",
+        "schema": r.schema,
+        "scenario": r.scenario_fingerprint,
+        "baseline_pack": r.baseline_pack,
+        "candidate_pack": r.candidate_pack,
+        "signals": r.signals.len(),
+        "decision_diffs": r.decision_diffs.len(),
+    })
+}
+
 /// 风险标注：扩大自治面（回填边/戳章点改动）与削弱复审者。
-fn risk_flags(surface: &str, diff: &str) -> Vec<&'static str> {
+pub(crate) fn risk_flags(surface: &str, diff: &str) -> Vec<&'static str> {
     let mut flags = Vec::new();
     if surface == "pack_copy"
         && (diff.contains("backfill_edges")
@@ -142,6 +211,40 @@ pub fn submit(
     content: &str,
 ) -> Result<String, PropError> {
     let (surface, target, diff) = parse_proposal(content)?;
+
+    // 回放证据（票 06）：存在即须可解析——脏证据视同坏提案拒收。
+    let evidence = match replay_evidence(content) {
+        Some(Ok(r)) => Some(evidence_summary(&r)),
+        Some(Err(e)) => return Err(PropError::Rejected(e)),
+        None => None,
+    };
+
+    // 票 10 强制：政策研发作者的提案必附回放证据 + judge 判定块——
+    // 「缺附件不可提交」。角色是禁区面,作者身份从 agents 表查不靠正文自述。
+    let author_role: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT role FROM agents WHERE id=?1 AND project_id=?2",
+            params![ctx.agent_id, ctx.project_id],
+            |r| r.get(0),
+        )
+        .ok();
+    if author_role.as_deref() == Some("政策研发") {
+        if evidence.is_none() {
+            return Err(PropError::Rejected(
+                "政策研发提案必须附 ```replay 回放证据块".into(),
+            ));
+        }
+        match judge_evidence(content) {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Err(PropError::Rejected(e)),
+            None => {
+                return Err(PropError::Rejected(
+                    "政策研发提案必须附 ```judge 判定块".into(),
+                ))
+            }
+        }
+    }
 
     // 生效面白名单 + 禁区双查
     let root = allowed_root(&surface)
@@ -198,7 +301,8 @@ pub fn submit(
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalQueued,
-        json!({"proposal_id": pid, "surface": surface, "target": target}),
+        json!({"proposal_id": pid, "surface": surface, "target": target,
+               "evidence": evidence}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
@@ -235,7 +339,7 @@ pub fn submit(
                 ctx.stage_run_id.as_deref(),
             )?;
         }
-        None => to_stamp_queue(db, ctx, &pid, &diff, &surface)?,
+        None => to_stamp_queue(db, ctx, &pid, &diff, &surface, evidence.as_ref())?,
     }
     Ok(pid)
 }
@@ -247,6 +351,7 @@ fn to_stamp_queue(
     pid: &str,
     diff: &str,
     surface: &str,
+    evidence: Option<&Value>,
 ) -> Result<(), PropError> {
     db.conn().execute(
         "UPDATE proposals SET status='awaiting_stamp' WHERE id=?1",
@@ -262,6 +367,7 @@ fn to_stamp_queue(
             ctx.project_id,
             ctx.agent_id,
             json!({"proposal_id": pid, "surface": surface,
+            "evidence": evidence,
             "warnings": flags,
             "warning_text": if flags.is_empty() { Value::Null } else {
                 json!(format!("此提案{}", flags.join(" + ")))
@@ -293,9 +399,13 @@ pub fn review(
     }
     if pass {
         // 读产物内容取 diff/surface 做风险标注
-        let (surface, target, diff) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
+        let (surface, target, diff, body) =
+            artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
         let _ = target;
-        to_stamp_queue(db, ctx, proposal_id, &diff, &surface)?;
+        let evidence = replay_evidence(&body)
+            .and_then(|r| r.ok())
+            .map(|r| evidence_summary(&r));
+        to_stamp_queue(db, ctx, proposal_id, &diff, &surface, evidence.as_ref())?;
     } else {
         db.conn().execute(
             "UPDATE proposals SET status='rejected', decided_at=datetime('now') WHERE id=?1",
@@ -320,7 +430,7 @@ fn artifact_proposal_parts(
     db: &Db,
     ctx: &ToolContext,
     artifact_id: Option<&str>,
-) -> Result<(String, String, String), PropError> {
+) -> Result<(String, String, String, String), PropError> {
     let path: String = db
         .conn()
         .query_row(
@@ -330,7 +440,8 @@ fn artifact_proposal_parts(
         )
         .map_err(|_| PropError::NotFound(format!("artifact {artifact_id:?}")))?;
     let content = std::fs::read_to_string(ctx.repo_root.join(".hexagon").join(&path))?;
-    parse_proposal(&content)
+    let (s, t, d) = parse_proposal(&content)?;
+    Ok((s, t, d, content))
 }
 
 /// 提案盖章驳回：qid 定位提案 → rejected + 原因 + 问题已答。与复审驳回同事件类。
@@ -405,7 +516,7 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
         [&pid],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let (_surface, _t, diff) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
+    let (_surface, _t, diff, _body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
     let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(&pid);
     std::fs::create_dir_all(&backup_dir)?;
     let target_path = ctx.repo_root.join(&target);
@@ -716,5 +827,35 @@ mod tests {
             .unwrap();
         assert!(payload.contains("expands_autonomy"));
         let _ = pid;
+    }
+
+    #[test]
+    fn replay_evidence_roundtrip_and_reject_malformed() {
+        let r = crate::replay::ReplayReport {
+            schema: crate::replay::REPLAY_SCHEMA,
+            scenario_fingerprint: "abc".into(),
+            baseline_pack: "t@v1".into(),
+            candidate_pack: "t@v2".into(),
+            policy_diff: vec![],
+            non_policy_changes: vec![],
+            baseline: Default::default(),
+            candidate: Default::default(),
+            decision_diffs: vec![],
+            signals: vec![],
+        };
+        let body = "## 动机\nm\n## 改动面\nc\n## 预期收益\nb\n## 验证方法\nv\n";
+        let with = attach_replay_evidence(body, &r);
+        let parsed = replay_evidence(&with).expect("block").expect("parse");
+        assert_eq!(parsed.candidate_pack, "t@v2");
+        // 脏证据：块在但 JSON 坏 → Err（submit 侧据此 Rejected）
+        let bad = "## 验证方法\n```replay\n{not json}\n```\n";
+        assert!(matches!(replay_evidence(bad), Some(Err(_))));
+        // 无块 → None
+        assert!(replay_evidence(body).is_none());
+        // schema 不符 → Err
+        let mut r2 = r.clone();
+        r2.schema = 999;
+        let with2 = attach_replay_evidence(body, &r2);
+        assert!(matches!(replay_evidence(&with2), Some(Err(_))));
     }
 }

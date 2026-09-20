@@ -110,6 +110,22 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
             <Icon name="warn" size={11} /> {String(p.warning_text ?? warnings.join(' + '))}
           </div>
         )}
+        {/* 票 09：judge 建议行——闭集 chip + 大白话行（i18n 模板,
+            rationale 是生成内容按数据展示）。判定是建议不是授权。 */}
+        {p.judge_verdict != null && (() => {
+          const vk = String(p.judge_verdict)
+          const suffix = vk === 'stamp' ? 'Stamp' : vk === 'reject' ? 'Reject' : 'NeedsHuman'
+          return (
+            <div style={{ fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span className="dim3" style={{ fontSize: 10 }}>{t('cards.judgeAdvice')}</span>
+              <span className={`chip ${vk === 'reject' ? 'err' : vk === 'stamp' ? 'ok' : 'warn'}`} style={{ fontSize: 10 }}>
+                {t(`cards.judge${suffix}`)}
+              </span>
+              <span className="dim">{t(`cards.judgeLine${suffix}`, { rationale: String(p.judge_advice ?? '') })}</span>
+              {p.judge_backend != null && <span className="dim3" style={{ fontSize: 10 }}>{String(p.judge_backend)}</span>}
+            </div>
+          )
+        })()}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <Btn primary onClick={() => api.confirmProposal(q.id)}>{t('cards.confirm')}{top && ` ${approveTip}`}</Btn>
           <Btn danger onClick={() => api.rejectProposal(q.id, 'owner rejected')}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>

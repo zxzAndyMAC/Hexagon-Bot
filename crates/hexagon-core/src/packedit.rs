@@ -124,10 +124,30 @@ pub fn to_yaml(pack: &PackDef) -> String {
             format!("[{}]", v.join(", "))
         }
     };
-    y.push_str(&format!(
-        "name: {}\nversion: {}\nstages:\n",
-        pack.name, pack.version
-    ));
+    y.push_str(&format!("name: {}\nversion: {}\n", pack.name, pack.version));
+    // 策略旋钮（票 04）：非默认才渲染,缺席=内核默认;
+    // 与 stages 的流程定义分行,读文件即见「策略面」。
+    let k = &pack.knobs;
+    if k.judge.is_some()
+        || k.flag_patience.is_some()
+        || k.auto_backfill.is_some()
+        || k.consult_auto_wake.is_some()
+    {
+        y.push_str("knobs:\n");
+        if let Some(j) = &k.judge {
+            y.push_str(&format!("  judge: {j}\n"));
+        }
+        if let Some(v) = k.flag_patience {
+            y.push_str(&format!("  flag_patience: {v}\n"));
+        }
+        if let Some(v) = k.auto_backfill {
+            y.push_str(&format!("  auto_backfill: {v}\n"));
+        }
+        if let Some(v) = k.consult_auto_wake {
+            y.push_str(&format!("  consult_auto_wake: {v}\n"));
+        }
+    }
+    y.push_str("stages:\n");
     for s in &pack.stages {
         y.push_str(&format!("  - name: {}\n", s.name));
         y.push_str(&format!("    roles: {}\n", list(&s.roles)));
@@ -181,6 +201,7 @@ pub fn draft_summary(pack: &PackDef) -> Value {
         "name": pack.name,
         "version": pack.version,
         "stage_count": pack.stages.len(),
+        "knobs": pack.knobs,
         "stages": pack.stages.iter().map(|s| serde_json::json!({
             "name": s.name, "roles": s.roles, "due": s.due,
             "checks": s.checks, "stamp_point": s.stamp_point,

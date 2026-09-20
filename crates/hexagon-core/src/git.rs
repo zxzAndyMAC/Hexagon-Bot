@@ -307,6 +307,7 @@ mod tests {
         let pack = crate::orchestra::PackDef {
             name: "t".into(),
             version: 1,
+            knobs: Default::default(),
             stages: vec![
                 crate::orchestra::StageDef {
                     name: "s0".into(),

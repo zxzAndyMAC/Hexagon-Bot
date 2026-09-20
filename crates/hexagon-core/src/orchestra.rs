@@ -73,14 +73,57 @@ pub struct StageDef {
     pub consult_wake: Vec<String>,
 }
 
+/// 策略旋钮（rsi-research 票 04）：pack 里「怎么编排」的可调面，
+/// 与「流程定义」（角色/阶段/验收/检验）分开——前者是回放评估与
+/// policy-dev 可改的旋钮集，后者动它们等于改流程本身。
+/// 全部 Option：缺席 = 内核默认。词表见 docs/glossary.html「策略旋钮」。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Knobs {
+    /// 判定后端选择："mechanical" / "llm" / "off"（默认 off——
+    /// 未声明的包不跑判定，judge 输出只服务盖章建议不授权）。
+    #[serde(default)]
+    pub judge: Option<String>,
+    /// 同 Agent 对同产物的打回升级阈值（默认 2：第 2 次起升级负责人）。
+    #[serde(default)]
+    pub flag_patience: Option<u32>,
+    /// 回填边自动裁决总开关（默认 true；false 时 L1+ 也不自动拨回）。
+    #[serde(default)]
+    pub auto_backfill: Option<bool>,
+    /// L2 会诊唤醒总开关（默认 true；false 时 L2 也不自动唤醒复审者）。
+    #[serde(default)]
+    pub consult_auto_wake: Option<bool>,
+}
+
+impl Knobs {
+    pub fn flag_patience(&self) -> u32 {
+        self.flag_patience.unwrap_or(2).max(1)
+    }
+    pub fn auto_backfill(&self) -> bool {
+        self.auto_backfill.unwrap_or(true)
+    }
+    pub fn consult_auto_wake(&self) -> bool {
+        self.consult_auto_wake.unwrap_or(true)
+    }
+    pub fn judge(&self) -> &str {
+        self.judge.as_deref().unwrap_or("off")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackDef {
     pub name: String,
     pub version: u32,
     pub stages: Vec<StageDef>,
+    /// 策略旋钮——策略面字段（区别于流程定义）。
+    #[serde(default)]
+    pub knobs: Knobs,
 }
 
 impl PackDef {
+    /// 阶段级策略面字段：与 pack.knobs 同属「旋钮」。stages[i] 的
+    /// name/roles/due/reviews/checks 是流程定义,不在此列。
+    const STAGE_KNOB_FIELDS: &[&str] = &["stamp_point", "backfill_edges", "consult_wake"];
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self, OrchError> {
         Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
     }
@@ -98,6 +141,104 @@ impl PackDef {
     pub fn pinned(repo_root: &Path) -> Result<Self, OrchError> {
         Self::load(repo_root.join(".hexagon/pack.active.json"))
     }
+}
+
+fn knob_changes(path: &str, a: &Value, b: &Value, out: &mut Vec<Value>) {
+    if a != b {
+        out.push(json!({"path": path, "from": a, "to": b}));
+    }
+}
+
+/// 策略面 diff（票 04）：只比旋钮——pack 级 knobs 四字段 +
+/// 按阶段名配对的 stamp_point/backfill_edges/consult_wake。
+/// 流程定义的增删改不进入本结果（用 `non_policy_changes` 取另一面）。
+pub fn policy_diff(a: &PackDef, b: &PackDef) -> Vec<Value> {
+    let mut out = Vec::new();
+    let (ka, kb) = (
+        serde_json::to_value(&a.knobs).unwrap_or_default(),
+        serde_json::to_value(&b.knobs).unwrap_or_default(),
+    );
+    for key in [
+        "judge",
+        "flag_patience",
+        "auto_backfill",
+        "consult_auto_wake",
+    ] {
+        knob_changes(&format!("knobs.{key}"), &ka[key], &kb[key], &mut out);
+    }
+    for st in &a.stages {
+        let Some(other) = b.stages.iter().find(|s| s.name == st.name) else {
+            continue; // 阶段增删是流程改动,不算旋钮 diff
+        };
+        let (sa, sb) = (
+            serde_json::to_value(st).unwrap_or_default(),
+            serde_json::to_value(other).unwrap_or_default(),
+        );
+        for f in PackDef::STAGE_KNOB_FIELDS {
+            knob_changes(
+                &format!("stages.{}.{}", st.name, f),
+                &sa[f],
+                &sb[f],
+                &mut out,
+            );
+        }
+    }
+    out
+}
+
+fn diff_tree(a: &Value, b: &Value, path: &str, out: &mut Vec<String>) {
+    match (a, b) {
+        (Value::Object(ma), Value::Object(mb)) => {
+            let keys: std::collections::BTreeSet<&String> = ma.keys().chain(mb.keys()).collect();
+            for k in keys {
+                diff_tree(
+                    ma.get(k).unwrap_or(&Value::Null),
+                    mb.get(k).unwrap_or(&Value::Null),
+                    &format!("{path}.{k}"),
+                    out,
+                );
+            }
+        }
+        (Value::Array(va), Value::Array(vb)) => {
+            for i in 0..va.len().max(vb.len()) {
+                diff_tree(
+                    va.get(i).unwrap_or(&Value::Null),
+                    vb.get(i).unwrap_or(&Value::Null),
+                    &format!("{path}[{i}]"),
+                    out,
+                );
+            }
+        }
+        _ => {
+            if a != b {
+                out.push(path.to_string());
+            }
+        }
+    }
+}
+
+/// 非策略面差异（票 04/10 强制点）：剥掉旋钮字段后对剩余树做深 diff,
+/// 返回叶路径集——非空即「流程定义变了」,policy-dev 提案必须被拒。
+pub fn non_policy_changes(a: &PackDef, b: &PackDef) -> Vec<String> {
+    let strip = |p: &PackDef| -> Value {
+        let mut v = serde_json::to_value(p).unwrap_or_default();
+        if let Value::Object(ref mut m) = v {
+            m.remove("knobs");
+        }
+        if let Some(Value::Array(stages)) = v.get_mut("stages") {
+            for st in stages {
+                if let Value::Object(ref mut m) = st {
+                    for f in PackDef::STAGE_KNOB_FIELDS {
+                        m.remove(*f);
+                    }
+                }
+            }
+        }
+        v
+    };
+    let mut out = Vec::new();
+    diff_tree(&strip(a), &strip(b), "", &mut out);
+    out
 }
 
 // ---------- 阶段状态 ----------
@@ -175,6 +316,21 @@ pub fn open_stage(
         .collect();
     let skipped = present.is_empty();
 
+    // 决策点记录（rsi-research 票 01）：激活名单的选择连同「当时可选集」
+    // 落盘——回放可按 eligible/alternatives diff 决策,而非只看结果。
+    // eligible = 包声明名单;chosen = 实际激活(名单∩团队);
+    // alternatives = 声明但缺席的角色(被否决项+理由)。
+    let roster_decision = json!({
+        "kind": "roster",
+        "eligible": stage.roles,
+        "chosen": present.iter().map(|(_, r)| r).collect::<Vec<_>>(),
+        "alternatives": stage.roles
+            .iter()
+            .filter(|r| !team.iter().any(|(_, tr)| tr == *r))
+            .map(|r| json!({"option": r, "reason": "absent_from_team"}))
+            .collect::<Vec<_>>(),
+    });
+
     db.conn().execute(
         "INSERT INTO stage_runs (id, project_id, stage_name, seq, state, started_at)
          VALUES (?1,?2,?3,?4,?5,datetime('now'))",
@@ -191,7 +347,8 @@ pub fn open_stage(
         db.append_event(
             project_id,
             EventKind::StageSkipped,
-            json!({"stage": stage.name, "seq": seq, "reason": "no listed role in team"}),
+            json!({"stage": stage.name, "seq": seq, "reason": "no listed role in team",
+                   "decision_kind": "roster", "decision": roster_decision}),
             None,
             Some(&rid),
         )?;
@@ -201,7 +358,9 @@ pub fn open_stage(
     db.append_event(
         project_id,
         EventKind::StageStarted,
-        json!({"stage": stage.name, "seq": seq, "due": stage.due, "stamp_point": stage.stamp_point}),
+        json!({"stage": stage.name, "seq": seq, "due": stage.due,
+               "stamp_point": stage.stamp_point,
+               "decision_kind": "roster", "decision": roster_decision}),
         None,
         Some(&rid),
     )?;
@@ -976,5 +1135,137 @@ mod tests {
         let pinned = PackDef::pinned(dir.path()).unwrap();
         assert_eq!(pinned.name, "规格驱动");
         assert_eq!(pinned.version, 3);
+    }
+
+    // ---- rsi-research 票 01/04：名单决策点 + 策略面 diff ----
+
+    #[test]
+    fn open_stage_records_roster_decision() {
+        // 团队含产品策划+前端：seq3「实现」声明 [前端,后端],后端缺席。
+        let (db, _dir) = setup(&["产品策划", "前端"]);
+        let pk = pack();
+        open_stage(&db, "p1", &pk, 0).unwrap();
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::StageStarted]))
+            .unwrap();
+        let d = &items[0].event.payload["decision"];
+        assert_eq!(d["kind"], "roster");
+        assert_eq!(d["eligible"], json!(["产品策划"]));
+        assert_eq!(d["chosen"], json!(["产品策划"]));
+        open_stage(&db, "p1", &pk, 3).unwrap();
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::StageStarted]))
+            .unwrap();
+        let d2 = items.iter().find(|e| e.event.payload["seq"] == 3).unwrap();
+        let dec = &d2.event.payload["decision"];
+        assert_eq!(dec["eligible"], json!(["前端", "后端"]));
+        assert_eq!(dec["chosen"], json!(["前端"]));
+        let alt = dec["alternatives"].as_array().unwrap();
+        assert!(alt
+            .iter()
+            .any(|a| a["option"] == "后端" && a["reason"] == "absent_from_team"));
+    }
+
+    #[test]
+    fn stage_skipped_also_records_roster_decision() {
+        let (db, _dir) = setup(&["产品策划"]);
+        let pk = pack();
+        open_stage(&db, "p1", &pk, 0).unwrap();
+        db.conn()
+            .execute("UPDATE stage_runs SET state='done'", [])
+            .unwrap();
+        // seq1「界面」要 UI——缺席 → skipped,decision 仍落盘
+        open_next(&db, "p1", &pk, 1).unwrap();
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::StageSkipped]))
+            .unwrap();
+        let d = &items[0].event.payload["decision"];
+        assert_eq!(d["kind"], "roster");
+        assert_eq!(d["chosen"], json!([]));
+        assert_eq!(d["alternatives"][0]["option"], "UI");
+    }
+
+    #[test]
+    fn policy_diff_separates_knobs_from_process() {
+        let mut a = pack();
+        let mut b = a.clone();
+        // 旋钮改动：knobs + 阶段级策略字段
+        b.knobs.flag_patience = Some(5);
+        b.stages[0].stamp_point = false;
+        b.stages[2].backfill_edges = vec![];
+        // 流程改动：角色名单
+        b.stages[0].roles = vec!["产品策划".into(), "架构师".into()];
+        let diff = policy_diff(&a, &b);
+        let paths: Vec<&str> = diff.iter().filter_map(|d| d["path"].as_str()).collect();
+        assert!(paths.contains(&"knobs.flag_patience"));
+        assert!(paths.contains(&"stages.规格.stamp_point"));
+        assert!(paths.contains(&"stages.接口.backfill_edges"));
+        // 流程改动不进策略 diff
+        assert!(!paths.iter().any(|p| p.contains("roles")));
+        // 另一面:non_policy_changes 只报流程差异
+        let npc = non_policy_changes(&a, &b);
+        assert_eq!(npc, vec![".stages[0].roles[1]".to_string()]);
+        // 纯旋钮改动 → non_policy_changes 为空
+        a.knobs.judge = Some("llm".into());
+        assert!(non_policy_changes(&a, &b)
+            .iter()
+            .all(|p| p.contains("roles")));
+    }
+
+    // ---- rsi-research 票 05：延续机制默认 disarmed ----
+
+    #[test]
+    fn crash_recovery_does_not_rearm_turns() {
+        // 崩溃恢复只把 run 交还负责人：不重放回合、不自动激活——
+        // 「继续」的下一步永远由人发起（ralph 式续跑默认关闭）。
+        let (db, _dir) = setup(&["产品策划"]);
+        let pk = pack();
+        let (r0, _) = open_stage(&db, "p1", &pk, 0).unwrap();
+        // 造 dangling turn：turn_started 无收尾
+        db.append_event(
+            "p1",
+            EventKind::TurnStarted,
+            json!({"agent": "a0"}),
+            Some("a0"),
+            Some(&r0),
+        )
+        .unwrap();
+        assert_eq!(detect_interrupted(&db, "p1").unwrap(), 1);
+        let pre_turns: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='turn_started'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let status_pre: String = db
+            .conn()
+            .query_row("SELECT status FROM agents WHERE id='a0'", [], |r| r.get(0))
+            .unwrap();
+        recover_run(&db, "p1", &r0).unwrap();
+        // 恢复后无新回合、agent 状态未被恢复动作触碰（激活与否由
+        // 阶段名单决定,不由恢复闸决定——恢复不重放、不点名）。
+        let post_turns: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='turn_started'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pre_turns, post_turns);
+        let status_post: String = db
+            .conn()
+            .query_row("SELECT status FROM agents WHERE id='a0'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status_pre, status_post);
+        let st: String = db
+            .conn()
+            .query_row("SELECT state FROM stage_runs WHERE id=?1", [&r0], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(st, "active");
     }
 }

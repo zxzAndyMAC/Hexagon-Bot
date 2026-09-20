@@ -114,14 +114,17 @@ pub fn enforce_cap(db: &Db, project_id: &str) -> Result<bool, crate::trace::Trac
     db.append_event(
         project_id,
         EventKind::UsageCapHit,
-        json!({ "limit_cents": limit_cents, "spent_mc": spent_mc(db, project_id)? }),
+        json!({ "limit_cents": limit_cents, "spent_mc": spent_mc(db, project_id)?,
+                "code": crate::trace::FailureCode::BudgetExceeded.as_str() }),
         None,
         None,
     )?;
     db.append_event(
         project_id,
         EventKind::TeamSlept,
-        json!({ "reason": "usage_cap" }),
+        // 票 02：用量触顶是闭集失败理由（budget-exceeded）——回放报告
+        // 按 code 聚合,不带 code 的触顶会漏出失败分布。
+        json!({ "reason": "usage_cap", "code": crate::trace::FailureCode::BudgetExceeded.as_str() }),
         None,
         None,
     )?;

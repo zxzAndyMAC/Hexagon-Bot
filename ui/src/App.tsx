@@ -14,7 +14,7 @@ import { Composer } from './components/Composer'
 import { SettingsPage } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
 import { CommandPalette } from './components/CommandPalette'
-import { api } from './api'
+import { api, onTurnDelta } from './api'
 import { useUiStore } from './store'
 import { PendingCards } from './components/PendingCards'
 import { Icon } from './components/Icon'
@@ -39,6 +39,17 @@ export default function App() {
     const iv = setInterval(refresh, 2000) // 事件推送落地前的轮询占位
     return () => clearInterval(iv)
   }, [refresh, projectOpen])
+
+  // 票 03：回合流式 delta 订阅（Tauri 事件 → store 瞬时缓冲；
+  // 浏览器 dev 无推送通道，onTurnDelta 返回 no-op）。
+  useEffect(() => {
+    if (projectOpen !== true) return
+    let un: (() => void) | undefined
+    onTurnDelta((d) => useUiStore.getState().applyDelta(d)).then((u) => {
+      un = u
+    })
+    return () => un?.()
+  }, [projectOpen])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {

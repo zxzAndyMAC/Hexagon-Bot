@@ -10,6 +10,26 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   return mock<T>(cmd, args)
 }
 
+// ---- 回合流式 delta（turn-streaming 票 03）----
+// 瞬时增量通道：payload 不落库；done=true 是流终信号（成败都发），
+// reset=true 表示瞬时重试、本轮已收文本作废重起。
+
+export interface TurnDelta {
+  agent_id: string
+  stage_run_id: string | null
+  call: number // 本回合第几次模型调用（方案调用=0，工具循环轮 1..）
+  reset: boolean
+  done: boolean
+  text: string
+}
+
+/// 订阅回合 delta；浏览器 dev 无推送通道，返回 no-op 退订。
+export async function onTurnDelta(cb: (d: TurnDelta) => void): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<TurnDelta>('turn-delta', (e) => cb(e.payload))
+}
+
 // ---- 与核侧 JSON 形状对齐 ----
 
 export interface StageRow {
@@ -218,6 +238,12 @@ export const api = {
   reviewProposal: (proposalId: string, pass: boolean, reason: string, reviewerAgent: string) =>
     call<void>('review_proposal', { proposalId, pass, reason, reviewerAgent }),
   confirmProposal: (qid: string) => call<string>('confirm_proposal', { qid }),
+  invariantCheck: () => call<number>('invariant_check'),
+  policydevPropose: (
+    edits: Record<string, unknown>[],
+    scenario: Record<string, unknown>,
+    motive: string,
+  ) => call<string>('policydev_propose', { edits, scenario, motive }),
   rejectProposal: (qid: string, reason: string) =>
     call<void>('reject_proposal', { qid, reason }),
   rollbackProposal: (proposalId: string) =>

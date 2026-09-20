@@ -49,6 +49,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0011_question_idem",
         include_str!("../migrations/0011_question_idem.sql"),
     ),
+    (
+        "0012_event_schema",
+        include_str!("../migrations/0012_event_schema.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +79,9 @@ impl Db {
     fn init(conn: Connection) -> Result<Self, DbError> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // 票 04/05：壳层在回合进行中用第二条连接写 owner 消息/暂停事件，
+        // WAL 单写者瞬间撞车 → busy_timeout 兜底，不然偶发 SQLITE_BUSY。
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

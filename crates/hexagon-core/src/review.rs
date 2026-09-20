@@ -75,9 +75,29 @@ fn autonomy_rank(db: &Db, project_id: &str) -> Result<u8, ReviewError> {
     Ok(crate::autonomy::rank(db, project_id)?)
 }
 
+/// 打回路由决策的落盘形状（rsi-research 票 01）：每次路由记
+/// eligible（声明结构允许的路由集）/chosen/alternatives/gates（裁决输入），
+/// 回放可按「当时可选集」diff 决策而非只看去向。
+fn route_decision(chosen: &str, eligible: &[&str], gates: Value) -> Value {
+    json!({
+        "kind": "flag_route",
+        "eligible": eligible,
+        "chosen": chosen,
+        "alternatives": eligible
+            .iter()
+            .filter(|r| **r != chosen)
+            .map(|r| json!({"option": r, "reason": "not_chosen"}))
+            .collect::<Vec<_>>(),
+        "gates": gates,
+    })
+}
+
+/// 升级（直给负责人）：code 是闭集理由（票 02），reason 是给人看的文本。
+/// 路由被迫收敛——eligible 只剩 escalated。
 fn escalate(
     db: &Db,
     ctx: &ToolContext,
+    code: crate::trace::FailureCode,
     reason: &str,
     flag_payload: Value,
 ) -> Result<FlagRoute, ReviewError> {
@@ -90,7 +110,10 @@ fn escalate(
     db.append_event(
         &ctx.project_id,
         EventKind::Escalated,
-        json!({"reason": reason, "question_id": qid, "flag": flag_payload}),
+        json!({"reason": reason, "code": code.as_str(), "question_id": qid,
+               "flag": flag_payload,
+               "decision_kind": "flag_route",
+               "decision": route_decision("escalated", &["escalated"], json!({}))}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
@@ -202,6 +225,7 @@ pub fn submit_flag(
         return escalate(
             db,
             ctx,
+            crate::trace::FailureCode::HardBlocked,
             "target artifact already stamped",
             json!({"flag_id": flag_id, "target": target_path}),
         );
@@ -218,6 +242,7 @@ pub fn submit_flag(
             return escalate(
                 db,
                 ctx,
+                crate::trace::FailureCode::Ambiguous,
                 "no declared reviewer for artifact kind",
                 json!({"flag_id": flag_id, "target": target_path}),
             );
@@ -232,6 +257,7 @@ pub fn submit_flag(
                 return escalate(
                     db,
                     ctx,
+                    crate::trace::FailureCode::Ambiguous,
                     "declared reviewer absent from team",
                     json!({"flag_id": flag_id, "target": target_path}),
                 );
@@ -239,22 +265,24 @@ pub fn submit_flag(
         }
     }
     // 重复打回：同 Agent 对同产物第 2 次起 → 升级
+    // （阈值可被 pack.knobs.flag_patience 覆盖——票 04 策略旋钮）
     let prior: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='flag_submitted'
          AND json_extract(payload,'$.flagger')=?2 AND json_extract(payload,'$.target')=?3",
         rusqlite::params![ctx.project_id, flagger, target_path],
         |r| r.get(0),
     )?;
-    if prior > 1 {
+    if prior >= pack.knobs.flag_patience() as i64 {
         return escalate(
             db,
             ctx,
+            crate::trace::FailureCode::Ambiguous,
             "repeat flag on same artifact",
             json!({"flag_id": flag_id, "target": target_path}),
         );
     }
 
-    // ---- 自动路径：回填边命中 + 自治 ≥L1 ----
+    // ---- 自动路径：回填边命中 + 自治 ≥L1 + 旋钮未关 ----
     let author_role = art_author.as_deref().and_then(|a| role_of(db, a).ok());
     let cur_run = ctx.stage_run_id.as_deref().and_then(|rid| {
         db.conn()
@@ -271,7 +299,21 @@ pub fn submit_flag(
                 .any(|(f, t)| f == &flagger && Some(t) == author_role.as_ref())
         })
         .unwrap_or(false);
-    if edge_hit && autonomy_rank(db, &ctx.project_id)? >= 1 {
+    let rank = autonomy_rank(db, &ctx.project_id)?;
+    // 路由决策的裁决输入：闸门事实原样落盘（票 01）——回放可比对的
+    // 是这些布尔量，不是「路由叫啥」的自由文本。
+    let gates = json!({
+        "edge_hit": edge_hit,
+        "autonomy": rank,
+        "prior_flags": prior,
+        "auto_backfill_enabled": pack.knobs.auto_backfill(),
+        "consult_auto_wake_enabled": pack.knobs.consult_auto_wake(),
+    });
+    let mut eligible: Vec<&str> = vec!["to_reviewer"];
+    if edge_hit {
+        eligible.push("auto_backfill");
+    }
+    if edge_hit && rank >= 1 && pack.knobs.auto_backfill() {
         let to_seq = art_run
             .as_deref()
             .and_then(|rid| {
@@ -282,6 +324,18 @@ pub fn submit_flag(
                     .ok()
             })
             .unwrap_or(0);
+        // 回填边命中即拨回——BackfillExecuted 落盘（事件类早已声明，
+        // 此前无发射点）；decision 记 eligible/chosen/gates。
+        db.append_event(
+            &ctx.project_id,
+            EventKind::BackfillExecuted,
+            json!({"flag_id": flag_id, "flagger": flagger, "target": target_path,
+                   "to_seq": to_seq, "code": crate::trace::FailureCode::Repairable.as_str(),
+                   "decision_kind": "flag_route",
+                   "decision": route_decision("auto_backfill", &eligible, gates.clone())}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
         adjudicate_flag(db, ctx, pack, &flag_id, true)?;
         return Ok(FlagRoute::AutoAdjudicated { to_seq });
     }
@@ -289,7 +343,8 @@ pub fn submit_flag(
     // L2 协调自治：打回路由裁决自动跑——复审者直接唤醒进入裁决，
     // 不等负责人（盖章点/安全网/新权限不受影响，照常在别处排队）。
     let reviewer = reviewer_role.unwrap();
-    if autonomy_rank(db, &ctx.project_id)? >= 2 {
+    eligible.push("auto_wake");
+    if rank >= 2 && pack.knobs.consult_auto_wake() {
         if let Ok(agent_id) = db.conn().query_row(
             "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
             rusqlite::params![ctx.project_id, reviewer],
@@ -300,7 +355,10 @@ pub fn submit_flag(
             db.append_event(
                 &ctx.project_id,
                 EventKind::ConsultWakeup,
-                json!({"agent": agent_id, "role": reviewer, "reason": "flag adjudication", "flag_id": flag_id}),
+                json!({"agent": agent_id, "role": reviewer, "reason": "flag adjudication",
+                       "flag_id": flag_id, "code": crate::trace::FailureCode::Repairable.as_str(),
+                       "decision_kind": "flag_route",
+                       "decision": route_decision("auto_wake", &eligible, gates.clone())}),
                 Some(&ctx.agent_id),
                 ctx.stage_run_id.as_deref(),
             )?;
@@ -311,6 +369,18 @@ pub fn submit_flag(
         }
     }
 
+    // 默认路由：交复审者排队裁决——唯一没有专属领域事件的路由,
+    // 落 System{kind:"flag_routed"} 补齐决策留痕。
+    db.append_event(
+        &ctx.project_id,
+        EventKind::System,
+        json!({"kind": "flag_routed", "flag_id": flag_id, "target": target_path,
+               "reviewer": reviewer, "code": crate::trace::FailureCode::Repairable.as_str(),
+               "decision_kind": "flag_route",
+               "decision": route_decision("to_reviewer", &eligible, gates)}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )?;
     Ok(FlagRoute::ToReviewer {
         reviewer_role: reviewer,
     })
@@ -346,6 +416,14 @@ pub fn adjudicate_flag(
         )
         .map_err(|_| ReviewError::NoArtifact(target.clone()))?;
 
+    // 打回裁决决策点（票 01）：同意/驳回连同可选集落盘。
+    let adjudication = |chosen: &str| {
+        json!({"kind": "flag_adjudication",
+               "eligible": ["agree", "reject"],
+               "chosen": chosen,
+               "alternatives": [{"option": if chosen == "agree" { "reject" } else { "agree" },
+                                  "reason": "not_chosen"}]})
+    };
     if agree {
         let to_seq: i64 = art_run
             .as_deref()
@@ -360,7 +438,9 @@ pub fn adjudicate_flag(
         db.append_event(
             &ctx.project_id,
             EventKind::FlagAdjudicated,
-            json!({"flag_id": flag_id, "agree": true, "to_seq": to_seq, "target": target}),
+            json!({"flag_id": flag_id, "agree": true, "to_seq": to_seq, "target": target,
+                   "decision_kind": "adjudication",
+                   "decision": adjudication("agree")}),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
@@ -370,7 +450,9 @@ pub fn adjudicate_flag(
         db.append_event(
             &ctx.project_id,
             EventKind::FlagAdjudicated,
-            json!({"flag_id": flag_id, "agree": false, "target": target}),
+            json!({"flag_id": flag_id, "agree": false, "target": target,
+                   "decision_kind": "adjudication",
+                   "decision": adjudication("reject")}),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
@@ -682,5 +764,116 @@ mod tests {
             .timeline("p1", None, 50, Some(&[EventKind::StampRejected]))
             .unwrap();
         assert_eq!(items.len(), 1);
+    }
+
+    // ---- rsi-research 票 01/02/04：决策点 + 闭集 code + 旋钮 ----
+
+    #[test]
+    fn flag_route_records_decision_with_eligible_and_gates() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        db.conn()
+            .execute("UPDATE stage_runs SET state='done' WHERE seq=0", [])
+            .unwrap();
+        orchestra::open_next(&db, "p1", &pack, 1).unwrap();
+        let r1: String = db
+            .conn()
+            .query_row(
+                "SELECT id FROM stage_runs WHERE seq=1 AND state='active'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // L0 + 回填边命中：eligible 应含 auto_backfill 与 auto_wake,
+        // chosen 落 to_reviewer（自治不够）。
+        let c = ctx("p1", "a1", dir.path(), Some(&r1));
+        submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "无法实现").unwrap();
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::System]))
+            .unwrap();
+        let routed = items
+            .iter()
+            .find(|e| e.event.payload["kind"] == "flag_routed")
+            .expect("flag_routed event");
+        let d = &routed.event.payload["decision"];
+        assert_eq!(d["chosen"], "to_reviewer");
+        assert_eq!(d["kind"], "flag_route");
+        let eligible: Vec<&str> = d["eligible"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(eligible.contains(&"auto_backfill") && eligible.contains(&"auto_wake"));
+        assert_eq!(routed.event.payload["code"], "repairable");
+        assert_eq!(d["gates"]["edge_hit"], true);
+    }
+
+    #[test]
+    fn auto_backfill_emits_backfill_executed_with_decision() {
+        let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+        crate::autonomy::set_level(&db, "p1", "L1").unwrap();
+        let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        db.conn()
+            .execute("UPDATE stage_runs SET state='done' WHERE seq=0", [])
+            .unwrap();
+        orchestra::open_next(&db, "p1", &pack, 1).unwrap();
+        let r1: String = db
+            .conn()
+            .query_row(
+                "SELECT id FROM stage_runs WHERE seq=1 AND state='active'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let c = ctx("p1", "a1", dir.path(), Some(&r1));
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "无法实现").unwrap();
+        assert!(matches!(route, FlagRoute::AutoAdjudicated { .. }));
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::BackfillExecuted]))
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        let p = &items[0].event.payload;
+        assert_eq!(p["code"], "repairable");
+        assert_eq!(p["decision"]["chosen"], "auto_backfill");
+        assert_eq!(p["decision"]["gates"]["autonomy"], 1);
+    }
+
+    #[test]
+    fn escalation_carries_closed_code() {
+        let (db, dir, pack) = setup(&["UI", "前端"]);
+        let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        // 无声明复审者 → ambiguous 升级
+        let c = ctx("p1", "a1", dir.path(), Some(&r0));
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "x").unwrap();
+        assert!(matches!(route, FlagRoute::Escalated { .. }));
+        let items = db
+            .timeline("p1", None, 50, Some(&[EventKind::Escalated]))
+            .unwrap();
+        assert_eq!(items[0].event.payload["code"], "ambiguous");
+        assert_eq!(items[0].event.payload["decision"]["chosen"], "escalated");
+    }
+
+    #[test]
+    fn flag_patience_knob_controls_repeat_escalation() {
+        let (db, dir, _pack) = setup(&["UI", "前端", "架构师"]);
+        // flag_patience=4：同 Agent 第 2、3 次仍路由复审者,第 4 次才升级
+        let pack: PackDef = serde_json::from_value(json!({
+        "name":"t","version":1,"knobs":{"flag_patience":4},"stages":[
+            {"name":"界面","roles":["UI"],"due":["界面稿"]},
+            {"name":"接口","roles":["前端","架构师"],"due":["接口说明"],
+             "reviews":[{"artifact_kind":"界面稿","reviewer":"架构师"}]}
+        ]}))
+        .unwrap();
+        let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+        let c = ctx("p1", "a1", dir.path(), Some(&r0));
+        // 前三次路由复审者（无回填边声明→默认路由）
+        for _ in 0..3 {
+            let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "x").unwrap();
+            assert!(matches!(route, FlagRoute::ToReviewer { .. }));
+        }
+        // 第四次（prior=4 达到阈值）升级
+        let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "x").unwrap();
+        assert!(matches!(route, FlagRoute::Escalated { .. }));
     }
 }

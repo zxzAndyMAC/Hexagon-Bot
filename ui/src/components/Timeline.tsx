@@ -75,7 +75,17 @@ function ReturnSummaryRow({ item }: { item: TimelineItem }) {
   )
 }
 
-export function EventRow({ item }: { item: TimelineItem }) {
+export function EventRow({
+  item,
+  steered,
+  turnBoundary,
+  turnActive,
+}: {
+  item: TimelineItem
+  steered?: Set<number>
+  turnBoundary?: number
+  turnActive?: boolean
+}) {
   const { t } = useTranslation()
   const team = useUiStore((s) => s.team)
   const openTab = useUiStore((s) => s.openTab)
@@ -145,6 +155,14 @@ export function EventRow({ item }: { item: TimelineItem }) {
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
             <div className="msg-author dim" style={{ textAlign: 'right' }}>
               {title}{time && <span className="dim3" style={{ marginLeft: 6 }}>{time}</span>}
+              {/* 票 05 steering 状态：steering_injected 事件到 → 已送达；
+                  回合进行中未注入 → 下回合生效（可能提前——下一检查点即排水） */}
+              {steered?.has(m.id) && (
+                <span className="chip ok" style={{ marginLeft: 6, fontSize: 10 }}>{t('timeline.steeringDelivered')}</span>
+              )}
+              {!steered?.has(m.id) && turnActive && item.event.id > (turnBoundary ?? -1) && (
+                <span className="chip warn" style={{ marginLeft: 6, fontSize: 10 }}>{t('timeline.steeringQueued')}</span>
+              )}
             </div>
             <div className="msg-body"><Md>{m.body}</Md></div>
           </div>
@@ -284,11 +302,47 @@ function NodeRail({ marks, onJump }: { marks: NodeMark[]; onJump: (m: NodeMark) 
   )
 }
 
+// ---- 流式气泡（票 03）：回合进行中的瞬时增量，挂在时间线尾部随内容滚动。
+// done 信号到达即由 store 清除；持久消息仍由轮询补上，两通道不打架。
+function StreamFooter() {
+  const { t } = useTranslation()
+  const { streams, team } = useUiStore()
+  const ids = Object.keys(streams).filter((id) =>
+    Object.values(streams[id]).some((s) => s.length > 0),
+  )
+  if (!ids.length) return null
+  return (
+    <div>
+      {ids.map((id) => {
+        const member = team.find((x) => x.id === id)
+        const text = Object.keys(streams[id])
+          .map(Number)
+          .sort((a, b) => a - b)
+          .map((c) => streams[id][c])
+          .filter((s) => s.length > 0)
+          .join('\n\n')
+        return (
+          <div className="msg" key={id} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
+            {member && <Avatar agentId={id} role={member.role} size={34} />}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+                <span style={{ fontWeight: 560, fontSize: 12 }}>{member?.role ?? id}</span>
+                <span className="dim3" style={{ fontSize: 10 }}>{t('timeline.streaming')}</span>
+              </div>
+              <div className="msg-body"><Md>{text}</Md></div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ---- 主体 ----
 
 export function Timeline() {
   const { t } = useTranslation()
-  const { timeline, pending } = useUiStore()
+  const { timeline, pending, streams } = useUiStore()
   const [filter, setFilter] = useState<Filter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [atBottom, setAtBottom] = useState(true)
@@ -300,6 +354,22 @@ export function Timeline() {
 
   const rows = useMemo(() => buildRows(timeline, filter), [timeline, filter])
   const marks = useMemo(() => nodeMarks(timeline, rows, pending.length), [timeline, rows, pending.length])
+  // 票 05：steering_injected 事件（payload.msg_id）标出已被本回合读到的
+  // owner 消息；turnBoundary = 最近一次 turn_started，其后的 owner 消息
+  // 才是「本回合内发来」的候选。
+  const { steered, turnBoundary } = useMemo(() => {
+    const s = new Set<number>()
+    let boundary = -1
+    for (const it of timeline) {
+      if (it.event.kind === 'turn_started') boundary = it.event.id
+      if (it.event.kind === 'system' && it.event.payload?.kind === 'steering_injected') {
+        const mid = Number(it.event.payload.msg_id)
+        if (mid) s.add(mid)
+      }
+    }
+    return { steered: s, turnBoundary: boundary }
+  }, [timeline])
+  const turnActive = Object.keys(streams).length > 0
 
   useEffect(() => {
     if (timeline.length > prevLen.current && !atBottom) {
@@ -378,6 +448,7 @@ export function Timeline() {
         <Virtuoso
           ref={ref}
           data={rows}
+          components={{ Footer: StreamFooter }}
           atBottomStateChange={(b) => { setAtBottom(b); if (b) setUnseen(0) }}
           followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
           itemContent={(_i, row) => {
@@ -409,7 +480,7 @@ export function Timeline() {
             }
             return (
               <div className={flash === row.item.event.id ? 'flash-row' : ''}>
-                <EventRow item={row.item} />
+                <EventRow item={row.item} steered={steered} turnBoundary={turnBoundary} turnActive={turnActive} />
               </div>
             )
           }}

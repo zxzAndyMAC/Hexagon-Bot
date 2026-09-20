@@ -14,6 +14,10 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
+
+/// 回合 delta 外发钩子类型（票 03）：壳层注入，emit 到 webview。
+pub type TurnDeltaHook = Box<dyn FnMut(&turn::TurnDelta) + Send>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -37,6 +41,8 @@ pub enum ApiError {
     Proposal(#[from] crate::proposals::PropError),
     #[error(transparent)]
     Review(#[from] crate::review::ReviewError),
+    #[error(transparent)]
+    PolicyDev(#[from] crate::policydev::PolicyDevError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
@@ -70,6 +76,11 @@ pub struct Workbench {
     pub project_id: String,
     pub repo_root: PathBuf,
     pub pack: Option<PackDef>,
+    /// 回合 delta hook（turn-streaming 票 03）：壳层挂 Tauri emit；
+    /// None=静默（测试/CLI 路径不变）。Mutex 包住——turn 入口全是 &self；
+    /// Send 约束在这里（hook 要跨线程 emit），turn 层的 DeltaSink 本身无此要求。
+    /// 注意：锁跨越整个回合，hook 内回调 Workbench 会死锁。
+    delta_hook: Mutex<Option<TurnDeltaHook>>,
 }
 
 impl Workbench {
@@ -111,6 +122,7 @@ impl Workbench {
             project_id,
             repo_root: dir,
             pack,
+            delta_hook: Mutex::new(None),
         })
     }
 
@@ -138,7 +150,14 @@ impl Workbench {
             project_id: "p1".into(),
             repo_root: dir.to_path_buf(),
             pack,
+            delta_hook: Mutex::new(None),
         })
+    }
+
+    /// 注册回合 delta hook（票 03）：壳层在 open 后调一次挂上 emit。
+    /// hook 不得回调 Workbench——锁跨越整个回合，回调即死锁。
+    pub fn set_turn_delta_hook(&self, hook: Option<TurnDeltaHook>) {
+        *self.delta_hook.lock().unwrap() = hook;
     }
 
     pub fn register_provider(&mut self, slot: &str, p: Arc<dyn ModelProvider>) {
@@ -397,17 +416,54 @@ impl Workbench {
         }
     }
 
+    /// 不变量伴随件（票 07）：独立路径重校验 trace——信封指纹重算、
+    /// 派发配对、悬挂回合、决策载荷形状。违规落 invariant_violation 事件。
+    /// 返回违规数；0 = trace 自洽。回放路径(scenario)与负责人手动体检共用。
+    pub fn invariant_check_and_log(&self) -> Result<usize, ApiError> {
+        Ok(crate::invariant::check_and_log(&self.db, &self.project_id)?)
+    }
+
+    /// 策略研发提案（票 10）：副本改旋钮 → 双保险 → 回放 → 携证据
+    /// +机械判定进提案队列。产出物无任何特权——submit 全校验照常。
+    /// 旋钮编辑走 JSON（壳层 Tauri 命令与测试同一入口）;sandbox 由
+    /// 内部建在 `.hexagon/replay/` 下,回放不碰项目仓工作树。
+    pub fn policydev_propose(
+        &self,
+        edits: &[serde_json::Value],
+        scenario: &crate::scenario::Scenario,
+        motive: &str,
+    ) -> Result<String, ApiError> {
+        let edits: Vec<crate::policydev::KnobEdit> = edits
+            .iter()
+            .map(crate::policydev::KnobEdit::from_value)
+            .collect::<Result<_, _>>()?;
+        let base = self
+            .pack
+            .clone()
+            .ok_or_else(|| ApiError::NoRole("no pack pinned".into()))?;
+        let aid = crate::policydev::policy_dev_agent(&self.db, &self.project_id)
+            .map_err(|_| ApiError::NoRole("政策研发 agent 不在团队".into()))?;
+        let ctx = self.ctx_for(&aid, None);
+        let sandbox = self.repo_root.join(format!(
+            ".hexagon/replay/{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        ));
+        Ok(crate::policydev::propose(
+            &self.db, &ctx, &base, &edits, scenario, motive, &sandbox,
+        )?)
+    }
+
     // ---------- 命令 ----------
 
     /// 发消息：解析 @/# 成结构化 token；文本指令与按钮走同一命令通道。
     /// 「退回[N]/回退[N]」「跳过」「盖章」「暂停」「休眠/全员休眠」「恢复」
     /// 命中则分发到对应命令（事件形状与按钮完全一致），消息本体照常入档。
     pub fn send_message(&self, body: &str) -> Result<i64, ApiError> {
-        let tokens = parse_tokens(body);
-        let id = self
-            .db
-            .append_message(&self.project_id, "owner", body, &tokens, None, None)?;
-        if let Some(cmd) = parse_command(body) {
+        let (id, cmd) = send_message_side(&self.db, &self.project_id, body)?;
+        if let Some(cmd) = cmd {
             log::info!("owner text command: {cmd:?}");
             // 命令失败不吞消息——记日志，消息已入档
             if let Err(e) = self.dispatch_command(&cmd) {
@@ -417,7 +473,8 @@ impl Workbench {
         Ok(id)
     }
 
-    fn dispatch_command(&self, cmd: &TextCommand) -> Result<(), ApiError> {
+    /// 文本指令分发（pub：壳层旁路写入后非 Pause/Resume 指令仍走 wb）。
+    pub fn dispatch_command(&self, cmd: &TextCommand) -> Result<(), ApiError> {
         match cmd {
             TextCommand::Rewind(to) => {
                 let to_seq = match to {
@@ -525,26 +582,44 @@ impl Workbench {
             .providers
             .get(slot.as_deref().unwrap_or("default"))
             .or_else(|| self.providers.get("default"))
-            .ok_or_else(|| ApiError::NoProvider(slot.unwrap_or_default()))?;
-        let run = if plan_first {
-            turn::run_turn_planned(
+            .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        // 票 03：delta hook 锁跨整个回合——hook 一旦挂上，所有走
+        // run_turn_opts 的入口（run_turn/dispatch/撞限放行）自动流式。
+        let mut guard = self.delta_hook.lock().unwrap();
+        let sink = guard.as_mut().map(|h| &mut **h as &mut turn::DeltaSink<'_>);
+        let run = turn::run_turn_streaming(
+            &self.db,
+            provider.as_ref(),
+            &self.registry,
+            &ctx,
+            vec![],
+            input,
+            plan_first,
+            sink,
+        );
+        // 票 08：回合扫尾——本轮若落了带回放证据的待盖章提案,
+        // 按包旋钮跑判定层。判定失败不挡回合（judge 是建议不是闸）。
+        drop(guard);
+        if let Some(backend) = crate::judge::backend_for(
+            crate::judge::JudgeFacet::ProposalStamp,
+            self.pack.as_ref(),
+            &self.providers,
+            slot.as_deref().unwrap_or("default"),
+            Some(crate::judge::JudgeObs {
+                db: &self.db,
+                project_id: &self.project_id,
+                repo_root: &self.repo_root,
+            }),
+        ) {
+            if let Err(e) = crate::judge::sweep(
                 &self.db,
-                provider.as_ref(),
-                &self.registry,
-                &ctx,
-                vec![],
-                input,
-            )
-        } else {
-            turn::run_turn(
-                &self.db,
-                provider.as_ref(),
-                &self.registry,
-                &ctx,
-                vec![],
-                input,
-            )
-        };
+                &self.project_id,
+                &self.repo_root,
+                backend.as_ref(),
+            ) {
+                log::warn!("judge sweep failed: {e}");
+            }
+        }
         Ok(run?)
     }
 
@@ -1176,9 +1251,24 @@ pub fn parse_tokens(body: &str) -> Vec<MessageToken> {
     out
 }
 
+/// 回合期旁路写入（turn-streaming 票 04/05）：dispatch 持 wb 锁跑回合时，
+/// owner 消息经独立的第二条 Db 连接落库——不然干预永远排在回合后面，
+/// steering 与流中叫停只剩空壳。指令只解析不分发，分发归调用方选通道
+/// （Pause/Resume 可以走同一条旁路 db；其余指令仍该排队等 wb）。
+pub fn send_message_side(
+    db: &Db,
+    project_id: &str,
+    body: &str,
+) -> Result<(i64, Option<TextCommand>), ApiError> {
+    let tokens = parse_tokens(body);
+    let id = db.append_message(project_id, "owner", body, &tokens, None, None)?;
+    Ok((id, parse_command(body)))
+}
+
 /// 文本指令（与按钮同权同痕）：只认整句命令，防普通语句被劫持。
+/// pub：壳层旁路写入路径（票 05 send_message_side）要按变体分流。
 #[derive(Debug, PartialEq)]
-enum TextCommand {
+pub enum TextCommand {
     Rewind(Option<usize>),
     Skip,
     Stamp,
@@ -1191,8 +1281,8 @@ enum TextCommand {
 
 /// 整句匹配：命令词 + 可选数字参数，多余文本一律不算命令。
 /// 双轨（ADR 0051）：`/verb` 规范式全语言通用；本地化斜杠别名（/退回 /盖章）也收；
-/// 裸词（退回/盖章…）保留为过渡形态。
-fn parse_command(body: &str) -> Option<TextCommand> {
+/// 裸词（退回/盖章…）保留为过渡形态。pub：壳层旁路写入要复用同一解析。
+pub fn parse_command(body: &str) -> Option<TextCommand> {
     let b = body.trim();
     // /verb 规范式 + 本地化斜杠别名（退回参数走同一数字尾巴规则）
     if let Some(rest) = b.strip_prefix('/') {
@@ -1277,6 +1367,43 @@ mod tests {
         assert_eq!(parse_command("/dance"), None);
         assert_eq!(parse_command("/rewind abc"), None);
         assert_eq!(parse_command("/skip 多余尾巴"), None);
+    }
+
+    /// 票 05：旁路写入——回合持有的主连接之外，壳层开第二条 Db 连接落
+    /// owner 消息并解析指令；WAL 下主连接立即可读（send_message_side 是
+    /// src-tauri send_message/pause/resume 在回合进行中的真实通道）。
+    #[test]
+    fn send_message_side_visible_from_main_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let main = Db::open(&path).unwrap();
+        main.conn()
+            .execute(
+                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                [],
+            )
+            .unwrap();
+        // 第二条连接 = 壳层旁路；写 /pause 与普通消息
+        let side = Db::open(&path).unwrap();
+        let (id, cmd) = send_message_side(&side, "p1", "/pause").unwrap();
+        assert_eq!(cmd, Some(TextCommand::Pause));
+        let body: String = main
+            .conn()
+            .query_row("SELECT body FROM messages WHERE id=?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(body, "/pause");
+        let (_id2, cmd2) = send_message_side(&side, "p1", "普通插话").unwrap();
+        assert_eq!(cmd2, None);
+        // owner_message 事件也随 append_message 落了——主连接看得到
+        let n: i64 = main
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='owner_message'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2);
     }
 
     #[test]
@@ -1650,10 +1777,8 @@ mod tests {
             }),
         );
         let out = wb.dispatch("后端", "干活").unwrap();
-        assert!(
-            matches!(out, TurnOutcome::Failed(ref e) if e.contains("paused")),
-            "got {out:?}"
-        );
+        // 票 04：叫停是 Interrupted 终态，不再是 Failed("paused…")
+        assert!(matches!(out, TurnOutcome::Interrupted), "got {out:?}");
         // 只跑了方案 + 一轮工具：第 3 次模型调用没发生
         assert!(!dir.path().join("src/b.rs").exists());
     }

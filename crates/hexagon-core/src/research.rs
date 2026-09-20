@@ -152,5 +152,7 @@ fn run_nested(
         )),
         TurnOutcome::Truncated => Err(ToolError::Exec("research output truncated".into())),
         TurnOutcome::Failed(e) => Err(ToolError::Exec(format!("research failed: {e}"))),
+        // 票 04：负责人叫停嵌套研究 = 模型可读的普通工具错（叫停不是基建事故）
+        TurnOutcome::Interrupted => Err(ToolError::Exec("interrupted by owner".into())),
     }
 }

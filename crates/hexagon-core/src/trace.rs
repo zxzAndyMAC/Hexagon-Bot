@@ -80,6 +80,34 @@ pub enum EventKind {
     System,
 }
 
+/// 失败/打回理由闭集（rsi-research 票 02；仿 DSH `TurnEndReason`/
+/// `GoalBlockReason` 的 code+message 分离）：code 是机器可判的稳定词表，
+/// message 永远自由文本给人看。自治裁决（repairable→可自动回填）与回放
+/// 报告的结局分类共用同一词表——词表只增不改，消费方按字面匹配。
+/// 出处：`.scratch/rsi-research/issues/02-failure-taxonomy.md`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureCode {
+    /// 可修复：声明的回路能自愈（回填边拨回、复审通道返工）
+    Repairable,
+    /// 歧义：机器无法裁决，需人看（无复审者/重复打回/意外失败）
+    Ambiguous,
+    /// 硬阻断：结构上不可继续（异议对象是已盖章产物、熔断停回合）
+    HardBlocked,
+    /// 预算/容量触顶（上下文撞限、用量触顶、输出截断）
+    BudgetExceeded,
+}
+
+impl FailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Repairable => "repairable",
+            Self::Ambiguous => "ambiguous",
+            Self::HardBlocked => "hard-blocked",
+            Self::BudgetExceeded => "budget-exceeded",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub id: i64,
@@ -149,6 +177,10 @@ impl Db {
     /// 对齐工具结果 spill 设施，事件表不被巨型 meta 撑爆。
     const EVENT_PAYLOAD_CAP: usize = 64 * 1024;
 
+    /// 事件 schema 版本（迁移 0012）：payload 形状演化时递增——回放/导出
+    /// 按列区分旧格式，不用解析 JSON 猜形状（对齐 aisuite TRACE_SCHEMA_VERSION）。
+    const EVENT_SCHEMA_VERSION: i64 = 1;
+
     pub fn append_event(
         &self,
         project_id: &str,
@@ -162,9 +194,16 @@ impl Db {
             text = self.spill_payload(project_id, &text);
         }
         self.conn().execute(
-            "INSERT INTO events (project_id, stage_run_id, agent_id, kind, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![project_id, stage_run_id, agent_id, kind_str(kind), text,],
+            "INSERT INTO events (project_id, stage_run_id, agent_id, kind, payload, schema_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                project_id,
+                stage_run_id,
+                agent_id,
+                kind_str(kind),
+                text,
+                Self::EVENT_SCHEMA_VERSION,
+            ],
         )?;
         Ok(self.conn().last_insert_rowid())
     }
@@ -243,14 +282,15 @@ impl Db {
             payload["after_external"] = serde_json::json!(true);
         }
         tx.execute(
-            "INSERT INTO events (project_id, stage_run_id, agent_id, kind, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO events (project_id, stage_run_id, agent_id, kind, payload, schema_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 project_id,
                 stage_run_id,
                 agent_id,
                 kind_str(kind),
                 serde_json::to_string(&payload)?,
+                Self::EVENT_SCHEMA_VERSION,
             ],
         )?;
         tx.commit()?;

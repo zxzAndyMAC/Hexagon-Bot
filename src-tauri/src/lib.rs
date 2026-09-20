@@ -4,10 +4,29 @@
 use hexagon_core::api::Workbench;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 struct AppState {
     wb: Mutex<Option<Workbench>>,
+    /// 项目库路径（turn-streaming 票 04/05）：回合进行中 wb 锁被占，
+    /// owner 消息/暂停指令经第二条 Db 连接旁路落库，不然干预进不来。
+    db_path: Mutex<Option<std::path::PathBuf>>,
+}
+
+/// 回合 delta → webview（turn-streaming 票 03）：所有 Workbench 构造点
+/// 统一挂 emit。delta 是瞬时展示通道，持久层照旧走 events/messages。
+fn attach_delta_hook(app: &tauri::AppHandle, wb: &Workbench) {
+    let h = app.clone();
+    wb.set_turn_delta_hook(Some(Box::new(move |d| {
+        let _ = h.emit("turn-delta", d);
+    })));
+}
+
+/// 旁路 Db：回合进行中也能写（WAL 双连接 + busy_timeout 兜底）。
+fn side_db(state: &AppState) -> Result<Option<hexagon_core::db::Db>, String> {
+    let p = state.db_path.lock().map_err(|e| e.to_string())?.clone();
+    p.map(|p| hexagon_core::db::Db::open(p).map_err(|e| e.to_string()))
+        .transpose()
 }
 
 fn with_wb<R>(
@@ -48,6 +67,9 @@ fn open_project(
         .map_err(|e: serde_json::Error| e.to_string())?;
     let mut wb = Workbench::open(&dir, &name, &roles, pack).map_err(|e| e.to_string())?;
     hexagon_core::providers::register_all(&mut wb, Arc::new(hexagon_core::credentials::OsKeychain));
+    attach_delta_hook(&app, &wb);
+    *state.db_path.lock().map_err(|e| e.to_string())? =
+        Some(std::path::Path::new(&dir).join(".hexagon/state.db"));
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(&app, &dir, &name, "pack");
     Ok(())
@@ -67,6 +89,26 @@ fn timeline(
 
 #[tauri::command]
 fn send_message(state: tauri::State<AppState>, body: String) -> Result<i64, String> {
+    // 票 04/05：回合进行中 wb 锁被 dispatch 占着——消息和 暂停/恢复
+    // 指令必须走旁路 Db 落库，否则 steering 和流中叫停永远排在回合后面。
+    // 其余指令（rewind/stamp/skip/override/install）仍排 wb 队列——
+    // 回合中途本来也不该执行它们。
+    if let Some(db) = side_db(&state)? {
+        let (id, cmd) =
+            hexagon_core::api::send_message_side(&db, "p1", &body).map_err(|e| e.to_string())?;
+        use hexagon_core::api::TextCommand;
+        match cmd {
+            Some(TextCommand::Pause) => {
+                hexagon_core::orchestra::pause(&db, "p1").map_err(|e| e.to_string())?;
+            }
+            Some(TextCommand::Resume) => {
+                hexagon_core::orchestra::resume(&db, "p1").map_err(|e| e.to_string())?;
+            }
+            Some(other) => with_wb(&state, |wb| wb.dispatch_command(&other))?,
+            None => {}
+        }
+        return Ok(id);
+    }
     with_wb(&state, |wb| wb.send_message(&body))
 }
 
@@ -109,10 +151,17 @@ fn skip_review(state: tauri::State<AppState>, artifact_kind: String) -> Result<(
 }
 #[tauri::command]
 fn pause(state: tauri::State<AppState>) -> Result<(), String> {
+    // 票 04：暂停按钮是回合中的叫停通道——必须走旁路，wb 锁正被回合占着
+    if let Some(db) = side_db(&state)? {
+        return hexagon_core::orchestra::pause(&db, "p1").map_err(|e| e.to_string());
+    }
     with_wb(&state, |wb| wb.pause())
 }
 #[tauri::command]
 fn resume(state: tauri::State<AppState>) -> Result<(), String> {
+    if let Some(db) = side_db(&state)? {
+        return hexagon_core::orchestra::resume(&db, "p1").map_err(|e| e.to_string());
+    }
     with_wb(&state, |wb| wb.resume())
 }
 #[tauri::command]
@@ -337,6 +386,28 @@ fn reject_proposal(
     with_wb(&state, |wb| wb.reject_proposal(&qid, &reason))
 }
 
+/// 票 07：不变量伴随件手动体检入口——返回违规数（0=trace 自洽），
+/// 违规明细落 invariant_violation 事件。
+#[tauri::command]
+fn invariant_check(state: tauri::State<AppState>) -> Result<usize, String> {
+    with_wb(&state, |wb| wb.invariant_check_and_log())
+}
+
+/// 票 10：政策研发提案的确定性入口——旋钮编辑 JSON + 场景 JSON →
+/// 副本改旋钮 → 回放 → 携证据+judge 判定进普通提案队列。
+/// 产出物无特权通道（submit 全校验+负责人盖章不变）。
+#[tauri::command]
+fn policydev_propose(
+    state: tauri::State<AppState>,
+    edits: Vec<Value>,
+    scenario: Value,
+    motive: String,
+) -> Result<String, String> {
+    let sc: hexagon_core::scenario::Scenario =
+        serde_json::from_value(scenario).map_err(|e| e.to_string())?;
+    with_wb(&state, |wb| wb.policydev_propose(&edits, &sc, &motive))
+}
+
 #[tauri::command]
 fn rollback_proposal(state: tauri::State<AppState>, proposal_id: String) -> Result<(), String> {
     with_wb(&state, |wb| wb.rollback_proposal(&proposal_id))
@@ -480,6 +551,9 @@ fn open_recent(
     // OR IGNORE 保住库里的真实 name/mode；project_info 读库得真值
     let mut wb = Workbench::open(&dir, &name, &[], pack).map_err(|e| e.to_string())?;
     hexagon_core::providers::register_all(&mut wb, Arc::new(hexagon_core::credentials::OsKeychain));
+    attach_delta_hook(&app, &wb);
+    *state.db_path.lock().map_err(|e| e.to_string())? =
+        Some(std::path::Path::new(&dir).join(".hexagon/state.db"));
     let info = wb.project_info().map_err(|e| e.to_string())?;
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(
@@ -495,6 +569,7 @@ fn open_recent(
 #[tauri::command]
 fn close_project(state: tauri::State<AppState>) -> Result<(), String> {
     *state.wb.lock().map_err(|e| e.to_string())? = None;
+    *state.db_path.lock().map_err(|e| e.to_string())? = None;
     Ok(())
 }
 
@@ -735,6 +810,9 @@ fn create_project(
     )
     .map_err(|e| e.to_string())?;
     hexagon_core::providers::register_all(&mut wb, Arc::new(OsKeychain));
+    attach_delta_hook(&app, &wb);
+    *state.db_path.lock().map_err(|e| e.to_string())? =
+        Some(std::path::Path::new(&opts.dir).join(".hexagon/state.db"));
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(
         &app,
@@ -810,6 +888,7 @@ pub fn run() {
         })
         .manage(AppState {
             wb: Mutex::new(None),
+            db_path: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             core_ping,
@@ -858,6 +937,8 @@ pub fn run() {
             review_proposal,
             confirm_proposal,
             reject_proposal,
+            invariant_check,
+            policydev_propose,
             rollback_proposal,
             request_publish,
             confirm_publish,
