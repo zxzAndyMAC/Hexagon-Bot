@@ -9,7 +9,6 @@
 //! 代价模型：误判「可过」= 负责人盖了不该盖的章;误判「需人看」=
 //! 多一次人工——所有存疑路径偏 needs-human。
 
-use crate::api::ApiError;
 use crate::db::Db;
 use crate::orchestra::PackDef;
 use crate::provider::{ChatRequest, ContentBlock, Message, ModelProvider, Role};
@@ -17,6 +16,21 @@ use crate::replay::ReplayReport;
 use crate::trace::EventKind;
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+/// 判定层错误（D08 清尾）：judge 是叶子模块，不再以门面 `ApiError`
+/// 为货币。`evaluate` 本身不返错（畸形/超时/报错一律 needs-human，
+/// 见模块头代价模型），错误只来自落库/读文件/卡注解。
+#[derive(Debug, thiserror::Error)]
+pub enum JudgeError {
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Trace(#[from] crate::trace::TraceError),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
+}
 
 /// 判定闭集：只增不改。needs-human 是所有异常路径的归宿。
 /// 名 Judgement 而非 Verdict——review.rs 的复审裁定也叫 Verdict,
@@ -363,7 +377,7 @@ pub fn judge_proposal(
     repo_root: &std::path::Path,
     backend: &dyn JudgeBackend,
     proposal_id: &str,
-) -> Result<Option<JudgeVerdict>, ApiError> {
+) -> Result<Option<JudgeVerdict>, JudgeError> {
     let (artifact_id, author): (Option<String>, String) = db.conn().query_row(
         "SELECT artifact_id, author_agent_id FROM proposals WHERE id=?1 AND project_id=?2",
         rusqlite::params![proposal_id, project_id],
@@ -377,8 +391,7 @@ pub fn judge_proposal(
             .query_row("SELECT path FROM artifacts WHERE id=?1", [&aid], |r| {
                 r.get(0)
             })?;
-    let body =
-        std::fs::read_to_string(repo_root.join(".hexagon").join(&path)).map_err(ApiError::Io)?;
+    let body = std::fs::read_to_string(repo_root.join(".hexagon").join(&path))?;
     let Some(Ok(report)) = crate::proposals::replay_evidence(&body) else {
         // 无证据提案标 judge_skip——不然 sweep 每回合都重读一遍产物
         // 文件（证据在文件里,查询层看不见）。
@@ -452,7 +465,7 @@ pub fn sweep(
     project_id: &str,
     repo_root: &std::path::Path,
     backend: &dyn JudgeBackend,
-) -> Result<usize, ApiError> {
+) -> Result<usize, JudgeError> {
     let ids = crate::cards::unjudged_stamp_proposals(db, project_id)?;
     let mut n = 0;
     for pid in ids {

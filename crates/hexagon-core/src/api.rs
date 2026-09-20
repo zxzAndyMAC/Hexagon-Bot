@@ -91,6 +91,8 @@ pub enum ApiError {
     Roles(#[from] crate::roles::RoleError),
     #[error(transparent)]
     PackEdit(#[from] crate::packedit::PackEditError),
+    #[error(transparent)]
+    Judge(#[from] crate::judge::JudgeError),
     #[error("bad input: {0}")]
     BadInput(String),
 }

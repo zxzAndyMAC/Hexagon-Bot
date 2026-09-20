@@ -96,7 +96,9 @@ impl_error_code!(
     Install,
     Roles,
     PackEdit,
+    Judge,
 );
+impl_error_code!(crate::judge::JudgeError, Sqlite, Io, Trace, Cards,);
 impl_error_code!(crate::artifacts::ArtifactError, Tool, Trace, Db, Sqlite, Io,);
 impl_error_code!(
     crate::autonomy::AutonomyError,
@@ -253,6 +255,11 @@ mod tests {
             rusqlite::Error::InvalidQuery,
         ));
         assert_eq!(e.code(), "sqlite");
+        // 票 09：JudgeError 是叶子模块本地货币，包装后仍穿透到叶码
+        let e = crate::api::ApiError::Judge(crate::judge::JudgeError::Cards(
+            crate::cards::CardsError::NotFound("q9".into()),
+        ));
+        assert_eq!(e.code(), "not_found");
     }
 
     #[test]
