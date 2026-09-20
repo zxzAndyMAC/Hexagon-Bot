@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUiStore } from './store'
-import type { TurnDelta } from './api'
+import { api, type TimelineItem, type TurnDelta } from './api'
 
 const d = (over: Partial<TurnDelta>): TurnDelta => ({
   agent_id: 'a1',
@@ -45,5 +45,60 @@ describe('applyDelta（turn-streaming 票 03）', () => {
     const streams = useUiStore.getState().streams
     expect(streams.a1).toBeUndefined()
     expect(streams.a2[0]).toBe('y')
+  })
+})
+
+// 增量通道（arch-review 票 07）：timeline 走 after 游标追加，
+// refresh() 是唯一的全量重置点。
+const mkItem = (id: number): TimelineItem => ({
+  event: {
+    id, project_id: 'p1', kind: 'system', agent_id: null,
+    stage_run_id: null, payload: {}, created_at: `2026-09-18T12:${String(id).padStart(2, '0')}:00Z`,
+  },
+  message: null,
+})
+
+describe('refreshFast 增量归并（arch-review 票 07）', () => {
+  beforeEach(() => useUiStore.setState({ timeline: [], stages: [], pending: [] }))
+  afterEach(() => vi.restoreAllMocks())
+
+  it('空时间线首拉全量；之后按末条 id 增量', async () => {
+    const spy = vi.spyOn(api, 'timeline')
+    await useUiStore.getState().refreshFast()
+    expect(spy).toHaveBeenCalledWith(undefined)
+    const n = useUiStore.getState().timeline.length
+    expect(n).toBeGreaterThan(0)
+    const lastId = useUiStore.getState().timeline.at(-1)!.event.id
+
+    await useUiStore.getState().refreshFast()
+    expect(spy).toHaveBeenLastCalledWith(lastId)
+    expect(useUiStore.getState().timeline.length).toBe(n) // mock 无新事件 → 不增
+  })
+
+  it('新事件追加；重复返回同批幂等', async () => {
+    const spy = vi.spyOn(api, 'timeline')
+    await useUiStore.getState().refreshFast()
+    const n = useUiStore.getState().timeline.length
+    const lastId = useUiStore.getState().timeline.at(-1)!.event.id
+
+    spy.mockResolvedValueOnce([mkItem(lastId + 1)])
+    await useUiStore.getState().refreshFast()
+    expect(useUiStore.getState().timeline.at(-1)!.event.id).toBe(lastId + 1)
+    expect(useUiStore.getState().timeline.length).toBe(n + 1)
+
+    // 实现漂移返回重复段：客户端 id 闸挡住
+    spy.mockResolvedValueOnce([mkItem(lastId + 1), mkItem(lastId + 2)])
+    await useUiStore.getState().refreshFast()
+    const ids = useUiStore.getState().timeline.map((i) => i.event.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(useUiStore.getState().timeline.at(-1)!.event.id).toBe(lastId + 2)
+  })
+
+  it('refresh() 全量重置游标', async () => {
+    useUiStore.setState({ timeline: [mkItem(9999)] })
+    await useUiStore.getState().refresh()
+    const tl = useUiStore.getState().timeline
+    expect(tl[0].event.id).toBe(1) // 回到 mock 首段，假数据被清
+    expect(tl.some((i) => i.event.id === 9999)).toBe(false)
   })
 })

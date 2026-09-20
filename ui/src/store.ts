@@ -75,6 +75,9 @@ interface UiState {
   setSplitOpen: (v: boolean) => void
   applyDelta: (d: TurnDelta) => void
   refresh: () => Promise<void>
+  /// 快通道（arch-review 票 07）：2s 轮询面 = stages+pending+timeline 增量
+  /// （3 invoke 稳态）。timeline 走 after 游标追加；空时间线=首拉全量。
+  refreshFast: () => Promise<void>
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -168,5 +171,23 @@ export const useUiStore = create<UiState>((set) => ({
       packName: info?.pack_name ?? null,
       projectName: info?.name ?? useUiStore.getState().projectName,
     })
+  },
+  refreshFast: async () => {
+    // 游标=末条 event.id（events 表 append-only、查询 ASC + after 排他）。
+    const after = useUiStore.getState().timeline.at(-1)?.event.id
+    const [stages, pending, items] = await Promise.all([
+      api.stageStatus(),
+      api.pendingQuestions(),
+      api.timeline(after),
+    ])
+    set((s) => ({
+      stages,
+      pending,
+      // after 在服务端即排他；客户端再挡一层防 mock/实现漂移。
+      timeline:
+        after == null
+          ? items
+          : [...s.timeline, ...items.filter((i) => i.event.id > after)],
+    }))
   },
 }))

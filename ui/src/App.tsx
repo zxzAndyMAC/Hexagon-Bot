@@ -23,6 +23,7 @@ import { bindingFor, matches } from './keymap'
 
 export default function App() {
   const refresh = useUiStore((s) => s.refresh)
+  const refreshFast = useUiStore((s) => s.refreshFast)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
@@ -36,9 +37,11 @@ export default function App() {
   useEffect(() => {
     if (projectOpen !== true) return
     refresh()
-    const iv = setInterval(refresh, 2000) // 事件推送落地前的轮询占位
+    // 票 07：轮询收窄到快通道（stages+pending+timeline 增量，稳态 3 invoke）；
+    // 慢通道（usage/artifacts/avatars）由 invalidate 失效标签驱动。
+    const iv = setInterval(refreshFast, 2000)
     return () => clearInterval(iv)
-  }, [refresh, projectOpen])
+  }, [refresh, refreshFast, projectOpen])
 
   // 票 03：回合流式 delta 订阅（Tauri 事件 → store 瞬时缓冲；
   // 浏览器 dev 无推送通道，onTurnDelta 返回 no-op）。

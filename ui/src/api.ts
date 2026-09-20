@@ -533,8 +533,10 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'art14', path: 'proposals/p2.md', kind: '改进提案', tier: 'parse', stage_run_id: 'r3', author: 'a1', version: 1, status: 'valid', upstream_id: null },
         { id: 'art15', path: 'docs/markdown-demo.md', kind: '结构说明', tier: 'freeform', stage_run_id: 'r1', author: 'a1', version: 1, status: 'valid', upstream_id: null },
       ] as T
-    case 'timeline':
-      return [
+    case 'timeline': {
+      // mock 也尊重 after/limit（票 07 增量通道）：真实后端同语义，
+      // dev/测试里才能演练游标归并。
+      const all: TimelineItem[] = [
         mkEv(1, 'pack_upgraded', null, null, { pack: '规格驱动' }, '09:00'),
         mkEv(2, 'agent_activated', 'a0', null, {}, '09:00'),
         mkEv(3, 'system', null, null, { note: '快速通道项目钉包副本，切规格驱动 v1' }, '09:00'),
@@ -647,7 +649,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
           artifacts: { valid: 4, stamped: 4, pending: 1 },
           flags: { open: 1 }, permissions: { asked: 1 }, stages: { waiting_stamp: 1 },
         }, '11:35'),
-      ] as T
+      ]
+      const after = args?.after == null ? null : Number(args.after)
+      const limit = Number(args?.limit ?? 500)
+      return all.filter((i) => after == null || i.event.id > after).slice(0, limit) as T
+    }
     case 'pending_questions':
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
