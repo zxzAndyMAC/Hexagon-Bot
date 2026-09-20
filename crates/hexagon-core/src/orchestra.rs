@@ -286,16 +286,25 @@ impl Db {
 
 /// 暂停看事件流：最后一个 Paused/Resumed 决定。
 pub fn is_paused(db: &Db, project_id: &str) -> Result<bool, OrchError> {
-    let k: Option<String> = db
-        .conn()
-        .query_row(
-            "SELECT kind FROM events WHERE project_id=?1
-             AND kind IN ('paused','resumed') ORDER BY id DESC LIMIT 1",
-            [project_id],
-            |r| r.get(0),
-        )
-        .ok();
-    Ok(k.as_deref() == Some("paused"))
+    // 两个 MAX(id) 索引探针而非 IN+ORDER BY：后者被规划器选成
+    // idx_events_project 全项目倒扫（10 万事件实测 50ms/次——arch-review
+    // 附录 B2；流式循环每 delta 调一次）。MAX 走 idx_events_kind
+    // (project_id,kind,id) 末项定位，O(log n) 且不依赖规划器。
+    let latest = |kind: &str| -> Option<i64> {
+        db.conn()
+            .query_row(
+                "SELECT MAX(id) FROM events WHERE project_id=?1 AND kind=?2",
+                rusqlite::params![project_id, kind],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten()
+    };
+    Ok(match (latest("paused"), latest("resumed")) {
+        (Some(p), Some(r)) => p > r,
+        (Some(_), None) => true,
+        _ => false,
+    })
 }
 
 /// 开一个阶段：建 stage_run、按名单激活/休眠、缺席判跳过。
@@ -1528,5 +1537,37 @@ mod tests {
             })
             .unwrap();
         assert_eq!(st, "active");
+    }
+
+    /// B2 核验（arch-review 附录 B2）：流式循环每 delta 调一次
+    /// `is_paused`（turn.rs 唯一暂停缝）。10 万事件库上实测每次调用
+    /// 必须走 `idx_events_kind(project_id,kind,id)` 索引 O(log n)——
+    /// 若未来 schema/查询漂移成全表扫，此测试会咬人。
+    #[test]
+    fn is_paused_scales_on_large_event_log() {
+        let (db, _d) = setup(&["后端"]);
+        let mut batch = String::from("BEGIN;");
+        for i in 0..100_000u32 {
+            batch.push_str(
+                "INSERT INTO events (project_id,kind,payload) VALUES ('p1','message','{}');",
+            );
+            if i % 10_000 == 9_999 {
+                batch.push_str("COMMIT;BEGIN;");
+            }
+        }
+        batch.push_str("COMMIT;");
+        db.conn().execute_batch(&batch).unwrap();
+
+        let t0 = std::time::Instant::now();
+        for _ in 0..1000 {
+            assert!(!is_paused(&db, "p1").unwrap());
+        }
+        let per = t0.elapsed() / 1000;
+        eprintln!("is_paused ×1000 @100k events: {per:?}/call");
+        // 宽限阈值：索引路径实测在微秒级；掉到毫秒级即说明索引失效。
+        assert!(
+            per < std::time::Duration::from_millis(5),
+            "is_paused 单次 {per:?}——索引路径疑似失效"
+        );
     }
 }

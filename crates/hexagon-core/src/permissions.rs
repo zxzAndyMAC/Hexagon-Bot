@@ -325,17 +325,29 @@ fn host_matches_dom(token: &str, dom: &str) -> bool {
 
 /// 段 token 序列与形状 token 序列匹配：`*` 至少吃一段
 /// （「cargo *」不匹配裸「cargo」——宽松面是安全隐患）。
+///
+/// 回溯加 memo：朴素递归对 k 个星 + 长 argv 是 O(n^k)（实测 k=8/n=40
+/// 跑 2.3s——arch-review 附录 B1 证实；形状来自 owner 批准的
+/// remember_shape，半可信输入不该能冻结评估循环）。memo 后 O(S·T)。
 fn seg_tokens_match(shape: &[&str], argv: &[String]) -> bool {
-    fn m(s: &[&str], t: &[String]) -> bool {
-        if s.is_empty() {
-            return t.is_empty();
+    let (sn, tn) = (shape.len(), argv.len());
+    let mut memo = vec![vec![None; tn + 1]; sn + 1];
+    fn m(s: &[&str], t: &[String], memo: &mut [Vec<Option<bool>>]) -> bool {
+        let (si, ti) = (s.len(), t.len());
+        if let Some(v) = memo[si][ti] {
+            return v;
         }
-        if s[0] == "*" {
-            return (1..=t.len()).any(|i| m(&s[1..], &t[i..]));
-        }
-        !t.is_empty() && s[0] == t[0] && m(&s[1..], &t[1..])
+        let v = if s.is_empty() {
+            t.is_empty()
+        } else if s[0] == "*" {
+            (1..=t.len()).any(|i| m(&s[1..], &t[i..], memo))
+        } else {
+            !t.is_empty() && s[0] == t[0] && m(&s[1..], &t[1..], memo)
+        };
+        memo[si][ti] = Some(v);
+        v
     }
-    m(shape, argv)
+    m(shape, argv, &mut memo)
 }
 
 /// bash 目标的形状匹配：复合命令每段独立判定，全部命中才放行。
@@ -1289,6 +1301,27 @@ mod tests {
     //
     // 规格 Testing Decisions：proptest 生成规则组合，断言三条不变量
     // 在任意 allow/deny/作用域组合下恒成立。
+
+    /// B1 核验探针（arch-review 附录 B1）：`*` 回溯最坏 O(n^k) 无 memo，
+    /// 病态形状（k 个星 + 尾段不匹配字面量强迫全回溯）必须在有界时间返回。
+    /// 打印实测耗时供报告取证；阈值取宽限值只抓指数爆炸。
+    #[test]
+    fn star_match_pathological_bounded() {
+        for k in [4usize, 6, 8] {
+            let mut shape = vec!["*"; k];
+            // 尾字面量 "z" 对全 x argv 永不命中——每个星的切分都要走完才败。
+            shape.push("z");
+            let argv: Vec<String> = (0..40).map(|_| "x".to_string()).collect();
+            let t0 = std::time::Instant::now();
+            let _ = seg_tokens_match(&shape, &argv);
+            let el = t0.elapsed();
+            eprintln!("seg_tokens_match k={k}+z n=40: {el:?}");
+            assert!(
+                el < std::time::Duration::from_secs(5),
+                "k={k} 病态形状 {el:?} 超界——需迭代+memo 修复"
+            );
+        }
+    }
 
     mod prop_tests {
         use super::tests::setup;
