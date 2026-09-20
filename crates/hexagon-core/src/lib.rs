@@ -27,7 +27,7 @@ pub mod proposals;
 pub mod provenance;
 pub mod provider;
 pub mod provider_admin;
-pub mod providers;
+pub mod provider_config;
 pub mod publish;
 pub mod replay;
 pub mod research;

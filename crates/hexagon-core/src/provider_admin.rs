@@ -1,15 +1,15 @@
 //! 供应商配置面（arch-review 票 05 / ADR 0053）：providers 文档读写 +
-//! keychain 凭据的组合操作，壳层唯一入口——`rg "hexagon_core::providers::"
+//! keychain 凭据的组合操作，壳层唯一入口——`rg "hexagon_core::provider_config::"
 //! src-tauri` 应保持 ≤1（唯一例外是 create_project 建档校验用的 load）。
 //! 运行中实例的热挂接走 `Workbench::reload_providers`，不在此列。
 
 use crate::credentials::{provider_key_name, CredentialStore};
-use crate::providers::{self};
+use crate::provider_config;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdminError {
     #[error(transparent)]
-    Providers(#[from] providers::ProvidersError),
+    Providers(#[from] provider_config::ProvidersError),
     #[error(transparent)]
     Cred(#[from] crate::credentials::CredError),
     #[error("json: {0}")]
@@ -20,9 +20,9 @@ pub enum AdminError {
     MissingKey(String),
 }
 
-// 壳层供应商面的类型出口也在这里——providers:: 直名只许出现在本模块
+// 壳层供应商面的类型出口也在这里——provider_config:: 直名只许出现在本模块
 // 与 create_project 建档校验（票 05 收口约定，rg 闸=1 针对逻辑直调）。
-pub use crate::providers::{ModelEntry, ProviderDef};
+pub use crate::provider_config::{ModelEntry, ProviderDef};
 
 /// 供应商的对外视图（ADR 0054）：非密字段平铺 + key_set 只报是否已存
 /// （key 明文永不回传）。
@@ -39,13 +39,13 @@ pub struct ProviderView {
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProvidersView {
     pub providers: Vec<ProviderView>,
-    pub slots: std::collections::HashMap<String, providers::SlotBinding>,
+    pub slots: std::collections::HashMap<String, provider_config::SlotBinding>,
 }
 
 /// 供应商文档的对外视图：非密字段 + 各供应商 key 是否已存
 /// （key 明文永不回传）+ 槽位绑定表。
 pub fn list(store: &dyn CredentialStore) -> Result<ProvidersView, AdminError> {
-    let doc = providers::load()?;
+    let doc = provider_config::load()?;
     let providers: Vec<ProviderView> = doc
         .providers
         .iter()
@@ -68,7 +68,7 @@ pub fn save(
     secret: Option<String>,
     store: &dyn CredentialStore,
 ) -> Result<(), AdminError> {
-    providers::save_provider(&def)?;
+    provider_config::save_provider(&def)?;
     if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
         store.set(&provider_key_name(&def.id), s.trim())?;
     }
@@ -77,25 +77,25 @@ pub fn save(
 
 /// 删供应商（级联解绑槽位）；keychain 不动。
 pub fn delete(id: &str) -> Result<(), AdminError> {
-    Ok(providers::delete_provider(id)?)
+    Ok(provider_config::delete_provider(id)?)
 }
 
 /// 槽位绑定（供应商必须存在）。
 pub fn set_binding(slot: &str, provider_id: &str, model: &str) -> Result<(), AdminError> {
-    Ok(providers::set_binding(slot, provider_id, model)?)
+    Ok(provider_config::set_binding(slot, provider_id, model)?)
 }
 
 /// 解绑槽位。
 pub fn remove_binding(slot: &str) -> Result<(), AdminError> {
-    Ok(providers::remove_binding(slot)?)
+    Ok(provider_config::remove_binding(slot)?)
 }
 
 /// 拉取/检测供应商模型目录：GET /models；key 从凭据库现取，缺 key 直报。
 pub fn fetch_models(
     id: &str,
     store: &dyn CredentialStore,
-) -> Result<Vec<providers::ModelEntry>, AdminError> {
-    let doc = providers::load()?;
+) -> Result<Vec<provider_config::ModelEntry>, AdminError> {
+    let doc = provider_config::load()?;
     let def = doc
         .providers
         .iter()
@@ -104,6 +104,6 @@ pub fn fetch_models(
     let key = store
         .get(&provider_key_name(&def.id))?
         .ok_or_else(|| AdminError::MissingKey(def.id.clone()))?;
-    let models = providers::fetch_models(def, &key)?;
+    let models = provider_config::fetch_models(def, &key)?;
     Ok(models)
 }

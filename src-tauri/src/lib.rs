@@ -1004,8 +1004,8 @@ fn create_project(
                 .ok_or_else(|| CmdError::internal(format!("未知流程包: {n}")))
         })
         .transpose()?;
-    // 壳层唯一保留的 providers:: 直调：create_project 建档校验要文档现状
-    let pdoc = hexagon_core::providers::load().unwrap_or_default();
+    // 壳层唯一保留的 provider_config:: 直调：create_project 建档校验要文档现状
+    let pdoc = hexagon_core::provider_config::load().unwrap_or_default();
     let mut wb = setup::create_project(
         &opts.dir,
         &opts.name,

@@ -98,11 +98,11 @@ pub fn write_agents_md(dir: impl AsRef<Path>, content: &str) -> Result<(), Setup
 
 /// 所选角色的模型槽里哪些不就绪（返回槽位名，去重排序）。
 /// 就绪 = 槽位有绑定 + 供应商存在且启用 + key 已存（default 槽兜底）——
-/// 语义已从「缺 key」升级为「缺可用供应商」，见 providers.rs。
+/// 语义已从「缺 key」升级为「缺可用供应商」，见 provider_config.rs。
 pub fn missing_model_keys(
     store: &dyn CredentialStore,
     roles: &[RoleDef],
-    doc: &crate::providers::ProviderDoc,
+    doc: &crate::provider_config::ProviderDoc,
 ) -> Result<Vec<String>, SetupError> {
     let mut missing = Vec::new();
     for slot in {
@@ -111,7 +111,7 @@ pub fn missing_model_keys(
         s.dedup();
         s
     } {
-        if !crate::providers::slot_ready(doc, store, slot) {
+        if !crate::provider_config::slot_ready(doc, store, slot) {
             missing.push(slot.to_string());
         }
     }
@@ -130,7 +130,7 @@ pub fn create_project(
     fastpath_role: Option<&str>,
     init_git: bool,
     store: &dyn CredentialStore,
-    doc: &crate::providers::ProviderDoc,
+    doc: &crate::provider_config::ProviderDoc,
 ) -> Result<Workbench, SetupError> {
     let dir = dir.as_ref();
     std::fs::create_dir_all(dir)?;
@@ -234,9 +234,9 @@ mod tests {
     }
 
     /// 测试用供应商档：test-prov + chat 槽绑定（新就绪语义=绑定+启用+key）。
-    fn doc_with_provider() -> crate::providers::ProviderDoc {
-        let mut doc = crate::providers::ProviderDoc::default();
-        doc.providers.push(crate::providers::ProviderDef {
+    fn doc_with_provider() -> crate::provider_config::ProviderDoc {
+        let mut doc = crate::provider_config::ProviderDoc::default();
+        doc.providers.push(crate::provider_config::ProviderDef {
             id: "test-prov".into(),
             name: "Test".into(),
             kind: crate::provider::ProviderKind::OpenAi,
@@ -246,7 +246,7 @@ mod tests {
         });
         doc.slots.insert(
             "chat".into(),
-            crate::providers::SlotBinding {
+            crate::provider_config::SlotBinding {
                 provider_id: "test-prov".into(),
                 model: "m".into(),
             },
@@ -387,7 +387,7 @@ mod tests {
             None,
             true,
             &MemoryStore::default(), // 没有任何 key
-            &crate::providers::ProviderDoc::default(),
+            &crate::provider_config::ProviderDoc::default(),
         ) {
             Ok(_) => panic!("missing key should block"),
             Err(e) => e,

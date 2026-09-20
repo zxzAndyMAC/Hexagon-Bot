@@ -152,7 +152,7 @@ impl_error_code!(
 );
 impl_error_code!(crate::provider::ProviderError);
 impl_error_code!(crate::provider_admin::AdminError, Providers, Cred, Json);
-impl_error_code!(crate::providers::ProvidersError, Io, Json);
+impl_error_code!(crate::provider_config::ProvidersError, Io, Json);
 impl_error_code!(
     crate::publish::PublishError,
     Sqlite,

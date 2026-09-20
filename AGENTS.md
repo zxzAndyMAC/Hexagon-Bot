@@ -34,7 +34,7 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 - **IPC 返回值必须是 serde 结构体**：禁止 `Vec<Value>`/`json!` 逐行拼装响应，payload 字段不得嵌字符串化 JSON。检查：`rg 'Result<Vec<Value>|Result<Value' crates/hexagon-core/src/api.rs` 白名单收敛（D06）
 - **跨 IPC 的 DTO 必须 `#[derive(ts_rs::TS)]` + `#[ts(export, export_to = ...)]`**，`export_to` 相对 crate 根：hexagon-core 用 `../../../ui/src/gen/`、src-tauri 用 `../../ui/src/gen/`。重生：`cargo test export_bindings`；64 位整数字段必须钉 `#[ts(type = "number")]`（ts-rs v11 默认 i64/u64→bigint，与 JSON number 不符）。`ui/src/gen/` 入 git，UI 不得手写同名 DTO（D06/ADR 0054）
 - **Tauri command 分 read/control/turn 三组注册，read 组禁止触碰 `state.wb`**。检查：`rg "state.wb" src-tauri/src/lib.rs` 命中只落 turn/mutation 组（D01）
-- **模型槽回退链只在 `providers::resolve_slot` 一处实现**。检查：`rg 'or_else.*"default"' crates/hexagon-core/src` 归零（D13）
+- **模型槽回退链只在 `provider_config::resolve_slot` 一处实现**（原 providers.rs，票 10 更名解碰 provider/providers）。检查：`rg 'or_else.*"default"' crates/hexagon-core/src` 归零（D13）
 - **`System` 事件的 `payload.kind` 子类词表集中登记于 `trace.rs`**，新增子类须同改词表与 `docs/glossary.html`。检查：`rg 'json!\(\{"kind":' crates/hexagon-core/src` 字面量只来自词表常量（D10）
 - **新判定器（judge/invariant/权限类判定面）必须配 proptest 属性测试**，不只样例测试；回归种子入 `proptest-regressions/`。检查：评审清单——新判定面 PR 必须含 `proptest!` 块钉不变量（D12）
 

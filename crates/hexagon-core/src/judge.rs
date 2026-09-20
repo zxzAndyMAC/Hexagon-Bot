@@ -354,7 +354,7 @@ pub fn backend_for<'a>(
         "off" => None,
         "mechanical" => Some(Box::new(MechanicalJudge)),
         "llm" => {
-            if let Some(p) = crate::providers::resolve_slot(providers, slot) {
+            if let Some(p) = crate::provider_config::resolve_slot(providers, slot) {
                 Some(Box::new(LlmJudge {
                     provider: p.as_ref(),
                     slot,

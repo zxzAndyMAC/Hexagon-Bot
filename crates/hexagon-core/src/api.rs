@@ -183,11 +183,11 @@ impl Workbench {
     /// 清掉文档覆盖的槽再按现状重挂——文档外的槽位（测试注入的
     /// ScriptedProvider）原样保留。
     pub fn reload_providers(&mut self) {
-        let doc = crate::providers::load().unwrap_or_default();
+        let doc = crate::provider_config::load().unwrap_or_default();
         for slot in doc.slots.keys() {
             self.providers.remove(slot);
         }
-        crate::providers::register_all(&mut self.providers, self.creds.clone());
+        crate::provider_config::register_all(&mut self.providers, self.creds.clone());
     }
 
     /// 测试构造：内存库 + 临时仓。
@@ -448,9 +448,11 @@ impl Workbench {
                 .query_row("SELECT model_slot FROM agents WHERE id=?1", [&aid], |r| {
                     r.get(0)
                 })?;
-        let provider =
-            crate::providers::resolve_slot(&self.providers, slot.as_deref().unwrap_or("default"))
-                .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        let provider = crate::provider_config::resolve_slot(
+            &self.providers,
+            slot.as_deref().unwrap_or("default"),
+        )
+        .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
         // 票 03：delta hook 锁跨整个回合——hook 一旦挂上，所有走
         // run_turn_opts 的入口（run_turn/dispatch/撞限放行）自动流式。
         let mut guard = self.delta_hook.lock().unwrap();
@@ -651,9 +653,11 @@ impl Workbench {
             [agent_id],
             |r| r.get(0),
         )?;
-        let provider =
-            crate::providers::resolve_slot(&self.providers, slot.as_deref().unwrap_or("default"))
-                .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        let provider = crate::provider_config::resolve_slot(
+            &self.providers,
+            slot.as_deref().unwrap_or("default"),
+        )
+        .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
         let role: String =
             self.db
                 .conn()
