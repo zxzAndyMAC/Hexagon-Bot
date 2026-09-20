@@ -306,6 +306,62 @@ pub fn query(
     Ok(rows)
 }
 
+/// 产物正文（ADR 0052 读组）：优先读 DB 最新版（0003 起随行存），
+/// 老行 content=NULL 回退读 `<root>/.hexagon/<path>` 盘上文件。
+pub fn content(
+    db: &Db,
+    repo_root: &std::path::Path,
+    project_id: &str,
+    path: &str,
+) -> Result<String, ArtifactError> {
+    let c: Option<String> = db.conn().query_row(
+        "SELECT content FROM artifacts WHERE project_id=?1 AND path=?2
+         ORDER BY version DESC LIMIT 1",
+        rusqlite::params![project_id, path],
+        |r| r.get(0),
+    )?;
+    if let Some(s) = c {
+        return Ok(s);
+    }
+    Ok(std::fs::read_to_string(
+        repo_root.join(".hexagon").join(path),
+    )?)
+}
+
+/// 指定版本内容（版本 diff / Agent 活动 tab 用）；版本不存在回 None。
+/// 老行无 content：只有「最新版=盘上文件」这一条路。
+pub fn content_at(
+    db: &Db,
+    repo_root: &std::path::Path,
+    project_id: &str,
+    path: &str,
+    version: i64,
+) -> Result<Option<String>, ArtifactError> {
+    let c: Option<Option<String>> = db
+        .conn()
+        .query_row(
+            "SELECT content FROM artifacts WHERE project_id=?1 AND path=?2 AND version=?3",
+            rusqlite::params![project_id, path, version],
+            |r| r.get(0),
+        )
+        .ok();
+    match c {
+        Some(Some(s)) => Ok(Some(s)),
+        Some(None) if version == latest_version(db, project_id, path)? => Ok(Some(
+            std::fs::read_to_string(repo_root.join(".hexagon").join(path))?,
+        )),
+        _ => Ok(None),
+    }
+}
+
+fn latest_version(db: &Db, project_id: &str, path: &str) -> Result<i64, ArtifactError> {
+    Ok(db.conn().query_row(
+        "SELECT COALESCE(MAX(version),0) FROM artifacts WHERE project_id=?1 AND path=?2",
+        rusqlite::params![project_id, path],
+        |r| r.get(0),
+    )?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

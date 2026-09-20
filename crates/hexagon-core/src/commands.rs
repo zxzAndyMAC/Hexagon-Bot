@@ -181,6 +181,52 @@ mod tests {
         assert_eq!(n, 2);
     }
 
+    /// ADR 0052 三通道：主连接（=wb 回合侧）握着未提交写事务时，
+    /// 控制连接的读不阻塞（WAL 快照语义，只见已提交前缀）；
+    /// 主连接提交后，控制连接的写/读双方互相可见。
+    /// busy_timeout=5s——若读取真去排队等写者，耗时断言必超阈值。
+    #[test]
+    fn control_conn_reads_while_main_holds_write_txn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let main = Db::open(&path).unwrap();
+        main.conn()
+            .execute(
+                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                [],
+            )
+            .unwrap();
+        let ctrl = Db::open(&path).unwrap();
+
+        // 主连接开写事务但不提交——模拟回合侧长事务占着写者位
+        main.conn().execute_batch("BEGIN IMMEDIATE").unwrap();
+        main.conn()
+            .execute(
+                "INSERT INTO messages (project_id, author, body) VALUES ('p1','a1','未提交')",
+                [],
+            )
+            .unwrap();
+
+        // 控制连接的读走快照：立即返回且看不到未提交行
+        let t = std::time::Instant::now();
+        let items = ctrl.timeline("p1", None, 100, None).unwrap();
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(2),
+            "timeline 被主连接的写事务阻塞了 {:?}",
+            t.elapsed()
+        );
+        assert!(items.is_empty(), "快照读不该看见未提交消息");
+
+        // 主连接提交后：控制连接写入 → 主连接立即可见（既有测试同语义）
+        main.conn().execute_batch("COMMIT").unwrap();
+        let (id, _) = send_message_side(&ctrl, "p1", "落库").unwrap();
+        let body: String = main
+            .conn()
+            .query_row("SELECT body FROM messages WHERE id=?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(body, "落库");
+    }
+
     #[test]
     fn token_parsing() {
         let t = parse_tokens("继续 @后端 参考 #src/main.rs 谢谢");

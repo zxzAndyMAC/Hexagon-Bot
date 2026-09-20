@@ -50,6 +50,27 @@ pub struct ToolContext {
     pub tiers: crate::artifacts::TierMap,
 }
 
+impl ToolContext {
+    /// 负责人上下文（ADR 0052 控制通道）：壳层裁决类命令经第二连接
+    /// 操作时构造——与 `Workbench::ctx_for("owner", None)` 同一配方。
+    pub fn owner(db: &Db, repo_root: &Path) -> Self {
+        Self::for_agent(db, repo_root, "owner")
+    }
+
+    /// 指定 agent 的无阶段上下文——同 `Workbench::ctx_for(agent, None)`。
+    /// 复审者裁决（review_proposal 的 reviewer_agent）走这个。
+    pub fn for_agent(db: &Db, repo_root: &Path, agent_id: &str) -> Self {
+        Self {
+            project_id: crate::PROJECT_ID.into(),
+            agent_id: agent_id.into(),
+            repo_root: repo_root.to_path_buf(),
+            stage_run_id: None,
+            owned_globs: crate::permissions::agent_globs(db, agent_id).unwrap_or_default(),
+            tiers: crate::artifacts::TierMap::new(),
+        }
+    }
+}
+
 /// 一次工具调用的结局。
 #[derive(Debug)]
 pub enum CallOutcome {

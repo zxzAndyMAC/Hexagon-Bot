@@ -1,16 +1,27 @@
 //! Tauri 壳：command 只做转发，业务全在 hexagon-core 的 Workbench。
 //! UI 的唯一通道是这些 command + 后续的事件推送 channel，没有旁路。
+//!
+//! 连接模型（ADR 0052 三通道）：`wb` 锁只守 turn/mutation 组命令；
+//! 读组+控制组走 `conn` 里的第二条 Db 连接——回合占着 wb 时
+//! UI 读取与干预指令（pause/resume/send_message/裁决）照常落地，
+//! WAL + busy_timeout(5s) 兜底单写者争用（db.rs::init）。
 
 use hexagon_core::api::Workbench;
+use hexagon_core::PROJECT_ID;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 struct AppState {
     wb: Mutex<Option<Workbench>>,
-    /// 项目库路径（turn-streaming 票 04/05）：回合进行中 wb 锁被占，
-    /// owner 消息/暂停指令经第二条 Db 连接旁路落库，不然干预进不来。
-    db_path: Mutex<Option<std::path::PathBuf>>,
+    /// 控制通道（ADR 0052）：与 wb 内连接并存的第二条 Db 连接。
+    /// root 供需要 repo_root 的读/控命令（裁决 ctx、产物回退读盘、头像）。
+    conn: Mutex<Option<ControlConn>>,
+}
+
+struct ControlConn {
+    db: hexagon_core::db::Db,
+    root: std::path::PathBuf,
 }
 
 /// 回合 delta → webview（turn-streaming 票 03）：所有 Workbench 构造点
@@ -22,11 +33,23 @@ fn attach_delta_hook(app: &tauri::AppHandle, wb: &Workbench) {
     })));
 }
 
-/// 旁路 Db：回合进行中也能写（WAL 双连接 + busy_timeout 兜底）。
-fn side_db(state: &AppState) -> Result<Option<hexagon_core::db::Db>, String> {
-    let p = state.db_path.lock().map_err(|e| e.to_string())?.clone();
-    p.map(|p| hexagon_core::db::Db::open(p).map_err(|e| e.to_string()))
-        .transpose()
+/// 打开控制通道：项目库的第二连接。与 wb 内连接同参数（WAL+busy_timeout）。
+fn open_control(dir: &str) -> Result<ControlConn, String> {
+    Ok(ControlConn {
+        db: hexagon_core::db::Db::open(std::path::Path::new(dir).join(".hexagon/state.db"))
+            .map_err(|e| e.to_string())?,
+        root: std::path::PathBuf::from(dir),
+    })
+}
+
+/// 读/控通道（ADR 0052）：不摸 wb——回合进行中照样读写。
+fn with_conn<R>(
+    state: &AppState,
+    f: impl FnOnce(&hexagon_core::db::Db, &std::path::Path) -> Result<R, String>,
+) -> Result<R, String> {
+    let g = state.conn.lock().map_err(|e| e.to_string())?;
+    let c = g.as_ref().ok_or_else(|| "no project open".to_string())?;
+    f(&c.db, &c.root)
 }
 
 fn with_wb<R>(
@@ -71,8 +94,7 @@ fn open_project(
         Arc::new(hexagon_core::credentials::OsKeychain),
     );
     attach_delta_hook(&app, &wb);
-    *state.db_path.lock().map_err(|e| e.to_string())? =
-        Some(std::path::Path::new(&dir).join(".hexagon/state.db"));
+    *state.conn.lock().map_err(|e| e.to_string())? = Some(open_control(&dir)?);
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(&app, &dir, &name, "pack");
     Ok(())
@@ -84,38 +106,38 @@ fn timeline(
     after: Option<i64>,
     limit: usize,
 ) -> Result<Value, String> {
-    with_wb(&state, |wb| {
-        wb.timeline(after, limit)
+    with_conn(&state, |db, _| {
+        db.timeline(PROJECT_ID, after, limit, None)
             .map(|v| serde_json::to_value(v).unwrap())
+            .map_err(|e| e.to_string())
     })
 }
 
 #[tauri::command]
 fn send_message(state: tauri::State<AppState>, body: String) -> Result<i64, String> {
-    // 票 04/05：回合进行中 wb 锁被 dispatch 占着——消息和 暂停/恢复
-    // 指令必须走旁路 Db 落库，否则 steering 和流中叫停永远排在回合后面。
+    // 控制通道（ADR 0052）：消息落库与 暂停/恢复 指令走第二连接——
+    // 回合占着 wb 锁时 steering 与流中叫停照常生效。
     // 其余指令（rewind/stamp/skip/override/install）仍排 wb 队列——
-    // 回合中途本来也不该执行它们。
-    if let Some(db) = side_db(&state)? {
-        let (id, cmd) =
-            hexagon_core::commands::send_message_side(&db, hexagon_core::PROJECT_ID, &body)
-                .map_err(|e| e.to_string())?;
-        use hexagon_core::commands::TextCommand;
+    // 回合中途本来也不该执行它们。两段分开拿锁：conn→wb 不嵌套。
+    use hexagon_core::commands::TextCommand;
+    let (id, cmd) = with_conn(&state, |db, _| {
+        let (id, cmd) = hexagon_core::commands::send_message_side(db, PROJECT_ID, &body)
+            .map_err(|e| e.to_string())?;
         match cmd {
             Some(TextCommand::Pause) => {
-                hexagon_core::orchestra::pause(&db, hexagon_core::PROJECT_ID)
-                    .map_err(|e| e.to_string())?;
+                hexagon_core::orchestra::pause(db, PROJECT_ID).map_err(|e| e.to_string())?;
             }
             Some(TextCommand::Resume) => {
-                hexagon_core::orchestra::resume(&db, hexagon_core::PROJECT_ID)
-                    .map_err(|e| e.to_string())?;
+                hexagon_core::orchestra::resume(db, PROJECT_ID).map_err(|e| e.to_string())?;
             }
-            Some(other) => with_wb(&state, |wb| wb.dispatch_command(&other))?,
-            None => {}
+            _ => {}
         }
-        return Ok(id);
+        Ok((id, cmd))
+    })?;
+    if let Some(other) = cmd.filter(|c| !matches!(c, TextCommand::Pause | TextCommand::Resume)) {
+        with_wb(&state, |wb| wb.dispatch_command(&other))?;
     }
-    with_wb(&state, |wb| wb.send_message(&body))
+    Ok(id)
 }
 
 #[tauri::command]
@@ -157,49 +179,61 @@ fn skip_review(state: tauri::State<AppState>, artifact_kind: String) -> Result<(
 }
 #[tauri::command]
 fn pause(state: tauri::State<AppState>) -> Result<(), String> {
-    // 票 04：暂停按钮是回合中的叫停通道——必须走旁路，wb 锁正被回合占着
-    if let Some(db) = side_db(&state)? {
-        return hexagon_core::orchestra::pause(&db, hexagon_core::PROJECT_ID)
-            .map_err(|e| e.to_string());
-    }
-    with_wb(&state, |wb| wb.pause())
+    // 暂停按钮是回合中的叫停通道——必须走控制连接，wb 锁正被回合占着
+    with_conn(&state, |db, _| {
+        hexagon_core::orchestra::pause(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 fn resume(state: tauri::State<AppState>) -> Result<(), String> {
-    if let Some(db) = side_db(&state)? {
-        return hexagon_core::orchestra::resume(&db, hexagon_core::PROJECT_ID)
-            .map_err(|e| e.to_string());
-    }
-    with_wb(&state, |wb| wb.resume())
+    with_conn(&state, |db, _| {
+        hexagon_core::orchestra::resume(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 fn sleep_all(state: tauri::State<AppState>) -> Result<(), String> {
-    with_wb(&state, |wb| wb.sleep_all())
+    // 全员休眠是干预指令（ADR 0052 控制组）：回合中途也要能落
+    with_conn(&state, |db, _| {
+        hexagon_core::orchestra::sleep_all(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn artifacts(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
-    with_wb(&state, |wb| wb.artifacts())
+    with_conn(&state, |db, _| {
+        hexagon_core::artifacts::query(db, PROJECT_ID, None, None, None, None)
+            .map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 fn artifact_content(state: tauri::State<AppState>, path: String) -> Result<String, String> {
-    with_wb(&state, |wb| wb.artifact_content(&path))
+    with_conn(&state, |db, root| {
+        hexagon_core::artifacts::content(db, root, PROJECT_ID, &path).map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 fn team(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
-    with_wb(&state, |wb| wb.team())
+    with_conn(&state, |db, _| {
+        hexagon_core::orchestra::team(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 fn stage_status(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
-    with_wb(&state, |wb| wb.stage_status())
+    with_conn(&state, |db, _| {
+        hexagon_core::orchestra::stage_status(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 fn pending_questions(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
-    with_wb(&state, |wb| wb.pending_questions())
+    with_conn(&state, |db, _| {
+        db.queued_questions(PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 fn usage(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
-    with_wb(&state, |wb| wb.usage())
+    with_conn(&state, |db, _| {
+        hexagon_core::usage::project_summary(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -219,12 +253,18 @@ fn override_checks(state: tauri::State<AppState>, reason: String) -> Result<Valu
 
 #[tauri::command]
 fn request_install(state: tauri::State<AppState>, desc: String) -> Result<String, String> {
-    with_wb(&state, |wb| wb.request_install(&desc))
+    // 安装请求只是入队一张待决卡（控制组）；执行在 resolve_install（wb 组）
+    with_conn(&state, |db, root| {
+        hexagon_core::install::request_install(db, PROJECT_ID, root, &desc)
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn agent_detail(state: tauri::State<AppState>, agent_id: String) -> Result<Value, String> {
-    with_wb(&state, |wb| wb.agent_detail(&agent_id))
+    with_conn(&state, |db, _| {
+        hexagon_core::roles::agent_detail(db, PROJECT_ID, &agent_id).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -266,27 +306,43 @@ fn draft_role_def(
 
 #[tauri::command]
 fn pack_draft(state: tauri::State<AppState>) -> Result<Value, String> {
-    with_wb(&state, |wb| wb.pack_draft())
+    with_conn(&state, |_, root| {
+        hexagon_core::packedit::load_draft(root)
+            .and_then(|p| serde_json::to_value(&p).map_err(|e| e.into()))
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn save_pack_draft(state: tauri::State<AppState>, pack_json: String) -> Result<(), String> {
-    with_wb(&state, |wb| wb.save_pack_draft(&pack_json))
+    // 草稿写 .hexagon/pack.json（非 active 副本）——控制通道可落
+    with_conn(&state, |db, root| {
+        let pack = hexagon_core::packedit::parse_draft(&pack_json).map_err(|e| e.to_string())?;
+        hexagon_core::packedit::save_draft(db, root, PROJECT_ID, &pack).map_err(|e| e.to_string())
+    })
 }
 
+/// 个人模板存 ~/.config/hexagon/templates/——项目无关，不需要任何项目态。
 #[tauri::command]
-fn save_pack_template(state: tauri::State<AppState>, pack_json: String) -> Result<String, String> {
-    with_wb(&state, |wb| wb.save_pack_template(&pack_json))
+fn save_pack_template(pack_json: String) -> Result<String, String> {
+    let pack = hexagon_core::packedit::parse_draft(&pack_json).map_err(|e| e.to_string())?;
+    hexagon_core::packedit::save_template(&pack)
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
 }
 
+/// 个人模板列表：同上，项目无关。
 #[tauri::command]
-fn pack_templates(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
-    with_wb(&state, |wb| wb.pack_templates())
+fn pack_templates() -> Result<Vec<String>, String> {
+    hexagon_core::packedit::list_templates().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn export_pack_yaml(state: tauri::State<AppState>, dest: String) -> Result<(), String> {
-    with_wb(&state, |wb| wb.export_pack_yaml(&dest))
+    with_conn(&state, |_, root| {
+        hexagon_core::packedit::export_yaml(root, std::path::Path::new(&dest))
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -316,8 +372,9 @@ fn export_events(
                 .collect::<Result<Vec<_>, String>>()
         })
         .transpose()?;
-    with_wb(&state, |wb| {
-        wb.export_events(
+    with_conn(&state, |db, _| {
+        db.export_events(
+            PROJECT_ID,
             std::path::Path::new(&path),
             &hexagon_core::trace::ExportFilter {
                 stage_run_id,
@@ -325,27 +382,39 @@ fn export_events(
                 kinds,
             },
         )
+        .map_err(|e| e.to_string())
     })
 }
 
 #[tauri::command]
 fn autonomy(state: tauri::State<AppState>) -> Result<String, String> {
-    with_wb(&state, |wb| wb.autonomy())
+    with_conn(&state, |db, _| {
+        hexagon_core::autonomy::level(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn set_autonomy(state: tauri::State<AppState>, level: String) -> Result<(), String> {
-    with_wb(&state, |wb| wb.set_autonomy(&level))
+    // 档位是 projects 行旋钮（控制组）：回合途中改档即时落库，下回合生效
+    with_conn(&state, |db, _| {
+        hexagon_core::autonomy::set_level(db, PROJECT_ID, &level).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn owner_away(state: tauri::State<AppState>) -> Result<(), String> {
-    with_wb(&state, |wb| wb.owner_away())
+    with_conn(&state, |db, _| {
+        hexagon_core::autonomy::leave(db, PROJECT_ID)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn owner_back(state: tauri::State<AppState>) -> Result<Value, String> {
-    with_wb(&state, |wb| wb.owner_back())
+    with_conn(&state, |db, _| {
+        hexagon_core::autonomy::back(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -353,6 +422,8 @@ fn reject_stamp(state: tauri::State<AppState>) -> Result<Value, String> {
     with_wb(&state, |wb| wb.reject_stamp())
 }
 
+/// ADR 0052 wb 组：context_overflow 放行时内联续跑一回合——必须持 wb 锁。
+/// 异步化与否见 report.md 待验证假设，本票不碰语义。
 #[tauri::command]
 fn adjudicate_flag(
     state: tauri::State<AppState>,
@@ -364,7 +435,9 @@ fn adjudicate_flag(
 
 #[tauri::command]
 fn proposals(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
-    with_wb(&state, |wb| wb.proposals())
+    with_conn(&state, |db, _| {
+        hexagon_core::proposals::list(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -375,14 +448,21 @@ fn review_proposal(
     reason: String,
     reviewer_agent: String,
 ) -> Result<(), String> {
-    with_wb(&state, |wb| {
-        wb.review_proposal(&proposal_id, pass, &reason, &reviewer_agent)
+    // 裁决类写（ADR 0052 控制组）：ctx 与 Workbench::ctx_for(reviewer_agent) 同配方
+    with_conn(&state, |db, root| {
+        let ctx = hexagon_core::tools::ToolContext::for_agent(db, root, &reviewer_agent);
+        hexagon_core::proposals::review(db, &ctx, &proposal_id, pass, &reason)
+            .map_err(|e| e.to_string())
     })
+    .map(|_| ())
 }
 
 #[tauri::command]
 fn confirm_proposal(state: tauri::State<AppState>, qid: String) -> Result<String, String> {
-    with_wb(&state, |wb| wb.confirm_proposal(&qid))
+    with_conn(&state, |db, root| {
+        let ctx = hexagon_core::tools::ToolContext::owner(db, root);
+        hexagon_core::proposals::activate(db, &ctx, &qid).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -391,11 +471,15 @@ fn reject_proposal(
     qid: String,
     reason: String,
 ) -> Result<(), String> {
-    with_wb(&state, |wb| wb.reject_proposal(&qid, &reason))
+    with_conn(&state, |db, root| {
+        let ctx = hexagon_core::tools::ToolContext::owner(db, root);
+        hexagon_core::proposals::reject_at_stamp(db, &ctx, &qid, &reason).map_err(|e| e.to_string())
+    })
 }
 
 /// 票 07：不变量伴随件手动体检入口——返回违规数（0=trace 自洽），
 /// 违规明细落 invariant_violation 事件。
+/// ADR 0052 wb 组：回合中段跑会把在途回合误报成悬挂回合——要静止态。
 #[tauri::command]
 fn invariant_check(state: tauri::State<AppState>) -> Result<usize, String> {
     with_wb(&state, |wb| wb.invariant_check_and_log())
@@ -404,6 +488,7 @@ fn invariant_check(state: tauri::State<AppState>) -> Result<usize, String> {
 /// 票 10：政策研发提案的确定性入口——旋钮编辑 JSON + 场景 JSON →
 /// 副本改旋钮 → 回放 → 携证据+judge 判定进普通提案队列。
 /// 产出物无特权通道（submit 全校验+负责人盖章不变）。
+/// ADR 0052 wb 组：内联双回放要锁 wb——异步化见 report.md 待验证假设。
 #[tauri::command]
 fn policydev_propose(
     state: tauri::State<AppState>,
@@ -418,12 +503,18 @@ fn policydev_propose(
 
 #[tauri::command]
 fn rollback_proposal(state: tauri::State<AppState>, proposal_id: String) -> Result<(), String> {
-    with_wb(&state, |wb| wb.rollback_proposal(&proposal_id))
+    with_conn(&state, |db, root| {
+        let ctx = hexagon_core::tools::ToolContext::owner(db, root);
+        hexagon_core::proposals::rollback(db, &ctx, &proposal_id).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn request_publish(state: tauri::State<AppState>, remote: String) -> Result<String, String> {
-    with_wb(&state, |wb| wb.request_publish(&remote))
+    // 发布请求只是入队待决卡（控制组）；push 在 confirm_publish（wb 组，要 creds）
+    with_conn(&state, |db, _| {
+        hexagon_core::publish::request(db, PROJECT_ID, &remote).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -433,7 +524,9 @@ fn confirm_publish(state: tauri::State<AppState>, qid: String) -> Result<Value, 
 
 #[tauri::command]
 fn reject_publish(state: tauri::State<AppState>, qid: String) -> Result<(), String> {
-    with_wb(&state, |wb| wb.reject_publish(&qid))
+    with_conn(&state, |db, _| {
+        hexagon_core::publish::reject(db, PROJECT_ID, &qid).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -442,12 +535,17 @@ fn set_agent_avatar(
     agent_id: String,
     data_url: String,
 ) -> Result<(), String> {
-    with_wb(&state, |wb| wb.set_agent_avatar(&agent_id, &data_url))
+    // 纯文件写（avatars/ 目录）——控制通道取 root 即可
+    with_conn(&state, |_, root| {
+        hexagon_core::roles::set_agent_avatar(root, &agent_id, &data_url).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn agent_avatar(state: tauri::State<AppState>, agent_id: String) -> Result<Option<String>, String> {
-    with_wb(&state, |wb| wb.agent_avatar(&agent_id))
+    with_conn(&state, |_, root| {
+        hexagon_core::roles::agent_avatar(root, &agent_id).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -456,7 +554,10 @@ fn artifact_content_at(
     path: String,
     version: i64,
 ) -> Result<Option<String>, String> {
-    with_wb(&state, |wb| wb.artifact_content_at(&path, version))
+    with_conn(&state, |db, root| {
+        hexagon_core::artifacts::content_at(db, root, PROJECT_ID, &path, version)
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -465,12 +566,18 @@ fn set_agent_sleeping(
     agent_id: String,
     sleeping: bool,
 ) -> Result<(), String> {
-    with_wb(&state, |wb| wb.set_agent_sleeping(&agent_id, sleeping))
+    // 休眠/唤醒是干预指令（ADR 0052 控制组）
+    with_conn(&state, |db, _| {
+        hexagon_core::orchestra::set_agent_sleeping(db, PROJECT_ID, &agent_id, sleeping)
+            .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 fn set_usage_limit(state: tauri::State<AppState>, limit_cents: Option<i64>) -> Result<(), String> {
-    with_wb(&state, |wb| wb.set_usage_limit(limit_cents))
+    with_conn(&state, |db, _| {
+        hexagon_core::usage::set_limit(db, PROJECT_ID, limit_cents).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -480,9 +587,10 @@ fn usage_series(
     from: Option<String>,
     to: Option<String>,
 ) -> Result<Value, String> {
-    with_wb(&state, |wb| {
-        wb.usage_series(&granularity, from.as_deref(), to.as_deref())
+    with_conn(&state, |db, _| {
+        hexagon_core::usage::series(db, PROJECT_ID, &granularity, from.as_deref(), to.as_deref())
             .map(|v| serde_json::to_value(v).unwrap())
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -563,8 +671,7 @@ fn open_recent(
         Arc::new(hexagon_core::credentials::OsKeychain),
     );
     attach_delta_hook(&app, &wb);
-    *state.db_path.lock().map_err(|e| e.to_string())? =
-        Some(std::path::Path::new(&dir).join(".hexagon/state.db"));
+    *state.conn.lock().map_err(|e| e.to_string())? = Some(open_control(&dir)?);
     let info = wb.project_info().map_err(|e| e.to_string())?;
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(
@@ -580,7 +687,7 @@ fn open_recent(
 #[tauri::command]
 fn close_project(state: tauri::State<AppState>) -> Result<(), String> {
     *state.wb.lock().map_err(|e| e.to_string())? = None;
-    *state.db_path.lock().map_err(|e| e.to_string())? = None;
+    *state.conn.lock().map_err(|e| e.to_string())? = None;
     Ok(())
 }
 
@@ -825,8 +932,7 @@ fn create_project(
     .map_err(|e| e.to_string())?;
     hexagon_core::providers::register_all(&mut wb.providers, Arc::new(OsKeychain));
     attach_delta_hook(&app, &wb);
-    *state.db_path.lock().map_err(|e| e.to_string())? =
-        Some(std::path::Path::new(&opts.dir).join(".hexagon/state.db"));
+    *state.conn.lock().map_err(|e| e.to_string())? = Some(open_control(&opts.dir)?);
     *state.wb.lock().map_err(|e| e.to_string())? = Some(wb);
     remember_recent(
         &app,
@@ -850,7 +956,9 @@ fn project_open(state: tauri::State<AppState>) -> bool {
 
 #[tauri::command]
 fn project_info(state: tauri::State<AppState>) -> Result<Value, String> {
-    with_wb(&state, |wb| wb.project_info())
+    with_conn(&state, |db, _| {
+        hexagon_core::orchestra::project_info(db, PROJECT_ID).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -902,7 +1010,7 @@ pub fn run() {
         })
         .manage(AppState {
             wb: Mutex::new(None),
-            db_path: Mutex::new(None),
+            conn: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             core_ping,

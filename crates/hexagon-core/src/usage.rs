@@ -160,6 +160,84 @@ pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite::Erro
     Ok(rows)
 }
 
+/// 项目用量总览（ADR 0052 读组）：summarize 多维汇总 + 总计/上限/tokens 尾行。
+/// 壳层经控制连接直调，不占 wb 锁。
+pub fn project_summary(db: &Db, project_id: &str) -> Result<Vec<Value>, rusqlite::Error> {
+    let mut rows = summarize(db, project_id)?;
+    let limit: Option<i64> = db.conn().query_row(
+        "SELECT usage_limit_cents FROM projects WHERE id=?1",
+        [project_id],
+        |r| r.get(0),
+    )?;
+    let tokens: i64 = db.conn().query_row(
+        "SELECT COALESCE(SUM(prompt_tokens+completion_tokens+tool_output_tokens),0)
+         FROM usage WHERE project_id=?1",
+        [project_id],
+        |r| r.get(0),
+    )?;
+    rows.push(json!({
+        "_total": true,
+        "spent_mc": spent_mc(db, project_id)?,
+        "limit_cents": limit,
+        "tokens": tokens,
+    }));
+    Ok(rows)
+}
+
+/// 用量时间序列：按 bucket × Agent 分组，带三类 token 与成本。
+/// `granularity`: "day"（YYYY-MM-DD）| "hour"（YYYY-MM-DD HH:00）。
+/// `from`/`to`：日期串 YYYY-MM-DD（含当天，`to` 含整日）；None = 不限。
+pub fn series(
+    db: &Db,
+    project_id: &str,
+    granularity: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<Value>, rusqlite::Error> {
+    let bucket = if granularity == "hour" {
+        "strftime('%Y-%m-%d %H:00', u.created_at)"
+    } else {
+        "date(u.created_at)"
+    };
+    let sql = format!(
+        "SELECT {bucket}, u.agent_id,
+                SUM(u.prompt_tokens), SUM(u.completion_tokens),
+                SUM(u.tool_output_tokens), SUM(u.cost_millicents)
+         FROM usage u
+         WHERE u.project_id=?1
+           AND (?2 IS NULL OR u.created_at >= ?2)
+           AND (?3 IS NULL OR u.created_at < date(?3, '+1 day'))
+         GROUP BY 1, u.agent_id ORDER BY 1"
+    );
+    let mut st = db.conn().prepare(&sql)?;
+    let rows = st
+        .query_map(params![project_id, from, to], |r| {
+            Ok(json!({
+                "bucket": r.get::<_, String>(0)?,
+                "agent_id": r.get::<_, Option<String>>(1)?,
+                "prompt_tokens": r.get::<_, i64>(2)?,
+                "completion_tokens": r.get::<_, i64>(3)?,
+                "tool_output_tokens": r.get::<_, i64>(4)?,
+                "cost_mc": r.get::<_, i64>(5)?,
+            }))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 设/清项目用量上限（分）；None = 不限。控制通道写（ADR 0052）。
+pub fn set_limit(
+    db: &Db,
+    project_id: &str,
+    limit_cents: Option<i64>,
+) -> Result<(), rusqlite::Error> {
+    db.conn().execute(
+        "UPDATE projects SET usage_limit_cents=?1 WHERE id=?2",
+        params![limit_cents, project_id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

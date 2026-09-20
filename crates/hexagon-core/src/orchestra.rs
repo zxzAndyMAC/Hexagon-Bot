@@ -720,6 +720,110 @@ pub fn resume(db: &Db, project_id: &str) -> Result<(), OrchError> {
     Ok(())
 }
 
+// ---------- 名册/项目读模型与休眠控制（ADR 0052 控制通道） ----------
+// 这组函数只吃 &Db：壳层读组/控制组命令经第二条连接直调，不占 wb 锁。
+
+/// 团队名册（agents 表读模型）。
+pub fn team(db: &Db, project_id: &str) -> Result<Vec<Value>, OrchError> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT id, role, model_slot, status FROM agents WHERE project_id=?1")?;
+    let rows = st
+        .query_map([project_id], |r| {
+            Ok(
+                json!({"id": r.get::<_,String>(0)?, "role": r.get::<_,String>(1)?,
+                      "model_slot": r.get::<_,Option<String>>(2)?,
+                      "status": r.get::<_,String>(3)?}),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 阶段运行状态表（stage_runs 读模型）。
+pub fn stage_status(db: &Db, project_id: &str) -> Result<Vec<Value>, OrchError> {
+    let mut st = db.conn().prepare(
+        "SELECT id, stage_name, seq, state FROM stage_runs WHERE project_id=?1 ORDER BY seq, id",
+    )?;
+    let rows = st
+        .query_map([project_id], |r| {
+            Ok(
+                json!({"run_id": r.get::<_,String>(0)?, "stage": r.get::<_,String>(1)?,
+                      "seq": r.get::<_,i64>(2)?, "state": r.get::<_,String>(3)?}),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 项目元信息（projects 行 + fastpath 角色名解析）。
+pub fn project_info(db: &Db, project_id: &str) -> Result<Value, OrchError> {
+    let (name, mode, pack_name, fast_aid): (String, String, Option<String>, Option<String>) =
+        db.conn().query_row(
+            "SELECT name, mode, pack_name, fastpath_agent_id FROM projects WHERE id=?1",
+            [project_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+    let fast_role: Option<String> = fast_aid.as_ref().and_then(|a| {
+        db.conn()
+            .query_row("SELECT role FROM agents WHERE id=?1", [a], |r| r.get(0))
+            .ok()
+    });
+    Ok(json!({
+        "name": name,
+        "mode": mode,
+        "pack_name": pack_name,
+        "fastpath_agent_id": fast_aid,
+        "fastpath_role": fast_role,
+    }))
+}
+
+/// 全员休眠（干预指令：回合进行中也要能落，故走控制通道）。
+/// agents.status 的归一写口收敛进 cards 阶段（arch-review 票 04）。
+pub fn sleep_all(db: &Db, project_id: &str) -> Result<(), OrchError> {
+    db.conn().execute(
+        "UPDATE agents SET status='sleeping' WHERE project_id=?1",
+        [project_id],
+    )?;
+    db.append_event(
+        project_id,
+        EventKind::TeamSlept,
+        json!({"by": "owner"}),
+        None,
+        None,
+    )?;
+    Ok(())
+}
+
+/// 单个 Agent 休眠/唤醒（干预指令，同上走控制通道）。
+pub fn set_agent_sleeping(
+    db: &Db,
+    project_id: &str,
+    agent_id: &str,
+    sleeping: bool,
+) -> Result<(), OrchError> {
+    db.conn().execute(
+        "UPDATE agents SET status=?1 WHERE id=?2 AND project_id=?3",
+        rusqlite::params![
+            if sleeping { "sleeping" } else { "active" },
+            agent_id,
+            project_id
+        ],
+    )?;
+    db.append_event(
+        project_id,
+        if sleeping {
+            EventKind::AgentSlept
+        } else {
+            EventKind::AgentActivated
+        },
+        json!({"by": "owner"}),
+        Some(agent_id),
+        None,
+    )?;
+    Ok(())
+}
+
 // ---------- 崩溃恢复（票 37） ----------
 
 /// 重开检出中断回合：每个 (run, agent) 看最后一条回合边界事件——

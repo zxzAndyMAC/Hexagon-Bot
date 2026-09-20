@@ -28,6 +28,8 @@ pub enum RoleError {
     Preset(#[from] crate::presets::PresetError),
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// 解析某角色的有效定义：项目覆盖行 → 预置底稿 → 无名（Err）。
@@ -272,6 +274,77 @@ pub fn agent_detail(db: &Db, project_id: &str, agent_id: &str) -> Result<Value, 
                 "model_slot": def.model_slot, "skills": def.skills},
         "globs": globs, "grants": grants,
     }))
+}
+
+/// 读头像 → data URL（前端直接 <img src>）；未设置回 None。
+/// 纯文件读（ADR 0052）：只需 repo_root，不摸 Db、不占 wb 锁。
+pub fn agent_avatar(
+    repo_root: &std::path::Path,
+    agent_id: &str,
+) -> Result<Option<String>, RoleError> {
+    use base64::Engine;
+    let dir = repo_root.join(".hexagon/avatars");
+    for (ext, mime) in [
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("webp", "image/webp"),
+        ("gif", "image/gif"),
+    ] {
+        let p = dir.join(format!("{agent_id}.{ext}"));
+        if p.exists() {
+            let b = std::fs::read(&p)?;
+            return Ok(Some(format!(
+                "data:{mime};base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(b)
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// 设置 agent 头像：UI 传 data URL（data:image/png;base64,…），
+/// 落盘 `<root>/.hexagon/avatars/<agent>.<ext>`，换扩展名时清旧文件。
+pub fn set_agent_avatar(
+    repo_root: &std::path::Path,
+    agent_id: &str,
+    data_url: &str,
+) -> Result<(), RoleError> {
+    use base64::Engine;
+    let invalid = || {
+        RoleError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "expected data:<mime>;base64,<payload>",
+        ))
+    };
+    let (mime, b64) = data_url
+        .strip_prefix("data:")
+        .and_then(|s| s.split_once(";base64,"))
+        .ok_or_else(invalid)?;
+    let ext = match mime {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "png",
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| RoleError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err(RoleError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "avatar >2MB",
+        )));
+    }
+    let dir = repo_root.join(".hexagon/avatars");
+    std::fs::create_dir_all(&dir)?;
+    for e in ["png", "jpg", "webp", "gif"] {
+        let p = dir.join(format!("{agent_id}.{e}"));
+        if e != ext && p.exists() {
+            std::fs::remove_file(p)?;
+        }
+    }
+    std::fs::write(dir.join(format!("{agent_id}.{ext}")), bytes)?;
+    Ok(())
 }
 
 /// 编辑补丁：None=不动。

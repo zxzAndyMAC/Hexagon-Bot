@@ -327,63 +327,13 @@ impl Workbench {
     /// 设置 agent 头像：UI 传 data URL（data:image/png;base64,…），
     /// 落盘 `<root>/.hexagon/avatars/<agent>.<ext>`，换扩展名时清旧文件。
     pub fn set_agent_avatar(&self, agent_id: &str, data_url: &str) -> Result<(), ApiError> {
-        use base64::Engine;
-        let (mime, b64) = data_url
-            .strip_prefix("data:")
-            .and_then(|s| s.split_once(";base64,"))
-            .ok_or_else(|| {
-                ApiError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "expected data:<mime>;base64,<payload>",
-                ))
-            })?;
-        let ext = match mime {
-            "image/jpeg" | "image/jpg" => "jpg",
-            "image/webp" => "webp",
-            "image/gif" => "gif",
-            _ => "png",
-        };
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|e| ApiError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
-        if bytes.len() > 2 * 1024 * 1024 {
-            return Err(ApiError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "avatar >2MB",
-            )));
-        }
-        let dir = self.repo_root.join(".hexagon/avatars");
-        std::fs::create_dir_all(&dir)?;
-        for e in ["png", "jpg", "webp", "gif"] {
-            let p = dir.join(format!("{agent_id}.{e}"));
-            if e != ext && p.exists() {
-                std::fs::remove_file(p)?;
-            }
-        }
-        std::fs::write(dir.join(format!("{agent_id}.{ext}")), bytes)?;
+        crate::roles::set_agent_avatar(&self.repo_root, agent_id, data_url)?;
         Ok(())
     }
 
     /// 读头像 → data URL（前端直接 <img src>）；未设置回 None。
     pub fn agent_avatar(&self, agent_id: &str) -> Result<Option<String>, ApiError> {
-        use base64::Engine;
-        let dir = self.repo_root.join(".hexagon/avatars");
-        for (ext, mime) in [
-            ("png", "image/png"),
-            ("jpg", "image/jpeg"),
-            ("webp", "image/webp"),
-            ("gif", "image/gif"),
-        ] {
-            let p = dir.join(format!("{agent_id}.{ext}"));
-            if p.exists() {
-                let b = std::fs::read(&p)?;
-                return Ok(Some(format!(
-                    "data:{mime};base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(b)
-                )));
-            }
-        }
-        Ok(None)
+        Ok(crate::roles::agent_avatar(&self.repo_root, agent_id)?)
     }
 
     /// 盖章点驳回：退上一阶段（与打回不同通道）。
@@ -677,25 +627,7 @@ impl Workbench {
 
     /// 项目标识：mode / pack_name / 快速通道角色（UI 与测试用）。
     pub fn project_info(&self) -> Result<Value, ApiError> {
-        let (name, mode, pack_name, fast_aid): (String, String, Option<String>, Option<String>) =
-            self.db.conn().query_row(
-                "SELECT name, mode, pack_name, fastpath_agent_id FROM projects WHERE id=?1",
-                [&self.project_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )?;
-        let fast_role: Option<String> = fast_aid.as_ref().and_then(|a| {
-            self.db
-                .conn()
-                .query_row("SELECT role FROM agents WHERE id=?1", [a], |r| r.get(0))
-                .ok()
-        });
-        Ok(json!({
-            "name": name,
-            "mode": mode,
-            "pack_name": pack_name,
-            "fastpath_agent_id": fast_aid,
-            "fastpath_role": fast_role,
-        }))
+        Ok(orchestra::project_info(&self.db, &self.project_id)?)
     }
 
     /// 当前激活阶段所有 active Agent 各跑一回合。
@@ -957,42 +889,17 @@ impl Workbench {
 
     /// 全员休眠。
     pub fn sleep_all(&self) -> Result<(), ApiError> {
-        self.db.conn().execute(
-            "UPDATE agents SET status='sleeping' WHERE project_id=?1",
-            [&self.project_id],
-        )?;
-        self.db.append_event(
-            &self.project_id,
-            EventKind::TeamSlept,
-            json!({"by": "owner"}),
-            None,
-            None,
-        )?;
-        Ok(())
+        Ok(orchestra::sleep_all(&self.db, &self.project_id)?)
     }
 
     /// 单个 Agent 休眠/唤醒（Agent tab 头卡用）。
     pub fn set_agent_sleeping(&self, agent_id: &str, sleeping: bool) -> Result<(), ApiError> {
-        self.db.conn().execute(
-            "UPDATE agents SET status=?1 WHERE id=?2 AND project_id=?3",
-            rusqlite::params![
-                if sleeping { "sleeping" } else { "active" },
-                agent_id,
-                self.project_id
-            ],
-        )?;
-        self.db.append_event(
+        Ok(orchestra::set_agent_sleeping(
+            &self.db,
             &self.project_id,
-            if sleeping {
-                EventKind::AgentSlept
-            } else {
-                EventKind::AgentActivated
-            },
-            json!({"by": "owner"}),
-            Some(agent_id),
-            None,
-        )?;
-        Ok(())
+            agent_id,
+            sleeping,
+        )?)
     }
 
     fn pack(&self) -> Result<&PackDef, ApiError> {
@@ -1048,18 +955,11 @@ impl Workbench {
     }
 
     pub fn artifact_content(&self, path: &str) -> Result<String, ApiError> {
-        // 优先读 DB 最新版内容（0003 起随行存）；老行 content=NULL 回退读盘
-        let c: Option<String> = self.db.conn().query_row(
-            "SELECT content FROM artifacts WHERE project_id=?1 AND path=?2
-             ORDER BY version DESC LIMIT 1",
-            rusqlite::params![self.project_id, path],
-            |r| r.get(0),
-        )?;
-        if let Some(s) = c {
-            return Ok(s);
-        }
-        Ok(std::fs::read_to_string(
-            self.repo_root.join(".hexagon").join(path),
+        Ok(artifacts::content(
+            &self.db,
+            &self.repo_root,
+            &self.project_id,
+            path,
         )?)
     }
 
@@ -1069,110 +969,35 @@ impl Workbench {
         path: &str,
         version: i64,
     ) -> Result<Option<String>, ApiError> {
-        let c: Option<Option<String>> = self
-            .db
-            .conn()
-            .query_row(
-                "SELECT content FROM artifacts WHERE project_id=?1 AND path=?2 AND version=?3",
-                rusqlite::params![self.project_id, path, version],
-                |r| r.get(0),
-            )
-            .ok();
-        match c {
-            Some(Some(s)) => Ok(Some(s)),
-            // 老行无 content：只有「最新版=盘上文件」这一条路
-            Some(None) if version == self.latest_artifact_version(path)? => Ok(Some(
-                std::fs::read_to_string(self.repo_root.join(".hexagon").join(path))?,
-            )),
-            _ => Ok(None),
-        }
-    }
-
-    fn latest_artifact_version(&self, path: &str) -> Result<i64, ApiError> {
-        Ok(self.db.conn().query_row(
-            "SELECT COALESCE(MAX(version),0) FROM artifacts WHERE project_id=?1 AND path=?2",
-            rusqlite::params![self.project_id, path],
-            |r| r.get(0),
+        Ok(artifacts::content_at(
+            &self.db,
+            &self.repo_root,
+            &self.project_id,
+            path,
+            version,
         )?)
     }
 
     pub fn team(&self) -> Result<Vec<Value>, ApiError> {
-        let mut st = self
-            .db
-            .conn()
-            .prepare("SELECT id, role, model_slot, status FROM agents WHERE project_id=?1")?;
-        let rows = st
-            .query_map([&self.project_id], |r| {
-                Ok(
-                    json!({"id": r.get::<_,String>(0)?, "role": r.get::<_,String>(1)?,
-                          "model_slot": r.get::<_,Option<String>>(2)?,
-                          "status": r.get::<_,String>(3)?}),
-                )
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        Ok(orchestra::team(&self.db, &self.project_id)?)
     }
 
     pub fn stage_status(&self) -> Result<Vec<Value>, ApiError> {
-        let mut st = self.db.conn().prepare(
-            "SELECT id, stage_name, seq, state FROM stage_runs WHERE project_id=?1 ORDER BY seq, id",
-        )?;
-        let rows = st
-            .query_map([&self.project_id], |r| {
-                Ok(
-                    json!({"run_id": r.get::<_,String>(0)?, "stage": r.get::<_,String>(1)?,
-                          "seq": r.get::<_,i64>(2)?, "state": r.get::<_,String>(3)?}),
-                )
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        Ok(orchestra::stage_status(&self.db, &self.project_id)?)
     }
 
     pub fn pending_questions(&self) -> Result<Vec<Value>, ApiError> {
-        let mut st = self.db.conn().prepare(
-            "SELECT id, kind, payload, state FROM pending_questions
-             WHERE project_id=?1 AND state='queued' ORDER BY created_at",
-        )?;
-        let rows = st
-            .query_map([&self.project_id], |r| {
-                Ok(
-                    json!({"id": r.get::<_,String>(0)?, "kind": r.get::<_,String>(1)?,
-                          "payload": r.get::<_,String>(2)?, "state": r.get::<_,String>(3)?}),
-                )
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        Ok(self.db.queued_questions(&self.project_id)?)
     }
 
     /// 用量：账本多维汇总 + 项目总计/上限。
     pub fn usage(&self) -> Result<Vec<Value>, ApiError> {
-        let mut rows = crate::usage::summarize(&self.db, &self.project_id)?;
-        let limit: Option<i64> = self.db.conn().query_row(
-            "SELECT usage_limit_cents FROM projects WHERE id=?1",
-            [&self.project_id],
-            |r| r.get(0),
-        )?;
-        let tokens: i64 = self.db.conn().query_row(
-            "SELECT COALESCE(SUM(prompt_tokens+completion_tokens+tool_output_tokens),0)
-             FROM usage WHERE project_id=?1",
-            [&self.project_id],
-            |r| r.get(0),
-        )?;
-        rows.push(json!({
-            "_total": true,
-            "spent_mc": crate::usage::spent_mc(&self.db, &self.project_id)?,
-            "limit_cents": limit,
-            "tokens": tokens,
-        }));
-        Ok(rows)
+        Ok(crate::usage::project_summary(&self.db, &self.project_id)?)
     }
 
     /// 设/清项目用量上限（分）；None = 不限。
     pub fn set_usage_limit(&self, limit_cents: Option<i64>) -> Result<(), ApiError> {
-        self.db.conn().execute(
-            "UPDATE projects SET usage_limit_cents=?1 WHERE id=?2",
-            rusqlite::params![limit_cents, self.project_id],
-        )?;
+        crate::usage::set_limit(&self.db, &self.project_id, limit_cents)?;
         Ok(())
     }
 
@@ -1185,35 +1010,13 @@ impl Workbench {
         from: Option<&str>,
         to: Option<&str>,
     ) -> Result<Vec<Value>, ApiError> {
-        let bucket = if granularity == "hour" {
-            "strftime('%Y-%m-%d %H:00', u.created_at)"
-        } else {
-            "date(u.created_at)"
-        };
-        let sql = format!(
-            "SELECT {bucket}, u.agent_id,
-                    SUM(u.prompt_tokens), SUM(u.completion_tokens),
-                    SUM(u.tool_output_tokens), SUM(u.cost_millicents)
-             FROM usage u
-             WHERE u.project_id=?1
-               AND (?2 IS NULL OR u.created_at >= ?2)
-               AND (?3 IS NULL OR u.created_at < date(?3, '+1 day'))
-             GROUP BY 1, u.agent_id ORDER BY 1"
-        );
-        let mut st = self.db.conn().prepare(&sql)?;
-        let rows = st
-            .query_map(rusqlite::params![self.project_id, from, to], |r| {
-                Ok(json!({
-                    "bucket": r.get::<_, String>(0)?,
-                    "agent_id": r.get::<_, Option<String>>(1)?,
-                    "prompt_tokens": r.get::<_, i64>(2)?,
-                    "completion_tokens": r.get::<_, i64>(3)?,
-                    "tool_output_tokens": r.get::<_, i64>(4)?,
-                    "cost_mc": r.get::<_, i64>(5)?,
-                }))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        Ok(crate::usage::series(
+            &self.db,
+            &self.project_id,
+            granularity,
+            from,
+            to,
+        )?)
     }
 
     /// 事件断言原料：DSL/验收套件直接消费。
