@@ -46,6 +46,8 @@ pub enum ApiError {
     PolicyDev(#[from] crate::policydev::PolicyDevError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("io: {0}")]
@@ -275,18 +277,11 @@ impl Workbench {
     /// 升级卡裁决：payload 取 flag_id → review::adjudicate_flag；标记问题已答。
     /// sub=context_overflow（US37）走撞限语义：放行=续跑回合，驳回=回合收场。
     pub fn adjudicate_flag(&self, qid: &str, agree: bool) -> Result<Value, ApiError> {
-        let payload: String = self.db.conn().query_row(
-            "SELECT payload FROM pending_questions
-             WHERE id=?1 AND project_id=?2 AND kind='escalation' AND state='queued'",
-            rusqlite::params![qid, self.project_id],
-            |r| r.get(0),
-        )?;
-        let pv: Value = serde_json::from_str(&payload)?;
+        // 卡表读写归 cards.rs（arch-review 票 04）
+        let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Escalation)?;
+        let pv = card.payload;
         if pv["sub"].as_str() == Some("context_overflow") {
-            self.db.conn().execute(
-                "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by='owner' WHERE id=?1",
-                [qid],
-            )?;
+            crate::cards::answer(&self.db, qid, "owner")?;
             self.db.append_event(
                 &self.project_id,
                 EventKind::System,
@@ -311,16 +306,10 @@ impl Workbench {
             )?;
             return Ok(json!({"resumed": true, "outcome": format!("{out:?}")}));
         }
-        let flag_id = serde_json::from_str::<Value>(&payload)?["flag_id"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        let flag_id = pv["flag_id"].as_str().unwrap_or_default().to_string();
         let ctx = self.ctx_for("owner", None);
         let v = crate::review::adjudicate_flag(&self.db, &ctx, self.pack()?, &flag_id, agree)?;
-        self.db.conn().execute(
-            "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
-            [qid],
-        )?;
+        crate::cards::answer(&self.db, qid, "owner")?;
         Ok(v)
     }
 
@@ -470,11 +459,9 @@ impl Workbench {
         scope: &str,
     ) -> Result<(), ApiError> {
         // 列里存的是 agent_id（变量曾误名 payload——arch-review 票 01 订正）
-        let agent_id: String = self.db.conn().query_row(
-            "SELECT agent_id FROM pending_questions WHERE id=?1",
-            [question_id],
-            |r| r.get(0),
-        )?;
+        let agent_id = crate::cards::get(&self.db, question_id)?
+            .agent_id
+            .ok_or_else(|| ApiError::BadInput(format!("question {question_id} has no agent")))?;
         let ctx = self.ctx_for(&agent_id, None);
         self.registry.resolve(
             &self.db,
@@ -491,13 +478,16 @@ impl Workbench {
 
     /// 队列里第一个待决必问。
     pub fn first_pending_question(&self, kind: &str) -> Result<Option<String>, ApiError> {
-        let mut st = self.db.conn().prepare(
-            "SELECT id FROM pending_questions
-             WHERE project_id=?1 AND kind=?2 AND state='queued' ORDER BY created_at LIMIT 1",
-        )?;
-        Ok(st
-            .query_row(rusqlite::params![self.project_id, kind], |r| r.get(0))
-            .ok())
+        let k = match kind {
+            "permission" => crate::cards::CardKind::Permission,
+            "stamp" => crate::cards::CardKind::Stamp,
+            "escalation" => crate::cards::CardKind::Escalation,
+            "recovery" => crate::cards::CardKind::Recovery,
+            "install" => crate::cards::CardKind::Install,
+            "publish" => crate::cards::CardKind::Publish,
+            other => return Err(ApiError::BadInput(format!("unknown card kind: {other}"))),
+        };
+        Ok(crate::cards::first_queued(&self.db, &self.project_id, k)?)
     }
 
     /// 跑某角色一回合（若激活）。有 interrupted run 未恢复时硬挡（票 37 恢复闸）。
@@ -584,9 +574,7 @@ impl Workbench {
                     r.get(0)
                 })?;
         if status == "sleeping" {
-            self.db
-                .conn()
-                .execute("UPDATE agents SET status='active' WHERE id=?1", [&aid])?;
+            orchestra::write_agent_status(&self.db, &self.project_id, &aid, false)?;
             self.db.append_event(
                 &self.project_id,
                 EventKind::AgentActivated,
@@ -987,7 +975,7 @@ impl Workbench {
     }
 
     pub fn pending_questions(&self) -> Result<Vec<Value>, ApiError> {
-        Ok(self.db.queued_questions(&self.project_id)?)
+        Ok(crate::cards::queued(&self.db, &self.project_id)?)
     }
 
     /// 用量：账本多维汇总 + 项目总计/上限。
@@ -1116,14 +1104,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         // 手工造一条已答问题 + 一条排队问题：列表只回排队的
-        wb.db.conn().execute(
-            "INSERT INTO pending_questions (id, project_id, kind, payload, state)
-             VALUES ('qa','p1','permission','{}','answered'), ('qb','p1','permission','{}','queued')",
-            [],
-        ).unwrap();
+        let qa = crate::cards::enqueue(
+            &wb.db,
+            "p1",
+            None,
+            crate::cards::CardKind::Permission,
+            json!({}),
+            None,
+        )
+        .unwrap();
+        crate::cards::answer(&wb.db, &qa, "owner").unwrap();
+        let qb = crate::cards::enqueue(
+            &wb.db,
+            "p1",
+            None,
+            crate::cards::CardKind::Permission,
+            json!({}),
+            None,
+        )
+        .unwrap();
         let qs = wb.pending_questions().unwrap();
         assert_eq!(qs.len(), 1);
-        assert_eq!(qs[0]["id"], "qb");
+        assert_eq!(qs[0]["id"], qb);
     }
     #[test]
     fn avatar_roundtrip_and_ext_switch() {
@@ -1407,29 +1409,23 @@ mod tests {
         let mut wb = fastpath_wb(dir.path());
         let prov = Arc::new(ScriptedProvider::new(vec![text_response("续跑完成")]));
         wb.register_provider("default", prov.clone());
-        wb.db
-            .conn()
-            .execute("UPDATE agents SET status='active' WHERE id='a0'", [])
-            .unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         // 手工塞一张 context_overflow 升级卡（等价于回合撞限挂起态）
-        wb.db.conn().execute(
-            "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-             VALUES ('qcx','p1','a0','escalation',
-                     '{\"sub\":\"context_overflow\",\"role\":\"后端\",\"est_tokens\":130000,\"cap\":120000,\"reason\":\"estimate\"}')",
-            [],
-        ).unwrap();
+        let qcx = crate::cards::enqueue(
+            &wb.db,
+            "p1",
+            Some("a0"),
+            crate::cards::CardKind::Escalation,
+            json!({"sub":"context_overflow","role":"后端","est_tokens":130000,"cap":120000,"reason":"estimate"}),
+            None,
+        )
+        .unwrap();
         // 放行 → 卡销 + context_resumed 事件 + 模型被再召续跑
-        wb.adjudicate_flag("qcx", true).unwrap();
-        let st: String = wb
-            .db
-            .conn()
-            .query_row(
-                "SELECT state FROM pending_questions WHERE id='qcx'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(st, "answered");
+        wb.adjudicate_flag(&qcx, true).unwrap();
+        assert_eq!(
+            crate::cards::get(&wb.db, &qcx).unwrap().state,
+            crate::cards::CardState::Answered
+        );
         assert_eq!(prov.recorded().len(), 1, "放行须续跑一回合");
         let tl = wb.timeline(None, 50).unwrap();
         assert!(tl.iter().any(|i| i.event.kind == EventKind::System
@@ -1797,10 +1793,7 @@ mod tests {
         assert_eq!(d["custom"], true);
         assert_eq!(d["globs"], json!(["docs/i18n/**"]));
         // 激活 → 跑通一回合（自定义角色与预置同权）
-        wb.db
-            .conn()
-            .execute("UPDATE agents SET status='active' WHERE id=?1", [&aid])
-            .unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", &aid, false).unwrap();
         let prov = Arc::new(ScriptedProvider::new(vec![text_response("翻訳完了")]));
         wb.register_provider("default", prov.clone());
         let out = wb.run_turn("翻译", "翻译 README").unwrap();
@@ -1815,10 +1808,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("notes.md"), "fact A").unwrap();
         let mut wb = Workbench::for_test(dir.path(), &["研究"], None).unwrap();
-        wb.db
-            .conn()
-            .execute("UPDATE agents SET status='active' WHERE id='a0'", [])
-            .unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         // 脚本序：父→research；嵌套→fs_read → 试写（只读注册表无此工具）
         //         → 文本作答；父→收尾
         let prov = Arc::new(ScriptedProvider::new(vec![
@@ -1880,10 +1870,7 @@ mod tests {
             .unwrap();
         assert!(n >= 2, "nested usage must bill parent, got {n}");
         // 父休眠嵌套不跑：直接截获调用也拒
-        wb.db
-            .conn()
-            .execute("UPDATE agents SET status='sleeping' WHERE id='a0'", [])
-            .unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", true).unwrap();
         let ctx = wb.ctx_for("a0", None);
         let r = crate::research::call_nested(
             &wb.db,

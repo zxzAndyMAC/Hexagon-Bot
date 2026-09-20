@@ -451,9 +451,7 @@ fn usage_cap_blocks_scheduling() {
 #[test]
 fn sleeping_agent_makes_zero_model_calls() {
     let (db, reg, ctx, _dir) = setup();
-    db.conn()
-        .execute("UPDATE agents SET status='sleeping' WHERE id='a1'", [])
-        .unwrap();
+    crate::orchestra::write_agent_status(&db, "p1", "a1", true).unwrap();
     let provider = ScriptedProvider::new(vec![text_response("不该被调用")]);
     let out = run_turn(&db, &provider, &reg, &ctx, vec![], "干活").unwrap();
     assert_eq!(out, TurnOutcome::SkippedSleeping);
@@ -864,16 +862,13 @@ fn us37_context_overflow_escalates() {
     let out = run_turn(&db, &provider, &reg, &ctx, vec![big], "go").unwrap();
     match out {
         TurnOutcome::AwaitingPermission(qid) => {
-            let (kind, payload): (String, String) = db
-                .conn()
-                .query_row(
-                    "SELECT kind, payload FROM pending_questions WHERE id=?1",
-                    [&qid],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .unwrap();
-            assert_eq!(kind, "escalation");
-            assert!(payload.contains("context_overflow"), "payload {payload}");
+            let card = crate::cards::get(&db, &qid).unwrap();
+            assert_eq!(card.kind, "escalation");
+            assert!(
+                card.payload.to_string().contains("context_overflow"),
+                "payload {}",
+                card.payload
+            );
         }
         o => panic!("expected AwaitingPermission, got {o:?}"),
     }

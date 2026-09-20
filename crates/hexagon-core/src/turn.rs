@@ -57,6 +57,8 @@ pub enum TurnError {
     NoAgent(String),
     #[error(transparent)]
     Orch(#[from] crate::orchestra::OrchError),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
 }
 
 /// 截断续推指令（票 13）：不重复推理，直接下一步。

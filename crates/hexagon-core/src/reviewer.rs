@@ -382,14 +382,11 @@ pub fn adjudicate(
     question_id: &str,
     user_input: &str,
 ) -> ReviewOutcome {
-    let Ok((payload,)) = db.conn().query_row(
-        "SELECT payload FROM pending_questions WHERE id=?1 AND kind='permission' AND state='queued'",
-        [question_id],
-        |r| Ok((r.get::<_, String>(0)?,)),
-    ) else {
+    let Ok(card) = crate::cards::get_queued(db, question_id, crate::cards::CardKind::Permission)
+    else {
         return ReviewOutcome::Held;
     };
-    let mut payload: Value = serde_json::from_str(&payload).unwrap_or_default();
+    let payload = &card.payload;
     // 安全网永不进 reviewer（不变量 1）：safety_net 的地板是「人看一眼」，
     // 这里放行 verdict 就是那道地板的旁路。
     if payload["safety_net"].as_bool() == Some(true) {
@@ -446,15 +443,12 @@ pub fn adjudicate(
     }
     // 非 allow：理由写进卡载荷给负责人看（「为什么问我」当场有答），
     // agent 永远看不到——resolve 的 deny 回执是 AGENT_DENY_MESSAGE。
-    if v.kind == VerdictKind::Deny {
-        payload["reviewer_denied"] = json!(v.reason);
+    let field = if v.kind == VerdictKind::Deny {
+        "reviewer_denied"
     } else {
-        payload["reviewer_unsure"] = json!(v.reason);
-    }
-    let _ = db.conn().execute(
-        "UPDATE pending_questions SET payload=?1 WHERE id=?2",
-        rusqlite::params![payload.to_string(), question_id],
-    );
+        "reviewer_unsure"
+    };
+    let _ = crate::cards::annotate(db, question_id, &[(field, json!(v.reason))]);
     if live && v.kind == VerdictKind::Deny {
         let streak = denial_streak(db, &ctx.project_id, ctx.stage_run_id.as_deref());
         if streak >= REVIEWER_TRIP {
@@ -641,15 +635,16 @@ mod tests {
                 [],
             )
             .unwrap();
-        db.conn()
-            .execute(
-                "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-                 VALUES ('q9','p1','a1','permission', ?1)",
-                [json!({"tool":"bash","raw_input":{"cmd":"cargo test"},
-                        "safety_net":false,"provenance":null})
-                .to_string()],
-            )
-            .unwrap();
+        let q9 = crate::cards::enqueue(
+            &db,
+            "p1",
+            Some("a1"),
+            crate::cards::CardKind::Permission,
+            json!({"tool":"bash","raw_input":{"cmd":"cargo test"},
+                   "safety_net":false,"provenance":null}),
+            None,
+        )
+        .unwrap();
         let provider = ScriptedProvider::new(vec![crate::provider::ChatResponse {
             content: vec![ContentBlock::Text {
                 text: "{\"verdict\":\"allow\",\"reason\":\"在范围内\"}".into(),
@@ -657,24 +652,19 @@ mod tests {
             stop: crate::provider::StopReason::EndTurn,
             usage: Default::default(),
         }]);
-        shadow_review(&db, &ctx, &provider, "s", "q9", "跑测试");
+        shadow_review(&db, &ctx, &provider, "s", &q9, "跑测试");
         let evs = db
             .timeline("p1", None, 50, Some(&[EventKind::ReviewerVerdict]))
             .unwrap();
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].event.payload["verdict"], "allow");
         assert_eq!(evs[0].event.payload["mode"], "shadow");
-        assert_eq!(evs[0].event.payload["question_id"], "q9");
+        assert_eq!(evs[0].event.payload["question_id"], q9);
         // 卡仍 queued——shadow 不动流程
-        let st: String = db
-            .conn()
-            .query_row(
-                "SELECT state FROM pending_questions WHERE id='q9'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(st, "queued");
+        assert_eq!(
+            crate::cards::get(&db, &q9).unwrap().state,
+            crate::cards::CardState::Queued
+        );
     }
 
     #[test]
@@ -687,19 +677,18 @@ mod tests {
                 [],
             )
             .unwrap();
-        db.conn()
-            .execute(
-                "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-                 VALUES ('qs','p1','a1','permission', ?1)",
-                [
-                    json!({"tool":"bash","raw_input":{"cmd":"git push origin main"},
-                        "safety_net":true})
-                    .to_string(),
-                ],
-            )
-            .unwrap();
+        let qs = crate::cards::enqueue(
+            &db,
+            "p1",
+            Some("a1"),
+            crate::cards::CardKind::Permission,
+            json!({"tool":"bash","raw_input":{"cmd":"git push origin main"},
+                   "safety_net":true}),
+            None,
+        )
+        .unwrap();
         let provider = ScriptedProvider::new(vec![]);
-        shadow_review(&db, &ctx, &provider, "s", "qs", "推送");
+        shadow_review(&db, &ctx, &provider, "s", &qs, "推送");
         assert!(
             provider.recorded().is_empty(),
             "safety-net 必问不进 reviewer"
@@ -739,8 +728,8 @@ mod tests {
 
     // ---- 票 05：live 切换 ----
 
-    /// live 前置：stage_run + queued 卡 + 项目 reviewer_mode/autonomy。
-    fn live_setup(db: &Db, qid: &str, payload: Value, reviewer_mode: &str, autonomy: &str) {
+    /// live 前置：stage_run + queued 卡 + 项目 reviewer_mode/autonomy。返回卡 id。
+    fn live_setup(db: &Db, payload: Value, reviewer_mode: &str, autonomy: &str) -> String {
         db.conn()
             .execute(
                 "INSERT INTO stage_runs (id, project_id, stage_name, seq, state)
@@ -754,13 +743,15 @@ mod tests {
                 rusqlite::params![reviewer_mode, autonomy],
             )
             .unwrap();
-        db.conn()
-            .execute(
-                "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-                 VALUES (?1,'p1','a1','permission', ?2)",
-                rusqlite::params![qid, payload.to_string()],
-            )
-            .unwrap();
+        crate::cards::enqueue(
+            db,
+            "p1",
+            Some("a1"),
+            crate::cards::CardKind::Permission,
+            payload,
+            None,
+        )
+        .unwrap()
     }
 
     fn verdict_provider(verdict: &str) -> ScriptedProvider {
@@ -776,15 +767,14 @@ mod tests {
     #[test]
     fn live_allow_returns_allow_and_marks_event_live() {
         let (db, ctx, _d) = setup();
-        live_setup(
+        let q1 = live_setup(
             &db,
-            "q1",
             json!({"tool":"bash","raw_input":{"cmd":"cargo test"},"safety_net":false}),
             "live",
             "L1",
         );
         let p = verdict_provider("allow");
-        let out = adjudicate(&db, &ctx, &p, "s", "q1", "跑测试");
+        let out = adjudicate(&db, &ctx, &p, "s", &q1, "跑测试");
         assert!(matches!(out, ReviewOutcome::Allow));
         let evs = db
             .timeline("p1", None, 50, Some(&[EventKind::ReviewerVerdict]))
@@ -796,15 +786,14 @@ mod tests {
     #[test]
     fn shadow_allow_is_held_never_executes() {
         let (db, ctx, _d) = setup();
-        live_setup(
+        let q1 = live_setup(
             &db,
-            "q1",
             json!({"tool":"bash","raw_input":{"cmd":"cargo test"},"safety_net":false}),
             "shadow",
             "L1",
         );
         let p = verdict_provider("allow");
-        let out = adjudicate(&db, &ctx, &p, "s", "q1", "跑测试");
+        let out = adjudicate(&db, &ctx, &p, "s", &q1, "跑测试");
         // shadow 下 allow 也只是记录——Held，卡照出
         assert!(matches!(out, ReviewOutcome::Held));
         let evs = db
@@ -817,9 +806,8 @@ mod tests {
     #[test]
     fn live_l0_autonomy_degrades_to_shadow() {
         let (db, ctx, _d) = setup();
-        live_setup(
+        let q1 = live_setup(
             &db,
-            "q1",
             json!({"tool":"bash","raw_input":{"cmd":"cargo test"},"safety_net":false}),
             "live",
             "L0",
@@ -827,7 +815,7 @@ mod tests {
         let p = verdict_provider("allow");
         // L0 语义=一切排负责人；live 放行之与其矛盾，退化为记录
         assert!(matches!(
-            adjudicate(&db, &ctx, &p, "s", "q1", "跑测试"),
+            adjudicate(&db, &ctx, &p, "s", &q1, "跑测试"),
             ReviewOutcome::Held
         ));
     }
@@ -835,73 +823,47 @@ mod tests {
     #[test]
     fn live_unsure_annotates_card_and_holds() {
         let (db, ctx, _d) = setup();
-        live_setup(
+        let q1 = live_setup(
             &db,
-            "q1",
             json!({"tool":"bash","raw_input":{"cmd":"git push origin main"},"safety_net":false}),
             "live",
             "L1",
         );
         let p = verdict_provider("unsure");
         assert!(matches!(
-            adjudicate(&db, &ctx, &p, "s", "q1", "修测试"),
+            adjudicate(&db, &ctx, &p, "s", &q1, "修测试"),
             ReviewOutcome::Held
         ));
-        let payload: String = db
-            .conn()
-            .query_row(
-                "SELECT payload FROM pending_questions WHERE id='q1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let payload: Value = serde_json::from_str(&payload).unwrap();
-        assert!(payload["reviewer_unsure"].is_string());
+        let card = crate::cards::get(&db, &q1).unwrap();
+        assert!(card.payload["reviewer_unsure"].is_string());
         // 卡仍 queued
-        let st: String = db
-            .conn()
-            .query_row(
-                "SELECT state FROM pending_questions WHERE id='q1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(st, "queued");
+        assert_eq!(card.state, crate::cards::CardState::Queued);
     }
 
     #[test]
     fn live_deny_annotates_and_counts_streak() {
         let (db, ctx, _d) = setup();
-        live_setup(
+        let q1 = live_setup(
             &db,
-            "q1",
             json!({"tool":"bash","raw_input":{"cmd":"rm -rf x"},"safety_net":false}),
             "live",
             "L1",
         );
         let p = verdict_provider("deny");
         assert!(matches!(
-            adjudicate(&db, &ctx, &p, "s", "q1", "清理"),
+            adjudicate(&db, &ctx, &p, "s", &q1, "清理"),
             ReviewOutcome::Held
         ));
-        let payload: String = db
-            .conn()
-            .query_row(
-                "SELECT payload FROM pending_questions WHERE id='q1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(serde_json::from_str::<Value>(&payload).unwrap()["reviewer_denied"].is_string());
+        let card = crate::cards::get(&db, &q1).unwrap();
+        assert!(card.payload["reviewer_denied"].is_string());
         assert_eq!(denial_streak(&db, "p1", Some("sr1")), 1);
     }
 
     #[test]
     fn five_denies_trip_breaker_for_activation() {
         let (db, ctx, _d) = setup();
-        live_setup(
+        let q1 = live_setup(
             &db,
-            "q1",
             json!({"tool":"bash","raw_input":{"cmd":"x"},"safety_net":false}),
             "live",
             "L1",
@@ -909,7 +871,7 @@ mod tests {
         // 制造 5 个 live deny 判定
         for i in 0..REVIEWER_TRIP {
             let p = verdict_provider("deny");
-            adjudicate(&db, &ctx, &p, "s", "q1", "req");
+            adjudicate(&db, &ctx, &p, "s", &q1, "req");
             // 每次 adjudicate 后卡还在（deny 不消耗卡），连败累计
             let _ = i;
         }
@@ -920,7 +882,7 @@ mod tests {
         // 跳闸后：provider 有新脚本也不会被调
         let p = verdict_provider("allow");
         assert!(matches!(
-            adjudicate(&db, &ctx, &p, "s", "q1", "req"),
+            adjudicate(&db, &ctx, &p, "s", &q1, "req"),
             ReviewOutcome::Held
         ));
         assert!(p.recorded().is_empty(), "跳闸后不再调 reviewer");
@@ -929,16 +891,15 @@ mod tests {
     #[test]
     fn non_deny_resets_streak() {
         let (db, ctx, _d) = setup();
-        live_setup(
+        let q1 = live_setup(
             &db,
-            "q1",
             json!({"tool":"bash","raw_input":{"cmd":"x"},"safety_net":false}),
             "live",
             "L1",
         );
         for v in ["deny", "deny", "unsure", "deny"] {
             let p = verdict_provider(v);
-            adjudicate(&db, &ctx, &p, "s", "q1", "req");
+            adjudicate(&db, &ctx, &p, "s", &q1, "req");
         }
         assert_eq!(denial_streak(&db, "p1", Some("sr1")), 1, "unsure 截断连败");
         assert!(db

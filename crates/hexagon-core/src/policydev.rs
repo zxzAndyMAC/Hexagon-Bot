@@ -397,15 +397,11 @@ mod tests {
             std::fs::read_to_string(dir.path().join(".hexagon/proposals/policy-dev.md")).unwrap();
         assert!(body.contains("```replay"));
         // 盖章卡带证据摘要
-        let card: String = db
-            .conn()
-            .query_row(
-                "SELECT payload FROM pending_questions WHERE kind='stamp'",
-                [],
-                |r| r.get(0),
-            )
+        let qid = crate::cards::first_queued(&db, "p", crate::cards::CardKind::Stamp)
+            .unwrap()
             .unwrap();
-        assert!(card.contains("evidence"));
+        let card = crate::cards::get(&db, &qid).unwrap();
+        assert!(card.payload.to_string().contains("evidence"));
     }
 
     #[test]

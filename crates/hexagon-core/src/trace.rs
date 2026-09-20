@@ -6,7 +6,7 @@
 
 use crate::db::{Db, DbError};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 /// 事件类型枚举。新增类型 = 加变体；spec「轨迹」列出的事件面逐项在此。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +161,8 @@ pub enum TraceError {
     Json(#[from] serde_json::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
 }
 
 /// 轨迹导出过滤（US54）：阶段 / Agent / kind 三维，None = 不过滤。
@@ -396,22 +398,9 @@ impl Db {
     }
 
     /// 待决卡队列读模型（ADR 0052 读组）：壳层经控制连接直查。
-    /// pending_questions 的属主归并是 arch-review 票 04（cards.rs）的活——
-    /// 届时本函数是唯一迁移点。
+    /// 数据面归 cards.rs（票 04），本函数只剩转发。
     pub fn queued_questions(&self, project_id: &str) -> Result<Vec<Value>, TraceError> {
-        let mut st = self.conn().prepare(
-            "SELECT id, kind, payload, state FROM pending_questions
-             WHERE project_id=?1 AND state='queued' ORDER BY created_at",
-        )?;
-        let rows = st
-            .query_map([project_id], |r| {
-                Ok(
-                    json!({"id": r.get::<_,String>(0)?, "kind": r.get::<_,String>(1)?,
-                          "payload": r.get::<_,String>(2)?, "state": r.get::<_,String>(3)?}),
-                )
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        Ok(crate::cards::queued(self, project_id)?)
     }
 
     /// 轨迹导出（US54）：过滤后事件集写 JSON 文件供回放核对。

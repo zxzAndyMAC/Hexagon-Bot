@@ -227,23 +227,20 @@ pub(super) fn context_overflow(
             |r| r.get(0),
         )
         .unwrap_or_else(|_| ctx.agent_id.clone());
-    let qid = format!("q{}", db.next_id("q")?);
-    db.conn().execute(
-        "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-         VALUES (?1,?2,?3,'escalation',?4)",
-        rusqlite::params![
-            qid,
-            ctx.project_id,
-            ctx.agent_id,
-            json!({
-                "sub": "context_overflow",
-                "role": role,
-                "est_tokens": est_tokens,
-                "cap": CONTEXT_CAP_TOKENS,
-                "reason": reason,
-            })
-            .to_string()
-        ],
+    // 卡表写口归 cards.rs（arch-review 票 04）
+    let qid = crate::cards::enqueue(
+        db,
+        &ctx.project_id,
+        Some(&ctx.agent_id),
+        crate::cards::CardKind::Escalation,
+        json!({
+            "sub": "context_overflow",
+            "role": role,
+            "est_tokens": est_tokens,
+            "cap": CONTEXT_CAP_TOKENS,
+            "reason": reason,
+        }),
+        None,
     )?;
     db.append_event(
         &ctx.project_id,

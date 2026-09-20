@@ -23,6 +23,8 @@ pub enum InstallError {
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
+    #[error(transparent)]
     Trace(#[from] TraceError),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
@@ -173,11 +175,13 @@ pub fn request_install(
     payload["net"] = json!(p.net());
     payload["creds"] = json!(false);
     payload["desc"] = json!(desc);
-    let qid = format!("q{}", db.next_id("q")?);
-    db.conn().execute(
-        "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-         VALUES (?1,?2,NULL,'install',?3)",
-        rusqlite::params![qid, project_id, payload.to_string()],
+    let qid = crate::cards::enqueue(
+        db,
+        project_id,
+        None,
+        crate::cards::CardKind::Install,
+        payload.clone(),
+        None,
     )?;
     db.append_event(
         project_id,
@@ -197,22 +201,10 @@ pub fn resolve_install(
     qid: &str,
     allow: bool,
 ) -> Result<Value, InstallError> {
-    let (payload, state): (String, String) = db
-        .conn()
-        .query_row(
-            "SELECT payload, state FROM pending_questions WHERE id=?1 AND kind='install'",
-            [qid],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(|_| InstallError::UnknownQuestion(qid.into()))?;
-    if state != "queued" {
-        return Err(InstallError::UnknownQuestion(qid.into()));
-    }
-    let plan: Value = serde_json::from_str(&payload)?;
-    db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by='owner' WHERE id=?1",
-        [qid],
-    )?;
+    let plan = crate::cards::get_queued(db, qid, crate::cards::CardKind::Install)
+        .map_err(|_| InstallError::UnknownQuestion(qid.into()))?
+        .payload;
+    crate::cards::answer(db, qid, "owner")?;
     if !allow {
         db.append_event(
             project_id,
@@ -383,16 +375,7 @@ mod tests {
             "{\"name\":\"cfg\",\"command\":\"npx\",\"args\":[]}",
         )
         .unwrap();
-        let kind: String = wb
-            .db
-            .conn()
-            .query_row(
-                "SELECT kind FROM pending_questions WHERE id=?1",
-                [&qid],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(kind, "install");
+        assert_eq!(crate::cards::get(&wb.db, &qid).unwrap().kind, "install");
 
         // 驳回：不执行、留 install_rejected、卡已回答
         let out = resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, false).unwrap();

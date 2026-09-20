@@ -106,10 +106,7 @@ pub fn enforce_cap(db: &Db, project_id: &str) -> Result<bool, crate::trace::Trac
     if active == 0 {
         return Ok(true); // 已触顶且已休眠：仍是闸，但事件不重复
     }
-    db.conn().execute(
-        "UPDATE agents SET status='sleeping' WHERE project_id=?1",
-        [project_id],
-    )?;
+    crate::orchestra::write_team_sleeping(db, project_id)?;
     log::warn!("usage cap hit: project={project_id} limit={limit_cents}¢ — team slept");
     db.append_event(
         project_id,

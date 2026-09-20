@@ -195,10 +195,7 @@ mod tests {
     #[test]
     fn sleeping_parent_rejected() {
         let (wb, _d) = setup();
-        wb.db
-            .conn()
-            .execute("UPDATE agents SET status='sleeping' WHERE id='a0'", [])
-            .unwrap();
+        crate::orchestra::write_agent_status(&wb.db, "p1", "a0", true).unwrap();
         let provider = ScriptedProvider::new(vec![text_response("x")]);
         let r = call_nested(
             &wb.db,
@@ -217,10 +214,7 @@ mod tests {
     fn nested_turn_collects_answer_and_citations() {
         let (wb, _d) = setup();
         // for_test 的 agent 默认 sleeping（schema 默认）——激活才可跑回合。
-        wb.db
-            .conn()
-            .execute("UPDATE agents SET status='active' WHERE id='a0'", [])
-            .unwrap();
+        crate::orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         std::fs::write(wb.repo_root.join("note.md"), "hello").unwrap();
         let provider = ScriptedProvider::new(vec![
             tool_response(vec![("t1", "fs_read", json!({"path": "note.md"}))]),

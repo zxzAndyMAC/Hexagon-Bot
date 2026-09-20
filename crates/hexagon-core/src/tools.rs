@@ -29,6 +29,8 @@ pub enum ToolError {
     Trace(#[from] TraceError),
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("artifact: {0}")]
@@ -256,7 +258,6 @@ impl Registry {
                         return Ok(outcome);
                     }
                 }
-                let qid = format!("q{}", db.next_id("q")?);
                 // 票 03：必问卡附溯源注记 + 激活冻结的 known world——
                 // 负责人能看到「这文件是 agent N 步前写的」「这 remote 不在初始列表」
                 let prov = crate::provenance::note(db, ctx, name, &input);
@@ -266,20 +267,17 @@ impl Registry {
                     ctx.stage_run_id.as_deref(),
                 );
                 let delta = crate::provenance::remote_delta(name, &input, world.as_ref());
-                db.conn().execute(
-                    "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload, idem_key)
-                     VALUES (?1, ?2, ?3, 'permission', ?4, ?5)",
-                    rusqlite::params![
-                        qid,
-                        ctx.project_id,
-                        ctx.agent_id,
-                        json!({ "tool": name, "input": scrub_input(name, &input),
-                                "raw_input": input, "reason": reason, "safety_net": safety_net,
-                                "provenance": prov, "known_world": world,
-                                "remote_delta": delta })
-                        .to_string(),
-                        idem_key,
-                    ],
+                // 卡表写口归 cards.rs（arch-review 票 04）
+                let qid = crate::cards::enqueue(
+                    db,
+                    &ctx.project_id,
+                    Some(&ctx.agent_id),
+                    crate::cards::CardKind::Permission,
+                    json!({ "tool": name, "input": scrub_input(name, &input),
+                            "raw_input": input, "reason": reason, "safety_net": safety_net,
+                            "provenance": prov, "known_world": world,
+                            "remote_delta": delta }),
+                    idem_key.as_deref(),
                 )?;
                 db.append_event(
                     &ctx.project_id,
@@ -322,28 +320,18 @@ impl Registry {
         pack: Option<&crate::orchestra::PackDef>,
         origin: &str,
     ) -> Result<CallOutcome, ToolError> {
-        let row = db
-            .conn()
-            .query_row(
-                "SELECT payload, state FROM pending_questions WHERE id = ?1 AND kind = 'permission'",
-                [question_id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .map_err(|_| ToolError::UnknownQuestion(question_id.into()))?;
-        if row.1 != "queued" {
-            return Err(ToolError::BadInput(format!(
-                "question {question_id} already {}",
-                row.1
-            )));
-        }
-        let payload: Value = serde_json::from_str(&row.0).unwrap_or_default();
+        let card = crate::cards::get_queued(db, question_id, crate::cards::CardKind::Permission)
+            .map_err(|e| match e {
+                crate::cards::CardsError::NotQueued { state, .. } => {
+                    ToolError::BadInput(format!("question {question_id} already {state}"))
+                }
+                _ => ToolError::UnknownQuestion(question_id.into()),
+            })?;
+        let payload = card.payload;
         let tool_name = payload["tool"].as_str().unwrap_or("").to_string();
         let raw_input = payload["raw_input"].clone();
 
-        db.conn().execute(
-            "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by=?2 WHERE id=?1",
-            rusqlite::params![question_id, origin],
-        )?;
+        crate::cards::answer(db, question_id, origin)?;
 
         if !allow {
             db.append_event(
@@ -411,26 +399,13 @@ impl Registry {
         ctx: &ToolContext,
         idem_key: &str,
     ) -> Result<Option<CallOutcome>, ToolError> {
-        let row = db
-            .conn()
-            .query_row(
-                "SELECT id, state, payload FROM pending_questions
-                 WHERE agent_id=?1 AND idem_key=?2
-                 AND kind='permission' ORDER BY id DESC LIMIT 1",
-                rusqlite::params![ctx.agent_id, idem_key],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((qid, state, payload)) = row else {
+        // 卡表读口归 cards.rs（票 04）；命中后的裁决沿用逻辑留在这里——
+        // 它要查 events（trace 域）并可能补执行（registry 域），都不归 cards。
+        let Some(card) = crate::cards::find_by_idem(db, &ctx.agent_id, idem_key)? else {
             return Ok(None);
         };
-        if state == "queued" {
+        let (qid, state, payload) = (card.id, card.state, card.payload);
+        if state == crate::cards::CardState::Queued {
             db.append_event(
                 &ctx.project_id,
                 EventKind::PermissionAsked,
@@ -440,7 +415,7 @@ impl Registry {
             )?;
             return Ok(Some(CallOutcome::Asked(qid)));
         }
-        if state != "answered" {
+        if state != crate::cards::CardState::Answered {
             return Ok(None);
         }
         // 已答：找裁决事件（allow 记 PermissionAllowed，deny 记 PermissionDenied）
@@ -458,8 +433,7 @@ impl Registry {
             return Ok(None);
         };
         if kind == "permission_denied" {
-            let p: Value = serde_json::from_str(&payload).unwrap_or_default();
-            let msg = if p["reviewer_denied"].is_string() {
+            let msg = if payload["reviewer_denied"].is_string() {
                 crate::reviewer::AGENT_DENY_MESSAGE
             } else {
                 "owner denied"
@@ -484,9 +458,8 @@ impl Registry {
             }))));
         }
         // 允许后崩在 exec 前：负责人已同意，此刻补执行（不再弹卡）
-        let p: Value = serde_json::from_str(&payload).unwrap_or_default();
-        let tool_name = p["tool"].as_str().unwrap_or("").to_string();
-        let raw_input = p["raw_input"].clone();
+        let tool_name = payload["tool"].as_str().unwrap_or("").to_string();
+        let raw_input = payload["raw_input"].clone();
         self.exec_and_log(db, ctx, &tool_name, raw_input)
             .map(|v| Some(CallOutcome::Done(v)))
     }
@@ -1382,13 +1355,7 @@ mod tests {
             .call_with_seq(&db, &ctx, "bash", inp(), Some("r0i0"))
             .unwrap();
         assert!(matches!(o2, CallOutcome::Asked(ref q) if *q == q1));
-        let n: i64 = db
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM pending_questions WHERE kind='permission'",
-                [],
-                |r| r.get(0),
-            )
+        let n = crate::cards::count_queued(&db, "p1", Some(crate::cards::CardKind::Permission))
             .unwrap();
         assert_eq!(n, 1);
         // deduped 事件留痕
@@ -1426,20 +1393,10 @@ mod tests {
             .call_with_seq(&db, &ctx, "bash", json!({"cmd":"rm -rf x"}), Some("r0i0"))
             .unwrap();
         assert!(matches!(out, CallOutcome::Denied(ref r) if r == "owner denied"));
-        let n: i64 = db
-            .conn()
-            .query_row("SELECT COUNT(*) FROM pending_questions", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 1);
-        let by: String = db
-            .conn()
-            .query_row(
-                "SELECT answered_by FROM pending_questions WHERE id=?1",
-                [&qid],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(by, "owner");
+        let n = crate::cards::count_queued(&db, "p1", None).unwrap();
+        assert_eq!(n, 0, "卡已答，不再计 queued");
+        let by = crate::cards::get(&db, &qid).unwrap().answered_by;
+        assert_eq!(by.as_deref(), Some("owner"));
     }
 
     #[test]

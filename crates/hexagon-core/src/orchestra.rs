@@ -21,6 +21,8 @@ pub enum OrchError {
     Trace(#[from] TraceError),
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("json: {0}")]
@@ -371,10 +373,7 @@ pub fn open_stage(
     // 激活/休眠
     for (aid, role) in &team {
         let on = stage.roles.contains(role);
-        db.conn().execute(
-            "UPDATE agents SET status=?1 WHERE id=?2",
-            rusqlite::params![if on { "active" } else { "sleeping" }, aid],
-        )?;
+        write_agent_status(db, project_id, aid, !on)?;
         db.append_event(
             project_id,
             if on {
@@ -564,15 +563,14 @@ pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<Value, OrchE
                     "UPDATE stage_runs SET state='waiting_stamp' WHERE id=?1",
                     [&run.id],
                 )?;
-                let qid = format!("q{}", db.next_id("q")?);
-                db.conn().execute(
-                    "INSERT INTO pending_questions (id, project_id, kind, payload)
-                     VALUES (?1,?2,'stamp',?3)",
-                    rusqlite::params![
-                        qid,
-                        project_id,
-                        json!({"stage": stage.name, "run_id": run.id}).to_string()
-                    ],
+                // 卡表写口归 cards.rs（arch-review 票 04）；阶段盖章卡无 agent
+                let qid = crate::cards::enqueue(
+                    db,
+                    project_id,
+                    None,
+                    crate::cards::CardKind::Stamp,
+                    json!({"stage": stage.name, "run_id": run.id}),
+                    None,
                 )?;
                 db.append_event(
                     project_id,
@@ -621,10 +619,7 @@ pub fn open_next(
     loop {
         if seq >= pack.stages.len() {
             // 全程跑完：全员休眠
-            db.conn().execute(
-                "UPDATE agents SET status='sleeping' WHERE project_id=?1",
-                [project_id],
-            )?;
+            write_team_sleeping(db, project_id)?;
             db.append_event(
                 project_id,
                 EventKind::TeamSlept,
@@ -778,13 +773,39 @@ pub fn project_info(db: &Db, project_id: &str) -> Result<Value, OrchError> {
     }))
 }
 
-/// 全员休眠（干预指令：回合进行中也要能落，故走控制通道）。
-/// agents.status 的归一写口收敛进 cards 阶段（arch-review 票 04）。
-pub fn sleep_all(db: &Db, project_id: &str) -> Result<(), OrchError> {
+/// agents.status 的唯一写口（arch-review 票 04）：裸状态迁移，**不附事件**——
+/// 事件语义归各调用场景（owner 干预 TeamSlept/AgentSlept、usage cap 的
+/// UsageCapHit、会诊唤醒 ConsultWakeup、点名唤醒 AgentActivated{by:dispatch}）。
+/// 薄包装只转 SQL 错误，故返回 rusqlite::Error 而非 OrchError。
+pub fn write_agent_status(
+    db: &Db,
+    project_id: &str,
+    agent_id: &str,
+    sleeping: bool,
+) -> Result<(), rusqlite::Error> {
+    db.conn().execute(
+        "UPDATE agents SET status=?1 WHERE id=?2 AND project_id=?3",
+        rusqlite::params![
+            if sleeping { "sleeping" } else { "active" },
+            agent_id,
+            project_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// 全项目休眠裸写（usage cap 与 sleep_all 共用）。
+pub fn write_team_sleeping(db: &Db, project_id: &str) -> Result<(), rusqlite::Error> {
     db.conn().execute(
         "UPDATE agents SET status='sleeping' WHERE project_id=?1",
         [project_id],
     )?;
+    Ok(())
+}
+
+/// 全员休眠（干预指令：回合进行中也要能落，故走控制通道）。
+pub fn sleep_all(db: &Db, project_id: &str) -> Result<(), OrchError> {
+    write_team_sleeping(db, project_id)?;
     db.append_event(
         project_id,
         EventKind::TeamSlept,
@@ -802,14 +823,7 @@ pub fn set_agent_sleeping(
     agent_id: &str,
     sleeping: bool,
 ) -> Result<(), OrchError> {
-    db.conn().execute(
-        "UPDATE agents SET status=?1 WHERE id=?2 AND project_id=?3",
-        rusqlite::params![
-            if sleeping { "sleeping" } else { "active" },
-            agent_id,
-            project_id
-        ],
-    )?;
+    write_agent_status(db, project_id, agent_id, sleeping)?;
     db.append_event(
         project_id,
         if sleeping {
@@ -874,16 +888,13 @@ pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
             "UPDATE stage_runs SET state='interrupted' WHERE id=?1",
             [&run_id],
         )?;
-        let qid = format!("q{}", db.next_id("q")?);
-        db.conn().execute(
-            "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-             VALUES (?1, ?2, ?3, 'recovery', ?4)",
-            rusqlite::params![
-                qid,
-                project_id,
-                agent_id,
-                json!({"run_id": run_id, "stage": stage}).to_string()
-            ],
+        let _qid = crate::cards::enqueue(
+            db,
+            project_id,
+            agent_id.as_deref(),
+            crate::cards::CardKind::Recovery,
+            json!({"run_id": run_id, "stage": stage}),
+            None,
         )?;
         n += 1;
     }
@@ -903,11 +914,14 @@ pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchEr
     }
     db.conn()
         .execute("UPDATE stage_runs SET state='active' WHERE id=?1", [run_id])?;
-    db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by='owner'
-         WHERE project_id=?1 AND kind='recovery' AND state='queued'
-           AND json_extract(payload, '$.run_id')=?2",
-        rusqlite::params![project_id, run_id],
+    // 销掉该 run 的全部 queued 恢复卡（卡表写口归 cards.rs，票 04）
+    crate::cards::answer_queued_where(
+        db,
+        project_id,
+        crate::cards::CardKind::Recovery,
+        "run_id",
+        run_id,
+        "owner",
     )?;
     db.append_event(
         project_id,

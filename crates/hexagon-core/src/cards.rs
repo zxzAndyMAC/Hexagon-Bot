@@ -85,11 +85,13 @@ impl CardState {
 #[derive(Debug, Clone)]
 pub struct Card {
     pub id: String,
+    pub project_id: String,
     pub kind: String,
     pub agent_id: Option<String>,
     pub payload: Value,
     pub state: CardState,
     pub idem_key: Option<String>,
+    pub answered_by: Option<String>,
 }
 
 // ---------- 四个动词 ----------
@@ -204,31 +206,35 @@ pub fn queued(db: &Db, project_id: &str) -> Result<Vec<Value>, CardsError> {
 pub fn get(db: &Db, qid: &str) -> Result<Card, CardsError> {
     db.conn()
         .query_row(
-            "SELECT id, kind, agent_id, payload, state, idem_key
+            "SELECT id, project_id, kind, agent_id, payload, state, idem_key, answered_by
              FROM pending_questions WHERE id=?1",
             [qid],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
                     r.get::<_, String>(4)?,
-                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
                 ))
             },
         )
         .map_err(|_| CardsError::NotFound(qid.into()))
-        .and_then(|(id, kind, agent_id, payload, state, idem_key)| {
-            Ok(Card {
+        .map(
+            |(id, project_id, kind, agent_id, payload, state, idem_key, answered_by)| Card {
                 id,
+                project_id,
                 kind,
                 agent_id,
                 payload: serde_json::from_str(&payload).unwrap_or_default(),
                 state: CardState::from_str(&state),
                 idem_key,
-            })
-        })
+                answered_by,
+            },
+        )
 }
 
 /// 按 id + kind + queued 态取卡（裁决入口的标准前置闸）。
@@ -305,7 +311,7 @@ pub fn find_by_idem(db: &Db, agent_id: &str, idem_key: &str) -> Result<Option<Ca
     let row = db
         .conn()
         .query_row(
-            "SELECT id, kind, agent_id, payload, state, idem_key
+            "SELECT id, project_id, kind, agent_id, payload, state, idem_key, answered_by
              FROM pending_questions
              WHERE agent_id=?1 AND idem_key=?2 AND kind='permission'
              ORDER BY id DESC LIMIT 1",
@@ -314,24 +320,28 @@ pub fn find_by_idem(db: &Db, agent_id: &str, idem_key: &str) -> Result<Option<Ca
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
                     r.get::<_, String>(4)?,
-                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
                 ))
             },
         )
         .ok();
-    let Some((id, kind, agent_id, payload, state, idem)) = row else {
+    let Some((id, project_id, kind, agent_id, payload, state, idem, answered_by)) = row else {
         return Ok(None);
     };
     Ok(Some(Card {
         id,
+        project_id,
         kind,
         agent_id,
         payload: serde_json::from_str(&payload).unwrap_or_default(),
         state: CardState::from_str(&state),
         idem_key: idem,
+        answered_by,
     }))
 }
 

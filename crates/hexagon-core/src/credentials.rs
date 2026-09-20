@@ -21,6 +21,8 @@ pub enum CredError {
     Store(String),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
 }
 
 pub trait CredentialStore: Send + Sync {
@@ -115,7 +117,6 @@ pub fn leak_scan(db: &Db, project_id: &str, secret: &str) -> Result<Vec<String>,
     for (table, col) in [
         ("events", "payload"),
         ("messages", "body"),
-        ("pending_questions", "payload"),
         ("artifacts", "path"),
     ] {
         let sql =
@@ -129,6 +130,10 @@ pub fn leak_scan(db: &Db, project_id: &str, secret: &str) -> Result<Vec<String>,
         for id in ids {
             hits.push(format!("{table}:{id}"));
         }
+    }
+    // 卡片分片走属主 API（票 04）：表内查询细节不外泄
+    for id in crate::cards::ids_with_payload_like(db, project_id, secret)? {
+        hits.push(format!("pending_questions:{id}"));
     }
     Ok(hits)
 }

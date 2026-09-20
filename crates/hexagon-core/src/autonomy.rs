@@ -20,6 +20,8 @@ use crate::trace::EventKind;
 pub enum AutonomyError {
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
     #[error("trace: {0}")]
     Trace(#[from] crate::trace::TraceError),
     #[error("db: {0}")]
@@ -108,15 +110,10 @@ pub fn back(db: &Db, project_id: &str) -> Result<Value, AutonomyError> {
     };
 
     // 待办：仍排队的必问/盖章/升级/发布卡
-    let mut st = db.conn().prepare(
-        "SELECT kind, COUNT(*) FROM pending_questions
-         WHERE project_id=?1 AND state='queued' GROUP BY kind",
-    )?;
-    let todos: Vec<Value> = st
-        .query_map([project_id], |r| {
-            Ok(json!({"kind": r.get::<_, String>(0)?, "count": r.get::<_, i64>(1)?}))
-        })?
-        .collect::<Result<_, _>>()?;
+    let todos: Vec<Value> = crate::cards::queued_kind_counts(db, project_id)?
+        .into_iter()
+        .map(|(kind, count)| json!({"kind": kind, "count": count}))
+        .collect();
 
     // 离开期间交付的产物（带 kind）
     let mut st = db.conn().prepare(
@@ -240,13 +237,15 @@ mod tests {
             .unwrap();
         db.append_event("p", EventKind::StageFinished, json!({}), None, None)
             .unwrap();
-        db.conn()
-            .execute(
-                "INSERT INTO pending_questions (id, project_id, kind, payload)
-             VALUES ('q1','p','permission','{}')",
-                [],
-            )
-            .unwrap();
+        crate::cards::enqueue(
+            &db,
+            "p",
+            None,
+            crate::cards::CardKind::Permission,
+            json!({}),
+            None,
+        )
+        .unwrap();
 
         let s = back(&db, "p").unwrap();
         assert_eq!(s["deliveries"].as_array().unwrap().len(), 1); // 只有 b.md

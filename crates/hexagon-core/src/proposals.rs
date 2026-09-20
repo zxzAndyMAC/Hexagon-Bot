@@ -23,6 +23,8 @@ use crate::trace::EventKind;
 pub enum PropError {
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
     #[error("trace: {0}")]
     Trace(#[from] crate::trace::TraceError),
     #[error("db: {0}")]
@@ -358,22 +360,19 @@ fn to_stamp_queue(
         [pid],
     )?;
     let flags = risk_flags(surface, diff);
-    let qid = format!("q{}", db.next_id("q")?);
-    db.conn().execute(
-        "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-         VALUES (?1,?2,?3,'stamp',?4)",
-        params![
-            qid,
-            ctx.project_id,
-            ctx.agent_id,
-            json!({"proposal_id": pid, "surface": surface,
-            "evidence": evidence,
-            "warnings": flags,
-            "warning_text": if flags.is_empty() { Value::Null } else {
-                json!(format!("此提案{}", flags.join(" + ")))
-            }})
-            .to_string()
-        ],
+    // 提案确认卡搭 kind='stamp'（卡种过载见 cards.rs 模块注记）
+    crate::cards::enqueue(
+        db,
+        &ctx.project_id,
+        Some(&ctx.agent_id),
+        crate::cards::CardKind::Stamp,
+        json!({"proposal_id": pid, "surface": surface,
+        "evidence": evidence,
+        "warnings": flags,
+        "warning_text": if flags.is_empty() { Value::Null } else {
+            json!(format!("此提案{}", flags.join(" + ")))
+        }}),
+        None,
     )?;
     Ok(())
 }
@@ -451,23 +450,15 @@ pub fn reject_at_stamp(
     qid: &str,
     reason: &str,
 ) -> Result<(), PropError> {
-    let payload: String = db
-        .conn()
-        .query_row(
-            "SELECT payload FROM pending_questions
-             WHERE id=?1 AND project_id=?2 AND kind='stamp' AND state='queued'",
-            params![qid, ctx.project_id],
-            |r| r.get(0),
-        )
-        .map_err(|_| PropError::NotFound(format!("question {qid}")))?;
-    let pid = serde_json::from_str::<Value>(&payload).unwrap_or(json!({}))["proposal_id"]
+    let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Stamp)
+        .ok()
+        .filter(|c| c.project_id == ctx.project_id)
+        .ok_or_else(|| PropError::NotFound(format!("question {qid}")))?;
+    let pid = card.payload["proposal_id"]
         .as_str()
         .ok_or_else(|| PropError::Rejected("question is not a proposal stamp".into()))?
         .to_string();
-    db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
-        [qid],
-    )?;
+    crate::cards::answer(db, qid, "owner")?;
     db.conn().execute(
         "UPDATE proposals SET status='rejected', decided_at=datetime('now') WHERE id=?1",
         [&pid],
@@ -484,24 +475,16 @@ pub fn reject_at_stamp(
 
 /// 盖章确认：快照 → 应用 diff → active。qid 是 kind='stamp' 且 payload 带 proposal_id 的卡。
 pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropError> {
-    let payload: String = db
-        .conn()
-        .query_row(
-            "SELECT payload FROM pending_questions
-             WHERE id=?1 AND project_id=?2 AND kind='stamp' AND state='queued'",
-            params![qid, ctx.project_id],
-            |r| r.get(0),
-        )
-        .map_err(|_| PropError::NotFound(format!("question {qid}")))?;
-    let p: Value = serde_json::from_str(&payload).unwrap_or(json!({}));
+    let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Stamp)
+        .ok()
+        .filter(|c| c.project_id == ctx.project_id)
+        .ok_or_else(|| PropError::NotFound(format!("question {qid}")))?;
+    let p = &card.payload;
     let pid = p["proposal_id"]
         .as_str()
         .ok_or_else(|| PropError::Rejected("question is not a proposal stamp".into()))?
         .to_string();
-    db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
-        [qid],
-    )?;
+    crate::cards::answer(db, qid, "owner")?;
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalStamped,
@@ -722,13 +705,8 @@ mod tests {
             })
             .unwrap();
         assert_eq!(status, "awaiting_stamp");
-        let qid: String = db
-            .conn()
-            .query_row(
-                "SELECT id FROM pending_questions WHERE kind='stamp' AND state='queued'",
-                [],
-                |r| r.get(0),
-            )
+        let qid = crate::cards::first_queued(&db, "p", crate::cards::CardKind::Stamp)
+            .unwrap()
             .unwrap();
         // 盖章 → 生效：文件被改
         activate(&db, &ctx, &qid).unwrap();
@@ -809,23 +787,11 @@ mod tests {
         let content = proposal_md("pack_copy", ".hexagon/pack.json", diff);
         mkart(&db, d.path(), "art1", &content);
         let pid = submit(&db, &ctx, "art1", &content).unwrap();
-        let qid: String = db
-            .conn()
-            .query_row(
-                "SELECT id FROM pending_questions WHERE kind='stamp' AND state='queued'",
-                [],
-                |r| r.get(0),
-            )
+        let qid = crate::cards::first_queued(&db, "p", crate::cards::CardKind::Stamp)
+            .unwrap()
             .unwrap();
-        let payload: String = db
-            .conn()
-            .query_row(
-                "SELECT payload FROM pending_questions WHERE id=?1",
-                [&qid],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(payload.contains("expands_autonomy"));
+        let card = crate::cards::get(&db, &qid).unwrap();
+        assert!(card.payload.to_string().contains("expands_autonomy"));
         let _ = pid;
     }
 

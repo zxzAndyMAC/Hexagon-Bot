@@ -144,13 +144,13 @@ impl Tool for GitBaselineMerge {
     }
     fn exec(&self, db: &Db, _input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         // 盖章闸：任何 waiting_stamp 阶段或未决 stamp 问题都挡住合入
-        let blocked: i64 = db.conn().query_row(
-            "SELECT (SELECT COUNT(*) FROM stage_runs WHERE project_id=?1 AND state='waiting_stamp')
-                  + (SELECT COUNT(*) FROM pending_questions WHERE project_id=?1
-                     AND kind='stamp' AND state='queued')",
+        let waiting: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM stage_runs WHERE project_id=?1 AND state='waiting_stamp'",
             [&ctx.project_id],
             |r| r.get(0),
         )?;
+        let blocked = waiting
+            + crate::cards::count_queued(db, &ctx.project_id, Some(crate::cards::CardKind::Stamp))?;
         if blocked > 0 {
             return Err(ToolError::Exec(
                 "baseline merge blocked: stamp gate not cleared".into(),

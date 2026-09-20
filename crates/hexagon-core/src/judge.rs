@@ -382,11 +382,13 @@ pub fn judge_proposal(
     let Some(Ok(report)) = crate::proposals::replay_evidence(&body) else {
         // 无证据提案标 judge_skip——不然 sweep 每回合都重读一遍产物
         // 文件（证据在文件里,查询层看不见）。
-        let _ = db.conn().execute(
-            "UPDATE pending_questions SET payload = json_set(payload,'$.judge_skip','no-evidence')
-             WHERE project_id=?1 AND kind='stamp' AND state='queued'
-               AND json_extract(payload,'$.proposal_id')=?2",
-            rusqlite::params![project_id, proposal_id],
+        let _ = crate::cards::annotate_queued_where(
+            db,
+            project_id,
+            crate::cards::CardKind::Stamp,
+            "proposal_id",
+            proposal_id,
+            &[("judge_skip", json!("no-evidence"))],
         );
         return Ok(None);
     };
@@ -426,22 +428,17 @@ pub fn judge_proposal(
         None,
     )?;
     // 回填待决卡：judge_verdict + judge_advice 进卡载荷
-    db.conn().execute(
-        "UPDATE pending_questions
-         SET payload = json_set(payload,
-             '$.judge_verdict', ?3,
-             '$.judge_advice', ?4,
-             '$.judge_backend', ?5,
-             '$.judge_line', ?6)
-         WHERE project_id=?1 AND kind='stamp' AND state='queued'
-           AND json_extract(payload,'$.proposal_id')=?2",
-        rusqlite::params![
-            project_id,
-            proposal_id,
-            verdict.verdict.as_str(),
-            verdict.rationale,
-            verdict.backend,
-            plain_line(&verdict),
+    crate::cards::annotate_queued_where(
+        db,
+        project_id,
+        crate::cards::CardKind::Stamp,
+        "proposal_id",
+        proposal_id,
+        &[
+            ("judge_verdict", json!(verdict.verdict.as_str())),
+            ("judge_advice", json!(verdict.rationale)),
+            ("judge_backend", json!(verdict.backend)),
+            ("judge_line", json!(plain_line(&verdict))),
         ],
     )?;
     Ok(Some(verdict))
@@ -456,18 +453,7 @@ pub fn sweep(
     repo_root: &std::path::Path,
     backend: &dyn JudgeBackend,
 ) -> Result<usize, ApiError> {
-    let mut st = db.conn().prepare(
-        "SELECT p.id FROM proposals p
-         JOIN pending_questions q ON q.project_id=p.project_id
-           AND q.kind='stamp' AND q.state='queued'
-           AND json_extract(q.payload,'$.proposal_id')=p.id
-         WHERE p.project_id=?1 AND p.status='awaiting_stamp'
-           AND json_extract(q.payload,'$.judge_verdict') IS NULL
-           AND json_extract(q.payload,'$.judge_skip') IS NULL",
-    )?;
-    let ids: Vec<String> = st
-        .query_map([project_id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
+    let ids = crate::cards::unjudged_stamp_proposals(db, project_id)?;
     let mut n = 0;
     for pid in ids {
         if judge_proposal(db, project_id, repo_root, backend, &pid)?.is_some() {

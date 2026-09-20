@@ -25,6 +25,8 @@ pub enum ReviewError {
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
     #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
+    #[error(transparent)]
     Orch(#[from] OrchError),
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
@@ -101,11 +103,14 @@ fn escalate(
     reason: &str,
     flag_payload: Value,
 ) -> Result<FlagRoute, ReviewError> {
-    let qid = format!("q{}", db.next_id("q")?);
-    db.conn().execute(
-        "INSERT INTO pending_questions (id, project_id, agent_id, kind, payload)
-         VALUES (?1,?2,?3,'escalation',?4)",
-        rusqlite::params![qid, ctx.project_id, ctx.agent_id, flag_payload.to_string()],
+    // 卡表写口归 cards.rs（arch-review 票 04）
+    let qid = crate::cards::enqueue(
+        db,
+        &ctx.project_id,
+        Some(&ctx.agent_id),
+        crate::cards::CardKind::Escalation,
+        flag_payload.clone(),
+        None,
     )?;
     db.append_event(
         &ctx.project_id,
@@ -350,8 +355,7 @@ pub fn submit_flag(
             rusqlite::params![ctx.project_id, reviewer],
             |r| r.get::<_, String>(0),
         ) {
-            db.conn()
-                .execute("UPDATE agents SET status='active' WHERE id=?1", [&agent_id])?;
+            crate::orchestra::write_agent_status(db, &ctx.project_id, &agent_id, false)?;
             db.append_event(
                 &ctx.project_id,
                 EventKind::ConsultWakeup,

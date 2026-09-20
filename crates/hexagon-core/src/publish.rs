@@ -16,6 +16,8 @@ use crate::trace::EventKind;
 pub enum PublishError {
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Cards(#[from] crate::cards::CardsError),
     #[error("db: {0}")]
     Db(#[from] crate::db::DbError),
     #[error("trace: {0}")]
@@ -36,20 +38,17 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
         |r| r.get::<_, String>(0),
     )?))
     .unwrap_or_else(|_| "main".into());
-    let qid = format!("q{}", db.next_id("q")?);
-    db.conn().execute(
-        "INSERT INTO pending_questions (id, project_id, kind, payload)
-         VALUES (?1, ?2, 'publish', ?3)",
-        rusqlite::params![
-            qid,
-            project_id,
-            json!({
-                "remote": remote,
-                "baseline": baseline,
-                "warning": "远程发布不可逆：代码与产物将推送到项目外部",
-            })
-            .to_string()
-        ],
+    let qid = crate::cards::enqueue(
+        db,
+        project_id,
+        None,
+        crate::cards::CardKind::Publish,
+        json!({
+            "remote": remote,
+            "baseline": baseline,
+            "warning": "远程发布不可逆：代码与产物将推送到项目外部",
+        }),
+        None,
     )?;
     db.append_event(
         project_id,
@@ -69,23 +68,14 @@ pub fn confirm(
     qid: &str,
     store: &dyn CredentialStore,
 ) -> Result<Value, PublishError> {
-    let payload: String = db
-        .conn()
-        .query_row(
-            "SELECT payload FROM pending_questions
-             WHERE id=?1 AND project_id=?2 AND kind='publish' AND state='queued'",
-            rusqlite::params![qid, project_id],
-            |r| r.get(0),
-        )
-        .map_err(|_| PublishError::UnknownQuestion(qid.into()))?;
-    let p: Value = serde_json::from_str(&payload).unwrap_or(json!({}));
+    // 卡表读写归 cards.rs（arch-review 票 04）
+    let p = crate::cards::get_queued(db, qid, crate::cards::CardKind::Publish)
+        .map_err(|_| PublishError::UnknownQuestion(qid.into()))?
+        .payload;
     let remote = p["remote"].as_str().unwrap_or("origin").to_string();
     let baseline = p["baseline"].as_str().unwrap_or("main").to_string();
 
-    db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_by='owner' WHERE id=?1",
-        [qid],
-    )?;
+    crate::cards::answer(db, qid, "owner")?;
 
     let dir: String =
         db.conn()
@@ -131,14 +121,12 @@ pub fn confirm(
 
 /// 拒绝发布：标记已答 + 轨迹。
 pub fn reject(db: &Db, project_id: &str, qid: &str) -> Result<(), PublishError> {
-    let n = db.conn().execute(
-        "UPDATE pending_questions SET state='answered', answered_by='owner'
-         WHERE id=?1 AND project_id=?2 AND kind='publish' AND state='queued'",
-        rusqlite::params![qid, project_id],
-    )?;
-    if n == 0 {
-        return Err(PublishError::UnknownQuestion(qid.into()));
-    }
+    // kind+queued+project 三闸保持原语义（未知/已答/跨项目卡都报 UnknownQuestion）
+    crate::cards::get_queued(db, qid, crate::cards::CardKind::Publish)
+        .ok()
+        .filter(|c| c.project_id == project_id)
+        .ok_or_else(|| PublishError::UnknownQuestion(qid.into()))?;
+    crate::cards::answer(db, qid, "owner")?;
     db.append_event(
         project_id,
         EventKind::PublishRejected,
