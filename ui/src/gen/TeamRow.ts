@@ -4,4 +4,8 @@
  * 团队名册（agents 表读模型）。
  * 团队花名册行（ADR 0054）：agents 读模型，IPC 直出。
  */
-export type TeamRow = { id: string, role: string, model_slot: string | null, status: 'active' | 'sleeping', };
+export type TeamRow = { id: string, role: string, model_slot: string | null, status: 'active' | 'sleeping', 
+/**
+ * 头像内容哈希（票 07）：随行下发，UI 哈希变了才拉 data URL。
+ */
+avatar_hash: string | null, };

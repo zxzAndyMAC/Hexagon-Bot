@@ -104,52 +104,80 @@ describe('refreshFast 增量归并（arch-review 票 07）', () => {
 })
 
 describe('invalidate 失效标签（arch-review 票 07）', () => {
-  beforeEach(() => useUiStore.setState({ timeline: [], stages: [], pending: [] }))
+  beforeEach(() => useUiStore.setState({ timeline: [], stages: [], pending: [], avatarHashes: {}, avatars: {} }))
   afterEach(() => vi.restoreAllMocks())
 
   it('refreshFast 稳态只打 3 个端点', async () => {
-    const calls: string[] = []
-    for (const k of ['stageStatus', 'pendingQuestions', 'timeline', 'usage', 'artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
-      const orig = api[k]
-      vi.spyOn(api, k).mockImplementation((...a: never[]) => {
-        calls.push(k)
-        return (orig as (...x: never[]) => unknown)(...a)
-      })
+    const spies = {
+      stageStatus: vi.spyOn(api, 'stageStatus'),
+      pendingQuestions: vi.spyOn(api, 'pendingQuestions'),
+      timeline: vi.spyOn(api, 'timeline'),
+      usage: vi.spyOn(api, 'usage'),
+      artifacts: vi.spyOn(api, 'artifacts'),
+      team: vi.spyOn(api, 'team'),
+      autonomy: vi.spyOn(api, 'autonomy'),
+      projectInfo: vi.spyOn(api, 'projectInfo'),
     }
     await useUiStore.getState().refreshFast()
-    expect(calls.sort()).toEqual(['pendingQuestions', 'stageStatus', 'timeline'])
+    expect(spies.stageStatus).toHaveBeenCalled()
+    expect(spies.pendingQuestions).toHaveBeenCalled()
+    expect(spies.timeline).toHaveBeenCalled()
+    for (const k of ['usage', 'artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
+      expect(spies[k], k).not.toHaveBeenCalled()
+    }
   })
 
   it('invalidate() 无参 = 全切片；带标签只拉对应域', async () => {
-    const calls: string[] = []
-    for (const k of ['usage', 'artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
-      const orig = api[k]
-      vi.spyOn(api, k).mockImplementation((...a: never[]) => {
-        calls.push(k)
-        return (orig as (...x: never[]) => unknown)(...a)
-      })
+    const spies = {
+      usage: vi.spyOn(api, 'usage'),
+      artifacts: vi.spyOn(api, 'artifacts'),
+      team: vi.spyOn(api, 'team'),
+      autonomy: vi.spyOn(api, 'autonomy'),
+      projectInfo: vi.spyOn(api, 'projectInfo'),
     }
-
     await useUiStore.getState().invalidate()
-    for (const k of ['usage', 'artifacts', 'team', 'autonomy', 'projectInfo']) {
-      expect(calls).toContain(k)
-    }
+    for (const spy of Object.values(spies)) expect(spy).toHaveBeenCalled()
 
-    calls.length = 0
+    vi.clearAllMocks()
     await useUiStore.getState().invalidate('usage')
-    expect(calls).toEqual(['usage'])
+    expect(spies.usage).toHaveBeenCalled()
+    for (const k of ['artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
+      expect(spies[k], k).not.toHaveBeenCalled()
+    }
   })
 
   it('invalidate 同时补快通道一拍（写后 pending/stages 立即一致）', async () => {
-    const fast: string[] = []
-    for (const k of ['stageStatus', 'pendingQuestions', 'timeline'] as const) {
-      const orig = api[k]
-      vi.spyOn(api, k).mockImplementation((...a: never[]) => {
-        fast.push(k)
-        return (orig as (...x: never[]) => unknown)(...a)
-      })
+    const spies = {
+      stageStatus: vi.spyOn(api, 'stageStatus'),
+      pendingQuestions: vi.spyOn(api, 'pendingQuestions'),
+      timeline: vi.spyOn(api, 'timeline'),
     }
     await useUiStore.getState().invalidate('usage')
-    expect(fast.sort()).toEqual(['pendingQuestions', 'stageStatus', 'timeline'])
+    for (const spy of Object.values(spies)) expect(spy).toHaveBeenCalled()
+  })
+})
+
+describe('avatar 哈希条件拉取（arch-review 票 07）', () => {
+  beforeEach(() => useUiStore.setState({ avatarHashes: {}, avatars: {} }))
+  afterEach(() => vi.restoreAllMocks())
+
+  it('哈希不变不拉；变了才拉；拉失败记 null 下轮重试', async () => {
+    const spy = vi.spyOn(api, 'agentAvatar')
+    await useUiStore.getState().invalidate('team')
+    // mock 只有 a1 有头像 → 恰好 1 次拉取
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('a1')
+    expect(useUiStore.getState().avatars.a1).toBeTruthy()
+
+    spy.mockClear()
+    await useUiStore.getState().invalidate('team')
+    expect(spy).not.toHaveBeenCalled() // 哈希未变 → 零拉取
+
+    // 给 a2 设头像 → team 行哈希变化 → 只拉 a2
+    await api.setAgentAvatar('a2', 'data:image/png;base64,AAAA')
+    await useUiStore.getState().invalidate('team')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('a2')
+    expect(useUiStore.getState().avatars.a2).toBe('data:image/png;base64,AAAA')
   })
 })

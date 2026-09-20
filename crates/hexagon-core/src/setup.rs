@@ -290,7 +290,7 @@ mod tests {
         .unwrap();
         assert!(git::is_repo(&sub));
         assert!(sub.join(".hexagon/pack.active.json").exists());
-        let team = crate::orchestra::team(&wb.db, &wb.project_id).unwrap();
+        let team = crate::orchestra::team(&wb.db, &wb.project_id, &wb.repo_root).unwrap();
         assert_eq!(team.len(), 2);
         // model_slot 和 globs 落库
         let db = Db::open(sub.join(".hexagon/state.db")).unwrap();

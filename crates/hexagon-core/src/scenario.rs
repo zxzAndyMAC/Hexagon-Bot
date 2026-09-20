@@ -359,7 +359,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             );
         }
         StepDef::AssertAgentStatus { role, status } => {
-            let team = crate::orchestra::team(&wb.db, &wb.project_id)?;
+            let team = crate::orchestra::team(&wb.db, &wb.project_id, &wb.repo_root)?;
             let hit = team.iter().any(|m| m.role == *role && m.status == *status);
             assert!(hit, "expected agent {role} status={status}");
         }

@@ -54,7 +54,7 @@ fn project_info(wb: &Workbench) -> Result<Value, String> {
 }
 
 fn team(wb: &Workbench) -> Result<Vec<Value>, String> {
-    orchestra::team(&wb.db, &wb.project_id)
+    orchestra::team(&wb.db, &wb.project_id, &wb.repo_root)
         .map(to_values)
         .map_err(|e| e.to_string())
 }
@@ -277,6 +277,37 @@ fn avatar_roundtrip_and_ext_switch() {
     set_agent_avatar(&wb, aid, &url2).unwrap();
     assert_eq!(agent_avatar(&wb, aid).unwrap().unwrap(), url2);
     assert!(!dir.path().join(".hexagon/avatars/a0.png").exists());
+}
+
+/// 票 07：team 行随行下发 avatar_hash——无头像 None，写入后哈希出现，
+/// 改图后哈希变（UI 据此决定要不要重拉 data URL）。
+#[test]
+fn team_row_carries_avatar_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+    let hash_of = || {
+        orchestra::team(&wb.db, &wb.project_id, &wb.repo_root)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == "a0")
+            .unwrap()
+            .avatar_hash
+    };
+    assert_eq!(hash_of(), None);
+    use base64::Engine;
+    let url = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(b"fakepng")
+    );
+    set_agent_avatar(&wb, "a0", &url).unwrap();
+    let h1 = hash_of().unwrap();
+    let url2 = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(b"fakepng-v2")
+    );
+    set_agent_avatar(&wb, "a0", &url2).unwrap();
+    let h2 = hash_of().unwrap();
+    assert_ne!(h1, h2);
 }
 #[test]
 fn artifact_content_at_reads_each_version() {

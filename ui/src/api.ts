@@ -275,6 +275,18 @@ const mockAvatars: Record<string, string> = {
 }
 
 const T0 = '2026-09-18T'
+
+/// mock 头像哈希（票 07）：FNV-1a，对 mockAvatars 内容敏感——
+/// set_agent_avatar 后 team 行哈希必须变，store 才会重拉。
+const mockHash = (s: string): string => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16)
+}
+
 type Payload = Record<string, unknown>
 const mkEv = (
   id: number, kind: EventKind, agent_id: string | null, stage_run_id: string | null,
@@ -514,7 +526,10 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'a5', role: 'QA', status: 'active', model_slot: 'chat' },
         { id: 'a6', role: '后端技术负责人', status: 'sleeping', model_slot: 'chat' },
         { id: 'a7', role: '运维', status: 'sleeping', model_slot: 'ops' },
-      ] as T
+      ].map((r) => ({
+        ...r,
+        avatar_hash: mockAvatars[r.id] ? mockHash(mockAvatars[r.id]) : null,
+      })) as T
     case 'artifacts':
       return [
         { id: 'art1', path: 'specs/prd.md', kind: '规格', tier: 'skeleton', stage_run_id: 'r0', author: 'a0', version: 1, status: 'superseded', upstream_id: null },

@@ -286,8 +286,8 @@ fn artifact_content(state: tauri::State<AppState>, path: String) -> Result<Strin
 }
 #[tauri::command]
 fn team(state: tauri::State<AppState>) -> Result<Vec<hexagon_core::orchestra::TeamRow>, CmdError> {
-    with_conn(&state, |db, _| {
-        hexagon_core::orchestra::team(db, PROJECT_ID).map_err(cmd_err)
+    with_conn(&state, |db, root| {
+        hexagon_core::orchestra::team(db, PROJECT_ID, root).map_err(cmd_err)
     })
 }
 #[tauri::command]

@@ -347,6 +347,28 @@ pub fn agent_avatar(
     Ok(None)
 }
 
+/// 头像内容哈希（arch-review 票 07）：team 行随行下发，UI 只在哈希
+/// 变化时拉 data URL——取代轮询期每 2s × N agent 的盲拉。
+/// DefaultHasher::new() 定值（非 RandomState），同工具链内可复现；
+/// 跨工具链换算法最多多一次拉取，无正确性问题。
+pub fn avatar_hash(
+    repo_root: &std::path::Path,
+    agent_id: &str,
+) -> Result<Option<String>, RoleError> {
+    use std::hash::{Hash, Hasher};
+    let dir = repo_root.join(".hexagon/avatars");
+    for ext in ["png", "jpg", "webp", "gif"] {
+        let p = dir.join(format!("{agent_id}.{ext}"));
+        if p.exists() {
+            let b = std::fs::read(&p)?;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            b.hash(&mut h);
+            return Ok(Some(format!("{:016x}", h.finish())));
+        }
+    }
+    Ok(None)
+}
+
 /// 设置 agent 头像：UI 传 data URL（data:image/png;base64,…），
 /// 落盘 `<root>/.hexagon/avatars/<agent>.<ext>`，换扩展名时清旧文件。
 pub fn set_agent_avatar(

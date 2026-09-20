@@ -804,22 +804,34 @@ pub struct TeamRow {
     #[ts(type = "'active' | 'sleeping'")]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub status: String,
+    /// 头像内容哈希（票 07）：随行下发，UI 哈希变了才拉 data URL。
+    pub avatar_hash: Option<String>,
 }
 
-pub fn team(db: &Db, project_id: &str) -> Result<Vec<TeamRow>, OrchError> {
+pub fn team(
+    db: &Db,
+    project_id: &str,
+    repo_root: &std::path::Path,
+) -> Result<Vec<TeamRow>, OrchError> {
     let mut st = db
         .conn()
         .prepare("SELECT id, role, model_slot, status FROM agents WHERE project_id=?1")?;
-    let rows = st
+    let mut rows = st
         .query_map([project_id], |r| {
             Ok(TeamRow {
                 id: r.get(0)?,
                 role: r.get(1)?,
                 model_slot: r.get(2)?,
                 status: r.get(3)?,
+                avatar_hash: None,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    for row in &mut rows {
+        // 头像 IO 失败不炸团队接口——哈希缺席=UI 当无头像处理
+        // （沿用 avatar 读路 `.catch(() => null)` 的静默降级语义）。
+        row.avatar_hash = crate::roles::avatar_hash(repo_root, &row.id).ok().flatten();
+    }
     Ok(rows)
 }
 

@@ -64,6 +64,9 @@ interface UiState {
   sideTab: 'artifacts' | 'team' | 'usage'
   usageRows: UsageRow[]
   avatars: Record<string, string>
+  /// 已解析的头像哈希簿（票 07）：agent → TeamRow.avatar_hash。
+  /// team 行哈希变了才重拉 data URL；null=已确认无头像。
+  avatarHashes: Record<string, string | null>
   tabs: WorkTab[]
   activeTab: string
   splitOpen: boolean
@@ -107,6 +110,7 @@ export const useUiStore = create<UiState>((set) => ({
   sideTab: 'artifacts',
   usageRows: [],
   avatars: {},
+  avatarHashes: {},
   tabs: [TIMELINE_TAB],
   activeTab: 'timeline',
   splitOpen: false,
@@ -164,19 +168,38 @@ export const useUiStore = create<UiState>((set) => ({
       want('info') ? api.projectInfo().catch(() => null) : Promise.resolve(undefined),
     ])
     let avatars: Record<string, string> | undefined
+    let avatarHashes: Record<string, string | null> | undefined
     if (team) {
-      avatars = {}
+      // 票 07：哈希未变不拉 data URL——稳态 team 失效只花 1 次 team()。
+      const prev = useUiStore.getState().avatarHashes
+      avatars = { ...useUiStore.getState().avatars }
+      avatarHashes = {}
       await Promise.all(
         team.map(async (m) => {
-          const u = await api.agentAvatar(m.id).catch(() => null)
-          if (u) avatars![m.id] = u
+          avatarHashes![m.id] = m.avatar_hash
+          if (!m.avatar_hash) {
+            delete avatars![m.id]
+          } else if (m.avatar_hash !== prev[m.id]) {
+            const u = await api.agentAvatar(m.id).catch(() => null)
+            if (u) {
+              avatars![m.id] = u
+            } else {
+              // 拉取失败：哈希记 null 强制下次重试，同时清掉陈旧图。
+              delete avatars![m.id]
+              avatarHashes![m.id] = null
+            }
+          }
         }),
       )
+      // 离队 agent 的头像缓存一并清
+      for (const id of Object.keys(avatars)) {
+        if (!(id in avatarHashes)) delete avatars[id]
+      }
     }
     set((s) => ({
       ...(usage ? { usageTotal: usage.total, usageRows: usage.rows } : {}),
       ...(artifacts ? { artifacts } : {}),
-      ...(team ? { team, avatars: avatars! } : {}),
+      ...(team ? { team, avatars: avatars!, avatarHashes: avatarHashes! } : {}),
       ...(autonomy !== undefined ? { autonomy: autonomy || 'L0' } : {}),
       ...(info !== undefined
         ? {
