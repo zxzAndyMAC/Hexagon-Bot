@@ -70,7 +70,12 @@ export const isTauri = '__TAURI_INTERNALS__' in window || '__TAURI__' in window
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri) return invoke<T>(cmd, args)
-  return mock<T>(cmd, args)
+  // mock 只可达于 dev 构建：import.meta.env.DEV 在产物里是字面量 false，
+  // 此分支为死码被 tree-shake，~560 行夹具不进生产包（arch-review 附录 B4
+  // 核验：原先走运行时 isTauri 判，摇不掉）。组件侧的 isTauri 是 UI 显隐
+  // 判定，与本门控职责不同，保留运行时检查。
+  if (import.meta.env.DEV) return mock<T>(cmd, args)
+  throw new Error('non-Tauri production build has no backend')
 }
 
 // ---- 错误信封（ADR 0054，arch-review 票 06）----
