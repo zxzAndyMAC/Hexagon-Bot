@@ -8,6 +8,7 @@
 pub mod api;
 pub mod artifacts;
 pub mod autonomy;
+pub mod cards;
 pub mod commands;
 pub mod credentials;
 pub mod db;
