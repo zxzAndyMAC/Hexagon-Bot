@@ -215,7 +215,9 @@ fn stage_status(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
     })
 }
 #[tauri::command]
-fn pending_questions(state: tauri::State<AppState>) -> Result<Vec<Value>, String> {
+fn pending_questions(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::cards::QueuedCard>, String> {
     with_conn(&state, |db, _| {
         db.queued_questions(PROJECT_ID).map_err(|e| e.to_string())
     })

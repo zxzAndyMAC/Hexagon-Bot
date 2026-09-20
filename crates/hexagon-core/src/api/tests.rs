@@ -26,7 +26,11 @@ fn stage_status(wb: &Workbench) -> Result<Vec<Value>, String> {
 }
 
 fn pending_questions(wb: &Workbench) -> Result<Vec<Value>, String> {
-    crate::cards::queued(&wb.db, &wb.project_id).map_err(|e| e.to_string())
+    crate::cards::queued(&wb.db, &wb.project_id)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .map(|c| serde_json::to_value(c).map_err(|e| e.to_string()))
+        .collect()
 }
 
 fn timeline(wb: &Workbench, after: Option<i64>, limit: usize) -> Result<Vec<TimelineItem>, String> {
@@ -690,7 +694,8 @@ fn us59_interrupted_run_recovers_by_owner() {
         .iter()
         .find(|q| q["kind"] == "recovery")
         .expect("recovery pending card");
-    let rp: Value = serde_json::from_str(rec["payload"].as_str().unwrap()).unwrap();
+    // 票 06：payload 出列即对象，不再有 TEXT→String→parse 三层编码
+    let rp = &rec["payload"];
     assert_eq!(rp["run_id"], run_id);
     assert!(prov.recorded().is_empty(), "reopen must not replay");
     // 恢复闸：不按继续，回合不发
@@ -1009,7 +1014,7 @@ fn us47_install_assistant_owner_gated() {
     let pend = pending_questions(&wb).unwrap();
     let card = pend.iter().find(|q| q["id"] == qid).unwrap();
     assert_eq!(card["kind"], "install");
-    let cp: Value = serde_json::from_str(card["payload"].as_str().unwrap()).unwrap();
+    let cp = &card["payload"];
     assert_eq!(cp["plan_kind"], "skill-dir");
     assert_eq!(cp["net"], false); // 本地源不出网
     assert_eq!(cp["creds"], false);
@@ -1051,12 +1056,9 @@ fn us47_install_assistant_owner_gated() {
     // ④ /install 文本指令同路（空描述落普通消息不吞）
     send(&wb, "/install npx @mcp/other").unwrap();
     let pend = pending_questions(&wb).unwrap();
-    assert!(pend.iter().any(|q| {
-        q["kind"] == "install"
-            && serde_json::from_str::<Value>(q["payload"].as_str().unwrap())
-                .map(|v| v["name"] == "other")
-                .unwrap_or(false)
-    }));
+    assert!(pend
+        .iter()
+        .any(|q| q["kind"] == "install" && q["payload"]["name"] == "other"));
     send(&wb, "/install").unwrap();
     let n = pend.len();
     assert_eq!(pending_questions(&wb).unwrap().len(), n); // 无新卡

@@ -398,8 +398,11 @@ impl Db {
     }
 
     /// 待决卡队列读模型（ADR 0052 读组）：壳层经控制连接直查。
-    /// 数据面归 cards.rs（票 04），本函数只剩转发。
-    pub fn queued_questions(&self, project_id: &str) -> Result<Vec<Value>, TraceError> {
+    /// 数据面归 cards.rs（票 04），本函数只剩转发；行类型化见 ADR 0054。
+    pub fn queued_questions(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::cards::QueuedCard>, TraceError> {
         Ok(crate::cards::queued(self, project_id)?)
     }
 

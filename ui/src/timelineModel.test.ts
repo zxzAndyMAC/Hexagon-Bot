@@ -9,7 +9,7 @@ const ev = (id: number, kind: string, payload: Record<string, unknown> = {}, aut
 })
 
 const q = (id: string, kind: string, payload: Record<string, unknown> = {}): PendingQuestion => ({
-  id, kind, payload, state: 'queued',
+  id, kind, agent_id: null, payload, state: 'queued',
 })
 
 describe('buildRows', () => {

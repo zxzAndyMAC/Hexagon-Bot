@@ -54,6 +54,7 @@ export interface TimelineItem {
 export interface PendingQuestion {
   id: string
   kind: string // permission / stamp / publish / proposal_confirm …
+  agent_id: string | null
   payload: Record<string, unknown>
   state: string
 }
@@ -213,12 +214,7 @@ export const api = {
     call<void>('set_agent_sleeping', { agentId, sleeping }),
   team: () => call<TeamRow[]>('team'),
   stageStatus: () => call<StageRow[]>('stage_status'),
-  pendingQuestions: async (): Promise<PendingQuestion[]> => {
-    const rows = await call<{ id: string; kind: string; payload: string; state: string }[]>(
-      'pending_questions',
-    )
-    return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload || '{}') }))
-  },
+  pendingQuestions: () => call<PendingQuestion[]>('pending_questions'),
   usage: () => call<UsageRow[]>('usage'),
   usageSeries: (granularity: 'day' | 'hour' = 'day', from?: string | null, to?: string | null) =>
     call<UsageBucket[]>('usage_series', { granularity, from: from ?? null, to: to ?? null }),
@@ -737,13 +733,13 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'pending_questions':
       return [
-        { id: 'q-rec', kind: 'recovery', payload: JSON.stringify({ run_id: 'r9', stage: '部署演练' }), state: 'queued' },
-        { id: 'q-pub', kind: 'publish', payload: JSON.stringify({ remote: 'origin', baseline: 'main', warning: '不可逆：代码与产物将离开本机' }), state: 'queued' },
-        { id: 'q-stamp', kind: 'stamp', payload: JSON.stringify({ run_id: 'r3', stage: '实现' }), state: 'queued' },
-        { id: 'q-esc', kind: 'escalation', payload: JSON.stringify({ flag_id: 'f12', target: 'api/spec.md' }), state: 'queued' },
-        { id: 'q-perm', kind: 'permission', payload: JSON.stringify({ tool: 'bash', input: { command: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }), state: 'queued' },
-        { id: 'q-perm2', kind: 'permission', payload: JSON.stringify({ tool: 'bash', input: { command: 'rm -rf target && cargo build' }, reason: '构建产物损坏，安全网必问', safety_net: true }), state: 'queued' },
-        { id: 'q-prop', kind: 'stamp', payload: JSON.stringify({ proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }), state: 'queued' },
+        { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
+        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
+        { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
+        { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
+        { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { command: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
+        { id: 'q-perm2', kind: 'permission', agent_id: 'a1', payload: { tool: 'bash', input: { command: 'rm -rf target && cargo build' }, reason: '构建产物损坏，安全网必问', safety_net: true }, state: 'queued' },
+        { id: 'q-prop', kind: 'stamp', agent_id: 'a1', payload: { proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }, state: 'queued' },
       ] as T
     case 'usage':
       return [

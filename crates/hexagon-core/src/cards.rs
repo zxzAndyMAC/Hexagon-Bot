@@ -198,18 +198,32 @@ pub fn annotate_queued_where(
     Ok(n)
 }
 
+/// 待决卡读模型行（ADR 0054）：payload 出列即解析成对象——IPC 面消灭
+/// SQL TEXT→String→`JSON.parse` 三层编码，字段漂移由类型兜住。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QueuedCard {
+    pub id: String,
+    pub kind: String,
+    pub agent_id: Option<String>,
+    pub payload: Value,
+    pub state: String,
+}
+
 /// 读模型：项目全部 queued 卡（壳层 pending_questions 命令的数据源）。
-pub fn queued(db: &Db, project_id: &str) -> Result<Vec<Value>, CardsError> {
+pub fn queued(db: &Db, project_id: &str) -> Result<Vec<QueuedCard>, CardsError> {
     let mut st = db.conn().prepare(
-        "SELECT id, kind, payload, state FROM pending_questions
+        "SELECT id, kind, agent_id, payload, state FROM pending_questions
          WHERE project_id=?1 AND state='queued' ORDER BY created_at",
     )?;
     let rows = st
         .query_map([project_id], |r| {
-            Ok(
-                serde_json::json!({"id": r.get::<_,String>(0)?, "kind": r.get::<_,String>(1)?,
-                      "payload": r.get::<_,String>(2)?, "state": r.get::<_,String>(3)?}),
-            )
+            Ok(QueuedCard {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                agent_id: r.get(2)?,
+                payload: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
+                state: r.get(4)?,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
