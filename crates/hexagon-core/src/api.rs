@@ -1268,7 +1268,7 @@ mod tests {
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         // a0(后端) 默认 sleeping；负责人点名 + 路径指针
         wb.send_message("@后端 参考 #src/api.rs 重写鉴权").unwrap();
-        let brief = crate::turn::build_brief_context(&wb.db, "a0", None).unwrap();
+        let brief = crate::turn::prompt::build_brief_context(&wb.db, "a0", None).unwrap();
         assert_eq!(brief.mentions, vec!["@后端 参考 #src/api.rs 重写鉴权"]);
         assert_eq!(brief.paths, vec!["src/api.rs"]);
     }

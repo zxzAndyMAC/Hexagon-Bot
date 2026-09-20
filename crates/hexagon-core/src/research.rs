@@ -16,7 +16,8 @@ use crate::db::Db;
 use crate::provider::ModelProvider;
 use crate::tools::{CallOutcome, Registry, ToolContext, ToolError};
 use crate::trace::EventKind;
-use crate::turn::{run_turn, LayerLevel, PromptLayer, TurnOutcome};
+use crate::turn::prompt::{LayerLevel, PromptLayer};
+use crate::turn::{run_turn, TurnOutcome};
 use serde_json::{json, Value};
 
 /// turn 层截获入口：与 Registry::call 同款事件留痕，然后跑嵌套回合。

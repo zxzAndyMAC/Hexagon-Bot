@@ -41,7 +41,8 @@ pub fn check(db: &Db, project_id: &str) -> Result<Vec<Value>, crate::trace::Trac
             .as_array()
             .map(|a| a.iter().filter_map(|t| t.as_str()).collect())
             .unwrap_or_default();
-        let expected = crate::turn::envelope_fingerprint(layers, msgs, &tools_vec, &p["params"]);
+        let expected =
+            crate::turn::prompt::envelope_fingerprint(layers, msgs, &tools_vec, &p["params"]);
         if expected != p["fingerprint"].as_str().unwrap_or("") {
             violations.push(json!({
                 "check": "envelope_self_consistent",

@@ -220,7 +220,7 @@ impl JudgeBackend for LlmJudge<'_> {
         // 记提案作者头上（判定成本由提案方承担）。信封无 layer 层
         // （judge 不经过 PromptLayer 装配）,messages/指纹照常可重算。
         if let Some(obs) = &self.obs {
-            let env = crate::turn::request_envelope(0, &req, &req.messages, &[]);
+            let env = crate::turn::prompt::request_envelope(0, &req, &req.messages, &[]);
             let _ = obs.db.append_event(
                 obs.project_id,
                 EventKind::System,
