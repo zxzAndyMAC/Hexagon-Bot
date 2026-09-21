@@ -104,7 +104,7 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
 // 兜底都得钉死。排序表达式与 usePendingKeys（decisions.ts:117）同款；
 // 平级保持入队序依赖 ES2019 stable sort，这一隐含依赖在此显式钉住。
 describe('severityOf 全序（TC-U-0001）', () => {
-  const sev = (kind: string, payload: PendingQuestion['payload'] = {}) =>
+  const sev = (kind: PendingQuestion['kind'], payload: PendingQuestion['payload'] = {}) =>
     severityOf(card({ kind, payload }))
 
   it('六档全序：恢复/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章', () => {
@@ -123,8 +123,13 @@ describe('severityOf 全序（TC-U-0001）', () => {
   })
 
   it('未知 kind 排最末（severity 9）', () => {
-    expect(sev('bogus_future_kind')).toBe(9)
-    expect(sev('bogus_future_kind')).toBeGreaterThan(sev('stamp', { proposal_id: 'x' }))
+    // 模拟 IPC 进来一个未来新增/未登记的 kind——联合类型外的值，
+    // 断言兜底到 9 而不是排序崩掉。
+    const bogus = 'bogus_future_kind' as PendingQuestion['kind']
+    expect(severityOf(card({ kind: bogus }))).toBe(9)
+    expect(severityOf(card({ kind: bogus }))).toBeGreaterThan(
+      sev('stamp', { proposal_id: 'x' })
+    )
   })
 
   it('同 severity 平级保持入队序（stable sort 依赖）', () => {
