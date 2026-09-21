@@ -488,6 +488,40 @@ impl Workbench {
             slot.as_deref().unwrap_or("default"),
         )
         .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        // e2e_live 活测实证：主回合曾恒传 vec![]——agent 不知道自己的
+        // 职责/归属 globs/已授技能/本阶段 due kind，模型只能猜，产物
+        // kind 不声明（落成 misc 不计交付）、写盘出归属线触发权限打转。
+        // RoleDef 层补齐身份面；格式细节仍走技能（load_skill 自助取）。
+        let mut turn_layers = Vec::new();
+        if let Ok(def) = crate::roles::role_def(&self.db, &self.project_id, role) {
+            let mut text = format!("你是「{role}」。{}", def.duty);
+            if !def.globs.is_empty() {
+                text += &format!(
+                    " 你的归属路径：{}——写盘只写范围内；范围外写入会排队等负责人批准。",
+                    def.globs.join("、")
+                );
+            }
+            if !def.skills.is_empty() {
+                text += &format!(
+                    " 已授技能：{}（与任务相关时先 load_skill 取全文再动手）。",
+                    def.skills.join("、")
+                );
+            }
+            if let Some(stage) = run.as_ref().and_then(|r| {
+                self.pack
+                    .as_ref()
+                    .and_then(|p| p.stages.get(r.seq as usize))
+            }) {
+                if !stage.due.is_empty() {
+                    text += &format!(
+                        " 本阶段「{}」应交产物 kind：{}——用 artifact_write 交付并传 kind 参数（或产物开头三行 `---` / `kind: <kind>` / `---` 声明）；kind 不符不计入交付。",
+                        stage.name,
+                        stage.due.join("、")
+                    );
+                }
+            }
+            turn_layers.push(turn::PromptLayer::new(turn::LayerLevel::RoleDef, text));
+        }
         // 票 03：delta hook 锁跨整个回合——hook 一旦挂上，所有走
         // run_turn_opts 的入口（run_turn/dispatch/撞限放行）自动流式。
         let mut guard = self.delta_hook.lock().unwrap();
@@ -497,7 +531,7 @@ impl Workbench {
             provider.as_ref(),
             &self.registry,
             &ctx,
-            vec![],
+            turn_layers,
             input,
             plan_first,
             sink,

@@ -71,19 +71,21 @@ impl SkillLoader {
             dirs,
             skills: BTreeMap::new(),
         };
-        // 内置层：path 为空路径作标记（listing 判 origin="builtin"）。
-        for (name, text) in crate::presets::SKILL_FILES {
-            if let Some(s) = parse_skill_text(text, name, PathBuf::new()) {
-                l.skills.insert(s.name.clone(), s);
-            }
-        }
         l.rescan();
         l
     }
 
     pub fn rescan(&mut self) {
         self.skills.clear();
-        // 顺序即优先级：先扫的被后扫的覆盖（全局 → 项目）。
+        // 内置层垫底——必须在 rescan 里重插（曾在 new() 插入后被这里的
+        // clear() 清掉：catalog 永远空、角色默认技能名全 404，e2e_live
+        // 活测实证）。path 为空路径作标记（listing 判 origin="builtin"）。
+        for (name, text) in crate::presets::SKILL_FILES {
+            if let Some(s) = parse_skill_text(text, name, PathBuf::new()) {
+                self.skills.insert(s.name.clone(), s);
+            }
+        }
+        // 顺序即优先级：先扫的被后扫的覆盖（内置 < 全局 → 项目）。
         for dir in self.dirs.clone() {
             self.discover(&dir);
         }
@@ -552,6 +554,42 @@ mod tests {
         assert!(l.get("new-one").is_none());
         l.rescan();
         assert!(l.get("new-one").is_some());
+    }
+
+    /// 回归（e2e_live 活测实证）：内置技能必须在 rescan 后仍可见——
+    /// 曾在 new() 插入后被 rescan() 的 clear() 清掉，catalog 恒空、
+    /// 角色默认技能名（如 spec-writing）load_skill 全 404。
+    #[test]
+    fn builtin_skills_survive_rescan() {
+        let mut l = SkillLoader::new(vec![]);
+        assert!(
+            l.get("spec-writing").is_some(),
+            "内置技能在 new() 后丢失（rescan clear 吞了内置层）"
+        );
+        let text = l.catalog_text(&HashSet::new()).unwrap();
+        assert!(text.contains("- spec-writing:"));
+        // rescan 不得再清内置层（load_skill miss 路径会触发 rescan）
+        l.rescan();
+        assert!(l.get("spec-writing").is_some());
+    }
+
+    /// 回归（e2e_live 活测实证）：声明「产物头」的内置技能必须把
+    /// `---`/`kind`/`---` 三行字面格式写出来——只写 `kind: X` 短语时
+    /// 模型会猜成单行 `---kind: X---`，parse_header 拒收 → kind 落 misc、
+    /// 阶段 due 永远缺（QA 连写 3 版 test-record 全 misc 的实证）。
+    #[test]
+    fn builtin_skills_show_literal_artifact_header() {
+        let l = SkillLoader::new(vec![]);
+        for (name, s) in &l.skills {
+            for line in s.instructions.lines() {
+                if line.contains("产物头") {
+                    assert!(
+                        line.contains("---") && line.contains("kind:"),
+                        "{name}: 「产物头」行必须展示 --- 分隔格式，否则模型猜单行 ---kind---：{line}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

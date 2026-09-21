@@ -170,7 +170,7 @@ impl Tool for ArtifactWrite {
         "artifact_write"
     }
     fn description(&self) -> &str {
-        "Deliver an artifact under .hexagon/ (metadata header required for enforced tiers). For partial edits prefer fs_patch over re-writing the whole artifact"
+        "Deliver an artifact under .hexagon/. Pass `kind` = the required deliverable name (e.g. 范围说明), or start content with a metadata header: line1 `---`, line2 `kind: <name>`, line3 `---`. Without either it registers as misc and does not count toward stage deliverables. For partial edits prefer fs_patch over re-writing the whole artifact"
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string"}},"required":["path","content"]})

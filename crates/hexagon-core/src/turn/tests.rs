@@ -619,7 +619,11 @@ fn us72_no_instructions_no_empty_layer() {
         ContentBlock::Text { text } => text.clone(),
         _ => panic!(),
     };
-    assert!(!sys.contains("agents.md"));
+    // 行为变更（skills.rs rescan 修复后）：内置技能目录是 AgentsMd 层，
+    // 无说明文件时系统提示仍含 "## agents.md" 段——断言收紧为「无说明
+    // 文件内容」（注入标记 "{name} 全文："；目录文本自带「取全文」字样，
+    // 不能拿裸「全文：」当判据）。
+    assert!(!sys.contains("AGENTS.md 全文") && !sys.contains("CLAUDE.md 全文"));
 }
 
 /// 票 02：撞限裁剪走 spill——超长 tool_result 全文落盘，上下文留
@@ -1187,10 +1191,13 @@ fn dispatch_persists_request_envelope() {
     assert_eq!(e["call"], 0);
     assert_eq!(e["model_slot"], "default");
     // layer 清单带 level/key/hash/bytes
+    // 行为变更（skills.rs rescan 修复）：内置技能目录恒在 → 第三个
+    // agents.md 层是新常态，2 → 3。
     let layers = e["layers"].as_array().unwrap();
-    assert_eq!(layers.len(), 2);
+    assert_eq!(layers.len(), 3);
     assert_eq!(layers[0]["level"], "workbench");
     assert_eq!(layers[1]["key"], "role:后端开发");
+    assert_eq!(layers[2]["level"], "agents.md");
     assert!(layers[0]["sha"].as_str().unwrap().len() == 16);
     // 每消息一条指纹
     assert_eq!(e["messages"].as_array().unwrap().len(), 2); // system+user

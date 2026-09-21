@@ -730,6 +730,17 @@ pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, O
         "UPDATE stage_runs SET state='done', finished_at=datetime('now') WHERE id=?1",
         [&run.id],
     )?;
+    // 销掉本 run 的盖章卡（e2e_live 实证：卡曾永不销——queued 僵尸卡
+    // 在已推进阶段后仍挂待决区。提案型 stamp 卡 payload 无 run_id，
+    // 按 run_id 匹配天然不碰提案面；提案卡归 proposals::activate 销）。
+    crate::cards::answer_queued_where(
+        db,
+        project_id,
+        crate::cards::CardKind::Stamp,
+        "run_id",
+        &run.id,
+        "owner",
+    )?;
     db.append_event(
         project_id,
         EventKind::Stamped,
@@ -858,12 +869,21 @@ pub struct StageRow {
     pub state: String,
 }
 
-/// 阶段运行状态表（stage_runs 读模型）。
+/// 阶段运行状态表（stage_runs 读模型 + pending 投影）。
+///
+/// 活测实证（桌面真窗口跑向导）：pack 项目建档后 stage_runs 为空，
+/// 阶段条拿不到任何 pending 行 → 「开阶段」按钮永远不渲染，owner
+/// 没有途径开首阶段——`pending` 词表在写侧从没人写过（dead vocab）。
+/// 修法选型：pending 不落库，只做读模型投影——stage_runs 保持
+/// 「真实发生过的 run」的事件溯源语义；包声明了但尚无 run 的 seq
+/// 合成一行 pending（run_id 用占位串，UI 只拿它当列表 key）。
+/// 曾考虑建档时预写 pending 行——否决：open_stage 的 INSERT 会与之
+/// 撞 seq，且 rewind 依赖同 seq 多行历史。
 pub fn stage_status(db: &Db, project_id: &str) -> Result<Vec<StageRow>, OrchError> {
     let mut st = db.conn().prepare(
         "SELECT id, stage_name, seq, state FROM stage_runs WHERE project_id=?1 ORDER BY seq, id",
     )?;
-    let rows = st
+    let mut rows = st
         .query_map([project_id], |r| {
             Ok(StageRow {
                 run_id: r.get(0)?,
@@ -873,6 +893,34 @@ pub fn stage_status(db: &Db, project_id: &str) -> Result<Vec<StageRow>, OrchErro
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    // pending 投影：仅 pack 模式有意义；钉盘副本缺失/非 pack 时静默跳过
+    // （读模型投影失败不该拖死整个状态查询——阶段条少几个待开 chip
+    // 总比整面读不出强，fail-open 偏向可用性）。
+    let dir_mode = db.conn().query_row(
+        "SELECT dir, mode FROM projects WHERE id=?1",
+        [project_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    );
+    if let Ok((dir, mode)) = dir_mode {
+        if mode == "pack" {
+            if let Ok(pack) = PackDef::pinned(Path::new(&dir)) {
+                let have: std::collections::HashSet<i64> = rows.iter().map(|r| r.seq).collect();
+                for (i, s) in pack.stages.iter().enumerate() {
+                    let seq = i as i64;
+                    if !have.contains(&seq) {
+                        rows.push(StageRow {
+                            run_id: format!("pending:{seq}"),
+                            stage: s.name.clone(),
+                            seq,
+                            state: "pending".into(),
+                        });
+                    }
+                }
+                // stable sort：同 seq 的历史 run（rewind 遗留）保持 id 序
+                rows.sort_by_key(|r| r.seq);
+            }
+        }
+    }
     Ok(rows)
 }
 
@@ -1203,6 +1251,59 @@ mod tests {
             .query_row("SELECT state FROM stage_runs WHERE seq=1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(st, "skipped");
+        // 回归（e2e_live 实证）：stamp 必须销掉本 run 的盖章卡——此前卡
+        // 永挂 queued，已推进阶段后待决区仍见僵尸「阶段盖章」卡。
+        let zombie: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM pending_questions
+                 WHERE project_id='p1' AND kind='stamp' AND state='queued'
+                   AND json_extract(payload,'$.run_id')=?1",
+                [&rid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(zombie, 0, "stamp 后盖章卡必须销（曾永挂 queued）");
+    }
+
+    /// 回归（桌面真窗口活测）：pack 项目建档后 stage_runs 为空 →
+    /// stage_status 无行 → 阶段条渲染不出「开阶段」按钮，owner 无路
+    /// 开首阶段（pending 词表在写侧从没人写过）。修法：pending 合成
+    /// 为读模型投影，不落库；开跑后投影被真实 run 行替换。
+    #[test]
+    fn stage_status_projects_pending_for_unrun_stages() {
+        let (db, d) = setup(&["产品策划", "后端", "架构师", "运维"]);
+        let p = pack();
+        // 投影数据源是钉盘副本——把 projects.dir 指到真目录并 pin
+        let dir = d.path().join("proj");
+        p.pin(&dir).unwrap();
+        db.conn()
+            .execute(
+                "UPDATE projects SET dir=?1 WHERE id='p1'",
+                [dir.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        // 无任何 run：全部 5 阶段投影为 pending（首个即 UI 的开阶段按钮目标）
+        let rows = stage_status(&db, "p1").unwrap();
+        assert_eq!(rows.len(), 5);
+        assert!(rows.iter().all(|r| r.state == "pending"));
+        assert_eq!(rows[0].stage, "规格");
+        assert_eq!(rows[0].seq, 0);
+        // 开 seq0：投影让位真实行，未跑 seq 仍 pending，按 seq 排序
+        open_stage(&db, "p1", &p, 0).unwrap();
+        let rows = stage_status(&db, "p1").unwrap();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].state, "active");
+        assert_eq!(rows[0].stage, "规格");
+        assert!(rows[1..].iter().all(|r| r.state == "pending"));
+        assert_eq!(rows[4].stage, "合入");
+        // 快通道/无钉盘：不投影（mode 闸 + pinned 失败静默跳过）
+        db.conn()
+            .execute("UPDATE projects SET mode='fastpath' WHERE id='p1'", [])
+            .unwrap();
+        let rows = stage_status(&db, "p1").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, "active");
     }
 
     #[test]
