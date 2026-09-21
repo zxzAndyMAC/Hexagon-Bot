@@ -81,6 +81,27 @@ export function Composer() {
       // 快速通道：消息即任务——发完直接派给通道角色跑一回合（票 26）
       if (mode === 'fastpath' && fastRole) {
         await api.dispatch(fastRole, body).catch(() => {})
+      } else if (mode === 'pack') {
+        // pack：@点名即派活（真窗口活测实证 D-06——此前 pack 消息
+        // 只落库，UI 没有任何触发 agent 回合的路径，阶段开了 agent
+        // 也永远干不了活）。无 mention 的消息是广播/steering——受控
+        // 语义：派活必须显式点名，不烧 token。与核 parse_tokens 同
+        // 规则：空白分词 + `@` 前缀 + 命中花名册才算点名。
+        const roster = new Set(team.map((m) => m.role))
+        const mentioned = [
+          ...new Set(
+            body
+              .split(/\s+/)
+              .filter((w) => w.startsWith('@'))
+              .map((w) => w.slice(1))
+              .filter((n) => roster.has(n)),
+          ),
+        ]
+        for (const role of mentioned) {
+          // 点名失败（角色不存在/回合报错）要可见——静默吞错正是
+          // D-06 那类「点了没反应」死路的成因。
+          await api.dispatch(role, body).catch((e) => pushToast(errText(e), 'err'))
+        }
       }
       setText('')
       setHistIdx(-1)
