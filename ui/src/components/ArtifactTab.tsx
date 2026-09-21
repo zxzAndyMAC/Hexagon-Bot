@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type ArtifactRow } from '../api'
+import { api, errText, type ArtifactRow } from '../api'
 import { useUiStore } from '../store'
 import { CodeView, DiffView } from './DiffView'
 import { diffLines } from '../diff'
@@ -14,6 +14,18 @@ export function ArtifactTab({ path }: { path: string }) {
   const { t } = useTranslation()
   const artifacts = useUiStore((s) => s.artifacts)
   const team = useUiStore((s) => s.team)
+  const { askConfirm, pushToast } = useUiStore()
+  // ui-audit-2 票 08：本路径若有 active 提案 → 露「回滚提案」入口
+  // （此前 rollbackProposal 命令死接线，cards.rollback 是死 i18n 键）。
+  const [activeProposal, setActiveProposal] = useState<string | null>(null)
+  useEffect(() => {
+    api.proposals()
+      .then((all) => {
+        const hit = all.find((r) => r.status === 'active' && r.artifact_path === path)
+        setActiveProposal(hit?.id ?? null)
+      })
+      .catch(() => setActiveProposal(null))
+  }, [path, artifacts])
   // 同路径版本链（升序）
   const versions = useMemo(
     () => artifacts.filter((a) => a.path === path).sort((a, b) => a.version - b.version),
@@ -63,6 +75,28 @@ export function ArtifactTab({ path }: { path: string }) {
           </span>
         )}
         <div style={{ flex: 1 }} />
+        {activeProposal && (
+          <button
+            className="btn danger"
+            style={{ fontSize: 11, padding: '2px 8px' }}
+            title={t('cards.rollbackHint')}
+            onClick={() =>
+              askConfirm({
+                title: t('cards.rollbackTitle', { id: activeProposal }),
+                body: t('cards.rollbackBody'),
+                danger: true,
+                confirmLabel: t('cards.rollback'),
+                run: () =>
+                  api
+                    .rollbackProposal(activeProposal)
+                    .then(() => setActiveProposal(null))
+                    .catch((e) => pushToast(errText(e), 'err')),
+              })
+            }
+          >
+            {t('cards.rollback')}
+          </button>
+        )}
         {isMd && mode === 'content' && (
           <>
             <button

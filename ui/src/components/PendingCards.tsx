@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type PendingQuestion } from '../api'
+import i18n from '../i18n'
+import { api, errText, type PendingQuestion, type ProposalRow } from '../api'
 import { useUiStore } from '../store'
-import { extractDiffBlock } from '../diff'
+import { extractDiffBlock, parseUnifiedDiff, type DiffOp } from '../diff'
+import { DiffView } from './DiffView'
 import { bindingFor, formatBinding } from '../keymap'
-import { severityOf } from '../decisions'
+import { kindTitleKey, rejectReasonWithJudge, severityOf } from '../decisions'
 import { Icon, type IconName } from './Icon'
 
 function CardShell({ tone, icon, title, children }: {
@@ -25,18 +27,109 @@ function CardShell({ tone, icon, title, children }: {
   )
 }
 
+// 票 19（方向卡 4）：提案卡内嵌 diff 手风琴——chevron 展开懒跑
+// proposals→artifactContent→extractDiffBlock 链；限高 200px 内滚 +
+// 「打开完整对照」tab 链接。加载失败回退开 tab 路径 + toast（票 04 约定）。
+function InlineDiff({ proposalId }: { proposalId: string }) {
+  const { t } = useTranslation()
+  const openTab = useUiStore((s) => s.openTab)
+  const pushToast = useUiStore((s) => s.pushToast)
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [ops, setOps] = useState<DiffOp[] | null>(null)
+
+  const fetchDiff = async (): Promise<{ diff: string | null; artPath: string | null }> => {
+    const props = await api.proposals()
+    const pr = props.find((x) => String(x.id) === proposalId)
+    const ap = pr?.artifact_path ? String(pr.artifact_path) : null
+    if (!ap) return { diff: null, artPath: null }
+    const body = await api.artifactContent(ap)
+    return { diff: extractDiffBlock(body), artPath: ap }
+  }
+
+  const openFull = async () => {
+    try {
+      const { diff, artPath: ap } = await fetchDiff()
+      if (diff) {
+        openTab({ id: `patch:${proposalId}`, kind: 'diff', title: `${proposalId} diff`, patchText: diff })
+      } else if (ap) {
+        openTab({ id: `art:${ap}`, kind: 'artifact', title: ap, path: ap })
+      }
+    } catch (e) {
+      pushToast(errText(e), 'err')
+    }
+  }
+
+  const toggle = async () => {
+    if (open) { setOpen(false); return }
+    setOpen(true)
+    if (loaded || loading) return
+    setLoading(true)
+    try {
+      const { diff } = await fetchDiff()
+      setOps(diff ? parseUnifiedDiff(diff) : null)
+      setLoaded(true)
+    } catch (e) {
+      setOpen(false)
+      pushToast(errText(e), 'err')
+      void openFull() // 回退开 tab 路径（其内部再 toast）
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+        <button
+          className="icon-btn"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--accent)' }}
+          title={t('cards.inlineDiff')}
+          onClick={() => void toggle()}
+        >
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={10} /> {t('cards.inlineDiff')}
+        </button>
+        {loaded && (
+          <button
+            className="btn"
+            style={{ fontSize: 10, padding: '1px 8px' }}
+            onClick={() => void openFull()}
+          >
+            {t('cards.openFullDiff')}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div style={{ maxHeight: 200, overflowY: 'auto', marginTop: 4, border: '1px solid var(--border)', borderRadius: 6, display: 'flex', minHeight: 0 }}>
+          {loading
+            ? <div className="dim3" style={{ fontSize: 11, padding: 8 }}>…</div>
+            : ops
+              ? <DiffView ops={ops} />
+              : <div className="dim3" style={{ fontSize: 11, padding: 8 }}>{t('cards.noDiff')}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Btn({ onClick, primary, danger, children }: {
   onClick: () => Promise<unknown>; primary?: boolean; danger?: boolean; children: React.ReactNode
 }) {
   const [busy, setBusy] = useState(false)
   const invalidate = useUiStore((s) => s.invalidate)
+  const pushToast = useUiStore((s) => s.pushToast)
   return (
     <button
       className={`btn ${primary ? 'primary' : ''} ${danger ? 'danger' : ''}`}
       disabled={busy}
       onClick={async () => {
         setBusy(true)
-        try { await onClick(); await invalidate() } finally { setBusy(false) }
+        // ui-audit 票 04（P1-6）：待决按钮统一错误出口——失败 toast，
+        // busy 复位、卡保留原地（后端幂等，重试安全）。
+        try { await onClick(); await invalidate() }
+        catch (e) { pushToast(i18n.t('errors.actionFailed', { detail: errText(e) }), 'err') }
+        finally { setBusy(false) }
       }}
     >
       {children}
@@ -46,8 +139,8 @@ function Btn({ onClick, primary, danger, children }: {
 
 export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
-  const openTab = useUiStore((s) => s.openTab)
   const [shape, setShape] = useState('')
+  const [rejectReason, setRejectReason] = useState('')
   const p = q.payload
   const approveTip = formatBinding(bindingFor('approve'))
   const rejectTip = formatBinding(bindingFor('reject'))
@@ -103,7 +196,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     return (
       <CardShell tone="stamp" icon="hex" title={`${t('cards.proposalStamp')} · ${String(p.proposal_id)}`}>
         <div className="dim" style={{ fontSize: 12 }}>
-          {t('cards.proposal')} · {String(p.surface ?? '')}
+          {t('cards.proposal')} · {t(`cards.surface_${String(p.surface)}`, { defaultValue: String(p.surface ?? '') })}
         </div>
         {warnings.length > 0 && (
           <div className="accent" style={{ fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -111,38 +204,51 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           </div>
         )}
         {/* 票 09：judge 建议行——闭集 chip + 大白话行（i18n 模板,
-            rationale 是生成内容按数据展示）。判定是建议不是授权。 */}
+            rationale 是生成内容按数据展示）。判定是建议不是授权。
+            票 07（P2-15）：视觉降权——stamp 不再 ok 绿、reject 不再 err 红
+            （err 留给确定的危险；judge 只是机器建议）。 */}
         {p.judge_verdict != null && (() => {
           const vk = String(p.judge_verdict)
           const suffix = vk === 'stamp' ? 'Stamp' : vk === 'reject' ? 'Reject' : 'NeedsHuman'
           return (
-            <div style={{ fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <div style={{ fontSize: 11, margin: '4px 0', display: 'flex', alignItems: 'baseline', gap: 6 }}>
               <span className="dim3" style={{ fontSize: 10 }}>{t('cards.judgeAdvice')}</span>
-              <span className={`chip ${vk === 'reject' ? 'err' : vk === 'stamp' ? 'ok' : 'warn'}`} style={{ fontSize: 10 }}>
+              <span className={`chip ${vk === 'stamp' ? '' : 'warn'}`} style={{ fontSize: 10 }}>
                 {t(`cards.judge${suffix}`)}
               </span>
-              <span className="dim">{t(`cards.judgeLine${suffix}`, { rationale: String(p.judge_advice ?? '') })}</span>
+              <span className="dim3">{t(`cards.judgeLine${suffix}`, { rationale: String(p.judge_advice ?? '') })}</span>
               {p.judge_backend != null && <span className="dim3" style={{ fontSize: 10 }}>{String(p.judge_backend)}</span>}
             </div>
           )
         })()}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <Btn primary onClick={() => api.confirmProposal(q.id)}>{t('cards.confirm')}{top && ` ${approveTip}`}</Btn>
-          <Btn danger onClick={() => api.rejectProposal(q.id, 'owner rejected')}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
-          <Btn onClick={async () => {
-            const props = await api.proposals()
-            const pr = props.find((x) => String(x.id) === String(p.proposal_id))
-            const ap = pr?.artifact_path ? String(pr.artifact_path) : null
-            if (!ap) return
-            const body = await api.artifactContent(ap)
-            const diff = extractDiffBlock(body)
-            if (diff) {
-              openTab({ id: `patch:${String(p.proposal_id)}`, kind: 'diff', title: `${String(p.proposal_id)} diff`, patchText: diff })
-            } else {
-              openTab({ id: `art:${ap}`, kind: 'artifact', title: ap, path: ap })
-            }
-          }}>{t('cards.viewDiff')}</Btn>
+          {(() => {
+            // 票 07（P2-15）：逆建议留痕——judge=stamp 时驳回、judge=reject 时确认，
+            // 按钮挂 againstJudge 小标记；驳回 reason 追加 judge=<verdict> 对照。
+            const jv = p.judge_verdict != null ? String(p.judge_verdict) : null
+            const mk = (bad: boolean) =>
+              bad && <span className="dim3" style={{ fontSize: 9, fontWeight: 400 }}> {t('cards.againstJudge')}</span>
+            return (
+              <>
+                <Btn primary onClick={() => api.confirmProposal(q.id)}>
+                  {t('cards.confirm')}{top && ` ${approveTip}`}{mk(jv === 'reject')}
+                </Btn>
+                <input
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder={t('cards.rejectReasonPh')}
+                  className="mono"
+                  style={{ flex: 1, minWidth: 60, fontSize: 11, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px', outline: 'none' }}
+                />
+                <Btn danger onClick={() => api.rejectProposal(q.id, rejectReasonWithJudge(rejectReason, jv))}>
+                  {t('cards.reject')}{top && ` ${rejectTip}`}{mk(jv === 'stamp')}
+                </Btn>
+              </>
+            )
+          })()}
         </div>
+        {/* 票 19：卡内 diff 手风琴（取代旧「查看 diff」直接跳 tab） */}
+        <InlineDiff proposalId={String(p.proposal_id)} />
       </CardShell>
     )
   }
@@ -157,7 +263,9 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           {String(p.warning ?? t('cards.publishWarn'))}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Btn primary danger onClick={() => api.confirmPublish(q.id)}>{t('cards.publishConfirm')}{top && ` ${approveTip}`}</Btn>
+          {/* ui-audit 票 02（P0-2）：L3 不可逆不显示批准键提示——
+              键盘批准对 publish 无效，提示出现即误导（decisions.ts 守卫同步拦截） */}
+          <Btn primary danger onClick={() => api.confirmPublish(q.id)}>{t('cards.publishConfirm')}</Btn>
           <Btn danger onClick={() => api.rejectPublish(q.id)}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
         </div>
       </CardShell>
@@ -246,14 +354,90 @@ function StageArtifacts({ runId }: { runId: string }) {
   )
 }
 
-export function PendingCards() {
-  const pending = useUiStore((s) => s.pending)
-  const sorted = [...pending].sort((a, b) => severityOf(a) - severityOf(b))
+/** in_review 提案的负责人裁决面（ui-audit-2 票 08 / report B）：复审 agent
+ *  从无工具可调 proposals::review——提案卡死 in_review 永不到盖章队列。
+ *  这里把 in_review 提案列进待决区，owner 通过/打回（署名 owner）。 */
+function InReviewCards() {
+  const { t } = useTranslation()
+  const { pending, pushToast } = useUiStore()
+  const [rows, setRows] = useState<ProposalRow[]>([])
+  const [reasons, setReasons] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    api.proposals()
+      .then((all) => setRows(all.filter((r) => r.status === 'in_review')))
+      .catch((e) => pushToast(errText(e), 'err'))
+    // pending 变化 = 有裁决发生——顺带重拉提案表兜底一致
+  }, [pending, pushToast])
+
   return (
     <>
-      {sorted.map((q, i) => (
-        <PendingCard key={q.id} q={q} top={i === 0} />
+      {rows.map((r) => (
+        <CardShell key={r.id} tone="flag" icon="hex" title={`${t('cards.proposalReview')} · ${r.id}`}>
+          <div className="dim" style={{ fontSize: 12 }}>
+            {t(`cards.surface_${r.surface}`)} · <span className="mono">{r.target}</span>
+            <span className="dim3" style={{ marginLeft: 8 }}>{t('cards.byAuthor')} {r.author}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <Btn primary onClick={() => api.reviewProposal(r.id, true, '')}>{t('cards.reviewPass')}</Btn>
+            <input
+              value={reasons[r.id] ?? ''}
+              onChange={(e) => setReasons((m) => ({ ...m, [r.id]: e.target.value }))}
+              placeholder={t('cards.rejectReasonPh')}
+              className="mono"
+              style={{ flex: 1, minWidth: 60, fontSize: 11, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px', outline: 'none' }}
+            />
+            <Btn danger onClick={() => api.reviewProposal(r.id, false, reasons[r.id] ?? '')}>
+              {t('cards.reject')}
+            </Btn>
+          </div>
+          <InlineDiff proposalId={r.id} />
+        </CardShell>
       ))}
+    </>
+  )
+}
+
+export function PendingCards() {
+  const { t } = useTranslation()
+  const pending = useUiStore((s) => s.pending)
+  const sorted = [...pending].sort((a, b) => severityOf(a) - severityOf(b))
+  const top = sorted[0]
+  const topRef = useRef<HTMLDivElement>(null)
+  const [topGone, setTopGone] = useState(false)
+  // ui-audit 票 02（P1-3）：顶卡滚出视口时，快捷键仍在作用于它——
+  // 顶缘 sticky 迷你条标出目标，让「键会打在哪张卡」始终可见。
+  useEffect(() => {
+    const el = topRef.current
+    if (!el) { setTopGone(false); return }
+    const ob = new IntersectionObserver(
+      ([e]) => setTopGone(!e.isIntersecting),
+      { root: el.closest('#pending-zone'), threshold: 0.4 },
+    )
+    ob.observe(el)
+    return () => ob.disconnect()
+  }, [top?.id])
+  const approveTip = formatBinding(bindingFor('approve'))
+  const rejectTip = formatBinding(bindingFor('reject'))
+  return (
+    <>
+      {topGone && top && (
+        <div className="kbd-strip">
+          <Icon name="warn" size={11} />
+          <span>{t(kindTitleKey(top))}</span>
+          <span className="dim3 mono" style={{ marginLeft: 'auto' }}>{approveTip} / {rejectTip}</span>
+        </div>
+      )}
+      {sorted.map((q, i) => (
+        <div
+          key={q.id}
+          ref={i === 0 ? topRef : undefined}
+          aria-current={i === 0 ? 'true' : undefined}
+        >
+          <PendingCard q={q} top={i === 0} />
+        </div>
+      ))}
+      <InReviewCards />
     </>
   )
 }

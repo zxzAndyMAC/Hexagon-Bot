@@ -37,6 +37,39 @@ describe('buildRows', () => {
     expect(dec).toHaveLength(1)
     expect(dec[0].type === 'item' && dec[0].item.event.kind).toBe('permission_asked')
   })
+
+  it('ui-audit 票 05：高危 system 子类提出折叠组外，始终可见', () => {
+    const sys = (id: number, kind: string) => ev(id, 'system', { kind })
+    const tl = [
+      sys(1, 'provider_retry'),
+      sys(2, 'known_world'),
+      sys(3, 'invariant_violation'), // 高危——不得被吞
+      sys(4, 'request_envelope'),
+      sys(5, 'tool_breaker'),        // 高危——不得被吞
+      sys(6, 'steering_injected'),
+      sys(7, 'context_denied'),      // 高危——不得被吞
+      sys(8, 'judge_verdict'),
+    ]
+    const rows = buildRows(tl, 'all')
+    // 高危行把折叠切成若干段；每段 <3 不折，高危行本身永为 item
+    const high = [3, 5, 7]
+    for (const id of high) {
+      const r = rows.find((x) => x.type === 'item' && x.item.event.id === id)
+      expect(r, `event ${id} must render standalone`).toBeTruthy()
+    }
+    // 低危段 1-2 两条不够 3 → 各自独立行；8 单条独立
+    expect(rows.filter((r) => r.type === 'sysgroup')).toHaveLength(0)
+    expect(rows).toHaveLength(8)
+  })
+
+  it('ui-audit 票 05：低危 system 连续 ≥3 仍折叠', () => {
+    const sys = (id: number, kind: string) => ev(id, 'system', { kind })
+    const tl = [sys(1, 'provider_retry'), sys(2, 'known_world'), sys(3, 'request_envelope'), sys(4, 'steering_injected')]
+    const rows = buildRows(tl, 'all')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].type).toBe('sysgroup')
+    expect(rows[0].type === 'sysgroup' && rows[0].items).toHaveLength(4)
+  })
 })
 
 describe('nodeMarks', () => {
@@ -104,5 +137,33 @@ describe('parseUnifiedDiff / extractDiffBlock', () => {
     const body = '# 提案\n\n```diff\n-a\n+b\n```\n\nend'
     expect(extractDiffBlock(body)).toBe('-a\n+b')
     expect(extractDiffBlock('no block')).toBeNull()
+  })
+})
+
+describe('story 档（ui-audit 票 18 / 方向卡 3）', () => {
+  const mk = (id: number, kind: string, msg = false): TimelineItem => ({
+    event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload: kind === 'turn_started' ? { stage: 'build' } : {}, created_at: '' },
+    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], created_at: '' } : null,
+  }) as unknown as TimelineItem
+
+  it('toolgroup/sysgroup 全移除；高危子类豁免可见；turn_started 成章', () => {
+    const rows = buildRows([
+      mk(1, 'turn_started'),
+      mk(2, 'agent_message', true),
+      mk(3, 'tool_called'),
+      mk(4, 'tool_result'),
+      mk(5, 'system'),                       // 普通 sys → 移除
+      mk(6, 'system'),                       // 同上（凑组）
+      mk(7, 'system'),
+      { ...mk(8, 'system'), event: { ...mk(8, 'system').event, payload: { kind: 'invariant_violation' } } }, // 高危豁免
+      mk(9, 'turn_started'),
+      mk(10, 'agent_message', true),
+    ], 'story')
+    expect(rows.every((r) => r.type !== 'toolgroup' && r.type !== 'sysgroup')).toBe(true)
+    const chapters = rows.filter((r) => r.type === 'chapter')
+    expect(chapters.length).toBe(2)
+    expect(chapters[0]).toMatchObject({ n: 1, agentId: 'a1', stage: 'build' })
+    const items = rows.filter((r) => r.type === 'item').map((r) => (r as { item: TimelineItem }).item.event.id)
+    expect(items).toEqual([2, 8, 10]) // 消息 + 高危豁免；普通 sys 与 tool 全不见
   })
 })

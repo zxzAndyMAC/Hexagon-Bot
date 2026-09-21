@@ -74,7 +74,9 @@ const PACK_FILES: &[(&str, &str)] = &[
     ("kanban", include_str!("../presets/packs/kanban.json")),
 ];
 
-const SKILL_FILES: &[(&str, &str)] = &[
+/// (name, SKILL.md 全文)。pub(crate)：skills.rs 的 SkillLoader 把内置技能
+/// 当最底层种子（global-config 票 03——此前只在二进制里睡着，load_skill 404）。
+pub(crate) const SKILL_FILES: &[(&str, &str)] = &[
     (
         "spec-writing",
         include_str!("../presets/skills/spec-writing/SKILL.md"),

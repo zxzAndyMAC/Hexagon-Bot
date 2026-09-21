@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ModelEntry, type ProviderView, type ProvidersView, type RoleDef } from '../api'
 import { Icon, type IconName } from './Icon'
+import { useUiStore } from '../store'
+import { DEDICATED_PREFIX, isDedicatedSlot } from '../modelpick'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。
 const PRESETS: { name: string; kind: 'openai' | 'anthropic'; base_url: string }[] = [
@@ -48,6 +50,7 @@ export function ProviderManager() {
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null)
   const [editModel, setEditModel] = useState<ModelEntry | null>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [q, setQ] = useState('') // settings-3col 票 04：供应商搜索（Cherry 同款）
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -193,48 +196,93 @@ export function ProviderManager() {
     ? `${draft.base_url.replace(/\/+$/, '')}${draft.kind === 'anthropic' ? '/v1/messages' : '/chat/completions'}`
     : ''
 
+  // ui-audit-2 票 10：本地端点（Ollama/LM Studio）不需要 key——检测不禁用
+  const needsKey = !!draft && !/^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])/i.test(draft.base_url)
+  const probeDisabled = busy || !draft || (needsKey && !draft.key_set && !secret.trim())
+
+  // 槽位绑定汇总：扫一眼知道「还差几步」
+  const slotStats = useMemo(() => {
+    let bound = 0
+    let blocked = 0
+    for (const s of slotNames) {
+      const b = doc.slots[s]
+      if (!b) continue
+      bound += 1
+      const p = doc.providers.find((x) => x.id === b.provider_id)
+      if (!p?.enabled || !p.key_set) blocked += 1
+    }
+    const missingKey = doc.providers.filter((p) => p.enabled && !p.key_set).length
+    return { total: slotNames.length, bound, blocked, missingKey }
+  }, [slotNames, doc])
+
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }
 
   return (
     <div>
-      <div className="dim3" style={{ fontSize: 11, marginBottom: 10 }}>{t('providers.hint')}</div>
+      <div className="dim3" style={{ fontSize: 12, marginBottom: 10 }}>{t('providers.hint')}</div>
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-        {/* ---- 左列：供应商列表（Cherry 式） ---- */}
+        {/* ---- 左列：供应商列表（Cherry 式，settings-3col 票 04 对齐 ListDetail） ---- */}
         <div
           className="panel"
-          style={{ width: 190, flexShrink: 0, display: 'flex', flexDirection: 'column', maxHeight: 420 }}
+          style={{ width: 270, flexShrink: 0, display: 'flex', flexDirection: 'column', maxHeight: 440 }}
         >
+          <div style={{ padding: '6px 6px 2px' }}>
+            <input
+              className="input"
+              style={{ width: '100%' }}
+              placeholder={t('providers.filter')}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px 4px' }}>
-            {doc.providers.map((p) => (
+            {doc.providers.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).map((p) => (
               <div
                 key={p.id}
-                style={{ ...row, outline: sel === p.id ? '1px solid var(--accent)' : undefined }}
+                style={{
+                  ...row,
+                  // 票 10：选中锚定用左竖条+底色（outline 会让行高跳）
+                  boxShadow: sel === p.id ? 'inset 2px 0 0 var(--accent)' : 'inset 2px 0 0 transparent',
+                  background: sel === p.id ? 'var(--accent-soft)' : undefined,
+                  opacity: p.enabled ? 1 : 0.55,
+                }}
                 onClick={() => pick(p.id)}
               >
-                <div style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {/* 配置状态点：●已配 key / ◐缺 key（琥珀）/ ○停用——不用点进去就知道能不能用 */}
+                <span
+                  className={`dot ${!p.enabled ? 'off' : p.key_set ? 'on' : 'warn'}`}
+                  title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : t('providers.keyMissing')}
+                />
+                <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {p.name}
                 </div>
-                <button
-                  className={`btn ${p.enabled ? 'primary' : ''}`}
-                  style={{ fontSize: 10, padding: '1px 7px' }}
+                {!p.enabled && <span className="chip" style={{ fontSize: 10 }}>{t('providers.disabledTag')}</span>}
+                <input
+                  type="checkbox"
+                  className="switch"
+                  checked={p.enabled}
                   title={t('providers.enabled')}
-                  onClick={(e) => { e.stopPropagation(); toggleEnabled(p) }}
-                >
-                  {p.enabled ? 'ON' : 'OFF'}
-                </button>
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggleEnabled(p)}
+                />
               </div>
             ))}
-            {unconfiguredPresets.length > 0 && doc.providers.length > 0 && (
+            {unconfiguredPresets.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).length > 0
+              && doc.providers.length > 0 && (
               <div style={{ borderTop: '1px solid var(--border)', margin: '4px 6px' }} />
             )}
-            {unconfiguredPresets.map((p) => (
+            {unconfiguredPresets.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).map((p) => (
               <div
                 key={p.name}
                 className="dim3"
-                style={{ ...row, outline: sel === `preset:${p.name}` ? '1px solid var(--accent)' : undefined }}
+                style={{
+                  ...row,
+                  boxShadow: sel === `preset:${p.name}` ? 'inset 2px 0 0 var(--accent)' : 'inset 2px 0 0 transparent',
+                  background: sel === `preset:${p.name}` ? 'var(--accent-soft)' : undefined,
+                }}
                 onClick={() => pick(`preset:${p.name}`)}
               >
-                <div style={{ flex: 1, fontSize: 12 }}>{p.name}</div>
+                <div style={{ flex: 1, fontSize: 13 }}>{p.name}</div>
                 <span className="chip" style={{ fontSize: 10 }}>{t('providers.preset')}</span>
               </div>
             ))}
@@ -249,14 +297,14 @@ export function ProviderManager() {
           </div>
         </div>
 
-        {/* ---- 右列：供应商详情 ---- */}
+        {/* ---- 右列：供应商详情（ui-polish-3：统一 .panel 圆角边线卡） ---- */}
         <div style={{ flex: 1, minWidth: 0 }}>
           {!draft && <div className="dim3" style={{ fontSize: 12, padding: '30px 0', textAlign: 'center' }}>{t('providers.pickHint')}</div>}
           {draft && (
-            <>
+            <div className="panel" style={{ padding: '12px 14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <input
-                  className="btn" style={{ fontWeight: 560, flex: '0 1 200px' }}
+                  className="input" style={{ fontWeight: 560, flex: '0 1 240px' }}
                   value={draft.name} placeholder={t('providers.name')}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 />
@@ -266,31 +314,36 @@ export function ProviderManager() {
                 </span>
                 <div style={{ flex: 1 }} />
                 {selConfigured && (
-                  <button className="btn" style={{ fontSize: 11, color: 'var(--err)' }} onClick={del}>{t('providers.delete')}</button>
+                  <button className="btn" style={{ fontSize: 12, color: 'var(--err)' }} onClick={del}>{t('providers.delete')}</button>
                 )}
               </div>
 
-              <label className="dim3" style={{ fontSize: 11 }}>{t('providers.key')}</label>
+              <label className="dim3" style={{ fontSize: 12 }}>{t('providers.key')}</label>
               <div style={{ display: 'flex', gap: 6, margin: '4px 0 10px' }}>
                 <input
-                  className="btn mono" style={{ flex: 1 }}
+                  className="input mono" style={{ flex: 1 }}
                   type={showKey ? 'text' : 'password'}
                   value={secret}
                   placeholder={draft.key_set ? t('providers.keyKeep') : 'sk-…'}
                   onChange={(e) => setSecret(e.target.value)}
                 />
-                <button className="btn" title={t('providers.showKey')} onClick={() => setShowKey((s) => !s)}>
-                  <Icon name="vision" size={12} />
+                <button className="btn" title={t(showKey ? 'providers.hideKey' : 'providers.showKey')} onClick={() => setShowKey((s) => !s)}>
+                  <Icon name={showKey ? 'vision' : 'vision-off'} size={12} />
                 </button>
-                <button className="btn" disabled={busy} onClick={probeAndMerge}>{t('providers.check')}</button>
+                <button
+                  className="btn" disabled={probeDisabled} onClick={probeAndMerge}
+                  title={probeDisabled && !busy ? t('providers.checkNeedsKey') : undefined}
+                >
+                  {t('providers.check')}
+                </button>
               </div>
               {probe && (
-                <div style={{ fontSize: 11, marginBottom: 8, color: probe.ok ? 'var(--ok)' : 'var(--err)' }}>{probe.text}</div>
+                <div style={{ fontSize: 12, marginBottom: 8, color: probe.ok ? 'var(--ok)' : 'var(--err)' }}>{probe.text}</div>
               )}
 
-              <label className="dim3" style={{ fontSize: 11 }}>{t('providers.kind')}</label>
+              <label className="dim3" style={{ fontSize: 12 }}>{t('providers.kind')}</label>
               <select
-                className="btn" style={{ margin: '4px 0 10px', display: 'block' }}
+                className="input" style={{ margin: '4px 0 10px', width: 'auto', minWidth: 220 }}
                 value={draft.kind}
                 onChange={(e) => setDraft({ ...draft, kind: e.target.value as ProviderView['kind'] })}
               >
@@ -298,24 +351,26 @@ export function ProviderManager() {
                 <option value="anthropic">Anthropic</option>
               </select>
 
-              <label className="dim3" style={{ fontSize: 11 }}>{t('providers.baseUrl')}</label>
+              <label className="dim3" style={{ fontSize: 12 }}>{t('providers.baseUrl')}</label>
               <input
-                className="btn mono" style={{ width: '100%', marginTop: 4 }}
+                className="input mono" style={{ marginTop: 4 }}
                 value={draft.base_url} placeholder="https://…/v1"
                 onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
               />
               {draft.base_url && (
-                <div className="dim3 mono" style={{ fontSize: 10, marginTop: 3 }}>{t('providers.preview')}: {previewUrl}</div>
+                <div className="dim3 mono" style={{ fontSize: 10, marginTop: 3 }}>
+                  {t('providers.preview')}: {previewUrl} · {t('providers.autoUrl')}
+                </div>
               )}
 
               {/* ---- 模型目录 ---- */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 6px' }}>
-                <label className="dim3" style={{ fontSize: 11, flex: 1 }}>{t('providers.models')}</label>
-                <button className="btn" style={{ fontSize: 11 }} disabled={busy} onClick={probeAndMerge}>
+                <label className="dim3" style={{ fontSize: 12, flex: 1 }}>{t('providers.models')}</label>
+                <button className="btn" style={{ fontSize: 12 }} disabled={busy} onClick={probeAndMerge}>
                   <Icon name="refresh" size={10} /> {t('providers.fetch')}
                 </button>
                 <button
-                  className="btn" style={{ fontSize: 11 }}
+                  className="btn" style={{ fontSize: 12 }}
                   onClick={() => setEditModel({ id: '', name: '', group: '', caps: [] })}
                 >
                   <Icon name="plus" size={10} /> {t('providers.addModel')}
@@ -324,7 +379,7 @@ export function ProviderManager() {
               {groups.map(([g, ms]) => (
                 <div key={g} style={{ marginBottom: 4 }}>
                   <div
-                    className="dim3" style={{ fontSize: 11, padding: '4px 2px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                    className="dim3" style={{ fontSize: 12, padding: '4px 2px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
                     onClick={() => setCollapsed((c) => ({ ...c, [g]: !c[g] }))}
                   >
                     <Icon name={collapsed[g] ? 'chevron-right' : 'chevron-down'} size={10} /> {g}
@@ -332,7 +387,7 @@ export function ProviderManager() {
                   {!collapsed[g] && ms.map((m) => (
                     <div key={m.id} className="panel" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', marginBottom: 3 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="mono" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div className="mono" style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {m.name || m.id}
                         </div>
                       </div>
@@ -352,7 +407,7 @@ export function ProviderManager() {
                 </div>
               ))}
               {draft.models.length === 0 && (
-                <div className="dim3" style={{ fontSize: 11, padding: '8px 0' }}>{t('providers.noModels')}</div>
+                <div className="dim3" style={{ fontSize: 12, padding: '8px 0' }}>{t('providers.noModels')}</div>
               )}
 
               {/* ---- 编辑模型内联框 ---- */}
@@ -360,15 +415,15 @@ export function ProviderManager() {
                 <div className="panel" style={{ marginTop: 8, padding: '10px 12px', outline: '1px solid var(--accent)' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '76px 1fr', gap: '6px 8px', alignItems: 'center', fontSize: 12 }}>
                     <label className="dim3">{t('providers.modelId')}</label>
-                    <input className="btn mono" value={editModel.id} onChange={(e) => setEditModel({ ...editModel, id: e.target.value })} />
+                    <input className="input mono" value={editModel.id} onChange={(e) => setEditModel({ ...editModel, id: e.target.value })} />
                     <label className="dim3">{t('providers.modelName')}</label>
-                    <input className="btn" value={editModel.name ?? ''} onChange={(e) => setEditModel({ ...editModel, name: e.target.value })} />
+                    <input className="input" value={editModel.name ?? ''} onChange={(e) => setEditModel({ ...editModel, name: e.target.value })} />
                     <label className="dim3">{t('providers.modelGroup')}</label>
-                    <input className="btn" value={editModel.group ?? ''} onChange={(e) => setEditModel({ ...editModel, group: e.target.value })} />
+                    <input className="input" value={editModel.group ?? ''} onChange={(e) => setEditModel({ ...editModel, group: e.target.value })} />
                     <label className="dim3">{t('providers.caps')}</label>
                     <div style={{ display: 'flex', gap: 10 }}>
                       {CAPS.map((c) => (
-                        <label key={c} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 11 }}>
+                        <label key={c} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
                           <input
                             type="checkbox"
                             checked={editModel.caps.includes(c)}
@@ -399,17 +454,24 @@ export function ProviderManager() {
                 >
                   {t('providers.save')}
                 </button>
-                {!selConfigured && <span className="dim3" style={{ fontSize: 11, alignSelf: 'center' }}>{t('providers.unsaved')}</span>}
+                {!selConfigured && <span className="dim3" style={{ fontSize: 12, alignSelf: 'center' }}>{t('providers.unsaved')}</span>}
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>
 
       {/* ---- 槽位分配：角色模型槽 → 供应商+模型（Cherry「默认模型」位） ---- */}
-      <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 12 }}>
-        <div style={{ fontWeight: 560, fontSize: 12, marginBottom: 2 }}>{t('providers.slots')}</div>
-        <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('providers.slotsHint')}</div>
+      <div className="panel" style={{ marginTop: 14, padding: '12px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 2 }}>
+          <div style={{ fontWeight: 560, fontSize: 12 }}>{t('providers.slots')}</div>
+          {/* 票 10：两步任务联动——绑不了常因上游供应商缺 key，汇总行把因果摆上台面 */}
+          <div className="dim3" style={{ fontSize: 12 }}>
+            {t('providers.slotsSummary', { bound: slotStats.bound, total: slotStats.total })}
+            {slotStats.missingKey > 0 && ` · ${t('providers.slotsMissingKey', { count: slotStats.missingKey })}`}
+          </div>
+        </div>
+        <div className="dim3" style={{ fontSize: 12, marginBottom: 8 }}>{t('providers.slotsHint')}</div>
         {slotNames.map((slot) => {
           const b = doc.slots[slot]
           const bp = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
@@ -447,17 +509,23 @@ function SlotRow({
   const [model, setModel] = useState(binding?.model ?? '')
   const provider = providers.find((p) => p.id === pid)
   const enabled = providers.filter((p) => p.enabled)
+  // ui-audit-2 票 01：agent:<id> 专属槽是角色编辑器写出的内部名，
+  // 槽位表里翻译成「专属 · 角色名」而非裸 id。
+  const team = useUiStore((s) => s.team)
+  const label = isDedicatedSlot(slot)
+    ? `${t('agent.dedicatedTag')} · ${team.find((m) => m.id === slot.slice(DEDICATED_PREFIX.length))?.role ?? slot}`
+    : slot
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-      <code style={{ fontSize: 11, width: 110, flexShrink: 0 }}>{slot}</code>
-      <select className="btn" style={{ flex: '0 1 170px' }} value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
+      <code style={{ fontSize: 12, minWidth: 110, flexShrink: 0 }}>{label}</code>
+      <select className="input" style={{ flex: '0 1 190px', width: 'auto' }} value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
         <option value="">{t('providers.pickProvider')}</option>
         {enabled.map((p) => (
           <option key={p.id} value={p.id}>{p.name}</option>
         ))}
       </select>
       <input
-        className="btn mono" style={{ flex: 1 }} list={`models-${slot}`}
+        className="input mono" style={{ flex: 1 }} list={`models-${slot}`}
         value={model} placeholder={t('providers.pickModel')}
         onChange={(e) => setModel(e.target.value)}
       />
@@ -465,14 +533,14 @@ function SlotRow({
         {provider?.models.map((m) => <option key={m.id} value={m.id} />)}
       </datalist>
       <button
-        className="btn" style={{ fontSize: 11 }}
+        className="btn" style={{ fontSize: 12 }}
         disabled={!pid || !model.trim()}
         onClick={() => onBind(slot, pid, model.trim())}
       >
         {t('providers.bind')}
       </button>
       {binding && (
-        <button className="btn" style={{ fontSize: 11 }} onClick={() => onUnbind(slot)}>{t('providers.unbind')}</button>
+        <button className="btn" style={{ fontSize: 12 }} onClick={() => onUnbind(slot)}>{t('providers.unbind')}</button>
       )}
       <span className="chip" style={ready ? { color: 'var(--ok)' } : { color: 'var(--err)' }}>
         {ready ? t('providers.bound') : t('providers.unbound')}

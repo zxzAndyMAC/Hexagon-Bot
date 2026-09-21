@@ -3,21 +3,28 @@
 // /stamp /skip /rewind /pause /resume /sleep 走的都是这些 api.*。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api'
+import { api, errText } from '../api'
 import { useUiStore } from '../store'
 import { bindingFor, formatBinding, type ActionId } from '../keymap'
+import { runStageOp } from '../stageops'
+import { filterPaletteItems, pushRecent } from '../paletteModel'
+import { Row } from './Row'
 
 interface Item {
   id: string
   group: 'cmd' | 'nav' | 'open'
   label: string
   hint?: string
+  /// ADR 0056-2（ui-audit 票 03）：'danger' 项渲染分级 + 执行前过确认层。
+  risk?: 'danger'
+  /// 参与匹配的额外关键词（英文动词/缩写），不进显示（ui-audit 票 09）。
+  keywords?: string[]
   run: () => unknown
 }
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
-  const { stages, team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, tabs, activeTab, closeTab, invalidate } = useUiStore()
+  const { team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, tabs, activeTab, closeTab, invalidate, pushToast, pending } = useUiStore()
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -30,20 +37,37 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     const bind = (a: ActionId) => formatBinding(bindingFor(a))
     const list: Item[] = [
       // 指令：与 composer /verb 同一命令通道
-      { id: 'c-stamp', group: 'cmd', label: t('palette.stamp'), run: () => api.stamp() },
-      { id: 'c-skip', group: 'cmd', label: t('palette.skip'), run: () => api.skip() },
+      // ui-audit 票 03（ADR 0056-2）：rewind/skip 标 danger——
+      // 渲染分级 + 执行前过确认层（runStageOp 内部 askConfirm）。
+      { id: 'c-stamp', group: 'cmd', label: t('palette.stamp'), keywords: ['stamp', 'approve'], run: () => runStageOp('stamp') },
+      { id: 'c-skip', group: 'cmd', label: t('palette.skip'), risk: 'danger', hint: t('palette.riskHint'), keywords: ['skip', 'pass'], run: () => runStageOp('skip') },
       {
-        id: 'c-rewind', group: 'cmd', label: t('palette.rewindPrev'),
-        run: () => {
-          const active = [...stages].reverse().find((s) => s.state === 'active' || s.state === 'waiting_stamp')
-          if (active && active.seq > 0) return api.rewind(active.seq - 1)
+        id: 'c-rewind', group: 'cmd', label: t('palette.rewindPrev'), risk: 'danger', hint: t('palette.riskHint'), keywords: ['rew', 'rewind', 'back'],
+        run: () => runStageOp('rewind'),
+      },
+      { id: 'c-pause', group: 'cmd', label: t('palette.pause'), keywords: ['pause', 'hold'], run: () => runStageOp('pause') },
+      { id: 'c-resume', group: 'cmd', label: t('palette.resume'), keywords: ['resume', 'continue'], run: () => runStageOp('resume') },
+      { id: 'c-checks', group: 'cmd', label: t('palette.checks'), keywords: ['check', 'verify'], run: () => api.runChecks() },
+      { id: 'c-advance', group: 'cmd', label: t('palette.advance'), keywords: ['adv', 'next'], run: () => api.advance() },
+      { id: 'c-sleep', group: 'cmd', label: t('palette.sleepAll'), keywords: ['sleep'], run: () => runStageOp('sleepAll') },
+      // ui-audit 票 09（P1-5 残余）：冰山 IPC 补入口——这两条此前只有
+      // 纯 invoke 通道，面板不可达。
+      {
+        id: 'c-invariant', group: 'cmd', label: t('palette.invariantCheck'), keywords: ['inv', 'invariant', 'audit'],
+        run: async () => {
+          const n = await api.invariantCheck()
+          pushToast(t('palette.invariantDone', { count: n }), n > 0 ? 'err' : 'ok')
         },
       },
-      { id: 'c-pause', group: 'cmd', label: t('palette.pause'), run: () => api.pause() },
-      { id: 'c-resume', group: 'cmd', label: t('palette.resume'), run: () => api.resume() },
-      { id: 'c-checks', group: 'cmd', label: t('palette.checks'), run: () => api.runChecks() },
-      { id: 'c-advance', group: 'cmd', label: t('palette.advance'), run: () => api.advance() },
-      { id: 'c-sleep', group: 'cmd', label: t('palette.sleepAll'), run: () => api.sleepAll() },
+      {
+        // L3 不可逆：不直接发布——请求/聚焦发布卡，卡内按钮确认（ADR 0056）。
+        id: 'c-publish', group: 'cmd', label: t('palette.requestPublish'), keywords: ['pub', 'publish', 'release'],
+        run: async () => {
+          if (!pending.some((x) => x.kind === 'publish')) await api.requestPublish('origin')
+          await invalidate()
+          document.getElementById('pending-zone')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        },
+      },
       // 导航
       { id: 'n-rail', group: 'nav', label: t('palette.rail'), hint: bind('toggleRail'), run: () => setRailOpen(!railOpen) },
       { id: 'n-split', group: 'nav', label: t('palette.split'), hint: bind('splitEditor'), run: () => setSplitOpen(!splitOpen) },
@@ -66,17 +90,26 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     ]
     void tabs
     return list
-  }, [t, stages, team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, closeTab, activeTab, tabs])
+  }, [t, team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, closeTab, activeTab, tabs, pending, pushToast, invalidate])
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase()
-    if (!needle) return items
-    return items.filter((i) => i.label.toLowerCase().includes(needle))
-  }, [items, q])
+  // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
+  // 最近使用项置顶（localStorage hexagon.palette.recents）。
+  const [recents, setRecents] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('hexagon.palette.recents') || '[]') } catch { return [] }
+  })
+  const filtered = useMemo(() => filterPaletteItems(items, q, recents), [items, q, recents])
 
   const runItem = async (i: Item) => {
     onClose()
-    await i.run()
+    // 票 09：执行失败走 toast 出口而非静默
+    try {
+      await i.run()
+      const next = pushRecent(recents, i.id)
+      setRecents(next)
+      localStorage.setItem('hexagon.palette.recents', JSON.stringify(next))
+    } catch (e) {
+      pushToast(errText(e), 'err')
+    }
     await invalidate()
   }
 
@@ -93,7 +126,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       onClick={onClose}
     >
       <div
-        className="panel"
+        className="panel panel-float"
         style={{ width: 480, maxHeight: '60vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 12px 40px rgba(0,0,0,.4)' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -110,7 +143,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           }}
           style={{ padding: '12px 14px', fontSize: 14, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', outline: 'none' }}
         />
-        <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
+        <div role="listbox" style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
           {filtered.length === 0 && (
             <div className="dim3" style={{ padding: '14px', fontSize: 12 }}>{t('palette.empty')}</div>
           )}
@@ -126,8 +159,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                   flatIdx += 1
                   const idx = flatIdx
                   return (
-                    <div
+                    // ui-audit 票 12（P2-13）：条目可键盘聚焦+Enter 激活，
+                    // aria-selected 报选中态（Row 原语）
+                    <Row
                       key={i.id}
+                      role="option"
+                      selected={idx === sel}
                       onClick={() => void runItem(i)}
                       onMouseEnter={() => setSel(idx)}
                       style={{
@@ -136,9 +173,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                         background: idx === sel ? 'var(--bg-2)' : 'transparent',
                       }}
                     >
-                      <span>{i.label}</span>
+                      <span style={i.risk === 'danger' ? { color: 'var(--err)' } : undefined}>{i.label}</span>
                       {i.hint && <span className="dim3 mono" style={{ fontSize: 11 }}>{i.hint}</span>}
-                    </div>
+                    </Row>
                   )
                 })}
               </div>

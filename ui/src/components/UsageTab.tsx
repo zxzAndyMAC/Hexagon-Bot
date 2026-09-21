@@ -9,7 +9,7 @@ import {
   groupTokens, parseLimitInput, perAgentSeries,
 } from '../usage'
 
-export function UsageTab() {
+export function UsageTab({ onDetail }: { onDetail?: () => void }) {
   const { t } = useTranslation()
   const { usageRows, usageTotal, team, invalidate, openTab } = useUiStore()
   const [series, setSeries] = useState<UsageBucket[]>([])
@@ -86,7 +86,8 @@ export function UsageTab() {
               <button
                 className="btn"
                 style={{ fontSize: 11, marginLeft: 'auto' }}
-                onClick={() => openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') })}
+                // 设置页嵌入时（ui-audit-2 票 05）：详情按钮回工作台开明细 tab
+                onClick={() => (onDetail ? onDetail() : openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') }))}
               >
                 {t('usage.detail')}
               </button>
@@ -140,8 +141,8 @@ function BarRow({ label, value, max }: { label: string; value: number; max: numb
   )
 }
 
-/** 右栏轻量多折线：每 Agent 一条，颜色 = 头像确定色。 */
-function MultiLine({ labels, series, roleOf }: {
+/** 右栏轻量多折线：每 Agent 一条，颜色 = 头像确定色。（票 17：顶栏 sparkline 复用） */
+export function MultiLine({ labels, series, roleOf }: {
   labels: string[]
   series: { agentId: string; points: number[] }[]
   roleOf: (id?: string | null) => string

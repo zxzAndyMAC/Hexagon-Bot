@@ -6,19 +6,26 @@ import { Avatar } from './Avatar'
 import { UsageTab } from './UsageTab'
 import { bindingFor, formatBinding } from '../keymap'
 import { Icon } from './Icon'
+import { Row } from './Row'
+import { slotLabel } from '../modelpick'
 
 function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | null; status: string } }) {
+  const { t } = useTranslation()
   const openTab = useUiStore((s) => s.openTab)
+  const pv = useUiStore((s) => s.providers)
   return (
-    <div
+    <Row
+      role="listitem"
       style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'center', opacity: m.status === 'sleeping' ? 0.5 : 1, cursor: 'pointer' }}
       onClick={() => openTab({ id: `agent:${m.id}`, kind: 'agent', title: m.role, agentId: m.id, role: m.role })}
     >
       <Avatar agentId={m.id} role={m.role} size={22} />
       <span className={`dot ${m.status === 'active' ? 'on' : 'off'}`} />
       <span>{m.role}</span>
-      <span className="dim3 mono" style={{ fontSize: 10, marginLeft: 'auto' }}>{m.model_slot || '—'}</span>
-    </div>
+      <span className="dim3 mono" style={{ fontSize: 10, marginLeft: 'auto' }}>
+        {slotLabel(m.model_slot, pv, t('agent.dedicatedTag'))}
+      </span>
+    </Row>
   )
 }
 
@@ -65,9 +72,16 @@ export function SidePanel() {
 
       {tab === 'artifacts' && (
         <div style={{ flex: 1, overflowY: 'auto' }}>
+          {/* ui-audit 票 06（P2-14）：空态给一句操作引导，不留纯白板 */}
+          {artifacts.length === 0 && (
+            <div className="dim3" style={{ padding: '14px 12px', fontSize: 11, lineHeight: 1.6 }}>
+              {t('side.noArtifacts')}
+            </div>
+          )}
           {artifacts.map((a) => (
-            <div
+            <Row
               key={a.id}
+              role="listitem"
               style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'baseline', cursor: 'pointer' }}
               onClick={() => openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })}
             >
@@ -75,7 +89,7 @@ export function SidePanel() {
               <span className={`chip ${a.status === 'stamped' ? 'amber' : a.status === 'superseded' ? '' : 'ok'}`} style={{ fontSize: 10, marginLeft: 'auto' }}>
                 {t(`side.${a.status}`, a.status)}
               </span>
-            </div>
+            </Row>
           ))}
         </div>
       )}
@@ -83,6 +97,11 @@ export function SidePanel() {
       {tab === 'team' && (
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
           <div style={{ flex: 1 }}>
+            {team.length === 0 && (
+              <div className="dim3" style={{ padding: '14px 12px', fontSize: 11, lineHeight: 1.6 }}>
+                {t('side.noMembers')}
+              </div>
+            )}
             {team.map((m) => (
               <TeamRow key={m.id} m={m} />
             ))}

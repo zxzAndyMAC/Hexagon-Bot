@@ -172,6 +172,7 @@ impl_error_code!(
     Sqlite,
 );
 impl_error_code!(crate::roles::RoleError, Sqlite, Json, Preset, Db, Io,);
+impl_error_code!(crate::templates::TemplateError, Io, Json, Preset,);
 impl_error_code!(
     crate::setup::SetupError,
     Api,

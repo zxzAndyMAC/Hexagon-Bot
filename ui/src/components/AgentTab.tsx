@@ -1,11 +1,13 @@
 import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type TimelineItem } from '../api'
+import { api, errText, type TimelineItem } from '../api'
 import { useUiStore } from '../store'
 import { CodeBlock, Md } from './Md'
 import { Avatar } from './Avatar'
 import { Icon, type IconName } from './Icon'
 import { RoleEditor } from './RoleEditor'
+import { fmtTime as fmtTimeShared } from '../usage'
+import { toolInputSummary } from '../agentSteps'
 
 type Step = {
   id: number
@@ -69,17 +71,15 @@ const TOOL_ICON: Record<string, IconName> = {
   'fs.list': 'folder', 'fs.search': 'list', bash: 'tool',
 }
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-}
+// 票 14：fmtTime 收敛到 usage.ts（Intl 本地语序）；本页要秒 → withSeconds。
+const fmtTime = (iso: string) => fmtTimeShared(iso, true)
+
+
 
 /** Agent 活动视图：头卡 + 执行链路（步骤按序，可展开看 payload）。 */
 export function AgentTab({ agentId }: { agentId: string }) {
   const { t } = useTranslation()
-  const { team, timeline, invalidate, openTab } = useUiStore()
+  const { team, timeline, invalidate, openTab, pushToast } = useUiStore()
   const member = team.find((m) => m.id === agentId)
   const fileRef = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
@@ -111,7 +111,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
           icon: TOOL_ICON[tool] ?? 'tool',
           tone: 'var(--text-2)',
           label: t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool }),
-          summary: String(p.path ?? p.input ?? ''),
+          summary: toolInputSummary(p),
           detail: JSON.stringify({ ...p, ...(res ? { result: res.event.payload } : {}) }, null, 2),
           ok: res ? res.event.payload.ok !== false : undefined,
           path: p.path ? String(p.path) : undefined,
@@ -161,10 +161,21 @@ export function AgentTab({ agentId }: { agentId: string }) {
           onChange={(e) => {
             const f = e.target.files?.[0]
             if (!f) return
+            // ui-audit 票 04（P1-6）：>2MB 本地拒绝不发请求（data URL
+            // 会膨胀 ~4/3，2MB 源图 ≈ 2.7MB payload）；上传失败走 toast。
+            if (f.size > 2 * 1024 * 1024) {
+              pushToast(t('agent.avatarTooBig'), 'err')
+              e.target.value = ''
+              return
+            }
             const r = new FileReader()
             r.onload = async () => {
-              await api.setAgentAvatar(agentId, String(r.result))
-              await invalidate('team')
+              try {
+                await api.setAgentAvatar(agentId, String(r.result))
+                await invalidate('team')
+              } catch (err) {
+                pushToast(errText(err), 'err')
+              }
             }
             r.readAsDataURL(f)
             e.target.value = ''
@@ -185,7 +196,10 @@ export function AgentTab({ agentId }: { agentId: string }) {
         <div style={{ flex: 1 }} />
         <button
           className={`btn ${sleeping ? 'primary' : ''}`}
-          onClick={async () => { await api.setAgentSleeping(agentId, !sleeping); await invalidate('team') }}
+          onClick={async () => {
+            try { await api.setAgentSleeping(agentId, !sleeping); await invalidate('team') }
+            catch (err) { pushToast(errText(err), 'err') }
+          }}
         >
           {sleeping ? t('agent.wake') : t('agent.sleep')}
         </button>

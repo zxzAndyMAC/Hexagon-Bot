@@ -9,8 +9,8 @@ import { api, type UsageBucket } from '../api'
 import { useUiStore } from '../store'
 import { agentColor } from '../colors'
 import {
-  capReached, centsToMc, fmtTok, fmtYuan,
-  groupTokens, parseLimitInput, perAgentSeries, tokenTypeSeries,
+  capReached, centsToMc, daysAgo, fmtTok, fmtYuan,
+  groupTokens, parseLimitInput, perAgentSeries, tokenTypeSeries, utcMonthRange,
 } from '../usage'
 import { Icon, type IconName } from './Icon'
 
@@ -28,9 +28,7 @@ interface Range {
   preset: string // 'today'|'yesterday'|'7d'|'14d'|'30d'|'month'|'lastMonth'|'all'|'custom'
 }
 
-const isoDay = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 864e5))
+// 票 14：isoDay/daysAgo/utcMonthRange 收敛到 usage.ts（UTC 口径，见彼处注释）。
 
 export function UsageDetailTab() {
   const { t } = useTranslation()
@@ -298,16 +296,8 @@ function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) =
     ['7d', () => ({ from: daysAgo(6), to: daysAgo(0), preset: '7d' })],
     ['14d', () => ({ from: daysAgo(13), to: daysAgo(0), preset: '14d' })],
     ['30d', () => ({ from: daysAgo(29), to: daysAgo(0), preset: '30d' })],
-    ['month', () => {
-      const d = new Date()
-      return { from: isoDay(new Date(d.getFullYear(), d.getMonth(), 1)), to: daysAgo(0), preset: 'month' }
-    }],
-    ['lastMonth', () => {
-      const d = new Date()
-      const first = new Date(d.getFullYear(), d.getMonth() - 1, 1)
-      const last = new Date(d.getFullYear(), d.getMonth(), 0)
-      return { from: isoDay(first), to: isoDay(last), preset: 'lastMonth' }
-    }],
+    ['month', () => ({ from: utcMonthRange(0)[0], to: daysAgo(0), preset: 'month' })],
+    ['lastMonth', () => { const [f, l] = utcMonthRange(-1); return { from: f, to: l, preset: 'lastMonth' } }],
     ['all', () => ({ from: null, to: null, preset: 'all' })],
   ]
 

@@ -28,6 +28,69 @@ pub fn parse_tokens(body: &str) -> Vec<MessageToken> {
     out
 }
 
+/// composer `#` 路径补全（ui-audit-2 票 09）：仓根的有界遍历 +
+/// 子串匹配，返回 ≤ limit 条相对路径（目录带尾 `/`）。
+/// 边界：不越仓根（symlink 不跟随）、跳高噪目录、访问总量封顶——
+/// 大仓上补全不拖 UI；权限/隐藏语义不管（这是补全提示不是授权）。
+pub fn repo_paths(repo_root: &std::path::Path, query: &str, limit: usize) -> Vec<String> {
+    const VISIT_CAP: usize = 20_000; // 遍历总量保险丝
+    const SKIP: &[&str] = &[
+        ".git",
+        "node_modules",
+        "target",
+        ".hexagon",
+        "dist",
+        "build",
+        ".next",
+        "__pycache__",
+    ];
+    let q = query.trim_start_matches('#').to_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    let mut visited = 0usize;
+    // BFS：浅层路径先返回——补全列表要的是「src/」先于「src/deep/nested/x」
+    let mut dirs = std::collections::VecDeque::from([repo_root.to_path_buf()]);
+    while let Some(dir) = dirs.pop_front() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut names: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        names.sort_by_key(|e| e.file_name());
+        for e in names {
+            visited += 1;
+            if visited > VISIT_CAP || out.len() >= limit {
+                return out;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') && name != ".github" {
+                continue; // 隐藏目录默认跳过（.github 例外：workflow 常被引）
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_symlink() {
+                continue; // 不跟符号链接——防环与越仓根
+            }
+            let rel = e
+                .path()
+                .strip_prefix(repo_root)
+                .unwrap_or(&e.path())
+                .to_string_lossy()
+                .to_string();
+            if ft.is_dir() {
+                if SKIP.contains(&name.as_str()) {
+                    continue;
+                }
+                let d = format!("{rel}/");
+                if q.is_empty() || d.to_lowercase().contains(&q) {
+                    out.push(d);
+                }
+                dirs.push_back(e.path());
+            } else if q.is_empty() || rel.to_lowercase().contains(&q) {
+                out.push(rel);
+            }
+        }
+    }
+    out
+}
+
 /// 回合期旁路写入（turn-streaming 票 04/05）：dispatch 持 wb 锁跑回合时，
 /// owner 消息经独立的第二条 Db 连接落库——不然干预永远排在回合后面，
 /// steering 与流中叫停只剩空壳。指令只解析不分发，分发归调用方选通道
@@ -257,6 +320,75 @@ mod tests {
             .query_row("SELECT body FROM messages WHERE id=?1", [id], |r| r.get(0))
             .unwrap();
         assert_eq!(body, "落库");
+    }
+
+    #[test]
+    fn repo_paths_lists_dirs_and_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src/nested")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "").unwrap();
+        std::fs::write(root.join("src/nested/deep.rs"), "").unwrap();
+        std::fs::write(root.join("AGENTS.md"), "").unwrap();
+        let got = repo_paths(root, "", 60);
+        assert!(got.contains(&"src/".to_string()));
+        assert!(got.contains(&"src/main.rs".to_string()));
+        assert!(got.contains(&"src/nested/".to_string()));
+        assert!(got.contains(&"src/nested/deep.rs".to_string()));
+        assert!(got.contains(&"AGENTS.md".to_string()));
+        // BFS：浅层先返回
+        let pos = |p: &str| got.iter().position(|x| x == p).unwrap();
+        assert!(pos("src/") < pos("src/nested/"));
+    }
+
+    #[test]
+    fn repo_paths_skips_noise_and_honors_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for d in [
+            "node_modules/pkg",
+            ".git/objects",
+            ".secret",
+            "target/debug",
+        ] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+            std::fs::write(root.join(d).join("x.rs"), "").unwrap();
+        }
+        std::fs::write(root.join("keep.rs"), "").unwrap();
+        let got = repo_paths(root, "", 60);
+        assert_eq!(got, vec!["keep.rs".to_string()]);
+        // limit 截断
+        std::fs::write(root.join("a.rs"), "").unwrap();
+        std::fs::write(root.join("b.rs"), "").unwrap();
+        let capped = repo_paths(root, "", 2);
+        assert_eq!(capped.len(), 2);
+    }
+
+    #[test]
+    fn repo_paths_query_matches_case_insensitive_substring() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("Src")).unwrap();
+        std::fs::write(root.join("Src/Main.RS"), "").unwrap();
+        std::fs::write(root.join("README"), "").unwrap();
+        let got = repo_paths(root, "main", 60);
+        assert_eq!(got, vec!["Src/Main.RS".to_string()]);
+        // 前导 # 容忍（composer 传入可能带井号）
+        let got2 = repo_paths(root, "#main", 60);
+        assert_eq!(got2, got);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repo_paths_does_not_follow_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+        std::fs::write(root.join("ok.rs"), "").unwrap();
+        let got = repo_paths(root, "", 60);
+        assert_eq!(got, vec!["ok.rs".to_string()]); // 逃逸链接既不列也不穿透
     }
 
     #[test]

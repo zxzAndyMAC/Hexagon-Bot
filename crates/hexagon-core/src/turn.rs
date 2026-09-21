@@ -315,7 +315,10 @@ fn run_turn_impl(
             .stage_run_id
             .clone()
             .unwrap_or_else(|| ctx.agent_id.clone());
-        let muted = crate::skills::SkillMutes::load(&ctx.repo_root).muted_set(&session);
+        // ADR 0057：mute 判定 = 会话集 ∪ 遗留 "*" ∪ 全局文件
+        // （~/.hexagon/skill-mutes.json）；*" 行是旧版全局开关的落点，
+        // 保留读以不丢存量开关，新写一律进全局文件。
+        let muted = crate::skills::effective_muted(&ctx.repo_root, &session);
         let loader = crate::skills::SkillLoader::new(crate::skills::skill_dirs(&ctx.repo_root));
         if let Some(text) = loader.catalog_text(&muted) {
             layers.push(PromptLayer::new(LayerLevel::AgentsMd, text));

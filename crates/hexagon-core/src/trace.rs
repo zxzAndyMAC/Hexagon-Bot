@@ -43,6 +43,8 @@ pub enum EventKind {
     PermissionAllowed,
     PermissionDenied,
     PermissionShapeRemembered,
+    // ui-audit-2 票 03：已记规则的撤销也留痕——审计面不能自身是盲区。
+    PermissionRuleRevoked,
     Stamped,
     StampRejected,
     Escalated,

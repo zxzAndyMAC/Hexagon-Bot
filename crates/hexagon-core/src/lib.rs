@@ -37,6 +37,7 @@ pub mod roles;
 pub mod scenario;
 pub mod setup;
 pub mod skills;
+pub mod templates;
 pub mod tools;
 pub mod trace;
 pub mod turn;

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import './i18n'
 import { TopBar } from './components/TopBar'
 import { StageBar } from './components/StageBar'
@@ -20,10 +21,19 @@ import { PendingCards } from './components/PendingCards'
 import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
+import { runStageOp } from './stageops'
 
 export default function App() {
+  const { t } = useTranslation()
   const refresh = useUiStore((s) => s.refresh)
   const refreshFast = useUiStore((s) => s.refreshFast)
+  const pending = useUiStore((s) => s.pending)
+  const timeline = useUiStore((s) => s.timeline)
+  const pendingH = useUiStore((s) => s.pendingH)
+  const pendingCollapsed = useUiStore((s) => s.pendingCollapsed)
+  const setPendingH = useUiStore((s) => s.setPendingH)
+  const setPendingCollapsed = useUiStore((s) => s.setPendingCollapsed)
+  const zoneRef = useRef<HTMLDivElement>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
@@ -33,6 +43,12 @@ export default function App() {
   useEffect(() => {
     api.projectOpen().then(setProjectOpen)
   }, [])
+
+  // ui-audit 票 01/02：界面作用域同步进 store——裁决快捷键据此放行/拦截。
+  // palette 可在设置页之上再开一层，优先级 palette > settings。
+  useEffect(() => {
+    useUiStore.getState().setModalScope(paletteOpen ? 'palette' : settingsOpen ? 'settings' : 'workbench')
+  }, [settingsOpen, paletteOpen])
 
   useEffect(() => {
     if (projectOpen !== true) return
@@ -52,6 +68,27 @@ export default function App() {
       un = u
     })
     return () => un?.()
+  }, [projectOpen])
+
+  // 票 16（方向卡 1）：失焦自动值守——blur 持续 60s 才 owner_away
+  //（短抖动不误触发），回焦即 owner_back（markBack 内有 away 守卫）。
+  useEffect(() => {
+    if (projectOpen !== true) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onBlur = () => {
+      timer = setTimeout(() => void useUiStore.getState().markAway(), 60_000)
+    }
+    const onFocus = () => {
+      clearTimeout(timer)
+      void useUiStore.getState().markBack()
+    }
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [projectOpen])
 
   useEffect(() => {
@@ -88,13 +125,33 @@ export default function App() {
         s.closeTab(s.activeTab) // timeline tab 在 closeTab 内被拦
         return
       }
+      // ui-audit 票 03：stage 操作绑定（ADR 0056-2）。与裁决键同样
+      // 吃作用域守卫——设置页/palette 打开时不许动阶段。
+      if (useUiStore.getState().modalScope === 'workbench') {
+        if (matches(e, bindingFor('stageRewind'))) { e.preventDefault(); runStageOp('rewind'); return }
+        if (matches(e, bindingFor('stageSkip'))) { e.preventDefault(); runStageOp('skip'); return }
+        if (matches(e, bindingFor('stageStamp'))) { e.preventDefault(); runStageOp('stamp'); return }
+        // 票 12：mod+J 聚焦节点轨（键盘可达性入口）
+        if (matches(e, bindingFor('nodeRail'))) { e.preventDefault(); useUiStore.getState().focusNodeRail(); return }
+      }
       void onKey(e)
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [onKey])
 
-  if (projectOpen === null) return null // 查项目状态中
+  // ui-audit 票 06（P2-14）：冷启动骨架屏——projectOpen 查询期间
+  // 不再渲染纯白窗口（曾被当成崩溃）。
+  if (projectOpen === null) {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+        <span style={{ color: 'var(--accent)', display: 'inline-flex', animation: 'pulse-amber 1.6s infinite' }}>
+          <Icon name="hex" size={30} />
+        </span>
+        <span className="dim3" style={{ fontSize: 12 }}>{t('app.loading')}</span>
+      </div>
+    )
+  }
   if (!projectOpen) {
     return <Launcher onOpen={() => setProjectOpen(true)} />
   }
@@ -102,7 +159,14 @@ export default function App() {
   if (settingsOpen) {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <SettingsPage onBack={() => setSettingsOpen(false)} />
+        <SettingsPage
+          onBack={() => setSettingsOpen(false)}
+          // ui-audit-2 票 05：设置-用量「详情」= 回工作台并开用量明细 tab
+          onOpenUsageDetail={() => {
+            useUiStore.getState().openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') })
+            setSettingsOpen(false)
+          }}
+        />
         {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
       </div>
     )
@@ -117,9 +181,53 @@ export default function App() {
       <StageBar />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 10, padding: '10px 14px' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <div id="pending-zone" style={{ maxHeight: 220, overflowY: 'auto', flexShrink: 0 }}>
+          {/* ui-audit 票 11（P2-11）：待决区高度内容感知——≤2 卡自适应
+              不圈地；积压封顶内滚；时间线近空时放宽上限多露卡。
+              workbench-polish 04（owner）：分隔条可上下拖动手调高度，
+              拖过收拢阈吸顶隐藏（TopBar 待决徽标点回）；手调高度持久化。 */}
+          <div
+            id="pending-zone"
+            ref={zoneRef}
+            style={{
+              display: pendingCollapsed ? 'none' : undefined,
+              height: pendingH ?? undefined,
+              maxHeight: pendingH != null ? 'none' : pending.length <= 2 ? 'max-content' : timeline.length < 20 ? 340 : 220,
+              overflowY: 'auto',
+              flexShrink: 0,
+            }}
+          >
             <PendingCards />
           </div>
+          {pending.length > 0 && (
+            <div
+              className={`zone-splitter${pendingCollapsed ? ' collapsed' : ''}`}
+              title={t('zone.resizeHint')}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                // 收起态下 zone display:none 无盒——锚点改取把手自身顶缘；
+                // grabOff 减手在把手内的偏移，起手不跳变。
+                const handleTop = e.currentTarget.getBoundingClientRect().top
+                const grabOff = e.clientY - handleTop
+                const top = pendingCollapsed || !zoneRef.current
+                  ? handleTop
+                  : zoneRef.current.getBoundingClientRect().top
+                document.body.style.userSelect = 'none'
+                const move = (ev: MouseEvent) => {
+                  const h = ev.clientY - grabOff - top
+                  if (h < 56) { setPendingCollapsed(true); return } // 收拢阈：拖到顶→吸顶
+                  setPendingCollapsed(false)
+                  setPendingH(Math.min(h, window.innerHeight * 0.6))
+                }
+                const up = () => {
+                  document.body.style.userSelect = ''
+                  window.removeEventListener('mousemove', move)
+                  window.removeEventListener('mouseup', up)
+                }
+                window.addEventListener('mousemove', move)
+                window.addEventListener('mouseup', up)
+              }}
+            />
+          )}
           <TabBar />
           <CenterPanes />
           <Composer />
@@ -157,7 +265,9 @@ function CenterPanes() {
   const { tabs, activeTab, splitOpen } = useUiStore()
   const active = tabs.find((t) => t.id === activeTab) ?? tabs[0]
   // 分屏右栏默认给「另一个最近 tab」；本地状态记右栏选中
-  const [splitId, setSplitId] = useState<string | null>(null)
+  // 票 15（P3）：splitId 上移 store——进出设置页后右栏选择保持。
+  const splitId = useUiStore((s) => s.splitId)
+  const setSplitId = useUiStore((s) => s.setSplitId)
   const others = tabs.filter((t) => t.id !== active.id)
   const splitTab = others.find((t) => t.id === splitId) ?? others[others.length - 1] ?? tabs[0]
   return (

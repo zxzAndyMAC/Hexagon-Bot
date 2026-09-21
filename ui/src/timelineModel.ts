@@ -2,7 +2,7 @@
 import type { TimelineItem } from './api'
 import type { IconName } from './components/Icon'
 
-export type Filter = 'all' | 'messages' | 'decisions'
+export type Filter = 'all' | 'messages' | 'decisions' | 'story'
 
 export const DECISION_KINDS = new Set([
   'permission_asked', 'permission_allowed', 'permission_denied', 'permission_shape_remembered',
@@ -20,8 +20,21 @@ const SPECIAL_KINDS = new Set([
   'stage_started', 'return_summary', 'artifact_delivered', 'flag_submitted', 'flag_adjudicated',
 ])
 
+// 高危 system 子类词表（ui-audit 票 05 / ADR 0056-3）：
+// invariant_violation / tool_breaker / context_denied 是需人注意的裁决信号，
+// 折进 ≥3 折叠组会被扫读漏掉。取「提出组外」而非组标红计数——
+// 组外零交互成本可见，红计数仍要求一次点击才看到是哪条违规。
+// 与 trace.rs SYSTEM_SUBKINDS 登记表同步维护。
+export const SYS_HIGH_RISK = new Set(['invariant_violation', 'tool_breaker', 'context_denied'])
+
+const isHighRiskSys = (it: TimelineItem) =>
+  it.event.kind === 'system' && SYS_HIGH_RISK.has(String(it.event.payload?.kind ?? ''))
+
 const isSysItem = (it: TimelineItem) =>
-  !TOOL_KINDS.has(it.event.kind) && !SPECIAL_KINDS.has(it.event.kind) && it.message == null
+  !TOOL_KINDS.has(it.event.kind) &&
+  !SPECIAL_KINDS.has(it.event.kind) &&
+  it.message == null &&
+  !isHighRiskSys(it)
 
 const SYS_GROUP_MIN = 3
 
@@ -29,8 +42,34 @@ export type Row =
   | { type: 'item'; item: TimelineItem; idx: number }
   | { type: 'toolgroup'; items: TimelineItem[]; idx: number }
   | { type: 'sysgroup'; items: TimelineItem[]; idx: number }
+  // 票 18（方向卡 3）：story 档的回合章节分隔——turn_started 事件升格为章节行。
+  | { type: 'chapter'; idx: number; n: number; agentId: string | null; stage: string }
 
 export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
+  // 票 18（方向卡 3）：story 档——慢读复盘面。tool/sys 行全移除
+  //（05 的高危子类豁免保留：invariant_violation 等仍可见），
+  // turn_started 在消息流间插章节分隔。
+  if (filter === 'story') {
+    const rows: Row[] = []
+    let n = 0
+    for (const it of timeline) {
+      if (it.event.kind === 'turn_started') {
+        n++
+        rows.push({
+          type: 'chapter',
+          idx: it.event.id,
+          n,
+          agentId: it.event.agent_id,
+          stage: String(it.event.payload?.stage ?? ''),
+        })
+        continue
+      }
+      if (it.message != null || isHighRiskSys(it) || DECISION_KINDS.has(it.event.kind)) {
+        rows.push({ type: 'item', item: it, idx: it.event.id })
+      }
+    }
+    return rows
+  }
   const vis = timeline.filter((it) =>
     filter === 'all' ? true
     : filter === 'messages' ? it.message != null

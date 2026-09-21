@@ -701,6 +701,82 @@ pub fn persist_rule(
     Ok(true)
 }
 
+/// 已记权限规则行（设置-权限分区审计面，ui-audit-2 票 03）。
+/// effect 一并下发：allow 与项目级 deny 规则同表陈列。
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct PermissionRuleRow {
+    pub id: String,
+    pub tool: String,
+    pub shape: String,
+    pub domain: Option<String>,
+    pub effect: String,
+    pub scope: String,
+    pub created_at: String,
+}
+
+/// 审计面读路径：只读 permission_rules，属主仍是本模块。
+pub fn list_rules(db: &Db, project_id: &str) -> Result<Vec<PermissionRuleRow>, rusqlite::Error> {
+    db.conn()
+        .prepare(
+            "SELECT id, tool, shape, domain, effect, scope, created_at
+             FROM permission_rules WHERE project_id=?1
+             ORDER BY created_at DESC, id DESC",
+        )?
+        .query_map([project_id], |r| {
+            Ok(PermissionRuleRow {
+                id: r.get(0)?,
+                tool: r.get(1)?,
+                shape: r.get(2)?,
+                domain: r.get(3)?,
+                effect: r.get(4)?,
+                scope: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        })?
+        .collect()
+}
+
+/// 撤销已记规则（ui-audit-2 票 03）：删行 + 落 permission_rule_revoked 事件。
+/// 「记住」可撤销是 persist_rule 的存在前提；撤销本身也进审计轨——
+/// 否则审计面自己就是盲区。返回 false = 规则不存在或不属本项目
+/// （不冒充删了；调用方据此报错而非静默成功）。
+pub fn revoke_rule(
+    db: &Db,
+    project_id: &str,
+    rule_id: &str,
+) -> Result<bool, crate::trace::TraceError> {
+    use rusqlite::OptionalExtension;
+    let row: Option<(String, String, String)> = db
+        .conn()
+        .query_row(
+            "SELECT tool, shape, scope FROM permission_rules WHERE id=?1 AND project_id=?2",
+            rusqlite::params![rule_id, project_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((tool, shape, scope)) = row else {
+        return Ok(false);
+    };
+    db.conn().execute(
+        "DELETE FROM permission_rules WHERE id=?1 AND project_id=?2",
+        rusqlite::params![rule_id, project_id],
+    )?;
+    db.append_event(
+        project_id,
+        crate::trace::EventKind::PermissionRuleRevoked,
+        serde_json::json!({
+            "rule_id": rule_id,
+            "tool": tool,
+            "shape": shape,
+            "scope": scope,
+        }),
+        None,
+        None,
+    )?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,6 +815,49 @@ mod tests {
 
     fn bash_ctx(db: &Db, ctx: &ToolContext, cmd: &str) -> Decision {
         evaluate(db, ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap()
+    }
+
+    /// ui-audit-2 票 03：审计面读+撤销。撤销留 permission_rule_revoked 事件；
+    /// 撤销后同形状请求回落必问（记忆层不再命中）。
+    #[test]
+    fn revoke_rule_roundtrip() {
+        let (db, ctx, _d) = setup();
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope)
+                 VALUES ('pr1','p1','bash','npm *','allow','project')",
+                [],
+            )
+            .unwrap();
+        let rules = list_rules(&db, "p1").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].shape, "npm *");
+        assert_eq!(rules[0].effect, "allow");
+
+        // 撤销前命中记忆 allow；撤销后回必问
+        assert!(matches!(
+            bash_ctx(&db, &ctx, "npm test"),
+            Decision::Allow { .. }
+        ));
+        assert!(revoke_rule(&db, "p1", "pr1").unwrap());
+        assert!(matches!(
+            bash_ctx(&db, &ctx, "npm test"),
+            Decision::Ask { .. }
+        ));
+        // 事件留痕
+        let kind: String = db
+            .conn()
+            .query_row(
+                "SELECT kind FROM events WHERE kind='permission_rule_revoked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "permission_rule_revoked");
+        // 不存在的规则：false，不冒充删除
+        assert!(!revoke_rule(&db, "p1", "prX").unwrap());
+        // 别人的项目：不可越界删
+        assert!(!revoke_rule(&db, "p2", "pr1").unwrap());
     }
 
     #[test]

@@ -66,6 +66,45 @@
   --popover: #16181b;
 }
 
+/* 票 21（方向卡 6）：「夜航」第四主题——比 dark 再降一档亮度，
+   凌晨值守不刺眼。口径：bg 压到 #040507；text-3 透明度上调
+   （0.48→0.56）补偿低亮度下的可读性；accent 提亮 ~10%
+   （#e8a33d→#f2b356）保持待决琥珀在黑底上的可辨度；
+   sysline/sysrow 透明度 0.65 降权（它们是背景节奏，不是内容）。 */
+[data-theme='night'] {
+  --bg: #040507;
+  --bg-1: rgba(255, 255, 255, 0.015);
+  --bg-2: rgba(255, 255, 255, 0.03);
+  --bg-3: rgba(255, 255, 255, 0.04);
+  --border: rgba(255, 255, 255, 0.045);
+  --border-strong: rgba(255, 255, 255, 0.09);
+  --text: #d8dade;
+  --text-2: rgba(255, 255, 255, 0.52);
+  --text-3: rgba(255, 255, 255, 0.56);
+  --accent: #f2b356;
+  --accent-soft: rgba(242, 179, 86, 0.10);
+  --accent-border: rgba(242, 179, 86, 0.35);
+  --ok: #4cae6a;
+  --ok-soft: rgba(76, 174, 106, 0.12);
+  --ok-border: rgba(76, 174, 106, 0.35);
+  --err: #d9554c;
+  --err-soft: rgba(217, 85, 76, 0.10);
+  --err-border: rgba(217, 85, 76, 0.35);
+  --flag: #9a82e0;
+  --flag-soft: rgba(154, 130, 224, 0.10);
+  --flag-border: rgba(154, 130, 224, 0.35);
+  --warn: #6ba5f8;
+  --warn-soft: rgba(107, 165, 248, 0.12);
+  --warn-border: rgba(107, 165, 248, 0.35);
+  --on-accent: #1a1b1e;
+  --popover: #101215;
+}
+
+[data-theme='night'] .sysrow,
+[data-theme='night'] .sysline {
+  opacity: 0.65;
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
@@ -113,6 +152,9 @@ body {
 .accent { color: var(--accent); }
 
 .panel { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-lg); }
+/* 设计规范（workbench-polish 01，owner 多次回归报告）：浮出层一律 .panel-float / --popover 不透明底。
+   .panel 的 --bg-1 在暗色主题是半透明（rgba .02），叠在内容上透字——下拉/悬浮卡/抽屉禁用裸 .panel。 */
+.panel-float { background: var(--popover); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
 .row-line { border-bottom: 1px solid var(--border); }
 .sys-row { color: var(--text-3); font-size: 12px; }
 
@@ -126,6 +168,10 @@ body {
 .chip.err { color: var(--err); border-color: var(--err-border); background: var(--err-soft); }
 .chip.flag { color: var(--flag); border-color: var(--flag-border); background: var(--flag-soft); }
 .chip.warn { color: var(--warn); border-color: var(--warn-border); background: var(--warn-soft); }
+/* 可交互 chip（workbench-polish 02，owner 报告：顶栏四枚 chip 同貌，看不出谁能点）。
+   规范：chip=静态标签；chip-btn=可点/可悬浮——加强描边 + pointer + hover 填充。 */
+.chip-btn { cursor: pointer; border-color: var(--border-strong); }
+.chip-btn:hover { background: var(--bg-3); color: var(--text); }
 
 button.btn {
   font: inherit; color: var(--text-2); background: var(--bg-2);
@@ -137,6 +183,24 @@ button.btn.primary { color: var(--on-accent); background: var(--accent); border-
 button.btn.primary.danger { color: #fff; background: var(--err); }
 button.btn.danger { color: var(--err); }
 button.btn:disabled { opacity: 0.4; cursor: default; }
+
+/* 文本输入原语：.input 此前是死 class（无规则，搜索框裸奔）——settings-density 01 补上 token 化样式。
+   ui-polish-2 ③：底改 --bg（暗色主题比 panel 的半透明 bg-1 深，呈凹槽井感）+ border-strong——
+   owner 报告 key 框「和底色融为一体，聚焦才知道是输入框」。display:block+width:100% 收进父栏宽。 */
+.input {
+  display: block; width: 100%; box-sizing: border-box;
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  padding: 5px 9px; color: var(--text);
+}
+.input:focus { border-color: var(--accent); outline: none; }
+
+/* 设置页密度档（.scratch/settings-density 01，owner 裁决 2026-09）：工作台保持紧凑密度，
+   放大只作用设置页——统一挂 .settings-scope 作用域，禁止把下列尺寸抬到全局原语上。
+   dim3/chip 用 !important 是因为各分区大量 inline fontSize:10-11，逐点改不如在档层收敛。 */
+.settings-scope .input { padding: 7px 10px; font-size: 13px; }
+.settings-scope button.btn { padding: 5px 13px; }
+.settings-scope .chip { font-size: 11px !important; padding: 2px 9px; }
+.settings-scope .dim3 { font-size: 12px !important; }
 
 /* 表单原语：checkbox/radio 全局 token 化（无需 class）。对号吃 --on-accent，与 primary 钮同一反向前景逻辑 */
 input[type='checkbox'], input[type='radio'] {
@@ -171,6 +235,24 @@ input[type='checkbox']:disabled, input[type='radio']:disabled { opacity: .4; cur
 .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .dot.on { background: var(--ok); }
 .dot.off { background: transparent; border: 1px solid var(--text-3); box-sizing: border-box; }
+.dot.warn { background: var(--accent); } /* ui-audit-2 票 10：供应商行「缺 key」态 */
+
+/* settings-3col 票 01：Cherry 式药丸启停开关（行内 toggle，全 token） */
+.switch {
+  appearance: none; -webkit-appearance: none;
+  width: 26px; height: 15px; border-radius: 999px; flex-shrink: 0;
+  border: 1px solid var(--border-strong); background: var(--bg-2);
+  position: relative; cursor: pointer; margin: 0; padding: 0;
+  transition: background .12s, border-color .12s;
+}
+.switch::after {
+  content: ''; position: absolute; top: 1.5px; left: 2px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--text-3); transition: left .12s, background .12s;
+}
+.switch:checked { background: var(--accent); border-color: var(--accent); }
+.switch:checked::after { left: 12px; background: var(--on-accent); }
+.switch:disabled { opacity: .4; cursor: default; }
 
 input, textarea { font: inherit; color: var(--text); }
 ::placeholder { color: var(--text-3); }
@@ -185,8 +267,21 @@ input, textarea { font: inherit; color: var(--text); }
 .msg-body {
   max-width: 78%; padding: 7px 12px; border-radius: var(--r-xl);
   background: var(--bg-1); border: 1px solid var(--border);
-  max-height: 240px; overflow-y: auto; font-size: 13px;
+  font-size: 13px;
 }
+/* ui-audit 票 11（P3-23）：超高消息不再内滚（滚动藏内容看不见底部）——
+   clamped 态限高 + 底部渐隐 mask 示意「还有」，配 expand/collapse 文字钮。 */
+.msg-body.clamped {
+  max-height: 240px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent);
+}
+.msg-toggle {
+  display: block; margin: 2px 0 4px; padding: 0 2px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-3); font-size: 11px;
+}
+.msg-toggle:hover { color: var(--text); }
 .msg-body p { margin: 4px 0; }
 
 /* markdown (Md) 排版：表格 / 代码 / 列表 / 标题 / 引用 */
@@ -220,6 +315,42 @@ input, textarea { font: inherit; color: var(--text); }
 }
 .flash-row { animation: flash-row 1.4s ease-out; }
 .flash-zone { outline: 2px solid var(--accent-border); outline-offset: -2px; border-radius: var(--r-lg); transition: outline .2s; }
+/* workbench-polish 03（owner 报告）：kbd-target 内描边曾给顶卡画 2px accent 环，
+   与卡自身 1px accent-border 叠出「双框」，被读作边框渲染 bug——已移除。
+   键盘目标提示不缺位：顶卡可视时主按钮 approveTip（⌘↵）标出；滚出视口时 .kbd-strip 接管。 */
+/* workbench-polish 04：待决区/内容区拖拽分隔条——上下拖调高度，拖过阈吸顶收起。
+   常态隐形（不占视觉），hover/拖拽显 accent 抓手线；收起态留 border-strong 细线作可拖回提示。 */
+.zone-splitter { position: relative; height: 7px; flex-shrink: 0; cursor: row-resize; }
+.zone-splitter::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px;
+  transform: translateY(-50%); border-radius: 1px; background: transparent; transition: background .12s;
+}
+.zone-splitter:hover::after, .zone-splitter:active::after { background: var(--accent-border); }
+.zone-splitter.collapsed::after { background: var(--border-strong); }
+.zone-splitter.collapsed:hover::after { background: var(--accent-border); }
+
+/* 顶卡滚出视口时的目标提示条（sticky 于待决区顶缘） */
+.kbd-strip {
+  position: sticky; top: 0; z-index: 6;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 14px; font-size: 11px; color: var(--accent);
+  background: var(--popover); border-bottom: 1px solid var(--accent-border);
+}
+
+/* toast 出口（ui-audit 票 01/04）：composer 上方浮层，点击可提前关闭 */
+.toast-host {
+  position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%);
+  z-index: 90; display: flex; flex-direction: column; gap: 6px; align-items: center;
+  pointer-events: none;
+}
+.toast {
+  font: inherit; font-size: 12px; pointer-events: auto; cursor: pointer;
+  padding: 7px 14px; border-radius: var(--r-pill); max-width: min(560px, 80vw);
+  background: var(--popover); color: var(--text); border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px rgba(0,0,0,.28);
+}
+.toast.err { border-color: var(--err-border); color: var(--err); }
+.toast.ok { border-color: var(--ok-border); color: var(--ok); }
 
 @keyframes pulse-amber {
   0%, 100% { opacity: 1; }

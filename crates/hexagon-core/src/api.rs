@@ -113,6 +113,9 @@ pub struct Workbench {
     /// Send 约束在这里（hook 要跨线程 emit），turn 层的 DeltaSink 本身无此要求。
     /// 注意：锁跨越整个回合，hook 内回调 Workbench 会死锁。
     delta_hook: Mutex<Option<TurnDeltaHook>>,
+    /// MCP 宿主（ui-audit-2 票 06）：持全部服务子进程，Drop 时全停。
+    /// `.hexagon/mcp.json` 缺席/为空 → None（MCP 是可选项）。
+    mcp_host: Option<crate::mcp::McpHost>,
 }
 
 impl Workbench {
@@ -146,15 +149,26 @@ impl Workbench {
         if interrupted > 0 {
             log::warn!("recovered {interrupted} interrupted run(s)");
         }
+        // ui-audit-2 票 06：MCP 端到端——`.hexagon/mcp.json` 配置的服务
+        // 在 open 时 spawn+握手，工具注册进统一管线（权限照常求值，
+        // grants 表 mcp 授权闸门在 evaluate L0）。
+        let mut registry = Registry::builtin();
+        let specs = crate::mcp::load_specs(&dir);
+        let mcp_host = if specs.is_empty() {
+            None
+        } else {
+            Some(crate::mcp::McpHost::start(specs, &mut registry))
+        };
         Ok(Self {
             db,
-            registry: Registry::builtin(),
+            registry,
             providers: HashMap::new(),
             creds: Arc::new(crate::credentials::OsKeychain),
             project_id,
             repo_root: dir,
             pack,
             delta_hook: Mutex::new(None),
+            mcp_host,
         })
     }
 
@@ -206,15 +220,25 @@ impl Workbench {
         if let Some(p) = &pack {
             p.pin(dir)?;
         }
+        // for_test 同样接 MCP（票 06）——测试仓写 .hexagon/mcp.json
+        // 即得端到端覆盖；无配置则 None。
+        let mut registry = Registry::builtin();
+        let specs = crate::mcp::load_specs(dir);
+        let mcp_host = if specs.is_empty() {
+            None
+        } else {
+            Some(crate::mcp::McpHost::start(specs, &mut registry))
+        };
         Ok(Self {
             db,
-            registry: Registry::builtin(),
+            registry,
             providers: HashMap::new(),
             creds: Arc::new(crate::credentials::MemoryStore::default()),
             project_id: crate::PROJECT_ID.into(),
             repo_root: dir.to_path_buf(),
             pack,
             delta_hook: Mutex::new(None),
+            mcp_host,
         })
     }
 
@@ -226,6 +250,15 @@ impl Workbench {
 
     pub fn register_provider(&mut self, slot: &str, p: Arc<dyn ModelProvider>) {
         self.providers.insert(slot.into(), p);
+    }
+
+    /// MCP 服务实况（ui-audit-2 票 06）：每配置服务一行（含失败原因）。
+    /// 无 `.hexagon/mcp.json` → 空表。
+    pub fn mcp_services(&self) -> Vec<crate::mcp::McpServiceRow> {
+        self.mcp_host
+            .as_ref()
+            .map(|h| h.status().to_vec())
+            .unwrap_or_default()
     }
 
     /// 测试/桌面端注入凭据实现（默认内存库；生产壳换成 OsKeychain）。

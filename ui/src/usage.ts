@@ -1,12 +1,45 @@
 import type { UsageBucket, UsageRow } from './api'
+import i18n from './i18n'
 
 /** 账本单位：成本以 millicents 计，上限以 cents 计。1 ¥ = 100 cents = 100_000 mc。 */
 export const MC_PER_YUAN = 100000
 export const MC_PER_CENT = 1000
 export const CENTS_PER_YUAN = 100
 
-export const fmtYuan = (mc?: number | null) =>
-  mc == null ? '—' : `¥${(mc / MC_PER_YUAN).toFixed(2)}`
+// ui-audit 票 14（P3-18）：金额固定 CNY 口径（owner 裁决：记账即人民币，
+// 多币种可配置化将来单独立项）。Intl currency 让 en/ja 渲染 CN¥，
+// 不再与日元 ¥ 混淆；ja 的 JPY 是 ¥、CNY 是 CN¥，歧义即消。
+export const fmtYuan = (mc?: number | null, loc?: string) =>
+  mc == null
+    ? '—'
+    : new Intl.NumberFormat(loc ?? i18n.language, { style: 'currency', currency: 'CNY' }).format(mc / MC_PER_YUAN)
+
+// 票 14（P3-18）：Intl 本地语序——en/ja 不再 MM/DD 美式拼接。
+// withSeconds=false → 日期+时分（时间线行）；true → 时分秒（agent 链路步）。
+export const fmtTime = (iso: string, withSeconds = false, loc?: string): string => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const o: Intl.DateTimeFormatOptions = withSeconds
+    ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }
+    : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+  return new Intl.DateTimeFormat(loc ?? i18n.language, o).format(d)
+}
+
+// 票 14（P3-18）：usage 区间日界对齐后端 bucket 的 UTC 口径
+//（strftime 无 localtime = UTC）。裁决：改前端而非后端加 localtime——
+// events/usage bucket 落库即 UTC，后端切 localtime 会把同一物理日
+// 拆进不同桶、历史数据失真；代价是 UTC+8 用户「今天」比本地日历
+// 早 8h 翻页，属可预期口径差，此处留档。
+export const isoDay = (d: Date) => d.toISOString().slice(0, 10)
+export const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 864e5))
+
+/** UTC 月份区间：offset=0 本月首日~今日由调用方拼；offset=-1 上月首~末日。 */
+export const utcMonthRange = (offset: 0 | -1): [string, string] => {
+  const d = new Date()
+  const y = d.getUTCFullYear()
+  const m = d.getUTCMonth() + offset
+  return [isoDay(new Date(Date.UTC(y, m, 1))), isoDay(new Date(Date.UTC(y, m + 1, 0)))]
+}
 
 export const centsToMc = (cents: number) => cents * MC_PER_CENT
 

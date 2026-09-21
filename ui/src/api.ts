@@ -28,12 +28,21 @@ import type { PublishOutcome } from './gen/PublishOutcome'
 import type { FlagOutcome } from './gen/FlagOutcome'
 import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
 import type { ReturnSummary } from './gen/ReturnSummary'
+import type { PermissionRuleRow } from './gen/PermissionRuleRow'
+import type { SkillRow } from './gen/SkillRow'
+import type { McpServiceRow } from './gen/McpServiceRow'
 import type { ProposalRow } from './gen/ProposalRow'
 import type { ProjectInfo } from './gen/ProjectInfo'
 import type { RecentProject } from './gen/RecentProject'
 import type { TurnOutcome } from './gen/TurnOutcome'
 import type { DirReport } from './gen/DirReport'
 import type { RoleDef } from './gen/RoleDef'
+import type { RoleTemplate } from './gen/RoleTemplate'
+import type { ExtSkillRow } from './gen/ExtSkillRow'
+import type { ImportReport } from './gen/ImportReport'
+import type { McpEntryRow } from './gen/McpEntryRow'
+import type { McpSpec } from './gen/McpSpec'
+import type { ExtMcpRow } from './gen/ExtMcpRow'
 import type { PackDef } from './gen/PackDef'
 import type { StageDef } from './gen/StageDef'
 import type { AgentPatch } from './gen/AgentPatch'
@@ -61,8 +70,10 @@ export type {
   CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PublishOutcome,
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
+  PermissionRuleRow, SkillRow, McpServiceRow,
   AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
   CreateProjectOpts, Event, EventKind, MessageRow, MessageToken, ExportFilter,
+  RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
 }
 
 
@@ -124,6 +135,8 @@ export const api = {
   timeline: (after?: number, limit = 500) =>
     call<TimelineItem[]>('timeline', { after: after ?? null, limit }),
   sendMessage: (body: string) => call<number>('send_message', { body }),
+  // ui-audit-2 票 09：composer # 路径补全（仓根有界遍历，≤60 条）
+  repoPaths: (query: string) => call<string[]>('repo_paths', { query }),
   answerPermission: (questionId: string, allow: boolean, rememberShape?: string, scope = 'activation') =>
     call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
   advance: () => call<StageAction>('advance'),
@@ -145,6 +158,34 @@ export const api = {
   team: () => call<TeamRow[]>('team'),
   stageStatus: () => call<StageRow[]>('stage_status'),
   pendingQuestions: () => call<PendingQuestion[]>('pending_questions'),
+  // ui-audit-2 票 03：已记权限规则审计面
+  permissionRules: () => call<PermissionRuleRow[]>('permission_rules'),
+  revokePermissionRule: (ruleId: string) =>
+    call<void>('revoke_permission_rule', { ruleId }),
+  // ui-audit-2 票 04：技能清单 + 全局静音（"*" 会话键）
+  listSkills: () => call<SkillRow[]>('list_skills'),
+  // global-config 票 03：技能包详情 + 全局技能编辑（无项目也可用）
+  skillFiles: (name: string) => call<string[]>('skill_files', { name }),
+  readSkillFile: (name: string, rel: string) =>
+    call<string>('read_skill_file', { name, rel }),
+  saveGlobalSkill: (name: string, description: string, body: string) =>
+    call<void>('save_global_skill', { name, description, body }),
+  // 票 04：外部技能扫描导入 + 包安装（文件夹/ZIP）
+  scanExternalSkills: () => call<ExtSkillRow[]>('scan_external_skills'),
+  importSkills: (paths: string[]) => call<ImportReport>('import_skills', { paths }),
+  installSkillPath: (path: string) => call<string>('install_skill_path', { path }),
+  setSkillMuted: (name: string, enabled: boolean) =>
+    call<void>('set_skill_muted', { name, enabled }),
+  // ui-audit-2 票 06：MCP 服务实况（.hexagon/mcp.json 配置 → 宿主状态）
+  mcpServices: () => call<McpServiceRow[]>('mcp_services'),
+  // 票 05：MCP 全局清单（无项目可用；配置清单≠授权）
+  mcpEntries: () => call<McpEntryRow[]>('list_mcp_entries'),
+  saveMcpService: (spec: McpSpec) => call<void>('save_mcp_service', { spec }),
+  deleteMcpService: (name: string) => call<void>('delete_mcp_service', { name }),
+  // 票 06：本机 MCP 扫描导入 + 市场
+  scanExternalMcp: () => call<ExtMcpRow[]>('scan_external_mcp'),
+  importMcp: (specs: McpSpec[]) => call<ImportReport>('import_mcp', { specs }),
+  openMcpMarket: () => call<void>('open_mcp_market'),
   usage: () => call<UsageSummary>('usage'),
   usageSeries: (granularity: 'day' | 'hour' = 'day', from?: string | null, to?: string | null) =>
     call<UsageBucket[]>('usage_series', { granularity, from: from ?? null, to: to ?? null }),
@@ -154,6 +195,9 @@ export const api = {
   logEnabled: () => call<boolean>('log_enabled'),
   autonomy: () => call<string>('autonomy'),
   setAutonomy: (level: string) => call<void>('set_autonomy', { level }),
+  // ui-audit-2 票 07：审查者档位（live 仅在 ≥L1 生效）
+  reviewerMode: () => call<string>('reviewer_mode'),
+  setReviewerMode: (mode: string) => call<void>('set_reviewer_mode', { mode }),
   ownerAway: () => call<void>('owner_away'),
   ownerBack: () => call<ReturnSummary>('owner_back'),
   // ---- 决策卡动作 ----
@@ -161,8 +205,10 @@ export const api = {
   adjudicateFlag: (qid: string, agree: boolean) =>
     call<AdjudicateOutcome>('adjudicate_flag', { qid, agree }),
   proposals: () => call<ProposalRow[]>('proposals'),
-  reviewProposal: (proposalId: string, pass: boolean, reason: string, reviewerAgent: string) =>
-    call<void>('review_proposal', { proposalId, pass, reason, reviewerAgent }),
+  // ui-audit-2 票 08：owner 对 in_review 提案的裁决（署名 owner——复审
+  //  agent 从无工具可达 review()，唯一裁决面就是负责人）。
+  reviewProposal: (proposalId: string, pass: boolean, reason: string) =>
+    call<void>('review_proposal', { proposalId, pass, reason }),
   confirmProposal: (qid: string) => call<string>('confirm_proposal', { qid }),
   invariantCheck: () => call<number>('invariant_check'),
   policydevPropose: (
@@ -182,7 +228,8 @@ export const api = {
   // ---- 检验覆盖（票 40）：显式覆盖留痕，composer /override <理由> 同权 ----
   overrideChecks: (reason: string) => call<OverrideOutcome>('override_checks', { reason }),
   // ---- 安装助手（票 36）：NL 请求 → 确认卡 → 负责人确认才执行；grants 永不动 ----
-  requestInstall: (desc: string) => call<string>('request_install', { desc }),
+  // ui-audit-2 票 08 裁决：request_install IPC 已删——composer `/install <描述>`
+  // 走 TextCommand::Install 同函数直达，owner 发起面就是 composer。
   resolveInstall: (qid: string, allow: boolean) =>
     call<InstallOutcome>('resolve_install', { qid, allow }),
   // ---- 角色编辑（票 30）：项目覆盖行 + 实例字段 + 授权名单（人手编辑面，非提案）----
@@ -199,6 +246,8 @@ export const api = {
   savePackDraft: (packJson: string) => call<void>('save_pack_draft', { packJson }),
   savePackTemplate: (packJson: string) => call<string>('save_pack_template', { packJson }),
   packTemplates: () => call<string[]>('pack_templates'),
+  // ui-audit-2 票 08：按名载入模板到编辑器
+  packTemplate: (name: string) => call<PackDef>('pack_template', { name }),
   exportPackYaml: (dest: string) => call<void>('export_pack_yaml', { dest }),
   exportEvents: (args: { path: string; stageRunId?: string; agentId?: string; kinds?: string[] }) =>
     call<number>('export_events', {
@@ -224,15 +273,18 @@ export const api = {
   inspectDir: (dir: string) => call<DirReport>('inspect_dir', { dir }),
   presetRoles: () => call<RoleDef[]>('preset_roles'),
   presetPacks: () => call<PackDef[]>('preset_packs'),
+  // ---- 角色模板库（ADR 0057：内置∪~/.hexagon/roles.json，无项目可用）----
+  listRoleTemplates: () => call<RoleTemplate[]>('list_role_templates'),
+  saveRoleTemplate: (def: RoleDef) => call<void>('save_role_template', { def }),
+  deleteRoleTemplate: (name: string) => call<void>('delete_role_template', { name }),
   /// UI 内部路由：请求打开共享设置页（启动页齿轮 / 向导 keys 步 / 后续任意入口）。
   /// 不走 IPC——广播 hexagon:open-settings，App/Launcher 各自挂监听。
   openSettings: () => {
     window.dispatchEvent(new CustomEvent('hexagon:open-settings'))
     return Promise.resolve()
   },
-  checkModelKeys: (slots: string[]) => call<string[]>('check_model_keys', { slots }),
-  setModelKey: (slot: string, secret: string) =>
-    call<void>('set_model_key', { slot, secret }),
+  // ui-audit-2 票 08 裁决：check_model_keys/set_model_key 已删——槽位级
+  // model/{slot} 凭据被 provider/{id} 供应商级 key 取代（后端同步删命令）。
   // ---- 供应商配置（设置页模型区 / 启动页设置共用；ProviderDoc=供应商+槽位绑定）----
   listProviders: () => call<ProvidersView>('list_providers'),
   saveProvider: (provider: Partial<ProviderDef>, secret?: string) =>
@@ -247,6 +299,9 @@ export const api = {
     dir: string
     name: string
     roles: string[]
+    /// ADR 0057：选中角色的生效定义全集（自定义模板 + 向导定制项都经此传入，
+    /// 后端 override 优先、回落内置；不传=纯内置目录）。
+    roleOverrides?: RoleDef[]
     packName?: string | null
     fastpathRole?: string | null
     initGit: boolean
@@ -257,6 +312,7 @@ export const api = {
         dir: opts.dir,
         name: opts.name,
         roles: opts.roles,
+        roleOverrides: opts.roleOverrides ?? null,
         packName: opts.packName ?? null,
         fastpathRole: opts.fastpathRole ?? null,
         initGit: opts.initGit,
@@ -731,6 +787,15 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'autonomy':
       return 'L1' as T
+    case 'owner_away':
+      return null as T
+    case 'owner_back':
+      return {
+        since_event: 0, deliveries: [], reviews: { passed: 0, rejected: 0 },
+        flags: { submitted: 0, adjudicated: 0, escalated: 0 },
+        permissions: { asked: 0, allowed: 0, denied: 0 },
+        stages: { finished: 0, skipped: 0, rewound: 0 }, pending_todos: [],
+      } as T
     case 'log_enabled':
       return true as T
     case 'set_agent_avatar':
@@ -759,8 +824,55 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'proposals':
       return [
-        { id: 'p2', artifact_path: 'proposals/p2.md', surface: '工具白名单', target: 'grants', status: 'queued', author: 'a4' },
+        { id: 'p2', artifact_path: 'proposals/p2.md', surface: 'pack_copy', target: 'grants', status: 'awaiting_stamp', author: 'a4' },
+        // 票 08：in_review 待负责人裁决（复审 agent 无工具面）
+        { id: 'p3', artifact_path: 'proposals/p3.md', surface: 'agents_md', target: 'AGENTS.md', status: 'in_review', author: 'a2' },
       ] as T
+    case 'mcp_services':
+      return [] as T
+    case 'list_mcp_entries':
+      return [
+        { name: 'termius', command: 'ssh-mcp', args: ['--stdio'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },
+        { name: 'web-svc', command: '', args: [], env: {}, cwd: null, disabled: true, transport: 'remote', url: 'https://h/sse', origin: 'global' },
+      ] as T
+    case 'save_mcp_service':
+    case 'delete_mcp_service':
+    case 'open_mcp_market':
+      return null as T
+    case 'scan_external_mcp':
+      return [
+        { name: 'figma', command: 'npx', args: ['-y', 'figma-mcp'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'cursor', source_path: '~/.cursor/mcp.json', conflict: false },
+        { name: 'web-svc', command: '', args: [], env: {}, cwd: null, disabled: false, transport: 'remote', url: 'https://h/sse', origin: 'claude', source_path: '~/.claude.json', conflict: true },
+      ] as T
+    case 'import_mcp':
+      return { imported: 1, skipped: ['web-svc: conflict'] } as T
+    case 'repo_paths':
+      return ['src/', 'src/api.rs', 'docs/', 'AGENTS.md'] as T
+    case 'list_skills':
+      return [
+        { name: 'spec-writing', description: '规格书写规范', origin: 'builtin', enabled: true },
+        { name: 'code-review', description: '评审清单', origin: 'builtin', enabled: true },
+        { name: 'my-lint', description: '自建检查器', origin: 'global', enabled: false },
+        { name: 'repo-notes', description: '本项目笔记规范', origin: 'project', enabled: true },
+      ] as T
+    case 'skill_files':
+      return ['SKILL.md', 'scripts/check.sh'] as T
+    case 'read_skill_file':
+      return `---\nname: ${args?.name}\ndescription: mock 技能\n---\n\n## 用法\n\n按需加载。` as T
+    case 'save_global_skill':
+      return null as T
+    case 'scan_external_skills':
+      return [
+        { name: 'skill-creator', description: '造技能的技能', origin: 'claude', path: '~/.claude/skills/skill-creator', conflict: false },
+        { name: 'banner-design', description: '横幅设计', origin: 'claude', path: '~/.claude/skills/banner-design', conflict: true },
+        { name: 'dev-guide', description: '开发规范', origin: 'cursor', path: '~/.cursor/skills/dev-guide', conflict: false },
+      ] as T
+    case 'import_skills':
+      return { imported: 1, skipped: ['dup: conflict'] } as T
+    case 'install_skill_path':
+      return 'installed-skill' as T
+    case 'reviewer_mode':
+      return 'shadow' as T
     // ---- 项目向导 mock：浏览器 dev 始终「已有项目」，向导只在 Tauri 真开时出现 ----
     case 'project_open':
       return true as T
@@ -781,16 +893,21 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { name: '产品策划', duty: '需求与规格', reviewer: null, model_slot: 'chat', globs: [], skills: ['spec-writing'] },
         { name: '后端', duty: '服务端实现', reviewer: '后端技术负责人', model_slot: 'chat', globs: [], skills: [] },
       ] as T
+    case 'list_role_templates':
+      return [
+        { def: { name: '产品策划', duty: '需求与规格', reviewer: null, model_slot: 'chat', globs: [], skills: ['spec-writing'] }, origin: 'builtin' },
+        { def: { name: '后端', duty: '服务端实现', reviewer: '后端技术负责人', model_slot: 'chat', globs: [], skills: [] }, origin: 'builtin' },
+        { def: { name: '插画师', duty: '出图素材', reviewer: null, model_slot: 'chat', globs: [], skills: [] }, origin: 'custom' },
+      ] as T
+    case 'save_role_template':
+    case 'delete_role_template':
+      return null as T
     case 'preset_packs':
       return [
         { name: '规格驱动', version: 1, stages: [{ name: '规格', roles: ['产品策划'], due: ['规格'], stamp_point: true }] },
       ] as T
-    case 'check_model_keys':
-      return [] as T
     case 'export_events':
       return 42 as T // mock：导出条数
-    case 'request_install':
-      return 'q-mock-install' as T // mock：待决卡 id
     case 'resolve_install':
       return { installed: args?.allow === true } as T
     case 'agent_detail':
@@ -803,6 +920,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return { name: '规格驱动', version: 1, stages: [{ name: '规格', roles: ['产品策划'], due: ['规格'], stamp_point: true }] } as T
     case 'pack_templates':
       return ['规格驱动'] as T
+    case 'pack_template':
+      return { name: '规格驱动', version: 1, stages: [{ name: '规格', roles: ['产品策划'], due: ['规格'], stamp_point: true }] } as T
     case 'draft_role_def':
       return '负责服务端实现与代码质量，向技术负责人汇报。' as T
     case 'update_agent':
@@ -813,7 +932,6 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'save_pack_template':
       return '/home/user/.config/hexagon/templates/规格驱动.json' as T
-    case 'set_model_key':
     case 'create_project':
       return null as T
     case 'list_providers':

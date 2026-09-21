@@ -2,7 +2,11 @@
 // 草稿存 localStorage `hexagon.wizard`，中途退出可续；缺密钥 fail-closed 不能开跑。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, isTauri, type DirReport, type PackDef, type ProvidersView, type RoleDef } from '../api'
+import { api, errText, isTauri, type DirReport, type PackDef, type ProvidersView, type RoleDef, type RoleTemplate } from '../api'
+import { useUiStore } from '../store'
+import { sharedSlots, slotLabel } from '../modelpick'
+import { Icon } from './Icon'
+import { EntityChips } from './EntityPicker'
 
 const DRAFT_KEY = 'hexagon.wizard'
 
@@ -10,6 +14,9 @@ interface Draft {
   dir: string
   name: string
   roles: string[]
+  /// ADR 0057：按角色名存定制后的完整 RoleDef（只作用本项目，不回写模板库）。
+  /// 缺项 = 用模板原定义。
+  roleOverrides: Record<string, RoleDef>
   mode: 'pack' | 'fastpath'
   packName: string
   fastRole: string
@@ -19,7 +26,7 @@ interface Draft {
 }
 
 const EMPTY: Draft = {
-  dir: '', name: '', roles: [], mode: 'pack', packName: '规格驱动',
+  dir: '', name: '', roles: [], roleOverrides: {}, mode: 'pack', packName: '规格驱动',
   fastRole: '', initGit: false, genAgents: false, agentsMd: '',
 }
 
@@ -53,10 +60,14 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<Step>('dir')
   const [draft, setDraft] = useState<Draft>(loadDraft)
   const [report, setReport] = useState<DirReport | null>(null)
-  const [roles, setRoles] = useState<RoleDef[]>([])
+  const [tpls, setTpls] = useState<RoleTemplate[]>([])
   const [packs, setPacks] = useState<PackDef[]>([])
+  // 正在展开定制的角色名（roles 步内联编辑面板）
+  const [customizing, setCustomizing] = useState<string | null>(null)
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
+  // 票 15：密钥显隐复用 ProviderManager 的 vision 钮模式（每 provider 独立）。
+  const [keyShown, setKeyShown] = useState<Set<string>>(new Set())
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -71,8 +82,10 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   }, [draft])
 
   useEffect(() => {
-    api.presetRoles().then(setRoles).catch(() => {})
+    api.listRoleTemplates().then(setTpls).catch(() => {})
     api.presetPacks().then(setPacks).catch(() => {})
+    // roles 步的模型槽下拉也要供应商文档——挂载即拉，不必等 keys 步轮询
+    api.listProviders().then(setDoc).catch(() => {})
   }, [])
 
   // 目录变化 → 重新体检（setTimeout 内统一处理，避免 effect 内同步 setState）
@@ -91,13 +104,18 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     }
   }, [draft.genAgents, draft.agentsMd, draft.name, set])
 
+  // 生效定义 = 向导定制 override ?? 模板原定义（模板含内置∪自定义两层）
+  const effDef = useCallback(
+    (tp: RoleTemplate) => draft.roleOverrides[tp.def.name] ?? tp.def,
+    [draft.roleOverrides],
+  )
   const pickedRoles = useMemo(
-    () => roles.filter((r) => draft.roles.includes(r.name)),
-    [roles, draft.roles],
+    () => tpls.filter((tp) => draft.roles.includes(tp.def.name)),
+    [tpls, draft.roles],
   )
   const slots = useMemo(
-    () => [...new Set(pickedRoles.map((r) => r.model_slot))],
-    [pickedRoles],
+    () => [...new Set(pickedRoles.map((tp) => effDef(tp).model_slot))],
+    [pickedRoles, effDef],
   )
 
   // 进入密钥步 / 所选角色变化 → 拉供应商文档（绑定 + key 状态）
@@ -169,6 +187,10 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       await api.saveProvider(provider, secret)
       setKeyInputs((k) => ({ ...k, [providerId]: '' }))
       recheckKeys()
+    } catch (e) {
+      // ui-audit 票 04（P1-6）：saveKey 失败原先只复位 busy、
+      // 无任何反馈——「按了没反应」。走 toast 出口。
+      useUiStore.getState().pushToast(errText(e), 'err')
     } finally {
       setBusy(false)
     }
@@ -182,6 +204,9 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         dir: draft.dir,
         name: draft.name,
         roles: draft.roles,
+        // 全部勾选角色传生效定义：自定义模板与定制项经 override 链物化，
+        // 内置模板同名直传也无损（定义等价）。
+        roleOverrides: pickedRoles.map(effDef),
         packName: draft.mode === 'pack' ? draft.packName : null,
         fastpathRole: draft.mode === 'fastpath' ? draft.fastRole : null,
         initGit: draft.initGit,
@@ -250,33 +275,74 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       <>
         <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.rolesHint')}</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-          {roles.map((r) => (
-            <label
-              key={r.name}
-              className="panel"
-              style={{
-                display: 'flex', gap: 8, padding: '8px 10px', cursor: 'pointer',
-                outline: draft.roles.includes(r.name) ? '1px solid var(--accent)' : undefined,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={draft.roles.includes(r.name)}
-                onChange={(e) =>
-                  set({
-                    roles: e.target.checked
-                      ? [...draft.roles, r.name]
-                      : draft.roles.filter((x) => x !== r.name),
-                  })
-                }
-              />
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 510 }}>{r.name}</div>
-                <div className="dim3" style={{ fontSize: 11 }}>{r.duty}</div>
-              </div>
-            </label>
-          ))}
+          {tpls.map((tp) => {
+            const picked = draft.roles.includes(tp.def.name)
+            const customized = !!draft.roleOverrides[tp.def.name]
+            return (
+              <label
+                key={tp.def.name}
+                className="panel"
+                style={{
+                  display: 'flex', gap: 8, padding: '8px 10px', cursor: 'pointer',
+                  outline: picked ? '1px solid var(--accent)' : undefined,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={picked}
+                  onChange={(e) =>
+                    set({
+                      roles: e.target.checked
+                        ? [...draft.roles, tp.def.name]
+                        : draft.roles.filter((x) => x !== tp.def.name),
+                    })
+                  }
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 510 }}>
+                    {tp.def.name}
+                    {tp.origin === 'custom' && (
+                      <span className="chip ok" style={{ fontSize: 9, marginLeft: 6 }}>{t('teamTpl.custom')}</span>
+                    )}
+                    {customized && (
+                      <span className="chip" style={{ fontSize: 9, marginLeft: 6 }}>{t('wizard.customized')}</span>
+                    )}
+                  </div>
+                  <div className="dim3" style={{ fontSize: 11 }}>{effDef(tp).duty}</div>
+                </div>
+                {picked && (
+                  <button
+                    className="btn"
+                    style={{ fontSize: 10, alignSelf: 'flex-start' }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      setCustomizing(customizing === tp.def.name ? null : tp.def.name)
+                    }}
+                  >
+                    {t('wizard.customize')}
+                  </button>
+                )}
+              </label>
+            )
+          })}
         </div>
+        {customizing && draft.roles.includes(customizing) && (
+          <RoleCustomize
+            key={customizing}
+            def={effDef(tpls.find((x) => x.def.name === customizing)!)}
+            names={tpls.map((x) => x.def.name)}
+            doc={doc}
+            onChange={(def) =>
+              set({ roleOverrides: { ...draft.roleOverrides, [customizing]: def } })
+            }
+            onReset={() => {
+              const next = { ...draft.roleOverrides }
+              delete next[customizing]
+              set({ roleOverrides: next })
+            }}
+            onClose={() => setCustomizing(null)}
+          />
+        )}
       </>
     ),
     mode: (
@@ -320,8 +386,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
             onChange={(e) => set({ fastRole: e.target.value })}
           >
             <option value="">{t('wizard.fastPick')}</option>
-            {pickedRoles.map((r) => (
-              <option key={r.name} value={r.name}>{r.name}</option>
+            {pickedRoles.map((tp) => (
+              <option key={tp.def.name} value={tp.def.name}>{tp.def.name}</option>
             ))}
           </select>
         </div>
@@ -377,7 +443,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                 <div style={{ flex: 1 }}>
                   <code style={{ fontSize: 12 }}>model/{slot}</code>
                   <div className="dim3" style={{ fontSize: 11 }}>
-                    {pickedRoles.filter((s) => s.model_slot === slot).map((s) => s.name).join('、')}
+                    {pickedRoles.filter((tp) => effDef(tp).model_slot === slot).map((tp) => tp.def.name).join('、')}
                     {r && ` · ${r.provider.name} · ${r.binding.model}`}
                     {r && viaDefault && ` · ${t('wizard.viaDefault')}`}
                   </div>
@@ -388,7 +454,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                   <>
                     <input
                       className="btn"
-                      type="password"
+                      type={keyShown.has(pid) ? 'text' : 'password'}
                       style={{ width: 180 }}
                       placeholder={t('wizard.keyPlaceholder')}
                       value={keyInputs[pid] ?? ''}
@@ -396,6 +462,19 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                         setKeyInputs((k) => ({ ...k, [pid]: e.target.value }))
                       }
                     />
+                    <button
+                      className="btn"
+                      title={t(keyShown.has(pid) ? 'providers.hideKey' : 'providers.showKey')}
+                      onClick={() =>
+                        setKeyShown((s) => {
+                          const n = new Set(s)
+                          if (n.has(pid)) n.delete(pid); else n.add(pid)
+                          return n
+                        })
+                      }
+                    >
+                      <Icon name={keyShown.has(pid) ? 'vision' : 'vision-off'} size={12} />
+                    </button>
                     <button className="btn" disabled={busy} onClick={() => saveKey(pid)}>
                       {t('wizard.keySave')}
                     </button>
@@ -427,7 +506,10 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           <div><span className="dim3">{t('wizard.sumName')}：</span>{draft.name}</div>
           <div>
             <span className="dim3">{t('wizard.sumRoles')}：</span>
-            {draft.roles.join('、')}
+            {draft.roles.map((n) => (draft.roleOverrides[n] ? `${n}*` : n)).join('、')}
+            {Object.keys(draft.roleOverrides).some((n) => draft.roles.includes(n)) && (
+              <span className="dim3" style={{ fontSize: 10 }}> {t('wizard.customMark')}</span>
+            )}
           </div>
           <div>
             <span className="dim3">{t('wizard.sumMode')}：</span>
@@ -460,16 +542,23 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         background: 'var(--bg)',
       }}
     >
-      <div className="panel" style={{ width: 560, maxHeight: '86vh', display: 'flex', flexDirection: 'column', padding: '20px 22px' }}>
+      {/* 票 15：窄窗不溢出——min(560px, 92vw) */}
+      <div className="panel" style={{ width: 'min(560px, 92vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', padding: '20px 22px' }}>
         <div style={{ fontWeight: 600, fontSize: 15 }}>{t('wizard.title')}</div>
-        {/* 步骤轨 */}
+        {/* 步骤轨（票 15：已完成步可点回跳；未来步不可点——跳步会绕过 canNext 校验） */}
         <div style={{ display: 'flex', gap: 4, margin: '12px 0 16px' }}>
           {STEPS.map((s, i) => (
             <div
               key={s}
+              role={i < idx ? 'button' : undefined}
+              tabIndex={i < idx ? 0 : undefined}
+              title={t(`wizard.step.${s}`)}
+              onClick={i < idx ? () => setStep(s) : undefined}
+              onKeyDown={i < idx ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setStep(s) } } : undefined}
               style={{
                 flex: 1, height: 3, borderRadius: 2,
                 background: i <= idx ? 'var(--accent)' : 'var(--bg-2)',
+                cursor: i < idx ? 'pointer' : 'default',
               }}
             />
           ))}
@@ -500,6 +589,69 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/** 向导内角色定制（ADR 0057）：改出的 RoleDef 只经 roleOverrides 进本项目，
+ *  不回写模板库。字段与模板编辑面一致：职责/上级/模型槽/归属路径/技能。 */
+function RoleCustomize({ def, names, doc, onChange, onReset, onClose }: {
+  def: RoleDef
+  names: string[]
+  doc: ProvidersView
+  onChange: (def: RoleDef) => void
+  onReset: () => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const input: React.CSSProperties = {
+    width: '100%', padding: '4px 8px', fontSize: 12,
+    background: 'var(--bg)', border: '1px solid var(--border-strong)', borderRadius: 6,
+    color: 'var(--text)', fontFamily: 'inherit',
+  }
+  const lbl: React.CSSProperties = { fontSize: 10, fontWeight: 560, color: 'var(--text-3)', marginTop: 6 }
+  const upd = (patch: Partial<RoleDef>) => onChange({ ...def, ...patch })
+
+  return (
+    <div className="panel" style={{ marginTop: 8, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <strong style={{ fontSize: 12 }}>{def.name}</strong>
+        <span className="dim3" style={{ fontSize: 10 }}>{t('wizard.scopeHint')}</span>
+        <button className="btn" style={{ marginLeft: 'auto', fontSize: 10 }} onClick={onReset}>
+          {t('wizard.resetTpl')}
+        </button>
+        <button className="btn" style={{ fontSize: 10 }} onClick={onClose}>×</button>
+      </div>
+      <div style={lbl}>{t('agent.duty')}</div>
+      <textarea value={def.duty} rows={2} style={{ ...input, resize: 'vertical' }}
+        onChange={(e) => upd({ duty: e.target.value })} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <div style={lbl}>{t('agent.reviewer')}</div>
+          <select value={def.reviewer ?? ''} style={input}
+            onChange={(e) => upd({ reviewer: e.target.value || null })}>
+            <option value="">{t('agent.noReviewer')}</option>
+            {names.filter((n) => n !== def.name).map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={lbl}>{t('agent.modelSlot')}</div>
+          <select value={def.model_slot} style={input}
+            onChange={(e) => upd({ model_slot: e.target.value })}>
+            {sharedSlots(doc.slots, def.model_slot).map((s) => (
+              <option key={s} value={s}>{slotLabel(s, doc, t('agent.dedicatedTag'))}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div style={lbl}>{t('agent.globs')}</div>
+      <textarea value={def.globs.join('\n')} rows={2} placeholder="src/**"
+        style={{ ...input, fontFamily: 'monospace', resize: 'vertical' }}
+        onChange={(e) => upd({ globs: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
+      <div style={lbl}>{t('agent.skills')}</div>
+      <EntityChips value={def.skills} onChange={(ids) => upd({ skills: ids })} source="skills" />
     </div>
   )
 }

@@ -94,6 +94,19 @@ pub fn save_template(pack: &PackDef) -> Result<PathBuf, PackEditError> {
     Ok(path)
 }
 
+/// 按名载入个人模板（ui-audit-2 票 08：PackEditor 模板下拉的数据口）。
+/// name 只接受 basename——禁路径分隔符防目录逃逸出 templates_dir。
+pub fn load_template(name: &str) -> Result<PackDef, PackEditError> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(PackEditError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("bad template name: {name}"),
+        )));
+    }
+    let path = templates_dir().join(format!("{}.json", name.replace('/', "-")));
+    Ok(PackDef::load(&path)?)
+}
+
 /// 已存个人模板名列表。
 pub fn list_templates() -> Result<Vec<String>, PackEditError> {
     let dir = templates_dir();

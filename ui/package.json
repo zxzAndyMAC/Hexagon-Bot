@@ -10,7 +10,8 @@
     "typecheck": "tsc -b",
     "preview": "vite preview",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tokens": "node scripts/check-tokens.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

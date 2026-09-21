@@ -10,6 +10,10 @@ export type ActionId =
   | 'closeTab'
   | 'settings'
   | 'focusComposer'
+  | 'stageRewind'
+  | 'stageSkip'
+  | 'stageStamp'
+  | 'nodeRail'
 
 const DEFAULTS: Record<ActionId, string> = {
   approve: 'mod+Enter',
@@ -20,9 +24,19 @@ const DEFAULTS: Record<ActionId, string> = {
   closeTab: 'mod+W',
   settings: 'mod+,',
   focusComposer: 'mod+N',
+  // ADR 0056-2：阶段操作键位（alt+mod 组合避开 ⌘ 系常用位）
+  stageRewind: 'alt+mod+ArrowLeft',
+  stageSkip: 'alt+mod+ArrowRight',
+  stageStamp: 'alt+mod+S',
+  // ui-audit 票 12（P2-13）：节点轨键盘入口
+  nodeRail: 'mod+J',
 }
 
-export const isMac = navigator.platform.toUpperCase().includes('MAC')
+// navigator.platform 已弃用（MDN，ui-audit 票 11）：优先 userAgentData；
+// 无该字段的浏览器退到 UA 嗅探。仅用于 ⌘/Ctrl 展示与红绿灯让位——
+// 判错的代价是视觉错位，不是功能失效，容错优先。
+const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
+export const isMac = uaData ? uaData.platform === 'macOS' : /Mac|iPhone|iPad/.test(navigator.userAgent)
 
 /** 设置页「键盘」分区的全量动作表（顺序 = 展示顺序） */
 export const ACTIONS: { id: ActionId; labelKey: string }[] = [
@@ -34,6 +48,10 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'focusComposer', labelKey: 'keys.composer' },
   { id: 'approve', labelKey: 'keys.approve' },
   { id: 'reject', labelKey: 'keys.reject' },
+  { id: 'stageRewind', labelKey: 'keys.stageRewind' },
+  { id: 'stageSkip', labelKey: 'keys.stageSkip' },
+  { id: 'stageStamp', labelKey: 'keys.stageStamp' },
+  { id: 'nodeRail', labelKey: 'keys.nodeRail' },
 ]
 
 export function bindingFor(a: ActionId): string {
@@ -85,7 +103,13 @@ export function matches(e: KeyboardEvent | React.KeyboardEvent, binding: string)
   const wantMod = parts.includes('mod')
   const wantShift = parts.includes('shift')
   const wantAlt = parts.includes('alt')
-  if ((e.metaKey || e.ctrlKey) !== wantMod) return false
+  // ui-audit 票 15（P3）：mod 平台精确化——macOS 的 mod 只认 metaKey，
+  // 其他平台只认 ctrlKey，且另一把修饰键不得同时按下。
+  // 旧实现 meta||ctrl 合并：mac 上 Ctrl+↵ 会误触「批准待决」——
+  // 裁决键必须精确，宁漏不误（fail-closed：漏触发花一次鼠标，误触发花一次未审副作用）。
+  const modHit = isMac ? e.metaKey : e.ctrlKey
+  const otherMod = isMac ? e.ctrlKey : e.metaKey
+  if (modHit !== wantMod || otherMod) return false
   if (e.shiftKey !== wantShift) return false
   if (e.altKey !== wantAlt) return false
   const evKey = e.key === ' ' ? 'space' : e.key.toLowerCase()

@@ -1143,3 +1143,66 @@ fn us33_check_override_lets_stage_pass() {
     // 无红可覆 → 报错（防无痕迹空覆盖）
     assert!(wb.override_checks("again").is_err());
 }
+
+/// ui-audit-2 票 06：`.hexagon/mcp.json` → open 时 spawn+握手+注册，
+/// mcp_services 实况可查；失败服务记 down 不连坐。
+#[test]
+fn mcp_end_to_end_via_for_test() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake_mcp.py");
+    std::fs::write(
+        &script,
+        r#"
+import sys, json
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write(f"Content-Length: {len(body)}\r\n\r\n{body}")
+    sys.stdout.flush()
+while True:
+    headers = {}
+    while True:
+        line = sys.stdin.readline()
+        if not line: sys.exit(0)
+        if line.strip() == "": break
+        k, v = line.split(":", 1); headers[k.strip()] = v.strip()
+    body = sys.stdin.read(int(headers["Content-Length"]))
+    req = json.loads(body)
+    if "id" not in req: continue
+    if req["method"] == "initialize":
+        send({"jsonrpc":"2.0","id":req["id"],"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"fake","version":"0"}}})
+    elif req["method"] == "tools/list":
+        send({"jsonrpc":"2.0","id":req["id"],"result":{"tools":[{"name":"echo","description":"echo args","inputSchema":{"type":"object"}}]}})
+    elif req["method"] == "tools/call":
+        send({"jsonrpc":"2.0","id":req["id"],"result":{"content":[{"type":"text","text":json.dumps(req["params"]["arguments"])}]}})
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join(".hexagon")).unwrap();
+    std::fs::write(
+        dir.path().join(".hexagon/mcp.json"),
+        serde_json::to_string(&serde_json::json!([
+            {"name": "fake", "command": "/usr/bin/python3", "args": [script.to_string_lossy()]},
+            {"name": "ghost", "command": "/nonexistent/binary", "args": []}
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let wb = Workbench::for_test(dir.path(), &["前端"], None).unwrap();
+    let rows = wb.mcp_services();
+    assert_eq!(rows.len(), 2);
+    let fake = rows.iter().find(|r| r.name == "fake").unwrap();
+    assert_eq!(fake.status, "up");
+    assert_eq!(fake.tools, vec!["echo".to_string()]);
+    let ghost = rows.iter().find(|r| r.name == "ghost").unwrap();
+    assert_eq!(ghost.status, "down");
+    assert!(ghost.error.is_some());
+    // 工具真的进了统一管线
+    assert!(wb.registry.defs().iter().any(|d| d.name == "mcp:fake:echo"));
+    // ghost 没注册任何工具
+    assert!(!wb
+        .registry
+        .defs()
+        .iter()
+        .any(|d| d.name.starts_with("mcp:ghost:")));
+}

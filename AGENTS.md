@@ -38,6 +38,18 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 - **`System` 事件的 `payload.kind` 子类词表集中登记于 `trace.rs`**，新增子类须同改词表与 `docs/glossary.html`。检查：`rg 'json!\(\{"kind":' crates/hexagon-core/src` 字面量只来自词表常量（D10）
 - **新判定器（judge/invariant/权限类判定面）必须配 proptest 属性测试**，不只样例测试；回归种子入 `proptest-regressions/`。检查：评审清单——新判定面 PR 必须含 `proptest!` 块钉不变量（D12）
 
+## 测试守门
+
+2026-09 从 0 到 1 全面 QA 委托沉淀（委托提示词与用例库：`.scratch/qa-alloy/`）。任何代码改动交付前按改动类型过门；说不清自己触发了哪条 = 没过门。
+
+- **任何代码改动**：`npm run check` + `npm test` 全绿（命令定义见上节 Commands，不在此复述）。豁免仅纯文档（`.md`），须在交付说明留痕
+- **改 Rust**：跑 `npm test` 全量，不得只跑单 crate/单测图快
+- **改 `#[derive(ts_rs::TS)]` 结构**：重跑 `cargo test export_bindings`，`ui/src/gen/` diff 随改动同次入提交（D06）
+- **改 `ui/src/i18n/locales/`**：七语言 key 集合一致性检查（尚无脚本则先补脚本再挂门禁）+ 一种非英文语言手测冒烟
+- **修 bug**：同一次改动附回归测试——修复即文档，commit 会被遗忘，测试跟着代码走；新判定器必须配 proptest（D12）
+- **新 UI 界面/控件**：同步 vitest；涉及裁决回路的改动额外过黄金标准手测——离开 20 分钟归来，30 秒内看清「发生了什么、哪些在等拍板、最严重的是什么」并完成第一笔裁决
+- **行为变更触及既有测试断言**：改测试与改代码同次提交，并在测试 diff 处注释说明行为为何变；静默删测试视为未过门
+
 ## Agent skills
 
 ### Issue tracker

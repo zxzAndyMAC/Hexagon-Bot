@@ -36,6 +36,12 @@ pub enum SetupError {
     DirtyTree(PathBuf),
     #[error("未知预置角色: {0}")]
     UnknownRole(String),
+    #[error("角色定制传了未勾选的角色: {0}")]
+    StrayOverride(String),
+    #[error("角色定制不能自审: {0}")]
+    SelfReviewer(String),
+    #[error("角色定制「{role}」的上级「{reviewer}」不在模板目录内")]
+    UnknownOverrideReviewer { role: String, reviewer: String },
     #[error("缺模型密钥，补齐或拿掉对应角色才能开跑: {}", .0.join(", "))]
     MissingKeys(Vec<String>),
     #[error("说明文件已存在，不覆盖: {0}")]
@@ -118,14 +124,17 @@ pub fn missing_model_keys(
     Ok(missing)
 }
 
-/// 建项目（向导最后一步）。`roles` 是预置角色名子集；`pack` 为 None 时
+/// 建项目（向导最后一步）。`roles` 是模板目录（内置∪自定义）角色名子集；
+/// `role_overrides` 携带**完整定义**——自定义模板与向导改过的角色都经它传入，
+/// 本函数不读全局模板文件（保持纯函数，测试不被 HOME 污染）。`pack` 为 None 时
 /// `fastpath_role` 必须给（快速通道）；`init_git` = 负责人确认了「无 git 则初始化」。
-/// 全程 fail-closed：脏树停、缺密钥停、未知角色停。
+/// 全程 fail-closed：脏树停、缺密钥停、未知角色停、野 override 停。
 #[allow(clippy::too_many_arguments)]
 pub fn create_project(
     dir: impl AsRef<Path>,
     name: &str,
     roles: &[String],
+    role_overrides: &[RoleDef],
     pack: Option<&PackDef>,
     fastpath_role: Option<&str>,
     init_git: bool,
@@ -146,16 +155,47 @@ pub fn create_project(
         return Err(SetupError::NoGit(dir.to_path_buf()));
     }
 
-    // 解析预置角色（未知角色拒绝），复查密钥（缺则不能开跑）
+    // 解析角色：override 优先（自定义模板/向导定制），回落内置（未知角色拒绝）。
+    // override 校验只做定义级（名非空/不自审/上级在目录内）——技能名不验，
+    // 理由同 templates.rs 头注；上级目录级校验同内置预置，不要求已勾选。
     let presets = preset_roles()?;
-    let mut picked: Vec<&RoleDef> = Vec::new();
+    let known: std::collections::HashSet<&str> = presets
+        .iter()
+        .chain(role_overrides.iter())
+        .map(|d| d.name.as_str())
+        .collect();
+    for o in role_overrides {
+        if !roles.contains(&o.name) {
+            return Err(SetupError::StrayOverride(o.name.clone()));
+        }
+        if o.name.trim().is_empty() {
+            return Err(SetupError::UnknownRole(o.name.clone()));
+        }
+        if o.reviewer.as_deref() == Some(o.name.as_str()) {
+            return Err(SetupError::SelfReviewer(o.name.clone()));
+        }
+        if let Some(rev) = &o.reviewer {
+            if !known.contains(rev.as_str()) {
+                return Err(SetupError::UnknownOverrideReviewer {
+                    role: o.name.clone(),
+                    reviewer: rev.clone(),
+                });
+            }
+        }
+    }
+    let mut picked: Vec<RoleDef> = Vec::new();
     for r in roles {
-        picked.push(
-            presets
-                .iter()
-                .find(|p| &p.name == r)
-                .ok_or_else(|| SetupError::UnknownRole(r.clone()))?,
-        );
+        if let Some(o) = role_overrides.iter().find(|o| &o.name == r) {
+            picked.push(o.clone());
+        } else {
+            picked.push(
+                presets
+                    .iter()
+                    .find(|p| &p.name == r)
+                    .ok_or_else(|| SetupError::UnknownRole(r.clone()))?
+                    .clone(),
+            );
+        }
     }
     if pack.is_none() {
         match fastpath_role {
@@ -163,11 +203,7 @@ pub fn create_project(
             _ => return Err(SetupError::NoFastRole),
         }
     }
-    let missing = missing_model_keys(
-        store,
-        &picked.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
-        doc,
-    )?;
+    let missing = missing_model_keys(store, &picked, doc)?;
     if !missing.is_empty() {
         return Err(SetupError::MissingKeys(missing));
     }
@@ -281,6 +317,7 @@ mod tests {
             &sub,
             "测试项目",
             &["产品策划".into(), "后端".into()],
+            &[],
             Some(&pack()),
             None,
             true, // 确认初始化
@@ -332,6 +369,7 @@ mod tests {
             d.path(),
             "仓",
             &["产品策划".into()],
+            &[],
             Some(&pack()),
             None,
             false,
@@ -346,6 +384,7 @@ mod tests {
                 d.path(),
                 "仓",
                 &["产品策划".into()],
+                &[],
                 Some(&pack()),
                 None,
                 false,
@@ -365,6 +404,7 @@ mod tests {
                 d.path(),
                 "p",
                 &["产品策划".into()],
+                &[],
                 Some(&pack()),
                 None,
                 false,
@@ -383,6 +423,7 @@ mod tests {
             &sub,
             "p",
             &["产品策划".into()],
+            &[],
             Some(&pack()),
             None,
             true,
@@ -409,6 +450,7 @@ mod tests {
                 &sub,
                 "p",
                 &["产品策划".into()],
+                &[],
                 None,
                 Some("后端"), // 未勾选
                 true,
@@ -422,6 +464,7 @@ mod tests {
             d.path().join("q"),
             "p",
             &["后端".into()],
+            &[],
             None,
             Some("后端"),
             true,
@@ -435,6 +478,112 @@ mod tests {
             .query_row("SELECT mode FROM projects WHERE id='p1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(mode, "fastpath");
+    }
+
+    /// override：自定义模板名（不在内置目录）能选中并物化；定制字段落库；
+    /// 野 override（未勾选角色）与自审/幽灵上级拒绝。
+    #[test]
+    fn role_overrides_materialize_and_validate() {
+        let d = tempfile::tempdir().unwrap();
+        let custom = RoleDef {
+            name: "自建角色".into(),
+            duty: "定制职责".into(),
+            reviewer: None,
+            model_slot: "chat".into(),
+            globs: vec!["src/x/**".into()],
+            skills: vec![],
+        };
+        // 自定义名不在内置目录 → 无 override 时 UnknownRole；有 override 时建得起来
+        let sub = d.path().join("p");
+        assert!(matches!(
+            create_project(
+                &sub,
+                "p",
+                &["自建角色".into()],
+                &[],
+                Some(&pack()),
+                None,
+                true,
+                &store_with_key(),
+                &doc_with_provider()
+            ),
+            Err(SetupError::UnknownRole(_))
+        ));
+        let wb = create_project(
+            &sub,
+            "p",
+            &["自建角色".into()],
+            std::slice::from_ref(&custom),
+            Some(&pack()),
+            None,
+            true,
+            &store_with_key(),
+            &doc_with_provider(),
+        )
+        .unwrap();
+        let db = Db::open(sub.join(".hexagon/state.db")).unwrap();
+        let role: String = db
+            .conn()
+            .query_row("SELECT role FROM agents WHERE id='a0'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(role, "自建角色");
+        let glob: String = db
+            .conn()
+            .query_row(
+                "SELECT glob FROM agent_globs WHERE agent_id='a0'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(glob, "src/x/**");
+        drop(wb);
+        // 野 override / 自审 / 幽灵上级
+        for (overrides, want) in [
+            (vec![custom.clone()], "StrayOverride"),
+            (
+                vec![RoleDef {
+                    reviewer: Some("自建角色".into()),
+                    ..custom.clone()
+                }],
+                "SelfReviewer",
+            ),
+            (
+                vec![RoleDef {
+                    reviewer: Some("幽灵".into()),
+                    ..custom.clone()
+                }],
+                "UnknownOverrideReviewer",
+            ),
+        ] {
+            let sub = d.path().join(format!("{:?}", want));
+            let roles = if want == "StrayOverride" {
+                vec!["产品策划".into()]
+            } else {
+                vec!["自建角色".into()]
+            };
+            let e = match create_project(
+                &sub,
+                "p",
+                &roles,
+                &overrides,
+                Some(&pack()),
+                None,
+                true,
+                &store_with_key(),
+                &doc_with_provider(),
+            ) {
+                Ok(_) => panic!("{want} should fail"),
+                Err(e) => e,
+            };
+            assert_eq!(
+                crate::errcode::variant_code(&e),
+                match want {
+                    "StrayOverride" => "stray_override",
+                    "SelfReviewer" => "self_reviewer",
+                    _ => "unknown_override_reviewer",
+                }
+            );
+        }
     }
 
     #[test]

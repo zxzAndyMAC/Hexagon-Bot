@@ -6,6 +6,7 @@ import { api, errText, isTauri } from '../api'
 import { Wizard } from './Wizard'
 import { Icon } from './Icon'
 import { SettingsPage } from './SettingsPage'
+import { Row } from './Row'
 
 interface Recent {
   dir: string
@@ -76,8 +77,9 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
           <div className="dim3" style={{ fontSize: 12, padding: '12px 0' }}>{t('launch.empty')}</div>
         )}
         {recents.map((r) => (
-          <div
+          <Row
             key={r.dir}
+            role="listitem"
             onClick={() => openDir(r.dir)}
             className="recent-row"
             style={{
@@ -95,7 +97,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
               </div>
             </div>
             <span className="chip mono">{t(`launch.mode_${r.mode}`)}</span>
-          </div>
+          </Row>
         ))}
         {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
         <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
@@ -117,7 +119,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
       {body}
       {settings && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)' }}>
-          <SettingsPage onBack={() => setSettings(false)} />
+          <SettingsPage onBack={() => setSettings(false)} projectless />
         </div>
       )}
     </>

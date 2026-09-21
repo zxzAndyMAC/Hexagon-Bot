@@ -270,7 +270,9 @@ impl Tool for LoadSkill {
             .stage_run_id
             .clone()
             .unwrap_or_else(|| ctx.agent_id.clone());
-        let muted = crate::skills::SkillMutes::load(&ctx.repo_root).muted_set(&session);
+        // load_skill 同样吃全局静音（此前只看会话集——owner 关掉的技能
+        // 仍能被点名加载，是漏口）。effective_muted = 会话∪"*"∪全局。
+        let muted = crate::skills::effective_muted(&ctx.repo_root, &session);
         if loader.get(&name).is_none() {
             loader.rescan();
         }

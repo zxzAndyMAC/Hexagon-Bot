@@ -306,6 +306,185 @@ fn pending_questions(
         db.queued_questions(PROJECT_ID).map_err(cmd_err)
     })
 }
+/// 已记权限规则列表（ui-audit-2 票 03：设置-权限分区审计面）。
+#[tauri::command]
+fn permission_rules(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::permissions::PermissionRuleRow>, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::permissions::list_rules(db, PROJECT_ID).map_err(cmd_err)
+    })
+}
+
+/// 撤销已记规则：false（不存在/不属本项目）报 internal 而非静默成功——
+/// 「没删却说删了」比报错更糟（fail-closed 偏向显式失败）。
+#[tauri::command]
+fn revoke_permission_rule(state: tauri::State<AppState>, rule_id: String) -> Result<(), CmdError> {
+    with_conn(&state, |db, _| -> Result<(), CmdError> {
+        let ok =
+            hexagon_core::permissions::revoke_rule(db, PROJECT_ID, &rule_id).map_err(cmd_err)?;
+        if ok {
+            Ok(())
+        } else {
+            Err(CmdError::internal(format!(
+                "permission rule not found: {rule_id}"
+            )))
+        }
+    })
+}
+
+/// 技能清单（ui-audit-2 票 04 → global-config 票 03）：有项目 = 全局∪项目
+/// 合并视图；无项目 = 全局层（~/.hexagon/skills）。enabled 看全局静音文件。
+#[tauri::command]
+fn list_skills(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::skills::SkillRow>, CmdError> {
+    let g = state
+        .conn
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?;
+    Ok(match g.as_ref() {
+        Some(c) => hexagon_core::skills::list_all(&c.root),
+        None => hexagon_core::skills::list_global(),
+    })
+}
+
+/// 技能包文件树（global-config 票 03 详情面）：有界列相对路径。
+/// 无项目时只解析全局技能。
+#[tauri::command]
+fn skill_files(state: tauri::State<AppState>, name: String) -> Result<Vec<String>, CmdError> {
+    let g = state
+        .conn
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?;
+    Ok(hexagon_core::skills::skill_files(
+        &name,
+        g.as_ref().map(|c| c.root.as_path()),
+    ))
+}
+
+/// 读技能包内文件（渲染面）：core 内做逃逸检查 + 256KB 截断。
+#[tauri::command]
+fn read_skill_file(
+    state: tauri::State<AppState>,
+    name: String,
+    rel: String,
+) -> Result<String, CmdError> {
+    let g = state
+        .conn
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?;
+    hexagon_core::skills::read_skill_file(&name, &rel, g.as_ref().map(|c| c.root.as_path()))
+        .map_err(|e| CmdError::internal(e.to_string()))
+}
+
+/// 新建/覆写全局技能（无项目可用）：~/.hexagon/skills/<name>/SKILL.md。
+#[tauri::command]
+fn save_global_skill(name: String, description: String, body: String) -> Result<(), CmdError> {
+    hexagon_core::skills::save_global_skill(&name, &description, &body)
+        .map_err(|e| CmdError::internal(e.to_string()))
+}
+
+// ---------- 外部技能扫描/导入（global-config 票 04） ----------
+
+/// 扫描主流平台本机技能目录（cursor/claude/agents/devin/windsurf/codex），
+/// 按技能名去重；conflict = 与本机全局同名（导入时跳过）。
+#[tauri::command]
+fn scan_external_skills() -> Vec<hexagon_core::skills::ExtSkillRow> {
+    hexagon_core::skills::scan_external_skills()
+}
+
+/// 批量导入外部技能目录 → ~/.hexagon/skills/。同名冲突跳过不覆盖。
+#[tauri::command]
+fn import_skills(paths: Vec<String>) -> Result<hexagon_core::skills::ImportReport, CmdError> {
+    hexagon_core::skills::import_skills(&paths).map_err(|e| CmdError::internal(e.to_string()))
+}
+
+/// 从文件夹或 ZIP 安装技能包（返回落地的技能名）。
+#[tauri::command]
+fn install_skill_path(path: String) -> Result<String, CmdError> {
+    hexagon_core::skills::install_skill_from_path(&path)
+        .map_err(|e| CmdError::internal(e.to_string()))
+}
+
+/// composer `#` 路径补全（ui-audit-2 票 09）：仓根有界遍历，conn 通道。
+#[tauri::command]
+fn repo_paths(state: tauri::State<AppState>, query: String) -> Result<Vec<String>, CmdError> {
+    with_conn(&state, |_db, root| {
+        Ok::<_, CmdError>(hexagon_core::commands::repo_paths(root, &query, 60))
+    })
+}
+
+/// MCP 服务实况（ui-audit-2 票 06）：需读运行中宿主的状态，走 wb 通道。
+#[tauri::command]
+fn mcp_services(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::mcp::McpServiceRow>, CmdError> {
+    with_wb(&state, |wb| Ok::<_, CmdError>(wb.mcp_services()))
+}
+
+// ---------- MCP 全局清单（global-config 票 05，ADR 0057） ----------
+
+/// 全量服务清单（无项目可用）：全局 ∪ 项目（同名项目覆盖全局），
+/// 含禁用与远程条目；origin 标来源。配置清单≠授权（ADR 0010）。
+#[tauri::command]
+fn list_mcp_entries(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::mcp::McpEntryRow>, CmdError> {
+    // wb 只借 repo_root 读路径，缺省=只看全局层——projectless 可列。
+    let root = state
+        .wb
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|wb| wb.repo_root.clone()));
+    Ok(hexagon_core::mcp::list_mcp_entries(root.as_deref()))
+}
+
+/// 新建/覆写全局 MCP 服务（upsert 按名；写 ~/.hexagon/mcp.json）。
+/// 生效时机 = 重开项目（一期不热重启宿主）。
+#[tauri::command]
+fn save_mcp_service(spec: hexagon_core::mcp::McpSpec) -> Result<(), CmdError> {
+    hexagon_core::mcp::save_global_mcp(&spec).map_err(CmdError::internal)
+}
+
+/// 删全局服务（幂等；项目层条目不受此命令影响——项目文件手改）。
+#[tauri::command]
+fn delete_mcp_service(name: String) -> Result<(), CmdError> {
+    hexagon_core::mcp::delete_global_mcp(&name).map_err(CmdError::internal)
+}
+
+// ---------- MCP 外部扫描/导入 + 市场（global-config 票 06） ----------
+
+/// 扫主流平台本机 MCP 配置（cursor/claude/claude-desktop/windsurf/gemini/
+/// devin/codex），按 名+传输签名 去重；conflict = 与全局清单同名。
+#[tauri::command]
+fn scan_external_mcp() -> Vec<hexagon_core::mcp::ExtMcpRow> {
+    hexagon_core::mcp::scan_external_mcp()
+}
+
+/// 批量导入勾选服务 → ~/.hexagon/mcp.json；同名跳过不覆盖。
+#[tauri::command]
+fn import_mcp(specs: Vec<hexagon_core::mcp::McpSpec>) -> hexagon_core::skills::ImportReport {
+    hexagon_core::mcp::import_mcp(&specs)
+}
+
+/// 公共 MCP 市场（票 06）：系统默认浏览器打开。URL 是常量非用户输入——
+/// 不给任意 URL 开口子（避免变成「以默认浏览器打开任意链接」原语）。
+const MCP_MARKET_URL: &str = "https://mcp.higress.ai/";
+
+#[tauri::command]
+fn open_mcp_market() -> Result<(), CmdError> {
+    open::that(MCP_MARKET_URL).map_err(|e| CmdError::internal(e.to_string()))
+}
+
+/// 全局技能开关（ADR 0057）：写 ~/.hexagon/skill-mutes.json——真全局文件，
+/// 无项目可用；回合注入时 会话集∪遗留"*"∪全局 生效。
+#[tauri::command]
+fn set_skill_muted(name: String, enabled: bool) -> Result<(), CmdError> {
+    hexagon_core::skills::set_globally_muted(&name, enabled)
+        .map_err(|e| CmdError::internal(e.to_string()))
+}
+
 #[tauri::command]
 fn usage(state: tauri::State<AppState>) -> Result<hexagon_core::usage::UsageSummary, CmdError> {
     with_conn(&state, |db, _| {
@@ -334,13 +513,9 @@ fn override_checks(
     with_wb(&state, |wb| wb.override_checks(&reason))
 }
 
-#[tauri::command]
-fn request_install(state: tauri::State<AppState>, desc: String) -> Result<String, CmdError> {
-    // 安装请求只是入队一张待决卡（控制组）；执行在 resolve_install（wb 组）
-    with_conn(&state, |db, root| {
-        hexagon_core::install::request_install(db, PROJECT_ID, root, &desc).map_err(cmd_err)
-    })
-}
+// ui-audit-2 票 08 裁决：request_install IPC 已删——composer `/install <描述>`
+// 经 TextCommand::Install → install::request_install 同函数直达，专设 IPC
+// 是重复入口；owner 发起安装的规范面就是 composer。
 
 #[tauri::command]
 fn agent_detail(
@@ -426,6 +601,12 @@ fn pack_templates() -> Result<Vec<String>, CmdError> {
     hexagon_core::packedit::list_templates().map_err(cmd_err)
 }
 
+/// 按名载入个人模板（ui-audit-2 票 08：PackEditor「载入模板」的数据口）。
+#[tauri::command]
+fn pack_template(name: String) -> Result<hexagon_core::orchestra::PackDef, CmdError> {
+    hexagon_core::packedit::load_template(&name).map_err(cmd_err)
+}
+
 #[tauri::command]
 fn export_pack_yaml(state: tauri::State<AppState>, dest: String) -> Result<(), CmdError> {
     with_conn(&state, |_, root| {
@@ -492,6 +673,23 @@ fn set_autonomy(state: tauri::State<AppState>, level: String) -> Result<(), CmdE
     })
 }
 
+/// 审查者档位读（ui-audit-2 票 07）：projects 行字段，conn 通道即可。
+#[tauri::command]
+fn reviewer_mode(state: tauri::State<AppState>) -> Result<String, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::autonomy::reviewer_mode(db, PROJECT_ID).map_err(cmd_err)
+    })
+}
+
+/// 审查者档位写：live 只在 autonomy ≥ L1 生效（L0+live 在裁决内退化为
+/// shadow——后端 adjudicate 拦，UI 也明示），这里只校验词表。
+#[tauri::command]
+fn set_reviewer_mode(state: tauri::State<AppState>, mode: String) -> Result<(), CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::autonomy::set_reviewer_mode(db, PROJECT_ID, &mode).map_err(cmd_err)
+    })
+}
+
 #[tauri::command]
 fn owner_away(state: tauri::State<AppState>) -> Result<(), CmdError> {
     with_conn(&state, |db, _| {
@@ -537,17 +735,18 @@ fn proposals(
     })
 }
 
+/// in_review 提案的负责人裁决（ui-audit-2 票 08）：原签名要 reviewer_agent——
+/// 但复审 agent 从无工具可调 review（in_review 曾是无出口死态），唯一真实
+/// 裁决面是 owner，署名 owner 比冒名复审 agent 诚实。
 #[tauri::command]
 fn review_proposal(
     state: tauri::State<AppState>,
     proposal_id: String,
     pass: bool,
     reason: String,
-    reviewer_agent: String,
 ) -> Result<(), CmdError> {
-    // 裁决类写（ADR 0052 控制组）：ctx 与 Workbench::ctx_for(reviewer_agent) 同配方
     with_conn(&state, |db, root| {
-        let ctx = hexagon_core::tools::ToolContext::for_agent(db, root, &reviewer_agent);
+        let ctx = hexagon_core::tools::ToolContext::owner(db, root);
         hexagon_core::proposals::review(db, &ctx, &proposal_id, pass, &reason).map_err(cmd_err)
     })
     .map(|_| ())
@@ -861,33 +1060,33 @@ fn preset_roles() -> Result<Vec<hexagon_core::presets::RoleDef>, CmdError> {
     hexagon_core::presets::preset_roles().map_err(cmd_err)
 }
 
+// ---------- 角色模板库（ADR 0057：~/.hexagon/roles.json，无项目可用） ----------
+
+#[tauri::command]
+fn list_role_templates() -> Result<Vec<hexagon_core::templates::RoleTemplate>, CmdError> {
+    hexagon_core::templates::role_templates().map_err(cmd_err)
+}
+
+#[tauri::command]
+fn save_role_template(def: hexagon_core::presets::RoleDef) -> Result<(), CmdError> {
+    hexagon_core::templates::save_role_template(&def).map_err(cmd_err)
+}
+
+/// 只删自定义层；覆盖内置的同名项删除后内置复活（就近优先自然结果）。
+#[tauri::command]
+fn delete_role_template(name: String) -> Result<(), CmdError> {
+    hexagon_core::templates::delete_role_template(&name).map_err(cmd_err)
+}
+
 #[tauri::command]
 fn preset_packs() -> Result<Vec<hexagon_core::orchestra::PackDef>, CmdError> {
     hexagon_core::presets::preset_packs().map_err(cmd_err)
 }
 
-#[tauri::command]
-fn check_model_keys(slots: Vec<String>) -> Result<Vec<String>, CmdError> {
-    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
-    let mut missing = Vec::new();
-    for s in slots {
-        let name = model_key_name(&s);
-        if OsKeychain.get(&name).map_err(cmd_err)?.is_none() {
-            missing.push(name);
-        }
-    }
-    Ok(missing)
-}
-
-#[tauri::command]
-fn set_model_key(slot: String, secret: String) -> Result<(), CmdError> {
-    use hexagon_core::credentials::{model_key_name, CredentialStore, OsKeychain};
-    OsKeychain
-        .set(&model_key_name(&slot), &secret)
-        .map_err(cmd_err)
-}
-
 // ---------- 供应商配置（设置页模型区 / 启动页共用）----------
+// ui-audit-2 票 08 裁决：check_model_keys/set_model_key 已删——槽位级
+// model/{slot} 凭据模型被 provider/{id} 供应商级 key 取代（require_model_key
+// 无调用方），留着是误导性死面。
 
 /// 供应商文档：非密字段 + 各供应商 key 是否已存（key 明文永不回传）+ 槽位绑定表。
 /// 实现归 provider_admin（票 05）——壳层只转发。
@@ -972,6 +1171,11 @@ struct CreateProjectOpts {
     dir: String,
     name: String,
     roles: Vec<String>,
+    /// 角色定制覆盖（ADR 0057）：自定义模板与向导改过的角色传完整定义；
+    /// 未列名字走内置目录。壳层不读全局模板文件，保持 core 纯函数。
+    #[serde(default)]
+    #[ts(optional)]
+    role_overrides: Option<Vec<hexagon_core::presets::RoleDef>>,
     #[ts(optional)]
     pack_name: Option<String>,
     #[ts(optional)]
@@ -1010,6 +1214,7 @@ fn create_project(
         &opts.dir,
         &opts.name,
         &opts.roles,
+        opts.role_overrides.as_deref().unwrap_or(&[]),
         pack.as_ref(),
         opts.fastpath_role.as_deref(),
         opts.init_git,
@@ -1129,6 +1334,24 @@ pub fn run() {
             team,
             stage_status,
             pending_questions,
+            permission_rules,
+            revoke_permission_rule,
+            list_skills,
+            set_skill_muted,
+            skill_files,
+            read_skill_file,
+            save_global_skill,
+            scan_external_skills,
+            import_skills,
+            install_skill_path,
+            mcp_services,
+            list_mcp_entries,
+            save_mcp_service,
+            delete_mcp_service,
+            scan_external_mcp,
+            import_mcp,
+            open_mcp_market,
+            repo_paths,
             usage,
             open_stage,
             recover_run,
@@ -1142,12 +1365,14 @@ pub fn run() {
             save_pack_draft,
             save_pack_template,
             pack_templates,
+            pack_template,
             export_pack_yaml,
-            request_install,
             resolve_install,
             export_events,
             autonomy,
             set_autonomy,
+            reviewer_mode,
+            set_reviewer_mode,
             owner_away,
             owner_back,
             reject_stamp,
@@ -1172,9 +1397,10 @@ pub fn run() {
             log_enabled,
             inspect_dir,
             preset_roles,
+            list_role_templates,
+            save_role_template,
+            delete_role_template,
             preset_packs,
-            check_model_keys,
-            set_model_key,
             list_providers,
             save_provider,
             delete_provider,
