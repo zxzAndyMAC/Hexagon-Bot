@@ -10,7 +10,7 @@ use hexagon_core::api::Workbench;
 use hexagon_core::errcode::ErrorCode;
 use hexagon_core::PROJECT_ID;
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
 /// IPC 错误信封（ADR 0054，arch-review 票 06）：Tauri 把 `Err` 面序列化成
@@ -164,7 +164,7 @@ fn open_project(
         &name,
         &roles,
         pack,
-        Arc::new(hexagon_core::credentials::OsKeychain),
+        hexagon_core::credentials::active(),
     )
     .map_err(cmd_err)?;
     attach_delta_hook(&app, &wb);
@@ -982,14 +982,8 @@ fn open_recent(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| dir.clone());
     // OR IGNORE 保住库里的真实 name/mode；project_info 读库得真值
-    let wb = Workbench::open_with(
-        &dir,
-        &name,
-        &[],
-        pack,
-        Arc::new(hexagon_core::credentials::OsKeychain),
-    )
-    .map_err(cmd_err)?;
+    let wb = Workbench::open_with(&dir, &name, &[], pack, hexagon_core::credentials::active())
+        .map_err(cmd_err)?;
     attach_delta_hook(&app, &wb);
     *state
         .conn
@@ -1092,7 +1086,7 @@ fn preset_packs() -> Result<Vec<hexagon_core::orchestra::PackDef>, CmdError> {
 /// 实现归 provider_admin（票 05）——壳层只转发。
 #[tauri::command]
 fn list_providers() -> Result<hexagon_core::provider_admin::ProvidersView, CmdError> {
-    hexagon_core::provider_admin::list(&hexagon_core::credentials::OsKeychain).map_err(cmd_err)
+    hexagon_core::provider_admin::list(&*hexagon_core::credentials::active()).map_err(cmd_err)
 }
 
 /// 刷新运行中 Workbench 的供应商注册（保存/删除/绑定变更后热生效）。
@@ -1115,7 +1109,7 @@ fn save_provider(
     provider: hexagon_core::provider_admin::ProviderDef,
     secret: Option<String>,
 ) -> Result<(), CmdError> {
-    hexagon_core::provider_admin::save(provider, secret, &hexagon_core::credentials::OsKeychain)
+    hexagon_core::provider_admin::save(provider, secret, &*hexagon_core::credentials::active())
         .map_err(cmd_err)?;
     refresh_providers(&state);
     Ok(())
@@ -1156,7 +1150,7 @@ fn remove_slot_binding(state: tauri::State<AppState>, slot: String) -> Result<()
 fn fetch_provider_models(
     id: String,
 ) -> Result<Vec<hexagon_core::provider_admin::ModelEntry>, CmdError> {
-    hexagon_core::provider_admin::fetch_models(&id, &hexagon_core::credentials::OsKeychain)
+    hexagon_core::provider_admin::fetch_models(&id, &*hexagon_core::credentials::active())
         .map_err(cmd_err)
 }
 
@@ -1193,7 +1187,6 @@ fn create_project(
     state: tauri::State<AppState>,
     opts: CreateProjectOpts,
 ) -> Result<(), CmdError> {
-    use hexagon_core::credentials::OsKeychain;
     use hexagon_core::setup;
     // 负责人已确认的说明文件先落盘（已存在会被 write_agents_md 拒绝，不覆盖）
     if let Some(md) = &opts.agents_md {
@@ -1220,12 +1213,12 @@ fn create_project(
         pack.as_ref(),
         opts.fastpath_role.as_deref(),
         opts.init_git,
-        &OsKeychain,
+        &*hexagon_core::credentials::active(),
         &pdoc,
     )
     .map_err(cmd_err)?;
     // 接线尾步归 Workbench：凭据库 + 按文档注册运行槽位（票 05）
-    wb.attach_providers(Arc::new(OsKeychain));
+    wb.attach_providers(hexagon_core::credentials::active());
     attach_delta_hook(&app, &wb);
     *state
         .conn

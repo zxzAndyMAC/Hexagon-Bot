@@ -58,7 +58,18 @@ impl CredentialStore for OsKeychain {
     fn set(&self, name: &str, secret: &str) -> Result<(), CredError> {
         keyring::Entry::new("dev.hexagon.bot", name)
             .and_then(|e| e.set_password(secret))
-            .map_err(|e| CredError::Store(e.to_string()))
+            .map_err(|e| CredError::Store(e.to_string()))?;
+        // 写后回读（e2e 活测实证）：adhoc 签名 macOS 二进制上 keyring 的
+        // set_password 静默丢写——SecItemAdd 返回成功但条目不落默认钥匙串，
+        // 向导「存入钥匙串」报成而 key_set 永假。宁可报错让 owner 换
+        // HEXAGON_CREDENTIALS_PATH 文件缝，也不谎报已存（fail-closed：
+        // 假成功 = 用户以为已配置却永远开不了跑）。
+        match self.get(name) {
+            Ok(Some(_)) => Ok(()),
+            _ => Err(CredError::Store(
+                "keychain write did not persist (unsigned build? set HEXAGON_CREDENTIALS_PATH to use the file store)".into(),
+            )),
+        }
     }
     fn delete(&self, name: &str) -> Result<(), CredError> {
         match keyring::Entry::new("dev.hexagon.bot", name) {
@@ -89,6 +100,63 @@ impl CredentialStore for MemoryStore {
         self.map.lock().unwrap().remove(name);
         Ok(())
     }
+}
+
+/// 文件凭据存储：dev/未签名二进制的逃生缝（系统钥匙串在 adhoc 签名下
+/// 静默丢写——见 OsKeychain::set 注释）。`HEXAGON_CREDENTIALS_PATH` 指向
+/// 一个 JSON map 文件则启用；0600 权限，明文不落库不落日志。
+/// 只在显式设 env 时生效——生产签名包正常走 OsKeychain。
+pub struct FileStore {
+    path: std::path::PathBuf,
+}
+
+impl FileStore {
+    pub fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+    fn load(&self) -> HashMap<String, String> {
+        std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+    fn save(&self, map: &HashMap<String, String>) -> Result<(), CredError> {
+        let s = serde_json::to_string(map).map_err(|e| CredError::Store(e.to_string()))?;
+        std::fs::write(&self.path, s).map_err(|e| CredError::Store(e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+}
+
+impl CredentialStore for FileStore {
+    fn get(&self, name: &str) -> Result<Option<String>, CredError> {
+        Ok(self.load().get(name).cloned())
+    }
+    fn set(&self, name: &str, secret: &str) -> Result<(), CredError> {
+        let mut m = self.load();
+        m.insert(name.into(), secret.into());
+        self.save(&m)
+    }
+    fn delete(&self, name: &str) -> Result<(), CredError> {
+        let mut m = self.load();
+        m.remove(name);
+        self.save(&m)
+    }
+}
+
+/// 凭据后端选择点：`HEXAGON_CREDENTIALS_PATH` 设了走 FileStore（dev 缝），
+/// 否则系统钥匙串。壳层/测试只调这里，不直接 new OsKeychain。
+pub fn active() -> std::sync::Arc<dyn CredentialStore> {
+    if let Ok(p) = std::env::var("HEXAGON_CREDENTIALS_PATH") {
+        if !p.is_empty() {
+            return std::sync::Arc::new(FileStore::new(p.into()));
+        }
+    }
+    std::sync::Arc::new(OsKeychain)
 }
 
 /// 取某 Agent 模型槽对应的 key 明文（调用瞬间用）。缺 = Missing(凭据名)。
@@ -184,6 +252,26 @@ mod tests {
         );
         s.delete("model/chat").unwrap();
         assert!(s.get("model/chat").unwrap().is_none());
+    }
+
+    /// FileStore 是 adhoc 签名 dev 二进制的逃生缝（OsKeychain 丢写实测）。
+    /// 钉：跨实例可见（同一文件）、0600 权限、删后不回。
+    #[test]
+    fn file_store_persists_across_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("creds.json");
+        let a = FileStore::new(p.clone());
+        a.set("provider/x", "sk-file-9").unwrap();
+        // 跨实例读——同一进程两条 IPC 各自 active() 时必须互见
+        let b = FileStore::new(p.clone());
+        assert_eq!(b.get("provider/x").unwrap().as_deref(), Some("sk-file-9"));
+        b.delete("provider/x").unwrap();
+        assert!(a.get("provider/x").unwrap().is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(p.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
     }
 
     #[test]

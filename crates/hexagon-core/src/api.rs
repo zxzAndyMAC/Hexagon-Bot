@@ -163,7 +163,7 @@ impl Workbench {
             db,
             registry,
             providers: HashMap::new(),
-            creds: Arc::new(crate::credentials::OsKeychain),
+            creds: crate::credentials::active(),
             project_id,
             repo_root: dir,
             pack,
