@@ -2,7 +2,7 @@
 
 - Dev: `npm run dev`（仓库根；拉起 Vite :1420 + Tauri 窗口）
 - Test: `npm test`（cargo test --workspace + vitest）
-- Check: `npm run check`（fmt + clippy -D warnings + oxlint + tsc）
+- Check: `npm run check`（fmt + clippy -D warnings + check-arch.sh + oxlint + tsc + check-tokens + check-i18n）
 - Rust 工具链经 rustup 安装，不在默认 PATH：命令前 `export PATH="$HOME/.cargo/bin:$PATH"`
 
 ## Layout
@@ -30,13 +30,15 @@
 arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊断卡）。每条附可执行的检查面；检查只剩人工评审的规则不进本节。
 
 - **`pending_questions` 与 `agents.status` 的写路径只出现在属主模块**（`cards.rs` / `orchestra.rs`）。检查：`rg "pending_questions|UPDATE agents SET status" crates/hexagon-core/src` 的 SQL 命中只落属主；合法豁免=测试 helper 名（api/tests.rs）、schema 断言（db.rs）、泄漏扫描标签（credentials.rs `pending_questions:{id}`）、注释（D04/D09）
-- **core 内部模块不得 `use crate::api`**——门面只被壳层调用。白名单：`scenario.rs`、`setup.rs`、`replay.rs`（回放/向导是门面上方的驱动方，用真门面是设计）；`#[cfg(test)]` 内 `Workbench::for_test` 是合法测试接缝不算依赖；`errcode.rs` 是错误码注册表，按设计必须点名全部错误类型。检查：`rg "use crate::api|crate::api::" crates/hexagon-core/src` 命中只落白名单+api.rs 自身（D08，票 09 清零 judge 残留）
+- **core 内部模块不得 `use crate::api`**——门面只被壳层调用。白名单：`scenario.rs`、`setup.rs`、`replay.rs`（回放/向导是门面上方的驱动方，用真门面是设计）；`#[cfg(test)]` 内 `Workbench::for_test` 是合法测试接缝不算依赖；`errcode.rs` 是错误码注册表，按设计必须点名全部错误类型。检查：`scripts/check-arch.sh`——`use crate::api` 只落白名单；`crate::api::` 路径引用除 `Workbench`（`for_test` 测试接缝，`cfg(test)` 编译闸天然兜底）外只落白名单 + `errcode.rs` + `api.rs`（D08，票 09 清零 judge 残留）
 - **IPC 返回值必须是 serde 结构体**：禁止 `Vec<Value>`/`json!` 逐行拼装响应，payload 字段不得嵌字符串化 JSON。检查：`rg 'Result<Vec<Value>|Result<Value' crates/hexagon-core/src/api.rs` 白名单收敛（D06）
 - **跨 IPC 的 DTO 必须 `#[derive(ts_rs::TS)]` + `#[ts(export, export_to = ...)]`**，`export_to` 相对 crate 根：hexagon-core 用 `../../../ui/src/gen/`、src-tauri 用 `../../ui/src/gen/`。重生：`cargo test export_bindings`；64 位整数字段必须钉 `#[ts(type = "number")]`（ts-rs v11 默认 i64/u64→bigint，与 JSON number 不符）。`ui/src/gen/` 入 git，UI 不得手写同名 DTO（D06/ADR 0054）
-- **Tauri command 分 read/control/turn 三组注册，read 组禁止触碰 `state.wb`**。检查：`rg "state.wb" src-tauri/src/lib.rs` 命中只落 turn/mutation 组（D01）
-- **模型槽回退链只在 `provider_config::resolve_slot` 一处实现**（原 providers.rs，票 10 更名解碰 provider/providers）。检查：`rg 'or_else.*"default"' crates/hexagon-core/src` 归零（D13）
-- **`System` 事件的 `payload.kind` 子类词表集中登记于 `trace.rs`**，新增子类须同改词表与 `docs/glossary.html`。检查：`rg 'json!\(\{"kind":' crates/hexagon-core/src` 字面量只来自词表常量（D10）
+- **Tauri command 分 read/control/turn 三组注册，read 组禁止触碰 `state.wb`**。检查：`rg "state.wb" src-tauri/src/lib.rs` 每处命中的当行或紧邻下一行须挂标签——`D01-ok`（mutation 路径，如 `refresh_providers`）或 `D01-exempt`（read 侧探针不调 wb 方法，如 `project_open` 的 `is_some`）。`generate_handler!` 是扁平单表，三组只是约定，行内标签是唯一可机检边界（`scripts/check-arch.sh`）
+- **模型槽回退链只在 `provider_config::resolve_slot` 一处实现**（原 providers.rs，票 10 更名解碰 provider/providers）。检查：`rg 'get("default")' crates/hexagon-core/src` 命中只许 `provider_config.rs`（resolve_slot 本体）或挂 `D13-exempt` 行内理由（`scripts/check-arch.sh`）
+- **`System` 事件的 `payload.kind` 子类词表集中登记于 `trace.rs`**，新增子类须同改词表与 `docs/glossary.html`。检查：登记完整性由 `trace.rs` 测试 `system_subkinds_stay_registered` 守（写入后读回校验）；`check-arch.sh` 提示级列出裸字面量写入点，常量化是未做的重构面（D10）
 - **新判定器（judge/invariant/权限类判定面）必须配 proptest 属性测试**，不只样例测试；回归种子入 `proptest-regressions/`。检查：评审清单——新判定面 PR 必须含 `proptest!` 块钉不变量（D12）
+
+- 以上检查面统一固化于 `scripts/check-arch.sh`（QA 委托 GR-06），随 `npm run check` 执行；新命中无白名单/行内豁免即红
 
 ## 测试守门
 
@@ -44,10 +46,12 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 
 - **任何代码改动**：`npm run check` + `npm test` 全绿（命令定义见上节 Commands，不在此复述）。豁免仅纯文档（`.md`），须在交付说明留痕
 - **改 Rust**：跑 `npm test` 全量，不得只跑单 crate/单测图快
-- **改 `#[derive(ts_rs::TS)]` 结构**：重跑 `cargo test export_bindings`，`ui/src/gen/` diff 随改动同次入提交（D06）
-- **改 `ui/src/i18n/locales/`**：七语言 key 集合一致性检查（尚无脚本则先补脚本再挂门禁）+ 一种非英文语言手测冒烟
+- **改 `#[derive(ts_rs::TS)]` 结构**：重跑 `cargo test export_bindings`（测试名过滤器不是文件名），`ui/src/gen/` diff 随改动同次入提交（D06）
+- **改 `ui/src/i18n/locales/`**：`node ui/scripts/check-i18n.mjs`（七语言 key 集合对账，已挂 `npm run check`）+ 一种非英文语言手测冒烟
 - **修 bug**：同一次改动附回归测试——修复即文档，commit 会被遗忘，测试跟着代码走；新判定器必须配 proptest（D12）
-- **新 UI 界面/控件**：同步 vitest；涉及裁决回路的改动额外过黄金标准手测——离开 20 分钟归来，30 秒内看清「发生了什么、哪些在等拍板、最严重的是什么」并完成第一笔裁决
+- **新 UI 界面/控件**：同步 vitest
+- **裁决回路改动**（`decisions.ts`/`PendingCards`/`stageops`/`TopBar`/`store.ts` 的 pending|streams|modalScope 面）：过黄金标准手测——离开 20 分钟归来，30 秒内看清「发生了什么、哪些在等拍板、最严重的是什么」并完成第一笔裁决。5 分钟跑法：造一张待决卡 → ①设置页打开按 ⌘↵ 应被拦+提示；②回工作台 ⌘↵ 裁决成功；③顶卡为 publish 时 ⌘↵ 只出提示不出裁决
+- **E2E 纪律**：E2E 只留黄金标准路径（启动→向导→首指令→首卡→裁决→推进→归来摘要）；下层已测的不重复上浮；无 e2e 设施期间用半自动跑法（`.scratch/qa-alloy/cases.md` TC-E-0001）
 - **行为变更触及既有测试断言**：改测试与改代码同次提交，并在测试 diff 处注释说明行为为何变；静默删测试视为未过门
 
 ## Agent skills

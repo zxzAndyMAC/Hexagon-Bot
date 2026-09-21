@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri",
-    "tokens": "node scripts/check-tokens.mjs"
+    "tokens": "node scripts/check-tokens.mjs",
+    "i18n": "node scripts/check-i18n.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

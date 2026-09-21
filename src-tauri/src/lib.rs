@@ -1097,7 +1097,9 @@ fn list_providers() -> Result<hexagon_core::provider_admin::ProvidersView, CmdEr
 
 /// 刷新运行中 Workbench 的供应商注册（保存/删除/绑定变更后热生效）。
 fn refresh_providers(state: &AppState) {
+    // D01-ok: mutation 路径——供应商变更后热挂接走 wb.reload_providers。
     let mut g = match state.wb.lock() {
+        // D01-ok: mutation helper
         Ok(g) => g,
         Err(_) => return,
     };
@@ -1248,7 +1250,9 @@ fn create_project(
 
 #[tauri::command]
 fn project_open(state: tauri::State<AppState>) -> bool {
-    state.wb.lock().map(|g| g.is_some()).unwrap_or(false)
+    // D01-exempt: read 侧 is_some 探针——只为答「有没有开着的项目」，
+    // 不调用 wb 方法，D01 禁的是 read 组借 wb 做事，不是看这个槽位空不空。
+    state.wb.lock().map(|g| g.is_some()).unwrap_or(false) // D01-exempt: is_some probe
 }
 
 // ---------- 快速通道（票 26）----------

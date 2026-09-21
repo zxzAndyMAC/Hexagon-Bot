@@ -99,6 +99,46 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
   })
 })
 
+// QA 委托 TC-U-0001：严重度全序此前只钉了 publish<permission 一格——
+// 「最严重的是什么」是黄金标准的裁决依据，全序、平级稳定、未知 kind
+// 兜底都得钉死。排序表达式与 usePendingKeys（decisions.ts:117）同款；
+// 平级保持入队序依赖 ES2019 stable sort，这一隐含依赖在此显式钉住。
+describe('severityOf 全序（TC-U-0001）', () => {
+  const sev = (kind: string, payload: PendingQuestion['payload'] = {}) =>
+    severityOf(card({ kind, payload }))
+
+  it('六档全序：恢复/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章', () => {
+    expect(sev('recovery')).toBe(0)
+    expect(sev('publish')).toBe(0)
+    expect(sev('install')).toBe(0)
+    expect(sev('stamp', {})).toBe(1)
+    expect(sev('escalation')).toBe(2)
+    expect(sev('permission')).toBe(3)
+    expect(sev('stamp', { proposal_id: 'p1' })).toBe(4)
+  })
+
+  it('stamp 按 payload.proposal_id 二分：有→提案档垫底，无→阶段档', () => {
+    expect(sev('stamp', { proposal_id: 'p1' })).toBeGreaterThan(sev('permission'))
+    expect(sev('stamp', {})).toBeLessThan(sev('escalation'))
+  })
+
+  it('未知 kind 排最末（severity 9）', () => {
+    expect(sev('bogus_future_kind')).toBe(9)
+    expect(sev('bogus_future_kind')).toBeGreaterThan(sev('stamp', { proposal_id: 'x' }))
+  })
+
+  it('同 severity 平级保持入队序（stable sort 依赖）', () => {
+    const pending = [
+      card({ id: 'perm1', kind: 'permission' }),
+      card({ id: 'rec1', kind: 'recovery' }),
+      card({ id: 'perm2', kind: 'permission' }),
+      card({ id: 'pub1', kind: 'publish' }),
+    ]
+    const sorted = [...pending].sort((a, b) => severityOf(a) - severityOf(b))
+    expect(sorted.map((q) => q.id)).toEqual(['rec1', 'pub1', 'perm1', 'perm2'])
+  })
+})
+
 describe('逆建议留痕（ui-audit 票 07 / P2-15）', () => {
   it('judge=stamp 时驳回 reason 追加 judge=stamp 对照', () => {
     expect(rejectReasonWithJudge('', 'stamp')).toBe('owner rejected · judge=stamp')

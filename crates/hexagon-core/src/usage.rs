@@ -35,7 +35,7 @@ fn price_for(repo_root: &std::path::Path, model_slot: &str) -> Price {
     let entry = v
         .get("models")
         .and_then(|m| m.get(model_slot))
-        .or_else(|| v.get("default"));
+        .or_else(|| v.get("default")); // D13-exempt: prices.json 价目兜底，非槽位绑定回退
     entry
         .map(|e| Price {
             prompt_per_1k_mc: e["prompt_per_1k_mc"].as_i64().unwrap_or(0),
