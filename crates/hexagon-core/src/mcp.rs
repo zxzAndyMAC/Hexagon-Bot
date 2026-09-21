@@ -650,6 +650,23 @@ pub struct McpServiceRow {
     pub error: Option<String>,
 }
 
+/// 按 pid 杀子进程（握手超时路径）：Conn 被阻塞线程占着拿不回 Child，
+/// 只能走 pid。unix/windows 各一行。
+fn kill_pid(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .status();
+    }
+}
+
 /// MCP 宿主：持全部服务进程，Drop 时全停。
 pub struct McpHost {
     servers: Vec<Arc<Server>>,
@@ -679,19 +696,36 @@ impl McpHost {
                     continue;
                 }
             };
+            // 握手超时兜底（e2e 活测实证）：read_response 只限帧数不限时，
+            // spawned-but-silent 的服务（cursor-talk-to-figma-mcp 不答
+            // initialize）会把 read_line 挂死，连累项目创建/打开永远卡死。
+            // 线程跑握手 + recv_timeout；超时按 pid 杀子进程，泄漏的读线程
+            // 在管道断开后自行退出。fail-closed：宁可服务 down 也不挂住建档。
+            let pid = conn.child.id();
             let server = Arc::new(Server {
                 spec: spec.clone(),
                 conn: Mutex::new(conn),
             });
-            let tools = match server.handshake() {
-                Ok(t) => t,
-                Err(e) => {
+            let srv = server.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(srv.handshake());
+            });
+            let tools = match rx.recv_timeout(std::time::Duration::from_secs(8)) {
+                Ok(Ok(t)) => t,
+                Ok(Err(e)) => {
                     log::warn!("mcp service {} handshake failed, skipped", spec.name);
                     // Child::drop 不杀进程——握手失败的服务若不 kill 会成孤儿。
                     if let Ok(mut c) = server.conn.lock() {
                         let _ = c.child.kill();
                     }
                     statuses.push(row("down", vec![], Some(e.to_string())));
+                    continue;
+                }
+                Err(_) => {
+                    log::warn!("mcp service {} handshake timeout, killed", spec.name);
+                    kill_pid(pid);
+                    statuses.push(row("down", vec![], Some("handshake timeout".into())));
                     continue;
                 }
             };
@@ -847,6 +881,25 @@ while True:
             command: command.into(),
             ..Default::default()
         }
+    }
+
+    /// 回归（e2e 活测实证）：spawned-but-silent 服务曾把 read_line 挂死，
+    /// 连累 create_project 永久卡在确认页。`sleep` 进程从不答
+    /// initialize——start 必须在握手超时内返回 down，不得无限阻塞。
+    /// 8s 超时 + 测试断言 <25s 留足余量。
+    #[cfg(unix)]
+    #[test]
+    fn silent_server_times_out_instead_of_hanging() {
+        let mut reg = crate::tools::Registry::builtin();
+        let mut s = spec("silent", "sleep");
+        s.args = vec!["30".into()];
+        let t0 = std::time::Instant::now();
+        let host = McpHost::start(vec![s], &mut reg);
+        let elapsed = t0.elapsed();
+        assert!(elapsed.as_secs() < 25, "handshake 无限阻塞: {elapsed:?}");
+        let st = &host.status()[0];
+        assert_eq!(st.status, "down");
+        assert_eq!(st.error.as_deref(), Some("handshake timeout"));
     }
 
     #[test]
