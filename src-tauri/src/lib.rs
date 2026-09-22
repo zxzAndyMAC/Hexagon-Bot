@@ -480,6 +480,15 @@ fn read_repo_file(state: tauri::State<AppState>, path: String) -> Result<String,
     })
 }
 
+/// 文件在 git HEAD 的版本（读组，文件页对比基线）。
+/// 非仓/未跟踪/无 HEAD → None，基线缺失不是错误。
+#[tauri::command]
+fn repo_file_head(state: tauri::State<AppState>, path: String) -> Result<Option<String>, CmdError> {
+    with_conn(&state, |_db, root| {
+        hexagon_core::files::repo_file_at_head(root, &path)
+    })
+}
+
 /// 新建空文件（控制组，落盘）。
 #[tauri::command]
 fn create_repo_file(state: tauri::State<AppState>, path: String) -> Result<(), CmdError> {
@@ -1573,6 +1582,7 @@ pub fn run() {
             repo_paths,
             list_repo_dir,
             read_repo_file,
+            repo_file_head,
             create_repo_file,
             create_repo_dir,
             write_repo_file,

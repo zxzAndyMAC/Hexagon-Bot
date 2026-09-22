@@ -156,7 +156,10 @@ describe('右栏项目页文件树（票 11）', () => {
     expect(rail.querySelector('[data-testid=file-tree]')).toBeTruthy()
     expect(api.readRepoFile).toHaveBeenCalledWith('README.md')
 
-    const save = center.querySelector('button') as HTMLButtonElement
+    // 文件页头部多了视图切换 seg（编辑/预览/对比），保存钮不再稳占
+    // 第一个 button——按 ⌘S tooltip 定位，不依赖排版顺序。
+    const save = [...center.querySelectorAll('button')].find((b) =>
+      b.title.includes(formatBinding(bindingFor('saveFile')))) as HTMLButtonElement
     expect(save.title).toContain(formatBinding(bindingFor('saveFile')))
   })
 })

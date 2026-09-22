@@ -153,6 +153,8 @@ export const api = {
   // 票 11：右栏文件树。读/建/写都落仓根，路径由核围栏。
   listRepoDir: (rel = '') => call<RepoEntry[]>('list_repo_dir', { rel }),
   readRepoFile: (path: string) => call<string>('read_repo_file', { path }),
+  /** 文件在 git HEAD 的版本（文件页对比基线）。非仓/未跟踪 → null。 */
+  repoFileHead: (path: string) => call<string | null>('repo_file_head', { path }),
   writeRepoFile: (path: string, content: string) => call<void>('write_repo_file', { path, content }),
   createRepoFile: (path: string) => call<void>('create_repo_file', { path }),
   createRepoDir: (path: string) => call<void>('create_repo_dir', { path }),
@@ -904,6 +906,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       const rel = String(args?.rel ?? '')
       if (rel === '' || rel === '.') {
         return [
+          { name: '.hexagon', path: '.hexagon', kind: 'dir' },
           { name: 'src', path: 'src', kind: 'dir' },
           { name: 'README.md', path: 'README.md', kind: 'file' },
           { name: 'package.json', path: 'package.json', kind: 'file' },
@@ -912,10 +915,29 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       if (rel === 'src') {
         return [{ name: 'main.ts', path: 'src/main.ts', kind: 'file' }] as T
       }
+      if (rel === '.hexagon') {
+        return [{ name: 'specs', path: '.hexagon/specs', kind: 'dir' }] as T
+      }
+      if (rel === '.hexagon/specs') {
+        return [{ name: 'prd.md', path: '.hexagon/specs/prd.md', kind: 'file' }] as T
+      }
       return [] as T
     }
-    case 'read_repo_file':
-      return `// ${args?.path}\n` as T
+    case 'read_repo_file': {
+      const p = String(args?.path)
+      // .hexagon/ 下的产物磁盘版与 ART_CONTENT 最新版对齐，
+      // 浏览器预览里「文件页 vs 版本基线」才有真实差异可看。
+      const artPath = p.startsWith('.hexagon/') ? p.slice('.hexagon/'.length) : null
+      const art = artPath ? artLatest(artPath) : null
+      if (art != null) return art as T
+      if (p.endsWith('.md')) {
+        return `# ${p}\n\n- 列表项一\n- 列表项二\n\n正文 **加粗** 与 \`code\`。\n` as T
+      }
+      return `// ${p}\n` as T
+    }
+    case 'repo_file_head':
+      // mock 仓假定每个文本文件都有 HEAD 版：比盘上少一行，diff 可见。
+      return `# HEAD 版 ${args?.path}\n` as T
     case 'write_repo_file':
     case 'create_repo_file':
     case 'create_repo_dir':

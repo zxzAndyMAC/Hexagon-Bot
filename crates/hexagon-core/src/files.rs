@@ -104,6 +104,30 @@ pub fn read_repo_file(root: &Path, rel: &str) -> Result<String, RepoFsError> {
     String::from_utf8(bytes).map_err(|_| RepoFsError::NotText(show(rel)))
 }
 
+/// 读 `rel` 在 git HEAD 的版本，作中栏文件页的对比基线。
+/// 非 git 仓库、无 HEAD 提交、文件未跟踪、HEAD 版本是二进制——都回 Ok(None)：
+/// 基线是增强不是门槛，UI 据此收起 HEAD 选项，而不是把文件页判死。
+/// 注意：git::run 对 stdout 做 trim，文件头尾空白差异在该基线上不可见。
+pub fn repo_file_at_head(root: &Path, rel: &str) -> Result<Option<String>, RepoFsError> {
+    // 与 read_repo_file 同一道路径围栏：拼进 `HEAD:` rev:path 参数前先过
+    // segments()，`..`/绝对路径/盘符在拼参数前就出局，路径纪律保持单点。
+    let segs = segments(rel)?;
+    if segs.is_empty() || !crate::git::is_repo(root) {
+        return Ok(None);
+    }
+    let spec = format!("HEAD:{}", segs.join("/"));
+    match crate::git::run(root, &["show", &spec]) {
+        // HEAD 里的二进制/巨型版本同样不算可用基线——编辑器本体就拒这类
+        // 文本（MAX_TEXT_BYTES），基线沿用同一条边界，不灌进 webview。
+        Ok(text) if text.contains('\0') || text.len() as u64 > MAX_TEXT_BYTES => Ok(None),
+        Ok(text) => Ok(Some(text)),
+        // git 起不来的 IOError 是环境故障，如实上报；
+        // Failed（未跟踪/无 HEAD/坏对象）一律视为「无基线」。
+        Err(crate::git::GitError::Io(e)) => Err(e.into()),
+        Err(_) => Ok(None),
+    }
+}
+
 /// 覆写已有普通文件，或在已存在的父目录里新建。不写穿符号链接。
 pub fn write_repo_file(root: &Path, rel: &str, content: &str) -> Result<(), RepoFsError> {
     if content.len() as u64 > MAX_TEXT_BYTES {
@@ -358,6 +382,35 @@ mod tests {
             RepoFsError::TooLarge(_)
         ));
         assert!(write_repo_file(root, "big.txt", &big).is_err());
+    }
+
+    #[test]
+    fn repo_file_at_head_reads_committed_version() {
+        let dir = root();
+        let repo = dir.path();
+        fs::create_dir(repo.join("src")).unwrap();
+        fs::write(repo.join("src/a.rs"), "old\n").unwrap();
+        crate::git::init(repo, "main").unwrap();
+        crate::git::commit_all(repo, "add a").unwrap();
+        // 工作区改动不影响 HEAD 基线
+        fs::write(repo.join("src/a.rs"), "new\n").unwrap();
+        // git::run 对 stdout trim，断言对齐这个边界。
+        assert_eq!(
+            repo_file_at_head(repo, "src/a.rs").unwrap().as_deref(),
+            Some("old")
+        );
+        // 未跟踪文件没有基线
+        fs::write(repo.join("b.txt"), "x").unwrap();
+        assert_eq!(repo_file_at_head(repo, "b.txt").unwrap(), None);
+        // 路径越界照旧硬拒
+        assert!(matches!(
+            repo_file_at_head(repo, "../x").unwrap_err(),
+            RepoFsError::PathEscape(_)
+        ));
+        // 非 git 目录一律无基线
+        let plain = tempfile::tempdir().unwrap();
+        fs::write(plain.path().join("a.txt"), "x").unwrap();
+        assert_eq!(repo_file_at_head(plain.path(), "a.txt").unwrap(), None);
     }
 
     #[test]
