@@ -12,10 +12,58 @@ use crate::tools::{Registry, ToolContext};
 use crate::trace::{EventKind, TraceError};
 use crate::turn::{self, TurnOutcome};
 use serde_json::json;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
+
+/// 一条派活链上最多再派这么多次。
+///
+/// 代价：再放行 = 模型互相点名可以无人值守烧完额度（false continue）；
+/// 停下来 = 这一轮之后要负责人再说一句（false stop）。偏向停。
+/// 出处：票 09。被否决：不设上限，只靠「先不派活」——模型不选那一项就停不下来。
+const DISPATCH_CHAIN_CAP: u32 = 8;
+
+thread_local! {
+    static DISPATCH_CHAIN: Cell<u32> = const { Cell::new(0) };
+}
+
+struct ChainGuard(u32);
+
+impl ChainGuard {
+    fn enter() -> Option<Self> {
+        let cur = DISPATCH_CHAIN.get();
+        if cur >= DISPATCH_CHAIN_CAP {
+            return None;
+        }
+        DISPATCH_CHAIN.set(cur + 1);
+        Some(Self(cur))
+    }
+}
+
+impl Drop for ChainGuard {
+    fn drop(&mut self) {
+        DISPATCH_CHAIN.set(self.0);
+    }
+}
+
+/// 花名册里的点名，按出现顺序去重。说话人自己不算「下一位」。
+fn roster_mentions(body: &str, roster: &[String], speaker: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for token in crate::commands::parse_tokens(body) {
+        let crate::trace::MessageToken::Mention { agent_role } = token else {
+            continue;
+        };
+        if agent_role == speaker || out.iter().any(|r| r == &agent_role) {
+            continue;
+        }
+        if roster.iter().any(|r| r == &agent_role) {
+            out.push(agent_role);
+        }
+    }
+    out
+}
 
 /// 回合 delta 外发钩子类型（票 03）：壳层注入，emit 到 webview。
 pub type TurnDeltaHook = Box<dyn FnMut(&turn::TurnDelta) + Send>;
@@ -102,14 +150,33 @@ pub enum ApiError {
     Decision(String),
 }
 
-/// 没点名的负责人发言走完封闭选择之后的结果。
-/// `Skipped` = 这句话不归票 08（有花名册点名、是指令、或花名册里没有项目经理）。
+/// 下一手派完之后的结果。
+///
+/// `Skipped` = 不派：整句是指令、接话人就是刚说完的那位，或链到了上限。
+/// `KeptInChat` = 角色点名在 L0/L1，只留在时间线上，不唤醒。
+/// `Noted` = 没有接话人，工作台自己写了说明，作者不是角色。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnnamedRoute {
     Skipped,
-    Dispatched { role: String, via: String },
-    Held { via: String },
-    Rejected { raw: String, via: String },
+    Dispatched {
+        role: String,
+        via: String,
+    },
+    Held {
+        via: String,
+    },
+    Rejected {
+        raw: String,
+        via: String,
+    },
+    /// 点名直接派了，没有做「先不派活」的封闭选择。
+    Mentioned {
+        roles: Vec<String>,
+    },
+    KeptInChat {
+        roles: Vec<String>,
+    },
+    Noted,
 }
 
 /// 工作台实例：一个打开的项目。
@@ -694,6 +761,8 @@ impl Workbench {
             }
             turn_layers.push(turn::PromptLayer::new(turn::LayerLevel::RoleDef, text));
         }
+        // 票 09：本回合新落的消息才算「说完的内容」。水位取在模型调用之前。
+        let watermark = self.message_high_water()?;
         // 票 03：delta hook 锁跨整个回合——hook 一旦挂上，所有走
         // run_turn_opts 的入口（run_turn/dispatch/撞限放行）自动流式。
         let mut guard = self.delta_hook.lock().unwrap();
@@ -732,7 +801,15 @@ impl Workbench {
                 log::warn!("judge sweep failed: {e}");
             }
         }
-        Ok(run?)
+        let outcome = run?;
+        // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
+        // 续派失败不推翻已经说完的这一回合——否则脚本耗尽会让成功的回复变成错误。
+        if matches!(outcome, TurnOutcome::Finished) {
+            if let Err(e) = self.continue_after_turn(role, watermark) {
+                log::warn!("continue after {role}: {e}");
+            }
+        }
+        Ok(outcome)
     }
 
     /// 快速通道派发（票 26）：负责人直接把任务派给一个已勾选角色，
@@ -772,42 +849,79 @@ impl Workbench {
         self.run_turn_opts(role, input, attachments, true)
     }
 
-    /// 负责人发言但没有点名花名册里的人：项目经理做一次封闭选择，
-    /// 然后最多唤醒一个角色（票 08 / ADR 0065）。
+    /// 负责人发言的下一手（票 08 / 票 09 / ADR 0065）。
+    ///
+    /// 点名在任何档位都直接派给被点名者，不经过「先不派活」。没点名时，
+    /// 项目经理做一次封闭选择；卸掉项目经理后，流程包交给当前阶段激活名单
+    /// 的第一位，快速通道交给通道角色。没有这样的角色时，工作台自己写说明。
     ///
     /// 不拨阶段指针、不改流程包激活名单、不改写激活简报——那些写者
     /// 仍是 `open_stage` / 回合内核。选中的角色可以不在当前阶段名单里，
     /// 唤醒走既有 [`Self::dispatch`]（改的是 `agents.status`，不是名单）。
     ///
-    /// 有花名册点名、整句是指令、或花名册里没有项目经理 → [`UnnamedRoute::Skipped`]。
-    /// 卸掉之后改由激活名单第一位或通道角色接，是票 09，这里不补。
+    /// 角色说完且没有点名下一位时，[`Self::continue_after_turn`] 再进这同一条路。
+    /// 角色点名只在 L2 及以上派活。
     pub fn route_unnamed_owner(
         &self,
         body: &str,
         attachments: &[crate::trace::AttachRef],
     ) -> Result<UnnamedRoute, ApiError> {
-        if crate::commands::parse_command(body).is_some() {
+        self.route_body("owner", body, attachments, true)
+    }
+
+    fn route_body(
+        &self,
+        speaker: &str,
+        body: &str,
+        attachments: &[crate::trace::AttachRef],
+        from_owner: bool,
+    ) -> Result<UnnamedRoute, ApiError> {
+        if from_owner && crate::commands::parse_command(body).is_some() {
             return Ok(UnnamedRoute::Skipped);
         }
-        let roster: Vec<String> = {
-            let mut st = self
-                .db
-                .conn()
-                .prepare("SELECT role FROM agents WHERE project_id=?1 ORDER BY id")?;
-            let rows = st.query_map([&self.project_id], |r| r.get(0))?;
-            rows.collect::<Result<Vec<_>, _>>()?
-        };
-        let mentioned = crate::commands::parse_tokens(body).into_iter().any(|t| {
-            matches!(t, crate::trace::MessageToken::Mention { agent_role } if roster.iter().any(|r| r == &agent_role))
-        });
-        // 点名仍走今日的 dispatch（界面在 pack 模式按花名册点名派）。
-        // 这里再选一次就会和点名双发。
-        if mentioned {
-            return Ok(UnnamedRoute::Skipped);
+        let roster = self.roster()?;
+        let mentions = roster_mentions(body, &roster, speaker);
+        if !mentions.is_empty() {
+            let rank = crate::autonomy::rank(&self.db, &self.project_id)?;
+            // 负责人的点名不进封闭选择，所以也没有「先不派活」这一项。
+            if !crate::pm_route::mention_wakes(from_owner, rank) {
+                return Ok(UnnamedRoute::KeptInChat { roles: mentions });
+            }
+            for role in &mentions {
+                self.dispatch(role, body, attachments)?;
+            }
+            return Ok(UnnamedRoute::Mentioned { roles: mentions });
         }
-        if !roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
-            return Ok(UnnamedRoute::Skipped);
+        if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
+            return self.closed_choice(speaker, body, attachments, from_owner, &roster);
         }
+        match self.handoff_role(&roster)? {
+            Some(role) if role != speaker => {
+                self.dispatch(&role, body, attachments)?;
+                Ok(UnnamedRoute::Dispatched {
+                    role,
+                    via: "fallback".into(),
+                })
+            }
+            // 接话人就是刚说完的这位。再派一次不是下一位，是把同一回合再跑一遍。
+            // 代价：再派 = 无人值守对着同一个人循环（false continue）；
+            // 停 = 这一位已经接过话（false stop）。偏向停。出处：票 09。
+            Some(_) => Ok(UnnamedRoute::Skipped),
+            None => {
+                self.write_no_receiver_note()?;
+                Ok(UnnamedRoute::Noted)
+            }
+        }
+    }
+
+    fn closed_choice(
+        &self,
+        speaker: &str,
+        body: &str,
+        attachments: &[crate::trace::AttachRef],
+        from_owner: bool,
+        roster: &[String],
+    ) -> Result<UnnamedRoute, ApiError> {
         let pm_id = self.agent_by_role(crate::pm_route::PM_ROLE)?;
         let decision_slot: Option<String> = self.db.conn().query_row(
             "SELECT decision_slot FROM agents WHERE id=?1",
@@ -847,8 +961,14 @@ impl Workbench {
                     .and_then(|p| p.stages.get(r.seq as usize).map(|s| s.roles.clone()))
             })
             .unwrap_or_default();
-        let prompt =
-            crate::pm_route::choice_prompt(stage_name.as_deref(), &activation, &roster, body);
+        let speaker_label = if from_owner { "负责人" } else { speaker };
+        let prompt = crate::pm_route::choice_prompt(
+            stage_name.as_deref(),
+            &activation,
+            roster,
+            speaker_label,
+            body,
+        );
         let req = crate::pm_route::choice_request(&slot_name, &prompt);
         let run_id = run.as_ref().map(|r| r.id.as_str());
         // 选择也是一次模型派发：信封在调用前落，用量在成功后记到项目经理头上。
@@ -875,8 +995,8 @@ impl Workbench {
         };
         crate::usage::record(&self.db, &usage_ctx, &slot_name, &resp.usage, 0)?;
         let raw = crate::pm_route::choice_text(&resp);
-        let choice = crate::pm_route::parse_route_choice(&raw, &roster);
-        let mut eligible = roster.clone();
+        let choice = crate::pm_route::parse_route_choice(&raw, roster);
+        let mut eligible = roster.to_vec();
         eligible.push(crate::pm_route::HOLD.to_string());
         let (held, rejected, role) = match &choice {
             Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
@@ -929,6 +1049,114 @@ impl Workbench {
                 via: via.to_string(),
             }),
         }
+    }
+
+    /// 角色回合正常说完之后的下一手。链上限见 [`DISPATCH_CHAIN_CAP`]。
+    fn continue_after_turn(&self, role: &str, watermark: i64) -> Result<UnnamedRoute, ApiError> {
+        let Some(_guard) = ChainGuard::enter() else {
+            log::warn!("dispatch chain stopped at {DISPATCH_CHAIN_CAP} after {role}");
+            return Ok(UnnamedRoute::Skipped);
+        };
+        let aid = self.agent_by_role(role)?;
+        let text = self.text_since(&aid, watermark)?;
+        let body = if text.trim().is_empty() {
+            "（没有可见回复）".to_string()
+        } else {
+            text
+        };
+        self.route_body(role, &body, &[], false)
+    }
+
+    fn message_high_water(&self) -> Result<i64, ApiError> {
+        Ok(self.db.conn().query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM messages WHERE project_id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    fn text_since(&self, author: &str, after_id: i64) -> Result<String, ApiError> {
+        let mut st = self.db.conn().prepare(
+            "SELECT body FROM messages
+             WHERE project_id=?1 AND author=?2 AND id>?3
+             ORDER BY id",
+        )?;
+        let rows = st.query_map(rusqlite::params![self.project_id, author, after_id], |r| {
+            r.get::<_, String>(0)
+        })?;
+        let mut parts = Vec::new();
+        for row in rows {
+            let body = row?;
+            if !body.is_empty() {
+                parts.push(body);
+            }
+        }
+        Ok(parts.join("\n"))
+    }
+
+    fn roster(&self) -> Result<Vec<String>, ApiError> {
+        let mut st = self
+            .db
+            .conn()
+            .prepare("SELECT role FROM agents WHERE project_id=?1 ORDER BY id")?;
+        let rows = st.query_map([&self.project_id], |r| r.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 卸掉项目经理之后的接话人。快速通道是通道角色；流程包是当前阶段
+    /// 激活名单的第一位，而且这人必须还在花名册里。没有则 `None`。
+    fn handoff_role(&self, roster: &[String]) -> Result<Option<String>, ApiError> {
+        let (mode, fast_id): (String, Option<String>) = self.db.conn().query_row(
+            "SELECT mode, fastpath_agent_id FROM projects WHERE id=?1",
+            [&self.project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if mode == "fastpath" {
+            let Some(id) = fast_id.filter(|s| !s.trim().is_empty()) else {
+                return Ok(None);
+            };
+            let role: Option<String> = self
+                .db
+                .conn()
+                .query_row(
+                    "SELECT role FROM agents WHERE project_id=?1 AND id=?2",
+                    rusqlite::params![self.project_id, id],
+                    |r| r.get(0),
+                )
+                .ok();
+            return Ok(role.filter(|r| roster.iter().any(|x| x == r)));
+        }
+        let Some(run) = self.active_run()? else {
+            return Ok(None);
+        };
+        let Some(pack) = self.pack.as_ref() else {
+            return Ok(None);
+        };
+        let Some(stage) = pack.stages.get(run.seq as usize) else {
+            return Ok(None);
+        };
+        let Some(first) = stage.roles.first() else {
+            return Ok(None);
+        };
+        if roster.iter().any(|r| r == first) {
+            Ok(Some(first.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn write_no_receiver_note(&self) -> Result<(), ApiError> {
+        let run = self.active_run()?;
+        self.db.append_message(
+            &self.project_id,
+            crate::pm_route::WORKBENCH_AUTHOR,
+            crate::pm_route::NO_RECEIVER_NOTE,
+            &[],
+            &[],
+            None,
+            run.as_ref().map(|r| r.id.as_str()),
+        )?;
+        Ok(())
     }
 
     /// 升级为流程包（票 26）：不换目录——钉包副本 + mode='pack' + PackUpgraded 事件。

@@ -36,10 +36,9 @@ async function sendText(el: HTMLElement, body: string) {
   })
 }
 
-// 回归（真窗口活测 D-06）：pack 模式此前无任何触发 agent 回合的
-// UI 路径——send 只落库，dispatch 只在 fastpath 调。「@点名即派活」
-// 补上最后一寸；无 mention 的广播消息不触发回合（受控：不烧 token）。
-describe('Composer pack 模式 @点名派活（D-06）', () => {
+// 票 09：派活在核内（send_message → route）。界面再 dispatch 会双发，
+// 也会把 L0/L1 的角色点名闸重写掉。这里只钉「界面不自己派」。
+describe('Composer 发送不在界面里派活（票 09）', () => {
   beforeEach(() => {
     useUiStore.setState({
       mode: 'pack',
@@ -51,28 +50,25 @@ describe('Composer pack 模式 @点名派活（D-06）', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it('@花名册角色 → dispatch 到该角色；一条消息可点多人', async () => {
+  it('@花名册角色只送原文，界面不 dispatch', async () => {
     const sendSpy = vi.spyOn(api, 'sendMessage')
     const dispSpy = vi.spyOn(api, 'dispatch')
     const { el, root } = await render(<Composer />)
     await sendText(el, '@产品策划 @后端 把首页骨架搭出来')
     expect(sendSpy).toHaveBeenCalledWith('@产品策划 @后端 把首页骨架搭出来', [])
-    expect(dispSpy).toHaveBeenCalledTimes(2)
-    expect(dispSpy).toHaveBeenCalledWith('产品策划', '@产品策划 @后端 把首页骨架搭出来', [])
-    expect(dispSpy).toHaveBeenCalledWith('后端', '@产品策划 @后端 把首页骨架搭出来', [])
+    expect(dispSpy).not.toHaveBeenCalled()
     root.unmount()
   })
 
-  it('同一角色重复 @ 只派一次', async () => {
+  it('同一角色重复 @ 也不在界面派活', async () => {
     const dispSpy = vi.spyOn(api, 'dispatch')
     const { el, root } = await render(<Composer />)
     await sendText(el, '@产品策划 写范围 @产品策划 别忘了验收标准')
-    expect(dispSpy).toHaveBeenCalledTimes(1)
+    expect(dispSpy).not.toHaveBeenCalled()
     root.unmount()
   })
 
-  // 票 08 起，没点名的派活改在核内封闭选择（send_message → route_unnamed_owner）。
-  // 界面不再自己 dispatch——本测试钉的是「界面不重写这道选择」，不是「没人接话」。
+  // 没点名的派活在核内封闭选择。界面不重写这道选择。
   it('无 mention 的消息界面不派活（封闭选择在核内）', async () => {
     const sendSpy = vi.spyOn(api, 'sendMessage')
     const dispSpy = vi.spyOn(api, 'dispatch')
@@ -91,18 +87,18 @@ describe('Composer pack 模式 @点名派活（D-06）', () => {
     root.unmount()
   })
 
-  it('fastpath 语义不变：消息直接派给通道角色', async () => {
+  it('fastpath 也不在界面预派通道角色', async () => {
     useUiStore.setState({ mode: 'fastpath', fastRole: '运维' })
+    const sendSpy = vi.spyOn(api, 'sendMessage')
     const dispSpy = vi.spyOn(api, 'dispatch')
     const { el, root } = await render(<Composer />)
     await sendText(el, '准备部署清单')
-    expect(dispSpy).toHaveBeenCalledTimes(1)
-    expect(dispSpy).toHaveBeenCalledWith('运维', '准备部署清单', [])
+    expect(sendSpy).toHaveBeenCalledWith('准备部署清单', [])
+    expect(dispSpy).not.toHaveBeenCalled()
     root.unmount()
   })
 
-  // 票 08：花名册有项目经理时，没点名的话由核内封闭选择派。
-  // 界面再派给通道角色就会双发。卸掉项目经理后的接话仍是上面那条今日行为。
+  // 有没有项目经理都一样：界面不派，核内决定接话人。
   it('fastpath 且有项目经理时，无点名的消息不预派通道角色', async () => {
     useUiStore.setState({
       mode: 'fastpath',
@@ -154,9 +150,8 @@ describe('Composer 图片附件（票 03）', () => {
     expect(sendSpy).toHaveBeenCalledWith('看这个截图', [
       expect.objectContaining({ path: '.hexagon/inbox/att-1-x.png' }),
     ])
-    expect(dispSpy).toHaveBeenCalledWith('运维', '看这个截图', [
-      expect.objectContaining({ media_type: 'image/png' }),
-    ])
+    // 票 09：通道角色由核内接，界面不 dispatch。附件跟 sendMessage 走。
+    expect(dispSpy).not.toHaveBeenCalled()
     root.unmount()
   })
 
@@ -350,7 +345,7 @@ describe('Composer 原子块（票 10）', () => {
     }
   })
 
-  it('点名块发送后派活口径不变：正文仍是 @角色', async () => {
+  it('点名块发送后正文仍是 @角色，界面不派活', async () => {
     const sendSpy = vi.spyOn(api, 'sendMessage')
     const dispSpy = vi.spyOn(api, 'dispatch')
     const { el, root } = await render(<Composer />)
@@ -361,8 +356,7 @@ describe('Composer 原子块（票 10）', () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
     expect(sendSpy).toHaveBeenCalledWith('@产品策划 ', [])
-    expect(dispSpy).toHaveBeenCalledTimes(1)
-    expect(dispSpy).toHaveBeenCalledWith('产品策划', '@产品策划 ', [])
+    expect(dispSpy).not.toHaveBeenCalled()
     root.unmount()
   })
 })

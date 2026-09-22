@@ -68,7 +68,7 @@ function fit(ta: HTMLTextAreaElement) {
 
 export function Composer() {
   const { t } = useTranslation()
-  const { team, invalidate, mode, fastRole, pushToast } = useUiStore()
+  const { team, invalidate, pushToast } = useUiStore()
   const [text, setText] = useState('')
   const [popup, setPopup] = useState<{ kind: '@' | '#'; items: { label: string; hint: string }[] } | null>(null)
   const [sel, setSel] = useState(0)
@@ -230,33 +230,9 @@ export function Composer() {
     // 原先 await 裸抛，文案随输入框状态悬在用户面前却无任何反馈。
     try {
       await api.sendMessage(body, refs)
-      // 票 08：没点名的派活在核内 route_unnamed_owner（send_message 之后
-      // 做封闭选择）。界面不再自己决定派给谁。
-      // 点名仍是今日行为：pack 模式按花名册 @ 派活（D-06）。与核
-      // parse_tokens 同规则：空白分词 + `@` 前缀 + 命中花名册才算点名。
-      // 花名册有项目经理且这句话没有点名时，快速通道也不预派通道角色
-      // ——否则和核内选择双发。卸掉项目经理后的接话人是票 09，
-      // 没点名的快速通道仍按今日行为派给通道角色。
-      const roster = new Set(team.map((m) => m.role))
-      const mentioned = [
-        ...new Set(
-          body
-            .split(/\s+/)
-            .filter((w) => w.startsWith('@'))
-            .map((w) => w.slice(1))
-            .filter((n) => roster.has(n)),
-        ),
-      ]
-      const pmRoutesUnnamed = roster.has('项目经理') && mentioned.length === 0
-      if (mode === 'fastpath' && fastRole && !pmRoutesUnnamed) {
-        await api.dispatch(fastRole, body, refs).catch(() => {})
-      } else if (mode === 'pack') {
-        for (const role of mentioned) {
-          // 点名失败（角色不存在/回合报错）要可见——静默吞错正是
-          // D-06 那类「点了没反应」死路的成因。
-          await api.dispatch(role, body, refs).catch((e) => pushToast(errText(e), 'err'))
-        }
-      }
+      // 票 09：点名、没点名的封闭选择、卸掉项目经理后的接话人，都在
+      // send_message → route_unnamed_owner。界面再 dispatch 会双发，
+      // 也会把 L0/L1 的角色点名闸重写成「看见 @ 就派」。
       setText('')
       attachments.forEach((a) => URL.revokeObjectURL(a.preview))
       setAttachments([])

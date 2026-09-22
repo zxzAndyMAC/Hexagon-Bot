@@ -175,21 +175,35 @@ fn text_command_same_shape_as_button() {
         .map(|e| format!("{:?}", e.kind))
         .collect();
     assert_eq!(kinds, vec!["StageRewound"]);
-    // 普通消息不触发命令
-    let before = events(&wb, None).unwrap().len();
-    send(&wb, "退回这个事情我们再想想").unwrap();
-    assert_eq!(events(&wb, None).unwrap().len(), before + 1); // 只多一条消息
+    // 普通消息不触发命令。退回之后停在没有角色的阶段：票 09 没有可派的
+    // 第一位，工作台自己说明，不跑后端，也不再退一阶段。
+    let rewound = events(&wb, Some(&[EventKind::StageRewound])).unwrap().len();
+    let route = send(&wb, "退回这个事情我们再想想").unwrap();
+    assert_eq!(
+        events(&wb, Some(&[EventKind::StageRewound])).unwrap().len(),
+        rewound
+    );
+    assert_eq!(route, UnnamedRoute::Noted);
+    assert_eq!(turns_for(&wb, "后端"), 0);
 }
 
 #[test]
 fn mention_and_path_reach_sleeping_agent_brief() {
     let dir = tempfile::tempdir().unwrap();
-    let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
-    // a0(后端) 默认 sleeping；负责人点名 + 路径指针
+    let mut wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+    // 票 09：负责人的点名在门面里直接派活，简报在该回合内被消费（游标推进），
+    // 不再停在未读简报里。这里钉出站任务里带着这句点名和路径。
+    let prov = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：按路径改鉴权"),
+        text_response("改完了"),
+    ]));
+    wb.register_provider("default", prov.clone());
     send(&wb, "@后端 参考 #src/api.rs 重写鉴权").unwrap();
-    let brief = crate::turn::prompt::build_brief_context(&wb.db, "a0", None).unwrap();
-    assert_eq!(brief.mentions, vec!["@后端 参考 #src/api.rs 重写鉴权"]);
-    assert_eq!(brief.paths, vec!["src/api.rs"]);
+    assert_eq!(turns_for(&wb, "后端"), 1);
+    assert!(prov.recorded().iter().any(|r| {
+        let text = req_text(r);
+        text.contains("@后端 参考 #src/api.rs 重写鉴权") && text.contains("src/api.rs")
+    }));
 }
 
 #[test]
@@ -212,7 +226,9 @@ fn end_to_end_open_project_to_timeline() {
                 text_response("done"),
             ])),
         );
-    send(&wb, "开工 @产品策划").unwrap();
+    // 票 09：带 @ 的负责人发言会立即派活，抢在开阶段之前烧掉下面的脚本。
+    // 这则测的是开项目到时间线，点名派活另有专测。
+    send(&wb, "开工").unwrap();
     wb.open_stage(0).unwrap();
     wb.run_turn("产品策划", "写规格").unwrap();
     let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
@@ -1439,11 +1455,15 @@ fn dispatch_coexists_with_pack() {
     }))
     .unwrap();
     let mut wb = Workbench::for_test(dir.path(), &["产品策划", "后端"], Some(pack)).unwrap();
+    // 票 09：后端说完没点名，没有项目经理，下一手是本阶段激活名单第一位
+    // （产品策划）。那次派活是 plan_first，占两条脚本；随后显式 run_turn 再一条。
     wb.register_provider(
         "default",
         Arc::new(ScriptedProvider::new(vec![
             text_response("方案：改错别字"),
             text_response("fast fix"),
+            text_response("方案：接后端没点名的话"),
+            text_response("先记下"),
             text_response("spec done"),
         ])),
     );
@@ -2325,7 +2345,10 @@ fn brief_snapshot(wb: &Workbench, role: &str) -> (Vec<Value>, Vec<Value>, Vec<Va
     (b.artifacts, b.upstream, b.notices, b.mentions)
 }
 
-/// 决策槽回「后端」。主对话槽若被误用来做选择，会回「先不派活」。
+/// 决策槽先回 `decision_line`，再说「先不派活」。
+/// 第二句是票 09：被派到的角色说完没有点名，会再做一次封闭选择。
+/// 不预先写上这一句的话，选择脚本耗尽，链在测试里半截停下。
+/// 主对话槽若被误用来做选择，会回「先不派活」。
 fn scripted_choice(
     wb: &mut Workbench,
     decision_line: &str,
@@ -2334,7 +2357,10 @@ fn scripted_choice(
     Arc<ScriptedProvider>,
     Arc<ScriptedProvider>,
 ) {
-    let decision = Arc::new(ScriptedProvider::new(vec![text_response(decision_line)]));
+    let decision = Arc::new(ScriptedProvider::new(vec![
+        text_response(decision_line),
+        text_response("先不派活"),
+    ]));
     let chat = Arc::new(ScriptedProvider::new(vec![text_response("先不派活")]));
     let worker = Arc::new(ScriptedProvider::new(vec![
         text_response("方案：先看登录校验"),
@@ -2391,7 +2417,12 @@ fn unnamed_owner_message_routes_outside_activation_list() {
     );
 
     assert!(chat.recorded().is_empty(), "配了决策槽就不走主对话模型");
-    assert_eq!(decision.recorded().len(), 1);
+    // 票 09：后端说完没点名，再做一次封闭选择；脚本第二句是「先不派活」，链停住。
+    assert_eq!(decision.recorded().len(), 2);
+    assert_eq!(worker.recorded().len(), 2, "先不派活之后不再叫后端");
+    let routed_all = events(&wb, Some(&[EventKind::PmRouted])).unwrap();
+    assert_eq!(routed_all.len(), 2);
+    assert_eq!(routed_all[1].payload["held"], true);
     let choice = &decision.recorded()[0];
     assert!(choice.tools.is_empty(), "封闭选择不带工具，不是聊天");
     assert_eq!(choice.model_slot, "decision");
@@ -2477,7 +2508,11 @@ fn choice_outside_roster_is_not_dispatched() {
 fn missing_decision_slot_uses_chat_model_for_the_same_choice() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = pm_wb(dir.path());
-    let chat = Arc::new(ScriptedProvider::new(vec![text_response("后端")]));
+    // 票 09：第一次选择派给后端；后端说完再选一次，第二句先不派活。
+    let chat = Arc::new(ScriptedProvider::new(vec![
+        text_response("后端"),
+        text_response("先不派活"),
+    ]));
     let worker = Arc::new(ScriptedProvider::new(vec![
         text_response("方案：改过期判断"),
         text_response("好"),
@@ -2495,9 +2530,16 @@ fn missing_decision_slot_uses_chat_model_for_the_same_choice() {
             via: "chat".into(),
         }
     );
-    assert_eq!(chat.recorded().len(), 1, "主对话模型只做这一次封闭选择");
-    assert!(chat.recorded()[0].tools.is_empty());
-    assert!(req_text(&chat.recorded()[0]).contains("封闭选择"));
+    assert_eq!(
+        chat.recorded().len(),
+        2,
+        "没点名一次，说完再一次；都是同一种封闭选择"
+    );
+    assert!(chat.recorded().iter().all(|r| r.tools.is_empty()));
+    assert!(chat
+        .recorded()
+        .iter()
+        .all(|r| req_text(r).contains("封闭选择")));
     assert!(!req_text(&chat.recorded()[0]).contains("执行方案"));
     assert!(!worker.recorded().is_empty());
     assert_eq!(turns_for(&wb, "项目经理"), 0);
@@ -2511,15 +2553,16 @@ fn pm_chat_reply_uses_main_model_not_decision_slot() {
         text_response("方案：先确认你在问进度"),
         text_response("在的，登录那件事还没派"),
     ]));
-    let decision = Arc::new(ScriptedProvider::new(vec![text_response("后端")]));
+    // 票 09：聊天回合本身不走决策槽；说完没点名的那次封闭选择才走。
+    let decision = Arc::new(ScriptedProvider::new(vec![text_response("先不派活")]));
     wb.register_provider("chat", chat.clone());
     wb.register_provider("decision", decision.clone());
     set_model_slot(&wb, "项目经理", "chat");
     wb.set_decision_slot("项目经理", Some("decision")).unwrap();
-    // 点名派活仍是今日的 dispatch，不经过封闭选择。
     wb.dispatch("项目经理", "在吗", &[]).unwrap();
-    assert!(decision.recorded().is_empty(), "聊天不走决策槽");
-    assert!(!chat.recorded().is_empty());
+    assert_eq!(decision.recorded().len(), 1, "说完没点名才走决策槽");
+    assert!(req_text(&decision.recorded()[0]).contains("只做一次封闭选择"));
+    assert_eq!(chat.recorded().len(), 2, "聊天仍是主对话模型的那一回合");
     // 职责文案里有「先不派活」三个字，不能拿它当选择请求的标记。
     // 选择请求才有「只做一次封闭选择」。
     assert!(chat
@@ -2529,35 +2572,325 @@ fn pm_chat_reply_uses_main_model_not_decision_slot() {
 }
 
 #[test]
-fn owner_mention_keeps_todays_path_and_skips_closed_choice() {
+fn owner_mention_dispatches_at_every_level_without_hold() {
+    // 票 08 把点名留在界面上另调 dispatch，门面返回 Skipped。
+    // 票 09 改成门面自己派：任何档位都立即唤醒被点名者，封闭选择不插在前面。
+    for lv in ["L0", "L1", "L2", "L3", "L4"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = pm_wb(dir.path());
+        wb.set_autonomy(lv).unwrap();
+        let decision = Arc::new(ScriptedProvider::new(vec![text_response("先不派活")]));
+        let worker = Arc::new(ScriptedProvider::new(vec![
+            text_response("方案：修过期判断"),
+            text_response("改完了"),
+        ]));
+        wb.register_provider("decision", decision.clone());
+        wb.register_provider("default", worker.clone());
+        set_model_slot(&wb, "项目经理", "chat");
+        set_model_slot(&wb, "后端", "default");
+        wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+        let ptr = stage_ptr(&wb);
+        let route = send(&wb, "@后端 你来修").unwrap();
+        assert_eq!(
+            route,
+            UnnamedRoute::Mentioned {
+                roles: vec!["后端".into()],
+            },
+            "{lv}"
+        );
+        assert_eq!(turns_for(&wb, "后端"), 1, "{lv}");
+        assert_eq!(stage_ptr(&wb), ptr, "{lv} 点名不拨阶段指针");
+        // 决策槽只出现在后端说完之后的那次选择，不出现在点名之前。
+        assert_eq!(decision.recorded().len(), 1, "{lv}");
+        let prompt = req_text(&decision.recorded()[0]);
+        assert!(prompt.contains("改完了"), "{lv} {prompt}");
+        assert!(!prompt.contains("@后端 你来修"), "{lv}");
+        assert!(!worker.recorded().is_empty(), "{lv}");
+    }
+}
+
+#[test]
+fn owner_mention_wakes_each_named_role_once() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = pm_wb(dir.path());
-    let (decision, _chat, worker) = scripted_choice(&mut wb, "产品策划");
-    let route = send(&wb, "@后端 你来修").unwrap();
-    assert_eq!(route, UnnamedRoute::Skipped);
-    assert!(decision.recorded().is_empty());
+    let decision = Arc::new(ScriptedProvider::new(vec![
+        text_response("先不派活"),
+        text_response("先不派活"),
+    ]));
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：写规格"),
+        text_response("规格写好了"),
+        text_response("方案：改登录"),
+        text_response("登录改好了"),
+    ]));
+    wb.register_provider("decision", decision.clone());
+    wb.register_provider("default", worker);
+    set_model_slot(&wb, "项目经理", "chat");
+    set_model_slot(&wb, "产品策划", "default");
+    set_model_slot(&wb, "后端", "default");
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    let route = send(&wb, "@产品策划 @后端 一起看 @产品策划").unwrap();
+    assert_eq!(
+        route,
+        UnnamedRoute::Mentioned {
+            roles: vec!["产品策划".into(), "后端".into()],
+        }
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 1);
+    assert_eq!(turns_for(&wb, "后端"), 1);
+    assert_eq!(decision.recorded().len(), 2);
+}
+
+#[test]
+fn owner_mention_on_fastpath_wakes_named_role_not_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["后端", "产品策划", "项目经理"], None).unwrap();
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE projects SET mode='fastpath', fastpath_agent_id='a0' WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+    let decision = Arc::new(ScriptedProvider::new(vec![text_response("先不派活")]));
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：看通道以外的人"),
+        text_response("看完了"),
+    ]));
+    wb.register_provider("decision", decision);
+    wb.register_provider("worker", worker);
+    set_model_slot(&wb, "项目经理", "chat");
+    set_model_slot(&wb, "产品策划", "worker");
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    let route = send(&wb, "@产品策划 你看").unwrap();
+    assert_eq!(
+        route,
+        UnnamedRoute::Mentioned {
+            roles: vec!["产品策划".into()],
+        }
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 1);
+    assert_eq!(turns_for(&wb, "后端"), 0, "点名不改派给通道角色");
+}
+
+#[test]
+fn fastpath_with_pm_unnamed_still_uses_closed_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["后端", "产品策划", "项目经理"], None).unwrap();
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE projects SET mode='fastpath', fastpath_agent_id='a0' WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+    let (decision, _chat, worker) = scripted_choice(&mut wb, "先不派活");
+    set_model_slot(&wb, "后端", "default");
+    let route = send(&wb, "有人吗").unwrap();
+    assert_eq!(
+        route,
+        UnnamedRoute::Held {
+            via: "decision".into()
+        }
+    );
+    assert!(!decision.recorded().is_empty());
+    assert_eq!(turns_for(&wb, "后端"), 0, "有项目经理时不改走通道角色");
     assert!(worker.recorded().is_empty());
+}
+
+#[test]
+fn role_mention_dispatches_only_at_l2_and_above() {
+    for lv in ["L0", "L1", "L2", "L3", "L4"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = pm_wb(dir.path());
+        wb.set_autonomy(lv).unwrap();
+        let decision = Arc::new(ScriptedProvider::new(vec![
+            text_response("产品策划"),
+            text_response("先不派活"),
+        ]));
+        let worker = Arc::new(ScriptedProvider::new(vec![
+            text_response("方案：先读规格"),
+            text_response("@后端 你来改登录"),
+            text_response("方案：改过期判断"),
+            text_response("修好了"),
+        ]));
+        wb.register_provider("decision", decision.clone());
+        wb.register_provider("worker", worker.clone());
+        set_model_slot(&wb, "项目经理", "chat");
+        set_model_slot(&wb, "产品策划", "worker");
+        set_model_slot(&wb, "后端", "worker");
+        wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+        let ptr = stage_ptr(&wb);
+        let started = events(&wb, Some(&[EventKind::StageStarted])).unwrap().len();
+        let route = send(&wb, "修一下登录").unwrap();
+        assert_eq!(
+            route,
+            UnnamedRoute::Dispatched {
+                role: "产品策划".into(),
+                via: "decision".into(),
+            },
+            "{lv}"
+        );
+        assert_eq!(stage_ptr(&wb), ptr, "{lv}");
+        assert_eq!(
+            events(&wb, Some(&[EventKind::StageStarted])).unwrap().len(),
+            started,
+            "{lv}"
+        );
+        let pm_id = wb.agent_by_role("产品策划").unwrap();
+        let tl = timeline(&wb, None, 80).unwrap();
+        assert!(
+            tl.iter().any(|i| {
+                i.message
+                    .as_ref()
+                    .is_some_and(|m| m.author == pm_id && m.body.contains("@后端"))
+            }),
+            "{lv} 点名留在时间线上"
+        );
+        let rank = crate::autonomy::rank(&wb.db, "p1").unwrap();
+        if rank < 2 {
+            assert_eq!(turns_for(&wb, "后端"), 0, "{lv} 不唤醒");
+            assert_eq!(decision.recorded().len(), 1, "{lv} 点名不进封闭选择");
+            let st = statuses(&wb);
+            let backend = st.iter().find(|(r, _)| r == "后端").unwrap();
+            assert_eq!(backend.1, "sleeping", "{lv}");
+            assert_eq!(worker.recorded().len(), 2, "{lv}");
+        } else {
+            assert_eq!(turns_for(&wb, "后端"), 1, "{lv}");
+            assert_eq!(decision.recorded().len(), 2, "{lv}");
+            let second = req_text(&decision.recorded()[1]);
+            assert!(second.contains("修好了"), "{lv} 点名本身不走先不派活");
+            assert!(!second.contains("@后端 你来改登录"), "{lv}");
+            assert_eq!(worker.recorded().len(), 4, "{lv}");
+        }
+    }
+}
+
+#[test]
+fn without_pm_unnamed_message_goes_to_first_activation_role() {
+    // 票 08 这里必须干等。票 09：卸掉项目经理后，没点名的话交给激活名单第一位，
+    // 不是名单上的下一位，也不是花名册顺序。
+    let dir = tempfile::tempdir().unwrap();
+    let pack: PackDef = serde_json::from_value(json!({
+        "name":"t","version":1,
+        "stages":[{"name":"规格","roles":["产品策划","后端"],"due":["规格"],"stamp_point":true}]
+    }))
+    .unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["产品策划", "后端"], Some(pack)).unwrap();
+    wb.open_stage(0).unwrap();
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：我先接"),
+        text_response("接完了"),
+    ]));
+    wb.register_provider("default", worker.clone());
+    let ptr = stage_ptr(&wb);
+    let route = send(&wb, "有人吗").unwrap();
+    assert_eq!(
+        route,
+        UnnamedRoute::Dispatched {
+            role: "产品策划".into(),
+            via: "fallback".into(),
+        }
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 1);
+    assert_eq!(turns_for(&wb, "后端"), 0);
+    assert_eq!(stage_ptr(&wb), ptr, "接话不拨阶段指针");
     assert!(events(&wb, Some(&[EventKind::PmRouted]))
         .unwrap()
         .is_empty());
+    assert!(!worker.recorded().is_empty());
+}
+
+#[test]
+fn without_pm_fastpath_unnamed_goes_to_channel_role() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = fastpath_wb(dir.path());
+    // a0 是后端，把通道改到产品策划，证明接的是通道角色而不是花名册第一位。
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE projects SET fastpath_agent_id='a1' WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：通道来接"),
+        text_response("接完了"),
+    ]));
+    wb.register_provider("default", worker);
+    let route = send(&wb, "准备部署清单").unwrap();
+    assert_eq!(
+        route,
+        UnnamedRoute::Dispatched {
+            role: "产品策划".into(),
+            via: "fallback".into(),
+        }
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 1);
     assert_eq!(turns_for(&wb, "后端"), 0);
 }
 
 #[test]
-fn without_pm_unnamed_message_does_not_pick_a_fallback() {
-    // 票 09 才做「卸掉项目经理后由激活名单第一位接」。这里必须干等，
-    // 不能悄悄派给产品策划。
+fn without_pm_and_no_receiver_workbench_notes() {
     let dir = tempfile::tempdir().unwrap();
-    let pack = pm_pack();
-    let mut wb = Workbench::for_test(dir.path(), &["产品策划", "后端"], Some(pack)).unwrap();
-    wb.open_stage(0).unwrap();
+    let pack: PackDef = serde_json::from_value(json!({
+        "name":"t","version":1,
+        "stages":[{"name":"规格","roles":["产品策划"],"due":[]}]
+    }))
+    .unwrap();
+    // 阶段名单上的人没在团队里 → 阶段被跳过，没有可派的第一位。
+    let mut wb = Workbench::for_test(dir.path(), &["后端"], Some(pack)).unwrap();
+    let opened = wb.open_stage(0).unwrap();
+    assert!(opened.skipped);
     let worker = Arc::new(ScriptedProvider::new(vec![text_response("不该被叫到")]));
     wb.register_provider("default", worker.clone());
     let route = send(&wb, "有人吗").unwrap();
-    assert_eq!(route, UnnamedRoute::Skipped);
+    assert_eq!(route, UnnamedRoute::Noted);
+    assert_eq!(turns_for(&wb, "后端"), 0);
     assert!(worker.recorded().is_empty());
-    assert_eq!(turns_for(&wb, "产品策划"), 0);
-    assert!(events(&wb, Some(&[EventKind::PmRouted]))
-        .unwrap()
-        .is_empty());
+    assert_workbench_note(&wb);
+
+    let dir2 = tempfile::tempdir().unwrap();
+    let fast = Workbench::for_test(dir2.path(), &["后端"], None).unwrap();
+    fast.db
+        .conn()
+        .execute(
+            "UPDATE projects SET mode='fastpath', fastpath_agent_id=NULL WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+    let route = send(&fast, "有人吗").unwrap();
+    assert_eq!(route, UnnamedRoute::Noted);
+    assert_eq!(turns_for(&fast, "后端"), 0);
+    assert_workbench_note(&fast);
+}
+
+fn assert_workbench_note(wb: &Workbench) {
+    let ids: Vec<String> = {
+        let mut st = wb
+            .db
+            .conn()
+            .prepare("SELECT id FROM agents WHERE project_id='p1'")
+            .unwrap();
+        st.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let tl = timeline(wb, None, 40).unwrap();
+    let note = tl
+        .iter()
+        .find(|i| {
+            i.message.as_ref().map(|m| m.author.as_str()) == Some(crate::pm_route::WORKBENCH_AUTHOR)
+        })
+        .expect("时间线上要有工作台的说明");
+    assert!(note.event.agent_id.is_none(), "说明不挂在某个角色头上");
+    assert!(!ids
+        .iter()
+        .any(|id| id == &note.message.as_ref().unwrap().author));
+    assert_eq!(
+        note.message.as_ref().unwrap().body,
+        crate::pm_route::NO_RECEIVER_NOTE
+    );
+    assert!(note.event.kind == EventKind::AgentMessage);
 }

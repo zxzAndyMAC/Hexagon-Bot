@@ -11,11 +11,32 @@
 
 use crate::provider::{ChatRequest, ChatResponse, ContentBlock, Message, Role};
 
-/// 预置角色名。向导默认勾选；卸掉之后的接话人是票 09，本模块不接。
+/// 预置角色名。向导默认勾选。卸掉之后的接话人在工作台门面（票 09）。
 pub const PM_ROLE: &str = "项目经理";
 
 /// 封闭选择里的「不唤醒任何人」。与角色名同级，不是自由文本。
 pub const HOLD: &str = "先不派活";
+
+/// 时间线上工作台自己的说明。不是花名册里的角色，也不伪造角色发言。
+pub const WORKBENCH_AUTHOR: &str = "工作台";
+
+/// 没有接话人时写入时间线的那一句。作者是 [`WORKBENCH_AUTHOR`]。
+pub const NO_RECEIVER_NOTE: &str =
+    "没有接话的人。项目经理未勾选；流程包要当前阶段激活名单的第一位，快速通道要通道角色，这里都没有。";
+
+/// 点名要不要唤醒被点名的角色。`rank` 是自治存储秩：0 = L0 … 4 = L4。
+///
+/// 负责人的点名在任何档位都唤醒，并且不经过「先不派活」——那是没点名时
+/// 的封闭选择，点名已经指定了人。角色点名只在 L2、L3、L4（秩 ≥ 2）唤醒；
+/// L0 和 L1 只留在时间线上。
+///
+/// 代价：L0/L1 把角色点名当成派活 = 没人看过就再开一回合（false wake）。
+/// 漏唤醒 = 这句话还在群聊里，负责人还在（false stay）。L0/L1 偏向不唤醒。
+/// 出处：ADR 0061、ADR 0065、票 09。被否决：角色点名在 L0 也派，那就把
+/// 自治档的「全部排队」挖穿了。
+pub fn mention_wakes(from_owner: bool, rank: u8) -> bool {
+    from_owner || rank >= 2
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteChoice {
@@ -44,10 +65,12 @@ pub fn parse_route_choice(raw: &str, roster: &[String]) -> Option<RouteChoice> {
 
 /// 给决策调用的用户消息。选项逐行列出，模型被要求原样回一行。
 /// 激活名单只是状态，不是选项边界——花名册里的人都可以被选。
+/// `speaker` 是「负责人」或刚说完的角色名，不是自由发挥的句子。
 pub fn choice_prompt(
     stage: Option<&str>,
     activation: &[String],
     roster: &[String],
+    speaker: &str,
     body: &str,
 ) -> String {
     let stage_line = stage.unwrap_or("（没有进行中的阶段）");
@@ -63,7 +86,7 @@ pub fn choice_prompt(
          当前阶段：{stage_line}\n\
          本阶段激活名单：{act}\n\
          可以派给激活名单以外的花名册角色。\n\
-         负责人刚说：\n{body}\n\
+         {speaker}刚说完，没有点名下一位：\n{body}\n\
          只输出下面其中一行，原样，不要加标点或其它字：\n{}",
         options.join("\n")
     )
@@ -144,6 +167,23 @@ mod tests {
                     prop_assert_ne!(t, HOLD);
                     prop_assert!(!roster.iter().any(|r| r == t));
                 }
+            }
+        }
+    }
+
+    proptest! {
+        /// 不变量：负责人点名在任何秩都唤醒；角色点名仅秩 ≥ 2。
+        /// L0/L1 的 false wake 会在「全部排队」里擅自开回合。
+        #[test]
+        fn owner_mention_always_wakes_role_mention_only_from_l2(
+            rank in 0u8..8,
+            from_owner in any::<bool>(),
+        ) {
+            let wakes = mention_wakes(from_owner, rank);
+            if from_owner {
+                prop_assert!(wakes);
+            } else {
+                prop_assert_eq!(wakes, rank >= 2);
             }
         }
     }

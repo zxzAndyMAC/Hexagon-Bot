@@ -214,8 +214,8 @@ fn send_message(
     if let Some(other) = cmd {
         with_wb(&state, |wb| wb.dispatch_command(&other))?;
     } else {
-        // 票 08：没点名的负责人发言由项目经理做封闭选择。有点名时
-        // route 自己跳过，界面仍按今日行为调 dispatch。
+        // 票 08/09：派活在核内。点名直接派给被点名者；没点名走项目经理的
+        // 封闭选择，或卸掉之后的接话人。界面不再另调 dispatch，否则双发。
         with_wb(&state, |wb| wb.route_unnamed_owner(&body, &attachments))?;
     }
     Ok(id)

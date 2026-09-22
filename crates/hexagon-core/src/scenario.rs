@@ -386,6 +386,8 @@ mod tests {
 
     #[test]
     fn scenario_deliver_and_assert() {
+        // 票 09：负责人消息若带 @产品策划，会在 open_stage 之前把脚本派掉。
+        // 这则测交付，不测点名。
         let dir = tempfile::tempdir().unwrap();
         let sc: Scenario = serde_json::from_value(serde_json::json!({
             "roles": ["产品策划"],
@@ -399,7 +401,7 @@ mod tests {
                 {"text": "done"}
             ]},
             "steps": [
-                {"do":"owner_message","text":"开工 @产品策划"},
+                {"do":"owner_message","text":"开工"},
                 {"do":"open_stage","seq":0},
                 {"do":"run_all_active"},
                 {"do":"assert_event","kind":"artifact_delivered","contains":{"path":"specs/prd.md"}},
