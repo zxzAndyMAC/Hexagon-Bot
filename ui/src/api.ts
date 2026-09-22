@@ -62,6 +62,7 @@ import type { EventKind } from './gen/EventKind'
 import type { MessageRow } from './gen/MessageRow'
 import type { MessageToken } from './gen/MessageToken'
 import type { ExportFilter } from './gen/ExportFilter'
+import type { RepoEntry } from './gen/RepoEntry'
 
 /** 旧名薄壳——新代码直接用 QueuedCard。 */
 export type PendingQuestion = QueuedCard
@@ -78,6 +79,7 @@ export type {
   AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
   CreateProjectOpts, CreateStepDto, Event, EventKind, MessageRow, MessageToken, ExportFilter,
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
+  RepoEntry,
 }
 
 
@@ -147,6 +149,12 @@ export const api = {
     call<void>('discard_attachments', { refs }),
   // ui-audit-2 票 09：composer # 路径补全（仓根有界遍历，≤60 条）
   repoPaths: (query: string) => call<string[]>('repo_paths', { query }),
+  // 票 11：右栏文件树。读/建/写都落仓根，路径由核围栏。
+  listRepoDir: (rel = '') => call<RepoEntry[]>('list_repo_dir', { rel }),
+  readRepoFile: (path: string) => call<string>('read_repo_file', { path }),
+  writeRepoFile: (path: string, content: string) => call<void>('write_repo_file', { path, content }),
+  createRepoFile: (path: string) => call<void>('create_repo_file', { path }),
+  createRepoDir: (path: string) => call<void>('create_repo_dir', { path }),
   sandboxStatus: () => call<SandboxStatus>('sandbox_status'),
   answerPermission: (questionId: string, allow: boolean, rememberShape?: string, scope = 'activation') =>
     call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
@@ -882,6 +890,26 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return { imported: 1, skipped: ['web-svc: conflict'] } as T
     case 'repo_paths':
       return ['src/', 'src/api.rs', 'docs/', 'AGENTS.md'] as T
+    case 'list_repo_dir': {
+      const rel = String(args?.rel ?? '')
+      if (rel === '' || rel === '.') {
+        return [
+          { name: 'src', path: 'src', kind: 'dir' },
+          { name: 'README.md', path: 'README.md', kind: 'file' },
+          { name: 'package.json', path: 'package.json', kind: 'file' },
+        ] as T
+      }
+      if (rel === 'src') {
+        return [{ name: 'main.ts', path: 'src/main.ts', kind: 'file' }] as T
+      }
+      return [] as T
+    }
+    case 'read_repo_file':
+      return `// ${args?.path}\n` as T
+    case 'write_repo_file':
+    case 'create_repo_file':
+    case 'create_repo_dir':
+      return null as T
     case 'sandbox_status':
       return { mode: 'seatbelt', available: true, note: 'mock sandboxed' } as T
     case 'list_skills':

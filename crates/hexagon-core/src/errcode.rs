@@ -194,6 +194,7 @@ impl_error_code!(
     Sqlite,
     Artifact,
 );
+impl_error_code!(crate::files::RepoFsError, Io);
 impl_error_code!(crate::trace::TraceError, Db, Sqlite, Json, Io, Cards,);
 impl_error_code!(
     crate::turn::TurnError,

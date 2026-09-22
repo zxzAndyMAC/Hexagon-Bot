@@ -15,6 +15,10 @@ export type ActionId =
   | 'stageStamp'
   | 'nodeRail'
   | 'dismissPending'
+  | 'treeNewFile'
+  | 'treeNewFolder'
+  | 'treeRefresh'
+  | 'saveFile'
 
 const DEFAULTS: Record<ActionId, string> = {
   approve: 'mod+Enter',
@@ -34,6 +38,11 @@ const DEFAULTS: Record<ActionId, string> = {
   // hands-free 票 05：收起待决弹窗。不用裸 Escape——确认层和命令面板
   // 已经占用它；mod+Escape 进键位表，关闭钮 tooltip 才能显示当前绑定。
   dismissPending: 'mod+Escape',
+  // 票 11：文件树与中栏保存。alt+mod 避开 ⌘N（聚焦输入）与 ⌘R（浏览器刷新）。
+  treeNewFile: 'alt+mod+n',
+  treeNewFolder: 'alt+mod+f',
+  treeRefresh: 'alt+mod+r',
+  saveFile: 'mod+s',
 }
 
 // navigator.platform 已弃用（MDN，ui-audit 票 11）：优先 userAgentData；
@@ -57,6 +66,10 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'stageStamp', labelKey: 'keys.stageStamp' },
   { id: 'nodeRail', labelKey: 'keys.nodeRail' },
   { id: 'dismissPending', labelKey: 'keys.dismissPending' },
+  { id: 'treeNewFile', labelKey: 'keys.treeNewFile' },
+  { id: 'treeNewFolder', labelKey: 'keys.treeNewFolder' },
+  { id: 'treeRefresh', labelKey: 'keys.treeRefresh' },
+  { id: 'saveFile', labelKey: 'keys.saveFile' },
 ]
 
 export function bindingFor(a: ActionId): string {

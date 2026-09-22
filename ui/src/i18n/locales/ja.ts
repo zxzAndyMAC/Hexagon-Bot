@@ -225,6 +225,22 @@ export default {
     noArtifacts: '成果物はまだありません——エージェントが納品するとここに表示されます。',
     noMembers: 'エージェントはまだいません——下でロールを作成してチームを作りましょう。',
     model: 'モデル',
+    files: 'プロジェクト',
+  },
+  tree: {
+    newFile: '新規ファイル',
+    newFolder: '新規フォルダ',
+    refresh: '更新',
+    namePh: '名前',
+    create: '作成',
+    emptyDir: '空のフォルダ',
+    badName: '名前は一つだけ。スラッシュは使えません',
+  },
+  file: {
+    save: '保存',
+    saving: '保存中…',
+    saved: '保存しました',
+    loading: '読み込み中…',
   },
   composer: {
     placeholder: 'チームへメッセージ… @ で指名、# でパス、またはコマンド（退回/跳过/盖章）',
@@ -579,6 +595,10 @@ export default {
     stageStamp: 'ステージに捺印',
     nodeRail: 'ノードレールにフォーカス',
     dismissPending: '未決ダイアログを閉じる',
+    treeNewFile: '新規ファイル',
+    treeNewFolder: '新規フォルダ',
+    treeRefresh: 'プロジェクトツリーを更新',
+    saveFile: 'ファイルを保存',
   },
   errors: {
     actionFailed: '操作に失敗しました——{{detail}}',
@@ -604,5 +624,9 @@ export default {
     forbidden: '禁止されたインストール元',
     unknown_question: '不明または期限切れのカード——更新して再試行',
     rejected: '提案は却下されました',
+    not_text: 'UTF-8 テキストではありません',
+    too_large: '大きすぎてここでは編集できません',
+    already_exists: '既に存在します',
+    not_dir: 'ディレクトリではありません',
   },
 }

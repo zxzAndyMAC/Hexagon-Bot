@@ -14,6 +14,7 @@ const KIND_ICON: Record<WorkTab['kind'], IconName> = {
   diff: 'diff',
   agent: 'agent',
   usage: 'usage',
+  file: 'file',
 }
 
 export function TabBar() {

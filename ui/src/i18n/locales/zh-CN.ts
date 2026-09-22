@@ -225,6 +225,22 @@ export default {
     noArtifacts: '还没有产物——agent 交付后会出现在这里。',
     noMembers: '还没有成员——在下方创建角色组建团队。',
     model: '模型',
+    files: '项目',
+  },
+  tree: {
+    newFile: '新建文件',
+    newFolder: '新建目录',
+    refresh: '刷新',
+    namePh: '名称',
+    create: '创建',
+    emptyDir: '空目录',
+    badName: '只要一个名字，不能带斜杠',
+  },
+  file: {
+    save: '保存',
+    saving: '保存中…',
+    saved: '已保存',
+    loading: '加载中…',
   },
   composer: {
     placeholder: '给团队发消息… @ 点名，# 引路径，或指令（退回/跳过/盖章）',
@@ -579,6 +595,10 @@ export default {
     stageStamp: '阶段盖章',
     nodeRail: '聚焦节点轨',
     dismissPending: '关闭待决弹窗',
+    treeNewFile: '新建文件',
+    treeNewFolder: '新建目录',
+    treeRefresh: '刷新项目树',
+    saveFile: '保存文件',
   },
   errors: {
     actionFailed: '操作失败——{{detail}}',
@@ -604,5 +624,9 @@ export default {
     forbidden: '安装来源被禁用',
     unknown_question: '卡片未知或已过期——刷新后重试',
     rejected: '提案已被拒绝',
+    not_text: '不是 UTF-8 文本',
+    too_large: '文件太大，无法在此编辑',
+    already_exists: '已经存在',
+    not_dir: '不是目录',
   },
 }

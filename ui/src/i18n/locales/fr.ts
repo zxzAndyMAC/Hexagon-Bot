@@ -225,6 +225,22 @@ export default {
     noArtifacts: 'Pas encore d’artefacts — ils apparaîtront ici quand les agents livreront.',
     noMembers: 'Pas encore d’agents — créez un rôle ci-dessous pour former l’équipe.',
     model: 'modèle',
+    files: 'Projet',
+  },
+  tree: {
+    newFile: 'Nouveau fichier',
+    newFolder: 'Nouveau dossier',
+    refresh: 'Actualiser',
+    namePh: 'Nom',
+    create: 'Créer',
+    emptyDir: 'Dossier vide',
+    badName: 'Un seul nom, sans barre oblique',
+  },
+  file: {
+    save: 'Enregistrer',
+    saving: 'Enregistrement…',
+    saved: 'Enregistré',
+    loading: 'Chargement…',
   },
   composer: {
     placeholder: 'Message à l’équipe… @ pour citer, # pour un chemin, ou une commande',
@@ -579,6 +595,10 @@ export default {
     stageStamp: 'Tamponner l’étape',
     nodeRail: 'Focaliser le rail de nœuds',
     dismissPending: 'Fermer le dialogue des décisions',
+    treeNewFile: 'Nouveau fichier',
+    treeNewFolder: 'Nouveau dossier',
+    treeRefresh: 'Actualiser l’arbre du projet',
+    saveFile: 'Enregistrer le fichier',
   },
   errors: {
     actionFailed: 'L’action a échoué — {{detail}}',
@@ -604,5 +624,9 @@ export default {
     forbidden: 'Source d’installation interdite',
     unknown_question: 'Carte inconnue ou périmée — actualisez et réessayez',
     rejected: 'Proposition rejetée',
+    not_text: 'Pas du texte UTF-8',
+    too_large: 'Fichier trop volumineux pour être modifié ici',
+    already_exists: 'Existe déjà',
+    not_dir: 'Pas un dossier',
   },
 }

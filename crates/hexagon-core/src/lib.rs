@@ -13,6 +13,7 @@ pub mod commands;
 pub mod credentials;
 pub mod db;
 pub mod errcode;
+pub mod files;
 pub mod git;
 pub mod install;
 pub mod invariant;

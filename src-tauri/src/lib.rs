@@ -453,6 +453,57 @@ fn repo_paths(state: tauri::State<AppState>, query: String) -> Result<Vec<String
     })
 }
 
+// ---------- 仓库文件树（hands-free 票 11，ADR 0062）----------
+// 读组 list/read 与控制组 create/write 都只借 conn.root 碰磁盘。
+// 不进回合、不拿工作台锁：读组禁止借那把锁做事，写路径同样不必拿它。
+
+/// 仓库目录一层（读组）。
+#[tauri::command]
+fn list_repo_dir(
+    state: tauri::State<AppState>,
+    rel: String,
+) -> Result<Vec<hexagon_core::files::RepoEntry>, CmdError> {
+    with_conn(&state, |_db, root| {
+        hexagon_core::files::list_repo_dir(root, &rel)
+    })
+}
+
+/// 读仓库文本（读组）。二进制与超限在核里拒绝。
+#[tauri::command]
+fn read_repo_file(state: tauri::State<AppState>, path: String) -> Result<String, CmdError> {
+    with_conn(&state, |_db, root| {
+        hexagon_core::files::read_repo_file(root, &path)
+    })
+}
+
+/// 新建空文件（控制组，落盘）。
+#[tauri::command]
+fn create_repo_file(state: tauri::State<AppState>, path: String) -> Result<(), CmdError> {
+    with_conn(&state, |_db, root| {
+        hexagon_core::files::create_repo_file(root, &path)
+    })
+}
+
+/// 新建目录（控制组，落盘）。
+#[tauri::command]
+fn create_repo_dir(state: tauri::State<AppState>, path: String) -> Result<(), CmdError> {
+    with_conn(&state, |_db, root| {
+        hexagon_core::files::create_repo_dir(root, &path)
+    })
+}
+
+/// 小改写回（控制组，落盘）。不写穿符号链接。
+#[tauri::command]
+fn write_repo_file(
+    state: tauri::State<AppState>,
+    path: String,
+    content: String,
+) -> Result<(), CmdError> {
+    with_conn(&state, |_db, root| {
+        hexagon_core::files::write_repo_file(root, &path, &content)
+    })
+}
+
 /// MCP 服务实况（ui-audit-2 票 06）：需读运行中宿主的状态，走 wb 通道。
 #[tauri::command]
 fn mcp_services(
@@ -1421,6 +1472,11 @@ pub fn run() {
             import_mcp,
             open_mcp_market,
             repo_paths,
+            list_repo_dir,
+            read_repo_file,
+            create_repo_file,
+            create_repo_dir,
+            write_repo_file,
             usage,
             open_stage,
             recover_run,

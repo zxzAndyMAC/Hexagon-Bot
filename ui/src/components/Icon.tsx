@@ -47,6 +47,13 @@ const ICONS = {
   yen: <path d="M4.5 2 8 7l3.5-5M8 7v7M5 9.5h6M5 12h6" />,
   folder: <path d="M2 4a1 1 0 0 1 1-1h3.2l1.6 1.6H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" />,
   plus: <path d="M8 3v10M3 8h10" />,
+  file: <path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" />,
+  'file-code': <><path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" /><path d="M6.3 8.2 4.9 9.5l1.4 1.3M9.7 8.2l1.4 1.3-1.4 1.3" /></>,
+  'file-text': <><path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" /><path d="M6 8.2h4M6 10.6h2.8" /></>,
+  'file-json': <><path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" /><path d="M6.3 7.3c-.8.5-.8 1.1 0 1.6.8.5.8 1.1 0 1.6M9.7 7.3c.8.5.8 1.1 0 1.6-.8.5-.8 1.1 0 1.6" /></>,
+  'file-image': <><path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" /><circle cx="7" cy="8.3" r=".8" /><path d="M5.2 12.2 7.5 9.7l1.5 1.5 1.1-1 1.7 2" /></>,
+  'file-config': <><path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" /><circle cx="8" cy="9.3" r="1.2" /><path d="M8 7.2v.7M8 10.7v.7M6.3 8.3l.6.3M9.1 10l.6.3M6.3 10.3l.6-.3M9.1 8.6l.6-.3" /></>,
+  link: <path d="M6.6 9.4 5.4 10.6a2 2 0 0 1-2.8-2.8L3.8 6.6a2 2 0 0 1 2.8 0M9.4 6.6l1.2-1.2a2 2 0 0 1 2.8 2.8l-1.2 1.2a2 2 0 0 1-2.8 0M6.4 9.6l3.2-3.2" />,
 } as const
 
 export type IconName = keyof typeof ICONS

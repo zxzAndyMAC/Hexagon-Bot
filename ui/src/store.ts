@@ -22,7 +22,9 @@ export type ThemePref = 'light' | 'dark' | 'night' | 'system'
 export type SlowSlice = 'usage' | 'artifacts' | 'team' | 'info'
 
 // 中栏选项卡（ADR 0051）：timeline 固定主 tab，其余可关。
-export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent' | 'usage'
+export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent' | 'usage' | 'file'
+export type SideTab = 'artifacts' | 'team' | 'usage' | 'files'
+export type FileTreeAction = 'new-file' | 'new-folder' | 'refresh'
 
 /// 界面作用域（ui-audit 票 01）：全局快捷键分发按它裁决。
 /// 非 workbench 时裁决类快捷键不得触发——设置页/命令面板打开期间，
@@ -69,7 +71,7 @@ export interface ConfirmReq {
 }
 
 export interface WorkTab {
-  id: string // timeline | art:<path> | diff:<path>:<a>-<b> | agent:<id> | patch:<proposalId>
+  id: string // timeline | art:<path> | diff:<path>:<a>-<b> | agent:<id> | patch:<proposalId> | file:<path>
   kind: TabKind
   title: string
   path?: string
@@ -118,7 +120,7 @@ interface UiState {
   fastRole: string | null
   packName: string | null
   railOpen: boolean
-  sideTab: 'artifacts' | 'team' | 'usage'
+  sideTab: SideTab
   usageRows: UsageRow[]
   /// 7 日 token 序列缓存（票 17 / 方向卡 2）：随 usage 慢切片一起拉，
   /// 顶栏 sparkline 悬停零新增 IPC。
@@ -153,7 +155,13 @@ interface UiState {
   closePendingDialog: () => void
   noteReviewRows: (rows: ProposalRow[]) => void
   syncPendingDialog: () => void
-  setSideTab: (t: 'artifacts' | 'team' | 'usage') => void
+  setSideTab: (t: SideTab) => void
+  /// 右栏文件树命令（票 11）：快捷键与按钮共用。n 递增，FileTree 消费一次。
+  fileTreeReq: { n: number; action: FileTreeAction } | null
+  requestFileTree: (action: FileTreeAction) => void
+  /// 中栏当前文件的保存脉冲（mod+S）。0 = 从未请求。
+  saveFileReq: number
+  requestSaveFile: () => void
   openTab: (t: WorkTab) => void
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
@@ -212,6 +220,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   packName: null,
   railOpen: localStorage.getItem('hexagon.rail') !== '0',
   sideTab: 'artifacts',
+  fileTreeReq: null,
+  saveFileReq: 0,
   usageRows: [],
   usageSeries7d: [],
   avatars: {},
@@ -335,6 +345,15 @@ export const useUiStore = create<UiState>((set, get) => ({
     }
   },
   setSideTab: (t) => set({ sideTab: t }),
+  requestFileTree: (action) => {
+    localStorage.setItem('hexagon.rail', '1')
+    set((s) => ({
+      railOpen: true,
+      sideTab: 'files',
+      fileTreeReq: { n: (s.fileTreeReq?.n ?? 0) + 1, action },
+    }))
+  },
+  requestSaveFile: () => set((s) => ({ saveFileReq: s.saveFileReq + 1 })),
   setThemePref: (p) => {
     localStorage.setItem('hexagon.theme', p)
     document.documentElement.dataset.theme = resolve(p)

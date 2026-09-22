@@ -4,6 +4,7 @@ import { useUiStore } from '../store'
 import { CreateRoleForm } from './RoleEditor'
 import { Avatar } from './Avatar'
 import { UsageTab } from './UsageTab'
+import { FileTree } from './FileTree'
 import { bindingFor, formatBinding } from '../keymap'
 import { Icon } from './Icon'
 import { Row } from './Row'
@@ -50,7 +51,7 @@ export function SidePanel() {
   return (
     <aside className="panel" style={{ width: 260, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div className="row-line" style={{ display: 'flex', alignItems: 'center', padding: '6px 6px 6px 12px', gap: 2 }}>
-        {(['artifacts', 'team', 'usage'] as const).map((k) => (
+        {(['files', 'artifacts', 'team', 'usage'] as const).map((k) => (
           <button
             key={k}
             className="btn"
@@ -121,6 +122,7 @@ export function SidePanel() {
       )}
 
       {tab === 'usage' && <UsageTab />}
+      {tab === 'files' && <FileTree />}
     </aside>
   )
 }

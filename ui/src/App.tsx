@@ -9,6 +9,7 @@ import { ArtifactTab } from './components/ArtifactTab'
 import { AgentTab } from './components/AgentTab'
 import { UsageDetailTab } from './components/UsageDetailTab'
 import { DiffView } from './components/DiffView'
+import { FileEditor } from './components/FileEditor'
 import { parseUnifiedDiff } from './diff'
 import { SidePanel } from './components/SidePanel'
 import { Composer } from './components/Composer'
@@ -86,6 +87,12 @@ export default function App() {
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      // 保存要在 Monaco 自己的 textarea 里也生效，所以赶在输入框豁免之前。
+      if (matches(e, bindingFor('saveFile'))) {
+        e.preventDefault()
+        useUiStore.getState().requestSaveFile()
+        return
+      }
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (matches(e, bindingFor('commandPalette'))) {
         e.preventDefault()
@@ -126,6 +133,9 @@ export default function App() {
         if (matches(e, bindingFor('stageStamp'))) { e.preventDefault(); runStageOp('stamp'); return }
         // 票 12：mod+J 聚焦节点轨（键盘可达性入口）
         if (matches(e, bindingFor('nodeRail'))) { e.preventDefault(); useUiStore.getState().focusNodeRail(); return }
+        if (matches(e, bindingFor('treeNewFile'))) { e.preventDefault(); useUiStore.getState().requestFileTree('new-file'); return }
+        if (matches(e, bindingFor('treeNewFolder'))) { e.preventDefault(); useUiStore.getState().requestFileTree('new-folder'); return }
+        if (matches(e, bindingFor('treeRefresh'))) { e.preventDefault(); useUiStore.getState().requestFileTree('refresh'); return }
       }
       void onKey(e)
     }
@@ -187,8 +197,10 @@ export default function App() {
   )
 }
 
-function TabContent({ tab }: { tab: ReturnType<typeof useUiStore.getState>['tabs'][number] }) {
+export function CenterTab({ tab }: { tab: ReturnType<typeof useUiStore.getState>['tabs'][number] }) {
   switch (tab.kind) {
+    case 'file':
+      return <FileEditor path={tab.path!} />
     case 'artifact':
       return <ArtifactTab path={tab.path!} />
     case 'agent':
@@ -223,7 +235,7 @@ function CenterPanes() {
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {tabs.map((t) => (
           <div key={t.id} style={{ display: t.id === active.id ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
-            <TabContent tab={t} />
+            <CenterTab tab={t} />
           </div>
         ))}
       </div>
@@ -241,7 +253,7 @@ function CenterPanes() {
               </button>
             ))}
           </div>
-          <TabContent tab={splitTab} />
+          <CenterTab tab={splitTab} />
         </div>
       )}
     </div>

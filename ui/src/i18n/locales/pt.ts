@@ -225,6 +225,22 @@ export default {
     noArtifacts: 'Ainda sem artefatos — eles aparecem aqui quando os agentes entregarem.',
     noMembers: 'Ainda sem agentes — crie um papel abaixo para montar a equipe.',
     model: 'modelo',
+    files: 'Projeto',
+  },
+  tree: {
+    newFile: 'Novo arquivo',
+    newFolder: 'Nova pasta',
+    refresh: 'Atualizar',
+    namePh: 'Nome',
+    create: 'Criar',
+    emptyDir: 'Pasta vazia',
+    badName: 'Um só nome, sem barras',
+  },
+  file: {
+    save: 'Salvar',
+    saving: 'Salvando…',
+    saved: 'Salvo',
+    loading: 'Carregando…',
   },
   composer: {
     placeholder: 'Mensagem à equipe… @ para mencionar, # para caminho, ou um comando',
@@ -579,6 +595,10 @@ export default {
     stageStamp: 'Carimbar etapa',
     nodeRail: 'Focar o trilho de nós',
     dismissPending: 'Fechar o diálogo de pendências',
+    treeNewFile: 'Novo arquivo',
+    treeNewFolder: 'Nova pasta',
+    treeRefresh: 'Atualizar a árvore do projeto',
+    saveFile: 'Salvar arquivo',
   },
   errors: {
     actionFailed: 'A ação falhou — {{detail}}',
@@ -604,5 +624,9 @@ export default {
     forbidden: 'Origem de instalação proibida',
     unknown_question: 'Cartão desconhecido ou obsoleto — atualize e tente de novo',
     rejected: 'Proposta rejeitada',
+    not_text: 'Não é texto UTF-8',
+    too_large: 'Arquivo grande demais para editar aqui',
+    already_exists: 'Já existe',
+    not_dir: 'Não é um diretório',
   },
 }

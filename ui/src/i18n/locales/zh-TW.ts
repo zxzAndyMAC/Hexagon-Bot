@@ -225,6 +225,22 @@ export default {
     noArtifacts: '還沒有產物——agent 交付後會出現在這裡。',
     noMembers: '還沒有成員——在下方建立角色組建團隊。',
     model: '模型',
+    files: '專案',
+  },
+  tree: {
+    newFile: '新增檔案',
+    newFolder: '新增目錄',
+    refresh: '重新整理',
+    namePh: '名稱',
+    create: '建立',
+    emptyDir: '空目錄',
+    badName: '只能是一個名稱，不能帶斜線',
+  },
+  file: {
+    save: '儲存',
+    saving: '儲存中…',
+    saved: '已儲存',
+    loading: '載入中…',
   },
   composer: {
     placeholder: '發訊息給團隊… @ 點名，# 引路徑，或指令（退回/略過/蓋章）',
@@ -579,6 +595,10 @@ export default {
     stageStamp: '階段蓋章',
     nodeRail: '聚焦節點軌',
     dismissPending: '關閉待決彈窗',
+    treeNewFile: '新增檔案',
+    treeNewFolder: '新增目錄',
+    treeRefresh: '重新整理專案樹',
+    saveFile: '儲存檔案',
   },
   errors: {
     actionFailed: '操作失敗——{{detail}}',
@@ -604,5 +624,9 @@ export default {
     forbidden: '安裝來源被禁用',
     unknown_question: '卡片未知或已過期——重新整理後重試',
     rejected: '提案已被拒絕',
+    not_text: '不是 UTF-8 文字',
+    too_large: '檔案太大，無法在此編輯',
+    already_exists: '已經存在',
+    not_dir: '不是目錄',
   },
 }

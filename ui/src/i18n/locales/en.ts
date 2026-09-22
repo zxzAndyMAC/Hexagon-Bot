@@ -225,6 +225,22 @@ export default {
     noArtifacts: 'No artifacts yet — they appear here when agents deliver.',
     noMembers: 'No agents yet — create a role below to grow the team.',
     model: 'model',
+    files: 'Project',
+  },
+  tree: {
+    newFile: 'New file',
+    newFolder: 'New folder',
+    refresh: 'Refresh',
+    namePh: 'Name',
+    create: 'Create',
+    emptyDir: 'Empty folder',
+    badName: 'Use a single name — no slashes',
+  },
+  file: {
+    save: 'Save',
+    saving: 'Saving…',
+    saved: 'Saved',
+    loading: 'Loading…',
   },
   composer: {
     placeholder: 'Message the team… @ to mention, # for a path, or a command (退回/跳过/盖章)',
@@ -579,6 +595,10 @@ export default {
     stageStamp: 'Stamp stage',
     nodeRail: 'Focus node rail',
     dismissPending: 'Close pending dialog',
+    treeNewFile: 'New file',
+    treeNewFolder: 'New folder',
+    treeRefresh: 'Refresh project tree',
+    saveFile: 'Save file',
   },
   errors: {
     actionFailed: 'Action failed — {{detail}}',
@@ -604,5 +624,9 @@ export default {
     forbidden: 'Install source not allowed',
     unknown_question: 'Unknown or stale card — refresh and retry',
     rejected: 'Proposal rejected',
+    not_text: 'Not a UTF-8 text file',
+    too_large: 'File is too large to edit here',
+    already_exists: 'Already exists',
+    not_dir: 'Not a directory',
   },
 }
