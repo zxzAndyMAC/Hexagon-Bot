@@ -248,6 +248,23 @@ export function EventRow({
   const team = useUiStore((s) => s.team)
   const openTab = useUiStore((s) => s.openTab)
   const k = item.event.kind
+  // 票 08：封闭选择的结果单独成行，不折进系统事件组——负责人要一眼看到派给了谁。
+  if (k === 'pm_routed') {
+    const held = item.event.payload.held === true
+    const rejected = item.event.payload.rejected === true
+    const role = String(item.event.payload.role ?? '')
+    const label = rejected
+      ? t('timeline.routeRejected')
+      : held
+        ? t('timeline.routeHold')
+        : t('timeline.routedTo', { role })
+    return (
+      <div className="sysrow" data-route={rejected ? 'rejected' : held ? 'hold' : role}>
+        <div className="sysline" />
+        <span className="syslabel">{label}</span>
+      </div>
+    )
+  }
   if (k === 'stage_started') return <StageHeader item={item} />
   if (k === 'return_summary') return <ReturnSummaryRow item={item} onJumpEvent={onJumpEvent} />
   if (k === 'artifact_delivered') {

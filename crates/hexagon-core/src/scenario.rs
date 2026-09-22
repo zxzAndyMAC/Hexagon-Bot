@@ -242,11 +242,14 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             wb.run_all_active(input.as_deref().unwrap_or(""))?;
         }
         StepDef::OwnerMessage { text } => {
-            // 与壳层 send_message 同路由：控制面落库+即时指令，余下交 wb 分发
+            // 与壳层 send_message 同路由：控制面落库+即时指令，余下交 wb 分发。
+            // 没点名且花名册有项目经理时，分发是一次封闭选择（票 08）。
             let (_id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, text, &[])
                 .map_err(|e| ApiError::BadInput(e.to_string()))?;
             if let Some(c) = cmd {
                 wb.dispatch_command(&c)?;
+            } else {
+                wb.route_unnamed_owner(text, &[])?;
             }
         }
         StepDef::Advance => {

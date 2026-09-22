@@ -22,6 +22,7 @@ pub mod mcp;
 pub mod orchestra;
 pub mod packedit;
 pub mod permissions;
+pub mod pm_route;
 pub mod policydev;
 pub mod presets;
 pub mod proposals;

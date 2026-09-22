@@ -70,6 +70,9 @@ export default {
     statusTool: 'Herramienta {{tool}}',
     steeringDelivered: 'entregado en este turno',
     steeringQueued: 'válido el próximo turno',
+    routedTo: 'asignado a {{role}}',
+    routeHold: 'aún no se asigna',
+    routeRejected: 'la elección está fuera del equipo — nadie fue despertado',
   },
   ev: {
     turn_started: 'turno iniciado',
@@ -404,6 +407,7 @@ export default {
     openProject: 'Abrir este proyecto',
     initGit: 'Inicializar un repositorio git aquí',
     rolesHint: 'Elige el equipo virtual del proyecto (catálogo de plantillas de rol; se puede personalizar cada rol marcado)',
+    pmDefault: 'El director de proyecto viene marcado: un mensaje sin mención se asigna con una elección cerrada, o queda en espera. Puedes desmarcarlo.',
     customize: 'Personalizar', customized: 'Personalizado',
     scopeHint: 'Solo aplica a este proyecto — la biblioteca de plantillas no cambia',
     resetTpl: 'Restaurar plantilla', customMark: '* = personalizado',

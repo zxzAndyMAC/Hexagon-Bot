@@ -38,6 +38,19 @@ describe('buildRows', () => {
     expect(g.type === 'toolgroup' && g.items.length).toBe(3)
   })
 
+  it('keeps a pm route line out of a system-event fold', () => {
+    const rows = buildRows([
+      ev(1, 'pm_routed', { role: '后端', held: false, rejected: false }),
+      ev(2, 'system', { kind: 'request_envelope' }),
+      ev(3, 'system', { kind: 'request_envelope' }),
+      ev(4, 'system', { kind: 'request_envelope' }),
+    ], 'all')
+    expect(rows.map((r) => r.type)).toEqual(['item', 'sysgroup'])
+    expect(rows[0].type === 'item' && rows[0].item.event.kind).toBe('pm_routed')
+    const dec = buildRows([ev(1, 'pm_routed', { role: '后端' })], 'decisions')
+    expect(dec).toHaveLength(1)
+  })
+
   it('filters messages and decisions', () => {
     const msgs = buildRows(tl, 'messages')
     expect(msgs).toHaveLength(1)

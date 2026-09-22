@@ -1,6 +1,7 @@
 //! 预置内容包：随包数据文件（`presets/`）+ 载入校验。
 //!
-//! - 十一预置角色 `presets/roles.json`：职责、上级链、默认模型槽、默认路径归属、默认技能。
+//! - 十二预置角色 `presets/roles.json`：职责、上级链、默认模型槽、默认路径归属、默认技能。
+//!   项目经理（票 08）只调度，不进四套流程包的阶段名单；包仍各自保留盖章点。
 //! - 四预置流程包 `presets/packs/*.json`：PackDef 数据；项目内改的是钉住的副本
 //!   （`PackDef::pin` 写 `.hexagon/pack.active.json`），源文件只读。
 //! - 预置技能 `presets/skills/<name>/SKILL.md`：Agent Skills 格式，角色按名引用。
@@ -131,7 +132,7 @@ pub fn preset_skill_names() -> Vec<&'static str> {
     SKILL_FILES.iter().map(|(n, _)| *n).collect()
 }
 
-/// 十一预置角色（载入即校验）。
+/// 十二预置角色（载入即校验）。项目经理在名单里，但不要求出现在流程包阶段中。
 pub fn preset_roles() -> Result<Vec<RoleDef>, PresetError> {
     let roles: Vec<RoleDef> =
         serde_json::from_str(ROLES_JSON).map_err(|src| PresetError::Json {
@@ -254,7 +255,7 @@ mod tests {
     #[test]
     fn preset_roles_load_and_validate() {
         let roles = preset_roles().unwrap();
-        assert_eq!(roles.len(), 11);
+        assert_eq!(roles.len(), 12);
         assert!(roles.iter().all(|r| !r.duty.is_empty()));
         assert!(roles.iter().all(|r| !r.model_slot.is_empty()));
         // CONTEXT.md 钉的四条上级链
@@ -270,6 +271,10 @@ mod tests {
         assert_eq!(rev("前端").as_deref(), Some("前端技术负责人"));
         assert_eq!(rev("后端").as_deref(), Some("后端技术负责人"));
         assert_eq!(rev("运维").as_deref(), Some("后端技术负责人"));
+        // 票 08：项目经理是预置角色，没有上级，职责里写明不写规格。
+        let pm = roles.iter().find(|r| r.name == "项目经理").unwrap();
+        assert!(pm.reviewer.is_none());
+        assert!(pm.duty.contains("不写规格"));
         // 每个角色至少 1 个默认技能，且正文可取
         for r in &roles {
             assert!(!r.skills.is_empty(), "{} has no skills", r.name);

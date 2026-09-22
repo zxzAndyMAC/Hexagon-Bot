@@ -170,7 +170,7 @@ mod tests {
         let t = merged.iter().find(|t| t.def.name == "产品策划").unwrap();
         assert_eq!(t.origin, "custom");
         assert_eq!(t.def.duty, "d");
-        assert_eq!(merged.len(), 11); // 覆盖不增项
+        assert_eq!(merged.len(), 12); // 覆盖不增项；12 = 预置角色数（含项目经理，票 08）
     }
 
     #[test]
@@ -185,7 +185,7 @@ mod tests {
         // 删后文件仍在（空表），目录回落纯内置
         delete_at(&p, "自建A").unwrap();
         assert!(load_custom_at(&p).is_empty());
-        assert_eq!(role_templates_at_len(&p), 11);
+        assert_eq!(role_templates_at_len(&p), 12);
     }
 
     fn role_templates_at_len(path: &Path) -> usize {

@@ -95,6 +95,19 @@ pub enum ApiError {
     Judge(#[from] crate::judge::JudgeError),
     #[error("bad input: {0}")]
     BadInput(String),
+    /// 封闭选择的模型调用失败（不是聊天回合的 Turn 错）。
+    #[error("decision model: {0}")]
+    Decision(String),
+}
+
+/// 没点名的负责人发言走完封闭选择之后的结果。
+/// `Skipped` = 这句话不归票 08（有花名册点名、是指令、或花名册里没有项目经理）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnnamedRoute {
+    Skipped,
+    Dispatched { role: String, via: String },
+    Held { via: String },
+    Rejected { raw: String, via: String },
 }
 
 /// 工作台实例：一个打开的项目。
@@ -264,6 +277,20 @@ impl Workbench {
 
     pub fn register_provider(&mut self, slot: &str, p: Arc<dyn ModelProvider>) {
         self.providers.insert(slot.into(), p);
+    }
+
+    /// 项目经理的决策槽（票 08）。`None` 或空白 = 没配，封闭选择改走主对话槽。
+    /// 只写这一列，不碰 `model_slot`——两个槽不许合成一个。
+    pub fn set_decision_slot(&self, role: &str, slot: Option<&str>) -> Result<(), ApiError> {
+        let slot = slot.map(str::trim).filter(|s| !s.is_empty());
+        let n = self.db.conn().execute(
+            "UPDATE agents SET decision_slot=?1 WHERE project_id=?2 AND role=?3",
+            rusqlite::params![slot, self.project_id, role],
+        )?;
+        if n == 0 {
+            return Err(ApiError::NoRole(role.into()));
+        }
+        Ok(())
     }
 
     /// MCP 服务实况（ui-audit-2 票 06）：每配置服务一行（含失败原因）。
@@ -671,6 +698,165 @@ impl Workbench {
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
         self.run_turn_opts(role, input, attachments, true)
+    }
+
+    /// 负责人发言但没有点名花名册里的人：项目经理做一次封闭选择，
+    /// 然后最多唤醒一个角色（票 08 / ADR 0065）。
+    ///
+    /// 不拨阶段指针、不改流程包激活名单、不改写激活简报——那些写者
+    /// 仍是 `open_stage` / 回合内核。选中的角色可以不在当前阶段名单里，
+    /// 唤醒走既有 [`Self::dispatch`]（改的是 `agents.status`，不是名单）。
+    ///
+    /// 有花名册点名、整句是指令、或花名册里没有项目经理 → [`UnnamedRoute::Skipped`]。
+    /// 卸掉之后改由激活名单第一位或通道角色接，是票 09，这里不补。
+    pub fn route_unnamed_owner(
+        &self,
+        body: &str,
+        attachments: &[crate::trace::AttachRef],
+    ) -> Result<UnnamedRoute, ApiError> {
+        if crate::commands::parse_command(body).is_some() {
+            return Ok(UnnamedRoute::Skipped);
+        }
+        let roster: Vec<String> = {
+            let mut st = self
+                .db
+                .conn()
+                .prepare("SELECT role FROM agents WHERE project_id=?1 ORDER BY id")?;
+            let rows = st.query_map([&self.project_id], |r| r.get(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mentioned = crate::commands::parse_tokens(body).into_iter().any(|t| {
+            matches!(t, crate::trace::MessageToken::Mention { agent_role } if roster.iter().any(|r| r == &agent_role))
+        });
+        // 点名仍走今日的 dispatch（界面在 pack 模式按花名册点名派）。
+        // 这里再选一次就会和点名双发。
+        if mentioned {
+            return Ok(UnnamedRoute::Skipped);
+        }
+        if !roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
+            return Ok(UnnamedRoute::Skipped);
+        }
+        let pm_id = self.agent_by_role(crate::pm_route::PM_ROLE)?;
+        let decision_slot: Option<String> = self.db.conn().query_row(
+            "SELECT decision_slot FROM agents WHERE id=?1",
+            [&pm_id],
+            |r| r.get(0),
+        )?;
+        let model_slot: Option<String> = self.db.conn().query_row(
+            "SELECT model_slot FROM agents WHERE id=?1",
+            [&pm_id],
+            |r| r.get(0),
+        )?;
+        let decision_slot = decision_slot.filter(|s| !s.trim().is_empty());
+        // 配了决策槽就精确取这个槽，不走 resolve_slot 的 default 回退——
+        // 回退会让决策调用和主对话合成同一个供应商（CONTEXT「模型槽」Avoid）。
+        // 槽名写了但没注册 → NoProvider，不假装没配。
+        let (provider, slot_name, via) = if let Some(slot) = decision_slot {
+            let p = self
+                .providers
+                .get(&slot)
+                .cloned()
+                .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
+            (p, slot, "decision")
+        } else {
+            let slot = model_slot.unwrap_or_else(|| "default".into());
+            let p = crate::provider_config::resolve_slot(&self.providers, &slot)
+                .cloned()
+                .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
+            (p, slot, "chat")
+        };
+        let run = self.active_run()?;
+        let stage_name = run.as_ref().map(|r| r.stage_name.clone());
+        let activation = run
+            .as_ref()
+            .and_then(|r| {
+                self.pack
+                    .as_ref()
+                    .and_then(|p| p.stages.get(r.seq as usize).map(|s| s.roles.clone()))
+            })
+            .unwrap_or_default();
+        let prompt =
+            crate::pm_route::choice_prompt(stage_name.as_deref(), &activation, &roster, body);
+        let req = crate::pm_route::choice_request(&slot_name, &prompt);
+        let run_id = run.as_ref().map(|r| r.id.as_str());
+        // 选择也是一次模型派发：信封在调用前落，用量在成功后记到项目经理头上。
+        // 不走 run_turn——那会把选择写成聊天回复。
+        self.db.append_event(
+            &self.project_id,
+            EventKind::System,
+            turn::request_envelope(0, &req, &req.messages, &[]),
+            Some(&pm_id),
+            run_id,
+        )?;
+        let resp = provider
+            .complete(&req)
+            .map_err(|e| ApiError::Decision(e.to_string()))?;
+        let usage_ctx = crate::tools::ToolContext {
+            project_id: self.project_id.clone(),
+            agent_id: pm_id.clone(),
+            repo_root: self.repo_root.clone(),
+            stage_run_id: run.as_ref().map(|r| r.id.clone()),
+            owned_globs: vec![],
+            tiers: crate::artifacts::TierMap::new(),
+            sessions: Default::default(),
+            caps: Default::default(),
+        };
+        crate::usage::record(&self.db, &usage_ctx, &slot_name, &resp.usage, 0)?;
+        let raw = crate::pm_route::choice_text(&resp);
+        let choice = crate::pm_route::parse_route_choice(&raw, &roster);
+        let mut eligible = roster.clone();
+        eligible.push(crate::pm_route::HOLD.to_string());
+        let (held, rejected, role) = match &choice {
+            Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
+                (false, false, Some(role.clone()))
+            }
+            Some(crate::pm_route::RouteChoice::Hold) => (true, false, None),
+            None => (false, true, None),
+        };
+        let mut payload = json!({
+            "held": held,
+            "rejected": rejected,
+            "via": via,
+            "role": role,
+            "raw": raw,
+        });
+        // 拒绝的输出不是一次决策：不写 decision，免得花名册外的字符串
+        // 被回放当成 chosen。接受/先不派活才落闭集决策。
+        if let Some(chosen) = choice.as_ref().map(|c| match c {
+            crate::pm_route::RouteChoice::Dispatch(role) => role.clone(),
+            crate::pm_route::RouteChoice::Hold => crate::pm_route::HOLD.to_string(),
+        }) {
+            payload["choice"] = json!(chosen);
+            payload["decision"] = json!({
+                "kind": "pm_route",
+                "eligible": eligible,
+                "chosen": chosen,
+                "via": via,
+            });
+        }
+        self.db.append_event(
+            &self.project_id,
+            EventKind::PmRouted,
+            payload,
+            Some(&pm_id),
+            run_id,
+        )?;
+        match choice {
+            Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
+                self.dispatch(&role, body, attachments)?;
+                Ok(UnnamedRoute::Dispatched {
+                    role,
+                    via: via.to_string(),
+                })
+            }
+            Some(crate::pm_route::RouteChoice::Hold) => Ok(UnnamedRoute::Held {
+                via: via.to_string(),
+            }),
+            None => Ok(UnnamedRoute::Rejected {
+                raw,
+                via: via.to_string(),
+            }),
+        }
     }
 
     /// 升级为流程包（票 26）：不换目录——钉包副本 + mode='pack' + PackUpgraded 事件。

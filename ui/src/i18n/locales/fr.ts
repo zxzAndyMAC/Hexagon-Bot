@@ -70,6 +70,9 @@ export default {
     statusTool: 'Outil {{tool}}',
     steeringDelivered: 'reçu dans ce tour',
     steeringQueued: 'effectif au prochain tour',
+    routedTo: 'assigné à {{role}}',
+    routeHold: 'pas d’assignation',
+    routeRejected: 'choix hors effectif — personne n’est réveillé',
   },
   ev: {
     turn_started: 'tour commencé',
@@ -404,6 +407,7 @@ export default {
     openProject: 'Ouvrir ce projet',
     initGit: 'Initialiser un dépôt git ici',
     rolesHint: 'Choisissez l’équipe virtuelle du projet (catalogue de modèles de rôle ; chaque rôle coché est personnalisable)',
+    pmDefault: 'Le chef de projet est coché par défaut : un message sans mention part vers un choix fermé, ou reste en attente. Vous pouvez le décocher.',
     customize: 'Personnaliser', customized: 'Personnalisé',
     scopeHint: 'S’applique uniquement à ce projet — la bibliothèque de modèles reste inchangée',
     resetTpl: 'Restaurer le modèle', customMark: '* = personnalisé',

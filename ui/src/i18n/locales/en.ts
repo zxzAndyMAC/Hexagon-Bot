@@ -70,6 +70,9 @@ export default {
     statusTool: 'Tool {{tool}}',
     steeringDelivered: 'delivered this turn',
     steeringQueued: 'effective next turn',
+    routedTo: 'routed to {{role}}',
+    routeHold: 'not routing yet',
+    routeRejected: 'closed choice outside the roster — nobody was woken',
   },
   ev: {
     turn_started: 'turn started',
@@ -404,6 +407,7 @@ export default {
     openProject: 'Open this project',
     initGit: 'Initialize a git repository here',
     rolesHint: 'Pick the virtual team for this project (role template catalog; checked roles can be customized)',
+    pmDefault: 'Project manager is checked by default: an unnamed message is a closed choice of who to route to, or hold. You can uncheck it.',
     customize: 'Customize', customized: 'Customized',
     scopeHint: 'Applies to this project only — the template library stays untouched',
     resetTpl: 'Reset to template', customMark: '* = customized',

@@ -31,8 +31,10 @@ interface Draft {
   brief: string
 }
 
+// 票 08：新草稿默认勾上项目经理。已写入 localStorage 的草稿按保存的勾选
+// 恢复——负责人卸掉之后不会被这次默认重新勾上。
 const EMPTY: Draft = {
-  dir: '', name: '', roles: [], roleOverrides: {}, mode: 'pack', packName: '规格驱动',
+  dir: '', name: '', roles: ['项目经理'], roleOverrides: {}, mode: 'pack', packName: '规格驱动',
   fastRole: '', initGit: false, genAgents: false, agentsMd: '', autonomy: 'L4', brief: '',
 }
 
@@ -355,7 +357,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     ),
     roles: (
       <>
-        <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.rolesHint')}</div>
+        <div className="dim3" style={{ fontSize: 11, marginBottom: 4 }}>{t('wizard.rolesHint')}</div>
+        <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.pmDefault')}</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
           {tpls.map((tp) => {
             const picked = draft.roles.includes(tp.def.name)

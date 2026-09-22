@@ -71,7 +71,9 @@ describe('Composer pack 模式 @点名派活（D-06）', () => {
     root.unmount()
   })
 
-  it('无 mention 的消息只落库不派活（广播/steering 不烧 token）', async () => {
+  // 票 08 起，没点名的派活改在核内封闭选择（send_message → route_unnamed_owner）。
+  // 界面不再自己 dispatch——本测试钉的是「界面不重写这道选择」，不是「没人接话」。
+  it('无 mention 的消息界面不派活（封闭选择在核内）', async () => {
     const sendSpy = vi.spyOn(api, 'sendMessage')
     const dispSpy = vi.spyOn(api, 'dispatch')
     const { el, root } = await render(<Composer />)
@@ -96,6 +98,21 @@ describe('Composer pack 模式 @点名派活（D-06）', () => {
     await sendText(el, '准备部署清单')
     expect(dispSpy).toHaveBeenCalledTimes(1)
     expect(dispSpy).toHaveBeenCalledWith('运维', '准备部署清单', [])
+    root.unmount()
+  })
+
+  // 票 08：花名册有项目经理时，没点名的话由核内封闭选择派。
+  // 界面再派给通道角色就会双发。卸掉项目经理后的接话仍是上面那条今日行为。
+  it('fastpath 且有项目经理时，无点名的消息不预派通道角色', async () => {
+    useUiStore.setState({
+      mode: 'fastpath',
+      fastRole: '运维',
+      team: [member('运维'), member('项目经理')],
+    })
+    const dispSpy = vi.spyOn(api, 'dispatch')
+    const { el, root } = await render(<Composer />)
+    await sendText(el, '准备部署清单')
+    expect(dispSpy).not.toHaveBeenCalled()
     root.unmount()
   })
 })

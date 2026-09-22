@@ -70,6 +70,9 @@ export default {
     statusTool: '工具 {{tool}}',
     steeringDelivered: '已送达本回合',
     steeringQueued: '下回合生效',
+    routedTo: '派给 {{role}}',
+    routeHold: '先不派活',
+    routeRejected: '封闭选择不在花名册，没有派活',
   },
   ev: {
     turn_started: '回合开始',
@@ -404,6 +407,7 @@ export default {
     openProject: '打开此项目',
     initGit: '在此目录初始化 git 仓库',
     rolesHint: '勾选本项目的虚拟团队（角色模板目录；勾上可逐角色定制）',
+    pmDefault: '项目经理默认勾选：没点名的话由它决定派给谁，或先不派活。可以卸掉。',
     customize: '定制', customized: '已定制',
     scopeHint: '定制只作用于本项目，不回写模板库',
     resetTpl: '还原模板', customMark: '* = 已定制',

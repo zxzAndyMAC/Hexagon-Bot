@@ -230,25 +230,27 @@ export function Composer() {
     // 原先 await 裸抛，文案随输入框状态悬在用户面前却无任何反馈。
     try {
       await api.sendMessage(body, refs)
-      // 快速通道：消息即任务——发完直接派给通道角色跑一回合（票 26）
-      if (mode === 'fastpath' && fastRole) {
+      // 票 08：没点名的派活在核内 route_unnamed_owner（send_message 之后
+      // 做封闭选择）。界面不再自己决定派给谁。
+      // 点名仍是今日行为：pack 模式按花名册 @ 派活（D-06）。与核
+      // parse_tokens 同规则：空白分词 + `@` 前缀 + 命中花名册才算点名。
+      // 花名册有项目经理且这句话没有点名时，快速通道也不预派通道角色
+      // ——否则和核内选择双发。卸掉项目经理后的接话人是票 09，
+      // 没点名的快速通道仍按今日行为派给通道角色。
+      const roster = new Set(team.map((m) => m.role))
+      const mentioned = [
+        ...new Set(
+          body
+            .split(/\s+/)
+            .filter((w) => w.startsWith('@'))
+            .map((w) => w.slice(1))
+            .filter((n) => roster.has(n)),
+        ),
+      ]
+      const pmRoutesUnnamed = roster.has('项目经理') && mentioned.length === 0
+      if (mode === 'fastpath' && fastRole && !pmRoutesUnnamed) {
         await api.dispatch(fastRole, body, refs).catch(() => {})
       } else if (mode === 'pack') {
-        // pack：@点名即派活（真窗口活测实证 D-06——此前 pack 消息
-        // 只落库，UI 没有任何触发 agent 回合的路径，阶段开了 agent
-        // 也永远干不了活）。无 mention 的消息是广播/steering——受控
-        // 语义：派活必须显式点名，不烧 token。与核 parse_tokens 同
-        // 规则：空白分词 + `@` 前缀 + 命中花名册才算点名。
-        const roster = new Set(team.map((m) => m.role))
-        const mentioned = [
-          ...new Set(
-            body
-              .split(/\s+/)
-              .filter((w) => w.startsWith('@'))
-              .map((w) => w.slice(1))
-              .filter((n) => roster.has(n)),
-          ),
-        ]
         for (const role of mentioned) {
           // 点名失败（角色不存在/回合报错）要可见——静默吞错正是
           // D-06 那类「点了没反应」死路的成因。

@@ -11,6 +11,7 @@ export const DECISION_KINDS = new Set([
   'proposal_activated', 'proposal_rolled_back',
   'publish_requested', 'publish_confirmed', 'publish_rejected', 'publish_failed',
   'autonomy_changed', 'baseline_merged', 'stage_rewound',
+  'pm_routed',
 ])
 
 export const TOOL_KINDS = new Set(['tool_called', 'tool_result'])
@@ -124,6 +125,7 @@ export function deriveWorkbenchStatus(src: StatusSources): WorkbenchStatus {
 // EventRow 里有专门渲染的 kind；其余无消息事件落入 SystemRow，连续成片时折叠。
 const SPECIAL_KINDS = new Set([
   'stage_started', 'return_summary', 'artifact_delivered', 'flag_submitted', 'flag_adjudicated',
+  'pm_routed',
 ])
 
 // 高危 system 子类词表（ui-audit 票 05 / ADR 0056-3）：

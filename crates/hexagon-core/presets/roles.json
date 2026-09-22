@@ -171,5 +171,17 @@
       "policy-tuning",
       "handoff-note"
     ]
+  },
+  {
+    "name": "项目经理",
+    "duty": "决定下一手派给花名册里的哪一个角色，或先不派活；不写规格、不写实现、不盖章、不远程发布",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": [
+      ".hexagon/**"
+    ],
+    "skills": [
+      "handoff-note"
+    ]
   }
 ]

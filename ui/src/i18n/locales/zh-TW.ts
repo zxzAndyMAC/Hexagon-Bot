@@ -70,6 +70,9 @@ export default {
     statusTool: '工具 {{tool}}',
     steeringDelivered: '已送達本回合',
     steeringQueued: '下回合生效',
+    routedTo: '派給 {{role}}',
+    routeHold: '先不派活',
+    routeRejected: '封閉選擇不在花名冊，沒有派活',
   },
   ev: {
     turn_started: '回合開始',
@@ -404,6 +407,7 @@ export default {
     openProject: '打開此專案',
     initGit: '在此目錄初始化 git 倉庫',
     rolesHint: '勾選本專案的虛擬團隊（角色範本目錄；勾上可逐角色自訂）',
+    pmDefault: '專案經理預設勾選：沒點名的話由它決定派給誰，或先不派活。可以卸掉。',
     customize: '自訂', customized: '已自訂',
     scopeHint: '自訂只作用於本專案，不回寫範本庫',
     resetTpl: '還原範本', customMark: '* = 已自訂',

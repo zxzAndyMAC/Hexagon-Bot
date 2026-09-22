@@ -63,6 +63,8 @@ pub enum EventKind {
     OwnerCommand,
     // 快速通道
     FastpathDispatched,
+    /// 票 08：项目经理对没点名的负责人发言做的封闭选择（派给谁 / 先不派活）。
+    PmRouted,
     PackUpgraded,
     // 自治与提案
     AutonomyChanged,

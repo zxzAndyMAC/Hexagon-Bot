@@ -955,11 +955,13 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'preset_roles':
       return [
         { name: '产品策划', duty: '需求与规格', reviewer: null, model_slot: 'chat', globs: [], skills: ['spec-writing'] },
+        { name: '项目经理', duty: '决定下一手派给谁，或先不派活', reviewer: null, model_slot: 'chat', globs: [], skills: ['handoff-note'] },
         { name: '后端', duty: '服务端实现', reviewer: '后端技术负责人', model_slot: 'chat', globs: [], skills: [] },
       ] as T
     case 'list_role_templates':
       return [
         { def: { name: '产品策划', duty: '需求与规格', reviewer: null, model_slot: 'chat', globs: [], skills: ['spec-writing'] }, origin: 'builtin' },
+        { def: { name: '项目经理', duty: '决定下一手派给谁，或先不派活', reviewer: null, model_slot: 'chat', globs: [], skills: ['handoff-note'] }, origin: 'builtin' },
         { def: { name: '后端', duty: '服务端实现', reviewer: '后端技术负责人', model_slot: 'chat', globs: [], skills: [] }, origin: 'builtin' },
         { def: { name: '插画师', duty: '出图素材', reviewer: null, model_slot: 'chat', globs: [], skills: [] }, origin: 'custom' },
       ] as T

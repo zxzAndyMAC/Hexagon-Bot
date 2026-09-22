@@ -70,6 +70,9 @@ export default {
     statusTool: 'Ferramenta {{tool}}',
     steeringDelivered: 'entregue neste turno',
     steeringQueued: 'vale no próximo turno',
+    routedTo: 'encaminhado a {{role}}',
+    routeHold: 'sem despacho',
+    routeRejected: 'escolha fora da equipe — ninguém foi acordado',
   },
   ev: {
     turn_started: 'turno iniciado',
@@ -404,6 +407,7 @@ export default {
     openProject: 'Abrir este projeto',
     initGit: 'Inicializar um repositório git aqui',
     rolesHint: 'Escolha a equipe virtual do projeto (catálogo de modelos de papel; cada papel marcado pode ser personalizado)',
+    pmDefault: 'O gerente de projeto vem marcado: uma mensagem sem menção segue uma escolha fechada, ou fica sem despacho. Você pode desmarcar.',
     customize: 'Personalizar', customized: 'Personalizado',
     scopeHint: 'Aplica-se apenas a este projeto — a biblioteca de modelos não muda',
     resetTpl: 'Restaurar modelo', customMark: '* = personalizado',

@@ -70,6 +70,9 @@ export default {
     statusTool: 'ツール {{tool}}',
     steeringDelivered: 'このターンに届いた',
     steeringQueued: '次のターンで有効',
+    routedTo: '{{role}} に割り当て',
+    routeHold: '今は振らない',
+    routeRejected: '名簿外の選択は却下、誰も起こさない',
   },
   ev: {
     turn_started: 'ターン開始',
@@ -404,6 +407,7 @@ export default {
     openProject: 'このプロジェクトを開く',
     initGit: 'このディレクトリで git を初期化',
     rolesHint: 'このプロジェクトの仮想チームを選択（ロールテンプレート一覧；チェック後に個別カスタマイズ可）',
+    pmDefault: 'プロジェクトマネージャーは既定でオンです。宛先のない発言は閉じた選択で振り分けます（今は振らない、も選べます）。外すこともできます。',
     customize: 'カスタマイズ', customized: 'カスタム済み',
     scopeHint: 'このプロジェクトのみに適用——テンプレート庫には書き戻しません',
     resetTpl: 'テンプレートに戻す', customMark: '* = カスタム済み',
