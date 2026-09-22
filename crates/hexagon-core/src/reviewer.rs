@@ -395,11 +395,13 @@ pub fn adjudicate(
     if tripped(db, &ctx.project_id, ctx.stage_run_id.as_deref()) {
         return ReviewOutcome::Held;
     }
-    // live 挂接档位：reviewer_mode='live' 且 autonomy ≥ L1。
+    // live 挂接档位：reviewer_mode='live' 且执行档 ≥ L1。
     // autonomy L0 的语义是「一切决策排负责人」，reviewer 放行与其矛盾——
     // L0 项目即使误开 live 也只记录不执行。
+    // 票 01：这里读 execution_rank。L3/L4 封顶到 2，所以和 L2 一样放行 live，
+    // 不会比 L2 多放行任何权限（安全网在上面已经 Held）。
     let live = mode(db, &ctx.project_id) == "live"
-        && crate::autonomy::rank(db, &ctx.project_id).unwrap_or(0) >= 1;
+        && crate::autonomy::execution_rank(db, &ctx.project_id).unwrap_or(0) >= 1;
 
     let tool = payload["tool"].as_str().unwrap_or("").to_string();
     let input = payload["raw_input"].clone();

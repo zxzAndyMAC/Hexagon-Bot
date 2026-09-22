@@ -26,12 +26,15 @@ interface Draft {
   initGit: boolean
   genAgents: boolean
   agentsMd: string
+  autonomy: 'L0' | 'L1' | 'L2' | 'L3' | 'L4'
 }
 
 const EMPTY: Draft = {
   dir: '', name: '', roles: [], roleOverrides: {}, mode: 'pack', packName: '规格驱动',
-  fastRole: '', initGit: false, genAgents: false, agentsMd: '',
+  fastRole: '', initGit: false, genAgents: false, agentsMd: '', autonomy: 'L4',
 }
+
+const AUTONOMY_LEVELS = ['L0', 'L1', 'L2', 'L3', 'L4'] as const
 
 function loadDraft(): Draft {
   try {
@@ -245,6 +248,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         initGit: draft.initGit,
         agentsMd:
           draft.genAgents && !report?.instructions ? draft.agentsMd : null,
+        autonomy: draft.autonomy,
       }, note)
       localStorage.removeItem(DRAFT_KEY)
       onDone()
@@ -575,6 +579,27 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                 ? t('wizard.sumAgentsGen')
                 : t('wizard.sumAgentsNone')}
           </div>
+          <div>
+            <span className="dim3">{t('wizard.sumAutonomy')}：</span>
+            {t(`autonomy.${draft.autonomy}`)}
+          </div>
+        </div>
+        <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 12 }}>
+          {t('wizard.autonomyLabel')}
+        </label>
+        <select
+          aria-label={t('wizard.autonomyLabel')}
+          className="btn"
+          style={{ marginTop: 4, textAlign: 'left' }}
+          value={draft.autonomy}
+          onChange={(e) => set({ autonomy: e.target.value as Draft['autonomy'] })}
+        >
+          {AUTONOMY_LEVELS.map((lv) => (
+            <option key={lv} value={lv}>{t(`autonomy.${lv}`)}</option>
+          ))}
+        </select>
+        <div className="dim3" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.6 }}>
+          {t('wizard.autonomyHint')}
         </div>
         {existingRepoAlign && (
           <div className="panel" style={{ marginTop: 12, padding: '8px 10px', fontSize: 12, color: 'var(--flag)' }}>

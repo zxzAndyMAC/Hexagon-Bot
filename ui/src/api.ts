@@ -309,6 +309,7 @@ export const api = {
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
   /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
+  /// 票 01：`autonomy` 缺省由核落 L4。非法档位核拒绝且不建项目。
   createProject: (
     opts: {
       dir: string
@@ -321,6 +322,7 @@ export const api = {
       fastpathRole?: string | null
       initGit: boolean
       agentsMd?: string | null
+      autonomy?: string | null
     },
     onStep?: (step: CreateStep) => void,
   ) => {
@@ -334,6 +336,7 @@ export const api = {
         fastpathRole: opts.fastpathRole ?? null,
         initGit: opts.initGit,
         agentsMd: opts.agentsMd ?? null,
+        autonomy: opts.autonomy ?? null,
       },
     }
     if (!isTauri) {
@@ -812,7 +815,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'set_usage_limit':
       return null as T
     case 'autonomy':
-      return 'L1' as T
+      // 票 01：浏览器预览与新项目默认档对齐（真项目以库里的值为准）
+      return 'L4' as T
     case 'owner_away':
       return null as T
     case 'owner_back':

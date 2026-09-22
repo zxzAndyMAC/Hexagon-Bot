@@ -6,4 +6,8 @@ export type CreateProjectOpts = { dir: string, name: string, roles: Array<string
  * 角色定制覆盖（ADR 0057）：自定义模板与向导改过的角色传完整定义；
  * 未列名字走内置目录。壳层不读全局模板文件，保持 core 纯函数。
  */
-roleOverrides?: Array<RoleDef>, packName?: string, fastpathRole?: string, initGit: boolean, agentsMd?: string, };
+roleOverrides?: Array<RoleDef>, packName?: string, fastpathRole?: string, initGit: boolean, agentsMd?: string, 
+/**
+ * 自治档位（票 01 / ADR 0064）。缺省 L4。非法档位拒绝且不建项目。
+ */
+autonomy?: string, };

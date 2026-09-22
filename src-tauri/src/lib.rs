@@ -1208,6 +1208,10 @@ struct CreateProjectOpts {
     init_git: bool,
     #[ts(optional)]
     agents_md: Option<String>,
+    /// 自治档位（票 01 / ADR 0064）。缺省 L4。非法档位拒绝且不建项目。
+    #[serde(default)]
+    #[ts(optional)]
+    autonomy: Option<String>,
 }
 
 #[tauri::command]
@@ -1247,6 +1251,7 @@ fn create_project(
         opts.init_git,
         &*hexagon_core::credentials::active(),
         &pdoc,
+        opts.autonomy.as_deref(),
         |step| {
             let _ = on_progress.send(step);
         },

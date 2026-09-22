@@ -182,6 +182,7 @@ impl_error_code!(
     Sqlite,
     Git,
     Io,
+    Autonomy,
 );
 impl_error_code!(
     crate::tools::ToolError,

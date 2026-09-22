@@ -139,6 +139,7 @@ impl Workbench {
         std::fs::create_dir_all(dir.join(".hexagon"))?;
         let db = Db::open(dir.join(".hexagon/state.db"))?;
         let project_id = crate::PROJECT_ID.to_string();
+        // 票 01 / ADR 0064：省略 autonomy → 列默认 L4。再次打开走 OR IGNORE，不改已选档。
         db.conn().execute(
             "INSERT OR IGNORE INTO projects (id, dir, name, mode)
              VALUES (?1, ?2, ?3, 'pack')",
@@ -217,8 +218,10 @@ impl Workbench {
     /// 测试构造：内存库 + 临时仓。
     pub fn for_test(dir: &Path, roles: &[&str], pack: Option<PackDef>) -> Result<Self, ApiError> {
         let db = Db::open_in_memory()?;
+        // 票 01：for_test 不是新项目。钉 L0，避免把「默认 L4、执行如 L2」灌进
+        // 既有「未声明档位 = 全部排队」的执行语义用例。用户路径是 open / create_project。
         db.conn().execute(
-            "INSERT INTO projects (id, dir, name, mode) VALUES (?1,?2,'t','pack')",
+            "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES (?1,?2,'t','pack','L0')",
             rusqlite::params![crate::PROJECT_ID, dir.to_string_lossy().to_string()],
         )?;
         for (i, r) in roles.iter().enumerate() {
@@ -275,6 +278,17 @@ impl Workbench {
     /// 测试/桌面端注入凭据实现（默认内存库；生产壳换成 OsKeychain）。
     pub fn set_credential_store(&mut self, store: Arc<dyn crate::credentials::CredentialStore>) {
         self.creds = store;
+    }
+
+    /// 项目自治档位（L0–L4）。新项目默认 L4。
+    pub fn autonomy(&self) -> Result<String, ApiError> {
+        Ok(crate::autonomy::level(&self.db, &self.project_id)?)
+    }
+
+    /// 改自治档。非法档拒绝，已存档不动。L3/L4 只改存储；执行面见 `execution_rank`。
+    pub fn set_autonomy(&self, level: &str) -> Result<(), ApiError> {
+        crate::autonomy::set_level(&self.db, &self.project_id, level)?;
+        Ok(())
     }
 
     /// 确认发布：凭据闸 + push。

@@ -53,6 +53,8 @@ pub enum SetupError {
     AgentsMdExists(PathBuf),
     #[error("快速通道须指定一个已勾选角色")]
     NoFastRole,
+    #[error(transparent)]
+    Autonomy(#[from] crate::autonomy::AutonomyError),
 }
 
 /// 目录体检报告：向导每一步的判定依据。
@@ -165,6 +167,7 @@ pub const CREATE_STEP_ORDER: [CreateStep; 5] = [
 /// `role_overrides` 携带**完整定义**——自定义模板与向导改过的角色都经它传入，
 /// 本函数不读全局模板文件（保持纯函数，测试不被 HOME 污染）。`pack` 为 None 时
 /// `fastpath_role` 必须给（快速通道）；`init_git` = 负责人确认了「无 git 则初始化」。
+/// `autonomy`：`None` = 列默认 L4；非法档在任何写盘之前拒绝，已有目录也不改。
 /// 全程 fail-closed：已有工作台停（再建会改写花名册）、缺密钥停、未知角色停、野 override 停。
 /// 脏树不停——ADR 0060：未提交改动留给负责人，开项目不提交、不清理。
 /// 进度走 `create_project_reporting`；本函数不报告（脚本/测试旧入口）。
@@ -179,6 +182,7 @@ pub fn create_project(
     init_git: bool,
     store: &dyn CredentialStore,
     doc: &crate::provider_config::ProviderDoc,
+    autonomy: Option<&str>,
 ) -> Result<Workbench, SetupError> {
     create_project_reporting(
         dir,
@@ -190,6 +194,7 @@ pub fn create_project(
         init_git,
         store,
         doc,
+        autonomy,
         |_| {},
     )
 }
@@ -208,11 +213,15 @@ pub fn create_project_reporting<F>(
     init_git: bool,
     store: &dyn CredentialStore,
     doc: &crate::provider_config::ProviderDoc,
+    autonomy: Option<&str>,
     mut on_step: F,
 ) -> Result<Workbench, SetupError>
 where
     F: FnMut(CreateStep),
 {
+    if let Some(lv) = autonomy {
+        crate::autonomy::parse_level(lv)?;
+    }
     let dir = dir.as_ref();
     // ADR 0060：已有工作台状态是打开，不是再建。先于 mkdir / git init，
     // 避免二次创建改 mode、槽位、授权。被否决的替代：静默当成 open 并套用
@@ -307,6 +316,12 @@ where
         .collect();
     let persisted = (|| -> Result<Workbench, SetupError> {
         let wb = Workbench::open(dir, name, &pairs, pack.cloned())?;
+        if let Some(lv) = autonomy {
+            let cur = crate::autonomy::level(&wb.db, &wb.project_id)?;
+            if cur != lv {
+                crate::autonomy::set_level(&wb.db, &wb.project_id, lv)?;
+            }
+        }
         let db = Db::open(&db_path)?;
         let mode = if pack.is_some() { "pack" } else { "fastpath" };
         let fast_agent = fastpath_role.map(|fr| {
@@ -459,6 +474,7 @@ mod tests {
             true, // 确认初始化
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         assert!(git::is_repo(&sub));
@@ -514,6 +530,7 @@ mod tests {
             false,
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         assert!(d.path().join(".hexagon/state.db").is_file());
@@ -546,6 +563,7 @@ mod tests {
             false,
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -582,7 +600,8 @@ mod tests {
                 None,
                 false,
                 &store_with_key(),
-                &doc_with_provider()
+                &doc_with_provider(),
+                None,
             ),
             Err(SetupError::NoGit(_))
         ));
@@ -611,6 +630,7 @@ mod tests {
             true,
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         assert!(git::is_repo(&sub));
@@ -638,7 +658,8 @@ mod tests {
                 None,
                 false,
                 &store_with_key(),
-                &doc_with_provider()
+                &doc_with_provider(),
+                None,
             ),
             Err(SetupError::NoGit(_))
         ));
@@ -653,6 +674,7 @@ mod tests {
             true,
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         assert!(git::is_repo(&sub));
@@ -674,6 +696,7 @@ mod tests {
             true,
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         drop(wb);
@@ -690,7 +713,8 @@ mod tests {
                 None,
                 true,
                 &store_with_key(),
-                &doc_with_provider()
+                &doc_with_provider(),
+                None,
             ),
             Err(SetupError::AlreadyProject(_))
         ));
@@ -740,6 +764,7 @@ mod tests {
             true,
             &MemoryStore::default(), // 没有任何 key
             &crate::provider_config::ProviderDoc::default(),
+            None,
         ) {
             Ok(_) => panic!("missing key should block"),
             Err(e) => e,
@@ -766,7 +791,8 @@ mod tests {
                 Some("后端"), // 未勾选
                 true,
                 &store_with_key(),
-                &doc_with_provider()
+                &doc_with_provider(),
+                None,
             ),
             Err(SetupError::NoFastRole)
         ));
@@ -781,6 +807,7 @@ mod tests {
             true,
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         let db = Db::open(d.path().join("q/.hexagon/state.db")).unwrap();
@@ -816,7 +843,8 @@ mod tests {
                 None,
                 true,
                 &store_with_key(),
-                &doc_with_provider()
+                &doc_with_provider(),
+                None,
             ),
             Err(SetupError::UnknownRole(_))
         ));
@@ -830,6 +858,7 @@ mod tests {
             true,
             &store_with_key(),
             &doc_with_provider(),
+            None,
         )
         .unwrap();
         let db = Db::open(sub.join(".hexagon/state.db")).unwrap();
@@ -882,6 +911,7 @@ mod tests {
                 true,
                 &store_with_key(),
                 &doc_with_provider(),
+                None,
             ) {
                 Ok(_) => panic!("{want} should fail"),
                 Err(e) => e,
@@ -913,6 +943,7 @@ mod tests {
             true,
             &store_with_key(),
             &doc_with_provider(),
+            None,
             |step| seen.push(step),
         )
         .unwrap();
@@ -942,6 +973,7 @@ mod tests {
             false,
             &store_with_key(),
             &doc_with_provider(),
+            None,
             |step| seen.push(step),
         )
         .unwrap();
@@ -965,6 +997,7 @@ mod tests {
             false,
             &store_with_key(),
             &doc_with_provider(),
+            None,
             |step| seen.push(step),
         ) {
             Ok(_) => panic!("no git should stop"),
@@ -988,6 +1021,7 @@ mod tests {
             true,
             &MemoryStore::default(),
             &crate::provider_config::ProviderDoc::default(),
+            None,
             |step| seen.push(step),
         ) {
             Ok(_) => panic!("missing keys should stop"),
@@ -1022,5 +1056,70 @@ mod tests {
             inspect_dir(d.path()).instructions.as_deref(),
             Some("AGENTS.md")
         );
+    }
+
+    /// 票 01：向导不传档位 → L4；传 L0–L3 则停在所选档；非法档不建项目。
+    #[test]
+    fn create_project_autonomy_defaults_and_honors_choice() {
+        let d = tempfile::tempdir().unwrap();
+        let sub = d.path().join("p");
+        let wb = create_project(
+            &sub,
+            "p",
+            &["产品策划".into()],
+            &[],
+            Some(&pack()),
+            None,
+            true,
+            &store_with_key(),
+            &doc_with_provider(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::autonomy::level(&wb.db, &wb.project_id).unwrap(),
+            "L4"
+        );
+        drop(wb);
+
+        let chosen = d.path().join("q");
+        let wb = create_project(
+            &chosen,
+            "q",
+            &["产品策划".into()],
+            &[],
+            Some(&pack()),
+            None,
+            true,
+            &store_with_key(),
+            &doc_with_provider(),
+            Some("L0"),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::autonomy::level(&wb.db, &wb.project_id).unwrap(),
+            "L0"
+        );
+
+        let bad = d.path().join("bad");
+        let err = create_project(
+            &bad,
+            "bad",
+            &["产品策划".into()],
+            &[],
+            Some(&pack()),
+            None,
+            true,
+            &store_with_key(),
+            &doc_with_provider(),
+            Some("L9"),
+        );
+        assert!(matches!(
+            err,
+            Err(SetupError::Autonomy(
+                crate::autonomy::AutonomyError::BadLevel(_)
+            ))
+        ));
+        assert!(!bad.join(".hexagon").exists());
     }
 }

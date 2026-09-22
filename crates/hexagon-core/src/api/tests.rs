@@ -226,6 +226,76 @@ fn end_to_end_open_project_to_timeline() {
     let arts = artifacts(&wb).unwrap();
     assert_eq!(arts.len(), 1);
 }
+/// 票 01 / ADR 0064：用户新建（`Workbench::open`）默认自治 L4。
+/// `for_test` 仍钉 L0——它是既有执行语义的夹具，不是新项目。
+#[test]
+fn new_project_defaults_to_l4_fixture_stays_l0() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(dir.path(), "新项目", &[], None).unwrap();
+    assert_eq!(wb.autonomy().unwrap(), "L4");
+    let fix = tempfile::tempdir().unwrap();
+    let fixture = Workbench::for_test(fix.path(), &["后端"], None).unwrap();
+    assert_eq!(fixture.autonomy().unwrap(), "L0");
+}
+
+/// 顶栏/设置写档走同一扇门：L0–L4 读回同一档；非法档拒绝且原档不动。
+#[test]
+fn autonomy_roundtrip_rejects_illegal_without_clobber() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(dir.path(), "n", &[], None).unwrap();
+    for lv in ["L0", "L1", "L2", "L3", "L4"] {
+        wb.set_autonomy(lv).unwrap();
+        assert_eq!(wb.autonomy().unwrap(), lv);
+    }
+    wb.set_autonomy("L2").unwrap();
+    for bad in ["L9", "l4", "", "L3 "] {
+        assert!(wb.set_autonomy(bad).is_err(), "{bad} must be rejected");
+        assert_eq!(wb.autonomy().unwrap(), "L2");
+    }
+    // 再次打开不把已选档刷回默认 L4
+    drop(wb);
+    let again = Workbench::open(dir.path(), "n", &[], None).unwrap();
+    assert_eq!(again.autonomy().unwrap(), "L2");
+}
+
+/// L3/L4 在后续票落地前不自动盖章：盖章点仍停在待决，和今天的 L2 一样。
+#[test]
+fn l3_and_l4_still_wait_at_stamp_point() {
+    for lv in ["L3", "L4"] {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"t","version":1,
+            "stages":[{"name":"规格","roles":["产品策划"],"due":["规格"],"stamp_point":true}]
+        }))
+        .unwrap();
+        let wb = Workbench::open(
+            dir.path(),
+            "n",
+            &[("a0".into(), "产品策划".into())],
+            Some(pack),
+        )
+        .unwrap();
+        wb.set_autonomy(lv).unwrap();
+        assert_eq!(wb.autonomy().unwrap(), lv);
+        let opened = wb.open_stage(0).unwrap();
+        wb.db
+            .conn()
+            .execute(
+                "INSERT INTO artifacts (id,project_id,path,kind,tier,stage_run_id,version,status)
+                 VALUES ('x','p1','specs/prd.md','规格','skeleton',?1,1,'valid')",
+                [&opened.run_id],
+            )
+            .unwrap();
+        let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
+        assert_eq!(r["action"], "awaiting_stamp", "{lv} must not auto-stamp");
+        let pending = pending_questions(&wb).unwrap();
+        assert!(
+            pending.iter().any(|c| c["kind"] == "stamp"),
+            "{lv} must still queue a stamp card"
+        );
+    }
+}
+
 #[test]
 fn pending_questions_filters_answered_and_reject_at_stamp() {
     let dir = tempfile::tempdir().unwrap();

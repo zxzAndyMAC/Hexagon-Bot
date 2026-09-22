@@ -1206,9 +1206,9 @@ function McpServiceForm({
   )
 }
 
-/** 自治分区（ui-audit-2 票 07 / report B1）：TopBar 的档位 chip 此前是
- *  只读标签——全应用没有变档入口。L2/live 变档走确认层（异步副作用
- *  放大前的最后一次人工停顿）；降档直接生效（安全方向不需要确认）。 */
+/** 自治分区。五档与顶栏下拉、向导同一组（票 01）。
+ *  升档确认只在执行面变大时出现：L3/L4 的执行档仍是 2（与
+ *  autonomy::execution_rank 一致），L2→L3/L4 不弹确认。降档直接生效。 */
 function AutonomySection() {
   const { t } = useTranslation()
   const { autonomy, pushToast, askConfirm, refreshSlow } = useUiStore()
@@ -1225,13 +1225,14 @@ function AutonomySection() {
       await api.setAutonomy(lv).catch((e) => pushToast(errText(e), 'err'))
       await refreshSlow(['info'])
     }
-    // 升档扩大自动执行面——确认；降档收窄——直接生效。
-    if (lv === 'L2' || (lv === 'L1' && autonomy === 'L0')) {
+    // 执行档：L0=0，L1=1，L2/L3/L4=2。只有执行面变大才确认。
+    const exec = (x: string) => (x === 'L0' ? 0 : x === 'L1' ? 1 : 2)
+    if (exec(lv) > exec(autonomy)) {
       askConfirm({
-        title: t('auto.upTitle', { level: lv }),
+        title: t('auto.upTitle', { level: t(`autonomy.${lv}`) }),
         body: t(`auto.desc_${lv}`),
-        danger: lv === 'L2',
-        confirmLabel: t('auto.upConfirm', { level: lv }),
+        danger: exec(lv) >= 2,
+        confirmLabel: t('auto.upConfirm', { level: t(`autonomy.${lv}`) }),
         run: apply,
       })
     } else {
@@ -1263,8 +1264,8 @@ function AutonomySection() {
         {t('auto.intro')}
       </div>
       <Row label={t('auto.level')}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {(['L0', 'L1', 'L2'] as const).map((lv) => (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {(['L0', 'L1', 'L2', 'L3', 'L4'] as const).map((lv) => (
             <button
               key={lv}
               className={`btn ${autonomy === lv ? 'primary' : ''}`}

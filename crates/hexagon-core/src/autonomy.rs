@@ -1,10 +1,12 @@
-//! 自治档位与归来摘要（票 17）。
+//! 自治档位与归来摘要（票 17；五档存储见 hands-free 票 01 / ADR 0064）。
 //!
-//! 档位语义（项目级，默认 L0）：
+//! 档位语义（项目级，新项目默认 L4）：
 //! - **L0**：一切决策排队等负责人；
 //! - **L1**：声明内自动——回填边、会诊唤醒命中即执行；打回裁决与新权限仍排队；
 //! - **L2**：协调自治——打回路由裁决、阶段推进自动跑；**盖章点、安全网必问、
 //!   新权限问题永远等负责人**（这三条不在档位控制内，见 permissions/orchestra）。
+//! - **L3 / L4**：可以存、可以选。执行面在后续票落地前封顶到 L2
+//!   （`execution_rank`）——不自动盖章、不放行安全网、新权限、提案、授权和安装。
 //! - 升级通道（escalation）在任何档位都排负责人——升级的定义就是超出声明自治。
 //!
 //! 归来摘要：**工作台模板生成**（不经模型）——按事件类型聚合成结构化摘要，
@@ -104,18 +106,33 @@ pub struct TodoCount {
     pub count: i64,
 }
 
-/// L0/L1/L2 → 0/1/2。
-pub fn rank(db: &Db, project_id: &str) -> Result<u8, rusqlite::Error> {
-    let level: String = db.conn().query_row(
-        "SELECT autonomy FROM projects WHERE id=?1",
-        [project_id],
-        |r| r.get(0),
-    )?;
-    Ok(match level.as_str() {
+/// 词表内的档 → 存储秩 0–4。词表外是 `BadLevel`，不入库。
+pub fn parse_level(lv: &str) -> Result<u8, AutonomyError> {
+    Ok(match lv {
+        "L0" => 0,
         "L1" => 1,
         "L2" => 2,
-        _ => 0,
+        "L3" => 3,
+        "L4" => 4,
+        _ => return Err(AutonomyError::BadLevel(lv.into())),
     })
+}
+
+/// 存储档 L0–L4 → 0–4。词表外（不该入库）按 0：脏值不升档。
+pub fn rank(db: &Db, project_id: &str) -> Result<u8, rusqlite::Error> {
+    let level = level(db, project_id)?;
+    Ok(parse_level(&level).unwrap_or(0))
+}
+
+/// 执行档。存储档见 `rank`。
+///
+/// 票 01（hands-free / ADR 0064）：L3、L4 已能存、能选，但盖章、安全网、
+/// 新权限、改进提案、授权和安装的自动放行要等后续票。执行档封顶到 2，
+/// 让现有 `>= 1` / `>= 2` 门把高档当成 L2，同时挡住提前写下的 `>= 3`。
+/// 被否决：`rank` 直接返回 3/4。现有门确实等价于 L2，但任何新的 `>= 3`
+/// 比较会在放行语义落地前静默生效——false positive 的代价是未审副作用。
+pub fn execution_rank(db: &Db, project_id: &str) -> Result<u8, rusqlite::Error> {
+    Ok(rank(db, project_id)?.min(2))
 }
 
 pub fn level(db: &Db, project_id: &str) -> Result<String, rusqlite::Error> {
@@ -128,9 +145,8 @@ pub fn level(db: &Db, project_id: &str) -> Result<String, rusqlite::Error> {
 
 /// 变档：校验 + 落 AutonomyChanged 事件。
 pub fn set_level(db: &Db, project_id: &str, lv: &str) -> Result<(), AutonomyError> {
-    if !matches!(lv, "L0" | "L1" | "L2") {
-        return Err(AutonomyError::BadLevel(lv.into()));
-    }
+    // 先校验再写：非法档不碰行，原档保持（票 01）。
+    parse_level(lv)?;
     let old = level(db, project_id)?;
     db.conn().execute(
         "UPDATE projects SET autonomy=?1 WHERE id=?2",
@@ -281,11 +297,19 @@ mod tests {
     #[test]
     fn level_validate_and_change() {
         let db = setup();
-        assert_eq!(level(&db, "p").unwrap(), "L0");
+        // 票 01 / ADR 0064：省略档位的新行默认 L4（曾是 L0）。
+        // 已有行显式写入的 L0 不被迁移改写，见 0014 的 INSERT SELECT。
+        assert_eq!(level(&db, "p").unwrap(), "L4");
+        assert_eq!(execution_rank(&db, "p").unwrap(), 2);
         assert!(set_level(&db, "p", "L9").is_err());
+        assert_eq!(level(&db, "p").unwrap(), "L4");
+        set_level(&db, "p", "L3").unwrap();
+        assert_eq!(level(&db, "p").unwrap(), "L3");
+        assert_eq!(rank(&db, "p").unwrap(), 3);
+        assert_eq!(execution_rank(&db, "p").unwrap(), 2);
         set_level(&db, "p", "L2").unwrap();
         assert_eq!(rank(&db, "p").unwrap(), 2);
-        // 变档落事件
+        // 非法档不落事件；两次成功变档各一条
         let n: i64 = db
             .conn()
             .query_row(
@@ -294,7 +318,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(n, 2);
     }
 
     #[test]

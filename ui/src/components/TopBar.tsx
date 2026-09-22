@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
-import { api } from '../api'
+import { api, errText } from '../api'
 import type { SandboxStatus } from '../gen/SandboxStatus'
 import { capReached, centsToMc, fmtTok, perAgentSeries } from '../usage'
 import { MultiLine } from './UsageTab'
@@ -17,7 +17,10 @@ interface Recent {
 
 export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void; onProjectClosed: () => void }) {
   const { t } = useTranslation()
-  const { projectName, packName, mode, autonomy, usageTotal, usageSeries7d, team, pending, reviewRows, refresh, setRailOpen, setSideTab, railOpen, away, markAway, markBack, openPendingDialog } = useUiStore()
+  const { projectName, packName, mode, autonomy, usageTotal, usageSeries7d, team, pending, reviewRows, refresh, refreshSlow, setRailOpen, setSideTab, railOpen, away, markAway, markBack, openPendingDialog, pushToast } = useUiStore()
+  // 请求在飞时先显示所选档；成功后以 store 读回为准，失败则丢掉乐观值。
+  const [autonomyPending, setAutonomyPending] = useState<string | null>(null)
+  const autonomyShown = autonomyPending ?? autonomy
   const [menuOpen, setMenuOpen] = useState(false)
   // 票 17（方向卡 2）：用量 chip 悬停 300ms 出 sparkline 浮层——
   // 数据全部走 store 缓存（usageSeries7d/usageTotal），零新增 IPC。
@@ -59,6 +62,19 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
   }
 
   const others = recents.filter((r) => r.name !== projectName)
+
+  const changeAutonomy = async (lv: string) => {
+    if (lv === autonomy) return
+    setAutonomyPending(lv)
+    try {
+      await api.setAutonomy(lv)
+      await refreshSlow(['info'])
+    } catch (e) {
+      pushToast(errText(e), 'err')
+    } finally {
+      setAutonomyPending(null)
+    }
+  }
 
   return (
     <header
@@ -111,7 +127,18 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
         )}
       </div>
       <span className="chip mono">{mode === 'fastpath' ? t('topbar.fastpath') : packName ?? t('topbar.pack')}</span>
-      <span className="chip">{t(`autonomy.${autonomy}`)}</span>
+      <select
+        className="chip"
+        aria-label={t('topbar.autonomyMenu')}
+        title={t('topbar.autonomyMenu')}
+        value={autonomyShown}
+        onChange={(e) => void changeAutonomy(e.target.value)}
+        style={{ cursor: 'pointer', maxWidth: 240 }}
+      >
+        {(['L0', 'L1', 'L2', 'L3', 'L4'] as const).map((lv) => (
+          <option key={lv} value={lv}>{t(`autonomy.${lv}`)}</option>
+        ))}
+      </select>
       {sandbox && (
         <span
           className={`chip ${sandbox.available ? 'ok' : 'amber'}`}

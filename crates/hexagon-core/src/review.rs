@@ -74,7 +74,8 @@ fn role_of(db: &Db, agent_id: &str) -> Result<String, ReviewError> {
 }
 
 fn autonomy_rank(db: &Db, project_id: &str) -> Result<u8, ReviewError> {
-    Ok(crate::autonomy::rank(db, project_id)?)
+    // 执行档，不是存储档。票 01：L3/L4 在此封顶为 2，决策门上的数字同 L2。
+    Ok(crate::autonomy::execution_rank(db, project_id)?)
 }
 
 /// 打回路由决策的落盘形状（rsi-research 票 01）：每次路由记
@@ -728,6 +729,31 @@ mod tests {
             .timeline("p1", None, 50, Some(&[EventKind::ConsultWakeup]))
             .unwrap();
         assert_eq!(items[0].event.payload["reason"], "flag adjudication");
+    }
+
+    /// 票 01：L3/L4 存储是高档，执行与 L2 相同——非回填边只自动唤醒复审者，
+    /// 不自动裁决，决策门上的 autonomy 是执行档 2 不是存储档 3/4。
+    #[test]
+    fn flag_at_l3_and_l4_executes_like_l2() {
+        for lv in ["L3", "L4"] {
+            let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
+            crate::autonomy::set_level(&db, "p1", lv).unwrap();
+            assert_eq!(crate::autonomy::level(&db, "p1").unwrap(), lv);
+            let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
+            let c = ctx("p1", "a2", dir.path(), Some(&_r0));
+            let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "规范冲突").unwrap();
+            assert_eq!(
+                route,
+                FlagRoute::AutoWoken {
+                    reviewer_role: "架构师".into(),
+                    agent_id: "a2".into()
+                }
+            );
+            let items = db
+                .timeline("p1", None, 50, Some(&[EventKind::ConsultWakeup]))
+                .unwrap();
+            assert_eq!(items[0].event.payload["decision"]["gates"]["autonomy"], 2);
+        }
     }
 
     #[test]
