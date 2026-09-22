@@ -8,6 +8,11 @@
 //
 // 目录不展开：路径块的值就是这一条路径（目录保留尾 /）。没有「把子文件
 // 写进正文」的入口；票 12 拖入必须走 pathTokenText，得到同一种 #路径。
+//
+// 拖放载荷用自定义 MIME，不用 Files、也不用 text/plain 当准入。
+// Files 会撞上图片附件通道，浏览器还可能把拖放画成「移动文件」。
+// text/plain 谁都能带，外部拖一段字进来不该变成路径块。
+// effectAllowed=copy：只复制路径文本，不改磁盘上的文件（票 12）。
 
 export type AtomKind = 'mention' | 'path'
 
@@ -92,6 +97,58 @@ export function atomicDeletion(
 /** 票 12 拖入与手打 / # 弹层共用。只返回这一条路径，不拼接子文件。 */
 export function pathTokenText(path: string): string {
   return `#${path.trim().replace(/^#+/, '')}`
+}
+
+/** 文件树 → 输入框。见文件头：不走 Files / text/plain。 */
+export const TREE_DRAG_MIME = 'application/x-hexagon-path'
+
+function oneRepoPath(path: string, kind: 'file' | 'dir'): string | null {
+  const raw = path.trim().replace(/\\/g, '/')
+  if (!raw || raw.startsWith('/') || /\s/.test(raw)) return null
+  const parts = raw.split('/').filter((p) => p.length > 0)
+  if (parts.length === 0 || parts.some((p) => p === '.' || p === '..')) return null
+  const joined = parts.join('/')
+  return kind === 'dir' ? `${joined}/` : joined
+}
+
+/** 文件或目录 → 一条载荷。目录补尾 /，与 repo_paths 的目录形一致。链接返回 null。 */
+export function treeDragPayload(entry: { path: string; kind: string }): { payload: string; token: string } | null {
+  if (entry.kind !== 'file' && entry.kind !== 'dir') return null
+  const path = oneRepoPath(entry.path, entry.kind)
+  if (!path) return null
+  return { payload: JSON.stringify({ path, kind: entry.kind }), token: pathTokenText(path) }
+}
+
+/** 只接受规范化后的单条路径。对不上（缺尾 /、夹了子文件、越出仓根）就丢掉。 */
+export function pathFromTreeDrag(raw: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const rec = parsed as { path?: unknown; kind?: unknown }
+  if (typeof rec.path !== 'string' || (rec.kind !== 'file' && rec.kind !== 'dir')) return null
+  const path = oneRepoPath(rec.path, rec.kind)
+  if (!path || path !== rec.path) return null
+  return path
+}
+
+/**
+ * 在光标处插入一条路径块，并补上收束空白，使退格一次删整块。
+ * 不读文件、不展开目录——path 是什么就只插入这一条。
+ */
+export function insertPathToken(text: string, caret: number, path: string): { text: string; caret: number } | null {
+  const token = pathTokenText(path)
+  if (token === '#') return null
+  const at = Math.max(0, Math.min(caret, text.length))
+  const before = text.slice(0, at)
+  const after = text.slice(at)
+  const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : ''
+  const trail = after.length === 0 || !/^\s/.test(after) ? ' ' : ''
+  const piece = `${lead}${token}${trail}`
+  return { text: before + piece + after, caret: before.length + piece.length }
 }
 
 export function mentionTokenText(role: string): string {

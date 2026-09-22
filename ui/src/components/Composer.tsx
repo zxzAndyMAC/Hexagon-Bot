@@ -7,8 +7,11 @@ import type { AttachRef } from '../gen/AttachRef'
 import {
   atomicDeletion,
   findAtoms,
+  insertPathToken,
   mentionTokenText,
+  pathFromTreeDrag,
   pathTokenText,
+  TREE_DRAG_MIME,
   type Atom,
 } from '../composerAtoms'
 
@@ -47,6 +50,15 @@ function ComposerMirror({ text, atoms }: { text: string; atoms: Atom[] }) {
   if (i < text.length) parts.push(<span key={`t${i}`}>{text.slice(i)}</span>)
   // textarea 在文末换行时多出一行；div 的 pre-wrap 会吃掉结尾 \n，补一个 br 对齐。
   return <>{parts}{text.endsWith('\n') ? <br /> : null}</>
+}
+
+function dropKind(dt: DataTransfer | null): 'path' | 'files' | null {
+  if (!dt) return null
+  const types = Array.from(dt.types)
+  // 路径优先于 Files：树节点不带文件字节。外部文件拖入仍走图片附件。
+  if (types.includes(TREE_DRAG_MIME)) return 'path'
+  if (types.includes('Files')) return 'files'
+  return null
 }
 
 function fit(ta: HTMLTextAreaElement) {
@@ -257,25 +269,45 @@ export function Composer() {
     }
   }
 
+  // 票 12：未聚焦时插到文末（拖进来的人多半没把光标点在半截词上）。
+  // 聚焦时插在光标处，并补收束空格，使这块和手打路径用同一次退格删掉。
+  const insertDroppedPath = (path: string) => {
+    const ta = inputRef.current
+    const caret = ta && document.activeElement === ta ? (ta.selectionStart ?? text.length) : text.length
+    const next = insertPathToken(text, caret, path)
+    if (!next) return
+    commitText(next.text, next.caret)
+    ta?.focus()
+  }
+
   return (
     <div
+      data-testid="composer"
       style={{
         position: 'relative', padding: '10px 14px', borderTop: '1px solid var(--border)',
         background: dragging ? 'var(--bg-2)' : 'var(--bg-1)',
         outline: dragging ? '1px dashed var(--accent)' : 'none',
         outlineOffset: -4,
       }}
-      // 票 03：拖拽图片进 Composer（dragover 必须 preventDefault 才会触发 drop）
+      // 票 03：拖拽图片进 Composer（dragover 必须 preventDefault 才会触发 drop）。
+      // 票 12：文件树节点走自定义 MIME，插入 pathTokenText，不读、不写文件。
       onDragOver={(e) => {
-        if (e.dataTransfer?.types?.includes('Files')) {
-          e.preventDefault()
-          setDragging(true)
-        }
+        if (!dropKind(e.dataTransfer)) return
+        e.preventDefault()
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+        setDragging(true)
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => {
+        const kind = dropKind(e.dataTransfer)
+        if (!kind) return
         e.preventDefault()
         setDragging(false)
+        if (kind === 'path') {
+          const path = pathFromTreeDrag(e.dataTransfer?.getData(TREE_DRAG_MIME) ?? '')
+          if (path) insertDroppedPath(path)
+          return
+        }
         void addFiles(Array.from(e.dataTransfer?.files ?? []))
       }}
     >

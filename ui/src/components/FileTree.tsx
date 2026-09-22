@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText, type RepoEntry } from '../api'
 import { bindingFor, formatBinding } from '../keymap'
 import { useUiStore } from '../store'
+import { TREE_DRAG_MIME, treeDragPayload } from '../composerAtoms'
 import { fileIcon } from './fileIcon'
 import { Icon } from './Icon'
 import { Row } from './Row'
@@ -195,10 +196,20 @@ function TreeList({ entries, depth, kids, anchor, onDir, onFile }: {
   return entries.map((e) => {
     const icon = fileIcon(e.name, e.kind)
     const open = e.kind === 'dir' && kids[e.path] != null
+    // 票 12：文件和目录可拖进输入框。链接不拖——拖了也没有一条仓内路径可指。
+    // copy 不是 move：拖走的是路径文本，树上的条目和磁盘文件都留在原地。
+    const drag = treeDragPayload(e)
     return (
       <div key={e.path}>
         <Row
           role="treeitem"
+          draggable={drag != null}
+          onDragStart={(ev) => {
+            if (!drag || !ev.dataTransfer) return
+            ev.dataTransfer.setData(TREE_DRAG_MIME, drag.payload)
+            ev.dataTransfer.setData('text/plain', drag.token)
+            ev.dataTransfer.effectAllowed = 'copy'
+          }}
           selected={anchor === e.path}
           onClick={() => (e.kind === 'dir' ? onDir(e) : e.kind === 'file' ? onFile(e) : undefined)}
           style={{

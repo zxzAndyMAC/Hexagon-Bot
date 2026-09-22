@@ -2,7 +2,7 @@
 // 出处：Launcher 最近项目/命令面板条目/节点轨等一律裸 div——Tab 进不去、
 // Enter/Space 不激活、读屏器报不出角色。统一收敛到本组件：
 // role + tabIndex + Enter/Space→onClick；选中态经 aria-selected 透传。
-import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
+import type { CSSProperties, DragEvent, KeyboardEvent, ReactNode } from 'react'
 
 export function Row({
   role = 'button',
@@ -15,6 +15,8 @@ export function Row({
   itemRef,
   onMouseEnter,
   onAuxClick,
+  draggable,
+  onDragStart,
 }: {
   role?: 'button' | 'option' | 'tab' | 'listitem' | 'treeitem'
   selected?: boolean
@@ -26,6 +28,8 @@ export function Row({
   itemRef?: (el: HTMLDivElement | null) => void
   onMouseEnter?: () => void
   onAuxClick?: (e: React.MouseEvent<HTMLDivElement>) => void
+  draggable?: boolean
+  onDragStart?: (e: DragEvent<HTMLDivElement>) => void
 }) {
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -47,6 +51,8 @@ export function Row({
       onKeyDown={onKeyDown}
       onMouseEnter={onMouseEnter}
       onAuxClick={onAuxClick}
+      draggable={draggable}
+      onDragStart={onDragStart}
     >
       {children}
     </div>

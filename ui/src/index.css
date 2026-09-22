@@ -181,7 +181,7 @@ body {
 
 /* 票 10：输入框原子块。镜像层与 textarea 同格叠字，块上禁止 padding/border
    （会撑宽，光标与透明正文错位）——着色只用 background + box-shadow。
-   点名琥珀、路径紫，与 @/# 弹层同色。手打收束和弹层选中是同一个 .atom-token。 */
+   点名琥珀、路径紫，与 @/# 弹层同色。手打收束、弹层选中、文件树拖入是同一个 .atom-token。 */
 .composer-field { flex: 1; display: grid; min-width: 0; }
 .composer-field > textarea,
 .composer-field > .composer-mirror {

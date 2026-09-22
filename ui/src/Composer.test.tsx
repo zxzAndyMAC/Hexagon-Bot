@@ -3,10 +3,12 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
 import { Composer } from './components/Composer'
+import { FileTree } from './components/FileTree'
 import { atomicDeletion, findAtoms } from './composerAtoms'
 import { useUiStore } from './store'
 import { api } from './api'
 import type { TeamRow } from './gen/TeamRow'
+import type { RepoEntry } from './gen/RepoEntry'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -344,6 +346,138 @@ describe('Composer 原子块（票 10）', () => {
     expect(sendSpy).toHaveBeenCalledWith('@产品策划 ', [])
     expect(dispSpy).toHaveBeenCalledTimes(1)
     expect(dispSpy).toHaveBeenCalledWith('产品策划', '@产品策划 ', [])
+    root.unmount()
+  })
+})
+
+// 票 12：右栏文件或目录拖进输入框，与手打 / 弹层是同一种 path 原子块。
+// 目录不展开；拖放是复制路径文本，不写磁盘。
+const TREE: Record<string, RepoEntry[]> = {
+  '': [
+    { name: 'src', path: 'src', kind: 'dir' },
+    { name: 'README.md', path: 'README.md', kind: 'file' },
+    { name: 'alias', path: 'alias', kind: 'link' },
+  ],
+  src: [{ name: 'main.ts', path: 'src/main.ts', kind: 'file' }],
+}
+
+function treeitem(el: HTMLElement, name: string) {
+  return [...el.querySelectorAll('[role=treeitem]')].find((n) => n.textContent?.includes(name)) as HTMLElement
+}
+
+function dragEvent(type: string, dt: DataTransfer) {
+  // happy-dom 把 DragEvent 别名成 Event，构造选项里的 dataTransfer 会丢掉。
+  // 与本文件粘贴测试一样挂到事件上，React 的 DragEventInterface 才能读到。
+  const e = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(e, 'dataTransfer', { value: dt })
+  return e
+}
+
+async function dragOnto(el: HTMLElement, name: string) {
+  const src = treeitem(el, name)
+  const onto = el.querySelector('[data-testid=composer]') as HTMLElement
+  const dt = new DataTransfer()
+  await act(async () => {
+    src.dispatchEvent(dragEvent('dragstart', dt))
+  })
+  await act(async () => {
+    onto.dispatchEvent(dragEvent('dragover', dt))
+    onto.dispatchEvent(dragEvent('drop', dt))
+  })
+}
+
+describe('从文件树拖进输入框（票 12）', () => {
+  beforeEach(() => {
+    useUiStore.setState({
+      mode: 'pack',
+      fastRole: null,
+      team: [member('产品策划'), member('后端')],
+      pending: [],
+      timeline: [],
+    })
+    vi.spyOn(api, 'listRepoDir').mockImplementation(async (rel = '') => TREE[rel] ?? [])
+    vi.spyOn(api, 'readRepoFile').mockResolvedValue('SHOULD-NOT-LEAK')
+    vi.spyOn(api, 'writeRepoFile').mockResolvedValue(undefined)
+    vi.spyOn(api, 'createRepoFile').mockResolvedValue(undefined)
+    vi.spyOn(api, 'createRepoDir').mockResolvedValue(undefined)
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('拖文件得到与手打相同的 path 块，退格一次删掉，发送时正文是 #路径', async () => {
+    const sendSpy = vi.spyOn(api, 'sendMessage')
+    const { el, root } = await render(
+      <div>
+        <FileTree />
+        <Composer />
+      </div>,
+    )
+    expect(treeitem(el, 'README.md').getAttribute('draggable')).toBe('true')
+    await setComposer(el, '看 #ui/App.tsx ')
+    const typed = el.querySelector('.atom-token')
+    expect(typed?.getAttribute('data-kind')).toBe('path')
+    expect(typed?.className).toBe('atom-token')
+
+    await dragOnto(el, 'README.md')
+    const ta = el.querySelector('textarea')!
+    expect(ta.value).toBe('看 #ui/App.tsx #README.md ')
+    expect(ta.value).not.toContain('SHOULD-NOT-LEAK')
+    const atoms = [...el.querySelectorAll('.atom-token')]
+    expect(atoms.map((n) => n.getAttribute('data-kind'))).toEqual(['path', 'path'])
+    expect(atoms.map((n) => n.className)).toEqual(['atom-token', 'atom-token'])
+    expect(atoms.map((n) => n.getAttribute('data-value'))).toEqual(['ui/App.tsx', 'README.md'])
+
+    await keyAt(ta, 'Backspace', ta.value.length)
+    expect(ta.value).toBe('看 #ui/App.tsx ')
+    expect(ta.value).not.toContain('README')
+
+    await dragOnto(el, 'README.md')
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(sendSpy).toHaveBeenCalledWith('看 #ui/App.tsx #README.md ', [])
+    expect(api.writeRepoFile).not.toHaveBeenCalled()
+    expect(api.createRepoFile).not.toHaveBeenCalled()
+    expect(api.createRepoDir).not.toHaveBeenCalled()
+    expect(api.readRepoFile).not.toHaveBeenCalled()
+    expect(treeitem(el, 'README.md').textContent).toContain('README.md')
+    root.unmount()
+  })
+
+  it('拖目录只插入一条带尾斜杠的路径，不展开子文件', async () => {
+    const { el, root } = await render(
+      <div>
+        <FileTree />
+        <Composer />
+      </div>,
+    )
+    expect(treeitem(el, 'src').getAttribute('draggable')).toBe('true')
+    await dragOnto(el, 'src')
+    const ta = el.querySelector('textarea')!
+    expect(ta.value).toBe('#src/ ')
+    expect(ta.value).not.toContain('main.ts')
+    const tokens = [...el.querySelectorAll('.atom-token')]
+    expect(tokens).toHaveLength(1)
+    expect(tokens[0].getAttribute('data-kind')).toBe('path')
+    expect(tokens[0].getAttribute('data-value')).toBe('src/')
+    await keyAt(ta, 'Backspace', ta.value.length)
+    expect(ta.value).toBe('')
+    expect(api.listRepoDir).not.toHaveBeenCalledWith('src')
+    expect(api.readRepoFile).not.toHaveBeenCalled()
+    expect(api.writeRepoFile).not.toHaveBeenCalled()
+    root.unmount()
+  })
+
+  it('符号链接不能拖成路径块', async () => {
+    const { el, root } = await render(
+      <div>
+        <FileTree />
+        <Composer />
+      </div>,
+    )
+    expect(treeitem(el, 'alias').getAttribute('draggable')).not.toBe('true')
+    await dragOnto(el, 'alias')
+    expect(el.querySelector('textarea')!.value).toBe('')
+    expect(el.querySelector('.atom-token')).toBeNull()
     root.unmount()
   })
 })
