@@ -242,13 +242,18 @@ button.btn:disabled { opacity: 0.4; cursor: default; }
 
 /* 文本输入原语：.input 此前是死 class（无规则，搜索框裸奔）——settings-density 01 补上 token 化样式。
    ui-polish-2 ③：底改 --bg（暗色主题比 panel 的半透明 bg-1 深，呈凹槽井感）+ border-strong——
-   owner 报告 key 框「和底色融为一体，聚焦才知道是输入框」。display:block+width:100% 收进父栏宽。 */
+   owner 报告 key 框「和底色融为一体，聚焦才知道是输入框」。display:block+width:100% 收进父栏宽。
+   input/select/textarea 一律用它；`.btn` 的选择器是 button.btn——套在非 button 上是死样式
+   （Wizard 全页表单曾因此融进底色，2026-09 修复）。font:inherit 给 select 兜底（上面
+   input,textarea 的继承规则不覆盖 select）。 */
 .input {
   display: block; width: 100%; box-sizing: border-box;
+  font: inherit;
   background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-md);
   padding: 5px 9px; color: var(--text);
 }
 .input:focus { border-color: var(--accent); outline: none; }
+.input:disabled { opacity: .4; cursor: default; }
 
 /* 设置页密度档（.scratch/settings-density 01，owner 裁决 2026-09）：工作台保持紧凑密度，
    放大只作用设置页——统一挂 .settings-scope 作用域，禁止把下列尺寸抬到全局原语上。

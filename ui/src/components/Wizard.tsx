@@ -301,7 +301,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         <label className="dim3" style={{ fontSize: 11 }}>{t('wizard.dirLabel')}</label>
         <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
           <input
-            className="btn"
+            className="input"
             style={{ flex: 1, textAlign: 'left' }}
             value={draft.dir}
             placeholder={t('wizard.dirPlaceholder')}
@@ -314,7 +314,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         <div style={{ marginTop: 10 }}>
           <label className="dim3" style={{ fontSize: 11 }}>{t('wizard.nameLabel')}</label>
           <input
-            className="btn"
+            className="input"
             style={{ width: '100%', marginTop: 4, textAlign: 'left' }}
             value={draft.name}
             onChange={(e) => set({ name: e.target.value })}
@@ -465,7 +465,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         </label>
         <div style={{ margin: '8px 0 0 22px' }}>
           <select
-            className="btn"
+            className="input"
+            style={{ width: 'auto', minWidth: 200 }}
             disabled={draft.mode !== 'fastpath'}
             value={draft.fastRole}
             onChange={(e) => set({ fastRole: e.target.value })}
@@ -491,8 +492,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           <>
             <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.briefHint')}</div>
             <textarea
-              className="btn"
-              style={{ width: '100%', height: 72, textAlign: 'left', fontSize: 12 }}
+              className="input"
+              style={{ width: '100%', height: 72, textAlign: 'left', fontSize: 12, resize: 'vertical' }}
               placeholder={t('wizard.briefPlaceholder')}
               value={draft.brief}
               onChange={(e) => set({ brief: e.target.value })}
@@ -511,8 +512,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                   {t('wizard.agentsDraftHint')}
                 </div>
                 <textarea
-                  className="btn"
-                  style={{ width: '100%', height: 180, textAlign: 'left', fontFamily: 'monospace', fontSize: 11 }}
+                  className="input"
+                  style={{ width: '100%', height: 180, textAlign: 'left', fontFamily: 'monospace', fontSize: 11, resize: 'vertical' }}
                   value={draft.agentsMd}
                   onChange={(e) => set({ agentsMd: e.target.value })}
                 />
@@ -536,8 +537,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                   {t('wizard.agentsDraftHint')}
                 </div>
                 <textarea
-                  className="btn"
-                  style={{ width: '100%', height: 180, textAlign: 'left', fontFamily: 'monospace', fontSize: 11 }}
+                  className="input"
+                  style={{ width: '100%', height: 180, textAlign: 'left', fontFamily: 'monospace', fontSize: 11, resize: 'vertical' }}
                   value={draft.agentsMd}
                   onChange={(e) => set({ agentsMd: e.target.value })}
                 />
@@ -571,7 +572,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                 {r && r.provider.enabled && !r.provider.key_set && (
                   <>
                     <input
-                      className="btn"
+                      className="input"
                       type={keyShown.has(pid) ? 'text' : 'password'}
                       style={{ width: 180 }}
                       placeholder={t('wizard.keyPlaceholder')}
@@ -651,8 +652,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         </label>
         <select
           aria-label={t('wizard.autonomyLabel')}
-          className="btn"
-          style={{ marginTop: 4, textAlign: 'left' }}
+          className="input"
+          style={{ marginTop: 4, textAlign: 'left', width: 'auto', minWidth: 200 }}
           value={draft.autonomy}
           onChange={(e) => set({ autonomy: e.target.value as Draft['autonomy'] })}
         >
@@ -775,11 +776,8 @@ function RoleCustomize({ def, names, doc, onChange, onReset, onClose }: {
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const input: React.CSSProperties = {
-    width: '100%', padding: '4px 8px', fontSize: 12,
-    background: 'var(--bg)', border: '1px solid var(--border-strong)', borderRadius: 6,
-    color: 'var(--text)', fontFamily: 'inherit',
-  }
+  // 表单控件走 .input 原语——此前手搓了一份同款内联样式，收编后 focus/disabled 态随原语走
+  const inputSm: React.CSSProperties = { fontSize: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, fontWeight: 560, color: 'var(--text-3)', marginTop: 6 }
   const upd = (patch: Partial<RoleDef>) => onChange({ ...def, ...patch })
 
@@ -794,12 +792,12 @@ function RoleCustomize({ def, names, doc, onChange, onReset, onClose }: {
         <button className="btn" style={{ fontSize: 10 }} onClick={onClose}>×</button>
       </div>
       <div style={lbl}>{t('agent.duty')}</div>
-      <textarea value={def.duty} rows={2} style={{ ...input, resize: 'vertical' }}
+      <textarea className="input" value={def.duty} rows={2} style={{ ...inputSm, resize: 'vertical' }}
         onChange={(e) => upd({ duty: e.target.value })} />
       <div style={{ display: 'flex', gap: 8 }}>
         <div style={{ flex: 1 }}>
           <div style={lbl}>{t('agent.reviewer')}</div>
-          <select value={def.reviewer ?? ''} style={input}
+          <select className="input" value={def.reviewer ?? ''} style={inputSm}
             onChange={(e) => upd({ reviewer: e.target.value || null })}>
             <option value="">{t('agent.noReviewer')}</option>
             {names.filter((n) => n !== def.name).map((n) => (
@@ -809,7 +807,7 @@ function RoleCustomize({ def, names, doc, onChange, onReset, onClose }: {
         </div>
         <div style={{ flex: 1 }}>
           <div style={lbl}>{t('agent.modelSlot')}</div>
-          <select value={def.model_slot} style={input}
+          <select className="input" value={def.model_slot} style={inputSm}
             onChange={(e) => upd({ model_slot: e.target.value })}>
             {sharedSlots(doc.slots, def.model_slot).map((s) => (
               <option key={s} value={s}>{slotLabel(s, doc, t('agent.dedicatedTag'))}</option>
@@ -818,8 +816,8 @@ function RoleCustomize({ def, names, doc, onChange, onReset, onClose }: {
         </div>
       </div>
       <div style={lbl}>{t('agent.globs')}</div>
-      <textarea value={def.globs.join('\n')} rows={2} placeholder="src/**"
-        style={{ ...input, fontFamily: 'monospace', resize: 'vertical' }}
+      <textarea className="input" value={def.globs.join('\n')} rows={2} placeholder="src/**"
+        style={{ ...inputSm, fontFamily: 'monospace', resize: 'vertical' }}
         onChange={(e) => upd({ globs: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} />
       <div style={lbl}>{t('agent.skills')}</div>
       <EntityChips value={def.skills} onChange={(ids) => upd({ skills: ids })} source="skills" />
@@ -917,20 +915,20 @@ function NewProviderForm({ onRefresh }: { onRefresh: () => void }) {
   return (
     <>
       <label className="dim3" style={{ fontSize: 11 }}>{t('providers.name')}</label>
-      <input className="btn" style={input} placeholder={t('providers.name')} value={name}
+      <input className="input" style={input} placeholder={t('providers.name')} value={name}
         onChange={(e) => setName(e.target.value)} />
       <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.kind')}</label>
-      <select className="btn" style={input} value={kind}
+      <select className="input" style={input} value={kind}
         onChange={(e) => setKind(e.target.value as ProviderView['kind'])}>
         <option value="openai">openai</option>
         <option value="anthropic">anthropic</option>
       </select>
       <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.baseUrl')}</label>
-      <input className="btn" style={input} placeholder={t('providers.baseUrl')} value={baseUrl}
+      <input className="input" style={input} placeholder={t('providers.baseUrl')} value={baseUrl}
         onChange={(e) => setBaseUrl(e.target.value)} />
       <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.key')}</label>
       <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-        <input className="btn" type={showKey ? 'text' : 'password'} style={{ flex: 1, textAlign: 'left' }}
+        <input className="input" type={showKey ? 'text' : 'password'} style={{ flex: 1, textAlign: 'left' }}
           placeholder={t('wizard.keyPlaceholder')} value={secret}
           onChange={(e) => setSecret(e.target.value)} />
         <button className="btn" title={t(showKey ? 'providers.hideKey' : 'providers.showKey')}
@@ -939,7 +937,7 @@ function NewProviderForm({ onRefresh }: { onRefresh: () => void }) {
         </button>
       </div>
       <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.model')}</label>
-      <input className="btn" style={input} placeholder={t('providers.pickModel')} value={model}
+      <input className="input" style={input} placeholder={t('providers.pickModel')} value={model}
         onChange={(e) => setModel(e.target.value)} />
       <button className="btn primary" style={{ marginTop: 10 }} disabled={busy || !canApply} onClick={apply}>
         {t('wizard.providersApply')}
@@ -984,7 +982,7 @@ function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: ()
   return (
     <>
       <label className="dim3" style={{ fontSize: 11 }}>{t('wizard.providersPick')}</label>
-      <select className="btn" style={input} value={provider.id}
+      <select className="input" style={input} value={provider.id}
         onChange={(e) => {
           const id = e.target.value
           setPid(id)
@@ -1000,7 +998,7 @@ function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: ()
         <>
           <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.key')}</label>
           <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-            <input className="btn" type={showKey ? 'text' : 'password'} style={{ flex: 1, textAlign: 'left' }}
+            <input className="input" type={showKey ? 'text' : 'password'} style={{ flex: 1, textAlign: 'left' }}
               placeholder={t('wizard.keyPlaceholder')} value={secret}
               onChange={(e) => setSecret(e.target.value)} />
             <button className="btn" title={t(showKey ? 'providers.hideKey' : 'providers.showKey')}
@@ -1011,7 +1009,7 @@ function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: ()
         </>
       )}
       <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.model')}</label>
-      <input className="btn" style={input} placeholder={t('providers.pickModel')} value={model}
+      <input className="input" style={input} placeholder={t('providers.pickModel')} value={model}
         list="wizard-default-models" onChange={(e) => setModel(e.target.value)} />
       <datalist id="wizard-default-models">
         {provider.models.map((m) => <option key={m.id} value={m.id} />)}

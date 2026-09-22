@@ -99,8 +99,8 @@ export function PackEditor({ onClose }: { onClose: () => void }) {
           {/* 票 08：模板载入——选名即读模板 JSON 进编辑区（覆盖当前草稿文本） */}
           {templates.length > 0 && (
             <select
-              className="btn"
-              style={{ fontSize: 11, marginLeft: 'auto' }}
+              className="input"
+              style={{ fontSize: 11, marginLeft: 'auto', width: 'auto' }}
               value=""
               onChange={async (e) => {
                 const name = e.target.value

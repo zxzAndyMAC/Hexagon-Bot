@@ -138,6 +138,14 @@ describe('向导先配模型服务商（票 13）', () => {
     expect(el.textContent).toContain('Project directory')
   })
 
+  it('表单控件走 .input 原语——.btn 只匹配 button，套在输入框上是死样式融进底色', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    const el = await renderWizard()
+    expect(el.querySelectorAll('input.btn, textarea.btn, select.btn')).toHaveLength(0)
+    // 新建供应商表单：名称/类型/地址/密钥/模型
+    expect(el.querySelectorAll('input.input, select.input')).toHaveLength(5)
+  })
+
   it('已有钥匙时绑定 default 槽走现有 API，且不重传钥匙', async () => {
     const doc: ProvidersView = {
       providers: [prov({
@@ -193,6 +201,13 @@ describe('向导目录（ADR 0060）', () => {
     expect(el.textContent).toContain('Uncommitted changes stay as they are')
     expect(el.textContent).not.toContain('stops here')
     expect(nextBtn(el).disabled).toBe(false)
+  })
+
+  it('目录步输入框走 .input 原语', async () => {
+    vi.spyOn(api, 'inspectDir').mockResolvedValue(report({}))
+    const el = await onDirectory()
+    expect(el.querySelectorAll('input.btn, textarea.btn, select.btn')).toHaveLength(0)
+    expect(el.querySelectorAll('input.input')).toHaveLength(2) // 目录 + 项目名
   })
 
   it('已有工作台状态不能下一步新建，打开走 openRecent', async () => {
@@ -318,6 +333,13 @@ describe('一句话优化成项目说明（票 16）', () => {
     expect(md).toContain('- Build:')
     expect(md).toContain('未知')
     expect(md).not.toMatch(/npm|cargo/)
+  })
+
+  it('说明步 textarea 走 .input 原语', async () => {
+    const el = await renderWizard()
+    await advance(el, '5 · Instructions')
+    expect(el.querySelectorAll('input.btn, textarea.btn, select.btn')).toHaveLength(0)
+    expect(el.querySelectorAll('textarea.input').length).toBeGreaterThanOrEqual(1)
   })
 
   it('优化后离开向导不会创建项目', async () => {
