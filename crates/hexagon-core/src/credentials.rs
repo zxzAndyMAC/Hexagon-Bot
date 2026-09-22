@@ -105,7 +105,9 @@ impl CredentialStore for MemoryStore {
 /// 文件凭据存储：dev/未签名二进制的逃生缝（系统钥匙串在 adhoc 签名下
 /// 静默丢写——见 OsKeychain::set 注释）。`HEXAGON_CREDENTIALS_PATH` 指向
 /// 一个 JSON map 文件则启用；0600 权限，明文不落库不落日志。
-/// 只在显式设 env 时生效——生产签名包正常走 OsKeychain。
+/// 只在显式设 env 时生效——生产签名包正常走 OsKeychain；桌面壳在
+/// debug 构建替开发者显式设默认路径（src-tauri run() setup），core
+/// 这层仍是纯 env 驱动，`cargo test` 不会碰到真实用户文件。
 pub struct FileStore {
     path: std::path::PathBuf,
 }
@@ -122,6 +124,13 @@ impl FileStore {
     }
     fn save(&self, map: &HashMap<String, String>) -> Result<(), CredError> {
         let s = serde_json::to_string(map).map_err(|e| CredError::Store(e.to_string()))?;
+        // 首次写时父目录可能不存在（dev 壳默认 ~/.config/hexagon/ 由
+        // providers.json 写路径建，但凭据可能先于任何供应商配置落盘——
+        // 缺这一层 create_dir_all 时首存即 io 错，报错面从 keychain
+        // 换成 file store 依然开不了跑）。
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| CredError::Store(e.to_string()))?;
+        }
         std::fs::write(&self.path, s).map_err(|e| CredError::Store(e.to_string()))?;
         #[cfg(unix)]
         {
@@ -148,15 +157,46 @@ impl CredentialStore for FileStore {
     }
 }
 
+/// 凭据后端选择（纯函数）：env 空/未设/`keychain` → 系统钥匙串；其余值
+/// → FileStore(路径)。`keychain` 哨兵是 dev 壳默认注入文件缝之后的
+/// 回退口——要在 dev 构建里测真钥匙串就 `HEXAGON_CREDENTIALS_PATH=keychain`。
+#[derive(Debug, PartialEq)]
+enum Backend {
+    Os,
+    File(std::path::PathBuf),
+}
+
+fn backend(env: Option<&str>) -> Backend {
+    match env {
+        Some(p) if !p.is_empty() && p != "keychain" => Backend::File(p.into()),
+        _ => Backend::Os,
+    }
+}
+
+/// dev 壳默认文件缝位置：与 providers.json 同目录约定（XDG_CONFIG_HOME
+///   → $HOME/.config → hexagon/credentials.json）。文件名钉死
+///   `credentials.json`——tools::safety::is_credential_path 按 base 名
+///   内置 deny，改名会脱出 Agent 可读性护栏。None = 探不到 home，
+///   壳层放弃兜底（保持 OsKeychain + 指引错误）。
+pub fn dev_file_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+        })?;
+    Some(base.join("hexagon").join("credentials.json"))
+}
+
 /// 凭据后端选择点：`HEXAGON_CREDENTIALS_PATH` 设了走 FileStore（dev 缝），
 /// 否则系统钥匙串。壳层/测试只调这里，不直接 new OsKeychain。
 pub fn active() -> std::sync::Arc<dyn CredentialStore> {
-    if let Ok(p) = std::env::var("HEXAGON_CREDENTIALS_PATH") {
-        if !p.is_empty() {
-            return std::sync::Arc::new(FileStore::new(p.into()));
-        }
+    match backend(std::env::var("HEXAGON_CREDENTIALS_PATH").ok().as_deref()) {
+        Backend::File(p) => std::sync::Arc::new(FileStore::new(p)),
+        Backend::Os => std::sync::Arc::new(OsKeychain),
     }
-    std::sync::Arc::new(OsKeychain)
 }
 
 /// 取某 Agent 模型槽对应的 key 明文（调用瞬间用）。缺 = Missing(凭据名)。
@@ -272,6 +312,32 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(p.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    /// 后端选择映射（回归）：env 语义集中在 backend()——空/未设/`keychain`
+    /// 哨兵 → OsKeychain，其余 → FileStore。钉死是防壳层默认注入后
+    /// 有人想测真钥匙串却没有回头路。
+    #[test]
+    fn backend_selection() {
+        assert_eq!(backend(None), Backend::Os);
+        assert_eq!(backend(Some("")), Backend::Os);
+        assert_eq!(backend(Some("keychain")), Backend::Os);
+        assert_eq!(
+            backend(Some("/tmp/creds.json")),
+            Backend::File("/tmp/creds.json".into())
+        );
+    }
+
+    /// FileStore 首存自建父目录（回归）：dev 默认路径 ~/.config/hexagon/
+    /// 可能尚不存在——没有 create_dir_all 时首存报 io 错，等于把
+    /// keychain 不可用换成 file store 不可用。
+    #[test]
+    fn file_store_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("nested/deep/credentials.json");
+        let s = FileStore::new(p.clone());
+        s.set("provider/x", "sk-1").unwrap();
+        assert_eq!(s.get("provider/x").unwrap().as_deref(), Some("sk-1"));
     }
 
     #[test]

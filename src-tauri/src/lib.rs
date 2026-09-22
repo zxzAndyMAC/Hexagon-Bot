@@ -1297,6 +1297,19 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // dev 壳默认凭据文件缝（仅 debug 构建）：macOS 对 adhoc 签名
+            // 二进制的 SecKeychain 写入静默丢写（credentials.rs
+            // OsKeychain::set 写后回读实证），不设默认则 `npm run dev`
+            // 每次存 key 必报 keychain unavailable。显式 env 优先；
+            // 要测真钥匙串 `HEXAGON_CREDENTIALS_PATH=keychain` 起 dev。
+            // release 壳不做此兜底——生产包保持 fail-closed 走 OsKeychain。
+            #[cfg(debug_assertions)]
+            if std::env::var_os("HEXAGON_CREDENTIALS_PATH").is_none_or(|v| v.is_empty()) {
+                if let Some(p) = hexagon_core::credentials::dev_file_path() {
+                    log::info!("dev build: credentials file store at {}", p.display());
+                    std::env::set_var("HEXAGON_CREDENTIALS_PATH", &p);
+                }
+            }
             // 启动时按持久化设置收口级别（plugin 初始给 Debug 以便捕获启动日志）
             let enabled = load_log_enabled(app.handle());
             log::set_max_level(if enabled {
