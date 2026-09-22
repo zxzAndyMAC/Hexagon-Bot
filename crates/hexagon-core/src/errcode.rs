@@ -94,6 +94,7 @@ impl_error_code!(
     Json,
     Io,
     Install,
+    Grant,
     Roles,
     PackEdit,
     Judge,
@@ -121,6 +122,7 @@ impl_error_code!(
     Json,
     Db,
 );
+impl_error_code!(crate::grants::GrantError, Sqlite, Cards, Trace, Db, Json,);
 impl_error_code!(
     crate::orchestra::OrchError,
     Trace,

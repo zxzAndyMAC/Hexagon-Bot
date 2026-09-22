@@ -341,6 +341,9 @@ pub fn submit(
                 ctx.stage_run_id.as_deref(),
             )?;
         }
+        // 无上级（或上级缺席）时负责人是唯一复审者。L4 只自动通过
+        // 「上级已经通过」之后的那一关，这里还没有复审结论，不放行。
+        // 被否决：无上级也直接生效——那是一次没人看过的改动。
         None => to_stamp_queue(db, ctx, &pid, &diff, &surface, evidence.as_ref())?,
     }
     Ok(pid)
@@ -396,29 +399,61 @@ pub fn review(
     if status != "in_review" {
         return Err(PropError::BadState(status));
     }
-    if pass {
-        // 读产物内容取 diff/surface 做风险标注
-        let (surface, target, diff, body) =
-            artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
-        let _ = target;
-        let evidence = replay_evidence(&body)
-            .and_then(|r| r.ok())
-            .map(|r| evidence_summary(&r));
-        to_stamp_queue(db, ctx, proposal_id, &diff, &surface, evidence.as_ref())?;
-    } else {
+    if !pass {
+        // 驳回不生效。L4 也不把驳回翻成通过。
         db.conn().execute(
             "UPDATE proposals SET status='rejected', decided_at=datetime('now') WHERE id=?1",
             [proposal_id],
         )?;
+        db.append_event(
+            &ctx.project_id,
+            EventKind::ProposalRejected,
+            json!({"proposal_id": proposal_id, "pass": false, "reason": reason}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        return Ok(());
     }
+    // 读产物内容取 diff/surface 做风险标注
+    let (surface, _target, diff, body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
+    let evidence = replay_evidence(&body)
+        .and_then(|r| r.ok())
+        .map(|r| evidence_summary(&r));
+    // 读档失败按等人。不把一次查询故障升成未审提案生效。
+    let rank = crate::autonomy::rank(db, &ctx.project_id).unwrap_or(0);
+    if crate::harnessgate::auto_passes(rank, crate::harnessgate::HarnessAction::ProposalOwnerStamp)
+    {
+        // 上级已经通过。负责人这一关自动过，不入待决卡。
+        // 先落盘再记轨迹：apply 失败则状态仍是 in_review，没有「已盖章但没生效」。
+        let effective = materialize(db, ctx, proposal_id)?;
+        db.append_event(
+            &ctx.project_id,
+            EventKind::ProposalReviewed,
+            json!({"proposal_id": proposal_id, "pass": true, "reason": reason}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        db.append_event(
+            &ctx.project_id,
+            EventKind::ProposalStamped,
+            json!({"proposal_id": proposal_id, "by": "autonomy", "evidence": evidence}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        db.append_event(
+            &ctx.project_id,
+            EventKind::ProposalActivated,
+            json!({"proposal_id": proposal_id, "effective_path": effective, "by": "autonomy"}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        return Ok(());
+    }
+    to_stamp_queue(db, ctx, proposal_id, &diff, &surface, evidence.as_ref())?;
     db.append_event(
         &ctx.project_id,
-        if pass {
-            EventKind::ProposalReviewed
-        } else {
-            EventKind::ProposalRejected
-        },
-        json!({"proposal_id": proposal_id, "pass": pass, "reason": reason}),
+        EventKind::ProposalReviewed,
+        json!({"proposal_id": proposal_id, "pass": true, "reason": reason}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
@@ -488,56 +523,62 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalStamped,
-        json!({"proposal_id": pid, "question_id": qid}),
+        // by=owner 与 L4 自动通过的 by=autonomy 区分。
+        json!({"proposal_id": pid, "question_id": qid, "by": "owner"}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
 
-    // 应用：版本化快照 → git apply diff（不热改运行中实体——pack 副本下次生效）
-    let (artifact_id, target): (Option<String>, String) = db.conn().query_row(
-        "SELECT artifact_id, effective_path FROM proposals WHERE id=?1",
-        [&pid],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    let (_surface, _t, diff, _body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
-    let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(&pid);
-    std::fs::create_dir_all(&backup_dir)?;
-    let target_path = ctx.repo_root.join(&target);
-    if target_path.exists() {
-        std::fs::copy(&target_path, backup_dir.join("before")).ok();
-    }
-    if crate::git::is_repo(&ctx.repo_root) {
-        std::fs::write(backup_dir.join("change.diff"), format!("{diff}\n"))?;
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&ctx.repo_root)
-            .args(["apply", "--whitespace=nowarn"])
-            .arg(backup_dir.join("change.diff"))
-            .output()?;
-        if !out.status.success() {
-            return Err(PropError::Rejected(format!(
-                "git apply failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )));
-        }
-    } else {
-        return Err(PropError::Rejected(
-            "proposal activation requires git repo".into(),
-        ));
-    }
-    db.conn().execute(
-        "UPDATE proposals SET status='active', decided_at=datetime('now') WHERE id=?1",
-        [&pid],
-    )?;
+    let target = materialize(db, ctx, &pid)?;
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalActivated,
-        json!({"proposal_id": pid, "effective_path": target}),
+        json!({"proposal_id": pid, "effective_path": target, "by": "owner"}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
     log::info!("proposal activated: {pid} -> {target}");
     Ok(pid)
+}
+
+/// 版本化快照 → git apply diff → active。不写盖章事件。
+/// 不热改运行中实体——pack 副本下次生效。
+fn materialize(db: &Db, ctx: &ToolContext, pid: &str) -> Result<String, PropError> {
+    let (artifact_id, target): (Option<String>, String) = db.conn().query_row(
+        "SELECT artifact_id, effective_path FROM proposals WHERE id=?1 AND project_id=?2",
+        params![pid, ctx.project_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let (_surface, _t, diff, _body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
+    let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(pid);
+    std::fs::create_dir_all(&backup_dir)?;
+    let target_path = ctx.repo_root.join(&target);
+    if target_path.exists() {
+        std::fs::copy(&target_path, backup_dir.join("before")).ok();
+    }
+    if !crate::git::is_repo(&ctx.repo_root) {
+        return Err(PropError::Rejected(
+            "proposal activation requires git repo".into(),
+        ));
+    }
+    std::fs::write(backup_dir.join("change.diff"), format!("{diff}\n"))?;
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ctx.repo_root)
+        .args(["apply", "--whitespace=nowarn"])
+        .arg(backup_dir.join("change.diff"))
+        .output()?;
+    if !out.status.success() {
+        return Err(PropError::Rejected(format!(
+            "git apply failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    db.conn().execute(
+        "UPDATE proposals SET status='active', decided_at=datetime('now') WHERE id=?1",
+        [pid],
+    )?;
+    Ok(target)
 }
 
 /// 一键回滚：快照还原 → rolled_back。

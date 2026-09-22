@@ -149,6 +149,7 @@ export default {
     request_envelope: 'sobre de solicitud',
     steering_injected: 'dirección inyectada',
     tool_breaker: 'disyuntor de herramienta',
+    grant_confirmed: 'autorización confirmada',
   },
   cards: {
     inlineDiff: 'Diff en línea',
@@ -209,6 +210,9 @@ export default {
     installCreds: 'requiere credenciales',
     installHint: 'Se ejecuta solo tras aprobación; no concede permisos automáticamente.',
     installRun: 'Aprobar e instalar',
+    grant: 'Autorización',
+    grantHint: 'Al confirmar se escribe solo la autorización de este agente en el proyecto actual, no en la biblioteca global.',
+    grantRun: 'Autorizar',
   },
   decisions: {
     scopeBlocked: 'Los atajos de decisión solo funcionan en la vista de trabajo',

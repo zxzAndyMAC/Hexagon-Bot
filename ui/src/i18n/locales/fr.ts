@@ -149,6 +149,7 @@ export default {
     request_envelope: 'enveloppe de requête',
     steering_injected: 'pilotage injecté',
     tool_breaker: 'disjoncteur d’outil déclenché',
+    grant_confirmed: 'autorisation confirmée',
   },
   cards: {
     inlineDiff: 'Diff intégré',
@@ -209,6 +210,9 @@ export default {
     installCreds: 'identifiants requis',
     installHint: 'Exécuté uniquement après approbation ; aucun droit accordé automatiquement.',
     installRun: 'Approuver et installer',
+    grant: 'Autorisation',
+    grantHint: "La confirmation n'écrit que l'autorisation de cet agent dans le projet courant, pas dans la bibliothèque globale.",
+    grantRun: 'Autoriser',
   },
   decisions: {
     scopeBlocked: 'Les raccourcis de décision ne fonctionnent que dans la vue principale',

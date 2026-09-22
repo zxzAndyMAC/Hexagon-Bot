@@ -81,6 +81,12 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).toHaveBeenCalledWith('q1')
   })
 
+  it('顶卡为授权确认时批准键调用 confirmGrant', async () => {
+    const spy = vi.spyOn(api, 'confirmGrant').mockResolvedValue({ granted: true, question_id: 'q1', via: 'owner' })
+    expect(await handlePendingKey(key('Enter'), [card({ kind: 'grant', payload: { name: 'spec-writing', grant_kind: 'skill' } })])).toBe('approved')
+    expect(spy).toHaveBeenCalledWith('q1', true)
+  })
+
   it('正常批准：顶卡 permission → answerPermission(true)', async () => {
     const spy = vi.spyOn(api, 'answerPermission')
     expect(await handlePendingKey(key('Enter'), [card({})])).toBe('approved')
@@ -118,10 +124,11 @@ describe('severityOf 全序（TC-U-0001）', () => {
   const sev = (kind: PendingQuestion['kind'], payload: PendingQuestion['payload'] = {}) =>
     severityOf(card({ kind, payload }))
 
-  it('六档全序：恢复/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章', () => {
+  it('恢复/发布/安装/授权 > 阶段盖章 > 升级 > 权限 > 提案盖章', () => {
     expect(sev('recovery')).toBe(0)
     expect(sev('publish')).toBe(0)
     expect(sev('install')).toBe(0)
+    expect(sev('grant')).toBe(0)
     expect(sev('stamp', {})).toBe(1)
     expect(sev('escalation')).toBe(2)
     expect(sev('permission')).toBe(3)

@@ -654,6 +654,30 @@ fn set_agent_grants(
     })
 }
 
+/// 票 04：技能/MCP 授权确认。L4 在核内自动写入项目 grants；L0–L3 只入队。
+#[tauri::command]
+fn request_grant(
+    state: tauri::State<AppState>,
+    agent_id: String,
+    kind: String,
+    name: String,
+) -> Result<hexagon_core::grants::GrantOutcome, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::grants::request(db, PROJECT_ID, &agent_id, &kind, &name).map_err(cmd_err)
+    })
+}
+
+#[tauri::command]
+fn confirm_grant(
+    state: tauri::State<AppState>,
+    qid: String,
+    allow: bool,
+) -> Result<hexagon_core::grants::GrantOutcome, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::grants::confirm(db, PROJECT_ID, &qid, allow).map_err(cmd_err)
+    })
+}
+
 #[tauri::command]
 fn draft_role_def(
     state: tauri::State<AppState>,
@@ -1489,6 +1513,8 @@ pub fn run() {
             update_agent,
             create_role,
             set_agent_grants,
+            request_grant,
+            confirm_grant,
             draft_role_def,
             pack_draft,
             save_pack_draft,

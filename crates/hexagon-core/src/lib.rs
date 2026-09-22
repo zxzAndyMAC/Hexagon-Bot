@@ -15,6 +15,8 @@ pub mod db;
 pub mod errcode;
 pub mod files;
 pub mod git;
+pub mod grants;
+pub mod harnessgate;
 pub mod install;
 pub mod invariant;
 pub mod judge;

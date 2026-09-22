@@ -5,8 +5,8 @@
 //! 本模块收口：enqueue/answer/annotate/queued 四个动词 + 读模型；
 //! `rg "pending_questions"` 在本模块外只允许命中 schema 迁移与注释。
 //!
-//! 词表对齐 schema CHECK（migrations 0001/0006/0007）：
-//! kind ∈ {permission, stamp, escalation, publish, recovery, install}
+//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0016）：
+//! kind ∈ {permission, stamp, escalation, publish, recovery, install, grant}
 //! state ∈ {queued, answered, expired}
 //!
 //! 注意 kind='stamp' 是过载的：阶段盖章卡（payload={stage,run_id}）与
@@ -41,6 +41,8 @@ pub enum CardKind {
     Recovery,
     Install,
     Publish,
+    /// 技能或 MCP 的授权确认（票 04）。不是权限卡。
+    Grant,
 }
 
 impl CardKind {
@@ -52,6 +54,7 @@ impl CardKind {
             Self::Recovery => "recovery",
             Self::Install => "install",
             Self::Publish => "publish",
+            Self::Grant => "grant",
         }
     }
 
@@ -64,6 +67,7 @@ impl CardKind {
             "recovery" => Ok(Self::Recovery),
             "install" => Ok(Self::Install),
             "publish" => Ok(Self::Publish),
+            "grant" => Ok(Self::Grant),
             other => Err(CardsError::BadInput(format!("unknown card kind: {other}"))),
         }
     }
@@ -204,7 +208,9 @@ pub fn annotate_queued_where(
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct QueuedCard {
     pub id: String,
-    #[ts(type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish'")]
+    #[ts(
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish' | 'grant'"
+    )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,
     pub agent_id: Option<String>,

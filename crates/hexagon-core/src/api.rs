@@ -88,6 +88,8 @@ pub enum ApiError {
     #[error(transparent)]
     Install(#[from] crate::install::InstallError),
     #[error(transparent)]
+    Grant(#[from] crate::grants::GrantError),
+    #[error(transparent)]
     Roles(#[from] crate::roles::RoleError),
     #[error(transparent)]
     PackEdit(#[from] crate::packedit::PackEditError),
@@ -313,8 +315,8 @@ impl Workbench {
     }
 
     /// 改自治档。非法档拒绝，已存档不动。
-    /// 盖章（票 02）与安全网、新权限询问（票 03）读存储档。提案和安装仍看
-    /// `execution_rank`（封顶 L2），等票 04。
+    /// 盖章（票 02）、安全网和新权限（票 03）、提案负责人关与授权/安装确认
+    /// （票 04）都读存储档。`execution_rank` 仍封顶 L2。
     pub fn set_autonomy(&self, level: &str) -> Result<(), ApiError> {
         crate::autonomy::set_level(&self.db, &self.project_id, level)?;
         Ok(())
@@ -323,6 +325,76 @@ impl Workbench {
     /// 发起远程发布：只入队确认卡，不执行。任何自治档都不自动放行（票 03 / ADR 0034）。
     pub fn request_publish(&self, remote: &str) -> Result<String, ApiError> {
         Ok(crate::publish::request(&self.db, &self.project_id, remote)?)
+    }
+
+    /// 自然语言安装。L4 自动写入当前项目；L0–L3 只入队。
+    pub fn request_install(&self, desc: &str) -> Result<String, ApiError> {
+        Ok(crate::install::request_install(
+            &self.db,
+            &self.project_id,
+            &self.repo_root,
+            desc,
+        )?)
+    }
+
+    /// 上级复审结论。通过且存储档为 L4 时，负责人盖章自动生效（可回滚）。
+    /// 驳回不生效。无上级的提案不走这里，仍等负责人。
+    pub fn review_proposal(
+        &self,
+        proposal_id: &str,
+        pass: bool,
+        reason: &str,
+    ) -> Result<(), ApiError> {
+        let author: String = self.db.conn().query_row(
+            "SELECT author_agent_id FROM proposals WHERE id=?1 AND project_id=?2",
+            rusqlite::params![proposal_id, self.project_id],
+            |r| r.get(0),
+        )?;
+        let ctx = self.ctx_for(&author, None);
+        crate::proposals::review(&self.db, &ctx, proposal_id, pass, reason)?;
+        Ok(())
+    }
+
+    /// 回滚一张已生效的改进提案。
+    pub fn rollback_proposal(&self, proposal_id: &str) -> Result<(), ApiError> {
+        let author: String = self.db.conn().query_row(
+            "SELECT author_agent_id FROM proposals WHERE id=?1 AND project_id=?2",
+            rusqlite::params![proposal_id, self.project_id],
+            |r| r.get(0),
+        )?;
+        let ctx = self.ctx_for(&author, None);
+        crate::proposals::rollback(&self.db, &ctx, proposal_id)?;
+        Ok(())
+    }
+
+    /// 技能或 MCP 授权确认。L4 只写入当前项目 grants；L0–L3 入队等人。
+    pub fn request_grant(
+        &self,
+        agent_id: &str,
+        kind: &str,
+        name: &str,
+    ) -> Result<crate::grants::GrantOutcome, ApiError> {
+        Ok(crate::grants::request(
+            &self.db,
+            &self.project_id,
+            agent_id,
+            kind,
+            name,
+        )?)
+    }
+
+    /// 负责人裁决授权卡。允许才写入项目 grants，不写用户全局。
+    pub fn confirm_grant(
+        &self,
+        qid: &str,
+        allow: bool,
+    ) -> Result<crate::grants::GrantOutcome, ApiError> {
+        Ok(crate::grants::confirm(
+            &self.db,
+            &self.project_id,
+            qid,
+            allow,
+        )?)
     }
 
     /// 确认发布：凭据闸 + push。
@@ -516,7 +588,7 @@ impl Workbench {
             TextCommand::Resume => orchestra::resume(&self.db, &self.project_id)?,
             TextCommand::SleepAll => orchestra::sleep_all(&self.db, &self.project_id)?,
             TextCommand::Install(desc) => {
-                crate::install::request_install(&self.db, &self.project_id, &self.repo_root, desc)?;
+                self.request_install(desc)?;
             }
             TextCommand::Override(reason) => {
                 self.override_checks(reason)?;

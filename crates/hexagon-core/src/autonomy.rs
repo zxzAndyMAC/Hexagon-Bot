@@ -7,8 +7,9 @@
 //!   新权限问题永远等负责人**（这三条不在档位控制内，见 permissions/orchestra）。
 //! - **L3 / L4**：安全网和新的权限询问直接放行（`permissions` 读存储档 `rank`，
 //!   票 03）。盖章点也读存储档：非最终盖章点自动通过，最终验收仍等人（票 02）。
-//!   提案、授权、安装仍走 `execution_rank`（封顶 2），等票 04。
-//!   内置永不、项目否定、远程发布任何档都不放行。
+//!   提案负责人盖章、技能/MCP 授权确认、自然语言安装确认只在 L4 自动通过
+//!   （`harnessgate` 读存储档，票 04）。`execution_rank` 仍封顶 2。
+//!   内置永不、项目否定、远程发布、开场项目说明草案任何档都不放行。
 //! - 升级通道（escalation）在任何档位都排负责人——升级的定义就是超出声明自治。
 //!
 //! 归来摘要：**工作台模板生成**（不经模型）——按事件类型聚合成结构化摘要，
@@ -129,9 +130,9 @@ pub fn rank(db: &Db, project_id: &str) -> Result<u8, rusqlite::Error> {
 /// 执行档。存储档见 `rank`。
 ///
 /// 票 01 把执行档封顶到 2，避免只有名字的高档被当成已经放行。
-/// 票 02 的盖章和票 03 的安全网、新权限询问不读这里，它们读存储档 `rank`。
-/// 封顶留下是给改进提案、授权和安装（票 04）。被否决：把 `min(2)` 改成 `min(4)`。
-/// false positive 的代价是未审的安装或提案生效。
+/// 票 02 的盖章、票 03 的安全网和新权限、票 04 的提案/授权/安装都不读这里，
+/// 它们读存储档 `rank`。被否决：把 `min(2)` 改成 `min(4)`。
+/// false positive 的代价是未审的安装或提案生效，而且会连坐仍读执行档的打回路径。
 pub fn execution_rank(db: &Db, project_id: &str) -> Result<u8, rusqlite::Error> {
     Ok(rank(db, project_id)?.min(2))
 }
@@ -301,7 +302,7 @@ mod tests {
         // 票 01 / ADR 0064：省略档位的新行默认 L4（曾是 L0）。
         // 已有行显式写入的 L0 不被迁移改写，见 0014 的 INSERT SELECT。
         assert_eq!(level(&db, "p").unwrap(), "L4");
-        // 票 03 不抬封顶：安全网读 rank，盖章仍读 execution_rank。
+        // 票 04 也不抬封顶：提案/授权/安装读 rank，执行档仍是 2。
         assert_eq!(execution_rank(&db, "p").unwrap(), 2);
         assert!(set_level(&db, "p", "L9").is_err());
         assert_eq!(level(&db, "p").unwrap(), "L4");

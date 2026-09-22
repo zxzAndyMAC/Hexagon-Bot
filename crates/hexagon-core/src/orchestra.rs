@@ -642,7 +642,7 @@ pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction,
             if stage.stamp_point {
                 let flags: Vec<bool> = pack.stages.iter().map(|s| s.stamp_point).collect();
                 let seq = run.seq as usize;
-                // 存储档，不是 execution_rank。封顶留着给安全网/权限/提案（票 03/04）。
+                // 存储档，不是 execution_rank。提案/授权/安装走 harnessgate（票 04）。
                 let stored = crate::autonomy::rank(db, project_id)?;
                 if crate::stampgate::classify_stamp(stored, &flags, seq)
                     == crate::stampgate::StampDisposition::AutoPass

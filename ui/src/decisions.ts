@@ -9,6 +9,7 @@ const SEVERITY: Record<string, number> = {
   recovery: 0,
   publish: 0,
   install: 0,
+  grant: 0,
   stamp_stage: 1,
   escalation: 2,
   permission: 3,
@@ -29,6 +30,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
   if (q.kind === 'recovery') return api.recoverRun(String(p.run_id))
   if (q.kind === 'install') return api.resolveInstall(q.id, true)
+  if (q.kind === 'grant') return api.confirmGrant(q.id, true)
 }
 
 export async function rejectQuestion(q: PendingQuestion) {
@@ -39,6 +41,7 @@ export async function rejectQuestion(q: PendingQuestion) {
   if (q.kind === 'publish') return api.rejectPublish(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, false)
   if (q.kind === 'install') return api.resolveInstall(q.id, false)
+  if (q.kind === 'grant') return api.confirmGrant(q.id, false)
 }
 
 /// 逆建议驳回的留痕（ui-audit 票 07 / P2-15）：owner 驳回一张
@@ -57,6 +60,7 @@ export function kindTitleKey(q: PendingQuestion): string {
   if (q.kind === 'publish') return 'cards.publish'
   if (q.kind === 'recovery') return 'cards.recovery'
   if (q.kind === 'install') return 'cards.install'
+  if (q.kind === 'grant') return 'cards.grant'
   if (q.kind === 'escalation') return 'cards.escalation'
   return q.kind
 }

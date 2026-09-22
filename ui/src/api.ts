@@ -27,6 +27,7 @@ import type { CheckResult } from './gen/CheckResult'
 import type { CheckOutcome } from './gen/CheckOutcome'
 import type { OverrideOutcome } from './gen/OverrideOutcome'
 import type { InstallOutcome } from './gen/InstallOutcome'
+import type { GrantOutcome } from './gen/GrantOutcome'
 import type { PublishOutcome } from './gen/PublishOutcome'
 import type { FlagOutcome } from './gen/FlagOutcome'
 import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
@@ -259,6 +260,11 @@ export const api = {
   createRole: (def: RoleDef) => call<string>('create_role', { def }),
   setAgentGrants: (agentId: string, kind: string, names: string[]) =>
     call<void>('set_agent_grants', { agentId, kind, names }),
+  // 票 04：授权确认。L4 由核自动写入当前项目；L0–L3 出卡后 confirmGrant。
+  requestGrant: (agentId: string, kind: string, name: string) =>
+    call<GrantOutcome>('request_grant', { agentId, kind, name }),
+  confirmGrant: (qid: string, allow: boolean) =>
+    call<GrantOutcome>('confirm_grant', { qid, allow }),
   draftRoleDef: (agentId: string, hint: string) =>
     call<string>('draft_role_def', { agentId, hint }),
   // ---- 流程包编辑（票 31）：draft=pack.json / active=钉住副本，编辑只碰 draft ----
@@ -993,6 +999,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'update_agent':
     case 'create_role':
     case 'set_agent_grants':
+      return null as T
+    case 'request_grant':
+      return { granted: false, question_id: 'q-grant', via: 'queued' } as T
+    case 'confirm_grant':
+      return { granted: args?.allow === true, question_id: args?.qid, via: 'owner' } as T
     case 'save_pack_draft':
     case 'export_pack_yaml':
       return null as T

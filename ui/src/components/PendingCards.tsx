@@ -324,6 +324,22 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     )
   }
 
+  if (q.kind === 'grant') {
+    return (
+      <CardShell tone="flag" icon="shield" title={`${t('cards.grant')} · ${String(p.name ?? '')}`}>
+        <div className="dim" style={{ fontSize: 12 }}>
+          <span className="mono">{String(p.grant_kind ?? '')}</span>
+          <span className="dim3" style={{ marginLeft: 8 }}>{String(p.agent_id ?? '')}</span>
+          <div className="dim3" style={{ marginTop: 4 }}>{t('cards.grantHint')}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <Btn primary onClick={() => api.confirmGrant(q.id, true)}>{t('cards.grantRun')}{top && ` ${approveTip}`}</Btn>
+          <Btn danger onClick={() => api.confirmGrant(q.id, false)}>{t('cards.rejectContinue')}{top && ` ${rejectTip}`}</Btn>
+        </div>
+      </CardShell>
+    )
+  }
+
   if (q.kind === 'install') {
     const net = p.net === true
     const creds = p.creds === true

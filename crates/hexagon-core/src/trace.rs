@@ -815,6 +815,7 @@ mod tests {
         "context_resumed",
         "exec_timeout",
         "flag_routed",
+        "grant_confirmed",
         "instructions_degraded",
         "invariant_violation",
         "judge_verdict",

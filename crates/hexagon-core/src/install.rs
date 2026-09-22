@@ -4,6 +4,11 @@
 //! 来源白名单：本地目录技能包 / git 技能包 / npm-npx MCP / 配置片段。
 //! 禁 `curl|sh`、`wget|sh`、`bash -c` 管道式安装；装完授权默认空
 //! （grants 不动——授权永远单独走权限管线）。
+//!
+//! L4（票 04 / ADR 0063）自动通过这张确认，仍只写入当前项目的
+//! `.hexagon/skills` 或 `.hexagon/mcp.json`，不写 `~/.hexagon/`。
+//! 被否决：L4 改走 `install_skill_from_path` / `save_global_mcp`。
+//! L0–L3 仍入队等人。读档失败按等人。
 
 use crate::db::Db;
 use crate::trace::{EventKind, TraceError};
@@ -164,6 +169,7 @@ pub fn plan(desc: &str, repo_root: &Path) -> Result<InstallPlan, InstallError> {
 }
 
 /// 入队安装待决卡（kind=install）+ install_requested 事件。返回 qid。
+/// L4 不入队：直接写入当前项目并留 `via=autonomy` 轨迹。
 pub fn request_install(
     db: &Db,
     project_id: &str,
@@ -175,6 +181,22 @@ pub fn request_install(
     payload["net"] = json!(p.net());
     payload["creds"] = json!(false);
     payload["desc"] = json!(desc);
+    // 读档失败按等人。管道式来源在 plan() 已经拒绝，到不了这里。
+    let rank = crate::autonomy::rank(db, project_id).unwrap_or(0);
+    if crate::harnessgate::auto_passes(rank, crate::harnessgate::HarnessAction::NlInstall) {
+        let qid = format!("q{}", db.next_id("q")?);
+        db.append_event(
+            project_id,
+            EventKind::InstallRequested,
+            json!({"question_id": qid, "plan": payload, "via": "autonomy"}),
+            None,
+            None,
+        )?;
+        // 写入面只有 repo_root。不调用全局技能/MCP 保存。
+        execute_plan(repo_root, &payload)?;
+        record_completed(db, project_id, &qid, &payload, "autonomy")?;
+        return Ok(qid);
+    }
     let qid = crate::cards::enqueue(
         db,
         project_id,
@@ -228,6 +250,16 @@ pub fn resolve_install(
         });
     }
 
+    execute_plan(repo_root, &plan)?;
+    record_completed(db, project_id, qid, &plan, "owner")?;
+    Ok(InstallOutcome {
+        installed: true,
+        plan: plan["name"].as_str().map(String::from),
+    })
+}
+
+/// 执行已解析的计划。只写 `repo_root` 下的项目技能目录和项目 MCP 清单。
+fn execute_plan(repo_root: &Path, plan: &Value) -> Result<(), InstallError> {
     let skills_dir = repo_root.join(".hexagon/skills");
     match plan["plan_kind"].as_str().unwrap_or("") {
         "mcp" => {
@@ -269,17 +301,30 @@ pub fn resolve_install(
         }
         other => return Err(InstallError::Unrecognized(other.into())),
     }
+    Ok(())
+}
+
+fn record_completed(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    plan: &Value,
+    via: &str,
+) -> Result<(), InstallError> {
     db.append_event(
         project_id,
         EventKind::InstallCompleted,
-        json!({"question_id": qid, "plan": plan["name"], "kind": plan["plan_kind"]}),
+        json!({
+            "question_id": qid,
+            "plan": plan["name"],
+            "kind": plan["plan_kind"],
+            "via": via,
+            "scope": "project",
+        }),
         None,
         None,
     )?;
-    Ok(InstallOutcome {
-        installed: true,
-        plan: plan["name"].as_str().map(String::from),
-    })
+    Ok(())
 }
 
 /// mcp.json 加/换一条服务规格（name 相同则替换）。

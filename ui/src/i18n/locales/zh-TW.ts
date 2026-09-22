@@ -149,6 +149,7 @@ export default {
     request_envelope: '請求信封',
     steering_injected: '轉向已注入',
     tool_breaker: '工具熔斷觸發',
+    grant_confirmed: '授權已確認',
   },
   cards: {
     inlineDiff: '內嵌 diff',
@@ -209,6 +210,9 @@ export default {
     installCreds: '需憑證',
     installHint: '確認後才執行；裝完不自動授權。',
     installRun: '核准並安裝',
+    grant: '授權',
+    grantHint: '確認後才寫入目前專案裡這個 Agent 的技能或 MCP 授權，不寫入使用者全域。',
+    grantRun: '確認授權',
   },
   decisions: {
     scopeBlocked: '裁決快捷鍵僅在工作台介面可用',

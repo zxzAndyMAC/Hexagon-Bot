@@ -149,6 +149,7 @@ export default {
     request_envelope: 'request envelope',
     steering_injected: 'steering injected',
     tool_breaker: 'tool breaker tripped',
+    grant_confirmed: 'grant confirmed',
   },
   cards: {
     inlineDiff: 'Inline diff',
@@ -209,6 +210,9 @@ export default {
     installCreds: 'needs credentials',
     installHint: 'Runs only on approval. No permissions are granted automatically.',
     installRun: 'Approve & install',
+    grant: 'Grant',
+    grantHint: 'Writes a skill or MCP grant for this agent in the current project only. Does not touch the user-global library.',
+    grantRun: 'Grant',
   },
   decisions: {
     scopeBlocked: 'Decision shortcuts only work in the workbench view',

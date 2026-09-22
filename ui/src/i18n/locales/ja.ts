@@ -149,6 +149,7 @@ export default {
     request_envelope: 'リクエスト封筒',
     steering_injected: 'ステアリング注入済み',
     tool_breaker: 'ツールブレーカー作動',
+    grant_confirmed: '認可を確認',
   },
   cards: {
     inlineDiff: 'インライン diff',
@@ -209,6 +210,9 @@ export default {
     installCreds: '認証情報が必要',
     installHint: '承認後にのみ実行。権限は自動付与されません。',
     installRun: '承認してインストール',
+    grant: '認可',
+    grantHint: '確認後、このプロジェクトのエージェントにだけスキルまたは MCP を認可します。ユーザー全体には書きません。',
+    grantRun: '認可する',
   },
   decisions: {
     scopeBlocked: '裁決ショートカットはワークベンチ画面でのみ有効です',
