@@ -4,6 +4,7 @@ import {
   errText,
   type ArtifactRow,
   type PendingQuestion,
+  type ProposalRow,
   type StageRow,
   type ProvidersView,
   type TeamRow,
@@ -102,6 +103,14 @@ interface UiState {
   artifacts: ArtifactRow[]
   timeline: TimelineItem[]
   pending: PendingQuestion[]
+  /* hands-free 票 05：待决不再占中栏。弹窗关掉 ≠ 驳回。
+     dismissedPendingKeys 记下已经收起的 id（q: 待决卡 / r: in_review 提案）。
+     只有没见过的 id 才再弹——漏弹人去点徽标，误弹只是烦；
+     把收起当成销卡会把必须人处理的卡静默丢掉（spec 故事 52/53），所以偏向再弹。
+     常驻区的 pendingH / pendingCollapsed 随区一起撤，高度还给中栏和时间线。 */
+  reviewRows: ProposalRow[]
+  pendingDialogOpen: boolean
+  dismissedPendingKeys: string[]
   usageTotal: { spent_mc: number; limit_cents: number | null; tokens: number } | null
   autonomy: string
   projectName: string
@@ -109,11 +118,6 @@ interface UiState {
   fastRole: string | null
   packName: string | null
   railOpen: boolean
-  /* workbench-polish 04：待决区用户拖定高度（null=规则默认）与吸顶收起态。
-     pendingH 持久化 localStorage；collapsed 仅会话内——重启回到展开，
-     新待决不该永久藏在折叠后面。 */
-  pendingH: number | null
-  pendingCollapsed: boolean
   sideTab: 'artifacts' | 'team' | 'usage'
   usageRows: UsageRow[]
   /// 7 日 token 序列缓存（票 17 / 方向卡 2）：随 usage 慢切片一起拉，
@@ -143,8 +147,10 @@ interface UiState {
   streamDone: Record<string, { afterEventId: number; at: number }>
   setThemePref: (p: ThemePref) => void
   setRailOpen: (v: boolean) => void
-  setPendingH: (h: number | null) => void
-  setPendingCollapsed: (v: boolean) => void
+  openPendingDialog: () => void
+  closePendingDialog: () => void
+  noteReviewRows: (rows: ProposalRow[]) => void
+  syncPendingDialog: () => void
   setSideTab: (t: 'artifacts' | 'team' | 'usage') => void
   openTab: (t: WorkTab) => void
   closeTab: (id: string) => void
@@ -180,13 +186,20 @@ interface UiState {
   invalidate: (...tags: SlowSlice[]) => Promise<void>
 }
 
-export const useUiStore = create<UiState>((set) => ({
+function humanKeys(pending: PendingQuestion[], reviewRows: { id: string }[]): string[] {
+  return [...pending.map((p) => `q:${p.id}`), ...reviewRows.map((r) => `r:${r.id}`)]
+}
+
+export const useUiStore = create<UiState>((set, get) => ({
   themePref: savedPref,
   stages: [],
   team: [],
   artifacts: [],
   timeline: [],
   pending: [],
+  reviewRows: [],
+  pendingDialogOpen: false,
+  dismissedPendingKeys: [],
   usageTotal: null,
   autonomy: 'L0',
   // 票 15（P3）：未加载时留空串——TopBar 回退 t('app.untitledProject')，
@@ -196,8 +209,6 @@ export const useUiStore = create<UiState>((set) => ({
   fastRole: null,
   packName: null,
   railOpen: localStorage.getItem('hexagon.rail') !== '0',
-  pendingH: Number(localStorage.getItem('hexagon.pendingH')) || null,
-  pendingCollapsed: false,
   sideTab: 'artifacts',
   usageRows: [],
   usageSeries7d: [],
@@ -287,12 +298,30 @@ export const useUiStore = create<UiState>((set) => ({
     localStorage.setItem('hexagon.rail', v ? '1' : '0')
     set({ railOpen: v })
   },
-  setPendingH: (h) => {
-    if (h == null) localStorage.removeItem('hexagon.pendingH')
-    else localStorage.setItem('hexagon.pendingH', String(Math.round(h)))
-    set({ pendingH: h })
+  openPendingDialog: () => set({ pendingDialogOpen: true }),
+  closePendingDialog: () => {
+    const s = get()
+    set({ pendingDialogOpen: false, dismissedPendingKeys: humanKeys(s.pending, s.reviewRows) })
   },
-  setPendingCollapsed: (v) => set({ pendingCollapsed: v }),
+  noteReviewRows: (rows) => {
+    const cur = get().reviewRows
+    if (cur.length === rows.length && cur.every((r, i) => r.id === rows[i].id && r.status === rows[i].status)) return
+    set({ reviewRows: rows })
+  },
+  syncPendingDialog: () => {
+    const s = get()
+    const keys = humanKeys(s.pending, s.reviewRows)
+    if (keys.length === 0) {
+      if (s.pendingDialogOpen || s.dismissedPendingKeys.length > 0) {
+        set({ pendingDialogOpen: false, dismissedPendingKeys: [] })
+      }
+      return
+    }
+    // 已打开时不强制重开；收起后只有新 id 才再弹（点徽标走 openPendingDialog）。
+    if (keys.some((k) => !s.dismissedPendingKeys.includes(k)) && !s.pendingDialogOpen) {
+      set({ pendingDialogOpen: true })
+    }
+  },
   setSideTab: (t) => set({ sideTab: t }),
   setThemePref: (p) => {
     localStorage.setItem('hexagon.theme', p)

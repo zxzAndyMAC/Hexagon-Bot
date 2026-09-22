@@ -324,18 +324,9 @@ input, textarea { font: inherit; color: var(--text); }
 /* workbench-polish 03（owner 报告）：kbd-target 内描边曾给顶卡画 2px accent 环，
    与卡自身 1px accent-border 叠出「双框」，被读作边框渲染 bug——已移除。
    键盘目标提示不缺位：顶卡可视时主按钮 approveTip（⌘↵）标出；滚出视口时 .kbd-strip 接管。 */
-/* workbench-polish 04：待决区/内容区拖拽分隔条——上下拖调高度，拖过阈吸顶收起。
-   常态隐形（不占视觉），hover/拖拽显 accent 抓手线；收起态留 border-strong 细线作可拖回提示。 */
-.zone-splitter { position: relative; height: 7px; flex-shrink: 0; cursor: row-resize; }
-.zone-splitter::after {
-  content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px;
-  transform: translateY(-50%); border-radius: 1px; background: transparent; transition: background .12s;
-}
-.zone-splitter:hover::after, .zone-splitter:active::after { background: var(--accent-border); }
-.zone-splitter.collapsed::after { background: var(--border-strong); }
-.zone-splitter.collapsed:hover::after { background: var(--accent-border); }
+/* hands-free 票 05：.zone-splitter 随常驻待决区删除。高度还给中栏，不再拖。 */
 
-/* 顶卡滚出视口时的目标提示条（sticky 于待决区顶缘） */
+/* 顶卡滚出弹窗视口时的目标提示条（sticky 于弹窗滚动区顶缘） */
 .kbd-strip {
   position: sticky; top: 0; z-index: 6;
   display: flex; align-items: center; gap: 6px;

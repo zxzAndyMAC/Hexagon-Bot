@@ -156,6 +156,9 @@ export default {
     deny: 'Deny',
     remember: 'Remember shape',
     pending: '{{count}} pending',
+    pendingDialog: 'Pending decisions',
+    pendingClose: 'Close',
+    pendingReopen: 'Reopen pending · {{approve}} / {{reject}}',
     escalation: 'Escalated — needs owner',
     contextOverflow: 'Context limit hit',
     contextHint: 'Agent paused at context cap. Approve to resume (context rebuilt + trimmed).',
@@ -525,7 +528,6 @@ export default {
     done: 'Done', empty: 'No matches', count: '{{n}} selected',
     title_skills: 'Select skills', title_mcp: 'Select MCP services',
   },
-  zone: { resizeHint: 'Drag to resize · drag to top to collapse' },
   keys: {
     palette: 'Command palette',
     rail: 'Toggle side panel',
@@ -539,6 +541,7 @@ export default {
     stageSkip: 'Skip stage',
     stageStamp: 'Stamp stage',
     nodeRail: 'Focus node rail',
+    dismissPending: 'Close pending dialog',
   },
   errors: {
     actionFailed: 'Action failed — {{detail}}',

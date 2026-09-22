@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './i18n'
 import { TopBar } from './components/TopBar'
@@ -17,7 +17,7 @@ import { Launcher } from './components/Launcher'
 import { CommandPalette } from './components/CommandPalette'
 import { api, onTurnDelta } from './api'
 import { useUiStore } from './store'
-import { PendingCards } from './components/PendingCards'
+import { PendingDialog } from './components/PendingCards'
 import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
@@ -27,13 +27,6 @@ export default function App() {
   const { t } = useTranslation()
   const refresh = useUiStore((s) => s.refresh)
   const refreshFast = useUiStore((s) => s.refreshFast)
-  const pending = useUiStore((s) => s.pending)
-  const timeline = useUiStore((s) => s.timeline)
-  const pendingH = useUiStore((s) => s.pendingH)
-  const pendingCollapsed = useUiStore((s) => s.pendingCollapsed)
-  const setPendingH = useUiStore((s) => s.setPendingH)
-  const setPendingCollapsed = useUiStore((s) => s.setPendingCollapsed)
-  const zoneRef = useRef<HTMLDivElement>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
@@ -181,59 +174,14 @@ export default function App() {
       <StageBar />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 10, padding: '10px 14px' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          {/* ui-audit 票 11（P2-11）：待决区高度内容感知——≤2 卡自适应
-              不圈地；积压封顶内滚；时间线近空时放宽上限多露卡。
-              workbench-polish 04（owner）：分隔条可上下拖动手调高度，
-              拖过收拢阈吸顶隐藏（TopBar 待决徽标点回）；手调高度持久化。 */}
-          <div
-            id="pending-zone"
-            ref={zoneRef}
-            style={{
-              display: pendingCollapsed ? 'none' : undefined,
-              height: pendingH ?? undefined,
-              maxHeight: pendingH != null ? 'none' : pending.length <= 2 ? 'max-content' : timeline.length < 20 ? 340 : 220,
-              overflowY: 'auto',
-              flexShrink: 0,
-            }}
-          >
-            <PendingCards />
-          </div>
-          {pending.length > 0 && (
-            <div
-              className={`zone-splitter${pendingCollapsed ? ' collapsed' : ''}`}
-              title={t('zone.resizeHint')}
-              onMouseDown={(e) => {
-                e.preventDefault()
-                // 收起态下 zone display:none 无盒——锚点改取把手自身顶缘；
-                // grabOff 减手在把手内的偏移，起手不跳变。
-                const handleTop = e.currentTarget.getBoundingClientRect().top
-                const grabOff = e.clientY - handleTop
-                const top = pendingCollapsed || !zoneRef.current
-                  ? handleTop
-                  : zoneRef.current.getBoundingClientRect().top
-                document.body.style.userSelect = 'none'
-                const move = (ev: MouseEvent) => {
-                  const h = ev.clientY - grabOff - top
-                  if (h < 56) { setPendingCollapsed(true); return } // 收拢阈：拖到顶→吸顶
-                  setPendingCollapsed(false)
-                  setPendingH(Math.min(h, window.innerHeight * 0.6))
-                }
-                const up = () => {
-                  document.body.style.userSelect = ''
-                  window.removeEventListener('mousemove', move)
-                  window.removeEventListener('mouseup', up)
-                }
-                window.addEventListener('mousemove', move)
-                window.addEventListener('mouseup', up)
-              }}
-            />
-          )}
           <TabBar />
           <CenterPanes />
           <Composer />
         </div>
         <SidePanel />
       </div>
+      {/* 票 05：待决是浮层，不插进这条纵栏——高度留给 Tab 和时间线。 */}
+      <PendingDialog />
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </div>
   )

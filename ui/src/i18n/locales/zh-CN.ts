@@ -156,6 +156,9 @@ export default {
     deny: '拒绝',
     remember: '记住形状',
     pending: '{{count}} 项待决',
+    pendingDialog: '待决',
+    pendingClose: '关闭',
+    pendingReopen: '打开待决 · {{approve}} / {{reject}}',
     escalation: '升级——需负责人裁决',
     contextOverflow: '上下文撞限',
     contextHint: '上下文到顶暂停中。放行则以重建+裁剪的上下文续跑。',
@@ -525,7 +528,6 @@ export default {
     done: '确定', empty: '无匹配项', count: '已选 {{n}} 项',
     title_skills: '选择技能', title_mcp: '选择 MCP 服务',
   },
-  zone: { resizeHint: '拖拽调整高度 · 拖到顶部收起' },
   keys: {
     palette: '命令面板',
     rail: '折叠/展开右栏',
@@ -539,6 +541,7 @@ export default {
     stageSkip: '跳过当前阶段',
     stageStamp: '阶段盖章',
     nodeRail: '聚焦节点轨',
+    dismissPending: '关闭待决弹窗',
   },
   errors: {
     actionFailed: '操作失败——{{detail}}',

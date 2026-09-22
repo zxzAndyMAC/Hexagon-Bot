@@ -14,6 +14,7 @@ export type ActionId =
   | 'stageSkip'
   | 'stageStamp'
   | 'nodeRail'
+  | 'dismissPending'
 
 const DEFAULTS: Record<ActionId, string> = {
   approve: 'mod+Enter',
@@ -30,6 +31,9 @@ const DEFAULTS: Record<ActionId, string> = {
   stageStamp: 'alt+mod+S',
   // ui-audit 票 12（P2-13）：节点轨键盘入口
   nodeRail: 'mod+J',
+  // hands-free 票 05：收起待决弹窗。不用裸 Escape——确认层和命令面板
+  // 已经占用它；mod+Escape 进键位表，关闭钮 tooltip 才能显示当前绑定。
+  dismissPending: 'mod+Escape',
 }
 
 // navigator.platform 已弃用（MDN，ui-audit 票 11）：优先 userAgentData；
@@ -52,6 +56,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'stageSkip', labelKey: 'keys.stageSkip' },
   { id: 'stageStamp', labelKey: 'keys.stageStamp' },
   { id: 'nodeRail', labelKey: 'keys.nodeRail' },
+  { id: 'dismissPending', labelKey: 'keys.dismissPending' },
 ]
 
 export function bindingFor(a: ActionId): string {
@@ -92,7 +97,7 @@ export function formatBinding(b: string): string {
   const mods = parts.slice(0, -1)
   const sym = (m: string) =>
     m === 'mod' ? (isMac ? '⌘' : 'Ctrl+') : m === 'shift' ? (isMac ? '⇧' : 'Shift+') : m === 'alt' ? (isMac ? '⌥' : 'Alt+') : m
-  const keySym = { Enter: isMac ? '↵' : 'Enter', Backspace: isMac ? '⌫' : 'Backspace', '\\': '\\' }[key] ?? key.toUpperCase()
+  const keySym = { Enter: isMac ? '↵' : 'Enter', Backspace: isMac ? '⌫' : 'Backspace', Escape: 'Esc', '\\': '\\' }[key] ?? key.toUpperCase()
   return mods.map(sym).join('') + keySym
 }
 

@@ -156,6 +156,9 @@ export default {
     deny: 'Negar',
     remember: 'Lembrar forma',
     pending: '{{count}} pendentes',
+    pendingDialog: 'Decisões pendentes',
+    pendingClose: 'Fechar',
+    pendingReopen: 'Reabrir pendentes · {{approve}} / {{reject}}',
     escalation: 'Escalado — o responsável decide',
     contextOverflow: 'Limite de contexto',
     contextHint: 'Agente pausado no teto de contexto. Aprovar para retomar (contexto reconstruído e podado).',
@@ -525,7 +528,6 @@ export default {
     done: 'OK', empty: 'Sem resultados', count: '{{n}} selecionados',
     title_skills: 'Selecionar habilidades', title_mcp: 'Selecionar serviços MCP',
   },
-  zone: { resizeHint: 'Arraste para redimensionar · até o topo para recolher' },
   keys: {
     palette: 'Paleta de comandos',
     rail: 'Alternar painel lateral',
@@ -539,6 +541,7 @@ export default {
     stageSkip: 'Pular etapa',
     stageStamp: 'Carimbar etapa',
     nodeRail: 'Focar o trilho de nós',
+    dismissPending: 'Fechar o diálogo de pendências',
   },
   errors: {
     actionFailed: 'A ação falhou — {{detail}}',

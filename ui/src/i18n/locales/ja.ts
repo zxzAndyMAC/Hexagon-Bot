@@ -156,6 +156,9 @@ export default {
     deny: '拒否',
     remember: '形を記憶',
     pending: '{{count}} 件待決',
+    pendingDialog: '未決',
+    pendingClose: '閉じる',
+    pendingReopen: '未決を開く · {{approve}} / {{reject}}',
     escalation: 'エスカレーション——オーナー裁定',
     contextOverflow: 'コンテキスト上限',
     contextHint: 'コンテキスト上限で一時停止。承認で再開（再構成+軽量裁剪）。',
@@ -525,7 +528,6 @@ export default {
     done: '完了', empty: '一致する項目がありません', count: '{{n}} 件選択中',
     title_skills: 'スキルを選択', title_mcp: 'MCP サービスを選択',
   },
-  zone: { resizeHint: 'ドラッグで高さ調整 · 上端までで折りたたみ' },
   keys: {
     palette: 'コマンドパレット',
     rail: 'サイドパネル切替',
@@ -539,6 +541,7 @@ export default {
     stageSkip: 'ステージをスキップ',
     stageStamp: 'ステージに捺印',
     nodeRail: 'ノードレールにフォーカス',
+    dismissPending: '未決ダイアログを閉じる',
   },
   errors: {
     actionFailed: '操作に失敗しました——{{detail}}',

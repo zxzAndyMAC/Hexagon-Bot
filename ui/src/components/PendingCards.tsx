@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
-import { api, errText, type PendingQuestion, type ProposalRow } from '../api'
+import { api, errText, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
 import { extractDiffBlock, parseUnifiedDiff, type DiffOp } from '../diff'
 import { DiffView } from './DiffView'
-import { bindingFor, formatBinding } from '../keymap'
+import { bindingFor, formatBinding, matches } from '../keymap'
 import { kindTitleKey, rejectReasonWithJudge, severityOf } from '../decisions'
 import { Icon, type IconName } from './Icon'
 
@@ -356,19 +356,12 @@ function StageArtifacts({ runId }: { runId: string }) {
 
 /** in_review 提案的负责人裁决面（ui-audit-2 票 08 / report B）：复审 agent
  *  从无工具可调 proposals::review——提案卡死 in_review 永不到盖章队列。
- *  这里把 in_review 提案列进待决区，owner 通过/打回（署名 owner）。 */
+ *  票 05 起跟待决卡进同一弹窗；行数据由 PendingDialog 拉进 store，
+ *  关掉弹窗也不丢（徽标张数含这些行）。 */
 function InReviewCards() {
   const { t } = useTranslation()
-  const { pending, pushToast } = useUiStore()
-  const [rows, setRows] = useState<ProposalRow[]>([])
+  const rows = useUiStore((s) => s.reviewRows)
   const [reasons, setReasons] = useState<Record<string, string>>({})
-
-  useEffect(() => {
-    api.proposals()
-      .then((all) => setRows(all.filter((r) => r.status === 'in_review')))
-      .catch((e) => pushToast(errText(e), 'err'))
-    // pending 变化 = 有裁决发生——顺带重拉提案表兜底一致
-  }, [pending, pushToast])
 
   return (
     <>
@@ -412,7 +405,7 @@ export function PendingCards() {
     if (!el) { setTopGone(false); return }
     const ob = new IntersectionObserver(
       ([e]) => setTopGone(!e.isIntersecting),
-      { root: el.closest('#pending-zone'), threshold: 0.4 },
+      { root: el.closest('#pending-dialog-body'), threshold: 0.4 },
     )
     ob.observe(el)
     return () => ob.disconnect()
@@ -439,5 +432,92 @@ export function PendingCards() {
       ))}
       <InReviewCards />
     </>
+  )
+}
+
+/** 必须人处理的卡的浮层（hands-free 票 05）。不占中栏高度。
+ *  关掉只收起：卡仍待决，顶栏徽标留着张数，点徽标再打开。
+ *  Esc 不收起——确认层和命令面板已经吃裸 Escape；关闭键进键位表
+ *  （默认 mod+Escape），按钮 tooltip 显示当前绑定（ADR 0051）。 */
+export function PendingDialog() {
+  const { t } = useTranslation()
+  const pending = useUiStore((s) => s.pending)
+  const reviewRows = useUiStore((s) => s.reviewRows)
+  const open = useUiStore((s) => s.pendingDialogOpen)
+  const close = useUiStore((s) => s.closePendingDialog)
+
+  useEffect(() => {
+    let cancel = false
+    api.proposals()
+      .then((all) => {
+        if (!cancel) useUiStore.getState().noteReviewRows(all.filter((r) => r.status === 'in_review'))
+      })
+      .catch((e) => {
+        if (cancel) return
+        useUiStore.getState().noteReviewRows([])
+        useUiStore.getState().pushToast(errText(e), 'err')
+      })
+    return () => { cancel = true }
+  }, [pending])
+
+  useEffect(() => {
+    useUiStore.getState().syncPendingDialog()
+  }, [pending, reviewRows])
+
+  useEffect(() => {
+    if (!open) return
+    const h = (e: KeyboardEvent) => {
+      if (!matches(e, bindingFor('dismissPending'))) return
+      const st = useUiStore.getState()
+      if (st.modalScope !== 'workbench' || st.confirmReq) return
+      e.preventDefault()
+      e.stopPropagation()
+      st.closePendingDialog()
+    }
+    window.addEventListener('keydown', h, true)
+    return () => window.removeEventListener('keydown', h, true)
+  }, [open])
+
+  if (!open || (pending.length === 0 && reviewRows.length === 0)) return null
+  const closeTip = `${t('cards.pendingClose')} ${formatBinding(bindingFor('dismissPending'))}`
+  return (
+    <div
+      role="presentation"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 65,
+        background: 'rgba(0,0,0,.45)', display: 'flex',
+        alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={close}
+    >
+      <div
+        className="panel panel-float"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('cards.pendingDialog')}
+        style={{
+          width: 'min(720px, 94vw)', maxHeight: 'min(80vh, 720px)',
+          display: 'flex', flexDirection: 'column', padding: '10px 0 12px',
+          boxShadow: '0 12px 40px rgba(0,0,0,.4)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 8px' }}>
+          <span style={{ fontWeight: 560, fontSize: 13 }}>{t('cards.pendingDialog')}</span>
+          <span style={{ flex: 1 }} />
+          <button
+            className="icon-btn"
+            title={closeTip}
+            aria-label={t('cards.pendingClose')}
+            onClick={close}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+        <div id="pending-dialog-body" style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+          <PendingCards />
+        </div>
+      </div>
+    </div>
   )
 }

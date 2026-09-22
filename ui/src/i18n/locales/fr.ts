@@ -156,6 +156,9 @@ export default {
     deny: 'Refuser',
     remember: 'Mémoriser la forme',
     pending: '{{count}} en attente',
+    pendingDialog: 'Décisions en attente',
+    pendingClose: 'Fermer',
+    pendingReopen: 'Rouvrir les décisions · {{approve}} / {{reject}}',
     escalation: 'Escaladé — le responsable décide',
     contextOverflow: 'Limite de contexte',
     contextHint: 'Agent en pause au plafond de contexte. Approuver pour reprendre (contexte reconstruit et élagué).',
@@ -525,7 +528,6 @@ export default {
     done: 'OK', empty: 'Aucun résultat', count: '{{n}} sélectionné(s)',
     title_skills: 'Choisir des compétences', title_mcp: 'Choisir des services MCP',
   },
-  zone: { resizeHint: 'Glisser pour redimensionner · tout en haut pour replier' },
   keys: {
     palette: 'Palette de commandes',
     rail: 'Basculer le panneau latéral',
@@ -539,6 +541,7 @@ export default {
     stageSkip: 'Sauter l’étape',
     stageStamp: 'Tamponner l’étape',
     nodeRail: 'Focaliser le rail de nœuds',
+    dismissPending: 'Fermer le dialogue des décisions',
   },
   errors: {
     actionFailed: 'L’action a échoué — {{detail}}',

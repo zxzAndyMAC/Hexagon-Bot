@@ -65,7 +65,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         run: async () => {
           if (!pending.some((x) => x.kind === 'publish')) await api.requestPublish('origin')
           await invalidate()
-          document.getElementById('pending-zone')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          // 票 05：待决区已撤，发布卡在弹窗里。invalidate 后的新 id 也会再弹；
+          // 这里显式打开，覆盖「负责人刚收起过同一张卡」的情况。
+          useUiStore.getState().openPendingDialog()
         },
       },
       // 导航

@@ -17,7 +17,7 @@ interface Recent {
 
 export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void; onProjectClosed: () => void }) {
   const { t } = useTranslation()
-  const { projectName, packName, mode, autonomy, usageTotal, usageSeries7d, team, pending, refresh, setRailOpen, setSideTab, railOpen, away, markAway, markBack } = useUiStore()
+  const { projectName, packName, mode, autonomy, usageTotal, usageSeries7d, team, pending, reviewRows, refresh, setRailOpen, setSideTab, railOpen, away, markAway, markBack, openPendingDialog } = useUiStore()
   const [menuOpen, setMenuOpen] = useState(false)
   // 票 17（方向卡 2）：用量 chip 悬停 300ms 出 sparkline 浮层——
   // 数据全部走 store 缓存（usageSeries7d/usageTotal），零新增 IPC。
@@ -45,16 +45,6 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
     window.addEventListener('mousedown', h)
     return () => window.removeEventListener('mousedown', h)
   }, [menuOpen])
-
-  const locatePending = () => {
-    // workbench-polish 04：区被拖收吸顶时先展开再定位——徽标是收起后的唯一回显入口
-    const st = useUiStore.getState()
-    if (st.pendingCollapsed) st.setPendingCollapsed(false)
-    const zone = document.getElementById('pending-zone')
-    zone?.scrollTo({ top: 0, behavior: 'smooth' })
-    zone?.classList.add('flash-zone')
-    setTimeout(() => zone?.classList.remove('flash-zone'), 1400)
-  }
 
   const switchTo = async (dir: string) => {
     setMenuOpen(false)
@@ -186,14 +176,18 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
         )}
       </div>
       <div data-tauri-drag-region style={{ flex: 1, alignSelf: 'stretch' }} />
-      {pending.length > 0 && (
+      {(pending.length + reviewRows.length) > 0 && (
         <button
           className="chip chip-btn amber"
+          data-pending-count={pending.length + reviewRows.length}
           style={{ border: '1px solid var(--accent-border)', animation: 'pulse-amber 1.6s infinite' }}
-          onClick={locatePending}
-          title={`${formatBinding(bindingFor('approve'))} / ${formatBinding(bindingFor('reject'))}`}
+          onClick={openPendingDialog}
+          title={t('cards.pendingReopen', {
+            approve: formatBinding(bindingFor('approve')),
+            reject: formatBinding(bindingFor('reject')),
+          })}
         >
-          <Icon name="warn" size={11} /> {t('cards.pending', { count: pending.length })}
+          <Icon name="warn" size={11} /> {t('cards.pending', { count: pending.length + reviewRows.length })}
         </button>
       )}
       <button
