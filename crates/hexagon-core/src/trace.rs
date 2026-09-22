@@ -151,6 +151,8 @@ pub struct MessageRow {
     /// 票 03：图片附件引用（无附件为 []）。
     pub attachments: Vec<AttachRef>,
     pub created_at: String,
+    /// 模型给出的推理文本（hands-free 票 06）。空串 = 没给，时间线不渲染思考行。
+    pub thinking: String,
 }
 
 /// composer 解析出的结构化 token：@点名 / #路径指针。
@@ -300,16 +302,43 @@ impl Db {
         agent_id: Option<&str>,
         stage_run_id: Option<&str>,
     ) -> Result<i64, TraceError> {
+        self.append_message_with(
+            project_id,
+            author,
+            body,
+            tokens,
+            attachments,
+            agent_id,
+            stage_run_id,
+            None,
+        )
+    }
+
+    /// 带思考的消息（hands-free 票 06）。`thinking` 空或 None = 不落推理文本。
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_message_with(
+        &self,
+        project_id: &str,
+        author: &str,
+        body: &str,
+        tokens: &[MessageToken],
+        attachments: &[AttachRef],
+        agent_id: Option<&str>,
+        stage_run_id: Option<&str>,
+        thinking: Option<&str>,
+    ) -> Result<i64, TraceError> {
+        let thinking = thinking.filter(|t| !t.is_empty());
         let tx = self.conn().unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO messages (project_id, author, body, tokens, attachments)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO messages (project_id, author, body, tokens, attachments, thinking)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 project_id,
                 author,
                 body,
                 serde_json::to_string(&tokens)?,
                 serde_json::to_string(&attachments)?,
+                thinking,
             ],
         )?;
         let msg_id = tx.last_insert_rowid();
@@ -380,7 +409,7 @@ impl Db {
         });
         let sql = format!(
             "SELECT e.id, e.project_id, e.stage_run_id, e.agent_id, e.kind, e.payload, e.created_at,
-                    m.id, m.author, m.body, m.tokens, m.created_at, m.attachments
+                    m.id, m.author, m.body, m.tokens, m.created_at, m.attachments, m.thinking
              FROM events e
              LEFT JOIN messages m
                ON m.id = json_extract(e.payload, '$.message_id')
@@ -411,12 +440,27 @@ impl Db {
                 msg_tokens,
                 r.get::<_, Option<String>>(11)?,
                 r.get::<_, Option<String>>(12)?,
+                r.get::<_, Option<String>>(13)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, pid, srid, aid, kind, payload, at, mid, author, body, tokens, mat, matt) =
-                row?;
+            let (
+                id,
+                pid,
+                srid,
+                aid,
+                kind,
+                payload,
+                at,
+                mid,
+                author,
+                body,
+                tokens,
+                mat,
+                matt,
+                thinking,
+            ) = row?;
             out.push(TimelineItem {
                 event: Event {
                     id,
@@ -435,6 +479,7 @@ impl Db {
                         tokens: serde_json::from_str(&tokens.unwrap_or_else(|| "[]".into()))?,
                         attachments: serde_json::from_str(&matt.unwrap_or_else(|| "[]".into()))?,
                         created_at: mat.unwrap_or_default(),
+                        thinking: thinking.unwrap_or_default(),
                     }),
                     _ => None,
                 },
@@ -483,7 +528,7 @@ impl Db {
         });
         let sql = format!(
             "SELECT e.id, e.stage_run_id, e.agent_id, e.kind, e.payload, e.created_at,
-                    m.id, m.author, m.body, m.tokens, m.attachments
+                    m.id, m.author, m.body, m.tokens, m.attachments, m.thinking
              FROM events e
              LEFT JOIN messages m
                ON m.id = json_extract(e.payload, '$.message_id')
@@ -517,6 +562,7 @@ impl Db {
                             "attachments": serde_json::from_str::<Value>(
                                 &r.get::<_, Option<String>>(10)?.unwrap_or_else(|| "[]".into())
                             ).unwrap_or(Value::Null),
+                            "thinking": r.get::<_, Option<String>>(11)?,
                         }),
                         _ => Value::Null,
                     },

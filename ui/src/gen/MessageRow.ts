@@ -6,4 +6,8 @@ export type MessageRow = { id: number, author: string, body: string, tokens: Arr
 /**
  * 票 03：图片附件引用（无附件为 []）。
  */
-attachments: Array<AttachRef>, created_at: string, };
+attachments: Array<AttachRef>, created_at: string, 
+/**
+ * 模型给出的推理文本（hands-free 票 06）。空串 = 没给，时间线不渲染思考行。
+ */
+thinking: string, };

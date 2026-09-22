@@ -98,6 +98,8 @@ pub(super) fn estimate_tokens(messages: &[Message]) -> usize {
         .flat_map(|m| m.content.iter())
         .map(|b| match b {
             ContentBlock::Text { text } => text.len(),
+            // 票 06：思考若还在出站副本里也要计入，漏算会绕过撞限。
+            ContentBlock::Thinking { text } => text.len(),
             ContentBlock::ToolUse { input, .. } => input.to_string().len(),
             // 票 02：tool_result 内嵌图也要计入——漏算的话 5MB base64
             // 绕过撞限检测直接撑爆请求体。
@@ -312,6 +314,12 @@ fn write_transcript(ctx: &ToolContext, removed: &[Message]) -> Option<String> {
         for b in &m.content {
             match b {
                 ContentBlock::Text { text } => {
+                    s.push_str(text);
+                    s.push('\n');
+                }
+                ContentBlock::Thinking { text } => {
+                    // 票 06：推理原文逐字留档，标签只标明它不是可见回复。
+                    s.push_str("[thinking]\n");
                     s.push_str(text);
                     s.push('\n');
                 }

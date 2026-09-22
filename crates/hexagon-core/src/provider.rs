@@ -64,6 +64,13 @@ pub enum ContentBlock {
         /// 供应商原始块 JSON（含 type 字段）。
         raw: Value,
     },
+    /// 模型给出的推理文本（hands-free 票 06）。只进时间线，不回灌下一轮请求。
+    /// 否决：拼进 Text（推理会变成可见回复，也变成已承诺的计划）；
+    /// 否决：原样回传 thinking 块（Anthropic 要 signature，我们没有，
+    /// 回传会被拒，或把推理当成下一步）。没收到明文就不构造这一块。
+    Thinking {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,12 +114,15 @@ pub struct ChatResponse {
     pub usage: Usage,
 }
 
-/// 流式增量（turn-streaming 票 01）：先只有文本——tool_use 增量不进
+/// 流式增量（turn-streaming 票 01）：文本 + 思考。tool_use 增量不进
 /// delta 通道，由最终 ChatResponse 统一承载（拼装正确性归折叠器，
 /// UI 不该面对 partial tool_call）。
+/// Thinking 只在供应商明文推理增量上发——没有就不发，不编造。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamDelta {
     Text(String),
+    /// hands-free 票 06：模型给出的推理增量。
+    Thinking(String),
 }
 
 /// sink 返回 false = 叫停（票 04 的唯一反压通道：流循环阻塞在读上，
@@ -156,48 +166,54 @@ pub trait ModelProvider: Send + Sync {
         sink: &mut StreamSink<'_>,
     ) -> Result<ChatResponse, ProviderError> {
         let resp = self.complete(req)?;
-        if !emit_text_deltas(
-            resp.content.iter().filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            }),
-            usize::MAX,
-            sink,
-        ) {
+        if !emit_content_deltas(&resp.content, usize::MAX, sink) {
             return Err(ProviderError::Interrupted);
         }
         Ok(resp)
     }
 }
 
-/// 按字符数把文本切成 ≤n 字符的 delta 发给 sink（n=usize::MAX 整段一次发）。
-/// 按 char 不按 byte——中文一字符一 delta 的切法对测试断言不直观。
-/// 返回 false = sink 叫停（上游据此返回 Interrupted 而不是吞掉当成功）。
-fn emit_text_deltas<'a>(
-    texts: impl Iterator<Item = &'a str>,
-    n: usize,
-    sink: &mut StreamSink<'_>,
-) -> bool {
-    for text in texts {
-        if text.is_empty() {
-            continue;
-        }
-        if n == usize::MAX {
-            if !sink(&StreamDelta::Text(text.to_string())) {
-                return false;
-            }
-            continue;
-        }
-        let mut buf = String::new();
-        for (i, ch) in text.chars().enumerate() {
-            buf.push(ch);
-            if (i + 1) % n == 0 && !sink(&StreamDelta::Text(std::mem::take(&mut buf))) {
-                return false;
-            }
-        }
-        if !buf.is_empty() && !sink(&StreamDelta::Text(buf)) {
+/// 按内容块顺序把可见文本和思考切成 ≤n 字符的 delta（n=usize::MAX 整段一次发）。
+/// 按 char 不按 byte。思考块单独走 Thinking，不并进 Text。
+/// 返回 false = sink 叫停。
+fn emit_content_deltas(blocks: &[ContentBlock], n: usize, sink: &mut StreamSink<'_>) -> bool {
+    for b in blocks {
+        let (text, thinking) = match b {
+            ContentBlock::Text { text } => (text.as_str(), false),
+            ContentBlock::Thinking { text } => (text.as_str(), true),
+            _ => continue,
+        };
+        if !emit_chunks(text, thinking, n, sink) {
             return false;
         }
+    }
+    true
+}
+
+fn emit_chunks(text: &str, thinking: bool, n: usize, sink: &mut StreamSink<'_>) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    let emit = |chunk: String, sink: &mut StreamSink<'_>| -> bool {
+        let d = if thinking {
+            StreamDelta::Thinking(chunk)
+        } else {
+            StreamDelta::Text(chunk)
+        };
+        sink(&d)
+    };
+    if n == usize::MAX {
+        return emit(text.to_string(), sink);
+    }
+    let mut buf = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        buf.push(ch);
+        if (i + 1) % n == 0 && !emit(std::mem::take(&mut buf), sink) {
+            return false;
+        }
+    }
+    if !buf.is_empty() && !emit(buf, sink) {
+        return false;
     }
     true
 }
@@ -335,14 +351,7 @@ impl ModelProvider for ScriptedProvider {
         } else {
             self.chunk_chars
         };
-        if !emit_text_deltas(
-            resp.content.iter().filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            }),
-            n,
-            sink,
-        ) {
+        if !emit_content_deltas(&resp.content, n, sink) {
             return Err(ProviderError::Interrupted);
         }
         Ok(resp)
@@ -392,6 +401,8 @@ pub mod openai_shape {
                             "role": "tool", "tool_call_id": tool_use_id, "content": content
                         }));
                     }
+                    // hands-free 票 06：思考不进出站请求（见 ContentBlock::Thinking）。
+                    ContentBlock::Thinking { .. } => {}
                     // 票 04：OpenAI 形状无 server tool 概念——折成文本占位
                     // 保史（跨供应商回放时语义不断片，而非整块蒸发）。
                     ContentBlock::Opaque { raw } => {
@@ -448,6 +459,16 @@ pub mod openai_shape {
         let choice = v["choices"][0].clone();
         let msg = &choice["message"];
         let mut content = Vec::new();
+        // 明文推理才收：reasoning 若是对象（结构化摘要）不当成思考文本。
+        if let Some(t) = msg["reasoning_content"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .or_else(|| msg["reasoning"].as_str().filter(|s| !s.is_empty()))
+        {
+            content.push(ContentBlock::Thinking {
+                text: t.to_string(),
+            });
+        }
         if let Some(text) = msg["content"].as_str() {
             content.push(ContentBlock::Text {
                 text: text.to_string(),
@@ -490,6 +511,8 @@ pub mod openai_shape {
     #[derive(Default)]
     pub struct SseFold {
         text: String,
+        /// 明文推理（reasoning_content / reasoning 字符串）。对象形态不收。
+        thinking: String,
         /// index → (id, name, arguments 片段缓冲)。BTreeMap 保 index 序。
         tools: std::collections::BTreeMap<usize, (String, String, String)>,
         finish: Option<String>,
@@ -515,6 +538,16 @@ pub mod openai_shape {
             }
             for ch in v["choices"].as_array().into_iter().flatten() {
                 let d = &ch["delta"];
+                if let Some(t) = d["reasoning_content"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| d["reasoning"].as_str().filter(|s| !s.is_empty()))
+                {
+                    self.thinking.push_str(t);
+                    if !sink(&StreamDelta::Thinking(t.to_string())) {
+                        return Err(ProviderError::Interrupted);
+                    }
+                }
                 if let Some(t) = d["content"].as_str() {
                     if !t.is_empty() {
                         self.text.push_str(t);
@@ -549,6 +582,11 @@ pub mod openai_shape {
         /// 问题 → Transport（不是丢一半静默收场）。
         pub fn finish(self) -> Result<ChatResponse, ProviderError> {
             let mut content = Vec::new();
+            if !self.thinking.is_empty() {
+                content.push(ContentBlock::Thinking {
+                    text: self.thinking,
+                });
+            }
             if !self.text.is_empty() {
                 content.push(ContentBlock::Text { text: self.text });
             }
@@ -588,17 +626,17 @@ pub mod anthropic_shape {
             let blocks: Vec<Value> = m
                 .content
                 .iter()
-                .map(|b| match b {
+                .filter_map(|b| match b {
                     ContentBlock::Text { text } => {
-                        serde_json::json!({"type":"text","text":text})
+                        Some(serde_json::json!({"type":"text","text":text}))
                     }
-                    ContentBlock::Image { media_type, data } => serde_json::json!({
+                    ContentBlock::Image { media_type, data } => Some(serde_json::json!({
                         "type":"image",
                         "source":{"type":"base64","media_type":media_type,"data":data}
-                    }),
-                    ContentBlock::ToolUse { id, name, input } => {
-                        serde_json::json!({"type":"tool_use","id":id,"name":name,"input":input})
-                    }
+                    })),
+                    ContentBlock::ToolUse { id, name, input } => Some(
+                        serde_json::json!({"type":"tool_use","id":id,"name":name,"input":input}),
+                    ),
                     ContentBlock::ToolResult {
                         tool_use_id,
                         content,
@@ -615,15 +653,17 @@ pub mod anthropic_shape {
                                 "source":{"type":"base64","media_type":im.media_type,"data":im.data}
                             }));
                         }
-                        serde_json::json!({
+                        Some(serde_json::json!({
                             "type":"tool_result","tool_use_id":tool_use_id,
                             "content":parts,
                             "is_error":is_error,
-                        })
+                        }))
                     }
                     // 票 04：server 工具块原样回显——Anthropic 要求它们
                     // 以原块类型留在历史里，否则下一轮 400。
-                    ContentBlock::Opaque { raw } => raw.clone(),
+                    ContentBlock::Opaque { raw } => Some(raw.clone()),
+                    // hands-free 票 06：思考不回灌（无 signature，见 ContentBlock::Thinking）。
+                    ContentBlock::Thinking { .. } => None,
                 })
                 .collect();
             match m.role {
@@ -673,6 +713,14 @@ pub mod anthropic_shape {
                     Some("text") => content.push(ContentBlock::Text {
                         text: b["text"].as_str().unwrap_or_default().to_string(),
                     }),
+                    // 明文 thinking 才收。redacted_thinking 是密文，不解码、不编一段可见推理。
+                    Some("thinking") => {
+                        if let Some(t) = b["thinking"].as_str().filter(|s| !s.is_empty()) {
+                            content.push(ContentBlock::Thinking {
+                                text: t.to_string(),
+                            });
+                        }
+                    }
                     Some("tool_use") => content.push(ContentBlock::ToolUse {
                         id: b["id"].as_str().unwrap_or_default().to_string(),
                         name: b["name"].as_str().unwrap_or_default().to_string(),
@@ -707,6 +755,7 @@ pub mod anthropic_shape {
     /// partial_json 片段持续拼接，stop 时才解析成 Value。
     enum ABlock {
         Text(String),
+        Thinking(String),
         ToolUse {
             id: String,
             name: String,
@@ -758,6 +807,14 @@ pub mod anthropic_shape {
                 "content_block_start" => {
                     let b = &v["content_block"];
                     self.blocks.push(match b["type"].as_str() {
+                        Some("thinking") => {
+                            let initial = b["thinking"].as_str().unwrap_or("").to_string();
+                            if !initial.is_empty() && !sink(&StreamDelta::Thinking(initial.clone()))
+                            {
+                                return Err(ProviderError::Interrupted);
+                            }
+                            ABlock::Thinking(initial)
+                        }
                         Some("tool_use") => ABlock::ToolUse {
                             id: b["id"].as_str().unwrap_or_default().into(),
                             name: b["name"].as_str().unwrap_or_default().into(),
@@ -782,6 +839,17 @@ pub mod anthropic_shape {
                                 if !s.is_empty() {
                                     t.push_str(s);
                                     if !sink(&StreamDelta::Text(s.to_string())) {
+                                        return Err(ProviderError::Interrupted);
+                                    }
+                                }
+                            }
+                        }
+                        // signature_delta 不是推理正文，落到下面的 _ 跳过。
+                        (Some(ABlock::Thinking(t)), Some("thinking_delta")) => {
+                            if let Some(s) = d["thinking"].as_str() {
+                                if !s.is_empty() {
+                                    t.push_str(s);
+                                    if !sink(&StreamDelta::Thinking(s.to_string())) {
                                         return Err(ProviderError::Interrupted);
                                     }
                                 }
@@ -825,6 +893,9 @@ pub mod anthropic_shape {
                 match b {
                     ABlock::Text(t) if !t.is_empty() => {
                         content.push(ContentBlock::Text { text: t })
+                    }
+                    ABlock::Thinking(t) if !t.is_empty() => {
+                        content.push(ContentBlock::Thinking { text: t })
                     }
                     ABlock::ToolUse { id, name, args } => {
                         let input: Value =
@@ -937,14 +1008,7 @@ fn emit_fallback(
     resp: ChatResponse,
     sink: &mut StreamSink<'_>,
 ) -> Result<ChatResponse, ProviderError> {
-    if !emit_text_deltas(
-        resp.content.iter().filter_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        }),
-        usize::MAX,
-        sink,
-    ) {
+    if !emit_content_deltas(&resp.content, usize::MAX, sink) {
         return Err(ProviderError::Interrupted);
     }
     Ok(resp)
@@ -1136,7 +1200,9 @@ mod tests {
         let mut deltas: Vec<String> = Vec::new();
         let resp = p
             .stream(&empty_req(), &mut |d| {
-                let StreamDelta::Text(t) = d;
+                let StreamDelta::Text(t) = d else {
+                    panic!("unexpected thinking delta");
+                };
                 deltas.push(t.clone());
                 true
             })
@@ -1155,7 +1221,9 @@ mod tests {
         let mut got = String::new();
         p.stream(&empty_req(), &mut |d| {
             count += 1;
-            let StreamDelta::Text(t) = d;
+            let StreamDelta::Text(t) = d else {
+                panic!("unexpected thinking delta");
+            };
             got.push_str(t);
             true
         })
@@ -1314,7 +1382,9 @@ mod tests {
         while let Some((_, data)) = blocks.next_block().unwrap() {
             if fold
                 .data(&data, &mut |d| {
-                    let StreamDelta::Text(t) = d;
+                    let StreamDelta::Text(t) = d else {
+                        panic!("unexpected thinking delta");
+                    };
                     got.push(t.clone());
                     true
                 })
@@ -1359,7 +1429,9 @@ mod tests {
         while let Some((ev, data)) = blocks.next_block().unwrap() {
             if fold
                 .event(&ev, &data, &mut |d| {
-                    let StreamDelta::Text(t) = d;
+                    let StreamDelta::Text(t) = d else {
+                        panic!("unexpected thinking delta");
+                    };
                     got.push(t.clone());
                     true
                 })
@@ -1382,6 +1454,85 @@ mod tests {
             }
             other => panic!("expected tool_use, got {other:?}"),
         }
+    }
+
+    /// hands-free 票 06：OpenAI 明文 reasoning_content 进思考增量；
+    /// reasoning 为对象时不编一段文本。
+    #[test]
+    fn openai_sse_folds_reasoning_text_only() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先想\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":{\"summary\":\"不要收\"}}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"再答\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut fold = openai_shape::SseFold::default();
+        let mut thinking = Vec::new();
+        let mut text = Vec::new();
+        let mut blocks = SseBlocks::new(std::io::BufReader::new(sse.as_bytes()));
+        while let Some((_, data)) = blocks.next_block().unwrap() {
+            if fold
+                .data(&data, &mut |d| {
+                    match d {
+                        StreamDelta::Thinking(t) => thinking.push(t.clone()),
+                        StreamDelta::Text(t) => text.push(t.clone()),
+                    }
+                    true
+                })
+                .unwrap()
+            {
+                break;
+            }
+        }
+        assert_eq!(thinking, vec!["先想"]);
+        assert_eq!(text, vec!["再答"]);
+        let resp = fold.finish().unwrap();
+        assert!(matches!(&resp.content[0], ContentBlock::Thinking { text } if text == "先想"));
+        assert!(matches!(&resp.content[1], ContentBlock::Text { text } if text == "再答"));
+    }
+
+    /// hands-free 票 06：Anthropic thinking_delta 进思考；redacted_thinking 无明文，不编造。
+    #[test]
+    fn anthropic_sse_folds_thinking_ignores_redacted() {
+        let sse = concat!(
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"因为\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"cipher\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"text_delta\",\"text\":\"答\"}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let mut fold = anthropic_shape::SseFold::default();
+        let mut thinking = Vec::new();
+        let mut text = Vec::new();
+        let mut blocks = SseBlocks::new(std::io::BufReader::new(sse.as_bytes()));
+        while let Some((ev, data)) = blocks.next_block().unwrap() {
+            if fold
+                .event(&ev, &data, &mut |d| {
+                    match d {
+                        StreamDelta::Thinking(t) => thinking.push(t.clone()),
+                        StreamDelta::Text(t) => text.push(t.clone()),
+                    }
+                    true
+                })
+                .unwrap()
+            {
+                break;
+            }
+        }
+        assert_eq!(thinking, vec!["因为"]);
+        assert_eq!(text, vec!["答"]);
+        let resp = fold.finish().unwrap();
+        assert_eq!(resp.content.len(), 2, "密文思考不得变成一块可见推理");
+        assert!(matches!(&resp.content[0], ContentBlock::Thinking { text } if text == "因为"));
+        assert!(matches!(&resp.content[1], ContentBlock::Text { text } if text == "答"));
+        let dumped = format!("{resp:?}");
+        assert!(!dumped.contains("cipher"));
     }
 
     /// 畸形行/注释/心跳跳过不崩；sink 叫停 → Interrupted。
@@ -1468,7 +1619,9 @@ mod tests {
         let mut got: Vec<String> = Vec::new();
         let resp = p
             .stream(&empty_req(), &mut |d| {
-                let StreamDelta::Text(t) = d;
+                let StreamDelta::Text(t) = d else {
+                    panic!("unexpected thinking delta");
+                };
                 got.push(t.clone());
                 true
             })
@@ -1572,7 +1725,9 @@ mod tests {
         let mut got: Vec<String> = Vec::new();
         let resp = p
             .stream(&empty_req(), &mut |d| {
-                let StreamDelta::Text(t) = d;
+                let StreamDelta::Text(t) = d else {
+                    panic!("unexpected thinking delta");
+                };
                 got.push(t.clone());
                 true
             })

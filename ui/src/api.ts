@@ -371,7 +371,7 @@ const mkMsg = (
   author: string, body: string, hhmm: string,
 ): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id, stage_run_id, payload: {}, created_at: `${T0}${hhmm}:00Z` },
-  message: { id, author, body, tokens: [], attachments: [], created_at: `${T0}${hhmm}:00Z` },
+  message: { id, author, body, tokens: [], attachments: [], created_at: `${T0}${hhmm}:00Z`, thinking: '' },
 })
 
 const ART_CONTENT: Record<string, Record<number, string>> = {

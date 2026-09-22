@@ -77,6 +77,123 @@ fn streaming_turn_emits_ordered_deltas_then_done() {
     assert_eq!(msgs, 1);
 }
 
+/// hands-free 票 06：思考增量跟可见回复分列到达，落成一条消息而不是一批。
+/// 没给思考则 thinking 为空。思考不回灌下一轮请求。
+#[test]
+fn thinking_streams_then_stays_on_one_message() {
+    let (db, reg, ctx, _dir) = setup();
+    let provider = ScriptedProvider::chunked(
+        vec![ChatResponse {
+            content: vec![
+                ContentBlock::Thinking {
+                    text: "先核对路径".into(),
+                },
+                ContentBlock::Text {
+                    text: "可以写".into(),
+                },
+            ],
+            stop: StopReason::EndTurn,
+            usage: Default::default(),
+        }],
+        2,
+    );
+    let mut got: Vec<TurnDelta> = Vec::new();
+    run_turn_streaming(
+        &db,
+        &provider,
+        &reg,
+        &ctx,
+        vec![],
+        "写",
+        &[],
+        false,
+        Some(&mut |d| got.push(d.clone())),
+    )
+    .unwrap();
+    let thinking: String = got
+        .iter()
+        .filter(|d| !d.done && !d.reset)
+        .map(|d| d.thinking.as_str())
+        .collect();
+    let text: String = got
+        .iter()
+        .filter(|d| !d.done && !d.reset)
+        .map(|d| d.text.as_str())
+        .collect();
+    assert_eq!(thinking, "先核对路径");
+    assert_eq!(text, "可以写");
+    // 思考帧不把推理写进 text，正文帧也不带思考。
+    assert!(got
+        .iter()
+        .all(|d| d.text.is_empty() || d.thinking.is_empty()));
+    let items = db
+        .timeline("p1", None, 50, Some(&[EventKind::AgentMessage]))
+        .unwrap();
+    assert_eq!(items.len(), 1, "增量不得落成多条消息");
+    let msg = items[0].message.as_ref().unwrap();
+    assert_eq!(msg.body, "可以写");
+    assert_eq!(msg.thinking, "先核对路径");
+}
+
+#[test]
+fn no_thinking_payload_leaves_message_thinking_empty() {
+    let (db, reg, ctx, _dir) = setup();
+    let provider = ScriptedProvider::new(vec![text_response("只有正文")]);
+    let mut got: Vec<TurnDelta> = Vec::new();
+    run_turn_streaming(
+        &db,
+        &provider,
+        &reg,
+        &ctx,
+        vec![],
+        "写",
+        &[],
+        false,
+        Some(&mut |d| got.push(d.clone())),
+    )
+    .unwrap();
+    assert!(got.iter().all(|d| d.thinking.is_empty()));
+    let items = db
+        .timeline("p1", None, 50, Some(&[EventKind::AgentMessage]))
+        .unwrap();
+    assert_eq!(items[0].message.as_ref().unwrap().thinking, "");
+    assert_eq!(items[0].message.as_ref().unwrap().body, "只有正文");
+}
+
+/// 工具轮上的思考留到最终回复，且下一轮请求里看不到这段推理。
+#[test]
+fn thinking_is_not_echoed_into_the_next_request() {
+    let (db, reg, ctx, _dir) = setup();
+    let provider = ScriptedProvider::new(vec![
+        ChatResponse {
+            content: vec![
+                ContentBlock::Thinking {
+                    text: "先看文件".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "no_such_tool".into(),
+                    input: json!({}),
+                },
+            ],
+            stop: StopReason::ToolUse,
+            usage: Default::default(),
+        },
+        text_response("读完了"),
+    ]);
+    run_turn(&db, &provider, &reg, &ctx, vec![], "写").unwrap();
+    let calls = provider.recorded();
+    assert!(calls.len() >= 2);
+    let echoed = serde_json::to_string(&calls[1].messages).unwrap();
+    assert!(!echoed.contains("先看文件"), "思考不得回灌下一轮: {echoed}");
+    let items = db
+        .timeline("p1", None, 50, Some(&[EventKind::AgentMessage]))
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].message.as_ref().unwrap().body, "读完了");
+    assert_eq!(items[0].message.as_ref().unwrap().thinking, "先看文件");
+}
+
 /// 发完半截文本撞上瞬时错 → 重试前补 reset，重试流从头重起。
 #[test]
 fn stream_retry_resets_partial_deltas() {

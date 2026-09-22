@@ -48,11 +48,12 @@ const d = (over: Partial<TurnDelta>): TurnDelta => ({
   reset: false,
   done: false,
   text: '',
+  thinking: '',
   ...over,
 })
 
 describe('applyDelta（turn-streaming 票 03）', () => {
-  beforeEach(() => useUiStore.setState({ streams: {} }))
+  beforeEach(() => useUiStore.setState({ streams: {}, thinkings: {}, streamDone: {} }))
 
   it('文本增量按序累积', () => {
     const s = useUiStore.getState()
@@ -76,6 +77,29 @@ describe('applyDelta（turn-streaming 票 03）', () => {
     expect(useUiStore.getState().streams.a1[0]).toBe('完整')
   })
 
+  it('思考增量与正文分列累积；空思考不造缓冲（hands-free 票 06）', () => {
+    const s = useUiStore.getState()
+    s.applyDelta(d({ thinking: '先想' }))
+    s.applyDelta(d({ thinking: '清楚' }))
+    s.applyDelta(d({ text: '再答' }))
+    const st = useUiStore.getState()
+    expect(st.thinkings.a1[0]).toBe('先想清楚')
+    expect(st.streams.a1[0]).toBe('再答')
+  })
+
+  it('没有思考文本时不留下思考缓冲', () => {
+    useUiStore.getState().applyDelta(d({ text: '只有正文' }))
+    expect(useUiStore.getState().thinkings.a1).toBeUndefined()
+  })
+
+  it('reset 同时清掉本 call 的思考', () => {
+    const s = useUiStore.getState()
+    s.applyDelta(d({ thinking: '半截推理', text: '半截' }))
+    s.applyDelta(d({ reset: true }))
+    expect(useUiStore.getState().streams.a1[0]).toBe('')
+    expect(useUiStore.getState().thinkings.a1[0]).toBe('')
+  })
+
   it('done 不清缓冲——标记完结等持久化交接（票 08）', () => {
     const s = useUiStore.getState()
     s.applyDelta(d({ text: 'x' }))
@@ -91,20 +115,20 @@ describe('applyDelta（turn-streaming 票 03）', () => {
 
 describe('流式交接（ui-audit 票 08 / P1-7）', () => {
   beforeEach(() =>
-    useUiStore.setState({ streams: {}, streamDone: {}, timeline: [], stages: [], pending: [], toasts: [] }),
+    useUiStore.setState({ streams: {}, thinkings: {}, streamDone: {}, timeline: [], stages: [], pending: [], toasts: [] }),
   )
   afterEach(() => vi.restoreAllMocks())
 
   const agentMsg = (id: number, author: string): TimelineItem => ({
     event: { id, project_id: 'p1', kind: 'agent_message', agent_id: author, stage_run_id: null, payload: {}, created_at: '' },
-    message: { id, author, body: 'done text', tokens: [], attachments: [], created_at: '' },
+    message: { id, author, body: 'done text', tokens: [], attachments: [], created_at: '', thinking: '留下的推理' },
   })
 
   it('持久消息到达后对应 stream 清除，其余保留', async () => {
     const s = useUiStore.getState()
-    s.applyDelta(d({ agent_id: 'a1', text: 'hello' }))
+    s.applyDelta(d({ agent_id: 'a1', text: 'hello', thinking: '因为' }))
     s.applyDelta(d({ agent_id: 'a1', done: true }))
-    s.applyDelta(d({ agent_id: 'a2', text: 'wip' }))
+    s.applyDelta(d({ agent_id: 'a2', text: 'wip', thinking: '还在想' }))
     s.applyDelta(d({ agent_id: 'a2', done: true }))
 
     const lastId = useUiStore.getState().timeline.at(-1)?.event.id ?? 0
@@ -112,8 +136,10 @@ describe('流式交接（ui-audit 票 08 / P1-7）', () => {
     await useUiStore.getState().refreshFast()
     const st = useUiStore.getState()
     expect(st.streams.a1).toBeUndefined()   // 持久化确认 → 交接
+    expect(st.thinkings.a1).toBeUndefined()
     expect(st.streamDone.a1).toBeUndefined()
     expect(st.streams.a2[0]).toBe('wip')    // 别的 agent 不受影响
+    expect(st.thinkings.a2[0]).toBe('还在想')
   })
 
   it('同 agent 旧水位之前的消息不触发交接', async () => {

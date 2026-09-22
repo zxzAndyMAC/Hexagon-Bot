@@ -139,6 +139,8 @@ interface UiState {
   /// 流式增量缓冲（票 03）：agent → 调用序号 → 累计文本。
   /// 瞬时态——不落盘。
   streams: Record<string, Record<number, string>>
+  /// 思考增量（hands-free 票 06）：与 streams 同键。空 = 模型没给推理，不编造。
+  thinkings: Record<string, Record<number, string>>
   /// 流式交接簿（ui-audit 票 08 / P1-7）：done 到达不立即删气泡——
   /// 标 {afterEventId: 当时时间线末条 id, at: 时间戳}；等 refreshFast
   /// 拉到同 agent 的持久 agent_message（id > afterEventId）才清缓冲，
@@ -274,6 +276,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   setActiveTab: (id) => set({ activeTab: id }),
   setSplitOpen: (v) => set({ splitOpen: v }),
   streams: {},
+  thinkings: {},
   streamDone: {},
   applyDelta: (d) =>
     set((s) => {
@@ -288,11 +291,20 @@ export const useUiStore = create<UiState>((set, get) => ({
         }
       }
       const streams = { ...s.streams }
+      const thinkings = { ...s.thinkings }
       const cur = { ...(streams[d.agent_id] ?? {}) }
-      // reset=瞬时重试：本次调用的已收文本作废（重试会重吐全文）
-      cur[d.call] = d.reset ? '' : (cur[d.call] ?? '') + d.text
+      const curT = { ...(thinkings[d.agent_id] ?? {}) }
+      // reset=瞬时重试：本次调用的已收文本和思考作废（重试会重吐全文）
+      if (d.reset) {
+        cur[d.call] = ''
+        curT[d.call] = ''
+      } else {
+        cur[d.call] = (cur[d.call] ?? '') + d.text
+        if (d.thinking) curT[d.call] = (curT[d.call] ?? '') + d.thinking
+      }
       streams[d.agent_id] = cur
-      return { streams }
+      if (d.reset || Object.values(curT).some((x) => x.length > 0)) thinkings[d.agent_id] = curT
+      return { streams, thinkings }
     }),
   setRailOpen: (v) => {
     localStorage.setItem('hexagon.rail', v ? '1' : '0')
@@ -436,12 +448,14 @@ export const useUiStore = create<UiState>((set, get) => ({
         // 票 08 交接清扫：同 agent 持久消息落进时间线（id > 标记水位）
         // → 缓冲交接完成清除；超时未持久化兜底清。
         let streams = s.streams
+        let thinkings = s.thinkings
         let streamDone = s.streamDone
         const marks = Object.entries(s.streamDone)
         if (marks.length) {
           const now = Date.now()
           const sd = { ...s.streamDone }
           const st = { ...s.streams }
+          const th = { ...s.thinkings }
           for (const [agent, mark] of marks) {
             const landed = timeline.some(
               (it) => it.event.id > mark.afterEventId && it.message?.author === agent,
@@ -449,12 +463,14 @@ export const useUiStore = create<UiState>((set, get) => ({
             if (landed || now - mark.at > STREAM_HANDOFF_MS) {
               delete sd[agent]
               delete st[agent]
+              delete th[agent]
             }
           }
           streams = st
+          thinkings = th
           streamDone = sd
         }
-        return { stages, pending, timeline, streams, streamDone }
+        return { stages, pending, timeline, streams, thinkings, streamDone }
       })
     } catch (e) {
       // 轮询失败吞掉继续——2s 一拍不能因一次抖动终止轮询；

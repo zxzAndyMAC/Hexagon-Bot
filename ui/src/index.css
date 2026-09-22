@@ -288,6 +288,26 @@ input, textarea { font: inherit; color: var(--text); }
   color: var(--text-3); font-size: 11px;
 }
 .msg-toggle:hover { color: var(--text); }
+/* hands-free 票 06：思考过长收成一行；状态行与进行中标记。 */
+.thinking-row {
+  display: block; width: 100%; max-width: 78%;
+  margin: 0 0 4px; padding: 0;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-3); font-size: 12px; text-align: left;
+}
+.thinking-row.thinking-ellipsis {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.thinking-row[data-open='1'] { white-space: pre-wrap; }
+.status-line {
+  display: flex; gap: 12px; align-items: center;
+  padding: 6px 14px 0; font-size: 11px; color: var(--text-2);
+}
+.stream-live { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-3); }
+.stream-live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); animation: pulse-amber 1.2s infinite;
+}
 .msg-body p { margin: 4px 0; }
 
 /* markdown (Md) 排版：表格 / 代码 / 列表 / 标题 / 引用 */

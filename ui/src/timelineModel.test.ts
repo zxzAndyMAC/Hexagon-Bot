@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildRows, nodeMarks } from './timelineModel'
+import { buildRows, deriveWorkbenchStatus, nodeMarks, type StatusSources } from './timelineModel'
 import { severityOf } from './decisions'
 import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api'
 
 const ev = (id: number, kind: EventKind, payload: Record<string, unknown> = {}, author?: string): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id: author ?? null, stage_run_id: null, payload, created_at: '' },
-  message: author ? { id, author, body: 'hi', tokens: [], attachments: [], created_at: '' } : null,
+  message: author ? { id, author, body: 'hi', tokens: [], attachments: [], created_at: '', thinking: '' } : null,
 })
 
 const q = (id: string, kind: QueuedCard['kind'], payload: Record<string, unknown> = {}): PendingQuestion => ({
@@ -143,7 +143,7 @@ describe('parseUnifiedDiff / extractDiffBlock', () => {
 describe('story 档（ui-audit 票 18 / 方向卡 3）', () => {
   const mk = (id: number, kind: string, msg = false): TimelineItem => ({
     event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload: kind === 'turn_started' ? { stage: 'build' } : {}, created_at: '' },
-    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], created_at: '' } : null,
+    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], created_at: '', thinking: '' } : null,
   }) as unknown as TimelineItem
 
   it('toolgroup/sysgroup 全移除；高危子类豁免可见；turn_started 成章', () => {
@@ -165,5 +165,67 @@ describe('story 档（ui-audit 票 18 / 方向卡 3）', () => {
     expect(chapters[0]).toMatchObject({ n: 1, agentId: 'a1', stage: 'build' })
     const items = rows.filter((r) => r.type === 'item').map((r) => (r as { item: TimelineItem }).item.event.id)
     expect(items).toEqual([2, 8, 10]) // 消息 + 高危豁免；普通 sys 与 tool 全不见
+  })
+})
+
+describe('deriveWorkbenchStatus（hands-free 票 06）', () => {
+  const base = (): StatusSources => ({
+    stages: [
+      { stage: '规格', seq: 1, state: 'done' },
+      { stage: '实现', seq: 2, state: 'active' },
+    ],
+    team: [{ id: 'a1', role: '后端开发' }],
+    timeline: [],
+    streams: {},
+    thinkings: {},
+    streamDone: {},
+  })
+
+  it('阶段、在跑角色和当前工具来自工作台，不读模型自述的计划', () => {
+    const src = base()
+    src.streams = { a1: { 1: '正在写' } }
+    src.timeline = [
+      ev(1, 'turn_started', {}, 'a1'),
+      ev(2, 'agent_message', {}, 'a1'),
+      ev(3, 'tool_called', { tool: 'fs_read' }, 'a1'),
+    ]
+    src.timeline[1].message = {
+      id: 2, author: 'a1', tokens: [], attachments: [], created_at: '',
+      body: '计划：阶段是发布，下一步用 fs_write',
+      thinking: '',
+    }
+    const st = deriveWorkbenchStatus(src)
+    expect(st).toEqual({ stage: '实现', role: '后端开发', tool: 'fs_read' })
+  })
+
+  it('工具结果或权限询问之后不再显示该工具', () => {
+    const src = base()
+    src.timeline = [
+      ev(1, 'turn_started', {}, 'a1'),
+      ev(2, 'tool_called', { tool: 'fs_read' }, 'a1'),
+      ev(3, 'tool_result', {}, 'a1'),
+    ]
+    expect(deriveWorkbenchStatus(src).tool).toBeNull()
+    src.timeline = [
+      ev(1, 'turn_started', {}, 'a1'),
+      ev(2, 'tool_called', { tool: 'fs_write' }, 'a1'),
+      ev(3, 'permission_asked', { tool: 'fs_write' }, 'a1'),
+    ]
+    expect(deriveWorkbenchStatus(src).tool).toBeNull()
+  })
+
+  it('没有进行中的回合时不编造角色和工具', () => {
+    const src = base()
+    src.timeline = [
+      ev(1, 'turn_started', {}, 'a1'),
+      ev(2, 'turn_finished', {}, 'a1'),
+    ]
+    expect(deriveWorkbenchStatus(src)).toEqual({ stage: '实现', role: null, tool: null })
+  })
+
+  it('多个 active 阶段取序号最大的', () => {
+    const src = base()
+    src.stages.push({ stage: '复审', seq: 3, state: 'active' })
+    expect(deriveWorkbenchStatus(src).stage).toBe('复审')
   })
 })

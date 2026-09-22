@@ -20,4 +20,9 @@ reset: boolean,
  * 流终信号：回合收口时发一次（无论成败/叫停），UI 收气泡，
  * 不必猜是哪个命令触发的回合。
  */
-done: boolean, text: string, };
+done: boolean, text: string, 
+/**
+ * 本帧的思考增量（hands-free 票 06）。空串 = 这一帧没有推理文本，
+ * UI 不因此画思考行。与 text 分列，不把推理拼进可见回复。
+ */
+thinking: string, };

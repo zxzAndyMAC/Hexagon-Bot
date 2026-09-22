@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
 import { api, isTauri } from '../api'
 import { Md } from './Md'
 import { useUiStore } from '../store'
-import { buildRows, nodeMarks, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark } from '../timelineModel'
+import { buildRows, nodeMarks, deriveWorkbenchStatus, thinkingCollapsed, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark } from '../timelineModel'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { Row } from './Row'
@@ -32,6 +32,80 @@ function trKey(t: TFunction, key: string, raw: string): string {
 
 const chipCls = (s: string) =>
   s === 'passed' ? 'ok' : s === 'queued' ? 'warn' : s === 'rejected' || s === 'failed' ? 'err' : 'err'
+
+export function ThinkingRow({ text }: { text: string }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  if (!text.trim()) return null
+  const { long, line } = thinkingCollapsed(text)
+  const shown = long && !open ? line : text.trim()
+  return (
+    <button
+      type="button"
+      className={`thinking-row${long && !open ? ' thinking-ellipsis' : ''}`}
+      data-thinking=""
+      data-open={long && open ? '1' : '0'}
+      aria-expanded={long ? open : undefined}
+      onClick={() => { if (long) setOpen((v) => !v) }}
+    >
+      {t('timeline.thinking')} {shown}
+    </button>
+  )
+}
+
+// 进行中的一条回复（hands-free 票 06）：增量追加在同一气泡，不另起多条。
+export function LiveReply({
+  role,
+  text,
+  thinking,
+  generating,
+  avatar,
+}: {
+  role: string
+  text: string
+  thinking: string
+  generating: boolean
+  avatar?: ReactNode
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="msg" data-live-reply="" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
+      {avatar}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+          <span style={{ fontWeight: 560, fontSize: 12 }}>{role}</span>
+          {generating && (
+            <span data-generating="" className="stream-live">
+              <span className="stream-live-dot" />
+              {t('timeline.streaming')}
+            </span>
+          )}
+        </div>
+        <ThinkingRow text={thinking} />
+        {text ? <CollapsibleBody text={text} /> : null}
+      </div>
+    </div>
+  )
+}
+
+export function StatusLine() {
+  const { t } = useTranslation()
+  const stages = useUiStore((s) => s.stages)
+  const team = useUiStore((s) => s.team)
+  const timeline = useUiStore((s) => s.timeline)
+  const streams = useUiStore((s) => s.streams)
+  const thinkings = useUiStore((s) => s.thinkings)
+  const streamDone = useUiStore((s) => s.streamDone)
+  const st = deriveWorkbenchStatus({ stages, team, timeline, streams, thinkings, streamDone })
+  if (!st.stage && !st.role && !st.tool) return null
+  return (
+    <div data-status-line="" className="status-line">
+      {st.stage && <span>{t('timeline.statusStage', { stage: st.stage })}</span>}
+      {st.role && <span>{t('timeline.statusRole', { role: st.role })}</span>}
+      {st.tool && <span>{t('timeline.statusTool', { tool: st.tool })}</span>}
+    </div>
+  )
+}
 
 // ui-audit 票 11（P3-23）：超高消息体渐隐夹持 + 展开/收起。
 // 原实现 max-height+内滚——滚到底才看得见尾巴，扫读时不知道藏了内容。
@@ -276,6 +350,7 @@ export function EventRow({
             <span style={{ fontWeight: 560, fontSize: 12 }}>{title}</span>
             {time && <span className="dim3" style={{ fontSize: 10 }}>{time}</span>}
           </div>
+          <ThinkingRow text={m.thinking} />
           <CollapsibleBody text={m.body} unclamped={story} />
         </div>
       </div>
@@ -419,11 +494,21 @@ function NodeRail({ marks, onJump }: { marks: NodeMark[]; onJump: (m: NodeMark) 
 // 与持久消息行同构同宽），等 refreshFast 拉到同 agent 持久消息才清除。
 // 交接语义取「持久化确认后」而非「done 即清」：后者留最长 2s 内容空窗
 // + 排版跳变（P1-7 实测），前者气泡与落库行无缝替换。
+function joinCalls(buf: Record<number, string> | undefined): string {
+  if (!buf) return ''
+  return Object.keys(buf)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((c) => buf[c])
+    .filter((s) => s.length > 0)
+    .join('\n\n')
+}
+
 function StreamFooter() {
-  const { t } = useTranslation()
-  const { streams, streamDone, team } = useUiStore()
-  const ids = Object.keys(streams).filter((id) =>
-    Object.values(streams[id]).some((s) => s.length > 0),
+  const { streams, thinkings, streamDone, team } = useUiStore()
+  const ids = [...new Set([...Object.keys(streams), ...Object.keys(thinkings)])].filter((id) =>
+    Object.values(streams[id] ?? {}).some((s) => s.length > 0) ||
+    Object.values(thinkings[id] ?? {}).some((s) => s.length > 0),
   )
   // Cursor 式底部留白（ui-polish-2 ⑤ 续，owner 二报「回不到底」）：
   // 列表尾部恒留空白带，最新内容可滚离输入条一段高度，而不是贴死在底缘。
@@ -434,25 +519,15 @@ function StreamFooter() {
       {ids.map((id) => {
         const member = team.find((x) => x.id === id)
         const done = streamDone[id] != null
-        const text = Object.keys(streams[id])
-          .map(Number)
-          .sort((a, b) => a - b)
-          .map((c) => streams[id][c])
-          .filter((s) => s.length > 0)
-          .join('\n\n')
         return (
-          <div className="msg" key={id} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
-            {member && <Avatar agentId={id} role={member.role} size={34} />}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
-                <span style={{ fontWeight: 560, fontSize: 12 }}>{member?.role ?? id}</span>
-                {!done && (
-                  <span className="dim3" style={{ fontSize: 10 }}>{t('timeline.streaming')}</span>
-                )}
-              </div>
-              <CollapsibleBody text={text} />
-            </div>
-          </div>
+          <LiveReply
+            key={id}
+            role={member?.role ?? id}
+            text={joinCalls(streams[id])}
+            thinking={joinCalls(thinkings[id])}
+            generating={!done}
+            avatar={member ? <Avatar agentId={id} role={member.role} size={34} /> : undefined}
+          />
         )
       })}
       {tail}
@@ -561,6 +636,7 @@ export function Timeline() {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <StatusLine />
       <div style={{ display: 'flex', gap: 4, padding: '6px 14px 0', alignItems: 'center' }}>
         {(['all', 'messages', 'decisions', 'story'] as const).map((f) => (
           <button

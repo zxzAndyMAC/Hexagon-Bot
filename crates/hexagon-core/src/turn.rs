@@ -85,6 +85,9 @@ pub struct TurnDelta {
     /// 不必猜是哪个命令触发的回合。
     pub done: bool,
     pub text: String,
+    /// 本帧的思考增量（hands-free 票 06）。空串 = 这一帧没有推理文本，
+    /// UI 不因此画思考行。与 text 分列，不把推理拼进可见回复。
+    pub thinking: String,
 }
 
 /// delta 回调接缝。不绑 Send——turn 内核同线程调用 sink；
@@ -116,7 +119,10 @@ fn stream_with_retry(
             if crate::orchestra::is_paused(db, &ctx.project_id).unwrap_or(false) {
                 return false;
             }
-            let crate::provider::StreamDelta::Text(t) = d;
+            let (text, thinking) = match d {
+                crate::provider::StreamDelta::Text(t) => (t.clone(), String::new()),
+                crate::provider::StreamDelta::Thinking(t) => (String::new(), t.clone()),
+            };
             emitted = true;
             sink(&TurnDelta {
                 agent_id: ctx.agent_id.clone(),
@@ -124,7 +130,8 @@ fn stream_with_retry(
                 call,
                 reset: false,
                 done: false,
-                text: t.clone(),
+                text,
+                thinking,
             });
             true
         });
@@ -144,6 +151,7 @@ fn stream_with_retry(
                         reset: true,
                         done: false,
                         text: String::new(),
+                        thinking: String::new(),
                     });
                 }
                 db.append_event(
@@ -465,6 +473,8 @@ fn run_turn_impl(
         // 每轮顶注入出站副本。只追加进本轮出站 messages——
         // owner_message 由 send_message 落库；注入模型可见 ≠ 改持久历史
         // （archive _outbound_messages 同款分层：模型视图与持久层分离）。
+        // 票 06：工具轮的思考先攒着，跟下一条可见回复一起落，不另起一条消息。
+        let mut carried_thinking = String::new();
         let mut steer_mark: i64 = db.conn().query_row(
             "SELECT COALESCE(MAX(id),0) FROM messages WHERE project_id=?1 AND author='owner'",
             [&ctx.project_id],
@@ -507,30 +517,10 @@ fn run_turn_impl(
                 Err(e) => return Err(e),
             };
             crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
-            let text: String = resp
-                .content
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !text.is_empty() {
-                db.append_message(
-                    &ctx.project_id,
-                    &ctx.agent_id,
-                    &text,
-                    &[],
-                    &[],
-                    Some(&ctx.agent_id),
-                    ctx.stage_run_id.as_deref(),
-                )?;
-            }
-            messages.push(Message {
-                role: Role::Assistant,
-                content: resp.content,
-            });
+            absorb_thinking(&resp.content, &mut carried_thinking);
+            let text = visible_text(&resp.content);
+            persist_visible(db, ctx, &text, &mut carried_thinking)?;
+            push_assistant(&mut messages, resp.content);
         }
         // 同工具同错熔断状态：跨 round 连击计数（US57）
         let mut last_fail: Option<(String, String)> = None;
@@ -663,11 +653,9 @@ fn run_turn_impl(
             // 旧写法（票 06 前）把输出截断误判成上下文满，直接弹升级卡——
             // 后果是每次长输出都打断负责人。est>cap 的输入侧撞限仍在
             // 循环顶的工具记录删减+升级路径。
+            absorb_thinking(&resp.content, &mut carried_thinking);
             if resp.stop == StopReason::MaxTokens {
-                messages.push(Message {
-                    role: Role::Assistant,
-                    content: resp.content.clone(),
-                });
+                push_assistant(&mut messages, resp.content.clone());
                 if !trunc_continued {
                     trunc_continued = true;
                     messages.push(Message {
@@ -681,10 +669,7 @@ fn run_turn_impl(
                 return Ok(TurnOutcome::Truncated);
             }
             trunc_continued = false;
-            messages.push(Message {
-                role: Role::Assistant,
-                content: resp.content.clone(),
-            });
+            push_assistant(&mut messages, resp.content.clone());
 
             let tool_uses: Vec<_> = resp
                 .content
@@ -698,27 +683,9 @@ fn run_turn_impl(
                 .collect();
 
             if resp.stop != StopReason::ToolUse && tool_uses.is_empty() {
-                // 回合结束：文本上时间线
-                let text: String = resp
-                    .content
-                    .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !text.is_empty() {
-                    db.append_message(
-                        &ctx.project_id,
-                        &ctx.agent_id,
-                        &text,
-                        &[],
-                        &[],
-                        Some(&ctx.agent_id),
-                        ctx.stage_run_id.as_deref(),
-                    )?;
-                }
+                // 回合结束：可见回复上时间线；思考随这条留下，没有就不写。
+                let text = visible_text(&resp.content);
+                persist_visible(db, ctx, &text, &mut carried_thinking)?;
                 return Ok(TurnOutcome::Finished);
             }
 
@@ -855,6 +822,7 @@ fn run_turn_impl(
         reset: false,
         done: true,
         text: String::new(),
+        thinking: String::new(),
     });
 
     db.append_event(
@@ -896,6 +864,75 @@ fn run_turn_impl(
         ctx.stage_run_id.as_deref(),
     )?;
     outcome
+}
+
+/// 把本轮推理并进待落账缓冲。空串不算「给了思考」。
+fn absorb_thinking(content: &[ContentBlock], carried: &mut String) {
+    for b in content {
+        if let ContentBlock::Thinking { text } = b {
+            if text.is_empty() {
+                continue;
+            }
+            if !carried.is_empty() {
+                carried.push('\n');
+            }
+            carried.push_str(text);
+        }
+    }
+}
+
+fn visible_text(content: &[ContentBlock]) -> String {
+    content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 思考不进下一轮出站历史（无 signature，见 ContentBlock::Thinking）。
+fn push_assistant(messages: &mut Vec<Message>, content: Vec<ContentBlock>) {
+    let content: Vec<_> = content
+        .into_iter()
+        .filter(|b| !matches!(b, ContentBlock::Thinking { .. }))
+        .collect();
+    if content.is_empty() {
+        return;
+    }
+    messages.push(Message {
+        role: Role::Assistant,
+        content,
+    });
+}
+
+/// 可见回复或思考至少有一边才落一条。思考不单独变成多条消息。
+fn persist_visible(
+    db: &Db,
+    ctx: &ToolContext,
+    text: &str,
+    carried: &mut String,
+) -> Result<(), TurnError> {
+    if text.is_empty() && carried.is_empty() {
+        return Ok(());
+    }
+    let thinking = if carried.is_empty() {
+        None
+    } else {
+        Some(std::mem::take(carried))
+    };
+    db.append_message_with(
+        &ctx.project_id,
+        &ctx.agent_id,
+        text,
+        &[],
+        &[],
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        thinking.as_deref(),
+    )?;
+    Ok(())
 }
 
 // 供测试构造响应
