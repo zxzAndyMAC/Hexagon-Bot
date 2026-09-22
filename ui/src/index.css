@@ -108,6 +108,12 @@
 html, body, #root {
   height: 100%;
   margin: 0;
+  /* 锁死文档级滚动：Tauri 的 WKWebView 对微溢出的 document 给橡皮筋
+     滚动，表现为「整个界面可上下左右拖动」。窗口本体永不滚——各面板
+     走自己的 overflowY:auto 内滚（Timeline/Settings/SidePanel 皆是）。
+     overscroll-behavior:none 挡惯性回弹链到根。 */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
