@@ -1718,6 +1718,7 @@ proptest! {
                         Role::Assistant
                     }
                     ContentBlock::Text { .. } | ContentBlock::Image { .. } => Role::User,
+                    ContentBlock::Thinking { .. } => Role::Assistant,
                 };
                 Message {
                     role,

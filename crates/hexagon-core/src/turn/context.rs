@@ -151,12 +151,15 @@ pub(super) fn trim_context(ctx: &ToolContext, mut messages: Vec<Message>) -> Vec
 /// 误判（把负责人或角色原文删掉、截断或换成摘要）会丢掉路径、报错和约束，
 /// 而且模型按残缺历史继续干活，没人当场复核。偏向保留文本——只有明确的
 /// 工具记录可以删或截断。内联图是负责人附件，不是工具记录，同样保留。
+/// 思考块也不是工具记录：出站请求会剥掉它，收缩阶段不能把它当成工具删掉。
 pub(super) fn tool_record_may_drop(block: &ContentBlock) -> bool {
     match block {
         ContentBlock::ToolUse { .. }
         | ContentBlock::ToolResult { .. }
         | ContentBlock::Opaque { .. } => true,
-        ContentBlock::Text { .. } | ContentBlock::Image { .. } => false,
+        ContentBlock::Text { .. }
+        | ContentBlock::Image { .. }
+        | ContentBlock::Thinking { .. } => false,
     }
 }
 
@@ -239,7 +242,9 @@ fn oldest_tool_group(messages: &[Message]) -> Option<Vec<(usize, usize)>> {
                     ord: (mi, bi),
                     locs: vec![(mi, bi)],
                 }),
-                ContentBlock::Text { .. } | ContentBlock::Image { .. } => {}
+                ContentBlock::Text { .. }
+                | ContentBlock::Image { .. }
+                | ContentBlock::Thinking { .. } => {}
             }
         }
     }
