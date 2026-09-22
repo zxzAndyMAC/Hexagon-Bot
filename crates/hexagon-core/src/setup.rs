@@ -2,7 +2,9 @@
 //!
 //! - 目录：`inspect_dir` 报 git/脏/空/已有工作台/说明文件。脏树可开（不提交、不清理）；
 //!   无 git 须确认初始化；已有 `.hexagon/state.db` 拒绝再建，走 `open_existing`。
-//! - 说明文件主读 `AGENTS.md`，没有则 `CLAUDE.md`；草稿人确认才写，不覆盖已有。
+//! - 说明文件主读 `AGENTS.md`，没有则 `CLAUDE.md`。空目录的一句话经
+//!   `optimize_agents_md`（ADR 0067，主对话模型）填草稿；人确认后才
+//!   `write_agents_md`，已有任一份说明都不覆盖。
 //! - 密钥 fail-closed：所选角色的模型槽缺 key 不能开跑（`create_project` 内置复查）。
 //! - 建项目把 RoleDef 落成实例：model_slot、agent_globs 归属、grants 技能授权。
 //! - 票 14：最后一步按 `CREATE_STEP_ORDER` 逐步报告。每步做完才回调，失败不回调
@@ -14,6 +16,7 @@ use crate::db::Db;
 use crate::git;
 use crate::orchestra::PackDef;
 use crate::presets::{preset_roles, PresetError, RoleDef};
+use crate::provider::{ChatRequest, ContentBlock, Message, ModelProvider, Role};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -55,6 +58,12 @@ pub enum SetupError {
     NoFastRole,
     #[error(transparent)]
     Autonomy(#[from] crate::autonomy::AutonomyError),
+    #[error("一句话是空的，不能优化项目说明")]
+    EmptyBrief,
+    #[error("主对话模型没有返回项目说明正文")]
+    EmptyDraft,
+    #[error(transparent)]
+    Model(#[from] crate::provider::ProviderError),
 }
 
 /// 目录体检报告：向导每一步的判定依据。
@@ -95,21 +104,110 @@ pub fn inspect_dir(dir: impl AsRef<Path>) -> DirReport {
     }
 }
 
-/// AGENTS.md 草稿（模板）。模型起草要等运行期供应商接线——向导阶段还没有
-/// 可用 provider；先给结构骨架，人确认才写盘，绝不覆盖已有文件。
+/// 无模型时的结构骨架。票 16 之后空目录走 `optimize_agents_md`，
+/// 不再用这份骨架冒充优化结果。非空目录的旧勾选路径仍可用。
 pub fn agents_md_draft(project_name: &str) -> String {
     format!(
         "# {project_name}\n\n## Commands\n\n- Build:\n- Test:\n- Check:\n\n## Layout\n\n-\n\n## Conventions\n\n-\n"
     )
 }
 
-/// 写 AGENTS.md：文件已存在即报错（内容相同也报——不静默跳过，让向导显式处理）。
-pub fn write_agents_md(dir: impl AsRef<Path>, content: &str) -> Result<(), SetupError> {
-    let p = dir.as_ref().join("AGENTS.md");
-    if p.exists() {
-        return Err(SetupError::AgentsMdExists(p));
+/// ADR 0067 优化描述的系统提示词。`{项目名}` 是唯一占位。
+/// 正文是合同，不随界面语言改写。
+pub const AGENTS_MD_OPTIMIZE_PROMPT: &str = "你在起草仓库根目录的 AGENTS.md。这份文件是被激活的 Agent 要读的项目级约束。它不是技能，不写流程进度，不写密钥，不写角色名单。
+
+用户只给了一句话。写成下面的骨架。用户没说的命令、技术栈、目录，留空或写「未知」，不要编造。用用户那句话的语言来写。
+
+# {项目名}
+
+## 做什么
+一两句。用户的句子里看得出边界时，写上不做什么。
+
+## Commands
+- Build:
+- Test:
+- Check:
+
+## Layout
+-
+
+## Conventions
+-
+
+只输出这份说明的正文，不要前言。";
+
+fn optimize_system_prompt(project_name: &str) -> String {
+    let name = project_name.trim();
+    let name = if name.is_empty() { "未知" } else { name };
+    AGENTS_MD_OPTIMIZE_PROMPT.replace("{项目名}", name)
+}
+
+/// 一句话 → 项目说明草稿。调用刚配好的主对话模型（`default` 槽），
+/// 不写磁盘：本函数不接收目录。落盘只走 `write_agents_md`，且只在负责人确认后。
+///
+/// 票 16 / ADR 0067。被否决的替代：模型一返回就写盘——取消或后退会留下半份说明。
+/// 不给工具：空目录没有可核对的命令，给了工具模型会去猜技术栈。
+/// 模型若仍编造，草稿停在文本框里，确认前可以改，不会进仓库
+/// （false negative 花一次人工编辑）。程序再改模型正文会毁掉
+/// 「用用户那句话的语言」（false positive），所以正文原样返回，约束放在提示词里。
+pub fn optimize_agents_md(
+    project_name: &str,
+    sentence: &str,
+    provider: &dyn ModelProvider,
+) -> Result<String, SetupError> {
+    let sentence = sentence.trim();
+    if sentence.is_empty() {
+        return Err(SetupError::EmptyBrief);
     }
-    std::fs::write(&p, content)?;
+    let req = ChatRequest {
+        // 主对话模型 = 票 13 放行的 default 槽，不是某个角色槽。
+        model_slot: "default".into(),
+        messages: vec![
+            Message {
+                role: Role::System,
+                content: vec![ContentBlock::Text {
+                    text: optimize_system_prompt(project_name),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: sentence.to_string(),
+                }],
+            },
+        ],
+        tools: vec![],
+    };
+    let resp = provider.complete(&req)?;
+    let text: String = resp
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    if text.trim().is_empty() {
+        return Err(SetupError::EmptyDraft);
+    }
+    Ok(text)
+}
+
+/// 写 `AGENTS.md`。已有项目说明（`AGENTS.md` 或 `CLAUDE.md`）即拒绝，两份都不改。
+///
+/// 票 16 / ADR 0067：没有 AGENTS.md 时 CLAUDE.md 就是项目说明。旁边再写一份
+/// AGENTS.md 会被 `inspect_dir` 当成主文件，等于换掉现成约束。
+/// false negative（漏拒）花一次未审覆盖；false positive（CLAUDE.md 在时
+/// 拒绝另写 AGENTS.md）花一次人工。偏向拒绝。内容相同也报——不静默跳过。
+pub fn write_agents_md(dir: impl AsRef<Path>, content: &str) -> Result<(), SetupError> {
+    let dir = dir.as_ref();
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        let existing = dir.join(name);
+        if existing.exists() {
+            return Err(SetupError::AgentsMdExists(existing));
+        }
+    }
+    std::fs::write(dir.join("AGENTS.md"), content)?;
     Ok(())
 }
 
@@ -1053,6 +1151,10 @@ mod tests {
             Err(SetupError::AgentsMdExists(_))
         ));
         assert_eq!(
+            std::fs::read_to_string(d.path().join("AGENTS.md")).unwrap(),
+            agents_md_draft("x")
+        );
+        assert_eq!(
             inspect_dir(d.path()).instructions.as_deref(),
             Some("AGENTS.md")
         );
@@ -1122,4 +1224,114 @@ mod tests {
         ));
         assert!(!bad.join(".hexagon").exists());
     }
+    #[test]
+    fn claude_md_blocks_agents_md_and_is_left_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("CLAUDE.md"), "keep-me").unwrap();
+        assert!(matches!(
+            write_agents_md(d.path(), "# Demo\n"),
+            Err(SetupError::AgentsMdExists(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("CLAUDE.md")).unwrap(),
+            "keep-me"
+        );
+        assert!(!d.path().join("AGENTS.md").exists());
+        assert_eq!(
+            inspect_dir(d.path()).instructions.as_deref(),
+            Some("CLAUDE.md")
+        );
+    }
+
+    /// 票 16：优化只回草稿。目录参数故意不存在——写盘只能是确认后的 write_agents_md。
+    #[test]
+    fn one_sentence_optimizes_without_writing_until_confirm() {
+        let sentence = "一个本地待办清单";
+        let scripted = "# Demo\n\n## 做什么\n一个本地待办清单。\n\n## Commands\n- Build:\n- Test:\n- Check:\n\n## Layout\n- 未知\n\n## Conventions\n-\n";
+        let provider =
+            crate::provider::ScriptedProvider::new(vec![crate::turn::text_response(scripted)]);
+        let dir = tempfile::tempdir().unwrap();
+        let draft = optimize_agents_md("Demo", sentence, &provider).unwrap();
+        assert_eq!(draft, scripted);
+        assert!(!dir.path().join("AGENTS.md").exists());
+        assert!(!dir.path().join("CLAUDE.md").exists());
+
+        let calls = provider.recorded();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].model_slot, "default");
+        assert!(calls[0].tools.is_empty());
+        assert_eq!(calls[0].messages.len(), 2);
+        let system = block_text(&calls[0].messages[0]);
+        let user = block_text(&calls[0].messages[1]);
+        assert_eq!(system, optimize_system_prompt("Demo"));
+        assert_eq!(AGENTS_MD_OPTIMIZE_PROMPT, ADR_0067_OPTIMIZE_PROMPT);
+        assert!(system.starts_with("# Demo\n") || system.contains("\n# Demo\n"));
+        assert!(!system.contains("{项目名}"));
+        assert!(!system.contains(sentence));
+        assert_eq!(user, sentence);
+        assert!(scripted.contains("- Build:\n- Test:\n- Check:"));
+        assert!(scripted.contains("未知"));
+        assert!(!scripted.contains("npm") && !scripted.contains("cargo"));
+
+        write_agents_md(dir.path(), &draft).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+            scripted
+        );
+        let md_names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.ends_with(".md"))
+            .collect();
+        assert_eq!(md_names, vec!["AGENTS.md".to_string()]);
+    }
+
+    #[test]
+    fn blank_sentence_does_not_call_the_model() {
+        let provider = crate::provider::ScriptedProvider::new(vec![]);
+        let err = optimize_agents_md("Demo", "  \n", &provider).unwrap_err();
+        assert!(matches!(err, SetupError::EmptyBrief));
+        assert!(provider.recorded().is_empty());
+    }
+
+    #[test]
+    fn empty_model_reply_is_not_a_draft() {
+        let provider =
+            crate::provider::ScriptedProvider::new(vec![crate::turn::text_response(" \n\t")]);
+        let err = optimize_agents_md("Demo", "一句", &provider).unwrap_err();
+        assert!(matches!(err, SetupError::EmptyDraft));
+    }
+
+    fn block_text(msg: &crate::provider::Message) -> String {
+        msg.content
+            .iter()
+            .filter_map(|b| match b {
+                crate::provider::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// ADR 0067 优化提示词原文。改常量而没改合同，这条会红。
+    const ADR_0067_OPTIMIZE_PROMPT: &str = "你在起草仓库根目录的 AGENTS.md。这份文件是被激活的 Agent 要读的项目级约束。它不是技能，不写流程进度，不写密钥，不写角色名单。
+
+用户只给了一句话。写成下面的骨架。用户没说的命令、技术栈、目录，留空或写「未知」，不要编造。用用户那句话的语言来写。
+
+# {项目名}
+
+## 做什么
+一两句。用户的句子里看得出边界时，写上不做什么。
+
+## Commands
+- Build:
+- Test:
+- Check:
+
+## Layout
+-
+
+## Conventions
+-
+
+只输出这份说明的正文，不要前言。";
 }

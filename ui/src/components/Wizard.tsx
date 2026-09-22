@@ -27,11 +27,13 @@ interface Draft {
   genAgents: boolean
   agentsMd: string
   autonomy: 'L0' | 'L1' | 'L2' | 'L3' | 'L4'
+  /// 票 16：空目录项目说明的种子。优化前不落盘。
+  brief: string
 }
 
 const EMPTY: Draft = {
   dir: '', name: '', roles: [], roleOverrides: {}, mode: 'pack', packName: '规格驱动',
-  fastRole: '', initGit: false, genAgents: false, agentsMd: '', autonomy: 'L4',
+  fastRole: '', initGit: false, genAgents: false, agentsMd: '', autonomy: 'L4', brief: '',
 }
 
 const AUTONOMY_LEVELS = ['L0', 'L1', 'L2', 'L3', 'L4'] as const
@@ -105,12 +107,14 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     return () => clearTimeout(id)
   }, [draft.dir])
 
-  // 说明文件草稿：选了生成且还没内容时拉模板
+  // 说明文件草稿：非空目录勾了生成且还没内容时拉骨架。
+  // 票 16：空目录走一句话优化，不用无模型时代的骨架冒充草稿。
   useEffect(() => {
+    if (!report || report.empty || report.instructions) return
     if (draft.genAgents && !draft.agentsMd && draft.name) {
       api.agentsMdDraft(draft.name).then((md) => set({ agentsMd: md })).catch(() => {})
     }
-  }, [draft.genAgents, draft.agentsMd, draft.name, set])
+  }, [draft.genAgents, draft.agentsMd, draft.name, report, set])
 
   // 生效定义 = 向导定制 override ?? 模板原定义（模板含内置∪自定义两层）
   const effDef = useCallback(
@@ -224,6 +228,29 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     }
   }
 
+  /// 确认前不写盘。已有 AGENTS.md / CLAUDE.md 时连草稿也不提交（不覆盖）。
+  function agentsToWrite(): string | null {
+    if (report?.instructions || !draft.agentsMd.trim()) return null
+    if (report?.empty || draft.genAgents) return draft.agentsMd
+    return null
+  }
+
+  async function optimizeBrief() {
+    const sentence = draft.brief.trim()
+    // 已有说明文件不提供优化——那是覆盖入口。
+    if (!sentence || report?.instructions) return
+    setBusy(true)
+    setErr('')
+    try {
+      const md = await api.optimizeAgentsMd(draft.name, sentence)
+      set({ agentsMd: md, genAgents: true })
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function launch() {
     setBusy(true)
     setCreateDone([])
@@ -246,8 +273,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         packName: draft.mode === 'pack' ? draft.packName : null,
         fastpathRole: draft.mode === 'fastpath' ? draft.fastRole : null,
         initGit: draft.initGit,
-        agentsMd:
-          draft.genAgents && !report?.instructions ? draft.agentsMd : null,
+        agentsMd: agentsToWrite(),
         autonomy: draft.autonomy,
       }, note)
       localStorage.removeItem(DRAFT_KEY)
@@ -458,6 +484,39 @@ export function Wizard({ onDone }: { onDone: () => void }) {
               {t('wizard.instructionsFound', { file: report.instructions })}
             </div>
           </div>
+        ) : report?.empty ? (
+          <>
+            <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.briefHint')}</div>
+            <textarea
+              className="btn"
+              style={{ width: '100%', height: 72, textAlign: 'left', fontSize: 12 }}
+              placeholder={t('wizard.briefPlaceholder')}
+              value={draft.brief}
+              onChange={(e) => set({ brief: e.target.value })}
+            />
+            <button
+              className="btn"
+              style={{ marginTop: 8 }}
+              disabled={busy || !draft.brief.trim()}
+              onClick={optimizeBrief}
+            >
+              {t('wizard.optimize')}
+            </button>
+            {draft.agentsMd && (
+              <>
+                <div className="dim3" style={{ fontSize: 11, margin: '8px 0 4px' }}>
+                  {t('wizard.agentsDraftHint')}
+                </div>
+                <textarea
+                  className="btn"
+                  style={{ width: '100%', height: 180, textAlign: 'left', fontFamily: 'monospace', fontSize: 11 }}
+                  value={draft.agentsMd}
+                  onChange={(e) => set({ agentsMd: e.target.value })}
+                />
+              </>
+            )}
+            {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
+          </>
         ) : (
           <>
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
@@ -575,7 +634,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
             <span className="dim3">{t('wizard.sumAgents')}：</span>
             {report?.instructions
               ? report.instructions
-              : draft.genAgents
+              : draft.agentsMd.trim() && (report?.empty || draft.genAgents)
                 ? t('wizard.sumAgentsGen')
                 : t('wizard.sumAgentsNone')}
           </div>

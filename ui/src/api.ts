@@ -307,6 +307,9 @@ export const api = {
   removeSlotBinding: (slot: string) => call<void>('remove_slot_binding', { slot }),
   fetchProviderModels: (id: string) => call<ModelEntry[]>('fetch_provider_models', { id }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
+  /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
+  optimizeAgentsMd: (name: string, sentence: string) =>
+    call<string>('optimize_agents_md', { name, sentence }),
   /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
   /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
   /// 票 01：`autonomy` 缺省由核落 L4。非法档位核拒绝且不建项目。
@@ -998,6 +1001,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'agents_md_draft':
       return `# ${args?.name ?? 'project'}\n\n## Commands\n` as T
+    case 'optimize_agents_md':
+      return `# ${args?.name ?? 'project'}\n\n## 做什么\n${args?.sentence ?? ''}\n\n## Commands\n- Build:\n- Test:\n- Check:\n\n## Layout\n- 未知\n\n## Conventions\n-\n` as T
     default:
       return null as T
   }

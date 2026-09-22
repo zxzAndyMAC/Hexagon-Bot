@@ -3,7 +3,10 @@
 //! src-tauri` 应保持 ≤1（唯一例外是 create_project 建档校验用的 load）。
 //! 运行中实例的热挂接走 `Workbench::reload_providers`，不在此列。
 
+use std::sync::Arc;
+
 use crate::credentials::{provider_key_name, CredentialStore};
+use crate::provider::ModelProvider;
 use crate::provider_config;
 
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +21,9 @@ pub enum AdminError {
     UnknownProvider(String),
     #[error("missing API key: provider/{0}")]
     MissingKey(String),
+    /// 票 16：优化描述要的是主对话模型（default 槽），不是任意一个已配槽。
+    #[error("主对话模型未就绪：需要启用的供应商、钥匙和 default 槽")]
+    MainChatUnavailable,
 }
 
 // 壳层供应商面的类型出口也在这里——provider_config:: 直名只许出现在本模块
@@ -106,4 +112,102 @@ pub fn fetch_models(
         .ok_or_else(|| AdminError::MissingKey(def.id.clone()))?;
     let models = provider_config::fetch_models(def, &key)?;
     Ok(models)
+}
+
+/// 票 16：向导优化项目说明用的主对话模型。项目还不存在，不走 Workbench。
+/// 主对话 = default 槽（票 13 向导第一步放行的那一条），不是角色槽。
+/// 缺绑定、供应商不存在、停用、空模型名、没钥匙 → 不发请求。
+pub fn main_chat_provider(
+    store: Arc<dyn CredentialStore>,
+) -> Result<Arc<dyn ModelProvider>, AdminError> {
+    let doc = provider_config::load()?;
+    let (def, model) = require_main_chat(&doc, store.as_ref())?;
+    Ok(provider_config::make_provider(def, model, store))
+}
+
+pub(crate) fn require_main_chat<'a>(
+    doc: &'a provider_config::ProviderDoc,
+    store: &dyn CredentialStore,
+) -> Result<(&'a provider_config::ProviderDef, &'a str), AdminError> {
+    // resolve_slot 是回退链的唯一实现。这里问的就是 default 本身。
+    let Some(binding) = provider_config::resolve_slot(&doc.slots, "default") else {
+        return Err(AdminError::MainChatUnavailable);
+    };
+    let Some(def) = doc.providers.iter().find(|p| p.id == binding.provider_id) else {
+        return Err(AdminError::MainChatUnavailable);
+    };
+    if !def.enabled || binding.model.trim().is_empty() {
+        return Err(AdminError::MainChatUnavailable);
+    }
+    let key = store.get(&provider_key_name(&def.id))?;
+    if key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return Err(AdminError::MainChatUnavailable);
+    }
+    Ok((def, binding.model.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::MemoryStore;
+    use crate::provider::ProviderKind;
+    use crate::provider_config::{ProviderDef, ProviderDoc, SlotBinding};
+
+    fn doc_default(enabled: bool) -> ProviderDoc {
+        let mut doc = ProviderDoc::default();
+        doc.providers.push(ProviderDef {
+            id: "p".into(),
+            name: "P".into(),
+            kind: ProviderKind::OpenAi,
+            base_url: "http://localhost".into(),
+            models: vec![],
+            enabled,
+        });
+        doc.slots.insert(
+            "default".into(),
+            SlotBinding {
+                provider_id: "p".into(),
+                model: "m".into(),
+            },
+        );
+        doc
+    }
+
+    #[test]
+    fn main_chat_is_the_default_slot_only() {
+        let store = MemoryStore::default();
+        store.set("provider/p", "sk").unwrap();
+        let ready = doc_default(true);
+        let (def, model) = require_main_chat(&ready, &store).unwrap();
+        assert_eq!(def.id, "p");
+        assert_eq!(model, "m");
+
+        let mut chat_only = doc_default(true);
+        chat_only.slots.clear();
+        chat_only.slots.insert(
+            "chat".into(),
+            SlotBinding {
+                provider_id: "p".into(),
+                model: "m".into(),
+            },
+        );
+        assert!(matches!(
+            require_main_chat(&chat_only, &store),
+            Err(AdminError::MainChatUnavailable)
+        ));
+        assert!(matches!(
+            require_main_chat(&doc_default(false), &store),
+            Err(AdminError::MainChatUnavailable)
+        ));
+        let bare = MemoryStore::default();
+        assert!(matches!(
+            require_main_chat(&doc_default(true), &bare),
+            Err(AdminError::MainChatUnavailable)
+        ));
+    }
 }

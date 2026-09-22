@@ -1188,6 +1188,16 @@ fn agents_md_draft(name: String) -> String {
     hexagon_core::setup::agents_md_draft(&name)
 }
 
+/// 票 16：一句话经主对话模型起草项目说明。不写磁盘——落盘仍是确认后的
+/// create_project → write_agents_md。项目还不存在，这条命令不进工作台。
+#[tauri::command]
+fn optimize_agents_md(name: String, sentence: String) -> Result<String, CmdError> {
+    let provider =
+        hexagon_core::provider_admin::main_chat_provider(hexagon_core::credentials::active())
+            .map_err(cmd_err)?;
+    hexagon_core::setup::optimize_agents_md(&name, &sentence, provider.as_ref()).map_err(cmd_err)
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(ts_rs::TS)]
@@ -1462,6 +1472,7 @@ pub fn run() {
             remove_slot_binding,
             fetch_provider_models,
             agents_md_draft,
+            optimize_agents_md,
             create_project,
             project_open,
             project_info,

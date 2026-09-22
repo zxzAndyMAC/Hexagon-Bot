@@ -208,3 +208,153 @@ describe('向导目录（ADR 0060）', () => {
     expect(create).not.toHaveBeenCalled()
   })
 })
+
+const MODEL_DRAFT = [
+  '# Demo',
+  '',
+  '## 做什么',
+  '一个本地待办清单。',
+  '',
+  '## Commands',
+  '- Build:',
+  '- Test:',
+  '- Check:',
+  '',
+  '## Layout',
+  '- 未知',
+  '',
+  '## Conventions',
+  '-',
+  '',
+].join('\n')
+
+function setTextArea(el: HTMLTextAreaElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+  setter.call(el, value)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+async function advance(el: HTMLElement, title: string) {
+  for (let i = 0; i < 8 && !el.textContent?.includes(title); i++) {
+    const btn = nextBtn(el)
+    if (btn.disabled) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 250)) })
+      continue
+    }
+    await act(async () => {
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise((r) => setTimeout(r, 250))
+    })
+  }
+  expect(el.textContent).toContain(title)
+}
+
+describe('一句话优化成项目说明（票 16）', () => {
+  const seeded = {
+    ...draft,
+    roles: ['产品策划'],
+    brief: '',
+    genAgents: false,
+    agentsMd: '',
+  }
+
+  beforeEach(async () => {
+    localStorage.clear()
+    await i18n.changeLanguage('en')
+    localStorage.setItem('hexagon.wizard', JSON.stringify(seeded))
+    vi.spyOn(api, 'listRoleTemplates').mockResolvedValue([{
+      origin: 'builtin',
+      def: {
+        name: '产品策划', duty: 'plan', reviewer: null,
+        model_slot: 'default', globs: [], skills: [],
+      },
+    }])
+    vi.spyOn(api, 'presetPacks').mockResolvedValue([])
+    vi.spyOn(api, 'listProviders').mockResolvedValue(readyDoc)
+    vi.spyOn(api, 'inspectDir').mockResolvedValue(report({ empty: true, is_git: true }))
+  })
+  afterEach(async () => {
+    await unmount()
+    vi.restoreAllMocks()
+    document.body.replaceChildren()
+    localStorage.clear()
+    await i18n.changeLanguage(prevLang)
+  })
+
+  it('空目录优化后可改，确认才提交草稿，后退不创建', async () => {
+    const optimize = vi.spyOn(api, 'optimizeAgentsMd').mockResolvedValue(MODEL_DRAFT)
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    const skeleton = vi.spyOn(api, 'agentsMdDraft').mockResolvedValue('# SKELETON')
+    const el = await renderWizard()
+    await advance(el, '5 · Instructions')
+    expect(skeleton).not.toHaveBeenCalled()
+    const optimizeBtn = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Optimize')!
+    expect(optimizeBtn.disabled).toBe(true)
+    const brief = el.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => { setTextArea(brief, '一个本地待办清单') })
+    expect(optimizeBtn.disabled).toBe(false)
+    await act(async () => {
+      optimizeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(optimize).toHaveBeenCalledWith('Demo', '一个本地待办清单')
+    expect(create).not.toHaveBeenCalled()
+    const boxes = [...el.querySelectorAll('textarea')]
+    expect(boxes).toHaveLength(2)
+    expect(boxes[1].value).toBe(MODEL_DRAFT)
+    expect(boxes[1].value).toContain('- Build:')
+    expect(boxes[1].value).toContain('未知')
+    expect(boxes[1].value).not.toMatch(/npm|cargo/)
+    await act(async () => { setTextArea(boxes[1], `${MODEL_DRAFT}\n人手改过`) })
+    const back = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Back')!
+    await act(async () => { back.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(el.textContent).toContain('4 · Process')
+    expect(create).not.toHaveBeenCalled()
+    await advance(el, '7 · Launch')
+    const launch = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Create project')!
+    await act(async () => { launch.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(create).toHaveBeenCalledTimes(1)
+    const md = create.mock.calls[0][0].agentsMd as string
+    expect(md).toContain('人手改过')
+    expect(md).toContain('- Build:')
+    expect(md).toContain('未知')
+    expect(md).not.toMatch(/npm|cargo/)
+  })
+
+  it('优化后离开向导不会创建项目', async () => {
+    vi.spyOn(api, 'optimizeAgentsMd').mockResolvedValue(MODEL_DRAFT)
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    const el = await renderWizard()
+    await advance(el, '5 · Instructions')
+    const brief = el.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => { setTextArea(brief, '一个本地待办清单') })
+    const optimizeBtn = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Optimize')!
+    await act(async () => { optimizeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(el.textContent).toContain('未知')
+    await unmount()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it.each(['AGENTS.md', 'CLAUDE.md'])('%s 已在时不提供优化，创建也不带草稿', async (file) => {
+    localStorage.setItem('hexagon.wizard', JSON.stringify({
+      ...seeded,
+      genAgents: true,
+      agentsMd: '# SHOULD NOT LAND\n- Build: npm test\n',
+      brief: 'overwrite me',
+    }))
+    vi.spyOn(api, 'inspectDir').mockResolvedValue(report({ instructions: file, empty: false }))
+    const optimize = vi.spyOn(api, 'optimizeAgentsMd').mockResolvedValue(MODEL_DRAFT)
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    const el = await renderWizard()
+    await advance(el, '5 · Instructions')
+    expect(el.textContent).toContain('Instructions file detected')
+    expect(el.textContent).toContain(file)
+    expect([...el.querySelectorAll('button')].some((b) => b.textContent === 'Optimize')).toBe(false)
+    expect(el.textContent).not.toContain('SHOULD NOT LAND')
+    expect(optimize).not.toHaveBeenCalled()
+    await advance(el, '7 · Launch')
+    const launch = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Create project')!
+    await act(async () => { launch.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0][0].agentsMd).toBeNull()
+  })
+})

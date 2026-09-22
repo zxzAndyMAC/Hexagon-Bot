@@ -183,6 +183,7 @@ impl_error_code!(
     Git,
     Io,
     Autonomy,
+    Model,
 );
 impl_error_code!(
     crate::tools::ToolError,
