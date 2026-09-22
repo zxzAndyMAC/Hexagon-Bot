@@ -230,6 +230,8 @@ export default {
     attachNotImage: '不是圖片：{{name}}',
     attachTooBig: '圖片超過 5MB：{{name}}',
     attachRemove: '移除附件',
+    imageZoom: '放大圖片：{{name}}',
+    previewClose: '關閉預覽',
     send: '送出',
   },
   usage: {

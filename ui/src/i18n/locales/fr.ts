@@ -230,6 +230,8 @@ export default {
     attachNotImage: "Ce n'est pas une image : {{name}}",
     attachTooBig: 'Image de plus de 5 Mo : {{name}}',
     attachRemove: "Retirer la piece jointe",
+    imageZoom: 'Agrandir l’image : {{name}}',
+    previewClose: 'Fermer l’aperçu',
     send: 'Envoyer',
   },
   usage: {

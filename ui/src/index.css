@@ -179,6 +179,56 @@ body {
 .chip-btn { cursor: pointer; border-color: var(--border-strong); }
 .chip-btn:hover { background: var(--bg-3); color: var(--text); }
 
+/* 票 10：输入框原子块。镜像层与 textarea 同格叠字，块上禁止 padding/border
+   （会撑宽，光标与透明正文错位）——着色只用 background + box-shadow。
+   点名琥珀、路径紫，与 @/# 弹层同色。手打收束和弹层选中是同一个 .atom-token。 */
+.composer-field { flex: 1; display: grid; min-width: 0; }
+.composer-field > textarea,
+.composer-field > .composer-mirror {
+  grid-area: 1 / 1;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 8px 12px;
+  font: inherit;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.composer-field > textarea {
+  resize: none;
+  overflow-y: auto;
+  color: transparent;
+  caret-color: var(--text);
+  background: transparent;
+  outline: none;
+}
+.composer-field > .composer-mirror {
+  pointer-events: none;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--bg-2);
+  border-color: transparent;
+}
+.atom-token {
+  border-radius: var(--r-xs);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.atom-token[data-kind='mention'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+.atom-token[data-kind='path'] {
+  color: var(--flag);
+  background: var(--flag-soft);
+  box-shadow: 0 0 0 1px var(--flag-border);
+}
+
 button.btn {
   font: inherit; color: var(--text-2); background: var(--bg-2);
   border: 1px solid var(--border); border-radius: var(--r-md);

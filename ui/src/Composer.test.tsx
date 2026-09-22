@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
 import { Composer } from './components/Composer'
+import { atomicDeletion, findAtoms } from './composerAtoms'
 import { useUiStore } from './store'
 import { api } from './api'
 import type { TeamRow } from './gen/TeamRow'
@@ -181,6 +182,235 @@ describe('Composer 图片附件（票 03）', () => {
     expect(stageSpy).toHaveBeenCalledTimes(4)
     await pasteEvent(el, [imgFile('one-more.png')])
     expect(stageSpy).toHaveBeenCalledTimes(4)
+    root.unmount()
+  })
+})
+
+// 票 10：点名 / 路径是原子块。正文仍是 @角色 / #路径（派活口径不变）；
+// 空白收束后退格或删除一次去掉整块，不留残字。目录只是一条路径。
+const ROLES = new Set(['产品策划', '后端', 'UX'])
+
+async function setComposer(el: HTMLElement, body: string) {
+  const ta = el.querySelector('textarea')!
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+    setter.call(ta, body)
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  return ta
+}
+
+async function keyAt(ta: HTMLTextAreaElement, key: string, at: number) {
+  await act(async () => {
+    ta.setSelectionRange(at, at)
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+  })
+}
+
+function clickLabel(el: HTMLElement, label: string) {
+  const node = [...el.querySelectorAll('.mono')].find((n) => n.textContent?.trim() === label)
+  if (!node?.parentElement) throw new Error(`no popup row ${label}`)
+  return act(async () => { node.parentElement!.click() })
+}
+
+describe('composerAtoms（票 10）', () => {
+  it('空白收束的点名：退格一次不留残字，连同尾随空白', () => {
+    const text = '@产品策划 '
+    const atoms = findAtoms(text, ROLES)
+    expect(atoms.map((a) => a.value)).toEqual(['产品策划'])
+    expect(atomicDeletion(text, text.length, text.length, 'Backspace', atoms)).toEqual({ text: '', caret: 0 })
+  })
+
+  it('未收束的路径还在打，不升成块', () => {
+    expect(findAtoms('#src/main.rs', ROLES)).toEqual([])
+    expect(atomicDeletion('#src/main.rs', 12, 12, 'Backspace', [])).toBeNull()
+  })
+
+  it('目录是一条路径，值保留尾 /', () => {
+    const atoms = findAtoms('看 #src/ ', ROLES)
+    expect(atoms).toEqual([{ kind: 'path', value: 'src/', start: 2, end: 7 }])
+  })
+
+  it('光标在块中间或只选中残段，删除扩成整块', () => {
+    const text = '@产品策划 你好'
+    const atoms = findAtoms(text, ROLES)
+    expect(atomicDeletion(text, 3, 3, 'Backspace', atoms)?.text).toBe('你好')
+    expect(atomicDeletion(text, 3, 5, 'Backspace', atoms)?.text).toBe('你好')
+    expect(atomicDeletion(text, 0, 0, 'Delete', atoms)?.text).toBe('你好')
+  })
+
+  it('连续两块只删光标打中的那一块', () => {
+    const text = '@产品策划 @后端 '
+    const atoms = findAtoms(text, ROLES)
+    expect(atomicDeletion(text, text.length, text.length, 'Backspace', atoms)?.text).toBe('@产品策划 ')
+  })
+
+  it('非花名册 @ 不是点名块', () => {
+    expect(findAtoms('@陌生人 ', ROLES)).toEqual([])
+  })
+})
+
+describe('Composer 原子块（票 10）', () => {
+  beforeEach(() => {
+    useUiStore.setState({
+      mode: 'pack',
+      fastRole: null,
+      team: [member('产品策划'), member('后端'), member('UX', 'sleeping')],
+      pending: [],
+      timeline: [],
+    })
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('点名一个角色后，退格一次删除整个点名，不留残字', async () => {
+    const { el, root } = await render(<Composer />)
+    await setComposer(el, '@产品')
+    await clickLabel(el, '@产品策划')
+    const ta = el.querySelector('textarea')!
+    expect(ta.value).toBe('@产品策划 ')
+    expect(el.querySelector('.atom-token')?.getAttribute('data-kind')).toBe('mention')
+    expect(el.querySelector('.atom-token')?.getAttribute('data-value')).toBe('产品策划')
+    await keyAt(ta, 'Backspace', ta.value.length)
+    expect(ta.value).toBe('')
+    expect(ta.value).not.toMatch(/产|策/)
+    root.unmount()
+  })
+
+  it('手打路径与弹层路径是同一种 path 块；退格一次删整段', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'repoPaths').mockResolvedValue(['src/', 'src/main.rs', 'src/lib.rs'])
+    const { el, root } = await render(<Composer />)
+    try {
+    await setComposer(el, '看 #ui/App.tsx ')
+    const typed = el.querySelector('.atom-token')
+    expect(typed?.getAttribute('data-kind')).toBe('path')
+    expect(typed?.getAttribute('data-value')).toBe('ui/App.tsx')
+    expect(typed?.className).toBe('atom-token')
+
+    await setComposer(el, '看 #ui/App.tsx #sr')
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await clickLabel(el, '#src/main.rs')
+    const atoms = [...el.querySelectorAll('.atom-token')]
+    expect(atoms.map((n) => n.getAttribute('data-kind'))).toEqual(['path', 'path'])
+    expect(new Set(atoms.map((n) => n.className))).toEqual(new Set(['atom-token']))
+    expect(atoms.map((n) => n.getAttribute('data-value'))).toEqual(['ui/App.tsx', 'src/main.rs'])
+
+    const ta = el.querySelector('textarea')!
+    await keyAt(ta, 'Backspace', ta.value.length)
+    expect(ta.value).toBe('看 #ui/App.tsx ')
+    expect(ta.value).not.toContain('main.rs')
+    expect(el.querySelector('.atom-token')?.getAttribute('data-value')).toBe('ui/App.tsx')
+    } finally {
+      vi.useRealTimers()
+      root.unmount()
+    }
+  })
+
+  it('目录块不把子文件展进输入框，退格一次删掉这条路径', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'repoPaths').mockResolvedValue(['src/', 'src/main.rs', 'src/lib.rs'])
+    const { el, root } = await render(<Composer />)
+    try {
+    await setComposer(el, '#src')
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    expect(el.textContent).toContain('#src/main.rs') // 弹层可以列出子文件
+    await clickLabel(el, '#src/')
+    const ta = el.querySelector('textarea')!
+    expect(ta.value).toBe('#src/ ')
+    expect(ta.value).not.toContain('main.rs')
+    expect(ta.value).not.toContain('lib.rs')
+    const tokens = [...el.querySelectorAll('.atom-token')]
+    expect(tokens).toHaveLength(1)
+    expect(tokens[0].getAttribute('data-kind')).toBe('path')
+    expect(tokens[0].getAttribute('data-value')).toBe('src/')
+    await keyAt(ta, 'Delete', 0)
+    expect(ta.value).toBe('')
+    } finally {
+      vi.useRealTimers()
+      root.unmount()
+    }
+  })
+
+  it('点名块发送后派活口径不变：正文仍是 @角色', async () => {
+    const sendSpy = vi.spyOn(api, 'sendMessage')
+    const dispSpy = vi.spyOn(api, 'dispatch')
+    const { el, root } = await render(<Composer />)
+    await setComposer(el, '@产品')
+    await clickLabel(el, '@产品策划')
+    const ta = el.querySelector('textarea')!
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(sendSpy).toHaveBeenCalledWith('@产品策划 ', [])
+    expect(dispSpy).toHaveBeenCalledTimes(1)
+    expect(dispSpy).toHaveBeenCalledWith('产品策划', '@产品策划 ', [])
+    root.unmount()
+  })
+})
+
+describe('Composer 图片放大（票 10）', () => {
+  beforeEach(() => {
+    useUiStore.setState({
+      mode: 'fastpath', fastRole: '运维',
+      team: [member('运维')], pending: [], timeline: [],
+    })
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('缩略图可放大，关闭预览回到输入框且不移除图片', async () => {
+    vi.spyOn(api, 'stageAttachment').mockResolvedValue({
+      media_type: 'image/png', path: '.hexagon/inbox/att-z.png', bytes: 11, name: 'shot.png',
+    })
+    const discardSpy = vi.spyOn(api, 'discardAttachments')
+    const { el, root } = await render(<Composer />)
+    await pasteEvent(el, [imgFile()])
+    const thumb = el.querySelector('img')
+    expect(thumb).toBeTruthy()
+    await act(async () => { el.querySelector<HTMLButtonElement>('.attach-thumb')!.click() })
+    const zoom = el.querySelector('.attach-zoom')
+    expect(zoom).toBeTruthy()
+    expect(zoom?.querySelector('img')?.getAttribute('alt')).toBe('shot.png')
+    await act(async () => { el.querySelector<HTMLButtonElement>('.attach-zoom-close')!.click() })
+    expect(el.querySelector('.attach-zoom')).toBeNull()
+    expect(el.querySelector('.attach-chip')).toBeTruthy()
+    expect(discardSpy).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(el.querySelector('textarea'))
+    root.unmount()
+  })
+
+  it('Esc 关闭放大也回到输入框', async () => {
+    vi.spyOn(api, 'stageAttachment').mockResolvedValue({
+      media_type: 'image/png', path: '.hexagon/inbox/att-z2.png', bytes: 11, name: 'shot.png',
+    })
+    const { el, root } = await render(<Composer />)
+    await pasteEvent(el, [imgFile()])
+    await act(async () => { el.querySelector<HTMLButtonElement>('.attach-thumb')!.click() })
+    expect(el.querySelector('.attach-zoom')).toBeTruthy()
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(el.querySelector('.attach-zoom')).toBeNull()
+    expect(document.activeElement).toBe(el.querySelector('textarea'))
+    root.unmount()
+  })
+
+  it('关闭钮只去掉这一张', async () => {
+    vi.spyOn(api, 'stageAttachment').mockImplementation(async (name: string) => ({
+      media_type: 'image/png', path: `.hexagon/inbox/${name}`, bytes: 11, name,
+    }))
+    const discardSpy = vi.spyOn(api, 'discardAttachments')
+    const { el, root } = await render(<Composer />)
+    await pasteEvent(el, [imgFile('a.png')])
+    await pasteEvent(el, [imgFile('b.png')])
+    expect(el.querySelectorAll('.attach-chip')).toHaveLength(2)
+    await act(async () => { el.querySelectorAll<HTMLButtonElement>('.attach-remove')[0].click() })
+    expect(el.querySelector('.attach-zoom')).toBeNull()
+    expect(el.querySelectorAll('.attach-chip')).toHaveLength(1)
+    expect(el.querySelector('.attach-thumb img')?.getAttribute('alt')).toBe('b.png')
+    expect(discardSpy).toHaveBeenCalledTimes(1)
+    expect(discardSpy).toHaveBeenCalledWith([
+      expect.objectContaining({ path: '.hexagon/inbox/a.png', name: 'a.png' }),
+    ])
     root.unmount()
   })
 })

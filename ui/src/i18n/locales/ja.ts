@@ -230,6 +230,8 @@ export default {
     attachNotImage: '画像ではありません: {{name}}',
     attachTooBig: '5MB超の画像: {{name}}',
     attachRemove: '添付を削除',
+    imageZoom: '画像を拡大：{{name}}',
+    previewClose: 'プレビューを閉じる',
     send: '送信',
   },
   usage: {

@@ -230,6 +230,8 @@ export default {
     attachNotImage: 'Not an image: {{name}}',
     attachTooBig: 'Image over 5MB: {{name}}',
     attachRemove: 'Remove attachment',
+    imageZoom: 'Zoom image: {{name}}',
+    previewClose: 'Close preview',
     send: 'Send',
   },
   usage: {
