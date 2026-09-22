@@ -666,8 +666,10 @@ fn spill_trim_keeps_tail_and_spills_full() {
     assert_eq!(std::fs::read_to_string(dir.path().join(rel)).unwrap(), big);
 }
 
-/// 票 06：撞限机械降级——最旧轮次逐字落 transcript，机械状态块入队，
-/// 切点不拆 tool_use/tool_result 对。
+/// 行为变更（票 07 / ADR 0066）：未超窗口不再把最旧一半换成「机械降级」摘要。
+/// 旧断言要求 out[2] 是机械块——消息数 > 3 就切，会把还没超限的工具记录
+/// 以及夹在里面的原文移走。现在原样留下；超限只删工具记录，见
+/// `ticket07_long_history_drops_tools_keeps_speech_verbatim`。
 #[test]
 fn mechanical_compact_spills_and_keeps_boundaries() {
     let (db, _reg, ctx, dir) = setup();
@@ -709,20 +711,88 @@ fn mechanical_compact_spills_and_keeps_boundaries() {
         }],
     });
     let out = mechanical_compact(&db, &ctx, msgs);
-    // [0]sys [1]首条指令原样；[2] 是机械块 User
     assert_eq!(out[1].role, Role::User);
-    assert_eq!(out[2].role, Role::User);
-    let ContentBlock::Text { text } = &out[2].content[0] else {
+    let ContentBlock::Text { text } = &out[1].content[0] else {
         panic!()
     };
-    assert!(text.contains("机械降级") && text.contains("transcript-"));
-    assert!(text.contains("首条指令") || text.contains("续写契约"));
-    // 保留段首不是孤儿 tool_result
-    assert_ne!(out[3].role, Role::Tool);
-    // transcript 落盘且逐字
-    let t = std::fs::read_to_string(dir.path().join(".hexagon/spill/transcript-1.md")).unwrap();
-    assert!(t.contains("tool_use fs_read"));
-    assert!(t.contains("tool_result"));
+    assert_eq!(text, "首条指令");
+    let flat = serde_json::to_string(&out).unwrap();
+    assert!(flat.contains("latest"));
+    assert!(!flat.contains("机械降级"), "未超限不应换成摘要");
+    assert!(!dir.path().join(".hexagon/spill/transcript-1.md").exists());
+}
+
+/// 票 07 / ADR 0066：过长历史只删工具调用和工具结果。负责人和角色原文
+/// 仍逐字留在下一次派发给模型的历史里，不换成「机械降级」摘要。
+/// 接缝是 run_turn → ScriptedProvider 录到的出站消息，不直接调裁剪函数。
+#[test]
+fn ticket07_long_history_drops_tools_keeps_speech_verbatim() {
+    let (db, reg, ctx, _dir) = setup();
+    let owner = "负责人原文保持 PathBuf src/lib.rs:12 报错 E0425";
+    let role_a = "角色原文 ALPHA 路径 crates/a.rs 约束不要改公开签名";
+    let role_b = "角色原文 BETA 报错 E0308 在 src/lib.rs:40";
+    // 单条工具入参低于 120k tok 上限，两条合计超过——第二轮之后必须收缩。
+    let oldest = format!("OLDEST_TOOL_PAYLOAD_{}", "o".repeat(280_000));
+    let newest = format!("NEWEST_TOOL_PAYLOAD_{}", "n".repeat(280_000));
+    let big = |marker: &str| ChatResponse {
+        content: vec![
+            ContentBlock::Text {
+                text: if marker.starts_with("OLDEST") {
+                    role_a
+                } else {
+                    role_b
+                }
+                .into(),
+            },
+            ContentBlock::ToolUse {
+                id: if marker.starts_with("OLDEST") {
+                    "t0".into()
+                } else {
+                    "t1".into()
+                },
+                name: "not_a_tool".into(),
+                input: json!({ "blob": marker }),
+            },
+        ],
+        stop: StopReason::ToolUse,
+        usage: Default::default(),
+    };
+    let provider = ScriptedProvider::new(vec![big(&oldest), big(&newest), text_response("done")]);
+    let out = run_turn(&db, &provider, &reg, &ctx, vec![], owner).unwrap();
+    assert_eq!(out, TurnOutcome::Finished);
+    let calls = provider.recorded();
+    assert!(calls.len() >= 3, "收缩后仍要派发，got {}", calls.len());
+    let sent = &calls[2];
+    let texts: Vec<&str> = sent
+        .messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.contains(&role_a),
+        "角色原文 ALPHA 被改写或删掉: {texts:?}"
+    );
+    assert!(
+        texts.contains(&role_b),
+        "角色原文 BETA 被改写或删掉: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains(owner)),
+        "负责人原文不在组装历史里"
+    );
+    assert!(
+        texts.iter().all(|t| !t.contains("机械降级")),
+        "原文被机械摘要替换"
+    );
+    let flat = serde_json::to_string(&sent.messages).unwrap();
+    assert!(
+        !flat.contains("OLDEST_TOOL_PAYLOAD"),
+        "过长历史仍带着最旧的整段工具调用"
+    );
 }
 
 /// 票 06：没东西可切（或切点跑穿）→ 原样返回，升级路径不变。
@@ -1442,4 +1512,126 @@ fn stage_attachment_rejects_non_image_and_huge() {
             name: "x".into(),
         }],
     ); // 越界引用静默跳过——prefix 闸门
+}
+
+// ---------- 票 07：工具记录可删，原文不可删 ----------
+
+fn speech_texts(messages: &[Message]) -> Vec<String> {
+    messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn inline_images(messages: &[Message]) -> Vec<(String, String)> {
+    messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Image { media_type, data } => Some((media_type.clone(), data.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 没有配对结果的 tool_use id，以及没有配对调用的 tool_result id。
+fn unpaired_tool_ids(messages: &[Message]) -> std::collections::BTreeSet<String> {
+    let mut uses = std::collections::BTreeSet::new();
+    let mut results = std::collections::BTreeSet::new();
+    for m in messages {
+        for b in &m.content {
+            match b {
+                ContentBlock::ToolUse { id, .. } => {
+                    uses.insert(id.clone());
+                }
+                ContentBlock::ToolResult { tool_use_id, .. } => {
+                    results.insert(tool_use_id.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    uses.symmetric_difference(&results).cloned().collect()
+}
+
+use proptest::prelude::*;
+
+fn arb_block() -> impl Strategy<Value = ContentBlock> {
+    prop_oneof![
+        "[ -~]{0,40}".prop_map(|text| ContentBlock::Text { text }),
+        "[a-z0-9]{0,16}".prop_map(|data| ContentBlock::Image {
+            media_type: "image/png".into(),
+            data,
+        }),
+        (0..5u8, "[a-z]{0,24}").prop_map(|(id, path)| ContentBlock::ToolUse {
+            id: format!("t{id}"),
+            name: "fs_read".into(),
+            input: json!({ "path": path }),
+        }),
+        (0..5u8, "[a-z]{0,24}").prop_map(|(id, body)| ContentBlock::ToolResult {
+            tool_use_id: format!("t{id}"),
+            content: body,
+            is_error: false,
+            images: vec![],
+        }),
+        "[a-z]{0,12}".prop_map(|k| ContentBlock::Opaque {
+            raw: json!({ "type": "server_tool_use", "k": k }),
+        }),
+    ]
+}
+
+proptest! {
+    /// 误删原文是贵的失败：任意块序列、任意预算下，文本和内联图逐字还在，
+    /// 删掉的块都必须是工具记录，并且不制造新的孤儿 tool_use/tool_result。
+    #[test]
+    fn shrink_keeps_speech_and_drops_only_tool_records(
+        blocks in proptest::collection::vec(arb_block(), 0..18),
+        cap in 0..80usize,
+    ) {
+        let messages: Vec<Message> = blocks
+            .into_iter()
+            .map(|block| {
+                let role = match &block {
+                    ContentBlock::ToolResult { .. } => Role::Tool,
+                    ContentBlock::ToolUse { .. } | ContentBlock::Opaque { .. } => {
+                        Role::Assistant
+                    }
+                    ContentBlock::Text { .. } | ContentBlock::Image { .. } => Role::User,
+                };
+                Message {
+                    role,
+                    content: vec![block],
+                }
+            })
+            .collect();
+        let before_text = speech_texts(&messages);
+        let before_img = inline_images(&messages);
+        let before_orphan = unpaired_tool_ids(&messages);
+        let (out, removed) = context::shrink_tool_records(messages, cap);
+        prop_assert_eq!(speech_texts(&out), before_text);
+        prop_assert_eq!(inline_images(&out), before_img);
+        for block in &removed {
+            prop_assert!(context::tool_record_may_drop(block));
+        }
+        prop_assert!(unpaired_tool_ids(&out).is_subset(&before_orphan));
+    }
+
+    /// 分类器本身：文本和内联图永远不可丢，不管里面写了什么。
+    #[test]
+    fn text_and_image_are_never_droppable(
+        text in "[ -~]{0,80}",
+        data in "[a-z0-9]{0,24}",
+    ) {
+        let text_block = ContentBlock::Text { text };
+        let image_block = ContentBlock::Image {
+            media_type: "image/png".into(),
+            data,
+        };
+        prop_assert!(!context::tool_record_may_drop(&text_block));
+        prop_assert!(!context::tool_record_may_drop(&image_block));
+    }
 }

@@ -1,5 +1,5 @@
 //! 上下文窗口管理（turn 内核的「装得下什么」侧）：
-//! 估算 → 轻量裁剪（spill）→ 机械降级（transcript）→ 撞限升级卡，
+//! 估算 → 轻量裁剪（spill）→ 只删工具记录（transcript）→ 撞限升级卡，
 //! 以及消息向量卫生（悬空 tool_use 修复）。
 
 use crate::db::Db;
@@ -143,52 +143,152 @@ pub(super) fn trim_context(ctx: &ToolContext, mut messages: Vec<Message>) -> Vec
     messages
 }
 
-/// 撞限前的机械降级（openworker-borrow 票 06）：最旧轮次逐字落 transcript
-/// 文件，出站视图换机械状态块（trace 派生）+ 首条负责人指令指引。
-/// 零模型参与——守 US37「影响语义的决策不自动做」，compaction.py 的
-/// LLM 摘要部分刻意不搬。
+/// 可丢弃分类器（票 07 / ADR 0066）。
+///
+/// 代价：漏判（该删的工具记录留着）最多多占窗口，超限再升级问一次人；
+/// 误判（把负责人或角色原文删掉、截断或换成摘要）会丢掉路径、报错和约束，
+/// 而且模型按残缺历史继续干活，没人当场复核。偏向保留文本——只有明确的
+/// 工具记录可以删或截断。内联图是负责人附件，不是工具记录，同样保留。
+pub(super) fn tool_record_may_drop(block: &ContentBlock) -> bool {
+    match block {
+        ContentBlock::ToolUse { .. }
+        | ContentBlock::ToolResult { .. }
+        | ContentBlock::Opaque { .. } => true,
+        ContentBlock::Text { .. } | ContentBlock::Image { .. } => false,
+    }
+}
+
+/// 从最旧的工具记录组开始删，直到估算不超过 `cap_tokens` 或已经没有可删组。
+/// 一组 = 同一个 tool_use id 的调用和结果，或单独一条服务端工具块。
+/// 调用和结果一起删，避免留下孤儿 tool_result（Anthropic 形状会 400）。
+/// 不插入摘要，不改写文本。返回 (留下的消息, 删掉的块)。
+pub(super) fn shrink_tool_records(
+    mut messages: Vec<Message>,
+    cap_tokens: usize,
+) -> (Vec<Message>, Vec<ContentBlock>) {
+    let mut removed = Vec::new();
+    while estimate_tokens(&messages) > cap_tokens {
+        let Some(locs) = oldest_tool_group(&messages) else {
+            break;
+        };
+        let kill: std::collections::HashSet<(usize, usize)> = locs.into_iter().collect();
+        let mut next = Vec::with_capacity(messages.len());
+        for (mi, mut m) in messages.into_iter().enumerate() {
+            let mut kept = Vec::with_capacity(m.content.len());
+            for (bi, block) in m.content.into_iter().enumerate() {
+                if kill.contains(&(mi, bi)) {
+                    debug_assert!(tool_record_may_drop(&block));
+                    removed.push(block);
+                } else {
+                    kept.push(block);
+                }
+            }
+            if !kept.is_empty() {
+                m.content = kept;
+                next.push(m);
+            }
+        }
+        messages = next;
+    }
+    (messages, removed)
+}
+
+/// 最旧一组工具记录的 (消息下标, 块下标)。没有可删块则 None。
+fn oldest_tool_group(messages: &[Message]) -> Option<Vec<(usize, usize)>> {
+    struct Group {
+        ord: (usize, usize),
+        locs: Vec<(usize, usize)>,
+    }
+    let mut groups: Vec<Group> = Vec::new();
+    let mut by_id: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let touch = |groups: &mut Vec<Group>, gi: usize, mi: usize, bi: usize| {
+        groups[gi].locs.push((mi, bi));
+        let pos = (mi, bi);
+        if pos < groups[gi].ord {
+            groups[gi].ord = pos;
+        }
+    };
+    for (mi, m) in messages.iter().enumerate() {
+        for (bi, block) in m.content.iter().enumerate() {
+            match block {
+                ContentBlock::ToolUse { id, .. } => {
+                    if let Some(&gi) = by_id.get(id) {
+                        touch(&mut groups, gi, mi, bi);
+                    } else {
+                        by_id.insert(id.clone(), groups.len());
+                        groups.push(Group {
+                            ord: (mi, bi),
+                            locs: vec![(mi, bi)],
+                        });
+                    }
+                }
+                ContentBlock::ToolResult { tool_use_id, .. } => {
+                    if let Some(&gi) = by_id.get(tool_use_id) {
+                        touch(&mut groups, gi, mi, bi);
+                    } else {
+                        by_id.insert(tool_use_id.clone(), groups.len());
+                        groups.push(Group {
+                            ord: (mi, bi),
+                            locs: vec![(mi, bi)],
+                        });
+                    }
+                }
+                ContentBlock::Opaque { .. } => groups.push(Group {
+                    ord: (mi, bi),
+                    locs: vec![(mi, bi)],
+                }),
+                ContentBlock::Text { .. } | ContentBlock::Image { .. } => {}
+            }
+        }
+    }
+    groups.sort_by_key(|g| g.ord);
+    groups.into_iter().next().map(|g| g.locs)
+}
+
+/// 撞限时只移走工具记录（票 07 / ADR 0066）。
+///
+/// 票 06 的机械降级把最旧一半消息整段换成「机械降级」状态块。那段里可以
+/// 有角色原文和中途插进来的负责人原文，换成摘要之后路径和报错就没了。
+/// 否决继续切消息：超限只删工具调用和工具结果，原文留在原块里。
+/// 删掉的工具记录逐字进 transcript；给模型的只是文件指针，不复述原文。
+/// transcript 落不了盘就不删——悄悄丢工具输出比升级问人更差。
+/// 零模型参与。不接入 fast-jev-compaction。
 pub(super) fn mechanical_compact(
     db: &Db,
     ctx: &ToolContext,
-    mut messages: Vec<Message>,
+    messages: Vec<Message>,
 ) -> Vec<Message> {
-    // 保留 [0]=system、[1]=首条负责人指令；切 [2..k) 移出。
-    if messages.len() <= 3 {
+    // 给指针行留一点预算，避免删完刚好贴着上限、加上指针又超。
+    const NOTE_TOKENS: usize = 128;
+    if estimate_tokens(&messages) <= CONTEXT_CAP_TOKENS {
         return messages;
     }
-    let mut k = messages.len() / 2;
-    // 切点不能落在 Tool 消息上：那会把它和（已移出的）tool_use 拆开，
-    // 出站历史出现孤儿 tool_result，Anthropic 类供应商直接 400。
-    while k < messages.len() && messages[k].role == Role::Tool {
-        k += 1;
+    let budget = CONTEXT_CAP_TOKENS.saturating_sub(NOTE_TOKENS);
+    let original = messages.clone();
+    let (mut messages, removed) = shrink_tool_records(messages, budget);
+    if removed.is_empty() {
+        return original;
     }
-    if k <= 2 || k >= messages.len() {
-        return messages;
-    }
-    let removed: Vec<Message> = messages.drain(2..k).collect();
-    let Some(transcript) = write_transcript(ctx, &removed) else {
-        // transcript 落不了盘就不悄悄丢消息——原样返回走升级路径
-        return messages;
+    let archived = vec![Message {
+        role: Role::Tool,
+        content: removed.clone(),
+    }];
+    let Some(transcript) = write_transcript(ctx, &archived) else {
+        return original;
     };
-    let block = format!(
-        "[机械降级] 最旧 {} 条消息已逐字移到 {transcript}，需要细节用 fs_read 读。\n\
-         {}\n\
-         负责人首条指令见上文首条消息（逐字保留）。\n\
-         续写契约：不重复已答问题、不复盘已交付内容。",
+    let note = format!(
+        "[工具记录已移出上下文] 最旧 {} 条工具调用或结果已逐字移到 {transcript}。\
+         需要细节用 fs_read 读。负责人与角色原文仍在上文，未改写。",
         removed.len(),
-        crate::provenance::state_block(db, ctx),
     );
-    messages.insert(
-        2,
-        Message {
-            role: Role::User,
-            content: vec![ContentBlock::Text { text: block }],
-        },
-    );
+    messages.push(Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text { text: note }],
+    });
     let _ = db.append_event(
         &ctx.project_id,
         EventKind::System,
-        json!({"kind": "context_compacted", "removed": k - 2, "transcript": transcript}),
+        json!({"kind": "context_compacted", "removed": removed.len(), "transcript": transcript}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     );

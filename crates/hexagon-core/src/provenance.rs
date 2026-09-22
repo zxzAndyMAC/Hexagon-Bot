@@ -328,9 +328,9 @@ pub fn note(db: &Db, ctx: &ToolContext, tool: &str, input: &Value) -> Option<Str
 
 // ---------- 机械状态块（openworker-borrow 票 06）----------
 //
-// 撞限降级时替换最旧轮次的「机械摘要」：全部字段从 trace 事件确定性派生，
-// 零模型参与（守「影响语义的决策不自动做」——compaction.py 的 LLM 摘要
-// 刻意不搬）。
+// 字段全部从 trace 事件确定性派生，零模型参与。
+// 票 07 / ADR 0066：不许再把它塞进回合上下文代替被移走的轮次——那是摘要，
+// 会盖住负责人和角色原文。撞限只删工具记录（turn::context）。
 
 /// 本激活的机械状态块：写过/下载的文件、已交付产物、最近 bash+exit。
 pub fn state_block(db: &Db, ctx: &ToolContext) -> String {

@@ -1,7 +1,7 @@
 //! 回合内核：tool-loop + 流式分发 + 终态映射。
 //!
 //! 子模块（arch-review 票 03 拆分）：`prompt` = 提示词装配/简报/请求信封，
-//! `context` = 上下文估算/裁剪/机械降级/升级卡/消息卫生。
+//! `context` = 上下文估算/裁剪/只删工具记录/升级卡/消息卫生。
 //!
 //! 休眠语义：status='sleeping' 的 Agent 不调度、不召模型——run_turn 直接
 //! 返回，provider 零调用。
@@ -592,8 +592,8 @@ fn run_turn_impl(
                     )?;
                 }
             }
-            // US37：轻量裁剪始终做；仍超上限先走机械降级（票 06），
-            // 降级后仍超才暂停问负责人（不做自动全量摘要）
+            // US37 + 票 07：轻量裁剪始终做；仍超上限只删工具记录
+            // （负责人与角色原文不换成摘要）。删完仍超才暂停问负责人。
             messages = trim_context(ctx, messages);
             let mut est = estimate_tokens(&messages);
             if est > CONTEXT_CAP_TOKENS {
@@ -662,7 +662,7 @@ fn run_turn_impl(
             // 一次（截断回复入史 + nudge），仍截断才以 truncated 收场。
             // 旧写法（票 06 前）把输出截断误判成上下文满，直接弹升级卡——
             // 后果是每次长输出都打断负责人。est>cap 的输入侧撞限仍在
-            // 循环顶的机械降级+升级路径。
+            // 循环顶的工具记录删减+升级路径。
             if resp.stop == StopReason::MaxTokens {
                 messages.push(Message {
                     role: Role::Assistant,
