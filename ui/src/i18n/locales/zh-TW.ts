@@ -409,6 +409,13 @@ export default {
     sumAgentsGen: '將產生 AGENTS.md',
     sumAgentsNone: '無',
     alignHint: '已有倉庫——建議開跑後先讓產品策劃對齊現狀',
+    create: {
+      check_dir: '檢查目錄',
+      git: 'git',
+      persist_roles: '角色落庫',
+      recheck_keys: '金鑰複查',
+      open_project: '打開專案',
+    },
     back: '上一步',
     next: '下一步',
     launch: '建立專案',

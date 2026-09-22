@@ -3,7 +3,8 @@
 // 草稿存 localStorage `hexagon.wizard`，中途退出可续；缺密钥 fail-closed 不能开跑。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, isTauri, type DirReport, type PackDef, type ProviderView, type ProvidersView, type RoleDef, type RoleTemplate } from '../api'
+import { api, asCmdError, errText, isTauri, type DirReport, type PackDef, type ProviderView, type ProvidersView, type RoleDef, type RoleTemplate } from '../api'
+import { applyCreateFailure, CREATE_STEPS, type CreateStep } from '../createProgress'
 import { useUiStore } from '../store'
 import { sharedSlots, slotLabel } from '../modelpick'
 import { providerStepReady } from '../providerGate'
@@ -71,8 +72,11 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
   // 票 15：密钥显隐复用 ProviderManager 的 vision 钮模式（每 provider 独立）。
   const [keyShown, setKeyShown] = useState<Set<string>>(new Set())
-  const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  // 票 14：创建步骤随核的回报点亮。失败停在该步，不进入工作台。
+  const [createDone, setCreateDone] = useState<CreateStep[]>([])
+  const [createFail, setCreateFail] = useState<{ step: CreateStep; reason: string } | null>(null)
 
   const set = useCallback(
     (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch })),
@@ -219,7 +223,15 @@ export function Wizard({ onDone }: { onDone: () => void }) {
 
   async function launch() {
     setBusy(true)
-    setErr('')
+    setCreateDone([])
+    setCreateFail(null)
+    const seen: CreateStep[] = []
+    let failed = false
+    const note = (step: CreateStep) => {
+      if (failed || seen.includes(step)) return
+      seen.push(step)
+      setCreateDone([...seen])
+    }
     try {
       await api.createProject({
         dir: draft.dir,
@@ -233,11 +245,15 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         initGit: draft.initGit,
         agentsMd:
           draft.genAgents && !report?.instructions ? draft.agentsMd : null,
-      })
+      }, note)
       localStorage.removeItem(DRAFT_KEY)
       onDone()
     } catch (e) {
-      setErr(errText(e))
+      // 命令拒绝 = 没打开。已报告的「打开项目」也撤掉，避免假成功。
+      failed = true
+      const applied = applyCreateFailure(seen, asCmdError(e).code)
+      setCreateDone(applied.done)
+      setCreateFail({ step: applied.failed, reason: errText(e) })
     } finally {
       setBusy(false)
     }
@@ -565,7 +581,39 @@ export function Wizard({ onDone }: { onDone: () => void }) {
             {t('wizard.alignHint')}
           </div>
         )}
-        {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 10 }}>{err}</div>}
+        {(busy || createDone.length > 0 || createFail) && (
+          <ul
+            data-testid="create-progress"
+            style={{ listStyle: 'none', padding: 0, margin: '12px 0 0' }}
+          >
+            {CREATE_STEPS.map((s) => {
+              const done = createDone.includes(s)
+              const failed = createFail?.step === s
+              const running = busy && !createFail && !done
+                && CREATE_STEPS.find((x) => !createDone.includes(x)) === s
+              const state = failed ? 'failed' : done ? 'done' : running ? 'running' : 'pending'
+              return (
+                <li
+                  key={s}
+                  data-create-step={s}
+                  data-state={state}
+                  style={{
+                    fontSize: 12, padding: '3px 0',
+                    color: failed ? 'var(--err)' : done ? 'var(--ok)' : 'var(--text-2)',
+                  }}
+                >
+                  <span style={{ display: 'inline-block', width: 16 }}>
+                    {failed ? '✗' : done ? '✓' : running ? '…' : '○'}
+                  </span>
+                  {t(`wizard.create.${s}`)}
+                  {failed && (
+                    <div style={{ marginLeft: 16, color: 'var(--err)' }}>{createFail.reason}</div>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </>
     ),
   }

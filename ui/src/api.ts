@@ -1,7 +1,8 @@
 // 核 API 接缝：Tauri 环境走 invoke；浏览器开发环境用内置 mock 数据。
 // UI 的唯一通道 = 这些命令 + 事件推送，没有旁路。类型对齐 api.rs 的 JSON 形状。
 
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
+import { CREATE_STEPS, type CreateStep } from './createProgress'
 import i18n from './i18n'
 
 // ---- IPC DTO（ADR 0054，票 06）：ui/src/gen/* 由 ts-rs 从 Rust DTO 生成 ----
@@ -55,6 +56,7 @@ import type { ProviderView } from './gen/ProviderView'
 import type { ProvidersView } from './gen/ProvidersView'
 import type { SlotBinding } from './gen/SlotBinding'
 import type { CreateProjectOpts } from './gen/CreateProjectOpts'
+import type { CreateStep as CreateStepDto } from './gen/CreateStep'
 import type { Event } from './gen/Event'
 import type { EventKind } from './gen/EventKind'
 import type { MessageRow } from './gen/MessageRow'
@@ -74,7 +76,7 @@ export type {
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
   PermissionRuleRow, SkillRow, McpServiceRow,
   AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
-  CreateProjectOpts, Event, EventKind, MessageRow, MessageToken, ExportFilter,
+  CreateProjectOpts, CreateStepDto, Event, EventKind, MessageRow, MessageToken, ExportFilter,
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
 }
 
@@ -305,19 +307,24 @@ export const api = {
   removeSlotBinding: (slot: string) => call<void>('remove_slot_binding', { slot }),
   fetchProviderModels: (id: string) => call<ModelEntry[]>('fetch_provider_models', { id }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
-  createProject: (opts: {
-    dir: string
-    name: string
-    roles: string[]
-    /// ADR 0057：选中角色的生效定义全集（自定义模板 + 向导定制项都经此传入，
-    /// 后端 override 优先、回落内置；不传=纯内置目录）。
-    roleOverrides?: RoleDef[]
-    packName?: string | null
-    fastpathRole?: string | null
-    initGit: boolean
-    agentsMd?: string | null
-  }) =>
-    call<void>('create_project', {
+  /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
+  /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
+  createProject: (
+    opts: {
+      dir: string
+      name: string
+      roles: string[]
+      /// ADR 0057：选中角色的生效定义全集（自定义模板 + 向导定制项都经此传入，
+      /// 后端 override 优先、回落内置；不传=纯内置目录）。
+      roleOverrides?: RoleDef[]
+      packName?: string | null
+      fastpathRole?: string | null
+      initGit: boolean
+      agentsMd?: string | null
+    },
+    onStep?: (step: CreateStep) => void,
+  ) => {
+    const args = {
       opts: {
         dir: opts.dir,
         name: opts.name,
@@ -328,7 +335,16 @@ export const api = {
         initGit: opts.initGit,
         agentsMd: opts.agentsMd ?? null,
       },
-    }),
+    }
+    if (!isTauri) {
+      // 浏览器 dev 没有壳层通道。按核的顺序当场报告再返回，不另睡假装耗时。
+      for (const step of CREATE_STEPS) onStep?.(step)
+      return call<void>('create_project', args)
+    }
+    const onProgress = new Channel<CreateStep>()
+    onProgress.onmessage = (step) => onStep?.(step)
+    return invoke<void>('create_project', { ...args, onProgress })
+  },
 }
 
 // ---- 浏览器 dev mock：覆盖全部事件 kind / 全部待决卡 / 产物版本链 / 代码文件 ----

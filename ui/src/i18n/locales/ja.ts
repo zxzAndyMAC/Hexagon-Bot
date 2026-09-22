@@ -409,6 +409,13 @@ export default {
     sumAgentsGen: 'AGENTS.md を生成',
     sumAgentsNone: 'なし',
     alignHint: '既存リポジトリ——起動後まずプロダクトプランナーに現状を把握させましょう',
+    create: {
+      check_dir: 'ディレクトリを確認',
+      git: 'git',
+      persist_roles: 'ロールを保存',
+      recheck_keys: 'キーを再確認',
+      open_project: 'プロジェクトを開く',
+    },
     back: '戻る',
     next: '次へ',
     launch: 'プロジェクト作成',

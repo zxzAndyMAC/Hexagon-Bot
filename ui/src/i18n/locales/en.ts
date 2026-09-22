@@ -409,6 +409,13 @@ export default {
     sumAgentsGen: 'will generate AGENTS.md',
     sumAgentsNone: 'none',
     alignHint: 'Existing repo — let the product planner align with current state after launch',
+    create: {
+      check_dir: 'Check directory',
+      git: 'git',
+      persist_roles: 'Save roles',
+      recheck_keys: 'Recheck keys',
+      open_project: 'Open project',
+    },
     back: 'Back',
     next: 'Next',
     launch: 'Create project',

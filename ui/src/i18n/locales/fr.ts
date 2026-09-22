@@ -409,6 +409,13 @@ export default {
     sumAgentsGen: 'AGENTS.md sera généré',
     sumAgentsNone: 'aucun',
     alignHint: 'Dépôt existant — laissez le planificateur produit s’aligner après le lancement',
+    create: {
+      check_dir: 'Vérifier le dossier',
+      git: 'git',
+      persist_roles: 'Enregistrer les rôles',
+      recheck_keys: 'Revérifier les clés',
+      open_project: 'Ouvrir le projet',
+    },
     back: 'Retour',
     next: 'Suivant',
     launch: 'Créer le projet',

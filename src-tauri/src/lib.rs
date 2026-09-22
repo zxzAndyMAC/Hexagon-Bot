@@ -1215,6 +1215,9 @@ fn create_project(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
     opts: CreateProjectOpts,
+    // 票 14：每步做完就推一帧。同步命令跑在阻塞池，不占渲染线程；
+    // 被否决的替代是界面定时器，或等到本命令返回才一次性打勾。
+    on_progress: tauri::ipc::Channel<hexagon_core::setup::CreateStep>,
 ) -> Result<(), CmdError> {
     use hexagon_core::setup;
     // 负责人已确认的说明文件先落盘（已存在会被 write_agents_md 拒绝，不覆盖）
@@ -1234,7 +1237,7 @@ fn create_project(
         .transpose()?;
     // 壳层唯一保留的 provider_config:: 直调：create_project 建档校验要文档现状
     let pdoc = hexagon_core::provider_config::load().unwrap_or_default();
-    let mut wb = setup::create_project(
+    let mut wb = setup::create_project_reporting(
         &opts.dir,
         &opts.name,
         &opts.roles,
@@ -1244,6 +1247,9 @@ fn create_project(
         opts.init_git,
         &*hexagon_core::credentials::active(),
         &pdoc,
+        |step| {
+            let _ = on_progress.send(step);
+        },
     )
     .map_err(cmd_err)?;
     // 接线尾步归 Workbench：凭据库 + 按文档注册运行槽位（票 05）
@@ -1256,7 +1262,7 @@ fn create_project(
     *state
         .wb
         .lock()
-        .map_err(|_| CmdError::internal("lock poisoned"))? = Some(wb);
+        .map_err(|_| CmdError::internal("lock poisoned"))? = Some(wb); // D01-ok: 创建成功才装入工作台
     remember_recent(
         &app,
         &opts.dir,
