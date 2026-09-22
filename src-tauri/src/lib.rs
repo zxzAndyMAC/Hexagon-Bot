@@ -1010,18 +1010,9 @@ fn open_recent(
     state: tauri::State<AppState>,
     dir: String,
 ) -> Result<(), CmdError> {
-    let d = std::path::Path::new(&dir);
-    if !d.join(".hexagon/state.db").exists() {
-        return Err(CmdError::internal(format!("不是 Hexagon 项目目录: {dir}")));
-    }
-    let pack = hexagon_core::orchestra::PackDef::pinned(d).ok();
-    let name = d
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| dir.clone());
-    // OR IGNORE 保住库里的真实 name/mode；project_info 读库得真值
-    let wb = Workbench::open_with(&dir, &name, &[], pack, hexagon_core::credentials::active())
-        .map_err(cmd_err)?;
+    // ADR 0060：已有工作台走打开。落库/花名册不在这里重跑；name 以库内为准。
+    let mut wb = hexagon_core::setup::open_existing(&dir).map_err(cmd_err)?;
+    wb.attach_providers(hexagon_core::credentials::active());
     attach_delta_hook(&app, &wb);
     *state
         .conn

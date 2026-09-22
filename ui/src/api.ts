@@ -899,7 +899,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'upgrade_to_pack':
       return null as T
     case 'inspect_dir':
-      return { exists: true, empty: false, is_git: true, dirty: false, instructions: 'AGENTS.md' } as T
+      return { exists: true, empty: false, is_git: true, dirty: false, has_workbench: false, instructions: 'AGENTS.md' } as T
     case 'preset_roles':
       return [
         { name: '产品策划', duty: '需求与规格', reviewer: null, model_slot: 'chat', globs: [], skills: ['spec-writing'] },

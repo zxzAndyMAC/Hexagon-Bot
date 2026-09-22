@@ -150,8 +150,9 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   )
   const unready = slots.filter((s) => !slotReady(s))
 
+  // ADR 0060：脏树不停步（改动保留）。已有工作台状态不能再建，只能打开。
   const dirBlocked =
-    !report || !report.exists || report.dirty || (!report.is_git && !draft.initGit)
+    !report || !report.exists || report.has_workbench || (!report.is_git && !draft.initGit)
   const canNext = useMemo(() => {
     switch (step) {
       case 'dir': return !!draft.dir && !!draft.name && !dirBlocked
@@ -191,6 +192,20 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       // ui-audit 票 04（P1-6）：saveKey 失败原先只复位 busy、
       // 无任何反馈——「按了没反应」。走 toast 出口。
       useUiStore.getState().pushToast(errText(e), 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function openExisting() {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.openRecent(draft.dir)
+      localStorage.removeItem(DRAFT_KEY)
+      onDone()
+    } catch (e) {
+      setErr(errText(e))
     } finally {
       setBusy(false)
     }
@@ -252,14 +267,26 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
             <Chip ok={report.is_git}>{report.is_git ? t('wizard.isGit') : t('wizard.noGit')}</Chip>
             {report.empty && <Chip>{t('wizard.emptyDir')}</Chip>}
-            {report.dirty && <Chip warn>{t('wizard.dirty')}</Chip>}
+            {report.dirty && <Chip>{t('wizard.dirty')}</Chip>}
+            {report.has_workbench && <Chip>{t('wizard.hasWorkbench')}</Chip>}
             {report.instructions && <Chip ok>{report.instructions}</Chip>}
           </div>
         )}
         {report?.dirty && (
-          <div style={{ color: 'var(--accent)', fontSize: 12, marginTop: 8 }}>{t('wizard.dirtyHint')}</div>
+          <div className="dim3" style={{ fontSize: 12, marginTop: 8 }}>{t('wizard.dirtyHint')}</div>
         )}
-        {report && !report.is_git && (
+        {report?.has_workbench && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, marginBottom: 8 }}>{t('wizard.openInstead')}</div>
+            <button className="btn primary" disabled={busy} onClick={openExisting}>
+              {t('wizard.openProject')}
+            </button>
+          </div>
+        )}
+        {err && step === 'dir' && (
+          <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 10 }}>{err}</div>
+        )}
+        {report && !report.is_git && !report.has_workbench && (
           <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10, fontSize: 12 }}>
             <input
               type="checkbox"

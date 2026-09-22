@@ -9,6 +9,10 @@ export type DirReport = { exists: boolean,
  */
 empty: boolean, is_git: boolean, dirty: boolean, 
 /**
+ * 已有工作台状态（`.hexagon/state.db`）。向导走打开，`create_project` 拒绝再建。
+ */
+has_workbench: boolean, 
+/**
  * 主说明文件：AGENTS.md 优先，其次 CLAUDE.md；都没有 = None
  */
 instructions: string | null, };

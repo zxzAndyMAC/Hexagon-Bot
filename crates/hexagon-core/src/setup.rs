@@ -1,6 +1,7 @@
-//! 项目向导（票 24）：目录检查 → 角色/包选择 → 说明文件 → 密钥 → 建项目。
+//! 项目向导（票 24，脏树/重开见 ADR 0060）：目录检查 → 角色/包选择 → 说明文件 → 密钥 → 建项目。
 //!
-//! - 三态目录：`inspect_dir` 报 git/脏/空/说明文件；脏树先停，无 git 须确认初始化。
+//! - 目录：`inspect_dir` 报 git/脏/空/已有工作台/说明文件。脏树可开（不提交、不清理）；
+//!   无 git 须确认初始化；已有 `.hexagon/state.db` 拒绝再建，走 `open_existing`。
 //! - 说明文件主读 `AGENTS.md`，没有则 `CLAUDE.md`；草稿人确认才写，不覆盖已有。
 //! - 密钥 fail-closed：所选角色的模型槽缺 key 不能开跑（`create_project` 内置复查）。
 //! - 建项目把 RoleDef 落成实例：model_slot、agent_globs 归属、grants 技能授权。
@@ -32,8 +33,10 @@ pub enum SetupError {
     Io(#[from] std::io::Error),
     #[error("目录不是 git 仓库，需确认初始化: {0}")]
     NoGit(PathBuf),
-    #[error("仓库有未提交改动，先清理再开项目: {0}")]
-    DirtyTree(PathBuf),
+    #[error("目录已有工作台状态，请打开而不是新建: {0}")]
+    AlreadyProject(PathBuf),
+    #[error("目录没有工作台状态，不能按已有项目打开: {0}")]
+    NotAProject(PathBuf),
     #[error("未知预置角色: {0}")]
     UnknownRole(String),
     #[error("角色定制传了未勾选的角色: {0}")]
@@ -59,6 +62,8 @@ pub struct DirReport {
     pub empty: bool,
     pub is_git: bool,
     pub dirty: bool,
+    /// 已有工作台状态（`.hexagon/state.db`）。向导走打开，`create_project` 拒绝再建。
+    pub has_workbench: bool,
     /// 主说明文件：AGENTS.md 优先，其次 CLAUDE.md；都没有 = None
     pub instructions: Option<String>,
 }
@@ -71,6 +76,7 @@ pub fn inspect_dir(dir: impl AsRef<Path>) -> DirReport {
             .map(|mut it| it.next().is_none())
             .unwrap_or(true);
     let is_git = exists && git::is_repo(dir);
+    let has_workbench = exists && dir.join(".hexagon/state.db").is_file();
     let instructions = ["AGENTS.md", "CLAUDE.md"]
         .iter()
         .find(|f| dir.join(f).is_file())
@@ -80,6 +86,7 @@ pub fn inspect_dir(dir: impl AsRef<Path>) -> DirReport {
         empty,
         is_git,
         dirty: is_git && git::is_dirty(dir),
+        has_workbench,
         instructions,
     }
 }
@@ -128,7 +135,8 @@ pub fn missing_model_keys(
 /// `role_overrides` 携带**完整定义**——自定义模板与向导改过的角色都经它传入，
 /// 本函数不读全局模板文件（保持纯函数，测试不被 HOME 污染）。`pack` 为 None 时
 /// `fastpath_role` 必须给（快速通道）；`init_git` = 负责人确认了「无 git 则初始化」。
-/// 全程 fail-closed：脏树停、缺密钥停、未知角色停、野 override 停。
+/// 全程 fail-closed：已有工作台停（再建会改写花名册）、缺密钥停、未知角色停、野 override 停。
+/// 脏树不停——ADR 0060：未提交改动留给负责人，开项目不提交、不清理。
 #[allow(clippy::too_many_arguments)]
 pub fn create_project(
     dir: impl AsRef<Path>,
@@ -142,17 +150,23 @@ pub fn create_project(
     doc: &crate::provider_config::ProviderDoc,
 ) -> Result<Workbench, SetupError> {
     let dir = dir.as_ref();
+    // ADR 0060：已有工作台状态是打开，不是再建。先于 mkdir / git init，
+    // 避免二次创建改 mode、槽位、授权。被否决的替代：静默当成 open 并套用
+    // 本次向导选项（会改写已有项目）。false negative（漏判已有库）会重跑落库；
+    // 本闸偏向拒绝再建。
+    if dir.join(".hexagon/state.db").is_file() {
+        return Err(SetupError::AlreadyProject(dir.to_path_buf()));
+    }
     std::fs::create_dir_all(dir)?;
 
-    // git 闸：非仓库须确认初始化；是仓库则脏树先停
-    if git::is_repo(dir) {
-        if git::is_dirty(dir) {
-            return Err(SetupError::DirtyTree(dir.to_path_buf()));
+    // git 闸：非仓库须确认后才 init。已是仓库则无论干净或有未提交改动都直接用：
+    // 不 init、不 commit、不 clean（ADR 0060 弃「脏树先停」；自动提交/stash 会动工作区）。
+    if !git::is_repo(dir) {
+        if init_git {
+            git::init(dir, "main")?;
+        } else {
+            return Err(SetupError::NoGit(dir.to_path_buf()));
         }
-    } else if init_git {
-        git::init(dir, "main")?;
-    } else {
-        return Err(SetupError::NoGit(dir.to_path_buf()));
     }
 
     // 解析角色：override 优先（自定义模板/向导定制），回落内置（未知角色拒绝）。
@@ -257,6 +271,22 @@ pub fn create_project(
     Ok(wb)
 }
 
+/// 打开已有项目（ADR 0060）。只接受已有 `.hexagon/state.db` 的目录。
+/// 不初始化 git、不提交、不清理工作区，不重跑角色落库（空角色表 + INSERT OR IGNORE）。
+/// 被否决的替代：没有状态也 `Workbench::open`（那会把空目录建成新库）。
+pub fn open_existing(dir: impl AsRef<Path>) -> Result<Workbench, SetupError> {
+    let dir = dir.as_ref();
+    if !dir.join(".hexagon/state.db").is_file() {
+        return Err(SetupError::NotAProject(dir.to_path_buf()));
+    }
+    let pack = PackDef::pinned(dir).ok();
+    let name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+    Ok(Workbench::open(dir, name, &[], pack)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,7 +336,7 @@ mod tests {
         assert!(!r.exists);
         std::fs::create_dir(&sub).unwrap();
         let r = inspect_dir(&sub);
-        assert!(r.exists && r.empty && !r.is_git && r.instructions.is_none());
+        assert!(r.exists && r.empty && !r.is_git && !r.has_workbench && r.instructions.is_none());
     }
 
     #[test]
@@ -358,13 +388,16 @@ mod tests {
         assert!(skills > 0);
     }
 
+    /// ADR 0060：干净的非空 git 仓库仍可开成项目。
     #[test]
-    fn existing_clean_repo_ok_dirty_stops() {
+    fn clean_nonempty_repo_becomes_project() {
         let d = tempfile::tempdir().unwrap();
         git::init(d.path(), "main").unwrap();
-        // init 后提交基线使树干净
-        std::fs::write(d.path().join("README.md"), "x").unwrap();
+        std::fs::write(d.path().join("README.md"), "kept").unwrap();
         git::commit_all(d.path(), "init").unwrap();
+        let head = git::head(d.path()).unwrap();
+        assert!(!git::is_dirty(d.path()));
+        assert!(!inspect_dir(d.path()).empty);
         create_project(
             d.path(),
             "仓",
@@ -377,28 +410,62 @@ mod tests {
             &doc_with_provider(),
         )
         .unwrap();
-        // 弄脏 → 拒绝
-        std::fs::write(d.path().join("README.md"), "dirty").unwrap();
-        assert!(matches!(
-            create_project(
-                d.path(),
-                "仓",
-                &["产品策划".into()],
-                &[],
-                Some(&pack()),
-                None,
-                false,
-                &store_with_key(),
-                &doc_with_provider()
-            ),
-            Err(SetupError::DirtyTree(_))
-        ));
+        assert!(d.path().join(".hexagon/state.db").is_file());
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("README.md")).unwrap(),
+            "kept"
+        );
+        // 开项目本身也不提交（.hexagon 留在工作区，不进这次 HEAD）
+        assert_eq!(git::head(d.path()).unwrap(), head);
+    }
+
+    /// ADR 0060 弃「脏树先停」：未提交改动在创建后仍在，且没有被提交、没有被清掉。
+    /// 旧断言是 DirtyTree——那条闸把已有代码的仓库挡在外面。
+    #[test]
+    fn dirty_repo_becomes_project_without_commit_or_clean() {
+        let d = tempfile::tempdir().unwrap();
+        git::init(d.path(), "main").unwrap();
+        std::fs::write(d.path().join("README.md"), "base").unwrap();
+        git::commit_all(d.path(), "init").unwrap();
+        let head = git::head(d.path()).unwrap();
+        std::fs::write(d.path().join("README.md"), "dirty-work").unwrap();
+        std::fs::write(d.path().join("notes.txt"), "scratch").unwrap();
+        create_project(
+            d.path(),
+            "仓",
+            &["产品策划".into()],
+            &[],
+            Some(&pack()),
+            None,
+            false,
+            &store_with_key(),
+            &doc_with_provider(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("README.md")).unwrap(),
+            "dirty-work"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("notes.txt")).unwrap(),
+            "scratch"
+        );
+        assert_eq!(git::head(d.path()).unwrap(), head);
+        let status = git::run(d.path(), &["status", "--porcelain"]).unwrap();
+        assert!(
+            status.lines().any(|l| l.contains("README.md")),
+            "modified file must stay uncommitted, status={status}"
+        );
+        assert!(
+            status.lines().any(|l| l.contains("notes.txt")),
+            "untracked file must stay, status={status}"
+        );
     }
 
     #[test]
     fn no_git_requires_confirm() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("x.txt"), "x").unwrap(); // 非空非仓库
+        std::fs::write(d.path().join("x.txt"), "keep").unwrap(); // 非空非仓库
         assert!(matches!(
             create_project(
                 d.path(),
@@ -412,6 +479,144 @@ mod tests {
                 &doc_with_provider()
             ),
             Err(SetupError::NoGit(_))
+        ));
+        assert!(!git::is_repo(d.path()));
+        assert!(!d.path().join(".hexagon/state.db").exists());
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("x.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    /// 确认后才 `git init`。初始化不把文件夹里已有文件提交进去。
+    #[test]
+    fn non_git_folder_inits_only_after_confirm() {
+        let d = tempfile::tempdir().unwrap();
+        let sub = d.path().join("plain");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("x.txt"), "keep").unwrap();
+        create_project(
+            &sub,
+            "p",
+            &["产品策划".into()],
+            &[],
+            Some(&pack()),
+            None,
+            true,
+            &store_with_key(),
+            &doc_with_provider(),
+        )
+        .unwrap();
+        assert!(git::is_repo(&sub));
+        assert_eq!(std::fs::read_to_string(sub.join("x.txt")).unwrap(), "keep");
+        assert!(
+            !git::run(&sub, &["ls-files"]).unwrap().contains("x.txt"),
+            "git init must not commit the folder's existing files"
+        );
+    }
+
+    /// 空目录同样未确认不能 init；确认后才成为仓库。
+    #[test]
+    fn empty_dir_requires_confirm_before_git_init() {
+        let d = tempfile::tempdir().unwrap();
+        let sub = d.path().join("empty");
+        std::fs::create_dir(&sub).unwrap();
+        assert!(inspect_dir(&sub).empty);
+        assert!(matches!(
+            create_project(
+                &sub,
+                "p",
+                &["产品策划".into()],
+                &[],
+                Some(&pack()),
+                None,
+                false,
+                &store_with_key(),
+                &doc_with_provider()
+            ),
+            Err(SetupError::NoGit(_))
+        ));
+        assert!(!git::is_repo(&sub));
+        create_project(
+            &sub,
+            "p",
+            &["产品策划".into()],
+            &[],
+            Some(&pack()),
+            None,
+            true,
+            &store_with_key(),
+            &doc_with_provider(),
+        )
+        .unwrap();
+        assert!(git::is_repo(&sub));
+        assert!(sub.join(".hexagon/state.db").is_file());
+    }
+
+    /// 已有工作台状态不能再建；打开不改花名册，也不提交/清理工作区。
+    #[test]
+    fn existing_workbench_refuses_recreate_and_opens() {
+        let d = tempfile::tempdir().unwrap();
+        let sub = d.path().join("proj");
+        let wb = create_project(
+            &sub,
+            "仓",
+            &["产品策划".into()],
+            &[],
+            Some(&pack()),
+            None,
+            true,
+            &store_with_key(),
+            &doc_with_provider(),
+        )
+        .unwrap();
+        drop(wb);
+        std::fs::write(sub.join("README.md"), "still-dirty").unwrap();
+        let head = git::head(&sub).unwrap();
+        assert!(inspect_dir(&sub).has_workbench);
+        assert!(matches!(
+            create_project(
+                &sub,
+                "另一个",
+                &["后端".into()],
+                &[],
+                Some(&pack()),
+                None,
+                true,
+                &store_with_key(),
+                &doc_with_provider()
+            ),
+            Err(SetupError::AlreadyProject(_))
+        ));
+        assert_eq!(git::head(&sub).unwrap(), head);
+        assert_eq!(
+            std::fs::read_to_string(sub.join("README.md")).unwrap(),
+            "still-dirty"
+        );
+        let opened = open_existing(&sub).unwrap();
+        let n: i64 = opened
+            .db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        let role: String = opened
+            .db
+            .conn()
+            .query_row("SELECT role FROM agents WHERE id='a0'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(role, "产品策划");
+        let name: String = opened
+            .db
+            .conn()
+            .query_row("SELECT name FROM projects WHERE id='p1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "仓");
+        assert!(opened.pack.is_some());
+        assert_eq!(git::head(&sub).unwrap(), head);
+        assert!(matches!(
+            open_existing(d.path().join("missing")),
+            Err(SetupError::NotAProject(_))
         ));
     }
 
