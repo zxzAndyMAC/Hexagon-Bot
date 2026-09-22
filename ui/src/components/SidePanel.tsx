@@ -85,8 +85,11 @@ export function SidePanel() {
               style={{ padding: '5px 12px', display: 'flex', gap: 8, alignItems: 'baseline', cursor: 'pointer' }}
               onClick={() => openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })}
             >
-              <span className="mono" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.path}</span>
-              <span className={`chip ${a.status === 'stamped' ? 'amber' : a.status === 'superseded' ? '' : 'ok'}`} style={{ fontSize: 10, marginLeft: 'auto' }}>
+              {/* 长名压缩 chip 的教训：flex 子项默认可缩，无 minWidth:0
+                  的 nowrap 文本把标记挤成竖排——路径吃 flex:1+minWidth:0
+                  截断，chip flexShrink:0+nowrap 保形；title 悬浮给全名。 */}
+              <span className="mono" title={a.path} style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.path}</span>
+              <span className={`chip ${a.status === 'stamped' ? 'amber' : a.status === 'superseded' ? '' : 'ok'}`} style={{ fontSize: 10, marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {t(`side.${a.status}`, a.status)}
               </span>
             </Row>
