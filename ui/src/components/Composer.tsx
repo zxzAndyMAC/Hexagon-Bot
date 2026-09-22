@@ -68,7 +68,7 @@ function fit(ta: HTMLTextAreaElement) {
 
 export function Composer() {
   const { t } = useTranslation()
-  const { team, invalidate, pushToast } = useUiStore()
+  const { team, invalidate, pushToast, mcpPending } = useUiStore()
   const [text, setText] = useState('')
   const [popup, setPopup] = useState<{ kind: '@' | '#'; items: { label: string; hint: string }[] } | null>(null)
   const [sel, setSel] = useState(0)
@@ -440,7 +440,11 @@ export function Composer() {
                   return
                 }
               }
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); return }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (!mcpPending) void send()
+                return
+              }
               if (e.key === 'ArrowUp' && (!text || histIdx >= 0)) {
                 e.preventDefault()
                 const next = Math.min(histIdx + 1, HISTORY.length - 1)
@@ -454,7 +458,8 @@ export function Composer() {
                 setText(next >= 0 ? HISTORY[next] : '')
               }
             }}
-            placeholder={`${t('composer.placeholder')} ${t('composer.multilineHint')}`}
+            placeholder={mcpPending ? t('composer.initializing') : `${t('composer.placeholder')} ${t('composer.multilineHint')}`}
+            disabled={mcpPending}
             // 票 03：粘贴图片（clipboardData.files）
             onPaste={(e) => {
               const files = Array.from(e.clipboardData?.files ?? [])
@@ -465,7 +470,7 @@ export function Composer() {
             }}
           />
         </div>
-        <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={send}>
+        <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} disabled={mcpPending} onClick={send}>
           <Icon name="send" size={12} /> {t('composer.send')}
         </button>
       </div>

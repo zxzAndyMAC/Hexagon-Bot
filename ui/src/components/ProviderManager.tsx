@@ -11,7 +11,8 @@ import { useUiStore } from '../store'
 import { DEDICATED_PREFIX, isDedicatedSlot } from '../modelpick'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。
-const PRESETS: { name: string; kind: 'openai' | 'anthropic'; base_url: string }[] = [
+const PRESETS: { name: string; kind: ProviderView['kind']; base_url: string; model?: string }[] = [
+  { name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', model: 'jev-latest' },
   { name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1' },
   { name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com' },
   { name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1' },
@@ -86,7 +87,13 @@ export function ProviderManager() {
       setDraft(emptyDef())
     } else if (s.startsWith('preset:')) {
       const p = PRESETS.find((x) => x.name === s.slice(7))
-      setDraft(p ? { ...emptyDef(), name: p.name, kind: p.kind, base_url: p.base_url } : null)
+      setDraft(p ? {
+        ...emptyDef(),
+        name: p.name,
+        kind: p.kind,
+        base_url: p.base_url,
+        models: p.model ? [{ id: p.model, name: 'Jev', group: 'typesafe', caps: [] }] : [],
+      } : null)
     } else {
       const p = doc.providers.find((x) => x.id === s)
       setDraft(p ? { ...p } : null)
@@ -100,6 +107,11 @@ export function ProviderManager() {
     try {
       const def = { ...draft, id: draft.id || slug(draft.name) }
       await api.saveProvider(def, withSecret)
+      // 决策模型只给项目经理。第一次保存 Jev 时把 decision 槽绑上，核在刷新供应商时写进决策槽。
+      if (def.kind === 'jev' && def.enabled && !doc.slots.decision) {
+        const model = def.models[0]?.id || 'jev-latest'
+        await api.setSlotBinding('decision', def.id, model)
+      }
       setSecret('')
       await reload(def.id)
     } catch (e) {
@@ -183,6 +195,7 @@ export function ProviderManager() {
   const slotNames = useMemo(() => {
     const s = new Set(roles.map((r) => r.model_slot))
     s.add('default')
+    s.add('decision')
     Object.keys(doc.slots).forEach((k) => s.add(k))
     return [...s].sort()
   }, [roles, doc.slots])
@@ -192,9 +205,13 @@ export function ProviderManager() {
     await reload()
   }
 
-  const previewUrl = draft
-    ? `${draft.base_url.replace(/\/+$/, '')}${draft.kind === 'anthropic' ? '/v1/messages' : '/chat/completions'}`
-    : ''
+  const previewUrl = (() => {
+    if (!draft) return ''
+    const base = draft.base_url.replace(/\/+$/, '')
+    if (draft.kind === 'anthropic') return `${base}/v1/messages`
+    if (draft.kind === 'jev') return `${base}/v1/systemone`
+    return `${base}/chat/completions`
+  })()
 
   // ui-audit-2 票 10：本地端点（Ollama/LM Studio）不需要 key——检测不禁用
   const needsKey = !!draft && !/^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])/i.test(draft.base_url)
@@ -349,7 +366,11 @@ export function ProviderManager() {
               >
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic</option>
+                <option value="jev">Jev</option>
               </select>
+              {draft.kind === 'jev' && (
+                <div className="dim3" style={{ fontSize: 12, marginTop: -6, marginBottom: 10 }}>{t('providers.jevHint')}</div>
+              )}
 
               <label className="dim3" style={{ fontSize: 12 }}>{t('providers.baseUrl')}</label>
               <input

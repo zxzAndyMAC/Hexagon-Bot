@@ -354,6 +354,8 @@ input, textarea { font: inherit; color: var(--text); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .thinking-row[data-open='1'] { white-space: pre-wrap; }
+/* Thinking 票 03：展开全文浮入；live 标签走 .shimmer-text */
+.thinking-full { animation: fade-up 300ms cubic-bezier(0.23,1,0.32,1) both; }
 .status-line {
   display: flex; gap: 12px; align-items: center;
   padding: 6px 14px 0; font-size: 11px; color: var(--text-2);
@@ -379,10 +381,32 @@ input, textarea { font: inherit; color: var(--text); }
 .msg-body code { font-family: var(--mono); font-size: 11.5px; background: var(--bg-3); padding: 1px 5px; border-radius: 4px; }
 .msg-body .shiki-wrap { margin: 6px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-md, 8px); background: var(--bg); overflow-x: auto; }
 .msg-body .shiki-wrap code { background: none; padding: 0; }
+/* 票 08 CodeBlock 头部：外框接管边框/圆角，shiki-wrap/fallback 在内部去框 */
+.code-block { margin: 6px 0; border: 1px solid var(--border); border-radius: var(--r-md, 8px); background: var(--bg); overflow: hidden; }
+.code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 10px; background: var(--bg-2); border-bottom: 1px solid var(--border); }
+.code-lang { font-size: 10px; color: var(--text-3); }
+.code-copy { font-size: 10px; gap: 4px; padding: 2px 6px; height: auto; }
+.code-block .shiki-wrap, .code-block .shiki-fallback { margin: 0; border: none; border-radius: 0; }
+.code-block .shiki-fallback { padding: 8px 10px; overflow-x: auto; }
 .msg-body blockquote { border-left: 3px solid var(--border); padding-left: 10px; margin: 6px 0; color: var(--text-2); }
 .msg-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .msg-body hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
 .msg-body img { max-width: 100%; border-radius: var(--r-md, 8px); }
+/* StreamingText 票 06（beautiful-ui 借形）：live 正文——最新块浮入 + 尾端光标。
+   粒度=块级：Md 每次整文重渲拿不到词级；:last-child 只标最新挂载块，
+   段落边界跨过时新块播一次 stream-in，旧块动画已完不重放（票面接受的妥协）。*/
+.msg-body.live > :last-child { animation: stream-in 220ms ease-out both; }
+/* 光标取 --text-2：语义是「在写」不是「在等你」，不给琥珀槽 */
+.msg-body.live > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--text-2);
+  animation: caret-blink 1.05s step-end infinite;
+}
 
 .icon-btn {
   font: inherit; color: var(--text-3); background: none; border: none;
@@ -429,6 +453,90 @@ input, textarea { font: inherit; color: var(--text); }
   50% { opacity: 0.35; }
 }
 
+/* beautiful-ui 移植动效原语（.scratch/beautiful-ui-port 票 01；借形 MIT
+   slev12397/beautiful-ui，不引其 foundation 色板——色全走本文件 token）。
+   分工（spec D2）：keyframes 管逐帧编排；enter/exit/layout 归 motion 包，
+   批内唯一用点 = PendingCards 卡片进出场。
+   reduced-motion 由上方全局媒体查询统一熔断——动画停、信息不丢；
+   靠动画推进状态的组件须另留静态兜底（LoadingState 格冻结 dim 态）。 */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes stream-in {
+  from { opacity: 0; filter: blur(4px); }
+  to { opacity: 1; filter: blur(0); }
+}
+@keyframes shimmer-text {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+/* 像素格波前（LoadingState Drive）：格子常态 dim，波前扫过瞬时点亮 */
+@keyframes pixel-on {
+  0% { opacity: 0.15; }
+  12% { opacity: 1; }
+  38%, 100% { opacity: 0.15; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
+/* TaskRows 票 05：运行环旋转（SpinnerRing 的 dash 弧） */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+/* StreamingText 票 06：终端式光标闪烁（step-end 硬跳，不是淡入淡出） */
+@keyframes caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* LoadingState Drive（beautiful-ui 票 04）：3×3 方格波前 + shimmer 标签 + 计时 */
+.loading-state { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; }
+.loading-grid { display: inline-grid; grid-template-columns: repeat(3, 4px); gap: 1.5px; }
+.loading-cell {
+  width: 4px; height: 4px; border-radius: 1px;
+  background: var(--text-2); opacity: 0.15;
+  animation: pixel-on 650ms ease-in-out infinite;
+}
+.loading-elapsed { font-size: 10px; font-variant-numeric: tabular-nums; }
+
+/* ToolChips 移植（beautiful-ui 票 02）：工具调用行 = 图标 + 定名 + mono 参数片。
+   片取 inset field 观感（bg-2 实填），行尾 ok/err 结果片或在途蓝点。 */
+.tchip-row {
+  display: flex; width: 100%; align-items: center; gap: 6px;
+  padding: 3px 4px; background: none; border: none; border-radius: var(--r-xs);
+  font: inherit; font-size: 11px; text-align: left; cursor: pointer;
+  color: var(--text-2);
+}
+.tchip-row:hover { background: var(--bg-2); }
+.tchip-label { font-weight: 510; flex-shrink: 0; }
+.tool-chip {
+  display: inline-flex; align-items: center; min-width: 0; flex: 1;
+  padding: 1px 8px; border-radius: var(--r-pill);
+  background: var(--bg-2); border: 1px solid var(--border);
+  font-family: var(--mono); font-size: 11px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tchip-detail {
+  margin: 2px 14px 4px 16px; padding: 6px 8px;
+  background: var(--bg-1); border-radius: 6px; overflow-x: auto; font-size: 11px;
+}
+.tchip-files {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border);
+}
+
+/* 微光扫字标签：live 态文字提示（思考中 / 等待中） */
+.shimmer-text {
+  background: linear-gradient(90deg, var(--text-3) 40%, var(--text) 50%, var(--text-3) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-text 1.6s linear infinite;
+}
+
 /* 用量详情（票 23）：仪表盘卡片 / 分段控件 / 统计图标 */
 .u-card {
   background: var(--bg-1); border: 1px solid var(--border);
@@ -456,3 +564,40 @@ input, textarea { font: inherit; color: var(--text); }
   width: 30px; height: 30px; border-radius: var(--r-lg); flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center; font-size: 14px;
 }
+
+/* ---- 执行卡（exec-cards 票 02，Devin 借形）----
+   重负载执行单元的统一壳：头行定名+meta+动作，体按工具分体。
+   与 .tchip-row 同密度基线，但升卡给富体（输出/diff）。 */
+.exec-card {
+  margin: 4px 0; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-1); overflow: hidden;
+}
+.exec-head { display: flex; align-items: center; gap: 2px; padding: 2px 6px 2px 8px; }
+.exec-toggle {
+  display: flex; flex: 1; min-width: 0; align-items: center; gap: 6px;
+  padding: 3px 0; background: none; border: none; font: inherit; font-size: 11px;
+  text-align: left; cursor: pointer; color: var(--text-2);
+}
+.exec-title {
+  font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex-shrink: 1;
+}
+.exec-copy { padding: 2px; }
+.exec-chev {
+  display: inline-flex; align-items: center; padding: 2px;
+  background: none; border: none; color: var(--text-3); cursor: pointer;
+}
+.exec-body { border-top: 1px solid var(--border); }
+.exec-cmd {
+  padding: 6px 10px; font-size: 11px; color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+  white-space: pre-wrap; word-break: break-all;
+}
+.exec-out {
+  margin: 0; padding: 8px 10px; font-size: 11px; line-height: 1.5;
+  max-height: 240px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+.exec-stat { font-family: var(--mono); font-size: 10px; font-weight: 560; }
+.exec-stat.ins { color: var(--ok); }
+.exec-stat.del { color: var(--err); }

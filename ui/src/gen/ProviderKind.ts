@@ -3,4 +3,4 @@
 /**
  * 供应商类型：决定请求路径、鉴权头与消息形状。
  */
-export type ProviderKind = "anthropic" | "openai";
+export type ProviderKind = "anthropic" | "openai" | "jev";

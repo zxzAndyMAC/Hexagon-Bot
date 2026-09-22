@@ -13,6 +13,7 @@ import type { AttachRef } from './gen/AttachRef'
 import type { SandboxStatus } from './gen/SandboxStatus'
 import type { QueuedCard } from './gen/QueuedCard'
 import type { TurnDelta } from './gen/TurnDelta'
+import type { ToolOutputDelta } from './gen/ToolOutputDelta'
 import type { StageRow } from './gen/StageRow'
 import type { TimelineItem } from './gen/TimelineItem'
 import type { TeamRow } from './gen/TeamRow'
@@ -71,7 +72,7 @@ export type PendingQuestion = QueuedCard
 export type PackStage = StageDef
 
 export type {
-  CmdError, TurnDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
+  CmdError, TurnDelta, ToolOutputDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
   UsageTotal, UsageRow, UsageSummary, UsageBucket, StageAction, OpenStageOutcome,
   CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PublishOutcome,
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
@@ -127,6 +128,14 @@ export function errText(e: unknown): string {
 // ---- 回合流式 delta（turn-streaming 票 03）----
 // 瞬时增量通道：payload 不落库；done=true 是流终信号（成败都发），
 // reset=true 表示瞬时重试、本轮已收文本作废重起。
+
+// exec-cards 票 04：bash 输出瞬时通道——与 turn-delta 同纪律
+//（不落库只展示，tool_result 仍是持久层）。
+export async function onToolOutput(cb: (d: ToolOutputDelta) => void): Promise<() => void> {
+  if (!isTauri) return async () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<ToolOutputDelta>('tool-output', (e) => cb(e.payload))
+}
 
 /// 订阅回合 delta；浏览器 dev 无推送通道，返回 no-op 退订。
 export async function onTurnDelta(cb: (d: TurnDelta) => void): Promise<() => void> {
@@ -418,6 +427,9 @@ const mkMsg = (
 })
 
 const ART_CONTENT: Record<string, Record<number, string>> = {
+  'docs/impl-notes.md': {
+    1: '# 实现要点\n\n- 列表筛选走 visible 字段\n- 计划页落 src/plan.ts\n- recipes.test.ts 覆盖筛选分支\n',
+  },
   'specs/prd.md': {
     1: '# 食谱 App 产品规格 v1\n\n## 目标\n家庭一周菜谱规划。\n\n## 范围\n- 食谱列表\n- 周计划\n\n## 验收\n1. 能建/改食谱\n2. 能排一周\n',
     2: '# 食谱 App 产品规格 v2\n\n## 目标\n家庭一周菜谱规划，支持中途替换。\n\n## 范围\n- 食谱列表（标签筛选）\n- 周计划（含「换一道」）\n- 详情页\n\n## 验收\n1. 能建/改食谱\n2. 能排一周\n3. 周计划内可替换某道菜\n',
@@ -661,6 +673,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'art13', path: 'reviews/be-spec.md', kind: '复审意见', tier: 'parse', stage_run_id: 'r2', author: 'a6', version: 1, status: 'valid', upstream_id: null },
         { id: 'art14', path: 'proposals/p2.md', kind: '改进提案', tier: 'parse', stage_run_id: 'r3', author: 'a1', version: 1, status: 'valid', upstream_id: null },
         { id: 'art15', path: 'docs/markdown-demo.md', kind: '结构说明', tier: 'freeform', stage_run_id: 'r1', author: 'a1', version: 1, status: 'valid', upstream_id: null },
+        { id: 'art16', path: 'docs/impl-notes.md', kind: '结构说明', tier: 'freeform', stage_run_id: 'r3', author: 'a3', version: 1, status: 'valid', upstream_id: null },
       ] as T
     case 'timeline': {
       // mock 也尊重 after/limit（票 07 增量通道）：真实后端同语义，
@@ -672,10 +685,10 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
 
         mkEv(4, 'stage_started', null, 'r0', { stage: '需求', run_id: 'r0' }, '09:01'),
         mkEv(5, 'turn_started', 'a0', 'r0', {}, '09:02'),
-        mkEv(6, 'tool_called', 'a0', 'r0', { tool: 'fs.read', path: 'docs/brief.md' }, '09:02'),
-        mkEv(7, 'tool_result', 'a0', 'r0', { tool: 'fs.read', ok: true }, '09:02'),
-        mkEv(8, 'tool_called', 'a0', 'r0', { tool: 'fs.write', path: 'specs/prd.md' }, '09:03'),
-        mkEv(9, 'tool_result', 'a0', 'r0', { tool: 'fs.write', ok: true }, '09:03'),
+        mkEv(6, 'tool_called', 'a0', 'r0', { tool: 'fs_read', input: { path: 'docs/brief.md' }, seq: 'r0:i0' }, '09:02'),
+        mkEv(7, 'tool_result', 'a0', 'r0', { tool: 'fs_read', ok: true, result: { output: { content: '# 项目简报\n\n家庭食谱 App，一周菜单规划。' } } }, '09:02'),
+        mkEv(8, 'tool_called', 'a0', 'r0', { tool: 'artifact_write', input: { path: 'specs/prd.md', bytes: 486, kind: '规格' }, seq: 'r0:i1' }, '09:03'),
+        mkEv(9, 'tool_result', 'a0', 'r0', { tool: 'artifact_write', ok: true, result: { output: { artifact_id: 'art1' } } }, '09:03'),
         mkMsg(10, 'agent_message', 'a0', 'r0', 'a0', '需求梳理完：聚焦家庭一周菜单。规格 v1 落 `specs/prd.md`，验收三条。', '09:05'),
         mkEv(11, 'artifact_delivered', 'a0', 'r0', { path: 'specs/prd.md', kind: '规格', version: 1, status: 'valid' }, '09:05'),
         mkEv(12, 'review_passed', 'a1', 'r0', { path: 'specs/prd.md' }, '09:07'),
@@ -686,8 +699,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(16, 'stage_started', null, 'r1', { stage: '界面稿', run_id: 'r1' }, '09:11'),
         mkEv(17, 'agent_activated', 'a2', 'r1', {}, '09:11'),
         mkEv(18, 'turn_started', 'a2', 'r1', {}, '09:12'),
-        mkEv(19, 'tool_called', 'a2', 'r1', { tool: 'fs.write', path: 'ui/screens.md' }, '09:13'),
-        mkEv(20, 'tool_result', 'a2', 'r1', { tool: 'fs.write', ok: true }, '09:13'),
+        mkEv(19, 'tool_called', 'a2', 'r1', { tool: 'artifact_write', input: { path: 'ui/screens.md', bytes: 1240, kind: '界面稿' }, seq: 'r1:i0' }, '09:13'),
+        mkEv(20, 'tool_result', 'a2', 'r1', { tool: 'artifact_write', ok: true, result: { output: { artifact_id: 'art4' } } }, '09:13'),
         mkMsg(21, 'agent_message', 'a2', 'r1', 'a2', '界面稿 v1 三屏：食谱列表 / 详情 / 周计划。', '09:15'),
         mkEv(22, 'artifact_delivered', 'a2', 'r1', { path: 'ui/screens.md', kind: '界面稿', version: 1, status: 'valid' }, '09:15'),
         mkEv(23, 'flag_submitted', 'a1', 'r1', { flag_id: 'f3', severity: 'high', target: 'ui/screens.md', section: '周计划', reason: '缺「换一道」入口，与验收 3 冲突' }, '09:18'),
@@ -703,11 +716,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(32, 'consult_wakeup', null, 'r2', { role: '后端技术负责人' }, '09:30'),
         mkEv(33, 'agent_activated', 'a6', 'r2', {}, '09:30'),
         mkEv(34, 'turn_started', 'a1', 'r2', {}, '09:31'),
-        mkEv(35, 'tool_called', 'a1', 'r2', { tool: 'fs.read', path: 'specs/prd.md' }, '09:31'),
-        mkEv(36, 'tool_result', 'a1', 'r2', { tool: 'fs.read', ok: true }, '09:31'),
-        mkEv(37, 'tool_called', 'a1', 'r2', { tool: 'fs.write', path: 'api/spec.md' }, '09:32'),
-        mkEv(38, 'tool_result', 'a1', 'r2', { tool: 'fs.write', ok: true }, '09:32'),
-        mkEv(39, 'permission_asked', 'a1', 'r2', { tool: 'bash', input: { command: 'sqlite3 .hexagon/state.db .schema' }, reason: '核对事件表结构' }, '09:33'),
+        mkEv(35, 'tool_called', 'a1', 'r2', { tool: 'fs_read', input: { path: 'specs/prd.md' }, seq: 'r2:i0' }, '09:31'),
+        mkEv(36, 'tool_result', 'a1', 'r2', { tool: 'fs_read', ok: true, result: { output: { content: '# 食谱 App 产品规格 v2\n…' } } }, '09:31'),
+        mkEv(37, 'tool_called', 'a1', 'r2', { tool: 'artifact_write', input: { path: 'api/spec.md', bytes: 980, kind: '接口说明' }, seq: 'r2:i1' }, '09:32'),
+        mkEv(38, 'tool_result', 'a1', 'r2', { tool: 'artifact_write', ok: true, result: { output: { artifact_id: 'art6' } } }, '09:32'),
+        mkEv(39, 'permission_asked', 'a1', 'r2', { tool: 'bash', input: { cmd: 'sqlite3 .hexagon/state.db .schema' }, reason: '核对事件表结构' }, '09:33'),
         mkEv(40, 'permission_allowed', null, 'r2', { tool: 'bash', by: 'owner' }, '09:34'),
         mkEv(41, 'permission_shape_remembered', null, null, { shape: 'sqlite3 .hexagon/* .schema' }, '09:34'),
         mkMsg(42, 'agent_message', 'a1', 'r2', 'a1', '接口说明 v1 出了：\n\n- `GET/POST /api/recipes`\n- `GET /api/recipes/:id`\n- 分页暂用 offset\n\n错误码表初版随稿。', '09:36'),
@@ -725,23 +738,23 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(53, 'resumed', null, null, {}, '10:02'),
         mkEv(54, 'owner_command', null, null, { text: '/advance' }, '10:02'),
         mkEv(55, 'turn_started', 'a3', 'r3', {}, '10:03'),
-        mkEv(56, 'tool_called', 'a3', 'r3', { tool: 'fs.write', path: 'src/recipes.ts' }, '10:04'),
-        mkEv(57, 'tool_result', 'a3', 'r3', { tool: 'fs.write', ok: true }, '10:04'),
-        mkEv(58, 'tool_called', 'a3', 'r3', { tool: 'bash', input: { command: 'npm run dev' } }, '10:05'),
-        mkEv(59, 'tool_result', 'a3', 'r3', { tool: 'bash', ok: true }, '10:05'),
+        mkEv(56, 'tool_called', 'a3', 'r3', { tool: 'fs_write', input: { path: 'src/recipes.ts', bytes: 3120 }, seq: 'r3:i0' }, '10:04'),
+        mkEv(57, 'tool_result', 'a3', 'r3', { tool: 'fs_write', ok: true, result: { output: { written: 'src/recipes.ts' } } }, '10:04'),
+        mkEv(58, 'tool_called', 'a3', 'r3', { tool: 'bash', input: { cmd: 'npm run dev' }, seq: 'r3:i1' }, '10:05'),
+        mkEv(59, 'tool_result', 'a3', 'r3', { tool: 'bash', ok: true, result: { output: { exit_code: 0, timed_out: false, stdout: 'VITE v6.1 ready in 318 ms\n\n  ➜  Local:   http://localhost:1420/\n  ➜  Network: use --host to expose', stderr: '' } } }, '10:05'),
         mkEv(60, 'artifact_delivered', 'a3', 'r3', { path: 'src/recipes.ts', kind: '代码', version: 1, status: 'valid' }, '10:07'),
         mkMsg(61, 'agent_message', 'a3', 'r3', 'a3', '列表页能跑了：筛选、标签 chip、加载态。', '10:07'),
         mkEv(62, 'turn_finished', 'a3', 'r3', {}, '10:08'),
         mkEv(63, 'turn_started', 'a4', 'r3', {}, '10:10'),
-        mkEv(64, 'tool_called', 'a4', 'r3', { tool: 'fs.write', path: 'crates/core/src/api.rs' }, '10:11'),
-        mkEv(65, 'tool_result', 'a4', 'r3', { tool: 'fs.write', ok: true }, '10:11'),
-        mkEv(66, 'tool_called', 'a4', 'r3', { tool: 'bash', input: { command: 'cargo build' } }, '10:12'),
-        mkEv(67, 'tool_result', 'a4', 'r3', { tool: 'bash', ok: true }, '10:12'),
+        mkEv(64, 'tool_called', 'a4', 'r3', { tool: 'fs_write', input: { path: 'crates/core/src/api.rs', bytes: 5210 }, seq: 'r3:i2' }, '10:11'),
+        mkEv(65, 'tool_result', 'a4', 'r3', { tool: 'fs_write', ok: true, result: { output: { written: 'crates/core/src/api.rs' } } }, '10:11'),
+        mkEv(66, 'tool_called', 'a4', 'r3', { tool: 'bash', input: { cmd: 'cargo build' }, seq: 'r3:i3' }, '10:12'),
+        mkEv(67, 'tool_result', 'a4', 'r3', { tool: 'bash', ok: true, result: { output: { exit_code: 101, timed_out: false, stdout: '', stderr: 'error[E0308]: mismatched types\n  --> crates/core/src/api.rs:214:9\n\nerror: could not compile `hexagon-core`' } } }, '10:12'),
         mkEv(68, 'artifact_delivered', 'a4', 'r3', { path: 'crates/core/src/api.rs', kind: '代码', version: 1, status: 'valid' }, '10:14'),
         mkMsg(69, 'agent_message', 'a4', 'r3', 'a4', '核 API 接缝落完：`timeline()` + 事件行投影。', '10:14'),
         mkMsg(70, 'owner_message', null, null, 'owner', '先补列表页单测，再推联调。', '10:16'),
         mkEv(71, 'turn_failed', 'a4', 'r3', { error: '模型供应商超时，已自动重试' }, '10:20'),
-        mkEv(72, 'permission_asked', 'a4', 'r3', { tool: 'bash', input: { command: 'rm -rf node_modules && npm i' }, reason: '依赖树损坏需重装' }, '10:22'),
+        mkEv(72, 'permission_asked', 'a4', 'r3', { tool: 'bash', input: { cmd: 'rm -rf node_modules && npm i' }, reason: '依赖树损坏需重装' }, '10:22'),
         mkEv(73, 'permission_denied', null, 'r3', { tool: 'bash', by: 'owner' }, '10:23'),
         mkEv(74, 'test_ran', 'a5', 'r3', { command: 'npm test', result: 'passed', passed: 24, total: 26 }, '10:25'),
         mkEv(75, 'artifact_delivered', 'a5', 'r3', { path: 'tests/qa-report.md', kind: '测试记录', version: 1, status: 'pending' }, '10:26'),
@@ -778,6 +791,30 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
           artifacts: { valid: 4, stamped: 4, pending: 1 },
           flags: { open: 1 }, permissions: { asked: 1 }, stages: { waiting_stamp: 1 },
         }, '11:35'),
+
+        // exec-cards 验收段：已收束回合（执行卡四体齐）+ 在途回合（不折）
+        mkEv(105, 'turn_started', 'a3', 'r3', {}, '11:40'),
+        mkEv(106, 'tool_called', 'a3', 'r3', {
+          tool: 'fs_patch', seq: 'r4:i0',
+          input: { path: 'src/recipes.ts', old: 'export function list() {\n  return recipes\n}', new: 'export function list() {\n  return recipes.filter((r) => r.visible)\n}' },
+        }, '11:40'),
+        mkEv(107, 'tool_result', 'a3', 'r3', { tool: 'fs_patch', ok: true, result: { output: { patched: 'src/recipes.ts', diff_added: 3, diff_removed: 3 } } }, '11:41'),
+        mkEv(108, 'tool_called', 'a3', 'r3', { tool: 'bash', input: { cmd: 'npm test -- --run src/recipes.test.ts' }, seq: 'r4:i1' }, '11:41'),
+        mkEv(109, 'tool_result', 'a3', 'r3', { tool: 'bash', ok: true, result: { output: { exit_code: 0, timed_out: false, stdout: ' ✓ src/recipes.test.ts (8 tests) 24ms\n\n Test Files  1 passed\n      Tests  8 passed', stderr: '' } } }, '11:44'),
+        mkEv(110, 'tool_called', 'a3', 'r3', { tool: 'fs_write', input: { path: 'src/plan.ts', bytes: 1840 }, seq: 'r4:i2' }, '11:45'),
+        mkEv(111, 'tool_result', 'a3', 'r3', { tool: 'fs_write', ok: true, result: { output: { written: 'src/plan.ts' } } }, '11:45'),
+        mkEv(112, 'tool_called', 'a3', 'r3', { tool: 'artifact_write', input: { path: 'docs/impl-notes.md', bytes: 920, kind: '结构说明' }, seq: 'r4:i3' }, '11:46'),
+        mkEv(113, 'tool_result', 'a3', 'r3', { tool: 'artifact_write', ok: true, result: { output: { artifact_id: 'art16' } } }, '11:46'),
+        mkEv(114, 'artifact_delivered', 'a3', 'r3', { path: 'docs/impl-notes.md', kind: '结构说明', version: 1, status: 'valid' }, '11:46'),
+        mkMsg(115, 'agent_message', 'a3', 'r3', 'a3', '补丁打上：列表只出可见项；`recipes.test.ts` 8 过。实现要点记到 `docs/impl-notes.md`。', '11:50'),
+        mkEv(116, 'turn_finished', 'a3', 'r3', {}, '11:52'),
+
+        // 在途回合：不收摘要行；bash 卡带在途运行环（浏览器 dev 无 tool-output 推送，
+        // 输出区空白属真实表现——真通道只在 Tauri 下供数）。
+        mkEv(117, 'turn_started', 'a4', 'r3', {}, '11:55'),
+        mkEv(118, 'tool_called', 'a4', 'r3', { tool: 'fs_read', input: { path: 'api/spec.md' }, seq: 'r5:i0' }, '11:55'),
+        mkEv(119, 'tool_result', 'a4', 'r3', { tool: 'fs_read', ok: true, result: { output: { content: '# 接口说明 v2\n…' } } }, '11:55'),
+        mkEv(120, 'tool_called', 'a4', 'r3', { tool: 'bash', input: { cmd: 'cargo test --workspace' }, seq: 'r5:i1' }, '11:56'),
       ]
       const after = args?.after == null ? null : Number(args.after)
       const limit = Number(args?.limit ?? 500)
@@ -789,8 +826,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
         { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
         { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
-        { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { command: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
-        { id: 'q-perm2', kind: 'permission', agent_id: 'a1', payload: { tool: 'bash', input: { command: 'rm -rf target && cargo build' }, reason: '构建产物损坏，安全网必问', safety_net: true }, state: 'queued' },
+        { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
+        { id: 'q-perm2', kind: 'permission', agent_id: 'a1', payload: { tool: 'bash', input: { cmd: 'rm -rf target && cargo build' }, reason: '构建产物损坏，安全网必问', safety_net: true }, state: 'queued' },
         { id: 'q-prop', kind: 'stamp', agent_id: 'a1', payload: { proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }, state: 'queued' },
       ] as T
     case 'usage':

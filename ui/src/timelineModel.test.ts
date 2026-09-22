@@ -190,6 +190,110 @@ describe('story 档（ui-audit 票 18 / 方向卡 3）', () => {
   })
 })
 
+describe('回合摘要行（exec-cards 票 03）', () => {
+  const t = (id: number, kind: EventKind, at: string, payload: Record<string, unknown> = {}): TimelineItem => ({
+    event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload, created_at: at },
+    message: kind === 'agent_message'
+      ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], created_at: at, thinking: '' }
+      : null,
+  })
+
+  it('已收束回合的执行行收成一条摘要行（占最后被折行槽位），消息行原位保留', () => {
+    const rows = buildRows([
+      t(1, 'turn_started', '2026-01-01T00:00:00Z'),
+      t(2, 'tool_called', '2026-01-01T00:00:01Z', { tool: 'fs_read' }),
+      t(3, 'tool_result', '2026-01-01T00:00:02Z', { ok: true }),
+      t(4, 'tool_called', '2026-01-01T00:00:03Z', { tool: 'bash' }),
+      t(5, 'system', '2026-01-01T00:00:04Z', { kind: 'provider_retry' }),
+      t(6, 'system', '2026-01-01T00:00:05Z', { kind: 'known_world' }),
+      t(7, 'system', '2026-01-01T00:00:06Z', { kind: 'request_envelope' }),
+      t(8, 'agent_message', '2026-01-01T00:00:40Z'),
+      t(9, 'turn_finished', '2026-01-01T00:00:42Z'),
+    ], 'all')
+    // 摘要行收在最后一个执行组与最终回复之间（Cursor 语法）；消息/边界行原位
+    expect(rows.map((r) => r.type)).toEqual(['item', 'turnsummary', 'item', 'item'])
+    const s = rows[1]
+    if (s.type !== 'turnsummary') throw new Error('expected turnsummary')
+    expect(s.calls).toBe(2) // 按 tool_called 计数
+    expect(s.secs).toBe(42)
+    expect(s.failed).toBe(false)
+    // toolgroup + sysgroup 两副被折行都在摘要行里
+    expect(s.folded.map((r) => r.type)).toEqual(['toolgroup', 'sysgroup'])
+    expect(rows[2].type === 'item' && rows[2].item.event.kind).toBe('agent_message')
+  })
+
+  it('未收束回合永不折叠——执行中过程必须可见', () => {
+    const rows = buildRows([
+      t(1, 'turn_started', '2026-01-01T00:00:00Z'),
+      t(2, 'tool_called', '2026-01-01T00:00:01Z', { tool: 'fs_read' }),
+      t(3, 'tool_result', '2026-01-01T00:00:02Z'),
+    ], 'all')
+    expect(rows.map((r) => r.type)).toEqual(['item', 'toolgroup'])
+  })
+
+  it('turn_failed 窗口产出 failed 标记的摘要行', () => {
+    const rows = buildRows([
+      t(1, 'turn_started', '2026-01-01T00:00:00Z'),
+      t(2, 'tool_called', '2026-01-01T00:00:01Z', { tool: 'bash' }),
+      t(3, 'tool_result', '2026-01-01T00:00:02Z', { ok: false }),
+      t(4, 'turn_failed', '2026-01-01T00:00:05Z'),
+    ], 'all')
+    const s = rows.find((r) => r.type === 'turnsummary')
+    expect(s && s.type === 'turnsummary' && s.failed).toBe(true)
+  })
+
+  it('all 档之外不产生摘要行；跨界组（含边界事件的 sysgroup）保持原位', () => {
+    const tl = [
+      t(1, 'turn_started', '2026-01-01T00:00:00Z'),
+      t(2, 'tool_called', '2026-01-01T00:00:01Z'),
+      t(3, 'tool_result', '2026-01-01T00:00:02Z'),
+      t(4, 'agent_message', '2026-01-01T00:00:03Z'),
+      t(5, 'turn_finished', '2026-01-01T00:00:04Z'),
+    ]
+    expect(buildRows(tl, 'messages').every((r) => r.type === 'item')).toBe(true)
+    expect(buildRows(tl, 'decisions').every((r) => r.type === 'item')).toBe(true)
+    // turn_started 被吸进 sysgroup（连续 sys 事件）：该组跨界不折
+    const rows = buildRows([
+      t(1, 'system', '2025-12-31T23:59:58Z', { kind: 'provider_retry' }),
+      t(2, 'turn_started', '2026-01-01T00:00:00Z'),
+      t(3, 'system', '2026-01-01T00:00:01Z', { kind: 'known_world' }),
+      t(4, 'system', '2026-01-01T00:00:02Z', { kind: 'request_envelope' }),
+      t(5, 'turn_finished', '2026-01-01T00:00:10Z'),
+    ], 'all')
+    expect(rows.some((r) => r.type === 'sysgroup')).toBe(true)
+    expect(rows.some((r) => r.type === 'turnsummary')).toBe(false)
+  })
+
+  it('并发回合交错不串窗：各 agent 的执行行折进各自摘要（串窗回归）', () => {
+    // 曾错在单栈开窗——A 的 finished 把 B 的窗关掉，B 的调用折进 A 的摘要。
+    const ta = (id: number, kind: EventKind, agent: string, at: string): TimelineItem => ({
+      event: { id, project_id: 'p1', kind, agent_id: agent, stage_run_id: null, payload: {}, created_at: at },
+      message: null,
+    })
+    const rows = buildRows([
+      ta(1, 'turn_started', 'a1', '2026-01-01T00:00:00Z'),
+      ta(2, 'turn_started', 'a2', '2026-01-01T00:00:01Z'),
+      ta(3, 'tool_called', 'a1', '2026-01-01T00:00:02Z'),
+      ta(4, 'tool_result', 'a1', '2026-01-01T00:00:03Z'),
+      // toolgroup 合组不看 agent——两家的调用直接相邻会并成混 agent 组，
+      // 整组拒折（保守对）。插一条非工具行把两家的组断开。
+      { event: { id: 5, project_id: 'p1', kind: 'system', agent_id: null, stage_run_id: null, payload: { kind: 'known_world' }, created_at: '2026-01-01T00:00:04Z' }, message: null },
+      ta(6, 'tool_called', 'a2', '2026-01-01T00:00:05Z'),
+      ta(7, 'tool_result', 'a2', '2026-01-01T00:00:06Z'),
+      ta(8, 'turn_finished', 'a2', '2026-01-01T00:00:08Z'),  // a2 先收
+      ta(9, 'turn_finished', 'a1', '2026-01-01T00:00:20Z'),
+    ], 'all')
+    const sums = rows.filter((r) => r.type === 'turnsummary')
+    expect(sums.length).toBe(2)
+    const a1 = sums.find((r) => r.type === 'turnsummary' && r.agentId === 'a1')!
+    const a2 = sums.find((r) => r.type === 'turnsummary' && r.agentId === 'a2')!
+    expect(a1.type === 'turnsummary' && a1.calls).toBe(1)
+    expect(a1.type === 'turnsummary' && a1.secs).toBe(20)
+    expect(a2.type === 'turnsummary' && a2.calls).toBe(1)
+    expect(a2.type === 'turnsummary' && a2.secs).toBe(7)
+  })
+})
+
 describe('deriveWorkbenchStatus（hands-free 票 06）', () => {
   const base = (): StatusSources => ({
     stages: [

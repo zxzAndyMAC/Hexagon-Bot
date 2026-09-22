@@ -61,6 +61,18 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
     root.unmount()
   })
 
+  it('票 06：生成中正文挂 live 面（caret/浮入），收束后摘掉', async () => {
+    const { el, root } = await render(<Probe />)
+    await act(async () => { useUiStore.getState().applyDelta(delta({ text: '在写' })) })
+    expect(el.querySelector('.msg-body.live')).not.toBeNull()
+    await act(async () => {
+      useUiStore.getState().applyDelta(delta({ text: '', done: true }))
+    })
+    expect(el.querySelector('.msg-body.live')).toBeNull()
+    expect(el.querySelector('.msg-body')).not.toBeNull()
+    root.unmount()
+  })
+
   it('过长思考收成一行，点开全文，再点收回省略', async () => {
     const full = `${'推'.repeat(THINKING_COLLAPSE_AT)}尾巴`
     const { el, root } = await render(<ThinkingRow text={full} />)
@@ -77,6 +89,28 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
     expect(row.textContent).not.toContain('尾巴')
     expect(row.textContent).toContain('…')
     root.unmount()
+  })
+
+  // beautiful-ui 票 03：live 态 shimmer+走秒；落定翻「Thought for Ns」；历史态回退原标签。
+  it('思考计时：live 走秒，落定显示用时，无 live 不回填假时长', async () => {
+    function Probe({ live }: { live?: boolean }) {
+      return <ThinkingRow text="想了一下" live={live} />
+    }
+    const { el, root } = await render(<Probe live />)
+    const row = el.querySelector('[data-thinking]')!
+    expect(row.textContent).toContain('思考')
+    expect(row.querySelector('.shimmer-text')).not.toBeNull()
+    // 落定：live→false 冻结成「思考用时 Ns」
+    await act(async () => { root.render(<Probe live={false} />) })
+    await act(async () => {})
+    expect(row.textContent).toContain('思考用时')
+    expect(row.querySelector('.shimmer-text')).toBeNull()
+    root.unmount()
+    // 历史消息（无 live）：只有标签，没有计时
+    const hist = await render(<ThinkingRow text="旧思考" />)
+    expect(hist.el.textContent).toContain('思考')
+    expect(hist.el.textContent).not.toContain('思考用时')
+    hist.root.unmount()
   })
 
   it('没有思考文本时不出现思考区', async () => {

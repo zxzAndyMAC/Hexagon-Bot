@@ -41,9 +41,9 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     expect(el.querySelectorAll('.dot.on')).toHaveLength(1)
     expect(el.querySelectorAll('.dot.warn')).toHaveLength(1)
     expect(el.querySelectorAll('.dot.off')).toHaveLength(1)
-    // 汇总行：default 绑到缺 key 的 NoKeyCo → 1/1 已绑 + 1 家待配 key
+    // 汇总行：default 绑到缺 key 的 NoKeyCo；decision 槽始终在列表里但未绑 → 1/2
     const text = el.textContent ?? ''
-    expect(text).toContain('1/1')
+    expect(text).toContain('1/2')
     root.unmount()
   })
 

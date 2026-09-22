@@ -54,6 +54,8 @@ const ICONS = {
   'file-image': <><path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" /><circle cx="7" cy="8.3" r=".8" /><path d="M5.2 12.2 7.5 9.7l1.5 1.5 1.1-1 1.7 2" /></>,
   'file-config': <><path d="M4 1.5h5.5L13 5v9.5H4zM9.5 1.5V5H13" /><circle cx="8" cy="9.3" r="1.2" /><path d="M8 7.2v.7M8 10.7v.7M6.3 8.3l.6.3M9.1 10l.6.3M6.3 10.3l.6-.3M9.1 8.6l.6-.3" /></>,
   link: <path d="M6.6 9.4 5.4 10.6a2 2 0 0 1-2.8-2.8L3.8 6.6a2 2 0 0 1 2.8 0M9.4 6.6l1.2-1.2a2 2 0 0 1 2.8 2.8l-1.2 1.2a2 2 0 0 1-2.8 0M6.4 9.6l3.2-3.2" />,
+  // 双矩形错叠（iconoir copy 借形）：前框主体 + 后框露左上沿
+  copy: <><path d="M10.5 2.5h-7a1.2 1.2 0 0 0-1.2 1.2v6.8" /><rect x="5.5" y="5.5" width="8.2" height="8.2" rx="1.3" /></>,
 } as const
 
 export type IconName = keyof typeof ICONS

@@ -73,13 +73,32 @@ function liveAgent(src: StatusSources): string | null {
   return null
 }
 
-function openTurnAgent(timeline: TimelineItem[]): string | null {
-  let open: string | null = null
+// beautiful-ui 票 04：升格导出——StreamFooter 首 token 等待位和 AgentTab
+// 忙碌态都要「未收束回合」判定；at=turn_started 时间戳给 LoadingState 起表。
+// exec-cards 票 03 修：并发回合交错——开窗按 agent 分槽，单栈会把
+// 先开的回合误关（AgentTab 忙碌徽标漏报）。
+export function openTurns(timeline: TimelineItem[]): Map<string | null, number | null> {
+  const m = new Map<string | null, number | null>()
   for (const it of timeline) {
-    if (it.event.kind === 'turn_started') open = it.event.agent_id
-    else if (it.event.kind === 'turn_finished' || it.event.kind === 'turn_failed') open = null
+    if (it.event.kind === 'turn_started') {
+      m.set(it.event.agent_id, Date.parse(it.event.created_at) || null)
+    } else if (it.event.kind === 'turn_finished' || it.event.kind === 'turn_failed') {
+      m.delete(it.event.agent_id)
+    }
   }
-  return open
+  return m
+}
+
+export function openTurn(timeline: TimelineItem[]): { agentId: string | null; at: number | null } {
+  // 兼容单展示位（WaitingReply 只冒一个气泡）：取最后开的那个。
+  let agentId: string | null = null
+  let at: number | null = null
+  for (const [a, t] of openTurns(timeline)) { agentId = a; at = t }
+  return { agentId, at }
+}
+
+function openTurnAgent(timeline: TimelineItem[]): string | null {
+  return openTurn(timeline).agentId
 }
 
 function currentTool(timeline: TimelineItem[], agentId: string): string | null {
@@ -152,6 +171,40 @@ export type Row =
   | { type: 'sysgroup'; items: TimelineItem[]; idx: number }
   // 票 18（方向卡 3）：story 档的回合章节分隔——turn_started 事件升格为章节行。
   | { type: 'chapter'; idx: number; n: number; agentId: string | null; stage: string }
+  // exec-cards 票 03：已收束回合的执行行收成一条摘要行（Cursor Worked-for-Xs
+  // 借形）。folded 保留被折的原始行供展开还原；calls/secs/failed 是窗口统计。
+  | { type: 'turnsummary'; idx: number; agentId: string | null; calls: number; secs: number | null; failed: boolean; folded: Row[] }
+
+// exec-cards 票 03：回合窗口表——turn_started 开窗、turn_finished/failed 关窗
+// （openTurn 同族逻辑，但这里要的是全部已收束窗口而非当前开着的那个）。
+// 未收束窗口不进表 = 执行中过程永不折叠。
+type TurnWindow = { startId: number; endId: number; agentId: string | null; failed: boolean; secs: number | null }
+
+function settledTurns(timeline: TimelineItem[]): TurnWindow[] {
+  const wins: TurnWindow[] = []
+  // 按 agent 各自开窗——多 agent 并发回合在时间线里交错，单栈会把
+  // A 的 finished 错关到 B 的窗上（串窗=摘要行张冠李戴）。
+  const open = new Map<string | null, { startId: number; startAt: number }>()
+  for (const it of timeline) {
+    const ev = it.event
+    if (ev.kind === 'turn_started') {
+      open.set(ev.agent_id, { startId: ev.id, startAt: Date.parse(ev.created_at) || 0 })
+    } else if (ev.kind === 'turn_finished' || ev.kind === 'turn_failed') {
+      const cur = open.get(ev.agent_id)
+      if (!cur) continue
+      open.delete(ev.agent_id)
+      const endAt = Date.parse(ev.created_at) || 0
+      wins.push({
+        startId: cur.startId,
+        endId: ev.id,
+        agentId: ev.agent_id,
+        failed: ev.kind === 'turn_failed',
+        secs: cur.startAt && endAt ? Math.max(0, (endAt - cur.startAt) / 1000) : null,
+      })
+    }
+  }
+  return wins
+}
 
 export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
   // 票 18（方向卡 3）：story 档——慢读复盘面。tool/sys 行全移除
@@ -212,7 +265,50 @@ export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
     }
     out.push(r)
   }
-  return out
+  // exec-cards 票 03：回合摘要行——只 all 档生效（messages/decisions 本就筛掉
+  // 执行行，story 走 chapter 先例）。窗口内 toolgroup/sysgroup 收成一条摘要
+  // 行，落在最后被折行的槽位（Cursor 语法：执行块收在它与最终回复之间）；
+  // 消息行与其余 item 原位保留——agent_message 是交付内容，折叠等于藏答案。
+  if (filter !== 'all') return out
+  const wins = settledTurns(timeline)
+  if (!wins.length) return out
+  const winOf = (r: Row): TurnWindow | null => {
+    if (r.type !== 'toolgroup' && r.type !== 'sysgroup') return null
+    // 行内全部事件严格落在窗口内才可折——turn_started/finished 被吸进
+    // sysgroup 时该组跨界，保持原位不动。且不得带别家 agent 的事件
+    // （并发回合 id 交错，否则把别家调用折进本窗摘要）；无归属的
+    // ambient 系统行不排他。
+    return wins.find(
+      (w) => r.items.every(
+        (x) => x.event.id > w.startId && x.event.id < w.endId
+          && (x.event.agent_id == null || x.event.agent_id === w.agentId),
+      ),
+    ) ?? null
+  }
+  const final: Row[] = []
+  const buckets = new Map<TurnWindow, { folded: Row[]; pos: number }>()
+  for (const r of out) {
+    const w = winOf(r)
+    if (!w) {
+      final.push(r)
+      continue
+    }
+    const b = buckets.get(w) ?? { folded: [], pos: 0 }
+    b.folded.push(r)
+    b.pos = final.length
+    buckets.set(w, b)
+  }
+  for (const [w, b] of [...buckets.entries()].sort((a, b2) => b2[1].pos - a[1].pos)) {
+    const calls = b.folded.reduce(
+      (n, r) => n + (r.type === 'toolgroup' ? r.items.filter((x) => x.event.kind === 'tool_called').length : 0),
+      0,
+    )
+    final.splice(b.pos, 0, {
+      type: 'turnsummary', idx: w.endId, agentId: w.agentId,
+      calls, secs: w.secs, failed: w.failed, folded: b.folded,
+    })
+  }
+  return final
 }
 
 export type NodeMark = { rowIdx: number; icon: IconName; label: string; pending?: boolean }

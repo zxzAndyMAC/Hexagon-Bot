@@ -3,13 +3,16 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
 import { api, isTauri } from '../api'
-import { Md } from './Md'
+import { Md, CodeBlock } from './Md'
 import { useUiStore } from '../store'
-import { buildRows, nodeMarks, deriveWorkbenchStatus, thinkingCollapsed, stampedByAutonomy, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark } from '../timelineModel'
+import { buildRows, nodeMarks, deriveWorkbenchStatus, thinkingCollapsed, stampedByAutonomy, openTurn, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
+import { LoadingState } from './LoadingState'
 import { Row } from './Row'
 import { bindingFor, formatBinding } from '../keymap'
+import { pairToolCalls, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
+import { CallStatus, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
 import type { TFunction } from 'i18next'
@@ -33,12 +36,41 @@ function trKey(t: TFunction, key: string, raw: string): string {
 const chipCls = (s: string) =>
   s === 'passed' ? 'ok' : s === 'queued' ? 'warn' : s === 'rejected' || s === 'failed' ? 'err' : 'err'
 
-export function ThinkingRow({ text }: { text: string }) {
+// Thinking 升级（beautiful-ui 票 03）：live 态 shimmer 走秒，
+// live→settled 翻转成「思考用时 Ns」；历史消息无计时源，回退原标签。
+// 「思考」只承载推理文本（CONTEXT.md 定名）——工具调用归 ToolChips，不混排。
+export function ThinkingRow({ text, live }: { text: string; live?: boolean }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
-  if (!text.trim()) return null
-  const { long, line } = thinkingCollapsed(text)
-  const shown = long && !open ? line : text.trim()
+  const [now, setNow] = useState(0)
+  const [start, setStart] = useState<number | null>(null)
+  const [end, setEnd] = useState<number | null>(null)
+  const trimmed = text.trim()
+  const hasText = trimmed !== ''
+  const timed = live !== undefined
+  // 渲染期派生态调整（React 认可模式，NodeRail 同款）：
+  // 首个非空增量起表，live→false 冻结，reset 清空归零重起；
+  // live 未传（历史消息）= 无计时源不起表，不回填假时长。
+  if (timed) {
+    if (hasText && start == null) setStart((s) => s ?? Date.now())
+    else if (!hasText && start != null) { setStart(null); setEnd(null) }
+    else if (live === false && start != null && end == null) setEnd(() => Date.now())
+  }
+  useEffect(() => {
+    if (!live) return
+    const iv = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [live])
+  if (!hasText) return null
+  const { long, line } = thinkingCollapsed(trimmed)
+  const shown = long && !open ? line : trimmed
+  const endAt = end ?? (now > 0 ? now : null)
+  const secs = start != null && endAt != null ? Math.max(0, (endAt - start) / 1000) : null
+  const label = live
+    ? `${t('timeline.thinking')} · ${Math.floor(secs ?? 0)}s`
+    : timed && secs != null
+      ? t('timeline.thought', { s: secs < 1 ? '<1' : String(Math.round(secs)) })
+      : t('timeline.thinking')
   return (
     <button
       type="button"
@@ -48,7 +80,8 @@ export function ThinkingRow({ text }: { text: string }) {
       aria-expanded={long ? open : undefined}
       onClick={() => { if (long) setOpen((v) => !v) }}
     >
-      {t('timeline.thinking')} {shown}
+      <span className={live ? 'shimmer-text' : undefined}>{label}</span>{' '}
+      {long && open ? <span className="thinking-full">{shown}</span> : shown}
     </button>
   )
 }
@@ -81,8 +114,9 @@ export function LiveReply({
             </span>
           )}
         </div>
-        <ThinkingRow text={thinking} />
-        {text ? <CollapsibleBody text={text} /> : null}
+        {/* 思考 live = 回合在跑且正文未出（正文一到即落定计时） */}
+        <ThinkingRow text={thinking} live={generating && !text} />
+        {text ? <CollapsibleBody text={text} live={generating} /> : null}
       </div>
     </div>
   )
@@ -109,7 +143,7 @@ export function StatusLine() {
 
 // ui-audit 票 11（P3-23）：超高消息体渐隐夹持 + 展开/收起。
 // 原实现 max-height+内滚——滚到底才看得见尾巴，扫读时不知道藏了内容。
-function CollapsibleBody({ text, unclamped }: { text: string; unclamped?: boolean }) {
+function CollapsibleBody({ text, unclamped, live }: { text: string; unclamped?: boolean; live?: boolean }) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const [tall, setTall] = useState(false)
@@ -120,7 +154,8 @@ function CollapsibleBody({ text, unclamped }: { text: string; unclamped?: boolea
   }, [text, unclamped])
   return (
     <>
-      <div ref={ref} className={`msg-body ${tall && !open ? 'clamped' : ''}`}>
+      {/* live=流式生成中（票 06）：最新块 stream-in + 尾端 caret，均由 CSS 驱动 */}
+      <div ref={ref} className={`msg-body${live ? ' live' : ''}${tall && !open ? ' clamped' : ''}`}>
         <Md>{text}</Md>
       </div>
       {tall && (
@@ -381,11 +416,67 @@ export function EventRow({
   return <SystemRow item={item} />
 }
 
+// ToolChips 移植（beautiful-ui 票 02，借形 MIT slev12397/beautiful-ui）：
+// 折叠组展开成逐行 chip——图标+定名+mono 参数片，行点开看 input/result 明细，
+// 组尾文件片点开产物 tab。原作的悬停 diff 预览未移植：core 把 fs_write 的
+// content scrub 成 bytes（safety.rs），事件里没有增删行数据，不做假预览。
+function ToolChipRow({ call, delay }: { call: ToolCall; delay: number }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const p = call.called.event.payload as Record<string, unknown>
+  const tool = String(p.tool ?? '')
+  const res = call.result?.event.payload as Record<string, unknown> | undefined
+  const ok = res ? res.ok !== false : undefined
+  const summary = toolInputSummary(p)
+  const detail = JSON.stringify({ input: p.input ?? p, ...(res ? { result: res } : {}) }, null, 2)
+  return (
+    <div style={{ animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${delay}ms both` }}>
+      <button
+        type="button"
+        className="tchip-row"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="dim3" style={{ display: 'inline-flex' }}>
+          <Icon name={TOOL_ICON[tool] ?? 'tool'} size={10} />
+        </span>
+        <span className="tchip-label">
+          {t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })}
+        </span>
+        {summary && <span className="tool-chip">{summary}</span>}
+        {/* 票 05 TaskRows 状态机：无 result=在途运行环（--warn 蓝槽）；
+            落定翻 check/X 徽标 pop-in。琥珀是「在等你」专色不给在途。
+            exec-cards 票 02 起与 ExecCard 共用 CallStatus。 */}
+        <CallStatus ok={ok} />
+        <span className="dim3" style={{ display: 'inline-flex' }}>
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={9} />
+        </span>
+      </button>
+      {open && (
+        <div className="tchip-detail">
+          <CodeBlock code={detail} lang="json" />
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; expanded: boolean; onToggle: () => void }) {
   const { t } = useTranslation()
   const team = useUiStore((s) => s.team)
+  const openTab = useUiStore((s) => s.openTab)
   const agentId = items[0]?.event.agent_id
   const member = agentId ? team.find((x) => x.id === agentId) : undefined
+  // 计数按调用对（called 吸收 result），不按事件条数——旧版 2N 的数会翻倍。
+  const calls = useMemo(() => pairToolCalls(items), [items])
+  const files = useMemo(() => {
+    const seen = new Set<string>()
+    for (const c of calls) {
+      const path = toolFilePath(c.called.event.payload as Record<string, unknown>)
+      if (path) seen.add(path)
+    }
+    return [...seen]
+  }, [calls])
   return (
     <div>
       <div
@@ -396,19 +487,36 @@ export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineIte
         <div className="sysline" />
         <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           {member && <Avatar agentId={member.id} role={member.role} size={14} />}
-          <Icon name="tool" size={10} /> {t('timeline.toolCalls', { count: items.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
+          <Icon name="tool" size={10} /> {t('timeline.toolCalls', { count: calls.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
         </span>
       </div>
-      {expanded && items.map((it) => (
-        <div key={it.event.id} className="sysrow" style={{ paddingLeft: 24 }}>
-          <div className="sysline" />
-          <span className="syslabel dim3" style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            {it.event.kind === 'tool_called'
-              ? <><Icon name="arrow-right" size={9} /> {String(it.event.payload.tool ?? '')}</>
-              : <><Icon name="arrow-left" size={9} /> {trKey(t, `ev.${it.event.kind}`, it.event.kind)}</>}
-          </span>
+      {expanded && (
+        <div style={{ paddingLeft: 24, paddingRight: 14 }}>
+          {/* exec-cards 票 02（spec D2）：重负载升 ExecCard，轻量读系保持 chip 行 */}
+          {calls.map((c, i) => {
+            const tool = String((c.called.event.payload as Record<string, unknown>).tool ?? '')
+            return EXEC_CARD_TOOLS.has(tool)
+              ? <ToolExecCard key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} />
+              : <ToolChipRow key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} />
+          })}
+          {files.length > 0 && (
+            <div className="tchip-files">
+              {files.map((path, i) => (
+                <button
+                  key={path}
+                  type="button"
+                  className="chip chip-btn mono"
+                  style={{ fontSize: 10, animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 60}ms both` }}
+                  title={path}
+                  onClick={() => openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}
+                >
+                  <Icon name="file" size={9} /> {path}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      ))}
+      )}
     </div>
   )
 }
@@ -428,6 +536,50 @@ export function SysGroupRow({ items, expanded, onToggle }: { items: TimelineItem
         </span>
       </div>
       {expanded && items.map((it) => <SystemRow key={it.event.id} item={it} />)}
+    </div>
+  )
+}
+
+// exec-cards 票 03：回合摘要行（Cursor Worked-for-Xs 借形）——已收束回合的
+// 执行行收成单行（角色 · 工具数 · 耗时），点开就地展开还原被折行。
+// 中性色：摘要是收纳不是信号；failed 回合挂 err 徽标（唯一需扫读区分的状态）。
+function TurnSummaryRow({
+  row,
+  expanded,
+  onToggle,
+  children,
+}: {
+  row: Extract<ModelRow, { type: 'turnsummary' }>
+  expanded: boolean
+  onToggle: () => void
+  children?: ReactNode
+}) {
+  const { t } = useTranslation()
+  const team = useUiStore((s) => s.team)
+  const member = row.agentId ? team.find((x) => x.id === row.agentId) : undefined
+  const role = member?.role ?? row.agentId ?? ''
+  const secs = row.secs == null ? '?' : row.secs < 1 ? '<1' : String(Math.round(row.secs))
+  return (
+    <div>
+      <div
+        className="sysrow turn-summary"
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } }}
+      >
+        <div className="sysline" />
+        <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          {member && <Avatar agentId={member.id} role={member.role} size={14} />}
+          <Icon name="bolt" size={10} />
+          {t('timeline.turnSummary', { role, count: row.calls, secs })}
+          {row.failed && <span className="chip err">{t('timeline.turnFailed')}</span>}
+          <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
+        </span>
+      </div>
+      {expanded && children}
     </div>
   )
 }
@@ -526,18 +678,50 @@ function joinCalls(buf: Record<number, string> | undefined): string {
     .join('\n\n')
 }
 
+// 首 token 等待位（beautiful-ui 票 04）：回合已开、流缓冲未到的死寂段——
+// 像素格占住气泡位，告诉负责人 agent 在跑而非卡死。
+// 缓冲一到即被 LiveReply 顶掉（ids 判据同一处），无交接空窗。
+export function WaitingReply({ role, startedAt, avatar }: {
+  role: string
+  startedAt?: number | null
+  avatar?: ReactNode
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="msg" data-waiting="" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
+      {avatar}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+          <span style={{ fontWeight: 560, fontSize: 12 }}>{role}</span>
+        </div>
+        <LoadingState label={t('timeline.working')} startedAt={startedAt ?? undefined} />
+      </div>
+    </div>
+  )
+}
+
 function StreamFooter() {
-  const { streams, thinkings, streamDone, team } = useUiStore()
+  const { streams, thinkings, streamDone, team, timeline } = useUiStore()
   const ids = [...new Set([...Object.keys(streams), ...Object.keys(thinkings)])].filter((id) =>
     Object.values(streams[id] ?? {}).some((s) => s.length > 0) ||
     Object.values(thinkings[id] ?? {}).some((s) => s.length > 0),
   )
+  const turn = openTurn(timeline)
+  const waitingId = turn.agentId && !ids.includes(turn.agentId) ? turn.agentId : null
+  const waitingMember = waitingId ? team.find((x) => x.id === waitingId) : undefined
   // Cursor 式底部留白（ui-polish-2 ⑤ 续，owner 二报「回不到底」）：
   // 列表尾部恒留空白带，最新内容可滚离输入条一段高度，而不是贴死在底缘。
   const tail = <div style={{ height: 96 }} />
-  if (!ids.length) return tail
+  if (!ids.length && !waitingId) return tail
   return (
     <div>
+      {waitingId && (
+        <WaitingReply
+          role={waitingMember?.role ?? waitingId}
+          startedAt={turn.at}
+          avatar={waitingMember ? <Avatar agentId={waitingId} role={waitingMember.role} size={34} /> : undefined}
+        />
+      )}
       {ids.map((id) => {
         const member = team.find((x) => x.id === id)
         const done = streamDone[id] != null
@@ -621,11 +805,65 @@ export function Timeline() {
 
   // 票 16：按事件 id 跳转（return_summary 行回跳 since_event 锚点）。
   const jumpToEvent = (eid: number) => {
-    const i = rows.findIndex((r) =>
-      r.type === 'item' ? r.item.event.id === eid
-      : r.type === 'chapter' ? false
-      : r.items.some((x) => x.event.id === eid))
-    if (i >= 0) jump({ rowIdx: i, icon: 'list', label: '' })
+    const i = rows.findIndex((r) => {
+      if (r.type === 'item') return r.item.event.id === eid
+      if (r.type === 'toolgroup' || r.type === 'sysgroup') return r.items.some((x) => x.event.id === eid)
+      // exec-cards 票 03：目标可能折在回合摘要行里
+      if (r.type === 'turnsummary') {
+        return r.folded.some((f) =>
+          (f.type === 'toolgroup' || f.type === 'sysgroup') && f.items.some((x) => x.event.id === eid))
+      }
+      return false
+    })
+    if (i < 0) return
+    const row = rows[i]
+    // 命中折叠行先展开摘要行再跳，否则落点行不可见。
+    if (row.type === 'turnsummary') setExpanded((s) => new Set(s).add(row.idx))
+    jump({ rowIdx: i, icon: 'list', label: '' })
+  }
+
+  const toggleRow = (idx: number) => () =>
+    setExpanded((s) => {
+      const n = new Set(s)
+      if (n.has(idx)) n.delete(idx); else n.add(idx)
+      return n
+    })
+
+  // exec-cards 票 03：行分发提成可递归闭包——摘要行展开时被折行
+  // （toolgroup/sysgroup）走同一套渲染与同一个 expanded 集合（键=行 idx 即事件 id）。
+  const rowContent = (row: ModelRow): ReactNode => {
+    if (row.type === 'chapter') {
+      const role = team.find((m) => m.id === row.agentId)?.role ?? row.agentId ?? ''
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 14px 4px' }}>
+          <div className="sysline" style={{ flex: 1 }} />
+          <span className="dim3" style={{ fontSize: 10, fontWeight: 560, whiteSpace: 'nowrap' }}>
+            {t('timeline.chapter', { n: row.n, agent: role })}{row.stage ? ` · ${row.stage}` : ''}
+          </span>
+          <div className="sysline" style={{ flex: 1 }} />
+        </div>
+      )
+    }
+    if (row.type === 'toolgroup') {
+      return <ToolGroupRow items={row.items} expanded={expanded.has(row.idx)} onToggle={toggleRow(row.idx)} />
+    }
+    if (row.type === 'sysgroup') {
+      return <SysGroupRow items={row.items} expanded={expanded.has(row.idx)} onToggle={toggleRow(row.idx)} />
+    }
+    if (row.type === 'turnsummary') {
+      return (
+        <TurnSummaryRow row={row} expanded={expanded.has(row.idx)} onToggle={toggleRow(row.idx)}>
+          {row.folded.map((r) => (
+            <div key={r.idx} style={{ paddingLeft: 12 }}>{rowContent(r)}</div>
+          ))}
+        </TurnSummaryRow>
+      )
+    }
+    return (
+      <div className={flash === row.item.event.id ? 'flash-row' : ''}>
+        <EventRow item={row.item} steered={steered} turnBoundary={turnBoundary} turnActive={turnActive} onJumpEvent={jumpToEvent} story={filter === 'story'} />
+      </div>
+    )
   }
 
   // 轨迹导出（US54）：kind 过滤随当前筛选档；Tauri 走保存对话框，浏览器 dev 合成 Blob 下载
@@ -692,51 +930,7 @@ export function Timeline() {
           atBottomThreshold={40}
           atBottomStateChange={(b) => { setAtBottom(b); if (b) setUnseen(0) }}
           followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
-          itemContent={(_i, row) => {
-            if (row.type === 'chapter') {
-              const role = team.find((m) => m.id === row.agentId)?.role ?? row.agentId ?? ''
-              return (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 14px 4px' }}>
-                  <div className="sysline" style={{ flex: 1 }} />
-                  <span className="dim3" style={{ fontSize: 10, fontWeight: 560, whiteSpace: 'nowrap' }}>
-                    {t('timeline.chapter', { n: row.n, agent: role })}{row.stage ? ` · ${row.stage}` : ''}
-                  </span>
-                  <div className="sysline" style={{ flex: 1 }} />
-                </div>
-              )
-            }
-            if (row.type === 'toolgroup') {
-              return (
-                <ToolGroupRow
-                  items={row.items}
-                  expanded={expanded.has(row.idx)}
-                  onToggle={() => setExpanded((s) => {
-                    const n = new Set(s)
-                    if (n.has(row.idx)) n.delete(row.idx); else n.add(row.idx)
-                    return n
-                  })}
-                />
-              )
-            }
-            if (row.type === 'sysgroup') {
-              return (
-                <SysGroupRow
-                  items={row.items}
-                  expanded={expanded.has(row.idx)}
-                  onToggle={() => setExpanded((s) => {
-                    const n = new Set(s)
-                    if (n.has(row.idx)) n.delete(row.idx); else n.add(row.idx)
-                    return n
-                  })}
-                />
-              )
-            }
-            return (
-              <div className={flash === row.item.event.id ? 'flash-row' : ''}>
-                <EventRow item={row.item} steered={steered} turnBoundary={turnBoundary} turnActive={turnActive} onJumpEvent={jumpToEvent} story={filter === 'story'} />
-              </div>
-            )
-          }}
+          itemContent={(_i, row) => rowContent(row)}
         />
         {/* ui-polish-2 ⑤：离开底部即给「回到底部」浮钮（不再只在新事件时），
             右下角落点不挡事件流；有新事件时附带计数文案 */}

@@ -1,11 +1,22 @@
-import { isValidElement, useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { isValidElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useTranslation } from 'react-i18next'
 import { getHighlighter, useTheme } from '../highlight'
+import { errText } from '../api'
+import { useUiStore } from '../store'
+import { Icon } from './Icon'
 
+// beautiful-ui 票 08：块级代码头部条（语言标签 + 复制钮）——
+// 只包 CodeBlock，行内 code 不出头；高亮体仍是 shiki，未就绪时 fallback
+// 也带头（复制不依赖高亮）。
 export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const theme = useTheme()
+  const { t } = useTranslation()
+  const pushToast = useUiStore((s) => s.pushToast)
   const [html, setHtml] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(null)
   useEffect(() => {
     let live = true
     getHighlighter()
@@ -20,8 +31,31 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
       .catch(() => {})
     return () => { live = false }
   }, [code, lang, theme])
-  if (!html) return <pre className="mono shiki-fallback">{code}</pre>
-  return <div className="shiki-wrap" dangerouslySetInnerHTML={{ __html: html }} />
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code.replace(/\n$/, ''))
+      setCopied(true)
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => setCopied(false), 1500)
+    } catch (e) {
+      pushToast(errText(e), 'err')
+    }
+  }
+  return (
+    <div className="code-block">
+      <div className="code-head">
+        <span className="code-lang mono">{lang ?? 'text'}</span>
+        <button className="icon-btn code-copy" onClick={copy}>
+          <Icon name={copied ? 'check' : 'copy'} size={11} />
+          {copied ? t('md.copied') : t('md.copy')}
+        </button>
+      </div>
+      {!html
+        ? <pre className="mono shiki-fallback">{code}</pre>
+        : <div className="shiki-wrap" dangerouslySetInnerHTML={{ __html: html }} />}
+    </div>
+  )
 }
 
 const mdComponents = {

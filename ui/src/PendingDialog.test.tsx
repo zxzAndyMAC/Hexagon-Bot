@@ -5,7 +5,7 @@ import './i18n'
 import i18n from './i18n'
 import App from './App'
 import { TopBar } from './components/TopBar'
-import { PendingCard, PendingDialog } from './components/PendingCards'
+import { PendingCard, PendingCards, PendingDialog } from './components/PendingCards'
 import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, formatBinding } from './keymap'
@@ -150,6 +150,24 @@ describe('待决弹窗（hands-free 票 05）', () => {
     })
     expect(el.querySelector('[role="dialog"]')).not.toBeNull()
     expect(el.querySelector('[data-pending-count]')?.getAttribute('data-pending-count')).toBe('2')
+  })
+
+  // beautiful-ui 票 01：进出场动画 smoke——增卡渲染、移除后 DOM 收走，不炸。
+  it('卡片进出场：新增渲染、裁决移除后收走', async () => {
+    const q1 = card({ id: 'q1', payload: { tool: 'bash', input: { command: 'cargo test' }, reason: '回归' } })
+    const q2 = card({ id: 'q2', payload: { tool: 'bash', input: { command: 'npm run lint' }, reason: '检查' } })
+    useUiStore.setState({ pending: [q1] })
+    const { el, root: r } = await render(<PendingCards />)
+    root = r
+    expect(el.textContent).toContain('cargo test')
+
+    await act(async () => { useUiStore.setState({ pending: [q1, q2] }) })
+    expect(el.textContent).toContain('npm run lint')
+
+    await act(async () => { useUiStore.setState({ pending: [q2] }) })
+    await act(async () => { await new Promise((r2) => setTimeout(r2, 500)) })
+    expect(el.textContent).not.toContain('cargo test')
+    expect(el.textContent).toContain('npm run lint')
   })
 
   it('最终验收退回把阶段和修改意见交给 reject_stamp', async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
 import { api, errText, type PendingQuestion } from '../api'
@@ -134,6 +135,29 @@ function Btn({ onClick, primary, danger, children }: {
     >
       {children}
     </button>
+  )
+}
+
+// beautiful-ui 移植票 01（spec D2/D9）：待决卡进出场是本批唯一 motion 用点。
+// enter=落下淡入；exit=淡出+高度收拢，剩余卡经 layout 上移补位。
+// 逐帧编排一律走 index.css keyframes，不在此扩散 motion 用途。
+function MotionCard({ children, itemRef, current }: {
+  children: React.ReactNode
+  itemRef?: React.Ref<HTMLDivElement>
+  current?: boolean
+}) {
+  return (
+    <motion.div
+      layout
+      ref={itemRef}
+      aria-current={current ? 'true' : undefined}
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, height: 0, overflow: 'hidden' }}
+      transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
+    >
+      {children}
+    </motion.div>
   )
 }
 
@@ -419,9 +443,10 @@ function InReviewCards() {
   const [reasons, setReasons] = useState<Record<string, string>>({})
 
   return (
-    <>
+    <AnimatePresence initial={false}>
       {rows.map((r) => (
-        <CardShell key={r.id} tone="flag" icon="hex" title={`${t('cards.proposalReview')} · ${r.id}`}>
+        <MotionCard key={r.id}>
+        <CardShell tone="flag" icon="hex" title={`${t('cards.proposalReview')} · ${r.id}`}>
           <div className="dim" style={{ fontSize: 12 }}>
             {t(`cards.surface_${r.surface}`)} · <span className="mono">{r.target}</span>
             <span className="dim3" style={{ marginLeft: 8 }}>{t('cards.byAuthor')} {r.author}</span>
@@ -441,8 +466,9 @@ function InReviewCards() {
           </div>
           <InlineDiff proposalId={r.id} />
         </CardShell>
+        </MotionCard>
       ))}
-    </>
+    </AnimatePresence>
   )
 }
 
@@ -476,15 +502,13 @@ export function PendingCards() {
           <span className="dim3 mono" style={{ marginLeft: 'auto' }}>{approveTip} / {rejectTip}</span>
         </div>
       )}
-      {sorted.map((q, i) => (
-        <div
-          key={q.id}
-          ref={i === 0 ? topRef : undefined}
-          aria-current={i === 0 ? 'true' : undefined}
-        >
-          <PendingCard q={q} top={i === 0} />
-        </div>
-      ))}
+      <AnimatePresence initial={false}>
+        {sorted.map((q, i) => (
+          <MotionCard key={q.id} itemRef={i === 0 ? topRef : undefined} current={i === 0}>
+            <PendingCard q={q} top={i === 0} />
+          </MotionCard>
+        ))}
+      </AnimatePresence>
       <InReviewCards />
     </>
   )

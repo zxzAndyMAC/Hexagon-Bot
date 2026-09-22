@@ -142,7 +142,9 @@ describe('toolInputSummary（票 15）', () => {
     const { toolInputSummary } = await import('./agentSteps')
     expect(toolInputSummary({ path: 'src/a.ts', input: { path: 'x' } })).toBe('src/a.ts')
     expect(toolInputSummary({ input: { path: 'README.md', content: 'x' } })).toBe('README.md')
-    expect(toolInputSummary({ input: { cmd: 'ls' } })).toBe('{"cmd":"ls"}')
+    // exec-cards 票 02 行为变更：bash 的 cmd 直接取命令文本——
+    // 序列化会把命令裹成 {"cmd":"…"} 噪声，卡头/chip 都读不出命令本体
+    expect(toolInputSummary({ input: { cmd: 'ls' } })).toBe('ls')
     expect(toolInputSummary({ input: 'plain text' })).toBe('plain text')
     expect(toolInputSummary({})).toBe('')
     const long = toolInputSummary({ input: { blob: 'x'.repeat(200) } })

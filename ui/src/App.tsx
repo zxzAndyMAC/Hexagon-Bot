@@ -16,7 +16,7 @@ import { Composer } from './components/Composer'
 import { SettingsPage } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
 import { CommandPalette } from './components/CommandPalette'
-import { api, errText, onTurnDelta } from './api'
+import { api, errText, onTurnDelta, onToolOutput } from './api'
 import { IntakeBar } from './components/IntakeBar'
 import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
@@ -58,6 +58,36 @@ export default function App() {
     return () => { cancel = true }
   }, [projectOpen])
 
+  // 进工作台不等 MCP 握手。有服务在 starting 时停输入，状态轮询里更新。
+  useEffect(() => {
+    if (projectOpen !== true) return
+    let stop = false
+    let toldDown = false
+    const tick = async () => {
+      try {
+        const rows = await api.mcpServices()
+        if (stop) return
+        const pending = rows.some((r) => r.status === 'starting')
+        useUiStore.setState({ mcpPending: pending })
+        if (!pending && !toldDown) {
+          const down = rows.filter((r) => r.status === 'down')
+          if (down.length) {
+            toldDown = true
+            useUiStore.getState().pushToast(
+              down.map((r) => `${r.name}: ${r.error ?? 'handshake failed'}`).join('\n'),
+              'err',
+            )
+          }
+        }
+        if (pending && !stop) setTimeout(tick, 400)
+      } catch {
+        if (!stop) useUiStore.setState({ mcpPending: false })
+      }
+    }
+    void tick()
+    return () => { stop = true }
+  }, [projectOpen])
+
   useEffect(() => {
     if (projectOpen !== true) return
     refresh()
@@ -73,6 +103,16 @@ export default function App() {
     if (projectOpen !== true) return
     let un: (() => void) | undefined
     onTurnDelta((d) => useUiStore.getState().applyDelta(d)).then((u) => {
+      un = u
+    })
+    return () => un?.()
+  }, [projectOpen])
+
+  // exec-cards 票 04：bash 输出流订阅——同 turn-delta 纪律（瞬时通道）。
+  useEffect(() => {
+    if (projectOpen !== true) return
+    let un: (() => void) | undefined
+    onToolOutput((d) => useUiStore.getState().applyToolOutput(d)).then((u) => {
       un = u
     })
     return () => un?.()

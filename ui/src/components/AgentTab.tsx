@@ -7,7 +7,11 @@ import { Avatar } from './Avatar'
 import { Icon, type IconName } from './Icon'
 import { RoleEditor } from './RoleEditor'
 import { fmtTime as fmtTimeShared } from '../usage'
-import { toolInputSummary } from '../agentSteps'
+import { toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
+import { openTurns } from '../timelineModel'
+import { LoadingState } from './LoadingState'
+import { SpinnerRing } from './SpinnerRing'
+import { ExecBody } from './ExecCard'
 
 type Step = {
   id: number
@@ -22,6 +26,8 @@ type Step = {
   path?: string
   divider?: boolean
   time: string
+  // exec-cards 票 02：重负载工具的调用对——展开明细借 ExecBody（同源复用）。
+  execCall?: ToolCall
 }
 
 const STEP_META: Record<string, { icon: IconName; tone: string }> = {
@@ -61,16 +67,8 @@ const STEP_META: Record<string, { icon: IconName; tone: string }> = {
   system: { icon: 'list', tone: 'var(--text-3)' },
 }
 
-const TOOL_LABEL: Record<string, string> = {
-  'fs.read': 'stepRead', 'fs.write': 'stepWrite', 'fs.edit': 'stepWrite',
-  'fs.list': 'stepList', 'fs.search': 'stepSearch', bash: 'stepBash',
-}
-
-const TOOL_ICON: Record<string, IconName> = {
-  'fs.read': 'artifact', 'fs.write': 'diff', 'fs.edit': 'diff',
-  'fs.list': 'folder', 'fs.search': 'list', bash: 'tool',
-}
-
+// TOOL_LABEL/TOOL_ICON 已升共享层（agentSteps.ts，beautiful-ui 票 02）——
+// 那里双写点号/下划线两族工具名。
 // 票 14：fmtTime 收敛到 usage.ts（Intl 本地语序）；本页要秒 → withSeconds。
 const fmtTime = (iso: string) => fmtTimeShared(iso, true)
 
@@ -105,7 +103,13 @@ export function AgentTab({ agentId }: { agentId: string }) {
       }
       if (ev.kind === 'tool_called') {
         const tool = String(p.tool ?? '')
-        const res: TimelineItem | undefined = items[i + 1]?.event.kind === 'tool_result' ? items[++i] : undefined
+        // 配对要同 agent（pairToolCalls 同约定）——并发回合事件交错，
+        // 别家的 result 不能吸进来。
+        const res: TimelineItem | undefined =
+          items[i + 1]?.event.kind === 'tool_result' && items[i + 1].event.agent_id === agentId
+            ? items[++i]
+            : undefined
+        const exec = EXEC_CARD_TOOLS.has(tool)
         out.push({
           ...base,
           icon: TOOL_ICON[tool] ?? 'tool',
@@ -115,6 +119,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
           detail: JSON.stringify({ ...p, ...(res ? { result: res.event.payload } : {}) }, null, 2),
           ok: res ? res.event.payload.ok !== false : undefined,
           path: p.path ? String(p.path) : undefined,
+          execCall: exec ? { called: it, result: res } : undefined,
         })
         continue
       }
@@ -131,6 +136,13 @@ export function AgentTab({ agentId }: { agentId: string }) {
     }
     return out
   }, [timeline, agentId, t])
+
+  // 忙碌 = 该 agent 有未收束回合（beautiful-ui 票 04 第二落位：
+  // 头卡状态旁挂像素格，回合一收自动消失）。openTurns per-agent——
+  // 并发回合交错时别家的开窗不能遮本家的忙碌态。
+  const turns = useMemo(() => openTurns(timeline), [timeline])
+  const busy = turns.has(agentId)
+  const busyAt = turns.get(agentId)
 
   if (!member) return <div className="dim3" style={{ padding: 14 }}>{agentId}</div>
 
@@ -188,6 +200,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
             <span className="dim3" style={{ fontSize: 11, fontWeight: 400 }}>
               {t(`side.${member.status}`, member.status)}
             </span>
+            {busy && <LoadingState label={t('timeline.working')} startedAt={busyAt ?? undefined} />}
           </div>
           <div className="dim3 mono" style={{ fontSize: 11, marginTop: 2 }}>
             {member.model_slot || '—'}
@@ -218,7 +231,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
           {t('agent.chain')}
         </div>
         {steps.length === 0 && <div className="dim3" style={{ padding: '4px 14px' }}>{t('agent.noEvents')}</div>}
-        {steps.map((s) => s.divider ? (
+        {steps.map((s, i) => s.divider ? (
           <div key={s.id} style={{ padding: '12px 14px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: s.tone, display: 'inline-flex' }}><Icon name={s.icon} size={10} /></span>
             <span style={{ fontWeight: 560, fontSize: 11, color: 'var(--text-2)' }}>{s.label}</span>
@@ -229,7 +242,8 @@ export function AgentTab({ agentId }: { agentId: string }) {
           <div
             key={s.id}
             className="row-line"
-            style={{ padding: '5px 14px 5px 24px', fontSize: 12, cursor: s.detail ? 'pointer' : undefined }}
+            // beautiful-ui 票 02（Q7=B）：步骤行随 fade-up 落位，stagger 封顶 10 行
+            style={{ padding: '5px 14px 5px 24px', fontSize: 12, cursor: s.detail ? 'pointer' : undefined, animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 35}ms both` }}
             onClick={() => { if (s.detail) toggle(s.id) }}
           >
             <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
@@ -237,15 +251,26 @@ export function AgentTab({ agentId }: { agentId: string }) {
               <span style={{ fontWeight: 510 }}>{s.label}</span>
               {s.summary && (
                 <span
-                  className={`mono ${s.path ? 'file-link' : 'dim'}`}
-                  style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}
+                  className={`tool-chip${s.path ? ' file-link' : ''}`}
+                  style={{ flex: '0 1 auto', maxWidth: '55%' }}
                   title={s.path ?? undefined}
                   onClick={s.path ? (e) => { e.stopPropagation(); openTab({ id: `art:${s.path}`, kind: 'artifact', title: s.path!, path: s.path! }) } : undefined}
                 >
                   {s.summary}
                 </span>
               )}
-              {s.ok != null && <span className={`chip ${s.ok ? 'ok' : 'err'}`}>{s.ok ? 'ok' : 'err'}</span>}
+              {/* 票 05 TaskRows 状态机：tool_called 无 result=在途运行环；
+                  落定翻 check/X 徽标 pop-in（与 ToolChipRow 同一套）。 */}
+              {s.kind === 'tool_called' && (s.ok == null
+                ? <SpinnerRing />
+                : (
+                  <span
+                    className={`chip ${s.ok ? 'ok' : 'err'}`}
+                    style={{ animation: 'pop-in 250ms cubic-bezier(0.23,1,0.32,1) both' }}
+                  >
+                    <Icon name={s.ok ? 'check' : 'close'} size={8} />{s.ok ? 'ok' : 'err'}
+                  </span>
+                ))}
               {s.detail && <span className="dim3" style={{ display: 'inline-flex' }}><Icon name={expanded.has(s.id) ? 'chevron-down' : 'chevron-right'} size={9} /></span>}
               <span className="dim3" style={{ marginLeft: 'auto', fontSize: 10, flexShrink: 0 }}>{s.time}</span>
             </div>
@@ -255,8 +280,8 @@ export function AgentTab({ agentId }: { agentId: string }) {
               </div>
             )}
             {s.detail && expanded.has(s.id) && (
-              <div style={{ margin: '4px 0 2px', padding: '6px 8px', background: 'var(--bg-1)', borderRadius: 6, overflowX: 'auto', fontSize: 11 }}>
-                <CodeBlock code={s.detail} lang="json" />
+              <div style={{ margin: '4px 0 2px', padding: s.execCall ? 0 : '6px 8px', background: s.execCall ? undefined : 'var(--bg-1)', borderRadius: 6, overflowX: 'auto', fontSize: 11 }}>
+                {s.execCall ? <ExecBody call={s.execCall} /> : <CodeBlock code={s.detail} lang="json" />}
               </div>
             )}
           </div>

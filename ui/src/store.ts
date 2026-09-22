@@ -10,6 +10,7 @@ import {
   type TeamRow,
   type TimelineItem,
   type TurnDelta,
+  type ToolOutputDelta,
   type UsageBucket,
   type UsageRow,
 } from './api'
@@ -50,6 +51,10 @@ const FAST_FAIL_TOAST_AT = 3
 // 票 08 交接兜底：持久消息正常在一拍（2s）内到达；10s 未等到说明
 // 该回合没有落库消息（turn_failed/中断等）——清缓冲防泄漏。
 export const STREAM_HANDOFF_MS = 10_000
+
+// exec-cards 票 04：toolStreams 单键尾留上限——background 任务比调用活得久，
+// 缓冲不能随任务寿命无限长；渲染层另截末 32KB（ExecCard.TAIL_CAP）。
+const TOOL_STREAM_CAP = 128 * 1024
 
 // ui-audit 票 06（P2-9）：项目切换代际守卫。refresh() 递增代际；
 // refreshFast/refreshSlow 起飞时捕获、落地前比对——切项目瞬间在飞的
@@ -115,6 +120,8 @@ interface UiState {
   dismissedPendingKeys: string[]
   usageTotal: { spent_mc: number; limit_cents: number | null; tokens: number } | null
   autonomy: string
+  /// MCP 还在握手时为 true。工作台已进入，输入先停。
+  mcpPending: boolean
   projectName: string
   mode: 'pack' | 'fastpath'
   fastRole: string | null
@@ -149,6 +156,11 @@ interface UiState {
   /// 消除 done→持久化之间的内容空窗与排版跳变。超 STREAM_HANDOFF_MS
   /// 未等到（turn_failed 无消息等路径）兜底清除，防泄漏。
   streamDone: Record<string, { afterEventId: number; at: number }>
+  /// bash 输出瞬时缓冲（exec-cards 票 04）：`${agentId}:${seq}` → 追加文本
+  /// （stdout/stderr 按到达序混排）。瞬时态——tool_result 落地后卡体改渲
+  /// result.output，缓冲即清。seq 缺席（resolve 等非回合路径）落 `·` 键。
+  toolStreams: Record<string, string>
+  applyToolOutput: (d: ToolOutputDelta) => void
   setThemePref: (p: ThemePref) => void
   setRailOpen: (v: boolean) => void
   openPendingDialog: () => void
@@ -216,6 +228,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   autonomy: 'L0',
   // 票 15（P3）：未加载时留空串——TopBar 回退 t('app.untitledProject')，
   // 不再以 mock 项目名「食谱 App」示人（真 Tauri 下首帧会闪假名）。
+  mcpPending: false,
   projectName: '',
   mode: 'pack',
   fastRole: null,
@@ -291,6 +304,15 @@ export const useUiStore = create<UiState>((set, get) => ({
   streams: {},
   thinkings: {},
   streamDone: {},
+  toolStreams: {},
+  applyToolOutput: (d) =>
+    set((s) => ({
+      toolStreams: {
+        ...s.toolStreams,
+        [`${d.agent_id}:${d.seq ?? '·'}`]:
+          ((s.toolStreams[`${d.agent_id}:${d.seq ?? '·'}`] ?? '') + d.text).slice(-TOOL_STREAM_CAP),
+      },
+    })),
   applyDelta: (d) =>
     set((s) => {
       if (d.done) {
@@ -367,7 +389,8 @@ export const useUiStore = create<UiState>((set, get) => ({
     // 切项目必须走这里——invalidate 的增量归并会把两个项目的事件缝一起。
     // 票 06：递增代际——本调用之后在飞的旧响应全部作废（见 generation）。
     generation += 1
-    set({ timeline: [] })
+    // 全量重置：瞬时缓冲一并清——切项目后旧 agent 的输出流不能缝进新时间线。
+    set({ timeline: [], toolStreams: {} })
     await useUiStore.getState().invalidate()
   },
   refreshSlow: async (tags) => {
@@ -495,6 +518,29 @@ export const useUiStore = create<UiState>((set, get) => ({
           thinkings = th
           streamDone = sd
         }
+        // exec-cards 票 04：tool_result 落地即清对应缓冲——卡体此后
+        // 定格 result.output（持久层为准）。配对约定同 pairToolCalls：
+        // result 紧跟其 called，且同 agent。
+        let toolStreams = s.toolStreams
+        if (items.length && Object.keys(toolStreams).length) {
+          const settled = new Set<string>()
+          for (let i = 1; i < timeline.length; i++) {
+            const it = timeline[i]
+            const prev = timeline[i - 1]
+            if (
+              it.event.kind === 'tool_result' &&
+              prev.event.kind === 'tool_called' &&
+              prev.event.agent_id === it.event.agent_id &&
+              prev.event.payload?.seq != null
+            ) {
+              settled.add(`${prev.event.agent_id}:${String(prev.event.payload.seq)}`)
+            }
+          }
+          if (settled.size) {
+            toolStreams = { ...toolStreams }
+            for (const k of settled) delete toolStreams[k]
+          }
+        }
         return {
           stages,
           pending,
@@ -502,6 +548,7 @@ export const useUiStore = create<UiState>((set, get) => ({
           streams,
           thinkings,
           streamDone,
+          toolStreams,
           intakeDraft: draft === true,
         }
       })
