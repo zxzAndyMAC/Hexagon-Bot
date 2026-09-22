@@ -135,7 +135,8 @@ pub trait Tool: Send + Sync {
 
 pub struct Registry {
     /// Arc 共享：只读视图（研究助手嵌套回合）按名拷 mcp:* 而不起新进程。
-    tools: HashMap<String, Arc<dyn Tool>>,
+    /// Mutex：MCP 握手在后台完成后再注册，回合进行中也能加工具（2026-09-22）。
+    tools: std::sync::Mutex<HashMap<String, Arc<dyn Tool>>>,
 }
 
 impl Default for Registry {
@@ -146,8 +147,8 @@ impl Default for Registry {
 
 impl Registry {
     pub fn builtin() -> Self {
-        let mut r = Self {
-            tools: HashMap::new(),
+        let r = Self {
+            tools: std::sync::Mutex::new(HashMap::new()),
         };
         r.register(FsRead);
         r.register(Research);
@@ -164,23 +165,27 @@ impl Registry {
         r
     }
 
-    pub fn register(&mut self, tool: impl Tool + 'static) {
-        self.tools.insert(tool.name().to_string(), Arc::new(tool));
+    pub fn register(&self, tool: impl Tool + 'static) {
+        self.tools
+            .lock()
+            .unwrap()
+            .insert(tool.name().to_string(), Arc::new(tool));
     }
 
     /// 只读视图（US36 研究助手嵌套回合）：fs_read/artifact_read + 共享 mcp:*
     /// —— 无写/bash/git/research → 结构性不可写、不可再派生；
     /// mcp:* 走 L0 授权闸门按调用方 agent_id 判 → 用不了父未授权服务。
     pub fn readonly(&self) -> Self {
-        let mut r = Self {
-            tools: HashMap::new(),
+        let r = Self {
+            tools: std::sync::Mutex::new(HashMap::new()),
         };
         r.register(FsRead);
         r.register(ArtifactRead);
         r.register(LoadSkill);
-        for (name, t) in &self.tools {
+        let guard = self.tools.lock().unwrap();
+        for (name, t) in guard.iter() {
             if name.starts_with("mcp:") {
-                r.tools.insert(name.clone(), t.clone());
+                r.tools.lock().unwrap().insert(name.clone(), t.clone());
             }
         }
         r
@@ -188,8 +193,8 @@ impl Registry {
 
     /// 供供应商请求用的工具清单（名字 + 描述 + schema）。
     pub fn defs(&self) -> Vec<crate::provider::ToolDef> {
-        let mut v: Vec<_> = self
-            .tools
+        let guard = self.tools.lock().unwrap();
+        let mut v: Vec<_> = guard
             .values()
             .map(|t| crate::provider::ToolDef {
                 name: t.name().into(),
@@ -225,7 +230,10 @@ impl Registry {
     ) -> Result<CallOutcome, ToolError> {
         let tool = self
             .tools
+            .lock()
+            .unwrap()
             .get(name)
+            .cloned()
             .ok_or_else(|| ToolError::BadInput(format!("unknown tool: {name}")))?;
 
         // 调用事件：敏感入参（fs_write 的 content 等）只记元信息。
@@ -333,7 +341,7 @@ impl Registry {
                     }
                     crate::permissions::AllowVia::Default => {}
                 }
-                self.exec_and_log(db, ctx, name, input)
+                self.exec_and_log(db, ctx, name, input, call_seq)
                     .map(CallOutcome::Done)
             }
         }
@@ -415,7 +423,9 @@ impl Registry {
             )?;
         }
 
-        self.exec_and_log(db, ctx, &tool_name, raw_input)
+        // 票 04：resolve 路径 seq=None（原 seq 在 idem_key 里不拆，
+        // UI 回退最新在途匹配）。
+        self.exec_and_log(db, ctx, &tool_name, raw_input, None)
             .map(CallOutcome::Done)
     }
 
@@ -495,7 +505,10 @@ impl Registry {
         // 允许后崩在 exec 前：负责人已同意，此刻补执行（不再弹卡）
         let tool_name = payload["tool"].as_str().unwrap_or("").to_string();
         let raw_input = payload["raw_input"].clone();
-        self.exec_and_log(db, ctx, &tool_name, raw_input)
+        // 票 04：resolve 路径 seq=None——执行发生在负责人裁决后，
+        // 原调用的 seq 沉在 idem_key 里不拆；UI 回退按该 agent 最新
+        // 在途 bash 匹配（票 04 DTO 注释）。
+        self.exec_and_log(db, ctx, &tool_name, raw_input, None)
             .map(|v| Some(CallOutcome::Done(v)))
     }
 
@@ -505,12 +518,21 @@ impl Registry {
         ctx: &ToolContext,
         name: &str,
         input: Value,
+        call_seq: Option<&str>,
     ) -> Result<Value, ToolError> {
         let tool = self
             .tools
+            .lock()
+            .unwrap()
             .get(name)
+            .cloned()
             .ok_or_else(|| ToolError::BadInput(format!("unknown tool: {name}")))?;
+        // exec-cards 票 04：登记调用归属——bash 三形态 spawn/run_in
+        // 时把输出口子绑进 Shared；执行完即摘，防非 bash 工具吃到
+        // 陈旧 meta（口子只被 sessions 读，登记对它是无成本的）。
+        ctx.sessions.set_call_meta(&ctx.agent_id, call_seq);
         let result = tool.exec(db, &input, ctx);
+        ctx.sessions.clear_call_meta();
         let (ok, payload) = match &result {
             Ok(v) => (true, json!({ "tool": name, "output": v })),
             Err(e) => (false, json!({ "tool": name, "error": e.to_string() })),

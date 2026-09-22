@@ -339,7 +339,7 @@ fn steering_envelopes(req: &ChatRequest) -> usize {
 /// 出现；留 steering_injected 审计事件；持久历史不掺假 assistant。
 #[test]
 fn steering_message_mid_turn_reaches_next_call() {
-    let (db, mut reg, ctx, _dir) = setup();
+    let (db, reg, ctx, _dir) = setup();
     reg.register(OwnerSpeaks);
     let provider = ScriptedProvider::new(vec![
         tool_response(vec![(
@@ -401,7 +401,7 @@ fn steering_message_mid_turn_reaches_next_call() {
 /// 它们属于正常上下文装配，注入只覆盖起跑线之后新来的。
 #[test]
 fn pre_turn_owner_message_not_steered() {
-    let (db, mut reg, ctx, _dir) = setup();
+    let (db, reg, ctx, _dir) = setup();
     reg.register(OwnerSpeaks);
     db.append_message("p1", "owner", "起跑前的背景", &[], &[], None, None)
         .unwrap();
@@ -433,7 +433,7 @@ fn pre_turn_owner_message_not_steered() {
 /// 也不落第二个 steering_injected 审计事件。
 #[test]
 fn steering_injected_once_not_every_round() {
-    let (db, mut reg, ctx, _dir) = setup();
+    let (db, reg, ctx, _dir) = setup();
     reg.register(OwnerSpeaks);
     let provider = ScriptedProvider::new(vec![
         tool_response(vec![("t1", "owner_speaks", json!({"body":"插队一句"}))]),
@@ -463,7 +463,7 @@ fn steering_injected_once_not_every_round() {
 /// 指令走控制面，不该被当业务插话喂给模型。
 #[test]
 fn command_messages_not_steered() {
-    let (db, mut reg, ctx, _dir) = setup();
+    let (db, reg, ctx, _dir) = setup();
     reg.register(OwnerSpeaks);
     let provider = ScriptedProvider::new(vec![
         tool_response(vec![("t1", "owner_speaks", json!({"body":"/stamp"}))]),

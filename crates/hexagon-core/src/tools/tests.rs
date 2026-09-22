@@ -986,3 +986,113 @@ fn fs_read_image_over_cap_returns_text() {
     assert!(v["image"].is_null(), "超上限不得带图");
     assert!(v["note"].as_str().unwrap().contains("5MB"));
 }
+
+// exec-cards 票 01：fs_patch 增删行计数 + scrub 放行有界 old/new。
+#[test]
+fn fs_patch_records_diff_stats_and_bounded_strings() {
+    let (db, reg, ctx, dir) = setup();
+    std::fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    let out = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_patch",
+            json!({"path": "a.txt", "old": "two", "new": "TWO\nTWO2"}),
+        )
+        .unwrap();
+    let CallOutcome::Done(v) = out else {
+        panic!("{out:?}")
+    };
+    // old=1 行，new=2 行
+    assert_eq!(v["diff_removed"], 1);
+    assert_eq!(v["diff_added"], 2);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "one\nTWO\nTWO2\nthree\n"
+    );
+    // tool_called 事件 payload 带 old/new（执行卡 diff 体的数据源）
+    let items = db
+        .timeline("p1", None, 50, Some(&[EventKind::ToolCalled]))
+        .unwrap();
+    let p = &items
+        .iter()
+        .find(|i| i.event.payload["tool"] == "fs_patch")
+        .unwrap()
+        .event
+        .payload;
+    assert_eq!(p["input"]["old"], "two");
+    assert_eq!(p["input"]["new"], "TWO\nTWO2");
+}
+
+#[test]
+fn fs_patch_scrub_truncates_over_4kb() {
+    let (_db, _reg, _ctx, _dir) = setup();
+    let big = "x".repeat(5000);
+    let v = scrub_input("fs_patch", &json!({"path":"a","old":big,"new":"y"}));
+    let old = v["old"].as_str().unwrap();
+    assert!(old.len() < 5000 && old.contains("[truncated]"), "{old}");
+    assert_eq!(v["new"], "y");
+    // fs_write 仍只留 path/bytes——文件体纪律不松
+    let w = scrub_input("fs_write", &json!({"path":"a","content":"body"}));
+    assert!(w["content"].is_null() && w["bytes"] == 4);
+}
+
+// exec-cards 票 04：bash 输出瞬时口子——归属配对 + 分段推送 + 无口子不崩。
+#[test]
+fn bash_output_streams_deltas_with_call_attribution() {
+    use std::sync::{Arc, Mutex};
+    let (db, _reg, ctx, _dir) = setup();
+    let got = Arc::new(Mutex::new(Vec::<(String, String, String)>::new()));
+    let g = got.clone();
+    ctx.sessions.set_output_tap(Some(Box::new(
+        move |d: &crate::sessions::ToolOutputDelta| {
+            g.lock().unwrap().push((
+                d.agent_id.clone(),
+                d.seq.clone().unwrap_or_default(),
+                d.text.clone(),
+            ));
+        },
+    )));
+    let run = |cmd: &str| {
+        ctx.sessions
+            .run_oneshot(&db, &ctx, cmd, std::time::Duration::from_secs(5), false)
+            .unwrap();
+    };
+
+    ctx.sessions.set_call_meta("a1", Some("r1:i0"));
+    run("printf 'hello-out'; printf 'oops-err' >&2");
+    ctx.sessions.clear_call_meta();
+    {
+        let v = got.lock().unwrap();
+        assert!(
+            v.iter()
+                .any(|(a, s, t)| a == "a1" && s == "r1:i0" && t.contains("hello-out")),
+            "stdout delta missing: {v:?}"
+        );
+        assert!(
+            v.iter().any(|(_, _, t)| t.contains("oops-err")),
+            "stderr delta missing: {v:?}"
+        );
+    }
+    // meta 摘后口子不绑——无归属的调用零 delta（防陈旧归属串线）
+    run("printf 'after-clear'");
+    {
+        let v = got.lock().unwrap();
+        assert!(
+            !v.iter().any(|(_, _, t)| t.contains("after-clear")),
+            "{v:?}"
+        );
+    }
+    // resolve 路径形态：set_call_meta(agent, None) → delta 带 agent 无 seq
+    ctx.sessions.set_call_meta("a1", None);
+    run("printf 'resolved-path'");
+    ctx.sessions.clear_call_meta();
+    {
+        let v = got.lock().unwrap();
+        assert!(
+            v.iter()
+                .any(|(a, s, t)| a == "a1" && s.is_empty() && t.contains("resolved-path")),
+            "{v:?}"
+        );
+    }
+}

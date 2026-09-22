@@ -63,6 +63,24 @@ pub fn parse_route_choice(raw: &str, roster: &[String]) -> Option<RouteChoice> {
     }
 }
 
+/// 给 Jev 的状态。只描述局面，不要求模型自己吐一行字——选项走选择题接口。
+pub fn choice_state(
+    stage: Option<&str>,
+    activation: &[String],
+    speaker: &str,
+    body: &str,
+) -> String {
+    let stage_line = stage.unwrap_or("（没有进行中的阶段）");
+    let act = if activation.is_empty() {
+        "（空）".to_string()
+    } else {
+        activation.join("、")
+    };
+    format!(
+        "当前阶段：{stage_line}\n本阶段激活名单：{act}\n{speaker}刚说完，没有点名下一位：\n{body}"
+    )
+}
+
 /// 给决策调用的用户消息。选项逐行列出，模型被要求原样回一行。
 /// 激活名单只是状态，不是选项边界——花名册里的人都可以被选。
 /// `speaker` 是「负责人」或刚说完的角色名，不是自由发挥的句子。

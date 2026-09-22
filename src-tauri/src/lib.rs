@@ -70,10 +70,15 @@ struct ControlConn {
 
 /// 回合 delta → webview（turn-streaming 票 03）：所有 Workbench 构造点
 /// 统一挂 emit。delta 是瞬时展示通道，持久层照旧走 events/messages。
+/// 票 04 同纪律加挂 tool-output：bash 执行中 stdout/stderr 逐段推。
 fn attach_delta_hook(app: &tauri::AppHandle, wb: &Workbench) {
     let h = app.clone();
     wb.set_turn_delta_hook(Some(Box::new(move |d| {
         let _ = h.emit("turn-delta", d);
+    })));
+    let h2 = app.clone();
+    wb.set_tool_output_hook(Some(Box::new(move |d| {
+        let _ = h2.emit("tool-output", d);
     })));
 }
 
@@ -151,7 +156,9 @@ fn sandbox_status() -> hexagon_core::sandbox::SandboxStatus {
     hexagon_core::sandbox::status()
 }
 
-#[tauri::command]
+// 2026-09-22：打开项目（建库、钥匙串、供应商）若留在主线程，窗口在
+// 命令返回前不能重画。和 send_message 同一处：标 async 丢到运行时线程。
+#[tauri::command(async)]
 fn open_project(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
@@ -197,8 +204,14 @@ fn timeline(
     })
 }
 
-#[tauri::command]
+// 2026-09-22：默认同步命令在主线程上跑完才把 IPC 还回去（tauri-macros
+// ExecutionContext::Blocking）。回合链和模型流都堵在这里时，窗口事件循环
+// 不转，turn-delta 和进度帧要等命令返回才一次性画出来。被否决的替代是
+// 界面定时器假装在流。`command(async)` 把同步函数丢到运行时线程，主线程
+// 继续收事件。
+#[tauri::command(async)]
 fn send_message(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     body: String,
     attachments: Vec<hexagon_core::trace::AttachRef>,
@@ -211,13 +224,27 @@ fn send_message(
         hexagon_core::commands::send_via_control(db, PROJECT_ID, &body, &attachments)
             .map_err(cmd_err)
     })?;
-    if let Some(other) = cmd {
-        with_wb(&state, |wb| wb.dispatch_command(&other))?;
-    } else {
-        // 票 08/09：派活在核内。点名直接派给被点名者；没点名走项目经理的
-        // 封闭选择，或卸掉之后的接话人。界面不再另调 dispatch，否则双发。
-        with_wb(&state, |wb| wb.route_unnamed_owner(&body, &attachments))?;
-    }
+    // 消息已经落库。派活（含后续整段回合）改到后台：这条命令马上返回，
+    // 输入框可以清掉，时间线轮询能读到刚写的那一句。若把回合留在这次
+    // 调用里，界面要等角色说完才看到自己的话（2026-09-22）。
+    let app = app.clone();
+    let body2 = body.clone();
+    let attachments2 = attachments.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let res = if let Some(other) = cmd {
+            with_wb(&state, |wb| wb.dispatch_command(&other))
+        } else {
+            // 票 08/09：派活在核内。点名直接派给被点名者；没点名走项目经理的
+            // 封闭选择，或卸掉之后的接话人。界面不再另调 dispatch，否则双发。
+            with_wb(&state, |wb| {
+                wb.route_unnamed_owner(&body2, &attachments2).map(|_| ())
+            })
+        };
+        if let Err(e) = res {
+            log::warn!("send follow-up: {e}");
+        }
+    });
     Ok(id)
 }
 
@@ -247,7 +274,7 @@ fn discard_attachments(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn answer_permission(
     state: tauri::State<AppState>,
     question_id: String,
@@ -518,7 +545,8 @@ fn write_repo_file(
 }
 
 /// MCP 服务实况（ui-audit-2 票 06）：需读运行中宿主的状态，走 wb 通道。
-#[tauri::command]
+/// 2026-09-22：顺手把后台握手完成的工具装进注册表，调用方不用等打开。
+#[tauri::command(async)]
 fn mcp_services(
     state: tauri::State<AppState>,
 ) -> Result<Vec<hexagon_core::mcp::McpServiceRow>, CmdError> {
@@ -1097,7 +1125,8 @@ fn recent_projects(app: tauri::AppHandle) -> Vec<RecentProject> {
 }
 
 /// 重新打开已有项目：钉住的包副本恢复 pack，fastpath 项目无副本即 None。
-#[tauri::command]
+/// 2026-09-22：不标 async 时整段打开堵在主线程，启动页和向导都会卡死。
+#[tauri::command(async)]
 fn open_recent(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
@@ -1283,7 +1312,7 @@ fn agents_md_draft(name: String) -> String {
 
 /// 票 16：一句话经主对话模型起草项目说明。不写磁盘——落盘仍是确认后的
 /// create_project → write_agents_md。项目还不存在，这条命令不进工作台。
-#[tauri::command]
+#[tauri::command(async)]
 fn optimize_agents_md(name: String, sentence: String) -> Result<String, CmdError> {
     let provider =
         hexagon_core::provider_admin::main_chat_provider(hexagon_core::credentials::active())
@@ -1317,13 +1346,14 @@ struct CreateProjectOpts {
     autonomy: Option<String>,
 }
 
-#[tauri::command]
+// 同 send_message（2026-09-22）：不标 async 时创建整段堵在主线程，
+// on_progress 的五步要等命令返回才一起亮。票 14 当时写「同步命令跑在
+// 阻塞池」是错的，默认是 Blocking。
+#[tauri::command(async)]
 fn create_project(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
     opts: CreateProjectOpts,
-    // 票 14：每步做完就推一帧。同步命令跑在阻塞池，不占渲染线程；
-    // 被否决的替代是界面定时器，或等到本命令返回才一次性打勾。
     on_progress: tauri::ipc::Channel<hexagon_core::setup::CreateStep>,
 ) -> Result<(), CmdError> {
     use hexagon_core::setup;
@@ -1385,7 +1415,7 @@ fn create_project(
 
 /// 票 17：进工作台之后的只读开场分析。模型调用不占工作台锁，
 /// 负责人这时仍能经控制连接把字写进时间线。
-#[tauri::command]
+#[tauri::command(async)]
 fn run_opening_intake(state: tauri::State<AppState>) -> Result<(), CmdError> {
     use hexagon_core::api::IntakePrepared;
     let prepared = {
@@ -1473,7 +1503,7 @@ fn project_info(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn dispatch(
     state: tauri::State<AppState>,
     role: String,
@@ -1504,7 +1534,10 @@ pub fn run() {
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: Some("hexagon".into()),
                     }),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                    // 2026-09-22：Debug 全灌进 webview 时，一轮工具调用的 ureq 日志
+                    // 就能把界面刷死。文件和 stdout 仍留 Debug。
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview)
+                        .filter(|meta| meta.level() <= log::Level::Warn),
                 ])
                 .max_file_size(5_000_000)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))

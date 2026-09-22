@@ -171,6 +171,22 @@ pub trait ModelProvider: Send + Sync {
         }
         Ok(resp)
     }
+
+    /// 决策模型（Jev）走自己的选择题接口。聊天供应商保持 false，封闭选择仍走 [`complete`]。
+    fn uses_decision_api(&self) -> bool {
+        false
+    }
+
+    /// `options` 是（选项原文，短说明）。返回正文必须是被选中的那一项原文。
+    fn decide(
+        &self,
+        _state: &str,
+        _options: &[(&str, &str)],
+    ) -> Result<ChatResponse, ProviderError> {
+        Err(ProviderError::Refused(
+            "this provider has no decision API".into(),
+        ))
+    }
 }
 
 /// 按内容块顺序把可见文本和思考切成 ≤n 字符的 delta（n=usize::MAX 整段一次发）。
@@ -941,6 +957,9 @@ pub enum ProviderKind {
     Anthropic,
     /// OpenAI 兼容 /chat/completions（Bearer）——OpenAI/DeepSeek/Moonshot/OpenRouter 等。
     OpenAi,
+    /// TypeSafe System One（Bearer，`POST /v1/systemone`）。只做封闭选择，不能当聊天模型。
+    /// 项目经理的决策槽用它；没配则同一次选择仍走主对话模型。
+    Jev,
 }
 
 /// 真实 HTTP 供应商：同步 ureq 叶子调用，key 在每次调用时从 creds 现取。
@@ -1066,6 +1085,9 @@ impl ModelProvider for HttpProvider {
                 let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                 openai_shape::from_response(&v)
             }
+            ProviderKind::Jev => Err(ProviderError::Refused(
+                "Jev only answers closed choices, not chat".into(),
+            )),
         }
     }
 
@@ -1136,8 +1158,91 @@ impl ModelProvider for HttpProvider {
                 }
                 fold.finish()
             }
+            ProviderKind::Jev => Err(ProviderError::Refused(
+                "Jev only answers closed choices, not chat".into(),
+            )),
         }
     }
+
+    fn uses_decision_api(&self) -> bool {
+        self.kind == ProviderKind::Jev
+    }
+
+    fn decide(&self, state: &str, options: &[(&str, &str)]) -> Result<ChatResponse, ProviderError> {
+        if self.kind != ProviderKind::Jev {
+            return Err(ProviderError::Refused(
+                "decision API is only for Jev".into(),
+            ));
+        }
+        let key = self.api_key()?;
+        jev_choice(
+            &self.agent,
+            &self.base_url,
+            &self.model,
+            &key,
+            state,
+            options,
+        )
+    }
+}
+
+/// `https://api.typesafe.ai` 与已经带 `/v1` 的基址都落到 `/v1/systemone`。
+pub fn systemone_url(base: &str) -> String {
+    let b = base.trim().trim_end_matches('/');
+    if b.ends_with("/v1/systemone") {
+        b.to_string()
+    } else if b.ends_with("/v1") {
+        format!("{b}/systemone")
+    } else {
+        format!("{b}/v1/systemone")
+    }
+}
+
+/// TypeSafe System One 的一道选择题。选项键必须原样回到 `choice`，
+/// 调用方再用花名册逐字比对。不走聊天形状。
+fn jev_choice(
+    agent: &ureq::Agent,
+    base: &str,
+    model: &str,
+    key: &str,
+    state: &str,
+    options: &[(&str, &str)],
+) -> Result<ChatResponse, ProviderError> {
+    let mut criteria = serde_json::Map::new();
+    for (name, note) in options {
+        criteria.insert((*name).to_string(), Value::String((*note).to_string()));
+    }
+    let body = serde_json::json!({
+        "state": state,
+        "model": model,
+        "questions": {
+            "route": {
+                "type": "choice",
+                "instructions": "下一手派给谁。可以派给当前阶段激活名单以外的人。没有人该接就选「先不派活」。只选一个。",
+                "criteria": criteria,
+            }
+        }
+    });
+    let url = systemone_url(base);
+    let mut resp = agent
+        .post(&url)
+        .header("Authorization", &format!("Bearer {key}"))
+        .send_json(&body)
+        .map_err(HttpProvider::map_err)?;
+    let v: Value = resp.body_mut().read_json().map_err(HttpProvider::map_err)?;
+    let choice = v["answers"]["route"]["choice"]
+        .as_str()
+        .ok_or_else(|| ProviderError::Transport("jev response missing choice".into()))?
+        .to_string();
+    let usage = Usage {
+        prompt_tokens: v["usage"]["input_tokens"].as_u64().unwrap_or(0),
+        completion_tokens: v["usage"]["output_tokens"].as_u64().unwrap_or(0),
+    };
+    Ok(ChatResponse {
+        content: vec![ContentBlock::Text { text: choice }],
+        stop: StopReason::EndTurn,
+        usage,
+    })
 }
 
 #[cfg(test)]
@@ -1597,6 +1702,51 @@ mod tests {
             s.write_all(body.as_bytes()).unwrap();
         });
         format!("http://{addr}")
+    }
+
+    #[test]
+    fn systemone_url_accepts_bare_and_v1_bases() {
+        assert_eq!(
+            systemone_url("https://api.typesafe.ai"),
+            "https://api.typesafe.ai/v1/systemone"
+        );
+        assert_eq!(
+            systemone_url("https://api.typesafe.ai/v1/"),
+            "https://api.typesafe.ai/v1/systemone"
+        );
+        assert_eq!(
+            systemone_url("https://api.typesafe.ai/v1/systemone"),
+            "https://api.typesafe.ai/v1/systemone"
+        );
+    }
+
+    #[test]
+    fn jev_decide_posts_choice_and_returns_the_option_verbatim() {
+        let base = serve_once(
+            200,
+            "application/json",
+            r#"{"model":"jev-1.13.0","answers":{"route":{"type":"choice","choice":"后端"}},"usage":{"input_tokens":4,"output_tokens":1}}"#,
+        );
+        let p = http_provider(ProviderKind::Jev, &base);
+        let resp = p
+            .decide(
+                "负责人说：开始执行",
+                &[("后端", "花名册角色"), ("先不派活", "先不唤醒任何人")],
+            )
+            .unwrap();
+        assert_eq!(choice_text_of(&resp), "后端");
+        assert_eq!(resp.usage.prompt_tokens, 4);
+    }
+
+    fn choice_text_of(resp: &ChatResponse) -> String {
+        resp.content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn http_provider(kind: ProviderKind, base: &str) -> HttpProvider {

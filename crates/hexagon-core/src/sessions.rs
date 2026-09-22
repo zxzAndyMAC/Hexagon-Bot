@@ -75,11 +75,44 @@ impl Ring {
     }
 }
 
+// ---------- 输出瞬时口子（exec-cards 票 04）----------
+
+/// bash 输出瞬时增量，壳层 emit 到 webview。与 TurnDelta 同纪律：
+/// **不落库、只增不重放**——持久层照旧是 tool_result 事件全量。
+/// `seq` 对 tool_called 载荷的调用序（"r{round}:i{index}"），UI 据此
+/// 把流挂到在途调用卡；None=非回合路径（owner resolve 等不经重放的
+/// 调用），UI 回退按该 agent 最新在途 bash 匹配。
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct ToolOutputDelta {
+    pub agent_id: String,
+    pub seq: Option<String>,
+    /// "stdout" | "stderr"
+    pub stream: String,
+    pub text: String,
+}
+
+/// 口子回调：reader 线程跨线程调用 → Send 要求落在此层（Workbench
+/// hook 存的是 Box<dyn FnMut + Send>，包 Arc<Mutex> 供多 reader 共享）。
+pub type OutputTapCb = Box<dyn FnMut(&ToolOutputDelta) + Send>;
+pub type OutputTap = Arc<Mutex<OutputTapCb>>;
+
+/// 绑定到某次调用的口子：归属元数据 + 回调。后台任务的 Shared 活得
+/// 比调用久——其输出终身记到 spawn 时那个 seq 名下（票 04 裁决：
+/// 后台进程就是那 call 的子嗣，归属随进程不随时间窗）。
+struct BoundTap {
+    agent_id: String,
+    seq: Option<String>,
+    cb: OutputTap,
+}
+
 // ---------- 共享状态 ----------
 
 struct Shared {
     st: Mutex<SharedState>,
     cond: Condvar,
+    /// 输出口子（票 04）：reader 线程每段字节顺手推 UI。
+    tap: Mutex<Option<BoundTap>>,
 }
 
 #[derive(Default)]
@@ -98,10 +131,11 @@ struct SharedState {
 }
 
 impl Shared {
-    fn new() -> Arc<Self> {
+    fn new(tap: Option<BoundTap>) -> Arc<Self> {
         Arc::new(Self {
             st: Mutex::new(SharedState::default()),
             cond: Condvar::new(),
+            tap: Mutex::new(tap),
         })
     }
 }
@@ -160,6 +194,17 @@ fn reader_to_ring<R: Read>(mut r: R, shared: Arc<Shared>, is_out: bool, eof_done
                 }
                 drop(st);
                 shared.cond.notify_all();
+                // 票 04：瞬时口子——字节原样推 UI 展示层，utf8 有损可接受。
+                // 锁序：st 已放，tap 锁独立；回调只做 emit 不回探会话表。
+                if let Some(t) = shared.tap.lock().unwrap().as_ref() {
+                    let d = ToolOutputDelta {
+                        agent_id: t.agent_id.clone(),
+                        seq: t.seq.clone(),
+                        stream: if is_out { "stdout" } else { "stderr" }.into(),
+                        text: String::from_utf8_lossy(&buf[..n]).into_owned(),
+                    };
+                    (t.cb.lock().unwrap())(&d);
+                }
             }
             Err(_) => break,
         }
@@ -243,7 +288,9 @@ impl Session {
     fn spawn(dir: &Path, spec: crate::sandbox::SandboxSpec) -> std::io::Result<Self> {
         let mut child = sh_command(dir, &spec).spawn()?;
         let stdin = child.stdin.take().unwrap();
-        let shared = Shared::new();
+        // 会话 Shared 跨命令复用——口子不随 spawn 绑死，exec_on
+        // 每条命令换绑（票 04）。
+        let shared = Shared::new(None);
         let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
         std::thread::spawn({
             let s = shared.clone();
@@ -304,6 +351,11 @@ struct TableState {
     sessions: HashMap<String, Arc<Session>>,
     tasks: HashMap<String, Arc<TaskHandle>>,
     seq: u64,
+    /// 票 04：表级口子回调（Workbench 开库后挂一次）+ 当次调用归属。
+    /// exec 前 set_call_meta、exec 后 clear；spawn/exec_on 起 Shared 时
+    /// 把当前 (tap, meta) 绑进去。
+    tap: Option<OutputTap>,
+    meta: Option<(String, Option<String>)>,
 }
 
 /// 任务句柄：monitor 线程独占 Child 阻塞等退出码，句柄只留 pid + shared。
@@ -314,6 +366,31 @@ pub struct TaskHandle {
 }
 
 impl SessionTable {
+    /// 票 04：Workbench 开库后挂一次输出口子（壳层 emit 到 webview）。
+    pub fn set_output_tap(&self, cb: Option<OutputTapCb>) {
+        self.inner.lock().unwrap().tap = cb.map(|c| Arc::new(Mutex::new(c)) as OutputTap);
+    }
+
+    /// exec_and_log 包边：调用前登记归属，spawn/run_in 据此把
+    /// (tap, meta) 绑进新 Shared；调用结束 clear 防陈旧 meta 串线。
+    pub fn set_call_meta(&self, agent_id: &str, seq: Option<&str>) {
+        self.inner.lock().unwrap().meta = Some((agent_id.into(), seq.map(Into::into)));
+    }
+    pub fn clear_call_meta(&self) {
+        self.inner.lock().unwrap().meta = None;
+    }
+    fn bound_tap(&self) -> Option<BoundTap> {
+        let t = self.inner.lock().unwrap();
+        match (&t.tap, &t.meta) {
+            (Some(cb), Some((a, s))) => Some(BoundTap {
+                agent_id: a.clone(),
+                seq: s.clone(),
+                cb: cb.clone(),
+            }),
+            _ => None,
+        }
+    }
+
     fn next_nonce(&self) -> String {
         let n = NONCE_SEQ.fetch_add(1, Ordering::Relaxed);
         let nanos = std::time::SystemTime::now()
@@ -349,7 +426,7 @@ impl SessionTable {
         net: bool,
     ) -> Result<Value, ToolError> {
         let spec = self.spec_for(db, ctx, net);
-        let task = spawn_task_handle(&ctx.repo_root, cmd, &spec)
+        let task = spawn_task_handle(&ctx.repo_root, cmd, &spec, self.bound_tap())
             .map_err(|e| ToolError::Exec(format!("spawn sh: {e}")))?;
         let deadline = Instant::now() + timeout;
         let timed_out = wait_done(&task.shared, deadline);
@@ -461,8 +538,12 @@ impl SessionTable {
             st.nonce = None;
             return Err(ToolError::Exec(format!("write to session {name}: {e}")));
         }
+        // 票 04：会话 Shared 跨命令复用——本条命令期间口子绑当前
+        // 调用归属，收尾即摘，防下一条命令吃到上条的 seq。
+        *sess.shared.tap.lock().unwrap() = self.bound_tap();
         let deadline = Instant::now() + timeout;
         let timed_out = wait_done(&sess.shared, deadline);
+        *sess.shared.tap.lock().unwrap() = None;
         if timed_out {
             sess.kill();
             emit(
@@ -515,7 +596,7 @@ impl SessionTable {
         net: bool,
     ) -> Result<Value, ToolError> {
         let spec = self.spec_for(db, ctx, net);
-        let task = spawn_task_handle(&ctx.repo_root, cmd, &spec)
+        let task = spawn_task_handle(&ctx.repo_root, cmd, &spec, self.bound_tap())
             .map_err(|e| ToolError::Exec(format!("spawn task: {e}")))?;
         let task = Arc::new(task);
         let id = {
@@ -648,12 +729,15 @@ fn spawn_task_handle(
     dir: &Path,
     cmd: &str,
     spec: &crate::sandbox::SandboxSpec,
+    tap: Option<BoundTap>,
 ) -> std::io::Result<TaskHandle> {
     let mut c = sh_command(dir, spec);
     c.arg("-c").arg(cmd);
     let mut child = c.spawn()?;
     let pid = child.id();
-    let shared = Shared::new();
+    // 任务的 Shared 就是这条进程的——口子随 spawn 绑死，进程终身
+    // 输出都记在这个 seq 名下（含后台任务活得比调用久的情形）。
+    let shared = Shared::new(tap);
     let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     std::thread::spawn({
         let s = shared.clone();

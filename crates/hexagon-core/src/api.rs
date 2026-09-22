@@ -274,12 +274,13 @@ impl Workbench {
         // ui-audit-2 票 06：MCP 端到端——`.hexagon/mcp.json` 配置的服务
         // 在 open 时 spawn+握手，工具注册进统一管线（权限照常求值，
         // grants 表 mcp 授权闸门在 evaluate L0）。
-        let mut registry = Registry::builtin();
+        let registry = Registry::builtin();
         let specs = crate::mcp::load_specs(&dir);
+        // 2026-09-22：握手不挡进入工作台。工具在后台就绪后由 poll / 回合入口装上。
         let mcp_host = if specs.is_empty() {
             None
         } else {
-            Some(crate::mcp::McpHost::start(specs, &mut registry))
+            Some(crate::mcp::McpHost::begin(specs))
         };
         Ok(Self {
             db,
@@ -326,6 +327,22 @@ impl Workbench {
             self.providers.remove(slot);
         }
         crate::provider_config::register_all(&mut self.providers, self.creds.clone());
+        // 决策槽绑上了就交给项目经理。槽名固定 decision，不和主对话槽合成一个。
+        // 没这个角色（测试夹具）就略过。卸掉绑定且当前正指着 decision 时清空。
+        let points_at_decision = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT decision_slot FROM agents WHERE project_id=?1 AND role=?2",
+                rusqlite::params![self.project_id, crate::pm_route::PM_ROLE],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok();
+        if self.providers.contains_key("decision") {
+            let _ = self.set_decision_slot(crate::pm_route::PM_ROLE, Some("decision"));
+        } else if points_at_decision.flatten().as_deref() == Some("decision") {
+            let _ = self.set_decision_slot(crate::pm_route::PM_ROLE, None);
+        }
     }
 
     /// 测试构造：内存库 + 临时仓。
@@ -348,12 +365,12 @@ impl Workbench {
         }
         // for_test 同样接 MCP（票 06）——测试仓写 .hexagon/mcp.json
         // 即得端到端覆盖；无配置则 None。
-        let mut registry = Registry::builtin();
+        let registry = Registry::builtin();
         let specs = crate::mcp::load_specs(dir);
         let mcp_host = if specs.is_empty() {
             None
         } else {
-            Some(crate::mcp::McpHost::start(specs, &mut registry))
+            Some(crate::mcp::McpHost::start(specs, &registry))
         };
         Ok(Self {
             db,
@@ -374,6 +391,14 @@ impl Workbench {
     /// hook 不得回调 Workbench——锁跨越整个回合，回调即死锁。
     pub fn set_turn_delta_hook(&self, hook: Option<TurnDeltaHook>) {
         *self.delta_hook.lock().unwrap() = hook;
+    }
+
+    /// 注册 bash 输出 delta hook（exec-cards 票 04）：与 turn-delta
+    /// 同纪律的瞬时展示通道——不落库、只增不重放，持久层照旧是
+    /// tool_result 事件。直接挂进共享 SessionTable（经 ToolContext
+    /// 注入每个调用），spawn/run_in 时绑归属。
+    pub fn set_tool_output_hook(&self, hook: Option<crate::sessions::OutputTapCb>) {
+        self.sessions.set_output_tap(hook);
     }
 
     pub fn register_provider(&mut self, slot: &str, p: Arc<dyn ModelProvider>) {
@@ -397,10 +422,30 @@ impl Workbench {
     /// MCP 服务实况（ui-audit-2 票 06）：每配置服务一行（含失败原因）。
     /// 无 `.hexagon/mcp.json` → 空表。
     pub fn mcp_services(&self) -> Vec<crate::mcp::McpServiceRow> {
+        self.install_ready_mcp_tools();
         self.mcp_host
             .as_ref()
-            .map(|h| h.status().to_vec())
+            .map(|h| h.status())
             .unwrap_or_default()
+    }
+
+    /// 把已经握手成功的 MCP 工具装进注册表。不等人。
+    fn install_ready_mcp_tools(&self) {
+        let Some(host) = self.mcp_host.as_ref() else {
+            return;
+        };
+        for tool in host.take_ready() {
+            self.registry.register(tool);
+        }
+    }
+
+    /// 回合要工具清单之前：握手还没完就等到结束（或 8 秒）。
+    /// 失败的服务保持 down，不在这里抛——调用时由工具缺失或状态行提示。
+    pub fn ensure_mcp_for_turn(&self) {
+        if let Some(host) = self.mcp_host.as_ref() {
+            host.wait_settled(std::time::Duration::from_secs(8));
+        }
+        self.install_ready_mcp_tools();
     }
 
     /// 测试/桌面端注入凭据实现（默认内存库；生产壳换成 OsKeychain）。
@@ -737,6 +782,8 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
+        // 握手还在进行时，这一回合等它结束再拿工具清单。打开项目本身不等。
+        self.ensure_mcp_for_turn();
         if let Ok(rid) = self.db.conn().query_row(
             "SELECT id FROM stage_runs
              WHERE project_id=?1 AND state='interrupted' LIMIT 1",
@@ -1002,6 +1049,7 @@ impl Workbench {
             body,
         );
         let req = crate::pm_route::choice_request(&slot_name, &prompt);
+        let use_jev = provider.uses_decision_api();
         let run_id = run.as_ref().map(|r| r.id.as_str());
         // 选择也是一次模型派发：信封在调用前落，用量在成功后记到项目经理头上。
         // 不走 run_turn——那会把选择写成聊天回复。
@@ -1012,9 +1060,24 @@ impl Workbench {
             Some(&pm_id),
             run_id,
         )?;
-        let resp = provider
-            .complete(&req)
-            .map_err(|e| ApiError::Decision(e.to_string()))?;
+        let resp = if use_jev {
+            let state = crate::pm_route::choice_state(
+                stage_name.as_deref(),
+                &activation,
+                speaker_label,
+                body,
+            );
+            let mut options: Vec<(&str, &str)> =
+                roster.iter().map(|r| (r.as_str(), "花名册角色")).collect();
+            options.push((crate::pm_route::HOLD, "先不唤醒任何人"));
+            provider
+                .decide(&state, &options)
+                .map_err(|e| ApiError::Decision(e.to_string()))?
+        } else {
+            provider
+                .complete(&req)
+                .map_err(|e| ApiError::Decision(e.to_string()))?
+        };
         let usage_ctx = crate::tools::ToolContext {
             project_id: self.project_id.clone(),
             agent_id: pm_id.clone(),

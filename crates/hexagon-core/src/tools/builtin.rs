@@ -178,12 +178,20 @@ impl Tool for FsPatch {
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         let old = str_arg(input, "old")?;
+        let new = str_arg(input, "new")?;
         let content = std::fs::read_to_string(&p)?;
         if !content.contains(old) {
             return Err(ToolError::BadInput("old string not found".into()));
         }
-        std::fs::write(&p, content.replacen(old, str_arg(input, "new")?, 1))?;
-        Ok(json!({"patched": str_arg(input, "path")?}))
+        std::fs::write(&p, content.replacen(old, new, 1))?;
+        // exec-cards 票 01（spec D6）：old/new 行数即替换区间的增删行——
+        // 精确值不是估算。随返回值进 tool_result 事件，执行卡的 +N −M
+        // 徽标数据源；模型上下文顺带得到变更规模信号。
+        Ok(json!({
+            "patched": str_arg(input, "path")?,
+            "diff_added": new.lines().count(),
+            "diff_removed": old.lines().count(),
+        }))
     }
 }
 

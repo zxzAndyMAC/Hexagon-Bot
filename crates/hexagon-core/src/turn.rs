@@ -475,6 +475,8 @@ fn run_turn_impl(
         // （archive _outbound_messages 同款分层：模型视图与持久层分离）。
         // 票 06：工具轮的思考先攒着，跟下一条可见回复一起落，不另起一条消息。
         let mut carried_thinking = String::new();
+        // 方案正文。不单独上时间线；执行轮没有可见回复时用它兜底，避免方案丢光。
+        let mut plan_text = String::new();
         let mut steer_mark: i64 = db.conn().query_row(
             "SELECT COALESCE(MAX(id),0) FROM messages WHERE project_id=?1 AND author='owner'",
             [&ctx.project_id],
@@ -518,8 +520,19 @@ fn run_turn_impl(
             };
             crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
             absorb_thinking(&resp.content, &mut carried_thinking);
-            let text = visible_text(&resp.content);
-            persist_visible(db, ctx, &text, &mut carried_thinking)?;
+            // 方案只进模型上下文，不另落一条时间线消息。再落一次会和后面的
+            // 可见回复叠成两条几乎一样的发言（2026-09-22）。流式缓冲也清掉，
+            // 避免气泡里把方案和正式回复拼成两段。
+            plan_text = visible_text(&resp.content);
+            sink(&TurnDelta {
+                agent_id: ctx.agent_id.clone(),
+                stage_run_id: ctx.stage_run_id.clone(),
+                call: 0,
+                reset: true,
+                done: false,
+                text: String::new(),
+                thinking: String::new(),
+            });
             push_assistant(&mut messages, resp.content);
         }
         // 同工具同错熔断状态：跨 round 连击计数（US57）
@@ -684,7 +697,11 @@ fn run_turn_impl(
 
             if resp.stop != StopReason::ToolUse && tool_uses.is_empty() {
                 // 回合结束：可见回复上时间线；思考随这条留下，没有就不写。
-                let text = visible_text(&resp.content);
+                // 执行轮没吐字时用方案兜底，仍然只落一条。
+                let mut text = visible_text(&resp.content);
+                if text.trim().is_empty() {
+                    text = std::mem::take(&mut plan_text);
+                }
                 persist_visible(db, ctx, &text, &mut carried_thinking)?;
                 return Ok(TurnOutcome::Finished);
             }

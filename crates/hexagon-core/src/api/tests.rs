@@ -1503,9 +1503,13 @@ fn dispatch_wakes_sleeping_and_rejects_unchecked() {
     ));
 }
 
-/// US15：快速通道动手前先发方案——方案消息先于首个工具调用落时间线，不阻塞等确认。
+/// US15：快速通道动手前先发方案——方案进模型上下文先于工具执行，不阻塞等确认。
+/// 2026-09-22 行为变更（turn.rs plan_text）：方案正文不再单独落时间线消息——
+/// 会和执行轮的可见回复叠成两条几乎一样的发言；执行轮没吐字时才用方案兜底
+/// 落一条。本测试钉新约定：时间线无「方案」行、工具调用在、模型调用仍 3 次；
+/// 外加兜底路径（执行轮空文本 → 方案落为唯一回复）。
 #[test]
-fn us15_dispatch_posts_plan_before_tools() {
+fn us15_dispatch_plan_not_posted_before_tools() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = fastpath_wb(dir.path());
     let prov = Arc::new(ScriptedProvider::new(vec![
@@ -1520,22 +1524,54 @@ fn us15_dispatch_posts_plan_before_tools() {
     wb.register_provider("default", prov.clone());
     wb.dispatch("后端", "修登录 bug", &[]).unwrap();
     let tl = timeline(&wb, None, 50).unwrap();
-    let plan_idx = tl
-        .iter()
-        .position(|i| {
+    assert!(
+        !tl.iter().any(|i| {
             i.message
                 .as_ref()
                 .map(|m| m.body.contains("方案"))
                 .unwrap_or(false)
-        })
-        .expect("plan message missing");
-    let tool_idx = tl
-        .iter()
-        .position(|i| i.event.kind == EventKind::ToolCalled)
-        .expect("tool call missing");
-    assert!(plan_idx < tool_idx, "plan must land before first tool call");
+        }),
+        "plan must not land as a separate timeline message"
+    );
+    assert!(
+        tl.iter().any(|i| i.event.kind == EventKind::ToolCalled),
+        "tool call missing"
+    );
+    assert!(tl.iter().any(|i| {
+        i.message
+            .as_ref()
+            .map(|m| m.body.contains("done"))
+            .unwrap_or(false)
+    }));
     assert_eq!(prov.recorded().len(), 3); // 方案 1 + 执行 2，不阻塞
     assert!(dir.path().join(".hexagon/notes/fix.md").exists());
+
+    // 兜底：执行轮空文本 → 方案落为唯一一条回复（不丢光）
+    let dir2 = tempfile::tempdir().unwrap();
+    let mut wb2 = fastpath_wb(dir2.path());
+    wb2.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            text_response("方案：兜底文本"),
+            tool_response(vec![(
+                "t1",
+                "artifact_write",
+                json!({"path":"notes/a.md","content":"---\nkind: 笔记\nauthor: a0\n---\nx"}),
+            )]),
+            text_response(""),
+        ])),
+    );
+    wb2.dispatch("后端", "x", &[]).unwrap();
+    let tl2 = timeline(&wb2, None, 50).unwrap();
+    assert!(
+        tl2.iter().any(|i| {
+            i.message
+                .as_ref()
+                .map(|m| m.body.contains("兜底文本"))
+                .unwrap_or(false)
+        }),
+        "empty final reply should fall back to plan text"
+    );
 }
 
 /// US15：负责人在工具循环期间可暂停——循环每轮顶检 paused 状态。

@@ -667,75 +667,140 @@ fn kill_pid(pid: u32) {
     }
 }
 
-/// MCP 宿主：持全部服务进程，Drop 时全停。
-pub struct McpHost {
+struct HostInner {
     servers: Vec<Arc<Server>>,
-    /// 每 spec 一行状态（含失败）——设置页审计面。
     statuses: Vec<McpServiceRow>,
+    /// 握手完成、尚未装进 Registry 的工具。
+    ready: Vec<McpTool>,
+}
+
+/// MCP 宿主：持全部服务进程，Drop 时全停。
+/// `begin` 立刻返回，握手在后台进行，不挡住进入工作台（2026-09-22）。
+pub struct McpHost {
+    inner: Arc<std::sync::Mutex<HostInner>>,
 }
 
 impl McpHost {
-    /// 起全部服务并把发现的工具注册进 Registry。
-    /// 单个服务起不来不连坐：记 status=down 继续（事件由调用方决定是否落）。
-    pub fn start(specs: Vec<McpSpec>, registry: &mut crate::tools::Registry) -> Self {
-        let mut servers = Vec::new();
-        let mut statuses = Vec::new();
-        for spec in specs {
-            let row = |status: &str, tools: Vec<String>, error: Option<String>| McpServiceRow {
-                name: spec.name.clone(),
-                command: spec.command.clone(),
-                status: status.into(),
-                tools,
-                error,
-            };
-            let conn = match Conn::spawn(&spec) {
-                Ok(c) => c,
-                Err(e) => {
-                    log::warn!("mcp service {} failed to spawn, skipped", spec.name);
-                    statuses.push(row("down", vec![], Some(e.to_string())));
-                    continue;
+    /// 立刻返回。每个服务先记 `starting`，握手在后台跑。
+    /// 调用方用 [`Self::take_ready`] 把成功的工具装进 Registry。
+    pub fn begin(specs: Vec<McpSpec>) -> Self {
+        let statuses = specs
+            .iter()
+            .map(|s| McpServiceRow {
+                name: s.name.clone(),
+                command: s.command.clone(),
+                status: "starting".into(),
+                tools: vec![],
+                error: None,
+            })
+            .collect();
+        let inner = Arc::new(std::sync::Mutex::new(HostInner {
+            servers: vec![],
+            statuses,
+            ready: vec![],
+        }));
+        if !specs.is_empty() {
+            let shared = inner.clone();
+            std::thread::spawn(move || drive_handshakes(shared, specs));
+        }
+        Self { inner }
+    }
+
+    /// 测试和需要「打开时工具已经在」的路径：等握手结束再注册。
+    pub fn start(specs: Vec<McpSpec>, registry: &crate::tools::Registry) -> Self {
+        let host = Self::begin(specs);
+        // 握手超时是 8 秒。这里多等一点，让状态从 starting 写成 up/down。
+        host.wait_settled(std::time::Duration::from_secs(10));
+        for tool in host.take_ready() {
+            registry.register(tool);
+        }
+        host
+    }
+
+    pub fn pending(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .statuses
+            .iter()
+            .any(|s| s.status == "starting")
+    }
+
+    pub fn wait_settled(&self, limit: std::time::Duration) {
+        let start = std::time::Instant::now();
+        while self.pending() && start.elapsed() < limit {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    }
+
+    pub fn take_ready(&self) -> Vec<McpTool> {
+        std::mem::take(&mut self.inner.lock().unwrap().ready)
+    }
+
+    /// 每配置服务一行实况（设置页列表用）。
+    pub fn status(&self) -> Vec<McpServiceRow> {
+        self.inner.lock().unwrap().statuses.clone()
+    }
+}
+
+/// 后台握手。不挡住 `begin` 的调用方。
+fn drive_handshakes(inner: Arc<std::sync::Mutex<HostInner>>, specs: Vec<McpSpec>) {
+    let mut inflight = Vec::new();
+    for spec in specs {
+        let conn = match Conn::spawn(&spec) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("mcp service {} failed to spawn, skipped", spec.name);
+                set_mcp_status(&inner, &spec.name, "down", vec![], Some(e.to_string()));
+                continue;
+            }
+        };
+        let pid = conn.child.id();
+        let server = Arc::new(Server {
+            spec: spec.clone(),
+            conn: Mutex::new(conn),
+        });
+        inner.lock().unwrap().servers.push(server.clone());
+        let srv = server.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(srv.handshake());
+        });
+        inflight.push((spec, pid, server, rx));
+    }
+    for (spec, pid, server, rx) in inflight {
+        let tools = match rx.recv_timeout(std::time::Duration::from_secs(8)) {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                log::warn!("mcp service {} handshake failed, skipped", spec.name);
+                if let Ok(mut c) = server.conn.lock() {
+                    let _ = c.child.kill();
                 }
-            };
-            // 握手超时兜底（e2e 活测实证）：read_response 只限帧数不限时，
-            // spawned-but-silent 的服务（cursor-talk-to-figma-mcp 不答
-            // initialize）会把 read_line 挂死，连累项目创建/打开永远卡死。
-            // 线程跑握手 + recv_timeout；超时按 pid 杀子进程，泄漏的读线程
-            // 在管道断开后自行退出。fail-closed：宁可服务 down 也不挂住建档。
-            let pid = conn.child.id();
-            let server = Arc::new(Server {
-                spec: spec.clone(),
-                conn: Mutex::new(conn),
-            });
-            let srv = server.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(srv.handshake());
-            });
-            let tools = match rx.recv_timeout(std::time::Duration::from_secs(8)) {
-                Ok(Ok(t)) => t,
-                Ok(Err(e)) => {
-                    log::warn!("mcp service {} handshake failed, skipped", spec.name);
-                    // Child::drop 不杀进程——握手失败的服务若不 kill 会成孤儿。
-                    if let Ok(mut c) = server.conn.lock() {
-                        let _ = c.child.kill();
-                    }
-                    statuses.push(row("down", vec![], Some(e.to_string())));
-                    continue;
-                }
-                Err(_) => {
-                    log::warn!("mcp service {} handshake timeout, killed", spec.name);
-                    kill_pid(pid);
-                    statuses.push(row("down", vec![], Some("handshake timeout".into())));
-                    continue;
-                }
-            };
-            let tool_names: Vec<String> = tools
-                .iter()
-                .filter_map(|t| t["name"].as_str().map(String::from))
-                .collect();
-            log::info!("mcp service {} up: {} tools", spec.name, tool_names.len());
+                set_mcp_status(&inner, &spec.name, "down", vec![], Some(e.to_string()));
+                continue;
+            }
+            Err(_) => {
+                log::warn!("mcp service {} handshake timeout, killed", spec.name);
+                kill_pid(pid);
+                set_mcp_status(
+                    &inner,
+                    &spec.name,
+                    "down",
+                    vec![],
+                    Some("handshake timeout".into()),
+                );
+                continue;
+            }
+        };
+        let tool_names: Vec<String> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(String::from))
+            .collect();
+        log::info!("mcp service {} up: {} tools", spec.name, tool_names.len());
+        {
+            let mut g = inner.lock().unwrap();
             for (t, name) in tools.iter().zip(tool_names.iter()) {
-                registry.register(McpTool {
+                g.ready.push(McpTool {
                     full_name: format!("mcp:{}:{}", spec.name, name),
                     desc: t["description"].as_str().unwrap_or("").to_string(),
                     schema: t["inputSchema"].clone(),
@@ -743,23 +808,33 @@ impl McpHost {
                     tool_name: name.clone(),
                 });
             }
-            statuses.push(row("up", tool_names, None));
-            servers.push(server);
         }
-        Self { servers, statuses }
+        set_mcp_status(&inner, &spec.name, "up", tool_names, None);
     }
+}
 
-    /// 每配置服务一行实况（设置页列表用）。
-    pub fn status(&self) -> &[McpServiceRow] {
-        &self.statuses
+fn set_mcp_status(
+    inner: &Arc<std::sync::Mutex<HostInner>>,
+    name: &str,
+    status: &str,
+    tools: Vec<String>,
+    error: Option<String>,
+) {
+    let mut g = inner.lock().unwrap();
+    if let Some(row) = g.statuses.iter_mut().find(|r| r.name == name) {
+        row.status = status.into();
+        row.tools = tools;
+        row.error = error;
     }
 }
 
 impl Drop for McpHost {
     fn drop(&mut self) {
-        for s in &self.servers {
-            if let Ok(mut c) = s.conn.lock() {
-                let _ = c.child.kill();
+        if let Ok(inner) = self.inner.lock() {
+            for s in &inner.servers {
+                if let Ok(mut c) = s.conn.lock() {
+                    let _ = c.child.kill();
+                }
             }
         }
     }
@@ -834,7 +909,7 @@ while True:
             sessions: Default::default(),
             caps: Default::default(),
         };
-        let mut reg = Registry::builtin();
+        let reg = Registry::builtin();
         let host = McpHost::start(
             vec![McpSpec {
                 name: "fake".into(),
@@ -842,7 +917,7 @@ while True:
                 args: vec![script.to_string_lossy().into()],
                 ..Default::default()
             }],
-            &mut reg,
+            &reg,
         );
         (db, reg, ctx, dir, host)
     }
@@ -893,11 +968,11 @@ while True:
     #[cfg(unix)]
     #[test]
     fn silent_server_times_out_instead_of_hanging() {
-        let mut reg = crate::tools::Registry::builtin();
+        let reg = crate::tools::Registry::builtin();
         let mut s = spec("silent", "sleep");
         s.args = vec!["30".into()];
         let t0 = std::time::Instant::now();
-        let host = McpHost::start(vec![s], &mut reg);
+        let host = McpHost::start(vec![s], &reg);
         let elapsed = t0.elapsed();
         assert!(elapsed.as_secs() < 25, "handshake 无限阻塞: {elapsed:?}");
         let st = &host.status()[0];
@@ -1077,7 +1152,7 @@ while True:
     #[test]
     fn dead_service_reports_error_not_crash() {
         let dir = tempfile::tempdir().unwrap();
-        let mut reg = Registry::builtin();
+        let reg = Registry::builtin();
         // 起不来的命令：静默跳过，不 panic
         let _host = McpHost::start(
             vec![McpSpec {
@@ -1086,7 +1161,7 @@ while True:
                 args: vec![],
                 ..Default::default()
             }],
-            &mut reg,
+            &reg,
         );
         assert!(reg.defs().iter().all(|d| !d.name.starts_with("mcp:")));
         let _ = dir;

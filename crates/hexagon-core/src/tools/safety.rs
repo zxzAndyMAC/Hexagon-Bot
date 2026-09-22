@@ -105,8 +105,31 @@ pub(crate) fn scrub_input(tool: &str, input: &Value) -> Value {
             "path": input["path"],
             "bytes": input["content"].as_str().map(|s| s.len()).unwrap_or(0),
         }),
-        "fs_patch" => json!({ "path": input["path"] }),
+        // exec-cards 票 01（spec D5，owner 裁决）：old/new 是模型自产的
+        // 变更片段而非文件全文——各截 4KB 放行，给执行卡的 diff 体供数据。
+        // 文件体纪律不松：fs_write/artifact_write 的 content 仍只留 bytes。
+        "fs_patch" => json!({
+            "path": input["path"],
+            "old": clip4k(input["old"].as_str()),
+            "new": clip4k(input["new"].as_str()),
+        }),
         _ => redact(input),
+    }
+}
+
+/// 4KB 截断 + marker（票 01）：超界说明这段 patch 本身就大到不该
+/// 进事件日志，marker 让 UI 知道体是残本不是全文。
+fn clip4k(s: Option<&str>) -> Value {
+    match s {
+        None => Value::Null,
+        Some(s) if s.len() <= 4096 => json!(s),
+        Some(s) => {
+            let mut end = 4096;
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            json!(format!("{}\n…[truncated]", &s[..end]))
+        }
     }
 }
 

@@ -242,6 +242,42 @@ pub fn register_all(
     }
 }
 
+/// Jev 没有模型目录接口。用一道最小是非题确认钥匙，目录只放响应里的模型名，
+/// 没有则回落 `jev-latest`。
+fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, ProvidersError> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(30)))
+        .build()
+        .into();
+    let body = serde_json::json!({
+        "state": "ping",
+        "model": "jev-latest",
+        "questions": {
+            "ok": { "type": "noul", "instructions": "Is this a connectivity check?" }
+        }
+    });
+    let mut resp = agent
+        .post(crate::provider::systemone_url(&def.base_url))
+        .header("Authorization", &format!("Bearer {key}"))
+        .send_json(&body)
+        .map_err(|e| ProvidersError::Http(e.to_string()))?;
+    let v: Value = resp
+        .body_mut()
+        .read_json()
+        .map_err(|e| ProvidersError::Http(e.to_string()))?;
+    let id = v["model"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("jev-latest")
+        .to_string();
+    Ok(vec![ModelEntry {
+        id,
+        name: Some("Jev".into()),
+        group: Some("typesafe".into()),
+        caps: vec![],
+    }])
+}
+
 /// 拉取模型目录：GET 端点的 /models 面（OpenAI {base}/models；Anthropic {base}/v1/models）。
 /// 返回 ModelEntry（id + 分组 + 推断能力）；4xx/网络错 → Http 错（透传给 UI）。
 pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, ProvidersError> {
@@ -249,6 +285,8 @@ pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
     let url = match def.kind {
         ProviderKind::Anthropic => format!("{base}/v1/models"),
         ProviderKind::OpenAi => format!("{base}/models"),
+        // Jev 没有 /models。用一道最小选择题确认钥匙，模型名以响应为准。
+        ProviderKind::Jev => return fetch_jev_models(def, key),
     };
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(30)))
@@ -260,6 +298,7 @@ pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
             .header("x-api-key", key)
             .header("anthropic-version", "2023-06-01"),
         ProviderKind::OpenAi => req.header("Authorization", &format!("Bearer {key}")),
+        ProviderKind::Jev => unreachable!("jev returns before the models request"),
     };
     let mut resp = req
         .call()
