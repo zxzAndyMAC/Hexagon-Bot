@@ -1,10 +1,12 @@
-// 项目向导（票 24）：选目录 → 勾角色 → 选流程包/快速通道 → 说明文件 → 密钥 → 开跑。
+// 项目向导：模型服务商 → 选目录 → 勾角色 → 选流程包/快速通道 → 说明文件 → 密钥 → 开跑。
+// 票 13：第一步没有启用的供应商、已存钥匙和 default 槽就不能进目录；已配好只显示就绪。
 // 草稿存 localStorage `hexagon.wizard`，中途退出可续；缺密钥 fail-closed 不能开跑。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, isTauri, type DirReport, type PackDef, type ProvidersView, type RoleDef, type RoleTemplate } from '../api'
+import { api, errText, isTauri, type DirReport, type PackDef, type ProviderView, type ProvidersView, type RoleDef, type RoleTemplate } from '../api'
 import { useUiStore } from '../store'
 import { sharedSlots, slotLabel } from '../modelpick'
+import { providerStepReady } from '../providerGate'
 import { Icon } from './Icon'
 import { EntityChips } from './EntityPicker'
 
@@ -38,7 +40,7 @@ function loadDraft(): Draft {
   }
 }
 
-const STEPS = ['dir', 'roles', 'mode', 'instructions', 'keys', 'confirm'] as const
+const STEPS = ['providers', 'dir', 'roles', 'mode', 'instructions', 'keys', 'confirm'] as const
 type Step = (typeof STEPS)[number]
 
 function Chip({ ok, warn, children }: { ok?: boolean; warn?: boolean; children: React.ReactNode }) {
@@ -57,7 +59,7 @@ function Chip({ ok, warn, children }: { ok?: boolean; warn?: boolean; children: 
 
 export function Wizard({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation()
-  const [step, setStep] = useState<Step>('dir')
+  const [step, setStep] = useState<Step>('providers')
   const [draft, setDraft] = useState<Draft>(loadDraft)
   const [report, setReport] = useState<DirReport | null>(null)
   const [tpls, setTpls] = useState<RoleTemplate[]>([])
@@ -65,6 +67,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   // 正在展开定制的角色名（roles 步内联编辑面板）
   const [customizing, setCustomizing] = useState<string | null>(null)
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
+  const [providersLoaded, setProvidersLoaded] = useState(false)
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
   // 票 15：密钥显隐复用 ProviderManager 的 vision 钮模式（每 provider 独立）。
   const [keyShown, setKeyShown] = useState<Set<string>>(new Set())
@@ -84,8 +87,6 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     api.listRoleTemplates().then(setTpls).catch(() => {})
     api.presetPacks().then(setPacks).catch(() => {})
-    // roles 步的模型槽下拉也要供应商文档——挂载即拉，不必等 keys 步轮询
-    api.listProviders().then(setDoc).catch(() => {})
   }, [])
 
   // 目录变化 → 重新体检（setTimeout 内统一处理，避免 effect 内同步 setState）
@@ -118,13 +119,17 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     [pickedRoles, effDef],
   )
 
-  // 进入密钥步 / 所选角色变化 → 拉供应商文档（绑定 + key 状态）
+  // 供应商步 / 密钥步拉同一份 providers 文档（绑定 + key 状态）。
+  // 轮询而非一次性：从设置页（hexagon:open-settings 覆盖层）返回时状态自刷新。
+  // 未读完之前不渲染钥匙框——已配好的机器不该先闪一次「请填钥匙」。
   const recheckKeys = useCallback(() => {
-    api.listProviders().then(setDoc).catch(() => {})
+    api.listProviders().then((d) => {
+      setDoc(d)
+      setProvidersLoaded(true)
+    }).catch(() => setProvidersLoaded(true))
   }, [])
   useEffect(() => {
-    if (step !== 'keys') return
-    // 轮询而非一次性：从设置页（hexagon:open-settings 覆盖层）返回时状态自刷新
+    if (step !== 'keys' && step !== 'providers') return
     const id = setInterval(recheckKeys, 2000)
     recheckKeys()
     return () => clearInterval(id)
@@ -155,6 +160,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     !report || !report.exists || report.has_workbench || (!report.is_git && !draft.initGit)
   const canNext = useMemo(() => {
     switch (step) {
+      case 'providers': return providerStepReady(doc)
       case 'dir': return !!draft.dir && !!draft.name && !dirBlocked
       case 'roles': return draft.roles.length > 0
       case 'mode':
@@ -163,7 +169,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       case 'confirm': return true
       case 'keys': return unready.length === 0 && slots.length > 0
     }
-  }, [step, draft, dirBlocked, unready, slots])
+  }, [step, draft, dirBlocked, unready, slots, doc])
 
   const existingRepoAlign =
     !!report?.is_git && !report?.empty && draft.roles.includes('产品策划')
@@ -239,6 +245,9 @@ export function Wizard({ onDone }: { onDone: () => void }) {
 
   const idx = STEPS.indexOf(step)
   const body: Record<Step, React.ReactNode> = {
+    providers: (
+      <ProviderFirstStep doc={doc} loaded={providersLoaded} onRefresh={recheckKeys} />
+    ),
     dir: (
       <>
         <label className="dim3" style={{ fontSize: 11 }}>{t('wizard.dirLabel')}</label>
@@ -680,5 +689,201 @@ function RoleCustomize({ def, names, doc, onChange, onReset, onClose }: {
       <div style={lbl}>{t('agent.skills')}</div>
       <EntityChips value={def.skills} onChange={(ids) => upd({ skills: ids })} source="skills" />
     </div>
+  )
+}
+
+// 与 ProviderManager 同一套 slug，避免两个界面对同一名字写出不同 id。
+const providerSlug = (s: string) =>
+  s.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-').replace(/^-+|-+$/g, '') || `p${Date.now()}`
+
+function suggestedModel(doc: ProvidersView, p?: ProviderView): string {
+  if (!p) return ''
+  const bound = doc.slots.default
+  if (bound?.provider_id === p.id && bound.model.trim()) return bound.model
+  return p.models[0]?.id ?? ''
+}
+
+function initialProviderId(doc: ProvidersView): string {
+  const bound = doc.slots.default?.provider_id
+  if (bound && doc.providers.some((p) => p.id === bound)) return bound
+  return doc.providers.find((p) => p.enabled && p.key_set)?.id ?? doc.providers[0]?.id ?? ''
+}
+
+/** 票 13：向导第一步。数据只走 list/save/set_slot_binding，不另起一份供应商存储。
+ *  已就绪不渲染钥匙框；缺钥匙才要输入。 */
+function ProviderFirstStep({ doc, loaded, onRefresh }: {
+  doc: ProvidersView
+  loaded: boolean
+  onRefresh: () => void
+}) {
+  const { t } = useTranslation()
+  const ready = loaded && providerStepReady(doc)
+  const binding = doc.slots.default
+  const bound = binding ? doc.providers.find((p) => p.id === binding.provider_id) : undefined
+  return (
+    <>
+      <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.providersHint')}</div>
+      {!loaded ? null : ready && bound && binding ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Chip ok>{t('wizard.providersReady')}</Chip>
+          <span style={{ fontSize: 12 }}>{bound.name} · {binding.model}</span>
+        </div>
+      ) : (
+        <>
+          <div style={{ color: 'var(--accent)', fontSize: 12, marginBottom: 8 }}>{t('wizard.providersBlocked')}</div>
+          {doc.providers.length === 0
+            ? <NewProviderForm onRefresh={onRefresh} />
+            : <FixProviderForm doc={doc} onRefresh={onRefresh} />}
+          <div style={{ marginTop: 10 }}>
+            <button className="btn" onClick={() => api.openSettings().catch(() => {})}>
+              {t('wizard.goSettings')}
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+function NewProviderForm({ onRefresh }: { onRefresh: () => void }) {
+  const { t } = useTranslation()
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<ProviderView['kind']>('openai')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [secret, setSecret] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [model, setModel] = useState('')
+  const [busy, setBusy] = useState(false)
+  const canApply = !!name.trim() && !!baseUrl.trim() && !!secret.trim() && !!model.trim()
+  const input: React.CSSProperties = { width: '100%', marginTop: 4, textAlign: 'left' }
+
+  async function apply() {
+    if (!canApply) return
+    const id = providerSlug(name)
+    setBusy(true)
+    try {
+      await api.saveProvider({
+        id,
+        name: name.trim(),
+        kind,
+        base_url: baseUrl.trim(),
+        models: [],
+        enabled: true,
+      }, secret.trim())
+      await api.setSlotBinding('default', id, model.trim())
+      onRefresh()
+    } catch (e) {
+      useUiStore.getState().pushToast(errText(e), 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <label className="dim3" style={{ fontSize: 11 }}>{t('providers.name')}</label>
+      <input className="btn" style={input} placeholder={t('providers.name')} value={name}
+        onChange={(e) => setName(e.target.value)} />
+      <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.kind')}</label>
+      <select className="btn" style={input} value={kind}
+        onChange={(e) => setKind(e.target.value as ProviderView['kind'])}>
+        <option value="openai">openai</option>
+        <option value="anthropic">anthropic</option>
+      </select>
+      <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.baseUrl')}</label>
+      <input className="btn" style={input} placeholder={t('providers.baseUrl')} value={baseUrl}
+        onChange={(e) => setBaseUrl(e.target.value)} />
+      <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.key')}</label>
+      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+        <input className="btn" type={showKey ? 'text' : 'password'} style={{ flex: 1, textAlign: 'left' }}
+          placeholder={t('wizard.keyPlaceholder')} value={secret}
+          onChange={(e) => setSecret(e.target.value)} />
+        <button className="btn" title={t(showKey ? 'providers.hideKey' : 'providers.showKey')}
+          onClick={() => setShowKey((s) => !s)}>
+          <Icon name={showKey ? 'vision' : 'vision-off'} size={12} />
+        </button>
+      </div>
+      <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.model')}</label>
+      <input className="btn" style={input} placeholder={t('providers.pickModel')} value={model}
+        onChange={(e) => setModel(e.target.value)} />
+      <button className="btn primary" style={{ marginTop: 10 }} disabled={busy || !canApply} onClick={apply}>
+        {t('wizard.providersApply')}
+      </button>
+    </>
+  )
+}
+
+function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () => void }) {
+  const { t } = useTranslation()
+  const [pid, setPid] = useState(() => initialProviderId(doc))
+  const provider = doc.providers.find((p) => p.id === pid) ?? doc.providers[0]
+  const [model, setModel] = useState(() => suggestedModel(doc, provider))
+  const [secret, setSecret] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [busy, setBusy] = useState(false)
+  if (!provider) return null
+  const needsKey = !provider.key_set
+  const canApply = !!model.trim() && (!needsKey || !!secret.trim())
+  const input: React.CSSProperties = { width: '100%', marginTop: 4, textAlign: 'left' }
+
+  async function apply() {
+    if (!canApply) return
+    const modelId = model.trim()
+    setBusy(true)
+    try {
+      // 钥匙已存就不要再送 secret——空 secret 后端会留下原钥匙，但这一步根本不该再问。
+      await api.saveProvider(
+        { ...provider, enabled: true },
+        needsKey ? secret.trim() : undefined,
+      )
+      await api.setSlotBinding('default', provider.id, modelId)
+      setSecret('')
+      onRefresh()
+    } catch (e) {
+      useUiStore.getState().pushToast(errText(e), 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <label className="dim3" style={{ fontSize: 11 }}>{t('wizard.providersPick')}</label>
+      <select className="btn" style={input} value={provider.id}
+        onChange={(e) => {
+          const id = e.target.value
+          setPid(id)
+          setModel(suggestedModel(doc, doc.providers.find((p) => p.id === id)))
+          setSecret('')
+          setShowKey(false)
+        }}>
+        {doc.providers.map((p) => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
+      {needsKey && (
+        <>
+          <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.key')}</label>
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <input className="btn" type={showKey ? 'text' : 'password'} style={{ flex: 1, textAlign: 'left' }}
+              placeholder={t('wizard.keyPlaceholder')} value={secret}
+              onChange={(e) => setSecret(e.target.value)} />
+            <button className="btn" title={t(showKey ? 'providers.hideKey' : 'providers.showKey')}
+              onClick={() => setShowKey((s) => !s)}>
+              <Icon name={showKey ? 'vision' : 'vision-off'} size={12} />
+            </button>
+          </div>
+        </>
+      )}
+      <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>{t('providers.model')}</label>
+      <input className="btn" style={input} placeholder={t('providers.pickModel')} value={model}
+        list="wizard-default-models" onChange={(e) => setModel(e.target.value)} />
+      <datalist id="wizard-default-models">
+        {provider.models.map((m) => <option key={m.id} value={m.id} />)}
+      </datalist>
+      <button className="btn primary" style={{ marginTop: 10 }} disabled={busy || !canApply} onClick={apply}>
+        {t('wizard.providersApply')}
+      </button>
+    </>
   )
 }
