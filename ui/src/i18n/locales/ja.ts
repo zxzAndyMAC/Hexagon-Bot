@@ -589,6 +589,10 @@ export default {
     done: '完了', empty: '一致する項目がありません', count: '{{n}} 件選択中',
     title_skills: 'スキルを選択', title_mcp: 'MCP サービスを選択',
   },
+  intake: {
+    confirm: 'プロジェクト説明を書き込む',
+    confirmHint: '開始分析が草案を添付しました。確認するまでディスクには書きません。L4 でも自動では書きません。',
+  },
   keys: {
     palette: 'コマンドパレット',
     rail: 'サイドパネル切替',
@@ -607,8 +611,11 @@ export default {
     treeNewFolder: '新規フォルダ',
     treeRefresh: 'プロジェクトツリーを更新',
     saveFile: 'ファイルを保存',
+    confirmIntake: '開始草案を確認',
   },
   errors: {
+    no_intake_draft: '確認する開始草案がありません',
+    intake_brief_exists: 'プロジェクト説明は既にあります。上書きしません',
     actionFailed: '操作に失敗しました——{{detail}}',
     internal: '内部エラー——再試行するかアプリを再起動してください',
     sqlite: 'データベースエラー——状態がビジーかもしれません。しばらくして再試行',

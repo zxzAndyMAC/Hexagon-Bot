@@ -589,6 +589,10 @@ export default {
     done: 'Aceptar', empty: 'Sin coincidencias', count: '{{n}} seleccionados',
     title_skills: 'Seleccionar habilidades', title_mcp: 'Seleccionar servicios MCP',
   },
+  intake: {
+    confirm: 'Escribir las instrucciones del proyecto',
+    confirmHint: 'El análisis de apertura adjuntó un borrador. No se guarda hasta que confirmes, ni siquiera en L4.',
+  },
   keys: {
     palette: 'Paleta de comandos',
     rail: 'Alternar panel lateral',
@@ -607,8 +611,11 @@ export default {
     treeNewFolder: 'Nueva carpeta',
     treeRefresh: 'Actualizar el árbol del proyecto',
     saveFile: 'Guardar archivo',
+    confirmIntake: 'Confirmar el borrador de apertura',
   },
   errors: {
+    no_intake_draft: 'No hay un borrador de apertura por confirmar',
+    intake_brief_exists: 'Las instrucciones del proyecto ya existen — no se sobrescriben',
     actionFailed: 'La acción falló — {{detail}}',
     internal: 'Error interno — reintenta o reinicia la app',
     sqlite: 'Error de base de datos — el estado puede estar ocupado; reintenta en un momento',

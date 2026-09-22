@@ -18,6 +18,7 @@ pub mod git;
 pub mod grants;
 pub mod harnessgate;
 pub mod install;
+pub mod intake;
 pub mod invariant;
 pub mod judge;
 pub mod mcp;

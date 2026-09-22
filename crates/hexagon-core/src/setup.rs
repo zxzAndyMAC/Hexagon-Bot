@@ -4,7 +4,8 @@
 //!   无 git 须确认初始化；已有 `.hexagon/state.db` 拒绝再建，走 `open_existing`。
 //! - 说明文件主读 `AGENTS.md`，没有则 `CLAUDE.md`。空目录的一句话经
 //!   `optimize_agents_md`（ADR 0067，主对话模型）填草稿；人确认后才
-//!   `write_agents_md`，已有任一份说明都不覆盖。
+//!   `write_agents_md`，已有任一份说明都不覆盖。非空目录第一次成为项目时
+//!   把 `opening_intake` 记成 pending，进工作台后才分析（票 17）；空目录记 skip。
 //! - 密钥 fail-closed：所选角色的模型槽缺 key 不能开跑（`create_project` 内置复查）。
 //! - 建项目把 RoleDef 落成实例：model_slot、agent_globs 归属、grants 技能授权。
 //! - 票 14：最后一步按 `CREATE_STEP_ORDER` 逐步报告。每步做完才回调，失败不回调
@@ -293,6 +294,7 @@ pub fn create_project(
         store,
         doc,
         autonomy,
+        None,
         |_| {},
     )
 }
@@ -312,6 +314,7 @@ pub fn create_project_reporting<F>(
     store: &dyn CredentialStore,
     doc: &crate::provider_config::ProviderDoc,
     autonomy: Option<&str>,
+    agents_md: Option<&str>,
     mut on_step: F,
 ) -> Result<Workbench, SetupError>
 where
@@ -321,6 +324,11 @@ where
         crate::autonomy::parse_level(lv)?;
     }
     let dir = dir.as_ref();
+    // 票 17：空不空看写说明文件之前。壳层确认过的一句话会在下面才落盘，
+    // 若先写再看，空目录会变成「已有 AGENTS.md」从而误走开场分析。
+    // 被否决：用「只有说明文件」反推空目录——只有一份现成 AGENTS.md 的仓库
+    // 和刚写进空目录的简报分不清。
+    let needs_intake = opening_intake_needed(dir);
     // ADR 0060：已有工作台状态是打开，不是再建。先于 mkdir / git init，
     // 避免二次创建改 mode、槽位、授权。被否决的替代：静默当成 open 并套用
     // 本次向导选项（会改写已有项目）。false negative（漏判已有库）会重跑落库；
@@ -329,6 +337,11 @@ where
         return Err(SetupError::AlreadyProject(dir.to_path_buf()));
     }
     std::fs::create_dir_all(dir)?;
+    // 负责人已确认的说明。已有 AGENTS.md / CLAUDE.md 时 write 拒绝，不覆盖。
+    // 放在进度回调之前：写失败等于这一步还没完成，界面不该亮「检查目录」。
+    if let Some(md) = agents_md {
+        write_agents_md(dir, md)?;
+    }
     on_step(CreateStep::CheckDir);
 
     // git 闸：非仓库须确认后才 init。已是仓库则无论干净或有未提交改动都直接用：
@@ -466,6 +479,16 @@ where
             return Err(e);
         }
     };
+    if needs_intake {
+        if let Err(e) = wb.db.conn().execute(
+            "UPDATE projects SET opening_intake=?1 WHERE id='p1'",
+            [crate::intake::STATUS_PENDING],
+        ) {
+            drop(wb);
+            rollback_fresh_hexagon(dir, hex_existed);
+            return Err(e.into());
+        }
+    }
     on_step(CreateStep::PersistRoles);
 
     let missing = missing_model_keys(store, &picked, doc)?;
@@ -495,6 +518,13 @@ pub fn open_existing(dir: impl AsRef<Path>) -> Result<Workbench, SetupError> {
         .and_then(|s| s.to_str())
         .unwrap_or("project");
     Ok(Workbench::open(dir, name, &[], pack)?)
+}
+
+/// 目录在成为项目之前就已经有条目，且还不是工作台。空目录、还不存在的
+/// 目录、已经是项目的目录，都不走开场分析。
+fn opening_intake_needed(dir: &Path) -> bool {
+    let report = inspect_dir(dir);
+    report.exists && !report.empty && !report.has_workbench
 }
 
 /// 落库后失败：本次新建的 `.hexagon` 整目录删掉，避免缺密钥却留下项目库。
@@ -1042,6 +1072,7 @@ mod tests {
             &store_with_key(),
             &doc_with_provider(),
             None,
+            None,
             |step| seen.push(step),
         )
         .unwrap();
@@ -1072,6 +1103,7 @@ mod tests {
             &store_with_key(),
             &doc_with_provider(),
             None,
+            None,
             |step| seen.push(step),
         )
         .unwrap();
@@ -1099,6 +1131,7 @@ mod tests {
             &store_with_key(),
             &doc_with_provider(),
             None,
+            None,
             |step| seen.push(step),
         ) {
             Ok(_) => panic!("no git should stop"),
@@ -1122,6 +1155,7 @@ mod tests {
             true,
             &MemoryStore::default(),
             &crate::provider_config::ProviderDoc::default(),
+            None,
             None,
             |step| seen.push(step),
         ) {

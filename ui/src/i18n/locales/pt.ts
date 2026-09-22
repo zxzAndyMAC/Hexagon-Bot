@@ -589,6 +589,10 @@ export default {
     done: 'OK', empty: 'Sem resultados', count: '{{n}} selecionados',
     title_skills: 'Selecionar habilidades', title_mcp: 'Selecionar serviços MCP',
   },
+  intake: {
+    confirm: 'Gravar as instruções do projeto',
+    confirmHint: 'A análise de abertura anexou um rascunho. Ele não vai ao disco até você confirmar, nem no L4.',
+  },
   keys: {
     palette: 'Paleta de comandos',
     rail: 'Alternar painel lateral',
@@ -607,8 +611,11 @@ export default {
     treeNewFolder: 'Nova pasta',
     treeRefresh: 'Atualizar a árvore do projeto',
     saveFile: 'Salvar arquivo',
+    confirmIntake: 'Confirmar o rascunho de abertura',
   },
   errors: {
+    no_intake_draft: 'Não há rascunho de abertura para confirmar',
+    intake_brief_exists: 'As instruções do projeto já existem — não são sobrescritas',
     actionFailed: 'A ação falhou — {{detail}}',
     internal: 'Erro interno — tente de novo ou reinicie o app',
     sqlite: 'Erro de banco de dados — o estado pode estar ocupado; tente em instantes',

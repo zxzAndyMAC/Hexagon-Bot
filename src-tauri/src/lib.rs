@@ -1318,10 +1318,8 @@ fn create_project(
     on_progress: tauri::ipc::Channel<hexagon_core::setup::CreateStep>,
 ) -> Result<(), CmdError> {
     use hexagon_core::setup;
-    // 负责人已确认的说明文件先落盘（已存在会被 write_agents_md 拒绝，不覆盖）
-    if let Some(md) = &opts.agents_md {
-        setup::write_agents_md(&opts.dir, md).map_err(cmd_err)?;
-    }
+    // 说明文件在核里、而且在「空不空」判定之后才写。先写的话，空目录的
+    // 一句话会把目录变成非空，误走开场分析（票 17）。
     let pack = opts
         .pack_name
         .as_deref()
@@ -1346,6 +1344,7 @@ fn create_project(
         &*hexagon_core::credentials::active(),
         &pdoc,
         opts.autonomy.as_deref(),
+        opts.agents_md.as_deref(),
         |step| {
             let _ = on_progress.send(step);
         },
@@ -1373,6 +1372,78 @@ fn create_project(
         },
     );
     Ok(())
+}
+
+/// 票 17：进工作台之后的只读开场分析。模型调用不占工作台锁，
+/// 负责人这时仍能经控制连接把字写进时间线。
+#[tauri::command]
+fn run_opening_intake(state: tauri::State<AppState>) -> Result<(), CmdError> {
+    use hexagon_core::api::IntakePrepared;
+    let prepared = {
+        let g = match state.wb.lock() {
+            // D01-ok: 准备开场分析；模型调用不在这把锁里，免得挡住打字
+            Ok(g) => g,
+            Err(_) => return Err(CmdError::internal("lock poisoned")),
+        };
+        let wb = g
+            .as_ref()
+            .ok_or_else(|| CmdError::internal("no project open"))?;
+        wb.prepare_opening_intake().map_err(cmd_err)?
+    };
+    match prepared {
+        IntakePrepared::Finished(_) => Ok(()),
+        IntakePrepared::Call { request, provider } => {
+            let resp = match provider.complete(&request) {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let g = match state.wb.lock() {
+                        // D01-ok: 模型失败，把开场分析收回 pending
+                        Ok(g) => g,
+                        Err(_) => return Err(CmdError::internal("lock poisoned")),
+                    };
+                    if let Some(wb) = g.as_ref() {
+                        let _ = wb.abort_opening_intake();
+                    }
+                    return Err(cmd_err(e));
+                }
+            };
+            let text = hexagon_core::intake::response_text(&resp);
+            let g = match state.wb.lock() {
+                // D01-ok: 开场分析写入时间线
+                Ok(g) => g,
+                Err(_) => return Err(CmdError::internal("lock poisoned")),
+            };
+            let wb = g
+                .as_ref()
+                .ok_or_else(|| CmdError::internal("no project open"))?;
+            match wb.commit_opening_intake(&text) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    let _ = wb.abort_opening_intake();
+                    Err(cmd_err(e))
+                }
+            }
+        }
+    }
+}
+
+/// 负责人点头后才把开场草案写成 AGENTS.md。L4 不走这里。
+#[tauri::command]
+fn confirm_intake_brief(state: tauri::State<AppState>) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.confirm_intake_brief())
+}
+
+/// 还有没有等人点头的草案。读控制连接，不进工作台锁。
+#[tauri::command]
+fn intake_draft_pending(state: tauri::State<AppState>) -> Result<bool, CmdError> {
+    with_conn(&state, |db, _| -> Result<bool, hexagon_core::db::DbError> {
+        let draft: Option<String> = db.conn().query_row(
+            "SELECT intake_draft FROM projects WHERE id=?1",
+            [PROJECT_ID],
+            |r| r.get(0),
+        )?;
+        Ok(draft.is_some_and(|s| !s.trim().is_empty()))
+    })
 }
 
 #[tauri::command]
@@ -1565,6 +1636,9 @@ pub fn run() {
             agents_md_draft,
             optimize_agents_md,
             create_project,
+            run_opening_intake,
+            confirm_intake_brief,
+            intake_draft_pending,
             project_open,
             project_info,
             dispatch,

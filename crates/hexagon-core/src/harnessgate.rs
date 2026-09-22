@@ -28,7 +28,8 @@ pub enum HarnessAction {
     McpGrant,
     /// 自然语言安装确认。落点是项目技能目录或项目 MCP 清单。
     NlInstall,
-    /// 开场分析附的项目说明草案。票 17 才落盘，本票任何档都不自动写。
+    /// 开场分析附的项目说明草案。票 17 只在负责人点头后落盘；
+    /// 任何档，包括 L4，都不从这里自动写。
     IntakeBrief,
     RemotePublish,
     FinalAcceptance,

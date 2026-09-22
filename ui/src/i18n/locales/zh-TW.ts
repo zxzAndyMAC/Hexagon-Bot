@@ -589,6 +589,10 @@ export default {
     done: '確定', empty: '無符合項目', count: '已選 {{n}} 項',
     title_skills: '選擇技能', title_mcp: '選擇 MCP 服務',
   },
+  intake: {
+    confirm: '寫入專案說明',
+    confirmHint: '開場分析附了一份草案。點頭之前不會落盤，自治 L4 也不會自動寫上。',
+  },
   keys: {
     palette: '命令面板',
     rail: '折疊/展開右欄',
@@ -607,8 +611,11 @@ export default {
     treeNewFolder: '新增目錄',
     treeRefresh: '重新整理專案樹',
     saveFile: '儲存檔案',
+    confirmIntake: '確認開場草案',
   },
   errors: {
+    no_intake_draft: '沒有待確認的開場草案',
+    intake_brief_exists: '專案說明已經存在，不覆蓋',
     actionFailed: '操作失敗——{{detail}}',
     internal: '內部錯誤——請重試或重啟應用',
     sqlite: '資料庫錯誤——專案狀態可能正忙，稍候重試',

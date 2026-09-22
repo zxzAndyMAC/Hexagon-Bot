@@ -148,6 +148,12 @@ pub enum ApiError {
     /// 封闭选择的模型调用失败（不是聊天回合的 Turn 错）。
     #[error("decision model: {0}")]
     Decision(String),
+    /// 开场草案还没产生，或已经写过。点头没有对象。
+    #[error("no opening draft to confirm")]
+    NoIntakeDraft,
+    /// 仓库里已经有项目说明。开场分析只引用，确认也不覆盖。
+    #[error("project instructions already exist")]
+    IntakeBriefExists,
 }
 
 /// 下一手派完之后的结果。
@@ -179,6 +185,27 @@ pub enum UnnamedRoute {
     Noted,
 }
 
+/// 开场分析跑完（或决定不跑）之后，门面外能看见的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntakeRun {
+    /// 空目录、已经分析过、或另一次调用正在跑。没叫模型。
+    Skipped,
+    /// 没有接话人。时间线上是工作台的说明，作者不是角色。
+    Noted,
+    /// 接话人把分析写进了时间线。`draft` = 磁盘上还没有项目说明。
+    Posted { role: String, draft: bool },
+}
+
+/// `prepare` 的结果。`Call` 的模型调用必须在工作台锁外面做，
+/// 否则负责人打字要等模型返回。
+pub enum IntakePrepared {
+    Finished(IntakeRun),
+    Call {
+        request: crate::provider::ChatRequest,
+        provider: Arc<dyn ModelProvider>,
+    },
+}
+
 /// 工作台实例：一个打开的项目。
 pub struct Workbench {
     pub db: Db,
@@ -201,6 +228,9 @@ pub struct Workbench {
     /// 终端会话表（agent-senses 票 05）：ctx_for 注入共享表；
     /// Drop 时 kill_all——项目关闭/切换不留 sh 孤儿。
     sessions: crate::sessions::SessionTable,
+    /// 开场分析已经领走、还没落时间线的接话人。模型调用在壳层的锁外面，
+    /// 所以接话人不能只放在栈上。
+    intake_speaker: Mutex<Option<(String, String)>>,
 }
 
 impl Drop for Workbench {
@@ -262,6 +292,7 @@ impl Workbench {
             delta_hook: Mutex::new(None),
             mcp_host,
             sessions: Default::default(),
+            intake_speaker: Mutex::new(None),
         })
     }
 
@@ -335,6 +366,7 @@ impl Workbench {
             delta_hook: Mutex::new(None),
             mcp_host,
             sessions: Default::default(),
+            intake_speaker: Mutex::new(None),
         })
     }
 
@@ -1321,6 +1353,275 @@ impl Workbench {
             .collect::<Vec<_>>()
             .join("\n");
         Ok(text)
+    }
+
+    /// 现成仓库第一次进入工作台后的只读开场分析（票 17 / ADR 0067）。
+    ///
+    /// 空目录、已经跑过、上次崩溃留在 running，都直接跳过，不叫模型。
+    /// 有项目经理就由项目经理写；卸掉时用票 09 的接话人。没有接话人时
+    /// 工作台自己说明，不伪造角色发言，也不叫模型。
+    ///
+    /// 不拨阶段指针，不改 `agents.status`，不给工具，所以不能改业务文件，
+    /// 也不能远程发布。草案只进 `intake_draft`，不写 `AGENTS.md`。
+    /// L4 不在这条路上自动确认——确认是 [`Self::confirm_intake_brief`]。
+    pub fn run_opening_intake(&self) -> Result<IntakeRun, ApiError> {
+        match self.prepare_opening_intake()? {
+            IntakePrepared::Finished(run) => Ok(run),
+            IntakePrepared::Call { request, provider } => {
+                let resp = match provider.complete(&request) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        let _ = self.abort_opening_intake();
+                        return Err(ApiError::Turn(e.into()));
+                    }
+                };
+                match self.commit_opening_intake(&crate::intake::response_text(&resp)) {
+                    Ok(run) => Ok(run),
+                    Err(e) => {
+                        let _ = self.abort_opening_intake();
+                        Err(e)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 领走一次 pending 分析。模型调用由调用方在锁外完成，再 [`Self::commit_opening_intake`]。
+    pub fn prepare_opening_intake(&self) -> Result<IntakePrepared, ApiError> {
+        let status = self.intake_status()?;
+        if status != crate::intake::STATUS_PENDING {
+            return Ok(IntakePrepared::Finished(IntakeRun::Skipped));
+        }
+        let roster = self.roster()?;
+        let speaker = if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
+            Some(crate::pm_route::PM_ROLE.to_string())
+        } else {
+            // 票 09 的接话人。没有进行中的阶段就没有「当前阶段第一位」，
+            // 这里不改用流程包第 0 阶段顶上——那会跟票 09 分叉，说出一个
+            // 当时并不会接话的角色。
+            self.handoff_role(&roster)?
+        };
+        let Some(role) = speaker else {
+            let claimed = self.claim_intake(crate::intake::STATUS_DONE)?;
+            if !claimed {
+                return Ok(IntakePrepared::Finished(IntakeRun::Skipped));
+            }
+            if let Err(e) = self.write_intake_note() {
+                // 说明没写上就不要记成做完，否则这次开场分析再也补不回来。
+                let _ = self.db.conn().execute(
+                    "UPDATE projects SET opening_intake=?1 WHERE id=?2 AND opening_intake=?3",
+                    rusqlite::params![
+                        crate::intake::STATUS_PENDING,
+                        self.project_id,
+                        crate::intake::STATUS_DONE,
+                    ],
+                );
+                return Err(e);
+            }
+            return Ok(IntakePrepared::Finished(IntakeRun::Noted));
+        };
+        let agent_id = self.agent_by_role(&role)?;
+        let slot = self.speaker_chat_slot(&agent_id)?;
+        let Some(provider) = crate::provider_config::resolve_slot(&self.providers, &slot).cloned()
+        else {
+            return Err(ApiError::NoProvider(slot));
+        };
+        // 决策槽只做封闭选择（票 08）。开场分析是读仓库后的说明，走主对话槽。
+        // 被否决：没配主对话槽就改用 decision_slot——那会把「派给谁」的模型
+        // 拿来写项目说明。
+        let resolved = if self.providers.contains_key(&slot) {
+            slot.clone()
+        } else {
+            "default".to_string()
+        };
+        let name = self.project_name()?;
+        let cmds = crate::intake::read_commands(&self.repo_root);
+        let req = crate::provider::ChatRequest {
+            model_slot: resolved,
+            messages: vec![
+                crate::provider::Message {
+                    role: crate::provider::Role::System,
+                    content: vec![crate::provider::ContentBlock::Text {
+                        text: crate::intake::INTAKE_PROMPT.to_string(),
+                    }],
+                },
+                crate::provider::Message {
+                    role: crate::provider::Role::User,
+                    content: vec![crate::provider::ContentBlock::Text {
+                        text: crate::intake::user_prompt(&self.repo_root, &name, &cmds),
+                    }],
+                },
+            ],
+            tools: vec![],
+        };
+        if !self.claim_intake(crate::intake::STATUS_RUNNING)? {
+            return Ok(IntakePrepared::Finished(IntakeRun::Skipped));
+        }
+        *self.intake_speaker.lock().unwrap() = Some((role, agent_id));
+        Ok(IntakePrepared::Call {
+            request: req,
+            provider,
+        })
+    }
+
+    /// 把模型回复写成时间线上的分析。命令段以文件为准，不采用模型编的命令。
+    /// 没有项目说明时把草案存进库，不写磁盘。
+    pub fn commit_opening_intake(&self, model_text: &str) -> Result<IntakeRun, ApiError> {
+        if self.intake_status()? != crate::intake::STATUS_RUNNING {
+            *self.intake_speaker.lock().unwrap() = None;
+            return Ok(IntakeRun::Skipped);
+        }
+        // 先放下锁再 abort。let-else 会把锁的临时守卫留到整句结束，
+        // abort 再锁同一把就是自死锁。
+        let speaker = self.intake_speaker.lock().unwrap().clone();
+        let Some((role, agent_id)) = speaker else {
+            let _ = self.abort_opening_intake();
+            return Err(ApiError::BadInput("opening intake has no speaker".into()));
+        };
+        let cmds = crate::intake::read_commands(&self.repo_root);
+        let scrubbed = crate::intake::scrub_model_text(model_text, &cmds.allowed());
+        let cited = crate::intake::instruction_file(&self.repo_root).map(str::to_string);
+        let draft = if cited.is_none() {
+            Some(crate::intake::draft_body(
+                &self.project_name()?,
+                &crate::intake::about_line(&scrubbed),
+                &cmds,
+                &crate::intake::layout_entries(&self.repo_root),
+            ))
+        } else {
+            None
+        };
+        let body =
+            crate::intake::compose_timeline(&scrubbed, &cmds, cited.as_deref(), draft.as_deref());
+        let run = self.active_run()?;
+        self.db.append_message(
+            &self.project_id,
+            &agent_id,
+            &body,
+            &[],
+            &[],
+            Some(&agent_id),
+            run.as_ref().map(|r| r.id.as_str()),
+        )?;
+        self.db.conn().execute(
+            "UPDATE projects SET opening_intake=?1, intake_draft=?2 WHERE id=?3",
+            rusqlite::params![
+                crate::intake::STATUS_DONE,
+                draft.as_deref(),
+                self.project_id,
+            ],
+        )?;
+        *self.intake_speaker.lock().unwrap() = None;
+        Ok(IntakeRun::Posted {
+            role,
+            draft: draft.is_some(),
+        })
+    }
+
+    /// 模型调用失败时把 running 收回 pending，同一次打开还可以再试。
+    /// 进程崩溃来不及收回的，留在 running，再次打开不重跑。
+    pub fn abort_opening_intake(&self) -> Result<(), ApiError> {
+        self.db.conn().execute(
+            "UPDATE projects SET opening_intake=?1 WHERE id=?2 AND opening_intake=?3",
+            rusqlite::params![
+                crate::intake::STATUS_PENDING,
+                self.project_id,
+                crate::intake::STATUS_RUNNING,
+            ],
+        )?;
+        *self.intake_speaker.lock().unwrap() = None;
+        Ok(())
+    }
+
+    /// 负责人点头：把草案写成 `AGENTS.md`。
+    ///
+    /// 不读自治档来决定写不写。L4 自动通过的是提案盖章和项目内安装（票 04），
+    /// 不是这份草案。`run_opening_intake` 不调用这里。
+    pub fn confirm_intake_brief(&self) -> Result<(), ApiError> {
+        let draft: Option<String> = self.db.conn().query_row(
+            "SELECT intake_draft FROM projects WHERE id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?;
+        let Some(draft) = draft.filter(|s| !s.trim().is_empty()) else {
+            return Err(ApiError::NoIntakeDraft);
+        };
+        if crate::intake::instruction_file(&self.repo_root).is_some() {
+            return Err(ApiError::IntakeBriefExists);
+        }
+        match crate::setup::write_agents_md(&self.repo_root, &draft) {
+            Ok(()) => {}
+            Err(crate::setup::SetupError::AgentsMdExists(_)) => {
+                return Err(ApiError::IntakeBriefExists);
+            }
+            Err(e) => return Err(ApiError::BadInput(e.to_string())),
+        }
+        self.db.conn().execute(
+            "UPDATE projects SET intake_draft=NULL WHERE id=?1",
+            [&self.project_id],
+        )?;
+        Ok(())
+    }
+
+    /// 还有没有等人点头的草案。读侧用，不跑分析。
+    pub fn intake_draft_pending(&self) -> Result<bool, ApiError> {
+        let draft: Option<String> = self.db.conn().query_row(
+            "SELECT intake_draft FROM projects WHERE id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?;
+        Ok(draft.is_some_and(|s| !s.trim().is_empty()))
+    }
+
+    fn intake_status(&self) -> Result<String, ApiError> {
+        Ok(self.db.conn().query_row(
+            "SELECT opening_intake FROM projects WHERE id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// pending → `to`。返回是否领到。并发的第二次领不到。
+    fn claim_intake(&self, to: &str) -> Result<bool, ApiError> {
+        let n = self.db.conn().execute(
+            "UPDATE projects SET opening_intake=?1 WHERE id=?2 AND opening_intake=?3",
+            rusqlite::params![to, self.project_id, crate::intake::STATUS_PENDING],
+        )?;
+        Ok(n == 1)
+    }
+
+    fn write_intake_note(&self) -> Result<(), ApiError> {
+        let run = self.active_run()?;
+        self.db.append_message(
+            &self.project_id,
+            crate::pm_route::WORKBENCH_AUTHOR,
+            crate::intake::NO_INTAKE_SPEAKER_NOTE,
+            &[],
+            &[],
+            None,
+            run.as_ref().map(|r| r.id.as_str()),
+        )?;
+        Ok(())
+    }
+
+    fn project_name(&self) -> Result<String, ApiError> {
+        Ok(self.db.conn().query_row(
+            "SELECT name FROM projects WHERE id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    fn speaker_chat_slot(&self, agent_id: &str) -> Result<String, ApiError> {
+        let slot: Option<String> = self.db.conn().query_row(
+            "SELECT model_slot FROM agents WHERE id=?1",
+            [agent_id],
+            |r| r.get(0),
+        )?;
+        Ok(slot
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "default".into()))
     }
 
     /// 显式覆盖检验失败（票 40）：留痕 check_overridden（谁/哪些命令/理由）。

@@ -2894,3 +2894,531 @@ fn assert_workbench_note(wb: &Workbench) {
     );
     assert!(note.event.kind == EventKind::AgentMessage);
 }
+
+// ---------- 票 17：现成仓库只读开场分析 ----------
+
+fn intake_store() -> crate::credentials::MemoryStore {
+    use crate::credentials::CredentialStore;
+    let s = crate::credentials::MemoryStore::default();
+    s.set("provider/test-prov", "sk-test").unwrap();
+    s
+}
+
+fn intake_doc() -> crate::provider_config::ProviderDoc {
+    let mut doc = crate::provider_config::ProviderDoc::default();
+    doc.providers.push(crate::provider_config::ProviderDef {
+        id: "test-prov".into(),
+        name: "Test".into(),
+        kind: crate::provider::ProviderKind::OpenAi,
+        base_url: "http://localhost".into(),
+        models: vec![],
+        enabled: true,
+    });
+    doc.slots.insert(
+        "chat".into(),
+        crate::provider_config::SlotBinding {
+            provider_id: "test-prov".into(),
+            model: "m".into(),
+        },
+    );
+    doc
+}
+
+fn intake_pack(roles: &[&str]) -> PackDef {
+    serde_json::from_value(json!({
+        "name": "规格驱动",
+        "version": 1,
+        "stages": [{
+            "name": "规格",
+            "roles": roles,
+            "due": ["规格"],
+            "stamp_point": false
+        }]
+    }))
+    .unwrap()
+}
+
+fn seed_nonempty(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/lib.rs"), "fn answer() {}\n").unwrap();
+    std::fs::write(dir.join("README.md"), "demo readme\n").unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"name":"demo","scripts":{"test":"vitest"}}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join(".env"), "SUPERSECRETKEY=abc\n").unwrap();
+}
+
+fn business_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn walk(
+        dir: &std::path::Path,
+        root: &std::path::Path,
+        out: &mut std::collections::BTreeMap<String, Vec<u8>>,
+    ) {
+        for ent in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = ent.file_name();
+            let name = name.to_string_lossy();
+            if name == ".git" || name == ".hexagon" {
+                continue;
+            }
+            let path = ent.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.insert(rel, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+fn open_made(
+    dir: &std::path::Path,
+    roles: &[&str],
+    pack: Option<PackDef>,
+    fast: Option<&str>,
+) -> Workbench {
+    let roles: Vec<String> = roles.iter().map(|s| (*s).to_string()).collect();
+    crate::setup::create_project(
+        dir,
+        "Demo",
+        &roles,
+        &[],
+        pack.as_ref(),
+        fast,
+        true,
+        &intake_store(),
+        &intake_doc(),
+        None,
+    )
+    .unwrap()
+}
+
+fn req_system_user(req: &crate::provider::ChatRequest) -> (String, String) {
+    let text = |i: usize| {
+        req.messages[i]
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                crate::provider::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>()
+    };
+    (text(0), text(1))
+}
+
+fn analysis_body(wb: &Workbench) -> (String, String) {
+    let tl = timeline(wb, None, 80).unwrap();
+    let msg = tl
+        .iter()
+        .filter_map(|i| i.message.as_ref())
+        .find(|m| m.body.contains("## Commands"))
+        .expect("时间线上要有开场分析");
+    (msg.author.clone(), msg.body.clone())
+}
+
+#[test]
+fn nonempty_repo_gets_one_readonly_intake_and_l4_does_not_write_the_draft() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_nonempty(dir.path());
+    let mut wb = open_made(
+        dir.path(),
+        &["项目经理", "产品策划"],
+        Some(intake_pack(&["产品策划"])),
+        None,
+    );
+    wb.open_stage(0).unwrap();
+    assert_eq!(wb.autonomy().unwrap(), "L4");
+    let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response(
+        "这是一个前端小项目。\n构建命令是 npm run build。\n测试用 npm run test。\n",
+    )]));
+    let decision = std::sync::Arc::new(ScriptedProvider::new(vec![text_response("先不派活")]));
+    wb.register_provider("chat", chat.clone());
+    wb.register_provider("decision", decision.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    let before = business_snapshot(dir.path());
+    assert!(!dir.path().join("AGENTS.md").exists());
+
+    let run = wb.run_opening_intake().unwrap();
+    assert_eq!(
+        run,
+        IntakeRun::Posted {
+            role: "项目经理".into(),
+            draft: true,
+        }
+    );
+    assert!(decision.recorded().is_empty(), "开场分析不走决策槽");
+    assert_eq!(chat.recorded().len(), 1);
+    let call = &chat.recorded()[0];
+    assert!(call.tools.is_empty(), "没有工具，不能改文件也不能远程发布");
+    assert_eq!(call.model_slot, "chat");
+    let (system, user) = req_system_user(call);
+    assert_eq!(system, crate::intake::INTAKE_PROMPT);
+    assert!(user.contains("vitest"));
+    assert!(!user.contains("SUPERSECRETKEY"));
+    assert!(user.contains("- Test: npm run test"));
+    assert!(user.contains("- Build: 未知"));
+
+    let (author, body) = analysis_body(&wb);
+    assert_eq!(author, wb.agent_by_role("项目经理").unwrap());
+    assert!(body.contains("这是一个前端小项目"));
+    assert!(body.contains("- Test: npm run test"));
+    assert!(body.contains("- Build: 未知"));
+    assert!(body.contains("- Check: 未知"));
+    assert!(body.contains("## 草案"));
+    assert!(
+        !body.contains("npm run build"),
+        "文件里没有的命令不能留在分析里"
+    );
+    assert!(!body.contains("SUPERSECRETKEY"));
+    assert_eq!(before, business_snapshot(dir.path()));
+    assert!(
+        !dir.path().join("AGENTS.md").exists(),
+        "未点头之前磁盘上没有草案"
+    );
+    assert!(wb.intake_draft_pending().unwrap());
+    assert!(pending_questions(&wb).unwrap().is_empty(), "分析不弹待决卡");
+    assert!(events(
+        &wb,
+        Some(&[
+            EventKind::TurnStarted,
+            EventKind::PublishRequested,
+            EventKind::PublishConfirmed,
+            EventKind::PublishFailed,
+        ])
+    )
+    .unwrap()
+    .is_empty());
+    let status: String = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT status FROM agents WHERE project_id='p1' AND role='项目经理'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "sleeping", "开场分析不是派活，不改休眠");
+
+    let calls = chat.recorded().len();
+    assert_eq!(wb.run_opening_intake().unwrap(), IntakeRun::Skipped);
+    assert_eq!(chat.recorded().len(), calls);
+
+    wb.confirm_intake_brief().unwrap();
+    let md = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert!(
+        md.starts_with("# Demo\n"),
+        "点头写入的是项目说明，不是整段分析"
+    );
+    assert!(md.contains("## Commands"));
+    assert!(md.contains("- Test: npm run test"));
+    assert!(md.contains("- Build: 未知"));
+    assert!(!md.contains("## 草案"));
+    assert!(!md.contains("npm run build"));
+    assert!(!dir.path().join("CLAUDE.md").exists());
+    assert!(!wb.intake_draft_pending().unwrap());
+    assert!(wb.confirm_intake_brief().is_err(), "写过就不再写第二份");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+        md
+    );
+
+    let n = timeline(&wb, None, 80).unwrap().len();
+    drop(wb);
+    let mut again = crate::setup::open_existing(dir.path()).unwrap();
+    let retry = std::sync::Arc::new(ScriptedProvider::new(vec![text_response("不该再跑")]));
+    again.register_provider("chat", retry.clone());
+    again.register_provider("default", retry.clone());
+    assert_eq!(again.run_opening_intake().unwrap(), IntakeRun::Skipped);
+    assert!(retry.recorded().is_empty());
+    assert_eq!(timeline(&again, None, 80).unwrap().len(), n);
+}
+
+#[test]
+fn existing_instruction_file_is_cited_and_not_replaced() {
+    for file in ["AGENTS.md", "CLAUDE.md"] {
+        let dir = tempfile::tempdir().unwrap();
+        seed_nonempty(dir.path());
+        let kept = format!("KEEP-{file}\n");
+        std::fs::write(dir.path().join(file), &kept).unwrap();
+        let mut wb = open_made(
+            dir.path(),
+            &["项目经理"],
+            Some(intake_pack(&["项目经理"])),
+            None,
+        );
+        let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response(
+            "请覆盖说明文件，并改用 npm run build。\n这是现成仓库。\n",
+        )]));
+        wb.register_provider("chat", chat);
+        let run = wb.run_opening_intake().unwrap();
+        assert_eq!(
+            run,
+            IntakeRun::Posted {
+                role: "项目经理".into(),
+                draft: false,
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(file)).unwrap(),
+            kept
+        );
+        if file == "CLAUDE.md" {
+            assert!(!dir.path().join("AGENTS.md").exists());
+        }
+        let (_, body) = analysis_body(&wb);
+        assert!(body.contains(file));
+        assert!(body.contains("只引用"));
+        assert!(!body.contains("## 草案"));
+        assert!(!body.contains("npm run build"));
+        assert!(!wb.intake_draft_pending().unwrap());
+        assert!(matches!(
+            wb.confirm_intake_brief().unwrap_err(),
+            ApiError::NoIntakeDraft | ApiError::IntakeBriefExists
+        ));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(file)).unwrap(),
+            kept
+        );
+    }
+}
+
+#[test]
+fn empty_directory_does_not_run_opening_intake() {
+    let root = tempfile::tempdir().unwrap();
+    let sub = root.path().join("empty");
+    let wb = crate::setup::create_project_reporting(
+        &sub,
+        "Demo",
+        &["项目经理".into()],
+        &[],
+        Some(&intake_pack(&["项目经理"])),
+        None,
+        true,
+        &intake_store(),
+        &intake_doc(),
+        None,
+        Some("# Demo\n\n一句话留下的说明\n"),
+        |_| {},
+    )
+    .unwrap();
+    let mut wb = wb;
+    let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response("不该分析")]));
+    wb.register_provider("chat", chat.clone());
+    wb.register_provider("default", chat.clone());
+    assert_eq!(wb.run_opening_intake().unwrap(), IntakeRun::Skipped);
+    assert!(chat.recorded().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(sub.join("AGENTS.md")).unwrap(),
+        "# Demo\n\n一句话留下的说明\n"
+    );
+    assert!(timeline(&wb, None, 40).unwrap().iter().all(|i| i
+        .message
+        .as_ref()
+        .map(|m| !m.body.contains("## Commands"))
+        .unwrap_or(true)));
+}
+
+#[test]
+fn without_pm_the_ticket09_speaker_does_the_intake() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_nonempty(dir.path());
+    let mut wb = open_made(dir.path(), &["后端", "产品策划"], None, Some("产品策划"));
+    let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response(
+        "通道看过仓库。\n",
+    )]));
+    wb.register_provider("chat", chat);
+    let run = wb.run_opening_intake().unwrap();
+    assert_eq!(
+        run,
+        IntakeRun::Posted {
+            role: "产品策划".into(),
+            draft: true,
+        }
+    );
+    let (author, _) = analysis_body(&wb);
+    assert_eq!(author, wb.agent_by_role("产品策划").unwrap());
+    assert_ne!(author, wb.agent_by_role("后端").unwrap());
+
+    let staged = tempfile::tempdir().unwrap();
+    seed_nonempty(staged.path());
+    let mut wb = open_made(
+        staged.path(),
+        &["后端", "产品策划"],
+        Some(intake_pack(&["产品策划"])),
+        None,
+    );
+    wb.open_stage(0).unwrap();
+    let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response(
+        "阶段第一位看过。\n",
+    )]));
+    wb.register_provider("chat", chat);
+    let run = wb.run_opening_intake().unwrap();
+    assert_eq!(
+        run,
+        IntakeRun::Posted {
+            role: "产品策划".into(),
+            draft: true,
+        }
+    );
+    assert_eq!(analysis_body(&wb).0, wb.agent_by_role("产品策划").unwrap());
+}
+
+#[test]
+fn without_a_speaker_the_workbench_notes_and_does_not_invent_a_role() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_nonempty(dir.path());
+    let mut wb = open_made(
+        dir.path(),
+        &["后端"],
+        Some(intake_pack(&["产品策划"])),
+        None,
+    );
+    let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response("不该被叫到")]));
+    wb.register_provider("chat", chat.clone());
+    wb.register_provider("default", chat.clone());
+    assert_eq!(wb.run_opening_intake().unwrap(), IntakeRun::Noted);
+    assert!(chat.recorded().is_empty());
+    assert!(!dir.path().join("AGENTS.md").exists());
+    let ids: Vec<String> = {
+        let mut st = wb
+            .db
+            .conn()
+            .prepare("SELECT id FROM agents WHERE project_id='p1'")
+            .unwrap();
+        st.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let tl = timeline(&wb, None, 40).unwrap();
+    let note = tl
+        .iter()
+        .find(|i| {
+            i.message.as_ref().map(|m| m.author.as_str()) == Some(crate::pm_route::WORKBENCH_AUTHOR)
+        })
+        .expect("工作台说明");
+    assert!(note.event.agent_id.is_none());
+    assert!(!ids
+        .iter()
+        .any(|id| id == &note.message.as_ref().unwrap().author));
+    assert_eq!(
+        note.message.as_ref().unwrap().body,
+        crate::intake::NO_INTAKE_SPEAKER_NOTE
+    );
+    assert_eq!(wb.run_opening_intake().unwrap(), IntakeRun::Skipped);
+    let again = timeline(&wb, None, 40).unwrap();
+    assert_eq!(
+        again
+            .iter()
+            .filter(|i| {
+                i.message.as_ref().map(|m| m.author.as_str())
+                    == Some(crate::pm_route::WORKBENCH_AUTHOR)
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn owner_can_write_while_intake_is_in_the_model_call() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_nonempty(dir.path());
+    let mut wb = open_made(
+        dir.path(),
+        &["项目经理"],
+        Some(intake_pack(&["项目经理"])),
+        None,
+    );
+    let (start_tx, start_rx) = std::sync::mpsc::channel();
+    let (rel_tx, rel_rx) = std::sync::mpsc::channel();
+    let fast = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let provider = std::sync::Arc::new(HoldProvider {
+        inner: ScriptedProvider::new(vec![text_response("看完了，没有改文件。\n")]),
+        started: std::sync::Mutex::new(start_tx),
+        release: std::sync::Mutex::new(rel_rx),
+    });
+    wb.register_provider("chat", provider);
+    let before = business_snapshot(dir.path());
+    let db_path = dir.path().join(".hexagon/state.db");
+    let fast2 = fast.clone();
+    let writer = std::thread::spawn(move || {
+        start_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        let t = std::time::Instant::now();
+        let db = crate::db::Db::open(&db_path).unwrap();
+        db.append_message(
+            crate::PROJECT_ID,
+            "owner",
+            "分析时我还在打字",
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        if t.elapsed() < std::time::Duration::from_secs(1) {
+            fast2.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        rel_tx.send(()).unwrap();
+    });
+    wb.run_opening_intake().unwrap();
+    writer.join().unwrap();
+    assert!(
+        fast.load(std::sync::atomic::Ordering::Relaxed),
+        "分析占着库的话，负责人的消息写不进去"
+    );
+    let tl = timeline(&wb, None, 80).unwrap();
+    let owner_at = tl
+        .iter()
+        .position(|i| {
+            i.message
+                .as_ref()
+                .is_some_and(|m| m.author == "owner" && m.body.contains("还在打字"))
+        })
+        .expect("打字落在时间线上");
+    let intake_at = tl
+        .iter()
+        .position(|i| {
+            i.message
+                .as_ref()
+                .is_some_and(|m| m.body.contains("看完了"))
+        })
+        .expect("分析也在时间线上");
+    assert!(
+        owner_at < intake_at,
+        "打字发生在分析落盘之前，没有被分析挡住"
+    );
+    assert_eq!(before, business_snapshot(dir.path()));
+}
+
+struct HoldProvider {
+    inner: ScriptedProvider,
+    started: std::sync::Mutex<std::sync::mpsc::Sender<()>>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl crate::provider::ModelProvider for HoldProvider {
+    fn complete(
+        &self,
+        req: &crate::provider::ChatRequest,
+    ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+        let _ = self.started.lock().unwrap().send(());
+        let _ = self
+            .release
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(3));
+        self.inner.complete(req)
+    }
+}

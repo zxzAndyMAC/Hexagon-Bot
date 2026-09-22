@@ -180,13 +180,15 @@ interface UiState {
   /// 值守态（票 16 / 方向卡 1）：owner_away/back 的 UI 侧开关。
   /// 手动 chip + 窗口 blur>60s/focus 自动；markBack 后 refreshFast 拉
   /// return_summary 行。失败走 pushToast（票 04 错误出口约定）。
+  /// 票 17：开场分析附的项目说明草案还在等人点头。不是待决弹窗。
+  intakeDraft: boolean
   away: boolean
   markAway: () => Promise<void>
   markBack: () => Promise<void>
   applyDelta: (d: TurnDelta) => void
   refresh: () => Promise<void>
-  /// 快通道（arch-review 票 07）：2s 轮询面 = stages+pending+timeline 增量
-  /// （3 invoke 稳态）。timeline 走 after 游标追加；空时间线=首拉全量。
+  /// 快通道（arch-review 票 07）：2s 轮询面 = stages+pending+timeline 增量，
+  /// 外加开场草案是否还在（票 17，失败不拖垮这一拍）。timeline 走 after 游标追加；空时间线=首拉全量。
   refreshFast: () => Promise<void>
   /// 慢通道：usage/artifacts/team(+avatars)/info，仅失效标签驱动，不轮询。
   /// tags 缺省 = 全切片。
@@ -249,6 +251,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   focusNodeRail: () => set((s) => ({ nodeRailPulse: s.nodeRailPulse + 1 })),
   splitId: null,
   setSplitId: (id) => set({ splitId: id }),
+  intakeDraft: false,
   away: false,
   markAway: async () => {
     const s = useUiStore.getState()
@@ -451,12 +454,15 @@ export const useUiStore = create<UiState>((set, get) => ({
     // 游标=末条 event.id（events 表 append-only、查询 ASC + after 排他）。
     const gen = generation
     const after = useUiStore.getState().timeline.at(-1)?.event.id
+    // 草案查询失败就留着上一次的值。并进 Promise.all 会让一次读失败把时间线也丢掉。
+    const draftP = api.intakeDraftPending().catch(() => useUiStore.getState().intakeDraft)
     try {
       const [stages, pending, items] = await Promise.all([
         api.stageStatus(),
         api.pendingQuestions(),
         api.timeline(after),
       ])
+      const draft = await draftP
       if (gen !== generation) return // 代际守卫：旧项目响应不缝进新状态
       fastFailStreak = 0
       set((s) => {
@@ -489,7 +495,15 @@ export const useUiStore = create<UiState>((set, get) => ({
           thinkings = th
           streamDone = sd
         }
-        return { stages, pending, timeline, streams, thinkings, streamDone }
+        return {
+          stages,
+          pending,
+          timeline,
+          streams,
+          thinkings,
+          streamDone,
+          intakeDraft: draft === true,
+        }
       })
     } catch (e) {
       // 轮询失败吞掉继续——2s 一拍不能因一次抖动终止轮询；

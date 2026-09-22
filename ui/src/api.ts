@@ -325,6 +325,10 @@ export const api = {
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
   optimizeAgentsMd: (name: string, sentence: string) =>
     call<string>('optimize_agents_md', { name, sentence }),
+  /// 票 17：进工作台后的只读开场分析。不挡住输入；空目录和再次打开是空操作。
+  runOpeningIntake: () => call<void>('run_opening_intake'),
+  confirmIntakeBrief: () => call<void>('confirm_intake_brief'),
+  intakeDraftPending: () => call<boolean>('intake_draft_pending'),
   /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
   /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
   /// 票 01：`autonomy` 缺省由核落 L4。非法档位核拒绝且不建项目。
@@ -1045,6 +1049,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return `# ${args?.name ?? 'project'}\n\n## Commands\n` as T
     case 'optimize_agents_md':
       return `# ${args?.name ?? 'project'}\n\n## 做什么\n${args?.sentence ?? ''}\n\n## Commands\n- Build:\n- Test:\n- Check:\n\n## Layout\n- 未知\n\n## Conventions\n-\n` as T
+    case 'run_opening_intake':
+    case 'confirm_intake_brief':
+      return null as T
+    case 'intake_draft_pending':
+      return false as T
     default:
       return null as T
   }

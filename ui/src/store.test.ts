@@ -231,11 +231,14 @@ describe('invalidate 失效标签（arch-review 票 07）', () => {
   beforeEach(() => useUiStore.setState({ timeline: [], stages: [], pending: [], avatarHashes: {}, avatars: {} }))
   afterEach(() => vi.restoreAllMocks())
 
-  it('refreshFast 稳态只打 3 个端点', async () => {
+  it('refreshFast 稳态打时间线三件，另问开场草案还在不在', async () => {
+    // 票 17：草案是否等人点头跟时间线同一拍，但不算慢切片。
+    // 原先这里钉死 3 个端点；多出来的是 intakeDraftPending，慢切片仍然不打。
     const spies = {
       stageStatus: vi.spyOn(api, 'stageStatus'),
       pendingQuestions: vi.spyOn(api, 'pendingQuestions'),
       timeline: vi.spyOn(api, 'timeline'),
+      intakeDraftPending: vi.spyOn(api, 'intakeDraftPending'),
       usage: vi.spyOn(api, 'usage'),
       artifacts: vi.spyOn(api, 'artifacts'),
       team: vi.spyOn(api, 'team'),
@@ -246,6 +249,7 @@ describe('invalidate 失效标签（arch-review 票 07）', () => {
     expect(spies.stageStatus).toHaveBeenCalled()
     expect(spies.pendingQuestions).toHaveBeenCalled()
     expect(spies.timeline).toHaveBeenCalled()
+    expect(spies.intakeDraftPending).toHaveBeenCalled()
     for (const k of ['usage', 'artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
       expect(spies[k], k).not.toHaveBeenCalled()
     }

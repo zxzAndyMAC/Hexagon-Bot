@@ -19,6 +19,7 @@ export type ActionId =
   | 'treeNewFolder'
   | 'treeRefresh'
   | 'saveFile'
+  | 'confirmIntake'
 
 const DEFAULTS: Record<ActionId, string> = {
   approve: 'mod+Enter',
@@ -43,6 +44,8 @@ const DEFAULTS: Record<ActionId, string> = {
   treeNewFolder: 'alt+mod+f',
   treeRefresh: 'alt+mod+r',
   saveFile: 'mod+s',
+  // 票 17：确认开场草案。mod+Enter 已是待决批准，加 shift 才不会误写 AGENTS.md。
+  confirmIntake: 'mod+shift+Enter',
 }
 
 // navigator.platform 已弃用（MDN，ui-audit 票 11）：优先 userAgentData；
@@ -70,6 +73,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'treeNewFolder', labelKey: 'keys.treeNewFolder' },
   { id: 'treeRefresh', labelKey: 'keys.treeRefresh' },
   { id: 'saveFile', labelKey: 'keys.saveFile' },
+  { id: 'confirmIntake', labelKey: 'keys.confirmIntake' },
 ]
 
 export function bindingFor(a: ActionId): string {

@@ -589,6 +589,10 @@ export default {
     done: 'Done', empty: 'No matches', count: '{{n}} selected',
     title_skills: 'Select skills', title_mcp: 'Select MCP services',
   },
+  intake: {
+    confirm: 'Write project instructions',
+    confirmHint: 'The opening analysis attached a draft. It stays off disk until you confirm, including at L4.',
+  },
   keys: {
     palette: 'Command palette',
     rail: 'Toggle side panel',
@@ -607,8 +611,11 @@ export default {
     treeNewFolder: 'New folder',
     treeRefresh: 'Refresh project tree',
     saveFile: 'Save file',
+    confirmIntake: 'Confirm opening draft',
   },
   errors: {
+    no_intake_draft: 'No opening draft to confirm',
+    intake_brief_exists: 'Project instructions already exist — not overwritten',
     actionFailed: 'Action failed — {{detail}}',
     internal: 'Internal error — please retry or restart the app',
     sqlite: 'Database error — project state may be busy; retry in a moment',

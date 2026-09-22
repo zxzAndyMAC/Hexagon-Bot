@@ -589,6 +589,10 @@ export default {
     done: '确定', empty: '无匹配项', count: '已选 {{n}} 项',
     title_skills: '选择技能', title_mcp: '选择 MCP 服务',
   },
+  intake: {
+    confirm: '写入项目说明',
+    confirmHint: '开场分析附了一份草案。点头之前不会落盘，自治 L4 也不会自动写上。',
+  },
   keys: {
     palette: '命令面板',
     rail: '折叠/展开右栏',
@@ -607,8 +611,11 @@ export default {
     treeNewFolder: '新建目录',
     treeRefresh: '刷新项目树',
     saveFile: '保存文件',
+    confirmIntake: '确认开场草案',
   },
   errors: {
+    no_intake_draft: '没有待确认的开场草案',
+    intake_brief_exists: '项目说明已经存在，不覆盖',
     actionFailed: '操作失败——{{detail}}',
     internal: '内部错误——请重试或重启应用',
     sqlite: '数据库错误——项目状态可能正忙，稍候重试',

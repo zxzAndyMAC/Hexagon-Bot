@@ -16,7 +16,9 @@ import { Composer } from './components/Composer'
 import { SettingsPage } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
 import { CommandPalette } from './components/CommandPalette'
-import { api, onTurnDelta } from './api'
+import { api, errText, onTurnDelta } from './api'
+import { IntakeBar } from './components/IntakeBar'
+import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
 import { PendingDialog } from './components/PendingCards'
 import { Icon } from './components/Icon'
@@ -43,6 +45,18 @@ export default function App() {
   useEffect(() => {
     useUiStore.getState().setModalScope(paletteOpen ? 'palette' : settingsOpen ? 'settings' : 'workbench')
   }, [settingsOpen, paletteOpen])
+
+  // 票 17：工作台已经在了再分析。不等这条命令，输入框不被它挡住。
+  useEffect(() => {
+    if (projectOpen !== true) return
+    let cancel = false
+    void api.runOpeningIntake().then(() => {
+      if (!cancel) void useUiStore.getState().refreshFast()
+    }).catch((e) => {
+      if (!cancel) useUiStore.getState().pushToast(errText(e), 'err')
+    })
+    return () => { cancel = true }
+  }, [projectOpen])
 
   useEffect(() => {
     if (projectOpen !== true) return
@@ -136,6 +150,11 @@ export default function App() {
         if (matches(e, bindingFor('treeNewFile'))) { e.preventDefault(); useUiStore.getState().requestFileTree('new-file'); return }
         if (matches(e, bindingFor('treeNewFolder'))) { e.preventDefault(); useUiStore.getState().requestFileTree('new-folder'); return }
         if (matches(e, bindingFor('treeRefresh'))) { e.preventDefault(); useUiStore.getState().requestFileTree('refresh'); return }
+        if (matches(e, bindingFor('confirmIntake')) && useUiStore.getState().intakeDraft) {
+          e.preventDefault()
+          void confirmIntakeDraft()
+          return
+        }
       }
       void onKey(e)
     }
@@ -186,6 +205,7 @@ export default function App() {
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <TabBar />
           <CenterPanes />
+          <IntakeBar />
           <Composer />
         </div>
         <SidePanel />

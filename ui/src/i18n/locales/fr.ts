@@ -589,6 +589,10 @@ export default {
     done: 'OK', empty: 'Aucun résultat', count: '{{n}} sélectionné(s)',
     title_skills: 'Choisir des compétences', title_mcp: 'Choisir des services MCP',
   },
+  intake: {
+    confirm: 'Écrire les instructions du projet',
+    confirmHint: 'L’analyse d’ouverture a joint un brouillon. Il n’est pas écrit tant que vous ne confirmez pas, même en L4.',
+  },
   keys: {
     palette: 'Palette de commandes',
     rail: 'Basculer le panneau latéral',
@@ -607,8 +611,11 @@ export default {
     treeNewFolder: 'Nouveau dossier',
     treeRefresh: 'Actualiser l’arbre du projet',
     saveFile: 'Enregistrer le fichier',
+    confirmIntake: 'Confirmer le brouillon d’ouverture',
   },
   errors: {
+    no_intake_draft: 'Aucun brouillon d’ouverture à confirmer',
+    intake_brief_exists: 'Les instructions du projet existent déjà — pas d’écrasement',
     actionFailed: 'L’action a échoué — {{detail}}',
     internal: 'Erreur interne — réessayez ou redémarrez l’app',
     sqlite: 'Erreur de base de données — l’état est peut-être occupé ; réessayez dans un instant',
