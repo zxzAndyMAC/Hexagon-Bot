@@ -74,6 +74,7 @@ export type KeyOutcome =
   | 'blocked-scope'
   | 'repeat'
   | 'blocked-publish'
+  | 'blocked-final'
   | 'approved'
   | 'rejected'
 
@@ -97,6 +98,11 @@ export async function handlePendingKey(
     // L3 对外不可逆：发布不走键盘批准（ADR 0056 确认分级）
     useUiStore.getState().pushToast(i18n.t('decisions.publishNeedsClick'))
     return 'blocked-publish'
+  }
+  // 票 02：最终验收退回必须写阶段和修改意见，键盘驳回填不了这两项。
+  if (isReject && q.kind === 'stamp' && !q.payload.proposal_id && q.payload.final_acceptance === true) {
+    useUiStore.getState().pushToast(i18n.t('decisions.finalNeedsForm'))
+    return 'blocked-final'
   }
   adjudicating = true
   try {

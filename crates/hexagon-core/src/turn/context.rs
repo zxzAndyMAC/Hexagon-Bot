@@ -157,9 +157,9 @@ pub(super) fn tool_record_may_drop(block: &ContentBlock) -> bool {
         ContentBlock::ToolUse { .. }
         | ContentBlock::ToolResult { .. }
         | ContentBlock::Opaque { .. } => true,
-        ContentBlock::Text { .. }
-        | ContentBlock::Image { .. }
-        | ContentBlock::Thinking { .. } => false,
+        ContentBlock::Text { .. } | ContentBlock::Image { .. } | ContentBlock::Thinking { .. } => {
+            false
+        }
     }
 }
 

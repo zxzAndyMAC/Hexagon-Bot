@@ -285,7 +285,8 @@ impl Workbench {
         Ok(crate::autonomy::level(&self.db, &self.project_id)?)
     }
 
-    /// 改自治档。非法档拒绝，已存档不动。L3/L4 只改存储；执行面见 `execution_rank`。
+    /// 改自治档。非法档拒绝，已存档不动。
+    /// 盖章自动通过读存储档（票 02）。安全网、权限、提案、安装仍看 `execution_rank`。
     pub fn set_autonomy(&self, level: &str) -> Result<(), ApiError> {
         crate::autonomy::set_level(&self.db, &self.project_id, level)?;
         Ok(())
@@ -347,13 +348,34 @@ impl Workbench {
         Ok(AdjudicateOutcome::Flag(v))
     }
 
-    /// 设置 agent 头像：UI 传 data URL（data:image/png;base64,…），
-    /// 盖章点驳回：退上一阶段（与打回不同通道）。
+    /// 非最终盖章点驳回：退上一阶段。停在最终验收上时拒绝——要阶段名和修改意见。
     pub fn reject_stamp(&self) -> Result<orchestra::StageAction, ApiError> {
         Ok(crate::review::reject_stamp(
             &self.db,
             &self.project_id,
             self.pack()?,
+        )?)
+    }
+
+    /// 最终验收退回。缺阶段名或修改意见（空白不算）则拒绝。只重开被点名的阶段。
+    pub fn reject_final(
+        &self,
+        stage_name: &str,
+        note: &str,
+    ) -> Result<orchestra::StageAction, ApiError> {
+        let stage_name = stage_name.trim();
+        let note = note.trim();
+        if stage_name.is_empty() || note.is_empty() {
+            return Err(ApiError::BadInput(
+                "final acceptance reject requires a stage name and a revision note".into(),
+            ));
+        }
+        Ok(crate::review::reject_final(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+            stage_name,
+            note,
         )?)
     }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRows, deriveWorkbenchStatus, nodeMarks, type StatusSources } from './timelineModel'
+import { buildRows, deriveWorkbenchStatus, nodeMarks, stampedByAutonomy, type StatusSources } from './timelineModel'
 import { severityOf } from './decisions'
 import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api'
 
@@ -10,6 +10,15 @@ const ev = (id: number, kind: EventKind, payload: Record<string, unknown> = {}, 
 
 const q = (id: string, kind: QueuedCard['kind'], payload: Record<string, unknown> = {}): PendingQuestion => ({
   id, kind, agent_id: null, payload, state: 'queued',
+})
+
+describe('stampedByAutonomy', () => {
+  it('只把 by=autonomy 当成自动通过，缺 by 的旧事件当人工', () => {
+    expect(stampedByAutonomy({ by: 'autonomy' })).toBe(true)
+    expect(stampedByAutonomy({ by: 'owner' })).toBe(false)
+    expect(stampedByAutonomy({})).toBe(false)
+    expect(stampedByAutonomy(undefined)).toBe(false)
+  })
 })
 
 describe('buildRows', () => {

@@ -33,11 +33,21 @@ async function clickButton(el: HTMLElement, label: string) {
 describe('向导创建进度（票 14）', () => {
   beforeEach(() => {
     localStorage.removeItem('hexagon.wizard')
+    // 票 13 起向导第一步是模型服务商。进度测试要先过这步，目录输入才出现。
+    vi.spyOn(api, 'listProviders').mockResolvedValue({
+      providers: [{
+        id: 'or', name: 'OpenRouter', kind: 'openai',
+        base_url: 'https://example.test/v1', models: [], enabled: true, key_set: true,
+      }],
+      slots: { default: { provider_id: 'or', model: 'm1' } },
+    })
     return i18n.changeLanguage('zh-CN')
   })
   afterEach(() => vi.restoreAllMocks())
 
   async function reachConfirm(el: HTMLElement) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    await clickButton(el, '下一步')
     const fields = [...el.querySelectorAll('input')].filter((i) => i.type !== 'checkbox')
     await act(async () => {
       setValue(fields[0], '/tmp/hex-create')

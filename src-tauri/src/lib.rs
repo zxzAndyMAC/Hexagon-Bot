@@ -749,8 +749,13 @@ fn owner_back(
 #[tauri::command]
 fn reject_stamp(
     state: tauri::State<AppState>,
+    stage: Option<String>,
+    note: Option<String>,
 ) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
-    with_wb(&state, |wb| wb.reject_stamp())
+    with_wb(&state, |wb| match (stage.as_deref(), note.as_deref()) {
+        (Some(stage), Some(note)) => wb.reject_final(stage, note),
+        _ => wb.reject_stamp(),
+    })
 }
 
 /// ADR 0052 wb 组：context_overflow 放行时内联续跑一回合——必须持 wb 锁。

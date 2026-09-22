@@ -212,7 +212,8 @@ export const api = {
   ownerAway: () => call<void>('owner_away'),
   ownerBack: () => call<ReturnSummary>('owner_back'),
   // ---- 决策卡动作 ----
-  rejectStamp: () => call<StageAction>('reject_stamp'),
+  rejectStamp: (stage?: string | null, note?: string | null) =>
+    call<StageAction>('reject_stamp', { stage: stage ?? null, note: note ?? null }),
   adjudicateFlag: (qid: string, agree: boolean) =>
     call<AdjudicateOutcome>('adjudicate_flag', { qid, agree }),
   proposals: () => call<ProposalRow[]>('proposals'),

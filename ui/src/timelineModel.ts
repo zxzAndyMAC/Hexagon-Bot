@@ -15,6 +15,11 @@ export const DECISION_KINDS = new Set([
 
 export const TOOL_KINDS = new Set(['tool_called', 'tool_result'])
 
+/** 票 02：自动盖章与负责人亲手盖章都是 `stamped`，靠 payload.by 区分。缺 by 的旧事件当人工。 */
+export function stampedByAutonomy(payload: { by?: unknown } | null | undefined): boolean {
+  return payload?.by === 'autonomy'
+}
+
 // hands-free 票 06：过长思考收成一行。按字符，不靠 scrollHeight
 // （happy-dom 测不出布局）。短思考原样，不假装要折叠。
 export const THINKING_COLLAPSE_AT = 72

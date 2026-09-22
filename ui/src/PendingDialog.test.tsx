@@ -5,7 +5,7 @@ import './i18n'
 import i18n from './i18n'
 import App from './App'
 import { TopBar } from './components/TopBar'
-import { PendingDialog } from './components/PendingCards'
+import { PendingCard, PendingDialog } from './components/PendingCards'
 import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, formatBinding } from './keymap'
@@ -150,5 +150,35 @@ describe('待决弹窗（hands-free 票 05）', () => {
     })
     expect(el.querySelector('[role="dialog"]')).not.toBeNull()
     expect(el.querySelector('[data-pending-count]')?.getAttribute('data-pending-count')).toBe('2')
+  })
+
+  it('最终验收退回把阶段和修改意见交给 reject_stamp', async () => {
+    const reject = vi.spyOn(api, 'rejectStamp').mockResolvedValue({ action: 'stamp_rejected', reopened_seq: 0, run_id: 'sr' })
+    useUiStore.setState({
+      stages: [
+        { run_id: 'r0', stage: '需求', seq: 0, state: 'done' },
+        { run_id: 'r1', stage: '合入', seq: 1, state: 'waiting_stamp' },
+      ],
+    })
+    const { el, root: r } = await render(
+      <PendingCard
+        top={false}
+        q={card({
+          kind: 'stamp',
+          payload: { stage: '合入', run_id: 'r1', final_acceptance: true },
+        })}
+      />,
+    )
+    root = r
+    const stage = el.querySelector('select') as HTMLSelectElement
+    const note = el.querySelector('input') as HTMLInputElement
+    expect(stage).not.toBeNull()
+    expect(note).not.toBeNull()
+    stage.value = '需求'
+    note.value = '把验收写具体'
+    const btn = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('驳回'))
+    expect(btn).toBeTruthy()
+    await act(async () => { btn!.click() })
+    expect(reject).toHaveBeenCalledWith('需求', '把验收写具体')
   })
 })

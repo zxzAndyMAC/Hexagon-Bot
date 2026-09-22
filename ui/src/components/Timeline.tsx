@@ -5,7 +5,7 @@ import type { TimelineItem } from '../api'
 import { api, isTauri } from '../api'
 import { Md } from './Md'
 import { useUiStore } from '../store'
-import { buildRows, nodeMarks, deriveWorkbenchStatus, thinkingCollapsed, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark } from '../timelineModel'
+import { buildRows, nodeMarks, deriveWorkbenchStatus, thinkingCollapsed, stampedByAutonomy, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark } from '../timelineModel'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { Row } from './Row'
@@ -139,14 +139,19 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
   const highRisk = SYS_HIGH_RISK.has(sub)
-  const label = sub
-    ? trKey(t, `sys.${sub}`, sub)
-    : trKey(t, `ev.${item.event.kind}`, item.event.kind)
+  const autoStamp = item.event.kind === 'stamped' && stampedByAutonomy(item.event.payload)
+  const label = autoStamp
+    ? t('ev.stamped_auto', { stage: String(item.event.payload?.stage ?? '') })
+    : sub
+      ? trKey(t, `sys.${sub}`, sub)
+      : trKey(t, `ev.${item.event.kind}`, item.event.kind)
+  const note = item.event.kind === 'stamp_rejected' ? String(item.event.payload?.note ?? '') : ''
   return (
     <div className="sysrow">
       <div className="sysline" />
       <span className="syslabel" style={highRisk ? { color: 'var(--err)' } : undefined}>
         {label}
+        {note && <span className="dim3"> · {note}</span>}
       </span>
     </div>
   )

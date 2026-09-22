@@ -349,7 +349,9 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.conn()
             .execute(
-                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                // 票 02：省略 autonomy 默认 L4，非最终盖章点会自动通过，打乱「每阶段等人盖章」走查。
+                // 走查钉 L0。L3 自动通过由 Workbench 门面测试钉。
+                "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p1','/tmp/x','x','pack','L0')",
                 [],
             )
             .unwrap();

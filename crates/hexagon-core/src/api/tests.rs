@@ -258,7 +258,8 @@ fn autonomy_roundtrip_rejects_illegal_without_clobber() {
     assert_eq!(again.autonomy().unwrap(), "L2");
 }
 
-/// L3/L4 在后续票落地前不自动盖章：盖章点仍停在待决，和今天的 L2 一样。
+/// 票 02：只有一道盖章点时它就是最终验收。L3/L4 仍停在待决，不自动通过。
+/// 曾写成「高档执行如 L2、任何盖章点都等人」——非最终盖章点已改为自动通过。
 #[test]
 fn l3_and_l4_still_wait_at_stamp_point() {
     for lv in ["L3", "L4"] {
@@ -293,6 +294,365 @@ fn l3_and_l4_still_wait_at_stamp_point() {
             pending.iter().any(|c| c["kind"] == "stamp"),
             "{lv} must still queue a stamp card"
         );
+    }
+}
+
+fn gate_pack() -> PackDef {
+    serde_json::from_value(json!({
+        "name":"t","version":1,
+        "stages":[
+            {"name":"准备","roles":["产品策划"],"due":[]},
+            {"name":"需求","roles":["产品策划"],"due":["规格"],"stamp_point":true},
+            {"name":"合入","roles":["产品策划"],"due":[],"stamp_point":true}
+        ]
+    }))
+    .unwrap()
+}
+
+fn insert_artifact(wb: &Workbench, run_id: &str, id: &str, path: &str, kind: &str) {
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO artifacts (id,project_id,path,kind,tier,stage_run_id,version,status)
+             VALUES (?1,'p1',?2,?3,'skeleton',?4,1,'valid')",
+            rusqlite::params![id, path, kind, run_id],
+        )
+        .unwrap();
+}
+
+fn active_run_id(wb: &Workbench) -> String {
+    wb.db
+        .conn()
+        .query_row(
+            "SELECT id FROM stage_runs
+             WHERE project_id='p1' AND state IN ('active','waiting_stamp')
+             ORDER BY seq DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+fn run_rows(wb: &Workbench) -> Vec<(String, String)> {
+    let mut st = wb
+        .db
+        .conn()
+        .prepare("SELECT stage_name, state FROM stage_runs ORDER BY seq, id")
+        .unwrap();
+    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+/// 票 02：L0–L2 每个盖章点都等人。L3/L4 只留最后一道（合入），更早的自动通过。
+/// 自动通过的 stamped 事件 by=autonomy，负责人 stamp() 的是 by=owner。
+#[test]
+fn l3_l4_auto_pass_earlier_stamps_final_still_waits() {
+    for lv in ["L3", "L4"] {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::open(
+            dir.path(),
+            "n",
+            &[("a0".into(), "产品策划".into())],
+            Some(gate_pack()),
+        )
+        .unwrap();
+        wb.set_autonomy(lv).unwrap();
+        // 执行档仍封顶，安全网/权限/提案不在本票放行。
+        assert_eq!(crate::autonomy::execution_rank(&wb.db, "p1").unwrap(), 2);
+        assert_eq!(
+            crate::autonomy::rank(&wb.db, "p1").unwrap(),
+            if lv == "L3" { 3 } else { 4 }
+        );
+
+        wb.open_stage(0).unwrap();
+        let opened = serde_json::to_value(wb.advance().unwrap()).unwrap();
+        assert_eq!(opened["action"], "stage_opened");
+        assert_eq!(opened["seq"], 1);
+        insert_artifact(&wb, &active_run_id(&wb), "art-req", "specs/prd.md", "规格");
+        let passed = serde_json::to_value(wb.advance().unwrap()).unwrap();
+        assert_eq!(
+            passed["action"], "stage_opened",
+            "{lv} earlier stamp must auto-pass"
+        );
+        assert_eq!(passed["seq"], 2);
+
+        let tl = timeline(&wb, None, 80).unwrap();
+        let autos: Vec<_> = tl
+            .iter()
+            .filter(|i| i.event.kind == EventKind::Stamped && i.event.payload["by"] == "autonomy")
+            .collect();
+        assert_eq!(autos.len(), 1, "{lv} timeline must show the auto stamp");
+        assert_eq!(autos[0].event.payload["stage"], "需求");
+        assert!(tl
+            .iter()
+            .all(|i| { i.event.kind != EventKind::Stamped || i.event.payload["by"] != "owner" }));
+        assert!(
+            pending_questions(&wb)
+                .unwrap()
+                .iter()
+                .all(|c| c["kind"] != "stamp"),
+            "{lv} auto-pass must not queue a stamp card"
+        );
+
+        let waiting = serde_json::to_value(wb.advance().unwrap()).unwrap();
+        assert_eq!(
+            waiting["action"], "awaiting_stamp",
+            "{lv} final gate still waits"
+        );
+        assert_eq!(waiting["stage"], "合入");
+        let pending = pending_questions(&wb).unwrap();
+        let card = pending
+            .iter()
+            .find(|c| c["kind"] == "stamp")
+            .expect("stamp card");
+        assert_eq!(card["payload"]["final_acceptance"], true);
+        assert_eq!(card["payload"]["stage"], "合入");
+        let tl = timeline(&wb, None, 80).unwrap();
+        assert_eq!(
+            tl.iter()
+                .filter(
+                    |i| i.event.kind == EventKind::Stamped && i.event.payload["by"] == "autonomy"
+                )
+                .count(),
+            1,
+            "合入 must not auto-stamp"
+        );
+
+        let done = serde_json::to_value(wb.stamp().unwrap()).unwrap();
+        assert_eq!(done["action"], "pack_finished");
+        let tl = timeline(&wb, None, 80).unwrap();
+        let owners: Vec<_> = tl
+            .iter()
+            .filter(|i| i.event.kind == EventKind::Stamped && i.event.payload["by"] == "owner")
+            .collect();
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].event.payload["stage"], "合入");
+        assert_ne!(owners[0].event.payload["by"], "autonomy");
+        assert!(tl.iter().all(|i| i.event.kind != EventKind::BaselineMerged));
+        assert!(tl
+            .iter()
+            .all(|i| i.event.kind != EventKind::PublishConfirmed));
+    }
+}
+
+#[test]
+fn l0_l2_stamp_points_all_wait() {
+    for lv in ["L0", "L1", "L2"] {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::open(
+            dir.path(),
+            "n",
+            &[("a0".into(), "产品策划".into())],
+            Some(gate_pack()),
+        )
+        .unwrap();
+        wb.set_autonomy(lv).unwrap();
+        wb.open_stage(0).unwrap();
+        wb.advance().unwrap();
+        insert_artifact(&wb, &active_run_id(&wb), "art-req", "specs/prd.md", "规格");
+        let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
+        assert_eq!(
+            r["action"], "awaiting_stamp",
+            "{lv} must wait at the earlier stamp"
+        );
+        assert_eq!(r["stage"], "需求");
+        let card = pending_questions(&wb)
+            .unwrap()
+            .into_iter()
+            .find(|c| c["kind"] == "stamp")
+            .expect("stamp card");
+        assert_eq!(card["payload"]["final_acceptance"], false);
+        let tl = timeline(&wb, None, 40).unwrap();
+        assert!(tl.iter().all(|i| i.event.kind != EventKind::Stamped));
+    }
+}
+
+/// 最终验收退回：缺阶段或修改意见则拒绝。只重开被点名的阶段，其余不回到起点。
+#[test]
+fn final_reject_needs_stage_and_note_and_reopens_only_that_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(
+        dir.path(),
+        "n",
+        &[("a0".into(), "产品策划".into())],
+        Some(gate_pack()),
+    )
+    .unwrap();
+    wb.set_autonomy("L3").unwrap();
+    wb.open_stage(0).unwrap();
+    wb.advance().unwrap();
+    insert_artifact(&wb, &active_run_id(&wb), "art-req", "specs/prd.md", "规格");
+    wb.advance().unwrap();
+    let waiting = serde_json::to_value(wb.advance().unwrap()).unwrap();
+    assert_eq!(waiting["action"], "awaiting_stamp");
+
+    assert!(
+        wb.reject_stamp().is_err(),
+        "bare reject must not clear final acceptance"
+    );
+    assert!(wb.reject_final("  ", "改验收").is_err());
+    assert!(wb.reject_final("需求", "   ").is_err());
+    assert!(wb.reject_final("不存在", "改验收").is_err());
+    // 拒绝退回之后门还在。
+    assert_eq!(
+        serde_json::to_value(wb.advance().unwrap()).unwrap()["action"],
+        "waiting_stamp"
+    );
+
+    let r = serde_json::to_value(wb.reject_final("需求", "把验收写具体").unwrap()).unwrap();
+    assert_eq!(r["action"], "stamp_rejected");
+    assert_eq!(r["reopened_seq"], 1);
+    let rows = run_rows(&wb);
+    let prep: Vec<_> = rows.iter().filter(|r| r.0 == "准备").collect();
+    let req: Vec<_> = rows.iter().filter(|r| r.0 == "需求").collect();
+    let merge: Vec<_> = rows.iter().filter(|r| r.0 == "合入").collect();
+    assert_eq!(prep.len(), 1);
+    assert_eq!(prep[0].1, "done");
+    assert_eq!(
+        req.len(),
+        2,
+        "named stage gets a new run; the old one stays done"
+    );
+    assert!(req.iter().any(|r| r.1 == "done"));
+    assert!(req.iter().any(|r| r.1 == "active"));
+    assert_eq!(merge.len(), 1);
+    assert_eq!(merge[0].1, "rejected");
+    let live: Vec<_> = rows
+        .iter()
+        .filter(|r| r.1 == "active" || r.1 == "waiting_stamp")
+        .collect();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].0, "需求");
+
+    let tl = timeline(&wb, None, 80).unwrap();
+    let rej = tl
+        .iter()
+        .find(|i| i.event.kind == EventKind::StampRejected)
+        .expect("stamp_rejected");
+    assert_eq!(rej.event.payload["to_stage"], "需求");
+    assert_eq!(rej.event.payload["note"], "把验收写具体");
+    assert!(
+        pending_questions(&wb)
+            .unwrap()
+            .iter()
+            .all(|c| c["kind"] != "stamp"),
+        "final card must be answered"
+    );
+    let brief =
+        crate::turn::prompt::build_brief_context(&wb.db, "a0", Some(r["run_id"].as_str().unwrap()))
+            .unwrap();
+    let blob = serde_json::to_string(&brief.notices).unwrap();
+    assert!(
+        blob.contains("把验收写具体"),
+        "revision note must reach the reopened stage: {blob}"
+    );
+}
+
+/// 四套预置包的最后一道盖章都是合入。阶段门更早的盖章点在 L3 自动通过。
+#[test]
+fn preset_packs_last_stamp_is_merge_stage_gate_earlier_auto_passes() {
+    let packs = crate::presets::preset_packs().unwrap();
+    assert_eq!(packs.len(), 4);
+    for p in &packs {
+        let flags: Vec<bool> = p.stages.iter().map(|s| s.stamp_point).collect();
+        let last = flags.iter().rposition(|s| *s).expect(&p.name);
+        assert_eq!(p.stages[last].name, "合入", "{}", p.name);
+        for (i, st) in p.stages.iter().enumerate() {
+            if !st.stamp_point {
+                continue;
+            }
+            let high = crate::stampgate::classify_stamp(4, &flags, i);
+            let low = crate::stampgate::classify_stamp(2, &flags, i);
+            assert_eq!(low, crate::stampgate::StampDisposition::Wait);
+            if i == last {
+                assert_eq!(high, crate::stampgate::StampDisposition::Wait, "{}", p.name);
+            } else {
+                assert_eq!(
+                    high,
+                    crate::stampgate::StampDisposition::AutoPass,
+                    "{}",
+                    p.name
+                );
+            }
+        }
+    }
+    let gate = packs.iter().find(|p| p.name == "阶段门").unwrap();
+    assert!(gate.stages.iter().filter(|s| s.stamp_point).count() > 1);
+    let kanban = packs.iter().find(|p| p.name == "看板流").unwrap();
+    assert_eq!(kanban.stages.iter().filter(|s| s.stamp_point).count(), 1);
+
+    let dir = tempfile::tempdir().unwrap();
+    // 设计阶段的角色必须在团队里，否则 open_next 会因无人而跳过，一路穿到包结束。
+    let wb = Workbench::open(
+        dir.path(),
+        "n",
+        &[
+            ("a0".into(), "产品策划".into()),
+            ("a1".into(), "UX".into()),
+            ("a2".into(), "UI".into()),
+        ],
+        Some(gate.clone()),
+    )
+    .unwrap();
+    wb.set_autonomy("L3").unwrap();
+    let opened = wb.open_stage(0).unwrap();
+    insert_artifact(&wb, &opened.run_id, "art-req", "specs/prd.md", "规格");
+    let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
+    assert_eq!(r["action"], "stage_opened");
+    assert_eq!(r["seq"], 1);
+    let tl = timeline(&wb, None, 40).unwrap();
+    assert!(tl.iter().any(|i| {
+        i.event.kind == EventKind::Stamped
+            && i.event.payload["by"] == "autonomy"
+            && i.event.payload["stage"] == "需求"
+    }));
+}
+
+/// 快速通道的合入基线是最终验收。L3/L4 不自动合入，仍停在安全网询问上。
+#[test]
+fn fastpath_l3_l4_does_not_auto_merge_baseline() {
+    for lv in ["L3", "L4"] {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::init(dir.path(), "main").unwrap();
+        crate::git::ensure_work_branch(dir.path(), "hexagon/work").unwrap();
+        std::fs::write(dir.path().join("feature.txt"), "wip").unwrap();
+        assert!(crate::git::commit_all(dir.path(), "wip").unwrap());
+        let mut wb = fastpath_wb(dir.path());
+        wb.set_autonomy(lv).unwrap();
+        assert_eq!(crate::autonomy::execution_rank(&wb.db, "p1").unwrap(), 2);
+        assert!(!crate::stampgate::may_auto_fastpath_merge(
+            crate::autonomy::rank(&wb.db, "p1").unwrap()
+        ));
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![
+                text_response("方案：把工作分支合入基线"),
+                tool_response(vec![("t1", "git_baseline_merge", json!({}))]),
+            ])),
+        );
+        let out = wb.dispatch("后端", "合入基线", &[]).unwrap();
+        assert!(
+            matches!(out, TurnOutcome::AwaitingPermission(_)),
+            "{lv} must ask, got {out:?}"
+        );
+        let tl = timeline(&wb, None, 40).unwrap();
+        assert!(tl.iter().all(|i| i.event.kind != EventKind::BaselineMerged));
+        assert!(tl
+            .iter()
+            .all(|i| i.event.kind != EventKind::PublishConfirmed));
+        assert!(
+            crate::git::run(
+                dir.path(),
+                &["merge-base", "--is-ancestor", "hexagon/work", "main"]
+            )
+            .is_err(),
+            "{lv} must not land the work branch"
+        );
+        let pending = pending_questions(&wb).unwrap();
+        assert!(pending.iter().any(|c| c["kind"] == "permission"));
+        assert!(pending.iter().all(|c| c["kind"] != "stamp"));
     }
 }
 

@@ -63,6 +63,17 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(useUiStore.getState().toasts.length).toBe(1)
   })
 
+  it('最终验收的驳回键不裸退回，提示去卡上填阶段和修改意见', async () => {
+    const spy = vi.spyOn(api, 'rejectStamp')
+    const out = await handlePendingKey(
+      key('Backspace'),
+      [card({ kind: 'stamp', payload: { stage: '合入', run_id: 'r', final_acceptance: true } })],
+    )
+    expect(out).toBe('blocked-final')
+    expect(spy).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.length).toBe(1)
+  })
+
   it('P0-2：publish 卡的驳回键仍可用', async () => {
     const spy = vi.spyOn(api, 'rejectPublish')
     const out = await handlePendingKey(key('Backspace'), [card({ kind: 'publish' })])

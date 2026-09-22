@@ -7,7 +7,8 @@
 //!   驳回 → 本阶段继续。
 //! - 升级（直给负责人）：产物已盖章 / 复审者缺席 / 同 Agent 对同产物第 2 次打回。
 //! - 自动路径：声明回填边命中且自治 ≥L1 → 无需等复审者，直接拨回。
-//! - 盖章点驳回：退上一阶段——与打回是两个通道，事件分开。
+//! - 盖章点驳回：非最终盖章点退上一阶段。最终验收必须点名阶段并写修改意见，
+//!   只重开那一阶段（票 02）。与打回是两个通道，事件分开。
 
 use crate::artifacts::{self, TierMap};
 use crate::db::Db;
@@ -34,6 +35,9 @@ pub enum ReviewError {
     NoArtifact(String),
     #[error("flag not found: {0}")]
     NoFlag(String),
+    /// 最终验收退回缺阶段/修改意见，或退回的不是最后一道盖章点。
+    #[error("{0}")]
+    BadReject(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -477,21 +481,34 @@ pub fn adjudicate_flag(
     }
 }
 
-/// 盖章点驳回：退上一阶段——与打回不同通道（事件分开）。
-pub fn reject_stamp(
-    db: &Db,
-    project_id: &str,
-    pack: &PackDef,
-) -> Result<orchestra::StageAction, ReviewError> {
-    let (rid, seq, name): (String, i64, String) = db
-        .conn()
+fn waiting_stamp(db: &Db, project_id: &str) -> Result<(String, i64, String), ReviewError> {
+    db.conn()
         .query_row(
             "SELECT id, seq, stage_name FROM stage_runs
              WHERE project_id=?1 AND state='waiting_stamp' ORDER BY seq DESC LIMIT 1",
             [project_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
-        .map_err(|_| OrchError::NoActiveStage(project_id.into()))?;
+        .map_err(|_| ReviewError::Orch(OrchError::NoActiveStage(project_id.into())))
+}
+
+fn stamp_flags(pack: &PackDef) -> Vec<bool> {
+    pack.stages.iter().map(|s| s.stamp_point).collect()
+}
+
+/// 盖章点驳回：非最终盖章点退上一阶段——与打回不同通道（事件分开）。
+/// 最终验收不走这条：缺阶段名和修改意见就拒绝，改走 `reject_final`。
+pub fn reject_stamp(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+) -> Result<orchestra::StageAction, ReviewError> {
+    let (rid, seq, name) = waiting_stamp(db, project_id)?;
+    if seq >= 0 && crate::stampgate::is_final_stamp(&stamp_flags(pack), seq as usize) {
+        return Err(ReviewError::BadReject(
+            "final acceptance reject requires a stage name and a revision note".into(),
+        ));
+    }
     db.conn().execute(
         "UPDATE stage_runs SET state='rejected', finished_at=datetime('now') WHERE id=?1",
         [&rid],
@@ -507,6 +524,67 @@ pub fn reject_stamp(
     let (new_rid, _) = orchestra::open_stage(db, project_id, pack, prev)?;
     Ok(orchestra::StageAction::StampRejected {
         reopened_seq: prev,
+        run_id: new_rid,
+    })
+}
+
+/// 最终验收退回。阶段名和修改意见都必填（空白不算）。只重开被点名的阶段，
+/// 其余 stage_runs 保持原状态，不把整条流程打回起点。
+pub fn reject_final(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    stage_name: &str,
+    note: &str,
+) -> Result<orchestra::StageAction, ReviewError> {
+    let stage_name = stage_name.trim();
+    let note = note.trim();
+    if stage_name.is_empty() || note.is_empty() {
+        return Err(ReviewError::BadReject(
+            "final acceptance reject requires a stage name and a revision note".into(),
+        ));
+    }
+    let (rid, seq, name) = waiting_stamp(db, project_id)?;
+    if seq < 0 || !crate::stampgate::is_final_stamp(&stamp_flags(pack), seq as usize) {
+        return Err(ReviewError::BadReject(
+            "only the final acceptance gate takes a named-stage reject".into(),
+        ));
+    }
+    let to_seq = pack
+        .stages
+        .iter()
+        .position(|s| s.name == stage_name)
+        .ok_or_else(|| ReviewError::BadReject(format!("unknown stage: {stage_name}")))?;
+    db.conn().execute(
+        "UPDATE stage_runs SET state='rejected', finished_at=datetime('now') WHERE id=?1",
+        [&rid],
+    )?;
+    // 销掉本 run 的盖章卡。提案型 stamp 卡没有 run_id，按 run_id 匹配不碰提案面。
+    crate::cards::answer_queued_where(
+        db,
+        project_id,
+        crate::cards::CardKind::Stamp,
+        "run_id",
+        &rid,
+        "owner",
+    )?;
+    db.append_event(
+        project_id,
+        EventKind::StampRejected,
+        json!({
+            "stage": name,
+            "seq": seq,
+            "to_stage": stage_name,
+            "to_seq": to_seq,
+            "note": note,
+            "by": "owner",
+        }),
+        None,
+        Some(&rid),
+    )?;
+    let (new_rid, _) = orchestra::open_stage(db, project_id, pack, to_seq)?;
+    Ok(orchestra::StageAction::StampRejected {
+        reopened_seq: to_seq,
         run_id: new_rid,
     })
 }
@@ -802,9 +880,12 @@ mod tests {
         let pack: PackDef = serde_json::from_value(json!({
         "name":"t","version":1,"stages":[
             {"name":"规格","roles":["UI"],"due":[]},
+            {"name":"设计","roles":["前端"],"due":[],"stamp_point":true},
             {"name":"合入","roles":["前端"],"due":[],"stamp_point":true}
         ]}))
         .unwrap();
+        // 票 02：设计不是最后一道盖章点，裸驳回仍退上一阶段。
+        // 合入是最终验收，缺阶段名和修改意见的裸驳回会拒绝（门面测试钉）。
         orchestra::open_stage(&db, "p1", &pack, 0).unwrap();
         orchestra::advance(&db, "p1", &pack).unwrap(); // seq0 done→seq1
         orchestra::advance(&db, "p1", &pack).unwrap(); // seq1 ready→awaiting_stamp

@@ -39,6 +39,7 @@ pub mod scenario;
 pub mod sessions;
 pub mod setup;
 pub mod skills;
+pub mod stampgate;
 pub mod templates;
 pub mod tools;
 pub mod trace;

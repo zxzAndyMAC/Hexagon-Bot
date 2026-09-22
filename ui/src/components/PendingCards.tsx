@@ -141,6 +141,10 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const [shape, setShape] = useState('')
   const [rejectReason, setRejectReason] = useState('')
+  const rewindStageRef = useRef<HTMLSelectElement>(null)
+  const rewindStageInputRef = useRef<HTMLInputElement>(null)
+  const revisionNoteRef = useRef<HTMLInputElement>(null)
+  const stageNames = useUiStore((s) => s.stages)
   const p = q.payload
   const approveTip = formatBinding(bindingFor('approve'))
   const rejectTip = formatBinding(bindingFor('reject'))
@@ -180,12 +184,47 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   }
 
   if (q.kind === 'stamp' && !p.proposal_id) {
+    const finalGate = p.final_acceptance === true
+    const names = [...new Set(stageNames.map((s) => s.stage))]
     return (
       <CardShell tone="stamp" icon="stamp" title={`${t('cards.stageStamp')} · ${String(p.stage ?? '')}`}>
         <StageArtifacts runId={String(p.run_id ?? '')} />
+        {finalGate && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+            {names.length > 0 ? (
+              <select
+                ref={rewindStageRef}
+                aria-label={t('cards.finalStagePh')}
+                defaultValue=""
+                style={{ fontSize: 12, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}
+              >
+                <option value="">{t('cards.finalStagePh')}</option>
+                {names.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            ) : (
+              <input
+                ref={rewindStageInputRef}
+                aria-label={t('cards.finalStagePh')}
+                placeholder={t('cards.finalStagePh')}
+                style={{ fontSize: 12, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}
+              />
+            )}
+            <input
+              ref={revisionNoteRef}
+              aria-label={t('cards.finalNotePh')}
+              placeholder={t('cards.finalNotePh')}
+              style={{ fontSize: 12, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}
+            />
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <Btn primary onClick={() => api.stamp()}>{t('cards.confirm')}{top && ` ${approveTip}`}</Btn>
-          <Btn danger onClick={() => api.rejectStamp()}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
+          <Btn danger onClick={() => (finalGate
+            ? api.rejectStamp(
+                rewindStageRef.current?.value ?? rewindStageInputRef.current?.value ?? '',
+                revisionNoteRef.current?.value ?? '',
+              )
+            : api.rejectStamp())}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
         </div>
       </CardShell>
     )

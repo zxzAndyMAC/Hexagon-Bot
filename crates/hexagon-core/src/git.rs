@@ -143,6 +143,21 @@ impl Tool for GitBaselineMerge {
         json!({"type":"object","properties":{"baseline":{"type":"string"}}})
     }
     fn exec(&self, db: &Db, _input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        // 票 02：快速通道的合入基线是最终验收。判定恒为不自动合入。
+        // 今天能进 exec 只因负责人批准了安全网（票 03 之前不会按档 Allow）。
+        // 若判定被改成自动通过，这里拒绝——false positive 是未审合入。
+        // 被否决：在权限层按 execution_rank 放行本工具。那会把安全网和这道门绑在一起。
+        let rank = crate::autonomy::rank(db, &ctx.project_id)?;
+        let mode: String = db.conn().query_row(
+            "SELECT mode FROM projects WHERE id=?1",
+            [&ctx.project_id],
+            |r| r.get(0),
+        )?;
+        if mode == "fastpath" && crate::stampgate::may_auto_fastpath_merge(rank) {
+            return Err(ToolError::Exec(
+                "fastpath baseline merge is final acceptance and does not auto-merge".into(),
+            ));
+        }
         // 盖章闸：任何 waiting_stamp 阶段或未决 stamp 问题都挡住合入
         let waiting: i64 = db.conn().query_row(
             "SELECT COUNT(*) FROM stage_runs WHERE project_id=?1 AND state='waiting_stamp'",

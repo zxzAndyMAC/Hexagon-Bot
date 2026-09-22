@@ -253,7 +253,7 @@ pub fn build_brief_context(
     };
 
     // 唤醒/打回通知：指向该 Agent 的裁决/唤醒事件——同样按游标取增量。
-    let notices = {
+    let mut notices = {
         let mut st = db.conn().prepare(
             "SELECT kind, payload FROM events
              WHERE project_id = ?1 AND agent_id = ?2 AND id > ?3
@@ -267,6 +267,28 @@ pub fn build_brief_context(
             .collect::<Result<Vec<_>, _>>()?;
         rows
     };
+    // 票 02：最终验收退回的修改意见进被点名阶段的简报。
+    // 事件 author 是空（负责人，不是某个 Agent），走不了上面按 agent_id 的过滤。
+    // 被否决：只留时间线不进简报——复工的 Agent 看不见要改什么。
+    if let Some(sid) = stage_run_id {
+        let stage_name: String = db.conn().query_row(
+            "SELECT stage_name FROM stage_runs WHERE id=?1",
+            [sid],
+            |r| r.get(0),
+        )?;
+        let mut st = db.conn().prepare(
+            "SELECT kind, payload FROM events
+             WHERE project_id=?1 AND id>?2 AND kind='stamp_rejected'
+             AND json_extract(payload,'$.to_stage')=?3
+             ORDER BY id",
+        )?;
+        let extra = st
+            .query_map(rusqlite::params![project_id, cursor, stage_name], |r| {
+                Ok(json!({"kind": r.get::<_, String>(0)?, "payload": r.get::<_, String>(1)?}))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        notices.extend(extra);
+    }
 
     Ok(BriefContext {
         artifacts,

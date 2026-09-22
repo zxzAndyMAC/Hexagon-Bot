@@ -6,7 +6,8 @@
 //!   阶段内并行默认。
 //! - 成功判定（工作台裁决）：应交产物齐且登记 + 检验命令全过 + 声明复审全过。
 //! - 声明式回路：回填边与会诊唤醒名单是包内声明数据（票 10 消费裁决语义）；
-//!   盖章点到点停为待决问题。
+//!   盖章点到点停为待决问题。L3/L4 的非最终盖章点自动通过（`stampgate`），
+//!   最后一个盖章点仍停。自动通过的轨迹 `by=autonomy`，人工盖章 `by=owner`。
 //! - 阶段动作：退回/跳过/暂停/恢复，全落事件。
 
 use crate::db::Db;
@@ -639,6 +640,16 @@ pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction,
         StageEval::Ready => {
             let stage = &pack.stages[run.seq as usize];
             if stage.stamp_point {
+                let flags: Vec<bool> = pack.stages.iter().map(|s| s.stamp_point).collect();
+                let seq = run.seq as usize;
+                // 存储档，不是 execution_rank。封顶留着给安全网/权限/提案（票 03/04）。
+                let stored = crate::autonomy::rank(db, project_id)?;
+                if crate::stampgate::classify_stamp(stored, &flags, seq)
+                    == crate::stampgate::StampDisposition::AutoPass
+                {
+                    return auto_pass_stamp(db, project_id, pack, &run);
+                }
+                let final_acceptance = crate::stampgate::is_final_stamp(&flags, seq);
                 db.conn().execute(
                     "UPDATE stage_runs SET state='waiting_stamp' WHERE id=?1",
                     [&run.id],
@@ -649,7 +660,11 @@ pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction,
                     project_id,
                     None,
                     crate::cards::CardKind::Stamp,
-                    json!({"stage": stage.name, "run_id": run.id}),
+                    json!({
+                        "stage": stage.name,
+                        "run_id": run.id,
+                        "final_acceptance": final_acceptance,
+                    }),
                     None,
                 )?;
                 db.append_event(
@@ -744,7 +759,29 @@ pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, O
     db.append_event(
         project_id,
         EventKind::Stamped,
-        json!({"stage": run.stage_name, "seq": run.seq}),
+        // 票 02：by=owner 与自动通过的 by=autonomy 区分。缺 by 的旧事件当人工。
+        json!({"stage": run.stage_name, "seq": run.seq, "by": "owner"}),
+        None,
+        Some(&run.id),
+    )?;
+    open_next(db, project_id, pack, run.seq as usize + 1)
+}
+
+/// L3/L4 非最终盖章点：不入待决卡，直接通过并留下和人工盖章不同的轨迹。
+fn auto_pass_stamp(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    run: &StageRun,
+) -> Result<StageAction, OrchError> {
+    db.conn().execute(
+        "UPDATE stage_runs SET state='done', finished_at=datetime('now') WHERE id=?1",
+        [&run.id],
+    )?;
+    db.append_event(
+        project_id,
+        EventKind::Stamped,
+        json!({"stage": run.stage_name, "seq": run.seq, "by": "autonomy"}),
         None,
         Some(&run.id),
     )?;
@@ -1228,6 +1265,11 @@ mod tests {
     #[test]
     fn stamp_point_stops_until_stamped() {
         let (db, _d) = setup(&["产品策划", "后端", "架构师"]);
+        // 票 02：省略 autonomy 的新行默认 L4，规格不是最后一道盖章点，会自动通过。
+        // 本测试钉的是「盖章点等人」的机械，所以钉 L0。L3+ 见 api 门面测试。
+        db.conn()
+            .execute("UPDATE projects SET autonomy='L0' WHERE id='p1'", [])
+            .unwrap();
         let p = pack();
         let (rid, _) = open_stage(&db, "p1", &p, 0).unwrap();
         db.conn()
@@ -1384,6 +1426,10 @@ mod tests {
         use crate::turn::{run_turn, text_response, tool_response, TurnOutcome};
 
         let (db, dir) = setup(&["产品策划", "后端", "架构师", "运维"]);
+        // 票 02：默认 L4 会自动通过「规格」（非最终盖章点），本走查要的是等人再 stamp。
+        db.conn()
+            .execute("UPDATE projects SET autonomy='L0' WHERE id='p1'", [])
+            .unwrap();
         let p = serde_json::from_value::<PackDef>(json!({
             "name": "规格驱动", "version": 1,
             "stages": [

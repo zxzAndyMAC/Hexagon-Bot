@@ -1076,7 +1076,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(seen, CREATE_STEP_ORDER.to_vec());
-        assert_eq!(std::fs::read_to_string(d.path().join("README.md")).unwrap(), "dirty");
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("README.md")).unwrap(),
+            "dirty"
+        );
         assert!(git::is_dirty(d.path()));
 
         // 无 git 且未确认：同样停在 git，不打开。
