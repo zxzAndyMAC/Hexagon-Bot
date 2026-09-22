@@ -286,10 +286,16 @@ impl Workbench {
     }
 
     /// 改自治档。非法档拒绝，已存档不动。
-    /// 盖章自动通过读存储档（票 02）。安全网、权限、提案、安装仍看 `execution_rank`。
+    /// 盖章（票 02）与安全网、新权限询问（票 03）读存储档。提案和安装仍看
+    /// `execution_rank`（封顶 L2），等票 04。
     pub fn set_autonomy(&self, level: &str) -> Result<(), ApiError> {
         crate::autonomy::set_level(&self.db, &self.project_id, level)?;
         Ok(())
+    }
+
+    /// 发起远程发布：只入队确认卡，不执行。任何自治档都不自动放行（票 03 / ADR 0034）。
+    pub fn request_publish(&self, remote: &str) -> Result<String, ApiError> {
+        Ok(crate::publish::request(&self.db, &self.project_id, remote)?)
     }
 
     /// 确认发布：凭据闸 + push。

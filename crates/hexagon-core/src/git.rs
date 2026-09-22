@@ -208,7 +208,8 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.conn()
             .execute(
-                "INSERT INTO projects (id, dir, name, mode) VALUES ('p',?1,'x','pack')",
+                // 票 03：默认 L4 会放行 git_baseline_merge 的安全网询问。本夹具守双闸，钉 L0。
+                "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p',?1,'x','pack','L0')",
                 [dir.to_string_lossy().to_string()],
             )
             .unwrap();

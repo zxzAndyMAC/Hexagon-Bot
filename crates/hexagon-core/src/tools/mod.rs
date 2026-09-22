@@ -107,9 +107,9 @@ pub enum RiskClass {
     WriteLocal,
     /// 任意命令执行：形状记忆可放行，其余必问。
     Exec,
-    /// 外部服务调用（mcp:*）：语义由第三方服务器自定，永远逐次必问，
-    /// 不可被授权/层级/形状记忆降级——焊死的地板，不对称代价：
-    /// 多问一次花一次点击，漏问一次是语义不明的副作用外发。
+    /// 外部服务调用（mcp:*）：语义由第三方服务器自定。记忆 allow 和规则写入
+    /// 永不生效。自治 L3+ 把这一次询问放行并留轨迹，不等于记住——降回 L2
+    /// 仍逐次必问（票 03 / ADR 0059）。被否决：高档位也弹卡。
     External,
 }
 
@@ -301,14 +301,37 @@ impl Registry {
                 Ok(CallOutcome::Asked(qid))
             }
             crate::permissions::Decision::Allow { via } => {
-                if let crate::permissions::AllowVia::Remembered { shape, scope } = via {
-                    db.append_event(
-                        &ctx.project_id,
-                        EventKind::PermissionAllowed,
-                        json!({ "tool": name, "layer": "remembered", "shape": shape, "scope": scope }),
-                        Some(&ctx.agent_id),
-                        ctx.stage_run_id.as_deref(),
-                    )?;
+                match &via {
+                    crate::permissions::AllowVia::Remembered { shape, scope } => {
+                        db.append_event(
+                            &ctx.project_id,
+                            EventKind::PermissionAllowed,
+                            json!({ "tool": name, "layer": "remembered", "shape": shape, "scope": scope }),
+                            Some(&ctx.agent_id),
+                            ctx.stage_run_id.as_deref(),
+                        )?;
+                    }
+                    // 票 03：和负责人裁决（via=owner）分开，时间线能看出是档位放行。
+                    crate::permissions::AllowVia::Autonomy {
+                        level,
+                        safety_net,
+                        reason,
+                    } => {
+                        db.append_event(
+                            &ctx.project_id,
+                            EventKind::PermissionAllowed,
+                            json!({
+                                "tool": name,
+                                "via": "autonomy",
+                                "level": format!("L{level}"),
+                                "safety_net": safety_net,
+                                "reason": reason,
+                            }),
+                            Some(&ctx.agent_id),
+                            ctx.stage_run_id.as_deref(),
+                        )?;
+                    }
+                    crate::permissions::AllowVia::Default => {}
                 }
                 self.exec_and_log(db, ctx, name, input)
                     .map(CallOutcome::Done)

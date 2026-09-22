@@ -2,15 +2,19 @@
 //!
 //! 1. 内置 deny（最高优先，不可覆盖）—— 在各 Tool::builtin_deny；
 //! 2. 安全网必问 —— 基线合入/远程发布/.git 内部改写/删仓根等不可逆高危，
-//!    永远必问且**永不进入记忆**；
-//! 3. 项目级 deny —— permission_rules effect='deny'，压过一切记忆 allow；
+//!    **永不进入记忆**。自治 L3+ 放行这一次（见 `release_at_high_autonomy`），
+//!    工具名 `remote_publish` 除外；
+//! 3. 项目级 deny —— permission_rules effect='deny'，压过一切记忆 allow，
+//!    也压过 L3+ 的放行；
 //! 4. 形状化记忆 allow —— tool + 命令/路径/域形 + 作用域（activation 绑授予时的
 //!    stage_run / project 长效）；网络规则绑域名；
 //! 5. 类级默认 —— 按 Tool::risk() 分：Read/WriteLocal 放行，
 //!    Egress/Exec/External 必问（必问卡通道：批准一次/拒绝/记住形状）。
-//!    External（mcp:*）焊死地板：L4 记忆 allow 不生效、规则写不进。
+//!    自治 L3+ 把这次询问放行，不写规则。
+//!    External（mcp:*）焊死地板：记忆层 allow 不生效、规则写不进。
+//!    这里的「L4」是记忆层，不是自治档 L4。
 //!
-//! 负责人离开时请求挂起排队，不自动拒绝。
+//! 负责人离开时，L0–L2 的请求挂起排队，不自动拒绝。
 //! 确认的检验命令沉淀为 Bash 形状授权（两本账合一）。
 
 use crate::db::Db;
@@ -59,9 +63,18 @@ pub enum AllowVia {
     Default,
     /// 形状化记忆命中
     Remembered { shape: String, scope: String },
+    /// 自治 L3+ 放行安全网或新的权限询问。不写 permission_rules。
+    /// `level` 是存储档 3 或 4。`safety_net` 与若排队时的卡标记一致，
+    /// 时间线用它区分危险操作和普通新询问。
+    Autonomy {
+        level: u8,
+        safety_net: bool,
+        reason: String,
+    },
 }
 
-/// 安全网：命令/路径命中清单即必问。清单是常量——不进记忆、不可降级。
+/// 安全网：命令/路径命中清单即必问（自治 L3+ 改为放行这一次，仍不进记忆）。
+/// 清单是常量。`remote_publish` 不随高档放行，见 `release_at_high_autonomy`。
 pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
     match tool {
         "bash" => {
@@ -516,11 +529,79 @@ fn pre_memory_guards(
     Ok(GuardVerdict::Pass)
 }
 
+/// 自治 L3+ 把安全网和新的权限询问换成放行。
+///
+/// 出处：hands-free 票 03 / ADR 0059。选 L3 就是离开后过程不再被询问，
+/// 危险操作的代价由选档承担。被否决：读 `execution_rank`（封顶 2）——
+/// 这张票就永远放行不了；也被否决：把封顶抬到 4，盖章和提案的 `>= 3`
+/// 会在票 02/04 之前生效。
+///
+/// 到这里时内置 deny 已经是 `Deny`（在 `pre_memory_guards`，先于本函数）。
+/// 项目否定要再查一次：安全网在 L0–L2 先于 deny 返回，低档仍是必问而不是拒绝
+/// （顺序不变）。高档位若直接把 Ask 换成 Allow，否定规则会被跳过。
+/// 被否决：全局把 deny 挪到安全网之前——L0–L2 上「安全网 + 否定规则」会从
+/// 必问变成拒绝。
+///
+/// 远程发布不搭这趟车：工具名 `remote_publish` 任何档都留下必问。
+/// `git push` 是另一条命令（CONTEXT「远程发布」），随安全网放行。
+/// 真正的发布入口是 `publish::request`，不进本函数，也不会在这里被放行。
+/// 基线合入同样不搭：`git_baseline_merge` 和 bash 里的 `git merge` 是最终验收
+///（票 02 / ADR 0059），L3/L4 也不自动合入。
+///
+/// 读档失败按 0。false negative 多一张卡；false positive 是未审副作用。
+/// 放行不写 permission_rules：安全网永不记忆；新询问只是这一档的放行，不是记住。
+fn release_at_high_autonomy(
+    db: &Db,
+    ctx: &ToolContext,
+    tool_name: &str,
+    input: &Value,
+    decision: Decision,
+) -> Result<Decision, crate::tools::ToolError> {
+    let Decision::Ask { reason, safety_net } = decision else {
+        return Ok(decision);
+    };
+    if tool_name == "remote_publish"
+        || tool_name == "git_baseline_merge"
+        || is_safety_net(tool_name, input) == Some("baseline merge")
+    {
+        return Ok(Decision::Ask { reason, safety_net });
+    }
+    let level = crate::autonomy::rank(db, &ctx.project_id).unwrap_or(0);
+    if level < 3 {
+        return Ok(Decision::Ask { reason, safety_net });
+    }
+    if let Some(shape) = matching_rule(db, ctx, tool_name, input, "deny")? {
+        return Ok(Decision::Deny {
+            reason: format!("project deny rule: {shape}"),
+            layer: "project_deny",
+        });
+    }
+    Ok(Decision::Allow {
+        via: AllowVia::Autonomy {
+            level,
+            safety_net,
+            reason,
+        },
+    })
+}
+
 /// 五层求值。`tool` 用于第 1 层内置 deny。
 /// 封印约定（票 05）：本函数与执行共用同一 `&input` 借用——裁决看到的
 /// 字节就是执行的字节；必问卡路径更硬：resolve 从持久化的 pending_question
 /// 载荷取 raw_input 执行,调用方根本没有再传参的入口。
+/// 自治 L3+ 的放行在返回前做（`release_at_high_autonomy`），不改这五层的顺序。
 pub fn evaluate(
+    db: &Db,
+    ctx: &ToolContext,
+    tool: &dyn Tool,
+    tool_name: &str,
+    input: &Value,
+) -> Result<Decision, crate::tools::ToolError> {
+    let decision = evaluate_layers(db, ctx, tool, tool_name, input)?;
+    release_at_high_autonomy(db, ctx, tool_name, input, decision)
+}
+
+fn evaluate_layers(
     db: &Db,
     ctx: &ToolContext,
     tool: &dyn Tool,
@@ -806,7 +887,9 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.conn()
             .execute(
-                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+                // 票 03：省略 autonomy 的新行默认 L4，安全网和新询问会放行。
+                // 本夹具测的是 L0 排队 / 记忆地板，显式钉 L0。高档见 prop 与 api 测试。
+                "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p1','/tmp/x','x','pack','L0')",
                 [],
             )
             .unwrap();
@@ -1465,7 +1548,7 @@ mod tests {
     mod prop_tests {
         use super::tests::setup;
         use super::*;
-        use crate::tools::{Bash, FsRead, FsWrite};
+        use crate::tools::{Bash, FsRead, FsWrite, WebFetch};
         use proptest::prelude::*;
         use proptest::{collection, sample};
         use serde_json::json;
@@ -1634,6 +1717,147 @@ mod tests {
                     matches!(d, Decision::Ask { .. }),
                     "{host} must not satisfy the domain rule, got {d:?}"
                 );
+            }
+        }
+
+        /// 票 03 判定面。高档放行安全网和新询问；任何档拒绝内置永不和远程发布。
+        /// 低档安全网/新询问仍是 Ask。夹具 setup() 钉 L0，这里再 set_level。
+        #[derive(Clone, Debug)]
+        enum Boundary {
+            SafetyBash(&'static str),
+            SafetyWrite(&'static str),
+            NewAsk(&'static str),
+            NewDomain(&'static str),
+            BuiltinRead(&'static str),
+            BuiltinWrite(&'static str),
+            BuiltinBash(&'static str),
+            RemotePublish,
+        }
+
+        fn boundary_action() -> impl Strategy<Value = Boundary> {
+            sample::select(vec![
+                Boundary::SafetyBash("rm -rf build"),
+                Boundary::SafetyBash("git push origin main"),
+                Boundary::SafetyBash("git update-ref HEAD"),
+                Boundary::SafetyWrite(".git/config"),
+                Boundary::NewAsk("echo hi"),
+                Boundary::NewDomain("https://new.example/a"),
+                Boundary::BuiltinRead(".env"),
+                Boundary::BuiltinWrite(".hexagon/permissions.toml"),
+                Boundary::BuiltinBash("cat .env"),
+                Boundary::RemotePublish,
+            ])
+        }
+
+        fn decide(db: &Db, ctx: &ToolContext, action: &Boundary) -> Decision {
+            match action {
+                Boundary::SafetyBash(cmd) | Boundary::NewAsk(cmd) | Boundary::BuiltinBash(cmd) => {
+                    evaluate(db, ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap()
+                }
+                Boundary::SafetyWrite(path) | Boundary::BuiltinWrite(path) => evaluate(
+                    db,
+                    ctx,
+                    &FsWrite,
+                    "fs_write",
+                    &json!({"path": path, "content": "x"}),
+                )
+                .unwrap(),
+                Boundary::BuiltinRead(path) => {
+                    evaluate(db, ctx, &FsRead, "fs_read", &json!({"path": path})).unwrap()
+                }
+                Boundary::NewDomain(url) => {
+                    evaluate(db, ctx, &WebFetch, "web_fetch", &json!({"url": url})).unwrap()
+                }
+                // 工具名占位，不在注册表里。git push 不走这条。
+                Boundary::RemotePublish => {
+                    evaluate(db, ctx, &Bash, "remote_publish", &json!({})).unwrap()
+                }
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn high_levels_pass_safety_net_and_reject_never_and_publish(
+                level in sample::select(vec!["L0", "L1", "L2", "L3", "L4"]),
+                action in boundary_action(),
+            ) {
+                let (db, ctx, _d) = setup();
+                crate::autonomy::set_level(&db, "p1", level).unwrap();
+                let high = matches!(level, "L3" | "L4");
+                let d = decide(&db, &ctx, &action);
+                match &action {
+                    Boundary::BuiltinRead(_)
+                    | Boundary::BuiltinWrite(_)
+                    | Boundary::BuiltinBash(_) => {
+                        prop_assert!(
+                            matches!(d, Decision::Deny { layer: "builtin_deny", .. }),
+                            "{level} {action:?} => {d:?}"
+                        );
+                    }
+                    Boundary::RemotePublish => {
+                        prop_assert!(
+                            matches!(d, Decision::Ask { safety_net: true, .. }),
+                            "{level} remote publish => {d:?}"
+                        );
+                    }
+                    other => {
+                        let expect_net = matches!(
+                            other,
+                            Boundary::SafetyBash(_) | Boundary::SafetyWrite(_)
+                        );
+                        if high {
+                            match &d {
+                                Decision::Allow {
+                                    via: AllowVia::Autonomy {
+                                        level: got,
+                                        safety_net,
+                                        ..
+                                    },
+                                } => {
+                                    let want = crate::autonomy::parse_level(level).unwrap();
+                                    prop_assert_eq!(*got, want, "{:?}", action);
+                                    prop_assert_eq!(*safety_net, expect_net, "{:?}", action);
+                                }
+                                _ => prop_assert!(false, "{level} {action:?} => {d:?}"),
+                            }
+                        } else {
+                            prop_assert!(
+                                matches!(d, Decision::Ask { safety_net, .. } if safety_net == expect_net),
+                                "{level} {action:?} => {d:?}"
+                            );
+                        }
+                    }
+                }
+            }
+
+            /// 项目否定在放行之前。安全网在 L0–L2 仍先必问（顺序不改）；
+            /// L3+ 不能把否定规则一起放掉。普通询问任何档都是 deny。
+            #[test]
+            fn project_deny_survives_high_autonomy(
+                level in sample::select(vec!["L0", "L1", "L2", "L3", "L4"]),
+                net in proptest::bool::ANY,
+            ) {
+                let (db, ctx, _d) = setup();
+                crate::autonomy::set_level(&db, "p1", level).unwrap();
+                let (shape, cmd) = if net {
+                    ("rm -rf *", "rm -rf build")
+                } else {
+                    ("npm *", "npm test")
+                };
+                insert_rule(&db, 0, "bash", shape, "deny", "project");
+                let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
+                let high = matches!(level, "L3" | "L4");
+                if net && !high {
+                    prop_assert!(
+                        matches!(d, Decision::Ask { safety_net: true, .. }),
+                        "{level} safety net still asks before deny, got {d:?}"
+                    );
+                } else {
+                    prop_assert!(
+                        matches!(d, Decision::Deny { layer: "project_deny", .. }),
+                        "{level} net={net} => {d:?}"
+                    );
+                }
             }
         }
     }

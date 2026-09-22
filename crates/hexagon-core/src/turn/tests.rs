@@ -588,6 +588,9 @@ fn sleeping_agent_makes_zero_model_calls() {
 #[test]
 fn ask_pauses_turn_with_question() {
     let (db, reg, ctx, _dir) = setup();
+    // 票 03：省略 autonomy 的项目行默认 L4，bash 会放行，回合不再停在询问。
+    // 本测试守的是 L0–L2 仍排队，所以钉 L0。
+    crate::autonomy::set_level(&db, "p1", "L0").unwrap();
     let provider = ScriptedProvider::new(vec![tool_response(vec![(
         "t1",
         "bash",

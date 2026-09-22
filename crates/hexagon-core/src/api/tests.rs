@@ -656,6 +656,296 @@ fn fastpath_l3_l4_does_not_auto_merge_baseline() {
     }
 }
 
+fn tool_call(
+    wb: &Workbench,
+    name: &str,
+    input: Value,
+) -> Result<crate::tools::CallOutcome, crate::tools::ToolError> {
+    let ctx = wb.ctx_for("a0", None);
+    wb.registry.call(&wb.db, &ctx, name, input)
+}
+
+fn permission_cards(wb: &Workbench) -> Vec<Value> {
+    pending_questions(wb)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c["kind"] == "permission")
+        .collect()
+}
+
+/// 票 03 / ADR 0059：L3/L4 放行安全网和新权限询问，时间线留 via=autonomy，
+/// 不入待决、不写 permission_rules。项目否定和内置永不仍拒绝。
+/// 盖章不在本票（见 `l3_and_l4_still_wait_at_stamp_point`）。
+#[test]
+fn l3_and_l4_release_safety_net_and_new_asks() {
+    for lv in ["L3", "L4"] {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        wb.set_autonomy(lv).unwrap();
+
+        std::fs::create_dir_all(dir.path().join("victim")).unwrap();
+        std::fs::write(dir.path().join("victim/a.txt"), "x").unwrap();
+        let out = tool_call(
+            &wb,
+            "bash",
+            json!({"cmd": "rm -rf victim", "timeout_ms": 5000}),
+        )
+        .unwrap();
+        assert!(
+            matches!(out, crate::tools::CallOutcome::Done(_)),
+            "{lv} delete-repo queued or denied: {out:?}"
+        );
+        assert!(!dir.path().join("victim").exists(), "{lv} rm did not run");
+
+        let out = tool_call(
+            &wb,
+            "fs_write",
+            json!({"path": ".git/config", "content": "x"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(out, crate::tools::CallOutcome::Done(_)),
+            "{lv} .git write: {out:?}"
+        );
+        assert!(dir.path().join(".git/config").is_file(), "{lv}");
+
+        let out = tool_call(
+            &wb,
+            "bash",
+            json!({"cmd": "git push origin main", "timeout_ms": 5000}),
+        )
+        .unwrap();
+        assert!(
+            matches!(out, crate::tools::CallOutcome::Done(_)),
+            "{lv} git push: {out:?}"
+        );
+
+        // 新域名：连不上是执行失败，不是待决卡，也不是内置拒绝。
+        let fetched = tool_call(
+            &wb,
+            "web_fetch",
+            json!({"url": "http://127.0.0.1:1/new-domain"}),
+        );
+        match &fetched {
+            Ok(crate::tools::CallOutcome::Asked(_)) | Ok(crate::tools::CallOutcome::Denied(_)) => {
+                panic!("{lv} new-domain egress must run, got {fetched:?}")
+            }
+            _ => {}
+        }
+
+        let out = tool_call(
+            &wb,
+            "bash",
+            json!({"cmd": "echo hi > out.txt", "timeout_ms": 5000}),
+        )
+        .unwrap();
+        assert!(
+            matches!(out, crate::tools::CallOutcome::Done(_)),
+            "{lv} new ask: {out:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "hi\n"
+        );
+        assert!(
+            permission_cards(&wb).is_empty(),
+            "{lv} permission cards: {:?}",
+            permission_cards(&wb)
+        );
+        let rules: i64 = wb
+            .db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM permission_rules", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rules, 0, "{lv} auto-pass must not memorize");
+
+        let allowed = events(&wb, Some(&[EventKind::PermissionAllowed])).unwrap();
+        assert!(
+            allowed.len() >= 4,
+            "{lv} allow traces {}, want >= 4",
+            allowed.len()
+        );
+        assert!(
+            allowed
+                .iter()
+                .all(|e| e.payload["via"] == "autonomy" && e.payload["level"] == lv),
+            "{lv} {:?}",
+            allowed
+                .iter()
+                .map(|e| e.payload.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(allowed
+            .iter()
+            .any(|e| { e.payload["safety_net"] == true && e.payload["tool"] == "bash" }));
+        assert!(allowed.iter().any(|e| e.payload["safety_net"] == false));
+
+        for (name, input) in [
+            ("fs_read", json!({"path": ".env"})),
+            (
+                "fs_write",
+                json!({"path": ".hexagon/permissions.toml", "content": "allow = *"}),
+            ),
+            ("bash", json!({"cmd": "cat .env", "timeout_ms": 5000})),
+        ] {
+            let denied = tool_call(&wb, name, input).unwrap();
+            assert!(
+                matches!(denied, crate::tools::CallOutcome::Denied(_)),
+                "{lv} {name} builtin never: {denied:?}"
+            );
+        }
+        assert!(!dir.path().join(".hexagon/permissions.toml").exists());
+        let denials = events(&wb, Some(&[EventKind::PermissionDenied])).unwrap();
+        assert!(
+            denials.iter().all(|e| e.payload["layer"] == "builtin_deny"),
+            "{lv} {denials:?}"
+        );
+        assert_eq!(permission_cards(&wb).len(), 0);
+
+        wb.db
+            .conn()
+            .execute(
+                "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope) VALUES
+                 ('d1','p1','bash','rm -rf *','deny','project'),
+                 ('d2','p1','bash','echo *','deny','project')",
+                [],
+            )
+            .unwrap();
+        std::fs::create_dir_all(dir.path().join("keep")).unwrap();
+        let d = tool_call(
+            &wb,
+            "bash",
+            json!({"cmd": "rm -rf keep", "timeout_ms": 5000}),
+        )
+        .unwrap();
+        assert!(
+            matches!(d, crate::tools::CallOutcome::Denied(_)),
+            "{lv} project deny must beat safety-net release: {d:?}"
+        );
+        assert!(dir.path().join("keep").exists(), "{lv}");
+        let d = tool_call(&wb, "bash", json!({"cmd": "echo no", "timeout_ms": 5000})).unwrap();
+        assert!(
+            matches!(d, crate::tools::CallOutcome::Denied(_)),
+            "{lv} project deny must beat a new ask: {d:?}"
+        );
+    }
+}
+
+/// 票 03：L0–L2 的安全网和权限询问仍排队，不留放行轨迹，也不执行。
+#[test]
+fn l0_through_l2_safety_net_and_new_asks_still_queue() {
+    for lv in ["L0", "L1", "L2"] {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        wb.set_autonomy(lv).unwrap();
+        std::fs::create_dir_all(dir.path().join("victim")).unwrap();
+        let out = tool_call(
+            &wb,
+            "bash",
+            json!({"cmd": "rm -rf victim", "timeout_ms": 5000}),
+        )
+        .unwrap();
+        assert!(
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
+            "{lv} safety net: {out:?}"
+        );
+        assert!(dir.path().join("victim").exists(), "{lv}");
+        let out = tool_call(
+            &wb,
+            "bash",
+            json!({"cmd": "echo hi > queued.txt", "timeout_ms": 5000}),
+        )
+        .unwrap();
+        assert!(
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
+            "{lv} new ask: {out:?}"
+        );
+        assert!(!dir.path().join("queued.txt").exists(), "{lv}");
+        let out = tool_call(
+            &wb,
+            "fs_write",
+            json!({"path": ".git/HEAD", "content": "x"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
+            "{lv} .git: {out:?}"
+        );
+        assert!(!dir.path().join(".git/HEAD").exists(), "{lv}");
+        let fetched = tool_call(
+            &wb,
+            "web_fetch",
+            json!({"url": "http://127.0.0.1:1/new-domain"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(fetched, crate::tools::CallOutcome::Asked(_)),
+            "{lv} egress: {fetched:?}"
+        );
+        assert!(
+            permission_cards(&wb).len() >= 4,
+            "{lv} {:?}",
+            permission_cards(&wb)
+        );
+        assert!(
+            events(&wb, Some(&[EventKind::PermissionAllowed]))
+                .unwrap()
+                .is_empty(),
+            "{lv}"
+        );
+    }
+}
+
+/// 票 03 / ADR 0034：远程发布不搭安全网的顺风车。L0–L4 都只入队，不推、不放行。
+#[test]
+fn remote_publish_waits_for_human_at_every_level() {
+    for lv in ["L0", "L1", "L2", "L3", "L4"] {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+        wb.set_autonomy(lv).unwrap();
+        let qid = wb.request_publish("origin").unwrap();
+        let pend = pending_questions(&wb).unwrap();
+        let card = pend.iter().find(|c| c["id"] == qid).expect(lv);
+        assert_eq!(card["kind"], "publish", "{lv}");
+        assert_eq!(card["state"], "queued", "{lv}");
+        assert!(
+            events(&wb, Some(&[EventKind::PublishConfirmed]))
+                .unwrap()
+                .is_empty(),
+            "{lv}"
+        );
+        assert_eq!(
+            events(&wb, Some(&[EventKind::PublishRequested]))
+                .unwrap()
+                .len(),
+            1,
+            "{lv}"
+        );
+        assert!(
+            events(&wb, Some(&[EventKind::PermissionAllowed]))
+                .unwrap()
+                .is_empty(),
+            "{lv} publish must not look like a safety-net release"
+        );
+    }
+}
+
+/// 票 04 还没落地：L4 不自动通过自然语言安装确认。
+#[test]
+fn l4_install_confirm_still_queues() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+    wb.set_autonomy("L4").unwrap();
+    std::fs::create_dir_all(dir.path().join("skillpack")).unwrap();
+    std::fs::write(dir.path().join("skillpack/SKILL.md"), "# t").unwrap();
+    let qid = request_install(&wb, "skillpack").unwrap();
+    assert!(!dir.path().join(".hexagon/skills/skillpack").exists());
+    let pend = pending_questions(&wb).unwrap();
+    assert!(pend
+        .iter()
+        .any(|q| q["id"] == qid && q["kind"] == "install"));
+}
+
 #[test]
 fn pending_questions_filters_answered_and_reject_at_stamp() {
     let dir = tempfile::tempdir().unwrap();

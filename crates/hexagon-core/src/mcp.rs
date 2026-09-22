@@ -805,7 +805,8 @@ while True:
         let db = Db::open_in_memory().unwrap();
         db.conn()
             .execute(
-                "INSERT INTO projects (id, dir, name, mode) VALUES ('p','/tmp/x','x','pack')",
+                // 票 03：默认 L4 会放行 External 询问。本夹具守「先问再批」，钉 L0。
+                "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p','/tmp/x','x','pack','L0')",
                 [],
             )
             .unwrap();

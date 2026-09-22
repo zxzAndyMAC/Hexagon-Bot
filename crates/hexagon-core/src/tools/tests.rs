@@ -5,7 +5,8 @@ fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
     let db = Db::open_in_memory().unwrap();
     db.conn()
         .execute(
-            "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
+            // 票 03：默认 L4 会放行安全网和新询问。本夹具守的是排队语义，钉 L0。
+            "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p1','/tmp/x','x','pack','L0')",
             [],
         )
         .unwrap();
