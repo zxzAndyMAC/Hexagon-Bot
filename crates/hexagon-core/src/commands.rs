@@ -99,9 +99,10 @@ pub fn send_message_side(
     db: &Db,
     project_id: &str,
     body: &str,
+    attachments: &[crate::trace::AttachRef],
 ) -> Result<(i64, Option<TextCommand>), TraceError> {
     let tokens = parse_tokens(body);
-    let id = db.append_message(project_id, "owner", body, &tokens, None, None)?;
+    let id = db.append_message(project_id, "owner", body, &tokens, attachments, None, None)?;
     Ok((id, parse_command(body)))
 }
 
@@ -121,8 +122,9 @@ pub fn send_via_control(
     db: &Db,
     project_id: &str,
     body: &str,
+    attachments: &[crate::trace::AttachRef],
 ) -> Result<(i64, Option<TextCommand>), RouteError> {
-    let (id, cmd) = send_message_side(db, project_id, body)?;
+    let (id, cmd) = send_message_side(db, project_id, body, attachments)?;
     let rest = match cmd {
         Some(TextCommand::Pause) => {
             crate::orchestra::pause(db, project_id)?;
@@ -135,6 +137,74 @@ pub fn send_via_control(
         other => other,
     };
     Ok((id, rest))
+}
+
+// ---------- 票 03：图片附件暂存（.hexagon/inbox/） ----------
+
+/// 附件落盘（Composer 粘贴/拖拽 → 发送前）：魔数嗅探（不信声明的
+/// MIME/扩展名）→ 限尺寸 → `.hexagon/inbox/att-<ulid>.<ext>` 写文件，
+/// 返回 AttachRef 供 send_message 落行引用。
+/// 防撞：ulid 由 db.next_id 供给（内容哈希在文件名里防同内容重写）。
+pub fn stage_attachment(
+    db: &Db,
+    repo_root: &std::path::Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<crate::trace::AttachRef, AttachError> {
+    let mt = crate::tools::sniff_image(bytes).ok_or_else(|| AttachError::NotImage(name.into()))?;
+    if bytes.len() > crate::tools::ATTACH_IMG_CAP {
+        return Err(AttachError::TooBig {
+            name: name.into(),
+            bytes: bytes.len() as i64,
+        });
+    }
+    let dir = repo_root.join(".hexagon/inbox");
+    std::fs::create_dir_all(&dir)?;
+    let _ = std::fs::write(dir.join(".gitignore"), "*\n");
+    let ext = match mt {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let n = db.next_id("att")?;
+    // 同内容幂等名：重发同图不堆文件（fnv64 与 spill 事件同名策略）
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let file = format!("att-{n}-{h:016x}.{ext}");
+    std::fs::write(dir.join(&file), bytes)?;
+    Ok(crate::trace::AttachRef {
+        media_type: mt.into(),
+        path: format!(".hexagon/inbox/{file}"),
+        bytes: bytes.len() as i64,
+        name: name.to_string(),
+    })
+}
+
+/// 发送失败/取消的附件清理：删 inbox 文件（best-effort，孤儿另有
+/// 周期清扫兜底——只认 .hexagon/inbox/ 前缀防越界删）。
+pub fn discard_attachments(repo_root: &std::path::Path, refs: &[crate::trace::AttachRef]) {
+    for r in refs {
+        let p = repo_root.join(&r.path);
+        if r.path.starts_with(".hexagon/inbox/") && p.is_file() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AttachError {
+    #[error("not an image: {0}")]
+    NotImage(String),
+    #[error("image too large: {name} ({bytes}B)")]
+    TooBig { name: String, bytes: i64 },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Db(#[from] crate::db::DbError),
 }
 
 /// 文本指令（与按钮同权同痕）：只认整句命令，防普通语句被劫持。
@@ -255,14 +325,14 @@ mod tests {
             .unwrap();
         // 第二条连接 = 壳层旁路；写 /pause 与普通消息
         let side = Db::open(&path).unwrap();
-        let (id, cmd) = send_message_side(&side, "p1", "/pause").unwrap();
+        let (id, cmd) = send_message_side(&side, "p1", "/pause", &[]).unwrap();
         assert_eq!(cmd, Some(TextCommand::Pause));
         let body: String = main
             .conn()
             .query_row("SELECT body FROM messages WHERE id=?1", [id], |r| r.get(0))
             .unwrap();
         assert_eq!(body, "/pause");
-        let (_id2, cmd2) = send_message_side(&side, "p1", "普通插话").unwrap();
+        let (_id2, cmd2) = send_message_side(&side, "p1", "普通插话", &[]).unwrap();
         assert_eq!(cmd2, None);
         // owner_message 事件也随 append_message 落了——主连接看得到
         let n: i64 = main
@@ -314,7 +384,7 @@ mod tests {
 
         // 主连接提交后：控制连接写入 → 主连接立即可见（既有测试同语义）
         main.conn().execute_batch("COMMIT").unwrap();
-        let (id, _) = send_message_side(&ctrl, "p1", "落库").unwrap();
+        let (id, _) = send_message_side(&ctrl, "p1", "落库", &[]).unwrap();
         let body: String = main
             .conn()
             .query_row("SELECT body FROM messages WHERE id=?1", [id], |r| r.get(0))

@@ -54,6 +54,7 @@ pub fn repair_dangling_tool_uses(messages: &mut Vec<Message>) -> usize {
                               re-issue the call if it is still needed\"}"
                         .into(),
                     is_error: true,
+                    images: vec![],
                 })
                 .collect();
             // 后续已有 Tool 消息则并入其头部，否则插一条新 Tool 消息——
@@ -98,7 +99,15 @@ pub(super) fn estimate_tokens(messages: &[Message]) -> usize {
         .map(|b| match b {
             ContentBlock::Text { text } => text.len(),
             ContentBlock::ToolUse { input, .. } => input.to_string().len(),
-            ContentBlock::ToolResult { content, .. } => content.len(),
+            // 票 02：tool_result 内嵌图也要计入——漏算的话 5MB base64
+            // 绕过撞限检测直接撑爆请求体。
+            ContentBlock::ToolResult {
+                content, images, ..
+            } => content.len() + images.iter().map(|i| i.data.len()).sum::<usize>(),
+            // 图按 base64 字符粗算（≈真实 token 代价同量级，宁高估）
+            ContentBlock::Image { data, .. } => data.len(),
+            // 票 04：server 工具块按序列化尺寸计
+            ContentBlock::Opaque { raw } => raw.to_string().len(),
         })
         .sum();
     chars / 4
@@ -108,9 +117,23 @@ pub(super) fn estimate_tokens(messages: &[Message]) -> usize {
 /// 完整内容落 `.hexagon/spill/`，上下文留 head+marker+tail；被裁部分可读回，
 /// 不再永久丢失。spill 失败时 spill_trim 内部退回旧式纯截断。
 pub(super) fn trim_context(ctx: &ToolContext, mut messages: Vec<Message>) -> Vec<Message> {
-    for m in &mut messages {
+    // 票 02：历史图先剥——只有最新一条 Tool 消息保留图，更早的
+    // tool_result 图字节是上下文黑洞（单张可达 5MB base64）。剥图留
+    // 指针注记，模型要再看可 fs_read 重读（与 spill 同一指针语义）。
+    let last_tool = messages.iter().rposition(|m| m.role == Role::Tool);
+    for (mi, m) in messages.iter_mut().enumerate() {
         for b in &mut m.content {
-            if let ContentBlock::ToolResult { content, .. } = b {
+            if let ContentBlock::ToolResult {
+                content, images, ..
+            } = b
+            {
+                if Some(mi) != last_tool && !images.is_empty() {
+                    let n = images.len();
+                    images.clear();
+                    content.push_str(&format!(
+                        "\n[{n} image(s) elided from history — fs_read again if still needed]"
+                    ));
+                }
                 if content.len() > TRIM_BLOCK_CHARS {
                     *content = crate::tools::spill_trim(ctx, content, TRIM_BLOCK_CHARS);
                 }
@@ -199,10 +222,21 @@ fn write_transcript(ctx: &ToolContext, removed: &[Message]) -> Option<String> {
                     tool_use_id,
                     content,
                     is_error,
+                    images,
                 } => {
                     s.push_str(&format!(
-                        "[tool_result #{tool_use_id} err={is_error}] {content}\n"
+                        "[tool_result #{tool_use_id} err={is_error} images={}] {content}\n",
+                        images.len()
                     ));
+                }
+                ContentBlock::Image { media_type, .. } => {
+                    // transcript 记图元信息不落字节——transcript 是文本档案
+                    s.push_str(&format!("[image {media_type}]\n"));
+                }
+                ContentBlock::Opaque { raw } => {
+                    // 票 04：server 工具块记类型不记体（结果体可能很大）
+                    let t = raw["type"].as_str().unwrap_or("opaque");
+                    s.push_str(&format!("[server_tool {t}]\n"));
                 }
             }
         }

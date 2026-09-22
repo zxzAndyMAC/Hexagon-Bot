@@ -244,6 +244,17 @@ export function EventRow({
               )}
             </div>
             <CollapsibleBody text={m.body} unclamped={story} />
+            {/* 票 03：图片附件引用 chip（字节在 .hexagon/inbox/，
+                不开 assetProtocol——渲染引用不渲染图本体） */}
+            {m.attachments?.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4, justifyContent: 'flex-end' }}>
+                {m.attachments.map((a) => (
+                  <span key={a.path} className="chip" style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }} title={a.path}>
+                    <Icon name="artifact" size={10} /> {a.name}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <Avatar agentId="owner" role={title} size={34} />
         </div>

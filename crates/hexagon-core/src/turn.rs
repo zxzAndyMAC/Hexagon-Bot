@@ -162,6 +162,33 @@ fn stream_with_retry(
     }
 }
 
+/// 工具执行值 → ToolResult 块（票 02）：`v["image"]`（fs_read 读图产出
+/// `{media_type, data}`）剥成 images 载荷；content 里图片占位符替数据，
+/// 字节本体不进文本。Anthropic 形状进 tool_result.content；OpenAI
+/// 由映射层补 user 消息（ADR 0058-2）。
+fn tool_result_block(tool_use_id: String, v: &Value) -> ContentBlock {
+    let mut images = Vec::new();
+    let mut content = v.clone();
+    if let Some(im) = v["image"].as_object() {
+        let mt = im["media_type"].as_str().unwrap_or("").to_string();
+        let data = im["data"].as_str().unwrap_or("").to_string();
+        if !mt.is_empty() && !data.is_empty() {
+            images.push(crate::provider::ImageData {
+                media_type: mt.clone(),
+                data,
+            });
+            content["image"] =
+                serde_json::json!({"media_type": mt, "omitted": "carried as image block"});
+        }
+    }
+    ContentBlock::ToolResult {
+        tool_use_id,
+        content: content.to_string(),
+        is_error: false,
+        images,
+    }
+}
+
 fn bump_streak(
     state: &mut Option<(String, String)>,
     streak: &mut usize,
@@ -210,7 +237,17 @@ pub fn run_turn(
     layers: Vec<PromptLayer>,
     user_input: &str,
 ) -> Result<TurnOutcome, TurnError> {
-    run_turn_impl(db, provider, registry, ctx, layers, user_input, false, None)
+    run_turn_impl(
+        db,
+        provider,
+        registry,
+        ctx,
+        layers,
+        user_input,
+        &[],
+        false,
+        None,
+    )
 }
 
 /// 方案先行回合（US15 快速通道）：工具循环前先发一段不阻塞方案消息，
@@ -223,7 +260,17 @@ pub fn run_turn_planned(
     layers: Vec<PromptLayer>,
     user_input: &str,
 ) -> Result<TurnOutcome, TurnError> {
-    run_turn_impl(db, provider, registry, ctx, layers, user_input, true, None)
+    run_turn_impl(
+        db,
+        provider,
+        registry,
+        ctx,
+        layers,
+        user_input,
+        &[],
+        true,
+        None,
+    )
 }
 
 /// 带 delta 通道的回合（票 03）：sink 收带归属的瞬时增量；传 None
@@ -236,11 +283,20 @@ pub fn run_turn_streaming(
     ctx: &ToolContext,
     layers: Vec<PromptLayer>,
     user_input: &str,
+    attachments: &[crate::trace::AttachRef],
     plan_first: bool,
     sink: Option<&mut DeltaSink<'_>>,
 ) -> Result<TurnOutcome, TurnError> {
     run_turn_impl(
-        db, provider, registry, ctx, layers, user_input, plan_first, sink,
+        db,
+        provider,
+        registry,
+        ctx,
+        layers,
+        user_input,
+        attachments,
+        plan_first,
+        sink,
     )
 }
 
@@ -252,6 +308,7 @@ fn run_turn_impl(
     ctx: &ToolContext,
     layers: Vec<PromptLayer>,
     user_input: &str,
+    attachments: &[crate::trace::AttachRef],
     plan_first: bool,
     sink: Option<&mut DeltaSink<'_>>,
 ) -> Result<TurnOutcome, TurnError> {
@@ -350,6 +407,53 @@ fn run_turn_impl(
         },
     ];
 
+    // 票 03：负责人附件注入。vision 槽 → Image 块进首条 user 消息；
+    // 非 vision 槽 → [image: name](path) 降级文本 + attachments_degraded
+    // 事件（时间线提示行）。字节嗅探复核——行内 media_type 不可信。
+    if !attachments.is_empty() {
+        let vision = ctx.caps.contains("vision");
+        let mut degraded = 0usize;
+        for r in attachments.iter().take(crate::tools::ATTACH_MAX_COUNT) {
+            let p = ctx.repo_root.join(&r.path);
+            let blk = if r.path.starts_with(".hexagon/inbox/") {
+                std::fs::read(&p).ok().and_then(|b| {
+                    (b.len() <= crate::tools::ATTACH_IMG_CAP
+                        && crate::tools::sniff_image(&b) == Some(r.media_type.as_str()))
+                    .then(|| {
+                        if vision {
+                            use base64::Engine;
+                            ContentBlock::Image {
+                                media_type: r.media_type.clone(),
+                                data: base64::engine::general_purpose::STANDARD.encode(&b),
+                            }
+                        } else {
+                            degraded += 1;
+                            ContentBlock::Text {
+                                text: format!("[image: {}]({})", r.name, r.path),
+                            }
+                        }
+                    })
+                })
+            } else {
+                None
+            };
+            if let Some(blk) = blk {
+                if let Some(m) = messages.get_mut(1) {
+                    m.content.push(blk);
+                }
+            }
+        }
+        if degraded > 0 {
+            db.append_event(
+                &ctx.project_id,
+                EventKind::System,
+                json!({"kind": "attachments_degraded", "count": degraded}),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+            )?;
+        }
+    }
+
     let req_base = ChatRequest {
         model_slot: model_slot.unwrap_or_else(|| "default".into()),
         messages: vec![],
@@ -417,6 +521,7 @@ fn run_turn_impl(
                     &ctx.project_id,
                     &ctx.agent_id,
                     &text,
+                    &[],
                     &[],
                     Some(&ctx.agent_id),
                     ctx.stage_run_id.as_deref(),
@@ -609,6 +714,7 @@ fn run_turn_impl(
                         &ctx.agent_id,
                         &text,
                         &[],
+                        &[],
                         Some(&ctx.agent_id),
                         ctx.stage_run_id.as_deref(),
                     )?;
@@ -633,11 +739,7 @@ fn run_turn_impl(
                     Ok(CallOutcome::Done(v)) => {
                         last_fail = None;
                         streak = 0;
-                        results.push(ContentBlock::ToolResult {
-                            tool_use_id: id,
-                            content: v.to_string(),
-                            is_error: false,
-                        })
+                        results.push(tool_result_block(id, &v))
                     }
                     Ok(CallOutcome::Denied(reason)) => {
                         let sig = format!("denied: {reason}");
@@ -648,6 +750,7 @@ fn run_turn_impl(
                             tool_use_id: id,
                             content: sig,
                             is_error: true,
+                            images: vec![],
                         })
                     }
                     Ok(CallOutcome::Asked(qid)) => {
@@ -675,11 +778,7 @@ fn run_turn_impl(
                                 "reviewer",
                             ) {
                                 Ok(CallOutcome::Done(result)) => {
-                                    results.push(ContentBlock::ToolResult {
-                                        tool_use_id: id,
-                                        content: result.to_string(),
-                                        is_error: false,
-                                    });
+                                    results.push(tool_result_block(id, &result));
                                     continue;
                                 }
                                 Ok(CallOutcome::Denied(r)) => {
@@ -687,6 +786,7 @@ fn run_turn_impl(
                                         tool_use_id: id,
                                         content: format!("denied: {r}"),
                                         is_error: true,
+                                        images: vec![],
                                     });
                                     continue;
                                 }
@@ -696,6 +796,7 @@ fn run_turn_impl(
                                         tool_use_id: id,
                                         content: format!("error: {e}"),
                                         is_error: true,
+                                        images: vec![],
                                     });
                                     continue;
                                 }
@@ -714,6 +815,7 @@ fn run_turn_impl(
                             tool_use_id: id,
                             content: format!("error: {sig}"),
                             is_error: true,
+                            images: vec![],
                         })
                     }
                     Err(e) => return Err(e.into()), // 基建错（trace/db/sqlite）上抛
@@ -722,7 +824,9 @@ fn run_turn_impl(
             let tool_bytes: usize = results
                 .iter()
                 .map(|b| match b {
-                    ContentBlock::ToolResult { content, .. } => content.len(),
+                    ContentBlock::ToolResult {
+                        content, images, ..
+                    } => content.len() + images.iter().map(|i| i.data.len()).sum::<usize>(),
                     _ => 0,
                 })
                 .sum();

@@ -175,6 +175,24 @@ pub fn resolve_slot<'a, V>(map: &'a HashMap<String, V>, slot: &str) -> Option<&'
     map.get(slot).or_else(|| map.get("default"))
 }
 
+/// 槽位能力集（agent-senses 票 02）：绑定槽 → 模型条目 caps；
+/// 模型不在目录 → infer_caps 兜底推断；链断任一环 → 空集。
+pub fn caps_for_slot(slot: &str) -> std::collections::HashSet<String> {
+    let Ok(doc) = load() else {
+        return Default::default();
+    };
+    let Some(b) = resolve_slot(&doc.slots, slot) else {
+        return Default::default();
+    };
+    let Some(p) = doc.providers.iter().find(|p| p.id == b.provider_id) else {
+        return Default::default();
+    };
+    if let Some(m) = p.models.iter().find(|m| m.id == b.model) {
+        return m.caps.iter().cloned().collect();
+    }
+    infer_caps(&b.model).into_iter().collect()
+}
+
 /// 槽位就绪判定（给向导/创建闸）：有绑定 + 供应商存在且启用 + key 已存。
 /// `default` 槽的绑定兜底任何槽。
 pub fn slot_ready(doc: &ProviderDoc, store: &dyn CredentialStore, slot: &str) -> bool {
@@ -308,6 +326,12 @@ pub fn infer_caps(id: &str) -> Vec<String> {
     .any(|k| l.contains(k))
     {
         caps.push("vision".into());
+    }
+    // 供应商原生搜索（agent-senses 票 04 / ADR 0058-1）：只认 Anthropic
+    // 模型族——web_search_20250305 是 Anthropic server tool；OpenAI 形状
+    // 缺席属预期不对称（不自建爬虫顶替，能力随供应商切换消失）。
+    if l.contains("claude") {
+        caps.push("web".into());
     }
     // 工具调用：现代对话模型默认带，只排除明确的非对话模型
     if !["embed", "whisper", "tts", "dall", "moderation", "audio"]

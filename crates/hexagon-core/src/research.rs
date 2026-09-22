@@ -178,6 +178,8 @@ mod tests {
             stage_run_id: None,
             owned_globs: vec![],
             tiers: crate::artifacts::TierMap::new(),
+            sessions: Default::default(),
+            caps: Default::default(),
         }
     }
 

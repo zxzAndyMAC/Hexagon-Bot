@@ -21,6 +21,14 @@ pub enum Role {
     Tool,
 }
 
+/// base64 图（agent-senses 票 02）：media_type + data。
+/// 字节本体只走这张图通道进上下文，不走文本载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageData {
+    pub media_type: String,
+    pub data: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
@@ -36,6 +44,25 @@ pub enum ContentBlock {
         tool_use_id: String,
         content: String,
         is_error: bool,
+        /// 票 02：工具结果随带图（fs_read 读图）。Anthropic 形状进
+        /// tool_result.content 数组；OpenAI 形状 tool 消息只收字符串——
+        /// 映射层在其后补一条带图的 user 消息（ADR 0058-2 降级路径）。
+        #[serde(default)]
+        images: Vec<ImageData>,
+    },
+    /// 消息内联图（用户贴图等；票 03  Composer 附件产它）。
+    Image {
+        media_type: String,
+        data: String,
+    },
+    /// 供应商原生块透传（agent-senses 票 04）：server_tool_use /
+    /// web_search_tool_result 等服务端已执行块——原样保史并在下次
+    /// 请求原样回显（Anthropic 要求 server 工具块随历史回传）。
+    /// 不落成 ToolUse：本地注册表无 web_search，执行会回 unknown tool
+    /// 假错——「turn 层无感」的正确含义是不执行而不是换个名执行。
+    Opaque {
+        /// 供应商原始块 JSON（含 type 字段）。
+        raw: Value,
     },
 }
 
@@ -110,6 +137,14 @@ pub enum ProviderError {
 
 pub trait ModelProvider: Send + Sync {
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
+
+    /// 供应商原生 server tools（agent-senses 票 04）：返回请求组装时
+    /// 并入 tools 数组的原始 JSON 定义（如 Anthropic web_search_20250305）。
+    /// 默认空集——无此能力的供应商（OpenAI 形状）缺席是预期（ADR 0058-1：
+    /// 不自建爬虫顶替；caps 过滤在调用方做，这里只给形状）。
+    fn server_tools(&self, _model: &str) -> Vec<Value> {
+        vec![]
+    }
 
     /// 流式完成（票 01）。默认实现 = complete + 一次性发全文 delta——
     /// 没实现真流式的 provider 零改动兼容（aisuite Provider 基类同款
@@ -318,46 +353,80 @@ impl ModelProvider for ScriptedProvider {
 pub mod openai_shape {
     use super::*;
 
+    /// 票 02：OpenAI tool 消息只收字符串——带图 tool_result 降级为
+    /// 「tool 消息（文本）+ 紧随的 user 消息（image_url 部件）」
+    /// （ADR 0058-2；缺图沉默丢失比多一条 user 消息更坏）。
     pub fn to_request(req: &ChatRequest) -> Value {
-        let messages: Vec<Value> = req
-            .messages
-            .iter()
-            .map(|m| {
-                let role = serde_json::to_value(&m.role).unwrap();
-                let mut content_parts = Vec::new();
-                let mut tool_calls = Vec::new();
-                for b in &m.content {
-                    match b {
-                        ContentBlock::Text { text } => {
-                            content_parts.push(serde_json::json!({"type":"text","text":text}))
-                        }
-                        ContentBlock::ToolUse { id, name, input } => {
-                            tool_calls.push(serde_json::json!({
-                                "id": id, "type": "function",
-                                "function": {"name": name, "arguments": input.to_string()}
-                            }))
-                        }
-                        ContentBlock::ToolResult {
-                            tool_use_id,
-                            content,
-                            ..
-                        } => {
-                            return serde_json::json!({
-                                "role": "tool", "tool_call_id": tool_use_id, "content": content
-                            });
-                        }
+        let mut messages: Vec<Value> = Vec::new();
+        for m in &req.messages {
+            let role = serde_json::to_value(&m.role).unwrap();
+            let mut content_parts = Vec::new();
+            let mut tool_calls = Vec::new();
+            let mut carried_images: Vec<&ImageData> = Vec::new();
+            let mut tool_msgs = Vec::new();
+            for b in &m.content {
+                match b {
+                    ContentBlock::Text { text } => {
+                        content_parts.push(serde_json::json!({"type":"text","text":text}))
+                    }
+                    ContentBlock::Image { media_type, data } => {
+                        content_parts.push(serde_json::json!({
+                            "type":"image_url",
+                            "image_url":{"url":format!("data:{media_type};base64,{data}")}
+                        }))
+                    }
+                    ContentBlock::ToolUse { id, name, input } => {
+                        tool_calls.push(serde_json::json!({
+                            "id": id, "type": "function",
+                            "function": {"name": name, "arguments": input.to_string()}
+                        }))
+                    }
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        images,
+                        ..
+                    } => {
+                        carried_images.extend(images.iter());
+                        tool_msgs.push(serde_json::json!({
+                            "role": "tool", "tool_call_id": tool_use_id, "content": content
+                        }));
+                    }
+                    // 票 04：OpenAI 形状无 server tool 概念——折成文本占位
+                    // 保史（跨供应商回放时语义不断片，而非整块蒸发）。
+                    ContentBlock::Opaque { raw } => {
+                        let t = raw["type"].as_str().unwrap_or("server_tool");
+                        content_parts.push(serde_json::json!({
+                            "type":"text","text":format!("[{t}]")
+                        }))
                     }
                 }
-                let mut msg = serde_json::json!({"role": role});
-                if !content_parts.is_empty() {
-                    msg["content"] = serde_json::json!(content_parts);
+            }
+            if !tool_msgs.is_empty() {
+                messages.extend(tool_msgs);
+                if !carried_images.is_empty() {
+                    let mut parts = vec![serde_json::json!({
+                        "type":"text","text":"[tool result image(s) above]"}
+                    )];
+                    for im in &carried_images {
+                        parts.push(serde_json::json!({
+                            "type":"image_url",
+                            "image_url":{"url":format!("data:{};base64,{}",im.media_type,im.data)}
+                        }));
+                    }
+                    messages.push(serde_json::json!({"role":"user","content":parts}));
                 }
-                if !tool_calls.is_empty() {
-                    msg["tool_calls"] = serde_json::json!(tool_calls);
-                }
-                msg
-            })
-            .collect();
+                continue;
+            }
+            let mut msg = serde_json::json!({"role": role});
+            if !content_parts.is_empty() {
+                msg["content"] = serde_json::json!(content_parts);
+            }
+            if !tool_calls.is_empty() {
+                msg["tool_calls"] = serde_json::json!(tool_calls);
+            }
+            messages.push(msg);
+        }
         let tools: Vec<Value> = req
             .tools
             .iter()
@@ -505,7 +574,14 @@ pub mod anthropic_shape {
     use super::*;
 
     /// system 消息抽顶字段；ToolResult 归 user 消息；其余角色/块近直译。
-    pub fn to_request(req: &ChatRequest, model: &str, max_tokens: u64) -> Value {
+    /// `server_tools`：供应商原生工具定义（票 04 web_search_20250305），
+    /// 已是目标形状原样并入 tools 数组。
+    pub fn to_request(
+        req: &ChatRequest,
+        model: &str,
+        max_tokens: u64,
+        server_tools: &[Value],
+    ) -> Value {
         let mut system_parts = Vec::new();
         let mut messages = Vec::new();
         for m in &req.messages {
@@ -516,6 +592,10 @@ pub mod anthropic_shape {
                     ContentBlock::Text { text } => {
                         serde_json::json!({"type":"text","text":text})
                     }
+                    ContentBlock::Image { media_type, data } => serde_json::json!({
+                        "type":"image",
+                        "source":{"type":"base64","media_type":media_type,"data":data}
+                    }),
                     ContentBlock::ToolUse { id, name, input } => {
                         serde_json::json!({"type":"tool_use","id":id,"name":name,"input":input})
                     }
@@ -523,13 +603,27 @@ pub mod anthropic_shape {
                         tool_use_id,
                         content,
                         is_error,
+                        images,
                     } => {
+                        // Anthropic tool_result.content 原生收 image 块——
+                        // 图留在结果体内（与 OpenAI 补 user 消息的降级不同轴，
+                        // ADR 0058-2）。
+                        let mut parts = vec![serde_json::json!({"type":"text","text":content})];
+                        for im in images {
+                            parts.push(serde_json::json!({
+                                "type":"image",
+                                "source":{"type":"base64","media_type":im.media_type,"data":im.data}
+                            }));
+                        }
                         serde_json::json!({
                             "type":"tool_result","tool_use_id":tool_use_id,
-                            "content":[{"type":"text","text":content}],
+                            "content":parts,
                             "is_error":is_error,
                         })
                     }
+                    // 票 04：server 工具块原样回显——Anthropic 要求它们
+                    // 以原块类型留在历史里，否则下一轮 400。
+                    ContentBlock::Opaque { raw } => raw.clone(),
                 })
                 .collect();
             match m.role {
@@ -556,6 +650,8 @@ pub mod anthropic_shape {
                     "input_schema": t.input_schema,
                 })
             })
+            // 票 04：server tools 原样并入（已是供应商形状，不走 ToolDef 映射）
+            .chain(server_tools.iter().cloned())
             .collect();
         let mut body = serde_json::json!({
             "model": model, "max_tokens": max_tokens, "messages": messages,
@@ -582,6 +678,12 @@ pub mod anthropic_shape {
                         name: b["name"].as_str().unwrap_or_default().to_string(),
                         input: b["input"].clone(),
                     }),
+                    // 票 04：服务端工具块透传保史——server_tool_use /
+                    // web_search_tool_result 由供应商执行完毕才回传，
+                    // 本地无对应工具；不折成 ToolUse 防止二次执行。
+                    Some("server_tool_use") | Some("web_search_tool_result") => {
+                        content.push(ContentBlock::Opaque { raw: b.clone() })
+                    }
                     _ => {}
                 }
             }
@@ -608,6 +710,12 @@ pub mod anthropic_shape {
         ToolUse {
             id: String,
             name: String,
+            args: String,
+        },
+        /// 票 04：服务端工具块（server_tool_use 的 query 经 input_json_delta
+        /// 累积；web_search_tool_result 整块随 start 事件到齐）。
+        ServerTool {
+            raw: Value,
             args: String,
         },
     }
@@ -655,6 +763,13 @@ pub mod anthropic_shape {
                             name: b["name"].as_str().unwrap_or_default().into(),
                             args: String::new(),
                         },
+                        // 票 04：server 工具块整块保史（input 后续 delta 回填）
+                        Some("server_tool_use") | Some("web_search_tool_result") => {
+                            ABlock::ServerTool {
+                                raw: b.clone(),
+                                args: String::new(),
+                            }
+                        }
                         _ => ABlock::Text(String::new()),
                     });
                 }
@@ -672,7 +787,8 @@ pub mod anthropic_shape {
                                 }
                             }
                         }
-                        (Some(ABlock::ToolUse { args, .. }), Some("input_json_delta")) => {
+                        (Some(ABlock::ToolUse { args, .. }), Some("input_json_delta"))
+                        | (Some(ABlock::ServerTool { args, .. }), Some("input_json_delta")) => {
                             if let Some(p) = d["partial_json"].as_str() {
                                 args.push_str(p);
                             }
@@ -717,6 +833,15 @@ pub mod anthropic_shape {
                                     ProviderError::Transport(format!("tool input json: {e}"))
                                 })?;
                         content.push(ContentBlock::ToolUse { id, name, input });
+                    }
+                    // 票 04：server 工具块——delta 累积的 input 回填 raw 再透传
+                    ABlock::ServerTool { mut raw, args } => {
+                        if !args.is_empty() {
+                            if let Ok(input) = serde_json::from_str::<Value>(&args) {
+                                raw["input"] = input;
+                            }
+                        }
+                        content.push(ContentBlock::Opaque { raw });
                     }
                     _ => {}
                 }
@@ -826,12 +951,34 @@ fn emit_fallback(
 }
 
 impl ModelProvider for HttpProvider {
+    /// 票 04：槽 caps 含 `web` 才给 Anthropic 挂 web_search_20250305
+    /// （max_uses 有界防搜索循环烧额度）。OpenAI 形状返回空——能力
+    /// 缺席是 ADR 0058-1 的预期不对称，不自建爬虫顶替。
+    fn server_tools(&self, model_slot: &str) -> Vec<Value> {
+        if self.kind != ProviderKind::Anthropic {
+            return vec![];
+        }
+        if !crate::provider_config::caps_for_slot(model_slot).contains("web") {
+            return vec![];
+        }
+        vec![serde_json::json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5,
+        })]
+    }
+
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
         let key = self.api_key()?;
         match self.kind {
             ProviderKind::Anthropic => {
                 let url = format!("{}/v1/messages", self.base_url);
-                let body = anthropic_shape::to_request(req, &self.model, 8192);
+                let body = anthropic_shape::to_request(
+                    req,
+                    &self.model,
+                    8192,
+                    &self.server_tools(&req.model_slot),
+                );
                 let mut resp = self
                     .agent
                     .post(&url)
@@ -869,7 +1016,12 @@ impl ModelProvider for HttpProvider {
         match self.kind {
             ProviderKind::Anthropic => {
                 let url = format!("{}/v1/messages", self.base_url);
-                let mut body = anthropic_shape::to_request(req, &self.model, 8192);
+                let mut body = anthropic_shape::to_request(
+                    req,
+                    &self.model,
+                    8192,
+                    &self.server_tools(&req.model_slot),
+                );
                 body["stream"] = serde_json::json!(true);
                 let mut resp = self
                     .agent
@@ -1084,6 +1236,7 @@ mod tests {
                         tool_use_id: "t1".into(),
                         content: "文件内容".into(),
                         is_error: false,
+                        images: vec![],
                     }],
                 },
             ],
@@ -1097,7 +1250,7 @@ mod tests {
             serde_json::to_value(&req.messages).unwrap(),
             serde_json::to_value(&req.tools).unwrap(),
         );
-        let out = anthropic_shape::to_request(&req, "claude-test", 8192);
+        let out = anthropic_shape::to_request(&req, "claude-test", 8192, &[]);
         assert_eq!(out["model"], "claude-test");
         assert_eq!(out["max_tokens"], 8192);
         assert_eq!(out["system"], "sys");
@@ -1325,6 +1478,91 @@ mod tests {
         assert_eq!(resp.stop, StopReason::EndTurn);
     }
 
+    // ---------- 票 02：图片内容块两形状 ----------
+
+    fn img_result() -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: "tu1".into(),
+            content: "{\"path\":\"a.png\"}".into(),
+            is_error: false,
+            images: vec![ImageData {
+                media_type: "image/png".into(),
+                data: "aGk=".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn openai_tool_result_images_become_user_message() {
+        let req = ChatRequest {
+            model_slot: "m".into(),
+            messages: vec![Message {
+                role: Role::Tool,
+                content: vec![img_result()],
+            }],
+            tools: vec![],
+        };
+        let out = openai_shape::to_request(&req);
+        let msgs = out["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2, "tool msg + 补图 user msg");
+        assert_eq!(msgs[0]["role"], "tool");
+        assert_eq!(msgs[0]["tool_call_id"], "tu1");
+        assert_eq!(msgs[1]["role"], "user");
+        let part = &msgs[1]["content"][1];
+        assert_eq!(part["type"], "image_url");
+        assert_eq!(part["image_url"]["url"], "data:image/png;base64,aGk=");
+    }
+
+    #[test]
+    fn anthropic_tool_result_keeps_images_inline() {
+        let req = ChatRequest {
+            model_slot: "m".into(),
+            messages: vec![Message {
+                role: Role::Tool,
+                content: vec![img_result()],
+            }],
+            tools: vec![],
+        };
+        let out = anthropic_shape::to_request(&req, "claude", 8192, &[]);
+        let msgs = out["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1, "Anthropic 不拆消息");
+        let tr = &msgs[0]["content"][0];
+        assert_eq!(tr["type"], "tool_result");
+        assert_eq!(tr["content"][1]["type"], "image");
+        assert_eq!(tr["content"][1]["source"]["media_type"], "image/png");
+    }
+
+    #[test]
+    fn inline_image_maps_both_shapes() {
+        let req = ChatRequest {
+            model_slot: "m".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![
+                    ContentBlock::Text {
+                        text: "看图".into(),
+                    },
+                    ContentBlock::Image {
+                        media_type: "image/png".into(),
+                        data: "aGk=".into(),
+                    },
+                ],
+            }],
+            tools: vec![],
+        };
+        let o = openai_shape::to_request(&req);
+        assert_eq!(o["messages"][0]["content"][1]["type"], "image_url");
+        let a = anthropic_shape::to_request(&req, "claude", 8192, &[]);
+        assert_eq!(a["messages"][0]["content"][1]["type"], "image");
+        // serde 往返
+        let blk = ContentBlock::Image {
+            media_type: "image/png".into(),
+            data: "x".into(),
+        };
+        let rt: ContentBlock = serde_json::from_str(&serde_json::to_string(&blk).unwrap()).unwrap();
+        assert_eq!(rt, blk);
+    }
+
     /// 非流式端点回退：响应是 JSON 非 event-stream → 单 delta 全量。
     #[test]
     fn http_stream_falls_back_on_plain_json() {
@@ -1341,5 +1579,171 @@ mod tests {
             .unwrap();
         assert_eq!(got, vec!["整段"]);
         assert_eq!(resp.stop, StopReason::EndTurn);
+    }
+}
+
+#[cfg(test)]
+mod server_tool_tests {
+    use super::*;
+
+    fn anthropic_provider() -> HttpProvider {
+        HttpProvider::new(
+            ProviderKind::Anthropic,
+            "http://unused".into(),
+            "claude-sonnet-4".into(),
+            "k".into(),
+            std::sync::Arc::new(crate::credentials::MemoryStore::default()),
+        )
+    }
+
+    #[test]
+    fn infer_caps_marks_claude_web_not_openai() {
+        assert!(crate::provider_config::infer_caps("claude-sonnet-4").contains(&"web".to_string()));
+        assert!(!crate::provider_config::infer_caps("gpt-4o").contains(&"web".to_string()));
+    }
+
+    #[test]
+    fn server_tools_gated_by_slot_caps() {
+        let p = anthropic_provider();
+        // 无 providers.json → caps 空 → 不挂 server tool（fail-closed）
+        assert!(p.server_tools("default").is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var(
+            "HEXAGON_PROVIDERS_PATH",
+            dir.path().join("providers.json").to_str().unwrap(),
+        );
+        // 绑一个 claude 模型 → infer_caps 给 web
+        let doc = crate::provider_config::ProviderDoc {
+            providers: vec![crate::provider_config::ProviderDef {
+                id: "anth".into(),
+                name: "anth".into(),
+                kind: ProviderKind::Anthropic,
+                base_url: "http://x".into(),
+                models: vec![],
+                enabled: true,
+            }],
+            slots: [(
+                "default".to_string(),
+                crate::provider_config::SlotBinding {
+                    provider_id: "anth".into(),
+                    model: "claude-sonnet-4".into(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        std::fs::write(
+            dir.path().join("providers.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
+        let defs = p.server_tools("default");
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0]["type"], "web_search_20250305");
+        assert_eq!(defs[0]["name"], "web_search");
+        assert!(defs[0]["max_uses"].as_u64().unwrap() <= 10);
+        // OpenAI 形状恒缺席（ADR 0058-1 不对称）
+        let openai = HttpProvider::new(
+            ProviderKind::OpenAi,
+            "http://unused".into(),
+            "gpt-4o".into(),
+            "k".into(),
+            std::sync::Arc::new(crate::credentials::MemoryStore::default()),
+        );
+        assert!(openai.server_tools("default").is_empty());
+        std::env::remove_var("HEXAGON_PROVIDERS_PATH");
+    }
+
+    #[test]
+    fn anthropic_request_merges_server_tools() {
+        let req = ChatRequest {
+            model_slot: "default".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "hi".into() }],
+            }],
+            tools: vec![ToolDef {
+                name: "fs_read".into(),
+                description: "d".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }],
+        };
+        let st = vec![
+            serde_json::json!({"type":"web_search_20250305","name":"web_search","max_uses":5}),
+        ];
+        let out = anthropic_shape::to_request(&req, "claude", 8192, &st);
+        let tools = out["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[1]["type"], "web_search_20250305");
+        // 无 server tools 时数组形态不变
+        let out2 = anthropic_shape::to_request(&req, "claude", 8192, &[]);
+        assert_eq!(out2["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn response_folds_server_blocks_to_opaque() {
+        let resp = serde_json::json!({
+            "content": [
+                {"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"rust 1.9"}},
+                {"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","title":"R","url":"https://x"}]},
+                {"type":"text","text":"found it"}
+            ],
+            "stop_reason":"end_turn",
+            "usage":{"input_tokens":1,"output_tokens":2}
+        });
+        let r = anthropic_shape::from_response(&resp).unwrap();
+        assert_eq!(r.content.len(), 3);
+        assert!(
+            matches!(&r.content[0], ContentBlock::Opaque { raw } if raw["type"] == "server_tool_use")
+        );
+        assert!(
+            matches!(&r.content[1], ContentBlock::Opaque { raw } if raw["type"] == "web_search_tool_result")
+        );
+        assert!(matches!(&r.content[2], ContentBlock::Text { text } if text == "found it"));
+        assert_eq!(r.usage.completion_tokens, 2);
+    }
+
+    #[test]
+    fn sse_folds_server_blocks() {
+        let mut f = anthropic_shape::SseFold::default();
+        let mut sink = |_d: &StreamDelta| true;
+        f.event("content_block_start", r#"{"index":0,"content_block":{"type":"server_tool_use","id":"s1","name":"web_search","input":{}}}"#, &mut sink).unwrap();
+        f.event("content_block_delta", r#"{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"rust\"}"}}"#, &mut sink).unwrap();
+        f.event("content_block_start", r#"{"index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"s1","content":[]}}"#, &mut sink).unwrap();
+        f.event("message_stop", "{}", &mut sink).unwrap();
+        let r = f.finish().unwrap();
+        assert_eq!(r.content.len(), 2);
+        if let ContentBlock::Opaque { raw } = &r.content[0] {
+            assert_eq!(raw["input"]["query"], "rust", "delta 累积的 input 应回填");
+        } else {
+            panic!()
+        }
+    }
+
+    #[test]
+    fn openai_shape_serializes_opaque_as_text() {
+        let req = ChatRequest {
+            model_slot: "m".into(),
+            messages: vec![Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Opaque {
+                    raw: serde_json::json!({"type":"server_tool_use","name":"web_search"}),
+                }],
+            }],
+            tools: vec![],
+        };
+        let out = openai_shape::to_request(&req);
+        assert_eq!(
+            out["messages"][0]["content"][0]["text"],
+            "[server_tool_use]"
+        );
+    }
+
+    /// 手写 web_search 调用走本地注册表 → unknown tool（server tool 不
+    /// 进注册表——只经供应商原生通道，防模型伪造本地调用）。
+    #[test]
+    fn handwritten_web_search_is_unknown_tool() {
+        let reg = crate::tools::Registry::builtin();
+        assert!(!reg.defs().iter().any(|d| d.name == "web_search"));
     }
 }

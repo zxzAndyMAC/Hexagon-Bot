@@ -13,6 +13,8 @@ export default {
     backToLauncher: 'Back to launcher',
     fastpath: 'fast path',
     sleepAllHint: 'Sleep the whole team (or /sleep)',
+    sandboxOn: 'sandboxed', sandboxOnTip: 'Agent commands run inside an OS sandbox (writes confined to repo; net off by default)',
+    sandboxOff: 'no sandbox', sandboxOffTip: 'No OS sandbox on this platform — commands run unsandboxed (still approval-gated)',
   },
   autonomy: {
     L0: 'L0 · Owner decides',
@@ -123,6 +125,7 @@ export default {
     system: 'system',
   },
   sys: {
+    attachments_degraded: 'images dropped — model slot lacks vision',
     context_compacted: 'context compacted',
     context_denied: 'context request denied',
     context_resumed: 'context resumed',
@@ -216,6 +219,10 @@ export default {
     pathHint: 'path pointer — not a full-file inject',
     directory: 'dir',
     file: 'file',
+    attachTooMany: 'At most {{max}} images per message',
+    attachNotImage: 'Not an image: {{name}}',
+    attachTooBig: 'Image over 5MB: {{name}}',
+    attachRemove: 'Remove attachment',
     send: 'Send',
   },
   usage: {

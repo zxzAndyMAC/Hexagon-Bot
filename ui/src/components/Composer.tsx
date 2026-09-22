@@ -3,6 +3,16 @@ import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
+import type { AttachRef } from '../gen/AttachRef'
+
+// 票 03：图片附件——粘贴/拖拽进 Composer → stage_attachment 落
+// .hexagon/inbox/ → chip 条可移除 → send/dispatch 带引用。
+// 前端拦截口径与核内一致：单图 ≤5MB、单条 ≤4 图、只收图片。
+const ATTACH_IMG_CAP = 5 * 1024 * 1024
+const ATTACH_MAX = 4
+const IMG_EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+}
 
 // ui-audit-2 票 09：`#` 路径补全走核 API（repo_paths IPC，仓根有界
 // 遍历）——MOCK_PATHS 占位数据已退役。防抖 120ms + seq 乱序守卫。
@@ -19,6 +29,8 @@ export function Composer() {
   const [popup, setPopup] = useState<{ kind: '@' | '#'; items: { label: string; hint: string }[] } | null>(null)
   const [sel, setSel] = useState(0)
   const [histIdx, setHistIdx] = useState(-1)
+  const [attachments, setAttachments] = useState<(AttachRef & { preview: string })[]>([])
+  const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const pathSeq = useRef(0)
   const pathTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -71,16 +83,50 @@ export function Composer() {
     inputRef.current?.focus()
   }
 
+  // 票 03：文件 → chip。前端先拦（类型/尺寸/数量），过了才调
+  // stage_attachment 落盘——核内魔数复核仍在（双判不信任前端）。
+  const addFiles = async (files: File[]) => {
+    for (const f of files) {
+      if (attachments.length >= ATTACH_MAX) {
+        pushToast(t('composer.attachTooMany', { max: ATTACH_MAX }), 'err')
+        return
+      }
+      if (!IMG_EXT[f.type]) {
+        pushToast(t('composer.attachNotImage', { name: f.name }), 'err')
+        continue
+      }
+      if (f.size > ATTACH_IMG_CAP) {
+        pushToast(t('composer.attachTooBig', { name: f.name }), 'err')
+        continue
+      }
+      try {
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        const ref = await api.stageAttachment(f.name, bytes)
+        // 预览走 object URL（字节已在 inbox 落盘，不另起 IPC 读回）。
+        const preview = URL.createObjectURL(new Blob([bytes], { type: ref.media_type }))
+        setAttachments((a) => [...a, { ...ref, preview }])
+      } catch (e) {
+        pushToast(errText(e), 'err')
+      }
+    }
+  }
+
+  const removeAttachment = async (ref: AttachRef) => {
+    setAttachments((a) => a.filter((x) => x.path !== ref.path))
+    await api.discardAttachments([ref]).catch(() => {})
+  }
+
   const send = async () => {
-    if (!text.trim()) return
+    if (!text.trim() && attachments.length === 0) return
     const body = text
+    const refs = attachments.map(({ preview: _p, ...r }) => r)
     // ui-audit 票 04（P1-6）：发送失败 toast + 草稿保留——
     // 原先 await 裸抛，文案随输入框状态悬在用户面前却无任何反馈。
     try {
-      await api.sendMessage(body)
+      await api.sendMessage(body, refs)
       // 快速通道：消息即任务——发完直接派给通道角色跑一回合（票 26）
       if (mode === 'fastpath' && fastRole) {
-        await api.dispatch(fastRole, body).catch(() => {})
+        await api.dispatch(fastRole, body, refs).catch(() => {})
       } else if (mode === 'pack') {
         // pack：@点名即派活（真窗口活测实证 D-06——此前 pack 消息
         // 只落库，UI 没有任何触发 agent 回合的路径，阶段开了 agent
@@ -100,21 +146,45 @@ export function Composer() {
         for (const role of mentioned) {
           // 点名失败（角色不存在/回合报错）要可见——静默吞错正是
           // D-06 那类「点了没反应」死路的成因。
-          await api.dispatch(role, body).catch((e) => pushToast(errText(e), 'err'))
+          await api.dispatch(role, body, refs).catch((e) => pushToast(errText(e), 'err'))
         }
       }
       setText('')
+      attachments.forEach((a) => URL.revokeObjectURL(a.preview))
+      setAttachments([])
       setHistIdx(-1)
       HISTORY.unshift(body)
       if (HISTORY.length > HISTORY_CAP) HISTORY.pop()
       await invalidate()
     } catch (e) {
+      // 票 03：发送失败保留 chip 与已落盘文件——重发直接可用；
+      // 未发送的孤儿文件由 inbox 周期清扫兜底（见 stage_attachment）。
       pushToast(errText(e), 'err')
     }
   }
 
   return (
-    <div style={{ position: 'relative', padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--bg-1)' }}>
+    <div
+      style={{
+        position: 'relative', padding: '10px 14px', borderTop: '1px solid var(--border)',
+        background: dragging ? 'var(--bg-2)' : 'var(--bg-1)',
+        outline: dragging ? '1px dashed var(--accent)' : 'none',
+        outlineOffset: -4,
+      }}
+      // 票 03：拖拽图片进 Composer（dragover 必须 preventDefault 才会触发 drop）
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault()
+          setDragging(true)
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragging(false)
+        void addFiles(Array.from(e.dataTransfer?.files ?? []))
+      }}
+    >
       {popup && popup.items.length > 0 && (
         <div className="panel panel-float" style={{ position: 'absolute', bottom: '100%', left: 14, right: 14, marginBottom: 4, overflow: 'hidden', zIndex: 10, boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
           <div className="sys-row" style={{ padding: '4px 10px' }}>
@@ -135,6 +205,38 @@ export function Composer() {
                 {it.label}
               </span>
               <span className="dim3" style={{ fontSize: 11 }}>{it.hint}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* 票 03：附件 chip 条——缩略图 + 名字 + 移除钮 */}
+      {attachments.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          {attachments.map((a) => (
+            <div
+              key={a.path}
+              className="attach-chip"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px 3px 3px',
+                background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 8,
+              }}
+            >
+              <img
+                src={a.preview}
+                alt={a.name}
+                style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 5 }}
+              />
+              <span className="dim3" style={{ fontSize: 11, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {a.name}
+              </span>
+              <button
+                className="attach-remove"
+                aria-label={t('composer.attachRemove')}
+                onClick={() => void removeAttachment(a)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 0, display: 'inline-flex' }}
+              >
+                <Icon name="close" size={11} />
+              </button>
             </div>
           ))}
         </div>
@@ -176,6 +278,14 @@ export function Composer() {
             }
           }}
           placeholder={`${t('composer.placeholder')} ${t('composer.multilineHint')}`}
+          // 票 03：粘贴图片（clipboardData.files）
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData?.files ?? [])
+            if (files.length) {
+              e.preventDefault() // 图不进文本流——走附件通道
+              void addFiles(files)
+            }
+          }}
           style={{
             flex: 1, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 8,
             padding: '8px 12px', outline: 'none', resize: 'none', lineHeight: 1.5,

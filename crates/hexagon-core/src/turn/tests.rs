@@ -28,6 +28,8 @@ fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
             stage_run_id: None,
             owned_globs: vec![],
             tiers: crate::artifacts::TierMap::new(),
+            sessions: Default::default(),
+            caps: Default::default(),
         },
         dir,
     )
@@ -49,6 +51,7 @@ fn streaming_turn_emits_ordered_deltas_then_done() {
         &ctx,
         vec![],
         "写",
+        &[],
         false,
         Some(&mut |d| got.push(d.clone())),
     )
@@ -109,6 +112,7 @@ fn stream_retry_resets_partial_deltas() {
         &ctx,
         vec![],
         "写",
+        &[],
         false,
         Some(&mut |d| got.push(d.clone())),
     )
@@ -137,6 +141,7 @@ fn pause_mid_stream_interrupts() {
         &ctx,
         vec![],
         "写",
+        &[],
         false,
         Some(&mut |d| {
             got.push(d.clone());
@@ -194,7 +199,7 @@ impl crate::tools::Tool for OwnerSpeaks {
     }
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         if let Some(body) = input.get("body").and_then(|v| v.as_str()) {
-            db.append_message(&ctx.project_id, "owner", body, &[], None, None)
+            db.append_message(&ctx.project_id, "owner", body, &[], &[], None, None)
                 .map_err(|e| ToolError::Exec(e.to_string()))?;
         }
         Ok(json!({"ok": true}))
@@ -281,7 +286,7 @@ fn steering_message_mid_turn_reaches_next_call() {
 fn pre_turn_owner_message_not_steered() {
     let (db, mut reg, ctx, _dir) = setup();
     reg.register(OwnerSpeaks);
-    db.append_message("p1", "owner", "起跑前的背景", &[], None, None)
+    db.append_message("p1", "owner", "起跑前的背景", &[], &[], None, None)
         .unwrap();
     // 首轮调用工具但不写消息 → 第二轮上下文不应出现任何 steering 信封
     let provider = ScriptedProvider::new(vec![
@@ -515,11 +520,12 @@ fn narrow_context_carries_pointers_not_bodies() {
         &[MessageToken::Mention {
             agent_role: "后端开发".into(),
         }],
+        &[],
         None,
         None,
     )
     .unwrap();
-    db.append_message("p1", "owner", "无关消息", &[], None, None)
+    db.append_message("p1", "owner", "无关消息", &[], &[], None, None)
         .unwrap();
 
     let provider = ScriptedProvider::new(vec![text_response("ok")]);
@@ -640,6 +646,7 @@ fn spill_trim_keeps_tail_and_spills_full() {
                 tool_use_id: "t1".into(),
                 content: big.clone(),
                 is_error: false,
+                images: vec![],
             }],
         }],
     );
@@ -691,6 +698,7 @@ fn mechanical_compact_spills_and_keeps_boundaries() {
                 tool_use_id: format!("t{i}"),
                 content: "x".repeat(100),
                 is_error: false,
+                images: vec![],
             }],
         });
     }
@@ -992,6 +1000,7 @@ fn t13_dangling_tool_use_repaired() {
                 tool_use_id: "t1".into(),
                 content: "ok".into(),
                 is_error: false,
+                images: vec![],
             }],
         },
         Message {
@@ -1031,7 +1040,7 @@ fn t13_dangling_tool_use_repaired() {
         .flat_map(|m| m.content.iter())
         .any(|b| matches!(
             b,
-            ContentBlock::ToolResult { content, is_error: true, .. }
+            ContentBlock::ToolResult { content, is_error: true, ..}
                 if content.contains("interrupted")
         )));
     // 幂等：再修一遍无新增
@@ -1049,6 +1058,7 @@ fn us37_trim_truncates_tool_results() {
                 tool_use_id: "t1".into(),
                 content: "y".repeat(9000),
                 is_error: false,
+                images: vec![],
             }],
         },
         Message {
@@ -1082,6 +1092,7 @@ fn owner_mention(db: &Db, body: &str) {
         &[crate::trace::MessageToken::Mention {
             agent_role: "后端开发".into(),
         }],
+        &[],
         None,
         None,
     )
@@ -1130,7 +1141,7 @@ fn external_results_taint_subsequent_outputs() {
         )
         .unwrap();
     // 外部内容回喂前：消息不带标
-    db.append_message("p1", "a1", "之前的话", &[], Some("a1"), Some("sr1"))
+    db.append_message("p1", "a1", "之前的话", &[], &[], Some("a1"), Some("sr1"))
         .unwrap();
     // mcp 结果回喂（tool_result 事件）
     db.append_event(
@@ -1141,8 +1152,16 @@ fn external_results_taint_subsequent_outputs() {
         Some("sr1"),
     )
     .unwrap();
-    db.append_message("p1", "a1", "读完外部后的判断", &[], Some("a1"), Some("sr1"))
-        .unwrap();
+    db.append_message(
+        "p1",
+        "a1",
+        "读完外部后的判断",
+        &[],
+        &[],
+        Some("a1"),
+        Some("sr1"),
+    )
+    .unwrap();
     let items = db
         .timeline("p1", None, 50, Some(&[EventKind::AgentMessage]))
         .unwrap();
@@ -1150,7 +1169,7 @@ fn external_results_taint_subsequent_outputs() {
     assert!(items[0].event.payload.get("after_external").is_none());
     assert_eq!(items[1].event.payload["after_external"], true);
     // 负责人消息永不打标
-    db.append_message("p1", "owner", "负责人说的", &[], None, Some("sr1"))
+    db.append_message("p1", "owner", "负责人说的", &[], &[], None, Some("sr1"))
         .unwrap();
     let items = db
         .timeline("p1", None, 50, Some(&[EventKind::OwnerMessage]))
@@ -1251,4 +1270,176 @@ fn envelope_fingerprint_is_deterministic_and_sensitive() {
     assert!(
         env[1]["messages"].as_array().unwrap().len() > env[0]["messages"].as_array().unwrap().len()
     );
+}
+
+/// 票 02：trim 剥历史图——只有最新 Tool 消息保留图，旧图留指针注记。
+/// （剥图先于 spill：5MB base64 若留着，轻量裁剪永远压不下去。）
+#[test]
+fn trim_context_elides_old_images_keeps_latest() {
+    let (_db, _reg, ctx, _dir) = setup();
+    let img = vec![crate::provider::ImageData {
+        media_type: "image/png".into(),
+        data: "aGk=".into(),
+    }];
+    let tr = |id: &str, imgs: Vec<crate::provider::ImageData>| Message {
+        role: Role::Tool,
+        content: vec![ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: "ok".into(),
+            is_error: false,
+            images: imgs,
+        }],
+    };
+    let msgs = vec![
+        Message {
+            role: Role::System,
+            content: vec![ContentBlock::Text { text: "s".into() }],
+        },
+        tr("t1", img.clone()),
+        tr("t2", img.clone()),
+    ];
+    let out = trim_context(&ctx, msgs);
+    let ContentBlock::ToolResult {
+        images: old,
+        content: oldc,
+        ..
+    } = &out[1].content[0]
+    else {
+        panic!()
+    };
+    assert!(old.is_empty(), "历史图应被剥");
+    assert!(oldc.contains("elided"), "应留指针注记");
+    let ContentBlock::ToolResult { images: new, .. } = &out[2].content[0] else {
+        panic!()
+    };
+    assert_eq!(new.len(), 1, "最新一轮的图保留");
+}
+
+// ---------- 票 03：负责人附件注入 ----------
+
+fn stage_png(db: &Db, root: &std::path::Path, name: &str) -> crate::trace::AttachRef {
+    crate::commands::stage_attachment(db, root, name, b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0d").unwrap()
+}
+
+#[test]
+fn attachment_reaches_model_as_image_on_vision_slot() {
+    let (db, _reg, mut ctx, dir) = setup();
+    ctx.caps.insert("vision".into());
+    let att = stage_png(&db, dir.path(), "shot.png");
+    let provider = ScriptedProvider::new(vec![ChatResponse {
+        content: vec![ContentBlock::Text {
+            text: "看到了".into(),
+        }],
+        stop: StopReason::EndTurn,
+        usage: Default::default(),
+    }]);
+    let reg = Registry::builtin();
+    let out = run_turn_streaming(
+        &db,
+        &provider,
+        &reg,
+        &ctx,
+        vec![],
+        "看图",
+        &[att],
+        false,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(out, TurnOutcome::Finished));
+    // 模型收到的首条 user 消息应含 Image 块
+    let req = &provider.recorded()[0];
+    let has_img =
+        req.messages.iter().flat_map(|m| m.content.iter()).any(
+            |b| matches!(b, ContentBlock::Image { media_type, .. } if media_type == "image/png"),
+        );
+    assert!(has_img, "vision 槽应注入 Image 块");
+}
+
+#[test]
+fn attachment_degrades_to_text_without_vision() {
+    let (db, _reg, ctx, dir) = setup(); // caps 空集
+    let att = stage_png(&db, dir.path(), "shot.png");
+    let provider = ScriptedProvider::new(vec![ChatResponse {
+        content: vec![ContentBlock::Text { text: "ok".into() }],
+        stop: StopReason::EndTurn,
+        usage: Default::default(),
+    }]);
+    let reg = Registry::builtin();
+    run_turn_streaming(
+        &db,
+        &provider,
+        &reg,
+        &ctx,
+        vec![],
+        "看图",
+        std::slice::from_ref(&att),
+        false,
+        None,
+    )
+    .unwrap();
+    let req = &provider.recorded()[0];
+    let flat =
+        req.messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .fold(String::new(), |mut s, b| {
+                if let ContentBlock::Text { text } = b {
+                    s += text
+                }
+                s
+            });
+    assert!(
+        flat.contains("[image: shot.png]"),
+        "非 vision 应降级为路径文本"
+    );
+    assert!(!req
+        .messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .any(|b| matches!(b, ContentBlock::Image { .. })));
+    // 降级事件落库（时间线提示行）
+    let n: i64 = db.conn().query_row(
+        "SELECT COUNT(*) FROM events WHERE kind='system' AND json_extract(payload,'$.kind')='attachments_degraded'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn stage_attachment_rejects_non_image_and_huge() {
+    let db = Db::open_in_memory().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    // 非图片字节
+    assert!(matches!(
+        crate::commands::stage_attachment(&db, dir.path(), "a.txt", b"hello"),
+        Err(crate::commands::AttachError::NotImage(_))
+    ));
+    // 超 5MB（伪造 PNG 头）
+    let mut big = b"\x89PNG\r\n\x1a\n".to_vec();
+    big.resize(5 * 1024 * 1024 + 1, 0);
+    assert!(matches!(
+        crate::commands::stage_attachment(&db, dir.path(), "big.png", &big),
+        Err(crate::commands::AttachError::TooBig { .. })
+    ));
+    // 合法图落盘 + 路径前缀正确
+    let r = stage_png(&db, dir.path(), "ok.png");
+    assert!(r.path.starts_with(".hexagon/inbox/"));
+    assert!(dir.path().join(&r.path).is_file());
+    // 同内容重 stage 幂等（同 hash 段文件名）
+    let r2 = stage_png(&db, dir.path(), "ok2.png");
+    assert!(r2.path.starts_with(".hexagon/inbox/"));
+    // discard 删对应文件；越界路径不删（前缀闸门）
+    let gone = r.path.clone();
+    crate::commands::discard_attachments(dir.path(), &[r]);
+    assert!(!dir.path().join(&gone).exists(), "已 discard 的文件应删");
+    assert!(dir.path().join(&r2.path).exists(), "未 discard 的保留");
+    crate::commands::discard_attachments(
+        dir.path(),
+        &[crate::trace::AttachRef {
+            media_type: "image/png".into(),
+            path: "../../etc/passwd".into(),
+            bytes: 1,
+            name: "x".into(),
+        }],
+    ); // 越界引用静默跳过——prefix 闸门
 }

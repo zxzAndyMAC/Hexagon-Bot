@@ -278,7 +278,7 @@ fn main() {
         for step in 0..max_steps {
             adjudicate_all(&wb);
             let r = if step == 0 {
-                wb.dispatch(role, &task)
+                wb.dispatch(role, &task, &[])
             } else {
                 wb.run_turn(role, "继续")
             };
@@ -422,6 +422,7 @@ fn main() {
                                 match wb.dispatch(
                                     &rv,
                                     &format!("请复审本阶段已交付的「{kind}」产物，用 artifact_write 产出复审意见（通过或驳回+理由）"),
+                                    &[],
                                 ) {
                                     Ok(o) => println!("    reviewer turn: {o:?}"),
                                     Err(e) => println!("    reviewer dispatch err {e}"),

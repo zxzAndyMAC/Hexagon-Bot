@@ -5,7 +5,7 @@ import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api
 
 const ev = (id: number, kind: EventKind, payload: Record<string, unknown> = {}, author?: string): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id: author ?? null, stage_run_id: null, payload, created_at: '' },
-  message: author ? { id, author, body: 'hi', tokens: [], created_at: '' } : null,
+  message: author ? { id, author, body: 'hi', tokens: [], attachments: [], created_at: '' } : null,
 })
 
 const q = (id: string, kind: QueuedCard['kind'], payload: Record<string, unknown> = {}): PendingQuestion => ({
@@ -143,7 +143,7 @@ describe('parseUnifiedDiff / extractDiffBlock', () => {
 describe('story 档（ui-audit 票 18 / 方向卡 3）', () => {
   const mk = (id: number, kind: string, msg = false): TimelineItem => ({
     event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload: kind === 'turn_started' ? { stage: 'build' } : {}, created_at: '' },
-    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], created_at: '' } : null,
+    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], created_at: '' } : null,
   }) as unknown as TimelineItem
 
   it('toolgroup/sysgroup 全移除；高危子类豁免可见；turn_started 成章', () => {

@@ -830,6 +830,8 @@ while True:
             stage_run_id: None,
             owned_globs: vec![],
             tiers: Default::default(),
+            sessions: Default::default(),
+            caps: Default::default(),
         };
         let mut reg = Registry::builtin();
         let host = McpHost::start(

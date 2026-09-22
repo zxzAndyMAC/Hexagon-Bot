@@ -13,6 +13,8 @@ export default {
     backToLauncher: '返回啟動頁',
     fastpath: '快速通道',
     sleepAllHint: '一鍵全員休眠（也可 /sleep）',
+    sandboxOn: '沙箱', sandboxOnTip: 'Agent 命令在 OS 沙箱內運行（寫限定倉庫內；預設斷網）',
+    sandboxOff: '無沙箱', sandboxOffTip: '本平台無 OS 沙箱——命令裸跑（仍走必問審批）',
   },
   autonomy: {
     L0: 'L0 · 負責人拍板',
@@ -123,6 +125,7 @@ export default {
     system: '系統',
   },
   sys: {
+    attachments_degraded: '圖片未送入——模型槽無 vision 能力',
     context_compacted: '上下文已壓縮',
     context_denied: '上下文請求被拒',
     context_resumed: '上下文已恢復',
@@ -216,6 +219,10 @@ export default {
     pathHint: '路徑指標——不是全文注入',
     directory: '目錄',
     file: '檔案',
+    attachTooMany: '每則訊息最多 {{max}} 張圖',
+    attachNotImage: '不是圖片：{{name}}',
+    attachTooBig: '圖片超過 5MB：{{name}}',
+    attachRemove: '移除附件',
     send: '送出',
   },
   usage: {

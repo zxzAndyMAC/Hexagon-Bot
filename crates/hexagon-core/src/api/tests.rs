@@ -7,7 +7,7 @@ use serde_json::Value;
 // ---- 票 05：门面读委托已删，测试直连模块函数（老 wb.* 形状由这组 helper 保持） ----
 
 fn send(wb: &Workbench, body: &str) -> Result<i64, String> {
-    let (id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, body)
+    let (id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, body, &[])
         .map_err(|e| e.to_string())?;
     // 与老 send_message 一致：指令分发失败不吞已落库的消息
     if let Some(c) = cmd {
@@ -320,6 +320,8 @@ fn artifact_content_at_reads_each_version() {
         stage_run_id: None,
         owned_globs: vec![],
         tiers: crate::artifacts::TierMap::new(),
+        sessions: Default::default(),
+        caps: Default::default(),
     };
     let d = |c: &str| {
         crate::artifacts::deliver(
@@ -376,7 +378,7 @@ fn fastpath_dispatch_runs_without_stages() {
                 text_response("done"),
             ])),
         );
-    wb.dispatch("后端", "直接修登录 bug").unwrap();
+    wb.dispatch("后端", "直接修登录 bug", &[]).unwrap();
     // 无 stage_runs 行——快速通道不占阶段
     let n: i64 = wb
         .db
@@ -415,7 +417,7 @@ fn dispatch_coexists_with_pack() {
     );
     wb.open_stage(0).unwrap();
     // 阶段跑着的同时直接派后端干活——互不干扰
-    wb.dispatch("后端", "顺手修个错别字").unwrap();
+    wb.dispatch("后端", "顺手修个错别字", &[]).unwrap();
     let runs = stage_status(&wb).unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0]["state"], "active");
@@ -435,7 +437,7 @@ fn dispatch_wakes_sleeping_and_rejects_unchecked() {
         ])),
     );
     set_agent_sleeping(&wb, "a0", true).unwrap();
-    wb.dispatch("后端", "活来了").unwrap();
+    wb.dispatch("后端", "活来了", &[]).unwrap();
     let st: String = wb
         .db
         .conn()
@@ -443,7 +445,10 @@ fn dispatch_wakes_sleeping_and_rejects_unchecked() {
         .unwrap();
     assert_eq!(st, "active");
     // 未勾选角色 → NoRole
-    assert!(matches!(wb.dispatch("运维", "x"), Err(ApiError::NoRole(_))));
+    assert!(matches!(
+        wb.dispatch("运维", "x", &[]),
+        Err(ApiError::NoRole(_))
+    ));
 }
 
 /// US15：快速通道动手前先发方案——方案消息先于首个工具调用落时间线，不阻塞等确认。
@@ -461,7 +466,7 @@ fn us15_dispatch_posts_plan_before_tools() {
         text_response("done"),
     ]));
     wb.register_provider("default", prov.clone());
-    wb.dispatch("后端", "修登录 bug").unwrap();
+    wb.dispatch("后端", "修登录 bug", &[]).unwrap();
     let tl = timeline(&wb, None, 50).unwrap();
     let plan_idx = tl
         .iter()
@@ -552,7 +557,7 @@ fn us15_owner_pauses_mid_tool_loop() {
             calls: std::sync::Mutex::new(0),
         }),
     );
-    let out = wb.dispatch("后端", "干活").unwrap();
+    let out = wb.dispatch("后端", "干活", &[]).unwrap();
     // 票 04：叫停是 Interrupted 终态，不再是 Failed("paused…")
     assert!(matches!(out, TurnOutcome::Interrupted), "got {out:?}");
     // 只跑了方案 + 一轮工具：第 3 次模型调用没发生

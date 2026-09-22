@@ -243,7 +243,7 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
         }
         StepDef::OwnerMessage { text } => {
             // 与壳层 send_message 同路由：控制面落库+即时指令，余下交 wb 分发
-            let (_id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, text)
+            let (_id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, text, &[])
                 .map_err(|e| ApiError::BadInput(e.to_string()))?;
             if let Some(c) = cmd {
                 wb.dispatch_command(&c)?;

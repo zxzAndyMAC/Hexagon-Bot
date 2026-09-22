@@ -13,6 +13,8 @@ export default {
     backToLauncher: '起動画面へ戻る',
     fastpath: 'ファストパス',
     sleepAllHint: '全員スリープ（/sleep でも可）',
+    sandboxOn: 'サンドボックス', sandboxOnTip: 'エージェントのコマンドは OS サンドボックス内で実行（書き込みはリポジトリ内限定・既定でネットワーク遮断）',
+    sandboxOff: 'サンドボックスなし', sandboxOffTip: 'このプラットフォームには OS サンドボックスなし——コマンドは非隔離で実行（承認ゲートは有効）',
   },
   autonomy: {
     L0: 'L0 · オーナー決裁',
@@ -123,6 +125,7 @@ export default {
     system: 'システム',
   },
   sys: {
+    attachments_degraded: '画像は省略されました — モデルに vision がありません',
     context_compacted: 'コンテキスト圧縮済み',
     context_denied: 'コンテキスト要求が拒否されました',
     context_resumed: 'コンテキスト再開',
@@ -216,6 +219,10 @@ export default {
     pathHint: 'パスポインタ——全文注入ではありません',
     directory: 'ディレクトリ',
     file: 'ファイル',
+    attachTooMany: '画像は1メッセージ{{max}}枚まで',
+    attachNotImage: '画像ではありません: {{name}}',
+    attachTooBig: '5MB超の画像: {{name}}',
+    attachRemove: '添付を削除',
     send: '送信',
   },
   usage: {

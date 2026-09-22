@@ -321,6 +321,8 @@ mod tests {
             stage_run_id: None,
             owned_globs: vec![],
             tiers: Default::default(),
+            sessions: Default::default(),
+            caps: Default::default(),
         };
         (db, ctx, dir)
     }

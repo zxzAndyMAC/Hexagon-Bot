@@ -50,6 +50,13 @@ pub struct ToolContext {
     pub owned_globs: Vec<String>,
     /// 产物档位注册表（自定义类型挂档用；内置映射不可降级）。
     pub tiers: crate::artifacts::TierMap,
+    /// 终端会话表（agent-senses 票 05）：Workbench 注入共享表，
+    /// 临时构造的 ctx 拿独立空表（一次性路径无会话复用需求）。
+    pub sessions: crate::sessions::SessionTable,
+    /// 模型槽能力集（agent-senses 票 02）：`vision` 缺位时 fs_read
+    /// 读图降级为路径文本——字节不进上下文（fail-closed 默认空集，
+    /// 临时构造的 ctx 自然无图能力）。
+    pub caps: std::collections::HashSet<String>,
 }
 
 impl ToolContext {
@@ -69,6 +76,8 @@ impl ToolContext {
             stage_run_id: None,
             owned_globs: crate::permissions::agent_globs(db, agent_id).unwrap_or_default(),
             tiers: crate::artifacts::TierMap::new(),
+            sessions: Default::default(),
+            caps: Default::default(),
         }
     }
 }
@@ -145,9 +154,12 @@ impl Registry {
         r.register(FsWrite);
         r.register(FsPatch);
         r.register(Bash);
+        r.register(BashOutput);
+        r.register(BashKill);
         r.register(ArtifactWrite);
         r.register(ArtifactRead);
         r.register(LoadSkill);
+        r.register(WebFetch);
         r.register(crate::git::GitBaselineMerge);
         r
     }

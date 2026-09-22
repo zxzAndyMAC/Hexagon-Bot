@@ -145,6 +145,12 @@ fn core_ping() -> String {
     hexagon_core::ping()
 }
 
+/// 沙箱实况（agent-senses 票 06）：纯平台探测，不触 state.wb（D01-exempt）。
+#[tauri::command]
+fn sandbox_status() -> hexagon_core::sandbox::SandboxStatus {
+    hexagon_core::sandbox::status()
+}
+
 #[tauri::command]
 fn open_project(
     app: tauri::AppHandle,
@@ -192,17 +198,49 @@ fn timeline(
 }
 
 #[tauri::command]
-fn send_message(state: tauri::State<AppState>, body: String) -> Result<i64, CmdError> {
+fn send_message(
+    state: tauri::State<AppState>,
+    body: String,
+    attachments: Vec<hexagon_core::trace::AttachRef>,
+) -> Result<i64, CmdError> {
     // 控制通道（ADR 0052）：路由表归 commands::send_via_control——消息落库 +
     // 暂停/恢复 就地生效；其余指令（rewind/stamp/skip/override/install）
     // 返回上来排 wb 队列。两段分开拿锁：conn→wb 不嵌套。
+    // 票 03：attachments 已先经 stage_attachment 落 .hexagon/inbox/。
     let (id, cmd) = with_conn(&state, |db, _| {
-        hexagon_core::commands::send_via_control(db, PROJECT_ID, &body).map_err(cmd_err)
+        hexagon_core::commands::send_via_control(db, PROJECT_ID, &body, &attachments)
+            .map_err(cmd_err)
     })?;
     if let Some(other) = cmd {
         with_wb(&state, |wb| wb.dispatch_command(&other))?;
     }
     Ok(id)
+}
+
+/// 票 03：粘贴/拖拽图片暂存 .hexagon/inbox/——魔数嗅探+尺寸闸在核内，
+/// 壳层只传字节。返回引用供 send_message 落行。
+#[tauri::command]
+fn stage_attachment(
+    state: tauri::State<AppState>,
+    name: String,
+    bytes: Vec<u8>,
+) -> Result<hexagon_core::trace::AttachRef, CmdError> {
+    with_conn(&state, |db, root| {
+        hexagon_core::commands::stage_attachment(db, root, &name, &bytes)
+            .map_err(|e| CmdError::internal(e.to_string()))
+    })
+}
+
+/// 票 03：发送失败/取消时清掉已暂存的附件文件（best-effort）。
+#[tauri::command]
+fn discard_attachments(
+    state: tauri::State<AppState>,
+    refs: Vec<hexagon_core::trace::AttachRef>,
+) -> Result<(), CmdError> {
+    with_conn(&state, |_db, root| {
+        hexagon_core::commands::discard_attachments(root, &refs);
+        Ok::<(), CmdError>(())
+    })
 }
 
 #[tauri::command]
@@ -1264,8 +1302,9 @@ fn dispatch(
     state: tauri::State<AppState>,
     role: String,
     input: String,
+    attachments: Vec<hexagon_core::trace::AttachRef>,
 ) -> Result<hexagon_core::turn::TurnOutcome, CmdError> {
-    with_wb(&state, |wb| wb.dispatch(&role, &input))
+    with_wb(&state, |wb| wb.dispatch(&role, &input, &attachments))
 }
 
 #[tauri::command]
@@ -1326,9 +1365,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             core_ping,
+            sandbox_status,
             open_project,
             timeline,
             send_message,
+            stage_attachment,
+            discard_attachments,
             answer_permission,
             advance,
             run_checks,

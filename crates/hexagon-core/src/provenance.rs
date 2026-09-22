@@ -577,6 +577,8 @@ mod tests {
                 stage_run_id: Some("sr1".into()),
                 owned_globs: vec![],
                 tiers: Default::default(),
+                sessions: Default::default(),
+                caps: Default::default(),
             },
             dir,
         )

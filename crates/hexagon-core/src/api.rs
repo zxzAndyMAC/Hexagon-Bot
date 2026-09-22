@@ -116,6 +116,15 @@ pub struct Workbench {
     /// MCP 宿主（ui-audit-2 票 06）：持全部服务子进程，Drop 时全停。
     /// `.hexagon/mcp.json` 缺席/为空 → None（MCP 是可选项）。
     mcp_host: Option<crate::mcp::McpHost>,
+    /// 终端会话表（agent-senses 票 05）：ctx_for 注入共享表；
+    /// Drop 时 kill_all——项目关闭/切换不留 sh 孤儿。
+    sessions: crate::sessions::SessionTable,
+}
+
+impl Drop for Workbench {
+    fn drop(&mut self) {
+        self.sessions.kill_all();
+    }
 }
 
 impl Workbench {
@@ -169,6 +178,7 @@ impl Workbench {
             pack,
             delta_hook: Mutex::new(None),
             mcp_host,
+            sessions: Default::default(),
         })
     }
 
@@ -239,6 +249,7 @@ impl Workbench {
             pack,
             delta_hook: Mutex::new(None),
             mcp_host,
+            sessions: Default::default(),
         })
     }
 
@@ -307,6 +318,7 @@ impl Workbench {
             let out = self.run_turn_opts(
                 &role,
                 "上下文撞限已由负责人放行。请接着完成未竟任务（上下文已重建+裁剪）。",
+                &[],
                 false,
             )?;
             return Ok(AdjudicateOutcome::Resumed {
@@ -350,6 +362,22 @@ impl Workbench {
             stage_run_id,
             owned_globs: crate::permissions::agent_globs(&self.db, agent_id).unwrap_or_default(),
             tiers: TierMap::new(),
+            sessions: self.sessions.clone(),
+            caps: {
+                // 票 02：槽位 caps 注入（读 agents.model_slot → 绑定的模型
+                // → caps 词表）。槽没绑定/无条目 → 空集（无 vision 等能力，
+                // fail-closed：宁可降读图，不把字节塞进看不见图的模型）。
+                let slot: Option<String> = self
+                    .db
+                    .conn()
+                    .query_row(
+                        "SELECT model_slot FROM agents WHERE id=?1",
+                        [agent_id],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                crate::provider_config::caps_for_slot(slot.as_deref().unwrap_or("default"))
+            },
         }
     }
 
@@ -456,14 +484,17 @@ impl Workbench {
 
     /// 跑某角色一回合（若激活）。有 interrupted run 未恢复时硬挡（票 37 恢复闸）。
     pub fn run_turn(&self, role: &str, input: &str) -> Result<TurnOutcome, ApiError> {
-        self.run_turn_opts(role, input, false)
+        self.run_turn_opts(role, input, &[], false)
     }
 
     /// plan_first=true 时回合先发不阻塞方案消息再进工具循环（US15 快速通道）。
+    /// 票 03：`attachments` 是负责人随消息贴的图片引用（.hexagon/inbox/ 内），
+    /// vision 槽注入 Image 块，否则降级为路径文本。
     fn run_turn_opts(
         &self,
         role: &str,
         input: &str,
+        attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
         if let Ok(rid) = self.db.conn().query_row(
@@ -533,6 +564,7 @@ impl Workbench {
             &ctx,
             turn_layers,
             input,
+            attachments,
             plan_first,
             sink,
         );
@@ -565,7 +597,12 @@ impl Workbench {
     /// 快速通道派发（票 26）：负责人直接把任务派给一个已勾选角色，
     /// 不走阶段——产物/事件落同一 .hexagon/，stage_runs 不产生行。
     /// 休眠角色被点名即唤醒（会诊唤醒同款语义）；未勾选角色 → NoRole。
-    pub fn dispatch(&self, role: &str, input: &str) -> Result<TurnOutcome, ApiError> {
+    pub fn dispatch(
+        &self,
+        role: &str,
+        input: &str,
+        attachments: &[crate::trace::AttachRef],
+    ) -> Result<TurnOutcome, ApiError> {
         let aid = self.agent_by_role(role)?;
         let status: String =
             self.db
@@ -591,7 +628,7 @@ impl Workbench {
             None,
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
-        self.run_turn_opts(role, input, true)
+        self.run_turn_opts(role, input, attachments, true)
     }
 
     /// 升级为流程包（票 26）：不换目录——钉包副本 + mode='pack' + PackUpgraded 事件。

@@ -97,7 +97,7 @@ describe('流式交接（ui-audit 票 08 / P1-7）', () => {
 
   const agentMsg = (id: number, author: string): TimelineItem => ({
     event: { id, project_id: 'p1', kind: 'agent_message', agent_id: author, stage_run_id: null, payload: {}, created_at: '' },
-    message: { id, author, body: 'done text', tokens: [], created_at: '' },
+    message: { id, author, body: 'done text', tokens: [], attachments: [], created_at: '' },
   })
 
   it('持久消息到达后对应 stream 清除，其余保留', async () => {

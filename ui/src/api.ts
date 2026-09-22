@@ -8,6 +8,8 @@ import i18n from './i18n'
 // 手改禁地——字段要改改 Rust 侧，`cargo test` 重出声明，字段漂移由 tsc 抓。
 // 词表字段（status/state/kind/mode）在 Rust 侧按 schema CHECK 钉了字面量联合。
 import type { CmdError } from './gen/CmdError'
+import type { AttachRef } from './gen/AttachRef'
+import type { SandboxStatus } from './gen/SandboxStatus'
 import type { QueuedCard } from './gen/QueuedCard'
 import type { TurnDelta } from './gen/TurnDelta'
 import type { StageRow } from './gen/StageRow'
@@ -134,9 +136,16 @@ export const api = {
     call<void>('open_project', { dir, name, roles, packJson: packJson ?? null }),
   timeline: (after?: number, limit = 500) =>
     call<TimelineItem[]>('timeline', { after: after ?? null, limit }),
-  sendMessage: (body: string) => call<number>('send_message', { body }),
+  sendMessage: (body: string, attachments: AttachRef[] = []) =>
+    call<number>('send_message', { body, attachments }),
+  // 票 03：粘贴/拖拽图片先暂存 .hexagon/inbox/，发送时带引用
+  stageAttachment: (name: string, bytes: Uint8Array) =>
+    call<AttachRef>('stage_attachment', { name, bytes: Array.from(bytes) }),
+  discardAttachments: (refs: AttachRef[]) =>
+    call<void>('discard_attachments', { refs }),
   // ui-audit-2 票 09：composer # 路径补全（仓根有界遍历，≤60 条）
   repoPaths: (query: string) => call<string[]>('repo_paths', { query }),
+  sandboxStatus: () => call<SandboxStatus>('sandbox_status'),
   answerPermission: (questionId: string, allow: boolean, rememberShape?: string, scope = 'activation') =>
     call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
   advance: () => call<StageAction>('advance'),
@@ -266,7 +275,8 @@ export const api = {
   closeProject: () => call<void>('close_project'),
   // ---- 快速通道（票 26）----
   projectInfo: () => call<ProjectInfo>('project_info'),
-  dispatch: (role: string, input: string) => call<TurnOutcome>('dispatch', { role, input }),
+  dispatch: (role: string, input: string, attachments: AttachRef[] = []) =>
+    call<TurnOutcome>('dispatch', { role, input, attachments }),
   upgradeToPack: (packName: string) => call<void>('upgrade_to_pack', { packName }),
   // ---- 项目向导（票 24）----
   projectOpen: () => call<boolean>('project_open'),
@@ -361,7 +371,7 @@ const mkMsg = (
   author: string, body: string, hhmm: string,
 ): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id, stage_run_id, payload: {}, created_at: `${T0}${hhmm}:00Z` },
-  message: { id, author, body, tokens: [], created_at: `${T0}${hhmm}:00Z` },
+  message: { id, author, body, tokens: [], attachments: [], created_at: `${T0}${hhmm}:00Z` },
 })
 
 const ART_CONTENT: Record<string, Record<number, string>> = {
@@ -848,6 +858,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return { imported: 1, skipped: ['web-svc: conflict'] } as T
     case 'repo_paths':
       return ['src/', 'src/api.rs', 'docs/', 'AGENTS.md'] as T
+    case 'sandbox_status':
+      return { mode: 'seatbelt', available: true, note: 'mock sandboxed' } as T
     case 'list_skills':
       return [
         { name: 'spec-writing', description: '规格书写规范', origin: 'builtin', enabled: true },

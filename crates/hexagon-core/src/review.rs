@@ -550,6 +550,8 @@ mod tests {
             stage_run_id: run.map(str::to_string),
             owned_globs: vec![],
             tiers: TierMap::new(),
+            sessions: Default::default(),
+            caps: Default::default(),
         }
     }
 

@@ -102,6 +102,7 @@ pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
 pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
     let target = match tool {
         "bash" => input["cmd"].as_str().unwrap_or(""),
+        "web_fetch" => input["url"].as_str().unwrap_or(""),
         "fs_read" | "fs_write" | "fs_patch" | "artifact_write" | "artifact_read" => {
             input["path"].as_str().unwrap_or("")
         }
@@ -109,7 +110,24 @@ pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
     };
     match tool {
         "bash" => bash_shape_matches(shape, target),
+        "web_fetch" => web_fetch_shape_matches(shape, target),
         _ => glob_match(shape, target),
+    }
+}
+
+/// web_fetch 的 URL 形状：`https://ex.com/*` 全串 glob，或 `*@dom` /
+/// `前缀@dom` 绑域名（host 边界复用 bash 的 @域语义——寄生域不命中）。
+/// 出处：ADR 0058-1——出网记忆沿「形状 × 域名」既有轴，不另造词汇。
+fn web_fetch_shape_matches(shape: &str, url: &str) -> bool {
+    let (head, dom) = match shape.split_once('@') {
+        Some((h, d)) => (h.trim_end_matches('*').trim_end(), Some(d.to_lowercase())),
+        None => (shape, None),
+    };
+    match dom {
+        Some(d) => {
+            host_matches_dom(url, &d) && (head.is_empty() || glob_match(&format!("{head}*"), url))
+        }
+        None => glob_match(shape, url),
     }
 }
 
@@ -808,6 +826,8 @@ mod tests {
                 stage_run_id: Some("sr1".into()),
                 owned_globs: vec![],
                 tiers: Default::default(),
+                sessions: Default::default(),
+                caps: Default::default(),
             },
             dir,
         )

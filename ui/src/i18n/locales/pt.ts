@@ -13,6 +13,8 @@ export default {
     backToLauncher: 'Voltar ao início',
     fastpath: 'via rápida',
     sleepAllHint: 'Dormir toda a equipe (ou /sleep)',
+    sandboxOn: 'sandbox', sandboxOnTip: 'Comandos do agente rodam em sandbox do SO (escrita limitada ao repo; rede desligada por padrão)',
+    sandboxOff: 'sem sandbox', sandboxOffTip: 'Sem sandbox de SO nesta plataforma — comandos sem isolamento (aprovação ainda exigida)',
   },
   autonomy: {
     L0: 'L0 · Responsável decide',
@@ -123,6 +125,7 @@ export default {
     system: 'sistema',
   },
   sys: {
+    attachments_degraded: 'imagens omitidas — o modelo não tem visão',
     context_compacted: 'contexto compactado',
     context_denied: 'pedido de contexto negado',
     context_resumed: 'contexto retomado',
@@ -216,6 +219,10 @@ export default {
     pathHint: 'ponteiro de caminho — não injeta o arquivo',
     directory: 'dir',
     file: 'arquivo',
+    attachTooMany: 'No máximo {{max}} imagens por mensagem',
+    attachNotImage: 'Não é uma imagem: {{name}}',
+    attachTooBig: 'Imagem acima de 5MB: {{name}}',
+    attachRemove: 'Remover anexo',
     send: 'Enviar',
   },
   usage: {

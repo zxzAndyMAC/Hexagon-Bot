@@ -413,6 +413,8 @@ mod tests {
                 stage_run_id: None,
                 owned_globs: vec![],
                 tiers: TierMap::new(),
+                sessions: Default::default(),
+                caps: Default::default(),
             },
             dir,
         )

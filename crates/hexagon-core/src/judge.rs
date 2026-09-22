@@ -258,6 +258,8 @@ impl JudgeBackend for LlmJudge<'_> {
                 stage_run_id: None,
                 owned_globs: vec![],
                 tiers: crate::artifacts::TierMap::new(),
+                sessions: Default::default(),
+                caps: Default::default(),
             };
             let _ = crate::usage::record(obs.db, &ctx, self.slot, &resp.usage, 0);
         }

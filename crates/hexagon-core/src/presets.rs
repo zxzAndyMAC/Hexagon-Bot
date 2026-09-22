@@ -443,6 +443,8 @@ mod tests {
                         stage_run_id: Some(rid.clone()),
                         owned_globs: vec![],
                         tiers: crate::artifacts::TierMap::new(),
+                        sessions: Default::default(),
+                        caps: Default::default(),
                     };
                     assert_eq!(
                         run_turn(&db, &provider, &reg, &ctx, vec![], "干活").unwrap(),

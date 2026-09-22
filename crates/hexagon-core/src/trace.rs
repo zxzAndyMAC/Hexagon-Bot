@@ -127,6 +127,19 @@ pub struct Event {
     pub created_at: String,
 }
 
+/// 消息图片附件引用（agent-senses 票 03）：字节本体在
+/// `.hexagon/inbox/` 文件里，行内只存引用（见迁移 0013 注释）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct AttachRef {
+    pub media_type: String,
+    /// 仓内相对路径（.hexagon/inbox/…）。
+    pub path: String,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
+    pub bytes: i64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct MessageRow {
@@ -135,6 +148,8 @@ pub struct MessageRow {
     pub author: String, // "owner" 或 agent_id
     pub body: String,
     pub tokens: Vec<MessageToken>,
+    /// 票 03：图片附件引用（无附件为 []）。
+    pub attachments: Vec<AttachRef>,
     pub created_at: String,
 }
 
@@ -272,19 +287,30 @@ impl Db {
     }
 
     /// 写消息：messages 行 + 一个配对事件（时间线序因此只需 events.id）。
+    /// 票 03：`attachments` 是图片附件引用（字节在 .hexagon/inbox/ 文件，
+    /// 行内只存 {media_type,path,bytes,name}——见迁移 0013）。
+    #[allow(clippy::too_many_arguments)] // 消息行七元组都是正交字段
     pub fn append_message(
         &self,
         project_id: &str,
         author: &str,
         body: &str,
         tokens: &[MessageToken],
+        attachments: &[AttachRef],
         agent_id: Option<&str>,
         stage_run_id: Option<&str>,
     ) -> Result<i64, TraceError> {
         let tx = self.conn().unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO messages (project_id, author, body, tokens) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![project_id, author, body, serde_json::to_string(&tokens)?],
+            "INSERT INTO messages (project_id, author, body, tokens, attachments)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                project_id,
+                author,
+                body,
+                serde_json::to_string(&tokens)?,
+                serde_json::to_string(&attachments)?,
+            ],
         )?;
         let msg_id = tx.last_insert_rowid();
         let kind = if author == "owner" {
@@ -354,7 +380,7 @@ impl Db {
         });
         let sql = format!(
             "SELECT e.id, e.project_id, e.stage_run_id, e.agent_id, e.kind, e.payload, e.created_at,
-                    m.id, m.author, m.body, m.tokens, m.created_at
+                    m.id, m.author, m.body, m.tokens, m.created_at, m.attachments
              FROM events e
              LEFT JOIN messages m
                ON m.id = json_extract(e.payload, '$.message_id')
@@ -384,11 +410,13 @@ impl Db {
                 r.get::<_, Option<String>>(9)?,
                 msg_tokens,
                 r.get::<_, Option<String>>(11)?,
+                r.get::<_, Option<String>>(12)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, pid, srid, aid, kind, payload, at, mid, author, body, tokens, mat) = row?;
+            let (id, pid, srid, aid, kind, payload, at, mid, author, body, tokens, mat, matt) =
+                row?;
             out.push(TimelineItem {
                 event: Event {
                     id,
@@ -405,6 +433,7 @@ impl Db {
                         author,
                         body,
                         tokens: serde_json::from_str(&tokens.unwrap_or_else(|| "[]".into()))?,
+                        attachments: serde_json::from_str(&matt.unwrap_or_else(|| "[]".into()))?,
                         created_at: mat.unwrap_or_default(),
                     }),
                     _ => None,
@@ -454,7 +483,7 @@ impl Db {
         });
         let sql = format!(
             "SELECT e.id, e.stage_run_id, e.agent_id, e.kind, e.payload, e.created_at,
-                    m.id, m.author, m.body, m.tokens
+                    m.id, m.author, m.body, m.tokens, m.attachments
              FROM events e
              LEFT JOIN messages m
                ON m.id = json_extract(e.payload, '$.message_id')
@@ -484,6 +513,9 @@ impl Db {
                             "id": mid, "author": author, "body": body,
                             "tokens": serde_json::from_str::<Value>(
                                 &r.get::<_, Option<String>>(9)?.unwrap_or_else(|| "[]".into())
+                            ).unwrap_or(Value::Null),
+                            "attachments": serde_json::from_str::<Value>(
+                                &r.get::<_, Option<String>>(10)?.unwrap_or_else(|| "[]".into())
                             ).unwrap_or(Value::Null),
                         }),
                         _ => Value::Null,
@@ -554,6 +586,7 @@ mod tests {
             &[MessageToken::Mention {
                 agent_role: "产品策划".into(),
             }],
+            &[],
             None,
             None,
         )
@@ -728,9 +761,11 @@ mod tests {
     /// 的全部合法二级分类。新增 System 子事件的纪律是「先加这里再写
     /// 入点」——漏登会让本测试在生产路径上观测到词表外 kind 时变红。
     const SYSTEM_SUBKINDS: &[&str] = &[
+        "attachments_degraded",
         "context_compacted",
         "context_denied",
         "context_resumed",
+        "exec_timeout",
         "flag_routed",
         "instructions_degraded",
         "invariant_violation",
@@ -738,7 +773,12 @@ mod tests {
         "known_world",
         "provider_retry",
         "request_envelope",
+        "sandbox_unavailable",
+        "session_exited",
+        "session_started",
         "steering_injected",
+        "task_killed",
+        "task_started",
         "tool_breaker",
     ];
 
@@ -791,6 +831,8 @@ mod tests {
             stage_run_id: None,
             owned_globs: vec![],
             tiers: crate::artifacts::TierMap::new(),
+            sessions: Default::default(),
+            caps: Default::default(),
         };
         crate::turn::run_turn(
             &db,

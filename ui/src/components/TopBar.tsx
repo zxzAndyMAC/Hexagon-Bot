@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { api } from '../api'
+import type { SandboxStatus } from '../gen/SandboxStatus'
 import { capReached, centsToMc, fmtTok, perAgentSeries } from '../usage'
 import { MultiLine } from './UsageTab'
 import { bindingFor, formatBinding, isMac } from '../keymap'
@@ -25,6 +26,11 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
   const sparkShow = () => { sparkTimer.current = setTimeout(() => setSparkOpen(true), 300) }
   const sparkHide = () => { clearTimeout(sparkTimer.current); setSparkOpen(false) }
   const [recents, setRecents] = useState<Recent[]>([])
+  // 票 06：沙箱实况徽章——纯平台探测，挂载即取（同项目内不变）。
+  const [sandbox, setSandbox] = useState<SandboxStatus | null>(null)
+  useEffect(() => {
+    api.sandboxStatus().then(setSandbox).catch(() => setSandbox(null))
+  }, [projectName])
   const menuRef = useRef<HTMLDivElement>(null)
   const fmt = (mc: number) => `¥${(mc / 100000).toFixed(1)}`
   const limitMc = usageTotal?.limit_cents != null ? centsToMc(usageTotal.limit_cents) : null
@@ -116,6 +122,15 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
       </div>
       <span className="chip mono">{mode === 'fastpath' ? t('topbar.fastpath') : packName ?? t('topbar.pack')}</span>
       <span className="chip">{t(`autonomy.${autonomy}`)}</span>
+      {sandbox && (
+        <span
+          className={`chip ${sandbox.available ? 'ok' : 'amber'}`}
+          title={`${t(sandbox.available ? 'topbar.sandboxOnTip' : 'topbar.sandboxOffTip')} · ${sandbox.note}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        >
+          <Icon name="shield" size={10} /> {t(sandbox.available ? 'topbar.sandboxOn' : 'topbar.sandboxOff')}
+        </span>
+      )}
       {/* 票 16（方向卡 1）：值守切换——away 时琥珀脉动，与待决指示同色系 */}
       <button
         className={`chip chip-btn ${away ? 'amber' : ''}`}

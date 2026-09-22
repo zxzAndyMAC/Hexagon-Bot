@@ -53,6 +53,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0012_event_schema",
         include_str!("../migrations/0012_event_schema.sql"),
     ),
+    (
+        "0013_message_attachments",
+        include_str!("../migrations/0013_message_attachments.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
