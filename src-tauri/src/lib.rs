@@ -942,7 +942,7 @@ fn invariant_check(state: tauri::State<AppState>) -> Result<usize, CmdError> {
     })
 }
 
-/// 票 10：政策研发提案的确定性入口——旋钮编辑 JSON + 场景 JSON →
+/// 票 10：流程优化提案的确定性入口——旋钮编辑 JSON + 场景 JSON →
 /// 副本改旋钮 → 回放 → 携证据+judge 判定进普通提案队列。
 /// 产出物无特权通道（submit 全校验+负责人盖章不变）。
 /// ADR 0052 wb 组：内联双回放要锁 wb——异步化见 report.md 待验证假设。

@@ -75,12 +75,14 @@ pub enum KnobEdit {
     },
 }
 
-/// 团队里政策研发角色的 agent_id（票 10）：该角色只能由负责人在
-/// 建项目/调团队时勾选——角色定义是提案禁区,启用即 owner 授权。
+/// 定名「流程优化」（2026-09-23，原「政策研发」）。
+pub const ROLE: &str = "流程优化";
+
+/// 团队里流程优化角色的 agent_id（票 10）：由负责人在建项目或调团队时勾选。
 pub fn policy_dev_agent(db: &Db, project_id: &str) -> Result<String, rusqlite::Error> {
     db.conn().query_row(
-        "SELECT id FROM agents WHERE project_id=?1 AND role='政策研发'",
-        [project_id],
+        "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
+        [project_id, ROLE],
         |r| r.get(0),
     )
 }
@@ -326,7 +328,7 @@ mod tests {
         db.conn()
             .execute(
                 "INSERT INTO agents (id, project_id, role, status)
-                 VALUES ('a0','p','政策研发','active')",
+                 VALUES ('a0','p','流程优化','active')",
                 [],
             )
             .unwrap();

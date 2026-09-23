@@ -685,7 +685,7 @@ impl Workbench {
             .clone()
             .ok_or_else(|| ApiError::NoRole("no pack pinned".into()))?;
         let aid = crate::policydev::policy_dev_agent(&self.db, &self.project_id)
-            .map_err(|_| ApiError::NoRole("政策研发 agent 不在团队".into()))?;
+            .map_err(|_| ApiError::NoRole(format!("{} agent 不在团队", crate::policydev::ROLE)))?;
         let ctx = self.ctx_for(&aid, None);
         // nanos 而非 secs：同秒两次 propose 会撞目录互相覆盖回放产物
         //（arch-review 附录 B5 核验证实）。nanos 冲突实际不可能。

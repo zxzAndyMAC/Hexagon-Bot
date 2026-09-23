@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
-import { api, errText } from '../api'
+import { api, type PackDef } from '../api'
 import type { SandboxStatus } from '../gen/SandboxStatus'
 import { capReached, centsToMc, fmtTok, perAgentSeries } from '../usage'
 import { MultiLine } from './UsageTab'
@@ -17,11 +17,10 @@ interface Recent {
 
 export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void; onProjectClosed: () => void }) {
   const { t } = useTranslation()
-  const { projectName, packName, mode, autonomy, usageTotal, usageSeries7d, team, pending, reviewRows, refresh, refreshSlow, setRailOpen, setSideTab, railOpen, away, markAway, markBack, openPendingDialog, pushToast } = useUiStore()
-  // 请求在飞时先显示所选档；成功后以 store 读回为准，失败则丢掉乐观值。
-  const [autonomyPending, setAutonomyPending] = useState<string | null>(null)
-  const autonomyShown = autonomyPending ?? autonomy
+  const { projectName, packName, mode, usageTotal, usageSeries7d, team, pending, reviewRows, refresh, setRailOpen, setSideTab, railOpen, away, markAway, markBack, openPendingDialog } = useUiStore()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [flowOpen, setFlowOpen] = useState(false)
+  const [flowPack, setFlowPack] = useState<PackDef | null>(null)
   // 票 17（方向卡 2）：用量 chip 悬停 300ms 出 sparkline 浮层——
   // 数据全部走 store 缓存（usageSeries7d/usageTotal），零新增 IPC。
   const [sparkOpen, setSparkOpen] = useState(false)
@@ -34,6 +33,12 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
   useEffect(() => {
     api.sandboxStatus().then(setSandbox).catch(() => setSandbox(null))
   }, [projectName])
+  useEffect(() => {
+    if (!flowOpen || mode === 'fastpath') return
+    let cancel = false
+    api.packDraft().then((p) => { if (!cancel) setFlowPack(p) }).catch(() => { if (!cancel) setFlowPack(null) })
+    return () => { cancel = true }
+  }, [flowOpen, mode])
   const menuRef = useRef<HTMLDivElement>(null)
   const fmt = (mc: number) => `¥${(mc / 100000).toFixed(1)}`
   const limitMc = usageTotal?.limit_cents != null ? centsToMc(usageTotal.limit_cents) : null
@@ -62,19 +67,6 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
   }
 
   const others = recents.filter((r) => r.name !== projectName)
-
-  const changeAutonomy = async (lv: string) => {
-    if (lv === autonomy) return
-    setAutonomyPending(lv)
-    try {
-      await api.setAutonomy(lv)
-      await refreshSlow(['info'])
-    } catch (e) {
-      pushToast(errText(e), 'err')
-    } finally {
-      setAutonomyPending(null)
-    }
-  }
 
   return (
     <header
@@ -126,19 +118,60 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
           </div>
         )}
       </div>
-      <span className="chip mono">{mode === 'fastpath' ? t('topbar.fastpath') : packName ?? t('topbar.pack')}</span>
-      <select
-        className="chip"
-        aria-label={t('topbar.autonomyMenu')}
-        title={t('topbar.autonomyMenu')}
-        value={autonomyShown}
-        onChange={(e) => void changeAutonomy(e.target.value)}
-        style={{ cursor: 'pointer', maxWidth: 240 }}
+      <button
+        className="chip chip-btn mono"
+        data-view-flow
+        title={t('topbar.viewFlow')}
+        onClick={() => setFlowOpen(true)}
       >
-        {(['L0', 'L1', 'L2', 'L3', 'L4'] as const).map((lv) => (
-          <option key={lv} value={lv}>{t(`autonomy.${lv}`)}</option>
-        ))}
-      </select>
+        {mode === 'fastpath' ? t('topbar.fastpath') : packName ?? t('topbar.pack')}
+      </button>
+      {flowOpen && (
+        <div
+          role="dialog"
+          aria-label={t('topbar.viewFlow')}
+          data-flow-dialog
+          style={{
+            position: 'fixed', inset: 0, zIndex: 80,
+            background: 'rgba(0,0,0,.35)',
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 64,
+          }}
+          onClick={() => setFlowOpen(false)}
+        >
+          <div
+            className="panel panel-float"
+            style={{ width: 420, maxWidth: 'calc(100% - 32px)', maxHeight: '70vh', overflow: 'auto', padding: 16 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>
+                {mode === 'fastpath' ? t('topbar.fastpath') : flowPack?.name ?? packName ?? t('topbar.pack')}
+              </span>
+              <div style={{ flex: 1 }} />
+              <button className="btn" style={{ fontSize: 12 }} onClick={() => setFlowOpen(false)}>{t('topbar.flowClose')}</button>
+            </div>
+            <div className="dim3" style={{ fontSize: 11, marginBottom: 12 }}>{t('topbar.flowMaintainer')}</div>
+            {mode === 'fastpath' ? (
+              <div style={{ fontSize: 13 }}>{t('topbar.flowFast')}</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {(flowPack?.stages ?? []).map((s) => (
+                  <div key={s.name} style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 560 }}>{s.name}</span>
+                      {s.stamp_point && <span className="chip amber" style={{ fontSize: 10 }}>{t('topbar.flowStamp')}</span>}
+                    </div>
+                    {s.roles.length > 0 && (
+                      <div className="dim3" style={{ fontSize: 11, marginTop: 4 }}>{s.roles.join(' · ')}</div>
+                    )}
+                  </div>
+                ))}
+                {!flowPack && <div className="dim3" style={{ fontSize: 12 }}>{t('side.noStages')}</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {sandbox && (
         <span
           className={`chip ${sandbox.available ? 'ok' : 'amber'}`}

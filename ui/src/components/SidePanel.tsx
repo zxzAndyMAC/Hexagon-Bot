@@ -9,6 +9,7 @@ import { bindingFor, formatBinding } from '../keymap'
 import { Icon } from './Icon'
 import { Row } from './Row'
 import { slotLabel } from '../modelpick'
+import { StageRail } from './StageBar'
 
 function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | null; status: string } }) {
   const { t } = useTranslation()
@@ -50,13 +51,14 @@ export function SidePanel() {
 
   return (
     <aside className="panel" style={{ width: 260, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div className="row-line" style={{ display: 'flex', alignItems: 'center', padding: '6px 6px 6px 12px', gap: 2 }}>
-        {(['files', 'artifacts', 'team', 'usage'] as const).map((k) => (
+      <div className="row-line" style={{ display: 'flex', alignItems: 'center', padding: '6px 6px 6px 8px', gap: 2, overflowX: 'auto' }}>
+        {(['files', 'artifacts', 'team', 'usage', 'stages'] as const).map((k) => (
           <button
             key={k}
+            data-side-tab={k}
             className="btn"
             style={{
-              padding: '2px 8px', fontSize: 11, border: 'none', background: 'none',
+              padding: '2px 6px', fontSize: 11, border: 'none', background: 'none', flexShrink: 0,
               color: tab === k ? 'var(--accent)' : 'var(--text-3)',
               fontWeight: tab === k ? 560 : 400,
             }}
@@ -70,6 +72,12 @@ export function SidePanel() {
           <Icon name="panel-right" size={12} />
         </button>
       </div>
+
+      {tab === 'stages' && (
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          <StageRail />
+        </div>
+      )}
 
       {tab === 'artifacts' && (
         <div style={{ flex: 1, overflowY: 'auto' }}>

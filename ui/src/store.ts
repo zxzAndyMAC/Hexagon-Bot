@@ -24,7 +24,7 @@ export type SlowSlice = 'usage' | 'artifacts' | 'team' | 'info'
 
 // 中栏选项卡（ADR 0051）：timeline 固定主 tab，其余可关。
 export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent' | 'usage' | 'file'
-export type SideTab = 'artifacts' | 'team' | 'usage' | 'files'
+export type SideTab = 'artifacts' | 'team' | 'usage' | 'files' | 'stages'
 export type FileTreeAction = 'new-file' | 'new-folder' | 'refresh'
 
 /// 界面作用域（ui-audit 票 01）：全局快捷键分发按它裁决。

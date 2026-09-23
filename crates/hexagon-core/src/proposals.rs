@@ -221,8 +221,8 @@ pub fn submit(
         None => None,
     };
 
-    // 票 10 强制：政策研发作者的提案必附回放证据 + judge 判定块——
-    // 「缺附件不可提交」。角色是禁区面,作者身份从 agents 表查不靠正文自述。
+    // 票 10 强制：流程优化作者的提案必附回放证据 + judge 判定块——
+    // 「缺附件不可提交」。作者身份从 agents 表查，不靠正文自述。
     let author_role: Option<String> = db
         .conn()
         .query_row(
@@ -231,19 +231,20 @@ pub fn submit(
             |r| r.get(0),
         )
         .ok();
-    if author_role.as_deref() == Some("政策研发") {
+    if author_role.as_deref() == Some(crate::policydev::ROLE) {
         if evidence.is_none() {
             return Err(PropError::Rejected(
-                "政策研发提案必须附 ```replay 回放证据块".into(),
+                format!("{}提案必须附 ```replay 回放证据块", crate::policydev::ROLE),
             ));
         }
         match judge_evidence(content) {
             Some(Ok(_)) => {}
             Some(Err(e)) => return Err(PropError::Rejected(e)),
             None => {
-                return Err(PropError::Rejected(
-                    "政策研发提案必须附 ```judge 判定块".into(),
-                ))
+                return Err(PropError::Rejected(format!(
+                    "{}提案必须附 ```judge 判定块",
+                    crate::policydev::ROLE
+                )))
             }
         }
     }

@@ -16,6 +16,11 @@ export default {
     sandboxOn: '沙箱', sandboxOnTip: 'Agent 命令在 OS 沙箱内运行（写限定仓库内；默认断网）',
     sandboxOff: '无沙箱', sandboxOffTip: '本平台无 OS 沙箱——命令裸跑（仍走必问审批）',
     autonomyMenu: '切换自治档位',
+    viewFlow: '查看流程',
+    flowClose: '关闭',
+    flowMaintainer: '由流程优化维护，只读',
+    flowStamp: '盖章点',
+    flowFast: '快速通道不走阶段',
   },
   autonomy: {
     L0: 'L0 · 负责人拍板',
@@ -237,6 +242,8 @@ export default {
     noMembers: '还没有成员——在下方创建角色组建团队。',
     model: '模型',
     files: '项目',
+    stages: '阶段',
+    noStages: '还没有阶段。',
   },
   tree: {
     newFile: '新建文件',

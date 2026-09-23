@@ -39,16 +39,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       // 指令：与 composer /verb 同一命令通道
       // ui-audit 票 03（ADR 0056-2）：rewind/skip 标 danger——
       // 渲染分级 + 执行前过确认层（runStageOp 内部 askConfirm）。
-      { id: 'c-stamp', group: 'cmd', label: t('palette.stamp'), keywords: ['stamp', 'approve'], run: () => runStageOp('stamp') },
-      { id: 'c-skip', group: 'cmd', label: t('palette.skip'), risk: 'danger', hint: t('palette.riskHint'), keywords: ['skip', 'pass'], run: () => runStageOp('skip') },
-      {
-        id: 'c-rewind', group: 'cmd', label: t('palette.rewindPrev'), risk: 'danger', hint: t('palette.riskHint'), keywords: ['rew', 'rewind', 'back'],
-        run: () => runStageOp('rewind'),
-      },
-      { id: 'c-pause', group: 'cmd', label: t('palette.pause'), keywords: ['pause', 'hold'], run: () => runStageOp('pause') },
-      { id: 'c-resume', group: 'cmd', label: t('palette.resume'), keywords: ['resume', 'continue'], run: () => runStageOp('resume') },
+      // ADR 0069：指针操作（退回/跳过/暂停/恢复/阶段盖章）不再进命令面板。
+      // 最终验收仍在待决卡。全员休眠留下。
       { id: 'c-checks', group: 'cmd', label: t('palette.checks'), keywords: ['check', 'verify'], run: () => api.runChecks() },
-      { id: 'c-advance', group: 'cmd', label: t('palette.advance'), keywords: ['adv', 'next'], run: () => api.advance() },
       { id: 'c-sleep', group: 'cmd', label: t('palette.sleepAll'), keywords: ['sleep'], run: () => runStageOp('sleepAll') },
       // ui-audit 票 09（P1-5 残余）：冰山 IPC 补入口——这两条此前只有
       // 纯 invoke 通道，面板不可达。

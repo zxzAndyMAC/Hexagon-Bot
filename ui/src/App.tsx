@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './i18n'
 import { TopBar } from './components/TopBar'
-import { StageBar } from './components/StageBar'
+
 import { Timeline } from './components/Timeline'
 import { TabBar } from './components/TabBar'
 import { ArtifactTab } from './components/ArtifactTab'
@@ -24,7 +24,7 @@ import { PendingDialog } from './components/PendingCards'
 import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
-import { runStageOp } from './stageops'
+
 
 export default function App() {
   const { t } = useTranslation()
@@ -179,12 +179,8 @@ export default function App() {
         s.closeTab(s.activeTab) // timeline tab 在 closeTab 内被拦
         return
       }
-      // ui-audit 票 03：stage 操作绑定（ADR 0056-2）。与裁决键同样
-      // 吃作用域守卫——设置页/palette 打开时不许动阶段。
+      // ADR 0069：退回/跳过/盖章不再有快捷键。最终验收留在待决卡。
       if (useUiStore.getState().modalScope === 'workbench') {
-        if (matches(e, bindingFor('stageRewind'))) { e.preventDefault(); runStageOp('rewind'); return }
-        if (matches(e, bindingFor('stageSkip'))) { e.preventDefault(); runStageOp('skip'); return }
-        if (matches(e, bindingFor('stageStamp'))) { e.preventDefault(); runStageOp('stamp'); return }
         // 票 12：mod+J 聚焦节点轨（键盘可达性入口）
         if (matches(e, bindingFor('nodeRail'))) { e.preventDefault(); useUiStore.getState().focusNodeRail(); return }
         if (matches(e, bindingFor('treeNewFile'))) { e.preventDefault(); useUiStore.getState().requestFileTree('new-file'); return }
@@ -240,7 +236,6 @@ export default function App() {
         onSettings={() => setSettingsOpen(true)}
         onProjectClosed={() => setProjectOpen(false)}
       />
-      <StageBar />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 10, padding: '10px 14px' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <TabBar />

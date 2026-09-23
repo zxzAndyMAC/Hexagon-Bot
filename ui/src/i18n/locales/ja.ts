@@ -16,6 +16,11 @@ export default {
     sandboxOn: 'サンドボックス', sandboxOnTip: 'エージェントのコマンドは OS サンドボックス内で実行（書き込みはリポジトリ内限定・既定でネットワーク遮断）',
     sandboxOff: 'サンドボックスなし', sandboxOffTip: 'このプラットフォームには OS サンドボックスなし——コマンドは非隔離で実行（承認ゲートは有効）',
     autonomyMenu: '自律レベルを変更',
+    viewFlow: 'フローを見る',
+    flowClose: '閉じる',
+    flowMaintainer: 'フロー最適化が維持。閲覧のみ',
+    flowStamp: '押印点',
+    flowFast: 'ファストパスに段階はない',
   },
   autonomy: {
     L0: 'L0 · オーナー決裁',
@@ -237,6 +242,8 @@ export default {
     noMembers: 'エージェントはまだいません——下でロールを作成してチームを作りましょう。',
     model: 'モデル',
     files: 'プロジェクト',
+    stages: '段階',
+    noStages: '段階はまだありません。',
   },
   tree: {
     newFile: '新規ファイル',

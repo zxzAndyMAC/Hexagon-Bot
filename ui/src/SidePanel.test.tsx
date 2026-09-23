@@ -5,6 +5,7 @@ import './i18n'
 import { SidePanel } from './components/SidePanel'
 import { useUiStore } from './store'
 import type { ArtifactRow } from './gen/ArtifactRow'
+import type { StageRow } from './gen/StageRow'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -39,5 +40,27 @@ describe('SidePanel 产物行长名', () => {
     const chip = el.querySelector('.chip') as HTMLElement
     expect(chip.style.flexShrink).toBe('0')
     expect(chip.style.whiteSpace).toBe('nowrap')
+  })
+})
+
+describe('右栏阶段进度', () => {
+  const snap = useUiStore.getState()
+  afterEach(() => useUiStore.setState(snap, true))
+
+  it('阶段是单独页签，其他页签不列出阶段', async () => {
+    const stages: StageRow[] = [
+      { run_id: 'r1', stage: '规格', seq: 0, state: 'done' },
+      { run_id: 'r2', stage: '实现', seq: 1, state: 'active' },
+    ]
+    useUiStore.setState({ railOpen: true, sideTab: 'files', stages })
+    const { el } = await render(<SidePanel />)
+    expect(el.querySelector('[data-stage-rail]')).toBeNull()
+    const tab = el.querySelector('[data-side-tab="stages"]') as HTMLButtonElement
+    expect(tab).toBeTruthy()
+    await act(async () => { tab.click() })
+    const rail = el.querySelector('[data-stage-rail]')
+    expect(rail?.textContent).toContain('规格')
+    expect(rail?.textContent).toContain('实现')
+    expect(rail?.querySelector('button')).toBeNull()
   })
 })

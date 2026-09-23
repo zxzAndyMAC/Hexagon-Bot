@@ -16,41 +16,27 @@ async function render(node: React.ReactNode) {
   return { el, root }
 }
 
-describe('TopBar 自治下拉（票 01）', () => {
+describe('TopBar 流程入口（ADR 0069）', () => {
   beforeEach(() => {
-    useUiStore.setState({ autonomy: 'L2', projectName: 'p', pending: [], team: [] })
+    useUiStore.setState({
+      projectName: 'p', packName: '规格驱动', mode: 'pack',
+      pending: [], team: [], railOpen: false,
+    })
     vi.spyOn(api, 'sandboxStatus').mockResolvedValue({ available: false, mode: 'none', note: '' })
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it('列出 L0–L4，改档后读回同一档；拒绝时下拉回到原档', async () => {
-    const setAutonomy = vi.spyOn(api, 'setAutonomy').mockResolvedValue(undefined)
-    vi.spyOn(api, 'autonomy').mockResolvedValue('L4')
-    vi.spyOn(api, 'projectInfo').mockResolvedValue({
-      name: 'p', mode: 'pack', pack_name: null, fastpath_role: null,
-    } as never)
+  it('没有自治档下拉；点流程名弹出只读流程', async () => {
     const { el, root } = await render(<TopBar onSettings={() => {}} onProjectClosed={() => {}} />)
-    const sel = el.querySelector('select[aria-label="Change autonomy level"]') as HTMLSelectElement
-    expect(sel).toBeTruthy()
-    const values = [...sel.options].map((o) => o.value)
-    expect(values).toEqual(['L0', 'L1', 'L2', 'L3', 'L4'])
-    expect(sel.selectedOptions[0].textContent).toContain('L2')
-    expect([...sel.options].some((o) => o.textContent?.startsWith('Autonomy L3'))).toBe(true)
-    expect([...sel.options].some((o) => o.textContent?.startsWith('Autonomy L4'))).toBe(true)
-
-    await act(async () => {
-      sel.value = 'L4'
-      sel.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(setAutonomy).toHaveBeenCalledWith('L4')
-    expect(useUiStore.getState().autonomy).toBe('L4')
-
-    setAutonomy.mockRejectedValueOnce(new Error('nope'))
-    await act(async () => {
-      sel.value = 'L0'
-      sel.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(sel.value).toBe('L4')
+    expect(el.querySelector('select')).toBeNull()
+    const flow = el.querySelector('[data-view-flow]') as HTMLButtonElement
+    expect(flow.textContent).toContain('规格驱动')
+    await act(async () => { flow.click() })
+    const dialog = el.querySelector('[data-flow-dialog]')
+    expect(dialog).toBeTruthy()
+    expect(dialog?.textContent).toContain('规格')
+    expect(dialog?.textContent).toContain('产品策划')
+    expect(useUiStore.getState().railOpen).toBe(false)
     root.unmount()
   })
 })

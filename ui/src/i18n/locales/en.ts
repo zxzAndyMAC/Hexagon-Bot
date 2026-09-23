@@ -16,6 +16,11 @@ export default {
     sandboxOn: 'sandboxed', sandboxOnTip: 'Agent commands run inside an OS sandbox (writes confined to repo; net off by default)',
     sandboxOff: 'no sandbox', sandboxOffTip: 'No OS sandbox on this platform — commands run unsandboxed (still approval-gated)',
     autonomyMenu: 'Change autonomy level',
+    viewFlow: 'View flow',
+    flowClose: 'Close',
+    flowMaintainer: 'Maintained by Flow optimization. Read only.',
+    flowStamp: 'Stamp point',
+    flowFast: 'Fast path has no stages',
   },
   autonomy: {
     L0: 'L0 · Owner decides',
@@ -237,6 +242,8 @@ export default {
     noMembers: 'No agents yet — create a role below to grow the team.',
     model: 'model',
     files: 'Project',
+    stages: 'Stages',
+    noStages: 'No stages yet.',
   },
   tree: {
     newFile: 'New file',

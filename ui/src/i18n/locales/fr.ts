@@ -16,6 +16,11 @@ export default {
     sandboxOn: 'sandbox', sandboxOnTip: 'Les commandes agent tournent dans un sandbox OS (écriture limitée au dépôt ; réseau coupé par défaut)',
     sandboxOff: 'sans sandbox', sandboxOffTip: 'Pas de sandbox OS sur cette plateforme — commandes non isolées (approbation toujours requise)',
     autonomyMenu: "Changer le niveau d'autonomie",
+    viewFlow: 'Voir le flux',
+    flowClose: 'Fermer',
+    flowMaintainer: 'Tenu par Optimisation du flux. Lecture seule.',
+    flowStamp: 'Point de tampon',
+    flowFast: 'La voie rapide n’a pas d’étapes',
   },
   autonomy: {
     L0: 'L0 · Le responsable décide',
@@ -237,6 +242,8 @@ export default {
     noMembers: 'Pas encore d’agents — créez un rôle ci-dessous pour former l’équipe.',
     model: 'modèle',
     files: 'Projet',
+    stages: 'Étapes',
+    noStages: 'Pas encore d’étapes.',
   },
   tree: {
     newFile: 'Nouveau fichier',
