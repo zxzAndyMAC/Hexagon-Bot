@@ -21,7 +21,7 @@ fn strings(v: &Value) -> Option<Vec<String>> {
     })
 }
 
-fn globs_widen(current: &[String], next: &[String]) -> bool {
+pub(crate) fn globs_widen(current: &[String], next: &[String]) -> bool {
     if current.is_empty() {
         return false;
     }
@@ -258,4 +258,51 @@ pub fn reviewed(db: &Db, proposal_id: &str) -> Result<bool, PropError> {
         |r| r.get(0),
     )?;
     Ok(n > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::globs_widen;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// 从现任里抽出来的非空子集不是放宽。
+        #[test]
+        fn subset_of_owned_paths_is_not_wider(
+            current in prop::collection::vec("[a-z]{1,3}", 1..6usize),
+            picks in prop::collection::vec(0..6usize, 1..6usize),
+        ) {
+            let next: Vec<String> = picks
+                .iter()
+                .map(|i| current[i % current.len()].clone())
+                .collect();
+            prop_assert!(!globs_widen(&current, &next));
+        }
+
+        /// 现任非空时，多出来的路径（带点，不可能等于纯字母项）是放宽。
+        #[test]
+        fn a_path_outside_the_current_set_is_wider(
+            current in prop::collection::vec("[a-z]{1,3}", 1..6usize),
+        ) {
+            let mut next = current.clone();
+            next.push(format!("{}.x", current[0]));
+            prop_assert!(globs_widen(&current, &next));
+        }
+
+        /// 现任非空时，收成空集等于取消归属限制，是放宽。
+        #[test]
+        fn clearing_owned_paths_is_wider(
+            current in prop::collection::vec("[a-z]{1,3}", 1..6usize),
+        ) {
+            prop_assert!(globs_widen(&current, &[]));
+        }
+
+        /// 现任本来就没有归属行时，写上路径是收紧，不是放宽。
+        #[test]
+        fn empty_ownership_does_not_count_added_paths_as_wider(
+            next in prop::collection::vec("[a-z]{1,3}", 0..6usize),
+        ) {
+            prop_assert!(!globs_widen(&[], &next));
+        }
+    }
 }

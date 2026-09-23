@@ -1256,13 +1256,20 @@ fn jev_choice(
     for (name, note) in options {
         criteria.insert((*name).to_string(), Value::String((*note).to_string()));
     }
+    // 执行判定和派活共用选择题接口。选项里出现「执行」就是判定，不能沿用派活说明。
+    let judgment = options.iter().any(|(name, _)| *name == "执行");
+    let instructions = if judgment {
+        "这是执行判定。证据和提案已经落盘。只选执行、驳回或交给负责人。不要改写提案，不要重算分数。拿不准就交给负责人。"
+    } else {
+        "下一手派给谁。可以派给当前阶段激活名单以外的人。没有人该接就选「先不派活」。只选一个。"
+    };
     let body = serde_json::json!({
         "state": state,
         "model": model,
         "questions": {
             "route": {
                 "type": "choice",
-                "instructions": "下一手派给谁。可以派给当前阶段激活名单以外的人。没有人该接就选「先不派活」。只选一个。",
+                "instructions": instructions,
                 "criteria": criteria,
             }
         }

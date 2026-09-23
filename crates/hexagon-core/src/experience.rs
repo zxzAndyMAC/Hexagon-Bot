@@ -275,9 +275,15 @@ pub fn apply(ctx: &ToolContext, db: &Db, body: &str, backup: &Path) -> Result<bo
         let slot = backup.join(format!("before-{i}"));
         if path.exists() {
             std::fs::copy(&path, &slot)?;
-            manifest.push(json!({"path": rel, "had": true, "slot": i}));
+            manifest.push(json!({
+                "path": rel, "had": true, "slot": i,
+                "grant": file["grant"].as_str(),
+            }));
         } else {
-            manifest.push(json!({"path": rel, "had": false, "slot": i}));
+            manifest.push(json!({
+                "path": rel, "had": false, "slot": i,
+                "grant": file["grant"].as_str(),
+            }));
         }
         std::fs::write(&path, file["after"].as_str().unwrap_or(""))?;
         if let Some(name) = file["grant"].as_str() {
@@ -295,7 +301,7 @@ pub fn apply(ctx: &ToolContext, db: &Db, body: &str, backup: &Path) -> Result<bo
     Ok(true)
 }
 
-pub fn rollback(ctx: &ToolContext, backup: &Path) -> Result<bool, PropError> {
+pub fn rollback(db: &Db, ctx: &ToolContext, backup: &Path) -> Result<bool, PropError> {
     let manifest_path = backup.join("experience.json");
     if !manifest_path.exists() {
         return Ok(false);
@@ -313,6 +319,12 @@ pub fn rollback(ctx: &ToolContext, backup: &Path) -> Result<bool, PropError> {
             std::fs::copy(&slot, &path)?;
         } else if path.exists() {
             std::fs::remove_file(&path).ok();
+        }
+        if let Some(name) = item["grant"].as_str() {
+            db.conn().execute(
+                "DELETE FROM grants WHERE agent_id=?1 AND kind='skill' AND name=?2",
+                rusqlite::params![ctx.agent_id, name],
+            )?;
         }
     }
     Ok(true)

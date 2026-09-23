@@ -261,6 +261,14 @@ pub fn submit(
             |r| r.get(0),
         )
         .ok();
+    if surface == "role_def"
+        && crate::roles::superior_of(db, &ctx.project_id, author_role.as_deref().unwrap_or(""))
+            .is_none()
+    {
+        return Err(PropError::Rejected(
+            "role definition needs a passed superior review".into(),
+        ));
+    }
     if surface == "pack_copy" && author_role.as_deref() != Some(crate::policydev::ROLE) {
         return Err(PropError::Rejected(
             "only 流程优化 can change the running pack".into(),
@@ -678,7 +686,7 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
         return Err(PropError::BadState(status));
     }
     let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(proposal_id);
-    if !crate::experience::rollback(ctx, &backup_dir)?
+    if !crate::experience::rollback(db, ctx, &backup_dir)?
         && !crate::rolesurf::rollback(db, ctx, &backup_dir)?
     {
         let backup = backup_dir.join("before");

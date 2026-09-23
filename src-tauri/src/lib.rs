@@ -1366,6 +1366,21 @@ fn optimize_agents_md(name: String, sentence: String) -> Result<String, CmdError
 
 /// 按项目说明起草流程包。用流程起草槽，没绑则落到默认槽。
 #[tauri::command(async)]
+fn read_instruction_file(dir: String) -> Result<String, CmdError> {
+    hexagon_core::setup::read_instruction_file(std::path::Path::new(&dir)).map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn draft_role_duty(name: String, hint: String) -> Result<String, CmdError> {
+    let provider = hexagon_core::provider_admin::authoring_provider(
+        hexagon_core::credentials::active(),
+        hexagon_core::provider_config::ROLE_DRAFT_SLOT,
+    )
+    .map_err(cmd_err)?;
+    hexagon_core::setup::draft_role_duty(&name, &hint, provider.as_ref()).map_err(cmd_err)
+}
+
+#[tauri::command(async)]
 fn draft_flow(sentence: String) -> Result<hexagon_core::orchestra::PackDef, CmdError> {
     let provider = hexagon_core::provider_admin::authoring_provider(
         hexagon_core::credentials::active(),
@@ -1742,6 +1757,8 @@ pub fn run() {
             agents_md_draft,
             optimize_agents_md,
             draft_flow,
+            read_instruction_file,
+            draft_role_duty,
             create_project,
             run_opening_intake,
             confirm_intake_brief,

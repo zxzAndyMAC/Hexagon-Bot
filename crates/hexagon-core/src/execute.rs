@@ -92,9 +92,15 @@ pub fn judge_passed(
         return Err(PropError::Rejected(reason));
     }
 
+    let evidence_text = evidence
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "none".into());
+    let state = format!(
+        "proposal {proposal_id}\nsurface {surface}\nevidence {evidence_text}\n正文已落盘，只决定写不写。"
+    );
     let choice = match jev {
         Some(p) if p.uses_decision_api() => match p.decide(
-            &format!("proposal {proposal_id} surface {surface}"),
+            &state,
             &[
                 (EXECUTE, "按提案写盘"),
                 (REJECT, "不改项目"),
@@ -184,5 +190,32 @@ pub fn pack_score_block(surface: &str, body: &str) -> Option<String> {
         ))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mechanical_block;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// 机械拒绝只覆盖那五个面。其它表面，包括技能和流程包，不在这里挡。
+        #[test]
+        fn only_the_closed_surfaces_are_blocked(
+            surface in "(permission|permissions|permission_rule|grant|grants|builtin_never|remote_publish|final_acceptance|skill|pack_copy|agents_md|role_def|[a-z]{1,8})",
+        ) {
+            let blocked = matches!(
+                surface.as_str(),
+                "permission"
+                    | "permissions"
+                    | "permission_rule"
+                    | "grant"
+                    | "grants"
+                    | "builtin_never"
+                    | "remote_publish"
+                    | "final_acceptance"
+            );
+            prop_assert_eq!(mechanical_block(&surface), blocked);
+        }
     }
 }

@@ -235,6 +235,43 @@ pub fn draft_flow(
     serde_json::from_str(json_text).map_err(|e| SetupError::BadFlow(e.to_string()))
 }
 
+/// 向导在项目还没建时读已有说明。只接受这两个文件名，不扫目录。
+pub fn read_instruction_file(dir: &Path) -> Result<String, SetupError> {
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        let path = dir.join(name);
+        if path.is_file() {
+            return Ok(std::fs::read_to_string(path)?);
+        }
+    }
+    Ok(String::new())
+}
+
+/// 角色起草槽优化职责。人确认才写入模板。
+pub fn draft_role_duty(
+    name: &str,
+    hint: &str,
+    provider: &dyn crate::provider::ModelProvider,
+) -> Result<String, SetupError> {
+    let req = crate::provider::ChatRequest {
+        model_slot: crate::provider_config::ROLE_DRAFT_SLOT.into(),
+        messages: vec![crate::provider::Message {
+            role: crate::provider::Role::User,
+            content: vec![crate::provider::ContentBlock::Text {
+                text: format!(
+                    "为角色「{name}」起草一段中文职责（≤80字，只输出职责正文）。补充：{hint}"
+                ),
+            }],
+        }],
+        tools: vec![],
+    };
+    let resp = provider.complete(&req)?;
+    let text = crate::intake::response_text(&resp);
+    if text.trim().is_empty() {
+        return Err(SetupError::EmptyDraft);
+    }
+    Ok(text)
+}
+
 pub fn write_agents_md(dir: impl AsRef<Path>, content: &str) -> Result<(), SetupError> {
     let dir = dir.as_ref();
     for name in ["AGENTS.md", "CLAUDE.md"] {

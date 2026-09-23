@@ -150,6 +150,9 @@ function NewRoleForm({ names, onDone }: { names: string[]; onDone: (def: RoleDef
   const [name, setName] = useState('')
   const [duty, setDuty] = useState('')
   const [reviewer, setReviewer] = useState('')
+  const [slot, setSlot] = useState('default')
+  const [globs, setGlobs] = useState('')
+  const [skills, setSkills] = useState('')
   const [err, setErr] = useState('')
   return (
     <div data-new-role-form className="panel" style={{ padding: 10, marginBottom: 10 }}>
@@ -159,6 +162,9 @@ function NewRoleForm({ names, onDone }: { names: string[]; onDone: (def: RoleDef
         <option value="">{t('agent.noReviewer')}</option>
         {names.map((n) => <option key={n} value={n}>{n}</option>)}
       </select>
+      <input className="input" aria-label={t('agent.modelSlot')} value={slot} onChange={(e) => setSlot(e.target.value)} style={{ marginTop: 6 }} />
+      <textarea className="input" aria-label={t('agent.globs')} value={globs} onChange={(e) => setGlobs(e.target.value)} placeholder={t('agent.globs')} style={{ marginTop: 6, width: '100%', minHeight: 40 }} />
+      <input className="input" aria-label={t('agent.skills')} value={skills} onChange={(e) => setSkills(e.target.value)} placeholder={t('agent.skills')} style={{ marginTop: 6 }} />
       {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 6 }}>{err}</div>}
       <button
         className="btn primary"
@@ -170,14 +176,25 @@ function NewRoleForm({ names, onDone }: { names: string[]; onDone: (def: RoleDef
             name: name.trim(),
             duty: duty.trim(),
             reviewer: reviewer || null,
-            model_slot: 'default',
-            globs: [],
-            skills: [],
+            model_slot: slot.trim() || 'default',
+            globs: globs.split('\n').map((s) => s.trim()).filter(Boolean),
+            skills: skills.split(',').map((s) => s.trim()).filter(Boolean),
           }
           api.saveRoleTemplate(def).then(() => onDone(def)).catch((e) => setErr(errText(e)))
         }}
       >
         {t('agent.createRole')}
+      </button>
+      <button
+        className="btn"
+        type="button"
+        style={{ marginTop: 8, marginLeft: 6 }}
+        disabled={!name.trim()}
+        onClick={() => {
+          api.draftRoleDuty(name.trim(), duty || ' ').then((text) => setDuty(text.trim())).catch((e) => setErr(errText(e)))
+        }}
+      >
+        {t('agent.draftAi')}
       </button>
     </div>
   )
@@ -423,14 +440,23 @@ export function Wizard({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     if (step !== 'flow' || draft.flowPack) return
-    const sentence = draft.agentsMd.trim() || draft.brief.trim() || draft.name
-    if (!sentence) return
     let cancelled = false
-    api.draftFlow(sentence).then((pack) => {
-      if (!cancelled) set({ flowPack: pack })
-    }).catch((e) => { if (!cancelled) setErr(errText(e)) })
+    const apply = (sentence: string) => {
+      const text = sentence.trim()
+      if (!text) return
+      api.draftFlow(text).then((pack) => {
+        if (!cancelled) set({ flowPack: pack })
+      }).catch((e) => { if (!cancelled) setErr(errText(e)) })
+    }
+    const sentence = draft.agentsMd.trim() || draft.brief.trim()
+    if (sentence) apply(sentence)
+    else if (report?.instructions && draft.dir) {
+      api.readInstructionFile(draft.dir).then((text) => {
+        if (!cancelled) apply(text)
+      }).catch(() => { if (!cancelled) apply(draft.name) })
+    } else apply(draft.name)
     return () => { cancelled = true }
-  }, [step, draft.flowPack, draft.agentsMd, draft.brief, draft.name, set])
+  }, [step, draft.flowPack, draft.agentsMd, draft.brief, draft.name, draft.dir, report, set])
 
   const idx = STEPS.indexOf(step)
   const body: Record<Step, React.ReactNode> = {

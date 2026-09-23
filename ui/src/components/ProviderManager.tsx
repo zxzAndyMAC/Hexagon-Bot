@@ -116,6 +116,10 @@ export function ProviderManager() {
       const def = { ...draft, id: draft.id || slug(draft.name) }
       await api.saveProvider(def, withSecret)
       // 决策模型只给项目经理。第一次保存 Jev 时把 decision 槽绑上，核在刷新供应商时写进决策槽。
+      if (def.kind === 'jev' && def.enabled && !doc.slots.jev) {
+        const model = def.models[0]?.id || 'jev-latest'
+        await api.setSlotBinding('jev', def.id, model)
+      }
       if (def.kind === 'jev' && def.enabled && !doc.slots.decision) {
         const model = def.models[0]?.id || 'jev-latest'
         await api.setSlotBinding('decision', def.id, model)

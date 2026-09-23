@@ -340,6 +340,9 @@ export const api = {
   optimizeAgentsMd: (name: string, sentence: string) =>
     call<string>('optimize_agents_md', { name, sentence }),
   draftFlow: (sentence: string) => call<PackDef>('draft_flow', { sentence }),
+  readInstructionFile: (dir: string) => call<string>('read_instruction_file', { dir }),
+  draftRoleDuty: (name: string, hint: string) =>
+    call<string>('draft_role_duty', { name, hint }),
   /// 票 17：进工作台后的只读开场分析。不挡住输入；空目录和再次打开是空操作。
   runOpeningIntake: () => call<void>('run_opening_intake'),
   confirmIntakeBrief: () => call<void>('confirm_intake_brief'),
@@ -1032,6 +1035,10 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'dispatch':
     case 'upgrade_to_pack':
       return null as T
+    case 'read_instruction_file':
+      return '已有项目说明' as T
+    case 'draft_role_duty':
+      return '起草的职责' as T
     case 'draft_flow':
       return {
         name: '生成的流程', version: 1,
