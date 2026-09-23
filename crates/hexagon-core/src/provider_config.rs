@@ -200,6 +200,14 @@ pub fn resolve_exact<'a, V>(map: &'a HashMap<String, V>, slot: &str) -> Option<&
     map.get(slot)
 }
 
+/// 「这次解析是不是落到了 default」——诊断记录用（diagnostic-records 票 03）。
+/// 与 [`resolve_slot`] 同一行链语义：链若加跳这里跟着改，调用点不许各自
+/// 用 contains_key 反推（D13：回退语义只在本文件）。resolve_slot 失败
+/// （default 也没绑）不算回退，是错误。
+pub fn fell_back_to_default<V>(map: &HashMap<String, V>, slot: &str) -> bool {
+    !map.contains_key(slot) && map.contains_key("default")
+}
+
 /// 槽位能力集（agent-senses 票 02）：绑定槽 → 模型条目 caps；
 /// 模型不在目录 → infer_caps 兜底推断；链断任一环 → 空集。
 pub fn caps_for_slot(slot: &str) -> std::collections::HashSet<String> {

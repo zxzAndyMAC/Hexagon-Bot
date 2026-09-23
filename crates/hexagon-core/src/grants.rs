@@ -127,8 +127,22 @@ pub fn request(
     }
     agent_in_project(db, project_id, agent_id)?;
     // 读档失败按等人。不把一次查询故障升成未审授权。
+    let started = std::time::Instant::now();
     let rank = crate::autonomy::rank(db, project_id).unwrap_or(0);
-    if harnessgate::auto_passes(rank, action) {
+    // diagnostic-records 票 02：自治放行 vs 排队等人是一条「判定」分支。
+    let auto = harnessgate::auto_passes(rank, action);
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(project_id),
+        Some(agent_id),
+        None,
+        None,
+        "grant",
+        if auto { "auto_pass" } else { "queued" },
+        started,
+    );
+    if auto {
         insert_grant(db, agent_id, kind, name)?;
         trace(db, project_id, agent_id, kind, name, "autonomy", true)?;
         return Ok(GrantOutcome {

@@ -4061,3 +4061,331 @@ impl crate::provider::ModelProvider for HoldProvider {
         self.inner.complete(req)
     }
 }
+
+// ---------- diagnostic-records：结构化诊断记录的门面读回（票 01–03）----------
+
+/// log::max_level 是进程全局——这组用例与 diag.rs 单测、permissions 的
+/// 记录用例共用同一把锁排队，否则并发跑会在「关着」窗口里丢记录。
+fn diag_lock() -> std::sync::MutexGuard<'static, ()> {
+    // 毒化也进：上个用例 panic 会把全局级别留在任意态，而每个用例
+    // 进来第一件事就是自己设级别——挡住只会让首个失败传染整组。
+    crate::diag::TEST_LEVEL_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// 票 01：一次真实门面拒绝落一条「拒绝」记录（Warn）——开关关着
+/// 也落盘也读得到；字段面只有规格列，没有提示词/正文/钥匙。
+#[test]
+fn diag_facade_refusal_lands_as_reject_record() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Warn); // 关着：Debug 不落盘
+    let (_dir, wb) = git_wb(&["前端"]);
+    // 走真门面：Workbench::set_autonomy 拒绝设档才落记录。
+    assert!(wb.set_autonomy("L3").is_err());
+
+    let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_REJECT));
+    let r = rs
+        .iter()
+        .find(|r| r.code == "gears_removed" && r.branch == "set_autonomy")
+        .expect("拒绝记录");
+    assert_eq!(r.level, "warn");
+    assert_eq!(r.project.as_deref(), Some("p1"));
+    // 字段面：只有规格列。
+    let v = serde_json::to_value(r).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "activation",
+            "agent",
+            "branch",
+            "class",
+            "code",
+            "level",
+            "ms",
+            "project",
+            "trace",
+            "ts"
+        ]
+    );
+    // 无项目读回：宿主以外一概不见。
+    assert!(!crate::diag::records(None, None)
+        .iter()
+        .any(|r| r.code == "gears_removed"));
+}
+
+/// 票 01：本项目记录与宿主同列；别的项目的记录不进列。
+#[test]
+fn diag_records_scope_project_plus_host() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let t = std::time::Instant::now();
+    crate::diag::host("ut_scope", "host_row", t);
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some("p1"),
+        None,
+        None,
+        None,
+        "ut_scope",
+        "proj_row",
+        t,
+    );
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some("other-proj"),
+        None,
+        None,
+        None,
+        "ut_scope",
+        "other_row",
+        t,
+    );
+
+    let rs = crate::diag::records(Some("p1"), None);
+    let codes: Vec<&str> = rs.iter().map(|r| r.code.as_str()).collect();
+    assert!(codes.contains(&"host_row"));
+    assert!(codes.contains(&"proj_row"));
+    assert!(!codes.contains(&"other_row"));
+    // 无项目：只剩宿主类——projectless 的非宿主行是异常，不借
+    // 「没写 project」混进无项目视图。
+    crate::diag::note(
+        crate::diag::CLASS_SLOT,
+        false,
+        None,
+        None,
+        None,
+        None,
+        "ut_scope",
+        "stray_slot_row",
+        t,
+    );
+    let rs = crate::diag::records(None, None);
+    assert!(rs.iter().all(|r| r.class == crate::diag::CLASS_HOST));
+    assert!(rs.iter().any(|r| r.code == "host_row"));
+    assert!(!rs.iter().any(|r| r.code == "proj_row"));
+    assert!(!rs.iter().any(|r| r.code == "stray_slot_row"));
+}
+
+/// 票 02：点名路由的封闭选择落「判定」记录，含分支/原因码/轨迹 id，
+/// Debug——关掉读回不到。
+#[test]
+fn diag_pm_route_choice_records_branch_and_code() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = pm_wb(dir.path());
+    let _p = scripted_choice(&mut wb, "后端");
+    let route = send(&wb, "把登录态的过期判断修一下").unwrap();
+    assert!(matches!(route, UnnamedRoute::Dispatched { .. }));
+
+    let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE));
+    let r = rs
+        .iter()
+        .find(|r| r.branch == "pm_route" && r.code == "dispatch:后端")
+        .expect("pm_route dispatch 记录");
+    assert_eq!(r.level, "debug");
+    assert!(r.trace.is_some(), "选择信封的轨迹 id 进记录");
+    assert!(r.activation.is_some(), "激活 run id 进记录");
+
+    log::set_max_level(log::LevelFilter::Warn);
+    assert!(
+        !crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
+            .iter()
+            .any(|r| r.branch == "pm_route" && r.code.starts_with("dispatch")),
+        "关掉后 Debug 判定读回不到"
+    );
+    log::set_max_level(log::LevelFilter::Debug);
+}
+
+/// 票 02：负责人点名直接派活也留「判定」记录。
+#[test]
+fn diag_mention_dispatch_recorded() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = pm_wb(dir.path());
+    let _p = scripted_choice(&mut wb, "后端");
+    let route = send(&wb, "@后端 把登录态的过期判断修一下").unwrap();
+    assert!(matches!(route, UnnamedRoute::Mentioned { .. }));
+    assert!(
+        crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
+            .iter()
+            .any(|r| r.branch == "mention" && r.code == "dispatch:后端")
+    );
+}
+
+/// 票 02：自治放行（秩 4 的 SkillGrant auto-pass）落「判定」记录，
+/// 能看出没等人。
+#[test]
+fn diag_grant_autonomy_autopass_recorded() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let (_dir, wb) = git_wb(&["前端"]);
+    let out = crate::grants::request(&wb.db, "p1", "a0", "skill", "pdf-read").unwrap();
+    assert!(out.granted);
+    assert!(
+        crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
+            .iter()
+            .any(|r| r.branch == "grant"
+                && r.code == "auto_pass"
+                && r.agent.as_deref() == Some("a0"))
+    );
+}
+
+/// 票 02：改进提案经 Jev 判定落「判定」记录——「交给负责人」说明
+/// 提案没有被自动放行。
+#[test]
+fn diag_proposal_judgment_records_choice() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let (_dir, mut wb, _chat) = judgment_wb();
+    let pid = submit_proposal(&wb, "art-diag1", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
+    let _jev = jev_on(&mut wb, Ok("flat"));
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE));
+    let r = rs
+        .iter()
+        .find(|r| r.branch == "execute_judgment")
+        .expect("判定记录");
+    assert_eq!(r.code, "hand_to_owner");
+    assert_eq!(r.level, "debug");
+}
+
+/// 票 03：agent 的主对话槽没绑，落到 default——Debug 的「槽位」记录，
+/// 写明哪个槽回退；关掉后读不到。
+#[test]
+fn diag_slot_fallback_on_turn_dispatch() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
+    wb.db
+        .conn()
+        .execute("UPDATE agents SET model_slot='chat' WHERE id='a0'", [])
+        .unwrap();
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：先看登录校验"),
+        text_response("改完了"),
+    ]));
+    wb.register_provider("default", worker);
+    wb.dispatch("后端", "修登录态过期判断", &[]).unwrap();
+
+    let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_SLOT));
+    let r = rs
+        .iter()
+        .find(|r| r.branch == "turn_dispatch")
+        .expect("槽位回退记录");
+    assert_eq!(r.code, "fallback_default:chat");
+    assert_eq!(r.level, "debug");
+    assert_eq!(r.agent.as_deref(), Some("a0"));
+
+    log::set_max_level(log::LevelFilter::Warn);
+    assert!(
+        !crate::diag::records(Some("p1"), Some(crate::diag::CLASS_SLOT))
+            .iter()
+            .any(|r| r.branch == "turn_dispatch"),
+        "正常回退的 Debug 关掉后读不到"
+    );
+    log::set_max_level(log::LevelFilter::Debug);
+}
+
+/// 票 03：Jev 未绑定 → Warn 的「槽位」记录，开关关掉仍读得到。
+#[test]
+fn diag_jev_unbound_is_warn_and_survives_toggle() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let (_dir, wb, _chat) = judgment_wb();
+    let pid = submit_proposal(&wb, "art-diag2", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
+    // 不注册 jev 槽——resolve 不到。
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_SLOT));
+    let r = rs
+        .iter()
+        .find(|r| r.code == "jev_unbound")
+        .expect("jev_unbound 记录");
+    assert_eq!(r.level, "warn");
+    assert_eq!(r.branch, "execute_judgment");
+
+    log::set_max_level(log::LevelFilter::Warn);
+    assert!(
+        crate::diag::records(Some("p1"), Some(crate::diag::CLASS_SLOT))
+            .iter()
+            .any(|r| r.code == "jev_unbound"),
+        "槽位失败的 Warn 关掉仍读得到"
+    );
+    log::set_max_level(log::LevelFilter::Debug);
+}
+
+/// 票 03：Jev 调用失败 → Warn 的「槽位」记录（不是判定分支）。
+#[test]
+fn diag_jev_call_failed_is_warn() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let (_dir, mut wb, _chat) = judgment_wb();
+    let pid = submit_proposal(&wb, "art-diag3", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
+    let _jev = jev_on(&mut wb, Err("down"));
+    // 槽位失败不再另写一条「判定」——失败口已在绑定/调用路径上说过。
+    // 同进程共享一个落盘文件，用前后差量数 hand_to_owner，不数绝对值。
+    let judge = || {
+        crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
+            .iter()
+            .filter(|r| r.branch == "execute_judgment" && r.code == "hand_to_owner")
+            .count()
+    };
+    let before = judge();
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    assert_eq!(judge(), before, "失败时不应多 hand_to_owner 判定记录");
+    let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_SLOT));
+    let r = rs
+        .iter()
+        .find(|r| r.code == "jev_call_failed")
+        .expect("jev_call_failed 记录");
+    assert_eq!(r.level, "warn");
+}
+
+/// 票 02：整句是指令 → 路由没派活也留「判定」记录，原因码指明哪个指令接管。
+#[test]
+fn diag_command_route_records_variant() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let (_dir, wb) = git_wb(&["前端"]);
+    let route = send(&wb, "/pause").unwrap();
+    assert!(matches!(route, UnnamedRoute::Skipped));
+    assert!(
+        crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
+            .iter()
+            .any(|r| r.branch == "route" && r.code == "command:pause")
+    );
+}
+
+/// 票 02：无 PM 时的顺位派活，「判定」记录的原因码带派给的角色——
+/// 记录要能回答「派给谁」。
+#[test]
+fn diag_handoff_records_target_role() {
+    let _g = diag_lock();
+    log::set_max_level(log::LevelFilter::Debug);
+    let dir = tempfile::tempdir().unwrap();
+    // fastpath：接话人是通道角色（a0=后端），不需要激活阶段。
+    let mut wb = fastpath_wb(dir.path());
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：我接"),
+        text_response("接完了"),
+        text_response("收尾"),
+    ]));
+    wb.register_provider("default", worker);
+    let route = send(&wb, "有人吗").unwrap();
+    let UnnamedRoute::Dispatched { role, .. } = route else {
+        panic!("expected dispatched, got {route:?}");
+    };
+    assert!(
+        crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
+            .iter()
+            .any(|r| r.branch == "route" && r.code == format!("handoff:{role}")),
+        "handoff 原因码要带派给的角色"
+    );
+}

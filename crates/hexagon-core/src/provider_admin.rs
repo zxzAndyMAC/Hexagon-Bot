@@ -127,6 +127,8 @@ fn ready_binding<'a>(
     let Some(binding) = provider_config::resolve_slot(&doc.slots, slot) else {
         return Err(AdminError::MainChatUnavailable);
     };
+    // diagnostic-records：项目还不存在时的回退不记槽位记录——
+    // 无项目视图只放宿主记录（规格），写了也读不出来。
     let Some(def) = doc.providers.iter().find(|p| p.id == binding.provider_id) else {
         return Err(AdminError::MainChatUnavailable);
     };

@@ -182,8 +182,22 @@ pub fn request_install(
     payload["creds"] = json!(false);
     payload["desc"] = json!(desc);
     // 读档失败按等人。管道式来源在 plan() 已经拒绝，到不了这里。
+    let started = std::time::Instant::now();
     let rank = crate::autonomy::rank(db, project_id).unwrap_or(0);
-    if crate::harnessgate::auto_passes(rank, crate::harnessgate::HarnessAction::NlInstall) {
+    // diagnostic-records 票 02：自治放行 vs 入队等人是一条「判定」分支。
+    let auto = crate::harnessgate::auto_passes(rank, crate::harnessgate::HarnessAction::NlInstall);
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(project_id),
+        None,
+        None,
+        None,
+        "install",
+        if auto { "auto_pass" } else { "queued" },
+        started,
+    );
+    if auto {
         let qid = format!("q{}", db.next_id("q")?);
         db.append_event(
             project_id,

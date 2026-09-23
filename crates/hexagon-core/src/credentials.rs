@@ -199,6 +199,16 @@ pub fn active() -> std::sync::Arc<dyn CredentialStore> {
     }
 }
 
+/// 当前凭据后端种类（诊断记录用，`diagnostic-records` 票 04）：
+/// `keychain` = 系统钥匙串；`dev_file` = 开发期文件库。与 [`active`]
+/// 走同一 `backend()` 判定，两处不许分叉。名字进记录，路径不进。
+pub fn backend_kind() -> &'static str {
+    match backend(std::env::var("HEXAGON_CREDENTIALS_PATH").ok().as_deref()) {
+        Backend::Os => "keychain",
+        Backend::File(_) => "dev_file",
+    }
+}
+
 /// 取某 Agent 模型槽对应的 key 明文（调用瞬间用）。缺 = Missing(凭据名)。
 pub fn require_model_key(
     db: &Db,

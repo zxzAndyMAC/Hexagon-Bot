@@ -356,7 +356,19 @@ pub fn backend_for<'a>(
         "off" => None,
         "mechanical" => Some(Box::new(MechanicalJudge)),
         "llm" => {
+            let started = std::time::Instant::now();
             if let Some(p) = crate::provider_config::resolve_slot(providers, slot) {
+                // diagnostic-records 票 03：判定槽没绑，落到 default 是正常回退。
+                if crate::provider_config::fell_back_to_default(providers, slot) {
+                    crate::diag::slot_fallback(
+                        obs.as_ref().map(|o| o.project_id),
+                        None,
+                        None,
+                        "judge_backend",
+                        slot,
+                        started,
+                    );
+                }
                 Some(Box::new(LlmJudge {
                     provider: p.as_ref(),
                     slot,

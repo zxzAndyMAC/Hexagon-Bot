@@ -661,6 +661,10 @@ fn evaluate_layers(
 }
 
 /// 带日志的求值入口包装：管线内部分支自带 return，这里统一记结论。
+///
+/// diagnostic-records 票 02：每条权限求值一条「判定」记录（全是 Debug），
+/// 原因码 = 命中的层——内置永不/危险必问/项目拒/已记形状/默认放行各一支。
+/// 工具的 Deny 仍是判定分支不是门面拒绝；「拒绝」类留给门面拒收提交。
 pub fn evaluate_logged(
     db: &Db,
     ctx: &ToolContext,
@@ -668,17 +672,48 @@ pub fn evaluate_logged(
     tool_name: &str,
     input: &Value,
 ) -> Result<Decision, crate::tools::ToolError> {
+    let started = std::time::Instant::now();
     let d = evaluate(db, ctx, tool, tool_name, input)?;
-    match &d {
+    let code = match &d {
         Decision::Deny { layer, reason } => {
-            log::info!("perm deny [{layer}] {tool_name}: {reason}")
+            log::info!("perm deny [{layer}] {tool_name}: {reason}");
+            match *layer {
+                // L0 授权闸门：grants 表缺席的硬拒（不走规则、不可记忆）。
+                "grant" => "no_grant",
+                l => l,
+            }
         }
-        Decision::Ask { reason, safety_net } => log::info!(
-            "perm ask{} {tool_name}: {reason}",
-            if *safety_net { " (safety-net)" } else { "" }
-        ),
-        Decision::Allow { via } => log::debug!("perm allow {tool_name} via {via:?}"),
-    }
+        Decision::Ask { reason, safety_net } => {
+            log::info!(
+                "perm ask{} {tool_name}: {reason}",
+                if *safety_net { " (safety-net)" } else { "" }
+            );
+            if *safety_net {
+                "safety_net"
+            } else {
+                "must_ask"
+            }
+        }
+        Decision::Allow { via } => {
+            log::debug!("perm allow {tool_name} via {via:?}");
+            match via {
+                AllowVia::Default => "default_allow",
+                AllowVia::Remembered { .. } => "remembered",
+                AllowVia::Autonomy { .. } => "autonomy_allow",
+            }
+        }
+    };
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(&ctx.project_id),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        None,
+        "permission",
+        code,
+        started,
+    );
     Ok(d)
 }
 
@@ -1591,6 +1626,92 @@ mod tests {
                 "k={k} 病态形状 {el:?} 超界——需迭代+memo 修复"
             );
         }
+    }
+
+    /// diagnostic-records 票 02：每条权限求值一条「判定」记录，
+    /// 原因码 = 命中层；全 Debug，开关关掉读回不到。
+    /// 断言打结构化读回，不打日志字符串。
+    #[test]
+    fn evaluate_logged_writes_judge_records() {
+        let _g = crate::diag::TEST_LEVEL_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        log::set_max_level(log::LevelFilter::Debug);
+        let (db, ctx, _d) = setup();
+        // 内置永不：fs_read .env
+        evaluate_logged(
+            &db,
+            &ctx,
+            &crate::tools::FsRead,
+            "fs_read",
+            &json!({"path": ".env"}),
+        )
+        .unwrap();
+        // 危险必问：baseline merge 永不放行，Ask 留存（safety_net）
+        evaluate_logged(&db, &ctx, &Bash, "bash", &json!({"cmd": "git merge x"})).unwrap();
+        // 项目否定
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope)
+                 VALUES ('pd','p1','bash','npm *','deny','project')",
+                [],
+            )
+            .unwrap();
+        evaluate_logged(&db, &ctx, &Bash, "bash", &json!({"cmd": "npm install zod"})).unwrap();
+        // 形状化规则（已记 allow）
+        db.conn()
+            .execute(
+                "INSERT INTO permission_rules (id,project_id,tool,shape,effect,scope)
+                 VALUES ('pa','p1','bash','make *','allow','project')",
+                [],
+            )
+            .unwrap();
+        evaluate_logged(&db, &ctx, &Bash, "bash", &json!({"cmd": "make build"})).unwrap();
+        // 默认放行
+        evaluate_logged(
+            &db,
+            &ctx,
+            &crate::tools::FsRead,
+            "fs_read",
+            &json!({"path": "src/a.rs"}),
+        )
+        .unwrap();
+        // 自治放行：Exec 无规则命中 → Ask → 秩 4 释放成 Autonomy
+        evaluate_logged(&db, &ctx, &Bash, "bash", &json!({"cmd": "ls -la"})).unwrap();
+        // L0 授权闸门缺席：mcp 工具没喂 grants
+        evaluate_logged(&db, &ctx, &ExternalStub, "mcp:svc:t", &json!({})).unwrap();
+
+        let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE));
+        // 同进程别的用例也可能写 permission 记录（dispatch 路径同样走
+        // evaluate_logged）——按 fixture 的三元组收窄到本用例的行。
+        let mine: Vec<&crate::diag::DiagRecord> = rs
+            .iter()
+            .filter(|r| {
+                r.branch == "permission"
+                    && r.agent.as_deref() == Some("a1")
+                    && r.activation.as_deref() == Some("sr1")
+            })
+            .collect();
+        for code in [
+            "builtin_deny",
+            "safety_net",
+            "project_deny",
+            "remembered",
+            "default_allow",
+            "autonomy_allow",
+            "no_grant",
+        ] {
+            assert!(mine.iter().any(|r| r.code == code), "missing {code}");
+        }
+        assert!(mine.iter().all(|r| r.level == "debug"));
+
+        // 票 02：关掉后读回不到（Debug 判定不留视图）。
+        log::set_max_level(log::LevelFilter::Warn);
+        let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE));
+        assert!(!rs
+            .iter()
+            .any(|r| r.branch == "permission" && r.agent.as_deref() == Some("a1")));
+        log::set_max_level(log::LevelFilter::Debug);
     }
 
     mod prop_tests {

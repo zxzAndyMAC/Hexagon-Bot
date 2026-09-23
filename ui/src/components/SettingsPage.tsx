@@ -1,12 +1,13 @@
 // 设置整页（票 29）：工作台整体换成设置页，不是弹层。
-// 左 nav 十分区：通用/键盘/团队/模型与凭据/权限/技能/MCP 服务/自治/用量/关于。
+// 左 nav 分区：通用/键盘/团队/模型与凭据/权限/技能/MCP 服务/自治/用量/日志/关于。
+// 「日志」（diagnostic-records 票 01）：诊断开关在这里，通用页不再放。
 // projectless（启动页「设置」入口，无项目上下文）：项目作用域分区渲染提示而
 // 不发必败的 conn/wb IPC——否则每个分区都弹 internal toast（ui-audit-2 收口回归）。
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n, { SUPPORTED, setLang, type Locale } from '../i18n'
 import { useUiStore, type ThemePref } from '../store'
-import { api, errText, isTauri, type ExtMcpRow, type ExtSkillRow, type McpEntryRow, type McpServiceRow, type PermissionRuleRow, type ProvidersView, type RoleDef, type RoleTemplate, type SkillRow } from '../api'
+import { api, errText, isTauri, type DiagRecord, type ExtMcpRow, type ExtSkillRow, type McpEntryRow, type McpServiceRow, type PermissionRuleRow, type ProvidersView, type RoleDef, type RoleTemplate, type SkillRow } from '../api'
 import { ACTIONS, bindingFor, conflictFor, formatBinding, isMac, normalizeEvent, resetBinding, setBinding, type ActionId } from '../keymap'
 import { PracticeGround } from './PracticeGround'
 import { Icon } from './Icon'
@@ -28,8 +29,8 @@ const LANG_NAMES: Record<string, string> = {
   fr: 'Français',
 }
 
-type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'autonomy' | 'usage' | 'about'
-const SECTIONS: Section[] = ['general', 'keys', 'team', 'models', 'perms', 'skills', 'mcp', 'autonomy', 'usage', 'about']
+type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'autonomy' | 'usage' | 'logs' | 'about'
+const SECTIONS: Section[] = ['general', 'keys', 'team', 'models', 'perms', 'skills', 'mcp', 'autonomy', 'usage', 'logs', 'about']
 /// settings-3col 票 01：list|detail 分区放宽到 980（760 塞中列后详情太挤）；
 /// 平铺分区保持 760 居中。
 const WIDE_SECTIONS = new Set<Section>(['team', 'models', 'skills', 'mcp'])
@@ -1266,6 +1267,128 @@ function UsageSection({ onDetail }: { onDetail?: () => void }) {
   return <UsageTab onDetail={onDetail} />
 }
 
+/// 诊断分类四档（词表定名，core diag.rs 同源）。显示走 i18n，
+/// 发往 core 的 class 参数是字面量本身——记录里存的就是这四个词。
+const DIAG_CLASSES = ['判定', '拒绝', '槽位', '宿主'] as const
+const diagClassKey = (c: string): string =>
+  c === '判定' ? 'judge' : c === '拒绝' ? 'reject' : c === '槽位' ? 'slot' : 'host'
+
+/** diagnostic-records 票 01：「日志」分区——诊断开关 + 四类筛选 +
+ *  结构化记录读回。记录的唯一存储是 core 的 diagnostics.jsonl，本页
+ *  读回同一文件（不是第二份）。projectless：只出宿主记录；选中非宿主
+ *  分类时提示先进入一个项目——这类记录按项目归，提示比空列表诚实。 */
+/// 行身份：全字段合成。ts 只到秒，同秒同分支的两条会在合成里仍撞上
+/// trace/activation；真正全同的两行内容可互换，共享展开态无害。
+const rowKey = (r: DiagRecord): string =>
+  `${r.ts}|${r.class}|${r.branch}|${r.code}|${r.project ?? ''}|${r.agent ?? ''}|${r.activation ?? ''}|${r.trace ?? ''}|${r.ms}`
+
+function LogsSection({ projectless = false }: { projectless?: boolean }) {
+  const { t } = useTranslation()
+  const [logOn, setLogOn] = useState(true)
+  const [cls, setCls] = useState<string | null>(null)
+  const [rows, setRows] = useState<DiagRecord[]>([])
+  const [open, setOpen] = useState<string | null>(null)
+  // core 项目 id 恒为 PROJECT_ID('p1')；无项目上下文传 null → 只剩宿主。
+  const project = projectless ? null : 'p1'
+
+  const refresh = useCallback(() => {
+    api
+      .diagnosticRecords(project, cls)
+      .then(setRows)
+      .catch(() => setRows([]))
+  }, [project, cls])
+
+  useEffect(() => {
+    api.logEnabled().then(setLogOn).catch(() => {})
+  }, [])
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  const needProject = projectless && cls !== null && cls !== '宿主'
+
+  return (
+    <div>
+      <Row label={t('settings.logging')} hint={t('settings.loggingHint')}>
+        <input
+          type="checkbox"
+          checked={logOn}
+          onChange={async (e) => {
+            setLogOn(e.target.checked)
+            await api.setLogEnabled(e.target.checked).catch(() => {})
+            refresh()
+          }}
+        />
+      </Row>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '12px 0 6px' }}>
+        {([null, ...DIAG_CLASSES] as (string | null)[]).map((c) => (
+          <button
+            key={c ?? 'all'}
+            className={`btn ${cls === c ? 'primary' : ''}`}
+            style={{ fontSize: 11 }}
+            onClick={() => {
+              setCls(c)
+              setOpen(null)
+            }}
+          >
+            {c === null ? t('settings.logs_all') : t(`settings.logs_class_${diagClassKey(c)}`)}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button className="btn" style={{ fontSize: 11 }} onClick={refresh}>
+          {t('settings.logs_refresh')}
+        </button>
+      </div>
+      {needProject ? (
+        <div className="dim3" style={{ fontSize: 12, padding: '24px 0', textAlign: 'center' }}>
+          {t('settings.logs_needProject')}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="dim3" style={{ fontSize: 12, padding: '24px 0', textAlign: 'center' }}>
+          {t('settings.logs_empty')}
+        </div>
+      ) : (
+        <div>
+          {rows.map((r) => (
+            // 行身份 = 全字段合成，不用序号——刷新后新记录顶到前面
+            // 时，序号身份会把展开态挂到别行头上。
+            <div key={rowKey(r)} style={{ borderBottom: '1px solid var(--border)' }}>
+              <button
+                className="btn"
+                style={{
+                  width: '100%', display: 'flex', gap: 8, alignItems: 'center',
+                  border: 'none', padding: '7px 4px', textAlign: 'left',
+                }}
+                onClick={() => setOpen(open === rowKey(r) ? null : rowKey(r))}
+              >
+                <span className="dim3" style={{ fontSize: 11, width: 60, flexShrink: 0 }}>
+                  {r.ts.slice(11, 19)}
+                </span>
+                <span className={`chip ${r.level === 'warn' ? 'err' : ''}`} style={{ fontSize: 10 }}>
+                  {t(`settings.logs_class_${diagClassKey(r.class)}`)}
+                </span>
+                <span style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {r.branch} · {r.code}
+                </span>
+                <span className="dim3" style={{ fontSize: 11, flexShrink: 0 }}>{r.ms}ms</span>
+              </button>
+              {open === rowKey(r) && (
+                <div className="dim3" style={{ fontSize: 11, lineHeight: 1.9, padding: '2px 4px 10px 70px' }}>
+                  <div>{r.ts}</div>
+                  <div>{t('settings.logs_f_project')}: {r.project ?? '—'}</div>
+                  <div>{t('settings.logs_f_agent')}: {r.agent ?? '—'}</div>
+                  <div>{t('settings.logs_f_activation')}: {r.activation ?? '—'}</div>
+                  <div>{t('settings.logs_f_trace')}: {r.trace ?? '—'}</div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }: {
   onBack: () => void
   onOpenUsageDetail?: () => void
@@ -1275,12 +1398,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
   const { t } = useTranslation()
   const { themePref, setThemePref } = useUiStore()
   const [section, setSection] = useState<Section>('general')
-  const [logOn, setLogOn] = useState(true)
   const [, setKeyTick] = useState(0)
-
-  useEffect(() => {
-    api.logEnabled().then(setLogOn).catch(() => {})
-  }, [])
 
   /// 项目作用域分区在无项目上下文下的占位（见头部注释）
   const gated = (el: React.ReactNode): React.ReactNode =>
@@ -1309,16 +1427,6 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
             ))}
           </div>
         </Row>
-        <Row label={t('settings.logging')} hint={t('settings.loggingHint')}>
-          <input
-            type="checkbox"
-            checked={logOn}
-            onChange={async (e) => {
-              setLogOn(e.target.checked)
-              await api.setLogEnabled(e.target.checked).catch(() => {})
-            }}
-          />
-        </Row>
       </>
     ),
     keys: (
@@ -1338,6 +1446,8 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
     autonomy: gated(<AutonomySection />),
 
     usage: gated(<UsageSection onDetail={onOpenUsageDetail} />),
+    // 日志页不被 gated 吃掉——无项目时宿主记录仍要看（diagnostic-records 票 01）。
+    logs: <LogsSection projectless={projectless} />,
     about: (
       <div style={{ fontSize: 12, lineHeight: 2 }}>
         <div><b>Hexagon-Bot</b> · v0.1.0</div>

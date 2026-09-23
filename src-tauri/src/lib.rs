@@ -914,9 +914,7 @@ fn review_proposal(
     reason: String,
 ) -> Result<(), CmdError> {
     // D01-ok: 执行判定要读工作台里的 Jev 槽，壳层不自己选模型。
-    with_wb(&state, |wb| {
-        wb.review_proposal(&proposal_id, pass, &reason)
-    })
+    with_wb(&state, |wb| wb.review_proposal(&proposal_id, pass, &reason))
 }
 
 #[tauri::command]
@@ -1219,7 +1217,16 @@ fn set_log_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), CmdError>
     } else {
         log::LevelFilter::Warn
     };
+    // diagnostic-records 票 04：拨动开关留一条「宿主」记录能看出开或关。
+    // 关掉要先记再收口（收口后 Debug 不落盘）；开着要收口后再记才落得上。
+    let t = std::time::Instant::now();
+    if !enabled {
+        hexagon_core::diag::host("log_toggle", "off", t);
+    }
     log::set_max_level(level);
+    if enabled {
+        hexagon_core::diag::host("log_toggle", "on", t);
+    }
     let p = log_enabled_path(&app).ok_or_else(|| CmdError::internal("no config dir"))?;
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(cmd_err)?;
@@ -1232,6 +1239,17 @@ fn set_log_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), CmdError>
 #[tauri::command]
 fn log_enabled(app: tauri::AppHandle) -> bool {
     load_log_enabled(&app)
+}
+
+/// 设置「日志」页读回（diagnostic-records 票 01）：转发 core 的同一份
+/// JSONL 账本。project=None → 只回宿主记录；class=None → 全部四类。
+/// 开关的 Debug 过滤在 core 读回侧收口，壳层不重复过滤。
+#[tauri::command]
+fn diagnostic_records(
+    project: Option<String>,
+    class: Option<String>,
+) -> Vec<hexagon_core::diag::DiagRecord> {
+    hexagon_core::diag::records(project.as_deref(), class.as_deref())
 }
 
 // ---------- 项目向导（票 24）：开项目前的检查/选择/建项目，不需要 wb ----------
@@ -1643,6 +1661,28 @@ pub fn run() {
                 log::LevelFilter::Warn
             });
             log::info!("hexagon-bot starting, log_enabled={enabled}");
+            // diagnostic-records 票 04：结构化记录与文本日志同一目录、
+            // 同一开关闸（上面的 set_max_level 之后写，关着就不落盘）。
+            if let Ok(dir) = app.path().app_log_dir() {
+                hexagon_core::diag::set_dir(&dir);
+            }
+            let boot = std::time::Instant::now();
+            hexagon_core::diag::host("startup", "app_start", boot);
+            hexagon_core::diag::host(
+                "credentials",
+                hexagon_core::credentials::backend_kind(),
+                boot,
+            );
+            let sb = hexagon_core::sandbox::status();
+            hexagon_core::diag::host(
+                "sandbox",
+                &if sb.available {
+                    sb.mode
+                } else {
+                    format!("unavailable:{}", sb.mode)
+                },
+                boot,
+            );
             Ok(())
         })
         .manage(AppState {
@@ -1742,6 +1782,7 @@ pub fn run() {
             usage_series,
             set_log_enabled,
             log_enabled,
+            diagnostic_records,
             inspect_dir,
             preset_roles,
             list_role_templates,

@@ -65,6 +65,21 @@ fn roster_mentions(body: &str, roster: &[String], speaker: &str) -> Vec<String> 
     out
 }
 
+/// 指令变体名——诊断记录的原因码用（diagnostic-records 票 02）。
+/// 只给变体名不带参数：Override/Install 的参数是自由文本，不进记录。
+fn command_name(cmd: &TextCommand) -> &'static str {
+    match cmd {
+        TextCommand::Rewind(_) => "rewind",
+        TextCommand::Skip => "skip",
+        TextCommand::Stamp => "stamp",
+        TextCommand::Pause => "pause",
+        TextCommand::Resume => "resume",
+        TextCommand::SleepAll => "sleep",
+        TextCommand::Install(_) => "install",
+        TextCommand::Override(_) => "override",
+    }
+}
+
 /// 回合 delta 外发钩子类型（票 03）：壳层注入，emit 到 webview。
 pub type TurnDeltaHook = Box<dyn FnMut(&turn::TurnDelta) + Send>;
 
@@ -731,6 +746,20 @@ impl Workbench {
     /// 文本指令分发（wb 侧：壳层经 commands::send_via_control 落库 +
     /// 就地处理 Pause/Resume 后，余下指令到这里；票 05 前壳层自己路由）。
     pub fn dispatch_command(&self, cmd: &TextCommand) -> Result<(), ApiError> {
+        // diagnostic-records 票 02：整句是指令 → 路由没派活，记是哪个指令
+        // 接管。只记变体名——Override/Install 的参数是自由文本，不进记录。
+        let started = std::time::Instant::now();
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            false,
+            Some(&self.project_id),
+            None,
+            None,
+            None,
+            "route",
+            &format!("command:{}", command_name(cmd)),
+            started,
+        );
         match cmd {
             TextCommand::Rewind(to) => {
                 let to_seq = match to {
@@ -826,11 +855,23 @@ impl Workbench {
                 .query_row("SELECT model_slot FROM agents WHERE id=?1", [&aid], |r| {
                     r.get(0)
                 })?;
-        let provider = crate::provider_config::resolve_slot(
-            &self.providers,
-            slot.as_deref().unwrap_or("default"),
-        )
-        .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        // diagnostic-records 票 03：槽未绑 → resolve_slot 落 default 是正常回退，
+        // 记 Debug 并说清哪个槽回退了。只在解析成功后记（没绑到任何东西是
+        // NoProvider，不是回退）。
+        let slot_name = slot.as_deref().unwrap_or("default").to_string();
+        let started = std::time::Instant::now();
+        let provider = crate::provider_config::resolve_slot(&self.providers, &slot_name)
+            .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        if crate::provider_config::fell_back_to_default(&self.providers, &slot_name) {
+            crate::diag::slot_fallback(
+                Some(&self.project_id),
+                Some(&aid),
+                run.as_ref().map(|r| r.id.as_str()),
+                "turn_dispatch",
+                &slot_name,
+                started,
+            );
+        }
         // e2e_live 活测实证：主回合曾恒传 vec![]——agent 不知道自己的
         // 职责/归属 globs/已授技能/本阶段 due kind，模型只能猜，产物
         // kind 不声明（落成 misc 不计交付）、写盘出归属线触发权限打转。
@@ -980,8 +1021,22 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         from_owner: bool,
     ) -> Result<UnnamedRoute, ApiError> {
-        if from_owner && crate::commands::parse_command(body).is_some() {
-            return Ok(UnnamedRoute::Skipped);
+        if from_owner {
+            if let Some(cmd) = crate::commands::parse_command(body) {
+                // diagnostic-records 票 02：整句是指令 → 不进路由，也是一支「没派」。
+                crate::diag::note(
+                    "判定",
+                    false,
+                    Some(&self.project_id),
+                    None,
+                    None,
+                    None,
+                    "route",
+                    &format!("command:{}", command_name(&cmd)),
+                    std::time::Instant::now(),
+                );
+                return Ok(UnnamedRoute::Skipped);
+            }
         }
         let roster = self.roster()?;
         let mentions = roster_mentions(body, &roster, speaker);
@@ -989,8 +1044,22 @@ impl Workbench {
             // 负责人的点名不进封闭选择，所以也没有「先不派活」这一项。
             let started = std::time::Instant::now();
             if !crate::pm_route::mention_wakes(from_owner) {
+                // diagnostic-records 票 02：提到了但没派也要看得出点的是谁。
+                crate::diag::note(
+                    "判定",
+                    false,
+                    Some(&self.project_id),
+                    None,
+                    None,
+                    None,
+                    "mention",
+                    &format!("held:{}", mentions.join(",")),
+                    started,
+                );
                 return Ok(UnnamedRoute::KeptInChat { roles: mentions });
             }
+            // diagnostic-records 票 02：原因码带派给谁（dispatch:角色），
+            // 只写角色名不写正文。
             crate::diag::note(
                 "判定",
                 false,
@@ -999,7 +1068,7 @@ impl Workbench {
                 None,
                 None,
                 "mention",
-                "dispatch",
+                &format!("dispatch:{}", mentions.join(",")),
                 started,
             );
             for role in &mentions {
@@ -1010,8 +1079,20 @@ impl Workbench {
         if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
             return self.closed_choice(speaker, body, attachments, from_owner, &roster);
         }
+        let handoff = std::time::Instant::now();
         match self.handoff_role(&roster)? {
             Some(role) if role != speaker => {
+                crate::diag::note(
+                    crate::diag::CLASS_JUDGE,
+                    false,
+                    Some(&self.project_id),
+                    None,
+                    None,
+                    None,
+                    "route",
+                    &format!("handoff:{role}"),
+                    handoff,
+                );
                 self.dispatch(&role, body, attachments)?;
                 Ok(UnnamedRoute::Dispatched {
                     role,
@@ -1021,8 +1102,32 @@ impl Workbench {
             // 接话人就是刚说完的这位。再派一次不是下一位，是把同一回合再跑一遍。
             // 代价：再派 = 无人值守对着同一个人循环（false continue）；
             // 停 = 这一位已经接过话（false stop）。偏向停。出处：票 09。
-            Some(_) => Ok(UnnamedRoute::Skipped),
+            Some(role) => {
+                crate::diag::note(
+                    crate::diag::CLASS_JUDGE,
+                    false,
+                    Some(&self.project_id),
+                    None,
+                    None,
+                    None,
+                    "route",
+                    &format!("same_speaker:{role}"),
+                    handoff,
+                );
+                Ok(UnnamedRoute::Skipped)
+            }
             None => {
+                crate::diag::note(
+                    crate::diag::CLASS_JUDGE,
+                    false,
+                    Some(&self.project_id),
+                    None,
+                    None,
+                    None,
+                    "route",
+                    "no_receiver",
+                    handoff,
+                );
                 self.write_no_receiver_note()?;
                 Ok(UnnamedRoute::Noted)
             }
@@ -1073,9 +1178,21 @@ impl Workbench {
                 started,
             );
             let slot = model_slot.unwrap_or_else(|| "default".into());
+            let started = std::time::Instant::now();
             let p = crate::provider_config::resolve_slot(&self.providers, &slot)
                 .cloned()
                 .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
+            // diagnostic-records 票 03：主对话槽也没绑，落到了 default。
+            if crate::provider_config::fell_back_to_default(&self.providers, &slot) {
+                crate::diag::slot_fallback(
+                    Some(&self.project_id),
+                    Some(&pm_id),
+                    None,
+                    "pm_route",
+                    &slot,
+                    started,
+                );
+            }
             (p, slot, "chat")
         };
         let run = self.active_run()?;
@@ -1150,6 +1267,9 @@ impl Workbench {
             Some(crate::pm_route::RouteChoice::Hold) => (true, false, None),
             None => (false, true, None),
         };
+        // diagnostic-records 票 02：unparsed 记拒绝/Warn——模型回了花名册外
+        // 的字符串等于这次路由被拒，关 Debug 也得看得见；dispatch 原因码带
+        // 派给的角色，回答「派给谁」。
         crate::diag::note(
             if rejected { "拒绝" } else { "判定" },
             rejected,
@@ -1158,12 +1278,12 @@ impl Workbench {
             run_id,
             Some(&trace),
             "pm_route",
-            if rejected {
-                "unparsed"
+            &if rejected {
+                "unparsed".to_string()
             } else if held {
-                "hold"
+                "hold".into()
             } else {
-                "dispatch"
+                format!("dispatch:{}", role.as_deref().unwrap_or("?"))
             },
             route_started,
         );
@@ -1449,16 +1569,13 @@ impl Workbench {
     pub fn draft_role_def(&self, agent_id: &str, hint: &str) -> Result<String, ApiError> {
         let slot = crate::provider_config::ROLE_DRAFT_SLOT.to_string();
         let started = std::time::Instant::now();
-        if !self.providers.contains_key(&slot) {
-            crate::diag::note(
-                "槽位",
-                false,
+        if crate::provider_config::fell_back_to_default(&self.providers, &slot) {
+            crate::diag::slot_fallback(
                 Some(&self.project_id),
                 Some(agent_id),
                 None,
-                None,
                 "role_draft",
-                "fallback_default",
+                &slot,
                 started,
             );
         }
@@ -1562,17 +1679,29 @@ impl Workbench {
         };
         let agent_id = self.agent_by_role(&role)?;
         let slot = self.speaker_chat_slot(&agent_id)?;
+        let started = std::time::Instant::now();
         let Some(provider) = crate::provider_config::resolve_slot(&self.providers, &slot).cloned()
         else {
             return Err(ApiError::NoProvider(slot));
         };
+        // diagnostic-records 票 03：接话人的主对话槽没绑，落到了 default。
+        if crate::provider_config::fell_back_to_default(&self.providers, &slot) {
+            crate::diag::slot_fallback(
+                Some(&self.project_id),
+                Some(&agent_id),
+                None,
+                "intake",
+                &slot,
+                started,
+            );
+        }
         // 决策槽只做封闭选择（票 08）。开场分析是读仓库后的说明，走主对话槽。
         // 被否决：没配主对话槽就改用 decision_slot——那会把「派给谁」的模型
         // 拿来写项目说明。
-        let resolved = if self.providers.contains_key(&slot) {
-            slot.clone()
-        } else {
+        let resolved = if crate::provider_config::fell_back_to_default(&self.providers, &slot) {
             "default".to_string()
+        } else {
+            slot.clone()
         };
         let name = self.project_name()?;
         let cmds = crate::intake::read_commands(&self.repo_root);

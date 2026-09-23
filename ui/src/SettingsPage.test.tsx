@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
 import { SettingsPage } from './components/SettingsPage'
-import { api } from './api'
+import { api, type DiagRecord } from './api'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -218,6 +218,112 @@ describe('SettingsPage list|detail 分区', () => {
     expect(el.querySelector('[role="dialog"]')).toBeNull()
     const chips = [...el.querySelectorAll('.chip')].map((c) => c.textContent)
     expect(chips.some((c) => c?.includes('spec-writing'))).toBe(true)
+    root.unmount()
+  })
+})
+
+// diagnostic-records 票 01：「日志」分区——开关从通用页搬来、四类筛选、
+// projectless 宿主可见 + 非宿主提示先开项目、行展开出 id。
+describe('SettingsPage 日志分区（diagnostic-records 票 01）', () => {
+  const rec = (over: Partial<DiagRecord>): DiagRecord => ({
+    ts: '2026-09-18T11:05:12Z', class: '判定', level: 'debug',
+    project: 'p1', agent: 'a0', activation: 'sr1', trace: '512',
+    branch: 'permission', code: 'autonomy_allow', ms: 3, ...over,
+  })
+  const ROWS: DiagRecord[] = [
+    rec({ class: '宿主', branch: 'startup', code: 'app_start', project: null, agent: null, activation: null, trace: null }),
+    rec({ class: '宿主', branch: 'credentials', code: 'dev_file', project: null, agent: null, activation: null, trace: null }),
+    rec({ class: '拒绝', level: 'warn', branch: 'set_autonomy', code: 'gears_removed', agent: null, activation: null, trace: null }),
+    rec({}),
+    rec({ class: '槽位', level: 'warn', branch: 'execute_judgment', code: 'jev_unbound', trace: null }),
+  ]
+
+  beforeEach(() => {
+    vi.spyOn(api, 'logEnabled').mockResolvedValue(true)
+    // 过滤口径与 core records() 对齐——mock 不是替身语义，是同一份形状。
+    vi.spyOn(api, 'diagnosticRecords').mockImplementation(async (proj, cls) =>
+      ROWS.filter((r) => (cls ? r.class === cls : true)).filter((r) =>
+        proj ? r.project === null || r.project === proj : r.project === null,
+      ),
+    )
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  const clickNav = async (el: HTMLElement, label: string) => {
+    const btn = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
+    await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  }
+
+  it('左栏有「日志」；开关在此页而不在通用页', async () => {
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    // 通用页不再有诊断开关（票 01：搬家）。
+    expect(el.textContent).not.toContain('Diagnostic logging')
+    expect(el.querySelector('input[type=checkbox]')).toBeNull()
+    await clickNav(el, 'Logs')
+    expect(el.textContent).toContain('Diagnostic logging')
+    const box = el.querySelector('input[type=checkbox]')
+    expect(box).toBeTruthy()
+    root.unmount()
+  })
+
+  it('行渲染：全部四类同列；展开出项目/Agent/激活/轨迹 id', async () => {
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Logs')
+    expect(el.textContent).toContain('app_start')
+    expect(el.textContent).toContain('gears_removed')
+    expect(el.textContent).toContain('autonomy_allow')
+    expect(el.textContent).toContain('jev_unbound')
+    // 未展开时看不到 id 值——展开 permission 行。
+    const row = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('autonomy_allow'))!
+    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(el.textContent).toContain('a0')
+    expect(el.textContent).toContain('sr1')
+    expect(el.textContent).toContain('512')
+    root.unmount()
+  })
+
+  it('分类筛选把词表字面量发给 core', async () => {
+    const spy = vi.spyOn(api, 'diagnosticRecords')
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Logs')
+    await clickNav(el, 'Rejected')
+    expect(spy).toHaveBeenLastCalledWith('p1', '拒绝')
+    expect(el.textContent).toContain('gears_removed')
+    expect(el.textContent).not.toContain('autonomy_allow')
+    await clickNav(el, 'Host')
+    expect(spy).toHaveBeenLastCalledWith('p1', '宿主')
+    expect(el.textContent).toContain('app_start')
+    root.unmount()
+  })
+
+  it('projectless：宿主记录照常列出；选非宿主类提示先开项目', async () => {
+    const { el, root } = await render(<SettingsPage onBack={() => {}} projectless />)
+    await clickNav(el, 'Logs')
+    // project=null → 只剩宿主；提示的不是空列表。
+    expect(el.textContent).toContain('app_start')
+    expect(el.textContent).toContain('dev_file')
+    expect(el.textContent).not.toContain('gears_removed')
+    expect(el.textContent).not.toContain('autonomy_allow')
+    await clickNav(el, 'Decision')
+    expect(el.textContent).toContain('Open a project first')
+    // 宿主类仍能看。
+    await clickNav(el, 'Host')
+    expect(el.textContent).toContain('app_start')
+    root.unmount()
+  })
+
+  it('拨动开关发 set_log_enabled 并重拉记录', async () => {
+    const setSpy = vi.spyOn(api, 'setLogEnabled').mockResolvedValue(undefined)
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Logs')
+    const box = el.querySelector<HTMLInputElement>('input[type=checkbox]')!
+    await act(async () => {
+      box.click()
+      // onChange 是异步链（setLogEnabled → refresh）——给一轮微任务再断言，
+      // 否则 setRows 落在 act 外。
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(setSpy).toHaveBeenCalledWith(false)
     root.unmount()
   })
 })

@@ -58,6 +58,7 @@ import type { ProviderDef } from './gen/ProviderDef'
 import type { ProviderView } from './gen/ProviderView'
 import type { ProvidersView } from './gen/ProvidersView'
 import type { SlotBinding } from './gen/SlotBinding'
+import type { DiagRecord } from './gen/DiagRecord'
 import type { CreateProjectOpts } from './gen/CreateProjectOpts'
 import type { CreateStep as CreateStepDto } from './gen/CreateStep'
 import type { Event } from './gen/Event'
@@ -82,7 +83,7 @@ export type {
   AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
   CreateProjectOpts, CreateStepDto, Event, EventKind, MessageRow, MessageToken, ExportFilter,
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
-  RepoEntry,
+  RepoEntry, DiagRecord,
 }
 
 
@@ -226,6 +227,10 @@ export const api = {
     call<void>('set_usage_limit', { limitCents }),
   setLogEnabled: (enabled: boolean) => call<void>('set_log_enabled', { enabled }),
   logEnabled: () => call<boolean>('log_enabled'),
+  // diagnostic-records 票 01：设置「日志」页读回。project=null → 只回
+  // 宿主记录；cls=null → 全部四类。Debug 过滤在 core 读回侧收口。
+  diagnosticRecords: (project: string | null, cls: string | null) =>
+    call<DiagRecord[]>('diagnostic_records', { project, class: cls }),
   autonomy: () => call<string>('autonomy'),
   setAutonomy: (level: string) => call<void>('set_autonomy', { level }),
   // ui-audit-2 票 07：审查者档位（live 仅在 ≥L1 生效）
@@ -900,6 +905,27 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       } as T
     case 'log_enabled':
       return true as T
+    case 'diagnostic_records': {
+      // diagnostic-records 票 01：浏览器预览同一份账本形状——过滤口径
+      // 与 core records() 对齐（project=null → 只剩宿主类；选中项目 →
+      // 本项目 + 宿主类；最新在前）。
+      const cls = (args?.class as string | null | undefined) ?? null
+      const proj = (args?.project as string | null | undefined) ?? null
+      const all = [
+        { ts: '2026-09-18T11:02:03Z', class: '宿主', level: 'debug', project: null, agent: null, activation: null, trace: null, branch: 'startup', code: 'app_start', ms: 0 },
+        { ts: '2026-09-18T11:02:04Z', class: '宿主', level: 'debug', project: null, agent: null, activation: null, trace: null, branch: 'credentials', code: 'dev_file', ms: 0 },
+        { ts: '2026-09-18T11:02:05Z', class: '宿主', level: 'debug', project: null, agent: null, activation: null, trace: null, branch: 'sandbox', code: 'seatbelt', ms: 0 },
+        { ts: '2026-09-18T11:05:12Z', class: '判定', level: 'debug', project: 'p1', agent: 'a0', activation: 'sr1', trace: '512', branch: 'permission', code: 'autonomy_allow', ms: 3 },
+        { ts: '2026-09-18T11:06:41Z', class: '判定', level: 'debug', project: 'p1', agent: 'a1', activation: 'sr1', trace: '560', branch: 'pm_route', code: 'dispatch:后端', ms: 812 },
+        { ts: '2026-09-18T11:08:20Z', class: '拒绝', level: 'warn', project: 'p1', agent: 'a2', activation: 'sr1', trace: '590', branch: 'execute_judgment', code: 'mechanical_block', ms: 1 },
+        { ts: '2026-09-18T11:09:33Z', class: '槽位', level: 'warn', project: 'p1', agent: 'a2', activation: 'sr1', trace: null, branch: 'execute_judgment', code: 'jev_unbound', ms: 0 },
+        { ts: '2026-09-18T11:10:01Z', class: '槽位', level: 'debug', project: 'p1', agent: 'a0', activation: 'sr1', trace: null, branch: 'turn_dispatch', code: 'fallback_default:chat', ms: 0 },
+      ]
+      return all
+        .filter((r) => (cls ? r.class === cls : true))
+        .filter((r) => (proj ? r.project === proj || r.class === '宿主' : r.class === '宿主'))
+        .reverse() as T
+    }
     case 'set_agent_avatar':
       mockAvatars[String(args?.agentId)] = String(args?.dataUrl)
       return null as T
