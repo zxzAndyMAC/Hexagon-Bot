@@ -2,6 +2,10 @@
 //!
 //! 可改职责、上级、模型槽，以及收窄路径归属或授权名单。放宽在执行判定前拒绝。
 //! 证据是上级复审通过，不接受回放。权限规则和授权清单本身不是提案面。
+//!
+//! 代价：把放宽判成可送判定 = 角色借提案扩大路径或授权（false negative，未审副作用）。
+//! 把收窄判成放宽 = 一次收紧被拒绝，负责人再改（false positive）。偏向拒绝。
+//! 被否决：放宽也送给 Jev——判定不能推翻这道机械拒绝。
 
 use crate::db::Db;
 use crate::proposals::PropError;
@@ -45,41 +49,51 @@ pub fn audit(db: &Db, ctx: &ToolContext, body: &str) -> Result<(), PropError> {
     if role.is_empty() {
         return Err(PropError::Rejected("missing role name".into()));
     }
-    let agent: String = db
-        .conn()
-        .query_row(
-            "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
-            rusqlite::params![ctx.project_id, role],
-            |r| r.get(0),
-        )
-        .map_err(|_| PropError::Rejected(format!("unknown role: {role}")))?;
+    let agents = role_agent_ids(db, &ctx.project_id, role)?;
     if let Some(next) = strings(&p["globs"]) {
-        let mut st = db
-            .conn()
-            .prepare("SELECT glob FROM agent_globs WHERE agent_id=?1 ORDER BY glob")?;
-        let current: Vec<String> = st
-            .query_map([&agent], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        if globs_widen(&current, &next) {
-            return Err(PropError::Rejected(
-                "role proposal must not widen path ownership".into(),
-            ));
+        for agent in &agents {
+            let mut st = db
+                .conn()
+                .prepare("SELECT glob FROM agent_globs WHERE agent_id=?1 ORDER BY glob")?;
+            let current: Vec<String> = st
+                .query_map([agent], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            if globs_widen(&current, &next) {
+                return Err(PropError::Rejected(
+                    "role proposal must not widen path ownership".into(),
+                ));
+            }
         }
     }
     if let Some(next) = strings(&p["grants"]) {
-        let mut st = db.conn().prepare(
-            "SELECT kind || ':' || name FROM grants WHERE agent_id=?1 ORDER BY kind, name",
-        )?;
-        let current: Vec<String> = st
-            .query_map([&agent], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        if list_widen(&current, &next) {
-            return Err(PropError::Rejected(
-                "role proposal must not widen grants".into(),
-            ));
+        for agent in &agents {
+            let mut st = db.conn().prepare(
+                "SELECT kind || ':' || name FROM grants WHERE agent_id=?1 ORDER BY kind, name",
+            )?;
+            let current: Vec<String> = st
+                .query_map([agent], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            if list_widen(&current, &next) {
+                return Err(PropError::Rejected(
+                    "role proposal must not widen grants".into(),
+                ));
+            }
         }
     }
     Ok(())
+}
+
+fn role_agent_ids(db: &Db, project_id: &str, role: &str) -> Result<Vec<String>, PropError> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id")?;
+    let ids: Vec<String> = st
+        .query_map(rusqlite::params![project_id, role], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    if ids.is_empty() {
+        return Err(PropError::Rejected(format!("unknown role: {role}")));
+    }
+    Ok(ids)
 }
 
 pub fn apply(db: &Db, ctx: &ToolContext, body: &str, backup: &Path) -> Result<bool, PropError> {
@@ -89,7 +103,7 @@ pub fn apply(db: &Db, ctx: &ToolContext, body: &str, backup: &Path) -> Result<bo
     audit(db, ctx, body)?;
     let role = p["role"].as_str().unwrap_or("").to_string();
     let agent: String = db.conn().query_row(
-        "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
+        "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
         rusqlite::params![ctx.project_id, role],
         |r| r.get(0),
     )?;
@@ -112,11 +126,9 @@ pub fn apply(db: &Db, ctx: &ToolContext, body: &str, backup: &Path) -> Result<bo
         .flatten();
     let model_slot: Option<String> = db
         .conn()
-        .query_row(
-            "SELECT model_slot FROM agents WHERE id=?1",
-            [&agent],
-            |r| r.get(0),
-        )
+        .query_row("SELECT model_slot FROM agents WHERE id=?1", [&agent], |r| {
+            r.get(0)
+        })
         .ok()
         .flatten();
     let mut st = db
@@ -161,8 +173,8 @@ pub fn apply(db: &Db, ctx: &ToolContext, body: &str, backup: &Path) -> Result<bo
     }
     if let Some(slot) = p["model_slot"].as_str() {
         db.conn().execute(
-            "UPDATE agents SET model_slot=?1 WHERE id=?2",
-            rusqlite::params![slot, agent],
+            "UPDATE agents SET model_slot=?1 WHERE project_id=?2 AND role=?3",
+            rusqlite::params![slot, ctx.project_id, role],
         )?;
         db.conn().execute(
             "INSERT INTO role_defs (project_id, name, model_slot) VALUES (?1,?2,?3)
@@ -171,26 +183,30 @@ pub fn apply(db: &Db, ctx: &ToolContext, body: &str, backup: &Path) -> Result<bo
         )?;
     }
     if let Some(globs) = strings(&p["globs"]) {
-        db.conn()
-            .execute("DELETE FROM agent_globs WHERE agent_id=?1", [&agent])?;
-        for g in globs {
-            db.conn().execute(
-                "INSERT INTO agent_globs (agent_id, glob) VALUES (?1,?2)",
-                rusqlite::params![agent, g],
-            )?;
+        for id in role_agent_ids(db, &ctx.project_id, &role)? {
+            db.conn()
+                .execute("DELETE FROM agent_globs WHERE agent_id=?1", [&id])?;
+            for g in &globs {
+                db.conn().execute(
+                    "INSERT INTO agent_globs (agent_id, glob) VALUES (?1,?2)",
+                    rusqlite::params![id, g],
+                )?;
+            }
         }
     }
     if let Some(grants) = strings(&p["grants"]) {
-        let mut st = db
-            .conn()
-            .prepare("SELECT id, kind || ':' || name FROM grants WHERE agent_id=?1")?;
-        let rows: Vec<(String, String)> = st
-            .query_map([&agent], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<_, _>>()?;
-        for (id, key) in rows {
-            if !grants.contains(&key) {
-                db.conn()
-                    .execute("DELETE FROM grants WHERE id=?1", [&id])?;
+        for id in role_agent_ids(db, &ctx.project_id, &role)? {
+            let mut st = db
+                .conn()
+                .prepare("SELECT id, kind || ':' || name FROM grants WHERE agent_id=?1")?;
+            let rows: Vec<(String, String)> = st
+                .query_map([&id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            for (gid, key) in rows {
+                if !grants.contains(&key) {
+                    db.conn()
+                        .execute("DELETE FROM grants WHERE id=?1", [&gid])?;
+                }
             }
         }
     }
@@ -242,7 +258,12 @@ pub fn rollback(db: &Db, ctx: &ToolContext, backup: &Path) -> Result<bool, PropE
             let id = format!("g{}", db.next_id("g")?);
             db.conn().execute(
                 "INSERT INTO grants (id, agent_id, kind, name) VALUES (?1,?2,?3,?4)",
-                rusqlite::params![id, agent, g[0].as_str().unwrap_or(""), g[1].as_str().unwrap_or("")],
+                rusqlite::params![
+                    id,
+                    agent,
+                    g[0].as_str().unwrap_or(""),
+                    g[1].as_str().unwrap_or("")
+                ],
             )?;
         }
     }

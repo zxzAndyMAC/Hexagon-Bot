@@ -81,6 +81,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0019_role_def_surface",
         include_str!("../migrations/0019_role_def_surface.sql"),
     ),
+    (
+        "0020_agent_peers",
+        include_str!("../migrations/0020_agent_peers.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

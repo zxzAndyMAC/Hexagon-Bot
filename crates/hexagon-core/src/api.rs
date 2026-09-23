@@ -333,7 +333,7 @@ impl Workbench {
             .db
             .conn()
             .query_row(
-                "SELECT decision_slot FROM agents WHERE project_id=?1 AND role=?2",
+                "SELECT decision_slot FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
                 rusqlite::params![self.project_id, crate::pm_route::PM_ROLE],
                 |r| r.get::<_, Option<String>>(0),
             )
@@ -497,11 +497,12 @@ impl Workbench {
         let ctx = self.ctx_for(&author, None);
         // 只取 Jev 槽，而且必须是决策接口。没绑、或绑的是聊天模型，都不调用。
         // 被否决：没配 Jev 就 resolve_slot 到 default。那是用聊天模型顶替判定。
-        let jev = self
-            .providers
-            .get(crate::provider_config::JEV_SLOT)
-            .filter(|p| p.uses_decision_api())
-            .map(|p| p.as_ref());
+        let jev = crate::provider_config::resolve_exact(
+            &self.providers,
+            crate::provider_config::JEV_SLOT,
+        )
+        .filter(|p| p.uses_decision_api())
+        .map(|p| p.as_ref());
         crate::proposals::review(&self.db, &ctx, proposal_id, pass, reason, jev)?;
         Ok(())
     }
@@ -514,12 +515,7 @@ impl Workbench {
         read: &[String],
     ) -> Result<String, ApiError> {
         let ctx = self.ctx_for(agent_id, None);
-        Ok(crate::experience::propose(
-            &self.db,
-            &ctx,
-            lesson,
-            read,
-        )?)
+        Ok(crate::experience::propose(&self.db, &ctx, lesson, read)?)
     }
 
     /// 激活简报里的技能目录。经验正文不在这里。
@@ -661,7 +657,7 @@ impl Workbench {
         self.db
             .conn()
             .query_row(
-                "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
+                "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
                 rusqlite::params![self.project_id, role],
                 |r| r.get(0),
             )
@@ -990,11 +986,22 @@ impl Workbench {
         let roster = self.roster()?;
         let mentions = roster_mentions(body, &roster, speaker);
         if !mentions.is_empty() {
-            let rank = crate::autonomy::rank(&self.db, &self.project_id)?;
             // 负责人的点名不进封闭选择，所以也没有「先不派活」这一项。
-            if !crate::pm_route::mention_wakes(from_owner, rank) {
+            let started = std::time::Instant::now();
+            if !crate::pm_route::mention_wakes(from_owner) {
                 return Ok(UnnamedRoute::KeptInChat { roles: mentions });
             }
+            crate::diag::note(
+                "判定",
+                false,
+                Some(&self.project_id),
+                None,
+                None,
+                None,
+                "mention",
+                "dispatch",
+                started,
+            );
             for role in &mentions {
                 self.dispatch(role, body, attachments)?;
             }
@@ -1053,6 +1060,18 @@ impl Workbench {
                 .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
             (p, slot, "decision")
         } else {
+            let started = std::time::Instant::now();
+            crate::diag::note(
+                "槽位",
+                false,
+                Some(&self.project_id),
+                Some(&pm_id),
+                None,
+                None,
+                "pm_route",
+                "fallback_chat",
+                started,
+            );
             let slot = model_slot.unwrap_or_else(|| "default".into());
             let p = crate::provider_config::resolve_slot(&self.providers, &slot)
                 .cloned()
@@ -1082,13 +1101,15 @@ impl Workbench {
         let run_id = run.as_ref().map(|r| r.id.as_str());
         // 选择也是一次模型派发：信封在调用前落，用量在成功后记到项目经理头上。
         // 不走 run_turn——那会把选择写成聊天回复。
-        self.db.append_event(
+        let trace_id = self.db.append_event(
             &self.project_id,
             EventKind::System,
             turn::request_envelope(0, &req, &req.messages, &[]),
             Some(&pm_id),
             run_id,
         )?;
+        let trace = trace_id.to_string();
+        let route_started = std::time::Instant::now();
         let resp = if use_jev {
             let state = crate::pm_route::choice_state(
                 stage_name.as_deref(),
@@ -1129,6 +1150,23 @@ impl Workbench {
             Some(crate::pm_route::RouteChoice::Hold) => (true, false, None),
             None => (false, true, None),
         };
+        crate::diag::note(
+            if rejected { "拒绝" } else { "判定" },
+            rejected,
+            Some(&self.project_id),
+            Some(&pm_id),
+            run_id,
+            Some(&trace),
+            "pm_route",
+            if rejected {
+                "unparsed"
+            } else if held {
+                "hold"
+            } else {
+                "dispatch"
+            },
+            route_started,
+        );
         let mut payload = json!({
             "held": held,
             "rejected": rejected,
@@ -1405,8 +1443,25 @@ impl Workbench {
 
     /// 角色设定起草。ADR 0069：用角色起草槽；没绑则落到默认槽。
     /// 不再用这个 Agent 自己的模型槽。人确认才写回。
+    ///
+    /// 回退只发生在 `resolve_slot`。请求上的槽名仍是角色起草槽，不再在这里
+    /// 改写成 `default`。正常回退记 Debug。
     pub fn draft_role_def(&self, agent_id: &str, hint: &str) -> Result<String, ApiError> {
         let slot = crate::provider_config::ROLE_DRAFT_SLOT.to_string();
+        let started = std::time::Instant::now();
+        if !self.providers.contains_key(&slot) {
+            crate::diag::note(
+                "槽位",
+                false,
+                Some(&self.project_id),
+                Some(agent_id),
+                None,
+                None,
+                "role_draft",
+                "fallback_default",
+                started,
+            );
+        }
         let provider = crate::provider_config::resolve_slot(&self.providers, &slot)
             .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
         let role: String =
@@ -1415,13 +1470,8 @@ impl Workbench {
                 .query_row("SELECT role FROM agents WHERE id=?1", [agent_id], |r| {
                     r.get(0)
                 })?;
-        let resolved = if self.providers.contains_key(&slot) {
-            slot.clone()
-        } else {
-            "default".to_string()
-        };
         let req = crate::provider::ChatRequest {
-            model_slot: resolved,
+            model_slot: slot,
             messages: vec![crate::provider::Message {
                 role: crate::provider::Role::User,
                 content: vec![crate::provider::ContentBlock::Text {

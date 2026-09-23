@@ -943,9 +943,12 @@ mod tests {
             Decision::Allow { .. }
         ));
         assert!(revoke_rule(&db, "p1", "pr1").unwrap());
+        // 记忆撤掉之后不再命中规则。新询问按自治放行。
         assert!(matches!(
             bash_ctx(&db, &ctx, "npm test"),
-            Decision::Ask { .. }
+            Decision::Allow {
+                via: AllowVia::Autonomy { .. }
+            }
         ));
         // 事件留痕
         let kind: String = db
@@ -1002,23 +1005,39 @@ mod tests {
                 [],
             )
             .unwrap();
-        for cmd in [
-            "git push origin main",
-            "git merge hexagon/work",
-            "rm -rf /tmp/x",
-        ] {
-            let d = bash_ctx(&db, &ctx, cmd);
-            assert!(
-                matches!(
-                    d,
-                    Decision::Ask {
-                        safety_net: true,
-                        ..
-                    }
-                ),
-                "{cmd}"
-            );
-        }
+        let push = bash_ctx(&db, &ctx, "git push origin main");
+        assert!(
+            matches!(
+                push,
+                Decision::Allow {
+                    via: AllowVia::Autonomy { .. },
+                    ..
+                }
+            ),
+            "{push:?}"
+        );
+        let merge = bash_ctx(&db, &ctx, "git merge hexagon/work");
+        assert!(
+            matches!(
+                merge,
+                Decision::Ask {
+                    safety_net: true,
+                    ..
+                }
+            ),
+            "baseline merge still asks: {merge:?}"
+        );
+        let rm = bash_ctx(&db, &ctx, "rm -rf /tmp/x");
+        assert!(
+            matches!(
+                rm,
+                Decision::Allow {
+                    via: AllowVia::Autonomy { .. },
+                    ..
+                }
+            ),
+            "{rm:?}"
+        );
         // 且永不进记忆
         let ok = persist_rule(
             &db,
@@ -1076,13 +1095,12 @@ mod tests {
                 via: AllowVia::Remembered { .. }
             }
         ));
-        // 不命中 → 默认问
+        // 不命中的新询问按原先 L4 放行，不是记忆命中。
         let d2 = bash_ctx(&db, &ctx, "cargo build");
         assert!(matches!(
             d2,
-            Decision::Ask {
-                safety_net: false,
-                ..
+            Decision::Allow {
+                via: AllowVia::Autonomy { .. }
             }
         ));
     }
@@ -1101,10 +1119,12 @@ mod tests {
             bash_ctx(&db, &ctx, "cargo test"),
             Decision::Allow { .. }
         ));
-        ctx.stage_run_id = Some("sr2".into()); // 换了激活期
+        ctx.stage_run_id = Some("sr2".into()); // 换了激活期：记忆不带走，新询问按自治放行
         assert!(matches!(
             bash_ctx(&db, &ctx, "cargo test"),
-            Decision::Ask { .. }
+            Decision::Allow {
+                via: AllowVia::Autonomy { .. }
+            }
         ));
     }
 
@@ -1122,9 +1142,14 @@ mod tests {
             "npm install zod --registry https://registry.npmjs.org",
         );
         assert!(matches!(d, Decision::Allow { .. }));
-        // 不引用 → 默认问（域不匹配）
+        // 不引用该域：不是这条记忆，新询问按自治放行
         let d2 = bash_ctx(&db, &ctx, "npm install zod");
-        assert!(matches!(d2, Decision::Ask { .. }));
+        assert!(matches!(
+            d2,
+            Decision::Allow {
+                via: AllowVia::Autonomy { .. }
+            }
+        ));
     }
 
     #[test]
@@ -1139,7 +1164,13 @@ mod tests {
             &json!({"path":"etc/x","content":"c"}),
         )
         .unwrap();
-        assert!(matches!(d, Decision::Ask { .. }));
+        // 界外新询问按原先 L4 放行，不再排队。
+        assert!(matches!(
+            d,
+            Decision::Allow {
+                via: AllowVia::Autonomy { .. }
+            }
+        ));
         // 界内放行
         let d2 = evaluate(
             &db,
@@ -1216,14 +1247,22 @@ mod tests {
             .unwrap();
         let d = evaluate(&db, &ctx, &ExternalStub, "mcp:svc:t", &json!({"x":1})).unwrap();
         assert!(
-            matches!(
+            !matches!(
                 d,
-                Decision::Ask {
-                    safety_net: false,
-                    ..
+                Decision::Allow {
+                    via: AllowVia::Remembered { .. }
                 }
             ),
             "External 地板：记忆 allow 永不生效，得 {d:?}"
+        );
+        assert!(
+            matches!(
+                d,
+                Decision::Allow {
+                    via: AllowVia::Autonomy { .. }
+                }
+            ),
+            "新询问按自治放行，得 {d:?}"
         );
     }
 
@@ -1477,8 +1516,14 @@ mod tests {
             "git log --output=/tmp/x",
         ] {
             assert!(
-                matches!(bash_ctx(&db, &ctx, cmd), Decision::Ask { .. }),
-                "{cmd} must ask (operand escapes repo)"
+                matches!(
+                    bash_ctx(&db, &ctx, cmd),
+                    Decision::Allow {
+                        via: AllowVia::Autonomy { .. }
+                    }
+                ),
+                "{cmd} must not be covered by the in-repo shape, got {:?}",
+                bash_ctx(&db, &ctx, cmd)
             );
         }
         // deny 语义不变：deny `cat *` 对越界读仍是 Deny 不是 Ask
@@ -1509,9 +1554,12 @@ mod tests {
                 [],
             )
             .unwrap();
+        // 复合命令不能靠记忆放行。离开时它是新询问，按自治放行。
         assert!(matches!(
             bash_ctx(&db, &ctx, "cargo test && echo hi"),
-            Decision::Ask { .. }
+            Decision::Allow {
+                via: AllowVia::Autonomy { .. }
+            }
         ));
         assert!(matches!(
             bash_ctx(&db, &ctx, "cargo test && cargo build"),
@@ -1611,9 +1659,10 @@ mod tests {
         }
 
         proptest! {
-            /// 不变量①：任意规则组合下安全网永远必问（记忆 allow 不能豁免）。
+            /// 不变量①：离开时的放行等于原先的 L4。安全网由自治放行，不因记忆规则改道。
+            /// 基线合入不在这组 NET 里。ADR 0069 之后夹具写成 L0 也不再把安全网留成必问。
             #[test]
-            fn safety_net_always_asks(
+            fn safety_net_releases_at_former_l4(
                 rules in collection::vec(rule(), 0..8),
                 idx in 0..NET.len(),
             ) {
@@ -1621,10 +1670,21 @@ mod tests {
                 for (i, (t, s, e, sc)) in rules.iter().enumerate() {
                     insert_rule(&db, i, t, s, e, sc);
                 }
-                let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": NET[idx]})).unwrap();
+                let cmd = NET[idx];
+                let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
+                let project_deny = matches!(d, Decision::Deny { layer: "project_deny", .. });
+                let baseline = cmd.starts_with("git merge")
+                    && matches!(d, Decision::Ask { safety_net: true, .. });
+                let released = matches!(
+                    d,
+                    Decision::Allow {
+                        via: AllowVia::Autonomy { safety_net: true, .. },
+                        ..
+                    }
+                );
                 prop_assert!(
-                    matches!(d, Decision::Ask { safety_net: true, .. }),
-                    "expected safety-net ask, got {d:?}"
+                    project_deny || baseline || released,
+                    "safety net got {d:?} for {cmd}"
                 );
             }
 
@@ -1691,8 +1751,9 @@ mod tests {
                 insert_rule(&db, 0, "bash", "cargo *", "allow", "project");
                 let cmd = format!("cargo test {sep} {tail}");
                 let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
+                // 形状不能放行复合命令。离开时的新询问可以按自治放行，但不是记忆命中。
                 prop_assert!(
-                    !matches!(d, Decision::Allow { .. }),
+                    !matches!(d, Decision::Allow { via: AllowVia::Remembered { .. }, .. }),
                     "compound {cmd} must not be shape-allowed, got {d:?}"
                 );
             }
@@ -1713,8 +1774,9 @@ mod tests {
                 );
                 let cmd = format!("npm install zod --registry https://{host}");
                 let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
+                // 寄生域不能命中 @ 规则。未命中的新询问按原先 L4 自治放行，不是规则放行。
                 prop_assert!(
-                    matches!(d, Decision::Ask { .. }),
+                    matches!(d, Decision::Allow { via: AllowVia::Autonomy { .. }, .. }),
                     "{host} must not satisfy the domain rule, got {d:?}"
                 );
             }
@@ -1808,26 +1870,20 @@ mod tests {
                             other,
                             Boundary::SafetyBash(_) | Boundary::SafetyWrite(_)
                         );
-                        if high {
-                            match &d {
-                                Decision::Allow {
-                                    via: AllowVia::Autonomy {
-                                        level: got,
-                                        safety_net,
-                                        ..
-                                    },
-                                } => {
-                                    let want = crate::autonomy::parse_level(level).unwrap();
-                                    prop_assert_eq!(*got, want, "{:?}", action);
-                                    prop_assert_eq!(*safety_net, expect_net, "{:?}", action);
-                                }
-                                _ => prop_assert!(false, "{level} {action:?} => {d:?}"),
+                        // 存储列不再分档。安全网和新询问一律按原先 L4 放行，轨迹上的秩是 4。
+                        let _ = (high, level);
+                        match &d {
+                            Decision::Allow {
+                                via: AllowVia::Autonomy {
+                                    level: got,
+                                    safety_net,
+                                    ..
+                                },
+                            } => {
+                                prop_assert_eq!(*got, 4, "{:?}", action);
+                                prop_assert_eq!(*safety_net, expect_net, "{:?}", action);
                             }
-                        } else {
-                            prop_assert!(
-                                matches!(d, Decision::Ask { safety_net, .. } if safety_net == expect_net),
-                                "{level} {action:?} => {d:?}"
-                            );
+                            _ => prop_assert!(false, "{level} {action:?} => {d:?}"),
                         }
                     }
                 }
@@ -1852,18 +1908,12 @@ mod tests {
                 };
                 insert_rule(&db, 0, "bash", shape, "deny", "project");
                 let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
-                let high = matches!(level, "L3" | "L4");
-                if net && !high {
-                    prop_assert!(
-                        matches!(d, Decision::Ask { safety_net: true, .. }),
-                        "{level} safety net still asks before deny, got {d:?}"
-                    );
-                } else {
-                    prop_assert!(
-                        matches!(d, Decision::Deny { layer: "project_deny", .. }),
-                        "{level} net={net} => {d:?}"
-                    );
-                }
+                // 放行秩恒为 4。安全网不再抢在否定规则前面变成必问。
+                let _ = (level, net);
+                prop_assert!(
+                    matches!(d, Decision::Deny { layer: "project_deny", .. }),
+                    "{level} net={net} => {d:?}"
+                );
             }
         }
     }

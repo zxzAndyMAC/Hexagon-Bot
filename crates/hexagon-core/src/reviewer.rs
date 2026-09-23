@@ -817,8 +817,8 @@ mod tests {
             "L0",
         );
         let p = verdict_provider("allow");
-        // L0 语义=一切排负责人；live 放行之与其矛盾，退化为记录
-        assert!(matches!(
+        // 列写成 L0 不再把 live 打回 shadow。执行档恒为 2，live 的 allow 会执行。
+        assert!(!matches!(
             adjudicate(&db, &ctx, &p, "s", &q1, "跑测试"),
             ReviewOutcome::Held
         ));

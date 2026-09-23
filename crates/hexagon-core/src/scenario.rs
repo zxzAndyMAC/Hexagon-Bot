@@ -423,16 +423,15 @@ mod tests {
                 {"name":"实现","roles":["后端"],"due":[]}
             ]},
             "scripts": {"default": [
-                {"tool_calls": [{"name":"bash","input":{"cmd":"npm install zod"}}]},
+                {"tool_calls": [{"name":"bash","input":{"cmd":"git merge hexagon/work"}}]},
                 {"text": "装好了"}
             ]},
             "steps": [
                 {"do":"open_stage","seq":0},
                 {"do":"run_all_active"},
                 {"do":"assert_event","kind":"permission_asked"},
-                {"do":"answer_permission","allow":true,"remember":"npm install *","scope":"project"},
+                {"do":"answer_permission","allow":true},
                 {"do":"assert_event","kind":"permission_allowed"},
-                {"do":"assert_event","kind":"permission_shape_remembered","contains":{"shape":"npm install *"}},
                 {"do":"assert_event","kind":"tool_result"}
             ]
         }))

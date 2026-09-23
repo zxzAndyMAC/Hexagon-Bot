@@ -86,8 +86,7 @@ pub struct ReplayReport {
 /// checks_failed，不够减按 0。
 pub fn score(m: &Metrics) -> i64 {
     let passed = m.checks_run.saturating_sub(m.checks_failed) as i64;
-    (m.stages_done as i64) * 20
-        + passed * 10
+    (m.stages_done as i64) * 20 + passed * 10
         - (m.flags as i64) * 30
         - (m.escalations as i64) * 40
         - (m.review_rejects as i64) * 25
@@ -300,6 +299,7 @@ pub fn replay(
 mod tests {
     use super::*;
     use crate::trace::Event;
+    use proptest::prelude::*;
 
     fn ev(kind: EventKind, payload: Value) -> Event {
         Event {
@@ -454,5 +454,48 @@ mod tests {
             r.decision_diffs
         );
         assert_eq!(r.decision_diffs[0]["kind"], "roster");
+    }
+
+    proptest::proptest! {
+        /// 回放分是这组系数的线性组合，代码算，判定模型不许改。
+        /// 完成阶段 +20，通过的检验 +10，打回 −30，升级 −40，复审驳回 −25，
+        /// 失败的检验 −50，不变量违规 −100，成本毫美分原样减。
+        /// 通过的检验 = checks_run 减去 checks_failed，不够减按 0。
+        #[test]
+        fn score_uses_the_published_coefficients(
+            stages_done in 0u32..40,
+            checks_run in 0u32..40,
+            checks_failed in 0u32..40,
+            flags in 0u32..20,
+            escalations in 0u32..20,
+            review_rejects in 0u32..20,
+            invariant_violations in 0u32..20,
+            cost_mc in -500i64..500,
+        ) {
+            let m = Metrics {
+                stages_done,
+                checks_run,
+                checks_failed,
+                flags,
+                escalations,
+                review_rejects,
+                invariant_violations,
+                cost_mc,
+                ..Metrics::default()
+            };
+            let passed = checks_run.saturating_sub(checks_failed) as i64;
+            let expect = (stages_done as i64) * 20
+                + passed * 10
+                - (flags as i64) * 30
+                - (escalations as i64) * 40
+                - (review_rejects as i64) * 25
+                - (checks_failed as i64) * 50
+                - (invariant_violations as i64) * 100
+                - cost_mc;
+            prop_assert_eq!(score(&m), expect);
+            let mut more = m.clone();
+            more.stages_done += 1;
+            prop_assert_eq!(score(&more), expect + 20);
+        }
     }
 }

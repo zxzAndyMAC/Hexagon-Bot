@@ -40,6 +40,34 @@ pub enum Effect {
     Handed { question_id: String },
 }
 
+/// 交给 Jev 的状态。提案是产物文件里的原文。有回放围栏时，证据是那份原文，
+/// 并附上主机已经算好的回放分；没有回放时，证据是上级复审已经通过。
+pub(crate) fn judgment_state(proposal_id: &str, surface: &str, body: &str) -> String {
+    let evidence = match crate::proposals::fenced(body, "replay") {
+        Some(raw) => {
+            let scores = crate::proposals::replay_from_body(body)
+                .and_then(|r| r.ok())
+                .map(|r| {
+                    format!(
+                        "\n回放分（主机已算，不要重算）：现任 {}，候选 {}",
+                        crate::replay::score(&r.baseline),
+                        crate::replay::score(&r.candidate)
+                    )
+                })
+                .unwrap_or_default();
+            format!("回放证据：\n{raw}{scores}")
+        }
+        None => "上级复审已通过。这份提案没有回放证据。".to_string(),
+    };
+    format!(
+        "执行判定。只决定写不写。不要改写提案，不要重算回放分。\n\
+         proposal {proposal_id}\n\
+         surface {surface}\n\
+         ## 已落盘的提案\n{body}\n\
+         ## 已落盘的证据\n{evidence}\n"
+    )
+}
+
 fn choice_of(text: &str) -> Option<&'static str> {
     match text.trim() {
         EXECUTE => Some(EXECUTE),
@@ -70,6 +98,7 @@ pub fn judge_passed(
             Some(&ctx.project_id),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
+            None,
             "execute_judgment",
             "mechanical_block",
             started,
@@ -85,6 +114,7 @@ pub fn judge_passed(
             Some(&ctx.project_id),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
+            None,
             "execute_judgment",
             "replay_score",
             started,
@@ -92,13 +122,11 @@ pub fn judge_passed(
         return Err(PropError::Rejected(reason));
     }
 
-    let evidence_text = evidence
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "none".into());
-    let state = format!(
-        "proposal {proposal_id}\nsurface {surface}\nevidence {evidence_text}\n正文已落盘，只决定写不写。"
-    );
-    let choice = match jev {
+    // 输入就是已经落盘的提案正文和证据。Jev 只选写不写，这里不改这两样。
+    let state = judgment_state(proposal_id, surface, body);
+    // 没配或这次调用失败是槽位失败，记 Warn。对不上三个字才是判定上的交给负责人。
+    // 被否决：两种都记成「判定 / 交给负责人」。那样日志里看不出 Jev 根本没跑。
+    let (parsed, slot_failure) = match jev {
         Some(p) if p.uses_decision_api() => match p.decide(
             &state,
             &[
@@ -109,27 +137,47 @@ pub fn judge_passed(
         ) {
             Ok(resp) => {
                 let text = crate::pm_route::choice_text(&resp);
-                choice_of(&text)
+                (choice_of(&text), false)
             }
-            Err(_) => None,
+            Err(_) => (None, true),
         },
-        _ => None,
+        _ => (None, true),
     };
-    let choice = choice.unwrap_or(OWNER);
-    crate::diag::note(
-        "判定",
-        false,
-        Some(&ctx.project_id),
-        Some(&ctx.agent_id),
-        ctx.stage_run_id.as_deref(),
-        "execute_judgment",
-        match choice {
-            EXECUTE => "execute",
-            REJECT => "reject",
-            _ => "hand_to_owner",
-        },
-        started,
-    );
+    if slot_failure {
+        let code = match jev {
+            Some(p) if p.uses_decision_api() => "jev_call_failed",
+            _ => "jev_unbound",
+        };
+        crate::diag::note(
+            "槽位",
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "execute_judgment",
+            code,
+            started,
+        );
+    }
+    let choice = parsed.unwrap_or(OWNER);
+    if !slot_failure {
+        crate::diag::note(
+            "判定",
+            false,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "execute_judgment",
+            match choice {
+                EXECUTE => "execute",
+                REJECT => "reject",
+                _ => "hand_to_owner",
+            },
+            started,
+        );
+    }
     match choice {
         EXECUTE => {
             let effective = proposals::materialize_for_judgment(db, ctx, proposal_id)?;
@@ -195,7 +243,7 @@ pub fn pack_score_block(surface: &str, body: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::mechanical_block;
+    use super::{choice_of, mechanical_block, pack_score_block, EXECUTE, OWNER, REJECT};
     use proptest::prelude::*;
 
     proptest! {
@@ -216,6 +264,39 @@ mod tests {
                     | "final_acceptance"
             );
             prop_assert_eq!(mechanical_block(&surface), blocked);
+        }
+
+        /// 封闭选择只认三个词的逐字相等（首尾空白可去）。多一个字就不是选择。
+        /// 漏接一个词 = 明确的执行被交给负责人；多认一个词 = 闲聊被当成执行。
+        #[test]
+        fn closed_choice_is_those_three_words(raw in "\\PC{0,40}") {
+            let got = choice_of(&raw);
+            match raw.trim() {
+                "执行" => prop_assert_eq!(got, Some(EXECUTE)),
+                "驳回" => prop_assert_eq!(got, Some(REJECT)),
+                "交给负责人" => prop_assert_eq!(got, Some(OWNER)),
+                _ => prop_assert!(got.is_none()),
+            }
+        }
+
+        /// 回放分不高于现任就挡在判定前。其它表面、没有回放围栏，不在这里挡。
+        #[test]
+        fn replay_score_blocks_only_a_weaker_pack(
+            surface in "(pack_copy|skill|role_def|agents_md)",
+            base in 0u32..30,
+            cand in 0u32..30,
+            fenced in proptest::bool::ANY,
+        ) {
+            let body = if fenced {
+                format!(
+                    "```replay\n{{\"schema\":1,\"baseline\":{{\"stages_done\":{base}}},\"candidate\":{{\"stages_done\":{cand}}}}}\n```"
+                )
+            } else {
+                format!("stages {base} {cand}")
+            };
+            let blocked = pack_score_block(&surface, &body);
+            let expect = surface == "pack_copy" && fenced && cand <= base;
+            prop_assert_eq!(blocked.is_some(), expect);
         }
     }
 }

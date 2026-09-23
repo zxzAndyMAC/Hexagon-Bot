@@ -26,13 +26,14 @@ pub const NO_RECEIVER_NOTE: &str =
 
 /// 点名要不要唤醒被点名的角色。
 ///
-/// ADR 0069 取消自治档之后，负责人的点名和角色的点名都派活。`rank` 保留
-/// 是为了不改调用形状；它不再参与判定。点名仍然不经过「先不派活」。
+/// ADR 0069 取消自治档之后，负责人的点名和角色的点名都派活。点名不看档位，
+/// 也不经过「先不派活」。`from_owner` 留在签名里，是因为负责人和角色的
+/// 点名以后仍可能分开记，今天两条都唤醒。
 ///
-/// 被否决：角色点名仍看秩 ≥ 2。存储列还在测试夹具里写成 L0，若继续读秩，
-/// 取消档位之后角色点名会留在群聊里。出处：ADR 0061、ADR 0065、ADR 0069。
-pub fn mention_wakes(from_owner: bool, rank: u8) -> bool {
-    let _ = (from_owner, rank);
+/// 被否决：留着秩参数但不读。调用方还会去读 `projects.autonomy`。
+/// 出处：ADR 0061、ADR 0065、ADR 0069。
+pub fn mention_wakes(from_owner: bool) -> bool {
+    let _ = from_owner;
     true
 }
 
@@ -188,14 +189,11 @@ mod tests {
     }
 
     proptest! {
-        /// 不变量：取消档位之后，负责人点名和角色点名在任何秩都唤醒。
+        /// 不变量：取消档位之后，负责人点名和角色点名都唤醒。
         /// 漏唤醒 = 点名留在群聊里，派活退回成只说话。
         #[test]
-        fn mentions_wake_at_every_rank(
-            rank in 0u8..8,
-            from_owner in any::<bool>(),
-        ) {
-            prop_assert!(mention_wakes(from_owner, rank));
+        fn mentions_always_wake(from_owner in any::<bool>()) {
+            prop_assert!(mention_wakes(from_owner));
         }
     }
 }

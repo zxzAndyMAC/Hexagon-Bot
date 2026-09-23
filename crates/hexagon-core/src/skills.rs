@@ -22,12 +22,42 @@ use std::path::{Path, PathBuf};
 const MAX_NAME: usize = 64;
 
 /// 给 Agent 看的名字。目录仍是 `经验-<角色>`，避免两个角色互相覆盖。
+/// 目录里只有一份经验时显示「经验」。两份同时出现时带上角色，否则两行名字一样，
+/// 点名分不清该加载哪一份。
 pub fn experience_display(name: &str) -> &str {
     if name.starts_with("经验-") {
         "经验"
     } else {
         name
     }
+}
+
+/// 目录行上的名字。`multi` 为真时写成 `经验（角色）`，点名加载认这个形状。
+pub fn experience_catalog_label(name: &str, multi: bool) -> String {
+    if multi {
+        if let Some(role) = name.strip_prefix("经验-") {
+            if !role.is_empty() {
+                return format!("经验（{role}）");
+            }
+        }
+    }
+    experience_display(name).to_string()
+}
+
+/// `load_skill` 的名字落到目录名。`经验` 用当前角色；`经验（角色）` 用括号里的角色。
+pub fn experience_load_name(requested: &str, role: &str) -> String {
+    let requested = requested.trim();
+    if requested == "经验" {
+        return experience_dir_name(role);
+    }
+    if let Some(rest) = requested.strip_prefix("经验（") {
+        if let Some(role) = rest.strip_suffix('）') {
+            if !role.is_empty() && !role.contains('/') && !role.contains('\\') {
+                return experience_dir_name(role);
+            }
+        }
+    }
+    requested.to_string()
 }
 
 pub fn experience_dir_name(role: &str) -> String {
@@ -141,12 +171,20 @@ impl SkillLoader {
 
     /// 一行式 catalog；空目录/全 mute → None（不占提示词）。
     pub fn catalog_text(&self, muted: &HashSet<String>) -> Option<String> {
-        let lines: Vec<String> = self
+        let visible: Vec<_> = self
             .skills
             .values()
             .filter(|s| !muted.contains(&s.name))
+            .collect();
+        let multi = visible
+            .iter()
+            .filter(|s| s.name.starts_with("经验-"))
+            .count()
+            > 1;
+        let lines: Vec<String> = visible
+            .iter()
             .map(|s| {
-                let shown = experience_display(&s.name);
+                let shown = experience_catalog_label(&s.name, multi);
                 format!("- {shown}: {}", s.description)
             })
             .collect();
@@ -556,6 +594,24 @@ mod tests {
             format!("---\nname: {name}\ndescription: {desc}\n---\n{body}"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn two_roles_do_not_share_one_experience_label() {
+        assert_eq!(experience_catalog_label("经验-前端", false), "经验");
+        assert_eq!(experience_catalog_label("经验-前端", true), "经验（前端）");
+        assert_eq!(experience_catalog_label("经验-后端", true), "经验（后端）");
+        assert_eq!(experience_load_name("经验", "前端"), "经验-前端");
+        assert_eq!(experience_load_name("经验（后端）", "前端"), "经验-后端");
+        let dir = tempfile::tempdir().unwrap();
+        skill(dir.path(), "经验-前端", "前端的教训", "甲");
+        skill(dir.path(), "经验-后端", "后端的教训", "乙");
+        let text = SkillLoader::new(vec![dir.path().to_path_buf()])
+            .catalog_text(&HashSet::new())
+            .unwrap();
+        assert!(text.contains("- 经验（前端）:"));
+        assert!(text.contains("- 经验（后端）:"));
+        assert_eq!(text.matches("- 经验:").count(), 0);
     }
 
     #[test]

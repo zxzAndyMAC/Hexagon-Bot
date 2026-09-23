@@ -115,14 +115,11 @@ export function ProviderManager() {
     try {
       const def = { ...draft, id: draft.id || slug(draft.name) }
       await api.saveProvider(def, withSecret)
-      // 决策模型只给项目经理。第一次保存 Jev 时把 decision 槽绑上，核在刷新供应商时写进决策槽。
+      // 执行判定读 jev 槽。第一次保存只绑这一槽。项目经理的 decision 槽是另一件事，
+      // 同一次保存再写它，两槽会一起被绑上。
       if (def.kind === 'jev' && def.enabled && !doc.slots.jev) {
         const model = def.models[0]?.id || 'jev-latest'
         await api.setSlotBinding('jev', def.id, model)
-      }
-      if (def.kind === 'jev' && def.enabled && !doc.slots.decision) {
-        const model = def.models[0]?.id || 'jev-latest'
-        await api.setSlotBinding('decision', def.id, model)
       }
       setSecret('')
       await reload(def.id)

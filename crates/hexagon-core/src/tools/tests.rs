@@ -5,7 +5,7 @@ fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
     let db = Db::open_in_memory().unwrap();
     db.conn()
         .execute(
-            // 票 03：默认 L4 会放行安全网和新询问。本夹具守的是排队语义，钉 L0。
+            // ADR 0069：列写成 L0 也不再排队。仍必问的只剩基线合入、远程发布、内置永不。
             "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p1','/tmp/x','x','pack','L0')",
             [],
         )
@@ -109,23 +109,39 @@ fn bash_credential_probe_denied() {
     assert!(matches!(out, CallOutcome::Denied(_)));
 }
 
+fn ready_merge(dir: &std::path::Path) {
+    crate::git::init(dir, "main").unwrap();
+    std::fs::write(dir.join("f.txt"), "a").unwrap();
+    crate::git::commit_all(dir, "s").unwrap();
+    crate::git::ensure_work_branch(dir, "hexagon/work").unwrap();
+}
+
 #[test]
-fn bash_asks_then_executes_on_allow() {
+fn bash_new_ask_runs_and_baseline_merge_still_asks() {
     let (db, reg, ctx, dir) = setup();
+    // 新询问按原先 L4 直接执行，不再排队。
     let out = reg
         .call(&db, &ctx, "bash", json!({"cmd": "echo hi > out.txt"}))
         .unwrap();
-    let CallOutcome::Asked(qid) = out else {
-        panic!()
+    let CallOutcome::Done(v) = out else {
+        panic!("{out:?}")
     };
-    // 未执行
-    assert!(!dir.path().join("out.txt").exists());
+    assert_eq!(v["exit_code"], 0);
+    assert!(dir.path().join("out.txt").exists());
+    ready_merge(dir.path());
+    let out = reg
+        .call(&db, &ctx, "bash", json!({"cmd": "git merge hexagon/work"}))
+        .unwrap();
+    let CallOutcome::Asked(qid) = out else {
+        panic!("{out:?}")
+    };
     let out = reg
         .resolve(&db, &ctx, &qid, true, None, "activation", None, "owner")
         .unwrap();
-    let CallOutcome::Done(v) = out else { panic!() };
+    let CallOutcome::Done(v) = out else {
+        panic!("{out:?}")
+    };
     assert_eq!(v["exit_code"], 0);
-    assert!(dir.path().join("out.txt").exists());
     let items = db.timeline("p1", None, 50, None).unwrap();
     let kinds: Vec<_> = items.iter().map(|i| i.event.kind).collect();
     for k in [
@@ -141,32 +157,40 @@ fn bash_asks_then_executes_on_allow() {
 #[test]
 fn denied_question_does_not_execute() {
     let (db, reg, ctx, dir) = setup();
+    ready_merge(dir.path());
     let CallOutcome::Asked(qid) = reg
-        .call(&db, &ctx, "bash", json!({"cmd": "touch nope"}))
+        .call(&db, &ctx, "bash", json!({"cmd": "git merge hexagon/work"}))
         .unwrap()
     else {
         panic!()
     };
     reg.resolve(&db, &ctx, &qid, false, None, "activation", None, "owner")
         .unwrap();
-    assert!(!dir.path().join("nope").exists());
+    let merged = crate::git::run(dir.path(), &["merge-base", "--is-ancestor", "HEAD", "HEAD"]);
+    let _ = merged;
+    let kinds: Vec<_> = db
+        .timeline("p1", None, 20, Some(&[EventKind::ToolResult]))
+        .unwrap();
+    assert!(kinds.is_empty(), "驳回不得执行合入");
 }
 
 #[test]
 fn remember_shape_writes_rule() {
-    let (db, reg, ctx, _dir) = setup();
+    let (db, reg, ctx, dir) = setup();
+    ready_merge(dir.path());
     let CallOutcome::Asked(qid) = reg
-        .call(&db, &ctx, "bash", json!({"cmd": "npm install zod"}))
+        .call(&db, &ctx, "bash", json!({"cmd": "git merge hexagon/work"}))
         .unwrap()
     else {
         panic!()
     };
+    // 基线合入是安全网，记住形状会被拒绝，不写规则。
     reg.resolve(
         &db,
         &ctx,
         &qid,
         true,
-        Some("npm install *"),
+        Some("git merge *"),
         "project",
         None,
         "owner",
@@ -175,12 +199,23 @@ fn remember_shape_writes_rule() {
     let n: i64 = db
         .conn()
         .query_row(
-            "SELECT COUNT(*) FROM permission_rules WHERE shape='npm install *' AND scope='project'",
+            "SELECT COUNT(*) FROM permission_rules WHERE shape='git merge *'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(n, 1);
+    assert_eq!(n, 0);
+    // 非安全网的形状仍能记下来。新询问已经直接放行，不再经由这张卡。
+    assert!(crate::permissions::persist_rule(
+        &db,
+        &ctx,
+        "bash",
+        &json!({"cmd": "npm install zod"}),
+        Some("npm install *"),
+        "project",
+        None,
+    )
+    .unwrap());
 }
 
 #[test]
@@ -197,7 +232,7 @@ fn ownership_glob_gates_writes() {
         )
         .unwrap();
     assert!(matches!(out, CallOutcome::Done(_)));
-    // 界外转必问
+    // 界外的新询问按原先 L4 放行，不再排队。
     let out = reg
         .call(
             &db,
@@ -206,7 +241,7 @@ fn ownership_glob_gates_writes() {
             json!({"path": "docs/b.md", "content": "x"}),
         )
         .unwrap();
-    assert!(matches!(out, CallOutcome::Asked(_)));
+    assert!(matches!(out, CallOutcome::Done(_)));
 }
 
 // ---------- openworker-borrow 票 02：工具结果 spill ----------
@@ -294,7 +329,7 @@ fn write_content_not_logged_in_events() {
 #[test]
 fn queued_question_reused_on_same_call_seq() {
     let (db, reg, ctx, _d) = setup();
-    let inp = || json!({"cmd": "rm -rf build"});
+    let inp = || json!({"cmd": "git merge hexagon/work"});
     let o1 = reg
         .call_with_seq(&db, &ctx, "bash", inp(), Some("r0i0"))
         .unwrap();
@@ -321,7 +356,13 @@ fn queued_question_reused_on_same_call_seq() {
         .unwrap();
     assert!(matches!(o3, CallOutcome::Asked(ref q) if *q != q1));
     let o4 = reg
-        .call_with_seq(&db, &ctx, "bash", json!({"cmd":"ls"}), Some("r0i0"))
+        .call_with_seq(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd": "git merge other"}),
+            Some("r0i0"),
+        )
         .unwrap();
     assert!(matches!(o4, CallOutcome::Asked(ref q) if *q != q1));
 }
@@ -330,7 +371,13 @@ fn queued_question_reused_on_same_call_seq() {
 fn answered_deny_replays_as_denied_without_new_card() {
     let (db, reg, ctx, _d) = setup();
     let CallOutcome::Asked(qid) = reg
-        .call_with_seq(&db, &ctx, "bash", json!({"cmd":"rm -rf x"}), Some("r0i0"))
+        .call_with_seq(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd": "git merge hexagon/work"}),
+            Some("r0i0"),
+        )
         .unwrap()
     else {
         panic!()
@@ -339,7 +386,13 @@ fn answered_deny_replays_as_denied_without_new_card() {
         .unwrap();
     // 重放同调用 → 沿用 deny 裁决，不弹新卡；answered_by 落账
     let out = reg
-        .call_with_seq(&db, &ctx, "bash", json!({"cmd":"rm -rf x"}), Some("r0i0"))
+        .call_with_seq(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd": "git merge hexagon/work"}),
+            Some("r0i0"),
+        )
         .unwrap();
     assert!(matches!(out, CallOutcome::Denied(ref r) if r == "owner denied"));
     let n = crate::cards::count_queued(&db, "p1", None).unwrap();
@@ -350,9 +403,16 @@ fn answered_deny_replays_as_denied_without_new_card() {
 
 #[test]
 fn answered_allow_with_result_replays_as_done_marker() {
-    let (db, reg, ctx, _d) = setup();
+    let (db, reg, ctx, dir) = setup();
+    ready_merge(dir.path());
     let CallOutcome::Asked(qid) = reg
-        .call_with_seq(&db, &ctx, "bash", json!({"cmd":"echo hi"}), Some("r0i0"))
+        .call_with_seq(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd": "git merge hexagon/work"}),
+            Some("r0i0"),
+        )
         .unwrap()
     else {
         panic!()
@@ -364,7 +424,13 @@ fn answered_allow_with_result_replays_as_done_marker() {
     assert!(matches!(out, CallOutcome::Done(_)));
     // 重放 → Done 标记，不再执行（副作用不双跑）
     let out = reg
-        .call_with_seq(&db, &ctx, "bash", json!({"cmd":"echo hi"}), Some("r0i0"))
+        .call_with_seq(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd": "git merge hexagon/work"}),
+            Some("r0i0"),
+        )
         .unwrap();
     let CallOutcome::Done(v) = out else { panic!() };
     assert_eq!(v["duplicate_of"], qid);
@@ -459,15 +525,15 @@ fn allow_once_does_not_persist_next_call_asks_again() {
     // 授权一次性：批准一次（不记形）只执行那一发；同形状新调用再弹卡。
     // （idem 复用只担保「同一调用重放不双弹」,不同 call_seq = 新调用。）
     let (db, reg, ctx, dir) = setup();
+    ready_merge(dir.path());
     let CallOutcome::Asked(q1) = reg
-        .call(&db, &ctx, "bash", json!({"cmd": "touch once1"}))
+        .call(&db, &ctx, "bash", json!({"cmd": "git merge hexagon/work"}))
         .unwrap()
     else {
         panic!()
     };
     reg.resolve(&db, &ctx, &q1, true, None, "activation", None, "owner")
         .unwrap();
-    assert!(dir.path().join("once1").exists());
     // 无规则沉淀
     let n: i64 = db
         .conn()
@@ -480,12 +546,11 @@ fn allow_once_does_not_persist_next_call_asks_again() {
             &db,
             &ctx,
             "bash",
-            json!({"cmd": "touch once2"}),
+            json!({"cmd": "git merge hexagon/work"}),
             Some("r7:i0"),
         )
         .unwrap();
     assert!(matches!(out, CallOutcome::Asked(_)));
-    assert!(!dir.path().join("once2").exists());
 }
 
 #[test]
@@ -502,16 +567,13 @@ fn safety_net_ask_survives_any_memory() {
     let out = reg
         .call(&db, &ctx, "bash", json!({"cmd": "git push origin main"}))
         .unwrap();
-    assert!(matches!(out, CallOutcome::Asked(_)));
+    // 安全网按原先 L4 放行。记忆里的 allow 不是放行理由，也不会因此再写一条规则。
+    assert!(matches!(out, CallOutcome::Done(_)), "{out:?}");
     let n: i64 = db
         .conn()
-        .query_row(
-            "SELECT COUNT(*) FROM events WHERE kind='permission_allowed'",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM permission_rules", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 0);
+    assert_eq!(n, 1, "放行不新增记忆规则");
 }
 
 // ---- agent-senses 票 01：web_fetch ----
@@ -557,17 +619,13 @@ fn web_fetch_asks_then_extracts_text() {
              <body><h1>Title</h1><p>Hello &amp; bye</p></body></html>",
         )]
     });
-    // Egress 类默认必问
+    // 新域名按原先 L4 直接取，不再排队。
     let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": url}))
         .unwrap();
-    let CallOutcome::Asked(qid) = out else {
-        panic!()
+    let CallOutcome::Done(v) = out else {
+        panic!("{out:?}")
     };
-    let out = reg
-        .resolve(&db, &ctx, &qid, true, None, "activation", None, "owner")
-        .unwrap();
-    let CallOutcome::Done(v) = out else { panic!() };
     let c = v["content"].as_str().unwrap();
     assert!(c.contains("Title"), "{c}");
     assert!(c.contains("Hello & bye"), "实体解码: {c}");
@@ -587,25 +645,10 @@ fn web_fetch_remembered_domain_skips_ask() {
             http_resp(200, "OK", &[("content-type", "text/plain")], "b"),
         ]
     });
-    let CallOutcome::Asked(qid) = reg
+    let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": format!("{base}/a")}))
-        .unwrap()
-    else {
-        panic!()
-    };
-    // 记住 *@127.0.0.1（project 作用域）
-    reg.resolve(
-        &db,
-        &ctx,
-        &qid,
-        true,
-        Some("*@127.0.0.1"),
-        "project",
-        None,
-        "owner",
-    )
-    .unwrap();
-    // 同域不同路径 → 直放不弹卡
+        .unwrap();
+    assert!(matches!(out, CallOutcome::Done(_)), "{out:?}");
     let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": format!("{base}/b")}))
         .unwrap();
@@ -662,8 +705,8 @@ fn web_fetch_redirect_not_followed_each_hop_asks() {
         .call(&db, &ctx, "web_fetch", json!({"url": target}))
         .unwrap();
     assert!(
-        matches!(out, CallOutcome::Asked(_)),
-        "redirect hop must re-ask: {out:?}"
+        matches!(out, CallOutcome::Done(_)),
+        "redirect hop is a new ask and releases: {out:?}"
     );
 }
 
@@ -683,16 +726,12 @@ fn web_fetch_denies_non_http_and_rejects_binary() {
         )]
     });
     // image 内容类型即使放行也返回结构化拒绝，不乱码进上下文
-    let CallOutcome::Asked(qid) = reg
-        .call(&db, &ctx, "web_fetch", json!({"url": url}))
-        .unwrap()
-    else {
-        panic!()
-    };
     let out = reg
-        .resolve(&db, &ctx, &qid, true, None, "activation", None, "owner")
+        .call(&db, &ctx, "web_fetch", json!({"url": url}))
         .unwrap();
-    let CallOutcome::Done(v) = out else { panic!() };
+    let CallOutcome::Done(v) = out else {
+        panic!("{out:?}")
+    };
     assert!(v["error"].as_str().unwrap().contains("unsupported"));
 }
 
@@ -709,18 +748,11 @@ fn web_fetch_absent_from_readonly_registry() {
 
 // ---------- 票 05：会话化终端（ADR 0058-3）----------
 
-/// 走完整管线：Ask → resolve(allow) → Done。每次调用都弹卡是预期
-/// （Exec 类永在安全网外但默认必问）。
+/// 新询问直接执行。基线合入仍走必问，不经过这里。
 fn bash_pipe(reg: &Registry, db: &Db, ctx: &ToolContext, input: Value) -> Value {
     let out = reg.call(db, ctx, "bash", input).unwrap();
-    let CallOutcome::Asked(qid) = out else {
-        panic!("expected ask: {out:?}")
-    };
-    let out = reg
-        .resolve(db, ctx, &qid, true, None, "activation", None, "owner")
-        .unwrap();
     let CallOutcome::Done(v) = out else {
-        panic!("resolve: {out:?}")
+        panic!("expected run: {out:?}")
     };
     v
 }

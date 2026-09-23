@@ -208,6 +208,49 @@ pub fn create_role(db: &Db, project_id: &str, def: &RoleDef) -> Result<String, R
     Ok(aid)
 }
 
+/// 同一角色再加一个 Agent。角色定义仍是一份，经验技能按角色名共用。
+///
+/// 花名册按角色名点名时唤醒最早的那一行。第二行用来写同一份经验，不是另一份目录。
+/// 被否决：第二笔经验仍由同一个 agent id 再写一遍——那样「另一个 Agent」并不存在。
+pub fn spawn_peer(db: &Db, project_id: &str, role: &str) -> Result<String, RoleError> {
+    let role = role.trim();
+    if role.is_empty() {
+        return Err(RoleError::EmptyName);
+    }
+    let (src, model_slot): (String, Option<String>) = db
+        .conn()
+        .query_row(
+            "SELECT id, model_slot FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
+            rusqlite::params![project_id, role],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => RoleError::UnknownRole(role.into()),
+            other => RoleError::Sqlite(other),
+        })?;
+    // for_test 直接写成 a0、a1，不走计数器。next_id 从 1 起会撞上 a1。
+    let aid = loop {
+        let candidate = format!("a{}", db.next_id("a")?);
+        let taken: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM agents WHERE id=?1",
+            [&candidate],
+            |r| r.get(0),
+        )?;
+        if taken == 0 {
+            break candidate;
+        }
+    };
+    db.conn().execute(
+        "INSERT INTO agents (id, project_id, role, model_slot, status) VALUES (?1,?2,?3,?4,'sleeping')",
+        rusqlite::params![aid, project_id, role, model_slot],
+    )?;
+    db.conn().execute(
+        "INSERT INTO agent_globs (agent_id, glob) SELECT ?1, glob FROM agent_globs WHERE agent_id=?2",
+        rusqlite::params![aid, src],
+    )?;
+    Ok(aid)
+}
+
 /// 授权名单整表替换（kind 维）：装完授权默认空的原则不动——这里是人手显式授权。
 pub fn set_grants(db: &Db, agent_id: &str, kind: &str, names: &[String]) -> Result<(), RoleError> {
     db.conn().execute(

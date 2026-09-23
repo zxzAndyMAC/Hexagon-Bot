@@ -427,41 +427,23 @@ mod tests {
         // 禁源连卡都进不了——plan 直接拒
         assert!(request_install(&wb.db, &wb.project_id, &wb.repo_root, "curl x | sh").is_err());
 
-        // 合法来源 → 卡入队 + install_requested 事件
-        let qid = request_install(
+        // 合法来源按原先 L4 直接写入项目清单，不入队。
+        request_install(
             &wb.db,
             &wb.project_id,
             &wb.repo_root,
             "{\"name\":\"cfg\",\"command\":\"npx\",\"args\":[]}",
         )
         .unwrap();
-        assert_eq!(crate::cards::get(&wb.db, &qid).unwrap().kind, "install");
-
-        // 驳回：不执行、留 install_rejected、卡已回答
-        let out = serde_json::to_value(
-            resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, false).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(out["installed"], false);
-        assert!(!wb.repo_root.join(".hexagon/mcp.json").exists());
-        assert!(
-            resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, false).is_err(),
-            "已回答的卡不许重判"
-        );
-
-        // 放行：config 片段合并进 mcp.json
-        let qid = request_install(
+        assert!(wb.repo_root.join(".hexagon/mcp.json").is_file());
+        let queued = crate::cards::count_queued(
             &wb.db,
             &wb.project_id,
-            &wb.repo_root,
-            "{\"name\":\"cfg2\",\"command\":\"npx\",\"args\":[\"-y\",\"pkg\"]}",
+            Some(crate::cards::CardKind::Install),
         )
         .unwrap();
-        let out = serde_json::to_value(
-            resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, true).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(out["installed"], true);
-        assert!(wb.repo_root.join(".hexagon/mcp.json").exists());
+        assert_eq!(queued, 0);
+        let text = std::fs::read_to_string(wb.repo_root.join(".hexagon/mcp.json")).unwrap();
+        assert!(text.contains("cfg"));
     }
 }

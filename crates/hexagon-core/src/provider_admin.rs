@@ -117,12 +117,13 @@ pub fn fetch_models(
 /// 票 16：向导优化项目说明用的主对话模型。项目还不存在，不走 Workbench。
 /// 主对话 = default 槽（票 13 向导第一步放行的那一条），不是角色槽。
 /// 缺绑定、供应商不存在、停用、空模型名、没钥匙 → 不发请求。
-/// 起草槽。`resolve_slot` 在槽未绑时落到 default。Jev 不走这里。
-pub fn authoring_provider(
-    store: Arc<dyn CredentialStore>,
+/// 槽已解析、供应商启用、模型名非空、钥匙非空。缺一档就不可用。
+/// 回退链只在 `resolve_slot`。起草槽和主对话槽共用这一段，避免两处钥匙检查分叉。
+fn ready_binding<'a>(
+    doc: &'a provider_config::ProviderDoc,
+    store: &dyn CredentialStore,
     slot: &str,
-) -> Result<Arc<dyn ModelProvider>, AdminError> {
-    let doc = provider_config::load()?;
+) -> Result<(&'a provider_config::ProviderDef, &'a str), AdminError> {
     let Some(binding) = provider_config::resolve_slot(&doc.slots, slot) else {
         return Err(AdminError::MainChatUnavailable);
     };
@@ -141,7 +142,17 @@ pub fn authoring_provider(
     {
         return Err(AdminError::MainChatUnavailable);
     }
-    Ok(provider_config::make_provider(def, binding.model.as_str(), store))
+    Ok((def, binding.model.as_str()))
+}
+
+/// 起草槽。`resolve_slot` 在槽未绑时落到 default。Jev 不走这里。
+pub fn authoring_provider(
+    store: Arc<dyn CredentialStore>,
+    slot: &str,
+) -> Result<Arc<dyn ModelProvider>, AdminError> {
+    let doc = provider_config::load()?;
+    let (def, model) = ready_binding(&doc, store.as_ref(), slot)?;
+    Ok(provider_config::make_provider(def, model, store))
 }
 
 pub fn main_chat_provider(
@@ -157,25 +168,7 @@ pub(crate) fn require_main_chat<'a>(
     store: &dyn CredentialStore,
 ) -> Result<(&'a provider_config::ProviderDef, &'a str), AdminError> {
     // resolve_slot 是回退链的唯一实现。这里问的就是 default 本身。
-    let Some(binding) = provider_config::resolve_slot(&doc.slots, "default") else {
-        return Err(AdminError::MainChatUnavailable);
-    };
-    let Some(def) = doc.providers.iter().find(|p| p.id == binding.provider_id) else {
-        return Err(AdminError::MainChatUnavailable);
-    };
-    if !def.enabled || binding.model.trim().is_empty() {
-        return Err(AdminError::MainChatUnavailable);
-    }
-    let key = store.get(&provider_key_name(&def.id))?;
-    if key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .is_none()
-    {
-        return Err(AdminError::MainChatUnavailable);
-    }
-    Ok((def, binding.model.as_str()))
+    ready_binding(doc, store, "default")
 }
 
 #[cfg(test)]

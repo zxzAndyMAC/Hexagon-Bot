@@ -335,6 +335,53 @@ describe('一句话优化成项目说明（票 16）', () => {
     expect(md).not.toMatch(/npm|cargo/)
   })
 
+  it('流程草稿可增删并改四项，检验命令、产物清单和回填边不出现', async () => {
+    localStorage.setItem('hexagon.wizard', JSON.stringify({ ...seeded, brief: '一个本地待办' }))
+    vi.spyOn(api, 'draftFlow').mockResolvedValue({
+      name: '从说明来',
+      version: 1,
+      knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      stages: [{
+        name: '规格',
+        roles: ['产品策划'],
+        due: ['规格'],
+        checks: ['npm test'],
+        reviews: [],
+        stamp_point: true,
+        backfill_edges: [['QA', '前端']],
+        consult_wake: ['架构师'],
+      }],
+    })
+    const el = await renderWizard()
+    await advance(el, '5 · Flow draft')
+    expect(el.querySelector('[data-flow-draft]')).toBeTruthy()
+    expect(el.textContent).not.toContain('npm test')
+    expect(el.textContent).not.toContain('backfill')
+    expect([...el.querySelectorAll('input, textarea')].every((n) => (n as HTMLInputElement).value !== 'npm test')).toBe(true)
+    const name = el.querySelector('input[aria-label="Stage name"]') as HTMLInputElement
+    const setVal = (input: HTMLInputElement, v: string) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      set.call(input, v)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    await act(async () => { setVal(name, '改过的阶段') })
+    expect(name.value).toBe('改过的阶段')
+    const stamp = el.querySelector('input[type="checkbox"]') as HTMLInputElement
+    expect(stamp.checked).toBe(true)
+    await act(async () => { stamp.click() })
+    expect(stamp.checked).toBe(false)
+    const add = el.querySelector('[data-add-stage]') as HTMLButtonElement
+    await act(async () => { add.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(el.querySelectorAll('[data-stage-row]')).toHaveLength(2)
+    const remove = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Remove stage')!
+    await act(async () => { remove.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(el.querySelectorAll('[data-stage-row]')).toHaveLength(1)
+    const up = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Move up')!
+    const down = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Move down')!
+    expect(up.disabled).toBe(true)
+    expect(down.disabled).toBe(true)
+  })
+
   it('说明步 textarea 走 .input 原语', async () => {
     const el = await renderWizard()
     await advance(el, '4 · Project brief')

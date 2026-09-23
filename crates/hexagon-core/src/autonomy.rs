@@ -124,20 +124,21 @@ pub fn parse_level(lv: &str) -> Result<u8, AutonomyError> {
     })
 }
 
-/// 存储档 L0–L4 → 0–4。词表外（不该入库）按 0：脏值不升档。
-pub fn rank(db: &Db, project_id: &str) -> Result<u8, rusqlite::Error> {
-    let level = level(db, project_id)?;
-    Ok(parse_level(&level).unwrap_or(0))
+/// 离开时的放行秩。ADR 0069 取消档位之后恒为原先的 L4（4）。
+///
+/// 不读 `projects.autonomy`。夹具把列写成 L0 不再收紧盖章、权限或授权。
+/// 被否决：继续 `SELECT autonomy`——测试夹具的 L0 会把离开时的放行打回成一切排队。
+/// 列还在，只给旧夹具和 `level()` 读口；放行不看它。
+pub fn rank(_db: &Db, _project_id: &str) -> Result<u8, rusqlite::Error> {
+    Ok(4)
 }
 
-/// 执行档。存储档见 `rank`。
+/// 执行档。原先把存储档封顶到 2，避免只有名字的高档被当成已经放行。
 ///
-/// 票 01 把执行档封顶到 2，避免只有名字的高档被当成已经放行。
-/// 票 02 的盖章、票 03 的安全网和新权限、票 04 的提案/授权/安装都不读这里，
-/// 它们读存储档 `rank`。被否决：把 `min(2)` 改成 `min(4)`。
-/// false positive 的代价是未审的安装或提案生效，而且会连坐仍读执行档的打回路径。
-pub fn execution_rank(db: &Db, project_id: &str) -> Result<u8, rusqlite::Error> {
-    Ok(rank(db, project_id)?.min(2))
+/// ADR 0069 之后不再读列，恒为原先 L4 的封顶 2。打回路由因此按协调自治走。
+/// 被否决：继续读列再 `min(2)`。夹具写成 L0 时，回填和复审唤醒会停住。
+pub fn execution_rank(_db: &Db, _project_id: &str) -> Result<u8, rusqlite::Error> {
+    Ok(2)
 }
 
 pub fn level(db: &Db, project_id: &str) -> Result<String, rusqlite::Error> {
@@ -160,6 +161,7 @@ pub fn set_level(db: &Db, project_id: &str, lv: &str) -> Result<(), AutonomyErro
         "拒绝",
         true,
         Some(project_id),
+        None,
         None,
         None,
         "set_autonomy",

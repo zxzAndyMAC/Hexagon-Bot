@@ -41,7 +41,11 @@ pub enum PropError {
     BadState(String),
 }
 
-/// 流程优化不能拨指针、写规格、盖章或改权限。旋钮 `stamp_point` 不是盖章动作。
+/// 流程优化不能拨指针、写规格、写实现、盖章或改权限。旋钮 `stamp_point` 不是盖章动作。
+///
+/// 写实现的判定是 diff 里出现源码路径或「实现」。漏掉 = 流程优化改了代码
+/// （false negative，未审副作用）。误拒一次旋钮 diff = 负责人看一眼
+/// （false positive）。偏向拒绝。被否决：只挡规格和盖章——`src/` 会漏过去。
 fn pack_forbidden_action(diff: &str) -> Option<&'static str> {
     let lower = diff.to_lowercase();
     if lower.contains("permission") || lower.contains("grant") {
@@ -59,7 +63,37 @@ fn pack_forbidden_action(diff: &str) -> Option<&'static str> {
     }) {
         return Some("流程优化不能盖章");
     }
+    if diff_touches_implementation(diff) {
+        return Some("流程优化不能写实现");
+    }
     None
+}
+
+fn diff_touches_implementation(diff: &str) -> bool {
+    let lower = diff.to_lowercase();
+    if diff.contains("实现") {
+        return true;
+    }
+    const ROOTS: &[&str] = &["src/", "crates/", "ui/src/", "src-tauri/"];
+    if ROOTS.iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    // `.js` 是 `.json` 的前缀。扩展名后面必须不是字母，否则流程包的 json 路径会被当成源码。
+    const EXTS: &[&str] = &[".rs", ".tsx", ".ts", ".jsx", ".js", ".mjs", ".py", ".go"];
+    EXTS.iter().any(|ext| ext_at_boundary(&lower, ext))
+}
+
+fn ext_at_boundary(lower: &str, ext: &str) -> bool {
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(ext) {
+        let at = from + i + ext.len();
+        let next = lower[at..].chars().next();
+        if next.map(|c| !c.is_ascii_alphanumeric()).unwrap_or(true) {
+            return true;
+        }
+        from += i + 1;
+    }
+    false
 }
 
 /// surface → 允许的目标根。禁区的判定 = 根白名单 + 危险段黑名单双查。
@@ -294,15 +328,55 @@ pub fn submit(
     }
 
     if let Some(reason) = crate::execute::pack_score_block(&surface, content) {
+        crate::diag::note(
+            "拒绝",
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "execute_judgment",
+            "replay_score",
+            std::time::Instant::now(),
+        );
         return Err(PropError::Rejected(reason));
     }
     if surface == "pack_copy" {
         if let Some(reason) = pack_forbidden_action(&diff) {
+            let code = if reason.contains("实现") {
+                "writes_implementation"
+            } else {
+                "pack_forbidden"
+            };
+            crate::diag::note(
+                "拒绝",
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "pack_copy",
+                code,
+                std::time::Instant::now(),
+            );
             return Err(PropError::Rejected(reason.into()));
         }
     }
     if surface == "role_def" {
-        crate::rolesurf::audit(db, ctx, content)?;
+        if let Err(e) = crate::rolesurf::audit(db, ctx, content) {
+            crate::diag::note(
+                "拒绝",
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "role_audit",
+                "rejected",
+                std::time::Instant::now(),
+            );
+            return Err(e);
+        }
     }
     if crate::execute::mechanical_block(&surface) {
         return Err(PropError::Rejected(format!(
@@ -393,7 +467,7 @@ pub fn submit(
     let reviewer = crate::roles::superior_of(db, &ctx.project_id, &author_role).and_then(|r| {
         db.conn()
             .query_row(
-                "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
+                "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
                 params![ctx.project_id, r],
                 |r| r.get::<_, String>(0),
             )
@@ -591,7 +665,9 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
         .to_string();
     let surface: String = db
         .conn()
-        .query_row("SELECT surface FROM proposals WHERE id=?1", [&pid], |r| r.get(0))
+        .query_row("SELECT surface FROM proposals WHERE id=?1", [&pid], |r| {
+            r.get(0)
+        })
         .unwrap_or_default();
     if surface == "role_def" && !crate::rolesurf::reviewed(db, &pid)? {
         return Err(PropError::Rejected(
@@ -819,7 +895,13 @@ mod tests {
         let (db, _d, ctx) = setup(&["前端"]);
         // 生效面不在白名单
         // ADR 0069：role_def 在白名单里，但没有角色块仍然拒绝。
-        let e = submit(&db, &ctx, "art-x", &proposal_md("role_def", ".hexagon/roles/前端.json", DIFF)).unwrap_err();
+        let e = submit(
+            &db,
+            &ctx,
+            "art-x",
+            &proposal_md("role_def", ".hexagon/roles/前端.json", DIFF),
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("missing role"), "{e}");
         let e = submit(&db, &ctx, "art-perm", &proposal_md("permission", "x", DIFF)).unwrap_err();
         assert!(

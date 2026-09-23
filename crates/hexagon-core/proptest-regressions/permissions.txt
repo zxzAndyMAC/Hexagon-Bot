@@ -9,3 +9,4 @@ cc 37c7424001eedfeca9ff27cae6eba7b3cffc9a472654cf5c8fc38f71441051e5 # shrinks to
 cc e55fbc67ba2caf7eff7c5d21de23f39141613ea93f2b5b29249a6eba4380a738 # shrinks to sep = "&&", tail = "echo hi"
 cc 4b195e1e41cde05c40f3665d96e3905bd48cf8652ef026e6a0ba7f001d96228a # shrinks to rules = [], pick = 0
 cc c7ac2d3ac2a8ef559c408ad2b64e90cef9d2d01057fdc4fff83ef0f366088768 # shrinks to rules = [], idx = 0
+cc 8f16f4f965e6d12e1c0701de0e93cdb0af56accd14ab99f6bc8f513873eaf002 # shrinks to rules = [("bash", "git *", "deny", "project")], idx = 1

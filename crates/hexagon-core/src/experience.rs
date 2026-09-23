@@ -68,9 +68,9 @@ fn gate(db: &Db, ctx: &ToolContext) -> Result<Gate, PropError> {
         .unwrap_or_else(|_| "[]".into());
     let mut skills: Vec<String> = serde_json::from_str(&skills_json).unwrap_or_default();
     if skills.is_empty() {
-        let mut st = db.conn().prepare(
-            "SELECT name FROM grants WHERE agent_id=?1 AND kind='skill' ORDER BY name",
-        )?;
+        let mut st = db
+            .conn()
+            .prepare("SELECT name FROM grants WHERE agent_id=?1 AND kind='skill' ORDER BY name")?;
         skills = st
             .query_map([&ctx.agent_id], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
@@ -120,6 +120,7 @@ pub fn propose(
             Some(&ctx.project_id),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
+            None,
             "experience",
             "unreviewed",
             started,
@@ -135,6 +136,7 @@ pub fn propose(
             Some(&ctx.project_id),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
+            None,
             "experience",
             "delivered",
             started,
@@ -212,16 +214,20 @@ pub fn propose(
             }
             files.push(json!({"path": rel, "after": new_skill(&gate.role, lesson), "grant": name}));
         } else {
-            let old = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-                format!("---\nname: {name}\ndescription: 技能\n---\n\n")
-            });
+            let old = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| format!("---\nname: {name}\ndescription: 技能\n---\n\n"));
             let after = append_lesson(&old, lesson);
-            if !after.contains(SECTION) || after.matches(SECTION).count() != old.matches(SECTION).count().max(1)
+            if !after.contains(SECTION)
+                || after.matches(SECTION).count() != old.matches(SECTION).count().max(1)
             {
-                return Err(PropError::Rejected("experience section must be appended".into()));
+                return Err(PropError::Rejected(
+                    "experience section must be appended".into(),
+                ));
             }
             if old.contains(SECTION) && !after.contains(lesson) {
-                return Err(PropError::Rejected("experience section must be appended".into()));
+                return Err(PropError::Rejected(
+                    "experience section must be appended".into(),
+                ));
             }
             let mut entry = json!({"path": rel, "after": after});
             if name.starts_with("经验-") {
@@ -259,14 +265,18 @@ pub fn apply(ctx: &ToolContext, db: &Db, body: &str, backup: &Path) -> Result<bo
         return Ok(false);
     };
     let Some(files) = payload["files"].as_array() else {
-        return Err(PropError::Rejected("experience payload missing files".into()));
+        return Err(PropError::Rejected(
+            "experience payload missing files".into(),
+        ));
     };
     std::fs::create_dir_all(backup)?;
     let mut manifest = Vec::new();
     for (i, file) in files.iter().enumerate() {
         let rel = file["path"].as_str().unwrap_or("");
         if rel.contains("..") || !rel.starts_with(".hexagon/skills/") {
-            return Err(PropError::Rejected("experience path escapes the project".into()));
+            return Err(PropError::Rejected(
+                "experience path escapes the project".into(),
+            ));
         }
         let path = ctx.repo_root.join(rel);
         if let Some(parent) = path.parent() {
@@ -306,8 +316,8 @@ pub fn rollback(db: &Db, ctx: &ToolContext, backup: &Path) -> Result<bool, PropE
     if !manifest_path.exists() {
         return Ok(false);
     }
-    let manifest: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)
-        .unwrap_or_default();
+    let manifest: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path)?).unwrap_or_default();
     for item in manifest {
         let rel = item["path"].as_str().unwrap_or("");
         let path = ctx.repo_root.join(rel);

@@ -81,7 +81,7 @@ pub const ROLE: &str = "流程优化";
 /// 团队里流程优化角色的 agent_id（票 10）：由负责人在建项目或调团队时勾选。
 pub fn policy_dev_agent(db: &Db, project_id: &str) -> Result<String, rusqlite::Error> {
     db.conn().query_row(
-        "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
+        "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
         [project_id, ROLE],
         |r| r.get(0),
     )

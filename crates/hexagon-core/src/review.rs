@@ -356,7 +356,7 @@ pub fn submit_flag(
     eligible.push("auto_wake");
     if rank >= 2 && pack.knobs.consult_auto_wake() {
         if let Ok(agent_id) = db.conn().query_row(
-            "SELECT id FROM agents WHERE project_id=?1 AND role=?2",
+            "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
             rusqlite::params![ctx.project_id, reviewer],
             |r| r.get::<_, String>(0),
         ) {
@@ -698,12 +698,8 @@ mod tests {
         let c = ctx("p1", "a1", dir.path(), Some(&r1));
         let route =
             submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "折叠屏无布局规范").unwrap();
-        assert_eq!(
-            route,
-            FlagRoute::ToReviewer {
-                reviewer_role: "架构师".into()
-            }
-        );
+        // 回填边命中，执行档恒为 2，所以自动同意拨回，不再停在复审者。
+        assert!(matches!(route, FlagRoute::AutoAdjudicated { .. }));
     }
 
     #[test]
@@ -740,7 +736,8 @@ mod tests {
         let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
         let c = ctx("p1", "a1", dir.path(), Some(&r0));
         let r1 = submit_flag(&db, &c, &pack, "ui/screens.md", "s", "r1").unwrap();
-        assert!(matches!(r1, FlagRoute::ToReviewer { .. }));
+        // 执行档恒为 2：第一次唤醒复审者，不再停成 ToReviewer。
+        assert!(matches!(r1, FlagRoute::AutoWoken { .. }));
         let r2 = submit_flag(&db, &c, &pack, "ui/screens.md", "s", "r2").unwrap();
         assert!(matches!(r2, FlagRoute::Escalated { .. }));
     }
@@ -841,8 +838,9 @@ mod tests {
         }
     }
 
+    /// ADR 0069：夹具把列写成 L0 也不再把回填边留给人。命中即自动裁决并拨回。
     #[test]
-    fn flag_at_l0_waits_for_reviewer_then_rewinds() {
+    fn stored_l0_still_auto_backfills() {
         let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
         let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
         db.conn()
@@ -857,21 +855,9 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        // L0：回填边命中也不自动 → 路由复审者
         let c = ctx("p1", "a1", dir.path(), Some(&r1));
         let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "无法实现").unwrap();
-        assert!(matches!(route, FlagRoute::ToReviewer { .. }));
-        // 架构师裁决同意 → 拨回
-        let flag_id = db
-            .conn()
-            .query_row(
-                "SELECT json_extract(payload,'$.flag_id') FROM events WHERE kind='flag_submitted'",
-                [],
-                |r| r.get::<_, String>(0),
-            )
-            .unwrap();
-        let c_rev = ctx("p1", "a2", dir.path(), Some(&r1));
-        adjudicate_flag(&db, &c_rev, &pack, &flag_id, true).unwrap();
+        assert!(matches!(route, FlagRoute::AutoAdjudicated { .. }));
         let cur: i64 = db
             .conn()
             .query_row("SELECT seq FROM stage_runs WHERE state='active'", [], |r| {
@@ -891,11 +877,16 @@ mod tests {
             {"name":"合入","roles":["前端"],"due":[],"stamp_point":true}
         ]}))
         .unwrap();
-        // 票 02：设计不是最后一道盖章点，裸驳回仍退上一阶段。
-        // 合入是最终验收，缺阶段名和修改意见的裸驳回会拒绝（门面测试钉）。
+        // 设计不是最后一道盖章点。ADR 0069 之后 advance 会把它自动通过，
+        // 到不了 waiting。这里把该行钉成 waiting，锁的是裸驳回仍退上一阶段。
         orchestra::open_stage(&db, "p1", &pack, 0).unwrap();
         orchestra::advance(&db, "p1", &pack).unwrap(); // seq0 done→seq1
-        orchestra::advance(&db, "p1", &pack).unwrap(); // seq1 ready→awaiting_stamp
+        db.conn()
+            .execute(
+                "UPDATE stage_runs SET state='waiting_stamp' WHERE seq=1",
+                [],
+            )
+            .unwrap();
         let r = serde_json::to_value(reject_stamp(&db, "p1", &pack).unwrap()).unwrap();
         assert_eq!(r["action"], "stamp_rejected");
         assert_eq!(r["reopened_seq"], 0);
@@ -923,19 +914,14 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        // L0 + 回填边命中：eligible 应含 auto_backfill 与 auto_wake,
-        // chosen 落 to_reviewer（自治不够）。
+        // 列是 L0，放行秩仍是原先的执行档 2。回填边命中就自动回填，决策门记 2。
         let c = ctx("p1", "a1", dir.path(), Some(&r1));
         submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "无法实现").unwrap();
         let items = db
-            .timeline("p1", None, 50, Some(&[EventKind::System]))
+            .timeline("p1", None, 50, Some(&[EventKind::BackfillExecuted]))
             .unwrap();
-        let routed = items
-            .iter()
-            .find(|e| e.event.payload["kind"] == "flag_routed")
-            .expect("flag_routed event");
-        let d = &routed.event.payload["decision"];
-        assert_eq!(d["chosen"], "to_reviewer");
+        let d = &items[0].event.payload["decision"];
+        assert_eq!(d["chosen"], "auto_backfill");
         assert_eq!(d["kind"], "flag_route");
         let eligible: Vec<&str> = d["eligible"]
             .as_array()
@@ -943,9 +929,10 @@ mod tests {
             .iter()
             .filter_map(|v| v.as_str())
             .collect();
-        assert!(eligible.contains(&"auto_backfill") && eligible.contains(&"auto_wake"));
-        assert_eq!(routed.event.payload["code"], "repairable");
+        assert!(eligible.contains(&"auto_backfill"));
+        assert_eq!(items[0].event.payload["code"], "repairable");
         assert_eq!(d["gates"]["edge_hit"], true);
+        assert_eq!(d["gates"]["autonomy"], 2);
     }
 
     #[test]
@@ -978,7 +965,8 @@ mod tests {
         let p = &items[0].event.payload;
         assert_eq!(p["code"], "repairable");
         assert_eq!(p["decision"]["chosen"], "auto_backfill");
-        assert_eq!(p["decision"]["gates"]["autonomy"], 1);
+        // 夹具写成 L1，门上的数字仍是执行档 2，不再跟着列走。
+        assert_eq!(p["decision"]["gates"]["autonomy"], 2);
     }
 
     #[test]
@@ -1009,10 +997,10 @@ mod tests {
         .unwrap();
         let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
         let c = ctx("p1", "a1", dir.path(), Some(&r0));
-        // 前三次路由复审者（无回填边声明→默认路由）
+        // 前三次唤醒复审者（执行档恒为 2，无回填边）。第四次才升级。
         for _ in 0..3 {
             let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "x").unwrap();
-            assert!(matches!(route, FlagRoute::ToReviewer { .. }));
+            assert!(matches!(route, FlagRoute::AutoWoken { .. }), "{route:?}");
         }
         // 第四次（prior=4 达到阈值）升级
         let route = submit_flag(&db, &c, &pack, "ui/screens.md", "断点", "x").unwrap();

@@ -41,9 +41,9 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     expect(el.querySelectorAll('.dot.on')).toHaveLength(1)
     expect(el.querySelectorAll('.dot.warn')).toHaveLength(1)
     expect(el.querySelectorAll('.dot.off')).toHaveLength(1)
-    // 汇总行：default 绑到缺 key 的 NoKeyCo；decision 槽始终在列表里但未绑 → 1/2
+    // 汇总行：default 已绑但缺钥匙。列表里还有 decision、三个起草槽和 jev，共 6 个。
     const text = el.textContent ?? ''
-    expect(text).toContain('1/2')
+    expect(text).toContain('1/6')
     root.unmount()
   })
 
@@ -123,6 +123,27 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
     const m = sent.models?.find((x) => x.id === 'mystery-x')!
     expect(m.context_window).toBe(32768)
     expect(m.max_output).toBe(4096)
+    root.unmount()
+  })
+})
+
+describe('Jev 槽', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('第一次保存只绑 jev，不绑项目经理的 decision 槽', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    const bind = vi.spyOn(api, 'setSlotBinding').mockResolvedValue(undefined)
+    vi.spyOn(api, 'saveProvider').mockResolvedValue(undefined)
+    const { el, root } = await render(<ProviderManager />)
+    const row = [...el.querySelectorAll('div')].find((d) => d.textContent === 'TypeSafe')!
+    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const save = [...el.querySelectorAll('button')].filter((b) =>
+      b.classList.contains('primary') && /save|保存|儲存|enregistrer|guardar|salvar/i.test(b.textContent ?? ''),
+    ).at(-1)!
+    await act(async () => { save.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(bind).toHaveBeenCalledTimes(1)
+    expect(bind).toHaveBeenCalledWith('jev', expect.any(String), 'jev-latest')
     root.unmount()
   })
 })

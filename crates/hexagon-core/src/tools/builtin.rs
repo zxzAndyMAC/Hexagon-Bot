@@ -723,20 +723,19 @@ impl Tool for LoadSkill {
         RiskClass::Read
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let mut name =
-            crate::skills::validate_name(str_arg(input, "name")?).map_err(ToolError::BadInput)?;
-        // 目录是「经验-<角色>」，给 Agent 看的名字是「经验」。
-        if name == "经验" {
-            let role: String = _db
-                .conn()
-                .query_row(
-                    "SELECT role FROM agents WHERE id=?1",
-                    [&ctx.agent_id],
-                    |r| r.get(0),
-                )
-                .unwrap_or_default();
-            name = crate::skills::experience_dir_name(&role);
-        }
+        let requested = str_arg(input, "name")?;
+        let role: String = _db
+            .conn()
+            .query_row(
+                "SELECT role FROM agents WHERE id=?1",
+                [&ctx.agent_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+        // 目录是「经验-<角色>」。单独的「经验」按当前角色找；目录里两行并存时
+        // 点名用「经验（角色）」。
+        let aliased = crate::skills::experience_load_name(requested, &role);
+        let name = crate::skills::validate_name(&aliased).map_err(ToolError::BadInput)?;
         let mut loader = crate::skills::SkillLoader::new(crate::skills::skill_dirs(&ctx.repo_root));
         let session = ctx
             .stage_run_id

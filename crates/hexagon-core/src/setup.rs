@@ -196,13 +196,8 @@ pub fn optimize_agents_md(
     Ok(text)
 }
 
-/// 写 `AGENTS.md`。已有项目说明（`AGENTS.md` 或 `CLAUDE.md`）即拒绝，两份都不改。
-///
-/// 票 16 / ADR 0067：没有 AGENTS.md 时 CLAUDE.md 就是项目说明。旁边再写一份
-/// AGENTS.md 会被 `inspect_dir` 当成主文件，等于换掉现成约束。
-/// false negative（漏拒）花一次未审覆盖；false positive（CLAUDE.md 在时
-/// 拒绝另写 AGENTS.md）花一次人工。偏向拒绝。内容相同也报——不静默跳过。
 /// 按项目说明起草流程包。调用方传入流程起草槽（未绑则已落到默认槽）的供应商。
+/// 只返回草稿，不写盘。检验命令、产物清单和回填边不在这张草稿的编辑面上。
 pub fn draft_flow(
     sentence: &str,
     provider: &dyn crate::provider::ModelProvider,
@@ -272,6 +267,12 @@ pub fn draft_role_duty(
     Ok(text)
 }
 
+/// 写 `AGENTS.md`。已有项目说明（`AGENTS.md` 或 `CLAUDE.md`）即拒绝，两份都不改。
+///
+/// 票 16 / ADR 0067：没有 AGENTS.md 时 CLAUDE.md 就是项目说明。旁边再写一份
+/// AGENTS.md 会被 `inspect_dir` 当成主文件，等于换掉现成约束。
+/// false negative（漏拒）花一次未审覆盖；false positive（CLAUDE.md 在时
+/// 拒绝另写 AGENTS.md）花一次人工。偏向拒绝。内容相同也报——不静默跳过。
 pub fn write_agents_md(dir: impl AsRef<Path>, content: &str) -> Result<(), SetupError> {
     let dir = dir.as_ref();
     for name in ["AGENTS.md", "CLAUDE.md"] {

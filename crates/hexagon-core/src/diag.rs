@@ -11,16 +11,18 @@ pub fn note(
     project: Option<&str>,
     agent: Option<&str>,
     activation: Option<&str>,
+    trace: Option<&str>,
     branch: &str,
     code: &str,
     started: std::time::Instant,
 ) {
     let ms = started.elapsed().as_millis();
     let line = format!(
-        "diag class={class} project={} agent={} activation={} branch={branch} code={code} ms={ms}",
+        "diag class={class} project={} agent={} activation={} trace={} branch={branch} code={code} ms={ms}",
         project.unwrap_or("-"),
         agent.unwrap_or("-"),
         activation.unwrap_or("-"),
+        trace.unwrap_or("-"),
     );
     if warn {
         log::warn!("{line}");

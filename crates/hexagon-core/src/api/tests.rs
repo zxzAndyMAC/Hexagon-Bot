@@ -124,12 +124,6 @@ fn request_install(wb: &Workbench, desc: &str) -> Result<String, String> {
     wb.request_install(desc).map_err(|e| e.to_string())
 }
 
-fn resolve_install(wb: &Workbench, qid: &str, allow: bool) -> Result<Value, String> {
-    crate::install::resolve_install(&wb.db, &wb.project_id, &wb.repo_root, qid, allow)
-        .and_then(|v| serde_json::to_value(v).map_err(Into::into))
-        .map_err(|e| e.to_string())
-}
-
 fn pack_draft(wb: &Workbench) -> Result<Value, String> {
     serde_json::to_value(crate::packedit::load_draft(&wb.repo_root).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
@@ -369,8 +363,9 @@ fn run_rows(wb: &Workbench) -> Vec<(String, String)> {
         .unwrap()
 }
 
-/// 票 02：L0–L2 每个盖章点都等人。L3/L4 只留最后一道（合入），更早的自动通过。
-/// 自动通过的 stamped 事件 by=autonomy，负责人 stamp() 的是 by=owner。
+/// 票 02 当时：L0–L2 每个盖章点都等人，L3/L4 只留最后一道。
+/// ADR 0069 取消档位之后，存储列写成 L0 也不再收紧。更早的盖章点一律自动通过，
+/// 最后一道仍等负责人。自动通过的 stamped 事件 by=autonomy，负责人 stamp() 的是 by=owner。
 #[test]
 fn l3_l4_auto_pass_earlier_stamps_final_still_waits() {
     for lv in ["L3", "L4"] {
@@ -384,11 +379,9 @@ fn l3_l4_auto_pass_earlier_stamps_final_still_waits() {
         .unwrap();
         pin_stored_rank(&wb, lv);
         // 执行档仍封顶，安全网/权限/提案不在本票放行。
+        // 放行秩不再读列。执行档恒为原先 L4 的封顶 2，存储秩恒为 4。
         assert_eq!(crate::autonomy::execution_rank(&wb.db, "p1").unwrap(), 2);
-        assert_eq!(
-            crate::autonomy::rank(&wb.db, "p1").unwrap(),
-            if lv == "L3" { 3 } else { 4 }
-        );
+        assert_eq!(crate::autonomy::rank(&wb.db, "p1").unwrap(), 4);
 
         wb.open_stage(0).unwrap();
         let opened = serde_json::to_value(wb.advance().unwrap()).unwrap();
@@ -461,8 +454,9 @@ fn l3_l4_auto_pass_earlier_stamps_final_still_waits() {
     }
 }
 
+/// ADR 0069：把存储列写成 L0–L2 不再让更早的盖章点等人。行为与原先的 L4 相同。
 #[test]
-fn l0_l2_stamp_points_all_wait() {
+fn stored_low_rank_still_auto_passes_earlier_stamps() {
     for lv in ["L0", "L1", "L2"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::open(
@@ -473,23 +467,20 @@ fn l0_l2_stamp_points_all_wait() {
         )
         .unwrap();
         pin_stored_rank(&wb, lv);
+        assert_eq!(crate::autonomy::level(&wb.db, "p1").unwrap(), lv);
+        assert_eq!(crate::autonomy::rank(&wb.db, "p1").unwrap(), 4);
         wb.open_stage(0).unwrap();
         wb.advance().unwrap();
         insert_artifact(&wb, &active_run_id(&wb), "art-req", "specs/prd.md", "规格");
         let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
         assert_eq!(
-            r["action"], "awaiting_stamp",
-            "{lv} must wait at the earlier stamp"
+            r["action"], "stage_opened",
+            "{lv} earlier stamp must auto-pass even though the column says {lv}"
         );
-        assert_eq!(r["stage"], "需求");
-        let card = pending_questions(&wb)
-            .unwrap()
-            .into_iter()
-            .find(|c| c["kind"] == "stamp")
-            .expect("stamp card");
-        assert_eq!(card["payload"]["final_acceptance"], false);
         let tl = timeline(&wb, None, 40).unwrap();
-        assert!(tl.iter().all(|i| i.event.kind != EventKind::Stamped));
+        assert!(tl.iter().any(|i| {
+            i.event.kind == EventKind::Stamped && i.event.payload["by"] == "autonomy"
+        }));
     }
 }
 
@@ -792,7 +783,8 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
         assert!(
             allowed
                 .iter()
-                .all(|e| e.payload["via"] == "autonomy" && e.payload["level"] == lv),
+                // 轨迹上的档是放行秩 L4，不是夹具写进列里的那个字符串。
+                .all(|e| e.payload["via"] == "autonomy" && e.payload["level"] == "L4"),
             "{lv} {:?}",
             allowed
                 .iter()
@@ -855,9 +847,9 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
     }
 }
 
-/// 票 03：L0–L2 的安全网和权限询问仍排队，不留放行轨迹，也不执行。
+/// ADR 0069：列写成 L0–L2 也不再把安全网和新询问留下排队。
 #[test]
-fn l0_through_l2_safety_net_and_new_asks_still_queue() {
+fn stored_low_rank_still_releases_safety_net_and_new_asks() {
     for lv in ["L0", "L1", "L2"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
@@ -870,10 +862,10 @@ fn l0_through_l2_safety_net_and_new_asks_still_queue() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Asked(_)),
+            matches!(out, crate::tools::CallOutcome::Done(_)),
             "{lv} safety net: {out:?}"
         );
-        assert!(dir.path().join("victim").exists(), "{lv}");
+        assert!(!dir.path().join("victim").exists(), "{lv}");
         let out = tool_call(
             &wb,
             "bash",
@@ -881,41 +873,26 @@ fn l0_through_l2_safety_net_and_new_asks_still_queue() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Asked(_)),
+            matches!(out, crate::tools::CallOutcome::Done(_)),
             "{lv} new ask: {out:?}"
         );
-        assert!(!dir.path().join("queued.txt").exists(), "{lv}");
-        let out = tool_call(
-            &wb,
-            "fs_write",
-            json!({"path": ".git/HEAD", "content": "x"}),
-        )
-        .unwrap();
-        assert!(
-            matches!(out, crate::tools::CallOutcome::Asked(_)),
-            "{lv} .git: {out:?}"
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("queued.txt")).unwrap(),
+            "hi\n"
         );
-        assert!(!dir.path().join(".git/HEAD").exists(), "{lv}");
         let fetched = tool_call(
             &wb,
             "web_fetch",
             json!({"url": "http://127.0.0.1:1/new-domain"}),
-        )
-        .unwrap();
-        assert!(
-            matches!(fetched, crate::tools::CallOutcome::Asked(_)),
-            "{lv} egress: {fetched:?}"
         );
         assert!(
-            permission_cards(&wb).len() >= 4,
+            !matches!(fetched, Ok(crate::tools::CallOutcome::Asked(_))),
+            "{lv} egress must not queue: {fetched:?}"
+        );
+        assert!(
+            permission_cards(&wb).is_empty(),
             "{lv} {:?}",
             permission_cards(&wb)
-        );
-        assert!(
-            events(&wb, Some(&[EventKind::PermissionAllowed]))
-                .unwrap()
-                .is_empty(),
-            "{lv}"
         );
     }
 }
@@ -1006,25 +983,27 @@ fn l4_install_confirm_writes_project_only() {
     ));
 }
 
-/// L0–L3 的自然语言安装仍要负责人点头，确认前零副作用。
+/// ADR 0069：列写成 L0–L3 时，自然语言安装仍按原先 L4 写入当前项目，不入队。
 #[test]
-fn l0_through_l3_install_confirm_still_waits() {
+fn stored_low_rank_still_installs_without_a_card() {
     for lv in ["L0", "L1", "L2", "L3"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         pin_stored_rank(&wb, lv);
         std::fs::create_dir_all(dir.path().join("skillpack")).unwrap();
         std::fs::write(dir.path().join("skillpack/SKILL.md"), "# t").unwrap();
-        let qid = request_install(&wb, "skillpack").unwrap();
+        request_install(&wb, "skillpack").unwrap();
         assert!(
-            !dir.path().join(".hexagon/skills/skillpack").exists(),
+            dir.path()
+                .join(".hexagon/skills/skillpack/SKILL.md")
+                .is_file(),
             "{lv}"
         );
         assert!(
             pending_questions(&wb)
                 .unwrap()
                 .iter()
-                .any(|q| q["id"] == qid && q["kind"] == "install"),
+                .all(|q| q["kind"] != "install"),
             "{lv}"
         );
     }
@@ -1167,6 +1146,7 @@ struct ScriptedDecision {
     lines: Mutex<VecDeque<Result<String, String>>>,
     decides: Mutex<u32>,
     completes: Mutex<u32>,
+    states: Mutex<Vec<String>>,
 }
 
 impl ScriptedDecision {
@@ -1175,10 +1155,14 @@ impl ScriptedDecision {
             lines: Mutex::new(lines.into()),
             decides: Mutex::new(0),
             completes: Mutex::new(0),
+            states: Mutex::new(Vec::new()),
         }
     }
     fn decides(&self) -> u32 {
         *self.decides.lock().unwrap()
+    }
+    fn states(&self) -> Vec<String> {
+        self.states.lock().unwrap().clone()
     }
 }
 
@@ -1195,10 +1179,11 @@ impl ModelProvider for ScriptedDecision {
     }
     fn decide(
         &self,
-        _state: &str,
+        state: &str,
         _options: &[(&str, &str)],
     ) -> Result<crate::provider::ChatResponse, ProviderError> {
         *self.decides.lock().unwrap() += 1;
+        self.states.lock().unwrap().push(state.to_string());
         match self.lines.lock().unwrap().pop_front() {
             Some(Ok(text)) => Ok(text_response(&text)),
             Some(Err(e)) => Err(ProviderError::Transport(e)),
@@ -1249,6 +1234,20 @@ fn execute_judgment_is_a_closed_choice_and_does_not_fall_back_to_chat() {
         .iter()
         .any(|q| q["kind"] == "stamp"));
     assert_eq!(jev.decides(), 1);
+    let seen = jev.states();
+    assert_eq!(seen.len(), 1);
+    assert!(
+        seen[0].contains("## 已落盘的提案")
+            && seen[0].contains("改进提示词")
+            && seen[0].contains("+line2"),
+        "提案正文要原样交给 Jev：{}",
+        seen[0]
+    );
+    assert!(
+        seen[0].contains("## 已落盘的证据") && seen[0].contains("上级复审已通过"),
+        "没有回放时，证据是已经通过的复审：{}",
+        seen[0]
+    );
     assert!(chat.recorded().is_empty(), "摊平不得改用聊天模型");
 
     let (dir, mut wb, chat) = judgment_wb();
@@ -1309,9 +1308,15 @@ fn execute_judgment_is_a_closed_choice_and_does_not_fall_back_to_chat() {
 
     let (dir, mut wb, _chat) = judgment_wb();
     let jev = jev_on(&mut wb, Ok("执行"));
-    for (i, surface) in ["permission", "grants", "builtin_never", "remote_publish", "final_acceptance"]
-        .into_iter()
-        .enumerate()
+    for (i, surface) in [
+        "permission",
+        "grants",
+        "builtin_never",
+        "remote_publish",
+        "final_acceptance",
+    ]
+    .into_iter()
+    .enumerate()
     {
         let err = submit_proposal(
             &wb,
@@ -1334,6 +1339,94 @@ fn execute_judgment_is_a_closed_choice_and_does_not_fall_back_to_chat() {
     assert_eq!(jev.decides(), 0, "机械拒绝不得送给 Jev");
 }
 
+/// 回放提案交给 Jev 的是落盘原文和主机已经算好的分数，不是计数摘要。
+#[test]
+fn execute_judgment_receives_persisted_replay() {
+    let (dir, mut wb) = git_wb(&["流程优化", "前端技术负责人"]);
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO role_defs (project_id, name, reviewer) VALUES ('p1','流程优化','前端技术负责人')",
+            [],
+        )
+        .unwrap();
+    let diff = "+ knobs.flag_patience: 2 → 5";
+    let mut content = proposal_body("pack_copy", ".hexagon/pack.active.json", diff);
+    content.push_str(
+        "\n```replay\n{\"schema\":1,\"scenario_fingerprint\":\"scene-7\",\"baseline_pack\":\"now\",\"candidate_pack\":\"next\",\"baseline\":{\"stages_done\":0},\"candidate\":{\"stages_done\":1}}\n```\n",
+    );
+    content.push_str(
+        "\n```judge\n{\"verdict\":\"needs-human\",\"rationale\":\"看一眼\",\"backend\":\"mechanical\"}\n```\n",
+    );
+    let path = ".hexagon/props/pack.md";
+    std::fs::create_dir_all(dir.path().join(".hexagon/props")).unwrap();
+    std::fs::write(dir.path().join(path), &content).unwrap();
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO artifacts (id, project_id, path, kind, tier, author_agent_id, version)
+             VALUES ('art-pack','p1','props/pack.md','改进提案','parse','a0',1)",
+            [],
+        )
+        .unwrap();
+    let ctx = wb.ctx_for("a0", None);
+    let pid = crate::proposals::submit(&wb.db, &ctx, "art-pack", &content).unwrap();
+    let jev = jev_on(&mut wb, Ok("交给负责人"));
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    let seen = jev.states();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].contains(&content), "提案原文要整份在状态里");
+    assert!(seen[0].contains("scene-7"), "回放证据原文要在状态里");
+    // stages_done 0 和 1、其余指标为 0：现任 0 分，候选 20 分。
+    assert!(
+        seen[0].contains("现任 0") && seen[0].contains("候选 20"),
+        "主机算好的回放分要交给 Jev：{}",
+        seen[0]
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(path)).unwrap(),
+        content,
+        "判定不改落盘的提案和证据"
+    );
+}
+
+/// 流程优化的 diff 若改实现文件，提交口拒绝，不到执行判定。
+#[test]
+fn flow_optimizer_cannot_write_implementation() {
+    let (dir, wb) = git_wb(&["流程优化", "前端技术负责人"]);
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO role_defs (project_id, name, reviewer) VALUES ('p1','流程优化','前端技术负责人')",
+            [],
+        )
+        .unwrap();
+    let diff = "+ src/lib.rs\n+ fn main() {}";
+    let mut content = proposal_body("pack_copy", ".hexagon/pack.active.json", diff);
+    content.push_str(
+        "\n```replay\n{\"schema\":1,\"baseline\":{\"stages_done\":0},\"candidate\":{\"stages_done\":1}}\n```\n",
+    );
+    content.push_str(
+        "\n```judge\n{\"verdict\":\"needs-human\",\"rationale\":\"看一眼\",\"backend\":\"mechanical\"}\n```\n",
+    );
+    let path = ".hexagon/props/impl.md";
+    std::fs::create_dir_all(dir.path().join(".hexagon/props")).unwrap();
+    std::fs::write(dir.path().join(path), &content).unwrap();
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO artifacts (id, project_id, path, kind, tier, author_agent_id, version)
+             VALUES ('art-impl','p1','props/impl.md','改进提案','parse','a0',1)",
+            [],
+        )
+        .unwrap();
+    let ctx = wb.ctx_for("a0", None);
+    let err = crate::proposals::submit(&wb.db, &ctx, "art-impl", &content)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("不能写实现"), "{err}");
+}
+
 fn role_proposal(role: &str, body: &str) -> String {
     format!(
         "---\nkind: 改进提案\nauthor: a0\nsurface: role_def\ntarget: .hexagon/roles/{role}.json\n---\n\
@@ -1351,10 +1444,13 @@ fn role_definition_proposal_narrows_and_rolls_back() {
         "INSERT INTO role_defs (project_id, name, duty, reviewer, model_slot) VALUES ('p1','前端','旧职责','前端技术负责人','chat')",
         [],
     ).unwrap();
-    wb.db.conn().execute(
-        "INSERT INTO agent_globs (agent_id, glob) VALUES ('a0','src/**'), ('a0','docs/**')",
-        [],
-    ).unwrap();
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO agent_globs (agent_id, glob) VALUES ('a0','src/**'), ('a0','docs/**')",
+            [],
+        )
+        .unwrap();
     wb.db.conn().execute(
         "INSERT INTO grants (id, agent_id, kind, name) VALUES ('g1','a0','skill','alpha'), ('g2','a0','skill','beta')",
         [],
@@ -1375,27 +1471,52 @@ fn role_definition_proposal_narrows_and_rolls_back() {
     assert_eq!(jev.decides(), 0);
     wb.review_proposal(&pid, true, "可以").unwrap();
     assert_eq!(jev.decides(), 1);
-    let duty: String = wb.db.conn().query_row(
-        "SELECT duty FROM role_defs WHERE name='前端'",
-        [],
-        |r| r.get(0),
-    ).unwrap();
+    let duty: String = wb
+        .db
+        .conn()
+        .query_row("SELECT duty FROM role_defs WHERE name='前端'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(duty, "新职责");
     let globs: Vec<String> = {
-        let mut st = wb.db.conn().prepare("SELECT glob FROM agent_globs WHERE agent_id='a0' ORDER BY glob").unwrap();
-        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+        let mut st = wb
+            .db
+            .conn()
+            .prepare("SELECT glob FROM agent_globs WHERE agent_id='a0' ORDER BY glob")
+            .unwrap();
+        st.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     };
     assert_eq!(globs, vec!["src/**".to_string()]);
     let grants: Vec<String> = {
-        let mut st = wb.db.conn().prepare("SELECT name FROM grants WHERE agent_id='a0' ORDER BY name").unwrap();
-        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+        let mut st = wb
+            .db
+            .conn()
+            .prepare("SELECT name FROM grants WHERE agent_id='a0' ORDER BY name")
+            .unwrap();
+        st.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     };
     assert_eq!(grants, vec!["alpha".to_string()]);
     wb.rollback_proposal(&pid).unwrap();
-    let duty: String = wb.db.conn().query_row("SELECT duty FROM role_defs WHERE name='前端'", [], |r| r.get(0)).unwrap();
+    let duty: String = wb
+        .db
+        .conn()
+        .query_row("SELECT duty FROM role_defs WHERE name='前端'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(duty, "旧职责");
 
-    let body = role_proposal("前端", r#"{"role":"前端","duty":"再改","globs":["src/**","extra/**"]}"#);
+    let body = role_proposal(
+        "前端",
+        r#"{"role":"前端","duty":"再改","globs":["src/**","extra/**"]}"#,
+    );
     std::fs::write(wb.repo_root.join(".hexagon/props/role2.md"), &body).unwrap();
     wb.db.conn().execute(
         "INSERT INTO artifacts (id, project_id, path, kind, tier, author_agent_id, version) VALUES ('art-role2','p1','props/role2.md','改进提案','parse','a0',1)",
@@ -1481,18 +1602,30 @@ fn experience_appends_or_creates_only_after_review_and_judgment() {
             [],
         )
         .unwrap();
-    write_skill(dir.path(), "alpha", "---\nname: alpha\ndescription: a\n---\n\n正文\n");
-    write_skill(dir.path(), "beta", "---\nname: beta\ndescription: b\n---\n\n乙\n");
+    write_skill(
+        dir.path(),
+        "alpha",
+        "---\nname: alpha\ndescription: a\n---\n\n正文\n",
+    );
+    write_skill(
+        dir.path(),
+        "beta",
+        "---\nname: beta\ndescription: b\n---\n\n乙\n",
+    );
     mark_reviewed(&wb, "a0");
     let pid = wb.propose_experience("a0", lesson, &[]).unwrap();
     jev_on(&mut wb, Ok("执行"));
     wb.review_proposal(&pid, true, "可以").unwrap();
-    assert!(std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md"))
-        .unwrap()
-        .contains(lesson));
-    assert!(!std::fs::read_to_string(dir.path().join(".hexagon/skills/beta/SKILL.md"))
-        .unwrap()
-        .contains(lesson));
+    assert!(
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md"))
+            .unwrap()
+            .contains(lesson)
+    );
+    assert!(
+        !std::fs::read_to_string(dir.path().join(".hexagon/skills/beta/SKILL.md"))
+            .unwrap()
+            .contains(lesson)
+    );
 
     let (_dir, wb) = git_wb(&["前端", "架构师"]);
     mark_reviewed(&wb, "a0");
@@ -1500,12 +1633,21 @@ fn experience_appends_or_creates_only_after_review_and_judgment() {
         .propose_experience("a0", lesson, &["alpha".into()])
         .unwrap_err()
         .to_string();
-    assert!(err.contains("cannot mint") || err.contains("not empty") || err.contains("unreviewed") || err.contains("list"), "{err}");
+    assert!(
+        err.contains("cannot mint")
+            || err.contains("not empty")
+            || err.contains("unreviewed")
+            || err.contains("list"),
+        "{err}"
+    );
 
     let (dir, mut wb) = git_wb(&["前端", "前端技术负责人", "后端"]);
     mark_reviewed(&wb, "a0");
     let pid = wb.propose_experience("a0", lesson, &[]).unwrap();
-    assert!(!dir.path().join(".hexagon/skills/经验-前端/SKILL.md").exists());
+    assert!(!dir
+        .path()
+        .join(".hexagon/skills/经验-前端/SKILL.md")
+        .exists());
     let grants_before: i64 = wb
         .db
         .conn()
@@ -1514,7 +1656,8 @@ fn experience_appends_or_creates_only_after_review_and_judgment() {
     assert_eq!(grants_before, 0, "授权确认不会提前装上");
     jev_on(&mut wb, Ok("执行"));
     wb.review_proposal(&pid, true, "可以").unwrap();
-    let created = std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
+    let created =
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
     assert!(created.contains("name: 经验-前端"));
     assert!(created.contains(lesson));
     let grants: Vec<String> = {
@@ -1539,23 +1682,39 @@ fn experience_appends_or_creates_only_after_review_and_judgment() {
     let pid = wb.propose_experience("a0", "第二个人的教训", &[]).unwrap();
     jev_on(&mut wb, Ok("执行"));
     wb.review_proposal(&pid, true, "可以").unwrap();
-    let shared = std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
-    assert!(shared.contains(lesson) && shared.contains("第二个人的教训"), "{shared}");
+    let shared =
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
+    assert!(
+        shared.contains(lesson) && shared.contains("第二个人的教训"),
+        "{shared}"
+    );
     assert!(!dir.path().join(".hexagon/skills/经验-a0").exists());
 
     let (_dir, wb) = git_wb(&["前/端", "架构师"]);
     mark_reviewed(&wb, "a0");
-    let err = wb.propose_experience("a0", lesson, &[]).unwrap_err().to_string();
+    let err = wb
+        .propose_experience("a0", lesson, &[])
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("path separator"), "{err}");
 
     let (dir, wb) = git_wb(&["前端", "架构师"]);
-    write_skill(dir.path(), "经验-前端", "---\nname: other\ndescription: 别的\n---\n\n原技能\n");
+    write_skill(
+        dir.path(),
+        "经验-前端",
+        "---\nname: other\ndescription: 别的\n---\n\n原技能\n",
+    );
     mark_reviewed(&wb, "a0");
-    let err = wb.propose_experience("a0", lesson, &[]).unwrap_err().to_string();
+    let err = wb
+        .propose_experience("a0", lesson, &[])
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("different skill"), "{err}");
-    assert!(std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md"))
-        .unwrap()
-        .contains("原技能"));
+    assert!(
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md"))
+            .unwrap()
+            .contains("原技能")
+    );
 
     let (dir, wb) = git_wb(&["前端", "架构师"]);
     mark_reviewed(&wb, "a0");
@@ -1573,7 +1732,39 @@ fn experience_appends_or_creates_only_after_review_and_judgment() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("frozen"), "{err}");
-    assert!(!dir.path().join(".hexagon/skills/经验-前端/SKILL.md").exists());
+    assert!(!dir
+        .path()
+        .join(".hexagon/skills/经验-前端/SKILL.md")
+        .exists());
+}
+
+/// 同一角色的第二个 Agent 把教训追加进同一份经验，不另建目录。
+/// ADR 0069：经验按角色名共用。以前 UNIQUE(project_id, role) 让第二行插不进去。
+#[test]
+fn peer_agent_appends_the_same_experience_file() {
+    let lesson = "先看日志再改路由";
+    let (dir, mut wb) = git_wb(&["前端", "前端技术负责人", "架构师"]);
+    mark_reviewed(&wb, "a0");
+    let peer = crate::roles::spawn_peer(&wb.db, "p1", "前端").unwrap();
+    assert_ne!(peer, "a0");
+    mark_reviewed(&wb, &peer);
+    let pid = wb.propose_experience("a0", lesson, &[]).unwrap();
+    jev_on(&mut wb, Ok("执行"));
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    let pid = wb.propose_experience(&peer, "第二个人的教训", &[]).unwrap();
+    jev_on(&mut wb, Ok("执行"));
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    let shared =
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
+    assert!(
+        shared.contains(lesson) && shared.contains("第二个人的教训"),
+        "{shared}"
+    );
+    assert!(!dir
+        .path()
+        .join(".hexagon/skills")
+        .join(format!("经验-{peer}"))
+        .exists());
 }
 
 /// 没有上级的提案在 L4 仍等负责人。自动通过只发生在复审通过之后。
@@ -1666,34 +1857,27 @@ fn l4_grant_confirm_is_project_scoped() {
 }
 
 #[test]
-fn below_l4_grant_confirm_waits_for_owner() {
+/// ADR 0069：列写成 L0–L3 时，技能和 MCP 授权确认仍写入当前项目，不入队。
+fn stored_low_rank_still_grants_without_a_card() {
     for lv in ["L0", "L1", "L2", "L3"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         pin_stored_rank(&wb, lv);
         let out = wb.request_grant("a0", "skill", "spec-writing").unwrap();
-        assert!(!out.granted, "{lv}");
-        assert_eq!(out.via, "queued");
-        assert!(grant_names(&wb, "a0", "skill").is_empty(), "{lv}");
-        let qid = out.question_id.clone().unwrap();
+        assert!(out.granted, "{lv}");
+        assert_eq!(out.via, "autonomy");
+        assert_eq!(
+            grant_names(&wb, "a0", "skill"),
+            vec!["spec-writing".to_string()],
+            "{lv}"
+        );
         assert!(
             pending_questions(&wb)
                 .unwrap()
                 .iter()
-                .any(|q| q["id"] == qid && q["kind"] == "grant"),
+                .all(|q| q["kind"] != "grant"),
             "{lv}"
         );
-        wb.confirm_grant(&qid, false).unwrap();
-        assert!(grant_names(&wb, "a0", "skill").is_empty(), "{lv} reject");
-        let again = wb.request_grant("a0", "mcp", "fake").unwrap();
-        wb.confirm_grant(again.question_id.as_deref().unwrap(), true)
-            .unwrap();
-        assert_eq!(
-            grant_names(&wb, "a0", "mcp"),
-            vec!["fake".to_string()],
-            "{lv}"
-        );
-        assert!(grant_names(&wb, "a0", "skill").is_empty(), "{lv}");
     }
 }
 
@@ -2569,32 +2753,21 @@ fn us47_install_assistant_owner_gated() {
     assert!(request_install(&wb, "bash -c something").is_err());
     assert!(pending_questions(&wb).unwrap().is_empty());
 
-    // ② 本地目录技能包：请求入卡，未确认零副作用
+    // ② 本地目录技能包：按原先 L4 直接写入项目，不入队、不写授权。
     std::fs::create_dir_all(dir.path().join("skillpack")).unwrap();
     std::fs::write(dir.path().join("skillpack/SKILL.md"), "# t").unwrap();
-    let qid = request_install(&wb, "skillpack").unwrap();
-    assert!(!dir.path().join(".hexagon/skills/skillpack").exists());
-    let pend = pending_questions(&wb).unwrap();
-    let card = pend.iter().find(|q| q["id"] == qid).unwrap();
-    assert_eq!(card["kind"], "install");
-    let cp = &card["payload"];
-    assert_eq!(cp["plan_kind"], "skill-dir");
-    assert_eq!(cp["net"], false); // 本地源不出网
-    assert_eq!(cp["creds"], false);
-    // 驳回：不执行 + install_rejected 留痕
-    resolve_install(&wb, &qid, false).unwrap();
-    assert!(!dir.path().join(".hexagon/skills/skillpack").exists());
-    assert_eq!(
-        events(&wb, Some(&[EventKind::InstallRejected]))
-            .unwrap()
-            .len(),
-        1
-    );
+    request_install(&wb, "skillpack").unwrap();
+    assert!(dir
+        .path()
+        .join(".hexagon/skills/skillpack/SKILL.md")
+        .is_file());
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .all(|q| q["kind"] != "install"));
 
-    // ③ npm MCP：放行才写 mcp.json；grants 永远空（装完授权默认空）
-    let qid = request_install(&wb, "npx @modelcontextprotocol/server-fs").unwrap();
-    assert!(!dir.path().join(".hexagon/mcp.json").exists());
-    resolve_install(&wb, &qid, true).unwrap();
+    // ③ npm MCP：直接写项目清单；grants 永远空
+    request_install(&wb, "npx @modelcontextprotocol/server-fs").unwrap();
     let specs: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join(".hexagon/mcp.json")).unwrap(),
     )
@@ -2611,20 +2784,34 @@ fn us47_install_assistant_owner_gated() {
         events(&wb, Some(&[EventKind::InstallCompleted]))
             .unwrap()
             .len(),
-        1
+        2
     );
-    // 已答卡不可重裁
-    assert!(resolve_install(&wb, &qid, true).is_err());
 
-    // ④ /install 文本指令同路（空描述落普通消息不吞）
+    // ④ /install 文本指令同路，直接装上。空描述不吞成安装。
     send(&wb, "/install npx @mcp/other").unwrap();
-    let pend = pending_questions(&wb).unwrap();
-    assert!(pend
+    let specs: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(".hexagon/mcp.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(specs
+        .as_array()
+        .unwrap()
         .iter()
-        .any(|q| q["kind"] == "install" && q["payload"]["name"] == "other"));
+        .any(|s| s["name"] == "other"));
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .all(|q| q["kind"] != "install"));
+    let before = events(&wb, Some(&[EventKind::InstallCompleted]))
+        .unwrap()
+        .len();
     send(&wb, "/install").unwrap();
-    let n = pend.len();
-    assert_eq!(pending_questions(&wb).unwrap().len(), n); // 无新卡
+    assert_eq!(
+        events(&wb, Some(&[EventKind::InstallCompleted]))
+            .unwrap()
+            .len(),
+        before
+    );
 }
 
 #[test]

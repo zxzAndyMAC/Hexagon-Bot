@@ -1265,11 +1265,7 @@ mod tests {
     #[test]
     fn stamp_point_stops_until_stamped() {
         let (db, _d) = setup(&["产品策划", "后端", "架构师"]);
-        // 票 02：省略 autonomy 的新行默认 L4，规格不是最后一道盖章点，会自动通过。
-        // 本测试钉的是「盖章点等人」的机械，所以钉 L0。L3+ 见 api 门面测试。
-        db.conn()
-            .execute("UPDATE projects SET autonomy='L0' WHERE id='p1'", [])
-            .unwrap();
+        // 规格不是最后一道盖章点。离开时按原先 L4 自动通过，界面无 UI 被跳过，开到接口。
         let p = pack();
         let (rid, _) = open_stage(&db, "p1", &p, 0).unwrap();
         db.conn()
@@ -1280,14 +1276,8 @@ mod tests {
             )
             .unwrap();
         let r = serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap();
-        assert_eq!(r["action"], "awaiting_stamp");
-        // 再 advance 不会动
-        let r2 = serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap();
-        assert_eq!(r2["action"], "waiting_stamp");
-        // 盖章 → 「界面」无 UI 被跳过 → 穿透到「接口」
-        let r3 = serde_json::to_value(stamp(&db, "p1", &p).unwrap()).unwrap();
-        assert_eq!(r3["action"], "stage_opened");
-        assert_eq!(r3["seq"], 2);
+        assert_eq!(r["action"], "stage_opened");
+        assert_eq!(r["seq"], 2);
         let st: String = db
             .conn()
             .query_row("SELECT state FROM stage_runs WHERE seq=1", [], |r| r.get(0))
@@ -1479,13 +1469,9 @@ mod tests {
             run_turn(&db, &provider, &reg, &ctx_for("a0", &r0), vec![], "写规格").unwrap(),
             TurnOutcome::Finished
         );
+        // 规格不是最后一道盖章点，离开时自动通过并打开接口。
         assert_eq!(
             serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap()["action"],
-            "awaiting_stamp"
-        );
-        // 盖章 → 接口阶段（架构师同激活，无交付义务）
-        assert_eq!(
-            serde_json::to_value(stamp(&db, "p1", &p).unwrap()).unwrap()["action"],
             "stage_opened"
         );
 
