@@ -1307,8 +1307,10 @@ function LogsSection({ projectless = false }: { projectless?: boolean }) {
 
   const needProject = projectless && cls !== null && cls !== '宿主'
 
+  // 布局：开关与筛选条钉在顶部不滚（外层容器对 logs 是 flex 列），
+  // 滚动只发生在下方记录列表内。
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <Row label={t('settings.logging')} hint={t('settings.loggingHint')}>
         <input
           type="checkbox"
@@ -1320,7 +1322,7 @@ function LogsSection({ projectless = false }: { projectless?: boolean }) {
           }}
         />
       </Row>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '12px 0 6px' }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '12px 0 6px', flexShrink: 0 }}>
         {([null, ...DIAG_CLASSES] as (string | null)[]).map((c) => (
           <button
             key={c ?? 'all'}
@@ -1339,16 +1341,17 @@ function LogsSection({ projectless = false }: { projectless?: boolean }) {
           {t('settings.logs_refresh')}
         </button>
       </div>
-      {needProject ? (
-        <div className="dim3" style={{ fontSize: 12, padding: '24px 0', textAlign: 'center' }}>
-          {t('settings.logs_needProject')}
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="dim3" style={{ fontSize: 12, padding: '24px 0', textAlign: 'center' }}>
-          {t('settings.logs_empty')}
-        </div>
-      ) : (
-        <div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {needProject ? (
+          <div className="dim3" style={{ fontSize: 12, padding: '24px 0', textAlign: 'center' }}>
+            {t('settings.logs_needProject')}
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="dim3" style={{ fontSize: 12, padding: '24px 0', textAlign: 'center' }}>
+            {t('settings.logs_empty')}
+          </div>
+        ) : (
+          <div>
           {rows.map((r) => (
             // 行身份 = 全字段合成，不用序号——刷新后新记录顶到前面
             // 时，序号身份会把展开态挂到别行头上。
@@ -1383,8 +1386,9 @@ function LogsSection({ projectless = false }: { projectless?: boolean }) {
               )}
             </div>
           ))}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -1486,8 +1490,16 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
           ))}
         </div>
         {/* 票 10：内容列居中；settings-density 01 owner 裁决——list|detail 分区去 cap 满宽流式（Cherry 同款），平铺表单分区保留 760 居中 */}
-        <div style={{ flex: 1, padding: '18px 28px', overflowY: 'auto', maxWidth: WIDE_SECTIONS.has(section) ? 'none' : 760, margin: '0 auto', width: '100%' }}>
-          <div style={{ fontWeight: 560, fontSize: 15, marginBottom: 12 }}>{t(`settings.nav_${section}`)}</div>
+        {/* 日志分区例外：容器不滚——标题/开关/筛选条钉住，滚动只发生在记录列表内部 */}
+        <div
+          style={{
+            flex: 1, padding: '18px 28px', maxWidth: WIDE_SECTIONS.has(section) ? 'none' : 760, margin: '0 auto', width: '100%',
+            ...(section === 'logs'
+              ? { display: 'flex', flexDirection: 'column', overflowY: 'hidden' }
+              : { overflowY: 'auto' }),
+          }}
+        >
+          <div style={{ fontWeight: 560, fontSize: 15, marginBottom: 12, flexShrink: 0 }}>{t(`settings.nav_${section}`)}</div>
           {bodies[section]}
         </div>
       </div>

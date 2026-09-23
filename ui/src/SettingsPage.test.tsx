@@ -243,7 +243,7 @@ describe('SettingsPage 日志分区（diagnostic-records 票 01）', () => {
     // 过滤口径与 core records() 对齐——mock 不是替身语义，是同一份形状。
     vi.spyOn(api, 'diagnosticRecords').mockImplementation(async (proj, cls) =>
       ROWS.filter((r) => (cls ? r.class === cls : true)).filter((r) =>
-        proj ? r.project === null || r.project === proj : r.project === null,
+        proj ? r.project === proj || r.class === '宿主' : r.class === '宿主',
       ),
     )
   })
@@ -309,6 +309,24 @@ describe('SettingsPage 日志分区（diagnostic-records 票 01）', () => {
     // 宿主类仍能看。
     await clickNav(el, 'Host')
     expect(el.textContent).toContain('app_start')
+    root.unmount()
+  })
+
+  it('只有记录列表滚动：开关与筛选条钉在滚动区外', async () => {
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Logs')
+    // 滚动容器 = 含记录行且 overflowY:auto 的那一层。
+    const scroller = [...el.querySelectorAll('div')].find(
+      (d) => d.style.overflowY === 'auto' && d.textContent?.includes('app_start'),
+    )!
+    expect(scroller).toBeTruthy()
+    // 开关和筛选按钮不在滚动区里。
+    expect(scroller.querySelector('input[type=checkbox]')).toBeNull()
+    const refresh = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Refresh')!
+    expect(scroller.contains(refresh)).toBe(false)
+    // 记录行在滚动区里。
+    const row = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('app_start'))!
+    expect(scroller.contains(row)).toBe(true)
     root.unmount()
   })
 

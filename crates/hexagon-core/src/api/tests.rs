@@ -4329,17 +4329,15 @@ fn diag_jev_call_failed_is_warn() {
     let (_dir, mut wb, _chat) = judgment_wb();
     let pid = submit_proposal(&wb, "art-diag3", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
     let _jev = jev_on(&mut wb, Err("down"));
-    // 槽位失败不再另写一条「判定」——失败口已在绑定/调用路径上说过。
-    // 同进程共享一个落盘文件，用前后差量数 hand_to_owner，不数绝对值。
-    let judge = || {
-        crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
-            .iter()
-            .filter(|r| r.branch == "execute_judgment" && r.code == "hand_to_owner")
-            .count()
-    };
-    let before = judge();
     wb.review_proposal(&pid, true, "可以").unwrap();
-    assert_eq!(judge(), before, "失败时不应多 hand_to_owner 判定记录");
+    // 槽位失败不再另写一条「判定」——失败口已在绑定/调用路径上说过。
+    // 测试线程各有一本账（diag.rs sink_path），这里读回的只有本用例写的。
+    let js = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE));
+    assert!(
+        !js.iter()
+            .any(|r| r.branch == "execute_judgment" && r.code == "hand_to_owner"),
+        "失败时不应再有 hand_to_owner 判定记录"
+    );
     let rs = crate::diag::records(Some("p1"), Some(crate::diag::CLASS_SLOT));
     let r = rs
         .iter()

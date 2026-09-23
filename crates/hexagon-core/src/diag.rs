@@ -73,10 +73,15 @@ fn sink_path() -> PathBuf {
     }
     #[cfg(test)]
     {
-        // 测试进程私目录：不写进真机的日志目录。同进程各测试共享，
-        // 用例用唯一 code 标识自己的记录。
+        // 测试每个线程一本账：不写进真机的日志目录，也不共享给并行用例——
+        // 断言记录的测试只读回自己写的那一份，并发用例写不进这本文件
+        // （线程 id 进文件名；{:?} 形如 ThreadId(7)，文件名安全）。
         std::env::temp_dir()
-            .join(format!("hexagon-diag-test-{}", std::process::id()))
+            .join(format!(
+                "hexagon-diag-test-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ))
             .join(FILE_NAME)
     }
     #[cfg(not(test))]
