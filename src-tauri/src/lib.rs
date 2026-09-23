@@ -1083,7 +1083,18 @@ fn recents_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         .map(|d| d.join("recent_projects.json"))
 }
 
-/// 最近项目条目（ADR 0054）：recents.json 行与 IPC 返回同一形状。
+/// recents.json 行（持久化形状，不导出）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RecentStored {
+    dir: String,
+    name: String,
+    mode: String,
+    opened_at: u64,
+}
+
+/// 最近项目条目（ADR 0054）：IPC 返回形状。exists 不落盘、读列表时现算——
+/// 磁盘上删掉目录后条目仍在，由启动页红色标出并给移除钮
+///（owner 反馈：静默消失让人以为数据丢了）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../ui/src/gen/")]
 struct RecentProject {
@@ -1092,9 +1103,10 @@ struct RecentProject {
     mode: String,
     #[ts(type = "number")] // JS number 域
     opened_at: u64,
+    exists: bool,
 }
 
-fn read_recents(app: &tauri::AppHandle) -> Vec<RecentProject> {
+fn read_recents(app: &tauri::AppHandle) -> Vec<RecentStored> {
     recents_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -1106,7 +1118,7 @@ fn remember_recent(app: &tauri::AppHandle, dir: &str, name: &str, mode: &str) {
     rs.retain(|r| r.dir != dir);
     rs.insert(
         0,
-        RecentProject {
+        RecentStored {
             dir: dir.into(),
             name: name.into(),
             mode: mode.into(),
@@ -1127,10 +1139,28 @@ fn remember_recent(app: &tauri::AppHandle, dir: &str, name: &str, mode: &str) {
 
 #[tauri::command]
 fn recent_projects(app: tauri::AppHandle) -> Vec<RecentProject> {
+    // 不再 is_dir 过滤：已删目录也返回（exists=false），启动页标红 + 移除钮
+    // 由人清理。过滤掉是隐形丢条目——目录没了之后点开报错且无入口删除。
     read_recents(&app)
         .into_iter()
-        .filter(|r| std::path::Path::new(&r.dir).is_dir())
+        .map(|r| RecentProject {
+            exists: std::path::Path::new(&r.dir).is_dir(),
+            dir: r.dir,
+            name: r.name,
+            mode: r.mode,
+            opened_at: r.opened_at,
+        })
         .collect()
+}
+
+/// 启动页最近列表的手动移除（×钮）：只改 recents.json，不碰磁盘上的项目。
+#[tauri::command]
+fn remove_recent(app: tauri::AppHandle, dir: String) {
+    let mut rs = read_recents(&app);
+    rs.retain(|r| r.dir != dir);
+    if let Some(p) = recents_path(&app) {
+        let _ = std::fs::write(&p, serde_json::to_string(&rs).unwrap_or_default());
+    }
 }
 
 /// 重新打开已有项目：钉住的包副本恢复 pack，fastpath 项目无副本即 None。
@@ -1701,6 +1731,7 @@ pub fn run() {
             upgrade_to_pack,
             recent_projects,
             open_recent,
+            remove_recent,
             close_project,
         ])
         .run(tauri::generate_context!())

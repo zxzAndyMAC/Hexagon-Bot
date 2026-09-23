@@ -496,6 +496,8 @@ export default {
     newProject: 'Novo projeto',
     mode_pack: 'pack de processo',
     mode_fastpath: 'via rápida',
+    missing: 'pasta excluída',
+    remove: 'Remover da lista',
     settings: 'Ajustes',
   },
 

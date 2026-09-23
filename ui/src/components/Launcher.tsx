@@ -3,21 +3,15 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, isTauri } from '../api'
+import type { RecentProject } from '../gen/RecentProject'
 import { Wizard } from './Wizard'
 import { Icon } from './Icon'
 import { SettingsPage } from './SettingsPage'
 import { Row } from './Row'
 
-interface Recent {
-  dir: string
-  name: string
-  mode: string
-  opened_at: number
-}
-
 export function Launcher({ onOpen }: { onOpen: () => void }) {
   const { t } = useTranslation()
-  const [recents, setRecents] = useState<Recent[]>([])
+  const [recents, setRecents] = useState<RecentProject[]>([])
   const [wizard, setWizard] = useState(false)
   const [settings, setSettings] = useState(false)
   const [err, setErr] = useState('')
@@ -76,29 +70,74 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
         {recents.length === 0 && (
           <div className="dim3" style={{ fontSize: 12, padding: '12px 0' }}>{t('launch.empty')}</div>
         )}
-        {recents.map((r) => (
-          <Row
-            key={r.dir}
-            role="listitem"
-            onClick={() => openDir(r.dir)}
-            className="recent-row"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
-              borderRadius: 8, cursor: 'pointer',
-            }}
-          >
+        {/* 列表限高滚动：超过 ~7 行内部滚动，面板高度不随条数无限涨 */}
+        <div style={{ maxHeight: 320, overflowY: 'auto', marginRight: -4, paddingRight: 4 }}>
+          {recents.map((r) => {
+          const removeBtn = (
+            <button
+              className="icon-btn"
+              style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
+              title={t('launch.remove')}
+              aria-label={t('launch.remove')}
+              onClick={(e) => {
+                e.stopPropagation()
+                void api.removeRecent(r.dir)
+                  .then(() => api.recentProjects())
+                  .then(setRecents)
+                  .catch((x) => setErr(errText(x)))
+              }}
+            >
+              <Icon name="close" size={11} />
+            </button>
+          )
+          const info = (
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 510 }}>{r.name}</div>
+              <div style={{ fontSize: 13, fontWeight: 510, color: r.exists ? undefined : 'var(--err)' }}>{r.name}</div>
               <div
                 className="dim3 mono"
-                style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                style={{
+                  fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  color: r.exists ? undefined : 'var(--err)', opacity: r.exists ? undefined : 0.8,
+                }}
               >
                 {r.dir}
               </div>
             </div>
-            <span className="chip mono">{t(`launch.mode_${r.mode}`)}</span>
-          </Row>
-        ))}
+          )
+          // 目录已删（exists=false）：不是可激活控件（open_recent 必报错），
+          // 渲染成纯展示行——红字 + missing chip，只剩 × 移除钮可操作
+          if (!r.exists) {
+            return (
+              <div
+                key={r.dir}
+                className="recent-row"
+                data-missing="1"
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8 }}
+              >
+                {info}
+                <span className="chip err">{t('launch.missing')}</span>
+                {removeBtn}
+              </div>
+            )
+          }
+          return (
+            <Row
+              key={r.dir}
+              role="listitem"
+              onClick={() => openDir(r.dir)}
+              className="recent-row"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+                borderRadius: 8, cursor: 'pointer',
+              }}
+            >
+              {info}
+              <span className="chip mono">{t(`launch.mode_${r.mode}`)}</span>
+              {removeBtn}
+            </Row>
+          )
+        })}
+        </div>
         {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
         <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
           {isTauri && (

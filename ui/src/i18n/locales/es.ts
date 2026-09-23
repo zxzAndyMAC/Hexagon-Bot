@@ -496,6 +496,8 @@ export default {
     newProject: 'Nuevo proyecto',
     mode_pack: 'pack de proceso',
     mode_fastpath: 'vía rápida',
+    missing: 'carpeta eliminada',
+    remove: 'Quitar de la lista',
     settings: 'Ajustes',
   },
 

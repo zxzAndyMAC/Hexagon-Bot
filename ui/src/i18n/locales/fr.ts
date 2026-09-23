@@ -496,6 +496,8 @@ export default {
     newProject: 'Nouveau projet',
     mode_pack: 'pack de processus',
     mode_fastpath: 'voie rapide',
+    missing: 'dossier supprimé',
+    remove: 'Retirer de la liste',
     settings: 'Réglages',
   },
 

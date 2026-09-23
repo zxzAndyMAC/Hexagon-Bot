@@ -496,6 +496,8 @@ export default {
     newProject: '新建專案',
     mode_pack: '流程包',
     mode_fastpath: '快速通道',
+    missing: '目錄已刪除',
+    remove: '從列表移除',
     settings: '設定',
   },
 

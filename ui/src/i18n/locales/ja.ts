@@ -496,6 +496,8 @@ export default {
     newProject: '新規プロジェクト',
     mode_pack: 'プロセスパック',
     mode_fastpath: 'ファストパス',
+    missing: 'フォルダは削除済み',
+    remove: 'リストから削除',
     settings: '設定',
   },
 

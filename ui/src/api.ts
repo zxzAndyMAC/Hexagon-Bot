@@ -302,6 +302,7 @@ export const api = {
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => call<void>('open_recent', { dir }),
+  removeRecent: (dir: string) => call<void>('remove_recent', { dir }),
   closeProject: () => call<void>('close_project'),
   // ---- 快速通道（票 26）----
   projectInfo: () => call<ProjectInfo>('project_info'),
@@ -1014,8 +1015,13 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'project_open':
       return true as T
     case 'recent_projects':
-      return [] as T
+      // 一条存在 + 一条已删目录（exists=false）——浏览器 dev 可目检红标与移除钮
+      return [
+        { dir: '/tmp/hexagon-demo', name: 'hexagon-demo', mode: 'pack', opened_at: 1, exists: true },
+        { dir: '/gone/deleted-proj', name: 'deleted-proj', mode: 'fastpath', opened_at: 0, exists: false },
+      ] as T
     case 'open_recent':
+    case 'remove_recent':
     case 'close_project':
       return null as T
     case 'project_info':

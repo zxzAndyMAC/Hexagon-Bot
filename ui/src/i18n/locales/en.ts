@@ -496,6 +496,8 @@ export default {
     newProject: 'New project',
     mode_pack: 'process pack',
     mode_fastpath: 'fast path',
+    missing: 'folder deleted',
+    remove: 'Remove from list',
     settings: 'Settings',
   },
 

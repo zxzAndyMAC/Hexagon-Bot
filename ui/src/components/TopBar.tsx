@@ -1,23 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
-import { api, type PackDef } from '../api'
+import { api, errText, type PackDef } from '../api'
 import type { SandboxStatus } from '../gen/SandboxStatus'
+import type { RecentProject } from '../gen/RecentProject'
 import { capReached, centsToMc, fmtTok, perAgentSeries } from '../usage'
 import { MultiLine } from './UsageTab'
 import { bindingFor, formatBinding, isMac } from '../keymap'
 import { runStageOp } from '../stageops'
 import { Icon } from './Icon'
 
-interface Recent {
-  dir: string
-  name: string
-  mode: string
-}
-
 export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void; onProjectClosed: () => void }) {
   const { t } = useTranslation()
   const { projectName, packName, mode, usageTotal, usageSeries7d, team, pending, reviewRows, refresh, setRailOpen, setSideTab, railOpen, away, markAway, markBack, openPendingDialog } = useUiStore()
+  const pushToast = useUiStore((s) => s.pushToast)
   const [menuOpen, setMenuOpen] = useState(false)
   const [flowOpen, setFlowOpen] = useState(false)
   const [flowPack, setFlowPack] = useState<PackDef | null>(null)
@@ -27,7 +23,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
   const sparkTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const sparkShow = () => { sparkTimer.current = setTimeout(() => setSparkOpen(true), 300) }
   const sparkHide = () => { clearTimeout(sparkTimer.current); setSparkOpen(false) }
-  const [recents, setRecents] = useState<Recent[]>([])
+  const [recents, setRecents] = useState<RecentProject[]>([])
   // 票 06：沙箱实况徽章——纯平台探测，挂载即取（同项目内不变）。
   const [sandbox, setSandbox] = useState<SandboxStatus | null>(null)
   useEffect(() => {
@@ -56,8 +52,13 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
 
   const switchTo = async (dir: string) => {
     setMenuOpen(false)
-    await api.openRecent(dir)
-    await refresh()
+    // TOCTOU：列出后目录被删仍会失败——toast 报出而不是静默拒绝
+    try {
+      await api.openRecent(dir)
+      await refresh()
+    } catch (e) {
+      pushToast(errText(e), 'err')
+    }
   }
 
   const backToLauncher = async () => {
@@ -66,7 +67,8 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
     onProjectClosed()
   }
 
-  const others = recents.filter((r) => r.name !== projectName)
+  // 已删目录（exists=false）不进切换菜单——清理入口在启动页，不在这里
+  const others = recents.filter((r) => r.exists && r.name !== projectName)
 
   return (
     <header
