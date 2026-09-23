@@ -548,6 +548,11 @@ fn read_response(r: &mut BufReader<impl Read>, want_id: i64) -> Result<Value, To
 struct Server {
     spec: McpSpec,
     conn: Mutex<Conn>,
+    /// 子进程 pid：McpHost::drop 只能按 pid 杀——拿 Child 句柄必须过
+    /// conn 锁，而它可能被阻塞在子进程 stdout read() 上的握手/调用
+    /// 线程占着（2026-09-23 卡死事故，见 Drop 注）。与握手超时路径
+    /// 同一招 kill_pid。
+    pid: u32,
 }
 
 impl Server {
@@ -759,6 +764,7 @@ fn drive_handshakes(inner: Arc<std::sync::Mutex<HostInner>>, specs: Vec<McpSpec>
         let server = Arc::new(Server {
             spec: spec.clone(),
             conn: Mutex::new(conn),
+            pid,
         });
         inner.lock().unwrap().servers.push(server.clone());
         let srv = server.clone();
@@ -830,12 +836,19 @@ fn set_mcp_status(
 
 impl Drop for McpHost {
     fn drop(&mut self) {
-        if let Ok(inner) = self.inner.lock() {
-            for s in &inner.servers {
-                if let Ok(mut c) = s.conn.lock() {
-                    let _ = c.child.kill();
-                }
-            }
+        // 2026-09-23 卡死事故：这里绝不许碰 s.conn 锁。Workbench drop 链
+        // 走到这里时，握手线程可能正握着 conn 阻塞在子进程 stdout 的
+        // read() 上（MCP 服务不回包——无读超时，read_response 只限 64 帧）；
+        // 旧写法握着 inner 等 conn，而 drive_handshakes 的收尾 set_mcp_status
+        // 又要 inner——三方互等，close_project 主线程永久冻结。
+        // inner 只在临界区抄 pid 清单（所有 inner 持锁者都是短临界区，
+        // 无人握着 inner 等 conn），随后按 pid 杀——与握手超时同一招。
+        let pids: Vec<u32> = match self.inner.lock() {
+            Ok(g) => g.servers.iter().map(|s| s.pid).collect(),
+            Err(_) => return,
+        };
+        for pid in pids {
+            kill_pid(pid);
         }
     }
 }
@@ -1165,5 +1178,37 @@ while True:
         );
         assert!(reg.defs().iter().all(|d| !d.name.starts_with("mcp:")));
         let _ = dir;
+    }
+
+    /// 2026-09-23 卡死事故回归：握手线程握着 conn 锁阻塞在子进程
+    /// stdout read() 时，Drop 不得等 conn（按 pid 杀）。sleep 永不写
+    /// stdout → 握手线程挂死在 read；旧写法 drop 会等 conn 锁直到 8s
+    /// 握手超时杀了子进程才放行，修后是瞬时。
+    #[cfg(unix)]
+    #[test]
+    fn drop_does_not_wait_on_blocked_handshake_conn() {
+        let host = McpHost::begin(vec![McpSpec {
+            name: "sleeper".into(),
+            command: "sleep".into(),
+            args: vec!["30".into()],
+            ..Default::default()
+        }]);
+        // 等 drive_handshakes 把 server 注册进 inner.servers（spawn 后即推入，
+        // 早于握手）。真空泡会直接拿空表 drop——用例就废了。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while host.inner.lock().unwrap().servers.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "mcp sleeper never spawned"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let t0 = std::time::Instant::now();
+        drop(host);
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(4),
+            "McpHost::drop blocked on conn mutex: {:?}",
+            t0.elapsed()
+        );
     }
 }

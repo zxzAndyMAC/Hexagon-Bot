@@ -1159,7 +1159,10 @@ fn open_recent(
 }
 
 /// 关闭当前项目回启动页（不删任何数据）。
-#[tauri::command]
+/// 2026-09-23：必须 async——wb drop 链会跑 McpHost 子进程清理，
+/// 同步命令钉在主线程上，任何停顿都冻结整个 UI（与 open_recent
+/// 2026-09-22 注释同一事故形态）。
+#[tauri::command(async)]
 fn close_project(state: tauri::State<AppState>) -> Result<(), CmdError> {
     *state
         .wb
