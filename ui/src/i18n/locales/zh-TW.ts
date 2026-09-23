@@ -40,6 +40,8 @@ export default {
     skipped: '略過',
     active: '進行中',
     waiting: '待蓋章',
+    pending: '未開始',
+    rejected: '遭退回',
     rewindConfirm: '退回階段「{{stage}}」？在跑工作將中斷重來。',
     skipConfirm: '跳過階段「{{stage}}」？該階段產物將不會產出。',
     override: '覆寫檢查', overrideTitle: '覆寫失敗的檢查？',

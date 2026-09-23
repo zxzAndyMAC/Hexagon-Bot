@@ -4,8 +4,7 @@ import { api, errText } from '../api'
 import { bindingFor, formatBinding } from '../keymap'
 import { useUiStore } from '../store'
 import { diffLines } from '../diff'
-import { Icon } from './Icon'
-import { fileIcon } from './fileIcon'
+import { FileTypeIcon } from './FileTypeIcon'
 import { Md } from './Md'
 import { DiffView } from './DiffView'
 
@@ -170,7 +169,7 @@ function FileBody({ path }: { path: string }) {
   return (
     <div data-testid="file-editor" data-path={path} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="row-line" style={{ padding: '6px 14px', display: 'flex', gap: 8, alignItems: 'center' }}>
-        <Icon name={fileIcon(path.split('/').pop() ?? path, 'file')} size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+        <FileTypeIcon name={path.split('/').pop() ?? path} kind="file" size={13} style={{ flexShrink: 0 }} />
         <span className="mono" title={path} style={{ fontWeight: 560, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
         {dirty && <span className="dot warn" title={t('file.unsaved')} style={{ flexShrink: 0 }} />}
         <div style={{ flex: 1 }} />

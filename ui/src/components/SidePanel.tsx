@@ -6,6 +6,7 @@ import { Avatar } from './Avatar'
 import { UsageTab } from './UsageTab'
 import { FileTree } from './FileTree'
 import { bindingFor, formatBinding } from '../keymap'
+import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
 import { Row } from './Row'
 import { slotLabel } from '../modelpick'
@@ -97,6 +98,7 @@ export function SidePanel() {
               {/* 长名压缩 chip 的教训：flex 子项默认可缩，无 minWidth:0
                   的 nowrap 文本把标记挤成竖排——路径吃 flex:1+minWidth:0
                   截断，chip flexShrink:0+nowrap 保形；title 悬浮给全名。 */}
+              <FileTypeIcon name={a.path.split('/').pop() ?? a.path} kind="file" size={13} style={{ alignSelf: 'center' }} />
               <span className="mono" title={a.path} style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.path}</span>
               <span className={`chip ${a.status === 'stamped' ? 'amber' : a.status === 'superseded' ? '' : 'ok'}`} style={{ fontSize: 10, marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {t(`side.${a.status}`, a.status)}

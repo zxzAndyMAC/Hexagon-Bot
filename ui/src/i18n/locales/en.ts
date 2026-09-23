@@ -40,6 +40,8 @@ export default {
     skipped: 'Skipped',
     active: 'Running',
     waiting: 'Waiting stamp',
+    pending: 'Pending',
+    rejected: 'Rejected',
     rewindConfirm: 'Rewind stage "{{stage}}"? In-flight work is interrupted and redone.',
     skipConfirm: 'Skip stage "{{stage}}"? Its deliverables will not be produced.',
     override: 'Override checks', overrideTitle: 'Override failed checks?',

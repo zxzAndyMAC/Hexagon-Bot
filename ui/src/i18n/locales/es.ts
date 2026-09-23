@@ -40,6 +40,8 @@ export default {
     skipped: 'Omitido',
     active: 'En curso',
     waiting: 'Esperando sello',
+    pending: 'Pendiente',
+    rejected: 'Rechazada',
     rewindConfirm: '¿Retroceder la etapa "{{stage}}"? El trabajo en curso se interrumpirá y se rehará.',
     skipConfirm: '¿Omitir la etapa "{{stage}}"? Sus entregables no se producirán.',
     override: 'Sobrescribir checks', overrideTitle: '¿Sobrescribir checks fallidos?',

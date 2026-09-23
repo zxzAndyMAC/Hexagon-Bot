@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useUiStore, type WorkTab } from '../store'
 import { bindingFor, formatBinding } from '../keymap'
 import { Icon, type IconName } from './Icon'
+import { FileTypeIcon } from './FileTypeIcon'
 import { Row } from './Row'
 
 // ui-audit 票 11（P2-17）：分栏在 <720px 窗口下两半都不可读——禁用并说明。
@@ -16,6 +17,12 @@ const KIND_ICON: Record<WorkTab['kind'], IconName> = {
   usage: 'usage',
   file: 'file',
 }
+
+// file 页签吃 FileIcon 主题类型图标（同文件树），其余走 KIND_ICON 语义图标
+const kindIcon = (tab: WorkTab, size = 11) =>
+  tab.kind === 'file'
+    ? <FileTypeIcon name={(tab.path ?? tab.title).split('/').pop() ?? tab.title} kind="file" size={size} />
+    : <Icon name={KIND_ICON[tab.kind]} size={size} />
 
 export function TabBar() {
   const { t } = useTranslation()
@@ -75,7 +82,7 @@ export function TabBar() {
                 flex: '0 1 auto', minWidth: 88, maxWidth: 200,
               }}
             >
-              <Icon name={KIND_ICON[tab.kind]} size={11} />
+              {kindIcon(tab)}
               <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
                 {title(tab)}
               </span>
@@ -124,7 +131,7 @@ export function TabBar() {
                     }}
                     onClick={() => { setActiveTab(tab.id); setMoreOpen(false) }}
                   >
-                    <Icon name={KIND_ICON[tab.kind]} size={11} />
+                    {kindIcon(tab)}
                     <span className="mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
                       {title(tab)}
                     </span>

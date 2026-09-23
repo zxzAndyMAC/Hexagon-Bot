@@ -4,7 +4,7 @@ import { api, errText, type RepoEntry } from '../api'
 import { bindingFor, formatBinding } from '../keymap'
 import { useUiStore } from '../store'
 import { TREE_DRAG_MIME, treeDragPayload } from '../composerAtoms'
-import { fileIcon } from './fileIcon'
+import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
 import { Row } from './Row'
 
@@ -194,7 +194,6 @@ function TreeList({ entries, depth, kids, anchor, onDir, onFile }: {
   onFile: (e: RepoEntry) => void
 }) {
   return entries.map((e) => {
-    const icon = fileIcon(e.name, e.kind)
     const open = e.kind === 'dir' && kids[e.path] != null
     // 票 12：文件和目录可拖进输入框。链接不拖——拖了也没有一条仓内路径可指。
     // copy 不是 move：拖走的是路径文本，树上的条目和磁盘文件都留在原地。
@@ -225,9 +224,10 @@ function TreeList({ entries, depth, kids, anchor, onDir, onFile }: {
           {e.kind === 'dir'
             ? <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
             : <span style={{ width: 11, flexShrink: 0 }} />}
-          <span data-icon={icon} data-kind={e.kind} style={{ display: 'inline-flex' }}>
-            <Icon name={icon} size={13} />
-          </span>
+          {e.kind === 'link'
+            // 主题资产无链接形，回退描边体系
+            ? <span data-icon="link" data-kind={e.kind} style={{ display: 'inline-flex' }}><Icon name="link" size={13} /></span>
+            : <FileTypeIcon name={e.name} kind={e.kind} open={open} size={13} />}
           <span className="mono" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
         </Row>
         {open && kids[e.path].length === 0 && (

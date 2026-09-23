@@ -40,6 +40,8 @@ export default {
     skipped: 'スキップ済',
     active: '実行中',
     waiting: 'スタンプ待ち',
+    pending: '未開始',
+    rejected: '差し戻し',
     rewindConfirm: 'ステージ「{{stage}}」を巻き戻しますか？実行中の作業は中断され、やり直されます。',
     skipConfirm: 'ステージ「{{stage}}」をスキップしますか？このステージの成果物は作成されません。',
     override: 'チェックを上書き', overrideTitle: '失敗したチェックを上書きしますか？',

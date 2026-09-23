@@ -40,6 +40,8 @@ export default {
     skipped: 'Pulado',
     active: 'Em curso',
     waiting: 'Aguardando carimbo',
+    pending: 'Pendente',
+    rejected: 'Rejeitada',
     rewindConfirm: 'Retroceder a etapa "{{stage}}"? O trabalho em curso será interrompido e refeito.',
     skipConfirm: 'Pular a etapa "{{stage}}"? Seus entregáveis não serão produzidos.',
     override: 'Sobrescrever checks', overrideTitle: 'Sobrescrever checks falhos?',

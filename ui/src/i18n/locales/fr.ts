@@ -40,6 +40,8 @@ export default {
     skipped: 'Sauté',
     active: 'En cours',
     waiting: 'En attente de tampon',
+    pending: 'À venir',
+    rejected: 'Rejetée',
     rewindConfirm: 'Revenir à l’étape « {{stage}} » ? Le travail en cours sera interrompu et refait.',
     skipConfirm: 'Sauter l’étape « {{stage}} » ? Ses livrables ne seront pas produits.',
     override: 'Forcer les checks', overrideTitle: 'Forcer les checks en échec ?',

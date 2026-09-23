@@ -89,14 +89,17 @@ describe('右栏项目页文件树（票 11）', () => {
     expect(el!.textContent).not.toContain('.hexagon/specs/plan.md')
     expect(el!.textContent).not.toMatch(/调试器|debugger|插件/)
 
+    // 断言值更新（ui-file-icons）：图标从描边 Icon 换成 vendored
+    // Material Icon Theme 资产，data-icon 现在报主题图标名
+    // （src→folder-src、README.md→readme、package.json→nodejs、ts→typescript）。
     const src = treeitem(el!, 'src')
-    expect(src.querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('folder')
-    expect(treeitem(el!, 'README.md').querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('file-text')
-    expect(treeitem(el!, 'package.json').querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('file-json')
+    expect(src.querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('folder-src')
+    expect(treeitem(el!, 'README.md').querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('readme')
+    expect(treeitem(el!, 'package.json').querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('nodejs')
 
     await act(async () => { src.click() })
     const main = treeitem(el!, 'main.ts')
-    expect(main.querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('file-code')
+    expect(main.querySelector('[data-icon]')!.getAttribute('data-icon')).toBe('typescript')
     expect(api.listRepoDir).toHaveBeenCalledWith('src')
   })
 
