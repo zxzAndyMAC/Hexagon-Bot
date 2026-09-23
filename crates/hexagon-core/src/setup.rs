@@ -63,6 +63,8 @@ pub enum SetupError {
     EmptyBrief,
     #[error("主对话模型没有返回项目说明正文")]
     EmptyDraft,
+    #[error("流程草稿不是一份流程包: {0}")]
+    BadFlow(String),
     #[error(transparent)]
     Model(#[from] crate::provider::ProviderError),
 }
@@ -200,6 +202,39 @@ pub fn optimize_agents_md(
 /// AGENTS.md 会被 `inspect_dir` 当成主文件，等于换掉现成约束。
 /// false negative（漏拒）花一次未审覆盖；false positive（CLAUDE.md 在时
 /// 拒绝另写 AGENTS.md）花一次人工。偏向拒绝。内容相同也报——不静默跳过。
+/// 按项目说明起草流程包。调用方传入流程起草槽（未绑则已落到默认槽）的供应商。
+pub fn draft_flow(
+    sentence: &str,
+    provider: &dyn crate::provider::ModelProvider,
+) -> Result<crate::orchestra::PackDef, SetupError> {
+    let sentence = sentence.trim();
+    if sentence.is_empty() {
+        return Err(SetupError::EmptyBrief);
+    }
+    let req = crate::provider::ChatRequest {
+        model_slot: crate::provider_config::FLOW_DRAFT_SLOT.into(),
+        messages: vec![crate::provider::Message {
+            role: crate::provider::Role::User,
+            content: vec![crate::provider::ContentBlock::Text {
+                text: format!(
+                    "根据下面的项目说明，只输出一份 JSON 流程包。字段：name、version、stages。\
+                     每个阶段有 name、roles、due、stamp_point。不要解释。\n{sentence}"
+                ),
+            }],
+        }],
+        tools: vec![],
+    };
+    let resp = provider.complete(&req)?;
+    let text = crate::intake::response_text(&resp);
+    let text = text.trim();
+    let json_text = text
+        .strip_prefix("```json")
+        .or_else(|| text.strip_prefix("```"))
+        .map(|rest| rest.trim_end_matches('`').trim())
+        .unwrap_or(text);
+    serde_json::from_str(json_text).map_err(|e| SetupError::BadFlow(e.to_string()))
+}
+
 pub fn write_agents_md(dir: impl AsRef<Path>, content: &str) -> Result<(), SetupError> {
     let dir = dir.as_ref();
     for name in ["AGENTS.md", "CLAUDE.md"] {
@@ -266,7 +301,7 @@ pub const CREATE_STEP_ORDER: [CreateStep; 5] = [
 /// `role_overrides` 携带**完整定义**——自定义模板与向导改过的角色都经它传入，
 /// 本函数不读全局模板文件（保持纯函数，测试不被 HOME 污染）。`pack` 为 None 时
 /// `fastpath_role` 必须给（快速通道）；`init_git` = 负责人确认了「无 git 则初始化」。
-/// `autonomy`：`None` = 列默认 L4；非法档在任何写盘之前拒绝，已有目录也不改。
+/// `autonomy`：必须是 `None`。传了任何档（包括原先合法的 L0–L4）都在写盘前拒绝。
 /// 全程 fail-closed：已有工作台停（再建会改写花名册）、缺密钥停、未知角色停、野 override 停。
 /// 脏树不停——ADR 0060：未提交改动留给负责人，开项目不提交、不清理。
 /// 进度走 `create_project_reporting`；本函数不报告（脚本/测试旧入口）。
@@ -320,8 +355,11 @@ pub fn create_project_reporting<F>(
 where
     F: FnMut(CreateStep),
 {
-    if let Some(lv) = autonomy {
-        crate::autonomy::parse_level(lv)?;
+    if autonomy.is_some() {
+        // ADR 0069：向导不再接收档位。传了就整单拒绝，目录还没建。
+        return Err(SetupError::Autonomy(
+            crate::autonomy::AutonomyError::GearsRemoved,
+        ));
     }
     let dir = dir.as_ref();
     // 票 17：空不空看写说明文件之前。壳层确认过的一句话会在下面才落盘，
@@ -427,12 +465,7 @@ where
         .collect();
     let persisted = (|| -> Result<Workbench, SetupError> {
         let wb = Workbench::open(dir, name, &pairs, pack.cloned())?;
-        if let Some(lv) = autonomy {
-            let cur = crate::autonomy::level(&wb.db, &wb.project_id)?;
-            if cur != lv {
-                crate::autonomy::set_level(&wb.db, &wb.project_id, lv)?;
-            }
-        }
+        let _ = autonomy;
         let db = Db::open(&db_path)?;
         let mode = if pack.is_some() { "pack" } else { "fastpath" };
         let fast_agent = fastpath_role.map(|fr| {
@@ -1197,9 +1230,9 @@ mod tests {
         );
     }
 
-    /// 票 01：向导不传档位 → L4；传 L0–L3 则停在所选档；非法档不建项目。
+    /// ADR 0069：向导不传档位 → 列默认 L4。传任何档都不建项目。
     #[test]
-    fn create_project_autonomy_defaults_and_honors_choice() {
+    fn create_project_rejects_autonomy_gear() {
         let d = tempfile::tempdir().unwrap();
         let sub = d.path().join("p");
         let wb = create_project(
@@ -1221,8 +1254,9 @@ mod tests {
         );
         drop(wb);
 
+        // 行为变了：以前传 L0 会停在所选档。现在任何档都拒绝，而且不建目录。
         let chosen = d.path().join("q");
-        let wb = create_project(
+        let err = create_project(
             &chosen,
             "q",
             &["产品策划".into()],
@@ -1233,12 +1267,14 @@ mod tests {
             &store_with_key(),
             &doc_with_provider(),
             Some("L0"),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::autonomy::level(&wb.db, &wb.project_id).unwrap(),
-            "L0"
         );
+        assert!(matches!(
+            err,
+            Err(SetupError::Autonomy(
+                crate::autonomy::AutonomyError::GearsRemoved
+            ))
+        ));
+        assert!(!chosen.join(".hexagon").exists());
 
         let bad = d.path().join("bad");
         let err = create_project(
@@ -1256,7 +1292,7 @@ mod tests {
         assert!(matches!(
             err,
             Err(SetupError::Autonomy(
-                crate::autonomy::AutonomyError::BadLevel(_)
+                crate::autonomy::AutonomyError::GearsRemoved
             ))
         ));
         assert!(!bad.join(".hexagon").exists());

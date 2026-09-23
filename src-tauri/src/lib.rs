@@ -913,11 +913,10 @@ fn review_proposal(
     pass: bool,
     reason: String,
 ) -> Result<(), CmdError> {
-    with_conn(&state, |db, root| {
-        let ctx = hexagon_core::tools::ToolContext::owner(db, root);
-        hexagon_core::proposals::review(db, &ctx, &proposal_id, pass, &reason).map_err(cmd_err)
+    // D01-ok: 执行判定要读工作台里的 Jev 槽，壳层不自己选模型。
+    with_wb(&state, |wb| {
+        wb.review_proposal(&proposal_id, pass, &reason)
     })
-    .map(|_| ())
 }
 
 #[tauri::command]
@@ -1356,10 +1355,24 @@ fn agents_md_draft(name: String) -> String {
 /// create_project → write_agents_md。项目还不存在，这条命令不进工作台。
 #[tauri::command(async)]
 fn optimize_agents_md(name: String, sentence: String) -> Result<String, CmdError> {
-    let provider =
-        hexagon_core::provider_admin::main_chat_provider(hexagon_core::credentials::active())
-            .map_err(cmd_err)?;
+    // ADR 0069：项目说明槽，没绑则落到默认槽。不是 Jev，也不是角色起草槽。
+    let provider = hexagon_core::provider_admin::authoring_provider(
+        hexagon_core::credentials::active(),
+        hexagon_core::provider_config::BRIEF_SLOT,
+    )
+    .map_err(cmd_err)?;
     hexagon_core::setup::optimize_agents_md(&name, &sentence, provider.as_ref()).map_err(cmd_err)
+}
+
+/// 按项目说明起草流程包。用流程起草槽，没绑则落到默认槽。
+#[tauri::command(async)]
+fn draft_flow(sentence: String) -> Result<hexagon_core::orchestra::PackDef, CmdError> {
+    let provider = hexagon_core::provider_admin::authoring_provider(
+        hexagon_core::credentials::active(),
+        hexagon_core::provider_config::FLOW_DRAFT_SLOT,
+    )
+    .map_err(cmd_err)?;
+    hexagon_core::setup::draft_flow(&sentence, provider.as_ref()).map_err(cmd_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -1382,7 +1395,11 @@ struct CreateProjectOpts {
     init_git: bool,
     #[ts(optional)]
     agents_md: Option<String>,
-    /// 自治档位（票 01 / ADR 0064）。缺省 L4。非法档位拒绝且不建项目。
+    /// 向导生成的流程草稿。有它就不用预置包名字。
+    #[serde(default)]
+    #[ts(optional)]
+    pack: Option<hexagon_core::orchestra::PackDef>,
+    /// 已废弃。传了任何档，核都拒绝且不建项目（ADR 0069）。
     #[serde(default)]
     #[ts(optional)]
     autonomy: Option<String>,
@@ -1401,17 +1418,20 @@ fn create_project(
     use hexagon_core::setup;
     // 说明文件在核里、而且在「空不空」判定之后才写。先写的话，空目录的
     // 一句话会把目录变成非空，误走开场分析（票 17）。
-    let pack = opts
-        .pack_name
-        .as_deref()
-        .map(|n| {
-            hexagon_core::presets::preset_packs()
-                .map_err(cmd_err)?
-                .into_iter()
-                .find(|p| p.name == n)
-                .ok_or_else(|| CmdError::internal(format!("未知流程包: {n}")))
-        })
-        .transpose()?;
+    let pack = if let Some(pack) = opts.pack.clone() {
+        Some(pack)
+    } else {
+        opts.pack_name
+            .as_deref()
+            .map(|n| {
+                hexagon_core::presets::preset_packs()
+                    .map_err(cmd_err)?
+                    .into_iter()
+                    .find(|p| p.name == n)
+                    .ok_or_else(|| CmdError::internal(format!("未知流程包: {n}")))
+            })
+            .transpose()?
+    };
     // 壳层唯一保留的 provider_config:: 直调：create_project 建档校验要文档现状
     let pdoc = hexagon_core::provider_config::load().unwrap_or_default();
     let mut wb = setup::create_project_reporting(
@@ -1446,7 +1466,7 @@ fn create_project(
         &app,
         &opts.dir,
         &opts.name,
-        if opts.pack_name.is_some() {
+        if opts.pack.is_some() || opts.pack_name.is_some() {
             "pack"
         } else {
             "fastpath"
@@ -1721,6 +1741,7 @@ pub fn run() {
             fetch_provider_models,
             agents_md_draft,
             optimize_agents_md,
+            draft_flow,
             create_project,
             run_opening_intake,
             confirm_intake_brief,

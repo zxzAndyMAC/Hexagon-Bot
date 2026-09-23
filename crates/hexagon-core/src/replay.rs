@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 pub const REPLAY_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Metrics {
     /// 回合数（turn_started）
     pub turns: u32,
@@ -55,7 +56,8 @@ pub struct Metrics {
     pub invariant_violations: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ReplayReport {
     pub schema: u32,
     /// 场景指纹（脚本内容的 fnv64——同名不同内容不混比）
@@ -74,6 +76,24 @@ pub struct ReplayReport {
     /// 机械信号行：{metric, baseline, candidate, delta}——judge/UX 的原料,
     /// 本层不做「好/坏」判断。
     pub signals: Vec<Value>,
+}
+
+/// 回放分。代码算，判定模型不许改。越高越好。
+///
+/// 口径（手算，不从实现反推）：完成阶段每个 +20，通过的检验每个 +10，
+/// 打回每个 −30，升级每个 −40，复审驳回每个 −25，失败的检验每个 −50，
+/// 不变量违规每个 −100，成本毫美分原样减。通过的检验 = checks_run 减去
+/// checks_failed，不够减按 0。
+pub fn score(m: &Metrics) -> i64 {
+    let passed = m.checks_run.saturating_sub(m.checks_failed) as i64;
+    (m.stages_done as i64) * 20
+        + passed * 10
+        - (m.flags as i64) * 30
+        - (m.escalations as i64) * 40
+        - (m.review_rejects as i64) * 25
+        - (m.checks_failed as i64) * 50
+        - (m.invariant_violations as i64) * 100
+        - m.cost_mc
 }
 
 /// 事件流 → 指标。口径即本函数——改这里必须 bump REPLAY_SCHEMA。

@@ -59,6 +59,7 @@ describe('向导创建进度（票 14）', () => {
     await act(async () => { box.click() })
     await clickButton(el, '下一步')
     await clickButton(el, '下一步')
+    await act(async () => { await new Promise((r) => setTimeout(r, 80)) })
     await clickButton(el, '下一步')
     await clickButton(el, '下一步')
   }

@@ -33,6 +33,9 @@ pub enum AutonomyError {
     Db(#[from] crate::db::DbError),
     #[error("invalid autonomy level: {0}")]
     BadLevel(String),
+    /// ADR 0069：自治不再分档。任何写入都拒绝，已存列不动。
+    #[error("autonomy gears are gone")]
+    GearsRemoved,
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -145,24 +148,25 @@ pub fn level(db: &Db, project_id: &str) -> Result<String, rusqlite::Error> {
     )
 }
 
-/// 变档：校验 + 落 AutonomyChanged 事件。
+/// 设档。ADR 0069 起一律拒绝，不写列、不落变档事件。
+///
+/// 离开时的放行等于原先的 L4，但那不是一档可以再选。被否决：仍接受
+/// 「L4」当作确认当前放手——那仍是可调档。false positive 是负责人
+/// 以为自己收紧了，离开后却按高档放行。
 pub fn set_level(db: &Db, project_id: &str, lv: &str) -> Result<(), AutonomyError> {
-    // 先校验再写：非法档不碰行，原档保持（票 01）。
-    parse_level(lv)?;
-    let old = level(db, project_id)?;
-    db.conn().execute(
-        "UPDATE projects SET autonomy=?1 WHERE id=?2",
-        params![lv, project_id],
-    )?;
-    db.append_event(
-        project_id,
-        EventKind::AutonomyChanged,
-        json!({"from": old, "to": lv}),
+    let started = std::time::Instant::now();
+    let _ = (db, lv);
+    crate::diag::note(
+        "拒绝",
+        true,
+        Some(project_id),
         None,
         None,
-    )?;
-    log::info!("autonomy {project_id}: {old} -> {lv}");
-    Ok(())
+        "set_autonomy",
+        "gears_removed",
+        started,
+    );
+    Err(AutonomyError::GearsRemoved)
 }
 
 /// 审查者档位（shadow/live，票 05）。live 只在 autonomy ≥ L1 生效；
@@ -304,15 +308,14 @@ mod tests {
         assert_eq!(level(&db, "p").unwrap(), "L4");
         // 票 04 也不抬封顶：提案/授权/安装读 rank，执行档仍是 2。
         assert_eq!(execution_rank(&db, "p").unwrap(), 2);
+        // ADR 0069：设档一律拒绝，列保持默认，也不写变档事件。
+        assert!(matches!(
+            set_level(&db, "p", "L3"),
+            Err(AutonomyError::GearsRemoved)
+        ));
         assert!(set_level(&db, "p", "L9").is_err());
         assert_eq!(level(&db, "p").unwrap(), "L4");
-        set_level(&db, "p", "L3").unwrap();
-        assert_eq!(level(&db, "p").unwrap(), "L3");
-        assert_eq!(rank(&db, "p").unwrap(), 3);
-        assert_eq!(execution_rank(&db, "p").unwrap(), 2);
-        set_level(&db, "p", "L2").unwrap();
-        assert_eq!(rank(&db, "p").unwrap(), 2);
-        // 非法档不落事件；两次成功变档各一条
+        assert_eq!(rank(&db, "p").unwrap(), 4);
         let n: i64 = db
             .conn()
             .query_row(
@@ -321,7 +324,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 2);
+        assert_eq!(n, 0);
     }
 
     #[test]

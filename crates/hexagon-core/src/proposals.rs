@@ -41,12 +41,34 @@ pub enum PropError {
     BadState(String),
 }
 
+/// 流程优化不能拨指针、写规格、盖章或改权限。旋钮 `stamp_point` 不是盖章动作。
+fn pack_forbidden_action(diff: &str) -> Option<&'static str> {
+    let lower = diff.to_lowercase();
+    if lower.contains("permission") || lower.contains("grant") {
+        return Some("流程优化不能改权限");
+    }
+    if diff.contains("specs/") || diff.contains("规格") {
+        return Some("流程优化不能写规格");
+    }
+    if lower.contains("rewind") || lower.contains("stage_pointer") {
+        return Some("流程优化不能拨指针");
+    }
+    if diff.lines().any(|l| {
+        let act = l.contains("盖章") || l.contains("stamp()");
+        act && !l.contains("stamp_point")
+    }) {
+        return Some("流程优化不能盖章");
+    }
+    None
+}
+
 /// surface → 允许的目标根。禁区的判定 = 根白名单 + 危险段黑名单双查。
 fn allowed_root(surface: &str) -> Option<&'static str> {
     match surface {
         "skill" => Some("skills/"),
         "pack_copy" => Some(".hexagon/pack"),
         "agents_md" => Some("AGENTS.md"),
+        "role_def" => Some(".hexagon/roles/"),
         _ => None,
     }
 }
@@ -108,6 +130,10 @@ pub(crate) fn parse_proposal(content: &str) -> Result<(String, String, String), 
     Ok((surface, target, diff))
 }
 
+pub(crate) fn fenced(body: &str, lang: &str) -> Option<String> {
+    extract_fenced(body, lang)
+}
+
 fn extract_fenced(body: &str, lang: &str) -> Option<String> {
     let open = format!("```{lang}");
     let start = body.find(&open)?;
@@ -150,6 +176,10 @@ pub(crate) fn judge_evidence(body: &str) -> Option<Result<Value, String>> {
             _ => Err("judge verdict outside closed set".into()),
         }
     })
+}
+
+pub(crate) fn replay_from_body(body: &str) -> Option<Result<crate::replay::ReplayReport, String>> {
+    replay_evidence(body)
 }
 
 /// 从提案正文提取回放证据：无块 → None；有块 → 解析结果。
@@ -231,6 +261,11 @@ pub fn submit(
             |r| r.get(0),
         )
         .ok();
+    if surface == "pack_copy" && author_role.as_deref() != Some(crate::policydev::ROLE) {
+        return Err(PropError::Rejected(
+            "only 流程优化 can change the running pack".into(),
+        ));
+    }
     if author_role.as_deref() == Some(crate::policydev::ROLE) {
         if evidence.is_none() {
             return Err(PropError::Rejected(format!(
@@ -250,18 +285,47 @@ pub fn submit(
         }
     }
 
-    // 生效面白名单 + 禁区双查
-    let root = allowed_root(&surface)
-        .ok_or_else(|| PropError::Rejected(format!("surface not in whitelist: {surface}")))?;
-    if !target.starts_with(root) {
+    if let Some(reason) = crate::execute::pack_score_block(&surface, content) {
+        return Err(PropError::Rejected(reason));
+    }
+    if surface == "pack_copy" {
+        if let Some(reason) = pack_forbidden_action(&diff) {
+            return Err(PropError::Rejected(reason.into()));
+        }
+    }
+    if surface == "role_def" {
+        crate::rolesurf::audit(db, ctx, content)?;
+    }
+    if crate::execute::mechanical_block(&surface) {
         return Err(PropError::Rejected(format!(
-            "target outside surface root: {target} !~ {root}"
+            "surface is not an execute-judgment input: {surface}"
         )));
     }
+
+    // 生效面白名单 + 禁区双查。经验写在项目技能目录，不走 skills/ 根。
+    let experience = crate::experience::experience_payload(content).is_some();
+    if experience {
+        if !target.starts_with(".hexagon/skills/") {
+            return Err(PropError::Rejected(format!(
+                "experience target must stay in the project skill dir: {target}"
+            )));
+        }
+    } else {
+        let root = allowed_root(&surface)
+            .ok_or_else(|| PropError::Rejected(format!("surface not in whitelist: {surface}")))?;
+        if !target.starts_with(root) {
+            return Err(PropError::Rejected(format!(
+                "target outside surface root: {target} !~ {root}"
+            )));
+        }
+    }
     if let Some(seg) = forbidden_target(&target) {
-        return Err(PropError::Rejected(format!(
-            "forbidden target segment '{seg}' in {target}"
-        )));
+        // 「roles/」含有片段 role。角色定义提案的目标就在这里，不能因此误拒。
+        if !(surface == "role_def" && seg == "role") {
+            return Err(PropError::Rejected(format!(
+                "forbidden target segment '{seg}' in {target}"
+            )));
+        }
     }
     // 技能 diff 不得引入 MCP 授权 / 权限扩大
     if surface == "skill" {
@@ -346,9 +410,22 @@ pub fn submit(
         // 无上级（或上级缺席）时负责人是唯一复审者。L4 只自动通过
         // 「上级已经通过」之后的那一关，这里还没有复审结论，不放行。
         // 被否决：无上级也直接生效——那是一次没人看过的改动。
-        None => to_stamp_queue(db, ctx, &pid, &diff, &surface, evidence.as_ref())?,
+        None => {
+            to_stamp_queue(db, ctx, &pid, &diff, &surface, evidence.as_ref())?;
+        }
     }
     Ok(pid)
+}
+
+pub(crate) fn queue_for_owner(
+    db: &Db,
+    ctx: &ToolContext,
+    pid: &str,
+    diff: &str,
+    surface: &str,
+    evidence: Option<&Value>,
+) -> Result<String, PropError> {
+    to_stamp_queue(db, ctx, pid, diff, surface, evidence)
 }
 
 /// in_review → awaiting_stamp + 盖章卡（带风险标注）。
@@ -359,14 +436,14 @@ fn to_stamp_queue(
     diff: &str,
     surface: &str,
     evidence: Option<&Value>,
-) -> Result<(), PropError> {
+) -> Result<String, PropError> {
     db.conn().execute(
         "UPDATE proposals SET status='awaiting_stamp' WHERE id=?1",
         [pid],
     )?;
     let flags = risk_flags(surface, diff);
     // 提案确认卡搭 kind='stamp'（卡种过载见 cards.rs 模块注记）
-    crate::cards::enqueue(
+    let qid = crate::cards::enqueue(
         db,
         &ctx.project_id,
         Some(&ctx.agent_id),
@@ -379,16 +456,18 @@ fn to_stamp_queue(
         }}),
         None,
     )?;
-    Ok(())
+    Ok(qid)
 }
 
-/// 上级复审结论：pass → awaiting_stamp；reject → rejected + 原因。
+/// 上级复审结论。驳回不生效。通过之后走执行判定，不再因高自治自动盖章。
+/// `jev` 只接受决策接口；没配或失败都交给负责人。
 pub fn review(
     db: &Db,
     ctx: &ToolContext,
     proposal_id: &str,
     pass: bool,
     reason: &str,
+    jev: Option<&dyn crate::provider::ModelProvider>,
 ) -> Result<(), PropError> {
     let (status, artifact_id): (String, Option<String>) = db
         .conn()
@@ -421,43 +500,24 @@ pub fn review(
     let evidence = replay_evidence(&body)
         .and_then(|r| r.ok())
         .map(|r| evidence_summary(&r));
-    // 读档失败按等人。不把一次查询故障升成未审提案生效。
-    let rank = crate::autonomy::rank(db, &ctx.project_id).unwrap_or(0);
-    if crate::harnessgate::auto_passes(rank, crate::harnessgate::HarnessAction::ProposalOwnerStamp)
-    {
-        // 上级已经通过。负责人这一关自动过，不入待决卡。
-        // 先落盘再记轨迹：apply 失败则状态仍是 in_review，没有「已盖章但没生效」。
-        let effective = materialize(db, ctx, proposal_id)?;
-        db.append_event(
-            &ctx.project_id,
-            EventKind::ProposalReviewed,
-            json!({"proposal_id": proposal_id, "pass": true, "reason": reason}),
-            Some(&ctx.agent_id),
-            ctx.stage_run_id.as_deref(),
-        )?;
-        db.append_event(
-            &ctx.project_id,
-            EventKind::ProposalStamped,
-            json!({"proposal_id": proposal_id, "by": "autonomy", "evidence": evidence}),
-            Some(&ctx.agent_id),
-            ctx.stage_run_id.as_deref(),
-        )?;
-        db.append_event(
-            &ctx.project_id,
-            EventKind::ProposalActivated,
-            json!({"proposal_id": proposal_id, "effective_path": effective, "by": "autonomy"}),
-            Some(&ctx.agent_id),
-            ctx.stage_run_id.as_deref(),
-        )?;
-        return Ok(());
-    }
-    to_stamp_queue(db, ctx, proposal_id, &diff, &surface, evidence.as_ref())?;
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalReviewed,
         json!({"proposal_id": proposal_id, "pass": true, "reason": reason}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
+    )?;
+    // ADR 0069：通过之后不按自治档自动生效。执行判定决定写不写。
+    // 正文和回放分留在产物文件里，这里不改。
+    crate::execute::judge_passed(
+        db,
+        ctx,
+        proposal_id,
+        &surface,
+        &diff,
+        &body,
+        evidence.as_ref(),
+        jev,
     )?;
     Ok(())
 }
@@ -521,6 +581,15 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
         .as_str()
         .ok_or_else(|| PropError::Rejected("question is not a proposal stamp".into()))?
         .to_string();
+    let surface: String = db
+        .conn()
+        .query_row("SELECT surface FROM proposals WHERE id=?1", [&pid], |r| r.get(0))
+        .unwrap_or_default();
+    if surface == "role_def" && !crate::rolesurf::reviewed(db, &pid)? {
+        return Err(PropError::Rejected(
+            "role definition needs a passed superior review".into(),
+        ));
+    }
     crate::cards::answer(db, qid, "owner")?;
     db.append_event(
         &ctx.project_id,
@@ -543,6 +612,14 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
     Ok(pid)
 }
 
+pub(crate) fn materialize_for_judgment(
+    db: &Db,
+    ctx: &ToolContext,
+    pid: &str,
+) -> Result<String, PropError> {
+    materialize(db, ctx, pid)
+}
+
 /// 版本化快照 → git apply diff → active。不写盖章事件。
 /// 不热改运行中实体——pack 副本下次生效。
 fn materialize(db: &Db, ctx: &ToolContext, pid: &str) -> Result<String, PropError> {
@@ -551,30 +628,34 @@ fn materialize(db: &Db, ctx: &ToolContext, pid: &str) -> Result<String, PropErro
         params![pid, ctx.project_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let (_surface, _t, diff, _body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
+    let (_surface, _t, diff, body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
     let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(pid);
     std::fs::create_dir_all(&backup_dir)?;
     let target_path = ctx.repo_root.join(&target);
     if target_path.exists() {
         std::fs::copy(&target_path, backup_dir.join("before")).ok();
     }
-    if !crate::git::is_repo(&ctx.repo_root) {
-        return Err(PropError::Rejected(
-            "proposal activation requires git repo".into(),
-        ));
-    }
-    std::fs::write(backup_dir.join("change.diff"), format!("{diff}\n"))?;
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&ctx.repo_root)
-        .args(["apply", "--whitespace=nowarn"])
-        .arg(backup_dir.join("change.diff"))
-        .output()?;
-    if !out.status.success() {
-        return Err(PropError::Rejected(format!(
-            "git apply failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )));
+    let wrote_experience = crate::experience::apply(ctx, db, &body, &backup_dir)?;
+    let wrote_role = crate::rolesurf::apply(db, ctx, &body, &backup_dir)?;
+    if !wrote_experience && !wrote_role {
+        if !crate::git::is_repo(&ctx.repo_root) {
+            return Err(PropError::Rejected(
+                "proposal activation requires git repo".into(),
+            ));
+        }
+        std::fs::write(backup_dir.join("change.diff"), format!("{diff}\n"))?;
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&ctx.repo_root)
+            .args(["apply", "--whitespace=nowarn"])
+            .arg(backup_dir.join("change.diff"))
+            .output()?;
+        if !out.status.success() {
+            return Err(PropError::Rejected(format!(
+                "git apply failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
     }
     db.conn().execute(
         "UPDATE proposals SET status='active', decided_at=datetime('now') WHERE id=?1",
@@ -596,16 +677,17 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
     if status != "active" {
         return Err(PropError::BadState(status));
     }
-    let backup = ctx
-        .repo_root
-        .join(".hexagon/proposals")
-        .join(proposal_id)
-        .join("before");
-    let target_path = ctx.repo_root.join(&target);
-    if backup.exists() {
-        std::fs::copy(&backup, &target_path)?;
-    } else if target_path.exists() {
-        std::fs::remove_file(&target_path)?; // 生效前不存在 = 回滚即删除
+    let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(proposal_id);
+    if !crate::experience::rollback(ctx, &backup_dir)?
+        && !crate::rolesurf::rollback(db, ctx, &backup_dir)?
+    {
+        let backup = backup_dir.join("before");
+        let target_path = ctx.repo_root.join(&target);
+        if backup.exists() {
+            std::fs::copy(&backup, &target_path)?;
+        } else if target_path.exists() {
+            std::fs::remove_file(&target_path)?; // 生效前不存在 = 回滚即删除
+        }
     }
     db.conn().execute(
         "UPDATE proposals SET status='rolled_back' WHERE id=?1",
@@ -728,8 +810,14 @@ mod tests {
     fn forbidden_surface_and_target_rejected() {
         let (db, _d, ctx) = setup(&["前端"]);
         // 生效面不在白名单
-        let e = submit(&db, &ctx, "art-x", &proposal_md("role_def", "x", DIFF)).unwrap_err();
-        assert!(e.to_string().contains("whitelist"));
+        // ADR 0069：role_def 在白名单里，但没有角色块仍然拒绝。
+        let e = submit(&db, &ctx, "art-x", &proposal_md("role_def", ".hexagon/roles/前端.json", DIFF)).unwrap_err();
+        assert!(e.to_string().contains("missing role"), "{e}");
+        let e = submit(&db, &ctx, "art-perm", &proposal_md("permission", "x", DIFF)).unwrap_err();
+        assert!(
+            e.to_string().contains("whitelist") || e.to_string().contains("execute-judgment"),
+            "{e}"
+        );
         // 目标越面根
         let e = submit(&db, &ctx, "art-x", &proposal_md("skill", "AGENTS.md", DIFF)).unwrap_err();
         assert!(e.to_string().contains("outside surface root"));
@@ -741,7 +829,12 @@ mod tests {
             &proposal_md("pack_copy", ".hexagon/pack-permission.json", DIFF),
         )
         .unwrap_err();
-        assert!(e.to_string().contains("forbidden"));
+        assert!(
+            e.to_string().contains("forbidden")
+                || e.to_string().contains("不能改权限")
+                || e.to_string().contains("only 流程优化"),
+            "{e}"
+        );
         // 技能 diff 引入 mcp 授权
         let e = submit(
             &db,
@@ -822,7 +915,7 @@ mod tests {
         .unwrap_err();
         assert!(e.to_string().contains("in-flight cap"));
         // 复审驳回带原因
-        review(&db, &ctx, &pid, false, "方向不对").unwrap();
+        review(&db, &ctx, &pid, false, "方向不对", None).unwrap();
         let status: String = db
             .conn()
             .query_row("SELECT status FROM proposals WHERE id=?1", [&pid], |r| {
@@ -844,9 +937,17 @@ mod tests {
 
     #[test]
     fn pack_copy_autonomy_flag_marked_on_stamp_card() {
-        let (db, d, ctx) = setup(&["前端"]);
+        // ADR 0069：只有流程优化能提交流程包副本。
+        let (db, d, ctx) = setup(&["流程优化"]);
         let diff = "--- a/.hexagon/pack.json\n+++ b/.hexagon/pack.json\n@@ -1 +1,2 @@\n x\n+\"backfill_edges\": []";
-        let content = proposal_md("pack_copy", ".hexagon/pack.json", diff);
+        let mut content = proposal_md("pack_copy", ".hexagon/pack.json", diff);
+        // 回放分高于现任，提案才能进队列。分数是 stages_done：候选 1，现任 0。
+        content.push_str(
+            "\n```replay\n{\"schema\":1,\"scenario_fingerprint\":\"x\",\"baseline_pack\":\"a\",\"candidate_pack\":\"b\",\"baseline\":{\"stages_done\":0},\"candidate\":{\"stages_done\":1}}\n```\n",
+        );
+        content.push_str(
+            "\n```judge\n{\"verdict\":\"needs-human\",\"rationale\":\"看一眼\",\"backend\":\"mechanical\"}\n```\n",
+        );
         mkart(&db, d.path(), "art1", &content);
         let pid = submit(&db, &ctx, "art1", &content).unwrap();
         let qid = crate::cards::first_queued(&db, "p", crate::cards::CardKind::Stamp)

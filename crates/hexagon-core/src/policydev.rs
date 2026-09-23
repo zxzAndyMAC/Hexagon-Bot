@@ -312,7 +312,6 @@ fn summarize_signals(r: &ReplayReport) -> String {
 mod tests {
     use super::*;
     use crate::artifacts::TierMap;
-    use crate::trace::EventKind;
     use serde_json::json;
 
     fn setup() -> (Db, ToolContext, tempfile::TempDir) {
@@ -373,7 +372,8 @@ mod tests {
     fn knob_proposal_flows_through_governed_queue() {
         let (db, ctx, dir) = setup();
         let sandbox = dir.path().join(".hexagon/replay/t1");
-        let pid = propose(
+        // ADR 0069：这段脚本两边回放分一样（都是 0）。不高于现任就到不了执行判定。
+        let err = propose(
             &db,
             &ctx,
             &base_pack(),
@@ -382,30 +382,8 @@ mod tests {
             "减少重复打回打扰",
             &sandbox,
         )
-        .unwrap();
-        // 走普通提案队列:无上级在场 → awaiting_stamp + 盖章卡
-        let status: String = db
-            .conn()
-            .query_row("SELECT status FROM proposals WHERE id=?1", [&pid], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(status, "awaiting_stamp");
-        // 证据进了事件载荷
-        let items = db
-            .timeline("p", None, 50, Some(&[EventKind::ProposalQueued]))
-            .unwrap();
-        assert_eq!(items[0].event.payload["evidence"]["kind"], "replay");
-        // 产物正文带回放块
-        let body =
-            std::fs::read_to_string(dir.path().join(".hexagon/proposals/policy-dev.md")).unwrap();
-        assert!(body.contains("```replay"));
-        // 盖章卡带证据摘要
-        let qid = crate::cards::first_queued(&db, "p", crate::cards::CardKind::Stamp)
-            .unwrap()
-            .unwrap();
-        let card = crate::cards::get(&db, &qid).unwrap();
-        assert!(card.payload.to_string().contains("evidence"));
+        .unwrap_err();
+        assert!(err.to_string().contains("not higher"), "{err}");
     }
 
     #[test]

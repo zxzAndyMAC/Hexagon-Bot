@@ -453,14 +453,14 @@ impl Workbench {
         self.creds = store;
     }
 
-    /// 项目自治档位（L0–L4）。新项目默认 L4。
-    pub fn autonomy(&self) -> Result<String, ApiError> {
-        Ok(crate::autonomy::level(&self.db, &self.project_id)?)
+    /// 自治读口。ADR 0069：不再返回可调档。离开时的放行是固定范围，
+    /// 不是 L0–L4 里的一项。存储列仍给既有判定读，不从这扇门暴露。
+    pub fn autonomy(&self) -> Result<&'static str, ApiError> {
+        let _ = self;
+        Ok("fixed")
     }
 
-    /// 改自治档。非法档拒绝，已存档不动。
-    /// 盖章（票 02）、安全网和新权限（票 03）、提案负责人关与授权/安装确认
-    /// （票 04）都读存储档。`execution_rank` 仍封顶 L2。
+    /// 改自治档。一律拒绝，已存列不动。
     pub fn set_autonomy(&self, level: &str) -> Result<(), ApiError> {
         crate::autonomy::set_level(&self.db, &self.project_id, level)?;
         Ok(())
@@ -495,8 +495,37 @@ impl Workbench {
             |r| r.get(0),
         )?;
         let ctx = self.ctx_for(&author, None);
-        crate::proposals::review(&self.db, &ctx, proposal_id, pass, reason)?;
+        // 只取 Jev 槽，而且必须是决策接口。没绑、或绑的是聊天模型，都不调用。
+        // 被否决：没配 Jev 就 resolve_slot 到 default。那是用聊天模型顶替判定。
+        let jev = self
+            .providers
+            .get(crate::provider_config::JEV_SLOT)
+            .filter(|p| p.uses_decision_api())
+            .map(|p| p.as_ref());
+        crate::proposals::review(&self.db, &ctx, proposal_id, pass, reason, jev)?;
         Ok(())
+    }
+
+    /// 复审通过之后提交经验。还不写技能。执行判定通过才落盘。
+    pub fn propose_experience(
+        &self,
+        agent_id: &str,
+        lesson: &str,
+        read: &[String],
+    ) -> Result<String, ApiError> {
+        let ctx = self.ctx_for(agent_id, None);
+        Ok(crate::experience::propose(
+            &self.db,
+            &ctx,
+            lesson,
+            read,
+        )?)
+    }
+
+    /// 激活简报里的技能目录。经验正文不在这里。
+    pub fn skill_catalog(&self) -> Result<String, ApiError> {
+        let loader = crate::skills::SkillLoader::new(crate::skills::skill_dirs(&self.repo_root));
+        Ok(loader.catalog_text(&Default::default()).unwrap_or_default())
     }
 
     /// 回滚一张已生效的改进提案。
@@ -939,7 +968,7 @@ impl Workbench {
     /// 唤醒走既有 [`Self::dispatch`]（改的是 `agents.status`，不是名单）。
     ///
     /// 角色说完且没有点名下一位时，[`Self::continue_after_turn`] 再进这同一条路。
-    /// 角色点名只在 L2 及以上派活。
+    /// 角色点名和负责人点名都派活（ADR 0069，不再看自治秩）。
     pub fn route_unnamed_owner(
         &self,
         body: &str,
@@ -1374,27 +1403,25 @@ impl Workbench {
         Ok(())
     }
 
-    /// 角色设定起草（票 30）：模型起草 duty/定位，人确认才写回（update_agent）。
-    /// 单发无工具调用；走该 Agent 的模型槽。
+    /// 角色设定起草。ADR 0069：用角色起草槽；没绑则落到默认槽。
+    /// 不再用这个 Agent 自己的模型槽。人确认才写回。
     pub fn draft_role_def(&self, agent_id: &str, hint: &str) -> Result<String, ApiError> {
-        let slot: Option<String> = self.db.conn().query_row(
-            "SELECT model_slot FROM agents WHERE id=?1",
-            [agent_id],
-            |r| r.get(0),
-        )?;
-        let provider = crate::provider_config::resolve_slot(
-            &self.providers,
-            slot.as_deref().unwrap_or("default"),
-        )
-        .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        let slot = crate::provider_config::ROLE_DRAFT_SLOT.to_string();
+        let provider = crate::provider_config::resolve_slot(&self.providers, &slot)
+            .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
         let role: String =
             self.db
                 .conn()
                 .query_row("SELECT role FROM agents WHERE id=?1", [agent_id], |r| {
                     r.get(0)
                 })?;
+        let resolved = if self.providers.contains_key(&slot) {
+            slot.clone()
+        } else {
+            "default".to_string()
+        };
         let req = crate::provider::ChatRequest {
-            model_slot: slot.unwrap_or_else(|| "default".into()),
+            model_slot: resolved,
             messages: vec![crate::provider::Message {
                 role: crate::provider::Role::User,
                 content: vec![crate::provider::ContentBlock::Text {

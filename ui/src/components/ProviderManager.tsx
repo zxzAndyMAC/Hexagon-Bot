@@ -205,6 +205,10 @@ export function ProviderManager() {
     const s = new Set(roles.map((r) => r.model_slot))
     s.add('default')
     s.add('decision')
+    s.add('role_draft')
+    s.add('brief')
+    s.add('flow_draft')
+    s.add('jev')
     Object.keys(doc.slots).forEach((k) => s.add(k))
     return [...s].sort()
   }, [roles, doc.slots])
@@ -595,8 +599,18 @@ function SlotRow({
       {binding && (
         <button className="btn" style={{ fontSize: 12 }} onClick={() => onUnbind(slot)}>{t('providers.unbind')}</button>
       )}
-      <span className="chip" style={ready ? { color: 'var(--ok)' } : { color: 'var(--err)' }}>
-        {ready ? t('providers.bound') : t('providers.unbound')}
+      <span
+        className="chip"
+        data-slot-state={binding ? 'bound' : slot === 'jev' ? 'empty' : 'default'}
+        style={ready ? { color: 'var(--ok)' } : { color: 'var(--err)' }}
+      >
+        {binding
+          ? t('providers.bound')
+          : slot === 'jev'
+            ? t('providers.jevEmpty')
+            : slot === 'default'
+              ? t('providers.unbound')
+              : t('providers.usingDefault')}
       </span>
     </div>
   )

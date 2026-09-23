@@ -24,18 +24,16 @@ pub const WORKBENCH_AUTHOR: &str = "工作台";
 pub const NO_RECEIVER_NOTE: &str =
     "没有接话的人。项目经理未勾选；流程包要当前阶段激活名单的第一位，快速通道要通道角色，这里都没有。";
 
-/// 点名要不要唤醒被点名的角色。`rank` 是自治存储秩：0 = L0 … 4 = L4。
+/// 点名要不要唤醒被点名的角色。
 ///
-/// 负责人的点名在任何档位都唤醒，并且不经过「先不派活」——那是没点名时
-/// 的封闭选择，点名已经指定了人。角色点名只在 L2、L3、L4（秩 ≥ 2）唤醒；
-/// L0 和 L1 只留在时间线上。
+/// ADR 0069 取消自治档之后，负责人的点名和角色的点名都派活。`rank` 保留
+/// 是为了不改调用形状；它不再参与判定。点名仍然不经过「先不派活」。
 ///
-/// 代价：L0/L1 把角色点名当成派活 = 没人看过就再开一回合（false wake）。
-/// 漏唤醒 = 这句话还在群聊里，负责人还在（false stay）。L0/L1 偏向不唤醒。
-/// 出处：ADR 0061、ADR 0065、票 09。被否决：角色点名在 L0 也派，那就把
-/// 自治档的「全部排队」挖穿了。
+/// 被否决：角色点名仍看秩 ≥ 2。存储列还在测试夹具里写成 L0，若继续读秩，
+/// 取消档位之后角色点名会留在群聊里。出处：ADR 0061、ADR 0065、ADR 0069。
 pub fn mention_wakes(from_owner: bool, rank: u8) -> bool {
-    from_owner || rank >= 2
+    let _ = (from_owner, rank);
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,19 +188,14 @@ mod tests {
     }
 
     proptest! {
-        /// 不变量：负责人点名在任何秩都唤醒；角色点名仅秩 ≥ 2。
-        /// L0/L1 的 false wake 会在「全部排队」里擅自开回合。
+        /// 不变量：取消档位之后，负责人点名和角色点名在任何秩都唤醒。
+        /// 漏唤醒 = 点名留在群聊里，派活退回成只说话。
         #[test]
-        fn owner_mention_always_wakes_role_mention_only_from_l2(
+        fn mentions_wake_at_every_rank(
             rank in 0u8..8,
             from_owner in any::<bool>(),
         ) {
-            let wakes = mention_wakes(from_owner, rank);
-            if from_owner {
-                prop_assert!(wakes);
-            } else {
-                prop_assert_eq!(wakes, rank >= 2);
-            }
+            prop_assert!(mention_wakes(from_owner, rank));
         }
     }
 }

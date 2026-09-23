@@ -1782,7 +1782,10 @@ mod tests {
                 action in boundary_action(),
             ) {
                 let (db, ctx, _d) = setup();
-                crate::autonomy::set_level(&db, "p1", level).unwrap();
+                // ADR 0069：门面不再设档。属性测试仍按存储秩锁放行边界。
+                db.conn()
+                    .execute("UPDATE projects SET autonomy=?1 WHERE id='p1'", [level])
+                    .unwrap();
                 let high = matches!(level, "L3" | "L4");
                 let d = decide(&db, &ctx, &action);
                 match &action {
@@ -1838,7 +1841,10 @@ mod tests {
                 net in proptest::bool::ANY,
             ) {
                 let (db, ctx, _d) = setup();
-                crate::autonomy::set_level(&db, "p1", level).unwrap();
+                // ADR 0069：门面不再设档。属性测试仍按存储秩锁放行边界。
+                db.conn()
+                    .execute("UPDATE projects SET autonomy=?1 WHERE id='p1'", [level])
+                    .unwrap();
                 let (shape, cmd) = if net {
                     ("rm -rf *", "rm -rf build")
                 } else {

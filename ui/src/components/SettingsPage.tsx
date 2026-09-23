@@ -1206,39 +1206,15 @@ function McpServiceForm({
   )
 }
 
-/** 自治分区。五档与顶栏下拉、向导同一组（票 01）。
- *  升档确认只在执行面变大时出现：L3/L4 的执行档仍是 2（与
- *  autonomy::execution_rank 一致），L2→L3/L4 不弹确认。降档直接生效。 */
+/** 自治不再分档（ADR 0069）。这里只留审查者 shadow/live。 */
 function AutonomySection() {
   const { t } = useTranslation()
-  const { autonomy, pushToast, askConfirm, refreshSlow } = useUiStore()
+  const { pushToast, askConfirm } = useUiStore()
   const [reviewer, setReviewer] = useState<string | null>(null)
 
   useEffect(() => {
     api.reviewerMode().then(setReviewer).catch((e) => pushToast(errText(e), 'err'))
-    void refreshSlow(['info']) // Launcher 直入设置时 autonomy 可能还是默认 L0
-  }, [pushToast, refreshSlow])
-
-  const setLevel = (lv: string) => {
-    if (lv === autonomy) return
-    const apply = async () => {
-      await api.setAutonomy(lv).catch((e) => pushToast(errText(e), 'err'))
-      await refreshSlow(['info'])
-    }
-    // 执行档：L0=0，L1=1，L2/L3/L4=2。只有执行面变大才确认。
-    const exec = (x: string) => (x === 'L0' ? 0 : x === 'L1' ? 1 : 2)
-    if (exec(lv) > exec(autonomy)) {
-      askConfirm({
-        title: t('auto.upTitle', { level: t(`autonomy.${lv}`) }),
-        body: t(`auto.desc_${lv}`),
-        danger: exec(lv) >= 2,
-        confirmLabel: t('auto.upConfirm', { level: t(`autonomy.${lv}`) }),
-        run: apply,
-      })
-    } else {
-      void apply()
-    }
-  }
+  }, [pushToast])
 
   const setMode = (mode: string) => {
     if (mode === reviewer) return
@@ -1261,23 +1237,7 @@ function AutonomySection() {
   return (
     <div>
       <div className="dim3" style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.7 }}>
-        {t('auto.intro')}
-      </div>
-      <Row label={t('auto.level')}>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {(['L0', 'L1', 'L2', 'L3', 'L4'] as const).map((lv) => (
-            <button
-              key={lv}
-              className={`btn ${autonomy === lv ? 'primary' : ''}`}
-              onClick={() => setLevel(lv)}
-            >
-              {t(`autonomy.${lv}`)}
-            </button>
-          ))}
-        </div>
-      </Row>
-      <div className="dim3" style={{ fontSize: 12, padding: '4px 0 10px', lineHeight: 1.7 }}>
-        {t(`auto.desc_${autonomy}`)}
+        {t('auto.floorsHint')}
       </div>
       <Row label={t('auto.reviewer')} hint={t('auto.reviewerHint')}>
         <div style={{ display: 'flex', gap: 4 }}>
@@ -1292,14 +1252,7 @@ function AutonomySection() {
           ))}
         </div>
       </Row>
-      {reviewer === 'live' && autonomy === 'L0' && (
-        <div className="dim3" style={{ fontSize: 12, marginTop: 8, color: 'var(--accent)' }}>
-          {t('auto.liveDegraded')}
-        </div>
-      )}
-      <div className="dim3" style={{ fontSize: 12, marginTop: 10, lineHeight: 1.7 }}>
-        {t('auto.floorsHint')}
-      </div>
+
     </div>
   )
 }
@@ -1383,6 +1336,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
     skills: <SkillsSection />, // 全局层无项目也可用（ADR 0057）
     mcp: <McpSection projectless={projectless} />, // 全局清单无项目可配（ADR 0057）
     autonomy: gated(<AutonomySection />),
+
     usage: gated(<UsageSection onDetail={onOpenUsageDetail} />),
     about: (
       <div style={{ fontSize: 12, lineHeight: 2 }}>

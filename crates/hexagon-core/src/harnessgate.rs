@@ -6,9 +6,9 @@
 //! false positive 的代价是未审的提案、授权或安装生效，而且会连坐
 //! 仍在读执行档的打回路径。盖章和安全网已经各自读存储档（票 02/03）。
 //!
-//! 自动通过只限四件，而且只在存储档恰好是 4：改进提案的负责人盖章、
-//! 技能授权确认、MCP 授权确认、自然语言安装确认。开场项目说明草案、
-//! 远程发布、最终验收、内置永不任何档都不在此列。
+//! 自动通过只限三件，而且只在存储档恰好是 4：技能授权确认、MCP 授权确认、
+//! 自然语言安装确认。改进提案的负责人盖章不再因高档自动通过（ADR 0069），
+//! 改走执行判定。开场项目说明草案、远程发布、最终验收、内置永不任何档都不在此列。
 //!
 //! 授权和安装的写入面恒为当前项目。判定本身不带路径；调用方不得把
 //! `AutoPass` 理解成可以写 `~/.hexagon`。
@@ -55,12 +55,11 @@ pub enum HarnessDisposition {
 /// `stored_rank` 是 `autonomy::rank`（0–4），不是 `execution_rank`。
 /// 脏档（>4）与 L0–L3 一律等。
 pub fn classify(stored_rank: u8, action: HarnessAction) -> HarnessDisposition {
+    // 改进提案不在白名单。ADR 0069：高档不再自动盖章，交给执行判定。
+    // 被否决：秩为 4 时仍 AutoPass ProposalOwnerStamp。那就是用自治通过改进。
     let allowed = matches!(
         action,
-        HarnessAction::ProposalOwnerStamp
-            | HarnessAction::SkillGrant
-            | HarnessAction::McpGrant
-            | HarnessAction::NlInstall
+        HarnessAction::SkillGrant | HarnessAction::McpGrant | HarnessAction::NlInstall
     );
     if stored_rank != 4 || !allowed {
         return HarnessDisposition::Wait;
@@ -102,16 +101,13 @@ mod tests {
     fn is_allowlisted(action: HarnessAction) -> bool {
         matches!(
             action,
-            HarnessAction::ProposalOwnerStamp
-                | HarnessAction::SkillGrant
-                | HarnessAction::McpGrant
-                | HarnessAction::NlInstall
+            HarnessAction::SkillGrant | HarnessAction::McpGrant | HarnessAction::NlInstall
         )
     }
 
     proptest! {
-        /// 不变量：自动通过当且仅当存储档恰好是 4 且动作在四件白名单。
-        /// 开场草案、远程发布、最终验收、内置永不、L0–L3、脏档一律等。
+        /// 不变量：自动通过当且仅当存储档恰好是 4 且动作在三件白名单。
+        /// 改进提案、开场草案、远程发布、最终验收、内置永不、L0–L3、脏档一律等。
         /// 授权和安装的自动通过写入面只能是当前项目。
         #[test]
         fn auto_pass_only_l4_allowlist_and_project_scope(

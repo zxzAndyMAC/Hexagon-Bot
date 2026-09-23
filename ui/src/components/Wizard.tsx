@@ -26,19 +26,20 @@ interface Draft {
   initGit: boolean
   genAgents: boolean
   agentsMd: string
-  autonomy: 'L0' | 'L1' | 'L2' | 'L3' | 'L4'
   /// 票 16：空目录项目说明的种子。优化前不落盘。
   brief: string
+  /// 确认前的流程草稿。快速通道不采用它。
+  flowPack: PackDef | null
+  fastPath: boolean
 }
 
 // 票 08：新草稿默认勾上项目经理。已写入 localStorage 的草稿按保存的勾选
 // 恢复——负责人卸掉之后不会被这次默认重新勾上。
 const EMPTY: Draft = {
-  dir: '', name: '', roles: ['项目经理'], roleOverrides: {}, mode: 'pack', packName: '规格驱动',
-  fastRole: '', initGit: false, genAgents: false, agentsMd: '', autonomy: 'L4', brief: '',
+  dir: '', name: '', roles: ['项目经理'], roleOverrides: {}, mode: 'pack', packName: '',
+  fastRole: '', initGit: false, genAgents: false, agentsMd: '', brief: '',
+  flowPack: null, fastPath: false,
 }
-
-const AUTONOMY_LEVELS = ['L0', 'L1', 'L2', 'L3', 'L4'] as const
 
 function loadDraft(): Draft {
   try {
@@ -48,8 +49,139 @@ function loadDraft(): Draft {
   }
 }
 
-const STEPS = ['providers', 'dir', 'roles', 'mode', 'instructions', 'keys', 'confirm'] as const
+const STEPS = ['providers', 'dir', 'roles', 'brief', 'flow', 'keys', 'confirm'] as const
 type Step = (typeof STEPS)[number]
+
+function FlowDraft({
+  pack, roles, onChange,
+}: {
+  pack: PackDef | null
+  roles: string[]
+  onChange: (pack: PackDef) => void
+}) {
+  const { t } = useTranslation()
+  if (!pack) {
+    return <div className="dim3" style={{ fontSize: 12 }}>{t('wizard.flowDraft')}</div>
+  }
+  const stages = pack.stages
+  const update = (next: PackDef['stages']) => onChange({ ...pack, stages: next })
+  return (
+    <div data-flow-draft>
+      <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{pack.name}</div>
+      {stages.map((st, i) => (
+        <div key={i} data-stage-row style={{ display: 'grid', gap: 6, marginBottom: 10 }}>
+          <input
+            className="input"
+            aria-label={t('wizard.stageName')}
+            value={st.name}
+            onChange={(e) => {
+              const next = stages.slice()
+              next[i] = { ...st, name: e.target.value }
+              update(next)
+            }}
+          />
+          <input
+            className="input"
+            aria-label={t('wizard.stageRoles')}
+            value={st.roles.join('、')}
+            onChange={(e) => {
+              const next = stages.slice()
+              next[i] = {
+                ...st,
+                roles: e.target.value.split(/[、,]/).map((s) => s.trim()).filter(Boolean),
+              }
+              update(next)
+            }}
+          />
+          <label style={{ display: 'flex', gap: 6, fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={st.stamp_point}
+              onChange={(e) => {
+                const next = stages.slice()
+                next[i] = { ...st, stamp_point: e.target.checked }
+                update(next)
+              }}
+            />
+            {t('wizard.stampPoint')}
+          </label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn" type="button" disabled={i === 0} onClick={() => {
+              const next = stages.slice()
+              const [row] = next.splice(i, 1)
+              next.splice(i - 1, 0, row)
+              update(next)
+            }}>{t('wizard.moveUp')}</button>
+            <button className="btn" type="button" disabled={i === stages.length - 1} onClick={() => {
+              const next = stages.slice()
+              const [row] = next.splice(i, 1)
+              next.splice(i + 1, 0, row)
+              update(next)
+            }}>{t('wizard.moveDown')}</button>
+            <button className="btn" type="button" onClick={() => update(stages.filter((_, j) => j !== i))}>
+              {t('wizard.removeStage')}
+            </button>
+          </div>
+        </div>
+      ))}
+      <button
+        className="btn"
+        type="button"
+        data-add-stage
+        onClick={() => update([...stages, {
+          name: t('wizard.newStage'),
+          roles: roles.slice(0, 1),
+          due: [],
+          checks: [],
+          reviews: [],
+          stamp_point: false,
+          backfill_edges: [],
+          consult_wake: [],
+        }])}
+      >
+        {t('wizard.addStage')}
+      </button>
+    </div>
+  )
+}
+
+function NewRoleForm({ names, onDone }: { names: string[]; onDone: (def: RoleDef) => void }) {
+  const { t } = useTranslation()
+  const [name, setName] = useState('')
+  const [duty, setDuty] = useState('')
+  const [reviewer, setReviewer] = useState('')
+  const [err, setErr] = useState('')
+  return (
+    <div data-new-role-form className="panel" style={{ padding: 10, marginBottom: 10 }}>
+      <input className="input" aria-label={t('agent.roleName')} value={name} onChange={(e) => setName(e.target.value)} placeholder={t('agent.roleName')} />
+      <textarea className="input" aria-label={t('agent.duty')} value={duty} onChange={(e) => setDuty(e.target.value)} placeholder={t('agent.duty')} style={{ marginTop: 6, width: '100%', minHeight: 48 }} />
+      <select className="input" aria-label={t('agent.reviewer')} value={reviewer} onChange={(e) => setReviewer(e.target.value)} style={{ marginTop: 6 }}>
+        <option value="">{t('agent.noReviewer')}</option>
+        {names.map((n) => <option key={n} value={n}>{n}</option>)}
+      </select>
+      {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 6 }}>{err}</div>}
+      <button
+        className="btn primary"
+        type="button"
+        style={{ marginTop: 8 }}
+        disabled={!name.trim()}
+        onClick={() => {
+          const def: RoleDef = {
+            name: name.trim(),
+            duty: duty.trim(),
+            reviewer: reviewer || null,
+            model_slot: 'default',
+            globs: [],
+            skills: [],
+          }
+          api.saveRoleTemplate(def).then(() => onDone(def)).catch((e) => setErr(errText(e)))
+        }}
+      >
+        {t('agent.createRole')}
+      </button>
+    </div>
+  )
+}
 
 function Chip({ ok, warn, children }: { ok?: boolean; warn?: boolean; children: React.ReactNode }) {
   return (
@@ -71,7 +203,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [draft, setDraft] = useState<Draft>(loadDraft)
   const [report, setReport] = useState<DirReport | null>(null)
   const [tpls, setTpls] = useState<RoleTemplate[]>([])
-  const [packs, setPacks] = useState<PackDef[]>([])
+  const [makingRole, setMakingRole] = useState(false)
   // 正在展开定制的角色名（roles 步内联编辑面板）
   const [customizing, setCustomizing] = useState<string | null>(null)
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
@@ -97,7 +229,6 @@ export function Wizard({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     api.listRoleTemplates().then(setTpls).catch(() => {})
-    api.presetPacks().then(setPacks).catch(() => {})
   }, [])
 
   // 目录变化 → 重新体检（setTimeout 内统一处理，避免 effect 内同步 setState）
@@ -176,13 +307,12 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       case 'providers': return providerStepReady(doc)
       case 'dir': return !!draft.dir && !!draft.name && !dirBlocked
       case 'roles': return draft.roles.length > 0
-      case 'mode':
-        return draft.mode === 'pack' ? !!draft.packName : !!draft.fastRole
-      case 'instructions':
-      case 'confirm': return true
+      case 'brief': return !!report?.instructions || !!draft.agentsMd.trim() || !!draft.brief.trim()
+      case 'flow': return !!draft.flowPack && draft.flowPack.stages.length > 0
+      case 'confirm': return !draft.fastPath || !!draft.fastRole
       case 'keys': return unready.length === 0 && slots.length > 0
     }
-  }, [step, draft, dirBlocked, unready, slots, doc])
+  }, [step, draft, dirBlocked, unready, slots, doc, report])
 
   const existingRepoAlign =
     !!report?.is_git && !report?.empty && draft.roles.includes('产品策划')
@@ -272,11 +402,11 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         // 全部勾选角色传生效定义：自定义模板与定制项经 override 链物化，
         // 内置模板同名直传也无损（定义等价）。
         roleOverrides: pickedRoles.map(effDef),
-        packName: draft.mode === 'pack' ? draft.packName : null,
-        fastpathRole: draft.mode === 'fastpath' ? draft.fastRole : null,
+        packName: null,
+        pack: draft.fastPath ? null : draft.flowPack,
+        fastpathRole: draft.fastPath ? draft.fastRole : null,
         initGit: draft.initGit,
         agentsMd: agentsToWrite(),
-        autonomy: draft.autonomy,
       }, note)
       localStorage.removeItem(DRAFT_KEY)
       onDone()
@@ -290,6 +420,17 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       setBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (step !== 'flow' || draft.flowPack) return
+    const sentence = draft.agentsMd.trim() || draft.brief.trim() || draft.name
+    if (!sentence) return
+    let cancelled = false
+    api.draftFlow(sentence).then((pack) => {
+      if (!cancelled) set({ flowPack: pack })
+    }).catch((e) => { if (!cancelled) setErr(errText(e)) })
+    return () => { cancelled = true }
+  }, [step, draft.flowPack, draft.agentsMd, draft.brief, draft.name, set])
 
   const idx = STEPS.indexOf(step)
   const body: Record<Step, React.ReactNode> = {
@@ -357,7 +498,25 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     ),
     roles: (
       <>
-        <div className="dim3" style={{ fontSize: 11, marginBottom: 4 }}>{t('wizard.rolesHint')}</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div className="dim3" style={{ fontSize: 11 }}>{t('wizard.rolesHint')}</div>
+          <button className="btn" data-new-role type="button" onClick={() => setMakingRole((v) => !v)}>
+            {t('agent.createRole')}
+          </button>
+        </div>
+        {makingRole && (
+          <NewRoleForm
+            names={tpls.map((tp) => tp.def.name)}
+            onDone={(def) => {
+              setTpls((list) => [...list.filter((tp) => tp.def.name !== def.name), { def, origin: 'custom' }])
+              set({
+                roles: draft.roles.includes(def.name) ? draft.roles : [...draft.roles, def.name],
+                roleOverrides: { ...draft.roleOverrides, [def.name]: def },
+              })
+              setMakingRole(false)
+            }}
+          />
+        )}
         <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.pmDefault')}</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
           {tpls.map((tp) => {
@@ -430,56 +589,14 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         )}
       </>
     ),
-    mode: (
-      <>
-        <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('wizard.modeHint')}</div>
-        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-          <input
-            type="radio"
-            checked={draft.mode === 'pack'}
-            onChange={() => set({ mode: 'pack' })}
-          />
-          {t('wizard.packMode')}
-        </label>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '8px 0 12px 22px' }}>
-          {packs.map((p) => (
-            <label key={p.name} style={{ display: 'flex', gap: 6, fontSize: 12 }}>
-              <input
-                type="radio"
-                disabled={draft.mode !== 'pack'}
-                checked={draft.mode === 'pack' && draft.packName === p.name}
-                onChange={() => set({ packName: p.name })}
-              />
-              {p.name}
-              <span className="dim3">（{p.stages.length} {t('wizard.stages')}）</span>
-            </label>
-          ))}
-        </div>
-        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-          <input
-            type="radio"
-            checked={draft.mode === 'fastpath'}
-            onChange={() => set({ mode: 'fastpath' })}
-          />
-          {t('wizard.fastMode')}
-        </label>
-        <div style={{ margin: '8px 0 0 22px' }}>
-          <select
-            className="input"
-            style={{ width: 'auto', minWidth: 200 }}
-            disabled={draft.mode !== 'fastpath'}
-            value={draft.fastRole}
-            onChange={(e) => set({ fastRole: e.target.value })}
-          >
-            <option value="">{t('wizard.fastPick')}</option>
-            {pickedRoles.map((tp) => (
-              <option key={tp.def.name} value={tp.def.name}>{tp.def.name}</option>
-            ))}
-          </select>
-        </div>
-      </>
+    flow: (
+      <FlowDraft
+        pack={draft.flowPack}
+        roles={draft.roles}
+        onChange={(flowPack) => set({ flowPack })}
+      />
     ),
-    instructions: (
+    brief: (
       <>
         {report?.instructions ? (
           <div style={{ fontSize: 12 }}>
@@ -632,8 +749,32 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           </div>
           <div>
             <span className="dim3">{t('wizard.sumMode')}：</span>
-            {draft.mode === 'pack' ? draft.packName : `${t('wizard.fastMode')} · ${draft.fastRole}`}
+            {draft.fastPath
+              ? `${t('wizard.fastMode')} · ${draft.fastRole}`
+              : (draft.flowPack?.name || t('wizard.flowDraft'))}
           </div>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8 }}>
+            <input
+              type="checkbox"
+              data-fast-path
+              checked={draft.fastPath}
+              onChange={(e) => set({ fastPath: e.target.checked, mode: e.target.checked ? 'fastpath' : 'pack' })}
+            />
+            {t('wizard.fastOnConfirm')}
+          </label>
+          {draft.fastPath && (
+            <select
+              className="input"
+              style={{ width: 'auto', minWidth: 200, marginTop: 6 }}
+              value={draft.fastRole}
+              onChange={(e) => set({ fastRole: e.target.value })}
+            >
+              <option value="">{t('wizard.fastPick')}</option>
+              {pickedRoles.map((tp) => (
+                <option key={tp.def.name} value={tp.def.name}>{tp.def.name}</option>
+              ))}
+            </select>
+          )}
           <div>
             <span className="dim3">{t('wizard.sumAgents')}：</span>
             {report?.instructions
@@ -642,27 +783,6 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                 ? t('wizard.sumAgentsGen')
                 : t('wizard.sumAgentsNone')}
           </div>
-          <div>
-            <span className="dim3">{t('wizard.sumAutonomy')}：</span>
-            {t(`autonomy.${draft.autonomy}`)}
-          </div>
-        </div>
-        <label className="dim3" style={{ fontSize: 11, display: 'block', marginTop: 12 }}>
-          {t('wizard.autonomyLabel')}
-        </label>
-        <select
-          aria-label={t('wizard.autonomyLabel')}
-          className="input"
-          style={{ marginTop: 4, textAlign: 'left', width: 'auto', minWidth: 200 }}
-          value={draft.autonomy}
-          onChange={(e) => set({ autonomy: e.target.value as Draft['autonomy'] })}
-        >
-          {AUTONOMY_LEVELS.map((lv) => (
-            <option key={lv} value={lv}>{t(`autonomy.${lv}`)}</option>
-          ))}
-        </select>
-        <div className="dim3" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.6 }}>
-          {t('wizard.autonomyHint')}
         </div>
         {existingRepoAlign && (
           <div className="panel" style={{ marginTop: 12, padding: '8px 10px', fontSize: 12, color: 'var(--flag)' }}>

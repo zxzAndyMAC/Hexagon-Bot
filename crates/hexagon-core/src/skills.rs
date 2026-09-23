@@ -21,6 +21,19 @@ use std::path::{Path, PathBuf};
 /// 技能名长度上限（store.py `_MAX_NAME` 同值）。
 const MAX_NAME: usize = 64;
 
+/// 给 Agent 看的名字。目录仍是 `经验-<角色>`，避免两个角色互相覆盖。
+pub fn experience_display(name: &str) -> &str {
+    if name.starts_with("经验-") {
+        "经验"
+    } else {
+        name
+    }
+}
+
+pub fn experience_dir_name(role: &str) -> String {
+    format!("经验-{role}")
+}
+
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub name: String,
@@ -31,8 +44,9 @@ pub struct Skill {
     pub path: PathBuf,
 }
 
-/// 技能名 = 目录名：只允许字母数字点线，禁 `..`/`/`/`\`——
-/// 拒绝一切能逃出 scope 目录的形态（store.py `validate_name`）。
+/// 技能名 = 目录名。禁 `..`、`/`、`\` 和空白——拒绝能逃出技能目录的形态。
+/// 允许 Unicode 字母：经验技能的目录是 `经验-<角色名>`（ADR 0069）。
+/// 被否决：只留 ASCII。那样经验技能在装载时被丢掉。
 pub fn validate_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -44,9 +58,10 @@ pub fn validate_name(name: &str) -> Result<String, String> {
     if name.contains("..")
         || name.contains('/')
         || name.contains('\\')
+        || name.chars().any(|c| c.is_whitespace() || c.is_control())
         || !name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_'))
     {
         return Err(
             "skill name may only contain letters, digits, dots, dashes, underscores".into(),
@@ -130,7 +145,10 @@ impl SkillLoader {
             .skills
             .values()
             .filter(|s| !muted.contains(&s.name))
-            .map(|s| format!("- {}: {}", s.name, s.description))
+            .map(|s| {
+                let shown = experience_display(&s.name);
+                format!("- {shown}: {}", s.description)
+            })
             .collect();
         if lines.is_empty() {
             return None;
@@ -664,7 +682,7 @@ mod tests {
         ] {
             assert!(validate_name(bad).is_err(), "{bad:?} must be rejected");
         }
-        for ok in ["api-conv", "test_v2", "x.y", "ABC"] {
+        for ok in ["api-conv", "test_v2", "x.y", "ABC", "经验-前端"] {
             assert!(validate_name(ok).is_ok(), "{ok:?} must be accepted");
         }
     }

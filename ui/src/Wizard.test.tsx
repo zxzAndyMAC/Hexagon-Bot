@@ -301,7 +301,7 @@ describe('一句话优化成项目说明（票 16）', () => {
     const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
     const skeleton = vi.spyOn(api, 'agentsMdDraft').mockResolvedValue('# SKELETON')
     const el = await renderWizard()
-    await advance(el, '5 · Instructions')
+    await advance(el, '4 · Project brief')
     expect(skeleton).not.toHaveBeenCalled()
     const optimizeBtn = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Optimize')!
     expect(optimizeBtn.disabled).toBe(true)
@@ -322,7 +322,7 @@ describe('一句话优化成项目说明（票 16）', () => {
     await act(async () => { setTextArea(boxes[1], `${MODEL_DRAFT}\n人手改过`) })
     const back = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Back')!
     await act(async () => { back.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    expect(el.textContent).toContain('4 · Process')
+    expect(el.textContent).toContain('3 · Roles')
     expect(create).not.toHaveBeenCalled()
     await advance(el, '7 · Launch')
     const launch = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Create project')!
@@ -337,7 +337,7 @@ describe('一句话优化成项目说明（票 16）', () => {
 
   it('说明步 textarea 走 .input 原语', async () => {
     const el = await renderWizard()
-    await advance(el, '5 · Instructions')
+    await advance(el, '4 · Project brief')
     expect(el.querySelectorAll('input.btn, textarea.btn, select.btn')).toHaveLength(0)
     expect(el.querySelectorAll('textarea.input').length).toBeGreaterThanOrEqual(1)
   })
@@ -346,7 +346,7 @@ describe('一句话优化成项目说明（票 16）', () => {
     vi.spyOn(api, 'optimizeAgentsMd').mockResolvedValue(MODEL_DRAFT)
     const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
     const el = await renderWizard()
-    await advance(el, '5 · Instructions')
+    await advance(el, '4 · Project brief')
     const brief = el.querySelector('textarea') as HTMLTextAreaElement
     await act(async () => { setTextArea(brief, '一个本地待办清单') })
     const optimizeBtn = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Optimize')!
@@ -367,7 +367,7 @@ describe('一句话优化成项目说明（票 16）', () => {
     const optimize = vi.spyOn(api, 'optimizeAgentsMd').mockResolvedValue(MODEL_DRAFT)
     const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
     const el = await renderWizard()
-    await advance(el, '5 · Instructions')
+    await advance(el, '4 · Project brief')
     expect(el.textContent).toContain('Instructions file detected')
     expect(el.textContent).toContain(file)
     expect([...el.querySelectorAll('button')].some((b) => b.textContent === 'Optimize')).toBe(false)

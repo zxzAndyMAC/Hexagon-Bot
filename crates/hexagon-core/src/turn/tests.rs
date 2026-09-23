@@ -590,7 +590,10 @@ fn ask_pauses_turn_with_question() {
     let (db, reg, ctx, _dir) = setup();
     // 票 03：省略 autonomy 的项目行默认 L4，bash 会放行，回合不再停在询问。
     // 本测试守的是 L0–L2 仍排队，所以钉 L0。
-    crate::autonomy::set_level(&db, "p1", "L0").unwrap();
+    // ADR 0069：门面不再设档。本夹具写列，把默认 L4 收成排队语义。
+    db.conn()
+        .execute("UPDATE projects SET autonomy='L0' WHERE id='p1'", [])
+        .unwrap();
     let provider = ScriptedProvider::new(vec![tool_response(vec![(
         "t1",
         "bash",

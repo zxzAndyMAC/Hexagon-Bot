@@ -748,7 +748,10 @@ mod tests {
     #[test]
     fn backfill_edge_auto_adjudicates_at_l1() {
         let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
-        crate::autonomy::set_level(&db, "p1", "L1").unwrap();
+        // ADR 0069：门面不再设档。本夹具写列，锁存储秩分支。
+        db.conn()
+            .execute("UPDATE projects SET autonomy='L1' WHERE id='p1'", [])
+            .unwrap();
         let (r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
         // 当前阶段 = 接口(seq1)：声明了回填边 前端→UI
         db.conn()
@@ -785,7 +788,9 @@ mod tests {
     #[test]
     fn flag_at_l2_auto_wakes_reviewer() {
         let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
-        crate::autonomy::set_level(&db, "p1", "L2").unwrap();
+        db.conn()
+            .execute("UPDATE projects SET autonomy='L2' WHERE id='p1'", [])
+            .unwrap();
         let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
         // 架构师(a2) 质疑界面稿：架构师→UI 不在回填边里 → 不自动裁决，走 L2 唤醒
         let c = ctx("p1", "a2", dir.path(), Some(&_r0));
@@ -815,7 +820,9 @@ mod tests {
     fn flag_at_l3_and_l4_executes_like_l2() {
         for lv in ["L3", "L4"] {
             let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
-            crate::autonomy::set_level(&db, "p1", lv).unwrap();
+            db.conn()
+                .execute("UPDATE projects SET autonomy=?1 WHERE id='p1'", [lv])
+                .unwrap();
             assert_eq!(crate::autonomy::level(&db, "p1").unwrap(), lv);
             let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
             let c = ctx("p1", "a2", dir.path(), Some(&_r0));
@@ -944,7 +951,10 @@ mod tests {
     #[test]
     fn auto_backfill_emits_backfill_executed_with_decision() {
         let (db, dir, pack) = setup(&["UI", "前端", "架构师"]);
-        crate::autonomy::set_level(&db, "p1", "L1").unwrap();
+        // ADR 0069：门面不再设档。本夹具写列，锁存储秩分支。
+        db.conn()
+            .execute("UPDATE projects SET autonomy='L1' WHERE id='p1'", [])
+            .unwrap();
         let (_r0, _art) = seed_artifact(&db, dir.path(), &pack, "a0");
         db.conn()
             .execute("UPDATE stage_runs SET state='done' WHERE seq=0", [])

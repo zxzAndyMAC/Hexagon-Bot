@@ -339,6 +339,7 @@ export const api = {
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
   optimizeAgentsMd: (name: string, sentence: string) =>
     call<string>('optimize_agents_md', { name, sentence }),
+  draftFlow: (sentence: string) => call<PackDef>('draft_flow', { sentence }),
   /// 票 17：进工作台后的只读开场分析。不挡住输入；空目录和再次打开是空操作。
   runOpeningIntake: () => call<void>('run_opening_intake'),
   confirmIntakeBrief: () => call<void>('confirm_intake_brief'),
@@ -355,6 +356,7 @@ export const api = {
       /// 后端 override 优先、回落内置；不传=纯内置目录）。
       roleOverrides?: RoleDef[]
       packName?: string | null
+      pack?: PackDef | null
       fastpathRole?: string | null
       initGit: boolean
       agentsMd?: string | null
@@ -369,6 +371,7 @@ export const api = {
         roles: opts.roles,
         roleOverrides: opts.roleOverrides ?? null,
         packName: opts.packName ?? null,
+        pack: opts.pack ?? null,
         fastpathRole: opts.fastpathRole ?? null,
         initGit: opts.initGit,
         agentsMd: opts.agentsMd ?? null,
@@ -1029,6 +1032,15 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'dispatch':
     case 'upgrade_to_pack':
       return null as T
+    case 'draft_flow':
+      return {
+        name: '生成的流程', version: 1,
+        stages: [{
+          name: '实现', roles: ['后端'], due: ['代码'], checks: ['npm test'],
+          reviews: [], stamp_point: true, backfill_edges: [['后端', 'QA']], consult_wake: ['架构师'],
+        }],
+        knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      } as T
     case 'inspect_dir':
       return { exists: true, empty: false, is_git: true, dirty: false, has_workbench: false, instructions: 'AGENTS.md' } as T
     case 'preset_roles':

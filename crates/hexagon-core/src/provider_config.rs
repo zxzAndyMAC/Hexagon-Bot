@@ -82,6 +82,13 @@ fn default_true() -> bool {
     true
 }
 
+/// 三个起草槽。没绑就经 [`resolve_slot`] 落到 default。
+pub const ROLE_DRAFT_SLOT: &str = "role_draft";
+pub const BRIEF_SLOT: &str = "brief";
+pub const FLOW_DRAFT_SLOT: &str = "flow_draft";
+/// Jev。不走 default 回退，见 [`resolve_exact`]。
+pub const JEV_SLOT: &str = "jev";
+
 /// 槽位 → 供应商+模型。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
@@ -185,6 +192,12 @@ pub fn remove_binding(slot: &str) -> Result<(), ProvidersError> {
 /// 绑定槽缺失时回退 `default` 槽。调用方不得再手写 `.or_else(get("default"))`。
 pub fn resolve_slot<'a, V>(map: &'a HashMap<String, V>, slot: &str) -> Option<&'a V> {
     map.get(slot).or_else(|| map.get("default"))
+}
+
+/// 精确绑定。Jev 用这个：没绑就是空，不落到 default，也不落到某个 Agent 的模型槽。
+/// 回退链仍然只有 [`resolve_slot`] 一处。
+pub fn resolve_exact<'a, V>(map: &'a HashMap<String, V>, slot: &str) -> Option<&'a V> {
+    map.get(slot)
 }
 
 /// 槽位能力集（agent-senses 票 02）：绑定槽 → 模型条目 caps；

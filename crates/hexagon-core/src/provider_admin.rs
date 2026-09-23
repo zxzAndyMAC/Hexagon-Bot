@@ -117,6 +117,33 @@ pub fn fetch_models(
 /// 票 16：向导优化项目说明用的主对话模型。项目还不存在，不走 Workbench。
 /// 主对话 = default 槽（票 13 向导第一步放行的那一条），不是角色槽。
 /// 缺绑定、供应商不存在、停用、空模型名、没钥匙 → 不发请求。
+/// 起草槽。`resolve_slot` 在槽未绑时落到 default。Jev 不走这里。
+pub fn authoring_provider(
+    store: Arc<dyn CredentialStore>,
+    slot: &str,
+) -> Result<Arc<dyn ModelProvider>, AdminError> {
+    let doc = provider_config::load()?;
+    let Some(binding) = provider_config::resolve_slot(&doc.slots, slot) else {
+        return Err(AdminError::MainChatUnavailable);
+    };
+    let Some(def) = doc.providers.iter().find(|p| p.id == binding.provider_id) else {
+        return Err(AdminError::MainChatUnavailable);
+    };
+    if !def.enabled || binding.model.trim().is_empty() {
+        return Err(AdminError::MainChatUnavailable);
+    }
+    let key = store.get(&provider_key_name(&def.id))?;
+    if key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return Err(AdminError::MainChatUnavailable);
+    }
+    Ok(provider_config::make_provider(def, binding.model.as_str(), store))
+}
+
 pub fn main_chat_provider(
     store: Arc<dyn CredentialStore>,
 ) -> Result<Arc<dyn ModelProvider>, AdminError> {
