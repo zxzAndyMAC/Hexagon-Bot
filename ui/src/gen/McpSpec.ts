@@ -12,4 +12,9 @@ export type McpSpec = { name: string, command: string, args: Array<string>, cwd:
 /**
  * 注入子进程的环境变量（可含密钥——本机明文文件，与 cursor/claude 惯例一致）。
  */
-env: { [key in string]?: string }, disabled: boolean, url: string | null, };
+env: { [key in string]?: string }, 
+/**
+ * 远程传输的请求标头（Authorization 等，可含密钥——与 env 同约定本机明文）。
+ * stdio 条目存而不用：外部配置里的 headers 原样保留，http 传输落地时消费。
+ */
+headers: { [key in string]?: string }, disabled: boolean, url: string | null, };

@@ -619,7 +619,7 @@ export default {
     enabled: 'Activé',
     live: 'Exécution (ce projet)',
     saved: 'Enregistré',
-    fName: 'Nom', fCommand: 'Commande', fArgs: 'Arguments (séparés par espaces)', fCwd: 'Dossier (optionnel)', fEnv: 'Env (K=V par ligne)',
+    fName: 'Nom', fCommand: 'Commande', fArgs: 'Arguments (séparés par espaces)', fCwd: 'Dossier (optionnel)', fEnv: 'Env (K=V par ligne)', fHeaders: 'En-têtes (K=V par ligne)', headersN: '{{n}} en-têtes',
     scan: 'Scanner les MCP locaux', scanning: 'Analyse…', market: 'Marché MCP',
     scanTitle: 'Services MCP trouvés sur cette machine', scanHint: 'dédupliqués par nom+transport ; conflits ignorés',
     scanEmpty: 'Aucun service MCP externe trouvé.', conflict: 'conflit',

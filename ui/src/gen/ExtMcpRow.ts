@@ -10,6 +10,10 @@ export type ExtMcpRow = { name: string, command: string, args: Array<string>, en
  */
 transport: string, url: string | null, 
 /**
+ * 远程标头（Authorization 等）——导入时随 spec 原样落盘
+ */
+headers: { [key in string]?: string }, 
+/**
  * 来源平台（cursor/claude/codex/…）
  */
 origin: string, 

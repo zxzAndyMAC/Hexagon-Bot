@@ -619,7 +619,7 @@ export default {
     enabled: '啟用',
     live: '運行實況（本專案）',
     saved: '已儲存',
-    fName: '名稱', fCommand: '命令', fArgs: '參數（空格分隔）', fCwd: '工作目錄（可選）', fEnv: '環境變數（每行 K=V）',
+    fName: '名稱', fCommand: '命令', fArgs: '參數（空格分隔）', fCwd: '工作目錄（可選）', fEnv: '環境變數（每行 K=V）', fHeaders: '請求標頭（每行 K=V）', headersN: '{{n}} 個標頭',
     scan: '掃描本機 MCP', scanning: '掃描中…', market: 'MCP 市集',
     scanTitle: '本機發現的 MCP 服務', scanHint: '按名+傳輸簽名去重；衝突項跳過不覆寫',
     scanEmpty: '本機未發現可匯入的 MCP 服務。', conflict: '同名衝突',

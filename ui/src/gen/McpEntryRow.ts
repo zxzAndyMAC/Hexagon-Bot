@@ -9,6 +9,10 @@ export type McpEntryRow = { name: string, command: string, args: Array<string>, 
  */
 transport: string, url: string | null, 
 /**
+ * 远程标头（Authorization 等）——清单行带给 UI 显示/编辑
+ */
+headers: { [key in string]?: string }, 
+/**
  * "global" | "project"（同名项目覆盖全局——全局行被吞后不显示）
  */
 origin: string, };

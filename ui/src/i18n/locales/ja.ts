@@ -619,7 +619,7 @@ export default {
     enabled: '有効',
     live: 'ランタイム（このプロジェクト）',
     saved: '保存しました',
-    fName: '名前', fCommand: 'コマンド', fArgs: '引数（空白区切り）', fCwd: '作業ディレクトリ（任意）', fEnv: '環境変数（1行に K=V）',
+    fName: '名前', fCommand: 'コマンド', fArgs: '引数（空白区切り）', fCwd: '作業ディレクトリ（任意）', fEnv: '環境変数（1行に K=V）', fHeaders: 'ヘッダー（1行に K=V）', headersN: 'ヘッダー {{n}} 件',
     scan: 'ローカル MCP をスキャン', scanning: 'スキャン中…', market: 'MCP マーケット',
     scanTitle: 'このマシンで見つかった MCP サービス', scanHint: '名前+転送で重複排除；競合はスキップ',
     scanEmpty: 'インポート可能な MCP サービスが見つかりません。', conflict: '名前競合',

@@ -619,7 +619,7 @@ export default {
     enabled: 'Activado',
     live: 'En ejecución (este proyecto)',
     saved: 'Guardado',
-    fName: 'Nombre', fCommand: 'Comando', fArgs: 'Argumentos (separados por espacio)', fCwd: 'Directorio (opcional)', fEnv: 'Env (K=V por línea)',
+    fName: 'Nombre', fCommand: 'Comando', fArgs: 'Argumentos (separados por espacio)', fCwd: 'Directorio (opcional)', fEnv: 'Env (K=V por línea)', fHeaders: 'Cabeceras (K=V por línea)', headersN: '{{n}} cabeceras',
     scan: 'Escanear MCP locales', scanning: 'Escaneando…', market: 'Mercado MCP',
     scanTitle: 'Servicios MCP encontrados en esta máquina', scanHint: 'deduplicados por nombre+transporte; conflictos omitidos',
     scanEmpty: 'No se encontraron servicios MCP externos.', conflict: 'conflicto',

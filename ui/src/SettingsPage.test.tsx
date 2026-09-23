@@ -46,7 +46,7 @@ describe('SettingsPage projectless 门（收口回归）', () => {
     ])
     // 票 05：MCP 全局清单无项目可列；实况（mcpServices）仍项目态不该被调
     const mcpEntries = vi.spyOn(api, 'mcpEntries').mockResolvedValue([
-      { name: 'termius', command: 'ssh-mcp', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },
+      { name: 'termius', command: 'ssh-mcp', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, headers: {}, origin: 'global' },
     ])
     const { el, root } = await render(<SettingsPage onBack={() => {}} projectless />)
     // 团队分区不再是项目态——模板库（内置∪自定义）在无项目时列出
@@ -115,8 +115,8 @@ describe('SettingsPage list|detail 分区', () => {
   }
 
   const mcpEntries = [
-    { name: 'termius', command: 'ssh-mcp', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio' as const, url: null, origin: 'global' as const },
-    { name: 'proj-svc', command: 'p-svc', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio' as const, url: null, origin: 'project' as const },
+    { name: 'termius', command: 'ssh-mcp', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio' as const, url: null, headers: {}, origin: 'global' as const },
+    { name: 'proj-svc', command: 'p-svc', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio' as const, url: null, headers: {}, origin: 'project' as const },
   ]
 
   it('MCP：选中行出详情表单；项目层条目只读不给保存', async () => {
@@ -145,6 +145,46 @@ describe('SettingsPage list|detail 分区', () => {
     await type(el, 'Filter services…', 'proj')
     expect(el.textContent).not.toContain('termius')
     expect(el.textContent).toContain('proj-svc')
+    root.unmount()
+  })
+
+  // 负责人反馈 2026-09：远程 MCP（context7）导入丢了 Authorization——
+  // headers 全链缺失。扫描行带标数 chip、导入透传、详情可显可编。
+  it('MCP 远程：扫描行显示标头数，导入透传 headers', async () => {
+    vi.spyOn(api, 'mcpEntries').mockResolvedValue([])
+    vi.spyOn(api, 'scanExternalMcp').mockResolvedValue([
+      {
+        name: 'context7', command: '', args: [], env: {}, cwd: null, disabled: false,
+        transport: 'remote', url: 'https://mcp.context7.com/mcp',
+        headers: { Authorization: 'Bearer k' }, origin: 'cursor', source_path: '/p', conflict: false,
+      },
+    ])
+    const imp = vi.spyOn(api, 'importMcp').mockResolvedValue({ imported: 1, skipped: [] })
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'MCP services')
+    await clickText(el, 'Scan local MCP')
+    expect(el.textContent).toContain('1 headers')
+    await clickText(el, 'Import (1)')
+    const spec = vi.mocked(imp).mock.calls.at(-1)![0][0]
+    expect(spec.headers).toEqual({ Authorization: 'Bearer k' })
+    root.unmount()
+  })
+
+  it('MCP 远程详情：headers 在表单可见可编', async () => {
+    vi.spyOn(api, 'mcpEntries').mockResolvedValue([
+      {
+        name: 'context7', command: '', args: [], env: {}, cwd: null, disabled: true,
+        transport: 'remote' as const, url: 'https://mcp.context7.com/mcp',
+        headers: { Authorization: 'Bearer k' }, origin: 'global' as const,
+      },
+    ])
+    vi.spyOn(api, 'mcpServices').mockResolvedValue([])
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'MCP services')
+    await clickText(el, 'context7')
+    const headersTa = [...el.querySelectorAll('textarea')]
+      .find((t) => t.value.includes('Authorization=Bearer k'))
+    expect(headersTa).toBeTruthy()
     root.unmount()
   })
 

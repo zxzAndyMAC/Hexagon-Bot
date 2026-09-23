@@ -917,6 +917,7 @@ function McpSection({ projectless }: { projectless: boolean }) {
           // 可见置灰 > 静默隐藏；enabled 后也是 spawnable()=false）
           disabled: r.disabled || r.transport === 'remote',
           url: r.url,
+          headers: r.headers,
         }
       })
       const rep = await api.importMcp(specs)
@@ -937,7 +938,7 @@ function McpSection({ projectless }: { projectless: boolean }) {
     try {
       await api.saveMcpService({
         name: s.name, command: s.command, args: s.args, env: s.env,
-        cwd: s.cwd, disabled: !s.disabled, url: s.url,
+        cwd: s.cwd, disabled: !s.disabled, url: s.url, headers: s.headers,
       })
       await load()
     } catch (e) { pushToast(errText(e), 'err') }
@@ -1081,6 +1082,11 @@ function McpSection({ projectless }: { projectless: boolean }) {
                 {r.transport === 'remote' && (
                   <span className="chip warn" style={{ fontSize: 9 }}>{t('mcp.remote')}</span>
                 )}
+                {Object.keys(r.headers).length > 0 && (
+                  <span className="chip" style={{ fontSize: 9 }}>
+                    {t('mcp.headersN', { n: Object.keys(r.headers).length })}
+                  </span>
+                )}
                 {r.conflict && <span className="chip warn" style={{ fontSize: 9 }}>{t('mcp.conflict')}</span>}
                 <span className="dim3 mono" style={{ fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {r.transport === 'remote' ? r.url : `${r.command} ${r.args.join(' ')}`}
@@ -1141,6 +1147,9 @@ function McpServiceForm({
   const [envText, setEnvText] = useState(
     Object.entries(entry?.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'),
   )
+  const [headersText, setHeadersText] = useState(
+    Object.entries(entry?.headers ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+  )
   const [disabled, setDisabled] = useState(entry?.disabled ?? false)
   const [busy, setBusy] = useState(false)
 
@@ -1152,12 +1161,18 @@ function McpServiceForm({
         const i = line.indexOf('=')
         if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim()
       }
+      const headers: Record<string, string> = {}
+      for (const line of headersText.split('\n')) {
+        const i = line.indexOf('=')
+        if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim()
+      }
       await api.saveMcpService({
         name: name.trim(),
         command: remote ? '' : command.trim(),
         args: remote ? [] : args.split(/\s+/).filter(Boolean),
         cwd: !remote && cwd.trim() ? cwd.trim() : null,
         env,
+        headers,
         disabled,
         url: remote && url.trim() ? url.trim() : null,
       })
@@ -1193,11 +1208,24 @@ function McpServiceForm({
           </label>
         </div>
         {remote ? (
-          <div style={fld}>
-            <div className="dim3" style={{ fontSize: 10 }}>URL (sse/http)</div>
-            <input className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
-            <div className="dim3" style={{ fontSize: 10, marginTop: 2 }}>{t('mcp.remoteHint')}</div>
-          </div>
+          <>
+            <div style={fld}>
+              <div className="dim3" style={{ fontSize: 10 }}>URL (sse/http)</div>
+              <input className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
+              <div className="dim3" style={{ fontSize: 10, marginTop: 2 }}>{t('mcp.remoteHint')}</div>
+            </div>
+            <div style={fld}>
+              <div className="dim3" style={{ fontSize: 10 }}>{t('mcp.fHeaders')}</div>
+              <textarea
+                className="input"
+                rows={3}
+                value={headersText}
+                onChange={(e) => setHeadersText(e.target.value)}
+                placeholder={'Authorization=Bearer …\nX-Key=…'}
+                style={{ fontFamily: 'var(--mono)', fontSize: 12 }}
+              />
+            </div>
+          </>
         ) : (
           <>
             <div style={fld}>

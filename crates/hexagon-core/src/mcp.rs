@@ -37,6 +37,10 @@ pub struct McpSpec {
     /// 注入子进程的环境变量（可含密钥——本机明文文件，与 cursor/claude 惯例一致）。
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// 远程传输的请求标头（Authorization 等，可含密钥——与 env 同约定本机明文）。
+    /// stdio 条目存而不用：外部配置里的 headers 原样保留，http 传输落地时消费。
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub disabled: bool,
     #[serde(default)]
@@ -185,6 +189,8 @@ pub struct McpEntryRow {
     /// "stdio" | "remote"（url 端点，一期不 spawn）
     pub transport: String,
     pub url: Option<String>,
+    /// 远程标头（Authorization 等）——清单行带给 UI 显示/编辑
+    pub headers: std::collections::BTreeMap<String, String>,
     /// "global" | "project"（同名项目覆盖全局——全局行被吞后不显示）
     pub origin: String,
 }
@@ -214,6 +220,7 @@ fn list_mcp_entries_at(
         disabled: s.disabled,
         transport: s.transport().into(),
         url: s.url.clone(),
+        headers: s.headers.clone(),
         origin: origin.into(),
     };
     globals
@@ -257,6 +264,8 @@ pub struct ExtMcpRow {
     /// "stdio" | "remote"
     pub transport: String,
     pub url: Option<String>,
+    /// 远程标头（Authorization 等）——导入时随 spec 原样落盘
+    pub headers: std::collections::BTreeMap<String, String>,
     /// 来源平台（cursor/claude/codex/…）
     pub origin: String,
     /// 来源配置文件路径（透明性：让用户知道从哪读到的）
@@ -307,6 +316,14 @@ fn specs_from_mcp_json(text: &str) -> Vec<McpSpec> {
                             .collect()
                     })
                     .unwrap_or_default(),
+                headers: e["headers"]
+                    .as_object()
+                    .map(|m| {
+                        m.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 disabled: e["disabled"].as_bool().unwrap_or(false),
                 url,
             })
@@ -341,6 +358,14 @@ fn specs_from_mcp_toml(text: &str) -> Vec<McpSpec> {
                     .unwrap_or_default(),
                 cwd: get("cwd").and_then(|v| v.as_str()).map(String::from),
                 env: get("env")
+                    .and_then(|v| v.as_table())
+                    .map(|m| {
+                        m.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                headers: get("headers")
                     .and_then(|v| v.as_table())
                     .map(|m| {
                         m.iter()
@@ -394,6 +419,7 @@ pub fn scan_external_mcp_at(
                 cwd: spec.cwd,
                 disabled: spec.disabled,
                 url: spec.url,
+                headers: spec.headers,
                 origin: platform.to_string(),
                 source_path: path.to_string_lossy().to_string(),
             });
@@ -1085,7 +1111,7 @@ while True:
             home.path().join(".cursor/mcp.json"),
             r#"{"mcpServers":{
                 "termius":{"command":"ssh-mcp","args":["--stdio"],"env":{"K":"v"}},
-                "fig":{"url":"https://h/sse"},
+                "fig":{"url":"https://h/sse","headers":{"Authorization":"Bearer t1"}},
                 "bad json row":42
             }}"#,
         )
@@ -1094,7 +1120,7 @@ while True:
         std::fs::create_dir_all(home.path().join(".codex")).unwrap();
         std::fs::write(
             home.path().join(".codex/config.toml"),
-            "[mcp_servers.ctx7]\ncommand = \"npx\"\nargs = [\"-y\", \"@upstash/context7-mcp\"]\n\n[mcp_servers.remote]\nurl = \"https://r/mcp\"\n",
+            "[mcp_servers.ctx7]\ncommand = \"npx\"\nargs = [\"-y\", \"@upstash/context7-mcp\"]\n\n[mcp_servers.remote]\nurl = \"https://r/mcp\"\n[mcp_servers.remote.headers]\nAuthorization = \"Bearer t2\"\n",
         )
         .unwrap();
         // 另一个平台同名同实现 → 去重
@@ -1122,10 +1148,13 @@ while True:
         assert_eq!(t.origin, "cursor");
         assert_eq!(t.env["K"], "v");
         assert_eq!(t.transport, "stdio");
-        assert_eq!(
-            rows.iter().find(|r| r.name == "fig").unwrap().transport,
-            "remote"
-        );
+        // 远程行标头随扫描行带出（负责人反馈 2026-09：context7 导入丢了
+        // Authorization——解析只认 command/url/env，headers 整环缺失）
+        let fig = rows.iter().find(|r| r.name == "fig").unwrap();
+        assert_eq!(fig.transport, "remote");
+        assert_eq!(fig.headers["Authorization"], "Bearer t1");
+        let r = rows.iter().find(|r| r.name == "remote").unwrap();
+        assert_eq!(r.headers["Authorization"], "Bearer t2");
         let c = rows.iter().find(|r| r.name == "ctx7").unwrap();
         assert!(c.conflict);
         assert_eq!(c.origin, "codex");
@@ -1137,22 +1166,39 @@ while True:
         let dir = tempfile::tempdir().unwrap();
         let gpath = dir.path().join("g.json");
         save_global_mcp_at(&spec("have", "/bin/have"), &gpath).unwrap();
+        let mut remote = spec("ctx7", "");
+        remote.url = Some("https://mcp.context7.com/mcp".into());
+        remote
+            .headers
+            .insert("Authorization".into(), "Bearer k".into());
         let rep = import_mcp_at(
             &gpath,
             &[
                 spec("have", "/bin/other"),
                 spec("new", "/bin/new"),
                 spec("bad name", "/x"),
+                remote,
             ],
         );
-        assert_eq!(rep.imported, 1);
+        assert_eq!(rep.imported, 2);
         assert_eq!(rep.skipped.len(), 2);
         let loaded = read_specs_at(&gpath);
-        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.len(), 3);
         // 既有条目没被覆盖
         assert_eq!(
             loaded.iter().find(|s| s.name == "have").unwrap().command,
             "/bin/have"
+        );
+        // 远程条目标头随导入落盘
+        let c = loaded.iter().find(|s| s.name == "ctx7").unwrap();
+        assert_eq!(c.headers["Authorization"], "Bearer k");
+        assert_eq!(
+            list_mcp_entries_at(&gpath, None)
+                .iter()
+                .find(|e| e.name == "ctx7")
+                .unwrap()
+                .headers["Authorization"],
+            "Bearer k"
         );
     }
 

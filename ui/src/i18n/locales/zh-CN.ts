@@ -619,7 +619,7 @@ export default {
     enabled: '启用',
     live: '运行实况（本项目）',
     saved: '已保存',
-    fName: '名称', fCommand: '命令', fArgs: '参数（空格分隔）', fCwd: '工作目录（可选）', fEnv: '环境变量（每行 K=V）',
+    fName: '名称', fCommand: '命令', fArgs: '参数（空格分隔）', fCwd: '工作目录（可选）', fEnv: '环境变量（每行 K=V）', fHeaders: '请求标头（每行 K=V）', headersN: '{{n}} 个标头',
     scan: '扫描本机 MCP', scanning: '扫描中…', market: 'MCP 市场',
     scanTitle: '本机发现的 MCP 服务', scanHint: '按名+传输签名去重；冲突项跳过不覆盖',
     scanEmpty: '本机未发现可导入的 MCP 服务。', conflict: '同名冲突',

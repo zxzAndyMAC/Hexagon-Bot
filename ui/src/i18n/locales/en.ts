@@ -619,7 +619,7 @@ export default {
     enabled: 'Enabled',
     live: 'Runtime (this project)',
     saved: 'Saved',
-    fName: 'Name', fCommand: 'Command', fArgs: 'Args (space-separated)', fCwd: 'Working dir (optional)', fEnv: 'Env (K=V per line)',
+    fName: 'Name', fCommand: 'Command', fArgs: 'Args (space-separated)', fCwd: 'Working dir (optional)', fEnv: 'Env (K=V per line)', fHeaders: 'Headers (K=V per line)', headersN: '{{n}} headers',
     scan: 'Scan local MCP', scanning: 'Scanning…', market: 'MCP marketplace',
     scanTitle: 'MCP services found on this machine', scanHint: 'deduplicated by name+transport; conflicts are skipped',
     scanEmpty: 'No external MCP services found.', conflict: 'conflict',
