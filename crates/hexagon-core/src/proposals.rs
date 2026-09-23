@@ -233,9 +233,10 @@ pub fn submit(
         .ok();
     if author_role.as_deref() == Some(crate::policydev::ROLE) {
         if evidence.is_none() {
-            return Err(PropError::Rejected(
-                format!("{}提案必须附 ```replay 回放证据块", crate::policydev::ROLE),
-            ));
+            return Err(PropError::Rejected(format!(
+                "{}提案必须附 ```replay 回放证据块",
+                crate::policydev::ROLE
+            )));
         }
         match judge_evidence(content) {
             Some(Ok(_)) => {}
