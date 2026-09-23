@@ -79,6 +79,7 @@ export function ExecCard({
   ok,
   copyText,
   delay = 0,
+  animate = true,
   children,
 }: {
   icon: IconName
@@ -87,12 +88,15 @@ export function ExecCard({
   ok: boolean | undefined
   copyText?: string
   delay?: number
+  // 虚拟列表里滚回视口的行会重挂载——入场动画只该在「刚展开」播一次，
+  // 重挂载再播就是闪烁（owner 反馈：快速滚动抖动）。Timeline 传 fresh。
+  animate?: boolean
   children?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const toggle = () => setOpen((v) => !v)
   return (
-    <div className="exec-card" style={{ animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${delay}ms both` }}>
+    <div className="exec-card" style={animate ? { animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${delay}ms both` } : undefined}>
       <div className="exec-head">
         <button type="button" className="exec-toggle" aria-expanded={open} onClick={toggle}>
           <span className="dim3" style={{ display: 'inline-flex' }}><Icon name={icon} size={10} /></span>
@@ -192,7 +196,7 @@ function JsonBody({ call }: { call: ToolCall }) {
 const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`)
 
 /** ToolGroupRow/AgentTab 共用的重负载卡分发。轻量工具走 ToolChipRow 不进这里。 */
-export function ToolExecCard({ call, delay = 0 }: { call: ToolCall; delay?: number }) {
+export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCall; delay?: number; animate?: boolean }) {
   const { t } = useTranslation()
   const p = call.called.event.payload as Record<string, unknown>
   const tool = String(p.tool ?? '')
@@ -219,6 +223,7 @@ export function ToolExecCard({ call, delay = 0 }: { call: ToolCall; delay?: numb
         ok={ok}
         copyText={cmd || undefined}
         delay={delay}
+        animate={animate}
         meta={typeof code === 'number' && code !== 0
           ? <span className="chip err">{t('exec.exit', { code })}</span>
           : undefined}
@@ -240,7 +245,7 @@ export function ToolExecCard({ call, delay = 0 }: { call: ToolCall; delay?: numb
       </>
     )
     return (
-      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || tool} ok={ok} delay={delay}
+      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || tool} ok={ok} delay={delay} animate={animate}
         copyText={typeof inp.new === 'string' ? inp.new : undefined} meta={stats}>
         <PatchBody call={call} />
       </ExecCard>
@@ -255,7 +260,7 @@ export function ToolExecCard({ call, delay = 0 }: { call: ToolCall; delay?: numb
       </>
     )
     return (
-      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || tool} ok={ok} delay={delay}
+      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || tool} ok={ok} delay={delay} animate={animate}
         copyText={path || undefined}
         meta={<>{artVersion > 0 && <span className="chip mono">v{artVersion}</span>}{stats}</>}>
         <ArtifactBody call={call} onOps={setArtOps} />
@@ -266,7 +271,7 @@ export function ToolExecCard({ call, delay = 0 }: { call: ToolCall; delay?: numb
   // fs_write 与其余重负载兜底：bytes 徽标 + JSON 明细（D4 不装伪 diff）。
   const bytes = typeof inp.bytes === 'number' ? inp.bytes : null
   return (
-    <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || toolInputSummary(p) || tool} ok={ok} delay={delay}
+    <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || toolInputSummary(p) || tool} ok={ok} delay={delay} animate={animate}
       copyText={path || undefined}
       meta={bytes != null ? <span className="chip mono">{fmtBytes(bytes)}</span> : undefined}>
       <JsonBody call={call} />

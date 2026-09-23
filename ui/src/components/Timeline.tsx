@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
@@ -148,7 +148,9 @@ function CollapsibleBody({ text, unclamped, live }: { text: string; unclamped?: 
   const ref = useRef<HTMLDivElement>(null)
   const [tall, setTall] = useState(false)
   const [open, setOpen] = useState(false)
-  useEffect(() => {
+  // useLayoutEffect：测高必须抢在 paint 前——useEffect 会先画一帧未夹持全文
+  // 再夹，虚拟列表滚回重挂时每条长消息都闪一下（owner 反馈滚动抖动）。
+  useLayoutEffect(() => {
     // 票 18：story 档全量展开，不测高不夹持
     setTall(!unclamped && (ref.current?.scrollHeight ?? 0) > 260)
   }, [text, unclamped])
@@ -192,7 +194,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   )
 }
 
-function StageHeader({ item }: { item: TimelineItem }) {
+const StageHeader = memo(function StageHeader({ item }: { item: TimelineItem }) {
   const { t } = useTranslation()
   const artifacts = useUiStore((s) => s.artifacts)
   const p = item.event.payload
@@ -206,7 +208,7 @@ function StageHeader({ item }: { item: TimelineItem }) {
       <div className="sysline" style={{ flex: 1 }} />
     </div>
   )
-}
+})
 
 function ReturnSummaryRow({ item, onJumpEvent }: { item: TimelineItem; onJumpEvent?: (eventId: number) => void }) {
   const { t } = useTranslation()
@@ -264,7 +266,9 @@ function ReturnSummaryRow({ item, onJumpEvent }: { item: TimelineItem; onJumpEve
   )
 }
 
-export function EventRow({
+// memo：滚动中 atBottom 翻转/flash 等父级重渲不再连带可见行整棵重渲
+//（remark 重解析是最贵的一帧）；store 订阅（team/openTab）不受 memo 挡。
+export const EventRow = memo(function EventRow({
   item,
   steered,
   turnBoundary,
@@ -414,13 +418,13 @@ export function EventRow({
     )
   }
   return <SystemRow item={item} />
-}
+})
 
 // ToolChips 移植（beautiful-ui 票 02，借形 MIT slev12397/beautiful-ui）：
 // 折叠组展开成逐行 chip——图标+定名+mono 参数片，行点开看 input/result 明细，
 // 组尾文件片点开产物 tab。原作的悬停 diff 预览未移植：core 把 fs_write 的
 // content scrub 成 bytes（safety.rs），事件里没有增删行数据，不做假预览。
-function ToolChipRow({ call, delay }: { call: ToolCall; delay: number }) {
+function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: number; animate?: boolean }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const p = call.called.event.payload as Record<string, unknown>
@@ -430,7 +434,7 @@ function ToolChipRow({ call, delay }: { call: ToolCall; delay: number }) {
   const summary = toolInputSummary(p)
   const detail = JSON.stringify({ input: p.input ?? p, ...(res ? { result: res } : {}) }, null, 2)
   return (
-    <div style={{ animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${delay}ms both` }}>
+    <div style={animate ? { animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${delay}ms both` } : undefined}>
       <button
         type="button"
         className="tchip-row"
@@ -461,7 +465,15 @@ function ToolChipRow({ call, delay }: { call: ToolCall; delay: number }) {
   )
 }
 
-export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; expanded: boolean; onToggle: () => void }) {
+export const ToolGroupRow = memo(function ToolGroupRow({ items, expanded, idx, onToggle, fresh }: {
+  items: TimelineItem[]
+  expanded: boolean
+  idx: number
+  onToggle: (idx: number) => void
+  // fresh=true：本次展开动作后的首挂——入场动画只播这一回；
+  // 之后滚动重挂载 fresh=false，不再重放（虚拟列表行会被卸载重建）。
+  fresh?: boolean
+}) {
   const { t } = useTranslation()
   const team = useUiStore((s) => s.team)
   const openTab = useUiStore((s) => s.openTab)
@@ -482,7 +494,7 @@ export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineIte
       <div
         className="sysrow"
         style={{ cursor: 'pointer', userSelect: 'none' }}
-        onClick={onToggle}
+        onClick={() => onToggle(idx)}
       >
         <div className="sysline" />
         <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -496,8 +508,8 @@ export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineIte
           {calls.map((c, i) => {
             const tool = String((c.called.event.payload as Record<string, unknown>).tool ?? '')
             return EXEC_CARD_TOOLS.has(tool)
-              ? <ToolExecCard key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} />
-              : <ToolChipRow key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} />
+              ? <ToolExecCard key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} animate={fresh} />
+              : <ToolChipRow key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} animate={fresh} />
           })}
           {files.length > 0 && (
             <div className="tchip-files">
@@ -506,7 +518,9 @@ export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineIte
                   key={path}
                   type="button"
                   className="chip chip-btn mono"
-                  style={{ fontSize: 10, animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 60}ms both` }}
+                  style={fresh
+                    ? { fontSize: 10, animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 60}ms both` }
+                    : { fontSize: 10 }}
                   title={path}
                   onClick={() => openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}
                 >
@@ -519,16 +533,21 @@ export function ToolGroupRow({ items, expanded, onToggle }: { items: TimelineIte
       )}
     </div>
   )
-}
+})
 
-export function SysGroupRow({ items, expanded, onToggle }: { items: TimelineItem[]; expanded: boolean; onToggle: () => void }) {
+export const SysGroupRow = memo(function SysGroupRow({ items, expanded, idx, onToggle }: {
+  items: TimelineItem[]
+  expanded: boolean
+  idx: number
+  onToggle: (idx: number) => void
+}) {
   const { t } = useTranslation()
   return (
     <div>
       <div
         className="sysrow"
         style={{ cursor: 'pointer', userSelect: 'none' }}
-        onClick={onToggle}
+        onClick={() => onToggle(idx)}
       >
         <div className="sysline" />
         <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -538,20 +557,22 @@ export function SysGroupRow({ items, expanded, onToggle }: { items: TimelineItem
       {expanded && items.map((it) => <SystemRow key={it.event.id} item={it} />)}
     </div>
   )
-}
+})
 
 // exec-cards 票 03：回合摘要行（Cursor Worked-for-Xs 借形）——已收束回合的
 // 执行行收成单行（角色 · 工具数 · 耗时），点开就地展开还原被折行。
 // 中性色：摘要是收纳不是信号；failed 回合挂 err 徽标（唯一需扫读区分的状态）。
-function TurnSummaryRow({
+const TurnSummaryRow = memo(function TurnSummaryRow({
   row,
   expanded,
+  idx,
   onToggle,
   children,
 }: {
   row: Extract<ModelRow, { type: 'turnsummary' }>
   expanded: boolean
-  onToggle: () => void
+  idx: number
+  onToggle: (idx: number) => void
   children?: ReactNode
 }) {
   const { t } = useTranslation()
@@ -567,8 +588,8 @@ function TurnSummaryRow({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        onClick={onToggle}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } }}
+        onClick={() => onToggle(idx)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(idx) } }}
       >
         <div className="sysline" />
         <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -582,7 +603,7 @@ function TurnSummaryRow({
       {expanded && children}
     </div>
   )
-}
+})
 
 // ---- 语义节点轨（hover 展开 / 点击跳转 / 待决脉动）----
 
@@ -701,7 +722,12 @@ export function WaitingReply({ role, startedAt, avatar }: {
 }
 
 function StreamFooter() {
-  const { streams, thinkings, streamDone, team, timeline } = useUiStore()
+  // 窄订阅：整店订阅会让任何无关 store 更新都重渲 Footer（流式期间每 delta 一次）
+  const streams = useUiStore((s) => s.streams)
+  const thinkings = useUiStore((s) => s.thinkings)
+  const streamDone = useUiStore((s) => s.streamDone)
+  const team = useUiStore((s) => s.team)
+  const timeline = useUiStore((s) => s.timeline)
   const ids = [...new Set([...Object.keys(streams), ...Object.keys(thinkings)])].filter((id) =>
     Object.values(streams[id] ?? {}).some((s) => s.length > 0) ||
     Object.values(thinkings[id] ?? {}).some((s) => s.length > 0),
@@ -755,6 +781,10 @@ export function Timeline() {
   const ref = useRef<VirtuosoHandle>(null)
   const scrollerEl = useRef<HTMLElement | null>(null)
   const prevLen = useRef(0)
+  // 展开时刻表：入场动画只在「刚展开」播一遍；虚拟列表滚出重挂的行
+  // 不再 fade-up/pop-in 重放（owner 反馈：内容多时快速滚动闪烁抖动）。
+  const expandAt = useRef(new Map<number, number>())
+  const ANIM_MS = 1000 // 覆盖最长 stagger（delay 540 + 300ms 动画）
 
   const rows = useMemo(() => buildRows(timeline, filter), [timeline, filter])
   const marks = useMemo(() => nodeMarks(timeline, rows, pending.length), [timeline, rows, pending.length])
@@ -791,7 +821,7 @@ export function Timeline() {
     if (atBottom && el) el.scrollTop = el.scrollHeight
   }, [streams, atBottom])
 
-  const jump = (m: NodeMark) => {
+  const jump = useCallback((m: NodeMark) => {
     if (m.rowIdx < 0) {
       ref.current?.scrollToIndex({ index: 0, align: 'start' })
       return
@@ -801,10 +831,10 @@ export function Timeline() {
     const idx = item.type === 'item' ? item.item.event.id : item.idx
     setFlash(idx)
     setTimeout(() => setFlash(null), 1400)
-  }
+  }, [rows])
 
   // 票 16：按事件 id 跳转（return_summary 行回跳 since_event 锚点）。
-  const jumpToEvent = (eid: number) => {
+  const jumpToEvent = useCallback((eid: number) => {
     const i = rows.findIndex((r) => {
       if (r.type === 'item') return r.item.event.id === eid
       if (r.type === 'toolgroup' || r.type === 'sysgroup') return r.items.some((x) => x.event.id === eid)
@@ -820,14 +850,25 @@ export function Timeline() {
     // 命中折叠行先展开摘要行再跳，否则落点行不可见。
     if (row.type === 'turnsummary') setExpanded((s) => new Set(s).add(row.idx))
     jump({ rowIdx: i, icon: 'list', label: '' })
-  }
+  }, [rows, jump])
 
-  const toggleRow = (idx: number) => () =>
+  const toggleRow = useCallback((idx: number) => {
     setExpanded((s) => {
       const n = new Set(s)
-      if (n.has(idx)) n.delete(idx); else n.add(idx)
+      if (n.has(idx)) {
+        n.delete(idx)
+        expandAt.current.delete(idx)
+      } else {
+        n.add(idx)
+        expandAt.current.set(idx, performance.now())
+      }
       return n
     })
+  }, [])
+
+  // 「刚展开」窗口内的行播入场动画；窗口外（含滚动重挂载）静止直出。
+  const isFreshExpand = (idx: number) =>
+    performance.now() - (expandAt.current.get(idx) ?? -1e9) < ANIM_MS
 
   // exec-cards 票 03：行分发提成可递归闭包——摘要行展开时被折行
   // （toolgroup/sysgroup）走同一套渲染与同一个 expanded 集合（键=行 idx 即事件 id）。
@@ -845,14 +886,14 @@ export function Timeline() {
       )
     }
     if (row.type === 'toolgroup') {
-      return <ToolGroupRow items={row.items} expanded={expanded.has(row.idx)} onToggle={toggleRow(row.idx)} />
+      return <ToolGroupRow items={row.items} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} fresh={isFreshExpand(row.idx)} />
     }
     if (row.type === 'sysgroup') {
-      return <SysGroupRow items={row.items} expanded={expanded.has(row.idx)} onToggle={toggleRow(row.idx)} />
+      return <SysGroupRow items={row.items} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} />
     }
     if (row.type === 'turnsummary') {
       return (
-        <TurnSummaryRow row={row} expanded={expanded.has(row.idx)} onToggle={toggleRow(row.idx)}>
+        <TurnSummaryRow row={row} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow}>
           {row.folded.map((r) => (
             <div key={r.idx} style={{ paddingLeft: 12 }}>{rowContent(r)}</div>
           ))}
@@ -926,6 +967,8 @@ export function Timeline() {
           ref={ref}
           scrollerRef={(el) => { scrollerEl.current = el as HTMLElement | null }}
           data={rows}
+          // overscan：快速滚动时预渲视口上下各 600px，行不再贴边「凭空长出」
+          increaseViewportBy={600}
           components={{ Footer: StreamFooter }}
           atBottomThreshold={40}
           atBottomStateChange={(b) => { setAtBottom(b); if (b) setUnseen(0) }}

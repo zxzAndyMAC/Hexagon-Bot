@@ -49,7 +49,7 @@ beforeEach(() => {
 
 describe('ToolGroupRow（beautiful-ui 票 02）', () => {
   it('折叠头按调用对计数，不按事件条数', async () => {
-    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded={false} onToggle={() => {}} />)
+    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded={false} idx={0} onToggle={() => {}} />)
     // 3 对调用（5 条事件）——旧版会显示 5
     expect(el.textContent).toContain('3')
     expect(el.textContent).not.toContain('5')
@@ -58,7 +58,7 @@ describe('ToolGroupRow（beautiful-ui 票 02）', () => {
   })
 
   it('展开渲染逐行 chip：定名 + 参数片 + 结果态', async () => {
-    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded onToggle={() => {}} />)
+    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded idx={0} onToggle={() => {}} />)
     // exec-cards 票 02（spec D2 分层）：fs_write/bash 升 .exec-card，
     // 轻量读系（fs_read）保持 .tchip-row——本组 fixture 只剩一条 chip。
     const rows = el.querySelectorAll('.tchip-row')
@@ -77,12 +77,12 @@ describe('ToolGroupRow（beautiful-ui 票 02）', () => {
   })
 
   it('票 05：在途环随 result 到达翻面成 ok/err 徽标', async () => {
-    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded onToggle={() => {}} />)
+    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded idx={0} onToggle={() => {}} />)
     // 票 02 起 bash 是 exec-card——在途环在卡头行同一状态机位。
     const inFlight = el.querySelectorAll('.exec-card')[1]
     expect(inFlight.querySelector('.spinner-ring')).not.toBeNull()
     const settled = [...CALLS, ev(6, 'tool_result', { tool: 'bash', ok: true })]
-    await act(async () => { root.render(<ToolGroupRow items={settled} expanded onToggle={() => {}} />) })
+    await act(async () => { root.render(<ToolGroupRow items={settled} expanded idx={0} onToggle={() => {}} />) })
     const last = el.querySelectorAll('.exec-card')[1]
     expect(last.querySelector('.spinner-ring')).toBeNull()
     expect(last.querySelector('.chip.ok')).not.toBeNull()
@@ -90,7 +90,7 @@ describe('ToolGroupRow（beautiful-ui 票 02）', () => {
   })
 
   it('行点击展开 input/result 明细', async () => {
-    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded onToggle={() => {}} />)
+    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded idx={0} onToggle={() => {}} />)
     const first = el.querySelector('.tchip-row')!
     expect(el.querySelector('.tchip-detail')).toBeNull()
     await act(async () => { first.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
@@ -102,7 +102,7 @@ describe('ToolGroupRow（beautiful-ui 票 02）', () => {
   })
 
   it('文件片点开产物 tab（去重）', async () => {
-    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded onToggle={() => {}} />)
+    const { el, root } = await render(<ToolGroupRow items={CALLS} expanded idx={0} onToggle={() => {}} />)
     const chips = el.querySelectorAll('.tchip-files .chip-btn')
     expect(chips.length).toBe(2) // brief.md + prd.md 去重；bash 无 path
     await act(async () => { chips[1].dispatchEvent(new MouseEvent('click', { bubbles: true })) })

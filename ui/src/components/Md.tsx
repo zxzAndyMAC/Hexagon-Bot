@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { isValidElement, memo, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
@@ -10,14 +10,22 @@ import { Icon } from './Icon'
 // beautiful-ui 票 08：块级代码头部条（语言标签 + 复制钮）——
 // 只包 CodeBlock，行内 code 不出头；高亮体仍是 shiki，未就绪时 fallback
 // 也带头（复制不依赖高亮）。
+// 时间线是虚拟列表（Virtuoso）——行滚出视口即卸载，滚回重挂。
+// 高亮结果模块级缓存：重挂载直接从 cache 起 html，不再闪「未高亮 pre →
+// 异步染色」两帧（owner 反馈：内容多时快速滚动闪烁抖动）。
+const highlightCache = new Map<string, string>()
+const HIGHLIGHT_CACHE_CAP = 400
+
 export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const theme = useTheme()
   const { t } = useTranslation()
   const pushToast = useUiStore((s) => s.pushToast)
-  const [html, setHtml] = useState<string | null>(null)
+  const cacheKey = `${theme}|${lang ?? ''}|${code}`
+  const [html, setHtml] = useState<string | null>(() => highlightCache.get(cacheKey) ?? null)
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(null)
   useEffect(() => {
+    if (highlightCache.has(cacheKey)) return
     let live = true
     getHighlighter()
       .then((hl) => {
@@ -26,11 +34,16 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
           lang: l,
           theme: theme === 'dark' ? 'github-dark' : 'github-light',
         })
+        // LRU 近似：写满先清一半（Map 保插入序，重插即续龄）
+        if (highlightCache.size >= HIGHLIGHT_CACHE_CAP) {
+          for (const k of [...highlightCache.keys()].slice(0, HIGHLIGHT_CACHE_CAP / 2)) highlightCache.delete(k)
+        }
+        highlightCache.set(cacheKey, out)
         if (live) setHtml(out)
       })
       .catch(() => {})
     return () => { live = false }
-  }, [code, lang, theme])
+  }, [cacheKey, code, lang, theme])
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
   const copy = async () => {
     try {
@@ -77,10 +90,12 @@ const mdComponents = {
 }
 
 /** GFM + 코드 하이라이트가 적용된 공용 마크다운 렌더러. */
-export function Md({ children }: { children: string }) {
+// memo：时间线 atBottom 翻转/flash 等父级重渲时跳过 remark 重解析
+//（重挂载仍要解析——组件实例不跨卸载存活，配合 Virtuoso overscan 摊掉）。
+export const Md = memo(function Md({ children }: { children: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
       {children}
     </ReactMarkdown>
   )
-}
+})
