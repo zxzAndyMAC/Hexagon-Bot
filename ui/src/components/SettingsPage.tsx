@@ -794,17 +794,20 @@ function SkillsSection() {
           </div>
         )}
       </ListDetail>
-      {/* 票 04：外部技能扫描结果——去重列表，冲突项禁选（导入不覆盖本机全局同名） */}
+      {/* 票 04：外部技能扫描结果——去重列表，冲突项禁选（导入不覆盖本机全局同名）。
+          面板限高 40vh（负责人反馈 2026-09：扫描结果平铺把整页顶出去）——
+          标题与底部操作钉住，只有行列表滚。 */}
       {scanRows !== null && (
-        <div className="panel" style={{ marginTop: 12, padding: '10px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <div className="panel" style={{ marginTop: 12, padding: '10px 12px', maxHeight: '40vh', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexShrink: 0 }}>
             <strong style={{ fontSize: 12 }}>{t('skills.scanTitle')}</strong>
             <span className="dim3" style={{ fontSize: 10 }}>{t('skills.scanHint')}</span>
           </div>
           {scanRows.length === 0 ? (
             <div className="dim3" style={{ fontSize: 12, padding: '8px 0' }}>{t('skills.scanEmpty')}</div>
           ) : (
-            scanRows.map((r) => (
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              {scanRows.map((r) => (
               <label
                 key={r.path}
                 style={{
@@ -828,9 +831,10 @@ function SkillsSection() {
                 {r.conflict && <span className="chip warn" style={{ fontSize: 9 }}>{t('skills.conflict')}</span>}
                 <span className="dim3" style={{ fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</span>
               </label>
-            ))
+              ))}
+            </div>
           )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexShrink: 0 }}>
             <button
               className="btn"
               style={{ fontSize: 12 }}
@@ -1041,16 +1045,19 @@ function McpSection({ projectless }: { projectless: boolean }) {
       </ListDetail>
       {/* 票 06：外部 MCP 扫描结果——去重列表；冲突禁选（不覆盖本机全局），
           远程传输可导入但落 disabled 态（一期不 spawn） */}
+      {/* 同 skills 扫描面板：限高 40vh，标题/操作钉住，只有行列表滚
+          （负责人反馈 2026-09：扫描结果平铺把整页顶出去）。 */}
       {scanRows !== null && (
-        <div className="panel" style={{ marginTop: 8, padding: '10px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <div className="panel" style={{ marginTop: 8, padding: '10px 12px', maxHeight: '40vh', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexShrink: 0 }}>
             <strong style={{ fontSize: 12 }}>{t('mcp.scanTitle')}</strong>
             <span className="dim3" style={{ fontSize: 10 }}>{t('mcp.scanHint')}</span>
           </div>
           {scanRows.length === 0 ? (
             <div className="dim3" style={{ fontSize: 12, padding: '8px 0' }}>{t('mcp.scanEmpty')}</div>
           ) : (
-            scanRows.map((r, i) => (
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              {scanRows.map((r, i) => (
               <label
                 key={`${r.origin}:${r.name}:${i}`}
                 style={{
@@ -1079,9 +1086,10 @@ function McpSection({ projectless }: { projectless: boolean }) {
                   {r.transport === 'remote' ? r.url : `${r.command} ${r.args.join(' ')}`}
                 </span>
               </label>
-            ))
+              ))}
+            </div>
           )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexShrink: 0 }}>
             <button
               className="btn"
               style={{ fontSize: 12 }}

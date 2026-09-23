@@ -265,6 +265,33 @@ describe('SettingsPage list|detail 分区', () => {
     root.unmount()
   })
 
+  // 负责人反馈 2026-09：扫描结果平铺把整页顶出去——面板限高 40vh，
+  // 标题与底部操作（全选/导入/取消）钉住，只有行列表滚。
+  it('Skills 扫描：结果面板限高，只有行列表滚', async () => {
+    vi.spyOn(api, 'listSkills').mockResolvedValue([])
+    vi.spyOn(api, 'scanExternalSkills').mockResolvedValue(
+      Array.from({ length: 20 }, (_, i) => ({
+        name: `ext-${i}`, description: 'd', origin: 'cursor', path: `/p/${i}`, conflict: i === 0,
+      })),
+    )
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Skills')
+    const scanBtn = [...el.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Scan local skills')!
+    await act(async () => { scanBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const panel = [...el.querySelectorAll<HTMLElement>('.panel')]
+      .find((p) => p.textContent?.includes('ext-0'))!
+    expect(panel.style.maxHeight).toBe('40vh')
+    const scrollers = [...panel.querySelectorAll<HTMLElement>('div')]
+      .filter((d) => d.style.overflowY === 'auto')
+    expect(scrollers).toHaveLength(1)
+    expect(scrollers[0].textContent).toContain('ext-19')
+    // 底部操作行在滚动区外
+    expect(scrollers[0].textContent).not.toContain('Import')
+    expect(panel.textContent).toContain('Import (19)')
+    root.unmount()
+  })
+
   // settings-density 02：名单字段=chip 行 + 弹窗勾选（owner 裁决，取代逗号输入框）
   it('模板编辑器：技能字段 chip 化，弹窗勾选追加', async () => {
     vi.spyOn(api, 'listRoleTemplates').mockResolvedValue([
