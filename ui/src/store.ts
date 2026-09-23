@@ -11,6 +11,7 @@ import {
   type TimelineItem,
   type TurnDelta,
   type ToolOutputDelta,
+  type ContextPressure,
   type UsageBucket,
   type UsageRow,
 } from './api'
@@ -132,6 +133,9 @@ interface UiState {
   /// 7 日 token 序列缓存（票 17 / 方向卡 2）：随 usage 慢切片一起拉，
   /// 顶栏 sparkline 悬停零新增 IPC。
   usageSeries7d: UsageBucket[]
+  /// 撞限压力（context-window 票 03 / ADR 0068）：近 14 天撞限卡+压缩计数，
+  /// 用量页度量闸——≥2 张撞限卡触发恢复层设计票。
+  contextPressure: ContextPressure | null
   avatars: Record<string, string>
   /// 已解析的头像哈希簿（票 07）：agent → TeamRow.avatar_hash。
   /// team 行哈希变了才重拉 data URL；null=已确认无头像。
@@ -239,6 +243,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   saveFileReq: 0,
   usageRows: [],
   usageSeries7d: [],
+  contextPressure: null,
   avatars: {},
   avatarHashes: {},
   providers: null,
@@ -403,6 +408,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     const settled = await Promise.allSettled([
       want('usage') ? api.usage() : Promise.resolve(undefined),
       want('usage') ? api.usageSeries('day', daysAgo(6)) : Promise.resolve(undefined),
+      want('usage') ? api.usageContextPressure() : Promise.resolve(undefined),
       want('artifacts') ? api.artifacts() : Promise.resolve(undefined),
       want('team') ? api.team() : Promise.resolve(undefined),
       want('team') ? api.listProviders() : Promise.resolve(undefined),
@@ -411,9 +417,10 @@ export const useUiStore = create<UiState>((set, get) => ({
     ])
     // 异构 tuple：逐值 fulfilled 收窄（map+泛型在 strict 下推不出联合成员）
     const vals = settled.map((r) => (r.status === 'fulfilled' ? r.value : undefined))
-    const [usage, series7d, artifacts, team, providersView, autonomy, info] = vals as [
+    const [usage, series7d, pressure, artifacts, team, providersView, autonomy, info] = vals as [
       Awaited<ReturnType<typeof api.usage>> | undefined,
       Awaited<ReturnType<typeof api.usageSeries>> | undefined,
+      Awaited<ReturnType<typeof api.usageContextPressure>> | undefined,
       Awaited<ReturnType<typeof api.artifacts>> | undefined,
       Awaited<ReturnType<typeof api.team>> | undefined,
       Awaited<ReturnType<typeof api.listProviders>> | undefined,
@@ -453,6 +460,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     set((s) => ({
       ...(usage ? { usageTotal: usage.total, usageRows: usage.rows } : {}),
       ...(series7d ? { usageSeries7d: series7d } : {}),
+      ...(pressure ? { contextPressure: pressure } : {}),
       ...(artifacts ? { artifacts } : {}),
       ...(team ? { team, avatars: avatars!, avatarHashes: avatarHashes! } : {}),
       ...(providersView ? { providers: providersView } : {}),

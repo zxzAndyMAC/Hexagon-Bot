@@ -35,7 +35,7 @@ pub enum ProvidersError {
 
 /// 模型目录条目：拉取/手添的模型 + 能力标记。
 /// caps 词表：web（联网）vision（视觉）reasoning（推理）tools（工具调用）free（免费）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ModelEntry {
     pub id: String,
@@ -47,6 +47,18 @@ pub struct ModelEntry {
     pub group: Option<String>,
     #[serde(default)]
     pub caps: Vec<String>,
+    /// 上下文窗口 tok（context-window 票 02 / ADR 0068）：拉目录时按
+    /// 内置前缀表兜底填，未识别留空 → 撞限闸回落 120k 全局上限，
+    /// 设置页提示手填。大窗口不放开吃满——120k 仍是刻意纪律上限。
+    /// `number | null`：u64 默认被 ts-rs 导成 bigint，与 JSON number 不符。
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub context_window: Option<u64>,
+    /// 单次响应输出上限 tok：两种请求形状都显式传给端点。
+    /// None → 供应商旧默认（Anthropic 8192；OpenAI 形状不传，吃端点默认）。
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub max_output: Option<u64>,
 }
 
 /// 一个供应商实例。
@@ -210,6 +222,9 @@ pub fn slot_ready(doc: &ProviderDoc, store: &dyn CredentialStore, slot: &str) ->
 }
 
 /// 从配置造一个真实供应商；key 在调用时才从 creds 取（轮换不用重启）。
+/// 票 02：模型元数据（窗口/输出上限）随实例带上——撞限闸和 max_tokens
+/// 都以「实际服务的那个模型」为准，不回去重读配置（槽位回退已由
+/// resolve_slot 在挂表时定完，重读会引入配置漂移窗口）。
 pub fn make_provider(
     def: &ProviderDef,
     model: &str,
@@ -221,6 +236,10 @@ pub fn make_provider(
         model.to_string(),
         crate::credentials::provider_key_name(&def.id),
         creds,
+        crate::provider::ModelMeta {
+            context_window: window_of(def, model),
+            max_output: max_output_of(def, model),
+        },
     ))
 }
 
@@ -275,6 +294,7 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
         name: Some("Jev".into()),
         group: Some("typesafe".into()),
         caps: vec![],
+        ..ModelEntry::default()
     }])
 }
 
@@ -322,6 +342,9 @@ pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
         .map(|id| ModelEntry {
             group: Some(group_of(&id)),
             caps: infer_caps(&id),
+            // 票 02：前缀表兜底填窗口/输出上限，未识别留空（设置页可手填）。
+            context_window: infer_window(&id),
+            max_output: infer_max_output(&id),
             name: None,
             id,
         })
@@ -387,6 +410,91 @@ pub fn group_of(id: &str) -> String {
     id.split('/').next().unwrap_or(id).to_string()
 }
 
+/// 内置模型元数据表（context-window 票 02 / ADR 0068）：LiteLLM
+/// model_prices_and_context_window 登记表的精简 vendor 版——拉目录/解析
+/// 槽位时按 id 子串兜底填默认，用户可在设置页改。
+/// 行 = (id 子串, 窗口 tok, 输出上限 tok)。顺序敏感：具体族在泛名前。
+/// 窗口 ≥150k 时撞限闸行为等价（cap=min(窗×0.8, 120k)），表只为小窗口
+/// 模型（deepseek 64k、gpt-3.5 16k）兜底精度。
+const MODEL_META_TABLE: &[(&str, u64, u64)] = &[
+    ("deepseek", 65_536, 8_192),
+    ("qwen3-coder", 262_144, 65_536),
+    ("qwen", 131_072, 8_192),
+    ("glm", 131_072, 8_192),
+    ("kimi", 131_072, 16_384),
+    ("moonshot", 131_072, 16_384),
+    ("claude", 200_000, 8_192),
+    ("gpt-4o", 131_072, 16_384),
+    ("gpt-4.1", 1_000_000, 32_768),
+    ("gpt-5", 400_000, 32_768),
+    ("gpt-3.5", 16_385, 4_096),
+    ("o1", 200_000, 32_768),
+    ("o3", 200_000, 32_768),
+    ("o4", 200_000, 32_768),
+    ("gemini", 1_000_000, 65_536),
+    ("minimax", 200_000, 8_192),
+    ("llama", 131_072, 8_192),
+    ("mistral", 131_072, 8_192),
+];
+
+fn meta_lookup(id: &str) -> Option<&'static (&'static str, u64, u64)> {
+    let l = id.to_lowercase();
+    MODEL_META_TABLE.iter().find(|(k, _, _)| l.contains(k))
+}
+
+/// 模型 id → 上下文窗口 tok（内置前缀表）。不识别 → None。
+pub fn infer_window(id: &str) -> Option<u64> {
+    meta_lookup(id).map(|(_, w, _)| *w)
+}
+
+/// 模型 id → 输出上限 tok（内置前缀表）。不识别 → None。
+pub fn infer_max_output(id: &str) -> Option<u64> {
+    meta_lookup(id).map(|(_, _, o)| *o)
+}
+
+/// 目录条目优先、前缀表兜底（票 02 解析链的单点实现）。
+pub fn window_of(def: &ProviderDef, model: &str) -> Option<u64> {
+    def.models
+        .iter()
+        .find(|m| m.id == model)
+        .and_then(|m| m.context_window)
+        .or_else(|| infer_window(model))
+}
+
+/// 同上，输出上限。
+pub fn max_output_of(def: &ProviderDef, model: &str) -> Option<u64> {
+    def.models
+        .iter()
+        .find(|m| m.id == model)
+        .and_then(|m| m.max_output)
+        .or_else(|| infer_max_output(model))
+}
+
+/// 槽位 → 窗口（票 02 命名接缝）：load → resolve_slot（default 兜底）→
+/// provider → 条目/前缀表，任一环断 → None（调用方回落旧默认）。
+/// 只读查询口；实例路径已在 make_provider 挂表时解析进 ModelMeta。
+pub fn window_for_slot(slot: &str) -> Option<u64> {
+    let doc = load().ok()?;
+    let b = resolve_slot(&doc.slots, slot)?;
+    let p = doc.providers.iter().find(|p| p.id == b.provider_id)?;
+    window_of(p, &b.model)
+}
+
+/// 同上，输出上限。
+pub fn max_output_for_slot(slot: &str) -> Option<u64> {
+    let doc = load().ok()?;
+    let b = resolve_slot(&doc.slots, slot)?;
+    let p = doc.providers.iter().find(|p| p.id == b.provider_id)?;
+    max_output_of(p, &b.model)
+}
+
+#[cfg(test)]
+/// 测试用进程级锁：providers.json 路径走 `HEXAGON_PROVIDERS_PATH` 环境变量
+/// （进程全局），并行测试互踩——一方 set 夹在另一方 remove 之间就丢配置。
+/// 所有碰该环境变量的测试先拿这把锁（provider.rs 的 server_tool_tests 同款）。
+#[cfg(test)]
+pub(crate) static PROVIDERS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +530,7 @@ mod tests {
     /// 供应商 CRUD + 槽位绑定生命周期 + 就绪判定（绑定/启用/key 三要件）。
     #[test]
     fn provider_def_and_binding_lifecycle() {
+        let _env = PROVIDERS_ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let _g = PathGuard::set(dir.path());
         let store = MemoryStore::default();
@@ -476,6 +585,100 @@ mod tests {
             save_provider(&bad),
             Err(ProvidersError::EmptyField("id"))
         ));
+    }
+
+    /// 票 02（context-window / ADR 0068）：模型窗口/输出上限的解析链——
+    /// 目录条目显式值 > 内置前缀表 > None（调用方回落旧默认，不误判小窗口）。
+    #[test]
+    fn model_meta_entry_beats_table_beats_none() {
+        let mut d = def("p");
+        // 条目显式值优先
+        d.models.push(ModelEntry {
+            id: "custom/m".into(),
+            context_window: Some(8_192),
+            max_output: Some(512),
+            ..ModelEntry::default()
+        });
+        assert_eq!(window_of(&d, "custom/m"), Some(8_192));
+        assert_eq!(max_output_of(&d, "custom/m"), Some(512));
+        // 条目留空 → 前缀表兜底（deepseek 64k 窗 / 8k 出）
+        d.models.push(ModelEntry {
+            id: "deepseek-chat".into(),
+            ..ModelEntry::default()
+        });
+        assert_eq!(window_of(&d, "deepseek-chat"), Some(65_536));
+        assert_eq!(max_output_of(&d, "deepseek-chat"), Some(8_192));
+        // 不在目录也不在表 → None（回落旧默认，不是 0）
+        assert_eq!(window_of(&d, "totally-unknown-xyz"), None);
+        assert_eq!(max_output_of(&d, "totally-unknown-xyz"), None);
+    }
+
+    /// 票 02：槽位级解析链逐级断点——未绑槽走 default 兜底照常解析；
+    /// 绑定指向不存在的供应商 → None；无绑定无 default → None。
+    #[test]
+    fn window_for_slot_walks_binding_and_default_fallback() {
+        let _env = PROVIDERS_ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let _g = PathGuard::set(dir.path());
+        let mut doc = ProviderDoc {
+            providers: vec![def("p")],
+            ..ProviderDoc::default()
+        };
+        doc.providers[0].models.push(ModelEntry {
+            id: "deepseek-chat".into(),
+            ..ModelEntry::default()
+        });
+        doc.slots.insert(
+            "default".into(),
+            SlotBinding {
+                provider_id: "p".into(),
+                model: "deepseek-chat".into(),
+            },
+        );
+        std::fs::write(
+            dir.path().join("providers.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
+        // 「chat」未绑 → resolve_slot default 兜底 → deepseek 前缀表
+        assert_eq!(window_for_slot("chat"), Some(65_536));
+        assert_eq!(max_output_for_slot("chat"), Some(8_192));
+        // 绑定指向不存在的供应商 → 链断 None（不回落 default——
+        // resolve_slot 只在「槽未绑」时兜底，绑定本身坏是另一回事）
+        doc.slots.insert(
+            "chat".into(),
+            SlotBinding {
+                provider_id: "ghost".into(),
+                model: "x".into(),
+            },
+        );
+        std::fs::write(
+            dir.path().join("providers.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(window_for_slot("chat"), None);
+    }
+
+    /// 前缀表按 id 子串兜底：常见族有值；qwen3-coder 比泛 qwen 先匹；
+    /// 不识别 → None。
+    #[test]
+    fn infer_window_covers_fleet_and_stays_conservative() {
+        assert_eq!(infer_window("qwen3-coder-plus"), Some(262_144));
+        assert_eq!(infer_window("qwen3.7-plus"), Some(131_072));
+        assert_eq!(infer_window("glm-5"), Some(131_072));
+        assert_eq!(infer_window("deepseek-v3.2"), Some(65_536));
+        assert_eq!(infer_window("claude-sonnet-4-5"), Some(200_000));
+        assert_eq!(infer_window("gpt-3.5-turbo"), Some(16_385));
+        assert_eq!(infer_window("mystery-model"), None);
+    }
+
+    /// 旧 providers.json（无新字段）照常加载——serde default 兼容。
+    #[test]
+    fn legacy_model_entry_without_meta_loads() {
+        let v: ModelEntry = serde_json::from_str(r#"{"id":"m","caps":["tools"]}"#).unwrap();
+        assert_eq!(v.context_window, None);
+        assert_eq!(v.max_output, None);
     }
 
     /// 能力推断：免费/推理/视觉/工具各归位，非对话模型不给 tools。

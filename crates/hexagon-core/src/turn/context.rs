@@ -10,7 +10,20 @@ use crate::turn::{TurnError, TurnOutcome};
 use serde_json::json;
 
 /// 上下文估算上限（US37）：~120k tok；超了轻量裁剪后仍超 → 暂停问负责人。
+/// 票 02 / ADR 0068 起这是**全局纪律上限 + 窗口未知时的回落值**，实际闸是
+/// [`effective_cap`] = min(所服务模型窗口×0.8, 本值)——大窗口模型不放开
+/// 吃满，小窗口模型提前撞闸走升级卡而不是被 API 400。
 pub(super) const CONTEXT_CAP_TOKENS: usize = 120_000;
+
+/// 槽位实际撞限闸（票 02）。`window` 来自所服务模型的元数据
+/// （ModelProvider::model_meta → ModelEntry.context_window/前缀表）。
+/// ×0.8 余量：输入把窗口吃满的请求连输出空间都没留，必然被端点拒。
+pub(super) fn effective_cap(window: Option<u64>) -> usize {
+    window
+        .and_then(|w| usize::try_from(w.saturating_mul(8) / 10).ok())
+        .map(|w| w.min(CONTEXT_CAP_TOKENS))
+        .unwrap_or(CONTEXT_CAP_TOKENS)
+}
 /// 轻量裁剪的单块上限（字符）：超长 tool_result 截断带标记，其余不动。
 const TRIM_BLOCK_CHARS: usize = 4_000;
 
@@ -91,28 +104,43 @@ pub(super) fn model_visible(e: &ToolError) -> bool {
     )
 }
 
-/// 上下文估算（US37）：按 ~4 字符/tok 粗算，只用于撞限判断不用于计费。
+/// 单张内联图的固定估算定额（context-window 票 01）。旧算法按 base64
+/// 字节数 /4 计，一张 1.5MB 截图估出 ~500k tok 直接假撞限；真实计费按
+/// 像素块——Anthropic ≈(宽×高)/750（截图常见 1.1k~2.6k），OpenAI 高分
+/// 辨率 ≈765+85/张。取 1500 作两家量级的中间值；漏算方向（估 0）会
+/// 绕过撞限，宁取中偏上。
+const IMAGE_TOKEN_ALLOWANCE: usize = 1_500;
+
+fn encoded_len(bpe: &tiktoken_rs::CoreBPE, text: &str) -> usize {
+    // 0.12 起 encode 返回 Result（遇未授权 special token 报错）。走
+    // encode_ordinary：把 <|endoftext|> 之类当普通文本计，tool_result
+    // 里出现供应商保留串不应让估算器失败。
+    bpe.encode_ordinary(text).len()
+}
+
+/// 上下文估算（US37 接缝；context-window 票 01 换真分词器）：cl100k 作
+/// 各家模型的统一代理——对 qwen/glm 不是精确值，只用于撞限判断，不用于
+/// 计费（真实账在 usage.rs）。旧 4 字符/tok 粗算两头出错：短文本整段
+/// 舍入成 0（"hi"→0 tok），内联图按 base64 字节估出几十万 tok 假撞限。
 pub(super) fn estimate_tokens(messages: &[Message]) -> usize {
-    let chars: usize = messages
+    let bpe = tiktoken_rs::cl100k_base_singleton();
+    messages
         .iter()
         .flat_map(|m| m.content.iter())
         .map(|b| match b {
-            ContentBlock::Text { text } => text.len(),
             // 票 06：思考若还在出站副本里也要计入，漏算会绕过撞限。
-            ContentBlock::Thinking { text } => text.len(),
-            ContentBlock::ToolUse { input, .. } => input.to_string().len(),
-            // 票 02：tool_result 内嵌图也要计入——漏算的话 5MB base64
-            // 绕过撞限检测直接撑爆请求体。
+            ContentBlock::Text { text } | ContentBlock::Thinking { text } => encoded_len(bpe, text),
+            ContentBlock::ToolUse { input, .. } => encoded_len(bpe, &input.to_string()),
+            // 票 02：tool_result 内嵌图也要计入——漏算的话图字节绕过
+            // 撞限检测；票 01：图不再按 base64 尺寸而按定额计。
             ContentBlock::ToolResult {
                 content, images, ..
-            } => content.len() + images.iter().map(|i| i.data.len()).sum::<usize>(),
-            // 图按 base64 字符粗算（≈真实 token 代价同量级，宁高估）
-            ContentBlock::Image { data, .. } => data.len(),
-            // 票 04：server 工具块按序列化尺寸计
-            ContentBlock::Opaque { raw } => raw.to_string().len(),
+            } => encoded_len(bpe, content) + images.len() * IMAGE_TOKEN_ALLOWANCE,
+            ContentBlock::Image { .. } => IMAGE_TOKEN_ALLOWANCE,
+            // 票 04：server 工具块按序列化文本计
+            ContentBlock::Opaque { raw } => encoded_len(bpe, &raw.to_string()),
         })
-        .sum();
-    chars / 4
+        .sum()
 }
 
 /// 轻量裁剪（US37 + openworker-borrow 票 02）：超长 tool_result 走 spill——
@@ -264,13 +292,14 @@ pub(super) fn mechanical_compact(
     db: &Db,
     ctx: &ToolContext,
     messages: Vec<Message>,
+    cap_tokens: usize,
 ) -> Vec<Message> {
     // 给指针行留一点预算，避免删完刚好贴着上限、加上指针又超。
     const NOTE_TOKENS: usize = 128;
-    if estimate_tokens(&messages) <= CONTEXT_CAP_TOKENS {
+    if estimate_tokens(&messages) <= cap_tokens {
         return messages;
     }
-    let budget = CONTEXT_CAP_TOKENS.saturating_sub(NOTE_TOKENS);
+    let budget = cap_tokens.saturating_sub(NOTE_TOKENS);
     let original = messages.clone();
     let (mut messages, removed) = shrink_tool_records(messages, budget);
     if removed.is_empty() {
@@ -365,6 +394,7 @@ pub(super) fn context_overflow(
     ctx: &ToolContext,
     est_tokens: usize,
     reason: &str,
+    cap_tokens: usize,
 ) -> Result<TurnOutcome, TurnError> {
     let role: String = db
         .conn()
@@ -384,7 +414,7 @@ pub(super) fn context_overflow(
             "sub": "context_overflow",
             "role": role,
             "est_tokens": est_tokens,
-            "cap": CONTEXT_CAP_TOKENS,
+            "cap": cap_tokens,
             "reason": reason,
         }),
         None,
@@ -393,8 +423,9 @@ pub(super) fn context_overflow(
         &ctx.project_id,
         EventKind::Escalated,
         // 票 02：上下文撞限升级带闭集 code——容量触顶归 budget-exceeded。
+        // cap 记有效闸值（模型窗口收编后 ≠ 全局 120k，审计要能复算）。
         json!({"reason": "context_overflow", "code": crate::trace::FailureCode::BudgetExceeded.as_str(),
-               "question_id": qid, "est_tokens": est_tokens, "cap": CONTEXT_CAP_TOKENS}),
+               "question_id": qid, "est_tokens": est_tokens, "cap": cap_tokens}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;

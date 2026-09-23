@@ -145,8 +145,25 @@ pub enum ProviderError {
     Interrupted,
 }
 
+/// 实例所服务模型的元数据（context-window 票 02 / ADR 0068）：
+/// `make_provider` 挂槽位时从 ModelEntry（或内置前缀表）解析好随实例
+/// 带上——撞限闸与 max_tokens 以实际服务的模型为准。None = 未知，
+/// 调用方回落旧默认（撞限闸 120k；Anthropic max_tokens 8192；OpenAI
+/// 不填 max_tokens）。测试桩保持 None：撞限测试恒定跑 120k，不随
+/// 本机 providers.json 漂移。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelMeta {
+    pub context_window: Option<u64>,
+    pub max_output: Option<u64>,
+}
+
 pub trait ModelProvider: Send + Sync {
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
+
+    /// 所服务模型的元数据（见 [`ModelMeta`]）。默认全 None = 未知。
+    fn model_meta(&self) -> ModelMeta {
+        ModelMeta::default()
+    }
 
     /// 供应商原生 server tools（agent-senses 票 04）：返回请求组装时
     /// 并入 tools 数组的原始 JSON 定义（如 Anthropic web_search_20250305）。
@@ -630,6 +647,12 @@ pub mod anthropic_shape {
     /// system 消息抽顶字段；ToolResult 归 user 消息；其余角色/块近直译。
     /// `server_tools`：供应商原生工具定义（票 04 web_search_20250305），
     /// 已是目标形状原样并入 tools 数组。
+    ///
+    /// 挂账（ADR 0068 票 03 否决项）：Anthropic `cache_control` 显式断点
+    /// 未加——前缀已按字节稳定（turn 层 with_dynamic_tail 把易变内容压
+    /// 在末尾），主力流量走 OpenAI 形状（阿里系服务端自动前缀缓存，
+    /// 无此字段），唯一受益的 anthropic 兼容端点是否透传断点未验证。
+    /// 直连真 Anthropic 出现时再加断点，勿提前上复杂度。
     pub fn to_request(
         req: &ChatRequest,
         model: &str,
@@ -970,6 +993,7 @@ pub struct HttpProvider {
     key_name: String,
     creds: Arc<dyn crate::credentials::CredentialStore>,
     agent: ureq::Agent,
+    meta: ModelMeta,
 }
 
 impl HttpProvider {
@@ -979,6 +1003,7 @@ impl HttpProvider {
         model: String,
         key_name: String,
         creds: Arc<dyn crate::credentials::CredentialStore>,
+        meta: ModelMeta,
     ) -> Self {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(180)))
@@ -991,6 +1016,7 @@ impl HttpProvider {
             key_name,
             creds,
             agent,
+            meta,
         }
     }
 
@@ -1034,6 +1060,10 @@ fn emit_fallback(
 }
 
 impl ModelProvider for HttpProvider {
+    fn model_meta(&self) -> ModelMeta {
+        self.meta.clone()
+    }
+
     /// 票 04：槽 caps 含 `web` 才给 Anthropic 挂 web_search_20250305
     /// （max_uses 有界防搜索循环烧额度）。OpenAI 形状返回空——能力
     /// 缺席是 ADR 0058-1 的预期不对称，不自建爬虫顶替。
@@ -1056,10 +1086,11 @@ impl ModelProvider for HttpProvider {
         match self.kind {
             ProviderKind::Anthropic => {
                 let url = format!("{}/v1/messages", self.base_url);
+                // 票 02：max_tokens 收编进模型元数据，8192 只是缺省旧值。
                 let body = anthropic_shape::to_request(
                     req,
                     &self.model,
-                    8192,
+                    self.meta.max_output.unwrap_or(8_192),
                     &self.server_tools(&req.model_slot),
                 );
                 let mut resp = self
@@ -1076,6 +1107,14 @@ impl ModelProvider for HttpProvider {
                 let url = format!("{}/chat/completions", self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
+                // 票 02：max_output 已知就显式传——此前不传吃端点默认，
+                // 阿里系端点默认几 K 是长输出隐性截断源。None 保持不传，
+                // 不给不认识的模型猜上限。reasoning 族（o*/gpt-5）的
+                // max_completion_tokens 异构：端点不认 max_tokens 时换名，
+                // 属已知妥协，先记在此不另开形状分支。
+                if let Some(max) = self.meta.max_output {
+                    body["max_tokens"] = serde_json::json!(max);
+                }
                 let mut resp = self
                     .agent
                     .post(&url)
@@ -1102,10 +1141,11 @@ impl ModelProvider for HttpProvider {
         match self.kind {
             ProviderKind::Anthropic => {
                 let url = format!("{}/v1/messages", self.base_url);
+                // 票 02：max_tokens 收编进模型元数据，8192 只是缺省旧值。
                 let mut body = anthropic_shape::to_request(
                     req,
                     &self.model,
-                    8192,
+                    self.meta.max_output.unwrap_or(8_192),
                     &self.server_tools(&req.model_slot),
                 );
                 body["stream"] = serde_json::json!(true);
@@ -1134,6 +1174,10 @@ impl ModelProvider for HttpProvider {
                 let url = format!("{}/chat/completions", self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
+                // 同 complete()：max_output 已知才显式传（reasoning 族异构见彼处注释）。
+                if let Some(max) = self.meta.max_output {
+                    body["max_tokens"] = serde_json::json!(max);
+                }
                 body["stream"] = serde_json::json!(true);
                 // 末块带 usage（OpenAI 系端点通用支持；不识别的端点忽略字段）
                 body["stream_options"] = serde_json::json!({"include_usage": true});
@@ -1463,6 +1507,7 @@ mod tests {
             "m".into(),
             "model/chat".into(),
             Arc::new(crate::credentials::MemoryStore::default()),
+            ModelMeta::default(),
         );
         let err = p.complete(&empty_req()).unwrap_err();
         assert!(matches!(err, ProviderError::MissingCredential(_)));
@@ -1750,9 +1795,13 @@ mod tests {
     }
 
     fn http_provider(kind: ProviderKind, base: &str) -> HttpProvider {
+        http_provider_with_meta(kind, base, ModelMeta::default())
+    }
+
+    fn http_provider_with_meta(kind: ProviderKind, base: &str, meta: ModelMeta) -> HttpProvider {
         let creds = Arc::new(crate::credentials::MemoryStore::default());
         creds.set("k", "test-key").unwrap();
-        HttpProvider::new(kind, base.into(), "m".into(), "k".into(), creds)
+        HttpProvider::new(kind, base.into(), "m".into(), "k".into(), creds, meta)
     }
 
     /// HttpProvider::stream 全链路：真 HTTP + SSE 响应 → 增量 delta + 终值响应。
@@ -1898,6 +1947,7 @@ mod server_tool_tests {
             "claude-sonnet-4".into(),
             "k".into(),
             std::sync::Arc::new(crate::credentials::MemoryStore::default()),
+            ModelMeta::default(),
         )
     }
 
@@ -1909,6 +1959,9 @@ mod server_tool_tests {
 
     #[test]
     fn server_tools_gated_by_slot_caps() {
+        // 进程级环境变量互斥：provider_config 测试也碰 HEXAGON_PROVIDERS_PATH，
+        // 并行会互踩（2026-09 曾打出 defs.len()=0 的偶发红）。
+        let _env = crate::provider_config::PROVIDERS_ENV_LOCK.lock().unwrap();
         let p = anthropic_provider();
         // 无 providers.json → caps 空 → 不挂 server tool（fail-closed）
         assert!(p.server_tools("default").is_empty());
@@ -1954,6 +2007,7 @@ mod server_tool_tests {
             "gpt-4o".into(),
             "k".into(),
             std::sync::Arc::new(crate::credentials::MemoryStore::default()),
+            ModelMeta::default(),
         );
         assert!(openai.server_tools("default").is_empty());
         std::env::remove_var("HEXAGON_PROVIDERS_PATH");

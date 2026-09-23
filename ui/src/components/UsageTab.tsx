@@ -11,7 +11,7 @@ import {
 
 export function UsageTab({ onDetail }: { onDetail?: () => void }) {
   const { t } = useTranslation()
-  const { usageRows, usageTotal, team, invalidate, openTab } = useUiStore()
+  const { usageRows, usageTotal, contextPressure, team, invalidate, openTab } = useUiStore()
   const [series, setSeries] = useState<UsageBucket[]>([])
   const [editLimit, setEditLimit] = useState('')
   const [editing, setEditing] = useState(false)
@@ -95,6 +95,20 @@ export function UsageTab({ onDetail }: { onDetail?: () => void }) {
           )}
         </div>
       </div>
+
+      {/* 撞限压力（context-window 票 03 / ADR 0068）：恢复层触发闸的度量面。
+          ≥2 张撞限卡/两周 → 值得建恢复设计票；不届时不引入静默改写通道。 */}
+      <Section title={t('usage.ctxPressure')}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+          <span className="dim">{t('usage.overflowCards')}</span>
+          <span className="mono">{contextPressure?.overflow_cards_14d ?? 0}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginTop: 4 }}>
+          <span className="dim">{t('usage.compactions')}</span>
+          <span className="mono">{contextPressure?.compactions_14d ?? 0}</span>
+        </div>
+        <div className="dim3" style={{ fontSize: 10, marginTop: 6, lineHeight: 1.5 }}>{t('usage.overflowHint')}</div>
+      </Section>
 
       {/* 按 Agent / 阶段分解（token 口径） */}
       <Section title={t('usage.byAgent')}>

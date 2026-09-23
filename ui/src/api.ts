@@ -22,6 +22,7 @@ import type { UsageTotal } from './gen/UsageTotal'
 import type { UsageRow } from './gen/UsageRow'
 import type { UsageSummary } from './gen/UsageSummary'
 import type { UsageBucket } from './gen/UsageBucket'
+import type { ContextPressure } from './gen/ContextPressure'
 import type { StageAction } from './gen/StageAction'
 import type { OpenStageOutcome } from './gen/OpenStageOutcome'
 import type { CheckResult } from './gen/CheckResult'
@@ -73,7 +74,7 @@ export type PackStage = StageDef
 
 export type {
   CmdError, TurnDelta, ToolOutputDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
-  UsageTotal, UsageRow, UsageSummary, UsageBucket, StageAction, OpenStageOutcome,
+  UsageTotal, UsageRow, UsageSummary, UsageBucket, ContextPressure, StageAction, OpenStageOutcome,
   CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PublishOutcome,
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
@@ -218,6 +219,7 @@ export const api = {
   importMcp: (specs: McpSpec[]) => call<ImportReport>('import_mcp', { specs }),
   openMcpMarket: () => call<void>('open_mcp_market'),
   usage: () => call<UsageSummary>('usage'),
+  usageContextPressure: () => call<ContextPressure>('usage_context_pressure'),
   usageSeries: (granularity: 'day' | 'hour' = 'day', from?: string | null, to?: string | null) =>
     call<UsageBucket[]>('usage_series', { granularity, from: from ?? null, to: to ?? null }),
   setUsageLimit: (limitCents: number | null) =>
@@ -843,6 +845,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         ],
         total: { spent_mc: 81400, limit_cents: 20000, tokens: 286400 },
       } as T
+    case 'usage_context_pressure':
+      return { overflow_cards_14d: 1, compactions_14d: 3 } as T
     case 'usage_series': {
       // 按 bucket × agent 的 mock 序列（粒度/范围参数在 mock 里不强模拟过滤）
       const mk = (bucket: string, agent: string, p: number, c: number, t: number, cost: number) =>

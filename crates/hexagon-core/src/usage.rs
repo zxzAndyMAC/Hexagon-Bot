@@ -67,6 +67,9 @@ pub fn record(
             model_slot,
             usage.prompt_tokens as i64,
             usage.completion_tokens as i64,
+            // 双口径分工（context-window 票 01）：tool_output 账仍按字节/4
+            // 粗估——账务近似量级即可；撞限判定走 turn/context.rs 的
+            // cl100k 真分词，两侧精度要求不同，勿互相对齐。
             (tool_output_bytes / 4) as i64,
             cost,
             ctx.stage_run_id,
@@ -238,6 +241,43 @@ pub fn project_summary(db: &Db, project_id: &str) -> Result<UsageSummary, rusqli
     })
 }
 
+/// 撞限压力面（.scratch/context-window 票 03 / ADR 0068）：近 14 天
+/// `context_overflow` 待决卡与 `context_compacted` 机械压缩事件计数。
+/// 恢复层（重建回合/锚定摘要）的触发闸：同项目两周 ≥2 张撞限卡才值得建
+/// ——度量先于设计，无数据时不引入静默改写通道。
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct ContextPressure {
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
+    pub overflow_cards_14d: i64,
+    #[ts(type = "number")] // JS number 域（wire 是 JSON number）
+    pub compactions_14d: i64,
+}
+
+/// 近 14 天撞限/压缩计数：直查 events（ADR 0052 读组，不占 wb 锁）。
+/// 撞限卡以 escalated+payload.reason 辨认；压缩以 system+payload.kind 辨认。
+/// 字符串字面量与写入侧 turn/context.rs 的发卡点同字——改名必须双侧同改
+/// （D10 常量化是挂账的未做面）。注意：超限载荷落 spill 指针的事件
+/// json_extract 取不到字段——撞限/压缩载荷天然小（远低于
+/// EVENT_PAYLOAD_CAP），不计失真。
+pub fn context_pressure(db: &Db, project_id: &str) -> Result<ContextPressure, rusqlite::Error> {
+    let (overflow, compacted): (i64, i64) = db.conn().query_row(
+        "SELECT
+            COUNT(*) FILTER (WHERE kind='escalated'
+                AND json_extract(payload,'$.reason')='context_overflow'),
+            COUNT(*) FILTER (WHERE kind='system'
+                AND json_extract(payload,'$.kind')='context_compacted')
+         FROM events
+         WHERE project_id=?1 AND created_at >= datetime('now','-14 days')",
+        [project_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(ContextPressure {
+        overflow_cards_14d: overflow,
+        compactions_14d: compacted,
+    })
+}
+
 /// 用量时间序列：按 bucket × Agent 分组，带三类 token 与成本。
 /// `granularity`: "day"（YYYY-MM-DD）| "hour"（YYYY-MM-DD HH:00）。
 /// `from`/`to`：日期串 YYYY-MM-DD（含当天，`to` 含整日）；None = 不限。
@@ -325,6 +365,66 @@ mod tests {
             caps: Default::default(),
         };
         (db, ctx, dir)
+    }
+
+    #[test]
+    fn context_pressure_counts_overflow_cards_and_compactions() {
+        let (db, _ctx, _d) = setup(None);
+        // 无关事件不计入：别的升级卡、别的 system subkind
+        db.append_event(
+            "p",
+            EventKind::System,
+            json!({"kind": "steering_injected"}),
+            None,
+            None,
+        )
+        .unwrap();
+        db.append_event(
+            "p",
+            EventKind::Escalated,
+            json!({"reason": "flag", "sub": "x"}),
+            None,
+            None,
+        )
+        .unwrap();
+        // 撞限卡（payload.reason）+ 机械压缩（payload.kind）
+        db.append_event(
+            "p",
+            EventKind::Escalated,
+            json!({"reason": "context_overflow", "code": "budget-exceeded"}),
+            Some("a1"),
+            None,
+        )
+        .unwrap();
+        db.append_event(
+            "p",
+            EventKind::System,
+            json!({"kind": "context_compacted", "removed": 3}),
+            Some("a1"),
+            None,
+        )
+        .unwrap();
+        // 14 天外的不计
+        let old = db
+            .append_event(
+                "p",
+                EventKind::Escalated,
+                json!({"reason": "context_overflow"}),
+                None,
+                None,
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE events SET created_at=datetime('now','-20 days') WHERE id=?1",
+                [old],
+            )
+            .unwrap();
+        let p = context_pressure(&db, "p").unwrap();
+        assert_eq!((p.overflow_cards_14d, p.compactions_14d), (1, 1));
+        // 无事件项目 → 0 不报错
+        let z = context_pressure(&db, "ghost").unwrap();
+        assert_eq!((z.overflow_cards_14d, z.compactions_14d), (0, 0));
     }
 
     #[test]

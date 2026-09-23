@@ -65,3 +65,64 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     root.unmount()
   })
 })
+
+// context-window 票 02：窗口/输出上限元数据在设置页可见可改
+describe('ProviderManager 模型窗口元数据（context-window 票 02）', () => {
+  const withModels: ProvidersView = {
+    providers: [
+      {
+        ...prov('a', 'ReadyCo', true, true),
+        models: [
+          { id: 'deepseek-chat', name: null, group: 'deepseek', caps: ['tools'], context_window: 65536, max_output: 8192 },
+          { id: 'mystery-x', name: null, group: null, caps: [], context_window: null, max_output: null },
+        ],
+      },
+    ],
+    slots: {},
+  }
+
+  beforeEach(() => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(withModels)
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'saveProvider').mockResolvedValue(undefined)
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('模型行：已知窗口显示 k 值，未识别挂未知警告标', async () => {
+    const { el, root } = await render(<ProviderManager />)
+    const row = (name: string) =>
+      [...el.querySelectorAll('div')].find((d) => d.textContent === name)!.closest('div')!
+    await act(async () => row('ReadyCo').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(el.textContent).toContain('64k')
+    // 未识别模型 → 回落 120k 的警告标要看得见
+    expect(el.textContent).toMatch(/window\?|窗口未知|視窗未知|ウィンドウ不明|inconnue|desc\./)
+    root.unmount()
+  })
+
+  it('编辑面板写入窗口/输出上限，保存时随模型条目上送', async () => {
+    const { el, root } = await render(<ProviderManager />)
+    const row = (name: string) =>
+      [...el.querySelectorAll('div')].find((d) => d.textContent === name)!.closest('div')!
+    await act(async () => row('ReadyCo').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    // mystery-x 行的编辑钮（行内第一枚按钮）。含此文本的 .panel 有外层
+    // 详情卡和行本体两级——取最内层（document 序最后一个）。
+    const mrow = [...el.querySelectorAll('div.panel')].filter((d) => d.textContent?.includes('mystery-x')).at(-1)!
+    const editBtn = mrow.querySelector('button')!
+    await act(async () => editBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const nums = [...el.querySelectorAll('input[type=number]')] as HTMLInputElement[]
+    expect(nums.length).toBe(2)
+    const setVal = (input: HTMLInputElement, v: string) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      set.call(input, v)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    await act(async () => { setVal(nums[0], '32768'); setVal(nums[1], '4096') })
+    const saveBtn = [...el.querySelectorAll('button')].find((b) => /save|保存|儲存|enregistrer|guardar|salvar/i.test(b.textContent ?? '') && b.classList.contains('primary'))!
+    await act(async () => saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const sent = vi.mocked(api.saveProvider).mock.calls.at(-1)![0]
+    const m = sent.models?.find((x) => x.id === 'mystery-x')!
+    expect(m.context_window).toBe(32768)
+    expect(m.max_output).toBe(4096)
+    root.unmount()
+  })
+})

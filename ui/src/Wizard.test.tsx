@@ -150,7 +150,7 @@ describe('向导先配模型服务商（票 13）', () => {
     const doc: ProvidersView = {
       providers: [prov({
         id: 'or', name: 'OpenRouter',
-        models: [{ id: 'm1', name: null, group: null, caps: [] }],
+        models: [{ id: 'm1', name: null, group: null, caps: [], context_window: null, max_output: null }],
       })],
       slots: {},
     }

@@ -12,4 +12,16 @@ name: string | null,
 /**
  * 分组名（Cherry 按 id 前缀分组；空 = 按 id 前缀自动归）。
  */
-group: string | null, caps: Array<string>, };
+group: string | null, caps: Array<string>, 
+/**
+ * 上下文窗口 tok（context-window 票 02 / ADR 0068）：拉目录时按
+ * 内置前缀表兜底填，未识别留空 → 撞限闸回落 120k 全局上限，
+ * 设置页提示手填。大窗口不放开吃满——120k 仍是刻意纪律上限。
+ * `number | null`：u64 默认被 ts-rs 导成 bigint，与 JSON number 不符。
+ */
+context_window: number | null, 
+/**
+ * 单次响应输出上限 tok：两种请求形状都显式传给端点。
+ * None → 供应商旧默认（Anthropic 8192；OpenAI 形状不传，吃端点默认）。
+ */
+max_output: number | null, };

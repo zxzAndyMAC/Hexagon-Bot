@@ -34,7 +34,7 @@ const detail = (slot: string): AgentDetail => ({
 
 const pv: ProvidersView = {
   providers: [
-    { id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://x', models: [{ id: 'gpt-5', name: null, group: '', caps: [] }], enabled: true, key_set: true },
+    { id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://x', models: [{ id: 'gpt-5', name: null, group: '', caps: [], context_window: null, max_output: null }], enabled: true, key_set: true },
   ],
   slots: { default: { provider_id: 'openai', model: 'gpt-4' }, 'agent:a3': { provider_id: 'openai', model: 'gpt-5' } },
 }

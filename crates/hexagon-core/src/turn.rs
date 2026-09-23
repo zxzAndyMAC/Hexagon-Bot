@@ -26,10 +26,7 @@ pub use prompt::{
     PromptLayer,
 };
 
-use context::{
-    context_overflow, estimate_tokens, mechanical_compact, model_visible, trim_context,
-    CONTEXT_CAP_TOKENS,
-};
+use context::{context_overflow, estimate_tokens, mechanical_compact, model_visible, trim_context};
 use prompt::{layer_meta, with_dynamic_tail};
 
 const MAX_TOOL_ROUNDS: usize = 8;
@@ -468,6 +465,11 @@ fn run_turn_impl(
         tools: registry.defs(),
     };
 
+    // 票 02 / ADR 0068：撞限闸按「实际服务的那个模型」的窗口收编——
+    // 元数据在 make_provider 挂槽位时已解析进实例；测试桩/未识别模型
+    // → None → 回落 120k，旧行为不回归。
+    let cap = context::effective_cap(provider.model_meta().context_window);
+
     let outcome = (|| -> Result<TurnOutcome, TurnError> {
         // 票 05 steering 水位：回合起跑线之后新来的 owner 消息在
         // 每轮顶注入出站副本。只追加进本轮出站 messages——
@@ -599,13 +601,13 @@ fn run_turn_impl(
             // （负责人与角色原文不换成摘要）。删完仍超才暂停问负责人。
             messages = trim_context(ctx, messages);
             let mut est = estimate_tokens(&messages);
-            if est > CONTEXT_CAP_TOKENS {
-                messages = mechanical_compact(db, ctx, messages);
+            if est > cap {
+                messages = mechanical_compact(db, ctx, messages, cap);
                 messages = trim_context(ctx, messages);
                 est = estimate_tokens(&messages);
             }
-            if est > CONTEXT_CAP_TOKENS {
-                return context_overflow(db, ctx, est, "estimate");
+            if est > cap {
+                return context_overflow(db, ctx, est, "estimate", cap);
             }
             log::debug!(
                 "model call round={round} agent={} slot={}",

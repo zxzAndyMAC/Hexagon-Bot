@@ -830,7 +830,7 @@ fn mechanical_compact_spills_and_keeps_boundaries() {
             text: "latest".into(),
         }],
     });
-    let out = mechanical_compact(&db, &ctx, msgs);
+    let out = mechanical_compact(&db, &ctx, msgs, context::CONTEXT_CAP_TOKENS);
     assert_eq!(out[1].role, Role::User);
     let ContentBlock::Text { text } = &out[1].content[0] else {
         panic!()
@@ -929,7 +929,132 @@ fn mechanical_compact_noop_when_nothing_to_cut() {
             content: vec![ContentBlock::Text { text: "u".into() }],
         },
     ];
-    assert_eq!(mechanical_compact(&db, &ctx, msgs).len(), 2);
+    assert_eq!(
+        mechanical_compact(&db, &ctx, msgs, context::CONTEXT_CAP_TOKENS).len(),
+        2
+    );
+}
+
+// ---- 票 01（context-window）：estimate_tokens 换真分词器 ----
+
+/// 旧估算是 4 字节/tok 粗算（US37 遗留），对中文系统性偏低（UTF-8 三
+/// 字节一字 ÷4 ≈ 0.75 tok/字，cl100k 实测 ~1.1 tok/字）——撞限闸偏晚
+/// 触发，真实超限先被 API 400 挡下而不是走升级卡。千字段中文实测
+/// ~1190 tok；断言 1000 卡在旧算法（798）之上、真值之下。
+#[test]
+fn estimate_tokens_counts_cjk_at_real_density() {
+    let para = "上下文管理的核心前提是把每次推理看作重新组装的工作台，而不是回放整段对话历史。\
+                负责人原文与角色输出逐字保留，超长工具结果落盘留指针，撞限时升级给人裁决。";
+    let msgs = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: para.repeat(14),
+        }],
+    }];
+    let est = estimate_tokens(&msgs);
+    assert!(
+        est >= 1_000,
+        "CJK 仍按 4 字节/tok 低估（{est} tok）——撞限闸对中文项目是假安全"
+    );
+}
+
+/// 旧估算把内联图按 base64 字符数计：一张 1.5MB 截图 ≈ 500k「tok」直接
+/// 假撞限。真实计费按像素块（Anthropic ~1.1k-1.6k tok/张，OpenAI 高分
+/// 辨率 ~765+85），改固定定额——数据体变大不得改变估算值。
+#[test]
+fn estimate_tokens_image_is_flat_allowance_not_bytes() {
+    let msg = |data: String| {
+        vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Image {
+                media_type: "image/png".into(),
+                data,
+            }],
+        }]
+    };
+    let small = estimate_tokens(&msg("QUJD".into()));
+    let large = estimate_tokens(&msg("a".repeat(2_000_000)));
+    assert_eq!(small, large, "图片仍按 base64 字符数计");
+    assert!(
+        (1_000..=2_000).contains(&small),
+        "单图定额应落在两家实际计费量级内，got {small}"
+    );
+}
+
+/// tool_result 随带图同样按定额计，不按 data 字节。
+#[test]
+fn estimate_tokens_tool_result_images_are_flat_allowance() {
+    let msg = |data: &str| {
+        vec![Message {
+            role: Role::Tool,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "ok".into(),
+                is_error: false,
+                images: vec![crate::provider::ImageData {
+                    media_type: "image/png".into(),
+                    data: data.into(),
+                }],
+            }],
+        }]
+    };
+    assert_eq!(
+        estimate_tokens(&msg("QUJD")),
+        estimate_tokens(&msg(&"a".repeat(2_000_000))),
+        "tool_result 内嵌图仍按 base64 字符数计"
+    );
+}
+
+/// 每个内容变体都得计入——漏掉任何一个就开了绕过撞限的口子
+/// （Opaque 块原样回传进请求，ToolUse input JSON 原文进请求体）。
+#[test]
+fn estimate_tokens_covers_every_block_variant() {
+    let cases: Vec<ContentBlock> = vec![
+        ContentBlock::Text { text: "hi".into() },
+        ContentBlock::Thinking { text: "hmm".into() },
+        ContentBlock::ToolUse {
+            id: "t".into(),
+            name: "fs_read".into(),
+            input: json!({"path": "/x"}),
+        },
+        ContentBlock::ToolResult {
+            tool_use_id: "t".into(),
+            content: "ok".into(),
+            is_error: false,
+            images: vec![],
+        },
+        ContentBlock::Image {
+            media_type: "image/png".into(),
+            data: "QUJD".into(),
+        },
+        ContentBlock::Opaque {
+            raw: json!({"type": "server_tool_use", "id": "s1"}),
+        },
+    ];
+    for block in cases {
+        let msgs = vec![Message {
+            role: Role::User,
+            content: vec![block],
+        }];
+        assert!(
+            estimate_tokens(&msgs) > 0,
+            "块变体未计入估算: {:?}",
+            msgs[0].content[0]
+        );
+    }
+}
+
+/// 票 02 / ADR 0068：撞限闸 cap=min(所服务模型窗口×0.8, 120k)——32k 窗
+/// 压到 25.6k（小窗口模型提前走升级卡而不是 API 400）；1M 窗仍卡 120k
+/// 不放开（纪律上限）；窗口未知回落 120k 旧行为。
+#[test]
+fn effective_cap_scales_down_never_up() {
+    assert_eq!(context::effective_cap(Some(32_768)), 26_214);
+    assert_eq!(
+        context::effective_cap(Some(1_000_000)),
+        context::CONTEXT_CAP_TOKENS
+    );
+    assert_eq!(context::effective_cap(None), context::CONTEXT_CAP_TOKENS);
 }
 
 // ---- US57：瞬时重试与同错熔断 ----
@@ -1058,8 +1183,13 @@ fn us57_streak_resets_on_success() {
 #[test]
 fn us37_context_overflow_escalates() {
     let (db, reg, ctx, _dir) = setup();
-    // 600KB 系统层 ≈ 150k tok > 120k 上限——轻量裁剪救不回系统层
-    let big = PromptLayer::new(LayerLevel::Brief, "x".repeat(600_000));
+    // 票 01 换真分词后 "x".repeat(N) 会被 BPE 合并成几千 tok，撞限测试
+    // 必须用不可压缩文本：逐词编号约 3+ tok/词，80k 词 ≈ ≥200k tok，
+    // 稳超 120k 上限——轻量裁剪救不回负责人/系统层文本。
+    let big = PromptLayer::new(
+        LayerLevel::Brief,
+        (0..80_000).map(|i| format!("w{i:05} ")).collect::<String>(),
+    );
     let provider = ScriptedProvider::new(vec![text_response("不该被调用")]);
     let out = run_turn(&db, &provider, &reg, &ctx, vec![big], "go").unwrap();
     match out {
@@ -1754,5 +1884,35 @@ proptest! {
         };
         prop_assert!(!context::tool_record_may_drop(&text_block));
         prop_assert!(!context::tool_record_may_drop(&image_block));
+    }
+
+    /// 票 01（context-window）：估算器对任意 UTF-8 不 panic、非空必有
+    /// 正估算；同字符数的中文估算不低于 ASCII——中文密度约为英文 4 倍，
+    /// 方向反了就是退回 4 字符/tok 粗算。
+    #[test]
+    fn estimator_utf8_no_panic_and_cjk_not_undercounted(
+        noise in proptest::collection::vec(any::<char>(), 0..60),
+        n in 0..160usize,
+    ) {
+        let wrap = |text: String| {
+            vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text }],
+            }]
+        };
+        let noise: String = noise.into_iter().collect();
+        let noise_est = estimate_tokens(&wrap(noise.clone()));
+        prop_assert_eq!(noise_est == 0, noise.is_empty());
+
+        // 同长度对比用各自有变化的字符：ASCII 轮 26 字母，CJK 轮 200 个
+        // 常用字——两边都不靠单字符重复吃 BPE 合并红利。
+        let ascii: String = (0..n).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        let cjk: String = (0..n)
+            .map(|i| char::from_u32(0x4e00 + (i % 200) as u32).unwrap())
+            .collect();
+        prop_assert!(
+            estimate_tokens(&wrap(cjk)) >= estimate_tokens(&wrap(ascii)),
+            "同字符数中文估算低于英文"
+        );
     }
 }

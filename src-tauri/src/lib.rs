@@ -623,6 +623,15 @@ fn usage(state: tauri::State<AppState>) -> Result<hexagon_core::usage::UsageSumm
 }
 
 #[tauri::command]
+fn usage_context_pressure(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::usage::ContextPressure, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::usage::context_pressure(db, PROJECT_ID).map_err(cmd_err)
+    })
+}
+
+#[tauri::command]
 fn open_stage(
     state: tauri::State<AppState>,
     seq: usize,
@@ -1620,6 +1629,7 @@ pub fn run() {
             create_repo_dir,
             write_repo_file,
             usage,
+            usage_context_pressure,
             open_stage,
             recover_run,
             override_checks,
