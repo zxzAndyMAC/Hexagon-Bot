@@ -12,6 +12,16 @@ export const dedicatedSlot = (agentId: string) => `${DEDICATED_PREFIX}${agentId}
 export const isDedicatedSlot = (slot: string | null | undefined): boolean =>
   !!slot && slot.startsWith(DEDICATED_PREFIX)
 
+/// 产品固定的槽位名——ProviderManager 播种与绑定列表本地化名共用这份词表
+///（负责人反馈 2026-09：绑定列表槽名全英文）。这些是 UI 词汇
+///（providers.slot_<name>，对应 provider_config.rs 的固定槽：default/decision/jev
+/// + ROLE_DRAFT_SLOT/BRIEF_SLOT/FLOW_DRAFT_SLOT）；角色自定义槽名（chat/code/…）
+/// 是模板数据，原文照显不翻译。注意：只译绑定列表这一面——角色编辑器/侧栏的
+/// 槽位下拉仍显示原槽名（选择器语境显示的是配置键，与后端 model_slot 值对齐）。
+export const BUILTIN_SLOTS = ['default', 'decision', 'jev', 'role_draft', 'brief', 'flow_draft'] as const
+export const isBuiltinSlot = (slot: string): boolean =>
+  (BUILTIN_SLOTS as readonly string[]).includes(slot)
+
 /// 跟随模式下可选的共享槽：排除专属槽（agent:* 是编辑器写出的实现细节，
 /// 不该出现在「跟随谁」的选项里）。default 恒在（后端回退终点）。
 export function sharedSlots(slots: ProvidersView['slots'], current?: string): string[] {

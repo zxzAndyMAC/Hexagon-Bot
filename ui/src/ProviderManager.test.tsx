@@ -64,6 +64,22 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     expect(checkBtn().disabled).toBe(false)
     root.unmount()
   })
+
+  // 固定槽是 UI 词表（providers.slot_*）——显示本地化名 + 原槽名参照；
+  // 角色自定义槽名是模板数据，原文照显不翻译。
+  it('槽位名本地化：固定槽显示本地化名+原键，自定义槽原文', async () => {
+    vi.mocked(api.presetRoles).mockResolvedValue([
+      { name: '后端', duty: '', reviewer: null, model_slot: 'chat', globs: [], skills: [] },
+    ])
+    const { el, root } = await render(<ProviderManager />)
+    const codes = [...el.querySelectorAll('code')].map((c) => c.textContent ?? '')
+    expect(codes.some((c) => c.includes('Default (fallback)') && c.includes('default'))).toBe(true)
+    expect(codes.some((c) => c.includes('Decision') && c.includes('decision'))).toBe(true)
+    expect(codes.some((c) => c.includes('Jev (judgment)') && c.includes('jev'))).toBe(true)
+    expect(codes.some((c) => c.includes('role_draft'))).toBe(true)
+    expect(codes).toContain('chat')
+    root.unmount()
+  })
 })
 
 // context-window 票 02：窗口/输出上限元数据在设置页可见可改

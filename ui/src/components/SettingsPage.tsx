@@ -524,6 +524,9 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   const [editing, setEditing] = useState(false)
   const [desc, setDesc] = useState(skill.description)
   const [body, setBody] = useState('')
+  // origBody 只装 SKILL.md 原文——content 跟的是当前选中文件（可能不是
+  // SKILL.md），取消编辑时拿它恢复会把别文件的正文灌进编辑框。
+  const [origBody, setOrigBody] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -532,7 +535,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
 
   useEffect(() => {
     api.readSkillFile(skill.name, sel)
-      .then((c) => { setContent(c); if (sel === 'SKILL.md') setBody(c) })
+      .then((c) => { setContent(c); if (sel === 'SKILL.md') { setBody(c); setOrigBody(c) } })
       .catch(() => setContent(''))
   }, [skill.name, sel])
 
@@ -545,16 +548,34 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
       const fmName = m?.[1].match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? skill.name
       const fmDesc = m?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? desc
       await api.saveGlobalSkill(fmName, fmDesc, m?.[2] ?? body)
+      // 落盘后回读 SKILL.md：服务端按 frontmatter 规范化重写文件，body 与盘上
+      // 文本不等价。不同步的话视图停在保存前，origBody 快照也过期——下次取消
+      // 会把 pre-save 文本灌回编辑框，再保存即静默回滚。
+      const fresh = await api.readSkillFile(skill.name, 'SKILL.md')
+      if (sel === 'SKILL.md') setContent(fresh)
+      setBody(fresh)
+      setOrigBody(fresh)
+      setDesc(fmDesc)
       setEditing(false)
       onSaved()
     } catch (e) { pushToast(errText(e), 'err') } finally { setBusy(false) }
   }
 
+  // 取消编辑：字段回到最后加载的 SKILL.md 原文，放弃未保存修改。
+  const cancelEdit = () => {
+    setDesc(skill.description)
+    setBody(origBody)
+    setEditing(false)
+  }
+
   const isMd = sel.endsWith('.md') || sel === 'SKILL.md'
-  // ui-polish-3：右列详情统一 .panel 圆角边线卡
+  // ui-polish-3：右列详情统一 .panel 圆角边线卡。
+  // 面板限高 72vh（与左列同；负责人反馈 2026-09：详情全屏滚动、编辑区过矮）——
+  // 头行与文件签钉住，滚动只发生在内容区，不把整个设置列顶出去；
+  // 编辑态 textarea flex 撑高取代原 rows=14 矮框。
   return (
-    <div className="panel" style={{ padding: '12px 14px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+    <div className="panel" style={{ padding: '12px 14px', maxHeight: '72vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexShrink: 0 }}>
         <strong style={{ fontSize: 13 }}>{skill.name}</strong>
         <span className={`chip ${skill.origin === 'builtin' ? '' : 'ok'}`} style={{ fontSize: 10 }}>
           {t(`skills.origin_${skill.origin}`)}
@@ -568,7 +589,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
         </span>
       </div>
       {files.length > 1 && (
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8, flexShrink: 0 }}>
           {files.map((f) => (
             <button
               key={f}
@@ -582,34 +603,43 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
         </div>
       )}
       {editing ? (
-        <>
-          <div style={{ fontSize: 12, fontWeight: 560, color: 'var(--text-3)', marginBottom: 4 }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ fontSize: 12, fontWeight: 560, color: 'var(--text-3)', marginBottom: 4, flexShrink: 0 }}>
             {t('skills.descLabel')}
           </div>
           <input
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
-            className="input" style={{ fontFamily: 'inherit' }}
+            className="input" style={{ fontFamily: 'inherit', flexShrink: 0 }}
           />
-          <div style={{ fontSize: 12, fontWeight: 560, color: 'var(--text-3)', margin: '8px 0 4px' }}>
+          <div style={{ fontSize: 12, fontWeight: 560, color: 'var(--text-3)', margin: '8px 0 4px', flexShrink: 0 }}>
             SKILL.md
           </div>
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            rows={14}
-            className="input" style={{ fontFamily: 'monospace', resize: 'vertical' }}
+            className="input"
+            style={{ fontFamily: 'monospace', resize: 'none', flex: 1, minHeight: '40vh' }}
           />
-          <button className="btn primary" style={{ marginTop: 8, fontSize: 12 }} disabled={busy} onClick={save}>
-            {t('skills.save')}
-          </button>
-        </>
-      ) : isMd ? (
-        <div className="panel" style={{ padding: '10px 14px', fontSize: 12 }}>
-          <Md>{content}</Md>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexShrink: 0 }}>
+            <button className="btn primary" style={{ fontSize: 12 }} disabled={busy} onClick={save}>
+              {t('skills.save')}
+            </button>
+            <button className="btn" style={{ fontSize: 12 }} disabled={busy} onClick={cancelEdit}>
+              {t('skills.cancel')}
+            </button>
+          </div>
         </div>
       ) : (
-        <CodeBlock code={content} />
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          {isMd ? (
+            <div className="panel" style={{ padding: '10px 14px', fontSize: 12 }}>
+              <Md>{content}</Md>
+            </div>
+          ) : (
+            <CodeBlock code={content} />
+          )}
+        </div>
       )}
     </div>
   )

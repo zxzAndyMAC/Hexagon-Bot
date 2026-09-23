@@ -552,6 +552,8 @@ export default {
     usingDefault: 'デフォルト槽を使用', jevEmpty: 'Jev の鍵なし',
     enabled: '有効', disabledTag: '無効',
     jevHint: 'プロジェクトマネージャの選択専用。チャットは主モデルのまま。最初の保存で decision スロットに結びます。',
+    slot_default: 'デフォルト（フォールバック）', slot_decision: '決定', slot_jev: 'Jev（実行判定）',
+    slot_role_draft: 'ロール起草', slot_brief: '説明起草', slot_flow_draft: 'フロー起草',
   },
   palette: {
     invariantCheck: '不変条件チェックを実行',
@@ -635,7 +637,7 @@ export default {
     filter: 'スキルを絞り込み…', installed: 'インストール済み ({{count}})', new: '新規スキル',
     create: '作成', createHint: '~/.hexagon/skills/<名前>/SKILL.md に作成——全プロジェクトで利用可能',
     nameLabel: '名前', descLabel: '説明',
-    view: '表示', edit: '編集', save: '保存',
+    view: '表示', edit: '編集', save: '保存', cancel: 'キャンセル',
     enabled: '有効',
     scan: 'ローカルスキルをスキャン', scanning: 'スキャン中…',
     installDir: 'フォルダをインストール', installZip: 'ZIP をインストール',

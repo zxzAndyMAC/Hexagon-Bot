@@ -552,6 +552,8 @@ export default {
     usingDefault: 'Usa el hueco predeterminado', jevEmpty: 'Jev sin llave',
     enabled: 'Activo', disabledTag: 'inactivo',
     jevHint: 'Modelo de decisión solo para el director del proyecto. El chat sigue en el modelo principal. El primer guardado enlaza la ranura decision.',
+    slot_default: 'Predeterminado (respaldo)', slot_decision: 'Decisión', slot_jev: 'Jev (juicio)',
+    slot_role_draft: 'Borrador de rol', slot_brief: 'Borrador de descripción', slot_flow_draft: 'Borrador de flujo',
   },
   palette: {
     invariantCheck: 'Ejecutar chequeo de invariantes',
@@ -635,7 +637,7 @@ export default {
     filter: 'Filtrar habilidades…', installed: 'Instaladas ({{count}})', new: 'Nueva habilidad',
     create: 'Crear', createHint: 'Crea ~/.hexagon/skills/<nombre>/SKILL.md — visible en todos los proyectos',
     nameLabel: 'Nombre', descLabel: 'Descripción',
-    view: 'Ver', edit: 'Editar', save: 'Guardar',
+    view: 'Ver', edit: 'Editar', save: 'Guardar', cancel: 'Cancelar',
     enabled: 'Activada',
     scan: 'Escanear skills locales', scanning: 'Escaneando…',
     installDir: 'Instalar carpeta', installZip: 'Instalar ZIP',

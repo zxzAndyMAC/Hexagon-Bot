@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText, type ModelEntry, type ProviderView, type ProvidersView, type RoleDef } from '../api'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
-import { DEDICATED_PREFIX, isDedicatedSlot } from '../modelpick'
+import { BUILTIN_SLOTS, DEDICATED_PREFIX, isBuiltinSlot, isDedicatedSlot } from '../modelpick'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。
 const PRESETS: { name: string; kind: ProviderView['kind']; base_url: string; model?: string }[] = [
@@ -201,15 +201,10 @@ export function ProviderManager() {
     return [...g.entries()].sort(([a], [b]) => a.localeCompare(b))
   }, [draft])
 
-  // 槽位集合：预置角色的 model_slot ∪ default ∪ 已绑定键
+  // 槽位集合：预置角色的 model_slot ∪ 产品固定槽 ∪ 已绑定键
   const slotNames = useMemo(() => {
     const s = new Set(roles.map((r) => r.model_slot))
-    s.add('default')
-    s.add('decision')
-    s.add('role_draft')
-    s.add('brief')
-    s.add('flow_draft')
-    s.add('jev')
+    BUILTIN_SLOTS.forEach((k) => s.add(k))
     Object.keys(doc.slots).forEach((k) => s.add(k))
     return [...s].sort()
   }, [roles, doc.slots])
@@ -570,12 +565,19 @@ function SlotRow({
   // ui-audit-2 票 01：agent:<id> 专属槽是角色编辑器写出的内部名，
   // 槽位表里翻译成「专属 · 角色名」而非裸 id。
   const team = useUiStore((s) => s.team)
+  // 产品固定槽给本地化名（BUILTIN_SLOTS 词表，负责人反馈 2026-09：槽名全英文），
+  // 原槽名小字保留作配置键参照；角色自定义槽名是模板数据，原文照显。
   const label = isDedicatedSlot(slot)
     ? `${t('agent.dedicatedTag')} · ${team.find((m) => m.id === slot.slice(DEDICATED_PREFIX.length))?.role ?? slot}`
-    : slot
+    : isBuiltinSlot(slot)
+      ? t(`providers.slot_${slot}`)
+      : slot
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-      <code style={{ fontSize: 12, minWidth: 110, flexShrink: 0 }}>{label}</code>
+      <code style={{ fontSize: 12, minWidth: 150, flexShrink: 0 }}>
+        {label}
+        {isBuiltinSlot(slot) && <span className="dim3" style={{ fontSize: 10 }}> {slot}</span>}
+      </code>
       <select className="input" style={{ flex: '0 1 190px', width: 'auto' }} value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
         <option value="">{t('providers.pickProvider')}</option>
         {enabled.map((p) => (

@@ -552,6 +552,8 @@ export default {
     usingDefault: 'Usando o slot padrão', jevEmpty: 'Jev sem chave',
     enabled: 'Ativo', disabledTag: 'inativo',
     jevHint: 'Modelo de decisão só para o gerente do projeto. O chat continua no modelo principal. O primeiro salvamento liga o slot decision.',
+    slot_default: 'Padrão (reserva)', slot_decision: 'Decisão', slot_jev: 'Jev (julgamento)',
+    slot_role_draft: 'Rascunho de papel', slot_brief: 'Rascunho de descrição', slot_flow_draft: 'Rascunho de fluxo',
   },
   palette: {
     invariantCheck: 'Executar verificação de invariantes',
@@ -635,7 +637,7 @@ export default {
     filter: 'Filtrar habilidades…', installed: 'Instaladas ({{count}})', new: 'Nova habilidade',
     create: 'Criar', createHint: 'Cria ~/.hexagon/skills/<nome>/SKILL.md — visível em todos os projetos',
     nameLabel: 'Nome', descLabel: 'Descrição',
-    view: 'Ver', edit: 'Editar', save: 'Salvar',
+    view: 'Ver', edit: 'Editar', save: 'Salvar', cancel: 'Cancelar',
     enabled: 'Ativada',
     scan: 'Varrer skills locais', scanning: 'Varrendo…',
     installDir: 'Instalar pasta', installZip: 'Instalar ZIP',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { dedicatedSlot, isDedicatedSlot, resolveBinding, sharedSlots, slotLabel } from './modelpick'
+import { BUILTIN_SLOTS, dedicatedSlot, isDedicatedSlot, resolveBinding, sharedSlots, slotLabel } from './modelpick'
 import type { ProvidersView } from './gen/ProvidersView'
+import en from './i18n/locales/en'
 
 const view: ProvidersView = {
   providers: [],
@@ -41,5 +42,14 @@ describe('modelpick（ui-audit-2 票 01：角色直选模型）', () => {
     expect(slotLabel('unbound', view, '专属')).toBe('unbound · deepseek-chat') // 回落 default
     expect(slotLabel(null, view, '专属')).toBe('—')
     expect(slotLabel('agent:gone', view, '专属')).toBe('专属 · deepseek-chat')
+  })
+
+  // 守卫：BUILTIN_SLOTS 每个成员都必须有 providers.slot_<name> 文案——
+  // 新增固定槽不配 key 会在绑定列表渲染出裸 key 路径（t 缺 key 回显原文）。
+  it('BUILTIN_SLOTS 每个槽名都有 providers.slot_* 文案', () => {
+    const providers = en.providers as Record<string, unknown>
+    for (const s of BUILTIN_SLOTS) {
+      expect(providers[`slot_${s}`], `missing providers.slot_${s}`).toBeTruthy()
+    }
   })
 })

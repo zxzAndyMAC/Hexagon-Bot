@@ -552,6 +552,8 @@ export default {
     usingDefault: '在用默认槽', jevEmpty: 'Jev 未配钥匙',
     enabled: '启用', disabledTag: '已停用',
     jevHint: '只给项目经理做封闭选择。聊天仍走主对话模型。第一次保存会绑定决策槽。',
+    slot_default: '默认（兜底）', slot_decision: '决策', slot_jev: 'Jev（执行判定）',
+    slot_role_draft: '角色起草', slot_brief: '说明起草', slot_flow_draft: '流程起草',
   },
   palette: {
     invariantCheck: '运行不变量体检',
@@ -635,7 +637,7 @@ export default {
     filter: '筛选技能…', installed: '已装 {{count}}', new: '新建技能',
     create: '创建', createHint: '创建到 ~/.hexagon/skills/<名称>/SKILL.md——所有项目可见',
     nameLabel: '名称', descLabel: '描述',
-    view: '查看', edit: '编辑', save: '保存',
+    view: '查看', edit: '编辑', save: '保存', cancel: '取消',
     enabled: '启用',
     scan: '扫描本机技能', scanning: '扫描中…',
     installDir: '安装文件夹', installZip: '安装 ZIP',

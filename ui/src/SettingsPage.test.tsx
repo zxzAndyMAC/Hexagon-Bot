@@ -189,6 +189,82 @@ describe('SettingsPage list|detail 分区', () => {
     root.unmount()
   })
 
+  // 详情面板限高 72vh：头行/文件签钉住，滚动只发生在内容区——
+  // 长 SKILL.md 不再把整个设置列顶出视口。
+  it('Skills 详情：面板限高且只有内容区滚动', async () => {
+    vi.spyOn(api, 'listSkills').mockResolvedValue([
+      { name: 'my-lint', description: '自建', origin: 'global', enabled: true },
+    ])
+    vi.spyOn(api, 'skillFiles').mockResolvedValue(['SKILL.md'])
+    vi.spyOn(api, 'readSkillFile').mockResolvedValue('# x')
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Skills')
+    await clickText(el, 'my-lint')
+    const detail = [...el.querySelectorAll<HTMLElement>('.panel')]
+      .find((p) => p.querySelector('strong')?.textContent === 'my-lint')!
+    expect(detail.style.maxHeight).toBe('72vh')
+    const scrollers = [...detail.querySelectorAll<HTMLElement>('div')]
+      .filter((d) => d.style.overflowY === 'auto')
+    expect(scrollers).toHaveLength(1)
+    expect(scrollers[0].textContent).toContain('x')
+    root.unmount()
+  })
+
+  // 取消=放弃未保存修改：不落盘、不刷新，再进编辑回到原文。
+  // 快照必须是 SKILL.md 原文而非当前选中文件——切到 ref.md 签再取消，
+  // 不能把 ref.md 正文灌回 SKILL.md 缓冲；保存后快照要跟盘上文本走。
+  it('Skills 编辑：保存旁有取消；取消放弃修改且不保存', async () => {
+    vi.spyOn(api, 'listSkills').mockResolvedValue([
+      { name: 'my-lint', description: 'orig desc', origin: 'global', enabled: true },
+    ])
+    vi.spyOn(api, 'skillFiles').mockResolvedValue(['SKILL.md', 'ref.md'])
+    let md = '# orig body'
+    vi.spyOn(api, 'readSkillFile').mockImplementation((_n: string, f: string) =>
+      Promise.resolve(f === 'ref.md' ? '# ref text' : md))
+    const save = vi.spyOn(api, 'saveGlobalSkill').mockImplementation(async () => { md = '# saved body' })
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Skills')
+    await clickText(el, 'my-lint')
+    const detail = () =>
+      [...el.querySelectorAll<HTMLElement>('.panel')]
+        .find((p) => p.querySelector('strong')?.textContent === 'my-lint')!
+    const btn = (label: string) =>
+      [...detail().querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
+    const setVal = (node: HTMLInputElement | HTMLTextAreaElement, v: string) => {
+      const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement
+      const setter = Object.getOwnPropertyDescriptor(proto.prototype, 'value')!.set!
+      setter.call(node, v)
+      node.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    // 切到 ref.md 签再进编辑——body 仍应是 SKILL.md 缓冲
+    await clickText(el, 'ref.md')
+    await act(async () => { btn('Edit').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const descInput = [...detail().querySelectorAll('input')].find((i) => i.value === 'orig desc')!
+    const ta = detail().querySelector('textarea')!
+    expect(ta.value).toBe('# orig body')
+    // 编辑态 textarea 撑高（取代原 rows=14 的矮框）
+    expect(ta.style.minHeight).toBe('40vh')
+    await act(async () => { setVal(descInput, 'changed'); setVal(ta, '# changed') })
+    await act(async () => { btn('Cancel').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(save).not.toHaveBeenCalled()
+    expect(detail().querySelector('textarea')).toBeNull()
+    // 再进编辑：字段回到 SKILL.md 原文，不是 ref.md 的内容
+    await act(async () => { btn('Edit').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(detail().querySelector('textarea')!.value).toBe('# orig body')
+    expect([...detail().querySelectorAll('input')].some((i) => i.value === 'orig desc')).toBe(true)
+    // 保存后取消：快照对齐盘上文本（服务端规范化重写后回读），不是保存前的旧稿
+    await act(async () => { setVal(detail().querySelector('textarea')!, '# to save') })
+    await act(async () => { btn('Save').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(save).toHaveBeenCalled()
+    await act(async () => { btn('Edit').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(detail().querySelector('textarea')!.value).toBe('# saved body')
+    await act(async () => { setVal(detail().querySelector('textarea')!, '# second edit') })
+    await act(async () => { btn('Cancel').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await act(async () => { btn('Edit').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(detail().querySelector('textarea')!.value).toBe('# saved body')
+    root.unmount()
+  })
+
   // settings-density 02：名单字段=chip 行 + 弹窗勾选（owner 裁决，取代逗号输入框）
   it('模板编辑器：技能字段 chip 化，弹窗勾选追加', async () => {
     vi.spyOn(api, 'listRoleTemplates').mockResolvedValue([

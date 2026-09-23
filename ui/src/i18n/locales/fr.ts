@@ -552,6 +552,8 @@ export default {
     usingDefault: 'Utilise le créneau par défaut', jevEmpty: 'Jev sans clé',
     enabled: 'Actif', disabledTag: 'inactif',
     jevHint: 'Modèle de décision réservé au chef de projet. Le chat reste sur le modèle principal. Le premier enregistrement lie le slot decision.',
+    slot_default: 'Défaut (secours)', slot_decision: 'Décision', slot_jev: 'Jev (jugement)',
+    slot_role_draft: 'Rédaction de rôle', slot_brief: 'Rédaction de brief', slot_flow_draft: 'Rédaction de flux',
   },
   palette: {
     invariantCheck: 'Lancer le contrôle d’invariants',
@@ -635,7 +637,7 @@ export default {
     filter: 'Filtrer les compétences…', installed: 'Installées ({{count}})', new: 'Nouvelle compétence',
     create: 'Créer', createHint: 'Crée ~/.hexagon/skills/<nom>/SKILL.md — visible dans tous les projets',
     nameLabel: 'Nom', descLabel: 'Description',
-    view: 'Voir', edit: 'Modifier', save: 'Enregistrer',
+    view: 'Voir', edit: 'Modifier', save: 'Enregistrer', cancel: 'Annuler',
     enabled: 'Activée',
     scan: 'Scanner les skills locales', scanning: 'Analyse…',
     installDir: 'Installer un dossier', installZip: 'Installer un ZIP',

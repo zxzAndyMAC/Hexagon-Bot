@@ -552,6 +552,8 @@ export default {
     usingDefault: 'Using default slot', jevEmpty: 'Jev has no key',
     enabled: 'Enabled', disabledTag: 'disabled',
     jevHint: 'Decision model for the project manager only. Chat stays on the main model. The first save binds the decision slot.',
+    slot_default: 'Default (fallback)', slot_decision: 'Decision', slot_jev: 'Jev (judgment)',
+    slot_role_draft: 'Role drafting', slot_brief: 'Brief drafting', slot_flow_draft: 'Flow drafting',
   },
   palette: {
     invariantCheck: 'Run invariant check',
@@ -635,7 +637,7 @@ export default {
     filter: 'Filter skills…', installed: 'Installed ({{count}})', new: 'New skill',
     create: 'Create', createHint: 'Creates ~/.hexagon/skills/<name>/SKILL.md — visible to every project',
     nameLabel: 'Name', descLabel: 'Description',
-    view: 'View', edit: 'Edit', save: 'Save',
+    view: 'View', edit: 'Edit', save: 'Save', cancel: 'Cancel',
     enabled: 'Enabled',
     scan: 'Scan local skills', scanning: 'Scanning…',
     installDir: 'Install folder', installZip: 'Install ZIP',
