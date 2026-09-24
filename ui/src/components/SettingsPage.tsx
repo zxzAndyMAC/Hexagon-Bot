@@ -10,6 +10,7 @@ import { useUiStore, type ThemePref } from '../store'
 import { api, errText, isTauri, type DiagRecord, type ExtMcpRow, type ExtSkillRow, type McpEntryRow, type McpServiceRow, type PermissionRuleRow, type ProvidersView, type RoleDef, type RoleTemplate, type SkillRow } from '../api'
 import { ACTIONS, bindingFor, conflictFor, formatBinding, isMac, normalizeEvent, resetBinding, setBinding, type ActionId } from '../keymap'
 import { PracticeGround } from './PracticeGround'
+import { PromptsSection } from './PromptsSection'
 import { Icon } from './Icon'
 import { ProviderManager } from './ProviderManager'
 import { UsageTab } from './UsageTab'
@@ -29,11 +30,11 @@ const LANG_NAMES: Record<string, string> = {
   fr: 'Français',
 }
 
-type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'autonomy' | 'usage' | 'logs' | 'about'
-const SECTIONS: Section[] = ['general', 'keys', 'team', 'models', 'perms', 'skills', 'mcp', 'autonomy', 'usage', 'logs', 'about']
+type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'autonomy' | 'usage' | 'logs' | 'prompts' | 'about'
+const SECTIONS: Section[] = ['general', 'keys', 'team', 'models', 'perms', 'skills', 'mcp', 'autonomy', 'usage', 'logs', 'prompts', 'about']
 /// settings-3col 票 01：list|detail 分区放宽到 980（760 塞中列后详情太挤）；
 /// 平铺分区保持 760 居中。
-const WIDE_SECTIONS = new Set<Section>(['team', 'models', 'skills', 'mcp'])
+const WIDE_SECTIONS = new Set<Section>(['team', 'models', 'skills', 'mcp', 'prompts'])
 
 /** settings-3col 票 01：Cherry 式「中列清单 | 右列详情」共享壳。
  *  中列 = 顶部搜索框 + 条目行（选中=左竖条+accent-soft 底）+ 底部动作行；
@@ -1518,6 +1519,8 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
     usage: gated(<UsageSection onDetail={onOpenUsageDetail} />),
     // 日志页不被 gated 吃掉——无项目时宿主记录仍要看（diagnostic-records 票 01）。
     logs: <LogsSection projectless={projectless} />,
+    // 提示词页是宿主级（翻译槽在全局 providers.json），无项目也可用（ADR 0071）。
+    prompts: <PromptsSection onGoModels={() => setSection('models')} />,
     about: (
       <div style={{ fontSize: 12, lineHeight: 2 }}>
         <div><b>Hexagon-Bot</b> · v0.1.0</div>

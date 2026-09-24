@@ -1238,14 +1238,16 @@ fn execute_judgment_is_a_closed_choice_and_does_not_fall_back_to_chat() {
     let seen = jev.states();
     assert_eq!(seen.len(), 1);
     assert!(
-        seen[0].contains("## 已落盘的提案")
+        // prompt-engineering 票 10：执行判定状态英文化（ADR 0071），正文仍原样。
+        seen[0].contains("## Proposal as written to disk")
             && seen[0].contains("改进提示词")
             && seen[0].contains("+line2"),
         "提案正文要原样交给 Jev：{}",
         seen[0]
     );
     assert!(
-        seen[0].contains("## 已落盘的证据") && seen[0].contains("上级复审已通过"),
+        seen[0].contains("## Evidence as written to disk")
+            && seen[0].contains("superior's review has passed"),
         "没有回放时，证据是已经通过的复审：{}",
         seen[0]
     );
@@ -1380,7 +1382,8 @@ fn execute_judgment_receives_persisted_replay() {
     assert!(seen[0].contains("scene-7"), "回放证据原文要在状态里");
     // stages_done 0 和 1、其余指标为 0：现任 0 分，候选 20 分。
     assert!(
-        seen[0].contains("现任 0") && seen[0].contains("候选 20"),
+        // prompt-engineering 票 10：回放分行英文化。
+        seen[0].contains("incumbent 0") && seen[0].contains("candidate 20"),
         "主机算好的回放分要交给 Jev：{}",
         seen[0]
     );
@@ -3125,7 +3128,8 @@ fn unnamed_owner_message_routes_outside_activation_list() {
     assert!(text.contains("规格"), "状态里带当前阶段");
     assert!(text.contains("产品策划"), "状态里带激活名单");
     assert!(text.contains("后端"));
-    assert!(text.contains("先不派活"));
+    // prompt-engineering 票 10：模型看到的是语言无关令牌 HOLD（落库决策仍写「先不派活」）。
+    assert!(text.lines().any(|l| l == crate::pm_route::HOLD_TOKEN));
     assert!(!worker.recorded().is_empty(), "被派到的角色跑了回合");
 
     let tl = timeline(&wb, None, 80).unwrap();
@@ -3234,8 +3238,9 @@ fn missing_decision_slot_uses_chat_model_for_the_same_choice() {
     assert!(chat
         .recorded()
         .iter()
-        .all(|r| req_text(r).contains("封闭选择")));
-    assert!(!req_text(&chat.recorded()[0]).contains("执行方案"));
+        .all(|r| req_text(r).contains("closed choice")));
+    // prompt-engineering 票 10：选择请求与方案预告指令都英文化，标记随之改。
+    assert!(!req_text(&chat.recorded()[0]).contains("state your plan"));
     assert!(!worker.recorded().is_empty());
     assert_eq!(turns_for(&wb, "项目经理"), 0);
 }
@@ -3256,7 +3261,8 @@ fn pm_chat_reply_uses_main_model_not_decision_slot() {
     wb.set_decision_slot("项目经理", Some("decision")).unwrap();
     wb.dispatch("项目经理", "在吗", &[]).unwrap();
     assert_eq!(decision.recorded().len(), 1, "说完没点名才走决策槽");
-    assert!(req_text(&decision.recorded()[0]).contains("只做一次封闭选择"));
+    // prompt-engineering 票 10：选择请求英文化，标记改为 "Make one closed choice"。
+    assert!(req_text(&decision.recorded()[0]).contains("Make one closed choice"));
     assert_eq!(chat.recorded().len(), 2, "聊天仍是主对话模型的那一回合");
     // 职责文案里有「先不派活」三个字，不能拿它当选择请求的标记。
     // 选择请求才有「只做一次封闭选择」。
@@ -3750,11 +3756,12 @@ fn nonempty_repo_gets_one_readonly_intake_and_l4_does_not_write_the_draft() {
     assert!(call.tools.is_empty(), "没有工具，不能改文件也不能远程发布");
     assert_eq!(call.model_slot, "chat");
     let (system, user) = req_system_user(call);
-    assert_eq!(system, crate::intake::INTAKE_PROMPT);
+    assert_eq!(system, crate::intake::intake_prompt());
     assert!(user.contains("vitest"));
     assert!(!user.contains("SUPERSECRETKEY"));
     assert!(user.contains("- Test: npm run test"));
-    assert!(user.contains("- Build: 未知"));
+    // prompt-engineering 票 09：发给模型的命令块占位英文化；时间线那份不变（下方）。
+    assert!(user.contains("- Build: unknown"));
 
     let (author, body) = analysis_body(&wb);
     assert_eq!(author, wb.agent_by_role("项目经理").unwrap());

@@ -1,6 +1,6 @@
 //! 现成仓库的只读开场分析（票 17 / ADR 0067）。
 //!
-//! 系统提示词就是 ADR 0067 后半，一个字不改。命令不靠模型发挥：
+//! 系统提示词就是 ADR 0067 后半（ADR 0071 起为英文版），一个字不改。命令不靠模型发挥：
 //! 只承认仓库根清单里写明的构建/测试/检查，没有的位置写「未知」。
 //! 模型若仍编出别的命令，从回复里拿掉那一行——编进时间线是一次
 //! 假的构建方式（false command），删掉一句叙述花一次人工（false cut）。
@@ -16,18 +16,25 @@ use crate::provider::{ChatResponse, ContentBlock};
 use serde_json::Value;
 use std::path::Path;
 
-/// ADR 0067 开场分析的系统提示词。正文是合同，不随界面语言改写。
-pub const INTAKE_PROMPT: &str = "你刚进入一个已有文件的仓库。只读，不改任何文件。根据仓库里真实存在的文件写出开场分析。
+/// ADR 0067 开场分析的系统提示词（ADR 0071 修订：英文，回复用界面语言）。
+/// 占位 `{language}`，由 [`intake_prompt`] 填。正文是合同，与 ADR 0067 逐字一致。
+pub const INTAKE_PROMPT: &str = "You have just entered a repository that already contains files. Read only; do not change any file. Write an opening analysis based on the files that actually exist in the repository.
 
-写进回复的内容：
-- 这是什么项目
-- 能从文件里确定的构建、测试、检查命令。文件里没有的写「未知」，不要编造
-- 入口和目录格局
-- 已有 AGENTS.md 或 CLAUDE.md 时只引用，不提议覆盖
+Put this in your reply:
+- what the project is
+- the build, test and check commands that can be determined from the files; for anything the files do not show, write \"unknown\" — never invent commands
+- the entry points and the directory layout
+- if AGENTS.md or CLAUDE.md already exists, only cite it; do not propose replacing it
 
-没有这两份文件时，在分析后面另附一份 AGENTS.md 草案，用与优化描述相同的骨架，并标明这是草案，等人确认才落盘。命令仍然只写文件里能确定的。
+If neither file exists, append an AGENTS.md draft after the analysis, using the same skeleton as the one-sentence optimisation, and mark it as a draft that is written to disk only after the owner confirms. Its commands, too, may only be ones the files establish.
 
-不要改业务代码，不要远程发布，不要写密钥。";
+Do not change business code, do not publish remotely, do not write secrets.
+
+Write the reply in {language}.";
+
+pub fn intake_prompt() -> String {
+    INTAKE_PROMPT.replace("{language}", crate::uilang::reply_language())
+}
 
 /// 没有接话人时工作台自己写的那一句。作者不是花名册里的角色。
 pub const NO_INTAKE_SPEAKER_NOTE: &str =
@@ -59,21 +66,26 @@ impl RepoCommands {
     }
 }
 
+/// 给负责人看的命令块（时间线里）。
 pub fn commands_block(cmds: &RepoCommands) -> String {
-    format!(
-        "## Commands\n- Build: {}\n- Test: {}\n- Check: {}\n",
-        slot_line(&cmds.build),
-        slot_line(&cmds.test),
-        slot_line(&cmds.check),
-    )
+    commands_block_with(cmds, "未知", "；")
 }
 
-fn slot_line(items: &[String]) -> String {
-    if items.is_empty() {
-        "未知".into()
-    } else {
-        items.join("；")
-    }
+/// 空槽的占位词可换：发给模型的那份用英文（ADR 0071），时间线那份不动。
+fn commands_block_with(cmds: &RepoCommands, unknown: &str, sep: &str) -> String {
+    let line = |items: &[String]| {
+        if items.is_empty() {
+            unknown.to_string()
+        } else {
+            items.join(sep)
+        }
+    };
+    format!(
+        "## Commands\n- Build: {}\n- Test: {}\n- Check: {}\n",
+        line(&cmds.build),
+        line(&cmds.test),
+        line(&cmds.check),
+    )
 }
 
 fn push_unique(slot: &mut Vec<String>, cmd: String) {
@@ -264,11 +276,11 @@ pub fn compose_timeline(
 
 pub fn user_prompt(root: &Path, project_name: &str, cmds: &RepoCommands) -> String {
     let mut out = String::new();
-    out.push_str(&format!("项目名：{project_name}\n\n"));
-    out.push_str("仓库根目录条目：\n");
+    out.push_str(&format!("Project name: {project_name}\n\n"));
+    out.push_str("Repository root entries:\n");
     let entries = layout_entries(root);
     if entries.is_empty() {
-        out.push_str("- （没有可见条目）\n");
+        out.push_str("- (no visible entries)\n");
     } else {
         for name in &entries {
             let path = root.join(name);
@@ -279,9 +291,11 @@ pub fn user_prompt(root: &Path, project_name: &str, cmds: &RepoCommands) -> Stri
             }
         }
     }
-    out.push_str("\n已从文件确定的命令。没有列出的就是未知，不要补充，不要改写：\n");
-    out.push_str(&commands_block(cmds));
-    out.push_str("\n文件摘录（只读）：\n");
+    out.push_str(
+        "\nCommands established from the files. Anything not listed is unknown — do not add or rewrite commands:\n",
+    );
+    out.push_str(&commands_block_with(cmds, "unknown", "; "));
+    out.push_str("\nFile excerpts (read-only):\n");
     let mut budget = 16_000usize;
     for name in [
         "package.json",
@@ -312,14 +326,14 @@ pub fn user_prompt(root: &Path, project_name: &str, cmds: &RepoCommands) -> Stri
     match instruction_file(root) {
         Some(file) => {
             out.push_str(&format!(
-                "\n已有项目说明：{file}。只引用，不要提议覆盖，不要另写一份。\n"
+                "\nExisting project instructions: {file}. Only cite them; do not propose replacing them or writing another copy.\n"
             ));
         }
         None => {
-            out.push_str("\n没有 AGENTS.md，也没有 CLAUDE.md。\n");
+            out.push_str("\nThere is no AGENTS.md and no CLAUDE.md.\n");
         }
     }
-    out.push_str("不要写任何文件，不要远程发布，不要写密钥。\n");
+    out.push_str("Do not write any files, do not publish remotely, do not write secrets.\n");
     out
 }
 
@@ -446,17 +460,20 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    const ADR_0067_INTAKE_PROMPT: &str = "你刚进入一个已有文件的仓库。只读，不改任何文件。根据仓库里真实存在的文件写出开场分析。
+    // ADR 0071 修订：合同原文换成英文版（ADR 0067 同步修订）。
+    const ADR_0067_INTAKE_PROMPT: &str = "You have just entered a repository that already contains files. Read only; do not change any file. Write an opening analysis based on the files that actually exist in the repository.
 
-写进回复的内容：
-- 这是什么项目
-- 能从文件里确定的构建、测试、检查命令。文件里没有的写「未知」，不要编造
-- 入口和目录格局
-- 已有 AGENTS.md 或 CLAUDE.md 时只引用，不提议覆盖
+Put this in your reply:
+- what the project is
+- the build, test and check commands that can be determined from the files; for anything the files do not show, write \"unknown\" — never invent commands
+- the entry points and the directory layout
+- if AGENTS.md or CLAUDE.md already exists, only cite it; do not propose replacing it
 
-没有这两份文件时，在分析后面另附一份 AGENTS.md 草案，用与优化描述相同的骨架，并标明这是草案，等人确认才落盘。命令仍然只写文件里能确定的。
+If neither file exists, append an AGENTS.md draft after the analysis, using the same skeleton as the one-sentence optimisation, and mark it as a draft that is written to disk only after the owner confirms. Its commands, too, may only be ones the files establish.
 
-不要改业务代码，不要远程发布，不要写密钥。";
+Do not change business code, do not publish remotely, do not write secrets.
+
+Write the reply in {language}.";
 
     #[test]
     fn prompt_is_the_adr_text() {
@@ -558,8 +575,9 @@ mod tests {
         let prompt = user_prompt(dir.path(), "Demo", &RepoCommands::default());
         assert!(!prompt.contains("SUPERSECRETKEY"));
         assert!(prompt.contains("hello"));
-        assert!(prompt.contains("没有 AGENTS.md"));
-        assert!(user_prompt(dir.path(), "Demo", &read_commands(dir.path())).contains("未知"));
+        // prompt-engineering 票 09：user 消息英文化（ADR 0071）。
+        assert!(prompt.contains("There is no AGENTS.md"));
+        assert!(user_prompt(dir.path(), "Demo", &read_commands(dir.path())).contains("unknown"));
     }
 
     fn script_body() -> impl Strategy<Value = Option<String>> {

@@ -15,7 +15,13 @@ use crate::provider::{ChatRequest, ChatResponse, ContentBlock, Message, Role};
 pub const PM_ROLE: &str = "项目经理";
 
 /// 封闭选择里的「不唤醒任何人」。与角色名同级，不是自由文本。
+/// 这是落库决策记录（eligible/chosen）与界面上的写法——回放基线按它比对，不改。
 pub const HOLD: &str = "先不派活";
+
+/// 发给模型的「不唤醒任何人」令牌（prompt-engineering 票 10 / ADR 0071）。
+/// 提示词英文化后仍要模型回中文「先不派活」会诱发翻译式漂移（回 "Hold off"
+/// 之类）而被判拒绝；给一个语言无关的令牌，解析后映射回 [`HOLD`]。
+pub const HOLD_TOKEN: &str = "HOLD";
 
 /// 时间线上工作台自己的说明。不是花名册里的角色，也不伪造角色发言。
 pub const WORKBENCH_AUTHOR: &str = "工作台";
@@ -52,7 +58,8 @@ pub fn parse_route_choice(raw: &str, roster: &[String]) -> Option<RouteChoice> {
         return None;
     }
     // HOLD 优先于花名册：没有角色该叫这个名字；即便有，也不派活。
-    if s == HOLD {
+    // 旧令牌仍收：两者都是封闭集合里的精确串，不放宽匹配。
+    if s == HOLD_TOKEN || s == HOLD {
         return Some(RouteChoice::Hold);
     }
     if roster.iter().any(|r| r == s) {
@@ -63,26 +70,27 @@ pub fn parse_route_choice(raw: &str, roster: &[String]) -> Option<RouteChoice> {
 }
 
 /// 给 Jev 的状态。只描述局面，不要求模型自己吐一行字——选项走选择题接口。
+/// 英文（ADR 0071）；阶段名、角色名、负责人原话逐字保留。
 pub fn choice_state(
     stage: Option<&str>,
     activation: &[String],
     speaker: &str,
     body: &str,
 ) -> String {
-    let stage_line = stage.unwrap_or("（没有进行中的阶段）");
+    let stage_line = stage.unwrap_or("(no stage in progress)");
     let act = if activation.is_empty() {
-        "（空）".to_string()
+        "(none)".to_string()
     } else {
-        activation.join("、")
+        activation.join(", ")
     };
     format!(
-        "当前阶段：{stage_line}\n本阶段激活名单：{act}\n{speaker}刚说完，没有点名下一位：\n{body}"
+        "Current stage: {stage_line}\nActivation list of this stage: {act}\n{speaker} just finished speaking without naming who goes next:\n{body}"
     )
 }
 
 /// 给决策调用的用户消息。选项逐行列出，模型被要求原样回一行。
 /// 激活名单只是状态，不是选项边界——花名册里的人都可以被选。
-/// `speaker` 是「负责人」或刚说完的角色名，不是自由发挥的句子。
+/// `speaker` 是「the owner」或刚说完的角色名，不是自由发挥的句子。
 pub fn choice_prompt(
     stage: Option<&str>,
     activation: &[String],
@@ -90,21 +98,21 @@ pub fn choice_prompt(
     speaker: &str,
     body: &str,
 ) -> String {
-    let stage_line = stage.unwrap_or("（没有进行中的阶段）");
+    let stage_line = stage.unwrap_or("(no stage in progress)");
     let act = if activation.is_empty() {
-        "（空）".to_string()
+        "(none)".to_string()
     } else {
-        activation.join("、")
+        activation.join(", ")
     };
     let mut options = roster.to_vec();
-    options.push(HOLD.to_string());
+    options.push(HOLD_TOKEN.to_string());
     format!(
-        "你是项目经理。只做一次封闭选择，不要聊天，不要解释。\n\
-         当前阶段：{stage_line}\n\
-         本阶段激活名单：{act}\n\
-         可以派给激活名单以外的花名册角色。\n\
-         {speaker}刚说完，没有点名下一位：\n{body}\n\
-         只输出下面其中一行，原样，不要加标点或其它字：\n{}",
+        "You are the project manager. Make one closed choice: no chat, no explanation.\n\
+         Current stage: {stage_line}\n\
+         Activation list of this stage: {act}\n\
+         You may pick roster roles outside the activation list. {HOLD_TOKEN} means wake no one for now.\n\
+         {speaker} just finished speaking without naming who goes next:\n{body}\n\
+         Output exactly one of the lines below, verbatim, with no punctuation or other text:\n{}",
         options.join("\n")
     )
 }
@@ -138,6 +146,22 @@ pub fn choice_text(resp: &ChatResponse) -> String {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// prompt-engineering 票 10：模型看到的是语言无关令牌 HOLD，解析后等同
+    /// 「先不派活」；旧中文令牌仍收。多一个字照旧拒绝。
+    #[test]
+    fn hold_token_is_language_neutral_and_exact() {
+        let roster = vec!["后端".to_string()];
+        assert_eq!(
+            parse_route_choice(" HOLD\n", &roster),
+            Some(RouteChoice::Hold)
+        );
+        assert_eq!(parse_route_choice(HOLD, &roster), Some(RouteChoice::Hold));
+        assert!(parse_route_choice("Hold off", &roster).is_none());
+        assert!(parse_route_choice("HOLD.", &roster).is_none());
+        let p = choice_prompt(None, &[], &roster, "The owner", "x");
+        assert!(p.lines().any(|l| l == HOLD_TOKEN) && p.lines().any(|l| l == "后端"));
+    }
 
     #[test]
     fn exact_roster_or_hold_only() {

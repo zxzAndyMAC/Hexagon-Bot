@@ -86,6 +86,8 @@ fn default_true() -> bool {
 pub const ROLE_DRAFT_SLOT: &str = "role_draft";
 pub const BRIEF_SLOT: &str = "brief";
 pub const FLOW_DRAFT_SLOT: &str = "flow_draft";
+/// 提示词页参考译文（prompt-engineering 票 11）。宿主级槽，没绑落 default。
+pub const TRANSLATE_SLOT: &str = "translate";
 /// Jev。不走 default 回退，见 [`resolve_exact`]。
 pub const JEV_SLOT: &str = "jev";
 

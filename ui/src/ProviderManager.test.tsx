@@ -43,7 +43,8 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     expect(el.querySelectorAll('.dot.off')).toHaveLength(1)
     // 汇总行：default 已绑但缺钥匙。列表里还有 decision、三个起草槽和 jev，共 6 个。
     const text = el.textContent ?? ''
-    expect(text).toContain('1/6')
+    // prompt-engineering 票 11：内置槽位新增 translate（提示词参考译文），6 → 7。
+    expect(text).toContain('1/7')
     root.unmount()
   })
 

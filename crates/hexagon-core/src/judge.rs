@@ -174,6 +174,17 @@ impl JudgeBackend for MechanicalJudge {
     }
 }
 
+/// 判定提示词的指令部分（prompt_version judge-v2：ADR 0071 英文化，
+/// rationale 用界面语言）。提示词页目录与运行时共用。
+pub(crate) fn prompt_head() -> String {
+    format!(
+        "You assist with judging a project change. Below is a JSON report comparing the baseline pack with the candidate pack on the same scenario replay. \
+         Output exactly one line of JSON: {{\"verdict\":\"stamp|reject|needs-human\",\"rationale\":\"one plain-language sentence for the owner, no jargon, written in {}\"}}.\n\
+         Rules: any metric regressed -> reject; nothing regressed and something improved -> stamp; unsure, no change or an abnormal report -> needs-human.",
+        crate::uilang::reply_language()
+    )
+}
+
 /// LLM 后端：把报告摘要交给模型,要闭集 JSON 判定。
 /// 一切异常路径——provider 错、输出非 JSON、verdict 词表外——
 /// 都收敛为 needs-human（fail-closed 不对称:judge 说「过」只是建议,
@@ -191,10 +202,8 @@ impl LlmJudge<'_> {
     fn prompt(input: &JudgeInput) -> String {
         let r = &input.report;
         format!(
-            "你是项目变更的判定助手。下面是同一场景回放基线包与候选包的对比报告(JSON)。\
-             只输出一行 JSON: {{\"verdict\":\"stamp|reject|needs-human\",\"rationale\":\"一句话大白话理由,不带术语\"}}。\n\
-             规则:指标退步→reject;全部不退步且有改善→stamp;拿不准/无变化/报告异常→needs-human。\n\
-             报告:\n{}",
+            "{}\nReport:\n{}",
+            prompt_head(),
             serde_json::to_string(&json!({
                 "surface": input.surface,
                 "warnings": input.warnings,
@@ -217,7 +226,7 @@ impl JudgeBackend for LlmJudge<'_> {
             rationale: format!("判定模型没能给出可用建议（{why}）——按惯例由人看"),
             backend: format!("llm:{}", self.slot),
             model: Some(self.slot.into()),
-            prompt_version: "judge-v1",
+            prompt_version: "judge-v2",
             deterministic: false,
         };
         let req = ChatRequest {
@@ -295,7 +304,7 @@ impl JudgeBackend for LlmJudge<'_> {
                 .to_string(),
             backend: format!("llm:{}", self.slot),
             model: Some(self.slot.into()),
-            prompt_version: "judge-v1",
+            prompt_version: "judge-v2",
             deterministic: false,
         }
     }

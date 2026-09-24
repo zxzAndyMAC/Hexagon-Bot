@@ -48,10 +48,18 @@ impl Tool for FsRead {
         "fs_read"
     }
     fn description(&self) -> &str {
-        "Read a file inside the repo. png/jpg/gif/webp with matching magic bytes return an image payload (requires a vision-capable model slot)"
+        r#"Read a file in the repo. Returns its text; png/jpg/gif/webp files whose magic bytes match come back as an image (vision-capable model slots only).
+- Use when: you need a file's contents, including before any edit — fs_patch and fs_write reject edits to files you have not read in this activation.
+- Do not use: to find files (fs_find), to search contents (fs_grep, sem_search), or for delivered artifacts under .hexagon/ (artifact_read).
+- `offset` / `limit` select a 1-based line range; the result reports `total_lines` and the `lines` you got. Use them for large files and for the spill files that trimmed results point to.
+- Errors: a missing path returns an I/O error; credential files are always denied; an offset past the end reports the file's line count."#
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})
+        json!({"type":"object","properties":{
+            "path":{"type":"string","description":"repo-relative file path"},
+            "offset":{"type":"integer","minimum":1,"description":"first line to read, 1-based"},
+            "limit":{"type":"integer","minimum":1,"description":"number of lines to read"}},
+            "required":["path"]})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::Read
@@ -62,7 +70,17 @@ impl Tool for FsRead {
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
+        // 指纹取在读之前：读与取指纹之间若有人改文件，指纹是旧的，下次编辑
+        // 判「读后已变」——偏差落在误判一侧（readstate 代价模型）。
+        let before = readstate::stamp(&p);
         let bytes = std::fs::read(&p)?;
+        // 票 02（prompt-engineering）：父代理读过才可改。子代理不能写盘，
+        // 它的读不代父记账——父 ctx 与子代理共享 Arc，记了就等于代读。
+        if ctx.subagent.is_none() {
+            if let Some(s) = before {
+                ctx.reads.record_stamp(&p, s);
+            }
+        }
         // 票 04：子代理域记实读路径——交回的引用以这格为准（实际读过的，
         // 不是模型自称读过什么）。
         if let Some(s) = &ctx.subagent {
@@ -99,13 +117,70 @@ impl Tool for FsRead {
                 "note": "image exceeds 5MB — returned as text, not sent as image"
             }));
         }
-        if bytes.len() > FS_READ_CAP {
-            let full = String::from_utf8_lossy(&bytes).into_owned();
-            let content = spill_trim(ctx, &full, FS_READ_CAP);
-            return Ok(json!({"truncated": true, "content": content}));
+        let text = String::from_utf8_lossy(&bytes);
+        let lines: Vec<&str> = text.split_inclusive('\n').collect();
+        let total = lines.len();
+        let offset = input["offset"].as_u64();
+        let limit = input["limit"].as_u64();
+        // 区间读（prompt-engineering 票 01）：spill 文件与大文件的中段靠它
+        // 读回——之前没有区间参数，超 cap 的部分只能看头尾。
+        if offset.is_some() || limit.is_some() {
+            let start = offset.unwrap_or(1).max(1) as usize;
+            if start > total.max(1) {
+                return Err(ToolError::BadInput(format!(
+                    "offset {start} is past the end: file has {total} lines"
+                )));
+            }
+            // saturating：schema 不设 limit 上限，u64::MAX 曾让加法溢出后切片越界 panic。
+            let end = limit
+                .map(|l| {
+                    (start - 1)
+                        .saturating_add(usize::try_from(l.max(1)).unwrap_or(usize::MAX))
+                        .min(total)
+                })
+                .unwrap_or(total);
+            let slice: String = lines[start - 1..end].concat();
+            let truncated = slice.len() > FS_READ_CAP;
+            let content = spill_trim(ctx, &slice, FS_READ_CAP);
+            return Ok(json!({
+                "content": content, "total_lines": total,
+                "lines": [start, end], "truncated": truncated,
+            }));
         }
-        Ok(json!({"content": String::from_utf8_lossy(&bytes)}))
+        if bytes.len() > FS_READ_CAP {
+            let content = spill_trim(ctx, &text, FS_READ_CAP);
+            return Ok(json!({"truncated": true, "content": content, "total_lines": total}));
+        }
+        Ok(json!({"content": text, "total_lines": total}))
     }
+}
+
+/// 先读后改（票 02，判定见 `readstate`）：拒绝记 Warn 级诊断。
+fn require_fresh_read(ctx: &ToolContext, rel: &str) -> Result<(), ToolError> {
+    let started = std::time::Instant::now();
+    let p = repo_path(&ctx.repo_root, rel)?;
+    let verdict = ctx.reads.check(&p);
+    let msg = match verdict {
+        readstate::Verdict::Ok => return Ok(()),
+        readstate::Verdict::NotRead => format!(
+            "{rel} has not been read in this activation. Read it with fs_read first, then retry the edit."
+        ),
+        readstate::Verdict::Changed => format!(
+            "{rel} changed since you last read it (another role, a command or the owner edited it). Read it again with fs_read, then redo the edit against the current content."
+        ),
+    };
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        Some(&ctx.project_id),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        None,
+        "read_before_edit",
+        verdict.code(),
+        started,
+    );
+    Err(ToolError::BadInput(msg))
 }
 
 pub struct FsWrite;
@@ -114,10 +189,14 @@ impl Tool for FsWrite {
         "fs_write"
     }
     fn description(&self) -> &str {
-        "Write a whole file inside the repo (ownership-gated). For partial edits prefer fs_patch — rewriting an entire file when only a few lines change doubles context cost (OpenWorker incident: 1812 full rewrites)"
+        r#"Write a whole file in the repo, creating parent directories.
+- Use when: creating a new file, or rewriting most of an existing one.
+- Do not use: for partial edits — use fs_patch (rewriting a whole file to change a few lines doubles context cost; OpenWorker incident: 1812 full rewrites) — or for stage deliverables (artifact_write).
+- Errors: overwriting an existing file you have not read in this activation, or that changed since you read it, is rejected — read it with fs_read first.
+- Writes outside your owned paths raise a pending card for the owner. Permission rules, skill/policy files and credential files are never writable."#
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})
+        json!({"type":"object","properties":{"path":{"type":"string","description":"repo-relative file path"},"content":{"type":"string","description":"the complete new file content"}},"required":["path","content"]})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::WriteLocal
@@ -132,12 +211,16 @@ impl Tool for FsWrite {
         }
         is_credential_path(p).then(|| "credential files are not writable by agents".into())
     }
+    fn precondition(&self, input: &Value, ctx: &ToolContext) -> Result<(), ToolError> {
+        require_fresh_read(ctx, str_arg(input, "path")?)
+    }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&p, str_arg(input, "content")?)?;
+        ctx.reads.record(&p);
         Ok(json!({"written": p.strip_prefix(&ctx.repo_root).unwrap_or(&p)}))
     }
 }
@@ -148,10 +231,18 @@ impl Tool for FsPatch {
         "fs_patch"
     }
     fn description(&self) -> &str {
-        "Replace an exact string in a repo file — the preferred way to make partial edits. `old` must match uniquely; read the file first if unsure"
+        r#"Replace an exact string in a repo file. The preferred way to make partial edits.
+- Use when: changing part of an existing file.
+- Do not use: for new files (fs_write) or stage deliverables (artifact_write).
+- Read the file with fs_read first; patches to unread files, or files changed since your last read, are rejected.
+- `old` must match exactly once, including whitespace and indentation. If it matches several times, add surrounding lines to make it unique, or set `replace_all: true` to change every occurrence. Keep `old` small but unique: usually 2–4 adjacent lines.
+- Errors: "not found" means your copy of the text is stale or mistyped — re-read the file; "N matches" means `old` is ambiguous. Writes outside your owned paths raise a pending card."#
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}},"required":["path","old","new"]})
+        json!({"type":"object","properties":{
+            "path":{"type":"string","description":"repo-relative file path"},"old":{"type":"string","description":"exact text to replace, copied from the file"},"new":{"type":"string","description":"replacement text"},
+            "replace_all":{"type":"boolean","description":"replace every occurrence of old (default false)"}},
+            "required":["path","old","new"]})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::WriteLocal
@@ -159,22 +250,50 @@ impl Tool for FsPatch {
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         FsWrite.builtin_deny(input, ctx)
     }
+    fn precondition(&self, input: &Value, ctx: &ToolContext) -> Result<(), ToolError> {
+        require_fresh_read(ctx, str_arg(input, "path")?)
+    }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         let old = str_arg(input, "old")?;
         let new = str_arg(input, "new")?;
-        let content = std::fs::read_to_string(&p)?;
-        if !content.contains(old) {
-            return Err(ToolError::BadInput("old string not found".into()));
+        let replace_all = input["replace_all"].as_bool().unwrap_or(false);
+        if old.is_empty() {
+            return Err(ToolError::BadInput("`old` must not be empty".into()));
         }
-        std::fs::write(&p, content.replacen(old, new, 1))?;
+        let content = std::fs::read_to_string(&p)?;
+        // 票 02（prompt-engineering）：描述一直承诺 old 唯一，旧写法却是
+        // `replacen(old, new, 1)`——多处匹配时静默改第一处，可能改错位置。
+        let matches = content.matches(old).count();
+        if matches == 0 {
+            let head: String = old.chars().take(200).collect();
+            return Err(ToolError::BadInput(format!(
+                "`old` not found in {}. Your copy of the text is stale or mistyped — re-read the file with fs_read and copy the exact text. old starts with: {head:?}",
+                str_arg(input, "path")?
+            )));
+        }
+        if matches > 1 && !replace_all {
+            return Err(ToolError::BadInput(format!(
+                "`old` is ambiguous: {matches} matches in {}. Add surrounding lines to make it unique, or set replace_all: true to change every occurrence.",
+                str_arg(input, "path")?
+            )));
+        }
+        let patched = if replace_all {
+            content.replace(old, new)
+        } else {
+            content.replacen(old, new, 1)
+        };
+        std::fs::write(&p, patched)?;
+        ctx.reads.record(&p);
+        let n = if replace_all { matches } else { 1 };
         // exec-cards 票 01（spec D6）：old/new 行数即替换区间的增删行——
         // 精确值不是估算。随返回值进 tool_result 事件，执行卡的 +N −M
         // 徽标数据源；模型上下文顺带得到变更规模信号。
         Ok(json!({
             "patched": str_arg(input, "path")?,
-            "diff_added": new.lines().count(),
-            "diff_removed": old.lines().count(),
+            "replacements": n,
+            "diff_added": new.lines().count() * n,
+            "diff_removed": old.lines().count() * n,
         }))
     }
 }
@@ -191,7 +310,11 @@ impl Tool for FsFind {
         "fs_find"
     }
     fn description(&self) -> &str {
-        "Find repo files by name. `pattern` with glob chars (* ? **) matches path or basename; plain text matches as a case-insensitive substring. Ignored files (.gitignore) are skipped. Returns up to 100 relative paths."
+        r#"Find repo files by name.
+- Use when: you know all or part of a file name, or a path pattern.
+- Do not use: to search file contents (fs_grep or sem_search). Never run find or ls through bash for this.
+- `pattern` with glob characters (* ? **) matches the path or the basename; plain text matches as a case-insensitive substring. Files ignored by .gitignore are skipped. At most 100 relative paths come back — narrow the pattern if you hit the cap.
+- Errors: zero hits returns count 0 — try a shorter substring or a glob such as `**/name*`."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -214,7 +337,10 @@ impl Tool for FsGrep {
         "fs_grep"
     }
     fn description(&self) -> &str {
-        "Search file contents for a literal substring (not regex). Returns matching path, line number and the line text — up to 100 hits. Ignored and binary files are skipped."
+        r#"Search file contents for a literal substring.
+- Use when: you know an exact identifier, string or error message.
+- Do not use: for regular expressions (the query is literal text, not a regex), for questions about meaning (sem_search), or through bash grep/rg.
+- Returns path, line number and line text for up to 100 hits; ignored and binary files are skipped. Hitting 100 means the query is too broad — make it more specific."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -241,11 +367,15 @@ impl Tool for Bash {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a shell command in the repo (always asks). Options: `session` reuses a persistent named sh (cwd/env persist between calls); `background` returns a task_id immediately — read it with bash_output, stop it with bash_kill; `timeout_ms` bounds execution (default 30s, max 10min); `net` grants network inside the OS sandbox (default false — set true only when the command needs egress)."
+        r#"Run a shell command in the repo. Commands go through the permission layer and may raise a pending card, which costs the owner a decision.
+- Use when: the job needs a shell — builds, tests, git, package managers, project scripts.
+- Do not use: to find files (fs_find), search contents (fs_grep, sem_search), read files (fs_read), edit files (fs_patch, fs_write) or print messages (reply in text instead).
+- Chain dependent commands with && in one call. `session` reuses a persistent named shell; `background` returns a task_id at once — read it with bash_output, stop it with bash_kill.
+- Never skip hooks or checks (--no-verify) to make a failure go away. Commands that touch credential material are always denied."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
-            "cmd":{"type":"string"},
+            "cmd":{"type":"string","description":"the shell command to run"},
             "session":{"type":"string","description":"persistent shell session name — same name reuses one sh (cwd/env kept)"},
             "background":{"type":"boolean","description":"run detached, return task_id immediately"},
             "timeout_ms":{"type":"integer","description":"default 30000, max 600000"},
@@ -288,14 +418,18 @@ impl Tool for BashOutput {
         "bash_output"
     }
     fn description(&self) -> &str {
-        "Read incremental output of a background task or shell session. Pass `task_id` (from bash background) or `session` name; `cursor_out`/`cursor_err` continue from the previous response's cursors (first read: omit or 0)."
+        r#"Read new output from a background task or a named shell session.
+- Use when: you started bash with `background` or `session` and need its output.
+- Do not use: for a one-shot bash call — its output is already in that call's result.
+- Pass `task_id` or `session`. `cursor_out` / `cursor_err` continue from the cursors in the previous response; omit them on the first read. Do other useful work between reads instead of polling in a tight loop.
+- Errors: an unknown task_id or session is reported; check the id returned by bash."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
-            "task_id":{"type":"string"},
-            "session":{"type":"string"},
-            "cursor_out":{"type":"integer"},
-            "cursor_err":{"type":"integer"}}})
+            "task_id":{"type":"string","description":"task id returned by a background bash call"},
+            "session":{"type":"string","description":"named shell session"},
+            "cursor_out":{"type":"integer","description":"stdout cursor from the previous response"},
+            "cursor_err":{"type":"integer","description":"stderr cursor from the previous response"}}})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::Read
@@ -320,12 +454,16 @@ impl Tool for BashKill {
         "bash_kill"
     }
     fn description(&self) -> &str {
-        "Kill a background task or shell session (and its process group). Idempotent: already-exited targets report killed=false."
+        r#"Stop a background task or a named shell session, including its process group.
+- Use when: a background command is no longer needed, hangs or runs away.
+- Do not use: to cancel a one-shot bash call (it has already returned).
+- Pass `task_id` or `session`. Idempotent: an already-exited target reports killed=false.
+- Errors: an unknown task_id or session is reported."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
-            "task_id":{"type":"string"},
-            "session":{"type":"string"}}})
+            "task_id":{"type":"string","description":"task id returned by a background bash call"},
+            "session":{"type":"string","description":"named shell session"}}})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::Exec
@@ -347,10 +485,14 @@ impl Tool for ArtifactWrite {
         "artifact_write"
     }
     fn description(&self) -> &str {
-        "Deliver an artifact under .hexagon/. Pass `kind` = the required deliverable name (e.g. 范围说明), or start content with a metadata header: line1 `---`, line2 `kind: <name>`, line3 `---`. Without either it registers as misc and does not count toward stage deliverables. For partial edits prefer fs_patch over re-writing the whole artifact"
+        r#"Deliver an artifact to .hexagon/<path>: checks the metadata header, registers the artifact and supersedes earlier versions.
+- Use when: producing a deliverable of the current stage or a handoff for another role.
+- Do not use: for ordinary repository files (fs_write, fs_patch). For small changes to an existing artifact, prefer fs_patch on its file.
+- Pass `kind` equal to the due deliverable name, verbatim (for example 范围说明), or start `content` with the header: line 1 `---`, line 2 `kind: <name>`, line 3 `---`. Without either it registers as misc and does not count toward the stage.
+- Errors: a malformed metadata header is reported — fix the header and deliver again."#
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string"}},"required":["path","content"]})
+        json!({"type":"object","properties":{"path":{"type":"string","description":"artifact path under .hexagon/ (without the prefix)"},"content":{"type":"string","description":"artifact content"},"kind":{"type":"string","description":"due deliverable name, verbatim"}},"required":["path","content"]})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::WriteLocal
@@ -401,10 +543,14 @@ impl Tool for ArtifactRead {
         "artifact_read"
     }
     fn description(&self) -> &str {
-        "Read a registered artifact by path"
+        r#"Read a registered artifact by its path under .hexagon/.
+- Use when: reading an artifact listed in context.artifacts of your brief.
+- Do not use: for other repository files (fs_read).
+- Pass the path as listed in the brief, without the .hexagon/ prefix. Returns up to 256KB of text.
+- Errors: an unknown path returns an I/O error — check context.artifacts for the exact path."#
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})
+        json!({"type":"object","properties":{"path":{"type":"string","description":"artifact path under .hexagon/ (without the prefix)"}},"required":["path"]})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::Read
@@ -448,7 +594,12 @@ impl Tool for WebFetch {
         "web_fetch"
     }
     fn description(&self) -> &str {
-        "Fetch an http(s) URL and return readable text (HTML is converted to plain text). Redirects are not followed: a 3xx returns {redirect: url} — call web_fetch again with that URL so each hop re-runs the egress permission check."
+        r#"Fetch an http(s) URL and return readable text (HTML is converted to plain text).
+- Use when: you need the content of a specific page, such as a web_search result or a URL the owner gave.
+- Do not use: for local files (fs_read) or non-http schemes (always rejected).
+- Network access may raise a pending card. Redirects are not followed: a 3xx returns {redirect: url} — call web_fetch again with that URL so each hop re-runs the permission check.
+- Long pages are trimmed and the full text is saved to a spill file you can read with fs_read.
+- Errors: non-text content types return an error instead of bytes."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -752,10 +903,13 @@ impl Tool for LoadSkill {
         "load_skill"
     }
     fn description(&self) -> &str {
-        "Load a skill's full instructions by name (see the skills catalog in your brief)"
+        r#"Load a skill's full instructions by name.
+- Use when: a skill in the available-skills list, or one granted to your role, is relevant to the task — load it before acting on it.
+- Do not use: to guess skills that are not listed.
+- Pass the name exactly as listed. An unknown name returns the list of available skills."#
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]})
+        json!({"type":"object","properties":{"name":{"type":"string","description":"skill name exactly as listed"}},"required":["name"]})
     }
     fn risk(&self) -> RiskClass {
         RiskClass::Read

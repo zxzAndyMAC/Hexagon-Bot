@@ -74,6 +74,9 @@ pub struct ToolContext {
     /// 子代理线程派遣要移动的 provider Arc（run_turn_opts 注入；
     /// 直测/内存库路径为 None → 派遣退化为同连接内联执行）。
     pub subagent_provider: Option<Arc<dyn crate::provider::ModelProvider>>,
+    /// 激活级已读账本（prompt-engineering 票 02）：先读后改判定的依据。
+    /// ctx 每回合新建，账本随激活清空。
+    pub reads: readstate::ReadLedger,
 }
 
 impl Default for ToolContext {
@@ -95,6 +98,7 @@ impl Default for ToolContext {
             websearch: None,
             embedder: None,
             subagent_provider: None,
+            reads: Default::default(),
         }
     }
 }
@@ -172,12 +176,27 @@ pub trait Tool: Send + Sync {
     fn builtin_deny(&self, _input: &Value, _ctx: &ToolContext) -> Option<String> {
         None
     }
+    /// 执行前提（票 02）：只在 `call_with_seq` 里、权限判定之前检查——注定
+    /// 失败的调用不弹卡。负责人批准后的执行不复查（见 readstate 模块头）。
+    fn precondition(&self, _input: &Value, _ctx: &ToolContext) -> Result<(), ToolError> {
+        Ok(())
+    }
+}
+
+/// 拒绝来源标签（prompt-engineering 票 04）：进模型可见的拒绝结果，让模型
+/// 分得清「换个做法能过」（rule）与「这条路结构性不通」（builtin）。
+fn deny_source(layer: &str) -> &'static str {
+    match layer {
+        "builtin_deny" => "builtin",
+        _ => "rule",
+    }
 }
 
 pub struct Registry {
     /// Arc 共享：只读视图（研究助手嵌套回合）按名拷 mcp:* 而不起新进程。
     /// Mutex：MCP 握手在后台完成后再注册，回合进行中也能加工具（2026-09-22）。
     tools: std::sync::Mutex<HashMap<String, Arc<dyn Tool>>>,
+    schemas: schema::SchemaCache,
 }
 
 impl Default for Registry {
@@ -190,6 +209,7 @@ impl Registry {
     pub fn builtin() -> Self {
         let r = Self {
             tools: std::sync::Mutex::new(HashMap::new()),
+            schemas: Default::default(),
         };
         r.register(FsRead);
         r.register(FsFind);
@@ -212,6 +232,7 @@ impl Registry {
     }
 
     pub fn register(&self, tool: impl Tool + 'static) {
+        self.schemas.invalidate(tool.name());
         self.tools
             .lock()
             .unwrap()
@@ -232,6 +253,7 @@ impl Registry {
     pub fn subagent_scope(&self, pick: &std::collections::HashSet<String>) -> Self {
         let r = Self {
             tools: std::sync::Mutex::new(HashMap::new()),
+            schemas: Default::default(),
         };
         r.register(FsRead);
         r.register(FsFind);
@@ -272,6 +294,36 @@ impl Registry {
             .collect();
         v.sort_by(|a, b| a.name.cmp(&b.name));
         v
+    }
+
+    /// 入参按工具 schema 校验（票 03）。`call_with_seq` 与回合层截获的
+    /// `subagent` 共用——截获路径不经主管线，不单独调用就漏校验。
+    pub fn validate_input(
+        &self,
+        ctx: &ToolContext,
+        tool: &dyn Tool,
+        input: &Value,
+    ) -> Result<(), ToolError> {
+        let started = std::time::Instant::now();
+        let name = tool.name();
+        self.schemas
+            .validate(name, &tool.input_schema(), input)
+            .map_err(|why| {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&ctx.project_id),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                    None,
+                    "tool_input",
+                    &format!("schema_invalid:{name}"),
+                    started,
+                );
+                ToolError::BadInput(format!(
+                    "invalid arguments for {name}: {why}. Fix the arguments to match the tool's input schema and call again."
+                ))
+            })
     }
 
     /// 主管线：deny → ask → exec，全程落事件。
@@ -320,6 +372,10 @@ impl Registry {
             ctx.agent_id,
             scrub_input(name, &input)
         );
+        // 票 03（prompt-engineering）：入参校验早于权限——坏参数不弹卡、
+        // 不落权限事件，以 BadInput 回喂模型并计入同错熔断。
+        self.validate_input(ctx, tool.as_ref(), &input)?;
+        tool.precondition(&input, ctx)?;
         match crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)? {
             crate::permissions::Decision::Deny { reason, layer } => {
                 db.append_event(
@@ -329,7 +385,10 @@ impl Registry {
                     Some(&ctx.agent_id),
                     ctx.stage_run_id.as_deref(),
                 )?;
-                Ok(CallOutcome::Denied(reason))
+                Ok(CallOutcome::Denied(format!(
+                    "({}): {reason}",
+                    deny_source(layer)
+                )))
             }
             crate::permissions::Decision::Ask { reason, safety_net } => {
                 // 票 11 幂等键：(激活,位置序,工具,入参指纹)。中断重放同一调用
@@ -460,7 +519,7 @@ impl Registry {
             } else {
                 "owner denied"
             };
-            return Ok(CallOutcome::Denied(msg.into()));
+            return Ok(CallOutcome::Denied(format!("(owner): {msg}")));
         }
 
         db.append_event(
@@ -551,7 +610,7 @@ impl Registry {
             } else {
                 "owner denied"
             };
-            return Ok(Some(CallOutcome::Denied(msg.into())));
+            return Ok(Some(CallOutcome::Denied(format!("(owner): {msg}"))));
         }
         // allowed：执行过吗？allow 事件之后同 agent 有 tool_result → 已执行
         let ran: bool = db
@@ -619,7 +678,9 @@ impl Registry {
 // ---------- 子模块（arch-review 票 11 / D14 拆分）----------
 // 护栏层与内建实现各成文件；`pub use` 再导出保 `crate::tools::X` 路径不变。
 mod builtin;
+pub mod readstate;
 mod safety;
+pub(crate) mod schema;
 pub use builtin::*;
 pub use safety::*;
 

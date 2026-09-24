@@ -21,7 +21,6 @@ use crate::db::Db;
 use crate::provider::ModelProvider;
 use crate::tools::{CallOutcome, Registry, ToolContext, ToolError};
 use crate::trace::EventKind;
-use crate::turn::prompt::{LayerLevel, PromptLayer};
 use crate::turn::{run_turn_streaming, TurnOutcome};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -278,24 +277,6 @@ impl TaskBoard {
 
 // ---------- 派遣（turn 层截获 `subagent` 工具调用）----------
 
-/// 子代理回合的角色层：结构性约束之外，这条管行为纪律（搜索词不夹带
-/// 文件正文、回执简洁）。提示词不是安全闸——安全在注册表与权限层。
-fn subagent_layers() -> Vec<PromptLayer> {
-    vec![PromptLayer::new(
-        LayerLevel::RoleDef,
-        "你是子代理：替父代理完成一件有界的调查或测试任务。\
-         可用工具：fs_read/artifact_read 读仓内文件，fs_find/fs_grep 找文件与正文，\
-         sem_search 本地语义搜索，web_search 搜网页摘要（只回标题/链接/摘要——\
-         要正文请把 URL 写进结论让父代理自己开），run_test 跑测试命令，\
-         以及本次派遣单独点名的 mcp 工具。\
-         你没有写盘、git、发布、执行任意命令、再派子代理的能力。\
-         纪律：搜索词来自任务本身——不要把文件正文或日志当查询词发出去；\
-         run_test 只跑明确的测试命令（构建产物/缓存目录可以产生，不改源文件）。\
-         交付：一段简洁结论；下结论要给出你实际读过的仓内路径作依据。"
-            .to_string(),
-    )]
-}
-
 /// 勾选的 mcp 工具是否可带：必须形如 mcp:<svc>:<tool>、在父注册表在场、
 /// 且父代理对该服务有 grants 授权（与权限层 L0 同一查询——勾选只是
 /// 「这次放行已授权的子集」，绝不扩权）。
@@ -408,7 +389,9 @@ fn run_child(
         provider,
         registry,
         nctx,
-        subagent_layers(),
+        // 行为纪律在工作台基础层的子代理版里（prompt-engineering 票 07），
+        // 回合内核按 ctx.subagent 注入；这里不再另挂角色层。
+        vec![],
         task,
         &[],
         false,
@@ -579,7 +562,11 @@ impl crate::tools::Tool for Subagent {
         "subagent"
     }
     fn description(&self) -> &str {
-        "Dispatch a bounded subagent inside this activation: it can search/read/compare/summarize the repo and run test commands, then hands back a concise result with citations. Max 4 concurrent; a 5th dispatch is rejected (wait for one to finish). `mcp_tools` selects which already-authorized mcp:* tools this dispatch may call. Results land on the task list — collect via `tasks`."
+        r#"Dispatch a bounded subagent inside this activation. It can find, read, search and compare repo content, search the web for snippets and run test commands, then hands back a concise conclusion citing the paths it read.
+- Use when: an investigation needs many searches or reads whose raw output you do not need in your own context, or several independent questions can run in parallel.
+- Do not use: for a single directed lookup (call fs_find, fs_grep or fs_read yourself), or for anything that writes files, runs git or publishes — subagents cannot.
+- `task` must be self-contained: the subagent has not seen this conversation. State the goal, what you already know or ruled out, and the answer you need back.
+- Errors: at most 4 run at once; a 5th dispatch is rejected — wait for one to finish. Results land on the task list: collect them with tasks (action "list"). Never guess a result before it arrives."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -609,11 +596,15 @@ impl crate::tools::Tool for Tasks {
         "tasks"
     }
     fn description(&self) -> &str {
-        "Activation task list: `list` shows tasks and subagent results; `create` adds a manual task; `close` marks a manual task done; `stop` halts a running task. The list is cleared when the activation ends."
+        r#"The activation task list: your own to-do items plus subagent dispatches and their results.
+- Use when: the work has 3 or more steps (create items, close each as you finish it), or to collect subagent results.
+- Do not use: for a single trivial step.
+- `action`: "list" shows every task with its status and result; "create" adds an item (`title`); "close" marks an item done (`task_id`); "stop" halts a running task (`task_id`). The list is cleared when the activation ends.
+- Errors: an unknown action or task_id is reported."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
-            "action":{"type":"string","enum":["list","create","close","stop"]},
+            "action":{"type":"string","enum":["list","create","close","stop"],"description":"what to do with the list"},
             "title":{"type":"string","description":"for create"},
             "task_id":{"type":"string","description":"for close/stop"}},
             "required":["action"]})
@@ -653,7 +644,10 @@ impl crate::tools::Tool for SemSearch {
         "sem_search"
     }
     fn description(&self) -> &str {
-        "Semantic search over the repo (local index, no network): natural-language query → matching file path, line number and a short excerpt. Falls back gracefully: empty hits mean try fs_grep."
+        r#"Semantic search over the repo using a local index (no network).
+- Use when: you are looking for code by meaning ("where are permissions evaluated?") and do not know the exact identifier.
+- Do not use: when you know the literal text — fs_grep is exact and cheaper.
+- Returns file path, line number and a short excerpt per hit. Empty hits mean nothing close was found: fall back to fs_grep or fs_find."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -828,7 +822,10 @@ impl crate::tools::Tool for RunTest {
         "run_test"
     }
     fn description(&self) -> &str {
-        "Run a command that is clearly a test (cargo test / npm test / vitest / pytest / go test / dotnet test / …). Returns pass/fail, exit code and a tail excerpt — full logs are not returned. Mechanically rejects writes to source/spec/docs, git, remote publish and pipe-installs."
+        r#"Run one test command and get the verdict: pass/fail, exit code and a tail excerpt (full logs are not returned).
+- Use when: you need to know whether tests pass (cargo test, npm test, vitest, pytest, go test, dotnet test, …).
+- Do not use: for anything that is not a test — writes to source, specs or docs, git, remote publishing and pipe-installs are mechanically rejected.
+- Errors: a rejected command comes back with the reason; do not reword it to get past the check."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{

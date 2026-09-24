@@ -192,7 +192,7 @@ impl SkillLoader {
             return None;
         }
         Some(format!(
-            "可用技能 —— 与当前任务相关时调用 load_skill(name) 取全文：\n{}",
+            "Available skills — when one is relevant to the current task, call load_skill(name) for its full instructions:\n{}",
             lines.join("\n")
         ))
     }

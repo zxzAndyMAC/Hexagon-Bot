@@ -18,6 +18,12 @@ pub const EXECUTE: &str = "执行";
 pub const REJECT: &str = "驳回";
 pub const OWNER: &str = "交给负责人";
 
+/// 发给 Jev 的选项键（prompt-engineering 票 10 / ADR 0071）：语言无关，
+/// 解析后映射回上面三个常量。上面三个是诊断与界面的写法，不改。
+const EXECUTE_TOKEN: &str = "execute";
+const REJECT_TOKEN: &str = "reject";
+const OWNER_TOKEN: &str = "hand_to_owner";
+
 /// 这些面在调用 Jev 之前拒绝。它们不是执行判定的输入。
 pub fn mechanical_block(surface: &str) -> bool {
     matches!(
@@ -49,30 +55,34 @@ pub(crate) fn judgment_state(proposal_id: &str, surface: &str, body: &str) -> St
                 .and_then(|r| r.ok())
                 .map(|r| {
                     format!(
-                        "\n回放分（主机已算，不要重算）：现任 {}，候选 {}",
+                        "\nReplay scores (computed by the host, do not recompute): incumbent {}, candidate {}",
                         crate::replay::score(&r.baseline),
                         crate::replay::score(&r.candidate)
                     )
                 })
                 .unwrap_or_default();
-            format!("回放证据：\n{raw}{scores}")
+            format!("Replay evidence:\n{raw}{scores}")
         }
-        None => "上级复审已通过。这份提案没有回放证据。".to_string(),
+        None => {
+            "The superior's review has passed. This proposal has no replay evidence.".to_string()
+        }
     };
     format!(
-        "执行判定。只决定写不写。不要改写提案，不要重算回放分。\n\
+        "Execute judgment. Decide only whether to write it. Do not rewrite the proposal and do not recompute replay scores.\n\
          proposal {proposal_id}\n\
          surface {surface}\n\
-         ## 已落盘的提案\n{body}\n\
-         ## 已落盘的证据\n{evidence}\n"
+         ## Proposal as written to disk\n{body}\n\
+         ## Evidence as written to disk\n{evidence}\n"
     )
 }
 
+/// 封闭集合精确匹配：英文令牌（现行）与中文原文（旧脚本/旧回放）都收，
+/// 其余一律 None → 交给负责人。
 fn choice_of(text: &str) -> Option<&'static str> {
     match text.trim() {
-        EXECUTE => Some(EXECUTE),
-        REJECT => Some(REJECT),
-        OWNER => Some(OWNER),
+        EXECUTE_TOKEN | EXECUTE => Some(EXECUTE),
+        REJECT_TOKEN | REJECT => Some(REJECT),
+        OWNER_TOKEN | OWNER => Some(OWNER),
         _ => None,
     }
 }
@@ -130,9 +140,9 @@ pub fn judge_passed(
         Some(p) if p.uses_decision_api() => match p.decide(
             &state,
             &[
-                (EXECUTE, "按提案写盘"),
-                (REJECT, "不改项目"),
-                (OWNER, "交给负责人"),
+                (EXECUTE_TOKEN, "write the proposal to disk"),
+                (REJECT_TOKEN, "leave the project unchanged"),
+                (OWNER_TOKEN, "hand the decision to the owner"),
             ],
         ) {
             Ok(resp) => {
@@ -245,6 +255,16 @@ pub fn pack_score_block(surface: &str, body: &str) -> Option<String> {
 mod tests {
     use super::{choice_of, mechanical_block, pack_score_block, EXECUTE, OWNER, REJECT};
     use proptest::prelude::*;
+
+    /// prompt-engineering 票 10：Jev 选项键英文令牌，映射回原常量；中文原文仍收。
+    #[test]
+    fn english_tokens_map_to_the_same_choices() {
+        assert_eq!(choice_of("execute"), Some(EXECUTE));
+        assert_eq!(choice_of(" reject\n"), Some(REJECT));
+        assert_eq!(choice_of("hand_to_owner"), Some(OWNER));
+        assert_eq!(choice_of("执行"), Some(EXECUTE));
+        assert_eq!(choice_of("Execute"), None);
+    }
 
     proptest! {
         /// 机械拒绝只覆盖那五个面。其它表面，包括技能和流程包，不在这里挡。

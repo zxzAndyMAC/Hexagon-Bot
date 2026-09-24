@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 base64 = "0.22"
 ignore = "0.4.33"
+jsonschema = { version = "0.57", default-features = false }
 keyring = "3"
 log = "0.4.34"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

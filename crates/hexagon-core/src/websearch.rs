@@ -186,7 +186,11 @@ impl crate::tools::Tool for WebSearch {
         "web_search"
     }
     fn description(&self) -> &str {
-        "Search the web via the configured search slot. Returns title+url+snippet only — open a result with web_fetch (each fetch re-runs the egress permission check)."
+        r#"Search the web through the configured search slot. Returns title, URL and snippet only.
+- Use when: you need external documentation or references.
+- Do not use: to read a page — open a result with web_fetch (a subagent hands the URL back to its parent instead).
+- `query` must come from the task itself: never paste repository contents or logs into it.
+- Errors: an unconfigured search slot is reported as such; do not retry — say what you needed instead."#
     }
     fn input_schema(&self) -> Value {
         serde_json::json!({"type":"object","properties":{

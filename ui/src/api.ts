@@ -59,6 +59,8 @@ import type { ProviderView } from './gen/ProviderView'
 import type { ProvidersView } from './gen/ProvidersView'
 import type { SlotBinding } from './gen/SlotBinding'
 import type { DiagRecord } from './gen/DiagRecord'
+import type { PromptEntry } from './gen/PromptEntry'
+import type { TranslateOutcome } from './gen/TranslateOutcome'
 import type { CreateProjectOpts } from './gen/CreateProjectOpts'
 import type { CreateStep as CreateStepDto } from './gen/CreateStep'
 import type { Event } from './gen/Event'
@@ -83,7 +85,7 @@ export type {
   AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
   CreateProjectOpts, CreateStepDto, Event, EventKind, MessageRow, MessageToken, ExportFilter,
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
-  RepoEntry, DiagRecord,
+  RepoEntry, DiagRecord, PromptEntry, TranslateOutcome,
 }
 
 
@@ -209,6 +211,10 @@ export const api = {
   installSkillPath: (path: string) => call<string>('install_skill_path', { path }),
   setSkillMuted: (name: string, enabled: boolean) =>
     call<void>('set_skill_muted', { name, enabled }),
+  setUiLanguage: (code: string) => call<void>('set_ui_language', { code }),
+  promptCatalog: () => call<PromptEntry[]>('prompt_catalog'),
+  translatePrompts: (lang: string, force: boolean) =>
+    call<TranslateOutcome>('translate_prompts', { lang, force }),
   // ui-audit-2 票 06：MCP 服务实况（.hexagon/mcp.json 配置 → 宿主状态）
   mcpServices: () => call<McpServiceRow[]>('mcp_services'),
   // 票 05：MCP 全局清单（无项目可用；配置清单≠授权）
@@ -645,6 +651,19 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
   switch (cmd) {
     case 'core_ping':
       return 'hexagon-core ok' as T
+    case 'prompt_catalog':
+      return [
+        { id: 'workbench.base', group: 'workbench', text: '# Hexagon workbench\nYou are an agent on a Hexagon workbench…', hash: '0' },
+        { id: 'tool.fs_patch', group: 'tools', text: 'Replace an exact string in a repo file.', hash: '1' },
+      ] as T
+    case 'translate_prompts':
+      return {
+        no_model: false,
+        entries: args?.lang === 'en' ? [] : [
+          { id: 'workbench.base', text: '（参考译文）Hexagon 工作台…', error: null },
+          { id: 'tool.fs_patch', text: '（参考译文）在仓库文件中替换一段精确字符串。', error: null },
+        ],
+      } as T
     case 'stage_status':
       return [
         { run_id: 'r0', stage: '需求', seq: 0, state: 'done' },

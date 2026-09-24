@@ -31,6 +31,7 @@ pub mod permissions;
 pub mod pm_route;
 pub mod policydev;
 pub mod presets;
+pub mod prompts;
 pub mod proposals;
 pub mod provenance;
 pub mod provider;
@@ -55,6 +56,7 @@ pub mod templates;
 pub mod tools;
 pub mod trace;
 pub mod turn;
+pub mod uilang;
 pub mod usage;
 pub mod websearch;
 

@@ -29,7 +29,24 @@ pub use prompt::{
 use context::{context_overflow, estimate_tokens, mechanical_compact, model_visible, trim_context};
 use prompt::{layer_meta, with_dynamic_tail};
 
-const MAX_TOOL_ROUNDS: usize = 8;
+/// 工具循环轮数上限（prompt-engineering 票 04）：8 → 32，即规格上限。
+/// 8 轮在「读、搜、读、改、测、再修」的普通编码任务上就会撞顶收 Failed。
+/// ADR 0052 当年担心长回合锁死 UI，读/控/回合三组命令拆分后已不成立；
+/// 用量硬上限与同错熔断两道闸仍在。模型经动态尾部块看到本预算。
+pub(crate) const MAX_TOOL_ROUNDS: usize = 32;
+/// 截断续推上限（票 04）：1 → 3，对齐 Claude Code 的
+/// MAX_OUTPUT_TOKENS_RECOVERY_LIMIT。不调 max_tokens——各模型输出上限
+/// 不同，model_meta 里没有可靠数据。
+const MAX_TRUNC_CONTINUES: usize = 3;
+/// 方案预告（US15）的指令：本轮不给工具，只要一段方案。
+pub(crate) const PLAN_FIRST_INSTRUCTION: &str =
+    "In one paragraph, state your plan for this task. Do not call tools in this reply; execution follows.";
+/// 任务清单提醒间隔（票 05）：有未关闭条目、连续这么多轮没碰 `tasks`
+/// 就提醒一次。出处：Claude Code 的 todo_reminder。
+const TASK_REMINDER_ROUNDS: usize = 5;
+/// 被拒绝的工具结果后缀（票 04）：旧写法只回 `denied: …`，模型往往原样
+/// 重试，要连错三次才被熔断收场。
+pub(crate) const DENIED_GUIDANCE: &str = "Do not repeat this call unchanged. Work out why it was denied and take another approach, or say in your reply what you need from the owner.";
 /// 瞬时重试（US57）：Transport 类抖动按 100/250/500ms 指数退避，最多 3 次；
 /// Refused（4xx/权限拒绝）、MissingCredential、ScriptExhausted 不重试直接上报。
 const RETRY_DELAYS_MS: [u64; 3] = [100, 250, 500];
@@ -87,12 +104,12 @@ pub enum TurnError {
 }
 
 /// 截断续推指令（票 13）：不重复推理，直接下一步。
-const TRUNCATION_NUDGE: &str = "输出被截断。不要重复推理，直接给下一步。";
+pub(crate) const TRUNCATION_NUDGE: &str = "Output limit hit. Continue exactly where you stopped — no apology, no recap. Break the remaining work into smaller pieces.";
 /// 票 NR-03：恢复重触发的固定提示。中断回合的原指令靠未推进的简报
 /// 游标自然重读，这句只提醒模型先看盘上已有状态再动手——重触发是
 /// 新回合，模型必须识别已有产物/进展而不是从头重做。
 pub const RECOVERY_NUDGE: &str =
-    "你负责的 run 曾被中断，现已恢复。简报里待办的指令继续执行——先确认已有产物与状态，接着往下做，不要从头重来。";
+    "The run you are responsible for was interrupted and has now resumed. Continue the pending instruction from your brief: first check the artifacts and state already on disk, then carry on from there — do not start over.";
 
 // ---------- 回合执行 ----------
 
@@ -382,9 +399,32 @@ fn tool_result_block(tool_use_id: String, v: &Value) -> ContentBlock {
     }
     ContentBlock::ToolResult {
         tool_use_id,
-        content: content.to_string(),
+        content: render_tool_value(content),
         is_error: false,
         images,
+    }
+}
+
+/// 结果正文按原文呈现（prompt-engineering 票 01）：整体 JSON 序列化会把
+/// 换行和引号转义，模型读代码要先反转义，抄进 fs_patch.old 时还容易带上
+/// `\n` 字面量。其余字段压成一行元信息放在正文之前。
+fn render_tool_value(v: Value) -> String {
+    let Value::Object(mut map) = v else {
+        return v.to_string();
+    };
+    let body = match map.remove("content") {
+        Some(Value::String(body)) => body,
+        other => {
+            if let Some(v) = other {
+                map.insert("content".into(), v);
+            }
+            return Value::Object(map).to_string();
+        }
+    };
+    if map.is_empty() {
+        body
+    } else {
+        format!("{}\n{body}", Value::Object(map))
     }
 }
 
@@ -559,9 +599,15 @@ fn run_turn_impl(
     )?;
 
     let brief = build_brief_context(db, &ctx.agent_id, ctx.stage_run_id.as_deref())?;
+    // 票 07（prompt-engineering）：工作台基础层 + 回复语言段在装配点统一
+    // 注入——所有走回合内核的入口（派活、点名、恢复重触发、子代理）同享。
+    let mut layers = {
+        let mut base = crate::turn::prompt::workbench_layers(ctx.subagent.is_some());
+        base.extend(layers);
+        base
+    };
     // US72：项目说明全文进激活首条消息（AgentsMd 层，优先级链位 2）。
     // 超 ~32KB 降级为头部+节标题目录+必读指引，并提醒负责人。
-    let mut layers = layers;
     if let Some((text, degraded)) = load_instructions(&ctx.repo_root) {
         layers.push(PromptLayer::new(LayerLevel::AgentsMd, text));
         if degraded {
@@ -700,7 +746,7 @@ fn run_turn_impl(
                         role: Role::User,
                         content: vec![ContentBlock::Text {
                             text: json!({
-                                "instruction": "用一段话给出执行方案（本轮不要调用工具），随后进入执行",
+                                "instruction": PLAN_FIRST_INSTRUCTION,
                                 "task": user_input
                             })
                             .to_string(),
@@ -750,8 +796,10 @@ fn run_turn_impl(
         // 同工具同错熔断状态：跨 round 连击计数（US57）
         let mut last_fail: Option<(String, String)> = None;
         let mut streak = 0usize;
-        // 票 13：截断续推只给一次（OPE-171 连败防循环）
-        let mut trunc_continued = false;
+        // 票 13：截断续推有上限（OPE-171 连败防循环；票 04 起上限 3）
+        let mut trunc_count = 0usize;
+        // 票 05：最近一次调用 tasks（或上次提醒）所在轮。
+        let mut tasks_mark = 0usize;
         let breaker = |db: &Db, tool: &str, sig: &str| -> Result<TurnOutcome, TurnError> {
             db.append_event(
                 &ctx.project_id,
@@ -823,13 +871,32 @@ fn run_turn_impl(
                     )?;
                 }
             }
+            // 票 05（prompt-engineering）：任务清单提醒。普通 user 消息而非
+            // 动态尾部块——尾部不进信封指纹，提醒却是模型可见的语义输入。
+            // 子代理共享父板但不被提醒（它看不到 tasks 工具）。
+            if ctx.subagent.is_none() && round >= tasks_mark + TASK_REMINDER_ROUNDS {
+                if let Some(text) = task_reminder(ctx) {
+                    tasks_mark = round;
+                    messages.push(Message {
+                        role: Role::User,
+                        content: vec![ContentBlock::Text { text }],
+                    });
+                    db.append_event(
+                        &ctx.project_id,
+                        EventKind::System,
+                        json!({"kind": "task_reminder", "round": round}),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                    )?;
+                }
+            }
             // US37 + 票 07：轻量裁剪始终做；仍超上限只删工具记录
             // （负责人与角色原文不换成摘要）。删完仍超才暂停问负责人。
-            messages = trim_context(ctx, messages);
+            messages = trim_context(ctx, messages, true);
             let mut est = estimate_tokens(&messages);
             if est > cap {
                 messages = mechanical_compact(db, ctx, messages, cap);
-                messages = trim_context(ctx, messages);
+                messages = trim_context(ctx, messages, false);
                 est = estimate_tokens(&messages);
             }
             if est > cap {
@@ -846,7 +913,7 @@ fn run_turn_impl(
             // 票 03 信封：对「实际发送物」（裁剪/修复/动态尾之后）取指纹——
             // 信封的语义是「这次往线上发了什么」,不是「想发什么」。
             let req = ChatRequest {
-                messages: with_dynamic_tail(&messages, round),
+                messages: with_dynamic_tail(&messages, round, MAX_TOOL_ROUNDS),
                 ..req_base.clone()
             };
             db.append_event(
@@ -899,8 +966,8 @@ fn run_turn_impl(
             absorb_thinking(&resp.content, &mut carried_thinking);
             if resp.stop == StopReason::MaxTokens {
                 push_assistant(&mut messages, resp.content.clone());
-                if !trunc_continued {
-                    trunc_continued = true;
+                if trunc_count < MAX_TRUNC_CONTINUES {
+                    trunc_count += 1;
                     messages.push(Message {
                         role: Role::User,
                         content: vec![ContentBlock::Text {
@@ -911,7 +978,7 @@ fn run_turn_impl(
                 }
                 return Ok(TurnOutcome::Truncated);
             }
-            trunc_continued = false;
+            trunc_count = 0;
             push_assistant(&mut messages, resp.content.clone());
 
             let tool_uses: Vec<_> = resp
@@ -942,10 +1009,18 @@ fn run_turn_impl(
             // 跨进程不复现，位置序在「同会话重放」中稳定，中断恢复命中既有卡。
             for (idx, (id, name, input)) in tool_uses.into_iter().enumerate() {
                 let seq = format!("r{round}i{idx}");
+                if name == "tasks" {
+                    tasks_mark = round;
+                }
                 // code-search 票 04：subagent 由 turn 层截获跑嵌套回合——
                 // provider/子代理注册表/任务板都在这里才够得着，exec 层拿不到。
                 let called = if name == "subagent" {
-                    crate::subagent::call_nested(db, provider, registry, ctx, input)
+                    registry
+                        .get("subagent")
+                        .map_or(Ok(()), |t| registry.validate_input(ctx, t.as_ref(), &input))
+                        .and_then(|()| {
+                            crate::subagent::call_nested(db, provider, registry, ctx, input)
+                        })
                 } else {
                     registry.call_with_seq(db, ctx, &name, input, Some(&seq))
                 };
@@ -956,13 +1031,13 @@ fn run_turn_impl(
                         results.push(tool_result_block(id, &v))
                     }
                     Ok(CallOutcome::Denied(reason)) => {
-                        let sig = format!("denied: {reason}");
+                        let sig = format!("denied {reason}");
                         if bump_streak(&mut last_fail, &mut streak, &name, &sig) >= BREAKER_STREAK {
                             return breaker(db, &name, &sig);
                         }
                         results.push(ContentBlock::ToolResult {
                             tool_use_id: id,
-                            content: sig,
+                            content: format!("{sig}. {DENIED_GUIDANCE}"),
                             is_error: true,
                             images: vec![],
                         })
@@ -998,7 +1073,7 @@ fn run_turn_impl(
                                 Ok(CallOutcome::Denied(r)) => {
                                     results.push(ContentBlock::ToolResult {
                                         tool_use_id: id,
-                                        content: format!("denied: {r}"),
+                                        content: format!("denied {r}. {DENIED_GUIDANCE}"),
                                         is_error: true,
                                         images: vec![],
                                     });
@@ -1116,6 +1191,40 @@ fn run_turn_impl(
         ctx.stage_run_id.as_deref(),
     )?;
     outcome
+}
+
+/// 未关闭条目（open/running）的提醒文案；没有则 None。
+fn task_reminder(ctx: &ToolContext) -> Option<String> {
+    let open: Vec<String> = ctx
+        .tasks
+        .list(&crate::subagent::activation_key(ctx))
+        .into_iter()
+        .filter(|t| matches!(t["status"].as_str(), Some("open" | "running")))
+        .map(|t| {
+            format!(
+                "- [{}] {} ({})",
+                t["status"].as_str().unwrap_or(""),
+                t["title"].as_str().unwrap_or(""),
+                t["id"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    if open.is_empty() {
+        return None;
+    }
+    Some(task_reminder_text(&open.join("\n")))
+}
+
+/// 压缩注记的模板形态（提示词页目录用）。
+pub(crate) fn compaction_note_template() -> String {
+    context::compaction_note("{count}", "{transcript path}")
+}
+
+/// 任务清单提醒正文（票 05）；提示词页目录与运行时共用这一份。
+pub(crate) fn task_reminder_text(open_tasks: &str) -> String {
+    format!(
+        "[workbench] Task list reminder: you have open tasks in this activation and have not touched the list for {TASK_REMINDER_ROUNDS} rounds. If it no longer matches your work, update it with the tasks tool (close finished items, collect subagent results). Ignore this if it is still accurate, and do not mention this reminder to the owner.\nOpen tasks:\n{open_tasks}"
+    )
 }
 
 /// 把本轮推理并进待落账缓冲。空串不算「给了思考」。

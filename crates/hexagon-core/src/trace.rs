@@ -830,6 +830,8 @@ mod tests {
         "session_exited",
         "session_started",
         "steering_injected",
+        // prompt-engineering 票 05：任务清单提醒
+        "task_reminder",
         "task_killed",
         "task_started",
         "tool_breaker",

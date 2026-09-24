@@ -615,6 +615,26 @@ fn set_skill_muted(name: String, enabled: bool) -> Result<(), CmdError> {
         .map_err(|e| CmdError::internal(e.to_string()))
 }
 
+/// 设置「提示词」页目录（prompt-engineering 票 11）：纯常量，不触工作台。
+#[tauri::command]
+fn prompt_catalog() -> Vec<hexagon_core::prompts::PromptEntry> {
+    hexagon_core::prompts::catalog()
+}
+
+/// 提示词参考译文：宿主级 translate 槽（没绑落 default），不属于任何项目，
+/// 不触工作台。要调模型，丢到运行时线程免堵主线程。
+#[tauri::command(async)]
+fn translate_prompts(lang: String, force: bool) -> hexagon_core::prompts::TranslateOutcome {
+    hexagon_core::prompts::translate(&lang, force)
+}
+
+/// 界面语言进核心（prompt-engineering 票 06）：写宿主 ~/.hexagon/ui.json，
+/// 回合读它决定回复语言。无项目可用，不触工作台。
+#[tauri::command]
+fn set_ui_language(code: String) -> Result<(), CmdError> {
+    hexagon_core::uilang::set_language(&code).map_err(|e| CmdError::internal(e.to_string()))
+}
+
 #[tauri::command]
 fn usage(state: tauri::State<AppState>) -> Result<hexagon_core::usage::UsageSummary, CmdError> {
     with_conn(&state, |db, _| {
@@ -1714,6 +1734,9 @@ pub fn run() {
             revoke_permission_rule,
             list_skills,
             set_skill_muted,
+            set_ui_language,
+            prompt_catalog,
+            translate_prompts,
             skill_files,
             read_skill_file,
             save_global_skill,

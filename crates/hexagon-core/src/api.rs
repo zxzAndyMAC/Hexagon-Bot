@@ -732,6 +732,7 @@ impl Workbench {
             websearch: self.websearch.clone(),
             embedder: self.embedder.clone(),
             subagent_provider: None,
+            reads: Default::default(),
         }
     }
 
@@ -924,32 +925,21 @@ impl Workbench {
         // RoleDef 层补齐身份面；格式细节仍走技能（load_skill 自助取）。
         let mut turn_layers = Vec::new();
         if let Ok(def) = crate::roles::role_def(&self.db, &self.project_id, role) {
-            let mut text = format!("你是「{role}」。{}", def.duty);
-            if !def.globs.is_empty() {
-                text += &format!(
-                    " 你的归属路径：{}——写盘只写范围内；范围外写入会排队等负责人批准。",
-                    def.globs.join("、")
-                );
-            }
-            if !def.skills.is_empty() {
-                text += &format!(
-                    " 已授技能：{}（与任务相关时先 load_skill 取全文再动手）。",
-                    def.skills.join("、")
-                );
-            }
-            if let Some(stage) = run.as_ref().and_then(|r| {
+            // 模板英文（prompt-engineering 票 07 / ADR 0071）；职责是负责人写的
+            // 内容，保持原语言。角色名、阶段名、kind 逐字引用——kind 按字面
+            // 比对计交付，模型把它译成英文就不计数。
+            let stage = run.as_ref().and_then(|r| {
                 self.pack
                     .as_ref()
                     .and_then(|p| p.stages.get(r.seq as usize))
-            }) {
-                if !stage.due.is_empty() {
-                    text += &format!(
-                        " 本阶段「{}」应交产物 kind：{}——用 artifact_write 交付并传 kind 参数（或产物开头三行 `---` / `kind: <kind>` / `---` 声明）；kind 不符不计入交付。",
-                        stage.name,
-                        stage.due.join("、")
-                    );
-                }
-            }
+            });
+            let text = turn::prompt::role_layer_text(
+                role,
+                &def.duty,
+                &def.globs,
+                &def.skills,
+                stage.map(|s| (s.name.as_str(), s.due.as_slice())),
+            );
             turn_layers.push(turn::PromptLayer::new(turn::LayerLevel::RoleDef, text));
         }
         // 票 09：本回合新落的消息才算「说完的内容」。水位取在模型调用之前。
@@ -1251,7 +1241,7 @@ impl Workbench {
                     .and_then(|p| p.stages.get(r.seq as usize).map(|s| s.roles.clone()))
             })
             .unwrap_or_default();
-        let speaker_label = if from_owner { "负责人" } else { speaker };
+        let speaker_label = if from_owner { "The owner" } else { speaker };
         let prompt = crate::pm_route::choice_prompt(
             stage_name.as_deref(),
             &activation,
@@ -1281,8 +1271,8 @@ impl Workbench {
                 body,
             );
             let mut options: Vec<(&str, &str)> =
-                roster.iter().map(|r| (r.as_str(), "花名册角色")).collect();
-            options.push((crate::pm_route::HOLD, "先不唤醒任何人"));
+                roster.iter().map(|r| (r.as_str(), "roster role")).collect();
+            options.push((crate::pm_route::HOLD_TOKEN, "wake no one for now"));
             provider
                 .decide(&state, &options)
                 .map_err(|e| ApiError::Decision(e.to_string()))?
@@ -1785,7 +1775,7 @@ impl Workbench {
                 crate::provider::Message {
                     role: crate::provider::Role::System,
                     content: vec![crate::provider::ContentBlock::Text {
-                        text: crate::intake::INTAKE_PROMPT.to_string(),
+                        text: crate::intake::intake_prompt(),
                     }],
                 },
                 crate::provider::Message {

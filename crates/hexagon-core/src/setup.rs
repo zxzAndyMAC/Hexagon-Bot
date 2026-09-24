@@ -115,16 +115,18 @@ pub fn agents_md_draft(project_name: &str) -> String {
     )
 }
 
-/// ADR 0067 优化描述的系统提示词。`{项目名}` 是唯一占位。
-/// 正文是合同，不随界面语言改写。
-pub const AGENTS_MD_OPTIMIZE_PROMPT: &str = "你在起草仓库根目录的 AGENTS.md。这份文件是被激活的 Agent 要读的项目级约束。它不是技能，不写流程进度，不写密钥，不写角色名单。
+/// ADR 0067 优化描述的系统提示词（ADR 0071 修订：英文，输出用界面语言）。
+/// 占位 `{project_name}`、`{language}`。正文是合同，与 ADR 0067 原文逐字一致。
+/// 2026-09-24 前的版本要求「用用户那句话的语言来写」；负责人裁决改为跟随
+/// 界面语言（prompt-engineering spec Q21），界面切到哪种语言草稿就是哪种。
+pub const AGENTS_MD_OPTIMIZE_PROMPT: &str = "You are drafting AGENTS.md at the repository root. This file holds the project-level constraints that activated agents read. It is not a skill; do not write process progress, secrets or a role roster into it.
 
-用户只给了一句话。写成下面的骨架。用户没说的命令、技术栈、目录，留空或写「未知」，不要编造。用用户那句话的语言来写。
+The user gave a single sentence. Fill in the skeleton below. For commands, tech stack or directories the user did not mention, leave them empty or write \"unknown\" — never invent them. Write the prose in {language}; keep the headings exactly as given.
 
-# {项目名}
+# {project_name}
 
-## 做什么
-一两句。用户的句子里看得出边界时，写上不做什么。
+## Purpose
+One or two sentences. If the user's sentence implies boundaries, also state what the project does not do.
 
 ## Commands
 - Build:
@@ -137,12 +139,14 @@ pub const AGENTS_MD_OPTIMIZE_PROMPT: &str = "你在起草仓库根目录的 AGEN
 ## Conventions
 -
 
-只输出这份说明的正文，不要前言。";
+Output only the body of this file, with no preamble.";
 
 fn optimize_system_prompt(project_name: &str) -> String {
     let name = project_name.trim();
-    let name = if name.is_empty() { "未知" } else { name };
-    AGENTS_MD_OPTIMIZE_PROMPT.replace("{项目名}", name)
+    let name = if name.is_empty() { "unknown" } else { name };
+    AGENTS_MD_OPTIMIZE_PROMPT
+        .replace("{project_name}", name)
+        .replace("{language}", crate::uilang::reply_language())
 }
 
 /// 一句话 → 项目说明草稿。调用刚配好的主对话模型（`default` 槽），
@@ -196,6 +200,24 @@ pub fn optimize_agents_md(
     Ok(text)
 }
 
+/// 流程起草提示词（ADR 0071：英文，阶段名用界面语言）。
+pub(crate) fn flow_prompt(sentence: &str) -> String {
+    format!(
+        "From the project description below, output one process pack as JSON and nothing else. \
+         Fields: name, version, stages. Each stage has name, roles, due, stamp_point. \
+         Write stage names in {}. No explanation.\n\n{sentence}",
+        crate::uilang::reply_language()
+    )
+}
+
+/// 职责起草提示词。旧版写死「起草一段中文职责」；ADR 0071 起跟随界面语言。
+pub(crate) fn duty_prompt(name: &str, hint: &str) -> String {
+    format!(
+        "Draft the duty statement for the role \"{name}\" in {}: one short paragraph (at most 80 characters in Chinese or Japanese, about 40 words otherwise). Output only the statement. Extra guidance: {hint}",
+        crate::uilang::reply_language()
+    )
+}
+
 /// 按项目说明起草流程包。调用方传入流程起草槽（未绑则已落到默认槽）的供应商。
 /// 只返回草稿，不写盘。检验命令、产物清单和回填边不在这张草稿的编辑面上。
 pub fn draft_flow(
@@ -211,10 +233,7 @@ pub fn draft_flow(
         messages: vec![crate::provider::Message {
             role: crate::provider::Role::User,
             content: vec![crate::provider::ContentBlock::Text {
-                text: format!(
-                    "根据下面的项目说明，只输出一份 JSON 流程包。字段：name、version、stages。\
-                     每个阶段有 name、roles、due、stamp_point。不要解释。\n{sentence}"
-                ),
+                text: flow_prompt(sentence),
             }],
         }],
         tools: vec![],
@@ -252,9 +271,7 @@ pub fn draft_role_duty(
         messages: vec![crate::provider::Message {
             role: crate::provider::Role::User,
             content: vec![crate::provider::ContentBlock::Text {
-                text: format!(
-                    "为角色「{name}」起草一段中文职责（≤80字，只输出职责正文）。补充：{hint}"
-                ),
+                text: duty_prompt(name, hint),
             }],
         }],
         tools: vec![],
@@ -1412,7 +1429,12 @@ mod tests {
         assert_eq!(system, optimize_system_prompt("Demo"));
         assert_eq!(AGENTS_MD_OPTIMIZE_PROMPT, ADR_0067_OPTIMIZE_PROMPT);
         assert!(system.starts_with("# Demo\n") || system.contains("\n# Demo\n"));
-        assert!(!system.contains("{项目名}"));
+        // prompt-engineering 票 09：占位符随英文化改名（{项目名} → {project_name}），新增 {language}。
+        assert!(!system.contains("{project_name}") && !system.contains("{language}"));
+        assert!(
+            system.contains("Write the prose in English"),
+            "测试构建未设界面语言 → 英文"
+        );
         assert!(!system.contains(sentence));
         assert_eq!(user, sentence);
         assert!(scripted.contains("- Build:\n- Test:\n- Check:"));
@@ -1430,6 +1452,28 @@ mod tests {
             .filter(|n| n.ends_with(".md"))
             .collect();
         assert_eq!(md_names, vec!["AGENTS.md".to_string()]);
+    }
+
+    /// prompt-engineering 票 09：向导提示词英文，草稿语言跟随界面语言。
+    /// 回归：角色职责起草曾写死「起草一段中文职责」，英文界面也出中文。
+    #[test]
+    fn wizard_drafts_follow_interface_language() {
+        crate::uilang::set_test_language(Some("ja"));
+        let p = crate::provider::ScriptedProvider::new(vec![
+            crate::turn::text_response("draft"),
+            crate::turn::text_response("duty"),
+        ]);
+        optimize_agents_md("Demo", "a todo list", &p).unwrap();
+        draft_role_duty("后端开发", "", &p).unwrap();
+        crate::uilang::set_test_language(None);
+        let calls = p.recorded();
+        assert!(block_text(&calls[0].messages[0]).contains("Write the prose in Japanese"));
+        let duty = block_text(&calls[1].messages[0]);
+        assert!(
+            duty.contains("in Japanese") && duty.contains("\"后端开发\""),
+            "{duty}"
+        );
+        assert!(!duty.contains("中文"));
     }
 
     #[test]
@@ -1459,14 +1503,15 @@ mod tests {
     }
 
     /// ADR 0067 优化提示词原文。改常量而没改合同，这条会红。
-    const ADR_0067_OPTIMIZE_PROMPT: &str = "你在起草仓库根目录的 AGENTS.md。这份文件是被激活的 Agent 要读的项目级约束。它不是技能，不写流程进度，不写密钥，不写角色名单。
+    // ADR 0071 修订：合同原文换成英文版（ADR 0067 同步修订）。
+    const ADR_0067_OPTIMIZE_PROMPT: &str = "You are drafting AGENTS.md at the repository root. This file holds the project-level constraints that activated agents read. It is not a skill; do not write process progress, secrets or a role roster into it.
 
-用户只给了一句话。写成下面的骨架。用户没说的命令、技术栈、目录，留空或写「未知」，不要编造。用用户那句话的语言来写。
+The user gave a single sentence. Fill in the skeleton below. For commands, tech stack or directories the user did not mention, leave them empty or write \"unknown\" — never invent them. Write the prose in {language}; keep the headings exactly as given.
 
-# {项目名}
+# {project_name}
 
-## 做什么
-一两句。用户的句子里看得出边界时，写上不做什么。
+## Purpose
+One or two sentences. If the user's sentence implies boundaries, also state what the project does not do.
 
 ## Commands
 - Build:
@@ -1479,5 +1524,5 @@ mod tests {
 ## Conventions
 -
 
-只输出这份说明的正文，不要前言。";
+Output only the body of this file, with no preamble.";
 }

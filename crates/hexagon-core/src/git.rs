@@ -137,10 +137,13 @@ impl Tool for GitBaselineMerge {
         "git_baseline_merge"
     }
     fn description(&self) -> &str {
-        "merge work branch into baseline (stamp-gated, always asks)"
+        r#"Merge the work branch into the baseline branch. In the fast lane this is final acceptance: it always needs the owner's stamp and raises a pending card.
+- Use when: the owner has asked you to merge the finished work into the baseline.
+- Do not use: to commit or push work in progress (use bash with git).
+- Errors: without the owner's stamp the merge is refused; do not retry — tell the owner the work is ready for final acceptance."#
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"baseline":{"type":"string"}}})
+        json!({"type":"object","properties":{"baseline":{"type":"string","description":"baseline branch name (optional)"}}})
     }
     fn exec(&self, db: &Db, _input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         // 票 02：快速通道的合入基线是最终验收。判定恒为不自动合入。

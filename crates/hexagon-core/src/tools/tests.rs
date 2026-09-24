@@ -395,7 +395,8 @@ fn answered_deny_replays_as_denied_without_new_card() {
             Some("r0i0"),
         )
         .unwrap();
-    assert!(matches!(out, CallOutcome::Denied(ref r) if r == "owner denied"));
+    // prompt-engineering 票 04：拒绝原因带来源前缀，模型分得清负责人拒绝与规则拒绝。
+    assert!(matches!(out, CallOutcome::Denied(ref r) if r == "(owner): owner denied"));
     let n = crate::cards::count_queued(&db, "p1", None).unwrap();
     assert_eq!(n, 0, "卡已答，不再计 queued");
     let by = crate::cards::get(&db, &qid).unwrap().answered_by;
@@ -1027,6 +1028,8 @@ fn fs_read_image_over_cap_returns_text() {
 fn fs_patch_records_diff_stats_and_bounded_strings() {
     let (db, reg, ctx, dir) = setup();
     std::fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    // prompt-engineering 票 02：改已存在文件前须本激活内读过（先读后改）。
+    read(&db, &reg, &ctx, "a.txt");
     let out = reg
         .call(
             &db,
@@ -1130,4 +1133,402 @@ fn bash_output_streams_deltas_with_call_attribution() {
             "{v:?}"
         );
     }
+}
+
+// ---- prompt-engineering 票 03：入参校验早于权限 ----
+
+fn events_of(db: &Db, kind: &str) -> i64 {
+    db.conn()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE project_id='p1' AND kind=?1",
+            [kind],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// 缺必填参数的 bash 不再先弹卡：旧写法权限判定在前，负责人批了才报
+/// `missing string arg`。
+#[test]
+fn pe03_missing_required_arg_rejected_before_permission() {
+    let (db, reg, ctx, _dir) = setup();
+    let err = reg
+        .call(&db, &ctx, "bash", json!({"command": "ls"}))
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("cmd"), "{msg}");
+    assert!(matches!(err, ToolError::BadInput(_)));
+    assert_eq!(events_of(&db, "permission_asked"), 0);
+    assert_eq!(crate::cards::count_queued(&db, "p1", None).unwrap(), 0);
+}
+
+#[test]
+fn pe03_wrong_type_names_the_field() {
+    let (db, reg, ctx, dir) = setup();
+    std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+    let err = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_read",
+            json!({"path": "a.txt", "offset": "3"}),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("/offset"), "{err}");
+}
+
+#[test]
+fn pe03_valid_input_passes_through() {
+    let (db, reg, ctx, dir) = setup();
+    std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+    assert!(matches!(
+        reg.call(&db, &ctx, "fs_read", json!({"path": "a.txt"}))
+            .unwrap(),
+        CallOutcome::Done(_)
+    ));
+}
+
+/// schema 本身写坏的工具不被校验卡死：跳过校验照常执行。
+#[test]
+fn pe03_broken_schema_skips_validation() {
+    struct Broken;
+    impl Tool for Broken {
+        fn name(&self) -> &str {
+            "broken_schema"
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "no-such-type"})
+        }
+        fn risk(&self) -> RiskClass {
+            RiskClass::Read
+        }
+        fn exec(&self, _db: &Db, _i: &Value, _c: &ToolContext) -> Result<Value, ToolError> {
+            Ok(json!({"ok": true}))
+        }
+    }
+    let (db, reg, ctx, _dir) = setup();
+    reg.register(Broken);
+    assert!(matches!(
+        reg.call(&db, &ctx, "broken_schema", json!({"any": 1}))
+            .unwrap(),
+        CallOutcome::Done(_)
+    ));
+}
+
+mod pe03_props {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// 不变量：缺任一必填字段必拒（D12）。
+        #[test]
+        fn missing_required_always_rejected(extra in "[a-z]{1,8}", val in any::<i64>()) {
+            let schema = json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]});
+            let mut obj = serde_json::Map::new();
+            if extra != "path" {
+                obj.insert(extra, json!(val));
+            }
+            prop_assert!(crate::tools::schema::check(&schema, &Value::Object(obj)).is_err());
+        }
+
+        /// 不变量：满足 schema 的输入必过（D12）。
+        #[test]
+        fn conforming_input_always_passes(path in ".{0,40}", off in 1i64..100_000, lim in proptest::option::of(1i64..1000)) {
+            let schema = json!({"type":"object","properties":{
+                "path":{"type":"string"},"offset":{"type":"integer","minimum":1},
+                "limit":{"type":"integer","minimum":1}},"required":["path"]});
+            let mut v = json!({"path": path, "offset": off});
+            if let Some(l) = lim { v["limit"] = json!(l); }
+            prop_assert!(crate::tools::schema::check(&schema, &v).is_ok());
+        }
+    }
+}
+
+// ---- prompt-engineering 票 02：编辑契约 ----
+
+fn read(db: &Db, reg: &Registry, ctx: &ToolContext, path: &str) {
+    assert!(matches!(
+        reg.call(db, ctx, "fs_read", json!({"path": path})).unwrap(),
+        CallOutcome::Done(_)
+    ));
+}
+
+/// 回归：旧写法 `replacen(old, new, 1)` 不查唯一性，多处匹配时静默改第一处。
+#[test]
+fn pe02_patch_ambiguous_old_rejected_and_file_untouched() {
+    let (db, reg, ctx, dir) = setup();
+    fs::write(dir.path().join("a.rs"), "x = 1;\ny = 2;\nx = 1;\n").unwrap();
+    read(&db, &reg, &ctx, "a.rs");
+    let err = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_patch",
+            json!({"path":"a.rs","old":"x = 1;","new":"x = 9;"}),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("2 matches"), "{err}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+        "x = 1;\ny = 2;\nx = 1;\n"
+    );
+}
+
+#[test]
+fn pe02_patch_replace_all_changes_every_occurrence() {
+    let (db, reg, ctx, dir) = setup();
+    fs::write(dir.path().join("a.rs"), "x = 1;\ny = 2;\nx = 1;\n").unwrap();
+    read(&db, &reg, &ctx, "a.rs");
+    let CallOutcome::Done(v) = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_patch",
+            json!({"path":"a.rs","old":"x = 1;","new":"x = 9;","replace_all":true}),
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v["replacements"], 2);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+        "x = 9;\ny = 2;\nx = 9;\n"
+    );
+}
+
+#[test]
+fn pe02_patch_not_found_echoes_old_and_says_reread() {
+    let (db, reg, ctx, dir) = setup();
+    fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    read(&db, &reg, &ctx, "a.rs");
+    let msg = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_patch",
+            json!({"path":"a.rs","old":"fn zzz()","new":"x"}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("fn zzz()") && msg.contains("fs_read"), "{msg}");
+}
+
+#[test]
+fn pe02_patch_unread_file_rejected_before_any_card() {
+    let (db, reg, ctx, dir) = setup();
+    fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    let msg = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_patch",
+            json!({"path":"a.rs","old":"a","new":"b"}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("has not been read"), "{msg}");
+    assert_eq!(events_of(&db, "permission_asked"), 0);
+}
+
+#[test]
+fn pe02_patch_after_external_change_rejected() {
+    let (db, reg, ctx, dir) = setup();
+    fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    read(&db, &reg, &ctx, "a.rs");
+    fs::write(
+        dir.path().join("a.rs"),
+        "fn a() { changed_by_someone_else(); }\n",
+    )
+    .unwrap();
+    let msg = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_patch",
+            json!({"path":"a.rs","old":"fn a()","new":"fn b()"}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("changed since you last read"), "{msg}");
+}
+
+#[test]
+fn pe02_own_edit_keeps_file_editable() {
+    let (db, reg, ctx, dir) = setup();
+    fs::write(dir.path().join("a.rs"), "one two\n").unwrap();
+    read(&db, &reg, &ctx, "a.rs");
+    reg.call(
+        &db,
+        &ctx,
+        "fs_patch",
+        json!({"path":"a.rs","old":"one","new":"uno"}),
+    )
+    .unwrap();
+    reg.call(
+        &db,
+        &ctx,
+        "fs_patch",
+        json!({"path":"a.rs","old":"two","new":"dos"}),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+        "uno dos\n"
+    );
+}
+
+#[test]
+fn pe02_write_new_file_needs_no_read_but_overwrite_does() {
+    let (db, reg, ctx, dir) = setup();
+    assert!(matches!(
+        reg.call(
+            &db,
+            &ctx,
+            "fs_write",
+            json!({"path":"new.rs","content":"a"})
+        )
+        .unwrap(),
+        CallOutcome::Done(_)
+    ));
+    fs::write(dir.path().join("old.rs"), "keep").unwrap();
+    let msg = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_write",
+            json!({"path":"old.rs","content":"clobber"}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("has not been read"), "{msg}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("old.rs")).unwrap(),
+        "keep"
+    );
+}
+
+mod pe02_props {
+    use crate::tools::readstate::{judge, Stamp, Verdict};
+    use proptest::prelude::*;
+
+    fn stamp() -> impl Strategy<Value = Stamp> {
+        (any::<u64>(), any::<u64>()).prop_map(|(m, l)| Stamp {
+            mtime_ns: m as u128,
+            len: l,
+        })
+    }
+
+    proptest! {
+        /// 不存在的目标永远放行（新文件由 fs_write 创建）。
+        #[test]
+        fn absent_target_always_ok(rec in proptest::option::of(stamp())) {
+            prop_assert_eq!(judge(rec, None), Verdict::Ok);
+        }
+        /// 未读必拒。
+        #[test]
+        fn unread_existing_always_rejected(cur in stamp()) {
+            prop_assert_eq!(judge(None, Some(cur)), Verdict::NotRead);
+        }
+        /// 读后未变必过；读后有任何变化必拒。
+        #[test]
+        fn changed_iff_stamp_differs(a in stamp(), b in stamp()) {
+            let v = judge(Some(a), Some(b));
+            if a == b { prop_assert_eq!(v, Verdict::Ok) } else { prop_assert_eq!(v, Verdict::Changed) }
+        }
+    }
+}
+
+// ---- prompt-engineering 票 08：工具描述四段式 ----
+
+/// 结构断言，不逐字断言：每个内置工具的描述都写明何时用、何时不用，
+/// 每个参数都有 description（弱模型最依赖工具说明书）。
+#[test]
+fn pe08_every_builtin_tool_has_when_to_use_and_param_docs() {
+    let main = Registry::builtin();
+    let sub = main.subagent_scope(&Default::default());
+    let mut defs = main.defs();
+    defs.extend(sub.defs());
+    assert!(defs.len() >= 18);
+    for d in &defs {
+        assert!(
+            d.description.contains("Use when"),
+            "{}: 缺 Use when",
+            d.name
+        );
+        assert!(
+            d.description.contains("Do not use"),
+            "{}: 缺 Do not use",
+            d.name
+        );
+        if let Some(props) = d.input_schema["properties"].as_object() {
+            for (k, v) in props {
+                assert!(
+                    v["description"].is_string(),
+                    "{}.{k}: 参数缺 description",
+                    d.name
+                );
+            }
+        }
+    }
+}
+
+// ---- code-review 回归：fs_read 区间 ----
+
+/// 回归：schema 不设 limit 上限，`start - 1 + limit` 曾溢出（debug panic /
+/// release 回绕后切片越界 panic）。
+#[test]
+fn pe01_fs_read_huge_limit_does_not_overflow() {
+    let (db, reg, ctx, dir) = setup();
+    fs::write(dir.path().join("r.txt"), "a\nb\nc\n").unwrap();
+    let CallOutcome::Done(v) = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_read",
+            json!({"path":"r.txt","offset":2,"limit":u64::MAX}),
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v["content"], "b\nc\n");
+    assert_eq!(v["lines"], json!([2, 3]));
+}
+
+/// 票 01 回归：被裁的结果指向的 spill 文件能用 offset/limit 读回中段。
+#[test]
+fn pe01_spill_file_middle_readable_by_range() {
+    let (db, reg, ctx, _dir) = setup();
+    let body: String = (1..=600)
+        .map(|i| format!("row {i} padding padding padding\n"))
+        .collect();
+    let trimmed = crate::tools::spill_trim(&ctx, &body, 4000);
+    assert!(!trimmed.contains("row 300 "), "中段应已被裁");
+    let path = trimmed
+        .split("full output: ")
+        .nth(1)
+        .and_then(|r| r.split(']').next())
+        .unwrap()
+        .trim()
+        .to_string();
+    let CallOutcome::Done(v) = reg
+        .call(
+            &db,
+            &ctx,
+            "fs_read",
+            json!({"path": path, "offset": 300, "limit": 2}),
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        v["content"],
+        "row 300 padding padding padding\nrow 301 padding padding padding\n"
+    );
+    assert_eq!(v["total_lines"], 600);
 }

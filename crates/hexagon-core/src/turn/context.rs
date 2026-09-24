@@ -146,7 +146,18 @@ pub(super) fn estimate_tokens(messages: &[Message]) -> usize {
 /// 轻量裁剪（US37 + openworker-borrow 票 02）：超长 tool_result 走 spill——
 /// 完整内容落 `.hexagon/spill/`，上下文留 head+marker+tail；被裁部分可读回，
 /// 不再永久丢失。spill 失败时 spill_trim 内部退回旧式纯截断。
-pub(super) fn trim_context(ctx: &ToolContext, mut messages: Vec<Message>) -> Vec<Message> {
+///
+/// 最近一条 Tool 消息不裁文本（prompt-engineering 票 01）。旧写法每轮连
+/// 刚返回的结果一起裁到 4000 字符，>4KB 的文件中段模型永远看不到，照着
+/// spill 指针重读又被裁一次（2026-09-24 对照 Claude Code 研究发现）。
+/// 模型读过一轮之后再裁，等价 Claude Code 的 microcompact；撞限仍由
+/// mechanical_compact 兜底；`keep_latest=false` 是撞限路径的最后一道——
+/// 宁可裁最新结果也不为一次大读取升级问负责人。
+pub(super) fn trim_context(
+    ctx: &ToolContext,
+    mut messages: Vec<Message>,
+    keep_latest: bool,
+) -> Vec<Message> {
     // 票 02：历史图先剥——只有最新一条 Tool 消息保留图，更早的
     // tool_result 图字节是上下文黑洞（单张可达 5MB base64）。剥图留
     // 指针注记，模型要再看可 fs_read 重读（与 spill 同一指针语义）。
@@ -164,7 +175,8 @@ pub(super) fn trim_context(ctx: &ToolContext, mut messages: Vec<Message>) -> Vec
                         "\n[{n} image(s) elided from history — fs_read again if still needed]"
                     ));
                 }
-                if content.len() > TRIM_BLOCK_CHARS {
+                let exempt = keep_latest && Some(mi) == last_tool;
+                if !exempt && content.len() > TRIM_BLOCK_CHARS {
                     *content = crate::tools::spill_trim(ctx, content, TRIM_BLOCK_CHARS);
                 }
             }
@@ -312,11 +324,7 @@ pub(super) fn mechanical_compact(
     let Some(transcript) = write_transcript(ctx, &archived) else {
         return original;
     };
-    let note = format!(
-        "[工具记录已移出上下文] 最旧 {} 条工具调用或结果已逐字移到 {transcript}。\
-         需要细节用 fs_read 读。负责人与角色原文仍在上文，未改写。",
-        removed.len(),
-    );
+    let note = compaction_note(removed.len(), &transcript);
     messages.push(Message {
         role: Role::User,
         content: vec![ContentBlock::Text { text: note }],
@@ -329,6 +337,14 @@ pub(super) fn mechanical_compact(
         ctx.stage_run_id.as_deref(),
     );
     messages
+}
+
+/// 工具记录移出上下文后留给模型的注记；提示词页目录与运行时共用。
+pub(crate) fn compaction_note(removed: impl std::fmt::Display, transcript: &str) -> String {
+    format!(
+        "[workbench] Tool records moved out of context: the oldest {removed} tool calls or results were moved verbatim to {transcript}. \
+         Read that file with fs_read when you need details. Owner and role messages above are unchanged."
+    )
 }
 
 /// 逐字 transcript：消息与块原样落盘（tool_use/tool_result 含全部字段）。
