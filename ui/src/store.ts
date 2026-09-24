@@ -182,6 +182,9 @@ interface UiState {
   /// 中栏当前文件的保存脉冲（mod+S）。0 = 从未请求。
   saveFileReq: number
   requestSaveFile: () => void
+  /// 时间线贴底脉冲。发送成功后递增；0 = 从未请求。失败不递增。
+  timelineStickReq: number
+  requestTimelineStick: () => void
   openTab: (t: WorkTab) => void
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
@@ -245,6 +248,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   sideTab: 'artifacts',
   fileTreeReq: null,
   saveFileReq: 0,
+  timelineStickReq: 0,
   usageRows: [],
   usageSeries7d: [],
   contextPressure: null,
@@ -397,6 +401,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     }))
   },
   requestSaveFile: () => set((s) => ({ saveFileReq: s.saveFileReq + 1 })),
+  requestTimelineStick: () => set((s) => ({ timelineStickReq: s.timelineStickReq + 1 })),
   setThemePref: (p) => {
     localStorage.setItem('hexagon.theme', p)
     document.documentElement.dataset.theme = resolve(p)

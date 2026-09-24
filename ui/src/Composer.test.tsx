@@ -559,3 +559,36 @@ describe('Composer 图片放大（票 10）', () => {
     root.unmount()
   })
 })
+
+describe('发送成功才把时间线钉回真底', () => {
+  beforeEach(() => {
+    useUiStore.setState({
+      mode: 'pack',
+      fastRole: null,
+      team: [member('产品策划')],
+      pending: [],
+      timeline: [],
+      timelineStickReq: 0,
+    })
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('发送成功要求贴底', async () => {
+    vi.spyOn(api, 'sendMessage').mockResolvedValue(1)
+    vi.spyOn(useUiStore.getState(), 'invalidate').mockResolvedValue()
+    const { el, root } = await render(<Composer />)
+    await sendText(el, '把留白留在视口里')
+    await act(async () => { await Promise.resolve() })
+    expect(useUiStore.getState().timelineStickReq).toBe(1)
+    root.unmount()
+  })
+
+  it('发送失败视口不动', async () => {
+    vi.spyOn(api, 'sendMessage').mockRejectedValue(new Error('down'))
+    const { el, root } = await render(<Composer />)
+    await sendText(el, '这条发不出去')
+    await act(async () => { await Promise.resolve() })
+    expect(useUiStore.getState().timelineStickReq).toBe(0)
+    root.unmount()
+  })
+})

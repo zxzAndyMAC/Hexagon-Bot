@@ -230,6 +230,8 @@ export function Composer() {
     // 原先 await 裸抛，文案随输入框状态悬在用户面前却无任何反馈。
     try {
       await api.sendMessage(body, refs)
+      // 发送成功才贴底。失败走下面的 catch，视口留在用户正在看的地方。
+      useUiStore.getState().requestTimelineStick()
       // 票 09：点名、没点名的封闭选择、卸掉项目经理后的接话人，都在
       // send_message → route_unnamed_owner。界面再 dispatch 会双发，
       // 也会把 L0/L1 的角色点名闸重写成「看见 @ 就派」。

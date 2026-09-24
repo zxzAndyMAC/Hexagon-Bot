@@ -15,6 +15,7 @@ import { pairToolCalls, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, E
 import { CallStatus, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
+import { listOverflows, pinAfterScroll, showStickButton, STICK_BAND_PX, tailScrollTop, TIMELINE_TAIL_PX } from '../timelineStick'
 import type { TFunction } from 'i18next'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
@@ -291,7 +292,7 @@ function ReturnSummaryRow({ item, onJumpEvent }: { item: TimelineItem; onJumpEve
   )
 }
 
-// memo：滚动中 atBottom 翻转/flash 等父级重渲不再连带可见行整棵重渲
+// memo：滚动中贴底翻转/flash 等父级重渲不再连带可见行整棵重渲
 //（remark 重解析是最贵的一帧）；store 订阅（team/openTab）不受 memo 挡。
 export const EventRow = memo(function EventRow({
   item,
@@ -767,9 +768,8 @@ function StreamFooter() {
   const turn = openTurn(timeline)
   const waitingId = turn.agentId && !ids.includes(turn.agentId) ? turn.agentId : null
   const waitingMember = waitingId ? team.find((x) => x.id === waitingId) : undefined
-  // Cursor 式底部留白（ui-polish-2 ⑤ 续，owner 二报「回不到底」）：
-  // 列表尾部恒留空白带，最新内容可滚离输入条一段高度，而不是贴死在底缘。
-  const tail = <div style={{ height: 96 }} />
+  // 底部留白带恒在内容总高里。贴底写的是 scrollHeight，不是最后一行的底边。
+  const tail = <div data-timeline-tail="" style={{ height: TIMELINE_TAIL_PX }} />
   if (!ids.length && !waitingId) return tail
   return (
     <div>
@@ -806,15 +806,26 @@ function StreamFooter() {
 export function Timeline() {
   const { t } = useTranslation()
   const { timeline, pending, streams, team } = useUiStore()
+  const stickReq = useUiStore((s) => s.timelineStickReq)
   const [filter, setFilter] = useState<Filter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const [atBottom, setAtBottom] = useState(true)
+  // 打开项目时钉着：内容高过窗口就落在真底（含留白带），不满一屏则顶对齐。
+  const [pinned, setPinned] = useState(true)
+  const [overflow, setOverflow] = useState(false)
+  const [stickSeen, setStickSeen] = useState(stickReq)
   const [unseen, setUnseen] = useState(0)
   const [flash, setFlash] = useState<number | null>(null)
   const [exported, setExported] = useState<number | null>(null)
   const ref = useRef<VirtuosoHandle>(null)
   const scrollerEl = useRef<HTMLElement | null>(null)
+  const pinnedRef = useRef(true)
+  const ownScroll = useRef(false)
+  const prevTop = useRef(0)
   const prevLen = useRef(0)
+  const userUntil = useRef(0)
+  const pointerDown = useRef(false)
+  const detachScroller = useRef<(() => void) | null>(null)
+  const seenStick = useRef(stickReq)
   // 展开时刻表：入场动画只在「刚展开」播一遍；虚拟列表滚出重挂的行
   // 不再 fade-up/pop-in 重放（owner 反馈：内容多时快速滚动闪烁抖动）。
   const expandAt = useRef(new Map<number, number>())
@@ -840,22 +851,154 @@ export function Timeline() {
   const turnActive = Object.keys(streams).length > 0
 
   useEffect(() => {
-    if (timeline.length > prevLen.current && !atBottom) {
-      setUnseen((u) => u + (timeline.length - prevLen.current))
-    }
+    const grew = timeline.length - prevLen.current
     prevLen.current = timeline.length
-  }, [timeline.length, atBottom])
+    if (grew > 0 && !pinnedRef.current) setUnseen((u) => u + grew)
+  }, [timeline.length])
 
-  // 钉底跟随流式增量（ui-polish-2 ⑤ 续，owner 二报「回不到底」）：流式文本
-  // 只撑高 Footer，不在 data 里——Virtuoso 的 followOutput 看不见它，回底钮
-  // 瞬跳后 Footer 继续长高便又离底。atBottom 期间每个 delta 手动钉到
-  // scrollHeight；atBottomThreshold 放宽「在底部」判定抗闪烁。
+  // 真底 = scrollHeight，留白带算在里面。直接赋 scrollTop，不用 smooth：
+  // 平滑滚动在流式还在长高时会提前落点（owner 二报「回不到底」）。
+  // followOutput 关掉：它只看见 data 行，落点停在最后一行底边，留白被甩到视口外。
+  // 第一下点击常被 Virtuoso 在同一帧把滚动锚回旧位置，所以 layout 写一次，
+  // 绘制后再写一次——第二次点击才生效，就是少了这一笔补写。
+  const writeTail = useCallback(() => {
+    const el = scrollerEl.current
+    if (!el || !pinnedRef.current) return
+    const top = tailScrollTop(el.scrollHeight, el.clientHeight)
+    if (Math.abs(el.scrollTop - top) <= 1) return
+    ownScroll.current = true
+    el.scrollTop = top
+    ownScroll.current = false
+    prevTop.current = el.scrollTop
+  }, [])
+
+  const releasePin = useCallback(() => {
+    if (!pinnedRef.current) return
+    pinnedRef.current = false
+    setPinned(false)
+  }, [])
+
+  const holdPin = useCallback(() => {
+    pinnedRef.current = true
+    setPinned(true)
+    setUnseen(0)
+    writeTail()
+  }, [writeTail])
+
+  const noteUserScroll = useCallback(() => {
+    userUntil.current = performance.now() + 250
+  }, [])
+
+  // 发送成功：这一轮渲染就把钉合上。效果里再 setState 会多一次级联渲染。
+  if (stickReq !== stickSeen) {
+    setStickSeen(stickReq)
+    if (stickReq > 0) {
+      setPinned(true)
+      setUnseen(0)
+    }
+  }
+
+  const onScrollerScroll = useCallback(() => {
+    const el = scrollerEl.current
+    if (!el) return
+    const previousScrollTop = prevTop.current
+    const scrollTop = el.scrollTop
+    prevTop.current = scrollTop
+    const overflows = listOverflows(el.scrollHeight, el.clientHeight)
+    setOverflow((o) => (o === overflows ? o : overflows))
+    const userMoved = pointerDown.current || performance.now() < userUntil.current
+    // 惯性还在滚时续上这扇窗，松手 250ms 之后的位移才当成布局。
+    if (userMoved) userUntil.current = performance.now() + 250
+    const next = pinAfterScroll({
+      pinned: pinnedRef.current,
+      own: ownScroll.current,
+      userMoved,
+      scrollTop,
+      previousScrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    })
+    if (next !== pinnedRef.current) {
+      pinnedRef.current = next
+      setPinned(next)
+      if (next) setUnseen(0)
+    }
+    // 钉还在，但视口被量高带离了真底：补写。用户往上翻时上面已经松钉，不会拽回去。
+    if (pinnedRef.current && !ownScroll.current) {
+      const distance = el.scrollHeight - el.clientHeight - el.scrollTop
+      if (distance > STICK_BAND_PX) writeTail()
+    }
+  }, [writeTail])
+
+  const bindScroller = useCallback((el: HTMLElement | Window | null) => {
+    const next = el instanceof HTMLElement ? el : null
+    const prev = scrollerEl.current
+    if (prev === next) return
+    detachScroller.current?.()
+    detachScroller.current = null
+    scrollerEl.current = next
+    if (!next) return
+    // 浏览器的 scroll anchoring 会在脚变高时把视口拽离我们刚写的真底。
+    next.style.overflowAnchor = 'none'
+    const onPointerDown = () => { pointerDown.current = true; noteUserScroll() }
+    const onPointerUp = () => { pointerDown.current = false }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Home' || e.key === 'End' || e.key === ' ') {
+        noteUserScroll()
+      }
+    }
+    next.addEventListener('scroll', onScrollerScroll, { passive: true })
+    next.addEventListener('wheel', noteUserScroll, { passive: true })
+    next.addEventListener('pointerdown', onPointerDown)
+    next.addEventListener('pointerup', onPointerUp)
+    next.addEventListener('pointercancel', onPointerUp)
+    next.addEventListener('keydown', onKey)
+    detachScroller.current = () => {
+      next.removeEventListener('scroll', onScrollerScroll)
+      next.removeEventListener('wheel', noteUserScroll)
+      next.removeEventListener('pointerdown', onPointerDown)
+      next.removeEventListener('pointerup', onPointerUp)
+      next.removeEventListener('pointercancel', onPointerUp)
+      next.removeEventListener('keydown', onKey)
+    }
+    if (pinnedRef.current) writeTail()
+  }, [noteUserScroll, onScrollerScroll, writeTail])
+
+  useEffect(() => () => { detachScroller.current?.() }, [])
+
+  useLayoutEffect(() => {
+    if (stickReq !== seenStick.current) {
+      seenStick.current = stickReq
+      if (stickReq > 0) pinnedRef.current = true
+    }
+    if (!pinnedRef.current) return
+    writeTail()
+  }, [stickReq, pinned, rows, streams, filter, writeTail])
+
+  useEffect(() => {
+    if (!pinnedRef.current) return
+    writeTail()
+    const id = requestAnimationFrame(() => writeTail())
+    return () => cancelAnimationFrame(id)
+  }, [stickReq, pinned, rows, streams, filter, writeTail])
+
   useEffect(() => {
     const el = scrollerEl.current
-    if (atBottom && el) el.scrollTop = el.scrollHeight
-  }, [streams, atBottom])
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const node = scrollerEl.current
+      if (!node) return
+      const overflows = listOverflows(node.scrollHeight, node.clientHeight)
+      setOverflow((o) => (o === overflows ? o : overflows))
+      if (pinnedRef.current) writeTail()
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [writeTail])
 
   const jump = useCallback((m: NodeMark) => {
+    // 节点轨是用户离开尾巴。先松钉，否则贴底补写会把这次跳转拽回去。
+    releasePin()
     if (m.rowIdx < 0) {
       ref.current?.scrollToIndex({ index: 0, align: 'start' })
       return
@@ -865,7 +1008,7 @@ export function Timeline() {
     const idx = item.type === 'item' ? item.item.event.id : item.idx
     setFlash(idx)
     setTimeout(() => setFlash(null), 1400)
-  }, [rows])
+  }, [rows, releasePin])
 
   // 票 16：按事件 id 跳转（return_summary 行回跳 since_event 锚点）。
   const jumpToEvent = useCallback((eid: number) => {
@@ -999,31 +1142,23 @@ export function Timeline() {
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <Virtuoso
           ref={ref}
-          scrollerRef={(el) => { scrollerEl.current = el as HTMLElement | null }}
+          scrollerRef={bindScroller}
           data={rows}
           // overscan：快速滚动时预渲视口上下各 600px，行不再贴边「凭空长出」
           increaseViewportBy={600}
           components={{ Footer: StreamFooter }}
-          atBottomThreshold={40}
-          atBottomStateChange={(b) => { setAtBottom(b); if (b) setUnseen(0) }}
-          followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
+          // 不满一屏顶对齐（不要 alignToBottom）。贴底由 writeTail 写 scrollHeight，
+          // followOutput 看不见 Footer 里的留白带，会把最新一行贴回输入框。
+          followOutput={false}
           itemContent={(_i, row) => rowContent(row)}
         />
-        {/* ui-polish-2 ⑤：离开底部即给「回到底部」浮钮（不再只在新事件时），
-            右下角落点不挡事件流；有新事件时附带计数文案 */}
-        {!atBottom && (
+        {/* 松钉且高过窗口才显。不满一屏钉着、按钮藏着。 */}
+        {showStickButton(pinned, overflow) && (
           <button
             className="btn primary"
             style={{ position: 'absolute', bottom: 12, right: 14, zIndex: 30, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 'var(--r-pill)', boxShadow: '0 4px 14px rgba(0,0,0,.3)' }}
             title={t('timeline.toBottom')}
-            onClick={() => {
-              // scrollToIndex 只能对到末行末尾——列表最底部是 StreamFooter 流式区（行之外、可几百px高），
-              // 且 smooth 滚动期间流还在长高会提前落点（owner 实测「回不到底」）。直接 scrollTop=scrollHeight 瞬跳。
-              const el = scrollerEl.current
-              if (el) el.scrollTo({ top: el.scrollHeight })
-              else ref.current?.scrollToIndex({ index: rows.length - 1, align: 'end' })
-              setUnseen(0)
-            }}
+            onClick={holdPin}
           >
             <Icon name="arrow-down" size={11} />{unseen > 0 ? ` ${t('timeline.newEvents', { count: unseen })}` : ''}
           </button>
