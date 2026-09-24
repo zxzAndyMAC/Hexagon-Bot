@@ -51,6 +51,7 @@ pub mod semsearch;
 pub mod sessions;
 pub mod setup;
 pub mod skills;
+pub mod stallwatch;
 pub mod stampgate;
 pub mod subagent;
 pub mod templates;

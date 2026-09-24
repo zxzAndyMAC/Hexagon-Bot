@@ -587,6 +587,46 @@ impl Db {
     }
 }
 
+/// D10 登记表落地前的 de-facto 词表钉死：System 事件 payload.kind
+/// 的全部合法二级分类。新增 System 子事件的纪律是「先加这里再写
+/// 入点」——漏登会让 `system_subkinds_stay_registered` 在生产路径上
+/// 观测到词表外 kind 时变红。模块级 `pub(crate)`：其它模块的测试
+/// （如失速监视的门面测试）写入 System 事件后也要对账这一张表。
+#[cfg(test)]
+pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
+    "attachments_degraded",
+    "context_compacted",
+    "context_denied",
+    "context_resumed",
+    "exec_timeout",
+    "flag_routed",
+    "grant_confirmed",
+    "instructions_degraded",
+    "invariant_violation",
+    "judge_verdict",
+    "known_world",
+    // network-resilience 票 01：等网进入/退出 + 挂起收口
+    "net_wait_enter",
+    "net_wait_exit",
+    "provider_retry",
+    "request_envelope",
+    "run_suspended",
+    "sandbox_unavailable",
+    "session_exited",
+    "session_started",
+    // stall-watch 票 01–04：重触发 / 调查 / 入卡 / 收场
+    "stall_carded",
+    "stall_closed",
+    "stall_investigation",
+    "stall_retrigger",
+    "steering_injected",
+    // prompt-engineering 票 05：任务清单提醒
+    "task_reminder",
+    "task_killed",
+    "task_started",
+    "tool_breaker",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -805,37 +845,7 @@ mod tests {
 
     // ---------- timeline 属性测试 + System 子 kind 词表（arch 票 08）----------
 
-    /// D10 登记表落地前的 de-facto 词表钉死：System 事件 payload.kind
-    /// 的全部合法二级分类。新增 System 子事件的纪律是「先加这里再写
-    /// 入点」——漏登会让本测试在生产路径上观测到词表外 kind 时变红。
-    const SYSTEM_SUBKINDS: &[&str] = &[
-        "attachments_degraded",
-        "context_compacted",
-        "context_denied",
-        "context_resumed",
-        "exec_timeout",
-        "flag_routed",
-        "grant_confirmed",
-        "instructions_degraded",
-        "invariant_violation",
-        "judge_verdict",
-        "known_world",
-        // network-resilience 票 01：等网进入/退出 + 挂起收口
-        "net_wait_enter",
-        "net_wait_exit",
-        "provider_retry",
-        "request_envelope",
-        "run_suspended",
-        "sandbox_unavailable",
-        "session_exited",
-        "session_started",
-        "steering_injected",
-        // prompt-engineering 票 05：任务清单提醒
-        "task_reminder",
-        "task_killed",
-        "task_started",
-        "tool_breaker",
-    ];
+    use super::SYSTEM_SUBKINDS;
 
     /// 词表钉死：跑真实回合（脚本化 provider + 超限 AGENTS.md 触发
     /// instructions_degraded + Transport 抖动触发 provider_retry），

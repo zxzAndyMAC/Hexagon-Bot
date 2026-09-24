@@ -243,6 +243,16 @@ impl TaskBoard {
             .count()
     }
 
+    /// 任一激活还有子代理没交还（失速监视用：子代理未交还不算失速，ADR 0074）。
+    /// 派遣线程可以比父回合活得久，父回合收口不代表子代理已交还。
+    pub fn any_running_subagent(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|t| t.kind == TaskKind::Subagent && t.status == "running")
+    }
+
     /// 测试接缝：等所有在跑的派遣线程收尾（join 而不是轮询）。
     #[cfg(test)]
     pub fn join_pending(&self) {

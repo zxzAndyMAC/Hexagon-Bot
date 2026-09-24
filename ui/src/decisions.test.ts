@@ -87,6 +87,29 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).toHaveBeenCalledWith('q1', true)
   })
 
+  it('stall-watch 票 02：失速卡批准键 = 再试一次，驳回键 = 知道了', async () => {
+    const retry = vi.spyOn(api, 'stallRetry').mockResolvedValue()
+    const ack = vi.spyOn(api, 'stallAck').mockResolvedValue()
+    const stall = card({ kind: 'stall', payload: { branch: 'no_reply', retry: true } })
+    expect(await handlePendingKey(key('Enter'), [stall])).toBe('approved')
+    expect(retry).toHaveBeenCalledWith('q1')
+    expect(await handlePendingKey(key('Backspace'), [stall])).toBe('rejected')
+    expect(ack).toHaveBeenCalledWith('q1')
+  })
+
+  it('stall-watch 票 02：只剩知道了的失速卡，批准键只出提示不收场', async () => {
+    const retry = vi.spyOn(api, 'stallRetry')
+    const ack = vi.spyOn(api, 'stallAck')
+    const out = await handlePendingKey(
+      key('Enter'),
+      [card({ kind: 'stall', payload: { branch: 'no_reply', retry: false } })],
+    )
+    expect(out).toBe('blocked-stall')
+    expect(retry).not.toHaveBeenCalled()
+    expect(ack).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.length).toBe(1)
+  })
+
   it('正常批准：顶卡 permission → answerPermission(true)', async () => {
     const spy = vi.spyOn(api, 'answerPermission')
     expect(await handlePendingKey(key('Enter'), [card({})])).toBe('approved')
@@ -109,10 +132,12 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('严重度序：recovery/publish/install 先于 permission', () => {
+  it('严重度序：recovery/stall/publish/install 先于 permission', () => {
     const a = card({ id: 'a', kind: 'permission' })
     const b = card({ id: 'b', kind: 'publish' })
+    const s = card({ id: 's', kind: 'stall' })
     expect(severityOf(b)).toBeLessThan(severityOf(a))
+    expect(severityOf(s)).toBe(severityOf(b))
   })
 })
 
@@ -124,8 +149,9 @@ describe('severityOf 全序（TC-U-0001）', () => {
   const sev = (kind: PendingQuestion['kind'], payload: PendingQuestion['payload'] = {}) =>
     severityOf(card({ kind, payload }))
 
-  it('恢复/发布/安装/授权 > 阶段盖章 > 升级 > 权限 > 提案盖章', () => {
+  it('恢复/失速/发布/安装/授权 > 阶段盖章 > 升级 > 权限 > 提案盖章', () => {
     expect(sev('recovery')).toBe(0)
+    expect(sev('stall')).toBe(0)
     expect(sev('publish')).toBe(0)
     expect(sev('install')).toBe(0)
     expect(sev('grant')).toBe(0)

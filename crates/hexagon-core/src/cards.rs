@@ -5,8 +5,8 @@
 //! 本模块收口：enqueue/answer/annotate/queued 四个动词 + 读模型；
 //! `rg "pending_questions"` 在本模块外只允许命中 schema 迁移与注释。
 //!
-//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0016）：
-//! kind ∈ {permission, stamp, escalation, publish, recovery, install, grant}
+//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022）：
+//! kind ∈ {permission, stamp, escalation, publish, recovery, install, grant, stall}
 //! state ∈ {queued, answered, expired}
 //!
 //! 注意 kind='stamp' 是过载的：阶段盖章卡（payload={stage,run_id}）与
@@ -43,6 +43,10 @@ pub enum CardKind {
     Publish,
     /// 技能或 MCP 的授权确认（票 04）。不是权限卡。
     Grant,
+    /// 失速卡（stall-watch 票 02 / ADR 0074）：只有「再试一次」「知道了」，
+    /// 自治不代点。没有复用 escalation{sub}——升级卡的批准是「同意打回」，
+    /// 键盘批准键打在失速卡上语义不同，分卡种界面与词典都不必再猜 sub。
+    Stall,
 }
 
 impl CardKind {
@@ -55,6 +59,7 @@ impl CardKind {
             Self::Install => "install",
             Self::Publish => "publish",
             Self::Grant => "grant",
+            Self::Stall => "stall",
         }
     }
 
@@ -68,6 +73,7 @@ impl CardKind {
             "install" => Ok(Self::Install),
             "publish" => Ok(Self::Publish),
             "grant" => Ok(Self::Grant),
+            "stall" => Ok(Self::Stall),
             other => Err(CardsError::BadInput(format!("unknown card kind: {other}"))),
         }
     }
@@ -209,7 +215,7 @@ pub fn annotate_queued_where(
 pub struct QueuedCard {
     pub id: String,
     #[ts(
-        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish' | 'grant'"
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish' | 'grant' | 'stall'"
     )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,
@@ -336,6 +342,17 @@ pub fn queued_ids(db: &Db, project_id: &str, kind: CardKind) -> Result<Vec<Strin
     )?;
     let rows = st
         .query_map(rusqlite::params![project_id, kind.as_str()], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 全部 queued 卡 id（按 id 排序）。失速监视的进度指纹用——不关心 kind。
+pub fn all_queued_ids(db: &Db, project_id: &str) -> Result<Vec<String>, CardsError> {
+    let mut st = db.conn().prepare(
+        "SELECT id FROM pending_questions WHERE project_id=?1 AND state='queued' ORDER BY id",
+    )?;
+    let rows = st
+        .query_map([project_id], |r| r.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }

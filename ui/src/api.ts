@@ -270,6 +270,9 @@ export const api = {
   rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
+  // ---- 失速卡（stall-watch 票 02/04）：再试一次 / 知道了 ----
+  stallRetry: (questionId: string) => call<void>('stall_retry', { questionId }),
+  stallAck: (questionId: string) => call<void>('stall_ack', { questionId }),
   // ---- 检验覆盖（票 40）：显式覆盖留痕，composer /override <理由> 同权 ----
   overrideChecks: (reason: string) => call<OverrideOutcome>('override_checks', { reason }),
   // ---- 安装助手（票 36）：NL 请求 → 确认卡 → 负责人确认才执行；grants 永不动 ----
@@ -856,6 +859,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'pending_questions':
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
+        { id: 'q-stall', kind: 'stall', agent_id: 'a3', payload: { branch: 'no_reply', retry: true, role: '前端', instruction: '把列表过滤修一下' }, state: 'queued' },
         { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
         { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
         { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
@@ -1119,6 +1123,9 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return 42 as T // mock：导出条数
     case 'resolve_install':
       return { installed: args?.allow === true } as T
+    case 'stall_retry':
+    case 'stall_ack':
+      return null as T
     case 'agent_detail':
       return {
         agent_id: 'a0', role: '后端', status: 'active', model_slot: 'chat', custom: false,

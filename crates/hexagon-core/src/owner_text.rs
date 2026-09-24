@@ -80,3 +80,86 @@ pub fn draft_banner() -> &'static str {
         _ => "\n## Draft\nWritten to AGENTS.md only after you confirm.\n\n",
     }
 }
+
+// ---------- 失速监视的工作台注记（stall-watch 票 02–04 / ADR 0074） ----------
+// 按钮名与界面 i18n `cards.stallRetry` / `cards.stallAck` 同名。
+
+pub fn stall_no_reply_card(role: &str) -> String {
+    match code() {
+        "zh-CN" => format!("{role} 重触发一次后仍没有可见回复，已交给负责人。"),
+        "zh-TW" => format!("{role} 重新觸發一次後仍沒有可見回覆，已交給負責人。"),
+        "ja" => {
+            format!("{role} は一度再起動しても見える返信がありません。オーナーに引き渡しました。")
+        }
+        "es" => {
+            format!("{role} sigue sin respuesta visible tras un reintento. Se pasa al responsable.")
+        }
+        "pt" => format!(
+            "{role} continua sem resposta visível após uma nova tentativa. Passado ao responsável."
+        ),
+        "fr" => {
+            format!("{role} reste sans réponse visible après une relance. Transmis au responsable.")
+        }
+        _ => format!("{role} still has no visible reply after one retrigger. Handed to the owner."),
+    }
+}
+
+pub fn stall_idle_no_pm() -> &'static str {
+    match code() {
+        "zh-CN" => "有回复但进度没有变化（阶段指针、产物、待决卡都没动），花名册上没有项目经理可以调查，已交给负责人。",
+        "zh-TW" => "有回覆但進度沒有變化（階段指標、產物、待決卡都沒動），名冊上沒有專案經理可以調查，已交給負責人。",
+        "ja" => "返信はあるものの進捗がありません（段階ポインタ・成果物・保留カードすべて不変）。調べるプロジェクトマネージャがいないため、オーナーに引き渡しました。",
+        "es" => "Hubo respuesta pero nada avanzó (puntero de etapa, artefactos y tarjetas sin cambios). No hay director de proyecto que investigue. Se pasa al responsable.",
+        "pt" => "Houve resposta, mas nada avançou (ponteiro de etapa, artefatos e cartões sem mudança). Não há gerente de projeto para investigar. Passado ao responsável.",
+        "fr" => "Il y a eu une réponse mais rien n'a avancé (pointeur d'étape, artefacts et cartes inchangés). Aucun chef de projet pour enquêter. Transmis au responsable.",
+        _ => "There was a reply but nothing moved (stage pointer, artifacts and pending cards unchanged). No project manager is on the roster to investigate. Handed to the owner.",
+    }
+}
+
+pub fn stall_idle_after_investigation() -> &'static str {
+    match code() {
+        "zh-CN" => "项目经理派活之后进度仍没有变化，已交给负责人。",
+        "zh-TW" => "專案經理派工之後進度仍沒有變化，已交給負責人。",
+        "ja" => "プロジェクトマネージャが割り振った後も進捗がありません。オーナーに引き渡しました。",
+        "es" => "Tras el reparto del director de proyecto sigue sin haber avance. Se pasa al responsable.",
+        "pt" => "Depois da distribuição do gerente de projeto ainda não houve avanço. Passado ao responsável.",
+        "fr" => "Après l'attribution du chef de projet, toujours aucun avancement. Transmis au responsable.",
+        _ => "Still no progress after the project manager dispatched. Handed to the owner.",
+    }
+}
+
+pub fn stall_investigation_timeout() -> &'static str {
+    match code() {
+        "zh-CN" => "项目经理这轮调查没有给出封闭选择，已交给负责人。",
+        "zh-TW" => "專案經理這輪調查沒有給出封閉選擇，已交給負責人。",
+        "ja" => "プロジェクトマネージャの調査は閉じた選択を返しませんでした。オーナーに引き渡しました。",
+        "es" => "La investigación del director de proyecto no dio una elección cerrada. Se pasa al responsable.",
+        "pt" => "A investigação do gerente de projeto não deu uma escolha fechada. Passado ao responsável.",
+        "fr" => "L'enquête du chef de projet n'a pas donné de choix fermé. Transmis au responsable.",
+        _ => "The project manager's investigation gave no closed choice. Handed to the owner.",
+    }
+}
+
+pub fn stall_hold_closed() -> &'static str {
+    match code() {
+        "zh-CN" => "项目经理调查后选择先不派活，这次失速收场。有新的负责人消息或新的激活再重新计时。",
+        "zh-TW" => "專案經理調查後選擇先不派工，這次失速收場。有新的負責人訊息或新的啟用再重新計時。",
+        "ja" => "プロジェクトマネージャは調査の結果、今は割り振らないことにしました。この停滞は終了です。オーナーの新しいメッセージか新しい起動で再び計測します。",
+        "es" => "Tras investigar, el director de proyecto decidió no repartir por ahora. Este atasco se cierra; se vuelve a medir con un nuevo mensaje del responsable o una nueva activación.",
+        "pt" => "Após investigar, o gerente de projeto decidiu não distribuir por enquanto. Este travamento se encerra; volta a contar com nova mensagem do responsável ou nova ativação.",
+        "fr" => "Après enquête, le chef de projet a choisi de ne rien attribuer pour l'instant. Ce blocage est clos ; le décompte reprend à un nouveau message du responsable ou une nouvelle activation.",
+        _ => "After investigating, the project manager chose to wake no one for now. This stall is closed; timing restarts on a new owner message or a new activation.",
+    }
+}
+
+pub fn stall_ack_closed() -> &'static str {
+    match code() {
+        "zh-CN" => "负责人点了「知道了」，这次失速收场。有新的负责人消息或新的激活再重新计时。",
+        "zh-TW" => "負責人點了「知道了」，這次失速收場。有新的負責人訊息或新的啟用再重新計時。",
+        "ja" => "オーナーが「了解」を押しました。この停滞は終了です。オーナーの新しいメッセージか新しい起動で再び計測します。",
+        "es" => "El responsable pulsó «Entendido». Este atasco se cierra; se vuelve a medir con un nuevo mensaje del responsable o una nueva activación.",
+        "pt" => "O responsável clicou em «Entendi». Este travamento se encerra; volta a contar com nova mensagem do responsável ou nova ativação.",
+        "fr" => "Le responsable a cliqué sur « Compris ». Ce blocage est clos ; le décompte reprend à un nouveau message du responsable ou une nouvelle activation.",
+        _ => "The owner clicked \"Got it\". This stall is closed; timing restarts on a new owner message or a new activation.",
+    }
+}

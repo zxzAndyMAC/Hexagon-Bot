@@ -15,6 +15,7 @@ use serde_json::json;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -46,6 +47,44 @@ impl Drop for ChainGuard {
     fn drop(&mut self) {
         DISPATCH_CHAIN.set(self.0);
     }
+}
+
+/// 回合或封闭选择在飞的计数守卫。失速监视的「回合在飞不计时」看它（ADR 0074）。
+/// 计数不是布尔：派活链上回合里套着封闭选择、封闭选择里又套着回合。
+struct InFlight<'a>(&'a AtomicUsize);
+
+impl<'a> InFlight<'a> {
+    fn enter(c: &'a AtomicUsize) -> Self {
+        c.fetch_add(1, Ordering::SeqCst);
+        Self(c)
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 失速监视一拍（或失速卡上一次按钮）之后发生了什么。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StallTick {
+    /// 没出手。原因码同诊断记录（in_flight / frozen / clock / owner_waits …）。
+    Wait(&'static str),
+    /// 无回复：对同一个 Agent 重触发了一轮。
+    Retriggered { agent_id: String },
+    /// 空转：项目经理的封闭选择派给了这个角色。
+    Investigated { role: String },
+    /// 调查请求了但没开回合（例如项目经理的槽没配上）。等满预算入卡。
+    InvestigationPending,
+    /// 入了失速卡。
+    Carded {
+        question_id: String,
+        branch: crate::stallwatch::Branch,
+        retry: bool,
+    },
+    /// 失速收场（调查里先不派活，或负责人点了「知道了」）。
+    Closed,
 }
 
 /// 花名册里的点名，按出现顺序去重。说话人自己不算「下一位」。
@@ -257,6 +296,14 @@ pub struct Workbench {
     pub websearch: Option<Arc<dyn crate::websearch::SearchBackend>>,
     /// 语义索引嵌入器（票 02）：None = 默认本地哈希嵌入器；测试注替身。
     pub embedder: Option<Arc<dyn crate::semsearch::Embedder>>,
+    /// 失速监视预算（stall-watch 票 01）：生产 60 秒；测试直接改写。
+    pub stall_policy: crate::stallwatch::StallPolicy,
+    /// 失速监视时钟：生产单调时钟；测试注入可拨的假钟。
+    pub stall_clock: Arc<dyn crate::stallwatch::StallClock>,
+    /// 监视状态只在进程内：重开项目从零计时。被否决：落库——
+    /// 重开时上一次的回合早已结束，拿旧锚点一开就判失速是误报。
+    stall: Mutex<crate::stallwatch::Watch>,
+    turn_depth: AtomicUsize,
 }
 
 impl Drop for Workbench {
@@ -325,6 +372,10 @@ impl Workbench {
             wait_policy: Default::default(),
             websearch: None,
             embedder: None,
+            stall_policy: Default::default(),
+            stall_clock: Arc::new(crate::stallwatch::SystemClock),
+            stall: Default::default(),
+            turn_depth: AtomicUsize::new(0),
         })
     }
 
@@ -422,6 +473,10 @@ impl Workbench {
             wait_policy: Default::default(),
             websearch: None,
             embedder: None,
+            stall_policy: Default::default(),
+            stall_clock: Arc::new(crate::stallwatch::SystemClock),
+            stall: Default::default(),
+            turn_depth: AtomicUsize::new(0),
         })
     }
 
@@ -880,6 +935,13 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
+        let _in_flight = InFlight::enter(&self.turn_depth);
+        // 失速监视（票 01）：重触发回合记的是原指令，不是包了提示的入参。
+        let instruction = self
+            .watch()
+            .retrigger_original
+            .take()
+            .unwrap_or_else(|| input.to_string());
         // 握手还在进行时，这一回合等它结束再拿工具清单。打开项目本身不等。
         self.ensure_mcp_for_turn();
         if let Ok(rid) = self.db.conn().query_row(
@@ -944,6 +1006,7 @@ impl Workbench {
         }
         // 票 09：本回合新落的消息才算「说完的内容」。水位取在模型调用之前。
         let watermark = self.message_high_water()?;
+        let fp_before = crate::stallwatch::fingerprint(&self.db, &self.project_id).ok();
         // 票 03：delta hook 锁跨整个回合——hook 一旦挂上，所有走
         // run_turn_opts 的入口（run_turn/dispatch/撞限放行）自动流式。
         let mut guard = self.delta_hook.lock().unwrap();
@@ -982,6 +1045,9 @@ impl Workbench {
                 log::warn!("judge sweep failed: {e}");
             }
         }
+        // 失败的回合也落地：没有可见回复就是无回复的起点。记在续派之前，
+        // 续派出去的下一位会覆盖成它自己的动静。
+        self.stall_note_turn(aid, role, instruction, watermark, fp_before);
         let outcome = run?;
         // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
         // 续派失败不推翻已经说完的这一回合——否则脚本耗尽会让成功的回复变成错误。
@@ -1113,7 +1179,13 @@ impl Workbench {
             return Ok(UnnamedRoute::Mentioned { roles: mentions });
         }
         if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
-            return self.closed_choice(speaker, body, attachments, from_owner, &roster);
+            let route = self.closed_choice(speaker, body, attachments, from_owner, &roster)?;
+            // ADR 0074：正常派活时的「先不派活」仍是空转信号。调查里的先不派活
+            // 不走这里（stall_investigate 直调 closed_choice 并就地收场）。
+            if matches!(route, UnnamedRoute::Held { .. }) {
+                self.stall_note_held(from_owner.then_some(body));
+            }
+            return Ok(route);
         }
         let handoff = std::time::Instant::now();
         match self.handoff_role(&roster)? {
@@ -1178,6 +1250,7 @@ impl Workbench {
         from_owner: bool,
         roster: &[String],
     ) -> Result<UnnamedRoute, ApiError> {
+        let _in_flight = InFlight::enter(&self.turn_depth);
         let pm_id = self.agent_by_role(crate::pm_route::PM_ROLE)?;
         let decision_slot: Option<String> = self.db.conn().query_row(
             "SELECT decision_slot FROM agents WHERE id=?1",
@@ -1967,6 +2040,525 @@ impl Workbench {
         )?)
     }
 
+    // ---------- 失速监视（stall-watch 票 01–04 / ADR 0074） ----------
+    //
+    // 监视挂在工作台而不是角色上：没有任何 Agent 发言时它也得跑（ADR 0074）。
+    // 壳层后台线程定时调 stall_tick；工作台锁被回合占着时那一拍直接跳过，
+    // 核内再用 turn_depth 兜一层——两层都是「回合在飞不计时」。
+
+    fn watch(&self) -> std::sync::MutexGuard<'_, crate::stallwatch::Watch> {
+        self.stall.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 测试接缝：假装有回合在飞。
+    #[cfg(test)]
+    pub(crate) fn hold_in_flight(&self) -> impl Drop + '_ {
+        InFlight::enter(&self.turn_depth)
+    }
+
+    fn stall_note_turn(
+        &self,
+        aid: &str,
+        role: &str,
+        instruction: String,
+        watermark: i64,
+        fp_before: Option<crate::stallwatch::Fingerprint>,
+    ) {
+        use crate::stallwatch::{Last, Seen, Segment};
+        let replied = self
+            .text_since(aid, watermark)
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+        let snap = crate::stallwatch::fingerprint(&self.db, &self.project_id).unwrap_or_default();
+        let progressed = fp_before.as_ref().is_some_and(|b| *b != snap);
+        // 交了产物、盖了章、起了卡都是看得见的动静——不按「无回复」重触发。
+        let last = if replied || progressed {
+            Last::Replied { progressed }
+        } else {
+            Last::Silent {
+                agent_id: aid.to_string(),
+                role: role.to_string(),
+                instruction: instruction.clone(),
+            }
+        };
+        let at = self.stall_clock.now();
+        let marker = crate::stallwatch::marker(&self.db, &self.project_id).ok();
+        let mut w = self.watch();
+        // 收场后的新回合把监视重新打开；并把 marker 钉到当下，免得
+        // 下一拍 stall_tick 把刚记下的动静当成「新一轮边界」清掉。
+        if w.status == crate::stallwatch::Status::Closed {
+            w.reset_episode();
+        }
+        if progressed {
+            w.seg = Segment::default();
+        }
+        w.instruction = instruction;
+        w.last = Some(Seen { last, at, snap });
+        if let Some(m) = marker {
+            w.marker = Some(m);
+        }
+    }
+
+    fn stall_note_held(&self, owner_body: Option<&str>) {
+        use crate::stallwatch::{Last, Seen};
+        let snap = crate::stallwatch::fingerprint(&self.db, &self.project_id).unwrap_or_default();
+        let at = self.stall_clock.now();
+        let marker = crate::stallwatch::marker(&self.db, &self.project_id).ok();
+        let mut w = self.watch();
+        if w.status == crate::stallwatch::Status::Closed {
+            w.reset_episode();
+        }
+        if let Some(b) = owner_body {
+            w.instruction = b.to_string();
+        }
+        w.last = Some(Seen {
+            last: Last::Held,
+            at,
+            snap,
+        });
+        if let Some(m) = marker {
+            w.marker = Some(m);
+        }
+    }
+
+    /// 失速监视一拍。壳层定时调；测试配假钟直接调。
+    /// 三支都不拨阶段指针、不盖章、不远程发布——动作只有重触发、
+    /// 唤醒项目经理做封闭选择、入失速卡、写工作台注记。
+    pub fn stall_tick(&self) -> Result<StallTick, ApiError> {
+        use crate::stallwatch::{self as sw, Last, LastKind, Obs, Segment, Status, Verdict};
+        if self.turn_depth.load(Ordering::SeqCst) > 0 {
+            return Ok(StallTick::Wait("in_flight"));
+        }
+        let started = std::time::Instant::now();
+        let now = self.stall_clock.now();
+        let marker = sw::marker(&self.db, &self.project_id)?;
+        let frozen = sw::frozen(&self.db, &self.project_id)?;
+        let fp = sw::fingerprint(&self.db, &self.project_id)?;
+        let owner_waits = sw::owner_waits(&self.db, &self.project_id)?;
+        let review_rework = sw::review_rework(&self.db, &self.project_id)?;
+        let has_pm = self.roster()?.iter().any(|r| r == crate::pm_route::PM_ROLE);
+        let mut w = self.watch();
+        if w.marker.as_ref() != Some(&marker) {
+            // 第一拍只记边界，不当作「新一轮」。
+            // 回合记账会把 marker 钉到当下，所以刚记下的动静不会被这里清掉。
+            if w.marker.is_some() {
+                w.reset_episode();
+            }
+            w.marker = Some(marker);
+        }
+        if frozen {
+            w.frozen_seen = true;
+        } else if w.frozen_seen {
+            // 暂停期间时钟不走：恢复那一拍重新起算。
+            w.frozen_seen = false;
+            if let Some(s) = w.last.as_mut() {
+                s.at = now;
+            }
+            if let Some(t) = w.investigation_pending_since.as_mut() {
+                *t = now;
+            }
+        }
+        if w.status == Status::Open {
+            let moved = w.last.as_ref().is_some_and(|s| s.snap != fp);
+            if moved {
+                // 上次动静之后有进度（例如负责人从控制通道盖了章）：新的一段。
+                if let Some(s) = w.last.as_mut() {
+                    s.snap = fp.clone();
+                    s.at = now;
+                    s.last = Last::Replied { progressed: true };
+                }
+                w.seg = Segment::default();
+                w.investigation_pending_since = None;
+            }
+        }
+        let (last_kind, silent) = match w.last.as_ref() {
+            None => (LastKind::None, None),
+            Some(s) => (
+                s.last.kind(),
+                match &s.last {
+                    Last::Silent {
+                        agent_id,
+                        role,
+                        instruction,
+                    } => Some((agent_id.clone(), role.clone(), instruction.clone())),
+                    _ => None,
+                },
+            ),
+        };
+        let speaker_active = match &silent {
+            Some((aid, _, _)) => {
+                self.db
+                    .conn()
+                    .query_row("SELECT status FROM agents WHERE id=?1", [aid], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .ok()
+                    .as_deref()
+                    == Some("active")
+            }
+            None => false,
+        };
+        let obs = Obs {
+            in_flight: false,
+            frozen,
+            owner_waits,
+            review_rework,
+            subagent_pending: self.tasks.any_running_subagent(),
+            speaker_active,
+            has_pm,
+            elapsed: w
+                .last
+                .as_ref()
+                .map(|s| now.saturating_duration_since(s.at))
+                .unwrap_or_default(),
+            investigation_pending: w
+                .investigation_pending_since
+                .map(|t| now.saturating_duration_since(t)),
+            budget: self.stall_policy.budget,
+        };
+        match sw::judge(&obs, last_kind, w.seg, w.status) {
+            Verdict::Wait(reason) => Ok(StallTick::Wait(reason)),
+            Verdict::Retrigger => {
+                let Some((aid, role, instruction)) = silent else {
+                    return Ok(StallTick::Wait("no_speaker"));
+                };
+                w.seg.retriggered = true;
+                drop(w);
+                self.stall_retrigger(&aid, &role, &instruction, "watch", started)
+            }
+            Verdict::Investigate => {
+                w.seg.investigated = true;
+                drop(w);
+                self.stall_investigate("watch", started)
+            }
+            Verdict::Card { branch, retry } => {
+                let speaker = silent.map(|(aid, role, _)| (aid, role));
+                let instruction = w.instruction.clone();
+                drop(w);
+                self.stall_card(branch, retry, speaker, &instruction, has_pm, started)
+            }
+        }
+    }
+
+    /// 无回复：对同一个 Agent 新开一回合，和恢复卡「继续」同一条路
+    /// （`run_turn_agent`，按确切 id）。不新落负责人消息——原指令只进简报。
+    fn stall_retrigger(
+        &self,
+        aid: &str,
+        role: &str,
+        instruction: &str,
+        by: &str,
+        started: std::time::Instant,
+    ) -> Result<StallTick, ApiError> {
+        let run = self.active_run()?;
+        let run_id = run.as_ref().map(|r| r.id.as_str());
+        self.db.append_event(
+            &self.project_id,
+            EventKind::System,
+            json!({"kind": "stall_retrigger", "branch": "no_reply", "by": by}),
+            Some(aid),
+            run_id,
+        )?;
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            false,
+            Some(&self.project_id),
+            Some(aid),
+            run_id,
+            None,
+            "stall",
+            &format!("retrigger:no_reply:{by}"),
+            started,
+        );
+        self.watch().retrigger_original = Some(instruction.to_string());
+        if let Err(e) = self.run_turn_agent(
+            aid,
+            role,
+            &crate::stallwatch::retrigger_input(instruction),
+            &[],
+            false,
+        ) {
+            // 回合没跑起来也不回滚记账：下一拍仍无回复就入卡，不第三次自动重试。
+            log::warn!("stall retrigger failed: agent={aid}: {e}");
+        }
+        Ok(StallTick::Retriggered {
+            agent_id: aid.to_string(),
+        })
+    }
+
+    /// 空转：唤醒项目经理做封闭选择（派给花名册里的一个角色，或先不派活）。
+    /// 派活沿用项目经理既有路由 `closed_choice`；这里只收三种结局。
+    fn stall_investigate(
+        &self,
+        by: &str,
+        started: std::time::Instant,
+    ) -> Result<StallTick, ApiError> {
+        let run = self.active_run()?;
+        let run_id = run.as_ref().map(|r| r.id.clone());
+        let pm_id = self.agent_by_role(crate::pm_route::PM_ROLE).ok();
+        let high_water: i64 = self.db.conn().query_row(
+            "SELECT COALESCE(MAX(id),0) FROM events WHERE project_id=?1",
+            [&self.project_id],
+            |r| r.get(0),
+        )?;
+        self.db.append_event(
+            &self.project_id,
+            EventKind::System,
+            json!({"kind": "stall_investigation", "branch": "idle_spin", "by": by}),
+            pm_id.as_deref(),
+            run_id.as_deref(),
+        )?;
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            false,
+            Some(&self.project_id),
+            pm_id.as_deref(),
+            run_id.as_deref(),
+            None,
+            "stall",
+            &format!("investigate:idle_spin:{by}"),
+            started,
+        );
+        let roster = self.roster()?;
+        let instruction = self.watch().instruction.clone();
+        let body = crate::stallwatch::investigation_body(self.stall_policy.budget, &instruction);
+        let res = self.closed_choice(
+            crate::stallwatch::INVESTIGATION_SPEAKER,
+            &body,
+            &[],
+            false,
+            &roster,
+        );
+        let retry = !self.watch().seg.retry_used;
+        match res {
+            Ok(UnnamedRoute::Dispatched { role, .. }) => Ok(StallTick::Investigated { role }),
+            Ok(UnnamedRoute::Held { .. }) => {
+                self.stall_close("hold", crate::owner_text::stall_hold_closed())?;
+                Ok(StallTick::Closed)
+            }
+            // 回合结束却没有封闭选择：立刻入卡，不另等预算（票 04）。
+            Ok(_) => self.stall_card(
+                crate::stallwatch::Branch::InvestigationTimeout,
+                retry,
+                None,
+                &instruction,
+                true,
+                started,
+            ),
+            Err(e) => {
+                // 三种可能：选了但被派的回合出错（调查本身已有结论）；
+                // 开了回合但没有结论（立刻入卡）；根本没开回合（等满预算再入卡）。
+                let chose: Option<String> = self
+                    .db
+                    .conn()
+                    .query_row(
+                        "SELECT json_extract(payload,'$.role') FROM events
+                         WHERE project_id=?1 AND id>?2 AND kind='pm_routed'
+                           AND json_extract(payload,'$.choice') IS NOT NULL
+                         ORDER BY id LIMIT 1",
+                        rusqlite::params![self.project_id, high_water],
+                        |r| r.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                if let Some(role) = chose {
+                    log::warn!("stall investigation dispatched {role} but the turn failed: {e}");
+                    return Ok(StallTick::Investigated { role });
+                }
+                let opened: i64 = self.db.conn().query_row(
+                    "SELECT COUNT(*) FROM events
+                     WHERE project_id=?1 AND id>?2 AND kind='system'
+                       AND json_extract(payload,'$.kind')='request_envelope'",
+                    rusqlite::params![self.project_id, high_water],
+                    |r| r.get(0),
+                )?;
+                if opened > 0 {
+                    log::warn!("stall investigation ended without a choice: {e}");
+                    return self.stall_card(
+                        crate::stallwatch::Branch::InvestigationTimeout,
+                        retry,
+                        None,
+                        &instruction,
+                        true,
+                        started,
+                    );
+                }
+                log::warn!("stall investigation did not open: {e}");
+                self.watch().investigation_pending_since = Some(self.stall_clock.now());
+                Ok(StallTick::InvestigationPending)
+            }
+        }
+    }
+
+    /// 入失速卡 + 工作台注记。自治不代点：卡种 stall 不在任何放行面上。
+    fn stall_card(
+        &self,
+        branch: crate::stallwatch::Branch,
+        retry: bool,
+        speaker: Option<(String, String)>,
+        instruction: &str,
+        has_pm: bool,
+        started: std::time::Instant,
+    ) -> Result<StallTick, ApiError> {
+        use crate::stallwatch::Branch;
+        let run = self.active_run()?;
+        let run_id = run.as_ref().map(|r| r.id.clone());
+        let pm = self
+            .agent_by_role(crate::pm_route::PM_ROLE)
+            .ok()
+            .map(|id| (id, crate::pm_route::PM_ROLE.to_string()));
+        // 无回复卡归那位没回复的 Agent（再试一次重触发它）；另两支归项目经理。
+        let (agent, role) = match branch {
+            Branch::NoReply => speaker.clone().unzip(),
+            _ => pm.clone().unzip(),
+        };
+        let note = match branch {
+            Branch::NoReply => {
+                crate::owner_text::stall_no_reply_card(role.as_deref().unwrap_or_default())
+            }
+            Branch::IdleSpin if !has_pm => crate::owner_text::stall_idle_no_pm().to_string(),
+            Branch::IdleSpin => crate::owner_text::stall_idle_after_investigation().to_string(),
+            Branch::InvestigationTimeout => {
+                crate::owner_text::stall_investigation_timeout().to_string()
+            }
+        };
+        let qid = crate::cards::enqueue(
+            &self.db,
+            &self.project_id,
+            agent.as_deref(),
+            crate::cards::CardKind::Stall,
+            json!({
+                "branch": branch.as_str(),
+                "retry": retry,
+                "role": role,
+                "instruction": instruction,
+                "run_id": run_id,
+            }),
+            None,
+        )?;
+        self.db.append_message(
+            &self.project_id,
+            crate::pm_route::WORKBENCH_AUTHOR,
+            &note,
+            &[],
+            &[],
+            None,
+            run_id.as_deref(),
+        )?;
+        self.db.append_event(
+            &self.project_id,
+            EventKind::System,
+            json!({"kind": "stall_carded", "branch": branch.as_str(),
+                   "question_id": qid, "retry": retry}),
+            agent.as_deref(),
+            run_id.as_deref(),
+        )?;
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            true,
+            Some(&self.project_id),
+            agent.as_deref(),
+            run_id.as_deref(),
+            None,
+            "stall",
+            &format!("card:{}", branch.as_str()),
+            started,
+        );
+        let mut w = self.watch();
+        w.status = crate::stallwatch::Status::Carded;
+        w.investigation_pending_since = None;
+        Ok(StallTick::Carded {
+            question_id: qid,
+            branch,
+            retry,
+        })
+    }
+
+    /// 失速收场：写工作台注记，不入卡、不再叫醒，直到新的负责人消息或新的激活。
+    fn stall_close(&self, reason: &str, note: &str) -> Result<(), ApiError> {
+        let run = self.active_run()?;
+        let run_id = run.as_ref().map(|r| r.id.as_str());
+        self.db.append_message(
+            &self.project_id,
+            crate::pm_route::WORKBENCH_AUTHOR,
+            note,
+            &[],
+            &[],
+            None,
+            run_id,
+        )?;
+        self.db.append_event(
+            &self.project_id,
+            EventKind::System,
+            json!({"kind": "stall_closed", "reason": reason}),
+            None,
+            run_id,
+        )?;
+        let mut w = self.watch();
+        w.status = crate::stallwatch::Status::Closed;
+        w.seg = Default::default();
+        w.investigation_pending_since = None;
+        Ok(())
+    }
+
+    /// 失速卡「再试一次」：只重复刚失败的那一动——无回复重触发同一个 Agent，
+    /// 空转/调查超时再唤醒项目经理一轮。同一段失速只给一轮，卡上不改派。
+    pub fn stall_retry(&self, qid: &str) -> Result<StallTick, ApiError> {
+        use crate::stallwatch::Branch;
+        let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Stall)?;
+        let p = &card.payload;
+        if p["retry"] != json!(true) {
+            return Err(ApiError::BadInput("this stall card offers no retry".into()));
+        }
+        let branch = p["branch"]
+            .as_str()
+            .and_then(Branch::from_name)
+            .ok_or_else(|| ApiError::BadInput("stall card without a branch".into()))?;
+        let instruction = p["instruction"].as_str().unwrap_or_default().to_string();
+        crate::cards::answer(&self.db, qid, "owner")?;
+        let started = std::time::Instant::now();
+        let fp = crate::stallwatch::fingerprint(&self.db, &self.project_id)?;
+        {
+            let mut w = self.watch();
+            // 销掉的这张卡不算进度，否则下一拍会把「再试一次已用」清零。
+            if let Some(s) = w.last.as_mut() {
+                s.snap = fp;
+            }
+            w.status = crate::stallwatch::Status::Open;
+            w.seg.retry_used = true;
+            w.investigation_pending_since = None;
+            if !instruction.is_empty() {
+                w.instruction = instruction.clone();
+            }
+            match branch {
+                Branch::NoReply => w.seg.retriggered = true,
+                _ => w.seg.investigated = true,
+            }
+        }
+        match branch {
+            Branch::NoReply => {
+                let aid = card
+                    .agent_id
+                    .clone()
+                    .ok_or_else(|| ApiError::BadInput("no-reply card without an agent".into()))?;
+                let role: String = self.db.conn().query_row(
+                    "SELECT role FROM agents WHERE id=?1",
+                    [&aid],
+                    |r| r.get(0),
+                )?;
+                self.stall_retrigger(&aid, &role, &instruction, "owner", started)
+            }
+            _ => self.stall_investigate("owner", started),
+        }
+    }
+
+    /// 失速卡「知道了」：这一次失速收场。
+    pub fn stall_ack(&self, qid: &str) -> Result<(), ApiError> {
+        crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Stall)?;
+        crate::cards::answer(&self.db, qid, "owner")?;
+        self.stall_close("ack", crate::owner_text::stall_ack_closed())
+    }
+
     fn pack(&self) -> Result<&PackDef, ApiError> {
         self.pack.as_ref().ok_or(ApiError::NoStage)
     }
@@ -1992,5 +2584,7 @@ impl Workbench {
 // 文本指令与 token 解析已迁往 `commands.rs`（中立模块，arch-review 票 01）：
 // turn.rs 曾为此反向依赖本门面（诊断卡 D08）。
 
+#[cfg(test)]
+mod stall_tests;
 #[cfg(test)]
 mod tests;

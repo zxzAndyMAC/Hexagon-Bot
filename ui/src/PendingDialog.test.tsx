@@ -199,4 +199,49 @@ describe('待决弹窗（hands-free 票 05）', () => {
     await act(async () => { btn!.click() })
     expect(reject).toHaveBeenCalledWith('需求', '把验收写具体')
   })
+
+  it('stall-watch 票 02：失速卡两钮，tooltip 显示当前绑定，按钮各走各的命令', async () => {
+    const retry = vi.spyOn(api, 'stallRetry').mockResolvedValue()
+    const ack = vi.spyOn(api, 'stallAck').mockResolvedValue()
+    const { el, root: r } = await render(
+      <PendingCard
+        top
+        q={card({ id: 'qs', kind: 'stall', payload: { branch: 'no_reply', retry: true, role: '后端' } })}
+      />,
+    )
+    root = r
+    const btns = [...el.querySelectorAll('button')]
+    expect(btns.map((b) => b.textContent?.split(' ')[0])).toEqual(['再试一次', '知道了'])
+    expect(btns[0].title).toBe(formatBinding(bindingFor('approve')))
+    expect(btns[1].title).toBe(formatBinding(bindingFor('reject')))
+    expect(el.textContent).toContain('重触发一次后仍没有可见回复')
+    expect(el.textContent).not.toMatch(/改派/)
+    await act(async () => { btns[0].click() })
+    expect(retry).toHaveBeenCalledWith('qs')
+    await act(async () => { btns[1].click() })
+    expect(ack).toHaveBeenCalledWith('qs')
+  })
+
+  it('stall-watch 票 02：同一段失速的第二张卡只留「知道了」', async () => {
+    const { el, root: r } = await render(
+      <PendingCard
+        top
+        q={card({ id: 'qs2', kind: 'stall', payload: { branch: 'no_reply', retry: false, role: '后端' } })}
+      />,
+    )
+    root = r
+    const btns = [...el.querySelectorAll('button')]
+    expect(btns).toHaveLength(1)
+    expect(btns[0].textContent).toContain('知道了')
+    expect(el.textContent).toContain('只剩「知道了」')
+  })
+
+  it('stall-watch 票 03：无项目经理的空转卡同样没有再试一次', async () => {
+    const { el, root: r } = await render(
+      <PendingCard top={false} q={card({ id: 'qs3', kind: 'stall', agent_id: null, payload: { branch: 'idle_spin', retry: false } })} />,
+    )
+    root = r
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['知道了'])
+    expect(el.textContent).toContain('有回复，但进度没有变化')
+  })
 })

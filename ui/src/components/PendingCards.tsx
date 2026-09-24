@@ -150,8 +150,8 @@ function InlineDiff({ proposalId }: { proposalId: string }) {
   )
 }
 
-function Btn({ onClick, primary, danger, children }: {
-  onClick: () => Promise<unknown>; primary?: boolean; danger?: boolean; children: React.ReactNode
+function Btn({ onClick, primary, danger, title, children }: {
+  onClick: () => Promise<unknown>; primary?: boolean; danger?: boolean; title?: string; children: React.ReactNode
 }) {
   const [busy, setBusy] = useState(false)
   const invalidate = useUiStore((s) => s.invalidate)
@@ -159,6 +159,7 @@ function Btn({ onClick, primary, danger, children }: {
   return (
     <button
       className={`btn ${primary ? 'primary' : ''} ${danger ? 'danger' : ''}`}
+      title={title}
       disabled={busy}
       onClick={async () => {
         setBusy(true)
@@ -382,6 +383,27 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <Btn primary onClick={() => api.recoverRun(String(p.run_id))}>{t('cards.recover')}{top && ` ${approveTip}`}</Btn>
+        </div>
+      </CardShell>
+    )
+  }
+
+  // stall-watch 票 02–04：失速卡只有两钮，卡上不改派。再试一次同一段失速
+  // 只给一轮——payload.retry=false（或无项目经理）时只渲染「知道了」。
+  if (q.kind === 'stall') {
+    const branch = String(p.branch ?? '')
+    const canRetry = p.retry === true
+    return (
+      <CardShell tone="flag" icon="warn" title={`${t('cards.stall')} · ${t(`cards.stall_${branch}`, { defaultValue: branch })}`}>
+        {p.role != null && <div className="mono dim" style={{ fontSize: 12 }}>{String(p.role)}</div>}
+        <div className="dim3" style={{ fontSize: 11, margin: '4px 0 8px' }}>
+          {canRetry ? t('cards.stallHint') : t('cards.stallAckOnly')}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {canRetry && (
+            <Btn primary title={approveTip} onClick={() => api.stallRetry(q.id)}>{t('cards.stallRetry')}{top && ` ${approveTip}`}</Btn>
+          )}
+          <Btn title={rejectTip} onClick={() => api.stallAck(q.id)}>{t('cards.stallAck')}{top && ` ${rejectTip}`}</Btn>
         </div>
       </CardShell>
     )

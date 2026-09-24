@@ -1636,6 +1636,40 @@ fn upgrade_to_pack(state: tauri::State<AppState>, pack_name: String) -> Result<(
     with_wb_mut(&state, |wb| wb.upgrade_to_pack(pack))
 }
 
+/// 失速卡「再试一次」（stall-watch 票 02/04）：会跑回合或唤醒项目经理，turn 组。
+#[tauri::command(async)]
+fn stall_retry(state: tauri::State<AppState>, question_id: String) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.stall_retry(&question_id).map(|_| ()))
+}
+
+/// 失速卡「知道了」：写注记、销卡、收场。要改工作台里的监视状态，走 wb。
+#[tauri::command(async)]
+fn stall_ack(state: tauri::State<AppState>, question_id: String) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.stall_ack(&question_id))
+}
+
+/// 失速监视的节拍（ADR 0074：监视必须在没有任何 Agent 发言时也能跑）。
+/// try_lock 拿不到 = 有回合或裁决占着工作台 = 回合在飞，这一拍不计。
+/// 被否决：阻塞 lock——节拍会排在回合后面，回合一结束就补跑一拍，
+/// 等于把在飞时间算进时钟。
+const STALL_TICK: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn spawn_stall_watch(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(STALL_TICK);
+        let state = app.state::<AppState>();
+        let Ok(g) = state.wb.try_lock() else {
+            // D01-ok: 失速节拍是 mutation 路径（可能重触发/入卡）；拿不到锁即回合在飞
+            continue;
+        };
+        if let Some(wb) = g.as_ref() {
+            if let Err(e) = wb.stall_tick() {
+                log::warn!("stall tick: {e}");
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1701,6 +1735,7 @@ pub fn run() {
                 },
                 boot,
             );
+            spawn_stall_watch(app.handle().clone());
             Ok(())
         })
         .manage(AppState {
@@ -1761,6 +1796,8 @@ pub fn run() {
             usage_context_pressure,
             open_stage,
             recover_run,
+            stall_retry,
+            stall_ack,
             override_checks,
             agent_detail,
             update_agent,

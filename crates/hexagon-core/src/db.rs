@@ -89,6 +89,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0021_code_index",
         include_str!("../migrations/0021_code_index.sql"),
     ),
+    (
+        "0022_stall_card",
+        include_str!("../migrations/0022_stall_card.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

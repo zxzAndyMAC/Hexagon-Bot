@@ -4,9 +4,11 @@ import { useUiStore } from './store'
 import { bindingFor, matches } from './keymap'
 import i18n from './i18n'
 
-// 严重度序：恢复/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章
+// 严重度序：恢复/失速/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章
+// 失速与恢复同档：两者都是「工作停了，不点不会自己动」（ADR 0074）。
 const SEVERITY: Record<string, number> = {
   recovery: 0,
+  stall: 0,
   publish: 0,
   install: 0,
   grant: 0,
@@ -29,6 +31,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'publish') return api.confirmPublish(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
   if (q.kind === 'recovery') return api.recoverRun(String(p.run_id))
+  if (q.kind === 'stall' && p.retry === true) return api.stallRetry(q.id)
   if (q.kind === 'install') return api.resolveInstall(q.id, true)
   if (q.kind === 'grant') return api.confirmGrant(q.id, true)
 }
@@ -42,6 +45,7 @@ export async function rejectQuestion(q: PendingQuestion) {
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, false)
   if (q.kind === 'install') return api.resolveInstall(q.id, false)
   if (q.kind === 'grant') return api.confirmGrant(q.id, false)
+  if (q.kind === 'stall') return api.stallAck(q.id)
 }
 
 /// 逆建议驳回的留痕（ui-audit 票 07 / P2-15）：owner 驳回一张
@@ -59,6 +63,7 @@ export function kindTitleKey(q: PendingQuestion): string {
   if (q.kind === 'stamp') return q.payload.proposal_id ? 'cards.proposalStamp' : 'cards.stageStamp'
   if (q.kind === 'publish') return 'cards.publish'
   if (q.kind === 'recovery') return 'cards.recovery'
+  if (q.kind === 'stall') return 'cards.stall'
   if (q.kind === 'install') return 'cards.install'
   if (q.kind === 'grant') return 'cards.grant'
   if (q.kind === 'escalation') return 'cards.escalation'
@@ -79,6 +84,7 @@ export type KeyOutcome =
   | 'repeat'
   | 'blocked-publish'
   | 'blocked-final'
+  | 'blocked-stall'
   | 'approved'
   | 'rejected'
 
@@ -107,6 +113,12 @@ export async function handlePendingKey(
   if (isReject && q.kind === 'stamp' && !q.payload.proposal_id && q.payload.final_acceptance === true) {
     useUiStore.getState().pushToast(i18n.t('decisions.finalNeedsForm'))
     return 'blocked-final'
+  }
+  // stall-watch 票 02：失速卡只剩「知道了」时，批准键没有可批准的动作——
+  // 不拿它顶替「知道了」，收场必须是负责人看清后按的那个键。
+  if (isApprove && q.kind === 'stall' && q.payload.retry !== true) {
+    useUiStore.getState().pushToast(i18n.t('decisions.stallNoRetry'))
+    return 'blocked-stall'
   }
   adjudicating = true
   try {
