@@ -428,7 +428,7 @@ export default {
     nav_about: 'À propos',
     nav_logs: 'Journaux',
     nav_prompts: 'Prompts',
-    prompts_intro: 'Les instructions fixes que l’atelier donne à chaque agent. Les agents reçoivent l’original anglais ; la colonne de droite est une traduction de référence dans la langue de votre interface, produite par l’emplacement du modèle de traduction.',
+    prompts_intro: 'Les instructions fixes que l’atelier donne à chaque agent. Les agents reçoivent l’original anglais ; l’onglet « Traduction de référence » affiche une traduction dans la langue de votre interface, produite par l’emplacement du modèle de traduction.',
     prompts_original: 'Original anglais (envoyé au modèle)',
     prompts_reference: 'Traduction de référence',
     prompts_retranslate: 'Retraduire',

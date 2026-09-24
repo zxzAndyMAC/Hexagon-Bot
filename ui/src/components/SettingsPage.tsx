@@ -1559,11 +1559,11 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
           ))}
         </div>
         {/* 票 10：内容列居中；settings-density 01 owner 裁决——list|detail 分区去 cap 满宽流式（Cherry 同款），平铺表单分区保留 760 居中 */}
-        {/* 日志分区例外：容器不滚——标题/开关/筛选条钉住，滚动只发生在记录列表内部 */}
+        {/* 日志/提示词分区例外：容器不滚——标题/工具行钉住，滚动只发生在内部列表与详情内 */}
         <div
           style={{
             flex: 1, padding: '18px 28px', maxWidth: WIDE_SECTIONS.has(section) ? 'none' : 760, margin: '0 auto', width: '100%',
-            ...(section === 'logs'
+            ...(section === 'logs' || section === 'prompts'
               ? { display: 'flex', flexDirection: 'column', overflowY: 'hidden' }
               : { overflowY: 'auto' }),
           }}

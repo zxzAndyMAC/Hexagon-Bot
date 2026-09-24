@@ -428,7 +428,7 @@ export default {
     nav_about: 'Acerca de',
     nav_logs: 'Registros',
     nav_prompts: 'Prompts',
-    prompts_intro: 'Las instrucciones fijas que el banco de trabajo da a cada agente. Los agentes reciben el original en inglés; la columna derecha es una traducción de referencia a tu idioma de interfaz, generada por la ranura del modelo de traducción.',
+    prompts_intro: 'Las instrucciones fijas que el banco de trabajo da a cada agente. Los agentes reciben el original en inglés; la pestaña «Traducción de referencia» muestra una traducción a tu idioma de interfaz, generada por la ranura del modelo de traducción.',
     prompts_original: 'Original en inglés (enviado al modelo)',
     prompts_reference: 'Traducción de referencia',
     prompts_retranslate: 'Traducir de nuevo',

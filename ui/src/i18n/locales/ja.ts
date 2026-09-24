@@ -428,7 +428,7 @@ export default {
     nav_about: '情報',
     nav_logs: 'ログ',
     nav_prompts: 'プロンプト',
-    prompts_intro: 'ワークベンチが各エージェントに渡す固定の指示です。エージェントが受け取るのは英語の原文で、右列は翻訳モデルスロットが生成した、現在の表示言語による参考訳です。',
+    prompts_intro: 'ワークベンチが各エージェントに渡す固定の指示です。エージェントが受け取るのは英語の原文で、「参考訳」タブには翻訳モデルスロットが生成した現在の表示言語による参考訳が表示されます。',
     prompts_original: '英語の原文（モデルに送信）',
     prompts_reference: '参考訳',
     prompts_retranslate: '再翻訳',

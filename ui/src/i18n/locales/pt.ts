@@ -428,7 +428,7 @@ export default {
     nav_about: 'Sobre',
     nav_logs: 'Registros',
     nav_prompts: 'Prompts',
-    prompts_intro: 'As instruções fixas que a bancada entrega a cada agente. Os agentes recebem o original em inglês; a coluna da direita é uma tradução de referência para o idioma da sua interface, gerada pelo slot do modelo de tradução.',
+    prompts_intro: 'As instruções fixas que a bancada entrega a cada agente. Os agentes recebem o original em inglês; a aba «Tradução de referência» mostra uma tradução para o idioma da sua interface, gerada pelo slot do modelo de tradução.',
     prompts_original: 'Original em inglês (enviado ao modelo)',
     prompts_reference: 'Tradução de referência',
     prompts_retranslate: 'Traduzir novamente',

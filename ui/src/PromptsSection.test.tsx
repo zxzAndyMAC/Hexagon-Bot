@@ -21,6 +21,10 @@ async function render(onGoModels = () => {}) {
   return { el, root }
 }
 
+const tabs = (el: HTMLElement) => [...el.querySelectorAll('[role="tab"]')] as HTMLElement[]
+const pick = (el: HTMLElement, id: string) =>
+  [...el.querySelectorAll('[data-prompt-id]')].find((n) => n.getAttribute('data-prompt-id') === id) as HTMLElement
+
 describe('PromptsSection（prompt-engineering 票 11）', () => {
   afterEach(async () => {
     vi.restoreAllMocks()
@@ -38,7 +42,7 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     act(() => root.unmount())
   })
 
-  it('非英文界面：原文与参考译文并排，重新翻译带 force', async () => {
+  it('非英文界面：译文走页签，重新翻译带 force；页签态跨条目保持', async () => {
     await i18n.changeLanguage('zh-CN')
     vi.spyOn(api, 'promptCatalog').mockResolvedValue(CATALOG)
     const tr = vi.spyOn(api, 'translatePrompts').mockResolvedValue({
@@ -50,9 +54,13 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     })
     const { el, root } = await render()
     expect(tr).toHaveBeenCalledWith('zh-CN', false)
-    const translated = [...el.querySelectorAll('[data-translation]')].map((n) => n.textContent)
-    expect(translated).toEqual(['# Hexagon 工作台', '替换一段精确字符串'])
-    expect(el.textContent).toContain('参考译文')
+    // 默认停在原文页签：选中第一条（左列首项）
+    expect(el.querySelector('[data-translation]')).toBeNull()
+    await act(async () => { tabs(el)[1].click() })
+    expect(el.querySelector('[data-translation]')!.textContent).toBe('# Hexagon 工作台')
+    // 换条目页签不回落原文——逐条审译文不用每行重切
+    await act(async () => { pick(el, 'tool.fs_patch').click() })
+    expect(el.querySelector('[data-translation]')!.textContent).toBe('替换一段精确字符串')
     const again = [...el.querySelectorAll('button')].find((b) => b.textContent === '重新翻译')!
     await act(async () => { again.click() })
     expect(tr).toHaveBeenLastCalledWith('zh-CN', true)
@@ -71,12 +79,14 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     const { el, root } = await render()
     await act(async () => { await i18n.changeLanguage('fr') })
     await act(async () => { releaseJa({ no_model: false, entries: [{ id: 'workbench.base', text: 'JA', error: null }, { id: 'tool.fs_patch', text: 'JA2', error: null }] }) })
-    const translated = [...el.querySelectorAll('[data-translation]')].map((n) => n.textContent)
-    expect(translated).toEqual(['FR', 'FR2'])
+    await act(async () => { tabs(el)[1].click() })
+    expect(el.querySelector('[data-translation]')!.textContent).toBe('FR')
+    await act(async () => { pick(el, 'tool.fs_patch').click() })
+    expect(el.querySelector('[data-translation]')!.textContent).toBe('FR2')
     act(() => root.unmount())
   })
 
-  it('没有可用模型：整页英文 + 去模型设置；某组失败只在该组提示', async () => {
+  it('没有可用模型：整页英文 + 去模型设置；单条失败只在该条译文页签提示', async () => {
     await i18n.changeLanguage('ja')
     vi.spyOn(api, 'promptCatalog').mockResolvedValue(CATALOG)
     vi.spyOn(api, 'translatePrompts').mockResolvedValue({ no_model: true, entries: [] })
@@ -97,10 +107,12 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
       ],
     })
     const second = await render()
+    await act(async () => { tabs(second.el)[1].click() })
     const alerts = [...second.el.querySelectorAll('[role="alert"]')].map((n) => n.textContent)
     // 后端只给原因码，文案由界面按语言给出（code-review：别把英文原句漏给负责人）。
     expect(alerts).toEqual(['翻訳に失敗しました：翻訳結果の形式が正しくありません'])
-    expect(second.el.textContent).toContain('正確な文字列を置換')
+    await act(async () => { pick(second.el, 'tool.fs_patch').click() })
+    expect(second.el.querySelector('[data-translation]')!.textContent).toBe('正確な文字列を置換')
     act(() => second.root.unmount())
   })
 })

@@ -428,7 +428,7 @@ export default {
     nav_about: '关于',
     nav_logs: '日志',
     nav_prompts: '提示词',
-    prompts_intro: '工作台交给每个 Agent 的固定指令。Agent 收到的是英文原文；右栏是按当前界面语言生成的参考译文，由翻译模型槽生成。',
+    prompts_intro: '工作台交给每个 Agent 的固定指令。Agent 收到的是英文原文；「参考译文」页签是按当前界面语言生成的译文，由翻译模型槽生成。',
     prompts_original: '英文原文（发给模型）',
     prompts_reference: '参考译文',
     prompts_retranslate: '重新翻译',
