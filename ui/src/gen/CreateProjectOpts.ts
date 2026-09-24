@@ -2,6 +2,13 @@
 import type { PackDef } from "./PackDef";
 import type { RoleDef } from "./RoleDef";
 
+/**
+ * `create_project` 命令的入参 DTO。原本在 src-tauri 定义，但 ts-rs 跨 crate
+ * 引用时把依赖类型的 `export_to` 原样写进 import 路径（src-tauri 的
+ * `../../ui/src/gen/` × 依赖的 `../../../ui/src/gen/` 拼出仓外路径，
+ * 类型检查只靠邻目录的巧合文件通过）。定义挪到与 RoleDef/PackDef 同 crate，
+ * import 永远生成 `./`。
+ */
 export type CreateProjectOpts = { dir: string, name: string, roles: Array<string>, 
 /**
  * 角色定制覆盖（ADR 0057）：自定义模板与向导改过的角色传完整定义；

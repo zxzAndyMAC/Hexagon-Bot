@@ -179,6 +179,7 @@ mod tests {
                 tiers: crate::artifacts::TierMap::new(),
                 sessions: Default::default(),
                 caps: Default::default(),
+                ..Default::default()
             },
             dir,
         )

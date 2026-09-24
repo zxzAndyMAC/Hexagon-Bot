@@ -1,5 +1,6 @@
 use super::*;
 use crate::provider::{ModelProvider, ProviderError, ScriptedProvider};
+use crate::tools::CallOutcome;
 use crate::trace::{Event, TimelineItem};
 use crate::turn::{text_response, tool_response};
 use serde_json::Value;
@@ -1977,6 +1978,7 @@ fn artifact_content_at_reads_each_version() {
         tiers: crate::artifacts::TierMap::new(),
         sessions: Default::default(),
         caps: Default::default(),
+        ..Default::default()
     };
     let d = |c: &str| {
         crate::artifacts::deliver(
@@ -2433,7 +2435,12 @@ fn us59_interrupted_run_recovers_by_owner() {
         Some(pack.clone()),
     )
     .unwrap();
-    let prov = Arc::new(ScriptedProvider::new(vec![text_response("go")]));
+    // 脚本两件：恢复重触发一件 + 恢复后的手动回合一件（票 NR-03：
+    // 恢复即重触发——第一件脚本被自动重启的回合消耗）。
+    let prov = Arc::new(ScriptedProvider::new(vec![
+        text_response("recovered"),
+        text_response("go"),
+    ]));
     wb.register_provider("default", prov.clone());
     assert_eq!(stage_status(&wb).unwrap()[0]["state"], "interrupted");
     let qs = pending_questions(&wb).unwrap();
@@ -2451,7 +2458,8 @@ fn us59_interrupted_run_recovers_by_owner() {
     // 中断痕迹已闭环：轨迹里补了 turn_failed(interrupted_shutdown)
     let evs = events(&wb, Some(&[EventKind::TurnFailed])).unwrap();
     assert_eq!(evs.len(), 1);
-    // 负责人按继续——恢复 active、卡销、零模型调用
+    // 负责人按继续——恢复 active、卡销、受影响 agent 自动重触发（票 NR-03：
+    // 原指令靠未推进的简报游标重读，这里只断言重启确实发生且记父 agent）。
     wb.recover_run(&run_id).unwrap();
     assert_eq!(stage_status(&wb).unwrap()[0]["state"], "active");
     assert!(pending_questions(&wb)
@@ -2459,10 +2467,14 @@ fn us59_interrupted_run_recovers_by_owner() {
         .iter()
         .all(|q| q["kind"] != "recovery"));
     assert_eq!(events(&wb, Some(&[EventKind::Resumed])).unwrap().len(), 1);
-    assert!(prov.recorded().is_empty());
+    assert_eq!(
+        prov.recorded().len(),
+        1,
+        "recover retriggers the owner agent"
+    );
     // 恢复后回合正常
     wb.run_turn("产品策划", "go").unwrap();
-    assert_eq!(prov.recorded().len(), 1);
+    assert_eq!(prov.recorded().len(), 2);
     // 第三轮：再重开——幂等，不重复出卡
     let wb = Workbench::open(
         dir.path(),
@@ -2662,20 +2674,25 @@ fn us7_custom_role_runs_a_turn() {
     assert_eq!(calls.len(), 1); // 自定义角色正常消耗模型调用
 }
 
-/// US36：只读研究助手——嵌套回合结构性不可写、引用进回包、用量记父。
+/// code-search 票 04/07：子代理派遣——嵌套回合结构性不可写、引用进回执、
+/// 用量记父、任务清单收结果。US36 研究助手语义由 subagent 继承：
+/// 只读注册表 → 有界派遣域（搜索/web/测试进来，写/bash/git/再派生仍没有）。
+/// 行为变更说明：回包从 {answer,citations} 改为任务清单回执
+/// {answer,citations:[{path}]}——引用由 fs_read/artifact_read 的实读
+/// 钩子记账，不再靠事件段抓取；嵌套消息不进时间线（走 scope 回执格）。
 #[test]
-fn us36_research_nested_readonly() {
+fn subagent_nested_scope_readonly() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("notes.md"), "fact A").unwrap();
     let mut wb = Workbench::for_test(dir.path(), &["研究"], None).unwrap();
     orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
-    // 脚本序：父→research；嵌套→fs_read → 试写（只读注册表无此工具）
-    //         → 文本作答；父→收尾
+    // 脚本序：父→subagent 派遣；嵌套→fs_read → 试写（派遣注册表无此工具）
+    //         → 文本作答；父→tasks list 收结果 → 收尾
     let prov = Arc::new(ScriptedProvider::new(vec![
         tool_response(vec![(
             "t1",
-            "research",
-            json!({"question": "notes.md 里写了什么"}),
+            "subagent",
+            json!({"task": "notes.md 里写了什么", "title": "查笔记"}),
         )]),
         tool_response(vec![("t2", "fs_read", json!({"path": "notes.md"}))]),
         tool_response(vec![(
@@ -2684,42 +2701,70 @@ fn us36_research_nested_readonly() {
             json!({"path": "x.md", "content": "hack"}),
         )]),
         text_response("观察：notes.md 记录 fact A"),
+        tool_response(vec![("t4", "tasks", json!({"action": "list"}))]),
         text_response("done"),
     ]));
     wb.register_provider("default", prov.clone());
     let out = wb.run_turn("研究", "查资料").unwrap();
     assert_eq!(out, TurnOutcome::Finished);
-    // 嵌套不可写（结构性：fs_write 不在只读注册表）
+    // 嵌套不可写（结构性：fs_write 不在派遣注册表）
     assert!(!dir.path().join("x.md").exists());
-    // 只读注册表清单断言：只有读类 + 无 research（不可再派生）
-    let ro_names: Vec<String> = wb
+    // 派遣注册表清单断言：读/搜/测在场；写/bash/git/web_fetch/subagent 不在
+    let sub_names: Vec<String> = wb
         .registry
-        .readonly()
+        .subagent_scope(&Default::default())
         .defs()
         .iter()
         .map(|d| d.name.clone())
         .collect();
-    assert!(ro_names.contains(&"fs_read".to_string()));
-    assert!(ro_names.contains(&"artifact_read".to_string()));
-    assert!(!ro_names
+    for t in [
+        "fs_read",
+        "fs_find",
+        "fs_grep",
+        "sem_search",
+        "artifact_read",
+        "run_test",
+    ] {
+        assert!(sub_names.contains(&t.to_string()), "missing {t}");
+    }
+    for t in [
+        "fs_write",
+        "fs_patch",
+        "bash",
+        "git_baseline_merge",
+        "web_fetch",
+        "subagent",
+        "tasks",
+    ] {
+        assert!(!sub_names.contains(&t.to_string()), "{t} leaked into scope");
+    }
+    // 任务清单回执：answer + 实读引用
+    let tasks = wb.tasks.list("a0");
+    let task = tasks
         .iter()
-        .any(|n| n == "fs_write" || n == "bash" || n == "research"));
-    // 回包：answer + 真实引用（嵌套段读过的路径）
-    let evs = events(&wb, Some(&[EventKind::ToolResult])).unwrap();
-    let res = evs
-        .iter()
-        .find(|e| e.payload["result"]["tool"] == "research")
-        .expect("research tool_result missing");
-    assert_eq!(res.payload["ok"], true);
-    assert!(res.payload["result"]["output"]["answer"]
+        .find(|t| t["kind"] == "subagent")
+        .expect("subagent task missing");
+    assert_eq!(task["status"], "done");
+    assert!(task["result"]["answer"]
         .as_str()
         .unwrap()
         .contains("fact A"));
-    assert!(res.payload["result"]["output"]["citations"]
+    assert!(task["result"]["citations"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|c| c["ref"] == "notes.md"));
+        .any(|c| c["path"] == "notes.md"));
+    // 嵌套消息不上时间线：messages 里没有子代理那条「观察」
+    let leaked: i64 = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM messages WHERE body LIKE '%观察%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(leaked, 0, "子代理可见回复不许落时间线");
     // 用量记父：嵌套回合的 usage 行也落在 a0 名下
     let n: i64 = wb
         .db
@@ -2729,17 +2774,21 @@ fn us36_research_nested_readonly() {
         })
         .unwrap();
     assert!(n >= 2, "nested usage must bill parent, got {n}");
-    // 父休眠嵌套不跑：直接截获调用也拒
+    // 父休眠派遣不跑：直接截获调用回报未派遣
     orchestra::write_agent_status(&wb.db, "p1", "a0", true).unwrap();
     let ctx = wb.ctx_for("a0", None);
-    let r = crate::research::call_nested(
+    let out = crate::subagent::call_nested(
         &wb.db,
         prov.as_ref(),
         &wb.registry,
         &ctx,
-        json!({"question": "x"}),
-    );
-    assert!(r.is_err());
+        json!({"task": "x"}),
+    )
+    .unwrap();
+    let CallOutcome::Done(v) = out else {
+        panic!("expected Done: {out:?}")
+    };
+    assert_eq!(v["dispatched"], false);
 }
 
 #[test]

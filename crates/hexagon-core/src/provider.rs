@@ -1996,6 +1996,7 @@ mod server_tool_tests {
             )]
             .into_iter()
             .collect(),
+            search: None,
         };
         std::fs::write(
             dir.path().join("providers.json"),
@@ -2105,11 +2106,35 @@ mod server_tool_tests {
         );
     }
 
-    /// 手写 web_search 调用走本地注册表 → unknown tool（server tool 不
-    /// 进注册表——只经供应商原生通道，防模型伪造本地调用）。
+    /// 手写 web_search 调用不撞供应商原生通道。行为变更说明（code-search
+    /// 票 03）：web_search 起是真实本地工具，防碰撞的实现从「不进注册表」
+    /// 改为「web 能力槽在场时 defs 不列出 + exec 拒绝」——断言跟着改：
+    /// 无 web caps 的 ctx 照常列出（本地槽是合法路径），web caps 的 ctx
+    /// 里清单与执行双不见。
     #[test]
     fn handwritten_web_search_is_unknown_tool() {
         let reg = crate::tools::Registry::builtin();
-        assert!(!reg.defs().iter().any(|d| d.name == "web_search"));
+        assert!(reg.get("web_search").is_some(), "本地搜索槽在册");
+        let plain = crate::tools::ToolContext::default();
+        assert!(reg
+            .defs_for_ctx(Some(&plain))
+            .iter()
+            .any(|d| d.name == "web_search"));
+        let native = crate::tools::ToolContext {
+            caps: ["web".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(!reg
+            .defs_for_ctx(Some(&native))
+            .iter()
+            .any(|d| d.name == "web_search"));
+        let err = crate::tools::Tool::exec(
+            &crate::websearch::WebSearch,
+            &crate::db::Db::open_in_memory().unwrap(),
+            &serde_json::json!({"query":"x"}),
+            &native,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("native web search"));
     }
 }

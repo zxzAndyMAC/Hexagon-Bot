@@ -452,6 +452,7 @@ mod tests {
                         tiers: crate::artifacts::TierMap::new(),
                         sessions: Default::default(),
                         caps: Default::default(),
+                        ..Default::default()
                     };
                     assert_eq!(
                         run_turn(&db, &provider, &reg, &ctx, vec![], "干活").unwrap(),

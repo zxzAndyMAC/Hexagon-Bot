@@ -1110,12 +1110,14 @@ pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
             "UPDATE stage_runs SET state='interrupted' WHERE id=?1",
             [&run_id],
         )?;
+        // 票 NR-03：卡载荷带 reason——「进程被杀」与「断网超时」的恢复卡
+        // 在 UI/重触发路径上要能区分。
         let _qid = crate::cards::enqueue(
             db,
             project_id,
             agent_id.as_deref(),
             crate::cards::CardKind::Recovery,
-            json!({"run_id": run_id, "stage": stage}),
+            json!({"run_id": run_id, "stage": stage, "reason": "interrupted_shutdown"}),
             None,
         )?;
         n += 1;
@@ -1153,6 +1155,74 @@ pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchEr
         Some(run_id),
     )?;
     Ok(())
+}
+
+/// 断网等网超时挂起（network-resilience 票 01）：run → interrupted +
+/// 恢复卡（reason=network_timeout）+ 系统事件。与 detect_interrupted
+/// 共用 interrupted 终态和卡型——挂起不是第三种 run 状态词：恢复语义
+/// 与进程被杀相同（解锁→重触发，票 NR-03），分开造词只会让恢复面分叉。
+/// 幂等：run 已非 active 时不动状态也不补卡。
+pub fn suspend_run(
+    db: &Db,
+    project_id: &str,
+    run_id: &str,
+    agent_id: &str,
+) -> Result<(), OrchError> {
+    let state: String = db.conn().query_row(
+        "SELECT state FROM stage_runs WHERE id=?1 AND project_id=?2",
+        rusqlite::params![run_id, project_id],
+        |r| r.get(0),
+    )?;
+    if state != "active" {
+        return Ok(());
+    }
+    let stage: String = db.conn().query_row(
+        "SELECT stage_name FROM stage_runs WHERE id=?1",
+        [run_id],
+        |r| r.get(0),
+    )?;
+    db.conn().execute(
+        "UPDATE stage_runs SET state='interrupted' WHERE id=?1",
+        [run_id],
+    )?;
+    let _qid = crate::cards::enqueue(
+        db,
+        project_id,
+        Some(agent_id),
+        crate::cards::CardKind::Recovery,
+        json!({"run_id": run_id, "stage": stage, "reason": "network_timeout"}),
+        None,
+    )?;
+    db.append_event(
+        project_id,
+        EventKind::System,
+        json!({"kind": "run_suspended", "run_id": run_id, "reason": "network_timeout"}),
+        Some(agent_id),
+        Some(run_id),
+    )?;
+    Ok(())
+}
+
+/// 恢复卡携带的归属 agent（票 NR-03 重触发的读口）：detect_interrupted
+/// 与 suspend_run 都把中断时的 agent 写进卡 agent_id。None = 悬空卡
+/// （解锁但不重触发）。
+pub fn recovery_agent(
+    db: &Db,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Option<String>, OrchError> {
+    use rusqlite::OptionalExtension;
+    Ok(db
+        .conn()
+        .query_row(
+            "SELECT agent_id FROM pending_questions
+             WHERE project_id=?1 AND kind='recovery' AND state='queued'
+               AND json_extract(payload,'$.run_id')=?2
+             ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![project_id, run_id],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 #[cfg(test)]
@@ -1461,6 +1531,7 @@ mod tests {
             tiers: crate::artifacts::TierMap::new(),
             sessions: Default::default(),
             caps: Default::default(),
+            ..Default::default()
         };
 
         // 阶段 0：规格

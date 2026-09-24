@@ -246,10 +246,22 @@ pub struct Workbench {
     /// 开场分析已经领走、还没落时间线的接话人。模型调用在壳层的锁外面，
     /// 所以接话人不能只放在栈上。
     intake_speaker: Mutex<Option<(String, String)>>,
+    /// 激活任务清单（code-search 票 07）：Workbench 级共享——同一激活的
+    /// 各回合 ctx 看到同一块板；激活边界在回合起跑线清场。
+    pub tasks: crate::subagent::TaskBoard,
+    /// 断网等待策略（network-resilience 票 01）：生产默认常量；
+    /// 测试直接改写本字段注入毫秒级预算。
+    pub wait_policy: crate::turn::WaitPolicy,
+    /// web 搜索摘要槽（票 03）：attach/reload 时按 providers 文档重建；
+    /// 测试注入替身直接写本字段。
+    pub websearch: Option<Arc<dyn crate::websearch::SearchBackend>>,
+    /// 语义索引嵌入器（票 02）：None = 默认本地哈希嵌入器；测试注替身。
+    pub embedder: Option<Arc<dyn crate::semsearch::Embedder>>,
 }
 
 impl Drop for Workbench {
     fn drop(&mut self) {
+        self.tasks.halt_all();
         self.sessions.kill_all();
     }
 }
@@ -309,6 +321,10 @@ impl Workbench {
             mcp_host,
             sessions: Default::default(),
             intake_speaker: Mutex::new(None),
+            tasks: Default::default(),
+            wait_policy: Default::default(),
+            websearch: None,
+            embedder: None,
         })
     }
 
@@ -342,6 +358,9 @@ impl Workbench {
             self.providers.remove(slot);
         }
         crate::provider_config::register_all(&mut self.providers, self.creds.clone());
+        // 票 03：web 搜索槽随 providers 文档热刷——配置变了即重建，
+        // 未配置即 None（工具回报槽未配置而不是隐式失败）。
+        self.websearch = crate::websearch::configured(self.creds.clone());
         // 决策槽绑上了就交给项目经理。槽名固定 decision，不和主对话槽合成一个。
         // 没这个角色（测试夹具）就略过。卸掉绑定且当前正指着 decision 时清空。
         let points_at_decision = self
@@ -399,6 +418,10 @@ impl Workbench {
             mcp_host,
             sessions: Default::default(),
             intake_speaker: Mutex::new(None),
+            tasks: Default::default(),
+            wait_policy: Default::default(),
+            websearch: None,
+            embedder: None,
         })
     }
 
@@ -703,6 +726,12 @@ impl Workbench {
                     .ok();
                 crate::provider_config::caps_for_slot(slot.as_deref().unwrap_or("default"))
             },
+            wait: self.wait_policy,
+            tasks: self.tasks.clone(),
+            subagent: None,
+            websearch: self.websearch.clone(),
+            embedder: self.embedder.clone(),
+            subagent_provider: None,
         }
     }
 
@@ -836,6 +865,20 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
+        let aid = self.agent_by_role(role)?;
+        self.run_turn_agent(&aid, role, input, attachments, plan_first)
+    }
+
+    /// 按确切 agent id 跑回合（票 NR-03 重触发用——恢复卡记的是 agent_id，
+    /// 同名角色的其他 Agent 不该替它复工）。role 仅用于 RoleDef 提示层。
+    fn run_turn_agent(
+        &self,
+        aid: &str,
+        role: &str,
+        input: &str,
+        attachments: &[crate::trace::AttachRef],
+        plan_first: bool,
+    ) -> Result<TurnOutcome, ApiError> {
         // 握手还在进行时，这一回合等它结束再拿工具清单。打开项目本身不等。
         self.ensure_mcp_for_turn();
         if let Ok(rid) = self.db.conn().query_row(
@@ -846,13 +889,12 @@ impl Workbench {
         ) {
             return Err(ApiError::Interrupted(rid));
         }
-        let aid = self.agent_by_role(role)?;
         let run = self.active_run()?;
-        let ctx = self.ctx_for(&aid, run.as_ref().map(|r| r.id.clone()));
+        let ctx = self.ctx_for(aid, run.as_ref().map(|r| r.id.clone()));
         let slot: Option<String> =
             self.db
                 .conn()
-                .query_row("SELECT model_slot FROM agents WHERE id=?1", [&aid], |r| {
+                .query_row("SELECT model_slot FROM agents WHERE id=?1", [aid], |r| {
                     r.get(0)
                 })?;
         // diagnostic-records 票 03：槽未绑 → resolve_slot 落 default 是正常回退，
@@ -862,10 +904,14 @@ impl Workbench {
         let started = std::time::Instant::now();
         let provider = crate::provider_config::resolve_slot(&self.providers, &slot_name)
             .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
+        // 子代理线程派遣要移动 provider——父回合解析出的就是子代理的模型
+        // （票 04：同主对话模型，不开新槽）。Arc 克隆后注入 ctx。
+        let mut ctx = ctx;
+        ctx.subagent_provider = Some(provider.clone());
         if crate::provider_config::fell_back_to_default(&self.providers, &slot_name) {
             crate::diag::slot_fallback(
                 Some(&self.project_id),
-                Some(&aid),
+                Some(aid),
                 run.as_ref().map(|r| r.id.as_str()),
                 "turn_dispatch",
                 &slot_name,
@@ -1254,6 +1300,7 @@ impl Workbench {
             tiers: crate::artifacts::TierMap::new(),
             sessions: Default::default(),
             caps: Default::default(),
+            ..Default::default()
         };
         crate::usage::record(&self.db, &usage_ctx, &slot_name, &resp.usage, 0)?;
         let raw = crate::pm_route::choice_text(&resp);
@@ -1555,9 +1602,36 @@ impl Workbench {
         Ok(orchestra::skip(&self.db, &self.project_id, self.pack()?)?)
     }
 
-    /// 恢复中断的阶段 run（票 37）：负责人按「继续」才重激活，不重放模型调用。
+    /// 恢复中断的阶段 run（票 37）：负责人按「继续」重激活。
+    /// 票 NR-03：恢复即重触发——恢复卡携的归属 agent 自动起新回合；
+    /// 原始指令上下文靠「游标没推进」自然重读（首个模型响应没到，
+    /// 简报 cursor 未消费，原指令仍待在 unread 段）。卡无 agent
+    /// （悬空 run）→ 解锁但不重启。重触发失败只留 warn——恢复本身
+    /// 已完成，不回滚解锁状态。
     pub fn recover_run(&self, run_id: &str) -> Result<(), ApiError> {
+        // 先读卡再恢复——answer_queued_where 销卡后归属就读不到了。
+        let agent = orchestra::recovery_agent(&self.db, &self.project_id, run_id)?;
         orchestra::recover_run(&self.db, &self.project_id, run_id)?;
+        if let Some(aid) = agent {
+            match self
+                .db
+                .conn()
+                .query_row("SELECT role FROM agents WHERE id=?1", [&aid], |r| {
+                    r.get::<_, String>(0)
+                }) {
+                Ok(role) => {
+                    // 按卡上 agent_id 精确重触发（同名角色的别的 Agent 不替班）。
+                    if let Err(e) =
+                        self.run_turn_agent(&aid, &role, crate::turn::RECOVERY_NUDGE, &[], false)
+                    {
+                        log::warn!("retrigger after recover failed: agent={aid} run={run_id}: {e}");
+                    }
+                }
+                Err(e) => {
+                    log::warn!("retrigger after recover skipped: agent {aid} role lookup: {e}")
+                }
+            }
+        }
         Ok(())
     }
 

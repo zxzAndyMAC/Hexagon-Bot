@@ -1354,6 +1354,34 @@ fn remove_slot_binding(state: tauri::State<AppState>, slot: String) -> Result<()
     Ok(())
 }
 
+/// web 搜索槽（code-search 票 03）：配后端 + 可选 key + 热刷新；
+/// key 进 keychain（`search/<backend>`），不进 providers.json。
+#[tauri::command]
+fn save_search_backend(
+    state: tauri::State<AppState>,
+    backend: String,
+    endpoint: Option<String>,
+    secret: Option<String>,
+) -> Result<(), CmdError> {
+    hexagon_core::provider_admin::save_search(
+        &backend,
+        endpoint,
+        secret,
+        &*hexagon_core::credentials::active(),
+    )
+    .map_err(cmd_err)?;
+    refresh_providers(&state);
+    Ok(())
+}
+
+/// 摘掉 web 搜索槽 + 热刷新（keychain 里的 key 保留）。
+#[tauri::command]
+fn remove_search_backend(state: tauri::State<AppState>) -> Result<(), CmdError> {
+    hexagon_core::provider_admin::remove_search().map_err(cmd_err)?;
+    refresh_providers(&state);
+    Ok(())
+}
+
 /// 拉取/检测供应商模型目录：GET /models；key 从 keychain 现取，缺 key 直报。
 /// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置。
 #[tauri::command]
@@ -1408,36 +1436,6 @@ fn draft_flow(sentence: String) -> Result<hexagon_core::orchestra::PackDef, CmdE
     hexagon_core::setup::draft_flow(&sentence, provider.as_ref()).map_err(cmd_err)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[derive(ts_rs::TS)]
-#[ts(export, export_to = "../../ui/src/gen/")]
-struct CreateProjectOpts {
-    dir: String,
-    name: String,
-    roles: Vec<String>,
-    /// 角色定制覆盖（ADR 0057）：自定义模板与向导改过的角色传完整定义；
-    /// 未列名字走内置目录。壳层不读全局模板文件，保持 core 纯函数。
-    #[serde(default)]
-    #[ts(optional)]
-    role_overrides: Option<Vec<hexagon_core::presets::RoleDef>>,
-    #[ts(optional)]
-    pack_name: Option<String>,
-    #[ts(optional)]
-    fastpath_role: Option<String>,
-    init_git: bool,
-    #[ts(optional)]
-    agents_md: Option<String>,
-    /// 向导生成的流程草稿。有它就不用预置包名字。
-    #[serde(default)]
-    #[ts(optional)]
-    pack: Option<hexagon_core::orchestra::PackDef>,
-    /// 已废弃。传了任何档，核都拒绝且不建项目（ADR 0069）。
-    #[serde(default)]
-    #[ts(optional)]
-    autonomy: Option<String>,
-}
-
 // 同 send_message（2026-09-22）：不标 async 时创建整段堵在主线程，
 // on_progress 的五步要等命令返回才一起亮。票 14 当时写「同步命令跑在
 // 阻塞池」是错的，默认是 Blocking。
@@ -1445,7 +1443,7 @@ struct CreateProjectOpts {
 fn create_project(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
-    opts: CreateProjectOpts,
+    opts: hexagon_core::setup::CreateProjectOpts,
     on_progress: tauri::ipc::Channel<hexagon_core::setup::CreateStep>,
 ) -> Result<(), CmdError> {
     use hexagon_core::setup;
@@ -1794,6 +1792,8 @@ pub fn run() {
             delete_provider,
             set_slot_binding,
             remove_slot_binding,
+            save_search_backend,
+            remove_search_backend,
             fetch_provider_models,
             agents_md_draft,
             optimize_agents_md,

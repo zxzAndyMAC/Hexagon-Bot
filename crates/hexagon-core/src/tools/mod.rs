@@ -39,7 +39,7 @@ pub enum ToolError {
     UnknownQuestion(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolContext {
     pub project_id: String,
     pub agent_id: String,
@@ -57,6 +57,46 @@ pub struct ToolContext {
     /// 读图降级为路径文本——字节不进上下文（fail-closed 默认空集，
     /// 临时构造的 ctx 自然无图能力）。
     pub caps: std::collections::HashSet<String>,
+    /// 断网等待策略（network-resilience 票 01）：Transport 快重试耗尽后
+    /// 的等网参数——生产常量，测试注入毫秒级。`Default` = 生产值。
+    pub wait: crate::turn::WaitPolicy,
+    /// 激活任务清单（code-search 票 07）：Workbench 注入共享板；
+    /// 临时构造的 ctx 拿独立空板（一次性路径无跨回合任务）。
+    pub tasks: crate::subagent::TaskBoard,
+    /// 非空 = 本 ctx 是一次子代理派遣（票 04/06）：halt 旗、回执格、
+    /// 本次勾选的 mcp 集、实读路径格。父级 ctx 恒为 None。
+    pub subagent: Option<crate::subagent::Scope>,
+    /// web 搜索摘要槽（票 03）：None = 未配置（工具回报「槽未配置」）。
+    pub websearch: Option<Arc<dyn crate::websearch::SearchBackend>>,
+    /// 语义索引嵌入器（票 02）：None = 默认本地哈希嵌入器。
+    /// 测试注入替身——嵌入向量本身是实现细节，替身只要确定性。
+    pub embedder: Option<Arc<dyn crate::semsearch::Embedder>>,
+    /// 子代理线程派遣要移动的 provider Arc（run_turn_opts 注入；
+    /// 直测/内存库路径为 None → 派遣退化为同连接内联执行）。
+    pub subagent_provider: Option<Arc<dyn crate::provider::ModelProvider>>,
+}
+
+impl Default for ToolContext {
+    /// 字面量构造点的填充底（`..Default::default()`）：project_id 取
+    /// 项目常量，其余零值——各构造点照旧显式写它在乎的字段。
+    fn default() -> Self {
+        Self {
+            project_id: crate::PROJECT_ID.into(),
+            agent_id: String::new(),
+            repo_root: PathBuf::new(),
+            stage_run_id: None,
+            owned_globs: vec![],
+            tiers: crate::artifacts::TierMap::new(),
+            sessions: Default::default(),
+            caps: Default::default(),
+            wait: Default::default(),
+            tasks: Default::default(),
+            subagent: None,
+            websearch: None,
+            embedder: None,
+            subagent_provider: None,
+        }
+    }
 }
 
 impl ToolContext {
@@ -78,6 +118,7 @@ impl ToolContext {
             tiers: crate::artifacts::TierMap::new(),
             sessions: Default::default(),
             caps: Default::default(),
+            ..Default::default()
         }
     }
 }
@@ -151,7 +192,12 @@ impl Registry {
             tools: std::sync::Mutex::new(HashMap::new()),
         };
         r.register(FsRead);
-        r.register(Research);
+        r.register(FsFind);
+        r.register(FsGrep);
+        r.register(crate::subagent::SemSearch);
+        r.register(crate::websearch::WebSearch);
+        r.register(crate::subagent::Subagent);
+        r.register(crate::subagent::Tasks);
         r.register(FsWrite);
         r.register(FsPatch);
         r.register(Bash);
@@ -172,19 +218,32 @@ impl Registry {
             .insert(tool.name().to_string(), Arc::new(tool));
     }
 
-    /// 只读视图（US36 研究助手嵌套回合）：fs_read/artifact_read + 共享 mcp:*
-    /// —— 无写/bash/git/research → 结构性不可写、不可再派生；
-    /// mcp:* 走 L0 授权闸门按调用方 agent_id 判 → 用不了父未授权服务。
-    pub fn readonly(&self) -> Self {
+    /// 工具是否在场（子代理勾选的合法性闸看注册表不看权限——
+    /// 不在场的名字连「这次勾选」都谈不上）。
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.lock().unwrap().get(name).cloned()
+    }
+
+    /// 子代理注册表（code-search-and-subagent 票 04/06）：只读工具 +
+    /// 仓内搜索 + web 摘要 + 测试执行（自带硬闸）+ `pick` 点名的 mcp:*。
+    /// 没有写/bash/git/web_fetch/子代理入口 → 结构性不可写、不可再派生、
+    /// 不可外带。`pick` 之外的 mcp 工具连名字都不可见（defs 不列出）——
+    /// 授权闸门是第二道，第一道是注册表本身。
+    pub fn subagent_scope(&self, pick: &std::collections::HashSet<String>) -> Self {
         let r = Self {
             tools: std::sync::Mutex::new(HashMap::new()),
         };
         r.register(FsRead);
+        r.register(FsFind);
+        r.register(FsGrep);
+        r.register(crate::subagent::SemSearch);
+        r.register(crate::subagent::RunTest);
         r.register(ArtifactRead);
         r.register(LoadSkill);
+        r.register(crate::websearch::WebSearch);
         let guard = self.tools.lock().unwrap();
         for (name, t) in guard.iter() {
-            if name.starts_with("mcp:") {
+            if name.starts_with("mcp:") && pick.contains(name) {
                 r.tools.lock().unwrap().insert(name.clone(), t.clone());
             }
         }
@@ -193,9 +252,18 @@ impl Registry {
 
     /// 供供应商请求用的工具清单（名字 + 描述 + schema）。
     pub fn defs(&self) -> Vec<crate::provider::ToolDef> {
+        self.defs_for_ctx(None)
+    }
+
+    /// ctx 相关的工具清单（票 03）：模型槽 caps 含 `web` 时本地
+    /// web_search 不上清单——供应商原生 web_search 在场（Anthropic
+    /// server tool 与本工具同名，并存会撞名；规格本就要求二选一）。
+    pub fn defs_for_ctx(&self, ctx: Option<&ToolContext>) -> Vec<crate::provider::ToolDef> {
         let guard = self.tools.lock().unwrap();
+        let native_web = ctx.is_some_and(|c| c.caps.contains("web"));
         let mut v: Vec<_> = guard
             .values()
+            .filter(|t| !(native_web && t.name() == "web_search"))
             .map(|t| crate::provider::ToolDef {
                 name: t.name().into(),
                 description: t.description().into(),

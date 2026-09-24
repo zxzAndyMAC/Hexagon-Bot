@@ -452,7 +452,7 @@ fn bash_operand_escapes(input: &Value, ctx: &ToolContext) -> bool {
 
 /// token 是否 path 形态：含分隔符、家目录、相对游走，或绝对路径。
 /// `-` 开头的是 flag 不是操作数。
-fn looks_like_operand_path(tok: &str) -> bool {
+pub(crate) fn looks_like_operand_path(tok: &str) -> bool {
     if tok.is_empty() || tok.starts_with('-') {
         return false;
     }
@@ -464,7 +464,7 @@ fn looks_like_operand_path(tok: &str) -> bool {
         || std::path::Path::new(tok).is_absolute()
 }
 
-fn operand_escapes(tok: &str, ctx: &ToolContext) -> bool {
+pub(crate) fn operand_escapes(tok: &str, ctx: &ToolContext) -> bool {
     // `~` 词法上是相对路径但实际指家目录——一定在 repo 外
     if tok.starts_with('~') {
         return true;
@@ -610,6 +610,33 @@ fn evaluate_layers(
 ) -> Result<Decision, crate::tools::ToolError> {
     if let Some(d) = pre_memory_guards(db, ctx, tool, tool_name, input)?.into_decision() {
         return Ok(d);
+    }
+    // 派遣域（code-search 票 06）：子代理回合里 mcp:* 按「本次勾选集」判——
+    // 勾选的在 L0 授权之上放行（授权记在父代理账上，这里只是选择子集）；
+    // 未勾选即拒。集合挂 ctx 随派遣生灭，不落 grants/permission_rules。
+    // run_test 同理：Exec 档在嵌套回合只能转 Ask 而子代理升不了级——
+    // 它的真边界是工具内的 test_cmd_gate，权限层放行不等于放宽。
+    if let Some(scope) = &ctx.subagent {
+        if tool_name.starts_with("mcp:") {
+            return Ok(if scope.mcp.contains(tool_name) {
+                Decision::Allow {
+                    via: AllowVia::Default,
+                }
+            } else {
+                Decision::Deny {
+                    reason: "mcp tool not selected for this dispatch".into(),
+                    layer: "dispatch_pick",
+                }
+            });
+        }
+        if tool_name == "run_test" || tool_name == "web_search" {
+            // run_test 的真边界是 test_cmd_gate；web_search 的出网面只是
+            // 一条 ≤300 字符的查询串（不能取页面正文，exfil 通道被 QUERY_CAP
+            // 限死）——派遣即授权语义内的一等能力，嵌套回合没有必问出口。
+            return Ok(Decision::Allow {
+                via: AllowVia::Default,
+            });
+        }
     }
     // L4 形状化记忆 allow
     if let Some((shape, scope)) = matching_rule_scoped(db, ctx, tool_name, input, "allow")? {
@@ -946,6 +973,7 @@ mod tests {
                 tiers: Default::default(),
                 sessions: Default::default(),
                 caps: Default::default(),
+                ..Default::default()
             },
             dir,
         )
@@ -1258,7 +1286,10 @@ mod tests {
         assert_eq!(crate::tools::FsPatch.risk(), WriteLocal);
         assert_eq!(crate::tools::ArtifactWrite.risk(), WriteLocal);
         assert_eq!(crate::tools::ArtifactRead.risk(), Read);
-        assert_eq!(crate::tools::Research.risk(), Read);
+        // code-search 票 04：research 被 subagent 取代——派遣声明 Exec
+        // （它能拉起 run_test），截获路径不过权限层，声明只是地板诚实。
+        assert_eq!(crate::subagent::Subagent.risk(), Exec);
+        assert_eq!(crate::subagent::Tasks.risk(), Read);
         assert_eq!(crate::tools::Bash.risk(), Exec);
     }
 

@@ -96,6 +96,35 @@ pub fn remove_binding(slot: &str) -> Result<(), AdminError> {
     Ok(provider_config::remove_binding(slot)?)
 }
 
+/// web 搜索槽（票 03）：配后端 + 可选 key（空 key 不写；key 走凭据库
+/// `search/<backend>`，明文永不进 providers.json）。
+pub fn save_search(
+    backend: &str,
+    endpoint: Option<String>,
+    secret: Option<String>,
+    store: &dyn CredentialStore,
+) -> Result<(), AdminError> {
+    let backend = backend.trim();
+    if backend.is_empty() {
+        return Err(AdminError::UnknownProvider(
+            "search backend is empty".into(),
+        ));
+    }
+    provider_config::set_search(Some(provider_config::SearchCfg {
+        backend: backend.into(),
+        endpoint: endpoint.filter(|e| !e.trim().is_empty()),
+    }))?;
+    if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
+        store.set(&crate::websearch::key_name(backend), s.trim())?;
+    }
+    Ok(())
+}
+
+/// 摘掉 web 搜索槽（凭据留着——同名后端重配时不必重录 key）。
+pub fn remove_search() -> Result<(), AdminError> {
+    Ok(provider_config::set_search(None)?)
+}
+
 /// 拉取/检测供应商模型目录：GET /models；key 从凭据库现取，缺 key 直报。
 pub fn fetch_models(
     id: &str,

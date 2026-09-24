@@ -631,6 +631,7 @@ mod tests {
             tiers: TierMap::new(),
             sessions: Default::default(),
             caps: Default::default(),
+            ..Default::default()
         }
     }
 

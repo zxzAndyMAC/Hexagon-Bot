@@ -26,6 +26,7 @@ fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
         tiers: crate::artifacts::TierMap::new(),
         sessions: Default::default(),
         caps: Default::default(),
+        ..Default::default()
     };
     (db, Registry::builtin(), ctx, dir)
 }
@@ -736,13 +737,15 @@ fn web_fetch_denies_non_http_and_rejects_binary() {
 }
 
 #[test]
-fn web_fetch_absent_from_readonly_registry() {
+fn web_fetch_absent_from_subagent_registry() {
+    // 行为变更说明（code-search 票 04）：readonly() 随 research 退场，
+    // 同一断言落在 subagent_scope 上——外带通道在派遣域同样缺席。
     let (_db, reg, _ctx, _dir) = setup();
-    let ro = reg.readonly();
+    let ro = reg.subagent_scope(&Default::default());
     let names: Vec<_> = ro.defs().iter().map(|d| d.name.clone()).collect::<Vec<_>>();
     assert!(
         !names.iter().any(|n| n == "web_fetch"),
-        "readonly 不得含 web_fetch"
+        "subagent 注册表不得含 web_fetch"
     );
 }
 

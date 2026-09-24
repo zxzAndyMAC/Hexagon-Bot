@@ -47,13 +47,14 @@ const d = (over: Partial<TurnDelta>): TurnDelta => ({
   call: 0,
   reset: false,
   done: false,
+  waiting: false,
   text: '',
   thinking: '',
   ...over,
 })
 
 describe('applyDelta（turn-streaming 票 03）', () => {
-  beforeEach(() => useUiStore.setState({ streams: {}, thinkings: {}, streamDone: {} }))
+  beforeEach(() => useUiStore.setState({ streams: {}, thinkings: {}, streamDone: {}, waitingSince: {} }))
 
   it('文本增量按序累积', () => {
     const s = useUiStore.getState()
@@ -110,6 +111,33 @@ describe('applyDelta（turn-streaming 票 03）', () => {
     expect(st.streams.a1[0]).toBe('x')
     expect(st.streamDone.a1).toBeTruthy()
     expect(st.streamDone.a2).toBeUndefined()
+  })
+
+  // network-resilience 票 02：等网旗的置位/清除语义
+  it('waiting:true 帧置等网态；其后正常帧清旗', () => {
+    const s = useUiStore.getState()
+    s.applyDelta(d({ waiting: true, reset: true })) // 等网进入（半截文本作废同帧）
+    expect(useUiStore.getState().waitingSince.a1).toBeTypeOf('number')
+    s.applyDelta(d({ waiting: false }))            // 探针成功的清旗帧
+    expect(useUiStore.getState().waitingSince.a1).toBeUndefined()
+  })
+
+  it('等网中正常增量帧隐式清旗；done 兜底清', () => {
+    const s = useUiStore.getState()
+    s.applyDelta(d({ waiting: true }))
+    s.applyDelta(d({ text: '回来了' }))            // waiting:false 的文本帧
+    expect(useUiStore.getState().waitingSince.a1).toBeUndefined()
+    s.applyDelta(d({ waiting: true }))
+    s.applyDelta(d({ done: true }))                // 挂起/叫停路径的收口帧
+    expect(useUiStore.getState().waitingSince.a1).toBeUndefined()
+  })
+
+  it('重复等网帧不重置起点（计时从第一次进入起算）', () => {
+    const s = useUiStore.getState()
+    s.applyDelta(d({ waiting: true }))
+    const first = useUiStore.getState().waitingSince.a1
+    s.applyDelta(d({ waiting: true, reset: true })) // 探针半截作废帧仍带旗
+    expect(useUiStore.getState().waitingSince.a1).toBe(first)
   })
 })
 

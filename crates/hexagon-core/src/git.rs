@@ -230,6 +230,7 @@ mod tests {
                 tiers: Default::default(),
                 sessions: Default::default(),
                 caps: Default::default(),
+                ..Default::default()
             },
         )
     }

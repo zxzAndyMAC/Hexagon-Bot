@@ -947,6 +947,7 @@ while True:
             tiers: Default::default(),
             sessions: Default::default(),
             caps: Default::default(),
+            ..Default::default()
         };
         let reg = Registry::builtin();
         let host = McpHost::start(

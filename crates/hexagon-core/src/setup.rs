@@ -335,6 +335,41 @@ pub const CREATE_STEP_ORDER: [CreateStep; 5] = [
     CreateStep::OpenProject,
 ];
 
+/// `create_project` 命令的入参 DTO。原本在 src-tauri 定义，但 ts-rs 跨 crate
+/// 引用时把依赖类型的 `export_to` 原样写进 import 路径（src-tauri 的
+/// `../../ui/src/gen/` × 依赖的 `../../../ui/src/gen/` 拼出仓外路径，
+/// 类型检查只靠邻目录的巧合文件通过）。定义挪到与 RoleDef/PackDef 同 crate，
+/// import 永远生成 `./`。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct CreateProjectOpts {
+    pub dir: String,
+    pub name: String,
+    pub roles: Vec<String>,
+    /// 角色定制覆盖（ADR 0057）：自定义模板与向导改过的角色传完整定义；
+    /// 未列名字走内置目录。壳层不读全局模板文件，保持 core 纯函数。
+    #[serde(default)]
+    #[ts(optional)]
+    pub role_overrides: Option<Vec<RoleDef>>,
+    #[ts(optional)]
+    pub pack_name: Option<String>,
+    #[ts(optional)]
+    pub fastpath_role: Option<String>,
+    pub init_git: bool,
+    #[ts(optional)]
+    pub agents_md: Option<String>,
+    /// 向导生成的流程草稿。有它就不用预置包名字。
+    #[serde(default)]
+    #[ts(optional)]
+    pub pack: Option<PackDef>,
+    /// 已废弃。传了任何档，核都拒绝且不建项目（ADR 0069）。
+    #[serde(default)]
+    #[ts(optional)]
+    pub autonomy: Option<String>,
+}
+
 /// 建项目（向导最后一步）。`roles` 是模板目录（内置∪自定义）角色名子集；
 /// `role_overrides` 携带**完整定义**——自定义模板与向导改过的角色都经它传入，
 /// 本函数不读全局模板文件（保持纯函数，测试不被 HOME 污染）。`pack` 为 None 时

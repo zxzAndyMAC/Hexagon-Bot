@@ -820,8 +820,12 @@ mod tests {
         "invariant_violation",
         "judge_verdict",
         "known_world",
+        // network-resilience 票 01：等网进入/退出 + 挂起收口
+        "net_wait_enter",
+        "net_wait_exit",
         "provider_retry",
         "request_envelope",
+        "run_suspended",
         "sandbox_unavailable",
         "session_exited",
         "session_started",
@@ -882,6 +886,7 @@ mod tests {
             tiers: crate::artifacts::TierMap::new(),
             sessions: Default::default(),
             caps: Default::default(),
+            ..Default::default()
         };
         crate::turn::run_turn(
             &db,

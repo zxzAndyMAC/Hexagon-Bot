@@ -260,6 +260,7 @@ impl JudgeBackend for LlmJudge<'_> {
                 tiers: crate::artifacts::TierMap::new(),
                 sessions: Default::default(),
                 caps: Default::default(),
+                ..Default::default()
             };
             let _ = crate::usage::record(obs.db, &ctx, self.slot, &resp.usage, 0);
         }

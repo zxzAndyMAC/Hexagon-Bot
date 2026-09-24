@@ -164,6 +164,10 @@ interface UiState {
   /// （stdout/stderr 按到达序混排）。瞬时态——tool_result 落地后卡体改渲
   /// result.output，缓冲即清。seq 缺席（resolve 等非回合路径）落 `·` 键。
   toolStreams: Record<string, string>
+  /// 断网等网态（network-resilience 票 02）：agent_id → 进入等网时刻。
+  /// waiting:true 帧置位；其后任何非等网帧（正常增量/复位/清旗/done）
+  /// 都清除——等网只活在「下一次调用还没出声」的窗口里。
+  waitingSince: Record<string, number>
   applyToolOutput: (d: ToolOutputDelta) => void
   setThemePref: (p: ThemePref) => void
   setRailOpen: (v: boolean) => void
@@ -310,6 +314,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   thinkings: {},
   streamDone: {},
   toolStreams: {},
+  waitingSince: {},
   applyToolOutput: (d) =>
     set((s) => ({
       toolStreams: {
@@ -323,15 +328,19 @@ export const useUiStore = create<UiState>((set, get) => ({
       if (d.done) {
         // 票 08：done 只标完结不清缓冲——气泡原地转为落位样式，
         // 持久化确认（refreshFast 拉到同 agent 消息）后才交接。
+        const waitingSince = { ...s.waitingSince }
+        delete waitingSince[d.agent_id] // 等网旗随回合收口兜底清除（票 NR-02）
         return {
           streamDone: {
             ...s.streamDone,
             [d.agent_id]: { afterEventId: s.timeline.at(-1)?.event.id ?? 0, at: Date.now() },
           },
+          waitingSince,
         }
       }
       const streams = { ...s.streams }
       const thinkings = { ...s.thinkings }
+      const waitingSince = { ...s.waitingSince }
       const cur = { ...(streams[d.agent_id] ?? {}) }
       const curT = { ...(thinkings[d.agent_id] ?? {}) }
       // reset=瞬时重试：本次调用的已收文本和思考作废（重试会重吐全文）
@@ -344,7 +353,11 @@ export const useUiStore = create<UiState>((set, get) => ({
       }
       streams[d.agent_id] = cur
       if (d.reset || Object.values(curT).some((x) => x.length > 0)) thinkings[d.agent_id] = curT
-      return { streams, thinkings }
+      // 票 NR-02：等网旗——true 帧记进入时刻（幂等：重进不重置起点），
+      // 其余帧一律清除（正常增量/显式清旗帧都是「网回来了」的信号）。
+      if (d.waiting) waitingSince[d.agent_id] = waitingSince[d.agent_id] ?? Date.now()
+      else delete waitingSince[d.agent_id]
+      return { streams, thinkings, waitingSince }
     }),
   setRailOpen: (v) => {
     localStorage.setItem('hexagon.rail', v ? '1' : '0')

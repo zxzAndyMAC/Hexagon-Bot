@@ -30,6 +30,7 @@ fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
             tiers: crate::artifacts::TierMap::new(),
             sessions: Default::default(),
             caps: Default::default(),
+            ..Default::default()
         },
         dir,
     )
@@ -1110,20 +1111,26 @@ fn us57_transient_retry_recovers() {
     assert_eq!(system_events(&db, "provider_retry"), 2);
 }
 
+/// 行为变更说明（network-resilience 票 01）：快重试耗尽不再判死回合——
+/// 转入等网态按探针间隔重发同一调用；旧断言「4 次全 Transport → Err」
+/// 改为「等网进入 → 探针成功 → Finished」。判死只剩两条路：预算耗尽
+/// （wait_budget_exhaustion_suspends_run）或等网中撞到非 Transport 错。
 #[test]
-fn us57_retry_exhausted_fails_turn() {
-    let (db, reg, ctx, _dir) = setup();
-    // 4 次全 Transport：初调 + 3 次重试用尽仍败 → 回合失败
+fn us57_retry_exhausted_waits_not_fails() {
+    let (db, reg, mut ctx, _dir) = setup();
+    ctx.wait = fast_wait(5, 5_000);
     let provider = FlakyProvider::new(vec![
         Err(crate::provider::ProviderError::Transport("t".into())),
         Err(crate::provider::ProviderError::Transport("t".into())),
         Err(crate::provider::ProviderError::Transport("t".into())),
         Err(crate::provider::ProviderError::Transport("t".into())),
-        Ok(text_response("不该到")),
+        Ok(text_response("探针恢复了")),
     ]);
-    assert!(run_turn(&db, &provider, &reg, &ctx, vec![], "go").is_err());
-    assert_eq!(provider.calls(), 4); // 最多 3 次重试
+    let out = run_turn(&db, &provider, &reg, &ctx, vec![], "go").unwrap();
+    assert_eq!(out, TurnOutcome::Finished);
+    assert_eq!(provider.calls(), 5); // 1+3 快试耗尽 → 首个探针成功
     assert_eq!(system_events(&db, "provider_retry"), 3);
+    assert_eq!(system_events(&db, "net_wait_enter"), 1);
 }
 
 #[test]
@@ -1913,4 +1920,205 @@ proptest! {
             "同字符数中文估算低于英文"
         );
     }
+}
+
+// ---------- network-resilience 票 01：断网等网两段式 ----------
+
+/// 永远 Transport 的桩：等网/挂起路径用（FlakyProvider 脚本耗尽会回
+/// ScriptExhausted——非 Transport 会把等网态顶出去，那不是「网一直断」）。
+struct DownForever;
+impl ModelProvider for DownForever {
+    fn complete(&self, _req: &ChatRequest) -> Result<ChatResponse, crate::provider::ProviderError> {
+        Err(crate::provider::ProviderError::Transport("down".into()))
+    }
+}
+
+/// 毫秒级等网策略：测试不等生产的 5s/5min。
+fn fast_wait(probe_ms: u64, budget_ms: u64) -> WaitPolicy {
+    WaitPolicy {
+        probe_interval: std::time::Duration::from_millis(probe_ms),
+        budget: std::time::Duration::from_millis(budget_ms),
+        tick: std::time::Duration::from_millis(2),
+    }
+}
+
+/// 事件流里某 System 子 kind 的载荷序列（按落库顺序）。
+fn sys_events(db: &Db, kind: &str) -> Vec<Value> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT payload FROM events WHERE kind='system' ORDER BY id")
+        .unwrap();
+    st.query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .flatten()
+        .map(|p| serde_json::from_str::<Value>(&p).unwrap())
+        .filter(|p| p["kind"] == kind)
+        .collect()
+}
+
+/// 快重试内的瞬时抖动：老语义不变——provider_retry 留痕，不进等网，
+/// 没有 waiting 旗帧。
+#[test]
+fn transient_failures_stay_in_fast_tier() {
+    let (db, reg, mut ctx, _dir) = setup();
+    ctx.wait = fast_wait(5, 60);
+    let prov = FlakyProvider::new(vec![
+        Err(crate::provider::ProviderError::Transport("t".into())),
+        Err(crate::provider::ProviderError::Transport("t".into())),
+        Ok(text_response("好了")),
+    ]);
+    let mut got: Vec<TurnDelta> = Vec::new();
+    let out = run_turn_streaming(
+        &db,
+        &prov,
+        &reg,
+        &ctx,
+        vec![],
+        "go",
+        &[],
+        false,
+        Some(&mut |d| got.push(d.clone())),
+    )
+    .unwrap();
+    assert!(matches!(out, TurnOutcome::Finished));
+    assert_eq!(prov.calls(), 3); // 1 首发 + 2 重试
+    assert_eq!(sys_events(&db, "provider_retry").len(), 2);
+    assert!(sys_events(&db, "net_wait_enter").is_empty());
+    assert!(!got.iter().any(|d| d.waiting));
+}
+
+/// 快重试耗尽 → 等网进入（waiting 旗 + 事件）→ 探针成功退出（resumed）。
+#[test]
+fn outage_enters_wait_then_resumes() {
+    let (db, reg, mut ctx, _dir) = setup();
+    ctx.wait = fast_wait(5, 5_000);
+    // 初调 + 3 快重试全败 → 进等网；第 5 次调用（首个探针）成功
+    let prov = FlakyProvider::new(vec![
+        Err(crate::provider::ProviderError::Transport("t".into())),
+        Err(crate::provider::ProviderError::Transport("t".into())),
+        Err(crate::provider::ProviderError::Transport("t".into())),
+        Err(crate::provider::ProviderError::Transport("t".into())),
+        Ok(text_response("恢复了")),
+    ]);
+    let mut got: Vec<TurnDelta> = Vec::new();
+    let out = run_turn_streaming(
+        &db,
+        &prov,
+        &reg,
+        &ctx,
+        vec![],
+        "go",
+        &[],
+        false,
+        Some(&mut |d| got.push(d.clone())),
+    )
+    .unwrap();
+    assert!(matches!(out, TurnOutcome::Finished));
+    assert_eq!(prov.calls(), 5);
+    assert_eq!(sys_events(&db, "provider_retry").len(), 3);
+    let enters = sys_events(&db, "net_wait_enter");
+    assert_eq!(enters.len(), 1, "进入只发一次");
+    let exits = sys_events(&db, "net_wait_exit");
+    assert_eq!(exits.len(), 1);
+    assert_eq!(exits[0]["reason"], "resumed");
+    // UI 侧可观测面：等网帧出现且最终清旗
+    assert!(got.iter().any(|d| d.waiting));
+    assert!(!got.last().unwrap().waiting);
+}
+
+/// 预算耗尽 → run 挂起（interrupted + 恢复卡 reason=network_timeout），
+/// 回合以 Suspended 收口而非失败上抛。
+#[test]
+fn wait_budget_exhaustion_suspends_run() {
+    let (db, reg, mut ctx, _dir) = setup();
+    db.conn()
+        .execute(
+            "INSERT INTO stage_runs (id, project_id, stage_name, seq, state)
+             VALUES ('r1','p1','实现',1,'active')",
+            [],
+        )
+        .unwrap();
+    ctx.stage_run_id = Some("r1".into());
+    ctx.wait = fast_wait(5, 20); // 预算只够一两次探针
+    let out = run_turn_streaming(
+        &db,
+        &DownForever,
+        &reg,
+        &ctx,
+        vec![],
+        "go",
+        &[],
+        false,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(out, TurnOutcome::Suspended));
+    let state: String = db
+        .conn()
+        .query_row("SELECT state FROM stage_runs WHERE id='r1'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(state, "interrupted");
+    // 恢复卡经属主 API 读回（D04/D09：pending_questions 查询面归 cards.rs）。
+    let queued = crate::cards::queued(&db, "p1").unwrap();
+    assert_eq!(queued.len(), 1);
+    let card = &queued[0];
+    assert_eq!(card.kind, "recovery");
+    let payload = &card.payload;
+    assert_eq!(payload["reason"], "network_timeout");
+    assert_eq!(payload["run_id"], "r1");
+    let exits = sys_events(&db, "net_wait_exit");
+    assert_eq!(exits.len(), 1);
+    assert_eq!(exits[0]["reason"], "timeout");
+    // 终态事件照常收口（TurnFailed）——轨迹不留半开边界
+    let failed: i64 = db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='turn_failed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(failed, 1);
+}
+
+/// 等网中叫停：睡眠按 tick 切片检查停旗——不停在 5s 探针间隔里。
+/// 用子代理 halt 旗驱动（is_paused 与 halt 共用 halted() 同一缝；
+/// 内存库无第二连接可写 Paused 事件，停旗是等价且可测的驱动面）。
+#[test]
+fn wait_is_interruptible_mid_sleep() {
+    let (db, reg, mut ctx, _dir) = setup();
+    ctx.wait = fast_wait(60_000, 60_000); // 大预算大间隔——不靠预算收口
+    let halt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    ctx.subagent = Some(crate::subagent::Scope {
+        halt: halt.clone(),
+        answer: Default::default(),
+        mcp: Default::default(),
+        reads: Default::default(),
+    });
+    let handle = {
+        let halt = halt.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(950));
+            halt.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
+    };
+    let out = run_turn_streaming(
+        &db,
+        &DownForever,
+        &reg,
+        &ctx,
+        vec![],
+        "go",
+        &[],
+        false,
+        None,
+    )
+    .unwrap();
+    handle.join().unwrap();
+    assert!(matches!(out, TurnOutcome::Interrupted));
+    let exits = sys_events(&db, "net_wait_exit");
+    assert_eq!(exits.len(), 1);
+    assert_eq!(exits[0]["reason"], "paused");
 }

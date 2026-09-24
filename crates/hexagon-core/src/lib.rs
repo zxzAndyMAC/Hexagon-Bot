@@ -38,22 +38,25 @@ pub mod provider_admin;
 pub mod provider_config;
 pub mod publish;
 pub mod replay;
-pub mod research;
 pub mod review;
 pub mod reviewer;
 pub mod roles;
 pub mod rolesurf;
 pub mod sandbox;
 pub mod scenario;
+pub mod search;
+pub mod semsearch;
 pub mod sessions;
 pub mod setup;
 pub mod skills;
 pub mod stampgate;
+pub mod subagent;
 pub mod templates;
 pub mod tools;
 pub mod trace;
 pub mod turn;
 pub mod usage;
+pub mod websearch;
 
 /// 单库单项目约定：每个项目目录一个 state.db，项目 id 恒为 "p1"。
 /// 壳层旁路写入（send_message_side/pause/resume）与 core 共用此常量——

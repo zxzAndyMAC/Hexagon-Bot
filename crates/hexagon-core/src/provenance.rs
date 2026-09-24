@@ -520,9 +520,11 @@ pub fn remote_delta(tool: &str, input: &Value, world: Option<&Value>) -> Option<
     None
 }
 
-/// taint（票 10）：外部内容源（research 结论、mcp:* 结果）回喂过该 agent 后，
-/// 其后续产出的事件打 `after_external`——下游 agent 与负责人看得出
-/// 「这段话是在读了外部内容之后写的」。纯机械派生自 trace，不改消息结构。
+/// taint（票 10）：外部内容源（subagent/旧 research 结论、mcp:* 结果）回喂过
+/// 该 agent 后，其后续产出的事件打 `after_external`——下游 agent 与负责人
+/// 看得出「这段话是在读了外部内容之后写的」。纯机械派生自 trace，不改消息
+/// 结构。subagent 回执含网页摘要——与旧 research 同档外部内容（
+/// code-search 票 04 更名迁移，旧轨迹里的 research 行仍算）。
 /// 不对称性：漏标 = 下游误信来源纯度；多标 = 多一行元数据——宁可多标。
 pub fn tainted(db: &Db, agent_id: &str, stage_run_id: Option<&str>) -> bool {
     db.conn()
@@ -530,7 +532,7 @@ pub fn tainted(db: &Db, agent_id: &str, stage_run_id: Option<&str>) -> bool {
             "SELECT COUNT(*) FROM events
              WHERE agent_id=?1 AND kind='tool_result'
              AND (?2 IS NULL OR stage_run_id=?2)
-             AND (json_extract(payload,'$.tool')='research'
+             AND (json_extract(payload,'$.tool') IN ('research','subagent')
                   OR json_extract(payload,'$.tool') LIKE 'mcp:%')",
             rusqlite::params![agent_id, stage_run_id],
             |r| r.get::<_, i64>(0),
@@ -579,6 +581,7 @@ mod tests {
                 tiers: Default::default(),
                 sessions: Default::default(),
                 caps: Default::default(),
+                ..Default::default()
             },
             dir,
         )

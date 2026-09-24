@@ -365,6 +365,10 @@ input, textarea { font: inherit; color: var(--text); }
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--accent); animation: pulse-amber 1.2s infinite;
 }
+/* network-resilience 票 02：等网角标——warn 蓝点区别于回复中的 accent
+   琥珀点；更慢的脉动传达「在等」而不是「在写」。 */
+.stream-live.net-waiting { color: var(--warn); }
+.stream-live-dot.net-waiting-dot { background: var(--warn); animation: pulse-amber 2.4s infinite; }
 .msg-body p { margin: 4px 0; }
 
 /* markdown (Md) 排版：表格 / 代码 / 列表 / 标题 / 引用 */

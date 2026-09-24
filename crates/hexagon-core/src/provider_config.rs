@@ -97,6 +97,18 @@ pub struct SlotBinding {
     pub model: String,
 }
 
+/// web 搜索摘要槽（code-search-and-subagent 票 03）：可选——未配置时
+/// web_search 工具回报「槽未配置」。`backend` 目前认 `brave` 与 `custom`
+/// （自建元搜索的预留位，endpoint 必填）；凭据名 `search/<backend>`
+/// 存钥匙串，不落本文件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct SearchCfg {
+    pub backend: String,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
 /// providers.json 文档。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
@@ -105,6 +117,8 @@ pub struct ProviderDoc {
     pub providers: Vec<ProviderDef>,
     #[serde(default)]
     pub slots: HashMap<String, SlotBinding>,
+    #[serde(default)]
+    pub search: Option<SearchCfg>,
 }
 
 fn providers_path() -> PathBuf {
@@ -185,6 +199,14 @@ pub fn set_binding(slot: &str, provider_id: &str, model: &str) -> Result<(), Pro
 pub fn remove_binding(slot: &str) -> Result<(), ProvidersError> {
     let mut doc = load()?;
     doc.slots.remove(slot);
+    write_doc(&doc)
+}
+
+/// 设置/清除 web 搜索摘要槽（票 03）。后端名空串=清除；
+/// 凭据不归本函数管（壳层经 provider_admin::save_search 走凭据库）。
+pub fn set_search(search: Option<SearchCfg>) -> Result<(), ProvidersError> {
+    let mut doc = load()?;
+    doc.search = search;
     write_doc(&doc)
 }
 

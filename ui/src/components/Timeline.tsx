@@ -86,18 +86,42 @@ export function ThinkingRow({ text, live }: { text: string; live?: boolean }) {
   )
 }
 
+// 断网等网角标（network-resilience 票 02）：等网中气泡转「重连中」——
+// 琥珀脉点 + 等网时长计时。与「回复中」同一槽位互斥切换：等网期间
+// 流式增量本来就停，两个状态叠着报只会互相撒谎。
+function ReconnectChip({ since }: { since: number }) {
+  const { t } = useTranslation()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 500)
+    return () => clearInterval(iv)
+  }, [])
+  const s = Math.max(0, now - since) / 1000
+  const elapsed = s < 60 ? `${s.toFixed(0)}s` : `${Math.floor(s / 60)}m ${(s % 60).toFixed(0)}s`
+  return (
+    <span data-net-waiting="" className="stream-live net-waiting">
+      <span className="stream-live-dot net-waiting-dot" />
+      {t('timeline.reconnecting')} · {elapsed}
+    </span>
+  )
+}
+
 // 进行中的一条回复（hands-free 票 06）：增量追加在同一气泡，不另起多条。
 export function LiveReply({
   role,
   text,
   thinking,
   generating,
+  netWaiting,
   avatar,
 }: {
   role: string
   text: string
   thinking: string
   generating: boolean
+  /// 等网进入时刻（票 NR-02）：非空 = 该 agent 在等网——气泡不切走、
+  /// 已收文本保留，只把状态角标换成「重连中」。
+  netWaiting?: number
   avatar?: ReactNode
 }) {
   const { t } = useTranslation()
@@ -107,7 +131,8 @@ export function LiveReply({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
           <span style={{ fontWeight: 560, fontSize: 12 }}>{role}</span>
-          {generating && (
+          {generating && netWaiting != null && <ReconnectChip since={netWaiting} />}
+          {generating && netWaiting == null && (
             <span data-generating="" className="stream-live">
               <span className="stream-live-dot" />
               {t('timeline.streaming')}
@@ -702,9 +727,12 @@ function joinCalls(buf: Record<number, string> | undefined): string {
 // 首 token 等待位（beautiful-ui 票 04）：回合已开、流缓冲未到的死寂段——
 // 像素格占住气泡位，告诉负责人 agent 在跑而非卡死。
 // 缓冲一到即被 LiveReply 顶掉（ids 判据同一处），无交接空窗。
-export function WaitingReply({ role, startedAt, avatar }: {
+export function WaitingReply({ role, startedAt, netWaiting, avatar }: {
   role: string
   startedAt?: number | null
+  /// 等网进入时刻（票 NR-02）：首 token 未到就断网时，占位气泡的
+  /// 标签从「执行中」转「重连中」，计时起点 = 等网起点（不是回合起点）。
+  netWaiting?: number
   avatar?: ReactNode
 }) {
   const { t } = useTranslation()
@@ -715,7 +743,10 @@ export function WaitingReply({ role, startedAt, avatar }: {
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
           <span style={{ fontWeight: 560, fontSize: 12 }}>{role}</span>
         </div>
-        <LoadingState label={t('timeline.working')} startedAt={startedAt ?? undefined} />
+        <LoadingState
+          label={netWaiting != null ? t('timeline.reconnecting') : t('timeline.working')}
+          startedAt={netWaiting ?? startedAt ?? undefined}
+        />
       </div>
     </div>
   )
@@ -726,6 +757,7 @@ function StreamFooter() {
   const streams = useUiStore((s) => s.streams)
   const thinkings = useUiStore((s) => s.thinkings)
   const streamDone = useUiStore((s) => s.streamDone)
+  const waitingSince = useUiStore((s) => s.waitingSince)
   const team = useUiStore((s) => s.team)
   const timeline = useUiStore((s) => s.timeline)
   const ids = [...new Set([...Object.keys(streams), ...Object.keys(thinkings)])].filter((id) =>
@@ -745,6 +777,7 @@ function StreamFooter() {
         <WaitingReply
           role={waitingMember?.role ?? waitingId}
           startedAt={turn.at}
+          netWaiting={waitingSince[waitingId]}
           avatar={waitingMember ? <Avatar agentId={waitingId} role={waitingMember.role} size={34} /> : undefined}
         />
       )}
@@ -758,6 +791,7 @@ function StreamFooter() {
             text={joinCalls(streams[id])}
             thinking={joinCalls(thinkings[id])}
             generating={!done}
+            netWaiting={waitingSince[id]}
             avatar={member ? <Avatar agentId={id} role={member.role} size={34} /> : undefined}
           />
         )

@@ -85,6 +85,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0020_agent_peers",
         include_str!("../migrations/0020_agent_peers.sql"),
     ),
+    (
+        "0021_code_index",
+        include_str!("../migrations/0021_code_index.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -152,6 +156,17 @@ impl Db {
 
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// 库文件路径（子代理线程用——rusqlite Connection 不跨线程，
+    /// 派遣线程自己开第二连接）。内存库/临时库的路径是空串——
+    /// `Db::open("")` 会开一份全新临时库（agents 表空空如也，
+    /// 嵌套回合上来就 NoAgent），必须滤掉让调用方退化内联路径。
+    pub fn path(&self) -> Option<std::path::PathBuf> {
+        self.conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
     }
 
     /// 项目内短 id：`{prefix}{n}`，n 按 prefix 单调递增（存 id_counters）。

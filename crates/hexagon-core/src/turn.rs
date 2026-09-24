@@ -36,6 +36,30 @@ const RETRY_DELAYS_MS: [u64; 3] = [100, 250, 500];
 /// 同工具同错熔断（US57）：连续 N 次相同失败结束回合等负责人。
 const BREAKER_STREAK: usize = 3;
 
+/// 断网等网策略（network-resilience 票 01）：快重试耗尽后的第二段。
+/// Copy + Default——ctx 每处克隆零成本；测试注入毫秒级参数。
+#[derive(Debug, Clone, Copy)]
+pub struct WaitPolicy {
+    /// 探针间隔：等网中每隔这么久原样重发同一调用（生产 5s）。
+    pub probe_interval: std::time::Duration,
+    /// 等网总预算：累计超限即挂起（生产 5min）。
+    pub budget: std::time::Duration,
+    /// 睡眠切片粒度：等网不是一觉睡死——每片末尾查暂停旗/停旗，
+    /// 负责人叫停的响应延迟被 tick 限定。
+    pub tick: std::time::Duration,
+}
+
+impl Default for WaitPolicy {
+    /// 生产常量（票 01 规格值：5s 探针 / 5min 预算 / 100ms 暂停响应粒度）。
+    fn default() -> Self {
+        Self {
+            probe_interval: std::time::Duration::from_secs(5),
+            budget: std::time::Duration::from_secs(300),
+            tick: std::time::Duration::from_millis(100),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TurnError {
     #[error(transparent)]
@@ -56,10 +80,19 @@ pub enum TurnError {
     Orch(#[from] crate::orchestra::OrchError),
     #[error(transparent)]
     Cards(#[from] crate::cards::CardsError),
+    /// 断网等网超预算挂起（network-resilience 票 01）：哨兵错误——
+    /// run 已在 suspend_run 里收口，这里只负责把终态带回调用方。
+    #[error("suspended: network wait budget exhausted")]
+    Suspended,
 }
 
 /// 截断续推指令（票 13）：不重复推理，直接下一步。
 const TRUNCATION_NUDGE: &str = "输出被截断。不要重复推理，直接给下一步。";
+/// 票 NR-03：恢复重触发的固定提示。中断回合的原指令靠未推进的简报
+/// 游标自然重读，这句只提醒模型先看盘上已有状态再动手——重触发是
+/// 新回合，模型必须识别已有产物/进展而不是从头重做。
+pub const RECOVERY_NUDGE: &str =
+    "你负责的 run 曾被中断，现已恢复。简报里待办的指令继续执行——先确认已有产物与状态，接着往下做，不要从头重来。";
 
 // ---------- 回合执行 ----------
 
@@ -81,6 +114,11 @@ pub struct TurnDelta {
     /// 流终信号：回合收口时发一次（无论成败/叫停），UI 收气泡，
     /// 不必猜是哪个命令触发的回合。
     pub done: bool,
+    /// 断网等网旗（network-resilience 票 02）：true 帧 = 进入等网
+    /// （气泡转「重连中」但保留已收文本）；false 帧清旗——正常增量
+    /// 与 done 帧隐式清，显式 false 帧只在「探针成功后没立刻出文本」
+    /// 的窗口里兜底。
+    pub waiting: bool,
     pub text: String,
     /// 本帧的思考增量（hands-free 票 06）。空串 = 这一帧没有推理文本，
     /// UI 不因此画思考行。与 text 分列，不把推理拼进可见回复。
@@ -96,8 +134,58 @@ fn retryable(e: &crate::provider::ProviderError) -> bool {
     matches!(e, crate::provider::ProviderError::Transport(_))
 }
 
-/// 模型调用（流式）+ 瞬时重试（US57）。重试全程落 System 事件留痕；
-/// 重试前已发 delta 时先补一发 reset，让 UI 丢弃半截文本重起。
+/// 子代理停旗（票 04）：非子代理恒 false。
+fn halted_flag(ctx: &ToolContext) -> bool {
+    ctx.subagent
+        .as_ref()
+        .is_some_and(|s| s.halt.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// 叫停判定（暂停旗 + 子代理停旗）：等网睡眠切片与流 delta 缝共用一处。
+fn halted(db: &Db, ctx: &ToolContext) -> bool {
+    crate::orchestra::is_paused(db, &ctx.project_id).unwrap_or(false) || halted_flag(ctx)
+}
+
+/// 等网退出留痕（票 01）：一条系统事件带探针数与等网时长 + 一帧清旗。
+/// 进入/退出各一条；失败探针不逐条落事件——5s 一次的探针刷屏没有信息量，
+/// 「等了多久、探了几次、怎么退出的」在退出事件里一次说清。
+fn leave_wait(
+    db: &Db,
+    ctx: &ToolContext,
+    sink: &mut DeltaSink<'_>,
+    call: usize,
+    since: std::time::Instant,
+    probes: usize,
+    reason: &str,
+) {
+    let _ = db.append_event(
+        &ctx.project_id,
+        EventKind::System,
+        json!({"kind": "net_wait_exit", "call": call, "probes": probes,
+               "elapsed_ms": since.elapsed().as_millis() as u64, "reason": reason}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    );
+    sink(&TurnDelta {
+        agent_id: ctx.agent_id.clone(),
+        stage_run_id: ctx.stage_run_id.clone(),
+        call,
+        reset: false,
+        done: false,
+        waiting: false,
+        text: String::new(),
+        thinking: String::new(),
+    });
+}
+
+/// 模型调用（流式）+ 两段式重试（US57 + network-resilience 票 01）。
+///
+/// 为什么两段而不是无限退避：快重试（100/250/500ms）吃亚秒级抖动，
+/// 断网是真状态——Wi-Fi/VPN 抖一下不该判死回合，也不该用指数退避把
+/// 恢复探测越推越慢。等网是「状态」不是「计数」：进入发 waiting 旗让
+/// UI 把气泡转「重连中」，睡眠按 tick 切片随时响应叫停，进出各落一条
+/// 系统事件，预算耗尽把 run 挂起等负责人恢复——这些语义塞不进
+/// 「retry_count」一个字里。
 fn stream_with_retry(
     db: &Db,
     ctx: &ToolContext,
@@ -107,13 +195,18 @@ fn stream_with_retry(
     sink: &mut DeltaSink<'_>,
 ) -> Result<ChatResponse, TurnError> {
     let mut attempt = 0usize;
+    // 等网态三要素：起点（时长/预算）、探针数、是否已进入（事件只发一次）。
+    let mut waiting_since: Option<std::time::Instant> = None;
+    let mut probes = 0usize;
     loop {
         let mut emitted = false;
         let r = provider.stream(req, &mut |d| {
             // 票 04：delta 间隙叫停检查——流循环阻塞在读上时，这里是
             // 唯一能让负责人暂停生效的缝。is_paused 读库失败按未暂停
             // 处理：暂停是尽力而为的中途检查，轮顶检查仍是权威闸。
-            if crate::orchestra::is_paused(db, &ctx.project_id).unwrap_or(false) {
+            // 票 04（code-search）：子代理的 halt 旗同缝检查——tasks stop
+            // 不需要等下一轮顶。
+            if halted(db, ctx) {
                 return false;
             }
             let (text, thinking) = match d {
@@ -127,13 +220,21 @@ fn stream_with_retry(
                 call,
                 reset: false,
                 done: false,
+                waiting: false,
                 text,
                 thinking,
             });
             true
         });
         match r {
-            Ok(resp) => return Ok(resp),
+            Ok(resp) => {
+                // 探针成功：等网退出（resumed）再交回响应——半截文本的复位帧
+                // 早随失败发过了，这里只收旗标。
+                if let Some(since) = waiting_since.take() {
+                    leave_wait(db, ctx, sink, call, since, probes, "resumed");
+                }
+                return Ok(resp);
+            }
             Err(e) if retryable(&e) && attempt < RETRY_DELAYS_MS.len() => {
                 attempt += 1;
                 log::warn!(
@@ -147,6 +248,7 @@ fn stream_with_retry(
                         call,
                         reset: true,
                         done: false,
+                        waiting: false,
                         text: String::new(),
                         thinking: String::new(),
                     });
@@ -162,7 +264,99 @@ fn stream_with_retry(
                     RETRY_DELAYS_MS[attempt - 1],
                 ));
             }
-            Err(e) => return Err(e.into()),
+            Err(e) if retryable(&e) => {
+                // ---- 第二段：等网（Transport 才进，别的错上面直传）----
+                if waiting_since.is_none() {
+                    waiting_since = Some(std::time::Instant::now());
+                    crate::diag::note(
+                        crate::diag::CLASS_JUDGE,
+                        false,
+                        Some(&ctx.project_id),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                        None,
+                        "net_wait",
+                        "enter",
+                        std::time::Instant::now(),
+                    );
+                    db.append_event(
+                        &ctx.project_id,
+                        EventKind::System,
+                        json!({"kind": "net_wait_enter", "call": call,
+                               "attempts": RETRY_DELAYS_MS.len()}),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                    )?;
+                    // 进入等网：waiting 旗与复位帧合一——已吐半截文本的
+                    // 先作废再转重连态，UI 上是一帧语义不是两帧。
+                    sink(&TurnDelta {
+                        agent_id: ctx.agent_id.clone(),
+                        stage_run_id: ctx.stage_run_id.clone(),
+                        call,
+                        reset: emitted,
+                        done: false,
+                        waiting: true,
+                        text: String::new(),
+                        thinking: String::new(),
+                    });
+                } else if emitted {
+                    // 等网中某次探针吐了半截又挂：重发前作废它。
+                    sink(&TurnDelta {
+                        agent_id: ctx.agent_id.clone(),
+                        stage_run_id: ctx.stage_run_id.clone(),
+                        call,
+                        reset: true,
+                        done: false,
+                        waiting: true,
+                        text: String::new(),
+                        thinking: String::new(),
+                    });
+                }
+                let since = waiting_since.unwrap();
+                if since.elapsed() > ctx.wait.budget {
+                    // 预算耗尽：等网转挂起。run 标 interrupted + 恢复卡入队
+                    // 归 orchestra::suspend_run（属主模块），本层不碰两表。
+                    // 挂起复用 interrupted 终态不是第三种 run 状态词：
+                    // 恢复语义与进程被杀相同（解锁→重触发），另造词只会让
+                    // 恢复面分叉。
+                    leave_wait(db, ctx, sink, call, since, probes, "timeout");
+                    crate::diag::note(
+                        crate::diag::CLASS_REJECT,
+                        true,
+                        Some(&ctx.project_id),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                        None,
+                        "net_wait",
+                        "suspend_budget",
+                        since,
+                    );
+                    if let Some(run_id) = ctx.stage_run_id.as_deref() {
+                        crate::orchestra::suspend_run(db, &ctx.project_id, run_id, &ctx.agent_id)?;
+                    }
+                    return Err(TurnError::Suspended);
+                }
+                // 等网睡眠按 tick 切片：每片末尾查叫停，暂停响应延迟 ≤ tick。
+                let mut left = ctx.wait.probe_interval;
+                while left > std::time::Duration::ZERO {
+                    let slice = left.min(ctx.wait.tick);
+                    std::thread::sleep(slice);
+                    left -= slice;
+                    if halted(db, ctx) {
+                        leave_wait(db, ctx, sink, call, since, probes, "paused");
+                        return Err(crate::provider::ProviderError::Interrupted.into());
+                    }
+                }
+                probes += 1;
+            }
+            Err(e) => {
+                // 等网中探到非 Transport 错：等网态收口再上报（退出原因
+                // 「error」——不是恢复也不是暂停，是另一类失败把它顶出去）。
+                if let Some(since) = waiting_since.take() {
+                    leave_wait(db, ctx, sink, call, since, probes, "error");
+                }
+                return Err(e.into());
+            }
         }
     }
 }
@@ -231,6 +425,10 @@ pub enum TurnOutcome {
     /// 取代旧的 Failed("paused by owner mid-turn")，轨迹上可与
     /// 真失败区分（OPE-171 教训：终态语义诚实，别拿 Failed 凑数）。
     Interrupted,
+    /// 断网等网超预算挂起（票 01）：run 已被 suspend_run 标
+    /// interrupted + 恢复卡入队；回合以「没正常完」收口但与
+    /// Interrupted（人主动叫停）可区分。
+    Suspended,
 }
 
 /// 跑一个回合。provider 是接缝（测试给 ScriptedProvider）。
@@ -338,6 +536,13 @@ fn run_turn_impl(
     if crate::usage::enforce_cap(db, &ctx.project_id)? {
         log::warn!("turn blocked by usage cap: agent={}", ctx.agent_id);
         return Ok(TurnOutcome::SkippedCap);
+    }
+    // 票 07：激活任务清单随激活生灭——父级回合起跑线即激活边界，
+    // 残留条目（含上次没收尾的子代理派遣）先 halt 再清空。
+    // 子代理回合（ctx.subagent 在场）共享父板，不得清场。
+    if ctx.subagent.is_none() {
+        ctx.tasks
+            .begin_activation(&crate::subagent::activation_key(ctx));
     }
     log::info!(
         "turn start: agent={} run={:?}",
@@ -462,7 +667,9 @@ fn run_turn_impl(
     let req_base = ChatRequest {
         model_slot: model_slot.unwrap_or_else(|| "default".into()),
         messages: vec![],
-        tools: registry.defs(),
+        // 票 03：caps 含 web 的槽（Anthropic 原生 web_search 在场）
+        // 本地 web_search 不上清单——同名撞车且规格要求二选一。
+        tools: registry.defs_for_ctx(Some(ctx)),
     };
 
     // 票 02 / ADR 0068：撞限闸按「实际服务的那个模型」的窗口收编——
@@ -518,6 +725,8 @@ fn run_turn_impl(
                 Err(TurnError::Provider(crate::provider::ProviderError::Interrupted)) => {
                     return Ok(TurnOutcome::Interrupted);
                 }
+                // 票 01：等网超预算 → Suspended（run 已在 suspend_run 收口）
+                Err(TurnError::Suspended) => return Ok(TurnOutcome::Suspended),
                 Err(e) => return Err(e),
             };
             crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
@@ -532,6 +741,7 @@ fn run_turn_impl(
                 call: 0,
                 reset: true,
                 done: false,
+                waiting: false,
                 text: String::new(),
                 thinking: String::new(),
             });
@@ -557,8 +767,24 @@ fn run_turn_impl(
         for round in 0..MAX_TOOL_ROUNDS {
             // 负责人在工具循环期间可暂停（US15）：每轮顶检，叫停即收回合。
             // 票 04：Interrupted 终态取代 Failed——叫停不是失败。
-            if crate::orchestra::is_paused(db, &ctx.project_id)? {
+            // 票 04（code-search）：子代理停旗同闸——tasks stop 在轮顶生效。
+            if crate::orchestra::is_paused(db, &ctx.project_id)? || halted_flag(ctx) {
                 return Ok(TurnOutcome::Interrupted);
+            }
+            // 子代理中途复查父休眠（票 04：父休眠子代理不跑——派遣前置闸
+            // 只管起跑，跑中睡死的在这里收口）。多读一行换一个语义闸。
+            if ctx.subagent.is_some() {
+                let sleeping: bool = db
+                    .conn()
+                    .query_row(
+                        "SELECT status='sleeping' FROM agents WHERE id=?1",
+                        [&ctx.agent_id],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(false);
+                if sleeping {
+                    return Ok(TurnOutcome::Interrupted);
+                }
             }
             // 票 05 steering 排水：把水位后新来的 owner 消息按 id 序注入
             // 出站上下文（结构化信封与首条 instruction 同款）。留痕可审计。
@@ -649,6 +875,8 @@ fn run_turn_impl(
                 Err(TurnError::Provider(crate::provider::ProviderError::Interrupted)) => {
                     return Ok(TurnOutcome::Interrupted);
                 }
+                // 票 01：等网超预算 → Suspended（run 已在 suspend_run 收口）
+                Err(TurnError::Suspended) => return Ok(TurnOutcome::Suspended),
                 Err(e) => return Err(e),
             };
             log::debug!(
@@ -714,10 +942,10 @@ fn run_turn_impl(
             // 跨进程不复现，位置序在「同会话重放」中稳定，中断恢复命中既有卡。
             for (idx, (id, name, input)) in tool_uses.into_iter().enumerate() {
                 let seq = format!("r{round}i{idx}");
-                // US36 研究助手：research 由 turn 层截获跑嵌套只读回合
-                // （provider/只读注册表都在这里才够得着，exec 层拿不到）
-                let called = if name == "research" {
-                    crate::research::call_nested(db, provider, registry, ctx, input)
+                // code-search 票 04：subagent 由 turn 层截获跑嵌套回合——
+                // provider/子代理注册表/任务板都在这里才够得着，exec 层拿不到。
+                let called = if name == "subagent" {
+                    crate::subagent::call_nested(db, provider, registry, ctx, input)
                 } else {
                     registry.call_with_seq(db, ctx, &name, input, Some(&seq))
                 };
@@ -834,12 +1062,15 @@ fn run_turn_impl(
     })();
 
     // 票 03：流终信号——无论成败都发一次，UI 据此收气泡。
+    // waiting:false 是 NR-02 的兜底清旗（等网中被打停/挂起的路径
+    // 都以这一帧收尾，不必各处再补清旗帧）。
     sink(&TurnDelta {
         agent_id: ctx.agent_id.clone(),
         stage_run_id: ctx.stage_run_id.clone(),
         call: usize::MAX,
         reset: false,
         done: true,
+        waiting: false,
         text: String::new(),
         thinking: String::new(),
     });
@@ -856,6 +1087,7 @@ fn run_turn_impl(
             // 但 outcome 载荷带 Interrupted 字样可区分主动叫停与真失败。
             Ok(TurnOutcome::Interrupted)
             | Ok(TurnOutcome::Truncated)
+            | Ok(TurnOutcome::Suspended)
             | Ok(TurnOutcome::Failed(_))
             | Err(_) => EventKind::TurnFailed,
         },
@@ -869,9 +1101,10 @@ fn run_turn_impl(
             let mut p = json!({ "agent": ctx.agent_id, "outcome": format!("{outcome:?}") });
             let code = match &outcome {
                 Ok(TurnOutcome::Truncated) => Some(crate::trace::FailureCode::BudgetExceeded),
-                Ok(TurnOutcome::Interrupted) | Ok(TurnOutcome::Failed(_)) | Err(_) => {
-                    Some(crate::trace::FailureCode::Ambiguous)
-                }
+                Ok(TurnOutcome::Interrupted)
+                | Ok(TurnOutcome::Suspended)
+                | Ok(TurnOutcome::Failed(_))
+                | Err(_) => Some(crate::trace::FailureCode::Ambiguous),
                 _ => None,
             };
             if let Some(c) = code {
@@ -927,6 +1160,9 @@ fn push_assistant(messages: &mut Vec<Message>, content: Vec<ContentBlock>) {
 }
 
 /// 可见回复或思考至少有一边才落一条。思考不单独变成多条消息。
+/// 票 04（code-search）：子代理域不上时间线——它的产出走回执格
+/// （scope.answer），气泡永远是父代理自己的回复；只读回合曾在
+/// 时间线叠第二条「助手」消息是 US36 的已纠行为。
 fn persist_visible(
     db: &Db,
     ctx: &ToolContext,
@@ -934,6 +1170,10 @@ fn persist_visible(
     carried: &mut String,
 ) -> Result<(), TurnError> {
     if text.is_empty() && carried.is_empty() {
+        return Ok(());
+    }
+    if let Some(scope) = &ctx.subagent {
+        *scope.answer.lock().unwrap() = Some(text.to_string());
         return Ok(());
     }
     let thinking = if carried.is_empty() {

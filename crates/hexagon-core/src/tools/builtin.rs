@@ -4,32 +4,6 @@ use super::*;
 
 // ---------- 内置工具 ----------
 
-/// 研究助手入口（US36）：模型可见的 `research` 工具；实际执行由 turn 层
-/// 截获跑嵌套只读回合（`research::call_nested`），exec 走到即未接截获的 bug。
-pub struct Research;
-impl Tool for Research {
-    fn name(&self) -> &str {
-        "research"
-    }
-    fn description(&self) -> &str {
-        "spawn a read-only nested research pass: search/read/compare and return observations with citations. Cannot write files, run commands, or use git."
-    }
-    fn input_schema(&self) -> Value {
-        json!({"type": "object",
-               "properties": {"question": {"type": "string",
-                 "description": "what to research"}},
-               "required": ["question"]})
-    }
-    fn risk(&self) -> RiskClass {
-        RiskClass::Read
-    }
-    fn exec(&self, _db: &Db, _input: &Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
-        Err(ToolError::Exec(
-            "research is intercepted by the turn layer".into(),
-        ))
-    }
-}
-
 /// 读图上限（票 02）：>5MB 按原文本路径处理并注明，不塞图。
 const FS_IMAGE_CAP: usize = 5 * 1024 * 1024;
 
@@ -89,6 +63,16 @@ impl Tool for FsRead {
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         let bytes = std::fs::read(&p)?;
+        // 票 04：子代理域记实读路径——交回的引用以这格为准（实际读过的，
+        // 不是模型自称读过什么）。
+        if let Some(s) = &ctx.subagent {
+            if let Ok(rel) = p.strip_prefix(&ctx.repo_root) {
+                s.reads
+                    .lock()
+                    .unwrap()
+                    .push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
         // 票 02 读图路径：双判认图 → caps 闸门 → 尺寸闸 → image 载荷。
         // 非 vision 槽字节不进上下文（fail-closed，ADR 0058-2）。
         if let Some(mt) = image_media_type(&p, &bytes) {
@@ -192,6 +176,57 @@ impl Tool for FsPatch {
             "diff_added": new.lines().count(),
             "diff_removed": old.lines().count(),
         }))
+    }
+}
+
+// ---------- 仓内搜索（code-search-and-subagent 票 01）----------
+//
+// 不走执行命令（bash rg/find）的原因：执行命令过 Exec 必问卡，把「找文件」
+// 这种只读定位动作变成人工裁决——票据动机就是去掉这条权限开销与上下文噪声。
+
+/// 按文件名找仓内文件（glob 或子串）。Read 类：纯定位无副作用。
+pub struct FsFind;
+impl Tool for FsFind {
+    fn name(&self) -> &str {
+        "fs_find"
+    }
+    fn description(&self) -> &str {
+        "Find repo files by name. `pattern` with glob chars (* ? **) matches path or basename; plain text matches as a case-insensitive substring. Ignored files (.gitignore) are skipped. Returns up to 100 relative paths."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{
+            "pattern":{"type":"string","description":"glob like 'src/**/*.rs' or plain substring"}},
+            "required":["pattern"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Read
+    }
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let hits = crate::search::find_by_name(&ctx.repo_root, str_arg(input, "pattern")?);
+        Ok(json!({"count": hits.len(), "paths": hits}))
+    }
+}
+
+/// 仓内正文搜索（字面量，返回 path:line）。Read 类。
+pub struct FsGrep;
+impl Tool for FsGrep {
+    fn name(&self) -> &str {
+        "fs_grep"
+    }
+    fn description(&self) -> &str {
+        "Search file contents for a literal substring (not regex). Returns matching path, line number and the line text — up to 100 hits. Ignored and binary files are skipped."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{
+            "query":{"type":"string","description":"literal text to search for"}},
+            "required":["query"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Read
+    }
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let hits = crate::search::grep_content(&ctx.repo_root, str_arg(input, "query")?);
+        Ok(json!({"count": hits.len(), "hits": hits}))
     }
 }
 
@@ -384,6 +419,9 @@ impl Tool for ArtifactRead {
         );
         let p = repo_path(&ctx.repo_root, &rel)?;
         let bytes = std::fs::read(&p)?;
+        if let Some(s) = &ctx.subagent {
+            s.reads.lock().unwrap().push(rel.clone());
+        }
         Ok(json!({"content": String::from_utf8_lossy(&bytes[..bytes.len().min(FS_READ_CAP)])}))
     }
 }

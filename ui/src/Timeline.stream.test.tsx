@@ -24,6 +24,7 @@ const delta = (over: Partial<TurnDelta>): TurnDelta => ({
   stage_run_id: null,
   call: 0,
   reset: false,
+  waiting: false,
   done: false,
   text: '',
   thinking: '',
