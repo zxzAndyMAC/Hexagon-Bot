@@ -22,7 +22,7 @@ pub const INTAKE_PROMPT: &str = "You have just entered a repository that already
 
 Put this in your reply:
 - what the project is
-- the build, test and check commands that can be determined from the files; for anything the files do not show, write \"unknown\" — never invent commands
+- the build, test and check commands that can be determined from the files; for anything the files do not show, write \"{unknown}\" — never invent commands
 - the entry points and the directory layout
 - if AGENTS.md or CLAUDE.md already exists, only cite it; do not propose replacing it
 
@@ -33,12 +33,15 @@ Do not change business code, do not publish remotely, do not write secrets.
 Write the reply in {language}.";
 
 pub fn intake_prompt() -> String {
-    INTAKE_PROMPT.replace("{language}", crate::uilang::reply_language())
+    INTAKE_PROMPT
+        .replace("{language}", crate::uilang::reply_language())
+        .replace("{unknown}", crate::owner_text::unknown())
 }
 
 /// 没有接话人时工作台自己写的那一句。作者不是花名册里的角色。
-pub const NO_INTAKE_SPEAKER_NOTE: &str =
-    "没有接话的人做这次开场分析。项目经理未勾选；流程包要当前阶段激活名单的第一位，快速通道要通道角色，这里都没有。";
+pub fn no_intake_speaker_note() -> &'static str {
+    crate::owner_text::no_intake_speaker()
+}
 
 pub const STATUS_SKIP: &str = "skip";
 pub const STATUS_PENDING: &str = "pending";
@@ -68,7 +71,11 @@ impl RepoCommands {
 
 /// 给负责人看的命令块（时间线里）。
 pub fn commands_block(cmds: &RepoCommands) -> String {
-    commands_block_with(cmds, "未知", "；")
+    commands_block_with(
+        cmds,
+        crate::owner_text::unknown(),
+        crate::owner_text::list_sep(),
+    )
 }
 
 /// 空槽的占位词可换：发给模型的那份用英文（ADR 0071），时间线那份不动。
@@ -227,25 +234,26 @@ pub fn about_line(scrubbed: &str) -> String {
         }
         return s;
     }
-    "未知".into()
+    crate::owner_text::unknown().into()
 }
 
 pub fn draft_body(name: &str, about: &str, cmds: &RepoCommands, layout: &[String]) -> String {
     let name = name.replace(['\n', '\r'], " ");
     let name = name.trim();
-    let name = if name.is_empty() { "未知" } else { name };
+    let unknown = crate::owner_text::unknown();
+    let name = if name.is_empty() { unknown } else { name };
     let about = about.trim();
-    let about = if about.is_empty() { "未知" } else { about };
+    let about = if about.is_empty() { unknown } else { about };
     let mut layout_s = String::new();
     if layout.is_empty() {
-        layout_s.push_str("- 未知\n");
+        layout_s.push_str(&format!("- {unknown}\n"));
     } else {
         for n in layout {
             layout_s.push_str(&format!("- {n}\n"));
         }
     }
     format!(
-        "# {name}\n\n## 做什么\n{about}\n\n{}\n## Layout\n{layout_s}\n## Conventions\n-\n",
+        "# {name}\n\n## Purpose\n{about}\n\n{}\n## Layout\n{layout_s}\n## Conventions\n-\n",
         commands_block(cmds)
     )
 }
@@ -263,9 +271,9 @@ pub fn compose_timeline(
     }
     body.push_str(&commands_block(cmds));
     if let Some(file) = cited {
-        body.push_str(&format!("\n已有项目说明：{file}（只引用，不覆盖）\n"));
+        body.push_str(&crate::owner_text::existing_instructions(file));
     } else if let Some(draft) = draft {
-        body.push_str("\n## 草案\n确认后才写入 AGENTS.md。\n\n");
+        body.push_str(crate::owner_text::draft_banner());
         body.push_str(draft);
         if !draft.ends_with('\n') {
             body.push('\n');
@@ -465,7 +473,7 @@ mod tests {
 
 Put this in your reply:
 - what the project is
-- the build, test and check commands that can be determined from the files; for anything the files do not show, write \"unknown\" — never invent commands
+- the build, test and check commands that can be determined from the files; for anything the files do not show, write \"{unknown}\" — never invent commands
 - the entry points and the directory layout
 - if AGENTS.md or CLAUDE.md already exists, only cite it; do not propose replacing it
 
@@ -493,9 +501,9 @@ Write the reply in {language}.";
         assert_eq!(cmds.test, vec!["npm run test".to_string()]);
         assert!(cmds.check.is_empty());
         let block = commands_block(&cmds);
-        assert!(block.contains("- Build: 未知"));
+        assert!(block.contains("- Build: unknown"));
         assert!(block.contains("- Test: npm run test"));
-        assert!(block.contains("- Check: 未知"));
+        assert!(block.contains("- Check: unknown"));
         assert!(!block.contains("oxlint"));
         assert!(!block.contains("npm run lint"));
         assert!(!block.contains("npm run build"));

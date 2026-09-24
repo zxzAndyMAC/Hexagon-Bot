@@ -3583,7 +3583,7 @@ fn assert_workbench_note(wb: &Workbench) {
         .any(|id| id == &note.message.as_ref().unwrap().author));
     assert_eq!(
         note.message.as_ref().unwrap().body,
-        crate::pm_route::NO_RECEIVER_NOTE
+        crate::pm_route::no_receiver_note()
     );
     assert!(note.event.kind == EventKind::AgentMessage);
 }
@@ -3767,9 +3767,9 @@ fn nonempty_repo_gets_one_readonly_intake_and_l4_does_not_write_the_draft() {
     assert_eq!(author, wb.agent_by_role("项目经理").unwrap());
     assert!(body.contains("这是一个前端小项目"));
     assert!(body.contains("- Test: npm run test"));
-    assert!(body.contains("- Build: 未知"));
-    assert!(body.contains("- Check: 未知"));
-    assert!(body.contains("## 草案"));
+    assert!(body.contains("- Build: unknown"));
+    assert!(body.contains("- Check: unknown"));
+    assert!(body.contains("## Draft"));
     assert!(
         !body.contains("npm run build"),
         "文件里没有的命令不能留在分析里"
@@ -3816,8 +3816,9 @@ fn nonempty_repo_gets_one_readonly_intake_and_l4_does_not_write_the_draft() {
     );
     assert!(md.contains("## Commands"));
     assert!(md.contains("- Test: npm run test"));
-    assert!(md.contains("- Build: 未知"));
-    assert!(!md.contains("## 草案"));
+    assert!(md.contains("- Build: unknown"));
+    assert!(md.contains("## Purpose"));
+    assert!(!md.contains("## Draft"));
     assert!(!md.contains("npm run build"));
     assert!(!dir.path().join("CLAUDE.md").exists());
     assert!(!wb.intake_draft_pending().unwrap());
@@ -3872,8 +3873,8 @@ fn existing_instruction_file_is_cited_and_not_replaced() {
         }
         let (_, body) = analysis_body(&wb);
         assert!(body.contains(file));
-        assert!(body.contains("只引用"));
-        assert!(!body.contains("## 草案"));
+        assert!(body.contains("cite only"));
+        assert!(!body.contains("## Draft"));
         assert!(!body.contains("npm run build"));
         assert!(!wb.intake_draft_pending().unwrap());
         assert!(matches!(
@@ -4008,7 +4009,7 @@ fn without_a_speaker_the_workbench_notes_and_does_not_invent_a_role() {
         .any(|id| id == &note.message.as_ref().unwrap().author));
     assert_eq!(
         note.message.as_ref().unwrap().body,
-        crate::intake::NO_INTAKE_SPEAKER_NOTE
+        crate::intake::no_intake_speaker_note()
     );
     assert_eq!(wb.run_opening_intake().unwrap(), IntakeRun::Skipped);
     let again = timeline(&wb, None, 40).unwrap();

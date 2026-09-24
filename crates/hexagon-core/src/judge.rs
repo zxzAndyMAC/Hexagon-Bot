@@ -63,8 +63,10 @@ impl Judgement {
 #[derive(Debug, Clone)]
 pub struct JudgeVerdict {
     pub verdict: Judgement,
-    /// 给负责人看的一句话理由（大白话,不带术语）
+    /// 模型写的一句（界面语言）。机械判定与失败兜底留空，理由在 [`reason`]。
     pub rationale: String,
+    /// 原因码加参数。界面渲染。模型成功给出理由时为 None。
+    pub reason: Option<serde_json::Value>,
     /// 后端标识：mechanical / llm:<slot>
     pub backend: String,
     /// 判定所用模型槽（机械后端为 None——票 08:verdict 事件要可溯源）
@@ -105,9 +107,10 @@ pub struct MechanicalJudge;
 
 impl JudgeBackend for MechanicalJudge {
     fn evaluate(&self, input: &JudgeInput) -> JudgeVerdict {
-        let base = |v: Judgement, r: String| JudgeVerdict {
+        let base = |v: Judgement, code: &str, reason: serde_json::Value| JudgeVerdict {
             verdict: v,
-            rationale: r,
+            rationale: code.into(),
+            reason: Some(reason),
             backend: "mechanical".into(),
             model: None,
             prompt_version: "mech-v1",
@@ -119,19 +122,19 @@ impl JudgeBackend for MechanicalJudge {
         if r.baseline.invariant_violations > 0 || r.candidate.invariant_violations > 0 {
             return base(
                 Judgement::NeedsHuman,
-                format!(
-                    "回放轨迹完整性有疑点（基线 {} 处、候选 {} 处违规）——这份证据不能直接作数,需要人看原始事件流",
-                    r.baseline.invariant_violations, r.candidate.invariant_violations
-                ),
+                "integrity",
+                json!({
+                    "code": "integrity",
+                    "baseline": r.baseline.invariant_violations,
+                    "candidate": r.candidate.invariant_violations,
+                }),
             );
         }
         if !r.non_policy_changes.is_empty() {
             return base(
                 Judgement::NeedsHuman,
-                format!(
-                    "改动动了流程定义（{} 处），不只是调旋钮——这类改动该人逐条看",
-                    r.non_policy_changes.len()
-                ),
+                "pack_definition",
+                json!({ "code": "pack_definition", "count": r.non_policy_changes.len() }),
             );
         }
         let (b, c) = (&r.baseline, &r.candidate);
@@ -151,25 +154,25 @@ impl JudgeBackend for MechanicalJudge {
         if !regressed.is_empty() || fail_delta > 0 {
             let mut why = regressed;
             if fail_delta > 0 {
-                why.push(format!("失败类计数 +{fail_delta}"));
+                why.push(format!("failures +{fail_delta}"));
             }
             return base(
                 Judgement::Reject,
-                format!("回放里有指标变差：{}", why.join("；")),
+                "regressed",
+                json!({ "code": "regressed", "detail": why.join("; ") }),
             );
         }
         if r.signals.is_empty() {
             return base(
                 Judgement::NeedsHuman,
-                "回放结果与基线完全一致——没有可量化的收益,建议人定夺".into(),
+                "unchanged",
+                json!({ "code": "unchanged" }),
             );
         }
         base(
             Judgement::Stamp,
-            format!(
-                "回放里无退步指标,{} 项有变化（如打回/升级/成本下降）。建议盖章,仍由你最终确认",
-                r.signals.len()
-            ),
+            "improved",
+            json!({ "code": "improved", "count": r.signals.len() }),
         )
     }
 }
@@ -223,7 +226,8 @@ impl JudgeBackend for LlmJudge<'_> {
     fn evaluate(&self, input: &JudgeInput) -> JudgeVerdict {
         let needs_human = |why: &str| JudgeVerdict {
             verdict: Judgement::NeedsHuman,
-            rationale: format!("判定模型没能给出可用建议（{why}）——按惯例由人看"),
+            rationale: "llm_unavailable".into(),
+            reason: Some(json!({ "code": "llm_unavailable", "why": why })),
             backend: format!("llm:{}", self.slot),
             model: Some(self.slot.into()),
             prompt_version: "judge-v2",
@@ -296,12 +300,22 @@ impl JudgeBackend for LlmJudge<'_> {
         let Some(verdict) = v["verdict"].as_str().and_then(Judgement::parse) else {
             return needs_human("verdict outside closed set");
         };
+        let rationale = v["rationale"].as_str().unwrap_or("").trim().to_string();
+        if rationale.is_empty() {
+            return JudgeVerdict {
+                verdict,
+                rationale: "llm_no_rationale".into(),
+                reason: Some(json!({ "code": "llm_no_rationale" })),
+                backend: format!("llm:{}", self.slot),
+                model: Some(self.slot.into()),
+                prompt_version: "judge-v2",
+                deterministic: false,
+            };
+        }
         JudgeVerdict {
             verdict,
-            rationale: v["rationale"]
-                .as_str()
-                .unwrap_or("（判定模型没给理由）")
-                .to_string(),
+            rationale,
+            reason: None,
             backend: format!("llm:{}", self.slot),
             model: Some(self.slot.into()),
             prompt_version: "judge-v2",
@@ -326,26 +340,6 @@ impl JudgeFacet {
     /// 这是不可绕过的不对称（B1）。
     fn configurable(self) -> bool {
         matches!(self, Self::ProposalStamp)
-    }
-}
-
-/// 给负责人看的大白话判定行（票 09）：只用词典词（打回/盖章/回放/
-/// 提案/返工），给具体后果,附「不确定怎么办」。不走术语、不报指标名
-/// 原文——机械信号已经在 rationale 里翻成了人话,这里再包一层行动建议。
-pub fn plain_line(v: &JudgeVerdict) -> String {
-    match v.verdict {
-        Judgement::Stamp => format!(
-            "建议盖章。{}。拿不准也可以先盖——流程包的改动能回退。",
-            v.rationale
-        ),
-        Judgement::Reject => format!(
-            "建议驳回。{}。拿不准就先别盖,让改的人把变差的地方处理好再提。",
-            v.rationale
-        ),
-        Judgement::NeedsHuman => format!(
-            "机器给不了确定建议,需要你定。{}。认可收益就盖章,拿不准就驳回让对方补证据。",
-            v.rationale
-        ),
     }
 }
 
@@ -458,7 +452,7 @@ pub fn judge_proposal(
             "prompt_version": verdict.prompt_version,
             "report_fp": input.report.scenario_fingerprint,
             "report_schema": input.report.schema,
-            "line": plain_line(&verdict),
+            "reason": verdict.reason,
             "deterministic": verdict.deterministic,
         }),
         Some(&author),
@@ -473,9 +467,19 @@ pub fn judge_proposal(
         proposal_id,
         &[
             ("judge_verdict", json!(verdict.verdict.as_str())),
-            ("judge_advice", json!(verdict.rationale)),
+            (
+                "judge_advice",
+                if verdict.reason.is_some() {
+                    Value::Null
+                } else {
+                    json!(verdict.rationale)
+                },
+            ),
+            (
+                "judge_reason",
+                verdict.reason.clone().unwrap_or(Value::Null),
+            ),
             ("judge_backend", json!(verdict.backend)),
-            ("judge_line", json!(plain_line(&verdict))),
         ],
     )?;
     Ok(Some(verdict))
@@ -560,7 +564,7 @@ mod tests {
         r.candidate.invariant_violations = 1;
         let v = MechanicalJudge.evaluate(&input(r));
         assert_eq!(v.verdict, Judgement::NeedsHuman);
-        assert!(v.rationale.contains("违规"));
+        assert_eq!(v.rationale, "integrity");
     }
 
     #[test]
@@ -690,27 +694,10 @@ mod tests {
     }
 
     #[test]
-    fn plain_line_speaks_owner_language() {
-        let v = JudgeVerdict {
-            verdict: Judgement::Reject,
-            rationale: "回放里有指标变差".into(),
-            backend: "mechanical".into(),
-            model: None,
-            prompt_version: "mech-v1",
-            deterministic: true,
-        };
-        let line = plain_line(&v);
-        assert!(line.contains("驳回") && line.contains("拿不准"));
-        let v = JudgeVerdict {
-            verdict: Judgement::NeedsHuman,
-            rationale: "x".into(),
-            backend: "m".into(),
-            model: None,
-            prompt_version: "mech-v1",
-            deterministic: true,
-        };
-        let line = plain_line(&v);
-        assert!(line.contains("需要你定") && line.contains("盖章"));
+    fn mechanical_reject_is_a_reason_code() {
+        let v = MechanicalJudge.evaluate(&input(report(1, 3, 0)));
+        assert_eq!(v.rationale, "regressed");
+        assert_eq!(v.reason.unwrap()["code"], "regressed");
     }
 
     // ---------- 判定面属性测试（arch 票 08）----------

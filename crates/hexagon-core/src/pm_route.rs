@@ -27,8 +27,10 @@ pub const HOLD_TOKEN: &str = "HOLD";
 pub const WORKBENCH_AUTHOR: &str = "工作台";
 
 /// 没有接话人时写入时间线的那一句。作者是 [`WORKBENCH_AUTHOR`]。
-pub const NO_RECEIVER_NOTE: &str =
-    "没有接话的人。项目经理未勾选；流程包要当前阶段激活名单的第一位，快速通道要通道角色，这里都没有。";
+/// 写下时的界面语言（ADR 0073），不随之后的切换改写。
+pub fn no_receiver_note() -> &'static str {
+    crate::owner_text::no_receiver_note()
+}
 
 /// 点名要不要唤醒被点名的角色。
 ///

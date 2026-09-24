@@ -424,7 +424,18 @@ pub fn adjudicate(
 
     let tool = payload["tool"].as_str().unwrap_or("").to_string();
     let input = payload["raw_input"].clone();
-    let provenance = payload["provenance"].as_str().map(|s| s.to_string());
+    let provenance = payload["provenance"].as_object().map(|o| {
+        let path = o["path"].as_str().unwrap_or("");
+        let downloaded = o["downloaded"].as_bool().unwrap_or(false);
+        let steps = o["steps_ago"].as_u64().unwrap_or(0) as usize;
+        let verb = if downloaded { "downloaded" } else { "created" };
+        let when = match steps {
+            0 => "just now".to_string(),
+            1 => "1 step ago".to_string(),
+            n => format!("{n} steps ago"),
+        };
+        format!("{path} was {verb} by this agent {when}")
+    });
     let world = crate::provenance::known_world(db, &ctx.project_id, ctx.stage_run_id.as_deref());
     let history = owner_history(db, &ctx.project_id);
     let v = review(

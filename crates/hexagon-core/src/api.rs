@@ -1469,7 +1469,7 @@ impl Workbench {
         self.db.append_message(
             &self.project_id,
             crate::pm_route::WORKBENCH_AUTHOR,
-            crate::pm_route::NO_RECEIVER_NOTE,
+            crate::pm_route::no_receiver_note(),
             &[],
             &[],
             None,
@@ -1928,7 +1928,7 @@ impl Workbench {
         self.db.append_message(
             &self.project_id,
             crate::pm_route::WORKBENCH_AUTHOR,
-            crate::intake::NO_INTAKE_SPEAKER_NOTE,
+            crate::intake::no_intake_speaker_note(),
             &[],
             &[],
             None,

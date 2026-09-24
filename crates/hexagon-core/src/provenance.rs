@@ -303,27 +303,39 @@ pub struct ProvenanceHit {
 }
 
 impl ProvenanceHit {
-    /// 固定词表一行：永不带文件内容。
-    pub fn render(&self) -> String {
-        let verb = if self.downloaded { "下载" } else { "创建" };
-        let when = match self.steps_ago {
-            0 => "刚刚".to_string(),
-            1 => "1 步前".to_string(),
-            n => format!("{n} 步前"),
+    /// 给审查者的英文事实。卡上的展示用 [`fact`]，界面按原因码渲染。
+    pub fn english_line(&self) -> String {
+        let verb = if self.downloaded {
+            "downloaded"
+        } else {
+            "created"
         };
-        format!("{} 由本 agent {} {}", self.path, when, verb)
+        let when = match self.steps_ago {
+            0 => "just now".to_string(),
+            1 => "1 step ago".to_string(),
+            n => format!("{n} steps ago"),
+        };
+        format!("{} was {verb} by this agent {when}", self.path)
+    }
+
+    pub fn fact(&self) -> Value {
+        json!({
+            "path": self.path,
+            "downloaded": self.downloaded,
+            "steps_ago": self.steps_ago,
+        })
     }
 }
 
 /// 工具调用的溯源注记（目前只有 bash——写后执行链都落在 shell 命令文本里）。
-pub fn note(db: &Db, ctx: &ToolContext, tool: &str, input: &Value) -> Option<String> {
+pub fn note(db: &Db, ctx: &ToolContext, tool: &str, input: &Value) -> Option<Value> {
     if tool != "bash" {
         return None;
     }
     match_command(db, ctx, input["cmd"].as_str().unwrap_or(""))
         .ok()
         .flatten()
-        .map(|h| h.render())
+        .map(|h| h.fact())
 }
 
 // ---------- 机械状态块（openworker-borrow 票 06）----------
@@ -497,7 +509,7 @@ pub fn known_world(db: &Db, project_id: &str, stage_run_id: Option<&str>) -> Opt
 
 /// `git push` 的 remote 参数与初始列表比对：不在即返回注记行。
 /// 快照缺失 → None（无基线不给结论，缺失不增益信任）。
-pub fn remote_delta(tool: &str, input: &Value, world: Option<&Value>) -> Option<String> {
+pub fn remote_delta(tool: &str, input: &Value, world: Option<&Value>) -> Option<Value> {
     if tool != "bash" {
         return None;
     }
@@ -512,7 +524,7 @@ pub fn remote_delta(tool: &str, input: &Value, world: Option<&Value>) -> Option<
             let remote = argv[2..].iter().find(|t| !t.starts_with('-'));
             if let Some(r) = remote {
                 if !remotes.iter().any(|n| n == r) {
-                    return Some(format!("remote '{r}' 不在激活开始时的 remote 列表"));
+                    return Some(json!({ "remote": r }));
                 }
             }
         }
@@ -602,7 +614,7 @@ mod tests {
             .unwrap();
         assert_eq!(hit.path, "scripts/setup.py");
         assert!(!hit.downloaded);
-        assert!(hit.render().contains("创建"));
+        assert!(hit.english_line().contains("created"));
         // 无关路径不命中
         assert!(match_command(&db, &ctx, "python other.py")
             .unwrap()
@@ -717,7 +729,7 @@ mod tests {
             &json!({"cmd":"git push -u myevil main"}),
             Some(&world),
         );
-        assert!(d.unwrap().contains("myevil"));
+        assert_eq!(d.unwrap()["remote"], "myevil");
         // 快照缺失 → 无结论
         assert!(remote_delta("bash", &json!({"cmd":"git push x main"}), None).is_none());
     }

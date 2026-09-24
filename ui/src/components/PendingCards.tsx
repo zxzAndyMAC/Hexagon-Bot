@@ -10,6 +10,42 @@ import { bindingFor, formatBinding, matches } from '../keymap'
 import { kindTitleKey, rejectReasonWithJudge, severityOf } from '../decisions'
 import { Icon, type IconName } from './Icon'
 
+type TFn = (key: string, opts?: Record<string, unknown>) => string
+
+function judgeRationale(p: Record<string, unknown>, t: TFn): string {
+  const reason = p.judge_reason
+  if (reason && typeof reason === 'object') {
+    const code = String((reason as { code?: unknown }).code ?? '')
+    if (code) return t(`cards.reason_${code}`, reason as Record<string, unknown>)
+  }
+  return String(p.judge_advice ?? '')
+}
+
+function ProvenanceLines({ payload }: { payload: Record<string, unknown> }) {
+  const { t } = useTranslation()
+  const fact = payload.provenance
+  const remote = payload.remote_delta
+  if (!fact && !remote) return null
+  const lines: string[] = []
+  if (fact && typeof fact === 'object') {
+    const f = fact as { path?: unknown; downloaded?: unknown; steps_ago?: unknown }
+    const n = Number(f.steps_ago ?? 0)
+    const when = n === 0 ? t('cards.justNow') : n === 1 ? t('cards.oneStepAgo') : t('cards.stepsAgo', { n })
+    const key = f.downloaded ? 'cards.provenanceDownloaded' : 'cards.provenanceCreated'
+    lines.push(t(key, { path: String(f.path ?? ''), when }))
+  }
+  if (remote && typeof remote === 'object') {
+    const name = String((remote as { remote?: unknown }).remote ?? '')
+    if (name) lines.push(t('cards.remoteUnknown', { remote: name }))
+  }
+  if (!lines.length) return null
+  return (
+    <div className="dim3" style={{ fontSize: 11, margin: '0 0 8px' }}>
+      {lines.map((line) => <div key={line}>{line}</div>)}
+    </div>
+  )
+}
+
 function CardShell({ tone, icon, title, children }: {
   tone: 'ask' | 'stamp' | 'flag' | 'danger'
   icon: IconName
@@ -187,6 +223,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           {String(p.reason ?? '')}
           {safety && <span className="chip err" style={{ marginLeft: 8 }}>{t('cards.askSafetyNet')}</span>}
         </div>
+        <ProvenanceLines payload={p} />
         {!safety && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
             <input
@@ -263,7 +300,9 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
         </div>
         {warnings.length > 0 && (
           <div className="accent" style={{ fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Icon name="warn" size={11} /> {String(p.warning_text ?? warnings.join(' + '))}
+            <Icon name="warn" size={11} /> {warnings.length
+              ? warnings.map((w) => t(`cards.warn_${w}`, { defaultValue: w })).join(' · ')
+              : String(p.warning_text ?? '')}
           </div>
         )}
         {/* 票 09：judge 建议行——闭集 chip + 大白话行（i18n 模板,
@@ -279,7 +318,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
               <span className={`chip ${vk === 'stamp' ? '' : 'warn'}`} style={{ fontSize: 10 }}>
                 {t(`cards.judge${suffix}`)}
               </span>
-              <span className="dim3">{t(`cards.judgeLine${suffix}`, { rationale: String(p.judge_advice ?? '') })}</span>
+              <span className="dim3">{t(`cards.judgeLine${suffix}`, { rationale: judgeRationale(p, t) })}</span>
               {p.judge_backend != null && <span className="dim3" style={{ fontSize: 10 }}>{String(p.judge_backend)}</span>}
             </div>
           )

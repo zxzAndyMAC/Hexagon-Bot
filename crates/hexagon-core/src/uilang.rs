@@ -85,6 +85,33 @@ thread_local! {
     static TEST_OVERRIDE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
+/// 当前界面语言码。未设置回落 `en`（ADR 0073）。
+pub fn interface_code() -> &'static str {
+    let owned = {
+        #[cfg(test)]
+        {
+            if let Some(c) = TEST_OVERRIDE.with(|o| o.borrow().clone()) {
+                Some(c)
+            } else {
+                language()
+            }
+        }
+        #[cfg(not(test))]
+        {
+            language()
+        }
+    };
+    match owned.as_deref() {
+        Some("zh-CN") => "zh-CN",
+        Some("zh-TW") => "zh-TW",
+        Some("ja") => "ja",
+        Some("es") => "es",
+        Some("pt") => "pt",
+        Some("fr") => "fr",
+        _ => "en",
+    }
+}
+
 /// 回合读取点：当前界面语言的语言名。
 pub fn reply_language() -> &'static str {
     #[cfg(test)]

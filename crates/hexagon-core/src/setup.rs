@@ -121,7 +121,7 @@ pub fn agents_md_draft(project_name: &str) -> String {
 /// 界面语言（prompt-engineering spec Q21），界面切到哪种语言草稿就是哪种。
 pub const AGENTS_MD_OPTIMIZE_PROMPT: &str = "You are drafting AGENTS.md at the repository root. This file holds the project-level constraints that activated agents read. It is not a skill; do not write process progress, secrets or a role roster into it.
 
-The user gave a single sentence. Fill in the skeleton below. For commands, tech stack or directories the user did not mention, leave them empty or write \"unknown\" — never invent them. Write the prose in {language}; keep the headings exactly as given.
+The user gave a single sentence. Fill in the skeleton below. For commands, tech stack or directories the user did not mention, leave them empty or write \"{unknown}\" — never invent them. Write the prose in {language}; keep the headings exactly as given.
 
 # {project_name}
 
@@ -147,6 +147,7 @@ fn optimize_system_prompt(project_name: &str) -> String {
     AGENTS_MD_OPTIMIZE_PROMPT
         .replace("{project_name}", name)
         .replace("{language}", crate::uilang::reply_language())
+        .replace("{unknown}", crate::owner_text::unknown())
 }
 
 /// 一句话 → 项目说明草稿。调用刚配好的主对话模型（`default` 槽），
@@ -1506,7 +1507,7 @@ mod tests {
     // ADR 0071 修订：合同原文换成英文版（ADR 0067 同步修订）。
     const ADR_0067_OPTIMIZE_PROMPT: &str = "You are drafting AGENTS.md at the repository root. This file holds the project-level constraints that activated agents read. It is not a skill; do not write process progress, secrets or a role roster into it.
 
-The user gave a single sentence. Fill in the skeleton below. For commands, tech stack or directories the user did not mention, leave them empty or write \"unknown\" — never invent them. Write the prose in {language}; keep the headings exactly as given.
+The user gave a single sentence. Fill in the skeleton below. For commands, tech stack or directories the user did not mention, leave them empty or write \"{unknown}\" — never invent them. Write the prose in {language}; keep the headings exactly as given.
 
 # {project_name}
 

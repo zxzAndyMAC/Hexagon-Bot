@@ -26,6 +26,7 @@ pub mod invariant;
 pub mod judge;
 pub mod mcp;
 pub mod orchestra;
+pub mod owner_text;
 pub mod packedit;
 pub mod permissions;
 pub mod pm_route;

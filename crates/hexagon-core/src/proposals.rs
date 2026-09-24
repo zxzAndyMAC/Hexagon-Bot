@@ -533,9 +533,7 @@ fn to_stamp_queue(
         json!({"proposal_id": pid, "surface": surface,
         "evidence": evidence,
         "warnings": flags,
-        "warning_text": if flags.is_empty() { Value::Null } else {
-            json!(format!("此提案{}", flags.join(" + ")))
-        }}),
+        "warning_text": Value::Null}),
         None,
     )?;
     Ok(qid)
