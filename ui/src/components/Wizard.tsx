@@ -1,4 +1,5 @@
-// 项目向导：模型服务商 → 选目录 → 勾角色 → 选流程包/快速通道 → 说明文件 → 密钥 → 开跑。
+// 项目向导：模型服务商 → 选目录 → 勾角色 → 项目说明 → 流程草稿 → 密钥 → 确认开跑。
+// 快速通道在确认页，不采用流程草稿。向导不提供四套预置流程包。
 // 票 13：第一步没有启用的供应商、已存钥匙和 default 槽就不能进目录；已配好只显示就绪。
 // 草稿存 localStorage `hexagon.wizard`，中途退出可续；缺密钥 fail-closed 不能开跑。
 import { useCallback, useEffect, useMemo, useState } from 'react'
