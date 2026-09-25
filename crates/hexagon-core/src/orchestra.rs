@@ -404,6 +404,48 @@ pub fn open_stage(
     Ok((rid, false))
 }
 
+/// 代码产物的路径（或 kind 为「代码」）必须在仓库根有同路径文件。
+/// 只有 `.hexagon/<path>` 时，这一阶段仍缺这份产物。
+fn code_artifact_missing_on_root(
+    db: &Db,
+    project_id: &str,
+    run_id: &str,
+    kind: &str,
+) -> Result<bool, OrchError> {
+    let dir: String =
+        db.conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
+                r.get(0)
+            })?;
+    let mut st = db.conn().prepare(
+        "SELECT path FROM artifacts
+         WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')",
+    )?;
+    let paths: Vec<String> = st
+        .query_map(rusqlite::params![project_id, run_id, kind], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let code: Vec<&str> = paths
+        .iter()
+        .map(String::as_str)
+        .filter(|p| kind == "代码" || runnable_source(p))
+        .collect();
+    if code.is_empty() {
+        return Ok(false);
+    }
+    let root = Path::new(&dir);
+    Ok(!code.iter().any(|p| root.join(p).is_file()))
+}
+
+fn runnable_source(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or(""),
+        "html" | "css" | "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "vue"
+    )
+}
+
 /// 阶段成功判定（工作台裁决，非 Agent）。
 pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, OrchError> {
     let run = db
@@ -421,6 +463,13 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
             |r| r.get(0),
         )?;
         if n == 0 {
+            missing.push(format!("artifact:{kind}"));
+            continue;
+        }
+        // 2026-09-24 论坛活测：index.html 只被 artifact_write 写进 .hexagon/，
+        // 阶段只数种类，仓库根没有可打开的页面也算齐。代码产物要在仓库根
+        // 有同路径文件（fs_write 那份）；规格仍只留在 .hexagon/。
+        if code_artifact_missing_on_root(db, project_id, &run.id, kind)? {
             missing.push(format!("artifact:{kind}"));
         }
     }
@@ -1408,6 +1457,46 @@ mod tests {
         assert_eq!(rows[0].state, "active");
     }
 
+    /// 2026-09-24 论坛活测：index.html 只在 .hexagon/ 里，阶段仍算缺这份代码。
+    /// 规格类 markdown 不要求仓库根另有一份。
+    #[test]
+    fn code_artifact_without_repo_file_stays_missing() {
+        let (db, dir) = setup(&["前端"]);
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(root.join(".hexagon")).unwrap();
+        db.conn()
+            .execute(
+                "UPDATE projects SET dir=?1 WHERE id='p1'",
+                [root.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        let p: PackDef = serde_json::from_value(json!({
+            "name": "论坛", "version": 1,
+            "stages": [{"name": "实现", "roles": ["前端"], "due": ["HTML/CSS/JS源码"]}]
+        }))
+        .unwrap();
+        let (rid, _) = open_stage(&db, "p1", &p, 0).unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO artifacts (id,project_id,path,kind,tier,stage_run_id,version,status)
+                 VALUES ('h','p1','index.html','HTML/CSS/JS源码','freeform',?1,1,'valid')",
+                [&rid],
+            )
+            .unwrap();
+        std::fs::write(root.join(".hexagon/index.html"), "<html></html>").unwrap();
+        match evaluate(&db, "p1", &p).unwrap() {
+            StageEval::Incomplete { missing } => {
+                assert!(
+                    missing.iter().any(|m| m == "artifact:HTML/CSS/JS源码"),
+                    "{missing:?}"
+                );
+            }
+            other => panic!("only .hexagon/index.html must stay missing, got {other:?}"),
+        }
+        std::fs::write(root.join("index.html"), "<html></html>").unwrap();
+        assert_eq!(evaluate(&db, "p1", &p).unwrap(), StageEval::Ready);
+    }
+
     #[test]
     fn rewind_opens_new_run_at_target() {
         let (db, _d) = setup(&["产品策划", "后端", "架构师"]);
@@ -1472,6 +1561,16 @@ mod tests {
                 "INSERT INTO artifacts (id,project_id,path,kind,tier,stage_run_id,version,status)
              VALUES ('y','p1','src/b.rs','代码','freeform',?1,1,'valid')",
                 [&rid2],
+            )
+            .unwrap();
+        // 2026-09-24：kind 为代码时，仓库根上要有同路径文件，阶段才算齐。
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/b.rs"), "fn b() {}").unwrap();
+        db.conn()
+            .execute(
+                "UPDATE projects SET dir=?1 WHERE id='p1'",
+                [root.to_string_lossy().as_ref()],
             )
             .unwrap();
         run_checks(&db, "p1", dir.path(), &p2).unwrap();

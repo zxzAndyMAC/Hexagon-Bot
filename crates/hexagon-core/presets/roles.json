@@ -6,8 +6,7 @@
     "model_slot": "chat",
     "globs": [
       "specs/**",
-      "docs/**",
-      ".hexagon/**"
+      "docs/**"
     ],
     "skills": [
       "spec-writing",
@@ -21,8 +20,7 @@
     "model_slot": "chat",
     "globs": [
       "docs/**",
-      "ux/**",
-      ".hexagon/**"
+      "ux/**"
     ],
     "skills": [
       "ia-outline",
@@ -38,8 +36,7 @@
       "docs/**",
       "ux/**",
       "ui/**",
-      "design/**",
-      ".hexagon/**"
+      "design/**"
     ],
     "skills": [
       "ui-annotation",
@@ -56,8 +53,7 @@
       "web/**",
       "src/**",
       "app/**",
-      "public/**",
-      ".hexagon/**"
+      "public/**"
     ],
     "skills": [
       "handoff-note"
@@ -73,8 +69,7 @@
       "crates/**",
       "server/**",
       "api/**",
-      "services/**",
-      ".hexagon/**"
+      "services/**"
     ],
     "skills": [
       "api-contract",
@@ -90,8 +85,7 @@
       "tests/**",
       "e2e/**",
       "**/*.test.*",
-      "**/*.spec.*",
-      ".hexagon/**"
+      "**/*.spec.*"
     ],
     "skills": [
       "test-plan",
@@ -104,8 +98,7 @@
     "reviewer": null,
     "model_slot": "chat",
     "globs": [
-      "docs/**",
-      ".hexagon/**"
+      "docs/**"
     ],
     "skills": [
       "code-review"
@@ -117,8 +110,7 @@
     "reviewer": null,
     "model_slot": "chat",
     "globs": [
-      "docs/**",
-      ".hexagon/**"
+      "docs/**"
     ],
     "skills": [
       "code-review"
@@ -135,8 +127,7 @@
       "scripts/**",
       ".github/**",
       "Dockerfile*",
-      "docker-compose*.yml",
-      ".hexagon/**"
+      "docker-compose*.yml"
     ],
     "skills": [
       "runbook",
@@ -150,8 +141,7 @@
     "model_slot": "chat",
     "globs": [
       "docs/**",
-      "adr/**",
-      ".hexagon/**"
+      "adr/**"
     ],
     "skills": [
       "code-review",
@@ -177,9 +167,7 @@
     "duty": "决定下一手派给花名册里的哪一个角色，或先不派活；不写规格、不写实现、不盖章、不远程发布",
     "reviewer": null,
     "model_slot": "chat",
-    "globs": [
-      ".hexagon/**"
-    ],
+    "globs": [],
     "skills": [
       "handoff-note"
     ]

@@ -165,6 +165,16 @@ pub fn catalog() -> Vec<PromptEntry> {
             crate::setup::AGENTS_MD_OPTIMIZE_PROMPT.into(),
         ),
         entry(
+            "wizard.questions",
+            "wizard",
+            crate::setup::BRIEF_QUESTIONS_PROMPT.into(),
+        ),
+        entry(
+            "wizard.role_defs",
+            "wizard",
+            crate::setup::ROLE_SEEDS_PROMPT.into(),
+        ),
+        entry(
             "wizard.intake",
             "wizard",
             crate::intake::INTAKE_PROMPT.into(),

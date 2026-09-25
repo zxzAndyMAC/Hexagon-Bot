@@ -20,6 +20,26 @@ use hexagon_core::turn::TurnOutcome;
 use std::path::Path;
 use std::sync::Arc;
 
+fn seed_live_key(doc: &provider_config::ProviderDoc) -> Arc<dyn CredentialStore> {
+    let creds = MemoryStore::default();
+    if let Ok(key) = std::env::var("HEXAGON_LIVE_KEY") {
+        for p in &doc.providers {
+            let name = hexagon_core::credentials::provider_key_name(&p.id);
+            creds.set(&name, &key).expect("seed key");
+            println!("creds: {name} seeded from HEXAGON_LIVE_KEY");
+        }
+        let probe = hexagon_core::credentials::provider_key_name("aliyun");
+        match OsKeychain.get(&probe) {
+            Ok(Some(_)) => println!("keychain probe: {probe} readable"),
+            Ok(None) => println!("keychain probe: {probe} NOT FOUND"),
+            Err(e) => println!("keychain probe: {probe} ERR {e}"),
+        }
+    } else {
+        println!("creds: no HEXAGON_CREDENTIALS_PATH and no HEXAGON_LIVE_KEY");
+    }
+    Arc::new(creds)
+}
+
 fn arg(flag: &str) -> Option<String> {
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -96,7 +116,20 @@ fn adjudicate(wb: &Workbench, c: &QueuedCard) -> bool {
                 }
             }
         }
-        "stamp" => wb.stamp().map(|_| "stage stamped".to_string()),
+        "stamp" => {
+            // 过程中的盖章自动通过；最后一个盖章点是最终验收，留给负责人。
+            let rows = stage_states(wb);
+            let n = rows.len();
+            let final_gate = n > 0
+                && rows
+                    .iter()
+                    .any(|(seq, _, st)| *st == "waiting_stamp" && *seq + 1 == n);
+            if final_gate {
+                println!("  [owner] {tag} → 最终验收留下，不代盖");
+                return false;
+            }
+            wb.stamp().map(|_| "stage stamped".to_string())
+        }
         "recovery" => c
             .payload
             .get("run_id")
@@ -234,25 +267,31 @@ fn main() {
         std::process::exit(2);
     }
 
-    // 凭据接缝：HEXAGON_LIVE_KEY 注入 MemoryStore（sanctioned 测试缝）。
-    // OsKeychain 在此 harness 里 read-after-set 仍 NotFound——keyring
-    // 的 keychain 后端选择问题单独排查（harness 不背这个锅）。
+    // 凭据接缝：与 debug 壳同一文件库（HEXAGON_CREDENTIALS_PATH）优先，
+    // 这样活测用负责人已经配好的供应商钥匙，不把明文放进命令行。
+    // 未设文件缝时仍走 HEXAGON_LIVE_KEY → MemoryStore。
+    // OsKeychain 在 adhoc 签名二进制上写后读不到，harness 不走它。
     let doc = provider_config::load().expect("providers.json");
-    let creds = MemoryStore::default();
-    if let Ok(key) = std::env::var("HEXAGON_LIVE_KEY") {
-        for p in &doc.providers {
-            let name = hexagon_core::credentials::provider_key_name(&p.id);
-            creds.set(&name, &key).expect("seed key");
-            println!("creds: {name} seeded");
-        }
-        // 探针：OsKeychain 的 get/set 读写在同一进程内是否自洽
-        let probe = hexagon_core::credentials::provider_key_name("aliyun");
-        match OsKeychain.get(&probe) {
-            Ok(Some(_)) => println!("keychain probe: {probe} readable"),
-            Ok(None) => println!("keychain probe: {probe} NOT FOUND"),
-            Err(e) => println!("keychain probe: {probe} ERR {e}"),
-        }
-    }
+    let creds: Arc<dyn CredentialStore> =
+        if let Ok(path) = std::env::var("HEXAGON_CREDENTIALS_PATH") {
+            if !path.is_empty() && path != "keychain" {
+                println!("creds: file store (names only follow)");
+                let store = hexagon_core::credentials::active();
+                for p in &doc.providers {
+                    let name = hexagon_core::credentials::provider_key_name(&p.id);
+                    match store.get(&name) {
+                        Ok(Some(_)) => println!("  {name}: present"),
+                        Ok(None) => println!("  {name}: MISSING"),
+                        Err(e) => println!("  {name}: ERR {e}"),
+                    }
+                }
+                store
+            } else {
+                seed_live_key(&doc)
+            }
+        } else {
+            seed_live_key(&doc)
+        };
     let roles_all = preset_roles().expect("preset roles");
 
     if pack_name == "fastpath" {
@@ -265,13 +304,13 @@ fn main() {
             None,
             Some(role),
             true,
-            &creds,
+            creds.as_ref(),
             &doc,
             None,
         )
         .expect("create_project fastpath");
         let mut wb = wb;
-        wb.attach_providers(Arc::new(creds));
+        wb.attach_providers(creds);
         // 活测驱动模型：dispatch 只做首回合（激活仪式 + plan_first 方案
         // 预告），续跑一律 run_turn——批准权限只是把工具跑完落
         // tool_result，模型要再被召一回合才看得到结果继续干活。
@@ -299,12 +338,55 @@ fn main() {
         return;
     }
 
-    // ---- pack 模式：全套班底跑 stage-gate ----
-    let pack = preset_packs()
-        .expect("preset packs")
-        .into_iter()
-        .find(|p| p.name == pack_name)
-        .unwrap_or_else(|| panic!("no pack named {pack_name}"));
+    // 向导不把四套预置当菜单。`--pack draft` 用流程起草槽按负责人那句话起草。
+    let pack = if pack_name == "draft" {
+        let b = doc
+            .slots
+            .get(hexagon_core::provider_config::FLOW_DRAFT_SLOT)
+            .or_else(|| doc.slots.get("default"))
+            .expect("flow_draft slot");
+        let def = doc
+            .providers
+            .iter()
+            .find(|p| p.id == b.provider_id)
+            .expect("flow_draft provider");
+        let provider = provider_config::make_provider(def, &b.model, creds.clone());
+        println!(
+            "起草流程: {} → {}/{}",
+            hexagon_core::provider_config::FLOW_DRAFT_SLOT,
+            def.id,
+            b.model
+        );
+        let mut pack = None;
+        let mut last_err = String::new();
+        for attempt in 1..=3 {
+            match hexagon_core::setup::draft_flow(&task, provider.as_ref()) {
+                Ok(p) => {
+                    pack = Some(p);
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    println!("  起草第 {attempt} 次未解析: {last_err}");
+                }
+            }
+        }
+        let pack = pack.unwrap_or_else(|| panic!("draft_flow: {last_err}"));
+        println!("流程草稿: {}", pack.name);
+        for (i, s) in pack.stages.iter().enumerate() {
+            println!(
+                "  [{i}] {} roles={:?} due={:?} stamp={}",
+                s.name, s.roles, s.due, s.stamp_point
+            );
+        }
+        pack
+    } else {
+        preset_packs()
+            .expect("preset packs")
+            .into_iter()
+            .find(|p| p.name == pack_name)
+            .unwrap_or_else(|| panic!("no pack named {pack_name}"))
+    };
 
     // 班底 = 阶段 roles ∪ reviewers；评审线走 review 槽（异构异协议）。
     let mut names: Vec<String> = vec![];
@@ -325,26 +407,23 @@ fn main() {
             }
         }
     }
-    // 异构模型分配：技术负责人/架构师 → review 槽（GLM-5 Anthropic 协议），
-    // 其余吃 preset 的 chat 槽（qwen3-coder-next，OpenAI 协议）。
-    let overrides: Vec<RoleDef> = names
-        .iter()
-        .filter_map(|n| {
-            roles_all.iter().find(|r| &r.name == n).map(|r| {
-                let mut d = r.clone();
-                if n.contains("负责人") || n == "架构师" {
-                    d.model_slot = "review".into();
-                }
-                d
-            })
-        })
-        .collect();
+    // 阶段名单通常不含项目经理。向导默认勾选他。聊天留角色模板的主对话槽，
+    // 决策槽由 attach_providers 绑到 decision（TypeSafe Jev），两个槽不合成一个。
+    if !names.iter().any(|n| n == "项目经理") {
+        names.push("项目经理".into());
+    }
+    let overrides: Vec<RoleDef> = vec![];
     println!("班底: {names:?}");
     println!(
-        "异构槽位: {:?}",
-        overrides
+        "主对话槽: {:?}",
+        names
             .iter()
-            .map(|d| format!("{}→{}", d.name, d.model_slot))
+            .filter_map(|n| {
+                roles_all
+                    .iter()
+                    .find(|r| &r.name == n)
+                    .map(|r| format!("{}→{}", r.name, r.model_slot))
+            })
             .collect::<Vec<_>>()
     );
 
@@ -356,18 +435,25 @@ fn main() {
         Some(&pack),
         None,
         true,
-        &creds,
+        creds.as_ref(),
         &doc,
         None,
     )
     .expect("create_project pack");
-    wb.attach_providers(Arc::new(creds));
+    wb.attach_providers(creds);
+    let slot: String = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT COALESCE(decision_slot, '') FROM agents WHERE project_id='p1' AND role='项目经理'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or_default();
+    println!("项目经理 decision_slot={slot:?}");
 
-    // 真实推进协议：open_stage(0) → advance() 评估 → 缺产物就驱 agent
-    // 干活、缺复审先唤醒复审者（真模型写复审意见）再 owner skip_review
-    // 放行、Ready+盖章点挂 Stamp 卡由裁决循环批 → stamp 内自动 open_next。
+    // 下一手只走项目经理的封闭选择。复审由他派，活测不代唤醒、不跳过。
     use hexagon_core::orchestra::StageAction;
-    use std::collections::HashSet;
     match wb.open_stage(0) {
         Ok(o) => println!("stage 0 opened (skipped={})", o.skipped),
         Err(e) => {
@@ -376,7 +462,6 @@ fn main() {
             return;
         }
     }
-    let mut dispatched_reviews: HashSet<String> = HashSet::new();
     for step in 0..max_steps {
         adjudicate_all(&wb);
         let cur = stage_states(&wb)
@@ -396,6 +481,16 @@ fn main() {
             Ok(StageAction::AwaitingStamp { stage, .. })
             | Ok(StageAction::WaitingStamp { stage }) => {
                 println!("[step {step}] {stage} → awaiting stamp");
+                let rows = stage_states(&wb);
+                let n = rows.len();
+                let final_gate = n > 0
+                    && rows
+                        .iter()
+                        .any(|(seq, _, st)| *st == "waiting_stamp" && *seq + 1 == n);
+                if final_gate {
+                    println!("[step {step}] 最终验收留给负责人，停止");
+                    break;
+                }
                 adjudicate_all(&wb);
                 continue;
             }
@@ -408,44 +503,6 @@ fn main() {
                     .iter()
                     .filter_map(|m| m.strip_prefix("artifact:").map(str::to_string))
                     .collect();
-                let mut only_reviews = !missing.is_empty();
-                for m in &missing {
-                    if let Some(kind) = m.strip_prefix("review:") {
-                        let key = format!("{seq}:{kind}");
-                        if dispatched_reviews.insert(key) {
-                            // 先让复审者真干活——写复审意见产物（真模型调用）。
-                            if let Some(rv) = pack
-                                .stages
-                                .get(seq)
-                                .and_then(|s| s.reviews.iter().find(|r| r.artifact_kind == kind))
-                                .map(|r| r.reviewer.clone())
-                            {
-                                println!("  [owner] 唤醒复审 {rv} ← {kind}");
-                                match wb.dispatch(
-                                    &rv,
-                                    &format!("请复审本阶段已交付的「{kind}」产物，用 artifact_write 产出复审意见（通过或驳回+理由）"),
-                                    &[],
-                                ) {
-                                    Ok(o) => println!("    reviewer turn: {o:?}"),
-                                    Err(e) => println!("    reviewer dispatch err {e}"),
-                                }
-                            }
-                        } else {
-                            // 复审者已跑过但 review:X 仍缺——复审意见产物不发射
-                            // review_passed 事件（submit_review 无生产调用方，活测
-                            // 实证此死路），owner 走 skip_review 真实 IPC 面放行。
-                            match wb.skip_review(kind) {
-                                Ok(_) => println!("  [owner] skip_review {kind}（复审意见在产物库，事件面无桥→owner 跳过）"),
-                                Err(e) => println!("  skip_review {kind} err {e}"),
-                            }
-                        }
-                    } else {
-                        only_reviews = false;
-                    }
-                }
-                if only_reviews {
-                    continue;
-                }
             }
             Ok(StageAction::StageOpened { seq: s, .. }) => {
                 println!("[step {step}] stage {s} opened");
@@ -467,13 +524,20 @@ fn main() {
                 art_missing[0]
             );
         }
-        match wb.run_all_active(&hint) {
-            Ok(outs) => {
-                for (role, o) in &outs {
-                    println!("  [{step}] {role}: {o:?}");
-                }
+        if names.iter().any(|n| n == "项目经理") {
+            match wb.route_unnamed_owner(&hint, &[]) {
+                Ok(route) => println!("  [{step}] 项目经理 → {route:?}"),
+                Err(e) => println!("  [{step}] 项目经理路由 ERROR {e}"),
             }
-            Err(e) => println!("  [{step}] run_all_active ERROR {e}"),
+        } else {
+            match wb.run_all_active(&hint) {
+                Ok(outs) => {
+                    for (role, o) in &outs {
+                        println!("  [{step}] {role}: {o:?}");
+                    }
+                }
+                Err(e) => println!("  [{step}] run_all_active ERROR {e}"),
+            }
         }
         adjudicate_all(&wb);
     }

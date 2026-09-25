@@ -233,7 +233,7 @@ fn ownership_glob_gates_writes() {
         )
         .unwrap();
     assert!(matches!(out, CallOutcome::Done(_)));
-    // 界外的新询问按原先 L4 放行，不再排队。
+    // 2026-09-24：界外不再由自治放行，停成必问卡。
     let out = reg
         .call(
             &db,
@@ -242,7 +242,7 @@ fn ownership_glob_gates_writes() {
             json!({"path": "docs/b.md", "content": "x"}),
         )
         .unwrap();
-    assert!(matches!(out, CallOutcome::Done(_)));
+    assert!(matches!(out, CallOutcome::Asked(_)));
 }
 
 // ---------- openworker-borrow 票 02：工具结果 spill ----------

@@ -1315,10 +1315,17 @@ impl Workbench {
             })
             .unwrap_or_default();
         let speaker_label = if from_owner { "The owner" } else { speaker };
+        // 不能派给自己。2026-09-24：名单里有项目经理时，他选了自己并开出写盘回合。
+        // 进度不靠他写文档，阶段、产物和待决卡已经看得见。
+        let choosable: Vec<String> = roster
+            .iter()
+            .filter(|r| r.as_str() != crate::pm_route::PM_ROLE)
+            .cloned()
+            .collect();
         let prompt = crate::pm_route::choice_prompt(
             stage_name.as_deref(),
             &activation,
-            roster,
+            &choosable,
             speaker_label,
             body,
         );
@@ -1367,8 +1374,8 @@ impl Workbench {
         };
         crate::usage::record(&self.db, &usage_ctx, &slot_name, &resp.usage, 0)?;
         let raw = crate::pm_route::choice_text(&resp);
-        let choice = crate::pm_route::parse_route_choice(&raw, roster);
-        let mut eligible = roster.to_vec();
+        let choice = crate::pm_route::parse_route_choice(&raw, &choosable);
+        let mut eligible = choosable.clone();
         eligible.push(crate::pm_route::HOLD.to_string());
         let (held, rejected, role) = match &choice {
             Some(crate::pm_route::RouteChoice::Dispatch(role)) => {

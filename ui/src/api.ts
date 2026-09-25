@@ -69,6 +69,9 @@ import type { MessageRow } from './gen/MessageRow'
 import type { MessageToken } from './gen/MessageToken'
 import type { ExportFilter } from './gen/ExportFilter'
 import type { RepoEntry } from './gen/RepoEntry'
+import type { BriefQA } from './gen/BriefQA'
+import type { BriefQuestion } from './gen/BriefQuestion'
+import type { RoleSeedDraft } from './gen/RoleSeedDraft'
 
 /** 旧名薄壳——新代码直接用 QueuedCard。 */
 export type PendingQuestion = QueuedCard
@@ -86,6 +89,7 @@ export type {
   CreateProjectOpts, CreateStepDto, Event, EventKind, MessageRow, MessageToken, ExportFilter,
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
   RepoEntry, DiagRecord, PromptEntry, TranslateOutcome,
+  BriefQA, BriefQuestion, RoleSeedDraft,
 }
 
 
@@ -351,8 +355,15 @@ export const api = {
   fetchProviderModels: (id: string) => call<ModelEntry[]>('fetch_provider_models', { id }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
-  optimizeAgentsMd: (name: string, sentence: string) =>
-    call<string>('optimize_agents_md', { name, sentence }),
+  /// 2026-09-25 答问优化流：qa 携带答问卡收集的答案（可选）。
+  optimizeAgentsMd: (name: string, sentence: string, qa?: BriefQA[]) =>
+    call<string>('optimize_agents_md', { name, sentence, qa: qa ?? null }),
+  /// 起草前先出答问题目（题数不设上限，每题 2–4 选项）；解析失败/空 → 界面回落直出。
+  briefQuestions: (name: string, sentence: string) =>
+    call<BriefQuestion[]>('brief_questions', { name, sentence }),
+  /// 按项目说明批量起草勾选角色的职责段落（只回草稿；ADR 0075 起不产 globs）。
+  draftRoleDefs: (brief: string, roles: RoleDef[]) =>
+    call<RoleSeedDraft[]>('draft_role_defs', { brief, roles }),
   draftFlow: (sentence: string) => call<PackDef>('draft_flow', { sentence }),
   readInstructionFile: (dir: string) => call<string>('read_instruction_file', { dir }),
   draftRoleDuty: (name: string, hint: string) =>
@@ -1189,6 +1200,17 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return `# ${args?.name ?? 'project'}\n\n## Commands\n` as T
     case 'optimize_agents_md':
       return `# ${args?.name ?? 'project'}\n\n## 做什么\n${args?.sentence ?? ''}\n\n## Commands\n- Build:\n- Test:\n- Check:\n\n## Layout\n- 未知\n\n## Conventions\n-\n` as T
+    case 'brief_questions':
+      return [
+        { question: '打算用什么技术栈？', options: ['React + Node', 'Python', '暂不指定'] },
+        { question: '主要给谁用？', options: ['自己/家人', '对外用户'] },
+      ] as T
+    case 'draft_role_defs':
+      return ((args?.roles as { name: string }[] | undefined) ?? []).map((r) => ({
+        name: r.name,
+        duty: `${r.name}在本项目中的职责`,
+        globs: [],
+      })) as T
     case 'run_opening_intake':
     case 'confirm_intake_brief':
       return null as T

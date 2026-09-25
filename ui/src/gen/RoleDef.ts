@@ -5,7 +5,8 @@
  */
 export type RoleDef = { name: string, 
 /**
- * 一句话职责（进激活简报与团队说明）
+ * 职责段落（能力域/边界/协作线索各一句上下，ADR 0075；
+ * 进激活简报与团队说明）
  */
 duty: string, reviewer: string | null, model_slot: string, 
 /**

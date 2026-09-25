@@ -55,9 +55,11 @@ describe('向导创建进度（票 14）', () => {
     })
     await act(async () => { await new Promise((r) => setTimeout(r, 250)) })
     await clickButton(el, '下一步')
+    // 重排（2026-09-25）：brief=3 在 roles=4 前。dev mock 目录带 AGENTS.md，
+    // brief 步是检出分支（无 checkbox）；卸角色挪到 roles 步。
+    await clickButton(el, '下一步')
     const box = el.querySelector('input[type=checkbox]') as HTMLInputElement
     await act(async () => { box.click() })
-    await clickButton(el, '下一步')
     await clickButton(el, '下一步')
     await act(async () => { await new Promise((r) => setTimeout(r, 80)) })
     await clickButton(el, '下一步')

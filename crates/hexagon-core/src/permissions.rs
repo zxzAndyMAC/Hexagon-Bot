@@ -475,6 +475,16 @@ pub(crate) fn operand_escapes(tok: &str, ctx: &ToolContext) -> bool {
 /// 记忆层之前的守卫序列（严格顺序，首个非 Pass 即终局）：
 /// L0 授权闸门 → L1 内置 deny → L2 安全网必问 → L3 项目级 deny。
 /// 全部只能输出 GuardVerdict——没有任何一个能替下层「放行」。
+fn agent_role(db: &Db, ctx: &ToolContext) -> Option<String> {
+    db.conn()
+        .query_row(
+            "SELECT role FROM agents WHERE id=?1",
+            [&ctx.agent_id],
+            |r| r.get(0),
+        )
+        .ok()
+}
+
 fn pre_memory_guards(
     db: &Db,
     ctx: &ToolContext,
@@ -504,6 +514,18 @@ fn pre_memory_guards(
                 layer: "grant",
             });
         }
+    }
+    // 项目经理不写盘。2026-09-24 论坛活测：封闭选择派给自己之后，
+    // 职责里的「不写规格」没拦住 artifact_write / fs_write，规格被改成他的版本。
+    // 提示词已经写了；这里是机械闸。不开「进度文档」例外——那会变成没点名的写盘口。
+    // false negative 少写一份他不该交的产物；false positive 是规格被调度者改写。
+    if matches!(tool_name, "fs_write" | "fs_patch" | "artifact_write")
+        && agent_role(db, ctx).as_deref() == Some(crate::pm_route::PM_ROLE)
+    {
+        return Ok(GuardVerdict::Deny {
+            reason: "project manager does not write".into(),
+            layer: "builtin_deny",
+        });
     }
     // L1 内置 deny
     if let Some(reason) = tool.builtin_deny(input, ctx) {
@@ -564,6 +586,21 @@ fn release_at_high_autonomy(
         || tool_name == "git_baseline_merge"
         || is_safety_net(tool_name, input) == Some("baseline merge")
     {
+        return Ok(Decision::Ask { reason, safety_net });
+    }
+    // 2026-09-24 论坛活测：自治把 `cd /tmp && mkdir` 放过去，QA 在仓库外
+    // 起了服务。文件工具早已拒绝越出 repo_root；shell 的操作数越界只是
+    // 必问，高档又把必问换成放行。仓库外的写入留下给负责人的一次授权，
+    // 不进记忆、不由自治放行。读仓库外（解释器、证书）没有 path 操作数，
+    // 不走这支。false negative 多一张卡；false positive 是仓库外的未审写入。
+    if tool_name == "bash" && bash_operand_escapes(input, ctx) {
+        return Ok(Decision::Ask { reason, safety_net });
+    }
+    // 2026-09-24 论坛活测：`.hexagon/**` 配上自治放行后，产品策划用
+    // artifact_write 交了 `e2e/runbook.md`。CONTEXT「路径所有权」Avoid
+    // 是匹配失败就开放整仓。越权写入留下给负责人的一次授权，不由自治放行。
+    // false negative 多一张卡；false positive 是角色树外的未审写入。
+    if violates_ownership(tool_name, input, ctx) {
         return Ok(Decision::Ask { reason, safety_net });
     }
     let level = crate::autonomy::rank(db, &ctx.project_id).unwrap_or(0);
@@ -717,6 +754,8 @@ pub fn evaluate_logged(
             );
             if *safety_net {
                 "safety_net"
+            } else if reason == "path outside ownership" {
+                "outside_ownership"
             } else {
                 "must_ask"
             }
@@ -762,8 +801,19 @@ fn violates_ownership(tool: &str, input: &Value, ctx: &ToolContext) -> bool {
     if !matches!(tool, "fs_write" | "fs_patch" | "artifact_write") || ctx.owned_globs.is_empty() {
         return false;
     }
-    let path = input["path"].as_str().unwrap_or("");
-    !ctx.owned_globs.iter().any(|g| glob_match(g, path))
+    let path = ownership_path(tool, input);
+    !ctx.owned_globs.iter().any(|g| glob_match(g, &path))
+}
+
+/// 产物交付的路径是调用参数，不是落盘后的 `.hexagon/` 前缀。
+/// 2026-09-24：前缀一加上，每个角色的 `.hexagon/**` 都匹配，产品策划交了 `e2e/`。
+fn ownership_path(tool: &str, input: &Value) -> String {
+    let path = input["path"].as_str().unwrap_or("").trim_start_matches('/');
+    if tool == "artifact_write" {
+        path.trim_start_matches(".hexagon/").to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 /// 命中的 deny/allow 规则形（activation 作用域要求同一 stage_run）。
@@ -942,7 +992,7 @@ pub fn revoke_rule(
 mod tests {
     use super::*;
     use crate::orchestra::PackDef;
-    use crate::tools::Bash;
+    use crate::tools::{Bash, FsWrite};
     use serde_json::json;
 
     fn setup() -> (Db, ToolContext, tempfile::TempDir) {
@@ -1090,7 +1140,8 @@ mod tests {
             ),
             "baseline merge still asks: {merge:?}"
         );
-        let rm = bash_ctx(&db, &ctx, "rm -rf /tmp/x");
+        // 仓内的破坏性删除仍由自治放行。`rm -rf /tmp/x` 越出仓库，另走必问。
+        let rm = bash_ctx(&db, &ctx, "rm -rf build");
         assert!(
             matches!(
                 rm,
@@ -1227,13 +1278,12 @@ mod tests {
             &json!({"path":"etc/x","content":"c"}),
         )
         .unwrap();
-        // 界外新询问按原先 L4 放行，不再排队。
-        assert!(matches!(
-            d,
-            Decision::Allow {
-                via: AllowVia::Autonomy { .. }
-            }
-        ));
+        // 2026-09-24：界外不再由自治放行。此前 L4 把必问换成放行，
+        // 产品策划交了所有权之外的 e2e/。越权写入停成卡。
+        assert!(
+            matches!(d, Decision::Ask { .. }),
+            "path outside ownership stays a card, got {d:?}"
+        );
         // 界内放行
         let d2 = evaluate(
             &db,
@@ -1582,13 +1632,8 @@ mod tests {
             "git log --output=/tmp/x",
         ] {
             assert!(
-                matches!(
-                    bash_ctx(&db, &ctx, cmd),
-                    Decision::Allow {
-                        via: AllowVia::Autonomy { .. }
-                    }
-                ),
-                "{cmd} must not be covered by the in-repo shape, got {:?}",
+                matches!(bash_ctx(&db, &ctx, cmd), Decision::Ask { .. }),
+                "{cmd} stays a card: autonomy must not write outside the repo, got {:?}",
                 bash_ctx(&db, &ctx, cmd)
             );
         }
@@ -1605,6 +1650,66 @@ mod tests {
             Decision::Deny {
                 layer: "project_deny",
                 ..
+            }
+        ));
+    }
+
+    #[test]
+    fn project_manager_cannot_write() {
+        let (db, ctx, _d) = setup();
+        db.conn()
+            .execute("UPDATE agents SET role='项目经理' WHERE id='a1'", [])
+            .unwrap();
+        let d = evaluate(
+            &db,
+            &ctx,
+            &FsWrite,
+            "fs_write",
+            &json!({"path": "specs/a.md", "content": "x"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                d,
+                Decision::Deny {
+                    layer: "builtin_deny",
+                    ..
+                }
+            ),
+            "{d:?}"
+        );
+    }
+
+    /// 2026-09-24 论坛活测：交付参数是 `e2e/runbook.md`，加上 `.hexagon/`
+    /// 前缀后每个角色的 `.hexagon/**` 都匹配。看的是参数本身。
+    #[test]
+    fn artifact_write_ownership_uses_logical_path() {
+        let (db, mut ctx, _d) = setup();
+        ctx.owned_globs = vec!["specs/**".into(), "docs/**".into(), ".hexagon/**".into()];
+        let outside = evaluate(
+            &db,
+            &ctx,
+            &crate::tools::ArtifactWrite,
+            "artifact_write",
+            &json!({"path": ".hexagon/e2e/runbook.md", "content": "x"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(outside, Decision::Ask { .. }),
+            "prefixed e2e path is still outside specs/docs, got {outside:?}"
+        );
+        let inside = evaluate(
+            &db,
+            &ctx,
+            &crate::tools::ArtifactWrite,
+            "artifact_write",
+            &json!({"path": "specs/requirements.md", "content": "x"}),
+        )
+        .unwrap();
+        assert!(matches!(
+            inside,
+            Decision::Allow {
+                via: AllowVia::Default
             }
         ));
     }

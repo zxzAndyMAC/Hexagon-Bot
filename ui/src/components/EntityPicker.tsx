@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 
 export type PickSource = 'skills' | 'mcp'
-type Option = { id: string; desc: string; badge: string; badgeOk: boolean }
+export type Option = { id: string; desc: string; badge: string; badgeOk?: boolean }
 
 // 数据源惰性加载——picker 打开才发 IPC，避免每个编辑器挂载都打一次清单。
 async function loadOptions(source: PickSource): Promise<Option[]> {
@@ -31,10 +31,16 @@ export function EntityChips({
   value,
   onChange,
   source,
+  options,
+  title,
 }: {
   value: string[]
   onChange: (ids: string[]) => void
-  source: PickSource
+  /** IPC 名单（skills/mcp）。本地名单（如向导阶段角色）走 options 跳过加载 */
+  source?: PickSource
+  options?: Option[]
+  /** 本地名单时的弹窗标题——picker.title_* 只登记了 skills/mcp */
+  title?: string
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -62,6 +68,8 @@ export function EntityChips({
       {open && (
         <EntityPicker
           source={source}
+          options={options}
+          title={title}
           selected={value}
           onClose={() => setOpen(false)}
           onConfirm={(ids) => { onChange(ids); setOpen(false) }}
@@ -73,32 +81,40 @@ export function EntityChips({
 
 function EntityPicker({
   source,
+  options,
+  title,
   selected,
   onConfirm,
   onClose,
 }: {
-  source: PickSource
+  source?: PickSource
+  options?: Option[]
+  title?: string
   selected: string[]
   onConfirm: (ids: string[]) => void
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const [opts, setOpts] = useState<Option[] | null>(null)
+  // 本地名单直接做初始值（打开时的快照）；没有才走 IPC
+  const [opts, setOpts] = useState<Option[] | null>(options ?? null)
   const [err, setErr] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<Set<string>>(new Set(selected))
   const searchRef = useRef<HTMLInputElement>(null)
+  const heading = title ?? (source ? t(`picker.title_${source}`) : '')
 
   useEffect(() => {
     searchRef.current?.focus()
     let live = true
-    loadOptions(source)
-      .then((o) => { if (live) setOpts(o) })
-      .catch((e) => { if (live) setErr(errText(e)) })
+    if (opts === null && source) {
+      loadOptions(source)
+        .then((o) => { if (live) setOpts(o) })
+        .catch((e) => { if (live) setErr(errText(e)) })
+    }
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onClose() } }
     window.addEventListener('keydown', h, true)
     return () => { live = false; window.removeEventListener('keydown', h, true) }
-  }, [source, onClose])
+  }, [source, opts, onClose])
 
   const shown = useMemo(() => {
     const base = opts ?? []
@@ -135,7 +151,7 @@ function EntityPicker({
         className="panel panel-float"
         role="dialog"
         aria-modal="true"
-        aria-label={t(`picker.title_${source}`)}
+        aria-label={heading}
         style={{
           width: 'min(520px, 92vw)', padding: 14, display: 'flex', flexDirection: 'column',
           boxShadow: '0 12px 40px rgba(0,0,0,.4)',
@@ -144,7 +160,7 @@ function EntityPicker({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ fontWeight: 560, fontSize: 14, marginBottom: 10 }}>
-          {t(`picker.title_${source}`)}
+          {heading}
         </div>
         <input
           ref={searchRef}
@@ -170,7 +186,7 @@ function EntityPicker({
             >
               <input type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} />
               <span className="mono" style={{ fontSize: 12, flexShrink: 0 }}>{o.id}</span>
-              <span className={`chip ${o.badgeOk ? 'ok' : ''}`}>{o.badge}</span>
+              {o.badge && <span className={`chip ${o.badgeOk ? 'ok' : ''}`}>{o.badge}</span>}
               <span className="dim3" style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {o.desc}
               </span>

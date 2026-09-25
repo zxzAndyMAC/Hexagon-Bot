@@ -44,7 +44,8 @@ pub enum PresetError {
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct RoleDef {
     pub name: String,
-    /// 一句话职责（进激活简报与团队说明）
+    /// 职责段落（能力域/边界/协作线索各一句上下，ADR 0075；
+    /// 进激活简报与团队说明）
     pub duty: String,
     #[serde(default)]
     pub reviewer: Option<String>,
@@ -423,10 +424,23 @@ mod tests {
                             _ => "## 概述\nx\n",
                         };
                         let content = format!("---\nkind: {k}\nauthor: {role}\n---\n{sections}");
+                        let path = format!("docs/{k}.md");
+                        // 2026-09-24：登记为代码的产物，仓库根上要有同路径文件。
+                        if k == "代码" {
+                            let file = dir.path().join(&path);
+                            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                            std::fs::write(&file, &content).unwrap();
+                            db.conn()
+                                .execute(
+                                    "UPDATE projects SET dir=?1 WHERE id='p1'",
+                                    [dir.path().to_string_lossy().as_ref()],
+                                )
+                                .unwrap();
+                        }
                         resps.push(tool_response(vec![(
                             "c",
                             "artifact_write",
-                            json!({"path": format!("docs/{k}.md"), "content": content}),
+                            json!({"path": path, "content": content}),
                         )]));
                     }
                     resps.push(text_response(&format!("{role} 交付完毕")));

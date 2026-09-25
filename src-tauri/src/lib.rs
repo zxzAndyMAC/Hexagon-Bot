@@ -1420,14 +1420,55 @@ fn agents_md_draft(name: String) -> String {
 /// 票 16：一句话经主对话模型起草项目说明。不写磁盘——落盘仍是确认后的
 /// create_project → write_agents_md。项目还不存在，这条命令不进工作台。
 #[tauri::command(async)]
-fn optimize_agents_md(name: String, sentence: String) -> Result<String, CmdError> {
+fn optimize_agents_md(
+    name: String,
+    sentence: String,
+    qa: Option<Vec<hexagon_core::setup::BriefQA>>,
+) -> Result<String, CmdError> {
     // ADR 0069：项目说明槽，没绑则落到默认槽。不是 Jev，也不是角色起草槽。
     let provider = hexagon_core::provider_admin::authoring_provider(
         hexagon_core::credentials::active(),
         hexagon_core::provider_config::BRIEF_SLOT,
     )
     .map_err(cmd_err)?;
-    hexagon_core::setup::optimize_agents_md(&name, &sentence, provider.as_ref()).map_err(cmd_err)
+    hexagon_core::setup::optimize_agents_md(
+        &name,
+        &sentence,
+        qa.as_deref().unwrap_or(&[]),
+        provider.as_ref(),
+    )
+    .map_err(cmd_err)
+}
+
+/// 2026-09-25 答问优化流：起草 AGENTS.md 前先出答问题目（题数不设上限，每题带选项）。
+/// 解析失败/空数组都回落到无答问直出——界面按「跳过讨论」处理，不挡优化。
+#[tauri::command(async)]
+fn brief_questions(
+    name: String,
+    sentence: String,
+) -> Result<Vec<hexagon_core::setup::BriefQuestion>, CmdError> {
+    let provider = hexagon_core::provider_admin::authoring_provider(
+        hexagon_core::credentials::active(),
+        hexagon_core::provider_config::BRIEF_SLOT,
+    )
+    .map_err(cmd_err)?;
+    hexagon_core::setup::brief_questions(&name, &sentence, provider.as_ref()).map_err(cmd_err)
+}
+
+/// 按项目说明批量起草勾选角色的职责段落（走角色起草槽）。
+/// 只回种子草稿——界面决定哪些落 roleOverrides；已定制的角色不入参。
+/// ADR 0075：不再产归属 globs（空目录上纯属虚构），字段恒空。
+#[tauri::command(async)]
+fn draft_role_defs(
+    brief: String,
+    roles: Vec<hexagon_core::presets::RoleDef>,
+) -> Result<Vec<hexagon_core::setup::RoleSeedDraft>, CmdError> {
+    let provider = hexagon_core::provider_admin::authoring_provider(
+        hexagon_core::credentials::active(),
+        hexagon_core::provider_config::ROLE_DRAFT_SLOT,
+    )
+    .map_err(cmd_err)?;
+    hexagon_core::setup::draft_role_defs(&brief, &roles, provider.as_ref()).map_err(cmd_err)
 }
 
 /// 按项目说明起草流程包。用流程起草槽，没绑则落到默认槽。
@@ -1857,6 +1898,8 @@ pub fn run() {
             fetch_provider_models,
             agents_md_draft,
             optimize_agents_md,
+            brief_questions,
+            draft_role_defs,
             draft_flow,
             read_instruction_file,
             draft_role_duty,

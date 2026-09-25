@@ -487,7 +487,7 @@ impl Tool for ArtifactWrite {
     fn description(&self) -> &str {
         r#"Deliver an artifact to .hexagon/<path>: checks the metadata header, registers the artifact and supersedes earlier versions.
 - Use when: producing a deliverable of the current stage or a handoff for another role.
-- Do not use: for ordinary repository files (fs_write, fs_patch). For small changes to an existing artifact, prefer fs_patch on its file.
+- Do not use: for ordinary repository files (fs_write, fs_patch). For small changes to an existing artifact, prefer fs_patch on its file. Runnable code (html, css, js, and kind 代码) also needs the same relative path written at the repository root with fs_write; a copy that exists only under .hexagon/ does not satisfy the stage.
 - Pass `kind` equal to the due deliverable name, verbatim (for example 范围说明), or start `content` with the header: line 1 `---`, line 2 `kind: <name>`, line 3 `---`. Without either it registers as misc and does not count toward the stage.
 - Errors: a malformed metadata header is reported — fix the header and deliver again."#
     }
