@@ -519,6 +519,7 @@ export default {
     fastPick: '选已勾选角色…',
     fastOnConfirm: '快速通道：不采用生成的流程。合入基线仍等最终验收。',
     flowDraft: '正在生成流程草稿…',
+    flowRedraft: '正在按当前项目重新生成流程草稿…',
     addStage: '增加阶段',
     removeStage: '删除阶段',
     moveUp: '上移',

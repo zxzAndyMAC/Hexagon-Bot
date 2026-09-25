@@ -519,6 +519,7 @@ export default {
     fastPick: 'Choisir un rôle coché…',
     fastOnConfirm: 'Voie rapide : ne pas adopter le flux généré. La fusion attend l’acceptation finale.',
     flowDraft: 'Génération du brouillon…',
+    flowRedraft: 'Régénération du brouillon de flux pour ce projet…',
     addStage: 'Ajouter une étape',
     removeStage: 'Retirer l’étape',
     moveUp: 'Monter',

@@ -519,6 +519,7 @@ export default {
     fastPick: 'チェック済みロールを選択…',
     fastOnConfirm: '高速経路: 生成フローは使わない。マージは最終検収を待つ。',
     flowDraft: 'フロー下書きを生成しています…',
+    flowRedraft: 'このプロジェクト向けにフロー下書きを再生成しています…',
     addStage: '段階を追加',
     removeStage: '段階を削除',
     moveUp: '上へ',

@@ -48,6 +48,8 @@ interface Draft {
   brief: string
   /// 确认前的流程草稿。快速通道不采用它。
   flowPack: PackDef | null
+  /// 起草这份流程时的项目身份。和当前不一致就重写，避免换项目后确认页还挂着上一个流程名。
+  flowDraftKey: string | null
   fastPath: boolean
 }
 
@@ -57,7 +59,7 @@ interface Draft {
 const EMPTY: Draft = {
   dir: '', name: '', roles: ['项目经理'], roleOverrides: {}, roleDrafted: [], roleHandTuned: [], instructionText: '', mode: 'pack',
   packName: '', fastRole: '', initGit: false, genAgents: false, agentsMd: '', brief: '',
-  flowPack: null, fastPath: false,
+  flowPack: null, flowDraftKey: null, fastPath: false,
 }
 
 function loadDraft(): Draft {
@@ -104,16 +106,17 @@ const STEPS = ['providers', 'dir', 'brief', 'roles', 'flow', 'keys', 'confirm'] 
 type Step = (typeof STEPS)[number]
 
 function FlowDraft({
-  pack, roles, onChange,
+  pack, roles, busy, onChange,
 }: {
   pack: PackDef | null
   roles: string[]
+  busy: boolean
   onChange: (pack: PackDef) => void
 }) {
   const { t } = useTranslation()
-  if (!pack) {
-    // draft_flow 在途——AI 指示同 brief 优化（动画+流光文案+计时）
-    return <LoadingState label={t('wizard.flowDraft')} />
+  if (!pack || busy) {
+    // draft_flow 在途——旧稿还在时也要换成等待态，否则下一步锁着、页面仍像能编辑
+    return <LoadingState label={t(pack ? 'wizard.flowRedraft' : 'wizard.flowDraft')} />
   }
   const stages = pack.stages
   const update = (next: PackDef['stages']) => onChange({ ...pack, stages: next })
@@ -463,7 +466,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   // 流程步 draft_flow 落定标记（成功/失败/空都算落定）。在途=进了流程步还没草稿也没落定——
   // 派生值而非 effect 里同步 setState：set-state-in-effect 会触发级联渲染，oxlint 红线
   const [flowDone, setFlowDone] = useState(false)
-  const flowBusy = step === 'flow' && !draft.flowPack && !flowDone
+  const flowStale = !!draft.flowPack && draft.flowDraftKey !== projectKey(draft)
+  const flowBusy = step === 'flow' && !flowDone && (!draft.flowPack || flowStale)
   const [newRoleBusy, setNewRoleBusy] = useState(false)
   // AI 调用在途即锁跳步（owner 2026-09-25：上一步/下一步/步骤轨回跳全锁），
   // 避免草稿还在生成时人已经走开。创建进度是例外：命令在阻塞池不占渲染线程，
@@ -805,7 +809,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   }
 
   useEffect(() => {
-    if (step !== 'flow' || draft.flowPack) return
+    if (step !== 'flow') return
+    if (draft.flowPack && draft.flowDraftKey === projectKey(draft)) return
     let cancelled = false
     // draft_flow 也是 AI 调用：在途由 flowBusy 派生锁跳步，done() 在异步出口落定
     const done = () => { if (!cancelled) setFlowDone(true) }
@@ -813,11 +818,13 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       const text = sentence.trim()
       if (!text) { done(); return }
       api.draftFlow(text).then((pack) => {
-        if (!cancelled) set({ flowPack: pack })
+        if (!cancelled) set({ flowPack: pack, flowDraftKey: projectKey(draft) })
       }).catch((e) => { if (!cancelled) setErr(errText(e)) })
         .finally(done)
     }
-    const sentence = draft.agentsMd.trim() || draft.brief.trim()
+    // 一句话换了项目、生成稿还是上一个时，以一句话为准。否则模型按旧稿
+    // 起草，确认页流程名仍是上一个项目（owner 2026-09-25：魂斗罗确认页写着计算器）。
+    const sentence = draftSource(draft)
     if (sentence) apply(sentence)
     else if (report?.instructions && draft.dir) {
       api.readInstructionFile(draft.dir).then((text) => {
@@ -825,7 +832,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       }).catch(() => { if (!cancelled) apply(draft.name) })
     } else apply(draft.name)
     return () => { cancelled = true }
-  }, [step, draft.flowPack, draft.agentsMd, draft.brief, draft.name, draft.dir, report, set])
+  }, [step, draft, report, set])
 
   const idx = STEPS.indexOf(step)
   // 跳步即收起侧弹卡——未保存编辑按「取消」语义丢弃（新建角色卡同此；
@@ -836,7 +843,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     setMakingRole(false)
     setErr('')
     // 再进 flow 步要重试 draft_flow——上次落定标记清掉，flowBusy 派生跟着重立
-    if (s === 'flow' && !draft.flowPack) setFlowDone(false)
+    if (s === 'flow' && draft.flowDraftKey !== projectKey(draft)) setFlowDone(false)
     setStep(s)
   }
   // 定制弹窗只活在 roles 步；角色被卸掉或模板失踪时自动关
@@ -1025,6 +1032,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         <FlowDraft
           pack={draft.flowPack}
           roles={draft.roles}
+          busy={flowBusy}
           onChange={(flowPack) => set({ flowPack })}
         />
         {err && step === 'flow' && (

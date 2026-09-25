@@ -519,6 +519,7 @@ export default {
     fastPick: 'Escolha um papel marcado…',
     fastOnConfirm: 'Atalho: não usar o fluxo gerado. A fusão ainda espera a aceitação final.',
     flowDraft: 'Gerando o rascunho…',
+    flowRedraft: 'Regenerando o rascunho do fluxo para este projeto…',
     addStage: 'Adicionar etapa',
     removeStage: 'Remover etapa',
     moveUp: 'Subir',

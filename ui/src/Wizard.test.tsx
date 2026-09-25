@@ -561,6 +561,45 @@ describe('一句话优化成项目说明（票 16）', () => {
     expect(down.disabled).toBe(true)
   })
 
+  it('项目说明换成魂斗罗后，确认页不再沿用上一个项目的流程名', async () => {
+    const calc = {
+      name: '桌面端跨平台计算器软件',
+      version: 1,
+      knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      stages: [{
+        name: '规格', roles: ['产品策划'], due: ['规格'], checks: [],
+        reviews: [], stamp_point: false, backfill_edges: [], consult_wake: [],
+      }],
+    }
+    localStorage.setItem('hexagon.wizard', JSON.stringify({
+      ...seeded,
+      dir: '/Users/andyzheng/work/bbbb',
+      name: 'aacddd',
+      brief: '魂斗罗横版射击游戏',
+      agentsMd: '桌面端跨平台计算器软件。四则运算。',
+      flowPack: calc,
+    }))
+    let resolveFlow: (v: PackDef) => void = () => {}
+    const flow = vi.spyOn(api, 'draftFlow').mockImplementation(
+      () => new Promise((r) => { resolveFlow = r }),
+    )
+    const el = await renderWizard()
+    await advance(el, '5 · Flow draft')
+    expect(el.querySelector('[role="status"]')).toBeTruthy()
+    expect(el.textContent).toContain('Regenerating the flow draft for this project')
+    expect(nextBtn(el).disabled).toBe(true)
+    await act(async () => {
+      resolveFlow({ ...calc, name: '魂斗罗' })
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(el.textContent).not.toContain('Regenerating the flow draft')
+    await advance(el, '7 · Launch')
+    expect(flow).toHaveBeenCalled()
+    expect(String(flow.mock.calls.at(-1)?.[0])).toContain('魂斗罗')
+    expect(el.textContent).toContain('魂斗罗')
+    expect(el.textContent).not.toContain('桌面端跨平台计算器软件')
+  })
+
   it('流程起草在途锁跳步，落地才放行', async () => {
     // draft_flow 也是 AI 调用：在途 Back/Next 同锁（owner 2026-09-25）
     localStorage.setItem('hexagon.wizard', JSON.stringify({ ...seeded, brief: '一个本地待办' }))

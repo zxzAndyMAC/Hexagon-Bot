@@ -519,6 +519,7 @@ export default {
     fastPick: 'Pick a checked role…',
     fastOnConfirm: 'Fast path: do not use the generated flow. Merge still waits for final acceptance.',
     flowDraft: 'Generating a flow draft…',
+    flowRedraft: 'Regenerating the flow draft for this project…',
     addStage: 'Add stage',
     removeStage: 'Remove stage',
     moveUp: 'Move up',

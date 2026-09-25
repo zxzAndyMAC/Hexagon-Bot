@@ -519,6 +519,7 @@ export default {
     fastPick: 'Elige un rol marcado…',
     fastOnConfirm: 'Vía rápida: no usar el flujo generado. La fusión espera la aceptación final.',
     flowDraft: 'Generando el borrador…',
+    flowRedraft: 'Regenerando el borrador del flujo para este proyecto…',
     addStage: 'Añadir etapa',
     removeStage: 'Quitar etapa',
     moveUp: 'Subir',
