@@ -3148,6 +3148,34 @@ fn unnamed_owner_message_routes_outside_activation_list() {
 }
 
 #[test]
+fn kickoff_with_no_stage_opens_the_first_and_wakes_its_lead() {
+    // 活测 2026-09-25：建完项目直接说「让我们开始吧」、没点名。
+    // stage_runs 为空，封闭选择看到「没有进行中的阶段」回 HOLD，
+    // 时间线上没有角色回复，60 秒后失速收场。
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(
+        dir.path(),
+        &["项目经理", "产品策划", "后端"],
+        Some(pm_pack()),
+    )
+    .unwrap();
+    assert!(wb.active_run().unwrap().is_none());
+    let (_d, _c, worker) = scripted_choice(&mut wb, "先不派活");
+    let route = send(&wb, "让我们开始吧").unwrap();
+    assert_eq!(
+        route,
+        UnnamedRoute::Dispatched {
+            role: "产品策划".into(),
+            via: "decision".into(),
+        }
+    );
+    let (_id, seq, name, state) = stage_ptr(&wb);
+    assert_eq!((seq, name.as_str(), state.as_str()), (0, "规格", "active"));
+    assert!(turns_for(&wb, "产品策划") >= 1, "开场白要有可见回合");
+    assert!(!worker.recorded().is_empty());
+}
+
+#[test]
 fn unnamed_owner_message_can_hold() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = pm_wb(dir.path());

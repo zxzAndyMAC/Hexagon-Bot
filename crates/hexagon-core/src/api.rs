@@ -1178,11 +1178,25 @@ impl Workbench {
             }
             return Ok(UnnamedRoute::Mentioned { roles: mentions });
         }
+        // 建档后 stage_runs 为空（pending 只是读模型）。负责人没点名的开场白
+        // 若直接做选择，局面是「没有进行中的阶段」，模型回先不派活，时间线上
+        // 没有角色回复，接着失速收场（owner 2026-09-25：让我们开始吧）。
+        // 先打开第一阶段，选择仍先不派活时交给该阶段激活名单的第一位。
+        let kickoff = self.maybe_open_first_stage(from_owner)?;
         if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
             let route = self.closed_choice(speaker, body, attachments, from_owner, &roster)?;
             // ADR 0074：正常派活时的「先不派活」仍是空转信号。调查里的先不派活
             // 不走这里（stall_investigate 直调 closed_choice 并就地收场）。
             if matches!(route, UnnamedRoute::Held { .. }) {
+                if kickoff {
+                    if let Some(role) = self.kickoff_lead(&roster) {
+                        self.dispatch(&role, body, attachments)?;
+                        return Ok(UnnamedRoute::Dispatched {
+                            role,
+                            via: "decision".into(),
+                        });
+                    }
+                }
                 self.stall_note_held(from_owner.then_some(body));
             }
             return Ok(route);
@@ -1448,6 +1462,30 @@ impl Workbench {
                 via: via.to_string(),
             }),
         }
+    }
+
+    /// 没有进行中的阶段时，负责人的下一句话打开流程的第一阶段。
+    /// 已经开过、快速通道、或这一句来自角色续派，都不动指针。
+    fn maybe_open_first_stage(&self, from_owner: bool) -> Result<bool, ApiError> {
+        if !from_owner || self.active_run()?.is_some() {
+            return Ok(false);
+        }
+        let Some(pack) = &self.pack else {
+            return Ok(false);
+        };
+        if pack.stages.is_empty() {
+            return Ok(false);
+        }
+        let opened = self.open_stage(0)?;
+        Ok(!opened.skipped)
+    }
+
+    /// 刚打开的阶段里，花名册上的第一位。项目经理不接这手。
+    fn kickoff_lead(&self, roster: &[String]) -> Option<String> {
+        let stage = self.pack.as_ref()?.stages.first()?;
+        stage.roles.iter().find(|role| {
+            role.as_str() != crate::pm_route::PM_ROLE && roster.iter().any(|r| r == *role)
+        }).cloned()
     }
 
     /// 角色回合正常说完之后的下一手。链上限见 [`DISPATCH_CHAIN_CAP`]。
