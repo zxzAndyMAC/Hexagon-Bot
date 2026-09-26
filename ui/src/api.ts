@@ -1,3 +1,4 @@
+import type { DataBoundary } from './gen/DataBoundary'
 // 核 API 接缝：Tauri 环境走 invoke；浏览器开发环境用内置 mock 数据。
 // UI 的唯一通道 = 这些命令 + 事件推送，没有旁路。类型对齐 api.rs 的 JSON 形状。
 
@@ -14,6 +15,10 @@ import type { SandboxStatus } from './gen/SandboxStatus'
 import type { QueuedCard } from './gen/QueuedCard'
 import type { TurnDelta } from './gen/TurnDelta'
 import type { ToolOutputDelta } from './gen/ToolOutputDelta'
+import type { StageEvidence } from './gen/StageEvidence'
+import type { ExceptionRequirement } from './gen/ExceptionRequirement'
+import type { ExceptionRequest } from './gen/ExceptionRequest'
+import type { ExceptionAcceptance } from './gen/ExceptionAcceptance'
 import type { StageRow } from './gen/StageRow'
 import type { TimelineItem } from './gen/TimelineItem'
 import type { TeamRow } from './gen/TeamRow'
@@ -79,7 +84,7 @@ export type PendingQuestion = QueuedCard
 export type PackStage = StageDef
 
 export type {
-  CmdError, TurnDelta, ToolOutputDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
+  StageEvidence, CmdError, TurnDelta, ToolOutputDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
   UsageTotal, UsageRow, UsageSummary, UsageBucket, ContextPressure, StageAction, OpenStageOutcome,
   CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PublishOutcome,
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
@@ -153,6 +158,7 @@ export async function onTurnDelta(cb: (d: TurnDelta) => void): Promise<() => voi
 }
 
 export const api = {
+  dataBoundary: () => call<DataBoundary>('data_boundary'),
   ping: () => call<string>('core_ping'),
   openProject: (dir: string, name: string, roles: [string, string][], packJson?: string) =>
     call<void>('open_project', { dir, name, roles, packJson: packJson ?? null }),
@@ -195,6 +201,10 @@ export const api = {
   setAgentSleeping: (agentId: string, sleeping: boolean) =>
     call<void>('set_agent_sleeping', { agentId, sleeping }),
   team: () => call<TeamRow[]>('team'),
+  requestAcceptanceException: (expected: string) => call<ExceptionRequest>('request_acceptance_exception', { expected }),
+  acceptDeliveryException: (question: string, expected: string, selected: ExceptionRequirement[], reason: string) => call<ExceptionAcceptance>('accept_delivery_exception', { question, expected, selected, reason }),
+  cancelAcceptanceException: (question: string) => call<void>('cancel_acceptance_exception', { question }),
+  stageEvidence: () => call<StageEvidence | null>('stage_evidence'),
   stageStatus: () => call<StageRow[]>('stage_status'),
   pendingQuestions: () => call<PendingQuestion[]>('pending_questions'),
   // ui-audit-2 票 03：已记权限规则审计面
@@ -227,7 +237,7 @@ export const api = {
   deleteMcpService: (name: string) => call<void>('delete_mcp_service', { name }),
   // 票 06：本机 MCP 扫描导入 + 市场
   scanExternalMcp: () => call<ExtMcpRow[]>('scan_external_mcp'),
-  importMcp: (specs: McpSpec[]) => call<ImportReport>('import_mcp', { specs }),
+  importMcp: (references: string[]) => call<ImportReport>('import_mcp', { references }),
   openMcpMarket: () => call<void>('open_mcp_market'),
   usage: () => call<UsageSummary>('usage'),
   usageContextPressure: () => call<ContextPressure>('usage_context_pressure'),
@@ -274,6 +284,10 @@ export const api = {
   rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
+  reconcileToolAction: (actionId: string) => call<void>('reconcile_tool_action', { actionId }),
+  abandonToolAction: (actionId: string, reason: string) => call<void>('abandon_tool_action', { actionId, reason }),
+  retryToolAction: (actionId: string, reason: string, acceptsDuplicate: boolean) => call<void>('retry_tool_action', { actionId, reason, acceptsDuplicate }),
+  resumeToolAction: (actionId: string) => call<void>('resume_tool_action', { actionId }),
   // ---- 失速卡（stall-watch 票 02/04）：再试一次 / 知道了 ----
   stallRetry: (questionId: string) => call<void>('stall_retry', { questionId }),
   stallAck: (questionId: string) => call<void>('stall_ack', { questionId }),
@@ -678,6 +692,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
           { id: 'tool.fs_patch', text: '（参考译文）在仓库文件中替换一段精确字符串。', error: null },
         ],
       } as T
+    case 'stage_evidence':
+      return null as T
     case 'stage_status':
       return [
         { run_id: 'r0', stage: '需求', seq: 0, state: 'done' },
@@ -867,6 +883,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       const limit = Number(args?.limit ?? 500)
       return all.filter((i) => after == null || i.event.id > after).slice(0, limit) as T
     }
+    case 'data_boundary':
+      return { credential_backend: 'dev_file', project_open: true, recipients: [
+        { kind: 'model', endpoint: 'https://api.example.test', transport: 'http', enabled: true },
+        { kind: 'mcp', endpoint: null, transport: 'stdio', enabled: true },
+      ] } as T
     case 'pending_questions':
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
@@ -1003,8 +1024,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'scan_external_mcp':
       return [
-        { name: 'figma', command: 'npx', args: ['-y', 'figma-mcp'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'cursor', source_path: '~/.cursor/mcp.json', conflict: false },
-        { name: 'web-svc', command: '', args: [], env: {}, cwd: null, disabled: false, transport: 'remote', url: 'https://h/sse', origin: 'claude', source_path: '~/.claude.json', conflict: true },
+        { reference: 'mock-figma', name: 'figma', command: 'npx', args: ['-y', 'figma-mcp'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'cursor', source_path: '~/.cursor/mcp.json', conflict: false },
+        { reference: 'mock-web', name: 'web-svc', command: '', args: [], env: {}, cwd: null, disabled: false, transport: 'remote', url: 'https://h/sse', origin: 'claude', source_path: '~/.claude.json', conflict: true },
       ] as T
     case 'import_mcp':
       return { imported: 1, skipped: ['web-svc: conflict'] } as T

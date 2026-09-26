@@ -821,3 +821,44 @@ fn investigation_retry_wakes_pm_once_then_only_acknowledge() {
     assert_eq!(turns(&wb, "后端") + turns(&wb, "产品策划"), 0, "卡上不改派");
     assert_no_side_effects(&wb, &ptr);
 }
+
+#[test]
+fn upgrade_budget_block_is_not_retried_or_reported_as_stall() {
+    struct TooLarge;
+    impl crate::provider::ModelProvider for TooLarge {
+        fn model_meta(&self) -> crate::provider::ModelMeta {
+            crate::provider::ModelMeta {
+                context_window: Some(2_000_000),
+                max_output: Some(1_000_000),
+            }
+        }
+        fn complete(&self, _: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+            panic!("budget must stop before dispatch")
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = fastpath_wb(dir.path(), &["worker"]);
+    let clock = with_clock(&mut wb);
+    std::fs::create_dir_all(dir.path().join(".hexagon")).unwrap();
+    std::fs::write(
+        dir.path().join(".hexagon/prices.json"),
+        r#"{"default":{"prompt_per_1k_mc":1000,"completion_per_1k_mc":1000}}"#,
+    )
+    .unwrap();
+    crate::usage::set_limit(&wb.db, "p1", Some(100)).unwrap();
+    wb.register_provider("default", Arc::new(TooLarge));
+    crate::orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    assert_eq!(
+        crate::errcode::ErrorCode::code(&wb.run_instance("a0", "work").unwrap_err()),
+        "budget_unavailable"
+    );
+    for _ in 0..2 {
+        clock.advance(Duration::from_secs(20 * 60));
+        assert!(matches!(wb.stall_tick().unwrap(), StallTick::Wait(_)));
+    }
+    assert_eq!(turns(&wb, "worker"), 1);
+    assert!(crate::cards::queued(&wb.db, "p1")
+        .unwrap()
+        .iter()
+        .all(|c| c.kind != "stall"));
+}

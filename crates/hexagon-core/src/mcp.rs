@@ -1,17 +1,19 @@
 //! MCP 宿主（票 13）：每服务一个 stdio OS 子进程，项目级生命周期。
 //!
-//! - 传输：JSON-RPC 2.0 over stdio，Content-Length 帧（MCP stdio 标准）。
+//! - 传输：JSON-RPC 2.0 over stdio，UTF-8 JSON 单行消息（MCP 标准）。
 //! - 握手：spawn → `initialize` → `notifications/initialized` → `tools/list`，
 //!   发现的工具注册为 `mcp:<service>:<tool>`，走统一工具管线（权限照常求值；
 //!   grants 表授权闸门在 permissions::evaluate 的 L0）。
-//! - 崩溃韧性：传输错误时按 spec 重启一次并重试一次，仍失败则报错——
-//!   子进程崩溃不拖垮核（所有 I/O 有 Mutex 串行化 + 超时外直接断开）。
+//! - 传输中断不重发工具动作：响应丢失不代表副作用没有发生（可靠性 08/09）。
 //! - 无常驻 Agent 进程；Host Drop 时全部 kill。
 
-use std::collections::HashMap;
+#[cfg(target_os = "macos")]
+use crate::sandbox::PROCESS_GROUP_RULES;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -120,6 +122,66 @@ fn valid_mcp_name(name: &str) -> bool {
         && !name.starts_with('.')
 }
 
+// Reliability 22: configuration is host-held. All free-form launch arguments,
+// environment/header values and paths may carry secrets, so do not guess keys.
+fn display_spec(raw: &McpSpec) -> McpSpec {
+    let mut s = raw.clone();
+    s.command = crate::data_boundary::hidden(&s.command);
+    s.args = s
+        .args
+        .iter()
+        .map(|v| crate::data_boundary::hidden(v))
+        .collect();
+    for v in s.env.values_mut().chain(s.headers.values_mut()) {
+        *v = crate::data_boundary::hidden(v);
+    }
+    s.cwd = s.cwd.as_deref().map(crate::data_boundary::hidden);
+    s.url = s.url.as_deref().map(crate::data_boundary::hidden_url);
+    s
+}
+fn restore_spec(input: &McpSpec, current: Option<&McpSpec>) -> Result<McpSpec, String> {
+    use crate::data_boundary::restore;
+    let mut s = input.clone();
+    s.command = restore(&input.command, current.map(|c| c.command.as_str()), false)?;
+    s.args = input
+        .args
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            restore(
+                v,
+                current.and_then(|c| c.args.get(i)).map(String::as_str),
+                false,
+            )
+        })
+        .collect::<Result<_, _>>()?;
+    for (key, value) in &mut s.env {
+        *value = restore(
+            value,
+            current.and_then(|c| c.env.get(key)).map(String::as_str),
+            false,
+        )?;
+    }
+    for (key, value) in &mut s.headers {
+        *value = restore(
+            value,
+            current.and_then(|c| c.headers.get(key)).map(String::as_str),
+            false,
+        )?;
+    }
+    s.cwd = input
+        .cwd
+        .as_deref()
+        .map(|v| restore(v, current.and_then(|c| c.cwd.as_deref()), false))
+        .transpose()?;
+    s.url = input
+        .url
+        .as_deref()
+        .map(|v| restore(v, current.and_then(|c| c.url.as_deref()), true))
+        .transpose()?;
+    Ok(s)
+}
+
 /// 新建/覆写全局 MCP 服务（upsert 按名；写 ~/.hexagon/mcp.json）。
 /// 校验：名合法；stdio 必有 command，远程必有 url，二选一。
 pub fn save_global_mcp(spec: &McpSpec) -> Result<(), String> {
@@ -136,8 +198,9 @@ fn save_global_mcp_at(spec: &McpSpec, path: &std::path::Path) -> Result<(), Stri
         _ => {}
     }
     let mut specs = read_specs_at(path);
+    let spec = restore_spec(spec, specs.iter().find(|s| s.name == spec.name))?;
     specs.retain(|s| s.name != spec.name);
-    specs.push(spec.clone());
+    specs.push(spec);
     write_specs_at(path, &specs)
 }
 
@@ -189,7 +252,7 @@ pub struct McpEntryRow {
     /// "stdio" | "remote"（url 端点，一期不 spawn）
     pub transport: String,
     pub url: Option<String>,
-    /// 远程标头（Authorization 等）——清单行带给 UI 显示/编辑
+    /// 远程标头值使用不透明保留标记；原文不返回 UI。
     pub headers: std::collections::BTreeMap<String, String>,
     /// "global" | "project"（同名项目覆盖全局——全局行被吞后不显示）
     pub origin: String,
@@ -211,17 +274,20 @@ fn list_mcp_entries_at(
         .unwrap_or_default();
     let shadowed: std::collections::HashSet<String> =
         projects.iter().map(|s| s.name.clone()).collect();
-    let row = |s: &McpSpec, origin: &str| McpEntryRow {
-        name: s.name.clone(),
-        command: s.command.clone(),
-        args: s.args.clone(),
-        env: s.env.clone(),
-        cwd: s.cwd.clone(),
-        disabled: s.disabled,
-        transport: s.transport().into(),
-        url: s.url.clone(),
-        headers: s.headers.clone(),
-        origin: origin.into(),
+    let row = |raw: &McpSpec, origin: &str| {
+        let s = display_spec(raw);
+        McpEntryRow {
+            name: s.name.clone(),
+            command: s.command.clone(),
+            args: s.args.clone(),
+            env: s.env.clone(),
+            cwd: s.cwd.clone(),
+            disabled: s.disabled,
+            transport: s.transport().into(),
+            url: s.url.clone(),
+            headers: s.headers.clone(),
+            origin: origin.into(),
+        }
     };
     globals
         .iter()
@@ -255,6 +321,8 @@ const EXT_MCP_SOURCES: &[(&str, &str, &str)] = &[
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ExtMcpRow {
+    /// Opaque binding to the scanned host-side configuration, used for import.
+    pub reference: String,
     pub name: String,
     pub command: String,
     pub args: Vec<String>,
@@ -264,7 +332,7 @@ pub struct ExtMcpRow {
     /// "stdio" | "remote"
     pub transport: String,
     pub url: Option<String>,
-    /// 远程标头（Authorization 等）——导入时随 spec 原样落盘
+    /// 远程标头值脱敏，导入通过 reference 在宿主重新读取。
     pub headers: std::collections::BTreeMap<String, String>,
     /// 来源平台（cursor/claude/codex/…）
     pub origin: String,
@@ -381,10 +449,7 @@ fn specs_from_mcp_toml(text: &str) -> Vec<McpSpec> {
 }
 
 /// 扫描入口（`home` 注入便于测试；线上用 HOME）。单源解析失败跳过不连坐。
-pub fn scan_external_mcp_at(
-    home: &std::path::Path,
-    global_path: &std::path::Path,
-) -> Vec<ExtMcpRow> {
+fn scan_external_raw_at(home: &std::path::Path, global_path: &std::path::Path) -> Vec<ExtMcpRow> {
     let existing: std::collections::HashSet<String> = read_specs_at(global_path)
         .iter()
         .map(|s| s.name.to_lowercase())
@@ -410,6 +475,7 @@ pub fn scan_external_mcp_at(
                 continue; // 同名同实现去重：表序先到的赢
             }
             out.push(ExtMcpRow {
+                reference: String::new(),
                 conflict: existing.contains(&spec.name.to_lowercase()),
                 transport: spec.transport().into(),
                 name: spec.name,
@@ -426,6 +492,76 @@ pub fn scan_external_mcp_at(
         }
     }
     out
+}
+
+fn external_spec(row: &ExtMcpRow) -> McpSpec {
+    McpSpec {
+        name: row.name.clone(),
+        command: row.command.clone(),
+        args: row.args.clone(),
+        env: row.env.clone(),
+        headers: row.headers.clone(),
+        cwd: row.cwd.clone(),
+        disabled: row.disabled,
+        url: row.url.clone(),
+    }
+}
+fn external_reference(row: &ExtMcpRow) -> String {
+    crate::data_boundary::hidden(&serde_json::to_string(row).unwrap_or_default())
+}
+pub fn scan_external_mcp_at(home: &std::path::Path, global: &std::path::Path) -> Vec<ExtMcpRow> {
+    scan_external_raw_at(home, global)
+        .into_iter()
+        .map(|mut row| {
+            row.reference = external_reference(&row);
+            let safe = display_spec(&external_spec(&row));
+            row.command = safe.command;
+            row.args = safe.args;
+            row.env = safe.env;
+            row.headers = safe.headers;
+            row.cwd = safe.cwd;
+            row.url = safe.url;
+            row
+        })
+        .collect()
+}
+
+/// Re-read only known platform configuration sources. No secret passes through
+/// UI import payloads; an edited source no longer matches its scan reference.
+pub fn import_mcp_references_at(
+    home: &std::path::Path,
+    global: &std::path::Path,
+    references: &[String],
+) -> crate::skills::ImportReport {
+    let rows = scan_external_raw_at(home, global);
+    let mut specs = Vec::new();
+    let mut stale = Vec::new();
+    for reference in references {
+        if let Some(row) = rows.iter().find(|r| {
+            crate::data_boundary::matches_reference(
+                reference,
+                &serde_json::to_string(r).unwrap_or_default(),
+            )
+        }) {
+            let mut spec = external_spec(row);
+            spec.disabled |= spec.url.is_some();
+            specs.push(spec);
+        } else {
+            stale.push("configuration changed; scan again".into());
+        }
+    }
+    let mut report = import_mcp_at(global, &specs);
+    report.skipped.extend(stale);
+    report
+}
+pub fn import_mcp_references(references: &[String]) -> crate::skills::ImportReport {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return crate::skills::ImportReport {
+            imported: 0,
+            skipped: vec!["home unavailable".into()],
+        };
+    };
+    import_mcp_references_at(&home, &runtime_global_path(), references)
 }
 
 pub fn scan_external_mcp() -> Vec<ExtMcpRow> {
@@ -471,27 +607,158 @@ pub fn import_mcp(specs: &[McpSpec]) -> crate::skills::ImportReport {
     import_mcp_at(&runtime_global_path(), specs)
 }
 
+// reliability 10: this is the sole owner/reaper of Child. Keep the unreaped
+// handle until termination, so an exited child's PID cannot be recycled before
+// its process group is killed. Never retain a naked PID for later shutdown.
+struct ManagedProcess {
+    child: Mutex<Option<Child>>,
+}
+impl ManagedProcess {
+    fn terminate(&self) {
+        let Some(mut child) = self.child.lock().unwrap().take() else {
+            return;
+        };
+        crate::sessions::kill_pid_group(child.id());
+        let _ = child.kill();
+        let grace = Instant::now() + Duration::from_millis(200);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) if Instant::now() < grace => std::thread::sleep(Duration::from_millis(5)),
+                _ => {
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                    return;
+                }
+            }
+        }
+    }
+}
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+fn lifecycle_command(
+    spec: &McpSpec,
+    isolation: Option<&crate::sandbox::SandboxSpec>,
+) -> Result<Command, ToolError> {
+    let mut original = Command::new(&spec.command);
+    original.args(&spec.args).envs(&spec.env);
+    if let Some(cwd) = &spec.cwd {
+        original.current_dir(cwd);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(isolation) = isolation {
+            let crate::sandbox::SandboxSpec::Seatbelt(profile) = isolation else {
+                return Err(ToolError::NotExecuted(
+                    "mcp: process lifetime isolation unavailable".into(),
+                ));
+            };
+            return crate::sandbox::wrap_command(
+                &mut original,
+                &crate::sandbox::SandboxSpec::Seatbelt(format!("{profile}\n{PROCESS_GROUP_RULES}")),
+            )
+            .map_err(|e| ToolError::NotExecuted(format!("mcp isolation: {e}")));
+        }
+        // Parent sessions keep their configured environment and external rights;
+        // this additional boundary controls process lifetime only.
+        let mut cmd = Command::new("/usr/bin/sandbox-exec");
+        cmd.args([
+            "-p",
+            &format!("(version 1)(allow default)\n{PROCESS_GROUP_RULES}"),
+            "--",
+        ])
+        .arg(&spec.command)
+        .args(&spec.args)
+        .envs(&spec.env);
+        if let Some(cwd) = &spec.cwd {
+            cmd.current_dir(cwd);
+        }
+        Ok(cmd)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if isolation.is_some() {
+            return Err(ToolError::NotExecuted(
+                "mcp: readonly isolation unavailable".into(),
+            ));
+        }
+        // PID namespace descendants cannot escape into the host namespace;
+        // namespace init death reaps detached sessions too. No unsandboxed retry.
+        let mut cmd = Command::new("bwrap");
+        cmd.args([
+            "--unshare-pid",
+            "--die-with-parent",
+            "--bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--",
+        ])
+        .arg(&spec.command)
+        .args(&spec.args)
+        .envs(&spec.env);
+        if let Some(cwd) = &spec.cwd {
+            cmd.current_dir(cwd);
+        }
+        Ok(cmd)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (original, isolation);
+        Err(ToolError::NotExecuted(
+            "mcp: process lifetime isolation unavailable".into(),
+        ))
+    }
+}
+
+#[cfg(test)]
+pub(crate) const TEST_PEER: &str = r#"
+const rl=require('readline').createInterface({input:process.stdin});
+const send=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\n');
+rl.on('line',line=>{const r=JSON.parse(line);if(r.id===undefined)return;
+if(r.method==='initialize')send(r.id,{protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'fake',version:'1'}});
+else if(r.method==='tools/list')send(r.id,{tools:[{name:'echo',description:'echo args',inputSchema:{type:'object'}}]});
+else if(r.method==='tools/call')send(r.id,{content:[{type:'text',text:JSON.stringify(r.params.arguments)}]});
+});
+"#;
+
 struct Conn {
-    child: Child,
+    process: Arc<ManagedProcess>,
     stdin: ChildStdin,
     stdout: BufReader<std::process::ChildStdout>,
+    next_id: i64,
+    broken: bool,
 }
 
 impl Conn {
     fn spawn(spec: &McpSpec) -> Result<Self, ToolError> {
-        log::info!("mcp spawn: {} {} {:?}", spec.name, spec.command, spec.args);
-        let mut cmd = Command::new(&spec.command);
-        cmd.args(&spec.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .envs(&spec.env);
-        if let Some(cwd) = &spec.cwd {
-            cmd.current_dir(cwd);
+        Self::spawn_with(spec, None)
+    }
+
+    fn spawn_with(
+        spec: &McpSpec,
+        isolation: Option<&crate::sandbox::SandboxSpec>,
+    ) -> Result<Self, ToolError> {
+        // reliability 05: command arguments may contain service credentials.
+        log::info!("mcp spawn: {}", spec.name);
+        let mut cmd = lifecycle_command(spec, isolation)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
         }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
         let mut child = cmd
             .spawn()
-            .map_err(|e| ToolError::Exec(format!("mcp spawn {}: {e}", spec.name)))?;
+            .map_err(|e| ToolError::NotExecuted(format!("mcp spawn {}: {e}", spec.name)))?;
         let stdin = child
             .stdin
             .take()
@@ -501,17 +768,97 @@ impl Conn {
             .take()
             .ok_or_else(|| ToolError::Exec("mcp stdout closed".into()))?;
         Ok(Self {
-            child,
+            process: Arc::new(ManagedProcess {
+                child: Mutex::new(Some(child)),
+            }),
             stdin,
             stdout: BufReader::new(stdout),
+            next_id: 0,
+            broken: false,
         })
     }
 
-    /// 发一帧 JSON-RPC 并读到响应（跳过通知帧）。
-    fn rpc(&mut self, method: &str, params: Value, id: i64) -> Result<Value, ToolError> {
-        let msg = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
-        write_frame(&mut self.stdin, &msg)?;
-        read_response(&mut self.stdout, id)
+    fn handshake(&mut self) -> Result<Vec<Value>, ToolError> {
+        let started = std::time::Instant::now();
+        let init = self.rpc(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-11-25", "capabilities": {},
+                "clientInfo": {"name":"hexagon", "version":"0.1"}
+            }),
+        )?;
+        if let Err(reason) = validate_initialize(&init) {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                None,
+                None,
+                None,
+                None,
+                "mcp_initialize",
+                reason,
+                started,
+            );
+            return Err(ToolError::Exec(reason.into()));
+        }
+        self.notify("notifications/initialized")?;
+        let mut tools = Vec::new();
+        let mut cursor = None;
+        for _ in 0..64 {
+            let res = self.rpc(
+                "tools/list",
+                cursor.as_ref().map_or(json!({}), |c| json!({"cursor":c})),
+            )?;
+            let page = res["tools"]
+                .as_array()
+                .ok_or_else(|| ToolError::Exec("mcp: invalid tools list".into()))?;
+            for tool in page {
+                if tool["name"].as_str().is_none_or(str::is_empty)
+                    || !tool["inputSchema"].is_object()
+                    || tools
+                        .iter()
+                        .any(|existing: &Value| existing["name"] == tool["name"])
+                {
+                    return Err(ToolError::Exec(
+                        "mcp: invalid or duplicate tool definition".into(),
+                    ));
+                }
+                tools.push(tool.clone());
+                if tools.len() > 10_000 {
+                    return Err(ToolError::Exec("mcp: too many tools".into()));
+                }
+            }
+            match res.get("nextCursor") {
+                None => return Ok(tools),
+                Some(Value::String(next)) if !next.is_empty() && cursor.as_ref() != Some(next) => {
+                    cursor = Some(next.clone())
+                }
+                _ => return Err(ToolError::Exec("mcp: invalid pagination cursor".into())),
+            }
+        }
+        Err(ToolError::Exec("mcp: too many tools pages".into()))
+    }
+
+    fn rpc(&mut self, method: &str, params: Value) -> Result<Value, ToolError> {
+        if self.broken {
+            return Err(ToolError::NotExecuted("mcp: session unavailable".into()));
+        }
+        self.next_id += 1;
+        let msg = json!({"jsonrpc":"2.0","id":self.next_id,"method":method,"params":params});
+        let result = write_frame(&mut self.stdin, &msg)
+            .and_then(|_| read_response(&mut self.stdout, &mut self.stdin, self.next_id))
+            .and_then(|result| {
+                if method == "tools/call" && !valid_tool_result(&result) {
+                    return Err(ToolError::Exec("mcp: malformed tool result".into()));
+                }
+                Ok(result)
+            });
+        // reliability 09: don't consume a stale response as a later call's result.
+        // A refusal costs a new session; false success can hide an unreviewed effect.
+        if result.is_err() {
+            self.broken = true;
+        }
+        result
     }
 
     fn notify(&mut self, method: &str) -> Result<(), ToolError> {
@@ -520,119 +867,225 @@ impl Conn {
     }
 }
 
+// reliability 09 / MCP 2025-11-25 stdio: bounded UTF-8 JSON-lines, no private
+// Content-Length wrapper. Read limit includes the delimiter, before allocating.
+const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
+
+// reliability 09: a matching response ID proves correlation, not success.
+// False rejection needs reconciliation; false acceptance hides an unknown effect.
+fn valid_tool_result(value: &Value) -> bool {
+    let Some(content) = value["content"].as_array() else {
+        return false;
+    };
+    if value.get("isError").is_some_and(|v| !v.is_boolean())
+        || value
+            .get("structuredContent")
+            .is_some_and(|v| !v.is_object())
+    {
+        return false;
+    }
+    content.iter().all(|block| match block["type"].as_str() {
+        Some("text") => block["text"].is_string(),
+        Some("image" | "audio") => block["data"].is_string() && block["mimeType"].is_string(),
+        Some("resource_link") => block["uri"].is_string() && block["name"].is_string(),
+        Some("resource") => {
+            let resource = &block["resource"];
+            resource["uri"].is_string()
+                && (resource["text"].is_string() || resource["blob"].is_string())
+        }
+        _ => false,
+    })
+}
+
+fn validate_initialize(init: &Value) -> Result<(), &'static str> {
+    if !matches!(
+        init["protocolVersion"].as_str(),
+        Some("2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25")
+    ) {
+        return Err("mcp: unsupported protocol version");
+    }
+    if !init["capabilities"]["tools"].is_object()
+        || !init["serverInfo"]["name"].is_string()
+        || !init["serverInfo"]["version"].is_string()
+    {
+        return Err("mcp: incompatible server capabilities");
+    }
+    Ok(())
+}
+
 fn write_frame(w: &mut impl Write, msg: &Value) -> Result<(), ToolError> {
-    let body = msg.to_string();
-    w.write_all(format!("Content-Length: {}\r\n\r\n{}", body.len(), body).as_bytes())
+    let body = serde_json::to_vec(msg).map_err(|e| ToolError::Exec(format!("mcp encode: {e}")))?;
+    if body.len() as u64 >= MAX_FRAME_BYTES {
+        return Err(ToolError::NotExecuted("mcp: frame too large".into()));
+    }
+    w.write_all(&body)
+        .and_then(|_| w.write_all(b"\n"))
         .and_then(|_| w.flush())
         .map_err(|e| ToolError::Exec(format!("mcp write: {e}")))
 }
 
-fn read_response(r: &mut BufReader<impl Read>, want_id: i64) -> Result<Value, ToolError> {
-    // 最多读 64 帧找响应（跳过通知/请求帧），防慢服务挂死时无限读
+fn read_response(
+    r: &mut BufReader<impl Read>,
+    w: &mut impl Write,
+    want_id: i64,
+) -> Result<Value, ToolError> {
     for _ in 0..64 {
-        let mut headers = HashMap::new();
-        loop {
-            let mut line = String::new();
-            let n = r
-                .read_line(&mut line)
-                .map_err(|e| ToolError::Exec(format!("mcp read: {e}")))?;
-            if n == 0 {
-                return Err(ToolError::Exec("mcp: server closed stdout".into()));
-            }
-            let line = line.trim();
-            if line.is_empty() {
-                break;
-            }
-            if let Some((k, v)) = line.split_once(':') {
-                headers.insert(k.trim().to_lowercase(), v.trim().to_string());
-            }
-        }
-        let len: usize = headers
-            .get("content-length")
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| ToolError::Exec("mcp: missing Content-Length".into()))?;
-        if len > 8 * 1024 * 1024 {
+        let mut buf = Vec::new();
+        (&mut *r)
+            .take(MAX_FRAME_BYTES + 1)
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| ToolError::Exec(format!("mcp read: {e}")))?;
+        if buf.len() as u64 > MAX_FRAME_BYTES {
             return Err(ToolError::Exec("mcp: frame too large".into()));
         }
-        let mut buf = vec![0u8; len];
-        r.read_exact(&mut buf)
-            .map_err(|e| ToolError::Exec(format!("mcp read body: {e}")))?;
-        let v: Value = serde_json::from_slice(&buf)
-            .map_err(|e| ToolError::Exec(format!("mcp bad json: {e}")))?;
-        if v["id"].as_i64() == Some(want_id) {
-            if let Some(err) = v.get("error") {
-                return Err(ToolError::Exec(format!("mcp error: {err}")));
-            }
-            return Ok(v["result"].clone());
+        if buf.last() != Some(&b'\n') {
+            return Err(ToolError::Exec(
+                "mcp: incomplete message or closed stdout".into(),
+            ));
         }
-        // 通知/请求帧：跳过
+        let v: Value = serde_json::from_slice(&buf)
+            .map_err(|_| ToolError::Exec("mcp: invalid JSON message".into()))?;
+        if v["jsonrpc"] != "2.0" {
+            return Err(ToolError::Exec("mcp: invalid JSON-RPC version".into()));
+        }
+        if let Some(method) = v.get("method") {
+            if !method.is_string() || v.get("result").is_some() || v.get("error").is_some() {
+                return Err(ToolError::Exec("mcp: malformed method message".into()));
+            }
+            if let Some(id) = v.get("id") {
+                if !id.is_string() && !id.is_i64() {
+                    return Err(ToolError::Exec(
+                        "mcp: invalid server request identity".into(),
+                    ));
+                }
+                // MCP ping works in both directions, including during initialization.
+                // No sampling/roots capability was advertised: explicitly reject others.
+                let reply = if method == "ping" {
+                    json!({"jsonrpc":"2.0","id":id,"result":{}})
+                } else {
+                    json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not supported"}})
+                };
+                write_frame(w, &reply)?;
+            }
+            continue;
+        }
+        if v["id"].as_i64() != Some(want_id)
+            || v.get("result").is_some() == v.get("error").is_some()
+        {
+            return Err(ToolError::Exec(
+                "mcp: invalid response identity or shape".into(),
+            ));
+        }
+        if let Some(error) = v.get("error") {
+            // Do not reflect untrusted service error bodies into diagnostics.
+            let code = error["code"]
+                .as_i64()
+                .ok_or_else(|| ToolError::Exec("mcp: invalid error code".into()))?;
+            return Err(ToolError::Exec(format!("mcp: remote error {code}")));
+        }
+        return Ok(v["result"].clone());
     }
-    Err(ToolError::Exec("mcp: no response after 64 frames".into()))
+    Err(ToolError::Exec("mcp: no response after 64 messages".into()))
 }
 
-/// 一个运行中的服务：连接 + 重启规格。
+/// Connection ownership moves to one I/O worker per running request. The slot
+/// mutex never covers reads/writes; waiting callers can still cancel or expire.
 struct Server {
     spec: McpSpec,
-    conn: Mutex<Conn>,
-    /// 子进程 pid：McpHost::drop 只能按 pid 杀——拿 Child 句柄必须过
-    /// conn 锁，而它可能被阻塞在子进程 stdout read() 上的握手/调用
-    /// 线程占着（2026-09-23 卡死事故，见 Drop 注）。与握手超时路径
-    /// 同一招 kill_pid。
-    pid: u32,
+    conn: Mutex<Option<Conn>>,
+    process: Arc<ManagedProcess>,
+    failed: AtomicBool,
 }
 
 impl Server {
-    /// 握手：initialize → initialized → tools/list。
-    fn handshake(&self) -> Result<Vec<Value>, ToolError> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|_| ToolError::Exec("poison".into()))?;
-        conn.rpc(
-            "initialize",
-            json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "hexagon", "version": "0.1"}
-            }),
-            1,
-        )?;
-        conn.notify("notifications/initialized")?;
-        let res = conn.rpc("tools/list", json!({}), 2)?;
-        Ok(res["tools"].as_array().cloned().unwrap_or_default())
+    fn new(spec: McpSpec, conn: Conn) -> Arc<Self> {
+        Arc::new(Self {
+            spec,
+            process: conn.process.clone(),
+            conn: Mutex::new(Some(conn)),
+            failed: AtomicBool::new(false),
+        })
     }
 
-    fn call_tool(&self, tool: &str, args: Value) -> Result<Value, ToolError> {
-        // 先试现连接；传输错误 → 重启一次重试一次
-        let attempt =
-            |conn: &mut Conn| conn.rpc("tools/call", json!({"name": tool, "arguments": args}), 3);
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|_| ToolError::Exec("poison".into()))?;
-        match attempt(&mut conn) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                // 重启策略：传输层失败才重启；RPC 层 error 直接上报
-                if e.to_string().contains("mcp error:") {
-                    return Err(e);
+    fn run<T: Send + 'static>(
+        self: &Arc<Self>,
+        timeout: Duration,
+        upper: Option<Instant>,
+        mut cancelled: impl FnMut() -> bool,
+        operation: impl FnOnce(&mut Conn) -> Result<T, ToolError> + Send + 'static,
+    ) -> Result<T, ToolError> {
+        let deadline = upper.map_or(Instant::now() + timeout, |d| {
+            d.min(Instant::now() + timeout)
+        });
+        let mut conn = loop {
+            if self.failed.load(Ordering::Acquire) {
+                return Err(ToolError::NotExecuted("mcp: session unavailable".into()));
+            }
+            if cancelled() || Instant::now() >= deadline {
+                return Err(ToolError::NotExecuted(
+                    "mcp: cancelled or expired before sending".into(),
+                ));
+            }
+            if let Some(conn) = self.conn.lock().unwrap().take() {
+                break conn;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let worker = self.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = operation(&mut conn);
+            if result.is_err() {
+                worker.failed.store(true, Ordering::Release);
+                worker.process.terminate();
+            } else if !worker.failed.load(Ordering::Acquire) {
+                *worker.conn.lock().unwrap() = Some(conn);
+            }
+            let _ = tx.send(result);
+        });
+        loop {
+            if cancelled() || Instant::now() >= deadline {
+                // Intent has reached the I/O worker. Killing a process is not
+                // evidence that its effect was rolled back: caller records unknown.
+                self.failed.store(true, Ordering::Release);
+                self.process.terminate();
+                return Err(ToolError::Exec(
+                    "mcp: deadline or cancellation after dispatch".into(),
+                ));
+            }
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(10));
+            match rx.recv_timeout(remaining) {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(_) => {
+                    self.failed.store(true, Ordering::Release);
+                    self.process.terminate();
+                    return Err(ToolError::Exec("mcp: I/O worker disconnected".into()));
                 }
-                log::warn!(
-                    "mcp transport failed for {}, respawning: {e}",
-                    self.spec.name
-                );
-                let _ = conn.child.kill();
-                *conn = Conn::spawn(&self.spec)?;
-                // 重启后要重新握手，否则服务端不认 tools/call
-                drop(conn);
-                self.handshake()?;
-                let mut conn = self
-                    .conn
-                    .lock()
-                    .map_err(|_| ToolError::Exec("poison".into()))?;
-                attempt(&mut conn)
             }
         }
+    }
+
+    fn handshake(self: &Arc<Self>, upper: Option<Instant>) -> Result<Vec<Value>, ToolError> {
+        self.run(Duration::from_secs(8), upper, || false, Conn::handshake)
+    }
+
+    fn call_tool(
+        self: &Arc<Self>,
+        tool: &str,
+        args: Value,
+        db: &Db,
+        ctx: &ToolContext,
+    ) -> Result<Value, ToolError> {
+        let tool = tool.to_owned();
+        self.run(
+            ctx.mcp_timeout.min(Duration::from_secs(120)),
+            ctx.deadline,
+            || crate::turn::halted(db, ctx),
+            move |conn| conn.rpc("tools/call", json!({"name":tool,"arguments":args})),
+        )
     }
 }
 
@@ -643,6 +1096,7 @@ pub struct McpTool {
     schema: Value,
     server: Arc<Server>,
     tool_name: String,
+    read_only_hint: bool,
 }
 
 impl Tool for McpTool {
@@ -661,8 +1115,156 @@ impl Tool for McpTool {
     fn risk(&self) -> crate::tools::RiskClass {
         crate::tools::RiskClass::External
     }
-    fn exec(&self, _db: &Db, input: &Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
-        self.server.call_tool(&self.tool_name, input.clone())
+    fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let started = std::time::Instant::now();
+        let result = self
+            .server
+            .call_tool(&self.tool_name, input.clone(), db, ctx);
+        crate::diag::note(
+            if result.is_ok() {
+                crate::diag::CLASS_HOST
+            } else {
+                crate::diag::CLASS_REJECT
+            },
+            result.is_err(),
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "mcp_call",
+            if result.is_ok() {
+                "response_received"
+            } else {
+                "session_interrupted"
+            },
+            started,
+        );
+        result
+    }
+
+    fn for_subagent(&self, ctx: &ToolContext) -> Result<Arc<dyn Tool>, ToolError> {
+        // reliability 05 / Q4: the hint is a contract, never the proof. False
+        // refusal loses one delegated tool; false acceptance permits a side
+        // effect. A separate OS-confined process supplies the actual boundary.
+        if !self.read_only_hint || !self.server.spec.spawnable() {
+            return Err(ToolError::Exec(
+                "local read-only tool contract unavailable".into(),
+            ));
+        }
+        if !self.server.spec.env.is_empty() || !self.server.spec.headers.is_empty() {
+            return Err(ToolError::Exec(
+                "credential/config overrides cannot be delegated to a read-only session".into(),
+            ));
+        }
+        let root = ctx.repo_root.canonicalize()?;
+        let mut spec = self.server.spec.clone();
+        let cwd = spec
+            .cwd
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.clone())
+            .canonicalize()?;
+        if !cwd.starts_with(&root)
+            || crate::sandbox::read_only_spec(&root, false)
+                == crate::sandbox::SandboxSpec::Unavailable
+        {
+            return Err(ToolError::Exec(
+                "read-only service isolation unavailable".into(),
+            ));
+        }
+        spec.cwd = Some(cwd.to_string_lossy().into());
+        Ok(Arc::new(ReadOnlyMcpTool {
+            definition: crate::provider::ToolDef {
+                name: self.full_name.clone(),
+                description: self.desc.clone(),
+                input_schema: self.schema.clone(),
+            },
+            spec,
+            tool_name: self.tool_name.clone(),
+            repo_root: root,
+        }))
+    }
+}
+
+/// A child never receives the parent's Server/Conn Arc. Each invocation gets
+/// an isolated local session; this deliberately favors confinement over reuse.
+struct ReadOnlyMcpTool {
+    definition: crate::provider::ToolDef,
+    spec: McpSpec,
+    tool_name: String,
+    repo_root: std::path::PathBuf,
+}
+
+impl Tool for ReadOnlyMcpTool {
+    fn name(&self) -> &str {
+        &self.definition.name
+    }
+    fn description(&self) -> &str {
+        &self.definition.description
+    }
+    fn input_schema(&self) -> Value {
+        self.definition.input_schema.clone()
+    }
+    fn risk(&self) -> crate::tools::RiskClass {
+        crate::tools::RiskClass::External
+    }
+    fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let started = std::time::Instant::now();
+        let project = ctx.project_id.clone();
+        let agent = ctx.agent_id.clone();
+        let activation = ctx.stage_run_id.clone();
+        let reject = move |reason: &str| {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&project),
+                Some(&agent),
+                activation.as_deref(),
+                None,
+                "mcp_readonly",
+                reason,
+                started,
+            );
+        };
+        if ctx.subagent.is_none() {
+            reject("child_dispatch_required");
+            return Err(ToolError::Exec(
+                "read-only delegation requires a child dispatch".into(),
+            ));
+        }
+        let isolation = crate::sandbox::read_only_spec(&self.repo_root, false);
+        if isolation == crate::sandbox::SandboxSpec::Unavailable {
+            reject("isolation_unavailable");
+            return Err(ToolError::Exec(
+                "read-only service isolation unavailable".into(),
+            ));
+        }
+        let conn = Conn::spawn_with(&self.spec, Some(&isolation))?;
+        let server = Server::new(self.spec.clone(), conn);
+        let tools = server
+            .run(
+                Duration::from_secs(8),
+                ctx.deadline,
+                || crate::turn::halted(db, ctx),
+                Conn::handshake,
+            )
+            .map_err(|error| {
+                ToolError::NotExecuted(format!("mcp initialization before tool dispatch: {error}"))
+            })?;
+        if !tools.iter().any(|tool| {
+            tool["name"] == self.tool_name && tool["annotations"]["readOnlyHint"] == true
+        }) {
+            reject("readonly_contract_changed");
+            return Err(ToolError::NotExecuted(
+                "read-only tool contract changed".into(),
+            ));
+        }
+        let result = server.call_tool(&self.tool_name, input.clone(), db, ctx);
+        if result.is_err() {
+            reject("readonly_interrupted");
+        }
+        server.process.terminate();
+        result
     }
 }
 
@@ -681,24 +1283,8 @@ pub struct McpServiceRow {
     pub error: Option<String>,
 }
 
-/// 按 pid 杀子进程（握手超时路径）：Conn 被阻塞线程占着拿不回 Child，
-/// 只能走 pid。unix/windows 各一行。
-fn kill_pid(pid: u32) {
-    #[cfg(unix)]
-    {
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status();
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .status();
-    }
-}
-
 struct HostInner {
+    closed: bool,
     servers: Vec<Arc<Server>>,
     statuses: Vec<McpServiceRow>,
     /// 握手完成、尚未装进 Registry 的工具。
@@ -715,24 +1301,30 @@ impl McpHost {
     /// 立刻返回。每个服务先记 `starting`，握手在后台跑。
     /// 调用方用 [`Self::take_ready`] 把成功的工具装进 Registry。
     pub fn begin(specs: Vec<McpSpec>) -> Self {
+        Self::begin_with_deadline(specs, None)
+    }
+
+    /// Upper caller deadline only shortens the fixed eight-second handshake.
+    pub fn begin_with_deadline(specs: Vec<McpSpec>, deadline: Option<Instant>) -> Self {
         let statuses = specs
             .iter()
             .map(|s| McpServiceRow {
                 name: s.name.clone(),
-                command: s.command.clone(),
+                command: crate::data_boundary::hidden(&s.command),
                 status: "starting".into(),
                 tools: vec![],
                 error: None,
             })
             .collect();
         let inner = Arc::new(std::sync::Mutex::new(HostInner {
+            closed: false,
             servers: vec![],
             statuses,
             ready: vec![],
         }));
         if !specs.is_empty() {
             let shared = inner.clone();
-            std::thread::spawn(move || drive_handshakes(shared, specs));
+            std::thread::spawn(move || drive_handshakes(shared, specs, deadline));
         }
         Self { inner }
     }
@@ -770,78 +1362,78 @@ impl McpHost {
 
     /// 每配置服务一行实况（设置页列表用）。
     pub fn status(&self) -> Vec<McpServiceRow> {
-        self.inner.lock().unwrap().statuses.clone()
+        let inner = self.inner.lock().unwrap();
+        let mut statuses = inner.statuses.clone();
+        for row in &mut statuses {
+            if row.status == "up"
+                && inner.servers.iter().any(|server| {
+                    server.spec.name == row.name
+                        && server.failed.load(std::sync::atomic::Ordering::Acquire)
+                })
+            {
+                row.status = "down".into();
+                row.error =
+                    Some("mcp: session interrupted; check action outcome before retrying".into());
+            }
+        }
+        statuses
     }
 }
 
 /// 后台握手。不挡住 `begin` 的调用方。
-fn drive_handshakes(inner: Arc<std::sync::Mutex<HostInner>>, specs: Vec<McpSpec>) {
-    let mut inflight = Vec::new();
+fn drive_handshakes(inner: Arc<Mutex<HostInner>>, specs: Vec<McpSpec>, deadline: Option<Instant>) {
     for spec in specs {
-        let conn = match Conn::spawn(&spec) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("mcp service {} failed to spawn, skipped", spec.name);
-                set_mcp_status(&inner, &spec.name, "down", vec![], Some(e.to_string()));
-                continue;
-            }
-        };
-        let pid = conn.child.id();
-        let server = Arc::new(Server {
-            spec: spec.clone(),
-            conn: Mutex::new(conn),
-            pid,
-        });
-        inner.lock().unwrap().servers.push(server.clone());
-        let srv = server.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(srv.handshake());
-        });
-        inflight.push((spec, pid, server, rx));
-    }
-    for (spec, pid, server, rx) in inflight {
-        let tools = match rx.recv_timeout(std::time::Duration::from_secs(8)) {
-            Ok(Ok(t)) => t,
-            Ok(Err(e)) => {
-                log::warn!("mcp service {} handshake failed, skipped", spec.name);
-                if let Ok(mut c) = server.conn.lock() {
-                    let _ = c.child.kill();
-                }
-                set_mcp_status(&inner, &spec.name, "down", vec![], Some(e.to_string()));
-                continue;
-            }
-            Err(_) => {
-                log::warn!("mcp service {} handshake timeout, killed", spec.name);
-                kill_pid(pid);
-                set_mcp_status(
-                    &inner,
-                    &spec.name,
-                    "down",
-                    vec![],
-                    Some("handshake timeout".into()),
-                );
-                continue;
-            }
-        };
-        let tool_names: Vec<String> = tools
-            .iter()
-            .filter_map(|t| t["name"].as_str().map(String::from))
-            .collect();
-        log::info!("mcp service {} up: {} tools", spec.name, tool_names.len());
-        {
-            let mut g = inner.lock().unwrap();
-            for (t, name) in tools.iter().zip(tool_names.iter()) {
-                g.ready.push(McpTool {
-                    full_name: format!("mcp:{}:{}", spec.name, name),
-                    desc: t["description"].as_str().unwrap_or("").to_string(),
-                    schema: t["inputSchema"].clone(),
-                    server: server.clone(),
-                    tool_name: name.clone(),
-                });
-            }
+        if inner.lock().unwrap().closed {
+            break;
         }
-        set_mcp_status(&inner, &spec.name, "up", tool_names, None);
+        let conn = match Conn::spawn(&spec) {
+            Ok(conn) => conn,
+            Err(error) => {
+                set_mcp_status(&inner, &spec.name, "down", vec![], Some(error.to_string()));
+                continue;
+            }
+        };
+        let server = Server::new(spec.clone(), conn);
+        {
+            let mut state = inner.lock().unwrap();
+            if state.closed {
+                drop(state);
+                server.process.terminate();
+                break;
+            }
+            state.servers.push(server.clone());
+        }
+        let shared = inner.clone();
+        std::thread::spawn(move || match server.handshake(deadline) {
+            Ok(tools) => {
+                let names = tools
+                    .iter()
+                    .map(|tool| tool["name"].as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>();
+                {
+                    let mut state = shared.lock().unwrap();
+                    if state.closed {
+                        return;
+                    }
+                    for (tool, name) in tools.iter().zip(&names) {
+                        state.ready.push(McpTool {
+                            full_name: format!("mcp:{}:{}", spec.name, name),
+                            desc: tool["description"].as_str().unwrap_or("").into(),
+                            schema: tool["inputSchema"].clone(),
+                            server: server.clone(),
+                            tool_name: name.clone(),
+                            read_only_hint: tool["annotations"]["readOnlyHint"]
+                                .as_bool()
+                                .unwrap_or(false),
+                        });
+                    }
+                }
+                set_mcp_status(&shared, &spec.name, "up", names, None);
+            }
+            Err(error) => {
+                set_mcp_status(&shared, &spec.name, "down", vec![], Some(error.to_string()))
+            }
+        });
     }
 }
 
@@ -856,25 +1448,34 @@ fn set_mcp_status(
     if let Some(row) = g.statuses.iter_mut().find(|r| r.name == name) {
         row.status = status.into();
         row.tools = tools;
-        row.error = error;
+        // Peer error bodies can echo credentials; detailed protocol facts remain host-side.
+        row.error = error.map(|e| {
+            if e.contains("deadline") {
+                "mcp: initialization deadline exceeded"
+            } else if e.contains("unsupported protocol version") {
+                "mcp: unsupported protocol version"
+            } else if e.contains("incompatible server capabilities") {
+                "mcp: incompatible server capabilities"
+            } else {
+                "mcp: initialization failed; check local configuration"
+            }
+            .into()
+        });
     }
 }
 
 impl Drop for McpHost {
     fn drop(&mut self) {
-        // 2026-09-23 卡死事故：这里绝不许碰 s.conn 锁。Workbench drop 链
-        // 走到这里时，握手线程可能正握着 conn 阻塞在子进程 stdout 的
-        // read() 上（MCP 服务不回包——无读超时，read_response 只限 64 帧）；
-        // 旧写法握着 inner 等 conn，而 drive_handshakes 的收尾 set_mcp_status
-        // 又要 inner——三方互等，close_project 主线程永久冻结。
-        // inner 只在临界区抄 pid 清单（所有 inner 持锁者都是短临界区，
-        // 无人握着 inner 等 conn），随后按 pid 杀——与握手超时同一招。
-        let pids: Vec<u32> = match self.inner.lock() {
-            Ok(g) => g.servers.iter().map(|s| s.pid).collect(),
-            Err(_) => return,
+        // reliability 10 / 2026-09-23 deadlock: never wait for a pipe or conn
+        // while holding HostInner. closed also fences spawn racing with close.
+        let servers = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.closed = true;
+            inner.servers.clone()
         };
-        for pid in pids {
-            kill_pid(pid);
+        for server in servers {
+            server.failed.store(true, Ordering::Release);
+            server.process.terminate();
         }
     }
 }
@@ -884,38 +1485,143 @@ mod tests {
     use super::*;
     use crate::tools::Registry;
 
-    /// 假 MCP 服务：python 脚本说 Content-Length 帧 JSON-RPC。
-    /// initialize/tools/list 应答清单；tools/call 回显参数。
-    const FAKE: &str = r#"
-import sys, json
-def send(msg):
-    body = json.dumps(msg)
-    sys.stdout.write(f"Content-Length: {len(body)}\r\n\r\n{body}")
-    sys.stdout.flush()
-while True:
-    headers = {}
-    while True:
-        line = sys.stdin.readline()
-        if not line: sys.exit(0)
-        if line.strip() == "": break
-        k, v = line.split(":", 1); headers[k.strip()] = v.strip()
-    body = sys.stdin.read(int(headers["Content-Length"]))
-    req = json.loads(body)
-    if "id" not in req: continue
-    if req["method"] == "initialize":
-        send({"jsonrpc":"2.0","id":req["id"],"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"fake","version":"0"}}})
-    elif req["method"] == "tools/list":
-        send({"jsonrpc":"2.0","id":req["id"],"result":{"tools":[{"name":"echo","description":"echo args","inputSchema":{"type":"object"}}]}})
-    elif req["method"] == "tools/call":
-        send({"jsonrpc":"2.0","id":req["id"],"result":{"content":[{"type":"text","text":json.dumps(req["params"]["arguments"])}]}})
-    else:
-        send({"jsonrpc":"2.0","id":req["id"],"error":{"code":-32601,"message":"unknown"}})
-"#;
+    proptest::proptest! {
+        #[test]
+        fn standard_stdio_tool_result_requires_typed_content(text in ".{0,80}") {
+            proptest::prop_assert!(valid_tool_result(&json!({"content":[{"type":"text","text":text}]})), "valid text");
+            proptest::prop_assert!(!valid_tool_result(&json!({"content":[],"isError":text})), "error flag must be boolean");
+            proptest::prop_assert!(!valid_tool_result(&json!({"content":[{"type":"text","text":false}]})), "text must be string");
+        }
+    }
+
+    #[test]
+    fn standard_stdio_answers_server_ping_without_losing_call_response() {
+        let wire = b"{\"jsonrpc\":\"2.0\",\"id\":\"health\",\"method\":\"ping\"}\n{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n";
+        let mut replies = Vec::new();
+        assert_eq!(
+            read_response(&mut BufReader::with_capacity(1, &wire[..]), &mut replies, 7).unwrap(),
+            json!({})
+        );
+        let reply: Value = serde_json::from_slice(&replies).unwrap();
+        assert_eq!(reply, json!({"jsonrpc":"2.0","id":"health","result":{}}));
+    }
+
+    #[test]
+    fn standard_stdio_rejects_incompatible_initialize() {
+        for response in [
+            json!({"protocolVersion":"future", "capabilities":{"tools":{}},"serverInfo":{"name":"peer","version":"1"}}),
+            json!({"protocolVersion":"2025-11-25", "capabilities":{},"serverInfo":{"name":"peer","version":"1"}}),
+            json!({"protocolVersion":"2025-11-25", "capabilities":{"tools":{}},"serverInfo":{}}),
+        ] {
+            assert!(validate_initialize(&response).is_err());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn standard_stdio_only_accepts_supported_versions(version in "[a-zA-Z0-9-]{0,32}") {
+            let supported = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"].contains(&version.as_str());
+            let init = json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"peer","version":"1"}});
+            proptest::prop_assert_eq!(validate_initialize(&init).is_ok(), supported);
+        }
+    }
+
+    // reliability 09: independent JSON-lines vectors, never the production encoder.
+    #[test]
+    fn standard_stdio_unicode_notifications_and_fragmented_read() {
+        let wire = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"text\":\"你好 🦀\\nline\"}}\n";
+        let mut reader = BufReader::with_capacity(1, wire.as_bytes());
+        assert_eq!(
+            read_response(&mut reader, &mut Vec::new(), 7).unwrap()["text"],
+            "你好 🦀\nline"
+        );
+        let mut out = Vec::new();
+        write_frame(&mut out, &json!({"jsonrpc":"2.0","id":7,"method":"ping"})).unwrap();
+        assert_eq!(out.last(), Some(&b'\n'));
+        assert!(!out.starts_with(b"Content-Length"));
+        let decoded: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(decoded["method"], "ping");
+    }
+
+    #[test]
+    fn standard_stdio_rejects_invalid_envelopes_and_oversize() {
+        for wire in [
+            "{\"jsonrpc\":\"1.0\",\"id\":7,\"result\":{}}\n".to_string(),
+            "{\"jsonrpc\":\"2.0\",\"id\":7}\n".to_string(),
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{},\"error\":{}}\n".to_string(),
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}".to_string(),
+            "x".repeat(8 * 1024 * 1024 + 1),
+        ] {
+            assert!(
+                read_response(&mut BufReader::new(wire.as_bytes()), &mut Vec::new(), 7).is_err()
+            );
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn standard_stdio_matches_only_requested_id(other in 8i64..i64::MAX, value in "[a-z]{0,30}") {
+            let wire = format!("{}\n", json!({"jsonrpc":"2.0","id":other,"result":value}));
+            proptest::prop_assert!(read_response(&mut BufReader::new(wire.as_bytes()), &mut Vec::new(), 7).is_err());
+        }
+    }
+
+    #[test]
+    fn mcp_deadline_handshake_honors_shorter_caller_deadline() {
+        let started = Instant::now();
+        let host = McpHost::begin_with_deadline(
+            vec![McpSpec {
+                name: "silent".into(),
+                command: "sleep".into(),
+                args: vec!["30".into()],
+                ..Default::default()
+            }],
+            Some(started + Duration::from_millis(80)),
+        );
+        host.wait_settled(Duration::from_millis(700));
+        assert_eq!(host.status()[0].status, "down");
+        assert!(started.elapsed() < Duration::from_millis(700));
+        // Boundary probe: the unique Child owner has reaped/retired its handle.
+        assert!(host.inner.lock().unwrap().servers[0]
+            .process
+            .child
+            .lock()
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn standard_stdio_incompatible_peer_is_down_and_not_registered() {
+        for bad in [
+            TEST_PEER.replace("2024-11-05", "2099-01-01"),
+            TEST_PEER.replace("capabilities:{tools:{}}", "capabilities:{}"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("incompatible.cjs");
+            std::fs::write(&script, bad).unwrap();
+            let registry = Registry::builtin();
+            let host = McpHost::start(
+                vec![McpSpec {
+                    name: "incompatible".into(),
+                    command: "node".into(),
+                    args: vec![script.to_string_lossy().into()],
+                    ..Default::default()
+                }],
+                &registry,
+            );
+            assert_eq!(host.status()[0].status, "down");
+            assert!(host.status()[0].error.is_some());
+            assert!(!registry
+                .defs()
+                .iter()
+                .any(|tool| tool.name.starts_with("mcp:incompatible:")));
+        }
+    }
 
     fn setup(grant: bool) -> (Db, Registry, ToolContext, tempfile::TempDir, McpHost) {
         let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("fake_mcp.py");
-        std::fs::write(&script, FAKE).unwrap();
+        let script = dir.path().join("fake_mcp.cjs");
+        std::fs::write(&script, TEST_PEER).unwrap();
         let db = Db::open_in_memory().unwrap();
         db.conn()
             .execute(
@@ -953,7 +1659,7 @@ while True:
         let host = McpHost::start(
             vec![McpSpec {
                 name: "fake".into(),
-                command: "/usr/bin/python3".into(),
+                command: "node".into(),
                 args: vec![script.to_string_lossy().into()],
                 ..Default::default()
             }],
@@ -1011,7 +1717,8 @@ while True:
         assert!(elapsed.as_secs() < 25, "handshake 无限阻塞: {elapsed:?}");
         let st = &host.status()[0];
         assert_eq!(st.status, "down");
-        assert_eq!(st.error.as_deref(), Some("handshake timeout"));
+        // reliability 10: handshake uses the same bounded I/O lifecycle as calls.
+        assert!(st.error.as_deref().unwrap().contains("deadline"));
     }
 
     #[test]
@@ -1081,7 +1788,11 @@ while True:
         assert_eq!(entries.len(), 4);
         let shared = entries.iter().find(|e| e.name == "shared").unwrap();
         assert_eq!(shared.origin, "project");
-        assert_eq!(shared.command, "/bin/project");
+        // Reliability 22: launch configuration stays host-held; runtime assertion below remains raw.
+        assert!(crate::data_boundary::matches_reference(
+            &shared.command,
+            "/bin/project"
+        ));
         assert_eq!(
             entries.iter().find(|e| e.name == "web").unwrap().transport,
             "remote"
@@ -1147,19 +1858,66 @@ while True:
         assert_eq!(rows.len(), 4, "{rows:?}");
         let t = rows.iter().find(|r| r.name == "termius").unwrap();
         assert_eq!(t.origin, "cursor");
-        assert_eq!(t.env["K"], "v");
+        // Reliability 22: scan returns retention markers; import re-reads its source.
+        assert!(crate::data_boundary::matches_reference(&t.env["K"], "v"));
         assert_eq!(t.transport, "stdio");
         // 远程行标头随扫描行带出（负责人反馈 2026-09：context7 导入丢了
         // Authorization——解析只认 command/url/env，headers 整环缺失）
         let fig = rows.iter().find(|r| r.name == "fig").unwrap();
         assert_eq!(fig.transport, "remote");
-        assert_eq!(fig.headers["Authorization"], "Bearer t1");
+        assert!(crate::data_boundary::matches_reference(
+            &fig.headers["Authorization"],
+            "Bearer t1"
+        ));
         let r = rows.iter().find(|r| r.name == "remote").unwrap();
-        assert_eq!(r.headers["Authorization"], "Bearer t2");
+        assert!(crate::data_boundary::matches_reference(
+            &r.headers["Authorization"],
+            "Bearer t2"
+        ));
         let c = rows.iter().find(|r| r.name == "ctx7").unwrap();
         assert!(c.conflict);
         assert_eq!(c.origin, "codex");
-        assert_eq!(c.command, "npx");
+        assert!(crate::data_boundary::matches_reference(&c.command, "npx"));
+    }
+
+    #[test]
+    fn concealed_mcp_edit_preserves_replaces_and_removes_host_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        let mut original = spec("peer", "SECRET_COMMAND");
+        original.args = vec!["SECRET_ARG".into()];
+        original.env.insert("TOKEN".into(), "SECRET_ENV".into());
+        original
+            .headers
+            .insert("Authorization".into(), "SECRET_HEADER".into());
+        save_global_mcp_at(&original, &path).unwrap();
+        let row = list_mcp_entries_at(&path, None).remove(0);
+        assert!(!serde_json::to_string(&row).unwrap().contains("SECRET"));
+        let mut edit = McpSpec {
+            name: row.name,
+            command: row.command,
+            args: row.args,
+            env: row.env,
+            headers: row.headers,
+            cwd: row.cwd,
+            disabled: true,
+            url: row.url,
+        };
+        save_global_mcp_at(&edit, &path).unwrap();
+        let saved = read_specs_at(&path).remove(0);
+        assert_eq!(saved.args, original.args);
+        assert_eq!(saved.env, original.env);
+        assert_eq!(saved.headers, original.headers);
+        assert!(saved.disabled);
+        edit.env.insert("TOKEN".into(), "REPLACED".into());
+        edit.headers.clear();
+        save_global_mcp_at(&edit, &path).unwrap();
+        let saved = read_specs_at(&path).remove(0);
+        assert_eq!(saved.env["TOKEN"], "REPLACED");
+        assert!(saved.headers.is_empty());
+        edit.args[0] = crate::data_boundary::hidden("foreign");
+        assert!(save_global_mcp_at(&edit, &path).is_err());
+        assert_eq!(read_specs_at(&path)[0].args, original.args);
     }
 
     #[test]
@@ -1193,14 +1951,15 @@ while True:
         // 远程条目标头随导入落盘
         let c = loaded.iter().find(|s| s.name == "ctx7").unwrap();
         assert_eq!(c.headers["Authorization"], "Bearer k");
-        assert_eq!(
-            list_mcp_entries_at(&gpath, None)
-                .iter()
-                .find(|e| e.name == "ctx7")
-                .unwrap()
-                .headers["Authorization"],
+        // Reliability 22: only an opaque host reference reaches the DTO.
+        let row = list_mcp_entries_at(&gpath, None)
+            .into_iter()
+            .find(|e| e.name == "ctx7")
+            .unwrap();
+        assert!(crate::data_boundary::matches_reference(
+            &row.headers["Authorization"],
             "Bearer k"
-        );
+        ));
     }
 
     #[test]

@@ -53,6 +53,23 @@ pub struct ReturnSummary {
     pub permissions: PermCounts,
     pub stages: StageCounts,
     pub pending_todos: Vec<TodoCount>,
+    pub attention: ReturnAttention,
+}
+
+/// Reliability 23: current uncertainty is separate from historical decisions.
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct ReturnAttention {
+    #[ts(type = "number")]
+    pub unresolved_actions: i64,
+    #[ts(type = "number")]
+    pub unknown_cost_records: i64,
+    #[ts(type = "number")]
+    pub budget_stops: i64,
+    #[ts(type = "number")]
+    pub exception_decisions: i64,
+    #[ts(type = "number")]
+    pub policy_candidates: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
@@ -251,7 +268,16 @@ pub fn back(db: &Db, project_id: &str) -> Result<ReturnSummary, AutonomyError> {
         })?
         .collect::<Result<_, _>>()?;
 
+    let costs = crate::usage::project_summary(db, project_id)?.total;
+    let attention = ReturnAttention {
+        unresolved_actions: db.conn().query_row("SELECT COUNT(*) FROM tool_actions a WHERE project_id=?1 AND state='unknown' AND NOT EXISTS(SELECT 1 FROM action_resolutions r WHERE r.action_id=a.id)", [project_id], |r|r.get(0))?,
+        unknown_cost_records: costs.unknown_requests.saturating_add(costs.legacy_unknown_records),
+        budget_stops: db.conn().query_row("SELECT COUNT(*) FROM events WHERE project_id=?1 AND id>?2 AND ((kind='turn_failed' AND json_extract(payload,'$.code')='budget-exceeded') OR kind='usage_cap_hit')", params![project_id,since], |r|r.get(0))?,
+        exception_decisions: db.conn().query_row("SELECT COUNT(*) FROM events WHERE project_id=?1 AND id>?2 AND kind='system' AND json_extract(payload,'$.kind')='acceptance_exception'", params![project_id,since], |r|r.get(0))?,
+        policy_candidates: db.conn().query_row("SELECT COUNT(*) FROM proposals WHERE project_id=?1 AND surface='pack_copy' AND status IN ('queued','in_review','awaiting_stamp')",[project_id],|r|r.get(0))?,
+    };
     let summary = ReturnSummary {
+        attention,
         since_event: since,
         deliveries,
         reviews: ReviewCounts {

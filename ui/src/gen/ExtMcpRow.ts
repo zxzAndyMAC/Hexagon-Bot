@@ -4,13 +4,17 @@
  * 外部 MCP 扫描行。去重键 = 小写名 + 传输签名（command 或 url）——
  * 同名不同实现是两个服务都列出；同名同实现只列先扫到的。
  */
-export type ExtMcpRow = { name: string, command: string, args: Array<string>, env: { [key in string]?: string }, cwd: string | null, disabled: boolean, 
+export type ExtMcpRow = { 
+/**
+ * Opaque binding to the scanned host-side configuration, used for import.
+ */
+reference: string, name: string, command: string, args: Array<string>, env: { [key in string]?: string }, cwd: string | null, disabled: boolean, 
 /**
  * "stdio" | "remote"
  */
 transport: string, url: string | null, 
 /**
- * 远程标头（Authorization 等）——导入时随 spec 原样落盘
+ * 远程标头值脱敏，导入通过 reference 在宿主重新读取。
  */
 headers: { [key in string]?: string }, 
 /**

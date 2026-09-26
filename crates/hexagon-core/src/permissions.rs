@@ -475,7 +475,7 @@ pub(crate) fn operand_escapes(tok: &str, ctx: &ToolContext) -> bool {
 /// 记忆层之前的守卫序列（严格顺序，首个非 Pass 即终局）：
 /// L0 授权闸门 → L1 内置 deny → L2 安全网必问 → L3 项目级 deny。
 /// 全部只能输出 GuardVerdict——没有任何一个能替下层「放行」。
-fn agent_role(db: &Db, ctx: &ToolContext) -> Option<String> {
+pub(crate) fn agent_role(db: &Db, ctx: &ToolContext) -> Option<String> {
     db.conn()
         .query_row(
             "SELECT role FROM agents WHERE id=?1",
@@ -531,6 +531,15 @@ fn pre_memory_guards(
     if let Some(reason) = tool.builtin_deny(input, ctx) {
         return Ok(GuardVerdict::Deny {
             reason,
+            layer: "builtin_deny",
+        });
+    }
+    // reliability 02 / D02 supersedes the 2026-09-24 one-off ownership Ask:
+    // remembered or manual permission cannot enlarge the execution scope.
+    // False negative needs an owner scope edit; false positive writes outside it.
+    if violates_ownership(tool_name, input, ctx) {
+        return Ok(GuardVerdict::Deny {
+            reason: "path outside ownership".into(),
             layer: "builtin_deny",
         });
     }
@@ -596,13 +605,6 @@ fn release_at_high_autonomy(
     if tool_name == "bash" && bash_operand_escapes(input, ctx) {
         return Ok(Decision::Ask { reason, safety_net });
     }
-    // 2026-09-24 论坛活测：`.hexagon/**` 配上自治放行后，产品策划用
-    // artifact_write 交了 `e2e/runbook.md`。CONTEXT「路径所有权」Avoid
-    // 是匹配失败就开放整仓。越权写入留下给负责人的一次授权，不由自治放行。
-    // false negative 多一张卡；false positive 是角色树外的未审写入。
-    if violates_ownership(tool_name, input, ctx) {
-        return Ok(Decision::Ask { reason, safety_net });
-    }
     let level = crate::autonomy::rank(db, &ctx.project_id).unwrap_or(0);
     if level < 3 {
         return Ok(Decision::Ask { reason, safety_net });
@@ -652,7 +654,7 @@ fn evaluate_layers(
     // 勾选的在 L0 授权之上放行（授权记在父代理账上，这里只是选择子集）；
     // 未勾选即拒。集合挂 ctx 随派遣生灭，不落 grants/permission_rules。
     // run_test 同理：Exec 档在嵌套回合只能转 Ask 而子代理升不了级——
-    // 它的真边界是工具内的 test_cmd_gate，权限层放行不等于放宽。
+    // reliability 04：实际写范围由测试专用 OS 沙箱约束，命令闸仅判用途。
     if let Some(scope) = &ctx.subagent {
         if tool_name.starts_with("mcp:") {
             return Ok(if scope.mcp.contains(tool_name) {
@@ -667,7 +669,7 @@ fn evaluate_layers(
             });
         }
         if tool_name == "run_test" || tool_name == "web_search" {
-            // run_test 的真边界是 test_cmd_gate；web_search 的出网面只是
+            // run_test 的写边界是测试专用 OS 沙箱；web_search 的出网面只是
             // 一条 ≤300 字符的查询串（不能取页面正文，exfil 通道被 QUERY_CAP
             // 限死）——派遣即授权语义内的一等能力，嵌套回合没有必问出口。
             return Ok(Decision::Allow {
@@ -698,13 +700,6 @@ fn evaluate_layers(
         }
         return Ok(Decision::Allow {
             via: AllowVia::Remembered { shape, scope },
-        });
-    }
-    // 记忆层之后的守卫：路径归属
-    if violates_ownership(tool_name, input, ctx) {
-        return Ok(Decision::Ask {
-            reason: "path outside ownership".into(),
-            safety_net: false,
         });
     }
     // L5 类级默认（票 08 数据驱动）：读/本地写默认放行，
@@ -797,11 +792,28 @@ pub fn agent_globs(
     Ok(rows)
 }
 
-fn violates_ownership(tool: &str, input: &Value, ctx: &ToolContext) -> bool {
+pub(crate) fn violates_ownership(tool: &str, input: &Value, ctx: &ToolContext) -> bool {
     if !matches!(tool, "fs_write" | "fs_patch" | "artifact_write") || ctx.owned_globs.is_empty() {
         return false;
     }
-    let path = ownership_path(tool, input);
+    let path = if tool == "artifact_write" {
+        ownership_path(tool, input)
+    } else {
+        let Ok(resolved) =
+            crate::tools::repo_path(&ctx.repo_root, input["path"].as_str().unwrap_or(""))
+        else {
+            return true;
+        };
+        let root = ctx
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| ctx.repo_root.clone());
+        resolved
+            .strip_prefix(&root)
+            .unwrap_or(&resolved)
+            .to_string_lossy()
+            .into_owned()
+    };
     !ctx.owned_globs.iter().any(|g| glob_match(g, &path))
 }
 
@@ -817,7 +829,7 @@ fn ownership_path(tool: &str, input: &Value) -> String {
 }
 
 /// 命中的 deny/allow 规则形（activation 作用域要求同一 stage_run）。
-fn matching_rule(
+pub(crate) fn matching_rule(
     db: &Db,
     ctx: &ToolContext,
     tool: &str,
@@ -1267,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn l5_ownership_violation_asks() {
+    fn ownership_violation_cannot_be_approved() {
         let (db, mut ctx, _d) = setup();
         ctx.owned_globs = vec!["src/**".into()];
         let d = evaluate(
@@ -1278,11 +1290,11 @@ mod tests {
             &json!({"path":"etc/x","content":"c"}),
         )
         .unwrap();
-        // 2026-09-24：界外不再由自治放行。此前 L4 把必问换成放行，
-        // 产品策划交了所有权之外的 e2e/。越权写入停成卡。
+        // reliability 02: D02 now makes scope a hard bound, including remembered
+        // and one-off approval; the old Ask assertion permitted scope expansion.
         assert!(
-            matches!(d, Decision::Ask { .. }),
-            "path outside ownership stays a card, got {d:?}"
+            matches!(d, Decision::Deny { .. }),
+            "path outside ownership must be denied, got {d:?}"
         );
         // 界内放行
         let d2 = evaluate(
@@ -1695,7 +1707,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(outside, Decision::Ask { .. }),
+            // reliability 02: an explicit scope cannot be waived by a card.
+            matches!(outside, Decision::Deny { .. }),
             "prefixed e2e path is still outside specs/docs, got {outside:?}"
         );
         let inside = evaluate(

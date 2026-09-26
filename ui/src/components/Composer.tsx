@@ -83,7 +83,11 @@ export function Composer() {
   const pendingCaret = useRef<number | null>(null)
   const pathSeq = useRef(0)
   const pathTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const roster = useMemo(() => new Set(team.map((m) => m.role)), [team])
+  // reliability 07: duplicate roles need stable instance tokens; a role label
+  // alone previously sent both menu entries to the first agent.
+  const mentionName = (m: typeof team[number]) => team.filter((peer) => peer.role === m.role).length > 1
+    ? `${m.role}[${m.id}]` : m.role
+  const roster = useMemo(() => new Set(team.flatMap((m) => [m.role, `${m.role}[${m.id}]`])), [team])
   const atoms = useMemo(() => findAtoms(text, roster), [text, roster])
 
   const fetchPaths = (q: string) => {
@@ -113,8 +117,8 @@ export function Composer() {
       setPopup({
         kind: '@',
         items: team
-          .filter((m) => m.role.includes(q))
-          .map((m) => ({ label: mentionTokenText(m.role), hint: t('composer.mentionHint') })),
+          .filter((m) => m.role.includes(q) || m.id.includes(q))
+          .map((m) => ({ label: mentionTokenText(mentionName(m)), hint: t('composer.mentionHint') })),
       })
       setSel(0)
     } else if (last.startsWith('#')) {

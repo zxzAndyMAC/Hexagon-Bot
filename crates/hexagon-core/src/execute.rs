@@ -132,18 +132,48 @@ pub fn judge_passed(
         return Err(PropError::Rejected(reason));
     }
 
+    // Reliability 21 / Q7: this also catches pre-upgrade in-review candidates.
+    // False waiting costs one owner decision; false execution changes policy
+    // without an independent quality gate, so no model score may bypass it.
+    if surface == "pack_copy" {
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            false,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "policy_candidate",
+            "owner_required",
+            started,
+        );
+        let question_id =
+            proposals::queue_for_owner(db, ctx, proposal_id, diff, surface, evidence)?;
+        return Ok(Effect::Handed { question_id });
+    }
+
     // 输入就是已经落盘的提案正文和证据。Jev 只选写不写，这里不改这两样。
     let state = judgment_state(proposal_id, surface, body);
     // 没配或这次调用失败是槽位失败，记 Warn。对不上三个字才是判定上的交给负责人。
     // 被否决：两种都记成「判定 / 交给负责人」。那样日志里看不出 Jev 根本没跑。
     let (parsed, slot_failure) = match jev {
-        Some(p) if p.uses_decision_api() => match p.decide(
-            &state,
-            &[
-                (EXECUTE_TOKEN, "write the proposal to disk"),
-                (REJECT_TOKEN, "leave the project unchanged"),
-                (OWNER_TOKEN, "hand the decision to the owner"),
-            ],
+        Some(p) if p.uses_decision_api() => match crate::usage::request(
+            db,
+            ctx,
+            crate::provider_config::JEV_SLOT,
+            "execute_judgment",
+            p,
+            None,
+            || {
+                p.decide(
+                    &state,
+                    &[
+                        (EXECUTE_TOKEN, "write the proposal to disk"),
+                        (REJECT_TOKEN, "leave the project unchanged"),
+                        (OWNER_TOKEN, "hand the decision to the owner"),
+                    ],
+                )
+            },
         ) {
             Ok(resp) => {
                 let text = crate::pm_route::choice_text(&resp);

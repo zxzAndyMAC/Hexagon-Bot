@@ -26,6 +26,10 @@ pub enum CredError {
 }
 
 pub trait CredentialStore: Send + Sync {
+    /// Non-secret identity of the actual store instance, not an environment guess.
+    fn backend_kind(&self) -> &'static str {
+        "custom"
+    }
     fn get(&self, name: &str) -> Result<Option<String>, CredError>;
     fn set(&self, name: &str, secret: &str) -> Result<(), CredError>;
     fn delete(&self, name: &str) -> Result<(), CredError>;
@@ -45,6 +49,9 @@ pub fn provider_key_name(provider_id: &str) -> String {
 pub struct OsKeychain;
 
 impl CredentialStore for OsKeychain {
+    fn backend_kind(&self) -> &'static str {
+        "keychain"
+    }
     fn get(&self, name: &str) -> Result<Option<String>, CredError> {
         match keyring::Entry::new("dev.hexagon.bot", name) {
             Ok(e) => match e.get_password() {
@@ -89,6 +96,9 @@ pub struct MemoryStore {
 }
 
 impl CredentialStore for MemoryStore {
+    fn backend_kind(&self) -> &'static str {
+        "memory"
+    }
     fn get(&self, name: &str) -> Result<Option<String>, CredError> {
         Ok(self.map.lock().unwrap().get(name).cloned())
     }
@@ -142,6 +152,9 @@ impl FileStore {
 }
 
 impl CredentialStore for FileStore {
+    fn backend_kind(&self) -> &'static str {
+        "dev_file"
+    }
     fn get(&self, name: &str) -> Result<Option<String>, CredError> {
         Ok(self.load().get(name).cloned())
     }
@@ -196,6 +209,14 @@ pub fn active() -> std::sync::Arc<dyn CredentialStore> {
     match backend(std::env::var("HEXAGON_CREDENTIALS_PATH").ok().as_deref()) {
         Backend::File(p) => std::sync::Arc::new(FileStore::new(p)),
         Backend::Os => std::sync::Arc::new(OsKeychain),
+    }
+}
+
+/// reliability 03: a custom filename must not escape the agent read policy.
+pub(crate) fn active_file_path() -> Option<std::path::PathBuf> {
+    match backend(std::env::var("HEXAGON_CREDENTIALS_PATH").ok().as_deref()) {
+        Backend::File(path) => Some(path),
+        Backend::Os => None,
     }
 }
 

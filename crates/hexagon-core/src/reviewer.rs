@@ -438,7 +438,7 @@ pub fn adjudicate(
     });
     let world = crate::provenance::known_world(db, &ctx.project_id, ctx.stage_run_id.as_deref());
     let history = owner_history(db, &ctx.project_id);
-    let v = review(
+    let v = review_with_usage(
         provider,
         model_slot,
         world.as_ref(),
@@ -449,6 +449,7 @@ pub fn adjudicate(
             arguments: &input,
             provenance: provenance.as_deref(),
         },
+        Some((db, ctx)),
     );
 
     if let Err(e) = db.append_event(
@@ -526,6 +527,17 @@ pub fn review(
     owner_msgs: &[String],
     action: &ReviewAction<'_>,
 ) -> Verdict {
+    review_with_usage(provider, model_slot, known_world, owner_msgs, action, None)
+}
+
+fn review_with_usage(
+    provider: &dyn ModelProvider,
+    model_slot: &str,
+    known_world: Option<&Value>,
+    owner_msgs: &[String],
+    action: &ReviewAction<'_>,
+    ledger: Option<(&Db, &ToolContext)>,
+) -> Verdict {
     let req = build_request(
         known_world,
         owner_msgs,
@@ -535,7 +547,19 @@ pub fn review(
         action.provenance,
         model_slot,
     );
-    match provider.complete(&req) {
+    let response = match ledger {
+        Some((db, ctx)) => crate::usage::request(
+            db,
+            ctx,
+            model_slot,
+            "action_review",
+            provider,
+            Some(&req),
+            || provider.complete(&req),
+        ),
+        None => provider.complete(&req),
+    };
+    match response {
         Ok(resp) => {
             let text: String = resp
                 .content

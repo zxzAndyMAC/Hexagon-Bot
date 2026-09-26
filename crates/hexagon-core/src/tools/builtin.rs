@@ -64,12 +64,14 @@ impl Tool for FsRead {
     fn risk(&self) -> RiskClass {
         RiskClass::Read
     }
-    fn builtin_deny(&self, input: &Value, _ctx: &ToolContext) -> Option<String> {
+    fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         let p = input["path"].as_str().unwrap_or("");
-        is_credential_path(p).then(|| "credential content never enters context".into())
+        readable_repo_path(&ctx.repo_root, p)
+            .err()
+            .map(|_| "content read policy denied this path".into())
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
+        let p = readable_repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         // 指纹取在读之前：读与取指纹之间若有人改文件，指纹是旧的，下次编辑
         // 判「读后已变」——偏差落在误判一侧（readstate 代价模型）。
         let before = readstate::stamp(&p);
@@ -84,7 +86,11 @@ impl Tool for FsRead {
         // 票 04：子代理域记实读路径——交回的引用以这格为准（实际读过的，
         // 不是模型自称读过什么）。
         if let Some(s) = &ctx.subagent {
-            if let Ok(rel) = p.strip_prefix(&ctx.repo_root) {
+            if let Ok(rel) = p.strip_prefix(
+                ctx.repo_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| ctx.repo_root.clone()),
+            ) {
                 s.reads
                     .lock()
                     .unwrap()
@@ -94,7 +100,13 @@ impl Tool for FsRead {
         // 票 02 读图路径：双判认图 → caps 闸门 → 尺寸闸 → image 载荷。
         // 非 vision 槽字节不进上下文（fail-closed，ADR 0058-2）。
         if let Some(mt) = image_media_type(&p, &bytes) {
-            let rel = p.strip_prefix(&ctx.repo_root).unwrap_or(&p);
+            let rel = p
+                .strip_prefix(
+                    ctx.repo_root
+                        .canonicalize()
+                        .unwrap_or_else(|_| ctx.repo_root.clone()),
+                )
+                .unwrap_or(&p);
             if !ctx.caps.contains("vision") {
                 return Ok(json!({
                     "path": rel, "bytes": bytes.len(),
@@ -185,6 +197,10 @@ fn require_fresh_read(ctx: &ToolContext, rel: &str) -> Result<(), ToolError> {
 
 pub struct FsWrite;
 impl Tool for FsWrite {
+    fn write_targets(&self, input: &Value) -> Result<Vec<String>, ToolError> {
+        Ok(vec![str_arg(input, "path")?.into()])
+    }
+
     fn name(&self) -> &str {
         "fs_write"
     }
@@ -201,18 +217,57 @@ impl Tool for FsWrite {
     fn risk(&self) -> RiskClass {
         RiskClass::WriteLocal
     }
-    fn builtin_deny(&self, input: &Value, _ctx: &ToolContext) -> Option<String> {
-        let p = input["path"].as_str().unwrap_or("");
+    fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
+        let raw = input["path"].as_str().unwrap_or("");
+        let resolved = match repo_path(&ctx.repo_root, raw) {
+            Ok(path) => path,
+            Err(_) => return Some("path escapes repo root".into()),
+        };
+        let root = ctx
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| ctx.repo_root.clone());
+        let canonical = resolved.canonicalize().unwrap_or(resolved);
+        let relative = canonical
+            .strip_prefix(&root)
+            .unwrap_or(&canonical)
+            .to_string_lossy();
+        let p = relative.as_ref();
         if is_permission_rule_path(p) {
             return Some("agents cannot modify permission rules".into());
         }
         if is_agent_policy_path(p) {
             return Some("skill/policy files are owner-managed".into());
         }
-        is_credential_path(p).then(|| "credential files are not writable by agents".into())
+        sensitive_file_path(&canonical).then(|| "sensitive files are not writable by agents".into())
     }
     fn precondition(&self, input: &Value, ctx: &ToolContext) -> Result<(), ToolError> {
         require_fresh_read(ctx, str_arg(input, "path")?)
+    }
+    fn reconcile(
+        &self,
+        _db: &Db,
+        input: &Value,
+        ctx: &ToolContext,
+        _action_id: &str,
+    ) -> Result<Reconciliation, ToolError> {
+        let p = readable_repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
+        let expected = str_arg(input, "content")?.as_bytes();
+        // D05 / reliability 11: a full replacement has an exact postcondition.
+        // Absence or differing bytes do not prove failure: another writer may
+        // have changed the file since the uncertain action. Never rewrite here.
+        if std::fs::metadata(&p).is_ok_and(|m| m.is_file() && m.len() == expected.len() as u64)
+            && std::fs::read(&p).is_ok_and(|actual| actual == expected)
+        {
+            Ok(Reconciliation::Succeeded {
+                output: json!({"written":str_arg(input, "path")?}),
+                evidence: "current file bytes exactly match full-replacement postcondition".into(),
+            })
+        } else {
+            Ok(Reconciliation::Unresolved {
+                evidence: "file postcondition does not establish the original outcome".into(),
+            })
+        }
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
@@ -221,12 +276,18 @@ impl Tool for FsWrite {
         }
         std::fs::write(&p, str_arg(input, "content")?)?;
         ctx.reads.record(&p);
-        Ok(json!({"written": p.strip_prefix(&ctx.repo_root).unwrap_or(&p)}))
+        Ok(
+            json!({"written": p.strip_prefix(ctx.repo_root.canonicalize().unwrap_or_else(|_| ctx.repo_root.clone())).unwrap_or(&p)}),
+        )
     }
 }
 
 pub struct FsPatch;
 impl Tool for FsPatch {
+    fn write_targets(&self, input: &Value) -> Result<Vec<String>, ToolError> {
+        Ok(vec![str_arg(input, "path")?.into()])
+    }
+
     fn name(&self) -> &str {
         "fs_patch"
     }
@@ -481,6 +542,13 @@ impl Tool for BashKill {
 /// 产物写入：走产物管道（元数据头校验 + `.hexagon/` 落盘 + 版本取代 + 登记）。
 pub struct ArtifactWrite;
 impl Tool for ArtifactWrite {
+    fn write_targets(&self, input: &Value) -> Result<Vec<String>, ToolError> {
+        Ok(vec![format!(
+            ".hexagon/{}",
+            str_arg(input, "path")?.trim_start_matches('/')
+        )])
+    }
+
     fn name(&self) -> &str {
         "artifact_write"
     }
@@ -489,7 +557,9 @@ impl Tool for ArtifactWrite {
 - Use when: producing a deliverable of the current stage or a handoff for another role.
 - Do not use: for ordinary repository files (fs_write, fs_patch). For small changes to an existing artifact, prefer fs_patch on its file. Runnable code (html, css, js, and kind 代码) also needs the same relative path written at the repository root with fs_write; a copy that exists only under .hexagon/ does not satisfy the stage.
 - Pass `kind` equal to the due deliverable name, verbatim (for example 范围说明), or start `content` with the header: line 1 `---`, line 2 `kind: <name>`, line 3 `---`. Without either it registers as misc and does not count toward the stage.
-- Errors: a malformed metadata header is reported — fix the header and deliver again."#
+- The kind parameter fills a missing header kind; conflicting kinds are rejected before writing. Freeform kinds may omit the header. 复审意见/测试记录/打回/改进提案 require a header with author; 规格/接口说明/技术裁定记录 also require their mandatory sections. A kind parameter never bypasses these requirements.
+- Reviews require target, verdict (pass/reject), and target_evidence copied from artifact_read; a changed target requires a new read and review.
+- Errors: malformed headers, conflicting kinds, missing author or required sections are rejected without changing the file. Fix metadata and deliver again."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string","description":"artifact path under .hexagon/ (without the prefix)"},"content":{"type":"string","description":"artifact content"},"kind":{"type":"string","description":"due deliverable name, verbatim"}},"required":["path","content"]})
@@ -500,14 +570,45 @@ impl Tool for ArtifactWrite {
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         // 产物落在 .hexagon/<path>——守卫看的是生效路径，
         // "skills/x/SKILL.md" 不能借产物管道写进策略面（票 09）。
+        if input["path"]
+            .as_str()
+            .unwrap_or("")
+            .split('/')
+            .any(|c| c == "..")
+        {
+            return Some("artifact path cannot traverse parent directories".into());
+        }
         let eff = format!(
             ".hexagon/{}",
             input["path"].as_str().unwrap_or("").trim_start_matches('/')
         );
-        if is_agent_policy_path(&eff) {
-            return Some("skill/policy files are owner-managed".into());
+        let target = match repo_path(&ctx.repo_root, &eff) {
+            Ok(path) => path,
+            Err(_) => return Some("artifact path escapes repo root".into()),
+        };
+        let root = ctx
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| ctx.repo_root.clone());
+        // reliability 02 review: logical notes/** used to authorize an alias
+        // into backend or credentials.json. Artifact identity must keep its
+        // physical location; reject aliases rather than widening logical scope.
+        if target != root.join(&eff) {
+            return Some("artifact aliases cannot change the delivery target".into());
         }
-        FsWrite.builtin_deny(input, ctx)
+        FsWrite.builtin_deny(&json!({"path":eff}), ctx)
+    }
+    fn reconcile(
+        &self,
+        db: &Db,
+        _input: &Value,
+        ctx: &ToolContext,
+        action_id: &str,
+    ) -> Result<Reconciliation, ToolError> {
+        match crate::artifacts::materialization_receipt(db,ctx,action_id).map_err(Box::new)? {
+            Some(output)=>Ok(Reconciliation::Succeeded {output,evidence:"registered artifact receipt and current bytes match the original action".into()}),
+            None=>Ok(Reconciliation::Unresolved {evidence:"artifact registration, current content, or additional proposal effects are not independently proven".into()}),
+        }
     }
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let content = str_arg(input, "content")?;
@@ -520,20 +621,24 @@ impl Tool for ArtifactWrite {
             input["kind"].as_str(),
         )
         .map_err(Box::new)?;
-        // 改进提案：交付即入提案队列（校验不过只拒提案不拒产物）
-        if crate::artifacts::parse_header(content)
-            .map(|(m, _)| m.kind.as_str() == "改进提案")
-            .unwrap_or(false)
-        {
+        let (kind, version): (String, i64) = db.conn().query_row(
+            "SELECT kind,version FROM artifacts WHERE id=?1 AND project_id=?2",
+            rusqlite::params![id, ctx.project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let mut receipt = json!({"artifact_id":id,"kind":kind,"version":version});
+        // D07: consumers use the merged, registered type, not a second parse
+        // that silently drops a kind supplied through the tool parameter.
+        if kind == "改进提案" {
             match crate::proposals::submit(db, ctx, &id, content) {
-                Ok(pid) => return Ok(json!({"artifact_id": id, "proposal_id": pid})),
+                Ok(pid) => receipt["proposal_id"] = json!(pid),
                 Err(e) => {
                     log::info!("proposal submit rejected for {id}: {e}");
-                    return Ok(json!({"artifact_id": id, "proposal_rejected": e.to_string()}));
+                    receipt["proposal_rejected"] = json!(e.to_string());
                 }
             }
         }
-        Ok(json!({"artifact_id": id}))
+        Ok(receipt)
     }
 }
 
@@ -547,6 +652,7 @@ impl Tool for ArtifactRead {
 - Use when: reading an artifact listed in context.artifacts of your brief.
 - Do not use: for other repository files (fs_read).
 - Pass the path as listed in the brief, without the .hexagon/ prefix. Returns up to 256KB of text.
+- For review: copy the returned review_target JSON verbatim into the review artifact header as target_evidence. Null means this read cannot certify the whole current target; resolve missing or changing files first.
 - Errors: an unknown path returns an I/O error — check context.artifacts for the exact path."#
     }
     fn input_schema(&self) -> Value {
@@ -556,19 +662,40 @@ impl Tool for ArtifactRead {
         RiskClass::Read
     }
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
-        FsRead.builtin_deny(input, ctx)
-    }
-    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let rel = format!(
             ".hexagon/{}",
-            str_arg(input, "path")?.trim_start_matches('/')
+            input["path"].as_str().unwrap_or("").trim_start_matches('/')
         );
-        let p = repo_path(&ctx.repo_root, &rel)?;
+        FsRead.builtin_deny(&json!({"path":rel}), ctx)
+    }
+    fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        use sha2::Digest;
+        let path = str_arg(input, "path")?;
+        let rel = format!(".hexagon/{}", path.trim_start_matches('/'));
+        let p = readable_repo_path(&ctx.repo_root, &rel)?;
+        let before =
+            crate::artifacts::evidence::for_path(db, &ctx.repo_root, &ctx.project_id, path)?;
         let bytes = std::fs::read(&p)?;
+        let after = before
+            .as_ref()
+            .map(|e| {
+                crate::artifacts::evidence::capture(db, &ctx.repo_root, &ctx.project_id, &e.id)
+            })
+            .transpose()?
+            .flatten();
+        // D08: only the complete, stable body read by this call gets a receipt.
+        // Concurrent replacement or truncation must not attest unseen bytes.
+        let review_target = before.filter(|e| {
+            bytes.len() <= FS_READ_CAP
+                && e.digest == format!("{:x}", sha2::Sha256::digest(&bytes))
+                && crate::artifacts::evidence::matches(Some(e), after.as_ref())
+        });
         if let Some(s) = &ctx.subagent {
-            s.reads.lock().unwrap().push(rel.clone());
+            s.reads.lock().unwrap().push(rel);
         }
-        Ok(json!({"content": String::from_utf8_lossy(&bytes[..bytes.len().min(FS_READ_CAP)])}))
+        Ok(
+            json!({"content":String::from_utf8_lossy(&bytes[..bytes.len().min(FS_READ_CAP)]),"review_target":review_target}),
+        )
     }
 }
 

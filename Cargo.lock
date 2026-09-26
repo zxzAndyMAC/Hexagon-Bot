@@ -1522,20 +1522,24 @@ name = "hexagon-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "getrandom 0.3.4",
  "ignore",
  "jsonschema",
  "keyring",
+ "libc",
  "log",
  "proptest",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tiktoken-rs",
  "toml 0.8.2",
  "ts-rs",
  "ureq",
+ "url",
  "zip",
 ]
 

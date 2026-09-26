@@ -11,8 +11,15 @@
 //! 版本：同 path 新版本自动把旧版标 'superseded'。
 
 use crate::db::Db;
-use crate::tools::{repo_path, ToolContext, ToolError};
+use crate::tools::{ToolContext, ToolError};
+pub(crate) mod evidence;
+pub(crate) mod fingerprint;
+pub use evidence::ArtifactReview;
+mod materialize;
 use crate::trace::{EventKind, TraceError};
+#[cfg(test)]
+pub(crate) use materialize::with_fault;
+pub(crate) use materialize::{receipt as materialization_receipt, recover};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -20,6 +27,12 @@ use std::collections::HashMap;
 pub enum ArtifactError {
     #[error("missing or unparseable metadata header")]
     MissingHeader,
+    #[error("artifact kind parameter conflicts with the metadata header")]
+    MetadataConflict,
+    #[error("review target changed; read and review the current version again")]
+    StaleReview,
+    #[error("artifact materialization requires recovery; current content is not registered")]
+    MaterializationPending,
     #[error("missing required field in header: {0}")]
     MissingField(&'static str),
     #[error("skeleton requires section: {0}")]
@@ -143,26 +156,46 @@ pub fn parse_header(content: &str) -> Option<(ArtifactMeta, &str)> {
 
 fn validate(
     content: &str,
-    tier: Tier,
+    tiers: &TierMap,
+    kind_hint: Option<&str>,
     fallback_author: &str,
-) -> Result<ArtifactMeta, ArtifactError> {
+) -> Result<(ArtifactMeta, Tier), ArtifactError> {
     let parsed = parse_header(content);
-    // freeform 不查结构：有头用头，没头给兜底 meta
-    if tier == Tier::Freeform {
-        return Ok(parsed.map(|(m, _)| m).unwrap_or(ArtifactMeta {
-            kind: "misc".into(),
+    let has_header = parsed.is_some();
+    // Reliability 14 / D07: merge before choosing the validation tier. The old
+    // flow chose the hinted tier but returned misc, so valid work never met due.
+    let (mut meta, body) = parsed.unwrap_or((
+        ArtifactMeta {
+            kind: String::new(),
             stage: None,
-            author: fallback_author.into(),
+            author: String::new(),
             upstream: None,
             handoff: None,
             extra: Default::default(),
-        }));
+        },
+        content,
+    ));
+    // A false negative costs a corrected submission; a false positive writes
+    // an unvalidated deliverable. Conflicting declarations therefore fail closed.
+    let hint = kind_hint.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(hint) = hint {
+        if !meta.kind.is_empty() && meta.kind != hint {
+            return Err(ArtifactError::MetadataConflict);
+        }
+        meta.kind = hint.into();
     }
-    let (meta, body) = parsed.ok_or(ArtifactError::MissingHeader)?;
     if meta.kind.is_empty() {
-        return Err(ArtifactError::MissingField("kind"));
+        meta.kind = "misc".into();
     }
-    if meta.author.is_empty() {
+    let tier = tiers.tier_for(&meta.kind);
+    if !has_header && (tier != Tier::Freeform || content.starts_with("---")) {
+        return Err(ArtifactError::MissingHeader);
+    }
+    if tier == Tier::Freeform {
+        if meta.author.is_empty() {
+            meta.author = fallback_author.into();
+        }
+    } else if meta.author.is_empty() {
         return Err(ArtifactError::MissingField("author"));
     }
     if tier == Tier::Skeleton {
@@ -175,7 +208,7 @@ fn validate(
             }
         }
     }
-    Ok(meta)
+    Ok((meta, tier))
 }
 
 /// 交付产物：校验 → 写 `.hexagon/<path>` → 版本+取代 → 登记 → 交付事件。
@@ -188,88 +221,44 @@ pub fn deliver(
     content: &str,
     kind_hint: Option<&str>,
 ) -> Result<String, ArtifactError> {
-    // 先定档位：头里的 kind 优先；没头看调用方声明的 kind_hint；都没有按 misc/freeform
-    let declared_kind = parse_header(content)
-        .map(|(m, _)| m.kind)
-        .or_else(|| kind_hint.map(str::to_string))
-        .unwrap_or_else(|| "misc".into());
-    let tier = tiers.tier_for(&declared_kind);
-    let meta = match validate(content, tier, &ctx.agent_id) {
+    let started = std::time::Instant::now();
+    let (meta, tier) = match validate(content, tiers, kind_hint, &ctx.agent_id) {
         Ok(m) => m,
         Err(e) => {
-            db.append_event(
+            let trace = db.append_event(
                 &ctx.project_id,
                 EventKind::ArtifactRejected,
-                json!({"path": path, "kind": declared_kind, "reason": e.to_string()}),
+                json!({"path": path, "kind": kind_hint, "reason": e.to_string()}),
                 Some(&ctx.agent_id),
                 ctx.stage_run_id.as_deref(),
             )?;
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                Some(&trace.to_string()),
+                "artifact_metadata",
+                &crate::errcode::ErrorCode::code(&e),
+                started,
+            );
             return Err(e);
         }
     };
-
-    // 落盘（限仓内）
-    let rel = format!(".hexagon/{}", path.trim_start_matches('/'));
-    let p = repo_path(&ctx.repo_root, &rel)?;
-    if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&p, content)?;
-
-    // 版本 + 取代
-    let version: i64 = db.conn().query_row(
-        "SELECT COALESCE(MAX(version),0)+1 FROM artifacts WHERE project_id=?1 AND path=?2",
-        rusqlite::params![ctx.project_id, path],
-        |r| r.get(0),
-    )?;
-    db.conn().execute(
-        "UPDATE artifacts SET status='superseded'
-         WHERE project_id=?1 AND path=?2 AND status='valid'",
-        rusqlite::params![ctx.project_id, path],
-    )?;
-
-    // 上游指针解析：path → 最新版行 id
-    let upstream_id: Option<String> = meta.upstream.as_deref().and_then(|up| {
-        db.conn()
-            .query_row(
-                "SELECT id FROM artifacts WHERE project_id=?1 AND path=?2
-                 ORDER BY version DESC LIMIT 1",
-                rusqlite::params![ctx.project_id, up],
-                |r| r.get(0),
-            )
-            .ok()
-    });
-
-    let aid = format!("art{}", db.next_id("art")?);
-    db.conn().execute(
-        "INSERT INTO artifacts
-         (id, project_id, path, kind, tier, stage_run_id, author_agent_id, version, status, upstream_id, content)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'valid',?9,?10)",
-        rusqlite::params![
-            aid,
-            ctx.project_id,
-            path,
-            meta.kind,
-            tier.as_str(),
-            ctx.stage_run_id,
-            ctx.agent_id,
-            version,
-            upstream_id,
-            content
-        ],
-    )?;
-    db.append_event(
-        &ctx.project_id,
-        EventKind::ArtifactDelivered,
-        json!({"path": path, "kind": meta.kind, "tier": tier.as_str(), "version": version,
-               "handoff": meta.handoff,
-               // 票 10 taint：读过外部内容（research/mcp:*）后的产出打标——
-               // 下游消费者看得出交付物来源纯度。
-               "after_external": crate::provenance::tainted(db, &ctx.agent_id, ctx.stage_run_id.as_deref())}),
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(&ctx.project_id),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
-    )?;
-    Ok(aid)
+        None,
+        "artifact_metadata",
+        "merged_and_validated",
+        started,
+    );
+
+    materialize::deliver(db, ctx, path, content, &meta, tier)
 }
 
 /// 产物浏览器查询：类型/阶段/状态/产出者可组合过滤。
@@ -291,6 +280,13 @@ pub struct ArtifactRow {
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub status: String,
     pub upstream_id: Option<String>,
+    /// Pending filesystem work is visible but cannot satisfy delivery gates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub materialization: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review: Option<ArtifactReview>,
 }
 
 pub fn query(
@@ -302,13 +298,23 @@ pub fn query(
     author: Option<&str>,
 ) -> Result<Vec<ArtifactRow>, ArtifactError> {
     let mut st = db.conn().prepare(
-        "SELECT id, path, kind, tier, stage_run_id, author_agent_id, version, status, upstream_id
-         FROM artifacts WHERE project_id=?1
+        "WITH visible AS (
+           SELECT a.id,a.project_id,a.path,a.kind,a.tier,a.stage_run_id,a.author_agent_id,a.version,a.status,a.upstream_id,
+             CASE WHEN EXISTS(SELECT 1 FROM artifact_materializations m WHERE m.project_id=a.project_id AND m.path=a.path AND m.state='pending') THEN 'pending_recovery' END AS materialization
+           FROM artifacts a
+           UNION ALL
+           SELECT id,project_id,path,json_extract(intent_json,'$.kind'),json_extract(intent_json,'$.tier'),
+             json_extract(intent_json,'$.stage'),json_extract(intent_json,'$.author'),json_extract(intent_json,'$.version'),
+             'pending',json_extract(intent_json,'$.upstream'),'pending_recovery'
+           FROM artifact_materializations WHERE state='pending'
+         )
+         SELECT id,path,kind,tier,stage_run_id,author_agent_id,version,status,upstream_id,materialization
+         FROM visible WHERE project_id=?1
          AND (?2 IS NULL OR kind=?2) AND (?3 IS NULL OR stage_run_id=?3)
          AND (?4 IS NULL OR status=?4) AND (?5 IS NULL OR author_agent_id=?5)
-         ORDER BY path, version",
+         ORDER BY path,version",
     )?;
-    let rows = st
+    let mut rows = st
         .query_map(
             rusqlite::params![project_id, kind, stage_run_id, status, author],
             |r| {
@@ -322,40 +328,50 @@ pub fn query(
                     version: r.get(6)?,
                     status: r.get(7)?,
                     upstream_id: r.get(8)?,
+                    materialization: r.get(9)?,
+                    review: None,
                 })
             },
         )?
         .collect::<Result<Vec<_>, _>>()?;
+    let root: String =
+        db.conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
+                r.get(0)
+            })?;
+    for row in &mut rows {
+        row.review = evidence::review_state(db, std::path::Path::new(&root), project_id, row)?;
+    }
     Ok(rows)
 }
 
-/// 产物正文（ADR 0052 读组）：优先读 DB 最新版（0003 起随行存），
-/// 老行 content=NULL 回退读 `<root>/.hexagon/<path>` 盘上文件。
+/// Current worktree content (D07). Immutable snapshots belong exclusively to
+/// content_at; a registered body must never impersonate an external edit.
 pub fn content(
     db: &Db,
     repo_root: &std::path::Path,
     project_id: &str,
     path: &str,
 ) -> Result<String, ArtifactError> {
-    let c: Option<String> = db.conn().query_row(
-        "SELECT content FROM artifacts WHERE project_id=?1 AND path=?2
-         ORDER BY version DESC LIMIT 1",
-        rusqlite::params![project_id, path],
-        |r| r.get(0),
-    )?;
-    if let Some(s) = c {
-        return Ok(s);
+    let known: bool = db.conn().query_row(
+        "SELECT EXISTS(SELECT 1 FROM artifacts WHERE project_id=?1 AND path=?2 UNION ALL SELECT 1 FROM artifact_materializations WHERE project_id=?1 AND path=?2 AND state='pending')",
+        rusqlite::params![project_id,path],|r|r.get(0))?;
+    if !known {
+        return Err(rusqlite::Error::QueryReturnedNoRows.into());
     }
-    Ok(std::fs::read_to_string(
-        repo_root.join(".hexagon").join(path),
-    )?)
+    let target = crate::tools::readable_repo_path(
+        repo_root,
+        &format!(".hexagon/{}", path.trim_start_matches('/')),
+    )?;
+    Ok(std::fs::read_to_string(target)?)
 }
 
 /// 指定版本内容（版本 diff / Agent 活动 tab 用）；版本不存在回 None。
-/// 老行无 content：只有「最新版=盘上文件」这一条路。
+/// Reliability 16: legacy NULL means no immutable evidence, including latest.
+/// Never borrow the current worktree to fill a missing historical snapshot.
 pub fn content_at(
     db: &Db,
-    repo_root: &std::path::Path,
+    _repo_root: &std::path::Path,
     project_id: &str,
     path: &str,
     version: i64,
@@ -370,19 +386,8 @@ pub fn content_at(
         .ok();
     match c {
         Some(Some(s)) => Ok(Some(s)),
-        Some(None) if version == latest_version(db, project_id, path)? => Ok(Some(
-            std::fs::read_to_string(repo_root.join(".hexagon").join(path))?,
-        )),
         _ => Ok(None),
     }
-}
-
-fn latest_version(db: &Db, project_id: &str, path: &str) -> Result<i64, ArtifactError> {
-    Ok(db.conn().query_row(
-        "SELECT COALESCE(MAX(version),0) FROM artifacts WHERE project_id=?1 AND path=?2",
-        rusqlite::params![project_id, path],
-        |r| r.get(0),
-    )?)
 }
 
 #[cfg(test)]
@@ -528,5 +533,22 @@ mod tests {
             .map(|r| serde_json::to_value(r).unwrap())
             .collect();
         assert_eq!(rows[0]["upstream_id"], up);
+    }
+    proptest::proptest! {
+        #[test]
+        fn metadata_conflict_cannot_select_a_weaker_validation_tier(
+            header_kind in "[a-z]{1,20}", hint in "[a-z]{1,20}",
+        ) {
+            let content = format!("---\nkind: {header_kind}\n---\nbody");
+            let result = validate(&content, &TierMap::new(), Some(&hint), "a0");
+            if header_kind == hint {
+                proptest::prop_assert_eq!(result.unwrap().0.kind, header_kind);
+            } else {
+                proptest::prop_assert!(matches!(result, Err(ArtifactError::MetadataConflict)));
+            }
+            for required in ["规格", "接口说明", "技术裁定记录", "测试记录", "复审意见", "改进提案"] {
+                proptest::prop_assert!(matches!(validate("body", &TierMap::new(), Some(required), "a0"), Err(ArtifactError::MissingHeader)));
+            }
+        }
     }
 }

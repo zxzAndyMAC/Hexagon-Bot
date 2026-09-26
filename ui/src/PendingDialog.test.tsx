@@ -8,7 +8,7 @@ import { TopBar } from './components/TopBar'
 import { PendingCard, PendingCards, PendingDialog } from './components/PendingCards'
 import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
-import { bindingFor, formatBinding } from './keymap'
+import { bindingFor, formatBinding, isMac } from './keymap'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -244,4 +244,74 @@ describe('待决弹窗（hands-free 票 05）', () => {
     expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['知道了'])
     expect(el.textContent).toContain('有回复，但进度没有变化')
   })
+})
+
+it('动作恢复卡区分未知与已授权未执行（可靠性 08）', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const resume = vi.spyOn(api, 'resumeToolAction').mockResolvedValue()
+  const unknown = await render(<PendingCard q={card({ kind: 'recovery', payload: { sub: 'tool_outcome_unknown', action_id: 'action1' } })} top />)
+  expect(unknown.el.textContent).toContain('工具结果未知')
+  expect(unknown.el.textContent).toContain('普通批准不会重试')
+  // Reliability 11: explicit reconciliation/owner forms replace the empty
+  // recovery card; ordinary approve still cannot silently retry an unknown.
+  const buttons = [...unknown.el.querySelectorAll('button')]
+  expect(buttons.map((b) => b.textContent)).toEqual(['核对结果', '放弃动作', '发起新尝试'])
+  expect(buttons[1].disabled).toBe(true)
+  expect(buttons[2].disabled).toBe(true)
+  expect(buttons[0].title).toBe(formatBinding(bindingFor('reconcileAction')))
+  await act(async () => unknown.root.unmount())
+  const ready = await render(<PendingCard q={card({ kind: 'recovery', payload: { sub: 'tool_action_ready', action_id: 'action2' } })} top />)
+  const button = ready.el.querySelector('button')!
+  expect(button.textContent).toContain(formatBinding(bindingFor('approve')))
+  await act(async () => button.click())
+  expect(resume).toHaveBeenCalledWith('action2')
+  await act(async () => ready.root.unmount())
+  vi.restoreAllMocks()
+  await i18n.changeLanguage('en')
+})
+
+it('未知动作显示证据，要求理由和重复风险确认；核对快捷键受界面范围约束', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const saved = useUiStore.getState()
+  const reconcile = vi.spyOn(api, 'reconcileToolAction').mockResolvedValue()
+  const retry = vi.spyOn(api, 'retryToolAction').mockResolvedValue()
+  useUiStore.setState({ invalidate: async () => {}, modalScope: 'settings' })
+  const { el, root } = await render(<PendingCard top q={card({ kind: 'recovery', payload: {
+    sub: 'tool_outcome_unknown', action_id: 'action-risk', reconciliation_evidence: 'receipt not found',
+  } })} />)
+  expect(el.textContent).toContain('receipt not found')
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', altKey: true, metaKey: isMac, ctrlKey: !isMac, cancelable: true })) })
+  expect(reconcile).not.toHaveBeenCalled()
+  useUiStore.setState({ modalScope: 'workbench' })
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', altKey: true, metaKey: isMac, ctrlKey: !isMac, cancelable: true })) })
+  expect(reconcile).toHaveBeenCalledWith('action-risk')
+  const text = el.querySelector('input:not([type="checkbox"])') as HTMLInputElement
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(text, 'owner checked receipt')
+    text.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const buttons = el.querySelectorAll('button')
+  expect(buttons[1].disabled).toBe(false)
+  expect(buttons[2].disabled).toBe(true)
+  await act(async () => { (el.querySelector('input[type="checkbox"]') as HTMLInputElement).click() })
+  expect(buttons[2].disabled).toBe(false)
+  await act(async () => { buttons[2].click() })
+  expect(retry).toHaveBeenCalledWith('action-risk', 'owner checked receipt', true)
+  await act(async () => root.unmount())
+  useUiStore.setState(saved)
+  vi.restoreAllMocks()
+  await i18n.changeLanguage('en')
+})
+
+it('写入待决显示绑定目标和变更冲突说明', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const { el, root } = await render(<PendingCard top q={card({ payload: {
+    tool: 'fs_write', input: { path: 'notes.md' }, action_id: 'action1',
+    write_targets: ['notes.md'],
+  } })} />)
+  expect(el.textContent).toContain('写入前会重新核对目标')
+  expect(el.textContent).toContain('notes.md')
+  await act(async () => root.unmount())
+  el.remove()
+  await i18n.changeLanguage('en')
 })

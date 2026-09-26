@@ -152,7 +152,11 @@ impl_error_code!(
     Io,
     Git,
 );
-impl_error_code!(crate::provider::ProviderError);
+impl ErrorCode for crate::provider::ProviderError {
+    fn code(&self) -> String {
+        variant_code(self.cause())
+    }
+}
 impl_error_code!(crate::provider_admin::AdminError, Providers, Cred, Json);
 impl_error_code!(crate::provider_config::ProvidersError, Io, Json);
 impl_error_code!(

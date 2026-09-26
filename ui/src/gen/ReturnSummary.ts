@@ -2,6 +2,7 @@
 import type { DeliveryRow } from "./DeliveryRow";
 import type { FlagCounts } from "./FlagCounts";
 import type { PermCounts } from "./PermCounts";
+import type { ReturnAttention } from "./ReturnAttention";
 import type { ReviewCounts } from "./ReviewCounts";
 import type { StageCounts } from "./StageCounts";
 import type { TodoCount } from "./TodoCount";
@@ -10,4 +11,4 @@ import type { TodoCount } from "./TodoCount";
  * 归来摘要（ADR 0054）：模板化计数表 + 待办 + 交付清单。
  * 同一形状既作 IPC 返回也作 ReturnSummary 事件载荷。
  */
-export type ReturnSummary = { since_event: number, deliveries: Array<DeliveryRow>, reviews: ReviewCounts, flags: FlagCounts, permissions: PermCounts, stages: StageCounts, pending_todos: Array<TodoCount>, };
+export type ReturnSummary = { since_event: number, deliveries: Array<DeliveryRow>, reviews: ReviewCounts, flags: FlagCounts, permissions: PermCounts, stages: StageCounts, pending_todos: Array<TodoCount>, attention: ReturnAttention, };

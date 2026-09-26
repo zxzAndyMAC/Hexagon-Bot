@@ -594,6 +594,9 @@ impl Db {
 /// （如失速监视的门面测试）写入 System 事件后也要对账这一张表。
 #[cfg(test)]
 pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
+    "acceptance_exception",
+    "artifact_materialization",
+    "policy_recovery",
     "attachments_degraded",
     "context_compacted",
     "context_denied",

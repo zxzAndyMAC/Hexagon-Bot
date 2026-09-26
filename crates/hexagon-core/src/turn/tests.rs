@@ -552,6 +552,9 @@ fn usage_cap_blocks_scheduling() {
         &ctx,
         "chat",
         &crate::provider::Usage {
+            unpriced: false,
+            prompt_reported: true,
+            completion_reported: true,
             prompt_tokens: 1000,
             completion_tokens: 0,
         },

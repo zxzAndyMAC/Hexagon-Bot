@@ -42,14 +42,21 @@ fn new_skill(role: &str, lesson: &str) -> String {
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Qualification {
+    review_event: i64,
+    activation: i64,
+    evidence: crate::artifacts::evidence::ArtifactEvidence,
+}
+
 struct Gate {
     role: String,
     skills: Vec<String>,
-    reviewed: bool,
+    qualification: Option<Qualification>,
     delivered: bool,
 }
 
-fn gate(db: &Db, ctx: &ToolContext) -> Result<Gate, PropError> {
+fn gate(db: &Db, ctx: &ToolContext, review_event: Option<i64>) -> Result<Gate, PropError> {
     let role: String = db
         .conn()
         .query_row(
@@ -75,28 +82,94 @@ fn gate(db: &Db, ctx: &ToolContext) -> Result<Gate, PropError> {
             .query_map([&ctx.agent_id], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
     }
-    let reviewed: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='review_passed'",
-        rusqlite::params![ctx.project_id, ctx.agent_id],
-        |r| r.get(0),
+    // Reliability 20: the event's agent is the reviewer, not the author.
+    // Unknown legacy links cost a fresh review; accepting them could award
+    // another instance's experience, so eligibility deliberately fails closed.
+    let run = ctx
+        .stage_run_id
+        .clone()
+        .or(db.active_stage_run(&ctx.project_id)?.map(|r| r.id));
+    let activation: i64 = db.conn().query_row(
+        "SELECT COALESCE(MAX(id),0) FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='agent_activated'",
+        rusqlite::params![ctx.project_id,ctx.agent_id], |r| r.get(0))?;
+    let mut query = db.conn().prepare(
+        "SELECT e.id,e.payload FROM events e WHERE e.project_id=?1 AND e.kind='review_passed'
+         AND e.stage_run_id IS ?2 AND e.agent_id != ?3 AND e.id > ?4
+         AND json_extract(e.payload,'$.evidence.author')=?3
+         AND NOT EXISTS(SELECT 1 FROM events later WHERE later.project_id=e.project_id
+             AND later.kind IN ('review_passed','review_rejected') AND later.id>e.id
+             AND json_extract(later.payload,'$.artifact_id')=json_extract(e.payload,'$.artifact_id')
+             AND json_extract(later.payload,'$.reviewer')=json_extract(e.payload,'$.reviewer'))
+         ORDER BY e.id DESC",
     )?;
-    // 改进提案自己的交付不是「工作交付」。否则提交经验就会把自己冻住。
-    let delivered: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM events e
-         WHERE e.project_id=?1 AND e.kind='artifact_delivered'
-           AND COALESCE(json_extract(e.payload,'$.kind'), '') != '改进提案'
-           AND e.id > COALESCE((
-            SELECT MAX(id) FROM events
-            WHERE project_id=?1 AND agent_id=?2 AND kind='review_passed'
-         ), 0)",
-        rusqlite::params![ctx.project_id, ctx.agent_id],
-        |r| r.get(0),
-    )?;
+    let rows = query
+        .query_map(
+            rusqlite::params![ctx.project_id, run, ctx.agent_id, activation],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut qualification = None;
+    for (id, raw) in rows {
+        // Reliability 20 review: another artifact's later review must not
+        // invalidate the original source of an already queued lesson.
+        if review_event.is_some_and(|expected| expected != id) {
+            continue;
+        }
+        let payload: Value = serde_json::from_str(&raw).unwrap_or_default();
+        let Ok(evidence) = serde_json::from_value::<crate::artifacts::evidence::ArtifactEvidence>(
+            payload["evidence"].clone(),
+        ) else {
+            continue;
+        };
+        if evidence.stage != run
+            || evidence.project != ctx.project_id
+            || evidence.author != ctx.agent_id
+            || matches!(evidence.kind.as_str(), "改进提案" | "复审意见")
+        {
+            continue;
+        }
+        let delivery: bool = db.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='artifact_delivered'
+             AND stage_run_id IS ?3 AND id>?4 AND id<?5 AND json_extract(payload,'$.artifact_id')=?6)",
+            rusqlite::params![ctx.project_id,ctx.agent_id,run,activation,id,evidence.id], |r|r.get(0))?;
+        if delivery
+            && crate::artifacts::evidence::matches(
+                Some(&evidence),
+                crate::artifacts::evidence::capture(
+                    db,
+                    &ctx.repo_root,
+                    &ctx.project_id,
+                    &evidence.id,
+                )?
+                .as_ref(),
+            )
+        {
+            qualification = Some(Qualification {
+                review_event: id,
+                activation,
+                evidence,
+            });
+            break;
+        }
+    }
+    // A later delivery freezes this author's current work only. Reviewer
+    // reports, improvement proposals and another instance's deliveries do not.
+    let delivered = if let Some(source) = &qualification {
+        db.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
+            AND stage_run_id IS ?3 AND kind='artifact_delivered' AND id>?4
+            AND COALESCE(json_extract(payload,'$.kind'),'') NOT IN ('改进提案','复审意见'))",
+            rusqlite::params![ctx.project_id, ctx.agent_id, run, source.review_event],
+            |r| r.get(0),
+        )?
+    } else {
+        false
+    };
     Ok(Gate {
         role,
         skills,
-        reviewed: reviewed > 0,
-        delivered: delivered > 0,
+        qualification,
+        delivered,
     })
 }
 
@@ -112,8 +185,8 @@ pub fn propose(
     if lesson.is_empty() {
         return Err(PropError::Rejected("empty lesson".into()));
     }
-    let gate = gate(db, ctx)?;
-    if !gate.reviewed {
+    let gate = gate(db, ctx, None)?;
+    if gate.qualification.is_none() {
         crate::diag::note(
             "拒绝",
             true,
@@ -125,9 +198,7 @@ pub fn propose(
             "unreviewed",
             started,
         );
-        return Err(PropError::Rejected(
-            "unreviewed work cannot become experience".into(),
-        ));
+        return Err(PropError::UnreviewedExperience);
     }
     if gate.delivered {
         crate::diag::note(
@@ -141,9 +212,7 @@ pub fn propose(
             "delivered",
             started,
         );
-        return Err(PropError::Rejected(
-            "experience is frozen after delivery".into(),
-        ));
+        return Err(PropError::FrozenExperience);
     }
     if gate.role.contains('/') || gate.role.contains('\\') {
         return Err(PropError::Rejected(
@@ -236,7 +305,18 @@ pub fn propose(
             files.push(entry);
         }
     }
-    let payload = json!({"lesson": lesson, "files": files, "create": creating});
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(&ctx.project_id),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        None,
+        "experience",
+        "author_qualified",
+        started,
+    );
+    let payload = json!({"lesson": lesson, "files": files, "create": creating, "qualification": gate.qualification});
     let diff = format!("+ {lesson}");
     let body = format!(
         "---\nkind: 改进提案\nauthor: {}\nsurface: skill\ntarget: {}\n---\n\
@@ -264,6 +344,24 @@ pub fn apply(ctx: &ToolContext, db: &Db, body: &str, backup: &Path) -> Result<bo
     let Some(payload) = experience_payload(body) else {
         return Ok(false);
     };
+    // Reliability 20: a queued lesson cannot reuse a superseded review at apply.
+    let started = std::time::Instant::now();
+    let saved = serde_json::from_value::<Qualification>(payload["qualification"].clone()).ok();
+    let current = gate(db, ctx, saved.as_ref().map(|q| q.review_event))?;
+    if saved.is_none() || saved != current.qualification || current.delivered {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "experience_apply",
+            "stale_source",
+            started,
+        );
+        return Err(PropError::StaleExperience);
+    }
     let Some(files) = payload["files"].as_array() else {
         return Err(PropError::Rejected(
             "experience payload missing files".into(),

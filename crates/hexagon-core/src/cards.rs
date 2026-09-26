@@ -14,6 +14,7 @@
 //! 不拆分，拆分是后续 ADR 的事（payload 形状已由调用方各自解读）。
 
 use crate::db::Db;
+use rusqlite::OptionalExtension;
 use serde_json::Value;
 
 #[derive(Debug, thiserror::Error)]
@@ -382,7 +383,16 @@ pub fn queued_kind_counts(db: &Db, project_id: &str) -> Result<Vec<(String, i64)
     Ok(rows)
 }
 
-/// 幂等键查重（票 11）：同 agent+idem_key 的最新一张 permission 卡。
+/// reliability 08: upgrade only legacy permission cards without an action link.
+pub(crate) fn legacy_permission_ids(db: &Db, project: &str) -> Result<Vec<String>, CardsError> {
+    let mut st = db.conn().prepare("SELECT id FROM pending_questions WHERE project_id=?1 AND kind='permission' AND json_extract(payload,'$.action_id') IS NULL")?;
+    let rows = st
+        .query_map([project], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// 幂等键查重：同 agent+idem_key 的最新卡（含可靠性 08 的动作恢复卡）。
 /// 命中语义（queued 复用/answered 沿用裁决/expired 不算）由调用方解释。
 pub fn find_by_idem(db: &Db, agent_id: &str, idem_key: &str) -> Result<Option<Card>, CardsError> {
     let row = db
@@ -390,7 +400,7 @@ pub fn find_by_idem(db: &Db, agent_id: &str, idem_key: &str) -> Result<Option<Ca
         .query_row(
             "SELECT id, project_id, kind, agent_id, payload, state, idem_key, answered_by
              FROM pending_questions
-             WHERE agent_id=?1 AND idem_key=?2 AND kind='permission'
+             WHERE agent_id=?1 AND idem_key=?2
              ORDER BY id DESC LIMIT 1",
             rusqlite::params![agent_id, idem_key],
             |r| {
@@ -406,7 +416,7 @@ pub fn find_by_idem(db: &Db, agent_id: &str, idem_key: &str) -> Result<Option<Ca
                 ))
             },
         )
-        .ok();
+        .optional()?;
     let Some((id, project_id, kind, agent_id, payload, state, idem, answered_by)) = row else {
         return Ok(None);
     };
@@ -415,7 +425,7 @@ pub fn find_by_idem(db: &Db, agent_id: &str, idem_key: &str) -> Result<Option<Ca
         project_id,
         kind,
         agent_id,
-        payload: serde_json::from_str(&payload).unwrap_or_default(),
+        payload: serde_json::from_str(&payload)?,
         state: CardState::from_str(&state),
         idem_key: idem,
         answered_by,
@@ -481,6 +491,13 @@ pub fn ids_with_payload_like(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ids)
+}
+
+/// Reliability 11: a bounded retry can still be uncertain. Restore the same
+/// recovery identity instead of losing it after the intermediate result closes it.
+pub(crate) fn requeue_action_recovery(db: &Db, id: &str) -> Result<(), CardsError> {
+    db.conn().execute("UPDATE pending_questions SET state='queued',answered_by=NULL,answered_at=NULL WHERE id=?1 AND kind='recovery' AND json_extract(payload,'$.sub')='tool_outcome_unknown'", [id])?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -607,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn idem_lookup_finds_latest_permission_card() {
+    fn idem_lookup_finds_latest_card_in_agent_domain() {
         let db = db();
         let q1 = enqueue(
             &db,
@@ -628,7 +645,7 @@ mod tests {
         assert!(find_by_idem(&db, "a1", "other").unwrap().is_none());
         // 注意：idx_pending_idem 是 (agent, idem_key) 全局唯一——不区分 kind。
         // 同 agent 同 key 的第二张卡（哪怕别的 kind）会撞 UNIQUE；换 agent
-        // 才是独立幂等域，此时 kind='permission' 过滤排除它的 stamp 卡。
+        // 才是独立幂等域。reliability 08：恢复卡也查重，查询不再限制 kind。
         enqueue(
             &db,
             "p1",
@@ -638,7 +655,13 @@ mod tests {
             Some("sr1:0:bash:abc"),
         )
         .unwrap();
-        assert!(find_by_idem(&db, "a2", "sr1:0:bash:abc").unwrap().is_none());
+        assert_eq!(
+            find_by_idem(&db, "a2", "sr1:0:bash:abc")
+                .unwrap()
+                .unwrap()
+                .kind,
+            "stamp"
+        );
         assert_eq!(
             find_by_idem(&db, "a1", "sr1:0:bash:abc")
                 .unwrap()

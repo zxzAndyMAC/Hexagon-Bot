@@ -11,6 +11,7 @@ import { Icon } from './Icon'
 import { Row } from './Row'
 import { slotLabel } from '../modelpick'
 import { StageRail } from './StageBar'
+import { StageEvidence } from './StageEvidence'
 
 function TeamRow({ m }: { m: { id: string; role: string; model_slot: string | null; status: string } }) {
   const { t } = useTranslation()
@@ -77,6 +78,7 @@ export function SidePanel() {
       {tab === 'stages' && (
         <div style={{ flex: 1, overflowY: 'auto' }}>
           <StageRail />
+          <div style={{ padding: '0 12px' }}><StageEvidence /></div>
         </div>
       )}
 
@@ -100,8 +102,8 @@ export function SidePanel() {
                   截断，chip flexShrink:0+nowrap 保形；title 悬浮给全名。 */}
               <FileTypeIcon name={a.path.split('/').pop() ?? a.path} kind="file" size={13} style={{ alignSelf: 'center' }} />
               <span className="mono" title={a.path} style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.path}</span>
-              <span className={`chip ${a.status === 'stamped' ? 'amber' : a.status === 'superseded' ? '' : 'ok'}`} style={{ fontSize: 10, marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                {t(`side.${a.status}`, a.status)}
+              <span className={`chip ${a.materialization === 'pending_recovery' ? 'warn' : a.status === 'stamped' ? 'amber' : a.status === 'superseded' ? '' : 'ok'}`} style={{ fontSize: 10, marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                {a.materialization === 'pending_recovery' ? t('side.pendingRecovery') : t(`side.${a.status}`, a.status)}
               </span>
             </Row>
           ))}

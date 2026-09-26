@@ -103,8 +103,62 @@ pub enum StopReason {
 
 #[derive(Debug, Clone, Default)]
 pub struct Usage {
+    /// Additional billing dimensions outside the local two-rate table.
+    pub unpriced: bool,
+    /// Missing counters remain explicitly unknown; zero defaults are not
+    /// evidence that a request was free (D06 / reliability 12).
+    pub prompt_reported: bool,
+    pub completion_reported: bool,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+}
+
+impl Usage {
+    fn from_value(value: &Value, input: &str, output: &str) -> Self {
+        let mut usage = Self::default();
+        usage.observe(value, input, output);
+        usage
+    }
+
+    fn observe(&mut self, value: &Value, input: &str, output: &str) {
+        if let Some(tokens) = value[input].as_u64() {
+            self.prompt_tokens = tokens;
+            self.prompt_reported = true;
+        }
+        if let Some(tokens) = value[output].as_u64() {
+            self.completion_tokens = tokens;
+            self.completion_reported = true;
+        }
+        // Reliability 12 / Anthropic Usage + streaming accumulator contract:
+        // delta totals overwrite each field independently; absent fields retain
+        // earlier counts. Cache/server-tool charges need separate prices. A
+        // false unknown costs review; false known hides an unbudgeted charge.
+        self.unpriced |= value.as_object().is_some_and(|fields| {
+            fields.iter().any(|(key, v)| {
+                !matches!(
+                    key.as_str(),
+                    "input_tokens"
+                        | "output_tokens"
+                        | "prompt_tokens"
+                        | "completion_tokens"
+                        | "total_tokens"
+                        | "output_tokens_details"
+                ) && !(key == "service_tier" && v == "standard")
+                    && nonzero_usage(v)
+            })
+        });
+    }
+}
+
+fn nonzero_usage(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(v) => *v,
+        Value::Number(v) => v.as_f64() != Some(0.0),
+        Value::String(v) => !v.is_empty(),
+        Value::Array(v) => v.iter().any(nonzero_usage),
+        Value::Object(v) => v.values().any(nonzero_usage),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -133,10 +187,19 @@ pub type StreamSink<'a> = dyn FnMut(&StreamDelta) -> bool + 'a;
 pub enum ProviderError {
     #[error("scripted provider: script exhausted")]
     ScriptExhausted,
+    /// Reliability 13: cancellation/transport failure cannot erase usage
+    /// already received. The request ledger settles this before propagating cause.
+    #[error("{0}")]
+    WithUsage(Box<ProviderError>, Usage),
     #[error("transport: {0}")]
     Transport(String),
     #[error("refused: {0}")]
     Refused(String),
+    /// Reliability 13: local admission failure, never a supplier refusal.
+    #[error(
+        "budget unavailable for this request; wait for in-flight requests or adjust the budget"
+    )]
+    BudgetUnavailable,
     #[error("missing credential: {0}")]
     MissingCredential(String),
     /// 流被 sink 叫停（票 04）：显式终态——不是传输故障不可重试，
@@ -145,11 +208,45 @@ pub enum ProviderError {
     Interrupted,
 }
 
+impl ProviderError {
+    fn with_usage(self, usage: &Usage) -> Self {
+        if matches!(self, Self::WithUsage(..))
+            || !(usage.prompt_reported || usage.completion_reported)
+        {
+            self
+        } else {
+            Self::WithUsage(Box::new(self), usage.clone())
+        }
+    }
+
+    pub(crate) fn cause(&self) -> &Self {
+        match self {
+            Self::WithUsage(source, _) => source.cause(),
+            _ => self,
+        }
+    }
+
+    pub(crate) fn usage(&self) -> Option<&Usage> {
+        match self {
+            Self::WithUsage(_, usage) => Some(usage),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_cause(self) -> Self {
+        match self {
+            Self::WithUsage(source, _) => source.into_cause(),
+            _ => self,
+        }
+    }
+}
+
 /// 实例所服务模型的元数据（context-window 票 02 / ADR 0068）：
 /// `make_provider` 挂槽位时从 ModelEntry（或内置前缀表）解析好随实例
 /// 带上——撞限闸与 max_tokens 以实际服务的模型为准。None = 未知，
-/// 调用方回落旧默认（撞限闸 120k；Anthropic max_tokens 8192；OpenAI
-/// 不填 max_tokens）。测试桩保持 None：撞限测试恒定跑 120k，不随
+/// 调用方回落默认（撞限闸 120k；聊天 HTTP 输出上限 8192）。
+/// reliability 13 的预算预占与实际 HTTP 请求使用同一输出上限。
+/// 测试桩保持 None：撞限测试恒定跑 120k，不随
 /// 本机 providers.json 漂移。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelMeta {
@@ -158,6 +255,15 @@ pub struct ModelMeta {
 }
 
 pub trait ModelProvider: Send + Sync {
+    /// Enforced output bound, not an expected response length. Implementations
+    /// advertising this must apply it to the actual transport request (D06).
+    fn output_token_limit(&self) -> Option<u64> {
+        self.model_meta().max_output.filter(|v| *v > 0)
+    }
+    /// Physical model identity, if known; a logical slot is not a model name.
+    fn billing_model(&self) -> Option<&str> {
+        None
+    }
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
 
     /// 所服务模型的元数据（见 [`ModelMeta`]）。默认全 None = 未知。
@@ -184,7 +290,7 @@ pub trait ModelProvider: Send + Sync {
     ) -> Result<ChatResponse, ProviderError> {
         let resp = self.complete(req)?;
         if !emit_content_deltas(&resp.content, usize::MAX, sink) {
-            return Err(ProviderError::Interrupted);
+            return Err(ProviderError::Interrupted.with_usage(&resp.usage));
         }
         Ok(resp)
     }
@@ -385,7 +491,7 @@ impl ModelProvider for ScriptedProvider {
             self.chunk_chars
         };
         if !emit_content_deltas(&resp.content, n, sink) {
-            return Err(ProviderError::Interrupted);
+            return Err(ProviderError::Interrupted.with_usage(&resp.usage));
         }
         Ok(resp)
     }
@@ -530,10 +636,7 @@ pub mod openai_shape {
         Ok(ChatResponse {
             content,
             stop,
-            usage: Usage {
-                prompt_tokens: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
-                completion_tokens: v["usage"]["completion_tokens"].as_u64().unwrap_or(0),
-            },
+            usage: Usage::from_value(&v["usage"], "prompt_tokens", "completion_tokens"),
         })
     }
 
@@ -549,7 +652,7 @@ pub mod openai_shape {
         /// index → (id, name, arguments 片段缓冲)。BTreeMap 保 index 序。
         tools: std::collections::BTreeMap<usize, (String, String, String)>,
         finish: Option<String>,
-        usage: Usage,
+        pub(super) usage: Usage,
     }
 
     impl SseFold {
@@ -565,9 +668,8 @@ pub mod openai_shape {
             let v: Value = serde_json::from_str(data)
                 .map_err(|e| ProviderError::Transport(format!("sse json: {e}")))?;
             if v["usage"].is_object() {
-                self.usage.prompt_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
-                self.usage.completion_tokens =
-                    v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+                self.usage
+                    .observe(&v["usage"], "prompt_tokens", "completion_tokens");
             }
             for ch in v["choices"].as_array().into_iter().flatten() {
                 let d = &ch["delta"];
@@ -745,6 +847,7 @@ pub mod anthropic_shape {
     }
 
     pub fn from_response(v: &Value) -> Result<ChatResponse, ProviderError> {
+        let mut usage = Usage::from_value(&v["usage"], "input_tokens", "output_tokens");
         let mut content = Vec::new();
         if let Some(blocks) = v["content"].as_array() {
             for b in blocks {
@@ -769,6 +872,9 @@ pub mod anthropic_shape {
                     // web_search_tool_result 由供应商执行完毕才回传，
                     // 本地无对应工具；不折成 ToolUse 防止二次执行。
                     Some("server_tool_use") | Some("web_search_tool_result") => {
+                        // Reliability 13: keep billing uncertainty even if the
+                        // consumer cancels after this complete response arrives.
+                        usage.unpriced = true;
                         content.push(ContentBlock::Opaque { raw: b.clone() })
                     }
                     _ => {}
@@ -783,10 +889,7 @@ pub mod anthropic_shape {
         Ok(ChatResponse {
             content,
             stop,
-            usage: Usage {
-                prompt_tokens: v["usage"]["input_tokens"].as_u64().unwrap_or(0),
-                completion_tokens: v["usage"]["output_tokens"].as_u64().unwrap_or(0),
-            },
+            usage,
         })
     }
 
@@ -816,7 +919,7 @@ pub mod anthropic_shape {
     pub struct SseFold {
         blocks: Vec<ABlock>,
         stop: Option<String>,
-        usage: Usage,
+        pub(super) usage: Usage,
     }
 
     impl SseFold {
@@ -840,11 +943,17 @@ pub mod anthropic_shape {
             };
             match kind {
                 "message_start" => {
-                    self.usage.prompt_tokens =
-                        v["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0);
+                    self.usage
+                        .observe(&v["message"]["usage"], "input_tokens", "output_tokens");
                 }
                 "content_block_start" => {
                     let b = &v["content_block"];
+                    // Reliability 13: a later abort can discard content blocks,
+                    // but cannot erase evidence of unpriced native service use.
+                    self.usage.unpriced |= matches!(
+                        b["type"].as_str(),
+                        Some("server_tool_use" | "web_search_tool_result")
+                    );
                     self.blocks.push(match b["type"].as_str() {
                         Some("thinking") => {
                             let initial = b["thinking"].as_str().unwrap_or("").to_string();
@@ -907,9 +1016,8 @@ pub mod anthropic_shape {
                     if let Some(s) = v["delta"]["stop_reason"].as_str() {
                         self.stop = Some(s.into());
                     }
-                    if let Some(o) = v["usage"]["output_tokens"].as_u64() {
-                        self.usage.completion_tokens = o;
-                    }
+                    self.usage
+                        .observe(&v["usage"], "input_tokens", "output_tokens");
                 }
                 "message_stop" => return Ok(true),
                 // Anthropic 流内 error 事件（如 overloaded_error）：完整性优先直传
@@ -1020,6 +1128,29 @@ impl HttpProvider {
         }
     }
 
+    fn apply_openai_output_limit(&self, body: &mut Value) {
+        // Reliability 13 / OpenAI Chat Completions contract: max_tokens is
+        // incompatible with reasoning models; max_completion_tokens also
+        // includes reasoning tokens. Keep max_tokens for legacy-compatible
+        // third-party endpoints instead of silently dropping the bound.
+        let family = self.model.split('-').next().unwrap_or_default();
+        let reasoning = matches!(family, "o1" | "o3" | "o4")
+            || self
+                .model
+                .strip_prefix("gpt-")
+                .and_then(|s| s.split(['-', '.']).next())
+                .and_then(|s| s.parse::<u32>().ok())
+                .is_some_and(|major| major >= 5);
+        let key = if reasoning {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        if let Some(max) = self.output_token_limit() {
+            body[key] = serde_json::json!(max);
+        }
+    }
+
     fn map_err(e: ureq::Error) -> ProviderError {
         match e {
             // 4xx（除 429 限流）是配置/权限问题——不可重试直报
@@ -1054,12 +1185,18 @@ fn emit_fallback(
     sink: &mut StreamSink<'_>,
 ) -> Result<ChatResponse, ProviderError> {
     if !emit_content_deltas(&resp.content, usize::MAX, sink) {
-        return Err(ProviderError::Interrupted);
+        return Err(ProviderError::Interrupted.with_usage(&resp.usage));
     }
     Ok(resp)
 }
 
 impl ModelProvider for HttpProvider {
+    fn output_token_limit(&self) -> Option<u64> {
+        (self.kind != ProviderKind::Jev).then_some(self.meta.max_output.unwrap_or(8_192).max(1))
+    }
+    fn billing_model(&self) -> Option<&str> {
+        Some(&self.model)
+    }
     fn model_meta(&self) -> ModelMeta {
         self.meta.clone()
     }
@@ -1090,7 +1227,7 @@ impl ModelProvider for HttpProvider {
                 let body = anthropic_shape::to_request(
                     req,
                     &self.model,
-                    self.meta.max_output.unwrap_or(8_192),
+                    self.output_token_limit().unwrap_or(8_192),
                     &self.server_tools(&req.model_slot),
                 );
                 let mut resp = self
@@ -1107,14 +1244,9 @@ impl ModelProvider for HttpProvider {
                 let url = format!("{}/chat/completions", self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
-                // 票 02：max_output 已知就显式传——此前不传吃端点默认，
-                // 阿里系端点默认几 K 是长输出隐性截断源。None 保持不传，
-                // 不给不认识的模型猜上限。reasoning 族（o*/gpt-5）的
-                // max_completion_tokens 异构：端点不认 max_tokens 时换名，
-                // 属已知妥协，先记在此不另开形状分支。
-                if let Some(max) = self.meta.max_output {
-                    body["max_tokens"] = serde_json::json!(max);
-                }
+                // Reliability 13: the same advertised bound must be sent to
+                // the provider; relying on its default makes reservations false.
+                self.apply_openai_output_limit(&mut body);
                 let mut resp = self
                     .agent
                     .post(&url)
@@ -1145,7 +1277,7 @@ impl ModelProvider for HttpProvider {
                 let mut body = anthropic_shape::to_request(
                     req,
                     &self.model,
-                    self.meta.max_output.unwrap_or(8_192),
+                    self.output_token_limit().unwrap_or(8_192),
                     &self.server_tools(&req.model_slot),
                 );
                 body["stream"] = serde_json::json!(true);
@@ -1163,21 +1295,25 @@ impl ModelProvider for HttpProvider {
                 let mut blocks =
                     SseBlocks::new(std::io::BufReader::new(resp.body_mut().as_reader()));
                 let mut fold = anthropic_shape::SseFold::default();
-                while let Some((ev, data)) = blocks.next_block()? {
-                    if fold.event(&ev, &data, sink)? {
+                while let Some((ev, data)) =
+                    blocks.next_block().map_err(|e| e.with_usage(&fold.usage))?
+                {
+                    if fold
+                        .event(&ev, &data, sink)
+                        .map_err(|e| e.with_usage(&fold.usage))?
+                    {
                         break;
                     }
                 }
-                fold.finish()
+                let usage = fold.usage.clone();
+                fold.finish().map_err(|e| e.with_usage(&usage))
             }
             ProviderKind::OpenAi => {
                 let url = format!("{}/chat/completions", self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
-                // 同 complete()：max_output 已知才显式传（reasoning 族异构见彼处注释）。
-                if let Some(max) = self.meta.max_output {
-                    body["max_tokens"] = serde_json::json!(max);
-                }
+                // Reliability 13: streaming uses the same enforced bound as complete().
+                self.apply_openai_output_limit(&mut body);
                 body["stream"] = serde_json::json!(true);
                 // 末块带 usage（OpenAI 系端点通用支持；不识别的端点忽略字段）
                 body["stream_options"] = serde_json::json!({"include_usage": true});
@@ -1194,13 +1330,19 @@ impl ModelProvider for HttpProvider {
                 let mut blocks =
                     SseBlocks::new(std::io::BufReader::new(resp.body_mut().as_reader()));
                 let mut fold = openai_shape::SseFold::default();
-                while let Some((ev, data)) = blocks.next_block()? {
+                while let Some((ev, data)) =
+                    blocks.next_block().map_err(|e| e.with_usage(&fold.usage))?
+                {
                     let _ = ev; // OpenAI 无 event 行，只有 data
-                    if fold.data(&data, sink)? {
+                    if fold
+                        .data(&data, sink)
+                        .map_err(|e| e.with_usage(&fold.usage))?
+                    {
                         break;
                     }
                 }
-                fold.finish()
+                let usage = fold.usage.clone();
+                fold.finish().map_err(|e| e.with_usage(&usage))
             }
             ProviderKind::Jev => Err(ProviderError::Refused(
                 "Jev only answers closed choices, not chat".into(),
@@ -1285,10 +1427,7 @@ fn jev_choice(
         .as_str()
         .ok_or_else(|| ProviderError::Transport("jev response missing choice".into()))?
         .to_string();
-    let usage = Usage {
-        prompt_tokens: v["usage"]["input_tokens"].as_u64().unwrap_or(0),
-        completion_tokens: v["usage"]["output_tokens"].as_u64().unwrap_or(0),
-    };
+    let usage = Usage::from_value(&v["usage"], "input_tokens", "output_tokens");
     Ok(ChatResponse {
         content: vec![ContentBlock::Text { text: choice }],
         stop: StopReason::EndTurn,
@@ -1724,6 +1863,96 @@ mod tests {
         assert_eq!(n, 2);
     }
 
+    #[test]
+    fn request_budget_native_tool_billing_stays_unknown_after_stream_error() {
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1000,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"s1\",\"name\":\"web_search\",\"input\":{}}}\n\n",
+            "event: message_delta\ndata: {\"usage\":{\"output_tokens\":25}}\n\n",
+            "event: error\ndata: {\"error\":{\"type\":\"overloaded_error\"}}\n\n",
+        );
+        let base = serve_once(200, "text/event-stream", body);
+        let provider = http_provider(ProviderKind::Anthropic, &base);
+        let error = provider.stream(&empty_req(), &mut |_| true).unwrap_err();
+        assert!(matches!(error.cause(), ProviderError::Transport(_)));
+        let usage = error
+            .usage()
+            .expect("received usage survives stream errors");
+        assert_eq!(usage.prompt_tokens, 1000);
+        assert_eq!(usage.completion_tokens, 25);
+        assert!(
+            usage.unpriced,
+            "two-rate table cannot price native web search"
+        );
+    }
+
+    #[test]
+    fn request_budget_output_limit_reaches_each_http_transport() {
+        for (kind, model, key) in [
+            (ProviderKind::Anthropic, "claude-test", "max_tokens"),
+            (ProviderKind::OpenAi, "legacy-compatible", "max_tokens"),
+            (ProviderKind::OpenAi, "o3", "max_completion_tokens"),
+            (ProviderKind::OpenAi, "gpt-5", "max_completion_tokens"),
+        ] {
+            for streaming in [false, true] {
+                for limit in [None, Some(1234)] {
+                    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                    let base = format!("http://{}", listener.local_addr().unwrap());
+                    let peer = std::thread::spawn(move || {
+                        use std::io::{BufRead, Read, Write};
+                        let (mut socket, _) = listener.accept().unwrap();
+                        socket
+                            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                            .unwrap();
+                        let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+                        let mut size = 0;
+                        loop {
+                            let mut line = String::new();
+                            reader.read_line(&mut line).unwrap();
+                            if let Some(value) =
+                                line.to_ascii_lowercase().strip_prefix("content-length:")
+                            {
+                                size = value.trim().parse::<usize>().unwrap();
+                            }
+                            if line.trim().is_empty() {
+                                break;
+                            }
+                        }
+                        let mut bytes = vec![0; size];
+                        reader.read_exact(&mut bytes).unwrap();
+                        let body: Value = serde_json::from_slice(&bytes).unwrap();
+                        let response = r#"{"content":[],"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"stop_reason":"end_turn"}"#;
+                        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
+                        body
+                    });
+                    let mut provider = http_provider_with_meta(
+                        kind.clone(),
+                        &base,
+                        ModelMeta {
+                            context_window: None,
+                            max_output: limit,
+                        },
+                    );
+                    provider.model = model.into();
+                    if streaming {
+                        provider.stream(&empty_req(), &mut |_| true).unwrap();
+                    } else {
+                        provider.complete(&empty_req()).unwrap();
+                    }
+                    let sent = peer.join().unwrap();
+                    assert_eq!(
+                        sent[key],
+                        limit.unwrap_or(8192),
+                        "{model} stream={streaming}"
+                    );
+                    if key == "max_completion_tokens" {
+                        assert!(sent.get("max_tokens").is_none());
+                    }
+                }
+            }
+        }
+    }
+
     /// 一次性 canned HTTP 端点：读完整请求后回固定响应，返回 base_url。
     fn serve_once(status: u16, content_type: &'static str, body: &'static str) -> String {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2136,5 +2365,17 @@ mod server_tool_tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("native web search"));
+    }
+    proptest::proptest! {
+        #[test]
+        fn unmodeled_billing_dimensions_never_look_fully_priced(count in 1u64..1_000_000) {
+            let mut usage = Usage::from_value(&serde_json::json!({"input_tokens":10,"cache_creation_input_tokens":count}), "input_tokens", "output_tokens");
+            usage.observe(&serde_json::json!({"output_tokens":5}), "input_tokens", "output_tokens");
+            proptest::prop_assert!(usage.unpriced);
+            proptest::prop_assert_eq!(usage.prompt_tokens,10);
+            proptest::prop_assert_eq!(usage.completion_tokens,5);
+            let standard = Usage::from_value(&serde_json::json!({"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"service_tier":"standard"}), "input_tokens", "output_tokens");
+            proptest::prop_assert!(!standard.unpriced);
+        }
     }
 }

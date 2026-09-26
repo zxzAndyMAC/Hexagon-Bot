@@ -259,11 +259,7 @@ impl JudgeBackend for LlmJudge<'_> {
         // 超时由 provider 层 timeout_global 兜底（provider.rs:767，180s）——
         // 同步调用不另起超时机制,超了走 Err → needs-human。
         let mut sink = |_d: &crate::provider::StreamDelta| true;
-        let resp = match self.provider.stream(&req, &mut sink) {
-            Ok(r) => r,
-            Err(e) => return needs_human(&e.to_string()),
-        };
-        if let Some(obs) = &self.obs {
+        let response = if let Some(obs) = &self.obs {
             let ctx = crate::tools::ToolContext {
                 project_id: obs.project_id.into(),
                 agent_id: input.author_agent_id.clone(),
@@ -275,8 +271,22 @@ impl JudgeBackend for LlmJudge<'_> {
                 caps: Default::default(),
                 ..Default::default()
             };
-            let _ = crate::usage::record(obs.db, &ctx, self.slot, &resp.usage, 0);
-        }
+            crate::usage::request(
+                obs.db,
+                &ctx,
+                self.slot,
+                "proposal_advice",
+                self.provider,
+                Some(&req),
+                || self.provider.stream(&req, &mut sink),
+            )
+        } else {
+            self.provider.stream(&req, &mut sink)
+        };
+        let resp = match response {
+            Ok(r) => r,
+            Err(e) => return needs_human(&e.to_string()),
+        };
         let text: String = resp
             .content
             .iter()

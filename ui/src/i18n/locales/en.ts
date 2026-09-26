@@ -1,4 +1,9 @@
 export default {
+  returnAttention: {"unresolved_actions": "Unknown action outcomes: {{count}}", "unknown_cost_records": "Cost not yet known: {{count}}", "budget_stops": "Budget/capacity stops while away: {{count}}", "exception_decisions": "Exception decisions while away (not passes): {{count}}", "policy_candidates": "Policy candidates: {{count}}"},
+  dataBoundary: {"edit": "Stored markers keep existing values. Enter a new value to replace it, or remove it to delete it. Reload after configuration changes.", "mcpStorage": "MCP environment variables and headers are stored in local configuration files as plaintext; the displayed model credential backend does not protect those files.", "title": "Data storage and recipients", "local": "Local: project state, messages, traces, tool results and artifacts are stored on this device. Diagnostic logs are also local.", "model": "Models: requests send selected instructions, messages and tool context to the configured provider. Provider processing and retention follow its own terms.", "mcp": "MCP: tools receive their call arguments. A local stdio service is a separate process and may contact external services; remote entries are configured destinations, not proof of an active connection.", "terminal": "Terminal: network access is controlled by terminal permissions and isolation. Blocking terminal networking does not block model or MCP requests. Subagents only receive MCP capabilities the host can enforce as read-only.", "retention": "Retention: history and files remain until explicitly managed. Credential scanning locates possible historical exposures; it does not automatically erase history or recall data already sent.", "credentials": "Credential storage", "configured": "Configured recipients (origin only; credentials, paths and URL parameters omitted). Enabled configuration does not prove a request was sent.", "empty": "No configured recipients.", "unavailable": "Configuration could not be read; recipients are unknown.", "backend_keychain": "System credential store", "backend_dev_file": "Local plaintext file (development backend)", "backend_memory": "In-memory store", "backend_custom": "Custom credential store", "kind_model": "Model", "kind_mcp": "MCP", "kind_search": "Search", "localProcess": "Local service process; its external recipients depend on the service", "unknownEndpoint": "Destination unavailable", "enabled": "Configured enabled", "disabled": "Configured disabled"},
+  policy: {"title": "Policy candidate", "adopt": "Adopt candidate", "report": "View candidate and replay report", "scores": "Replay scores: current {{baseline}} · candidate {{candidate}}", "ownerOnly": "This candidate needs your approval. A higher replay score does not prove task quality. Adoption rechecks the current baseline and constraints.", "recovery": "The policy change needs recovery. Current files are preserved. Restore a verified before/after version and reopen the project."},
+  exceptions: {"title": "Delivery exception", "request": "Request exception", "accept": "Accept selected exceptions", "accepted": "Accepted by exception", "cancel": "Cancel request", "reason": "Reason", "hint": "Select specific unmet requirements and explain why this delivery is acceptable. Original results remain unchanged.", "stale": "Delivery changed. Cancel this request and request an exception for the current version."},
+  evidence: {"requirement_action": "Unresolved action: {{value}}", "deliveryChanged": "Delivery changed or cannot be verified", "requirement_artifact": "Deliverable: {{value}}", "requirement_review": "Review: {{value}}", "requirement_check": "Check: {{value}}", "requirement_stage": "Stage: {{value}}", "title": "Current delivery evidence", "noChecks": "No checks declared", "missing": "Not run", "passed": "Passed for current delivery", "failed": "Failed", "stale": "Outdated evidence", "unavailable": "Evidence unavailable", "exit": "Recorded exit code: {{code}}", "missingRequirements": "Requirements still unmet"},
   app: { title: 'Hexagon-Bot', loading: 'Loading workspace…', untitledProject: 'Untitled project' },
   topbar: {
     away: 'Watch',
@@ -14,7 +19,7 @@ export default {
     fastpath: 'fast path',
     sleepAllHint: 'Sleep the whole team (or /sleep)',
     sandboxOn: 'sandboxed', sandboxOnTip: 'Agent commands run inside an OS sandbox (writes confined to repo; net off by default)',
-    sandboxOff: 'no sandbox', sandboxOffTip: 'No OS sandbox on this platform — commands run unsandboxed (still approval-gated)',
+    sandboxOff: 'no sandbox', sandboxOffTip: 'No usable OS sandbox — terminal execution is blocked; permitted reads remain available',
     autonomyMenu: 'Change autonomy level',
     viewFlow: 'View flow',
     flowClose: 'Close',
@@ -148,6 +153,10 @@ export default {
     system: 'system',
   },
   sys: {
+    policy_recovery: "Policy change recovery",
+    artifact_materialization: "Artifact delivery recovery",
+    acceptance_exception: "Exception acceptance",
+
     attachments_degraded: 'images dropped — model slot lacks vision',
     context_compacted: 'context compacted',
     context_denied: 'context request denied',
@@ -171,6 +180,7 @@ export default {
     stall_closed: 'stall closed',
   },
   cards: {
+    writeTargets: 'Write targets are rechecked before execution. If changed, reread and create a new action.',
     inlineDiff: 'Inline diff',
     openFullDiff: 'Open full view',
     noDiff: 'No diff block',
@@ -236,6 +246,14 @@ export default {
     rollbackHint: 'Roll back the change applied by this proposal',
     handoff: 'handoff',
     recovery: 'Interrupted',
+        actionReadyHint: "This action was authorized but never started. Continue resumes the same action after checking current permissions.",
+        reconcileAction: "Reconcile outcome",
+        abandonAction: "Abandon action",
+        retryAction: "Start new attempt",
+        actionReason: "Reason for owner decision",
+        duplicateRisk: "I accept that a new attempt may duplicate the original effect.",
+        actionUnknown: "Tool outcome unknown",
+        actionUnknownHint: "This action may already have taken effect. Its execution chain is paused until the outcome is reconciled; ordinary approval does not retry it.",
         recoveryHint: 'A turn was killed on last exit or suspended on network timeout. Continue restores the stage and automatically restarts the affected agent.',
         recover: 'Continue',
     install: 'Install',
@@ -262,7 +280,7 @@ export default {
     finalNeedsForm: 'Final acceptance needs a stage and a revision note — use the card',
     stallNoRetry: 'This stall card has no Try again — use Got it',
   },
-  side: {
+  side: { pendingRecovery: "Pending recovery",
     usage: 'Usage',
     artifacts: 'Artifacts',
     team: 'Team',
@@ -322,6 +340,13 @@ export default {
     initializing: 'Initializing session…',
   },
   usage: {
+    reservedEstimate: 'In-flight estimate',
+    unknownTokens: 'Unknown token usage',
+    unknownCost: "Unknown cost",
+    budgetUnknown: "Unknown charges mean the monetary budget cannot be guaranteed.",
+    knownAmount: "Known amount",
+    historicalUnknown: "Unclassified historical records: {{count}}",
+
     spark7d: 'Last 7 days · tokens',
     sparkToday: 'Today / budget',
     capHit: 'Usage cap reached — team sleeping',
@@ -336,7 +361,7 @@ export default {
     openDashboard: 'Open usage dashboard',
     detail: 'Detail',
     budget: 'Budget',
-    totalTokens: 'Total tokens',
+    totalTokens: 'Recorded tokens',
     ctxPressure: 'Context pressure · 14d',
     overflowCards: 'Overflow cards',
     compactions: 'Compactions',
@@ -371,7 +396,7 @@ export default {
   },
   tabs: { timeline: 'Timeline', close: 'Close', split: 'Split editor', more: 'More tabs',
     splitNeedsWidth: 'Split needs a wider window (≥720px)', },
-  art: { content: 'Content', compare: 'Compare', version: 'v{{n}}', vs: 'vs', unavailable: 'content unavailable', preview: 'Preview', source: 'Source' },
+  art: { reviewPassed: "Review passed", reviewRejected: "Review rejected", reviewStale: "Review outdated", currentWorktree: "Current worktree", pendingRecovery: "Delivery registration is incomplete. Current files are preserved; this artifact cannot be accepted until recovery proves its state.", content: 'Content', compare: 'Compare', version: 'v{{n}}', vs: 'vs', unavailable: 'content unavailable', preview: 'Preview', source: 'Source' },
   md: { copy: 'Copy', copied: 'Copied' },
   exec: { exit: 'exit {{code}}', noOutput: '(no output)', tail: '… showing last 32 KB' },
   agent: {
@@ -554,7 +579,7 @@ export default {
     agentsDraftHint: 'Draft — written at project creation once confirmed (never overwrites)',
     keysHint: 'Selected roles with missing model keys block launch — fill them or go back and uncheck',
     keyPlaceholder: 'Paste API key',
-    keySave: 'Save to keychain',
+    keySave: "Save credential",
     keyOk: 'Ready',
     keysBlocked: 'Missing keys block launch',
     goSettings: 'Open settings',
@@ -597,7 +622,7 @@ export default {
   },
 
   providers: {
-    hint: 'Model providers are global — slot bindings map each role model slot to a provider + model; API keys live in the OS keychain (write-only). A "default" slot covers unbound slots.',
+    hint: "Model providers are global. Slot bindings select a provider and model; default covers unbound slots. Keys use the active credential backend shown in General settings.",
     filter: 'Filter providers…',
     empty: 'No providers yet — add one so agents can call a model',
     preset: 'built-in', pickHint: 'Pick a provider on the left', name: 'Name',
@@ -681,6 +706,7 @@ export default {
     floorsHint: 'At every level: final acceptance, safety nets, and new-permission questions wait for the owner. Earlier stamp gates auto-pass only at L3 and above.',
   },
   mcp: {
+    starting: 'Initializing…',
     intro: 'Global inventory ~/.hexagon/mcp.json + project .hexagon/mcp.json (same-name project wins); reopen the project after changes.',
     empty: 'No services — add one below, or scan local platforms.',
     origin_global: 'Global', origin_project: 'Project',
@@ -749,6 +775,13 @@ export default {
     confirmIntake: 'Confirm opening draft',
   },
   errors: {
+    policy_stale: "Policy baseline or candidate changed. Reevaluate and submit a new candidate.", policy_constraint: "Policy candidate violates current constraints or permissions.", policy_owner_required: "Policy candidates require owner adoption.", policy_recovery: "The policy change needs recovery. Current files are preserved. Restore a verified before/after version and reopen the project.",
+    unreviewed_experience: "Only currently reviewed work by this author can provide experience.", frozen_experience: "Experience is frozen after this author delivers the current work.", stale_experience: "The reviewed work changed or was delivered. Obtain a current review and submit a new lesson.",
+    invalid_acceptance_exception: "Select current requirements and provide a reason in an exception request.", stale_acceptance_version: "Delivery changed. Request an exception for the current version.", unresolved_delivery_action: "Resolve unknown action outcomes before accepting exceptions.",
+    stale_review: "Review target changed. Read and review the current version again.", materialization_pending: "Artifact delivery requires recovery. Current files are preserved; restore a provable state before delivering again.",
+    write_conflict: 'The write targets changed, are busy, or have no saved approval evidence. Reread the files and create a new action.',
+    metadata_conflict: 'The artifact kind conflicts with its metadata header. Align them and submit again.',
+    budget_unavailable: 'Insufficient available budget for this request. Wait for in-flight requests or adjust the budget.',
     no_intake_draft: 'No opening draft to confirm',
     intake_brief_exists: 'Project instructions already exist — not overwritten',
     actionFailed: 'Action failed — {{detail}}',

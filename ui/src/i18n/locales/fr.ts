@@ -1,4 +1,9 @@
 export default {
+  returnAttention: {"unresolved_actions": "Actions au résultat inconnu : {{count}}", "unknown_cost_records": "Coût encore inconnu : {{count}}", "budget_stops": "Arrêts de budget/capacité pendant l’absence : {{count}}", "exception_decisions": "Décisions d’exception pendant l’absence (pas des validations) : {{count}}", "policy_candidates": "Propositions de politique : {{count}}"},
+  dataBoundary: {"edit": "Les marqueurs conservent les valeurs enregistrées. Saisissez une valeur pour la remplacer, ou effacez-la pour la supprimer. Rechargez après modification de configuration.", "mcpStorage": "Les variables et en-têtes MCP sont conservés en clair dans les fichiers locaux ; le stockage des identifiants de modèles affiché ne protège pas ces fichiers.", "title": "Stockage et destinataires", "local": "Local : état du projet, messages, traces, résultats, livrables et journaux de diagnostic sont conservés sur cet appareil.", "model": "Modèles : les requêtes transmettent les instructions, messages et contexte sélectionnés au fournisseur configuré. Traitement et conservation suivent ses conditions.", "mcp": "MCP : les outils reçoivent les arguments. Un service stdio local est un autre processus et peut contacter des services externes. Une entrée distante ne prouve pas une connexion active.", "terminal": "Terminal : les permissions et l’isolation contrôlent le réseau. Le bloquer ne bloque pas les requêtes des modèles ou MCP. Les sous-agents reçoivent uniquement des capacités MCP dont l’hôte impose la lecture seule.", "retention": "Conservation : fichiers et historique restent jusqu’à leur gestion explicite. Le scan des identifiants repère les fuites historiques possibles ; il ne supprime rien automatiquement et ne rappelle pas les données envoyées.", "credentials": "Stockage des identifiants", "configured": "Destinataires configurés (origine seule ; identifiants, chemins et paramètres URL omis). Une configuration active ne prouve aucun envoi.", "empty": "Aucun destinataire configuré.", "unavailable": "Configuration illisible ; destinataires inconnus.", "backend_keychain": "Stockage système", "backend_dev_file": "Fichier local en clair (développement)", "backend_memory": "Mémoire", "backend_custom": "Stockage personnalisé", "kind_model": "Modèle", "kind_mcp": "MCP", "kind_search": "Recherche", "localProcess": "Processus local ; les destinataires externes dépendent du service", "unknownEndpoint": "Destination indisponible", "enabled": "Activé dans la configuration", "disabled": "Désactivé dans la configuration"},
+  policy: {"title": "Politique candidate", "adopt": "Adopter la candidate", "report": "Voir la candidate et le rapport", "scores": "Scores de rejeu : actuel {{baseline}} · candidat {{candidate}}", "ownerOnly": "Votre approbation est requise. Un meilleur score de rejeu ne prouve pas la qualité réelle. La base et les contraintes sont revérifiées avant adoption.", "recovery": "La modification doit être récupérée. Les fichiers actuels sont conservés. Restaurez une version vérifiée avant ou après modification, puis rouvrez le projet."},
+  exceptions: {"title": "Acceptation dérogatoire", "request": "Demander une dérogation", "accept": "Accepter les dérogations choisies", "accepted": "Accepté par dérogation", "cancel": "Annuler la demande", "reason": "Motif", "hint": "Sélectionnez les exigences non satisfaites et justifiez l’acceptation de cette livraison. Les résultats initiaux sont conservés.", "stale": "La livraison a changé. Annulez cette demande et recommencez pour la version actuelle."},
+  evidence: {"requirement_action": "Action non résolue : {{value}}", "deliveryChanged": "Livraison modifiée ou impossible à vérifier", "requirement_artifact": "Livrable : {{value}}", "requirement_review": "Revue : {{value}}", "requirement_check": "Vérification : {{value}}", "requirement_stage": "Étape : {{value}}", "title": "Preuves de la livraison actuelle", "noChecks": "Aucune vérification déclarée", "missing": "Non exécutée", "passed": "Réussie pour la livraison actuelle", "failed": "Échec", "stale": "Preuves périmées", "unavailable": "Preuves indisponibles", "exit": "Code de sortie enregistré : {{code}}", "missingRequirements": "Exigences non satisfaites"},
   app: { title: 'Hexagon-Bot', loading: 'Chargement de l’espace de travail…', untitledProject: 'Projet sans titre' },
   topbar: {
     away: 'Veiller',
@@ -14,7 +19,7 @@ export default {
     fastpath: 'voie rapide',
     sleepAllHint: 'Suspendre toute l’équipe (ou /sleep)',
     sandboxOn: 'sandbox', sandboxOnTip: 'Les commandes agent tournent dans un sandbox OS (écriture limitée au dépôt ; réseau coupé par défaut)',
-    sandboxOff: 'sans sandbox', sandboxOffTip: 'Pas de sandbox OS sur cette plateforme — commandes non isolées (approbation toujours requise)',
+    sandboxOff: 'sans sandbox', sandboxOffTip: 'Sans sandbox OS utilisable, exécution du terminal bloquée ; lectures autorisées disponibles',
     autonomyMenu: "Changer le niveau d'autonomie",
     viewFlow: 'Voir le flux',
     flowClose: 'Fermer',
@@ -148,6 +153,10 @@ export default {
     system: 'système',
   },
   sys: {
+    policy_recovery: "Récupération de politique",
+    artifact_materialization: "Récupération de livraison",
+    acceptance_exception: "Acceptation par exception",
+
     attachments_degraded: 'images omises — le modele sans vision',
     context_compacted: 'contexte compacté',
     context_denied: 'demande de contexte refusée',
@@ -171,6 +180,7 @@ export default {
     stall_closed: 'blocage clos',
   },
   cards: {
+    writeTargets: 'Les fichiers cibles sont revérifiés avant écriture. En cas de changement, relisez-les et créez une nouvelle action.',
     inlineDiff: 'Diff intégré',
     openFullDiff: 'Ouvrir la vue complète',
     noDiff: 'Aucun bloc diff',
@@ -236,6 +246,14 @@ export default {
     rollbackHint: 'Annule le changement appliqué par cette proposition',
     handoff: 'passation',
     recovery: 'Interrompu',
+        actionReadyHint: "Cette action a été autorisée, mais pas commencée. Continuer reprend la même action après vérification des droits actuels.",
+        reconcileAction: "Vérifier le résultat",
+        abandonAction: "Abandonner l’action",
+        retryAction: "Nouvelle tentative",
+        actionReason: "Motif de la décision",
+        duplicateRisk: "J’accepte qu’une nouvelle tentative puisse produire un effet en double.",
+        actionUnknown: "Résultat de l’outil inconnu",
+        actionUnknownHint: "Cette action a peut-être déjà eu un effet. La chaîne est suspendue jusqu’à vérification du résultat ; une approbation ordinaire ne la relance pas.",
         recoveryHint: 'Un tour a été tué à la fermeture ou suspendu après un délai réseau. Continuer restaure l’étape et relance automatiquement l’agent concerné.',
         recover: 'Continuer',
     install: 'Installer',
@@ -262,7 +280,7 @@ export default {
     finalNeedsForm: "L'acceptation finale exige une étape et une note — remplissez la carte",
     stallNoRetry: 'Cette carte de blocage n\'a pas Réessayer — utilisez Compris',
   },
-  side: {
+  side: { pendingRecovery: "Récupération en attente",
     usage: 'Usage',
     artifacts: 'Artefacts',
     team: 'Équipe',
@@ -322,6 +340,13 @@ export default {
     initializing: 'Initialisation de la session…',
   },
   usage: {
+    reservedEstimate: 'Estimation des requêtes en cours',
+    unknownTokens: 'Utilisation de tokens inconnue',
+    unknownCost: "Coût inconnu",
+    budgetUnknown: "Les frais inconnus empêchent de garantir le budget monétaire.",
+    knownAmount: "Montant connu",
+    historicalUnknown: "Historique non classé : {{count}}",
+
     spark7d: '7 derniers jours · tokens',
     sparkToday: 'Aujourd’hui / budget',
     capHit: 'Plafond d’usage atteint — équipe suspendue',
@@ -336,7 +361,7 @@ export default {
     openDashboard: 'Ouvrir le tableau d’usage',
     detail: 'Détail',
     budget: 'Budget',
-    totalTokens: 'Tokens totaux',
+    totalTokens: 'Tokens enregistrés',
     ctxPressure: 'Pression de contexte · 14 j',
     overflowCards: 'Cartes de dépassement',
     compactions: 'Compactages',
@@ -371,7 +396,7 @@ export default {
   },
   tabs: { timeline: 'Chronologie', close: 'Fermer', split: 'Éditeur divisé', more: 'Plus d’onglets',
     splitNeedsWidth: 'La vue scindée exige une fenêtre plus large (≥720px)', },
-  art: { content: 'Contenu', compare: 'Comparer', version: 'v{{n}}', vs: '↔', unavailable: 'contenu indisponible', preview: 'Aperçu', source: 'Source' },
+  art: { reviewPassed: "Revue approuvée", reviewRejected: "Revue rejetée", reviewStale: "Revue obsolète", currentWorktree: "Arbre de travail actuel", pendingRecovery: "L’enregistrement de la livraison est incomplet. Les fichiers actuels sont conservés ; cet artefact ne peut être accepté avant vérification de son état.", content: 'Contenu', compare: 'Comparer', version: 'v{{n}}', vs: '↔', unavailable: 'contenu indisponible', preview: 'Aperçu', source: 'Source' },
   md: { copy: 'Copier', copied: 'Copié' },
   exec: { exit: 'exit {{code}}', noOutput: '(aucune sortie)', tail: '… 32 derniers Ko' },
   agent: {
@@ -554,7 +579,7 @@ export default {
     agentsDraftHint: 'Brouillon — écrit à la création du projet (jamais d’écrasement)',
     keysHint: 'Un rôle sans clé de modèle bloque le lancement — renseignez-la ou décochez-le',
     keyPlaceholder: 'Coller la clé API',
-    keySave: 'Enregistrer au trousseau',
+    keySave: "Enregistrer l’identifiant",
     keyOk: 'Prêt',
     keysBlocked: 'Clés manquantes : lancement bloqué',
     goSettings: 'Ouvrir les réglages',
@@ -597,7 +622,7 @@ export default {
   },
 
   providers: {
-    hint: 'Les fournisseurs sont globaux — les liaisons de slot associent chaque slot de rôle à fournisseur+modèle ; les clés API vont au trousseau de l’OS (écriture seule). « default » couvre les slots non liés.',
+    hint: "Les fournisseurs sont globaux. Les slots choisissent fournisseur et modèle ; default couvre les slots non liés. Les clés utilisent le stockage actif affiché dans Général.",
     filter: 'Filtrer les fournisseurs…',
     empty: 'Aucun fournisseur — ajoutez-en un pour que les agents appellent un modèle',
     preset: 'intégré', pickHint: 'Choisissez un fournisseur à gauche', name: 'Nom',
@@ -681,6 +706,7 @@ export default {
     floorsHint: "À tout niveau : l'acceptation finale, les filets de sécurité et les nouvelles permissions attendent le responsable. Les validations plus tôt ne passent seules qu'à partir de L3.",
   },
   mcp: {
+    starting: 'Initialisation…',
     intro: 'Inventaire global ~/.hexagon/mcp.json + projet .hexagon/mcp.json (à nom égal le projet gagne) ; rouvrez le projet après modification.',
     empty: 'Aucun service — créez-en un ci-dessous ou scannez les plateformes locales.',
     origin_global: 'Global', origin_project: 'Projet',
@@ -749,6 +775,13 @@ export default {
     confirmIntake: 'Confirmer le brouillon d’ouverture',
   },
   errors: {
+    policy_stale: "La base ou la candidate a changé. Réévaluez et soumettez une nouvelle candidate.", policy_constraint: "La candidate viole les contraintes ou permissions actuelles.", policy_owner_required: "Une politique candidate doit être adoptée par le responsable.", policy_recovery: "La modification doit être récupérée. Les fichiers actuels sont conservés. Restaurez une version vérifiée avant ou après modification, puis rouvrez le projet.",
+    unreviewed_experience: "Seul le travail actuel de cet auteur ayant passé une revue peut fournir une expérience.", frozen_experience: "L’expérience est figée après la livraison du travail actuel par cet auteur.", stale_experience: "Le travail revu a changé ou a été livré. Faites-le réévaluer avant de soumettre une nouvelle leçon.",
+    invalid_acceptance_exception: "Sélectionnez les exigences actuelles et fournissez un motif.", stale_acceptance_version: "La livraison a changé. Demandez une dérogation pour la version actuelle.", unresolved_delivery_action: "Vérifiez les actions au résultat inconnu avant d’accepter les dérogations.",
+    stale_review: "La cible a changé. Relisez et examinez la version actuelle.", materialization_pending: "La livraison nécessite une récupération. Les fichiers actuels sont conservés ; rétablissez un état vérifiable avant une nouvelle livraison.",
+    write_conflict: 'Les fichiers cibles ont changé, sont occupés ou leur état approuvé manque. Relisez-les et créez une nouvelle action.',
+    metadata_conflict: 'Le type du livrable contredit son en-tête de métadonnées. Corrigez-le et soumettez à nouveau.',
+    budget_unavailable: 'Budget disponible insuffisant pour cette requête. Attendez les requêtes en cours ou ajustez le budget.',
     no_intake_draft: 'Aucun brouillon d’ouverture à confirmer',
     intake_brief_exists: 'Les instructions du projet existent déjà — pas d’écrasement',
     actionFailed: 'L’action a échoué — {{detail}}',

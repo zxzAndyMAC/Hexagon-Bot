@@ -4,4 +4,4 @@
  * 待审/在途提案队列（UI 提案卡数据源）。
  * 提案队列行（ADR 0054）：proposals×artifacts 联表读模型。
  */
-export type ProposalRow = { id: string, surface: 'skill' | 'pack_copy' | 'agents_md', target: string, status: 'queued' | 'in_review' | 'rejected' | 'awaiting_stamp' | 'active' | 'rolled_back', author: string, artifact_path: string | null, };
+export type ProposalRow = { id: string, surface: 'skill' | 'pack_copy' | 'agents_md', target: string, status: 'queued' | 'in_review' | 'rejected' | 'awaiting_stamp' | 'active' | 'rolled_back', author: string, artifact_path: string | null, recovery_pending?: boolean, };

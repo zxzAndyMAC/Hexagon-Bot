@@ -276,6 +276,13 @@ pub fn propose(
         verdict.backend,
     ));
 
+    // Reliability 21: structured candidate data is applied by the host. The
+    // human-readable knob diff is not a shell patch or authority to edit files.
+    body.push_str(&format!(
+        "\n```policy\n{}\n```\n",
+        serde_json::json!({"baseline":base,"candidate":cand})
+    ));
+
     // 产物交付 + 提案入队——全走既有受管路径
     let aid = crate::artifacts::deliver(
         db,

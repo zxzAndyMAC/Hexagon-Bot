@@ -17,14 +17,16 @@ export function ArtifactTab({ path }: { path: string }) {
   const { askConfirm, pushToast } = useUiStore()
   // ui-audit-2 票 08：本路径若有 active 提案 → 露「回滚提案」入口
   // （此前 rollbackProposal 命令死接线，cards.rollback 是死 i18n 键）。
+  const [policyRecovery, setPolicyRecovery] = useState(false)
   const [activeProposal, setActiveProposal] = useState<string | null>(null)
   useEffect(() => {
     api.proposals()
       .then((all) => {
+        setPolicyRecovery(all.some((r) => r.artifact_path === path && r.recovery_pending))
         const hit = all.find((r) => r.status === 'active' && r.artifact_path === path)
         setActiveProposal(hit?.id ?? null)
       })
-      .catch(() => setActiveProposal(null))
+      .catch(() => { setActiveProposal(null); setPolicyRecovery(false) })
   }, [path, artifacts])
   // 同路径版本链（升序）
   const versions = useMemo(
@@ -44,11 +46,18 @@ export function ArtifactTab({ path }: { path: string }) {
   const selB = vB ?? latest?.version ?? 1
   const selA = vA ?? (versions.length > 1 ? versions[versions.length - 2]?.version ?? 1 : 1)
 
+  const selected = versions.find((a) => a.version === selB)
+  const review = selected?.review
+
+  const currentWorktree = mode === 'content' && selB === latest?.version
   useEffect(() => {
     let live = true
-    api.artifactContentAt(path, selB).then((c) => { if (live) setTextB(c) })
+    // Reliability 16: current delivery is the worktree, historical versions are
+    // immutable evidence. A registered snapshot cannot hide an external edit.
+    const read = currentWorktree ? api.artifactContent(path) : api.artifactContentAt(path, selB)
+    read.then((c) => { if (live) setTextB(c) }).catch(() => { if (live) setTextB(null) })
     return () => { live = false }
-  }, [path, selB])
+  }, [path, selB, currentWorktree, artifacts])
   useEffect(() => {
     if (mode !== 'diff') return
     let live = true
@@ -68,17 +77,19 @@ export function ArtifactTab({ path }: { path: string }) {
       <div className="row-line" style={{ padding: '8px 14px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span className="mono" style={{ fontWeight: 560, fontSize: 13 }}>{path}</span>
         {latest && <span className="chip">{latest.kind}</span>}
-        {latest && <span className={`chip ${chipCls(latest.status)}`}>{t(`side.${latest.status}`, latest.status)}</span>}
+        {latest && <span className={`chip ${latest.materialization === 'pending_recovery' ? 'warn' : chipCls(latest.status)}`}>{latest.materialization === 'pending_recovery' ? t('side.pendingRecovery') : t(`side.${latest.status}`, latest.status)}</span>}
         {latest?.author && (
           <span className="dim3" style={{ fontSize: 11 }}>
             {team.find((m) => m.id === latest.author)?.role ?? latest.author}
           </span>
         )}
         <div style={{ flex: 1 }} />
+        {policyRecovery && <span role="alert" className="chip warn">{t('policy.recovery')}</span>}
         {activeProposal && (
           <button
             className="btn danger"
             style={{ fontSize: 11, padding: '2px 8px' }}
+            disabled={policyRecovery}
             title={t('cards.rollbackHint')}
             onClick={() =>
               askConfirm({
@@ -142,7 +153,13 @@ export function ArtifactTab({ path }: { path: string }) {
           </>
         )}
         <VersionPicker versions={versions} value={selB} onChange={setVB} />
+        {currentWorktree && <span className="dim3">{t('art.currentWorktree')}</span>}
       </div>
+      {review && <div style={{ padding: '8px 14px', display: 'flex', gap: 8 }}>
+        <span className={`chip ${review.status === 'passed' ? 'ok' : 'warn'}`}>{t(review.status === 'passed' ? 'art.reviewPassed' : review.status === 'rejected' ? 'art.reviewRejected' : 'art.reviewStale')}</span>
+        <span className="dim3">{review.reviewer}{review.version != null ? ` · v${review.version}` : ''}</span>
+      </div>}
+      {latest?.materialization === 'pending_recovery' && <div className="dim3" style={{ padding: '8px 14px' }}>{t('art.pendingRecovery')}</div>}
       {mode === 'content'
         ? (textB != null
             ? (isMd && mdView === 'preview'

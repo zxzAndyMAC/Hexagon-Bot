@@ -151,6 +151,21 @@ fn core_ping() -> String {
 }
 
 /// 沙箱实况（agent-senses 票 06）：纯平台探测，不触 state.wb（D01-exempt）。
+/// Read-only host disclosure works with or without a project, without the turn lock.
+#[tauri::command]
+fn data_boundary(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::data_boundary::DataBoundary, CmdError> {
+    let root = state
+        .conn
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?
+        .as_ref()
+        .map(|c| c.root.clone());
+    hexagon_core::api::data_boundary(root.as_deref(), &*hexagon_core::credentials::active())
+        .map_err(cmd_err)
+}
+
 #[tauri::command]
 fn sandbox_status() -> hexagon_core::sandbox::SandboxStatus {
     hexagon_core::sandbox::status()
@@ -357,6 +372,15 @@ fn artifact_content(state: tauri::State<AppState>, path: String) -> Result<Strin
 fn team(state: tauri::State<AppState>) -> Result<Vec<hexagon_core::orchestra::TeamRow>, CmdError> {
     with_conn(&state, |db, root| {
         hexagon_core::orchestra::team(db, PROJECT_ID, root).map_err(cmd_err)
+    })
+}
+#[tauri::command]
+fn stage_evidence(
+    state: tauri::State<AppState>,
+) -> Result<Option<hexagon_core::orchestra::StageEvidence>, CmdError> {
+    with_conn(&state, |db, root| {
+        let pack = hexagon_core::orchestra::PackDef::pinned(root).map_err(cmd_err)?;
+        hexagon_core::orchestra::stage_evidence(db, PROJECT_ID, &pack).map_err(cmd_err)
     })
 }
 #[tauri::command]
@@ -594,8 +618,8 @@ fn scan_external_mcp() -> Vec<hexagon_core::mcp::ExtMcpRow> {
 
 /// 批量导入勾选服务 → ~/.hexagon/mcp.json；同名跳过不覆盖。
 #[tauri::command]
-fn import_mcp(specs: Vec<hexagon_core::mcp::McpSpec>) -> hexagon_core::skills::ImportReport {
-    hexagon_core::mcp::import_mcp(&specs)
+fn import_mcp(references: Vec<String>) -> hexagon_core::skills::ImportReport {
+    hexagon_core::mcp::import_mcp_references(&references)
 }
 
 /// 公共 MCP 市场（票 06）：系统默认浏览器打开。URL 是常量非用户输入——
@@ -662,6 +686,33 @@ fn open_stage(
 #[tauri::command]
 fn recover_run(state: tauri::State<AppState>, run_id: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.recover_run(&run_id))
+}
+
+#[tauri::command]
+fn request_acceptance_exception(
+    state: tauri::State<AppState>,
+    expected: String,
+) -> Result<hexagon_core::orchestra::ExceptionRequest, CmdError> {
+    with_wb(&state, |wb| wb.request_acceptance_exception(&expected))
+}
+#[tauri::command]
+fn accept_delivery_exception(
+    state: tauri::State<AppState>,
+    question: String,
+    expected: String,
+    selected: Vec<hexagon_core::orchestra::ExceptionRequirement>,
+    reason: String,
+) -> Result<hexagon_core::orchestra::ExceptionAcceptance, CmdError> {
+    with_wb(&state, |wb| {
+        wb.accept_delivery_exception(&question, &expected, &selected, &reason)
+    })
+}
+#[tauri::command]
+fn cancel_acceptance_exception(
+    state: tauri::State<AppState>,
+    question: String,
+) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.cancel_acceptance_exception(&question))
 }
 
 #[tauri::command]
@@ -939,10 +990,7 @@ fn review_proposal(
 
 #[tauri::command]
 fn confirm_proposal(state: tauri::State<AppState>, qid: String) -> Result<String, CmdError> {
-    with_conn(&state, |db, root| {
-        let ctx = hexagon_core::tools::ToolContext::owner(db, root);
-        hexagon_core::proposals::activate(db, &ctx, &qid).map_err(cmd_err)
-    })
+    with_wb_mut(&state, |wb| wb.confirm_proposal(&qid))
 }
 
 #[tauri::command]
@@ -985,10 +1033,7 @@ fn policydev_propose(
 
 #[tauri::command]
 fn rollback_proposal(state: tauri::State<AppState>, proposal_id: String) -> Result<(), CmdError> {
-    with_conn(&state, |db, root| {
-        let ctx = hexagon_core::tools::ToolContext::owner(db, root);
-        hexagon_core::proposals::rollback(db, &ctx, &proposal_id).map_err(cmd_err)
-    })
+    with_wb_mut(&state, |wb| wb.rollback_proposal(&proposal_id))
 }
 
 #[tauri::command]
@@ -1585,8 +1630,17 @@ fn run_opening_intake(state: tauri::State<AppState>) -> Result<(), CmdError> {
     };
     match prepared {
         IntakePrepared::Finished(_) => Ok(()),
-        IntakePrepared::Call { request, provider } => {
-            let resp = match provider.complete(&request) {
+        IntakePrepared::Call {
+            request,
+            provider,
+            context,
+        } => {
+            let resp = match hexagon_core::usage::complete_project_request(
+                &context,
+                provider.as_ref(),
+                &request,
+                "opening_intake",
+            ) {
                 Ok(resp) => resp,
                 Err(e) => {
                     let g = match state.wb.lock() {
@@ -1655,6 +1709,45 @@ fn project_info(
     with_conn(&state, |db, _| {
         hexagon_core::orchestra::project_info(db, PROJECT_ID).map_err(cmd_err)
     })
+}
+
+#[tauri::command(async)]
+fn reconcile_tool_action(state: tauri::State<AppState>, action_id: String) -> Result<(), CmdError> {
+    with_wb(&state, |wb| match wb.reconcile_tool_action(&action_id) {
+        // A completed read-only check may leave uncertainty. The refreshed card
+        // shows its evidence; it is not a failed UI command or execution success.
+        Err(hexagon_core::api::ApiError::Tool(hexagon_core::tools::ToolError::OutcomeUnknown(
+            _,
+        ))) => Ok(()),
+        result => result.map(|_| ()),
+    })
+}
+
+#[tauri::command(async)]
+fn abandon_tool_action(
+    state: tauri::State<AppState>,
+    action_id: String,
+    reason: String,
+) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.abandon_tool_action(&action_id, &reason))
+}
+
+#[tauri::command(async)]
+fn retry_tool_action(
+    state: tauri::State<AppState>,
+    action_id: String,
+    reason: String,
+    accepts_duplicate: bool,
+) -> Result<(), CmdError> {
+    with_wb(&state, |wb| {
+        wb.retry_tool_action(&action_id, &reason, accepts_duplicate)
+            .map(|_| ())
+    })
+}
+
+#[tauri::command(async)]
+fn resume_tool_action(state: tauri::State<AppState>, action_id: String) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.resume_tool_action(&action_id).map(|_| ()))
 }
 
 #[tauri::command(async)]
@@ -1786,6 +1879,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             core_ping,
             sandbox_status,
+            data_boundary,
             open_project,
             timeline,
             send_message,
@@ -1805,6 +1899,7 @@ pub fn run() {
             artifact_content,
             team,
             stage_status,
+            stage_evidence,
             pending_questions,
             permission_rules,
             revoke_permission_rule,
@@ -1837,9 +1932,16 @@ pub fn run() {
             usage_context_pressure,
             open_stage,
             recover_run,
+            reconcile_tool_action,
+            abandon_tool_action,
+            retry_tool_action,
+            resume_tool_action,
             stall_retry,
             stall_ack,
             override_checks,
+            request_acceptance_exception,
+            accept_delivery_exception,
+            cancel_acceptance_exception,
             agent_detail,
             update_agent,
             create_role,

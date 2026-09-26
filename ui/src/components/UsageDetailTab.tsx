@@ -1,3 +1,4 @@
+import { UsageUncertainty } from './UsageTab'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import * as echarts from 'echarts/core'
@@ -161,10 +162,11 @@ export function UsageDetailTab() {
           <div className="u-card" style={{ padding: '12px 14px', display: 'flex', gap: 10 }}>
             <span className="stat-ic" style={{ color: capped ? 'var(--err)' : 'var(--accent)', background: capped ? 'var(--err-soft)' : 'var(--accent-soft)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="yen" size={15} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="dim3" style={{ fontSize: 10 }}>{t('usage.budget')}</div>
+              <div className="dim3" style={{ fontSize: 10 }}>{t('usage.knownAmount')}</div>
               <div className="mono" style={{ fontSize: 15, fontWeight: 560, marginTop: 2 }}>
                 {fmtYuan(spent)}{limitMc != null && <span className="dim3" style={{ fontSize: 12 }}> / {fmtYuan(limitMc)}</span>}
               </div>
+              <UsageUncertainty />
               <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', marginTop: 6, overflow: 'hidden' }}>
                 <div style={{ width: `${pct}%`, height: '100%', background: capped ? 'var(--err)' : 'var(--accent)' }} />
               </div>

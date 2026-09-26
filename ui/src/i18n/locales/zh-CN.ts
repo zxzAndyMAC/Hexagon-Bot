@@ -1,4 +1,9 @@
 export default {
+  returnAttention: {"unresolved_actions": "结果未知动作：{{count}}", "unknown_cost_records": "费用尚未确定：{{count}}", "budget_stops": "离开期间预算/容量阻塞：{{count}}", "exception_decisions": "离开期间例外裁决（非通过）：{{count}}", "policy_candidates": "策略候选：{{count}}"},
+  dataBoundary: {"edit": "保留标记表示沿用已存值；输入新值会替换，清空或移除会删除。配置变化后请重新加载。", "mcpStorage": "MCP 环境变量和标头以明文保存在本机配置文件中；页面显示的模型凭据后端不保护这些文件。", "title": "数据存储与接收方", "local": "本地：项目状态、消息、轨迹、工具结果和产物保存在本机，诊断日志也仅保存在本机。", "model": "模型：请求会将选中的指令、消息与工具上下文发给配置的供应商，其处理与保留方式按供应商自身条款执行。", "mcp": "MCP：工具接收调用参数。本地 stdio 服务是独立进程，也可能连接外部服务；远程条目仅表示已配置接收方，不证明连接已启用。", "terminal": "终端：联网受终端权限与隔离约束。禁止终端联网不等于禁止模型或 MCP 请求。子代理仅获得宿主能强制只读的 MCP 能力。", "retention": "保留范围：历史和文件会保留，直到明确管理。凭据扫描只定位可能的历史泄漏，不自动清除历史，也不能撤回已外发的数据。", "credentials": "凭据存储", "configured": "已配置接收方（仅显示源站，省略凭据、路径和 URL 参数）。配置启用不表示实际发出过请求。", "empty": "尚无配置的接收方。", "unavailable": "配置读取失败，接收方未知。", "backend_keychain": "系统凭据库", "backend_dev_file": "本机明文文件（开发后端）", "backend_memory": "内存存储", "backend_custom": "自定义凭据库", "kind_model": "模型", "kind_mcp": "MCP", "kind_search": "搜索", "localProcess": "本地服务进程；外部接收方取决于该服务", "unknownEndpoint": "接收端点不可用", "enabled": "配置已启用", "disabled": "配置已禁用"},
+  policy: {"title": "策略候选", "adopt": "采纳候选", "report": "查看候选与回放报告", "scores": "回放分：现任 {{baseline}} · 候选 {{candidate}}", "ownerOnly": "候选须由你采纳。更高回放分不等于真实任务质量；采纳前会重新核对当前基线和约束。", "recovery": "策略变更待恢复，当前文件已保留。请恢复经过核对的变更前或变更后版本，再重新打开项目。"},
+  exceptions: {"title": "交付例外验收", "request": "申请例外验收", "accept": "接受所选例外", "accepted": "例外接受", "cancel": "取消申请", "reason": "接受理由", "hint": "选择具体未满足的要求，并说明接受当前交付的理由。原始检查与复审结果仍保留。", "stale": "交付已变化。请取消此申请，并针对当前版本重新申请。"},
+  evidence: {"requirement_action": "结果待核对的动作：{{value}}", "deliveryChanged": "交付已变化或无法核对", "requirement_artifact": "产物：{{value}}", "requirement_review": "复审：{{value}}", "requirement_check": "检查：{{value}}", "requirement_stage": "阶段：{{value}}", "title": "当前交付证据", "noChecks": "未声明检查", "missing": "尚未执行", "passed": "当前交付检查通过", "failed": "检查失败", "stale": "证据已过期", "unavailable": "无法核对证据", "exit": "原退出码：{{code}}", "missingRequirements": "尚未满足的要求"},
   app: { title: 'Hexagon-Bot', loading: '正在加载工作台…', untitledProject: '未命名项目' },
   topbar: {
     away: '值守',
@@ -14,7 +19,7 @@ export default {
     fastpath: '快速通道',
     sleepAllHint: '一键全员休眠（也可 /sleep）',
     sandboxOn: '沙箱', sandboxOnTip: 'Agent 命令在 OS 沙箱内运行（写限定仓库内；默认断网）',
-    sandboxOff: '无沙箱', sandboxOffTip: '本平台无 OS 沙箱——命令裸跑（仍走必问审批）',
+    sandboxOff: '无沙箱', sandboxOffTip: '无可用 OS 沙箱时停止终端执行；允许的读取仍可使用',
     autonomyMenu: '切换自治档位',
     viewFlow: '查看流程',
     flowClose: '关闭',
@@ -148,6 +153,10 @@ export default {
     system: '系统',
   },
   sys: {
+    policy_recovery: "策略变更恢复",
+    artifact_materialization: "产物交付恢复",
+    acceptance_exception: "例外验收",
+
     attachments_degraded: '图片未送入——模型槽无 vision 能力',
     context_compacted: '上下文已压缩',
     context_denied: '上下文请求被拒',
@@ -171,6 +180,7 @@ export default {
     stall_closed: '失速收场',
   },
   cards: {
+    writeTargets: '写入前会重新核对目标；若已变更，须重读并发起新动作。',
     inlineDiff: '内嵌 diff',
     openFullDiff: '打开完整对照',
     noDiff: '无 diff 块',
@@ -236,6 +246,14 @@ export default {
     rollbackHint: '回滚该提案应用的改动',
     handoff: '交接',
     recovery: '中断',
+        actionReadyHint: "此动作已获授权，但尚未开始执行。继续时复核当前权限，并恢复同一动作。",
+        reconcileAction: "核对结果",
+        abandonAction: "放弃动作",
+        retryAction: "发起新尝试",
+        actionReason: "负责人处理理由",
+        duplicateRisk: "我接受新尝试可能重复产生原动作的副作用。",
+        actionUnknown: "工具结果未知",
+        actionUnknownHint: "该动作可能已产生副作用。当前执行链暂停，须核对实际结果；普通批准不会重试。",
         recoveryHint: '上次退出时回合被杀或断网超时挂起，未完成。按继续恢复阶段并自动重跑受影响的回合。',
         recover: '继续',
     install: '安装',
@@ -262,7 +280,7 @@ export default {
     finalNeedsForm: '最终验收退回要写阶段和修改意见——请在卡上填写',
     stallNoRetry: '这张失速卡没有「再试一次」，请点「知道了」',
   },
-  side: {
+  side: { pendingRecovery: "待恢复",
     usage: '用量',
     artifacts: '产物',
     team: '团队',
@@ -322,6 +340,13 @@ export default {
     initializing: '正在初始化会话…',
   },
   usage: {
+    reservedEstimate: '在途预占估算',
+    unknownTokens: '部分 Token 用量未知',
+    unknownCost: "费用未知",
+    budgetUnknown: "存在未知费用，金额预算无法保证。",
+    knownAmount: "已知金额",
+    historicalUnknown: "无法分类的历史记录：{{count}}",
+
     spark7d: '近 7 日 · token',
     sparkToday: '今日 / 预算',
     capHit: '已达用量上限——全员休眠中',
@@ -336,7 +361,7 @@ export default {
     openDashboard: '打开用量面板',
     detail: '详情',
     budget: '预算',
-    totalTokens: '总 Token',
+    totalTokens: '已记录 Token',
     ctxPressure: '上下文压力 · 14 天',
     overflowCards: '撞限卡',
     compactions: '机械压缩',
@@ -371,7 +396,7 @@ export default {
   },
   tabs: { timeline: '时间线', close: '关闭', split: '分屏对照', more: '更多标签页',
     splitNeedsWidth: '分栏需要更宽的窗口（≥720px）', },
-  art: { content: '内容', compare: '对比', version: 'v{{n}}', vs: '↔', unavailable: '内容不可用', preview: '预览', source: '源码' },
+  art: { reviewPassed: "当前版本复审通过", reviewRejected: "当前版本复审驳回", reviewStale: "复审已过期", currentWorktree: "当前工作树", pendingRecovery: "交付登记未完成。当前文件已保留；恢复并核对状态前，此产物不能用于验收。", content: '内容', compare: '对比', version: 'v{{n}}', vs: '↔', unavailable: '内容不可用', preview: '预览', source: '源码' },
   md: { copy: '复制', copied: '已复制' },
   exec: { exit: '退出 {{code}}', noOutput: '（无输出）', tail: '… 仅显示末 32KB' },
   agent: {
@@ -554,7 +579,7 @@ export default {
     agentsDraftHint: '草稿——确认无误后建项目时写入（不覆盖已有文件）',
     keysHint: '所选角色的模型槽缺 key 不能开跑——补齐或回上一步拿掉角色',
     keyPlaceholder: '粘贴 API key',
-    keySave: '存入钥匙串',
+    keySave: "保存凭据",
     keyOk: '已就绪',
     keysBlocked: '缺密钥无法开跑',
     goSettings: '打开设置',
@@ -597,7 +622,7 @@ export default {
   },
 
   providers: {
-    hint: '模型供应商是全局配置——「槽位绑定」把每个角色模型槽指到 供应商+模型；API key 只进系统钥匙串（只写不读）。「default」槽兜底未绑定槽位。',
+    hint: "模型供应商是全局配置。槽位绑定选择供应商和模型，default 兜底未绑定槽位。密钥使用「通用」设置显示的实际凭据后端。",
     filter: '筛选供应商…',
     empty: '还没有供应商——先加一条，Agent 才能调模型',
     preset: '内置', pickHint: '从左侧选一个供应商', name: '名称',
@@ -681,6 +706,7 @@ export default {
     floorsHint: '无论哪档：最终验收、安全网、新权限问题等负责人。更早的盖章点只在 L3 及以上自动通过。',
   },
   mcp: {
+    starting: '初始化中…',
     intro: '全局清单 ~/.hexagon/mcp.json + 项目 .hexagon/mcp.json（同名项目覆盖）；改动重开项目生效。',
     empty: '还没有服务——下方新建，或扫描本机平台导入。',
     origin_global: '全局', origin_project: '项目',
@@ -749,6 +775,13 @@ export default {
     confirmIntake: '确认开场草案',
   },
   errors: {
+    policy_stale: "策略基线或候选已变化，请重新评估并提交新候选。", policy_constraint: "策略候选不符合当前约束或权限。", policy_owner_required: "策略候选必须由负责人采纳。", policy_recovery: "策略变更待恢复，当前文件已保留。请恢复经过核对的变更前或变更后版本，再重新打开项目。",
+    unreviewed_experience: "只有当前作者本次工作通过真实复审，才能提交经验。", frozen_experience: "当前作者已交付本次工作，经验已冻结。", stale_experience: "被审工作已变化或已交付，请重新复审并提交新的经验提案。",
+    invalid_acceptance_exception: "请在例外申请中选择当前要求并填写理由。", stale_acceptance_version: "交付已变化，请针对当前版本重新申请例外。", unresolved_delivery_action: "请先核对结果未知的动作，再接受例外。",
+    stale_review: "复审目标已变化，请重新读取并复审当前版本。", materialization_pending: "产物交付待恢复，当前文件已保留。请先恢复到可核对的状态，再重新交付。",
+    write_conflict: '写入目标已变更、正被占用，或旧批准缺少目标证据。请重读文件并发起新动作。',
+    metadata_conflict: '产物类型与元数据头冲突，请保持一致后重新交付。',
+    budget_unavailable: '本次请求可用预算不足。请等待在途请求结束或调整预算。',
     no_intake_draft: '没有待确认的开场草案',
     intake_brief_exists: '项目说明已经存在，不覆盖',
     actionFailed: '操作失败——{{detail}}',

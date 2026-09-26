@@ -127,7 +127,7 @@ pub fn catalog() -> Vec<PromptEntry> {
     ];
     let main = crate::tools::Registry::builtin();
     let mut tools = main.defs();
-    for d in main.subagent_scope(&Default::default()).defs() {
+    for d in main.subagent_scope(&[]).defs() {
         if !tools.iter().any(|t| t.name == d.name) {
             tools.push(d);
         }

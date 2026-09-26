@@ -1,4 +1,9 @@
 export default {
+  returnAttention: {"unresolved_actions": "結果不明の操作：{{count}}", "unknown_cost_records": "費用未確定：{{count}}", "budget_stops": "離席中の予算・容量による停止：{{count}}", "exception_decisions": "離席中の例外判断（合格ではない）：{{count}}", "policy_candidates": "方針候補：{{count}}"},
+  dataBoundary: {"edit": "保存マーカーは既存値を保持します。新しい値で置換し、空欄または削除で消去します。設定変更後は再読込してください。", "mcpStorage": "MCP の環境変数とヘッダーはローカル設定ファイルに平文で保存されます。表示されたモデル認証情報の保存先はこれらのファイルを保護しません。", "title": "データ保存と送信先", "local": "ローカル：プロジェクト状態、メッセージ、履歴、ツール結果、成果物と診断ログはこの端末に保存されます。", "model": "モデル：選択した指示、メッセージ、ツールの文脈を設定済みプロバイダーに送信します。処理と保存期間は各社の規約に従います。", "mcp": "MCP：ツールには呼び出し引数が渡されます。ローカル stdio サービスも外部に通信できます。リモート設定は接続が有効である証明ではありません。", "terminal": "ターミナル：通信は権限と隔離で制御します。通信禁止はモデルや MCP の要求を禁止しません。子エージェントにはホストが読み取り専用を強制できる MCP 機能のみ渡します。", "retention": "保存範囲：履歴とファイルは明示的に管理するまで残ります。認証情報スキャンは過去の漏えい候補を探すだけで、履歴の自動削除や送信済みデータの回収はしません。", "credentials": "認証情報の保存先", "configured": "設定済み送信先（オリジンのみ。認証情報、パス、URL パラメータは省略）。有効な設定は実際の送信を意味しません。", "empty": "設定済み送信先はありません。", "unavailable": "設定を読み取れず、送信先は不明です。", "backend_keychain": "システム認証情報ストア", "backend_dev_file": "ローカル平文ファイル（開発用）", "backend_memory": "メモリ内ストア", "backend_custom": "独自の認証情報ストア", "kind_model": "モデル", "kind_mcp": "MCP", "kind_search": "検索", "localProcess": "ローカルサービスプロセス。外部送信先はサービス次第です", "unknownEndpoint": "送信先を表示できません", "enabled": "設定で有効", "disabled": "設定で無効"},
+  policy: {"title": "ポリシー候補", "adopt": "候補を採用", "report": "候補とリプレイ報告を見る", "scores": "リプレイスコア: 現行 {{baseline}} · 候補 {{candidate}}", "ownerOnly": "候補の採用には承認が必要です。高いリプレイスコアは実際の品質を保証しません。採用前に現行の基準と制約を再確認します。", "recovery": "ポリシー変更の復旧が必要です。現在のファイルは保持されています。確認済みの変更前または変更後の版に戻し、プロジェクトを再度開いてください。"},
+  exceptions: {"title": "納品の例外承認", "request": "例外承認を申請", "accept": "選択した例外を承認", "accepted": "例外として承認済み", "cancel": "申請を取り消す", "reason": "承認理由", "hint": "未達成の要件を選択し、現在の納品を受け入れる理由を記入してください。元のチェックとレビュー結果は保持されます。", "stale": "納品が変更されました。この申請を取り消し、現在のバージョンで再申請してください。"},
+  evidence: {"requirement_action": "未解決の操作: {{value}}", "deliveryChanged": "成果物が変更されたか確認できません", "requirement_artifact": "成果物：{{value}}", "requirement_review": "レビュー：{{value}}", "requirement_check": "検査：{{value}}", "requirement_stage": "段階：{{value}}", "title": "現在の成果物の検証記録", "noChecks": "検査の指定なし", "missing": "未実行", "passed": "現在の成果物で合格", "failed": "不合格", "stale": "古い検証記録", "unavailable": "検証記録を確認できません", "exit": "記録された終了コード：{{code}}", "missingRequirements": "未達成の要件"},
   app: { title: 'Hexagon-Bot', loading: 'ワークスペースを読み込み中…', untitledProject: '無題のプロジェクト' },
   topbar: {
     away: 'ウォッチ',
@@ -14,7 +19,7 @@ export default {
     fastpath: 'ファストパス',
     sleepAllHint: '全員スリープ（/sleep でも可）',
     sandboxOn: 'サンドボックス', sandboxOnTip: 'エージェントのコマンドは OS サンドボックス内で実行（書き込みはリポジトリ内限定・既定でネットワーク遮断）',
-    sandboxOff: 'サンドボックスなし', sandboxOffTip: 'このプラットフォームには OS サンドボックスなし——コマンドは非隔離で実行（承認ゲートは有効）',
+    sandboxOff: 'サンドボックスなし', sandboxOffTip: '利用可能な OS サンドボックスがない場合、端末実行は停止します。許可された読み取りは利用できます',
     autonomyMenu: '自律レベルを変更',
     viewFlow: 'フローを見る',
     flowClose: '閉じる',
@@ -148,6 +153,10 @@ export default {
     system: 'システム',
   },
   sys: {
+    policy_recovery: "方針変更の復旧",
+    artifact_materialization: "成果物配信の復旧",
+    acceptance_exception: "例外受入",
+
     attachments_degraded: '画像は省略されました — モデルに vision がありません',
     context_compacted: 'コンテキスト圧縮済み',
     context_denied: 'コンテキスト要求が拒否されました',
@@ -171,6 +180,7 @@ export default {
     stall_closed: '停滞を終了',
   },
   cards: {
+    writeTargets: '書き込み直前に対象を再確認します。変更されている場合は再読込し、新しい操作を作成してください。',
     inlineDiff: 'インライン diff',
     openFullDiff: '完全なビューを開く',
     noDiff: 'diff ブロックなし',
@@ -236,6 +246,14 @@ export default {
     rollbackHint: 'この提案が適用した変更をロールバック',
     handoff: '引き継ぎ',
     recovery: '中断',
+        actionReadyHint: "この操作は承認済みですが未実行です。続行時に現在の権限を確認し、同じ操作を再開します。",
+        reconcileAction: "結果を照合",
+        abandonAction: "操作を放棄",
+        retryAction: "新しい試行を開始",
+        actionReason: "責任者の判断理由",
+        duplicateRisk: "新しい試行で元の操作が重複するリスクを承諾します。",
+        actionUnknown: "ツールの結果が不明",
+        actionUnknownHint: "操作はすでに反映された可能性があります。結果を確認するまで実行を停止します。通常の承認では再試行しません。",
         recoveryHint: '前回終了時にターンが中断されたか、ネットワークタイムアウトで一時停止されました。続行するとステージが復旧し、該当エージェントが自動で再起動します。',
         recover: '続行',
     install: 'インストール',
@@ -262,7 +280,7 @@ export default {
     finalNeedsForm: '最終検収の差し戻しには段階と修正意見が必要です——カードに記入してください',
     stallNoRetry: 'この停滞カードには「もう一度」がありません。「了解」を押してください',
   },
-  side: {
+  side: { pendingRecovery: "復旧待ち",
     usage: '使用量',
     artifacts: '成果物',
     team: 'チーム',
@@ -322,6 +340,13 @@ export default {
     initializing: 'セッションを初期化しています…',
   },
   usage: {
+    reservedEstimate: '実行中のリクエストの見積額',
+    unknownTokens: '一部の Token 使用量が不明',
+    unknownCost: "費用不明",
+    budgetUnknown: "不明な費用があるため、金額予算は保証できません。",
+    knownAmount: "判明している金額",
+    historicalUnknown: "分類できない過去の記録：{{count}}",
+
     spark7d: '過去 7 日 · トークン',
     sparkToday: '今日 / 予算',
     capHit: '使用量上限に到達——全員スリープ中',
@@ -336,7 +361,7 @@ export default {
     openDashboard: '使用量ダッシュボードを開く',
     detail: '詳細',
     budget: '予算',
-    totalTokens: '総 Token',
+    totalTokens: '記録済み Token',
     ctxPressure: 'コンテキスト圧力 · 14日',
     overflowCards: '上限超過カード',
     compactions: '機械圧縮',
@@ -371,7 +396,7 @@ export default {
   },
   tabs: { timeline: 'タイムライン', close: '閉じる', split: '分割エディタ', more: 'その他のタブ',
     splitNeedsWidth: '分割表示には 720px 以上の幅が必要です', },
-  art: { content: '内容', compare: '比較', version: 'v{{n}}', vs: '↔', unavailable: '内容がありません', preview: 'プレビュー', source: 'ソース' },
+  art: { reviewPassed: "現在の版のレビュー承認", reviewRejected: "現在の版のレビュー却下", reviewStale: "レビューは期限切れ", currentWorktree: "現在の作業ツリー", pendingRecovery: "納品の登録が未完了です。現在のファイルは保持され、状態を確認して復旧するまで検収には使えません。", content: '内容', compare: '比較', version: 'v{{n}}', vs: '↔', unavailable: '内容がありません', preview: 'プレビュー', source: 'ソース' },
   md: { copy: 'コピー', copied: 'コピーしました' },
   exec: { exit: 'exit {{code}}', noOutput: '（出力なし）', tail: '… 末尾 32KB を表示' },
   agent: {
@@ -554,7 +579,7 @@ export default {
     agentsDraftHint: '下書き——確認後、プロジェクト作成時に書込（上書きしない）',
     keysHint: 'モデルキーが不足するロールがあると起動不可——補完するか前に戻って除外',
     keyPlaceholder: 'API key を貼り付け',
-    keySave: 'キーチェーンに保存',
+    keySave: "認証情報を保存",
     keyOk: '準備完了',
     keysBlocked: 'キー不足のため起動不可',
     goSettings: '設定を開く',
@@ -597,7 +622,7 @@ export default {
   },
 
   providers: {
-    hint: 'モデルプロバイダはグローバル設定——「スロット割当」が各ロールのモデルスロットを プロバイダ+モデル に結びます。API キーは OS キーチェーンのみ（書き込み専用）。「default」は未割当スロットの兜底です。',
+    hint: "モデル設定は全体で共有します。スロットはプロバイダーとモデルを選び、default は未割当を補います。キーは一般設定に表示された実際の保存先を使います。",
     filter: 'プロバイダーを絞り込み…',
     empty: 'プロバイダ未設定——まず1件追加してください',
     preset: '内蔵', pickHint: '左からプロバイダを選択', name: '名前',
@@ -681,6 +706,7 @@ export default {
     floorsHint: 'どのレベルでも：最終検収、セーフティネット、新規権限はオーナー待ちです。それより前のスタンプは L3 以上でのみ自動通過します。',
   },
   mcp: {
+    starting: '初期化中…',
     intro: 'グローバル ~/.hexagon/mcp.json + プロジェクト .hexagon/mcp.json（同名はプロジェクト優先）。変更はプロジェクト再起動で反映。',
     empty: 'サービスなし——下で新規作成、またはローカルプラットフォームをスキャン。',
     origin_global: 'グローバル', origin_project: 'プロジェクト',
@@ -749,6 +775,13 @@ export default {
     confirmIntake: '開始草案を確認',
   },
   errors: {
+    policy_stale: "基準または候補が変更されました。再評価して新しい候補を提出してください。", policy_constraint: "候補が現在の制約または権限に違反しています。", policy_owner_required: "ポリシー候補は責任者による採用が必要です。", policy_recovery: "ポリシー変更の復旧が必要です。現在のファイルは保持されています。確認済みの変更前または変更後の版に戻し、プロジェクトを再度開いてください。",
+    unreviewed_experience: "この作者の現在の作業が実際のレビューに合格した場合のみ、経験を提案できます。", frozen_experience: "この作者が現在の作業を納品したため、経験は凍結されています。", stale_experience: "レビュー対象が変更または納品されました。再レビュー後に新しい経験を提案してください。",
+    invalid_acceptance_exception: "例外申請で現在の要件を選択し、理由を記入してください。", stale_acceptance_version: "納品が変更されました。現在のバージョンで再申請してください。", unresolved_delivery_action: "例外を承認する前に、結果不明の操作を確認してください。",
+    stale_review: "レビュー対象が変更されました。現在の版を読み直してレビューしてください。", materialization_pending: "成果物の納品は復旧待ちです。現在のファイルは保持されています。確認可能な状態に復旧してから再納品してください。",
+    write_conflict: '書き込み対象が変更済み、使用中、または承認時の記録がありません。再読込して新しい操作を作成してください。',
+    metadata_conflict: '成果物の種類がメタデータヘッダーと一致しません。修正して再提出してください。',
+    budget_unavailable: 'このリクエストの利用可能な予算が不足しています。実行中のリクエストを待つか、予算を調整してください。',
     no_intake_draft: '確認する開始草案がありません',
     intake_brief_exists: 'プロジェクト説明は既にあります。上書きしません',
     actionFailed: '操作に失敗しました——{{detail}}',

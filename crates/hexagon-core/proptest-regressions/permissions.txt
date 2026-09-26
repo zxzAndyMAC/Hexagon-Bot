@@ -10,3 +10,4 @@ cc e55fbc67ba2caf7eff7c5d21de23f39141613ea93f2b5b29249a6eba4380a738 # shrinks to
 cc 4b195e1e41cde05c40f3665d96e3905bd48cf8652ef026e6a0ba7f001d96228a # shrinks to rules = [], pick = 0
 cc c7ac2d3ac2a8ef559c408ad2b64e90cef9d2d01057fdc4fff83ef0f366088768 # shrinks to rules = [], idx = 0
 cc 8f16f4f965e6d12e1c0701de0e93cdb0af56accd14ab99f6bc8f513873eaf002 # shrinks to rules = [("bash", "git *", "deny", "project")], idx = 1
+cc 8e824230efc68edd102a02d838ca385e9445929e8d08b4bda1a7f17d680c6563 # shrinks to level = "L0", action = SafetyWrite(".git/config")

@@ -150,13 +150,13 @@ describe('SettingsPage list|detail 分区', () => {
 
   // 负责人反馈 2026-09：远程 MCP（context7）导入丢了 Authorization——
   // headers 全链缺失。扫描行带标数 chip、导入透传、详情可显可编。
-  it('MCP 远程：扫描行显示标头数，导入透传 headers', async () => {
+  it('MCP 远程：扫描行显示标头数，导入仅传宿主引用', async () => {
     vi.spyOn(api, 'mcpEntries').mockResolvedValue([])
     vi.spyOn(api, 'scanExternalMcp').mockResolvedValue([
       {
-        name: 'context7', command: '', args: [], env: {}, cwd: null, disabled: false,
+        reference: 'scan-ref', name: 'context7', command: '', args: [], env: {}, cwd: null, disabled: false,
         transport: 'remote', url: 'https://mcp.context7.com/mcp',
-        headers: { Authorization: 'Bearer k' }, origin: 'cursor', source_path: '/p', conflict: false,
+        headers: { Authorization: '[stored:opaque]' }, origin: 'cursor', source_path: '/p', conflict: false,
       },
     ])
     const imp = vi.spyOn(api, 'importMcp').mockResolvedValue({ imported: 1, skipped: [] })
@@ -165,17 +165,32 @@ describe('SettingsPage list|detail 分区', () => {
     await clickText(el, 'Scan local MCP')
     expect(el.textContent).toContain('1 headers')
     await clickText(el, 'Import (1)')
-    const spec = vi.mocked(imp).mock.calls.at(-1)![0][0]
-    expect(spec.headers).toEqual({ Authorization: 'Bearer k' })
+    // Reliability 22: only the scan reference crosses IPC; the host retains credentials.
+    expect(vi.mocked(imp).mock.calls.at(-1)![0]).toEqual(['scan-ref'])
     root.unmount()
   })
 
-  it('MCP 远程详情：headers 在表单可见可编', async () => {
+  it('MCP initialization is shown as starting, not a failed service', async () => {
+    vi.spyOn(api, 'mcpEntries').mockResolvedValue([
+      { name: 'starting-peer', command: 'node', args: [], env: {}, cwd: null, disabled: false,
+        transport: 'stdio', url: null, headers: {}, origin: 'global' },
+    ])
+    vi.spyOn(api, 'mcpServices').mockResolvedValue([
+      { name: 'starting-peer', command: 'node', status: 'starting', tools: [], error: null },
+    ])
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'MCP services')
+    await clickText(el, 'starting-peer')
+    expect(el.textContent).toContain('Initializing…')
+    await act(async () => root.unmount())
+  })
+
+  it('MCP 远程详情：headers 保留标记可编辑', async () => {
     vi.spyOn(api, 'mcpEntries').mockResolvedValue([
       {
         name: 'context7', command: '', args: [], env: {}, cwd: null, disabled: true,
         transport: 'remote' as const, url: 'https://mcp.context7.com/mcp',
-        headers: { Authorization: 'Bearer k' }, origin: 'global' as const,
+        headers: { Authorization: '[stored:opaque]' }, origin: 'global' as const,
       },
     ])
     vi.spyOn(api, 'mcpServices').mockResolvedValue([])
@@ -183,8 +198,11 @@ describe('SettingsPage list|detail 分区', () => {
     await clickNav(el, 'MCP services')
     await clickText(el, 'context7')
     const headersTa = [...el.querySelectorAll('textarea')]
-      .find((t) => t.value.includes('Authorization=Bearer k'))
+      // Reliability 22: a retention marker replaces the old plaintext assertion.
+      .find((t) => t.value.includes('Authorization=[stored:opaque]'))
     expect(headersTa).toBeTruthy()
+    // reliability 09: configured remote endpoint is visibly unavailable, not silently ready.
+    expect(el.textContent).toContain('Remote transports are listed but not spawned yet')
     root.unmount()
   })
 

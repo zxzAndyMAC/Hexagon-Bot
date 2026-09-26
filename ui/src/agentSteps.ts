@@ -44,24 +44,33 @@ export const TOOL_ICON: Record<string, IconName> = {
   bash_output: 'tool', bash_kill: 'tool',
 }
 
-// 一次调用对 = tool_called 吸收紧随的 tool_result（AgentTab 步骤折叠同约定）。
-// 孤儿 tool_result（无 called 先行）不计入——缺上下文渲染不出有意义的行。
-// exec-cards 票 03 补 agent 校验：并发回合的事件在流里交错，别家的
-// result 不能吸进本家调用（否则本家 called 永挂运行环、显示别家输出）。
+// security-delivery-reliability 08: durable action identity owns the result.
+// Legacy records only pair adjacent unkeyed results; never borrow a keyed result.
 export type ToolCall = { called: TimelineItem; result?: TimelineItem }
+export type ToolOutcome = boolean | 'unknown' | undefined
+
+export function toolOutcome(result?: TimelineItem): ToolOutcome {
+  if (!result) return undefined
+  const p = result.event.payload
+  if (p.state === 'unknown' || p.ok === null) return 'unknown'
+  return p.ok !== false
+}
 
 export function pairToolCalls(items: TimelineItem[]): ToolCall[] {
-  const out: ToolCall[] = []
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i]
-    if (it.event.kind !== 'tool_called') continue
-    const nx = items[i + 1]
-    const res = nx?.event.kind === 'tool_result' && nx.event.agent_id === it.event.agent_id
-      ? items[++i]
-      : undefined
-    out.push({ called: it, result: res })
+  const results = new Map<string, TimelineItem>()
+  const key = (it: TimelineItem) => JSON.stringify([it.event.project_id, it.event.agent_id, it.event.payload.action_id])
+  for (const it of items) {
+    if (it.event.kind === 'tool_result' && typeof it.event.payload.action_id === 'string') results.set(key(it), it)
   }
-  return out
+  return items.flatMap((it, i) => {
+    if (it.event.kind !== 'tool_called') return []
+    const nx = items[i + 1]
+    const result = typeof it.event.payload.action_id === 'string'
+      ? results.get(key(it))
+      : nx?.event.kind === 'tool_result' && nx.event.agent_id === it.event.agent_id
+        && nx.event.payload.action_id == null ? nx : undefined
+    return [{ called: it, result }]
+  })
 }
 
 // 文件片收集：scrub 后的 input 只剩 {path[,bytes]}（safety.rs），顶层 path

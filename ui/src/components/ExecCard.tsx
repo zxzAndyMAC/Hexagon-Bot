@@ -11,7 +11,7 @@ import { Icon, type IconName } from './Icon'
 import { CodeBlock } from './Md'
 import { DiffView } from './DiffView'
 import { SpinnerRing } from './SpinnerRing'
-import { toolInputSummary, TOOL_ICON, type ToolCall } from '../agentSteps'
+import { toolInputSummary, toolOutcome, TOOL_ICON, type ToolCall, type ToolOutcome } from '../agentSteps'
 
 // 渲染上限（票 04）：实时流/结果体只渲末 32KB——长输出（cargo test 全量）
 // 不炸 DOM；缓冲层另有 128KB 尾留（store.toolStreams）。
@@ -31,7 +31,9 @@ function resultOutput(call: ToolCall): Record<string, unknown> | undefined {
 
 // 票 05 TaskRows 状态机，与 ToolChipRow/AgentTab 同一套语义：
 // 无 result=在途运行环；落定翻 check/X 徽标 pop-in。
-export function CallStatus({ ok }: { ok: boolean | undefined }) {
+export function CallStatus({ ok }: { ok: ToolOutcome }) {
+  const { t } = useTranslation()
+  if (ok === 'unknown') return <span className="chip warn"><Icon name="help" size={8} />{t('cards.actionUnknown')}</span>
   if (ok == null) return <SpinnerRing />
   return (
     <span
@@ -85,7 +87,7 @@ export function ExecCard({
   icon: IconName
   title: string
   meta?: ReactNode
-  ok: boolean | undefined
+  ok: ToolOutcome
   copyText?: string
   delay?: number
   // 虚拟列表里滚回视口的行会重挂载——入场动画只该在「刚展开」播一次，
@@ -200,8 +202,7 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
   const { t } = useTranslation()
   const p = call.called.event.payload as Record<string, unknown>
   const tool = String(p.tool ?? '')
-  const res = call.result?.event.payload as Record<string, unknown> | undefined
-  const ok = res ? res.ok !== false : undefined
+  const ok = toolOutcome(call.result)
   const inp = (p.input ?? {}) as Record<string, unknown>
   const out = resultOutput(call)
   const [artOps, setArtOps] = useState<DiffOp[] | null>(null)

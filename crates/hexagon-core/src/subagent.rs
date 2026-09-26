@@ -3,7 +3,7 @@
 //!
 //! 前身是 US36「研究助手」（research.rs）：同一条结构性约束思路，面放宽。
 //! 结构性约束（不靠提示词自觉）：
-//! - 嵌套注册表 = `Registry::subagent_scope(pick)`：fs_read/artifact_read/
+//! - 嵌套注册表 = `Registry::subagent_scope(isolated)`：fs_read/artifact_read/
 //!   load_skill + fs_find/fs_grep/sem_search/web_search + run_test +
 //!   本次勾选的 mcp:* —— 没有写/bash/git/web_fetch/subagent →
 //!   不可写、不可跑任意命令、不可外带、不可再派生；
@@ -20,7 +20,6 @@
 use crate::db::Db;
 use crate::provider::ModelProvider;
 use crate::tools::{CallOutcome, Registry, ToolContext, ToolError};
-use crate::trace::EventKind;
 use crate::turn::{run_turn_streaming, TurnOutcome};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -422,29 +421,22 @@ pub fn call_nested(
     ctx: &ToolContext,
     input: Value,
 ) -> Result<CallOutcome, ToolError> {
+    call_nested_with_seq(db, provider, registry, ctx, input, None)
+}
+
+pub(crate) fn call_nested_with_seq(
+    db: &Db,
+    provider: &dyn ModelProvider,
+    registry: &Registry,
+    ctx: &ToolContext,
+    input: Value,
+    seq: Option<&str>,
+) -> Result<CallOutcome, ToolError> {
     let task = input["task"].as_str().unwrap_or("").trim().to_string();
     let title = input["title"].as_str().unwrap_or("").trim().to_string();
-    db.append_event(
-        &ctx.project_id,
-        EventKind::ToolCalled,
-        json!({"tool": "subagent", "input": {"task": task, "title": title,
-              "mcp_tools": input["mcp_tools"]}}),
-        Some(&ctx.agent_id),
-        ctx.stage_run_id.as_deref(),
-    )?;
-    let result = dispatch(db, provider, registry, ctx, &input, task, title);
-    let (ok, payload) = match &result {
-        Ok(v) => (true, json!({"tool": "subagent", "output": v})),
-        Err(e) => (false, json!({"tool": "subagent", "error": e.to_string()})),
-    };
-    db.append_event(
-        &ctx.project_id,
-        EventKind::ToolResult,
-        json!({"tool": "subagent", "ok": ok, "result": payload}),
-        Some(&ctx.agent_id),
-        ctx.stage_run_id.as_deref(),
-    )?;
-    result.map(CallOutcome::Done)
+    registry.tracked_nested(db, ctx, &input, seq, || {
+        dispatch(db, provider, registry, ctx, &input, task, title).map(CallOutcome::Done)
+    })
 }
 
 fn dispatch(
@@ -477,24 +469,6 @@ fn dispatch(
         return Ok(json!({"dispatched": false, "reason": "parent agent sleeping"}));
     }
 
-    // 票 06：每次派遣独立勾选。mcp_tools 里没授权/不在场/非法名的项
-    // 不进选择集也不悄悄带过——回执列出 dropped 名单，父代理看得见。
-    let mut pick: HashSet<String> = HashSet::new();
-    let mut dropped: Vec<String> = Vec::new();
-    if let Some(list) = input["mcp_tools"].as_array() {
-        for v in list {
-            let Some(name) = v.as_str() else {
-                dropped.push(v.to_string());
-                continue;
-            };
-            if selectable(db, ctx, registry, name)? {
-                pick.insert(name.to_string());
-            } else {
-                dropped.push(name.to_string());
-            }
-        }
-    }
-
     let key = activation_key(ctx);
     let title = if title.is_empty() {
         task.chars().take(60).collect()
@@ -511,6 +485,65 @@ fn dispatch(
     };
     let id = disp.id;
 
+    // reliability 05: reserve the existing bounded dispatch slot first. A fifth
+    // dispatch must not start isolation work before being refused.
+    let mut pick: HashSet<String> = HashSet::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut reasons = std::collections::BTreeMap::new();
+    let mut isolated = Vec::new();
+    if let Some(list) = input["mcp_tools"].as_array() {
+        for value in list {
+            let Some(name) = value.as_str() else {
+                dropped.push(value.to_string());
+                continue;
+            };
+            if pick.contains(name) || reasons.contains_key(name) {
+                continue;
+            }
+            let started = std::time::Instant::now();
+            let candidate = if selectable(db, ctx, registry, name)? {
+                registry
+                    .get(name)
+                    .ok_or_else(|| ToolError::Exec("tool unavailable".into()))
+                    .and_then(|tool| tool.for_subagent(ctx))
+            } else {
+                Err(ToolError::Exec(
+                    "parent authorization or tool unavailable".into(),
+                ))
+            };
+            let accepted = candidate.is_ok();
+            crate::diag::note(
+                if accepted {
+                    crate::diag::CLASS_JUDGE
+                } else {
+                    crate::diag::CLASS_REJECT
+                },
+                !accepted,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "subagent_mcp",
+                if accepted {
+                    "isolated_read_only"
+                } else {
+                    "capability_unavailable"
+                },
+                started,
+            );
+            match candidate {
+                Ok(tool) => {
+                    pick.insert(name.to_string());
+                    isolated.push(tool);
+                }
+                Err(error) => {
+                    dropped.push(name.to_string());
+                    reasons.insert(name.to_string(), error.to_string());
+                }
+            }
+        }
+    }
+
     let scope = Scope {
         halt: disp.halt,
         answer: disp.answer,
@@ -519,7 +552,7 @@ fn dispatch(
     };
     let mut nctx = ctx.clone();
     nctx.subagent = Some(scope);
-    let sub_registry = registry.subagent_scope(&pick);
+    let sub_registry = registry.subagent_scope(&isolated);
 
     // 线程派遣需要两件套：可移动的第二连接（内存库没有文件路径，退化为
     // 内联同步——测试接缝的诚实降级）与可移动的 provider Arc。
@@ -542,7 +575,7 @@ fn dispatch(
             Ok(json!({
                 "dispatched": true, "task_id": id, "status": "running",
                 "mcp_selected": pick.iter().collect::<Vec<_>>(),
-                "mcp_dropped": dropped,
+                "mcp_dropped": dropped, "mcp_drop_reasons": reasons,
                 "note": "collect the result via tasks list",
             }))
         }
@@ -555,7 +588,7 @@ fn dispatch(
             Ok(json!({
                 "dispatched": true, "task_id": id, "status": done.status,
                 "mcp_selected": pick.iter().collect::<Vec<_>>(),
-                "mcp_dropped": dropped,
+                "mcp_dropped": dropped, "mcp_drop_reasons": reasons,
                 "result": done.result, "error": done.error,
             }))
         }
@@ -583,7 +616,7 @@ impl crate::tools::Tool for Subagent {
             "task":{"type":"string","description":"bounded instruction for the child"},
             "title":{"type":"string","description":"short task-list label (defaults to task prefix)"},
             "mcp_tools":{"type":"array","items":{"type":"string"},
-                "description":"mcp:<service>:<tool> names authorized for you to hand to this dispatch only"}},
+                "description":"mcp:<service>:<tool> names already authorized for you; only separately host-confined local read-only capabilities can be delegated. Unsupported selections return mcp_drop_reasons."}},
             "required":["task"]})
     }
     fn risk(&self) -> crate::tools::RiskClass {
@@ -751,6 +784,25 @@ const DENY_TEST_FLAGS: &[&str] = &["-u", "--update", "--update-snapshot", "--upd
 /// run_test 命令闸：Ok = 可跑；Err(reason) = 机械拒。
 /// 提示词里写「这条是允许的」对本函数零影响——它只看命令文本。
 pub fn test_cmd_gate(cmd: &str, ctx: &ToolContext) -> Result<(), String> {
+    // reliability 04: runners need the host-generated output path in flags.
+    // Only this exact variable is permitted; unrelated variables/substitution
+    // remain opaque. This substitution is for validation, not shell execution.
+    let normalized = cmd.replace("${HEXAGON_TEST_OUTPUT}", ".hexagon-test-output");
+    let mut parts = normalized.split("$HEXAGON_TEST_OUTPUT");
+    let mut checked = parts.next().unwrap_or_default().to_string();
+    for part in parts {
+        let longer_name = part
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        checked.push_str(if longer_name {
+            "$HEXAGON_TEST_OUTPUT"
+        } else {
+            ".hexagon-test-output"
+        });
+        checked.push_str(part);
+    }
+    let cmd = checked.as_str();
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return Err("empty command".into());
@@ -835,17 +887,19 @@ impl crate::tools::Tool for RunTest {
         r#"Run one test command and get the verdict: pass/fail, exit code and a tail excerpt (full logs are not returned).
 - Use when: you need to know whether tests pass (cargo test, npm test, vitest, pytest, go test, dotnet test, …).
 - Do not use: for anything that is not a test — writes to source, specs or docs, git, remote publishing and pipe-installs are mechanically rejected.
+- Outputs: only the fresh host-assigned HEXAGON_TEST_OUTPUT directory is writable. TMPDIR, CARGO_TARGET_DIR, XDG_CACHE_HOME, npm_config_cache and COVERAGE_FILE point there. Configure other runners to use that directory; source, snapshots and host state stay read-only. The result includes output_dir.
 - Errors: a rejected command comes back with the reason; do not reword it to get past the check."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
             "cmd":{"type":"string","description":"a single test command"},
             "timeout_ms":{"type":"integer","description":"default 120000, cap 120000"}},
-            "required":["cmd"]})
+            "required":["cmd"],"additionalProperties":false})
     }
     fn risk(&self) -> crate::tools::RiskClass {
         // Exec 声明是诚实的（跑命令）；派遣域里权限层按 Scope 放行——
-        // 真正的边界是 test_cmd_gate，不是权限档。
+        // reliability 04: OS write scope enforces isolation. Command shape is
+        // an intent filter, not a guarantee that a script cannot modify source.
         crate::tools::RiskClass::Exec
     }
     fn builtin_deny(&self, input: &Value, _ctx: &ToolContext) -> Option<String> {
@@ -934,6 +988,7 @@ impl crate::tools::Tool for RunTest {
             "exit_code": exit,
             "killed": killed,
             "excerpt": tail,
+            "output_dir": v["output_dir"],
         }))
     }
 }
@@ -1092,7 +1147,12 @@ mod tests {
         proptest!(|(cmd in ".*")| {
             let r = test_cmd_gate(&cmd, &ctx);
             let _ = r; // 不 panic 即半条不变量
-            for t in ["`", "$(", "$", ">", "<", "("] {
+            // reliability 04 intentionally permits the host-assigned output
+            // variable; all other dynamic shell sources still fail closed.
+            if cmd.contains('$') && !cmd.contains("$HEXAGON_TEST_OUTPUT") && !cmd.contains("${HEXAGON_TEST_OUTPUT}") {
+                prop_assert!(r.is_err());
+            }
+            for t in ["`", "$(", ">", "<", "("] {
                 if cmd.contains(t) {
                     prop_assert!(r.is_err(), "opaque {t:?} passed: {cmd:?}");
                 }

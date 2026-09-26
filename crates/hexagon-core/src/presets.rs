@@ -249,7 +249,6 @@ mod tests {
     use crate::orchestra;
     use crate::provider::ScriptedProvider;
     use crate::tools::{Registry, ToolContext};
-    use crate::trace::EventKind;
     use crate::turn::{run_turn, text_response, tool_response, TurnOutcome};
     use serde_json::json;
 
@@ -353,6 +352,7 @@ mod tests {
 
     fn setup_all_roles() -> (Db, tempfile::TempDir) {
         let db = Db::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
         db.conn()
             .execute(
                 // 票 02：省略 autonomy 默认 L4，非最终盖章点会自动通过，打乱「每阶段等人盖章」走查。
@@ -369,7 +369,15 @@ mod tests {
                 )
                 .unwrap();
         }
-        (db, tempfile::tempdir().unwrap())
+        // Reliability 17/18: all delivery evidence reads the real project root,
+        // including packs without code. /tmp/x was only a metadata-only fixture.
+        db.conn()
+            .execute(
+                "UPDATE projects SET dir=?1 WHERE id='p1'",
+                [dir.path().to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        (db, dir)
     }
 
     fn agent_id(db: &Db, role: &str) -> String {
@@ -395,7 +403,7 @@ mod tests {
 
     /// 每个预置包：全角色团队在 ScriptedProvider 下走完所有阶段到 pack_finished。
     /// 脚本按阶段生成——每个激活角色交付其轮值的一份 due 产物（kind 均分），
-    /// 声明复审直接补 review_passed 事件（复审本身在票 10 已测）。
+    /// 声明复审使用实际当前产物生成版本证据；旧的 kind-only 事件不再代表通过。
     #[test]
     fn all_preset_packs_run_to_finish() {
         let reg = Registry::builtin();
@@ -424,7 +432,7 @@ mod tests {
                             _ => "## 概述\nx\n",
                         };
                         let content = format!("---\nkind: {k}\nauthor: {role}\n---\n{sections}");
-                        let path = format!("docs/{k}.md");
+                        let path = format!("docs/{}/{k}.md", st.name);
                         // 2026-09-24：登记为代码的产物，仓库根上要有同路径文件。
                         if k == "代码" {
                             let file = dir.path().join(&path);
@@ -477,16 +485,43 @@ mod tests {
                         role
                     );
                 }
-                // 声明复审补齐通过事件
+                // Reliability 17/18: the old hand-written kind-only pass event
+                // cannot attest a version. Preserve the pack completion assertion
+                // by reviewing each real latest artifact, scoped to this run.
                 for rv in &st.reviews {
-                    db.append_event(
+                    let ctx = ToolContext {
+                        project_id: "p1".into(),
+                        agent_id: agent_id(&db, &rv.reviewer),
+                        repo_root: dir.path().to_path_buf(),
+                        stage_run_id: Some(rid.clone()),
+                        ..Default::default()
+                    };
+                    let rows = crate::artifacts::query(
+                        &db,
                         "p1",
-                        EventKind::ReviewPassed,
-                        json!({"artifact_kind": rv.artifact_kind, "reviewer": rv.reviewer}),
-                        Some(&agent_id(&db, &rv.reviewer)),
+                        Some(&rv.artifact_kind),
                         Some(&rid),
+                        None,
+                        None,
                     )
                     .unwrap();
+                    assert!(!rows.is_empty());
+                    for row in &rows {
+                        if rows
+                            .iter()
+                            .any(|other| other.path == row.path && other.version > row.version)
+                        {
+                            continue;
+                        }
+                        crate::review::submit_review(
+                            &db,
+                            &ctx,
+                            &row.id,
+                            crate::review::Verdict::Pass,
+                            "reviewed fixture delivery",
+                        )
+                        .unwrap();
+                    }
                 }
                 // 推进：可能是下一阶段直接开，也可能停在盖章点
                 let a =

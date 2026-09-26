@@ -3,4 +3,8 @@
 /**
  * 项目总计：spent/limit/tokens。
  */
-export type UsageTotal = { spent_mc: number, limit_cents: number | null, tokens: number, };
+export type UsageTotal = { 
+/**
+ * Reliability 13: in-flight estimate, never a settled supplier charge.
+ */
+reserved_mc: number, spent_mc: number, limit_cents: number | null, tokens: number, unknown_requests: number, legacy_unknown_records: number, unknown_token_records: number, };

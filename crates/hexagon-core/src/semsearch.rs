@@ -132,8 +132,9 @@ pub fn refresh(
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for rel in &files {
-        stale.retain(|p| p != rel);
-        let p = root.join(rel);
+        let Ok(p) = crate::tools::readable_repo_path(root, rel) else {
+            continue;
+        };
         let Ok(meta) = p.metadata() else { continue };
         if meta.len() > INDEX_FILE_BYTES || meta.len() == 0 {
             continue;
@@ -145,6 +146,7 @@ pub fn refresh(
             continue;
         }
         let text = String::from_utf8_lossy(&bytes).into_owned();
+        stale.retain(|p| p != rel);
         let sig = format!("{}:{:016x}", embedder.name(), fnv64(&text));
         let cur: Option<String> = db
             .conn()
@@ -207,6 +209,9 @@ pub fn query(
     let mut scored: Vec<(f32, String, i64)> = Vec::new();
     for row in rows {
         let (path, line_start, blob) = row?;
+        if crate::tools::readable_repo_path(root, &path).is_err() {
+            continue;
+        }
         let v = unpack(&blob);
         let dot: f32 = qv.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
         if dot > 0.0 {
@@ -249,7 +254,10 @@ pub fn query(
 
 /// 命中块的短摘：从块首行起取非空行拼到 ~240 字符。
 fn excerpt(root: &Path, rel: &str, line_start: i64) -> String {
-    let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+    let Ok(path) = crate::tools::readable_repo_path(root, rel) else {
+        return String::new();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
         return String::new();
     };
     let mut out = String::new();

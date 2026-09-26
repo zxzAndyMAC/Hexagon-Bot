@@ -163,3 +163,19 @@ pub fn stall_ack_closed() -> &'static str {
         _ => "The owner clicked \"Got it\". This stall is closed; timing restarts on a new owner message or a new activation.",
     }
 }
+
+/// reliability 07: preserve literal instance mentions across interface languages.
+pub fn choose_instance(candidates: &str) -> String {
+    let prompt = match code() {
+        "zh-CN" => "这个角色有多个实例，请用输入框 @ 选择一个实例后重新发送：",
+        "zh-TW" => "這個角色有多個實例，請用輸入框 @ 選擇一個實例後重新傳送：",
+        "ja" => "同じ役割のエージェントが複数います。入力欄の @ で1つ選び、再送してください：",
+        "es" => "Hay varias instancias de este rol. Elige una con @ y vuelve a enviar:",
+        "pt" => "Há várias instâncias deste papel. Escolha uma com @ e envie novamente:",
+        "fr" => {
+            "Plusieurs instances ont ce rôle. Choisissez-en une avec @ et renvoyez le message :"
+        }
+        _ => "This role has multiple instances. Select one with @ in the composer and resend:",
+    };
+    format!("{prompt} {candidates}")
+}

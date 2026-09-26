@@ -360,7 +360,11 @@ pub fn state_block(db: &Db, ctx: &ToolContext) -> String {
         downloaded.sort();
         let rel = |p: &str| {
             Path::new(p)
-                .strip_prefix(&ctx.repo_root)
+                .strip_prefix(
+                    ctx.repo_root
+                        .canonicalize()
+                        .unwrap_or_else(|_| ctx.repo_root.clone()),
+                )
                 .map(|r| r.to_string_lossy().to_string())
                 .unwrap_or_else(|_| p.to_string())
         };

@@ -5,12 +5,14 @@
 //! Tauri/WebView 只是薄壳，经进程内 API 边界（本 crate 的公开面）与核交互。
 //! 该边界同时是全项目唯一的测试主接缝（见 spec「Testing Decisions」）。
 
+pub(crate) mod actions;
 pub mod api;
 pub mod artifacts;
 pub mod autonomy;
 pub mod cards;
 pub mod commands;
 pub mod credentials;
+pub mod data_boundary;
 pub mod db;
 pub mod diag;
 pub mod errcode;

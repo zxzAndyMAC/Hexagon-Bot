@@ -1,9 +1,9 @@
 //! 用量账本（票 12）：计量、汇总、上限硬闸。
 //!
-//! - 计量：每次模型响应记 prompt/completion tokens；每次工具结果按
-//!   字节/4 估算工具输出 tokens 一并记入行。
-//! - 成本：单价表从项目目录 `.hexagon/prices.json` 读（可改、不落盘死价），
-//!   缺文件则成本按 0 计——token 数永远真实记录，钱只是本地估算。
+//! - 每次模型实际派发先记 request 身份，结束后记录可得用量及状态。
+//!   工具输出字节/4 独立记账，不计入请求数；旧不可分类行保留 legacy。
+//! - `.hexagon/prices.json` 的缺失、损坏、不匹配与缺少供应商用量均
+//!   标记未知费用；数字成本只是已知部分的本地估算，不把未知说成免费。
 //! - 上限：`projects.usage_limit_cents`（分）对 `SUM(cost_millicents)/1000`；
 //!   触顶 → 全员休眠 + UsageCapHit/TeamSlept 事件，之后任何 Agent 不被调度
 //!   （turn 内核在召模型前先查账）。上限压过自治档位。
@@ -25,23 +25,307 @@ pub struct Price {
 
 /// 从 `.hexagon/prices.json` 读价格表。格式：
 /// `{ "default": {...}, "models": { "<slot>": {...} } }`
-fn price_for(repo_root: &std::path::Path, model_slot: &str) -> Price {
-    let Ok(text) = std::fs::read_to_string(repo_root.join(".hexagon/prices.json")) else {
-        return Price::default();
-    };
-    let Ok(v) = serde_json::from_str::<Value>(&text) else {
-        return Price::default();
-    };
+fn price_for(repo_root: &std::path::Path, model_slot: &str) -> Option<Price> {
+    let text = std::fs::read_to_string(repo_root.join(".hexagon/prices.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
     let entry = v
         .get("models")
         .and_then(|m| m.get(model_slot))
-        .or_else(|| v.get("default")); // D13-exempt: prices.json 价目兜底，非槽位绑定回退
-    entry
-        .map(|e| Price {
-            prompt_per_1k_mc: e["prompt_per_1k_mc"].as_i64().unwrap_or(0),
-            completion_per_1k_mc: e["completion_per_1k_mc"].as_i64().unwrap_or(0),
-        })
-        .unwrap_or_default()
+        .or_else(|| v.get("default"))?; // D13-exempt: explicit price-table default, not a model-slot fallback
+    let prompt = entry["prompt_per_1k_mc"].as_i64()?;
+    let completion = entry["completion_per_1k_mc"].as_i64()?;
+    (prompt >= 0 && completion >= 0).then_some(Price {
+        prompt_per_1k_mc: prompt,
+        completion_per_1k_mc: completion,
+    })
+}
+
+fn cost_for(price: Price, usage: &Usage) -> Option<i64> {
+    // Reliability 12: malformed supplier counts can overflow even i128 when
+    // both products are added. Unknown costs extra reconciliation; wrapped
+    // cheap/negative costs can bypass a real budget. Never wrap or panic.
+    let prompt = (usage.prompt_tokens as i128).checked_mul(price.prompt_per_1k_mc as i128)?;
+    let completion =
+        (usage.completion_tokens as i128).checked_mul(price.completion_per_1k_mc as i128)?;
+    let cost = prompt.checked_add(completion)? / 1000;
+    i64::try_from(cost).ok()
+}
+
+// Reliability 13 / D06: false negatives postpone a request; false positives
+// can dispatch unbudgeted work. Compare in i128, reject exhausted known spend,
+// and never wrap a cents limit or summed reservations into an affordable value.
+fn reservation_fits(spent: i64, held: i64, needed: i64, limit_cents: i64) -> bool {
+    let limit = i128::from(limit_cents) * 1000;
+    i128::from(spent) < limit && i128::from(spent) + i128::from(held) + i128::from(needed) <= limit
+}
+
+fn request_lock_path(root: &std::path::Path, id: &str) -> std::path::PathBuf {
+    root.join(".hexagon/request-locks")
+        .join(format!("{id}.lock"))
+}
+
+fn mark_request_unknown(db: &Db, project: &str, id: &str) -> Result<(), rusqlite::Error> {
+    let started = std::time::Instant::now();
+    let changed = db.conn().execute("UPDATE usage SET request_state='outcome_unknown',reserved_mc=0,cost_known=0 WHERE project_id=?1 AND request_id=?2 AND request_state='pending'",params![project,id])?;
+    if changed > 0 {
+        let (agent, activation): (Option<String>, Option<String>) = db.conn().query_row(
+            "SELECT agent_id,stage_run_id FROM usage WHERE project_id=?1 AND request_id=?2",
+            params![project, id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(project),
+            agent.as_deref(),
+            activation.as_deref(),
+            None,
+            "request_recovery",
+            // Request identity is not an event/trace ID. Keep its explicit
+            // namespace in the reason detail, without any request contents.
+            &format!("unsettled_request_cost_unknown:{id}"),
+            started,
+        );
+    }
+    Ok(())
+}
+
+struct PendingRequest<'a> {
+    db: &'a Db,
+    project: &'a str,
+    id: &'a str,
+    _lock: std::fs::File,
+}
+
+impl Drop for PendingRequest<'_> {
+    fn drop(&mut self) {
+        // Reliability 13: unwinding after dispatch is not evidence of a free
+        // request. Release only the estimate and retain an unknown charge.
+        // Successful settlement already changed state, so this CAS is a no-op.
+        let _ = mark_request_unknown(self.db, self.project, self.id);
+    }
+}
+
+/// Reconcile stale local reservations without replaying a model request. A
+/// live OS lock is stronger evidence than a timeout or a reusable process ID.
+pub fn recover_requests(
+    db: &Db,
+    root: &std::path::Path,
+    project: &str,
+) -> Result<(), rusqlite::Error> {
+    let rows = {
+        let mut st = db.conn().prepare("SELECT request_id,reserved_mc FROM usage WHERE project_id=?1 AND record_kind='request' AND request_state='pending'")?;
+        let rows = st
+            .query_map([project], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for (id, reserved) in rows {
+        // IDs are host-generated. Corrupt imported ledger text is never a path.
+        if !id
+            .strip_prefix("request")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        {
+            continue;
+        }
+        let path = request_lock_path(root, &id);
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
+            Ok(file) => match file.try_lock() {
+                Ok(()) => mark_request_unknown(db, project, &id)?,
+                Err(std::fs::TryLockError::WouldBlock) => (),
+                Err(std::fs::TryLockError::Error(_)) => (), // Cannot prove abandonment: retain the reservation.
+            },
+            // Pre-13 pending requests have no reservation/lock to preserve.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && reserved == 0 => {
+                mark_request_unknown(db, project, &id)?
+            }
+            Err(_) => (),
+        }
+    }
+    Ok(())
+}
+
+/// One row per dispatch attempt, before provider IO. Repeated tool-output rows
+/// are separate records, never model calls. Unknown prices do not imply zero.
+pub fn complete_project_request(
+    ctx: &ToolContext,
+    provider: &dyn crate::provider::ModelProvider,
+    req: &crate::provider::ChatRequest,
+    purpose: &str,
+) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+    // Reliability 12 / D01: opening intake must not hold the Workbench or
+    // control-connection mutex during network IO. Use its own project ledger.
+    let db = Db::open(ctx.repo_root.join(".hexagon/state.db"))
+        .map_err(|e| crate::provider::ProviderError::Refused(format!("request ledger: {e}")))?;
+    request(
+        &db,
+        ctx,
+        &req.model_slot,
+        purpose,
+        provider,
+        Some(req),
+        || provider.complete(req),
+    )
+}
+
+pub fn request(
+    db: &Db,
+    ctx: &ToolContext,
+    model_slot: &str,
+    purpose: &str,
+    provider: &dyn crate::provider::ModelProvider,
+    chat: Option<&crate::provider::ChatRequest>,
+    send: impl FnOnce() -> Result<crate::provider::ChatResponse, crate::provider::ProviderError>,
+) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+    use crate::provider::ProviderError;
+    let started = std::time::Instant::now();
+    let ledger_error = |e: String| ProviderError::Refused(format!("request ledger: {e}"));
+    recover_requests(db, &ctx.repo_root, &ctx.project_id)
+        .map_err(|e| ledger_error(e.to_string()))?;
+    // Reliability 13: admission and reservation share one SQLite writer
+    // transaction. Separate reads let all four workers spend the same balance.
+    // No transaction remains open during provider IO.
+    let tx =
+        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| ledger_error(e.to_string()))?;
+    if enforce_cap(db, &ctx.project_id).map_err(|e| ledger_error(e.to_string()))? {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "model_request",
+            "known_budget_exhausted",
+            started,
+        );
+        tx.commit().map_err(|e| ledger_error(e.to_string()))?;
+        return Err(ProviderError::BudgetUnavailable);
+    }
+    let id = format!(
+        "request{}",
+        db.next_id("model_request")
+            .map_err(|e| ledger_error(e.to_string()))?
+    );
+    let price = price_for(&ctx.repo_root, model_slot);
+    let mut reserved_mc = 0;
+    let mut estimated_prompt = None;
+    let mut output_limit = None;
+    if let (Some(price), Some(req), Some(output)) = (price, chat, provider.output_token_limit()) {
+        let input = serde_json::to_string(&(&req.messages, &req.tools))
+            .map_err(|e| ledger_error(e.to_string()))?;
+        let estimate = crate::provider::Usage {
+            prompt_tokens: tiktoken_rs::cl100k_base_singleton()
+                .encode_ordinary(&input)
+                .len() as u64,
+            completion_tokens: output,
+            prompt_reported: true,
+            completion_reported: true,
+            ..Default::default()
+        };
+        reserved_mc = cost_for(price, &estimate).unwrap_or(i64::MAX);
+        estimated_prompt = Some(estimate.prompt_tokens.min(i64::MAX as u64) as i64);
+        output_limit = Some(output.min(i64::MAX as u64) as i64);
+        let limit: Option<i64> = db
+            .conn()
+            .query_row(
+                "SELECT usage_limit_cents FROM projects WHERE id=?1",
+                [&ctx.project_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| ledger_error(e.to_string()))?;
+        if let Some(limit) = limit {
+            let spent = spent_mc(db, &ctx.project_id).map_err(|e| ledger_error(e.to_string()))?;
+            let in_flight: i64 = db.conn().query_row("SELECT COALESCE(SUM(reserved_mc),0) FROM usage WHERE project_id=?1 AND request_state='pending'", [&ctx.project_id], |r| r.get(0)).map_err(|e| ledger_error(e.to_string()))?;
+            if !reservation_fits(spent, in_flight, reserved_mc, limit) {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&ctx.project_id),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                    None,
+                    "request_budget",
+                    "insufficient_estimated_balance",
+                    started,
+                );
+                return Err(ProviderError::BudgetUnavailable);
+            }
+        }
+    }
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(&ctx.project_id),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        None,
+        "model_request",
+        if price.is_some() {
+            "price_available"
+        } else {
+            "price_unknown_continue"
+        },
+        started,
+    );
+    let basis = price.map(|p|json!({"model_slot":model_slot,"prompt_per_1k_mc":p.prompt_per_1k_mc,"completion_per_1k_mc":p.completion_per_1k_mc}).to_string());
+    let lock_path = request_lock_path(&ctx.repo_root, &id);
+    let lock_dir = lock_path.parent().expect("request lock has a parent");
+    if lock_dir
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+        || lock_path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return Err(ledger_error("request lock path is a symlink".into()));
+    }
+    std::fs::create_dir_all(lock_dir).map_err(|e| ledger_error(e.to_string()))?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .map_err(|e| ledger_error(e.to_string()))?;
+    lock.try_lock().map_err(|e| ledger_error(e.to_string()))?;
+    db.conn().execute("INSERT INTO usage(project_id,agent_id,model,prompt_tokens,completion_tokens,tool_output_tokens,cost_millicents,stage_run_id,record_kind,request_id,purpose,request_state,price_basis,cost_known,actual_model) VALUES (?1,?2,?3,0,0,0,0,?4,'request',?5,?6,'pending',?7,0,?8)",params![ctx.project_id,ctx.agent_id,model_slot,ctx.stage_run_id,id,purpose,basis,provider.billing_model()]).map_err(|e|ledger_error(e.to_string()))?;
+    db.conn().execute("UPDATE usage SET reserved_mc=?2,estimated_prompt_tokens=?3,output_limit=?4 WHERE request_id=?1",params![id,reserved_mc,estimated_prompt,output_limit]).map_err(|e|ledger_error(e.to_string()))?;
+    tx.commit().map_err(|e| ledger_error(e.to_string()))?;
+    let _pending = PendingRequest {
+        db,
+        project: &ctx.project_id,
+        id: &id,
+        _lock: lock,
+    };
+    let result = send();
+    let usage = match &result {
+        Ok(response) => Some(&response.usage),
+        Err(error) => error.usage(),
+    };
+    let cost = usage
+        .filter(|u| u.prompt_reported || u.completion_reported)
+        .and_then(|u| price.and_then(|p| cost_for(p, u)));
+    // Native service tools can be billed separately even when their usage
+    // counters are missing. Preserve the priced portion, flag the remainder.
+    let unpriced = usage.is_some_and(|u| u.unpriced || !u.prompt_reported || !u.completion_reported) || result.as_ref().is_ok_and(|r| r.content.iter().any(|b| matches!(b,
+        crate::provider::ContentBlock::Opaque { raw } if matches!(raw["type"].as_str(), Some("server_tool_use" | "web_search_tool_result"))
+    )));
+    let state = match &result {
+        Ok(_) => "succeeded",
+        Err(error) if matches!(error.cause(), ProviderError::Interrupted) => "interrupted",
+        Err(error) if matches!(error.cause(), ProviderError::MissingCredential(_)) => "not_sent",
+        Err(_) => "failed",
+    };
+    db.conn().execute("UPDATE usage SET reserved_mc=0,prompt_tokens=?1,completion_tokens=?2,cost_millicents=?3,cost_known=?4,request_state=?5,prompt_known=?7,completion_known=?8 WHERE request_id=?6 AND request_state='pending'",params![usage.map(|u|u.prompt_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),usage.map(|u|u.completion_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),cost.unwrap_or(0),cost.is_some() && !unpriced,state,id,usage.is_some_and(|u|u.prompt_reported),usage.is_some_and(|u|u.completion_reported)]).map_err(|e|ledger_error(e.to_string()))?;
+    result.map_err(ProviderError::into_cause)
 }
 
 /// 记一行账。`tool_output_bytes` 是本轮工具结果合计字节数，按 /4 估 token。
@@ -52,15 +336,12 @@ pub fn record(
     usage: &Usage,
     tool_output_bytes: usize,
 ) -> Result<(), rusqlite::Error> {
-    let price = price_for(&ctx.repo_root, model_slot);
-    let cost = (usage.prompt_tokens as i64 * price.prompt_per_1k_mc
-        + usage.completion_tokens as i64 * price.completion_per_1k_mc)
-        / 1000;
+    let cost = price_for(&ctx.repo_root, model_slot).and_then(|p| cost_for(p, usage));
     db.conn().execute(
         "INSERT INTO usage (project_id, agent_id, model, prompt_tokens,
                             completion_tokens, tool_output_tokens, cost_millicents,
-                            stage_run_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                            stage_run_id,record_kind,cost_known)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             ctx.project_id,
             ctx.agent_id,
@@ -71,10 +352,26 @@ pub fn record(
             // 粗估——账务近似量级即可；撞限判定走 turn/context.rs 的
             // cl100k 真分词，两侧精度要求不同，勿互相对齐。
             (tool_output_bytes / 4) as i64,
-            cost,
+            cost.unwrap_or(0),
             ctx.stage_run_id,
+            // Reliability 12: this compatibility API mixes model and tool
+            // counters; nonempty tool output cannot prove it is a tool-only row.
+            // Only record_tools may assert that; keep actual request count unknown.
+            "legacy",
+            cost.is_some(),
         ],
     )?;
+    Ok(())
+}
+
+/// Tool-output metering is deliberately not a request, including empty output.
+pub fn record_tools(
+    db: &Db,
+    ctx: &ToolContext,
+    model_slot: &str,
+    bytes: usize,
+) -> Result<(), rusqlite::Error> {
+    db.conn().execute("INSERT INTO usage(project_id,agent_id,model,prompt_tokens,completion_tokens,tool_output_tokens,cost_millicents,stage_run_id,record_kind,cost_known) VALUES (?1,?2,?3,0,0,?4,0,?5,'tool',1)",params![ctx.project_id,ctx.agent_id,model_slot,(bytes/4).min(i64::MAX as usize) as i64,ctx.stage_run_id])?;
     Ok(())
 }
 
@@ -98,7 +395,7 @@ pub fn enforce_cap(db: &Db, project_id: &str) -> Result<bool, crate::trace::Trac
     let Some(limit_cents) = limit else {
         return Ok(false);
     };
-    if spent_mc(db, project_id)? < limit_cents * 1000 {
+    if i128::from(spent_mc(db, project_id)?) < i128::from(limit_cents) * 1000 {
         return Ok(false);
     }
     let active: i64 = db.conn().query_row(
@@ -150,18 +447,33 @@ pub struct UsageRow {
     pub cost_mc: i64,
     #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub calls: i64,
+    #[ts(type = "number")]
+    pub unknown_requests: i64,
+    #[ts(type = "number")]
+    pub legacy_unknown_records: i64,
+    #[ts(type = "number")]
+    pub unknown_token_records: i64,
 }
 
 /// 项目总计：spent/limit/tokens。
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct UsageTotal {
+    /// Reliability 13: in-flight estimate, never a settled supplier charge.
+    #[ts(type = "number")]
+    pub reserved_mc: i64,
     #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub spent_mc: i64,
     #[ts(type = "number | null")]
     pub limit_cents: Option<i64>,
     #[ts(type = "number")] // JS number 域（wire 是 JSON number）
     pub tokens: i64,
+    #[ts(type = "number")]
+    pub unknown_requests: i64,
+    #[ts(type = "number")]
+    pub legacy_unknown_records: i64,
+    #[ts(type = "number")]
+    pub unknown_token_records: i64,
 }
 
 /// 用量面返回体：明细行 + 总计（原 `_total` 哨兵行已拆——哨兵行正是
@@ -193,7 +505,11 @@ pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<UsageRow>, rusqlite::E
     let mut st = db.conn().prepare(
         "SELECT u.agent_id, u.model, sr.stage_name,
                 SUM(u.prompt_tokens), SUM(u.completion_tokens),
-                SUM(u.tool_output_tokens), SUM(u.cost_millicents), COUNT(*)
+                SUM(u.tool_output_tokens), SUM(u.cost_millicents),
+                SUM(u.record_kind='request' AND u.request_state!='not_sent'),
+                SUM(u.record_kind='request' AND u.cost_known=0 AND u.request_state!='not_sent'),
+                SUM(u.record_kind='legacy'),
+                SUM(u.record_kind='legacy' OR (u.record_kind='request' AND u.request_state!='not_sent' AND (u.prompt_known=0 OR u.completion_known=0)))
          FROM usage u LEFT JOIN stage_runs sr ON sr.id = u.stage_run_id
          WHERE u.project_id=?1
          GROUP BY u.agent_id, u.model, u.stage_run_id
@@ -210,6 +526,9 @@ pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<UsageRow>, rusqlite::E
                 tool_output_tokens: r.get(5)?,
                 cost_mc: r.get(6)?,
                 calls: r.get(7)?,
+                unknown_requests: r.get(8)?,
+                legacy_unknown_records: r.get(9)?,
+                unknown_token_records: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -231,12 +550,19 @@ pub fn project_summary(db: &Db, project_id: &str) -> Result<UsageSummary, rusqli
         [project_id],
         |r| r.get(0),
     )?;
+    let unknown_requests = rows.iter().map(|r| r.unknown_requests).sum();
+    let legacy_unknown_records = rows.iter().map(|r| r.legacy_unknown_records).sum();
+    let unknown_token_records = rows.iter().map(|r| r.unknown_token_records).sum();
     Ok(UsageSummary {
         rows,
         total: UsageTotal {
+            reserved_mc: db.conn().query_row("SELECT COALESCE(SUM(reserved_mc),0) FROM usage WHERE project_id=?1 AND request_state='pending'", [project_id], |r| r.get(0))?,
             spent_mc: spent_mc(db, project_id)?,
             limit_cents: limit,
             tokens,
+            unknown_requests,
+            legacy_unknown_records,
+            unknown_token_records,
         },
     })
 }
@@ -432,6 +758,9 @@ mod tests {
     fn records_and_summarizes() {
         let (db, ctx, _d) = setup(None);
         let u = Usage {
+            unpriced: false,
+            prompt_reported: true,
+            completion_reported: true,
             prompt_tokens: 1000,
             completion_tokens: 500,
         };
@@ -445,7 +774,10 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["prompt_tokens"], 2000);
         assert_eq!(rows[0]["tool_output_tokens"], 100); // 400B / 4
-        assert_eq!(rows[0]["calls"], 2);
+                                                        // D06 / 12: both mixed rows remain legacy, even with tool-output bytes;
+                                                        // neither provides evidence of an actual individual model request.
+        assert_eq!(rows[0]["calls"], 0);
+        assert_eq!(rows[0]["legacy_unknown_records"], 2);
     }
 
     #[test]
@@ -459,6 +791,9 @@ mod tests {
             )
             .unwrap();
         let u = Usage {
+            unpriced: false,
+            prompt_reported: true,
+            completion_reported: true,
             prompt_tokens: 100,
             completion_tokens: 0,
         };
@@ -480,7 +815,9 @@ mod tests {
             rows.iter().map(|r| r["stage"].as_str().unwrap()).collect();
         assert_eq!(stages.iter().copied().collect::<Vec<_>>(), ["实现", "接口"]);
         let impl_row = rows.iter().find(|r| r["stage"] == "实现").unwrap();
-        assert_eq!(impl_row["calls"], 2);
+        // D06 / 12: keep historical grouping without fabricating dispatches.
+        assert_eq!(impl_row["calls"], 0);
+        assert_eq!(impl_row["legacy_unknown_records"], 2);
         assert_eq!(impl_row["prompt_tokens"], 200);
     }
 
@@ -498,6 +835,9 @@ mod tests {
             &ctx,
             "chat",
             &Usage {
+                unpriced: false,
+                prompt_reported: true,
+                completion_reported: true,
                 prompt_tokens: 1000,
                 completion_tokens: 1000,
             },
@@ -521,6 +861,9 @@ mod tests {
             &ctx,
             "chat",
             &Usage {
+                unpriced: false,
+                prompt_reported: true,
+                completion_reported: true,
                 prompt_tokens: 1000, // 2000 毫分 = 2 分 > 1 分上限
                 completion_tokens: 0,
             },
@@ -568,6 +911,9 @@ mod tests {
             &ctx,
             "chat",
             &Usage {
+                unpriced: false,
+                prompt_reported: true,
+                completion_reported: true,
                 prompt_tokens: 999_999,
                 completion_tokens: 0,
             },
@@ -575,5 +921,39 @@ mod tests {
         )
         .unwrap();
         assert!(!enforce_cap(&db, "p").unwrap());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn request_reservation_is_monotone_and_never_admits_exhausted_balance(
+            limit in 1i64..=i64::MAX,
+            held in 0i64..=i64::MAX,
+            needed in 0i64..=i64::MAX,
+            extra in 0i64..=i64::MAX,
+        ) {
+            proptest::prop_assert!(!reservation_fits(i64::MAX, held, needed, 1));
+            proptest::prop_assert!(reservation_fits(0, 0, 0, limit));
+            if reservation_fits(0, held.saturating_add(extra), needed, limit) {
+                proptest::prop_assert!(reservation_fits(0, held, needed, limit));
+            }
+            if reservation_fits(0, held, needed.saturating_add(extra), limit) {
+                proptest::prop_assert!(reservation_fits(0, held, needed, limit));
+            }
+            // Huge positive limits and costs stay positive in the wide domain.
+            proptest::prop_assert!(reservation_fits(0, i64::MAX, i64::MAX, i64::MAX));
+            proptest::prop_assert!(!reservation_fits(1000, 0, 0, 1));
+        }
+
+        #[test]
+        fn cost_estimates_never_overflow_on_supplier_counts(
+            prompt in (u64::MAX - 1024)..=u64::MAX,
+            completion in (u64::MAX - 1024)..=u64::MAX,
+        ) {
+            let usage = Usage { unpriced: false, prompt_reported: true, completion_reported: true, prompt_tokens: prompt, completion_tokens: completion };
+            let price = Price { prompt_per_1k_mc: i64::MAX, completion_per_1k_mc: i64::MAX };
+            // Both terms far exceed the ledger range. Unknown is required;
+            // wrapping into a small or negative amount would bypass the cap.
+            proptest::prop_assert_eq!(cost_for(price, &usage), None);
+        }
     }
 }

@@ -324,11 +324,11 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
         .post(crate::provider::systemone_url(&def.base_url))
         .header("Authorization", &format!("Bearer {key}"))
         .send_json(&body)
-        .map_err(|e| ProvidersError::Http(e.to_string()))?;
+        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
     let v: Value = resp
         .body_mut()
         .read_json()
-        .map_err(|e| ProvidersError::Http(e.to_string()))?;
+        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
     let id = v["model"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -344,7 +344,9 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
 }
 
 /// 拉取模型目录：GET 端点的 /models 面（OpenAI {base}/models；Anthropic {base}/v1/models）。
-/// 返回 ModelEntry（id + 分组 + 推断能力）；4xx/网络错 → Http 错（透传给 UI）。
+/// 返回 ModelEntry（id + 分组 + 推断能力）；4xx/网络错 → 安全 Http 原因。
+/// Reliability 22: ureq BadUri used to echo authentication URLs into UI errors.
+/// Never return raw transport/parser errors, which can contain credentials.
 pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, ProvidersError> {
     let base = def.base_url.trim_end_matches('/');
     let url = match def.kind {
@@ -367,11 +369,11 @@ pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
     };
     let mut resp = req
         .call()
-        .map_err(|e| ProvidersError::Http(e.to_string()))?;
+        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
     let v: Value = resp
         .body_mut()
         .read_json()
-        .map_err(|e| ProvidersError::Http(e.to_string()))?;
+        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
     let mut ids: Vec<String> = v["data"]
         .as_array()
         .map(|a| {

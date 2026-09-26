@@ -14,6 +14,7 @@ import {
   type ContextPressure,
   type UsageBucket,
   type UsageRow,
+  type UsageTotal,
 } from './api'
 import { daysAgo } from './usage'
 
@@ -109,6 +110,7 @@ interface UiState {
   stages: StageRow[]
   team: TeamRow[]
   artifacts: ArtifactRow[]
+  evidenceRevision: number
   timeline: TimelineItem[]
   pending: PendingQuestion[]
   /* hands-free 票 05：待决不再占中栏。弹窗关掉 ≠ 驳回。
@@ -119,7 +121,7 @@ interface UiState {
   reviewRows: ProposalRow[]
   pendingDialogOpen: boolean
   dismissedPendingKeys: string[]
-  usageTotal: { spent_mc: number; limit_cents: number | null; tokens: number } | null
+  usageTotal: UsageTotal | null
   autonomy: string
   /// MCP 还在握手时为 true。工作台已进入，输入先停。
   mcpPending: boolean
@@ -230,6 +232,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   stages: [],
   team: [],
   artifacts: [],
+  evidenceRevision: 0,
   timeline: [],
   pending: [],
   reviewRows: [],
@@ -498,6 +501,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   invalidate: async (...tags) => {
     const s = useUiStore.getState()
     await Promise.all([s.refreshFast(), s.refreshSlow(tags)])
+    // D08: a refused acceptance may append no event. Explicit mutations still
+    // invalidate the evidence view; background timeline polling does not.
+    set((current) => ({ evidenceRevision: current.evidenceRevision + 1 }))
   },
   refreshFast: async () => {
     // 游标=末条 event.id（events 表 append-only、查询 ASC + after 排他）。

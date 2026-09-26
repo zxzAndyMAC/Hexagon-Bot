@@ -65,10 +65,11 @@ describe('usage units', () => {
 describe('usage rows', () => {
   // ADR 0054：_total 哨兵行已拆成 UsageSummary.total——明细行天然纯净，
   // 「滤掉汇总行」这类防御已由类型层取代。
+  // Reliability 12: these fixtures have complete, classified model usage.
   const rows: UsageRow[] = [
-    { agent_id: 'a0', model: 'm1', stage: null, prompt_tokens: 10, completion_tokens: 1, tool_output_tokens: 0, cost_mc: 100, calls: 2 },
-    { agent_id: 'a1', model: 'm1', stage: null, prompt_tokens: 20, completion_tokens: 1, tool_output_tokens: 0, cost_mc: 300, calls: 3 },
-    { agent_id: 'a1', model: 'm2', stage: null, prompt_tokens: 0, completion_tokens: 0, tool_output_tokens: 5, cost_mc: 50, calls: 1 },
+    { agent_id: 'a0', model: 'm1', stage: null, prompt_tokens: 10, completion_tokens: 1, tool_output_tokens: 0, cost_mc: 100, calls: 2, unknown_requests: 0, legacy_unknown_records: 0, unknown_token_records: 0 },
+    { agent_id: 'a1', model: 'm1', stage: null, prompt_tokens: 20, completion_tokens: 1, tool_output_tokens: 0, cost_mc: 300, calls: 3, unknown_requests: 0, legacy_unknown_records: 0, unknown_token_records: 0 },
+    { agent_id: 'a1', model: 'm2', stage: null, prompt_tokens: 0, completion_tokens: 0, tool_output_tokens: 5, cost_mc: 50, calls: 1, unknown_requests: 0, legacy_unknown_records: 0, unknown_token_records: 0 },
   ]
 
   it('groupCost sums cost_mc by key and sorts desc', () => {

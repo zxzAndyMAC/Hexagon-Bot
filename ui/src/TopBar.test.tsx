@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import './i18n'
+import i18n from './i18n'
 import { TopBar } from './components/TopBar'
 import { api } from './api'
 import { useUiStore } from './store'
@@ -39,4 +39,19 @@ describe('TopBar 流程入口（ADR 0069）', () => {
     expect(useUiStore.getState().railOpen).toBe(false)
     root.unmount()
   })
+  it('无沙箱时提示停止执行，不再承诺裸跑审批兜底', async () => {
+    const previous = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    const { el, root } = await render(<TopBar onSettings={() => {}} onProjectClosed={() => {}} />)
+    try {
+      const badge = Array.from(el.querySelectorAll('[title]')).find(node => node.textContent?.includes('无沙箱'))
+      expect(badge?.getAttribute('title')).toContain('停止终端执行')
+      expect(badge?.getAttribute('title')).not.toContain('裸跑')
+    } finally {
+      await act(async () => { root.unmount() })
+      el.remove()
+      await i18n.changeLanguage(previous)
+    }
+  })
+
 })

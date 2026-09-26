@@ -9,6 +9,8 @@ import { DiffView } from './DiffView'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { kindTitleKey, rejectReasonWithJudge, severityOf } from '../decisions'
 import { Icon, type IconName } from './Icon'
+import { StageEvidence } from './StageEvidence'
+import type { StageEvidence as Evidence } from '../gen/StageEvidence'
 
 type TFn = (key: string, opts?: Record<string, unknown>) => string
 
@@ -150,8 +152,8 @@ function InlineDiff({ proposalId }: { proposalId: string }) {
   )
 }
 
-function Btn({ onClick, primary, danger, title, children }: {
-  onClick: () => Promise<unknown>; primary?: boolean; danger?: boolean; title?: string; children: React.ReactNode
+function Btn({ onClick, primary, danger, title, disabled, children }: {
+  onClick: () => Promise<unknown>; primary?: boolean; danger?: boolean; title?: string; disabled?: boolean; children: React.ReactNode
 }) {
   const [busy, setBusy] = useState(false)
   const invalidate = useUiStore((s) => s.invalidate)
@@ -160,7 +162,7 @@ function Btn({ onClick, primary, danger, title, children }: {
     <button
       className={`btn ${primary ? 'primary' : ''} ${danger ? 'danger' : ''}`}
       title={title}
-      disabled={busy}
+      disabled={busy || disabled}
       onClick={async () => {
         setBusy(true)
         // ui-audit 票 04（P1-6）：待决按钮统一错误出口——失败 toast，
@@ -198,6 +200,127 @@ function MotionCard({ children, itemRef, current }: {
   )
 }
 
+function ActionRecovery({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const [reason, setReason] = useState('')
+  const [acceptsDuplicate, setAcceptsDuplicate] = useState(false)
+  const container = useRef<HTMLDivElement>(null)
+  const id = String(q.payload.action_id)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!top || e.repeat || e.defaultPrevented) return
+      const index = (['reconcileAction', 'abandonAction', 'retryAction'] as const).findIndex((action) => matches(e, bindingFor(action)))
+      if (index < 0) return
+      e.preventDefault()
+      if (useUiStore.getState().modalScope !== 'workbench') {
+        useUiStore.getState().pushToast(i18n.t('decisions.scopeBlocked'))
+        return
+      }
+      container.current?.querySelectorAll('button')[index]?.click()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [top])
+  return <CardShell tone="ask" icon="warn" title={t('cards.actionUnknown')}>
+    <div ref={container}>
+      <div className="dim3">{t('cards.actionUnknownHint')}</div>
+      <code>{id}</code>
+      {q.payload.reconciliation_evidence != null && <p>{String(q.payload.reconciliation_evidence)}</p>}
+      <label>{t('cards.actionReason')}<input value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+      <label><input type="checkbox" checked={acceptsDuplicate} onChange={(e) => setAcceptsDuplicate(e.target.checked)} />{t('cards.duplicateRisk')}</label>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Btn title={formatBinding(bindingFor('reconcileAction'))} onClick={() => api.reconcileToolAction(id)}>{t('cards.reconcileAction')}</Btn>
+        <Btn danger disabled={!reason.trim()} title={formatBinding(bindingFor('abandonAction'))} onClick={() => api.abandonToolAction(id, reason)}>{t('cards.abandonAction')}</Btn>
+        <Btn danger disabled={!reason.trim() || !acceptsDuplicate} title={formatBinding(bindingFor('retryAction'))} onClick={() => api.retryToolAction(id, reason, acceptsDuplicate)}>{t('cards.retryAction')}</Btn>
+      </div>
+    </div>
+  </CardShell>
+}
+
+function PolicyReport({ q }: { q: PendingQuestion }) {
+  const { t } = useTranslation()
+  const openButton = useRef<HTMLButtonElement>(null)
+  const report = q.payload.evidence as Record<string, unknown> | null | undefined
+  return <div onKeyDown={(e) => {
+    if (!matches(e, bindingFor('openPolicyReport'))) return
+    e.preventDefault()
+    if (!e.repeat && useUiStore.getState().modalScope === 'workbench') openButton.current?.click()
+  }}>
+    <p className="dim">{t('policy.ownerOnly')}</p>
+    {q.payload.policy_recovery === true && <p role="alert">{t('policy.recovery')}</p>}
+    {report && <p className="mono">{t('policy.scores', { baseline: report.baseline_score ?? '—', candidate: report.candidate_score ?? '—' })}</p>}
+    <button ref={openButton} className="btn" title={`${t('policy.report')} · ${formatBinding(bindingFor('openPolicyReport'))}`} onClick={async () => {
+      try {
+        const proposal = (await api.proposals()).find((p) => p.id === q.payload.proposal_id)
+        if (!proposal?.artifact_path) throw new Error(t('errors.not_found'))
+        useUiStore.getState().openTab({ id: `art:${proposal.artifact_path}`, kind: 'artifact', title: proposal.artifact_path, path: proposal.artifact_path })
+        useUiStore.getState().closePendingDialog()
+      } catch (e) { useUiStore.getState().pushToast(errText(e), 'err') }
+    }}>{t('policy.report')}</button>
+  </div>
+}
+
+function AcceptanceException({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const [evidence, setEvidence] = useState<Evidence | null>(null)
+  const [reason, setReason] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
+  const [error, setError] = useState('')
+  const container = useRef<HTMLDivElement>(null)
+  const revision = useUiStore((s) => s.evidenceRevision)
+  const event = useUiStore((s) => s.timeline.at(-1)?.event.id)
+  useEffect(() => {
+    let live = true
+    let request = 0
+    const refresh = () => {
+      const token = ++request
+      setEvidence(null)
+      setSelected([])
+      void api.stageEvidence().then((next) => { if (live && token === request) { setEvidence(next); setError('') } },
+        (e) => { if (live && token === request) setError(errText(e)) })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => { live = false; window.removeEventListener('focus', refresh) }
+  }, [q.id, revision, event])
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (!top || e.repeat || e.defaultPrevented || !matches(e, bindingFor('acceptException'))) return
+      e.preventDefault()
+      if (useUiStore.getState().modalScope !== 'workbench') {
+        useUiStore.getState().pushToast(i18n.t('decisions.scopeBlocked'))
+        return
+      }
+      container.current?.querySelector<HTMLButtonElement>('button.primary')?.click()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [top])
+  const current = evidence?.run_id === q.payload.run_id && evidence?.fingerprint === q.payload.fingerprint
+  const candidates = evidence?.exceptions.filter((item) => !item.accepted) ?? []
+  const items = candidates.filter((item) => selected.includes(JSON.stringify(item.requirement)))
+  return <CardShell tone="ask" icon="warn" title={t('exceptions.title')}>
+    <div ref={container}>
+      <p className="dim">{t('exceptions.hint')}</p>
+      {error && <div role="alert">{error}</div>}
+      {evidence && !current && <p role="alert">{t('exceptions.stale')}</p>}
+      {current && candidates.map((item) => {
+        const id = JSON.stringify(item.requirement)
+        return <label key={id} style={{ display: 'block' }}>
+          <input type="checkbox" checked={selected.includes(id)} onChange={(e) => setSelected((old) => e.target.checked ? [...old, id] : old.filter((value) => value !== id))} />{item.label}
+        </label>
+      })}
+      <label>{t('exceptions.reason')}<textarea value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Btn primary title={formatBinding(bindingFor('acceptException'))}
+          disabled={!current || !reason.trim() || items.length === 0 || evidence?.missing.some((m) => m.startsWith('action:'))}
+          onClick={() => api.acceptDeliveryException(q.id, String(q.payload.fingerprint), items.map((item) => item.requirement), reason)}>{t('exceptions.accept')}</Btn>
+        <Btn title={formatBinding(bindingFor('reject'))} onClick={() => api.cancelAcceptanceException(q.id)}>{t('exceptions.cancel')}</Btn>
+      </div>
+    </div>
+  </CardShell>
+}
+
 export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const [shape, setShape] = useState('')
@@ -224,6 +347,9 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           {String(p.reason ?? '')}
           {safety && <span className="chip err" style={{ marginLeft: 8 }}>{t('cards.askSafetyNet')}</span>}
         </div>
+        {Array.isArray(p.write_targets) && p.write_targets.length > 0 && <div className="dim3" style={{ marginBottom: 8 }}>
+          {t('cards.writeTargets')} <span className="mono">{p.write_targets.filter((v): v is string => typeof v === 'string').join(' · ')}</span>
+        </div>}
         <ProvenanceLines payload={p} />
         {!safety && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
@@ -245,12 +371,15 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     )
   }
 
+  if (q.kind === 'stamp' && p.sub === 'acceptance_exception') return <AcceptanceException q={q} top={top} />
+
   if (q.kind === 'stamp' && !p.proposal_id) {
     const finalGate = p.final_acceptance === true
     const names = [...new Set(stageNames.map((s) => s.stage))]
     return (
       <CardShell tone="stamp" icon="stamp" title={`${t('cards.stageStamp')} · ${String(p.stage ?? '')}`}>
         <StageArtifacts runId={String(p.run_id ?? '')} />
+        <StageEvidence runId={String(p.run_id ?? '')} />
         {finalGate && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
             {names.length > 0 ? (
@@ -293,12 +422,14 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   }
 
   if (q.kind === 'stamp' && p.proposal_id) {
+    const policy = p.surface === 'pack_copy'
     const warnings = (p.warnings as string[] | undefined) ?? []
     return (
-      <CardShell tone="stamp" icon="hex" title={`${t('cards.proposalStamp')} · ${String(p.proposal_id)}`}>
+      <CardShell tone="stamp" icon="hex" title={`${t(policy ? 'policy.title' : 'cards.proposalStamp')} · ${String(p.proposal_id)}`}>
         <div className="dim" style={{ fontSize: 12 }}>
           {t('cards.proposal')} · {t(`cards.surface_${String(p.surface)}`, { defaultValue: String(p.surface ?? '') })}
         </div>
+        {policy && <PolicyReport q={q} />}
         {warnings.length > 0 && (
           <div className="accent" style={{ fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'center', gap: 5 }}>
             <Icon name="warn" size={11} /> {warnings.length
@@ -333,8 +464,8 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
               bad && <span className="dim3" style={{ fontSize: 9, fontWeight: 400 }}> {t('cards.againstJudge')}</span>
             return (
               <>
-                <Btn primary onClick={() => api.confirmProposal(q.id)}>
-                  {t('cards.confirm')}{top && ` ${approveTip}`}{mk(jv === 'reject')}
+                <Btn primary disabled={p.policy_recovery === true} title={approveTip} onClick={() => api.confirmProposal(q.id)}>
+                  {t(policy ? 'policy.adopt' : 'cards.confirm')}{top && ` ${approveTip}`}{mk(jv === 'reject')}
                 </Btn>
                 <input
                   value={rejectReason}
@@ -371,6 +502,20 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           <Btn primary danger onClick={() => api.confirmPublish(q.id)}>{t('cards.publishConfirm')}</Btn>
           <Btn danger onClick={() => api.rejectPublish(q.id)}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
         </div>
+      </CardShell>
+    )
+  }
+
+  if (q.kind === 'recovery' && p.sub === 'tool_outcome_unknown') {
+    return <ActionRecovery q={q} top={top} />
+  }
+
+  if (q.kind === 'recovery' && p.sub === 'tool_action_ready') {
+    return (
+      <CardShell tone="ask" icon="warn" title={t('cards.recovery')}>
+        <div className="dim3">{t('cards.actionReadyHint')}</div>
+        <code>{String(p.action_id)}</code>
+        <Btn primary onClick={() => api.resumeToolAction(String(p.action_id))}>{t('cards.recover')}{top && ` ${approveTip}`}</Btn>
       </CardShell>
     )
   }

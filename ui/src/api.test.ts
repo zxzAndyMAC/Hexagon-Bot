@@ -32,3 +32,12 @@ describe('IPC error envelope', () => {
     )
   })
 })
+
+it('explains experience eligibility failures in Chinese without exposing backend details', async () => {
+  await i18n.changeLanguage('zh-CN')
+  try {
+    expect(errText({ code: 'unreviewed_experience', message: 'internal detail' })).toContain('当前作者')
+    expect(errText({ code: 'frozen_experience', message: 'internal detail' })).toContain('经验已冻结')
+    expect(errText({ code: 'stale_experience', message: 'internal detail' })).toContain('重新复审')
+  } finally { await i18n.changeLanguage('en') }
+})

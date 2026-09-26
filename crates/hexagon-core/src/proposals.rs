@@ -12,6 +12,14 @@
 //!   包副本改动下次运行生效（版本钉住，不热改运行中实体）。
 //! - 盖章卡显著标注：扩大自治面（新增回填边等）/ 削弱复审者的提案。
 
+mod policy;
+pub(crate) use policy::recover as recover_policy;
+#[cfg(test)]
+pub(crate) use policy::{
+    crash_after_replace as crash_policy_after_replace,
+    edit_after_replace as edit_policy_after_replace,
+};
+
 use rusqlite::params;
 use serde_json::{json, Value};
 
@@ -21,6 +29,22 @@ use crate::trace::EventKind;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PropError {
+    #[error(
+        "policy change needs recovery; preserve current files and reconcile the interrupted change"
+    )]
+    PolicyRecovery,
+    #[error("policy baseline or candidate changed; reevaluate and submit a new candidate")]
+    PolicyStale,
+    #[error("policy candidate violates current constraints or permissions")]
+    PolicyConstraint,
+    #[error("policy candidates require owner adoption")]
+    PolicyOwnerRequired,
+    #[error("unreviewed work cannot become experience")]
+    UnreviewedExperience,
+    #[error("experience is frozen after delivery")]
+    FrozenExperience,
+    #[error("experience source is stale or frozen; obtain a current review and propose again")]
+    StaleExperience,
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
@@ -244,6 +268,8 @@ fn evidence_summary(r: &crate::replay::ReplayReport) -> Value {
         "scenario": r.scenario_fingerprint,
         "baseline_pack": r.baseline_pack,
         "candidate_pack": r.candidate_pack,
+        "baseline_score": crate::replay::score(&r.baseline),
+        "candidate_score": crate::replay::score(&r.candidate),
         "signals": r.signals.len(),
         "decision_diffs": r.decision_diffs.len(),
     })
@@ -434,6 +460,16 @@ pub fn submit(
         ));
     }
 
+    let _policy_lease = if surface == "pack_copy" && ctx.write_lease.is_none() {
+        Some(crate::tools::writeguard::repository_lock(ctx)?)
+    } else {
+        None
+    };
+    let policy_binding = if surface == "pack_copy" {
+        Some(policy::capture(db, ctx, content, &target)?)
+    } else {
+        None
+    };
     let pid = format!("prop{}", db.next_id("prop")?);
     db.conn().execute(
         "INSERT INTO proposals (id, project_id, author_agent_id, surface, artifact_id,
@@ -452,11 +488,18 @@ pub fn submit(
         &ctx.project_id,
         EventKind::ProposalQueued,
         json!({"proposal_id": pid, "surface": surface, "target": target,
-               "evidence": evidence}),
+               "evidence": evidence, "policy_binding": policy_binding}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
     log::info!("proposal queued: {pid} surface={surface} target={target}");
+
+    // Q7 / reliability 21: the replay report is an owner candidate, never an
+    // automatic execution judgment. Legacy review continuations are guarded too.
+    if surface == "pack_copy" {
+        to_stamp_queue(db, ctx, &pid, &diff, &surface, evidence.as_ref())?;
+        return Ok(pid);
+    }
 
     // 路由：上级在场 → in_review；否则直达负责人（awaiting_stamp + 盖章卡）
     let author_role: String = db.conn().query_row(
@@ -531,7 +574,7 @@ fn to_stamp_queue(
         Some(&ctx.agent_id),
         crate::cards::CardKind::Stamp,
         json!({"proposal_id": pid, "surface": surface,
-        "evidence": evidence,
+        "evidence": evidence, "policy_candidate": surface == "pack_copy",
         "warnings": flags,
         "warning_text": Value::Null}),
         None,
@@ -667,27 +710,32 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
             r.get(0)
         })
         .unwrap_or_default();
+    if surface == "pack_copy" {
+        return policy::activate(db, ctx, &pid, qid);
+    }
     if surface == "role_def" && !crate::rolesurf::reviewed(db, &pid)? {
         return Err(PropError::Rejected(
             "role definition needs a passed superior review".into(),
         ));
     }
+    // Reliability 20: failed source revalidation must leave the card queued.
+    // Owner is not an agents row; record owner in payload, not the agent FK.
+    let target = materialize(db, ctx, &pid)?;
     crate::cards::answer(db, qid, "owner")?;
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalStamped,
         // by=owner 与 L4 自动通过的 by=autonomy 区分。
         json!({"proposal_id": pid, "question_id": qid, "by": "owner"}),
-        Some(&ctx.agent_id),
+        (ctx.agent_id != "owner").then_some(ctx.agent_id.as_str()),
         ctx.stage_run_id.as_deref(),
     )?;
 
-    let target = materialize(db, ctx, &pid)?;
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalActivated,
         json!({"proposal_id": pid, "effective_path": target, "by": "owner"}),
-        Some(&ctx.agent_id),
+        (ctx.agent_id != "owner").then_some(ctx.agent_id.as_str()),
         ctx.stage_run_id.as_deref(),
     )?;
     log::info!("proposal activated: {pid} -> {target}");
@@ -699,16 +747,24 @@ pub(crate) fn materialize_for_judgment(
     ctx: &ToolContext,
     pid: &str,
 ) -> Result<String, PropError> {
+    let surface: String = db.conn().query_row(
+        "SELECT surface FROM proposals WHERE project_id=?1 AND id=?2",
+        params![ctx.project_id, pid],
+        |r| r.get(0),
+    )?;
+    if surface == "pack_copy" {
+        return Err(PropError::PolicyOwnerRequired);
+    }
     materialize(db, ctx, pid)
 }
 
 /// 版本化快照 → git apply diff → active。不写盖章事件。
 /// 不热改运行中实体——pack 副本下次生效。
 fn materialize(db: &Db, ctx: &ToolContext, pid: &str) -> Result<String, PropError> {
-    let (artifact_id, target): (Option<String>, String) = db.conn().query_row(
-        "SELECT artifact_id, effective_path FROM proposals WHERE id=?1 AND project_id=?2",
+    let (artifact_id, target, author): (Option<String>, String, String) = db.conn().query_row(
+        "SELECT artifact_id, effective_path, author_agent_id FROM proposals WHERE id=?1 AND project_id=?2",
         params![pid, ctx.project_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let (_surface, _t, diff, body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
     let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(pid);
@@ -717,7 +773,11 @@ fn materialize(db: &Db, ctx: &ToolContext, pid: &str) -> Result<String, PropErro
     if target_path.exists() {
         std::fs::copy(&target_path, backup_dir.join("before")).ok();
     }
-    let wrote_experience = crate::experience::apply(ctx, db, &body, &backup_dir)?;
+    // Reliability 20: owner confirmation applies skills to the proposal author.
+    let mut author_ctx = ctx.clone();
+    author_ctx.agent_id = author;
+    author_ctx.stage_run_id = db.active_stage_run(&ctx.project_id)?.map(|r| r.id);
+    let wrote_experience = crate::experience::apply(&author_ctx, db, &body, &backup_dir)?;
     let wrote_role = crate::rolesurf::apply(db, ctx, &body, &backup_dir)?;
     if !wrote_experience && !wrote_role {
         if !crate::git::is_repo(&ctx.repo_root) {
@@ -748,19 +808,30 @@ fn materialize(db: &Db, ctx: &ToolContext, pid: &str) -> Result<String, PropErro
 
 /// 一键回滚：快照还原 → rolled_back。
 pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), PropError> {
-    let (status, target): (String, String) = db
+    let surface: String = db.conn().query_row(
+        "SELECT surface FROM proposals WHERE project_id=?1 AND id=?2",
+        params![ctx.project_id, proposal_id],
+        |r| r.get(0),
+    )?;
+    if surface == "pack_copy" {
+        return policy::rollback(db, ctx, proposal_id);
+    }
+
+    let (status, target, author): (String, String, String) = db
         .conn()
         .query_row(
-            "SELECT status, effective_path FROM proposals WHERE id=?1 AND project_id=?2",
+            "SELECT status, effective_path, author_agent_id FROM proposals WHERE id=?1 AND project_id=?2",
             params![proposal_id, ctx.project_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .map_err(|_| PropError::NotFound(proposal_id.into()))?;
     if status != "active" {
         return Err(PropError::BadState(status));
     }
     let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(proposal_id);
-    if !crate::experience::rollback(db, ctx, &backup_dir)?
+    let mut author_ctx = ctx.clone();
+    author_ctx.agent_id = author;
+    if !crate::experience::rollback(db, &author_ctx, &backup_dir)?
         && !crate::rolesurf::rollback(db, ctx, &backup_dir)?
     {
         let backup = backup_dir.join("before");
@@ -779,7 +850,7 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
         &ctx.project_id,
         EventKind::ProposalRolledBack,
         json!({"proposal_id": proposal_id, "restored": target}),
-        Some(&ctx.agent_id),
+        (ctx.agent_id != "owner").then_some(ctx.agent_id.as_str()),
         ctx.stage_run_id.as_deref(),
     )?;
     log::info!("proposal rolled back: {proposal_id}");
@@ -802,11 +873,15 @@ pub struct ProposalRow {
     pub status: String,
     pub author: String,
     pub artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub recovery_pending: Option<bool>,
 }
 
 pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
     let mut st = db.conn().prepare(
-        "SELECT p.id, p.surface, p.effective_path, p.status, p.author_agent_id, a.path
+        "SELECT p.id, p.surface, p.effective_path, p.status, p.author_agent_id, a.path,
+         EXISTS(SELECT 1 FROM policy_changes c WHERE c.proposal_id=p.id AND c.project_id=p.project_id AND c.state IN ('pending','conflict'))
          FROM proposals p LEFT JOIN artifacts a ON a.id = p.artifact_id
          WHERE p.project_id=?1 ORDER BY p.created_at",
     )?;
@@ -819,6 +894,7 @@ pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
                 status: r.get(3)?,
                 author: r.get(4)?,
                 artifact_path: r.get(5)?,
+                recovery_pending: r.get::<_, bool>(6)?.then_some(true),
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -1037,6 +1113,17 @@ mod tests {
         content.push_str(
             "\n```judge\n{\"verdict\":\"needs-human\",\"rationale\":\"看一眼\",\"backend\":\"mechanical\"}\n```\n",
         );
+        // Reliability 21: owner adoption needs a host-bound structured candidate.
+        content = content.replace(".hexagon/pack.json", ".hexagon/pack.active.json");
+        let baseline: crate::orchestra::PackDef =
+            serde_json::from_value(json!({"name":"t","version":1,"stages":[]})).unwrap();
+        baseline.pin(d.path()).unwrap();
+        let mut candidate = baseline.clone();
+        candidate.knobs.flag_patience = Some(5);
+        content.push_str(&format!(
+            "\n```policy\n{}\n```\n",
+            json!({"baseline":baseline,"candidate":candidate})
+        ));
         mkart(&db, d.path(), "art1", &content);
         let pid = submit(&db, &ctx, "art1", &content).unwrap();
         let qid = crate::cards::first_queued(&db, "p", crate::cards::CardKind::Stamp)

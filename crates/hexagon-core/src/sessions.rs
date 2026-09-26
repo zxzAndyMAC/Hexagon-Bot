@@ -145,31 +145,81 @@ impl Shared {
 /// agent 命令的唯一 Command 出口（票 06 漏斗证明点：grep `Command::new`
 /// 在本文件只命中这里与 kill 辅助——kill 是宿主侧工具进程不该进沙箱）。
 /// wrap_command 会重建 Command 并自带 process_group，故裸 Command 不设组。
-fn sh_command(dir: &Path, spec: &crate::sandbox::SandboxSpec) -> Command {
+fn sh_command(dir: &Path, spec: &crate::sandbox::SandboxSpec) -> std::io::Result<Command> {
     let mut c = Command::new("sh");
     c.current_dir(dir).env("TERM", "dumb");
     // wrap 重建 Command——stdio 配置不可经 get_* 读出，管道在包裹后设置。
-    let mut w = crate::sandbox::wrap_command(&mut c, spec);
+    // Reliability 15: inherited process-group confinement also blocks
+    // setsid/setpgid and posix_spawn escapes; group kill alone is insufficient.
+    #[cfg(target_os = "macos")]
+    let fenced = match spec {
+        crate::sandbox::SandboxSpec::Seatbelt(profile) => crate::sandbox::SandboxSpec::Seatbelt(
+            format!("{profile}\n{}", crate::sandbox::PROCESS_GROUP_RULES),
+        ),
+        other => other.clone(),
+    };
+    #[cfg(target_os = "macos")]
+    let spec = &fenced;
+    let mut w = crate::sandbox::wrap_command(&mut c, spec)?;
     w.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    w
+    Ok(w)
 }
 
-/// 杀整棵进程树：unix 先打进程组（pgid=child pid），再杀领头兜底。
-/// 进程组 kill 借 `sh -c kill`（POSIX 内建），不引 libc 依赖。
-/// 非 unix 只能杀领头——孙进程可能残留，这是平台边界不是 bug。
-fn kill_tree(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let pgid = child.id();
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(format!("kill -KILL -- -{pgid} 2>/dev/null"))
-            .status();
+// Reliability 15: observe without reaping so the owned leader pins the PID
+// until the group has been signalled. A cached PID after wait() can be reused.
+#[cfg(unix)]
+fn child_exited(child: &Child) -> std::io::Result<bool> {
+    // SAFETY: zeroed siginfo is writable; P_PID refers to our unreaped child.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id(),
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
     }
+    Ok(unsafe { info.si_pid() } != 0)
+}
+#[cfg(not(unix))]
+fn child_exited(_child: &Child) -> std::io::Result<bool> {
+    Ok(false)
+}
+
+fn finish_child(
+    mut child: Child,
+    lease: Option<std::fs::File>,
+) -> std::io::Result<std::process::ExitStatus> {
+    let pid = child.id();
+    kill_pid_group(pid);
     let _ = child.kill();
-    let _ = child.wait();
+    let status = child.wait();
+    // After reaping never signal this numeric PID again. Group disappearance
+    // proves that even redirected/double-fork children cannot write later.
+    // False busy costs a retry; false free costs an unreviewed side effect.
+    if let Some(lease) = lease {
+        #[cfg(unix)]
+        {
+            let gone = move || unsafe { libc::kill(-(pid as i32), 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if !gone() {
+                std::thread::spawn(move || {
+                    while !gone() {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    drop(lease);
+                });
+                return status;
+            }
+        }
+        drop(lease);
+    }
+    status
 }
 
 /// `eof_done`：stdout EOF 是否即判收尾——会话成立（sh 死则命令边界消失，
@@ -274,7 +324,10 @@ fn partial_suffix_len(hold: &[u8], needle: &[u8]) -> usize {
 // ---------- 会话与任务 ----------
 
 struct Session {
-    child: Mutex<Child>,
+    /// Reliability 15: a persistent shell can still have background children
+    /// after a command sentinel; retain its write lease until the shell closes.
+    write_lease: Arc<Mutex<Option<std::fs::File>>>,
+    child: Arc<Mutex<Option<Child>>>,
     stdin: Mutex<ChildStdin>,
     shared: Arc<Shared>,
     /// 同会话命令串行——一条跑完才写下一条（哨兵协议的前提）。
@@ -285,8 +338,9 @@ struct Session {
 }
 
 impl Session {
-    fn spawn(dir: &Path, spec: crate::sandbox::SandboxSpec) -> std::io::Result<Self> {
-        let mut child = sh_command(dir, &spec).spawn()?;
+    fn spawn(ctx: &ToolContext, spec: crate::sandbox::SandboxSpec) -> std::io::Result<Self> {
+        let lease = crate::tools::writeguard::repository_lock(ctx)?;
+        let mut child = sh_command(&ctx.repo_root, &spec)?.spawn()?;
         let stdin = child.stdin.take().unwrap();
         // 会话 Shared 跨命令复用——口子不随 spawn 绑死，exec_on
         // 每条命令换绑（票 04）。
@@ -300,8 +354,12 @@ impl Session {
             let s = shared.clone();
             move || reader_to_ring(err, s, false, false)
         });
+        let child = Arc::new(Mutex::new(Some(child)));
+        let write_lease = Arc::new(Mutex::new(Some(lease)));
+        monitor_child(child.clone(), write_lease.clone(), shared.clone());
         Ok(Self {
-            child: Mutex::new(child),
+            write_lease,
+            child,
             stdin: Mutex::new(stdin),
             shared,
             cmd_lock: Mutex::new(()),
@@ -315,17 +373,29 @@ impl Session {
             return true;
         }
         drop(st);
-        matches!(self.child.lock().unwrap().try_wait(), Ok(Some(_)))
+        self.child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_none_or(|child| child_exited(child).unwrap_or(false))
     }
 
     fn kill(&self) {
-        kill_tree(&mut self.child.lock().unwrap());
+        if let Some(child) = self.child.lock().unwrap().take() {
+            let _ = finish_child(child, self.write_lease.lock().unwrap().take());
+        }
         let mut st = self.shared.st.lock().unwrap();
         st.exited = true;
         st.done = true;
         st.killed = true;
         drop(st);
         self.shared.cond.notify_all();
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.kill();
     }
 }
 
@@ -358,11 +428,19 @@ struct TableState {
     meta: Option<(String, Option<String>)>,
 }
 
-/// 任务句柄：monitor 线程独占 Child 阻塞等退出码，句柄只留 pid + shared。
-/// kill 走 pgid 信号不打锁（wait 随信号返回由 monitor 收割）。
+/// Monitor 与取消共享未回收的 Child；拿走句柄后取消不能再信号旧 PID。
 pub struct TaskHandle {
-    pid: u32,
+    child: Arc<Mutex<Option<Child>>>,
     shared: Arc<Shared>,
+}
+
+impl TaskHandle {
+    fn kill(&self) {
+        // Same lock as the monitor: never signal after it has taken/reaped Child.
+        if let Some(child) = self.child.lock().unwrap().as_ref() {
+            kill_pid_group(child.id());
+        }
+    }
 }
 
 impl SessionTable {
@@ -400,19 +478,71 @@ impl SessionTable {
         format!("{n:x}{nanos:x}")
     }
 
-    /// 出网裁决 → 沙箱规格；不可用即裸跑并留事件（ADR 0058-4：
-    /// 不可用不误放——Exec 必问卡仍是真边界，沙箱只是围笼）。
+    /// reliability 02 / Q3: missing isolation records a refusal; never naked execution.
     fn spec_for(&self, db: &Db, ctx: &ToolContext, net: bool) -> crate::sandbox::SandboxSpec {
-        let spec = crate::sandbox::spec_for(&ctx.repo_root, &ctx.owned_globs, net);
-        if spec == crate::sandbox::SandboxSpec::Unavailable {
+        let started = Instant::now();
+        let read_only =
+            crate::permissions::agent_role(db, ctx).as_deref() == Some(crate::pm_route::PM_ROLE);
+        let spec = if read_only {
+            crate::sandbox::read_only_spec(&ctx.repo_root, net)
+        } else {
+            crate::sandbox::spec_for(&ctx.repo_root, &ctx.owned_globs, net)
+        };
+        Self::note_spec(
+            db,
+            ctx,
+            &spec,
+            if read_only {
+                "pm_read_only"
+            } else {
+                "owned_scope"
+            },
+            started,
+        );
+        spec
+    }
+
+    fn note_spec(
+        db: &Db,
+        ctx: &ToolContext,
+        spec: &crate::sandbox::SandboxSpec,
+        branch: &str,
+        started: Instant,
+    ) {
+        if *spec == crate::sandbox::SandboxSpec::Unavailable {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "sandbox",
+                "isolation_unavailable",
+                started,
+            );
             emit(
                 db,
                 ctx,
                 "sandbox_unavailable",
-                json!({"note": crate::sandbox::status().note}),
+                json!({
+                    "note": "terminal execution blocked: required isolation unavailable or requested scope cannot be enforced",
+                    "backend": crate::sandbox::status().mode
+                }),
+            );
+        } else {
+            crate::diag::note(
+                crate::diag::CLASS_JUDGE,
+                false,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "sandbox",
+                branch,
+                started,
             );
         }
-        spec
     }
 
     /// 前台一次性执行（无会话名）：起任务形制进程 + 同步等收尾。
@@ -426,12 +556,12 @@ impl SessionTable {
         net: bool,
     ) -> Result<Value, ToolError> {
         let spec = self.spec_for(db, ctx, net);
-        let task = spawn_task_handle(&ctx.repo_root, cmd, &spec, self.bound_tap())
-            .map_err(|e| ToolError::Exec(format!("spawn sh: {e}")))?;
+        let task = spawn_task_handle(ctx, cmd, &spec, self.bound_tap(), None)
+            .map_err(|e| ToolError::NotExecuted(format!("spawn sh: {e}")))?;
         let deadline = Instant::now() + timeout;
         let timed_out = wait_done(&task.shared, deadline);
         if timed_out {
-            kill_pid_group(task.pid);
+            task.kill();
             wait_done(&task.shared, Instant::now() + Duration::from_secs(2));
             emit(
                 db,
@@ -458,9 +588,10 @@ impl SessionTable {
         let _ser = sess.cmd_lock.lock().unwrap();
         // 会话可能在等锁期间死掉——重查一次
         if sess.dead() {
+            sess.kill();
             emit(db, ctx, "session_exited", json!({"session": name}));
-            let fresh = Session::spawn(&ctx.repo_root, spec.clone())
-                .map_err(|e| ToolError::Exec(format!("respawn sh: {e}")))?;
+            let fresh = Session::spawn(ctx, spec.clone())
+                .map_err(|e| ToolError::NotExecuted(format!("respawn sh: {e}")))?;
             let fresh = Arc::new(fresh);
             self.inner
                 .lock()
@@ -497,13 +628,14 @@ impl SessionTable {
             if !s.dead() {
                 return Ok(s.clone());
             }
+            s.kill();
             drop(t);
             emit(db, ctx, "session_exited", json!({"session": name}));
             t = self.inner.lock().unwrap();
             t.sessions.remove(name);
         }
-        let s = Session::spawn(&ctx.repo_root, spec.clone())
-            .map_err(|e| ToolError::Exec(format!("spawn sh: {e}")))?;
+        let s = Session::spawn(ctx, spec.clone())
+            .map_err(|e| ToolError::NotExecuted(format!("spawn sh: {e}")))?;
         let s = Arc::new(s);
         t.sessions.insert(name.into(), s.clone());
         drop(t);
@@ -595,9 +727,32 @@ impl SessionTable {
         cmd: &str,
         net: bool,
     ) -> Result<Value, ToolError> {
-        let spec = self.spec_for(db, ctx, net);
-        let task = spawn_task_handle(&ctx.repo_root, cmd, &spec, self.bound_tap())
-            .map_err(|e| ToolError::Exec(format!("spawn task: {e}")))?;
+        let started = Instant::now();
+        // reliability 04 / D02: tests used to inherit the parent's source-write
+        // scope. Only a fresh host-created directory is writable now; callers
+        // cannot designate source or a pre-existing alias as an output directory.
+        let output = if ctx.subagent.is_some() {
+            let root = ctx.repo_root.canonicalize()?;
+            let dir = root.join(format!(
+                ".hexagon-test-{}-{}",
+                std::process::id(),
+                self.next_nonce()
+            ));
+            std::fs::create_dir(&dir)?;
+            Some(dir)
+        } else {
+            None
+        };
+        let spec = if let Some(output) = &output {
+            let name = output.file_name().unwrap().to_string_lossy();
+            let spec = crate::sandbox::spec_for(&ctx.repo_root, &[format!("{name}/**")], false);
+            Self::note_spec(db, ctx, &spec, "subagent_test_outputs", started);
+            spec
+        } else {
+            self.spec_for(db, ctx, net)
+        };
+        let task = spawn_task_handle(ctx, cmd, &spec, self.bound_tap(), output.as_deref())
+            .map_err(|e| ToolError::NotExecuted(format!("spawn task: {e}")))?;
         let task = Arc::new(task);
         let id = {
             let mut t = self.inner.lock().unwrap();
@@ -612,7 +767,7 @@ impl SessionTable {
             "task_started",
             json!({"task_id": id, "cmd": head(cmd)}),
         );
-        Ok(json!({"task_id": id, "background": true}))
+        Ok(json!({"task_id": id, "background": true, "output_dir": output}))
     }
 
     /// 增量读：`cursor_out/cursor_err` 为上次返回的游标（首读 0）。
@@ -680,7 +835,7 @@ impl SessionTable {
                 st.exited || st.killed
             };
             if !already {
-                kill_pid_group(h.pid);
+                h.kill();
                 h.shared.st.lock().unwrap().killed = true;
                 emit(db, ctx, "task_killed", json!({"task_id": id}));
             }
@@ -696,8 +851,8 @@ impl SessionTable {
                 .cloned()
                 .ok_or_else(|| ToolError::BadInput(format!("unknown session: {name}")))?;
             let already = s.dead();
+            s.kill();
             if !already {
-                s.kill();
                 emit(
                     db,
                     ctx,
@@ -718,23 +873,38 @@ impl SessionTable {
             s.kill();
         }
         for (_, h) in t.tasks.drain() {
-            kill_pid_group(h.pid);
+            h.kill();
         }
     }
 }
 
-/// 任务 spawn：monitor 线程独占 Child 阻塞等退出码；
-/// kill 走 pgid 信号（不碰 child 锁，wait 随信号返回）。
+/// 任务 spawn：monitor 先观察退出再收割，进程组消失后才释放写租约。
 fn spawn_task_handle(
-    dir: &Path,
+    ctx: &ToolContext,
     cmd: &str,
     spec: &crate::sandbox::SandboxSpec,
     tap: Option<BoundTap>,
+    output: Option<&Path>,
 ) -> std::io::Result<TaskHandle> {
-    let mut c = sh_command(dir, spec);
+    // D08 / reliability-18: checks already hold the host boundary across before/
+    // after fingerprints. Clone that lease so descendants retain it until dead.
+    let lease = match &ctx.write_lease {
+        Some(lease) => lease.try_clone()?,
+        None => crate::tools::writeguard::repository_lock(ctx)?,
+    };
+    let mut c = sh_command(&ctx.repo_root, spec)?;
     c.arg("-c").arg(cmd);
+    if let Some(output) = output {
+        // Host-generated paths after environment sanitization; test input
+        // cannot inject arbitrary environment or filesystem capabilities.
+        c.env("HEXAGON_TEST_OUTPUT", output)
+            .env("TMPDIR", output)
+            .env("CARGO_TARGET_DIR", output.join("target"))
+            .env("XDG_CACHE_HOME", output.join("cache"))
+            .env("npm_config_cache", output.join("npm-cache"))
+            .env("COVERAGE_FILE", output.join(".coverage"));
+    }
     let mut child = c.spawn()?;
-    let pid = child.id();
     // 任务的 Shared 就是这条进程的——口子随 spawn 绑死，进程终身
     // 输出都记在这个 seq 名下（含后台任务活得比调用久的情形）。
     let shared = Shared::new(tap);
@@ -747,31 +917,56 @@ fn spawn_task_handle(
         let s = shared.clone();
         move || reader_to_ring(err, s, false, false)
     });
-    std::thread::spawn({
-        let s = shared.clone();
-        move || {
-            let status = child.wait();
-            let mut st = s.st.lock().unwrap();
-            st.done = true;
-            st.exited = true;
-            st.exit_code = status.ok().and_then(|x| x.code());
-            drop(st);
-            s.cond.notify_all();
-        }
+    let child = Arc::new(Mutex::new(Some(child)));
+    monitor_child(
+        child.clone(),
+        Arc::new(Mutex::new(Some(lease))),
+        shared.clone(),
+    );
+    Ok(TaskHandle { child, shared })
+}
+
+// Reliability 15: a named shell may exit after its command sentinel. Monitor
+// lifetime independently of tool calls so an exited table entry holds no lease.
+fn monitor_child(
+    owned: Arc<Mutex<Option<Child>>>,
+    lease: Arc<Mutex<Option<std::fs::File>>>,
+    shared: Arc<Shared>,
+) {
+    std::thread::spawn(move || {
+        let child = loop {
+            let mut guard = owned.lock().unwrap();
+            let Some(child) = guard.as_ref() else {
+                return;
+            };
+            if child_exited(child).unwrap_or(true) {
+                break guard.take().unwrap();
+            }
+            drop(guard);
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let status = finish_child(child, lease.lock().unwrap().take());
+        let mut st = shared.st.lock().unwrap();
+        st.done = true;
+        st.exited = true;
+        st.exit_code = status.ok().and_then(|x| x.code());
+        drop(st);
+        shared.cond.notify_all();
     });
-    Ok(TaskHandle { pid, shared })
 }
 
 /// unix 下 pgid==pid（spawn 时 process_group(0)）；非 unix 退化为杀单进程。
-fn kill_pid_group(pid: u32) {
+pub(crate) fn kill_pid_group(pid: u32) {
     #[cfg(unix)]
     {
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(format!(
-                "kill -KILL -- -{pid} 2>/dev/null; kill -KILL {pid} 2>/dev/null"
-            ))
-            .status();
+        // All callers hold an unreaped Child. Direct signals avoid launching
+        // another shell during cancellation (Reliability 10/15 deadlines).
+        // SAFETY: kill takes numeric process IDs only; negative ID selects our
+        // confined process group and the second signal covers its leader.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
     }
     #[cfg(not(unix))]
     {

@@ -41,3 +41,9 @@ describe('时间线标出派给了谁（票 08）', () => {
     expect(rejected.route).toBe('rejected')
   })
 })
+
+it('实例路由同时显示角色与实例编号（可靠性 07）', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const sent = await textOf(<EventRow item={item({ role: '后端', agent_id: 'a2', scope: 'role_instances', held: false, rejected: false })} />)
+  expect(sent.text).toContain('派给 后端 · a2')
+})

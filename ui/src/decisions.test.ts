@@ -201,3 +201,21 @@ describe('逆建议留痕（ui-audit 票 07 / P2-15）', () => {
     expect(rejectReasonWithJudge('有理由', 'reject')).toBe('有理由')
   })
 })
+
+it('未知副作用不能被普通批准或驳回重试/清除（可靠性 08）', async () => {
+  useUiStore.setState({ modalScope: 'workbench', toasts: [] })
+  const recover = vi.spyOn(api, 'recoverRun')
+  const unknown = card({ kind: 'recovery', payload: { sub: 'tool_outcome_unknown', action_id: 'action1' } })
+  expect(await handlePendingKey(key('Enter'), [unknown])).toBe('blocked-unknown')
+  expect(await handlePendingKey(key('Backspace'), [unknown])).toBe('blocked-unknown')
+  expect(recover).not.toHaveBeenCalled()
+  expect(useUiStore.getState().toasts).toHaveLength(2)
+})
+
+it('已授权未执行动作恢复原 ID（可靠性 08）', async () => {
+  useUiStore.setState({ modalScope: 'workbench', toasts: [] })
+  const resume = vi.spyOn(api, 'resumeToolAction').mockResolvedValue()
+  const ready = card({ kind: 'recovery', payload: { sub: 'tool_action_ready', action_id: 'action1' } })
+  expect(await handlePendingKey(key('Enter'), [ready])).toBe('approved')
+  expect(resume).toHaveBeenCalledWith('action1')
+})

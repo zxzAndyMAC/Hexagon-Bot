@@ -25,7 +25,7 @@ pub const INDEX_FILE_CAP: usize = 4_000;
 pub fn repo_files(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false) // dotfile 是仓内合法内容（.hexagon/、.envrc）
+        .hidden(false) // Hidden files remain searchable only after the read policy.
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true)
@@ -45,7 +45,10 @@ pub fn repo_files(root: &Path) -> Vec<String> {
         let Ok(rel) = entry.path().strip_prefix(root) else {
             continue;
         };
-        out.push(rel.to_string_lossy().replace('\\', "/"));
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if crate::tools::readable_repo_path(root, &rel).is_ok() {
+            out.push(rel);
+        }
     }
     out
 }
@@ -87,7 +90,9 @@ pub fn grep_content(root: &Path, needle: &str) -> Vec<Value> {
         if hits.len() >= GREP_CAP {
             break;
         }
-        let p = root.join(&rel);
+        let Ok(p) = crate::tools::readable_repo_path(root, &rel) else {
+            continue;
+        };
         let Ok(meta) = p.metadata() else { continue };
         if meta.len() > GREP_FILE_CAP {
             continue;

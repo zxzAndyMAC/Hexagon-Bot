@@ -25,11 +25,24 @@ export function severityOf(q: PendingQuestion): number {
 
 export async function approveQuestion(q: PendingQuestion) {
   const p = q.payload
+  if (p.policy_recovery === true) {
+    useUiStore.getState().pushToast(i18n.t('policy.recovery'))
+    return
+  }
+  if (p.sub === 'tool_outcome_unknown') {
+    useUiStore.getState().pushToast(i18n.t('cards.actionUnknownHint'))
+    return
+  }
+  if (p.sub === 'acceptance_exception') {
+    useUiStore.getState().pushToast(i18n.t('exceptions.hint'))
+    return
+  }
   if (q.kind === 'permission') return api.answerPermission(q.id, true)
   if (q.kind === 'stamp' && !p.proposal_id) return api.stamp()
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
   if (q.kind === 'publish') return api.confirmPublish(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
+  if (q.kind === 'recovery' && p.sub === 'tool_action_ready') return api.resumeToolAction(String(p.action_id))
   if (q.kind === 'recovery') return api.recoverRun(String(p.run_id))
   if (q.kind === 'stall' && p.retry === true) return api.stallRetry(q.id)
   if (q.kind === 'install') return api.resolveInstall(q.id, true)
@@ -38,6 +51,11 @@ export async function approveQuestion(q: PendingQuestion) {
 
 export async function rejectQuestion(q: PendingQuestion) {
   const p = q.payload
+  if (p.sub === 'tool_outcome_unknown') {
+    useUiStore.getState().pushToast(i18n.t('cards.actionUnknownHint'))
+    return
+  }
+  if (p.sub === 'acceptance_exception') return api.cancelAcceptanceException(q.id)
   if (q.kind === 'permission') return api.answerPermission(q.id, false)
   if (q.kind === 'stamp' && !p.proposal_id) return api.rejectStamp()
   if (q.kind === 'stamp') return api.rejectProposal(q.id, 'owner rejected')
@@ -59,10 +77,12 @@ export function rejectReasonWithJudge(reason: string, judgeVerdict: string | nul
 
 /** 卡 kind → 卡面标题 i18n key（kbd 目标提示 / sticky 迷你条共用） */
 export function kindTitleKey(q: PendingQuestion): string {
+  if (q.payload.sub === 'acceptance_exception') return 'exceptions.title'
+  if (q.kind === 'stamp' && q.payload.proposal_id && q.payload.surface === 'pack_copy') return 'policy.title'
   if (q.kind === 'permission') return 'cards.ask'
   if (q.kind === 'stamp') return q.payload.proposal_id ? 'cards.proposalStamp' : 'cards.stageStamp'
   if (q.kind === 'publish') return 'cards.publish'
-  if (q.kind === 'recovery') return 'cards.recovery'
+  if (q.kind === 'recovery') return q.payload.sub === 'tool_outcome_unknown' ? 'cards.actionUnknown' : 'cards.recovery'
   if (q.kind === 'stall') return 'cards.stall'
   if (q.kind === 'install') return 'cards.install'
   if (q.kind === 'grant') return 'cards.grant'
@@ -85,6 +105,9 @@ export type KeyOutcome =
   | 'blocked-publish'
   | 'blocked-final'
   | 'blocked-stall'
+  | 'blocked-unknown'
+  | 'blocked-exception'
+  | 'blocked-policy'
   | 'approved'
   | 'rejected'
 
@@ -104,6 +127,18 @@ export async function handlePendingKey(
     return 'blocked-scope'
   }
   if (e.repeat || adjudicating) return 'repeat'
+  if (q.payload.sub === 'tool_outcome_unknown') {
+    useUiStore.getState().pushToast(i18n.t('cards.actionUnknownHint'))
+    return 'blocked-unknown'
+  }
+  if (isApprove && q.payload.policy_recovery === true) {
+    useUiStore.getState().pushToast(i18n.t('policy.recovery'))
+    return 'blocked-policy'
+  }
+  if (isApprove && q.payload.sub === 'acceptance_exception') {
+    useUiStore.getState().pushToast(i18n.t('exceptions.hint'))
+    return 'blocked-exception'
+  }
   if (isApprove && q.kind === 'publish') {
     // L3 对外不可逆：发布不走键盘批准（ADR 0056 确认分级）
     useUiStore.getState().pushToast(i18n.t('decisions.publishNeedsClick'))

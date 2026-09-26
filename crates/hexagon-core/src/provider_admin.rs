@@ -57,7 +57,11 @@ pub fn list(store: &dyn CredentialStore) -> Result<ProvidersView, AdminError> {
         .iter()
         .map(|p| {
             Ok(ProviderView {
-                def: p.clone(),
+                def: {
+                    let mut safe = p.clone();
+                    safe.base_url = crate::data_boundary::hidden_url(&p.base_url);
+                    safe
+                },
                 key_set: store.get(&provider_key_name(&p.id))?.is_some(),
             })
         })
@@ -74,6 +78,16 @@ pub fn save(
     secret: Option<String>,
     store: &dyn CredentialStore,
 ) -> Result<(), AdminError> {
+    let mut def = def;
+    let doc = provider_config::load()?;
+    let current = doc.providers.iter().find(|p| p.id == def.id);
+    def.base_url =
+        crate::data_boundary::restore(&def.base_url, current.map(|p| p.base_url.as_str()), true)
+            .map_err(|_| {
+                AdminError::Providers(provider_config::ProvidersError::EmptyField(
+                    "reload_stored_configuration",
+                ))
+            })?;
     provider_config::save_provider(&def)?;
     if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
         store.set(&provider_key_name(&def.id), s.trim())?;

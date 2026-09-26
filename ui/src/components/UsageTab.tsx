@@ -9,6 +9,19 @@ import {
   groupTokens, parseLimitInput, perAgentSeries,
 } from '../usage'
 
+/** Charges without a reliable price or supplier usage remain visible. */
+export function UsageUncertainty() {
+  const { t } = useTranslation()
+  const total = useUiStore((s) => s.usageTotal)
+  if (!total || !(total.unknown_requests > 0 || total.legacy_unknown_records > 0 || total.unknown_token_records > 0)) return null
+  return <div className="dim3" role="status" style={{ marginTop: 6 }}>
+    <span>{t('usage.unknownCost')}</span>
+    {total.unknown_token_records > 0 && <span> · {t('usage.unknownTokens')}</span>}
+    {total.legacy_unknown_records > 0 && <span> · {t('usage.historicalUnknown', { count: total.legacy_unknown_records })}</span>}
+    {total.limit_cents != null && <div>{t('usage.budgetUnknown')}</div>}
+  </div>
+}
+
 export function UsageTab({ onDetail }: { onDetail?: () => void }) {
   const { t } = useTranslation()
   const { usageRows, usageTotal, contextPressure, team, invalidate, openTab } = useUiStore()
@@ -40,18 +53,22 @@ export function UsageTab({ onDetail }: { onDetail?: () => void }) {
         </div>
       )}
 
-      {/* 总 token + 预算条（预算是唯一钱口径：它守的是 API 账单） */}
+      {/* 已记录 token + 已知金额预算条；未知部分单列，不代表供应商账单上限 */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <span className="dim">{t('usage.totalTokens')}</span>
           <span className="mono" style={{ fontWeight: 560 }}>{fmtTok(usageTotal?.tokens ?? 0)}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 4 }}>
-          <span className="dim3" style={{ fontSize: 10 }}>{t('usage.budget')}</span>
+          <span className="dim3" style={{ fontSize: 10 }}>{t('usage.knownAmount')}</span>
           <span className="mono dim" style={{ fontSize: 11 }}>
             {fmtY(spent)}{limitMc != null && ` / ${fmtY(limitMc)}`}
           </span>
         </div>
+        {(usageTotal?.reserved_mc ?? 0) > 0 && <div className="dim3" role="status">
+          {t('usage.reservedEstimate')} · {fmtY(usageTotal!.reserved_mc)}
+        </div>}
+        <UsageUncertainty />
         <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', marginTop: 6, overflow: 'hidden' }}>
           <div style={{ width: `${pct}%`, height: '100%', background: capped ? 'var(--err)' : 'var(--accent)', transition: 'width .3s' }} />
         </div>

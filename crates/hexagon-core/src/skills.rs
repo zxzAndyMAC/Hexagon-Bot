@@ -201,6 +201,13 @@ impl SkillLoader {
 /// frontmatter 解析：只认 `---` 头块里的 name/description，
 /// 缺 name 用目录名兜底（与 OpenWorker `_parse_skill` 同语义）。
 fn parse_skill(md: &Path) -> Option<Skill> {
+    // reliability 03: metadata and instructions are content reads too. An
+    // innocent SKILL.md alias must not import credential bytes into the prompt.
+    let started = std::time::Instant::now();
+    if crate::tools::sensitive_file_path(md) {
+        crate::tools::record_sensitive_read_rejection(started);
+        return None;
+    }
     let text = std::fs::read_to_string(md).ok()?;
     let fallback = md
         .parent()
@@ -455,7 +462,15 @@ pub fn read_skill_file(
     if !canon_p.starts_with(&canon_base) {
         return Err(std::io::Error::other("path escape rejected"));
     }
-    let bytes = std::fs::read(&p)?;
+    let started = std::time::Instant::now();
+    if crate::tools::sensitive_file_path(&p) {
+        crate::tools::record_sensitive_read_rejection(started);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "sensitive content is not readable by agents",
+        ));
+    }
+    let bytes = std::fs::read(&canon_p)?;
     let cap = bytes.len().min(256 * 1024);
     Ok(String::from_utf8_lossy(&bytes[..cap]).to_string())
 }

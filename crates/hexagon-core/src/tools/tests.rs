@@ -233,7 +233,8 @@ fn ownership_glob_gates_writes() {
         )
         .unwrap();
     assert!(matches!(out, CallOutcome::Done(_)));
-    // 2026-09-24：界外不再由自治放行，停成必问卡。
+    // reliability 02 / D02: an explicit scope is a hard bound, not an Ask that
+    // a remembered permission or single approval can override.
     let out = reg
         .call(
             &db,
@@ -242,7 +243,7 @@ fn ownership_glob_gates_writes() {
             json!({"path": "docs/b.md", "content": "x"}),
         )
         .unwrap();
-    assert!(matches!(out, CallOutcome::Asked(_)));
+    assert!(matches!(out, CallOutcome::Denied(_)));
 }
 
 // ---------- openworker-borrow 票 02：工具结果 spill ----------
@@ -351,21 +352,20 @@ fn queued_question_reused_on_same_call_seq() {
         items[1].event.payload["deduped"], true,
         "第二次命中应有 deduped 标记"
     );
-    // 不同 seq 或不同参 → 各自独立新卡
+    // reliability 08: new calls use new identities; mutating an existing action
+    // identity is rejected, never silently treated as another approved operation.
     let o3 = reg
         .call_with_seq(&db, &ctx, "bash", inp(), Some("r0i1"))
         .unwrap();
     assert!(matches!(o3, CallOutcome::Asked(ref q) if *q != q1));
-    let o4 = reg
-        .call_with_seq(
-            &db,
-            &ctx,
-            "bash",
-            json!({"cmd": "git merge other"}),
-            Some("r0i0"),
-        )
-        .unwrap();
-    assert!(matches!(o4, CallOutcome::Asked(ref q) if *q != q1));
+    let o4 = reg.call_with_seq(
+        &db,
+        &ctx,
+        "bash",
+        json!({"cmd": "git merge other"}),
+        Some("r0i0"),
+    );
+    assert!(matches!(o4, Err(ToolError::BadInput(_))));
 }
 
 #[test]
@@ -404,7 +404,7 @@ fn answered_deny_replays_as_denied_without_new_card() {
 }
 
 #[test]
-fn answered_allow_with_result_replays_as_done_marker() {
+fn answered_allow_with_result_replays_exact_result() {
     let (db, reg, ctx, dir) = setup();
     ready_merge(dir.path());
     let CallOutcome::Asked(qid) = reg
@@ -423,8 +423,11 @@ fn answered_allow_with_result_replays_as_done_marker() {
     let out = reg
         .resolve(&db, &ctx, &qid, true, None, "activation", None, "owner")
         .unwrap();
-    assert!(matches!(out, CallOutcome::Done(_)));
-    // 重放 → Done 标记，不再执行（副作用不双跑）
+    let CallOutcome::Done(original) = out else {
+        panic!()
+    };
+    // reliability 08: replay the action's own persisted result, not a generic
+    // marker inferred from any later result by the same agent.
     let out = reg
         .call_with_seq(
             &db,
@@ -435,7 +438,7 @@ fn answered_allow_with_result_replays_as_done_marker() {
         )
         .unwrap();
     let CallOutcome::Done(v) = out else { panic!() };
-    assert_eq!(v["duplicate_of"], qid);
+    assert_eq!(v, original);
     let execs: i64 = db
             .conn()
             .query_row(
@@ -742,7 +745,7 @@ fn web_fetch_absent_from_subagent_registry() {
     // 行为变更说明（code-search 票 04）：readonly() 随 research 退场，
     // 同一断言落在 subagent_scope 上——外带通道在派遣域同样缺席。
     let (_db, reg, _ctx, _dir) = setup();
-    let ro = reg.subagent_scope(&Default::default());
+    let ro = reg.subagent_scope(&[]);
     let names: Vec<_> = ro.defs().iter().map(|d| d.name.clone()).collect::<Vec<_>>();
     assert!(
         !names.iter().any(|n| n == "web_fetch"),
@@ -913,8 +916,11 @@ fn kill_all_drains_table() {
     let (db, _reg, ctx, _dir) = setup();
     Bash.exec(&db, &json!({"cmd": "true", "session": "sx"}), &ctx)
         .unwrap();
-    Bash.exec(&db, &json!({"cmd": "sleep 60", "background": true}), &ctx)
-        .unwrap();
+    // Reliability 15: a live named session owns the repository write lease;
+    // another writer is refused until it closes (read/output controls still work).
+    assert!(Bash
+        .exec(&db, &json!({"cmd": "sleep 60", "background": true}), &ctx)
+        .is_err());
     ctx.sessions.kill_all();
     // 表已排空：句柄全失效
     assert!(BashOutput
@@ -1449,7 +1455,7 @@ mod pe02_props {
 #[test]
 fn pe08_every_builtin_tool_has_when_to_use_and_param_docs() {
     let main = Registry::builtin();
-    let sub = main.subagent_scope(&Default::default());
+    let sub = main.subagent_scope(&[]);
     let mut defs = main.defs();
     defs.extend(sub.defs());
     assert!(defs.len() >= 18);
@@ -1531,4 +1537,14 @@ fn pe01_spill_file_middle_readable_by_range() {
         "row 300 padding padding padding\nrow 301 padding padding padding\n"
     );
     assert_eq!(v["total_lines"], 600);
+}
+
+// reliability 10: cancellation never proves rollback after dispatch.
+proptest::proptest! {
+    #[test]
+    fn mcp_dispatch_failure_classification(dispatched in proptest::bool::ANY, reason in "[a-z]{0,32}") {
+        let error = if dispatched { ToolError::Exec(reason) } else { ToolError::NotExecuted(reason) };
+        proptest::prop_assert_eq!(effect_uncertain(RiskClass::External, &error), dispatched);
+        proptest::prop_assert!(!effect_uncertain(RiskClass::Read, &error));
+    }
 }

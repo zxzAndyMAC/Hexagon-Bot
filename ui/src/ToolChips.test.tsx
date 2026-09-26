@@ -6,6 +6,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
 import { ToolGroupRow } from './components/Timeline'
+import { AgentTab } from './components/AgentTab'
 import { useUiStore } from './store'
 import type { TimelineItem } from './api'
 import type { EventKind } from './gen/EventKind'
@@ -110,4 +111,33 @@ describe('ToolGroupRow（beautiful-ui 票 02）', () => {
     expect(tabs.some((t) => t.id === 'art:specs/prd.md')).toBe(true)
     root.unmount()
   })
+})
+
+// security-delivery-reliability 08: unknown is not success; identity beats adjacency.
+describe('durable action presentation', () => {
+  it.each(['fs_read', 'bash'])('%s shows unknown without a success badge or running spinner', async (tool) => {
+    const items = [
+      ev(100, 'tool_called', { tool, action_id: 'A', input: { cmd: 'touch out' } }),
+      ev(101, 'tool_result', { tool, action_id: 'B', ok: true }),
+      ev(102, 'tool_result', { tool, action_id: 'A', state: 'unknown', ok: null }),
+    ]
+    const { el, root } = await render(<ToolGroupRow items={items} expanded idx={0} onToggle={() => {}} />)
+    expect(el.textContent).toContain('Tool outcome unknown')
+    expect(el.querySelector('.chip.ok')).toBeNull()
+    expect(el.querySelector('.spinner-ring')).toBeNull()
+    await act(async () => root.unmount())
+  })
+})
+
+it('agent activity preserves unknown across unrelated events', async () => {
+  useUiStore.setState({ timeline: [
+    ev(1, 'tool_called', { tool: 'fs_read', action_id: 'A', input: { path: 'data.txt' } }),
+    ev(2, 'permission_asked', {}),
+    ev(3, 'tool_result', { tool: 'fs_read', action_id: 'B', ok: true }),
+    ev(4, 'tool_result', { tool: 'fs_read', action_id: 'A', state: 'unknown', ok: null }),
+  ] })
+  const { el, root } = await render(<AgentTab agentId="a1" />)
+  expect(el.textContent).toContain('Tool outcome unknown')
+  expect(el.querySelector('.chip.ok')).toBeNull()
+  await act(async () => root.unmount())
 })

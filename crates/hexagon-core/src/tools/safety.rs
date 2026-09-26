@@ -5,21 +5,86 @@ use super::*;
 // ---------- 内置 deny 与路径安全 ----------
 
 /// 凭据类路径：正文永远不进上下文（内置 deny，最高优先）。
+/// reliability 03: MCP/package-manager configuration can store inline keys;
+/// protecting only keychain/.env left those known credential containers readable.
 pub(crate) fn is_credential_path(p: &str) -> bool {
     let lower = p.to_lowercase();
-    let base = lower.rsplit('/').next().unwrap_or(&lower);
-    lower.contains("/.ssh/")
-        || lower.contains("/.aws/")
-        || lower.contains("keychain")
-        || base.starts_with(".env")
-        || base.ends_with(".pem")
-        || base.ends_with(".key")
-        || base.starts_with("id_rsa")
-        || base.starts_with("id_ed25519")
-        || base == "credentials"
-        || base == "credentials.json"
-        || base == "netrc"
-        || base == ".netrc"
+    lower.split('/').any(|base| {
+        matches!(
+            base,
+            ".ssh"
+                | ".aws"
+                | "credentials"
+                | "credentials.json"
+                | "netrc"
+                | ".netrc"
+                | "mcp.json"
+                | ".npmrc"
+                | ".pypirc"
+        ) || base.contains("keychain")
+            || base.starts_with(".env")
+            || base.ends_with(".pem")
+            || base.ends_with(".key")
+            || base.starts_with("id_rsa")
+            || base.starts_with("id_ed25519")
+    })
+}
+
+/// reliability 03 / D03: apply before reading bytes, including resolved aliases.
+/// False negative refuses one read; false positive leaks a secret into durable
+/// context. Hard-linked files have ambiguous identities and are denied too.
+pub(crate) fn sensitive_file_path(path: &Path) -> bool {
+    if is_credential_path(&path.to_string_lossy()) {
+        return true;
+    }
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if is_credential_path(&resolved.to_string_lossy()) {
+        return true;
+    }
+    if crate::credentials::active_file_path()
+        .is_some_and(|p| p.canonicalize().unwrap_or(p) == resolved)
+    {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if resolved
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.nlink() > 1)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn record_sensitive_read_rejection(started: std::time::Instant) {
+    // Background index expansion has no agent identity. Do not log paths or
+    // contents just to fill identity fields; the tool envelope carries IDs.
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        None,
+        None,
+        None,
+        None,
+        "content_read",
+        "sensitive_content",
+        started,
+    );
+}
+
+pub(crate) fn readable_repo_path(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
+    let started = std::time::Instant::now();
+    let path = repo_path(root, rel)?;
+    if is_credential_path(rel) || sensitive_file_path(&path) {
+        record_sensitive_read_rejection(started);
+        return Err(ToolError::BadInput(
+            "sensitive content is not readable by agents".into(),
+        ));
+    }
+    Ok(path)
 }
 
 /// 权限规则文件：Agent 不得自改规则（内置 deny）。
@@ -30,11 +95,31 @@ pub(crate) fn is_permission_rule_path(p: &str) -> bool {
 
 /// agent 自授策略面（票 09）：skills 定义与本地会话偏好是负责人管理的
 /// 提示词内容——写进 SKILL.md = 给自己追加指令，与 permission_rules 同类。
-/// bash 侧不设防（bash 本就逐次必问/形状记忆，路径语义管不了）；
-/// 这里的守卫只针对结构化写工具。
+/// reliability 02: structure writes check resolved paths; terminal isolation
+/// denies direct writes to the host state tree. Approval is not isolation.
 pub fn is_agent_policy_path(p: &str) -> bool {
     let lower = p.to_lowercase();
-    lower.starts_with(".hexagon/skills/") || lower.starts_with(".hexagon/local/")
+    let Some(rel) = lower.strip_prefix(".hexagon/") else {
+        return false;
+    };
+    let first = rel.split('/').next().unwrap_or("");
+    matches!(
+        first,
+        "skills"
+            | "local"
+            | "roles"
+            | "roles.json"
+            | "mcp.json"
+            | "permissions.toml"
+            | "prices.json"
+            | "request-locks"
+            | "write-locks"
+            | "skill-mutes.json"
+            | "ui.json"
+    ) || first.starts_with("state.db")
+        || first.starts_with("pack.")
+        || first == "pack"
+        || first == "pack-permission.json"
 }
 
 /// bash 命令里的凭据探测模式。
@@ -255,17 +340,33 @@ pub fn repo_path(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
             other => norm.push(other),
         }
     }
-    // 已存在的文件按真实路径校验（挡符号链接逃逸）
-    let check = if norm.exists() {
-        norm.canonicalize().unwrap_or(norm.clone())
-    } else {
-        norm.clone()
-    };
-    let root_c = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    if !check.starts_with(&root_c) && !norm.starts_with(&root_c) && !norm.starts_with(root) {
+    // reliability 02: the old lexical OR accepted a symlink inside the repo
+    // even when its target escaped. Resolve the nearest existing ancestor too,
+    // so creating a new file under an escaping directory symlink is rejected.
+    let mut existing = norm.as_path();
+    let mut tail = Vec::new();
+    while !existing.exists() {
+        if std::fs::symlink_metadata(existing).is_ok() {
+            return Err(ToolError::PathEscape(rel.into()));
+        }
+        let Some(name) = existing.file_name() else {
+            return Err(ToolError::PathEscape(rel.into()));
+        };
+        tail.push(name.to_os_string());
+        let Some(parent) = existing.parent() else {
+            return Err(ToolError::PathEscape(rel.into()));
+        };
+        existing = parent;
+    }
+    let mut check = existing.canonicalize()?;
+    for part in tail.iter().rev() {
+        check.push(part);
+    }
+    let root_c = root.canonicalize()?;
+    if !check.starts_with(&root_c) {
         return Err(ToolError::PathEscape(rel.into()));
     }
-    Ok(norm)
+    Ok(check)
 }
 
 /// 极简 glob：`*` 匹配任意段内字符，`**` 跨段。

@@ -5,4 +5,4 @@
  * `stage` 为阶段名；NULL = 未分阶段的历史/非阶段账。
  * 用量汇总行（ADR 0054）：agent×model×stage 账本维。
  */
-export type UsageRow = { agent_id: string | null, model: string | null, stage: string | null, prompt_tokens: number, completion_tokens: number, tool_output_tokens: number, cost_mc: number, calls: number, };
+export type UsageRow = { agent_id: string | null, model: string | null, stage: string | null, prompt_tokens: number, completion_tokens: number, tool_output_tokens: number, cost_mc: number, calls: number, unknown_requests: number, legacy_unknown_records: number, unknown_token_records: number, };

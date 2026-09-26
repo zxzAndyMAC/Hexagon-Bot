@@ -303,7 +303,8 @@ fn run_step(wb: &Workbench, step: &StepDef) -> Result<(), ApiError> {
             let art_id: String =
                 crate::artifacts::query(&wb.db, &wb.project_id, None, None, None, None)?
                     .iter()
-                    .find(|a| a.path == *artifact)
+                    .filter(|a| a.path == *artifact)
+                    .max_by_key(|a| a.version)
                     .map(|a| a.id.clone())
                     .ok_or_else(|| ApiError::NoRole(format!("no artifact {artifact}")))?;
             let v = match verdict.as_str() {
@@ -386,8 +387,8 @@ mod tests {
 
     #[test]
     fn scenario_deliver_and_assert() {
-        // 票 09：负责人消息若带 @产品策划，会在 open_stage 之前把脚本派掉。
-        // 这则测交付，不测点名。
+        // reliability 01: owner_message opens the first stage and runs its lead.
+        // Do not replay that same activation with open_stage/run_all_active.
         let dir = tempfile::tempdir().unwrap();
         let sc: Scenario = serde_json::from_value(serde_json::json!({
             "roles": ["产品策划"],
@@ -395,6 +396,7 @@ mod tests {
                 {"name":"规格","roles":["产品策划"],"due":["规格"]}
             ]},
             "scripts": {"default": [
+                {"text": "先写规格，再交付验收。"},
                 {"tool_calls": [{"name":"artifact_write","input":{
                     "path":"specs/prd.md",
                     "content":"---\nkind: 规格\nauthor: a0\n---\n## 目标\nx\n## 范围\nx\n## 验收\nx"}}]},
@@ -402,8 +404,6 @@ mod tests {
             ]},
             "steps": [
                 {"do":"owner_message","text":"开工"},
-                {"do":"open_stage","seq":0},
-                {"do":"run_all_active"},
                 {"do":"assert_event","kind":"artifact_delivered","contains":{"path":"specs/prd.md"}},
                 {"do":"assert_agent_status","role":"产品策划","status":"active"},
                 {"do":"advance"},
@@ -506,10 +506,9 @@ mod tests {
         run_scenario(dir.path(), &sc).unwrap();
     }
 
-    /// US26：跳过复审留痕——review_skipped 进轨迹且阶段评估视作满足；
-    /// 已通过的复审不可跳（章后无后门）。
+    /// Reliability 19: review completion requires evidence; legacy skips are rejected.
     #[test]
-    fn us26_skip_review_leaves_trace_and_satisfies() {
+    fn us26_missing_review_stays_blocked_and_legacy_skip_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let sc: Scenario = serde_json::from_value(serde_json::json!({
             "roles": ["产品策划", "架构师"],
@@ -528,10 +527,9 @@ mod tests {
                 {"do":"run_all_active"},
                 {"do":"advance"},
                 {"do":"assert_stage","seq":0,"state":"active"},   // 复审未过挡评估
-                {"do":"skip_review","artifact_kind":"规格"},
-                {"do":"assert_event","kind":"review_skipped","contains":{"artifact_kind":"规格","reviewer":"架构师","by":"owner"}},
                 {"do":"advance"},
-                {"do":"assert_stage","seq":0,"state":"done"}
+                // D08: a legacy kind-only skip has no version/reason and cannot attest current work.
+                {"do":"assert_stage","seq":0,"state":"active"}
             ]
         }))
         .unwrap();
@@ -539,7 +537,7 @@ mod tests {
 
         // 已通过不可跳
         let dir2 = tempfile::tempdir().unwrap();
-        let sc2: Scenario = serde_json::from_value(serde_json::json!({
+        let mut sc2: Scenario = serde_json::from_value(serde_json::json!({
             "roles": ["产品策划", "架构师"],
             "pack": {"name":"t","version":1,"stages":[
                 {"name":"规格","roles":["产品策划"],"due":["规格"],
@@ -558,6 +556,16 @@ mod tests {
             ]
         }))
         .unwrap();
+        // D08 regression: the scenario review action must pick the current
+        // version, not the first historical row returned by the read model.
+        if let ScriptedStep::Calls { tool_calls } = &mut sc2.scripts.get_mut("default").unwrap()[0]
+        {
+            let mut revised = tool_calls[0].clone();
+            revised.input["content"] = serde_json::json!(
+                "---\nkind: 规格\nauthor: a0\n---\n## 目标\nv2\n## 范围\nx\n## 验收\nx"
+            );
+            tool_calls.push(revised);
+        }
         // 手动补 skip：run_scenario 没有 expect-error 步，直接借 Workbench 断言
         let roles: Vec<&str> = sc2.roles.iter().map(|s| s.as_str()).collect();
         let mut wb = Workbench::for_test(dir2.path(), &roles, sc2.pack.clone()).unwrap();

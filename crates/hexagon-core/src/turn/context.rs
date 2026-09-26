@@ -101,6 +101,7 @@ pub(super) fn model_visible(e: &ToolError) -> bool {
             | ToolError::Exec(_)
             | ToolError::Artifact(_)
             | ToolError::UnknownQuestion(_)
+            | ToolError::NotExecuted(_)
     )
 }
 

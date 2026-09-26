@@ -159,7 +159,7 @@ fn halted_flag(ctx: &ToolContext) -> bool {
 }
 
 /// 叫停判定（暂停旗 + 子代理停旗）：等网睡眠切片与流 delta 缝共用一处。
-fn halted(db: &Db, ctx: &ToolContext) -> bool {
+pub(crate) fn halted(db: &Db, ctx: &ToolContext) -> bool {
     crate::orchestra::is_paused(db, &ctx.project_id).unwrap_or(false) || halted_flag(ctx)
 }
 
@@ -203,12 +203,14 @@ fn leave_wait(
 /// UI 把气泡转「重连中」，睡眠按 tick 切片随时响应叫停，进出各落一条
 /// 系统事件，预算耗尽把 run 挂起等负责人恢复——这些语义塞不进
 /// 「retry_count」一个字里。
+#[allow(clippy::too_many_arguments)]
 fn stream_with_retry(
     db: &Db,
     ctx: &ToolContext,
     provider: &dyn ModelProvider,
     req: &ChatRequest,
     call: usize,
+    purpose: &str,
     sink: &mut DeltaSink<'_>,
 ) -> Result<ChatResponse, TurnError> {
     let mut attempt = 0usize;
@@ -217,32 +219,42 @@ fn stream_with_retry(
     let mut probes = 0usize;
     loop {
         let mut emitted = false;
-        let r = provider.stream(req, &mut |d| {
-            // 票 04：delta 间隙叫停检查——流循环阻塞在读上时，这里是
-            // 唯一能让负责人暂停生效的缝。is_paused 读库失败按未暂停
-            // 处理：暂停是尽力而为的中途检查，轮顶检查仍是权威闸。
-            // 票 04（code-search）：子代理的 halt 旗同缝检查——tasks stop
-            // 不需要等下一轮顶。
-            if halted(db, ctx) {
-                return false;
-            }
-            let (text, thinking) = match d {
-                crate::provider::StreamDelta::Text(t) => (t.clone(), String::new()),
-                crate::provider::StreamDelta::Thinking(t) => (String::new(), t.clone()),
-            };
-            emitted = true;
-            sink(&TurnDelta {
-                agent_id: ctx.agent_id.clone(),
-                stage_run_id: ctx.stage_run_id.clone(),
-                call,
-                reset: false,
-                done: false,
-                waiting: false,
-                text,
-                thinking,
-            });
-            true
-        });
+        let r = crate::usage::request(
+            db,
+            ctx,
+            &req.model_slot,
+            purpose,
+            provider,
+            Some(req),
+            || {
+                provider.stream(req, &mut |d| {
+                    // 票 04：delta 间隙叫停检查——流循环阻塞在读上时，这里是
+                    // 唯一能让负责人暂停生效的缝。is_paused 读库失败按未暂停
+                    // 处理：暂停是尽力而为的中途检查，轮顶检查仍是权威闸。
+                    // 票 04（code-search）：子代理的 halt 旗同缝检查——tasks stop
+                    // 不需要等下一轮顶。
+                    if halted(db, ctx) {
+                        return false;
+                    }
+                    let (text, thinking) = match d {
+                        crate::provider::StreamDelta::Text(t) => (t.clone(), String::new()),
+                        crate::provider::StreamDelta::Thinking(t) => (String::new(), t.clone()),
+                    };
+                    emitted = true;
+                    sink(&TurnDelta {
+                        agent_id: ctx.agent_id.clone(),
+                        stage_run_id: ctx.stage_run_id.clone(),
+                        call,
+                        reset: false,
+                        done: false,
+                        waiting: false,
+                        text,
+                        thinking,
+                    });
+                    true
+                })
+            },
+        );
         match r {
             Ok(resp) => {
                 // 探针成功：等网退出（resumed）再交回响应——半截文本的复位帧
@@ -560,6 +572,7 @@ fn run_turn_impl(
         Some(s) => s,
         None => &mut noop,
     };
+    crate::actions::ensure_clear(db, ctx)?;
     // 休眠语义：不调度、不召模型
     let (status, model_slot): (String, Option<String>) = db
         .conn()
@@ -670,7 +683,9 @@ fn run_turn_impl(
         let vision = ctx.caps.contains("vision");
         let mut degraded = 0usize;
         for r in attachments.iter().take(crate::tools::ATTACH_MAX_COUNT) {
-            let p = ctx.repo_root.join(&r.path);
+            let Ok(p) = crate::tools::readable_repo_path(&ctx.repo_root, &r.path) else {
+                continue;
+            };
             let blk = if r.path.starts_with(".hexagon/inbox/") {
                 std::fs::read(&p).ok().and_then(|b| {
                     (b.len() <= crate::tools::ATTACH_IMG_CAP
@@ -765,7 +780,7 @@ fn run_turn_impl(
                 ctx.stage_run_id.as_deref(),
             )?;
             // 票 03：方案消息也走流式——call=0，工具循环从 1 起。
-            let resp = match stream_with_retry(db, ctx, provider, &plan_req, 0, sink) {
+            let resp = match stream_with_retry(db, ctx, provider, &plan_req, 0, "planning", sink) {
                 Ok(r) => r,
                 // 票 04：流中被叫停 → Interrupted 终态（不上抛成错误）
                 Err(TurnError::Provider(crate::provider::ProviderError::Interrupted)) => {
@@ -775,7 +790,6 @@ fn run_turn_impl(
                 Err(TurnError::Suspended) => return Ok(TurnOutcome::Suspended),
                 Err(e) => return Err(e),
             };
-            crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
             absorb_thinking(&resp.content, &mut carried_thinking);
             // 方案只进模型上下文，不另落一条时间线消息。再落一次会和后面的
             // 可见回复叠成两条几乎一样的发言（2026-09-22）。流式缓冲也清掉，
@@ -916,7 +930,7 @@ fn run_turn_impl(
                 messages: with_dynamic_tail(&messages, round, MAX_TOOL_ROUNDS),
                 ..req_base.clone()
             };
-            db.append_event(
+            let request_id = db.append_event(
                 &ctx.project_id,
                 EventKind::System,
                 request_envelope(
@@ -935,6 +949,13 @@ fn run_turn_impl(
                 &req,
                 // 票 03：call 序号——plan_first 的方案占用 0，循环轮顺延。
                 round + usize::from(plan_first),
+                // Reliability 12: call index zero is also an ordinary first
+                // turn. Purpose comes from this dispatch site, not its index.
+                if ctx.subagent.is_some() {
+                    "subagent"
+                } else {
+                    "turn"
+                },
                 sink,
             ) {
                 Ok(r) => r,
@@ -952,7 +973,6 @@ fn run_turn_impl(
                 resp.usage.prompt_tokens,
                 resp.usage.completion_tokens
             );
-            crate::usage::record(db, ctx, &req_base.model_slot, &resp.usage, 0)?;
             // 票 10：首个响应到手 = brief 送达模型——推进游标到组装水位。
             // 早了丢增量（下次激活漏读），晚了只是重送——这个点是正确侧。
             if round == 0 {
@@ -1005,10 +1025,10 @@ fn run_turn_impl(
 
             // 执行工具调用，结果回喂；同工具同错连 BREAKER_STREAK 次熔断（US57）
             let mut results = Vec::new();
-            // 票 11：位置序 r{round}i{idx} 作幂等序号——provider 的 tool_use id
-            // 跨进程不复现，位置序在「同会话重放」中稳定，中断恢复命中既有卡。
-            for (idx, (id, name, input)) in tool_uses.into_iter().enumerate() {
-                let seq = format!("r{round}i{idx}");
+            // reliability 08: round/index collide across fresh turns and fast
+            // paths. Persisted request identity scopes the provider's call ID.
+            for (id, name, input) in tool_uses {
+                let seq = json!([request_id, id]).to_string();
                 if name == "tasks" {
                     tasks_mark = round;
                 }
@@ -1019,7 +1039,14 @@ fn run_turn_impl(
                         .get("subagent")
                         .map_or(Ok(()), |t| registry.validate_input(ctx, t.as_ref(), &input))
                         .and_then(|()| {
-                            crate::subagent::call_nested(db, provider, registry, ctx, input)
+                            crate::subagent::call_nested_with_seq(
+                                db,
+                                provider,
+                                registry,
+                                ctx,
+                                input,
+                                Some(&seq),
+                            )
                         })
                 } else {
                     registry.call_with_seq(db, ctx, &name, input, Some(&seq))
@@ -1119,13 +1146,7 @@ fn run_turn_impl(
                     _ => 0,
                 })
                 .sum();
-            crate::usage::record(
-                db,
-                ctx,
-                &req_base.model_slot,
-                &Default::default(),
-                tool_bytes,
-            )?;
+            crate::usage::record_tools(db, ctx, &req_base.model_slot, tool_bytes)?;
             messages.push(Message {
                 role: Role::Tool,
                 content: results,
@@ -1175,7 +1196,11 @@ fn run_turn_impl(
         {
             let mut p = json!({ "agent": ctx.agent_id, "outcome": format!("{outcome:?}") });
             let code = match &outcome {
-                Ok(TurnOutcome::Truncated) => Some(crate::trace::FailureCode::BudgetExceeded),
+                // Reliability 13: admission failure has a budget reason, not ambiguity.
+                Ok(TurnOutcome::Truncated)
+                | Err(TurnError::Provider(crate::provider::ProviderError::BudgetUnavailable)) => {
+                    Some(crate::trace::FailureCode::BudgetExceeded)
+                }
                 Ok(TurnOutcome::Interrupted)
                 | Ok(TurnOutcome::Suspended)
                 | Ok(TurnOutcome::Failed(_))

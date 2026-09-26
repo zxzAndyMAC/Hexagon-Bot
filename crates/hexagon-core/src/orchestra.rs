@@ -10,6 +10,15 @@
 //!   最后一个盖章点仍停。自动通过的轨迹 `by=autonomy`，人工盖章 `by=owner`。
 //! - 阶段动作：退回/跳过/暂停/恢复，全落事件。
 
+mod exception;
+pub use exception::{
+    accept as accept_delivery_exception, cancel as cancel_acceptance_exception,
+    request as request_acceptance_exception,
+};
+pub use exception::{
+    ExceptionAcceptance, ExceptionCandidate, ExceptionRequest, ExceptionRequirement,
+};
+
 use crate::db::Db;
 use crate::trace::{EventKind, TraceError};
 use serde::{Deserialize, Serialize};
@@ -18,6 +27,12 @@ use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OrchError {
+    #[error("resolve unknown tool outcomes before accepting delivery exceptions")]
+    UnresolvedDeliveryAction,
+    #[error("select current requirements and provide a reason in an owner exception card")]
+    InvalidAcceptanceException,
+    #[error("delivery changed; request a new exception for the current version")]
+    StaleAcceptanceVersion,
     #[error(transparent)]
     Trace(#[from] TraceError),
     #[error(transparent)]
@@ -267,7 +282,7 @@ pub enum StageEval {
 }
 
 impl Db {
-    fn active_stage_run(&self, project_id: &str) -> Result<Option<StageRun>, OrchError> {
+    pub(crate) fn active_stage_run(&self, project_id: &str) -> rusqlite::Result<Option<StageRun>> {
         let mut st = self.conn().prepare(
             "SELECT id, seq, stage_name, state FROM stage_runs
              WHERE project_id=?1 AND state IN ('active','waiting_stamp')
@@ -281,7 +296,7 @@ impl Db {
                 state: r.get(3)?,
             })
         })?;
-        Ok(rows.next().transpose()?)
+        rows.next().transpose()
     }
 }
 
@@ -406,44 +421,117 @@ pub fn open_stage(
 
 /// 代码产物的路径（或 kind 为「代码」）必须在仓库根有同路径文件。
 /// 只有 `.hexagon/<path>` 时，这一阶段仍缺这份产物。
-fn code_artifact_missing_on_root(
+fn missing_artifact_files(
     db: &Db,
     project_id: &str,
     run_id: &str,
     kind: &str,
-) -> Result<bool, OrchError> {
+) -> Result<Vec<String>, OrchError> {
     let dir: String =
         db.conn()
             .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
                 r.get(0)
             })?;
-    let mut st = db.conn().prepare(
-        "SELECT path FROM artifacts
-         WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')",
-    )?;
+    let mut st = db.conn().prepare("SELECT path FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')")?;
     let paths: Vec<String> = st
         .query_map(rusqlite::params![project_id, run_id, kind], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
-    let code: Vec<&str> = paths
-        .iter()
-        .map(String::as_str)
-        .filter(|p| kind == "代码" || runnable_source(p))
-        .collect();
-    if code.is_empty() {
-        return Ok(false);
+    let mut missing = Vec::new();
+    for path in paths {
+        let relative = path.trim_start_matches('/');
+        let mut required = vec![format!(".hexagon/{relative}")];
+        if kind == "代码" || runnable_source(&path) {
+            required.push(relative.to_string());
+        }
+        for file in required {
+            // D08 / reliability 17: any(one file) previously attested a whole
+            // delivery. Every required body must be readable, not just registered.
+            let readable = crate::tools::readable_repo_path(Path::new(&dir), &file)
+                .is_ok_and(|p| p.is_file() && std::fs::File::open(p).is_ok());
+            if !readable {
+                missing.push(format!("artifact:{kind}:{file}"));
+            }
+        }
     }
-    let root = Path::new(&dir);
-    Ok(!code.iter().any(|p| root.join(p).is_file()))
+    Ok(missing)
 }
 
-fn runnable_source(path: &str) -> bool {
-    matches!(
-        Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or(""),
-        "html" | "css" | "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "vue"
-    )
+use crate::artifacts::evidence::runnable_source;
+
+// D07 / reliability 16: a pending replacement invalidates the old registered
+// body too. Abandoning its unknown tool action does not attest artifact delivery.
+fn materialization_gaps(
+    db: &Db,
+    project: &str,
+    run: &str,
+    due: &[String],
+) -> Result<Vec<String>, OrchError> {
+    let started = std::time::Instant::now();
+    let mut missing = Vec::new();
+    let dir: String =
+        db.conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project], |r| {
+                r.get(0)
+            })?;
+    let root = Path::new(&dir);
+    let mut pending_query = db.conn().prepare("SELECT path,json_extract(intent_json,'$.resolved'),json_extract(intent_json,'$.stage'),json_extract(intent_json,'$.kind') FROM artifact_materializations WHERE project_id=?1 AND state='pending'")?;
+    let pending = pending_query
+        .query_map([project], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for kind in due {
+        let mut query = db.conn().prepare("SELECT path FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')")?;
+        let paths = query
+            .query_map(rusqlite::params![project, run, kind], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        // Reliability 16 upgrade: old rows kept /x and ./x spellings. Compare
+        // physical identities without rewriting historical records or merging
+        // colliding version chains. An unresolvable identity cannot attest safety.
+        let blocked = pending
+            .iter()
+            .any(|(pending_path, resolved, stage, pending_kind)| {
+                (stage.as_deref() == Some(run) && pending_kind == kind)
+                    || paths.iter().any(|path| {
+                        path == pending_path
+                            || crate::tools::repo_path(
+                                root,
+                                &format!(".hexagon/{}", path.trim_start_matches('/')),
+                            )
+                            .map_or(true, |target| target == Path::new(resolved))
+                    })
+            });
+        if blocked {
+            missing.push(format!("artifact:{kind}"));
+        }
+    }
+    crate::diag::note(
+        if missing.is_empty() {
+            crate::diag::CLASS_JUDGE
+        } else {
+            crate::diag::CLASS_REJECT
+        },
+        !missing.is_empty(),
+        Some(project),
+        None,
+        Some(run),
+        None,
+        "artifact_materialization_gate",
+        if missing.is_empty() {
+            "no_pending_delivery"
+        } else {
+            "pending_delivery"
+        },
+        started,
+    );
+    Ok(missing)
 }
 
 /// 阶段成功判定（工作台裁决，非 Agent）。
@@ -451,11 +539,146 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
     let run = db
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
-    let stage = &pack.stages[run.seq as usize];
+    let runs = evidence_runs(db, project_id, pack, &run)?;
     let mut missing = Vec::new();
+    let started = std::time::Instant::now();
+    let unresolved = crate::actions::unresolved_delivery_actions(
+        db,
+        project_id,
+        if is_final_acceptance(pack, &run) {
+            None
+        } else {
+            Some(&run.id)
+        },
+    )?;
+    for id in unresolved {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(project_id),
+            None,
+            Some(&run.id),
+            None,
+            "delivery_evidence",
+            "unknown_action",
+            started,
+        );
+        missing.push(format!("action:{id}"));
+    }
+    if is_final_acceptance(pack, &run) {
+        for seq in 0..=run.seq {
+            if !runs.iter().any(|r| r.seq == seq) {
+                missing.push(format!("stage:{seq}"));
+            }
+        }
+    }
+    for target in runs {
+        if declared_absence(db, project_id, pack, &target)? {
+            continue;
+        }
+        if target.id != run.id && target.state != "done" {
+            missing.push(format!("stage:{}", target.stage_name));
+        }
+        if let StageEval::Incomplete { missing: gaps } =
+            evaluate_run(db, project_id, pack, &target)?
+        {
+            missing.extend(gaps);
+        }
+    }
+    Ok(if missing.is_empty() {
+        StageEval::Ready
+    } else {
+        StageEval::Incomplete { missing }
+    })
+}
+
+fn is_final_acceptance(pack: &PackDef, run: &StageRun) -> bool {
+    let flags: Vec<_> = pack.stages.iter().map(|s| s.stamp_point).collect();
+    crate::stampgate::is_final_stamp(&flags, run.seq as usize)
+}
+
+// D08 / reliability-18: an empty final stage cannot hide earlier requirements.
+// Select the latest attempt, including rejected attempts; never borrow an older
+// successful run. Historical completion remains a fact, not current evidence.
+fn evidence_runs(
+    db: &Db,
+    project: &str,
+    pack: &PackDef,
+    run: &StageRun,
+) -> Result<Vec<StageRun>, OrchError> {
+    if !is_final_acceptance(pack, run) {
+        return Ok(vec![run.clone()]);
+    }
+    let mut query = db.conn().prepare(
+        "SELECT id,seq,stage_name,state FROM stage_runs s
+        WHERE project_id=?1 AND seq<=?2 AND rowid=(SELECT MAX(rowid) FROM stage_runs latest
+        WHERE latest.project_id=s.project_id AND latest.seq=s.seq) ORDER BY seq",
+    )?;
+    let runs = query
+        .query_map(rusqlite::params![project, run.seq], |r| {
+            Ok(StageRun {
+                id: r.get(0)?,
+                seq: r.get(1)?,
+                stage_name: r.get(2)?,
+                state: r.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(runs)
+}
+
+// D08 / reliability-18: legacy owner skips share the SQL state with absent
+// rosters. Missing proof costs a manual repair; treating a skip as proof would
+// silently accept absent deliverables. Only the original roster fact exempts.
+fn declared_absence(
+    db: &Db,
+    project: &str,
+    pack: &PackDef,
+    run: &StageRun,
+) -> Result<bool, OrchError> {
+    if run.state != "skipped" {
+        return Ok(false);
+    }
+    use rusqlite::OptionalExtension;
+    let payload: Option<String> = db.conn().query_row(
+        "SELECT payload FROM events WHERE project_id=?1 AND stage_run_id=?2 AND kind='stage_skipped' ORDER BY id DESC LIMIT 1",
+        rusqlite::params![project,run.id], |r| r.get(0)).optional()?;
+    let stage = pack
+        .stages
+        .get(run.seq as usize)
+        .ok_or(OrchError::BadSeq(run.seq))?;
+    Ok(payload
+        .and_then(|p| serde_json::from_str::<Value>(&p).ok())
+        .is_some_and(|p| absent_roster_fact(&p, &stage.roles)))
+}
+
+fn absent_roster_fact(payload: &Value, roles: &[String]) -> bool {
+    payload["reason"] == "no listed role in team"
+        && payload["decision_kind"] == "roster"
+        && payload["decision"]["kind"] == "roster"
+        && payload["decision"]["chosen"] == json!([])
+        && payload["decision"]["eligible"] == json!(roles)
+}
+
+fn evaluate_run(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    run: &StageRun,
+) -> Result<StageEval, OrchError> {
+    let started = std::time::Instant::now();
+    let accepted = exception::accepted_for_run(db, project_id, pack, &run.id)?;
+    let stage = pack
+        .stages
+        .get(run.seq as usize)
+        .ok_or(OrchError::BadSeq(run.seq))?;
+    let mut missing = materialization_gaps(db, project_id, &run.id, &stage.due)?;
 
     // 应交产物齐（本 run 内 valid/stamped）
     for kind in &stage.due {
+        if missing.contains(&format!("artifact:{kind}")) {
+            continue;
+        }
         let n: i64 = db.conn().query_row(
             "SELECT COUNT(*) FROM artifacts
              WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')",
@@ -469,35 +692,86 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
         // 2026-09-24 论坛活测：index.html 只被 artifact_write 写进 .hexagon/，
         // 阶段只数种类，仓库根没有可打开的页面也算齐。代码产物要在仓库根
         // 有同路径文件（fs_write 那份）；规格仍只留在 .hexagon/。
-        if code_artifact_missing_on_root(db, project_id, &run.id, kind)? {
+        let files = missing_artifact_files(db, project_id, &run.id, kind)?;
+        if !files.is_empty() {
             missing.push(format!("artifact:{kind}"));
+            missing.extend(files);
         }
     }
 
-    // 检验命令全过：最近一次 TestRan exit=0，或负责人已显式覆盖（票 40）
+    // D08: historical exit=0 requires stable, current delivery evidence.
     for cmd in failing_checks(db, project_id, &run.id, stage)? {
-        missing.push(format!("check:{cmd}"));
+        if !accepted.contains(&ExceptionRequirement::Check {
+            run_id: run.id.clone(),
+            cmd: cmd.clone(),
+        }) {
+            missing.push(format!("check:{cmd}"));
+        }
     }
 
-    // 声明复审全过：每条声明最新复审事件为 passed
+    // D08: each required artifact needs its own current evidence. A kind-level
+    // latest event (including legacy skips) cannot attest unrelated deliveries.
+    let root: String =
+        db.conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
+                r.get(0)
+            })?;
     for rev in &stage.reviews {
-        let k: Option<String> = db
-            .conn()
-            .query_row(
-                "SELECT kind FROM events
-                 WHERE project_id=?1 AND stage_run_id=?2
-                 AND kind IN ('review_passed','review_rejected','review_skipped')
-                 AND json_extract(payload,'$.artifact_kind')=?3
-                 ORDER BY id DESC LIMIT 1",
+        let mut query=db.conn().prepare("SELECT id,path FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')")?;
+        let targets = query
+            .query_map(
                 rusqlite::params![project_id, run.id, rev.artifact_kind],
-                |r| r.get(0),
-            )
-            .ok();
-        // passed 或负责人显式跳过都算满足；rejected 仍是缺口
-        if !matches!(k.as_deref(), Some("review_passed") | Some("review_skipped")) {
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        if targets.is_empty() {
             missing.push(format!("review:{}", rev.artifact_kind));
         }
+        for (id, path) in targets {
+            // Reliability 19: an owner review exception cannot attest an
+            // unfinished materialization, even while old bytes still match.
+            // A false negative needs another owner decision; a false positive
+            // would accept delivery that has never finished registering.
+            let exception_applies =
+                crate::artifacts::evidence::capture(db, Path::new(&root), project_id, &id)?
+                    .is_some()
+                    && accepted.contains(&ExceptionRequirement::Review {
+                        run_id: run.id.clone(),
+                        artifact_id: id.clone(),
+                        reviewer: rev.reviewer.clone(),
+                    });
+            if !crate::artifacts::evidence::review_satisfied(
+                db,
+                Path::new(&root),
+                project_id,
+                &run.id,
+                &id,
+                &rev.reviewer,
+            )? && !exception_applies
+            {
+                missing.push(format!("review:{}:{path}", rev.artifact_kind));
+            }
+        }
     }
+    crate::diag::note(
+        if missing.is_empty() {
+            crate::diag::CLASS_JUDGE
+        } else {
+            crate::diag::CLASS_REJECT
+        },
+        !missing.is_empty(),
+        Some(project_id),
+        None,
+        Some(&run.id),
+        None,
+        "delivery_evidence",
+        if missing.is_empty() {
+            "current"
+        } else {
+            "missing_or_stale"
+        },
+        started,
+    );
 
     Ok(if missing.is_empty() {
         StageEval::Ready
@@ -506,42 +780,245 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
     })
 }
 
-/// 未满足的检验命令：最近一次 TestRan 非 0（含未跑），且没有
-/// 覆盖到该命令的 check_overridden 事件（票 40：覆盖是留痕事实，评估认账）。
+/// Current check evidence. Original exit codes remain visible even when stale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub enum CheckState {
+    Missing,
+    Passed,
+    Failed,
+    Stale,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct CheckEvidence {
+    pub run_id: String,
+    pub stage: String,
+    pub cmd: String,
+    #[ts(type = "number | null")]
+    pub event_id: Option<i64>,
+    pub exit_code: Option<i32>,
+    pub state: CheckState,
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct StageEvidence {
+    pub run_id: String,
+    pub fingerprint: Option<String>,
+    pub checks: Vec<CheckEvidence>,
+    pub exceptions: Vec<ExceptionCandidate>,
+    pub missing: Vec<String>,
+}
+
+// D08: uncertainty is visible and fails closed. A false negative costs another
+// check; a false positive would accept an unchecked delivery. Old exit=0 alone
+// is historical execution evidence, never current version proof.
+fn check_state(
+    present: bool,
+    exit: Option<i32>,
+    recorded: Option<&str>,
+    stable: bool,
+    current: Option<&str>,
+) -> CheckState {
+    if !present {
+        return CheckState::Missing;
+    }
+    if current.is_none() {
+        return CheckState::Unavailable;
+    }
+    if !crate::artifacts::fingerprint::current(recorded, stable, current) {
+        return CheckState::Stale;
+    }
+    if exit == Some(0) {
+        CheckState::Passed
+    } else {
+        CheckState::Failed
+    }
+}
+
+fn required_kinds(stage: &StageDef) -> Vec<String> {
+    stage
+        .due
+        .iter()
+        .chain(stage.reviews.iter().map(|r| &r.artifact_kind))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn check_evidence(
+    db: &Db,
+    project: &str,
+    run: &str,
+    stage: &StageDef,
+) -> Result<Vec<CheckEvidence>, OrchError> {
+    let started = std::time::Instant::now();
+    use rusqlite::OptionalExtension;
+    if stage.checks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root: String =
+        db.conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project], |r| {
+                r.get(0)
+            })?;
+    let fingerprint = crate::artifacts::fingerprint::capture(
+        db,
+        Path::new(&root),
+        project,
+        run,
+        &required_kinds(stage),
+    )
+    .ok();
+    let mut rows = Vec::new();
+    for cmd in &stage.checks {
+        let latest: Option<(i64,Option<i32>,Option<String>,bool)> = db.conn().query_row(
+            "SELECT id,json_extract(payload,'$.exit_code'),json_extract(payload,'$.fingerprint'),COALESCE(json_extract(payload,'$.stable'),0)
+             FROM events WHERE project_id=?1 AND stage_run_id=?2 AND kind='test_ran' AND json_extract(payload,'$.cmd')=?3 ORDER BY id DESC LIMIT 1",
+            rusqlite::params![project,run,cmd], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        let (event_id, exit_code, recorded, stable) = latest
+            .map(|(id, exit, fp, stable)| (Some(id), exit, fp, stable))
+            .unwrap_or_default();
+        let state = check_state(
+            event_id.is_some(),
+            exit_code,
+            recorded.as_deref(),
+            stable,
+            fingerprint.as_deref(),
+        );
+        let reason = match state {
+            CheckState::Missing => "missing",
+            CheckState::Passed => "current_pass",
+            CheckState::Failed => "current_fail",
+            CheckState::Stale => "stale",
+            CheckState::Unavailable => "unavailable",
+        };
+        crate::diag::note(
+            if state == CheckState::Passed {
+                crate::diag::CLASS_JUDGE
+            } else {
+                crate::diag::CLASS_REJECT
+            },
+            state != CheckState::Passed,
+            Some(project),
+            None,
+            Some(run),
+            event_id.map(|id| id.to_string()).as_deref(),
+            "check_evidence",
+            reason,
+            started,
+        );
+        rows.push(CheckEvidence {
+            run_id: run.into(),
+            stage: stage.name.clone(),
+            cmd: cmd.clone(),
+            event_id,
+            exit_code,
+            state,
+        });
+    }
+    Ok(rows)
+}
+
 fn failing_checks(
     db: &Db,
-    project_id: &str,
-    run_id: &str,
+    project: &str,
+    run: &str,
     stage: &StageDef,
 ) -> Result<Vec<String>, OrchError> {
-    let mut failing = Vec::new();
-    for cmd in &stage.checks {
-        let passed: Option<i64> = db
-            .conn()
-            .query_row(
-                "SELECT CAST(json_extract(payload,'$.exit_code') AS INTEGER) FROM events
-                 WHERE project_id=?1 AND stage_run_id=?2 AND kind='test_ran'
-                 AND json_extract(payload,'$.cmd')=?3
-                 ORDER BY id DESC LIMIT 1",
-                rusqlite::params![project_id, run_id, cmd],
-                |r| r.get(0),
-            )
-            .ok();
-        if passed == Some(0) {
+    Ok(check_evidence(db, project, run, stage)?
+        .into_iter()
+        .filter(|c| c.state != CheckState::Passed)
+        .map(|c| c.cmd)
+        .collect())
+}
+
+fn delivery_fingerprint(
+    db: &Db,
+    project: &str,
+    pack: &PackDef,
+    run: &StageRun,
+) -> Result<Option<String>, OrchError> {
+    use sha2::{Digest, Sha256};
+    let root: String =
+        db.conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project], |r| {
+                r.get(0)
+            })?;
+    let mut inputs = Vec::new();
+    for target in evidence_runs(db, project, pack, run)? {
+        let stage = pack
+            .stages
+            .get(target.seq as usize)
+            .ok_or(OrchError::BadSeq(target.seq))?;
+        let Ok(fingerprint) = crate::artifacts::fingerprint::capture(
+            db,
+            Path::new(&root),
+            project,
+            &target.id,
+            &required_kinds(stage),
+        ) else {
+            return Ok(None);
+        };
+        inputs.push((target.id, fingerprint));
+    }
+    Ok(Some(format!(
+        "v1:{:x}",
+        Sha256::digest(serde_json::to_vec(&(pack, inputs))?)
+    )))
+}
+
+/// Read-only seam: checks and gate use the same classifier, not a UI inference.
+pub fn stage_evidence(
+    db: &Db,
+    project: &str,
+    pack: &PackDef,
+) -> Result<Option<StageEvidence>, OrchError> {
+    let Some(run) = db.active_stage_run(project)? else {
+        return Ok(None);
+    };
+    let before = delivery_fingerprint(db, project, pack, &run)?;
+    let mut checks = Vec::new();
+    for target in evidence_runs(db, project, pack, &run)? {
+        if declared_absence(db, project, pack, &target)? {
             continue;
         }
-        let covered: i64 = db.conn().query_row(
-            "SELECT COUNT(*) FROM events e, json_each(json_extract(e.payload,'$.cmds')) j
-             WHERE e.project_id=?1 AND e.stage_run_id=?2
-               AND e.kind='check_overridden' AND j.value=?3",
-            rusqlite::params![project_id, run_id, cmd],
-            |r| r.get(0),
-        )?;
-        if covered == 0 {
-            failing.push(cmd.clone());
-        }
+        let stage = pack
+            .stages
+            .get(target.seq as usize)
+            .ok_or(OrchError::BadSeq(target.seq))?;
+        checks.extend(check_evidence(db, project, &target.id, stage)?);
     }
-    Ok(failing)
+    let mut missing = match evaluate(db, project, pack)? {
+        StageEval::Ready => Vec::new(),
+        StageEval::Incomplete { missing } => missing,
+    };
+    let exceptions = exception::candidates(db, project, pack, &run)?;
+    let after = delivery_fingerprint(db, project, pack, &run)?;
+    let fingerprint =
+        if crate::artifacts::fingerprint::current(before.as_deref(), true, after.as_deref()) {
+            after
+        } else {
+            for check in &mut checks {
+                if check.state == CheckState::Passed {
+                    check.state = CheckState::Stale;
+                }
+            }
+            missing.push("delivery:changed_or_unavailable".into());
+            None
+        };
+    Ok(Some(StageEvidence {
+        run_id: run.id,
+        fingerprint,
+        checks,
+        exceptions,
+        missing,
+    }))
 }
 
 /// 负责人显式覆盖检验失败（票 40）：落 check_overridden 留痕（谁/哪些命令/理由），
@@ -553,33 +1030,14 @@ pub struct OverrideOutcome {
     pub stage: String,
 }
 
-/// 之后 evaluate 把这些命令记为满足——stamp/合入随既有闸门自然放行。
-/// 只覆盖检验项；缺产物/未过复审不在覆盖范围。
+/// Reliability 19: require an explicit, version-bound owner decision instead.
 pub fn override_checks(
-    db: &Db,
-    project_id: &str,
-    pack: &PackDef,
-    reason: &str,
+    _db: &Db,
+    _project_id: &str,
+    _pack: &PackDef,
+    _reason: &str,
 ) -> Result<OverrideOutcome, OrchError> {
-    let run = db
-        .active_stage_run(project_id)?
-        .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
-    let stage = &pack.stages[run.seq as usize];
-    let failing = failing_checks(db, project_id, &run.id, stage)?;
-    if failing.is_empty() {
-        return Err(OrchError::NothingToOverride(run.id));
-    }
-    db.append_event(
-        project_id,
-        EventKind::CheckOverridden,
-        json!({"cmds": failing, "reason": reason, "by": "owner"}),
-        None,
-        Some(&run.id),
-    )?;
-    Ok(OverrideOutcome {
-        overridden: failing,
-        stage: run.stage_name,
-    })
+    Err(OrchError::InvalidAcceptanceException)
 }
 
 /// 检验结果行（ADR 0054）：cmd + 退出码。
@@ -598,36 +1056,97 @@ pub struct CheckOutcome {
 }
 
 /// 跑本阶段的检验命令（包内声明 = 预授权，直跑不过权限管线）。
+// D08: the same OS lease used by structured tools spans evidence capture,
+// execution and persistence, and final revalidation through acceptance writes.
+fn write_boundary(db: &Db, project: &str) -> Result<std::fs::File, OrchError> {
+    let dir: String =
+        db.conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project], |r| {
+                r.get(0)
+            })?;
+    Ok(crate::tools::writeguard::repository_lock(
+        &crate::tools::ToolContext {
+            project_id: project.into(),
+            agent_id: "owner".into(),
+            repo_root: dir.into(),
+            ..Default::default()
+        },
+    )?)
+}
+
 pub fn run_checks(
     db: &Db,
     project_id: &str,
     repo_root: &Path,
     pack: &PackDef,
 ) -> Result<Vec<CheckResult>, OrchError> {
+    let lease = std::sync::Arc::new(write_boundary(db, project_id)?);
+    let sessions = crate::sessions::SessionTable::default();
     let run = db
         .active_stage_run(project_id)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
-    let stage = &pack.stages[run.seq as usize];
     let mut out = Vec::new();
-    for cmd in &stage.checks {
-        let res = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(repo_root)
-            .output()?;
-        let code = res.status.code().unwrap_or(-1);
-        db.append_event(
+    for run in evidence_runs(db, project_id, pack, &run)? {
+        if declared_absence(db, project_id, pack, &run)? {
+            continue;
+        }
+        let stage = pack
+            .stages
+            .get(run.seq as usize)
+            .ok_or(OrchError::BadSeq(run.seq))?;
+        for cmd in &stage.checks {
+            let before = crate::artifacts::fingerprint::capture(
+                db,
+                repo_root,
+                project_id,
+                &run.id,
+                &required_kinds(stage),
+            )
+            .ok();
+            let ctx = crate::tools::ToolContext {
+                project_id: project_id.into(),
+                agent_id: "owner".into(),
+                stage_run_id: Some(run.id.clone()),
+                repo_root: repo_root.into(),
+                write_lease: Some(lease.clone()),
+                ..Default::default()
+            };
+            // D08: raw sh.output() returned while redirected background children
+            // were still writing. Use the existing owned, confined process tree.
+            let res = sessions
+                .run_oneshot(db, &ctx, cmd, std::time::Duration::from_secs(300), true)
+                .map_err(std::io::Error::other)?;
+            let code = if res["timed_out"] == true {
+                -1
+            } else {
+                res["exit_code"]
+                    .as_i64()
+                    .and_then(|n| i32::try_from(n).ok())
+                    .unwrap_or(-1)
+            };
+            let after = crate::artifacts::fingerprint::capture(
+                db,
+                repo_root,
+                project_id,
+                &run.id,
+                &required_kinds(stage),
+            )
+            .ok();
+            let stable =
+                crate::artifacts::fingerprint::current(before.as_deref(), true, after.as_deref());
+            db.append_event(
             project_id,
             EventKind::TestRan,
-            json!({"cmd": cmd, "exit_code": code,
-                   "stdout": String::from_utf8_lossy(&res.stdout).chars().take(2000).collect::<String>()}),
+            json!({"cmd": cmd, "exit_code": code, "fingerprint": before, "stable": stable,
+                   "stdout": res["stdout"].as_str().unwrap_or("").chars().take(2000).collect::<String>()}),
             None,
             Some(&run.id),
         )?;
-        out.push(CheckResult {
-            cmd: cmd.clone(),
-            exit_code: code,
-        });
+            out.push(CheckResult {
+                cmd: cmd.clone(),
+                exit_code: code,
+            });
+        }
     }
     Ok(out)
 }
@@ -670,67 +1189,76 @@ pub enum StageAction {
 /// 推进：评估当前阶段 → ready 则盖章点停 or done+开下一阶段。
 /// 返回发生了什么的描述。
 pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
-    if is_paused(db, project_id)? {
-        return Err(OrchError::Paused);
-    }
-    let run = db
-        .active_stage_run(project_id)?
-        .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
-    if run.state == "waiting_stamp" {
-        return Ok(StageAction::WaitingStamp {
-            stage: run.stage_name,
-        });
-    }
-    match evaluate(db, project_id, pack)? {
-        StageEval::Incomplete { missing } => Ok(StageAction::Incomplete {
-            stage: run.stage_name,
-            missing,
-        }),
-        StageEval::Ready => {
-            let stage = &pack.stages[run.seq as usize];
-            if stage.stamp_point {
-                let flags: Vec<bool> = pack.stages.iter().map(|s| s.stamp_point).collect();
-                let seq = run.seq as usize;
-                // 存储档，不是 execution_rank。提案/授权/安装走 harnessgate（票 04）。
-                let stored = crate::autonomy::rank(db, project_id)?;
-                if crate::stampgate::classify_stamp(stored, &flags, seq)
-                    == crate::stampgate::StampDisposition::AutoPass
-                {
-                    return auto_pass_stamp(db, project_id, pack, &run);
-                }
-                let final_acceptance = crate::stampgate::is_final_stamp(&flags, seq);
-                db.conn().execute(
-                    "UPDATE stage_runs SET state='waiting_stamp' WHERE id=?1",
-                    [&run.id],
-                )?;
-                // 卡表写口归 cards.rs（arch-review 票 04）；阶段盖章卡无 agent
-                let qid = crate::cards::enqueue(
-                    db,
-                    project_id,
-                    None,
-                    crate::cards::CardKind::Stamp,
-                    json!({
-                        "stage": stage.name,
-                        "run_id": run.id,
-                        "final_acceptance": final_acceptance,
-                    }),
-                    None,
-                )?;
-                db.append_event(
-                    project_id,
-                    EventKind::PermissionAsked,
-                    json!({"kind": "stamp", "stage": stage.name, "question_id": qid}),
-                    None,
-                    Some(&run.id),
-                )?;
-                return Ok(StageAction::AwaitingStamp {
-                    stage: stage.name.clone(),
-                    question_id: qid,
-                });
-            }
-            finish_stage(db, project_id, pack, &run)
+    let _lease = write_boundary(db, project_id)?;
+    // D08: the file lease and an immediate SQLite transaction cover the whole
+    // verdict. A failed event/card write previously left a completed stage.
+    let tx =
+        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)?;
+    let result = (|| {
+        if is_paused(db, project_id)? {
+            return Err(OrchError::Paused);
         }
-    }
+        let run = db
+            .active_stage_run(project_id)?
+            .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
+        if run.state == "waiting_stamp" {
+            return Ok(StageAction::WaitingStamp {
+                stage: run.stage_name,
+            });
+        }
+        match evaluate(db, project_id, pack)? {
+            StageEval::Incomplete { missing } => Ok(StageAction::Incomplete {
+                stage: run.stage_name,
+                missing,
+            }),
+            StageEval::Ready => {
+                let stage = &pack.stages[run.seq as usize];
+                if stage.stamp_point {
+                    let flags: Vec<bool> = pack.stages.iter().map(|s| s.stamp_point).collect();
+                    let seq = run.seq as usize;
+                    // 存储档，不是 execution_rank。提案/授权/安装走 harnessgate（票 04）。
+                    let stored = crate::autonomy::rank(db, project_id)?;
+                    if crate::stampgate::classify_stamp(stored, &flags, seq)
+                        == crate::stampgate::StampDisposition::AutoPass
+                    {
+                        return auto_pass_stamp(db, project_id, pack, &run);
+                    }
+                    let final_acceptance = crate::stampgate::is_final_stamp(&flags, seq);
+                    db.conn().execute(
+                        "UPDATE stage_runs SET state='waiting_stamp' WHERE id=?1",
+                        [&run.id],
+                    )?;
+                    // 卡表写口归 cards.rs（arch-review 票 04）；阶段盖章卡无 agent
+                    let qid = crate::cards::enqueue(
+                        db,
+                        project_id,
+                        None,
+                        crate::cards::CardKind::Stamp,
+                        json!({
+                            "stage": stage.name,
+                            "run_id": run.id,
+                            "final_acceptance": final_acceptance,
+                        }),
+                        None,
+                    )?;
+                    db.append_event(
+                        project_id,
+                        EventKind::PermissionAsked,
+                        json!({"kind": "stamp", "stage": stage.name, "question_id": qid}),
+                        None,
+                        Some(&run.id),
+                    )?;
+                    return Ok(StageAction::AwaitingStamp {
+                        stage: stage.name.clone(),
+                        question_id: qid,
+                    });
+                }
+                finish_stage(db, project_id, pack, &run)
+            }
+        }
+    })()?;
+    tx.commit()?;
+    Ok(result)
 }
 
 fn finish_stage(
@@ -784,36 +1312,54 @@ pub fn open_next(
 
 /// 盖章确认：waiting_stamp → done → 推进。
 pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
-    let run = db
-        .active_stage_run(project_id)?
-        .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
-    if run.state != "waiting_stamp" {
-        return Err(OrchError::BadSeq(run.seq));
-    }
-    db.conn().execute(
-        "UPDATE stage_runs SET state='done', finished_at=datetime('now') WHERE id=?1",
-        [&run.id],
-    )?;
-    // 销掉本 run 的盖章卡（e2e_live 实证：卡曾永不销——queued 僵尸卡
-    // 在已推进阶段后仍挂待决区。提案型 stamp 卡 payload 无 run_id，
-    // 按 run_id 匹配天然不碰提案面；提案卡归 proposals::activate 销）。
-    crate::cards::answer_queued_where(
-        db,
-        project_id,
-        crate::cards::CardKind::Stamp,
-        "run_id",
-        &run.id,
-        "owner",
-    )?;
-    db.append_event(
-        project_id,
-        EventKind::Stamped,
-        // 票 02：by=owner 与自动通过的 by=autonomy 区分。缺 by 的旧事件当人工。
-        json!({"stage": run.stage_name, "seq": run.seq, "by": "owner"}),
-        None,
-        Some(&run.id),
-    )?;
-    open_next(db, project_id, pack, run.seq as usize + 1)
+    let _lease = write_boundary(db, project_id)?;
+    // D08: the file lease and an immediate SQLite transaction cover the whole
+    // verdict. A failed event/card write previously left a completed stage.
+    let tx =
+        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)?;
+    let result = (|| {
+        let run = db
+            .active_stage_run(project_id)?
+            .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
+        if run.state != "waiting_stamp" {
+            return Err(OrchError::BadSeq(run.seq));
+        }
+        // D08: waiting for the owner does not freeze files or review evidence.
+        let evidence = stage_evidence(db, project_id, pack)?
+            .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
+        if !evidence.missing.is_empty() {
+            return Ok(StageAction::Incomplete {
+                stage: run.stage_name,
+                missing: evidence.missing,
+            });
+        }
+        db.conn().execute(
+            "UPDATE stage_runs SET state='done', finished_at=datetime('now') WHERE id=?1",
+            [&run.id],
+        )?;
+        // 销掉本 run 的盖章卡（e2e_live 实证：卡曾永不销——queued 僵尸卡
+        // 在已推进阶段后仍挂待决区。提案型 stamp 卡 payload 无 run_id，
+        // 按 run_id 匹配天然不碰提案面；提案卡归 proposals::activate 销）。
+        crate::cards::answer_queued_where(
+            db,
+            project_id,
+            crate::cards::CardKind::Stamp,
+            "run_id",
+            &run.id,
+            "owner",
+        )?;
+        db.append_event(
+            project_id,
+            EventKind::Stamped,
+            // 票 02：by=owner 与自动通过的 by=autonomy 区分。缺 by 的旧事件当人工。
+            json!({"stage": run.stage_name, "seq": run.seq, "by": "owner", "delivery_fingerprint": evidence.fingerprint}),
+            None,
+            Some(&run.id),
+        )?;
+        open_next(db, project_id, pack, run.seq as usize + 1)
+    })()?;
+    tx.commit()?;
+    Ok(result)
 }
 
 /// L3/L4 非最终盖章点：不入待决卡，直接通过并留下和人工盖章不同的轨迹。
@@ -868,23 +1414,9 @@ pub fn rewind(
     })
 }
 
-/// 跳过当前阶段。
-pub fn skip(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
-    let run = db
-        .active_stage_run(project_id)?
-        .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
-    db.conn().execute(
-        "UPDATE stage_runs SET state='skipped', finished_at=datetime('now') WHERE id=?1",
-        [&run.id],
-    )?;
-    db.append_event(
-        project_id,
-        EventKind::StageSkipped,
-        json!({"stage": run.stage_name, "by": "owner"}),
-        None,
-        Some(&run.id),
-    )?;
-    open_next(db, project_id, pack, run.seq as usize + 1)
+/// Reliability 19: general stage skipping cannot stand in for delivery evidence.
+pub fn skip(_db: &Db, _project_id: &str, _pack: &PackDef) -> Result<StageAction, OrchError> {
+    Err(OrchError::InvalidAcceptanceException)
 }
 
 pub fn pause(db: &Db, project_id: &str) -> Result<(), OrchError> {
@@ -1297,10 +1829,11 @@ mod tests {
 
     fn setup(roles: &[&str]) -> (Db, tempfile::TempDir) {
         let db = Db::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
         db.conn()
             .execute(
-                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1','/tmp/x','x','pack')",
-                [],
+                "INSERT INTO projects (id, dir, name, mode) VALUES ('p1',?1,'x','pack')",
+                [dir.path().to_string_lossy().as_ref()],
             )
             .unwrap();
         for (i, r) in roles.iter().enumerate() {
@@ -1311,7 +1844,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        (db, tempfile::tempdir().unwrap())
+        (db, dir)
     }
 
     #[test]
@@ -1357,20 +1890,34 @@ mod tests {
             }
             _ => panic!("should be incomplete"),
         }
-        // 交付产物 + 复审通过
-        db.conn()
-            .execute(
-                "INSERT INTO artifacts (id,project_id,path,kind,tier,stage_run_id,version,status)
-             VALUES ('x','p1','specs/api.md','接口说明','skeleton',?1,1,'valid')",
-                [&rid],
-            )
-            .unwrap();
-        db.append_event(
-            "p1",
-            EventKind::ReviewPassed,
-            json!({"artifact_kind":"接口说明","reviewer":"架构师"}),
+        // D08: actual bodies and target-bound reviews replace the old fake
+        // kind-only event fixture; a row alone no longer attests delivery.
+        let ctx = crate::tools::ToolContext {
+            project_id: "p1".into(),
+            agent_id: "a1".into(),
+            repo_root: dir.path().into(),
+            stage_run_id: Some(rid.clone()),
+            ..Default::default()
+        };
+        let aid = crate::artifacts::deliver(
+            &db,
+            &ctx,
+            &Default::default(),
+            "specs/api.md",
+            "---\nkind: 接口说明\nauthor: a1\n---\n## 资源\nx\n## 端点\nx\n## 错误码\nx",
             None,
-            Some(&rid),
+        )
+        .unwrap();
+        let reviewer = crate::tools::ToolContext {
+            agent_id: "a2".into(),
+            ..ctx
+        };
+        crate::review::submit_review(
+            &db,
+            &reviewer,
+            &aid,
+            crate::review::Verdict::Pass,
+            "reviewed",
         )
         .unwrap();
         assert_eq!(evaluate(&db, "p1", &p).unwrap(), StageEval::Ready);
@@ -1383,7 +1930,7 @@ mod tests {
 
     #[test]
     fn stamp_point_stops_until_stamped() {
-        let (db, _d) = setup(&["产品策划", "后端", "架构师"]);
+        let (db, dir) = setup(&["产品策划", "后端", "架构师"]);
         // 规格不是最后一道盖章点。离开时按原先 L4 自动通过，界面无 UI 被跳过，开到接口。
         let p = pack();
         let (rid, _) = open_stage(&db, "p1", &p, 0).unwrap();
@@ -1394,6 +1941,9 @@ mod tests {
                 [&rid],
             )
             .unwrap();
+        // D08: registration must have a readable current body.
+        std::fs::create_dir_all(dir.path().join(".hexagon/specs")).unwrap();
+        std::fs::write(dir.path().join(".hexagon/specs/prd.md"), "spec").unwrap();
         let r = serde_json::to_value(advance(&db, "p1", &p).unwrap()).unwrap();
         assert_eq!(r["action"], "stage_opened");
         assert_eq!(r["seq"], 2);
@@ -1567,13 +2117,16 @@ mod tests {
         let root = dir.path().join("repo");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/b.rs"), "fn b() {}").unwrap();
+        // D08: both the registered body and its executable counterpart exist.
+        std::fs::create_dir_all(root.join(".hexagon/src")).unwrap();
+        std::fs::write(root.join(".hexagon/src/b.rs"), "fn b() {}").unwrap();
         db.conn()
             .execute(
                 "UPDATE projects SET dir=?1 WHERE id='p1'",
                 [root.to_string_lossy().as_ref()],
             )
             .unwrap();
-        run_checks(&db, "p1", dir.path(), &p2).unwrap();
+        run_checks(&db, "p1", &root, &p2).unwrap();
         assert_eq!(evaluate(&db, "p1", &p2).unwrap(), StageEval::Ready);
     }
 
@@ -1653,12 +2206,21 @@ mod tests {
             StageEval::Incomplete { missing } => assert!(!missing.is_empty()),
             _ => panic!(),
         }
-        db.append_event(
-            "p1",
-            EventKind::ReviewPassed,
-            json!({"artifact_kind":"接口说明","reviewer":"架构师"}),
-            Some("a2"),
-            Some(&r1),
+        // D08: a kind-only event no longer passes the review gate.
+        let target: String = db
+            .conn()
+            .query_row(
+                "SELECT id FROM artifacts WHERE path='specs/api.md' ORDER BY version DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        crate::review::submit_review(
+            &db,
+            &ctx_for("a2", &r1),
+            &target,
+            crate::review::Verdict::Pass,
+            "reviewed",
         )
         .unwrap();
         // 推进 → 合入（盖章点）
@@ -1874,5 +2436,29 @@ mod tests {
             per < std::time::Duration::from_millis(5),
             "is_paused 单次 {per:?}——索引路径疑似失效"
         );
+    }
+}
+
+#[cfg(test)]
+mod evidence_properties {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn only_current_success_is_passed(value in ".{0,60}", exit in any::<i32>(), stable in any::<bool>()) {
+            let before = format!("old:{value}");
+            let after = format!("new:{value}");
+            prop_assert_ne!(check_state(true, Some(exit), Some(&before), stable, Some(&after)), CheckState::Passed);
+            prop_assert_ne!(check_state(true, Some(exit), None, stable, Some(&after)), CheckState::Passed);
+            prop_assert_ne!(check_state(true, Some(exit), Some(&before), stable, None), CheckState::Passed);
+            prop_assert_eq!(check_state(true, Some(exit), Some(&before), stable, Some(&before)) == CheckState::Passed, exit == 0 && stable);
+        }
+        #[test]
+        fn owner_skip_is_never_roster_evidence(role in ".{0,40}", reason in ".{0,60}") {
+            let owner = json!({"by":"owner","reason":reason});
+            prop_assert!(!absent_roster_fact(&owner, std::slice::from_ref(&role)));
+            let fact = json!({"reason":"no listed role in team","decision_kind":"roster", "decision":{"kind":"roster","chosen":[],"eligible":[role.clone()]}});
+            prop_assert!(absent_roster_fact(&fact, &[role]));
+        }
     }
 }

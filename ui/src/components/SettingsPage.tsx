@@ -12,6 +12,7 @@ import { ACTIONS, bindingFor, conflictFor, formatBinding, isMac, normalizeEvent,
 import { PracticeGround } from './PracticeGround'
 import { PromptsSection } from './PromptsSection'
 import { Icon } from './Icon'
+import { DataBoundary } from './DataBoundary'
 import { ProviderManager } from './ProviderManager'
 import { UsageTab } from './UsageTab'
 import { RoleEditor, CreateRoleForm } from './RoleEditor'
@@ -909,19 +910,8 @@ function McpSection({ projectless }: { projectless: boolean }) {
     if (!scanRows) return
     setBusy(true)
     try {
-      const specs = [...picked].map((i) => {
-        const r = scanRows[i]
-        return {
-          name: r.name, command: r.command, args: r.args, env: r.env,
-          cwd: r.cwd,
-          // 远程传输一期不 spawn——导入落 disabled 态明示（票 06 裁决：
-          // 可见置灰 > 静默隐藏；enabled 后也是 spawnable()=false）
-          disabled: r.disabled || r.transport === 'remote',
-          url: r.url,
-          headers: r.headers,
-        }
-      })
-      const rep = await api.importMcp(specs)
+      const references = [...picked].map((i) => scanRows[i].reference)
+      const rep = await api.importMcp(references)
       pushToast(t('mcp.importResult', { n: rep.imported, m: rep.skipped.length }), 'ok')
       setScanRows(null)
       await load()
@@ -951,7 +941,7 @@ function McpSection({ projectless }: { projectless: boolean }) {
   return (
     <div>
       <div className="dim3" style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.7 }}>
-        {t('mcp.intro')}
+        {t('mcp.intro')}<p>{t('dataBoundary.edit')}</p><p>{t('dataBoundary.mcpStorage')}</p>
       </div>
       <ListDetail<McpEntryRow>
         items={entries ?? []}
@@ -1024,8 +1014,8 @@ function McpSection({ projectless }: { projectless: boolean }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span className={`dot ${selLive.status === 'up' ? 'on' : 'off'}`} />
                   <span style={{ fontSize: 12, fontWeight: 510 }}>{t('mcp.live')}</span>
-                  <span className={`chip ${selLive.status === 'up' ? 'ok' : 'err'}`} style={{ fontSize: 10 }}>
-                    {selLive.status === 'up' ? t('mcp.up', { count: selLive.tools.length }) : t('mcp.down')}
+                  <span className={`chip ${selLive.status === 'up' ? 'ok' : selLive.status === 'starting' ? 'warn' : 'err'}`} style={{ fontSize: 10 }}>
+                    {selLive.status === 'up' ? t('mcp.up', { count: selLive.tools.length }) : selLive.status === 'starting' ? t('mcp.starting') : t('mcp.down')}
                   </span>
                 </div>
                 {selLive.status === 'up' && selLive.tools.length > 0 && (
@@ -1498,6 +1488,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
             ))}
           </div>
         </Row>
+        <DataBoundary />
       </>
     ),
     keys: (

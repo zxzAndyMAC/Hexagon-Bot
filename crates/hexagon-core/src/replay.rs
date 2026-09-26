@@ -341,6 +341,9 @@ mod tests {
             tool_output_tokens: 0,
             cost_mc: 7,
             calls: 1,
+            unknown_requests: 0,
+            legacy_unknown_records: 0,
+            unknown_token_records: 0,
         }];
         let m = metrics_from_events(&events, &usage);
         assert_eq!(m.turns, 2);

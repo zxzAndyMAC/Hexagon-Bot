@@ -1,17 +1,16 @@
 import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type TimelineItem } from '../api'
+import { api, errText } from '../api'
 import { useUiStore } from '../store'
 import { CodeBlock, Md } from './Md'
 import { Avatar } from './Avatar'
 import { Icon, type IconName } from './Icon'
 import { RoleEditor } from './RoleEditor'
 import { fmtTime as fmtTimeShared } from '../usage'
-import { toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
+import { pairToolCalls, toolOutcome, type ToolOutcome, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
 import { openTurns } from '../timelineModel'
 import { LoadingState } from './LoadingState'
-import { SpinnerRing } from './SpinnerRing'
-import { ExecBody } from './ExecCard'
+import { ExecBody, CallStatus } from './ExecCard'
 
 type Step = {
   id: number
@@ -21,7 +20,7 @@ type Step = {
   label: string
   summary?: string
   detail?: string
-  ok?: boolean
+  ok?: ToolOutcome
   message?: string
   path?: string
   divider?: boolean
@@ -85,6 +84,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
 
   const steps = useMemo(() => {
     const items = timeline.filter((it) => it.event.agent_id === agentId)
+    const calls = new Map(pairToolCalls(items).map((call) => [call.called.event.id, call]))
     const evLabel = (k: string) => t(`ev.${k}`, { defaultValue: k.replace(/_/g, ' ') })
     const out: Step[] = []
     for (let i = 0; i < items.length; i++) {
@@ -103,12 +103,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
       }
       if (ev.kind === 'tool_called') {
         const tool = String(p.tool ?? '')
-        // 配对要同 agent（pairToolCalls 同约定）——并发回合事件交错，
-        // 别家的 result 不能吸进来。
-        const res: TimelineItem | undefined =
-          items[i + 1]?.event.kind === 'tool_result' && items[i + 1].event.agent_id === agentId
-            ? items[++i]
-            : undefined
+        const res = calls.get(ev.id)?.result
         const exec = EXEC_CARD_TOOLS.has(tool)
         out.push({
           ...base,
@@ -117,7 +112,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
           label: t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool }),
           summary: toolInputSummary(p),
           detail: JSON.stringify({ ...p, ...(res ? { result: res.event.payload } : {}) }, null, 2),
-          ok: res ? res.event.payload.ok !== false : undefined,
+          ok: toolOutcome(res),
           path: p.path ? String(p.path) : undefined,
           execCall: exec ? { called: it, result: res } : undefined,
         })
@@ -261,16 +256,7 @@ export function AgentTab({ agentId }: { agentId: string }) {
               )}
               {/* 票 05 TaskRows 状态机：tool_called 无 result=在途运行环；
                   落定翻 check/X 徽标 pop-in（与 ToolChipRow 同一套）。 */}
-              {s.kind === 'tool_called' && (s.ok == null
-                ? <SpinnerRing />
-                : (
-                  <span
-                    className={`chip ${s.ok ? 'ok' : 'err'}`}
-                    style={{ animation: 'pop-in 250ms cubic-bezier(0.23,1,0.32,1) both' }}
-                  >
-                    <Icon name={s.ok ? 'check' : 'close'} size={8} />{s.ok ? 'ok' : 'err'}
-                  </span>
-                ))}
+              {s.kind === 'tool_called' && <CallStatus ok={s.ok} />}
               {s.detail && <span className="dim3" style={{ display: 'inline-flex' }}><Icon name={expanded.has(s.id) ? 'chevron-down' : 'chevron-right'} size={9} /></span>}
               <span className="dim3" style={{ marginLeft: 'auto', fontSize: 10, flexShrink: 0 }}>{s.time}</span>
             </div>

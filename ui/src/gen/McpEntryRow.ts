@@ -9,7 +9,7 @@ export type McpEntryRow = { name: string, command: string, args: Array<string>, 
  */
 transport: string, url: string | null, 
 /**
- * 远程标头（Authorization 等）——清单行带给 UI 显示/编辑
+ * 远程标头值使用不透明保留标记；原文不返回 UI。
  */
 headers: { [key in string]?: string }, 
 /**

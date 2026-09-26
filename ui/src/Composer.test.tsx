@@ -592,3 +592,24 @@ describe('发送成功才把时间线钉回真底', () => {
     root.unmount()
   })
 })
+
+describe('实例点名（可靠性 07）', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('同角色补全保留实例 ID，发送只走已有消息入口', async () => {
+    useUiStore.setState({ team: [{ ...member('后端'), id: 'a0' }, { ...member('后端'), id: 'a1' }], pending: [], timeline: [] })
+    const send = vi.spyOn(api, 'sendMessage').mockResolvedValue(1)
+    const dispatch = vi.spyOn(api, 'dispatch').mockResolvedValue('finished')
+    const { el, root } = await render(<Composer />)
+    await setComposer(el, '@后端')
+    expect(el.textContent).toContain('@后端[a0]')
+    expect(el.textContent).toContain('@后端[a1]')
+    await clickLabel(el, '@后端[a1]')
+    const ta = el.querySelector('textarea')!
+    expect(ta.value).toBe('@后端[a1] ')
+    expect(el.querySelector('.atom-token')?.getAttribute('data-value')).toBe('后端[a1]')
+    await act(async () => { ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(send).toHaveBeenCalledWith('@后端[a1] ', [])
+    expect(dispatch).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+})

@@ -2,7 +2,7 @@
 // 布局对齐 Cherry Studio：左列=内置常见供应商+已配置供应商+底部固定「添加」；
 // 右列=选中供应商详情（密钥/端点/模型目录）——检测、拉取模型列表、能力标记、
 // 编辑模型一应俱全；底部「槽位分配」把角色模型槽绑到 供应商+模型。
-// 数据语义：非密配置存 providers.json；key 只写 keychain（provider/<id>）。
+// 数据语义：非密配置存 providers.json；key 使用 active CredentialStore（provider/<id>）。
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ModelEntry, type ProviderView, type ProvidersView, type RoleDef } from '../api'
@@ -245,7 +245,7 @@ export function ProviderManager() {
 
   return (
     <div>
-      <div className="dim3" style={{ fontSize: 12, marginBottom: 10 }}>{t('providers.hint')}</div>
+      <div className="dim3" style={{ fontSize: 12, marginBottom: 10 }}>{t('providers.hint')}<p>{t('dataBoundary.edit')}</p></div>
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
         {/* ---- 左列：供应商列表（Cherry 式，settings-3col 票 04 对齐 ListDetail） ---- */}
         <div

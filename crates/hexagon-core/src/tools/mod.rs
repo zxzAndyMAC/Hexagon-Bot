@@ -6,7 +6,6 @@
 
 use crate::db::Db;
 use crate::trace::{EventKind, TraceError};
-use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -17,6 +16,10 @@ pub const FS_READ_CAP: usize = 256 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
+    #[error(
+        "write conflict for action {action_id}: {path}; reread targets and create a new action"
+    )]
+    WriteConflict { action_id: String, path: String },
     #[error("path escapes repo root: {0}")]
     PathEscape(String),
     #[error("io: {0}")]
@@ -37,6 +40,14 @@ pub enum ToolError {
     Artifact(#[from] Box<crate::artifacts::ArtifactError>),
     #[error("unknown question: {0}")]
     UnknownQuestion(String),
+    #[error("tool outcome unknown; reconcile before continuing: {0}")]
+    OutcomeUnknown(String),
+    #[error("tool action already executing: {0}")]
+    ActionInProgress(String),
+    #[error("authorized action must be resumed before new work: {0}")]
+    ActionReady(String),
+    #[error("tool was not executed: {0}")]
+    NotExecuted(String),
 }
 
 #[derive(Clone)]
@@ -45,8 +56,8 @@ pub struct ToolContext {
     pub agent_id: String,
     pub repo_root: PathBuf,
     pub stage_run_id: Option<String>,
-    /// 路径归属 glob：非空时 fs 写入必须命中其一，否则转必问。
-    /// 由编排内核按阶段注入；空 = 未限定（开发早期）。
+    /// 路径归属 glob：非空时写入必须命中其一，否则拒绝。
+    /// 空 = 不增加归属限制；宿主保护和其他硬拒绝仍生效。
     pub owned_globs: Vec<String>,
     /// 产物档位注册表（自定义类型挂档用；内置映射不可降级）。
     pub tiers: crate::artifacts::TierMap,
@@ -60,6 +71,14 @@ pub struct ToolContext {
     /// 断网等待策略（network-resilience 票 01）：Transport 快重试耗尽后
     /// 的等网参数——生产常量，测试注入毫秒级。`Default` = 生产值。
     pub wait: crate::turn::WaitPolicy,
+    /// reliability 10: caller deadline can only shorten the MCP tool budget.
+    pub deadline: Option<std::time::Instant>,
+    pub mcp_timeout: std::time::Duration,
+    /// Host-supplied durable key; only tools declaring a real idempotency
+    /// contract may rely on it. Never supplied by the model or provider call ID.
+    pub action_key: Option<String>,
+    /// Host-owned execution lease, reused by nested local materialization.
+    pub(crate) write_lease: Option<Arc<std::fs::File>>,
     /// 激活任务清单（code-search 票 07）：Workbench 注入共享板；
     /// 临时构造的 ctx 拿独立空板（一次性路径无跨回合任务）。
     pub tasks: crate::subagent::TaskBoard,
@@ -93,6 +112,10 @@ impl Default for ToolContext {
             sessions: Default::default(),
             caps: Default::default(),
             wait: Default::default(),
+            deadline: None,
+            mcp_timeout: std::time::Duration::from_secs(120),
+            action_key: None,
+            write_lease: None,
             tasks: Default::default(),
             subagent: None,
             websearch: None,
@@ -158,7 +181,33 @@ pub enum RiskClass {
     External,
 }
 
+/// Reliability 11: only host-installed contracts may assert an observed outcome.
+/// Tool descriptions, model text and MCP annotations cannot implement this hook.
+#[derive(Debug)]
+pub enum Reconciliation {
+    Unresolved { evidence: String },
+    Succeeded { output: Value, evidence: String },
+    NotExecuted { evidence: String },
+}
+
+pub struct IdempotencyContract {
+    pub version: String,
+    pub validity: std::time::Duration,
+}
+
 pub trait Tool: Send + Sync {
+    /// Host-owned complete file target manifest. Opaque external tools do not
+    /// claim this guarantee. Paths are repository-relative, never model grants.
+    fn write_targets(&self, _input: &Value) -> Result<Vec<String>, ToolError> {
+        Ok(vec![])
+    }
+
+    /// Trusted host adapter guarantee, not a remote annotation. exec must pass
+    /// ctx.action_key to the actual provider's deduplication mechanism.
+    fn idempotency_contract(&self) -> Option<IdempotencyContract> {
+        None
+    }
+
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     /// 参数命名约定（票 14 备忘）：参数名别撞宿主模板/语言方法名——
@@ -167,6 +216,26 @@ pub trait Tool: Send + Sync {
     /// `get`/`update` 这类名字禁用；宁可 `entries`/`todo_list`。
     fn input_schema(&self) -> Value;
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError>;
+    /// Must only read a receipt/postcondition; never execute the original action.
+    fn reconcile(
+        &self,
+        _db: &Db,
+        _input: &Value,
+        _ctx: &ToolContext,
+        _action_id: &str,
+    ) -> Result<Reconciliation, ToolError> {
+        Ok(Reconciliation::Unresolved {
+            evidence: "tool has no read-only reconciliation contract".into(),
+        })
+    }
+    /// reliability 05: metadata and a parent's grant cannot attest read-only
+    /// behavior. Only a host implementation creating a separately confined
+    /// capability may override this; never return a parent's writable session.
+    fn for_subagent(&self, _ctx: &ToolContext) -> Result<Arc<dyn Tool>, ToolError> {
+        Err(ToolError::Exec(
+            "host-enforced read-only capability unavailable".into(),
+        ))
+    }
     /// 风险类声明（票 08）。默认 Exec——最保守的「默认必问」档，
     /// 新工具忘了声明也不会意外变成免问。
     fn risk(&self) -> RiskClass {
@@ -177,7 +246,7 @@ pub trait Tool: Send + Sync {
         None
     }
     /// 执行前提（票 02）：只在 `call_with_seq` 里、权限判定之前检查——注定
-    /// 失败的调用不弹卡。负责人批准后的执行不复查（见 readstate 模块头）。
+    /// 失败的调用不弹卡。批准后的执行由 writeguard 核对持久目标前提。
     fn precondition(&self, _input: &Value, _ctx: &ToolContext) -> Result<(), ToolError> {
         Ok(())
     }
@@ -246,11 +315,11 @@ impl Registry {
     }
 
     /// 子代理注册表（code-search-and-subagent 票 04/06）：只读工具 +
-    /// 仓内搜索 + web 摘要 + 测试执行（自带硬闸）+ `pick` 点名的 mcp:*。
+    /// 仓内搜索 + web 摘要 + 测试执行（自带 OS 隔离）+ 宿主新建的只读 MCP 能力。
     /// 没有写/bash/git/web_fetch/子代理入口 → 结构性不可写、不可再派生、
-    /// 不可外带。`pick` 之外的 mcp 工具连名字都不可见（defs 不列出）——
+    /// 不可外带。未通过授权/勾选/隔离的 MCP 连名字都不可见（defs 不列出）——
     /// 授权闸门是第二道，第一道是注册表本身。
-    pub fn subagent_scope(&self, pick: &std::collections::HashSet<String>) -> Self {
+    pub fn subagent_scope(&self, isolated: &[Arc<dyn Tool>]) -> Self {
         let r = Self {
             tools: std::sync::Mutex::new(HashMap::new()),
             schemas: Default::default(),
@@ -263,11 +332,11 @@ impl Registry {
         r.register(ArtifactRead);
         r.register(LoadSkill);
         r.register(crate::websearch::WebSearch);
-        let guard = self.tools.lock().unwrap();
-        for (name, t) in guard.iter() {
-            if name.starts_with("mcp:") && pick.contains(name) {
-                r.tools.lock().unwrap().insert(name.clone(), t.clone());
-            }
+        for tool in isolated {
+            r.tools
+                .lock()
+                .unwrap()
+                .insert(tool.name().to_string(), tool.clone());
         }
         r
     }
@@ -356,12 +425,30 @@ impl Registry {
             .cloned()
             .ok_or_else(|| ToolError::BadInput(format!("unknown tool: {name}")))?;
 
+        let action = crate::actions::prepare(db, ctx, name, &input, call_seq)?;
+        crate::actions::ensure_clear_except(db, ctx, &action.id)?;
+        if let Some(outcome) = crate::actions::replay(&action)? {
+            if let CallOutcome::Asked(qid) = &outcome {
+                db.append_event(
+                    &ctx.project_id,
+                    EventKind::PermissionAsked,
+                    json!({"question_id":qid,"action_id":action.id,"deduped":true}),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                )?;
+            }
+            return Ok(outcome);
+        }
+        if action.state == "authorized" {
+            return self.resume_action(db, ctx, &action.id);
+        }
+
         // 调用事件：敏感入参（fs_write 的 content 等）只记元信息。
         // seq 入载荷（票 11）：中断重放时同一调用可被指认。
         db.append_event(
             &ctx.project_id,
             EventKind::ToolCalled,
-            json!({ "tool": name, "input": scrub_input(name, &input), "seq": call_seq }),
+            json!({ "tool": name, "input": scrub_input(name, &input), "seq": call_seq, "action_id":action.id }),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
@@ -378,6 +465,12 @@ impl Registry {
         tool.precondition(&input, ctx)?;
         match crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)? {
             crate::permissions::Decision::Deny { reason, layer } => {
+                crate::actions::denied(
+                    db,
+                    ctx,
+                    &action.id,
+                    &format!("({}): {reason}", deny_source(layer)),
+                )?;
                 db.append_event(
                     &ctx.project_id,
                     EventKind::PermissionDenied,
@@ -391,20 +484,8 @@ impl Registry {
                 )))
             }
             crate::permissions::Decision::Ask { reason, safety_net } => {
-                // 票 11 幂等键：(激活,位置序,工具,入参指纹)。中断重放同一调用
-                // 命中既有卡——queued 复用不弹新卡；answered 沿用裁决。
-                let idem_key = call_seq.map(|seq| {
-                    format!(
-                        "{}:{seq}:{name}:{:016x}",
-                        ctx.stage_run_id.as_deref().unwrap_or("-"),
-                        fnv64(&input.to_string())
-                    )
-                });
-                if let Some(idem) = &idem_key {
-                    if let Some(outcome) = self.idem_reuse(db, ctx, idem)? {
-                        return Ok(outcome);
-                    }
-                }
+                writeguard::capture(db, ctx, tool.as_ref(), &input, &action.id)?;
+                let idem_key = Some(action.id.clone());
                 // 票 03：必问卡附溯源注记 + 激活冻结的 known world——
                 // 负责人能看到「这文件是 agent N 步前写的」「这 remote 不在初始列表」
                 let prov = crate::provenance::note(db, ctx, name, &input);
@@ -415,17 +496,20 @@ impl Registry {
                 );
                 let delta = crate::provenance::remote_delta(name, &input, world.as_ref());
                 // 卡表写口归 cards.rs（arch-review 票 04）
+                let tx = db.conn().unchecked_transaction()?;
                 let qid = crate::cards::enqueue(
                     db,
                     &ctx.project_id,
                     Some(&ctx.agent_id),
                     crate::cards::CardKind::Permission,
                     json!({ "tool": name, "input": scrub_input(name, &input),
-                            "raw_input": input, "reason": reason, "safety_net": safety_net,
+                            "raw_input": input, "reason": reason, "safety_net": safety_net, "action_id":action.id,
+                            "write_targets": tool.write_targets(&input)?,
                             "provenance": prov, "known_world": world,
                             "remote_delta": delta }),
                     idem_key.as_deref(),
                 )?;
+                crate::actions::set_question(db, ctx, &action.id, &qid)?;
                 db.append_event(
                     &ctx.project_id,
                     EventKind::PermissionAsked,
@@ -433,9 +517,11 @@ impl Registry {
                     Some(&ctx.agent_id),
                     ctx.stage_run_id.as_deref(),
                 )?;
+                tx.commit()?;
                 Ok(CallOutcome::Asked(qid))
             }
             crate::permissions::Decision::Allow { via } => {
+                writeguard::capture(db, ctx, tool.as_ref(), &input, &action.id)?;
                 match &via {
                     crate::permissions::AllowVia::Remembered { shape, scope } => {
                         db.append_event(
@@ -468,7 +554,8 @@ impl Registry {
                     }
                     crate::permissions::AllowVia::Default => {}
                 }
-                self.exec_and_log(db, ctx, name, input, call_seq)
+                crate::actions::authorize(db, ctx, &action.id)?;
+                self.exec_and_log(db, ctx, name, input, call_seq, &action.id, true)
                     .map(CallOutcome::Done)
             }
         }
@@ -497,10 +584,44 @@ impl Registry {
                 }
                 _ => ToolError::UnknownQuestion(question_id.into()),
             })?;
+        if card.project_id != ctx.project_id
+            || card.agent_id.as_deref() != Some(ctx.agent_id.as_str())
+        {
+            return Err(ToolError::BadInput("permission owner mismatch".into()));
+        }
         let payload = card.payload;
         let tool_name = payload["tool"].as_str().unwrap_or("").to_string();
         let raw_input = payload["raw_input"].clone();
 
+        let action_id = match payload["action_id"].as_str() {
+            Some(id) => id.to_string(),
+            None => {
+                // A still-queued legacy card proves authorization has not occurred.
+                let action = crate::actions::prepare(
+                    db,
+                    ctx,
+                    &tool_name,
+                    &raw_input,
+                    Some(&format!("legacy:{question_id}")),
+                )?;
+                crate::cards::annotate(db, question_id, &[("action_id", json!(action.id))])?;
+                action.id
+            }
+        };
+        let action = crate::actions::get(db, &ctx.project_id, &action_id)?;
+        if action.agent_id != ctx.agent_id || action.tool != tool_name || action.input != raw_input
+        {
+            return Err(ToolError::BadInput("permission action mismatch".into()));
+        }
+        let mut origin_ctx = ctx.clone();
+        origin_ctx.stage_run_id = action.stage_run_id;
+        let ctx = &origin_ctx;
+        // reliability 08: existing permission cards must not bypass another
+        // unknown effect. Rejecting a card is harmless; approving is not.
+        if allow {
+            crate::actions::ensure_clear_except(db, ctx, &action_id)?;
+        }
+        let tx = db.conn().unchecked_transaction()?;
         crate::cards::answer(db, question_id, origin)?;
 
         if !allow {
@@ -519,7 +640,10 @@ impl Registry {
             } else {
                 "owner denied"
             };
-            return Ok(CallOutcome::Denied(format!("(owner): {msg}")));
+            let reason = format!("(owner): {msg}");
+            crate::actions::denied(db, ctx, &action_id, &reason)?;
+            tx.commit()?;
+            return Ok(CallOutcome::Denied(reason));
         }
 
         db.append_event(
@@ -550,95 +674,73 @@ impl Registry {
             )?;
         }
 
-        // 票 04：resolve 路径 seq=None（原 seq 在 idem_key 里不拆，
-        // UI 回退最新在途匹配）。
-        self.exec_and_log(db, ctx, &tool_name, raw_input, None)
+        crate::actions::authorize(db, ctx, &action_id)?;
+        tx.commit()?;
+        self.exec_and_log(db, ctx, &tool_name, raw_input, None, &action_id, true)
             .map(CallOutcome::Done)
     }
 
-    /// 票 11：同幂等键的既有卡复用（对照 OpenWorker `inbox.for_tool_call`）。
-    /// 返回 Some = 本次调用已按既有卡处理；None = 无命中，走新卡。
-    /// - queued   → 复用同一张卡，不重复弹（带 deduped 标记事件留痕）
-    /// - answered → 沿用裁决：allow 看执行痕迹（执行过→Done 标记，崩在
-    ///   允许后执行前的窄窗→此刻补执行）；deny → 同样的无信息量回执
-    /// - expired  → 不算命中，走新卡
-    ///
-    /// 不对称性：漏查重 = 同一动作弹两次卡；错沿用 = 跳过一次人工。
-    /// 故指纹含完整 canonical 入参——同名不同参绝不共享一张卡。
-    fn idem_reuse(
+    pub(crate) fn resume_action(
         &self,
         db: &Db,
         ctx: &ToolContext,
-        idem_key: &str,
-    ) -> Result<Option<CallOutcome>, ToolError> {
-        // 卡表读口归 cards.rs（票 04）；命中后的裁决沿用逻辑留在这里——
-        // 它要查 events（trace 域）并可能补执行（registry 域），都不归 cards。
-        let Some(card) = crate::cards::find_by_idem(db, &ctx.agent_id, idem_key)? else {
-            return Ok(None);
-        };
-        let (qid, state, payload) = (card.id, card.state, card.payload);
-        if state == crate::cards::CardState::Queued {
-            db.append_event(
-                &ctx.project_id,
-                EventKind::PermissionAsked,
-                json!({ "question_id": qid, "deduped": true, "idem_key": idem_key }),
-                Some(&ctx.agent_id),
-                ctx.stage_run_id.as_deref(),
-            )?;
-            return Ok(Some(CallOutcome::Asked(qid)));
+        id: &str,
+    ) -> Result<CallOutcome, ToolError> {
+        let action = crate::actions::get(db, &ctx.project_id, id)?;
+        if action.agent_id != ctx.agent_id {
+            return Err(ToolError::BadInput("action owner mismatch".into()));
         }
-        if state != crate::cards::CardState::Answered {
-            return Ok(None);
+        if let Some(result) = crate::actions::replay(&action)? {
+            return Ok(result);
         }
-        // 已答：找裁决事件（allow 记 PermissionAllowed，deny 记 PermissionDenied）
-        let verdict = db
-            .conn()
-            .query_row(
-                "SELECT id, kind FROM events
-                 WHERE project_id=?1 AND kind IN ('permission_allowed','permission_denied')
-                 AND json_extract(payload,'$.question_id')=?2 ORDER BY id DESC LIMIT 1",
-                rusqlite::params![ctx.project_id, qid],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        let Some((eid, kind)) = verdict else {
-            return Ok(None);
-        };
-        if kind == "permission_denied" {
-            let msg = if payload["reviewer_denied"].is_string() {
-                crate::reviewer::AGENT_DENY_MESSAGE
-            } else {
-                "owner denied"
-            };
-            return Ok(Some(CallOutcome::Denied(format!("(owner): {msg}"))));
+        crate::actions::ensure_clear_except(db, ctx, id)?;
+        if action.state != "authorized" {
+            return Err(ToolError::BadInput("action is not authorized".into()));
         }
-        // allowed：执行过吗？allow 事件之后同 agent 有 tool_result → 已执行
-        let ran: bool = db
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND agent_id=?2
-                 AND kind='tool_result' AND id > ?3",
-                rusqlite::params![ctx.project_id, ctx.agent_id, eid],
-                |r| r.get::<_, i64>(0),
-            )
-            .map(|n| n > 0)
-            .unwrap_or(false);
-        if ran {
-            return Ok(Some(CallOutcome::Done(json!({
-                "duplicate_of": qid,
-                "note": "该调用已批准并执行过；结果见 trace，不要重复执行"
-            }))));
-        }
-        // 允许后崩在 exec 前：负责人已同意，此刻补执行（不再弹卡）
-        let tool_name = payload["tool"].as_str().unwrap_or("").to_string();
-        let raw_input = payload["raw_input"].clone();
-        // 票 04：resolve 路径 seq=None——执行发生在负责人裁决后，
-        // 原调用的 seq 沉在 idem_key 里不拆；UI 回退按该 agent 最新
-        // 在途 bash 匹配（票 04 DTO 注释）。
-        self.exec_and_log(db, ctx, &tool_name, raw_input, None)
-            .map(|v| Some(CallOutcome::Done(v)))
+        self.exec_and_log(db, ctx, &action.tool, action.input, None, id, true)
+            .map(CallOutcome::Done)
     }
 
+    pub(crate) fn tracked_nested(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        input: &Value,
+        seq: Option<&str>,
+        execute: impl FnOnce() -> Result<CallOutcome, ToolError>,
+    ) -> Result<CallOutcome, ToolError> {
+        let action = crate::actions::prepare(db, ctx, "subagent", input, seq)?;
+        crate::actions::ensure_clear_except(db, ctx, &action.id)?;
+        if let Some(outcome) = crate::actions::replay(&action)? {
+            return Ok(outcome);
+        }
+        db.append_event(&ctx.project_id,EventKind::ToolCalled,
+            json!({"tool":"subagent","input":scrub_input("subagent",input),"seq":seq,"action_id":action.id}),
+            Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
+        crate::actions::authorize(db, ctx, &action.id)?;
+        #[cfg(test)]
+        crate::actions::checkpoint(crate::actions::CrashPoint::Authorization);
+        crate::actions::start(db, ctx, &action.id)?;
+        let outcome = execute();
+        let result = match outcome {
+            Ok(CallOutcome::Done(value)) => Ok(value),
+            Ok(_) => Err(ToolError::Exec(
+                "nested dispatch returned an unexpected permission state".into(),
+            )),
+            Err(e) => Err(e),
+        };
+        let uncertain = result
+            .as_ref()
+            .err()
+            .is_some_and(|e| effect_uncertain(RiskClass::Exec, e));
+        crate::actions::finish(db, ctx, &action.id, &result, uncertain)?;
+        if uncertain {
+            return Err(ToolError::OutcomeUnknown(action.id));
+        }
+        result.map(CallOutcome::Done)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn exec_and_log(
         &self,
         db: &Db,
@@ -646,6 +748,8 @@ impl Registry {
         name: &str,
         input: Value,
         call_seq: Option<&str>,
+        action_id: &str,
+        allow_recovery: bool,
     ) -> Result<Value, ToolError> {
         let tool = self
             .tools
@@ -658,20 +762,154 @@ impl Registry {
         // 时把输出口子绑进 Shared；执行完即摘，防非 bash 工具吃到
         // 陈旧 meta（口子只被 sessions 读，登记对它是无成本的）。
         ctx.sessions.set_call_meta(&ctx.agent_id, call_seq);
-        let result = tool.exec(db, &input, ctx);
-        ctx.sessions.clear_call_meta();
-        let (ok, payload) = match &result {
-            Ok(v) => (true, json!({ "tool": name, "output": v })),
-            Err(e) => (false, json!({ "tool": name, "error": e.to_string() })),
+        let retry = crate::actions::is_retry(db, action_id)?;
+        let allow_recovery = allow_recovery && !retry;
+        let permission = crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)?;
+        if !retry {
+            if let crate::permissions::Decision::Deny { reason, .. } = permission {
+                ctx.sessions.clear_call_meta();
+                crate::actions::denied(db, ctx, action_id, &reason)?;
+                return Err(ToolError::Exec(reason));
+            }
+        }
+        #[cfg(test)]
+        crate::actions::checkpoint(crate::actions::CrashPoint::Authorization);
+        if retry {
+            if !crate::actions::start_retry(
+                db,
+                ctx,
+                action_id,
+                tool.idempotency_contract(),
+                matches!(permission, crate::permissions::Decision::Allow { .. }),
+            )? {
+                ctx.sessions.clear_call_meta();
+                return Err(ToolError::OutcomeUnknown(action_id.into()));
+            }
+        } else {
+            crate::actions::capture_retry_contract(db, action_id, tool.idempotency_contract())?;
+            crate::actions::start(db, ctx, action_id)?;
+        }
+        let mut execution_ctx = ctx.clone();
+        execution_ctx.action_key = Some(action_id.into());
+        // Reliability 15: approval is bound to the original target snapshot.
+        // Keep the host locks until execution returns; an empty fresh read ledger
+        // on the control connection cannot waive the persisted precondition.
+        let result = match writeguard::verify(db, &execution_ctx, tool.as_ref(), &input, action_id)
+        {
+            Ok(mut locks) => {
+                execution_ctx.write_lease = locks.pop().map(Arc::new);
+                tool.exec(db, &input, &execution_ctx)
+            }
+            Err(error) => Err(error),
         };
-        db.append_event(
-            &ctx.project_id,
-            EventKind::ToolResult,
-            json!({ "tool": name, "ok": ok, "result": payload }),
-            Some(&ctx.agent_id),
-            ctx.stage_run_id.as_deref(),
-        )?;
+        execution_ctx.write_lease.take();
+        ctx.sessions.clear_call_meta();
+        let uncertain = result
+            .as_ref()
+            .err()
+            .is_some_and(|e| effect_uncertain(tool.risk(), e))
+            || (tool.risk() != RiskClass::Read
+                && result
+                    .as_ref()
+                    .is_ok_and(|v| v["timed_out"] == true || v["isError"] == true));
+        // A failed retry proves nothing about the first uncertain attempt.
+        // In particular NotExecuted here must not erase the original unknown.
+        let uncertain = uncertain || (!allow_recovery && result.is_err());
+        crate::actions::finish(db, ctx, action_id, &result, uncertain)?;
+        if uncertain && !allow_recovery {
+            return Err(ToolError::OutcomeUnknown(action_id.into()));
+        }
+        if uncertain {
+            return self
+                .reconcile_action(db, ctx, action_id)
+                .and_then(|outcome| match outcome {
+                    CallOutcome::Done(output) => Ok(output),
+                    _ => Err(ToolError::OutcomeUnknown(action_id.into())),
+                });
+        }
         result
+    }
+
+    /// Recovery keeps the original identity; neither this API nor its default
+    /// contract executes the uncertain operation again (D05 / ticket 11).
+    pub fn reconcile_action(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        action_id: &str,
+    ) -> Result<CallOutcome, ToolError> {
+        let action = crate::actions::get(db, &ctx.project_id, action_id)?;
+        if action.agent_id != ctx.agent_id {
+            return Err(ToolError::BadInput("reconciliation owner mismatch".into()));
+        }
+        if crate::actions::has_resolution(db, action_id)? {
+            return Err(ToolError::BadInput(
+                "action already resolved by owner".into(),
+            ));
+        }
+        if action.state != "unknown" {
+            return crate::actions::replay(&action)?
+                .ok_or_else(|| ToolError::BadInput("action is not unknown".into()));
+        }
+        let tool = self
+            .get(&action.tool)
+            .ok_or_else(|| ToolError::BadInput("reconciliation tool unavailable".into()))?;
+        // Revocation also prevents querying an external service through an old
+        // grant. False refusal costs owner intervention, not unauthorized IO.
+        if !matches!(
+            crate::permissions::evaluate_logged(
+                db,
+                ctx,
+                tool.as_ref(),
+                &action.tool,
+                &action.input
+            )?,
+            crate::permissions::Decision::Allow { .. }
+        ) {
+            return Err(ToolError::OutcomeUnknown(action_id.into()));
+        }
+        let observed = tool
+            .reconcile(db, &action.input, ctx, action_id)
+            .unwrap_or_else(|_| Reconciliation::Unresolved {
+                evidence: "read-only reconciliation failed".into(),
+            });
+        let result = crate::actions::record_reconciliation(db, ctx, action_id, observed);
+        if matches!(result, Err(ToolError::OutcomeUnknown(_)))
+            && crate::actions::authorize_idempotent_retry(
+                db,
+                ctx,
+                action_id,
+                tool.idempotency_contract(),
+            )?
+        {
+            return self
+                .exec_and_log(db, ctx, &action.tool, action.input, None, action_id, false)
+                .map(CallOutcome::Done);
+        }
+        result
+    }
+}
+
+// reliability 08: only structured validation errors prove no side effect;
+// transport/IO/opaque execution failures after intent are conservatively unknown.
+fn effect_uncertain(risk: RiskClass, error: &ToolError) -> bool {
+    if risk == RiskClass::Read {
+        return false;
+    }
+    match error {
+        ToolError::BadInput(_)
+        | ToolError::PathEscape(_)
+        | ToolError::NotExecuted(_)
+        | ToolError::WriteConflict { .. } => false,
+        ToolError::Artifact(e) => !matches!(
+            e.as_ref(),
+            crate::artifacts::ArtifactError::MissingHeader
+                | crate::artifacts::ArtifactError::MetadataConflict
+                | crate::artifacts::ArtifactError::StaleReview
+                | crate::artifacts::ArtifactError::MissingField(_)
+                | crate::artifacts::ArtifactError::MissingSection(_)
+        ),
+        _ => true,
     }
 }
 
@@ -681,6 +919,7 @@ mod builtin;
 pub mod readstate;
 mod safety;
 pub(crate) mod schema;
+pub(crate) mod writeguard;
 pub use builtin::*;
 pub use safety::*;
 

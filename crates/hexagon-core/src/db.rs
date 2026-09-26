@@ -93,6 +93,38 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0022_stall_card",
         include_str!("../migrations/0022_stall_card.sql"),
     ),
+    (
+        "0023_sensitive_index_reset",
+        include_str!("../migrations/0023_sensitive_index_reset.sql"),
+    ),
+    (
+        "0024_tool_actions",
+        include_str!("../migrations/0024_tool_actions.sql"),
+    ),
+    (
+        "0025_action_recovery",
+        include_str!("../migrations/0025_action_recovery.sql"),
+    ),
+    (
+        "0026_request_usage",
+        include_str!("../migrations/0026_request_usage.sql"),
+    ),
+    (
+        "0027_request_reservations",
+        include_str!("../migrations/0027_request_reservations.sql"),
+    ),
+    (
+        "0028_write_preconditions",
+        include_str!("../migrations/0028_write_preconditions.sql"),
+    ),
+    (
+        "0029_artifact_materializations",
+        include_str!("../migrations/0029_artifact_materializations.sql"),
+    ),
+    (
+        "0030_policy_changes",
+        include_str!("../migrations/0030_policy_changes.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

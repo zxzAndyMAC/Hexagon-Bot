@@ -11,7 +11,7 @@ import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { Row } from './Row'
 import { bindingFor, formatBinding } from '../keymap'
-import { pairToolCalls, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
+import { pairToolCalls, toolOutcome, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
 import { CallStatus, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
@@ -259,6 +259,8 @@ function ReturnSummaryRow({ item, onJumpEvent }: { item: TimelineItem; onJumpEve
     if (d?.path) lines.push(`${trKey(t, 'rs.group.deliveries', 'deliveries')} · ${String(d.path)}`)
   }
   const todos = Array.isArray(p.pending_todos) ? (p.pending_todos as { kind?: unknown; count?: unknown }[]) : []
+  const attention = p.attention as Record<string, unknown> | undefined
+  const attentionKeys = ['unresolved_actions', 'unknown_cost_records', 'budget_stops', 'exception_decisions', 'policy_candidates'] as const
   const pendingN = todos.reduce((s, x) => s + Number(x?.count ?? 0), 0)
   for (const x of todos) {
     if (Number(x?.count) > 0) lines.push(`${trKey(t, 'rs.group.todos', 'todos')} · ${String(x.kind)}: ${x.count}`)
@@ -271,6 +273,12 @@ function ReturnSummaryRow({ item, onJumpEvent }: { item: TimelineItem; onJumpEve
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={9} />
         {pendingN > 0 && <span className="chip amber" style={{ marginLeft: 4 }}>{t('cards.pending', { count: pendingN })}</span>}
       </div>
+      {attention && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
+        {attentionKeys.filter((key) => Number(attention[key]) > 0).map((key) => <span
+          key={key} className={`chip ${key === 'unresolved_actions' ? 'err' : 'warn'}`}>
+          {t(`returnAttention.${key}`, { count: Number(attention[key]) })}
+        </span>)}
+      </div>}
       {open && (
         <div className="mono dim" style={{ fontSize: 11, marginTop: 6 }}>
           {lines.length
@@ -318,11 +326,13 @@ export const EventRow = memo(function EventRow({
     const held = item.event.payload.held === true
     const rejected = item.event.payload.rejected === true
     const role = String(item.event.payload.role ?? '')
+    const instance = item.event.payload.scope === 'role_instances' ? item.event.payload.agent_id : null
+    const target = instance ? `${role} · ${String(instance)}` : role
     const label = rejected
       ? t('timeline.routeRejected')
       : held
         ? t('timeline.routeHold')
-        : t('timeline.routedTo', { role })
+        : t('timeline.routedTo', { role: target })
     return (
       <div className="sysrow" data-route={rejected ? 'rejected' : held ? 'hold' : role}>
         <div className="sysline" />
@@ -456,7 +466,7 @@ function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: n
   const p = call.called.event.payload as Record<string, unknown>
   const tool = String(p.tool ?? '')
   const res = call.result?.event.payload as Record<string, unknown> | undefined
-  const ok = res ? res.ok !== false : undefined
+  const ok = toolOutcome(call.result)
   const summary = toolInputSummary(p)
   const detail = JSON.stringify({ input: p.input ?? p, ...(res ? { result: res } : {}) }, null, 2)
   return (
@@ -491,8 +501,9 @@ function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: n
   )
 }
 
-export const ToolGroupRow = memo(function ToolGroupRow({ items, expanded, idx, onToggle, fresh }: {
+export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expanded, idx, onToggle, fresh }: {
   items: TimelineItem[]
+  callIndex?: ReadonlyMap<number, ToolCall>
   expanded: boolean
   idx: number
   onToggle: (idx: number) => void
@@ -506,7 +517,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, expanded, idx, o
   const agentId = items[0]?.event.agent_id
   const member = agentId ? team.find((x) => x.id === agentId) : undefined
   // 计数按调用对（called 吸收 result），不按事件条数——旧版 2N 的数会翻倍。
-  const calls = useMemo(() => pairToolCalls(items), [items])
+  const calls = useMemo(() => pairToolCalls(items).map((call) => callIndex?.get(call.called.event.id) ?? call), [items, callIndex])
   const files = useMemo(() => {
     const seen = new Set<string>()
     for (const c of calls) {
@@ -515,6 +526,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, expanded, idx, o
     }
     return [...seen]
   }, [calls])
+  if (!calls.length) return null
   return (
     <div>
       <div
@@ -806,6 +818,8 @@ function StreamFooter() {
 export function Timeline() {
   const { t } = useTranslation()
   const { timeline, pending, streams, team } = useUiStore()
+  // reliability 08: recovery results can follow permission/turn events in another group.
+  const callIndex = useMemo(() => new Map(pairToolCalls(timeline).map((call) => [call.called.event.id, call])), [timeline])
   const stickReq = useUiStore((s) => s.timelineStickReq)
   const [filter, setFilter] = useState<Filter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
@@ -1063,7 +1077,7 @@ export function Timeline() {
       )
     }
     if (row.type === 'toolgroup') {
-      return <ToolGroupRow items={row.items} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} fresh={isFreshExpand(row.idx)} />
+      return <ToolGroupRow items={row.items} callIndex={callIndex} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} fresh={isFreshExpand(row.idx)} />
     }
     if (row.type === 'sysgroup') {
       return <SysGroupRow items={row.items} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} />

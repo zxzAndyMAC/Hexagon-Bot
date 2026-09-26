@@ -64,3 +64,17 @@ describe('右栏阶段进度', () => {
     expect(rail?.querySelector('button')).toBeNull()
   })
 })
+
+it('materialization conflicts remain visible as pending recovery', async () => {
+  const saved = useUiStore.getState()
+  const row: ArtifactRow = Object.assign({
+    id: 'pending-art', path: 'notes.md', kind: 'doc', tier: 'freeform' as const,
+    stage_run_id: null, author: null, version: 2, status: 'pending' as const, upstream_id: null,
+  }, { materialization: 'pending_recovery' })
+  useUiStore.setState({ artifacts: [row], railOpen: true, sideTab: 'artifacts' })
+  const { el, root } = await render(<SidePanel />)
+  expect(el.textContent).toMatch(/Pending recovery|待恢复/)
+  await act(async () => root.unmount())
+  el.remove()
+  useUiStore.setState(saved, true)
+})

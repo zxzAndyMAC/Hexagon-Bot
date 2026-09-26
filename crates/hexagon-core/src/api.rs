@@ -149,6 +149,8 @@ pub struct OpenStageOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
+    #[error("data boundary configuration unavailable")]
+    DataBoundaryUnavailable,
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
     #[error(transparent)]
@@ -181,6 +183,10 @@ pub enum ApiError {
     Io(#[from] std::io::Error),
     #[error("agent role not found: {0}")]
     NoRole(String),
+    #[error("agent role is ambiguous; select an instance: {0}")]
+    AmbiguousRole(String),
+    #[error("agent instance not found: {0}")]
+    NoAgent(String),
     #[error("no provider configured for slot: {0}")]
     NoProvider(String),
     #[error("no active stage")]
@@ -257,6 +263,7 @@ pub enum IntakePrepared {
     Call {
         request: crate::provider::ChatRequest,
         provider: Arc<dyn ModelProvider>,
+        context: Box<crate::tools::ToolContext>,
     },
 }
 
@@ -291,6 +298,8 @@ pub struct Workbench {
     /// 断网等待策略（network-resilience 票 01）：生产默认常量；
     /// 测试直接改写本字段注入毫秒级预算。
     pub wait_policy: crate::turn::WaitPolicy,
+    pub call_deadline: Option<std::time::Instant>,
+    pub mcp_timeout: std::time::Duration,
     /// web 搜索摘要槽（票 03）：attach/reload 时按 providers 文档重建；
     /// 测试注入替身直接写本字段。
     pub websearch: Option<Arc<dyn crate::websearch::SearchBackend>>,
@@ -337,9 +346,27 @@ impl Workbench {
                 rusqlite::params![aid, crate::PROJECT_ID, role],
             )?;
         }
-        if let Some(p) = &pack {
-            p.pin(&dir)?;
+        // Reliability 21: reopening must not rewrite the evidence of an
+        // interrupted policy replacement before recovery inspects it.
+        let recovering_policy: bool = db.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM policy_changes WHERE project_id=?1 AND state IN ('pending','conflict'))",
+            [&project_id], |r| r.get(0))?;
+        if !recovering_policy && !dir.join(".hexagon/pack.active.json").exists() {
+            if let Some(p) = &pack {
+                p.pin(&dir)?;
+            }
         }
+        crate::proposals::recover_policy(&db, &dir, &project_id)?;
+        let pack = if dir.join(".hexagon/pack.active.json").exists() {
+            Some(PackDef::pinned(&dir)?)
+        } else if recovering_policy {
+            None
+        } else {
+            pack
+        };
+        crate::actions::recover(&db, &project_id)?;
+        crate::usage::recover_requests(&db, &dir, &project_id)?;
+        crate::artifacts::recover(&db, &dir, &project_id)?;
         // 票 37：检出上次被杀留下的中断回合（无收束的 turn_started）。
         let interrupted = orchestra::detect_interrupted(&db, &project_id)?;
         if interrupted > 0 {
@@ -370,6 +397,8 @@ impl Workbench {
             intake_speaker: Mutex::new(None),
             tasks: Default::default(),
             wait_policy: Default::default(),
+            call_deadline: None,
+            mcp_timeout: std::time::Duration::from_secs(120),
             websearch: None,
             embedder: None,
             stall_policy: Default::default(),
@@ -415,14 +444,18 @@ impl Workbench {
         // 决策槽绑上了就交给项目经理。槽名固定 decision，不和主对话槽合成一个。
         // 没这个角色（测试夹具）就略过。卸掉绑定且当前正指着 decision 时清空。
         let points_at_decision = self
-            .db
-            .conn()
-            .query_row(
-                "SELECT decision_slot FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
-                rusqlite::params![self.project_id, crate::pm_route::PM_ROLE],
-                |r| r.get::<_, Option<String>>(0),
-            )
-            .ok();
+            .agent_by_role(crate::pm_route::PM_ROLE)
+            .ok()
+            .and_then(|id| {
+                self.db
+                    .conn()
+                    .query_row(
+                        "SELECT decision_slot FROM agents WHERE project_id=?1 AND id=?2",
+                        rusqlite::params![self.project_id, id],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
+                    .ok()
+            });
         if self.providers.contains_key("decision") {
             let _ = self.set_decision_slot(crate::pm_route::PM_ROLE, Some("decision"));
         } else if points_at_decision.flatten().as_deref() == Some("decision") {
@@ -471,6 +504,8 @@ impl Workbench {
             intake_speaker: Mutex::new(None),
             tasks: Default::default(),
             wait_policy: Default::default(),
+            call_deadline: None,
+            mcp_timeout: std::time::Duration::from_secs(120),
             websearch: None,
             embedder: None,
             stall_policy: Default::default(),
@@ -501,10 +536,11 @@ impl Workbench {
     /// 项目经理的决策槽（票 08）。`None` 或空白 = 没配，封闭选择改走主对话槽。
     /// 只写这一列，不碰 `model_slot`——两个槽不许合成一个。
     pub fn set_decision_slot(&self, role: &str, slot: Option<&str>) -> Result<(), ApiError> {
+        let aid = self.agent_by_role(role)?;
         let slot = slot.map(str::trim).filter(|s| !s.is_empty());
         let n = self.db.conn().execute(
-            "UPDATE agents SET decision_slot=?1 WHERE project_id=?2 AND role=?3",
-            rusqlite::params![slot, self.project_id, role],
+            "UPDATE agents SET decision_slot=?1 WHERE project_id=?2 AND id=?3",
+            rusqlite::params![slot, self.project_id, aid],
         )?;
         if n == 0 {
             return Err(ApiError::NoRole(role.into()));
@@ -607,7 +643,7 @@ impl Workbench {
         lesson: &str,
         read: &[String],
     ) -> Result<String, ApiError> {
-        let ctx = self.ctx_for(agent_id, None);
+        let ctx = self.ctx_for(agent_id, self.active_run()?.map(|r| r.id));
         Ok(crate::experience::propose(&self.db, &ctx, lesson, read)?)
     }
 
@@ -617,15 +653,33 @@ impl Workbench {
         Ok(loader.catalog_text(&Default::default()).unwrap_or_default())
     }
 
-    /// 回滚一张已生效的改进提案。
-    pub fn rollback_proposal(&self, proposal_id: &str) -> Result<(), ApiError> {
+    /// Controlled owner adoption synchronizes runtime knobs before returning.
+    pub fn confirm_proposal(&mut self, question_id: &str) -> Result<String, ApiError> {
+        crate::proposals::recover_policy(&self.db, &self.repo_root, &self.project_id)?;
+        self.refresh_policy()?;
+        let pid = crate::proposals::activate(&self.db, &self.ctx_for("owner", None), question_id)?;
+        self.refresh_policy()?;
+        Ok(pid)
+    }
+
+    fn refresh_policy(&mut self) -> Result<(), ApiError> {
+        if self.repo_root.join(".hexagon/pack.active.json").exists() {
+            self.pack = Some(PackDef::pinned(&self.repo_root)?);
+        }
+        Ok(())
+    }
+
+    pub fn rollback_proposal(&mut self, proposal_id: &str) -> Result<(), ApiError> {
         let author: String = self.db.conn().query_row(
             "SELECT author_agent_id FROM proposals WHERE id=?1 AND project_id=?2",
             rusqlite::params![proposal_id, self.project_id],
             |r| r.get(0),
         )?;
         let ctx = self.ctx_for(&author, None);
+        crate::proposals::recover_policy(&self.db, &self.repo_root, &self.project_id)?;
+        self.refresh_policy()?;
         crate::proposals::rollback(&self.db, &ctx, proposal_id)?;
+        self.refresh_policy()?;
         Ok(())
     }
 
@@ -676,6 +730,18 @@ impl Workbench {
         let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Escalation)?;
         let pv = &card.payload;
         if crate::cards::escalation_sub(&card) == crate::cards::EscalationSub::ContextOverflow {
+            let role = pv["role"].as_str().unwrap_or_default().to_string();
+            let resume_id = if agree {
+                let aid = match card.agent_id.as_deref() {
+                    Some(id) => id.to_string(),
+                    None => self.agent_by_role(&role)?,
+                };
+                self.instance_role(&aid)?;
+                Some(aid)
+            } else {
+                None
+            };
+
             crate::cards::answer(&self.db, qid, "owner")?;
             self.db.append_event(
                 &self.project_id,
@@ -696,9 +762,10 @@ impl Workbench {
                 });
             }
             // 放行：以「继续」指令续跑一回合（上下文重建自带轻量裁剪）
-            let role = pv["role"].as_str().unwrap_or_default().to_string();
-            let out = self.run_turn_opts(
-                &role,
+            // reliability 06: use the card owner, never another same-role peer.
+            let aid = resume_id.expect("agree resolves the instance before answering");
+            let out = self.run_turn_agent(
+                &aid,
                 "上下文撞限已由负责人放行。请接着完成未竟任务（上下文已重建+裁剪）。",
                 &[],
                 false,
@@ -747,14 +814,65 @@ impl Workbench {
     }
 
     pub(crate) fn agent_by_role(&self, role: &str) -> Result<String, ApiError> {
-        self.db
-            .conn()
-            .query_row(
-                "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
-                rusqlite::params![self.project_id, role],
-                |r| r.get(0),
-            )
-            .map_err(|_| ApiError::NoRole(role.into()))
+        let started = std::time::Instant::now();
+        let mut st = self.db.conn().prepare(
+            "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 2",
+        )?;
+        let ids = st
+            .query_map(rusqlite::params![self.project_id, role], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        // reliability 06 / D10: rejecting ambiguity costs a selection; silently
+        // picking the first instance spends another agent's authority and budget.
+        let (result, reason) = match ids.as_slice() {
+            [id] => (Ok(id.clone()), "unique_role"),
+            [] => (Err(ApiError::NoRole(role.into())), "role_missing"),
+            _ => (Err(ApiError::AmbiguousRole(role.into())), "role_ambiguous"),
+        };
+        crate::diag::note(
+            if result.is_ok() {
+                crate::diag::CLASS_JUDGE
+            } else {
+                crate::diag::CLASS_REJECT
+            },
+            result.is_err(),
+            Some(&self.project_id),
+            result.as_ref().ok().map(String::as_str),
+            None,
+            None,
+            "instance_resolution",
+            reason,
+            started,
+        );
+        result
+    }
+
+    fn instance_role(&self, agent_id: &str) -> Result<String, ApiError> {
+        let started = std::time::Instant::now();
+        let role = self.db.conn().query_row(
+            "SELECT role FROM agents WHERE project_id=?1 AND id=?2",
+            rusqlite::params![self.project_id, agent_id],
+            |r| r.get::<_, String>(0),
+        );
+        match role {
+            Ok(role) => Ok(role),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&self.project_id),
+                    Some(agent_id),
+                    None,
+                    None,
+                    "instance_resolution",
+                    "instance_missing",
+                    started,
+                );
+                Err(ApiError::NoAgent(agent_id.into()))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub(crate) fn ctx_for(&self, agent_id: &str, stage_run_id: Option<String>) -> ToolContext {
@@ -782,6 +900,10 @@ impl Workbench {
                 crate::provider_config::caps_for_slot(slot.as_deref().unwrap_or("default"))
             },
             wait: self.wait_policy,
+            deadline: self.call_deadline,
+            mcp_timeout: self.mcp_timeout,
+            action_key: None,
+            write_lease: None,
             tasks: self.tasks.clone(),
             subagent: None,
             websearch: self.websearch.clone(),
@@ -880,6 +1002,74 @@ impl Workbench {
         Ok(())
     }
 
+    /// Explicit owner acceptance creates one linked new business attempt. It
+    /// passes current permissions and is durable across duplicate clicks.
+    pub fn retry_tool_action(
+        &self,
+        action_id: &str,
+        reason: &str,
+        accepts_duplicate: bool,
+    ) -> Result<crate::tools::CallOutcome, ApiError> {
+        let original = crate::actions::get(&self.db, &self.project_id, action_id)?;
+        self.instance_role(&original.agent_id)?;
+        let ctx = self.ctx_for(&original.agent_id, original.stage_run_id.clone());
+        let next = crate::actions::new_owner_attempt(
+            &self.db,
+            &ctx,
+            action_id,
+            reason,
+            accepts_duplicate,
+        )?;
+        let result = self.registry.call_with_seq(
+            &self.db,
+            &ctx,
+            &next.tool,
+            next.input,
+            Some(&format!("owner-new-attempt:{action_id}")),
+        );
+        if let Err(error) = &result {
+            crate::actions::fail_unstarted_attempt(&self.db, &ctx, &next.id, error)?;
+        }
+        let current = crate::actions::get(&self.db, &self.project_id, &next.id)?;
+        if current.state != "pending" || current.question_id.is_some() {
+            crate::actions::close_resolved_card(&self.db, &ctx, action_id)?;
+        }
+        Ok(result?)
+    }
+
+    /// Resolve the blocking decision, without rewriting uncertain history.
+    pub fn abandon_tool_action(&self, action_id: &str, reason: &str) -> Result<(), ApiError> {
+        Ok(crate::actions::abandon(
+            &self.db,
+            &self.project_id,
+            action_id,
+            reason,
+        )?)
+    }
+
+    /// Owner-triggered read-only reconciliation of an uncertain action.
+    pub fn reconcile_tool_action(
+        &self,
+        action_id: &str,
+    ) -> Result<crate::tools::CallOutcome, ApiError> {
+        let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
+        self.instance_role(&action.agent_id)?;
+        let ctx = self.ctx_for(&action.agent_id, action.stage_run_id.clone());
+        Ok(self.registry.reconcile_action(&self.db, &ctx, action_id)?)
+    }
+
+    /// Resume a durably authorized but provably not yet executed action.
+    /// Unknown outcomes remain blocked for reconciliation (reliability 08).
+    pub fn resume_tool_action(
+        &self,
+        action_id: &str,
+    ) -> Result<crate::tools::CallOutcome, ApiError> {
+        let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
+        self.instance_role(&action.agent_id)?;
+        let ctx = self.ctx_for(&action.agent_id, action.stage_run_id.clone());
+        Ok(self.registry.resume_action(&self.db, &ctx, action_id)?)
+    }
+
     /// 必问裁决。
     pub fn answer_permission(
         &self,
@@ -911,6 +1101,11 @@ impl Workbench {
         self.run_turn_opts(role, input, &[], false)
     }
 
+    /// Run exactly one instance. Sleeping/missing instances never fall back to peers.
+    pub fn run_instance(&self, agent_id: &str, input: &str) -> Result<TurnOutcome, ApiError> {
+        self.run_turn_agent(agent_id, input, &[], false)
+    }
+
     /// plan_first=true 时回合先发不阻塞方案消息再进工具循环（US15 快速通道）。
     /// 票 03：`attachments` 是负责人随消息贴的图片引用（.hexagon/inbox/ 内），
     /// vision 槽注入 Image 块，否则降级为路径文本。
@@ -922,19 +1117,22 @@ impl Workbench {
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
         let aid = self.agent_by_role(role)?;
-        self.run_turn_agent(&aid, role, input, attachments, plan_first)
+        self.run_turn_agent(&aid, input, attachments, plan_first)
     }
 
     /// 按确切 agent id 跑回合（票 NR-03 重触发用——恢复卡记的是 agent_id，
-    /// 同名角色的其他 Agent 不该替它复工）。role 仅用于 RoleDef 提示层。
+    /// 同名角色的其他 Agent 不该替它复工）。角色从实例读取，仅用于提示模板。
     fn run_turn_agent(
         &self,
         aid: &str,
-        role: &str,
         input: &str,
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
+        // reliability 06: resumed work retains its stored instance ID. Re-read
+        // its current role only for templates; stale/deleted IDs cannot retarget.
+        let current_role = self.instance_role(aid)?;
+        let role = current_role.as_str();
         let _in_flight = InFlight::enter(&self.turn_depth);
         // 失速监视（票 01）：重触发回合记的是原指令，不是包了提示的入参。
         let instruction = self
@@ -1048,11 +1246,35 @@ impl Workbench {
         // 失败的回合也落地：没有可见回复就是无回复的起点。记在续派之前，
         // 续派出去的下一位会覆盖成它自己的动静。
         self.stall_note_turn(aid, role, instruction, watermark, fp_before);
+        // Reliability 13/23 regression: admission refused by the budget is a
+        // known stop, not an unexplained silent model. Re-triggering cannot
+        // create funds and used to produce a false stall card. A new owner
+        // instruction/activation or explicit turn reopens the existing watch.
+        if matches!(
+            &run,
+            Err(turn::TurnError::Provider(
+                crate::provider::ProviderError::BudgetUnavailable
+            ))
+        ) {
+            self.watch().status = crate::stallwatch::Status::Closed;
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                Some(aid),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "stall",
+                "budget_blocked",
+                std::time::Instant::now(),
+            );
+        }
+
         let outcome = run?;
         // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
         // 续派失败不推翻已经说完的这一回合——否则脚本耗尽会让成功的回复变成错误。
         if matches!(outcome, TurnOutcome::Finished) {
-            if let Err(e) = self.continue_after_turn(role, watermark) {
+            if let Err(e) = self.continue_after_turn(aid, role, watermark) {
                 log::warn!("continue after {role}: {e}");
             }
         }
@@ -1069,19 +1291,55 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
     ) -> Result<TurnOutcome, ApiError> {
         let aid = self.agent_by_role(role)?;
+        self.dispatch_instance(&aid, input, attachments)
+    }
+
+    /// Explicit dispatch wakes only the selected instance, preserving the stage pointer.
+    pub fn dispatch_instance(
+        &self,
+        aid: &str,
+        input: &str,
+        attachments: &[crate::trace::AttachRef],
+    ) -> Result<TurnOutcome, ApiError> {
+        let role = self.instance_role(aid)?;
+        // reliability 07: unavailable model used to wake a sleeping instance and
+        // record dispatch before failing. Prove dispatchability before mutation.
+        let slot: Option<String> = self.db.conn().query_row(
+            "SELECT model_slot FROM agents WHERE project_id=?1 AND id=?2",
+            rusqlite::params![self.project_id, aid],
+            |r| r.get(0),
+        )?;
+        let started = std::time::Instant::now();
+        if crate::provider_config::resolve_slot(
+            &self.providers,
+            slot.as_deref().unwrap_or("default"),
+        )
+        .is_none()
+        {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                Some(aid),
+                None,
+                None,
+                "instance_dispatch",
+                "provider_unavailable",
+                started,
+            );
+            return Err(ApiError::NoProvider(slot.unwrap_or_default()));
+        }
         let status: String =
             self.db
                 .conn()
-                .query_row("SELECT status FROM agents WHERE id=?1", [&aid], |r| {
-                    r.get(0)
-                })?;
+                .query_row("SELECT status FROM agents WHERE id=?1", [aid], |r| r.get(0))?;
         if status == "sleeping" {
-            orchestra::write_agent_status(&self.db, &self.project_id, &aid, false)?;
+            orchestra::write_agent_status(&self.db, &self.project_id, aid, false)?;
             self.db.append_event(
                 &self.project_id,
                 EventKind::AgentActivated,
                 json!({"by": "dispatch"}),
-                Some(&aid),
+                Some(aid),
                 None,
             )?;
         }
@@ -1089,11 +1347,11 @@ impl Workbench {
             &self.project_id,
             EventKind::FastpathDispatched,
             json!({"role": role}),
-            Some(&aid),
+            Some(aid),
             None,
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
-        self.run_turn_opts(role, input, attachments, true)
+        self.run_turn_agent(aid, input, attachments, true)
     }
 
     /// 负责人发言的下一手（票 08 / 票 09 / ADR 0065）。
@@ -1113,12 +1371,13 @@ impl Workbench {
         body: &str,
         attachments: &[crate::trace::AttachRef],
     ) -> Result<UnnamedRoute, ApiError> {
-        self.route_body("owner", body, attachments, true)
+        self.route_body("owner", None, body, attachments, true)
     }
 
     fn route_body(
         &self,
         speaker: &str,
+        speaker_id: Option<&str>,
         body: &str,
         attachments: &[crate::trace::AttachRef],
         from_owner: bool,
@@ -1141,7 +1400,62 @@ impl Workbench {
             }
         }
         let roster = self.roster()?;
-        let mentions = roster_mentions(body, &roster, speaker);
+        // reliability 07: explicit instance tokens are authoritative even when
+        // stale. Never ignore a deleted token and fall through to another agent.
+        let explicit: Vec<(String, String)> = crate::commands::parse_tokens(body)
+            .into_iter()
+            .filter_map(|t| match t {
+                crate::trace::MessageToken::Mention { agent_role } => agent_role
+                    .strip_suffix(']')
+                    .and_then(|t| t.rsplit_once('['))
+                    .map(|(role, id)| (role.to_string(), id.to_string())),
+                _ => None,
+            })
+            .collect();
+        if !explicit.is_empty() {
+            // Validate the entire selection before starting any side effect.
+            for (role, id) in &explicit {
+                let started = std::time::Instant::now();
+                let valid = self.instance_role(id)? == *role;
+                crate::diag::note(
+                    if valid {
+                        crate::diag::CLASS_JUDGE
+                    } else {
+                        crate::diag::CLASS_REJECT
+                    },
+                    !valid,
+                    Some(&self.project_id),
+                    Some(id),
+                    None,
+                    None,
+                    "instance_mention",
+                    if valid {
+                        "exact_instance"
+                    } else {
+                        "role_changed"
+                    },
+                    started,
+                );
+                if !valid {
+                    return Err(ApiError::BadInput("instance mention role changed".into()));
+                }
+            }
+            let mut dispatched = std::collections::HashSet::new();
+            for (_, id) in &explicit {
+                if Some(id.as_str()) != speaker_id && dispatched.insert(id.clone()) {
+                    self.dispatch_instance(id, body, attachments)?;
+                }
+            }
+        }
+        let mentions: Vec<_> = roster_mentions(body, &roster, speaker)
+            .into_iter()
+            .filter(|role| !explicit.iter().any(|(r, _)| r == role))
+            .collect();
+        if mentions.is_empty() && !explicit.is_empty() {
+            return Ok(UnnamedRoute::Mentioned {
+                roles: explicit.into_iter().map(|(r, _)| r).collect(),
+            });
+        }
         if !mentions.is_empty() {
             // 负责人的点名不进封闭选择，所以也没有「先不派活」这一项。
             let started = std::time::Instant::now();
@@ -1174,7 +1488,55 @@ impl Workbench {
                 started,
             );
             for role in &mentions {
-                self.dispatch(role, body, attachments)?;
+                let candidates = self.role_instances(role)?;
+                if matches!(self.agent_by_role(role), Err(ApiError::AmbiguousRole(_))) {
+                    if candidates.is_empty() {
+                        return Err(ApiError::NoProvider(role.clone()));
+                    }
+                    if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
+                        let result = self.closed_choice(
+                            speaker,
+                            body,
+                            attachments,
+                            from_owner,
+                            &roster,
+                            Some(&candidates),
+                        )?;
+                        if !matches!(result, UnnamedRoute::Dispatched { .. }) {
+                            return Ok(result);
+                        }
+                    } else {
+                        let names = candidates
+                            .iter()
+                            .map(|(id, r)| format!("@{r}[{id}]"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        crate::diag::note(
+                            crate::diag::CLASS_JUDGE,
+                            false,
+                            Some(&self.project_id),
+                            None,
+                            None,
+                            None,
+                            "instance_mention",
+                            "owner_selection_required",
+                            started,
+                        );
+                        let note = crate::owner_text::choose_instance(&names);
+                        self.db.append_message(
+                            &self.project_id,
+                            crate::pm_route::WORKBENCH_AUTHOR,
+                            &note,
+                            &[],
+                            &[],
+                            None,
+                            self.active_run()?.as_ref().map(|r| r.id.as_str()),
+                        )?;
+                        return Ok(UnnamedRoute::Noted);
+                    }
+                } else {
+                    self.dispatch(role, body, attachments)?;
+                }
             }
             return Ok(UnnamedRoute::Mentioned { roles: mentions });
         }
@@ -1184,7 +1546,8 @@ impl Workbench {
         // 先打开第一阶段，选择仍先不派活时交给该阶段激活名单的第一位。
         let kickoff = self.maybe_open_first_stage(from_owner)?;
         if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
-            let route = self.closed_choice(speaker, body, attachments, from_owner, &roster)?;
+            let route =
+                self.closed_choice(speaker, body, attachments, from_owner, &roster, None)?;
             // ADR 0074：正常派活时的「先不派活」仍是空转信号。调查里的先不派活
             // 不走这里（stall_investigate 直调 closed_choice 并就地收场）。
             if matches!(route, UnnamedRoute::Held { .. }) {
@@ -1202,8 +1565,8 @@ impl Workbench {
             return Ok(route);
         }
         let handoff = std::time::Instant::now();
-        match self.handoff_role(&roster)? {
-            Some(role) if role != speaker => {
+        match self.handoff_instance(&roster)? {
+            Some((aid, role)) if Some(aid.as_str()) != speaker_id => {
                 crate::diag::note(
                     crate::diag::CLASS_JUDGE,
                     false,
@@ -1215,7 +1578,7 @@ impl Workbench {
                     &format!("handoff:{role}"),
                     handoff,
                 );
-                self.dispatch(&role, body, attachments)?;
+                self.dispatch_instance(&aid, body, attachments)?;
                 Ok(UnnamedRoute::Dispatched {
                     role,
                     via: "fallback".into(),
@@ -1224,7 +1587,7 @@ impl Workbench {
             // 接话人就是刚说完的这位。再派一次不是下一位，是把同一回合再跑一遍。
             // 代价：再派 = 无人值守对着同一个人循环（false continue）；
             // 停 = 这一位已经接过话（false stop）。偏向停。出处：票 09。
-            Some(role) => {
+            Some((_aid, role)) => {
                 crate::diag::note(
                     crate::diag::CLASS_JUDGE,
                     false,
@@ -1263,6 +1626,7 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         from_owner: bool,
         roster: &[String],
+        instances: Option<&[(String, String)]>,
     ) -> Result<UnnamedRoute, ApiError> {
         let _in_flight = InFlight::enter(&self.turn_depth);
         let pm_id = self.agent_by_role(crate::pm_route::PM_ROLE)?;
@@ -1331,11 +1695,14 @@ impl Workbench {
         let speaker_label = if from_owner { "The owner" } else { speaker };
         // 不能派给自己。2026-09-24：名单里有项目经理时，他选了自己并开出写盘回合。
         // 进度不靠他写文档，阶段、产物和待决卡已经看得见。
-        let choosable: Vec<String> = roster
-            .iter()
-            .filter(|r| r.as_str() != crate::pm_route::PM_ROLE)
-            .cloned()
-            .collect();
+        let choosable: Vec<String> = match instances {
+            Some(instances) => instances.iter().map(|(id, _)| id.clone()).collect(),
+            None => roster
+                .iter()
+                .filter(|r| r.as_str() != crate::pm_route::PM_ROLE)
+                .cloned()
+                .collect(),
+        };
         let prompt = crate::pm_route::choice_prompt(
             stage_name.as_deref(),
             &activation,
@@ -1343,6 +1710,11 @@ impl Workbench {
             speaker_label,
             body,
         );
+        let prompt = if let Some(instances) = instances {
+            format!("Select exactly one agent instance ID from this list: {instances:?}. Return only its ID, no tools or HOLD. The owner named this role: {body}")
+        } else {
+            prompt
+        };
         let req = crate::pm_route::choice_request(&slot_name, &prompt);
         let use_jev = provider.uses_decision_api();
         let run_id = run.as_ref().map(|r| r.id.as_str());
@@ -1357,24 +1729,6 @@ impl Workbench {
         )?;
         let trace = trace_id.to_string();
         let route_started = std::time::Instant::now();
-        let resp = if use_jev {
-            let state = crate::pm_route::choice_state(
-                stage_name.as_deref(),
-                &activation,
-                speaker_label,
-                body,
-            );
-            let mut options: Vec<(&str, &str)> =
-                roster.iter().map(|r| (r.as_str(), "roster role")).collect();
-            options.push((crate::pm_route::HOLD_TOKEN, "wake no one for now"));
-            provider
-                .decide(&state, &options)
-                .map_err(|e| ApiError::Decision(e.to_string()))?
-        } else {
-            provider
-                .complete(&req)
-                .map_err(|e| ApiError::Decision(e.to_string()))?
-        };
         let usage_ctx = crate::tools::ToolContext {
             project_id: self.project_id.clone(),
             agent_id: pm_id.clone(),
@@ -1386,11 +1740,46 @@ impl Workbench {
             caps: Default::default(),
             ..Default::default()
         };
-        crate::usage::record(&self.db, &usage_ctx, &slot_name, &resp.usage, 0)?;
+        let resp = crate::usage::request(
+            &self.db,
+            &usage_ctx,
+            &slot_name,
+            "pm_route",
+            provider.as_ref(),
+            if use_jev { None } else { Some(&req) },
+            || {
+                if use_jev {
+                    let state = crate::pm_route::choice_state(
+                        stage_name.as_deref(),
+                        &activation,
+                        speaker_label,
+                        body,
+                    );
+                    let mut options: Vec<(&str, &str)> = choosable
+                        .iter()
+                        .map(|r| (r.as_str(), "eligible target"))
+                        .collect();
+                    if instances.is_none() {
+                        options.push((crate::pm_route::HOLD_TOKEN, "wake no one for now"));
+                    }
+                    provider.decide(&state, &options)
+                } else {
+                    provider.complete(&req)
+                }
+            },
+        )
+        .map_err(|e| ApiError::Decision(e.to_string()))?;
         let raw = crate::pm_route::choice_text(&resp);
-        let choice = crate::pm_route::parse_route_choice(&raw, &choosable);
+        // reliability 07 / Q8: a mistaken refusal asks for selection; accepting
+        // an out-of-role or stale ID starts an unauthorized instance. Fail closed.
+        let choice = crate::pm_route::parse_route_choice(&raw, &choosable).filter(|c| {
+            instances.is_none() || matches!(c, crate::pm_route::RouteChoice::Dispatch(id)
+                if instances.is_some_and(|xs| xs.iter().any(|(aid,role)| aid == id && self.instance_role(aid).ok().as_ref() == Some(role))))
+        });
         let mut eligible = choosable.clone();
-        eligible.push(crate::pm_route::HOLD.to_string());
+        if instances.is_none() {
+            eligible.push(crate::pm_route::HOLD.to_string());
+        }
         let (held, rejected, role) = match &choice {
             Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
                 (false, false, Some(role.clone()))
@@ -1425,6 +1814,18 @@ impl Workbench {
             "role": role,
             "raw": raw,
         });
+        if let Some(candidates) = instances {
+            // reliability 07: role remains a role in the historical event
+            // contract; the selected instance has its own field.
+            let selected_agent_id = role.as_deref();
+            let selected_role = candidates
+                .iter()
+                .find(|(id, _)| Some(id.as_str()) == selected_agent_id)
+                .map(|(_, role)| role);
+            payload["role"] = json!(selected_role);
+            payload["agent_id"] = json!(selected_agent_id);
+            payload["scope"] = json!("role_instances");
+        }
         // 拒绝的输出不是一次决策：不写 decision，免得花名册外的字符串
         // 被回放当成 chosen。接受/先不派活才落闭集决策。
         if let Some(chosen) = choice.as_ref().map(|c| match c {
@@ -1448,7 +1849,14 @@ impl Workbench {
         )?;
         match choice {
             Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
-                self.dispatch(&role, body, attachments)?;
+                let role = if instances.is_some() {
+                    let actual_role = self.instance_role(&role)?;
+                    self.dispatch_instance(&role, body, attachments)?;
+                    actual_role
+                } else {
+                    self.dispatch(&role, body, attachments)?;
+                    role
+                };
                 Ok(UnnamedRoute::Dispatched {
                     role,
                     via: via.to_string(),
@@ -1483,25 +1891,33 @@ impl Workbench {
     /// 刚打开的阶段里，花名册上的第一位。项目经理不接这手。
     fn kickoff_lead(&self, roster: &[String]) -> Option<String> {
         let stage = self.pack.as_ref()?.stages.first()?;
-        stage.roles.iter().find(|role| {
-            role.as_str() != crate::pm_route::PM_ROLE && roster.iter().any(|r| r == *role)
-        }).cloned()
+        stage
+            .roles
+            .iter()
+            .find(|role| {
+                role.as_str() != crate::pm_route::PM_ROLE && roster.iter().any(|r| r == *role)
+            })
+            .cloned()
     }
 
     /// 角色回合正常说完之后的下一手。链上限见 [`DISPATCH_CHAIN_CAP`]。
-    fn continue_after_turn(&self, role: &str, watermark: i64) -> Result<UnnamedRoute, ApiError> {
+    fn continue_after_turn(
+        &self,
+        aid: &str,
+        role: &str,
+        watermark: i64,
+    ) -> Result<UnnamedRoute, ApiError> {
         let Some(_guard) = ChainGuard::enter() else {
             log::warn!("dispatch chain stopped at {DISPATCH_CHAIN_CAP} after {role}");
             return Ok(UnnamedRoute::Skipped);
         };
-        let aid = self.agent_by_role(role)?;
-        let text = self.text_since(&aid, watermark)?;
+        let text = self.text_since(aid, watermark)?;
         let body = if text.trim().is_empty() {
             "（没有可见回复）".to_string()
         } else {
             text
         };
-        self.route_body(role, &body, &[], false)
+        self.route_body(role, Some(aid), &body, &[], false)
     }
 
     fn message_high_water(&self) -> Result<i64, ApiError> {
@@ -1531,6 +1947,30 @@ impl Workbench {
         Ok(parts.join("\n"))
     }
 
+    fn role_instances(&self, role: &str) -> Result<Vec<(String, String)>, ApiError> {
+        let mut st = self.db.conn().prepare("SELECT id, role, model_slot FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at,id")?;
+        let rows = st
+            .query_map(rusqlite::params![self.project_id, role], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, _, slot)| {
+                crate::provider_config::resolve_slot(
+                    &self.providers,
+                    slot.as_deref().unwrap_or("default"),
+                )
+                .is_some()
+            })
+            .map(|(id, role, _)| (id, role))
+            .collect())
+    }
+
     fn roster(&self) -> Result<Vec<String>, ApiError> {
         let mut st = self
             .db
@@ -1542,7 +1982,7 @@ impl Workbench {
 
     /// 卸掉项目经理之后的接话人。快速通道是通道角色；流程包是当前阶段
     /// 激活名单的第一位，而且这人必须还在花名册里。没有则 `None`。
-    fn handoff_role(&self, roster: &[String]) -> Result<Option<String>, ApiError> {
+    fn handoff_instance(&self, roster: &[String]) -> Result<Option<(String, String)>, ApiError> {
         let (mode, fast_id): (String, Option<String>) = self.db.conn().query_row(
             "SELECT mode, fastpath_agent_id FROM projects WHERE id=?1",
             [&self.project_id],
@@ -1561,7 +2001,9 @@ impl Workbench {
                     |r| r.get(0),
                 )
                 .ok();
-            return Ok(role.filter(|r| roster.iter().any(|x| x == r)));
+            return Ok(role
+                .filter(|r| roster.iter().any(|x| x == r))
+                .map(|role| (id, role)));
         }
         let Some(run) = self.active_run()? else {
             return Ok(None);
@@ -1576,7 +2018,7 @@ impl Workbench {
             return Ok(None);
         };
         if roster.iter().any(|r| r == first) {
-            Ok(Some(first.clone()))
+            Ok(Some((self.agent_by_role(first)?, first.clone())))
         } else {
             Ok(None)
         }
@@ -1617,19 +2059,17 @@ impl Workbench {
 
     /// 当前激活阶段所有 active Agent 各跑一回合。
     pub fn run_all_active(&self, input: &str) -> Result<Vec<(String, TurnOutcome)>, ApiError> {
-        let roles: Vec<String> = {
-            let mut st = self
-                .db
-                .conn()
-                .prepare("SELECT role FROM agents WHERE project_id=?1 AND status='active'")?;
+        let instances: Vec<(String, String)> = {
+            let mut st = self.db.conn().prepare(
+                "SELECT id, role FROM agents WHERE project_id=?1 AND status='active' ORDER BY created_at, id")?;
             let rows = st
-                .query_map([&self.project_id], |r| r.get(0))?
+                .query_map([&self.project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<Result<_, _>>()?;
             rows
         };
         let mut out = Vec::new();
-        for role in roles {
-            out.push((role.clone(), self.run_turn(&role, input)?));
+        for (aid, role) in instances {
+            out.push((role.clone(), self.run_turn_agent(&aid, input, &[], false)?));
         }
         Ok(out)
     }
@@ -1650,6 +2090,41 @@ impl Workbench {
             self.pack()?,
         )?)
     }
+    pub fn request_acceptance_exception(
+        &self,
+        expected: &str,
+    ) -> Result<orchestra::ExceptionRequest, ApiError> {
+        Ok(orchestra::request_acceptance_exception(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+            expected,
+        )?)
+    }
+    pub fn accept_delivery_exception(
+        &self,
+        question: &str,
+        expected: &str,
+        selected: &[orchestra::ExceptionRequirement],
+        reason: &str,
+    ) -> Result<orchestra::ExceptionAcceptance, ApiError> {
+        Ok(orchestra::accept_delivery_exception(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+            question,
+            expected,
+            selected,
+            reason,
+        )?)
+    }
+    pub fn stage_evidence(&self) -> Result<Option<orchestra::StageEvidence>, ApiError> {
+        Ok(orchestra::stage_evidence(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+        )?)
+    }
     pub fn run_checks(&self) -> Result<orchestra::CheckOutcome, ApiError> {
         let r = orchestra::run_checks(&self.db, &self.project_id, &self.repo_root, self.pack()?)?;
         Ok(orchestra::CheckOutcome { results: r })
@@ -1658,44 +2133,17 @@ impl Workbench {
         Ok(orchestra::stamp(&self.db, &self.project_id, self.pack()?)?)
     }
 
-    /// 跳过某次声明复审（票 33 / US26）：留 review_skipped 事件，
-    /// 阶段评估视为该复审满足。已通过的复审不可跳——章后无后门。
-    pub fn skip_review(&self, artifact_kind: &str) -> Result<(), ApiError> {
-        let run = self.active_run()?.ok_or(ApiError::NoStage)?;
-        let pack = self.pack()?;
-        let stage = pack.stages.get(run.seq as usize).ok_or(ApiError::NoStage)?;
-        let decl = stage
-            .reviews
-            .iter()
-            .find(|r| r.artifact_kind == artifact_kind)
-            .ok_or_else(|| ApiError::NoRole(format!("no declared review for {artifact_kind}")))?;
-        let latest: Option<String> = self
-            .db
-            .conn()
-            .query_row(
-                "SELECT kind FROM events
-                 WHERE project_id=?1 AND stage_run_id=?2
-                 AND kind IN ('review_passed','review_rejected','review_skipped')
-                 AND json_extract(payload,'$.artifact_kind')=?3
-                 ORDER BY id DESC LIMIT 1",
-                rusqlite::params![self.project_id, run.id, artifact_kind],
-                |r| r.get(0),
-            )
-            .ok();
-        if latest.as_deref() == Some("review_passed") {
-            return Err(ApiError::NoRole(format!(
-                "review for {artifact_kind} already passed"
-            )));
-        }
-        self.db.append_event(
+    /// Reliability 19: legacy kind-only decisions cannot authorize delivery.
+    pub fn skip_review(&self, _artifact_kind: &str) -> Result<(), ApiError> {
+        Err(orchestra::OrchError::InvalidAcceptanceException.into())
+    }
+
+    pub fn cancel_acceptance_exception(&self, question: &str) -> Result<(), ApiError> {
+        Ok(orchestra::cancel_acceptance_exception(
+            &self.db,
             &self.project_id,
-            EventKind::ReviewSkipped,
-            json!({"artifact_kind": artifact_kind, "reviewer": decl.reviewer,
-                   "stage_run_id": run.id, "by": "owner"}),
-            None,
-            Some(&run.id),
-        )?;
-        Ok(())
+            question,
+        )?)
     }
 
     pub fn rewind(&self, to_seq: usize) -> Result<orchestra::StageAction, ApiError> {
@@ -1727,10 +2175,10 @@ impl Workbench {
                 .query_row("SELECT role FROM agents WHERE id=?1", [&aid], |r| {
                     r.get::<_, String>(0)
                 }) {
-                Ok(role) => {
+                Ok(_) => {
                     // 按卡上 agent_id 精确重触发（同名角色的别的 Agent 不替班）。
                     if let Err(e) =
-                        self.run_turn_agent(&aid, &role, crate::turn::RECOVERY_NUDGE, &[], false)
+                        self.run_turn_agent(&aid, crate::turn::RECOVERY_NUDGE, &[], false)
                     {
                         log::warn!("retrigger after recover failed: agent={aid} run={run_id}: {e}");
                     }
@@ -1781,7 +2229,17 @@ impl Workbench {
             }],
             tools: vec![],
         };
-        let resp = provider.complete(&req).map_err(turn::TurnError::from)?;
+        let ctx = self.ctx_for(agent_id, None);
+        let resp = crate::usage::request(
+            &self.db,
+            &ctx,
+            &req.model_slot,
+            "role_draft",
+            provider.as_ref(),
+            Some(&req),
+            || provider.complete(&req),
+        )
+        .map_err(turn::TurnError::from)?;
         let text = resp
             .content
             .iter()
@@ -1806,8 +2264,20 @@ impl Workbench {
     pub fn run_opening_intake(&self) -> Result<IntakeRun, ApiError> {
         match self.prepare_opening_intake()? {
             IntakePrepared::Finished(run) => Ok(run),
-            IntakePrepared::Call { request, provider } => {
-                let resp = match provider.complete(&request) {
+            IntakePrepared::Call {
+                request,
+                provider,
+                context,
+            } => {
+                let resp = match crate::usage::request(
+                    &self.db,
+                    &context,
+                    &request.model_slot,
+                    "opening_intake",
+                    provider.as_ref(),
+                    Some(&request),
+                    || provider.complete(&request),
+                ) {
                     Ok(resp) => resp,
                     Err(e) => {
                         let _ = self.abort_opening_intake();
@@ -1833,14 +2303,17 @@ impl Workbench {
         }
         let roster = self.roster()?;
         let speaker = if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
-            Some(crate::pm_route::PM_ROLE.to_string())
+            Some((
+                self.agent_by_role(crate::pm_route::PM_ROLE)?,
+                crate::pm_route::PM_ROLE.to_string(),
+            ))
         } else {
             // 票 09 的接话人。没有进行中的阶段就没有「当前阶段第一位」，
             // 这里不改用流程包第 0 阶段顶上——那会跟票 09 分叉，说出一个
             // 当时并不会接话的角色。
-            self.handoff_role(&roster)?
+            self.handoff_instance(&roster)?
         };
-        let Some(role) = speaker else {
+        let Some((agent_id, role)) = speaker else {
             let claimed = self.claim_intake(crate::intake::STATUS_DONE)?;
             if !claimed {
                 return Ok(IntakePrepared::Finished(IntakeRun::Skipped));
@@ -1859,7 +2332,6 @@ impl Workbench {
             }
             return Ok(IntakePrepared::Finished(IntakeRun::Noted));
         };
-        let agent_id = self.agent_by_role(&role)?;
         let slot = self.speaker_chat_slot(&agent_id)?;
         let started = std::time::Instant::now();
         let Some(provider) = crate::provider_config::resolve_slot(&self.providers, &slot).cloned()
@@ -1908,10 +2380,12 @@ impl Workbench {
         if !self.claim_intake(crate::intake::STATUS_RUNNING)? {
             return Ok(IntakePrepared::Finished(IntakeRun::Skipped));
         }
+        let context = Box::new(self.ctx_for(&agent_id, None));
         *self.intake_speaker.lock().unwrap() = Some((role, agent_id));
         Ok(IntakePrepared::Call {
             request: req,
             provider,
+            context,
         })
     }
 
@@ -2290,7 +2764,7 @@ impl Workbench {
     fn stall_retrigger(
         &self,
         aid: &str,
-        role: &str,
+        _role: &str,
         instruction: &str,
         by: &str,
         started: std::time::Instant,
@@ -2318,7 +2792,6 @@ impl Workbench {
         self.watch().retrigger_original = Some(instruction.to_string());
         if let Err(e) = self.run_turn_agent(
             aid,
-            role,
             &crate::stallwatch::retrigger_input(instruction),
             &[],
             false,
@@ -2373,6 +2846,7 @@ impl Workbench {
             &[],
             false,
             &roster,
+            None,
         );
         let retry = !self.watch().seg.retry_used;
         match res {
@@ -2609,25 +3083,22 @@ impl Workbench {
     }
 
     pub(crate) fn active_run(&self) -> Result<Option<orchestra::StageRun>, ApiError> {
-        let mut st = self.db.conn().prepare(
-            "SELECT id, seq, stage_name, state FROM stage_runs
-             WHERE project_id=?1 AND state IN ('active','waiting_stamp')
-             ORDER BY seq DESC LIMIT 1",
-        )?;
-        let mut rows = st.query_map([&self.project_id], |r| {
-            Ok(orchestra::StageRun {
-                id: r.get(0)?,
-                seq: r.get(1)?,
-                stage_name: r.get(2)?,
-                state: r.get(3)?,
-            })
-        })?;
-        Ok(rows.next().transpose()?)
+        Ok(self.db.active_stage_run(&self.project_id)?)
     }
 }
 
 // 文本指令与 token 解析已迁往 `commands.rs`（中立模块，arch-review 票 01）：
 // turn.rs 曾为此反向依赖本门面（诊断卡 D08）。
+
+/// Reliability 22: disclosure is available without a project and never returns
+/// credential values, raw transport configuration or authentication URLs.
+pub fn data_boundary(
+    root: Option<&std::path::Path>,
+    store: &dyn crate::credentials::CredentialStore,
+) -> Result<crate::data_boundary::DataBoundary, ApiError> {
+    let doc = crate::provider_config::load().map_err(|_| ApiError::DataBoundaryUnavailable)?;
+    Ok(crate::data_boundary::read(root, store, &doc))
+}
 
 #[cfg(test)]
 mod stall_tests;

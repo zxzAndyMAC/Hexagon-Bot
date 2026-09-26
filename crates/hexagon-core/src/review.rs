@@ -142,20 +142,16 @@ pub fn submit_review(
     verdict: Verdict,
     body: &str,
 ) -> Result<String, ReviewError> {
-    let (tpath, tkind, trun): (String, String, Option<String>) = db
-        .conn()
-        .query_row(
-            "SELECT path, kind, stage_run_id FROM artifacts WHERE id=?1",
-            [target_artifact_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .map_err(|_| ReviewError::NoArtifact(target_artifact_id.into()))?;
-    let reviewer = role_of(db, &ctx.agent_id)?;
+    let evidence =
+        artifacts::evidence::capture(db, &ctx.repo_root, &ctx.project_id, target_artifact_id)?
+            .ok_or_else(|| ReviewError::NoArtifact(target_artifact_id.into()))?;
+    let tpath = &evidence.path;
     let content = format!(
-        "---\nkind: 复审意见\nauthor: {}\ntarget: {}\nverdict: {}\n---\n{}",
+        "---\nkind: 复审意见\nauthor: {}\ntarget: {}\nverdict: {}\ntarget_evidence: {}\n---\n{}",
         ctx.agent_id,
         tpath,
         verdict.as_str(),
+        json!(evidence),
         body
     );
     let n: i64 = db.conn().query_row(
@@ -164,21 +160,7 @@ pub fn submit_review(
         |r| r.get(0),
     )?;
     let path = format!("reviews/{}-{}.md", tpath.replace('/', "_"), n);
-    let aid =
-        artifacts::deliver(db, ctx, &TierMap::new(), &path, &content, None).map_err(Box::new)?;
-    db.append_event(
-        &ctx.project_id,
-        match verdict {
-            Verdict::Pass => EventKind::ReviewPassed,
-            Verdict::Reject => EventKind::ReviewRejected,
-        },
-        json!({"artifact_kind": tkind, "artifact_id": target_artifact_id,
-               "artifact_path": tpath, "reviewer": reviewer,
-               "review_artifact": aid, "stage_run_id": trun}),
-        Some(&ctx.agent_id),
-        ctx.stage_run_id.as_deref().or(trun.as_deref()),
-    )?;
-    Ok(aid)
+    Ok(artifacts::deliver(db, ctx, &TierMap::new(), &path, &content, None).map_err(Box::new)?)
 }
 
 /// 提交打回：登记打回产物 + 路由（复审者 / 自动 / 升级）。

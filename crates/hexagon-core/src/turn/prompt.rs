@@ -265,9 +265,8 @@ pub(super) fn with_dynamic_tail(
 /// 返回 (注入文本, 是否降级)；无说明文件返回 None。
 pub fn load_instructions(repo_root: &Path) -> Option<(String, bool)> {
     let (name, full) = ["AGENTS.md", "CLAUDE.md"].iter().find_map(|n| {
-        std::fs::read_to_string(repo_root.join(n))
-            .ok()
-            .map(|c| (*n, c))
+        let path = crate::tools::readable_repo_path(repo_root, n).ok()?;
+        std::fs::read_to_string(path).ok().map(|c| (*n, c))
     })?;
     if full.len() <= INSTRUCTIONS_CAP {
         return Some((format!("{name} (full text):\n{full}"), false));

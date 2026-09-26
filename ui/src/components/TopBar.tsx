@@ -203,6 +203,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
           }}
         >
           {capped ? <><Icon name="warn" size={10} /> {t('usage.capHit')}</> : `${t('topbar.usage')} ${usageTotal ? fmtTok(usageTotal.tokens) : '—'}`}
+          {usageTotal && (usageTotal.unknown_requests > 0 || usageTotal.legacy_unknown_records > 0) && <span title={t('usage.budgetUnknown')}> · {t('usage.unknownCost')}</span>}
           {usageTotal && limitMc != null && ` · ${fmt(usageTotal.spent_mc)}/¥${usageTotal.limit_cents! / 100}`}
         </button>
         {sparkOpen && (

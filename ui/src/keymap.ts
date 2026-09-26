@@ -11,7 +11,6 @@ export type ActionId =
   | 'settings'
   | 'focusComposer'
   | 'stageRewind'
-  | 'stageSkip'
   | 'stageStamp'
   | 'nodeRail'
   | 'dismissPending'
@@ -20,6 +19,12 @@ export type ActionId =
   | 'treeRefresh'
   | 'saveFile'
   | 'confirmIntake'
+  | 'reconcileAction'
+  | 'abandonAction'
+  | 'retryAction'
+  | 'requestException'
+  | 'acceptException'
+  | 'openPolicyReport'
 
 const DEFAULTS: Record<ActionId, string> = {
   approve: 'mod+Enter',
@@ -32,7 +37,6 @@ const DEFAULTS: Record<ActionId, string> = {
   focusComposer: 'mod+N',
   // ADR 0056-2：阶段操作键位（alt+mod 组合避开 ⌘ 系常用位）
   stageRewind: 'alt+mod+ArrowLeft',
-  stageSkip: 'alt+mod+ArrowRight',
   stageStamp: 'alt+mod+S',
   // ui-audit 票 12（P2-13）：节点轨键盘入口
   nodeRail: 'mod+J',
@@ -46,6 +50,12 @@ const DEFAULTS: Record<ActionId, string> = {
   saveFile: 'mod+s',
   // 票 17：确认开场草案。mod+Enter 已是待决批准，加 shift 才不会误写 AGENTS.md。
   confirmIntake: 'mod+shift+Enter',
+  reconcileAction: 'alt+mod+i',
+  abandonAction: 'alt+mod+Backspace',
+  retryAction: 'alt+mod+Enter',
+  requestException: 'alt+mod+e',
+  acceptException: 'alt+mod+shift+Enter',
+  openPolicyReport: 'alt+mod+p',
 }
 
 // navigator.platform 已弃用（MDN，ui-audit 票 11）：优先 userAgentData；
@@ -65,7 +75,6 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'approve', labelKey: 'keys.approve' },
   { id: 'reject', labelKey: 'keys.reject' },
   { id: 'stageRewind', labelKey: 'keys.stageRewind' },
-  { id: 'stageSkip', labelKey: 'keys.stageSkip' },
   { id: 'stageStamp', labelKey: 'keys.stageStamp' },
   { id: 'nodeRail', labelKey: 'keys.nodeRail' },
   { id: 'dismissPending', labelKey: 'keys.dismissPending' },
@@ -74,6 +83,12 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'treeRefresh', labelKey: 'keys.treeRefresh' },
   { id: 'saveFile', labelKey: 'keys.saveFile' },
   { id: 'confirmIntake', labelKey: 'keys.confirmIntake' },
+  { id: 'reconcileAction', labelKey: 'cards.reconcileAction' },
+  { id: 'abandonAction', labelKey: 'cards.abandonAction' },
+  { id: 'retryAction', labelKey: 'cards.retryAction' },
+  { id: 'requestException', labelKey: 'exceptions.request' },
+  { id: 'acceptException', labelKey: 'exceptions.accept' },
+  { id: 'openPolicyReport', labelKey: 'policy.report' },
 ]
 
 export function bindingFor(a: ActionId): string {
