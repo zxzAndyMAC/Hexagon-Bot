@@ -136,6 +136,11 @@ fn providers_path() -> PathBuf {
 
 /// 读文档；文件不存在 = 空文档（首次启动常见路径，不算错）。
 pub fn load() -> Result<ProviderDoc, ProvidersError> {
+    #[cfg(test)]
+    if let Some(doc) = FIXTURE_DOCUMENT.with(|d| d.borrow().clone()) {
+        return Ok(doc);
+    }
+
     let path = providers_path();
     if !path.exists() {
         return Ok(ProviderDoc::default());
@@ -742,4 +747,21 @@ mod tests {
         assert!(infer_caps("meta-llama/llama-3.1-8b").contains(&"tools".to_string()));
         assert_eq!(group_of("google/gemini-2.5-flash"), "google");
     }
+}
+
+// Evaluation 17: isolate supplier-boundary fixtures per test thread. Mutating
+// process environment raced concurrent frozen configuration checks.
+#[cfg(test)]
+thread_local! { static FIXTURE_DOCUMENT:std::cell::RefCell<Option<ProviderDoc>>=const {std::cell::RefCell::new(None)}; }
+#[cfg(test)]
+pub(crate) struct FixtureDocument(Option<ProviderDoc>);
+#[cfg(test)]
+impl Drop for FixtureDocument {
+    fn drop(&mut self) {
+        FIXTURE_DOCUMENT.with(|d| *d.borrow_mut() = self.0.take());
+    }
+}
+#[cfg(test)]
+pub(crate) fn fixture_document(doc: ProviderDoc) -> FixtureDocument {
+    FixtureDocument(FIXTURE_DOCUMENT.with(|d| d.replace(Some(doc))))
 }

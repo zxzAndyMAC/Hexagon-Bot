@@ -598,3 +598,22 @@ pub(super) fn rollback(db: &Db, ctx: &ToolContext, pid: &str) -> Result<(), Prop
     );
     result
 }
+
+/// Ticket 17: only the proposal owner reads and revalidates immutable bindings.
+/// A supplied JSON digest or a pending-card summary is never a source receipt.
+pub(crate) fn evaluation_binding(
+    db: &Db,
+    ctx: &ToolContext,
+    pid: &str,
+) -> Result<(String, PackDef, PackDef), PropError> {
+    let artifact: String = db.conn().query_row(
+        "SELECT artifact_id FROM proposals WHERE id=?1 AND project_id=?2 AND surface='pack_copy' AND status='awaiting_stamp'",
+        params![pid, ctx.project_id], |r| r.get(0),
+    )?;
+    let (_, _, _, body) = artifact_proposal_parts(db, ctx, Some(&artifact))?;
+    let binding = bound(db, ctx, pid, &body)?;
+    let baseline: PackDef = serde_json::from_slice(&std::fs::read(target(ctx)?)?)
+        .map_err(|_| PropError::PolicyStale)?;
+    let fingerprint = crate::evaluation::config::digest(&binding)?;
+    Ok((fingerprint, baseline, binding.candidate))
+}

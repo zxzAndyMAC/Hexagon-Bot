@@ -279,6 +279,7 @@ pub(crate) fn build(db: &Db, root: &Path, batch_id: &str) -> io::Result<BenefitR
             match plan.kind {
                 plan::PlanKind::Pilot => ReportGroupKind::Pilot,
                 plan::PlanKind::Formal => ReportGroupKind::Formal,
+                plan::PlanKind::Candidate => ReportGroupKind::Candidate,
             }
         };
         let group = groups
@@ -353,7 +354,10 @@ pub(crate) fn build(db: &Db, root: &Path, batch_id: &str) -> io::Result<BenefitR
                                 row.human_ms = timing.human_ms;
                             }
                         }
-                        let ledger = if run.evidence_kind == "live_model" {
+                        let ledger = if matches!(
+                            run.evidence_kind.as_str(),
+                            "live_model" | "provider_boundary_fixture"
+                        ) {
                             &paid
                         } else {
                             &scripted

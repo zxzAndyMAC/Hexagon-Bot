@@ -309,7 +309,7 @@ pub fn request(
     };
     // Evaluation D08: commit the local attempt before admission, but do not
     // dispatch until the shared authority has reserved this actual request.
-    let mut evaluation = match crate::evaluation::budget::admit(ctx, provider, &id, purpose) {
+    let mut evaluation = match crate::evaluation::budget::admit(ctx, provider, &id, purpose, chat) {
         Ok(guard) => guard,
         Err(error) => {
             let _ = crate::evaluation::control::budget_refused(&ctx.repo_root);
@@ -821,6 +821,7 @@ mod tests {
     fn records_and_summarizes() {
         let (db, ctx, _d) = setup(None);
         let u = Usage {
+            observed_model: None,
             unpriced: false,
             prompt_reported: true,
             completion_reported: true,
@@ -854,6 +855,7 @@ mod tests {
             )
             .unwrap();
         let u = Usage {
+            observed_model: None,
             unpriced: false,
             prompt_reported: true,
             completion_reported: true,
@@ -898,6 +900,7 @@ mod tests {
             &ctx,
             "chat",
             &Usage {
+                observed_model: None,
                 unpriced: false,
                 prompt_reported: true,
                 completion_reported: true,
@@ -924,6 +927,7 @@ mod tests {
             &ctx,
             "chat",
             &Usage {
+                observed_model: None,
                 unpriced: false,
                 prompt_reported: true,
                 completion_reported: true,
@@ -974,6 +978,7 @@ mod tests {
             &ctx,
             "chat",
             &Usage {
+                observed_model: None,
                 unpriced: false,
                 prompt_reported: true,
                 completion_reported: true,
@@ -1012,7 +1017,7 @@ mod tests {
             prompt in (u64::MAX - 1024)..=u64::MAX,
             completion in (u64::MAX - 1024)..=u64::MAX,
         ) {
-            let usage = Usage { unpriced: false, prompt_reported: true, completion_reported: true, prompt_tokens: prompt, completion_tokens: completion };
+            let usage = Usage { observed_model: None, unpriced: false, prompt_reported: true, completion_reported: true, prompt_tokens: prompt, completion_tokens: completion };
             let price = Price { prompt_per_1k_mc: i64::MAX, completion_per_1k_mc: i64::MAX };
             // Both terms far exceed the ledger range. Unknown is required;
             // wrapping into a small or negative amount would bypass the cap.

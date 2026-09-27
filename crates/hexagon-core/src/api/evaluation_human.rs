@@ -1,5 +1,5 @@
 //! D07: owner interactions use the same business facade as ordinary projects.
-use super::evaluation_runner::{drive_scripted, ScriptCursor};
+use super::evaluation_runner::{drive_evaluation, EvaluationCursor};
 use super::*;
 use crate::evaluation::{self as eval, AttentionHandle, EvaluationActor, EvaluationDecision};
 
@@ -80,7 +80,7 @@ impl Workbench {
             [&result.id],
             |r| r.get(0),
         )?;
-        let mut cursor: ScriptCursor = serde_json::from_str(&cursor_json)?;
+        let mut cursor: EvaluationCursor = serde_json::from_str(&cursor_json)?;
         let task_json: String = self.db.conn().query_row(
             "SELECT task_json FROM evaluation_runs WHERE id=?1",
             [&result.id],
@@ -94,6 +94,9 @@ impl Workbench {
             cursor.pack.clone(),
             false,
         )?;
+        if cursor.live {
+            self.attach_evaluation_resume_transport(&mut worker, &result)?;
+        }
         if cursor.permission.is_some()
             && !matches!(&decision, EvaluationDecision::Permission { .. })
         {
@@ -178,7 +181,7 @@ impl Workbench {
         result.error = None;
         let execution = (|| -> Result<(), ApiError> {
             match action {
-                None => drive_scripted(&mut worker, &task, &mut cursor, &mut result)?,
+                None => drive_evaluation(&mut worker, &task, &mut cursor, &mut result)?,
                 Some(orchestra::StageAction::PackFinished) => {
                     result.flow_completed = cursor.pack.is_some();
                     result.state = "completed".into();
@@ -199,7 +202,7 @@ impl Workbench {
                         // continuation; resetting the old cursor replays side effects.
                         result.state = "waiting_human".into();
                     } else {
-                        drive_scripted(&mut worker, &task, &mut cursor, &mut result)?;
+                        drive_evaluation(&mut worker, &task, &mut cursor, &mut result)?;
                     }
                 }
                 Some(

@@ -3272,3 +3272,9 @@ mod evaluation_supplement_tests;
 
 #[cfg(test)]
 mod evaluation_report_tests;
+
+mod evaluation_candidate;
+
+mod evaluation_live;
+#[cfg(test)]
+mod evaluation_live_tests;

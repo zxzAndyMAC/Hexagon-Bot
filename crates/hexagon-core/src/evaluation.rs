@@ -1,5 +1,11 @@
 //! Task-benefit-evaluation 01: host-owned task acceptance, independent of turns.
 //! Only scripted debug execution is admitted until isolation and quota gates land.
+pub(crate) mod live;
+pub use live::PreflightReceipt;
+pub(crate) mod generation;
+pub use generation::PolicyGeneration;
+pub(crate) mod candidate;
+pub use candidate::{CandidateEvaluation, CandidateQuality, CandidateSource};
 pub(crate) mod report;
 pub use report::{
     ArmBenefits, BenefitGroup, BenefitRecommendation, BenefitReport, BenefitRun, CategoryBenefits,

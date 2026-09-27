@@ -220,6 +220,30 @@ pub fn propose(
     motive: &str,
     sandbox: &std::path::Path,
 ) -> Result<String, PolicyDevError> {
+    let body = prepare_body(ctx, base, edits, scenario, motive, sandbox)?;
+    // 产物交付 + 提案入队——全走既有受管路径
+    let aid = crate::artifacts::deliver(
+        db,
+        ctx,
+        &ctx.tiers,
+        "proposals/policy-dev.md",
+        &body,
+        Some("改进提案"),
+    )
+    .map_err(PolicyDevError::Deliver)?;
+    crate::proposals::submit(db, ctx, &aid, &body).map_err(PolicyDevError::Proposal)
+}
+
+// Evaluation 17: delivery persists its own file intent before source/proposal
+// commit. Preparing the diagnostic body separately avoids nesting transactions.
+pub(crate) fn prepare_body(
+    ctx: &ToolContext,
+    base: &PackDef,
+    edits: &[KnobEdit],
+    scenario: &Scenario,
+    motive: &str,
+    sandbox: &std::path::Path,
+) -> Result<String, PolicyDevError> {
     let (cand, desc) = apply_knob_edits(base, edits)?;
 
     // 双保险（票 10 强制点）：KnobEdit 类型层只许旋钮,
@@ -283,17 +307,7 @@ pub fn propose(
         serde_json::json!({"baseline":base,"candidate":cand})
     ));
 
-    // 产物交付 + 提案入队——全走既有受管路径
-    let aid = crate::artifacts::deliver(
-        db,
-        ctx,
-        &ctx.tiers,
-        "proposals/policy-dev.md",
-        &body,
-        Some("改进提案"),
-    )
-    .map_err(PolicyDevError::Deliver)?;
-    crate::proposals::submit(db, ctx, &aid, &body).map_err(PolicyDevError::Proposal)
+    Ok(body)
 }
 
 /// 信号行 → 人话收益句（提案「预期收益」节的原料）。

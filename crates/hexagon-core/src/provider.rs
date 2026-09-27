@@ -103,6 +103,8 @@ pub enum StopReason {
 
 #[derive(Debug, Clone, Default)]
 pub struct Usage {
+    /// Supplier-reported identity; the requested logical slot is not evidence.
+    pub observed_model: Option<String>,
     /// Additional billing dimensions outside the local two-rate table.
     pub unpriced: bool,
     /// Missing counters remain explicitly unknown; zero defaults are not
@@ -114,6 +116,26 @@ pub struct Usage {
 }
 
 impl Usage {
+    fn observe_model(&mut self, value: &Value) {
+        if let Some(model) = value["model"].as_str().filter(|m| !m.is_empty()) {
+            if self
+                .observed_model
+                .as_deref()
+                .is_some_and(|old| old != model)
+            {
+                // Evaluation 17: conflicting stream model identities cannot be
+                // priced as the initially requested model. Keep an unknown hold.
+                self.unpriced = true;
+            } else {
+                self.observed_model = Some(model.into());
+            }
+        }
+    }
+    fn with_model(mut self, value: &Value) -> Self {
+        self.observe_model(value);
+        self
+    }
+
     fn from_value(value: &Value, input: &str, output: &str) -> Self {
         let mut usage = Self::default();
         usage.observe(value, input, output);
@@ -671,7 +693,8 @@ pub mod openai_shape {
         Ok(ChatResponse {
             content,
             stop,
-            usage: Usage::from_value(&v["usage"], "prompt_tokens", "completion_tokens"),
+            usage: Usage::from_value(&v["usage"], "prompt_tokens", "completion_tokens")
+                .with_model(v),
         })
     }
 
@@ -702,6 +725,7 @@ pub mod openai_shape {
             }
             let v: Value = serde_json::from_str(data)
                 .map_err(|e| ProviderError::Transport(format!("sse json: {e}")))?;
+            self.usage.observe_model(&v);
             if v["usage"].is_object() {
                 self.usage
                     .observe(&v["usage"], "prompt_tokens", "completion_tokens");
@@ -882,7 +906,8 @@ pub mod anthropic_shape {
     }
 
     pub fn from_response(v: &Value) -> Result<ChatResponse, ProviderError> {
-        let mut usage = Usage::from_value(&v["usage"], "input_tokens", "output_tokens");
+        let mut usage =
+            Usage::from_value(&v["usage"], "input_tokens", "output_tokens").with_model(v);
         let mut content = Vec::new();
         if let Some(blocks) = v["content"].as_array() {
             for b in blocks {
@@ -978,6 +1003,7 @@ pub mod anthropic_shape {
             };
             match kind {
                 "message_start" => {
+                    self.usage.observe_model(&v["message"]);
                     self.usage
                         .observe(&v["message"]["usage"], "input_tokens", "output_tokens");
                 }
@@ -1467,7 +1493,7 @@ fn jev_choice(
         .as_str()
         .ok_or_else(|| ProviderError::Transport("jev response missing choice".into()))?
         .to_string();
-    let usage = Usage::from_value(&v["usage"], "input_tokens", "output_tokens");
+    let usage = Usage::from_value(&v["usage"], "input_tokens", "output_tokens").with_model(&v);
     Ok(ChatResponse {
         content: vec![ContentBlock::Text { text: choice }],
         stop: StopReason::EndTurn,
@@ -2446,5 +2472,28 @@ mod server_tool_tests {
             let standard = Usage::from_value(&serde_json::json!({"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"service_tier":"standard"}), "input_tokens", "output_tokens");
             proptest::prop_assert!(!standard.unpriced);
         }
+    }
+}
+#[cfg(test)]
+mod evaluation_model_identity_tests {
+    use super::*;
+    #[test]
+    fn paid_preflight_reads_supplier_model_identity_not_only_requested_slot() {
+        let response=openai_shape::from_response(&serde_json::json!({
+            "model":"observed-model-v2", "choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":1,"completion_tokens":1}
+        })).unwrap();
+        assert_eq!(
+            response.usage.observed_model.as_deref(),
+            Some("observed-model-v2")
+        );
+        let response=anthropic_shape::from_response(&serde_json::json!({
+            "model":"observed-anthropic-v2", "content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
+            "usage":{"input_tokens":1,"output_tokens":1}
+        })).unwrap();
+        assert_eq!(
+            response.usage.observed_model.as_deref(),
+            Some("observed-anthropic-v2")
+        );
     }
 }

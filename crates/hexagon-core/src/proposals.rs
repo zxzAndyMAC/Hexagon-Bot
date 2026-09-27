@@ -673,6 +673,9 @@ pub fn reject_at_stamp(
     qid: &str,
     reason: &str,
 ) -> Result<(), PropError> {
+    // Evaluation 17 regression: owner is not an Agent row. Recording it as
+    // event.agent_id violated the FK after the card had already been answered.
+    let tx = db.conn().unchecked_transaction()?;
     let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Stamp)
         .ok()
         .filter(|c| c.project_id == ctx.project_id)
@@ -690,9 +693,10 @@ pub fn reject_at_stamp(
         &ctx.project_id,
         EventKind::ProposalRejected,
         json!({"proposal_id": pid, "pass": false, "reason": reason, "question_id": qid}),
-        Some(&ctx.agent_id),
+        (ctx.agent_id != "owner").then_some(ctx.agent_id.as_str()),
         ctx.stage_run_id.as_deref(),
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -924,6 +928,8 @@ pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
         .collect::<Result<_, _>>()?;
     Ok(rows)
 }
+
+pub(crate) use policy::evaluation_binding;
 
 #[cfg(test)]
 mod tests {

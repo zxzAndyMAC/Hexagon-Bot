@@ -28,3 +28,6 @@ zip = { version = "2.4", default-features = false }
 
 [dev-dependencies]
 proptest = "1.11.0"
+
+[build-dependencies]
+sha2 = "0.10"

@@ -5,6 +5,37 @@ use std::{collections::BTreeMap, error::Error, path::Path};
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        [op,host,id] if matches!(op.as_str(),"preflight"|"next-live"|"generate-candidate") => {
+            let wb=live_host(host)?;
+            let value=match op.as_str() {
+                "preflight"=>serde_json::to_value(wb.preflight_evaluation(id)?)?,
+                "next-live"=>serde_json::to_value(wb.evaluate_next_live(id)?)?,
+                _=>serde_json::to_value(wb.generate_policy_candidate(id)?)?,
+            };
+            println!("{}",serde_json::to_string_pretty(&value)?);
+        }
+        [op,host,id] if op=="read-preflight" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            println!("{}",serde_json::to_string_pretty(&wb.evaluation_preflight(id)?)?);
+        }
+        [op,host,id] if op=="read-policy-generation" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            println!("{}",serde_json::to_string_pretty(&wb.policy_generation(id)?)?);
+        }
+        [op,host,id,edits] if op=="generate-candidate-debug" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            let edits=serde_json::from_slice::<Vec<serde_json::Value>>(&std::fs::read(edits)?)?;
+            println!("{}",serde_json::to_string_pretty(&wb.generate_policy_candidate_debug(id,&edits)?)?);
+        }
+        [op, host, proposal, generation] if op == "candidate-freeze" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            println!("{}", serde_json::to_string_pretty(&wb.freeze_policy_evaluation(proposal,generation)?)?);
+        }
+        [op, host, proposal] if op == "candidate-report" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            println!("{}", serde_json::to_string_pretty(&wb.policy_evaluation(proposal)?)?);
+        }
+
         [op, host, batch] if matches!(op.as_str(), "report" | "report-json") => {
             let wb = Workbench::open_evaluation_host(Path::new(host))?;
             let report = wb.evaluation_benefit_report(batch)?;
@@ -66,7 +97,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("{}",serde_json::to_string_pretty(&wb.evaluate_next_with_owner_debug(plan,&acts)?)?);
         }
         [op,host,run] if op=="owner-session" => {
-            let wb=Workbench::open_evaluation_host(Path::new(host))?;owner_session(&wb,run)?;
+            let wb=live_host(host)?;owner_session(&wb,run)?;
         }
         [op,host,run] if op=="timing" => {
             let wb=Workbench::open_evaluation_host(Path::new(host))?;
@@ -156,7 +187,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let wb = Workbench::open_evaluation_host(Path::new(host))?;
             println!("{}", serde_json::to_string_pretty(&wb.evaluation_result(id)?)?);
         }
-        _ => return Err("usage: evaluate debug HOST TASK.json WRITES.json | read HOST RUN_ID | check-category HOST CORPUS.json | freeze HOST CONFIG.json [PARENT_BATCH] | batch HOST BATCH_ID | check-config HOST BATCH_ID CONFIG.json | record-verification HOST BATCH_ID OBSERVATION.json | plan HOST BATCH_ID pilot|formal | read-plan HOST PLAN_ID | next-debug HOST PLAN_ID SCRIPT.json | stop-plan HOST PLAN_ID | generation HOST BATCH_ID | read-generation HOST CONTEXT_ID | reveal-task HOST CONTEXT_ID TASK_ID | check-isolation HOST | read-isolation HOST CHECK_ID | next-owner-debug HOST PLAN_ID SCRIPT.json | owner-session HOST RUN_ID | timing HOST RUN_ID | pending HOST RUN_ID | outcome HOST RUN_ID | outcome-history HOST RUN_ID | recheck HOST RUN_ID | debug-budget-config HOST PLAN_ID PRICE.json | budget-debug HOST | budget HOST | control HOST RUN_ID | stop-run HOST RUN_ID | pause-run HOST RUN_ID | resume-run HOST RUN_ID | recovery HOST | reconcile HOST RUN_ID | supplement HOST PLAN_ID EVEN_POSITION | supplements HOST PLAN_ID | report HOST BATCH_ID | report-json HOST BATCH_ID; live evaluation is not enabled".into()),
+        _ => return Err("usage: evaluate debug HOST TASK.json WRITES.json | read HOST RUN_ID | check-category HOST CORPUS.json | freeze HOST CONFIG.json [PARENT_BATCH] | batch HOST BATCH_ID | check-config HOST BATCH_ID CONFIG.json | record-verification HOST BATCH_ID OBSERVATION.json | plan HOST BATCH_ID pilot|formal | read-plan HOST PLAN_ID | next-debug HOST PLAN_ID SCRIPT.json | stop-plan HOST PLAN_ID | generation HOST BATCH_ID | read-generation HOST CONTEXT_ID | reveal-task HOST CONTEXT_ID TASK_ID | check-isolation HOST | read-isolation HOST CHECK_ID | next-owner-debug HOST PLAN_ID SCRIPT.json | owner-session HOST RUN_ID | timing HOST RUN_ID | pending HOST RUN_ID | outcome HOST RUN_ID | outcome-history HOST RUN_ID | recheck HOST RUN_ID | debug-budget-config HOST PLAN_ID PRICE.json | budget-debug HOST | budget HOST | control HOST RUN_ID | stop-run HOST RUN_ID | pause-run HOST RUN_ID | resume-run HOST RUN_ID | recovery HOST | reconcile HOST RUN_ID | supplement HOST PLAN_ID EVEN_POSITION | supplements HOST PLAN_ID | report HOST BATCH_ID | report-json HOST BATCH_ID | preflight HOST BATCH_ID | read-preflight HOST PREFLIGHT_ID | next-live HOST PLAN_ID | generate-candidate HOST CONTEXT_ID | generate-candidate-debug HOST CONTEXT_ID EDITS.json | read-policy-generation HOST CONTEXT_ID | candidate-freeze HOST PROPOSAL_ID CONTEXT_ID | candidate-report HOST PROPOSAL_ID".into()),
     }
     Ok(())
 }
@@ -265,4 +296,10 @@ fn owner_session(wb: &Workbench, run_id: &str) -> Result<(), Box<dyn Error>> {
         serde_json::to_string_pretty(&wb.evaluation_timing(run_id)?)?
     );
     Ok(())
+}
+
+fn live_host(host: &str) -> Result<Workbench, Box<dyn Error>> {
+    let mut wb = Workbench::open_evaluation_host(Path::new(host))?;
+    wb.set_credential_store(hexagon_core::credentials::active());
+    Ok(wb)
 }

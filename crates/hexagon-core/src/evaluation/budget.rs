@@ -1,4 +1,5 @@
 //! D08: shared reservations; fixture accounting never spends the paid authority.
+pub(crate) mod live;
 use super::{config, err, plan, EvaluationResult};
 use crate::{
     db::Db,
@@ -107,13 +108,22 @@ fn money(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
 fn canonical(root: &Path) -> io::Result<String> {
     Ok(root.canonicalize()?.to_string_lossy().into_owned())
 }
+#[cfg(test)]
+thread_local! { static PAID_FIXTURE:tempfile::TempDir=tempfile::tempdir().expect("paid authority fixture"); }
 fn paid_path() -> io::Result<PathBuf> {
-    // D08 review: changing CLI HOST must not reset the approved first round.
-    // This authority is independent of provider-config and evaluation HOST.
-    let home = std::env::var_os("HOME").ok_or_else(|| rejected("owner_home_missing"))?;
-    Ok(PathBuf::from(home)
-        .join(".config/hexagon/evaluations/task-benefit-evaluation-2026-09-first.db"))
+    #[cfg(test)]
+    {
+        Ok(PAID_FIXTURE.with(|dir| dir.path().join("authority.db")))
+    }
+    #[cfg(not(test))]
+    {
+        // D08: independent of HOST/provider paths; tests never spend this authority.
+        let home = std::env::var_os("HOME").ok_or_else(|| rejected("owner_home_missing"))?;
+        Ok(PathBuf::from(home)
+            .join(".config/hexagon/evaluations/task-benefit-evaluation-2026-09-first.db"))
+    }
 }
+
 pub(crate) fn paid_summary() -> io::Result<BudgetSummary> {
     let path = paid_path()?;
     if !path.exists() {
@@ -185,18 +195,24 @@ pub(crate) fn before_claim(db: &Db, root: &Path, plan_id: &str) -> io::Result<()
     if db.conn().is_autocommit() {
         return Err(rejected("reservation_requires_claim_transaction"));
     }
-    let price: Option<String> = db
+    let price: Option<(String, String)> = db
         .conn()
         .query_row(
-            "SELECT price_json FROM evaluation_budget_plans WHERE plan_id=?1",
+            "SELECT price_json,scope FROM evaluation_budget_plans WHERE plan_id=?1",
             [plan_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(err)?;
-    let Some(price) = price else {
+    let Some((price, scope)) = price else {
         return Ok(());
     };
+    if scope == PAID {
+        return live::reserve_plan(db, root, plan_id, &price);
+    }
+    if scope != DEBUG {
+        return Err(rejected("unknown_budget_scope"));
+    }
     let plan = plan::read(db, plan_id)?;
     if plan
         .entries
@@ -238,9 +254,15 @@ fn reserve_pair(
         .map_err(err)?;
     if !exists {
         let report = summary(db, scope)?;
+        // Ticket 17: a candidate has one Full attempt, comparisons have two arms.
+        let arms = if plan.kind == plan::PlanKind::Candidate {
+            1
+        } else {
+            2
+        };
         let needed = limits
             .run_mc
-            .checked_mul(2)
+            .checked_mul(arms)
             .ok_or_else(|| rejected("pair_allowance_overflow"))?;
         let pilot = plan.kind == plan::PlanKind::Pilot;
         if report.blocked
@@ -260,13 +282,13 @@ fn reserve_pair(
         {
             return Err(rejected("pair_budget_unavailable"));
         }
-        db.conn().execute("INSERT INTO evaluation_budget_pairs(id,round_id,host,plan_id,pilot,allowance_mc) VALUES (?1,?2,?3,?4,?5,?6)",params![pair,scope,host,plan_id,pilot,sql(needed)?]).map_err(err)?;
+        db.conn().execute("INSERT INTO evaluation_budget_pairs(id,round_id,host,plan_id,pilot,allowance_mc,expected_runs) VALUES (?1,?2,?3,?4,?5,?6,?7)",params![pair,scope,host,plan_id,pilot,sql(needed)?,sql(arms)?]).map_err(err)?;
         let entries: Vec<_> = plan
             .entries
             .iter()
             .filter(|e| e.task_id == next.task_id && e.repetition == next.repetition)
             .collect();
-        if entries.len() != 2 {
+        if entries.len() as u64 != arms {
             return Err(rejected("pair_is_not_two_arms"));
         }
         for entry in entries {
@@ -278,6 +300,11 @@ fn reserve_pair(
 }
 
 pub(crate) fn bind_debug(db: &Db, host: &Path, workspace: &Path, run_id: &str) -> io::Result<()> {
+    let paid:bool=db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_plan_runs r JOIN evaluation_budget_plans p ON p.plan_id=r.plan_id WHERE r.run_id=?1 AND p.scope=?2)",params![run_id,PAID],|r|r.get(0)).map_err(err)?;
+    if paid {
+        return live::bind_plan(db, host, workspace, run_id);
+    }
+
     let key:Option<String>=db.conn().query_row("SELECT b.id FROM evaluation_budget_runs b JOIN evaluation_budget_pairs p ON p.id=b.pair_id JOIN evaluation_plan_runs r ON r.plan_id=p.plan_id AND r.position=b.position WHERE r.run_id=?1",[run_id],|r|r.get(0)).optional().map_err(err)?;
     let Some(key) = key else {
         let required: bool = db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_plan_runs r JOIN evaluation_budget_plans b ON b.plan_id=r.plan_id WHERE r.run_id=?1)", [run_id], |r| r.get(0)).map_err(err)?;
@@ -304,6 +331,21 @@ pub(crate) fn bind_debug(db: &Db, host: &Path, workspace: &Path, run_id: &str) -
     Ok(())
 }
 pub(crate) fn finish(db: &Db, run: &EvaluationResult) -> io::Result<()> {
+    let binding_path = Path::new(&run.workspace).join(".hexagon/evaluation-budget.json");
+    if binding_path.exists() {
+        let binding: Binding = serde_json::from_slice(&std::fs::read(&binding_path)?)?;
+        if binding.scope == PAID {
+            // D10: a closed paid allowance does not assert host run success.
+            // If host commit fails afterward, recovery preserves incomplete;
+            // every unknown request still retains its conservative paid hold.
+            return live::finish_activity(
+                Path::new(&binding.host),
+                Path::new(&run.workspace),
+                &run.id,
+            );
+        }
+    }
+
     // D08 / 2026-09-27 CLI regression: macOS /var and /private/var name
     // the same copy. Comparing the display path left terminal allowances held.
     let workspace = canonical(Path::new(&run.workspace))?;
@@ -334,7 +376,7 @@ pub(crate) fn summary(db: &Db, scope: &str) -> io::Result<BudgetSummary> {
     result.pilot_limit_mc = pilot;
     result.blocked = blocked;
     let pairs = {
-        let mut q=db.conn().prepare("SELECT id,pilot,allowance_mc,host,plan_id FROM evaluation_budget_pairs WHERE round_id=?1 ORDER BY id").map_err(err)?;
+        let mut q=db.conn().prepare("SELECT id,pilot,allowance_mc,host,plan_id,expected_runs FROM evaluation_budget_pairs WHERE round_id=?1 ORDER BY id").map_err(err)?;
         let rows = q
             .query_map([scope], |r| {
                 Ok((
@@ -343,6 +385,7 @@ pub(crate) fn summary(db: &Db, scope: &str) -> io::Result<BudgetSummary> {
                     money(r, 2)?,
                     r.get::<_, String>(3)?,
                     r.get::<_, String>(4)?,
+                    money(r, 5)?,
                 ))
             })
             .map_err(err)?
@@ -350,7 +393,7 @@ pub(crate) fn summary(db: &Db, scope: &str) -> io::Result<BudgetSummary> {
             .map_err(err)?;
         rows
     };
-    for (pair, is_pilot, allowance, host, plan_id) in pairs {
+    for (pair, is_pilot, allowance, host, plan_id, expected_runs) in pairs {
         let runs = {
             let mut q=db.conn().prepare("SELECT id,run_id,closed,position,workspace FROM evaluation_budget_runs WHERE pair_id=?1 ORDER BY position").map_err(err)?;
             let rows = q
@@ -370,7 +413,9 @@ pub(crate) fn summary(db: &Db, scope: &str) -> io::Result<BudgetSummary> {
         };
         let mut known = 0u64;
         let mut held = 0u64;
-        let mut all_closed = runs.len() == 2;
+        // Ticket17 preflight regression: one-run reservations never released.
+        // Infer neither one nor two from remaining rows: that could free missing work.
+        let mut all_closed = runs.len() as u64 == expected_runs;
         for (key, run_id, closed, position, workspace) in runs {
             let (n,confirmed,k,u,p):(u64,u64,u64,u64,u64)=db.conn().query_row("SELECT COUNT(*),COALESCE(SUM(confirmed),0),COALESCE(SUM(known_mc),0),COALESCE(SUM(CASE WHEN state='unknown' THEN held_mc ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='pending' THEN held_mc ELSE 0 END),0) FROM evaluation_budget_requests WHERE run_key=?1 AND state!='not_sent'",[&key],|r|Ok((money(r,0)?,money(r,1)?,money(r,2)?,money(r,3)?,money(r,4)?))).map_err(err)?;
             known = known
@@ -512,6 +557,7 @@ pub(crate) struct RequestGuard {
     id: String,
     price: DebugPrice,
     dispatched: bool,
+    expected_model: Option<String>,
     project: String,
     agent: String,
     activation: Option<String>,
@@ -542,6 +588,10 @@ impl RequestGuard {
         not_sent: bool,
         unpriced: bool,
     ) -> io::Result<()> {
+        let unpriced = unpriced
+            || self.expected_model.as_deref().is_some_and(|expected| {
+                usage.and_then(|u| u.observed_model.as_deref()) != Some(expected)
+            });
         let facts = (
             usage.map(|u| {
                 (
@@ -550,6 +600,7 @@ impl RequestGuard {
                     u.prompt_reported,
                     u.completion_reported,
                     u.unpriced,
+                    u.observed_model.as_deref(),
                 )
             }),
             response,
@@ -636,6 +687,7 @@ pub(crate) fn admit(
     provider: &dyn ModelProvider,
     local_id: &str,
     purpose: &str,
+    chat: Option<&crate::provider::ChatRequest>,
 ) -> io::Result<Option<RequestGuard>> {
     let marker = ctx.repo_root.join(".hexagon/evaluation-worker");
     if !marker.exists() {
@@ -653,20 +705,21 @@ pub(crate) fn admit(
         return Err(rejected("binding_is_symlink"));
     }
     let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
-    if binding.scope != DEBUG {
-        return Err(rejected("live_evaluation_not_enabled"));
-    }
-    if !provider.is_scripted() {
+    if binding.scope == DEBUG && !provider.is_scripted() {
         return Err(rejected("real_provider_in_debug_budget"));
     }
     let host = Path::new(&binding.host);
     if canonical(host)? != binding.host {
         return Err(rejected("noncanonical_authority"));
     }
-    let db = Db::open(host.join(".hexagon/state.db")).map_err(err)?;
+    let db = live::authority(&binding)?;
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
+    let (owner,scope):(String,String)=db.conn().query_row("SELECT p.host,p.round_id FROM evaluation_budget_pairs p JOIN evaluation_budget_runs r ON r.pair_id=p.id WHERE r.id=?1",[&binding.run_key],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
+    if owner != binding.host || scope != binding.scope {
+        return Err(rejected("paid_authority_owner_mismatch"));
+    }
     let (workspace,run_id,allowance,limit,price,closed):(Option<String>,Option<String>,u64,u64,String,bool)=db.conn().query_row("SELECT workspace,run_id,allowance_mc,request_limit,price_json,closed FROM evaluation_budget_runs WHERE id=?1",[&binding.run_key],|r|Ok((r.get(0)?,r.get(1)?,money(r,2)?,money(r,3)?,r.get(4)?,r.get(5)?))).map_err(err)?;
     if workspace.as_deref() != Some(canonical(&ctx.repo_root)?.as_str())
         || run_id.is_none()
@@ -674,10 +727,17 @@ pub(crate) fn admit(
     {
         return Err(rejected("worker_binding_not_current"));
     }
-    let price: DebugPrice = serde_json::from_str(&price)?;
+    let (price, expected_model) = if binding.scope == PAID {
+        let paid: live::LivePrice = serde_json::from_str(&price)?;
+        live::validate_request(provider, chat, &paid)?;
+        (paid.tariff, Some(paid.model))
+    } else {
+        (serde_json::from_str::<DebugPrice>(&price)?, None)
+    };
     let needed = bound(&price)?;
     let (n,known,held):(u64,u64,u64)=db.conn().query_row("SELECT COUNT(*),COALESCE(SUM(known_mc),0),COALESCE(SUM(held_mc),0) FROM evaluation_budget_requests WHERE run_key=?1 AND state!='not_sent'",[&binding.run_key],|r|Ok((money(r,0)?,money(r,1)?,money(r,2)?))).map_err(err)?;
-    if summary(&db, DEBUG)?.blocked || n >= limit || !fits(known, held, needed, allowance) {
+    if summary(&db, &binding.scope)?.blocked || n >= limit || !fits(known, held, needed, allowance)
+    {
         return Err(rejected("run_budget_unavailable"));
     }
     let id = config::digest(&(&binding.run_key, local_id))?;
@@ -688,6 +748,7 @@ pub(crate) fn admit(
         id,
         price,
         dispatched: false,
+        expected_model,
         project: ctx.project_id.clone(),
         agent: ctx.agent_id.clone(),
         activation: ctx.stage_run_id.clone(),
@@ -740,6 +801,7 @@ pub(crate) fn redeliver_fixture(root: &Path, run_key: &str, usage: &Usage) -> io
         id,
         price: serde_json::from_str(&price)?,
         dispatched: true,
+        expected_model: None,
         project: crate::PROJECT_ID.into(),
         agent: "fixture".into(),
         activation: None,
@@ -756,7 +818,7 @@ pub(crate) fn stop_reason(root: &Path) -> io::Result<Option<&'static str>> {
         return Err(rejected("binding_is_symlink"));
     }
     let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
-    let db = Db::open_current(Path::new(&binding.host).join(".hexagon/state.db")).map_err(err)?;
+    let db = live::authority(&binding)?;
     let (limit, allowance, closed): (u64, u64, bool) = db
         .conn()
         .query_row(
@@ -810,6 +872,32 @@ pub(crate) fn validate_recovery_binding(
     host: &Path,
     run: &EvaluationResult,
 ) -> io::Result<()> {
+    let paid_required:bool=db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_plan_runs r JOIN evaluation_budget_plans p ON p.plan_id=r.plan_id WHERE r.run_id=?1 AND p.scope=?2)",params![run.id,PAID],|r|r.get(0)).map_err(err)?;
+    if paid_required {
+        let path = Path::new(&run.workspace).join(".hexagon/evaluation-budget.json");
+        if path.symlink_metadata()?.is_symlink() {
+            return Err(rejected("binding_is_symlink"));
+        }
+        let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
+        if binding.scope != PAID || binding.host != canonical(host)? {
+            return Err(rejected("paid_recovery_authority_mismatch"));
+        }
+        let (plan, position): (String, i64) = db
+            .conn()
+            .query_row(
+                "SELECT plan_id,position FROM evaluation_plan_runs WHERE run_id=?1",
+                [&run.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(err)?;
+        let paid = live::authority(&binding)?;
+        let matches:bool=paid.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_budget_runs r JOIN evaluation_budget_pairs p ON p.id=r.pair_id WHERE r.id=?1 AND r.run_id=?2 AND r.workspace=?3 AND p.host=?4 AND p.plan_id=?5 AND r.position=?6 AND p.round_id=?7)",params![binding.run_key,run.id,canonical(Path::new(&run.workspace))?,binding.host,plan,position,PAID],|r|r.get(0)).map_err(err)?;
+        return if matches {
+            Ok(())
+        } else {
+            Err(rejected("paid_recovery_binding_mismatch"))
+        };
+    }
     let stored: Option<(String, String)> = db
         .conn()
         .query_row(
@@ -853,9 +941,15 @@ pub(crate) fn recover_abandoned(db: &Db, host: &Path, workspace: &Path) -> io::R
         return Err(rejected("binding_is_symlink"));
     }
     let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
-    if binding.scope != DEBUG || binding.host != canonical(host)? {
+    if !matches!(binding.scope.as_str(), DEBUG | PAID) || binding.host != canonical(host)? {
         return Err(rejected("unverified_recovery_authority"));
     }
+    let paid = if binding.scope == PAID {
+        Some(live::authority(&binding)?)
+    } else {
+        None
+    };
+    let db = paid.as_ref().unwrap_or(db);
     let stored: String = db
         .conn()
         .query_row(
@@ -869,6 +963,62 @@ pub(crate) fn recover_abandoned(db: &Db, host: &Path, workspace: &Path) -> io::R
     }
     db.conn().execute("UPDATE evaluation_budget_requests SET state='unknown',held_mc=MAX(bound_mc,held_mc) WHERE run_key=?1 AND state='pending'",[&binding.run_key]).map_err(err)?;
     db.conn().execute("UPDATE evaluation_budget_rounds SET blocked=1 WHERE id=?1 AND EXISTS(SELECT 1 FROM evaluation_budget_requests WHERE run_key=?2 AND state='unknown')",params![binding.scope,binding.run_key]).map_err(err)?;
+    Ok(())
+}
+
+/// One host-owned generation operation has a separate, accounted allowance.
+/// It is not a task run and never contributes a successful heldout sample.
+pub(crate) fn bind_debug_activity(
+    db: &Db,
+    host: &Path,
+    workspace: &Path,
+    operation: &str,
+    limits: &config::EvaluationLimits,
+    price: &DebugPrice,
+) -> io::Result<()> {
+    bound(price)?;
+    let tx =
+        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
+            .map_err(err)?;
+    tx.execute(
+        "INSERT OR IGNORE INTO evaluation_budget_rounds(id,total_mc,pilot_mc) VALUES (?1,?2,?3)",
+        params![DEBUG, sql(limits.total_mc)?, sql(limits.pilot_mc)?],
+    )
+    .map_err(err)?;
+    let summary = summary(db, DEBUG)?;
+    if summary.blocked
+        || !fits(
+            summary.known_mc,
+            summary.reserved_mc,
+            limits.run_mc,
+            summary.limit_mc.min(limits.total_mc),
+        )
+    {
+        return Err(rejected("generation_budget_unavailable"));
+    }
+    let host = canonical(host)?;
+    let key = config::digest(&(DEBUG, &host, operation))?;
+    tx.execute("INSERT INTO evaluation_budget_pairs(id,round_id,host,plan_id,pilot,allowance_mc,expected_runs) VALUES (?1,?2,?3,?4,0,?5,1)",params![key,DEBUG,host,operation,sql(limits.run_mc)?]).map_err(err)?;
+    tx.execute("INSERT INTO evaluation_budget_runs(id,pair_id,position,run_id,workspace,allowance_mc,request_limit,price_json) VALUES (?1,?1,0,?2,?3,?4,1,?5)",params![key,operation,canonical(workspace)?,sql(limits.run_mc)?,serde_json::to_string(price)?]).map_err(err)?;
+    tx.commit().map_err(err)?;
+    std::fs::write(
+        workspace.join(".hexagon/evaluation-budget.json"),
+        serde_json::to_vec(&Binding {
+            host,
+            run_key: key,
+            scope: DEBUG.into(),
+        })?,
+    )?;
+    Ok(())
+}
+
+pub(crate) fn finish_debug_activity(db: &Db, operation: &str) -> io::Result<()> {
+    db.conn()
+        .execute(
+            "UPDATE evaluation_budget_runs SET closed=1 WHERE run_id=?1",
+            [operation],
+        )
+        .map_err(err)?;
     Ok(())
 }
 

@@ -220,6 +220,7 @@ fn evaluation_budget_overflow_receipt_freezes_further_dispatch() {
     let mut worker = Workbench::open_evaluation_host(Path::new(&run.workspace)).unwrap();
     let mut reply = fixture_reply();
     reply.usage = crate::provider::Usage {
+        observed_model: None,
         prompt_tokens: u64::MAX,
         completion_tokens: u64::MAX,
         prompt_reported: true,
@@ -299,6 +300,7 @@ fn evaluation_budget_duplicate_receipt_is_idempotent_and_conflict_keeps_exposure
         serde_json::to_value(&before).unwrap()
     );
     let usage = crate::provider::Usage {
+        observed_model: None,
         prompt_tokens: 600000,
         completion_tokens: 400000,
         prompt_reported: true,

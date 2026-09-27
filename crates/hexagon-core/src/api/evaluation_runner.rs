@@ -3,6 +3,11 @@ use super::*;
 use crate::evaluation::{self as eval, EvaluationArm, EvaluationBatch, EvaluationResult};
 use crate::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason};
 
+enum DriverMode {
+    Scripted { owner: bool },
+    Live(Arc<dyn ModelProvider>),
+}
+
 fn scripted_responses(activation: &eval::DebugActivation) -> Vec<ChatResponse> {
     let text = |value: &str| ChatResponse {
         content: vec![ContentBlock::Text { text: value.into() }],
@@ -139,6 +144,10 @@ impl Workbench {
         activations: &[eval::DebugActivation],
         owner: bool,
     ) -> Result<EvaluationResult, ApiError> {
+        let paid:bool=self.db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_budget_plans WHERE plan_id=?1 AND scope='paid_first_round')",[plan],|r|r.get(0))?;
+        if paid {
+            return Err(ApiError::BadInput("paid_plan_requires_live_driver".into()));
+        }
         let current = eval::plan::read(&self.db, plan)?;
         let batch = self.evaluation_batch(&current.batch_id)?;
         let check = self.check_evaluation_configuration(&batch.id, &batch.request)?;
@@ -160,12 +169,44 @@ impl Workbench {
             .find(|c| c.task.id == entry.task_id)
             .ok_or_else(|| ApiError::BadInput("planned task missing".into()))?
             .task;
-        let result = self.run_scripted_evaluation_mode(
+        let result = self.run_evaluation_mode(
             task,
             &id,
             Some((&batch, entry.arm)),
             activations,
-            owner,
+            DriverMode::Scripted { owner },
+            Some(lease),
+        )?;
+        if result.state != "waiting_human" {
+            eval::plan::finish(&self.db, plan, position, &id)?;
+        }
+        Ok(result)
+    }
+
+    pub fn evaluate_next_live(&self, plan: &str) -> Result<EvaluationResult, ApiError> {
+        let current = eval::plan::read(&self.db, plan)?;
+        let batch = self.evaluation_batch(&current.batch_id)?;
+        self.enable_evaluation_live(plan)?;
+        let provider = self.frozen_evaluation_provider(&batch)?;
+        if provider.is_scripted() {
+            return Err(ApiError::BadInput("live_driver_requires_transport".into()));
+        }
+        let (current, position, id, lease) = eval::plan::claim(&self.db, &self.repo_root, plan)?;
+        let entry = &current.entries[position];
+        let task = &batch
+            .request
+            .corpora
+            .iter()
+            .flat_map(|c| &c.cases)
+            .find(|c| c.task.id == entry.task_id)
+            .ok_or_else(|| ApiError::BadInput("planned_task_missing".into()))?
+            .task;
+        let result = self.run_evaluation_mode(
+            task,
+            &id,
+            Some((&batch, entry.arm)),
+            &[],
+            DriverMode::Live(provider),
             Some(lease),
         )?;
         if result.state != "waiting_human" {
@@ -181,18 +222,29 @@ impl Workbench {
         frozen: Option<(&EvaluationBatch, EvaluationArm)>,
         activations: &[eval::DebugActivation],
     ) -> Result<EvaluationResult, ApiError> {
-        self.run_scripted_evaluation_mode(task, id, frozen, activations, false, None)
+        self.run_evaluation_mode(
+            task,
+            id,
+            frozen,
+            activations,
+            DriverMode::Scripted { owner: false },
+            None,
+        )
     }
 
-    fn run_scripted_evaluation_mode(
+    fn run_evaluation_mode(
         &self,
         task: &eval::EvaluationTask,
         id: &str,
         frozen: Option<(&EvaluationBatch, EvaluationArm)>,
         activations: &[eval::DebugActivation],
-        owner: bool,
+        mode: DriverMode,
         lease: Option<std::fs::File>,
     ) -> Result<EvaluationResult, ApiError> {
+        let (owner, live_provider) = match mode {
+            DriverMode::Scripted { owner } => (owner, None),
+            DriverMode::Live(provider) => (true, Some(provider)),
+        };
         let _owner = match lease {
             Some(file) => file,
             None => eval::recovery::new_lease(&self.db, &self.repo_root, "driver", id, id)?,
@@ -210,7 +262,16 @@ impl Workbench {
             task_id: task.id.clone(),
             task_fingerprint: format!("v1:{:x}", Sha256::digest(serde_json::to_vec(task)?)),
             workspace: copy.to_string_lossy().into_owned(),
-            evidence_kind: "scripted_debug".into(),
+            evidence_kind: if live_provider.is_some() {
+                if cfg!(test) {
+                    "provider_boundary_fixture"
+                } else {
+                    "live_model"
+                }
+            } else {
+                "scripted_debug"
+            }
+            .into(),
             state: "started".into(),
             flow_completed: false,
             independent_passed: false,
@@ -321,7 +382,19 @@ impl Workbench {
                     rusqlite::params![worker.project_id, aid],
                 )?;
             }
-            let mut cursor = ScriptCursor {
+            if let Some(provider) = &live_provider {
+                worker.providers.clear();
+                worker.register_provider(
+                    &frozen
+                        .ok_or_else(|| ApiError::BadInput("live_batch_missing".into()))?
+                        .0
+                        .request
+                        .main_slot,
+                    provider.clone(),
+                );
+            }
+            let mut cursor = EvaluationCursor {
+                live: live_provider.is_some(),
                 roles,
                 pack: full_pack,
                 slot: frozen
@@ -343,7 +416,7 @@ impl Workbench {
                 eval::control::watch(&copy, worker.sessions.clone(), worker.tasks.clone())?;
             #[cfg(test)]
             worker.inject_evaluation_service_failure_fixture()?;
-            drive_scripted(&mut worker, task, &mut cursor, &mut result)?;
+            drive_evaluation(&mut worker, task, &mut cursor, &mut result)?;
             self.save_evaluation_cursor(&cursor, &result)?;
             Ok(())
         })();
@@ -373,7 +446,11 @@ impl Workbench {
             None,
             None,
             None,
-            "evaluation_scripted_run",
+            if live_provider.is_some() {
+                "evaluation_live_run"
+            } else {
+                "evaluation_scripted_run"
+            },
             &format!("{}:{}", result.state, result.id),
             started,
         );
@@ -382,7 +459,9 @@ impl Workbench {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub(super) struct ScriptCursor {
+pub(super) struct EvaluationCursor {
+    #[serde(default)]
+    pub live: bool,
     pub roles: Vec<(String, String)>,
     pub pack: Option<PackDef>,
     pub slot: String,
@@ -396,10 +475,10 @@ pub(super) struct ScriptCursor {
     pub rework: bool,
 }
 
-pub(super) fn drive_scripted(
+pub(super) fn drive_evaluation(
     worker: &mut Workbench,
     task: &eval::EvaluationTask,
-    cursor: &mut ScriptCursor,
+    cursor: &mut EvaluationCursor,
     result: &mut EvaluationResult,
 ) -> Result<(), ApiError> {
     let stages: Vec<Vec<String>> = match &cursor.pack {
@@ -410,24 +489,29 @@ pub(super) fn drive_scripted(
     while cursor.stage < stages.len() {
         while cursor.role_index < stages[cursor.stage].len() {
             let role = &stages[cursor.stage][cursor.role_index];
-            let activation = cursor
-                .activations
-                .get(cursor.next_activation)
-                .ok_or_else(|| ApiError::BadInput("missing scripted activation".into()))?;
-            if activation.role != *role {
-                return Err(ApiError::BadInput(
-                    "scripted role differs from frozen execution order".into(),
-                ));
-            }
             let consumed = cursor.permission.as_ref().map(|(_, n)| *n).unwrap_or(0);
-            let provider = Arc::new(ScriptedProvider::new(
-                scripted_responses(activation)
-                    .into_iter()
-                    .skip(consumed)
-                    .collect(),
-            ));
-            worker.providers.clear();
-            worker.register_provider(&cursor.slot, provider.clone());
+            let provider = if cursor.live {
+                None
+            } else {
+                let activation = cursor
+                    .activations
+                    .get(cursor.next_activation)
+                    .ok_or_else(|| ApiError::BadInput("missing scripted activation".into()))?;
+                if activation.role != *role {
+                    return Err(ApiError::BadInput(
+                        "scripted role differs from frozen execution order".into(),
+                    ));
+                }
+                let provider = Arc::new(ScriptedProvider::new(
+                    scripted_responses(activation)
+                        .into_iter()
+                        .skip(consumed)
+                        .collect(),
+                ));
+                worker.providers.clear();
+                worker.register_provider(&cursor.slot, provider.clone());
+                Some(provider)
+            };
             let aid = worker.agent_by_role(role)?;
             let outcome = if consumed > 0 {
                 worker.run_turn_agent(
@@ -443,7 +527,10 @@ pub(super) fn drive_scripted(
                 TurnOutcome::AwaitingPermission(question_id) => {
                     // D07: retain response offset, role and activation. Replaying
                     // the scripted tool would create a second side-effect intent.
-                    cursor.permission = Some((question_id, consumed + provider.recorded().len()));
+                    cursor.permission = Some((
+                        question_id,
+                        consumed + provider.as_ref().map(|p| p.recorded().len()).unwrap_or(1),
+                    ));
                     result.state = "waiting_human".into();
                     return Ok(());
                 }
@@ -512,7 +599,7 @@ pub(super) fn drive_scripted(
 impl Workbench {
     pub(super) fn save_evaluation_cursor(
         &self,
-        cursor: &ScriptCursor,
+        cursor: &EvaluationCursor,
         result: &EvaluationResult,
     ) -> Result<(), ApiError> {
         let now = i64::try_from(eval::now_ms()?).map_err(std::io::Error::other)?;

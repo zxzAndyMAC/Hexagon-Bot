@@ -298,7 +298,8 @@ pub(crate) fn execution_fingerprint(root: &Path) -> io::Result<String> {
     if !path.is_file() {
         return Err(err("worker evidence missing"));
     }
-    let db = Db::open(path).map_err(err)?;
+    // Evaluation17: inspection must not migrate a worker on every report row.
+    let db = Db::open_current(path).map_err(err)?;
     let (actions, events) = facts(&db)?;
     config::digest(&(
         &actions,
@@ -519,7 +520,7 @@ fn observe(host: &Db, run_id: &str, persist: bool) -> io::Result<OutcomeObservat
     }
     let dbpath = root.join(".hexagon/state.db");
     let worker = if dbpath.is_file() {
-        Db::open(&dbpath).ok()
+        Db::open_current(&dbpath).ok()
     } else {
         None
     };

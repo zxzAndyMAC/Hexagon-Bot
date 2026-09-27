@@ -235,18 +235,13 @@ fn public_url(text: &str) -> Option<String> {
 }
 
 pub(crate) fn code_fingerprint() -> io::Result<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(std::env::current_exe()?)?;
-    let mut digest = Sha256::new();
-    let mut bytes = [0u8; 65536];
-    loop {
-        let n = file.read(&mut bytes)?;
-        if n == 0 {
-            break;
-        }
-        digest.update(&bytes[..n]);
-    }
-    Ok(format!("v1:{:x}", digest.finalize()))
+    // D14 / ticket 17: bind shared core code, not the CLI/Desktop executable.
+    // Test builds remain a distinct identity even with identical source inputs.
+    Ok(format!(
+        "core-v2:{}:{}",
+        env!("HEXAGON_CORE_BUILD_ID"),
+        if cfg!(test) { "test" } else { "product" }
+    ))
 }
 
 fn versions() -> io::Result<BTreeMap<String, Option<String>>> {
@@ -512,6 +507,14 @@ pub(crate) fn read(db: &Db, id: &str) -> io::Result<EvaluationBatch> {
 }
 
 fn with_retirement(db: &Db, mut batch: EvaluationBatch) -> io::Result<EvaluationBatch> {
+    // Owner observations alone cannot open execution. Only a host receipt
+    // tied to two actual requests and the paid authority clears this guard.
+    if super::live::proof(db, &batch).unwrap_or(false) {
+        batch
+            .blocks
+            .retain(|b| *b != AdmissionBlock::ExecutionGuardsPending);
+    }
+    batch.ready = batch.blocks.is_empty();
     for case in batch
         .request
         .corpora

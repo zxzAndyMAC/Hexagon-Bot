@@ -16,6 +16,7 @@ pub enum EvaluationArm {
 pub enum PlanKind {
     Pilot,
     Formal,
+    Candidate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,13 +120,29 @@ fn entries(batch: &super::EvaluationBatch, kind: PlanKind) -> io::Result<Vec<Pla
     for case in batch.request.corpora.iter().flat_map(|c| &c.cases) {
         let selected = match kind {
             PlanKind::Pilot => case.pilot,
-            PlanKind::Formal => case.split == "heldout",
+            PlanKind::Formal | PlanKind::Candidate => case.split == "heldout",
         };
         if selected {
-            for repetition in 1..=if kind == PlanKind::Formal { 3 } else { 1 } {
+            for repetition in 1..=if kind == PlanKind::Pilot { 1 } else { 3 } {
                 pairs.push((case.task.id.clone(), repetition));
             }
         }
+    }
+    if kind == PlanKind::Candidate {
+        shuffle(&mut pairs)?;
+        return Ok(pairs
+            .into_iter()
+            .enumerate()
+            .map(|(position, (task_id, repetition))| PlannedRun {
+                position,
+                task_id,
+                repetition,
+                arm: EvaluationArm::Full,
+                state: PlannedState::Planned,
+                run_id: None,
+                reason: Some("awaiting_admission".into()),
+            })
+            .collect());
     }
     order_pairs(pairs)
 }
@@ -161,12 +178,22 @@ pub(crate) fn create(db: &Db, batch_id: &str, kind: PlanKind) -> io::Result<Eval
     let kind_json = match kind {
         PlanKind::Pilot => "pilot",
         PlanKind::Formal => "formal",
+        PlanKind::Candidate => "candidate",
     };
-    let tx =
-        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
-            .map_err(err)?;
+    let tx = if db.conn().is_autocommit() {
+        Some(
+            rusqlite::Transaction::new_unchecked(
+                db.conn(),
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(err)?,
+        )
+    } else {
+        None
+    };
     use rusqlite::OptionalExtension;
-    let existing: Option<String> = tx
+    let existing: Option<String> = db
+        .conn()
         .query_row(
             "SELECT id FROM evaluation_plans WHERE batch_id=?1 AND kind=?2",
             rusqlite::params![batch_id, kind_json],
@@ -175,7 +202,9 @@ pub(crate) fn create(db: &Db, batch_id: &str, kind: PlanKind) -> io::Result<Eval
         .optional()
         .map_err(err)?;
     if let Some(id) = existing {
-        tx.commit().map_err(err)?;
+        if let Some(tx) = tx {
+            tx.commit().map_err(err)?;
+        }
         return read(db, &id);
     }
     let plan = EvaluationPlan {
@@ -186,11 +215,13 @@ pub(crate) fn create(db: &Db, batch_id: &str, kind: PlanKind) -> io::Result<Eval
         kind,
         entries: entries(&batch, kind)?,
     };
-    tx.execute("INSERT INTO evaluation_plans(id,batch_id,kind,plan_json,fingerprint) VALUES (?1,?2,?3,?4,?5)",rusqlite::params![plan.id,batch_id,kind_json,serde_json::to_string(&plan)?,config::digest(&plan)?]).map_err(err)?;
+    db.conn().execute("INSERT INTO evaluation_plans(id,batch_id,kind,plan_json,fingerprint) VALUES (?1,?2,?3,?4,?5)",rusqlite::params![plan.id,batch_id,kind_json,serde_json::to_string(&plan)?,config::digest(&plan)?]).map_err(err)?;
     for entry in &plan.entries {
-        tx.execute("INSERT INTO evaluation_plan_runs(plan_id,position,state,reason) VALUES (?1,?2,'planned','awaiting_admission')",rusqlite::params![plan.id,i64::try_from(entry.position).map_err(err)?]).map_err(err)?;
+        db.conn().execute("INSERT INTO evaluation_plan_runs(plan_id,position,state,reason) VALUES (?1,?2,'planned','awaiting_admission')",rusqlite::params![plan.id,i64::try_from(entry.position).map_err(err)?]).map_err(err)?;
     }
-    tx.commit().map_err(err)?;
+    if let Some(tx) = tx {
+        tx.commit().map_err(err)?;
+    }
     read(db, &plan.id)
 }
 
@@ -246,8 +277,13 @@ pub(crate) fn claim(
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
-    super::budget::before_claim(db, root, id)?;
     let plan = read(db, id)?;
+    let captured_candidate = if plan.kind == PlanKind::Candidate {
+        super::candidate::validate_start(db, root, id)?
+    } else {
+        false
+    };
+    super::budget::before_claim(db, root, id)?;
     let started = std::time::Instant::now();
     let position = next_position(&plan.entries).inspect_err(|_| {
         crate::diag::note(
@@ -263,7 +299,8 @@ pub(crate) fn claim(
         );
     })?;
     let batch = config::read(db, &plan.batch_id)?;
-    if plan.kind == PlanKind::Formal
+    if matches!(plan.kind, PlanKind::Formal | PlanKind::Candidate)
+        && !captured_candidate
         && batch
             .blocks
             .contains(&super::AdmissionBlock::HeldoutRetired)

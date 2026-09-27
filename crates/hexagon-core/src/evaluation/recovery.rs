@@ -30,7 +30,7 @@ pub struct RecoveryReport {
 }
 
 pub(crate) fn inspect(db: &Db, root: &std::path::Path) -> io::Result<RecoveryReport> {
-    let mut q=db.conn().prepare("SELECT id FROM evaluation_runs UNION SELECT run_id FROM evaluation_plan_runs WHERE run_id IS NOT NULL UNION SELECT run_id FROM evaluation_leases WHERE kind='driver' ORDER BY 1").map_err(err)?;
+    let mut q=db.conn().prepare("SELECT id FROM evaluation_runs UNION SELECT run_id FROM evaluation_plan_runs WHERE run_id IS NOT NULL UNION SELECT run_id FROM evaluation_leases WHERE kind IN ('driver','activity') UNION SELECT id FROM evaluation_preflights UNION SELECT id FROM evaluation_policy_generations ORDER BY 1").map_err(err)?;
     let ids = q
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(err)?
@@ -46,6 +46,17 @@ pub(crate) fn inspect(db: &Db, root: &std::path::Path) -> io::Result<RecoveryRep
     })
 }
 fn inspect_one(db: &Db, root: &std::path::Path, id: &str) -> io::Result<RecoveryEntry> {
+    match activity(db, id) {
+        Ok(Some(activity)) => return inspect_activity(db, root, id, &activity),
+        Ok(None) => (),
+        Err(_) => {
+            return Ok(RecoveryEntry {
+                run_id: id.into(),
+                state: RecoveryState::Corrupt,
+                reasons: vec!["activity_record_invalid".into()],
+            })
+        }
+    }
     let exists: bool = db
         .conn()
         .query_row(
@@ -243,6 +254,9 @@ pub(crate) fn resume_driver(
 }
 
 pub(crate) fn reconcile(db: &Db, root: &std::path::Path, id: &str) -> io::Result<RecoveryEntry> {
+    if let Some(activity) = activity(db, id)? {
+        return reconcile_activity(db, root, id, activity);
+    }
     let _owner = resume_driver(db, root, id)?;
     let exists: bool = db
         .conn()
@@ -418,6 +432,143 @@ pub(crate) fn crash_at(point: CrashPoint) {
     if CRASH.get() == Some(point) {
         std::process::exit(86);
     }
+}
+
+// Activities have no acceptance result or task coverage. Reconciliation can
+// only close an abandoned activity as interrupted, never manufacture a receipt.
+enum Activity {
+    Preflight(super::PreflightReceipt),
+    Generation(super::PolicyGeneration),
+}
+impl Activity {
+    fn state(&self) -> &str {
+        match self {
+            Self::Preflight(r) => &r.state,
+            Self::Generation(r) => &r.state,
+        }
+    }
+    fn workspace(&self) -> &str {
+        match self {
+            Self::Preflight(r) => &r.workspace,
+            Self::Generation(r) => &r.workspace,
+        }
+    }
+}
+fn activity(db: &Db, id: &str) -> io::Result<Option<Activity>> {
+    let preflight: bool = db
+        .conn()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM evaluation_preflights WHERE id=?1)",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    if preflight {
+        return Ok(Some(Activity::Preflight(super::live::read(db, id)?)));
+    }
+    let context: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT context_id FROM evaluation_policy_generations WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(err)?;
+    context
+        .map(|c| super::generation::read(db, &c).map(Activity::Generation))
+        .transpose()
+}
+fn inspect_activity(
+    db: &Db,
+    root: &std::path::Path,
+    id: &str,
+    activity: &Activity,
+) -> io::Result<RecoveryEntry> {
+    let state = if matches!(
+        activity.state(),
+        "passed" | "failed" | "completed" | "interrupted"
+    ) {
+        RecoveryState::Ended
+    } else {
+        match probe_lease(db, root, "activity", id)? {
+            LeaseProbe::Live => RecoveryState::Running,
+            LeaseProbe::Available(_) => RecoveryState::NeedsReconciliation,
+            _ => RecoveryState::Unverified,
+        }
+    };
+    Ok(RecoveryEntry {
+        run_id: id.into(),
+        state,
+        reasons: if state == RecoveryState::NeedsReconciliation {
+            vec!["activity_owner_lost".into()]
+        } else {
+            vec![]
+        },
+    })
+}
+fn reconcile_activity(
+    db: &Db,
+    root: &std::path::Path,
+    id: &str,
+    mut activity: Activity,
+) -> io::Result<RecoveryEntry> {
+    let _owner = match probe_lease(db, root, "activity", id)? {
+        LeaseProbe::Available(file) => file,
+        _ => return Err(refusal(id, "activity_lease_unverifiable")),
+    };
+    let workspace = std::path::Path::new(activity.workspace());
+    let expected = root.canonicalize()?.join(match activity {
+        Activity::Preflight(_) => ".hexagon/evaluation-preflights",
+        Activity::Generation(_) => ".hexagon/evaluation-generators",
+    });
+    if workspace.canonicalize()?.parent() != Some(expected.as_path())
+        || workspace.symlink_metadata()?.is_symlink()
+    {
+        return Err(refusal(id, "activity_workspace_invalid"));
+    }
+    // D10/17: these fixed synchronous model calls expose no task tools or
+    // detached work. Their activity OS lease is the execution boundary.
+    // Task evaluation-work.lock does not exist in a probe/generation worker.
+    let worker = Db::open_current(workspace.join(".hexagon/state.db")).map_err(err)?;
+    crate::usage::recover_requests(&worker, workspace, crate::PROJECT_ID).map_err(err)?;
+    let paid = match &activity {
+        Activity::Preflight(_) => true,
+        Activity::Generation(op) => op.source_kind != "scripted_generation",
+    };
+    super::budget::live::recover_activity(db, root, workspace, id, paid)?;
+    // Completed source and authority close are in separate databases. Repair
+    // that crash window without downgrading or recreating completed evidence.
+    if matches!(
+        activity.state(),
+        "passed" | "failed" | "completed" | "interrupted"
+    ) {
+        return inspect_activity(db, root, id, &activity);
+    }
+    match &mut activity {
+        Activity::Preflight(receipt) => {
+            receipt.state = "interrupted".into();
+            receipt.reason = Some("activity_owner_lost".into());
+            super::live::save(db, receipt)?;
+        }
+        Activity::Generation(op) => {
+            op.state = "interrupted".into();
+            op.reason = Some("activity_owner_lost".into());
+            super::generation::save(db, op, None)?;
+        }
+    }
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        Some(crate::PROJECT_ID),
+        None,
+        None,
+        None,
+        "evaluation_activity_recovery",
+        "activity_owner_lost",
+        std::time::Instant::now(),
+    );
+    inspect_activity(db, root, id, &activity)
 }
 
 #[cfg(test)]

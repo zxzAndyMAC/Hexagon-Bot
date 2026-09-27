@@ -7441,6 +7441,7 @@ fn request_usage_unknown_prices_continue_with_or_without_budget() {
             orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
             let mut response = text_response("done");
             response.usage = crate::provider::Usage {
+                observed_model: None,
                 prompt_tokens: 1000,
                 completion_tokens: 1000,
                 unpriced: false,
@@ -8010,6 +8011,7 @@ fn request_budget_rechecks_after_first_response_even_when_next_price_unknown() {
     crate::usage::set_limit(&wb.db, "p1", Some(1)).unwrap();
     let mut first = tool_response(vec![("r1", "fs_read", json!({"path":"a.txt"}))]);
     first.usage = crate::provider::Usage {
+        observed_model: None,
         prompt_tokens: 1000,
         completion_tokens: 0,
         prompt_reported: true,
@@ -11015,4 +11017,355 @@ fn policy_candidate_freezes_uninstantiated_reviewers_and_host_review_mode() {
             "configuration drift must be distinguished from missing evidence: {error:?}"
         );
     }
+}
+
+#[test]
+fn candidate_evaluation_has_own_frozen_heldout_plan_and_never_borrows_comparison() {
+    let (_dir, wb) = git_wb(&["流程优化"]);
+    let (pid, _qid) = queue_policy_candidate(&wb, 7);
+    let mut request = super::evaluation_config_tests::request();
+    request.full_pack = PackDef::pinned(&wb.repo_root).unwrap();
+    let baseline = wb.freeze_evaluation(&request, None).unwrap();
+    let generation = wb.prepare_evaluation_generation(&baseline.id).unwrap();
+    let comparison = wb
+        .plan_evaluation(&baseline.id, crate::evaluation::PlanKind::Formal)
+        .unwrap();
+    let candidate = wb.freeze_policy_evaluation(&pid, &generation.id).unwrap();
+    assert_ne!(candidate.batch_id, baseline.id);
+    assert_ne!(candidate.plan_id, comparison.id);
+    let plan = wb.evaluation_plan(&candidate.plan_id).unwrap();
+    assert_eq!(plan.kind, crate::evaluation::PlanKind::Candidate);
+    assert_eq!(plan.entries.len(), 24);
+    assert!(plan
+        .entries
+        .iter()
+        .all(|r| r.arm == crate::evaluation::EvaluationArm::Full && r.run_id.is_none()));
+    let frozen = wb.evaluation_batch(&candidate.batch_id).unwrap();
+    assert_eq!(frozen.request.full_pack.knobs.flag_patience(), 7);
+    let evidence = wb.policy_evaluation(&pid).unwrap();
+    assert_eq!(
+        evidence.state,
+        crate::evaluation::CandidateQuality::Incomplete
+    );
+    assert_eq!(evidence.original_planned, 24);
+    assert_eq!(evidence.original_passed, 0);
+    assert!(!evidence.adoptable);
+    assert!(evidence.rows.iter().all(|r| r.run_id.is_none()));
+}
+
+#[test]
+fn candidate_evaluation_rejects_disclosure_and_preserves_stale_bindings() {
+    let (_dir, wb) = git_wb(&["流程优化"]);
+    let (pid, qid) = queue_policy_candidate(&wb, 7);
+    let mut request = super::evaluation_config_tests::request();
+    request.full_pack = PackDef::pinned(&wb.repo_root).unwrap();
+    let batch = wb.freeze_evaluation(&request, None).unwrap();
+    let generation = wb.prepare_evaluation_generation(&batch.id).unwrap();
+    let source = wb.freeze_policy_evaluation(&pid, &generation.id).unwrap();
+    assert_eq!(source.source_kind, "existing_proposal_unverified");
+    assert_eq!(
+        wb.freeze_policy_evaluation(&pid, &generation.id)
+            .unwrap()
+            .plan_id,
+        source.plan_id
+    );
+    let task = request
+        .corpora
+        .iter()
+        .flat_map(|c| &c.cases)
+        .find(|c| c.split == "heldout")
+        .unwrap()
+        .task
+        .id
+        .clone();
+    wb.reveal_evaluation_task(&generation.id, &task).unwrap();
+    assert_eq!(
+        wb.policy_evaluation(&pid).unwrap().state,
+        crate::evaluation::CandidateQuality::Stale
+    );
+    let fresh = wb.prepare_evaluation_generation(&batch.id).unwrap();
+    assert!(wb.freeze_policy_evaluation(&pid, &fresh.id).is_err());
+    crate::proposals::reject_at_stamp(
+        &wb.db,
+        &wb.ctx_for("owner", None),
+        &qid,
+        "retain regression only",
+    )
+    .unwrap();
+    let (pid2, _) = queue_policy_candidate(&wb, 8);
+    assert!(wb.freeze_policy_evaluation(&pid2, &fresh.id).is_err());
+    assert_eq!(
+        wb.evaluation_plan(&source.plan_id).unwrap().entries.len(),
+        24
+    );
+}
+
+#[test]
+fn isolated_candidate_generation_records_actual_source_without_claiming_live_evidence() {
+    let (dir, memory) = git_wb(&["流程优化"]);
+    drop(memory);
+    let wb = Workbench::open_scoped(
+        dir.path(),
+        "candidate generation",
+        &[("a0".into(), "流程优化".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    let (_existing, qid) = queue_policy_candidate(&wb, 7);
+    let mut request = super::evaluation_config_tests::request();
+    request.full_pack = PackDef::pinned(&wb.repo_root).unwrap();
+    let baseline = wb.freeze_evaluation(&request, None).unwrap();
+    let context = wb.prepare_evaluation_generation(&baseline.id).unwrap();
+    crate::proposals::reject_at_stamp(
+        &wb.db,
+        &wb.ctx_for("owner", None),
+        &qid,
+        "superseded by isolated generation",
+    )
+    .unwrap();
+    let generated = wb
+        .generate_policy_candidate_debug(&context.id, &[json!({"kind":"flag_patience","value":9})])
+        .unwrap();
+    assert_eq!(generated.source_kind, "scripted_generation");
+    assert_ne!(generated.proposal_id, _existing);
+    assert_eq!(
+        wb.evaluation_batch(&generated.batch_id)
+            .unwrap()
+            .request
+            .full_pack
+            .knobs
+            .flag_patience(),
+        9
+    );
+    assert!(
+        !wb.policy_evaluation(&generated.proposal_id)
+            .unwrap()
+            .adoptable
+    );
+    assert_eq!(wb.evaluation_budget_debug().unwrap().requests, 1);
+    let op = wb.policy_generation(&context.id).unwrap();
+    assert_eq!(op.state, "completed");
+    assert!(op.request_id.is_some());
+    assert_eq!(
+        op.proposal_id.as_deref(),
+        Some(generated.proposal_id.as_str())
+    );
+    assert!(wb
+        .generate_policy_candidate_debug(&context.id, &[json!({"kind":"flag_patience","value":10})])
+        .is_err());
+    assert_eq!(wb.evaluation_budget_debug().unwrap().requests, 1);
+    assert_eq!(
+        wb.policy_evaluation(&generated.proposal_id).unwrap().state,
+        crate::evaluation::CandidateQuality::Incomplete
+    );
+    let heldout = request
+        .corpora
+        .iter()
+        .flat_map(|c| &c.cases)
+        .find(|c| c.split == "heldout")
+        .unwrap()
+        .task
+        .id
+        .clone();
+    wb.reveal_evaluation_task(&context.id, &heldout).unwrap();
+    // D05: later feedback cannot retroactively taint an immutable earlier output.
+    assert_eq!(
+        wb.policy_evaluation(&generated.proposal_id).unwrap().state,
+        crate::evaluation::CandidateQuality::Incomplete
+    );
+    let fresh = wb.prepare_evaluation_generation(&baseline.id).unwrap();
+    assert!(wb
+        .generate_policy_candidate_debug(&fresh.id, &[json!({"kind":"flag_patience","value":10})])
+        .is_err());
+    std::fs::write(
+        std::path::Path::new(&context.workspace).join("development.json"),
+        "changed inputs",
+    )
+    .unwrap();
+    assert_eq!(
+        wb.policy_evaluation(&generated.proposal_id).unwrap().state,
+        crate::evaluation::CandidateQuality::Stale
+    );
+}
+
+#[test]
+fn isolated_live_candidate_needs_all_original_attempts_and_never_claims_real_benefit() {
+    use super::evaluation_live_tests::{
+        attest_price, fixture_configuration, priced_request, task_provider, ProbeProvider,
+        TaskProvider,
+    };
+    use crate::evaluation as eval;
+    use crate::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason};
+    let _config = fixture_configuration();
+    let (dir, memory) = git_wb(&["流程优化"]);
+    drop(memory);
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "candidate boundary",
+        &[("a0".into(), "流程优化".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    let request = priced_request();
+    request.full_pack.pin(dir.path()).unwrap();
+    wb.register_provider("default", Arc::new(ProbeProvider { wrong_model: false }));
+    let baseline = wb.freeze_evaluation(&request, None).unwrap();
+    attest_price(&wb, &baseline);
+    assert_eq!(
+        wb.preflight_evaluation(&baseline.id).unwrap().state,
+        "passed"
+    );
+    let context = wb.prepare_evaluation_generation(&baseline.id).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(TaskProvider(ScriptedProvider::new(vec![ChatResponse {
+            content: vec![ContentBlock::Text {
+                text: json!({"edits":[{"kind":"flag_patience","value":9}]}).to_string(),
+            }],
+            stop: StopReason::EndTurn,
+            usage: Default::default(),
+        }]))),
+    );
+    let source = wb.generate_policy_candidate(&context.id).unwrap();
+    assert_eq!(source.source_kind, "boundary_generation");
+    assert_eq!(
+        wb.policy_generation(&context.id).unwrap().state,
+        "completed"
+    );
+    let candidate = wb.evaluation_batch(&source.batch_id).unwrap();
+    attest_price(&wb, &candidate);
+    wb.register_provider("default", Arc::new(ProbeProvider { wrong_model: false }));
+    assert_eq!(
+        wb.preflight_evaluation(&candidate.id).unwrap().state,
+        "passed"
+    );
+    assert!(!wb.policy_evaluation(&source.proposal_id).unwrap().adoptable);
+    let plan = wb.evaluation_plan(&source.plan_id).unwrap();
+    assert_eq!(plan.entries.len(), 24);
+    for (index, entry) in plan.entries.iter().enumerate() {
+        let task = &request
+            .corpora
+            .iter()
+            .flat_map(|c| &c.cases)
+            .find(|c| c.task.id == entry.task_id)
+            .unwrap()
+            .task;
+        wb.register_provider("default", task_provider(task));
+        let run = wb.evaluate_next_live(&plan.id).unwrap();
+        assert_eq!(
+            run.state, "waiting_human",
+            "attempt {index}: {:?}",
+            run.error
+        );
+        let attention = wb
+            .begin_evaluation_attention(&run.id, eval::EvaluationActor::Scripted)
+            .unwrap();
+        let completed = wb
+            .submit_evaluation_decision(&attention, eval::EvaluationDecision::ApproveStamp)
+            .unwrap();
+        assert_eq!(
+            completed.state, "completed",
+            "attempt {index}: {:?}",
+            completed.error
+        );
+        assert!(completed.independent_passed);
+        assert_eq!(completed.evidence_kind, "provider_boundary_fixture");
+        // Coverage mutations are property-tested separately. Inspect the first
+        // and penultimate attempts here; avoid re-scanning all previous workers
+        // after every step of this real 24-attempt integration path.
+        if index == 0 || index == 22 {
+            let quality = wb.policy_evaluation(&source.proposal_id).unwrap();
+            assert_eq!(
+                quality.original_passed,
+                index + 1,
+                "{:?}",
+                quality.rows[index]
+            );
+            assert_eq!(quality.adoptable, index == 23, "{:?}", quality.reasons);
+        }
+    }
+    let quality = wb.policy_evaluation(&source.proposal_id).unwrap();
+    assert_eq!(quality.state, eval::CandidateQuality::Qualified);
+    assert!(quality
+        .rows
+        .iter()
+        .all(|r| !r.formal_success && r.human_ms.is_none()));
+    assert_eq!(
+        PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),
+        2,
+        "qualification does not apply a policy"
+    );
+    assert!(wb.evaluate_next_live(&source.plan_id).is_err());
+    // D05: later feedback preserves only this exact captured candidate. No new
+    // candidate may reuse the now disclosed heldout set.
+    let heldout = &plan.entries[0].task_id;
+    wb.reveal_evaluation_task(&context.id, heldout).unwrap();
+    assert!(wb.policy_evaluation(&source.proposal_id).unwrap().adoptable);
+    let fresh = wb.prepare_evaluation_generation(&baseline.id).unwrap();
+    assert!(wb.generate_policy_candidate(&fresh.id).is_err());
+}
+
+#[test]
+fn evaluation_generation_committed_crash_child() {
+    let Some(root) = std::env::var_os("HEXAGON_TEST_ACTIVITY_CRASH_ROOT") else {
+        return;
+    };
+    let context = std::env::var("HEXAGON_TEST_ACTIVITY_CRASH_CONTEXT").unwrap();
+    let wb = Workbench::open_evaluation_host(Path::new(&root)).unwrap();
+    wb.generate_policy_candidate_debug(&context, &[json!({"kind":"flag_patience","value":9})])
+        .unwrap();
+    panic!("committed activity checkpoint must exit");
+}
+
+#[test]
+fn isolated_generation_completed_source_survives_exit_before_budget_close() {
+    let (dir, memory) = git_wb(&["流程优化"]);
+    drop(memory);
+    let wb = Workbench::open_scoped(
+        dir.path(),
+        "generation crash",
+        &[("a0".into(), "流程优化".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    let request = super::evaluation_config_tests::request();
+    request.full_pack.pin(dir.path()).unwrap();
+    let batch = wb.freeze_evaluation(&request, None).unwrap();
+    let context = wb.prepare_evaluation_generation(&batch.id).unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "api::tests::evaluation_generation_committed_crash_child",
+            "--nocapture",
+        ])
+        .env("HEXAGON_TEST_ACTIVITY_CRASH_ROOT", dir.path())
+        .env("HEXAGON_TEST_ACTIVITY_CRASH_CONTEXT", &context.id)
+        .env("HEXAGON_TEST_ACTIVITY_CRASH_POINT", "committed")
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(86),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let before = wb.policy_generation(&context.id).unwrap();
+    assert_eq!(before.state, "completed");
+    let money = wb.evaluation_budget_debug().unwrap();
+    assert_eq!(money.requests, 1);
+    assert!(money.reserved_mc > 0);
+    assert_eq!(
+        wb.reconcile_evaluation_run(&before.id).unwrap().state,
+        crate::evaluation::RecoveryState::Ended
+    );
+    let after = wb.policy_generation(&context.id).unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    assert_eq!(wb.evaluation_budget_debug().unwrap().requests, 1);
+    assert_eq!(wb.evaluation_budget_debug().unwrap().reserved_mc, 0);
 }
