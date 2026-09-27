@@ -1,6 +1,6 @@
 # 任务收益评测
 
-当前入口仅支持离线脚本调试和持久结果读取，不调用真实模型、不证明真人收益。
+入口支持离线脚本、受预算和预检约束的真实模型执行、真人待决计时、配对报告及独立策略质量验收。脚本只验证工具行为，不能证明真人收益；真实调用必须先满足下文准入。
 
 ```sh
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -14,7 +14,7 @@ cargo run -p hexagon-core --example evaluate -- read /tmp/hexagon-evaluation eva
 
 结果分别呈现执行状态、流程完成、独立验收与负责人例外。验收保存命令、退出状态、输出、文件和权限指纹、起止时间；测中修改文件或权限不能通过。离线脚本没有完成负责人最终验收，流程完成与例外不会凭脚本结束自动设为真。
 
-debug 夹具仅用于工具冒烟，不计入规格要求的二十个任务。完整对照、预算、停止与恢复、策略质量门及真实实验按后续票据实施。
+debug 夹具仅用于工具冒烟，不计入规格要求的二十个任务。完整对照、预算、停止与恢复和策略质量门已实现；实际覆盖须以宿主报告为准，不能由实现完成推定实验完成。
 
 类别清单可通过同一宿主入口执行自检：
 
@@ -37,9 +37,9 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 
 `CONFIG.json` 对应 `FreezeRequest`：四份完整 `corpora`、现有 `main_slot`、`fast_role`、完整 `full_pack`、`prices`、`limits` 及 `statistics_version: "paired-benefit-v1"`。金额单位为千分之一美分（`total_mc: 20000000` = 200 美元，`pilot_mc: 2000000` = 20 美元，`run_mc: 500000` = 5 美元）；`requests: 80`、`active_ms: 1800000`。正式配置必须使用开发阶段选定的现有角色与流程包，不能以测试用简化流程代替。
 
-冻结记录包含实际槽绑定、供应商和型号、输出界限、角色能力、宿主判定与隔离约定、二进制指纹、解释器及系统环境。供应商默认生成参数标为未指定，不虚构具体温度。URL 带凭据、查询串或片段时不作为可用身份；钥匙正文不进入配置。
+冻结记录包含实际槽绑定、供应商和型号、输出界限、角色能力、宿主判定与隔离约定、共享产品核心构建身份、解释器及系统环境。供应商默认生成参数标为未指定，不虚构具体温度。URL 带凭据、查询串或片段时不作为可用身份；钥匙正文不进入配置。
 
-`record-verification HOST BATCH_ID OBSERVATION.json` 保存来源核对观察（`dimension: model|tools|price`、`outcome: unknown|failed|reported_pass`、`batch_fingerprint`、不带秘密的 `source_url`、`checked_at`）。观察与可计费调用凭据分开：报告通过不会清除 `model_not_verified`、`tools_not_verified` 或 `price_not_verified`。正式准入还需后续隔离、共享预算与停止机制，当前以 `execution_guards_pending` 明示，配置存在不等于可调用。
+`record-verification HOST BATCH_ID OBSERVATION.json` 保存来源核对观察（`dimension: model|tools|price`、`outcome: unknown|failed|reported_pass`、`batch_fingerprint`、不带秘密的 `source_url`、`checked_at`）。观察与可计费调用凭据分开：报告通过不会清除 `model_not_verified`、`tools_not_verified` 或 `price_not_verified`。真实准入还需实际预检、隔离、共享预算与停止机制，当前以 `execution_guards_pending` 明示，配置存在不等于可调用。
 
 `plan HOST BATCH_ID pilot|formal` 保存配对顺序，重复调用返回原计划。正式计划为 8 个留出任务 × 3 次 × 两侧共 48 次，整体各 12 对由快速通道/完整流程先行。`read-plan HOST PLAN_ID` 保留每次的任务、重复号、路径、状态、运行身份及未启动原因；重读不洗牌。
 
@@ -49,13 +49,13 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 
 每次运行重建独立工作副本、数据库、会话和经验目录。受保护的 `.hexagon/evaluation-worker` 标记阻止继承全局可变技能与开关；内置技能仍由固定程序版本提供。计划只保存身份及状态，不复用上一侧的交付内容。
 
-`stop-plan HOST PLAN_ID` 原子停止后续调度：所有尚未启动项保留为 `not_run / owner_stopped`，已启动与终态事实保留，重开后不能悄悄续跑该计划。此命令当前只停止新增调度；在途取消与费用收场由后续停止机制接通。
+`stop-plan HOST PLAN_ID` 原子停止后续调度：所有尚未启动项保留为 `not_run / owner_stopped`，已启动与终态事实保留，重开后不能悄悄续跑该计划。此命令只停止新增调度；在途运行使用已实现的 `stop-run HOST RUN_ID`，取消未确认时保留未知费用。
 
-`generation HOST BATCH_ID` 创建与执行侧分离的新生成上下文，只有 12 个开发任务的公共字段及基线流程包；隐藏验收、预期输出、正确/错误参考均不复制。`read-generation HOST CONTEXT_ID` 检查材料指纹与污染状态。此入口只准备材料；付费生成和候选资格由后续候选链路处理。
+`generation HOST BATCH_ID` 创建与执行侧分离的新生成上下文，只有 12 个开发任务的公共字段及基线流程包；隐藏验收、预期输出、正确/错误参考均不复制。`read-generation HOST CONTEXT_ID` 检查材料指纹与污染状态。此入口只准备材料；付费生成和候选资格使用下文独立候选入口。
 
 向生成方提供留出反馈时，用 `reveal-task HOST CONTEXT_ID TASK_ID` 记录揭示：该上下文不能再作为干净生成来源，相关任务内容退役为回归用途。揭示与实际运行使用分别持久记录。任务的身份、分发元数据、环境/归属声明不能建立“新”留出内容；改名、改版本描述或重排依赖后，新批次仍会得到 `heldout_retired`，正式计划不能启动。配置指纹仍完整冻结这些声明。
 
-`check-isolation HOST` 运行固定边界探针并保存记录：公共需求必须可读，工具及终端/子进程不能读写外部隐藏文件，评测标记不能被改写，索引和模型请求不携带隐藏正文。正向对照防止把“进程根本没启动”当成隔离通过。`read-isolation HOST CHECK_ID` 重读绑定当前可执行文件指纹的宿主探针证据；该证据只证明被测边界，不是任务通过、真人收益或模型能力证明。
+`check-isolation HOST` 运行固定边界探针并保存记录：公共需求必须可读，工具及终端/子进程不能读写外部隐藏文件，评测标记不能被改写，索引和模型请求不携带隐藏正文。正向对照防止把“进程根本没启动”当成隔离通过。`read-isolation HOST CHECK_ID` 重读绑定共享产品核心构建身份的宿主探针证据；该证据只证明被测边界，不是任务通过、真人收益或模型能力证明。
 
 真人处理入口使用 `next-owner-debug HOST PLAN_ID SCRIPT.json` 开始一条保留真实待决的脚本运行，再用 `owner-session HOST RUN_ID` 处理。会话内 `start`/`continue` 开始计时，`guidance TEXT` 把额外指导放入该运行的普通负责人消息，`away` 结束区间，`timing` 显示分项时间，`quit` 离席。完整流程的 `approve` 调用原有盖章门面；`decision JSON` 提交带类型的裁决。快速通道的交付检查使用 `{"kind":"finish_review"}`，不会盖流程章或合入代码。非交互 stdin 标为 scripted；脚本模型运行即使由真人点击，也不能成为真实模型收益样本。
 
@@ -73,7 +73,7 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 
 预算离线回归先调用 `debug-budget-config HOST PLAN_ID PRICE.json`，再用原有 `next-debug` 或 `next-owner-debug`。`PRICE.json` 为明确的夹具价格与单请求界限：`{"prompt_per_1k_mc":1000,"completion_per_1k_mc":1000,"prompt_bound":2000,"output_bound":1000}`；只接受脚本供应商，不能作为真实价格凭据。计划开始前固定，开始后不可修改。配对两侧额度与领取第一侧在同一事务中保存。
 
-`budget-debug HOST` 返回该宿主的脚本账本；`budget HOST` 读取固定负责人首轮真实预算，改变 HOST 不会产生新的 200 美元额度。真实账本不存在时只返回未使用状态，不创建或消费它。真实实验入口仍关闭。金额为本地估算，不是供应商账单：`known_mc` 是已知部分，`reserved_mc` 包含配对未用额度和未知/在途预占，`unknown_mc` 与 `in_flight_mc` 是预占的子集，不能再扣一次。`available_mc` 是剩余额度。`requests` 为已准入且无法证明未发送的请求数；`confirmed_requests` 只包括实际响应或已报告用量的请求。请求数量按实际模型入口累计，包含规划、路由、判定、执行和子代理调用。
+`budget-debug HOST` 返回该宿主的脚本账本；`budget HOST` 读取固定负责人首轮真实预算，改变 HOST 不会产生新的 200 美元额度。真实账本不存在时只返回未使用状态，不创建或消费它。Live execution requires the paid preflight described below.金额为本地估算，不是供应商账单：`known_mc` 是已知部分，`reserved_mc` 包含配对未用额度和未知/在途预占，`unknown_mc` 与 `in_flight_mc` 是预占的子集，不能再扣一次。`available_mc` 是剩余额度。`requests` 为已准入且无法证明未发送的请求数；`confirmed_requests` 只包括实际响应或已报告用量的请求。请求数量按实际模型入口累计，包含规划、路由、判定、执行和子代理调用。
 
 ### Stop and cleanup
 
@@ -98,9 +98,11 @@ acquiring its OS lease. A live owner, missing identity, or corrupt worker bindin
 is rejected. Waiting for an owner stays distinct from interrupted execution.
 Lost attention handles retain unknown duration; requests without a durable
 receipt retain their full unknown fee hold. Recovery never retries tools or
-models, invents a missing result, or upgrades a failed attempt. Terminal results,
-budget closure, control and plan completion commit atomically. Reconciliation
-can repair legacy derived links while preserving the original terminal evidence.
+models, invents a missing result, or upgrades a failed attempt. Host results,
+control and plan completion commit in one transaction. Paid budget closure uses
+a separate database and idempotent reconciliation; it is not a cross-database
+atomic commit. Unknown reservations remain held. Reconciliation can repair
+derived links while preserving the original terminal evidence.
 
 ### Supplemental pairs
 
@@ -111,10 +113,86 @@ linking the terminal provider failure to its actual HTTP 502/503/504 request und
 the batch's frozen policy. Text saying “HTTP 503”, ordinary failure, timeouts,
 limits, stopped execution, and legacy batches without the policy do not qualify.
 
-`supplements HOST PLAN_ID` lists linked plans. Execute a supplemental plan through
-the normal `next-debug`/`next-owner-debug` entry: both sides get new workspaces,
+`supplements HOST PLAN_ID` lists linked plans. Execute real supplemental plans
+through `next-live HOST PLAN_ID`; `next-debug`/`next-owner-debug` remain limited
+to the scripted budget domain. Both sides get new workspaces,
 the same frozen batch and order, the same price and shared budget. A second
 supplement or supplement-of-supplement is refused. Original results and costs
 remain; reports must list supplements separately from original success rates
 and the three-original-repetitions quality requirement. Unknown fees still block
 execution and are never refunded to make room for a supplement.
+
+### Live preflight and execution
+
+`preflight HOST BATCH_ID` sends paid supplier requests. First freeze a compatible
+metered service, bounded text pricing and output limits; record the owner's
+verified price source through `record-verification`. Preflight checks actual
+model identity and nonce/tool-result exchanges, binding the complete receipt to
+the price observation, isolation check, shared budget and core build identity.
+CLI and desktop share the product core identity; test builds are separate.
+`read-preflight HOST PREFLIGHT_ID` reads the receipt without dispatching work.
+Configured capabilities and a manually reported pass are not protocol evidence.
+
+`next-live HOST PLAN_ID` starts the next original entry through the frozen
+provider and ordinary tools, stages and owner decisions. Preflight, generation
+and task execution share the approved first-round $200 limit; preflight also
+counts toward the $20 pilot allowance. Unknown and in-flight fees retain their
+reservations. Reopening, changing hosts, failures and supplements never reset
+the allowance. Unpriced fee dimensions remain unknown, not a zero-cost claim.
+
+Use `pending HOST RUN_ID` to inspect owner questions. A real owner runs
+`owner-session HOST RUN_ID`: `start`/`continue` starts measured attention,
+`away` ends it, and `guidance TEXT` or `decision JSON` records actual input.
+Piped input is scripted evidence. An automated agent must not impersonate a
+human through a pseudo-terminal to fill missing measurements.
+
+Preflight and generation also own OS execution leases. After interruption,
+inspect `recovery` and explicitly `reconcile` the original activity; never
+resend to repair an absent receipt. Missing receipts retain unknown fees.
+If generation committed before budget closure, reconciliation repairs only
+the derived accounting and preserves the completed source.
+
+### Paired reports
+
+`report HOST BATCH_ID` emits Markdown; `report-json HOST BATCH_ID` emits the
+structured report. Development, pilot, original formal, supplemental and
+candidate results remain separate. Task/repetition rows retain coverage,
+independent acceptance, safety, owner exceptions, human/active time, costs and
+exclusion reasons. Missing coverage, fees, real calls or human measurements
+produce `insufficient_evidence`; missing metrics are not zero-cost estimates.
+Each category has only two heldout tasks, so results cannot establish general
+software coverage or statistical significance. Reports never change defaults.
+
+### Independent candidates and owner adoption
+
+Before disclosing heldout feedback, capture `generation HOST BATCH_ID`, then
+use metered `generate-candidate HOST CONTEXT_ID`. The isolated generation
+process receives only public development material and the policy baseline.
+One tool-free request returns closed knob edits; the host binds its actual
+request, raw output, source and paid receipts. Read the activity through
+`read-policy-generation HOST CONTEXT_ID`. `generate-candidate-debug` is scripted and cannot
+grant product adoption eligibility.
+
+The returned candidate owns a batch and an original 24-run heldout plan.
+Preflight that batch and execute its plan with `next-live`.
+`candidate-report HOST PROPOSAL_ID` verifies the source, current baseline,
+candidate/configuration bindings and all original evidence, then refreshes
+the last-assessed display state. `candidate-freeze HOST PROPOSAL_ID CONTEXT_ID`
+can plan evaluation of an existing proposal but cannot retroactively grant
+isolated generation provenance. Formal comparison successes, supplemental
+runs, replay scores and self-reported passes never replace the candidate's
+three original independent passes per heldout task.
+
+The UI distinguishes unverified, incomplete, failed, stale and qualified.
+Qualified candidates still require an owner decision. Actual adoption repeats
+the complete evidence check under the repository lease and transaction and
+compares the exact candidate bytes; cached display state grants no authority.
+Missing evidence or concurrent changes leave the card pending. Rollback only
+restores that adoption's original version. Historical means adopted or rolled
+back, not missing evidence, and never grants new eligibility.
+
+An immutable candidate captured before disclosure may finish its original
+plan. A new candidate developed after heldout feedback requires a new heldout
+version. If the configured service, verified prices, actual human participation
+or lawful candidate are unavailable, deliver a specific blocked, insufficient
+or unverified conclusion without widening the budget or quality gate.

@@ -391,12 +391,13 @@ mod tests {
     }
 
     #[test]
-    fn knob_proposal_flows_through_governed_queue() {
-        let (db, ctx, dir) = setup();
+    fn equal_replay_score_keeps_candidate_available_for_independent_quality() {
+        let (_db, ctx, dir) = setup();
         let sandbox = dir.path().join(".hexagon/replay/t1");
-        // ADR 0069：这段脚本两边回放分一样（都是 0）。不高于现任就到不了执行判定。
-        let err = propose(
-            &db,
+        // Evaluation16/D13 replaces the old "not higher" rejection: both replay
+        // scores may be zero. Retain diagnostic evidence and the candidate;
+        // actual adoption still requires independent quality at the core API.
+        let body = prepare_body(
             &ctx,
             &base_pack(),
             &[KnobEdit::FlagPatience(5)],
@@ -404,8 +405,10 @@ mod tests {
             "减少重复打回打扰",
             &sandbox,
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("not higher"), "{err}");
+        .unwrap();
+        assert!(body.contains("```replay"));
+        assert!(body.contains("```policy"));
+        assert!(body.contains("flag_patience"));
     }
 
     #[test]

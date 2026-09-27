@@ -2290,17 +2290,12 @@ mod server_tool_tests {
 
     #[test]
     fn server_tools_gated_by_slot_caps() {
-        // 进程级环境变量互斥：provider_config 测试也碰 HEXAGON_PROVIDERS_PATH，
-        // 并行会互踩（2026-09 曾打出 defs.len()=0 的偶发红）。
-        let _env = crate::provider_config::PROVIDERS_ENV_LOCK.lock().unwrap();
-        let p = anthropic_provider();
-        // 无 providers.json → caps 空 → 不挂 server tool（fail-closed）
-        assert!(p.server_tools("default").is_empty());
+        // Evaluation22: no process environment mutation while other tests
+        // freeze provider identities. This scope still exercises real file reads.
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var(
-            "HEXAGON_PROVIDERS_PATH",
-            dir.path().join("providers.json").to_str().unwrap(),
-        );
+        let _path = crate::provider_config::fixture_path(dir.path().join("providers.json"));
+        let p = anthropic_provider();
+        assert!(p.server_tools("default").is_empty());
         // 绑一个 claude 模型 → infer_caps 给 web
         let doc = crate::provider_config::ProviderDoc {
             providers: vec![crate::provider_config::ProviderDef {
@@ -2342,7 +2337,6 @@ mod server_tool_tests {
             ModelMeta::default(),
         );
         assert!(openai.server_tools("default").is_empty());
-        std::env::remove_var("HEXAGON_PROVIDERS_PATH");
     }
 
     #[test]

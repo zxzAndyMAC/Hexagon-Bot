@@ -124,6 +124,10 @@ pub struct ProviderDoc {
 }
 
 fn providers_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = FIXTURE_PATH.with(|p| p.borrow().clone()) {
+        return path;
+    }
     if let Ok(p) = std::env::var("HEXAGON_PROVIDERS_PATH") {
         return PathBuf::from(p);
     }
@@ -541,32 +545,9 @@ pub fn max_output_for_slot(slot: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
-/// 测试用进程级锁：providers.json 路径走 `HEXAGON_PROVIDERS_PATH` 环境变量
-/// （进程全局），并行测试互踩——一方 set 夹在另一方 remove 之间就丢配置。
-/// 所有碰该环境变量的测试先拿这把锁（provider.rs 的 server_tool_tests 同款）。
-#[cfg(test)]
-pub(crate) static PROVIDERS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::credentials::MemoryStore;
-
-    struct PathGuard;
-    impl PathGuard {
-        fn set(dir: &std::path::Path) -> Self {
-            std::env::set_var(
-                "HEXAGON_PROVIDERS_PATH",
-                dir.join("providers.json").to_str().unwrap(),
-            );
-            PathGuard
-        }
-    }
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("HEXAGON_PROVIDERS_PATH");
-        }
-    }
 
     fn def(id: &str) -> ProviderDef {
         ProviderDef {
@@ -579,12 +560,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn concurrent_provider_files_do_not_change_another_threads_frozen_inputs() {
+        // Evaluation22: the old process-global path made unrelated evaluations
+        // intermittently fail "configuration drift" during provider CRUD tests.
+        let parent = tempfile::tempdir().unwrap();
+        let _parent = fixture_path(parent.path().join("providers.json"));
+        save_provider(&def("parent")).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let threads: Vec<_> = ["left", "right"]
+            .into_iter()
+            .map(|id| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let home = tempfile::tempdir().unwrap();
+                    let _path = fixture_path(home.path().join("providers.json"));
+                    save_provider(&def(id)).unwrap();
+                    barrier.wait();
+                    assert_eq!(load().unwrap().providers[0].id, id);
+                    {
+                        let nested = tempfile::tempdir().unwrap();
+                        let _nested = fixture_path(nested.path().join("providers.json"));
+                        assert!(load().unwrap().providers.is_empty());
+                    }
+                    assert_eq!(load().unwrap().providers[0].id, id);
+                })
+            })
+            .collect();
+        barrier.wait();
+        assert_eq!(load().unwrap().providers[0].id, "parent");
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(load().unwrap().providers[0].id, "parent");
+    }
+
     /// 供应商 CRUD + 槽位绑定生命周期 + 就绪判定（绑定/启用/key 三要件）。
     #[test]
     fn provider_def_and_binding_lifecycle() {
-        let _env = PROVIDERS_ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let _g = PathGuard::set(dir.path());
+        let _g = fixture_path(dir.path().join("providers.json"));
         let store = MemoryStore::default();
         assert!(load().unwrap().providers.is_empty());
 
@@ -669,9 +684,8 @@ mod tests {
     /// 绑定指向不存在的供应商 → None；无绑定无 default → None。
     #[test]
     fn window_for_slot_walks_binding_and_default_fallback() {
-        let _env = PROVIDERS_ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let _g = PathGuard::set(dir.path());
+        let _g = fixture_path(dir.path().join("providers.json"));
         let mut doc = ProviderDoc {
             providers: vec![def("p")],
             ..ProviderDoc::default()
@@ -764,4 +778,28 @@ impl Drop for FixtureDocument {
 #[cfg(test)]
 pub(crate) fn fixture_document(doc: ProviderDoc) -> FixtureDocument {
     FixtureDocument(FIXTURE_DOCUMENT.with(|d| d.replace(Some(doc))))
+}
+
+// Evaluation22 regression: writer-only ENV_LOCK did not protect concurrent
+// evaluation readers. Temporary provider documents appeared as real runtime
+// drift. Keep test paths thread-local; product environment resolution is unchanged.
+#[cfg(test)]
+thread_local! { static FIXTURE_PATH:std::cell::RefCell<Option<PathBuf>>=const {std::cell::RefCell::new(None)}; }
+#[cfg(test)]
+pub(crate) struct FixturePath {
+    previous: Option<PathBuf>,
+    same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+#[cfg(test)]
+impl Drop for FixturePath {
+    fn drop(&mut self) {
+        FIXTURE_PATH.with(|p| *p.borrow_mut() = self.previous.take());
+    }
+}
+#[cfg(test)]
+pub(crate) fn fixture_path(path: PathBuf) -> FixturePath {
+    FixturePath {
+        previous: FIXTURE_PATH.with(|p| p.replace(Some(path))),
+        same_thread: std::marker::PhantomData,
+    }
 }

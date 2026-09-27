@@ -10660,20 +10660,9 @@ fn owner_policy_reopen_preserves_missing_recovery_target() {
 
 #[test]
 fn data_boundary_discloses_backend_and_only_non_secret_recipients() {
-    let _lock = crate::provider_config::PROVIDERS_ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("providers.json");
-    struct Restore(Option<std::ffi::OsString>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            match &self.0 {
-                Some(v) => std::env::set_var("HEXAGON_PROVIDERS_PATH", v),
-                None => std::env::remove_var("HEXAGON_PROVIDERS_PATH"),
-            }
-        }
-    }
-    let _restore = Restore(std::env::var_os("HEXAGON_PROVIDERS_PATH"));
-    std::env::set_var("HEXAGON_PROVIDERS_PATH", &path);
+    let _path = crate::provider_config::fixture_path(dir.path().join("providers.json"));
     std::fs::write(&path, r#"{"providers":[{"id":"local","name":"Gateway","kind":"openai","base_url":"https://user:SECRET_PASSWORD@model.example:8443/SECRET_PATH?api_key=SECRET_QUERY#SECRET_FRAGMENT","models":[],"enabled":true}]}"#).unwrap();
     std::fs::create_dir_all(dir.path().join(".hexagon")).unwrap();
     std::fs::write(dir.path().join(".hexagon/mcp.json"), r#"[{"name":"remote","url":"https://SECRET_USER:SECRET_PASSWORD@mcp.example/tools?token=SECRET_QUERY","headers":{"Authorization":"Bearer SECRET_HEADER"},"env":{"API_KEY":"SECRET_ENV"}}]"#).unwrap();
@@ -10738,19 +10727,8 @@ fn data_boundary_mcp_import_keeps_secrets_on_host_and_rejects_changed_sources() 
 
 #[test]
 fn data_boundary_provider_errors_do_not_echo_authentication_urls() {
-    let _lock = crate::provider_config::PROVIDERS_ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    struct Restore(Option<std::ffi::OsString>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            match &self.0 {
-                Some(v) => std::env::set_var("HEXAGON_PROVIDERS_PATH", v),
-                None => std::env::remove_var("HEXAGON_PROVIDERS_PATH"),
-            }
-        }
-    }
-    let _restore = Restore(std::env::var_os("HEXAGON_PROVIDERS_PATH"));
-    std::env::set_var("HEXAGON_PROVIDERS_PATH", dir.path().join("providers.json"));
+    let _path = crate::provider_config::fixture_path(dir.path().join("providers.json"));
     let store = crate::credentials::MemoryStore::default();
     for kind in [
         crate::provider::ProviderKind::OpenAi,
