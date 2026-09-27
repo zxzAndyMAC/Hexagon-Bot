@@ -3128,6 +3128,9 @@ mod tests;
 #[cfg(test)]
 mod evaluation_config_tests;
 #[cfg(test)]
+mod evaluation_plan_tests;
+mod evaluation_runner;
+#[cfg(test)]
 mod evaluation_tests;
 
 impl Workbench {
@@ -3199,8 +3202,6 @@ impl Workbench {
         writes: &std::collections::BTreeMap<String, String>,
     ) -> Result<crate::evaluation::EvaluationResult, ApiError> {
         use crate::evaluation as eval;
-        use crate::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason};
-        use sha2::{Digest, Sha256};
         eval::self_check(task)?;
         if writes
             .keys()
@@ -3222,96 +3223,15 @@ impl Workbench {
             ));
         }
         let id = format!("eval-{}", self.db.next_id("evaluation")?);
-        let parent = self.repo_root.join(".hexagon/evaluation-runs");
-        std::fs::create_dir_all(&parent)?;
-        let copy = tempfile::Builder::new()
-            .prefix(&format!("{id}-"))
-            .tempdir_in(parent)?
-            .keep();
-        let mut result = eval::EvaluationResult {
-            version: 1,
-            id,
-            task_id: task.id.clone(),
-            task_fingerprint: format!("v1:{:x}", Sha256::digest(serde_json::to_vec(task)?)),
-            workspace: copy.to_string_lossy().into_owned(),
-            evidence_kind: "scripted_debug".into(),
-            state: "started".into(),
-            flow_completed: false,
-            independent_passed: false,
-            owner_exception: false,
-            acceptance: None,
-            git_baseline: None,
-            elapsed_ms: 0,
-            error: None,
-        };
-        // Persist before any task execution; even setup failure remains a started attempt.
-        eval::insert(&self.db, task, &result)?;
-        let started = std::time::Instant::now();
-        let run = (|| -> Result<(), ApiError> {
-            result.git_baseline = eval::reconstruct(&copy, task)?;
-            eval::update_started(&self.db, &result)?;
-            let mut worker = Workbench::open_scoped(
-                &copy,
-                &task.id,
-                &[("a0".into(), "后端".into())],
-                None,
-                false,
-            )?;
-            worker.set_credential_store(Arc::new(crate::credentials::MemoryStore::default()));
-            // Evaluation 01 regression: dispatch consumes a planning response
-            // before the tool loop. A read placed first was swallowed as a plan,
-            // so write-precondition correctly rejected the subsequent delivery.
-            let mut responses = vec![ChatResponse {
-                content: vec![ContentBlock::Text {
-                    text: "Read task inputs before changing the declared files.".into(),
-                }],
-                stop: StopReason::EndTurn,
-                usage: Default::default(),
-            }];
-            for (path, body) in writes {
-                // Real read-before-write evidence is established through ordinary tools.
-                for (tool, input) in [
-                    ("fs_read", json!({"path":path})),
-                    ("fs_write", json!({"path":path,"content":body})),
-                ] {
-                    responses.push(ChatResponse {
-                        content: vec![ContentBlock::ToolUse {
-                            id: format!("eval-{}", responses.len()),
-                            name: tool.into(),
-                            input,
-                        }],
-                        stop: StopReason::ToolUse,
-                        usage: Default::default(),
-                    });
-                }
-            }
-            responses.push(ChatResponse {
-                content: vec![ContentBlock::Text {
-                    text: "Debug task execution ended".into(),
-                }],
-                stop: StopReason::EndTurn,
-                usage: Default::default(),
-            });
-            worker.register_provider("default", Arc::new(ScriptedProvider::new(responses)));
-            let outcome = worker.dispatch_instance("a0", &task.requirements, &[])?;
-            result.state = if matches!(outcome, TurnOutcome::Finished) {
-                "completed"
-            } else {
-                "incomplete"
-            }
-            .into();
-            let acceptance = eval::accept(&worker.db, &copy, task, result.git_baseline.as_ref())?;
-            result.independent_passed = acceptance.passed;
-            result.acceptance = Some(acceptance);
-            Ok(())
-        })();
-        if let Err(e) = run {
-            result.state = "failed".into();
-            result.error = Some(e.to_string());
-        }
-        result.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        eval::update_started(&self.db, &result)?;
-        Ok(result)
+        self.run_scripted_evaluation(
+            task,
+            &id,
+            None,
+            &[eval::DebugActivation {
+                role: "后端".into(),
+                writes: writes.clone(),
+            }],
+        )
     }
 
     pub fn evaluation_result(

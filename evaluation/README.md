@@ -40,3 +40,13 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 冻结记录包含实际槽绑定、供应商和型号、输出界限、角色能力、宿主判定与隔离约定、二进制指纹、解释器及系统环境。供应商默认生成参数标为未指定，不虚构具体温度。URL 带凭据、查询串或片段时不作为可用身份；钥匙正文不进入配置。
 
 `record-verification HOST BATCH_ID OBSERVATION.json` 保存来源核对观察（`dimension: model|tools|price`、`outcome: unknown|failed|reported_pass`、`batch_fingerprint`、不带秘密的 `source_url`、`checked_at`）。观察与可计费调用凭据分开：报告通过不会清除 `model_not_verified`、`tools_not_verified` 或 `price_not_verified`。正式准入还需后续隔离、共享预算与停止机制，当前以 `execution_guards_pending` 明示，配置存在不等于可调用。
+
+`plan HOST BATCH_ID pilot|formal` 保存配对顺序，重复调用返回原计划。正式计划为 8 个留出任务 × 3 次 × 两侧共 48 次，整体各 12 对由快速通道/完整流程先行。`read-plan HOST PLAN_ID` 保留每次的任务、重复号、路径、状态、运行身份及未启动原因；重读不洗牌。
+
+冻结配置可通过 `task_owners` 给选定的既有角色分配各任务 `allowed_paths` 中的精确文件，适用于这些文件不在预置目录归属内的夹具。此项在运行前选定并冻结，两侧共用；原角色职责、技能、既有归属及内置拒绝仍然有效。缺省不额外分配，不能通过清空归属来放行任务。
+
+`next-debug HOST PLAN_ID SCRIPT.json` 仅启动持久顺序中的下一侧。脚本为 `[{"role":"后端","writes":{"目标文件":"内容"}}]`，完整流程按各阶段角色顺序提供激活脚本；不改文件的激活使用空 `writes`。快速通道使用选定的实例，完整流程实际派遣角色、推进阶段并通过宿主盖章门面进行脚本裁决。缺交付、检验或复审时保留未完成。脚本裁决不计真人证据，所有这类结果仍标 `scripted_debug`。
+
+每次运行重建独立工作副本、数据库、会话和经验目录。受保护的 `.hexagon/evaluation-worker` 标记阻止继承全局可变技能与开关；内置技能仍由固定程序版本提供。计划只保存身份及状态，不复用上一侧的交付内容。
+
+`stop-plan HOST PLAN_ID` 原子停止后续调度：所有尚未启动项保留为 `not_run / owner_stopped`，已启动与终态事实保留，重开后不能悄悄续跑该计划。此命令当前只停止新增调度；在途取消与费用收场由后续停止机制接通。

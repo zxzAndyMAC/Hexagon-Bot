@@ -38,6 +38,9 @@ pub struct FreezeRequest {
     pub corpora: Vec<EvaluationCorpus>,
     pub main_slot: String,
     pub fast_role: String,
+    /// Owner assigns only the declared task files to these existing roles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_owners: Vec<String>,
     pub full_pack: PackDef,
     pub prices: BTreeMap<String, PriceSource>,
     pub limits: EvaluationLimits,
@@ -340,6 +343,13 @@ fn snapshot(db: &Db, project: &str, request: &FreezeRequest) -> io::Result<Runti
     let roles = collect_roles(names, |name| {
         crate::roles::role_def(db, project, name).map_err(err)
     })?;
+    if request
+        .task_owners
+        .iter()
+        .any(|name| !roles.contains_key(name))
+    {
+        return Err(err("task ownership must name an existing frozen role"));
+    }
     Ok(RuntimeSnapshot {
         models,
         roles,

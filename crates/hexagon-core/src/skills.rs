@@ -315,7 +315,9 @@ pub fn effective_muted_at(repo_root: &Path, session: &str, global_path: &Path) -
     let mutes = SkillMutes::load(repo_root);
     let mut muted = mutes.muted_set(session);
     muted.extend(mutes.muted_set(GLOBAL_MUTE_SESSION));
-    muted.extend(global_muted_set_at(global_path));
+    if !is_evaluation_worker(repo_root) {
+        muted.extend(global_muted_set_at(global_path));
+    }
     muted
 }
 
@@ -496,7 +498,11 @@ pub fn list_all(repo_root: &Path) -> Vec<SkillRow> {
 
 pub fn list_all_at(repo_root: &Path, global_mutes: Option<&Path>) -> Vec<SkillRow> {
     let loader = SkillLoader::new(skill_dirs(repo_root));
-    let mut muted = global_mutes.map(global_muted_set_at).unwrap_or_default();
+    let mut muted = if is_evaluation_worker(repo_root) {
+        HashSet::new()
+    } else {
+        global_mutes.map(global_muted_set_at).unwrap_or_default()
+    };
     muted.extend(SkillMutes::load(repo_root).muted_set(GLOBAL_MUTE_SESSION));
     let gdir = global_dir();
     loader
@@ -522,9 +528,19 @@ fn global_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| Path::new(&h).join(".hexagon/skills"))
 }
 
+fn is_evaluation_worker(repo_root: &Path) -> bool {
+    repo_root.join(".hexagon/evaluation-worker").exists()
+}
+
 /// 扫描顺序：全局先、项目后（项目覆盖全局同名）。
 pub fn skill_dirs(repo_root: &Path) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = global_dir().into_iter().collect();
+    // Evaluation 07 / D04: paired workers may not inherit shared mutable
+    // experience. This protected marker is host-created before any activation.
+    let mut v: Vec<PathBuf> = if is_evaluation_worker(repo_root) {
+        Vec::new()
+    } else {
+        global_dir().into_iter().collect()
+    };
     v.push(repo_root.join(".hexagon/skills"));
     v
 }
@@ -1130,4 +1146,28 @@ pub fn install_skill_from_path_at(dest_root: &Path, path: &str) -> Result<String
 pub fn install_skill_from_path(path: &str) -> Result<String, std::io::Error> {
     let dest = global_dir().ok_or_else(|| std::io::Error::other("no HOME"))?;
     install_skill_from_path_at(&dest, path)
+}
+
+#[cfg(test)]
+mod evaluation_isolation_tests {
+    use super::*;
+
+    #[test]
+    fn evaluation_worker_does_not_inherit_global_skills_or_mutes() {
+        let home = tempfile::tempdir().unwrap();
+        let global = home.path().join("global-mutes.json");
+        std::fs::write(&global, r#"{"muted":["api-contract"]}"#).unwrap();
+        assert!(effective_muted_at(home.path(), "session", &global).contains("api-contract"));
+        std::fs::create_dir_all(home.path().join(".hexagon")).unwrap();
+        std::fs::write(
+            home.path().join(".hexagon/evaluation-worker"),
+            "private-state-v1",
+        )
+        .unwrap();
+        assert!(effective_muted_at(home.path(), "session", &global).is_empty());
+        assert_eq!(
+            skill_dirs(home.path()),
+            vec![home.path().join(".hexagon/skills")]
+        );
+    }
 }

@@ -15,6 +15,7 @@ pub(super) fn request() -> crate::evaluation::FreezeRequest {
         "corpora":corpora,
         "main_slot":"default",
         "fast_role":"后端",
+        "task_owners":["后端"],
         "full_pack":{"name":"evaluation-existing-role", "version":1,
             "stages":[{"name":"delivery","roles":["后端"],"due":[],"stamp_point":true}]},
         "prices":{},

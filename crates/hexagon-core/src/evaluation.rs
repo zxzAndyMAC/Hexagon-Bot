@@ -5,6 +5,10 @@ pub use config::{
     AdmissionBlock, EvaluationBatch, EvaluationLimits, FreezeRequest, ObservedOutcome, PriceSource,
     VerificationDimension, VerificationObservation,
 };
+pub(crate) mod plan;
+pub use plan::{
+    DebugActivation, EvaluationArm, EvaluationPlan, PlanKind, PlannedRun, PlannedState,
+};
 mod workspace;
 use crate::{db::Db, sessions::SessionTable, tools::ToolContext};
 use serde::{Deserialize, Serialize};
