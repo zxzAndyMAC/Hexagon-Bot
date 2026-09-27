@@ -312,6 +312,13 @@ fn read_roots(repo: &Path) -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     if let Some(developer) = developer_directory() {
         roots.push(developer.join("usr"));
+        // Evaluation 02 / 2026-09-27: the selected Python launcher links this
+        // framework outside developer/usr. Read-only and alias-scanned; allowing
+        // all of /Applications would expose unrelated application data.
+        let python = developer.join("Library/Frameworks/Python3.framework");
+        if python.exists() {
+            roots.push(python);
+        }
     }
     if let Some(home) = std::env::var_os("HOME") {
         roots.extend(
@@ -645,6 +652,51 @@ mod tests {
             // reliability 02: full repo write is only valid for empty ownership.
             prop_assert_eq!(a.windows(3).any(|w| w[0] == "--bind" && w[1] == "/repo/proj"), globs.is_empty());
         }
+    }
+
+    // Evaluation 02 (2026-09-27): Xcode's python launcher was readable while
+    // its framework was denied. Granting all of /Applications was rejected.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn python_runtime_runs_without_external_file_access() {
+        let repo = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("private.txt"), "synthetic").unwrap();
+        let script = r#"import pathlib, sys
+assert sum([1, 2, 3]) == 6
+for mode in ('r', 'w'):
+    try:
+        with open(sys.argv[1], mode):
+            pass
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError('external access allowed: ' + mode)
+print('runtime isolated')
+"#;
+        std::fs::write(repo.path().join("probe.py"), script).unwrap();
+        let spec = spec_for(repo.path(), &["output.txt".into()], false);
+        // Invoke the interpreter, not Xcode's posix_spawn launcher. The latter
+        // must remain blocked by reliability 10's process containment rule.
+        let python = developer_directory()
+            .map(|d| d.join("Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python"))
+            .filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("python3"));
+        let mut command = Command::new(python);
+        command
+            .args(["-B", "probe.py"])
+            .arg(outside.path().join("private.txt"))
+            .current_dir(repo.path());
+        let out = wrap_command(&mut command, &spec).unwrap().output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout, b"runtime isolated\n");
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("private.txt")).unwrap(),
+            "synthetic"
+        );
     }
 
     #[test]

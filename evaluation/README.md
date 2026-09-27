@@ -15,3 +15,14 @@ cargo run -p hexagon-core --example evaluate -- read /tmp/hexagon-evaluation eva
 结果分别呈现执行状态、流程完成、独立验收与负责人例外。验收保存命令、退出状态、输出、文件和权限指纹、起止时间；测中修改文件或权限不能通过。离线脚本没有完成负责人最终验收，流程完成与例外不会凭脚本结束自动设为真。
 
 debug 夹具仅用于工具冒烟，不计入规格要求的二十个任务。完整对照、预算、停止与恢复、真人计时、策略质量门及真实实验按后续票据实施。
+
+类别清单可通过同一宿主入口执行自检：
+
+```sh
+cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-evaluation evaluation/corpus/bugs.json
+```
+
+清单固定为五个不同任务、三开发/两留出及一项开发试跑。输出 `fixture_self_check` 报告逐项保留起点、参考修复、关键错误修复的独立验收事实；任意自检不符返回非零状态。此结果只证明任务可验收，不是模型收益。任务来源与 MIT 许可随每个输入副本提供，依赖只用声明的标准库，不下载包。正式批次需另行冻结实际解释器版本与运行环境。
+
+
+类别任务还须提供非空 `expected_stdout`：宿主核对完整实际输出，该预期值不注入验收进程。Python 探针仅输出函数行为数据，不在执行任务代码的进程内断言成功；提前退出、输出缺项及额外输出均失败。macOS 使用 Xcode 自带的实际 Python 解释器，绕开依赖 posix_spawn 的启动包装器，进程隔离规则保持生效。

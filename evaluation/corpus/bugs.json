@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "split": "development",
+      "pilot": true,
+      "task": {
+        "id": "bug-pagination",
+        "category": "bug",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/bugs.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-bug-fixtures-v1",
+        "requirements": "Fix zero-based pagination. Each full page contains size items, the last page may be shorter, and a page past the end is empty. Reject negative index or nonpositive size with ValueError. Do not mutate the input.",
+        "allowed_paths": [
+          "pagination.py"
+        ],
+        "files": {
+          "pagination.py": "def page(items, index, size):\n    if index < 0 or size <= 0:\n        raise ValueError('invalid page')\n    start = index * size\n    return items[start:start + size - 1]\n",
+          "README.md": "Fix zero-based pagination. Each full page contains size items, the last page may be shorter, and a page past the end is empty. Reject negative index or nonpositive size with ValueError. Do not mutate the input.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import json, runpy\ndef error(call):\n    try:\n        call()\n    except Exception as exc:\n        return type(exc).__name__\n    return 'no_error'\nm=runpy.run_path('pagination.py')\nf=m['page']\nitems=[10,20,30,40,50]\nr=[f(items,0,2),f(items,1,2),f(items,2,2),f(items,4,2),f([],0,1),items]\nfor args in [(-1,2),(0,0),(0,-1)]:\n    r.append(error(lambda: f(items,*args)))\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "pagination.py": "def page(items, index, size):\n    if index < 0 or size <= 0:\n        raise ValueError('invalid page')\n    start = index * size\n    return items[start:start + size]\n"
+        },
+        "wrong": {
+          "pagination.py": "def page(items, index, size):\n    return items[index:index + size]\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)"
+        ],
+        "expected_stdout": "[[10,20],[30,40],[50],[],[],[10,20,30,40,50],\"ValueError\",\"ValueError\",\"ValueError\"]\n"
+      }
+    },
+    {
+      "split": "development",
+      "pilot": false,
+      "task": {
+        "id": "bug-intervals",
+        "category": "bug",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/bugs.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-bug-fixtures-v1",
+        "requirements": "Fix overlap detection for half-open intervals [start,end). Touching endpoints and empty intervals do not overlap. Reject reversed intervals with ValueError. Accept negative endpoints.",
+        "allowed_paths": [
+          "intervals.py"
+        ],
+        "files": {
+          "intervals.py": "def overlaps(a, b):\n    if a[0] > a[1] or b[0] > b[1]:\n        raise ValueError('reversed interval')\n    return max(a[0], b[0]) <= min(a[1], b[1])\n",
+          "README.md": "Fix overlap detection for half-open intervals [start,end). Touching endpoints and empty intervals do not overlap. Reject reversed intervals with ValueError. Accept negative endpoints.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import json, runpy\ndef error(call):\n    try:\n        call()\n    except Exception as exc:\n        return type(exc).__name__\n    return 'no_error'\nm=runpy.run_path('intervals.py')\nf=m['overlaps']\nr=[]\nfor a,b in [((0,2),(2,4)),((0,3),(2,4)),((1,1),(0,2)),((-4,-1),(-2,0)),((0,1),(3,4))]:\n    r.extend([f(a,b),f(b,a)])\nfor a,b in [((3,1),(0,4)),((0,4),(2,1))]:\n    r.append(error(lambda: f(a,b)))\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "intervals.py": "def overlaps(a, b):\n    if a[0] > a[1] or b[0] > b[1]:\n        raise ValueError('reversed interval')\n    return max(a[0], b[0]) < min(a[1], b[1])\n"
+        },
+        "wrong": {
+          "intervals.py": "def overlaps(a, b):\n    return a[0] < b[1] and b[0] < a[1]\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)"
+        ],
+        "expected_stdout": "[false,false,true,true,false,false,true,true,false,false,\"ValueError\",\"ValueError\"]\n"
+      }
+    },
+    {
+      "split": "development",
+      "pilot": false,
+      "task": {
+        "id": "bug-backoff",
+        "category": "bug",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/bugs.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-bug-fixtures-v1",
+        "requirements": "Fix integer exponential backoff: attempt zero yields min(base,cap); each subsequent attempt doubles until cap. Nonnegative integer inputs only, negative inputs raise ValueError. Zero base yields zero. Huge attempts must return promptly without building a giant integer.",
+        "allowed_paths": [
+          "backoff.py"
+        ],
+        "files": {
+          "backoff.py": "def delay(attempt, base, cap):\n    if min(attempt, base, cap) < 0:\n        raise ValueError('negative input')\n    return max(base * 2 ** attempt, cap)\n",
+          "README.md": "Fix integer exponential backoff: attempt zero yields min(base,cap); each subsequent attempt doubles until cap. Nonnegative integer inputs only, negative inputs raise ValueError. Zero base yields zero. Huge attempts must return promptly without building a giant integer.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import json, runpy\ndef error(call):\n    try:\n        call()\n    except Exception as exc:\n        return type(exc).__name__\n    return 'no_error'\nm=runpy.run_path('backoff.py')\nf=m['delay']\nr=[[f(i,3,20) for i in range(5)],f(0,30,20),f(100000000,1,100),f(100000000,0,100),f(2,1,0)]\nfor args in [(-1,1,4),(1,-1,4),(1,1,-4)]:\n    r.append(error(lambda: f(*args)))\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "backoff.py": "def delay(attempt, base, cap):\n    if min(attempt, base, cap) < 0:\n        raise ValueError('negative input')\n    if base == 0:\n        return 0\n    if attempt >= cap.bit_length():\n        return cap\n    return min(base * 2 ** attempt, cap)\n"
+        },
+        "wrong": {
+          "backoff.py": "def delay(attempt, base, cap):\n    return min(base * attempt, cap)\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)"
+        ],
+        "expected_stdout": "[[3,6,12,20,20],20,100,0,0,\"ValueError\",\"ValueError\",\"ValueError\"]\n"
+      }
+    },
+    {
+      "split": "heldout",
+      "pilot": false,
+      "task": {
+        "id": "bug-query-values",
+        "category": "bug",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/bugs.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-bug-fixtures-v1",
+        "requirements": "Fix query values lookup. Return all values for the requested key, preserving order and blank values. Decode percent escapes and plus-as-space, do not split encoded ampersands, and return an empty list for missing keys.",
+        "allowed_paths": [
+          "query.py"
+        ],
+        "files": {
+          "query.py": "from urllib.parse import parse_qsl\n\ndef values(query, key):\n    return [dict(parse_qsl(query)).get(key)]\n",
+          "README.md": "Fix query values lookup. Return all values for the requested key, preserving order and blank values. Decode percent escapes and plus-as-space, do not split encoded ampersands, and return an empty list for missing keys.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import json, runpy\ndef error(call):\n    try:\n        call()\n    except Exception as exc:\n        return type(exc).__name__\n    return 'no_error'\nm=runpy.run_path('query.py')\nf=m['values']\nr=[f('tag=a&tag=b&other=c','tag'),f('tag=&tag=z&tag','tag'),f('tag=a%26b&tag=two+words','tag'),f('a=1','missing'),f('','tag')]\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "query.py": "from urllib.parse import parse_qsl\n\ndef values(query, key):\n    return [value for name, value in parse_qsl(query, keep_blank_values=True) if name == key]\n"
+        },
+        "wrong": {
+          "query.py": "from urllib.parse import parse_qsl\n\ndef values(query, key):\n    return [value for name, value in parse_qsl(query) if name == key]\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)"
+        ],
+        "expected_stdout": "[[\"a\",\"b\"],[\"\",\"z\",\"\"],[\"a&b\",\"two words\"],[],[]]\n"
+      }
+    },
+    {
+      "split": "heldout",
+      "pilot": false,
+      "task": {
+        "id": "bug-cache-expiry",
+        "category": "bug",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/bugs.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-bug-fixtures-v1",
+        "requirements": "Fix cache expiration. Values are valid only while now is strictly before expiry. Expired lookups must remove the stored entry; ttl zero expires immediately. Overwriting a key resets its expiry. Negative ttl raises ValueError without replacing an existing entry.",
+        "allowed_paths": [
+          "cache.py"
+        ],
+        "files": {
+          "cache.py": "class Cache:\n    def __init__(self):\n        self.entries = {}\n\n    def put(self, key, value, ttl, now):\n        if ttl < 0:\n            raise ValueError('negative ttl')\n        self.entries[key] = (value, now + ttl)\n\n    def get(self, key, now):\n        item = self.entries.get(key)\n        if item is None:\n            return None\n        value, expiry = item\n        if now > expiry:\n            del self.entries[key]\n            return None\n        return value\n",
+          "README.md": "Fix cache expiration. Values are valid only while now is strictly before expiry. Expired lookups must remove the stored entry; ttl zero expires immediately. Overwriting a key resets its expiry. Negative ttl raises ValueError without replacing an existing entry.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import json, runpy\ndef error(call):\n    try:\n        call()\n    except Exception as exc:\n        return type(exc).__name__\n    return 'no_error'\nm=runpy.run_path('cache.py')\nc=m['Cache']()\nc.put('k','v',5,10)\nr=[c.get('k',14),c.get('k',15),'k' in c.entries]\nc.put('k','zero',0,20)\nr.append(c.get('k',20))\nc.put('k','old',1,30)\nc.put('k','new',10,30)\nr.append(c.get('k',32))\nr.append(error(lambda: c.put('k','bad',-1,32)))\nr.extend([c.get('k',32),c.get('missing',32)])\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "cache.py": "class Cache:\n    def __init__(self):\n        self.entries = {}\n\n    def put(self, key, value, ttl, now):\n        if ttl < 0:\n            raise ValueError('negative ttl')\n        self.entries[key] = (value, now + ttl)\n\n    def get(self, key, now):\n        item = self.entries.get(key)\n        if item is None:\n            return None\n        value, expiry = item\n        if now >= expiry:\n            del self.entries[key]\n            return None\n        return value\n"
+        },
+        "wrong": {
+          "cache.py": "class Cache:\n    def __init__(self):\n        self.entries = {}\n    def put(self, key, value, ttl, now):\n        self.entries[key] = (value, now + ttl)\n    def get(self, key, now):\n        item = self.entries.get(key)\n        if item is None or now >= item[1]:\n            return None\n        return item[0]\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)"
+        ],
+        "expected_stdout": "[\"v\",null,false,null,\"new\",\"ValueError\",\"new\",null]\n"
+      }
+    }
+  ]
+}

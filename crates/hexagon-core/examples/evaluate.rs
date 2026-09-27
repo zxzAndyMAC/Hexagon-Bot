@@ -11,11 +11,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             let wb = Workbench::open_evaluation_host(Path::new(host))?;
             println!("{}", serde_json::to_string_pretty(&wb.evaluate_debug(&task, &writes)?)?);
         }
+        [op, host, corpus] if op == "check-category" => {
+            let corpus = serde_json::from_slice(&std::fs::read(corpus)?)?;
+            let wb = Workbench::open_evaluation_host(Path::new(host))?;
+            let report = wb.check_evaluation_category(&corpus)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if !report.passed { return Err("fixture self-check failed".into()); }
+        }
         [op, host, id] if op == "read" => {
             let wb = Workbench::open_evaluation_host(Path::new(host))?;
             println!("{}", serde_json::to_string_pretty(&wb.evaluation_result(id)?)?);
         }
-        _ => return Err("usage: evaluate debug HOST TASK.json WRITES.json | evaluate read HOST RUN_ID; live evaluation is not enabled".into()),
+        _ => return Err("usage: evaluate debug HOST TASK.json WRITES.json | evaluate read HOST RUN_ID; evaluate check-category HOST CORPUS.json; live evaluation is not enabled".into()),
     }
     Ok(())
 }

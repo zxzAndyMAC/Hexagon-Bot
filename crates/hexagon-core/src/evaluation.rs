@@ -19,13 +19,146 @@ pub struct EvaluationTask {
     pub license: String,
     pub revision: String,
     pub requirements: String,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
     pub allowed_paths: Vec<String>,
     pub files: BTreeMap<String, String>,
     /// Entry path in host-owned validation_files; never a mutable task command.
     pub validator: String,
     pub validation_files: BTreeMap<String, String>,
+    /// Host-only assertion; never copied into the verifier or worker workspace.
+    #[serde(default)]
+    pub expected_stdout: Option<String>,
     pub reference: BTreeMap<String, String>,
     pub wrong: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvaluationCorpus {
+    pub version: u32,
+    pub cases: Vec<EvaluationCase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvaluationCase {
+    pub split: String,
+    pub pilot: bool,
+    pub task: EvaluationTask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryReport {
+    pub evidence_kind: String,
+    pub category: String,
+    pub passed: bool,
+    pub cases: Vec<TaskSelfCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSelfCheck {
+    pub task_id: String,
+    pub initial: Acceptance,
+    pub reference: Acceptance,
+    pub wrong: Acceptance,
+}
+
+impl TaskSelfCheck {
+    fn passed(&self) -> bool {
+        !self.initial.passed && self.reference.passed && !self.wrong.passed
+    }
+}
+
+fn category_valid(corpus: &EvaluationCorpus) -> bool {
+    // Evaluation 02 / D02: invalid partitions cost a corrected manifest;
+    // accepting one would let selected samples masquerade as full coverage.
+    let Some(first) = corpus.cases.first() else {
+        return false;
+    };
+    corpus.cases.iter().all(|c| {
+        c.task
+            .expected_stdout
+            .as_ref()
+            .is_some_and(|s| !s.is_empty())
+    }) && corpus.version == 1
+        && matches!(
+            first.task.category.as_str(),
+            "bug" | "feature" | "interface" | "dirty_tree"
+        )
+        && corpus.cases.len() == 5
+        && corpus
+            .cases
+            .iter()
+            .map(|c| &c.task.id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == 5
+        && corpus
+            .cases
+            .iter()
+            .all(|c| c.task.category == first.task.category)
+        && corpus
+            .cases
+            .iter()
+            .filter(|c| c.split == "development")
+            .count()
+            == 3
+        && corpus.cases.iter().filter(|c| c.split == "heldout").count() == 2
+        && corpus.cases.iter().filter(|c| c.pilot).count() == 1
+        && corpus
+            .cases
+            .iter()
+            .all(|c| !c.pilot || c.split == "development")
+}
+
+pub(crate) fn check_category(corpus: &EvaluationCorpus) -> io::Result<CategoryReport> {
+    let started = Instant::now();
+    if !category_valid(corpus) {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            None,
+            "evaluation_category",
+            "invalid_partition",
+            started,
+        );
+        return Err(err("category requires five unique tasks with expected results, three development, two heldout and one development pilot"));
+    }
+    let cases = corpus
+        .cases
+        .iter()
+        .map(|c| self_check_evidence(&c.task))
+        .collect::<io::Result<Vec<_>>>()?;
+    let report = CategoryReport {
+        evidence_kind: "fixture_self_check".into(),
+        category: corpus.cases[0].task.category.clone(),
+        passed: cases.iter().all(TaskSelfCheck::passed),
+        cases,
+    };
+    crate::diag::note(
+        if report.passed {
+            crate::diag::CLASS_JUDGE
+        } else {
+            crate::diag::CLASS_REJECT
+        },
+        !report.passed,
+        Some(crate::PROJECT_ID),
+        None,
+        None,
+        None,
+        "evaluation_category",
+        if report.passed {
+            "self_checked"
+        } else {
+            "self_check_failed"
+        },
+        started,
+    );
+    Ok(report)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,7 +407,11 @@ pub(crate) fn accept(db: &Db, root: &Path, task: &EvaluationTask) -> io::Result<
         timed_out,
         before == after && verifier_before == verifier_after,
         preserved,
-    );
+    ) && task.expected_stdout.as_ref().is_none_or(|expected| {
+        // Evaluation 02 review: os._exit(0) used to skip Python assertions.
+        // Only the host compares the complete probe result; missing output fails.
+        output["stdout"].as_str() == Some(expected.as_str())
+    });
     crate::diag::note(
         if passed {
             crate::diag::CLASS_JUDGE
@@ -309,34 +446,40 @@ pub(crate) fn accept(db: &Db, root: &Path, task: &EvaluationTask) -> io::Result<
     })
 }
 
-pub(crate) fn self_check(task: &EvaluationTask) -> io::Result<()> {
+fn self_check_evidence(task: &EvaluationTask) -> io::Result<TaskSelfCheck> {
     validate(task)?;
-    let started = Instant::now();
-    for (patch, expected) in [
-        (None, false),
-        (Some(&task.reference), true),
-        (Some(&task.wrong), false),
-    ] {
+    let run = |patch: Option<&BTreeMap<String, String>>| -> io::Result<Acceptance> {
         let copy = tempfile::tempdir()?;
         materialize(copy.path(), &task.files)?;
         if let Some(patch) = patch {
             materialize(copy.path(), patch)?;
         }
         let db = Db::open_in_memory().map_err(err)?;
-        if accept(&db, copy.path(), task)?.passed != expected {
-            crate::diag::note(
-                crate::diag::CLASS_REJECT,
-                true,
-                Some(crate::PROJECT_ID),
-                None,
-                None,
-                None,
-                "evaluation_self_check",
-                "unexpected_outcome",
-                started,
-            );
-            return Err(err("task self-check disagrees with declared outcome"));
-        }
+        accept(&db, copy.path(), task)
+    };
+    Ok(TaskSelfCheck {
+        task_id: task.id.clone(),
+        initial: run(None)?,
+        reference: run(Some(&task.reference))?,
+        wrong: run(Some(&task.wrong))?,
+    })
+}
+
+pub(crate) fn self_check(task: &EvaluationTask) -> io::Result<()> {
+    let started = Instant::now();
+    if !self_check_evidence(task)?.passed() {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            None,
+            "evaluation_self_check",
+            "unexpected_outcome",
+            started,
+        );
+        return Err(err("task self-check disagrees with declared outcome"));
     }
     Ok(())
 }
@@ -381,9 +524,25 @@ pub(crate) fn read(db: &Db, id: &str) -> io::Result<EvaluationResult> {
 
 #[cfg(test)]
 mod tests {
-    use super::acceptance_passed;
+    use super::{acceptance_passed, category_valid, EvaluationCorpus};
     use proptest::prelude::*;
     proptest! {
+        #[test]
+        fn invalid_category_partition_never_admits(index in 0usize..5, heldout_pilot in any::<bool>()) {
+            let mut corpus: EvaluationCorpus = serde_json::from_str(include_str!("../../../evaluation/corpus/bugs.json")).unwrap();
+            prop_assert!(category_valid(&corpus));
+            let mut missing = corpus.clone();
+            missing.cases[index].task.expected_stdout = None;
+            prop_assert!(!category_valid(&missing));
+            if heldout_pilot {
+                corpus.cases[0].pilot = false;
+                corpus.cases[3].pilot = true;
+            } else {
+                corpus.cases[index].split = "unknown".into();
+            }
+            prop_assert!(!category_valid(&corpus));
+        }
+
         #[test]
         fn removing_acceptance_evidence_never_passes(exit in any::<i64>(), timeout in any::<bool>(), stable in any::<bool>(), preserved in any::<bool>()) {
             prop_assert!(!acceptance_passed(exit, true, stable, preserved));

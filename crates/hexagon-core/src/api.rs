@@ -3134,6 +3134,14 @@ impl Workbench {
         Self::open_scoped(dir, "Task evaluation", &[], None, false)
     }
 
+    /// Host-only fixture checks, never model-benefit evidence.
+    pub fn check_evaluation_category(
+        &self,
+        corpus: &crate::evaluation::EvaluationCorpus,
+    ) -> Result<crate::evaluation::CategoryReport, ApiError> {
+        Ok(crate::evaluation::check_category(corpus)?)
+    }
+
     /// Host-only debug runner; no arbitrary provider or real-model mode is accepted.
     /// Task-benefit-evaluation 01: paid admission stays closed until 08/11/12.
     pub fn evaluate_debug(
