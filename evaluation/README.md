@@ -32,3 +32,11 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 `corpus/interfaces.json` 提供五个 Python 服务端与 CommonJS 客户端任务，实际服务端数据经管道送入客户端。宿主同时核对完整报文与客户端结果，单改一侧、保留旧字段或不兼容响应均不能通过。两个清单也使用 `check-category` 入口，仍属于夹具自检。
 
 `corpus/dirty-trees.json` 的五项任务声明 `initial_changes`（已跟踪文件的原有改动）、`untracked_files` 和可选 `preserved_fragments`（允许修改的文件内仍须保留的内容）。宿主仅在新副本初始化固定 Git 基线，再应用原有改动。Git 初始化不读取个人配置，不执行个人模板、签名或 hooks。起始 HEAD、索引和配置指纹在任务派遣前保存；验收同时核对原有文件内容和 Git 未提交状态。目标功能通过也不能抵消删除、回退、误暂存或误提交已有工作。
+
+批次配置通过 `freeze HOST CONFIG.json [PARENT_BATCH]` 冻结，`batch HOST BATCH_ID` 重读，`check-config HOST BATCH_ID CONFIG.json` 核对当前配置与环境。核对拒绝时输出结构化 `blocks` 并返回非零状态。变更任务、验收、模型绑定、角色、流程、限制或统计规则须另建关联批次；旧批次保持原始指纹。此入口不执行付费预检。
+
+`CONFIG.json` 对应 `FreezeRequest`：四份完整 `corpora`、现有 `main_slot`、`fast_role`、完整 `full_pack`、`prices`、`limits` 及 `statistics_version: "paired-benefit-v1"`。金额单位为千分之一美分（`total_mc: 20000000` = 200 美元，`pilot_mc: 2000000` = 20 美元，`run_mc: 500000` = 5 美元）；`requests: 80`、`active_ms: 1800000`。正式配置必须使用开发阶段选定的现有角色与流程包，不能以测试用简化流程代替。
+
+冻结记录包含实际槽绑定、供应商和型号、输出界限、角色能力、宿主判定与隔离约定、二进制指纹、解释器及系统环境。供应商默认生成参数标为未指定，不虚构具体温度。URL 带凭据、查询串或片段时不作为可用身份；钥匙正文不进入配置。
+
+`record-verification HOST BATCH_ID OBSERVATION.json` 保存来源核对观察（`dimension: model|tools|price`、`outcome: unknown|failed|reported_pass`、`batch_fingerprint`、不带秘密的 `source_url`、`checked_at`）。观察与可计费调用凭据分开：报告通过不会清除 `model_not_verified`、`tools_not_verified` 或 `price_not_verified`。正式准入还需后续隔离、共享预算与停止机制，当前以 `execution_guards_pending` 明示，配置存在不等于可调用。

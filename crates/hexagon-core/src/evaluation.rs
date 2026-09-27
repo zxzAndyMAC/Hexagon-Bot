@@ -1,5 +1,10 @@
 //! Task-benefit-evaluation 01: host-owned task acceptance, independent of turns.
 //! Only scripted debug execution is admitted until isolation and quota gates land.
+pub(crate) mod config;
+pub use config::{
+    AdmissionBlock, EvaluationBatch, EvaluationLimits, FreezeRequest, ObservedOutcome, PriceSource,
+    VerificationDimension, VerificationObservation,
+};
 mod workspace;
 use crate::{db::Db, sessions::SessionTable, tools::ToolContext};
 use serde::{Deserialize, Serialize};

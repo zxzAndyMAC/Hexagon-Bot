@@ -3126,12 +3126,61 @@ mod stall_tests;
 mod tests;
 
 #[cfg(test)]
+mod evaluation_config_tests;
+#[cfg(test)]
 mod evaluation_tests;
 
 impl Workbench {
     /// Open a local evaluation host without inherited MCP or credentials.
     pub fn open_evaluation_host(dir: &Path) -> Result<Self, ApiError> {
         Self::open_scoped(dir, "Task evaluation", &[], None, false)
+    }
+
+    /// Freeze a host-owned batch without executing a model preflight.
+    pub fn freeze_evaluation(
+        &self,
+        request: &crate::evaluation::FreezeRequest,
+        parent: Option<&str>,
+    ) -> Result<crate::evaluation::EvaluationBatch, ApiError> {
+        Ok(crate::evaluation::config::freeze(
+            &self.db,
+            &self.project_id,
+            request,
+            parent,
+        )?)
+    }
+
+    pub fn evaluation_batch(
+        &self,
+        id: &str,
+    ) -> Result<crate::evaluation::EvaluationBatch, ApiError> {
+        Ok(crate::evaluation::config::read(&self.db, id)?)
+    }
+
+    pub fn check_evaluation_configuration(
+        &self,
+        id: &str,
+        request: &crate::evaluation::FreezeRequest,
+    ) -> Result<crate::evaluation::EvaluationBatch, ApiError> {
+        Ok(crate::evaluation::config::check(
+            &self.db,
+            &self.project_id,
+            id,
+            request,
+        )?)
+    }
+
+    pub fn record_evaluation_verification(
+        &self,
+        id: &str,
+        observation: &crate::evaluation::VerificationObservation,
+    ) -> Result<crate::evaluation::EvaluationBatch, ApiError> {
+        Ok(crate::evaluation::config::observe(
+            &self.db,
+            &self.project_id,
+            id,
+            observation,
+        )?)
     }
 
     /// Host-only fixture checks, never model-benefit evidence.
