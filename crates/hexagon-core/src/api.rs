@@ -3263,3 +3263,6 @@ mod evaluation_budget_tests;
 mod evaluation_control;
 #[cfg(test)]
 mod evaluation_control_tests;
+mod evaluation_recovery;
+#[cfg(test)]
+mod evaluation_recovery_tests;

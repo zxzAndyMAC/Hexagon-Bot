@@ -337,10 +337,14 @@ pub fn request(
     if let Some(guard) = &mut evaluation {
         guard.dispatch().map_err(|e| ledger_error(e.to_string()))?;
     }
+    #[cfg(test)]
+    crate::evaluation::recovery::crash_at(crate::evaluation::recovery::CrashPoint::Reserved);
     let _watch =
         crate::evaluation::control::watch(&ctx.repo_root, ctx.sessions.clone(), ctx.tasks.clone())
             .map_err(|e| ledger_error(e.to_string()))?;
     let result = send();
+    #[cfg(test)]
+    crate::evaluation::recovery::crash_at(crate::evaluation::recovery::CrashPoint::Returned);
     let usage = match &result {
         Ok(response) => Some(&response.usage),
         Err(error) => error.usage(),
@@ -367,6 +371,8 @@ pub fn request(
             .settle(usage, result.is_ok(), state == "not_sent", extra_unpriced)
             .map_err(|e| ledger_error(e.to_string()))?;
     }
+    #[cfg(test)]
+    crate::evaluation::recovery::crash_at(crate::evaluation::recovery::CrashPoint::Persisted);
     // D09: a tool-only response has no text delta at which streaming could
     // notice stop. Settle actual usage, then refuse the late tool response.
     if crate::evaluation::control::checkpoint(&ctx.repo_root).is_err() {

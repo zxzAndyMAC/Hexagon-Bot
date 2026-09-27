@@ -239,7 +239,7 @@ pub(crate) fn claim(
     db: &Db,
     root: &std::path::Path,
     id: &str,
-) -> io::Result<(EvaluationPlan, usize, String)> {
+) -> io::Result<(EvaluationPlan, usize, String, std::fs::File)> {
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
@@ -281,6 +281,7 @@ pub(crate) fn claim(
         ));
     }
     let run_id = format!("eval-{}", db.next_id("evaluation").map_err(err)?);
+    let owner = super::recovery::new_lease(db, root, "driver", &run_id, &run_id)?;
     tx.execute("UPDATE evaluation_plan_runs SET state='started',run_id=?3,reason=NULL WHERE plan_id=?1 AND position=?2 AND state='planned'",rusqlite::params![id,i64::try_from(position).map_err(err)?,run_id]).map_err(err)?;
     let task = &batch
         .request
@@ -292,6 +293,8 @@ pub(crate) fn claim(
         .task;
     super::isolation::record_use(db, &batch.id, &run_id, task)?;
     tx.commit().map_err(err)?;
+    #[cfg(test)]
+    super::recovery::crash_at(super::recovery::CrashPoint::Claimed);
     crate::diag::note(
         crate::diag::CLASS_JUDGE,
         false,
@@ -303,7 +306,7 @@ pub(crate) fn claim(
         &format!("started:{run_id}"),
         started,
     );
-    Ok((plan, position, run_id))
+    Ok((plan, position, run_id, owner))
 }
 
 pub(crate) fn finish(db: &Db, id: &str, position: usize, run_id: &str) -> io::Result<()> {
@@ -313,8 +316,29 @@ pub(crate) fn finish(db: &Db, id: &str, position: usize, run_id: &str) -> io::Re
     }
     let changed = db.conn().execute("UPDATE evaluation_plan_runs SET state=?4,reason=?5 WHERE plan_id=?1 AND position=?2 AND run_id=?3 AND state='started'",rusqlite::params![id,i64::try_from(position).map_err(err)?,run_id,result.state,result.error]).map_err(err)?;
     if changed != 1 {
-        return Err(err("plan run no longer active"));
+        let same:bool=db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_plan_runs WHERE plan_id=?1 AND position=?2 AND run_id=?3 AND state=?4)",rusqlite::params![id,i64::try_from(position).map_err(err)?,run_id,result.state],|r|r.get(0)).map_err(err)?;
+        if !same {
+            return Err(err("plan run no longer active"));
+        }
     }
+    Ok(())
+}
+
+/// D10: admission survived but no result was materialized. Keep the original
+/// identity and denominator; do not manufacture a successful/empty result.
+pub(crate) fn abandon_missing(db: &Db, id: &str) -> io::Result<()> {
+    let exists: bool = db
+        .conn()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM evaluation_runs WHERE id=?1)",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    if exists {
+        return Err(err("run already has a result"));
+    }
+    db.conn().execute("UPDATE evaluation_plan_runs SET state='incomplete',reason='interrupted_before_result' WHERE run_id=?1 AND state='started'",[id]).map_err(err)?;
     Ok(())
 }
 

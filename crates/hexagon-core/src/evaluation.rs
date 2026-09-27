@@ -2,6 +2,8 @@
 //! Only scripted debug execution is admitted until isolation and quota gates land.
 pub(crate) mod budget;
 pub use budget::{BudgetRunSummary, BudgetSummary, DebugPrice};
+pub(crate) mod recovery;
+pub use recovery::{RecoveryEntry, RecoveryReport, RecoveryState};
 pub(crate) mod control;
 pub use control::{EvaluationControl, EvaluationControlState};
 pub(crate) mod config;
@@ -587,14 +589,54 @@ pub(crate) fn update_started(db: &Db, result: &EvaluationResult) -> io::Result<(
     } else {
         None
     };
+    let tx = if db.conn().is_autocommit() {
+        Some(
+            rusqlite::Transaction::new_unchecked(
+                db.conn(),
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(err)?,
+        )
+    } else {
+        None
+    };
     let changed = db.conn().execute("UPDATE evaluation_runs SET result_json=?2,execution_fingerprint=CASE WHEN ?3 THEN ?4 ELSE execution_fingerprint END WHERE id=?1 AND json_extract(result_json,'$.state') IN ('started','waiting_human')", rusqlite::params![result.id,serde_json::to_string(result)?,terminal,seal]).map_err(err)?;
     if changed != 1 {
         return Err(err("evaluation result already terminal or missing"));
     }
+    #[cfg(test)]
     if terminal {
-        budget::finish(db, result)?;
+        recovery::crash_at(recovery::CrashPoint::ResultPersisted);
     }
+    if terminal {
+        settle_terminal(db, result)?;
+    } else {
+        control::sync(db, result)?;
+    }
+    if let Some(tx) = tx {
+        tx.commit().map_err(err)?;
+    }
+    Ok(())
+}
+
+// D10 / ticket 13: result, fee closure, control and plan once had separate
+// crash windows. Call inside a host transaction; never rewrite terminal evidence.
+pub(crate) fn settle_terminal(db: &Db, result: &EvaluationResult) -> io::Result<()> {
+    budget::finish(db, result)?;
     control::sync(db, result)?;
+    use rusqlite::OptionalExtension;
+    let plan: Option<(String, i64)> = db
+        .conn()
+        .query_row(
+            "SELECT plan_id,position FROM evaluation_plan_runs WHERE run_id=?1 AND state='started'",
+            [&result.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(err)?;
+    if let Some((id, pos)) = plan {
+        plan::finish(db, &id, usize::try_from(pos).map_err(err)?, &result.id)?;
+    }
     Ok(())
 }
 

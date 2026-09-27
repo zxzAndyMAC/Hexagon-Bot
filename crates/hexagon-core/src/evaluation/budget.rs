@@ -785,6 +785,77 @@ fn stop_at_boundary(
     }
 }
 
+/// D10: a dead execution owner never proves an admitted request was not sent.
+/// Recover only the pending classification, retaining its full conservative hold.
+// D10 / ticket 13: deleting a required binding must not masquerade as an
+// unbudgeted run and strand pending reservations outside reconciliation.
+pub(crate) fn validate_recovery_binding(
+    db: &Db,
+    host: &Path,
+    run: &EvaluationResult,
+) -> io::Result<()> {
+    let stored: Option<(String, String)> = db
+        .conn()
+        .query_row(
+            "SELECT id,workspace FROM evaluation_budget_runs WHERE run_id=?1",
+            [&run.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(err)?;
+    let path = Path::new(&run.workspace).join(".hexagon/evaluation-budget.json");
+    match stored {
+        Some((key, workspace)) => {
+            if path.symlink_metadata()?.is_symlink() {
+                return Err(err("budget binding is an alias"));
+            }
+            let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
+            if binding.scope != DEBUG
+                || binding.host != canonical(host)?
+                || binding.run_key != key
+                || workspace != canonical(Path::new(&run.workspace))?
+            {
+                return Err(err("budget recovery identity mismatch"));
+            }
+        }
+        None => {
+            let required:bool=db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_plan_runs r JOIN evaluation_budget_plans b ON b.plan_id=r.plan_id WHERE r.run_id=?1)",[&run.id],|r|r.get(0)).map_err(err)?;
+            if required || path.symlink_metadata().is_ok() {
+                return Err(err("budget recovery association missing"));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn recover_abandoned(db: &Db, host: &Path, workspace: &Path) -> io::Result<()> {
+    let path = workspace.join(".hexagon/evaluation-budget.json");
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.symlink_metadata()?.is_symlink() {
+        return Err(rejected("binding_is_symlink"));
+    }
+    let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
+    if binding.scope != DEBUG || binding.host != canonical(host)? {
+        return Err(rejected("unverified_recovery_authority"));
+    }
+    let stored: String = db
+        .conn()
+        .query_row(
+            "SELECT workspace FROM evaluation_budget_runs WHERE id=?1",
+            [&binding.run_key],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    if stored != canonical(workspace)? {
+        return Err(rejected("recovery_workspace_mismatch"));
+    }
+    db.conn().execute("UPDATE evaluation_budget_requests SET state='unknown',held_mc=MAX(bound_mc,held_mc) WHERE run_key=?1 AND state='pending'",[&binding.run_key]).map_err(err)?;
+    db.conn().execute("UPDATE evaluation_budget_rounds SET blocked=1 WHERE id=?1 AND EXISTS(SELECT 1 FROM evaluation_budget_requests WHERE run_key=?2 AND state='unknown')",params![binding.scope,binding.run_key]).map_err(err)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

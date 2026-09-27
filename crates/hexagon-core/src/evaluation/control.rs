@@ -118,6 +118,14 @@ pub(crate) fn read(db: &Db, id: &str) -> io::Result<EvaluationControl> {
         "SELECT active_frozen_ms,stopped_at_ms,cleanup_ended_ms FROM evaluation_controls WHERE run_id=?1",[id],|r|Ok((optional_num(r,0)?,optional_num(r,1)?,optional_num(r,2)?))).map_err(err)?;
     let active = frozen.unwrap_or(measured_active);
     let incomplete:bool=db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_human_intervals WHERE run_id=?1 AND ended_at_ms IS NOT NULL AND duration_ms IS NULL)",[id],|r|r.get(0)).map_err(err)?;
+    let recovery_unknown: bool = db
+        .conn()
+        .query_row(
+            "SELECT recovery_unknown FROM evaluation_controls WHERE run_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
     let run = super::read(db, id)?;
     let worker = rusqlite::Connection::open_with_flags(
         Path::new(&run.workspace).join(".hexagon/state.db"),
@@ -136,13 +144,15 @@ pub(crate) fn read(db: &Db, id: &str) -> io::Result<EvaluationControl> {
         remote_cancellation_confirmed: false,
         stopped_at_ms: stopped,
         cleanup_elapsed_ms: stopped.map(|start| cleaned.unwrap_or(now).saturating_sub(start)),
-        active_time_complete: !incomplete,
-        cleanup_confirmed: matches!(
-            state,
-            EvaluationControlState::Stopping
-                | EvaluationControlState::Interrupted
-                | EvaluationControlState::Ended
-        ) && pending == 0
+        active_time_complete: !incomplete && !recovery_unknown,
+        cleanup_confirmed: !recovery_unknown
+            && matches!(
+                state,
+                EvaluationControlState::Stopping
+                    | EvaluationControlState::Interrupted
+                    | EvaluationControlState::Ended
+            )
+            && pending == 0
             && quiescent(Path::new(&run.workspace), &worker),
     })
 }
@@ -230,6 +240,11 @@ fn quiescent(root: &Path, worker: &rusqlite::Connection) -> bool {
     if !matches!(unresolved, Ok(false)) {
         return false;
     }
+    idle_leases(root).is_ok()
+}
+/// D10: keep exclusion while reconciling. A momentary liveness check would
+/// race a newly dispatched worker between inspection and the stop transition.
+pub(crate) fn idle_leases(root: &Path) -> io::Result<Vec<std::fs::File>> {
     let mut locks = Vec::new();
     for (name, required) in [
         ("evaluation-work.lock", true),
@@ -239,21 +254,16 @@ fn quiescent(root: &Path, worker: &rusqlite::Connection) -> bool {
         match path.symlink_metadata() {
             Err(e) if e.kind() == io::ErrorKind::NotFound && !required => continue,
             Ok(meta) if !meta.is_symlink() => (),
-            _ => return false,
+            _ => return Err(err("execution lease missing or invalid")),
         }
-        let Ok(file) = std::fs::OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .open(path)
-        else {
-            return false;
-        };
-        if file.try_lock().is_err() {
-            return false;
-        }
+            .open(path)?;
+        file.try_lock().map_err(err)?;
         locks.push(file);
     }
-    true
+    Ok(locks)
 }
 
 // D05/D09: fixed host boundary probes are not task runs. Their authority is
@@ -306,6 +316,20 @@ fn binding(root: &Path) -> io::Result<Option<Binding>> {
         return Err(err("evaluation control identity mismatch"));
     }
     Ok(Some(binding))
+}
+pub(crate) fn validate_owner(host: &Path, run: &EvaluationResult) -> io::Result<()> {
+    let worker = Path::new(&run.workspace);
+    let b = binding(worker)?.ok_or_else(|| err("evaluation worker binding missing"))?;
+    if b.run_id != run.id || Path::new(&b.host) != host.canonicalize()? {
+        return Err(err("evaluation worker owner mismatch"));
+    }
+    if !worker
+        .canonicalize()?
+        .starts_with(host.canonicalize()?.join(".hexagon/evaluation-runs"))
+    {
+        return Err(err("evaluation workspace outside host"));
+    }
+    Ok(())
 }
 fn halt(db: &Db, id: &str, reason: &str) -> io::Result<()> {
     let current = read(db, id)?;
@@ -451,6 +475,22 @@ pub(crate) fn watch(
 fn active_limit_reached(active: u64, limit: u64) -> bool {
     limit == 0 || active >= limit
 }
+pub(crate) fn abandon(db: &Db, run: &EvaluationResult) -> io::Result<()> {
+    db.conn().execute("UPDATE evaluation_controls SET state='stopping',reason='execution_owner_lost',recovery_unknown=1,active_frozen_ms=?2,phase_started_ms=NULL,stopped_at_ms=COALESCE(stopped_at_ms,?3) WHERE run_id=?1 AND state IN ('running','stopping')",params![run.id,i64::try_from(run.elapsed_ms).map_err(err)?,i64::try_from(now_ms()?).map_err(err)?]).map_err(err)?;
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        Some(crate::PROJECT_ID),
+        None,
+        None,
+        None,
+        "evaluation_recovery",
+        &format!("execution_owner_lost:{}", run.id),
+        std::time::Instant::now(),
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

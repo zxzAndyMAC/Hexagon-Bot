@@ -71,6 +71,7 @@ impl Workbench {
     ) -> Result<eval::EvaluationResult, ApiError> {
         eval::human::validate_handle(&self.db, &self.repo_root, handle)?;
         let mut result = eval::read(&self.db, &handle.run_id)?;
+        let _owner = eval::recovery::resume_driver(&self.db, &self.repo_root, &handle.run_id)?;
         if result.state != "waiting_human" {
             return Err(owner_refusal("run_not_waiting"));
         }

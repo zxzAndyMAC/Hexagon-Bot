@@ -230,8 +230,8 @@ fn expose_unknown(
     Ok(())
 }
 
-/// Called only when opening the Workbench, never when a control connection opens
-/// the database. A second connection must not declare a live action crashed.
+/// Called by Workbench startup or D10 explicit evaluation recovery holding the
+/// exclusive driver/work leases. Read-only/control opens never recover live work.
 pub(crate) fn recover(db: &Db, project: &str) -> Result<(), ToolError> {
     let started = std::time::Instant::now();
     migrate_legacy_cards(db, project)?;

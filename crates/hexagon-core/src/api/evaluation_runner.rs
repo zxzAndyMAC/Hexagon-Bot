@@ -97,7 +97,7 @@ impl Workbench {
         }) {
             return Err(ApiError::BadInput("evaluation configuration drift".into()));
         }
-        let (current, position, id) = eval::plan::claim(&self.db, &self.repo_root, plan)?;
+        let (current, position, id, lease) = eval::plan::claim(&self.db, &self.repo_root, plan)?;
         let entry = &current.entries[position];
         let task = &batch
             .request
@@ -113,6 +113,7 @@ impl Workbench {
             Some((&batch, entry.arm)),
             activations,
             owner,
+            Some(lease),
         )?;
         if result.state != "waiting_human" {
             eval::plan::finish(&self.db, plan, position, &id)?;
@@ -127,7 +128,7 @@ impl Workbench {
         frozen: Option<(&EvaluationBatch, EvaluationArm)>,
         activations: &[eval::DebugActivation],
     ) -> Result<EvaluationResult, ApiError> {
-        self.run_scripted_evaluation_mode(task, id, frozen, activations, false)
+        self.run_scripted_evaluation_mode(task, id, frozen, activations, false, None)
     }
 
     fn run_scripted_evaluation_mode(
@@ -137,7 +138,12 @@ impl Workbench {
         frozen: Option<(&EvaluationBatch, EvaluationArm)>,
         activations: &[eval::DebugActivation],
         owner: bool,
+        lease: Option<std::fs::File>,
     ) -> Result<EvaluationResult, ApiError> {
+        let _owner = match lease {
+            Some(file) => file,
+            None => eval::recovery::new_lease(&self.db, &self.repo_root, "driver", id, id)?,
+        };
         use sha2::{Digest, Sha256};
         let parent = self.repo_root.join(".hexagon/evaluation-runs");
         std::fs::create_dir_all(&parent)?;

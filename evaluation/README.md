@@ -89,3 +89,15 @@ its lease with unknown human duration; it cannot establish a human-time benefit.
 owner boundary. They cannot resume a stopped run or claim to cancel active work.
 The owner's away period consumes no active-time allowance. These commands use
 the existing offline CLI and do not add a desktop evaluation screen.
+
+### Recovery
+
+`recovery HOST` inspects persisted run/plan ownership without dispatching work.
+`reconcile HOST RUN_ID` explicitly reconciles an abandoned execution only after
+acquiring its OS lease. A live owner, missing identity, or corrupt worker binding
+is rejected. Waiting for an owner stays distinct from interrupted execution.
+Lost attention handles retain unknown duration; requests without a durable
+receipt retain their full unknown fee hold. Recovery never retries tools or
+models, invents a missing result, or upgrades a failed attempt. Terminal results,
+budget closure, control and plan completion commit atomically. Reconciliation
+can repair legacy derived links while preserving the original terminal evidence.

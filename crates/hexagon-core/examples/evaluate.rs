@@ -5,6 +5,14 @@ use std::{collections::BTreeMap, error::Error, path::Path};
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        [op,host] if op == "recovery" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            println!("{}",serde_json::to_string_pretty(&wb.inspect_evaluation_recovery()?)?);
+        }
+        [op,host,run] if op == "reconcile" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            println!("{}",serde_json::to_string_pretty(&wb.reconcile_evaluation_run(run)?)?);
+        }
         [op,host,run] if matches!(op.as_str(),"control"|"stop-run"|"pause-run"|"resume-run") => {
             let wb=Workbench::open_evaluation_host(Path::new(host))?;
             let state=match op.as_str() {"stop-run"=>wb.stop_evaluation_run(run)?,"pause-run"=>wb.pause_evaluation_run(run)?,"resume-run"=>wb.resume_evaluation_run(run)?,_=>wb.evaluation_control(run)?};
@@ -134,7 +142,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let wb = Workbench::open_evaluation_host(Path::new(host))?;
             println!("{}", serde_json::to_string_pretty(&wb.evaluation_result(id)?)?);
         }
-        _ => return Err("usage: evaluate debug HOST TASK.json WRITES.json | read HOST RUN_ID | check-category HOST CORPUS.json | freeze HOST CONFIG.json [PARENT_BATCH] | batch HOST BATCH_ID | check-config HOST BATCH_ID CONFIG.json | record-verification HOST BATCH_ID OBSERVATION.json | plan HOST BATCH_ID pilot|formal | read-plan HOST PLAN_ID | next-debug HOST PLAN_ID SCRIPT.json | stop-plan HOST PLAN_ID | generation HOST BATCH_ID | read-generation HOST CONTEXT_ID | reveal-task HOST CONTEXT_ID TASK_ID | check-isolation HOST | read-isolation HOST CHECK_ID | next-owner-debug HOST PLAN_ID SCRIPT.json | owner-session HOST RUN_ID | timing HOST RUN_ID | pending HOST RUN_ID | outcome HOST RUN_ID | outcome-history HOST RUN_ID | recheck HOST RUN_ID | debug-budget-config HOST PLAN_ID PRICE.json | budget-debug HOST | budget HOST | control HOST RUN_ID | stop-run HOST RUN_ID | pause-run HOST RUN_ID | resume-run HOST RUN_ID; live evaluation is not enabled".into()),
+        _ => return Err("usage: evaluate debug HOST TASK.json WRITES.json | read HOST RUN_ID | check-category HOST CORPUS.json | freeze HOST CONFIG.json [PARENT_BATCH] | batch HOST BATCH_ID | check-config HOST BATCH_ID CONFIG.json | record-verification HOST BATCH_ID OBSERVATION.json | plan HOST BATCH_ID pilot|formal | read-plan HOST PLAN_ID | next-debug HOST PLAN_ID SCRIPT.json | stop-plan HOST PLAN_ID | generation HOST BATCH_ID | read-generation HOST CONTEXT_ID | reveal-task HOST CONTEXT_ID TASK_ID | check-isolation HOST | read-isolation HOST CHECK_ID | next-owner-debug HOST PLAN_ID SCRIPT.json | owner-session HOST RUN_ID | timing HOST RUN_ID | pending HOST RUN_ID | outcome HOST RUN_ID | outcome-history HOST RUN_ID | recheck HOST RUN_ID | debug-budget-config HOST PLAN_ID PRICE.json | budget-debug HOST | budget HOST | control HOST RUN_ID | stop-run HOST RUN_ID | pause-run HOST RUN_ID | resume-run HOST RUN_ID | recovery HOST | reconcile HOST RUN_ID; live evaluation is not enabled".into()),
     }
     Ok(())
 }

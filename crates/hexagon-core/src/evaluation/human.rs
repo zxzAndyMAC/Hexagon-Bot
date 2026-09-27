@@ -41,6 +41,7 @@ pub struct AttentionHandle {
     pub(crate) run_id: String,
     host: PathBuf,
     started: Instant,
+    _lease: std::fs::File,
 }
 impl AttentionHandle {
     pub fn id(&self) -> &str {
@@ -138,12 +139,14 @@ pub(crate) fn begin(
         EvaluationActor::Scripted => "scripted",
     };
     tx.execute("INSERT INTO evaluation_human_intervals(id,run_id,actor,started_at_ms,fingerprint_before) VALUES (?1,?2,?3,?4,?5)",rusqlite::params![id,run_id,actor,i64::try_from(now_ms()?).map_err(err)?,fingerprint]).map_err(err)?;
+    let lease = super::recovery::new_lease(db, &host, "attention", &id, run_id)?;
     tx.commit().map_err(err)?;
     Ok(AttentionHandle {
         id,
         run_id: run_id.into(),
         host,
         started: Instant::now(),
+        _lease: lease,
     })
 }
 
@@ -234,8 +237,18 @@ pub(crate) fn timing(db: &Db, run_id: &str) -> io::Result<RunTiming> {
         .map(|id| interval(db, id))
         .collect::<io::Result<Vec<_>>>()?;
     let unmeasured:bool=db.conn().query_row("SELECT COALESCE((SELECT unmeasured_changes FROM evaluation_cursors WHERE run_id=?1),1)",[run_id],|r|r.get(0)).map_err(err)?;
-    let complete =
-        !unmeasured && !intervals.is_empty() && intervals.iter().all(|i| i.duration_ms.is_some());
+    let recovered_unknown: bool = db
+        .conn()
+        .query_row(
+            "SELECT COALESCE((SELECT recovery_unknown FROM evaluation_controls WHERE run_id=?1),1)",
+            [run_id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    let complete = !recovered_unknown
+        && !unmeasured
+        && !intervals.is_empty()
+        && intervals.iter().all(|i| i.duration_ms.is_some());
     let eligible = complete && human_eligible(&run.evidence_kind, &intervals);
     let sum = intervals
         .iter()
@@ -258,7 +271,7 @@ pub(crate) fn timing(db: &Db, run_id: &str) -> io::Result<RunTiming> {
     Ok(RunTiming {
         run_id: run_id.into(),
         human_ms: eligible.then_some(sum),
-        active_ms: Some(run.elapsed_ms.saturating_add(sum)),
+        active_ms: (!recovered_unknown).then_some(run.elapsed_ms.saturating_add(sum)),
         waiting_ms: waiting,
         elapsed_ms: elapsed,
         human_benefit_eligible: eligible,
