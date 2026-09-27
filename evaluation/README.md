@@ -14,7 +14,7 @@ cargo run -p hexagon-core --example evaluate -- read /tmp/hexagon-evaluation eva
 
 结果分别呈现执行状态、流程完成、独立验收与负责人例外。验收保存命令、退出状态、输出、文件和权限指纹、起止时间；测中修改文件或权限不能通过。离线脚本没有完成负责人最终验收，流程完成与例外不会凭脚本结束自动设为真。
 
-debug 夹具仅用于工具冒烟，不计入规格要求的二十个任务。完整对照、预算、停止与恢复、真人计时、策略质量门及真实实验按后续票据实施。
+debug 夹具仅用于工具冒烟，不计入规格要求的二十个任务。完整对照、预算、停止与恢复、策略质量门及真实实验按后续票据实施。
 
 类别清单可通过同一宿主入口执行自检：
 
@@ -56,3 +56,9 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 向生成方提供留出反馈时，用 `reveal-task HOST CONTEXT_ID TASK_ID` 记录揭示：该上下文不能再作为干净生成来源，相关任务内容退役为回归用途。揭示与实际运行使用分别持久记录。任务的身份、分发元数据、环境/归属声明不能建立“新”留出内容；改名、改版本描述或重排依赖后，新批次仍会得到 `heldout_retired`，正式计划不能启动。配置指纹仍完整冻结这些声明。
 
 `check-isolation HOST` 运行固定边界探针并保存记录：公共需求必须可读，工具及终端/子进程不能读写外部隐藏文件，评测标记不能被改写，索引和模型请求不携带隐藏正文。正向对照防止把“进程根本没启动”当成隔离通过。`read-isolation HOST CHECK_ID` 重读绑定当前可执行文件指纹的宿主探针证据；该证据只证明被测边界，不是任务通过、真人收益或模型能力证明。
+
+真人处理入口使用 `next-owner-debug HOST PLAN_ID SCRIPT.json` 开始一条保留真实待决的脚本运行，再用 `owner-session HOST RUN_ID` 处理。会话内 `start`/`continue` 开始计时，`guidance TEXT` 把额外指导放入该运行的普通负责人消息，`away` 结束区间，`timing` 显示分项时间，`quit` 离席。完整流程的 `approve` 调用原有盖章门面；`decision JSON` 提交带类型的裁决。快速通道的交付检查使用 `{"kind":"finish_review"}`，不会盖流程章或合入代码。非交互 stdin 标为 scripted；脚本模型运行即使由真人点击，也不能成为真实模型收益样本。
+
+只有开始处理后才能手改打印出的独立运行目录。处理前后记录文件指纹、额外指导次数与单调时钟时长；离席期间发生文件变化会永久标记漏计。单个宿主同一时刻只能有一个负责人处理区间，结束的句柄不可再提交。待人状态跨重开保留原运行、阶段和目录。`timing HOST RUN_ID` 分开显示人工时间、活动时间、等待和总历时；脚本或不完整计时的 `human_ms` 为 null，不能用零代替。
+
+`pending HOST RUN_ID` 读取该运行真实待决卡；会话也显示卡号。权限裁决用 `{"kind":"permission","question_id":"…","allow":false}`，最终驳回用 `{"kind":"reject_final","stage":"…","note":"…"}`。返工期间可在处理区间内修改当前副本并补充指导，再用 `{"kind":"continue_rework"}` 逐阶段重新检查；这不会重放原脚本。只有完整流程真实完成才设置 `flow_completed`，快速通道的交付复核不会设置它。

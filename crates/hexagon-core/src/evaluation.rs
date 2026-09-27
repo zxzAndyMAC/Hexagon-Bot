@@ -5,6 +5,10 @@ pub use config::{
     AdmissionBlock, EvaluationBatch, EvaluationLimits, FreezeRequest, ObservedOutcome, PriceSource,
     VerificationDimension, VerificationObservation,
 };
+pub(crate) mod human;
+pub use human::{
+    AttentionEnd, AttentionHandle, EvaluationActor, EvaluationDecision, HumanInterval, RunTiming,
+};
 pub(crate) mod isolation;
 pub use isolation::{GenerationContext, IsolationReport};
 pub(crate) mod plan;
@@ -373,7 +377,7 @@ fn permissions(meta: &std::fs::Metadata) -> u32 {
     }
 }
 
-fn now_ms() -> io::Result<u64> {
+pub(crate) fn now_ms() -> io::Result<u64> {
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(err)?
@@ -554,7 +558,7 @@ pub(crate) fn insert(db: &Db, task: &EvaluationTask, result: &EvaluationResult) 
 }
 
 pub(crate) fn update_started(db: &Db, result: &EvaluationResult) -> io::Result<()> {
-    let changed = db.conn().execute("UPDATE evaluation_runs SET result_json=?2 WHERE id=?1 AND json_extract(result_json,'$.state')='started'", rusqlite::params![result.id,serde_json::to_string(result)?]).map_err(err)?;
+    let changed = db.conn().execute("UPDATE evaluation_runs SET result_json=?2 WHERE id=?1 AND json_extract(result_json,'$.state') IN ('started','waiting_human')", rusqlite::params![result.id,serde_json::to_string(result)?]).map_err(err)?;
     if changed != 1 {
         return Err(err("evaluation result already terminal or missing"));
     }

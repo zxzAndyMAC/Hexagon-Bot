@@ -72,11 +72,13 @@ fn evaluation_pair_uses_separate_workers_and_real_stage_dispatch() {
     let mut outcomes = Vec::new();
     for entry in &plan.entries[..2] {
         let mut activations = vec![crate::evaluation::DebugActivation {
+            request_baseline_merge: false,
             role: request.fast_role.clone(),
             writes: task.reference.clone(),
         }];
         if entry.arm == crate::evaluation::EvaluationArm::Full {
             activations.push(crate::evaluation::DebugActivation {
+                request_baseline_merge: false,
                 role: request.fast_role.clone(),
                 writes: Default::default(),
             });

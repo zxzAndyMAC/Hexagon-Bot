@@ -89,6 +89,8 @@ pub struct EvaluationPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DebugActivation {
+    #[serde(default)]
+    pub request_baseline_merge: bool,
     pub role: String,
     pub writes: std::collections::BTreeMap<String, String>,
 }

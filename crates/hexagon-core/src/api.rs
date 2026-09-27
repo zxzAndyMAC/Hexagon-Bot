@@ -3231,6 +3231,7 @@ impl Workbench {
             &id,
             None,
             &[eval::DebugActivation {
+                request_baseline_merge: false,
                 role: "后端".into(),
                 writes: writes.clone(),
             }],
@@ -3244,3 +3245,8 @@ impl Workbench {
         Ok(crate::evaluation::read(&self.db, id)?)
     }
 }
+
+#[cfg(test)]
+mod evaluation_human_tests;
+
+mod evaluation_human;

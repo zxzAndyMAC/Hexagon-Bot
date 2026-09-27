@@ -2,9 +2,8 @@
 use super::*;
 use crate::evaluation::{self as eval, EvaluationArm, EvaluationBatch, EvaluationResult};
 use crate::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason};
-use std::collections::BTreeMap;
 
-fn scripted_responses(writes: &BTreeMap<String, String>) -> Vec<ChatResponse> {
+fn scripted_responses(activation: &eval::DebugActivation) -> Vec<ChatResponse> {
     let text = |value: &str| ChatResponse {
         content: vec![ContentBlock::Text { text: value.into() }],
         stop: StopReason::EndTurn,
@@ -12,7 +11,7 @@ fn scripted_responses(writes: &BTreeMap<String, String>) -> Vec<ChatResponse> {
     };
     // Dispatch consumes one planning reply before the tool loop (ticket 01).
     let mut responses = vec![text("Read declared task inputs before writing.")];
-    for (path, body) in writes {
+    for (path, body) in &activation.writes {
         for (tool, input) in [
             ("fs_read", json!({"path":path})),
             ("fs_write", json!({"path":path,"content":body})),
@@ -27,6 +26,17 @@ fn scripted_responses(writes: &BTreeMap<String, String>) -> Vec<ChatResponse> {
                 usage: Default::default(),
             });
         }
+    }
+    if activation.request_baseline_merge {
+        responses.push(ChatResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: format!("eval-{}", responses.len()),
+                name: "git_baseline_merge".into(),
+                input: json!({}),
+            }],
+            stop: StopReason::ToolUse,
+            usage: Default::default(),
+        });
     }
     responses.push(text("Debug activation ended"));
     responses
@@ -59,6 +69,23 @@ impl Workbench {
         plan: &str,
         activations: &[eval::DebugActivation],
     ) -> Result<EvaluationResult, ApiError> {
+        self.evaluate_next_scripted(plan, activations, false)
+    }
+
+    pub fn evaluate_next_with_owner_debug(
+        &self,
+        plan: &str,
+        activations: &[eval::DebugActivation],
+    ) -> Result<EvaluationResult, ApiError> {
+        self.evaluate_next_scripted(plan, activations, true)
+    }
+
+    fn evaluate_next_scripted(
+        &self,
+        plan: &str,
+        activations: &[eval::DebugActivation],
+        owner: bool,
+    ) -> Result<EvaluationResult, ApiError> {
         let current = eval::plan::read(&self.db, plan)?;
         let batch = self.evaluation_batch(&current.batch_id)?;
         let check = self.check_evaluation_configuration(&batch.id, &batch.request)?;
@@ -80,9 +107,16 @@ impl Workbench {
             .find(|c| c.task.id == entry.task_id)
             .ok_or_else(|| ApiError::BadInput("planned task missing".into()))?
             .task;
-        let result =
-            self.run_scripted_evaluation(task, &id, Some((&batch, entry.arm)), activations)?;
-        eval::plan::finish(&self.db, plan, position, &id)?;
+        let result = self.run_scripted_evaluation_mode(
+            task,
+            &id,
+            Some((&batch, entry.arm)),
+            activations,
+            owner,
+        )?;
+        if result.state != "waiting_human" {
+            eval::plan::finish(&self.db, plan, position, &id)?;
+        }
         Ok(result)
     }
 
@@ -92,6 +126,17 @@ impl Workbench {
         id: &str,
         frozen: Option<(&EvaluationBatch, EvaluationArm)>,
         activations: &[eval::DebugActivation],
+    ) -> Result<EvaluationResult, ApiError> {
+        self.run_scripted_evaluation_mode(task, id, frozen, activations, false)
+    }
+
+    fn run_scripted_evaluation_mode(
+        &self,
+        task: &eval::EvaluationTask,
+        id: &str,
+        frozen: Option<(&EvaluationBatch, EvaluationArm)>,
+        activations: &[eval::DebugActivation],
+        owner: bool,
     ) -> Result<EvaluationResult, ApiError> {
         use sha2::{Digest, Sha256};
         let parent = self.repo_root.join(".hexagon/evaluation-runs");
@@ -117,6 +162,7 @@ impl Workbench {
             error: None,
         };
         eval::insert(&self.db, task, &result)?;
+        let started_at = eval::now_ms()?;
         let started = std::time::Instant::now();
         let execute = (|| -> Result<(), ApiError> {
             if frozen.is_some() {
@@ -206,71 +252,26 @@ impl Workbench {
                     rusqlite::params![worker.project_id, aid],
                 )?;
             }
-            let mut finished = true;
-            let mut next_activation = 0;
-            let stages: Vec<Vec<String>> = match &full_pack {
-                Some(pack) => pack.stages.iter().map(|s| s.roles.clone()).collect(),
-                None => vec![vec![frozen
+            let mut cursor = ScriptCursor {
+                roles,
+                pack: full_pack,
+                slot: frozen
+                    .map(|(b, _)| b.request.main_slot.clone())
+                    .unwrap_or_else(|| "default".into()),
+                fast_role: frozen
                     .map(|(b, _)| b.request.fast_role.clone())
-                    .unwrap_or_else(|| "后端".into())]],
+                    .unwrap_or_else(|| "后端".into()),
+                activations: activations.to_vec(),
+                stage: 0,
+                next_activation: 0,
+                await_owner_decision: owner,
+                role_index: 0,
+                permission: None,
+                rework: false,
             };
-            for stage_roles in stages {
-                for role in stage_roles {
-                    let activation = activations
-                        .get(next_activation)
-                        .ok_or_else(|| ApiError::BadInput("missing scripted activation".into()))?;
-                    if activation.role != role {
-                        return Err(ApiError::BadInput(
-                            "scripted role differs from frozen execution order".into(),
-                        ));
-                    }
-                    next_activation += 1;
-                    let provider = Arc::new(ScriptedProvider::new(scripted_responses(
-                        &activation.writes,
-                    )));
-                    worker.providers.clear();
-                    let slot = frozen
-                        .map(|(b, _)| b.request.main_slot.as_str())
-                        .unwrap_or("default");
-                    worker.register_provider(slot, provider);
-                    let aid = worker.agent_by_role(&role)?;
-                    if !matches!(
-                        worker.dispatch_instance(&aid, &task.requirements, &[])?,
-                        TurnOutcome::Finished
-                    ) {
-                        finished = false;
-                        break;
-                    }
-                }
-                if !finished {
-                    break;
-                }
-                if full_pack.is_some() {
-                    let mut action = worker.advance()?;
-                    if matches!(
-                        action,
-                        orchestra::StageAction::AwaitingStamp { .. }
-                            | orchestra::StageAction::WaitingStamp { .. }
-                    ) {
-                        action = worker.stamp()?;
-                    }
-                    match action {
-                        orchestra::StageAction::StageOpened { .. } => {}
-                        orchestra::StageAction::PackFinished => {
-                            result.flow_completed = true;
-                            break;
-                        }
-                        _ => {
-                            finished = false;
-                            break;
-                        }
-                    }
-                }
-            }
-            result.state = if finished { "completed" } else { "incomplete" }.into();
-            let acceptance = eval::accept(&worker.db, &copy, task, result.git_baseline.as_ref())?;
-            result.independent_passed = acceptance.passed;
-            result.acceptance = Some(acceptance);
+            self.db.conn().execute("INSERT INTO evaluation_cursors(run_id,cursor_json,started_at_ms) VALUES (?1,?2,?3)",rusqlite::params![id,serde_json::to_string(&cursor)?,i64::try_from(started_at).map_err(std::io::Error::other)?])?;
+            drive_scripted(&mut worker, task, &mut cursor, &mut result)?;
+            self.save_evaluation_cursor(&cursor, &result)?;
             Ok(())
         })();
         if let Err(error) = execute {
@@ -280,12 +281,12 @@ impl Workbench {
         result.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         eval::update_started(&self.db, &result)?;
         crate::diag::note(
-            if result.state == "completed" {
+            if matches!(result.state.as_str(), "completed" | "waiting_human") {
                 crate::diag::CLASS_JUDGE
             } else {
                 crate::diag::CLASS_REJECT
             },
-            result.state != "completed",
+            !matches!(result.state.as_str(), "completed" | "waiting_human"),
             Some(&self.project_id),
             None,
             None,
@@ -295,5 +296,146 @@ impl Workbench {
             started,
         );
         Ok(result)
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct ScriptCursor {
+    pub roles: Vec<(String, String)>,
+    pub pack: Option<PackDef>,
+    pub slot: String,
+    pub fast_role: String,
+    pub activations: Vec<eval::DebugActivation>,
+    pub stage: usize,
+    pub next_activation: usize,
+    pub await_owner_decision: bool,
+    pub role_index: usize,
+    pub permission: Option<(String, usize)>,
+    pub rework: bool,
+}
+
+pub(super) fn drive_scripted(
+    worker: &mut Workbench,
+    task: &eval::EvaluationTask,
+    cursor: &mut ScriptCursor,
+    result: &mut EvaluationResult,
+) -> Result<(), ApiError> {
+    let stages: Vec<Vec<String>> = match &cursor.pack {
+        Some(pack) => pack.stages.iter().map(|s| s.roles.clone()).collect(),
+        None => vec![vec![cursor.fast_role.clone()]],
+    };
+    result.state = "started".into();
+    while cursor.stage < stages.len() {
+        while cursor.role_index < stages[cursor.stage].len() {
+            let role = &stages[cursor.stage][cursor.role_index];
+            let activation = cursor
+                .activations
+                .get(cursor.next_activation)
+                .ok_or_else(|| ApiError::BadInput("missing scripted activation".into()))?;
+            if activation.role != *role {
+                return Err(ApiError::BadInput(
+                    "scripted role differs from frozen execution order".into(),
+                ));
+            }
+            let consumed = cursor.permission.as_ref().map(|(_, n)| *n).unwrap_or(0);
+            let provider = Arc::new(ScriptedProvider::new(
+                scripted_responses(activation)
+                    .into_iter()
+                    .skip(consumed)
+                    .collect(),
+            ));
+            worker.providers.clear();
+            worker.register_provider(&cursor.slot, provider.clone());
+            let aid = worker.agent_by_role(role)?;
+            let outcome = if consumed > 0 {
+                worker.run_turn_agent(
+                    &aid,
+                    "Continue after the owner's permission decision.",
+                    &[],
+                    false,
+                )?
+            } else {
+                worker.dispatch_instance(&aid, &task.requirements, &[])?
+            };
+            match outcome {
+                TurnOutcome::AwaitingPermission(question_id) => {
+                    // D07: retain response offset, role and activation. Replaying
+                    // the scripted tool would create a second side-effect intent.
+                    cursor.permission = Some((question_id, consumed + provider.recorded().len()));
+                    result.state = "waiting_human".into();
+                    return Ok(());
+                }
+                TurnOutcome::Finished => {
+                    cursor.permission = None;
+                    cursor.next_activation += 1;
+                    cursor.role_index += 1;
+                }
+                _ => {
+                    result.state = "incomplete".into();
+                    break;
+                }
+            }
+        }
+        if result.state == "incomplete" {
+            break;
+        }
+        cursor.stage += 1;
+        cursor.role_index = 0;
+        if cursor.pack.is_some() {
+            let mut action = worker.advance()?;
+            if matches!(
+                action,
+                orchestra::StageAction::AwaitingStamp { .. }
+                    | orchestra::StageAction::WaitingStamp { .. }
+            ) {
+                if cursor.await_owner_decision {
+                    result.state = "waiting_human".into();
+                    return Ok(());
+                }
+                action = worker.stamp()?;
+            }
+            match action {
+                orchestra::StageAction::StageOpened { .. } => {}
+                orchestra::StageAction::PackFinished => {
+                    result.flow_completed = true;
+                    break;
+                }
+                _ => {
+                    result.state = "incomplete".into();
+                    break;
+                }
+            }
+        }
+    }
+    if result.state == "started" && cursor.await_owner_decision && cursor.pack.is_none() {
+        // D07: fast-path owners also inspect the delivered files. This review
+        // closes evaluation only; it does not invent a pack stamp or merge.
+        result.state = "waiting_human".into();
+        return Ok(());
+    }
+    if result.state == "started" {
+        result.state = "completed".into();
+    }
+    let acceptance = eval::accept(
+        &worker.db,
+        Path::new(&result.workspace),
+        task,
+        result.git_baseline.as_ref(),
+    )?;
+    result.independent_passed = acceptance.passed;
+    result.acceptance = Some(acceptance);
+    Ok(())
+}
+
+impl Workbench {
+    pub(super) fn save_evaluation_cursor(
+        &self,
+        cursor: &ScriptCursor,
+        result: &EvaluationResult,
+    ) -> Result<(), ApiError> {
+        let now = i64::try_from(eval::now_ms()?).map_err(std::io::Error::other)?;
+        let fingerprint = eval::fingerprint(Path::new(&result.workspace))?;
+        self.db.conn().execute("UPDATE evaluation_cursors SET cursor_json=?2,wait_fingerprint=?5,waiting_since_ms=CASE WHEN ?3='waiting_human' THEN ?4 ELSE NULL END,ended_at_ms=CASE WHEN ?3 IN ('completed','incomplete','failed') THEN ?4 ELSE NULL END WHERE run_id=?1",rusqlite::params![result.id,serde_json::to_string(cursor)?,result.state,now,fingerprint])?;
+        Ok(())
     }
 }
