@@ -366,6 +366,13 @@ pub fn request(
         Err(_) => "failed",
     };
     db.conn().execute("UPDATE usage SET reserved_mc=0,prompt_tokens=?1,completion_tokens=?2,cost_millicents=?3,cost_known=?4,request_state=?5,prompt_known=?7,completion_known=?8 WHERE request_id=?6 AND request_state='pending'",params![usage.map(|u|u.prompt_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),usage.map(|u|u.completion_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),cost.unwrap_or(0),cost.is_some() && !unpriced,state,id,usage.is_some_and(|u|u.prompt_reported),usage.is_some_and(|u|u.completion_reported)]).map_err(|e|ledger_error(e.to_string()))?;
+    let status = result.as_ref().err().and_then(|e| e.http_status());
+    db.conn()
+        .execute(
+            "UPDATE usage SET http_status=?2 WHERE request_id=?1",
+            params![id, status],
+        )
+        .map_err(|e| ledger_error(e.to_string()))?;
     if let Some(guard) = &evaluation {
         guard
             .settle(usage, result.is_ok(), state == "not_sent", extra_unpriced)
@@ -378,7 +385,10 @@ pub fn request(
     if crate::evaluation::control::checkpoint(&ctx.repo_root).is_err() {
         return Err(ProviderError::Interrupted);
     }
-    result.map_err(ProviderError::into_cause)
+    result.map_err(|mut error| {
+        error.bind_request(&id);
+        error.into_cause()
+    })
 }
 
 /// 记一行账。`tool_output_bytes` 是本轮工具结果合计字节数，按 /4 估 token。

@@ -79,6 +79,8 @@ pub struct PlannedRun {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationPlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supplement: Option<super::SupplementOrigin>,
     pub id: String,
     pub batch_id: String,
     pub batch_fingerprint: String,
@@ -177,6 +179,7 @@ pub(crate) fn create(db: &Db, batch_id: &str, kind: PlanKind) -> io::Result<Eval
         return read(db, &id);
     }
     let plan = EvaluationPlan {
+        supplement: None,
         id: format!("plan-{}", db.next_id("evaluation_plan").map_err(err)?),
         batch_id: batch_id.into(),
         batch_fingerprint: batch.fingerprint.clone(),

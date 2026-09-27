@@ -43,6 +43,32 @@ fn scripted_responses(activation: &eval::DebugActivation) -> Vec<ChatResponse> {
 }
 
 impl Workbench {
+    pub(super) fn record_evaluation_service_failure(
+        &self,
+        run: &EvaluationResult,
+        error: &ApiError,
+    ) -> Result<(), ApiError> {
+        if let ApiError::Turn(turn::TurnError::Provider(error)) = error {
+            if let Some(status) = error.http_status() {
+                eval::supplement::record_failure(&self.db, run, status, error.request_id())?;
+            }
+        }
+        Ok(())
+    }
+    pub fn supplement_evaluation_pair(
+        &self,
+        plan: &str,
+        position: usize,
+    ) -> Result<eval::EvaluationPlan, ApiError> {
+        Ok(eval::supplement::create(&self.db, plan, position)?)
+    }
+    pub fn evaluation_supplements(
+        &self,
+        plan: &str,
+    ) -> Result<Vec<eval::EvaluationPlan>, ApiError> {
+        Ok(eval::supplement::list(&self.db, plan)?)
+    }
+
     pub fn plan_evaluation(
         &self,
         batch: &str,
@@ -288,17 +314,27 @@ impl Workbench {
             self.db.conn().execute("INSERT INTO evaluation_cursors(run_id,cursor_json,started_at_ms) VALUES (?1,?2,?3)",rusqlite::params![id,serde_json::to_string(&cursor)?,i64::try_from(started_at).map_err(std::io::Error::other)?])?;
             let _watch =
                 eval::control::watch(&copy, worker.sessions.clone(), worker.tasks.clone())?;
+            #[cfg(test)]
+            worker.inject_evaluation_service_failure_fixture()?;
             drive_scripted(&mut worker, task, &mut cursor, &mut result)?;
             self.save_evaluation_cursor(&cursor, &result)?;
             Ok(())
         })();
+        // D11: external failure receipt and terminal result share one host
+        // transaction; a crash cannot leave only half of the eligibility fact.
+        let terminal_tx = rusqlite::Transaction::new_unchecked(
+            self.db.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         if let Err(error) = execute {
+            self.record_evaluation_service_failure(&result, &error)?;
             result.state = "failed".into();
             result.error = Some(error.to_string());
         }
         result.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         eval::control::apply_stop(&self.db, &mut result)?;
         eval::update_started(&self.db, &result)?;
+        terminal_tx.commit()?;
         crate::diag::note(
             if matches!(result.state.as_str(), "completed" | "waiting_human") {
                 crate::diag::CLASS_JUDGE
@@ -455,6 +491,82 @@ impl Workbench {
         let now = i64::try_from(eval::now_ms()?).map_err(std::io::Error::other)?;
         let fingerprint = eval::fingerprint(Path::new(&result.workspace))?;
         self.db.conn().execute("UPDATE evaluation_cursors SET cursor_json=?2,wait_fingerprint=?5,waiting_since_ms=CASE WHEN ?3='waiting_human' THEN ?4 ELSE NULL END,ended_at_ms=CASE WHEN ?3 IN ('completed','incomplete','failed') THEN ?4 ELSE NULL END WHERE run_id=?1",rusqlite::params![result.id,serde_json::to_string(cursor)?,result.state,now,fingerprint])?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+thread_local! {static SERVICE_FAULT:std::cell::Cell<Option<(u16,u8)>>=const {std::cell::Cell::new(None)};}
+#[cfg(test)]
+impl Workbench {
+    pub(super) fn arm_evaluation_service_failure_fixture(&self, status: u16) {
+        SERVICE_FAULT.set(Some((status, 0)));
+    }
+    pub(super) fn arm_interleaved_evaluation_service_failure_fixture(&self) {
+        SERVICE_FAULT.set(Some((503, 1)));
+    }
+    pub(super) fn arm_unbound_evaluation_service_failure_fixture(&self) {
+        SERVICE_FAULT.set(Some((503, 2)));
+    }
+    fn inject_evaluation_service_failure_fixture(&self) -> Result<(), ApiError> {
+        if let Some((status, mode)) = SERVICE_FAULT.take() {
+            let provider = ScriptedProvider::new(vec![]);
+            let ctx = self.ctx_for("a0", None);
+            let response = crate::usage::request(
+                &self.db,
+                &ctx,
+                "default",
+                "service_failure_fixture",
+                &provider,
+                None,
+                || {
+                    Err(crate::provider::ProviderError::WithUsage(
+                        Box::new(crate::provider::ProviderError::HttpStatus(
+                            Box::new(crate::provider::ProviderError::Transport(
+                                "HTTP boundary fixture".into(),
+                            )),
+                            status,
+                            None,
+                        )),
+                        crate::provider::Usage {
+                            prompt_tokens: 100,
+                            completion_tokens: 50,
+                            prompt_reported: true,
+                            completion_reported: true,
+                            ..Default::default()
+                        },
+                    ))
+                },
+            );
+            if mode == 1 {
+                crate::usage::request(
+                    &self.db,
+                    &ctx,
+                    "default",
+                    "later_independent_request",
+                    &provider,
+                    None,
+                    || {
+                        Ok(ChatResponse {
+                            content: vec![],
+                            stop: StopReason::EndTurn,
+                            usage: crate::provider::Usage {
+                                prompt_reported: true,
+                                completion_reported: true,
+                                ..Default::default()
+                            },
+                        })
+                    },
+                )
+                .map_err(turn::TurnError::Provider)?;
+            }
+            response.map_err(|mut error| {
+                if mode == 2 {
+                    error.bind_request("missing-fixture-request");
+                }
+                turn::TurnError::Provider(error)
+            })?;
+        }
         Ok(())
     }
 }

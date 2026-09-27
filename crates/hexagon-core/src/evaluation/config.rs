@@ -88,6 +88,8 @@ pub struct RuntimeSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostPolicy {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supplement_statuses: Vec<u16>,
     pub reviewer_mode: String,
     pub permission_contract: String,
     pub worker_network: String,
@@ -359,6 +361,7 @@ fn snapshot(db: &Db, project: &str, request: &FreezeRequest) -> io::Result<Runti
         executable_fingerprint: code_fingerprint()?,
         runtime_versions: versions()?,
         host_policy: HostPolicy {
+            supplement_statuses: vec![502, 503, 504],
             reviewer_mode: crate::autonomy::reviewer_mode(db, project).map_err(err)?,
             permission_contract: "existing-instance-permissions-v1".into(),
             worker_network: "denied-except-host-model-transport".into(),

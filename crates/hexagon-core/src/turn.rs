@@ -148,7 +148,7 @@ pub type DeltaSink<'a> = dyn FnMut(&TurnDelta) + 'a;
 
 /// 可重试的供应商错：只有 Transport 类瞬时抖动；4xx/拒绝/缺凭据/脚本耗尽直传。
 fn retryable(e: &crate::provider::ProviderError) -> bool {
-    matches!(e, crate::provider::ProviderError::Transport(_))
+    matches!(e.cause(), crate::provider::ProviderError::Transport(_))
 }
 
 /// 子代理停旗（票 04）：非子代理恒 false。

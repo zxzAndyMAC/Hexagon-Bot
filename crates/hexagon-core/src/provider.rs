@@ -191,6 +191,9 @@ pub enum ProviderError {
     /// already received. The request ledger settles this before propagating cause.
     #[error("{0}")]
     WithUsage(Box<ProviderError>, Usage),
+    /// D11: preserve structured service status; never infer it from model prose.
+    #[error("{0}")]
+    HttpStatus(Box<ProviderError>, u16, Option<String>),
     #[error("transport: {0}")]
     Transport(String),
     #[error("refused: {0}")]
@@ -221,8 +224,33 @@ impl ProviderError {
 
     pub(crate) fn cause(&self) -> &Self {
         match self {
-            Self::WithUsage(source, _) => source.cause(),
+            Self::WithUsage(source, _) | Self::HttpStatus(source, ..) => source.cause(),
             _ => self,
+        }
+    }
+
+    pub(crate) fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::HttpStatus(_, status, _) => Some(*status),
+            Self::WithUsage(source, _) => source.http_status(),
+            _ => None,
+        }
+    }
+
+    // D11: classification follows the failing request, never the last request
+    // another concurrent agent happened to settle in the shared worker ledger.
+    pub(crate) fn bind_request(&mut self, id: &str) {
+        match self {
+            Self::HttpStatus(_, _, request) => *request = Some(id.into()),
+            Self::WithUsage(source, _) => source.bind_request(id),
+            _ => (),
+        }
+    }
+    pub(crate) fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::HttpStatus(_, _, id) => id.as_deref(),
+            Self::WithUsage(source, _) => source.request_id(),
+            _ => None,
         }
     }
 
@@ -1160,9 +1188,14 @@ impl HttpProvider {
 
     fn map_err(e: ureq::Error) -> ProviderError {
         match e {
-            // 4xx（除 429 限流）是配置/权限问题——不可重试直报
-            ureq::Error::StatusCode(c) if (400..500).contains(&c) && c != 429 => {
-                ProviderError::Refused(format!("HTTP {c}"))
+            // D11: retain the actual status alongside the existing retry class.
+            ureq::Error::StatusCode(c) => {
+                let cause = if (400..500).contains(&c) && c != 429 {
+                    ProviderError::Refused(format!("HTTP {c}"))
+                } else {
+                    ProviderError::Transport(format!("HTTP {c}"))
+                };
+                ProviderError::HttpStatus(Box::new(cause), c, None)
             }
             other => ProviderError::Transport(other.to_string()),
         }
@@ -2006,6 +2039,35 @@ mod tests {
             systemone_url("https://api.typesafe.ai/v1/systemone"),
             "https://api.typesafe.ai/v1/systemone"
         );
+    }
+
+    #[test]
+    fn evaluation_service_fault_uses_http_status_not_error_prose() {
+        let base = serve_once(
+            503,
+            "application/json",
+            r#"{"error":"200 everything is fine"}"#,
+        );
+        let p = http_provider(ProviderKind::OpenAi, &base);
+        let error = p
+            .complete(&ChatRequest {
+                model_slot: "default".into(),
+                messages: vec![],
+                tools: vec![],
+            })
+            .unwrap_err();
+        assert_eq!(error.http_status(), Some(503));
+        assert!(matches!(error.cause(), ProviderError::Transport(_)));
+        assert_eq!(
+            ProviderError::Transport("HTTP 503".into()).http_status(),
+            None
+        );
+        let wrapped = error.with_usage(&Usage {
+            prompt_reported: true,
+            ..Default::default()
+        });
+        assert_eq!(wrapped.http_status(), Some(503));
+        assert_eq!(wrapped.into_cause().http_status(), Some(503));
     }
 
     #[test]

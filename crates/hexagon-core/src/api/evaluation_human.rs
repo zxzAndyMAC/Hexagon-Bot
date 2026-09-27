@@ -230,7 +230,14 @@ impl Workbench {
             }
             Ok(())
         })();
+        // D11: external failure receipt and terminal result share one host
+        // transaction; a crash cannot leave only half of the eligibility fact.
+        let terminal_tx = rusqlite::Transaction::new_unchecked(
+            self.db.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         if let Err(error) = execution {
+            self.record_evaluation_service_failure(&result, &error)?;
             result.state = "failed".into();
             result.error = Some(error.to_string());
         }
@@ -240,6 +247,7 @@ impl Workbench {
         self.save_evaluation_cursor(&cursor, &result)?;
         eval::control::apply_stop(&self.db, &mut result)?;
         eval::update_started(&self.db, &result)?;
+        terminal_tx.commit()?;
         if result.state != "waiting_human" {
             self.finish_evaluation_owner_plan(&result)?;
         }

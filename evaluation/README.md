@@ -101,3 +101,20 @@ receipt retain their full unknown fee hold. Recovery never retries tools or
 models, invents a missing result, or upgrades a failed attempt. Terminal results,
 budget closure, control and plan completion commit atomically. Reconciliation
 can repair legacy derived links while preserving the original terminal evidence.
+
+### Supplemental pairs
+
+`supplement HOST PLAN_ID EVEN_POSITION` requests one supplemental plan for the
+original pair starting at a zero-based even position. Both original entries must
+have ended or been explicitly marked not run. Eligibility requires a host receipt
+linking the terminal provider failure to its actual HTTP 502/503/504 request under
+the batch's frozen policy. Text saying “HTTP 503”, ordinary failure, timeouts,
+limits, stopped execution, and legacy batches without the policy do not qualify.
+
+`supplements HOST PLAN_ID` lists linked plans. Execute a supplemental plan through
+the normal `next-debug`/`next-owner-debug` entry: both sides get new workspaces,
+the same frozen batch and order, the same price and shared budget. A second
+supplement or supplement-of-supplement is refused. Original results and costs
+remain; reports must list supplements separately from original success rates
+and the three-original-repetitions quality requirement. Unknown fees still block
+execution and are never refunded to make room for a supplement.
