@@ -3191,6 +3191,7 @@ impl Workbench {
             independent_passed: false,
             owner_exception: false,
             acceptance: None,
+            git_baseline: None,
             elapsed_ms: 0,
             error: None,
         };
@@ -3198,7 +3199,8 @@ impl Workbench {
         eval::insert(&self.db, task, &result)?;
         let started = std::time::Instant::now();
         let run = (|| -> Result<(), ApiError> {
-            eval::materialize(&copy, &task.files)?;
+            result.git_baseline = eval::reconstruct(&copy, task)?;
+            eval::update_started(&self.db, &result)?;
             let mut worker = Workbench::open_scoped(
                 &copy,
                 &task.id,
@@ -3249,7 +3251,7 @@ impl Workbench {
                 "incomplete"
             }
             .into();
-            let acceptance = eval::accept(&worker.db, &copy, task)?;
+            let acceptance = eval::accept(&worker.db, &copy, task, result.git_baseline.as_ref())?;
             result.independent_passed = acceptance.passed;
             result.acceptance = Some(acceptance);
             Ok(())
@@ -3259,7 +3261,7 @@ impl Workbench {
             result.error = Some(e.to_string());
         }
         result.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        eval::finish(&self.db, &result)?;
+        eval::update_started(&self.db, &result)?;
         Ok(result)
     }
 

@@ -1,5 +1,6 @@
 //! Task-benefit-evaluation 01: host-owned task acceptance, independent of turns.
 //! Only scripted debug execution is admitted until isolation and quota gates land.
+mod workspace;
 use crate::{db::Db, sessions::SessionTable, tools::ToolContext};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,6 +10,8 @@ use std::{
     path::{Component, Path},
     time::{Duration, Instant},
 };
+pub(crate) use workspace::reconstruct;
+pub use workspace::GitBaseline;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +26,12 @@ pub struct EvaluationTask {
     pub dependencies: Vec<String>,
     pub allowed_paths: Vec<String>,
     pub files: BTreeMap<String, String>,
+    #[serde(default)]
+    pub initial_changes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub untracked_files: BTreeMap<String, String>,
+    #[serde(default)]
+    pub preserved_fragments: BTreeMap<String, Vec<String>>,
     /// Entry path in host-owned validation_files; never a mutable task command.
     pub validator: String,
     pub validation_files: BTreeMap<String, String>,
@@ -168,6 +177,8 @@ pub struct Acceptance {
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
+    #[serde(default)]
+    pub git_preserved: Option<bool>,
     pub before: String,
     pub after: String,
     pub passed: bool,
@@ -189,6 +200,8 @@ pub struct EvaluationResult {
     pub independent_passed: bool,
     pub owner_exception: bool,
     pub acceptance: Option<Acceptance>,
+    #[serde(default)]
+    pub git_baseline: Option<GitBaseline>,
     pub elapsed_ms: u64,
     pub error: Option<String>,
 }
@@ -212,6 +225,7 @@ pub(crate) fn safe_path(path: &str) -> bool {
 
 pub(crate) fn validate(task: &EvaluationTask) -> io::Result<()> {
     let started = Instant::now();
+    let initial_files = workspace::effective_files(task);
     let valid = [
         &task.id,
         &task.category,
@@ -225,17 +239,34 @@ pub(crate) fn validate(task: &EvaluationTask) -> io::Result<()> {
     .all(|s| !s.trim().is_empty())
         && task.validation_files.contains_key(&task.validator)
         && task.validation_files.keys().all(|p| {
-            safe_path(p) && !task.allowed_paths.contains(p) && !task.files.contains_key(p)
+            safe_path(p) && !task.allowed_paths.contains(p) && !initial_files.contains_key(p)
         })
         && !task.files.is_empty()
         && !task.allowed_paths.is_empty()
         && task
             .files
             .keys()
+            .chain(task.initial_changes.keys())
+            .chain(task.untracked_files.keys())
+            .chain(task.preserved_fragments.keys())
             .chain(task.allowed_paths.iter())
             .chain(task.reference.keys())
             .chain(task.wrong.keys())
             .all(|p| safe_path(p))
+        && task
+            .initial_changes
+            .keys()
+            .all(|p| task.files.contains_key(p))
+        && task
+            .untracked_files
+            .keys()
+            .all(|p| !task.files.contains_key(p))
+        && task.preserved_fragments.iter().all(|(p, fragments)| {
+            !fragments.is_empty()
+                && initial_files
+                    .get(p)
+                    .is_some_and(|body| fragments.iter().all(|f| !f.is_empty() && body.contains(f)))
+        })
         && task
             .reference
             .keys()
@@ -369,10 +400,16 @@ fn copy_inputs(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn accept(db: &Db, root: &Path, task: &EvaluationTask) -> io::Result<Acceptance> {
+pub(crate) fn accept(
+    db: &Db,
+    root: &Path,
+    task: &EvaluationTask,
+    baseline: Option<&GitBaseline>,
+) -> io::Result<Acceptance> {
     let started = Instant::now();
     let started_at_ms = now_ms()?;
     let before = fingerprint(root)?;
+    let git_before = baseline.map(|b| workspace::git_preserved(root, b));
     // Evaluation 01 review: running `sh check.sh` in the delivered tree let
     // an agent replace its own acceptance with `exit 0`. Host validation files
     // are disjoint from mutable inputs and are never placed in the worker tree.
@@ -397,16 +434,22 @@ pub(crate) fn accept(db: &Db, root: &Path, task: &EvaluationTask) -> io::Result<
     let verifier_after = fingerprint(verification.path())?;
     let exit_code = output["exit_code"].as_i64().unwrap_or(-1);
     let timed_out = output["timed_out"].as_bool().unwrap_or(true);
-    let preserved = task
-        .files
+    let preserved = workspace::effective_files(task)
         .iter()
         .filter(|(p, _)| !task.allowed_paths.contains(p))
         .all(|(p, body)| std::fs::read_to_string(root.join(p)).ok().as_ref() == Some(body));
+    let fragments_preserved = task.preserved_fragments.iter().all(|(path, parts)| {
+        std::fs::read_to_string(root.join(path))
+            .is_ok_and(|body| parts.iter().all(|p| body.contains(p)))
+    });
+    let git_preserved =
+        baseline.map(|b| git_before == Some(true) && workspace::git_preserved(root, b));
+    let required_git = !task.initial_changes.is_empty() || !task.untracked_files.is_empty();
     let passed = acceptance_passed(
         exit_code,
         timed_out,
         before == after && verifier_before == verifier_after,
-        preserved,
+        preserved && fragments_preserved && (!required_git || git_preserved == Some(true)),
     ) && task.expected_stdout.as_ref().is_none_or(|expected| {
         // Evaluation 02 review: os._exit(0) used to skip Python assertions.
         // Only the host compares the complete probe result; missing output fails.
@@ -437,6 +480,7 @@ pub(crate) fn accept(db: &Db, root: &Path, task: &EvaluationTask) -> io::Result<
         stdout: output["stdout"].as_str().unwrap_or("").into(),
         stderr: output["stderr"].as_str().unwrap_or("").into(),
         timed_out,
+        git_preserved,
         before,
         after,
         passed,
@@ -450,12 +494,12 @@ fn self_check_evidence(task: &EvaluationTask) -> io::Result<TaskSelfCheck> {
     validate(task)?;
     let run = |patch: Option<&BTreeMap<String, String>>| -> io::Result<Acceptance> {
         let copy = tempfile::tempdir()?;
-        materialize(copy.path(), &task.files)?;
+        let baseline = reconstruct(copy.path(), task)?;
         if let Some(patch) = patch {
             materialize(copy.path(), patch)?;
         }
         let db = Db::open_in_memory().map_err(err)?;
-        accept(&db, copy.path(), task)
+        accept(&db, copy.path(), task, baseline.as_ref())
     };
     Ok(TaskSelfCheck {
         task_id: task.id.clone(),
@@ -498,7 +542,7 @@ pub(crate) fn insert(db: &Db, task: &EvaluationTask, result: &EvaluationResult) 
     Ok(())
 }
 
-pub(crate) fn finish(db: &Db, result: &EvaluationResult) -> io::Result<()> {
+pub(crate) fn update_started(db: &Db, result: &EvaluationResult) -> io::Result<()> {
     let changed = db.conn().execute("UPDATE evaluation_runs SET result_json=?2 WHERE id=?1 AND json_extract(result_json,'$.state')='started'", rusqlite::params![result.id,serde_json::to_string(result)?]).map_err(err)?;
     if changed != 1 {
         return Err(err("evaluation result already terminal or missing"));

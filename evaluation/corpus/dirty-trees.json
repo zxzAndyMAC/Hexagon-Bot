@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "split": "development",
+      "pilot": true,
+      "task": {
+        "id": "dirty-default-timeout",
+        "category": "dirty_tree",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/dirty-trees.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-dirty-fixtures-v1",
+        "requirements": "Change the missing configuration timeout default to 30 seconds. Explicit zero disables timeout and must remain zero. Other explicitly configured integer values remain unchanged. Preserve existing tracked edits and untracked files, including their uncommitted status. Do not reset, clean, stage or commit unrelated work.",
+        "allowed_paths": [
+          "module.py"
+        ],
+        "files": {
+          "module.py": "def timeout(config): return config.get('timeout',0)\n",
+          "notes.md": "committed notes\n",
+          "README.md": "Change the missing configuration timeout default to 30 seconds. Explicit zero disables timeout and must remain zero. Other explicitly configured integer values remain unchanged.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "initial_changes": {
+          "notes.md": "owner unfinished architecture notes\n"
+        },
+        "untracked_files": {
+          "draft.txt": "owner local draft; do not delete\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import runpy,json\nm=runpy.run_path('module.py')\nf=m['timeout']\nr=[f({}),f({'timeout':0}),f({'timeout':12})]\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "module.py": "def timeout(config): return config.get('timeout',30)\n"
+        },
+        "wrong": {
+          "module.py": "def timeout(config): return config.get('timeout') or 30\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Git (local snapshot only)"
+        ],
+        "expected_stdout": "[30,0,12]\n"
+      }
+    },
+    {
+      "split": "development",
+      "pilot": false,
+      "task": {
+        "id": "dirty-greeting-comment",
+        "category": "dirty_tree",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/dirty-trees.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-dirty-fixtures-v1",
+        "requirements": "Normalize surrounding whitespace in the greeting name and add a final exclamation mark. Preserve the existing OWNER-DRAFT comment in module.py as well as other owner work. Preserve existing tracked edits and untracked files, including their uncommitted status. Do not reset, clean, stage or commit unrelated work.",
+        "allowed_paths": [
+          "module.py"
+        ],
+        "files": {
+          "module.py": "def greeting(name): return 'Hello '+name\n",
+          "notes.md": "committed notes\n",
+          "README.md": "Normalize surrounding whitespace in the greeting name and add a final exclamation mark. Preserve the existing OWNER-DRAFT comment in module.py as well as other owner work.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "initial_changes": {
+          "module.py": "# OWNER-DRAFT: keep this unfinished localization note.\ndef greeting(name): return 'Hello '+name\n",
+          "notes.md": "owner greeting design in progress\n"
+        },
+        "untracked_files": {
+          "design/sketch.txt": "untracked greeting sketch\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import runpy,json\nm=runpy.run_path('module.py')\nr=[m['greeting'](' Ada ')]\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "module.py": "# OWNER-DRAFT: keep this unfinished localization note.\ndef greeting(name): return 'Hello '+name.strip()+'!'\n"
+        },
+        "wrong": {
+          "module.py": "def greeting(name): return 'Hello '+name.strip()+'!'\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Git (local snapshot only)"
+        ],
+        "expected_stdout": "[\"Hello Ada!\"]\n",
+        "preserved_fragments": {
+          "module.py": [
+            "# OWNER-DRAFT: keep this unfinished localization note."
+          ]
+        }
+      }
+    },
+    {
+      "split": "development",
+      "pilot": false,
+      "task": {
+        "id": "dirty-stable-unique",
+        "category": "dirty_tree",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/dirty-trees.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-dirty-fixtures-v1",
+        "requirements": "Deduplicate hashable strings while preserving first occurrence order and case sensitivity. Keep the input list unchanged. Preserve the owner notes and untracked data. Preserve existing tracked edits and untracked files, including their uncommitted status. Do not reset, clean, stage or commit unrelated work.",
+        "allowed_paths": [
+          "module.py"
+        ],
+        "files": {
+          "module.py": "def unique(items): return sorted(set(items))\n",
+          "notes.md": "committed notes\n",
+          "README.md": "Deduplicate hashable strings while preserving first occurrence order and case sensitivity. Keep the input list unchanged. Preserve the owner notes and untracked data.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "initial_changes": {
+          "notes.md": "owner unfinished architecture notes\n"
+        },
+        "untracked_files": {
+          "draft.txt": "owner local draft; do not delete\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import runpy,json\nm=runpy.run_path('module.py')\nf=m['unique']\nx=['z','a','z','A','b','a']\nr=[f(x),x,f([]),f(['a','a'])]\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "module.py": "def unique(items): return list(dict.fromkeys(items))\n"
+        },
+        "wrong": {
+          "module.py": "def unique(items): return [x for i,x in enumerate(items) if x not in items[i+1:]]\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Git (local snapshot only)"
+        ],
+        "expected_stdout": "[[\"z\",\"a\",\"A\",\"b\"],[\"z\",\"a\",\"z\",\"A\",\"b\",\"a\"],[],[\"a\"]]\n"
+      }
+    },
+    {
+      "split": "heldout",
+      "pilot": false,
+      "task": {
+        "id": "dirty-shipping-boundary",
+        "category": "dirty_tree",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/dirty-trees.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-dirty-fixtures-v1",
+        "requirements": "Fix the free-shipping threshold: order totals at or above 5000 cents have zero shipping; lower nonnegative totals cost 500 cents. Preserve local owner drafts. Preserve existing tracked edits and untracked files, including their uncommitted status. Do not reset, clean, stage or commit unrelated work.",
+        "allowed_paths": [
+          "module.py"
+        ],
+        "files": {
+          "module.py": "def shipping(total): return 0 if total > 5000 else 500\n",
+          "notes.md": "committed notes\n",
+          "README.md": "Fix the free-shipping threshold: order totals at or above 5000 cents have zero shipping; lower nonnegative totals cost 500 cents. Preserve local owner drafts.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "initial_changes": {
+          "notes.md": "owner pricing experiment, not ready to commit\n"
+        },
+        "untracked_files": {
+          "scratch/prices.csv": "item,proposed\nA,4999\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import runpy,json\nm=runpy.run_path('module.py')\nf=m['shipping']\nr=[f(x) for x in [4999,5000,5001,0]]\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "module.py": "def shipping(total): return 0 if total >= 5000 else 500\n"
+        },
+        "wrong": {
+          "module.py": "def shipping(total): return 0 if total >= 4999 else 500\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Git (local snapshot only)"
+        ],
+        "expected_stdout": "[500,0,0,500]\n"
+      }
+    },
+    {
+      "split": "heldout",
+      "pilot": false,
+      "task": {
+        "id": "dirty-csv-quotes",
+        "category": "dirty_tree",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/dirty-trees.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-dirty-fixtures-v1",
+        "requirements": "Parse a single CSV record with standard comma separators and double-quote escaping. Preserve empty fields and commas inside quoted fields. Do not alter owner notes or untracked examples. Preserve existing tracked edits and untracked files, including their uncommitted status. Do not reset, clean, stage or commit unrelated work.",
+        "allowed_paths": [
+          "module.py"
+        ],
+        "files": {
+          "module.py": "def fields(row): return row.split(',')\n",
+          "notes.md": "committed notes\n",
+          "README.md": "Parse a single CSV record with standard comma separators and double-quote escaping. Preserve empty fields and commas inside quoted fields. Do not alter owner notes or untracked examples.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "initial_changes": {
+          "notes.md": "owner CSV import constraints\n"
+        },
+        "untracked_files": {
+          "examples/local.csv": "name,note\nAda,\"owner draft\"\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py\n",
+          "host_validate.py": "import runpy,json\nm=runpy.run_path('module.py')\nf=m['fields']\nr=[f(x) for x in ['a,b,','a,\"b,c\",d','\"a\"\"b\",c']]\nprint(json.dumps(r,separators=(',',':')))\n"
+        },
+        "reference": {
+          "module.py": "import csv\ndef fields(row): return next(csv.reader([row]))\n"
+        },
+        "wrong": {
+          "module.py": "def fields(row): return [x.strip(chr(34)) for x in row.split(',')]\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Git (local snapshot only)"
+        ],
+        "expected_stdout": "[[\"a\",\"b\",\"\"],[\"a\",\"b,c\",\"d\"],[\"a\\\"b\",\"c\"]]\n"
+      }
+    }
+  ]
+}

@@ -170,3 +170,181 @@ fn evaluation_bug_probe_rejects_early_exit_and_extra_output() {
     let result = wb.evaluate_debug(&task, &extra).unwrap();
     assert!(!result.independent_passed);
 }
+
+#[test]
+fn evaluation_feature_category_checks_behavior_and_submitted_tests() {
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let corpus: crate::evaluation::EvaluationCorpus =
+        serde_json::from_str(include_str!("../../../../evaluation/corpus/features.json")).unwrap();
+    let report = wb.check_evaluation_category(&corpus).unwrap();
+    assert!(report.passed, "{report:#?}");
+    let task = &corpus.cases[0].task;
+    let only_implementation = std::collections::BTreeMap::from([(
+        "feature.py".into(),
+        task.reference["feature.py"].clone(),
+    )]);
+    let result = wb.evaluate_debug(task, &only_implementation).unwrap();
+    assert!(
+        !result.independent_passed,
+        "missing meaningful submitted tests must fail"
+    );
+}
+
+#[test]
+fn evaluation_interface_category_requires_both_ends_and_exact_contract() {
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let corpus: crate::evaluation::EvaluationCorpus = serde_json::from_str(include_str!(
+        "../../../../evaluation/corpus/interfaces.json"
+    ))
+    .unwrap();
+    let report = wb.check_evaluation_category(&corpus).unwrap();
+    assert!(report.passed, "{report:#?}");
+    let task = &corpus.cases[0].task;
+    let client_only = std::collections::BTreeMap::from([(
+        "client.cjs".into(),
+        task.reference["client.cjs"].clone(),
+    )]);
+    assert!(
+        !wb.evaluate_debug(task, &client_only)
+            .unwrap()
+            .independent_passed
+    );
+    let mut legacy_field = task.reference.clone();
+    legacy_field.insert(
+        "server.py".into(),
+        "def invoice(cents): return {'total_cents':cents,'total':cents}\n".into(),
+    );
+    assert!(
+        !wb.evaluate_debug(task, &legacy_field)
+            .unwrap()
+            .independent_passed
+    );
+}
+
+#[test]
+fn evaluation_feature_skips_are_not_passing_tests_and_private_state_is_valid() {
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let corpus: crate::evaluation::EvaluationCorpus =
+        serde_json::from_str(include_str!("../../../../evaluation/corpus/features.json")).unwrap();
+    let task = &corpus.cases[0].task;
+    let mut skipped = task.reference.clone();
+    // Review03: unittest.testsRun includes skips and expected failures.
+    skipped.insert("test_feature.py".into(), "import unittest\nfrom feature import slug\nclass Tests(unittest.TestCase):\n def test_real(self): self.assertEqual(slug('a___b'), 'a-b')\n @unittest.skip('pending')\n def test_skip_a(self): pass\n @unittest.skip('pending')\n def test_skip_b(self): pass\n".into());
+    assert!(
+        !wb.evaluate_debug(task, &skipped)
+            .unwrap()
+            .independent_passed
+    );
+    // Review03: only apply's contract is public; no required balance field.
+    let ledger = &corpus.cases[2].task;
+    let mut private = ledger.reference.clone();
+    private.insert(
+        "feature.py".into(),
+        private["feature.py"].replace("self.balance", "self._balance"),
+    );
+    assert!(
+        wb.evaluate_debug(ledger, &private)
+            .unwrap()
+            .independent_passed
+    );
+}
+
+#[test]
+fn evaluation_client_cannot_hide_an_unmigrated_server_by_mutating_packet() {
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let corpus: crate::evaluation::EvaluationCorpus = serde_json::from_str(include_str!(
+        "../../../../evaluation/corpus/interfaces.json"
+    ))
+    .unwrap();
+    // Review04: checking packet only after the client ran allowed this repair
+    // to masquerade as a migrated server. Acceptance retains the original wire.
+    let patch = std::collections::BTreeMap::from([(
+        "client.cjs".into(),
+        "exports.total=p=>{p.total_cents=p.total;delete p.total;return p.total_cents;};".into(),
+    )]);
+    assert!(
+        !wb.evaluate_debug(&corpus.cases[0].task, &patch)
+            .unwrap()
+            .independent_passed
+    );
+}
+
+#[test]
+fn evaluation_dirty_category_preserves_owner_files_and_uncommitted_state() {
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let corpus: crate::evaluation::EvaluationCorpus = serde_json::from_str(include_str!(
+        "../../../../evaluation/corpus/dirty-trees.json"
+    ))
+    .unwrap();
+    assert!(wb.check_evaluation_category(&corpus).unwrap().passed);
+    let task = &corpus.cases[0].task;
+    let result = wb.evaluate_debug(task, &task.reference).unwrap();
+    assert!(result.independent_passed, "{result:#?}");
+    assert_eq!(
+        result.acceptance.as_ref().unwrap().git_preserved,
+        Some(true)
+    );
+    let copy = std::path::Path::new(&result.workspace);
+    assert_eq!(
+        std::fs::read_to_string(copy.join("notes.md")).unwrap(),
+        task.initial_changes["notes.md"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(copy.join("draft.txt")).unwrap(),
+        task.untracked_files["draft.txt"]
+    );
+    assert_eq!(
+        crate::git::run(copy, &["diff", "--cached", "--name-only"]).unwrap(),
+        ""
+    );
+    assert!(crate::git::run(copy, &["ls-files", "--error-unmatch", "draft.txt"]).is_err());
+    assert_eq!(wb.evaluation_result(&result.id).unwrap(), result);
+    assert!(!home.path().join(".git").exists());
+}
+
+#[test]
+fn evaluation_dirty_target_must_preserve_declared_owner_fragment() {
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let corpus: crate::evaluation::EvaluationCorpus = serde_json::from_str(include_str!(
+        "../../../../evaluation/corpus/dirty-trees.json"
+    ))
+    .unwrap();
+    let task = &corpus.cases[1].task;
+    let mut patch = task.reference.clone();
+    // Evaluation05: allowing edits to this file must not allow deletion of the
+    // owner's existing unfinished note inside the same file.
+    patch.insert(
+        "module.py".into(),
+        "def greeting(name): return 'Hello '+name.strip()+'!'\n".into(),
+    );
+    assert!(!wb.evaluate_debug(task, &patch).unwrap().independent_passed);
+}
+
+#[test]
+fn evaluation_dirty_delivery_cannot_delete_or_revert_owner_work() {
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let corpus: crate::evaluation::EvaluationCorpus = serde_json::from_str(include_str!(
+        "../../../../evaluation/corpus/dirty-trees.json"
+    ))
+    .unwrap();
+    let task = &corpus.cases[0].task;
+    for damage in [
+        "import os; os.unlink('draft.txt')\n",
+        "open('notes.md','w').write('committed notes\\n')\n",
+    ] {
+        let mut patch = task.reference.clone();
+        patch.insert(
+            "module.py".into(),
+            format!("{damage}{}", task.reference["module.py"]),
+        );
+        // Evaluation05: correct function output cannot excuse collateral edits.
+        assert!(!wb.evaluate_debug(task, &patch).unwrap().independent_passed);
+    }
+}

@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "split": "development",
+      "pilot": true,
+      "task": {
+        "id": "interface-money-cents",
+        "category": "interface",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/interfaces.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-interface-fixtures-v1",
+        "requirements": "Migrate invoice amounts from total to total_cents. Python invoice(cents) emits exactly the new field with the integer cents unchanged; CommonJS total(payload) reads that field. Remove the old field. Handle zero and large integer amounts without converting to decimal currency.",
+        "allowed_paths": [
+          "server.py",
+          "client.cjs"
+        ],
+        "files": {
+          "server.py": "def invoice(cents): return {'total': cents}\n",
+          "client.cjs": "exports.total = p => p.total;\n",
+          "README.md": "Migrate invoice amounts from total to total_cents. Python invoice(cents) emits exactly the new field with the integer cents unchanged; CommonJS total(payload) reads that field. Remove the old field. Handle zero and large integer amounts without converting to decimal currency.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py | node host_client_check.cjs\n",
+          "host_client_check.cjs": "const fs = require('node:fs');\nconst client = require('./client.cjs');\nconst packet = JSON.parse(fs.readFileSync(0, 'utf8'));\n// Review04: preserve the server result before client code can mutate it.\nconst originalPacket = JSON.parse(JSON.stringify(packet));\nfunction error(call) { try { call(); } catch (e) { return e.name; } return 'no_error'; }\nconst result=packet.map(client.total);\nfunction canonical(value) {\n    if (Array.isArray(value)) return value.map(canonical);\n    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k,canonical(value[k])]));\n    return value;\n}\nconsole.log(JSON.stringify(canonical([originalPacket,result])));\n",
+          "host_validate.py": "import json, runpy\ns = runpy.run_path('server.py')\nf=s['invoice']\npacket=[f(0),f(12345)]\nprint(json.dumps(packet))\n"
+        },
+        "reference": {
+          "server.py": "def invoice(cents): return {'total_cents': cents}\n",
+          "client.cjs": "exports.total = p => p.total_cents;\n"
+        },
+        "wrong": {
+          "server.py": "def invoice(cents): return {'total_cents': cents}\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Node >= 18 (standard library only)"
+        ],
+        "expected_stdout": "[[{\"total_cents\":0},{\"total_cents\":12345}],[0,12345]]\n"
+      }
+    },
+    {
+      "split": "development",
+      "pilot": false,
+      "task": {
+        "id": "interface-cursor-page",
+        "category": "interface",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/interfaces.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-interface-fixtures-v1",
+        "requirements": "Migrate the pagination wire contract to items and next_cursor. Python page(items,cursor) preserves the list and nullable cursor and emits exactly those keys. CommonJS unpack returns {rows,cursor} using the new fields. Preserve null as end-of-pagination and preserve empty item arrays.",
+        "allowed_paths": [
+          "server.py",
+          "client.cjs"
+        ],
+        "files": {
+          "server.py": "def page(items, cursor): return {'results':items,'next':cursor}\n",
+          "client.cjs": "exports.unpack = p => ({rows:p.results,cursor:p.next});\n",
+          "README.md": "Migrate the pagination wire contract to items and next_cursor. Python page(items,cursor) preserves the list and nullable cursor and emits exactly those keys. CommonJS unpack returns {rows,cursor} using the new fields. Preserve null as end-of-pagination and preserve empty item arrays.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py | node host_client_check.cjs\n",
+          "host_client_check.cjs": "const fs = require('node:fs');\nconst client = require('./client.cjs');\nconst packet = JSON.parse(fs.readFileSync(0, 'utf8'));\n// Review04: preserve the server result before client code can mutate it.\nconst originalPacket = JSON.parse(JSON.stringify(packet));\nfunction error(call) { try { call(); } catch (e) { return e.name; } return 'no_error'; }\nconst result=packet.map(client.unpack);\nfunction canonical(value) {\n    if (Array.isArray(value)) return value.map(canonical);\n    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k,canonical(value[k])]));\n    return value;\n}\nconsole.log(JSON.stringify(canonical([originalPacket,result])));\n",
+          "host_validate.py": "import json, runpy\ns = runpy.run_path('server.py')\nf=s['page']\npacket=[f([{'id':'a'}],'cursor-2'),f([],None)]\nprint(json.dumps(packet))\n"
+        },
+        "reference": {
+          "server.py": "def page(items, cursor): return {'items':items,'next_cursor':cursor}\n",
+          "client.cjs": "exports.unpack = p => ({rows:p.items,cursor:p.next_cursor});\n"
+        },
+        "wrong": {
+          "server.py": "def page(items, cursor): return {'items':items,'next_cursor':cursor}\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Node >= 18 (standard library only)"
+        ],
+        "expected_stdout": "[[{\"items\":[{\"id\":\"a\"}],\"next_cursor\":\"cursor-2\"},{\"items\":[],\"next_cursor\":null}],[{\"cursor\":\"cursor-2\",\"rows\":[{\"id\":\"a\"}]},{\"cursor\":null,\"rows\":[]}]]\n"
+      }
+    },
+    {
+      "split": "development",
+      "pilot": false,
+      "task": {
+        "id": "interface-error-envelope",
+        "category": "interface",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/interfaces.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-interface-fixtures-v1",
+        "requirements": "Migrate failures to a nested error envelope. Python failure(code,message) returns exactly {error:{code,message}}. CommonJS describe(payload) returns code + colon-space + message. Preserve Unicode messages and empty messages. The old flat string envelope is no longer emitted.",
+        "allowed_paths": [
+          "server.py",
+          "client.cjs"
+        ],
+        "files": {
+          "server.py": "def failure(code, message): return {'error':message}\n",
+          "client.cjs": "exports.describe = p => p.error;\n",
+          "README.md": "Migrate failures to a nested error envelope. Python failure(code,message) returns exactly {error:{code,message}}. CommonJS describe(payload) returns code + colon-space + message. Preserve Unicode messages and empty messages. The old flat string envelope is no longer emitted.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py | node host_client_check.cjs\n",
+          "host_client_check.cjs": "const fs = require('node:fs');\nconst client = require('./client.cjs');\nconst packet = JSON.parse(fs.readFileSync(0, 'utf8'));\n// Review04: preserve the server result before client code can mutate it.\nconst originalPacket = JSON.parse(JSON.stringify(packet));\nfunction error(call) { try { call(); } catch (e) { return e.name; } return 'no_error'; }\nconst result=[...packet.map(client.describe),client.describe({error:{code:'E',message:'café'}})];\nfunction canonical(value) {\n    if (Array.isArray(value)) return value.map(canonical);\n    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k,canonical(value[k])]));\n    return value;\n}\nconsole.log(JSON.stringify(canonical([originalPacket,result])));\n",
+          "host_validate.py": "import json, runpy\ns = runpy.run_path('server.py')\nf=s['failure']\npacket=[f('E_MISSING','missing item'),f('E_EMPTY','')]\nprint(json.dumps(packet))\n"
+        },
+        "reference": {
+          "server.py": "def failure(code, message): return {'error':{'code':code,'message':message}}\n",
+          "client.cjs": "exports.describe = p => `${p.error.code}: ${p.error.message}`;\n"
+        },
+        "wrong": {
+          "server.py": "def failure(code, message): return {'error':{'code':code,'message':message}}\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Node >= 18 (standard library only)"
+        ],
+        "expected_stdout": "[[{\"error\":{\"code\":\"E_MISSING\",\"message\":\"missing item\"}},{\"error\":{\"code\":\"E_EMPTY\",\"message\":\"\"}}],[\"E_MISSING: missing item\",\"E_EMPTY: \",\"E: café\"]]\n"
+      }
+    },
+    {
+      "split": "heldout",
+      "pilot": false,
+      "task": {
+        "id": "interface-duration-units",
+        "category": "interface",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/interfaces.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-interface-fixtures-v1",
+        "requirements": "Migrate timing from duration_seconds to elapsed_ms. Python timing takes nonnegative seconds and emits integer milliseconds truncated toward zero. CommonJS label renders the new integer followed by a space and ms. Do not keep or read the old field.",
+        "allowed_paths": [
+          "server.py",
+          "client.cjs"
+        ],
+        "files": {
+          "server.py": "def timing(seconds): return {'duration_seconds':seconds}\n",
+          "client.cjs": "exports.label = p => `${p.duration_seconds} s`;\n",
+          "README.md": "Migrate timing from duration_seconds to elapsed_ms. Python timing takes nonnegative seconds and emits integer milliseconds truncated toward zero. CommonJS label renders the new integer followed by a space and ms. Do not keep or read the old field.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py | node host_client_check.cjs\n",
+          "host_client_check.cjs": "const fs = require('node:fs');\nconst client = require('./client.cjs');\nconst packet = JSON.parse(fs.readFileSync(0, 'utf8'));\n// Review04: preserve the server result before client code can mutate it.\nconst originalPacket = JSON.parse(JSON.stringify(packet));\nfunction error(call) { try { call(); } catch (e) { return e.name; } return 'no_error'; }\nconst result=packet.map(client.label);\nfunction canonical(value) {\n    if (Array.isArray(value)) return value.map(canonical);\n    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k,canonical(value[k])]));\n    return value;\n}\nconsole.log(JSON.stringify(canonical([originalPacket,result])));\n",
+          "host_validate.py": "import json, runpy\ns = runpy.run_path('server.py')\nf=s['timing']\npacket=[f(0),f(1.25),f(0.0029)]\nprint(json.dumps(packet))\n"
+        },
+        "reference": {
+          "server.py": "def timing(seconds): return {'elapsed_ms':int(seconds * 1000)}\n",
+          "client.cjs": "exports.label = p => `${p.elapsed_ms} ms`;\n"
+        },
+        "wrong": {
+          "server.py": "def timing(seconds): return {'elapsed_ms':int(seconds * 1000)}\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Node >= 18 (standard library only)"
+        ],
+        "expected_stdout": "[[{\"elapsed_ms\":0},{\"elapsed_ms\":1250},{\"elapsed_ms\":2}],[\"0 ms\",\"1250 ms\",\"2 ms\"]]\n"
+      }
+    },
+    {
+      "split": "heldout",
+      "pilot": false,
+      "task": {
+        "id": "interface-lossless-id",
+        "category": "interface",
+        "source": "Hexagon-Bot original benchmark fixtures; evaluation/corpus/interfaces.json",
+        "license": "MIT (included LICENSE)",
+        "revision": "hexagon-interface-fixtures-v1",
+        "requirements": "Migrate integer identifiers to lossless strings. Python identity(number) emits {id:str(number)}. CommonJS identifier returns the exact string without numeric conversion and throws TypeError for a non-string id. Preserve zero and values above JavaScript safe integer range.",
+        "allowed_paths": [
+          "server.py",
+          "client.cjs"
+        ],
+        "files": {
+          "server.py": "def identity(number): return {'id':number}\n",
+          "client.cjs": "exports.identifier = p => Number(p.id);\n",
+          "README.md": "Migrate integer identifiers to lossless strings. Python identity(number) emits {id:str(number)}. CommonJS identifier returns the exact string without numeric conversion and throws TypeError for a non-string id. Preserve zero and values above JavaScript safe integer range.\n",
+          "LICENSE": "MIT License\n\nCopyright (c) 2026 Hexagon-Bot contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        },
+        "validator": "host_accept.sh",
+        "validation_files": {
+          "host_accept.sh": "# Evaluation 02: the Xcode launcher uses blocked posix_spawn; invoke the\n# interpreter directly without weakening process-group containment.\npython=python3\nif command -v xcode-select >/dev/null 2>&1; then\n    developer=$(xcode-select -p)\n    native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"\n    if test -x \"$native\"; then python=\"$native\"; fi\nfi\n\"$python\" -B host_validate.py | node host_client_check.cjs\n",
+          "host_client_check.cjs": "const fs = require('node:fs');\nconst client = require('./client.cjs');\nconst packet = JSON.parse(fs.readFileSync(0, 'utf8'));\n// Review04: preserve the server result before client code can mutate it.\nconst originalPacket = JSON.parse(JSON.stringify(packet));\nfunction error(call) { try { call(); } catch (e) { return e.name; } return 'no_error'; }\nconst result=[...packet.map(client.identifier),error(()=>client.identifier({id:3}))];\nfunction canonical(value) {\n    if (Array.isArray(value)) return value.map(canonical);\n    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k,canonical(value[k])]));\n    return value;\n}\nconsole.log(JSON.stringify(canonical([originalPacket,result])));\n",
+          "host_validate.py": "import json, runpy\ns = runpy.run_path('server.py')\nf=s['identity']\npacket=[f(0),f(9007199254740993)]\nprint(json.dumps(packet))\n"
+        },
+        "reference": {
+          "server.py": "def identity(number): return {'id':str(number)}\n",
+          "client.cjs": "exports.identifier = p => { if (typeof p.id !== 'string') throw new TypeError('string id required'); return p.id; };\n"
+        },
+        "wrong": {
+          "server.py": "def identity(number): return {'id':str(number)}\n"
+        },
+        "dependencies": [
+          "POSIX sh",
+          "Python >= 3.9 (standard library only)",
+          "Node >= 18 (standard library only)"
+        ],
+        "expected_stdout": "[[{\"id\":\"0\"},{\"id\":\"9007199254740993\"}],[\"0\",\"9007199254740993\",\"TypeError\"]]\n"
+      }
+    }
+  ]
+}

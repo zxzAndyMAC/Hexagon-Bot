@@ -26,3 +26,9 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 
 
 类别任务还须提供非空 `expected_stdout`：宿主核对完整实际输出，该预期值不注入验收进程。Python 探针仅输出函数行为数据，不在执行任务代码的进程内断言成功；提前退出、输出缺项及额外输出均失败。macOS 使用 Xcode 自带的实际 Python 解释器，绕开依赖 posix_spawn 的启动包装器，进程隔离规则保持生效。
+
+`corpus/features.json` 提供五个带测试的功能任务；独立功能探针之外，提交的 unittest 至少三项通过且必须发现预设回归。缺测试或只改测试断言不能替代功能交付。探针规范化等值整数/浮点及对象键顺序，避免序列化形式制造失败。
+
+`corpus/interfaces.json` 提供五个 Python 服务端与 CommonJS 客户端任务，实际服务端数据经管道送入客户端。宿主同时核对完整报文与客户端结果，单改一侧、保留旧字段或不兼容响应均不能通过。两个清单也使用 `check-category` 入口，仍属于夹具自检。
+
+`corpus/dirty-trees.json` 的五项任务声明 `initial_changes`（已跟踪文件的原有改动）、`untracked_files` 和可选 `preserved_fragments`（允许修改的文件内仍须保留的内容）。宿主仅在新副本初始化固定 Git 基线，再应用原有改动。Git 初始化不读取个人配置，不执行个人模板、签名或 hooks。起始 HEAD、索引和配置指纹在任务派遣前保存；验收同时核对原有文件内容和 Git 未提交状态。目标功能通过也不能抵消删除、回退、误暂存或误提交已有工作。
