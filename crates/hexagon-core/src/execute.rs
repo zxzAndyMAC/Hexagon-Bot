@@ -117,7 +117,7 @@ pub fn judge_passed(
             "surface is not an execute-judgment input: {surface}"
         )));
     }
-    if let Some(reason) = pack_score_block(surface, body) {
+    if let Some(reason) = pack_replay_format_block(surface, body) {
         crate::diag::note(
             "拒绝",
             true,
@@ -126,7 +126,7 @@ pub fn judge_passed(
             ctx.stage_run_id.as_deref(),
             None,
             "execute_judgment",
-            "replay_score",
+            "replay_format_invalid",
             started,
         );
         return Err(PropError::Rejected(reason));
@@ -259,31 +259,22 @@ pub fn judge_passed(
     }
 }
 
-/// 编排策略：回放分不高于现任则到不了执行判定。没有回放块时不在这里拦
-/// （提交口已经要求流程优化附回放）。
-pub fn pack_score_block(surface: &str, body: &str) -> Option<String> {
+// Evaluation 16 / D13: replay remains diagnostic history. The previous
+// score comparison discarded correct escalation and admitted no quality proof.
+// Only malformed legacy evidence is rejected here; scores grant no authority.
+pub fn pack_replay_format_block(surface: &str, body: &str) -> Option<String> {
     if surface != "pack_copy" {
         return None;
     }
-    let report = match proposals::replay_from_body(body) {
-        Some(Ok(r)) => r,
-        Some(Err(e)) => return Some(e),
-        None => return None,
-    };
-    let base = crate::replay::score(&report.baseline);
-    let cand = crate::replay::score(&report.candidate);
-    if cand <= base {
-        Some(format!(
-            "replay score {cand} is not higher than incumbent {base}"
-        ))
-    } else {
-        None
+    match proposals::replay_from_body(body) {
+        Some(Err(error)) => Some(error),
+        _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{choice_of, mechanical_block, pack_score_block, EXECUTE, OWNER, REJECT};
+    use super::{choice_of, mechanical_block, pack_replay_format_block, EXECUTE, OWNER, REJECT};
     use proptest::prelude::*;
 
     /// prompt-engineering 票 10：Jev 选项键英文令牌，映射回原常量；中文原文仍收。
@@ -329,9 +320,10 @@ mod tests {
             }
         }
 
-        /// 回放分不高于现任就挡在判定前。其它表面、没有回放围栏，不在这里挡。
+        // Evaluation 16/D13 replaces the old score gate: every valid score
+        // remains available for independent evaluation, never grants adoption.
         #[test]
-        fn replay_score_blocks_only_a_weaker_pack(
+        fn replay_score_never_discards_a_valid_candidate(
             surface in "(pack_copy|skill|role_def|agents_md)",
             base in 0u32..30,
             cand in 0u32..30,
@@ -344,9 +336,8 @@ mod tests {
             } else {
                 format!("stages {base} {cand}")
             };
-            let blocked = pack_score_block(&surface, &body);
-            let expect = surface == "pack_copy" && fenced && cand <= base;
-            prop_assert_eq!(blocked.is_some(), expect);
+            let blocked = pack_replay_format_block(&surface, &body);
+            prop_assert!(blocked.is_none());
         }
     }
 }

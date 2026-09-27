@@ -14,7 +14,8 @@ const card: PendingQuestion = { id: 'policy-card', kind: 'stamp', agent_id: 'a0'
   evidence: { baseline_score: 0, candidate_score: 20, scenario: 'fixed' },
 } }
 
-it('keeps a high-score policy candidate pending until owner adoption and opens its full report', async () => {
+// Evaluation 16/D14: old scores cannot authorize adoption; viewing stays available.
+it('keeps an unverified high-score candidate pending and opens its full report', async () => {
   await i18n.changeLanguage('en')
   const saved = useUiStore.getState()
   const openTab = vi.fn()
@@ -28,15 +29,18 @@ it('keeps a high-score policy candidate pending until owner adoption and opens i
     await act(async () => root.render(<PendingCard q={card} top />))
     expect(el.textContent).toContain('Policy candidate')
     expect(el.textContent).toContain('current 0 · candidate 20')
-    expect(el.textContent).toContain('does not prove task quality')
+    expect(el.textContent).toContain('Independent quality evidence is missing')
     expect(accept).not.toHaveBeenCalled()
     const report = [...el.querySelectorAll('button')].find((b) => b.textContent === 'View candidate and replay report')!
     expect(report.title).toContain('P')
     await act(async () => report.click())
     expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ kind: 'artifact', path: 'proposals/policy.md' }))
     const adopt = [...el.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Adopt candidate'))!
+    expect(adopt.disabled).toBe(true)
     await act(async () => adopt.click())
-    expect(accept).toHaveBeenCalledExactlyOnceWith('policy-card')
+    const event = new KeyboardEvent('keydown', { key: 'Enter', metaKey: isMac, ctrlKey: !isMac })
+    expect(await handlePendingKey(event, [card])).toBe('blocked-policy')
+    expect(accept).not.toHaveBeenCalled()
   } finally { await act(async () => root.unmount()); el.remove(); vi.restoreAllMocks(); useUiStore.setState(saved, true) }
 })
 

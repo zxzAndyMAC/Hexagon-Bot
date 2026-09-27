@@ -7,7 +7,7 @@ import { useUiStore } from '../store'
 import { extractDiffBlock, parseUnifiedDiff, type DiffOp } from '../diff'
 import { DiffView } from './DiffView'
 import { bindingFor, formatBinding, matches } from '../keymap'
-import { kindTitleKey, rejectReasonWithJudge, severityOf } from '../decisions'
+import { kindTitleKey, policyNeedsQuality, rejectReasonWithJudge, severityOf } from '../decisions'
 import { Icon, type IconName } from './Icon'
 import { StageEvidence } from './StageEvidence'
 import type { StageEvidence as Evidence } from '../gen/StageEvidence'
@@ -247,6 +247,7 @@ function PolicyReport({ q }: { q: PendingQuestion }) {
     if (!e.repeat && useUiStore.getState().modalScope === 'workbench') openButton.current?.click()
   }}>
     <p className="dim">{t('policy.ownerOnly')}</p>
+    {policyNeedsQuality(q) && <p role="status">{t('policy.unverified')}</p>}
     {q.payload.policy_recovery === true && <p role="alert">{t('policy.recovery')}</p>}
     {report && <p className="mono">{t('policy.scores', { baseline: report.baseline_score ?? '—', candidate: report.candidate_score ?? '—' })}</p>}
     <button ref={openButton} className="btn" title={`${t('policy.report')} · ${formatBinding(bindingFor('openPolicyReport'))}`} onClick={async () => {
@@ -464,7 +465,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
               bad && <span className="dim3" style={{ fontSize: 9, fontWeight: 400 }}> {t('cards.againstJudge')}</span>
             return (
               <>
-                <Btn primary disabled={p.policy_recovery === true} title={approveTip} onClick={() => api.confirmProposal(q.id)}>
+                <Btn primary disabled={p.policy_recovery === true || policyNeedsQuality(q)} title={approveTip} onClick={() => api.confirmProposal(q.id)}>
                   {t(policy ? 'policy.adopt' : 'cards.confirm')}{top && ` ${approveTip}`}{mk(jv === 'reject')}
                 </Btn>
                 <input

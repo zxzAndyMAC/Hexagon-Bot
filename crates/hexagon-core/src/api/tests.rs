@@ -10282,6 +10282,15 @@ fn policy_candidate_fixture(patience: u32) -> (tempfile::TempDir, Workbench, Str
 }
 
 fn queue_policy_candidate(wb: &Workbench, patience: u32) -> (String, String) {
+    queue_policy_candidate_with_scores(wb, patience, 0, 1)
+}
+
+fn queue_policy_candidate_with_scores(
+    wb: &Workbench,
+    patience: u32,
+    baseline_score: u32,
+    candidate_score: u32,
+) -> (String, String) {
     let baseline: PackDef = serde_json::from_value(json!({"name":"policy","version":1,"stages":[
         {"name":"accept","roles":["架构师"],"due":[],"stamp_point":true}
     ]}))
@@ -10294,7 +10303,7 @@ fn queue_policy_candidate(wb: &Workbench, patience: u32) -> (String, String) {
         ".hexagon/pack.active.json",
         "+ knobs.flag_patience: 2 → candidate",
     );
-    body.push_str("\n```replay\n{\"schema\":1,\"scenario_fingerprint\":\"fixed\",\"baseline_pack\":\"policy@v1\",\"candidate_pack\":\"policy@v1\",\"baseline\":{\"stages_done\":0},\"candidate\":{\"stages_done\":1}}\n```\n```judge\n{\"verdict\":\"needs-human\",\"backend\":\"mechanical\"}\n```\n");
+    body.push_str(&format!("\n```replay\n{}\n```\n```judge\n{{\"verdict\":\"needs-human\",\"backend\":\"mechanical\"}}\n```\n", json!({"schema":1,"scenario_fingerprint":"fixed","baseline_pack":"policy@v1","candidate_pack":"policy@v1","baseline":{"stages_done":baseline_score},"candidate":{"stages_done":candidate_score}})));
     body.push_str(&format!(
         "\n```policy\n{}\n```\n",
         json!({"baseline":baseline,"candidate":candidate})
@@ -10321,6 +10330,15 @@ fn queue_policy_candidate(wb: &Workbench, patience: u32) -> (String, String) {
     (pid, qid)
 }
 
+// Evaluation 16/D15: these existing file-atomicity tests exercise historical
+// operations. They no longer imply a new candidate can bypass independent quality.
+fn replay_legacy_adoption(wb: &mut Workbench, qid: &str) -> Result<String, ApiError> {
+    let pid =
+        crate::proposals::replay_pre_quality_adoption(&wb.db, &wb.ctx_for("owner", None), qid)?;
+    wb.refresh_policy()?;
+    Ok(pid)
+}
+
 #[test]
 fn owner_policy_adoption_and_rollback_preserve_real_versions_and_history() {
     let (dir, mut wb, pid, qid) = policy_candidate_fixture(7);
@@ -10333,12 +10351,16 @@ fn owner_policy_adoption_and_rollback_preserve_real_versions_and_history() {
     assert!(
         crate::proposals::materialize_for_judgment(&wb.db, &wb.ctx_for("a0", None), &pid).is_err()
     );
-    wb.confirm_proposal(&qid).unwrap();
+    replay_legacy_adoption(&mut wb, &qid).unwrap();
     assert_eq!(
         PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),
         7
     );
     assert_eq!(proposal_status(&wb, &pid), "active");
+    assert_eq!(
+        crate::proposals::list(&wb.db, &wb.project_id).unwrap()[0].quality,
+        Some(crate::proposals::PolicyQualityState::Historical)
+    );
     assert_eq!(wb.pack.as_ref().unwrap().knobs.flag_patience(), 7);
     assert!(crate::proposals::activate(&wb.db, &wb.ctx_for("owner", None), &qid).is_err());
     assert_eq!(
@@ -10402,10 +10424,14 @@ fn owner_policy_adoption_revalidates_baseline_proposal_permissions_and_legacy_bi
             _ => unreachable!(),
         }
         let before = std::fs::read(&path).unwrap();
-        assert!(
-            crate::proposals::activate(&wb.db, &wb.ctx_for("owner", None), &qid).is_err(),
-            "{change}"
-        );
+        // Evaluation 16: preserve the old post-replacement failure regression
+        // as a historical operation; other branches still use current admission.
+        let admission = if change == "event_failure" {
+            crate::proposals::replay_pre_quality_adoption(&wb.db, &wb.ctx_for("owner", None), &qid)
+        } else {
+            crate::proposals::activate(&wb.db, &wb.ctx_for("owner", None), &qid)
+        };
+        assert!(admission.is_err(), "{change}");
         assert_eq!(
             std::fs::read(&path).unwrap(),
             before,
@@ -10460,8 +10486,9 @@ proptest::proptest! {
         let (dir,wb,pid,qid)=policy_candidate_fixture(patience);
         proptest::prop_assert_eq!(PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),2);
         proptest::prop_assert!(crate::proposals::materialize_for_judgment(&wb.db,&wb.ctx_for("a0",None),&pid).is_err());
-        crate::proposals::activate(&wb.db,&wb.ctx_for("owner",None),&qid).unwrap();
-        proptest::prop_assert_eq!(PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),patience);
+        // Evaluation 16: owner intent alone no longer provides qualification.
+        proptest::prop_assert!(crate::proposals::activate(&wb.db,&wb.ctx_for("owner",None),&qid).is_err());
+        proptest::prop_assert_eq!(PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),2);
     }
 }
 
@@ -10470,14 +10497,14 @@ fn owner_policy_crash_recovery_finishes_only_observed_replacements_once() {
     for rollback in [false, true] {
         let (dir, mut wb, pid, qid) = policy_candidate_fixture(9);
         if rollback {
-            wb.confirm_proposal(&qid).unwrap();
+            replay_legacy_adoption(&mut wb, &qid).unwrap();
         }
         crate::proposals::crash_policy_after_replace();
         let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if rollback {
                 wb.rollback_proposal(&pid)
             } else {
-                wb.confirm_proposal(&qid).map(|_| ())
+                replay_legacy_adoption(&mut wb, &qid).map(|_| ())
             }
         }));
         assert!(crash.is_err());
@@ -10518,7 +10545,7 @@ fn owner_policy_compensation_and_recovery_preserve_external_changes() {
     external.knobs.flag_patience = Some(33);
     let text = serde_json::to_string_pretty(&external).unwrap();
     crate::proposals::edit_policy_after_replace(&text);
-    assert!(wb.confirm_proposal(&qid).is_err());
+    assert!(replay_legacy_adoption(&mut wb, &qid).is_err());
     assert_eq!(
         std::fs::read_to_string(dir.path().join(".hexagon/pack.active.json")).unwrap(),
         text
@@ -10562,8 +10589,10 @@ fn owner_policy_reopens_interrupted_adoption_without_rewriting_evidence() {
     let (pid, qid) = queue_policy_candidate(&wb, 11);
     crate::proposals::crash_policy_after_replace();
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wb.confirm_proposal(&qid)))
-            .is_err()
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay_legacy_adoption(
+            &mut wb, &qid
+        )))
+        .is_err()
     );
     drop(wb);
     let wb = Workbench::open(dir.path(), "policy recovery", &[], None).unwrap();
@@ -10600,8 +10629,10 @@ fn owner_policy_reopen_preserves_missing_recovery_target() {
     let supplied = PackDef::pinned(dir.path()).unwrap();
     crate::proposals::crash_policy_after_replace();
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wb.confirm_proposal(&qid)))
-            .is_err()
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay_legacy_adoption(
+            &mut wb, &qid
+        )))
+        .is_err()
     );
     drop(wb);
     let path = dir.path().join(".hexagon/pack.active.json");
@@ -10922,4 +10953,66 @@ fn upgrade_return_summary_keeps_exception_history_separate_from_unknown_effects(
         "unknown"
     );
     assert!(!wb.stage_evidence().unwrap().unwrap().missing.is_empty());
+}
+
+#[test]
+fn policy_candidate_without_independent_quality_cannot_be_adopted() {
+    let (dir, mut wb, _pid, qid) = policy_candidate_fixture(7);
+    let path = dir.path().join(".hexagon/pack.active.json");
+    let before = std::fs::read(&path).unwrap();
+    let rows = crate::proposals::list(&wb.db, &wb.project_id).unwrap();
+    assert_eq!(
+        rows[0].quality,
+        Some(crate::proposals::PolicyQualityState::Unverified)
+    );
+    assert!(
+        wb.confirm_proposal(&qid).is_err(),
+        "old replay score and owner approval cannot manufacture quality evidence"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .any(|q| q["id"] == qid));
+}
+
+#[test]
+fn policy_candidate_lower_replay_score_remains_available_for_independent_evaluation() {
+    let (dir, mut wb) = git_wb(&["流程优化", "架构师"]);
+    let (pid, qid) = queue_policy_candidate_with_scores(&wb, 7, 10, 0);
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .any(|q| q["payload"]["proposal_id"] == pid));
+    assert!(wb.confirm_proposal(&qid).is_err());
+    assert_eq!(
+        PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),
+        2
+    );
+}
+
+fn alter_frozen_policy_configuration_fixture(wb: &Workbench, mode: bool) {
+    if mode {
+        crate::autonomy::set_reviewer_mode(&wb.db, &wb.project_id, "live").unwrap();
+    } else {
+        // Configuration fault fixture: this referenced role has no Agent row.
+        wb.db.conn().execute("INSERT INTO role_defs(project_id,name,duty,model_slot,skills) VALUES (?1,'架构师','changed reviewer instructions','default','[]')", [&wb.project_id]).unwrap();
+    }
+}
+
+#[test]
+fn policy_candidate_freezes_uninstantiated_reviewers_and_host_review_mode() {
+    for mode in [false, true] {
+        let (_dir, mut wb) = git_wb(&["流程优化"]);
+        let (_pid, qid) = queue_policy_candidate(&wb, 7);
+        alter_frozen_policy_configuration_fixture(&wb, mode);
+        let error = wb.confirm_proposal(&qid).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ApiError::Proposal(crate::proposals::PropError::PolicyStale)
+            ),
+            "configuration drift must be distinguished from missing evidence: {error:?}"
+        );
+    }
 }

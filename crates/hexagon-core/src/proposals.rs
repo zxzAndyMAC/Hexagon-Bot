@@ -17,7 +17,7 @@ pub(crate) use policy::recover as recover_policy;
 #[cfg(test)]
 pub(crate) use policy::{
     crash_after_replace as crash_policy_after_replace,
-    edit_after_replace as edit_policy_after_replace,
+    edit_after_replace as edit_policy_after_replace, replay_pre_quality_adoption,
 };
 
 use rusqlite::params;
@@ -39,6 +39,8 @@ pub enum PropError {
     PolicyConstraint,
     #[error("policy candidates require owner adoption")]
     PolicyOwnerRequired,
+    #[error("independent policy quality evidence is missing; evaluate this frozen candidate before adoption")]
+    PolicyQualityUnverified,
     #[error("unreviewed work cannot become experience")]
     UnreviewedExperience,
     #[error("experience is frozen after delivery")]
@@ -353,7 +355,7 @@ pub fn submit(
         }
     }
 
-    if let Some(reason) = crate::execute::pack_score_block(&surface, content) {
+    if let Some(reason) = crate::execute::pack_replay_format_block(&surface, content) {
         crate::diag::note(
             "拒绝",
             true,
@@ -362,7 +364,7 @@ pub fn submit(
             ctx.stage_run_id.as_deref(),
             None,
             "execute_judgment",
-            "replay_score",
+            "replay_format_invalid",
             std::time::Instant::now(),
         );
         return Err(PropError::Rejected(reason));
@@ -575,6 +577,7 @@ fn to_stamp_queue(
         crate::cards::CardKind::Stamp,
         json!({"proposal_id": pid, "surface": surface,
         "evidence": evidence, "policy_candidate": surface == "pack_copy",
+        "policy_quality": quality_state(surface, "awaiting_stamp"),
         "warnings": flags,
         "warning_text": Value::Null}),
         None,
@@ -857,6 +860,23 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
     Ok(())
 }
 
+/// Evaluation 16/D14: old approvals remain history, never fresh qualification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub enum PolicyQualityState {
+    Unverified,
+    Historical,
+}
+
+fn quality_state(surface: &str, status: &str) -> Option<PolicyQualityState> {
+    (surface == "pack_copy").then_some(if matches!(status, "active" | "rolled_back") {
+        PolicyQualityState::Historical
+    } else {
+        PolicyQualityState::Unverified
+    })
+}
+
 /// 待审/在途提案队列（UI 提案卡数据源）。
 /// 提案队列行（ADR 0054）：proposals×artifacts 联表读模型。
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
@@ -876,6 +896,9 @@ pub struct ProposalRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub recovery_pending: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub quality: Option<PolicyQualityState>,
 }
 
 pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
@@ -895,6 +918,7 @@ pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
                 author: r.get(4)?,
                 artifact_path: r.get(5)?,
                 recovery_pending: r.get::<_, bool>(6)?.then_some(true),
+                quality: quality_state(&r.get::<_, String>(1)?, &r.get::<_, String>(3)?),
             })
         })?
         .collect::<Result<_, _>>()?;

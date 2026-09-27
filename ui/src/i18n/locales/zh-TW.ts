@@ -1,7 +1,7 @@
 export default {
   returnAttention: {"unresolved_actions": "結果未知動作：{{count}}", "unknown_cost_records": "費用尚未確定：{{count}}", "budget_stops": "離開期間預算/容量阻塞：{{count}}", "exception_decisions": "離開期間例外裁決（非通過）：{{count}}", "policy_candidates": "策略候選：{{count}}"},
   dataBoundary: {"edit": "保留標記表示沿用已存值；輸入新值會替換，清空或移除會刪除。設定變更後請重新載入。", "mcpStorage": "MCP 環境變數與標頭以明文保存在本機設定檔中；頁面顯示的模型憑據後端不保護這些檔案。", "title": "資料儲存與接收方", "local": "本機：專案狀態、訊息、軌跡、工具結果與產物儲存在本機，診斷記錄也僅保存在本機。", "model": "模型：請求會將選取的指令、訊息與工具上下文傳給設定的供應商，其處理與保留方式依供應商自身條款執行。", "mcp": "MCP：工具接收呼叫參數。本機 stdio 服務是獨立程序，也可能連接外部服務；遠端項目僅表示已設定接收方，不證明連線已啟用。", "terminal": "終端：連網受終端權限與隔離約束。禁止終端連網不等於禁止模型或 MCP 請求。子代理僅獲得宿主能強制唯讀的 MCP 能力。", "retention": "保留範圍：歷史與檔案會保留，直到明確管理。憑據掃描只定位可能的歷史洩漏，不自動清除歷史，也不能撤回已外傳的資料。", "credentials": "憑據儲存", "configured": "已設定接收方（僅顯示來源站，省略憑據、路徑與 URL 參數）。設定啟用不表示實際發出過請求。", "empty": "尚無設定的接收方。", "unavailable": "設定讀取失敗，接收方未知。", "backend_keychain": "系統憑據庫", "backend_dev_file": "本機明文檔案（開發後端）", "backend_memory": "記憶體儲存", "backend_custom": "自訂憑據庫", "kind_model": "模型", "kind_mcp": "MCP", "kind_search": "搜尋", "localProcess": "本機服務程序；外部接收方取決於該服務", "unknownEndpoint": "接收端點不可用", "enabled": "設定已啟用", "disabled": "設定已停用"},
-  policy: {"title": "策略候選", "adopt": "採納候選", "report": "查看候選與回放報告", "scores": "回放分：現任 {{baseline}} · 候選 {{candidate}}", "ownerOnly": "候選須由你採納。更高回放分不等於實際任務品質；採納前會重新核對目前基線和約束。", "recovery": "策略變更待恢復，目前檔案已保留。請恢復經核對的變更前或變更後版本，再重新開啟專案。"},
+  policy: {"title": "策略候選", "adopt": "採納候選", "report": "查看候選與回放報告", "scores": "回放分：現任 {{baseline}} · 候選 {{candidate}}", "ownerOnly": "回放分數僅作診斷歷史。候選須先通過獨立品質驗證，再由你決定是否採納。", "recovery": "策略變更待恢復，目前檔案已保留。請恢復經核對的變更前或變更後版本，再重新開啟專案。", "unverified": "缺少獨立品質證據。可檢視、評測或駁回此候選，目前不可採納。", "historical": "歷史採納，未記錄獨立品質證據。"},
   exceptions: {"title": "交付例外驗收", "request": "申請例外驗收", "accept": "接受所選例外", "accepted": "例外接受", "cancel": "取消申請", "reason": "接受理由", "hint": "選擇具體未滿足的要求，並說明接受目前交付的理由。原始檢查與複審結果仍保留。", "stale": "交付已變更。請取消此申請，並針對目前版本重新申請。"},
   evidence: {"requirement_action": "結果待核對的動作：{{value}}", "deliveryChanged": "交付已變更或無法核對", "requirement_artifact": "產物：{{value}}", "requirement_review": "複審：{{value}}", "requirement_check": "檢查：{{value}}", "requirement_stage": "階段：{{value}}", "title": "目前交付證據", "noChecks": "未宣告檢查", "missing": "尚未執行", "passed": "目前交付檢查通過", "failed": "檢查失敗", "stale": "證據已過期", "unavailable": "無法核對證據", "exit": "原結束代碼：{{code}}", "missingRequirements": "尚未滿足的要求"},
   app: { title: 'Hexagon-Bot', loading: '正在載入工作台…', untitledProject: '未命名專案' },
@@ -775,6 +775,7 @@ export default {
     confirmIntake: '確認開場草案',
   },
   errors: {
+    policy_quality_unverified: "缺少獨立品質證據。可檢視、評測或駁回此候選，目前不可採納。",
     policy_stale: "策略基線或候選已變更，請重新評估並提交新候選。", policy_constraint: "策略候選不符合目前約束或權限。", policy_owner_required: "策略候選必須由負責人採納。", policy_recovery: "策略變更待恢復，目前檔案已保留。請恢復經核對的變更前或變更後版本，再重新開啟專案。",
     unreviewed_experience: "只有目前作者本次工作通過實際複審，才能提交經驗。", frozen_experience: "目前作者已交付本次工作，經驗已凍結。", stale_experience: "受審工作已變更或已交付，請重新複審並提交新的經驗提案。",
     invalid_acceptance_exception: "請在例外申請中選擇目前要求並填寫理由。", stale_acceptance_version: "交付已變更，請針對目前版本重新申請例外。", unresolved_delivery_action: "請先核對結果未知的操作，再接受例外。",

@@ -1,4 +1,4 @@
-//! Reliability 21 / Q7: replay produces a candidate; only the owner can apply it.
+//! D13/D14: replay produces a candidate; independent quality precedes owner adoption.
 use super::*;
 use crate::orchestra::PackDef;
 use rusqlite::OptionalExtension;
@@ -21,6 +21,46 @@ pub(super) struct Binding {
     resolved: String,
     author: String,
     candidate: PackDef,
+    #[serde(default)]
+    configuration_fingerprint: Option<String>,
+}
+
+// Freeze only a digest; provider credentials are stored separately, and no
+// provider URL or role instructions are copied into proposal payloads here.
+fn configuration_fingerprint(
+    db: &Db,
+    project: &str,
+    baseline: &PackDef,
+    candidate: &PackDef,
+) -> Result<String, PropError> {
+    // Ticket 16: pack reviewers need not have an instantiated Agent. Freezing
+    // only team rows let changed reviewer instructions escape stale checks.
+    let mut names: std::collections::BTreeSet<String> = crate::roles::team_roles(db, project)
+        .map_err(|_| PropError::PolicyConstraint)?
+        .into_iter()
+        .collect();
+    for pack in [baseline, candidate] {
+        for stage in &pack.stages {
+            names.extend(stage.roles.iter().cloned());
+            names.extend(stage.reviews.iter().map(|r| r.reviewer.clone()));
+            names.extend(stage.consult_wake.iter().cloned());
+            for (from, to) in &stage.backfill_edges {
+                names.insert(from.clone());
+                names.insert(to.clone());
+            }
+        }
+    }
+    let definitions = crate::evaluation::config::collect_roles(names, |name| {
+        crate::roles::role_def(db, project, name).map_err(std::io::Error::other)
+    })
+    .map_err(|_| PropError::PolicyConstraint)?;
+    let providers = crate::provider_config::load().map_err(|_| PropError::PolicyConstraint)?;
+    let reviewer_mode = crate::autonomy::reviewer_mode(db, project)?;
+    // Value canonicalizes map ordering before hashing provider slot maps.
+    let value = json!({"providers":providers,"roles":definitions,"reviewer_mode":reviewer_mode});
+    Ok(digest(
+        &serde_json::to_vec(&value).map_err(|_| PropError::PolicyConstraint)?,
+    ))
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -92,6 +132,12 @@ pub(super) fn capture(
         proposal_digest: digest(body.as_bytes()),
         resolved: path.to_string_lossy().into_owned(),
         author: ctx.agent_id.clone(),
+        configuration_fingerprint: Some(configuration_fingerprint(
+            db,
+            &ctx.project_id,
+            &pair.baseline,
+            &pair.candidate,
+        )?),
         candidate: pair.candidate,
     })
 }
@@ -121,7 +167,10 @@ fn bound(db: &Db, ctx: &ToolContext, pid: &str, body: &str) -> Result<Binding, P
     // Re-run the same host constraints before applying the persisted candidate.
     let mut author_ctx = ctx.clone();
     author_ctx.agent_id = author;
-    capture(db, &author_ctx, body, TARGET)?;
+    let current = capture(db, &author_ctx, body, TARGET)?;
+    if current.configuration_fingerprint != binding.configuration_fingerprint {
+        return Err(PropError::PolicyStale);
+    }
     Ok(binding)
 }
 
@@ -401,6 +450,60 @@ fn perform(
     Ok(())
 }
 
+// Evaluation 16 / D14: owner approval and replay scores are not evidence.
+// False refusal costs an independent evaluation; false admission applies an
+// unverified policy. Persisted historical operations are recovered separately.
+fn require_independent_quality(_db: &Db, _ctx: &ToolContext, _pid: &str) -> Result<(), PropError> {
+    Err(PropError::PolicyQualityUnverified)
+}
+
+fn apply_bound_adoption(
+    db: &Db,
+    ctx: &ToolContext,
+    pid: &str,
+    qid: &str,
+    binding: &Binding,
+) -> Result<String, PropError> {
+    let path = target(ctx)?;
+    let before = std::fs::read(&path)?;
+    if digest(&before) != binding.baseline_digest {
+        return Err(PropError::PolicyStale);
+    }
+    let after =
+        serde_json::to_vec_pretty(&binding.candidate).map_err(|_| PropError::PolicyConstraint)?;
+    let backup = backup(ctx, pid)?;
+    std::fs::create_dir_all(&backup)?;
+    replace(&backup.join("before"), &before)?;
+    replace(
+        &backup.join("policy.json"),
+        json!({"after":digest(&after),"before":digest(&before)})
+            .to_string()
+            .as_bytes(),
+    )?;
+    perform(db, ctx, pid, Some(qid), "adopt", &before, &after)?;
+    Ok(pid.to_string())
+}
+
+// Evaluation 16/D15: construct pre-upgrade persisted operations for recovery
+// tests only. This creates no quality receipt and cannot be called in a product
+// build. New adoption tests must go through activate's independent quality gate.
+#[cfg(test)]
+pub(crate) fn replay_pre_quality_adoption(
+    db: &Db,
+    ctx: &ToolContext,
+    qid: &str,
+) -> Result<String, PropError> {
+    let _lease = crate::tools::writeguard::repository_lock(ctx)?;
+    let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Stamp)?;
+    let pid = card.payload["proposal_id"]
+        .as_str()
+        .ok_or(PropError::PolicyConstraint)?;
+    let artifact: String = db.conn().query_row("SELECT artifact_id FROM proposals WHERE id=?1 AND project_id=?2 AND status='awaiting_stamp'", params![pid,ctx.project_id], |row| row.get(0))?;
+    let (_, _, _, body) = artifact_proposal_parts(db, ctx, Some(&artifact))?;
+    let binding = bound(db, ctx, pid, &body)?;
+    apply_bound_adoption(db, ctx, pid, qid, &binding)
+}
+
 pub(super) fn activate(
     db: &Db,
     ctx: &ToolContext,
@@ -423,24 +526,8 @@ pub(super) fn activate(
             return Err(PropError::PolicyConstraint);
         }
         let binding = bound(db, ctx, pid, &body)?;
-        let path = target(ctx)?;
-        let before = std::fs::read(&path)?;
-        if digest(&before) != binding.baseline_digest {
-            return Err(PropError::PolicyStale);
-        }
-        let after = serde_json::to_vec_pretty(&binding.candidate)
-            .map_err(|_| PropError::PolicyConstraint)?;
-        let backup = backup(ctx, pid)?;
-        std::fs::create_dir_all(&backup)?;
-        replace(&backup.join("before"), &before)?;
-        replace(
-            &backup.join("policy.json"),
-            json!({"after":digest(&after),"before":digest(&before)})
-                .to_string()
-                .as_bytes(),
-        )?;
-        perform(db, ctx, pid, Some(qid), "adopt", &before, &after)?;
-        Ok(pid.to_string())
+        require_independent_quality(db, ctx, pid)?;
+        apply_bound_adoption(db, ctx, pid, qid, &binding)
     })();
     crate::diag::note(
         if result.is_err() {
@@ -454,10 +541,10 @@ pub(super) fn activate(
         None,
         None,
         "policy_adoption",
-        if result.is_ok() {
-            "owner_applied"
-        } else {
-            "revalidation_refused"
+        match &result {
+            Ok(_) => "owner_applied",
+            Err(PropError::PolicyQualityUnverified) => "policy_quality_unverified",
+            Err(_) => "revalidation_refused",
         },
         started,
     );

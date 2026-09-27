@@ -272,7 +272,7 @@ fn versions() -> io::Result<BTreeMap<String, Option<String>>> {
     Ok(versions)
 }
 
-fn collect_roles(
+pub(crate) fn collect_roles(
     names: BTreeSet<String>,
     mut lookup: impl FnMut(&str) -> io::Result<RoleDef>,
 ) -> io::Result<BTreeMap<String, RoleDef>> {

@@ -23,10 +23,19 @@ export function severityOf(q: PendingQuestion): number {
   return SEVERITY[q.kind] ?? 9
 }
 
+// Evaluation 16/D14: missing legacy metadata grants no quality authority.
+export function policyNeedsQuality(q: PendingQuestion): boolean {
+  return (q.payload.surface === 'pack_copy' || q.payload.policy_candidate === true) && q.payload.policy_quality !== 'qualified'
+}
+
 export async function approveQuestion(q: PendingQuestion) {
   const p = q.payload
   if (p.policy_recovery === true) {
     useUiStore.getState().pushToast(i18n.t('policy.recovery'))
+    return
+  }
+  if (policyNeedsQuality(q)) {
+    useUiStore.getState().pushToast(i18n.t('policy.unverified'))
     return
   }
   if (p.sub === 'tool_outcome_unknown') {
@@ -133,6 +142,10 @@ export async function handlePendingKey(
   }
   if (isApprove && q.payload.policy_recovery === true) {
     useUiStore.getState().pushToast(i18n.t('policy.recovery'))
+    return 'blocked-policy'
+  }
+  if (isApprove && policyNeedsQuality(q)) {
+    useUiStore.getState().pushToast(i18n.t('policy.unverified'))
     return 'blocked-policy'
   }
   if (isApprove && q.payload.sub === 'acceptance_exception') {
