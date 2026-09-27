@@ -235,10 +235,15 @@ fn next_position(entries: &[PlannedRun]) -> io::Result<usize> {
 
 /// Claim only the next original entry. A crash cannot make a new attempt appear
 /// unstarted; recovery later resolves the durable started record (tickets 12/13).
-pub(crate) fn claim(db: &Db, id: &str) -> io::Result<(EvaluationPlan, usize, String)> {
+pub(crate) fn claim(
+    db: &Db,
+    root: &std::path::Path,
+    id: &str,
+) -> io::Result<(EvaluationPlan, usize, String)> {
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
+    super::budget::before_claim(db, root, id)?;
     let plan = read(db, id)?;
     let started = std::time::Instant::now();
     let position = next_position(&plan.entries).inspect_err(|_| {

@@ -97,7 +97,7 @@ impl Workbench {
         }) {
             return Err(ApiError::BadInput("evaluation configuration drift".into()));
         }
-        let (current, position, id) = eval::plan::claim(&self.db, plan)?;
+        let (current, position, id) = eval::plan::claim(&self.db, &self.repo_root, plan)?;
         let entry = &current.entries[position];
         let task = &batch
             .request
@@ -180,6 +180,7 @@ impl Workbench {
                 }
             }
             result.git_baseline = eval::reconstruct(&copy, task)?;
+            eval::budget::bind_debug(&self.db, &self.repo_root, &copy, id)?;
             eval::update_started(&self.db, &result)?;
             let full_pack = frozen
                 .filter(|(_, arm)| *arm == EvaluationArm::Full)

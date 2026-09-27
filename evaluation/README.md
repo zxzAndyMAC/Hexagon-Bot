@@ -70,3 +70,7 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 `recheck HOST RUN_ID` 使用宿主验收器在新的隔离副本中复验，禁网络，不调用模型。复验单独持久保存，不更改原执行结果；执行失败、超时或停止后即使复验通过，也不会变成正式正常成功。脚本调试始终不计正式成功。
 
 原生上下文超限使用 `context_overflow` 条件（`agent_id`、冻结的有效 `cap`），核对实际 `TurnStarted`、升级事件及卡片的 `trigger_turn_id`。能证明宿主在调用前拒绝时，零工具动作可以成立；空记录本身不能证明安全。结束运行会封存动作、事件和相关卡片指纹，结束后追加操作或补升级卡只能成为新的未知，不能修补原样本。
+
+预算离线回归先调用 `debug-budget-config HOST PLAN_ID PRICE.json`，再用原有 `next-debug` 或 `next-owner-debug`。`PRICE.json` 为明确的夹具价格与单请求界限：`{"prompt_per_1k_mc":1000,"completion_per_1k_mc":1000,"prompt_bound":2000,"output_bound":1000}`；只接受脚本供应商，不能作为真实价格凭据。计划开始前固定，开始后不可修改。配对两侧额度与领取第一侧在同一事务中保存。
+
+`budget-debug HOST` 返回该宿主的脚本账本；`budget HOST` 读取固定负责人首轮真实预算，改变 HOST 不会产生新的 200 美元额度。真实账本不存在时只返回未使用状态，不创建或消费它。真实实验入口仍关闭。金额为本地估算，不是供应商账单：`known_mc` 是已知部分，`reserved_mc` 包含配对未用额度和未知/在途预占，`unknown_mc` 与 `in_flight_mc` 是预占的子集，不能再扣一次。`available_mc` 是剩余额度。`requests` 为已准入且无法证明未发送的请求数；`confirmed_requests` 只包括实际响应或已报告用量的请求。请求数量按实际模型入口累计，包含规划、路由、判定、执行和子代理调用。

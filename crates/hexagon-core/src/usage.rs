@@ -305,6 +305,29 @@ pub fn request(
         id: &id,
         _lock: lock,
     };
+    // Evaluation D08: commit the local attempt before admission, but do not
+    // dispatch until the shared authority has reserved this actual request.
+    let mut evaluation = match crate::evaluation::budget::admit(ctx, provider, &id, purpose) {
+        Ok(guard) => guard,
+        Err(error) => {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "evaluation_budget_admission",
+                &format!("admission_refused:{id}"),
+                started,
+            );
+            db.conn().execute("UPDATE usage SET request_state='not_sent',reserved_mc=0,cost_known=1 WHERE request_id=?1 AND request_state='pending'", [&id]).map_err(|e| ledger_error(e.to_string()))?;
+            return Err(ledger_error(error.to_string()));
+        }
+    };
+    if let Some(guard) = &mut evaluation {
+        guard.dispatch().map_err(|e| ledger_error(e.to_string()))?;
+    }
     let result = send();
     let usage = match &result {
         Ok(response) => Some(&response.usage),
@@ -315,9 +338,11 @@ pub fn request(
         .and_then(|u| price.and_then(|p| cost_for(p, u)));
     // Native service tools can be billed separately even when their usage
     // counters are missing. Preserve the priced portion, flag the remainder.
-    let unpriced = usage.is_some_and(|u| u.unpriced || !u.prompt_reported || !u.completion_reported) || result.as_ref().is_ok_and(|r| r.content.iter().any(|b| matches!(b,
+    let extra_unpriced = usage.is_some_and(|u| u.unpriced) || result.as_ref().is_ok_and(|r| r.content.iter().any(|b| matches!(b,
         crate::provider::ContentBlock::Opaque { raw } if matches!(raw["type"].as_str(), Some("server_tool_use" | "web_search_tool_result"))
     )));
+    let unpriced =
+        extra_unpriced || usage.is_some_and(|u| !u.prompt_reported || !u.completion_reported);
     let state = match &result {
         Ok(_) => "succeeded",
         Err(error) if matches!(error.cause(), ProviderError::Interrupted) => "interrupted",
@@ -325,6 +350,11 @@ pub fn request(
         Err(_) => "failed",
     };
     db.conn().execute("UPDATE usage SET reserved_mc=0,prompt_tokens=?1,completion_tokens=?2,cost_millicents=?3,cost_known=?4,request_state=?5,prompt_known=?7,completion_known=?8 WHERE request_id=?6 AND request_state='pending'",params![usage.map(|u|u.prompt_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),usage.map(|u|u.completion_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),cost.unwrap_or(0),cost.is_some() && !unpriced,state,id,usage.is_some_and(|u|u.prompt_reported),usage.is_some_and(|u|u.completion_reported)]).map_err(|e|ledger_error(e.to_string()))?;
+    if let Some(guard) = &evaluation {
+        guard
+            .settle(usage, result.is_ok(), state == "not_sent", extra_unpriced)
+            .map_err(|e| ledger_error(e.to_string()))?;
+    }
     result.map_err(ProviderError::into_cause)
 }
 

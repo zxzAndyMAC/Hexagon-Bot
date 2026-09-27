@@ -1,5 +1,7 @@
 //! Task-benefit-evaluation 01: host-owned task acceptance, independent of turns.
 //! Only scripted debug execution is admitted until isolation and quota gates land.
+pub(crate) mod budget;
+pub use budget::{BudgetRunSummary, BudgetSummary, DebugPrice};
 pub(crate) mod config;
 pub use config::{
     AdmissionBlock, EvaluationBatch, EvaluationLimits, FreezeRequest, ObservedOutcome, PriceSource,
@@ -586,6 +588,9 @@ pub(crate) fn update_started(db: &Db, result: &EvaluationResult) -> io::Result<(
     let changed = db.conn().execute("UPDATE evaluation_runs SET result_json=?2,execution_fingerprint=CASE WHEN ?3 THEN ?4 ELSE execution_fingerprint END WHERE id=?1 AND json_extract(result_json,'$.state') IN ('started','waiting_human')", rusqlite::params![result.id,serde_json::to_string(result)?,terminal,seal]).map_err(err)?;
     if changed != 1 {
         return Err(err("evaluation result already terminal or missing"));
+    }
+    if terminal {
+        budget::finish(db, result)?;
     }
     Ok(())
 }

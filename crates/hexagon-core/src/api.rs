@@ -3255,3 +3255,7 @@ mod evaluation_human;
 mod evaluation_outcome_tests;
 
 mod evaluation_outcome;
+
+mod evaluation_budget;
+#[cfg(test)]
+mod evaluation_budget_tests;

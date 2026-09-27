@@ -255,6 +255,10 @@ pub struct ModelMeta {
 }
 
 pub trait ModelProvider: Send + Sync {
+    /// Evaluation debug accounting must never admit a network provider.
+    fn is_scripted(&self) -> bool {
+        false
+    }
     /// Enforced output bound, not an expected response length. Implementations
     /// advertising this must apply it to the actual transport request (D06).
     fn output_token_limit(&self) -> Option<u64> {
@@ -470,6 +474,9 @@ impl ScriptedProvider {
 }
 
 impl ModelProvider for ScriptedProvider {
+    fn is_scripted(&self) -> bool {
+        true
+    }
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
         self.calls.lock().unwrap().push(req.clone());
         self.script
