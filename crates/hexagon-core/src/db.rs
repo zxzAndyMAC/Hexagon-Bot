@@ -125,6 +125,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0030_policy_changes",
         include_str!("../migrations/0030_policy_changes.sql"),
     ),
+    (
+        "0031_evaluation_runs",
+        include_str!("../migrations/0031_evaluation_runs.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

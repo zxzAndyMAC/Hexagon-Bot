@@ -1,0 +1,14 @@
+{
+  "id": "debug-answer",
+  "category": "bug",
+  "source": "Hexagon-Bot original offline smoke fixture",
+  "license": "MIT",
+  "revision": "debug-v1",
+  "requirements": "Change answer.txt to correct. Preserve notes.txt.",
+  "allowed_paths": ["answer.txt"],
+  "files": {"answer.txt": "wrong", "notes.txt": "existing owner work"},
+  "validator": "accept.sh",
+  "validation_files": {"accept.sh": "test \"$(cat answer.txt)\" = correct\n"},
+  "reference": {"answer.txt": "correct"},
+  "wrong": {"answer.txt": "still wrong"}
+}

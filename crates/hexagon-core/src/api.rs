@@ -330,7 +330,19 @@ impl Workbench {
         roles: &[(String, String)], // (agent_id, role)
         pack: Option<PackDef>,
     ) -> Result<Self, ApiError> {
-        let dir = dir.as_ref().to_path_buf();
+        Self::open_scoped(dir.as_ref(), name, roles, pack, true)
+    }
+
+    // Evaluation 01: an offline run must not start globally configured MCP
+    // services or select the user's credential store as a side effect of open.
+    fn open_scoped(
+        dir: &Path,
+        name: &str,
+        roles: &[(String, String)],
+        pack: Option<PackDef>,
+        external_services: bool,
+    ) -> Result<Self, ApiError> {
+        let dir = dir.to_path_buf();
         std::fs::create_dir_all(dir.join(".hexagon"))?;
         let db = Db::open(dir.join(".hexagon/state.db"))?;
         let project_id = crate::PROJECT_ID.to_string();
@@ -376,7 +388,11 @@ impl Workbench {
         // 在 open 时 spawn+握手，工具注册进统一管线（权限照常求值，
         // grants 表 mcp 授权闸门在 evaluate L0）。
         let registry = Registry::builtin();
-        let specs = crate::mcp::load_specs(&dir);
+        let specs = if external_services {
+            crate::mcp::load_specs(&dir)
+        } else {
+            Vec::new()
+        };
         // 2026-09-22：握手不挡进入工作台。工具在后台就绪后由 poll / 回合入口装上。
         let mcp_host = if specs.is_empty() {
             None
@@ -387,7 +403,11 @@ impl Workbench {
             db,
             registry,
             providers: HashMap::new(),
-            creds: crate::credentials::active(),
+            creds: if external_services {
+                crate::credentials::active()
+            } else {
+                Arc::new(crate::credentials::MemoryStore::default())
+            },
             project_id,
             repo_root: dir,
             pack,
@@ -3104,3 +3124,141 @@ pub fn data_boundary(
 mod stall_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod evaluation_tests;
+
+impl Workbench {
+    /// Open a local evaluation host without inherited MCP or credentials.
+    pub fn open_evaluation_host(dir: &Path) -> Result<Self, ApiError> {
+        Self::open_scoped(dir, "Task evaluation", &[], None, false)
+    }
+
+    /// Host-only debug runner; no arbitrary provider or real-model mode is accepted.
+    /// Task-benefit-evaluation 01: paid admission stays closed until 08/11/12.
+    pub fn evaluate_debug(
+        &self,
+        task: &crate::evaluation::EvaluationTask,
+        writes: &std::collections::BTreeMap<String, String>,
+    ) -> Result<crate::evaluation::EvaluationResult, ApiError> {
+        use crate::evaluation as eval;
+        use crate::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason};
+        use sha2::{Digest, Sha256};
+        eval::self_check(task)?;
+        if writes
+            .keys()
+            .any(|p| !eval::safe_path(p) || !task.allowed_paths.contains(p))
+        {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                None,
+                None,
+                None,
+                "evaluation_debug",
+                "write_outside_task",
+                std::time::Instant::now(),
+            );
+            return Err(ApiError::BadInput(
+                "debug write outside declared task scope".into(),
+            ));
+        }
+        let id = format!("eval-{}", self.db.next_id("evaluation")?);
+        let parent = self.repo_root.join(".hexagon/evaluation-runs");
+        std::fs::create_dir_all(&parent)?;
+        let copy = tempfile::Builder::new()
+            .prefix(&format!("{id}-"))
+            .tempdir_in(parent)?
+            .keep();
+        let mut result = eval::EvaluationResult {
+            version: 1,
+            id,
+            task_id: task.id.clone(),
+            task_fingerprint: format!("v1:{:x}", Sha256::digest(serde_json::to_vec(task)?)),
+            workspace: copy.to_string_lossy().into_owned(),
+            evidence_kind: "scripted_debug".into(),
+            state: "started".into(),
+            flow_completed: false,
+            independent_passed: false,
+            owner_exception: false,
+            acceptance: None,
+            elapsed_ms: 0,
+            error: None,
+        };
+        // Persist before any task execution; even setup failure remains a started attempt.
+        eval::insert(&self.db, task, &result)?;
+        let started = std::time::Instant::now();
+        let run = (|| -> Result<(), ApiError> {
+            eval::materialize(&copy, &task.files)?;
+            let mut worker = Workbench::open_scoped(
+                &copy,
+                &task.id,
+                &[("a0".into(), "后端".into())],
+                None,
+                false,
+            )?;
+            worker.set_credential_store(Arc::new(crate::credentials::MemoryStore::default()));
+            // Evaluation 01 regression: dispatch consumes a planning response
+            // before the tool loop. A read placed first was swallowed as a plan,
+            // so write-precondition correctly rejected the subsequent delivery.
+            let mut responses = vec![ChatResponse {
+                content: vec![ContentBlock::Text {
+                    text: "Read task inputs before changing the declared files.".into(),
+                }],
+                stop: StopReason::EndTurn,
+                usage: Default::default(),
+            }];
+            for (path, body) in writes {
+                // Real read-before-write evidence is established through ordinary tools.
+                for (tool, input) in [
+                    ("fs_read", json!({"path":path})),
+                    ("fs_write", json!({"path":path,"content":body})),
+                ] {
+                    responses.push(ChatResponse {
+                        content: vec![ContentBlock::ToolUse {
+                            id: format!("eval-{}", responses.len()),
+                            name: tool.into(),
+                            input,
+                        }],
+                        stop: StopReason::ToolUse,
+                        usage: Default::default(),
+                    });
+                }
+            }
+            responses.push(ChatResponse {
+                content: vec![ContentBlock::Text {
+                    text: "Debug task execution ended".into(),
+                }],
+                stop: StopReason::EndTurn,
+                usage: Default::default(),
+            });
+            worker.register_provider("default", Arc::new(ScriptedProvider::new(responses)));
+            let outcome = worker.dispatch_instance("a0", &task.requirements, &[])?;
+            result.state = if matches!(outcome, TurnOutcome::Finished) {
+                "completed"
+            } else {
+                "incomplete"
+            }
+            .into();
+            let acceptance = eval::accept(&worker.db, &copy, task)?;
+            result.independent_passed = acceptance.passed;
+            result.acceptance = Some(acceptance);
+            Ok(())
+        })();
+        if let Err(e) = run {
+            result.state = "failed".into();
+            result.error = Some(e.to_string());
+        }
+        result.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        eval::finish(&self.db, &result)?;
+        Ok(result)
+    }
+
+    pub fn evaluation_result(
+        &self,
+        id: &str,
+    ) -> Result<crate::evaluation::EvaluationResult, ApiError> {
+        Ok(crate::evaluation::read(&self.db, id)?)
+    }
+}

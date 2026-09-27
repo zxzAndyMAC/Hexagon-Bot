@@ -16,6 +16,7 @@ pub mod data_boundary;
 pub mod db;
 pub mod diag;
 pub mod errcode;
+pub mod evaluation;
 pub mod execute;
 pub mod experience;
 pub mod files;
