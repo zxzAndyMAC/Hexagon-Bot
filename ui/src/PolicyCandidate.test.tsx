@@ -60,3 +60,40 @@ it('blocks unresolved policy recovery through both the button and approval short
     expect(accept).not.toHaveBeenCalled()
   } finally { await act(async () => root.unmount()); vi.restoreAllMocks(); useUiStore.setState(saved, true) }
 })
+
+// Evaluation 18/D14: status refresh updates both the visible reason and action.
+it('refreshes all quality states and allows only qualified owner adoption', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const saved = useUiStore.getState()
+  useUiStore.setState({ invalidate: async () => {}, modalScope: 'workbench' })
+  const accept = vi.spyOn(api, 'confirmProposal').mockResolvedValue('policy-1')
+  const el = document.createElement('div'); const root = createRoot(el)
+  try {
+    for (const [state, phrase] of [
+      ['incomplete', '原定验收尚未完成'], ['failed', '原定验收未通过'],
+      ['stale', '候选或评测绑定已变化'], ['qualified', '独立质量验收已通过'],
+      ['unverified', '缺少独立质量证据'],
+    ]) {
+      const pending = { ...card, payload: { ...card.payload, policy_quality: state } }
+      await act(async () => root.render(<PendingCard q={pending} top />))
+      expect(el.querySelector('[role="status"]')?.textContent).toContain(phrase)
+      expect(el.querySelector<HTMLButtonElement>('button.primary')?.disabled).toBe(state !== 'qualified')
+      expect(accept).not.toHaveBeenCalled()
+    }
+    const qualified = { ...card, payload: { ...card.payload, policy_quality: 'qualified' } }
+    await act(async () => root.render(<PendingCard q={qualified} top />))
+    await act(async () => el.querySelector<HTMLButtonElement>('button.primary')!.click())
+    expect(accept).toHaveBeenCalledWith('policy-card')
+    accept.mockClear()
+    useUiStore.setState({ modalScope: 'settings' })
+    const event = () => new KeyboardEvent('keydown', { key: 'Enter', metaKey: isMac, ctrlKey: !isMac })
+    await handlePendingKey(event(), [qualified])
+    expect(accept).not.toHaveBeenCalled()
+    useUiStore.setState({ modalScope: 'workbench' })
+    await handlePendingKey(event(), [qualified])
+    expect(accept).toHaveBeenCalledWith('policy-card')
+  } finally {
+    await act(async () => root.unmount()); vi.restoreAllMocks(); useUiStore.setState(saved, true)
+    await i18n.changeLanguage('en')
+  }
+})

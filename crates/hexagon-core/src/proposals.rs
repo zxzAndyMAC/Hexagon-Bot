@@ -870,6 +870,10 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub enum PolicyQualityState {
     Unverified,
+    Incomplete,
+    Failed,
+    Stale,
+    Qualified,
     Historical,
 }
 
@@ -879,6 +883,32 @@ fn quality_state(surface: &str, status: &str) -> Option<PolicyQualityState> {
     } else {
         PolicyQualityState::Unverified
     })
+}
+
+pub(crate) fn quality_for(
+    db: &Db,
+    project: &str,
+    id: &str,
+    surface: &str,
+    status: &str,
+) -> Option<PolicyQualityState> {
+    let legacy = quality_state(surface, status)?;
+    // Evaluation-18/D15: completed records retain their evidence report, but do not
+    // advertise current eligibility after adoption changed the baseline. Historical
+    // describes lifecycle, not absence of evidence (including pre-quality records).
+    if legacy == PolicyQualityState::Historical {
+        return Some(legacy);
+    }
+    use crate::evaluation::CandidateQuality;
+    Some(
+        match crate::evaluation::candidate::display_state(db, project, id) {
+            Ok(CandidateQuality::Incomplete) => PolicyQualityState::Incomplete,
+            Ok(CandidateQuality::Failed) => PolicyQualityState::Failed,
+            Ok(CandidateQuality::Stale) => PolicyQualityState::Stale,
+            Ok(CandidateQuality::Qualified) => PolicyQualityState::Qualified,
+            _ => PolicyQualityState::Unverified,
+        },
+    )
 }
 
 /// 待审/在途提案队列（UI 提案卡数据源）。
@@ -912,7 +942,7 @@ pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
          FROM proposals p LEFT JOIN artifacts a ON a.id = p.artifact_id
          WHERE p.project_id=?1 ORDER BY p.created_at",
     )?;
-    let rows = st
+    let mut rows: Vec<ProposalRow> = st
         .query_map([project_id], |r| {
             Ok(ProposalRow {
                 id: r.get(0)?,
@@ -926,10 +956,16 @@ pub fn list(db: &Db, project_id: &str) -> Result<Vec<ProposalRow>, PropError> {
             })
         })?
         .collect::<Result<_, _>>()?;
+    for row in &mut rows {
+        row.quality = quality_for(db, project_id, &row.id, &row.surface, &row.status);
+    }
     Ok(rows)
 }
 
 pub(crate) use policy::evaluation_binding;
+
+#[cfg(test)]
+pub(crate) use policy::edit_after_quality_for_test;
 
 #[cfg(test)]
 mod tests {

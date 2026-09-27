@@ -235,7 +235,7 @@ pub fn queued(db: &Db, project_id: &str) -> Result<Vec<QueuedCard>, CardsError> 
         "SELECT id, kind, agent_id, payload, state FROM pending_questions
          WHERE project_id=?1 AND state='queued' ORDER BY created_at",
     )?;
-    let rows = st
+    let mut rows = st
         .query_map([project_id], |r| {
             Ok(QueuedCard {
                 id: r.get(0)?,
@@ -246,6 +246,22 @@ pub fn queued(db: &Db, project_id: &str) -> Result<Vec<QueuedCard>, CardsError> 
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    // Evaluation18: read current candidate state on the same polling path as
+    // other cards. Do not rewrite pending_questions or trust its old summary.
+    for row in &mut rows {
+        if let Some(id) = row.payload["proposal_id"].as_str() {
+            if row.payload["surface"] == "pack_copy" || row.payload["policy_candidate"] == true {
+                row.payload["policy_quality"] =
+                    serde_json::to_value(crate::proposals::quality_for(
+                        db,
+                        project_id,
+                        id,
+                        "pack_copy",
+                        "awaiting_stamp",
+                    ))?;
+            }
+        }
+    }
     Ok(rows)
 }
 

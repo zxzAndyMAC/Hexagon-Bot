@@ -282,6 +282,10 @@ pub(crate) fn inspect(
             r.state,
             PlannedState::Failed | PlannedState::Incomplete | PlannedState::NotRun
         ) || r.safety == Some(SafetyVerdict::Failed)
+            || (r.state == PlannedState::Completed
+                && (r.independent_passed == Some(false)
+                    || r.flow_completed == Some(false)
+                    || r.owner_exception == Some(true)))
     }) {
         CandidateQuality::Failed
     } else if rows.iter().any(|r| r.state != PlannedState::Completed) {
@@ -372,6 +376,125 @@ fn freeze_refusal(ctx: &ToolContext, code: &str, started: std::time::Instant) ->
     err(code)
 }
 
+#[derive(Serialize, Deserialize)]
+struct Assessment {
+    source_fingerprint: String,
+    plan_fingerprint: String,
+    code_fingerprint: String,
+    state: CandidateQuality,
+}
+
+pub(crate) fn assess(
+    db: &Db,
+    ctx: &ToolContext,
+    proposal: &str,
+) -> io::Result<CandidateEvaluation> {
+    let result = inspect(db, ctx, proposal)?;
+    let cached = Assessment {
+        source_fingerprint: config::digest(&result.source)?,
+        plan_fingerprint: config::digest(&super::plan::read(db, &result.source.plan_id)?)?,
+        code_fingerprint: config::code_fingerprint()?,
+        state: result.state,
+    };
+    db.conn().execute("UPDATE evaluation_candidates SET assessment_json=?2,assessment_fingerprint=?3 WHERE proposal_id=?1",rusqlite::params![proposal,serde_json::to_string(&cached)?,config::digest(&cached)?]).map_err(err)?;
+    Ok(result)
+}
+
+/// D14/18: UI polling reads only the host record and current proposal/config
+/// binding. It never scans 24 worker workspaces. A displayed qualified state is
+/// explicitly the last assessment; adoption must run inspect again.
+pub(crate) fn display_state(
+    db: &Db,
+    project: &str,
+    proposal: &str,
+) -> io::Result<CandidateQuality> {
+    let Some(source) = source(db, proposal)? else {
+        return Ok(CandidateQuality::Unverified);
+    };
+    let root: String = db
+        .conn()
+        .query_row("SELECT dir FROM projects WHERE id=?1", [project], |r| {
+            r.get(0)
+        })
+        .map_err(err)?;
+    let mut ctx = ToolContext::owner(db, Path::new(&root));
+    ctx.project_id = project.into();
+    let batch = config::read(db, &source.batch_id)?;
+    if source.host != Path::new(&root).canonicalize()?.to_string_lossy()
+        || batch.runtime.executable_fingerprint != config::code_fingerprint()?
+        || !crate::proposals::evaluation_binding(db, &ctx, proposal)
+            .is_ok_and(|b| b.0 == source.proposal_binding)
+    {
+        return Ok(CandidateQuality::Stale);
+    }
+    let plan = super::plan::read(db, &source.plan_id)?;
+    if plan.entries.iter().any(|r| {
+        matches!(
+            r.state,
+            PlannedState::Failed | PlannedState::Incomplete | PlannedState::NotRun
+        )
+    }) {
+        return Ok(CandidateQuality::Failed);
+    }
+    if plan
+        .entries
+        .iter()
+        .any(|r| r.state != PlannedState::Completed)
+    {
+        return Ok(CandidateQuality::Incomplete);
+    }
+    let (json,fingerprint):(Option<String>,Option<String>)=db.conn().query_row("SELECT assessment_json,assessment_fingerprint FROM evaluation_candidates WHERE proposal_id=?1",[proposal],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
+    let Some(json) = json else {
+        return Ok(CandidateQuality::Unverified);
+    };
+    let cached: Assessment = serde_json::from_str(&json)?;
+    if !assessment_matches(
+        &cached,
+        fingerprint.as_deref(),
+        &config::digest(&source)?,
+        &config::digest(&plan)?,
+        &config::code_fingerprint()?,
+    )? {
+        return Ok(CandidateQuality::Unverified);
+    }
+    Ok(cached.state)
+}
+
+// D12/18: this is only a last-check display hint. A false acceptance could
+// enable a misleading button; mismatches therefore fall back to unverified.
+fn assessment_matches(
+    cached: &Assessment,
+    fingerprint: Option<&str>,
+    source: &str,
+    plan: &str,
+    code: &str,
+) -> io::Result<bool> {
+    Ok(fingerprint == Some(config::digest(cached)?.as_str())
+        && cached.source_fingerprint == source
+        && cached.plan_fingerprint == plan
+        && cached.code_fingerprint == code)
+}
+
+pub(crate) fn refresh_finished_plan(db: &Db, root: &Path, plan_id: &str) -> io::Result<()> {
+    let proposal: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT proposal_id FROM evaluation_candidates WHERE plan_id=?1",
+            [plan_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(err)?;
+    let Some(proposal) = proposal else {
+        return Ok(());
+    };
+    let unfinished:bool=db.conn().query_row("SELECT EXISTS(SELECT 1 FROM evaluation_plan_runs WHERE plan_id=?1 AND state IN ('planned','started'))",[plan_id],|r|r.get(0)).map_err(err)?;
+    if !unfinished {
+        assess(db, &ToolContext::owner(db, root), &proposal)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +549,20 @@ mod tests {
             .collect()
     }
     proptest! {
+        #[test]
+        fn stale_cached_quality_never_enables_a_fresh_candidate(suffix in "x[a-z]{1,20}", field in 0u8..4) {
+            let mut cached=Assessment{source_fingerprint:"source".into(),plan_fingerprint:"plan".into(),code_fingerprint:"code".into(),state:CandidateQuality::Qualified};
+            let fingerprint=config::digest(&cached).unwrap();
+            prop_assert!(assessment_matches(&cached,Some(&fingerprint),"source","plan","code").unwrap());
+            prop_assert!(!assessment_matches(&cached,None,"source","plan","code").unwrap());
+            match field {0=>cached.source_fingerprint.push_str(&suffix),1=>cached.plan_fingerprint.push_str(&suffix),2=>cached.code_fingerprint.push_str(&suffix),_=>cached.state=CandidateQuality::Failed}
+            prop_assert!(!assessment_matches(&cached,Some(&fingerprint),"source","plan","code").unwrap());
+            // Evaluation-18: a valid digest of an old assessment cannot bind new inputs.
+            if field < 3 {
+                let valid_digest=config::digest(&cached).unwrap();
+                prop_assert!(!assessment_matches(&cached,Some(&valid_digest),"source","plan","code").unwrap());
+            }
+        }
         #[test]
         fn candidate_qualification_cannot_gain_from_missing_failed_foreign_or_unknown_evidence(index in 0usize..24, corruption in 0u8..10) {
             let mut rows=good_rows();

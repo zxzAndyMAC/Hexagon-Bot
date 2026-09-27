@@ -11033,6 +11033,25 @@ fn candidate_evaluation_has_own_frozen_heldout_plan_and_never_borrows_comparison
     let candidate = wb.freeze_policy_evaluation(&pid, &generation.id).unwrap();
     assert_ne!(candidate.batch_id, baseline.id);
     assert_ne!(candidate.plan_id, comparison.id);
+    assert_eq!(
+        crate::proposals::list(&wb.db, &wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == pid)
+            .unwrap()
+            .quality,
+        Some(crate::proposals::PolicyQualityState::Incomplete)
+    );
+    assert_eq!(
+        wb.db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == pid)
+            .unwrap()
+            .payload["policy_quality"],
+        "incomplete"
+    );
     let plan = wb.evaluation_plan(&candidate.plan_id).unwrap();
     assert_eq!(plan.kind, crate::evaluation::PlanKind::Candidate);
     assert_eq!(plan.entries.len(), 24);
@@ -11051,6 +11070,38 @@ fn candidate_evaluation_has_own_frozen_heldout_plan_and_never_borrows_comparison
     assert_eq!(evidence.original_passed, 0);
     assert!(!evidence.adoptable);
     assert!(evidence.rows.iter().all(|r| r.run_id.is_none()));
+    wb.stop_evaluation_plan(&candidate.plan_id).unwrap();
+    assert_eq!(
+        crate::proposals::list(&wb.db, &wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == pid)
+            .unwrap()
+            .quality,
+        Some(crate::proposals::PolicyQualityState::Failed)
+    );
+    let mut changed = PackDef::pinned(&wb.repo_root).unwrap();
+    changed.knobs.flag_patience = Some(8);
+    changed.pin(&wb.repo_root).unwrap();
+    assert_eq!(
+        crate::proposals::list(&wb.db, &wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == pid)
+            .unwrap()
+            .quality,
+        Some(crate::proposals::PolicyQualityState::Stale)
+    );
+    assert_eq!(
+        wb.db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == pid)
+            .unwrap()
+            .payload["policy_quality"],
+        "stale"
+    );
 }
 
 #[test]
@@ -11305,6 +11356,90 @@ fn isolated_live_candidate_needs_all_original_attempts_and_never_claims_real_ben
     assert!(wb.policy_evaluation(&source.proposal_id).unwrap().adoptable);
     let fresh = wb.prepare_evaluation_generation(&baseline.id).unwrap();
     assert!(wb.generate_policy_candidate(&fresh.id).is_err());
+    // Evaluation18: the cached read-model status never substitutes for the
+    // actual evidence check at owner adoption.
+    let proposal = crate::proposals::list(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|p| p.id == source.proposal_id)
+        .unwrap();
+    assert_eq!(
+        proposal.quality,
+        Some(crate::proposals::PolicyQualityState::Qualified)
+    );
+    let qid = wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["proposal_id"] == source.proposal_id)
+        .unwrap()
+        .id;
+    let policy_path = dir.path().join(".hexagon/pack.active.json");
+    let before = std::fs::read(&policy_path).unwrap();
+    let last = quality.rows.last().unwrap();
+    let last_run = wb.evaluation_result(last.run_id.as_ref().unwrap()).unwrap();
+    let task = &request
+        .corpora
+        .iter()
+        .flat_map(|c| &c.cases)
+        .find(|c| c.task.id == last.task_id)
+        .unwrap()
+        .task;
+    let delivery =
+        std::path::Path::new(&last_run.workspace).join(task.reference.keys().next().unwrap());
+    let delivery_before = std::fs::read(&delivery).unwrap();
+    std::fs::write(&delivery, "changed after quality assessment").unwrap();
+    assert!(wb.confirm_proposal(&qid).is_err());
+    assert_eq!(std::fs::read(&policy_path).unwrap(), before);
+    assert!(wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .iter()
+        .any(|q| q.id == qid));
+    std::fs::write(delivery, delivery_before).unwrap();
+    let artifact = dir
+        .path()
+        .join(".hexagon")
+        .join(proposal.artifact_path.unwrap());
+    let artifact_before = std::fs::read(&artifact).unwrap();
+    crate::proposals::edit_after_quality_for_test(
+        artifact.clone(),
+        b"racing body replacement".to_vec(),
+    );
+    assert!(wb.confirm_proposal(&qid).is_err());
+    assert_eq!(std::fs::read(&policy_path).unwrap(), before);
+    assert!(wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .iter()
+        .any(|q| q.id == qid));
+    std::fs::write(artifact, artifact_before).unwrap();
+    wb.confirm_proposal(&qid).unwrap();
+    assert_eq!(
+        PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),
+        9
+    );
+    assert_eq!(wb.pack.as_ref().unwrap().knobs.flag_patience(), 9);
+    assert_eq!(proposal_status(&wb, &source.proposal_id), "active");
+    assert!(wb.confirm_proposal(&qid).is_err());
+    wb.rollback_proposal(&source.proposal_id).unwrap();
+    assert_eq!(std::fs::read(policy_path).unwrap(), before);
+    assert_eq!(wb.pack.as_ref().unwrap().knobs.flag_patience(), 2);
+    assert_eq!(proposal_status(&wb, &source.proposal_id), "rolled_back");
+    drop(wb);
+    let reopened = Workbench::open_evaluation_host(dir.path()).unwrap();
+    assert_eq!(
+        crate::proposals::list(&reopened.db, &reopened.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == source.proposal_id)
+            .unwrap()
+            .quality,
+        Some(crate::proposals::PolicyQualityState::Historical)
+    );
 }
 
 #[test]

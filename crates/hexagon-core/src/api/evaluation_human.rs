@@ -271,6 +271,7 @@ impl Workbench {
             usize::try_from(position).map_err(std::io::Error::other)?,
             &result.id,
         )?;
+        eval::candidate::refresh_finished_plan(&self.db, &self.repo_root, &plan)?;
         Ok(())
     }
 }

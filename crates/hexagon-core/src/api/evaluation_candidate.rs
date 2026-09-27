@@ -16,7 +16,7 @@ impl Workbench {
         )?)
     }
     pub fn policy_evaluation(&self, proposal: &str) -> Result<CandidateEvaluation, ApiError> {
-        Ok(eval::candidate::inspect(
+        Ok(eval::candidate::assess(
             &self.db,
             &self.ctx_for("owner", None),
             proposal,

@@ -3,4 +3,4 @@
 /**
  * Evaluation 16/D14: old approvals remain history, never fresh qualification.
  */
-export type PolicyQualityState = "unverified" | "historical";
+export type PolicyQualityState = "unverified" | "incomplete" | "failed" | "stale" | "qualified" | "historical";

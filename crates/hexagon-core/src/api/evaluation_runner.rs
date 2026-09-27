@@ -179,6 +179,7 @@ impl Workbench {
         )?;
         if result.state != "waiting_human" {
             eval::plan::finish(&self.db, plan, position, &id)?;
+            eval::candidate::refresh_finished_plan(&self.db, &self.repo_root, plan)?;
         }
         Ok(result)
     }
@@ -211,6 +212,7 @@ impl Workbench {
         )?;
         if result.state != "waiting_human" {
             eval::plan::finish(&self.db, plan, position, &id)?;
+            eval::candidate::refresh_finished_plan(&self.db, &self.repo_root, plan)?;
         }
         Ok(result)
     }

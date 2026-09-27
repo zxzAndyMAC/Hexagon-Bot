@@ -28,6 +28,16 @@ export function policyNeedsQuality(q: PendingQuestion): boolean {
   return (q.payload.surface === 'pack_copy' || q.payload.policy_candidate === true) && q.payload.policy_quality !== 'qualified'
 }
 
+export function policyQualityMessage(q: PendingQuestion) {
+  switch (q.payload.policy_quality) {
+    case 'incomplete': return 'policy.incomplete'
+    case 'failed': return 'policy.failed'
+    case 'stale': return 'policy.stale'
+    case 'qualified': return 'policy.qualified'
+    default: return 'policy.unverified'
+  }
+}
+
 export async function approveQuestion(q: PendingQuestion) {
   const p = q.payload
   if (p.policy_recovery === true) {
@@ -35,7 +45,7 @@ export async function approveQuestion(q: PendingQuestion) {
     return
   }
   if (policyNeedsQuality(q)) {
-    useUiStore.getState().pushToast(i18n.t('policy.unverified'))
+    useUiStore.getState().pushToast(i18n.t(policyQualityMessage(q)))
     return
   }
   if (p.sub === 'tool_outcome_unknown') {
@@ -145,7 +155,7 @@ export async function handlePendingKey(
     return 'blocked-policy'
   }
   if (isApprove && policyNeedsQuality(q)) {
-    useUiStore.getState().pushToast(i18n.t('policy.unverified'))
+    useUiStore.getState().pushToast(i18n.t(policyQualityMessage(q)))
     return 'blocked-policy'
   }
   if (isApprove && q.payload.sub === 'acceptance_exception') {

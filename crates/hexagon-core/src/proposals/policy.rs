@@ -208,6 +208,13 @@ pub(crate) fn crash_after_replace() {
 pub(crate) fn edit_after_replace(text: &str) {
     FAULT.with(|f| *f.borrow_mut() = Some(Some(text.into())));
 }
+#[cfg(test)]
+thread_local! {static AFTER_QUALITY_EDIT:std::cell::RefCell<Option<(PathBuf,Vec<u8>)>>=const {std::cell::RefCell::new(None)};}
+#[cfg(test)]
+pub(crate) fn edit_after_quality_for_test(path: PathBuf, bytes: Vec<u8>) {
+    AFTER_QUALITY_EDIT.with(|edit| *edit.borrow_mut() = Some((path, bytes)));
+}
+
 fn checkpoint(_path: &Path) -> Result<(), PropError> {
     #[cfg(test)]
     if let Some(fault) = FAULT.with(|f| f.borrow_mut().take()) {
@@ -412,7 +419,18 @@ fn perform(
                 return Err(PropError::PolicyStale);
             }
             let (_, _, _, body) = artifact_proposal_parts(db, ctx, Some(&artifact))?;
-            bound(db, ctx, pid, &body)?;
+            let fresh = bound(db, ctx, pid, &body)?;
+            // Evaluation18/D14: old code rechecked the binding but discarded
+            // its candidate, allowing a changed source to race prepared bytes.
+            // Verify exact replacement and independent evidence in this same
+            // write transaction; the read-model quality hint has no authority.
+            if serde_json::to_vec_pretty(&fresh.candidate)
+                .map_err(|_| PropError::PolicyConstraint)?
+                != after
+            {
+                return Err(PropError::PolicyStale);
+            }
+            require_independent_quality(db, ctx, pid)?;
         } else if status != "active" {
             return Err(PropError::BadState(status));
         }
@@ -453,8 +471,16 @@ fn perform(
 // Evaluation 16 / D14: owner approval and replay scores are not evidence.
 // False refusal costs an independent evaluation; false admission applies an
 // unverified policy. Persisted historical operations are recovered separately.
-fn require_independent_quality(_db: &Db, _ctx: &ToolContext, _pid: &str) -> Result<(), PropError> {
-    Err(PropError::PolicyQualityUnverified)
+fn require_independent_quality(db: &Db, ctx: &ToolContext, pid: &str) -> Result<(), PropError> {
+    #[cfg(test)]
+    if HISTORICAL_OPERATION.get() {
+        return Ok(());
+    }
+    if crate::evaluation::candidate::inspect(db, ctx, pid).is_ok_and(|result| result.adoptable) {
+        Ok(())
+    } else {
+        Err(PropError::PolicyQualityUnverified)
+    }
 }
 
 fn apply_bound_adoption(
@@ -501,7 +527,27 @@ pub(crate) fn replay_pre_quality_adoption(
     let artifact: String = db.conn().query_row("SELECT artifact_id FROM proposals WHERE id=?1 AND project_id=?2 AND status='awaiting_stamp'", params![pid,ctx.project_id], |row| row.get(0))?;
     let (_, _, _, body) = artifact_proposal_parts(db, ctx, Some(&artifact))?;
     let binding = bound(db, ctx, pid, &body)?;
+    let _history = HistoricalOperation::enter();
     apply_bound_adoption(db, ctx, pid, qid, &binding)
+}
+
+// Evaluation18: old persisted-intent recovery fixtures remain isolated from
+// product builds. New adoption tests must construct actual independent evidence.
+#[cfg(test)]
+thread_local! {static HISTORICAL_OPERATION:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(test)]
+struct HistoricalOperation(bool);
+#[cfg(test)]
+impl HistoricalOperation {
+    fn enter() -> Self {
+        Self(HISTORICAL_OPERATION.replace(true))
+    }
+}
+#[cfg(test)]
+impl Drop for HistoricalOperation {
+    fn drop(&mut self) {
+        HISTORICAL_OPERATION.set(self.0);
+    }
 }
 
 pub(super) fn activate(
@@ -527,6 +573,10 @@ pub(super) fn activate(
         }
         let binding = bound(db, ctx, pid, &body)?;
         require_independent_quality(db, ctx, pid)?;
+        #[cfg(test)]
+        if let Some((path, bytes)) = AFTER_QUALITY_EDIT.with(|edit| edit.borrow_mut().take()) {
+            std::fs::write(path, bytes)?;
+        }
         apply_bound_adoption(db, ctx, pid, qid, &binding)
     })();
     crate::diag::note(

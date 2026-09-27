@@ -7,7 +7,7 @@ import { useUiStore } from '../store'
 import { extractDiffBlock, parseUnifiedDiff, type DiffOp } from '../diff'
 import { DiffView } from './DiffView'
 import { bindingFor, formatBinding, matches } from '../keymap'
-import { kindTitleKey, policyNeedsQuality, rejectReasonWithJudge, severityOf } from '../decisions'
+import { kindTitleKey, policyNeedsQuality, policyQualityMessage, rejectReasonWithJudge, severityOf } from '../decisions'
 import { Icon, type IconName } from './Icon'
 import { StageEvidence } from './StageEvidence'
 import type { StageEvidence as Evidence } from '../gen/StageEvidence'
@@ -247,7 +247,7 @@ function PolicyReport({ q }: { q: PendingQuestion }) {
     if (!e.repeat && useUiStore.getState().modalScope === 'workbench') openButton.current?.click()
   }}>
     <p className="dim">{t('policy.ownerOnly')}</p>
-    {policyNeedsQuality(q) && <p role="status">{t('policy.unverified')}</p>}
+    <p role="status">{t(policyQualityMessage(q))}</p>
     {q.payload.policy_recovery === true && <p role="alert">{t('policy.recovery')}</p>}
     {report && <p className="mono">{t('policy.scores', { baseline: report.baseline_score ?? '—', candidate: report.candidate_score ?? '—' })}</p>}
     <button ref={openButton} className="btn" title={`${t('policy.report')} · ${formatBinding(bindingFor('openPolicyReport'))}`} onClick={async () => {
