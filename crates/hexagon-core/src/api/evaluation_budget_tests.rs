@@ -70,7 +70,7 @@ fn evaluation_budget_counts_actual_scripted_requests_in_a_shared_debug_round() {
     );
 }
 
-fn waiting_budget(
+pub(super) fn waiting_budget(
     request_limit: u32,
     run_mc: u64,
     price: crate::evaluation::DebugPrice,
@@ -99,9 +99,11 @@ fn waiting_budget(
             }],
         )
         .unwrap();
+    // D09: native budget probes now need an explicitly active execution phase.
+    let run = wb.resume_evaluation_fixture(&run.id).unwrap();
     (home, wb, run)
 }
-fn fixture_price() -> crate::evaluation::DebugPrice {
+pub(super) fn fixture_price() -> crate::evaluation::DebugPrice {
     crate::evaluation::DebugPrice {
         prompt_per_1k_mc: 1000,
         completion_per_1k_mc: 1000,
@@ -122,7 +124,7 @@ fn fixture_reply() -> crate::provider::ChatResponse {
 #[test]
 fn evaluation_budget_four_workers_share_eighty_request_ceiling() {
     let (_home, host, run) = waiting_budget(80, 500000, fixture_price());
-    assert_eq!(run.state, "waiting_human");
+    assert_eq!(run.state, "started");
     let initial = host.evaluation_budget_debug().unwrap().requests;
     let provider = Arc::new(crate::provider::ScriptedProvider::new(
         (0..100).map(|_| fixture_reply()).collect(),
@@ -146,8 +148,14 @@ fn evaluation_budget_four_workers_share_eighty_request_ceiling() {
         })
         .collect();
     let completed: usize = handles.into_iter().map(|h| h.join().unwrap()).sum();
-    assert_eq!(completed as u64 + initial, 80);
-    assert_eq!(provider.recorded().len(), completed, "no eighty-first IO");
+    // D09: at the limit, admitted replies can be interrupted before delivery.
+    // Supplier dispatches, not successful API returns, prove no eighty-first IO.
+    assert!(completed as u64 + initial <= 80);
+    assert_eq!(
+        provider.recorded().len() as u64 + initial,
+        80,
+        "no eighty-first IO"
+    );
     let report = host.evaluation_budget_debug().unwrap();
     assert_eq!(report.requests, 80);
     assert_eq!(report.unknown_mc, 240000);
@@ -159,7 +167,7 @@ fn evaluation_budget_four_workers_share_eighty_request_ceiling() {
 #[test]
 fn evaluation_budget_money_exhaustion_keeps_unknown_reservations_on_reopen() {
     let (home, host, run) = waiting_budget(80, 6500, fixture_price());
-    assert_eq!(run.state, "waiting_human");
+    assert_eq!(run.state, "started");
     let mut worker = Workbench::open_evaluation_host(Path::new(&run.workspace)).unwrap();
     let provider = Arc::new(crate::provider::ScriptedProvider::new(
         vec![fixture_reply()],
@@ -224,7 +232,8 @@ fn evaluation_budget_overflow_receipt_freezes_further_dispatch() {
     ]));
     worker.register_provider("default", provider.clone());
     let before = host.evaluation_budget_debug().unwrap();
-    worker.draft_role_def("a0", "overflow receipt").unwrap();
+    // D09: settlement persists first, then a blocked receipt interrupts work.
+    assert!(worker.draft_role_def("a0", "overflow receipt").is_err());
     let after = host.evaluation_budget_debug().unwrap();
     assert!(after.blocked);
     assert!(after.unknown_mc >= before.unknown_mc + 3000);

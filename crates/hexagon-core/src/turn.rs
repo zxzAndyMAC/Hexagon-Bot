@@ -160,7 +160,9 @@ fn halted_flag(ctx: &ToolContext) -> bool {
 
 /// 叫停判定（暂停旗 + 子代理停旗）：等网睡眠切片与流 delta 缝共用一处。
 pub(crate) fn halted(db: &Db, ctx: &ToolContext) -> bool {
-    crate::orchestra::is_paused(db, &ctx.project_id).unwrap_or(false) || halted_flag(ctx)
+    crate::orchestra::is_paused(db, &ctx.project_id).unwrap_or(false)
+        || halted_flag(ctx)
+        || crate::evaluation::control::checkpoint(&ctx.repo_root).is_err()
 }
 
 /// 等网退出留痕（票 01）：一条系统事件带探针数与等网时长 + 一帧清旗。

@@ -87,7 +87,9 @@ pub(crate) fn begin(
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
     let run = super::read(db, run_id)?;
-    if !matches!(run.state.as_str(), "waiting_human") {
+    if !matches!(run.state.as_str(), "waiting_human")
+        || super::control::read(db, run_id)?.state != super::EvaluationControlState::WaitingHuman
+    {
         crate::diag::note(
             crate::diag::CLASS_REJECT,
             true,

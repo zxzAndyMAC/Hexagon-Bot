@@ -52,6 +52,7 @@ impl Workbench {
             None,
             false,
         )?;
+        let _probe = eval::control::probe(&root)?;
         let ctx = worker.ctx_for("a0", None);
         let public = worker
             .registry

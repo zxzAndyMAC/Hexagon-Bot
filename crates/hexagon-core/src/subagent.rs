@@ -448,6 +448,8 @@ fn dispatch(
     task: String,
     title: String,
 ) -> Result<Value, ToolError> {
+    let evaluation_work = crate::evaluation::control::work_lease(&ctx.repo_root)
+        .map_err(|e| ToolError::NotExecuted(e.to_string()))?;
     if task.is_empty() {
         return Err(ToolError::BadInput("subagent needs a task".into()));
     }
@@ -554,6 +556,18 @@ fn dispatch(
     nctx.subagent = Some(scope);
     let sub_registry = registry.subagent_scope(&isolated);
 
+    // D09: isolating selected MCP tools can wait across a stop. Release the
+    // reserved dispatch slot instead of spawning a child after that wait.
+    if let Err(error) = crate::evaluation::control::checkpoint(&ctx.repo_root) {
+        ctx.tasks.finish(
+            &id,
+            "interrupted",
+            None,
+            Some("evaluation stopped before child dispatch".into()),
+        );
+        return Err(ToolError::NotExecuted(error.to_string()));
+    }
+
     // 线程派遣需要两件套：可移动的第二连接（内存库没有文件路径，退化为
     // 内联同步——测试接缝的诚实降级）与可移动的 provider Arc。
     match (db.path(), ctx.subagent_provider.clone()) {
@@ -561,6 +575,7 @@ fn dispatch(
             let board = ctx.tasks.clone();
             let id2 = id.clone();
             let handle = std::thread::spawn(move || {
+                let _evaluation_work = evaluation_work;
                 let done = match Db::open(&path) {
                     Ok(db2) => run_child(&db2, prov.as_ref(), &sub_registry, &nctx, &task),
                     Err(e) => ChildDone {

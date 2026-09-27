@@ -141,8 +141,14 @@ fn evaluation_outcome_unknown_action_is_not_erased_by_unchanged_files() {
         .unknowns
         .iter()
         .any(|s| s == "execution_changed_after_terminal_or_unsealed"));
-    // Native invalid call leaves an unresolved durable action; a chat claim or
-    // an unchanged final file cannot erase its unknown outcome.
+    // D09: ended evaluations now reject model dispatch. Exercise unresolved
+    // native actions in an active driver phase instead of bypassing that stop.
+    let (_active_home, wb, run) = super::evaluation_budget_tests::waiting_budget(
+        80,
+        500000,
+        super::evaluation_budget_tests::fixture_price(),
+    );
+    let mut worker = Workbench::open_evaluation_host(Path::new(&run.workspace)).unwrap();
     worker.register_provider(
         "default",
         Arc::new(ScriptedProvider::new(vec![

@@ -417,6 +417,8 @@ impl Registry {
         input: Value,
         call_seq: Option<&str>,
     ) -> Result<CallOutcome, ToolError> {
+        crate::evaluation::control::checkpoint(&ctx.repo_root)
+            .map_err(|e| ToolError::NotExecuted(e.to_string()))?;
         let tool = self
             .tools
             .lock()
@@ -709,6 +711,10 @@ impl Registry {
         seq: Option<&str>,
         execute: impl FnOnce() -> Result<CallOutcome, ToolError>,
     ) -> Result<CallOutcome, ToolError> {
+        // D09: nested dispatch bypasses exec_and_log; gate both its intent
+        // and the actual dispatch after authorization/lease waits.
+        crate::evaluation::control::checkpoint(&ctx.repo_root)
+            .map_err(|e| ToolError::NotExecuted(e.to_string()))?;
         let action = crate::actions::prepare(db, ctx, "subagent", input, seq)?;
         crate::actions::ensure_clear_except(db, ctx, &action.id)?;
         if let Some(outcome) = crate::actions::replay(&action)? {
@@ -721,7 +727,9 @@ impl Registry {
         #[cfg(test)]
         crate::actions::checkpoint(crate::actions::CrashPoint::Authorization);
         crate::actions::start(db, ctx, &action.id)?;
-        let outcome = execute();
+        let outcome = crate::evaluation::control::checkpoint(&ctx.repo_root)
+            .map_err(|e| ToolError::NotExecuted(e.to_string()))
+            .and_then(|()| execute());
         let result = match outcome {
             Ok(CallOutcome::Done(value)) => Ok(value),
             Ok(_) => Err(ToolError::Exec(
@@ -751,6 +759,10 @@ impl Registry {
         action_id: &str,
         allow_recovery: bool,
     ) -> Result<Value, ToolError> {
+        // D09: recheck at the final side-effect boundary, including owner
+        // permission resumes; a late model response cannot authorize new work.
+        let _evaluation_work = crate::evaluation::control::work_lease(&ctx.repo_root)
+            .map_err(|e| ToolError::NotExecuted(e.to_string()))?;
         let tool = self
             .tools
             .lock()
@@ -798,7 +810,9 @@ impl Registry {
         {
             Ok(mut locks) => {
                 execution_ctx.write_lease = locks.pop().map(Arc::new);
-                tool.exec(db, &input, &execution_ctx)
+                crate::evaluation::control::checkpoint(&ctx.repo_root)
+                    .map_err(|e| ToolError::NotExecuted(e.to_string()))
+                    .and_then(|()| tool.exec(db, &input, &execution_ctx))
             }
             Err(error) => Err(error),
         };

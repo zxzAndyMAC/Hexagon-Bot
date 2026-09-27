@@ -731,11 +731,74 @@ pub(crate) fn redeliver_fixture(root: &Path, run_key: &str, usage: &Usage) -> io
     guard.settle(Some(usage), true, false, false)
 }
 
+pub(crate) fn stop_reason(root: &Path) -> io::Result<Option<&'static str>> {
+    let path = root.join(".hexagon/evaluation-budget.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    if path.symlink_metadata()?.is_symlink() {
+        return Err(rejected("binding_is_symlink"));
+    }
+    let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
+    let db = Db::open_current(Path::new(&binding.host).join(".hexagon/state.db")).map_err(err)?;
+    let (limit, allowance, closed): (u64, u64, bool) = db
+        .conn()
+        .query_row(
+            "SELECT request_limit,allowance_mc,closed FROM evaluation_budget_runs WHERE id=?1",
+            [&binding.run_key],
+            |r| Ok((money(r, 0)?, money(r, 1)?, r.get(2)?)),
+        )
+        .map_err(err)?;
+    // D09: a reservation already owns admission, but is not yet a dispatch.
+    // Counting it here used to cancel the legal last request before send.
+    // admit still counts ALL reservations atomically to forbid request 81.
+    let (count,exposure):(u64,u64)=db.conn().query_row("SELECT COUNT(*),COALESCE(SUM(known_mc+held_mc),0) FROM evaluation_budget_requests WHERE run_key=?1 AND state!='not_sent' AND dispatch_started=1",[&binding.run_key],|r|Ok((money(r,0)?,money(r,1)?))).map_err(err)?;
+    Ok(stop_at_boundary(
+        closed,
+        summary(&db, &binding.scope)?.blocked,
+        count,
+        limit,
+        exposure,
+        allowance,
+    ))
+}
+
+// False positives defer work; false negatives admit unreviewed budget excess.
+fn stop_at_boundary(
+    closed: bool,
+    blocked: bool,
+    count: u64,
+    limit: u64,
+    exposure: u64,
+    allowance: u64,
+) -> Option<&'static str> {
+    if closed {
+        Some("budget_run_closed")
+    } else if blocked {
+        Some("shared_budget_blocked")
+    } else if count >= limit {
+        Some("request_limit")
+    } else if exposure >= allowance {
+        Some("run_budget_limit")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
     proptest! {
+        #[test]
+        fn stopped_boundary_cannot_reopen_by_increasing_work(count in any::<u64>(),limit in any::<u64>(),exposure in any::<u64>(),allowance in any::<u64>(),extra in any::<u64>()) {
+            if stop_at_boundary(false,false,count,limit,exposure,allowance).is_some() {
+                prop_assert!(stop_at_boundary(false,false,count.saturating_add(extra),limit,exposure.saturating_add(extra),allowance).is_some());
+            }
+            prop_assert!(stop_at_boundary(true,false,count,limit,exposure,allowance).is_some());
+            prop_assert!(stop_at_boundary(false,true,count,limit,exposure,allowance).is_some());
+        }
+
         #[test]
         fn reservations_never_wrap_into_available_money(known in any::<u64>(), held in any::<u64>(), needed in any::<u64>(), limit in any::<u64>()) {
             if fits(known,held,needed,limit) {

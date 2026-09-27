@@ -74,3 +74,18 @@ cargo run -p hexagon-core --example evaluate -- check-category /tmp/hexagon-eval
 预算离线回归先调用 `debug-budget-config HOST PLAN_ID PRICE.json`，再用原有 `next-debug` 或 `next-owner-debug`。`PRICE.json` 为明确的夹具价格与单请求界限：`{"prompt_per_1k_mc":1000,"completion_per_1k_mc":1000,"prompt_bound":2000,"output_bound":1000}`；只接受脚本供应商，不能作为真实价格凭据。计划开始前固定，开始后不可修改。配对两侧额度与领取第一侧在同一事务中保存。
 
 `budget-debug HOST` 返回该宿主的脚本账本；`budget HOST` 读取固定负责人首轮真实预算，改变 HOST 不会产生新的 200 美元额度。真实账本不存在时只返回未使用状态，不创建或消费它。真实实验入口仍关闭。金额为本地估算，不是供应商账单：`known_mc` 是已知部分，`reserved_mc` 包含配对未用额度和未知/在途预占，`unknown_mc` 与 `in_flight_mc` 是预占的子集，不能再扣一次。`available_mc` 是剩余额度。`requests` 为已准入且无法证明未发送的请求数；`confirmed_requests` 只包括实际响应或已报告用量的请求。请求数量按实际模型入口累计，包含规划、路由、判定、执行和子代理调用。
+
+### Stop and cleanup
+
+`control HOST RUN_ID` reads execution control separately from the task outcome.
+`stop-run HOST RUN_ID` prevents new model/tool work and requests owned-process
+cleanup. Pending remote calls remain `stopping`; lack of remote cancellation
+confirmation never proves zero cost. Partial usage and unknown reservations stay
+in the budget ledger. `active_ms` freezes at stop, while `cleanup_elapsed_ms`
+shows subsequent cleanup time. Stopping with an open attention handle closes
+its lease with unknown human duration; it cannot establish a human-time benefit.
+
+`pause-run HOST RUN_ID` and `resume-run HOST RUN_ID` only suspend/resume an idle
+owner boundary. They cannot resume a stopped run or claim to cancel active work.
+The owner's away period consumes no active-time allowance. These commands use
+the existing offline CLI and do not add a desktop evaluation screen.

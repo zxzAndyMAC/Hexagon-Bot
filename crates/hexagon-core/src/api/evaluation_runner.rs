@@ -162,6 +162,14 @@ impl Workbench {
             error: None,
         };
         eval::insert(&self.db, task, &result)?;
+        eval::control::install(
+            &self.db,
+            &self.repo_root,
+            &result,
+            frozen
+                .map(|(b, _)| b.request.limits.active_ms)
+                .unwrap_or(1_800_000),
+        )?;
         let started_at = eval::now_ms()?;
         let started = std::time::Instant::now();
         let execute = (|| -> Result<(), ApiError> {
@@ -181,6 +189,7 @@ impl Workbench {
             }
             result.git_baseline = eval::reconstruct(&copy, task)?;
             eval::budget::bind_debug(&self.db, &self.repo_root, &copy, id)?;
+            eval::control::apply_stop(&self.db, &mut result)?;
             eval::update_started(&self.db, &result)?;
             let full_pack = frozen
                 .filter(|(_, arm)| *arm == EvaluationArm::Full)
@@ -271,6 +280,8 @@ impl Workbench {
                 rework: false,
             };
             self.db.conn().execute("INSERT INTO evaluation_cursors(run_id,cursor_json,started_at_ms) VALUES (?1,?2,?3)",rusqlite::params![id,serde_json::to_string(&cursor)?,i64::try_from(started_at).map_err(std::io::Error::other)?])?;
+            let _watch =
+                eval::control::watch(&copy, worker.sessions.clone(), worker.tasks.clone())?;
             drive_scripted(&mut worker, task, &mut cursor, &mut result)?;
             self.save_evaluation_cursor(&cursor, &result)?;
             Ok(())
@@ -280,6 +291,7 @@ impl Workbench {
             result.error = Some(error.to_string());
         }
         result.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        eval::control::apply_stop(&self.db, &mut result)?;
         eval::update_started(&self.db, &result)?;
         crate::diag::note(
             if matches!(result.state.as_str(), "completed" | "waiting_human") {

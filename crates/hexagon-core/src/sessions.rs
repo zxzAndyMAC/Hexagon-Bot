@@ -340,6 +340,7 @@ struct Session {
 impl Session {
     fn spawn(ctx: &ToolContext, spec: crate::sandbox::SandboxSpec) -> std::io::Result<Self> {
         let lease = crate::tools::writeguard::repository_lock(ctx)?;
+        crate::evaluation::control::checkpoint(&ctx.repo_root)?;
         let mut child = sh_command(&ctx.repo_root, &spec)?.spawn()?;
         let stdin = child.stdin.take().unwrap();
         // 会话 Shared 跨命令复用——口子不随 spawn 绑死，exec_on
@@ -480,6 +481,8 @@ impl SessionTable {
 
     /// reliability 02 / Q3: missing isolation records a refusal; never naked execution.
     fn spec_for(&self, db: &Db, ctx: &ToolContext, net: bool) -> crate::sandbox::SandboxSpec {
+        // D05/D09: only host model transport may use the network in a worker.
+        let net = net && !ctx.repo_root.join(".hexagon/evaluation-worker").exists();
         let started = Instant::now();
         let read_only =
             crate::permissions::agent_role(db, ctx).as_deref() == Some(crate::pm_route::PM_ROLE);
@@ -558,8 +561,24 @@ impl SessionTable {
         let spec = self.spec_for(db, ctx, net);
         let task = spawn_task_handle(ctx, cmd, &spec, self.bound_tap(), None)
             .map_err(|e| ToolError::NotExecuted(format!("spawn sh: {e}")))?;
+        // D09: foreground checks used to escape kill_all because their handle
+        // lived only on this stack. Keep them in the same owned-process table.
+        let task = Arc::new(task);
+        let id = format!("oneshot-{}", self.next_nonce());
+        self.inner
+            .lock()
+            .unwrap()
+            .tasks
+            .insert(id.clone(), task.clone());
         let deadline = Instant::now() + timeout;
-        let timed_out = wait_done(&task.shared, deadline);
+        let waiting = wait_controlled(&task.shared, deadline, &ctx.repo_root);
+        if let Err(e) = waiting {
+            task.kill();
+            wait_done(&task.shared, Instant::now() + Duration::from_secs(2));
+            self.inner.lock().unwrap().tasks.remove(&id);
+            return Err(ToolError::Exec(format!("evaluation interrupted: {e}")));
+        }
+        let timed_out = waiting.unwrap();
         if timed_out {
             task.kill();
             wait_done(&task.shared, Instant::now() + Duration::from_secs(2));
@@ -570,6 +589,7 @@ impl SessionTable {
                 json!({"cmd": head(cmd), "timeout_ms": timeout.as_millis() as u64}),
             );
         }
+        self.inner.lock().unwrap().tasks.remove(&id);
         Ok(task_result(&task, timed_out, ctx))
     }
 
@@ -652,6 +672,8 @@ impl SessionTable {
         cmd: &str,
         timeout: Duration,
     ) -> Result<Value, ToolError> {
+        crate::evaluation::control::checkpoint(&ctx.repo_root)
+            .map_err(|e| ToolError::NotExecuted(e.to_string()))?;
         let nonce = self.next_nonce();
         let start_out;
         let start_err;
@@ -674,7 +696,14 @@ impl SessionTable {
         // 调用归属，收尾即摘，防下一条命令吃到上条的 seq。
         *sess.shared.tap.lock().unwrap() = self.bound_tap();
         let deadline = Instant::now() + timeout;
-        let timed_out = wait_done(&sess.shared, deadline);
+        let waiting = wait_controlled(&sess.shared, deadline, &ctx.repo_root);
+        if let Err(e) = waiting {
+            *sess.shared.tap.lock().unwrap() = None;
+            sess.kill();
+            self.inner.lock().unwrap().sessions.remove(name);
+            return Err(ToolError::Exec(format!("evaluation interrupted: {e}")));
+        }
+        let timed_out = waiting.unwrap();
         *sess.shared.tap.lock().unwrap() = None;
         if timed_out {
             sess.kill();
@@ -904,6 +933,8 @@ fn spawn_task_handle(
             .env("npm_config_cache", output.join("npm-cache"))
             .env("COVERAGE_FILE", output.join(".coverage"));
     }
+    // D09: acquiring the repository lease can wait across a stop.
+    crate::evaluation::control::checkpoint(&ctx.repo_root)?;
     let mut child = c.spawn()?;
     // 任务的 Shared 就是这条进程的——口子随 spawn 绑死，进程终身
     // 输出都记在这个 seq 名下（含后台任务活得比调用久的情形）。
@@ -973,6 +1004,25 @@ pub(crate) fn kill_pid_group(pid: u32) {
         let _ = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .status();
+    }
+}
+
+// D09: a silent child cannot keep a stopped run blocked until its tool timeout.
+fn wait_controlled(shared: &Shared, deadline: Instant, root: &Path) -> std::io::Result<bool> {
+    if !root.join(".hexagon/evaluation-worker").exists() {
+        return Ok(wait_done(shared, deadline));
+    }
+    loop {
+        crate::evaluation::control::checkpoint(root)?;
+        if !wait_done(
+            shared,
+            deadline.min(Instant::now() + Duration::from_millis(100)),
+        ) {
+            return Ok(false);
+        }
+        if Instant::now() >= deadline {
+            return Ok(true);
+        }
     }
 }
 

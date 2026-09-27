@@ -185,6 +185,8 @@ pub fn request(
 ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
     use crate::provider::ProviderError;
     let started = std::time::Instant::now();
+    let _evaluation_work = crate::evaluation::control::work_lease(&ctx.repo_root)
+        .map_err(|_| ProviderError::Interrupted)?;
     let ledger_error = |e: String| ProviderError::Refused(format!("request ledger: {e}"));
     recover_requests(db, &ctx.repo_root, &ctx.project_id)
         .map_err(|e| ledger_error(e.to_string()))?;
@@ -310,6 +312,7 @@ pub fn request(
     let mut evaluation = match crate::evaluation::budget::admit(ctx, provider, &id, purpose) {
         Ok(guard) => guard,
         Err(error) => {
+            let _ = crate::evaluation::control::budget_refused(&ctx.repo_root);
             crate::diag::note(
                 crate::diag::CLASS_REJECT,
                 true,
@@ -325,9 +328,18 @@ pub fn request(
             return Err(ledger_error(error.to_string()));
         }
     };
+    // D09: the ledger writer can wait behind another connection. Recheck
+    // after that wait, before marking this request dispatched.
+    if crate::evaluation::control::checkpoint(&ctx.repo_root).is_err() {
+        db.conn().execute("UPDATE usage SET request_state='not_sent',reserved_mc=0,cost_known=1 WHERE request_id=?1 AND request_state='pending'",[&id]).map_err(|e|ledger_error(e.to_string()))?;
+        return Err(ProviderError::Interrupted);
+    }
     if let Some(guard) = &mut evaluation {
         guard.dispatch().map_err(|e| ledger_error(e.to_string()))?;
     }
+    let _watch =
+        crate::evaluation::control::watch(&ctx.repo_root, ctx.sessions.clone(), ctx.tasks.clone())
+            .map_err(|e| ledger_error(e.to_string()))?;
     let result = send();
     let usage = match &result {
         Ok(response) => Some(&response.usage),
@@ -354,6 +366,11 @@ pub fn request(
         guard
             .settle(usage, result.is_ok(), state == "not_sent", extra_unpriced)
             .map_err(|e| ledger_error(e.to_string()))?;
+    }
+    // D09: a tool-only response has no text delta at which streaming could
+    // notice stop. Settle actual usage, then refuse the late tool response.
+    if crate::evaluation::control::checkpoint(&ctx.repo_root).is_err() {
+        return Err(ProviderError::Interrupted);
     }
     result.map_err(ProviderError::into_cause)
 }

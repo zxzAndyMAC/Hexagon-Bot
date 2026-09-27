@@ -128,9 +128,16 @@ impl Workbench {
         self.db.conn().execute("UPDATE evaluation_cursors SET waiting_ms=waiting_ms+MAX(0,?2-COALESCE(waiting_since_ms,?2)),waiting_since_ms=NULL WHERE run_id=?1",rusqlite::params![result.id,eval::now_ms()? as i64])?;
         let started = std::time::Instant::now();
         result.state = "started".into();
+        eval::control::apply_stop(&self.db, &mut result)?;
         eval::update_started(&self.db, &result)?;
         tx.commit()?;
         let action = (|| -> Result<Option<orchestra::StageAction>, ApiError> {
+            let _watch = eval::control::watch(
+                Path::new(&result.workspace),
+                worker.sessions.clone(),
+                worker.tasks.clone(),
+            )?;
+            eval::control::checkpoint(Path::new(&result.workspace))?;
             Ok(match decision {
                 EvaluationDecision::ContinueRework => {
                     // D07: manual edits and guidance are already in this workspace.
@@ -159,7 +166,11 @@ impl Workbench {
                     .elapsed_ms
                     .saturating_add(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
                 self.save_evaluation_cursor(&cursor, &result)?;
+                eval::control::apply_stop(&self.db, &mut result)?;
                 eval::update_started(&self.db, &result)?;
+                if result.state != "waiting_human" {
+                    self.finish_evaluation_owner_plan(&result)?;
+                }
                 return Err(error);
             }
         };
@@ -226,21 +237,29 @@ impl Workbench {
             .elapsed_ms
             .saturating_add(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
         self.save_evaluation_cursor(&cursor, &result)?;
+        eval::control::apply_stop(&self.db, &mut result)?;
         eval::update_started(&self.db, &result)?;
         if result.state != "waiting_human" {
-            let (plan, position): (String, i64) = self.db.conn().query_row(
-                "SELECT plan_id,position FROM evaluation_plan_runs WHERE run_id=?1",
-                [&result.id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            eval::plan::finish(
-                &self.db,
-                &plan,
-                usize::try_from(position).map_err(std::io::Error::other)?,
-                &result.id,
-            )?;
+            self.finish_evaluation_owner_plan(&result)?;
         }
         Ok(result)
+    }
+    fn finish_evaluation_owner_plan(
+        &self,
+        result: &eval::EvaluationResult,
+    ) -> Result<(), ApiError> {
+        let (plan, position): (String, i64) = self.db.conn().query_row(
+            "SELECT plan_id,position FROM evaluation_plan_runs WHERE run_id=?1",
+            [&result.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        eval::plan::finish(
+            &self.db,
+            &plan,
+            usize::try_from(position).map_err(std::io::Error::other)?,
+            &result.id,
+        )?;
+        Ok(())
     }
 }
 

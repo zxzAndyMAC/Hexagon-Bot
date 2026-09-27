@@ -153,6 +153,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0037_evaluation_budget",
         include_str!("../migrations/0037_evaluation_budget.sql"),
     ),
+    (
+        "0038_evaluation_controls",
+        include_str!("../migrations/0038_evaluation_controls.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -169,6 +173,24 @@ impl Db {
     /// 打开（必要时创建）项目数据库并迁移到最新。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         Self::init(Connection::open(path)?)
+    }
+
+    /// D09: control polling connects only to an initialized current database.
+    /// Never create/migrate in a stream callback: migration scans add latency
+    /// and can block cancellation behind unrelated schema writes.
+    pub(crate) fn open_current(path: impl AsRef<Path>) -> Result<Self, DbError> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        conn.busy_timeout(std::time::Duration::from_millis(250))?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        let current: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=?1)",
+            [MIGRATIONS.last().expect("schema migrations exist").0],
+            |r| r.get(0),
+        )?;
+        if !current {
+            return Err(DbError::Sqlite(rusqlite::Error::InvalidQuery));
+        }
+        Ok(Self { conn })
     }
 
     /// 内存库，测试用。

@@ -2,6 +2,8 @@
 //! Only scripted debug execution is admitted until isolation and quota gates land.
 pub(crate) mod budget;
 pub use budget::{BudgetRunSummary, BudgetSummary, DebugPrice};
+pub(crate) mod control;
+pub use control::{EvaluationControl, EvaluationControlState};
 pub(crate) mod config;
 pub use config::{
     AdmissionBlock, EvaluationBatch, EvaluationLimits, FreezeRequest, ObservedOutcome, PriceSource,
@@ -592,6 +594,7 @@ pub(crate) fn update_started(db: &Db, result: &EvaluationResult) -> io::Result<(
     if terminal {
         budget::finish(db, result)?;
     }
+    control::sync(db, result)?;
     Ok(())
 }
 
