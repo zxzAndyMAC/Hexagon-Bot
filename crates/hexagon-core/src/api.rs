@@ -3127,6 +3127,9 @@ mod tests;
 
 #[cfg(test)]
 mod evaluation_config_tests;
+mod evaluation_isolation;
+#[cfg(test)]
+mod evaluation_isolation_tests;
 #[cfg(test)]
 mod evaluation_plan_tests;
 mod evaluation_runner;

@@ -5,6 +5,8 @@ pub use config::{
     AdmissionBlock, EvaluationBatch, EvaluationLimits, FreezeRequest, ObservedOutcome, PriceSource,
     VerificationDimension, VerificationObservation,
 };
+pub(crate) mod isolation;
+pub use isolation::{GenerationContext, IsolationReport};
 pub(crate) mod plan;
 pub use plan::{
     DebugActivation, EvaluationArm, EvaluationPlan, PlanKind, PlannedRun, PlannedState,

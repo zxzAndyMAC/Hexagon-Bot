@@ -117,6 +117,9 @@ pub fn is_agent_policy_path(p: &str) -> bool {
             | "skill-mutes.json"
             | "ui.json"
     ) || first.starts_with("state.db")
+        // Evaluation 08 probe reproduced a structured overwrite of the
+        // isolation marker. These host protocol files are never Agent policy.
+        || first.starts_with("evaluation-")
         || first.starts_with("pack.")
         || first == "pack"
         || first == "pack-permission.json"
@@ -396,4 +399,18 @@ pub(crate) fn str_arg<'a>(input: &'a Value, key: &str) -> Result<&'a str, ToolEr
     input[key]
         .as_str()
         .ok_or_else(|| ToolError::BadInput(format!("missing string arg: {key}")))
+}
+
+#[cfg(test)]
+mod evaluation_policy_tests {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn evaluation_protocol_paths_are_always_owner_managed(suffix in "[a-z0-9/-]{0,30}",upper in any::<bool>()) {
+            let mut path=format!(".hexagon/evaluation-{suffix}");
+            if upper {path=path.to_uppercase();}
+            prop_assert!(is_agent_policy_path(&path));
+        }
+    }
 }

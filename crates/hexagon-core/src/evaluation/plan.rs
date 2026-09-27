@@ -252,8 +252,38 @@ pub(crate) fn claim(db: &Db, id: &str) -> io::Result<(EvaluationPlan, usize, Str
             started,
         );
     })?;
+    let batch = config::read(db, &plan.batch_id)?;
+    if plan.kind == PlanKind::Formal
+        && batch
+            .blocks
+            .contains(&super::AdmissionBlock::HeldoutRetired)
+    {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            None,
+            "evaluation_plan_admission",
+            "heldout_retired",
+            started,
+        );
+        return Err(err(
+            "heldout tasks are retired; regression use cannot qualify",
+        ));
+    }
     let run_id = format!("eval-{}", db.next_id("evaluation").map_err(err)?);
     tx.execute("UPDATE evaluation_plan_runs SET state='started',run_id=?3,reason=NULL WHERE plan_id=?1 AND position=?2 AND state='planned'",rusqlite::params![id,i64::try_from(position).map_err(err)?,run_id]).map_err(err)?;
+    let task = &batch
+        .request
+        .corpora
+        .iter()
+        .flat_map(|c| &c.cases)
+        .find(|c| c.task.id == plan.entries[position].task_id)
+        .ok_or_else(|| err("planned task missing"))?
+        .task;
+    super::isolation::record_use(db, &batch.id, &run_id, task)?;
     tx.commit().map_err(err)?;
     crate::diag::note(
         crate::diag::CLASS_JUDGE,
@@ -294,7 +324,7 @@ mod tests {
             prop_assert_eq!(entries.iter().step_by(2).filter(|e|e.arm==EvaluationArm::Fast).count(),half);
             let unique: std::collections::BTreeSet<_> = entries.iter().step_by(2).map(|e|e.task_id.clone()).collect();
             prop_assert_eq!(unique.len(),half*2);
-            for pair in entries.chunks_exact(2) {
+            for pair in entries.as_chunks::<2>().0 {
                 prop_assert_eq!(&pair[0].task_id,&pair[1].task_id);
                 prop_assert_eq!(pair[0].repetition,pair[1].repetition);
                 prop_assert_ne!(pair[0].arm,pair[1].arm);

@@ -52,6 +52,7 @@ pub struct FreezeRequest {
 pub enum AdmissionBlock {
     ConfigurationDrift,
     RuntimeDrift,
+    HeldoutRetired,
     ModelNotConfigured,
     ModelNotVerified,
     ToolsNotVerified,
@@ -231,7 +232,7 @@ fn public_url(text: &str) -> Option<String> {
     .then(|| url.to_string())
 }
 
-fn code_fingerprint() -> io::Result<String> {
+pub(crate) fn code_fingerprint() -> io::Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(std::env::current_exe()?)?;
     let mut digest = Sha256::new();
@@ -464,7 +465,7 @@ pub(crate) fn freeze(
         let verification = Verification::default();
         db.conn().execute("INSERT INTO evaluation_batches(id,parent_id,frozen_json,fingerprint,verification_json) VALUES (?1,?2,?3,?4,?5)",
             rusqlite::params![record.id,record.parent_batch,serde_json::to_string(&record)?,fingerprint,serde_json::to_string(&verification)?]).map_err(err)?;
-        Ok(view(record, fingerprint, verification))
+        with_retirement(db, view(record, fingerprint, verification))
     })();
     crate::diag::note(
         if result.is_ok() {
@@ -501,11 +502,27 @@ pub(crate) fn read(db: &Db, id: &str) -> io::Result<EvaluationBatch> {
     if record.version != 1 || record.id != id || digest(&record)? != fingerprint {
         return Err(err("unsupported or damaged frozen evaluation batch"));
     }
-    Ok(view(
-        record,
-        fingerprint,
-        serde_json::from_str(&verification)?,
-    ))
+    with_retirement(
+        db,
+        view(record, fingerprint, serde_json::from_str(&verification)?),
+    )
+}
+
+fn with_retirement(db: &Db, mut batch: EvaluationBatch) -> io::Result<EvaluationBatch> {
+    for case in batch
+        .request
+        .corpora
+        .iter()
+        .flat_map(|c| &c.cases)
+        .filter(|c| c.split == "heldout")
+    {
+        if super::isolation::retired(db, &case.task)? {
+            batch.blocks.push(AdmissionBlock::HeldoutRetired);
+            batch.ready = false;
+            break;
+        }
+    }
+    Ok(batch)
 }
 
 pub(crate) fn check(
