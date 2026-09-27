@@ -3250,3 +3250,8 @@ impl Workbench {
 mod evaluation_human_tests;
 
 mod evaluation_human;
+
+#[cfg(test)]
+mod evaluation_outcome_tests;
+
+mod evaluation_outcome;

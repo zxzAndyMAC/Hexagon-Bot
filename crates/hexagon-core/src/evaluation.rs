@@ -11,6 +11,10 @@ pub use human::{
 };
 pub(crate) mod isolation;
 pub use isolation::{GenerationContext, IsolationReport};
+pub(crate) mod outcome;
+pub use outcome::{
+    ExternalEffects, OutcomeObservation, RequiredSafetyFact, SafetyContract, SafetyVerdict,
+};
 pub(crate) mod plan;
 pub use plan::{
     DebugActivation, EvaluationArm, EvaluationPlan, PlanKind, PlannedRun, PlannedState,
@@ -40,6 +44,8 @@ pub struct EvaluationTask {
     #[serde(default)]
     pub dependencies: Vec<String>,
     pub allowed_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safety: Option<SafetyContract>,
     pub files: BTreeMap<String, String>,
     #[serde(default)]
     pub initial_changes: BTreeMap<String, String>,
@@ -256,6 +262,7 @@ pub(crate) fn validate(task: &EvaluationTask) -> io::Result<()> {
         && task.validation_files.keys().all(|p| {
             safe_path(p) && !task.allowed_paths.contains(p) && !initial_files.contains_key(p)
         })
+        && task.safety.as_ref().is_none_or(outcome::valid_contract)
         && !task.files.is_empty()
         && !task.allowed_paths.is_empty()
         && task
@@ -315,7 +322,14 @@ pub(crate) fn materialize(root: &Path, files: &BTreeMap<String, String>) -> io::
         }
         let target = root.join(path);
         std::fs::create_dir_all(target.parent().ok_or_else(|| err("missing parent"))?)?;
-        std::fs::write(target, body)?;
+        std::fs::write(&target, body)?;
+        // D02/D06: fixture files have a deterministic 0644 baseline. Comparing
+        // only executable bits missed unauthorized 0444/0666 mode changes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))?;
+        }
     }
     Ok(())
 }
@@ -464,7 +478,10 @@ pub(crate) fn accept(
         exit_code,
         timed_out,
         before == after && verifier_before == verifier_after,
-        preserved && fragments_preserved && (!required_git || git_preserved == Some(true)),
+        preserved
+            && fragments_preserved
+            && outcome::scope_violations(root, task)?.is_empty()
+            && (!required_git || git_preserved == Some(true)),
     ) && task.expected_stdout.as_ref().is_none_or(|expected| {
         // Evaluation 02 review: os._exit(0) used to skip Python assertions.
         // Only the host compares the complete probe result; missing output fails.
@@ -558,7 +575,15 @@ pub(crate) fn insert(db: &Db, task: &EvaluationTask, result: &EvaluationResult) 
 }
 
 pub(crate) fn update_started(db: &Db, result: &EvaluationResult) -> io::Result<()> {
-    let changed = db.conn().execute("UPDATE evaluation_runs SET result_json=?2 WHERE id=?1 AND json_extract(result_json,'$.state') IN ('started','waiting_human')", rusqlite::params![result.id,serde_json::to_string(result)?]).map_err(err)?;
+    let terminal = matches!(result.state.as_str(), "completed" | "failed" | "incomplete");
+    // D06: late tools/cards cannot repair a missed upgrade in an already-ended
+    // attempt. Retain its execution boundary; absent legacy seals stay unknown.
+    let seal = if terminal {
+        outcome::execution_fingerprint(Path::new(&result.workspace)).ok()
+    } else {
+        None
+    };
+    let changed = db.conn().execute("UPDATE evaluation_runs SET result_json=?2,execution_fingerprint=CASE WHEN ?3 THEN ?4 ELSE execution_fingerprint END WHERE id=?1 AND json_extract(result_json,'$.state') IN ('started','waiting_human')", rusqlite::params![result.id,serde_json::to_string(result)?,terminal,seal]).map_err(err)?;
     if changed != 1 {
         return Err(err("evaluation result already terminal or missing"));
     }

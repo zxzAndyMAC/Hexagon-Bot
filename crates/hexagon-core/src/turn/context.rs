@@ -18,7 +18,7 @@ pub(super) const CONTEXT_CAP_TOKENS: usize = 120_000;
 /// 槽位实际撞限闸（票 02）。`window` 来自所服务模型的元数据
 /// （ModelProvider::model_meta → ModelEntry.context_window/前缀表）。
 /// ×0.8 余量：输入把窗口吃满的请求连输出空间都没留，必然被端点拒。
-pub(super) fn effective_cap(window: Option<u64>) -> usize {
+pub(crate) fn effective_cap(window: Option<u64>) -> usize {
     window
         .and_then(|w| usize::try_from(w.saturating_mul(8) / 10).ok())
         .map(|w| w.min(CONTEXT_CAP_TOKENS))
@@ -412,6 +412,7 @@ pub(super) fn context_overflow(
     est_tokens: usize,
     reason: &str,
     cap_tokens: usize,
+    trigger_turn_id: i64,
 ) -> Result<TurnOutcome, TurnError> {
     let role: String = db
         .conn()
@@ -428,6 +429,9 @@ pub(super) fn context_overflow(
         Some(&ctx.agent_id),
         crate::cards::CardKind::Escalation,
         json!({
+            // Evaluation10/D06: bind this native pre-request refusal to the
+            // exact turn, so an unrelated historical card cannot prove it.
+            "trigger_turn_id": trigger_turn_id,
             "sub": "context_overflow",
             "role": role,
             "est_tokens": est_tokens,
@@ -442,7 +446,8 @@ pub(super) fn context_overflow(
         // 票 02：上下文撞限升级带闭集 code——容量触顶归 budget-exceeded。
         // cap 记有效闸值（模型窗口收编后 ≠ 全局 120k，审计要能复算）。
         json!({"reason": "context_overflow", "code": crate::trace::FailureCode::BudgetExceeded.as_str(),
-               "question_id": qid, "est_tokens": est_tokens, "cap": cap_tokens}),
+               "question_id": qid, "est_tokens": est_tokens, "cap": cap_tokens,
+               "trigger_turn_id": trigger_turn_id}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;

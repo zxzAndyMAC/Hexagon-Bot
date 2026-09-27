@@ -29,7 +29,15 @@ impl Workbench {
         handle: &AttentionHandle,
         reason: eval::AttentionEnd,
     ) -> Result<eval::HumanInterval, ApiError> {
-        Ok(eval::human::end(&self.db, &self.repo_root, handle, reason)?)
+        // Ticket09 follow-up: closing attention and advancing its fingerprint
+        // must be atomic, or a concurrent begin falsely reports unmeasured work.
+        let tx = rusqlite::Transaction::new_unchecked(
+            self.db.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let interval = eval::human::end(&self.db, &self.repo_root, handle, reason)?;
+        tx.commit()?;
+        Ok(interval)
     }
     pub fn evaluation_timing(&self, run_id: &str) -> Result<eval::RunTiming, ApiError> {
         Ok(eval::human::timing(&self.db, run_id)?)

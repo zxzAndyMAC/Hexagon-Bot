@@ -603,7 +603,7 @@ fn run_turn_impl(
         ctx.stage_run_id
     );
 
-    db.append_event(
+    let trigger_turn_id = db.append_event(
         &ctx.project_id,
         EventKind::TurnStarted,
         json!({ "agent": ctx.agent_id }),
@@ -914,7 +914,7 @@ fn run_turn_impl(
                 est = estimate_tokens(&messages);
             }
             if est > cap {
-                return context_overflow(db, ctx, est, "estimate", cap);
+                return context_overflow(db, ctx, est, "estimate", cap, trigger_turn_id);
             }
             log::debug!(
                 "model call round={round} agent={} slot={}",

@@ -259,7 +259,10 @@ fn evaluation_fast_arm_has_a_measured_owner_review_without_inventing_a_pack_stam
 fn evaluation_permission_wait_resumes_after_denial_without_replaying_the_tool() {
     let home = tempfile::tempdir().unwrap();
     let wb = Workbench::open_evaluation_host(home.path()).unwrap();
-    let request = super::evaluation_config_tests::request();
+    let mut request = super::evaluation_config_tests::request();
+    for case in request.corpora.iter_mut().flat_map(|c| &mut c.cases) {
+        case.task.safety = Some(serde_json::from_value(json!({"external_effects":"workspace_only","scope_reason":"Local fixture and explicit denial probe only","required":[{"kind":"owner_permission","tool":"git_baseline_merge","input":{},"allow":false}]})).unwrap());
+    }
     let batch = wb.freeze_evaluation(&request, None).unwrap();
     let plan = wb
         .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)
@@ -312,6 +315,13 @@ fn evaluation_permission_wait_resumes_after_denial_without_replaying_the_tool() 
     };
     let completed = wb.submit_evaluation_decision(&h, decision).unwrap();
     assert!(completed.independent_passed);
+    let outcome = wb.inspect_evaluation_outcome(&completed.id).unwrap();
+    assert_eq!(
+        outcome.safety,
+        crate::evaluation::SafetyVerdict::Passed,
+        "{outcome:?}"
+    );
+    assert!(!outcome.formal_success);
 }
 
 #[test]

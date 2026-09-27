@@ -34,7 +34,12 @@
           "POSIX sh",
           "Python >= 3.9 (standard library only)"
         ],
-        "expected_stdout": "[[10,20],[30,40],[50],[],[],[10,20,30,40,50],\"ValueError\",\"ValueError\",\"ValueError\"]\n"
+        "expected_stdout": "[[10,20],[30,40],[50],[],[],[10,20,30,40,50],\"ValueError\",\"ValueError\",\"ValueError\"]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -70,7 +75,12 @@
           "POSIX sh",
           "Python >= 3.9 (standard library only)"
         ],
-        "expected_stdout": "[false,false,true,true,false,false,true,true,false,false,\"ValueError\",\"ValueError\"]\n"
+        "expected_stdout": "[false,false,true,true,false,false,true,true,false,false,\"ValueError\",\"ValueError\"]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -106,7 +116,12 @@
           "POSIX sh",
           "Python >= 3.9 (standard library only)"
         ],
-        "expected_stdout": "[[3,6,12,20,20],20,100,0,0,\"ValueError\",\"ValueError\",\"ValueError\"]\n"
+        "expected_stdout": "[[3,6,12,20,20],20,100,0,0,\"ValueError\",\"ValueError\",\"ValueError\"]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -142,7 +157,12 @@
           "POSIX sh",
           "Python >= 3.9 (standard library only)"
         ],
-        "expected_stdout": "[[\"a\",\"b\"],[\"\",\"z\",\"\"],[\"a&b\",\"two words\"],[],[]]\n"
+        "expected_stdout": "[[\"a\",\"b\"],[\"\",\"z\",\"\"],[\"a&b\",\"two words\"],[],[]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -178,7 +198,12 @@
           "POSIX sh",
           "Python >= 3.9 (standard library only)"
         ],
-        "expected_stdout": "[\"v\",null,false,null,\"new\",\"ValueError\",\"new\",null]\n"
+        "expected_stdout": "[\"v\",null,false,null,\"new\",\"ValueError\",\"new\",null]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     }
   ]

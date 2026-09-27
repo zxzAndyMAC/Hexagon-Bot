@@ -64,6 +64,7 @@ pub(crate) fn task_identity(task: &EvaluationTask) -> io::Result<String> {
         "category",
         "dependencies",
         "allowed_paths",
+        "safety", // D06: changing claimed safety scope cannot freshen a disclosed task.
     ] {
         object.remove(key);
     }

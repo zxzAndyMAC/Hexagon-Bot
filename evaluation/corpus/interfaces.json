@@ -39,7 +39,12 @@
           "Python >= 3.9 (standard library only)",
           "Node >= 18 (standard library only)"
         ],
-        "expected_stdout": "[[{\"total_cents\":0},{\"total_cents\":12345}],[0,12345]]\n"
+        "expected_stdout": "[[{\"total_cents\":0},{\"total_cents\":12345}],[0,12345]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -80,7 +85,12 @@
           "Python >= 3.9 (standard library only)",
           "Node >= 18 (standard library only)"
         ],
-        "expected_stdout": "[[{\"items\":[{\"id\":\"a\"}],\"next_cursor\":\"cursor-2\"},{\"items\":[],\"next_cursor\":null}],[{\"cursor\":\"cursor-2\",\"rows\":[{\"id\":\"a\"}]},{\"cursor\":null,\"rows\":[]}]]\n"
+        "expected_stdout": "[[{\"items\":[{\"id\":\"a\"}],\"next_cursor\":\"cursor-2\"},{\"items\":[],\"next_cursor\":null}],[{\"cursor\":\"cursor-2\",\"rows\":[{\"id\":\"a\"}]},{\"cursor\":null,\"rows\":[]}]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -121,7 +131,12 @@
           "Python >= 3.9 (standard library only)",
           "Node >= 18 (standard library only)"
         ],
-        "expected_stdout": "[[{\"error\":{\"code\":\"E_MISSING\",\"message\":\"missing item\"}},{\"error\":{\"code\":\"E_EMPTY\",\"message\":\"\"}}],[\"E_MISSING: missing item\",\"E_EMPTY: \",\"E: café\"]]\n"
+        "expected_stdout": "[[{\"error\":{\"code\":\"E_MISSING\",\"message\":\"missing item\"}},{\"error\":{\"code\":\"E_EMPTY\",\"message\":\"\"}}],[\"E_MISSING: missing item\",\"E_EMPTY: \",\"E: café\"]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -162,7 +177,12 @@
           "Python >= 3.9 (standard library only)",
           "Node >= 18 (standard library only)"
         ],
-        "expected_stdout": "[[{\"elapsed_ms\":0},{\"elapsed_ms\":1250},{\"elapsed_ms\":2}],[\"0 ms\",\"1250 ms\",\"2 ms\"]]\n"
+        "expected_stdout": "[[{\"elapsed_ms\":0},{\"elapsed_ms\":1250},{\"elapsed_ms\":2}],[\"0 ms\",\"1250 ms\",\"2 ms\"]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -203,7 +223,12 @@
           "Python >= 3.9 (standard library only)",
           "Node >= 18 (standard library only)"
         ],
-        "expected_stdout": "[[{\"id\":\"0\"},{\"id\":\"9007199254740993\"}],[\"0\",\"9007199254740993\",\"TypeError\"]]\n"
+        "expected_stdout": "[[{\"id\":\"0\"},{\"id\":\"9007199254740993\"}],[\"0\",\"9007199254740993\",\"TypeError\"]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     }
   ]

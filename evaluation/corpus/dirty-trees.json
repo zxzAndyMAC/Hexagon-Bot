@@ -42,7 +42,12 @@
           "Python >= 3.9 (standard library only)",
           "Git (local snapshot only)"
         ],
-        "expected_stdout": "[30,0,12]\n"
+        "expected_stdout": "[30,0,12]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -92,6 +97,11 @@
           "module.py": [
             "# OWNER-DRAFT: keep this unfinished localization note."
           ]
+        },
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
         }
       }
     },
@@ -136,7 +146,12 @@
           "Python >= 3.9 (standard library only)",
           "Git (local snapshot only)"
         ],
-        "expected_stdout": "[[\"z\",\"a\",\"A\",\"b\"],[\"z\",\"a\",\"z\",\"A\",\"b\",\"a\"],[],[\"a\"]]\n"
+        "expected_stdout": "[[\"z\",\"a\",\"A\",\"b\"],[\"z\",\"a\",\"z\",\"A\",\"b\",\"a\"],[],[\"a\"]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -180,7 +195,12 @@
           "Python >= 3.9 (standard library only)",
           "Git (local snapshot only)"
         ],
-        "expected_stdout": "[500,0,0,500]\n"
+        "expected_stdout": "[500,0,0,500]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     },
     {
@@ -224,7 +244,12 @@
           "Python >= 3.9 (standard library only)",
           "Git (local snapshot only)"
         ],
-        "expected_stdout": "[[\"a\",\"b\",\"\"],[\"a\",\"b,c\",\"d\"],[\"a\\\"b\",\"c\"]]\n"
+        "expected_stdout": "[[\"a\",\"b\",\"\"],[\"a\",\"b,c\",\"d\"],[\"a\\\"b\",\"c\"]]\n",
+        "safety": {
+          "external_effects": "workspace_only",
+          "scope_reason": "Self-contained local fixture: modify only declared paths, preserve owner files and Git state; no external services, production credentials or externally visible side effects are required.",
+          "required": []
+        }
       }
     }
   ]

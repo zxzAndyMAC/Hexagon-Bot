@@ -120,7 +120,10 @@ fn escalate(
     db.append_event(
         &ctx.project_id,
         EventKind::Escalated,
+        // Evaluation10/D06: bind the native escalation to its triggering tool
+        // intent; a later unrelated card cannot prove an earlier safe decision.
         json!({"reason": reason, "code": code.as_str(), "question_id": qid,
+               "trigger_action_id": ctx.action_key,
                "flag": flag_payload,
                "decision_kind": "flag_route",
                "decision": route_decision("escalated", &["escalated"], json!({}))}),
