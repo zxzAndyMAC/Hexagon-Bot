@@ -43,6 +43,33 @@ fn scripted_responses(activation: &eval::DebugActivation) -> Vec<ChatResponse> {
 }
 
 impl Workbench {
+    #[cfg(test)]
+    pub(super) fn move_evaluation_report_binding_fixture(
+        &self,
+        plan: &str,
+        run: &str,
+        position: u32,
+    ) -> Result<(), ApiError> {
+        self.db.conn().execute(
+            "UPDATE evaluation_plan_runs SET run_id=NULL WHERE plan_id=?1 AND run_id=?2",
+            rusqlite::params![plan, run],
+        )?;
+        self.db.conn().execute("UPDATE evaluation_plan_runs SET run_id=?2,state='failed' WHERE plan_id=?1 AND position=?3", rusqlite::params![plan,run,position])?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn summarize_evaluation_measurements_fixture(
+        &self,
+        rows: &[eval::BenefitRun],
+    ) -> eval::report::CategoryBenefits {
+        eval::report::summarize("bug", &rows.iter().collect::<Vec<_>>())
+    }
+
+    pub fn evaluation_benefit_report(&self, batch: &str) -> Result<eval::BenefitReport, ApiError> {
+        Ok(eval::report::build(&self.db, &self.repo_root, batch)?)
+    }
+
     pub(super) fn record_evaluation_service_failure(
         &self,
         run: &EvaluationResult,

@@ -480,6 +480,16 @@ fn context_overflow_evidence(
 }
 
 pub(crate) fn inspect(host: &Db, run_id: &str) -> io::Result<OutcomeObservation> {
+    observe(host, run_id, true)
+}
+
+// Ticket 15/D10: report regeneration must not append inspection history.
+// Reusing inspect previously manufactured another stored observation per read.
+pub(crate) fn snapshot(host: &Db, run_id: &str) -> io::Result<OutcomeObservation> {
+    observe(host, run_id, false)
+}
+
+fn observe(host: &Db, run_id: &str, persist: bool) -> io::Result<OutcomeObservation> {
     let started = std::time::Instant::now();
     let run = super::read(host, run_id)?;
     let task_json: String = host
@@ -700,17 +710,22 @@ pub(crate) fn inspect(host: &Db, run_id: &str) -> io::Result<OutcomeObservation>
                 && files == after
         });
     let safety = verdict(&violations, &unknowns);
-    let id = format!(
-        "outcome-{}",
-        host.next_id("evaluation_outcome").map_err(err)?
-    );
+    let evidence_fingerprint = config::digest(&(&run, &task, &files, &execution_binding))?;
+    let id = if persist {
+        format!(
+            "outcome-{}",
+            host.next_id("evaluation_outcome").map_err(err)?
+        )
+    } else {
+        format!("snapshot:{evidence_fingerprint}")
+    };
     let result = OutcomeObservation {
         id,
         run_id: run_id.into(),
         observed_at_ms: now_ms()?,
         task_fingerprint: run.task_fingerprint.clone(),
         execution_state: run.state.clone(),
-        evidence_fingerprint: config::digest(&(&run, &task, &files, &execution_binding))?,
+        evidence_fingerprint,
         files_fingerprint: files,
         action_count: actions.len(),
         last_event_id: events.last().map(|e| e.id).unwrap_or(0),
@@ -730,31 +745,33 @@ pub(crate) fn inspect(host: &Db, run_id: &str) -> io::Result<OutcomeObservation>
         violations,
         unknowns,
     };
-    host.conn()
-        .execute(
-            "INSERT INTO evaluation_outcomes(id,run_id,observation_json) VALUES (?1,?2,?3)",
-            rusqlite::params![result.id, run_id, serde_json::to_string(&result)?],
-        )
-        .map_err(err)?;
-    crate::diag::note(
-        if safety == SafetyVerdict::Passed {
-            crate::diag::CLASS_JUDGE
-        } else {
-            crate::diag::CLASS_REJECT
-        },
-        safety != SafetyVerdict::Passed,
-        Some(crate::PROJECT_ID),
-        None,
-        None,
-        None,
-        "evaluation_outcome",
-        match safety {
-            SafetyVerdict::Passed => "observed_pass",
-            SafetyVerdict::Failed => "observed_violation",
-            SafetyVerdict::Unknown => "evidence_unknown",
-        },
-        started,
-    );
+    if persist {
+        host.conn()
+            .execute(
+                "INSERT INTO evaluation_outcomes(id,run_id,observation_json) VALUES (?1,?2,?3)",
+                rusqlite::params![result.id, run_id, serde_json::to_string(&result)?],
+            )
+            .map_err(err)?;
+        crate::diag::note(
+            if safety == SafetyVerdict::Passed {
+                crate::diag::CLASS_JUDGE
+            } else {
+                crate::diag::CLASS_REJECT
+            },
+            safety != SafetyVerdict::Passed,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            None,
+            "evaluation_outcome",
+            match safety {
+                SafetyVerdict::Passed => "observed_pass",
+                SafetyVerdict::Failed => "observed_violation",
+                SafetyVerdict::Unknown => "evidence_unknown",
+            },
+            started,
+        );
+    }
     Ok(result)
 }
 

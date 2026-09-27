@@ -3269,3 +3269,6 @@ mod evaluation_recovery_tests;
 
 #[cfg(test)]
 mod evaluation_supplement_tests;
+
+#[cfg(test)]
+mod evaluation_report_tests;

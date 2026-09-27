@@ -26,6 +26,10 @@ pub struct DebugPrice {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetRunSummary {
+    pub host: String,
+    pub plan_id: String,
+    pub position: u64,
+    pub workspace: Option<String>,
     pub key: String,
     pub run_id: Option<String>,
     pub closed: bool,
@@ -330,25 +334,33 @@ pub(crate) fn summary(db: &Db, scope: &str) -> io::Result<BudgetSummary> {
     result.pilot_limit_mc = pilot;
     result.blocked = blocked;
     let pairs = {
-        let mut q=db.conn().prepare("SELECT id,pilot,allowance_mc FROM evaluation_budget_pairs WHERE round_id=?1 ORDER BY id").map_err(err)?;
+        let mut q=db.conn().prepare("SELECT id,pilot,allowance_mc,host,plan_id FROM evaluation_budget_pairs WHERE round_id=?1 ORDER BY id").map_err(err)?;
         let rows = q
             .query_map([scope], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, money(r, 2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, bool>(1)?,
+                    money(r, 2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
         rows
     };
-    for (pair, is_pilot, allowance) in pairs {
+    for (pair, is_pilot, allowance, host, plan_id) in pairs {
         let runs = {
-            let mut q=db.conn().prepare("SELECT id,run_id,closed FROM evaluation_budget_runs WHERE pair_id=?1 ORDER BY position").map_err(err)?;
+            let mut q=db.conn().prepare("SELECT id,run_id,closed,position,workspace FROM evaluation_budget_runs WHERE pair_id=?1 ORDER BY position").map_err(err)?;
             let rows = q
                 .query_map([&pair], |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, Option<String>>(1)?,
                         r.get::<_, bool>(2)?,
+                        money(r, 3)?,
+                        r.get::<_, Option<String>>(4)?,
                     ))
                 })
                 .map_err(err)?
@@ -359,7 +371,7 @@ pub(crate) fn summary(db: &Db, scope: &str) -> io::Result<BudgetSummary> {
         let mut known = 0u64;
         let mut held = 0u64;
         let mut all_closed = runs.len() == 2;
-        for (key, run_id, closed) in runs {
+        for (key, run_id, closed, position, workspace) in runs {
             let (n,confirmed,k,u,p):(u64,u64,u64,u64,u64)=db.conn().query_row("SELECT COUNT(*),COALESCE(SUM(confirmed),0),COALESCE(SUM(known_mc),0),COALESCE(SUM(CASE WHEN state='unknown' THEN held_mc ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='pending' THEN held_mc ELSE 0 END),0) FROM evaluation_budget_requests WHERE run_key=?1 AND state!='not_sent'",[&key],|r|Ok((money(r,0)?,money(r,1)?,money(r,2)?,money(r,3)?,money(r,4)?))).map_err(err)?;
             known = known
                 .checked_add(k)
@@ -380,6 +392,10 @@ pub(crate) fn summary(db: &Db, scope: &str) -> io::Result<BudgetSummary> {
             result.requests += n;
             result.confirmed_requests += confirmed;
             result.runs.push(BudgetRunSummary {
+                host: host.clone(),
+                plan_id: plan_id.clone(),
+                position,
+                workspace,
                 key,
                 run_id,
                 closed,
