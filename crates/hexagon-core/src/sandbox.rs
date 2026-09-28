@@ -114,6 +114,27 @@ pub fn read_only_spec(repo_root: &Path, net: bool) -> SandboxSpec {
     scoped_spec(repo_root, &[], net, true)
 }
 
+// Ticket 25: execution evidence requires the actual invocation to exclude host
+// state and external IPC, not merely a previously successful isolation probe.
+pub(crate) fn evaluation_spec(root: &Path, paths: &[String]) -> SandboxSpec {
+    let spec = scoped_spec(root, paths, false, paths.is_empty());
+    match spec {
+        SandboxSpec::Seatbelt(mut profile) => {
+            let Ok(root) = root.canonicalize() else {
+                return SandboxSpec::Unavailable;
+            };
+            profile.push_str(&format!(
+                "(deny file-read-data (subpath \"{}\"))\n",
+                sbq(&root.join(".hexagon"))
+            ));
+            profile.push_str("(deny network*)\n(deny mach-lookup)\n(deny ipc*)\n");
+            SandboxSpec::Seatbelt(profile)
+        }
+        // No claim for another backend until its equivalent boundary is proven.
+        _ => SandboxSpec::Unavailable,
+    }
+}
+
 fn scoped_spec(
     repo_root: &Path,
     owned_globs: &[String],
@@ -289,6 +310,22 @@ fn developer_directory() -> Option<&'static PathBuf> {
                 .ok()
         })
         .as_ref()
+}
+
+// Ticket 26: python3 on macOS is a posix_spawn launcher blocked by our
+// process-group containment. Advertise the actual interpreter already covered
+// by read_roots; never grant Conda/home or weaken containment to run the shim.
+pub(crate) fn python_interpreter() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        developer_directory()
+            .and_then(|d| d.join("Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python").canonicalize().ok())
+            .filter(|p| p.is_file())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 fn read_roots(repo: &Path) -> Vec<PathBuf> {
@@ -678,9 +715,7 @@ print('runtime isolated')
         let spec = spec_for(repo.path(), &["output.txt".into()], false);
         // Invoke the interpreter, not Xcode's posix_spawn launcher. The latter
         // must remain blocked by reliability 10's process containment rule.
-        let python = developer_directory()
-            .map(|d| d.join("Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python"))
-            .filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("python3"));
+        let python = python_interpreter().unwrap_or_else(|| PathBuf::from("python3"));
         let mut command = Command::new(python);
         command
             .args(["-B", "probe.py"])

@@ -79,6 +79,8 @@ pub struct ToolContext {
     pub action_key: Option<String>,
     /// Host-owned execution lease, reused by nested local materialization.
     pub(crate) write_lease: Option<Arc<std::fs::File>>,
+    /// Fresh for each execution; remote tools cannot populate this host channel.
+    pub(crate) native_effect: Option<Arc<std::sync::Mutex<Option<effects::NativeEffect>>>>,
     /// 激活任务清单（code-search 票 07）：Workbench 注入共享板；
     /// 临时构造的 ctx 拿独立空板（一次性路径无跨回合任务）。
     pub tasks: crate::subagent::TaskBoard,
@@ -116,6 +118,7 @@ impl Default for ToolContext {
             mcp_timeout: std::time::Duration::from_secs(120),
             action_key: None,
             write_lease: None,
+            native_effect: None,
             tasks: Default::default(),
             subagent: None,
             websearch: None,
@@ -429,7 +432,18 @@ impl Registry {
             .ok_or_else(|| ToolError::BadInput(format!("unknown tool: {name}")))?;
 
         let action = crate::actions::prepare(db, ctx, name, &input, call_seq)?;
-        crate::actions::ensure_clear_except(db, ctx, &action.id)?;
+        if let Err(error) = crate::actions::ensure_clear_except(db, ctx, &action.id) {
+            // Evaluation 27: a different unresolved action can reject this fresh
+            // call before validation. Close only its still-unstarted CAS row;
+            // the original unknown/authorized action and its card stay intact.
+            crate::actions::fail_unstarted_attempt(
+                db,
+                ctx,
+                &action.id,
+                &ToolError::NotExecuted(error.to_string()),
+            )?;
+            return Err(error);
+        }
         if let Some(outcome) = crate::actions::replay(&action)? {
             if let CallOutcome::Asked(qid) = &outcome {
                 db.append_event(
@@ -446,9 +460,14 @@ impl Registry {
             return self.resume_action(db, ctx, &action.id);
         }
 
-        // 调用事件：敏感入参（fs_write 的 content 等）只记元信息。
-        // seq 入载荷（票 11）：中断重放时同一调用可被指认。
-        db.append_event(
+        // Evaluation 27 (eval-6/action17): ordinary preflight failures used to
+        // strand pending actions; recovery-only cleanup missed this common path.
+        // Reuse the CAS finalizer: authorized/dispatched/queued actions must keep
+        // their evidence, never turn an uncertain effect into "not executed".
+        let result = (|| {
+            // 调用事件：敏感入参（fs_write 的 content 等）只记元信息。
+            // seq 入载荷（票 11）：中断重放时同一调用可被指认。
+            db.append_event(
             &ctx.project_id,
             EventKind::ToolCalled,
             json!({ "tool": name, "input": scrub_input(name, &input), "seq": call_seq, "action_id":action.id }),
@@ -456,112 +475,117 @@ impl Registry {
             ctx.stage_run_id.as_deref(),
         )?;
 
-        log::debug!(
-            "tool call: {} agent={} input={}",
-            name,
-            ctx.agent_id,
-            scrub_input(name, &input)
-        );
-        // 票 03（prompt-engineering）：入参校验早于权限——坏参数不弹卡、
-        // 不落权限事件，以 BadInput 回喂模型并计入同错熔断。
-        self.validate_input(ctx, tool.as_ref(), &input)?;
-        tool.precondition(&input, ctx)?;
-        match crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)? {
-            crate::permissions::Decision::Deny { reason, layer } => {
-                crate::actions::denied(
-                    db,
-                    ctx,
-                    &action.id,
-                    &format!("({}): {reason}", deny_source(layer)),
-                )?;
-                db.append_event(
-                    &ctx.project_id,
-                    EventKind::PermissionDenied,
-                    json!({ "tool": name, "layer": layer, "reason": reason }),
-                    Some(&ctx.agent_id),
-                    ctx.stage_run_id.as_deref(),
-                )?;
-                Ok(CallOutcome::Denied(format!(
-                    "({}): {reason}",
-                    deny_source(layer)
-                )))
-            }
-            crate::permissions::Decision::Ask { reason, safety_net } => {
-                writeguard::capture(db, ctx, tool.as_ref(), &input, &action.id)?;
-                let idem_key = Some(action.id.clone());
-                // 票 03：必问卡附溯源注记 + 激活冻结的 known world——
-                // 负责人能看到「这文件是 agent N 步前写的」「这 remote 不在初始列表」
-                let prov = crate::provenance::note(db, ctx, name, &input);
-                let world = crate::provenance::known_world(
-                    db,
-                    &ctx.project_id,
-                    ctx.stage_run_id.as_deref(),
-                );
-                let delta = crate::provenance::remote_delta(name, &input, world.as_ref());
-                // 卡表写口归 cards.rs（arch-review 票 04）
-                let tx = db.conn().unchecked_transaction()?;
-                let qid = crate::cards::enqueue(
-                    db,
-                    &ctx.project_id,
-                    Some(&ctx.agent_id),
-                    crate::cards::CardKind::Permission,
-                    json!({ "tool": name, "input": scrub_input(name, &input),
+            log::debug!(
+                "tool call: {} agent={} input={}",
+                name,
+                ctx.agent_id,
+                scrub_input(name, &input)
+            );
+            // 票 03（prompt-engineering）：入参校验早于权限——坏参数不弹卡、
+            // 不落权限事件，以 BadInput 回喂模型并计入同错熔断。
+            self.validate_input(ctx, tool.as_ref(), &input)?;
+            tool.precondition(&input, ctx)?;
+            match crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)? {
+                crate::permissions::Decision::Deny { reason, layer } => {
+                    crate::actions::denied(
+                        db,
+                        ctx,
+                        &action.id,
+                        &format!("({}): {reason}", deny_source(layer)),
+                    )?;
+                    db.append_event(
+                        &ctx.project_id,
+                        EventKind::PermissionDenied,
+                        json!({ "tool": name, "layer": layer, "reason": reason }),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                    )?;
+                    Ok(CallOutcome::Denied(format!(
+                        "({}): {reason}",
+                        deny_source(layer)
+                    )))
+                }
+                crate::permissions::Decision::Ask { reason, safety_net } => {
+                    writeguard::capture(db, ctx, tool.as_ref(), &input, &action.id)?;
+                    let idem_key = Some(action.id.clone());
+                    // 票 03：必问卡附溯源注记 + 激活冻结的 known world——
+                    // 负责人能看到「这文件是 agent N 步前写的」「这 remote 不在初始列表」
+                    let prov = crate::provenance::note(db, ctx, name, &input);
+                    let world = crate::provenance::known_world(
+                        db,
+                        &ctx.project_id,
+                        ctx.stage_run_id.as_deref(),
+                    );
+                    let delta = crate::provenance::remote_delta(name, &input, world.as_ref());
+                    // 卡表写口归 cards.rs（arch-review 票 04）
+                    let tx = db.conn().unchecked_transaction()?;
+                    let qid = crate::cards::enqueue(
+                        db,
+                        &ctx.project_id,
+                        Some(&ctx.agent_id),
+                        crate::cards::CardKind::Permission,
+                        json!({ "tool": name, "input": scrub_input(name, &input),
                             "raw_input": input, "reason": reason, "safety_net": safety_net, "action_id":action.id,
                             "write_targets": tool.write_targets(&input)?,
                             "provenance": prov, "known_world": world,
                             "remote_delta": delta }),
-                    idem_key.as_deref(),
-                )?;
-                crate::actions::set_question(db, ctx, &action.id, &qid)?;
-                db.append_event(
+                        idem_key.as_deref(),
+                    )?;
+                    crate::actions::set_question(db, ctx, &action.id, &qid)?;
+                    db.append_event(
                     &ctx.project_id,
                     EventKind::PermissionAsked,
                     json!({ "tool": name, "question_id": qid, "reason": reason, "safety_net": safety_net }),
                     Some(&ctx.agent_id),
                     ctx.stage_run_id.as_deref(),
                 )?;
-                tx.commit()?;
-                Ok(CallOutcome::Asked(qid))
-            }
-            crate::permissions::Decision::Allow { via } => {
-                writeguard::capture(db, ctx, tool.as_ref(), &input, &action.id)?;
-                match &via {
-                    crate::permissions::AllowVia::Remembered { shape, scope } => {
-                        db.append_event(
+                    tx.commit()?;
+                    Ok(CallOutcome::Asked(qid))
+                }
+                crate::permissions::Decision::Allow { via } => {
+                    writeguard::capture(db, ctx, tool.as_ref(), &input, &action.id)?;
+                    match &via {
+                        crate::permissions::AllowVia::Remembered { shape, scope } => {
+                            db.append_event(
                             &ctx.project_id,
                             EventKind::PermissionAllowed,
                             json!({ "tool": name, "layer": "remembered", "shape": shape, "scope": scope }),
                             Some(&ctx.agent_id),
                             ctx.stage_run_id.as_deref(),
                         )?;
+                        }
+                        // 票 03：和负责人裁决（via=owner）分开，时间线能看出是档位放行。
+                        crate::permissions::AllowVia::Autonomy {
+                            level,
+                            safety_net,
+                            reason,
+                        } => {
+                            db.append_event(
+                                &ctx.project_id,
+                                EventKind::PermissionAllowed,
+                                json!({
+                                    "tool": name,
+                                    "via": "autonomy",
+                                    "level": format!("L{level}"),
+                                    "safety_net": safety_net,
+                                    "reason": reason,
+                                }),
+                                Some(&ctx.agent_id),
+                                ctx.stage_run_id.as_deref(),
+                            )?;
+                        }
+                        crate::permissions::AllowVia::Default => {}
                     }
-                    // 票 03：和负责人裁决（via=owner）分开，时间线能看出是档位放行。
-                    crate::permissions::AllowVia::Autonomy {
-                        level,
-                        safety_net,
-                        reason,
-                    } => {
-                        db.append_event(
-                            &ctx.project_id,
-                            EventKind::PermissionAllowed,
-                            json!({
-                                "tool": name,
-                                "via": "autonomy",
-                                "level": format!("L{level}"),
-                                "safety_net": safety_net,
-                                "reason": reason,
-                            }),
-                            Some(&ctx.agent_id),
-                            ctx.stage_run_id.as_deref(),
-                        )?;
-                    }
-                    crate::permissions::AllowVia::Default => {}
+                    crate::actions::authorize(db, ctx, &action.id)?;
+                    self.exec_and_log(db, ctx, name, input, call_seq, &action.id, true)
+                        .map(CallOutcome::Done)
                 }
-                crate::actions::authorize(db, ctx, &action.id)?;
-                self.exec_and_log(db, ctx, name, input, call_seq, &action.id, true)
-                    .map(CallOutcome::Done)
             }
+        })();
+        if let Err(error) = &result {
+            crate::actions::fail_unstarted_attempt(db, ctx, &action.id, error)?;
         }
+        result
     }
 
     /// 必问裁决：批准则执行并落结果，拒绝则落 PermissionDenied。
@@ -804,6 +828,11 @@ impl Registry {
         }
         let mut execution_ctx = ctx.clone();
         execution_ctx.action_key = Some(action_id.into());
+        execution_ctx.native_effect = ctx
+            .repo_root
+            .join(".hexagon/evaluation-worker")
+            .is_file()
+            .then(|| Arc::new(std::sync::Mutex::new(None)));
         // Reliability 15: approval is bound to the original target snapshot.
         // Keep the host locks until execution returns; an empty fresh read ledger
         // on the control connection cannot waive the persisted precondition.
@@ -830,7 +859,7 @@ impl Registry {
         // A failed retry proves nothing about the first uncertain attempt.
         // In particular NotExecuted here must not erase the original unknown.
         let uncertain = uncertain || (!allow_recovery && result.is_err());
-        crate::actions::finish(db, ctx, action_id, &result, uncertain)?;
+        crate::actions::finish(db, &execution_ctx, action_id, &result, uncertain)?;
         if uncertain && !allow_recovery {
             return Err(ToolError::OutcomeUnknown(action_id.into()));
         }
@@ -931,6 +960,7 @@ fn effect_uncertain(risk: RiskClass, error: &ToolError) -> bool {
 // ---------- 子模块（arch-review 票 11 / D14 拆分）----------
 // 护栏层与内建实现各成文件；`pub use` 再导出保 `crate::tools::X` 路径不变。
 mod builtin;
+pub(crate) mod effects;
 pub mod readstate;
 mod safety;
 pub(crate) mod schema;

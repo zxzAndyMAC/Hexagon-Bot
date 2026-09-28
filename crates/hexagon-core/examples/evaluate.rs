@@ -5,6 +5,15 @@ use std::{collections::BTreeMap, error::Error, path::Path};
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        [op,host] if op == "billing-requests" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            println!("{}",serde_json::to_string_pretty(&wb.evaluation_billing_requests()?)?);
+        }
+        [op,host,path] if op == "reconcile-billing" => {
+            let wb=Workbench::open_evaluation_host(Path::new(host))?;
+            let evidence=serde_json::from_slice(&std::fs::read(path)?)?;
+            println!("{}",serde_json::to_string_pretty(&wb.reconcile_evaluation_billing(&evidence)?)?);
+        }
         [op,host,id] if matches!(op.as_str(),"preflight"|"next-live"|"generate-candidate") => {
             let wb=live_host(host)?;
             let value=match op.as_str() {
@@ -187,7 +196,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let wb = Workbench::open_evaluation_host(Path::new(host))?;
             println!("{}", serde_json::to_string_pretty(&wb.evaluation_result(id)?)?);
         }
-        _ => return Err("usage: evaluate debug HOST TASK.json WRITES.json | read HOST RUN_ID | check-category HOST CORPUS.json | freeze HOST CONFIG.json [PARENT_BATCH] | batch HOST BATCH_ID | check-config HOST BATCH_ID CONFIG.json | record-verification HOST BATCH_ID OBSERVATION.json | plan HOST BATCH_ID pilot|formal | read-plan HOST PLAN_ID | next-debug HOST PLAN_ID SCRIPT.json | stop-plan HOST PLAN_ID | generation HOST BATCH_ID | read-generation HOST CONTEXT_ID | reveal-task HOST CONTEXT_ID TASK_ID | check-isolation HOST | read-isolation HOST CHECK_ID | next-owner-debug HOST PLAN_ID SCRIPT.json | owner-session HOST RUN_ID | timing HOST RUN_ID | pending HOST RUN_ID | outcome HOST RUN_ID | outcome-history HOST RUN_ID | recheck HOST RUN_ID | debug-budget-config HOST PLAN_ID PRICE.json | budget-debug HOST | budget HOST | control HOST RUN_ID | stop-run HOST RUN_ID | pause-run HOST RUN_ID | resume-run HOST RUN_ID | recovery HOST | reconcile HOST RUN_ID | supplement HOST PLAN_ID EVEN_POSITION | supplements HOST PLAN_ID | report HOST BATCH_ID | report-json HOST BATCH_ID | preflight HOST BATCH_ID | read-preflight HOST PREFLIGHT_ID | next-live HOST PLAN_ID | generate-candidate HOST CONTEXT_ID | generate-candidate-debug HOST CONTEXT_ID EDITS.json | read-policy-generation HOST CONTEXT_ID | candidate-freeze HOST PROPOSAL_ID CONTEXT_ID | candidate-report HOST PROPOSAL_ID".into()),
+        _ => return Err("usage: evaluate billing-requests HOST | reconcile-billing HOST EVIDENCE.json | debug HOST TASK.json WRITES.json | read HOST RUN_ID | check-category HOST CORPUS.json | freeze HOST CONFIG.json [PARENT_BATCH] | batch HOST BATCH_ID | check-config HOST BATCH_ID CONFIG.json | record-verification HOST BATCH_ID OBSERVATION.json | plan HOST BATCH_ID pilot|formal | read-plan HOST PLAN_ID | next-debug HOST PLAN_ID SCRIPT.json | stop-plan HOST PLAN_ID | generation HOST BATCH_ID | read-generation HOST CONTEXT_ID | reveal-task HOST CONTEXT_ID TASK_ID | check-isolation HOST | read-isolation HOST CHECK_ID | next-owner-debug HOST PLAN_ID SCRIPT.json | owner-session HOST RUN_ID | timing HOST RUN_ID | pending HOST RUN_ID | outcome HOST RUN_ID | outcome-history HOST RUN_ID | recheck HOST RUN_ID | debug-budget-config HOST PLAN_ID PRICE.json | budget-debug HOST | budget HOST | control HOST RUN_ID | stop-run HOST RUN_ID | pause-run HOST RUN_ID | resume-run HOST RUN_ID | recovery HOST | reconcile HOST RUN_ID | supplement HOST PLAN_ID EVEN_POSITION | supplements HOST PLAN_ID | report HOST BATCH_ID | report-json HOST BATCH_ID | preflight HOST BATCH_ID | read-preflight HOST PREFLIGHT_ID | next-live HOST PLAN_ID | generate-candidate HOST CONTEXT_ID | generate-candidate-debug HOST CONTEXT_ID EDITS.json | read-policy-generation HOST CONTEXT_ID | candidate-freeze HOST PROPOSAL_ID CONTEXT_ID | candidate-report HOST PROPOSAL_ID".into()),
     }
     Ok(())
 }

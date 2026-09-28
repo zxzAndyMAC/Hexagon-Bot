@@ -1,5 +1,6 @@
 //! D08: shared reservations; fixture accounting never spends the paid authority.
 pub(crate) mod live;
+pub(crate) mod reconciliation;
 use super::{config, err, plan, EvaluationResult};
 use crate::{
     db::Db,
@@ -109,11 +110,26 @@ fn canonical(root: &Path) -> io::Result<String> {
     Ok(root.canonicalize()?.to_string_lossy().into_owned())
 }
 #[cfg(test)]
-thread_local! { static PAID_FIXTURE:tempfile::TempDir=tempfile::tempdir().expect("paid authority fixture"); }
+thread_local! {
+    static PAID_FIXTURE: std::cell::RefCell<std::sync::Arc<tempfile::TempDir>> =
+        std::cell::RefCell::new(std::sync::Arc::new(tempfile::tempdir().expect("paid authority fixture")));
+}
+
+// 2026-09-28 permission-resume regression: a watch thread previously created
+// its own empty authority and killed valid test commands on the first tick.
+// Share the fixture lifetime with that thread; never disable the budget guard.
+#[cfg(test)]
+pub(crate) fn paid_fixture() -> std::sync::Arc<tempfile::TempDir> {
+    PAID_FIXTURE.with(|dir| dir.borrow().clone())
+}
+#[cfg(test)]
+pub(crate) fn inherit_paid_fixture(dir: std::sync::Arc<tempfile::TempDir>) {
+    PAID_FIXTURE.with(|current| *current.borrow_mut() = dir);
+}
 fn paid_path() -> io::Result<PathBuf> {
     #[cfg(test)]
     {
-        Ok(PAID_FIXTURE.with(|dir| dir.path().join("authority.db")))
+        Ok(paid_fixture().path().join("authority.db"))
     }
     #[cfg(not(test))]
     {

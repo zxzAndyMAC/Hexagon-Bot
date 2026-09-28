@@ -12878,3 +12878,401 @@ fn experience_native_publish_fixture_requires_explicit_publication_action() {
         std::fs::write(pointer, path.to_string_lossy().as_bytes()).unwrap();
     }
 }
+
+#[test]
+fn evaluation_private_state_is_not_a_generic_file_or_artifact() {
+    let (_home, host, run) = super::evaluation_budget_tests::waiting_budget(
+        80,
+        500000,
+        super::evaluation_budget_tests::fixture_price(),
+    );
+    let root = Path::new(&run.workspace);
+    let wb = Workbench::open_evaluation_host(root).unwrap();
+    std::fs::write(
+        root.join(".hexagon/private-evidence.json"),
+        "PRIVATE_EVAL_NEEDLE",
+    )
+    .unwrap();
+    std::fs::write(root.join("public.txt"), "PUBLIC_NEEDLE").unwrap();
+    std::os::unix::fs::symlink(".hexagon/private-evidence.json", root.join("alias.txt")).unwrap();
+    for path in [
+        ".hexagon/private-evidence.json",
+        "./.hexagon/private-evidence.json",
+        "alias.txt",
+    ] {
+        let result = tool_call(&wb, "fs_read", json!({"path":path})).unwrap();
+        assert!(
+            matches!(result, CallOutcome::Denied(_)),
+            "{path}: {result:?}"
+        );
+    }
+    let result = tool_call(
+        &wb,
+        "artifact_read",
+        json!({"path":"private-evidence.json"}),
+    );
+    assert!(!matches!(result, Ok(CallOutcome::Done(_))), "{result:?}");
+    for (tool, input) in [
+        ("fs_find", json!({"pattern":"private-evidence"})),
+        ("fs_grep", json!({"query":"PRIVATE_EVAL_NEEDLE"})),
+        ("sem_search", json!({"query":"PRIVATE_EVAL_NEEDLE"})),
+    ] {
+        let result = tool_call(&wb, tool, input).unwrap();
+        assert!(!format!("{result:?}").contains("PRIVATE_EVAL_NEEDLE"));
+        assert!(!format!("{result:?}").contains("private-evidence.json"));
+    }
+    assert!(matches!(
+        tool_call(&wb, "fs_read", json!({"path":"public.txt"})).unwrap(),
+        CallOutcome::Done(_)
+    ));
+    // The host output limiter must not mutate owner files to cache large output.
+    let original_ignore = std::fs::read(root.join(".gitignore")).ok();
+    std::fs::write(root.join("large.txt"), "public data\n".repeat(30000)).unwrap();
+    assert!(matches!(
+        tool_call(&wb, "fs_read", json!({"path":"large.txt"})).unwrap(),
+        CallOutcome::Done(_)
+    ));
+    assert_eq!(std::fs::read(root.join(".gitignore")).ok(), original_ignore);
+    // Finish the alias rejection probe before inspecting file scope: the host
+    // fingerprint correctly refuses symlinks instead of following private data.
+    std::fs::remove_file(root.join("alias.txt")).unwrap();
+    assert!(!host
+        .inspect_evaluation_outcome(&run.id)
+        .unwrap()
+        .violations
+        .iter()
+        .any(|v| v == "file_outside_allowed_scope:.gitignore"));
+    // Do not whitelist a lookalike change merely because the old host wrote it.
+    std::fs::write(root.join(".gitignore"), ".hexagon/spill/\n").unwrap();
+    assert!(host
+        .inspect_evaluation_outcome(&run.id)
+        .unwrap()
+        .violations
+        .iter()
+        .any(|v| v == "file_outside_allowed_scope:.gitignore"));
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+    #[test]
+    fn evaluation_artifact_reads_require_registered_identity(name in "[a-z]{1,12}", registered in proptest::bool::ANY, alias in 0u8..3) {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        std::fs::create_dir_all(dir.path().join(".hexagon/docs")).unwrap();
+        std::fs::write(dir.path().join(".hexagon/evaluation-worker"), "private-state-v1").unwrap();
+        let _probe = crate::evaluation::control::probe(dir.path()).unwrap();
+        let path = format!("docs/{name}.md");
+        if registered {
+            let result = tool_call(&wb, "artifact_write", json!({"path":path,"kind":"结构说明","content":"registered content"})).unwrap();
+            proptest::prop_assert!(matches!(result, CallOutcome::Done(_)), "{:?}", result);
+        } else {
+            std::fs::write(dir.path().join(".hexagon").join(&path), "unregistered content").unwrap();
+        }
+        let path = if alias == 1 {
+            std::os::unix::fs::symlink(&path, dir.path().join(".hexagon/alias.md")).unwrap();
+            "alias.md".to_string()
+        } else if alias == 2 {
+            // A registered logical path must not be replaced with a private alias.
+            std::fs::write(dir.path().join(".hexagon/private.txt"), "private content").unwrap();
+            std::fs::remove_file(dir.path().join(".hexagon").join(&path)).unwrap();
+            std::os::unix::fs::symlink("../private.txt", dir.path().join(".hexagon").join(&path)).unwrap();
+            path
+        } else { path };
+        let result = tool_call(&wb, "artifact_read", json!({"path":path}));
+        if registered && alias == 0 {
+            let value = match result { Ok(CallOutcome::Done(v))=>v, other=>panic!("{other:?}") };
+            proptest::prop_assert!(value["review_target"]["id"].is_string());
+        } else {
+            proptest::prop_assert!(!matches!(result, Ok(CallOutcome::Done(_))), "{:?}", result);
+        }
+    }
+}
+
+// Ticket 26: the live UX turn guessed three artifact paths, then tripped the
+// breaker. Scope must be actionable in both the request and denial feedback.
+#[test]
+fn artifact_scope_is_visible_and_denial_allows_in_scope_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["UX"], None).unwrap();
+    // for_test does not materialize preset ownership; mirror the live UX instance.
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO agent_globs(agent_id,glob) VALUES ('a0','docs/**'),('a0','ux/**')",
+            [],
+        )
+        .unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![(
+            "bad",
+            "artifact_write",
+            json!({"path":"structure/note.md","content":"notes","kind":"memo"}),
+        )]),
+        tool_response(vec![(
+            "good",
+            "artifact_write",
+            json!({"path":"ux/note.md","content":"notes","kind":"memo"}),
+        )]),
+        text_response("delivered"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.run_instance("a0", "Deliver a short memo.").unwrap();
+    let requests = provider.recorded();
+    let first = serde_json::to_string(&requests[0].messages).unwrap();
+    assert!(!first.contains("writes outside queue"), "{first}");
+    assert!(
+        first.contains("artifact_write") && first.contains("logical path"),
+        "{first}"
+    );
+    let after_denial = serde_json::to_string(&requests[1].messages).unwrap();
+    assert!(
+        after_denial.contains("Allowed write paths: docs/**, ux/**"),
+        "{after_denial}"
+    );
+    assert!(!dir.path().join(".hexagon/structure/note.md").exists());
+    assert!(dir.path().join(".hexagon/ux/note.md").exists());
+}
+
+#[test]
+fn tool_preflight_failure_is_terminal_and_survives_reopen() {
+    // Evaluation 27: eval-6/action17 failed read-before-edit but stayed pending.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("feature.py"), "old").unwrap();
+    let wb = Workbench::open(
+        dir.path(),
+        "preflight",
+        &[("a0".into(), "worker".into())],
+        None,
+    )
+    .unwrap();
+    for input in [
+        json!({"path":"feature.py"}),
+        json!({"path":"feature.py","old":"old","new":"new"}),
+    ] {
+        assert!(tool_call(&wb, "fs_patch", input).is_err());
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("feature.py")).unwrap(),
+        "old"
+    );
+    let results = events(&wb, Some(&[EventKind::ToolResult])).unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .filter(
+                |e| e.payload["state"] == "failed" && e.payload["reason"] == "preflight_rejected"
+            )
+            .count(),
+        2
+    );
+    assert!(permission_cards(&wb).is_empty());
+    drop(wb);
+    let wb = Workbench::open(dir.path(), "preflight", &[], None).unwrap();
+    let results = events(&wb, Some(&[EventKind::ToolResult])).unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .filter(|e| e.payload["state"] == "failed")
+            .count(),
+        2
+    );
+    assert!(matches!(
+        tool_call(&wb, "fs_read", json!({"path":"feature.py"})).unwrap(),
+        CallOutcome::Done(_)
+    ));
+}
+
+#[test]
+fn local_similarity_benchmark() {
+    let corpus: Value =
+        serde_json::from_str(include_str!("../../../../evaluation/retrieval/corpus.json")).unwrap();
+    let extended = std::env::var_os("HEXAGON_RETRIEVAL_BENCH").is_some();
+    let sizes: &[usize] = if extended { &[100, 1000, 4000] } else { &[100] };
+    let mut reports = Vec::new();
+    for &size in sizes {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        for (path, body) in corpus["files"].as_object().unwrap() {
+            std::fs::write(dir.path().join(path), body.as_str().unwrap()).unwrap();
+        }
+        for i in 10..size {
+            std::fs::write(
+                dir.path().join(format!("src/filler{i}.rs")),
+                format!("// generated fixture record {i}\npub fn item_{i}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let mut cold = Vec::new();
+        let mut hot = Vec::new();
+        let mut rows = Vec::new();
+        for round in 0..if extended { 5 } else { 1 } {
+            let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+            let started = std::time::Instant::now();
+            tool_call(
+                &wb,
+                "sem_search",
+                json!({"query":"evaluate_permissions","count":5}),
+            )
+            .unwrap();
+            cold.push(started.elapsed().as_secs_f64() * 1000.0);
+            for case in corpus["queries"].as_array().unwrap() {
+                let started = std::time::Instant::now();
+                let CallOutcome::Done(value) =
+                    tool_call(&wb, "sem_search", json!({"query":case["query"],"count":5})).unwrap()
+                else {
+                    panic!("search must complete")
+                };
+                hot.push(started.elapsed().as_secs_f64() * 1000.0);
+                if round == 0 {
+                    rows.push(json!({"kind":case["kind"],"query":case["query"],"expected":case["expected"],"hits":value["hits"]}));
+                }
+            }
+        }
+        for row in &rows {
+            if row["kind"] == "unrelated" {
+                assert!(
+                    row["hits"].as_array().unwrap().is_empty(),
+                    "unrelated query must fall back: {row}"
+                );
+            }
+            if matches!(
+                row["kind"].as_str(),
+                Some("identifier" | "chinese" | "english")
+            ) {
+                assert!(
+                    row["hits"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|h| row["expected"].as_array().unwrap().contains(&h["path"])),
+                    "literal recall lost: {row}"
+                );
+            }
+        }
+        cold.sort_by(f64::total_cmp);
+        hot.sort_by(f64::total_cmp);
+        reports.push(json!({"files":size,"cold_ms":cold,"hot_p50_ms":hot[hot.len()/2],"hot_p95_ms":hot[(hot.len()*95/100).min(hot.len()-1)],"rows":rows}));
+    }
+    assert_eq!(corpus["queries"].as_array().unwrap().len(), 50);
+    if let Some(path) = std::env::var_os("HEXAGON_RETRIEVAL_REPORT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&reports).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn local_similarity_top_k_returns_distinct_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("large.rs"),
+        "evaluate_permissions\n".repeat(1200),
+    )
+    .unwrap();
+    for i in 0..4 {
+        std::fs::write(
+            dir.path().join(format!("other{i}.rs")),
+            "evaluate_permissions\nextra detail\n",
+        )
+        .unwrap();
+    }
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let CallOutcome::Done(value) = tool_call(
+        &wb,
+        "sem_search",
+        json!({"query":"evaluate_permissions","count":5}),
+    )
+    .unwrap() else {
+        panic!("search must complete")
+    };
+    assert_eq!(
+        value["hits"].as_array().unwrap().len(),
+        5,
+        "one large file must not crowd out other files: {value}"
+    );
+}
+
+#[test]
+fn tool_preflight_recovery_gate_closes_only_the_new_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let wb = Workbench::open(
+        dir.path(),
+        "blocked-preflight",
+        &[("a0".into(), "worker".into())],
+        None,
+    )
+    .unwrap();
+    wb.registry.register(CountingAction(calls.clone()));
+    crate::actions::crash_at(crate::actions::CrashPoint::Effect);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool_call(
+            &wb,
+            "counting_action",
+            json!({})
+        )))
+        .is_err()
+    );
+    drop(wb);
+    let wb = Workbench::open(dir.path(), "blocked-preflight", &[], None).unwrap();
+    assert!(matches!(
+        tool_call(&wb, "fs_read", json!({"path":"missing"})),
+        Err(crate::tools::ToolError::OutcomeUnknown(_))
+    ));
+    let results = events(&wb, Some(&[EventKind::ToolResult])).unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .filter(
+                |e| e.payload["tool"] == "fs_read" && e.payload["reason"] == "preflight_rejected"
+            )
+            .count(),
+        1
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .any(|c| c["payload"]["sub"] == "tool_outcome_unknown"));
+}
+
+#[test]
+fn tool_preflight_snapshot_io_failure_leaves_no_pending_action() {
+    struct SnapshotFailure;
+    impl crate::tools::Tool for SnapshotFailure {
+        fn name(&self) -> &str {
+            "snapshot_failure"
+        }
+        fn description(&self) -> &str {
+            "test native snapshot failure"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type":"object"})
+        }
+        fn risk(&self) -> crate::tools::RiskClass {
+            crate::tools::RiskClass::WriteLocal
+        }
+        fn write_targets(&self, _: &Value) -> Result<Vec<String>, crate::tools::ToolError> {
+            Ok(vec!["directory".into()])
+        }
+        fn exec(
+            &self,
+            _: &crate::db::Db,
+            _: &Value,
+            _: &crate::tools::ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            panic!("directory snapshot must reject before dispatch")
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("directory")).unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    wb.registry.register(SnapshotFailure);
+    assert!(matches!(
+        tool_call(&wb, "snapshot_failure", json!({})),
+        Err(crate::tools::ToolError::Io(_))
+    ));
+    assert!(events(&wb, Some(&[EventKind::ToolResult]))
+        .unwrap()
+        .iter()
+        .any(|e| e.payload["state"] == "failed" && e.payload["reason"] == "preflight_rejected"));
+}

@@ -4,5 +4,4 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc 30b01cb58d5b761a7c2947a255eb42d3f8d689e4d4b9ba4e32289c8aeda4b3a8 # shrinks to name = "a", suffix = "a"
-cc bc95e83377656a8c81cb89471f309746e9af81d9e26d3fda42a9e6c60344f216 # shrinks to name = "a", registered = true, alias = 2
+cc 5d604569a78231a86015bf1554b16707b7730072be25e3669f4d0559310075f7 # shrinks to name = "aaaa", alias = 0

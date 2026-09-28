@@ -14,6 +14,7 @@ pub use report::{
 pub(crate) mod supplement;
 pub use supplement::SupplementOrigin;
 pub(crate) mod budget;
+pub use budget::reconciliation::{BillingRequest, SupplierUsageReconciliation};
 pub use budget::{BudgetRunSummary, BudgetSummary, DebugPrice};
 pub(crate) mod recovery;
 pub use recovery::{RecoveryEntry, RecoveryReport, RecoveryState};

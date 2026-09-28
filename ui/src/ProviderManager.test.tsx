@@ -36,6 +36,24 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
+  it('异步读回已保存绑定后，固定槽输入与已绑状态一致，重新打开仍显示', async () => {
+    // 2026-09-28 重启回归：固定槽先于配置挂载，不能只在首次挂载取绑定。
+    for (let opening = 0; opening < 2; opening++) {
+      let resolve!: (value: ProvidersView) => void
+      vi.mocked(api.listProviders).mockReturnValueOnce(new Promise((done) => { resolve = done }))
+      const { el, root } = await render(<ProviderManager />)
+      try {
+        await act(async () => { resolve(pv) })
+        const row = el.querySelector('[data-slot-state="bound"]')!.parentElement!
+        expect(row.querySelector('select')!.value).toBe('b')
+        expect(row.querySelector('input')!.value).toBe('m1')
+      } finally {
+        await act(async () => root.unmount())
+        el.remove()
+      }
+    }
+  })
+
   it('左列状态点三态：已配 key=on / 缺 key=warn / 停用=off', async () => {
     const { el, root } = await render(<ProviderManager />)
     expect(el.querySelectorAll('.dot.on')).toHaveLength(1)
@@ -46,6 +64,52 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     // prompt-engineering 票 11：内置槽位新增 translate（提示词参考译文），6 → 7。
     expect(text).toContain('1/7')
     root.unmount()
+  })
+
+  it('解绑读回后清空旧选择，不再把旧模型留在未绑槽中', async () => {
+    vi.spyOn(api, 'removeSlotBinding').mockResolvedValue(undefined)
+    const { el, root } = await render(<ProviderManager />)
+    try {
+      const row = el.querySelector('[data-slot-state="bound"]')!.parentElement!
+      vi.mocked(api.listProviders).mockResolvedValue({ ...pv, slots: {} })
+      await act(async () => {
+        row.querySelectorAll('button')[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      expect(api.removeSlotBinding).toHaveBeenCalledWith('default')
+      const updated = [...el.querySelectorAll('code')].find((c) => c.textContent?.includes('default'))!.parentElement!
+      expect(updated.querySelector('select')!.value).toBe('')
+      expect(updated.querySelector('input')!.value).toBe('')
+      expect(updated.querySelector('[data-slot-state="bound"]')).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      el.remove()
+    }
+  })
+
+  it('其他槽绑定触发刷新时保留当前槽尚未提交的模型草稿', async () => {
+    vi.spyOn(api, 'setSlotBinding').mockResolvedValue(undefined)
+    const loaded = { ...pv, slots: { ...pv.slots, chat: { provider_id: 'a', model: 'chat-model' } } }
+    vi.mocked(api.listProviders).mockResolvedValue(loaded)
+    const { el, root } = await render(<ProviderManager />)
+    try {
+      const row = (slot: string) => [...el.querySelectorAll('code')]
+        .find((c) => c.textContent?.endsWith(slot))!.parentElement!
+      const input = row('default').querySelector('input')!
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'draft-model')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      // 新响应对象但保存值相同：不能按对象身份重置其他槽的编辑。
+      vi.mocked(api.listProviders).mockResolvedValue(structuredClone(loaded))
+      await act(async () => {
+        row('chat').querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      expect(api.setSlotBinding).toHaveBeenCalledWith('chat', 'a', 'chat-model')
+      expect(row('default').querySelector('input')!.value).toBe('draft-model')
+    } finally {
+      await act(async () => root.unmount())
+      el.remove()
+    }
   })
 
   it('检测按钮：缺 key 且未填 key 时禁用；已配 key 或本地端点可用', async () => {

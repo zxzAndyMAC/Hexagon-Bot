@@ -396,7 +396,7 @@ fn stream_with_retry(
 /// `{media_type, data}`）剥成 images 载荷；content 里图片占位符替数据，
 /// 字节本体不进文本。Anthropic 形状进 tool_result.content；OpenAI
 /// 由映射层补 user 消息（ADR 0058-2）。
-fn tool_result_block(tool_use_id: String, v: &Value) -> ContentBlock {
+pub(crate) fn tool_result_block(tool_use_id: String, v: &Value) -> ContentBlock {
     let mut images = Vec::new();
     let mut content = v.clone();
     if let Some(im) = v["image"].as_object() {
@@ -504,6 +504,7 @@ pub fn run_turn(
         &[],
         false,
         None,
+        &[],
     )
 }
 
@@ -527,6 +528,7 @@ pub fn run_turn_planned(
         &[],
         true,
         None,
+        &[],
     )
 }
 
@@ -554,6 +556,36 @@ pub fn run_turn_streaming(
         attachments,
         plan_first,
         sink,
+        &[],
+    )
+}
+
+/// Resume evidence is already scoped by the calling facade. Preserve message
+/// roles so historical tool output never becomes an owner/system instruction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_turn_streaming_with_history(
+    db: &Db,
+    provider: &dyn ModelProvider,
+    registry: &Registry,
+    ctx: &ToolContext,
+    layers: Vec<PromptLayer>,
+    user_input: &str,
+    attachments: &[crate::trace::AttachRef],
+    plan_first: bool,
+    sink: Option<&mut DeltaSink<'_>>,
+    history: &[Message],
+) -> Result<TurnOutcome, TurnError> {
+    run_turn_impl(
+        db,
+        provider,
+        registry,
+        ctx,
+        layers,
+        user_input,
+        attachments,
+        plan_first,
+        sink,
+        history,
     )
 }
 
@@ -568,6 +600,7 @@ fn run_turn_impl(
     attachments: &[crate::trace::AttachRef],
     plan_first: bool,
     sink: Option<&mut DeltaSink<'_>>,
+    history: &[Message],
 ) -> Result<TurnOutcome, TurnError> {
     let mut noop = |_d: &TurnDelta| {};
     let sink: &mut DeltaSink = match sink {
@@ -677,6 +710,11 @@ fn run_turn_impl(
             }],
         },
     ];
+
+    // 2026-09-28 evaluation pilot: permission resolution starts a fresh turn.
+    // Rehydrate recorded observations before steering/cap handling, instead of
+    // silently losing the task's tool receipts whenever the CLI is reopened.
+    messages.extend_from_slice(history);
 
     // 票 03：负责人附件注入。vision 槽 → Image 块进首条 user 消息；
     // 非 vision 槽 → [image: name](path) 降级文本 + attachments_degraded

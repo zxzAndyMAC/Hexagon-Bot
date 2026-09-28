@@ -1,4 +1,4 @@
-//! 本地语义搜索（code-search-and-subagent 票 02）：自然语言 → 路径/行号/短摘。
+//! 本地相似检索（code-search-and-subagent 票 02）：自然语言 → 路径/行号/短摘。
 //!
 //! 硬约束的实现选择：
 //! - **本地性**：默认嵌入器是纯计算的 hashing-trick 稀疏向量（char n-gram），
@@ -26,8 +26,6 @@ const CHUNK_LINES: usize = 48;
 const CHUNK_STEP: usize = 40;
 /// 索引收录单文件上限：与文本搜索同口径。
 const INDEX_FILE_BYTES: u64 = 256 * 1024;
-/// 结果条数上限（工具再封顶一次；这里先取宽，宁可召回多切）。
-const POOL_CAP: usize = 24;
 
 /// 嵌入器接缝（spec：「嵌入器用替身」）：测试注入查表桩，生产用 HashEmbedder。
 /// 实现必须确定性——同文本同向量，否则索引哈希对不上。
@@ -125,14 +123,17 @@ pub fn refresh(
         .into_iter()
         .take(crate::search::INDEX_FILE_CAP)
         .collect();
+    // Audit A15 (2026-09-28): per-row commits and a shrinking Vec made refresh
+    // needlessly expensive. Keep content hashing: mtime alone misses replacements.
+    let tx = db.conn().unchecked_transaction()?;
     let mut indexed = 0usize;
-    let mut stale: Vec<String> = db
+    let mut stale: std::collections::HashSet<String> = db
         .conn()
         .prepare("SELECT path FROM code_files")?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for rel in &files {
-        let Ok(p) = crate::tools::readable_repo_path(root, rel) else {
+        let Ok(p) = crate::tools::agent_readable_repo_path(root, rel) else {
             continue;
         };
         let Ok(meta) = p.metadata() else { continue };
@@ -146,7 +147,7 @@ pub fn refresh(
             continue;
         }
         let text = String::from_utf8_lossy(&bytes).into_owned();
-        stale.retain(|p| p != rel);
+        stale.remove(rel);
         let sig = format!("{}:{:016x}", embedder.name(), fnv64(&text));
         let cur: Option<String> = db
             .conn()
@@ -183,7 +184,16 @@ pub fn refresh(
         db.conn()
             .execute("DELETE FROM code_chunks WHERE path=?1", [&p])?;
     }
+    tx.commit()?;
     Ok(indexed)
+}
+
+// Audit A15, 50-query synthetic calibration (2026-09-28): unrelated maxima
+// reached .262; literal positives started at .308. A .30 floor only applies to
+// this hash engine, not injected embedders. False negatives cost a literal-search
+// fallback; false positives waste inspection. This is not semantic confidence.
+fn candidate_score(engine: &str, score: f32) -> bool {
+    score.is_finite() && score > if engine == "hash-ngram-v1" { 0.30 } else { 0.0 }
 }
 
 /// 语义搜索：全块内积取 top-k（块已归一化 → 点积即余弦）。
@@ -206,46 +216,42 @@ pub fn query(
             r.get::<_, Vec<u8>>(2)?,
         ))
     })?;
-    let mut scored: Vec<(f32, String, i64)> = Vec::new();
+    // A15: select distinct files before top-k. A large file's first 24 chunks
+    // previously crowded all other files out. Bound sorting to the requested k.
+    let mut seen: std::collections::HashMap<String, (f32, i64)> = Default::default();
     for row in rows {
         let (path, line_start, blob) = row?;
-        if crate::tools::readable_repo_path(root, &path).is_err() {
+        if crate::tools::agent_readable_repo_path(root, &path).is_err() {
             continue;
         }
         let v = unpack(&blob);
         let dot: f32 = qv.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
-        if dot > 0.0 {
-            scored.push((dot, path, line_start));
+        if candidate_score(embedder.name(), dot) {
+            seen.entry(path)
+                .and_modify(|e| {
+                    if dot > e.0 || (dot == e.0 && line_start < e.1) {
+                        *e = (dot, line_start);
+                    }
+                })
+                .or_insert((dot, line_start));
         }
     }
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(POOL_CAP.max(cap));
-    // 同文件多块命中折叠成一条（取最高分行号）——交回的是「文件+位置」
-    // 不是块清单。
-    let mut seen: std::collections::HashMap<String, (f32, i64)> = Default::default();
-    for (s, p, l) in scored {
-        seen.entry(p)
-            .and_modify(|e| {
-                if s > e.0 {
-                    *e = (s, l)
-                }
-            })
-            .or_insert((s, l));
+    let mut hits: Vec<_> = seen.into_iter().collect();
+    let order = |a: &(String, (f32, i64)), b: &(String, (f32, i64))| {
+        b.1 .0.total_cmp(&a.1 .0).then_with(|| a.0.cmp(&b.0))
+    };
+    if cap < hits.len() {
+        hits.select_nth_unstable_by(cap, order);
+        hits.truncate(cap);
     }
-    let mut hits: Vec<(&String, &(f32, i64))> = seen.iter().collect();
-    hits.sort_by(|a, b| {
-        b.1 .0
-            .partial_cmp(&a.1 .0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    hits.truncate(cap);
+    hits.sort_by(order);
     Ok(hits
         .into_iter()
         .map(|(path, (score, line_start))| {
             json!({
                 "path": path,
                 "line": line_start,
-                "excerpt": excerpt(root, path, *line_start),
+                "excerpt": excerpt(root, &path, line_start),
                 "score": format!("{score:.3}"),
             })
         })
@@ -254,7 +260,7 @@ pub fn query(
 
 /// 命中块的短摘：从块首行起取非空行拼到 ~240 字符。
 fn excerpt(root: &Path, rel: &str, line_start: i64) -> String {
-    let Ok(path) = crate::tools::readable_repo_path(root, rel) else {
+    let Ok(path) = crate::tools::agent_readable_repo_path(root, rel) else {
         return String::new();
     };
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -371,5 +377,16 @@ mod tests {
         let emb = Dict(vec![("magic", 1)]);
         refresh(&db, dir.path(), &emb).unwrap();
         assert_eq!(query(&db, dir.path(), &emb, "magic", 3).unwrap().len(), 3);
+    }
+    proptest::proptest! {
+        #[test]
+        fn weak_hash_scores_always_require_fallback(score in -1000f32..=0.30f32) {
+            proptest::prop_assert!(!candidate_score("hash-ngram-v1", score));
+        }
+        #[test]
+        fn raising_similarity_preserves_a_candidate(a in 0.31f32..1.0, extra in 0.0f32..1.0) {
+            proptest::prop_assert!(candidate_score("hash-ngram-v1", a));
+            proptest::prop_assert!(candidate_score("hash-ngram-v1", a+extra));
+        }
     }
 }

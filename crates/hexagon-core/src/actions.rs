@@ -182,8 +182,17 @@ pub(crate) fn finish(
         return Err(ToolError::OutcomeUnknown(id.into()));
     }
     let action = get(db, &ctx.project_id, id)?;
+    // Ticket 24: bind only a successful native execution's private observation.
+    // Reconciliation and plugin-returned JSON cannot manufacture this receipt.
+    let native_effect = if uncertain {
+        None
+    } else {
+        result.as_ref().ok().and_then(|output| {
+            crate::tools::effects::receipt(ctx, id, &action.tool, &action.input, output)
+        })
+    };
     db.append_event(&ctx.project_id,EventKind::ToolResult,
-        json!({"action_id":id,"tool":action.tool,"ok":if uncertain {None} else {Some(result.is_ok())},
+        json!({"action_id":id,"tool":action.tool,"native_effect":native_effect,"ok":if uncertain {None} else {Some(result.is_ok())},
             "state":state,"result":{"tool":action.tool,"output":result.as_ref().ok(),"error":error,
                 "code":result.as_ref().err().map(crate::errcode::ErrorCode::code)}}),
         Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
@@ -670,11 +679,15 @@ pub(crate) fn fail_unstarted_attempt(
 ) -> Result<(), ToolError> {
     // Reliability 11: a rejected preflight used to strand the linked pending
     // attempt forever. Only definite input/precondition rejection is terminal;
-    // persistence and sequencing errors retain the recovery entry. The CAS
+    // Evaluation 27: snapshot IO errors are also pre-dispatch failures while
+    // still pending; persistence and sequencing errors retain the recovery entry. The CAS
     // must not overwrite a concurrent permission card or dispatched attempt.
     if !matches!(
         error,
-        ToolError::BadInput(_) | ToolError::PathEscape(_) | ToolError::NotExecuted(_)
+        ToolError::BadInput(_)
+            | ToolError::PathEscape(_)
+            | ToolError::NotExecuted(_)
+            | ToolError::Io(_)
     ) {
         return Ok(());
     }
@@ -699,7 +712,7 @@ pub(crate) fn fail_unstarted_attempt(
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
             None,
-            "owner_new_attempt",
+            "tool_preflight",
             "preflight_rejected",
             started,
         );

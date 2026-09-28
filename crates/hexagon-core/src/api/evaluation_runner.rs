@@ -484,7 +484,23 @@ pub(super) fn drive_evaluation(
     result: &mut EvaluationResult,
 ) -> Result<(), ApiError> {
     let stages: Vec<Vec<String>> = match &cursor.pack {
-        Some(pack) => pack.stages.iter().map(|s| s.roles.clone()).collect(),
+        Some(pack) => pack
+            .stages
+            .iter()
+            .map(|s| {
+                let mut roles = s.roles.clone();
+                let mut reviewers = std::collections::BTreeSet::new();
+                // 2026-09-28 pilot eval-2: dispatching only producers stopped at
+                // the first review gate. Reviewers run after all producers, even
+                // if they also produced work; advance still checks current evidence.
+                for review in &s.reviews {
+                    if reviewers.insert(&review.reviewer) {
+                        roles.push(review.reviewer.clone());
+                    }
+                }
+                roles
+            })
+            .collect(),
         None => vec![vec![cursor.fast_role.clone()]],
     };
     result.state = "started".into();
@@ -515,16 +531,60 @@ pub(super) fn drive_evaluation(
                 Some(provider)
             };
             let aid = worker.agent_by_role(role)?;
+            let reviewing = cursor
+                .pack
+                .as_ref()
+                .is_some_and(|pack| cursor.role_index >= pack.stages[cursor.stage].roles.len());
+            let instruction = if reviewing {
+                let kinds: Vec<_> = cursor.pack.as_ref().unwrap().stages[cursor.stage]
+                    .reviews
+                    .iter()
+                    .filter(|r| r.reviewer == *role)
+                    .map(|r| &r.artifact_kind)
+                    .collect();
+                json!({
+                    "assignment": "Independently review each current-stage artifact of the declared review_kinds. Read each target with artifact_read and submit a review artifact with its exact review_target as target_evidence and your pass/reject verdict. Do not implement, self-approve, skip review, or advance the stage.",
+                    "review_kinds": kinds,
+                    "task_requirements": task.requirements,
+                }).to_string()
+            } else {
+                task.requirements.clone()
+            };
+            let review_stage = if reviewing {
+                worker
+                    .db
+                    .active_stage_run(&worker.project_id)?
+                    .map(|r| r.id)
+            } else {
+                None
+            };
+            let started = std::time::Instant::now();
             let outcome = if consumed > 0 {
-                worker.run_turn_agent(
+                let history = worker.evaluation_resume_history(&aid)?;
+                worker.run_turn_agent_with_history(
                     &aid,
-                    "Continue after the owner's permission decision.",
+                    &instruction,
                     &[],
+                    false,
+                    &history,
                     false,
                 )?
             } else {
-                worker.dispatch_instance(&aid, &task.requirements, &[])?
+                worker.dispatch_instance_with_followup(&aid, &instruction, &[], false)?
             };
+            if reviewing {
+                crate::diag::note(
+                    crate::diag::CLASS_JUDGE,
+                    false,
+                    Some(&worker.project_id),
+                    Some(&aid),
+                    review_stage.as_deref(),
+                    None,
+                    "evaluation_review",
+                    "declared_reviewer_dispatched",
+                    started,
+                );
+            }
             match outcome {
                 TurnOutcome::AwaitingPermission(question_id) => {
                     // D07: retain response offset, role and activation. Replaying

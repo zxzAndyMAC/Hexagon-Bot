@@ -132,6 +132,71 @@ impl ModelProvider for ProbeProvider {
 }
 
 #[test]
+fn evaluation_preflight_prices_included_usage_details_without_blocking_second_request() {
+    // 2026-09-28 preflight-1 regression: exercise the real response parser and
+    // paid authority together; unknown extras must still stop the second call.
+    struct DetailedProbe {
+        unknown_extra: bool,
+    }
+    impl ModelProvider for DetailedProbe {
+        fn billing_model(&self) -> Option<&str> {
+            Some("fixture-model-v1")
+        }
+        fn model_meta(&self) -> ModelMeta {
+            ProbeProvider { wrong_model: false }.model_meta()
+        }
+        fn complete(&self, request: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+            let mut response = ProbeProvider { wrong_model: false }.complete(request)?;
+            let mut raw = json!({
+                "model":"fixture-model-v1", "choices":[{"message":{"content":""},"finish_reason":"stop"}],
+                "usage":{"prompt_tokens":16,"completion_tokens":10,"total_tokens":26,
+                    "prompt_cache_hit_tokens":5,"prompt_cache_miss_tokens":11,
+                    "prompt_tokens_details":{"cached_tokens":5},
+                    "completion_tokens_details":{"reasoning_tokens":4}}
+            });
+            if self.unknown_extra {
+                raw["usage"]["server_tool_use"] = json!({"web_search_requests":1});
+            }
+            response.usage = crate::provider::openai_shape::from_response(&raw)?.usage;
+            Ok(response)
+        }
+    }
+    let _config = fixture_configuration();
+    let home = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let batch = wb.freeze_evaluation(&priced_request(), None).unwrap();
+    attest_price(&wb, &batch);
+    wb.register_provider(
+        "default",
+        Arc::new(DetailedProbe {
+            unknown_extra: false,
+        }),
+    );
+    let receipt = wb.preflight_evaluation(&batch.id).unwrap();
+    assert_eq!(receipt.state, "passed");
+    let budget = wb.evaluation_budget().unwrap();
+    assert_eq!(budget.requests, 2);
+    assert_eq!(budget.known_mc, 2); // ceil((16 + 10) * 10 / 1000) per request
+    assert_eq!(budget.unknown_mc, 0);
+    assert!(!budget.blocked);
+    wb.register_provider(
+        "default",
+        Arc::new(DetailedProbe {
+            unknown_extra: true,
+        }),
+    );
+    let failed = wb.preflight_evaluation(&batch.id).unwrap();
+    assert_eq!(failed.state, "failed");
+    let budget = wb.evaluation_budget().unwrap();
+    assert_eq!(
+        budget.requests, 3,
+        "unknown extra stops the second exchange before dispatch"
+    );
+    assert!(budget.unknown_mc > 0);
+    assert!(budget.blocked);
+}
+
+#[test]
 fn evaluation_paid_preflight_requires_attestation_and_binds_actual_receipts() {
     let _config = fixture_configuration();
     let home = tempfile::tempdir().unwrap();
@@ -394,4 +459,308 @@ pub(super) fn task_provider(task: &eval::EvaluationTask) -> Arc<dyn ModelProvide
     Arc::new(TaskProvider(crate::provider::ScriptedProvider::new(
         responses,
     )))
+}
+
+#[test]
+fn evaluation_permission_resume_delivers_task_guidance_and_result_after_reopen() {
+    assert_evaluation_permission_resume(true);
+}
+
+#[test]
+fn evaluation_permission_resume_keeps_denials_after_reopen() {
+    assert_evaluation_permission_resume(false);
+}
+
+fn assert_evaluation_permission_resume(allow: bool) {
+    // 2026-09-28 live pilot: scripted response offsets hid a fresh, contextless
+    // turn after each permission. Observe the real provider boundary instead.
+    let _config = fixture_configuration();
+    let home = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    wb.register_provider("default", Arc::new(ProbeProvider { wrong_model: false }));
+    let mut request = priced_request();
+    for case in request.corpora.iter_mut().flat_map(|c| &mut c.cases) {
+        case.task.allowed_paths.push("resume-marker.txt".into());
+        case.task
+            .files
+            .insert("resume-marker.txt".into(), String::new());
+    }
+    let batch = wb.freeze_evaluation(&request, None).unwrap();
+    attest_price(&wb, &batch);
+    assert_eq!(wb.preflight_evaluation(&batch.id).unwrap().state, "passed");
+    let plan = wb
+        .plan_evaluation(&batch.id, eval::PlanKind::Pilot)
+        .unwrap();
+    let requirements = &request
+        .corpora
+        .iter()
+        .flat_map(|c| &c.cases)
+        .find(|c| c.task.id == plan.entries[0].task_id)
+        .unwrap()
+        .task
+        .requirements;
+    let text = |s: &str| ChatResponse {
+        content: vec![ContentBlock::Text { text: s.into() }],
+        stop: StopReason::EndTurn,
+        usage: Default::default(),
+    };
+    let provider = Arc::new(TaskProvider(crate::provider::ScriptedProvider::new(vec![
+        text("Verify the local interpreter once"),
+        ChatResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "verify-once".into(),
+                name: "bash".into(),
+                input: json!({"cmd":"printf resume-proof >> resume-marker.txt; sleep 0.2; /bin/echo interpreter-ready"}),
+            }],
+            stop: StopReason::ToolUse,
+            usage: Default::default(),
+        },
+        text(r#"{"verdict":"unsure","reason":"fixture requests an owner decision"}"#),
+        ChatResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "verify-second".into(),
+                name: "bash".into(),
+                input: json!({"cmd":"/bin/echo second-ready"}),
+            }],
+            stop: StopReason::ToolUse,
+            usage: Default::default(),
+        },
+        text(r#"{"verdict":"unsure","reason":"fixture requests an owner decision"}"#),
+        text("Ready for review"),
+    ])));
+    wb.register_provider("default", provider.clone());
+    let run = wb.evaluate_next_live(&plan.id).unwrap();
+    assert_eq!(run.state, "waiting_human", "{:?}", run.error);
+    let permission = wb
+        .evaluation_pending(&run.id)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.kind == "permission")
+        .expect("local command needs permission");
+    let h = wb
+        .begin_evaluation_attention(&run.id, eval::EvaluationActor::Scripted)
+        .unwrap();
+    wb.add_evaluation_guidance(&h, "Use this interpreter result; do not search for Conda.")
+        .unwrap();
+    wb.end_evaluation_attention(&h, eval::AttentionEnd::Away)
+        .unwrap();
+    drop(wb);
+    let mut wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    wb.register_provider("default", provider.clone());
+    let h = wb
+        .begin_evaluation_attention(&run.id, eval::EvaluationActor::Scripted)
+        .unwrap();
+    let resumed = wb
+        .submit_evaluation_decision(
+            &h,
+            eval::EvaluationDecision::Permission {
+                question_id: permission.id.clone(),
+                allow,
+            },
+        )
+        .unwrap();
+    assert_eq!(resumed.state, "waiting_human", "{:?}", resumed.error);
+    let before_duplicate = provider.0.recorded().len();
+    assert!(wb
+        .submit_evaluation_decision(
+            &h,
+            eval::EvaluationDecision::Permission {
+                question_id: permission.id,
+                allow,
+            }
+        )
+        .is_err());
+    assert_eq!(provider.0.recorded().len(), before_duplicate);
+    let second = wb
+        .evaluation_pending(&run.id)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.kind == "permission")
+        .expect("second permission pause");
+    let h = wb
+        .begin_evaluation_attention(&run.id, eval::EvaluationActor::Scripted)
+        .unwrap();
+    wb.add_evaluation_guidance(&h, "Keep both observed results and finish this task.")
+        .unwrap();
+    let resumed = wb
+        .submit_evaluation_decision(
+            &h,
+            eval::EvaluationDecision::Permission {
+                question_id: second.id,
+                allow,
+            },
+        )
+        .unwrap();
+    assert_eq!(resumed.state, "waiting_human", "{:?}", resumed.error);
+    let calls = provider.0.recorded();
+    let sent = serde_json::to_string(&calls.last().unwrap().messages).unwrap();
+    let instruction = calls
+        .last()
+        .unwrap()
+        .messages
+        .iter()
+        .filter(|m| matches!(m.role, Role::User))
+        .flat_map(|m| &m.content)
+        .find_map(|c| match c {
+            ContentBlock::Text { text } => serde_json::from_str::<serde_json::Value>(text)
+                .ok()?
+                .get("instruction")?
+                .as_str()
+                .map(str::to_owned),
+            _ => None,
+        });
+    assert_eq!(
+        instruction.as_deref(),
+        Some(requirements.as_str()),
+        "original task lost"
+    );
+    assert!(
+        sent.contains("Use this interpreter result; do not search for Conda."),
+        "owner guidance lost"
+    );
+    assert!(sent.contains("Keep both observed results and finish this task."));
+    let tool_results: Vec<_> = calls
+        .last()
+        .unwrap()
+        .messages
+        .iter()
+        .filter(|m| matches!(m.role, Role::Tool))
+        .flat_map(|m| &m.content)
+        .collect();
+    assert!(tool_results.iter().any(|c| matches!(c,
+            ContentBlock::ToolResult { content, is_error, .. }
+            if if allow { !is_error && content.contains("interpreter-ready") } else { *is_error && content.contains("denied") }
+        )), "decision result missing: {tool_results:?}");
+    assert_eq!(tool_results.len(), 2, "both permission receipts retained");
+    if allow {
+        assert!(
+            tool_results.iter().any(|c| matches!(c,
+                ContentBlock::ToolResult { content, is_error: false, .. }
+                if content.contains("second-ready")
+            )),
+            "second approved result lost"
+        );
+    } else {
+        assert!(
+            tool_results.iter().all(|c| matches!(c,
+                ContentBlock::ToolResult { content, is_error: true, .. }
+                if content.contains("denied")
+            )),
+            "denial must not become success"
+        );
+    }
+    let marker = Path::new(&run.workspace).join("resume-marker.txt");
+    if allow {
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "resume-proof");
+    } else {
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "");
+    }
+    wb.stop_evaluation_plan(&plan.id).unwrap();
+}
+
+#[test]
+fn evaluation_permission_resume_excludes_previous_activation_and_other_instance() {
+    let _config = fixture_configuration();
+    let home = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    wb.register_provider("default", Arc::new(ProbeProvider { wrong_model: false }));
+    let mut request = priced_request();
+    let stage = request.full_pack.stages[0].clone();
+    request.full_pack.stages = ["old-own-stage", "other-instance-stage", "current-stage"]
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let mut next = stage.clone();
+            next.name = name.into();
+            next.stamp_point = i == 2;
+            if i == 1 {
+                next.roles = vec!["前端".into()];
+            }
+            next
+        })
+        .collect();
+    let batch = wb.freeze_evaluation(&request, None).unwrap();
+    attest_price(&wb, &batch);
+    assert_eq!(wb.preflight_evaluation(&batch.id).unwrap().state, "passed");
+    let plan = wb
+        .plan_evaluation(&batch.id, eval::PlanKind::Pilot)
+        .unwrap();
+    let text = |s: &str| ChatResponse {
+        content: vec![ContentBlock::Text { text: s.into() }],
+        stop: StopReason::EndTurn,
+        usage: Default::default(),
+    };
+    let bash = |id: &str, cmd: &str| ChatResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: id.into(),
+            name: "bash".into(),
+            input: json!({"cmd":cmd}),
+        }],
+        stop: StopReason::ToolUse,
+        usage: Default::default(),
+    };
+    if plan.entries[0].arm == eval::EvaluationArm::Fast {
+        wb.register_provider(
+            "default",
+            Arc::new(TaskProvider(crate::provider::ScriptedProvider::new(vec![
+                text("Plan"),
+                text("No changes for the unrelated fast arm"),
+            ]))),
+        );
+        let fast = wb.evaluate_next_live(&plan.id).unwrap();
+        wb.stop_evaluation_run(&fast.id).unwrap();
+    }
+    let unsure = r#"{"verdict":"unsure","reason":"fixture requests an owner decision"}"#;
+    let provider = Arc::new(TaskProvider(crate::provider::ScriptedProvider::new(vec![
+        text("Plan old stage"),
+        bash("old", "/bin/echo old-activation-receipt"),
+        text(unsure),
+        text("Old stage complete"),
+        text("Plan other instance"),
+        bash("other", "printf other-instance-receipt"),
+        text("Other stage complete"),
+        text("Plan current stage"),
+        bash("current", "/bin/echo current-activation-receipt"),
+        text(unsure),
+        text("Current stage complete"),
+    ])));
+    wb.register_provider("default", provider.clone());
+    let run = wb.evaluate_next_live(&plan.id).unwrap();
+    for guidance in ["old-stage-owner-guidance", "current-stage-owner-guidance"] {
+        let permission = wb
+            .evaluation_pending(&run.id)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.kind == "permission")
+            .expect("stage waits for permission");
+        let h = wb
+            .begin_evaluation_attention(&run.id, eval::EvaluationActor::Scripted)
+            .unwrap();
+        wb.add_evaluation_guidance(&h, guidance).unwrap();
+        let resumed = wb
+            .submit_evaluation_decision(
+                &h,
+                eval::EvaluationDecision::Permission {
+                    question_id: permission.id,
+                    allow: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(resumed.state, "waiting_human", "{:?}", resumed.error);
+    }
+    let calls = provider.0.recorded();
+    let sent = serde_json::to_string(&calls.last().unwrap().messages).unwrap();
+    assert!(sent.contains("current-activation-receipt"));
+    assert!(sent.contains("current-stage-owner-guidance"));
+    for unrelated in [
+        "old-activation-receipt",
+        "other-instance-receipt",
+        "old-stage-owner-guidance",
+    ] {
+        assert!(
+            !sent.contains(unrelated),
+            "unrelated history leaked: {unrelated}"
+        );
+    }
+    wb.stop_evaluation_plan(&plan.id).unwrap();
 }

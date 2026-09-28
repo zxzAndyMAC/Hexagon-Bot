@@ -529,9 +529,11 @@ export function ProviderManager() {
           const b = doc.slots[slot]
           const bp = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
           const ready = !!(b && bp?.enabled && bp.key_set)
+          // 2026-09-28 重启后固定槽曾显示空白但标已绑：行先于配置挂载，
+          // 仅以 slot 作 key 会保留初始空草稿。已保存绑定变化才重置，普通刷新保留编辑。
           return (
             <SlotRow
-              key={slot}
+              key={JSON.stringify([slot, b?.provider_id, b?.model])}
               slot={slot}
               binding={b}
               providers={doc.providers}

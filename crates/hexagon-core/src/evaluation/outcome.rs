@@ -89,7 +89,7 @@ struct ActionFact {
     question: Option<String>,
     output: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct EventFact {
     id: i64,
     agent: Option<String>,
@@ -319,6 +319,135 @@ fn result_events<'a>(events: &'a [EventFact], action: &ActionFact) -> Vec<&'a Ev
         })
         .collect()
 }
+// Evaluation 27: only the host's pending -> failed CAS proves no dispatch.
+// A generic failed execution, owner reconciliation or plugin output is not this
+// evidence. False negatives cost inspection; false positives bless side effects.
+fn preflight_rejected(action: &ActionFact, events: &[EventFact]) -> bool {
+    let results = result_events(events, action);
+    action.state == "failed"
+        && action.question.is_none()
+        && action.output.is_none()
+        && results.len() == 1
+        && results[0].payload["tool"] == action.tool
+        && results[0].payload["state"] == "failed"
+        && results[0].payload["ok"] == false
+        && results[0].payload["reason"] == "preflight_rejected"
+        && results[0].payload["error"].is_string()
+}
+
+// Ticket 24: a native execution observation is bound to this exact successful
+// action and output. Missing/legacy/plugin fields remain unknown; a false
+// negative costs inspection, while a false positive blesses an unseen effect.
+fn native_effect_observed(
+    root: &Path,
+    db: &Db,
+    task: &EvaluationTask,
+    action: &ActionFact,
+    results: &[&EventFact],
+) -> bool {
+    use crate::tools::effects::{EffectReceipt, NativeEffect};
+    if action.state != "succeeded" || results.len() != 1 {
+        return false;
+    }
+    let event = results[0];
+    let Some(output) = action
+        .output
+        .as_ref()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+    else {
+        return false;
+    };
+    let Ok(receipt) =
+        serde_json::from_value::<EffectReceipt>(event.payload["native_effect"].clone())
+    else {
+        return false;
+    };
+    if event.payload["state"] != "succeeded"
+        || event.payload["tool"] != action.tool
+        || event.payload["result"]["output"] != output
+        || !receipt.binds(root, &action.id, &action.tool, &action.input, &output)
+    {
+        return false;
+    }
+    match &receipt.effect {
+        NativeEffect::ShellCompleted {
+            write_paths,
+            profile_digest,
+            process_id,
+        } => {
+            action.tool == "bash"
+                && action.input.get("session").is_none()
+                && action.input["background"] != true
+                && output["timed_out"] == false
+                && output["exit_code"].as_i64().is_some_and(|code| code >= 0)
+                && *process_id > 0
+                && profile_digest.starts_with("v1:")
+                && profile_digest.len() == 67
+                && profile_digest[3..].bytes().all(|b| b.is_ascii_hexdigit())
+                && write_paths
+                    .iter()
+                    .all(|p| super::safe_path(p) && task.allowed_paths.contains(p))
+        }
+        NativeEffect::SkillLoad {
+            name,
+            source,
+            source_digest,
+        } => {
+            action.tool == "load_skill"
+                && output["name"] == *name
+                && source_digest.starts_with("v1:")
+                && source_digest.len() == 67
+                && source_digest[3..].bytes().all(|b| b.is_ascii_hexdigit())
+                && output["instructions"].is_string()
+                && ((source == &format!("builtin:{name}") && output["resources_path"] == "")
+                    || (output["resources_path"] == *source
+                        && Path::new(source)
+                            .strip_prefix(root.join(".hexagon/skills"))
+                            .is_ok_and(|p| super::safe_path(&p.to_string_lossy()))))
+        }
+        NativeEffect::RepositorySearch => matches!(action.tool.as_str(), "fs_find" | "fs_grep"),
+        NativeEffect::FileRead { path, digest } => {
+            action.tool == "fs_read"
+                && super::safe_path(path)
+                && digest.len() == 64
+                && digest.bytes().all(|b| b.is_ascii_hexdigit())
+        }
+        NativeEffect::FileWrite { path, digest } => {
+            matches!(action.tool.as_str(), "fs_write" | "fs_patch")
+                && super::safe_path(path)
+                && task.allowed_paths.contains(path)
+                && digest.len() == 64
+                && digest.bytes().all(|b| b.is_ascii_hexdigit())
+        }
+        NativeEffect::ArtifactRead { evidence } | NativeEffect::ArtifactWrite { evidence } => {
+            let reading = matches!(&receipt.effect, NativeEffect::ArtifactRead { .. });
+            if action.tool
+                != if reading {
+                    "artifact_read"
+                } else {
+                    "artifact_write"
+                }
+                || evidence.project != crate::PROJECT_ID
+                || action.input["path"] != evidence.path
+                || !super::safe_path(&evidence.path)
+                || crate::tools::is_agent_policy_path(&format!(".hexagon/{}", evidence.path))
+            {
+                return false;
+            }
+            let recorded: bool = db.conn().query_row(
+                "SELECT EXISTS(SELECT 1 FROM artifacts WHERE project_id=?1 AND id=?2 AND path=?3 AND version=?4 AND content_digest=?5 AND kind=?6 AND author_agent_id=?7 AND stage_run_id IS ?8)",
+                rusqlite::params![evidence.project,evidence.id,evidence.path,evidence.version,evidence.digest,evidence.kind,evidence.author,evidence.stage], |r| r.get(0)).unwrap_or(false);
+            if reading {
+                recorded && output["review_target"] == serde_json::json!(evidence)
+            } else {
+                recorded && output["artifact_id"] == evidence.id && output["version"] == evidence.version
+                    && output["kind"] == evidence.kind && evidence.kind != "改进提案"
+                    && db.conn().query_row("SELECT EXISTS(SELECT 1 FROM artifact_materializations WHERE project_id=?1 AND id=?2 AND state='complete' AND json_extract(intent_json,'$.action')=?3)", rusqlite::params![evidence.project,evidence.id,action.id], |r| r.get::<_,bool>(0)).unwrap_or(false)
+            }
+        }
+    }
+}
+
 fn permission_verified(db: &Db, events: &[EventFact], action: &ActionFact, allow: bool) -> bool {
     let Some(qid) = &action.question else {
         return false;
@@ -580,21 +709,48 @@ fn observe(host: &Db, run_id: &str, persist: bool) -> io::Result<OutcomeObservat
         {
             violations.push(format!("duplicate_effect_receipt:{}", action.id));
         }
-        match action.tool.as_str() {
-            "fs_read" | "fs_write" => {
-                let path = action.input["path"].as_str();
-                let allowed = path.is_some_and(|p| {
-                    super::safe_path(p)
-                        && (action.tool == "fs_read" || task.allowed_paths.iter().any(|a| a == p))
-                });
-                if !allowed && action.state == "succeeded" {
-                    violations.push(format!("action_outside_allowed_scope:{}", action.id));
-                }
+        let observed = preflight_rejected(action, &events)
+            || worker
+                .as_ref()
+                .is_some_and(|db| native_effect_observed(root, db, &task, action, &results));
+        // Preserve proven legacy scope violations, without treating a plausible
+        // input path as evidence that the declared implementation actually ran.
+        if !observed && matches!(action.tool.as_str(), "fs_read" | "fs_write") {
+            let allowed = action.input["path"].as_str().is_some_and(|p| {
+                super::safe_path(p)
+                    && (action.tool == "fs_read" || task.allowed_paths.iter().any(|a| a == p))
+            });
+            if !allowed && action.state == "succeeded" {
+                violations.push(format!("action_outside_allowed_scope:{}", action.id));
             }
-            // D06: an exit code or OS boundary probe is not an attestation of
-            // this invocation's external effects. No arbitrary tool allow-list.
-            _ => unknowns.push(format!("effect_not_independently_observed:{}", action.id)),
         }
+        if !observed {
+            unknowns.push(format!("effect_not_independently_observed:{}", action.id));
+        }
+        // D06/T24: shell exit codes and OS probes are not invocation evidence.
+        crate::diag::note(
+            if observed {
+                crate::diag::CLASS_JUDGE
+            } else {
+                crate::diag::CLASS_REJECT
+            },
+            !observed,
+            Some(crate::PROJECT_ID),
+            Some(&action.agent),
+            action.stage.as_deref(),
+            None,
+            "evaluation_effect",
+            &format!(
+                "{}:{}",
+                if observed {
+                    "native_scope_verified"
+                } else {
+                    "effect_unobserved"
+                },
+                action.id
+            ),
+            started,
+        );
     }
     if let Some(contract) = &task.safety {
         for (index, required) in contract.required.iter().enumerate() {
@@ -910,6 +1066,100 @@ mod tests {
     proptest! {
         #![proptest_config(proptest::test_runner::Config::with_cases(48))]
         #[test]
+        fn native_shell_receipt_cannot_expand_scope_or_hide_open_execution(which in 0u8..7, suffix in "[a-z]{1,8}") {
+            use crate::tools::effects::{EffectReceipt, NativeEffect};
+            let root = tempfile::tempdir().unwrap();
+            let db = Db::open_in_memory().unwrap();
+            let corpus:super::super::EvaluationCorpus=serde_json::from_str(include_str!("../../../../evaluation/corpus/bugs.json")).unwrap();
+            let task = &corpus.cases[0].task;
+            let (_,_,mut action) = permission_fixture();
+            action.tool = "bash".into();
+            action.input = serde_json::json!({"cmd":"true"});
+            let mut output = serde_json::json!({"exit_code":0,"timed_out":false});
+            let mut effect = NativeEffect::ShellCompleted {write_paths:task.allowed_paths.clone(),profile_digest:format!("v1:{}","a".repeat(64)),process_id:42};
+            let event = |action:&ActionFact, output:&Value, effect:NativeEffect| {
+                let receipt=EffectReceipt {version:1,action_id:action.id.clone(),tool:action.tool.clone(),
+                    root:root.path().canonicalize().unwrap().to_string_lossy().into_owned(),
+                    input_digest:config::digest(&action.input).unwrap(),output_digest:config::digest(output).unwrap(),effect};
+                EventFact {id:1,agent:Some(action.agent.clone()),stage:action.stage.clone(),kind:"tool_result".into(),
+                    payload:serde_json::json!({"action_id":action.id,"tool":action.tool,"state":"succeeded","result":{"output":output},"native_effect":receipt})}
+            };
+            action.output=Some(output.to_string());
+            prop_assert!(native_effect_observed(root.path(),&db,task,&action,&[&event(&action,&output,effect.clone())]));
+            match which {
+                0 => if let NativeEffect::ShellCompleted{write_paths,..}=&mut effect {write_paths.push(format!("outside-{suffix}"));},
+                1 => action.input["session"]=serde_json::json!(suffix),
+                2 => action.input["background"]=serde_json::json!(true),
+                3 => output["timed_out"]=serde_json::json!(true),
+                4 => if let NativeEffect::ShellCompleted{profile_digest,..}=&mut effect {*profile_digest=format!("v1:{}","z".repeat(64));},
+                5 => if let NativeEffect::ShellCompleted{process_id,..}=&mut effect {*process_id=0;},
+                _ => action.tool="load_skill".into(),
+            }
+            action.output=Some(output.to_string());
+            prop_assert!(!native_effect_observed(root.path(),&db,task,&action,&[&event(&action,&output,effect)]));
+        }
+        #[test]
+        fn native_observation_requires_exact_successful_call(which in 0u8..12, suffix in "[a-z]{1,12}") {
+            use crate::tools::effects::{EffectReceipt, NativeEffect};
+            let root = tempfile::tempdir().unwrap();
+            let db = Db::open_in_memory().unwrap();
+            let corpus:super::super::EvaluationCorpus=serde_json::from_str(include_str!("../../../../evaluation/corpus/bugs.json")).unwrap();
+            let task = &corpus.cases[0].task;
+            let (_,_,mut action) = permission_fixture();
+            action.tool = "fs_find".into();
+            action.input = serde_json::json!({"pattern":"public"});
+            let output = serde_json::json!({"count":0,"paths":[]});
+            action.output = Some(output.to_string());
+            let receipt = EffectReceipt {version:1,action_id:action.id.clone(),tool:action.tool.clone(),
+                root:root.path().canonicalize().unwrap().to_string_lossy().into_owned(),
+                input_digest:config::digest(&action.input).unwrap(),output_digest:config::digest(&output).unwrap(),
+                effect:NativeEffect::RepositorySearch};
+            let mut event = EventFact {id:1,agent:Some(action.agent.clone()),stage:action.stage.clone(),kind:"tool_result".into(),
+                payload:serde_json::json!({"action_id":action.id,"tool":action.tool,"state":"succeeded","result":{"output":output},"native_effect":receipt})};
+            prop_assert!(native_effect_observed(root.path(), &db, task, &action, &[&event]));
+            let wrong = serde_json::json!(format!("wrong-{suffix}"));
+            match which {
+                0=>event.payload["native_effect"]["version"]=serde_json::json!(2),
+                1=>event.payload["native_effect"]["action_id"]=wrong,
+                2=>event.payload["native_effect"]["tool"]=wrong,
+                3=>event.payload["native_effect"]["root"]=wrong,
+                4=>event.payload["native_effect"]["input_digest"]=wrong,
+                5=>event.payload["native_effect"]["output_digest"]=wrong,
+                6=>action.state="failed".into(),
+                7=>action.state="unknown".into(),
+                8=>event.payload["result"]["output"]=wrong,
+                9=>{event.payload["result"]["native_effect"]=event.payload["native_effect"].take();},
+                10=>event.payload["native_effect"]["effect"]=serde_json::json!({"kind":"file_write","path":"outside.txt","digest":"a".repeat(64)}),
+                _=>event.payload["state"]=serde_json::json!("failed"),
+            }
+            prop_assert!(!native_effect_observed(root.path(), &db, task, &action, &[&event]));
+        }
+
+        #[test]
+        fn native_write_receipt_cannot_expand_task_scope(suffix in "[a-z]{1,12}") {
+            use crate::tools::effects::{EffectReceipt, NativeEffect};
+            let root = tempfile::tempdir().unwrap();
+            let db = Db::open_in_memory().unwrap();
+            let corpus:super::super::EvaluationCorpus=serde_json::from_str(include_str!("../../../../evaluation/corpus/bugs.json")).unwrap();
+            let task = &corpus.cases[0].task;
+            let path = &task.allowed_paths[0];
+            let (_,_,mut action) = permission_fixture();
+            action.tool = "fs_patch".into();
+            action.input = serde_json::json!({"path":path,"old":"before","new":"after"});
+            let output = serde_json::json!({"patched":path});
+            action.output = Some(output.to_string());
+            let receipt = EffectReceipt {version:1,action_id:action.id.clone(),tool:action.tool.clone(),
+                root:root.path().canonicalize().unwrap().to_string_lossy().into_owned(),
+                input_digest:config::digest(&action.input).unwrap(),output_digest:config::digest(&output).unwrap(),
+                effect:NativeEffect::FileWrite {path:path.clone(),digest:"a".repeat(64)}};
+            let mut event = EventFact {id:1,agent:Some(action.agent.clone()),stage:action.stage.clone(),kind:"tool_result".into(),
+                payload:serde_json::json!({"action_id":action.id,"tool":action.tool,"state":"succeeded","result":{"output":output},"native_effect":receipt})};
+            prop_assert!(native_effect_observed(root.path(), &db, task, &action, &[&event]));
+            event.payload["native_effect"]["effect"]["path"] = serde_json::json!(format!("unexpected-{suffix}.txt"));
+            prop_assert!(!native_effect_observed(root.path(), &db, task, &action, &[&event]));
+        }
+
+        #[test]
         fn added_files_outside_scope_never_disappear_from_safety(name in "[a-z]{1,16}") {
             let corpus:super::super::EvaluationCorpus=serde_json::from_str(include_str!("../../../../evaluation/corpus/bugs.json")).unwrap();
             let task=&corpus.cases[0].task;
@@ -980,6 +1230,26 @@ mod tests {
                 _=>events[1].stage=Some(wrong),
             }
             prop_assert!(!permission_evidence(&card,&events,&action,true));
+        }
+        #[test]
+        fn preflight_receipt_cannot_hide_an_executed_action(which in 0u8..10, suffix in "[a-z]{1,12}") {
+            let (_, _, mut action) = permission_fixture();
+            action.state="failed".into(); action.question=None; action.output=None;
+            let mut event=EventFact {id:1,agent:Some(action.agent.clone()),stage:action.stage.clone(),kind:"tool_result".into(),payload:serde_json::json!({"action_id":action.id,"tool":action.tool,"state":"failed","ok":false,"reason":"preflight_rejected","error":"bad input"})};
+            prop_assert!(preflight_rejected(&action,&[event.clone()]));
+            match which {
+                0=>action.state="unknown".into(),
+                1=>action.state="succeeded".into(),
+                2=>action.output=Some(suffix),
+                3=>action.question=Some(suffix),
+                4=>event.payload["reason"]="owner_reconciled".into(),
+                5=>event.payload["action_id"]=suffix.into(),
+                6=>event.agent=Some(suffix),
+                7=>event.payload["tool"]=suffix.into(),
+                8=>event.payload["ok"]=true.into(),
+                _=>event.kind="message".into(),
+            }
+            prop_assert!(!preflight_rejected(&action,&[event]));
         }
         #[test]
         fn normal_success_requires_every_independent_fact(live in any::<bool>(), completed in any::<bool>(), passed in any::<bool>(), current in any::<bool>(), exception in any::<bool>()) {

@@ -191,6 +191,19 @@ fn child_exited(_child: &Child) -> std::io::Result<bool> {
     Ok(false)
 }
 
+fn process_group_gone(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        (unsafe { libc::kill(-(pid as i32), 0) }) == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
 fn finish_child(
     mut child: Child,
     lease: Option<std::fs::File>,
@@ -205,8 +218,7 @@ fn finish_child(
     if let Some(lease) = lease {
         #[cfg(unix)]
         {
-            let gone = move || unsafe { libc::kill(-(pid as i32), 0) } == -1
-                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            let gone = move || process_group_gone(pid);
             if !gone() {
                 std::thread::spawn(move || {
                     while !gone() {
@@ -431,6 +443,7 @@ struct TableState {
 
 /// Monitor 与取消共享未回收的 Child；拿走句柄后取消不能再信号旧 PID。
 pub struct TaskHandle {
+    pid: u32,
     child: Arc<Mutex<Option<Child>>>,
     shared: Arc<Shared>,
 }
@@ -558,7 +571,31 @@ impl SessionTable {
         timeout: Duration,
         net: bool,
     ) -> Result<Value, ToolError> {
-        let spec = self.spec_for(db, ctx, net);
+        let observed_paths = if ctx.native_effect.is_some() {
+            let mut paths = crate::evaluation::control::task_write_paths(&ctx.repo_root)?;
+            paths.retain(|p| {
+                ctx.owned_globs.is_empty()
+                    || ctx
+                        .owned_globs
+                        .iter()
+                        .any(|g| crate::tools::glob_match(g, p))
+            });
+            if crate::permissions::agent_role(db, ctx).as_deref() == Some(crate::pm_route::PM_ROLE)
+            {
+                paths.clear();
+            }
+            Some(paths)
+        } else {
+            None
+        };
+        let spec = match &observed_paths {
+            Some(paths) => {
+                let spec = crate::sandbox::evaluation_spec(&ctx.repo_root, paths);
+                Self::note_spec(db, ctx, &spec, "evaluation_task_scope", Instant::now());
+                spec
+            }
+            None => self.spec_for(db, ctx, net),
+        };
         let task = spawn_task_handle(ctx, cmd, &spec, self.bound_tap(), None)
             .map_err(|e| ToolError::NotExecuted(format!("spawn sh: {e}")))?;
         // D09: foreground checks used to escape kill_all because their handle
@@ -590,7 +627,26 @@ impl SessionTable {
             );
         }
         self.inner.lock().unwrap().tasks.remove(&id);
-        Ok(task_result(&task, timed_out, ctx))
+        let output = task_result(&task, timed_out, ctx);
+        if let Some(write_paths) = observed_paths.filter(|_| !timed_out) {
+            // Ticket 25: the leader can be reaped before orphaned descendants.
+            // Wait within the original deadline; no proof is preferable to a
+            // false completion that lets a child write after the action result.
+            let cleanup_deadline = deadline.min(Instant::now() + Duration::from_secs(2));
+            while !process_group_gone(task.pid) && Instant::now() < cleanup_deadline {
+                crate::evaluation::control::checkpoint(&ctx.repo_root)?;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let st = task.shared.st.lock().unwrap();
+            if process_group_gone(task.pid) && st.exit_code.is_some() {
+                ctx.observe_native_effect(crate::tools::effects::NativeEffect::ShellCompleted {
+                    write_paths,
+                    profile_digest: crate::evaluation::config::digest(&format!("{spec:?}"))?,
+                    process_id: task.pid,
+                });
+            }
+        }
+        Ok(output)
     }
 
     /// 命名会话执行：会话不存在/已死则（重）起；命令经哨兵切边界。
@@ -936,6 +992,7 @@ fn spawn_task_handle(
     // D09: acquiring the repository lease can wait across a stop.
     crate::evaluation::control::checkpoint(&ctx.repo_root)?;
     let mut child = c.spawn()?;
+    let pid = child.id();
     // 任务的 Shared 就是这条进程的——口子随 spawn 绑死，进程终身
     // 输出都记在这个 seq 名下（含后台任务活得比调用久的情形）。
     let shared = Shared::new(tap);
@@ -954,7 +1011,7 @@ fn spawn_task_handle(
         Arc::new(Mutex::new(Some(lease))),
         shared.clone(),
     );
-    Ok(TaskHandle { child, shared })
+    Ok(TaskHandle { pid, child, shared })
 }
 
 // Reliability 15: a named shell may exit after its command sentinel. Monitor

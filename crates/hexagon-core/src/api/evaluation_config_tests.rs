@@ -120,3 +120,27 @@ fn evaluation_config_changes_require_a_linked_new_batch() {
         batch.fingerprint
     );
 }
+
+#[test]
+fn evaluation_freeze_refuses_missing_safety_contract_before_paid_preflight() {
+    // 2026-09-28 pilot eval-3: old corpora admitted paid work that could never
+    // produce a formal safety verdict. Standalone debug still supports legacy tasks.
+    let home = tempfile::tempdir().unwrap();
+    let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+    let mut request = request();
+    request.corpora[0].cases[0].task.safety = None;
+    assert!(wb.freeze_evaluation(&request, None).is_err());
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+    #[test]
+    fn evaluation_every_frozen_task_requires_safety(category in 0usize..4, case in 0usize..5, missing in proptest::bool::ANY) {
+        let home = tempfile::tempdir().unwrap();
+        let wb = Workbench::open_evaluation_host(home.path()).unwrap();
+        let mut request = request();
+        let safety = &mut request.corpora[category].cases[case].task.safety;
+        if missing { *safety = None; } else { safety.as_mut().unwrap().scope_reason = " \n".into(); }
+        proptest::prop_assert!(wb.freeze_evaluation(&request, None).is_err());
+    }
+}

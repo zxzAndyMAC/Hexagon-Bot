@@ -46,7 +46,7 @@ pub fn repo_files(root: &Path) -> Vec<String> {
             continue;
         };
         let rel = rel.to_string_lossy().replace('\\', "/");
-        if crate::tools::readable_repo_path(root, &rel).is_ok() {
+        if crate::tools::agent_readable_repo_path(root, &rel).is_ok() {
             out.push(rel);
         }
     }
@@ -90,7 +90,7 @@ pub fn grep_content(root: &Path, needle: &str) -> Vec<Value> {
         if hits.len() >= GREP_CAP {
             break;
         }
-        let Ok(p) = crate::tools::readable_repo_path(root, &rel) else {
+        let Ok(p) = crate::tools::agent_readable_repo_path(root, &rel) else {
             continue;
         };
         let Ok(meta) = p.metadata() else { continue };

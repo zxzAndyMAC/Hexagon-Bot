@@ -702,10 +702,10 @@ impl crate::tools::Tool for SemSearch {
         "sem_search"
     }
     fn description(&self) -> &str {
-        r#"Semantic search over the repo using a local index (no network).
-- Use when: you are looking for code by meaning ("where are permissions evaluated?") and do not know the exact identifier.
-- Do not use: when you know the literal text — fs_grep is exact and cheaper.
-- Returns file path, line number and a short excerpt per hit. Empty hits mean nothing close was found: fall back to fs_grep or fs_find."#
+        r#"Local text-similarity search over the repo using character n-grams (no network, no learned semantic model).
+- Use when: you have descriptive words likely to appear in the code or comments. Synonyms and unrelated concepts may not match.
+- Do not use: when you know the literal text, identifier or filename — prefer fs_grep or fs_find.
+- Returns file path, line number and a short excerpt per hit. Scores indicate text similarity, not relevance confidence. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -733,7 +733,7 @@ impl crate::tools::Tool for SemSearch {
             "indexed_files": indexed,
             "hits": hits,
             "fallback": hits.is_empty(),
-            "note": if hits.is_empty() { "no semantic hits — try fs_grep with a literal term" } else { "" },
+            "note": if hits.is_empty() { "no similar text — try fs_grep with a literal term" } else { "" },
         }))
     }
 }

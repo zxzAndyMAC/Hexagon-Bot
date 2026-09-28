@@ -23,6 +23,8 @@ pub struct PreflightReceipt {
 }
 
 pub(crate) fn price(batch: &EvaluationBatch) -> io::Result<budget::live::LivePrice> {
+    // Also check legacy frozen batches before preflight, generation or dispatch.
+    config::require_safety_contracts(&batch.request)?;
     let model = batch
         .runtime
         .models

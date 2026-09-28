@@ -182,7 +182,35 @@ fn limits_valid(limits: &EvaluationLimits) -> bool {
         && limits.active_ms <= 1_800_000
 }
 
+pub(crate) fn require_safety_contracts(request: &FreezeRequest) -> io::Result<()> {
+    let started = std::time::Instant::now();
+    // 2026-09-28 pilot eval-3: absent legacy contracts reached paid preflight
+    // but could never pass outcome inspection. Missing proof must cost a new
+    // configuration, not paid work mislabeled as formally admissible.
+    if request.corpora.iter().flat_map(|c| &c.cases).any(|c| {
+        c.task
+            .safety
+            .as_ref()
+            .is_none_or(|s| !super::outcome::valid_contract(s))
+    }) {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            None,
+            "evaluation_admission",
+            "safety_contract_required",
+            started,
+        );
+        return Err(err("evaluation_safety_contract_required"));
+    }
+    Ok(())
+}
+
 fn validate(request: &FreezeRequest) -> io::Result<()> {
+    require_safety_contracts(request)?;
     let mut categories = BTreeSet::new();
     let mut ids = BTreeSet::new();
     if request.corpora.len() != 4
@@ -248,10 +276,16 @@ fn versions() -> io::Result<BTreeMap<String, Option<String>>> {
     let root = tempfile::tempdir()?;
     let db = Db::open_in_memory().map_err(err)?;
     let ctx = crate::tools::ToolContext::owner(&db, root.path());
-    let python = "python=python3; if command -v xcode-select >/dev/null 2>&1; then developer=$(xcode-select -p); native=\"$developer/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python\"; if test -x \"$native\"; then python=\"$native\"; fi; fi; \"$python\" --version";
+    // Ticket 26: freeze the same interpreter advertised to the worker.
+    let interpreter =
+        crate::sandbox::python_interpreter().unwrap_or_else(|| std::path::PathBuf::from("python3"));
+    let python = format!(
+        "'{}' --version",
+        interpreter.to_string_lossy().replace('\'', "'\\''")
+    );
     let mut versions = BTreeMap::new();
     for (name, command) in [
-        ("python", python),
+        ("python", python.as_str()),
         ("node", "node --version"),
         ("git", "git --version"),
     ] {

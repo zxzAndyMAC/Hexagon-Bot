@@ -1,0 +1,348 @@
+{
+  "version": 1,
+  "source": "Original synthetic bilingual fixture; not a real-project semantic benchmark",
+  "files": {
+    "src/permissions.rs": "// 检查写入权限与路径归属\n// permission ownership decision\npub fn evaluate_permissions() {}\n",
+    "src/budget.rs": "// 模型请求之前预占费用预算\n// reserve budget before request\npub fn reserve_budget() {}\n",
+    "src/actions.rs": "// 核对执行结果未知的工具动作\n// reconcile unknown tool action\npub fn reconcile_action() {}\n",
+    "src/reviews.rs": "// 复审绑定产物的当前版本\n// review current artifact version\npub fn review_version() {}\n",
+    "src/skills.rs": "// 装入技能正文与适用经验\n// load skill instructions\npub fn load_skill() {}\n",
+    "src/search.rs": "// 按文件名称寻找仓库路径\n// find files by name\npub fn find_files() {}\n",
+    "src/provider.rs": "// 解析模型槽及默认回退\n// resolve model slot fallback\npub fn resolve_slot() {}\n",
+    "src/events.rs": "// 记录工具调用结果轨迹\n// append tool result event\npub fn append_event() {}\n",
+    "src/plans.rs": "// 当前阶段完成后推进流程\n// advance completed workflow stage\npub fn advance_stage() {}\n",
+    "src/patch.rs": "// 先读文件再替换精确文本\n// replace exact text after read\npub fn replace_text() {}\n"
+  },
+  "queries": [
+    {
+      "kind": "identifier",
+      "query": "evaluate_permissions",
+      "expected": [
+        "src/permissions.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "检查写入权限与路径归属",
+      "expected": [
+        "src/permissions.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "permission ownership decision",
+      "expected": [
+        "src/permissions.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "authorize a file modification",
+      "expected": [
+        "src/permissions.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "reserve_budget",
+      "expected": [
+        "src/budget.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "模型请求之前预占费用预算",
+      "expected": [
+        "src/budget.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "reserve budget before request",
+      "expected": [
+        "src/budget.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "hold funds for model calls",
+      "expected": [
+        "src/budget.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "reconcile_action",
+      "expected": [
+        "src/actions.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "核对执行结果未知的工具动作",
+      "expected": [
+        "src/actions.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "reconcile unknown tool action",
+      "expected": [
+        "src/actions.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "recover an uncertain operation",
+      "expected": [
+        "src/actions.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "review_version",
+      "expected": [
+        "src/reviews.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "复审绑定产物的当前版本",
+      "expected": [
+        "src/reviews.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "review current artifact version",
+      "expected": [
+        "src/reviews.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "invalidate an outdated approval",
+      "expected": [
+        "src/reviews.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "load_skill",
+      "expected": [
+        "src/skills.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "装入技能正文与适用经验",
+      "expected": [
+        "src/skills.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "load skill instructions",
+      "expected": [
+        "src/skills.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "retrieve relevant learned guidance",
+      "expected": [
+        "src/skills.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "find_files",
+      "expected": [
+        "src/search.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "按文件名称寻找仓库路径",
+      "expected": [
+        "src/search.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "find files by name",
+      "expected": [
+        "src/search.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "locate a source document",
+      "expected": [
+        "src/search.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "resolve_slot",
+      "expected": [
+        "src/provider.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "解析模型槽及默认回退",
+      "expected": [
+        "src/provider.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "resolve model slot fallback",
+      "expected": [
+        "src/provider.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "choose a replacement provider",
+      "expected": [
+        "src/provider.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "append_event",
+      "expected": [
+        "src/events.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "记录工具调用结果轨迹",
+      "expected": [
+        "src/events.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "append tool result event",
+      "expected": [
+        "src/events.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "persist execution history",
+      "expected": [
+        "src/events.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "advance_stage",
+      "expected": [
+        "src/plans.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "当前阶段完成后推进流程",
+      "expected": [
+        "src/plans.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "advance completed workflow stage",
+      "expected": [
+        "src/plans.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "move to the following phase",
+      "expected": [
+        "src/plans.rs"
+      ]
+    },
+    {
+      "kind": "identifier",
+      "query": "replace_text",
+      "expected": [
+        "src/patch.rs"
+      ]
+    },
+    {
+      "kind": "chinese",
+      "query": "先读文件再替换精确文本",
+      "expected": [
+        "src/patch.rs"
+      ]
+    },
+    {
+      "kind": "english",
+      "query": "replace exact text after read",
+      "expected": [
+        "src/patch.rs"
+      ]
+    },
+    {
+      "kind": "synonym",
+      "query": "edit an existing source fragment",
+      "expected": [
+        "src/patch.rs"
+      ]
+    },
+    {
+      "kind": "unrelated",
+      "query": "quantum entanglement",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "恐龙灭绝原因",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "sourdough fermentation",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "星际航行曲率引擎",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "photosynthesis chlorophyll",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "巴洛克音乐历史",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "oceanic salinity",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "火山喷发预测",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "mitochondrial genome",
+      "expected": []
+    },
+    {
+      "kind": "unrelated",
+      "query": "唐代青瓷鉴赏",
+      "expected": []
+    }
+  ]
+}

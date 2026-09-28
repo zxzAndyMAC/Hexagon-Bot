@@ -2,6 +2,20 @@
 use super::*;
 use crate::evaluation as eval;
 impl Workbench {
+    /// Owner-supplied supplier evidence; never exposed as an agent tool.
+    pub fn reconcile_evaluation_billing(
+        &self,
+        evidence: &eval::SupplierUsageReconciliation,
+    ) -> Result<eval::BudgetSummary, ApiError> {
+        Ok(eval::budget::reconciliation::reconcile(
+            &self.repo_root,
+            evidence,
+        )?)
+    }
+    pub fn evaluation_billing_requests(&self) -> Result<Vec<eval::BillingRequest>, ApiError> {
+        Ok(eval::budget::reconciliation::requests(&self.repo_root)?)
+    }
+
     pub fn enable_evaluation_budget_debug(
         &self,
         plan: &str,

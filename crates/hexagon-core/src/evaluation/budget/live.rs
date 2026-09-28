@@ -18,7 +18,7 @@ pub(super) fn authority(binding: &Binding) -> io::Result<Db> {
     }
 }
 
-fn paid_db() -> io::Result<Db> {
+pub(super) fn paid_db() -> io::Result<Db> {
     let path = paid_path()?;
     std::fs::create_dir_all(
         path.parent()

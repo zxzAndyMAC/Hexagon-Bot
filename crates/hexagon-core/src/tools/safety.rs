@@ -87,6 +87,42 @@ pub(crate) fn readable_repo_path(root: &Path, rel: &str) -> Result<PathBuf, Tool
     Ok(path)
 }
 
+/// Generic file/search tools in evaluation workers cannot read host state.
+/// 2026-09-28 eval-2 read pack/control/lock files successfully. False negative
+/// costs an artifact_read; false positive exposes host protocol state. Registered
+/// artifacts retain the separate host-validated artifact_read path.
+pub(crate) fn agent_readable_repo_path(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
+    let started = std::time::Instant::now();
+    let path = readable_repo_path(root, rel)?;
+    if root.join(".hexagon/evaluation-worker").is_file()
+        && path
+            .strip_prefix(root.canonicalize()?)
+            .ok()
+            .and_then(|p| p.components().next())
+            .is_some_and(|c| {
+                c.as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(".hexagon")
+            })
+    {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            None,
+            "content_read",
+            "evaluation_private_state",
+            started,
+        );
+        return Err(ToolError::BadInput(
+            "evaluation host state requires a registered artifact".into(),
+        ));
+    }
+    Ok(path)
+}
+
 /// 权限规则文件：Agent 不得自改规则（内置 deny）。
 pub(crate) fn is_permission_rule_path(p: &str) -> bool {
     let lower = p.to_lowercase();
@@ -241,6 +277,13 @@ fn fnv1a(s: &str) -> String {
 /// 完整结果落 spill 文件，返回仓内相对路径。IO 失败 → None：
 /// spill 是上下文优化不是安全门，失败退回旧式纯截断，不拖垮工具调用。
 pub fn spill_result(ctx: &ToolContext, full: &str) -> Option<String> {
+    // 2026-09-28 eval-2: caching output created .gitignore outside task scope.
+    // ponytail: isolated evaluations use the existing bounded-output fallback;
+    // add a host cache read capability only if truncation blocks real tasks.
+    // Do not exempt .gitignore or expose host state to make the cache readable.
+    if ctx.repo_root.join(".hexagon/evaluation-worker").is_file() {
+        return None;
+    }
     let dir = ctx.repo_root.join(SPILL_DIR);
     std::fs::create_dir_all(&dir).ok()?;
     ensure_gitignore(ctx);
@@ -406,6 +449,22 @@ mod evaluation_policy_tests {
     use super::*;
     use proptest::prelude::*;
     proptest! {
+        #[test]
+        fn evaluation_private_reads_reject_normalized_paths_and_aliases(name in "[a-z]{1,20}", alias in any::<bool>()) {
+            let dir = tempfile::tempdir().unwrap();
+            let private = dir.path().join(".hexagon");
+            std::fs::create_dir(&private).unwrap();
+            std::fs::write(private.join("evaluation-worker"), "private-state-v1").unwrap();
+            std::fs::write(private.join(&name), "private").unwrap();
+            let input = if alias {
+                std::os::unix::fs::symlink(private.join(&name), dir.path().join("alias")).unwrap();
+                "alias".into()
+            } else { format!("./.hexagon/../.hexagon/{name}") };
+            prop_assert!(agent_readable_repo_path(dir.path(), &input).is_err());
+            std::fs::write(dir.path().join("public.txt"), "public").unwrap();
+            prop_assert!(agent_readable_repo_path(dir.path(), "public.txt").is_ok());
+        }
+
         #[test]
         fn evaluation_protocol_paths_are_always_owner_managed(suffix in "[a-z0-9/-]{0,30}",upper in any::<bool>()) {
             let mut path=format!(".hexagon/evaluation-{suffix}");

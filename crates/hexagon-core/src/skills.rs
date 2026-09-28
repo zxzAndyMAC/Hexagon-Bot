@@ -70,6 +70,8 @@ pub struct Skill {
     pub description: String,
     /// 完整正文——按需加载，不进系统提示。
     pub instructions: String,
+    /// Digest of the exact source bytes parsed, before governed loading filters.
+    pub(crate) source_digest: String,
     /// 技能目录（资源/脚本所在），agent 可按需 fs_read。
     pub path: PathBuf,
 }
@@ -208,6 +210,15 @@ fn parse_skill(md: &Path) -> Option<Skill> {
         crate::tools::record_sensitive_read_rejection(started);
         return None;
     }
+    // Ticket 25: a project SKILL.md alias must not turn private worker state
+    // into instructions. Check before reading; a later digest cannot undo a leak.
+    if let Some(root) = md.ancestors().nth(4).filter(|r| is_evaluation_worker(r)) {
+        let expected = root.canonicalize().ok()?.join(md.strip_prefix(root).ok()?);
+        if md.canonicalize().ok()? != expected {
+            crate::tools::record_sensitive_read_rejection(started);
+            return None;
+        }
+    }
     let text = std::fs::read_to_string(md).ok()?;
     let fallback = md
         .parent()
@@ -244,6 +255,7 @@ fn parse_skill_text(text: &str, fallback_name: &str, path: PathBuf) -> Option<Sk
         name,
         description,
         instructions: body.trim().to_string(),
+        source_digest: crate::evaluation::config::digest(&text).ok()?,
         path,
     })
 }

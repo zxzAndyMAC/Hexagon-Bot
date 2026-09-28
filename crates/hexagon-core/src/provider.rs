@@ -143,6 +143,7 @@ impl Usage {
     }
 
     fn observe(&mut self, value: &Value, input: &str, output: &str) {
+        let started = std::time::Instant::now();
         if let Some(tokens) = value[input].as_u64() {
             self.prompt_tokens = tokens;
             self.prompt_reported = true;
@@ -157,6 +158,16 @@ impl Usage {
         // false unknown costs review; false known hides an unbudgeted charge.
         self.unpriced |= value.as_object().is_some_and(|fields| {
             fields.iter().any(|(key, v)| {
+                // 2026-09-28 DeepSeek preflight: cache and reasoning counters
+                // subdivide the reported totals, not additional billable work.
+                // Source: https://api-docs.deepseek.com/api/create-chat-completion
+                // Use the cache-miss input rate as a conservative upper estimate.
+                // Rejected alternative: ignore all *_details (would hide audio
+                // or future service charges). False unknown needs review; false
+                // known spends unreviewed money, so inconsistent counts fail closed.
+                if input == "prompt_tokens" && is_token_breakdown(key) {
+                    return !included_token_breakdown(value, key);
+                }
                 !matches!(
                     key.as_str(),
                     "input_tokens"
@@ -169,6 +180,91 @@ impl Usage {
                     && nonzero_usage(v)
             })
         });
+        if input == "prompt_tokens"
+            && value
+                .as_object()
+                .is_some_and(|fields| fields.keys().any(|key| is_token_breakdown(key)))
+        {
+            crate::diag::note(
+                if self.unpriced {
+                    crate::diag::CLASS_REJECT
+                } else {
+                    crate::diag::CLASS_HOST
+                },
+                self.unpriced,
+                None,
+                None,
+                None,
+                None,
+                "usage_breakdown",
+                if self.unpriced {
+                    "unpriced_or_inconsistent"
+                } else {
+                    "included_in_token_totals"
+                },
+                started,
+            );
+        }
+    }
+}
+
+fn is_token_breakdown(key: &str) -> bool {
+    matches!(
+        key,
+        "prompt_cache_hit_tokens"
+            | "prompt_cache_miss_tokens"
+            | "prompt_tokens_details"
+            | "completion_tokens_details"
+    )
+}
+
+fn included_token_breakdown(usage: &Value, key: &str) -> bool {
+    let prompt = usage["prompt_tokens"].as_u64();
+    let hit = usage["prompt_cache_hit_tokens"].as_u64();
+    let miss = usage["prompt_cache_miss_tokens"].as_u64();
+    // A split is evidence only when both counters and their total occur in the
+    // same response/stream usage snapshot; never borrow totals from older chunks.
+    let split_present = usage.get("prompt_cache_hit_tokens").is_some()
+        || usage.get("prompt_cache_miss_tokens").is_some();
+    let split_valid = match (prompt, hit, miss) {
+        (Some(total), Some(hit), Some(miss)) => hit.checked_add(miss) == Some(total),
+        _ => false,
+    };
+    match key {
+        "prompt_cache_hit_tokens" | "prompt_cache_miss_tokens" => {
+            split_valid
+                && usage.get("prompt_tokens_details").is_none_or(|details| {
+                    details
+                        .get("cached_tokens")
+                        .is_none_or(|cached| cached.as_u64() == hit)
+                })
+        }
+        "prompt_tokens_details" | "completion_tokens_details" => {
+            let (field, total) = if key == "prompt_tokens_details" {
+                if split_present && !split_valid {
+                    return false;
+                }
+                ("cached_tokens", prompt)
+            } else {
+                ("reasoning_tokens", usage["completion_tokens"].as_u64())
+            };
+            let Some(total) = total else { return false };
+            usage[key].as_object().is_some_and(|details| {
+                details.iter().all(|(name, value)| {
+                    if name == field {
+                        value.as_u64().is_some_and(|n| {
+                            n <= total
+                                && (key != "prompt_tokens_details"
+                                    || !split_present
+                                    || Some(n) == hit)
+                        })
+                    } else {
+                        !nonzero_usage(value)
+                    }
+                })
+            })
+        }
+        _ => false,
     }
 }
 
@@ -2471,6 +2567,100 @@ mod server_tool_tests {
 #[cfg(test)]
 mod evaluation_model_identity_tests {
     use super::*;
+    fn detailed_usage(hit: u64, miss: u64, reasoning: u64, output: u64) -> Value {
+        serde_json::json!({
+            "prompt_tokens":hit + miss,"completion_tokens":output,
+            "prompt_cache_hit_tokens":hit,"prompt_cache_miss_tokens":miss,
+            "prompt_tokens_details":{"cached_tokens":hit},
+            "completion_tokens_details":{"reasoning_tokens":reasoning}
+        })
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn usage_subdivisions_preserve_totals_and_unknown_charges(
+            hit in 0u64..1_000_000, miss in 0u64..1_000_000,
+            reasoning in 0u64..1_000_000, text in 0u64..1_000_000, extra in 1u64..1_000_000,
+        ) {
+            let mut value = detailed_usage(hit, miss, reasoning, reasoning + text);
+            let usage = Usage::from_value(&value, "prompt_tokens", "completion_tokens");
+            proptest::prop_assert!(!usage.unpriced);
+            proptest::prop_assert_eq!(usage.prompt_tokens, hit + miss);
+            proptest::prop_assert_eq!(usage.completion_tokens, reasoning + text);
+            value["prompt_tokens_details"]["audio_tokens"] = extra.into();
+            let mut usage = Usage::from_value(&value, "prompt_tokens", "completion_tokens");
+            usage.observe(&detailed_usage(hit, miss, reasoning, reasoning + text), "prompt_tokens", "completion_tokens");
+            proptest::prop_assert!(usage.unpriced, "later valid totals cannot erase an unknown charge");
+        }
+
+        #[test]
+        fn contradictory_subdivisions_never_release_unknown_costs(hit in 0u64..1_000_000, miss in 0u64..1_000_000, output in 0u64..1_000_000) {
+            let valid = detailed_usage(hit, miss, 0, output);
+            for (field, replacement) in [
+                ("prompt_cache_hit_tokens", serde_json::json!(hit + 1)),
+                ("prompt_cache_miss_tokens", Value::Null),
+                ("prompt_tokens_details", serde_json::json!({"cached_tokens":hit + 1})),
+                ("completion_tokens_details", serde_json::json!({"reasoning_tokens":output + 1})),
+                ("completion_tokens_details", serde_json::json!({"new_charge":1})),
+                ("completion_tokens_details", serde_json::json!({"reasoning_tokens":"0"})),
+            ] {
+                let mut value = valid.clone();
+                value[field] = replacement;
+                proptest::prop_assert!(Usage::from_value(&value, "prompt_tokens", "completion_tokens").unpriced);
+            }
+        }
+    }
+
+    #[test]
+    fn usage_breakdowns_overflow_and_missing_snapshot_totals_stay_unknown() {
+        for value in [
+            serde_json::json!({"prompt_tokens":0,"completion_tokens":1,"prompt_cache_hit_tokens":u64::MAX,"prompt_cache_miss_tokens":1}),
+            serde_json::json!({"prompt_tokens_details":{"cached_tokens":1}}),
+            serde_json::json!({"completion_tokens_details":{"reasoning_tokens":1}}),
+            serde_json::json!({"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":1}),
+        ] {
+            assert!(Usage::from_value(&value, "prompt_tokens", "completion_tokens").unpriced);
+        }
+    }
+
+    #[test]
+    fn streamed_usage_breakdowns_match_nonstreaming_totals() {
+        let mut fold = openai_shape::SseFold::default();
+        let mut sink = |_delta: &StreamDelta| true;
+        let value = serde_json::json!({"model":"deepseek-flash","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":detailed_usage(5, 11, 4, 10)});
+        fold.data(&value.to_string(), &mut sink).unwrap();
+        let usage = fold.finish().unwrap().usage;
+        assert!(!usage.unpriced);
+        assert_eq!((usage.prompt_tokens, usage.completion_tokens), (16, 10));
+    }
+    #[test]
+    fn deepseek_usage_breakdowns_do_not_create_extra_billing_dimensions() {
+        // 2026-09-28 live preflight incident: documented subdivisions of totals
+        // must not block the next request under a cache-miss upper-bound tariff.
+        // Source: api-docs.deepseek.com/api/create-chat-completion (usage schema).
+        let response = openai_shape::from_response(&serde_json::json!({
+            "model":"deepseek-flash",
+            "choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],
+            "usage":{
+                "prompt_tokens":16,"completion_tokens":10,"total_tokens":26,
+                "prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":16,
+                "prompt_tokens_details":{"cached_tokens":0},
+                "completion_tokens_details":{"reasoning_tokens":4}
+            }
+        }))
+        .unwrap();
+        assert!(
+            !response.usage.unpriced,
+            "token breakdowns are already inside the two billed totals"
+        );
+        assert_eq!(
+            (
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens
+            ),
+            (16, 10)
+        );
+    }
     #[test]
     fn paid_preflight_reads_supplier_model_identity_not_only_requested_slot() {
         let response=openai_shape::from_response(&serde_json::json!({

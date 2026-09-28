@@ -70,12 +70,11 @@ impl Workbench {
             "fs_write",
             json!({"path":secret,"content":"changed"}),
         ));
-        let _ = worker.registry.call(
-            &worker.db,
-            &ctx,
-            "fs_read",
-            json!({"path":".hexagon/evaluation-worker"}),
-        );
+        // Ticket 24: agents can no longer read private state. This host-owned
+        // probe supplies the read prerequisite itself so it still exercises the
+        // non-overridable write denial, rather than failing on "read first".
+        ctx.reads
+            .record(&root.canonicalize()?.join(".hexagon/evaluation-worker"));
         let marker_denied = denied(worker.registry.call(
             &worker.db,
             &ctx,

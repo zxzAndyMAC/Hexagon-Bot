@@ -193,6 +193,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0047_experience_role_skills",
         include_str!("../migrations/0047_experience_role_skills.sql"),
     ),
+    (
+        "0048_evaluation_billing",
+        include_str!("../migrations/0048_evaluation_billing.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

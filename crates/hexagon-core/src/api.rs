@@ -1056,6 +1056,7 @@ impl Workbench {
             mcp_timeout: self.mcp_timeout,
             action_key: None,
             write_lease: None,
+            native_effect: None,
             tasks: self.tasks.clone(),
             subagent: None,
             websearch: self.websearch.clone(),
@@ -1281,6 +1282,18 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
+        self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], true)
+    }
+
+    fn run_turn_agent_with_history(
+        &self,
+        aid: &str,
+        input: &str,
+        attachments: &[crate::trace::AttachRef],
+        plan_first: bool,
+        history: &[crate::provider::Message],
+        followup: bool,
+    ) -> Result<TurnOutcome, ApiError> {
         // reliability 06: resumed work retains its stored instance ID. Re-read
         // its current role only for templates; stale/deleted IDs cannot retarget.
         let current_role = self.instance_role(aid)?;
@@ -1348,7 +1361,7 @@ impl Workbench {
             let text = turn::prompt::role_layer_text(
                 role,
                 &def.duty,
-                &def.globs,
+                &ctx.owned_globs,
                 &def.skills,
                 stage.map(|s| (s.name.as_str(), s.due.as_slice())),
             );
@@ -1361,7 +1374,7 @@ impl Workbench {
         // run_turn_opts 的入口（run_turn/dispatch/撞限放行）自动流式。
         let mut guard = self.delta_hook.lock().unwrap();
         let sink = guard.as_mut().map(|h| &mut **h as &mut turn::DeltaSink<'_>);
-        let run = turn::run_turn_streaming(
+        let run = turn::run_turn_streaming_with_history(
             &self.db,
             provider.as_ref(),
             &self.registry,
@@ -1371,6 +1384,7 @@ impl Workbench {
             attachments,
             plan_first,
             sink,
+            history,
         );
         // 票 08：回合扫尾——本轮若落了带回放证据的待盖章提案,
         // 按包旋钮跑判定层。判定失败不挡回合（judge 是建议不是闸）。
@@ -1425,7 +1439,10 @@ impl Workbench {
         let outcome = run?;
         // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
         // 续派失败不推翻已经说完的这一回合——否则脚本耗尽会让成功的回复变成错误。
-        if matches!(outcome, TurnOutcome::Finished) {
+        // 2026-09-28 evaluation issue 23: the persisted evaluation cursor owns
+        // its next role. Automatic handoff here re-dispatched the stage lead
+        // after a reviewer, hiding nested permission waits from that cursor.
+        if followup && matches!(outcome, TurnOutcome::Finished) {
             if let Err(e) = self.continue_after_turn(aid, role, watermark) {
                 log::warn!("continue after {role}: {e}");
             }
@@ -1452,6 +1469,16 @@ impl Workbench {
         aid: &str,
         input: &str,
         attachments: &[crate::trace::AttachRef],
+    ) -> Result<TurnOutcome, ApiError> {
+        self.dispatch_instance_with_followup(aid, input, attachments, true)
+    }
+
+    fn dispatch_instance_with_followup(
+        &self,
+        aid: &str,
+        input: &str,
+        attachments: &[crate::trace::AttachRef],
+        followup: bool,
     ) -> Result<TurnOutcome, ApiError> {
         let role = self.instance_role(aid)?;
         // reliability 07: unavailable model used to wake a sleeping instance and
@@ -1503,7 +1530,7 @@ impl Workbench {
             None,
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
-        self.run_turn_agent(aid, input, attachments, true)
+        self.run_turn_agent_with_history(aid, input, attachments, true, &[], followup)
     }
 
     /// 负责人发言的下一手（票 08 / 票 09 / ADR 0065）。
@@ -3264,6 +3291,7 @@ mod evaluation_isolation;
 mod evaluation_isolation_tests;
 #[cfg(test)]
 mod evaluation_plan_tests;
+mod evaluation_resume;
 mod evaluation_runner;
 #[cfg(test)]
 mod evaluation_tests;
@@ -3410,3 +3438,9 @@ mod evaluation_candidate;
 mod evaluation_live;
 #[cfg(test)]
 mod evaluation_live_tests;
+
+#[cfg(test)]
+mod evaluation_billing_tests;
+
+#[cfg(test)]
+mod evaluation_review_tests;

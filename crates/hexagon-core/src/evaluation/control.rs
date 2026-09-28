@@ -317,6 +317,26 @@ fn binding(root: &Path) -> io::Result<Option<Binding>> {
     }
     Ok(Some(binding))
 }
+// Ticket 25: scope comes from the owning host, never model input or worker files.
+pub(crate) fn task_write_paths(root: &Path) -> io::Result<Vec<String>> {
+    let b = binding(root)?.ok_or_else(|| err("evaluation binding required"))?;
+    let db = Db::open_current(Path::new(&b.host).join(".hexagon/state.db")).map_err(err)?;
+    let run = super::read(&db, &b.run_id)?;
+    validate_owner(Path::new(&b.host), &run)?;
+    if Path::new(&run.workspace).canonicalize()? != root.canonicalize()? {
+        return Err(err("evaluation task workspace mismatch"));
+    }
+    let json: String = db
+        .conn()
+        .query_row(
+            "SELECT task_json FROM evaluation_runs WHERE id=?1",
+            [&b.run_id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    let task: super::EvaluationTask = serde_json::from_str(&json)?;
+    Ok(task.allowed_paths)
+}
 pub(crate) fn validate_owner(host: &Path, run: &EvaluationResult) -> io::Result<()> {
     let worker = Path::new(&run.workspace);
     let b = binding(worker)?.ok_or_else(|| err("evaluation worker binding missing"))?;
@@ -451,9 +471,13 @@ pub(crate) fn watch(
     }
     let root = root.to_path_buf();
     let (stop, receiver) = std::sync::mpsc::channel();
+    #[cfg(test)]
+    let authority = super::budget::paid_fixture();
     let thread = std::thread::Builder::new()
         .name("evaluation-stop-watch".into())
         .spawn(move || {
+            #[cfg(test)]
+            super::budget::inherit_paid_fixture(authority);
             while matches!(
                 receiver.recv_timeout(std::time::Duration::from_millis(100)),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout)

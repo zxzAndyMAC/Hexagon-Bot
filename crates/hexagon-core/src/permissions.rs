@@ -539,7 +539,13 @@ fn pre_memory_guards(
     // False negative needs an owner scope edit; false positive writes outside it.
     if violates_ownership(tool_name, input, ctx) {
         return Ok(GuardVerdict::Deny {
-            reason: "path outside ownership".into(),
+            // Ticket 26: UX guessed three paths because the rejection omitted
+            // the permitted scope. Feedback must guide a valid retry, never
+            // suggest that owner approval can bypass this hard boundary.
+            reason: format!(
+                "path outside ownership. Allowed write paths: {}. artifact_write uses a logical path without the .hexagon/ prefix; choose a matching path.",
+                ctx.owned_globs.join(", ")
+            ),
             layer: "builtin_deny",
         });
     }

@@ -66,16 +66,17 @@ impl Tool for FsRead {
     }
     fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
         let p = input["path"].as_str().unwrap_or("");
-        readable_repo_path(&ctx.repo_root, p)
+        agent_readable_repo_path(&ctx.repo_root, p)
             .err()
             .map(|_| "content read policy denied this path".into())
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let p = readable_repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
+        let p = agent_readable_repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
         // 指纹取在读之前：读与取指纹之间若有人改文件，指纹是旧的，下次编辑
         // 判「读后已变」——偏差落在误判一侧（readstate 代价模型）。
         let before = readstate::stamp(&p);
         let bytes = std::fs::read(&p)?;
+        ctx.observe_file(&p, &bytes, false);
         // 票 02（prompt-engineering）：父代理读过才可改。子代理不能写盘，
         // 它的读不代父记账——父 ctx 与子代理共享 Arc，记了就等于代读。
         if ctx.subagent.is_none() {
@@ -275,6 +276,7 @@ impl Tool for FsWrite {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&p, str_arg(input, "content")?)?;
+        ctx.observe_file(&p, str_arg(input, "content")?.as_bytes(), true);
         ctx.reads.record(&p);
         Ok(
             json!({"written": p.strip_prefix(ctx.repo_root.canonicalize().unwrap_or_else(|_| ctx.repo_root.clone())).unwrap_or(&p)}),
@@ -297,7 +299,7 @@ impl Tool for FsPatch {
 - Do not use: for new files (fs_write) or stage deliverables (artifact_write).
 - Read the file with fs_read first; patches to unread files, or files changed since your last read, are rejected.
 - `old` must match exactly once, including whitespace and indentation. If it matches several times, add surrounding lines to make it unique, or set `replace_all: true` to change every occurrence. Keep `old` small but unique: usually 2–4 adjacent lines.
-- Errors: "not found" means your copy of the text is stale or mistyped — re-read the file; "N matches" means `old` is ambiguous. Writes outside your owned paths raise a pending card."#
+- Errors: "not found" means your copy of the text is stale or mistyped — re-read the file; "N matches" means `old` is ambiguous. Writes outside your owned paths are denied; choose a path within your ownership."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -344,7 +346,8 @@ impl Tool for FsPatch {
         } else {
             content.replacen(old, new, 1)
         };
-        std::fs::write(&p, patched)?;
+        std::fs::write(&p, &patched)?;
+        ctx.observe_file(&p, patched.as_bytes(), true);
         ctx.reads.record(&p);
         let n = if replace_all { matches } else { 1 };
         // exec-cards 票 01（spec D6）：old/new 行数即替换区间的增删行——
@@ -386,7 +389,9 @@ impl Tool for FsFind {
         RiskClass::Read
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let hits = crate::search::find_by_name(&ctx.repo_root, str_arg(input, "pattern")?);
+        let root = ctx.repo_root.canonicalize()?;
+        let hits = crate::search::find_by_name(&root, str_arg(input, "pattern")?);
+        ctx.observe_native_effect(effects::NativeEffect::RepositorySearch);
         Ok(json!({"count": hits.len(), "paths": hits}))
     }
 }
@@ -400,7 +405,7 @@ impl Tool for FsGrep {
     fn description(&self) -> &str {
         r#"Search file contents for a literal substring.
 - Use when: you know an exact identifier, string or error message.
-- Do not use: for regular expressions (the query is literal text, not a regex), for questions about meaning (sem_search), or through bash grep/rg.
+- Do not use: for regular expressions (the query is literal text, not a regex), for approximate text similarity (sem_search), or through bash grep/rg.
 - Returns path, line number and line text for up to 100 hits; ignored and binary files are skipped. Hitting 100 means the query is too broad — make it more specific."#
     }
     fn input_schema(&self) -> Value {
@@ -412,7 +417,9 @@ impl Tool for FsGrep {
         RiskClass::Read
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let hits = crate::search::grep_content(&ctx.repo_root, str_arg(input, "query")?);
+        let root = ctx.repo_root.canonicalize()?;
+        let hits = crate::search::grep_content(&root, str_arg(input, "query")?);
+        ctx.observe_native_effect(effects::NativeEffect::RepositorySearch);
         Ok(json!({"count": hits.len(), "hits": hits}))
     }
 }
@@ -446,7 +453,27 @@ impl Tool for Bash {
     fn risk(&self) -> RiskClass {
         RiskClass::Exec
     }
-    fn builtin_deny(&self, input: &Value, _ctx: &ToolContext) -> Option<String> {
+    fn builtin_deny(&self, input: &Value, ctx: &ToolContext) -> Option<String> {
+        // Ticket 25: returning a task/session handle does not bound later
+        // effects. Evaluation commands must finish within this action receipt.
+        if ctx.repo_root.join(".hexagon/evaluation-worker").exists()
+            && (input["background"] == true || input.get("session").is_some())
+        {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "evaluation_shell",
+                "foreground_required",
+                std::time::Instant::now(),
+            );
+            return Some(
+                "evaluation shell requires a foreground command without a named session".into(),
+            );
+        }
         let cmd = input["cmd"].as_str().unwrap_or("");
         bash_hits_credentials(cmd).then(|| "command touches credential material".into())
     }
@@ -638,6 +665,24 @@ impl Tool for ArtifactWrite {
                 }
             }
         }
+        if ctx.native_effect.is_some() {
+            let observed = ctx
+                .action_key
+                .as_deref()
+                .and_then(|action| {
+                    crate::artifacts::materialization_receipt(db, ctx, action)
+                        .ok()
+                        .flatten()
+                })
+                .and_then(|_| {
+                    crate::artifacts::evidence::capture(db, &ctx.repo_root, &ctx.project_id, &id)
+                        .ok()
+                        .flatten()
+                });
+            if let Some(evidence) = observed {
+                ctx.observe_native_effect(effects::NativeEffect::ArtifactWrite { evidence });
+            }
+        }
         Ok(receipt)
     }
 }
@@ -666,15 +711,40 @@ impl Tool for ArtifactRead {
             ".hexagon/{}",
             input["path"].as_str().unwrap_or("").trim_start_matches('/')
         );
-        FsRead.builtin_deny(&json!({"path":rel}), ctx)
+        readable_repo_path(&ctx.repo_root, &rel)
+            .err()
+            .map(|_| "content read policy denied this artifact".into())
     }
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         use sha2::Digest;
         let path = str_arg(input, "path")?;
         let rel = format!(".hexagon/{}", path.trim_start_matches('/'));
         let p = readable_repo_path(&ctx.repo_root, &rel)?;
-        let before =
-            crate::artifacts::evidence::for_path(db, &ctx.repo_root, &ctx.project_id, path)?;
+        let evaluation = ctx.repo_root.join(".hexagon/evaluation-worker").is_file();
+        // Check physical identity before evidence capture itself reads bytes.
+        let before = if evaluation && p != ctx.repo_root.canonicalize()?.join(&rel) {
+            None
+        } else {
+            crate::artifacts::evidence::for_path(db, &ctx.repo_root, &ctx.project_id, path)?
+        };
+        // 2026-09-28 eval-2: artifact_read must not be a second fs_read into
+        // host state. A registered artifact is checked before any bytes are read.
+        if evaluation && before.is_none() {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "content_read",
+                "evaluation_artifact_unregistered",
+                std::time::Instant::now(),
+            );
+            return Err(ToolError::BadInput(
+                "evaluation artifact is not registered or current".into(),
+            ));
+        }
         let bytes = std::fs::read(&p)?;
         let after = before
             .as_ref()
@@ -690,6 +760,11 @@ impl Tool for ArtifactRead {
                 && e.digest == format!("{:x}", sha2::Sha256::digest(&bytes))
                 && crate::artifacts::evidence::matches(Some(e), after.as_ref())
         });
+        if let Some(evidence) = &review_target {
+            ctx.observe_native_effect(effects::NativeEffect::ArtifactRead {
+                evidence: evidence.clone(),
+            });
+        }
         if let Some(s) = &ctx.subagent {
             s.reads.lock().unwrap().push(rel);
         }
@@ -1068,7 +1143,8 @@ impl Tool for LoadSkill {
         }
         let skill = loader.get(&name).filter(|_| !muted.contains(&name));
         match skill {
-            Some(s) => Ok(json!({
+            Some(s) => {
+                let output = json!({
                 "name": s.name,
                 "instructions": crate::experience::loading_view(_db, ctx, &name, &s.instructions)
                     .map_err(|e| ToolError::BadInput(e.to_string()))?,
@@ -1076,7 +1152,18 @@ impl Tool for LoadSkill {
                 "digest": if s.path.as_os_str().is_empty() { None } else {
                     crate::tools::writeguard::digest(&s.path.join("SKILL.md"))?
                 },
-            })),
+                });
+                ctx.observe_native_effect(effects::NativeEffect::SkillLoad {
+                    name: s.name.clone(),
+                    source: if s.path.as_os_str().is_empty() {
+                        format!("builtin:{}", s.name)
+                    } else {
+                        s.path.to_string_lossy().into_owned()
+                    },
+                    source_digest: s.source_digest.clone(),
+                });
+                Ok(output)
+            }
             None => Err(ToolError::BadInput(format!(
                 "unknown skill: {name}; available: {:?}",
                 loader.visible_names(&muted)
