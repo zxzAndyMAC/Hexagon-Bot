@@ -1,3 +1,16 @@
+import type { ExperienceSourceRequest } from './gen/ExperienceSourceRequest'
+import type { ExperienceSourceDocument } from './gen/ExperienceSourceDocument'
+import type { ExperienceHistoryRequest } from './gen/ExperienceHistoryRequest'
+import type { ExperienceHistoryPage } from './gen/ExperienceHistoryPage'
+import type { ExperienceCuration } from './gen/ExperienceCuration'
+import type { ExperienceRevocation } from './gen/ExperienceRevocation'
+import type { ProjectSkillDocument } from './gen/ProjectSkillDocument'
+import type { ExperienceLimits } from './gen/ExperienceLimits'
+import type { ExperienceRecovery } from './gen/ExperienceRecovery'
+import type { ExperienceEntryView } from './gen/ExperienceEntryView'
+import type { ExperienceSubmission } from './gen/ExperienceSubmission'
+import type { ExperienceRequest } from './gen/ExperienceRequest'
+import type { ExperienceProposalView } from './gen/ExperienceProposalView'
 import type { DataBoundary } from './gen/DataBoundary'
 // 核 API 接缝：Tauri 环境走 invoke；浏览器开发环境用内置 mock 数据。
 // UI 的唯一通道 = 这些命令 + 事件推送，没有旁路。类型对齐 api.rs 的 JSON 形状。
@@ -264,6 +277,18 @@ export const api = {
   adjudicateFlag: (qid: string, agree: boolean) =>
     call<AdjudicateOutcome>('adjudicate_flag', { qid, agree }),
   proposals: () => call<ProposalRow[]>('proposals'),
+  curateLegacyExperience: (request: ExperienceCuration) => call<ExperienceSubmission>('curate_legacy_experience', { request }),
+  revokeExperience: (request: ExperienceRevocation) => call<ExperienceEntryView>('revoke_experience', { request }),
+  projectSkillDocument: (skill: string) => call<ProjectSkillDocument>('project_skill_document', { skill }),
+  saveProjectSkillDocument: (document: ProjectSkillDocument) => call<ProjectSkillDocument>('save_project_skill_document', { document }),
+  experienceLimits: () => call<ExperienceLimits>('experience_limits'),
+  setExperienceLimits: (limits: ExperienceLimits) => call<ExperienceLimits>('set_experience_limits', { limits }),
+  recoverExperience: () => call<ExperienceRecovery[]>('recover_experience'),
+  experienceSourceDocument: (request: ExperienceSourceRequest) => call<ExperienceSourceDocument>('experience_source_document', { request }),
+  experienceHistory: (request: ExperienceHistoryRequest) => call<ExperienceHistoryPage>('experience_history', { request }),
+  experienceEntries: (skill: string) => call<ExperienceEntryView[]>('experience_entries', { skill }),
+  experienceProposal: (proposalId: string) => call<ExperienceProposalView | null>('experience_proposal', { proposalId }),
+  proposeExperienceEntry: (agentId: string, request: ExperienceRequest) => call<ExperienceSubmission>('propose_experience_entry', { agentId, request }),
   // ui-audit-2 票 08：owner 对 in_review 提案的裁决（署名 owner——复审
   //  agent 从无工具可达 review()，唯一裁决面就是负责人）。
   reviewProposal: (proposalId: string, pass: boolean, reason: string) =>
@@ -1005,6 +1030,14 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'sleep_all':
     case 'send_message':
       return null as T
+    case 'project_skill_document': return { project_root: '/mock', skill: String(args?.skill), digest: 'mock', content: '# Project skill' } as T
+    case 'save_project_skill_document': return args?.document as T
+    case 'experience_limits': return { entry_chars: 2000, load_count: 10, load_chars: 8000 } as T
+    case 'set_experience_limits': return args?.limits as T
+    case 'recover_experience': return [] as T
+    case 'experience_history': return { items: [], next_cursor: null } as T
+    case 'experience_entries': return [] as T
+    case 'experience_proposal': return null as T
     case 'proposals':
       return [
         { id: 'p2', artifact_path: 'proposals/p2.md', surface: 'pack_copy', target: 'grants', status: 'awaiting_stamp', author: 'a4' },

@@ -295,6 +295,7 @@ impl Registry {
         r.register(ArtifactWrite);
         r.register(ArtifactRead);
         r.register(LoadSkill);
+        r.register(ProposeExperience);
         r.register(WebFetch);
         r.register(crate::git::GitBaselineMerge);
         r

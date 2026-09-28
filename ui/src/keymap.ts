@@ -24,9 +24,24 @@ export type ActionId =
   | 'retryAction'
   | 'requestException'
   | 'acceptException'
+  | 'curateLegacyExperience'
+  | 'rollbackExperience'
+  | 'revokeExperience'
+  | 'editProjectSkill'
+  | 'saveProjectSkill'
+  | 'saveExperienceLimits'
+  | 'recoverExperience'
+  | 'nextExperiencePage'
+  | 'refreshExperienceHistory'
+  | 'openExperienceSource'
+  | 'openRelatedExperience'
   | 'openPolicyReport'
 
 const DEFAULTS: Record<ActionId, string> = {
+  openRelatedExperience: 'alt+mod+shift+o',
+  openExperienceSource: 'alt+mod+o',
+  refreshExperienceHistory: 'alt+mod+shift+h',
+  nextExperiencePage: 'alt+mod+ArrowDown',
   approve: 'mod+Enter',
   reject: 'mod+Backspace',
   commandPalette: 'mod+K',
@@ -56,6 +71,13 @@ const DEFAULTS: Record<ActionId, string> = {
   requestException: 'alt+mod+e',
   acceptException: 'alt+mod+shift+Enter',
   openPolicyReport: 'alt+mod+p',
+  recoverExperience: 'alt+mod+g',
+  saveExperienceLimits: 'alt+mod+l',
+  editProjectSkill: 'alt+mod+shift+e',
+  revokeExperience: 'alt+mod+shift+Backspace',
+  rollbackExperience: 'alt+mod+shift+r',
+  curateLegacyExperience: 'alt+mod+shift+c',
+  saveProjectSkill: 'alt+mod+shift+s',
 }
 
 // navigator.platform 已弃用（MDN，ui-audit 票 11）：优先 userAgentData；
@@ -88,6 +110,17 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'retryAction', labelKey: 'cards.retryAction' },
   { id: 'requestException', labelKey: 'exceptions.request' },
   { id: 'acceptException', labelKey: 'exceptions.accept' },
+  { id: 'curateLegacyExperience', labelKey: 'experience.curate' },
+  { id: 'rollbackExperience', labelKey: 'experience.withdraw' },
+  { id: 'revokeExperience', labelKey: 'experience.revoke' },
+  { id: 'editProjectSkill', labelKey: 'skills.edit' },
+  { id: 'saveProjectSkill', labelKey: 'skills.save' },
+  { id: 'saveExperienceLimits', labelKey: 'experience.saveLimits' },
+  { id: 'nextExperiencePage', labelKey: 'experience.nextPage' },
+  { id: 'refreshExperienceHistory', labelKey: 'experience.refreshHistory' },
+  { id: 'openExperienceSource', labelKey: 'experience.openSource' },
+  { id: 'openRelatedExperience', labelKey: 'experience.openRelated' },
+  { id: 'recoverExperience', labelKey: 'experience.recover' },
   { id: 'openPolicyReport', labelKey: 'policy.report' },
 ]
 

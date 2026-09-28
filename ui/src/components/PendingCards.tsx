@@ -1,3 +1,4 @@
+import { ExperienceProposal } from './ExperienceProposal'
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -456,6 +457,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
             </div>
           )
         })()}
+        {p.surface === 'skill' && typeof p.proposal_id === 'string' && <ExperienceProposal proposalId={p.proposal_id} />}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           {(() => {
             // 票 07（P2-15）：逆建议留痕——judge=stamp 时驳回、judge=reject 时确认，
@@ -658,6 +660,7 @@ function InReviewCards() {
             {t(`cards.surface_${r.surface}`)} · <span className="mono">{r.target}</span>
             <span className="dim3" style={{ marginLeft: 8 }}>{t('cards.byAuthor')} {r.author}</span>
           </div>
+          {r.surface === 'skill' && <ExperienceProposal proposalId={r.id} />}
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <Btn primary onClick={() => api.reviewProposal(r.id, true, '')}>{t('cards.reviewPass')}</Btn>
             <input

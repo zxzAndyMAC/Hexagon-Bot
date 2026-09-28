@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { bindingFor, formatBinding, matches } from '../keymap'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ArtifactRow } from '../api'
 import { useUiStore } from '../store'
@@ -17,16 +18,24 @@ export function ArtifactTab({ path }: { path: string }) {
   const { askConfirm, pushToast } = useUiStore()
   // ui-audit-2 票 08：本路径若有 active 提案 → 露「回滚提案」入口
   // （此前 rollbackProposal 命令死接线，cards.rollback 是死 i18n 键）。
+  const rollbackButton = useRef<HTMLButtonElement>(null)
+  const [experienceProposal, setExperienceProposal] = useState(false)
   const [policyRecovery, setPolicyRecovery] = useState(false)
   const [activeProposal, setActiveProposal] = useState<string | null>(null)
   useEffect(() => {
+    let current = true
     api.proposals()
-      .then((all) => {
+      .then(async (all) => {
+        if (!current) return
         setPolicyRecovery(all.some((r) => r.artifact_path === path && r.recovery_pending))
         const hit = all.find((r) => r.status === 'active' && r.artifact_path === path)
+        const experience = hit?.surface === 'skill' ? await api.experienceProposal(hit.id) : null
+        if (!current) return
+        setExperienceProposal(!!experience)
         setActiveProposal(hit?.id ?? null)
       })
-      .catch(() => { setActiveProposal(null); setPolicyRecovery(false) })
+      .catch(() => { if (current) { setActiveProposal(null); setPolicyRecovery(false); setExperienceProposal(false) } })
+    return () => { current = false }
   }, [path, artifacts])
   // 同路径版本链（升序）
   const versions = useMemo(
@@ -73,7 +82,10 @@ export function ArtifactTab({ path }: { path: string }) {
   )
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div onKeyDown={(e) => {
+      const state = useUiStore.getState()
+      if (experienceProposal && !e.repeat && state.modalScope === 'workbench' && !state.confirmReq && matches(e.nativeEvent, bindingFor('rollbackExperience'))) { e.preventDefault(); e.stopPropagation(); rollbackButton.current?.click() }
+    }} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="row-line" style={{ padding: '8px 14px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span className="mono" style={{ fontWeight: 560, fontSize: 13 }}>{path}</span>
         {latest && <span className="chip">{latest.kind}</span>}
@@ -87,14 +99,15 @@ export function ArtifactTab({ path }: { path: string }) {
         {policyRecovery && <span role="alert" className="chip warn">{t('policy.recovery')}</span>}
         {activeProposal && (
           <button
+            ref={rollbackButton}
             className="btn danger"
             style={{ fontSize: 11, padding: '2px 8px' }}
             disabled={policyRecovery}
-            title={t('cards.rollbackHint')}
+            title={experienceProposal ? `${t('experience.withdraw')} (${formatBinding(bindingFor('rollbackExperience'))})` : t('cards.rollbackHint')}
             onClick={() =>
               askConfirm({
                 title: t('cards.rollbackTitle', { id: activeProposal }),
-                body: t('cards.rollbackBody'),
+                body: t(experienceProposal ? 'experience.withdrawBody' : 'cards.rollbackBody'),
                 danger: true,
                 confirmLabel: t('cards.rollback'),
                 run: () =>
@@ -105,7 +118,7 @@ export function ArtifactTab({ path }: { path: string }) {
               })
             }
           >
-            {t('cards.rollback')}
+            {t(experienceProposal ? 'experience.withdraw' : 'cards.rollback')}
           </button>
         )}
         {isMd && mode === 'content' && (

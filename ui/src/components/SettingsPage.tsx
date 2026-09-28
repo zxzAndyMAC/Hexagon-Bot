@@ -1,3 +1,5 @@
+import type { ProjectSkillDocument } from '../gen/ProjectSkillDocument'
+import { ExperienceEntries } from './ExperienceEntries'
 // 设置整页（票 29）：工作台整体换成设置页，不是弹层。
 // 左 nav 分区：通用/键盘/团队/模型与凭据/权限/技能/MCP 服务/自治/用量/日志/关于。
 // 「日志」（diagnostic-records 票 01）：诊断开关在这里，通用页不再放。
@@ -8,7 +10,7 @@ import { useTranslation } from 'react-i18next'
 import i18n, { SUPPORTED, setLang, type Locale } from '../i18n'
 import { useUiStore, type ThemePref } from '../store'
 import { api, errText, isTauri, type DiagRecord, type ExtMcpRow, type ExtSkillRow, type McpEntryRow, type McpServiceRow, type PermissionRuleRow, type ProvidersView, type RoleDef, type RoleTemplate, type SkillRow } from '../api'
-import { ACTIONS, bindingFor, conflictFor, formatBinding, isMac, normalizeEvent, resetBinding, setBinding, type ActionId } from '../keymap'
+import { ACTIONS, bindingFor, conflictFor, formatBinding, isMac, matches, normalizeEvent, resetBinding, setBinding, type ActionId } from '../keymap'
 import { PracticeGround } from './PracticeGround'
 import { PromptsSection } from './PromptsSection'
 import { Icon } from './Icon'
@@ -523,6 +525,9 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   const [files, setFiles] = useState<string[]>([])
   const [sel, setSel] = useState('SKILL.md')
   const [content, setContent] = useState('')
+  const [readError, setReadError] = useState('')
+  const [readRevision, setReadRevision] = useState(0)
+  const [projectDocument, setProjectDocument] = useState<ProjectSkillDocument | null>(null)
   const [editing, setEditing] = useState(false)
   const [desc, setDesc] = useState(skill.description)
   const [body, setBody] = useState('')
@@ -536,10 +541,33 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   }, [skill.name])
 
   useEffect(() => {
+    // Governance 01: an unreadable original is not an empty successful read;
+    // a delayed response for a previous file must not replace the current one.
+    let current = true
+    setReadError('')
+    setContent('')
     api.readSkillFile(skill.name, sel)
-      .then((c) => { setContent(c); if (sel === 'SKILL.md') { setBody(c); setOrigBody(c) } })
-      .catch(() => setContent(''))
-  }, [skill.name, sel])
+      .then((c) => {
+        if (!current) return
+        setContent(c)
+        if (sel === 'SKILL.md') { setBody(c); setOrigBody(c) }
+      })
+      .catch((e) => { if (current) setReadError(errText(e)) })
+    return () => { current = false }
+  }, [skill.name, sel, readRevision])
+
+  const toggleEdit = async () => {
+    if (editing) { setEditing(false); return }
+    if (skill.origin === 'project') {
+      try {
+        const document = await api.projectSkillDocument(skill.name)
+        setProjectDocument(document)
+        setBody(document.content)
+        setOrigBody(document.content)
+      } catch (e) { pushToast(errText(e), 'err'); return }
+    }
+    setEditing(true)
+  }
 
   const save = async () => {
     setBusy(true)
@@ -549,16 +577,26 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
       const m = body.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
       const fmName = m?.[1].match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? skill.name
       const fmDesc = m?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? desc
-      await api.saveGlobalSkill(fmName, fmDesc, m?.[2] ?? body)
+      // Governance 08: project edits never route through the global writer.
+      // The host verifies both project root and the version read on editor entry.
+      let projectFresh: ProjectSkillDocument | null = null
+      if (skill.origin === 'project') {
+        if (!projectDocument || projectDocument.skill !== skill.name) throw new Error(t('experience.changed'))
+        projectFresh = await api.saveProjectSkillDocument({ ...projectDocument, content: body })
+        setProjectDocument(projectFresh)
+      } else {
+        await api.saveGlobalSkill(fmName, fmDesc, m?.[2] ?? body)
+      }
       // 落盘后回读 SKILL.md：服务端按 frontmatter 规范化重写文件，body 与盘上
       // 文本不等价。不同步的话视图停在保存前，origBody 快照也过期——下次取消
       // 会把 pre-save 文本灌回编辑框，再保存即静默回滚。
-      const fresh = await api.readSkillFile(skill.name, 'SKILL.md')
+      const fresh = projectFresh?.content ?? await api.readSkillFile(skill.name, 'SKILL.md')
       if (sel === 'SKILL.md') setContent(fresh)
       setBody(fresh)
       setOrigBody(fresh)
       setDesc(fmDesc)
       setEditing(false)
+      setReadRevision((n) => n + 1)
       onSaved()
     } catch (e) { pushToast(errText(e), 'err') } finally { setBusy(false) }
   }
@@ -576,20 +614,29 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   // 头行与文件签钉住，滚动只发生在内容区，不把整个设置列顶出去；
   // 编辑态 textarea flex 撑高取代原 rows=14 矮框。
   return (
-    <div className="panel" style={{ padding: '12px 14px', maxHeight: '72vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="panel" onKeyDown={(e) => {
+      if (skill.origin !== 'project' || e.repeat || busy) return
+      if (matches(e.nativeEvent, bindingFor('editProjectSkill'))) { e.preventDefault(); e.stopPropagation(); void toggleEdit() }
+      else if (editing && matches(e.nativeEvent, bindingFor('saveProjectSkill'))) { e.preventDefault(); e.stopPropagation(); void save() }
+    }} style={{ padding: '12px 14px', maxHeight: '72vh', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexShrink: 0 }}>
         <strong style={{ fontSize: 13 }}>{skill.name}</strong>
         <span className={`chip ${skill.origin === 'builtin' ? '' : 'ok'}`} style={{ fontSize: 10 }}>
           {t(`skills.origin_${skill.origin}`)}
         </span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          {skill.origin === 'global' && (
-            <button className="btn" style={{ fontSize: 12 }} onClick={() => setEditing((v) => !v)}>
+          {(skill.origin === 'global' || skill.origin === 'project') && (
+            <button className="btn" style={{ fontSize: 12 }} onClick={() => void toggleEdit()} title={skill.origin === 'project' ? `${t('skills.edit')} (${formatBinding(bindingFor('editProjectSkill'))})` : undefined}>
               {editing ? t('skills.view') : t('skills.edit')}
             </button>
           )}
         </span>
       </div>
+      {readError && <p role="alert">{readError}</p>}
+      {skill.origin === 'project' && <ExperienceEntries key={skill.name} skill={skill.name} documentRevision={readRevision} onRecovered={() => { setReadRevision((n) => n + 1); onSaved() }} />}
+      {!!skill.legacy_experience_blocks && (
+        <p role="status">{t('skills.legacyExperience', { count: skill.legacy_experience_blocks })}</p>
+      )}
       {files.length > 1 && (
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8, flexShrink: 0 }}>
           {files.map((f) => (
@@ -611,6 +658,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
           </div>
           <input
             value={desc}
+            disabled={skill.origin === 'project'}
             onChange={(e) => setDesc(e.target.value)}
             className="input" style={{ fontFamily: 'inherit', flexShrink: 0 }}
           />
@@ -624,7 +672,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
             style={{ fontFamily: 'monospace', resize: 'none', flex: 1, minHeight: '40vh' }}
           />
           <div style={{ display: 'flex', gap: 8, marginTop: 8, flexShrink: 0 }}>
-            <button className="btn primary" style={{ fontSize: 12 }} disabled={busy} onClick={save}>
+            <button className="btn primary" style={{ fontSize: 12 }} disabled={busy} onClick={save} title={skill.origin === 'project' ? `${t('skills.save')} (${formatBinding(bindingFor('saveProjectSkill'))})` : undefined}>
               {t('skills.save')}
             </button>
             <button className="btn" style={{ fontSize: 12 }} disabled={busy} onClick={cancelEdit}>

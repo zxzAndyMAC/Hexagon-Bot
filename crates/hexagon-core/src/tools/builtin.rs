@@ -1070,13 +1070,56 @@ impl Tool for LoadSkill {
         match skill {
             Some(s) => Ok(json!({
                 "name": s.name,
-                "instructions": s.instructions,
+                "instructions": crate::experience::loading_view(_db, ctx, &name, &s.instructions)
+                    .map_err(|e| ToolError::BadInput(e.to_string()))?,
                 "resources_path": s.path,
+                "digest": if s.path.as_os_str().is_empty() { None } else {
+                    crate::tools::writeguard::digest(&s.path.join("SKILL.md"))?
+                },
             })),
             None => Err(ToolError::BadInput(format!(
                 "unknown skill: {name}; available: {:?}",
                 loader.visible_names(&muted)
             ))),
         }
+    }
+}
+
+/// Governance 02: models propose an explicit reviewed entry; the host owns
+/// source qualification, target validation and eventual application.
+pub struct ProposeExperience;
+impl Tool for ProposeExperience {
+    fn name(&self) -> &str {
+        "propose_experience"
+    }
+    fn description(&self) -> &str {
+        "Use when your reviewed work supports a reusable lesson for explicitly relevant project skills. Read each target skill first for its current digest. Do not use for unreviewed work, global skills, or direct activation. This submits for review and never grants permissions."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","additionalProperties":false,
+            "properties":{
+                "create_role_skill":{"type":"boolean","description":"Explicitly create or join the project role-experience skill only when your effective skill list is empty. Leave targets empty; the host binds the shared role target and author grant."},
+                "body":{"type":"string","description":"Complete reusable lesson, within the project entry limit."},"notes":{"type":"string","description":"Natural-language caveats; part of the reviewed content."},
+                "review_event":{"type":["integer","null"],"description":"Exact reviewed work event, or null for the current qualified work."},
+                "conditions":{"type":"object","description":"Optional host-matched role, stable stage-run, and relative work-path conditions.","additionalProperties":false,"properties":{
+                    "roles":{"type":"array","items":{"type":"string"}},
+                    "stages":{"type":"array","items":{"type":"string"}},
+                    "paths":{"type":"array","items":{"type":"string"}}
+                },"required":["roles","stages","paths"]},
+                "targets":{"type":"array","description":"Explicit project skills with observed digest and relevance; empty means an unresolved draft.","items":{"type":"object","additionalProperties":false,"properties":{
+                    "skill":{"type":"string"},"expected_digest":{"type":"string"},"reason":{"type":"string"},
+                    "change":{"type":["object","null"],"description":"Explicit reviewed revision, replacement or reactivation of an existing entry.","properties":{"kind":{"enum":["revise","replace","reactivate"]},"entry_id":{"type":"string"},"expected_revision":{"type":"integer"},"reason":{"type":"string"}},"required":["kind","entry_id","expected_revision","reason"],"additionalProperties":false}
+                },"required":["skill","expected_digest","reason"]}}
+            },"required":["body","notes","review_event","conditions","targets"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::WriteLocal
+    }
+    fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let request = serde_json::from_value(input.clone())
+            .map_err(|e| ToolError::BadInput(e.to_string()))?;
+        let id = crate::experience::propose_entry(db, ctx, &request)
+            .map_err(|e| ToolError::BadInput(e.to_string()))?;
+        Ok(json!({"proposal_id":id,"applied":false}))
     }
 }

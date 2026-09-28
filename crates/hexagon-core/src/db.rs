@@ -173,6 +173,26 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0042_candidate_quality_view",
         include_str!("../migrations/0042_candidate_quality_view.sql"),
     ),
+    (
+        "0043_experience_proposals",
+        include_str!("../migrations/0043_experience_proposals.sql"),
+    ),
+    (
+        "0044_experience_entries",
+        include_str!("../migrations/0044_experience_entries.sql"),
+    ),
+    (
+        "0045_experience_limits",
+        include_str!("../migrations/0045_experience_limits.sql"),
+    ),
+    (
+        "0046_experience_controls",
+        include_str!("../migrations/0046_experience_controls.sql"),
+    ),
+    (
+        "0047_experience_role_skills",
+        include_str!("../migrations/0047_experience_role_skills.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

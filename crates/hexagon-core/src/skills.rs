@@ -351,6 +351,10 @@ pub fn list_global() -> Vec<SkillRow> {
                 "global".into()
             },
             enabled: !muted.contains(&s.name),
+            legacy_experience_blocks: {
+                let count = crate::experience::unmanaged_experience_sections(&s.instructions);
+                (count > 0).then_some(count)
+            },
         })
         .collect()
 }
@@ -487,6 +491,10 @@ pub struct SkillRow {
     pub origin: String,
     /// 全局开关态（`"*"` 会话键的 mute 集）。
     pub enabled: bool,
+    /// Governance 01: counts identifiable legacy sections, not guessed lessons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub legacy_experience_blocks: Option<u32>,
 }
 
 /// 扫描目录 + 静音态（设置页列表用；同名项目技能覆盖全局）。
@@ -519,6 +527,10 @@ pub fn list_all_at(repo_root: &Path, global_mutes: Option<&Path>) -> Vec<SkillRo
                 "project".into()
             },
             enabled: !muted.contains(&s.name),
+            legacy_experience_blocks: {
+                let count = crate::experience::unmanaged_experience_sections(&s.instructions);
+                (count > 0).then_some(count)
+            },
         })
         .collect()
 }

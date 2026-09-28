@@ -113,6 +113,27 @@ fn trace(
     Ok(())
 }
 
+/// Governance 14: called only inside the reviewed experience receipt transaction,
+/// never the autonomous grant-request path; ownership stays with the work author.
+pub(crate) fn grant_reviewed_experience(
+    db: &Db,
+    project: &str,
+    author: &str,
+    skill: &str,
+) -> Result<(), GrantError> {
+    agent_in_project(db, project, author)?;
+    insert_grant(db, author, "skill", skill)?;
+    trace(
+        db,
+        project,
+        author,
+        "skill",
+        skill,
+        "reviewed_experience",
+        true,
+    )
+}
+
 /// 请求把 `name` 授给这个 Agent。L4 直接写入项目 grants；否则只入队。
 pub fn request(
     db: &Db,

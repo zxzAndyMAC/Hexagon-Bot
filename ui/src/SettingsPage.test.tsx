@@ -114,6 +114,33 @@ describe('SettingsPage list|detail 分区', () => {
     })
   }
 
+  it('legacy project experience is labelled ungoverned while the original remains readable', async () => {
+    vi.spyOn(api, 'listSkills').mockResolvedValue([
+      { name: 'governance-legacy', description: 'fixture', origin: 'project', enabled: true, legacy_experience_blocks: 1 },
+    ])
+    vi.spyOn(api, 'skillFiles').mockResolvedValue(['SKILL.md'])
+    vi.spyOn(api, 'readSkillFile').mockResolvedValue('## 经验\nOriginal legacy lesson')
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Skills')
+    await clickText(el, 'governance-legacy')
+    expect(el.textContent).toContain('Ungoverned experience')
+    expect(el.textContent).toContain('Original legacy lesson')
+    await act(async () => root.unmount())
+  })
+
+  it('skill original read failure remains visible rather than an empty successful preview', async () => {
+    vi.spyOn(api, 'listSkills').mockResolvedValue([
+      { name: 'unreadable-skill', description: '', origin: 'project', enabled: true },
+    ])
+    vi.spyOn(api, 'skillFiles').mockResolvedValue(['SKILL.md'])
+    vi.spyOn(api, 'readSkillFile').mockRejectedValue(new Error('READ_FAILURE'))
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Skills')
+    await clickText(el, 'unreadable-skill')
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('READ_FAILURE')
+    await act(async () => root.unmount())
+  })
+
   const mcpEntries = [
     { name: 'termius', command: 'ssh-mcp', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio' as const, url: null, headers: {}, origin: 'global' as const },
     { name: 'proj-svc', command: 'p-svc', args: [], env: {}, cwd: null, disabled: false, transport: 'stdio' as const, url: null, headers: {}, origin: 'project' as const },
@@ -320,6 +347,25 @@ describe('SettingsPage list|detail 分区', () => {
     await act(async () => { btn('Cancel').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await act(async () => { btn('Edit').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(detail().querySelector('textarea')!.value).toBe('# saved body')
+    root.unmount()
+  })
+
+  it('project skill editing uses a version-bound project command and never the global writer', async () => {
+    vi.spyOn(api, 'listSkills').mockResolvedValue([{ name: 'project-skill', description: 'project', origin: 'project', enabled: true }])
+    vi.spyOn(api, 'skillFiles').mockResolvedValue(['SKILL.md'])
+    vi.spyOn(api, 'readSkillFile').mockResolvedValue('# Original')
+    const document = { project_root: '/project', skill: 'project-skill', digest: 'version-1', content: '# Original' }
+    vi.spyOn(api, 'projectSkillDocument').mockResolvedValue(document)
+    const save = vi.spyOn(api, 'saveProjectSkillDocument').mockResolvedValue({ ...document, digest: 'version-2' })
+    const globalSave = vi.spyOn(api, 'saveGlobalSkill')
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Skills')
+    await clickText(el, 'project-skill')
+    await clickText(el, 'Edit')
+    expect(el.querySelector('textarea')?.value).toBe('# Original')
+    await act(async () => { Array.from(el.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Save')?.click() })
+    expect(save).toHaveBeenCalledWith(document)
+    expect(globalSave).not.toHaveBeenCalled()
     root.unmount()
   })
 

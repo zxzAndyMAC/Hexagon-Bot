@@ -974,6 +974,135 @@ fn proposals(
     })
 }
 
+#[tauri::command]
+fn curate_legacy_experience(
+    state: tauri::State<AppState>,
+    request: hexagon_core::experience::ExperienceCuration,
+) -> Result<hexagon_core::experience::ExperienceSubmission, CmdError> {
+    with_wb(&state, |wb| wb.curate_legacy_experience(&request))
+        .map(|proposal_id| hexagon_core::experience::ExperienceSubmission { proposal_id })
+}
+
+#[tauri::command]
+fn revoke_experience(
+    state: tauri::State<AppState>,
+    request: hexagon_core::experience::ExperienceRevocation,
+) -> Result<hexagon_core::experience::ExperienceEntryView, CmdError> {
+    with_wb(&state, |wb| wb.revoke_experience(&request))
+}
+
+#[tauri::command]
+fn project_skill_document(
+    state: tauri::State<AppState>,
+    skill: String,
+) -> Result<hexagon_core::experience::ProjectSkillDocument, CmdError> {
+    with_conn(&state, |db, root| {
+        hexagon_core::experience::read_project_skill(
+            db,
+            &hexagon_core::tools::ToolContext::owner(db, root),
+            &skill,
+        )
+        .map_err(cmd_err)
+    })
+}
+#[tauri::command]
+fn save_project_skill_document(
+    state: tauri::State<AppState>,
+    document: hexagon_core::experience::ProjectSkillDocument,
+) -> Result<hexagon_core::experience::ProjectSkillDocument, CmdError> {
+    with_wb(&state, |wb| wb.save_project_skill_document(&document))
+}
+
+#[tauri::command]
+fn experience_limits(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::experience::ExperienceLimits, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::experience::loading_limits(db, PROJECT_ID).map_err(cmd_err)
+    })
+}
+#[tauri::command]
+fn set_experience_limits(
+    state: tauri::State<AppState>,
+    limits: hexagon_core::experience::ExperienceLimits,
+) -> Result<hexagon_core::experience::ExperienceLimits, CmdError> {
+    with_wb(&state, |wb| wb.set_experience_limits(&limits))
+}
+
+#[tauri::command]
+fn recover_experience(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::experience::ExperienceRecovery>, CmdError> {
+    with_wb_mut(&state, |wb| wb.recover_experience())
+}
+
+#[tauri::command]
+fn experience_source_document(
+    state: tauri::State<AppState>,
+    request: hexagon_core::experience::ExperienceSourceRequest,
+) -> Result<hexagon_core::experience::ExperienceSourceDocument, CmdError> {
+    with_conn(&state, |db, root| {
+        hexagon_core::experience::source_document(
+            db,
+            &hexagon_core::tools::ToolContext::owner(db, root),
+            &request,
+        )
+        .map_err(cmd_err)
+    })
+}
+
+#[tauri::command]
+fn experience_history(
+    state: tauri::State<AppState>,
+    request: hexagon_core::experience::ExperienceHistoryRequest,
+) -> Result<hexagon_core::experience::ExperienceHistoryPage, CmdError> {
+    with_conn(&state, |db, root| {
+        hexagon_core::experience::history(
+            db,
+            &hexagon_core::tools::ToolContext::owner(db, root),
+            &request,
+        )
+        .map_err(cmd_err)
+    })
+}
+
+#[tauri::command]
+fn experience_entries(
+    state: tauri::State<AppState>,
+    skill: String,
+) -> Result<Vec<hexagon_core::experience::ExperienceEntryView>, CmdError> {
+    with_conn(&state, |db, root| {
+        hexagon_core::experience::entries(
+            db,
+            &hexagon_core::tools::ToolContext::owner(db, root),
+            &skill,
+        )
+        .map_err(cmd_err)
+    })
+}
+
+#[tauri::command]
+fn experience_proposal(
+    state: tauri::State<AppState>,
+    proposal_id: String,
+) -> Result<Option<hexagon_core::experience::ExperienceProposalView>, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::experience::proposal_view(db, PROJECT_ID, &proposal_id).map_err(cmd_err)
+    })
+}
+
+#[tauri::command]
+fn propose_experience_entry(
+    state: tauri::State<AppState>,
+    agent_id: String,
+    request: hexagon_core::experience::ExperienceRequest,
+) -> Result<hexagon_core::experience::ExperienceSubmission, CmdError> {
+    with_wb(&state, |wb| {
+        wb.propose_experience_entry(&agent_id, &request)
+    })
+    .map(|proposal_id| hexagon_core::experience::ExperienceSubmission { proposal_id })
+}
+
 /// in_review 提案的负责人裁决（ui-audit-2 票 08）：原签名要 reviewer_agent——
 /// 但复审 agent 从无工具可调 review（in_review 曾是无出口死态），唯一真实
 /// 裁决面是 owner，署名 owner 比冒名复审 agent 诚实。
@@ -1966,6 +2095,18 @@ pub fn run() {
             reject_stamp,
             adjudicate_flag,
             proposals,
+            experience_proposal,
+            experience_entries,
+            experience_history,
+            experience_source_document,
+            recover_experience,
+            experience_limits,
+            project_skill_document,
+            revoke_experience,
+            curate_legacy_experience,
+            save_project_skill_document,
+            set_experience_limits,
+            propose_experience_entry,
             review_proposal,
             confirm_proposal,
             reject_proposal,

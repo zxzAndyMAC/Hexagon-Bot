@@ -11,4 +11,8 @@ origin: string,
 /**
  * 全局开关态（`"*"` 会话键的 mute 集）。
  */
-enabled: boolean, };
+enabled: boolean, 
+/**
+ * Governance 01: counts identifiable legacy sections, not guessed lessons.
+ */
+legacy_experience_blocks?: number, };

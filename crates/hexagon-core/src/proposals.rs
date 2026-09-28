@@ -43,10 +43,14 @@ pub enum PropError {
     PolicyQualityUnverified,
     #[error("unreviewed work cannot become experience")]
     UnreviewedExperience,
+    #[error("legacy experience requires structured conditions and host-verified review before application or rollback")]
+    UngovernedExperience,
     #[error("experience is frozen after delivery")]
     FrozenExperience,
     #[error("experience source is stale or frozen; obtain a current review and propose again")]
     StaleExperience,
+    #[error("experience history or scope changed; refresh the current project history")]
+    StaleExperienceHistory,
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
@@ -623,13 +627,15 @@ pub fn review(
     }
     // 读产物内容取 diff/surface 做风险标注
     let (surface, _target, diff, body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
+    let experience_digest =
+        crate::experience::validate_review(db, &ctx.project_id, proposal_id, &body)?;
     let evidence = replay_evidence(&body)
         .and_then(|r| r.ok())
         .map(|r| evidence_summary(&r));
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalReviewed,
-        json!({"proposal_id": proposal_id, "pass": true, "reason": reason}),
+        json!({"proposal_id": proposal_id, "pass": true, "reason": reason, "experience_digest": experience_digest}),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
@@ -784,7 +790,7 @@ fn materialize(db: &Db, ctx: &ToolContext, pid: &str) -> Result<String, PropErro
     let mut author_ctx = ctx.clone();
     author_ctx.agent_id = author;
     author_ctx.stage_run_id = db.active_stage_run(&ctx.project_id)?.map(|r| r.id);
-    let wrote_experience = crate::experience::apply(&author_ctx, db, &body, &backup_dir)?;
+    let wrote_experience = crate::experience::apply(&author_ctx, db, pid, &body, &backup_dir)?;
     let wrote_role = crate::rolesurf::apply(db, ctx, &body, &backup_dir)?;
     if !wrote_experience && !wrote_role {
         if !crate::git::is_repo(&ctx.repo_root) {
@@ -832,8 +838,16 @@ pub fn rollback(db: &Db, ctx: &ToolContext, proposal_id: &str) -> Result<(), Pro
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .map_err(|_| PropError::NotFound(proposal_id.into()))?;
+    if status == "rolled_back" && surface == "skill" && target.starts_with(".hexagon/skills/") {
+        return crate::experience::rollback_contribution(db, ctx, proposal_id);
+    }
     if status != "active" {
         return Err(PropError::BadState(status));
+    }
+    // Governance 11: project experience has a contribution map or is refused;
+    // it must never fall through to the whole-file legacy snapshot restore.
+    if surface == "skill" && target.starts_with(".hexagon/skills/") {
+        return crate::experience::rollback_contribution(db, ctx, proposal_id);
     }
     let backup_dir = ctx.repo_root.join(".hexagon/proposals").join(proposal_id);
     let mut author_ctx = ctx.clone();

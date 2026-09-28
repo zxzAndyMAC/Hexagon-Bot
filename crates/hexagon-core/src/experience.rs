@@ -1,9 +1,37 @@
-//! 经验（ADR 0069）。
-//!
-//! 复审通过之后，把同一段教训追加到技能「经验」节。读过的每一份都写。
-//! 一份都没读、名单不空，写名单第一个。名单空才新建 `经验-<角色>`，
-//! 授权和正文在同一份提案里，不走授权确认的自动放行。
-//! 不进激活简报，不进用户全局。交付之后不再写。
+//! Project experience. Governance 01 keeps legacy requests inspectable but
+//! refuses their whole-file application/rollback. Legacy skill sections are
+//! withheld from default loading until they have governed entry receipts.
+//! ADR 0069 / experience-governance Q1–Q18 supersede read-every-skill copying.
+
+mod controls;
+mod curation;
+pub use curation::{propose as curate_legacy, ExperienceCuration, LegacyRange};
+mod editing;
+pub use controls::{revoke, ExperienceRevocation};
+mod governance;
+mod history;
+pub use editing::{read as read_project_skill, save as save_project_skill, ProjectSkillDocument};
+pub(crate) use governance::validate_review;
+pub use history::{
+    query as history, ExperienceHistoryItem, ExperienceHistoryKind, ExperienceHistoryPage,
+    ExperienceHistoryRequest,
+};
+mod limits;
+mod matching;
+mod role_skill;
+pub use limits::{read as loading_limits, set as set_loading_limits, ExperienceLimits};
+mod storage;
+pub use governance::{
+    proposal_view, ExperienceChange, ExperienceChangeKind, ExperienceConditions,
+    ExperienceProposalView, ExperienceRequest, ExperienceSource, ExperienceSubmission,
+    ExperienceTarget,
+};
+pub use storage::{
+    entries_view as entries, recover, rollback_contribution, ExperienceEntry, ExperienceEntryView,
+    ExperienceRecovery,
+};
+#[cfg(test)]
+pub use storage::{fail_next, ExperienceFault};
 
 use crate::db::Db;
 use crate::proposals::{self, PropError};
@@ -12,6 +40,88 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub const SECTION: &str = "## 经验";
+
+/// Governance 01 / Q12: legacy prose lacks a host receipt. False negatives
+/// cost an owner review; false positives inject unreviewed lessons. Prefer
+/// withholding the experience section, while preserving the source file.
+/// Returns the default loading view and the number of withheld sections.
+pub fn legacy_loading_view(markdown: &str) -> (String, u32) {
+    let (view, headings, _) = legacy_view(markdown);
+    (view, headings)
+}
+/// A governed-only section is not an unresolved legacy lesson (Governance 16).
+pub fn unmanaged_experience_sections(markdown: &str) -> u32 {
+    legacy_view(&storage::without_blocks(markdown)).2
+}
+fn legacy_view(markdown: &str) -> (String, u32, u32) {
+    let mut result = String::new();
+    let mut hidden = false;
+    let mut blocks = 0;
+    let mut unmanaged = 0;
+    let mut counted = false;
+    let mut fence: Option<(char, usize)> = None;
+    for line in markdown.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let at_margin =
+            line.len() - line.trim_start_matches(' ').len() <= 3 && !line.starts_with('\t');
+        if hidden
+            && !counted
+            && !trimmed.is_empty()
+            && !trimmed.starts_with("## ")
+            && !trimmed.starts_with("# ")
+            && !trimmed.starts_with("<!-- hexagon-stopped-experience:")
+        {
+            unmanaged += 1;
+            counted = true;
+        }
+        let first = trimmed.chars().next();
+        if at_margin && matches!(first, Some('`' | '~')) {
+            let marker = first.unwrap();
+            let width = trimmed.chars().take_while(|c| *c == marker).count();
+            if width >= 3 {
+                match fence {
+                    Some((open, length))
+                        if open == marker
+                            && width >= length
+                            && trimmed[width..].trim().is_empty() =>
+                    {
+                        fence = None
+                    }
+                    // Governance 01 review: ```inline``` is not an opening
+                    // fence. Treating it as one hid the following real heading
+                    // from this filter and leaked the legacy lesson.
+                    None if marker != '`' || !trimmed[width..].contains('`') => {
+                        fence = Some((marker, width))
+                    }
+                    _ => {}
+                }
+                if !hidden {
+                    result.push_str(line);
+                }
+                continue;
+            }
+        }
+        if fence.is_none() && at_margin {
+            let level = trimmed.chars().take_while(|c| *c == '#').count();
+            if (1..=6).contains(&level) && trimmed[level..].starts_with(char::is_whitespace) {
+                let title = trimmed[level..].trim().trim_end_matches('#').trim_end();
+                if level <= 2 {
+                    hidden = false;
+                }
+                if level == 2 && title == "经验" {
+                    hidden = true;
+                    counted = false;
+                    blocks += 1;
+                    result.push_str("## 经验\n[Legacy experience withheld: not yet governed.]\n");
+                }
+            }
+        }
+        if !hidden {
+            result.push_str(line);
+        }
+    }
+    (result, blocks, unmanaged)
+}
 
 /// 已有节则在节末追加，没有就新建。旧正文留着。
 pub fn append_lesson(markdown: &str, lesson: &str) -> String {
@@ -339,101 +449,58 @@ pub fn experience_payload(body: &str) -> Option<Value> {
     proposals::fenced(body, "experience").and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
-/// 执行时写技能，并在新建时给这个 Agent 一行项目内授权。不调用授权确认。
-pub fn apply(ctx: &ToolContext, db: &Db, body: &str, backup: &Path) -> Result<bool, PropError> {
-    let Some(payload) = experience_payload(body) else {
+/// Governance 01: a legacy proposal remains inspectable, but its prepared
+/// whole-file payload is not an audited entry. Owner approval cannot supply
+/// missing evidence. False rejection costs review; accepting it costs an
+/// unreviewed write and can overwrite later lessons.
+pub fn apply(
+    ctx: &ToolContext,
+    db: &Db,
+    proposal_id: &str,
+    body: &str,
+    _backup: &Path,
+) -> Result<bool, PropError> {
+    if experience_payload(body).is_none() {
         return Ok(false);
-    };
-    // Reliability 20: a queued lesson cannot reuse a superseded review at apply.
-    let started = std::time::Instant::now();
-    let saved = serde_json::from_value::<Qualification>(payload["qualification"].clone()).ok();
-    let current = gate(db, ctx, saved.as_ref().map(|q| q.review_event))?;
-    if saved.is_none() || saved != current.qualification || current.delivered {
-        crate::diag::note(
-            crate::diag::CLASS_REJECT,
-            true,
-            Some(&ctx.project_id),
-            Some(&ctx.agent_id),
-            ctx.stage_run_id.as_deref(),
-            None,
-            "experience_apply",
-            "stale_source",
-            started,
-        );
-        return Err(PropError::StaleExperience);
     }
-    let Some(files) = payload["files"].as_array() else {
-        return Err(PropError::Rejected(
-            "experience payload missing files".into(),
-        ));
-    };
-    std::fs::create_dir_all(backup)?;
-    let mut manifest = Vec::new();
-    for (i, file) in files.iter().enumerate() {
-        let rel = file["path"].as_str().unwrap_or("");
-        if rel.contains("..") || !rel.starts_with(".hexagon/skills/") {
-            return Err(PropError::Rejected(
-                "experience path escapes the project".into(),
-            ));
-        }
-        let path = ctx.repo_root.join(rel);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let slot = backup.join(format!("before-{i}"));
-        if path.exists() {
-            std::fs::copy(&path, &slot)?;
-            manifest.push(json!({
-                "path": rel, "had": true, "slot": i,
-                "grant": file["grant"].as_str(),
-            }));
-        } else {
-            manifest.push(json!({
-                "path": rel, "had": false, "slot": i,
-                "grant": file["grant"].as_str(),
-            }));
-        }
-        std::fs::write(&path, file["after"].as_str().unwrap_or(""))?;
-        if let Some(name) = file["grant"].as_str() {
-            let id = format!("g{}", db.next_id("g")?);
-            db.conn().execute(
-                "INSERT OR IGNORE INTO grants (id, agent_id, kind, name) VALUES (?1,?2,'skill',?3)",
-                rusqlite::params![id, ctx.agent_id, name],
-            )?;
-        }
-    }
-    std::fs::write(
-        backup.join("experience.json"),
-        serde_json::to_string(&manifest).unwrap_or_else(|_| "[]".into()),
-    )?;
-    Ok(true)
+    storage::apply(db, ctx, proposal_id, body)
 }
 
-pub fn rollback(db: &Db, ctx: &ToolContext, backup: &Path) -> Result<bool, PropError> {
-    let manifest_path = backup.join("experience.json");
-    if !manifest_path.exists() {
+pub fn loading_view(
+    db: &Db,
+    ctx: &ToolContext,
+    skill: &str,
+    text: &str,
+) -> Result<String, PropError> {
+    storage::loading_view(db, ctx, skill, text)
+}
+
+/// Governance 01: restoring a legacy snapshot used to erase later experience
+/// and revoke grants still in use. Preserve it for inspection, never replay it.
+pub fn rollback(_db: &Db, ctx: &ToolContext, backup: &Path) -> Result<bool, PropError> {
+    if !backup.join("experience.json").exists() {
         return Ok(false);
     }
-    let manifest: Vec<Value> =
-        serde_json::from_str(&std::fs::read_to_string(&manifest_path)?).unwrap_or_default();
-    for item in manifest {
-        let rel = item["path"].as_str().unwrap_or("");
-        let path = ctx.repo_root.join(rel);
-        let slot = backup.join(format!("before-{}", item["slot"].as_u64().unwrap_or(0)));
-        if item["had"] == true && slot.exists() {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(&slot, &path)?;
-        } else if path.exists() {
-            std::fs::remove_file(&path).ok();
-        }
-        if let Some(name) = item["grant"].as_str() {
-            db.conn().execute(
-                "DELETE FROM grants WHERE agent_id=?1 AND kind='skill' AND name=?2",
-                rusqlite::params![ctx.agent_id, name],
-            )?;
-        }
-    }
-    Ok(true)
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        Some(&ctx.project_id),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        None,
+        "experience_rollback",
+        "ungoverned",
+        std::time::Instant::now(),
+    );
+    Err(PropError::UngovernedExperience)
 }
+
+pub fn propose_entry(
+    db: &Db,
+    ctx: &ToolContext,
+    request: &ExperienceRequest,
+) -> Result<String, PropError> {
+    governance::propose(db, ctx, request)
+}
+
+pub use history::{source_document, ExperienceSourceDocument, ExperienceSourceRequest};

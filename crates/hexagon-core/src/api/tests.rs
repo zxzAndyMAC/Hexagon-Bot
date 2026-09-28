@@ -1562,221 +1562,105 @@ fn write_skill(dir: &std::path::Path, name: &str, body: &str) {
     std::fs::write(p.join("SKILL.md"), body).unwrap();
 }
 
-/// 经验追加、新建、拒绝，以及不进简报、可回滚。
+// Governance 01 changes the former append/create/whole-file rollback contract:
+// legacy requests may be inspected, but cannot materialize. Structured positive
+// paths are added with tickets 03/14; review eligibility must remain enforced.
 #[test]
-fn experience_appends_or_creates_only_after_review_and_judgment() {
-    let lesson = "先看日志再改路由";
-    let (dir, mut wb) = git_wb(&["前端", "架构师"]);
-    wb.db
-        .conn()
-        .execute(
-            "INSERT INTO role_defs (project_id, name, skills) VALUES ('p1','前端','[\"alpha\",\"beta\"]')",
-            [],
-        )
-        .unwrap();
-    write_skill(
-        dir.path(),
-        "alpha",
-        "---\nname: alpha\ndescription: a\n---\n\n## 经验\n旧教训\n",
-    );
-    write_skill(
-        dir.path(),
-        "beta",
-        "---\nname: beta\ndescription: b\n---\n\n没有这一节\n",
-    );
-    assert!(wb
-        .propose_experience("a0", lesson, &["alpha".into(), "beta".into()])
-        .unwrap_err()
-        .to_string()
-        .contains("unreviewed"));
-    mark_reviewed(&wb, "a0");
-    let pid = wb
-        .propose_experience("a0", lesson, &["alpha".into(), "beta".into()])
-        .unwrap();
-    assert!(
-        !std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md"))
-            .unwrap()
-            .contains(lesson),
-        "判定前不写"
-    );
-    jev_on(&mut wb, Ok("执行"));
-    wb.review_proposal(&pid, true, "可以").unwrap();
-    let alpha = std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap();
-    let beta = std::fs::read_to_string(dir.path().join(".hexagon/skills/beta/SKILL.md")).unwrap();
-    assert!(alpha.contains("旧教训\n先看日志再改路由"), "{alpha}");
-    assert!(beta.contains("## 经验\n先看日志再改路由"), "{beta}");
-    assert!(!wb.skill_catalog().unwrap().contains(lesson));
-    wb.rollback_proposal(&pid).unwrap();
-    let alpha = std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap();
-    assert!(alpha.contains("旧教训"));
-    assert!(!alpha.contains(lesson));
-
-    let (dir, mut wb) = git_wb(&["前端", "架构师"]);
-    wb.db
-        .conn()
-        .execute(
-            "INSERT INTO role_defs (project_id, name, skills) VALUES ('p1','前端','[\"alpha\",\"beta\"]')",
-            [],
-        )
-        .unwrap();
-    write_skill(
-        dir.path(),
-        "alpha",
-        "---\nname: alpha\ndescription: a\n---\n\n正文\n",
-    );
-    write_skill(
-        dir.path(),
-        "beta",
-        "---\nname: beta\ndescription: b\n---\n\n乙\n",
-    );
-    mark_reviewed(&wb, "a0");
-    let pid = wb.propose_experience("a0", lesson, &[]).unwrap();
-    jev_on(&mut wb, Ok("执行"));
-    wb.review_proposal(&pid, true, "可以").unwrap();
-    assert!(
-        std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md"))
-            .unwrap()
-            .contains(lesson)
-    );
-    assert!(
-        !std::fs::read_to_string(dir.path().join(".hexagon/skills/beta/SKILL.md"))
-            .unwrap()
-            .contains(lesson)
-    );
-
-    let (_dir, wb) = git_wb(&["前端", "架构师"]);
-    mark_reviewed(&wb, "a0");
-    let err = wb
-        .propose_experience("a0", lesson, &["alpha".into()])
-        .unwrap_err()
-        .to_string();
-    assert!(
-        err.contains("cannot mint")
-            || err.contains("not empty")
-            || err.contains("unreviewed")
-            || err.contains("list"),
-        "{err}"
-    );
-
-    let (dir, mut wb) = git_wb(&["前端", "前端技术负责人", "后端"]);
-    mark_reviewed(&wb, "a0");
-    let pid = wb.propose_experience("a0", lesson, &[]).unwrap();
-    assert!(!dir
-        .path()
-        .join(".hexagon/skills/经验-前端/SKILL.md")
-        .exists());
-    let grants_before: i64 = wb
-        .db
-        .conn()
-        .query_row("SELECT COUNT(*) FROM grants", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(grants_before, 0, "授权确认不会提前装上");
-    jev_on(&mut wb, Ok("执行"));
-    wb.review_proposal(&pid, true, "可以").unwrap();
-    let created =
-        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
-    assert!(created.contains("name: 经验-前端"));
-    assert!(created.contains(lesson));
-    let grants: Vec<String> = {
-        let mut st = wb
+fn legacy_experience_preserves_eligibility_but_cannot_append_or_create() {
+    for skills in [false, true] {
+        let (dir, mut wb) = git_wb(&["前端", "架构师"]);
+        let original = "---\nname: alpha\ndescription: fixture\n---\n## 经验\nOlder lesson\n";
+        let targets = if skills {
+            wb.db.conn().execute("INSERT INTO role_defs(project_id,name,skills) VALUES ('p1','前端','[\"alpha\"]')", []).unwrap();
+            write_skill(dir.path(), "alpha", original);
+            vec!["alpha".into()]
+        } else {
+            vec![]
+        };
+        assert!(wb
+            .propose_experience("a0", "lesson", &targets)
+            .unwrap_err()
+            .to_string()
+            .contains("unreviewed"));
+        mark_reviewed(&wb, "a0");
+        let pid = wb.propose_experience("a0", "lesson", &targets).unwrap();
+        if proposal_status(&wb, &pid) == "in_review" {
+            wb.review_proposal(&pid, true, "reviewed").unwrap();
+        }
+        let qid = wb
             .db
-            .conn()
-            .prepare("SELECT name FROM grants WHERE agent_id='a0' AND kind='skill'")
-            .unwrap();
-        st.query_map([], |r| r.get(0))
+            .queued_questions(&wb.project_id)
             .unwrap()
-            .collect::<Result<Vec<_>, _>>()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == pid)
             .unwrap()
-    };
-    assert_eq!(grants, vec!["经验-前端".to_string()]);
-    if let Some(home) = std::env::var_os("HOME") {
-        assert!(!std::path::PathBuf::from(home)
-            .join(".hexagon/skills/经验-前端/SKILL.md")
-            .exists());
+            .id;
+        let error = wb.confirm_proposal(&qid).unwrap_err();
+        assert_eq!(
+            crate::errcode::ErrorCode::code(&error),
+            "ungoverned_experience"
+        );
+        assert!(!wb.skill_catalog().unwrap().contains("lesson"));
+        if skills {
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap(),
+                original
+            );
+        } else {
+            assert!(!dir
+                .path()
+                .join(".hexagon/skills/经验-前端/SKILL.md")
+                .exists());
+        }
     }
-
-    // 花名册一行一个角色。第二笔仍按角色名写进同一份，不另建目录。
-    let pid = wb.propose_experience("a0", "第二个人的教训", &[]).unwrap();
-    jev_on(&mut wb, Ok("执行"));
-    wb.review_proposal(&pid, true, "可以").unwrap();
-    let shared =
-        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
-    assert!(
-        shared.contains(lesson) && shared.contains("第二个人的教训"),
-        "{shared}"
-    );
-    assert!(!dir.path().join(".hexagon/skills/经验-a0").exists());
-
-    let (_dir, wb) = git_wb(&["前/端", "架构师"]);
-    mark_reviewed(&wb, "a0");
-    let err = wb
-        .propose_experience("a0", lesson, &[])
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("path separator"), "{err}");
-
-    let (dir, wb) = git_wb(&["前端", "架构师"]);
-    write_skill(
-        dir.path(),
-        "经验-前端",
-        "---\nname: other\ndescription: 别的\n---\n\n原技能\n",
-    );
-    mark_reviewed(&wb, "a0");
-    let err = wb
-        .propose_experience("a0", lesson, &[])
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("different skill"), "{err}");
-    assert!(
-        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md"))
-            .unwrap()
-            .contains("原技能")
-    );
-
-    let (dir, wb) = git_wb(&["前端", "架构师"]);
+    // Eligibility, directory collision and post-delivery freeze remain enforced
+    // even while the legacy application route is deliberately disabled.
+    for role in ["前/端", "前端"] {
+        let (dir, wb) = git_wb(&[role, "架构师"]);
+        mark_reviewed(&wb, "a0");
+        if role == "前端" {
+            write_skill(
+                dir.path(),
+                "经验-前端",
+                "---\nname: other\ndescription: other\n---\nUnrelated skill",
+            );
+        }
+        assert!(wb.propose_experience("a0", "lesson", &[]).is_err());
+    }
+    let (_dir, wb) = git_wb(&["前端", "架构师"]);
     mark_reviewed(&wb, "a0");
     wb.db
         .append_event(
             "p1",
             EventKind::ArtifactDelivered,
-            json!({"path": "x", "kind": "代码"}),
+            json!({"path":"x","kind":"代码"}),
             Some("a0"),
             None,
         )
         .unwrap();
-    let err = wb
-        .propose_experience("a0", "最终验收通过", &[])
+    assert!(wb
+        .propose_experience("a0", "lesson", &[])
         .unwrap_err()
-        .to_string();
-    assert!(err.contains("frozen"), "{err}");
+        .to_string()
+        .contains("frozen"));
+}
+
+// Governance 01: two same-role legacy requests must remain proposals, rather
+// than silently append ungoverned text or create instance-specific directories.
+#[test]
+fn same_role_legacy_experience_requests_do_not_create_shared_or_instance_files() {
+    let (dir, mut wb) = git_wb(&["前端", "前端技术负责人", "架构师"]);
+    let peer = crate::roles::spawn_peer(&wb.db, "p1", "前端").unwrap();
+    for agent in ["a0", peer.as_str()] {
+        mark_reviewed(&wb, agent);
+        let pid = wb.propose_experience(agent, "legacy lesson", &[]).unwrap();
+        jev_on(&mut wb, Ok("执行"));
+        assert!(wb.review_proposal(&pid, true, "reviewed").is_err());
+    }
     assert!(!dir
         .path()
         .join(".hexagon/skills/经验-前端/SKILL.md")
         .exists());
-}
-
-/// 同一角色的第二个 Agent 把教训追加进同一份经验，不另建目录。
-/// ADR 0069：经验按角色名共用。以前 UNIQUE(project_id, role) 让第二行插不进去。
-#[test]
-fn peer_agent_appends_the_same_experience_file() {
-    let lesson = "先看日志再改路由";
-    let (dir, mut wb) = git_wb(&["前端", "前端技术负责人", "架构师"]);
-    mark_reviewed(&wb, "a0");
-    let peer = crate::roles::spawn_peer(&wb.db, "p1", "前端").unwrap();
-    assert_ne!(peer, "a0");
-    mark_reviewed(&wb, &peer);
-    let pid = wb.propose_experience("a0", lesson, &[]).unwrap();
-    jev_on(&mut wb, Ok("执行"));
-    wb.review_proposal(&pid, true, "可以").unwrap();
-    let pid = wb.propose_experience(&peer, "第二个人的教训", &[]).unwrap();
-    jev_on(&mut wb, Ok("执行"));
-    wb.review_proposal(&pid, true, "可以").unwrap();
-    let shared =
-        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap();
-    assert!(
-        shared.contains(lesson) && shared.contains("第二个人的教训"),
-        "{shared}"
-    );
     assert!(!dir
         .path()
         .join(".hexagon/skills")
@@ -10187,28 +10071,16 @@ fn experience_authorship_revalidates_owner_apply_and_grants_the_author() {
                 .join(".hexagon/skills/经验-前端/SKILL.md")
                 .exists());
         } else {
-            applied.unwrap();
-            let grant: String = wb
-                .db
-                .conn()
-                .query_row(
-                    "SELECT agent_id FROM grants WHERE kind='skill' AND name='经验-前端'",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(grant, "a0", "owner approval must not transfer authorship");
-            crate::proposals::rollback(&wb.db, &owner, &pid).unwrap();
-            let count: i64 = wb
-                .db
-                .conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM grants WHERE name='经验-前端'",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(count, 0);
+            // Governance 01: current authorship no longer authorizes legacy
+            // whole-file writes. No grant may be manufactured by owner approval.
+            assert_eq!(
+                crate::errcode::ErrorCode::code(&applied.unwrap_err()),
+                "ungoverned_experience"
+            );
+            assert!(!dir
+                .path()
+                .join(".hexagon/skills/经验-前端/SKILL.md")
+                .exists());
         }
     }
 }
@@ -10273,8 +10145,14 @@ fn experience_authorship_later_review_of_another_artifact_preserves_saved_qualif
         .find(|q| q.payload["proposal_id"] == pid)
         .unwrap()
         .id;
-    crate::proposals::activate(&wb.db, &wb.ctx_for("owner", None), &qid).unwrap();
-    assert_eq!(proposal_status(&wb, &pid), "active");
+    // Governance 01: another review does not change source eligibility, but
+    // a legacy payload still cannot become an active governed entry.
+    let err = crate::proposals::activate(&wb.db, &wb.ctx_for("owner", None), &qid).unwrap_err();
+    assert_eq!(
+        crate::errcode::ErrorCode::code(&err),
+        "ungoverned_experience"
+    );
+    assert_ne!(proposal_status(&wb, &pid), "active");
 }
 
 fn policy_candidate_fixture(patience: u32) -> (tempfile::TempDir, Workbench, String, String) {
@@ -11481,4 +11359,1522 @@ fn isolated_generation_completed_source_survives_exit_before_budget_close() {
     );
     assert_eq!(wb.evaluation_budget_debug().unwrap().requests, 1);
     assert_eq!(wb.evaluation_budget_debug().unwrap().reserved_mc, 0);
+}
+
+// Experience governance 01: legacy prose has no host-verified entry receipt.
+// Loading a skill must not promote it to effective experience, or destroy it.
+#[test]
+fn legacy_experience_is_hidden_from_skill_loading_but_preserved_on_disk() {
+    let (dir, wb) = git_wb(&["前端", "架构师"]);
+    let original = "---\nname: governance-legacy\ndescription: fixture\n---\n# Instructions\nKeep this instruction.\n## 经验\nUNVERIFIED_LESSON_SENTINEL\n### Detail\nUNVERIFIED_DETAIL\n## References\nKeep this reference.\n";
+    write_skill(dir.path(), "governance-legacy", original);
+    let outcome = tool_call(&wb, "load_skill", json!({"name":"governance-legacy"})).unwrap();
+    let crate::tools::CallOutcome::Done(value) = outcome else {
+        panic!("{outcome:?}")
+    };
+    let instructions = value["instructions"].as_str().unwrap();
+    assert!(
+        !instructions.contains("UNVERIFIED_LESSON_SENTINEL"),
+        "{instructions}"
+    );
+    assert!(!instructions.contains("UNVERIFIED_DETAIL"));
+    assert!(instructions.contains("Keep this instruction."));
+    assert!(instructions.contains("Keep this reference."));
+    assert_eq!(
+        std::fs::read_to_string(
+            dir.path()
+                .join(".hexagon/skills/governance-legacy/SKILL.md")
+        )
+        .unwrap(),
+        original
+    );
+}
+
+#[test]
+fn legacy_experience_proposals_cannot_write_or_restore_entire_skills() {
+    let (dir, mut wb) = git_wb(&["前端", "架构师"]);
+    mark_reviewed(&wb, "a0");
+    let pid = wb.propose_experience("a0", "legacy lesson", &[]).unwrap();
+    if proposal_status(&wb, &pid) == "in_review" {
+        wb.review_proposal(&pid, true, "reviewed").unwrap();
+    }
+    let question = pending_questions(&wb)
+        .unwrap()
+        .into_iter()
+        .find(|q| q["payload"]["proposal_id"] == pid);
+    let qid = question
+        .map(|q| q["id"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| {
+            wb.db
+                .queued_questions(&wb.project_id)
+                .unwrap()
+                .into_iter()
+                .find(|q| q.payload["proposal_id"] == pid)
+                .unwrap()
+                .id
+        });
+    assert!(wb.confirm_proposal(&qid).is_err());
+    assert!(!dir
+        .path()
+        .join(".hexagon/skills/经验-前端/SKILL.md")
+        .exists());
+    assert!(wb.rollback_proposal(&pid).is_err());
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    #[test]
+    fn legacy_experience_loading_never_exposes_generated_lessons(lesson in "[a-zA-Z0-9 ]{1,80}", ending in proptest::bool::ANY) {
+        let (dir, wb) = git_wb(&["前端", "架构师"]);
+        let newline = if ending { "\r\n" } else { "\n" };
+        let original = format!("---\nname: governance-property\ndescription: fixture\n---\n# Keep\n## 经验{newline}SECRET_BEGIN_{lesson}_SECRET_END{newline}### Detail{newline}HIDDEN_DETAIL{newline}## After{newline}VISIBLE_AFTER{newline}");
+        write_skill(dir.path(), "governance-property", &original);
+        let CallOutcome::Done(out) = tool_call(&wb,"load_skill",json!({"name":"governance-property"})).unwrap() else { panic!("load refused") };
+        let body = out["instructions"].as_str().unwrap();
+        proptest::prop_assert!(!body.contains("SECRET_BEGIN_"));
+        proptest::prop_assert!(!body.contains("HIDDEN_DETAIL"));
+        proptest::prop_assert!(body.contains("VISIBLE_AFTER"));
+        proptest::prop_assert_eq!(std::fs::read_to_string(dir.path().join(".hexagon/skills/governance-property/SKILL.md")).unwrap(), original);
+    }
+}
+
+#[test]
+fn legacy_experience_rollback_without_manifest_preserves_later_content() {
+    let (dir, mut wb) = git_wb(&["前端", "架构师"]);
+    mark_reviewed(&wb, "a0");
+    let pid = wb.propose_experience("a0", "old lesson", &[]).unwrap();
+    // Imported pre-governance database/file state, including an interrupted
+    // legacy write that never persisted its experience manifest.
+    wb.db
+        .conn()
+        .execute("UPDATE proposals SET status='active' WHERE id=?1", [&pid])
+        .unwrap();
+    let backup = dir.path().join(".hexagon/proposals").join(&pid);
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::write(backup.join("before"), "old snapshot").unwrap();
+    write_skill(dir.path(), "经验-前端", "later owner content");
+    assert!(wb.rollback_proposal(&pid).is_err());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap(),
+        "later owner content"
+    );
+}
+
+#[test]
+fn inline_backticks_do_not_hide_a_real_legacy_experience_heading() {
+    for prefix in [
+        "```example```",
+        "    ```indented example",
+        "```rust\n## 经验\nExample inside code\n```",
+    ] {
+        let (dir, wb) = git_wb(&["前端", "架构师"]);
+        write_skill(dir.path(), "governance-fence", &format!("---\nname: governance-fence\ndescription: fixture\n---\n# Instructions\n{prefix}\n\n## 经验\nSECRET_REAL_LESSON\n## Reference\nSAFE_REFERENCE\n"));
+        let CallOutcome::Done(out) =
+            tool_call(&wb, "load_skill", json!({"name":"governance-fence"})).unwrap()
+        else {
+            panic!("load refused")
+        };
+        let body = out["instructions"].as_str().unwrap();
+        assert!(
+            !body.contains("SECRET_REAL_LESSON"),
+            "prefix {prefix}: {body}"
+        );
+        assert!(body.contains(prefix));
+        assert!(body.contains("SAFE_REFERENCE"));
+    }
+}
+
+#[test]
+fn governed_experience_proposal_binds_reviewed_source_and_explicit_project_target() {
+    use sha2::{Digest, Sha256};
+    let (dir, wb) = git_wb(&["前端", "架构师"]);
+    let original = "---\nname: alpha\ndescription: fixture\n---\n# Instructions\nKeep owner text\n";
+    write_skill(dir.path(), "alpha", original);
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO role_defs(project_id,name,skills) VALUES('p1','前端','[\"alpha\"]')",
+            [],
+        )
+        .unwrap();
+    mark_reviewed(&wb, "a0");
+    let request = serde_json::from_value(json!({
+        "body":"Check the input before parsing", "notes":"Applies to parser changes",
+        "conditions":{"roles":["前端"],"stages":[],"paths":[]},
+        "targets":[{"skill":"alpha","expected_digest":format!("{:x}",Sha256::digest(original)),"reason":"The skill describes parser work"}],
+        "review_event":null
+    })).unwrap();
+    let pid = wb.propose_experience_entry("a0", &request).unwrap();
+    let view = wb.experience_proposal(&pid).unwrap().unwrap();
+    assert_eq!(view.source.author, "a0");
+    assert_eq!(view.request.targets[0].skill, "alpha");
+    assert_eq!(view.request.body, "Check the input before parsing");
+    assert!(view.source.review_event > 0);
+
+    assert!(matches!(
+        proposal_status(&wb, &pid).as_str(),
+        "in_review" | "awaiting_stamp"
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap(),
+        original,
+        "submission is not application"
+    );
+}
+
+#[test]
+fn governed_experience_without_target_keeps_a_draft_instead_of_selecting_first_skill() {
+    let (dir, wb) = git_wb(&["前端", "架构师"]);
+    mark_reviewed(&wb, "a0");
+    let request = crate::experience::ExperienceRequest {
+        create_role_skill: false,
+        body: "Do not infer applicability".into(),
+        notes: String::new(),
+        conditions: Default::default(),
+        targets: vec![],
+        review_event: None,
+    };
+    let id = wb.propose_experience_entry("a0", &request).unwrap();
+    let view = wb.experience_proposal(&id).unwrap().unwrap();
+    assert!(view.request.targets.is_empty());
+    assert_eq!(view.request.body, request.body);
+    assert!(!dir.path().join(".hexagon/skills/经验-前端").exists());
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    #[test]
+    fn governed_experience_cannot_mint_target_authorization(name in "[a-z]{1,12}") {
+        let (dir, wb)=git_wb(&["前端","架构师"]);
+        mark_reviewed(&wb,"a0");
+        let target=format!("ungranted-{name}");
+        write_skill(dir.path(),&target,"Original owner instructions");
+        let request=crate::experience::ExperienceRequest { create_role_skill: false,
+            body:"lesson".into(), notes:String::new(), conditions:Default::default(), review_event:None,
+            targets:vec![crate::experience::ExperienceTarget { change: None, skill:target.clone(),expected_digest:"model asserted digest".into(),reason:"model asserted relevance".into() }],
+        };
+        proptest::prop_assert!(wb.propose_experience_entry("a0",&request).is_err());
+        proptest::prop_assert_eq!(std::fs::read_to_string(dir.path().join(".hexagon/skills").join(target).join("SKILL.md")).unwrap(),"Original owner instructions");
+    }
+}
+
+#[test]
+fn governed_single_skill_approval_writes_a_verified_entry_and_preserves_owner_text() {
+    use sha2::{Digest, Sha256};
+    let (dir, mut wb) = git_wb(&["前端", "架构师"]);
+    let original="---\nname: alpha\ndescription: fixture\n---\n# Instructions\nOWNER_TEXT\n## 经验\nLEGACY_SECRET\n";
+    write_skill(dir.path(), "alpha", original);
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO role_defs(project_id,name,skills) VALUES('p1','前端','[\"alpha\"]')",
+            [],
+        )
+        .unwrap();
+    mark_reviewed(&wb, "a0");
+    let request = crate::experience::ExperienceRequest {
+        create_role_skill: false,
+        body: "VERIFIED_LESSON".into(),
+        notes: String::new(),
+        conditions: Default::default(),
+        review_event: None,
+        targets: vec![crate::experience::ExperienceTarget {
+            change: None,
+            skill: "alpha".into(),
+            expected_digest: format!("{:x}", Sha256::digest(original)),
+            reason: "Matches this work".into(),
+        }],
+    };
+    let pid = wb.propose_experience_entry("a0", &request).unwrap();
+    if proposal_status(&wb, &pid) == "in_review" {
+        wb.review_proposal(&pid, true, "reviewed").unwrap();
+    }
+    let qid = wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["proposal_id"] == pid)
+        .unwrap()
+        .id;
+    wb.confirm_proposal(&qid).unwrap();
+    let CallOutcome::Done(out) = tool_call(&wb, "load_skill", json!({"name":"alpha"})).unwrap()
+    else {
+        panic!("load refused")
+    };
+    let body = out["instructions"].as_str().unwrap();
+    assert!(body.contains("VERIFIED_LESSON"), "{body}");
+    assert!(body.contains("OWNER_TEXT"));
+    assert!(!body.contains("LEGACY_SECRET"));
+    let on_disk =
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap();
+    assert!(on_disk.starts_with(original));
+    assert_eq!(proposal_status(&wb, &pid), "active");
+}
+
+fn single_experience_pending() -> (tempfile::TempDir, Workbench, String, String) {
+    use sha2::{Digest, Sha256};
+    let (dir, wb) = git_wb(&["前端", "架构师"]);
+    let original = "---\nname: alpha\ndescription: fixture\n---\n# Owner\nKEEP_ME\n";
+    write_skill(dir.path(), "alpha", original);
+    wb.db
+        .conn()
+        .execute(
+            "INSERT INTO role_defs(project_id,name,skills) VALUES('p1','前端','[\"alpha\"]')",
+            [],
+        )
+        .unwrap();
+    mark_reviewed(&wb, "a0");
+    let request = crate::experience::ExperienceRequest {
+        create_role_skill: false,
+        body: "APPROVED_BODY".into(),
+        notes: String::new(),
+        conditions: Default::default(),
+        review_event: None,
+        targets: vec![crate::experience::ExperienceTarget {
+            change: None,
+            skill: "alpha".into(),
+            expected_digest: format!("{:x}", Sha256::digest(original)),
+            reason: "Relevant".into(),
+        }],
+    };
+    let pid = wb.propose_experience_entry("a0", &request).unwrap();
+    if proposal_status(&wb, &pid) == "in_review" {
+        wb.review_proposal(&pid, true, "reviewed").unwrap();
+    }
+    let qid = wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["proposal_id"] == pid)
+        .unwrap()
+        .id;
+    (dir, wb, pid, qid)
+}
+
+#[test]
+fn governed_experience_conflict_preserves_owner_edit_and_pending_proposal() {
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    write_skill(dir.path(), "alpha", "OWNER_CHANGED_AFTER_REVIEW");
+    assert!(wb.confirm_proposal(&qid).is_err());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap(),
+        "OWNER_CHANGED_AFTER_REVIEW"
+    );
+    assert_ne!(proposal_status(&wb, &pid), "active");
+    assert!(wb.experience_entries("alpha").unwrap().is_empty());
+}
+
+#[test]
+fn interrupted_experience_write_is_not_loaded_as_approved() {
+    for point in [
+        crate::experience::ExperienceFault::AfterIntent,
+        crate::experience::ExperienceFault::AfterReplace,
+        crate::experience::ExperienceFault::BeforeCommit,
+    ] {
+        let (_dir, mut wb, pid, qid) = single_experience_pending();
+        wb.fail_next_experience(point);
+        assert!(wb.confirm_proposal(&qid).is_err());
+        assert_ne!(proposal_status(&wb, &pid), "active");
+        let entries = wb.experience_entries("alpha").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].state, "pending_recovery");
+        let CallOutcome::Done(out) = tool_call(&wb, "load_skill", json!({"name":"alpha"})).unwrap()
+        else {
+            panic!("load refused")
+        };
+        assert!(!out["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("APPROVED_BODY"));
+    }
+}
+
+#[test]
+fn experience_recovery_finishes_once_and_preserves_conflicting_owner_content() {
+    for conflict in [false, true] {
+        let (dir, mut wb, pid, qid) = single_experience_pending();
+        wb.fail_next_experience(crate::experience::ExperienceFault::AfterReplace);
+        assert!(wb.confirm_proposal(&qid).is_err());
+        if conflict {
+            write_skill(dir.path(), "alpha", "OWNER_CONFLICT");
+        }
+        let recovered = wb.recover_experience().unwrap();
+        assert_eq!(recovered.len(), 1);
+        if conflict {
+            assert_eq!(recovered[0].state, "conflict");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap(),
+                "OWNER_CONFLICT"
+            );
+            assert_ne!(proposal_status(&wb, &pid), "active");
+        } else {
+            assert_eq!(recovered[0].state, "complete");
+            assert_eq!(proposal_status(&wb, &pid), "active");
+            let entries = wb.experience_entries("alpha").unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].state, "active");
+            wb.recover_experience().unwrap();
+            assert_eq!(wb.experience_entries("alpha").unwrap().len(), 1);
+        }
+    }
+}
+
+#[test]
+fn experience_recovery_handles_every_durable_boundary_idempotently() {
+    for point in [
+        crate::experience::ExperienceFault::AfterIntent,
+        crate::experience::ExperienceFault::AfterReplace,
+        crate::experience::ExperienceFault::BeforeCommit,
+        crate::experience::ExperienceFault::AfterCommit,
+    ] {
+        let (dir, mut wb, pid, qid) = single_experience_pending();
+        wb.fail_next_experience(point);
+        assert!(wb.confirm_proposal(&qid).is_err());
+        let reports = wb.recover_experience().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].state, "complete");
+        assert_eq!(proposal_status(&wb, &pid), "active");
+        let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+        let once = std::fs::read_to_string(&path).unwrap();
+        assert!(wb.recover_experience().unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), once);
+        assert_eq!(wb.experience_entries("alpha").unwrap().len(), 1);
+        assert!(!wb
+            .db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .iter()
+            .any(|q| q.id == qid));
+    }
+}
+
+#[test]
+fn experience_committed_receipt_waits_for_recovery_acknowledgement() {
+    let (_dir, mut wb, _pid, qid) = single_experience_pending();
+    wb.fail_next_experience(crate::experience::ExperienceFault::AfterCommit);
+    assert!(wb.confirm_proposal(&qid).is_err());
+    // Governance 04: a receipt alone must not make an unacknowledged operation
+    // visible; otherwise rejecting the still-pending card leaves active content.
+    assert_eq!(
+        wb.experience_entries("alpha").unwrap()[0].state,
+        "pending_recovery"
+    );
+}
+
+#[test]
+fn experience_corrupt_recovery_material_preserves_the_file() {
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.fail_next_experience(crate::experience::ExperienceFault::AfterIntent);
+    assert!(wb.confirm_proposal(&qid).is_err());
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE experience_operations SET intent_json='broken' WHERE proposal_id=?1",
+            [&pid],
+        )
+        .unwrap();
+    let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+    let before = std::fs::read_to_string(&path).unwrap();
+    for _ in 0..2 {
+        let reports = wb.recover_experience().unwrap();
+        assert_eq!(reports[0].state, "conflict");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert_ne!(proposal_status(&wb, &pid), "active");
+    }
+}
+
+#[test]
+fn experience_recovery_rechecks_source_and_target_authorization() {
+    for invalidation in ["authority", "source"] {
+        let (dir, mut wb, pid, qid) = single_experience_pending();
+        wb.fail_next_experience(crate::experience::ExperienceFault::AfterIntent);
+        assert!(wb.confirm_proposal(&qid).is_err());
+        if invalidation == "authority" {
+            wb.db.conn().execute("UPDATE role_defs SET skills='[\"different-skill\"]' WHERE project_id=?1 AND name='前端'", [&wb.project_id]).unwrap();
+        } else {
+            wb.db
+                .append_event(
+                    &wb.project_id,
+                    EventKind::AgentActivated,
+                    json!({}),
+                    Some("a0"),
+                    None,
+                )
+                .unwrap();
+        }
+        let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+        let before = std::fs::read_to_string(&path).unwrap();
+        let report = wb.recover_experience().unwrap();
+        assert_eq!(report[0].state, "conflict");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), before);
+        assert_ne!(proposal_status(&wb, &pid), "active");
+    }
+}
+
+#[test]
+fn experience_recovery_runs_when_the_project_is_reopened() {
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.fail_next_experience(crate::experience::ExperienceFault::AfterReplace);
+    assert!(wb.confirm_proposal(&qid).is_err());
+    let db_path = dir.path().join(".hexagon/state.db");
+    wb.db
+        .conn()
+        .execute("VACUUM INTO ?1", [db_path.to_str().unwrap()])
+        .unwrap();
+    drop(wb);
+    for _ in 0..2 {
+        let reopened = Workbench::open_scoped(dir.path(), "reopened", &[], None, false).unwrap();
+        assert_eq!(proposal_status(&reopened, &pid), "active");
+        assert_eq!(reopened.experience_entries("alpha").unwrap().len(), 1);
+        assert_eq!(
+            reopened.experience_entries("alpha").unwrap()[0].state,
+            "active"
+        );
+    }
+}
+
+fn approve_repeated_experience(
+    wb: &mut Workbench,
+    dir: &Path,
+    previous: &str,
+    body: &str,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut request = wb.experience_proposal(previous).unwrap().unwrap().request;
+    request.body = body.into();
+    request.targets[0].expected_digest = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(dir.join(".hexagon/skills/alpha/SKILL.md")).unwrap())
+    );
+    let pid = wb.propose_experience_entry("a0", &request).unwrap();
+    if proposal_status(wb, &pid) == "in_review" {
+        wb.review_proposal(&pid, true, "reviewed duplicate source")
+            .unwrap();
+    }
+    let qid = wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["proposal_id"] == pid)
+        .unwrap()
+        .id;
+    wb.confirm_proposal(&qid).unwrap();
+    pid
+}
+
+#[test]
+fn experience_exact_duplicates_keep_one_entry_and_one_source_identity() {
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let first = wb.experience_entries("alpha").unwrap()[0]
+        .entry
+        .entry_id
+        .clone();
+    approve_repeated_experience(&mut wb, dir.path(), &pid, " \r\nAPPROVED_BODY\r\n ");
+    let entries = wb.experience_entries("alpha").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry.entry_id, first);
+    assert_eq!(entries[0].entry.sources.len(), 1);
+    // Governance 05: case and internal whitespace remain meaningful.
+    approve_repeated_experience(&mut wb, dir.path(), &pid, "approved_body");
+    assert_eq!(wb.experience_entries("alpha").unwrap().len(), 2);
+}
+
+#[test]
+fn experience_equal_content_adds_a_distinct_reviewed_source() {
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let identity = wb.experience_entries("alpha").unwrap()[0]
+        .entry
+        .entry_id
+        .clone();
+    deliver_reviewed_work(&wb, "a0", "a1", "another-work.md");
+    approve_repeated_experience(&mut wb, dir.path(), &pid, "APPROVED_BODY");
+    let entries = wb.experience_entries("alpha").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry.entry_id, identity);
+    assert_eq!(entries[0].entry.sources.len(), 2);
+    assert_ne!(
+        entries[0].entry.sources[0].artifact_id,
+        entries[0].entry.sources[1].artifact_id
+    );
+}
+
+#[test]
+fn experience_duplicate_interruption_blocks_old_entry_until_recovery() {
+    use sha2::{Digest, Sha256};
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let mut request = wb.experience_proposal(&pid).unwrap().unwrap().request;
+    request.targets[0].expected_digest = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap())
+    );
+    let duplicate = wb.propose_experience_entry("a0", &request).unwrap();
+    if proposal_status(&wb, &duplicate) == "in_review" {
+        wb.review_proposal(&duplicate, true, "reviewed").unwrap();
+    }
+    let qid = wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["proposal_id"] == duplicate)
+        .unwrap()
+        .id;
+    wb.fail_next_experience(crate::experience::ExperienceFault::AfterIntent);
+    assert!(wb.confirm_proposal(&qid).is_err());
+    assert_eq!(
+        wb.experience_entries("alpha").unwrap()[0].state,
+        "pending_recovery"
+    );
+    wb.recover_experience().unwrap();
+    let entries = wb.experience_entries("alpha").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].state, "active");
+}
+
+#[test]
+fn experience_loading_matches_host_role_and_all_work_paths() {
+    use sha2::{Digest, Sha256};
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let mut request = wb.experience_proposal(&pid).unwrap().unwrap().request;
+    request.body = "ROLE_PATH_GUIDANCE".into();
+    request.conditions.roles = vec!["前端".into()];
+    request.conditions.paths = vec!["work-a0.md".into()];
+    request.targets[0].expected_digest = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap())
+    );
+    let next = wb.propose_experience_entry("a0", &request).unwrap();
+    if proposal_status(&wb, &next) == "in_review" {
+        wb.review_proposal(&next, true, "reviewed").unwrap();
+    }
+    let qid = wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["proposal_id"] == next)
+        .unwrap()
+        .id;
+    wb.confirm_proposal(&qid).unwrap();
+    let CallOutcome::Done(out) = tool_call(&wb, "load_skill", json!({"name":"alpha"})).unwrap()
+    else {
+        panic!("load refused")
+    };
+    assert!(out["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("ROLE_PATH_GUIDANCE"));
+    deliver_reviewed_work(&wb, "a0", "a1", "uncovered.md");
+    let CallOutcome::Done(out) = tool_call(
+        &wb,
+        "load_skill",
+        json!({"name":"alpha", "paths":["work-a0.md"]}),
+    )
+    .unwrap() else {
+        panic!("load refused")
+    };
+    assert!(!out["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("ROLE_PATH_GUIDANCE"));
+}
+
+#[test]
+fn experience_limits_persist_reject_invalid_updates_and_never_delete_entries() {
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    approve_repeated_experience(&mut wb, dir.path(), &pid, &"😀".repeat(100));
+    let before = std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap();
+    let limits = crate::experience::ExperienceLimits {
+        entry_chars: 80,
+        load_count: 1,
+        load_chars: 300,
+    };
+    wb.set_experience_limits(&limits).unwrap();
+    assert_eq!(wb.experience_limits().unwrap(), limits);
+    let invalid = crate::experience::ExperienceLimits {
+        entry_chars: 80,
+        load_count: 0,
+        load_chars: 300,
+    };
+    assert!(wb.set_experience_limits(&invalid).is_err());
+    assert_eq!(wb.experience_limits().unwrap(), limits);
+    let CallOutcome::Done(out) = tool_call(&wb, "load_skill", json!({"name":"alpha"})).unwrap()
+    else {
+        panic!("load refused")
+    };
+    let loaded = out["instructions"].as_str().unwrap();
+    assert!(loaded.contains("APPROVED_BODY"));
+    assert!(!loaded.contains('😀'));
+    assert!(loaded.contains("omitted by limits: 1"));
+    assert_eq!(
+        std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap(),
+        before
+    );
+    assert_eq!(wb.experience_entries("alpha").unwrap().len(), 2);
+}
+
+#[test]
+fn experience_observed_external_change_cannot_regain_trust_by_restoring_bytes() {
+    let (dir, mut wb, _pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+    let original = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, original.replace("APPROVED_BODY", "EXTERNAL_BODY")).unwrap();
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "changed");
+    std::fs::write(&path, &original).unwrap();
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "changed");
+    let CallOutcome::Done(out) = tool_call(&wb, "load_skill", json!({"name":"alpha"})).unwrap()
+    else {
+        panic!("load refused")
+    };
+    assert!(!out["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("APPROVED_BODY"));
+}
+
+#[test]
+fn project_skill_edits_bind_project_and_version_without_invalidating_ordinary_changes() {
+    let (_dir, mut wb, _pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let mut document = wb.project_skill_document("alpha").unwrap();
+    let stale = document.clone();
+    document.content = document
+        .content
+        .replace("KEEP_ME", "OWNER_UPDATED_INSTRUCTIONS");
+    let saved = wb.save_project_skill_document(&document).unwrap();
+    assert_eq!(saved.content, document.content);
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "active");
+    assert!(wb.save_project_skill_document(&stale).is_err());
+    let mut wrong = saved.clone();
+    wrong.project_root.push_str("/different-project");
+    assert!(wb.save_project_skill_document(&wrong).is_err());
+    let mut edited = saved;
+    edited.content = edited
+        .content
+        .replace("APPROVED_BODY", "MANUALLY_CHANGED_BODY");
+    wb.save_project_skill_document(&edited).unwrap();
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "changed");
+}
+
+#[test]
+fn experience_review_rejects_edited_payload_before_it_can_be_reverted() {
+    let (_dir, wb, pid, _qid) = single_experience_pending();
+    // Governance review regression: recreate the pre-review state to exercise
+    // the public review gate with a changed artifact, then restore the bytes.
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE proposals SET status='in_review' WHERE id=?1",
+            [&pid],
+        )
+        .unwrap();
+    let relative: String = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT a.path FROM artifacts a JOIN proposals p ON p.artifact_id=a.id WHERE p.id=?1",
+            [&pid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let path = wb.repo_root.join(".hexagon").join(relative);
+    let original = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        original.replace("APPROVED_BODY", "CHANGED_REVIEW_BODY"),
+    )
+    .unwrap();
+    assert!(wb
+        .review_proposal(&pid, true, "review changed proposal")
+        .is_err());
+    assert_eq!(proposal_status(&wb, &pid), "in_review");
+    std::fs::write(path, original).unwrap();
+    wb.review_proposal(&pid, true, "review exact proposal")
+        .unwrap();
+}
+
+#[test]
+fn experience_owner_revocation_survives_file_conflicts_and_cannot_load_again() {
+    for changed in [false, true] {
+        let (dir, mut wb, _pid, qid) = single_experience_pending();
+        wb.confirm_proposal(&qid).unwrap();
+        let view = wb.experience_entries("alpha").unwrap().remove(0);
+        let document = wb.project_skill_document("alpha").unwrap();
+        if changed {
+            write_skill(
+                dir.path(),
+                "alpha",
+                &document
+                    .content
+                    .replace("APPROVED_BODY", "OWNER_EXTERNAL_CONTENT"),
+            );
+        }
+        let request = crate::experience::ExperienceRevocation {
+            project_root: document.project_root,
+            skill: "alpha".into(),
+            entry_id: view.entry.entry_id,
+            expected_revision: view.entry.revision,
+            reason: "Advice is wrong".into(),
+        };
+        let revoked = wb.revoke_experience(&request).unwrap();
+        assert_eq!(revoked.state, "revoked");
+        assert_eq!(revoked.recovery_pending, changed);
+        let recovery = wb.recover_experience().unwrap();
+        // Governance 16: file drift is not expired author approval.
+        if changed {
+            assert_eq!(recovery[0].reason_code.as_deref(), Some("target_changed"));
+        }
+        assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "revoked");
+        let CallOutcome::Done(out) = tool_call(&wb, "load_skill", json!({"name":"alpha"})).unwrap()
+        else {
+            panic!("load refused")
+        };
+        assert!(!out["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("APPROVED_BODY"));
+        if changed {
+            assert!(
+                std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md"))
+                    .unwrap()
+                    .contains("OWNER_EXTERNAL_CONTENT")
+            );
+        }
+    }
+}
+
+#[test]
+fn experience_revocation_is_already_effective_when_file_sync_is_interrupted() {
+    let (_dir, mut wb, _pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let entry = wb.experience_entries("alpha").unwrap().remove(0).entry;
+    let document = wb.project_skill_document("alpha").unwrap();
+    wb.fail_next_experience(crate::experience::ExperienceFault::AfterIntent);
+    let request = crate::experience::ExperienceRevocation {
+        project_root: document.project_root,
+        skill: "alpha".into(),
+        entry_id: entry.entry_id,
+        expected_revision: entry.revision,
+        reason: "Stop immediately".into(),
+    };
+    assert!(wb.revoke_experience(&request).is_err());
+    let stopped = wb.experience_entries("alpha").unwrap();
+    assert_eq!(stopped[0].state, "revoked");
+    assert!(stopped[0].recovery_pending);
+    wb.recover_experience().unwrap();
+    assert!(!wb.experience_entries("alpha").unwrap()[0].recovery_pending);
+    assert_eq!(wb.revoke_experience(&request).unwrap().state, "revoked");
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(4))]
+    #[test]
+    fn experience_repeated_submission_never_reactivates_a_revoked_identity(padding in 0usize..12) {
+        use sha2::{Digest,Sha256};
+        let (dir,mut wb,pid,qid)=single_experience_pending();
+        wb.confirm_proposal(&qid).unwrap();
+        let entry=wb.experience_entries("alpha").unwrap().remove(0).entry;
+        let document=wb.project_skill_document("alpha").unwrap();
+        wb.revoke_experience(&crate::experience::ExperienceRevocation {project_root:document.project_root,skill:"alpha".into(),entry_id:entry.entry_id,expected_revision:entry.revision,reason:"Stop".into()}).unwrap();
+        let mut request=wb.experience_proposal(&pid).unwrap().unwrap().request;
+        request.body=format!("{}APPROVED_BODY{}"," ".repeat(padding)," ".repeat(padding));
+        request.targets[0].expected_digest=format!("{:x}",Sha256::digest(std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap()));
+        let next=wb.propose_experience_entry("a0",&request).unwrap();
+        if proposal_status(&wb,&next)=="in_review" {wb.review_proposal(&next,true,"same content").unwrap();}
+        let qid=wb.db.queued_questions(&wb.project_id).unwrap().into_iter().find(|q|q.payload["proposal_id"]==next).unwrap().id;
+        proptest::prop_assert!(wb.confirm_proposal(&qid).is_err());
+        let entries=wb.experience_entries("alpha").unwrap();
+        proptest::prop_assert_eq!(entries.len(),1);
+        proptest::prop_assert_eq!(&entries[0].state,"revoked");
+    }
+}
+
+#[test]
+fn experience_reviewed_changes_revise_replace_and_explicitly_reactivate() {
+    use sha2::{Digest, Sha256};
+    for kind in [
+        crate::experience::ExperienceChangeKind::Revise,
+        crate::experience::ExperienceChangeKind::Replace,
+        crate::experience::ExperienceChangeKind::Reactivate,
+    ] {
+        let (dir, mut wb, pid, qid) = single_experience_pending();
+        wb.confirm_proposal(&qid).unwrap();
+        let first = wb.experience_entries("alpha").unwrap().remove(0).entry;
+        if kind == crate::experience::ExperienceChangeKind::Reactivate {
+            wb.revoke_experience(&crate::experience::ExperienceRevocation {
+                project_root: wb.project_skill_document("alpha").unwrap().project_root,
+                skill: "alpha".into(),
+                entry_id: first.entry_id.clone(),
+                expected_revision: first.revision,
+                reason: "Stopped".into(),
+            })
+            .unwrap();
+        }
+        let mut request = wb.experience_proposal(&pid).unwrap().unwrap().request;
+        request.body = "UPDATED_APPROVED_BODY".into();
+        request.targets[0].expected_digest = format!(
+            "{:x}",
+            Sha256::digest(
+                std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap()
+            )
+        );
+        request.targets[0].change = Some(crate::experience::ExperienceChange {
+            kind: kind.clone(),
+            entry_id: first.entry_id.clone(),
+            expected_revision: first.revision,
+            reason: "Explicitly reviewed change".into(),
+        });
+        let next = wb.propose_experience_entry("a0", &request).unwrap();
+        assert_eq!(
+            wb.experience_proposal(&next)
+                .unwrap()
+                .unwrap()
+                .previous_entries[0]
+                .body,
+            "APPROVED_BODY"
+        );
+        if proposal_status(&wb, &next) == "in_review" {
+            wb.review_proposal(&next, true, "review full change")
+                .unwrap();
+        }
+        let qid = wb
+            .db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == next)
+            .unwrap()
+            .id;
+        wb.confirm_proposal(&qid).unwrap();
+        let views = wb.experience_entries("alpha").unwrap();
+        let active = views.iter().find(|v| v.state == "active").unwrap();
+        assert_eq!(active.entry.body, "UPDATED_APPROVED_BODY");
+        if kind == crate::experience::ExperienceChangeKind::Replace {
+            assert_ne!(active.entry.entry_id, first.entry_id);
+            assert_eq!(
+                views
+                    .iter()
+                    .find(|v| v.entry.entry_id == first.entry_id)
+                    .unwrap()
+                    .state,
+                "superseded"
+            );
+        } else {
+            assert_eq!(active.entry.entry_id, first.entry_id);
+            assert_eq!(active.entry.revision, 2);
+        }
+    }
+}
+
+#[test]
+fn experience_rollback_withdraws_only_its_source_and_preserves_later_owner_text() {
+    let (dir, mut wb, first, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    deliver_reviewed_work(&wb, "a0", "a1", "later-source.md");
+    let second = approve_repeated_experience(&mut wb, dir.path(), &first, "APPROVED_BODY");
+    let mut document = wb.project_skill_document("alpha").unwrap();
+    document
+        .content
+        .push_str("\n## Owner notes\nLATER_OWNER_TEXT\n");
+    wb.save_project_skill_document(&document).unwrap();
+    wb.rollback_proposal(&first).unwrap();
+    let entries = wb.experience_entries("alpha").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].state, "active");
+    assert_eq!(entries[0].entry.sources.len(), 1);
+    assert_eq!(proposal_status(&wb, &first), "rolled_back");
+    assert_eq!(proposal_status(&wb, &second), "active");
+    assert!(
+        std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md"))
+            .unwrap()
+            .contains("LATER_OWNER_TEXT")
+    );
+    wb.rollback_proposal(&first).unwrap();
+    assert_eq!(
+        wb.experience_entries("alpha").unwrap()[0]
+            .entry
+            .sources
+            .len(),
+        1
+    );
+    wb.rollback_proposal(&second).unwrap();
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "revoked");
+}
+
+#[test]
+fn experience_rollback_recovers_without_repeating_source_withdrawal() {
+    let (_dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    wb.fail_next_experience(crate::experience::ExperienceFault::AfterIntent);
+    assert!(wb.rollback_proposal(&pid).is_err());
+    assert_eq!(
+        wb.experience_entries("alpha").unwrap()[0].state,
+        "pending_recovery"
+    );
+    wb.recover_experience().unwrap();
+    assert_eq!(proposal_status(&wb, &pid), "rolled_back");
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "revoked");
+    assert!(wb.recover_experience().unwrap().is_empty());
+}
+
+#[test]
+fn experience_rollback_refuses_external_body_changes_without_restoring_old_bytes() {
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+    let changed = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("APPROVED_BODY", "OWNER_REWROTE_BODY");
+    std::fs::write(&path, &changed).unwrap();
+    assert!(wb.rollback_proposal(&pid).is_err());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
+    assert_eq!(proposal_status(&wb, &pid), "active");
+}
+
+#[test]
+fn experience_multi_skill_interruption_never_activates_half_a_proposal() {
+    use sha2::{Digest, Sha256};
+    for point in [
+        crate::experience::ExperienceFault::AfterTarget(0),
+        crate::experience::ExperienceFault::AfterTarget(1),
+        crate::experience::ExperienceFault::BeforeCommit,
+        crate::experience::ExperienceFault::AfterCommit,
+    ] {
+        let (dir, mut wb, original, original_qid) = single_experience_pending();
+        wb.confirm_proposal(&original_qid).unwrap();
+        let beta = "---\nname: beta\ndescription: second skill\n---\n# Beta\nKEEP_BETA\n";
+        write_skill(dir.path(), "beta", beta);
+        wb.db.conn().execute("UPDATE role_defs SET skills='[\"alpha\",\"beta\"]' WHERE project_id=?1 AND name='前端'",[&wb.project_id]).unwrap();
+        let mut request = wb.experience_proposal(&original).unwrap().unwrap().request;
+        request.targets[0].expected_digest = format!(
+            "{:x}",
+            Sha256::digest(
+                std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap()
+            )
+        );
+        request.targets.push(crate::experience::ExperienceTarget {
+            skill: "beta".into(),
+            change: None,
+            expected_digest: format!("{:x}", Sha256::digest(beta)),
+            reason: "Also relevant to beta".into(),
+        });
+        let pid = wb.propose_experience_entry("a0", &request).unwrap();
+        if proposal_status(&wb, &pid) == "in_review" {
+            wb.review_proposal(&pid, true, "review both targets")
+                .unwrap();
+        }
+        let qid = wb
+            .db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == pid)
+            .unwrap()
+            .id;
+        wb.fail_next_experience(point);
+        assert!(wb.confirm_proposal(&qid).is_err());
+        for skill in ["alpha", "beta"] {
+            assert_eq!(
+                wb.experience_entries(skill).unwrap()[0].state,
+                "pending_recovery"
+            );
+        }
+        if point == crate::experience::ExperienceFault::AfterTarget(0) {
+            write_skill(
+                dir.path(),
+                "beta",
+                &format!("{beta}OWNER_CONCURRENT_EDIT\n"),
+            );
+            let reports = wb.recover_experience().unwrap();
+            assert!(reports.iter().any(|r| r.state == "conflict"));
+            for skill in ["alpha", "beta"] {
+                assert_eq!(
+                    wb.experience_entries(skill).unwrap()[0].state,
+                    "pending_recovery"
+                );
+            }
+            assert!(
+                std::fs::read_to_string(dir.path().join(".hexagon/skills/beta/SKILL.md"))
+                    .unwrap()
+                    .contains("OWNER_CONCURRENT_EDIT")
+            );
+            // Explicitly restore the expected before state, as an owner repair.
+            write_skill(dir.path(), "beta", beta);
+        }
+        wb.recover_experience().unwrap();
+        let alpha = wb.experience_entries("alpha").unwrap();
+        let beta = wb.experience_entries("beta").unwrap();
+        assert_eq!(alpha[0].state, "active");
+        assert_eq!(beta[0].state, "active");
+        assert_ne!(alpha[0].entry.entry_id, beta[0].entry.entry_id);
+        let related = wb
+            .experience_history(&crate::experience::ExperienceHistoryRequest {
+                project_root: dir
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                skill: "alpha".into(),
+                entry_id: alpha[0].entry.entry_id.clone(),
+                kind: crate::experience::ExperienceHistoryKind::Related,
+                cursor: None,
+                limit: 20,
+            })
+            .unwrap();
+        assert!(related.items.iter().any(|item| matches!(item, crate::experience::ExperienceHistoryItem::Related { skill, entry_id, state, .. } if skill == "beta" && entry_id == &beta[0].entry.entry_id && state == "active")));
+        assert!(wb.recover_experience().unwrap().is_empty());
+        wb.rollback_proposal(&pid).unwrap();
+        assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "active");
+        assert_eq!(wb.experience_entries("beta").unwrap()[0].state, "revoked");
+    }
+}
+
+#[test]
+fn experience_legacy_curation_uses_verified_history_without_reviving_current_eligibility() {
+    use sha2::{Digest, Sha256};
+    let (_dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let event = wb
+        .experience_proposal(&pid)
+        .unwrap()
+        .unwrap()
+        .source
+        .review_event;
+    let mut document = wb.project_skill_document("alpha").unwrap();
+    let start = document.content.len();
+    let legacy = "OLD_UNGOVERNED_LESSON\n";
+    document.content.push_str(legacy);
+    let document = wb.save_project_skill_document(&document).unwrap();
+    wb.db
+        .append_event(
+            &wb.project_id,
+            EventKind::AgentActivated,
+            json!({}),
+            Some("a0"),
+            None,
+        )
+        .unwrap();
+    let mut request = wb.experience_proposal(&pid).unwrap().unwrap().request;
+    request.body = "CURATED_FROM_REVIEWED_HISTORY".into();
+    request.targets[0].expected_digest = document.digest;
+    assert!(wb.propose_experience_entry("a0", &request).is_err());
+    let mut curation = crate::experience::ExperienceCuration {
+        project_root: document.project_root,
+        request,
+        legacy: crate::experience::LegacyRange {
+            skill: "alpha".into(),
+            start_byte: start as u32,
+            end_byte: (start + legacy.len()) as u32,
+            digest: format!("{:x}", Sha256::digest(legacy)),
+        },
+        review_event: 0,
+    };
+    assert!(wb.curate_legacy_experience(&curation).is_err());
+    curation.review_event = event;
+    let next = wb.curate_legacy_experience(&curation).unwrap();
+    if proposal_status(&wb, &next) == "in_review" {
+        wb.review_proposal(&next, true, "review curated lesson")
+            .unwrap();
+    }
+    let qid = wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["proposal_id"] == next)
+        .unwrap()
+        .id;
+    wb.confirm_proposal(&qid).unwrap();
+    let CallOutcome::Done(out) = tool_call(&wb, "load_skill", json!({"name":"alpha"})).unwrap()
+    else {
+        panic!("load refused")
+    };
+    assert!(out["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("CURATED_FROM_REVIEWED_HISTORY"));
+    assert!(!out["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("OLD_UNGOVERNED_LESSON"));
+}
+
+#[test]
+fn experience_empty_role_creation_recovers_file_and_grants_only_the_author() {
+    for interruption in [
+        None,
+        Some(crate::experience::ExperienceFault::AfterReplace),
+        Some(crate::experience::ExperienceFault::BeforeDirectoryPublish),
+    ] {
+        let (dir, mut wb) = git_wb(&["前端", "架构师"]);
+        mark_reviewed(&wb, "a0");
+        let request = crate::experience::ExperienceRequest {
+            create_role_skill: true,
+            body: "ROLE_REVIEWED_LESSON".into(),
+            notes: String::new(),
+            conditions: Default::default(),
+            targets: vec![],
+            review_event: None,
+        };
+        let pid = wb.propose_experience_entry("a0", &request).unwrap();
+        let view = wb.experience_proposal(&pid).unwrap().unwrap();
+        assert_eq!(view.request.targets[0].skill, "经验-前端");
+        if proposal_status(&wb, &pid) == "in_review" {
+            wb.review_proposal(&pid, true, "review role skill and grant")
+                .unwrap();
+        }
+        let qid = wb
+            .db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == pid)
+            .unwrap()
+            .id;
+        if let Some(point) = interruption {
+            wb.fail_next_experience(point);
+            assert!(wb.confirm_proposal(&qid).is_err());
+            assert_eq!(
+                wb.experience_entries("经验-前端").unwrap()[0].state,
+                "pending_recovery"
+            );
+            wb.recover_experience().unwrap();
+        } else {
+            wb.confirm_proposal(&qid).unwrap();
+        }
+        assert!(dir
+            .path()
+            .join(".hexagon/skills/经验-前端/SKILL.md")
+            .is_file());
+        let grants: Vec<String> = wb
+            .db
+            .conn()
+            .prepare("SELECT agent_id FROM grants WHERE kind='skill' AND name='经验-前端'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(grants, vec!["a0"]);
+        assert_eq!(
+            wb.experience_entries("经验-前端").unwrap()[0].state,
+            "active"
+        );
+        wb.rollback_proposal(&pid).unwrap();
+        assert!(dir
+            .path()
+            .join(".hexagon/skills/经验-前端/SKILL.md")
+            .is_file());
+        assert_eq!(
+            wb.db
+                .conn()
+                .query_row(
+                    "SELECT count(*) FROM grants WHERE agent_id='a0' AND name='经验-前端'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn experience_role_creation_rechecks_empty_list_and_shared_directory_conflicts() {
+    for occupied in [false, true] {
+        let (dir, mut wb) = git_wb(&["前端", "架构师"]);
+        mark_reviewed(&wb, "a0");
+        let request = crate::experience::ExperienceRequest {
+            create_role_skill: true,
+            body: "ROLE_LESSON".into(),
+            notes: String::new(),
+            conditions: Default::default(),
+            targets: vec![],
+            review_event: None,
+        };
+        let pid = wb.propose_experience_entry("a0", &request).unwrap();
+        if proposal_status(&wb, &pid) == "in_review" {
+            wb.review_proposal(&pid, true, "review").unwrap();
+        }
+        let qid = wb
+            .db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == pid)
+            .unwrap()
+            .id;
+        if occupied {
+            std::fs::create_dir_all(dir.path().join(".hexagon/skills/经验-前端")).unwrap();
+        } else {
+            wb.db.conn().execute("INSERT INTO grants(id,agent_id,kind,name) VALUES('changed-list','a0','skill','another')",[]).unwrap();
+        }
+        assert!(wb.confirm_proposal(&qid).is_err());
+        assert!(!dir
+            .path()
+            .join(".hexagon/skills/经验-前端/SKILL.md")
+            .exists());
+    }
+}
+
+#[test]
+fn experience_history_pages_sources_and_versions_without_changing_loading_eligibility() {
+    use crate::experience::{
+        ExperienceHistoryItem, ExperienceHistoryKind as Kind, ExperienceHistoryRequest,
+    };
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    for index in 0..22 {
+        deliver_reviewed_work(&wb, "a0", "a1", &format!("history-{index}.md"));
+        approve_repeated_experience(&mut wb, dir.path(), &pid, "APPROVED_BODY");
+    }
+    let current = wb.experience_entries("alpha").unwrap().remove(0);
+    assert_eq!(current.source_count, 23);
+    assert_eq!(current.entry.sources.len(), 20);
+    let source = wb
+        .experience_source_document(&crate::experience::ExperienceSourceRequest {
+            project_root: dir
+                .path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            skill: "alpha".into(),
+            entry_id: current.entry.entry_id.clone(),
+            review_event: current.entry.sources[0].review_event,
+        })
+        .unwrap();
+    assert!(!source.content.is_empty());
+    let mut request = ExperienceHistoryRequest {
+        project_root: dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        skill: "alpha".into(),
+        entry_id: current.entry.entry_id.clone(),
+        kind: Kind::Sources,
+        cursor: None,
+        limit: 7,
+    };
+    let first = wb.experience_history(&request).unwrap();
+    let cursor = first.next_cursor.clone().unwrap();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let page = wb.experience_history(&request).unwrap();
+        assert!(page.items.len() <= 7);
+        for item in page.items {
+            let ExperienceHistoryItem::Source { source, path } = item else {
+                panic!("wrong page kind")
+            };
+            assert!(path.is_some());
+            assert!(seen.insert(source.artifact_id));
+        }
+        request.cursor = page.next_cursor;
+        if request.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 23);
+    request.kind = Kind::Versions;
+    request.cursor = Some(cursor.clone());
+    assert!(wb.experience_history(&request).is_err());
+    request.cursor = None;
+    let mut count = 0;
+    loop {
+        let page = wb.experience_history(&request).unwrap();
+        count += page.items.len();
+        request.cursor = page.next_cursor;
+        if request.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(count, 23);
+    request.kind = Kind::Sources;
+    request.cursor = Some(cursor);
+    request.project_root = "/different-project".into();
+    assert!(wb.experience_history(&request).is_err());
+    request.project_root = dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    deliver_reviewed_work(&wb, "a0", "a1", "changed-history.md");
+    approve_repeated_experience(&mut wb, dir.path(), &pid, "APPROVED_BODY");
+    assert!(wb.experience_history(&request).is_err());
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "active");
+}
+
+#[test]
+fn experience_missing_file_invalidates_receipt_and_owner_stop_survives_restore() {
+    for revoke in [false, true] {
+        let (dir, mut wb, _pid, qid) = single_experience_pending();
+        wb.confirm_proposal(&qid).unwrap();
+        let document = wb.project_skill_document("alpha").unwrap();
+        let entry = wb.experience_entries("alpha").unwrap().remove(0).entry;
+        let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+        std::fs::remove_file(&path).unwrap();
+        if revoke {
+            let stopped = wb
+                .revoke_experience(&crate::experience::ExperienceRevocation {
+                    project_root: document.project_root,
+                    skill: "alpha".into(),
+                    entry_id: entry.entry_id,
+                    expected_revision: entry.revision,
+                    reason: "missing file stop".into(),
+                })
+                .unwrap();
+            assert_eq!(stopped.state, "revoked");
+            assert!(stopped.recovery_pending);
+        } else {
+            assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "changed");
+        }
+        std::fs::write(path, document.content).unwrap();
+        assert_eq!(
+            wb.experience_entries("alpha").unwrap()[0].state,
+            if revoke { "revoked" } else { "changed" }
+        );
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    #[test]
+    fn experience_history_arbitrary_foreign_scope_never_exposes_sources(suffix in "[a-z]{1,20}", cursor in ".{0,40}") {
+        let (_dir, mut wb, _pid, qid) = single_experience_pending();
+        wb.confirm_proposal(&qid).unwrap();
+        let entry = wb.experience_entries("alpha").unwrap().remove(0).entry;
+        let request = crate::experience::ExperienceHistoryRequest { project_root: format!("/other-{suffix}"), skill: "alpha".into(), entry_id: entry.entry_id.clone(), kind: crate::experience::ExperienceHistoryKind::Sources, cursor: Some(cursor), limit: 1 };
+        proptest::prop_assert!(wb.experience_history(&request).is_err());
+        let source = crate::experience::ExperienceSourceRequest { project_root: request.project_root, skill: request.skill, entry_id: entry.entry_id, review_event: entry.sources[0].review_event };
+        proptest::prop_assert!(wb.experience_source_document(&source).is_err());
+    }
+    #[test]
+    fn experience_role_creation_never_overwrites_an_occupied_target(content in "[A-Za-z0-9 ]{0,80}") {
+        let (dir, wb) = git_wb(&["前端", "架构师"]);
+        mark_reviewed(&wb, "a0");
+        write_skill(dir.path(), "经验-前端", &content);
+        let request = crate::experience::ExperienceRequest { create_role_skill: true, body: "Reviewed lesson".into(), notes: String::new(), conditions: Default::default(), targets: vec![], review_event: None };
+        proptest::prop_assert!(wb.propose_experience_entry("a0", &request).is_err());
+        proptest::prop_assert_eq!(std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md")).unwrap(), content);
+    }
+}
+
+#[test]
+fn experience_same_role_instances_join_one_reviewed_skill_with_independent_author_grants() {
+    let (dir, mut wb) = git_wb(&["前端", "前端", "架构师"]);
+    for author in ["a0", "a1"] {
+        mark_reviewed(&wb, author);
+        let request = crate::experience::ExperienceRequest {
+            create_role_skill: true,
+            body: format!("Reviewed lesson by {author}"),
+            notes: String::new(),
+            conditions: Default::default(),
+            targets: vec![],
+            review_event: None,
+        };
+        let pid = wb.propose_experience_entry(author, &request).unwrap();
+        if proposal_status(&wb, &pid) == "in_review" {
+            wb.review_proposal(&pid, true, "review shared role skill")
+                .unwrap();
+        }
+        let qid = wb
+            .db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|q| q.payload["proposal_id"] == pid)
+            .unwrap()
+            .id;
+        wb.confirm_proposal(&qid).unwrap();
+    }
+    assert_eq!(wb.experience_entries("经验-前端").unwrap().len(), 2);
+    assert!(dir
+        .path()
+        .join(".hexagon/skills/经验-前端/SKILL.md")
+        .is_file());
+    let count: i64 = wb.db.conn().query_row("SELECT count(*) FROM grants WHERE name='经验-前端' AND kind='skill' AND agent_id IN ('a0','a1')", [], |r| r.get(0)).unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(
+        crate::experience::unmanaged_experience_sections(
+            &std::fs::read_to_string(dir.path().join(".hexagon/skills/经验-前端/SKILL.md"))
+                .unwrap()
+        ),
+        0
+    );
+}
+
+#[test]
+fn experience_native_smoke_fixture_keeps_reviewed_entries_and_pending_owner_decision() {
+    use sha2::{Digest, Sha256};
+    let (dir, mut wb, pid, qid) = single_experience_pending();
+    wb.confirm_proposal(&qid).unwrap();
+    let mut request = wb.experience_proposal(&pid).unwrap().unwrap().request;
+    request.body = "NATIVE_PENDING_REVIEWED_LESSON".into();
+    request.targets[0].expected_digest = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap())
+    );
+    let next = wb.propose_experience_entry("a0", &request).unwrap();
+    if proposal_status(&wb, &next) == "in_review" {
+        wb.review_proposal(&next, true, "Native scope smoke review")
+            .unwrap();
+    }
+    assert_eq!(wb.experience_entries("alpha").unwrap()[0].state, "active");
+    assert!(wb
+        .db
+        .queued_questions(&wb.project_id)
+        .unwrap()
+        .iter()
+        .any(|q| q.payload["proposal_id"] == next));
+    // Governance 16: opt-in reproducible native smoke fixture. This exports only
+    // synthetic local work; it does not attach a provider or send model calls.
+    if let Some(pointer) = std::env::var_os("HEXAGON_EXPERIENCE_SMOKE_POINTER") {
+        let db_path = dir.path().join(".hexagon/state.db");
+        wb.db
+            .conn()
+            .execute("VACUUM INTO ?1", [db_path.to_str().unwrap()])
+            .unwrap();
+        drop(wb);
+        let path = dir.keep();
+        std::fs::write(pointer, path.to_string_lossy().as_bytes()).unwrap();
+    }
+}
+
+#[test]
+fn experience_native_publish_fixture_requires_explicit_publication_action() {
+    let (dir, wb) = git_wb(&["前端", "架构师"]);
+    let qid = crate::cards::enqueue(
+        &wb.db,
+        &wb.project_id,
+        Some("a0"),
+        crate::cards::CardKind::Publish,
+        json!({"summary":"Native publish shortcut guard", "path":"reviewed.txt"}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(wb.db.queued_questions(&wb.project_id).unwrap()[0].id, qid);
+    if let Some(pointer) = std::env::var_os("HEXAGON_PUBLISH_SMOKE_POINTER") {
+        std::fs::create_dir_all(dir.path().join(".hexagon")).unwrap();
+        let db_path = dir.path().join(".hexagon/state.db");
+        wb.db
+            .conn()
+            .execute("VACUUM INTO ?1", [db_path.to_str().unwrap()])
+            .unwrap();
+        drop(wb);
+        let path = dir.keep();
+        std::fs::write(pointer, path.to_string_lossy().as_bytes()).unwrap();
+    }
 }

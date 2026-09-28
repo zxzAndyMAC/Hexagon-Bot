@@ -369,6 +369,9 @@ impl Workbench {
             }
         }
         crate::proposals::recover_policy(&db, &dir, &project_id)?;
+        let mut recovery_ctx = crate::tools::ToolContext::owner(&db, &dir);
+        recovery_ctx.project_id = project_id.clone();
+        crate::experience::recover(&db, &recovery_ctx)?;
         let pack = if dir.join(".hexagon/pack.active.json").exists() {
             Some(PackDef::pinned(&dir)?)
         } else if recovering_policy {
@@ -667,6 +670,133 @@ impl Workbench {
         Ok(crate::experience::propose(&self.db, &ctx, lesson, read)?)
     }
 
+    #[cfg(test)]
+    pub fn fail_next_experience(&self, point: crate::experience::ExperienceFault) {
+        crate::experience::fail_next(point);
+    }
+
+    pub fn experience_source_document(
+        &self,
+        request: &crate::experience::ExperienceSourceRequest,
+    ) -> Result<crate::experience::ExperienceSourceDocument, ApiError> {
+        Ok(crate::experience::source_document(
+            &self.db,
+            &self.ctx_for("owner", None),
+            request,
+        )?)
+    }
+
+    pub fn experience_history(
+        &self,
+        request: &crate::experience::ExperienceHistoryRequest,
+    ) -> Result<crate::experience::ExperienceHistoryPage, ApiError> {
+        Ok(crate::experience::history(
+            &self.db,
+            &self.ctx_for("owner", None),
+            request,
+        )?)
+    }
+
+    pub fn curate_legacy_experience(
+        &self,
+        request: &crate::experience::ExperienceCuration,
+    ) -> Result<String, ApiError> {
+        Ok(crate::experience::curate_legacy(
+            &self.db,
+            &self.ctx_for("owner", None),
+            request,
+        )?)
+    }
+
+    pub fn revoke_experience(
+        &self,
+        request: &crate::experience::ExperienceRevocation,
+    ) -> Result<crate::experience::ExperienceEntryView, ApiError> {
+        Ok(crate::experience::revoke(
+            &self.db,
+            &self.ctx_for("owner", None),
+            request,
+        )?)
+    }
+
+    pub fn project_skill_document(
+        &self,
+        skill: &str,
+    ) -> Result<crate::experience::ProjectSkillDocument, ApiError> {
+        Ok(crate::experience::read_project_skill(
+            &self.db,
+            &self.ctx_for("owner", None),
+            skill,
+        )?)
+    }
+    pub fn save_project_skill_document(
+        &self,
+        document: &crate::experience::ProjectSkillDocument,
+    ) -> Result<crate::experience::ProjectSkillDocument, ApiError> {
+        Ok(crate::experience::save_project_skill(
+            &self.db,
+            &self.ctx_for("owner", None),
+            document,
+        )?)
+    }
+
+    pub fn experience_limits(&self) -> Result<crate::experience::ExperienceLimits, ApiError> {
+        Ok(crate::experience::loading_limits(
+            &self.db,
+            &self.project_id,
+        )?)
+    }
+    pub fn set_experience_limits(
+        &self,
+        limits: &crate::experience::ExperienceLimits,
+    ) -> Result<crate::experience::ExperienceLimits, ApiError> {
+        Ok(crate::experience::set_loading_limits(
+            &self.db,
+            &self.ctx_for("owner", None),
+            limits,
+        )?)
+    }
+
+    pub fn recover_experience(
+        &mut self,
+    ) -> Result<Vec<crate::experience::ExperienceRecovery>, ApiError> {
+        Ok(crate::experience::recover(
+            &self.db,
+            &self.ctx_for("owner", None),
+        )?)
+    }
+
+    pub fn experience_entries(
+        &self,
+        skill: &str,
+    ) -> Result<Vec<crate::experience::ExperienceEntryView>, ApiError> {
+        Ok(crate::experience::entries(
+            &self.db,
+            &self.ctx_for("owner", None),
+            skill,
+        )?)
+    }
+
+    pub fn experience_proposal(
+        &self,
+        proposal_id: &str,
+    ) -> Result<Option<crate::experience::ExperienceProposalView>, ApiError> {
+        Ok(crate::experience::proposal_view(
+            &self.db,
+            &self.project_id,
+            proposal_id,
+        )?)
+    }
+
+    pub fn propose_experience_entry(
+        &self,
+        agent_id: &str,
+        request: &crate::experience::ExperienceRequest,
+    ) -> Result<String, ApiError> {
+        let ctx = self.ctx_for(agent_id, self.active_run()?.map(|r| r.id));
+        Ok(crate::experience::propose_entry(&self.db, &ctx, request)?)
+    }
+
     /// 激活简报里的技能目录。经验正文不在这里。
     pub fn skill_catalog(&self) -> Result<String, ApiError> {
         let loader = crate::skills::SkillLoader::new(crate::skills::skill_dirs(&self.repo_root));
@@ -690,12 +820,14 @@ impl Workbench {
     }
 
     pub fn rollback_proposal(&mut self, proposal_id: &str) -> Result<(), ApiError> {
-        let author: String = self.db.conn().query_row(
-            "SELECT author_agent_id FROM proposals WHERE id=?1 AND project_id=?2",
+        let (author, surface): (String, String) = self.db.conn().query_row(
+            "SELECT author_agent_id,surface FROM proposals WHERE id=?1 AND project_id=?2",
             rusqlite::params![proposal_id, self.project_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        let ctx = self.ctx_for(&author, None);
+        // Governance 11: this facade is an owner control; entry withdrawal
+        // must retain that identity rather than impersonating the proposal author.
+        let ctx = self.ctx_for(if surface == "skill" { "owner" } else { &author }, None);
         crate::proposals::recover_policy(&self.db, &self.repo_root, &self.project_id)?;
         self.refresh_policy()?;
         crate::proposals::rollback(&self.db, &ctx, proposal_id)?;
