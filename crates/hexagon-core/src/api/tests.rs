@@ -6160,23 +6160,36 @@ else if(r.method==='tools/call'){{fs.appendFileSync('effects.txt','x');if({parti
 
 fn silent_mcp_workbench() -> (tempfile::TempDir, Workbench) {
     let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("silent-control.cjs");
+    // 2026-09-29 hosted CI: Node/libuv can abort on blocked posix_spawn(ENOSYS)
+    // before returning a JS error. Use the existing Python runtime so this
+    // fixture attempts setsid and reports its refusal; do not loosen isolation.
+    let python =
+        crate::sandbox::python_interpreter().unwrap_or_else(|| std::path::PathBuf::from("python3"));
+    let script = dir.path().join("silent-control.py");
     std::fs::write(&script, r#"
-const fs=require('fs'), rl=require('readline').createInterface({input:process.stdin});
-fs.writeFileSync('service.pid', String(process.pid));
-const send=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\n');
-rl.on('line',line=>{const r=JSON.parse(line);if(r.id===undefined)return;
-if(r.method==='initialize')send(r.id,{protocolVersion:'2025-11-25',capabilities:{tools:{}},serverInfo:{name:'silent',version:'1'}});
-else if(r.method==='tools/list')send(r.id,{tools:[{name:'write',inputSchema:{type:'object'}}]});
-else if(r.method==='tools/call'){
-if(r.params.arguments.detach){
-  fs.writeFileSync('detach-started.txt',String(Date.now()));
-  try{const c=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),1500)'],{detached:true,stdio:['ignore','inherit','inherit']});fs.writeFileSync('detached.pid',String(c.pid));}
-  catch(e){fs.writeFileSync('detach-blocked.txt',e.code);}
-}
-fs.appendFileSync('effects.txt','x');setTimeout(()=>process.exit(0),1500);}
-
-});
+import json, os, pathlib, subprocess, sys, time
+pathlib.Path('service.pid').write_text(str(os.getpid()))
+def send(id, result):
+    print(json.dumps({'jsonrpc':'2.0', 'id':id, 'result':result}), flush=True)
+for line in sys.stdin:
+    r = json.loads(line)
+    if 'id' not in r:
+        continue
+    if r['method'] == 'initialize':
+        send(r['id'], {'protocolVersion':'2025-11-25','capabilities':{'tools':{}},'serverInfo':{'name':'silent','version':'1'}})
+    elif r['method'] == 'tools/list':
+        send(r['id'], {'tools':[{'name':'write','inputSchema':{'type':'object'}}]})
+    elif r['method'] == 'tools/call':
+        if r['params']['arguments'].get('detach'):
+            try:
+                child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1.5)'], start_new_session=True, stdin=subprocess.DEVNULL)
+                pathlib.Path('detached.pid').write_text(str(child.pid))
+            except OSError as error:
+                pathlib.Path('detach-blocked.txt').write_text(str(error.errno))
+        with open('effects.txt', 'a') as effect:
+            effect.write('x')
+        time.sleep(1.5)
+        break
 "#).unwrap();
     let sdk = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../ui/scripts/fixtures/mcp-sdk-server.mjs")
@@ -6186,7 +6199,7 @@ fs.appendFileSync('effects.txt','x');setTimeout(()=>process.exit(0),1500);}
     std::fs::write(
         dir.path().join(".hexagon/mcp.json"),
         serde_json::to_vec(&json!([
-            {"name":"silent", "command":"sh", "args":["-c", "exec node \"$1\" 2>service.stderr", "sh", script], "cwd":dir.path()},
+            {"name":"silent", "command":python, "args":[script], "cwd":dir.path()},
             {"name":"healthy", "command":"node", "args":[sdk]}
         ]))
         .unwrap(),
@@ -6349,13 +6362,7 @@ fn mcp_deadline_detached_descendant_cannot_outlive_service() {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     } else {
-        assert!(
-            dir.path().join("detach-blocked.txt").exists(),
-            "detach started={}, effects={}, stderr={}",
-            dir.path().join("detach-started.txt").exists(),
-            dir.path().join("effects.txt").exists(),
-            std::fs::read_to_string(dir.path().join("service.stderr")).unwrap_or_default()
-        );
+        assert!(dir.path().join("detach-blocked.txt").exists());
     }
 }
 
