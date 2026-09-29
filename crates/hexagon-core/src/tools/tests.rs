@@ -869,11 +869,28 @@ fn background_task_output_cursor_and_kill() {
 #[test]
 fn timeout_kills_and_traces() {
     let (db, _reg, ctx, _dir) = setup();
-    let t0 = std::time::Instant::now();
+    // 2026-09-29 hosted CI: runtime inventory can take over 10s before spawn.
+    // The execution deadline starts after preparation. Observe command startup
+    // through the existing output tap instead of enlarging the timeout bound.
+    let (started, observed) = std::sync::mpsc::channel();
+    ctx.sessions.set_call_meta(&ctx.agent_id, None);
+    ctx.sessions.set_output_tap(Some(Box::new(move |delta| {
+        if delta.stream == "stdout" {
+            started.send(std::time::Instant::now()).unwrap();
+        }
+    })));
     let v = Bash
-        .exec(&db, &json!({"cmd": "sleep 30", "timeout_ms": 150}), &ctx)
+        .exec(
+            &db,
+            &json!({"cmd": "printf ready; exec sleep 30", "timeout_ms": 150}),
+            &ctx,
+        )
         .unwrap();
+    let t0 = observed
+        .try_recv()
+        .expect("command emitted its startup marker");
     assert!(t0.elapsed() < std::time::Duration::from_secs(10));
+    assert_eq!(v["stdout"], "ready");
     assert_eq!(v["timed_out"], true);
     let kinds: Vec<String> = db
         .timeline("p1", None, 200, Some(&[EventKind::System]))
