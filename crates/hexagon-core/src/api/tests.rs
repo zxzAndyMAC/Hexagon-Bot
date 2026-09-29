@@ -6170,6 +6170,7 @@ if(r.method==='initialize')send(r.id,{protocolVersion:'2025-11-25',capabilities:
 else if(r.method==='tools/list')send(r.id,{tools:[{name:'write',inputSchema:{type:'object'}}]});
 else if(r.method==='tools/call'){
 if(r.params.arguments.detach){
+  fs.writeFileSync('detach-started.txt',String(Date.now()));
   try{const c=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),1500)'],{detached:true,stdio:['ignore','inherit','inherit']});fs.writeFileSync('detached.pid',String(c.pid));}
   catch(e){fs.writeFileSync('detach-blocked.txt',e.code);}
 }
@@ -6185,7 +6186,7 @@ fs.appendFileSync('effects.txt','x');setTimeout(()=>process.exit(0),1500);}
     std::fs::write(
         dir.path().join(".hexagon/mcp.json"),
         serde_json::to_vec(&json!([
-            {"name":"silent", "command":"node", "args":[script], "cwd":dir.path()},
+            {"name":"silent", "command":"sh", "args":["-c", "exec node \"$1\" 2>service.stderr", "sh", script], "cwd":dir.path()},
             {"name":"healthy", "command":"node", "args":[sdk]}
         ]))
         .unwrap(),
@@ -6348,7 +6349,13 @@ fn mcp_deadline_detached_descendant_cannot_outlive_service() {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     } else {
-        assert!(dir.path().join("detach-blocked.txt").exists());
+        assert!(
+            dir.path().join("detach-blocked.txt").exists(),
+            "detach started={}, effects={}, stderr={}",
+            dir.path().join("detach-started.txt").exists(),
+            dir.path().join("effects.txt").exists(),
+            std::fs::read_to_string(dir.path().join("service.stderr")).unwrap_or_default()
+        );
     }
 }
 
