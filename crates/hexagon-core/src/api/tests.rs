@@ -4863,26 +4863,42 @@ fn subagent_test_processes_cannot_modify_source_or_host_state() {
     std::fs::write(dir.path().join("source.txt"), "original").unwrap();
     std::fs::create_dir_all(dir.path().join(".hexagon")).unwrap();
     std::fs::write(dir.path().join(".hexagon/permissions.toml"), "# original").unwrap();
+    // 2026-09-29 CI: official Node/libuv aborts on the ENOSYS required by
+    // process-group confinement, before its test payload finishes. Use the
+    // existing Python runtime and a synthetic pytest entry point to exercise
+    // the same run_test gate; never relax containment to accommodate a runner.
+    let python = crate::sandbox::python_interpreter().expect("macOS Python interpreter");
     std::fs::write(
-        dir.path().join("package.json"),
-        r#"{"scripts":{"test":"node probe.cjs"}}"#,
+        dir.path().join("pytest.py"),
+        r#"
+import os, pathlib, subprocess, sys
+assert sys.argv[1] == os.environ['HEXAGON_TEST_OUTPUT']
+for name in ['source.txt', '.hexagon/permissions.toml']:
+    try:
+        pathlib.Path(name).write_text('changed')
+    except PermissionError:
+        pass
+child = subprocess.run([sys.executable, '-c', """
+import pathlib
+try:
+    pathlib.Path('child.txt').write_text('changed')
+except PermissionError:
+    print('CHILD_WRITE_DENIED')
+"""], capture_output=True, text=True, check=True)
+assert 'CHILD_WRITE_DENIED' in child.stdout
+print(child.stdout)
+output = pathlib.Path(os.environ['HEXAGON_TEST_OUTPUT'])
+(output / 'alias').symlink_to(pathlib.Path.cwd() / 'source.txt')
+try:
+    (output / 'alias').write_text('changed')
+except PermissionError:
+    pass
+(output / 'verdict.txt').write_text('allowed')
+print('ALLOWED_TEST_OUTPUT')
+print('REAL_TEST_FINISHED')
+"#,
     )
     .unwrap();
-    std::fs::write(dir.path().join("probe.cjs"), r#"
-const fs = require('fs');
-const cp = require('child_process');
-if (process.argv[2] !== process.env.HEXAGON_TEST_OUTPUT) throw new Error('output argument not expanded');
-try { fs.writeFileSync('source.txt', 'changed'); } catch {}
-try { fs.writeFileSync('.hexagon/permissions.toml', 'changed'); } catch {}
-try { cp.execFileSync(process.execPath, ['-e', "require('fs').writeFileSync('child.txt','changed')"], {stdio:'pipe'}); } catch {}
-if (process.env.HEXAGON_TEST_OUTPUT) {
-  fs.symlinkSync(process.cwd() + '/source.txt', process.env.HEXAGON_TEST_OUTPUT + '/alias');
-  try { fs.writeFileSync(process.env.HEXAGON_TEST_OUTPUT + '/alias', 'changed'); } catch {}
-  fs.writeFileSync(process.env.HEXAGON_TEST_OUTPUT + '/verdict.txt', 'allowed');
-  console.log('ALLOWED_TEST_OUTPUT');
-}
-console.log('REAL_TEST_FINISHED');
-"#).unwrap();
     let provider = Arc::new(ScriptedProvider::new(vec![
         tool_response(vec![(
             "t1",
@@ -4892,7 +4908,7 @@ console.log('REAL_TEST_FINISHED');
         tool_response(vec![(
             "t2",
             "run_test",
-            json!({"cmd":r#"npm test -- "$HEXAGON_TEST_OUTPUT""#}),
+            json!({"cmd":format!(r#""{}" -m pytest "$HEXAGON_TEST_OUTPUT""#, python.display())}),
         )]),
         text_response("test result collected"),
         text_response("done"),
@@ -4922,6 +4938,10 @@ console.log('REAL_TEST_FINISHED');
     assert!(
         recorded.contains("REAL_TEST_FINISHED"),
         "test process did not complete"
+    );
+    assert!(
+        recorded.contains("CHILD_WRITE_DENIED"),
+        "child write probe did not run"
     );
     assert!(
         recorded.contains("ALLOWED_TEST_OUTPUT"),

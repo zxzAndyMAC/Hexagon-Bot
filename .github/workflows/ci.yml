@@ -47,10 +47,13 @@ jobs:
                               os.unlink(temporary)
           print('Independent Homebrew runtime copies:', copied)
           PY
-      - name: Verify macOS sandbox before the full suite
-        run: cargo test -p hexagon-core sandbox::tests::seatbelt_confines_writes -- --exact --nocapture
-      - name: Verify MCP descendant cleanup before the full suite
-        run: cargo test -p hexagon-core api::tests::mcp_deadline_detached_descendant_cannot_outlive_service -- --exact --nocapture
+      - name: Verify sandbox and process fixtures before the full suite
+        run: >-
+          cargo test -p hexagon-core -- --exact --no-capture
+          sandbox::tests::seatbelt_confines_writes
+          api::tests::mcp_deadline_detached_descendant_cannot_outlive_service
+          api::tests::subagent_test_processes_cannot_modify_source_or_host_state
+          tools::tests::timeout_kills_and_traces
       # reliability 01: same entrypoints locally and in CI, including architecture,
       # tokens, seven-language keys and regenerated DTO drift.
       - run: npm run check
