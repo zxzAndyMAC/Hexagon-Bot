@@ -20,33 +20,32 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci --prefix ui
-      - name: Inspect sandbox runtime inventory
+      # 2026-09-29 hosted-runner incident: 992 preinstalled Homebrew hardlinks
+      # produced 119 KB of deny rules, exceeding the 64 KiB fail-closed limit.
+      # Normalize only this disposable runner's runtime files; production limits
+      # and hardlink attack fixtures stay intact. No skipped isolation tests.
+      - name: Make hosted Homebrew runtime files independent
         run: |
           python3 - <<'PY'
-          import os, pathlib, stat, subprocess
-          developer = pathlib.Path(subprocess.check_output(['xcode-select', '-p'], text=True).strip()).resolve()
-          print('selected developer:', developer)
-          print('command line tools installed:', pathlib.Path('/Library/Developer/CommandLineTools/usr').is_dir())
-          roots = [pathlib.Path(p) for p in ['/opt/homebrew', '/usr/local', '/private/etc/ssl']]
-          roots += [developer / 'usr', developer / 'Library/Frameworks/Python3.framework']
-          roots += [pathlib.Path.home() / p for p in ['.rustup', '.cargo/bin', '.cargo/registry', '.cargo/git']]
-          for root in roots:
-              if not root.exists():
-                  continue
-              pending, entries, aliases, rule_bytes = [root], 0, 0, 0
-              try:
-                  while pending:
-                      for entry in os.scandir(pending.pop()):
-                          entries += 1
-                          meta = entry.stat(follow_symlinks=False)
-                          if stat.S_ISDIR(meta.st_mode):
-                              pending.append(entry.path)
-                          elif stat.S_ISREG(meta.st_mode) and meta.st_nlink > 1:
-                              aliases += 1
-                              rule_bytes += len(f'(deny file-read-data file-write* (literal "{entry.path}"))\n'.encode())
-                  print(root, 'entries=', entries, 'aliases=', aliases, 'rule_bytes=', rule_bytes)
-              except OSError as error:
-                  print(root, 'inventory error:', error)
+          import os, pathlib, shutil, stat, tempfile
+          root = pathlib.Path('/opt/homebrew')
+          pending, copied = ([root] if root.exists() else []), 0
+          while pending:
+              for entry in os.scandir(pending.pop()):
+                  meta = entry.stat(follow_symlinks=False)
+                  if stat.S_ISDIR(meta.st_mode):
+                      pending.append(entry.path)
+                  elif stat.S_ISREG(meta.st_mode) and meta.st_nlink > 1:
+                      fd, temporary = tempfile.mkstemp(dir=os.path.dirname(entry.path))
+                      os.close(fd)
+                      try:
+                          shutil.copy2(entry.path, temporary)
+                          os.replace(temporary, entry.path)
+                          copied += 1
+                      finally:
+                          if os.path.exists(temporary):
+                              os.unlink(temporary)
+          print('Independent Homebrew runtime copies:', copied)
           PY
       - name: Verify macOS sandbox before the full suite
         run: cargo test -p hexagon-core sandbox::tests::seatbelt_confines_writes -- --exact --nocapture
