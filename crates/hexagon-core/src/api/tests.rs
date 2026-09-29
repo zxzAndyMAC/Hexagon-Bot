@@ -8228,11 +8228,11 @@ fn approved_write_host_lock_prevents_two_instances_overwriting_same_target() {
             ctx: &crate::tools::ToolContext,
         ) -> Result<Value, crate::tools::ToolError> {
             self.started.send(()).unwrap();
-            self.release
-                .lock()
-                .unwrap()
-                .recv_timeout(std::time::Duration::from_secs(10))
-                .unwrap();
+            // 2026-09-29 CI: slow sandbox preparation could outlast a 10s
+            // fixture timeout and release the writer before the competitor ran.
+            // Hold until the parent finishes both attempts; parent unwind drops
+            // the sender too. A longer timeout would retain the same race.
+            self.release.lock().unwrap().recv().unwrap();
             self.inner.exec(db, input, ctx)
         }
     }
