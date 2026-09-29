@@ -4480,10 +4480,9 @@ fn terminal_linux_rejects_unenforceable_read_scope() {
         out.is_err(),
         "unsupported directory scope executed: {out:?}"
     );
-    assert!(
-        dir.path().join("attempted.txt").exists(),
-        "escape probe must actually run"
-    );
+    // 2026-09-29 Linux CI audit: refusal happens before process launch. The
+    // old attempted.txt assertion came from an executing probe; neither command
+    // here creates it. Preserve the no-effect assertions for this denied path.
     assert!(!dir.path().join("escaped.txt").exists());
     // Empty ownership continues to permit structured ordinary business writes.
     let out = tool_call(
@@ -4511,10 +4510,6 @@ fn terminal_linux_rejects_unenforceable_read_scope() {
     assert_eq!(
         std::fs::read_to_string(dir.path().join("ordinary.txt")).unwrap(),
         "original"
-    );
-    assert!(
-        dir.path().join("attempted.txt").exists(),
-        "escape probe must actually run"
     );
     assert!(!dir.path().join("escaped.txt").exists());
     assert!(!crate::sandbox::status().available);
