@@ -20,6 +20,36 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci --prefix ui
+      - name: Inspect sandbox runtime inventory
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, stat, subprocess
+          developer = pathlib.Path(subprocess.check_output(['xcode-select', '-p'], text=True).strip()).resolve()
+          print('selected developer:', developer)
+          print('command line tools installed:', pathlib.Path('/Library/Developer/CommandLineTools/usr').is_dir())
+          roots = [pathlib.Path(p) for p in ['/opt/homebrew', '/usr/local', '/private/etc/ssl']]
+          roots += [developer / 'usr', developer / 'Library/Frameworks/Python3.framework']
+          roots += [pathlib.Path.home() / p for p in ['.rustup', '.cargo/bin', '.cargo/registry', '.cargo/git']]
+          for root in roots:
+              if not root.exists():
+                  continue
+              pending, entries, aliases, rule_bytes = [root], 0, 0, 0
+              try:
+                  while pending:
+                      for entry in os.scandir(pending.pop()):
+                          entries += 1
+                          meta = entry.stat(follow_symlinks=False)
+                          if stat.S_ISDIR(meta.st_mode):
+                              pending.append(entry.path)
+                          elif stat.S_ISREG(meta.st_mode) and meta.st_nlink > 1:
+                              aliases += 1
+                              rule_bytes += len(f'(deny file-read-data file-write* (literal "{entry.path}"))\n'.encode())
+                  print(root, 'entries=', entries, 'aliases=', aliases, 'rule_bytes=', rule_bytes)
+              except OSError as error:
+                  print(root, 'inventory error:', error)
+          PY
+      - name: Verify macOS sandbox before the full suite
+        run: cargo test -p hexagon-core sandbox::tests::seatbelt_confines_writes -- --exact --nocapture
       # reliability 01: same entrypoints locally and in CI, including architecture,
       # tokens, seven-language keys and regenerated DTO drift.
       - run: npm run check
