@@ -1,0 +1,154 @@
+[
+  {
+    "kind": "identifier",
+    "query": "resolve_slot",
+    "expected": [
+      "crates/hexagon-core/src/provider_config.rs"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "模型槽位没有绑定时在哪里回退到默认模型",
+    "expected": [
+      "crates/hexagon-core/src/provider_config.rs"
+    ]
+  },
+  {
+    "kind": "identifier",
+    "query": "reconcile_tool_action",
+    "expected": [
+      "crates/hexagon-core/src/api.rs"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "工具执行结果不确定以后怎样核对恢复",
+    "expected": [
+      "crates/hexagon-core/src/api.rs"
+    ]
+  },
+  {
+    "kind": "identifier",
+    "query": "candidate_score",
+    "expected": [
+      "crates/hexagon-core/src/semsearch.rs"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "本地相似检索如何过滤低分候选",
+    "expected": [
+      "crates/hexagon-core/src/semsearch.rs"
+    ]
+  },
+  {
+    "kind": "identifier",
+    "query": "detect_status",
+    "expected": [
+      "crates/hexagon-core/src/sandbox.rs"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "系统不支持安全沙箱时是否允许运行命令",
+    "expected": [
+      "crates/hexagon-core/src/sandbox.rs"
+    ]
+  },
+  {
+    "kind": "identifier",
+    "query": "ReturnSummaryRow",
+    "expected": [
+      "ui/src/components/Timeline.tsx"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "离开后回来在哪里看到待处理事项",
+    "expected": [
+      "ui/src/components/Timeline.tsx"
+    ]
+  },
+  {
+    "kind": "identifier",
+    "query": "SlotRow",
+    "expected": [
+      "ui/src/components/ProviderManager.tsx"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "重启后设置中的模型绑定如何回填",
+    "expected": [
+      "ui/src/components/ProviderManager.tsx"
+    ]
+  },
+  {
+    "kind": "identifier",
+    "query": "SupplierUsageReconciliation",
+    "expected": [
+      "crates/hexagon-core/src/evaluation/budget/reconciliation.rs"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "缺少供应商用量的费用怎样对账",
+    "expected": [
+      "crates/hexagon-core/src/evaluation/budget/reconciliation.rs"
+    ]
+  },
+  {
+    "kind": "identifier",
+    "query": "fail_unstarted_attempt",
+    "expected": [
+      "crates/hexagon-core/src/actions.rs"
+    ]
+  },
+  {
+    "kind": "natural",
+    "query": "工具参数不合法时怎样避免挂起动作残留",
+    "expected": [
+      "crates/hexagon-core/src/actions.rs"
+    ]
+  },
+  {
+    "kind": "unrelated",
+    "query": "糖醋排骨做法",
+    "expected": []
+  },
+  {
+    "kind": "unrelated",
+    "query": "明天北京天气预报",
+    "expected": []
+  },
+  {
+    "kind": "unrelated",
+    "query": "土星卫星公转周期",
+    "expected": []
+  },
+  {
+    "kind": "unrelated",
+    "query": "宋代瓷器鉴定方法",
+    "expected": []
+  },
+  {
+    "kind": "unrelated",
+    "query": "sourdough fermentation temperature",
+    "expected": []
+  },
+  {
+    "kind": "unrelated",
+    "query": "medieval Venetian trade routes",
+    "expected": []
+  },
+  {
+    "kind": "unrelated",
+    "query": "coral reef bleaching survey",
+    "expected": []
+  },
+  {
+    "kind": "unrelated",
+    "query": "violin bow hair replacement",
+    "expected": []
+  }
+]

@@ -176,7 +176,7 @@ fn evaluation_recovery_crash_child() {
     }
     let run = host.evaluation_result(&run_id).unwrap();
     let _owner = host.hold_evaluation_driver_fixture(&run_id).unwrap();
-    struct Receipt(std::path::PathBuf);
+    struct Receipt(std::path::PathBuf, bool);
     impl crate::provider::ModelProvider for Receipt {
         fn is_scripted(&self) -> bool {
             true
@@ -186,6 +186,13 @@ fn evaluation_recovery_crash_child() {
             _: &crate::provider::ChatRequest,
         ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
             std::fs::write(self.0.join("request-reached-peer"), "one request").unwrap();
+            // 2026-09-29 acceptance: the parent kills this process while the
+            // provider owns the request, before any response or receipt exists.
+            if self.1 {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
             Ok(crate::provider::ChatResponse {
                 content: vec![crate::provider::ContentBlock::Text {
                     text: "response".into(),
@@ -202,10 +209,68 @@ fn evaluation_recovery_crash_child() {
         }
     }
     let mut worker = Workbench::open_evaluation_host(Path::new(&run.workspace)).unwrap();
-    worker.register_provider("default", Arc::new(Receipt(root)));
-    worker.arm_evaluation_crash_fixture(&point).unwrap();
+    worker.register_provider("default", Arc::new(Receipt(root, point == "inflight")));
+    if point != "inflight" {
+        worker.arm_evaluation_crash_fixture(&point).unwrap();
+    }
     let _ = worker.draft_role_def("a0", "crash receipt boundary fixture");
     panic!("crash boundary must exit");
+}
+
+#[test]
+#[cfg(unix)]
+fn evaluation_recovery_sigkill_inflight_preserves_unknown_without_replay() {
+    use std::os::unix::process::ExitStatusExt;
+    let (home, host, run) = super::evaluation_budget_tests::waiting_budget(
+        80,
+        500000,
+        super::evaluation_budget_tests::fixture_price(),
+    );
+    let before = host.evaluation_budget_debug().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "api::evaluation_recovery_tests::evaluation_recovery_crash_child",
+            "--nocapture",
+        ])
+        .env("HEXAGON_TEST_EVALUATION_CRASH_ROOT", home.path())
+        .env("HEXAGON_TEST_EVALUATION_CRASH_POINT", "inflight")
+        .env("HEXAGON_TEST_EVALUATION_CRASH_RUN", &run.id)
+        .spawn()
+        .unwrap();
+    let marker = home.path().join("request-reached-peer");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // Reap even on timeout so a failed acceptance never leaves a hanging child.
+    let reached = marker.exists();
+    let killed = child.kill();
+    let status = child.wait().unwrap();
+    assert!(reached, "provider was never reached before the deadline");
+    killed.unwrap();
+    assert_eq!(status.signal(), Some(9));
+    drop(host);
+    for _ in 0..2 {
+        let reopened = Workbench::open_evaluation_host(home.path()).unwrap();
+        reopened.reconcile_evaluation_run(&run.id).unwrap();
+        let after = reopened.evaluation_budget_debug().unwrap();
+        assert_eq!(after.requests, before.requests + 1);
+        assert_eq!(after.known_mc, before.known_mc);
+        assert_eq!(after.unknown_mc, before.unknown_mc + 3000);
+        assert_eq!(after.in_flight_mc, 0);
+        assert!(after.blocked);
+        assert_eq!(
+            reopened.evaluation_result(&run.id).unwrap().state,
+            "incomplete"
+        );
+        assert!(
+            !reopened
+                .evaluation_control(&run.id)
+                .unwrap()
+                .cleanup_confirmed
+        );
+    }
 }
 
 #[test]

@@ -13079,6 +13079,51 @@ fn tool_preflight_failure_is_terminal_and_survives_reopen() {
 }
 
 #[test]
+fn local_similarity_real_project_measurement() {
+    // Opt-in measurement, not a synthetic quality gate: freeze the source copy
+    // and expected paths before running, and retain misses in the output.
+    let Some(root) = std::env::var_os("HEXAGON_RETRIEVAL_PROJECT") else {
+        return;
+    };
+    // 2026-09-29 review: for_test starts project MCP commands. A retrieval
+    // measurement must use a source-only snapshot, never launch those commands.
+    assert!(
+        !Path::new(&root).join(".hexagon/mcp.json").exists(),
+        "retrieval measurement requires a source snapshot without MCP configuration"
+    );
+    let cases: Value = serde_json::from_slice(
+        &std::fs::read(std::env::var_os("HEXAGON_RETRIEVAL_CASES").unwrap()).unwrap(),
+    )
+    .unwrap();
+    let wb = Workbench::for_test(Path::new(&root), &["worker"], None).unwrap();
+    println!(
+        "searchable_files={}",
+        crate::search::repo_files(Path::new(&root)).len()
+    );
+    let mut rows = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let start = std::time::Instant::now();
+        let CallOutcome::Done(result) =
+            tool_call(&wb, "sem_search", json!({"query":case["query"],"count":5})).unwrap()
+        else {
+            panic!("local retrieval did not complete");
+        };
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let CallOutcome::Done(exact) =
+            tool_call(&wb, "fs_grep", json!({"query":case["query"]})).unwrap()
+        else {
+            panic!("exact retrieval did not complete");
+        };
+        rows.push(json!({"case":case,"hits":result["hits"],"elapsed_ms":elapsed_ms,"exact_hits":exact["hits"]}));
+    }
+    std::fs::write(
+        std::env::var_os("HEXAGON_RETRIEVAL_REPORT").unwrap(),
+        serde_json::to_vec_pretty(&rows).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn local_similarity_benchmark() {
     let corpus: Value =
         serde_json::from_str(include_str!("../../../../evaluation/retrieval/corpus.json")).unwrap();

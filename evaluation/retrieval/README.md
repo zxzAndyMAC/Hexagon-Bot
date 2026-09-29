@@ -7,3 +7,34 @@ The Workbench regression checks distinct-file top-k, literal Recall@5 and unrela
 2026-09-28 measured baseline: hot p95 17.34/159.77/956.81 ms. Conservative same-host regression ceilings are 40/350/2000 ms hot and 60/400/2500 ms cold p95. After optimization: hot p95 17.37/148.92/649.72 ms, literal recall 30/30 and unrelated rejection 10/10 at each size. Paraphrase recall is 0/10; this remains character similarity, not learned semantics. The hash-ngram-v1 cutoff 0.30 was calibrated against this development fixture and may reject useful low-overlap matches. Prefer exact text/filename search, and verify excerpts.
 
 Content hashing remains enabled on every refresh to catch replacements regardless of size/mtime. A future learned embedder or filesystem-change cache needs its own quality/freshness evidence rather than inheriting these results.
+
+## Real repository measurement (2026-09-29)
+
+`real-project-queries.json` was frozen before measuring 573 tracked files under
+`crates/hexagon-core/src` and `ui/src` at commit `44390f9`. It contains eight
+identifiers, eight Chinese questions and eight unrelated queries. No threshold
+or retrieval implementation was changed using these results.
+
+| Query group | Local similarity | Literal fs_grep |
+| --- | --- | --- |
+| Identifiers: expected file found | 0/8 in top 5 | 8/8 within returned hits (up to 100 lines) |
+| Natural language: expected file found | 0/8 in top 5 | 0/8 within returned hits |
+| Unrelated: empty result | 8/8 | 8/8 |
+
+The two result caps differ; this is a check of the existing exact-search fallback,
+not a claim that their ranking metrics are interchangeable. All expected files
+were present and below the 256 KiB search limit. This is one small, author-selected
+repository sample, not evidence of general semantic quality. Prefer fs_grep for
+known symbols. The synthetic calibration's literal success did not generalize to
+these real source files; natural-language retrieval remains unverified for use as
+the sole navigation tool. A model upgrade needs fresh queries and its own budget.
+
+To reproduce, copy those tracked directories from the frozen commit into a
+disposable directory, preserving relative paths and excluding `.hexagon` runtime
+configuration (the measurement rejects project MCP configuration). Set `HEXAGON_RETRIEVAL_PROJECT`
+to that directory, `HEXAGON_RETRIEVAL_CASES` to the absolute path of
+`real-project-queries.json`, and `HEXAGON_RETRIEVAL_REPORT` to a JSON output path.
+Run `cargo test -p hexagon-core local_similarity_real_project_measurement -- --nocapture`.
+The test uses the Workbench tool registry with an in-memory database, reports
+misses rather than treating them as execution failures, and does not call models.
+Without these environment variables the optional measurement does not run.
