@@ -2,8 +2,8 @@
 //!
 //! 硬约束的实现选择：
 //! - **本地性**：默认嵌入器是纯计算的 hashing-trick 稀疏向量（char n-gram），
-//!   零网络零依赖。中英通用靠字符 n-gram——中文无空格分词、英文词干差异
-//!   都被 n-gram 天然吃掉。精度和神经嵌入器没法比，这是「完全本地」的
+//!   零网络零依赖。字符 n-gram 只比较字符重叠，不理解同义词或跨语言含义。
+//!   字面命中优先于近似分数。精度和神经嵌入器没法比，这是「完全本地」的
 //!   取舍；`Embedder` 是 trait，日后换小模型只动注入点。
 //! - **增量**：code_files 记「嵌入器名+内容哈希」——嵌入器实现换了即全量
 //!   重建（旧向量对新向量是噪声），文件没变则整文件跳过，不重嵌未动块。
@@ -15,6 +15,7 @@
 use crate::db::Db;
 use crate::tools::fnv64;
 use serde_json::{json, Value};
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -112,6 +113,30 @@ fn unpack(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+// A15 review (2026-09-29): indexing, literal evidence and excerpts must read
+// the same text. Strict UTF-8 in only one path silently lost indexed identifiers.
+fn indexed_text(root: &Path, rel: &str) -> Option<String> {
+    let path = crate::tools::agent_readable_repo_path(root, rel).ok()?;
+    if path.metadata().ok()?.len() > INDEX_FILE_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    // Bound the read itself as well: an external editor can grow the file after
+    // metadata was checked. Keep the existing 8 KiB binary probe and lossy decode.
+    std::fs::File::open(path)
+        .ok()?
+        .take(INDEX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.is_empty()
+        || bytes.len() as u64 > INDEX_FILE_BYTES
+        || bytes[..bytes.len().min(8192)].contains(&0)
+    {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// 增量刷新索引：新/变文件重嵌，消失文件连带清块，未动文件整文件跳过。
 /// 返回本次重嵌的文件数（事件/结果载荷的可观测面）。
 pub fn refresh(
@@ -133,20 +158,9 @@ pub fn refresh(
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for rel in &files {
-        let Ok(p) = crate::tools::agent_readable_repo_path(root, rel) else {
+        let Some(text) = indexed_text(root, rel) else {
             continue;
         };
-        let Ok(meta) = p.metadata() else { continue };
-        if meta.len() > INDEX_FILE_BYTES || meta.len() == 0 {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&p) else {
-            continue;
-        };
-        if bytes[..bytes.len().min(8192)].contains(&0) {
-            continue;
-        }
-        let text = String::from_utf8_lossy(&bytes).into_owned();
         stale.remove(rel);
         let sig = format!("{}:{:016x}", embedder.name(), fnv64(&text));
         let cur: Option<String> = db
@@ -196,8 +210,8 @@ fn candidate_score(engine: &str, score: f32) -> bool {
     score.is_finite() && score > if engine == "hash-ngram-v1" { 0.30 } else { 0.0 }
 }
 
-/// 语义搜索：全块内积取 top-k（块已归一化 → 点积即余弦）。
-/// 命中给出 path + 块首行号 + 块首段摘录（~240 字符）。
+/// 本地相似检索：默认引擎优先保留字面命中文件，再按全块内积取 top-k。
+/// 字面命中定位实际行；近似命中定位最佳块。分数仍为块余弦，不是置信度。
 pub fn query(
     db: &Db,
     root: &Path,
@@ -205,6 +219,27 @@ pub fn query(
     q: &str,
     cap: usize,
 ) -> Result<Vec<Value>, crate::tools::ToolError> {
+    if q.trim().is_empty() || cap == 0 {
+        return Ok(Vec::new());
+    }
+    // A15 real-source measurement (2026-09-29): 48-line normalization drowned
+    // out literal identifiers (.065 vs .783 alone). Lowering the global floor
+    // would also admit hash collisions. Keep exact evidence ahead of similarity
+    // and point the excerpt at the actual matching line, not the chunk's start.
+    let mut literal_lines = std::collections::HashMap::new();
+    if embedder.name() == "hash-ngram-v1" {
+        let mut files = db.conn().prepare("SELECT path FROM code_files")?;
+        for path in files.query_map([], |r| r.get::<_, String>(0))? {
+            let path = path?;
+            let Some(text) = indexed_text(root, &path) else {
+                continue;
+            };
+            if let Some(offset) = text.find(q) {
+                let line = text[..offset].bytes().filter(|&b| b == b'\n').count() + 1;
+                literal_lines.insert(path, line as i64);
+            }
+        }
+    }
     let qv = embedder.embed(q);
     let mut st = db
         .conn()
@@ -226,7 +261,7 @@ pub fn query(
         }
         let v = unpack(&blob);
         let dot: f32 = qv.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
-        if candidate_score(embedder.name(), dot) {
+        if literal_lines.contains_key(&path) || candidate_score(embedder.name(), dot) {
             seen.entry(path)
                 .and_modify(|e| {
                     if dot > e.0 || (dot == e.0 && line_start < e.1) {
@@ -238,7 +273,11 @@ pub fn query(
     }
     let mut hits: Vec<_> = seen.into_iter().collect();
     let order = |a: &(String, (f32, i64)), b: &(String, (f32, i64))| {
-        b.1 .0.total_cmp(&a.1 .0).then_with(|| a.0.cmp(&b.0))
+        literal_lines
+            .contains_key(&b.0)
+            .cmp(&literal_lines.contains_key(&a.0))
+            .then_with(|| b.1 .0.total_cmp(&a.1 .0))
+            .then_with(|| a.0.cmp(&b.0))
     };
     if cap < hits.len() {
         hits.select_nth_unstable_by(cap, order);
@@ -248,11 +287,14 @@ pub fn query(
     Ok(hits
         .into_iter()
         .map(|(path, (score, line_start))| {
+            let literal = literal_lines.get(&path);
+            let line_start = literal.copied().unwrap_or(line_start);
             json!({
                 "path": path,
                 "line": line_start,
                 "excerpt": excerpt(root, &path, line_start),
                 "score": format!("{score:.3}"),
+                "match": if literal.is_some() { "literal" } else { "similarity" },
             })
         })
         .collect())
@@ -260,10 +302,7 @@ pub fn query(
 
 /// 命中块的短摘：从块首行起取非空行拼到 ~240 字符。
 fn excerpt(root: &Path, rel: &str, line_start: i64) -> String {
-    let Ok(path) = crate::tools::agent_readable_repo_path(root, rel) else {
-        return String::new();
-    };
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Some(text) = indexed_text(root, rel) else {
         return String::new();
     };
     let mut out = String::new();

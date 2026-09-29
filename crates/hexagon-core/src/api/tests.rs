@@ -13235,6 +13235,103 @@ fn local_similarity_benchmark() {
 }
 
 #[test]
+fn local_similarity_finds_literal_inside_long_source_block() {
+    let dir = tempfile::tempdir().unwrap();
+    // A15 real-repository regression (2026-09-29): surrounding code must not
+    // drown out an identifier that is literally present in the source.
+    let body = format!(
+        "{}pub fn reconcile_tool_action() {{}}\n",
+        "let value = values.iter().map(|item| item.len()).sum::<usize>();\n".repeat(40)
+    );
+    std::fs::write(dir.path().join("actions.rs"), body).unwrap();
+    std::fs::write(dir.path().join("approximate.rs"), "reconcile tool action").unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let CallOutcome::Done(value) = tool_call(
+        &wb,
+        "sem_search",
+        json!({"query":"reconcile_tool_action","count":1}),
+    )
+    .unwrap() else {
+        panic!("search must complete")
+    };
+    assert!(
+        value["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["path"] == "actions.rs"
+                && h["line"] == 41
+                && h["match"] == "literal"
+                && h["excerpt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reconcile_tool_action")),
+        "literal match lost in surrounding source: {value}"
+    );
+}
+
+#[test]
+fn local_similarity_literal_uses_indexed_text_and_multiline_queries() {
+    // A15 review (2026-09-29): the exact pass must use the same lossy text
+    // decoding as indexing, and an accepted query may span source lines.
+    for (name, query, tail) in [
+        ("lossy", "reconcile_tool_action", vec![0xff]),
+        ("late_nul", "reconcile_tool_action", vec![0]),
+        (
+            "multiline",
+            "reconcile_tool_action\nnext_marker",
+            Vec::new(),
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let padding = format!("// {}\n", "ordinary surrounding source words ".repeat(8)).repeat(40);
+        let mut body = format!("{padding}{query}\n{padding}").into_bytes();
+        body.extend(tail);
+        std::fs::write(dir.path().join("source.rs"), body).unwrap();
+        let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let CallOutcome::Done(value) =
+            tool_call(&wb, "sem_search", json!({"query":query})).unwrap()
+        else {
+            panic!("search must complete")
+        };
+        assert_eq!(value["hits"][0]["match"], "literal", "{name}: {value}");
+        assert_eq!(value["hits"][0]["line"], 41, "{name}: {value}");
+        assert!(
+            value["hits"][0]["excerpt"]
+                .as_str()
+                .unwrap()
+                .contains("reconcile_tool_action"),
+            "{name}: {value}"
+        );
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(16))]
+    #[test]
+    fn local_similarity_literal_survives_padding(lines in 8usize..120, suffix in 0u32..1000000) {
+        let dir = tempfile::tempdir().unwrap();
+        let needle = format!("repair_case_{suffix}");
+        std::fs::write(dir.path().join("source.rs"), format!(
+            "{}fn {needle}() {{}}\n", "let count = entries.len();\n".repeat(lines)
+        )).unwrap();
+        let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let CallOutcome::Done(value) = tool_call(&wb, "sem_search", json!({"query":needle,"count":1})).unwrap()
+        else { panic!("search must complete") };
+        proptest::prop_assert_eq!(&value["hits"][0]["path"], &json!("source.rs"));
+        proptest::prop_assert_eq!(&value["hits"][0]["line"], &json!(lines+1));
+        // A literal result must disappear when its source is replaced; neither
+        // the old vectors nor the literal path may serve stale evidence.
+        std::fs::write(dir.path().join("source.rs"), "unrelated replacement").unwrap();
+        let CallOutcome::Done(value) = tool_call(&wb, "sem_search", json!({"query":needle,"count":1})).unwrap()
+        else { panic!("search must complete") };
+        // Replacement may still have a legitimate approximate match: freshness
+        // removes old literal evidence, it does not promise zero similarity.
+        proptest::prop_assert!(value["hits"].as_array().unwrap().iter().all(|h| h["match"] != "literal"));
+    }
+}
+
+#[test]
 fn local_similarity_top_k_returns_distinct_files() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(

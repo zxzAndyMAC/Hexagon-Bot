@@ -695,7 +695,7 @@ impl crate::tools::Tool for Tasks {
 
 /// `sem_search` 工具（票 02）：语义搜索共用主/子注册表——工具同一件，
 /// 只是子代理那边的是它可用清单的一员。每次调用先增量刷新索引
-/// （改动才重嵌），再全块内积取 top-k。
+/// （改动才重嵌），默认引擎保留字面命中，再按全块内积取 top-k。
 pub struct SemSearch;
 impl crate::tools::Tool for SemSearch {
     fn name(&self) -> &str {
@@ -705,7 +705,7 @@ impl crate::tools::Tool for SemSearch {
         r#"Local text-similarity search over the repo using character n-grams (no network, no learned semantic model).
 - Use when: you have descriptive words likely to appear in the code or comments. Synonyms and unrelated concepts may not match.
 - Do not use: when you know the literal text, identifier or filename — prefer fs_grep or fs_find.
-- Returns file path, line number and a short excerpt per hit. Scores indicate text similarity, not relevance confidence. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find."#
+- Returns file path, line number, excerpt and match kind (literal or similarity). With the default engine, case-sensitive literal matches in indexed files come first and point to the matching line; remaining hits use character similarity. Scores remain chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{

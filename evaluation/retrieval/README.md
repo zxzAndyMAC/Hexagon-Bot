@@ -38,3 +38,38 @@ Run `cargo test -p hexagon-core local_similarity_real_project_measurement -- --n
 The test uses the Workbench tool registry with an in-memory database, reports
 misses rather than treating them as execution failures, and does not call models.
 Without these environment variables the optional measurement does not run.
+
+## Literal recall repair (2026-09-29)
+
+A Workbench regression reproduced a literal identifier disappearing inside a
+48-line source chunk: its cosine dropped from .783 in a short declaration to
+.065 with surrounding code. The default engine now retains case-sensitive literal
+matches in indexed files ahead of approximate matches, deduplicates by file, and
+points their excerpts at the first matching line. The `match` field distinguishes
+`literal` from `similarity`; `score` remains chunk cosine and is not the sole sort
+key. Other candidates keep the .30 floor; injected embedders keep their original
+score selection and ranking.
+
+Rerunning the same frozen 573-file, 24-query snapshot gives identifier target-file
+Recall@5 **8/8** (previously 0/8), Chinese questions **0/8**, and unrelated empty
+results **8/8**. These are now development regression queries, not an independent
+held-out evaluation. Literal recall is repaired on this sample; semantic quality
+is not. Exact matching uses the same 4000-file indexed scope and read policy,
+including the 256 KiB limit, and rereads current text rather than persisting a
+second text index. The original measurement above remains the historical baseline.
+
+Five-round debug measurements on the same host, including refresh and the tool
+call, remain within the predeclared conservative ceilings:
+
+| Files | Hot p95 (ms) | Maximum cold run (ms) |
+| --- | --- | --- |
+| 100 | 18.80 | 30.92 |
+| 1000 | 175.91 | 210.81 |
+| 4000 | 784.02 | 1044.57 |
+
+The 4000-file hot p95 is about 21% above the earlier 649.72 ms record. These were
+not interleaved controlled runs, so the entire difference cannot be attributed
+to the implementation, but the extra current-text scan has a cost. Literal
+calibration recall remains 30/30 and unrelated empty results remain 10/10 at each
+size. This is a recall improvement, not a speedup or a large-repository latency
+claim.
