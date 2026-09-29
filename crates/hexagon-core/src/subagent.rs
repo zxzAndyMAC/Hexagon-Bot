@@ -702,10 +702,10 @@ impl crate::tools::Tool for SemSearch {
         "sem_search"
     }
     fn description(&self) -> &str {
-        r#"Local text-similarity search over the repo using character n-grams (no network, no learned semantic model).
-- Use when: you have descriptive words likely to appear in the code or comments. Synonyms and unrelated concepts may not match.
+        r#"Local repository search with an installed multilingual code-embedding model, or character n-grams when model assets are absent. The returned engine identifies which ran. No network or paid calls.
+- Use when: you have a natural-language description of code behavior, including Chinese questions about English source. The character engine only compares overlapping text and cannot understand synonyms.
 - Do not use: when you know the literal text, identifier or filename — prefer fs_grep or fs_find.
-- Returns file path, line number, excerpt and match kind (literal or similarity). With the default engine, case-sensitive literal matches in indexed files come first and point to the matching line; remaining hits use character similarity. Scores remain chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find."#
+- Returns file path, line number, excerpt and match kind (literal or similarity). With built-in engines, case-sensitive literal matches in indexed files come first and point to the matching line. Scores are chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find. The first learned-model index is slower; subsequent calls reuse unchanged vectors."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -722,19 +722,72 @@ impl crate::tools::Tool for SemSearch {
             return Err(ToolError::BadInput("empty query".into()));
         }
         let cap = input["count"].as_u64().unwrap_or(8).clamp(1, 10) as usize;
-        let embedder = ctx
-            .embedder
-            .clone()
-            .unwrap_or_else(crate::semsearch::default_embedder);
-        let indexed = crate::semsearch::refresh(db, &ctx.repo_root, embedder.as_ref())?;
-        let hits = crate::semsearch::query(db, &ctx.repo_root, embedder.as_ref(), query, cap)?;
-        Ok(json!({
-            "count": hits.len(),
-            "indexed_files": indexed,
-            "hits": hits,
-            "fallback": hits.is_empty(),
-            "note": if hits.is_empty() { "no similar text — try fs_grep with a literal term" } else { "" },
-        }))
+        let started = std::time::Instant::now();
+        // A15 review: bounded, resumable cold indexing. Completed files are
+        // reusable after cancellation; native inference stops between batches.
+        let deadline = ctx
+            .deadline
+            .map_or(started + std::time::Duration::from_secs(900), |d| {
+                d.min(started + std::time::Duration::from_secs(900))
+            });
+        let check = || {
+            if std::time::Instant::now() >= deadline
+                || ctx
+                    .subagent
+                    .as_ref()
+                    .is_some_and(|scope| scope.halt.load(std::sync::atomic::Ordering::Relaxed))
+            {
+                return Err(ToolError::Exec(
+                    "local retrieval stopped or deadline exceeded; retry resumes indexing".into(),
+                ));
+            }
+            crate::evaluation::control::checkpoint(&ctx.repo_root)
+                .map_err(|e| ToolError::Exec(e.to_string()))
+        };
+        let result = (|| {
+            check()?;
+            let embedder = match &ctx.embedder {
+                Some(embedder) => embedder.clone(),
+                None => crate::semsearch::default_embedder(&check)?,
+            };
+            crate::diag::note(
+                crate::diag::CLASS_HOST,
+                false,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "retrieval_engine",
+                embedder.name(),
+                started,
+            );
+            let indexed = crate::semsearch::refresh(db, &ctx.repo_root, embedder.as_ref(), &check)?;
+            let hits =
+                crate::semsearch::query(db, &ctx.repo_root, embedder.as_ref(), query, cap, &check)?;
+            Ok(json!({
+                "count": hits.len(),
+                "indexed_files": indexed,
+                "engine": embedder.name(),
+                "hits": hits,
+                "fallback": hits.is_empty(),
+                "note": if hits.is_empty() { "no similar text — try fs_grep with a literal term" }
+                    else if embedder.name() == "hash-ngram-v1" { "character similarity only; local multilingual model not installed" } else { "" },
+            }))
+        })();
+        if result.is_err() {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "retrieval_refused",
+                "index_or_inference_failed",
+                started,
+            );
+        }
+        result
     }
 }
 

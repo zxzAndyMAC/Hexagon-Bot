@@ -81,6 +81,20 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 Once the workbench opens, configure your model service in settings. Then use the project wizard to select a directory, team, and workflow. Start with a small task that has clear acceptance criteria, such as “add search to the existing page and cover it with tests.”
 
+### Optional offline code retrieval
+
+For Chinese questions about English source, install the pinned local embedding
+model with `python3 scripts/install-retrieval-model.py` (Python 3.9+, about 219 MB).
+Weights use the [Gemma terms](https://ai.google.dev/gemma/terms) and are stored in
+`~/.hexagon/models/embeddinggemma-300m-q4-v1`, outside your repositories. The
+installer downloads public assets and verifies their pinned hashes; search itself
+runs offline and never downloads weights or uploads source. Without installed
+weights, `sem_search` explicitly reports its character-similarity engine.
+
+The first model index can take minutes; unchanged files reuse persisted vectors.
+Use exact search for known symbols and verify returned excerpts. See the
+[retrieval measurements and limits](evaluation/retrieval/README.md).
+
 ### Data and credentials
 
 Project files, workflow state, and traces are stored locally. Model requests and external tool calls send the necessary content to the services you configure. Local storage does not mean all model inference runs offline.

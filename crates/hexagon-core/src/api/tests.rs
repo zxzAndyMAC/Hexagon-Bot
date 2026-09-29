@@ -8411,6 +8411,207 @@ fn approved_write_terminal_lease_blocks_writers_but_not_reads_and_releases_on_cl
 
 #[cfg(target_os = "macos")]
 #[test]
+fn sandbox_node_child_processes_and_npm_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(
+        dir.path(),
+        "Node compatibility",
+        &[("a0".into(), "dev".into())],
+        None,
+    )
+    .unwrap();
+    let node = std::env::var_os("HEXAGON_TEST_NODE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let output = std::process::Command::new("node")
+                .args(["-p", "process.execPath"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap().trim().into()
+        });
+    // 2026-09-29 full-suite regression: Homebrew Node loads libnode via
+    // @loader_path; copying only its executable broke startup. Copy its runtime
+    // library too. A symlink back to Homebrew would hit the path-ownership gate.
+    // Official CI Node is standalone; neither fixture widens sandbox permissions.
+    std::fs::copy(&node, dir.path().join("node")).unwrap();
+    if let Ok(libraries) = std::fs::read_dir(node.parent().unwrap().join("../lib")) {
+        for entry in libraries {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .is_some_and(|s| s.starts_with("libnode.") && s.ends_with(".dylib"))
+            {
+                std::fs::copy(entry.path(), dir.path().join(name)).unwrap();
+            }
+        }
+    }
+    std::fs::write(dir.path().join("probe.mjs"), r#"
+import assert from 'node:assert/strict';
+import cp, {execFileSync} from 'node:child_process';
+import {promisify} from 'node:util';
+import {once} from 'node:events';
+import fs from 'node:fs';
+const node = process.execPath;
+assert.equal(execFileSync(node, ['-p', '6*7'], {encoding:'utf8'}).trim(), '42');
+assert.equal(cp.spawnSync(node, ['-p','6*7'], {encoding:'utf8'}).stdout.trim(), '42');
+assert.equal(cp.execSync('printf forty-two', {encoding:'utf8'}), 'forty-two');
+assert.equal((await promisify(cp.execFile)(node, ['-p','6*7'])).stdout.trim(), '42');
+assert.equal((await promisify(cp.exec)('printf forty-two')).stdout, 'forty-two');
+const child = cp.spawn(node, ['-e','process.exit(0)']);
+assert.deepEqual(await once(child, 'exit'), [0, null]);
+fs.writeFileSync('fork.cjs', "process.send('fork-ok');process.disconnect()");
+const fork = cp.fork('fork.cjs', [], {silent:true});
+const exited = once(fork, 'exit');
+assert.equal((await once(fork, 'message'))[0], 'fork-ok');
+assert.deepEqual(await exited, [0, null]);
+assert.throws(() => cp.spawnSync(node, [], {uid:'invalid'}), {code:'ERR_INVALID_ARG_TYPE'});
+assert.throws(() => cp.spawnSync(node, [], 'invalid'), {code:'ERR_INVALID_ARG_TYPE'});
+assert.equal(cp.spawnSync('/bin/pwd', {encoding:'utf8'}).status, 0);
+assert.equal(cp.spawnSync('/bin/pwd', undefined, {encoding:'utf8'}).status, 0);
+const grandchild = 'process.stdout.write(require("node:child_process").execFileSync("/bin/echo",["grandchild"]))';
+const env = Object.freeze({NODE_OPTIONS:'--no-warnings'});
+assert.equal(cp.execFileSync(node, ['-e',grandchild], {env,encoding:'utf8'}).trim(), 'grandchild');
+assert.equal((await promisify(cp.execFile)(node, ['-e',grandchild], {env:{}})).stdout.trim(), 'grandchild');
+assert.equal(env.NODE_OPTIONS, '--no-warnings');
+assert.equal(cp.execFileSync('/bin/echo', ['null-options'], null).toString().trim(), 'null-options');
+// The unchanged kernel rules must keep a detached child in this execution's
+// process group so terminal cleanup can kill it before releasing the lease.
+const detached = cp.spawn('/bin/sh', ['-c','sleep 1; echo escaped > escaped.txt'], {detached:true,stdio:'ignore'});
+await once(detached, 'spawn'); detached.unref();
+console.log('NODE_CHILDREN_OK');
+"#).unwrap();
+    let result = tool_call(&wb, "bash", json!({"cmd":"./node probe.mjs"})).unwrap();
+    assert!(
+        format!("{result:?}").contains("NODE_CHILDREN_OK"),
+        "{result:?}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(!dir.path().join("escaped.txt").exists());
+
+    // Run the installed real npm offline, not a shell fixture named npm.
+    let npm = std::process::Command::new("/bin/sh")
+        .args(["-c", "command -v npm"])
+        .output()
+        .unwrap();
+    assert!(npm.status.success());
+    let cli = std::path::PathBuf::from(String::from_utf8(npm.stdout).unwrap().trim())
+        .canonicalize()
+        .unwrap();
+    assert!(std::process::Command::new("/bin/cp")
+        .arg("-R")
+        .arg(cli.parent().unwrap().parent().unwrap())
+        .arg(dir.path().join("npm-runtime"))
+        .status()
+        .unwrap()
+        .success());
+    std::fs::write(dir.path().join("package.json"), r#"{"name":"sandbox-probe","version":"1.0.0","scripts":{"test":"node -e \"require('node:child_process').execFileSync(process.execPath,['-e', 'console.log(42)'],{stdio:'inherit'})\""}}"#).unwrap();
+    let result = tool_call(&wb, "bash", json!({"cmd":"PATH=\"$PWD:$PATH\" ./node npm-runtime/bin/npm-cli.js test --offline --ignore-scripts=false"})).unwrap();
+    let CallOutcome::Done(value) = result else {
+        panic!("npm must execute")
+    };
+    assert_eq!(value["exit_code"], 0, "{value}");
+    assert!(value["stdout"].as_str().unwrap().contains("42"));
+
+    let script = dir.path().join("peer.cjs");
+    std::fs::write(&script, crate::mcp::TEST_PEER
+        .replace("inputSchema:{type:'object'}", "inputSchema:{type:'object'},annotations:{readOnlyHint:true}")
+        .replace("JSON.stringify(r.params.arguments)", "require('node:child_process').execFileSync(process.execPath,['-p','6*7'],{encoding:'utf8'}).trim()"))
+        .unwrap();
+    let _host = crate::mcp::McpHost::start(
+        vec![crate::mcp::McpSpec {
+            name: "node-child".into(),
+            command: dir.path().join("node").to_string_lossy().into(),
+            args: vec![script.to_string_lossy().into()],
+            cwd: Some(dir.path().to_string_lossy().into()),
+            ..Default::default()
+        }],
+        &wb.registry,
+    );
+    wb.db.conn().execute("INSERT INTO grants(id,agent_id,kind,name) VALUES ('node-grant','a0','mcp','node-child')", []).unwrap();
+    wb.db
+        .conn()
+        .execute("UPDATE projects SET autonomy='L4'", [])
+        .unwrap();
+    let name = "mcp:node-child:echo";
+    let parent = tool_call(&wb, name, json!({})).unwrap();
+    assert!(format!("{parent:?}").contains("42"), "{parent:?}");
+    let mut ctx = wb.ctx_for("a0", None);
+    ctx.subagent = Some(crate::subagent::Scope {
+        halt: Default::default(),
+        answer: Default::default(),
+        mcp: Arc::new(std::collections::HashSet::from([name.into()])),
+        reads: Default::default(),
+    });
+    let child = wb.registry.get(name).unwrap().for_subagent(&ctx).unwrap();
+    let registry = wb.registry.subagent_scope(&[child]);
+    let result = registry.call(&wb.db, &ctx, name, json!({})).unwrap();
+    assert!(format!("{result:?}").contains("42"), "{result:?}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_large_hardlink_inventory_keeps_exact_denials() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(
+        dir.path(),
+        "large policy",
+        &[("a0".into(), "dev".into())],
+        None,
+    )
+    .unwrap();
+    let folder = format!("runtime-{}", "x".repeat(100));
+    std::fs::create_dir(dir.path().join(&folder)).unwrap();
+    let secret = dir.path().join(".env");
+    std::fs::write(&secret, "SYNTHETIC_SECRET").unwrap();
+    for i in 0..1000 {
+        std::fs::hard_link(
+            &secret,
+            dir.path().join(&folder).join(format!("alias-{i}.txt")),
+        )
+        .unwrap();
+    }
+    std::fs::write(dir.path().join(&folder).join("alias-1000.txt"), "ORDINARY").unwrap();
+    // A15 follow-up: >200 KiB of naive literal rules used to reject the entire
+    // invocation. Compression must neither miss an alias nor widen its denial.
+    let cmd = format!(
+        "for f in '{folder}'/alias-*.txt; do cat \"$f\" 2>/dev/null; done; printf ok > allowed.txt"
+    );
+    let result = tool_call(&wb, "bash", json!({"cmd":cmd})).unwrap();
+    let CallOutcome::Done(value) = result else {
+        panic!("terminal must execute")
+    };
+    assert_eq!(value["exit_code"], 0, "{value}");
+    assert_eq!(value["stdout"], "ORDINARY");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("allowed.txt")).unwrap(),
+        "ok"
+    );
+    assert_eq!(std::fs::read_to_string(secret).unwrap(), "SYNTHETIC_SECRET");
+}
+
+#[cfg(target_os = "macos")]
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    #[test]
+    fn sandbox_hardlink_regex_names_remain_exact(suffix in "[a-z0-9]{1,8}", punct in proptest::sample::select(vec![".", "+", "[", "]", "(", ")", "$", "^", "|", "?", "*", "\\", "\"", "中"])) {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::open(dir.path(), "exact policy", &[("a0".into(), "dev".into())], None).unwrap();
+        let name = format!("ordinary{punct}{suffix}.txt");
+        std::fs::write(dir.path().join(".env"), "SYNTHETIC_SECRET").unwrap();
+        std::fs::hard_link(dir.path().join(".env"), dir.path().join(&name)).unwrap();
+        let ordinary = format!("{name}extra");
+        std::fs::write(dir.path().join(&ordinary), "ORDINARY").unwrap();
+        let result = tool_call(&wb, "bash", json!({"cmd":format!("cat '{}' 2>/dev/null; cat '{}'",name,ordinary)})).unwrap();
+        let CallOutcome::Done(value) = result else { panic!("terminal must execute") };
+        proptest::prop_assert_eq!(&value["exit_code"], &json!(0), "{}", value);
+        proptest::prop_assert_eq!(&value["stdout"], &json!("ORDINARY"));
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn approved_write_terminal_cannot_spawn_a_detached_writer() {
     if !crate::sandbox::status().available {
         return;
@@ -13113,6 +13314,221 @@ fn tool_preflight_failure_is_terminal_and_survives_reopen() {
 }
 
 #[test]
+fn local_similarity_multilingual_model_finds_english_code() {
+    // Opt-in real local weights. CI runs this with the pinned model installed;
+    // ordinary unit tests must not download assets or depend on the user's cache.
+    if std::env::var_os("HEXAGON_EMBEDDING_MODEL_DIR").is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for (name, body) in [
+        ("delivery.rs", "// Failed network sends are retained in an outbox. Once connectivity returns, retry delivery.\npub fn retry_outbox() {}"),
+        ("session.rs", "// Signing out revokes the login token. Previously issued sessions must no longer authenticate the user.\npub fn revoke_session() {}"),
+        ("blobs.rs", "// Deduplicate attachments by content digest. Identical uploads share one stored blob.\npub fn deduplicate_blob() {}"),
+        ("edits.rs", "// Before replacing a disk file, compare its current version with the version read by the caller.\npub fn compare_and_replace() {}"),
+    ] { std::fs::write(dir.path().join(name), body).unwrap(); }
+    let wb = Workbench::open(
+        dir.path(),
+        "multilingual",
+        &[("a0".into(), "dev".into())],
+        None,
+    )
+    .unwrap();
+    for (query, expected) in [
+        ("把失败的发送保留下来，等网络恢复后再尝试", "delivery.rs"),
+        ("用户登出以后旧的登录票据不能再使用", "session.rs"),
+        ("相同内容的附件只保留一份", "blobs.rs"),
+        ("磁盘文件替换之前先验证读到的版本", "edits.rs"),
+    ] {
+        let CallOutcome::Done(value) =
+            tool_call(&wb, "sem_search", json!({"query":query,"count":1})).unwrap()
+        else {
+            panic!("search must complete")
+        };
+        assert_eq!(value["hits"][0]["path"], expected, "{query}: {value}");
+    }
+    for query in ["红烧牛肉怎么做", "木星有多少颗卫星"] {
+        let CallOutcome::Done(value) =
+            tool_call(&wb, "sem_search", json!({"query":query})).unwrap()
+        else {
+            panic!("search must complete")
+        };
+        assert!(
+            value["hits"].as_array().unwrap().is_empty(),
+            "{query}: {value}"
+        );
+    }
+    let CallOutcome::Done(value) =
+        tool_call(&wb, "sem_search", json!({"query":"retry_outbox","count":1})).unwrap()
+    else {
+        panic!("search must complete")
+    };
+    assert_eq!(value["hits"][0]["match"], "literal");
+    assert_eq!(value["indexed_files"], 0);
+    drop(wb);
+    let wb = Workbench::open(dir.path(), "multilingual", &[], None).unwrap();
+    let CallOutcome::Done(value) =
+        tool_call(&wb, "sem_search", json!({"query":"retry_outbox"})).unwrap()
+    else {
+        panic!("search must complete")
+    };
+    assert_eq!(
+        value["indexed_files"], 0,
+        "persisted vectors must survive reopen"
+    );
+    std::fs::remove_file(dir.path().join("delivery.rs")).unwrap();
+    let CallOutcome::Done(value) =
+        tool_call(&wb, "sem_search", json!({"query":"retry_outbox"})).unwrap()
+    else {
+        panic!("search must complete")
+    };
+    assert!(value["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|hit| hit["path"] != "delivery.rs"));
+}
+
+#[test]
+fn local_similarity_inference_failure_is_an_error_not_empty_success() {
+    struct Broken;
+    impl crate::semsearch::Embedder for Broken {
+        fn name(&self) -> &'static str {
+            "broken-fixture"
+        }
+        fn embed(
+            &self,
+            _: &str,
+            _: crate::semsearch::Checkpoint<'_>,
+        ) -> Result<Vec<f32>, crate::tools::ToolError> {
+            Err(crate::tools::ToolError::Exec(
+                "synthetic inference failure".into(),
+            ))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("source.rs"), "fn retained_symbol() {}").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    wb.embedder = Some(Arc::new(Broken));
+    assert!(tool_call(&wb, "sem_search", json!({"query":"retained_symbol"})).is_err());
+    wb.embedder = Some(Arc::new(crate::semsearch::HashEmbedder));
+    let CallOutcome::Done(value) =
+        tool_call(&wb, "sem_search", json!({"query":"retained_symbol"})).unwrap()
+    else {
+        panic!("search must complete")
+    };
+    assert_eq!(value["hits"][0]["path"], "source.rs");
+}
+
+// A15 review 2026-09-29: slow inference must not commit after cancellation,
+// or attach a pre-edit vector to a post-edit excerpt.
+#[test]
+fn local_similarity_interrupts_inference_and_rejects_changed_source() {
+    struct Changing {
+        path: std::path::PathBuf,
+        halt: Arc<std::sync::atomic::AtomicBool>,
+        stop: bool,
+    }
+    impl crate::semsearch::Embedder for Changing {
+        fn name(&self) -> &'static str {
+            "changing-fixture"
+        }
+        fn embed(
+            &self,
+            _: &str,
+            _: crate::semsearch::Checkpoint<'_>,
+        ) -> Result<Vec<f32>, crate::tools::ToolError> {
+            if self.stop {
+                self.halt.store(true, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                std::fs::write(&self.path, "fn replacement_symbol() {}").unwrap();
+            }
+            Ok(vec![1.0])
+        }
+    }
+    for stop in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.rs");
+        std::fs::write(&path, "fn old_symbol() {}").unwrap();
+        let halt = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        wb.embedder = Some(Arc::new(Changing {
+            path,
+            halt: halt.clone(),
+            stop,
+        }));
+        let mut ctx = wb.ctx_for("a0", None);
+        ctx.subagent = Some(crate::subagent::Scope {
+            halt,
+            answer: Default::default(),
+            mcp: Default::default(),
+            reads: Default::default(),
+        });
+        let result = wb
+            .registry
+            .call(&wb.db, &ctx, "sem_search", json!({"query":"old_symbol"}));
+        assert!(result.is_err(), "stop={stop}: {result:?}");
+        wb.embedder = Some(Arc::new(crate::semsearch::HashEmbedder));
+        let query = if stop {
+            "old_symbol"
+        } else {
+            "replacement_symbol"
+        };
+        let CallOutcome::Done(value) =
+            tool_call(&wb, "sem_search", json!({"query":query})).unwrap()
+        else {
+            panic!("retry must complete")
+        };
+        assert_eq!(value["indexed_files"], 1);
+        assert_eq!(value["hits"][0]["match"], "literal");
+    }
+}
+
+#[test]
+fn local_similarity_query_does_not_pair_old_vectors_with_new_text() {
+    struct EditingQuery {
+        path: std::path::PathBuf,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl crate::semsearch::Embedder for EditingQuery {
+        fn name(&self) -> &'static str {
+            "editing-query"
+        }
+        fn embed(
+            &self,
+            _: &str,
+            _: crate::semsearch::Checkpoint<'_>,
+        ) -> Result<Vec<f32>, crate::tools::ToolError> {
+            if self
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                == 1
+            {
+                std::fs::write(&self.path, "fn new_unrelated_body() {}").unwrap();
+            }
+            Ok(vec![1.0])
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.rs");
+    std::fs::write(&path, "fn previous_body() {}").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    wb.embedder = Some(Arc::new(EditingQuery {
+        path,
+        calls: Default::default(),
+    }));
+    let CallOutcome::Done(value) =
+        tool_call(&wb, "sem_search", json!({"query":"previous_body"})).unwrap()
+    else {
+        panic!("search must complete")
+    };
+    assert_eq!(
+        value["count"], 0,
+        "an edit during query inference must invalidate old vectors"
+    );
+}
+
+#[test]
 fn local_similarity_real_project_measurement() {
     // Opt-in measurement, not a synthetic quality gate: freeze the source copy
     // and expected paths before running, and retain misses in the output.
@@ -13129,7 +13545,10 @@ fn local_similarity_real_project_measurement() {
         &std::fs::read(std::env::var_os("HEXAGON_RETRIEVAL_CASES").unwrap()).unwrap(),
     )
     .unwrap();
-    let wb = Workbench::for_test(Path::new(&root), &["worker"], None).unwrap();
+    let mut wb = Workbench::for_test(Path::new(&root), &["worker"], None).unwrap();
+    if std::env::var_os("HEXAGON_EMBEDDING_MODEL_DIR").is_some() {
+        wb.embedder = None;
+    }
     println!(
         "searchable_files={}",
         crate::search::repo_files(Path::new(&root)).len()

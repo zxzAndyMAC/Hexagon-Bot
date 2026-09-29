@@ -27,6 +27,27 @@
 #[cfg(target_os = "macos")]
 pub(crate) const PROCESS_GROUP_RULES: &str = "(deny syscall-unix (syscall-number 82) (syscall-number 147))\n(deny syscall-unix (syscall-number 244) (with errno 78))";
 
+// Node >=18.19 supports --import, including data URLs. A host-owned preload
+// needs no writable bootstrap file or extra filesystem grant. Scoped commands
+// pass None: never reintroduce an inherited injection variable after env_clear.
+#[cfg(target_os = "macos")]
+pub(crate) fn node_options(existing: Option<&std::ffi::OsStr>) -> std::ffi::OsString {
+    use base64::Engine;
+    static PRELOAD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let preload = PRELOAD.get_or_init(|| {
+        format!(
+            "--import=data:text/javascript;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(include_str!("node_fork.mjs"))
+        )
+    });
+    let mut options = std::ffi::OsString::from(preload);
+    if let Some(existing) = existing.filter(|s| !s.is_empty()) {
+        options.push(" ");
+        options.push(existing);
+    }
+    options
+}
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -188,12 +209,10 @@ fn scoped_spec(
                 return SandboxSpec::Unavailable;
             };
             let mut profile = seatbelt_profile(repo_root, &canon, owned_globs, net, read_only);
-            for path in aliases {
-                profile.push_str(&format!(
-                    "(deny file-read-data file-write* (literal \"{}\"))\n",
-                    sbq(&path)
-                ));
-            }
+            let Ok(rules) = hardlink_rules(&aliases) else {
+                return SandboxSpec::Unavailable;
+            };
+            profile.push_str(&rules);
             if profile.len() > 64 * 1024 {
                 return SandboxSpec::Unavailable;
             }
@@ -285,6 +304,10 @@ pub fn wrap_command(cmd: &mut Command, spec: &SandboxSpec) -> std::io::Result<Co
     // merely to satisfy Git's optional global configuration lookup.
     c.env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1");
+    #[cfg(target_os = "macos")]
+    if matches!(spec, SandboxSpec::Seatbelt(profile) if profile.contains(PROCESS_GROUP_RULES)) {
+        c.env("NODE_OPTIONS", node_options(None));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -415,6 +438,79 @@ fn hardlink_paths(roots: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {
         }
     }
     Ok(aliases)
+}
+
+// 2026-09-29 hosted Homebrew: 992 aliases exceeded the 64 KiB source cap.
+// Raising it also hits Seatbelt's 65535-byte compiled-data limit. Share only
+// directory prefixes, with escaped, anchored filename alternatives: denying
+// whole directories would make unrelated runtime files unreadable.
+fn hardlink_rules(paths: &[PathBuf]) -> std::io::Result<String> {
+    fn escaped(path: &Path) -> std::io::Result<String> {
+        let text = path
+            .to_str()
+            .filter(|s| !s.chars().any(char::is_control))
+            .ok_or_else(|| std::io::Error::other("unrepresentable hardlink path"))?;
+        let mut out = String::new();
+        for c in text.chars() {
+            if ".+*?()[]{}^$|\\".contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        Ok(out)
+    }
+    let mut rules = String::new();
+    let mut directories: std::collections::BTreeMap<&Path, Vec<&Path>> = Default::default();
+    for path in paths {
+        // Seatbelt #"..." is a raw regex reader: backslash-quote terminates
+        // it rather than escaping the delimiter (property regression below).
+        // Use the existing literal encoding for these uncommon pathnames.
+        if path.to_str().is_some_and(|p| p.contains('"')) {
+            escaped(path)?;
+            rules.push_str(&format!(
+                "(deny file-read-data file-write* (literal \"{}\"))\n",
+                sbq(path)
+            ));
+            continue;
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("hardlink without parent"))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("hardlink without name"))?;
+        directories.entry(parent).or_default().push(Path::new(name));
+    }
+    for (parent, mut names) in directories {
+        names.sort_unstable();
+        names.dedup();
+        let prefix = format!("^{}/(", escaped(parent)?);
+        let mut pattern = prefix.clone();
+        for name in names {
+            let name = escaped(name)?;
+            // Seatbelt's source reader also bounds individual regex strings.
+            // ponytail: bounded flat alternatives; keep fail-closed for policies
+            // still exceeding the cap instead of building a regex trie compiler.
+            if pattern.len() > prefix.len() && pattern.len() + name.len() > 700 {
+                pattern.push_str(")$");
+                rules.push_str(&format!(
+                    "(deny file-read-data file-write* (regex #\"{}\"))\n",
+                    pattern
+                ));
+                pattern = prefix.clone();
+            }
+            if pattern.len() > prefix.len() {
+                pattern.push('|');
+            }
+            pattern.push_str(&name);
+        }
+        pattern.push_str(")$");
+        rules.push_str(&format!(
+            "(deny file-read-data file-write* (regex #\"{}\"))\n",
+            pattern
+        ));
+    }
+    Ok(rules)
 }
 
 // ---------- seatbelt ----------

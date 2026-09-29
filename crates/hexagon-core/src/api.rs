@@ -530,7 +530,9 @@ impl Workbench {
             call_deadline: None,
             mcp_timeout: std::time::Duration::from_secs(120),
             websearch: None,
-            embedder: None,
+            // Deterministic default for synthetic Workbench fixtures; real-model
+            // tests opt back into production selection explicitly.
+            embedder: Some(Arc::new(crate::semsearch::HashEmbedder)),
             stall_policy: Default::default(),
             stall_clock: Arc::new(crate::stallwatch::SystemClock),
             stall: Default::default(),

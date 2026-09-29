@@ -675,6 +675,15 @@ fn lifecycle_command(
         .arg(&spec.command)
         .args(&spec.args)
         .envs(&spec.env);
+        let node_options = spec
+            .env
+            .get("NODE_OPTIONS")
+            .map(std::ffi::OsString::from)
+            .or_else(|| std::env::var_os("NODE_OPTIONS"));
+        cmd.env(
+            "NODE_OPTIONS",
+            crate::sandbox::node_options(node_options.as_deref()),
+        );
         if let Some(cwd) = &spec.cwd {
             cmd.current_dir(cwd);
         }

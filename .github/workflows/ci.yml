@@ -20,40 +20,25 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci --prefix ui
-      # 2026-09-29 hosted-runner incident: 992 preinstalled Homebrew hardlinks
-      # produced 119 KB of deny rules, exceeding the 64 KiB fail-closed limit.
-      # Normalize only this disposable runner's runtime files; production limits
-      # and hardlink attack fixtures stay intact. No skipped isolation tests.
-      - name: Make hosted Homebrew runtime files independent
-        run: |
-          python3 - <<'PY'
-          import os, pathlib, shutil, stat, tempfile
-          root = pathlib.Path('/opt/homebrew')
-          pending, copied = ([root] if root.exists() else []), 0
-          while pending:
-              for entry in os.scandir(pending.pop()):
-                  meta = entry.stat(follow_symlinks=False)
-                  if stat.S_ISDIR(meta.st_mode):
-                      pending.append(entry.path)
-                  elif stat.S_ISREG(meta.st_mode) and meta.st_nlink > 1:
-                      fd, temporary = tempfile.mkstemp(dir=os.path.dirname(entry.path))
-                      os.close(fd)
-                      try:
-                          shutil.copy2(entry.path, temporary)
-                          os.replace(temporary, entry.path)
-                          copied += 1
-                      finally:
-                          if os.path.exists(temporary):
-                              os.unlink(temporary)
-          print('Independent Homebrew runtime copies:', copied)
-          PY
       - name: Verify sandbox and process fixtures before the full suite
         run: >-
           cargo test -p hexagon-core -- --exact --no-capture
           sandbox::tests::seatbelt_confines_writes
+          api::tests::sandbox_node_child_processes_and_npm_complete
+          api::tests::sandbox_large_hardlink_inventory_keeps_exact_denials
           api::tests::mcp_deadline_detached_descendant_cannot_outlive_service
           api::tests::subagent_test_processes_cannot_modify_source_or_host_state
           tools::tests::timeout_kills_and_traces
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/hexagon-retrieval-model
+          key: embeddinggemma-5090578-q4-v1
+      - name: Verify offline multilingual retrieval with pinned public weights
+        env:
+          HEXAGON_EMBEDDING_MODEL_DIR: ${{ runner.temp }}/hexagon-retrieval-model
+        run: |
+          python3 scripts/install-retrieval-model.py --directory "$HEXAGON_EMBEDDING_MODEL_DIR"
+          cargo test -p hexagon-core local_similarity_multilingual_model -- --nocapture
       # reliability 01: same entrypoints locally and in CI, including architecture,
       # tokens, seven-language keys and regenerated DTO drift.
       - run: npm run check

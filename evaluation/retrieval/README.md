@@ -36,7 +36,7 @@ to that directory, `HEXAGON_RETRIEVAL_CASES` to the absolute path of
 `real-project-queries.json`, and `HEXAGON_RETRIEVAL_REPORT` to a JSON output path.
 Run `cargo test -p hexagon-core local_similarity_real_project_measurement -- --nocapture`.
 The test uses the Workbench tool registry with an in-memory database, reports
-misses rather than treating them as execution failures, and does not call models.
+misses rather than treating them as execution failures, and does not call remote models.
 Without these environment variables the optional measurement does not run.
 
 ## Literal recall repair (2026-09-29)
@@ -73,3 +73,84 @@ to the implementation, but the extra current-text scan has a cost. Literal
 calibration recall remains 30/30 and unrelated empty results remain 10/10 at each
 size. This is a recall improvement, not a speedup or a large-repository latency
 claim.
+
+## Offline multilingual engine (2026-09-29)
+
+The optional learned engine is EmbeddingGemma 300M Q4, using the pinned
+[ONNX community export](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/tree/5090578d9565bb06545b4552f76e6bc2c93e4a66).
+Its assets use [Gemma terms](https://ai.google.dev/gemma/terms); weights are not
+included in this repository. `scripts/install-retrieval-model.py` installs about
+219 MB using only Python 3.9+ standard library. `--check` verifies without network.
+The application validates asset sizes and SHA-256 again before native inference.
+The model manifest pins graph, external weights and tokenizer together.
+
+Runtime is Rust/ONNX CPU, four threads, at most four texts per inference batch,
+512 tokens per 48-line chunk, 768-dimensional normalized embeddings. Query prefix
+is the model-card default `task: search result | query: `; documents use their
+relative path as title and source as text. Index signatures include model revision,
+prefix and token limit. There is no inference downloader, Python subprocess,
+remote key, or paid request. `HEXAGON_EMBEDDING_MODEL_DIR` overrides the default
+`~/.hexagon/models/embeddinggemma-300m-q4-v1`. Explicit missing/corrupt assets fail
+with an error; an absent default installation retains `hash-ngram-v1`. The shared
+loaded model lasts until process exit; restart after changing model installation.
+
+Both built-in engines preserve literal priority. Learned candidates use a separate
+.35 cosine floor, calibrated on the same development queries below. This is not a
+confidence guarantee. An E5-small prototype was rejected because it recovered only
+3/8 Chinese targets and admitted unrelated questions. No query-specific dictionary
+or paid model was introduced.
+
+Native Workbench measurement on the original frozen 573-file snapshot:
+
+| Query group | Hash after literal repair | Gemma Q4 |
+| --- | --- | --- |
+| Identifier target-file Recall@5 | 8/8 | 8/8 |
+| Chinese target-file Recall@5 | 0/8 | 6/8 |
+| Unrelated empty results | 8/8 | 8/8 |
+
+The original queries and expected files were retained. Misses remain for
+“工具执行结果不确定以后怎样核对恢复” (`api.rs`) and
+“离开后回来在哪里看到待处理事项” (`Timeline.tsx`). Related alternate files do not
+count as success. These are development results, not held-out evidence of general
+quality. A separate four-file English fixture checks four Chinese behaviors, two
+unrelated questions, literal priority, persisted reuse after reopening and removal.
+CI explicitly installs/verifies cached assets and runs this real-model regression;
+the ordinary suite stays deterministic with an injected hash engine.
+
+The native debug measurement took 546.65 seconds for its first query including
+cold indexing; subsequent 23 queries had median 283.19 ms and p95 286.98 ms. This
+initial ranking measurement preceded the cancellation/freshness checks; those
+checks are covered separately and can add overhead. The neural cold path does
+not satisfy the old hash-engine millisecond limits. Large files are still capped
+at 256 KiB and repositories at 4000 indexed files; 512-token truncation can miss
+code late in long chunks. No claim is made about arbitrary large-repository speed.
+
+Search now checks cancellation between files, model lock waits and four-text
+batches, and respects the earlier of the caller's deadline or a 15-minute invocation
+budget. A native session initialization or currently executing batch finishes
+before it can observe stop. Completed files remain reusable after a cancelled
+refresh, so retry resumes indexing. Inference happens outside SQLite write
+transactions; source changes during inference abort that file's commit. Query and
+excerpt generation recheck current content against the indexed signature, avoiding
+old-vector/new-excerpt pairs. Stop and inference failure are errors, not successful
+empty-search responses.
+
+For the real snapshot measurement, set `HEXAGON_EMBEDDING_MODEL_DIR` as well as the
+three measurement variables above. Real-model regression:
+
+```bash
+python3 scripts/install-retrieval-model.py
+HEXAGON_EMBEDDING_MODEL_DIR="$HOME/.hexagon/models/embeddinggemma-300m-q4-v1" \
+  cargo test -p hexagon-core local_similarity_multilingual_model -- --nocapture
+```
+
+Final cancellation/freshness implementation, five-round hash-engine regression:
+
+| Files | Hot p95 (ms) | Maximum cold run (ms) |
+| --- | --- | --- |
+| 100 | 16.10 | 32.78 |
+| 1000 | 154.97 | 244.27 |
+| 4000 | 603.04 | 1011.08 |
+
+All remain within the predeclared hash-engine ceilings; results are local debug
+measurements, not a general speedup claim.

@@ -1,10 +1,9 @@
 //! 本地相似检索（code-search-and-subagent 票 02）：自然语言 → 路径/行号/短摘。
 //!
 //! 硬约束的实现选择：
-//! - **本地性**：默认嵌入器是纯计算的 hashing-trick 稀疏向量（char n-gram），
-//!   零网络零依赖。字符 n-gram 只比较字符重叠，不理解同义词或跨语言含义。
-//!   字面命中优先于近似分数。精度和神经嵌入器没法比，这是「完全本地」的
-//!   取舍；`Embedder` 是 trait，日后换小模型只动注入点。
+//! - **本地性**：安装固定校验的多语言模型后本地推理，无模型时保留字符
+//!   n-gram 引擎；结果明示 engine。运行期不下载、不上传源码、不调用付费
+//!   接口。字符引擎只比较重叠，不理解跨语言含义；两者均优先保留字面命中。
 //! - **增量**：code_files 记「嵌入器名+内容哈希」——嵌入器实现换了即全量
 //!   重建（旧向量对新向量是噪声），文件没变则整文件跳过，不重嵌未动块。
 //! - **存储**：向量随项目库（state.db），天然 per-project 不共享；
@@ -19,6 +18,9 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
+mod model;
+pub use model::LocalEmbedder;
+
 /// 哈希嵌入维度：256 桶 × 4B = 1KB/块。再大选不起（4k 文件仓 ≈ 几十万块），
 /// 再小撞桶率伤召回。不与任何神经嵌入器维度对齐——签名哈希自报家门。
 const DIMS: usize = 256;
@@ -28,12 +30,29 @@ const CHUNK_STEP: usize = 40;
 /// 索引收录单文件上限：与文本搜索同口径。
 const INDEX_FILE_BYTES: u64 = 256 * 1024;
 
-/// 嵌入器接缝（spec：「嵌入器用替身」）：测试注入查表桩，生产用 HashEmbedder。
+/// 嵌入器接缝（spec：「嵌入器用替身」）：测试可注入查表桩。
 /// 实现必须确定性——同文本同向量，否则索引哈希对不上。
+pub type Checkpoint<'a> = &'a dyn Fn() -> Result<(), crate::tools::ToolError>;
+
 pub trait Embedder: Send + Sync {
     /// 实现名进哈希签名：换实现即全量重建。
     fn name(&self) -> &'static str;
-    fn embed(&self, text: &str) -> Vec<f32>;
+    fn embed(&self, text: &str, check: Checkpoint<'_>)
+        -> Result<Vec<f32>, crate::tools::ToolError>;
+    fn embed_documents(
+        &self,
+        _path: &str,
+        chunks: &[(usize, String)],
+        check: Checkpoint<'_>,
+    ) -> Result<Vec<Vec<f32>>, crate::tools::ToolError> {
+        chunks
+            .iter()
+            .map(|(_, text)| {
+                check()?;
+                self.embed(text, check)
+            })
+            .collect()
+    }
 }
 
 /// 默认本地嵌入器：字符 3-gram 签名哈希到 256 维，正负号消偏。
@@ -44,7 +63,12 @@ impl Embedder for HashEmbedder {
     fn name(&self) -> &'static str {
         "hash-ngram-v1"
     }
-    fn embed(&self, text: &str) -> Vec<f32> {
+    fn embed(
+        &self,
+        text: &str,
+        check: Checkpoint<'_>,
+    ) -> Result<Vec<f32>, crate::tools::ToolError> {
+        check()?;
         let mut v = vec![0f32; DIMS];
         let norm: String = text
             .to_lowercase()
@@ -73,13 +97,15 @@ impl Embedder for HashEmbedder {
                 *x /= norm2;
             }
         }
-        v
+        Ok(v)
     }
 }
 
-/// ctx.embedder 为 None 时的默认实例（无状态，现建现用）。
-pub fn default_embedder() -> Arc<dyn Embedder> {
-    Arc::new(HashEmbedder)
+/// ctx.embedder 为 None 时惰性加载共享本地模型；未安装时用字符引擎。
+pub fn default_embedder(
+    check: Checkpoint<'_>,
+) -> Result<Arc<dyn Embedder>, crate::tools::ToolError> {
+    model::default_embedder(check)
 }
 
 /// 把文本切成 (line_start, chunk_text)。行号 1-based。
@@ -143,6 +169,7 @@ pub fn refresh(
     db: &Db,
     root: &Path,
     embedder: &dyn Embedder,
+    check: Checkpoint<'_>,
 ) -> Result<usize, crate::tools::ToolError> {
     let files: Vec<String> = crate::search::repo_files(root)
         .into_iter()
@@ -150,7 +177,6 @@ pub fn refresh(
         .collect();
     // Audit A15 (2026-09-28): per-row commits and a shrinking Vec made refresh
     // needlessly expensive. Keep content hashing: mtime alone misses replacements.
-    let tx = db.conn().unchecked_transaction()?;
     let mut indexed = 0usize;
     let mut stale: std::collections::HashSet<String> = db
         .conn()
@@ -158,6 +184,7 @@ pub fn refresh(
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for rel in &files {
+        check()?;
         let Some(text) = indexed_text(root, rel) else {
             continue;
         };
@@ -172,26 +199,42 @@ pub fn refresh(
         if cur.as_deref() == Some(sig.as_str()) {
             continue;
         }
+        let chunks = chunks_of(&text);
+        let vectors = embedder.embed_documents(rel, &chunks, check)?;
+        if vectors.len() != chunks.len() {
+            return Err(crate::tools::ToolError::Exec(
+                "embedding count mismatch".into(),
+            ));
+        }
+        check()?;
+        // A15 review 2026-09-29: an editor can replace source while inference
+        // runs. Never commit that old vector as though it described new text.
+        if indexed_text(root, rel).as_deref() != Some(text.as_str()) {
+            return Err(crate::tools::ToolError::Exec(
+                "source changed during indexing; retry search".into(),
+            ));
+        }
+        // A15 neural indexing can take seconds per file. Infer before taking
+        // a write transaction, then commit each complete file atomically; a
+        // failed inference keeps that file's previous index for a later retry.
+        let tx = db.conn().unchecked_transaction()?;
         db.conn()
             .execute("DELETE FROM code_chunks WHERE path=?1", [rel])?;
         db.conn().execute(
             "INSERT OR REPLACE INTO code_files(path, hash) VALUES(?1, ?2)",
             rusqlite::params![rel, sig],
         )?;
-        for (idx, (line_start, body)) in chunks_of(&text).into_iter().enumerate() {
+        for (idx, ((line_start, _), vector)) in chunks.into_iter().zip(vectors).enumerate() {
             db.conn().execute(
                 "INSERT INTO code_chunks(path, idx, line_start, vec) VALUES(?1,?2,?3,?4)",
-                rusqlite::params![
-                    rel,
-                    idx as i64,
-                    line_start as i64,
-                    pack(&embedder.embed(&body))
-                ],
+                rusqlite::params![rel, idx as i64, line_start as i64, pack(&vector)],
             )?;
         }
+        tx.commit()?;
         indexed += 1;
     }
     // 仓里已消失的文件：行与块一起清（不存在不报错——幂等收尾）。
+    let tx = db.conn().unchecked_transaction()?;
     for p in stale {
         db.conn()
             .execute("DELETE FROM code_files WHERE path=?1", [&p])?;
@@ -204,10 +247,20 @@ pub fn refresh(
 
 // Audit A15, 50-query synthetic calibration (2026-09-28): unrelated maxima
 // reached .262; literal positives started at .308. A .30 floor only applies to
-// this hash engine, not injected embedders. False negatives cost a literal-search
-// fallback; false positives waste inspection. This is not semantic confidence.
+// this hash engine, not injected embedders. Gemma's separate .35 floor was
+// checked on the frozen source corpus: unrelated max .291, weakest recovered
+// Chinese target .373. These are development queries, not a general guarantee.
+// False negatives cost a literal-search fallback; false positives waste
+// inspection. Neither cutoff is semantic confidence.
 fn candidate_score(engine: &str, score: f32) -> bool {
-    score.is_finite() && score > if engine == "hash-ngram-v1" { 0.30 } else { 0.0 }
+    let floor = if engine == "hash-ngram-v1" {
+        0.30
+    } else if engine == model::NAME {
+        0.35
+    } else {
+        0.0
+    };
+    score.is_finite() && score > floor
 }
 
 /// 本地相似检索：默认引擎优先保留字面命中文件，再按全块内积取 top-k。
@@ -218,6 +271,7 @@ pub fn query(
     embedder: &dyn Embedder,
     q: &str,
     cap: usize,
+    check: Checkpoint<'_>,
 ) -> Result<Vec<Value>, crate::tools::ToolError> {
     if q.trim().is_empty() || cap == 0 {
         return Ok(Vec::new());
@@ -226,21 +280,29 @@ pub fn query(
     // out literal identifiers (.065 vs .783 alone). Lowering the global floor
     // would also admit hash collisions. Keep exact evidence ahead of similarity
     // and point the excerpt at the actual matching line, not the chunk's start.
+    check()?;
+    let qv = embedder.embed(q, check)?;
+    check()?;
     let mut literal_lines = std::collections::HashMap::new();
-    if embedder.name() == "hash-ngram-v1" {
-        let mut files = db.conn().prepare("SELECT path FROM code_files")?;
-        for path in files.query_map([], |r| r.get::<_, String>(0))? {
-            let path = path?;
-            let Some(text) = indexed_text(root, &path) else {
-                continue;
-            };
+    let mut valid = std::collections::HashMap::new();
+    let mut files = db.conn().prepare("SELECT path, hash FROM code_files")?;
+    for row in files.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        check()?;
+        let (path, hash) = row?;
+        let Some(text) = indexed_text(root, &path) else {
+            continue;
+        };
+        if hash != format!("{}:{:016x}", embedder.name(), fnv64(&text)) {
+            continue;
+        }
+        if matches!(embedder.name(), "hash-ngram-v1" | model::NAME) {
             if let Some(offset) = text.find(q) {
                 let line = text[..offset].bytes().filter(|&b| b == b'\n').count() + 1;
-                literal_lines.insert(path, line as i64);
+                literal_lines.insert(path.clone(), line as i64);
             }
         }
+        valid.insert(path, hash);
     }
-    let qv = embedder.embed(q);
     let mut st = db
         .conn()
         .prepare("SELECT path, line_start, vec FROM code_chunks")?;
@@ -256,7 +318,8 @@ pub fn query(
     let mut seen: std::collections::HashMap<String, (f32, i64)> = Default::default();
     for row in rows {
         let (path, line_start, blob) = row?;
-        if crate::tools::agent_readable_repo_path(root, &path).is_err() {
+        check()?;
+        if !valid.contains_key(&path) {
             continue;
         }
         let v = unpack(&blob);
@@ -286,25 +349,26 @@ pub fn query(
     hits.sort_by(order);
     Ok(hits
         .into_iter()
-        .map(|(path, (score, line_start))| {
+        .filter_map(|(path, (score, line_start))| {
+            let text = indexed_text(root, &path)?;
+            if valid.get(&path)? != &format!("{}:{:016x}", embedder.name(), fnv64(&text)) {
+                return None;
+            }
             let literal = literal_lines.get(&path);
             let line_start = literal.copied().unwrap_or(line_start);
-            json!({
+            Some(json!({
                 "path": path,
                 "line": line_start,
-                "excerpt": excerpt(root, &path, line_start),
+                "excerpt": excerpt(&text, line_start),
                 "score": format!("{score:.3}"),
                 "match": if literal.is_some() { "literal" } else { "similarity" },
-            })
+            }))
         })
         .collect())
 }
 
 /// 命中块的短摘：从块首行起取非空行拼到 ~240 字符。
-fn excerpt(root: &Path, rel: &str, line_start: i64) -> String {
-    let Some(text) = indexed_text(root, rel) else {
-        return String::new();
-    };
+fn excerpt(text: &str, line_start: i64) -> String {
     let mut out = String::new();
     for line in text
         .lines()
@@ -338,14 +402,19 @@ mod tests {
         fn name(&self) -> &'static str {
             "dict-stub"
         }
-        fn embed(&self, text: &str) -> Vec<f32> {
+        fn embed(
+            &self,
+            text: &str,
+            check: Checkpoint<'_>,
+        ) -> Result<Vec<f32>, crate::tools::ToolError> {
+            check()?;
             let mut v = vec![0f32; DIMS];
             for (w, i) in &self.0 {
                 if text.contains(w) {
                     v[i % DIMS] = 1.0;
                 }
             }
-            v
+            Ok(v)
         }
     }
 
@@ -370,8 +439,8 @@ mod tests {
     fn semantic_hit_returns_path_line_excerpt() {
         let (db, dir) = fixture();
         let emb = Dict(vec![("ruling", 1), ("adjudicate", 1), ("裁决", 1)]);
-        refresh(&db, dir.path(), &emb).unwrap();
-        let hits = query(&db, dir.path(), &emb, "裁决是怎么判定的", 10).unwrap();
+        refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
+        let hits = query(&db, dir.path(), &emb, "裁决是怎么判定的", 10, &|| Ok(())).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["path"], "src/orchestra.rs");
         assert_eq!(hits[0]["line"], 1);
@@ -382,17 +451,17 @@ mod tests {
     fn refresh_is_incremental() {
         let (db, dir) = fixture();
         let emb = Dict(vec![("streaming", 2), ("裁决", 1)]);
-        let n1 = refresh(&db, dir.path(), &emb).unwrap();
+        let n1 = refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
         assert_eq!(n1, 3);
         // 未动文件不重嵌
-        assert_eq!(refresh(&db, dir.path(), &emb).unwrap(), 0);
+        assert_eq!(refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap(), 0);
         // 改一个 → 只重嵌一个
         std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
-        assert_eq!(refresh(&db, dir.path(), &emb).unwrap(), 1);
+        assert_eq!(refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap(), 1);
         // 删一个 → 块清掉
         std::fs::remove_file(dir.path().join("src/turn.rs")).unwrap();
-        refresh(&db, dir.path(), &emb).unwrap();
-        let gone = query(&db, dir.path(), &emb, "streaming", 10).unwrap();
+        refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
+        let gone = query(&db, dir.path(), &emb, "streaming", 10, &|| Ok(())).unwrap();
         assert!(!gone.iter().any(|h| h["path"] == "src/turn.rs"));
     }
 
@@ -400,10 +469,12 @@ mod tests {
     fn no_hit_is_empty_signal_for_fallback() {
         let (db, dir) = fixture();
         let emb = Dict(vec![("ruling", 1)]);
-        refresh(&db, dir.path(), &emb).unwrap();
-        assert!(query(&db, dir.path(), &emb, "unrelated needle", 10)
-            .unwrap()
-            .is_empty());
+        refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
+        assert!(
+            query(&db, dir.path(), &emb, "unrelated needle", 10, &|| Ok(()))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -414,13 +485,31 @@ mod tests {
         }
         let db = Db::open_in_memory().unwrap();
         let emb = Dict(vec![("magic", 1)]);
-        refresh(&db, dir.path(), &emb).unwrap();
-        assert_eq!(query(&db, dir.path(), &emb, "magic", 3).unwrap().len(), 3);
+        refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
+        assert_eq!(
+            query(&db, dir.path(), &emb, "magic", 3, &|| Ok(()))
+                .unwrap()
+                .len(),
+            3
+        );
     }
     proptest::proptest! {
         #[test]
         fn weak_hash_scores_always_require_fallback(score in -1000f32..=0.30f32) {
             proptest::prop_assert!(!candidate_score("hash-ngram-v1", score));
+        }
+        #[test]
+        fn weak_multilingual_scores_always_require_fallback(score in -1000f32..=0.35f32) {
+            proptest::prop_assert!(!candidate_score(model::NAME, score));
+        }
+        #[test]
+        fn multilingual_candidates_are_finite_and_monotonic(score in proptest::prelude::any::<f32>(), extra in 0.0f32..1.0) {
+            if candidate_score(model::NAME, score) {
+                proptest::prop_assert!(score.is_finite());
+                if (score + extra).is_finite() {
+                    proptest::prop_assert!(candidate_score(model::NAME, score + extra));
+                }
+            }
         }
         #[test]
         fn raising_similarity_preserves_a_candidate(a in 0.31f32..1.0, extra in 0.0f32..1.0) {
