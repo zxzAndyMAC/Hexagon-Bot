@@ -49,6 +49,8 @@ jobs:
           PY
       - name: Verify macOS sandbox before the full suite
         run: cargo test -p hexagon-core sandbox::tests::seatbelt_confines_writes -- --exact --nocapture
+      - name: Verify MCP descendant cleanup before the full suite
+        run: cargo test -p hexagon-core api::tests::mcp_deadline_detached_descendant_cannot_outlive_service -- --exact --nocapture
       # reliability 01: same entrypoints locally and in CI, including architecture,
       # tokens, seven-language keys and regenerated DTO drift.
       - run: npm run check
