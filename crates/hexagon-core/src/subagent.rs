@@ -702,7 +702,7 @@ impl crate::tools::Tool for SemSearch {
         "sem_search"
     }
     fn description(&self) -> &str {
-        r#"Local repository search with an installed multilingual code-embedding model, or character n-grams when model assets are absent. The returned engine identifies which ran. No network or paid calls.
+        r#"Optional local similarity search; prefer scoped fs_find/fs_grep followed by fs_read for repository exploration. Local repository search with an installed multilingual code-embedding model, or character n-grams when model assets are absent. The returned engine identifies which ran. No network or paid calls.
 - Use when: you have a natural-language description of code behavior, including Chinese questions about English source. The character engine only compares overlapping text and cannot understand synonyms.
 - Do not use: when you know the literal text, identifier or filename — prefer fs_grep or fs_find.
 - Returns file path, line number, excerpt and match kind (literal or similarity). With built-in engines, case-sensitive literal matches in indexed files come first and point to the matching line. Scores are chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find. The first learned-model index is slower; subsequent calls reuse unchanged vectors."#

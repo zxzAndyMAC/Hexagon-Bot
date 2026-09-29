@@ -378,11 +378,13 @@ impl Tool for FsFind {
 - Use when: you know all or part of a file name, or a path pattern.
 - Do not use: to search file contents (fs_grep or sem_search). Never run find or ls through bash for this.
 - `pattern` with glob characters (* ? **) matches the path or the basename; plain text matches as a case-insensitive substring. Files ignored by .gitignore are skipped. At most 100 relative paths come back — narrow the pattern if you hit the cap.
-- Errors: zero hits returns count 0 — try a shorter substring or a glob such as `**/name*`."#
+- `path` scopes traversal to a repo-relative directory or file (default `.`). Use fs_list to discover directories, then narrow path; changing only the pattern does not reduce traversal.
+- Check `coverage`: capped/omitted results are incomplete, not proof of absence. Empty query, invalid glob or invalid scope is an error. Zero hits: try another name or scope."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
-            "pattern":{"type":"string","description":"glob like 'src/**/*.rs' or plain substring"}},
+            "pattern":{"type":"string","description":"glob like 'src/**/*.rs' or plain substring"},
+            "path":{"type":"string","description":"repo-relative directory or file scope; default ."}},
             "required":["pattern"]})
     }
     fn risk(&self) -> RiskClass {
@@ -390,9 +392,14 @@ impl Tool for FsFind {
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let root = ctx.repo_root.canonicalize()?;
-        let hits = crate::search::find_by_name(&root, str_arg(input, "pattern")?);
+        let result = repo_search(
+            &root,
+            input,
+            ctx,
+            crate::search::Query::Find(str_arg(input, "pattern")?),
+        )?;
         ctx.observe_native_effect(effects::NativeEffect::RepositorySearch);
-        Ok(json!({"count": hits.len(), "paths": hits}))
+        Ok(result)
     }
 }
 
@@ -406,11 +413,14 @@ impl Tool for FsGrep {
         r#"Search file contents for a literal substring.
 - Use when: you know an exact identifier, string or error message.
 - Do not use: for regular expressions (the query is literal text, not a regex), for approximate text similarity (sem_search), or through bash grep/rg.
-- Returns path, line number and line text for up to 100 hits; ignored and binary files are skipped. Hitting 100 means the query is too broad — make it more specific."#
+- `path` scopes traversal to a repo-relative directory or file (default `.`); `glob` filters paths/basenames before reading. Narrow path first in large repositories.
+- Returns path, line number and line text for up to 100 hits. Inspect `coverage` for truncation and skipped files; incomplete zero hits do not prove absence. Ignored files and symlinks are excluded; binary and >256KiB files are skipped. Use fs_read on a known file to inspect excerpts. Stops/deadlines are errors, never successful empty results."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
-            "query":{"type":"string","description":"literal text to search for"}},
+            "query":{"type":"string","description":"literal text to search for"},
+            "path":{"type":"string","description":"repo-relative directory or file scope; default ."},
+            "glob":{"type":"string","description":"optional repo-relative path or basename glob; filters before reads"}},
             "required":["query"]})
     }
     fn risk(&self) -> RiskClass {
@@ -418,10 +428,63 @@ impl Tool for FsGrep {
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let root = ctx.repo_root.canonicalize()?;
-        let hits = crate::search::grep_content(&root, str_arg(input, "query")?);
+        let result = repo_search(
+            &root,
+            input,
+            ctx,
+            crate::search::Query::Grep(str_arg(input, "query")?),
+        )?;
         ctx.observe_native_effect(effects::NativeEffect::RepositorySearch);
-        Ok(json!({"count": hits.len(), "hits": hits}))
+        Ok(result)
     }
+}
+
+// 2026-09-29 scoped exploration: parent/child use one bounded search path.
+fn repo_search(
+    root: &Path,
+    input: &Value,
+    ctx: &ToolContext,
+    query: crate::search::Query<'_>,
+) -> Result<Value, ToolError> {
+    let optional = |key| match input.get(key) {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.as_str())),
+        _ => Err(ToolError::BadInput(format!("{key} must be a string"))),
+    };
+    let scope = optional("path")?.unwrap_or(".");
+    let glob = optional("glob")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = ctx.deadline.map_or(deadline, |d| d.min(deadline));
+    let started = std::time::Instant::now();
+    let search_ctx = ctx.clone();
+    let result = crate::search::search(root, query, scope, glob, move || {
+        if std::time::Instant::now() >= deadline
+            || search_ctx
+                .subagent
+                .as_ref()
+                .is_some_and(|s| s.halt.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(ToolError::Exec(
+                "repository search stopped or deadline exceeded; narrow the path".into(),
+            ));
+        }
+        crate::evaluation::control::checkpoint(&search_ctx.repo_root)
+            .map_err(|e| ToolError::Exec(e.to_string()))
+    });
+    if result.is_err() {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            None,
+            None,
+            "repository_search",
+            "scope_or_execution_refused",
+            started,
+        );
+    }
+    result
 }
 
 /// bash 族（agent-senses 票 05 / ADR 0058-3）：同一执行漏斗三种形态——

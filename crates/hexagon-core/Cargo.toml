@@ -9,6 +9,7 @@ license.workspace = true
 base64 = "0.22"
 fastembed = { version = "=7.1.0", default-features = false, features = ["ort-download-binaries-native-tls"] }
 getrandom = "0.3"
+globset = "0.4"
 ignore = "0.4.33"
 jsonschema = { version = "0.57", default-features = false }
 keyring = "3"

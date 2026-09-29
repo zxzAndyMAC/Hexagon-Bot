@@ -13866,3 +13866,287 @@ fn tool_preflight_snapshot_io_failure_leaves_no_pending_action() {
         .iter()
         .any(|e| e.payload["state"] == "failed" && e.payload["reason"] == "preflight_rejected"));
 }
+
+/// 2026-09-29: filtering after full-repo search loses scoped hits behind caps.
+#[test]
+fn scoped_search_prunes_unrelated_files_and_preserves_parent_ignores() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["前端"], None).unwrap();
+    for (path, body) in [
+        (".gitignore", "packages/a/ignored/\n"),
+        ("packages/a/src/main.rs", "needle scoped\n"),
+        ("packages/a/src/readme.md", "needle documentation\n"),
+        ("packages/a/ignored/secret.rs", "needle ignored\n"),
+        ("packages/b/src/main.rs", "needle outside\n"),
+    ] {
+        let p = dir.path().join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+    let CallOutcome::Done(v) = tool_call(
+        &wb,
+        "fs_grep",
+        json!({
+            "query":"needle", "path":"packages/a", "glob":"*.rs"
+        }),
+    )
+    .unwrap() else {
+        panic!("search failed")
+    };
+    assert_eq!(v["count"], 1, "{v}");
+    assert_eq!(v["hits"][0]["path"], "packages/a/src/main.rs");
+    assert_eq!(v["coverage"]["files_searched"], 1);
+    assert_eq!(v["coverage"]["truncated"], false);
+    let CallOutcome::Done(v) = tool_call(
+        &wb,
+        "fs_find",
+        json!({
+            "pattern":"*.rs", "path":"packages/a"
+        }),
+    )
+    .unwrap() else {
+        panic!("find failed")
+    };
+    assert_eq!(v["paths"], json!(["packages/a/src/main.rs"]));
+}
+
+#[test]
+fn scoped_search_reports_truncation_and_skipped_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/many.txt"), "needle\n".repeat(101)).unwrap();
+    let CallOutcome::Done(v) =
+        tool_call(&wb, "fs_grep", json!({"query":"needle","path":"src"})).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v["count"], 100);
+    assert_eq!(v["coverage"]["truncated"], true);
+    assert_eq!(v["coverage"]["reason"], "hit_limit");
+    assert_eq!(v["coverage"]["complete"], false);
+    std::fs::write(dir.path().join("src/large.txt"), vec![b'x'; 262145]).unwrap();
+    std::fs::write(dir.path().join("src/binary.dat"), b"needle\0").unwrap();
+    let CallOutcome::Done(v) =
+        tool_call(&wb, "fs_grep", json!({"query":"absent","path":"src"})).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v["count"], 0);
+    assert_eq!(v["coverage"]["skipped_large"], 1);
+    assert_eq!(v["coverage"]["skipped_binary"], 1);
+    assert_eq!(v["coverage"]["complete"], false);
+    let CallOutcome::Done(v) = tool_call(
+        &wb,
+        "fs_grep",
+        json!({"query":"absent","path":"src/many.txt"}),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(v["coverage"]["complete"], true);
+    assert_eq!(v["coverage"]["files_searched"], 1);
+}
+
+#[test]
+fn scoped_search_rejects_invalid_scope_and_stopped_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::write(dir.path().join("visible.rs"), "needle").unwrap();
+    for path in [json!(42), json!("missing"), json!("../"), json!(dir.path())] {
+        assert!(tool_call(&wb, "fs_grep", json!({"query":"needle","path":path})).is_err());
+    }
+    assert!(tool_call(&wb, "fs_grep", json!({"query":"needle","glob":"["})).is_err());
+    assert!(tool_call(&wb, "fs_find", json!({"pattern":""})).is_err());
+    let mut ctx = wb.ctx_for("a0", None);
+    ctx.deadline = Some(std::time::Instant::now());
+    assert!(wb
+        .registry
+        .call(&wb.db, &ctx, "fs_grep", json!({"query":"needle"}))
+        .is_err());
+    ctx.deadline = None;
+    ctx.subagent = Some(crate::subagent::Scope {
+        halt: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        answer: Default::default(),
+        mcp: Default::default(),
+        reads: Default::default(),
+    });
+    assert!(wb
+        .registry
+        .call(&wb.db, &ctx, "fs_find", json!({"pattern":"*.rs"}))
+        .is_err());
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(20))]
+    #[test]
+    fn scoped_search_never_escapes_requested_subtree(name in "[a-z]{1,16}", parent in proptest::bool::ANY) {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        std::fs::create_dir(dir.path().join(&name)).unwrap();
+        std::fs::write(dir.path().join("outside.txt"), "marker").unwrap();
+        std::fs::write(dir.path().join(&name).join("inside.txt"), "marker").unwrap();
+        let scope = if parent {format!("{name}/..")} else {name.clone()};
+        let result = tool_call(&wb, "fs_grep", json!({"query":"marker","path":scope}));
+        if parent { proptest::prop_assert!(result.is_err()); }
+        else {
+            let CallOutcome::Done(v) = result.unwrap() else {panic!()};
+            proptest::prop_assert_eq!(&v["hits"][0]["path"], &json!(format!("{name}/inside.txt")));
+            proptest::prop_assert_eq!(&v["count"], &json!(1));
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn scoped_search_never_enters_symlink_or_private_scopes() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/public.txt"), "needle").unwrap();
+    std::os::unix::fs::symlink("src", dir.path().join("alias")).unwrap();
+    std::fs::write(dir.path().join(".env.local"), "needle private").unwrap();
+    for path in ["alias", "alias/public.txt", ".env.local"] {
+        assert!(tool_call(&wb, "fs_grep", json!({"query":"needle","path":path})).is_err());
+    }
+    let CallOutcome::Done(v) =
+        tool_call(&wb, "fs_grep", json!({"query":"needle","path":"src"})).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v["count"], 1);
+}
+
+/// Scripted provider proves the tool/context wiring, not real-model relevance.
+#[test]
+fn scoped_search_exploration_reads_source_before_reporting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::create_dir_all(dir.path().join("packages/session")).unwrap();
+    std::fs::write(dir.path().join("packages/session/expiry.rs"), "pub fn expire_session() { revoke_token(); }\nfn revoke_token() { /* audited implementation */ }\n").unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![(
+            "locate",
+            "fs_find",
+            json!({"pattern":"*expiry*","path":"packages"}),
+        )]),
+        tool_response(vec![(
+            "search",
+            "fs_grep",
+            json!({"query":"expire_session","path":"packages/session","glob":"*.rs"}),
+        )]),
+        tool_response(vec![(
+            "read",
+            "fs_read",
+            json!({"path":"packages/session/expiry.rs","offset":1,"limit":10}),
+        )]),
+        text_response("会话过期调用 revoke_token；依据 packages/session/expiry.rs:1–2。"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    wb.run_instance("a0", "查明会话过期如何撤销令牌，给出源码依据")
+        .unwrap();
+    let recorded = provider.recorded();
+    assert_eq!(recorded.len(), 4);
+    for (index, id, evidence) in [
+        (1, "locate", "packages/session/expiry.rs"),
+        (2, "search", "expire_session"),
+        (3, "read", "audited implementation"),
+    ] {
+        assert!(recorded[index].messages.iter().flat_map(|m| &m.content).any(|block| matches!(block,
+            crate::provider::ContentBlock::ToolResult {tool_use_id, content, is_error:false, ..} if tool_use_id == id && content.contains(evidence)
+        )), "missing actual source evidence for {id}");
+    }
+    let text = serde_json::to_string(&recorded[0].messages).unwrap();
+    assert!(text.contains("# Exploring a repository"));
+    assert!(text.contains("search hypotheses, not facts"));
+}
+
+/// Manual performance evidence; filesystem creation is excluded from timings.
+#[test]
+#[ignore = "creates 50100 files; run explicitly for repository search performance evidence"]
+fn scoped_search_large_repository_benchmark() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    for package in 0..20 {
+        let path = dir.path().join(format!("packages/p{package:02}"));
+        std::fs::create_dir_all(&path).unwrap();
+        for file in 0..2505 {
+            std::fs::write(
+                path.join(format!("f{file:04}.rs")),
+                "pub fn ordinary_function() {}\n",
+            )
+            .unwrap();
+        }
+    }
+    for scope in [".", "packages/p19"] {
+        let mut samples = Vec::new();
+        for trial in 0..6 {
+            let start = std::time::Instant::now();
+            let CallOutcome::Done(value) = tool_call(
+                &wb,
+                "fs_grep",
+                json!({"query":"absent_identifier","path":scope}),
+            )
+            .unwrap() else {
+                panic!()
+            };
+            let ms = start.elapsed().as_secs_f64() * 1000.;
+            assert_eq!(value["count"], 0);
+            assert_eq!(value["coverage"]["truncated"], scope == ".");
+            if scope != "." {
+                assert_eq!(value["coverage"]["files_searched"], 2505);
+            }
+            println!(
+                "search_bench scope={scope} trial={trial} elapsed_ms={ms:.2} coverage={}",
+                value["coverage"]
+            );
+            if trial > 0 {
+                samples.push(ms);
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "search_bench scope={scope} warm_median_ms={:.2} warm_max_ms={:.2}",
+            samples[2], samples[4]
+        );
+    }
+}
+
+#[test]
+fn scoped_search_refuses_broken_ignore_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "[z-a]\n").unwrap();
+    std::fs::write(dir.path().join("src/public.rs"), "needle").unwrap();
+    assert!(tool_call(&wb, "fs_grep", json!({"query":"needle","path":"src"})).is_err());
+}
+
+#[test]
+fn scoped_search_refuses_durably_stopped_evaluation() {
+    let (_home, host, run) = super::evaluation_budget_tests::waiting_budget(
+        80,
+        500000,
+        super::evaluation_budget_tests::fixture_price(),
+    );
+    let worker = Workbench::open_evaluation_host(Path::new(&run.workspace)).unwrap();
+    std::fs::write(Path::new(&run.workspace).join("visible.txt"), "needle").unwrap();
+    assert!(matches!(
+        tool_call(
+            &worker,
+            "fs_grep",
+            json!({"query":"needle","path":"visible.txt"})
+        ),
+        Ok(CallOutcome::Done(_))
+    ));
+    host.stop_evaluation_run(&run.id).unwrap();
+    assert!(!matches!(
+        tool_call(
+            &worker,
+            "fs_grep",
+            json!({"query":"needle","path":"visible.txt"})
+        ),
+        Ok(CallOutcome::Done(_))
+    ));
+}

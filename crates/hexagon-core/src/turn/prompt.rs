@@ -215,16 +215,30 @@ pub fn role_layer_text(
     text
 }
 
+/// Owner decision 2026-09-29: source-led exploration is the default. A separate
+/// shared paragraph keeps parent and child guidance consistent without a new loop.
+const REPO_EXPLORATION: &str = r#"
+# Exploring a repository
+- Start from task concepts, in any language, and propose likely code identifiers, error strings or filenames. Treat these as search hypotheses, not facts. Use fs_list/fs_find to locate a package, then fs_grep with a narrow `path` and optional `glob`.
+- Read promising source with fs_read (offset/limit for excerpts), then follow definitions, callers and tests. A search snippet alone does not establish behaviour. Cite actual paths and lines you read; distinguish evidence from inference.
+- Inspect search `coverage`. A capped or partially skipped search cannot establish absence. Narrow the path/query, split investigation across relevant directories, or read a known file. Change terms or scope when a search is unhelpful; do not repeat unchanged searches.
+- Batch independent lookups and keep only relevant excerpts. Stay within the existing round budget; stop once evidence answers the task or report the precise remaining gap. If subagent is available, use it only for a bounded multi-file investigation and ask for source references.
+- sem_search is optional compatibility, not a prerequisite or the default exploration route. Do not start a whole-repository embedding index just to orient yourself. Never bypass read policy or search limits through shell commands.
+"#;
+
 /// 回合装配点注入的工作台层。
 pub fn workbench_layers(subagent: bool) -> Vec<PromptLayer> {
     if subagent {
         return vec![PromptLayer::new(
             LayerLevel::Workbench,
-            WORKBENCH_BASE_SUBAGENT,
+            format!("{WORKBENCH_BASE_SUBAGENT}\n{REPO_EXPLORATION}"),
         )];
     }
     vec![
-        PromptLayer::new(LayerLevel::Workbench, WORKBENCH_BASE),
+        PromptLayer::new(
+            LayerLevel::Workbench,
+            format!("{WORKBENCH_BASE}\n{REPO_EXPLORATION}"),
+        ),
         PromptLayer::keyed(
             LayerLevel::Workbench,
             "reply_language",

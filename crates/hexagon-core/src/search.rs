@@ -1,5 +1,6 @@
 //! 仓内搜索（code-search-and-subagent 票 01）：文件名/正文/语义索引共用的
-//! 遍历层——`repo_files` 是「被忽略的不进结果」的单一实现。
+//! 遍历层——`repo_files` 供相似索引，`search` 供流式范围搜索；
+//! 两者遵守 ignore 遍历语义和同一读取权限边界。
 //!
 //! gitignore 语义不自研：嵌套 .gitignore、`!` 反选、锚点与非锚点、目录级
 //! 规则——自研必漏（OpenWorker readonly.py 曾因只支持 basename 规则把
@@ -15,7 +16,8 @@ pub const FIND_CAP: usize = 100;
 pub const GREP_CAP: usize = 100;
 /// 单文件正文搜索体积上限：超大生成物/日志不进文本搜索（索引也不收）。
 const GREP_FILE_CAP: u64 = 256 * 1024;
-/// 遍历硬上限：防御畸形仓（几十万文件）拖死一次工具调用。
+/// 文本搜索限制回调可见条目；旧相似索引遍历限制收录文件数。
+/// ignore 内部丢弃的条目不计数；停止为协作式，不承诺硬中断文件系统。
 const WALK_CAP: usize = 50_000;
 /// 语义索引收录的文件数上限（票 02）：超界部分只走文本搜索。
 pub const INDEX_FILE_CAP: usize = 4_000;
@@ -53,75 +55,299 @@ pub fn repo_files(root: &Path) -> Vec<String> {
     out
 }
 
-/// 文件名搜索（票 01）：含通配符 → glob 匹配（相对路径或 basename 命中其一）；
-/// 否则按相对路径大小写不敏感子串。返回排序后的相对路径，封顶 FIND_CAP。
-pub fn find_by_name(root: &Path, pattern: &str) -> Vec<String> {
-    let pat = pattern.trim();
-    if pat.is_empty() {
-        return Vec::new();
-    }
-    let has_glob = pat.contains(['*', '?', '[', ']']);
-    let lower = pat.to_lowercase();
-    let mut hits: Vec<String> = repo_files(root)
-        .into_iter()
-        .filter(|rel| {
-            if has_glob {
-                let base = rel.rsplit('/').next().unwrap_or(rel);
-                crate::tools::glob_match(pat, rel) || crate::tools::glob_match(pat, base)
-            } else {
-                rel.to_lowercase().contains(&lower)
-            }
-        })
-        .collect();
-    hits.sort();
-    hits.truncate(FIND_CAP);
-    hits
+/// 2026-09-29 owner decision: scoped exploration must prune before caps, not
+/// filter an already truncated whole-repo result. Existing read policy remains
+/// authoritative; a rejected scope is an error, never a whole-repo fallback.
+pub enum Query<'a> {
+    Find(&'a str),
+    Grep(&'a str),
 }
 
-/// 正文搜索（票 01）：字面量子串（不做正则——正则引擎是模型可控输入的
-/// 复杂度炸弹面，字面量没有；要模式请把搜索词写准）。命中行截 ~200 字符。
-/// 跳过：超体积文件、含 NUL 的二进制、被忽略文件。
-pub fn grep_content(root: &Path, needle: &str) -> Vec<Value> {
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    let mut hits = Vec::new();
-    for rel in repo_files(root) {
-        if hits.len() >= GREP_CAP {
-            break;
-        }
-        let Ok(p) = crate::tools::agent_readable_repo_path(root, &rel) else {
-            continue;
-        };
-        let Ok(meta) = p.metadata() else { continue };
-        if meta.len() > GREP_FILE_CAP {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&p) else {
-            continue;
-        };
-        if bytes[..bytes.len().min(8192)].contains(&0) {
-            continue;
-        }
-        let text = String::from_utf8_lossy(&bytes);
-        for (i, line) in text.lines().enumerate() {
-            if !line.contains(needle) {
-                continue;
+pub fn search(
+    root: &Path,
+    query: Query<'_>,
+    scope: &str,
+    glob: Option<&str>,
+    checkpoint: impl Fn() -> Result<(), crate::tools::ToolError> + Send + Sync + 'static,
+) -> Result<Value, crate::tools::ToolError> {
+    use crate::tools::ToolError;
+    use std::io::Read;
+    checkpoint()?;
+    // 2026-09-29 regression: macOS /var aliases /private/var. Compare the
+    // canonical scope with a canonical walker root, including direct core calls.
+    let root = root.canonicalize()?;
+    let root = root.as_path();
+    let mut scoped = root.to_path_buf();
+    // Reuse the read boundary, additionally refusing symlink scope aliases:
+    // starting a walker at a symlink could otherwise bypass ignore rules.
+    for part in Path::new(scope).components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => {
+                scoped.push(name);
+                if std::fs::symlink_metadata(&scoped)?.file_type().is_symlink() {
+                    return Err(ToolError::BadInput(
+                        "search path must not contain symlinks".into(),
+                    ));
+                }
             }
-            let trimmed = line.trim();
-            let shown: String = trimmed.chars().take(200).collect();
-            hits.push(json!({"path": rel, "line": i + 1, "text": shown}));
-            if hits.len() >= GREP_CAP {
+            _ => {
+                return Err(ToolError::BadInput(
+                    "search path must be repo-relative without parent components".into(),
+                ))
+            }
+        }
+    }
+    let scoped = crate::tools::agent_readable_repo_path(root, scope)?;
+    let needle = match query {
+        Query::Find(s) => s.trim(),
+        Query::Grep(s) => s,
+    };
+    if needle.is_empty() {
+        return Err(ToolError::BadInput("search query must not be empty".into()));
+    }
+    let has_glob = needle.contains(['*', '?', '[', ']']);
+    let lower = needle.to_lowercase();
+    let name_glob = if has_glob && matches!(query, Query::Find(_)) {
+        Some(search_glob(needle)?)
+    } else {
+        None
+    };
+    let filter_glob = glob.map(search_glob).transpose()?;
+    let within = scoped.clone();
+    let checkpoint = std::sync::Arc::new(checkpoint);
+    let filter_check = checkpoint.clone();
+    let traversal = std::sync::Arc::new(std::sync::Mutex::new(Traversal {
+        entries: 1, // ignore does not call filter_entry for the root.
+        limited: false,
+        error: None,
+    }));
+    let filter_state = traversal.clone();
+    // Walk from root, rather than scope, so root and intermediate ignore files
+    // still apply even when the requested subtree itself is ignored.
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .ignore(true)
+        .parents(true)
+        .require_git(false)
+        .follow_links(false)
+        .filter_entry(move |entry| {
+            // Returning true on stop makes the iterator yield immediately;
+            // returning false would keep scanning rejected siblings internally.
+            let mut state = filter_state.lock().unwrap();
+            if let Err(error) = filter_check() {
+                state.error = Some(error);
+                return true;
+            }
+            if state.entries >= WALK_CAP {
+                state.limited = true;
+                return true;
+            }
+            state.entries += 1;
+            let p = entry.path();
+            !(entry.file_type().is_some_and(|t| t.is_dir()) && entry.file_name() == ".git")
+                && (p.starts_with(&within) || within.starts_with(p))
+        })
+        .build();
+    let mut paths = Vec::new();
+    let mut hits = Vec::new();
+    let mut files_searched = 0;
+    let mut oversized = 0;
+    let mut binary = 0;
+    let mut unreadable = 0;
+    let mut excluded = 0;
+    let mut reason = None;
+    for entry in walker {
+        checkpoint()?;
+        {
+            let mut state = traversal.lock().unwrap();
+            if let Some(error) = state.error.take() {
+                return Err(error);
+            }
+            if state.limited {
+                reason = Some("entry_limit");
                 break;
             }
         }
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
+        };
+        if entry.error().is_some() {
+            return Err(ToolError::Exec(
+                "repository search cannot apply ignore rules; repair the ignore file".into(),
+            ));
+        }
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .expect("walker stays in root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if filter_glob
+            .as_ref()
+            .is_some_and(|pat| !matches_glob(pat, &rel))
+        {
+            continue;
+        }
+        let path = match crate::tools::agent_readable_repo_path(root, &rel) {
+            Ok(p) => p,
+            Err(_) => {
+                excluded += 1;
+                continue;
+            }
+        };
+        match query {
+            Query::Find(_) => {
+                if if let Some(pat) = &name_glob {
+                    matches_glob(pat, &rel)
+                } else {
+                    rel.to_lowercase().contains(&lower)
+                } {
+                    paths.push(rel);
+                    if paths.len() >= FIND_CAP {
+                        reason = Some("hit_limit");
+                        break;
+                    }
+                }
+            }
+            Query::Grep(_) => {
+                let meta = match path.metadata() {
+                    Ok(m) => m,
+                    Err(_) => {
+                        unreadable += 1;
+                        continue;
+                    }
+                };
+                if meta.len() > GREP_FILE_CAP {
+                    oversized += 1;
+                    continue;
+                }
+                let mut bytes = Vec::new();
+                // Bounded even if a file grows between metadata and read.
+                let read = std::fs::File::open(&path)
+                    .and_then(|f| f.take(GREP_FILE_CAP + 1).read_to_end(&mut bytes));
+                if read.is_err() {
+                    unreadable += 1;
+                    continue;
+                }
+                checkpoint()?;
+                if bytes.len() as u64 > GREP_FILE_CAP {
+                    oversized += 1;
+                    continue;
+                }
+                if bytes.contains(&0) {
+                    binary += 1;
+                    continue;
+                }
+                files_searched += 1;
+                let text = String::from_utf8_lossy(&bytes);
+                for (i, line) in text.lines().enumerate() {
+                    if !line.contains(needle) {
+                        continue;
+                    }
+                    hits.push(json!({"path":rel,"line":i+1,"text":line.trim().chars().take(200).collect::<String>()}));
+                    if hits.len() >= GREP_CAP {
+                        reason = Some("hit_limit");
+                        break;
+                    }
+                }
+                if reason.is_some() {
+                    break;
+                }
+            }
+        }
     }
-    hits
+    checkpoint()?;
+    paths.sort();
+    let coverage = json!({
+        "entries_visited":traversal.lock().unwrap().entries, "files_searched":files_searched,
+        "skipped_large":oversized, "skipped_binary":binary,
+        "skipped_unreadable":unreadable, "excluded_by_policy":excluded,
+        "truncated":reason.is_some(), "reason":reason,
+        "complete":reason.is_none() && oversized == 0 && binary == 0 && unreadable == 0 && excluded == 0,
+        "scope":scope,
+        "note":"Coverage applies only to the requested scope/filter and non-ignored files. If incomplete, narrow path/query or inspect a known file with fs_read; empty hits do not prove absence."
+    });
+    Ok(match query {
+        Query::Find(_) => json!({"count":paths.len(),"paths":paths,"coverage":coverage}),
+        Query::Grep(_) => json!({"count":hits.len(),"hits":hits,"coverage":coverage}),
+    })
+}
+
+struct Traversal {
+    entries: usize,
+    limited: bool,
+    error: Option<crate::tools::ToolError>,
+}
+
+// Reuse ignore's existing globset dependency instead of the recursive permission
+// glob matcher: model-supplied search patterns must not cause exponential work.
+fn search_glob(pattern: &str) -> Result<globset::GlobMatcher, crate::tools::ToolError> {
+    if pattern.len() > 1024 {
+        return Err(crate::tools::ToolError::BadInput(
+            "search glob exceeds 1024 bytes".into(),
+        ));
+    }
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .map(|g| g.compile_matcher())
+        .map_err(|_| crate::tools::ToolError::BadInput("invalid search glob".into()))
+}
+fn matches_glob(pattern: &globset::GlobMatcher, rel: &str) -> bool {
+    pattern.is_match(rel) || pattern.is_match(rel.rsplit('/').next().unwrap_or(rel))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn find_by_name(root: &Path, pattern: &str) -> Vec<String> {
+        if pattern.is_empty() {
+            return Vec::new();
+        }
+        serde_json::from_value(
+            search(root, Query::Find(pattern), ".", None, || Ok(())).unwrap()["paths"].clone(),
+        )
+        .unwrap()
+    }
+    fn grep_content(root: &Path, query: &str) -> Vec<Value> {
+        search(root, Query::Grep(query), ".", None, || Ok(())).unwrap()["hits"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    // Complements the Workbench stop tests at the existing core search seam:
+    // stop deterministically during pruning, without sleeps or production hooks.
+    #[test]
+    fn scoped_search_stops_while_pruning_unrelated_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..100 {
+            std::fs::create_dir(dir.path().join(format!("d{i}"))).unwrap();
+        }
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        let result = search(dir.path(), Query::Grep("absent"), "d0", None, move || {
+            if observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 10 {
+                return Err(crate::tools::ToolError::Exec(
+                    "fixture stopped during traversal".into(),
+                ));
+            }
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 11);
+    }
 
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
