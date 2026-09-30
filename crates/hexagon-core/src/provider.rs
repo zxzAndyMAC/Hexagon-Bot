@@ -762,7 +762,14 @@ pub mod openai_shape {
                 })
             })
             .collect();
-        serde_json::json!({ "messages": messages, "tools": tools })
+        let mut body = serde_json::json!({ "messages": messages });
+        // 2026-09-30 model comparison: GLM/MiniMax reject tools:[] with HTTP400.
+        // A planning turn has no tools; omit the optional field instead of
+        // inventing a dummy tool or adding per-model exceptions.
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools);
+        }
+        body
     }
 
     pub fn from_response(v: &Value) -> Result<ChatResponse, ProviderError> {
@@ -1734,6 +1741,15 @@ mod tests {
         .unwrap();
         assert_eq!(count, 1);
         assert_eq!(got, "一整段");
+    }
+
+    #[test]
+    fn openai_planning_request_omits_empty_tools() {
+        // 2026-09-30 configured-model comparison: GLM rejects tools:[] before
+        // any search; the same planning request with the field omitted succeeds.
+        let request = empty_req();
+        let wire = openai_shape::to_request(&request);
+        assert!(wire.get("tools").is_none());
     }
 
     #[test]
