@@ -88,6 +88,7 @@ fn thinking_streams_then_stays_on_one_message() {
             content: vec![
                 ContentBlock::Thinking {
                     text: "先核对路径".into(),
+                    replay_as_reasoning_content: false,
                 },
                 ContentBlock::Text {
                     text: "可以写".into(),
@@ -170,6 +171,7 @@ fn thinking_is_not_echoed_into_the_next_request() {
             content: vec![
                 ContentBlock::Thinking {
                     text: "先看文件".into(),
+                    replay_as_reasoning_content: false,
                 },
                 ContentBlock::ToolUse {
                     id: "t1".into(),
@@ -1030,7 +1032,10 @@ fn estimate_tokens_tool_result_images_are_flat_allowance() {
 fn estimate_tokens_covers_every_block_variant() {
     let cases: Vec<ContentBlock> = vec![
         ContentBlock::Text { text: "hi".into() },
-        ContentBlock::Thinking { text: "hmm".into() },
+        ContentBlock::Thinking {
+            text: "hmm".into(),
+            replay_as_reasoning_content: true,
+        },
         ContentBlock::ToolUse {
             id: "t".into(),
             name: "fs_read".into(),
@@ -1841,6 +1846,12 @@ use proptest::prelude::*;
 fn arb_block() -> impl Strategy<Value = ContentBlock> {
     prop_oneof![
         "[ -~]{0,40}".prop_map(|text| ContentBlock::Text { text }),
+        ("[ -~]{0,40}", any::<bool>()).prop_map(|(text, replay_as_reasoning_content)| {
+            ContentBlock::Thinking {
+                text,
+                replay_as_reasoning_content,
+            }
+        }),
         "[a-z0-9]{0,16}".prop_map(|data| ContentBlock::Image {
             media_type: "image/png".into(),
             data,
@@ -1890,7 +1901,12 @@ proptest! {
         let before_text = speech_texts(&messages);
         let before_img = inline_images(&messages);
         let before_orphan = unpaired_tool_ids(&messages);
+        // Native continuation remains intact even if its tool records are gone.
+        let thinking = |ms: &[Message]| ms.iter().flat_map(|m| &m.content)
+            .filter(|b| matches!(b, ContentBlock::Thinking { .. })).cloned().collect::<Vec<_>>();
+        let before_thinking = thinking(&messages);
         let (out, removed) = context::shrink_tool_records(messages, cap);
+        prop_assert_eq!(thinking(&out), before_thinking);
         prop_assert_eq!(speech_texts(&out), before_text);
         prop_assert_eq!(inline_images(&out), before_img);
         for block in &removed {

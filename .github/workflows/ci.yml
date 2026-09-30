@@ -29,16 +29,6 @@ jobs:
           api::tests::mcp_deadline_detached_descendant_cannot_outlive_service
           api::tests::subagent_test_processes_cannot_modify_source_or_host_state
           tools::tests::timeout_kills_and_traces
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/hexagon-retrieval-model
-          key: embeddinggemma-5090578-q4-v1
-      - name: Verify offline multilingual retrieval with pinned public weights
-        env:
-          HEXAGON_EMBEDDING_MODEL_DIR: ${{ runner.temp }}/hexagon-retrieval-model
-        run: |
-          python3 scripts/install-retrieval-model.py --directory "$HEXAGON_EMBEDDING_MODEL_DIR"
-          cargo test -p hexagon-core local_similarity_multilingual_model -- --nocapture
       # reliability 01: same entrypoints locally and in CI, including architecture,
       # tokens, seven-language keys and regenerated DTO drift.
       - run: npm run check

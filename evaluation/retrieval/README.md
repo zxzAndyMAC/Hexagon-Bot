@@ -1,5 +1,7 @@
 # Local text-similarity calibration
 
+Current status (2026-09-30): the optional neural engine and installer have been removed by owner request. The following neural measurements are historical, not current capabilities. Chinese source exploration uses the configured Agent and scoped file/search/read tools. `sem_search` retains explicitly lexical similarity only. No local weights are loaded, including from the former environment override. Saved neural indices rebuild on next refresh; user assets are not deleted.
+
 `corpus.json` contains original synthetic source snippets and 50 development queries: 30 literal/identifier, 10 paraphrases, 10 unrelated. It is a calibration fixture, not a held-out semantic retrieval evaluation.
 
 The Workbench regression checks distinct-file top-k, literal Recall@5 and unrelated-query fallback. Optional `HEXAGON_RETRIEVAL_BENCH=1` expands `local_similarity_benchmark` to 100/1000/4000 files and five cold runs each; `HEXAGON_RETRIEVAL_REPORT` names a local JSON output path. Reports include cold samples, hot p50/p95 and every query's expected paths and returned hits. The fixture uses debug code and in-memory SQLite. Do not infer durable-database or real-project quality from these timings.
@@ -74,75 +76,30 @@ calibration recall remains 30/30 and unrelated empty results remain 10/10 at eac
 size. This is a recall improvement, not a speedup or a large-repository latency
 claim.
 
-## Offline multilingual engine (2026-09-29)
+## Retired multilingual experiment (2026-09-29)
 
-The optional learned engine is EmbeddingGemma 300M Q4, using the pinned
-[ONNX community export](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/tree/5090578d9565bb06545b4552f76e6bc2c93e4a66).
-Its assets use [Gemma terms](https://ai.google.dev/gemma/terms); weights are not
-included in this repository. `scripts/install-retrieval-model.py` installs about
-219 MB using only Python 3.9+ standard library. `--check` verifies without network.
-The application validates asset sizes and SHA-256 again before native inference.
-The model manifest pins graph, external weights and tokenizer together.
+Before its removal on 2026-09-30, the optional engine used EmbeddingGemma 300M
+Q4 with pinned ONNX/tokenizer assets (about 219 MB). These historical measurements
+are retained; they do not describe the current character-similarity engine.
 
-Runtime is Rust/ONNX CPU, four threads, at most four texts per inference batch,
-512 tokens per 48-line chunk, 768-dimensional normalized embeddings. Query prefix
-is the model-card default `task: search result | query: `; documents use their
-relative path as title and source as text. Index signatures include model revision,
-prefix and token limit. There is no inference downloader, Python subprocess,
-remote key, or paid request. `HEXAGON_EMBEDDING_MODEL_DIR` overrides the default
-`~/.hexagon/models/embeddinggemma-300m-q4-v1`. Explicit missing/corrupt assets fail
-with an error; an absent default installation retains `hash-ngram-v1`. The shared
-loaded model lasts until process exit; restart after changing model installation.
-
-Both built-in engines preserve literal priority. Learned candidates use a separate
-.35 cosine floor, calibrated on the same development queries below. This is not a
-confidence guarantee. An E5-small prototype was rejected because it recovered only
-3/8 Chinese targets and admitted unrelated questions. No query-specific dictionary
-or paid model was introduced.
-
-Native Workbench measurement on the original frozen 573-file snapshot:
-
-| Query group | Hash after literal repair | Gemma Q4 |
+| Query group | Hash after literal repair | Former Gemma Q4 |
 | --- | --- | --- |
 | Identifier target-file Recall@5 | 8/8 | 8/8 |
 | Chinese target-file Recall@5 | 0/8 | 6/8 |
 | Unrelated empty results | 8/8 | 8/8 |
 
-The original queries and expected files were retained. Misses remain for
-“工具执行结果不确定以后怎样核对恢复” (`api.rs`) and
-“离开后回来在哪里看到待处理事项” (`Timeline.tsx`). Related alternate files do not
-count as success. These are development results, not held-out evidence of general
-quality. A separate four-file English fixture checks four Chinese behaviors, two
-unrelated questions, literal priority, persisted reuse after reopening and removal.
-CI explicitly installs/verifies cached assets and runs this real-model regression;
-the ordinary suite stays deterministic with an injected hash engine.
+The frozen development sample was the original 573-file snapshot. Misses remained
+for “工具执行结果不确定以后怎样核对恢复” and “离开后回来在哪里看到待处理事项”.
+Related alternate files were not counted as success. This was not independent
+held-out evidence. The former native debug measurement took 546.65 seconds for
+cold indexing; subsequent queries had median 283.19 ms and p95 286.98 ms. It did
+not meet hash-engine latency ceilings or establish arbitrary-repository quality.
 
-The native debug measurement took 546.65 seconds for its first query including
-cold indexing; subsequent 23 queries had median 283.19 ms and p95 286.98 ms. This
-initial ranking measurement preceded the cancellation/freshness checks; those
-checks are covered separately and can add overhead. The neural cold path does
-not satisfy the old hash-engine millisecond limits. Large files are still capped
-at 256 KiB and repositories at 4000 indexed files; 512-token truncation can miss
-code late in long chunks. No claim is made about arbitrary large-repository speed.
-
-Search now checks cancellation between files, model lock waits and four-text
-batches, and respects the earlier of the caller's deadline or a 15-minute invocation
-budget. A native session initialization or currently executing batch finishes
-before it can observe stop. Completed files remain reusable after a cancelled
-refresh, so retry resumes indexing. Inference happens outside SQLite write
-transactions; source changes during inference abort that file's commit. Query and
-excerpt generation recheck current content against the indexed signature, avoiding
-old-vector/new-excerpt pairs. Stop and inference failure are errors, not successful
-empty-search responses.
-
-For the real snapshot measurement, set `HEXAGON_EMBEDDING_MODEL_DIR` as well as the
-three measurement variables above. Real-model regression:
-
-```bash
-python3 scripts/install-retrieval-model.py
-HEXAGON_EMBEDDING_MODEL_DIR="$HOME/.hexagon/models/embeddinggemma-300m-q4-v1" \
-  cargo test -p hexagon-core local_similarity_multilingual_model -- --nocapture
-```
+The neural runtime, installer, environment override and CI weight download are
+now removed. Model-free Workbench regressions cover default engine selection,
+persistence, literal matches, deletion, cancellation and source freshness. The
+Agent's Chinese source-answer quality requires separate real-model evaluation;
+these old scores do not transfer to it or to the remaining lexical tool.
 
 Final cancellation/freshness implementation, five-round hash-engine regression:
 

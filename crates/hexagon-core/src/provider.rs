@@ -64,12 +64,15 @@ pub enum ContentBlock {
         /// 供应商原始块 JSON（含 type 字段）。
         raw: Value,
     },
-    /// 模型给出的推理文本（hands-free 票 06）。只进时间线，不回灌下一轮请求。
-    /// 否决：拼进 Text（推理会变成可见回复，也变成已承诺的计划）；
-    /// 否决：原样回传 thinking 块（Anthropic 要 signature，我们没有，
-    /// 回传会被拒，或把推理当成下一步）。没收到明文就不构造这一块。
+    /// Provider thinking stays separate from the visible reply. Unsigned
+    /// Anthropic/generic thinking cannot be replayed. Native OpenAI-compatible
+    /// reasoning_content must survive tool turns (DeepSeek protocol, 2026-09-30).
     Thinking {
         text: String,
+        /// Only the native reasoning_content decoder sets this. Old serialized
+        /// blocks remain display-only; never promote generic reasoning to it.
+        #[serde(default)]
+        replay_as_reasoning_content: bool,
     },
 }
 
@@ -469,7 +472,7 @@ fn emit_content_deltas(blocks: &[ContentBlock], n: usize, sink: &mut StreamSink<
     for b in blocks {
         let (text, thinking) = match b {
             ContentBlock::Text { text } => (text.as_str(), false),
-            ContentBlock::Thinking { text } => (text.as_str(), true),
+            ContentBlock::Thinking { text, .. } => (text.as_str(), true),
             _ => continue,
         };
         if !emit_chunks(text, thinking, n, sink) {
@@ -663,6 +666,7 @@ pub mod openai_shape {
             let role = serde_json::to_value(&m.role).unwrap();
             let mut content_parts = Vec::new();
             let mut tool_calls = Vec::new();
+            let mut reasoning_content: Option<String> = None;
             let mut carried_images: Vec<&ImageData> = Vec::new();
             let mut tool_msgs = Vec::new();
             for b in &m.content {
@@ -693,7 +697,14 @@ pub mod openai_shape {
                             "role": "tool", "tool_call_id": tool_use_id, "content": content
                         }));
                     }
-                    // hands-free 票 06：思考不进出站请求（见 ContentBlock::Thinking）。
+                    // Native continuation is protocol data, never visible content.
+                    // Include even an empty field and non-tool-call assistant turns.
+                    ContentBlock::Thinking {
+                        text,
+                        replay_as_reasoning_content: true,
+                    } if m.role == Role::Assistant => {
+                        reasoning_content.get_or_insert_default().push_str(text);
+                    }
                     ContentBlock::Thinking { .. } => {}
                     // 票 04：OpenAI 形状无 server tool 概念——折成文本占位
                     // 保史（跨供应商回放时语义不断片，而非整块蒸发）。
@@ -722,8 +733,15 @@ pub mod openai_shape {
                 continue;
             }
             let mut msg = serde_json::json!({"role": role});
+            if let Some(reasoning) = reasoning_content {
+                msg["reasoning_content"] = serde_json::json!(reasoning);
+            }
             if !content_parts.is_empty() {
                 msg["content"] = serde_json::json!(content_parts);
+            } else if msg.get("reasoning_content").is_some() {
+                // Tool compaction/length truncation can leave only continuation;
+                // assistant messages still need a valid content field.
+                msg["content"] = serde_json::json!("");
             }
             if !tool_calls.is_empty() {
                 msg["tool_calls"] = serde_json::json!(tool_calls);
@@ -751,15 +769,23 @@ pub mod openai_shape {
         let choice = v["choices"][0].clone();
         let msg = &choice["message"];
         let mut content = Vec::new();
-        // 明文推理才收：reasoning 若是对象（结构化摘要）不当成思考文本。
-        if let Some(t) = msg["reasoning_content"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .or_else(|| msg["reasoning"].as_str().filter(|s| !s.is_empty()))
-        {
+        // Preserve native field presence, including empty continuations. Generic
+        // reasoning remains display-only; it is not an alias for this protocol.
+        if let Some(text) = msg["reasoning_content"].as_str() {
             content.push(ContentBlock::Thinking {
-                text: t.to_string(),
+                text: text.to_string(),
+                replay_as_reasoning_content: true,
             });
+        }
+        // 2026-09-30: preserving an empty native field must not suppress the
+        // pre-existing generic display fallback; it still must never be replayed.
+        if msg["reasoning_content"].as_str().is_none_or(str::is_empty) {
+            if let Some(text) = msg["reasoning"].as_str().filter(|s| !s.is_empty()) {
+                content.push(ContentBlock::Thinking {
+                    text: text.to_string(),
+                    replay_as_reasoning_content: false,
+                });
+            }
         }
         if let Some(text) = msg["content"].as_str() {
             content.push(ContentBlock::Text {
@@ -803,6 +829,7 @@ pub mod openai_shape {
         text: String,
         /// 明文推理（reasoning_content / reasoning 字符串）。对象形态不收。
         thinking: String,
+        reasoning_content: Option<String>,
         /// index → (id, name, arguments 片段缓冲)。BTreeMap 保 index 序。
         tools: std::collections::BTreeMap<usize, (String, String, String)>,
         finish: Option<String>,
@@ -828,12 +855,20 @@ pub mod openai_shape {
             }
             for ch in v["choices"].as_array().into_iter().flatten() {
                 let d = &ch["delta"];
-                if let Some(t) = d["reasoning_content"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| d["reasoning"].as_str().filter(|s| !s.is_empty()))
-                {
+                let native = d["reasoning_content"].as_str();
+                if let Some(t) = native {
+                    self.reasoning_content.get_or_insert_default().push_str(t);
+                }
+                // Same empty-native display fallback as the blocking decoder.
+                let thinking = if let Some(t) = native.filter(|s| !s.is_empty()) {
+                    Some(t)
+                } else if let Some(t) = d["reasoning"].as_str() {
                     self.thinking.push_str(t);
+                    Some(t)
+                } else {
+                    None
+                };
+                if let Some(t) = thinking.filter(|s| !s.is_empty()) {
                     if !sink(&StreamDelta::Thinking(t.to_string())) {
                         return Err(ProviderError::Interrupted);
                     }
@@ -872,9 +907,16 @@ pub mod openai_shape {
         /// 问题 → Transport（不是丢一半静默收场）。
         pub fn finish(self) -> Result<ChatResponse, ProviderError> {
             let mut content = Vec::new();
+            if let Some(text) = self.reasoning_content {
+                content.push(ContentBlock::Thinking {
+                    text,
+                    replay_as_reasoning_content: true,
+                });
+            }
             if !self.thinking.is_empty() {
                 content.push(ContentBlock::Thinking {
                     text: self.thinking,
+                    replay_as_reasoning_content: false,
                 });
             }
             if !self.text.is_empty() {
@@ -970,6 +1012,9 @@ pub mod anthropic_shape {
                         }
                     }
                 }
+                // Cross-protocol history can leave only unsigned/native OpenAI
+                // thinking. Do not emit an invalid empty Anthropic assistant turn.
+                Role::Assistant if blocks.is_empty() => {}
                 // Anthropic 无 tool 角色：tool_result 块走 user 消息。
                 Role::Tool => messages.push(serde_json::json!({"role":"user","content":blocks})),
                 _ => messages.push(serde_json::json!({
@@ -1016,6 +1061,7 @@ pub mod anthropic_shape {
                         if let Some(t) = b["thinking"].as_str().filter(|s| !s.is_empty()) {
                             content.push(ContentBlock::Thinking {
                                 text: t.to_string(),
+                                replay_as_reasoning_content: false,
                             });
                         }
                     }
@@ -1198,9 +1244,10 @@ pub mod anthropic_shape {
                     ABlock::Text(t) if !t.is_empty() => {
                         content.push(ContentBlock::Text { text: t })
                     }
-                    ABlock::Thinking(t) if !t.is_empty() => {
-                        content.push(ContentBlock::Thinking { text: t })
-                    }
+                    ABlock::Thinking(t) if !t.is_empty() => content.push(ContentBlock::Thinking {
+                        text: t,
+                        replay_as_reasoning_content: false,
+                    }),
                     ABlock::ToolUse { id, name, args } => {
                         let input: Value =
                             serde_json::from_str(if args.is_empty() { "{}" } else { &args })
@@ -1946,8 +1993,120 @@ mod tests {
         assert_eq!(thinking, vec!["先想"]);
         assert_eq!(text, vec!["再答"]);
         let resp = fold.finish().unwrap();
-        assert!(matches!(&resp.content[0], ContentBlock::Thinking { text } if text == "先想"));
+        assert!(matches!(&resp.content[0], ContentBlock::Thinking { text, .. } if text == "先想"));
         assert!(matches!(&resp.content[1], ContentBlock::Text { text } if text == "再答"));
+    }
+
+    // DeepSeek thinking-mode protocol, 2026-09-30: native continuation must be
+    // exact, even empty and on turns without tool calls. Generic reasoning and
+    // unsigned Anthropic thinking must never acquire this provenance.
+    #[test]
+    fn openai_reasoning_replay_preserves_native_field_only() {
+        for text in ["", "先想\n\"quoted\"🙂"] {
+            let response = openai_shape::from_response(&serde_json::json!({
+                "choices":[{"message":{"reasoning_content":text,"content":"answer"},"finish_reason":"stop"}]
+            })).unwrap();
+            let mut fold = openai_shape::SseFold::default();
+            for piece in ["", text, ""] {
+                fold.data(
+                    &serde_json::json!({"choices":[{"delta":{"reasoning_content":piece}}]})
+                        .to_string(),
+                    &mut |_| true,
+                )
+                .unwrap();
+            }
+            // A separate generic delta remains display-only, not native replay.
+            fold.data(
+                r#"{"choices":[{"delta":{"reasoning":"generic"}}]}"#,
+                &mut |_| true,
+            )
+            .unwrap();
+            for content in [response.content, fold.finish().unwrap().content] {
+                let request = ChatRequest {
+                    model_slot: "test".into(),
+                    messages: vec![Message {
+                        role: Role::Assistant,
+                        content,
+                    }],
+                    tools: vec![],
+                };
+                let wire = openai_shape::to_request(&request);
+                assert_eq!(wire["messages"][0]["reasoning_content"], text);
+                assert!(wire["messages"][0].get("content").is_some());
+                assert!(!wire.to_string().contains("generic"));
+                let other = anthropic_shape::to_request(&request, "test", 1024, &[]);
+                assert!(!other.to_string().contains("reasoning_content"));
+                assert!(other["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|m| !m["content"].as_array().unwrap().is_empty()));
+            }
+        }
+        let old: ContentBlock =
+            serde_json::from_value(serde_json::json!({"type":"thinking","text":"legacy"})).unwrap();
+        let generic = openai_shape::from_response(&serde_json::json!({"choices":[{"message":{"reasoning":"generic","content":"answer"}}]})).unwrap();
+        let anthropic = anthropic_shape::from_response(
+            &serde_json::json!({"content":[{"type":"thinking","thinking":"unsigned"}]}),
+        )
+        .unwrap();
+        for content in [vec![old], generic.content, anthropic.content] {
+            let request = ChatRequest {
+                model_slot: "test".into(),
+                messages: vec![Message {
+                    role: Role::Assistant,
+                    content,
+                }],
+                tools: vec![],
+            };
+            let wire = openai_shape::to_request(&request);
+            assert!(wire["messages"][0].get("reasoning_content").is_none());
+        }
+    }
+
+    // 2026-09-30 native replay repair must retain the older empty-native
+    // display fallback without promoting generic reasoning into the protocol.
+    #[test]
+    fn openai_empty_native_keeps_generic_display_fallback() {
+        for native in ["", "native"] {
+            let response = openai_shape::from_response(&serde_json::json!({
+                "choices":[{"message":{"reasoning_content":native,"reasoning":"generic","content":"answer"}}]
+            })).unwrap();
+            let mut fold = openai_shape::SseFold::default();
+            let mut displayed = Vec::new();
+            fold.data(
+                &serde_json::json!({"choices":[{"delta":{
+                    "reasoning_content":native,"reasoning":"generic"
+                }}]})
+                .to_string(),
+                &mut |delta| {
+                    if let StreamDelta::Thinking(text) = delta {
+                        displayed.push(text.clone());
+                    }
+                    true
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                displayed,
+                vec![if native.is_empty() { "generic" } else { native }]
+            );
+            for content in [response.content, fold.finish().unwrap().content] {
+                assert_eq!(content.iter().any(|block| matches!(block,
+                    ContentBlock::Thinking { text, replay_as_reasoning_content: false } if text == "generic"
+                )), native.is_empty());
+                let wire = openai_shape::to_request(&ChatRequest {
+                    model_slot: "test".into(),
+                    messages: vec![Message {
+                        role: Role::Assistant,
+                        content,
+                    }],
+                    tools: vec![],
+                });
+                assert_eq!(wire["messages"][0]["reasoning_content"], native);
+                assert!(!wire.to_string().contains("generic"));
+            }
+        }
     }
 
     /// hands-free 票 06：Anthropic thinking_delta 进思考；redacted_thinking 无明文，不编造。
@@ -1987,7 +2146,7 @@ mod tests {
         assert_eq!(text, vec!["答"]);
         let resp = fold.finish().unwrap();
         assert_eq!(resp.content.len(), 2, "密文思考不得变成一块可见推理");
-        assert!(matches!(&resp.content[0], ContentBlock::Thinking { text } if text == "因为"));
+        assert!(matches!(&resp.content[0], ContentBlock::Thinking { text, .. } if text == "因为"));
         assert!(matches!(&resp.content[1], ContentBlock::Text { text } if text == "答"));
         let dumped = format!("{resp:?}");
         assert!(!dumped.contains("cipher"));

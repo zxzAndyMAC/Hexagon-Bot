@@ -702,10 +702,10 @@ impl crate::tools::Tool for SemSearch {
         "sem_search"
     }
     fn description(&self) -> &str {
-        r#"Optional local similarity search; prefer scoped fs_find/fs_grep followed by fs_read for repository exploration. Local repository search with an installed multilingual code-embedding model, or character n-grams when model assets are absent. The returned engine identifies which ran. No network or paid calls.
-- Use when: you have a natural-language description of code behavior, including Chinese questions about English source. The character engine only compares overlapping text and cannot understand synonyms.
+        r#"Optional local similarity search; prefer scoped fs_find/fs_grep followed by fs_read for repository exploration. Character n-gram similarity only; no model weights. No network or paid calls.
+- Use when: you have approximate source text to match. For Chinese questions about English source, derive candidate English terms and use fs_find/fs_grep/fs_read; this tool does not translate or understand synonyms.
 - Do not use: when you know the literal text, identifier or filename — prefer fs_grep or fs_find.
-- Returns file path, line number, excerpt and match kind (literal or similarity). With built-in engines, case-sensitive literal matches in indexed files come first and point to the matching line. Scores are chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find. The first learned-model index is slower; subsequent calls reuse unchanged vectors."#
+- Returns file path, line number, excerpt and match kind (literal or similarity). With built-in engines, case-sensitive literal matches in indexed files come first and point to the matching line. Scores are chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find. Unchanged files reuse persisted vectors."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -724,7 +724,7 @@ impl crate::tools::Tool for SemSearch {
         let cap = input["count"].as_u64().unwrap_or(8).clamp(1, 10) as usize;
         let started = std::time::Instant::now();
         // A15 review: bounded, resumable cold indexing. Completed files are
-        // reusable after cancellation; native inference stops between batches.
+        // reusable after cancellation; check stop between files and chunks.
         let deadline = ctx
             .deadline
             .map_or(started + std::time::Duration::from_secs(900), |d| {
@@ -771,7 +771,7 @@ impl crate::tools::Tool for SemSearch {
                 "hits": hits,
                 "fallback": hits.is_empty(),
                 "note": if hits.is_empty() { "no similar text — try fs_grep with a literal term" }
-                    else if embedder.name() == "hash-ngram-v1" { "character similarity only; local multilingual model not installed" } else { "" },
+                    else if embedder.name() == "hash-ngram-v1" { "character similarity only; no cross-language semantic understanding" } else { "" },
             }))
         })();
         if result.is_err() {

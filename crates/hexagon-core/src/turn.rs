@@ -675,6 +675,11 @@ fn run_turn_impl(
     // 注入——所有走回合内核的入口（派活、点名、恢复重触发、子代理）同享。
     let mut layers = {
         let mut base = crate::turn::prompt::workbench_layers(ctx.subagent.is_some());
+        // Source inquiries keep language/project/role layers, while nested agents
+        // retain their separate parent/child protocol and confinement guidance.
+        if source_mode && ctx.subagent.is_none() {
+            base[0] = PromptLayer::new(LayerLevel::Workbench, prompt::SOURCE_INQUIRY);
+        }
         base.extend(layers);
         base
     };
@@ -1215,13 +1220,25 @@ fn run_turn_impl(
                             evidence_started,
                         );
                         // 2026-09-30 v04: this fixed host phase rule is policy,
-                        // not another task datum. v12 pilots still added false side facts;
-                        // v13 removes overlapping instructions instead of adding more.
+                        // not another task datum. Owner 2026-09-30 supplied-source probes
+                        // still generalized success paths from comments; select branch
+                        // evidence before answering instead of adding another review call.
                         // Keep interpolated question
                         // and repair-reference data in User messages above/below.
-                        messages.push(Message { role: Role::System, content: vec![ContentBlock::Text {
-                            text: "The cited draft has NOT been delivered. Answer the owner's original question again from source. The positive draft is omitted; reread the necessary implementation. For each requested fact, give only its direct answer and a supporting `repo/path.rs:12-18` citation. Do not add background, adjacent behavior, tests, or details the question did not request. Keep the original branch conditions and exceptions; do not infer a called function's behavior without reading it. Prefer one short paragraph unless the owner requests another format. If the requested implementation was not located, perform relevant fs_grep and fs_read calls and return exactly {\"source_not_found\":true}; the host reports the bounded investigation. This is one review within the existing round budget, not a correctness verdict.".into(),
-                        }] });
+                        // v14 supplied-source/Workbench comparison: normalize the
+                        // phase policy into the leading host system message. Preserve
+                        // all existing instructions; never promote question/tool data.
+                        let review_policy = "The cited draft has NOT been delivered. Answer the owner's original question again from fresh implementation reads; the positive draft is omitted. For each requested point, first select its implementation evidence, then give the direct answer with a supporting `repo/path.rs:12-18` citation. Check actual return/error branches before summarizing: comments and tests describe intent/examples, not all outcomes. Qualify a success-path description when an error path differs; never strengthen a conditional behavior into an unconditional guarantee or infer an uninspected caller/callee. Include only requested facts, with no extra background, UI behavior or test descriptions. Unless the owner asks for detail or another format, use one short bullet per requested point: one direct sentence with its citations, without a preface, headings, code excerpts or repeated summary. Treat each explicit question clause as an answer slot and fill only those slots. A location question needs the location, not lifecycle limits; a yes/no question needs the answer and branch evidence, not an exhaustive alternative list. Mention concrete error types, thresholds and tests only when expressly requested. Preserve conditions necessary to make the requested answer true. If the implementation was not located, perform relevant fs_grep and fs_read calls and return exactly {\"source_not_found\":true}; the host reports the bounded investigation. This is one review within the existing round budget, not a correctness verdict.";
+                        let system = messages
+                            .iter_mut()
+                            .find(|m| m.role == Role::System)
+                            .expect("turn retains its leading host system message");
+                        system.content = vec![ContentBlock::Text {
+                            text: format!(
+                                "{}\n\n# Source-answer review\n{review_policy}",
+                                visible_text(&system.content)
+                            ),
+                        }];
                         continue;
                     }
                     source_repair = true;
@@ -1541,7 +1558,7 @@ pub(crate) fn task_reminder_text(open_tasks: &str) -> String {
 /// 把本轮推理并进待落账缓冲。空串不算「给了思考」。
 fn absorb_thinking(content: &[ContentBlock], carried: &mut String) {
     for b in content {
-        if let ContentBlock::Thinking { text } = b {
+        if let ContentBlock::Thinking { text, .. } = b {
             if text.is_empty() {
                 continue;
             }
@@ -1564,11 +1581,21 @@ fn visible_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-/// 思考不进下一轮出站历史（无 signature，见 ContentBlock::Thinking）。
+/// 2026-09-30 protocol fix: native reasoning_content continues tool reasoning.
+/// The old blanket removal also discarded DeepSeek's required continuation.
+/// Unsigned/generic thinking remains display-only; fresh review clears both.
 fn push_assistant(messages: &mut Vec<Message>, content: Vec<ContentBlock>) {
     let content: Vec<_> = content
         .into_iter()
-        .filter(|b| !matches!(b, ContentBlock::Thinking { .. }))
+        .filter(|b| {
+            !matches!(
+                b,
+                ContentBlock::Thinking {
+                    replay_as_reasoning_content: false,
+                    ..
+                }
+            )
+        })
         .collect();
     if content.is_empty() {
         return;

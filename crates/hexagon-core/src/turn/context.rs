@@ -130,7 +130,9 @@ pub(super) fn estimate_tokens(messages: &[Message]) -> usize {
         .flat_map(|m| m.content.iter())
         .map(|b| match b {
             // 票 06：思考若还在出站副本里也要计入，漏算会绕过撞限。
-            ContentBlock::Text { text } | ContentBlock::Thinking { text } => encoded_len(bpe, text),
+            ContentBlock::Text { text } | ContentBlock::Thinking { text, .. } => {
+                encoded_len(bpe, text)
+            }
             ContentBlock::ToolUse { input, .. } => encoded_len(bpe, &input.to_string()),
             // 票 02：tool_result 内嵌图也要计入——漏算的话图字节绕过
             // 撞限检测；票 01：图不再按 base64 尺寸而按定额计。
@@ -192,7 +194,7 @@ pub(super) fn trim_context(
 /// 误判（把负责人或角色原文删掉、截断或换成摘要）会丢掉路径、报错和约束，
 /// 而且模型按残缺历史继续干活，没人当场复核。偏向保留文本——只有明确的
 /// 工具记录可以删或截断。内联图是负责人附件，不是工具记录，同样保留。
-/// 思考块也不是工具记录：出站请求会剥掉它，收缩阶段不能把它当成工具删掉。
+/// 思考块也不是工具记录：原生 reasoning_content 需随保留的助手消息回传，不得作为工具删掉。
 pub(super) fn tool_record_may_drop(block: &ContentBlock) -> bool {
     match block {
         ContentBlock::ToolUse { .. }
@@ -368,7 +370,7 @@ fn write_transcript(ctx: &ToolContext, removed: &[Message]) -> Option<String> {
                     s.push_str(text);
                     s.push('\n');
                 }
-                ContentBlock::Thinking { text } => {
+                ContentBlock::Thinking { text, .. } => {
                     // 票 06：推理原文逐字留档，标签只标明它不是可见回复。
                     s.push_str("[thinking]\n");
                     s.push_str(text);

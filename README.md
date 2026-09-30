@@ -81,19 +81,17 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 Once the workbench opens, configure your model service in settings. Then use the project wizard to select a directory, team, and workflow. Start with a small task that has clear acceptance criteria, such as “add search to the existing page and cover it with tests.”
 
-### Optional offline code retrieval
+### Repository exploration
 
-For Chinese questions about English source, install the pinned local embedding
-model with `python3 scripts/install-retrieval-model.py` (Python 3.9+, about 219 MB).
-Weights use the [Gemma terms](https://ai.google.dev/gemma/terms) and are stored in
-`~/.hexagon/models/embeddinggemma-300m-q4-v1`, outside your repositories. The
-installer downloads public assets and verifies their pinned hashes; search itself
-runs offline and never downloads weights or uploads source. Without installed
-weights, `sem_search` explicitly reports its character-similarity engine.
-
-The first model index can take minutes; unchanged files reuse persisted vectors.
-Use exact search for known symbols and verify returned excerpts. See the
-[retrieval measurements and limits](evaluation/retrieval/README.md).
+Chinese questions use the configured agent model to derive candidate identifiers,
+then scoped `fs_find` / `fs_grep` and `fs_read` to inspect actual implementations.
+No separate embedding model or model-weight installation is required.
+`sem_search` remains an optional character-similarity tool for compatibility; it
+cannot translate Chinese concepts into English code or establish semantic truth.
+It reports `hash-ngram-v1`, preserves literal matches and reuses unchanged indexed
+files. Old neural vectors are replaced on refresh through engine signatures.
+Previously installed model files are left untouched and are no longer loaded.
+See the [historical retrieval measurements and limits](evaluation/retrieval/README.md).
 
 For a source-backed answer, start a message with `/source ` followed by your
 question (you can also mention a team member). This mode requires a citation

@@ -1,9 +1,9 @@
 //! 本地相似检索（code-search-and-subagent 票 02）：自然语言 → 路径/行号/短摘。
 //!
 //! 硬约束的实现选择：
-//! - **本地性**：安装固定校验的多语言模型后本地推理，无模型时保留字符
-//!   n-gram 引擎；结果明示 engine。运行期不下载、不上传源码、不调用付费
-//!   接口。字符引擎只比较重叠，不理解跨语言含义；两者均优先保留字面命中。
+//! - **本地性**：字符 n-gram 引擎，无模型权重、运行期下载或网络调用。
+//!   只比较文本重叠，不理解跨语言含义；中文探索由 Agent 提出候选标识词，
+//!   使用 fs_find/fs_grep/fs_read 定位并验证，不能把字符相似度当语义模型。
 //! - **增量**：code_files 记「嵌入器名+内容哈希」——嵌入器实现换了即全量
 //!   重建（旧向量对新向量是噪声），文件没变则整文件跳过，不重嵌未动块。
 //! - **存储**：向量随项目库（state.db），天然 per-project 不共享；
@@ -17,9 +17,6 @@ use serde_json::{json, Value};
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
-
-mod model;
-pub use model::LocalEmbedder;
 
 /// 哈希嵌入维度：256 桶 × 4B = 1KB/块。再大选不起（4k 文件仓 ≈ 几十万块），
 /// 再小撞桶率伤召回。不与任何神经嵌入器维度对齐——签名哈希自报家门。
@@ -101,11 +98,12 @@ impl Embedder for HashEmbedder {
     }
 }
 
-/// ctx.embedder 为 None 时惰性加载共享本地模型；未安装时用字符引擎。
+/// Owner 2026-09-30: remove neural assets; legacy vectors rebuild via engine signatures.
 pub fn default_embedder(
     check: Checkpoint<'_>,
 ) -> Result<Arc<dyn Embedder>, crate::tools::ToolError> {
-    model::default_embedder(check)
+    check()?;
+    Ok(Arc::new(HashEmbedder))
 }
 
 /// 把文本切成 (line_start, chunk_text)。行号 1-based。
@@ -247,19 +245,12 @@ pub fn refresh(
 
 // Audit A15, 50-query synthetic calibration (2026-09-28): unrelated maxima
 // reached .262; literal positives started at .308. A .30 floor only applies to
-// this hash engine, not injected embedders. Gemma's separate .35 floor was
-// checked on the frozen source corpus: unrelated max .291, weakest recovered
-// Chinese target .373. These are development queries, not a general guarantee.
+// this hash engine, not injected embedders. Development calibration is not a
+// semantic correctness guarantee.
 // False negatives cost a literal-search fallback; false positives waste
 // inspection. Neither cutoff is semantic confidence.
 fn candidate_score(engine: &str, score: f32) -> bool {
-    let floor = if engine == "hash-ngram-v1" {
-        0.30
-    } else if engine == model::NAME {
-        0.35
-    } else {
-        0.0
-    };
+    let floor = if engine == "hash-ngram-v1" { 0.30 } else { 0.0 };
     score.is_finite() && score > floor
 }
 
@@ -295,7 +286,7 @@ pub fn query(
         if hash != format!("{}:{:016x}", embedder.name(), fnv64(&text)) {
             continue;
         }
-        if matches!(embedder.name(), "hash-ngram-v1" | model::NAME) {
+        if embedder.name() == "hash-ngram-v1" {
             if let Some(offset) = text.find(q) {
                 let line = text[..offset].bytes().filter(|&b| b == b'\n').count() + 1;
                 literal_lines.insert(path.clone(), line as i64);
@@ -497,19 +488,6 @@ mod tests {
         #[test]
         fn weak_hash_scores_always_require_fallback(score in -1000f32..=0.30f32) {
             proptest::prop_assert!(!candidate_score("hash-ngram-v1", score));
-        }
-        #[test]
-        fn weak_multilingual_scores_always_require_fallback(score in -1000f32..=0.35f32) {
-            proptest::prop_assert!(!candidate_score(model::NAME, score));
-        }
-        #[test]
-        fn multilingual_candidates_are_finite_and_monotonic(score in proptest::prelude::any::<f32>(), extra in 0.0f32..1.0) {
-            if candidate_score(model::NAME, score) {
-                proptest::prop_assert!(score.is_finite());
-                if (score + extra).is_finite() {
-                    proptest::prop_assert!(candidate_score(model::NAME, score + extra));
-                }
-            }
         }
         #[test]
         fn raising_similarity_preserves_a_candidate(a in 0.31f32..1.0, extra in 0.0f32..1.0) {

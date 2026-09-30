@@ -13313,13 +13313,30 @@ fn tool_preflight_failure_is_terminal_and_survives_reopen() {
     ));
 }
 
+// Owner 2026-09-30: source exploration must not depend on local neural assets.
+// Exercise the production default (for_test otherwise injects a hash embedder).
 #[test]
-fn local_similarity_multilingual_model_finds_english_code() {
-    // Opt-in real local weights. CI runs this with the pinned model installed;
-    // ordinary unit tests must not download assets or depend on the user's cache.
-    if std::env::var_os("HEXAGON_EMBEDDING_MODEL_DIR").is_none() {
-        return;
-    }
+fn local_similarity_default_needs_no_model_assets() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("delivery.rs"), "pub fn retry_outbox() {}\n").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    wb.embedder = None;
+    let CallOutcome::Done(value) =
+        tool_call(&wb, "sem_search", json!({"query":"retry_outbox"})).unwrap()
+    else {
+        panic!("search must complete")
+    };
+    assert_eq!(value["engine"], "hash-ngram-v1");
+    assert_eq!(value["hits"][0]["path"], "delivery.rs");
+    assert_eq!(value["hits"][0]["match"], "literal");
+    assert!(!value["note"].as_str().unwrap().contains("not installed"));
+}
+
+#[test]
+fn local_similarity_default_reuses_and_refreshes_index() {
+    // Owner 2026-09-30: neural retrieval removed. Keep persistence/removal
+    // coverage unconditional; Chinese-to-English understanding is now tested
+    // through real Agent exploration, not claimed for character similarity.
     let dir = tempfile::tempdir().unwrap();
     for (name, body) in [
         ("delivery.rs", "// Failed network sends are retained in an outbox. Once connectivity returns, retry delivery.\npub fn retry_outbox() {}"),
@@ -13335,10 +13352,10 @@ fn local_similarity_multilingual_model_finds_english_code() {
     )
     .unwrap();
     for (query, expected) in [
-        ("把失败的发送保留下来，等网络恢复后再尝试", "delivery.rs"),
-        ("用户登出以后旧的登录票据不能再使用", "session.rs"),
-        ("相同内容的附件只保留一份", "blobs.rs"),
-        ("磁盘文件替换之前先验证读到的版本", "edits.rs"),
+        ("retry_outbox", "delivery.rs"),
+        ("revoke_session", "session.rs"),
+        ("deduplicate_blob", "blobs.rs"),
+        ("compare_and_replace", "edits.rs"),
     ] {
         let CallOutcome::Done(value) =
             tool_call(&wb, "sem_search", json!({"query":query,"count":1})).unwrap()
@@ -13545,10 +13562,7 @@ fn local_similarity_real_project_measurement() {
         &std::fs::read(std::env::var_os("HEXAGON_RETRIEVAL_CASES").unwrap()).unwrap(),
     )
     .unwrap();
-    let mut wb = Workbench::for_test(Path::new(&root), &["worker"], None).unwrap();
-    if std::env::var_os("HEXAGON_EMBEDDING_MODEL_DIR").is_some() {
-        wb.embedder = None;
-    }
+    let wb = Workbench::for_test(Path::new(&root), &["worker"], None).unwrap();
     println!(
         "searchable_files={}",
         crate::search::repo_files(Path::new(&root)).len()
@@ -14732,8 +14746,24 @@ fn source_mode_reviews_a_cited_draft_before_persisting_the_answer() {
         .contains("全仓不存在集群扩缩容"));
     // v04: host phase policy must not compete as ordinary user data. Only the
     // static policy is System; original questions retain data-level priority.
+    // Source inquiry gets its own host task, not artifact delivery/test-running
+    // instructions. Owner/project instructions remain in the system assembly.
+    let first_system = serde_json::to_string(&requests[0].messages[0]).unwrap();
+    assert!(first_system.contains("# Source inquiry"));
+    assert!(first_system.contains("# Trust order"));
+    assert!(!first_system.contains("# Doing the work"));
+    // 2026-09-30: phase rules belong in the canonical leading system
+    // instruction, not a second system turn interleaved with task data.
+    assert_eq!(
+        requests[2]
+            .messages
+            .iter()
+            .filter(|m| m.role == crate::provider::Role::System)
+            .count(),
+        1
+    );
     let policy = requests[2].messages.iter().find(|m| m.content.iter().any(|block|
-        matches!(block, crate::provider::ContentBlock::Text { text } if text.starts_with("The cited draft has NOT been delivered."))
+        matches!(block, crate::provider::ContentBlock::Text { text } if text.contains("The cited draft has NOT been delivered."))
     )).expect("host review policy");
     assert_eq!(policy.role, crate::provider::Role::System);
     for m in &requests[2].messages {
@@ -14986,4 +15016,57 @@ fn source_mode_repair_names_the_unread_extra_reference() {
         .unwrap();
     assert!(repair.contains(r#""reference":"extra.rs:1""#), "{repair}");
     assert!(!repair.contains(r#""reference":"main.rs:1""#));
+}
+
+// 2026-09-30 DeepSeek thinking-mode protocol: dropping reasoning_content between
+// tool calls loses the provider's continuation. It remains separate from replies,
+// and a fresh source review must still discard the old assistant history.
+#[test]
+fn source_mode_replays_native_reasoning_only_until_fresh_review() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sample.rs"), "fn example() {}\n").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let native_read = |id: &str, reasoning: &str| {
+        crate::provider::openai_shape::from_response(&json!({"choices":[{
+            "message":{"reasoning_content":reasoning,"content":"", "tool_calls":[{
+                "id":id,"type":"function","function":{"name":"fs_read","arguments":"{\"path\":\"sample.rs\"}"}
+            }]},"finish_reason":"tool_calls"
+        }]})).unwrap()
+    };
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        native_read("first-read", "native-first"),
+        text_response("定义见 `sample.rs:1`。"),
+        native_read("review-read", "native-review"),
+        text_response("定义见 `sample.rs:1`。"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    assert_eq!(
+        wb.run_instance("a0", "/source 查看定义").unwrap(),
+        TurnOutcome::Finished
+    );
+    let requests = provider.recorded();
+    assert_eq!(requests.len(), 4);
+    for (index, expected) in [(1, "native-first"), (3, "native-review")] {
+        let wire = crate::provider::openai_shape::to_request(&requests[index]);
+        let assistant = wire["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .unwrap();
+        assert_eq!(assistant["reasoning_content"], expected);
+        assert!(!assistant["content"].to_string().contains(expected));
+        let other_protocol =
+            crate::provider::anthropic_shape::to_request(&requests[index], "test", 1024, &[]);
+        assert!(!other_protocol.to_string().contains(expected));
+    }
+    assert!(!serde_json::to_string(&requests[2].messages)
+        .unwrap()
+        .contains("native-first"));
+    let messages = timeline(&wb, None, 100).unwrap();
+    assert!(messages
+        .iter()
+        .filter_map(|i| i.message.as_ref())
+        .all(|m| !m.body.contains("native-")));
 }
