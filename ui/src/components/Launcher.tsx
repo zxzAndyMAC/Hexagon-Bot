@@ -8,6 +8,7 @@ import { Wizard } from './Wizard'
 import { Icon } from './Icon'
 import { SettingsPage } from './SettingsPage'
 import { Row } from './Row'
+import { bindingFor, formatBinding } from '../keymap'
 
 export function Launcher({ onOpen }: { onOpen: () => void }) {
   const { t } = useTranslation()
@@ -18,8 +19,9 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
 
   useEffect(() => {
     api.recentProjects().then(setRecents).catch(() => {})
-    // 向导 keys 步等处的「去设置」走 hexagon:open-settings 广播
-    const h = () => setSettings(true)
+    // 向导 keys 步等处的「去设置」与未开项目时的 ⌘, 都走 hexagon:open-settings
+    // 广播（App.tsx 在项目未开时改发此事件）；收成 toggle 与工作台同键语义一致。
+    const h = () => setSettings((v) => !v)
     window.addEventListener('hexagon:open-settings', h)
     return () => window.removeEventListener('hexagon:open-settings', h)
   }, [])
@@ -54,14 +56,6 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
         alignItems: 'center', justifyContent: 'center', background: 'var(--bg)',
       }}
     >
-      <button
-        className="btn"
-        title={t('launch.settings')}
-        style={{ position: 'absolute', top: 16, right: 16, display: 'inline-flex', alignItems: 'center', gap: 5 }}
-        onClick={() => setSettings(true)}
-      >
-        <Icon name="settings" size={13} /> {t('launch.settings')}
-      </button>
       <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Hexagon-Bot</div>
       <div className="dim3" style={{ fontSize: 12, marginBottom: 28 }}>{t('launch.title')}</div>
 
@@ -156,6 +150,16 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
   return (
     <>
       {body}
+      {/* 设置钮对启动页与向导全程恒显（owner 2026-09-30：向导期间也要能进
+          设置）。zIndex 70：压过向导层 60；设置覆盖层 80 打开时自然盖住它。 */}
+      <button
+        className="btn"
+        title={`${t('launch.settings')} ${formatBinding(bindingFor('settings'))}`}
+        style={{ position: 'fixed', top: 16, right: 16, zIndex: 70, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+        onClick={() => setSettings(true)}
+      >
+        <Icon name="settings" size={13} /> {t('launch.settings')}
+      </button>
       {settings && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)' }}>
           <SettingsPage onBack={() => setSettings(false)} projectless />

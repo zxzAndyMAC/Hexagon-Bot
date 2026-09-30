@@ -155,7 +155,11 @@ export default function App() {
       }
       if (matches(e, bindingFor('settings'))) {
         e.preventDefault()
-        setSettingsOpen((v) => !v)
+        // 启动页/向导期 settingsOpen 是死状态——渲染先落 Launcher 分支，
+        // 原地 toggle 只留 armed 标记，项目一开设置页误弹（owner 2026-09-30）。
+        // 该期间改发 hexagon:open-settings，由 Launcher 的设置覆盖层接。
+        if (projectOpen === true) setSettingsOpen((v) => !v)
+        else if (projectOpen === false) void api.openSettings()
         return
       }
       if (matches(e, bindingFor('focusComposer'))) {
@@ -196,7 +200,7 @@ export default function App() {
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [onKey])
+  }, [onKey, projectOpen])
 
   // ui-audit 票 06（P2-14）：冷启动骨架屏——projectOpen 查询期间
   // 不再渲染纯白窗口（曾被当成崩溃）。
