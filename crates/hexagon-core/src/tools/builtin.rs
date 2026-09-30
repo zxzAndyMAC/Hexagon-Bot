@@ -378,7 +378,7 @@ impl Tool for FsFind {
 - Use when: you know all or part of a file name, or a path pattern.
 - Do not use: to search file contents (fs_grep or sem_search). Never run find or ls through bash for this.
 - `pattern` with glob characters (* ? **) matches the path or the basename; plain text matches as a case-insensitive substring. Files ignored by .gitignore are skipped. At most 100 relative paths come back — narrow the pattern if you hit the cap.
-- `path` scopes traversal to a repo-relative directory or file (default `.`). Use fs_list to discover directories, then narrow path; changing only the pattern does not reduce traversal.
+- `path` scopes traversal to a repo-relative directory or file (default `.`). Use returned file paths to identify directories, then narrow path; changing only the pattern does not reduce traversal.
 - Check `coverage`: capped/omitted results are incomplete, not proof of absence. Empty query, invalid glob or invalid scope is an error. Zero hits: try another name or scope."#
     }
     fn input_schema(&self) -> Value {
@@ -414,7 +414,7 @@ impl Tool for FsGrep {
 - Use when: you know an exact identifier, string or error message.
 - Do not use: for regular expressions (the query is literal text, not a regex), for approximate text similarity (sem_search), or through bash grep/rg.
 - `path` scopes traversal to a repo-relative directory or file (default `.`); `glob` filters paths/basenames before reading. Narrow path first in large repositories.
-- Returns path, line number and line text for up to 100 hits. Inspect `coverage` for truncation and skipped files; incomplete zero hits do not prove absence. Ignored files and symlinks are excluded; binary and >256KiB files are skipped. Use fs_read on a known file to inspect excerpts. Stops/deadlines are errors, never successful empty results."#
+- Returns path, line number and line text for up to 100 hits. Inspect `coverage` for truncation and skipped files; incomplete zero hits do not prove absence. Ignored files and symlinks are excluded; binary files are skipped. Directory searches skip files over 256KiB and sample their paths in coverage.skipped_large_paths_sample. Retry a relevant skipped file with its exact `path` (up to 8MiB), then use fs_read offset/limit to inspect the matching lines. Larger files remain skipped. Stops/deadlines are errors, never successful empty results."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{

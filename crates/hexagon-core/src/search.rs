@@ -14,8 +14,11 @@ use std::path::Path;
 pub const FIND_CAP: usize = 100;
 /// 正文命中行数上限：同上——要更多请缩小范围，不是翻页。
 pub const GREP_CAP: usize = 100;
-/// 单文件正文搜索体积上限：超大生成物/日志不进文本搜索（索引也不收）。
+/// 目录搜索逐文件体积上限，避免广搜批量读取大生成物/日志。
 const GREP_FILE_CAP: u64 = 256 * 1024;
+/// 2026-09-30 p08: real test source exceeds 256KiB. Explicit file scope
+/// permits bounded follow-up search, not an unlimited whole-repo cap increase.
+const FOCUSED_GREP_FILE_CAP: u64 = 8 * 1024 * 1024;
 /// 文本搜索限制回调可见条目；旧相似索引遍历限制收录文件数。
 /// ignore 内部丢弃的条目不计数；停止为协作式，不承诺硬中断文件系统。
 const WALK_CAP: usize = 50_000;
@@ -99,6 +102,11 @@ pub fn search(
         }
     }
     let scoped = crate::tools::agent_readable_repo_path(root, scope)?;
+    let file_cap = if scoped.is_file() {
+        FOCUSED_GREP_FILE_CAP
+    } else {
+        GREP_FILE_CAP
+    };
     let needle = match query {
         Query::Find(s) => s.trim(),
         Query::Grep(s) => s,
@@ -156,6 +164,7 @@ pub fn search(
     let mut hits = Vec::new();
     let mut files_searched = 0;
     let mut oversized = 0;
+    let mut large_paths = Vec::new();
     let mut binary = 0;
     let mut unreadable = 0;
     let mut excluded = 0;
@@ -228,21 +237,31 @@ pub fn search(
                         continue;
                     }
                 };
-                if meta.len() > GREP_FILE_CAP {
+                if meta.len() > file_cap {
                     oversized += 1;
+                    // 2026-09-30 live p08: counts alone hid a skipped test file.
+                    // Sample only paths that already passed the read policy.
+                    if large_paths.len() < 8 {
+                        large_paths.push(rel.clone());
+                    }
                     continue;
                 }
                 let mut bytes = Vec::new();
                 // Bounded even if a file grows between metadata and read.
                 let read = std::fs::File::open(&path)
-                    .and_then(|f| f.take(GREP_FILE_CAP + 1).read_to_end(&mut bytes));
+                    .and_then(|f| f.take(file_cap + 1).read_to_end(&mut bytes));
                 if read.is_err() {
                     unreadable += 1;
                     continue;
                 }
                 checkpoint()?;
-                if bytes.len() as u64 > GREP_FILE_CAP {
+                if bytes.len() as u64 > file_cap {
                     oversized += 1;
+                    // 2026-09-30 live p08: counts alone hid a skipped test file.
+                    // Sample only paths that already passed the read policy.
+                    if large_paths.len() < 8 {
+                        large_paths.push(rel.clone());
+                    }
                     continue;
                 }
                 if bytes.contains(&0) {
@@ -271,12 +290,13 @@ pub fn search(
     paths.sort();
     let coverage = json!({
         "entries_visited":traversal.lock().unwrap().entries, "files_searched":files_searched,
-        "skipped_large":oversized, "skipped_binary":binary,
+        "skipped_large":oversized, "skipped_large_paths_sample":large_paths,
+        "skipped_large_sample_truncated":oversized > large_paths.len(), "skipped_binary":binary,
         "skipped_unreadable":unreadable, "excluded_by_policy":excluded,
         "truncated":reason.is_some(), "reason":reason,
         "complete":reason.is_none() && oversized == 0 && binary == 0 && unreadable == 0 && excluded == 0,
         "scope":scope,
-        "note":"Coverage applies only to the requested scope/filter and non-ignored files. If incomplete, narrow path/query or inspect a known file with fs_read; empty hits do not prove absence."
+        "note":"Coverage applies only to the requested scope/filter and non-ignored files. Skipped files can be source code or tests. Search relevant skipped_large_paths_sample files by setting path to that exact file (up to 8MiB), then use fs_read offset/limit; the sample is not exhaustive when skipped_large_sample_truncated is true. Narrow capped searches. Empty hits do not prove absence, even when complete within a scope/filter."
     });
     Ok(match query {
         Query::Find(_) => json!({"count":paths.len(),"paths":paths,"coverage":coverage}),

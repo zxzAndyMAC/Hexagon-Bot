@@ -217,11 +217,18 @@ pub fn role_layer_text(
 
 /// Owner decision 2026-09-29: source-led exploration is the default. A separate
 /// shared paragraph keeps parent and child guidance consistent without a new loop.
+/// 2026-09-30 live acceptance: unavailable fs_list caused a refused call;
+/// extra audit claims and skipped tests turned correct lookups into wrong answers.
+/// Follow-up h01/h03: correct main answers still grew false side claims; use a
+/// concrete short-answer default rather than another vague "be accurate" rule.
 const REPO_EXPLORATION: &str = r#"
 # Exploring a repository
-- Start from task concepts, in any language, and propose likely code identifiers, error strings or filenames. Treat these as search hypotheses, not facts. Use fs_list/fs_find to locate a package, then fs_grep with a narrow `path` and optional `glob`.
+- Start from task concepts, in any language, and propose likely code identifiers, error strings or filenames. Treat these as search hypotheses, not facts. Use the available fs_find tool to locate files or a package, then fs_grep with a narrow `path` and optional `glob`.
 - Read promising source with fs_read (offset/limit for excerpts), then follow definitions, callers and tests. A search snippet alone does not establish behaviour. Cite actual paths and lines you read; distinguish evidence from inference.
-- Inspect search `coverage`. A capped or partially skipped search cannot establish absence. Narrow the path/query, split investigation across relevant directories, or read a known file. Change terms or scope when a search is unhelpful; do not repeat unchanged searches.
+- Inspect search `coverage`. A capped or partially skipped search cannot establish absence. Skipped large files can be source code or tests, not just generated files: use `skipped_large_paths_sample` to locate relevant files, retry fs_grep with the exact file path (up to 8MiB), then fs_read with offset/limit to inspect the matching lines. Narrow capped searches; change terms or scope rather than repeating unchanged searches.
+- For a repository lookup, default to at most three short paragraphs: the direct answer, the exact source references that support it, and any material coverage limit. Expand only when the owner asks for detail. Do not append inventories, adjacent features, incidental findings, security guarantees or test-gap commentary unless they answer an explicit part of the question. Before sending, remove every sentence that does not answer the requested question. Stop exploring when the necessary implementation and its immediate caller or test support that answer.
+- Verify every claim you include, including side notes: read branch order and early returns before claiming what executes. Omit unverified extras. A search for an error string alone does not prove that a test is missing.
+- For a feature you cannot locate, say "not found in the searched scope" and state the scope and any skipped/truncated coverage. Do not convert that into "does not exist", "no tests", "all sources were covered", or "the only implementation". Finding several examples does not prove an exhaustive list. Do not invent a nearby implementation to answer a false premise.
 - Batch independent lookups and keep only relevant excerpts. Stay within the existing round budget; stop once evidence answers the task or report the precise remaining gap. If subagent is available, use it only for a bounded multi-file investigation and ask for source references.
 - sem_search is optional compatibility, not a prerequisite or the default exploration route. Do not start a whole-repository embedding index just to orient yourself. Never bypass read policy or search limits through shell commands.
 "#;

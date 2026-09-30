@@ -14060,6 +14060,18 @@ fn scoped_search_exploration_reads_source_before_reporting() {
     let text = serde_json::to_string(&recorded[0].messages).unwrap();
     assert!(text.contains("# Exploring a repository"));
     assert!(text.contains("search hypotheses, not facts"));
+    // 2026-09-30 n02: guidance advertised fs_list, which is not registered.
+    assert!(!recorded[0].tools.iter().any(|t| t.name == "fs_list"));
+    assert!(
+        !text.contains("fs_list"),
+        "do not recommend unavailable tools"
+    );
+    assert!(
+        !serde_json::to_string(&recorded[0].tools)
+            .unwrap()
+            .contains("fs_list"),
+        "tool descriptions must not recommend unavailable tools"
+    );
 }
 
 /// Manual performance evidence; filesystem creation is excluded from timings.
@@ -14149,4 +14161,95 @@ fn scoped_search_refuses_durably_stopped_evaluation() {
         ),
         Ok(CallOutcome::Done(_))
     ));
+}
+
+/// 2026-09-30 live p08: a skipped large test file was mistaken for no tests.
+#[test]
+fn scoped_search_identifies_large_files_for_followup_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/tests.rs"),
+        format!("regression needle\n{}", "x".repeat(270_000)),
+    )
+    .unwrap();
+    let CallOutcome::Done(value) =
+        tool_call(&wb, "fs_grep", json!({"query":"needle","path":"src"})).unwrap()
+    else {
+        panic!("expected search")
+    };
+    assert_eq!(value["count"], 0);
+    assert_eq!(value["coverage"]["complete"], false);
+    assert_eq!(
+        value["coverage"]["skipped_large_paths_sample"],
+        json!(["src/tests.rs"])
+    );
+    let CallOutcome::Done(read) = tool_call(
+        &wb,
+        "fs_read",
+        json!({"path":"src/tests.rs","offset":1,"limit":1}),
+    )
+    .unwrap() else {
+        panic!("expected read")
+    };
+    assert!(read.to_string().contains("regression needle"));
+    // More than eight candidates must not leak denied names or imply a full list.
+    for i in 0..8 {
+        std::fs::write(
+            dir.path().join(format!("src/large{i}.rs")),
+            vec![b'x'; 270_000],
+        )
+        .unwrap();
+    }
+    std::fs::write(dir.path().join("src/.env.local"), vec![b'x'; 270_000]).unwrap();
+    let CallOutcome::Done(v) =
+        tool_call(&wb, "fs_grep", json!({"query":"absent","path":"src"})).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v["coverage"]["skipped_large"], 9);
+    assert_eq!(
+        v["coverage"]["skipped_large_paths_sample"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert_eq!(v["coverage"]["skipped_large_sample_truncated"], true);
+    assert!(!v["coverage"]["skipped_large_paths_sample"]
+        .to_string()
+        .contains(".env.local"));
+}
+
+/// 2026-09-30 p08: naming a skipped source file must enable bounded follow-up grep.
+#[test]
+fn scoped_search_can_grep_large_explicit_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::write(
+        dir.path().join("tests.rs"),
+        format!("{}\n目标回归\n", "x".repeat(540_000)),
+    )
+    .unwrap();
+    let CallOutcome::Done(v) = tool_call(
+        &wb,
+        "fs_grep",
+        json!({"query":"目标回归","path":"tests.rs"}),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(v["count"], 1);
+    assert_eq!(v["hits"][0]["line"], 2);
+    assert_eq!(v["coverage"]["complete"], true);
+    // The focused read remains bounded; selecting one huge file is not a bypass.
+    std::fs::write(dir.path().join("huge.rs"), vec![b'x'; 8 * 1024 * 1024 + 1]).unwrap();
+    let CallOutcome::Done(v) =
+        tool_call(&wb, "fs_grep", json!({"query":"absent","path":"huge.rs"})).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v["coverage"]["skipped_large"], 1);
+    assert_eq!(v["coverage"]["complete"], false);
 }

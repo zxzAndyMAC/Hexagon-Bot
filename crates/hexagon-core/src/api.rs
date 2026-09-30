@@ -1039,9 +1039,11 @@ impl Workbench {
             tiers: TierMap::new(),
             sessions: self.sessions.clone(),
             caps: {
-                // 票 02：槽位 caps 注入（读 agents.model_slot → 绑定的模型
-                // → caps 词表）。槽没绑定/无条目 → 空集（无 vision 等能力，
-                // fail-closed：宁可降读图，不把字节塞进看不见图的模型）。
+                // 2026-09-30 retrieval k01: the old comment incorrectly said an
+                // unbound slot has no capabilities. caps_for_slot resolves the
+                // default fallback; a missing model entry uses infer_caps.
+                // Lookup failures return an empty set; a resolved model may also
+                // legitimately declare no capabilities.
                 let slot: Option<String> = self
                     .db
                     .conn()
