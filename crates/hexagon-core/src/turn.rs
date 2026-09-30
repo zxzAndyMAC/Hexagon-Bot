@@ -638,10 +638,11 @@ fn run_turn_impl(
         ctx.stage_run_id
     );
 
+    let source_mode = prompt::source_mode(user_input);
     let trigger_turn_id = db.append_event(
         &ctx.project_id,
         EventKind::TurnStarted,
-        json!({ "agent": ctx.agent_id }),
+        json!({ "agent": ctx.agent_id, "source_mode": source_mode, "subagent": ctx.subagent.is_some() }),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
@@ -854,6 +855,10 @@ fn run_turn_impl(
         let mut trunc_count = 0usize;
         // 票 05：最近一次调用 tasks（或上次提醒）所在轮。
         let mut tasks_mark = 0usize;
+        let mut repository_evidence = prompt::RepositoryEvidence::default();
+        // An explicit owner-selected mode, not a language/keyword classifier.
+        // Filename listing and ordinary conversation must remain valid without reads.
+        let mut source_repair = false;
         let breaker = |db: &Db, tool: &str, sig: &str| -> Result<TurnOutcome, TurnError> {
             db.append_event(
                 &ctx.project_id,
@@ -947,11 +952,18 @@ fn run_turn_impl(
             // US37 + 票 07：轻量裁剪始终做；仍超上限只删工具记录
             // （负责人与角色原文不换成摘要）。删完仍超才暂停问负责人。
             messages = trim_context(ctx, messages, true);
-            let mut est = estimate_tokens(&messages);
+            let tail_tokens = estimate_tokens(&with_dynamic_tail(
+                &[],
+                round,
+                MAX_TOOL_ROUNDS,
+                source_mode.then_some(&repository_evidence),
+            ));
+            let mut est = estimate_tokens(&messages) + tail_tokens;
             if est > cap {
-                messages = mechanical_compact(db, ctx, messages, cap);
+                // Evidence survives compaction; reserve its space before trimming.
+                messages = mechanical_compact(db, ctx, messages, cap.saturating_sub(tail_tokens));
                 messages = trim_context(ctx, messages, false);
-                est = estimate_tokens(&messages);
+                est = estimate_tokens(&messages) + tail_tokens;
             }
             if est > cap {
                 return context_overflow(db, ctx, est, "estimate", cap, trigger_turn_id);
@@ -967,7 +979,12 @@ fn run_turn_impl(
             // 票 03 信封：对「实际发送物」（裁剪/修复/动态尾之后）取指纹——
             // 信封的语义是「这次往线上发了什么」,不是「想发什么」。
             let req = ChatRequest {
-                messages: with_dynamic_tail(&messages, round, MAX_TOOL_ROUNDS),
+                messages: with_dynamic_tail(
+                    &messages,
+                    round,
+                    MAX_TOOL_ROUNDS,
+                    source_mode.then_some(&repository_evidence),
+                ),
                 ..req_base.clone()
             };
             let request_id = db.append_event(
@@ -1059,6 +1076,62 @@ fn run_turn_impl(
                 if text.trim().is_empty() {
                     text = std::mem::take(&mut plan_text);
                 }
+                let evidence_started = std::time::Instant::now();
+                let supported = !source_mode || repository_evidence.supports_citation(&text);
+                if source_mode {
+                    crate::diag::note(
+                        if supported {
+                            crate::diag::CLASS_JUDGE
+                        } else {
+                            crate::diag::CLASS_REJECT
+                        },
+                        !supported,
+                        Some(&ctx.project_id),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                        Some(&request_id.to_string()),
+                        "source_answer",
+                        if supported {
+                            "read_reference_present"
+                        } else {
+                            "missing_source_evidence"
+                        },
+                        evidence_started,
+                    );
+                }
+                if !supported {
+                    // The streamed draft is provisional; do not leave it visible as
+                    // the accepted answer while repairing or returning failure.
+                    sink(&TurnDelta {
+                        agent_id: ctx.agent_id.clone(),
+                        stage_run_id: ctx.stage_run_id.clone(),
+                        call: round + usize::from(plan_first),
+                        reset: true,
+                        done: false,
+                        waiting: false,
+                        text: String::new(),
+                        thinking: String::new(),
+                    });
+                    if source_repair || round + 1 == MAX_TOOL_ROUNDS {
+                        db.append_message(
+                            &ctx.project_id,
+                            crate::pm_route::WORKBENCH_AUTHOR,
+                            crate::owner_text::source_unverified(),
+                            &[],
+                            &[],
+                            None,
+                            ctx.stage_run_id.as_deref(),
+                        )?;
+                        return Ok(TurnOutcome::Failed(
+                            "source evidence missing: answer remains unverified".into(),
+                        ));
+                    }
+                    source_repair = true;
+                    messages.push(Message { role: Role::User, content: vec![ContentBlock::Text {
+                        text: "The draft was not accepted: missing source evidence. Read the relevant implementation with fs_read and cite its exact repo-relative path:line (or path:start-end) within the returned non-truncated range. A search result, description or invented citation is insufficient. One repair opportunity remains; do not invent an answer if you cannot verify it.".into(),
+                    }] });
+                    continue;
+                }
                 persist_visible(db, ctx, &text, &mut carried_thinking)?;
                 return Ok(TurnOutcome::Finished);
             }
@@ -1068,6 +1141,9 @@ fn run_turn_impl(
             // reliability 08: round/index collide across fresh turns and fast
             // paths. Persisted request identity scopes the provider's call ID.
             for (id, name, input) in tool_uses {
+                let evidence_input = (source_mode
+                    && matches!(name.as_str(), "fs_read" | "fs_find" | "fs_grep"))
+                .then(|| input.clone());
                 let seq = json!([request_id, id]).to_string();
                 if name == "tasks" {
                     tasks_mark = round;
@@ -1093,6 +1169,9 @@ fn run_turn_impl(
                 };
                 match called {
                     Ok(CallOutcome::Done(v)) => {
+                        if let Some(input) = evidence_input.filter(|_| source_mode) {
+                            repository_evidence.record(&name, &input, &v);
+                        }
                         last_fail = None;
                         streak = 0;
                         results.push(tool_result_block(id, &v))

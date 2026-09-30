@@ -95,6 +95,13 @@ The first model index can take minutes; unchanged files reuse persisted vectors.
 Use exact search for known symbols and verify returned excerpts. See the
 [retrieval measurements and limits](evaluation/retrieval/README.md).
 
+For a source-backed answer, start a message with `/source ` followed by your
+question (you can also mention a team member). This mode requires a citation
+such as `src/example.rs:12` matching source lines actually read in that turn.
+It allows one repair attempt, then reports the investigation as unverified if
+evidence is still missing. This checks a minimum source reference, not the truth
+or relevance of every claim. Ordinary chat does not enable this gate.
+
 ### Data and credentials
 
 Project files, workflow state, and traces are stored locally. Model requests and external tool calls send the necessary content to the services you configure. Local storage does not mean all model inference runs offline.

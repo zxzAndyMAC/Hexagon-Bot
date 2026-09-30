@@ -8,6 +8,18 @@ fn code() -> &'static str {
     crate::uilang::interface_code()
 }
 
+pub fn source_unverified() -> &'static str {
+    match code() {
+        "zh-CN" => "源码调查未完成：未能把引用对应到本回合实际读取的源码行。未经核实的草稿未保留为正式回答。",
+        "zh-TW" => "原始碼調查未完成：未能將引用對應到本回合實際讀取的原始碼行。未經核實的草稿未保留為正式回答。",
+        "ja" => "ソース調査は未完了です。引用を、このターンで実際に読んだソース行と照合できませんでした。未確認の草稿は正式な回答として保存していません。",
+        "es" => "Investigación del código incompleta: no se pudo vincular una cita con las líneas leídas en este turno. El borrador sin verificar no se guardó como respuesta final.",
+        "pt" => "Investigação do código incompleta: não foi possível associar uma citação às linhas lidas neste turno. O rascunho não verificado não foi salvo como resposta final.",
+        "fr" => "Analyse du code incomplète : aucune citation n'a pu être reliée aux lignes lues pendant ce tour. Le brouillon non vérifié n'a pas été conservé comme réponse finale.",
+        _ => "Source investigation incomplete: no citation could be matched to source lines read in this turn. The unverified draft was not saved as a final answer.",
+    }
+}
+
 pub fn unknown() -> &'static str {
     match code() {
         "zh-CN" | "zh-TW" => "未知",

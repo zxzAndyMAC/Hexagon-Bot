@@ -918,12 +918,13 @@ impl Workbench {
             // 放行：以「继续」指令续跑一回合（上下文重建自带轻量裁剪）
             // reliability 06: use the card owner, never another same-role peer.
             let aid = resume_id.expect("agree resolves the instance before answering");
-            let out = self.run_turn_agent(
+            let input = self.source_resume_input(
                 &aid,
+                pv["trigger_turn_id"].as_i64(),
+                None,
                 "上下文撞限已由负责人放行。请接着完成未竟任务（上下文已重建+裁剪）。",
-                &[],
-                false,
             )?;
+            let out = self.run_turn_agent(&aid, &input, &[], false)?;
             return Ok(AdjudicateOutcome::Resumed {
                 resumed: true,
                 outcome: Some(format!("{out:?}")),
@@ -1289,6 +1290,41 @@ impl Workbench {
         self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], true)
     }
 
+    /// 2026-09-30: recovery nudges replaced /source and silently dropped its gate.
+    /// Restore only the card's exact turn, or the latest parent turn of its run;
+    /// never infer a mode from arbitrary conversation text or another agent.
+    fn source_resume_input(
+        &self,
+        aid: &str,
+        turn_id: Option<i64>,
+        run_id: Option<&str>,
+        input: &str,
+    ) -> Result<String, ApiError> {
+        use rusqlite::OptionalExtension;
+        if turn_id.is_none() && run_id.is_none() {
+            return Ok(input.to_string());
+        }
+        let required = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT COALESCE(json_extract(payload,'$.source_mode'),0) FROM events
+             WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started'
+               AND (?3 IS NULL OR id=?3) AND (?4 IS NULL OR stage_run_id=?4)
+               AND (?3 IS NOT NULL OR COALESCE(json_extract(payload,'$.subagent'),0)=0)
+             ORDER BY id DESC LIMIT 1",
+                rusqlite::params![self.project_id, aid, turn_id, run_id],
+                |r| r.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(false);
+        Ok(if required {
+            format!("/source {input}")
+        } else {
+            input.to_string()
+        })
+    }
+
     fn run_turn_agent_with_history(
         &self,
         aid: &str,
@@ -1309,6 +1345,10 @@ impl Workbench {
             .retrigger_original
             .take()
             .unwrap_or_else(|| input.to_string());
+        let mode_input = (turn::prompt::source_mode(&instruction)
+            && !turn::prompt::source_mode(input))
+        .then(|| format!("/source {input}"));
+        let input = mode_input.as_deref().unwrap_or(input);
         // 握手还在进行时，这一回合等它结束再拿工具清单。打开项目本身不等。
         self.ensure_mcp_for_turn();
         if let Ok(rid) = self.db.conn().query_row(
@@ -2359,10 +2399,14 @@ impl Workbench {
                     r.get::<_, String>(0)
                 }) {
                 Ok(_) => {
+                    let input = self.source_resume_input(
+                        &aid,
+                        None,
+                        Some(run_id),
+                        crate::turn::RECOVERY_NUDGE,
+                    )?;
                     // 按卡上 agent_id 精确重触发（同名角色的别的 Agent 不替班）。
-                    if let Err(e) =
-                        self.run_turn_agent(&aid, crate::turn::RECOVERY_NUDGE, &[], false)
-                    {
+                    if let Err(e) = self.run_turn_agent(&aid, &input, &[], false) {
                         log::warn!("retrigger after recover failed: agent={aid} run={run_id}: {e}");
                     }
                 }
