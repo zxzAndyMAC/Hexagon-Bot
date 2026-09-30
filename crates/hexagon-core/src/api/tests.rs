@@ -14136,6 +14136,26 @@ fn scoped_search_refuses_broken_ignore_rules() {
 }
 
 #[test]
+fn literal_search_reports_its_mode_without_reflecting_the_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::write(dir.path().join("sample.rs"), "alpha\nbeta\nalpha|beta\n").unwrap();
+    let CallOutcome::Done(result) = tool_call(
+        &wb,
+        "fs_grep",
+        json!({"query":"alpha|beta","path":"sample.rs"}),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    // q01: zero hits for a pipe-separated string were misreported as separate
+    // negative searches. The returned contract identifies the exact substring.
+    assert_eq!(result["count"], 1);
+    assert!(result.get("query").is_none());
+    assert_eq!(result["match_mode"], "literal_substring");
+}
+
+#[test]
 fn scoped_search_refuses_durably_stopped_evaluation() {
     let (_home, host, run) = super::evaluation_budget_tests::waiting_budget(
         80,
@@ -14278,6 +14298,13 @@ fn repository_evidence_comes_from_successful_tools_not_model_claims() {
             json!({"path":"sample.rs","offset":2,"limit":1}),
         )]),
         text_response("依据 sample.rs:2，定义 second。"),
+        // 2026-09-30: fresh review discards initial receipts and must read again.
+        tool_response(vec![(
+            "review-read",
+            "fs_read",
+            json!({"path":"sample.rs","offset":2,"limit":1}),
+        )]),
+        text_response("依据 sample.rs:2，定义 second。"),
     ]));
     wb.register_provider("default", provider.clone());
     wb.run_instance(
@@ -14294,7 +14321,10 @@ fn repository_evidence_comes_from_successful_tools_not_model_claims() {
         };
         serde_json::from_str::<serde_json::Value>(text).unwrap()["repository_evidence"].clone()
     };
-    assert_eq!(requests.len(), 4, "evidence feedback adds no model calls");
+    // Fresh review includes one independent read before its final answer.
+    assert_eq!(requests.len(), 6);
+    assert_eq!(evidence(4)["observations"], json!([]));
+    assert_eq!(evidence(5)["observations"][0]["lines"], json!([2, 2]));
     assert_eq!(evidence(0)["observations"], json!([]));
     assert_eq!(
         evidence(1)["observations"],
@@ -14311,7 +14341,7 @@ fn repository_evidence_comes_from_successful_tools_not_model_claims() {
         .into_iter()
         .filter(|e| e.payload["kind"] == "request_envelope")
         .collect();
-    assert_eq!(envelopes.len(), 4);
+    assert_eq!(envelopes.len(), 6);
     assert!(envelopes[0].payload["params"]["repository_evidence_sha"].is_string());
     assert_ne!(
         envelopes[0].payload["params"]["repository_evidence_sha"],
@@ -14342,6 +14372,13 @@ fn repository_evidence_is_bounded_and_keeps_partial_coverage_honest() {
                 json!({"path":"large.rs","offset":1,"limit":1}),
             ),
         ]),
+        text_response("搜索不完整，不能证明不存在；已核对 sample.rs:1。"),
+        // Fresh review cannot reuse even successful initial-phase receipts.
+        tool_response(vec![(
+            "review-read",
+            "fs_read",
+            json!({"path":"sample.rs"}),
+        )]),
         text_response("搜索不完整，不能证明不存在；已核对 sample.rs:1。"),
     ]));
     wb.register_provider("default", provider.clone());
@@ -14429,6 +14466,12 @@ fn source_mode_can_repair_missing_evidence_without_affecting_plain_questions() {
         text_response("未经读取的猜测"),
         tool_response(vec![("read", "fs_read", json!({"path":"sample.rs"}))]),
         text_response("定义了 example；依据 `sample.rs:1`。"),
+        tool_response(vec![(
+            "review-read",
+            "fs_read",
+            json!({"path":"sample.rs"}),
+        )]),
+        text_response("定义了 example；依据 `sample.rs:1`。"),
     ]));
     wb.register_provider("default", provider.clone());
     // Same message/control routing as desktop send_message; the prefix is not
@@ -14437,7 +14480,11 @@ fn source_mode_can_repair_missing_evidence_without_affecting_plain_questions() {
         send(&wb, "/source @worker[a0] 定位 example").unwrap(),
         UnnamedRoute::Mentioned { .. }
     ));
-    assert_eq!(provider.recorded().len(), 4); // plan, rejected draft, read, answer
+    // 2026-09-30: valid cited drafts now receive one claim-to-source revision.
+    assert_eq!(provider.recorded().len(), 6); // plan, rejected draft, read, draft, fresh read, revision
+                                              // h10 repeatedly searched after generic feedback; name the missing action.
+    let repair = serde_json::to_string(&provider.recorded()[2].messages).unwrap();
+    assert!(repair.contains("Your next step must be fs_read"));
     assert!(timeline(&wb, None, 200).unwrap().iter().any(|i| i
         .message
         .as_ref()
@@ -14459,24 +14506,68 @@ fn source_mode_can_repair_missing_evidence_without_affecting_plain_questions() {
 
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(16))]
+    #[test]
+    fn source_mode_expands_only_unambiguous_read_basenames(ambiguous in proptest::bool::ANY) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/sample.rs"), "first\n").unwrap();
+        let mut reads = vec![("one", "fs_read", json!({"path":"src/sample.rs"}))];
+        if ambiguous {
+            std::fs::create_dir(dir.path().join("other")).unwrap();
+            std::fs::write(dir.path().join("other/sample.rs"), "second\n").unwrap();
+            reads.push(("two", "fs_read", json!({"path":"other/sample.rs"})));
+        }
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            tool_response(reads.clone()), text_response("See `src/sample.rs:1`."),
+            tool_response(reads),
+            text_response("See `sample.rs:1`."), text_response("See `sample.rs:1`."),
+        ]));
+        wb.register_provider("default", provider);
+        let result = wb.run_instance("a0", "/source locate first").unwrap();
+        proptest::prop_assert_eq!(result == crate::turn::TurnOutcome::Finished, !ambiguous, "{:?}", result);
+        if !ambiguous {
+            proptest::prop_assert!(timeline(&wb, None, 200).unwrap().iter().any(|i| i.message.as_ref()
+                .is_some_and(|m| m.author == "a0" && m.body == "See `src/sample.rs:1`.")));
+        }
+    }
+
     /// D12: an unread line/range or a different path must never satisfy the gate.
     #[test]
-    fn source_mode_citation_must_stay_within_a_real_read(first in 1u64..13, last in 1u64..13, wrong_path in proptest::bool::ANY) {
+    fn source_mode_citation_must_stay_within_a_real_read(first in 1u64..13, last in 1u64..13, wrong_path in proptest::bool::ANY, quoted in proptest::bool::ANY, reread in proptest::bool::ANY) {
         let dir = tempfile::tempdir().unwrap();
         let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
         std::fs::write(dir.path().join("sample.rs"), "source line\n".repeat(12)).unwrap();
         orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         let path = if wrong_path { "other/sample.rs" } else { "sample.rs" };
-        let answer = format!("依据 `{path}:{first}-{last}`。");
-        let provider = Arc::new(ScriptedProvider::new(vec![
+        // q05: one valid reference must not authorize an additional unread one.
+        let citation = format!("{path}:{first}-{last}");
+        let citation = if quoted { format!("`{citation}`") } else { citation };
+        let answer = format!("依据 `sample.rs:4-8`，另见 {citation}。");
+        let mut responses = vec![
             tool_response(vec![("read", "fs_read", json!({"path":"sample.rs","offset":4,"limit":5}))]),
-            text_response(&answer), text_response(&answer),
-        ]));
+            // A supported first draft must not authorize a later unread citation.
+            text_response("See sample.rs:4-8."),
+        ];
+        if reread {
+            responses.push(tool_response(vec![("review-read", "fs_read", json!({"path":"sample.rs","offset":4,"limit":5}))]));
+        }
+        responses.extend([text_response(&answer), text_response(&answer)]);
+        let provider = Arc::new(ScriptedProvider::new(responses));
         wb.register_provider("default", provider.clone());
         let result = wb.run_instance("a0", "/source 定位 source line").unwrap();
-        let supported = !wrong_path && first >= 4 && first <= last && last <= 8;
+        let supported = reread && !wrong_path && first >= 4 && first <= last && last <= 8;
         proptest::prop_assert_eq!(result == crate::turn::TurnOutcome::Finished, supported);
-        proptest::prop_assert_eq!(provider.recorded().len(), if supported {2} else {3});
+        // Revision still passes the evidence gate; invalid revisions get one repair.
+        proptest::prop_assert_eq!(provider.recorded().len(), if supported || !reread {4} else {5});
+        if !supported {
+            // A real read with a bad citation needs citation repair, not a claim
+            // that no usable read remains in the receipts.
+            let repair = serde_json::to_string(&provider.recorded()[if reread {4} else {3}].messages).unwrap();
+            proptest::prop_assert_eq!(repair.contains("Your next step must be fs_read"), !reread);
+            if reread { proptest::prop_assert!(repair.contains("missing or invalid source evidence")); }
+        }
     }
 }
 
@@ -14581,4 +14672,318 @@ fn source_mode_rejects_unconsumed_reference_suffixes_and_honors_round_limit() {
             .is_some_and(|m| m.body == crate::owner_text::source_unverified())),
         "owner sees the unverified result"
     );
+    // Even a supported first draft on the last round cannot skip revision.
+    let mut responses: Vec<_> = (0..30)
+        .map(|_| tool_response(vec![("search", "fs_find", json!({"pattern":"missing"}))]))
+        .collect();
+    responses.push(tool_response(vec![(
+        "read",
+        "fs_read",
+        json!({"path":"sample.rs"}),
+    )]));
+    responses.push(text_response("See sample.rs:1."));
+    let provider = Arc::new(ScriptedProvider::new(responses));
+    wb.register_provider("default", provider.clone());
+    assert!(matches!(
+        wb.run_instance("a0", "/source inspect source").unwrap(),
+        TurnOutcome::Failed(_)
+    ));
+    assert_eq!(provider.recorded().len(), 32);
+}
+
+/// 2026-09-30 h09/h12: a real citation alone did not stop an unsupported
+/// absence claim or an unrelated quoted range from being persisted as final.
+#[test]
+fn source_mode_reviews_a_cited_draft_before_persisting_the_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::write(dir.path().join("sample.rs"), "fn example() {}\n").unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![("read", "fs_read", json!({"path":"sample.rs"}))]),
+        text_response("全仓不存在集群扩缩容；依据 sample.rs:1。"),
+        tool_response(vec![("review-read", "fs_read", json!({"path":"sample.rs"}))]),
+        text_response(
+            "在已读取的 sample.rs 中未找到集群扩缩容；`sample.rs:1` 只定义 example。其他文件未核实。",
+        ),
+    ]));
+    wb.register_provider("default", provider.clone());
+    assert_eq!(
+        wb.run_instance("a0", "/source 定位集群扩缩容").unwrap(),
+        TurnOutcome::Finished
+    );
+    assert_eq!(
+        provider.recorded().len(),
+        4,
+        "a traceable draft still needs a claim-to-source review"
+    );
+    // 2026-09-30 v07: even an unverified draft anchored a false error type.
+    // Review retains the question but cannot see the rejected draft claim.
+    let requests = provider.recorded();
+    assert!(!requests[2]
+        .messages
+        .iter()
+        .any(|m| m.role == crate::provider::Role::Assistant));
+    assert!(serde_json::to_string(&requests[2].messages)
+        .unwrap()
+        .contains("定位集群扩缩容"));
+    assert!(!serde_json::to_string(&requests[2].messages)
+        .unwrap()
+        .contains("全仓不存在集群扩缩容"));
+    // v04: host phase policy must not compete as ordinary user data. Only the
+    // static policy is System; original questions retain data-level priority.
+    let policy = requests[2].messages.iter().find(|m| m.content.iter().any(|block|
+        matches!(block, crate::provider::ContentBlock::Text { text } if text.starts_with("The cited draft has NOT been delivered."))
+    )).expect("host review policy");
+    assert_eq!(policy.role, crate::provider::Role::System);
+    for m in &requests[2].messages {
+        for block in &m.content {
+            if let crate::provider::ContentBlock::Text { text } = block {
+                if text.contains("source_question") {
+                    assert_eq!(m.role, crate::provider::Role::User);
+                }
+            }
+        }
+    }
+    let messages = timeline(&wb, None, 200).unwrap();
+    assert!(!messages.iter().any(|i| i
+        .message
+        .as_ref()
+        .is_some_and(|m| m.body.contains("全仓不存在"))));
+    assert!(messages.iter().any(|i| i
+        .message
+        .as_ref()
+        .is_some_and(|m| m.body.contains("其他文件未核实"))));
+}
+
+#[test]
+fn source_reads_show_actual_line_numbers_without_changing_file_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let original = "first\n\nthird\nfourth";
+    std::fs::write(dir.path().join("sample.rs"), original).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![(
+            "read",
+            "fs_read",
+            json!({"path":"sample.rs","offset":2,"limit":2}),
+        )]),
+        text_response("done"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    wb.run_instance("a0", "Read the selected lines").unwrap();
+    let calls = provider.recorded();
+    let displayed = calls[1]
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .find_map(|c| match c {
+            crate::provider::ContentBlock::ToolResult { content, .. } => Some(content),
+            _ => None,
+        })
+        .unwrap();
+    assert!(displayed.contains("2| \n3| third"), "{displayed}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("sample.rs")).unwrap(),
+        original
+    );
+    let CallOutcome::Done(raw) = tool_call(&wb, "fs_read", json!({"path":"sample.rs"})).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        raw["content"], original,
+        "line labels are presentation only"
+    );
+}
+
+#[test]
+fn source_not_found_keeps_search_filters_and_escaped_data_visible() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::write(dir.path().join("sample.rs"), "source\n").unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            tool_response(vec![
+                (
+                    "search",
+                    "fs_grep",
+                    json!({"query":"&lt;\n", "glob":"*.rs"}),
+                ),
+                (
+                    "literal",
+                    "fs_grep",
+                    json!({"query":r"&lt;\n", "glob":"*.rs"}),
+                ),
+                ("read", "fs_read", json!({"path":"sample.rs"})),
+            ]),
+            text_response(r#"{"source_not_found":true}"#),
+            text_response(r#"{"source_not_found":true}"#),
+        ])),
+    );
+    assert_eq!(
+        wb.run_instance("a0", "/source locate requested feature")
+            .unwrap(),
+        TurnOutcome::Finished
+    );
+    let items = timeline(&wb, None, 200).unwrap();
+    let answer = &items
+        .iter()
+        .filter_map(|i| i.message.as_ref())
+        .rfind(|m| m.author == "a0")
+        .unwrap()
+        .body;
+    assert!(answer.contains("glob:"));
+    assert!(answer.contains(r"\*.rs"));
+    assert!(
+        answer.contains(r"\&lt;\\n"),
+        "HTML entities and literal controls must not change the query: {answer}"
+    );
+    assert!(
+        answer.contains(r"\&lt;\\\\n"),
+        "literal backslash must remain distinct: {answer}"
+    );
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    /// h09: negative answers need observed scope, not an unrelated code claim.
+    #[test]
+    fn source_mode_not_found_requires_real_search_and_read(search in proptest::bool::ANY, read in proptest::bool::ANY, shortened in proptest::bool::ANY) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        std::fs::write(dir.path().join("sample.rs"), "fn example() {}\n").unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        let mut calls = Vec::new();
+        if search { calls.push(("search", "fs_grep", json!({"query":if shortened {"x".repeat(257)} else {"absent".into()}, "path":"sample.rs"}))); }
+        if read { calls.push(("read", "fs_read", json!({"path":"sample.rs"}))); }
+        let mut responses = Vec::new();
+        if !calls.is_empty() { responses.push(tool_response(calls)); }
+        responses.push(text_response(r#"{"source_not_found":true}"#));
+        responses.push(text_response(r#"{"source_not_found":true}"#));
+        let provider = Arc::new(ScriptedProvider::new(responses));
+        wb.register_provider("default", provider.clone());
+        let result = wb.run_instance("a0", "/source locate absent").unwrap();
+        proptest::prop_assert_eq!(result == TurnOutcome::Finished, search && read && !shortened);
+        if search && read && !shortened {
+            let items = timeline(&wb, None, 200).unwrap();
+            proptest::prop_assert!(items.iter().any(|i| i.message.as_ref().is_some_and(|m|
+                m.body.contains("sample.rs") && m.body.contains("absent") && !m.body.contains("source_not_found"))));
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    /// 2026-09-30 s11: batch errors arrive before the model can correct a path.
+    #[test]
+    fn recoverable_tool_breaker_counts_feedback_opportunities(batch_size in 1usize..7, rounds in 1usize..4, tool_index in 0usize..3) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        let mut responses = Vec::new();
+        let tool = ["fs_read", "fs_find", "fs_grep"][tool_index];
+        let input = match tool {
+            "fs_find" => json!({"path":"missing.rs", "pattern":"needle"}),
+            "fs_grep" => json!({"path":"missing.rs", "query":"needle"}),
+            _ => json!({"path":"missing.rs"}),
+        };
+        for round in 0..rounds {
+            let ids: Vec<_> = (0..batch_size).map(|n| format!("missing-{round}-{n}")).collect();
+            responses.push(tool_response(ids.iter().map(|id|
+                (id.as_str(), tool, input.clone())
+            ).collect()));
+        }
+        responses.push(text_response("No source conclusion: the requested path was unavailable."));
+        let provider = Arc::new(ScriptedProvider::new(responses));
+        wb.register_provider("default", provider.clone());
+        let result = wb.run_instance("a0", "Search the requested path").unwrap();
+        proptest::prop_assert_eq!(result == TurnOutcome::Finished, rounds < 3);
+        proptest::prop_assert_eq!(provider.recorded().len(), if rounds < 3 { rounds + 1 } else { 3 });
+        if rounds < 3 {
+            let requests = provider.recorded();
+            let errors = requests[1].messages.iter().flat_map(|m| &m.content).filter(|b|
+                matches!(b, crate::provider::ContentBlock::ToolResult { is_error:true, .. })
+            ).count();
+            proptest::prop_assert_eq!(errors, batch_size);
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    /// The s11 exception must not deduplicate invalid inputs or permission refusals.
+    #[test]
+    fn other_tool_errors_and_denials_remain_per_call(batch_size in 1usize..7, rounds in 1usize..4, denied in proptest::bool::ANY) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        let (tool, input) = if denied {
+            ("fs_read", json!({"path":".env"}))
+        } else {
+            ("fs_grep", json!({"query":""}))
+        };
+        let mut responses = Vec::new();
+        for round in 0..rounds {
+            let ids: Vec<_> = (0..batch_size).map(|n| format!("error-{round}-{n}")).collect();
+            responses.push(tool_response(ids.iter().map(|id| (id.as_str(), tool, input.clone())).collect()));
+        }
+        responses.push(text_response("done"));
+        let provider = Arc::new(ScriptedProvider::new(responses));
+        wb.register_provider("default", provider.clone());
+        let result = wb.run_instance("a0", "exercise tool errors").unwrap();
+        proptest::prop_assert_eq!(result == TurnOutcome::Finished, rounds * batch_size < 3);
+        proptest::prop_assert_eq!(provider.recorded().len(), if rounds * batch_size < 3 { rounds + 1 } else { 3usize.div_ceil(batch_size) });
+    }
+}
+
+/// 2026-09-30 t06: generic feedback let a stale extra citation survive repair.
+#[test]
+fn source_mode_repair_names_the_unread_extra_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(dir.path().join("extra.rs"), "fn extra() {}\n").unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![
+            ("initial-main", "fs_read", json!({"path":"main.rs"})),
+            ("initial-extra", "fs_read", json!({"path":"extra.rs"})),
+        ]),
+        text_response("main.rs:1; extra.rs:1"),
+        tool_response(vec![("fresh-main", "fs_read", json!({"path":"main.rs"}))]),
+        text_response("main.rs:1; extra.rs:1"),
+        text_response("main.rs:1"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    assert_eq!(
+        wb.run_instance("a0", "/source locate main").unwrap(),
+        TurnOutcome::Finished
+    );
+    let requests = provider.recorded();
+    assert!(requests[4]
+        .messages
+        .iter()
+        .filter(|m| m.role == crate::provider::Role::System)
+        .all(|m| !serde_json::to_string(&m.content)
+            .unwrap()
+            .contains("extra.rs:1")));
+    let repair = requests[4]
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .find_map(|b| match b {
+            crate::provider::ContentBlock::Text { text }
+                if text.starts_with("The draft was not accepted:") =>
+            {
+                Some(text)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(repair.contains(r#""reference":"extra.rs:1""#), "{repair}");
+    assert!(!repair.contains(r#""reference":"main.rs:1""#));
 }

@@ -98,9 +98,20 @@ Use exact search for known symbols and verify returned excerpts. See the
 For a source-backed answer, start a message with `/source ` followed by your
 question (you can also mention a team member). This mode requires a citation
 such as `src/example.rs:12` matching source lines actually read in that turn.
-It allows one repair attempt, then reports the investigation as unverified if
-evidence is still missing. This checks a minimum source reference, not the truth
-or relevance of every claim. Ordinary chat does not enable this gate.
+Additional recognizable path references are checked too; use full repository-relative
+paths in backticks. This grammar does not comprehensively parse prose line numbers,
+extensionless root filenames, or space-containing paths outside backticks.
+It allows one evidence repair attempt and a separate claim-to-source revision
+before delivery, within the existing turn limit. Positive drafts are reviewed in a
+fresh model context that preserves owner/system instructions but requires new source
+reads; the prior draft is omitted to avoid anchoring on its claims. Unique basenames may be expanded
+from retained usable read paths; ambiguous names are refused. If no implementation is located,
+the model can return a non-finding that the workbench renders from actual search
+scopes and read ranges, without claiming repository-wide absence. Missing evidence
+or an unfinished revision leaves the investigation unverified. These checks and
+the revision do not guarantee factual correctness. Ordinary chat does not enable
+this gate. Text read results show line numbers as display metadata; these prefixes
+are not part of the file and must be omitted when copying source into edits.
 
 ### Data and credentials
 

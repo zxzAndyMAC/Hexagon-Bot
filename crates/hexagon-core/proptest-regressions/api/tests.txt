@@ -7,3 +7,4 @@
 cc 30b01cb58d5b761a7c2947a255eb42d3f8d689e4d4b9ba4e32289c8aeda4b3a8 # shrinks to name = "a", suffix = "a"
 cc bc95e83377656a8c81cb89471f309746e9af81d9e26d3fda42a9e6c60344f216 # shrinks to name = "a", registered = true, alias = 2
 cc 6e8391d26418d30312261e4d0f7932886bf5455b464d7403b40e4d0b9670f853 # shrinks to suffix = "a", punct = "\""
+cc e3ff4b0a716c677cece82a2d737de71df927d6e37e3ee7589d34dff49a90f207 # shrinks to search = true, read = true

@@ -2182,7 +2182,9 @@ fn pe01_fresh_read_of_large_file_reaches_model_whole() {
     run_turn(&db, &provider, &reg, &ctx, vec![], "read").unwrap();
     let seen = tool_result_texts(&provider.recorded()[1]).join("");
     assert!(
-        seen.contains("MIDDLE_MARKER line\nline 201"),
+        // 2026-09-30 source citations: display line numbers are metadata; the
+        // consecutive middle lines must still arrive intact and unescaped.
+        seen.contains("201| MIDDLE_MARKER line\n202| line 201"),
         "中段不可见或被转义: {}",
         &seen[..200.min(seen.len())]
     );

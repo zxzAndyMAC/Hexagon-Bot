@@ -8,15 +8,63 @@ fn code() -> &'static str {
     crate::uilang::interface_code()
 }
 
+pub fn source_not_found() -> &'static str {
+    match code() {
+        "zh-CN" => "未在本次调查范围内定位到请求的实现。这不代表整个仓库不存在该功能。以下仅列出保留的最近检索记录，不是全仓覆盖证明；忽略规则和读取权限仍限制搜索范围。",
+        "zh-TW" => "未在本次調查範圍內定位到請求的實作。這不代表整個儲存庫不存在該功能。以下僅列出保留的最近檢索紀錄，並非完整覆蓋證明；忽略規則與讀取權限仍限制搜尋範圍。",
+        "ja" => "今回の調査範囲では要求された実装を特定できませんでした。リポジトリ全体に存在しないという意味ではありません。以下は保持された最近の検索記録のみです。無視ルールと読み取り権限により範囲が制限されます。",
+        "es" => "No se localizó la implementación solicitada en esta investigación. Esto no demuestra su ausencia en todo el repositorio. Solo se muestran los registros recientes conservados; las reglas de exclusión y los permisos limitan la búsqueda.",
+        "pt" => "A implementação solicitada não foi localizada nesta investigação. Isso não prova sua ausência em todo o repositório. Apenas os registros recentes retidos são mostrados; regras de exclusão e permissões limitam a busca.",
+        "fr" => "L’implémentation demandée n’a pas été localisée dans cette recherche. Cela ne prouve pas son absence dans tout le dépôt. Seules les recherches récentes conservées sont affichées ; les exclusions et permissions limitent leur portée.",
+        _ => "The requested implementation was not located within this investigation. This does not prove absence from the repository. Only retained recent searches are listed; ignore rules and read permissions still limit coverage.",
+    }
+}
+
+pub fn source_search(path: &str, query: &str, hits: u64, skipped: u64, complete: bool) -> String {
+    let limit = match (code(), complete) {
+        ("zh-CN", true) | ("zh-TW", true) => "完整",
+        ("zh-CN", false) | ("zh-TW", false) => "不完整",
+        ("ja", true) => "完全",
+        ("ja", false) => "不完全",
+        ("es" | "pt", true) => "completa",
+        ("es" | "pt", false) => "incompleta",
+        ("fr", true) => "complète",
+        ("fr", false) => "incomplète",
+        (_, true) => "complete",
+        (_, false) => "incomplete",
+    };
+    match code() {
+        "zh-CN" => format!("范围 {path}；查询 {query}；返回 {hits} 处匹配；跳过 {skipped} 项；本次搜索完整性 {limit}。"),
+        "zh-TW" => format!("範圍 {path}；查詢 {query}；回傳 {hits} 處符合；略過 {skipped} 項；本次搜尋完整性 {limit}。"),
+        "ja" => format!("範囲 {path}；検索 {query}；一致 {hits}；スキップ {skipped}；検索の完全性 {limit}。"),
+        "es" => format!("Ámbito {path}; consulta {query}; coincidencias {hits}; omitidos {skipped}; cobertura de esta búsqueda {limit}."),
+        "pt" => format!("Escopo {path}; consulta {query}; resultados {hits}; ignorados {skipped}; cobertura desta busca {limit}."),
+        "fr" => format!("Portée {path} ; recherche {query} ; résultats {hits} ; éléments ignorés {skipped} ; couverture de cette recherche {limit}."),
+        _ => format!("Scope {path}; query {query}; returned matches {hits}; skipped {skipped}; completeness of this search {limit}."),
+    }
+}
+
+pub fn source_read_scope() -> &'static str {
+    match code() {
+        "zh-CN" => "实际读取的源码范围（仅证明检查过这些行，不是功能不存在的证据）：",
+        "zh-TW" => "實際讀取的原始碼範圍（僅證明已檢查這些行，並非功能不存在的證據）：",
+        "ja" => "実際に読んだソース範囲（確認した行を示すだけで、不在の証明ではありません）：",
+        "es" => "Líneas leídas (prueban la lectura, no la ausencia de la función):",
+        "pt" => "Linhas lidas (comprovam a leitura, não a ausência da função):",
+        "fr" => "Lignes lues (preuve de lecture, pas de l’absence de la fonction) :",
+        _ => "Source ranges actually read (proof of reading, not proof of feature absence):",
+    }
+}
+
 pub fn source_unverified() -> &'static str {
     match code() {
-        "zh-CN" => "源码调查未完成：未能把引用对应到本回合实际读取的源码行。未经核实的草稿未保留为正式回答。",
-        "zh-TW" => "原始碼調查未完成：未能將引用對應到本回合實際讀取的原始碼行。未經核實的草稿未保留為正式回答。",
-        "ja" => "ソース調査は未完了です。引用を、このターンで実際に読んだソース行と照合できませんでした。未確認の草稿は正式な回答として保存していません。",
-        "es" => "Investigación del código incompleta: no se pudo vincular una cita con las líneas leídas en este turno. El borrador sin verificar no se guardó como respuesta final.",
-        "pt" => "Investigação do código incompleta: não foi possível associar uma citação às linhas lidas neste turno. O rascunho não verificado não foi salvo como resposta final.",
-        "fr" => "Analyse du code incomplète : aucune citation n'a pu être reliée aux lignes lues pendant ce tour. Le brouillon non vérifié n'a pas été conservé comme réponse finale.",
-        _ => "Source investigation incomplete: no citation could be matched to source lines read in this turn. The unverified draft was not saved as a final answer.",
+        "zh-CN" => "源码调查未完成：实读证据、引用对应或回答核对尚未完成。未经核实的草稿未保留为正式回答。",
+        "zh-TW" => "原始碼調查未完成：實讀證據、引用對應或回答核對尚未完成。未經核實的草稿未保留為正式回答。",
+        "ja" => "ソース調査は未完了です。実際の読み取り、引用の照合、または回答の確認が完了していません。未確認の草稿は正式な回答として保存していません。",
+        "es" => "Investigación del código incompleta: falta verificar la lectura, las citas o la respuesta. El borrador sin verificar no se guardó como respuesta final.",
+        "pt" => "Investigação do código incompleta: falta verificar a leitura, as citações ou a resposta. O rascunho não verificado não foi salvo como resposta final.",
+        "fr" => "Analyse du code incomplète : la lecture, les citations ou la réponse restent à vérifier. Le brouillon non vérifié n'a pas été conservé comme réponse finale.",
+        _ => "Source investigation incomplete: source reads, citation matching or answer review remain unverified. The unverified draft was not saved as a final answer.",
     }
 }
 

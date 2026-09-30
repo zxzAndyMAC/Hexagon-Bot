@@ -428,12 +428,18 @@ impl Tool for FsGrep {
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let root = ctx.repo_root.canonicalize()?;
-        let result = repo_search(
+        let mut result = repo_search(
             &root,
             input,
             ctx,
             crate::search::Query::Grep(str_arg(input, "query")?),
         )?;
+        // 2026-09-30 q01: the description alone did not stop pipe-separated
+        // literal queries being reported as independent negative searches.
+        // Do not echo the query: isolation probes deliberately search a hidden
+        // marker and scan returned text for leaks; reflecting input forged a hit.
+        result["match_mode"] = json!("literal_substring");
+        result["query_note"] = json!("The entire query is one literal substring; | is not OR. Search each alternative separately.");
         ctx.observe_native_effect(effects::NativeEffect::RepositorySearch);
         Ok(result)
     }
