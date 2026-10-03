@@ -174,6 +174,76 @@ pub fn complete_project_request(
     )
 }
 
+/// Owner revocation governs every outgoing request carrying computer pixels,
+/// including retries after context compaction. Source metadata is assigned by
+/// the host; ordinary file/user image attachments retain their own authority.
+pub(crate) fn desktop_request_allowed(db: &Db, request: &crate::provider::ChatRequest) -> bool {
+    desktop_request_allowed_at(
+        request,
+        crate::desktop::actions::capture_generation(),
+        || crate::desktop::actions::enabled(db).unwrap_or(false),
+    )
+}
+
+// Issue13: snapshot the clear generation for one request; explicit facts make
+// the authority predicate testable without racing other tests clearing images.
+// Consent remains lazy: ordinary user attachments never query computer grants.
+fn desktop_request_allowed_at(
+    request: &crate::provider::ChatRequest,
+    current_generation: u64,
+    enabled: impl FnOnce() -> bool,
+) -> bool {
+    let carries_desktop = request.messages.iter().flat_map(|m| &m.content).any(|block| {
+        matches!(block, crate::provider::ContentBlock::ToolResult { images, .. } if images.iter().any(|image| image.computer_screenshot))
+            || matches!(block, crate::provider::ContentBlock::ComputerImage { data, .. } if !data.is_empty())
+    });
+    // Ticket07 / 2026-10-01 review P1: false negative costs a fresh observation;
+    // false positive transmits revoked screen pixels. Unreadable consent denies.
+    let stale_selected_image = request
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .any(|block| {
+            matches!(block, crate::provider::ContentBlock::ComputerImage { data, generation, .. }
+            if !data.is_empty() && *generation != current_generation)
+        });
+    !stale_selected_image && (!carries_desktop || enabled())
+}
+
+fn authorize_desktop_dispatch(
+    db: &Db,
+    ctx: &ToolContext,
+    id: &str,
+    chat: Option<&crate::provider::ChatRequest>,
+    evaluation: &mut Option<crate::evaluation::budget::RequestGuard>,
+    started: std::time::Instant,
+) -> Result<(), crate::provider::ProviderError> {
+    if chat.is_none_or(|request| desktop_request_allowed(db, request)) {
+        return Ok(());
+    }
+    // This branch runs only before `send` is invoked: unlike an interrupted
+    // transport, the host can prove zero transmission and release its bounds.
+    if let Some(guard) = evaluation {
+        guard
+            .cancel_before_send()
+            .map_err(|e| crate::provider::ProviderError::Refused(format!("request ledger: {e}")))?;
+    }
+    db.conn().execute("UPDATE usage SET request_state='not_sent',reserved_mc=0,cost_known=1,prompt_known=1,completion_known=1 WHERE request_id=?1 AND request_state='pending'",[id])
+        .map_err(|e| crate::provider::ProviderError::Refused(format!("request ledger: {e}")))?;
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        Some(&ctx.project_id),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        Some(id),
+        "model_request",
+        "desktop_screenshot_consent_revoked",
+        started,
+    );
+    Err(crate::provider::ProviderError::Interrupted)
+}
+
 pub fn request(
     db: &Db,
     ctx: &ToolContext,
@@ -334,6 +404,9 @@ pub fn request(
         db.conn().execute("UPDATE usage SET request_state='not_sent',reserved_mc=0,cost_known=1 WHERE request_id=?1 AND request_state='pending'",[&id]).map_err(|e|ledger_error(e.to_string()))?;
         return Err(ProviderError::Interrupted);
     }
+    // Ticket07 review P1: consent may have changed while either ledger/admission
+    // waited. Check before dispatch bookkeeping and again after its final wait.
+    authorize_desktop_dispatch(db, ctx, &id, chat, &mut evaluation, started)?;
     if let Some(guard) = &mut evaluation {
         guard.dispatch().map_err(|e| ledger_error(e.to_string()))?;
     }
@@ -342,6 +415,8 @@ pub fn request(
     let _watch =
         crate::evaluation::control::watch(&ctx.repo_root, ctx.sessions.clone(), ctx.tasks.clone())
             .map_err(|e| ledger_error(e.to_string()))?;
+    // No blocking host preparation remains between this check and transport.
+    authorize_desktop_dispatch(db, ctx, &id, chat, &mut evaluation, started)?;
     let result = send();
     #[cfg(test)]
     crate::evaluation::recovery::crash_at(crate::evaluation::recovery::CrashPoint::Returned);
@@ -726,6 +801,54 @@ mod tests {
     use super::*;
     use crate::db::Db;
 
+    fn selected_image_request(data: String, generation: u64) -> crate::provider::ChatRequest {
+        crate::provider::ChatRequest {
+            model_slot: "chat".into(),
+            tools: vec![],
+            messages: vec![crate::provider::Message {
+                role: crate::provider::Role::User,
+                content: vec![crate::provider::ContentBlock::ComputerImage {
+                    media_type: "image/png".into(),
+                    data,
+                    generation,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn current_authorized_selected_pixels_pass_and_ordinary_images_keep_their_authority() {
+        use crate::provider::{ContentBlock, ImageData};
+        let mut request = selected_image_request("pixels".into(), 42);
+        assert!(desktop_request_allowed_at(&request, 42, || true));
+        assert!(!desktop_request_allowed_at(&request, 42, || false));
+        assert!(!desktop_request_allowed_at(&request, 43, || true));
+        request.messages[0].content = vec![ContentBlock::Image {
+            media_type: "image/png".into(),
+            data: "owner attachment".into(),
+        }];
+        assert!(desktop_request_allowed_at(&request, 43, || panic!(
+            "ordinary attachments must not consult computer grants"
+        )));
+        for computer_screenshot in [false, true] {
+            request.messages[0].content = vec![ContentBlock::ToolResult {
+                tool_use_id: "observation".into(),
+                content: String::new(),
+                is_error: false,
+                images: vec![ImageData {
+                    computer_screenshot,
+                    media_type: "image/png".into(),
+                    data: "tool pixels".into(),
+                }],
+            }];
+            assert_eq!(
+                desktop_request_allowed_at(&request, 43, || false),
+                !computer_screenshot
+            );
+            assert!(desktop_request_allowed_at(&request, 43, || true));
+        }
+    }
+
     fn setup(limit_cents: Option<i64>) -> (Db, ToolContext, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open_in_memory().unwrap();
@@ -992,6 +1115,18 @@ mod tests {
     }
 
     proptest::proptest! {
+        #[test]
+        fn selected_pixels_pass_exactly_when_empty_or_authorized_and_current(
+            data in ".{0,32}",
+            generation in proptest::prelude::any::<u64>(),
+            enabled in proptest::prelude::any::<bool>(),
+            same_generation in proptest::prelude::any::<bool>(),
+        ) {
+            let current = if same_generation { generation } else { generation.wrapping_add(1) };
+            let request = selected_image_request(data.clone(), generation);
+            proptest::prop_assert_eq!(desktop_request_allowed_at(&request, current, || enabled), data.is_empty() || (enabled && same_generation));
+        }
+
         #[test]
         fn request_reservation_is_monotone_and_never_admits_exhausted_balance(
             limit in 1i64..=i64::MAX,

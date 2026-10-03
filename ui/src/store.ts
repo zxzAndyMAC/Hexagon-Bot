@@ -1,3 +1,6 @@
+import type { TimelineFacts } from './gen/TimelineFacts'
+import type { TimelineToolStreamKey } from './gen/TimelineToolStreamKey'
+import { watchedTimelineMessages } from './useTimelineWindow'
 import { create } from 'zustand'
 import {
   api,
@@ -62,6 +65,8 @@ const TOOL_STREAM_CAP = 128 * 1024
 // refreshFast/refreshSlow 起飞时捕获、落地前比对——切项目瞬间在飞的
 // 旧响应被整体丢弃，旧项目事件不再缝进新时间线/新状态。
 let generation = 0
+let fastRequestSeq = 0
+let lastAppliedFastRequest = 0
 
 /// 确认层请求（ui-audit 票 03，ADR 0056）：L2 流程破坏性操作
 /// （rewind/skip、⌘K 危险项）统一走应用内确认层，替代原生 confirm()。
@@ -106,11 +111,20 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
 })
 
 interface UiState {
+  projectRoot: string | null
+  projectEpoch: number
+  beginProjectSwitch: () => void
+  commitProjectRoot: (root: string | null, epoch: number) => void
+  timelineFacts: TimelineFacts | null
+  factsError: string | null
+  toolStreamKeys: Record<string, TimelineToolStreamKey>
+  refreshFacts: () => Promise<void>
   themePref: ThemePref
   stages: StageRow[]
   team: TeamRow[]
   artifacts: ArtifactRow[]
   evidenceRevision: number
+  timelineCaughtUp: boolean
   timeline: TimelineItem[]
   pending: PendingQuestion[]
   /* hands-free 票 05：待决不再占中栏。弹窗关掉 ≠ 驳回。
@@ -155,13 +169,14 @@ interface UiState {
   /// 瞬时态——不落盘。
   streams: Record<string, Record<number, string>>
   /// 思考增量（hands-free 票 06）：与 streams 同键。空 = 模型没给推理，不编造。
+  plans: Record<string, string>
   thinkings: Record<string, Record<number, string>>
   /// 流式交接簿（ui-audit 票 08 / P1-7）：done 到达不立即删气泡——
   /// 标 {afterEventId: 当时时间线末条 id, at: 时间戳}；等 refreshFast
   /// 拉到同 agent 的持久 agent_message（id > afterEventId）才清缓冲，
   /// 消除 done→持久化之间的内容空窗与排版跳变。超 STREAM_HANDOFF_MS
   /// 未等到（turn_failed 无消息等路径）兜底清除，防泄漏。
-  streamDone: Record<string, { afterEventId: number; at: number }>
+  streamDone: Record<string, { afterEventId: number; at: number; hydrating?: boolean }>
   /// bash 输出瞬时缓冲（exec-cards 票 04）：`${agentId}:${seq}` → 追加文本
   /// （stdout/stderr 按到达序混排）。瞬时态——tool_result 落地后卡体改渲
   /// result.output，缓冲即清。seq 缺席（resolve 等非回合路径）落 `·` 键。
@@ -228,11 +243,27 @@ function humanKeys(pending: PendingQuestion[], reviewRows: { id: string }[]): st
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
+  projectRoot: null,
+  projectEpoch: 0,
+  timelineFacts: null,
+  factsError: null,
+  toolStreamKeys: {},
+  beginProjectSwitch: () => {
+    // Issue15/14: invalidate synchronously before the first project IPC awaits.
+    // Same-name projects still have distinct epochs; failed switches never admit
+    // old responses when restoring the original root.
+    generation++
+    set(s => ({ projectRoot: null, projectEpoch: s.projectEpoch + 1,
+      timelineFacts: null, factsError: null, timeline: [], timelineCaughtUp: false,
+      streams: {}, thinkings: {}, streamDone: {}, toolStreams: {}, toolStreamKeys: {}, plans: {}, waitingSince: {} }))
+  },
+  commitProjectRoot: (root, epoch) => { if (get().projectEpoch === epoch) set({ projectRoot: root }) },
   themePref: savedPref,
   stages: [],
   team: [],
   artifacts: [],
   evidenceRevision: 0,
+  timelineCaughtUp: false,
   timeline: [],
   pending: [],
   reviewRows: [],
@@ -318,12 +349,15 @@ export const useUiStore = create<UiState>((set, get) => ({
   setActiveTab: (id) => set({ activeTab: id }),
   setSplitOpen: (v) => set({ splitOpen: v }),
   streams: {},
+  plans: {},
   thinkings: {},
   streamDone: {},
   toolStreams: {},
   waitingSince: {},
   applyToolOutput: (d) =>
     set((s) => ({
+      toolStreamKeys: d.seq == null ? s.toolStreamKeys : { ...s.toolStreamKeys,
+        [`${d.agent_id}:${d.seq}`]: { agent_id: d.agent_id, seq: d.seq } },
       toolStreams: {
         ...s.toolStreams,
         [`${d.agent_id}:${d.seq ?? '·'}`]:
@@ -340,11 +374,13 @@ export const useUiStore = create<UiState>((set, get) => ({
         return {
           streamDone: {
             ...s.streamDone,
-            [d.agent_id]: { afterEventId: s.timeline.at(-1)?.event.id ?? 0, at: Date.now() },
+            [d.agent_id]: { afterEventId: s.timelineFacts?.latest_event_id ?? 0, at: Date.now(), hydrating: s.timelineFacts == null },
           },
           waitingSince,
         }
       }
+      const plans = { ...s.plans }
+      if (d.plan != null) plans[d.agent_id] = d.reset ? '' : (plans[d.agent_id] ?? '') + d.plan
       const streams = { ...s.streams }
       const thinkings = { ...s.thinkings }
       const waitingSince = { ...s.waitingSince }
@@ -364,7 +400,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       // 其余帧一律清除（正常增量/显式清旗帧都是「网回来了」的信号）。
       if (d.waiting) waitingSince[d.agent_id] = waitingSince[d.agent_id] ?? Date.now()
       else delete waitingSince[d.agent_id]
-      return { streams, thinkings, waitingSince }
+      return { streams, thinkings, plans, waitingSince }
     }),
   setRailOpen: (v) => {
     localStorage.setItem('hexagon.rail', v ? '1' : '0')
@@ -411,13 +447,16 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ themePref: p })
   },
   refresh: async () => {
-    // 全量重置边界（挂载/项目切换）：时间线游标归零 → 快通道首拉全量。
-    // 切项目必须走这里——invalidate 的增量归并会把两个项目的事件缝一起。
-    // 票 06：递增代际——本调用之后在飞的旧响应全部作废（见 generation）。
-    generation += 1
-    // 全量重置：瞬时缓冲一并清——切项目后旧 agent 的输出流不能缝进新时间线。
-    set({ timeline: [], toolStreams: {} })
-    await useUiStore.getState().invalidate()
+    generation++
+    const epoch = get().projectEpoch
+    if (!get().projectRoot) {
+      try {
+        const status = await api.desktopStatus()
+        if (get().projectEpoch !== epoch) return
+        get().commitProjectRoot(status.project_root, epoch)
+      } catch { return }
+    }
+    await get().invalidate()
   },
   refreshSlow: async (tags) => {
     // ui-audit 票 04（P1-6）：allSettled 按切片落地——单切片失败
@@ -505,92 +544,60 @@ export const useUiStore = create<UiState>((set, get) => ({
     // invalidate the evidence view; background timeline polling does not.
     set((current) => ({ evidenceRevision: current.evidenceRevision + 1 }))
   },
-  refreshFast: async () => {
-    // 游标=末条 event.id（events 表 append-only、查询 ASC + after 排他）。
+  refreshFacts: async () => {
+    const { projectRoot: root, projectEpoch: epoch } = get()
+    if (!root) return
     const gen = generation
-    const after = useUiStore.getState().timeline.at(-1)?.event.id
-    // 草案查询失败就留着上一次的值。并进 Promise.all 会让一次读失败把时间线也丢掉。
-    const draftP = api.intakeDraftPending().catch(() => useUiStore.getState().intakeDraft)
+    const watched = Object.values(get().toolStreamKeys).slice(0, 500)
     try {
-      const [stages, pending, items] = await Promise.all([
-        api.stageStatus(),
-        api.pendingQuestions(),
-        api.timeline(after),
-      ])
-      const draft = await draftP
-      if (gen !== generation) return // 代际守卫：旧项目响应不缝进新状态
-      fastFailStreak = 0
-      set((s) => {
-        const timeline =
-          after == null
-            ? items
-            : [...s.timeline, ...items.filter((i) => i.event.id > after)]
-        // 票 08 交接清扫：同 agent 持久消息落进时间线（id > 标记水位）
-        // → 缓冲交接完成清除；超时未持久化兜底清。
-        let streams = s.streams
-        let thinkings = s.thinkings
-        let streamDone = s.streamDone
-        const marks = Object.entries(s.streamDone)
-        if (marks.length) {
-          const now = Date.now()
-          const sd = { ...s.streamDone }
-          const st = { ...s.streams }
-          const th = { ...s.thinkings }
-          for (const [agent, mark] of marks) {
-            const landed = timeline.some(
-              (it) => it.event.id > mark.afterEventId && it.message?.author === agent,
-            )
-            if (landed || now - mark.at > STREAM_HANDOFF_MS) {
-              delete sd[agent]
-              delete st[agent]
-              delete th[agent]
-            }
+      const facts = await api.timelineFacts({ expected_project_root: root, watched_tool_streams: watched,
+        watched_message_ids: watchedTimelineMessages(root, epoch) })
+      if (generation !== gen || get().projectEpoch !== epoch || get().projectRoot !== root || facts.project_root !== root) return
+      // Overlapping invalidation/poll responses must never roll a facts waterline back.
+      if ((get().timelineFacts?.latest_event_id ?? -1) > facts.latest_event_id) return
+      set(s => {
+        const plans = { ...s.plans }
+        for (const plan of facts.latest_plans) if (plans[plan.agent_id]?.trim() === plan.text.trim()) delete plans[plan.agent_id]
+        const streamDone = { ...s.streamDone }, streams = { ...s.streams }, thinkings = { ...s.thinkings }
+        const now = Date.now()
+        for (const [agent, mark] of Object.entries(streamDone)) {
+          if (mark.hydrating) {
+            streamDone[agent] = { afterEventId: facts.latest_event_id, at: now }
+            continue
           }
-          streams = st
-          thinkings = th
-          streamDone = sd
-        }
-        // exec-cards 票 04：tool_result 落地即清对应缓冲——卡体此后
-        // 定格 result.output（持久层为准）。配对约定同 pairToolCalls：
-        // result 紧跟其 called，且同 agent。
-        let toolStreams = s.toolStreams
-        if (items.length && Object.keys(toolStreams).length) {
-          const settled = new Set<string>()
-          for (let i = 1; i < timeline.length; i++) {
-            const it = timeline[i]
-            const prev = timeline[i - 1]
-            if (
-              it.event.kind === 'tool_result' &&
-              prev.event.kind === 'tool_called' &&
-              prev.event.agent_id === it.event.agent_id &&
-              prev.event.payload?.seq != null
-            ) {
-              settled.add(`${prev.event.agent_id}:${String(prev.event.payload.seq)}`)
-            }
-          }
-          if (settled.size) {
-            toolStreams = { ...toolStreams }
-            for (const k of settled) delete toolStreams[k]
+          const receipt = facts.latest_agent_messages.find(item => item.agent_id === agent)
+          if ((receipt && receipt.event_id > mark.afterEventId) || now - mark.at > STREAM_HANDOFF_MS) {
+            delete streamDone[agent]; delete streams[agent]; delete thinkings[agent]; delete plans[agent]
           }
         }
-        return {
-          stages,
-          pending,
-          timeline,
-          streams,
-          thinkings,
-          streamDone,
-          toolStreams,
-          intakeDraft: draft === true,
+        const toolStreams = { ...s.toolStreams }, toolStreamKeys = { ...s.toolStreamKeys }
+        for (const key of facts.settled_tool_streams) {
+          const id = `${key.agent_id}:${key.seq}`
+          delete toolStreams[id]; delete toolStreamKeys[id]
         }
+        return { timelineFacts: facts, factsError: null, plans, streams, thinkings, streamDone, toolStreams, toolStreamKeys }
       })
-    } catch (e) {
-      // 轮询失败吞掉继续——2s 一拍不能因一次抖动终止轮询；
-      // 第 FAST_FAIL_TOAST_AT 次连续失败 toast 一次，恢复即复位。
-      fastFailStreak += 1
-      if (fastFailStreak === FAST_FAIL_TOAST_AT) {
-        useUiStore.getState().pushToast(errText(e), 'err')
-      }
+    } catch (error) {
+      if (generation === gen && get().projectEpoch === epoch) set({ factsError: errText(error) })
     }
+  },
+  refreshFast: async () => {
+    const gen = generation
+    const request = ++fastRequestSeq
+    // Issue15: window/facts failure cannot suppress current pending cards. Each
+    // projection owns its failure state; facts is independently race checked.
+    const facts = get().refreshFacts()
+    const draft = api.intakeDraftPending().catch(() => get().intakeDraft)
+    try {
+      const [stages, pending, intakeDraft] = await Promise.all([api.stageStatus(), api.pendingQuestions(), draft])
+      if (gen !== generation || request < lastAppliedFastRequest) return
+      lastAppliedFastRequest = request
+      fastFailStreak = 0
+      set({ stages, pending, intakeDraft })
+    } catch (error) {
+      if (gen !== generation || request < lastAppliedFastRequest) return
+      fastFailStreak++
+      if (fastFailStreak === FAST_FAIL_TOAST_AT) get().pushToast(errText(error), 'err')
+    } finally { await facts }
   },
 }))

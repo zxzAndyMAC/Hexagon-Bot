@@ -1,3 +1,4 @@
+import { DesktopPermissions } from './components/DesktopPermissions'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './i18n'
@@ -24,6 +25,7 @@ import { PendingDialog } from './components/PendingCards'
 import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
+import { pauseDesktop } from './desktopPause'
 
 
 export default function App() {
@@ -31,6 +33,7 @@ export default function App() {
   const refresh = useUiStore((s) => s.refresh)
   const refreshFast = useUiStore((s) => s.refreshFast)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [computerSettings, setComputerSettings] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
   const [projectOpen, setProjectOpen] = useState<boolean | null>(null)
@@ -141,6 +144,19 @@ export default function App() {
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      // Ticket 07: Settings unmounts Composer, but cannot remove the owner's
+      // only explicit computer stop key. It also works from focused inputs.
+      if (matches(e, bindingFor('desktopPause'))) {
+        e.preventDefault()
+        if (!e.repeat && projectOpen === true) void pauseDesktop()
+        return
+      }
+      // Owner issue19: retained keymap actions now navigate to Settings.
+      if (matches(e, bindingFor('desktopPanel')) || matches(e, bindingFor('browserPanel'))) {
+        e.preventDefault()
+        if (projectOpen === true) { setComputerSettings(true); setSettingsOpen(true) }
+        return
+      }
       // 保存要在 Monaco 自己的 textarea 里也生效，所以赶在输入框豁免之前。
       if (matches(e, bindingFor('saveFile'))) {
         e.preventDefault()
@@ -221,8 +237,8 @@ export default function App() {
   if (settingsOpen) {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <SettingsPage
-          onBack={() => setSettingsOpen(false)}
+        <SettingsPage initialSection={computerSettings ? 'perms' : 'general'}
+          onBack={() => { setSettingsOpen(false); setComputerSettings(false) }}
           // ui-audit-2 票 05：设置-用量「详情」= 回工作台并开用量明细 tab
           onOpenUsageDetail={() => {
             useUiStore.getState().openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') })
@@ -236,6 +252,7 @@ export default function App() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <DesktopPermissions compact />
       <TopBar
         onSettings={() => setSettingsOpen(true)}
         onProjectClosed={() => setProjectOpen(false)}

@@ -4,7 +4,6 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import i18n from './i18n'
 import { LiveReply, StatusLine, ThinkingRow } from './components/Timeline'
-import { THINKING_COLLAPSE_AT } from './timelineModel'
 import { useUiStore } from './store'
 import type { TurnDelta } from './api'
 
@@ -43,7 +42,9 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('zh-CN')
     useUiStore.setState({
-      streams: {}, thinkings: {}, streamDone: {}, timeline: [],
+      // Fixture represents a fully loaded history; partial hydration is tested separately.
+      timelineCaughtUp: true,
+      streams: {}, thinkings: {}, plans: {}, streamDone: {}, timeline: [],
       stages: [], team: [], pending: [],
     })
   })
@@ -74,21 +75,46 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
     root.unmount()
   })
 
-  it('过长思考收成一行，点开全文，再点收回省略', async () => {
-    const full = `${'推'.repeat(THINKING_COLLAPSE_AT)}尾巴`
-    const { el, root } = await render(<ThinkingRow text={full} />)
+  // 2026-10-01 用户验收：一行72字省略无法跟随思考，改为进行中展开、完成收拢。
+  it('思考进行中展示全文，完成后收拢，仍可手动展开查看', async () => {
+    const full = `${'推'.repeat(100)}\n最新的推理尾部`
+    const { el, root } = await render(<ThinkingRow text={full} live />)
     const row = el.querySelector('[data-thinking]')!
-    expect(row.getAttribute('data-open')).toBe('0')
-    expect(row.textContent).toContain('…')
-    expect(row.textContent).not.toContain('尾巴')
-    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(row.getAttribute('data-open')).toBe('1')
-    expect(row.textContent).toContain('尾巴')
-    expect(row.textContent).not.toContain('…')
-    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(row.textContent).toContain('最新的推理尾部')
+    const header = row.querySelector('button')!
+    expect(header.getAttribute('aria-expanded')).toBe('true')
+    expect(header.textContent).not.toContain('推推')
+    await act(async () => { root.render(<ThinkingRow text={full} live={false} />) })
     expect(row.getAttribute('data-open')).toBe('0')
-    expect(row.textContent).not.toContain('尾巴')
-    expect(row.textContent).toContain('…')
+    expect(row.textContent).not.toContain('最新的推理尾部')
+    await act(async () => { header.click() })
+    expect(row.textContent).toContain('最新的推理尾部')
+    root.unmount()
+  })
+
+  it('计划增量不混入正式回复，计划标题与 Markdown 可展开', async () => {
+    useUiStore.getState().applyDelta(delta({ plan: '# 先确认\n\n- **检查**需求' }))
+    expect(useUiStore.getState().streams.a1?.[0]).toBe('')
+    expect(useUiStore.getState().plans.a1).toContain('检查')
+    const { el, root } = await render(<ThinkingRow plan live text={useUiStore.getState().plans.a1} />)
+    expect(el.querySelector('h1')?.textContent).toBe('先确认')
+    expect(el.querySelector('li strong')?.textContent).toBe('检查')
+    expect(el.textContent).toContain('规划中')
+    await act(async () => { root.render(<ThinkingRow plan text={useUiStore.getState().plans.a1} />) })
+    expect(el.textContent).toBe('执行计划')
+    await act(async () => { (el.querySelector('button') as HTMLButtonElement).click() })
+    expect(el.querySelector('li strong')?.textContent).toBe('检查')
+    root.unmount()
+  })
+
+  it('手动收起思考后新增内容不强行展开', async () => {
+    const { el, root } = await render(<ThinkingRow text="开始推理" live />)
+    const header = el.querySelector('[data-thinking] button') as HTMLButtonElement
+    await act(async () => { header.click() })
+    await act(async () => { root.render(<ThinkingRow text="开始推理，后续思路" live />) })
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    expect(el.textContent).not.toContain('后续思路')
     root.unmount()
   })
 
@@ -149,7 +175,7 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
           stage_run_id: null, payload: {}, created_at: '',
         },
         message: {
-          id: 2, author: 'a1', tokens: [], attachments: [], created_at: '', thinking: '',
+          id: 2, author: 'a1', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '',
           body: '计划：阶段是发布，下一步用 fs_write',
         },
       }, {

@@ -125,6 +125,11 @@ struct SharedState {
     /// 前台命令/任务已收尾（哨兵到 / 进程退出）。
     done: bool,
     exit_code: Option<i32>,
+    // Ticket04 (2026-10-01): timing the entire tool call misclassified sandbox
+    // setup/cleanup jitter as an application regression. Measure the owned
+    // benchmark leader with a host monotonic clock; still await full cleanup.
+    command_started: Option<Instant>,
+    command_elapsed_ms: Option<f64>,
     /// 子进程已退出（stdout EOF 或 wait 观察到）。
     exited: bool,
     killed: bool,
@@ -504,6 +509,7 @@ impl SessionTable {
         } else {
             crate::sandbox::spec_for(&ctx.repo_root, &ctx.owned_globs, net)
         };
+        let spec = crate::design::guard_shell(db, ctx, spec);
         Self::note_spec(
             db,
             ctx,
@@ -571,6 +577,24 @@ impl SessionTable {
         timeout: Duration,
         net: bool,
     ) -> Result<Value, ToolError> {
+        self.run_oneshot_with_spec(db, ctx, cmd, timeout, (net, None, None))
+    }
+
+    /// Host-only adapter for a separately authorized external cwd. The caller
+    /// supplies an equally restrictive OS profile; models cannot set this field.
+    pub(crate) fn run_oneshot_with_spec(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        cmd: &str,
+        timeout: Duration,
+        policy: (
+            bool,
+            Option<crate::sandbox::SandboxSpec>,
+            Option<std::path::PathBuf>,
+        ),
+    ) -> Result<Value, ToolError> {
+        let (net, host_spec, output_root) = policy;
         let observed_paths = if ctx.native_effect.is_some() {
             let mut paths = crate::evaluation::control::task_write_paths(&ctx.repo_root)?;
             paths.retain(|p| {
@@ -594,7 +618,7 @@ impl SessionTable {
                 Self::note_spec(db, ctx, &spec, "evaluation_task_scope", Instant::now());
                 spec
             }
-            None => self.spec_for(db, ctx, net),
+            None => host_spec.unwrap_or_else(|| self.spec_for(db, ctx, net)),
         };
         let task = spawn_task_handle(ctx, cmd, &spec, self.bound_tap(), None)
             .map_err(|e| ToolError::NotExecuted(format!("spawn sh: {e}")))?;
@@ -627,7 +651,11 @@ impl SessionTable {
             );
         }
         self.inner.lock().unwrap().tasks.remove(&id);
-        let output = task_result(&task, timed_out, ctx);
+        let mut output_ctx = ctx.clone();
+        if let Some(root) = output_root {
+            output_ctx.repo_root = root;
+        }
+        let output = task_result(&task, timed_out, &output_ctx);
         if let Some(write_paths) = observed_paths.filter(|_| !timed_out) {
             // Ticket 25: the leader can be reaped before orphaned descendants.
             // Wait within the original deadline; no proof is preferable to a
@@ -991,11 +1019,13 @@ fn spawn_task_handle(
     }
     // D09: acquiring the repository lease can wait across a stop.
     crate::evaluation::control::checkpoint(&ctx.repo_root)?;
+    let command_started = Instant::now();
     let mut child = c.spawn()?;
     let pid = child.id();
     // 任务的 Shared 就是这条进程的——口子随 spawn 绑死，进程终身
     // 输出都记在这个 seq 名下（含后台任务活得比调用久的情形）。
     let shared = Shared::new(tap);
+    shared.st.lock().unwrap().command_started = Some(command_started);
     let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     std::thread::spawn({
         let s = shared.clone();
@@ -1033,11 +1063,18 @@ fn monitor_child(
             drop(guard);
             std::thread::sleep(Duration::from_millis(5));
         };
+        let command_elapsed_ms = shared
+            .st
+            .lock()
+            .unwrap()
+            .command_started
+            .map(|started| started.elapsed().as_secs_f64() * 1000.0);
         let status = finish_child(child, lease.lock().unwrap().take());
         let mut st = shared.st.lock().unwrap();
         st.done = true;
         st.exited = true;
         st.exit_code = status.ok().and_then(|x| x.code());
+        st.command_elapsed_ms = command_elapsed_ms;
         drop(st);
         shared.cond.notify_all();
     });
@@ -1120,6 +1157,7 @@ fn task_result(t: &TaskHandle, timed_out: bool, ctx: &ToolContext) -> Value {
     json!({
         "exit_code": st.exit_code.unwrap_or(-1),
         "timed_out": timed_out,
+        "command_elapsed_ms": st.command_elapsed_ms,
         "stdout": stdout,
         "stderr": stderr,
     })

@@ -40,6 +40,7 @@ export function policyQualityMessage(q: PendingQuestion) {
 
 export async function approveQuestion(q: PendingQuestion) {
   const p = q.payload
+  if (p.sub === 'design_direction') { useUiStore.getState().pushToast(i18n.t('design.chooseHint')); return }
   if (p.policy_recovery === true) {
     useUiStore.getState().pushToast(i18n.t('policy.recovery'))
     return
@@ -70,6 +71,7 @@ export async function approveQuestion(q: PendingQuestion) {
 
 export async function rejectQuestion(q: PendingQuestion) {
   const p = q.payload
+  if (p.sub === 'design_direction') { useUiStore.getState().pushToast(i18n.t('design.chooseHint')); return }
   if (p.sub === 'tool_outcome_unknown') {
     useUiStore.getState().pushToast(i18n.t('cards.actionUnknownHint'))
     return
@@ -96,6 +98,7 @@ export function rejectReasonWithJudge(reason: string, judgeVerdict: string | nul
 
 /** 卡 kind → 卡面标题 i18n key（kbd 目标提示 / sticky 迷你条共用） */
 export function kindTitleKey(q: PendingQuestion): string {
+  if (q.payload.sub === 'design_direction') return 'design.title'
   if (q.payload.sub === 'acceptance_exception') return 'exceptions.title'
   if (q.kind === 'stamp' && q.payload.proposal_id && q.payload.surface === 'pack_copy') return 'policy.title'
   if (q.kind === 'permission') return 'cards.ask'

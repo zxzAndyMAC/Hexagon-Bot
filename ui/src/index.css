@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* Owner incident 2026-10-02: Tailwind v4 resets dialog margins to zero,
+   putting native previews and Broad confirmation at the viewport origin.
+   Restore UA centering for every native modal without changing its top layer. */
+@layer base { dialog { margin: auto; } }
+
+
 /* Linear 派生双主题：深色原生介质，亮色镜像同一套亮度分层逻辑 */
 :root {
   --bg: #f7f8f8;
@@ -343,19 +349,18 @@ input, textarea { font: inherit; color: var(--text); }
   color: var(--text-3); font-size: 11px;
 }
 .msg-toggle:hover { color: var(--text); }
-/* hands-free 票 06：思考过长收成一行；状态行与进行中标记。 */
-.thinking-row {
-  display: block; width: 100%; max-width: 78%;
-  margin: 0 0 4px; padding: 0;
-  background: none; border: none; cursor: pointer;
-  color: var(--text-3); font-size: 12px; text-align: left;
+/* 2026-10-01 用户验收：思考独立标题+可滚动正文，不再截72字单行省略。 */
+.thinking-row { width: 100%; margin: 0 0 8px; color: var(--text-3); font-size: 12px; }
+.thinking-toggle {
+  display: flex; align-items: center; gap: 6px; padding: 4px 0;
+  background: none; border: none; color: inherit; cursor: pointer; text-align: left;
 }
-.thinking-row.thinking-ellipsis {
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.thinking-toggle:hover { color: var(--text); }
+.thinking-full {
+  max-height: 12rem; overflow: auto; overscroll-behavior: contain;
+  margin: 4px 0 8px 5px; padding: 0 12px; border-left: 1px solid var(--border-strong);
+  line-height: 1.65; overflow-wrap: anywhere; color: var(--text-2);
 }
-.thinking-row[data-open='1'] { white-space: pre-wrap; }
-/* Thinking 票 03：展开全文浮入；live 标签走 .shimmer-text */
-.thinking-full { animation: fade-up 300ms cubic-bezier(0.23,1,0.32,1) both; }
 .status-line {
   display: flex; gap: 12px; align-items: center;
   padding: 6px 14px 0; font-size: 11px; color: var(--text-2);
@@ -605,3 +610,67 @@ input, textarea { font: inherit; color: var(--text); }
 .exec-stat { font-family: var(--mono); font-size: 10px; font-weight: 560; }
 .exec-stat.ins { color: var(--ok); }
 .exec-stat.del { color: var(--err); }
+
+.plan-row { padding: 6px 14px; }
+.thinking-full p { margin: 0 0 .6em; }
+.thinking-full :is(h1,h2,h3,h4) { font-size: 1em; margin: .8em 0 .4em; }
+.thinking-full :is(ul,ol) { margin: .4em 0; padding-left: 1.6em; }
+.thinking-full pre { white-space: pre-wrap; padding: 8px; background: var(--bg-2); }
+.thinking-full > :last-child { margin-bottom: 0; }
+
+.context-meter { position: relative; align-self: center; color: var(--text-2); font-size: 11px; }
+.context-meter-trigger { border: 0; background: transparent; color: inherit; font: inherit; display: flex; align-items: center; gap: 5px; padding: 7px 4px; cursor: pointer; list-style: none; font-variant-numeric: tabular-nums; }
+
+.context-meter-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.context-meter-detail { position: absolute; bottom: calc(100% + 10px); right: 0; width: min(280px, 70vw); padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px var(--border); z-index: 25; line-height: 1.6; }
+.context-meter-detail p { margin: 8px 0 0; color: var(--text-2); }
+
+/* Keep the pointer route into the hover tooltip continuous (owner 2026-10-01). */
+.context-meter-detail::after { content: ""; position: absolute; height: 10px; top: 100%; left: 0; right: 0; }
+
+/* 2026-10-01 owner: text above controls, role context beside a stable send arrow. */
+.composer-box { border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--bg-2); }
+.composer-box:focus-within { border-color: var(--accent); }
+.composer-box .composer-field > textarea,
+.composer-box .composer-field > .composer-mirror { border: 0; border-radius: 0; min-height: 68px; padding: 12px; }
+.composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 10px 10px; }
+.composer-hint { color: var(--text-3); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-actions { display: flex; gap: 10px; align-items: center; flex-shrink: 0; margin-left: auto; }
+.btn.composer-send { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: 50%; }
+.composer-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.composer-submit-spin { animation: composer-submit-turn 1s linear infinite; }
+@keyframes composer-submit-turn { to { transform: rotate(360deg); } }
+.context-meter-role { margin-top: 6px; }
+.context-meter-role time { color: var(--text-3); font-size: 10px; }
+@media (prefers-reduced-motion: reduce) { .composer-submit-spin { animation: none; } }
+
+/* Desktop ticket 07: native dialog owns focus and blocks hidden workbench actions. */
+.desktop-permissions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.desktop-permissions p { font-size: 12px; margin: 6px 0; }
+.desktop-permissions-dialog { position: fixed; inset: 0; width: min(580px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; margin: auto; padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); }
+.desktop-permissions-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.desktop-permissions-dialog h2 { margin: 0 0 16px; font-size: 18px; }
+.desktop-permissions-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.desktop-permission-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.desktop-permissions-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+.composer-controls { display: flex; align-items: center; gap: 12px; min-width: 0; }
+@media (max-width: 900px) { .composer-controls .composer-hint { display: none; } }
+
+.desktop-control { position: relative; display: flex; align-items: center; gap: 2px; }
+.desktop-pause { display: inline-flex; padding: 6px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); color: var(--text); cursor: pointer; }
+.desktop-control-popover { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 45; width: min(390px, calc(100vw - 48px)); max-height: min(620px, 70vh); overflow-y: auto; padding: 16px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--popover); font-size: 12px; line-height: 1.6; }
+.desktop-control-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.desktop-control-popover .desktop-permissions { margin-top: 12px; }
+.desktop-pause:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.quality-evidence { margin-top: 4px; padding-left: 8px; border-left: 2px solid var(--border); line-height: 1.6; }
+
+@media (max-width: 700px) { .composer-controls { position: relative; } .desktop-control { position: static; } .desktop-control-popover { left: 0; } }
+
+.desktop-tool-details figure { margin: 8px 0; }
+.desktop-tool-details img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--r-md); }
+
+/* Owner issue19: setup/consent belongs in Settings, not the composer toolbar. */
+.desktop-control-inline { display: block; margin-bottom: 16px; }
+.desktop-control-inline .desktop-control-popover { position: static; width: 100%; max-height: none; }

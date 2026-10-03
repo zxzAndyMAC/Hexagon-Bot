@@ -38,6 +38,14 @@ pub(crate) fn sensitive_file_path(path: &Path) -> bool {
         return true;
     }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // Desktop ticket 07: ordinary file/search tools must not bypass revocation
+    // of screenshot-sharing consent by rereading the clearable private trail.
+    let normalized = resolved.to_string_lossy().replace('\\', "/").to_lowercase();
+    if normalized.contains("/.hexagon/computer-use/")
+        || normalized.ends_with("/.hexagon/computer-use")
+    {
+        return true;
+    }
     if is_credential_path(&resolved.to_string_lossy()) {
         return true;
     }
@@ -152,6 +160,7 @@ pub fn is_agent_policy_path(p: &str) -> bool {
             | "write-locks"
             | "skill-mutes.json"
             | "ui.json"
+            | "computer-use"
     ) || first.starts_with("state.db")
         // Evaluation 08 probe reproduced a structured overwrite of the
         // isolation marker. These host protocol files are never Agent policy.

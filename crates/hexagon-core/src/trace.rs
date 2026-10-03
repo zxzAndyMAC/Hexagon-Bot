@@ -4,6 +4,8 @@
 //! 群聊时间线、归来摘要、审计回放都是它的投影——结构化事件是权威，
 //! 聊天文本只是其中一类。
 
+pub mod window;
+
 use crate::db::{Db, DbError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -152,6 +154,9 @@ pub struct MessageRow {
     pub tokens: Vec<MessageToken>,
     /// 票 03：图片附件引用（无附件为 []）。
     pub attachments: Vec<AttachRef>,
+    /// Owner-selected untrusted browser context; never concatenated into body.
+    #[serde(default)]
+    pub element_refs: Vec<crate::browser_elements::ElementRef>,
     pub created_at: String,
     /// 模型给出的推理文本（hands-free 票 06）。空串 = 没给，时间线不渲染思考行。
     pub thinking: String,
@@ -329,11 +334,37 @@ impl Db {
         stage_run_id: Option<&str>,
         thinking: Option<&str>,
     ) -> Result<i64, TraceError> {
+        self.append_message_with_elements(
+            project_id,
+            author,
+            body,
+            tokens,
+            attachments,
+            agent_id,
+            stage_run_id,
+            thinking,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_message_with_elements(
+        &self,
+        project_id: &str,
+        author: &str,
+        body: &str,
+        tokens: &[MessageToken],
+        attachments: &[AttachRef],
+        agent_id: Option<&str>,
+        stage_run_id: Option<&str>,
+        thinking: Option<&str>,
+        element_refs: &[crate::browser_elements::ElementRef],
+    ) -> Result<i64, TraceError> {
         let thinking = thinking.filter(|t| !t.is_empty());
         let tx = self.conn().unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO messages (project_id, author, body, tokens, attachments, thinking)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO messages (project_id, author, body, tokens, attachments, thinking, element_refs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 project_id,
                 author,
@@ -341,6 +372,7 @@ impl Db {
                 serde_json::to_string(&tokens)?,
                 serde_json::to_string(&attachments)?,
                 thinking,
+                serde_json::to_string(element_refs)?,
             ],
         )?;
         let msg_id = tx.last_insert_rowid();
@@ -411,7 +443,7 @@ impl Db {
         });
         let sql = format!(
             "SELECT e.id, e.project_id, e.stage_run_id, e.agent_id, e.kind, e.payload, e.created_at,
-                    m.id, m.author, m.body, m.tokens, m.created_at, m.attachments, m.thinking
+                    m.id, m.author, m.body, m.tokens, m.created_at, m.attachments, m.thinking, m.element_refs
              FROM events e
              LEFT JOIN messages m
                ON m.id = json_extract(e.payload, '$.message_id')
@@ -423,8 +455,17 @@ impl Db {
                 .map(|f| format!("AND e.kind IN ({f})"))
                 .unwrap_or_default()
         );
-        let mut st = self.conn().prepare(&sql)?;
-        let rows = st.query_map(rusqlite::params![project_id, after_id, limit as i64], |r| {
+        self.query_timeline(&sql, &[&project_id, &after_id, &(limit as i64)])
+    }
+
+    // Issue 15: window and legacy readers must decode attachments/element refs identically.
+    fn query_timeline(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<Vec<TimelineItem>, TraceError> {
+        let mut st = self.conn().prepare(sql)?;
+        let rows = st.query_map(params, |r| {
             let kind_str: String = r.get(4)?;
             let payload_str: String = r.get(5)?;
             let msg_tokens: Option<String> = r.get(10)?;
@@ -443,6 +484,7 @@ impl Db {
                 r.get::<_, Option<String>>(11)?,
                 r.get::<_, Option<String>>(12)?,
                 r.get::<_, Option<String>>(13)?,
+                r.get::<_, Option<String>>(14)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -462,6 +504,7 @@ impl Db {
                 mat,
                 matt,
                 thinking,
+                element_refs,
             ) = row?;
             out.push(TimelineItem {
                 event: Event {
@@ -482,6 +525,9 @@ impl Db {
                         attachments: serde_json::from_str(&matt.unwrap_or_else(|| "[]".into()))?,
                         created_at: mat.unwrap_or_default(),
                         thinking: thinking.unwrap_or_default(),
+                        element_refs: crate::browser_elements::decode_refs(
+                            &element_refs.unwrap_or_else(|| "[]".into()),
+                        )?,
                     }),
                     _ => None,
                 },
@@ -594,6 +640,12 @@ impl Db {
 /// （如失速监视的门面测试）写入 System 事件后也要对账这一张表。
 #[cfg(test)]
 pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
+    "approval_mode_changed",
+    "design_direction_requested",
+    "design_options_proposed",
+    "design_direction_selected",
+    "quality_source_baseline",
+    "computer_control",
     "acceptance_exception",
     "artifact_materialization",
     "policy_recovery",
@@ -613,6 +665,7 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "net_wait_exit",
     "provider_retry",
     "request_envelope",
+    "agent_plan",
     "run_suspended",
     "sandbox_unavailable",
     "session_exited",

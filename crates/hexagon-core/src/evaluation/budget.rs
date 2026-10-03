@@ -597,6 +597,14 @@ impl RequestGuard {
         self.dispatched = true;
         Ok(())
     }
+    /// Ticket07 review P1: only the host caller before invoking its transport
+    /// can prove an already reserved dispatch intent never sent any bytes.
+    pub(crate) fn cancel_before_send(&mut self) -> io::Result<()> {
+        self.db.conn().execute("UPDATE evaluation_budget_requests SET dispatch_started=0 WHERE id=?1 AND state='pending'", [&self.id]).map_err(err)?;
+        self.dispatched = false;
+        self.settle(None, false, true, false)
+    }
+
     pub(crate) fn settle(
         &self,
         usage: Option<&Usage>,

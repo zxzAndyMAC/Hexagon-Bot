@@ -228,7 +228,7 @@ fn evaluation_outcome_detects_non_executable_permission_changes() {
 fn evaluation_outcome_accepts_native_context_escalation_bound_to_the_actual_turn() {
     let home = tempfile::tempdir().unwrap();
     let wb = Workbench::open_evaluation_host(home.path()).unwrap();
-    let mut request = super::evaluation_config_tests::request();
+    let mut request = super::evaluation_config_tests::control_only_request();
     let initial = wb.freeze_evaluation(&request, None).unwrap();
     let window = initial
         .runtime
@@ -265,6 +265,9 @@ fn evaluation_outcome_accepts_native_context_escalation_bound_to_the_actual_turn
         )
         .unwrap();
     assert_eq!(run.state, "waiting_human");
+    // D09 / 2026-10-01: native context probes require an active driver phase;
+    // waiting_human correctly stops execution before reaching the context gate.
+    let run = wb.resume_evaluation_fixture(&run.id).unwrap();
     let mut worker = Workbench::open_scoped(
         Path::new(&run.workspace),
         &task.id,
@@ -297,11 +300,16 @@ fn evaluation_outcome_accepts_native_context_escalation_bound_to_the_actual_turn
         window,
     });
     worker.register_provider("default", provider.clone());
-    let large = (0..80000)
+    // 2026-10-01 default window rose to 1M: derive the overflow fixture from
+    // the frozen cap instead of silently relying on the retired 120K ceiling.
+    let large = (0..cap as usize / 2 + 1)
         .map(|i| format!("word{i:05} "))
         .collect::<String>();
     let result = worker.run_instance("a0", &large).unwrap();
-    assert!(matches!(result, TurnOutcome::AwaitingPermission(_)));
+    assert!(
+        matches!(result, TurnOutcome::AwaitingPermission(_)),
+        "{result:?}"
+    );
     assert!(inner.recorded().is_empty());
     let checked = wb.inspect_evaluation_outcome(&run.id).unwrap();
     assert_eq!(
@@ -456,6 +464,16 @@ fn evaluation_skill_and_foreground_shell_have_execution_bound_evidence() {
         .registry
         .call(&worker.db, &ctx, "bash", json!({"cmd":"printf observed"}))
         .unwrap();
+    // Owner Q10 (2026-10-01): restricted mode asks for shell execution. This
+    // regression concerns the actual sandbox receipt, so explicitly authorize
+    // this fixture command before asserting its execution-bound evidence.
+    let executed = match executed {
+        CallOutcome::Asked(id) => worker
+            .registry
+            .resolve(&worker.db, &ctx, &id, true, None, "project", None, "owner")
+            .unwrap(),
+        other => other,
+    };
     assert!(matches!(executed, CallOutcome::Done(_)), "{executed:?}");
     let observed = host.inspect_evaluation_outcome(&run.id).unwrap();
     assert_eq!(
@@ -482,6 +500,13 @@ fn evaluation_skill_and_foreground_shell_have_execution_bound_evidence() {
             .registry
             .call(&worker.db, &ctx, "bash", json!({"cmd":cmd}))
             .unwrap();
+        let result = match result {
+            CallOutcome::Asked(id) => worker
+                .registry
+                .resolve(&worker.db, &ctx, &id, true, None, "project", None, "owner")
+                .unwrap(),
+            other => other,
+        };
         let CallOutcome::Done(output) = result else {
             panic!("{result:?}")
         };
@@ -542,6 +567,14 @@ fn evaluation_skill_and_foreground_shell_have_execution_bound_evidence() {
         "bash",
         json!({"cmd":"sleep 2","timeout_ms":1}),
     );
+    // Owner Q10: reach the actual timeout only after granting execution;
+    // an unanswered permission card is not an unknown external effect.
+    let result = match result {
+        Ok(CallOutcome::Asked(id)) => worker
+            .registry
+            .resolve(&worker.db, &ctx, &id, true, None, "project", None, "owner"),
+        other => other,
+    };
     assert!(
         matches!(result, Err(crate::tools::ToolError::OutcomeUnknown(_))),
         "{result:?}"

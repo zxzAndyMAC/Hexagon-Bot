@@ -1,4 +1,4 @@
-import { isValidElement, memo, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { isValidElement, memo, useDeferredValue, useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
@@ -98,4 +98,28 @@ export const Md = memo(function Md({ children }: { children: string }) {
       {children}
     </ReactMarkdown>
   )
+})
+
+const ReasoningBody = memo(function ReasoningBody({ text }: { text: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{text}</ReactMarkdown>
+})
+
+// Live acceptance 2026-10-01: useDeferredValue alone reparsed long reasoning on
+// every delta (and again during the deferred render). It is priority, not throttling.
+// Keep every token, present at 4Hz, and memoize the expensive parser separately.
+export const ReasoningMarkdown = memo(function ReasoningMarkdown({ text, live, onRender }: {
+  text: string; live?: boolean; onRender?: () => void
+}) {
+  const latest = useRef(text)
+  const [snapshot, setSnapshot] = useState(text)
+  useLayoutEffect(() => { latest.current = text }, [text])
+  useEffect(() => {
+    if (!live) return
+    const timer = setInterval(() => setSnapshot(latest.current), 250)
+    return () => clearInterval(timer)
+  }, [live])
+  const deferred = useDeferredValue(snapshot)
+  const displayed = live ? deferred : text
+  useLayoutEffect(() => { onRender?.() }, [displayed, onRender])
+  return <ReasoningBody text={displayed} />
 })

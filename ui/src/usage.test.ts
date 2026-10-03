@@ -40,6 +40,12 @@ describe('usage units', () => {
     expect(sec).toContain(`${hh}:${mm}:${String(d.getSeconds()).padStart(2, '0')}`)
   })
 
+  it('SQLite UTC timestamps display at the same local time as explicit ISO UTC', () => {
+    // 2026-10-01 原生验收：06:57 的新消息显示为前一天22:57。
+    expect(fmtTime('2026-09-30 22:57:35', false, 'zh-CN'))
+      .toBe(fmtTime('2026-09-30T22:57:35Z', false, 'zh-CN'))
+  })
+
   it('fmtTok scales with K/M/B suffixes', () => {
     expect(fmtTok(999)).toBe('999')
     expect(fmtTok(1000)).toBe('1K')

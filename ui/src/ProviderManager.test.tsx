@@ -169,6 +169,82 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
   })
   afterEach(() => vi.restoreAllMocks())
 
+  it('编辑框紧跟所选模型，切换编辑不会落到整个目录底部', async () => {
+    // Owner 2026-10-01: editing the first model used to require scrolling past every group.
+    const { el, root } = await render(<ProviderManager />)
+    try {
+      await act(async () => [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true })))
+      for (const id of ['deepseek-chat', 'mystery-x']) {
+        await act(async () => el.querySelector<HTMLButtonElement>(`button[aria-label="Edit ${id}"]`)!.click())
+        const editor = el.querySelector('input[aria-label="Context window"]')!.closest('.panel')!
+        const button = el.querySelector(`button[aria-label="Edit ${id}"]`)!
+        expect(button.closest('.panel')!.nextElementSibling).toBe(editor)
+      }
+    } finally {
+      await act(async () => root.unmount())
+      el.remove()
+    }
+  })
+
+  it('编辑 ID 保持原行位置，保存替换原条目并可标注嵌入和重排', async () => {
+    const { el, root } = await render(<ProviderManager />)
+    try {
+      await act(async () => [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true })))
+      await act(async () => el.querySelector<HTMLButtonElement>('button[aria-label="Edit deepseek-chat"]')!.click())
+      const input = [...el.querySelectorAll('input')].find((i) => i.value === 'deepseek-chat')!
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'renamed-model')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      const editor = input.closest('.panel')!
+      expect(el.querySelector('button[aria-label="Edit deepseek-chat"]')!.closest('.panel')!.nextElementSibling).toBe(editor)
+      for (const label of ['Embeddings', 'Reranking']) {
+        const checkbox = [...editor.querySelectorAll('label')].find((l) => l.textContent?.includes(label))!.querySelector('input')!
+        await act(async () => checkbox.click())
+      }
+      await act(async () => editor.querySelector<HTMLButtonElement>('button.primary')!.click())
+      const saved = vi.mocked(api.saveProvider).mock.calls.at(-1)![0]
+      expect(saved.models!.map((m) => m.id)).toEqual(['renamed-model', 'mystery-x'])
+      expect(saved.models![0].caps).toEqual(expect.arrayContaining(['embedding', 'rerank']))
+    } finally { await act(async () => root.unmount()); el.remove() }
+  })
+
+  it('刷新目录保留用户明确清空的能力及分组，同时导入新模型元数据', async () => {
+    vi.spyOn(api, 'fetchProviderModels').mockResolvedValue([
+      { id: 'mystery-x', name: 'Discovered', group: 'remote', caps: ['tools'], context_window: 300000, max_output: 20000 },
+      { id: 'new-embedding', name: 'Embedding', group: 'remote', caps: ['embedding'], context_window: 8000, max_output: null },
+    ])
+    const { el, root } = await render(<ProviderManager />)
+    try {
+      await act(async () => [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true })))
+      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('Fetch'))!.click())
+      const saved = vi.mocked(api.saveProvider).mock.calls.at(-1)![0]
+      expect(saved.models!.find((m) => m.id === 'mystery-x')?.caps).toEqual([])
+      expect(saved.models!.find((m) => m.id === 'new-embedding')?.caps).toEqual(['embedding'])
+    } finally { await act(async () => root.unmount()); el.remove() }
+  })
+
+  it('使用供应商信息只更新当前草稿，保存后才改变配置', async () => {
+    vi.spyOn(api, 'fetchProviderModels').mockResolvedValue([
+      { id: 'deepseek-chat', name: null, group: null, caps: ['reasoning'], context_window: 1048576, max_output: 393216 },
+    ])
+    const { el, root } = await render(<ProviderManager />)
+    try {
+      await act(async () => [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true })))
+      await act(async () => el.querySelector<HTMLButtonElement>('button[aria-label="Edit deepseek-chat"]')!.click())
+      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Use provider metadata')!.click())
+      expect(el.querySelector<HTMLInputElement>('input[aria-label="Context window"]')!.value).toBe('1048576')
+      expect(api.saveProvider).not.toHaveBeenCalled()
+      const editor = el.querySelector('input[aria-label="Context window"]')!.closest('.panel')!
+      await act(async () => editor.querySelector<HTMLButtonElement>('button.primary')!.click())
+      expect(vi.mocked(api.saveProvider).mock.calls.at(-1)![0].models![0].caps).toEqual(['reasoning'])
+    } finally { await act(async () => root.unmount()); el.remove() }
+  })
+
   it('模型行：已知窗口显示 k 值，未识别挂未知警告标', async () => {
     const { el, root } = await render(<ProviderManager />)
     const row = (name: string) =>
@@ -177,6 +253,17 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
     expect(el.textContent).toContain('64k')
     // 未识别模型 → 回落 120k 的警告标要看得见
     expect(el.textContent).toMatch(/window\?|窗口未知|視窗未知|ウィンドウ不明|inconnue|desc\./)
+    root.unmount()
+  })
+
+  it('新增自定义模型默认显示可编辑的 1M 窗口', async () => {
+    const { el, root } = await render(<ProviderManager />)
+    const row = [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+    await act(async () => row.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const add = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add')!
+    await act(async () => add.click())
+    expect((el.querySelector('input[type=number]') as HTMLInputElement).value).toBe('1000000')
+    expect(el.querySelector('input[type=number]')?.getAttribute('aria-label')).toBeTruthy()
     root.unmount()
   })
 

@@ -862,3 +862,82 @@ fn upgrade_budget_block_is_not_retried_or_reported_as_stall() {
         .iter()
         .all(|c| c.kind != "stall"));
 }
+
+// Live acceptance 2026-10-01: post-stamp observe + HOLD was replayed at 60s.
+fn completed_supplemental_fixture(
+    dir: &Path,
+    lines: &[&str],
+) -> (Workbench, Arc<FakeClock>, Arc<ScriptedProvider>) {
+    let pack: PackDef = serde_json::from_value(json!({
+        "name":"supplemental","version":1,
+        "stages":[{"name":"完成","roles":["后端"],"due":[]}]
+    }))
+    .unwrap();
+    let mut wb = Workbench::for_test(dir, &["项目经理", "后端"], Some(pack)).unwrap();
+    wb.open_stage(0).unwrap();
+    assert!(matches!(
+        wb.advance().unwrap(),
+        orchestra::StageAction::PackFinished
+    ));
+    let clock = with_clock(&mut wb);
+    let decision = scripted(&mut wb, "decision", &["先不派活", "先不派活"]);
+    scripted(&mut wb, "default", lines);
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    (wb, clock, decision)
+}
+
+#[test]
+fn completed_pack_supplemental_reply_and_hold_settles_without_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, clock, decision) = completed_supplemental_fixture(dir.path(), &["plan", "observed"]);
+    owner_says(&wb, "@后端 inspect the page");
+    assert_eq!(turns(&wb, "后端"), 1);
+    assert_eq!(decision.recorded().len(), 1);
+    for _ in 0..3 {
+        clock.advance(PAST);
+        assert_eq!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+    }
+    assert!(stall_cards(&wb).is_empty());
+    assert_eq!(turns(&wb, "后端"), 1);
+    assert_eq!(decision.recorded().len(), 1);
+}
+
+#[test]
+fn completed_pack_silent_supplement_does_not_close_rescue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, clock, _) = completed_supplemental_fixture(dir.path(), &["plan", ""]);
+    owner_says(&wb, "@后端 inspect the page");
+    assert_ne!(wb.watch().status, crate::stallwatch::Status::Closed);
+    clock.advance(PAST);
+    assert_ne!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+}
+
+#[test]
+fn reopened_stage_invalidates_pack_finished_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, _, _) = completed_supplemental_fixture(dir.path(), &[]);
+    assert!(crate::stallwatch::pack_finished(&wb.db, &wb.project_id).unwrap());
+    wb.open_stage(0).unwrap();
+    assert!(!crate::stallwatch::pack_finished(&wb.db, &wb.project_id).unwrap());
+}
+
+#[test]
+fn completed_pack_open_todo_keeps_rescue_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, _, _) = completed_supplemental_fixture(dir.path(), &["plan", "observed"]);
+    owner_says(&wb, "@后端 inspect the page");
+    wb.watch().status = crate::stallwatch::Status::Open;
+    let aid = wb.agent_by_role("后端").unwrap();
+    wb.tasks.create_manual(&aid, "pending verification");
+    let owner_mark: i64 = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT MAX(id) FROM messages WHERE author='owner'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    wb.continue_after_turn(&aid, "后端", owner_mark).unwrap();
+    assert_eq!(wb.watch().status, crate::stallwatch::Status::Open);
+}

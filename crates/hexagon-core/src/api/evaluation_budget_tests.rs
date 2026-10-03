@@ -81,7 +81,7 @@ pub(super) fn waiting_budget(
 ) {
     let home = tempfile::tempdir().unwrap();
     let wb = Workbench::open_evaluation_host(home.path()).unwrap();
-    let mut request = super::evaluation_config_tests::request();
+    let mut request = super::evaluation_config_tests::control_only_request();
     request.limits.requests = request_limit;
     request.limits.run_mc = run_mc;
     let batch = wb.freeze_evaluation(&request, None).unwrap();

@@ -607,6 +607,18 @@ impl Workbench {
         self.creds = store;
     }
 
+    /// Project approval mode never changes coordinator autonomy or role ownership.
+    pub fn approval_mode(&self) -> Result<crate::approval_mode::ApprovalModeStatus, ApiError> {
+        Ok(crate::approval_mode::read(&self.db, &self.project_id)?)
+    }
+
+    pub fn set_approval_mode(
+        &self,
+        mode: crate::approval_mode::ApprovalMode,
+    ) -> Result<crate::approval_mode::ApprovalModeStatus, ApiError> {
+        set_approval_mode(&self.db, &self.project_id, mode)
+    }
+
     /// 自治读口。ADR 0069：不再返回可调档。离开时的放行是固定范围，
     /// 不是 L0–L4 里的一项。存储列仍给既有判定读，不从这扇门暴露。
     pub fn autonomy(&self) -> Result<&'static str, ApiError> {
@@ -625,7 +637,7 @@ impl Workbench {
         Ok(crate::publish::request(&self.db, &self.project_id, remote)?)
     }
 
-    /// 自然语言安装。L4 自动写入当前项目；L0–L3 只入队。
+    /// 自然语言安装：所有模式先确认解析后的新能力方案。
     pub fn request_install(&self, desc: &str) -> Result<String, ApiError> {
         Ok(crate::install::request_install(
             &self.db,
@@ -883,6 +895,13 @@ impl Workbench {
         // 卡表读写归 cards.rs（arch-review 票 04）；sub 分发也归它（票 05）
         let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Escalation)?;
         let pv = &card.payload;
+        // Owner Q5 / ticket 03: a binary escalation decision cannot select a
+        // versioned visual option. Both generic approve and reject must preserve it.
+        if pv["sub"] == "design_direction" {
+            return Err(ApiError::BadInput(
+                "choose a versioned design option or confirm existing guidance".into(),
+            ));
+        }
         if crate::cards::escalation_sub(&card) == crate::cards::EscalationSub::ContextOverflow {
             let role = pv["role"].as_str().unwrap_or_default().to_string();
             let resume_id = if agree {
@@ -1068,6 +1087,7 @@ impl Workbench {
             embedder: self.embedder.clone(),
             subagent_provider: None,
             reads: Default::default(),
+            manual_skill_invocations: Default::default(),
         }
     }
 
@@ -1251,6 +1271,48 @@ impl Workbench {
             self.pack.as_ref(),
             "owner",
         )?;
+        Ok(())
+    }
+
+    /// Desktop owner decisions resume the waiting instance with recorded results.
+    /// Evaluation drivers keep using answer_permission and own their next activation.
+    pub fn answer_permission_and_continue(
+        &self,
+        question_id: &str,
+        allow: bool,
+        remember_shape: Option<&str>,
+        scope: &str,
+    ) -> Result<(), ApiError> {
+        let card = crate::cards::get(&self.db, question_id)?;
+        self.answer_permission(question_id, allow, remember_shape, scope)?;
+        // Live acceptance 2026-10-01: approval executed the tool but silently left
+        // the agent idle. Restore observations, never replay the approved effect.
+        let aid = card
+            .agent_id
+            .ok_or_else(|| ApiError::BadInput("permission has no owner".into()))?;
+        let Some(action_id) = card.payload["action_id"].as_str() else {
+            return Ok(());
+        };
+        let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
+        let active = self.active_run()?.map(|r| r.id);
+        if action.stage_run_id != active {
+            return Ok(());
+        }
+        let boundary: i64 = self.db.conn().query_row(
+            "SELECT COALESCE(MAX(id), (SELECT MIN(id) FROM events WHERE project_id=?1 AND agent_id=?2
+               AND kind='turn_started' AND stage_run_id IS ?4),0) FROM events WHERE project_id=?1 AND agent_id=?2
+             AND stage_run_id IS ?4 AND kind='fastpath_dispatched' AND id <= (SELECT request_id FROM tool_actions WHERE id=?3 AND project_id=?1)",
+            rusqlite::params![self.project_id, aid, action_id, action.stage_run_id], |r| r.get(0))?;
+        let history = self.recorded_activation_history(&aid, boundary)?;
+        let instruction: Option<String> = self.db.conn().query_row(
+            "SELECT json_extract(payload,'$.instruction') FROM events WHERE project_id=?1 AND agent_id=?2
+             AND kind='turn_started' AND id <= (SELECT request_id FROM tool_actions WHERE id=?3 AND project_id=?1)
+             ORDER BY id DESC LIMIT 1", rusqlite::params![self.project_id, aid, action_id], |r| r.get(0))?;
+        let instruction = instruction
+            .as_deref()
+            .unwrap_or(crate::turn::RECOVERY_NUDGE);
+        let input = self.source_resume_input(&aid, None, active.as_deref(), instruction)?;
+        self.run_turn_agent_with_history(&aid, &input, &[], false, &history, true)?;
         Ok(())
     }
 
@@ -1577,6 +1639,49 @@ impl Workbench {
         self.run_turn_agent_with_history(aid, input, attachments, true, &[], followup)
     }
 
+    /// Dispatch a persisted owner message after the desktop workbench queue drains.
+    pub fn route_queued_owner(&self, message_id: i64) -> Result<UnnamedRoute, ApiError> {
+        let (body, attachments, elements): (String, String, String) = self.db.conn().query_row(
+            "SELECT body,attachments,element_refs FROM messages WHERE id=?1 AND project_id=?2 AND author='owner'",
+            rusqlite::params![message_id, self.project_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let elements: Vec<crate::browser_elements::ElementRef> = serde_json::from_str(&elements)?;
+        let attachments: Vec<crate::trace::AttachRef> = serde_json::from_str(&attachments)?;
+        // 2026-10-01 live acceptance #16: a message already injected into QA
+        // was queued again after handoff, overwriting accepted-stage artifacts.
+        // Prefer owner-visible retry over silently repeating work across stages.
+        // Steering currently sends text only; attachments still need full routing.
+        let mut query = self.db.conn().prepare(
+            "SELECT DISTINCT agent_id FROM events WHERE project_id=?1 AND kind='system' AND json_extract(payload,'$.kind')='steering_injected' AND json_extract(payload,'$.msg_id')=?2 AND agent_id IS NOT NULL",
+        )?;
+        // Issue13: typed page context, like images, needs full routing even when
+        // the owner text was already injected into a running turn.
+        let consumed = if attachments.is_empty() && elements.is_empty() {
+            query
+                .query_map(rusqlite::params![self.project_id, message_id], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        if !consumed.is_empty() {
+            crate::diag::note(
+                crate::diag::CLASS_JUDGE,
+                false,
+                Some(&self.project_id),
+                None,
+                None,
+                None,
+                "owner_queue",
+                "steering_already_injected",
+                std::time::Instant::now(),
+            );
+        }
+        self.route_body("owner", None, &body, &attachments, true, &consumed)
+    }
+
     /// 负责人发言的下一手（票 08 / 票 09 / ADR 0065）。
     ///
     /// 点名在任何档位都直接派给被点名者，不经过「先不派活」。没点名时，
@@ -1594,7 +1699,7 @@ impl Workbench {
         body: &str,
         attachments: &[crate::trace::AttachRef],
     ) -> Result<UnnamedRoute, ApiError> {
-        self.route_body("owner", None, body, attachments, true)
+        self.route_body("owner", None, body, attachments, true, &[])
     }
 
     fn route_body(
@@ -1604,6 +1709,7 @@ impl Workbench {
         body: &str,
         attachments: &[crate::trace::AttachRef],
         from_owner: bool,
+        consumed: &[String],
     ) -> Result<UnnamedRoute, ApiError> {
         if from_owner {
             if let Some(cmd) = crate::commands::parse_command(body) {
@@ -1665,7 +1771,10 @@ impl Workbench {
             }
             let mut dispatched = std::collections::HashSet::new();
             for (_, id) in &explicit {
-                if Some(id.as_str()) != speaker_id && dispatched.insert(id.clone()) {
+                if Some(id.as_str()) != speaker_id
+                    && !consumed.contains(id)
+                    && dispatched.insert(id.clone())
+                {
                     self.dispatch_instance(id, body, attachments)?;
                 }
             }
@@ -1712,6 +1821,11 @@ impl Workbench {
             );
             for role in &mentions {
                 let candidates = self.role_instances(role)?;
+                // Only this exact, unambiguous recipient consumed the message.
+                // Mentions of another role/instance must remain dispatchable.
+                if candidates.len() == 1 && consumed.contains(&candidates[0].0) {
+                    continue;
+                }
                 if matches!(self.agent_by_role(role), Err(ApiError::AmbiguousRole(_))) {
                     if candidates.is_empty() {
                         return Err(ApiError::NoProvider(role.clone()));
@@ -1762,6 +1876,9 @@ impl Workbench {
                 }
             }
             return Ok(UnnamedRoute::Mentioned { roles: mentions });
+        }
+        if !consumed.is_empty() {
+            return Ok(UnnamedRoute::Skipped);
         }
         // 建档后 stage_runs 为空（pending 只是读模型）。负责人没点名的开场白
         // 若直接做选择，局面是「没有进行中的阶段」，模型回先不派活，时间线上
@@ -1934,7 +2051,9 @@ impl Workbench {
             body,
         );
         let prompt = if let Some(instances) = instances {
-            format!("Select exactly one agent instance ID from this list: {instances:?}. Return only its ID, no tools or HOLD. The owner named this role: {body}")
+            format!(
+                "Select exactly one agent instance ID from this list: {instances:?}. Return only its ID, no tools or HOLD. The owner named this role: {body}"
+            )
         } else {
             prompt
         };
@@ -2134,13 +2253,110 @@ impl Workbench {
             log::warn!("dispatch chain stopped at {DISPATCH_CHAIN_CAP} after {role}");
             return Ok(UnnamedRoute::Skipped);
         };
+        // Live acceptance 2026-10-01: routing alone kept redispatching finished
+        // roles forever. Reuse the authoritative evidence/stamp gate before
+        // choosing another role; a model saying "done" never grants approval.
+        // Evaluation turns opt out of this handoff because their cursor owns it.
+        let mut quality_failures = Vec::new();
+        if self.pack.is_some() && self.active_run()?.is_some() {
+            let started = std::time::Instant::now();
+            let action = self.advance()?;
+            let waiting = matches!(
+                action,
+                orchestra::StageAction::AwaitingStamp { .. }
+                    | orchestra::StageAction::WaitingStamp { .. }
+                    | orchestra::StageAction::PackFinished
+            );
+            crate::diag::note(
+                crate::diag::CLASS_JUDGE,
+                false,
+                Some(&self.project_id),
+                Some(aid),
+                self.active_run()?.as_ref().map(|run| run.id.as_str()),
+                None,
+                "stage_handoff",
+                if waiting {
+                    "await_owner_or_finished"
+                } else {
+                    "continue"
+                },
+                started,
+            );
+            if waiting {
+                return Ok(UnnamedRoute::Skipped);
+            }
+            if let Some(evidence) = self.stage_evidence()? {
+                for check in evidence.checks {
+                    if !evidence.missing.contains(&format!("check:{}", check.cmd)) {
+                        continue;
+                    }
+                    if let Some(quality) = check.quality {
+                        quality_failures.push(json!({"category":quality.category,"reason":quality.reason,
+                            "event_id":check.event_id,"baseline_ms":quality.baseline_ms,"measured_ms":quality.measured_ms}));
+                    }
+                }
+            }
+        }
         let text = self.text_since(aid, watermark)?;
-        let body = if text.trim().is_empty() {
+        let replied = !text.trim().is_empty();
+        let mut body = if !replied {
             "（没有可见回复）".to_string()
         } else {
             text
         };
-        self.route_body(role, Some(aid), &body, &[], false)
+        // Ticket04: the coordinator receives host evidence, not an agent's
+        // self-reported success. Missing runners need a declared check or an
+        // explicit owner exception; regression needs repair and same-runner retest.
+        if !quality_failures.is_empty() {
+            body.push_str("\n[Host quality gate: delivery remains blocked. Diagnose and delegate repairs/retests; missing configuration requires an owner decision. Evidence: ");
+            body.push_str(&serde_json::to_string(&quality_failures)?);
+            body.push(']');
+        }
+        let route = self.route_body(role, Some(aid), &body, &[], false, &[])?;
+        // Live acceptance 2026-10-01: PM HOLD after a completed pack's
+        // successful one-off observation is normal rest, not idle spin.
+        // Keep Silent/error rescue and unfinished-pack HOLD semantics unchanged.
+        let finished_pack =
+            self.pack.is_some() && crate::stallwatch::pack_finished(&self.db, &self.project_id)?;
+        if finished_pack && matches!(route, UnnamedRoute::Held { .. }) {
+            let started = std::time::Instant::now();
+            let new_owner: bool = self.db.conn().query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND author='owner' AND id>?2)",
+                rusqlite::params![self.project_id, watermark], |row| row.get(0),
+            )?;
+            let tool_failed: bool = self.db.conn().query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
+                 AND kind='tool_result' AND id>COALESCE((SELECT MAX(id) FROM events
+                    WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started'),0)
+                 AND (json_extract(payload,'$.ok')=0 OR json_extract(payload,'$.state')='unknown'))",
+                rusqlite::params![self.project_id, aid], |row| row.get(0),
+            )?;
+            let outstanding = crate::stallwatch::owner_waits(&self.db, &self.project_id)?
+                || self.tasks.any_unfinished()
+                || new_owner
+                || tool_failed;
+            let settled =
+                crate::stallwatch::supplemental_settled(finished_pack, replied, true, outstanding);
+            if settled {
+                self.watch().status = crate::stallwatch::Status::Closed;
+            }
+            crate::diag::note(
+                crate::diag::CLASS_JUDGE,
+                false,
+                Some(&self.project_id),
+                Some(aid),
+                None,
+                None,
+                "stall_supplemental",
+                if settled {
+                    "completed_pack_reply_held"
+                } else {
+                    "unfinished_or_silent"
+                },
+                started,
+            );
+        }
+        Ok(route)
     }
 
     fn message_high_water(&self) -> Result<i64, ApiError> {
@@ -2307,6 +2523,7 @@ impl Workbench {
     }
 
     pub fn advance(&self) -> Result<orchestra::StageAction, ApiError> {
+        orchestra::run_quality_checks(&self.db, &self.project_id, &self.repo_root, self.pack()?)?;
         Ok(orchestra::advance(
             &self.db,
             &self.project_id,
@@ -3492,3 +3709,388 @@ mod evaluation_billing_tests;
 
 #[cfg(test)]
 mod evaluation_review_tests;
+
+/// Read-only platform readiness; project approval is a separate gate.
+pub fn desktop_permissions(library: &std::path::Path) -> crate::desktop::DesktopPermissions {
+    crate::desktop::permissions(library)
+}
+
+pub fn desktop_settings_url(permission: crate::desktop::DesktopPermission) -> &'static str {
+    crate::desktop::settings_url(permission)
+}
+
+/// Desktop read lane; never takes the long-running turn lock.
+pub fn desktop_status(db: &Db, root: &Path) -> Result<crate::desktop::DesktopStatus, String> {
+    crate::desktop::actions::status(db, root)
+}
+
+pub fn desktop_initialize(library: &Path) -> Result<(), String> {
+    crate::desktop::actions::initialize(library)
+}
+
+pub fn desktop_screenshot(
+    _db: &Db,
+    root: &Path,
+    name: &str,
+    expected_project_root: &str,
+) -> Result<crate::desktop::DesktopScreenshot, String> {
+    // Issue 11: p1 is not a workspace identity; check the persisted evidence root
+    // under the shell connection lock before resolving the restricted basename.
+    desktop_check_project(root, expected_project_root)?;
+    crate::desktop::actions::screenshot(root, name)
+}
+
+/// Owner-only control lane. Enable explicitly consents to screen transmission
+/// to the selected model; it does not authorize any subsequent GUI mutation.
+pub fn desktop_control(
+    db: &Db,
+    root: &Path,
+    action: crate::desktop::DesktopControl,
+) -> Result<crate::desktop::DesktopStatus, String> {
+    crate::desktop::actions::control(db, root, action)
+}
+
+#[cfg(test)]
+pub(crate) fn desktop_permissions_for_test(
+    bits: Result<u32, String>,
+    supported: bool,
+) -> crate::desktop::DesktopPermissions {
+    crate::desktop::decode(bits, supported)
+}
+
+#[cfg(test)]
+mod approval_mode_tests;
+
+#[cfg(test)]
+mod skill_discovery_tests;
+
+pub fn desktop_request_permission(
+    path: &std::path::Path,
+    permission: crate::desktop::DesktopPermission,
+) -> Result<(), String> {
+    crate::desktop::request_permission(path, permission)
+}
+
+/// Read-only facade for the desktop read lane; never acquires the turn lock.
+pub fn approval_mode(
+    db: &Db,
+    project_id: &str,
+) -> Result<crate::approval_mode::ApprovalModeStatus, ApiError> {
+    Ok(crate::approval_mode::read(db, project_id)?)
+}
+
+/// Owner control lane: switching access must not wait for a running turn.
+pub fn set_approval_mode(
+    db: &Db,
+    project_id: &str,
+    mode: crate::approval_mode::ApprovalMode,
+) -> Result<crate::approval_mode::ApprovalModeStatus, ApiError> {
+    let tx = db.conn().unchecked_transaction()?;
+    let status = crate::approval_mode::set(db, project_id, mode)?;
+    db.append_event(
+        project_id,
+        crate::trace::EventKind::System,
+        serde_json::json!({ "kind": "approval_mode_changed", "mode": status.mode }),
+        None,
+        None,
+    )?;
+    tx.commit()?;
+    Ok(status)
+}
+
+/// Shell keeps its project lock across identity validation and mode persistence.
+/// Review 2026-10-01: all local DBs share PROJECT_ID, so that ID cannot prevent
+/// a queued broad-access click from project A modifying project B after switch.
+pub fn set_project_approval_mode(
+    db: &Db,
+    project_id: &str,
+    root: &Path,
+    expected_root: &str,
+    mode: crate::approval_mode::ApprovalMode,
+) -> Result<crate::approval_mode::ApprovalModeStatus, ApiError> {
+    let started = std::time::Instant::now();
+    if crate::desktop::actions::verify_project(root, expected_root).is_err() {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(project_id),
+            None,
+            None,
+            None,
+            "approval_mode",
+            "workspace_changed",
+            started,
+        );
+        return Err(ApiError::BadInput("approval mode workspace changed".into()));
+    }
+    let mut status = set_approval_mode(db, project_id, mode)?;
+    status.project_root = Some(expected_root.to_string());
+    Ok(status)
+}
+
+/// Read-only suggested rule from the actual queued action; never persists it.
+pub fn permission_shape_suggestion(
+    db: &Db,
+    project_id: &str,
+    question_id: &str,
+) -> Result<Option<crate::permission_suggestion::PermissionShapeSuggestion>, ApiError> {
+    let started = std::time::Instant::now();
+    let card = crate::cards::get_queued(db, question_id, crate::cards::CardKind::Permission)?;
+    if card.project_id != project_id {
+        return Err(ApiError::BadInput(
+            "permission card project mismatch".into(),
+        ));
+    }
+    let Some(agent_id) = card.agent_id else {
+        return Ok(None);
+    };
+    let Some(tool) = card.payload["tool"].as_str() else {
+        return Ok(None);
+    };
+    let input = if card.payload["raw_input"].is_null() {
+        &card.payload["input"]
+    } else {
+        &card.payload["raw_input"]
+    };
+    // A redacted display must not be expanded back into a secret-bearing rule.
+    if !card.payload["input"].is_null() && card.payload["input"] != *input {
+        return Ok(None);
+    }
+    let proposal = if card.payload["safety_net"] == true {
+        None
+    } else {
+        crate::permission_suggestion::suggest(tool, input)
+    };
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(project_id),
+        Some(&agent_id),
+        None,
+        None,
+        "permission_shape_suggestion",
+        if proposal.is_some() {
+            "suggested"
+        } else {
+            "unavailable"
+        },
+        started,
+    );
+    Ok(proposal.map(|(shape, generalized)| {
+        crate::permission_suggestion::PermissionShapeSuggestion {
+            shape,
+            generalized,
+            tool: tool.into(),
+            project_id: project_id.into(),
+            agent_id,
+        }
+    }))
+}
+#[cfg(test)]
+mod permission_suggestion_tests;
+
+#[cfg(test)]
+mod quality_tests;
+
+/// Immutable visual options and the owner's current project direction.
+pub fn design_direction(
+    db: &Db,
+    project_id: &str,
+) -> Result<crate::design::DesignDirection, ApiError> {
+    Ok(crate::design::read(db, project_id)?)
+}
+
+/// Owner control lane only. No agent tool exposes this operation.
+pub fn choose_design_direction(
+    db: &Db,
+    project_id: &str,
+    question_id: &str,
+    revision: i64,
+    option_id: Option<&str>,
+    existing_guidance: Option<&str>,
+) -> Result<crate::design::DesignDirection, ApiError> {
+    Ok(crate::design::choose(
+        db,
+        project_id,
+        question_id,
+        revision,
+        option_id,
+        existing_guidance,
+    )?)
+}
+
+#[cfg(test)]
+mod design_tests;
+
+#[cfg(test)]
+pub(crate) fn desktop_request_allowed_for_test(
+    db: &Db,
+    request: &crate::provider::ChatRequest,
+) -> bool {
+    crate::turn::desktop_request_allowed(db, request)
+}
+#[cfg(test)]
+mod desktop_transmission_tests;
+
+#[cfg(test)]
+mod desktop_actions_tests;
+
+#[cfg(test)]
+mod host_scope_tests;
+
+/// Validate the UI workspace identity while the shell retains its project lock.
+pub fn desktop_check_project(root: &Path, expected: &str) -> Result<(), String> {
+    crate::desktop::actions::verify_project(root, expected)
+}
+
+/// Live acceptance 2026-10-01: abandoning uncertainty is a DB-only owner
+/// decision, not tool execution; waiting for a whole model turn delayed it minutes.
+/// The shell holds its control connection lock across identity check and write.
+/// Fail closed: a false negative costs a retry; a false positive resolves another
+/// project's card without its owner's intent. Project IDs alone are not unique.
+pub fn abandon_tool_action_control(
+    db: &Db,
+    project_id: &str,
+    root: &Path,
+    expected_root: &str,
+    action_id: &str,
+    reason: &str,
+) -> Result<(), ApiError> {
+    let started = std::time::Instant::now();
+    if crate::desktop::actions::verify_project(root, expected_root).is_err() {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(project_id),
+            None,
+            None,
+            None,
+            "action_resolution",
+            "workspace_changed",
+            started,
+        );
+        return Err(ApiError::BadInput(
+            "action resolution workspace changed".into(),
+        ));
+    }
+    Ok(crate::actions::abandon(db, project_id, action_id, reason)?)
+}
+
+/// Owner Agent Screen preview: current-project read, independent of model turns.
+pub fn desktop_preview_target(
+    db: &Db,
+    root: &Path,
+    expected_root: &str,
+) -> Result<Option<crate::desktop::preview::NativePreviewTarget>, String> {
+    desktop_check_project(root, expected_root)?;
+    crate::desktop::preview::target(db, root)
+}
+pub fn desktop_preview_validate(
+    db: &Db,
+    root: &Path,
+    expected_root: &str,
+    window: u32,
+    process: i32,
+) -> Result<crate::desktop::preview::NativePreviewTarget, String> {
+    crate::desktop::preview::require_target(db, root, expected_root, window, process)
+}
+pub fn desktop_preview(
+    target: &crate::desktop::preview::NativePreviewTarget,
+) -> Result<crate::desktop::preview::NativePreviewFrame, String> {
+    crate::desktop::preview::frame(target)
+}
+pub fn desktop_preview_stop() -> Result<(), String> {
+    crate::desktop::preview::stop()
+}
+pub fn desktop_preview_focus(
+    target: &crate::desktop::preview::NativePreviewTarget,
+) -> Result<(), String> {
+    crate::desktop::preview::focus(target)
+}
+
+pub fn browser_initialize(node: &Path, worker: &Path) -> Result<(), String> {
+    crate::browser::initialize(node, worker)
+}
+pub fn browser_status(root: &Path) -> Result<Option<crate::browser::BrowserSession>, String> {
+    crate::browser::refresh_status(root)
+}
+pub fn browser_open(
+    root: &Path,
+    mode: crate::browser::BrowserMode,
+    labels: crate::browser::BrowserLabels,
+) -> Result<crate::browser::BrowserSession, String> {
+    crate::browser::open(root, mode, labels)
+}
+pub fn browser_detach(root: &Path, session_id: &str) -> Result<(), String> {
+    crate::browser::detach(root, session_id)
+}
+pub fn browser_focus(root: &Path, session_id: &str) -> Result<(), String> {
+    crate::browser::focus(root, session_id)
+}
+pub fn browser_preview(
+    root: &Path,
+    session_id: &str,
+) -> Result<crate::browser::BrowserPreview, String> {
+    crate::browser::preview(root, session_id)
+}
+pub fn browser_close_project(root: &Path) {
+    crate::browser::close_project(root)
+}
+
+// Issue 15, owner Q1–Q6 (2026-10-02): all workspaces use p1. The root must
+// be checked under the read connection lock before labeling any history response.
+fn check_timeline_project(root: &Path, expected: &str) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    if let Err(error) = crate::desktop::actions::verify_project(root, expected) {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            None,
+            "timeline_read",
+            "workspace_changed",
+            started,
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+pub fn timeline_window(
+    db: &Db,
+    root: &Path,
+    request: &crate::trace::window::TimelineWindowRequest,
+) -> Result<crate::trace::window::TimelineWindowPage, String> {
+    check_timeline_project(root, &request.expected_project_root)?;
+    crate::trace::window::window(db, crate::PROJECT_ID, request)
+}
+pub fn timeline_facts(
+    db: &Db,
+    root: &Path,
+    request: &crate::trace::window::TimelineFactsRequest,
+) -> Result<crate::trace::window::TimelineFacts, String> {
+    check_timeline_project(root, &request.expected_project_root)?;
+    crate::trace::window::facts(db, crate::PROJECT_ID, request)
+}
+pub fn timeline_nodes(
+    db: &Db,
+    root: &Path,
+    request: &crate::trace::window::TimelineNodesRequest,
+) -> Result<crate::trace::window::TimelineNodesPage, String> {
+    check_timeline_project(root, &request.expected_project_root)?;
+    crate::trace::window::nodes(db, crate::PROJECT_ID, request)
+}
+
+#[cfg(test)]
+#[path = "api/timeline_window_tests.rs"]
+mod timeline_window_tests;
+
+pub fn timeline_window_metadata(
+    db: &Db,
+    root: &Path,
+    request: &crate::trace::window::TimelineWindowMetadataRequest,
+) -> Result<crate::trace::window::TimelineWindowMetadata, String> {
+    check_timeline_project(root, &request.expected_project_root)?;
+    crate::trace::window::metadata(db, crate::PROJECT_ID, request)
+}

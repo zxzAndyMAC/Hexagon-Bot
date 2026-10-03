@@ -124,7 +124,31 @@ pub fn send_via_control(
     body: &str,
     attachments: &[crate::trace::AttachRef],
 ) -> Result<(i64, Option<TextCommand>), RouteError> {
-    let (id, cmd) = send_message_side(db, project_id, body, attachments)?;
+    send_via_control_with_elements(db, project_id, body, attachments, &[])
+}
+
+/// Browser page strings stay in typed attachments; only the owner body is parsed
+/// for commands, mentions and explicit skill invocations (issue13, 2026-10-02).
+pub fn send_via_control_with_elements(
+    db: &Db,
+    project_id: &str,
+    body: &str,
+    attachments: &[crate::trace::AttachRef],
+    elements: &[crate::browser_elements::ElementRef],
+) -> Result<(i64, Option<TextCommand>), RouteError> {
+    let tokens = parse_tokens(body);
+    let id = db.append_message_with_elements(
+        project_id,
+        "owner",
+        body,
+        &tokens,
+        attachments,
+        None,
+        None,
+        None,
+        elements,
+    )?;
+    let cmd = parse_command(body);
     let rest = match cmd {
         Some(TextCommand::Pause) => {
             crate::orchestra::pause(db, project_id)?;

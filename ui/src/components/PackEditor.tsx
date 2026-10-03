@@ -61,6 +61,14 @@ export function PackEditor({ onClose }: { onClose: () => void }) {
         for (const s of pack.stages ?? []) {
           y += `  - name: ${s.name}\n    roles: ${list(s.roles)}\n    due: ${list(s.due)}\n`
           if (s.checks?.length) y += `    checks: ${list(s.checks)}\n`
+          // Owner 2026-10-01: dropping this map loses the explicit quality
+          // contract; quote commands so colons, quotes and newlines survive YAML.
+          if (s.quality_checks && Object.keys(s.quality_checks).length) {
+            y += '    quality_checks:\n'
+            for (const [category, command] of Object.entries(s.quality_checks)) {
+              y += `      ${JSON.stringify(category)}: ${JSON.stringify(command)}\n`
+            }
+          }
           if (s.reviews?.length) {
             y += '    reviews:\n'
             for (const r of s.reviews) y += `      - artifact_kind: ${r.artifact_kind}\n        reviewer: ${r.reviewer}\n`
@@ -118,6 +126,8 @@ export function PackEditor({ onClose }: { onClose: () => void }) {
           )}
         </div>
         <div className="dim3" style={{ fontSize: 10, margin: '4px 0 8px' }}>{t('pack.hint')}</div>
+        <p className="dim3" style={{ fontSize: 12 }}>{t('pack.qualityHint')}</p>
+        <code>{'{"quality_checks": {"tests": "npm test"}}'}</code>
         {err && <div className="chip err" style={{ display: 'block', fontSize: 11, marginBottom: 8 }}>{err}</div>}
         {msg && <div className="chip ok" style={{ display: 'inline-block', fontSize: 11, marginBottom: 8 }}>{msg}</div>}
         <textarea

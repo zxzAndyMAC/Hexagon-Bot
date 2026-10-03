@@ -5,7 +5,7 @@ fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
     let db = Db::open_in_memory().unwrap();
     db.conn()
         .execute(
-            // ADR 0069：列写成 L0 也不再排队。仍必问的只剩基线合入、远程发布、内置永不。
+            // Owner 2026-10-01 Q10: rank does not override restricted approval defaults.
             "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p1','/tmp/x','x','pack','L0')",
             [],
         )
@@ -29,6 +29,22 @@ fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
         ..Default::default()
     };
     (db, Registry::builtin(), ctx, dir)
+}
+
+// Owner 2026-10-01 Q3/Q10 removed the L4 bypass. These execution fixtures
+// must answer the real queued card, without installing blanket allow rules.
+fn approve_queued(
+    reg: &Registry,
+    db: &Db,
+    ctx: &ToolContext,
+    outcome: CallOutcome,
+    remember: Option<&str>,
+) -> CallOutcome {
+    let CallOutcome::Asked(id) = outcome else {
+        panic!("expected owner approval: {outcome:?}");
+    };
+    reg.resolve(db, ctx, &id, true, remember, "project", None, "owner")
+        .unwrap()
 }
 
 #[test]
@@ -118,12 +134,13 @@ fn ready_merge(dir: &std::path::Path) {
 }
 
 #[test]
-fn bash_new_ask_runs_and_baseline_merge_still_asks() {
+fn bash_runs_after_owner_approval_and_baseline_merge_still_asks() {
     let (db, reg, ctx, dir) = setup();
-    // 新询问按原先 L4 直接执行，不再排队。
+    // Q10: routine shell side effects wait for one explicit owner decision.
     let out = reg
         .call(&db, &ctx, "bash", json!({"cmd": "echo hi > out.txt"}))
         .unwrap();
+    let out = approve_queued(&reg, &db, &ctx, out, None);
     let CallOutcome::Done(v) = out else {
         panic!("{out:?}")
     };
@@ -572,13 +589,13 @@ fn safety_net_ask_survives_any_memory() {
     let out = reg
         .call(&db, &ctx, "bash", json!({"cmd": "git push origin main"}))
         .unwrap();
-    // 安全网按原先 L4 放行。记忆里的 allow 不是放行理由，也不会因此再写一条规则。
-    assert!(matches!(out, CallOutcome::Done(_)), "{out:?}");
+    // Owner Q3: critical operations always ask, even with a matching allow.
+    assert!(matches!(out, CallOutcome::Asked(_)), "{out:?}");
     let n: i64 = db
         .conn()
         .query_row("SELECT COUNT(*) FROM permission_rules", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 1, "放行不新增记忆规则");
+    assert_eq!(n, 1, "安全网询问不新增记忆规则");
 }
 
 // ---- agent-senses 票 01：web_fetch ----
@@ -624,10 +641,11 @@ fn web_fetch_asks_then_extracts_text() {
              <body><h1>Title</h1><p>Hello &amp; bye</p></body></html>",
         )]
     });
-    // 新域名按原先 L4 直接取，不再排队。
+    // Owner Q10: a new domain needs a real approval before HTTP dispatch.
     let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": url}))
         .unwrap();
+    let out = approve_queued(&reg, &db, &ctx, out, None);
     let CallOutcome::Done(v) = out else {
         panic!("{out:?}")
     };
@@ -653,7 +671,12 @@ fn web_fetch_remembered_domain_skips_ask() {
     let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": format!("{base}/a")}))
         .unwrap();
-    assert!(matches!(out, CallOutcome::Done(_)), "{out:?}");
+    // The first real owner decision creates the rule being tested below.
+    let out = approve_queued(&reg, &db, &ctx, out, Some("*@127.0.0.1"));
+    let CallOutcome::Done(first) = out else {
+        panic!("{out:?}")
+    };
+    assert_eq!(first["content"], "a");
     let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": format!("{base}/b")}))
         .unwrap();
@@ -661,6 +684,7 @@ fn web_fetch_remembered_domain_skips_ask() {
         panic!("remembered domain should allow: {out:?}")
     };
     assert_eq!(v["status"], 200);
+    assert_eq!(v["content"], "b");
     // 寄生域不命中：形状 *@127.0.0.1 不覆盖 127.0.0.1.evil.test
     assert!(!crate::permissions::shape_matches(
         "*@127.0.0.1",
@@ -709,10 +733,12 @@ fn web_fetch_redirect_not_followed_each_hop_asks() {
     let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": target}))
         .unwrap();
-    assert!(
-        matches!(out, CallOutcome::Done(_)),
-        "redirect hop is a new ask and releases: {out:?}"
-    );
+    let out = approve_queued(&reg, &db, &ctx, out, None);
+    let CallOutcome::Done(value) = out else {
+        panic!("{out:?}")
+    };
+    assert_eq!(value["status"], 200);
+    assert_eq!(value["content"], "page-b");
 }
 
 #[test]
@@ -734,6 +760,7 @@ fn web_fetch_denies_non_http_and_rejects_binary() {
     let out = reg
         .call(&db, &ctx, "web_fetch", json!({"url": url}))
         .unwrap();
+    let out = approve_queued(&reg, &db, &ctx, out, None);
     let CallOutcome::Done(v) = out else {
         panic!("{out:?}")
     };
@@ -755,9 +782,13 @@ fn web_fetch_absent_from_subagent_registry() {
 
 // ---------- 票 05：会话化终端（ADR 0058-3）----------
 
-/// 新询问直接执行。基线合入仍走必问，不经过这里。
+/// Session fixtures explicitly approve each queued shell action (owner Q10).
 fn bash_pipe(reg: &Registry, db: &Db, ctx: &ToolContext, input: Value) -> Value {
     let out = reg.call(db, ctx, "bash", input).unwrap();
+    let out = match out {
+        CallOutcome::Asked(_) => approve_queued(reg, db, ctx, out, None),
+        other => other,
+    };
     let CallOutcome::Done(v) = out else {
         panic!("expected run: {out:?}")
     };

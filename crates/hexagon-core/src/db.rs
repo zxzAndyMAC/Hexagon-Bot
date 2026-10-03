@@ -197,6 +197,34 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0048_evaluation_billing",
         include_str!("../migrations/0048_evaluation_billing.sql"),
     ),
+    (
+        "0049_approval_mode",
+        include_str!("../migrations/0049_approval_mode.sql"),
+    ),
+    (
+        "0050_permission_rule_agent",
+        include_str!("../migrations/0050_permission_rule_agent.sql"),
+    ),
+    (
+        "0051_design_directions",
+        include_str!("../migrations/0051_design_directions.sql"),
+    ),
+    (
+        "0052_quality_baselines",
+        include_str!("../migrations/0052_quality_baselines.sql"),
+    ),
+    (
+        "0053_permission_execution_scope",
+        include_str!("../migrations/0053_permission_execution_scope.sql"),
+    ),
+    (
+        "0054_browser_element_refs",
+        include_str!("../migrations/0054_browser_element_refs.sql"),
+    ),
+    (
+        "0055_timeline_receipt_indexes",
+        include_str!("../migrations/0055_timeline_receipt_indexes.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

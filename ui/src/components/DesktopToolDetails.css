@@ -1,0 +1,9 @@
+.desktop-tool-details .desktop-screenshot-thumbnail { display: flex; align-items: center; justify-content: center; width: min(240px, 100%); height: 140px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); color: var(--text-2); cursor: zoom-in; }
+.desktop-tool-details .desktop-screenshot-thumbnail img { width: 100%; height: 100%; object-fit: contain; border: 0; }
+.desktop-tool-details figcaption { margin-top: 4px; color: var(--text-2); font-size: 11px; overflow-wrap: anywhere; }
+.desktop-screenshot-thumbnail:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+.desktop-screenshot-preview { width: min(1400px, 94vw); max-width: 94vw; max-height: 94vh; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); color: var(--text); }
+.desktop-screenshot-preview::backdrop { background: rgba(0, 0, 0, .65); }
+.desktop-screenshot-preview header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.desktop-screenshot-preview header button { flex-shrink: 0; }
+.desktop-tool-details .desktop-screenshot-preview img { display: block; width: 100%; max-height: calc(90vh - 80px); object-fit: contain; border: 0; }

@@ -31,38 +31,7 @@ pub(crate) fn capture(
     required: &[String],
 ) -> io::Result<String> {
     let root = root.canonicalize()?;
-    let mut inputs = Inputs {
-        root: &root,
-        files: BTreeMap::new(),
-        bytes: 0,
-    };
-    inputs.collect(&root, false)?;
-    // --cached ignores ignore rules; -z preserves spaces/newlines without Git
-    // quoting. Disable fsmonitor so a repository hook is never run while reading.
-    if root.ancestors().any(|p| p.join(".git").exists()) {
-        let out = std::process::Command::new("git")
-            .args(["-c", "core.fsmonitor=false", "ls-files", "--cached", "-z"])
-            .current_dir(&root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_CONFIG_COUNT")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env(
-                "GIT_CONFIG_GLOBAL",
-                if cfg!(windows) { "NUL" } else { "/dev/null" },
-            )
-            .output()?;
-        if !out.status.success() {
-            return Err(io::Error::other("cannot enumerate tracked check inputs"));
-        }
-        for path in out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-            let path = std::str::from_utf8(path).map_err(io::Error::other)?;
-            if !host_path(Path::new(path)) {
-                inputs.collect(&root.join(path), true)?;
-            }
-        }
-    }
+    let mut inputs = source_inputs(&root)?;
     let mut query=db.conn().prepare("SELECT id,path,kind,author_agent_id,version FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND status IN ('valid','stamped') AND kind IN (SELECT value FROM json_each(?3)) ORDER BY id").map_err(io::Error::other)?;
     let required = serde_json::to_string(required).map_err(io::Error::other)?;
     let artifacts = query
@@ -87,6 +56,49 @@ pub(crate) fn capture(
     }
     let bytes = serde_json::to_vec(&(1, inputs.files, artifacts)).map_err(io::Error::other)?;
     Ok(format!("v1:{:x}", Sha256::digest(bytes)))
+}
+
+/// Same source inventory as delivery fingerprints, without artifact metadata.
+/// Quality scopes must not use a weaker ignore/glob view than acceptance.
+pub(crate) fn source_manifest(root: &Path) -> io::Result<BTreeMap<String, (String, u32)>> {
+    let root = root.canonicalize()?;
+    Ok(source_inputs(&root)?.files)
+}
+
+fn source_inputs(root: &Path) -> io::Result<Inputs<'_>> {
+    let mut inputs = Inputs {
+        root,
+        files: BTreeMap::new(),
+        bytes: 0,
+    };
+    inputs.collect(root, false)?;
+    // --cached ignores ignore rules; -z preserves spaces/newlines without Git
+    // quoting. Disable fsmonitor so a repository hook is never run while reading.
+    if root.ancestors().any(|p| p.join(".git").exists()) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "core.fsmonitor=false", "ls-files", "--cached", "-z"])
+            .current_dir(root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_CONFIG_COUNT")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .output()?;
+        if !out.status.success() {
+            return Err(io::Error::other("cannot enumerate tracked check inputs"));
+        }
+        for path in out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+            let path = std::str::from_utf8(path).map_err(io::Error::other)?;
+            if !host_path(Path::new(path)) {
+                inputs.collect(&root.join(path), true)?;
+            }
+        }
+    }
+    Ok(inputs)
 }
 
 fn host_path(path: &Path) -> bool {

@@ -1,0 +1,23 @@
+.approval-mode { position: relative; flex-shrink: 0; }
+.approval-mode-trigger { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid transparent; border-radius: var(--r-md); background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+.approval-mode-trigger:hover { background: var(--bg-3); color: var(--text); }
+.approval-mode-trigger:disabled { opacity: .5; cursor: default; }
+.approval-mode-trigger:focus-visible, .approval-mode-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.approval-mode-menu { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40; width: min(340px, calc(100vw - 48px)); padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--popover);  }
+.approval-mode-option { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.approval-mode-option:hover, .approval-mode-option[aria-checked="true"] { background: var(--bg-3); }
+.approval-mode-option:disabled { cursor: wait; opacity: .6; }
+.approval-mode-option-copy { flex: 1; display: grid; gap: 4px; }
+.approval-mode-option-copy strong { font-size: 13px; font-weight: 500; }
+.approval-mode-option-copy > span, .approval-mode-boundary, .approval-mode-error { font-size: 12px; line-height: 1.5; color: var(--text-2); }
+.approval-mode-boundary { border-top: 1px solid var(--border); margin: 6px 4px 0; padding: 10px 6px 4px; }
+.approval-mode-error { padding: 4px 10px; color: var(--err); }
+
+.approval-mode-menu-below { bottom: auto; top: calc(100% + 8px); }
+
+.approval-mode-broad, .approval-mode-broad:hover { color: var(--accent); border-color: var(--accent-border); background: var(--accent-soft); }
+.approval-mode-confirm { max-height: calc(100dvh - 48px); overflow: auto; width: min(440px, calc(100vw - 48px)); padding: 20px; color: var(--text); background: var(--popover); border: 1px solid var(--accent-border); border-radius: var(--r-lg); }
+.approval-mode-confirm::backdrop { background: var(--bg-2); opacity: .75; }
+.approval-mode-confirm h2 { display: flex; align-items: center; gap: 8px; color: var(--accent); font-size: 16px; margin: 0; }
+.approval-mode-confirm p { font-size: 13px; line-height: 1.6; color: var(--text-2); }
+.approval-mode-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }

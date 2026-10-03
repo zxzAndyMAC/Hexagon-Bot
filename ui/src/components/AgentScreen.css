@@ -1,0 +1,16 @@
+.agent-screen { position: fixed; z-index: 45; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--popover); color: var(--text); overflow: hidden; }
+.agent-screen header { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.agent-screen header button { border: 0; background: transparent; color: var(--text-2); cursor: pointer; padding: 4px; }
+.agent-screen .agent-screen-drag { display: flex; align-items: center; gap: 7px; cursor: grab; touch-action: none; flex: 1; text-align: left; font-size: 12px; }
+.agent-screen .agent-screen-drag:active { cursor: grabbing; }
+.agent-screen-picture { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 9; padding: 0; border: 0; color: var(--text-2); background: var(--bg-2); cursor: zoom-in; font-size: 12px; }
+.agent-screen-picture img { width: 100%; height: 100%; object-fit: contain; }
+.agent-screen-expanded .agent-screen-picture { cursor: zoom-out; }
+.agent-screen-caption { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px 0; font-size: 10px; color: var(--text-2); }
+.agent-screen-caption span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-screen-caption span:last-child { flex-shrink: 0; }
+.agent-screen footer { display: flex; justify-content: space-between; padding: 8px; gap: 6px; }
+.agent-screen footer .btn { font-size: 11px; }
+.agent-screen select { width: calc(100% - 16px); margin: 6px 8px; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-md); }
+.agent-screen-reopen { margin-left: auto; display: flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--popover); color: var(--text-2); padding: 7px 10px; font-size: 11px; cursor: pointer; }
+.agent-screen button:focus-visible, .agent-screen-reopen:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

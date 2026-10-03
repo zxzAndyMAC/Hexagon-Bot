@@ -5,7 +5,6 @@ use crate::tools::CallOutcome;
 
 impl Workbench {
     pub(super) fn evaluation_resume_history(&self, aid: &str) -> Result<Vec<Message>, ApiError> {
-        let started = std::time::Instant::now();
         // 2026-09-28 live pilot: a generic "continue" lost the original task,
         // successful interpreter result and three owner guidance messages. Do
         // not replay calls or insert trace text as owner instructions. Rebuild
@@ -18,6 +17,15 @@ impl Workbench {
             rusqlite::params![self.project_id, aid],
             |r| r.get(0),
         )?;
+        self.recorded_activation_history(aid, dispatch)
+    }
+
+    pub(super) fn recorded_activation_history(
+        &self,
+        aid: &str,
+        dispatch: i64,
+    ) -> Result<Vec<Message>, ApiError> {
+        let started = std::time::Instant::now();
         let ids = {
             let mut st = self.db.conn().prepare(
                 "SELECT id FROM tool_actions WHERE project_id=?1 AND agent_id=?2
@@ -34,11 +42,17 @@ impl Workbench {
         for id in ids {
             let action = crate::actions::get(&self.db, &self.project_id, &id)?;
             let result = match crate::actions::replay(&action) {
-                Ok(Some(CallOutcome::Done(value))) => turn::tool_result_block(id.clone(), &value),
+                Ok(Some(CallOutcome::Done(value))) => turn::tool_result_block(id.clone(), &action.tool, &value),
                 Ok(Some(CallOutcome::Denied(reason))) => resume_error(&id, format!("denied: {reason}")),
                 // A failed action has a recorded error; replay never executes it.
                 Err(crate::tools::ToolError::Exec(reason)) if action.state == "failed" =>
                     resume_error(&id, format!("error: {reason}")),
+                // Live acceptance 2026-10-01: an owner resolution unblocks the
+                // chain but deliberately keeps the original effect unknown.
+                // Restoring observations must not re-block or replay that effect.
+                Err(crate::tools::ToolError::OutcomeUnknown(_))
+                    if crate::actions::has_resolution(&self.db, &id)? =>
+                    resume_error(&id, "Outcome remains unknown; the owner resolved this action. Do not replay it or assume success.".into()),
                 Err(error) => return Err(error.into()),
                 _ => resume_error(&id, format!("No execution result recorded; action state: {}. This is not evidence of success.", action.state)),
             };

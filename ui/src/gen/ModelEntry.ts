@@ -2,7 +2,7 @@
 
 /**
  * 模型目录条目：拉取/手添的模型 + 能力标记。
- * caps 词表：web（联网）vision（视觉）reasoning（推理）tools（工具调用）free（免费）。
+ * caps 词表见 docs/glossary.html：对话能力、输入/输出模态、嵌入/重排等目录标记。
  */
 export type ModelEntry = { id: string, 
 /**
@@ -15,8 +15,8 @@ name: string | null,
 group: string | null, caps: Array<string>, 
 /**
  * 上下文窗口 tok（context-window 票 02 / ADR 0068）：拉目录时按
- * 内置前缀表兜底填，未识别留空 → 撞限闸回落 120k 全局上限，
- * 设置页提示手填。大窗口不放开吃满——120k 仍是刻意纪律上限。
+ * 内置前缀表兜底填，未识别留空 → 撞限闸回落 1M 全局上限，
+ * 设置页提示手填。大窗口不放开吃满——1M 仍是刻意纪律上限。
  * `number | null`：u64 默认被 ts-rs 导成 bigint，与 JSON number 不符。
  */
 context_window: number | null, 

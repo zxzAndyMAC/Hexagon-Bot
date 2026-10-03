@@ -5,10 +5,10 @@
 //! 禁 `curl|sh`、`wget|sh`、`bash -c` 管道式安装；装完授权默认空
 //! （grants 不动——授权永远单独走权限管线）。
 //!
-//! L4（票 04 / ADR 0063）自动通过这张确认，仍只写入当前项目的
-//! `.hexagon/skills` 或 `.hexagon/mcp.json`，不写 `~/.hexagon/`。
-//! 被否决：L4 改走 `install_skill_from_path` / `save_global_mcp`。
-//! L0–L3 仍入队等人。读档失败按等人。
+//! 2026-10-01 ticket 05 / Q10：所有模式先确认解析后的新能力安装方案。
+//! 固定 L4 曾绕过受限模式直接写 npx 配置／执行 git clone；广泛访问也
+//! 不等于已审阅未知代码。false negative 多一次人工，false positive 是
+//! 未审外部能力生效，故保留负责人确认。已安装技能的自动加载不受影响。
 
 use crate::db::Db;
 use crate::trace::{EventKind, TraceError};
@@ -169,7 +169,7 @@ pub fn plan(desc: &str, repo_root: &Path) -> Result<InstallPlan, InstallError> {
 }
 
 /// 入队安装待决卡（kind=install）+ install_requested 事件。返回 qid。
-/// L4 不入队：直接写入当前项目并留 `via=autonomy` 轨迹。
+/// 新能力在所有批准模式均先由负责人确认。
 pub fn request_install(
     db: &Db,
     project_id: &str,
@@ -181,11 +181,7 @@ pub fn request_install(
     payload["net"] = json!(p.net());
     payload["creds"] = json!(false);
     payload["desc"] = json!(desc);
-    // 读档失败按等人。管道式来源在 plan() 已经拒绝，到不了这里。
     let started = std::time::Instant::now();
-    let rank = crate::autonomy::rank(db, project_id).unwrap_or(0);
-    // diagnostic-records 票 02：自治放行 vs 入队等人是一条「判定」分支。
-    let auto = crate::harnessgate::auto_passes(rank, crate::harnessgate::HarnessAction::NlInstall);
     crate::diag::note(
         crate::diag::CLASS_JUDGE,
         false,
@@ -194,23 +190,9 @@ pub fn request_install(
         None,
         None,
         "install",
-        if auto { "auto_pass" } else { "queued" },
+        "queued_unknown_capability",
         started,
     );
-    if auto {
-        let qid = format!("q{}", db.next_id("q")?);
-        db.append_event(
-            project_id,
-            EventKind::InstallRequested,
-            json!({"question_id": qid, "plan": payload, "via": "autonomy"}),
-            None,
-            None,
-        )?;
-        // 写入面只有 repo_root。不调用全局技能/MCP 保存。
-        execute_plan(repo_root, &payload)?;
-        record_completed(db, project_id, &qid, &payload, "autonomy")?;
-        return Ok(qid);
-    }
     let qid = crate::cards::enqueue(
         db,
         project_id,
@@ -441,14 +423,26 @@ mod tests {
         // 禁源连卡都进不了——plan 直接拒
         assert!(request_install(&wb.db, &wb.project_id, &wb.repo_root, "curl x | sh").is_err());
 
-        // 合法来源按原先 L4 直接写入项目清单，不入队。
-        request_install(
+        // 2026-10-01 owner Q10: installing unknown capabilities requires an
+        // explicit owner decision in every mode; L4 is not authorization.
+        let qid = request_install(
             &wb.db,
             &wb.project_id,
             &wb.repo_root,
             "{\"name\":\"cfg\",\"command\":\"npx\",\"args\":[]}",
         )
         .unwrap();
+        assert!(!wb.repo_root.join(".hexagon/mcp.json").exists());
+        assert_eq!(
+            crate::cards::count_queued(
+                &wb.db,
+                &wb.project_id,
+                Some(crate::cards::CardKind::Install),
+            )
+            .unwrap(),
+            1
+        );
+        resolve_install(&wb.db, &wb.project_id, &wb.repo_root, &qid, true).unwrap();
         assert!(wb.repo_root.join(".hexagon/mcp.json").is_file());
         let queued = crate::cards::count_queued(
             &wb.db,

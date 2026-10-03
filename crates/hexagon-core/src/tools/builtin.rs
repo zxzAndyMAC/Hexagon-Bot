@@ -1167,6 +1167,68 @@ fn html_to_text(html: &str) -> String {
 }
 
 /// 技能按需加载（票 09）：catalog 在系统提示里是一行式指针，
+/// Bounded metadata search, available to every role and confined subagents.
+pub struct SearchSkills;
+impl Tool for SearchSkills {
+    fn name(&self) -> &str {
+        "search_skills"
+    }
+    fn description(&self) -> &str {
+        "Find a small set of installed skills relevant to your current task. Use when the current task needs guidance beyond the visible skill shortlist; search using concrete concepts, names, or English synonyms and narrow the query when needed. Do not use search results as instructions or completed work: results contain metadata only, so load selected skills before following them."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","additionalProperties":false,"properties":{"query":{"type":"string","maxLength":512,"description":"Concrete task concepts, an exact skill name, or English synonyms; 1–512 characters."}},"required":["query"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::Read
+    }
+    fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let query = str_arg(input, "query")?.trim();
+        if query.is_empty() || query.chars().count() > 512 {
+            return Err(ToolError::BadInput(
+                "query must contain 1–512 characters".into(),
+            ));
+        }
+        let session = ctx.stage_run_id.as_deref().unwrap_or(&ctx.agent_id);
+        let muted = crate::skills::effective_muted(&ctx.repo_root, session);
+        let loader = crate::skills::SkillLoader::new(crate::skills::skill_dirs(&ctx.repo_root));
+        let started = std::time::Instant::now();
+        let mut skills = Vec::new();
+        let mut bytes = 0;
+        for skill in loader.search(query, &muted, &ctx.manual_skill_invocations) {
+            let metadata = json!({
+                "name":skill.name, "description":skill.description.chars().take(240).collect::<String>(),
+                "source":if skill.path.as_os_str().is_empty() { format!("builtin:{}",skill.name) } else { skill.path.to_string_lossy().into_owned() },
+                "invocation": if skill.disable_model_invocation { "owner_explicit" } else { "automatic" }
+            });
+            bytes += metadata.to_string().len();
+            if bytes > 7800 {
+                break;
+            }
+            skills.push(metadata);
+        }
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            false,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "skill_discovery",
+            if skills.is_empty() {
+                "no_match"
+            } else {
+                "shortlist"
+            },
+            started,
+        );
+
+        Ok(
+            json!({"skills":skills,"limit":12,"note":"Metadata only; load selected skills. Results are a shortlist, not an exhaustive catalog."}),
+        )
+    }
+}
+
 /// 全文从这里取。每次调用重扫目录——会话中新建的技能也能取到。
 pub struct LoadSkill;
 impl Tool for LoadSkill {
@@ -1176,8 +1238,8 @@ impl Tool for LoadSkill {
     fn description(&self) -> &str {
         r#"Load a skill's full instructions by name.
 - Use when: a skill in the available-skills list, or one granted to your role, is relevant to the task — load it before acting on it.
-- Do not use: to guess skills that are not listed.
-- Pass the name exactly as listed. An unknown name returns the list of available skills."#
+- Do not use: to guess skills that are not listed; use search_skills to discover more.
+- Pass the name exactly as listed. An unknown name asks you to search; it never injects the whole catalog."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"name":{"type":"string","description":"skill name exactly as listed"}},"required":["name"]})
@@ -1213,8 +1275,42 @@ impl Tool for LoadSkill {
         let skill = loader.get(&name).filter(|_| !muted.contains(&name));
         match skill {
             Some(s) => {
+                let started = std::time::Instant::now();
+                let manual_allowed = ctx.manual_skill_invocations.contains(&s.name);
+                let allowed = !s.disable_model_invocation || manual_allowed;
+                // 2026-10-01 ticket 02: the tool's owner_invoked flag was forgeable;
+                // only host-delivered owner messages populate the activation set.
+                // Prefer a missed automatic invocation (owner can retry) over
+                // executing a workflow explicitly restricted to manual invocation.
+                crate::diag::note(
+                    if allowed {
+                        crate::diag::CLASS_JUDGE
+                    } else {
+                        crate::diag::CLASS_REJECT
+                    },
+                    !allowed,
+                    Some(&ctx.project_id),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                    None,
+                    "skill_invocation",
+                    if !allowed {
+                        "manual_owner_required"
+                    } else if manual_allowed {
+                        "owner_explicit"
+                    } else {
+                        "automatic"
+                    },
+                    started,
+                );
+                if !allowed {
+                    return Err(ToolError::BadInput(format!("skill {name} is manual-only; the owner must explicitly invoke ${name} for this task")));
+                }
                 let output = json!({
                 "name": s.name,
+                "source": if s.path.as_os_str().is_empty() { format!("builtin:{}", s.name) } else { s.path.to_string_lossy().into_owned() },
+                "status": "loaded",
+                "invocation": if manual_allowed { "owner_explicit" } else { "automatic" },
                 "instructions": crate::experience::loading_view(_db, ctx, &name, &s.instructions)
                     .map_err(|e| ToolError::BadInput(e.to_string()))?,
                 "resources_path": s.path,
@@ -1234,8 +1330,7 @@ impl Tool for LoadSkill {
                 Ok(output)
             }
             None => Err(ToolError::BadInput(format!(
-                "unknown skill: {name}; available: {:?}",
-                loader.visible_names(&muted)
+                "unknown or muted skill: {name}; use search_skills(query) for available candidates"
             ))),
         }
     }

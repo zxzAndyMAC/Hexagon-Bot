@@ -3,6 +3,21 @@ use crate::provider::ScriptedProvider;
 use crate::tools::ToolContext;
 use crate::trace::MessageToken;
 
+// Owner raised the default to 1M on 2026-10-01. These existing overflow fixtures
+// deliberately retain a 150K model, rather than allocating million-token inputs.
+struct SmallWindow<'a>(&'a ScriptedProvider);
+impl ModelProvider for SmallWindow<'_> {
+    fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, crate::provider::ProviderError> {
+        self.0.complete(req)
+    }
+    fn model_meta(&self) -> crate::provider::ModelMeta {
+        crate::provider::ModelMeta {
+            context_window: Some(150_000),
+            max_output: None,
+        }
+    }
+}
+
 fn setup() -> (Db, Registry, ToolContext, tempfile::TempDir) {
     let db = Db::open_in_memory().unwrap();
     db.conn()
@@ -285,6 +300,44 @@ fn pause_mid_stream_interrupts() {
     assert_eq!(msgs, 0);
 }
 
+// 2026-10-01 原生验收：全员休眠后主 Agent 仍发下一轮模型请求。
+#[test]
+fn sleep_all_mid_stream_interrupts() {
+    let (db, reg, ctx, _dir) = setup();
+    let provider = ScriptedProvider::chunked(vec![text_response("一二三四")], 1);
+    let mut chunks = 0;
+    let out = run_turn_streaming(
+        &db,
+        &provider,
+        &reg,
+        &ctx,
+        vec![],
+        "写",
+        &[],
+        false,
+        Some(&mut |d| {
+            if !d.text.is_empty() {
+                chunks += 1;
+                crate::orchestra::sleep_all(&db, "p1").unwrap();
+            }
+        }),
+    )
+    .unwrap();
+    assert!(matches!(out, TurnOutcome::Interrupted), "{out:?}");
+    assert_eq!(chunks, 1);
+    assert_eq!(provider.recorded().len(), 1);
+}
+
+proptest::proptest! {
+    #[test]
+    fn sleeping_never_loses_to_other_halt_flags(paused in proptest::bool::ANY, sleeping in proptest::bool::ANY) {
+        let (db, _, ctx, _dir) = setup();
+        if paused { crate::orchestra::pause(&db, "p1").unwrap(); }
+        if sleeping { crate::orchestra::sleep_all(&db, "p1").unwrap(); }
+        proptest::prop_assert_eq!(halted(&db, &ctx), paused || sleeping);
+    }
+}
+
 /// 流前叫停（既有轮顶闸）也走 Interrupted——两种叫停同终态。
 #[test]
 fn pause_before_turn_interrupts_without_call() {
@@ -294,6 +347,44 @@ fn pause_before_turn_interrupts_without_call() {
     let out = run_turn(&db, &provider, &reg, &ctx, vec![], "写").unwrap();
     assert!(matches!(out, TurnOutcome::Interrupted));
     assert!(provider.recorded().is_empty()); // 模型零调用
+}
+
+// 2026-10-01 用户验收：内部计划被流成正文后reset，造成回复突然消失。
+#[test]
+fn internal_plan_never_flashes_as_a_public_reply() {
+    let (db, reg, ctx, _dir) = setup();
+    let provider = ScriptedProvider::chunked(
+        vec![text_response("内部计划"), text_response("正式结果")],
+        1,
+    );
+    let mut visible = String::new();
+    let mut plan = String::new();
+    let out = run_turn_streaming(
+        &db,
+        &provider,
+        &reg,
+        &ctx,
+        vec![],
+        "go",
+        &[],
+        true,
+        Some(&mut |d| {
+            visible.push_str(&d.text);
+            if let Some(text) = &d.plan {
+                plan.push_str(text);
+            }
+        }),
+    )
+    .unwrap();
+    assert!(matches!(out, TurnOutcome::Finished));
+    assert_eq!(visible, "正式结果");
+    assert_eq!(plan, "内部计划");
+    assert_eq!(system_events(&db, "agent_plan"), 1);
+    let calls = provider.recorded();
+    assert!(calls[1].messages.iter().any(|m| m
+        .content
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Text { text } if text == "内部计划"))));
 }
 
 // ---------- 票 05：steering 回灌 ----------
@@ -899,7 +990,7 @@ fn ticket07_long_history_drops_tools_keeps_speech_verbatim() {
         usage: Default::default(),
     };
     let provider = ScriptedProvider::new(vec![big(&oldest), big(&newest), text_response("done")]);
-    let out = run_turn(&db, &provider, &reg, &ctx, vec![], owner).unwrap();
+    let out = run_turn(&db, &SmallWindow(&provider), &reg, &ctx, vec![], owner).unwrap();
     assert_eq!(out, TurnOutcome::Finished);
     let calls = provider.recorded();
     assert!(calls.len() >= 3, "收缩后仍要派发，got {}", calls.len());
@@ -1013,6 +1104,7 @@ fn estimate_tokens_tool_result_images_are_flat_allowance() {
                 content: "ok".into(),
                 is_error: false,
                 images: vec![crate::provider::ImageData {
+                    computer_screenshot: false,
                     media_type: "image/png".into(),
                     data: data.into(),
                 }],
@@ -1068,17 +1160,20 @@ fn estimate_tokens_covers_every_block_variant() {
     }
 }
 
-/// 票 02 / ADR 0068：撞限闸 cap=min(所服务模型窗口×0.8, 120k)——32k 窗
-/// 压到 25.6k（小窗口模型提前走升级卡而不是 API 400）；1M 窗仍卡 120k
-/// 不放开（纪律上限）；窗口未知回落 120k 旧行为。
+// 2026-10-01 owner decision: 1M fallback, with 20% reserved for replies.
 #[test]
-fn effective_cap_scales_down_never_up() {
+fn effective_cap_reserves_reply_space() {
     assert_eq!(context::effective_cap(Some(32_768)), 26_214);
-    assert_eq!(
-        context::effective_cap(Some(1_000_000)),
-        context::CONTEXT_CAP_TOKENS
-    );
-    assert_eq!(context::effective_cap(None), context::CONTEXT_CAP_TOKENS);
+    assert_eq!(context::effective_cap(Some(1_000_000)), 800_000);
+    assert_eq!(context::effective_cap(None), 800_000);
+}
+proptest::proptest! {
+    #[test]
+    fn context_cap_never_exceeds_model_or_global_window(window in 0u64..u64::MAX) {
+        let cap = context::effective_cap(Some(window));
+        proptest::prop_assert!(cap <= context::CONTEXT_CAP_TOKENS);
+        proptest::prop_assert!(cap as u64 <= window);
+    }
 }
 
 // ---- US57：瞬时重试与同错熔断 ----
@@ -1221,7 +1316,7 @@ fn us37_context_overflow_escalates() {
         (0..80_000).map(|i| format!("w{i:05} ")).collect::<String>(),
     );
     let provider = ScriptedProvider::new(vec![text_response("不该被调用")]);
-    let out = run_turn(&db, &provider, &reg, &ctx, vec![big], "go").unwrap();
+    let out = run_turn(&db, &SmallWindow(&provider), &reg, &ctx, vec![big], "go").unwrap();
     match out {
         TurnOutcome::AwaitingPermission(qid) => {
             let card = crate::cards::get(&db, &qid).unwrap();
@@ -1559,6 +1654,9 @@ fn dispatch_persists_request_envelope() {
     let e = &env[0];
     assert_eq!(e["call"], 0);
     assert_eq!(e["model_slot"], "default");
+    assert_eq!(e["context"]["window_tokens"], 1_000_000);
+    assert_eq!(e["context"]["compact_at_tokens"], 800_000);
+    assert!(e["context"]["used_tokens"].as_u64().unwrap() > 0);
     // layer 清单带 level/key/hash/bytes
     // 行为变更（skills.rs rescan 修复）：内置技能目录恒在 → 第三个
     // agents.md 层是新常态，2 → 3。
@@ -1631,6 +1729,7 @@ fn envelope_fingerprint_is_deterministic_and_sensitive() {
 fn trim_context_elides_old_images_keeps_latest() {
     let (_db, _reg, ctx, _dir) = setup();
     let img = vec![crate::provider::ImageData {
+        computer_screenshot: false,
         media_type: "image/png".into(),
         data: "aGk=".into(),
     }];
@@ -1889,7 +1988,7 @@ proptest! {
                     ContentBlock::ToolUse { .. } | ContentBlock::Opaque { .. } => {
                         Role::Assistant
                     }
-                    ContentBlock::Text { .. } | ContentBlock::Image { .. } => Role::User,
+                    ContentBlock::Text { .. } | ContentBlock::Image { .. } | ContentBlock::ComputerImage { .. } => Role::User,
                     ContentBlock::Thinking { .. } => Role::Assistant,
                 };
                 Message {
@@ -2131,18 +2230,16 @@ fn wait_is_interruptible_mid_sleep() {
     ctx.wait = fast_wait(60_000, 60_000); // 大预算大间隔——不靠预算收口
     let halt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     ctx.subagent = Some(crate::subagent::Scope {
+        approval_mode: Default::default(),
+        permission_rules: Default::default(),
         halt: halt.clone(),
         answer: Default::default(),
         mcp: Default::default(),
         reads: Default::default(),
     });
-    let handle = {
-        let halt = halt.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(950));
-            halt.store(true, std::sync::atomic::Ordering::Relaxed);
-        })
-    };
+    // 2026-10-01：请求前也检查叫停后，固定950ms会在进入等网前触发。
+    // 以真实 waiting 信号触发叫停，保持本测试只验证等网切片的退出契约。
+    let mut entered_wait = false;
     let out = run_turn_streaming(
         &db,
         &DownForever,
@@ -2152,10 +2249,15 @@ fn wait_is_interruptible_mid_sleep() {
         "go",
         &[],
         false,
-        None,
+        Some(&mut |d| {
+            if d.waiting {
+                entered_wait = true;
+                halt.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }),
     )
     .unwrap();
-    handle.join().unwrap();
+    assert!(entered_wait);
     assert!(matches!(out, TurnOutcome::Interrupted));
     let exits = sys_events(&db, "net_wait_exit");
     assert_eq!(exits.len(), 1);
@@ -2478,6 +2580,8 @@ fn pe05_subagent_turn_is_never_reminded() {
     ctx.tasks
         .create_manual(&crate::subagent::activation_key(&ctx), "open item");
     ctx.subagent = Some(crate::subagent::Scope {
+        approval_mode: Default::default(),
+        permission_rules: Default::default(),
         halt: Default::default(),
         answer: Default::default(),
         mcp: Default::default(),

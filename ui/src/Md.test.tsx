@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
-import { CodeBlock } from './components/Md'
+import { CodeBlock, ReasoningMarkdown } from './components/Md'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -19,6 +19,30 @@ async function render(node: ReactNode) {
 
 beforeEach(() => {
   document.body.innerHTML = ''
+})
+
+it('长思考连续增量限频显示，结束立即保留完整 Markdown', async () => {
+  vi.useFakeTimers()
+  const onRender = vi.fn()
+  const { el, root } = await render(<ReasoningMarkdown text="**开始**" live onRender={onRender} />)
+  try {
+    for (let i = 1; i <= 20; i++) {
+      await act(async () => { root.render(<ReasoningMarkdown text={`**开始**\n\n尾部 ${i}`} live onRender={onRender} />) })
+      await act(async () => { vi.advanceTimersByTime(10) })
+    }
+    expect(el.textContent).not.toContain('尾部')
+    expect(onRender).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(50) })
+    expect(el.textContent).toContain('尾部 20')
+    expect(onRender).toHaveBeenCalledTimes(2)
+    await act(async () => { root.render(<ReasoningMarkdown text="**开始**\n\n最终全部文本" live={false} onRender={onRender} />) })
+    expect(el.textContent).toContain('最终全部文本')
+    expect(el.querySelector('strong')?.textContent).toBe('开始')
+  } finally {
+    await act(async () => { root.unmount() })
+    expect(vi.getTimerCount()).toBe(0)
+    vi.useRealTimers()
+  }
 })
 
 describe('CodeBlock 头部（beautiful-ui 票 08）', () => {

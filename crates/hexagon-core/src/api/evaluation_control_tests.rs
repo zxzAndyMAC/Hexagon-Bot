@@ -4,7 +4,7 @@ use super::*;
 fn evaluation_stop_waiting_run_preserves_costs_and_prevents_owner_resume() {
     let home = tempfile::tempdir().unwrap();
     let wb = Workbench::open_evaluation_host(home.path()).unwrap();
-    let request = super::evaluation_config_tests::request();
+    let request = super::evaluation_config_tests::control_only_request();
     let batch = wb.freeze_evaluation(&request, None).unwrap();
     let plan = wb
         .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)
@@ -380,7 +380,7 @@ fn stop_http_peer(streaming: bool) {
 fn evaluation_pause_away_and_stop_preserve_human_timing_boundaries() {
     let home = tempfile::tempdir().unwrap();
     let host = Workbench::open_evaluation_host(home.path()).unwrap();
-    let request = super::evaluation_config_tests::request();
+    let request = super::evaluation_config_tests::control_only_request();
     let batch = host.freeze_evaluation(&request, None).unwrap();
     let plan = host
         .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)

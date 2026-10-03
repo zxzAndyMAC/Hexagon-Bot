@@ -17,7 +17,7 @@ fn evaluation_recovery_empty_host_does_not_invent_evidence() {
 fn evaluation_recovery_preserves_waiting_run_without_replay() {
     let home = tempfile::tempdir().unwrap();
     let host = Workbench::open_evaluation_host(home.path()).unwrap();
-    let request = super::evaluation_config_tests::request();
+    let request = super::evaluation_config_tests::control_only_request();
     let batch = host.freeze_evaluation(&request, None).unwrap();
     let plan = host
         .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)
@@ -86,7 +86,7 @@ fn evaluation_recovery_never_reclaims_a_live_driver_or_replays_a_dead_one() {
 fn evaluation_recovery_lost_attention_stays_unknown_and_releases_owner_slot() {
     let home = tempfile::tempdir().unwrap();
     let host = Workbench::open_evaluation_host(home.path()).unwrap();
-    let request = super::evaluation_config_tests::request();
+    let request = super::evaluation_config_tests::control_only_request();
     let batch = host.freeze_evaluation(&request, None).unwrap();
     let plan = host
         .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)

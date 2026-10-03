@@ -14,10 +14,16 @@ export const fmtYuan = (mc?: number | null, loc?: string) =>
     ? '—'
     : new Intl.NumberFormat(loc ?? i18n.language, { style: 'currency', currency: 'CNY' }).format(mc / MC_PER_YUAN)
 
+// 2026-10-01 原生验收：SQLite datetime('now') 是 UTC，但无时区字符串被浏览器当成本地。
+// 只补齐数据库格式；已有 Z/offset 的时间保留原义。时间线的耗时计算也走同一入口。
+export const parseTime = (iso: string): number => Date.parse(
+  /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(iso) ? `${iso.replace(' ', 'T')}Z` : iso,
+)
+
 // 票 14（P3-18）：Intl 本地语序——en/ja 不再 MM/DD 美式拼接。
 // withSeconds=false → 日期+时分（时间线行）；true → 时分秒（agent 链路步）。
 export const fmtTime = (iso: string, withSeconds = false, loc?: string): string => {
-  const d = new Date(iso)
+  const d = new Date(parseTime(iso))
   if (Number.isNaN(d.getTime())) return ''
   const o: Intl.DateTimeFormatOptions = withSeconds
     ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }

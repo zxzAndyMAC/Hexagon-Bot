@@ -25,6 +25,11 @@ pub enum Role {
 /// 字节本体只走这张图通道进上下文，不走文本载荷。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImageData {
+    /// Host provenance survives compaction but cannot be supplied by model JSON.
+    /// Owner ticket 07: disabling screen sharing blocks subsequent transmissions,
+    /// including transport retries containing a previously observed desktop.
+    #[serde(skip)]
+    pub computer_screenshot: bool,
     pub media_type: String,
     pub data: String,
 }
@@ -54,6 +59,15 @@ pub enum ContentBlock {
     Image {
         media_type: String,
         data: String,
+    },
+    /// Host-created selected browser pixels (issue13). Persist only the marker:
+    /// permission resumes must not rehydrate old screenshots from message history.
+    ComputerImage {
+        media_type: String,
+        #[serde(skip)]
+        data: String,
+        #[serde(skip)]
+        generation: u64,
     },
     /// 供应商原生块透传（agent-senses 票 04）：server_tool_use /
     /// web_search_tool_result 等服务端已执行块——原样保史并在下次
@@ -393,9 +407,9 @@ impl ProviderError {
 /// 实例所服务模型的元数据（context-window 票 02 / ADR 0068）：
 /// `make_provider` 挂槽位时从 ModelEntry（或内置前缀表）解析好随实例
 /// 带上——撞限闸与 max_tokens 以实际服务的模型为准。None = 未知，
-/// 调用方回落默认（撞限闸 120k；聊天 HTTP 输出上限 8192）。
+/// 调用方回落默认（撞限闸 1M；聊天 HTTP 输出上限 8192）。
 /// reliability 13 的预算预占与实际 HTTP 请求使用同一输出上限。
-/// 测试桩保持 None：撞限测试恒定跑 120k，不随
+/// 测试桩保持 None：撞限测试恒定跑 1M，不随
 /// 本机 providers.json 漂移。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelMeta {
@@ -653,6 +667,36 @@ impl ModelProvider for ScriptedProvider {
     }
 }
 
+// 2026-09-30 原生负责人验收：mcp:node_repl:js 被 DeepSeek 以工具名格式 HTTP400 拒绝。
+// 别名只在传输边界使用；不能把内部注册表/权限名改成简单替换冒号（会与下划线名碰撞）。
+// 240-bit 摘要固定长度并与工具列表顺序无关，工具历史在后续回合中保持一致。
+fn wire_tool_name(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    if !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with("hx_")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return name.into();
+    }
+    let mut alias = format!("hx_{:x}", Sha256::digest(name.as_bytes()));
+    alias.truncate(63);
+    alias
+}
+
+fn restore_tool_names(req: &ChatRequest, mut response: ChatResponse) -> ChatResponse {
+    for block in &mut response.content {
+        if let ContentBlock::ToolUse { name, .. } = block {
+            if let Some(tool) = req.tools.iter().find(|t| wire_tool_name(&t.name) == *name) {
+                name.clone_from(&tool.name);
+            }
+        }
+    }
+    response
+}
+
 /// OpenAI 兼容形状的请求/响应映射（纯函数，不碰网络——传输层归具体供应商实现）。
 pub mod openai_shape {
     use super::*;
@@ -674,7 +718,10 @@ pub mod openai_shape {
                     ContentBlock::Text { text } => {
                         content_parts.push(serde_json::json!({"type":"text","text":text}))
                     }
-                    ContentBlock::Image { media_type, data } => {
+                    ContentBlock::ComputerImage { data, .. } if data.is_empty() => {
+                        content_parts.push(serde_json::json!({"type":"text","text":"[Historical selected screenshot omitted; request a fresh observation if needed.]"}));
+                    }
+                    ContentBlock::Image { media_type, data } | ContentBlock::ComputerImage { media_type, data, .. } => {
                         content_parts.push(serde_json::json!({
                             "type":"image_url",
                             "image_url":{"url":format!("data:{media_type};base64,{data}")}
@@ -683,7 +730,7 @@ pub mod openai_shape {
                     ContentBlock::ToolUse { id, name, input } => {
                         tool_calls.push(serde_json::json!({
                             "id": id, "type": "function",
-                            "function": {"name": name, "arguments": input.to_string()}
+                            "function": {"name": wire_tool_name(name), "arguments": input.to_string()}
                         }))
                     }
                     ContentBlock::ToolResult {
@@ -755,7 +802,7 @@ pub mod openai_shape {
                 serde_json::json!({
                     "type": "function",
                     "function": {
-                        "name": t.name,
+                        "name": wire_tool_name(&t.name),
                         "description": t.description,
                         "parameters": t.input_schema,
                     }
@@ -799,7 +846,13 @@ pub mod openai_shape {
                 text: text.to_string(),
             });
         }
-        if let Some(calls) = msg["tool_calls"].as_array() {
+        // 2026-10-01 原生验收：输出上限截断的参数不是网络错误。
+        // 此响应中的工具都未执行，不放入历史以免产生没有结果的 tool_use。
+        // 保留 MaxTokens 和 usage，让回合层拆小续推；无截断标记的坏 JSON 仍拒绝。
+        if let Some(calls) = msg["tool_calls"]
+            .as_array()
+            .filter(|_| choice["finish_reason"].as_str() != Some("length"))
+        {
             for c in calls {
                 let input: Value =
                     serde_json::from_str(c["function"]["arguments"].as_str().unwrap_or("{}"))
@@ -930,6 +983,10 @@ pub mod openai_shape {
                 content.push(ContentBlock::Text { text: self.text });
             }
             for (_i, (id, name, args)) in self.tools {
+                // 同非流式：截断工具从未执行，交回 MaxTokens 恢复分支。
+                if self.finish.as_deref() == Some("length") {
+                    break;
+                }
                 let input: Value = serde_json::from_str(if args.is_empty() { "{}" } else { &args })
                     .map_err(|e| ProviderError::Transport(format!("tool args json: {e}")))?;
                 content.push(ContentBlock::ToolUse { id, name, input });
@@ -975,12 +1032,13 @@ pub mod anthropic_shape {
                     ContentBlock::Text { text } => {
                         Some(serde_json::json!({"type":"text","text":text}))
                     }
-                    ContentBlock::Image { media_type, data } => Some(serde_json::json!({
+                    ContentBlock::ComputerImage { data, .. } if data.is_empty() => Some(serde_json::json!({"type":"text","text":"[Historical selected screenshot omitted; request a fresh observation if needed.]"})),
+                    ContentBlock::Image { media_type, data } | ContentBlock::ComputerImage { media_type, data, .. } => Some(serde_json::json!({
                         "type":"image",
                         "source":{"type":"base64","media_type":media_type,"data":data}
                     })),
                     ContentBlock::ToolUse { id, name, input } => Some(
-                        serde_json::json!({"type":"tool_use","id":id,"name":name,"input":input}),
+                        serde_json::json!({"type":"tool_use","id":id,"name":wire_tool_name(name),"input":input}),
                     ),
                     ContentBlock::ToolResult {
                         tool_use_id,
@@ -1034,7 +1092,7 @@ pub mod anthropic_shape {
             .iter()
             .map(|t| {
                 serde_json::json!({
-                    "name": t.name, "description": t.description,
+                    "name": wire_tool_name(&t.name), "description": t.description,
                     "input_schema": t.input_schema,
                 })
             })
@@ -1072,11 +1130,12 @@ pub mod anthropic_shape {
                             });
                         }
                     }
-                    Some("tool_use") => content.push(ContentBlock::ToolUse {
-                        id: b["id"].as_str().unwrap_or_default().to_string(),
-                        name: b["name"].as_str().unwrap_or_default().to_string(),
-                        input: b["input"].clone(),
-                    }),
+                    Some("tool_use") if v["stop_reason"].as_str() != Some("max_tokens") => content
+                        .push(ContentBlock::ToolUse {
+                            id: b["id"].as_str().unwrap_or_default().to_string(),
+                            name: b["name"].as_str().unwrap_or_default().to_string(),
+                            input: b["input"].clone(),
+                        }),
                     // 票 04：服务端工具块透传保史——server_tool_use /
                     // web_search_tool_result 由供应商执行完毕才回传，
                     // 本地无对应工具；不折成 ToolUse 防止二次执行。
@@ -1255,7 +1314,10 @@ pub mod anthropic_shape {
                         text: t,
                         replay_as_reasoning_content: false,
                     }),
-                    ABlock::ToolUse { id, name, args } => {
+                    // 同 OpenAI：参数被上限截断时不能误报 Transport 原样重试。
+                    ABlock::ToolUse { id, name, args }
+                        if self.stop.as_deref() != Some("max_tokens") =>
+                    {
                         let input: Value =
                             serde_json::from_str(if args.is_empty() { "{}" } else { &args })
                                 .map_err(|e| {
@@ -1454,7 +1516,7 @@ impl ModelProvider for HttpProvider {
                     .send_json(&body)
                     .map_err(Self::map_err)?;
                 let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
-                anthropic_shape::from_response(&v)
+                anthropic_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
             ProviderKind::OpenAi => {
                 let url = format!("{}/chat/completions", self.base_url);
@@ -1470,7 +1532,7 @@ impl ModelProvider for HttpProvider {
                     .send_json(&body)
                     .map_err(Self::map_err)?;
                 let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
-                openai_shape::from_response(&v)
+                openai_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
             ProviderKind::Jev => Err(ProviderError::Refused(
                 "Jev only answers closed choices, not chat".into(),
@@ -1506,7 +1568,10 @@ impl ModelProvider for HttpProvider {
                     .map_err(Self::map_err)?;
                 if !Self::is_sse(&resp) {
                     let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
-                    return emit_fallback(anthropic_shape::from_response(&v)?, sink);
+                    return emit_fallback(
+                        restore_tool_names(req, anthropic_shape::from_response(&v)?),
+                        sink,
+                    );
                 }
                 let mut blocks =
                     SseBlocks::new(std::io::BufReader::new(resp.body_mut().as_reader()));
@@ -1522,7 +1587,9 @@ impl ModelProvider for HttpProvider {
                     }
                 }
                 let usage = fold.usage.clone();
-                fold.finish().map_err(|e| e.with_usage(&usage))
+                fold.finish()
+                    .map(|r| restore_tool_names(req, r))
+                    .map_err(|e| e.with_usage(&usage))
             }
             ProviderKind::OpenAi => {
                 let url = format!("{}/chat/completions", self.base_url);
@@ -1541,7 +1608,10 @@ impl ModelProvider for HttpProvider {
                     .map_err(Self::map_err)?;
                 if !Self::is_sse(&resp) {
                     let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
-                    return emit_fallback(openai_shape::from_response(&v)?, sink);
+                    return emit_fallback(
+                        restore_tool_names(req, openai_shape::from_response(&v)?),
+                        sink,
+                    );
                 }
                 let mut blocks =
                     SseBlocks::new(std::io::BufReader::new(resp.body_mut().as_reader()));
@@ -1558,7 +1628,9 @@ impl ModelProvider for HttpProvider {
                     }
                 }
                 let usage = fold.usage.clone();
-                fold.finish().map_err(|e| e.with_usage(&usage))
+                fold.finish()
+                    .map(|r| restore_tool_names(req, r))
+                    .map_err(|e| e.with_usage(&usage))
             }
             ProviderKind::Jev => Err(ProviderError::Refused(
                 "Jev only answers closed choices, not chat".into(),
@@ -1750,6 +1822,77 @@ mod tests {
         let request = empty_req();
         let wire = openai_shape::to_request(&request);
         assert!(wire.get("tools").is_none());
+    }
+
+    #[test]
+    fn truncated_tool_json_reaches_continuation_without_executable_calls() {
+        // 2026-10-01 原生活测：8192-token 截断被当成 Transport，导致相同请求重试。
+        for truncated in [true, false] {
+            let reason = if truncated { "length" } else { "tool_calls" };
+            let response = json!({"choices":[{"finish_reason":reason,"message":{"content":"partial", "tool_calls":[{"id":"t1","function":{"name":"fs_write","arguments":"{\"content\":\"cut"}}]}}],"usage":{"completion_tokens":8192}});
+            let mut fold = openai_shape::SseFold::default();
+            fold.data(&json!({"choices":[{"finish_reason":reason,"delta":{"content":"partial", "tool_calls":[{"index":0,"id":"t1","function":{"name":"fs_write","arguments":"{\"content\":\"cut"}}]}}],"usage":{"completion_tokens":8192}}).to_string(), &mut |_| true).unwrap();
+            let mut anthropic = anthropic_shape::SseFold::default();
+            anthropic.event("content_block_start", &json!({"index":0,"content_block":{"type":"tool_use","id":"t1","name":"fs_write","input":{}}}).to_string(), &mut |_| true).unwrap();
+            anthropic.event("content_block_delta", &json!({"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"content\":\"cut"}}).to_string(), &mut |_| true).unwrap();
+            anthropic.event("message_delta", &json!({"delta":{"stop_reason":if truncated {"max_tokens"} else {"tool_use"}},"usage":{"output_tokens":8192}}).to_string(), &mut |_| true).unwrap();
+            for result in [
+                openai_shape::from_response(&response),
+                fold.finish(),
+                anthropic.finish(),
+            ] {
+                if truncated {
+                    let r = result.unwrap();
+                    assert_eq!(r.stop, StopReason::MaxTokens);
+                    assert_eq!(r.usage.completion_tokens, 8192);
+                    assert!(!r
+                        .content
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ToolUse { .. })));
+                } else {
+                    assert!(result.is_err(), "未声明截断时不能吞掉损坏的参数");
+                }
+            }
+        }
+        let r = anthropic_shape::from_response(&json!({"stop_reason":"max_tokens","content":[{"type":"tool_use","id":"t1","name":"fs_write","input":{}}]})).unwrap();
+        assert!(!r
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. })));
+    }
+
+    #[test]
+    fn mcp_names_are_valid_on_both_provider_wires() {
+        // 2026-09-30 原生验收：DeepSeek 对内部 mcp:service:tool 名返回 HTTP400。
+        let mut req = empty_req();
+        req.tools.push(ToolDef {
+            name: "mcp:node_repl:js".into(),
+            description: "test".into(),
+            input_schema: serde_json::json!({"type":"object","properties":{}}),
+        });
+        req.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: req.tools[0].name.clone(),
+                input: serde_json::json!({}),
+            }],
+        });
+        let openai = openai_shape::to_request(&req);
+        let anthropic = anthropic_shape::to_request(&req, "test", 32, &[]);
+        let alias = openai["tools"][0]["function"]["name"].as_str().unwrap();
+        assert!(
+            alias.len() <= 64
+                && alias
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        );
+        assert_eq!(
+            openai["messages"][0]["tool_calls"][0]["function"]["name"],
+            alias
+        );
+        assert_eq!(anthropic["tools"][0]["name"], alias);
+        assert_eq!(anthropic["messages"][0]["content"][0]["name"], alias);
     }
 
     #[test]
@@ -2406,6 +2549,66 @@ mod tests {
         HttpProvider::new(kind, base.into(), "m".into(), "k".into(), creds, meta)
     }
 
+    #[test]
+    fn http_mcp_alias_restored_for_blocking_stream_and_json_fallback() {
+        let mut req = empty_req();
+        let name = "mcp:node_repl:js";
+        req.tools.push(ToolDef {
+            name: name.into(),
+            description: "test".into(),
+            input_schema: json!({"type":"object"}),
+        });
+        let alias = wire_tool_name(name);
+        for kind in [ProviderKind::OpenAi, ProviderKind::Anthropic] {
+            for mode in 0..3 {
+                let payload = if kind == ProviderKind::OpenAi {
+                    if mode == 2 {
+                        format!(
+                            "data: {}\n\ndata: [DONE]\n\n",
+                            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":alias,"arguments":"{}"}}]},"finish_reason":"tool_calls"}]})
+                        )
+                    } else {
+                        json!({"choices":[{"message":{"tool_calls":[{"id":"t1","function":{"name":alias,"arguments":"{}"}}]},"finish_reason":"tool_calls"}]}).to_string()
+                    }
+                } else if mode == 2 {
+                    format!("event: content_block_start\ndata: {}\n\nevent: message_stop\ndata: {{}}\n\n", json!({"index":0,"content_block":{"type":"tool_use","id":"t1","name":alias,"input":{}}}))
+                } else {
+                    json!({"content":[{"type":"tool_use","id":"t1","name":alias,"input":{}}],"stop_reason":"tool_use"}).to_string()
+                };
+                let base = serve_once(
+                    200,
+                    if mode == 2 {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                    Box::leak(payload.into_boxed_str()),
+                );
+                let provider = http_provider(kind.clone(), &base);
+                let response = if mode == 0 {
+                    provider.complete(&req)
+                } else {
+                    provider.stream(&req, &mut |_| true)
+                }
+                .unwrap();
+                assert!(
+                    matches!(&response.content[0], ContentBlock::ToolUse { name: restored, .. } if restored == name)
+                );
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn wire_tool_alias_is_valid_stable_and_distinct(a in ".{0,150}", b in ".{0,150}") {
+            let alias = wire_tool_name(&a);
+            proptest::prop_assert!(!alias.is_empty() && alias.len() <= 64);
+            proptest::prop_assert!(alias.bytes().all(|v| v.is_ascii_alphanumeric() || v == b'_' || v == b'-'));
+            proptest::prop_assert_eq!(&alias, &wire_tool_name(&a));
+            if a != b { proptest::prop_assert_ne!(alias, wire_tool_name(&b)); }
+        }
+    }
+
     /// HttpProvider::stream 全链路：真 HTTP + SSE 响应 → 增量 delta + 终值响应。
     #[test]
     fn http_stream_reads_sse_end_to_end() {
@@ -2440,12 +2643,46 @@ mod tests {
             content: "{\"path\":\"a.png\"}".into(),
             is_error: false,
             images: vec![ImageData {
+                computer_screenshot: false,
                 media_type: "image/png".into(),
                 data: "aGk=".into(),
             }],
         }
     }
 
+    #[test]
+    fn selected_computer_images_use_native_vision_but_persist_no_pixels() {
+        let req = ChatRequest {
+            model_slot: "m".into(),
+            tools: vec![],
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::ComputerImage {
+                    media_type: "image/png".into(),
+                    data: "aGk=".into(),
+                    generation: 17,
+                }],
+            }],
+        };
+        let openai = openai_shape::to_request(&req);
+        assert_eq!(openai["messages"][0]["content"][0]["type"], "image_url");
+        let anthropic = anthropic_shape::to_request(&req, "m", 1024, &[]);
+        assert_eq!(anthropic["messages"][0]["content"][0]["type"], "image");
+        let saved = serde_json::to_string(&req.messages).unwrap();
+        assert!(!saved.contains("aGk="));
+        let restored: Vec<Message> = serde_json::from_str(&saved).unwrap();
+        assert!(
+            matches!(&restored[0].content[0], ContentBlock::ComputerImage { data, generation: 0, .. } if data.is_empty())
+        );
+        let historical = ChatRequest {
+            messages: restored,
+            ..req
+        };
+        assert_eq!(
+            openai_shape::to_request(&historical)["messages"][0]["content"][0]["type"],
+            "text"
+        );
+    }
     #[test]
     fn openai_tool_result_images_become_user_message() {
         let req = ChatRequest {

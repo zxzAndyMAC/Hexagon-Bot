@@ -1,21 +1,8 @@
-//! 权限管线：五层求值（严格顺序）。
-//!
-//! 1. 内置 deny（最高优先，不可覆盖）—— 在各 Tool::builtin_deny；
-//! 2. 安全网必问 —— 基线合入/远程发布/.git 内部改写/删仓根等不可逆高危，
-//!    **永不进入记忆**。自治 L3+ 放行这一次（见 `release_at_high_autonomy`），
-//!    工具名 `remote_publish` 除外；
-//! 3. 项目级 deny —— permission_rules effect='deny'，压过一切记忆 allow，
-//!    也压过 L3+ 的放行；
-//! 4. 形状化记忆 allow —— tool + 命令/路径/域形 + 作用域（activation 绑授予时的
-//!    stage_run / project 长效）；网络规则绑域名；
-//! 5. 类级默认 —— 按 Tool::risk() 分：Read/WriteLocal 放行，
-//!    Egress/Exec/External 必问（必问卡通道：批准一次/拒绝/记住形状）。
-//!    自治 L3+ 把这次询问放行，不写规则。
-//!    External（mcp:*）焊死地板：记忆层 allow 不生效、规则写不进。
-//!    这里的「L4」是记忆层，不是自治档 L4。
-//!
-//! 负责人离开时，L0–L2 的请求挂起排队，不自动拒绝。
-//! 确认的检验命令沉淀为 Bash 形状授权（两本账合一）。
+//! Permission guards, remembered owner grants and project approval modes.
+//! Builtin denies, credentials and role ownership always win. Safety-net
+//! operations always require the owner. Restricted is the project default;
+//! assisted/broad release only actions with host-verifiable contracts.
+//! Coordination autonomy is independent and cannot bypass this pipeline.
 
 use crate::db::Db;
 use crate::orchestra::PackDef;
@@ -63,22 +50,60 @@ pub enum AllowVia {
     Default,
     /// 形状化记忆命中
     Remembered { shape: String, scope: String },
-    /// 自治 L3+ 放行安全网或新的权限询问。不写 permission_rules。
-    /// `level` 是存储档 3 或 4。`safety_net` 与若排队时的卡标记一致，
-    /// 时间线用它区分危险操作和普通新询问。
-    Autonomy {
-        level: u8,
-        safety_net: bool,
-        reason: String,
+    /// Host-classified action permitted by the project's current approval mode.
+    ApprovalMode {
+        mode: crate::approval_mode::ApprovalMode,
     },
 }
 
-/// 安全网：命令/路径命中清单即必问（自治 L3+ 改为放行这一次，仍不进记忆）。
-/// 清单是常量。`remote_publish` 不随高档放行，见 `release_at_high_autonomy`。
+/// Owner Q3: safety-net commands and paths always require owner confirmation,
+/// in every approval mode. They can never become remembered grants.
 pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
+    // Owner Q3/Q6: arbitrary host shell and existing-file replacement never
+    // become remembered blanket host authority, even in Broad mode.
+    if tool == "host_bash" {
+        return Some("host command");
+    }
+    if tool == "host_fs_write" && input.get("expected_sha256").is_some() {
+        return Some("external file replacement");
+    }
     match tool {
+        // Owner Q3/Q6/Q15 + desktop ticket 07: pixels and model descriptions
+        // cannot attest publishing, deletion, payment or role write ownership.
+        // False negative costs a card; false positive spends an unreviewed
+        // desktop side effect. No mode or remembered rule may waive this gate.
+        // Issue19: creating/closing even an isolated browser is a side effect;
+        // lifecycle support must not waive the existing per-action approval.
+        "browser_session" if input["op"].as_str() != Some("status") => {
+            Some("browser session lifecycle")
+        }
+        "computer_action" | "browser_action" => {
+            Some("desktop action with unverified external effects")
+        }
         "bash" => {
-            let cmd = input["cmd"].as_str().unwrap_or("").to_lowercase();
+            let raw = input["cmd"].as_str().unwrap_or("");
+            // Owner Q3 / 2026-10-01: whitespace or quoted argv must not turn
+            // `git push` into a remembered ordinary command. Shell parsing
+            // uncertainty is itself a reason for fresh owner confirmation.
+            let Ok(words) = shell_words(raw) else {
+                return Some("opaque shell command");
+            };
+            let cmd = words.join(" ").to_lowercase();
+            if words
+                .iter()
+                .any(|word| matches!(word.as_str(), "-delete" | "-exec" | "-execdir"))
+            {
+                return Some("potentially destructive command");
+            }
+            if words
+                .iter()
+                .any(|word| matches!(word.rsplit('/').next(), Some("git")))
+                && words
+                    .iter()
+                    .any(|word| matches!(word.as_str(), "push" | "send-email"))
+            {
+                return Some("remote publish / external message");
+            }
             const PATTERNS: &[(&str, &str)] = &[
                 ("git push", "remote publish"),
                 ("git merge", "baseline merge"),
@@ -88,7 +113,13 @@ pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
                 ("git filter-branch", "history rewrite"),
                 ("git checkout --", "worktree rewrite"),
                 ("git clean", "worktree rewrite"),
-                ("rm -rf", "destructive delete"),
+                ("rm ", "destructive delete"),
+                ("rmdir ", "destructive delete"),
+                ("npm publish", "remote publish"),
+                ("cargo publish", "remote publish"),
+                ("gh release", "remote publish"),
+                ("sendmail", "external message"),
+                ("stripe ", "payment"),
             ];
             PATTERNS
                 .iter()
@@ -121,6 +152,11 @@ pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
         }
         _ => return false,
     };
+    // Q12 exact fallback: literal '*' and '@' remain data, not pattern syntax.
+    // Bash still obeys the existing opaque/inline/compound eligibility guard.
+    if let Some(exact) = shape.strip_prefix("exact:") {
+        return exact == target && (tool != "bash" || bash_shape_matches("*", target));
+    }
     match tool {
         "bash" => bash_shape_matches(shape, target),
         "web_fetch" => web_fetch_shape_matches(shape, target),
@@ -140,7 +176,9 @@ fn web_fetch_shape_matches(shape: &str, url: &str) -> bool {
         Some(d) => {
             host_matches_dom(url, &d) && (head.is_empty() || glob_match(&format!("{head}*"), url))
         }
-        None => glob_match(shape, url),
+        None => url::Url::parse(url)
+            .ok()
+            .is_some_and(|value| glob_match(shape, value.as_str())),
     }
 }
 
@@ -317,6 +355,12 @@ fn prefix_eligible(argv: &[String]) -> bool {
         .unwrap_or(&argv[0])
         .to_lowercase();
     let prog = prog.strip_suffix(".exe").unwrap_or(&prog);
+    // Q12 exact fallback must retain an actual executable, not a filename glob
+    // whose expansion could choose a different program on the next call.
+    if prog.contains(['*', '?', '[', ']', '{', '}']) {
+        return false;
+    }
+
     if ARG_EXECUTORS.contains(&prog) {
         return false;
     }
@@ -527,6 +571,12 @@ fn pre_memory_guards(
             layer: "builtin_deny",
         });
     }
+    if let Some(reason) = crate::tools::host::guard(db, ctx, tool_name, input)? {
+        return Ok(GuardVerdict::Deny {
+            reason,
+            layer: "builtin_deny",
+        });
+    }
     // L1 内置 deny
     if let Some(reason) = tool.builtin_deny(input, ctx) {
         return Ok(GuardVerdict::Deny {
@@ -549,6 +599,12 @@ fn pre_memory_guards(
             layer: "builtin_deny",
         });
     }
+    if let Some(reason) = crate::design::guard_write(db, ctx, tool_name, input)? {
+        return Ok(GuardVerdict::Deny {
+            reason,
+            layer: "builtin_deny",
+        });
+    }
     // L2 安全网必问（永不进记忆）
     if let Some(label) = is_safety_net(tool_name, input) {
         return Ok(GuardVerdict::ReferHuman {
@@ -566,28 +622,11 @@ fn pre_memory_guards(
     Ok(GuardVerdict::Pass)
 }
 
-/// 自治 L3+ 把安全网和新的权限询问换成放行。
-///
-/// 出处：hands-free 票 03 / ADR 0059。选 L3 就是离开后过程不再被询问，
-/// 危险操作的代价由选档承担。被否决：读 `execution_rank`（封顶 2）——
-/// 这张票就永远放行不了；也被否决：把封顶抬到 4，盖章和提案的 `>= 3`
-/// 会在票 02/04 之前生效。
-///
-/// 到这里时内置 deny 已经是 `Deny`（在 `pre_memory_guards`，先于本函数）。
-/// 项目否定要再查一次：安全网在 L0–L2 先于 deny 返回，低档仍是必问而不是拒绝
-/// （顺序不变）。高档位若直接把 Ask 换成 Allow，否定规则会被跳过。
-/// 被否决：全局把 deny 挪到安全网之前——L0–L2 上「安全网 + 否定规则」会从
-/// 必问变成拒绝。
-///
-/// 远程发布不搭这趟车：工具名 `remote_publish` 任何档都留下必问。
-/// `git push` 是另一条命令（CONTEXT「远程发布」），随安全网放行。
-/// 真正的发布入口是 `publish::request`，不进本函数，也不会在这里被放行。
-/// 基线合入同样不搭：`git_baseline_merge` 和 bash 里的 `git merge` 是最终验收
-///（票 02 / ADR 0059），L3/L4 也不自动合入。
-///
-/// 读档失败按 0。false negative 多一张卡；false positive 是未审副作用。
-/// 放行不写 permission_rules：安全网永不记忆；新询问只是这一档的放行，不是记住。
-fn release_at_high_autonomy(
+/// Owner 2026-10-01 Q3/Q6/Q10: access modes supersede the old fixed-L4
+/// bypass. Coordinator autonomy must never approve a new tool permission.
+/// Unknown shell/MCP semantics stay pending: a false negative costs an owner
+/// question; a false positive costs an unreviewed side effect.
+fn release_in_approval_mode(
     db: &Db,
     ctx: &ToolContext,
     tool_name: &str,
@@ -597,44 +636,74 @@ fn release_at_high_autonomy(
     let Decision::Ask { reason, safety_net } = decision else {
         return Ok(decision);
     };
-    if tool_name == "remote_publish"
-        || tool_name == "git_baseline_merge"
-        || is_safety_net(tool_name, input) == Some("baseline merge")
-    {
-        return Ok(Decision::Ask { reason, safety_net });
-    }
-    // 2026-09-24 论坛活测：自治把 `cd /tmp && mkdir` 放过去，QA 在仓库外
-    // 起了服务。文件工具早已拒绝越出 repo_root；shell 的操作数越界只是
-    // 必问，高档又把必问换成放行。仓库外的写入留下给负责人的一次授权，
-    // 不进记忆、不由自治放行。读仓库外（解释器、证书）没有 path 操作数，
-    // 不走这支。false negative 多一张卡；false positive 是仓库外的未审写入。
-    if tool_name == "bash" && bash_operand_escapes(input, ctx) {
-        return Ok(Decision::Ask { reason, safety_net });
-    }
-    let level = crate::autonomy::rank(db, &ctx.project_id).unwrap_or(0);
-    if level < 3 {
-        return Ok(Decision::Ask { reason, safety_net });
-    }
     if let Some(shape) = matching_rule(db, ctx, tool_name, input, "deny")? {
         return Ok(Decision::Deny {
             reason: format!("project deny rule: {shape}"),
             layer: "project_deny",
         });
     }
+    if safety_net {
+        return Ok(Decision::Ask { reason, safety_net });
+    }
+    let mode = crate::approval_mode::read(db, &ctx.project_id)?.mode;
+    use crate::approval_mode::ApprovalMode;
+    if let Some(child) = &ctx.subagent {
+        // Owner Q11 / review 2026-10-01: unconditional child run_test/search
+        // allowed effects that a Restricted parent had never been granted.
+        // Require both dispatch-time and current parent authorization. A missed
+        // delegation costs another task; a false allow spends an unreviewed effect.
+        if !matches!(tool_name, "run_test" | "web_search")
+            || child.approval_mode == ApprovalMode::Restricted
+        {
+            return Ok(Decision::Ask { reason, safety_net });
+        }
+    }
+    let known_read =
+        tool_name == "bash" && safe_read_command(input) && !bash_operand_escapes(input, ctx);
+    // Desktop ticket 07: these are separate host implementations, not model
+    // labels. Activation requires an existing process-generation receipt;
+    // scrolling invokes only an observed AX scroll action, never click/type.
+    let known_navigation = tool_name == "computer_navigate"
+        && matches!(input["op"].as_str(), Some("activate" | "scroll"));
+    let allowed = match mode {
+        ApprovalMode::Restricted => false,
+        ApprovalMode::Assisted => {
+            known_read || known_navigation || matches!(tool_name, "web_search" | "run_test")
+        }
+        // Network reads and sandboxed test execution have host-enforced tool
+        // contracts. A command merely named "test" has no such guarantee.
+        ApprovalMode::Broad => {
+            known_read
+                || known_navigation
+                || matches!(tool_name, "web_fetch" | "web_search" | "run_test")
+        }
+    };
+    if !allowed {
+        return Ok(Decision::Ask { reason, safety_net });
+    }
     Ok(Decision::Allow {
-        via: AllowVia::Autonomy {
-            level,
-            safety_net,
-            reason,
-        },
+        via: AllowVia::ApprovalMode { mode },
     })
+}
+
+/// A deliberately exact vocabulary, not prefix matching. Git options/config,
+/// shell substitutions and arbitrary scripts can execute code; they need owner
+/// authorization even if a model calls them "read-only".
+fn safe_read_command(input: &Value) -> bool {
+    let Some(cmd) = input["cmd"].as_str() else {
+        return false;
+    };
+    // Even `git status` can launch repository-configured fsmonitor commands,
+    // and executable names can resolve to project-controlled PATH entries.
+    // Only the shell builtin has a sufficient host contract here.
+    cmd.trim() == "pwd"
 }
 
 /// 五层求值。`tool` 用于第 1 层内置 deny。
 /// 封印约定（票 05）：本函数与执行共用同一 `&input` 借用——裁决看到的
 /// 字节就是执行的字节；必问卡路径更硬：resolve 从持久化的 pending_question
 /// 载荷取 raw_input 执行,调用方根本没有再传参的入口。
-/// 自治 L3+ 的放行在返回前做（`release_at_high_autonomy`），不改这五层的顺序。
+/// Project modes only release host-verifiable low-risk actions after the guards.
 pub fn evaluate(
     db: &Db,
     ctx: &ToolContext,
@@ -643,7 +712,7 @@ pub fn evaluate(
     input: &Value,
 ) -> Result<Decision, crate::tools::ToolError> {
     let decision = evaluate_layers(db, ctx, tool, tool_name, input)?;
-    release_at_high_autonomy(db, ctx, tool_name, input, decision)
+    release_in_approval_mode(db, ctx, tool_name, input, decision)
 }
 
 fn evaluate_layers(
@@ -659,8 +728,8 @@ fn evaluate_layers(
     // 派遣域（code-search 票 06）：子代理回合里 mcp:* 按「本次勾选集」判——
     // 勾选的在 L0 授权之上放行（授权记在父代理账上，这里只是选择子集）；
     // 未勾选即拒。集合挂 ctx 随派遣生灭，不落 grants/permission_rules。
-    // run_test 同理：Exec 档在嵌套回合只能转 Ask 而子代理升不了级——
-    // reliability 04：实际写范围由测试专用 OS 沙箱约束，命令闸仅判用途。
+    // run_test/web_search also retain parent authorization; confinement alone
+    // does not grant permission. Dispatch snapshots cap later project widening.
     if let Some(scope) = &ctx.subagent {
         if tool_name.starts_with("mcp:") {
             return Ok(if scope.mcp.contains(tool_name) {
@@ -672,14 +741,6 @@ fn evaluate_layers(
                     reason: "mcp tool not selected for this dispatch".into(),
                     layer: "dispatch_pick",
                 }
-            });
-        }
-        if tool_name == "run_test" || tool_name == "web_search" {
-            // run_test 的写边界是测试专用 OS 沙箱；web_search 的出网面只是
-            // 一条 ≤300 字符的查询串（不能取页面正文，exfil 通道被 QUERY_CAP
-            // 限死）——派遣即授权语义内的一等能力，嵌套回合没有必问出口。
-            return Ok(Decision::Allow {
-                via: AllowVia::Default,
             });
         }
     }
@@ -766,7 +827,7 @@ pub fn evaluate_logged(
             match via {
                 AllowVia::Default => "default_allow",
                 AllowVia::Remembered { .. } => "remembered",
-                AllowVia::Autonomy { .. } => "autonomy_allow",
+                AllowVia::ApprovalMode { .. } => "approval_mode_allow",
             }
         }
     };
@@ -853,21 +914,76 @@ fn matching_rule_scoped(
     effect: &str,
 ) -> Result<Option<(String, String)>, crate::tools::ToolError> {
     let mut st = db.conn().prepare(
-        "SELECT shape, scope, stage_run_id, domain FROM permission_rules
-         WHERE project_id=?1 AND tool=?2 AND effect=?3",
+        "SELECT shape, scope, stage_run_id, domain, network_allowed, background_allowed, session_name, id FROM permission_rules
+         WHERE project_id=?1 AND tool=?2 AND effect=?3 AND (agent_id IS NULL OR agent_id=?4)",
     )?;
-    let rules: Vec<(String, String, Option<String>, Option<String>)> = st
-        .query_map(rusqlite::params![ctx.project_id, tool, effect], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?
-        .collect::<Result<_, _>>()?;
-    for (shape, scope, srid, _domain) in rules {
+    let rules = st
+        .query_map(
+            rusqlite::params![ctx.project_id, tool, effect, ctx.agent_id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            },
+        )?
+        .collect::<Result<
+            Vec<(
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                bool,
+                bool,
+                Option<String>,
+                String,
+            )>,
+            _,
+        >>()?;
+    for (shape, scope, srid, _domain, network, background, session, id) in rules {
+        // Ticket 06 review 2026-10-01: command patterns once widened offline
+        // approval into network/background execution. Legacy rows are offline.
+        // False negative costs another owner ask; false positive an unreviewed effect.
+        let execution_ok = effect != "allow"
+            || tool != "bash"
+            || ((!input["net"].as_bool().unwrap_or(false) || network)
+                && input["background"].as_bool().unwrap_or(false) == background
+                && input["session"].as_str() == session.as_deref());
         let scope_ok = match scope.as_str() {
             "project" => true,
             "activation" => srid.as_deref() == ctx.stage_run_id.as_deref(),
             _ => false,
         };
-        if scope_ok && shape_matches(&shape, tool, input) {
+        let inherited = effect != "allow"
+            || ctx
+                .subagent
+                .as_ref()
+                .is_none_or(|child| child.permission_rules.contains(&id));
+        let shape_ok = shape_matches(&shape, tool, input);
+        if scope_ok && shape_ok && (!execution_ok || !inherited) {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "permission_memory",
+                if !execution_ok {
+                    "execution_scope_mismatch"
+                } else {
+                    "outside_dispatch_grants"
+                },
+                std::time::Instant::now(),
+            );
+        }
+        if scope_ok && execution_ok && inherited && shape_ok {
             return Ok(Some((shape, scope)));
         }
     }
@@ -885,6 +1001,7 @@ pub fn persist_rule(
     scope: &str,
     pack: Option<&PackDef>,
 ) -> Result<bool, crate::tools::ToolError> {
+    let started = std::time::Instant::now();
     if is_safety_net(tool, input).is_some() {
         return Ok(false);
     }
@@ -908,15 +1025,63 @@ pub fn persist_rule(
     } else {
         return Ok(false);
     };
+    // Owner Q12: an editable suggestion is not authority to widen to arbitrary
+    // terminal commands. Reject an empty/global shape and patterns that do not
+    // cover the very action being approved; false negative costs another ask.
+    if shape.trim().is_empty()
+        || shape.trim().chars().all(|c| c == '*')
+        || !shape_matches(&shape, tool, input)
+    {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "permission_shape",
+            "shape_mismatch",
+            started,
+        );
+        return Err(crate::tools::ToolError::BadInput(
+            "permission shape does not safely match this action".into(),
+        ));
+    }
+    if tool == "bash" && !shape.starts_with("exact:") {
+        let command = input["cmd"].as_str().unwrap_or("");
+        let executable = shell_words(command)
+            .ok()
+            .and_then(|words| words.into_iter().next());
+        if shape.split_whitespace().next() != executable.as_deref() {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "permission_shape",
+                "executable_widening",
+                started,
+            );
+            return Err(crate::tools::ToolError::BadInput(
+                "permission shape must retain the executable".into(),
+            ));
+        }
+    }
     let srid = if scope == "activation" {
         ctx.stage_run_id.clone()
     } else {
         None
     };
-    let domain = shape.split_once('@').map(|(_, d)| d.to_string());
+    let domain = if shape.starts_with("exact:") {
+        None
+    } else {
+        shape.split_once('@').map(|(_, d)| d.to_string())
+    };
     db.conn().execute(
-        "INSERT INTO permission_rules (id, project_id, tool, shape, domain, effect, scope, stage_run_id)
-         VALUES (?1,?2,?3,?4,?5,'allow',?6,?7)",
+        "INSERT INTO permission_rules (id, project_id, tool, shape, domain, effect, scope, stage_run_id, agent_id, network_allowed, background_allowed, session_name)
+         VALUES (?1,?2,?3,?4,?5,'allow',?6,?7,?8,?9,?10,?11)",
         rusqlite::params![
             format!("pr{}", db.next_id("pr")?),
             ctx.project_id,
@@ -924,7 +1089,11 @@ pub fn persist_rule(
             shape,
             domain,
             scope,
-            srid
+            srid,
+            ctx.agent_id,
+            tool == "bash" && input["net"].as_bool().unwrap_or(false),
+            tool == "bash" && input["background"].as_bool().unwrap_or(false),
+            if tool == "bash" { input["session"].as_str() } else { None }
         ],
     )?;
     Ok(true)
@@ -936,19 +1105,23 @@ pub fn persist_rule(
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct PermissionRuleRow {
     pub id: String,
+    pub agent_id: Option<String>,
     pub tool: String,
     pub shape: String,
     pub domain: Option<String>,
     pub effect: String,
     pub scope: String,
     pub created_at: String,
+    pub network_allowed: bool,
+    pub background_allowed: bool,
+    pub session_name: Option<String>,
 }
 
 /// 审计面读路径：只读 permission_rules，属主仍是本模块。
 pub fn list_rules(db: &Db, project_id: &str) -> Result<Vec<PermissionRuleRow>, rusqlite::Error> {
     db.conn()
         .prepare(
-            "SELECT id, tool, shape, domain, effect, scope, created_at
+            "SELECT id, tool, shape, domain, effect, scope, created_at, agent_id, network_allowed, background_allowed, session_name
              FROM permission_rules WHERE project_id=?1
              ORDER BY created_at DESC, id DESC",
         )?
@@ -961,6 +1134,10 @@ pub fn list_rules(db: &Db, project_id: &str) -> Result<Vec<PermissionRuleRow>, r
                 effect: r.get(4)?,
                 scope: r.get(5)?,
                 created_at: r.get(6)?,
+                agent_id: r.get(7)?,
+                network_allowed: r.get(8)?,
+                background_allowed: r.get(9)?,
+                session_name: r.get(10)?,
             })
         })?
         .collect()
@@ -1017,7 +1194,7 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.conn()
             .execute(
-                // 票 03：省略 autonomy 的新行默认 L4，安全网和新询问会放行。
+                // 2026-10-01 Q3/Q10：协作默认 L4 不授予工具权限；新项目仍 Restricted。
                 // 本夹具测的是 L0 排队 / 记忆地板，显式钉 L0。高档见 prop 与 api 测试。
                 "INSERT INTO projects (id, dir, name, mode, autonomy) VALUES ('p1','/tmp/x','x','pack','L0')",
                 [],
@@ -1074,12 +1251,10 @@ mod tests {
             Decision::Allow { .. }
         ));
         assert!(revoke_rule(&db, "p1", "pr1").unwrap());
-        // 记忆撤掉之后不再命中规则。新询问按自治放行。
+        // Owner 2026-10-01: revocation returns to restricted approval, independent of autonomy.
         assert!(matches!(
             bash_ctx(&db, &ctx, "npm test"),
-            Decision::Allow {
-                via: AllowVia::Autonomy { .. }
-            }
+            Decision::Ask { .. }
         ));
         // 事件留痕
         let kind: String = db
@@ -1137,16 +1312,7 @@ mod tests {
             )
             .unwrap();
         let push = bash_ctx(&db, &ctx, "git push origin main");
-        assert!(
-            matches!(
-                push,
-                Decision::Allow {
-                    via: AllowVia::Autonomy { .. },
-                    ..
-                }
-            ),
-            "{push:?}"
-        );
+        assert!(matches!(push, Decision::Ask { .. }), "{push:?}");
         let merge = bash_ctx(&db, &ctx, "git merge hexagon/work");
         assert!(
             matches!(
@@ -1158,18 +1324,9 @@ mod tests {
             ),
             "baseline merge still asks: {merge:?}"
         );
-        // 仓内的破坏性删除仍由自治放行。`rm -rf /tmp/x` 越出仓库，另走必问。
+        // Owner Q3: destructive deletion always asks, including inside the project.
         let rm = bash_ctx(&db, &ctx, "rm -rf build");
-        assert!(
-            matches!(
-                rm,
-                Decision::Allow {
-                    via: AllowVia::Autonomy { .. },
-                    ..
-                }
-            ),
-            "{rm:?}"
-        );
+        assert!(matches!(rm, Decision::Ask { .. }), "{rm:?}");
         // 且永不进记忆
         let ok = persist_rule(
             &db,
@@ -1227,14 +1384,9 @@ mod tests {
                 via: AllowVia::Remembered { .. }
             }
         ));
-        // 不命中的新询问按原先 L4 放行，不是记忆命中。
+        // Owner Q10: unremembered operations now ask in restricted mode.
         let d2 = bash_ctx(&db, &ctx, "cargo build");
-        assert!(matches!(
-            d2,
-            Decision::Allow {
-                via: AllowVia::Autonomy { .. }
-            }
-        ));
+        assert!(matches!(d2, Decision::Ask { .. }));
     }
 
     #[test]
@@ -1251,12 +1403,10 @@ mod tests {
             bash_ctx(&db, &ctx, "cargo test"),
             Decision::Allow { .. }
         ));
-        ctx.stage_run_id = Some("sr2".into()); // 换了激活期：记忆不带走，新询问按自治放行
+        ctx.stage_run_id = Some("sr2".into()); // Owner Q10: activation grants expire; the new request asks again.
         assert!(matches!(
             bash_ctx(&db, &ctx, "cargo test"),
-            Decision::Allow {
-                via: AllowVia::Autonomy { .. }
-            }
+            Decision::Ask { .. }
         ));
     }
 
@@ -1274,14 +1424,9 @@ mod tests {
             "npm install zod --registry https://registry.npmjs.org",
         );
         assert!(matches!(d, Decision::Allow { .. }));
-        // 不引用该域：不是这条记忆，新询问按自治放行
+        // Owner Q10: a different domain needs a fresh approval.
         let d2 = bash_ctx(&db, &ctx, "npm install zod");
-        assert!(matches!(
-            d2,
-            Decision::Allow {
-                via: AllowVia::Autonomy { .. }
-            }
-        ));
+        assert!(matches!(d2, Decision::Ask { .. }));
     }
 
     #[test]
@@ -1390,13 +1535,8 @@ mod tests {
             "External 地板：记忆 allow 永不生效，得 {d:?}"
         );
         assert!(
-            matches!(
-                d,
-                Decision::Allow {
-                    via: AllowVia::Autonomy { .. }
-                }
-            ),
-            "新询问按自治放行，得 {d:?}"
+            matches!(d, Decision::Ask { .. }),
+            "Owner Q3: unknown external effects require approval, got {d:?}"
         );
     }
 
@@ -1744,12 +1884,10 @@ mod tests {
                 [],
             )
             .unwrap();
-        // 复合命令不能靠记忆放行。离开时它是新询问，按自治放行。
+        // Owner Q10: a compound outside the remembered shape asks again.
         assert!(matches!(
             bash_ctx(&db, &ctx, "cargo test && echo hi"),
-            Decision::Allow {
-                via: AllowVia::Autonomy { .. }
-            }
+            Decision::Ask { .. }
         ));
         assert!(matches!(
             bash_ctx(&db, &ctx, "cargo test && cargo build"),
@@ -1831,7 +1969,7 @@ mod tests {
             &json!({"path": "src/a.rs"}),
         )
         .unwrap();
-        // 自治放行：Exec 无规则命中 → Ask → 秩 4 释放成 Autonomy
+        // Owner Q10: unknown Exec is now a pending permission.
         evaluate_logged(&db, &ctx, &Bash, "bash", &json!({"cmd": "ls -la"})).unwrap();
         // L0 授权闸门缺席：mcp 工具没喂 grants
         evaluate_logged(&db, &ctx, &ExternalStub, "mcp:svc:t", &json!({})).unwrap();
@@ -1853,7 +1991,7 @@ mod tests {
             "project_deny",
             "remembered",
             "default_allow",
-            "autonomy_allow",
+            "must_ask",
             "no_grant",
         ] {
             assert!(mine.iter().any(|r| r.code == code), "missing {code}");
@@ -1935,10 +2073,10 @@ mod tests {
         }
 
         proptest! {
-            /// 不变量①：离开时的放行等于原先的 L4。安全网由自治放行，不因记忆规则改道。
-            /// 基线合入不在这组 NET 里。ADR 0069 之后夹具写成 L0 也不再把安全网留成必问。
+            /// Owner Q3: critical actions require the owner in every access mode;
+            /// old fixed-L4 release assertions were unsafe under that decision.
             #[test]
-            fn safety_net_releases_at_former_l4(
+            fn safety_net_requires_owner_independent_of_autonomy(
                 rules in collection::vec(rule(), 0..8),
                 idx in 0..NET.len(),
             ) {
@@ -1951,15 +2089,9 @@ mod tests {
                 let project_deny = matches!(d, Decision::Deny { layer: "project_deny", .. });
                 let baseline = cmd.starts_with("git merge")
                     && matches!(d, Decision::Ask { safety_net: true, .. });
-                let released = matches!(
-                    d,
-                    Decision::Allow {
-                        via: AllowVia::Autonomy { safety_net: true, .. },
-                        ..
-                    }
-                );
+                let pending = matches!(d, Decision::Ask { safety_net: true, .. });
                 prop_assert!(
-                    project_deny || baseline || released,
+                    project_deny || baseline || pending,
                     "safety net got {d:?} for {cmd}"
                 );
             }
@@ -2027,7 +2159,7 @@ mod tests {
                 insert_rule(&db, 0, "bash", "cargo *", "allow", "project");
                 let cmd = format!("cargo test {sep} {tail}");
                 let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
-                // 形状不能放行复合命令。离开时的新询问可以按自治放行，但不是记忆命中。
+                // Owner Q10: the compound needs fresh approval; coordinator autonomy cannot release it.
                 prop_assert!(
                     !matches!(d, Decision::Allow { via: AllowVia::Remembered { .. }, .. }),
                     "compound {cmd} must not be shape-allowed, got {d:?}"
@@ -2050,9 +2182,9 @@ mod tests {
                 );
                 let cmd = format!("npm install zod --registry https://{host}");
                 let d = evaluate(&db, &ctx, &Bash, "bash", &json!({"cmd": cmd})).unwrap();
-                // 寄生域不能命中 @ 规则。未命中的新询问按原先 L4 自治放行，不是规则放行。
+                // Owner Q10: a hostile domain cannot borrow a remembered grant; restricted asks.
                 prop_assert!(
-                    matches!(d, Decision::Allow { via: AllowVia::Autonomy { .. }, .. }),
+                    matches!(d, Decision::Ask { .. }),
                     "{host} must not satisfy the domain rule, got {d:?}"
                 );
             }
@@ -2115,7 +2247,7 @@ mod tests {
 
         proptest! {
             #[test]
-            fn high_levels_pass_safety_net_and_reject_never_and_publish(
+            fn coordination_levels_do_not_change_permission_boundaries(
                 level in sample::select(vec!["L0", "L1", "L2", "L3", "L4"]),
                 action in boundary_action(),
             ) {
@@ -2146,21 +2278,11 @@ mod tests {
                             other,
                             Boundary::SafetyBash(_) | Boundary::SafetyWrite(_)
                         );
-                        // 存储列不再分档。安全网和新询问一律按原先 L4 放行，轨迹上的秩是 4。
-                        let _ = (high, level);
-                        match &d {
-                            Decision::Allow {
-                                via: AllowVia::Autonomy {
-                                    level: got,
-                                    safety_net,
-                                    ..
-                                },
-                            } => {
-                                prop_assert_eq!(*got, 4, "{:?}", action);
-                                prop_assert_eq!(*safety_net, expect_net, "{:?}", action);
-                            }
-                            _ => prop_assert!(false, "{level} {action:?} => {d:?}"),
-                        }
+                        // Owner 2026-10-01: coordinator autonomy cannot approve
+                        // permissions. Restricted is the independent default.
+                        let _ = high;
+                        prop_assert!(matches!(d, Decision::Ask { safety_net, .. } if safety_net == expect_net),
+                            "{level} {action:?} => {d:?}");
                     }
                 }
             }

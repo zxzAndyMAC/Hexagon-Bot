@@ -1680,9 +1680,16 @@ mod tests {
     #[test]
     fn granted_agent_calls_mcp_tool() {
         let (db, reg, ctx, _d, _h) = setup(true);
-        // 已授权的 MCP 调用是新询问，按原先 L4 直接执行。
+        // 2026-10-01 owner Q10: a service grant exposes the tool, but does
+        // not authorize unknown external effects. Exercise the owner gate.
         let out = reg
             .call(&db, &ctx, "mcp:fake:echo", json!({"hello": "world"}))
+            .unwrap();
+        let crate::tools::CallOutcome::Asked(qid) = out else {
+            panic!("expected owner review, got {out:?}");
+        };
+        let out = reg
+            .resolve(&db, &ctx, &qid, true, None, "project", None, "owner")
             .unwrap();
         let crate::tools::CallOutcome::Done(v) = out else {
             panic!("expected done, got {out:?}");

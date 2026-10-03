@@ -25,6 +25,9 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "resources": {
+      "resources/browser/": "browser/"
+    }
   }
 }

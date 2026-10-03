@@ -1,3 +1,8 @@
+import { DesktopControlPanel } from './DesktopControlPanel'
+import { BrowserControlPanel } from './BrowserControlPanel'
+import { pauseDesktop } from '../desktopPause'
+import { ProjectApprovalMode } from './ProjectApprovalMode'
+import { DesktopPermissions } from './DesktopPermissions'
 import type { ProjectSkillDocument } from '../gen/ProjectSkillDocument'
 import { ExperienceEntries } from './ExperienceEntries'
 // 设置整页（票 29）：工作台整体换成设置页，不是弹层。
@@ -5,7 +10,9 @@ import { ExperienceEntries } from './ExperienceEntries'
 // 「日志」（diagnostic-records 票 01）：诊断开关在这里，通用页不再放。
 // projectless（启动页「设置」入口，无项目上下文）：项目作用域分区渲染提示而
 // 不发必败的 conn/wb IPC——否则每个分区都弹 internal toast（ui-audit-2 收口回归）。
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { SettingsVirtualList } from './SettingsVirtualList'
+import { LoadingState } from './LoadingState'
 import { useTranslation } from 'react-i18next'
 import i18n, { SUPPORTED, setLang, type Locale } from '../i18n'
 import { useUiStore, type ThemePref } from '../store'
@@ -52,6 +59,7 @@ function ListDetail<T>({
   searchPlaceholder,
   actions,
   emptyText,
+  virtualized = false,
   children,
 }: {
   items: T[]
@@ -63,6 +71,7 @@ function ListDetail<T>({
   searchPlaceholder?: string
   actions?: React.ReactNode
   emptyText?: string
+  virtualized?: boolean
   children: React.ReactNode
 }) {
   const [q, setQ] = useState('')
@@ -89,6 +98,8 @@ function ListDetail<T>({
         <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
           {shown.length === 0 ? (
             <div className="dim3" style={{ fontSize: 12, padding: '12px 8px' }}>{emptyText ?? '—'}</div>
+          ) : virtualized && shown.length > 100 ? (
+            <SettingsVirtualList key={q} items={shown} itemKey={itemKey} selected={selected} onSelect={onSelect} renderItem={renderItem} />
           ) : (
             shown.map((it) => {
               const k = itemKey(it)
@@ -497,9 +508,13 @@ function PermsSection() {
             style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}
           >
             <span className="chip">{r.tool}</span>
-            <span className="mono" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.shape}>
-              {r.shape}
-            </span>
+            {r.agent_id && <span className="chip">{r.agent_id}</span>}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.shape}>{r.shape}</div>
+              {r.tool === 'bash' && <div className="dim3">
+                {t(r.network_allowed ? 'perms.networkAllowed' : 'perms.networkDisabled')} · {t(r.background_allowed ? 'perms.backgroundAllowed' : 'perms.foregroundOnly')} · {r.session_name ? t('perms.namedSession', { name: r.session_name }) : t('perms.noNamedSession')}
+              </div>}
+            </div>
             <span className={`chip ${r.effect === 'deny' ? 'err' : 'ok'}`} style={{ fontSize: 10 }}>
               {t(`perms.effect_${r.effect}`)}
             </span>
@@ -526,6 +541,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   const [sel, setSel] = useState('SKILL.md')
   const [content, setContent] = useState('')
   const [readError, setReadError] = useState('')
+  const [reading, setReading] = useState(true)
   const [readRevision, setReadRevision] = useState(0)
   const [projectDocument, setProjectDocument] = useState<ProjectSkillDocument | null>(null)
   const [editing, setEditing] = useState(false)
@@ -537,7 +553,9 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    api.skillFiles(skill.name).then(setFiles).catch(() => setFiles(['SKILL.md']))
+    let current = true
+    api.skillFiles(skill.name).then(value => { if (current) setFiles(value) }).catch(() => { if (current) setFiles(['SKILL.md']) })
+    return () => { current = false }
   }, [skill.name])
 
   useEffect(() => {
@@ -545,6 +563,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
     // a delayed response for a previous file must not replace the current one.
     let current = true
     setReadError('')
+    setReading(true)
     setContent('')
     api.readSkillFile(skill.name, sel)
       .then((c) => {
@@ -553,6 +572,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
         if (sel === 'SKILL.md') { setBody(c); setOrigBody(c) }
       })
       .catch((e) => { if (current) setReadError(errText(e)) })
+      .finally(() => { if (current) setReading(false) })
     return () => { current = false }
   }, [skill.name, sel, readRevision])
 
@@ -633,6 +653,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
         </span>
       </div>
       {readError && <p role="alert">{readError}</p>}
+      {reading && <LoadingState label={t('skills.loadingDetail')} />}
       {skill.origin === 'project' && <ExperienceEntries key={skill.name} skill={skill.name} documentRevision={readRevision} onRecovered={() => { setReadRevision((n) => n + 1); onSaved() }} />}
       {!!skill.legacy_experience_blocks && (
         <p role="status">{t('skills.legacyExperience', { count: skill.legacy_experience_blocks })}</p>
@@ -712,11 +733,26 @@ function SkillsSection() {
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [scanning, setScanning] = useState(false)
 
-  const load = useCallback(
-    () => api.listSkills().then(setSkills).catch((e) => pushToast(errText(e), 'err')),
-    [pushToast],
-  )
-  useEffect(() => { void load() }, [load])
+  const loadGeneration = useRef(0)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const load = useCallback(async () => {
+    const generation = ++loadGeneration.current
+    setLoading(true)
+    setLoadError('')
+    try {
+      const rows = await api.listSkills()
+      if (generation === loadGeneration.current) setSkills(rows)
+    } catch (error) {
+      if (generation === loadGeneration.current) setLoadError(errText(error))
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    void load()
+    return () => { loadGeneration.current += 1 }
+  }, [load])
 
   const toggle = (s: SkillRow) => {
     const next = !s.enabled
@@ -778,14 +814,19 @@ function SkillsSection() {
   return (
     <div>
       <div className="dim3" style={{ fontSize: 12, marginBottom: 10 }}>{t('skills.intro')}</div>
+      {loading && <LoadingState label={t('skills.loadingList')} />}
+      {loadError && <div role="alert">{loadError} <button className="btn" onClick={() => void load()}
+        title={[t('skills.retryLoad'), formatBinding(bindingFor('retrySkillsLoad'))].filter(Boolean).join(' · ')}
+        onKeyDown={event => { if (matches(event.nativeEvent, bindingFor('retrySkillsLoad'))) { event.preventDefault(); event.stopPropagation(); void load() } }}>{t('skills.retryLoad')}</button></div>}
       <ListDetail<SkillRow>
+        virtualized
         items={skills ?? []}
         itemKey={(s) => s.name}
         filterText={(s) => `${s.name} ${s.description}`}
         selected={creating ? null : selected}
         onSelect={(k) => { setSelected(k); setCreating(false) }}
         searchPlaceholder={t('skills.filter')}
-        emptyText={t('skills.empty')}
+        emptyText={loading ? t('skills.loadingList') : loadError ? '—' : t('skills.empty')}
         actions={
           <>
             <button className="btn" style={{ fontSize: 12 }} onClick={() => { setCreating(true); setSelected(null) }}>
@@ -1498,16 +1539,25 @@ function LogsSection({ projectless = false }: { projectless?: boolean }) {
   )
 }
 
-export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }: {
+export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false, initialSection = 'general' }: {
   onBack: () => void
+  initialSection?: Section
   onOpenUsageDetail?: () => void
   /// 无项目上下文（启动页进入）：项目作用域分区只显示提示，不触发 IPC
   projectless?: boolean
 }) {
   const { t } = useTranslation()
   const { themePref, setThemePref } = useUiStore()
-  const [section, setSection] = useState<Section>('general')
+  const [section, setSection] = useState<Section>(initialSection)
   const [, setKeyTick] = useState(0)
+  useEffect(() => { setSection(initialSection) }, [initialSection])
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (matches(event, bindingFor('desktopPanel')) || matches(event, bindingFor('browserPanel'))) setSection('perms')
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
 
   /// 项目作用域分区在无项目上下文下的占位（见头部注释）
   const gated = (el: React.ReactNode): React.ReactNode =>
@@ -1550,7 +1600,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
     ),
     team: <TeamSection projectless={projectless} />,
     models: <ProviderManager />, // 全局 providers.json，无项目也可用
-    perms: gated(<PermsSection />),
+    perms: <>{projectless && <DesktopPermissions />}{gated(<><DesktopControlPanel inline /><BrowserControlPanel inline /><ProjectApprovalMode placement="below" /><PermsSection /></>)}</>,
     skills: <SkillsSection />, // 全局层无项目也可用（ADR 0057）
     mcp: <McpSection projectless={projectless} />, // 全局清单无项目可配（ADR 0057）
     autonomy: gated(<AutonomySection />),
@@ -1579,6 +1629,10 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false }:
           <Icon name="arrow-left" size={12} /> {t('settings.back')}
         </button>
         <strong style={{ fontWeight: 510 }}>{t('settings.title')}</strong>
+        {!projectless && <button type="button" className="btn" onClick={() => void pauseDesktop()}
+          title={`${t('computer.pause')} · ${formatBinding(bindingFor('desktopPause'))}`}>
+          <Icon name="pause" size={12} /> {t('computer.pause')}
+        </button>}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <div style={{ width: 180, padding: '14px 10px', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 2 }}>

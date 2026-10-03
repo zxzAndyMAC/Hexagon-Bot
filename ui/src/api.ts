@@ -1,3 +1,29 @@
+import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
+import type { TimelineWindowMetadata } from './gen/TimelineWindowMetadata'
+import { mockTimelineWindow, mockTimelineFacts, mockTimelineNodes } from './timelineMock'
+import { useUiStore } from './store'
+import type { TimelineWindowRequest } from './gen/TimelineWindowRequest'
+import type { TimelineWindowPage } from './gen/TimelineWindowPage'
+import type { TimelineFactsRequest } from './gen/TimelineFactsRequest'
+import type { TimelineFacts } from './gen/TimelineFacts'
+import type { TimelineNodesRequest } from './gen/TimelineNodesRequest'
+import type { TimelineNodesPage } from './gen/TimelineNodesPage'
+import type { BrowserLabels } from './gen/BrowserLabels'
+import type { BrowserSession } from './gen/BrowserSession'
+import type { BrowserMode } from './gen/BrowserMode'
+import type { BrowserPreview } from './gen/BrowserPreview'
+import type { ElementRef } from './gen/ElementRef'
+import type { NativePreviewTarget } from './gen/NativePreviewTarget'
+import type { NativePreviewFrame } from './gen/NativePreviewFrame'
+import type { DesignDirection } from './gen/DesignDirection'
+import type { DesktopScreenshot } from './gen/DesktopScreenshot'
+import type { DesktopStatus } from './gen/DesktopStatus'
+import type { DesktopControl } from './gen/DesktopControl'
+import type { PermissionShapeSuggestion } from './gen/PermissionShapeSuggestion'
+import type { ApprovalMode } from './gen/ApprovalMode'
+import type { ApprovalModeStatus } from './gen/ApprovalModeStatus'
+import type { DesktopPermissions } from './gen/DesktopPermissions'
+import type { DesktopPermission } from './gen/DesktopPermission'
 import type { ExperienceSourceRequest } from './gen/ExperienceSourceRequest'
 import type { ExperienceSourceDocument } from './gen/ExperienceSourceDocument'
 import type { ExperienceHistoryRequest } from './gen/ExperienceHistoryRequest'
@@ -167,16 +193,95 @@ export async function onToolOutput(cb: (d: ToolOutputDelta) => void): Promise<()
 export async function onTurnDelta(cb: (d: TurnDelta) => void): Promise<() => void> {
   if (!isTauri) return () => {}
   const { listen } = await import('@tauri-apps/api/event')
-  return listen<TurnDelta>('turn-delta', (e) => cb(e.payload))
+  const batch = batchTurnDeltas(cb)
+  const unlisten = await listen<TurnDelta>('turn-delta', (e) => batch.push(e.payload))
+  return () => { unlisten(); batch.cancel() }
+}
+
+// 2026-10-01 native profiling: per-token IPC caused thousands of synchronous
+// Markdown renders. Coalesce adjacent data frames; protocol boundaries stay ordered.
+export function batchTurnDeltas(cb: (d: TurnDelta) => void) {
+  let pending: TurnDelta | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const flush = () => {
+    clearTimeout(timer)
+    timer = undefined
+    const value = pending
+    pending = undefined
+    if (value) cb(value)
+  }
+  return {
+    push(d: TurnDelta) {
+      if (d.reset || d.done || d.waiting) { flush(); cb(d); return }
+      if (pending && (pending.agent_id !== d.agent_id || pending.stage_run_id !== d.stage_run_id || pending.call !== d.call)) flush()
+      pending = pending ? { ...d, text: pending.text + d.text,
+        thinking: pending.thinking + d.thinking,
+        plan: pending.plan == null && d.plan == null ? undefined : (pending.plan ?? '') + (d.plan ?? ''),
+      } : { ...d }
+      timer ??= setTimeout(flush, 50)
+    },
+    cancel() { clearTimeout(timer); timer = undefined; pending = undefined },
+  }
+}
+
+// Project IPCs have one synchronous invalidation boundary, including callers in
+// the wizard/start screen. Reopening the same canonical root is still a new epoch.
+async function switchProject<T>(operation: () => Promise<T>, closing = false): Promise<T> {
+  const store = useUiStore.getState()
+  store.beginProjectSwitch()
+  const epoch = useUiStore.getState().projectEpoch
+  let succeeded = false
+  try {
+    const result = await operation()
+    succeeded = true
+    return result
+  } finally {
+    if (epoch === useUiStore.getState().projectEpoch && !(closing && succeeded)) {
+      try {
+        const status = await call<DesktopStatus>('desktop_status')
+        useUiStore.getState().commitProjectRoot(status.project_root, epoch)
+      } catch { /* no active project; null keeps old content hidden */ }
+    }
+  }
 }
 
 export const api = {
+  timelineWindowMetadata: (request: TimelineWindowMetadataRequest) => call<TimelineWindowMetadata>('timeline_window_metadata', { request }),
+  timelineWindow: (request: TimelineWindowRequest) => call<TimelineWindowPage>('timeline_window', { request }),
+  timelineFacts: (request: TimelineFactsRequest) => call<TimelineFacts>('timeline_facts', { request }),
+  timelineNodes: (request: TimelineNodesRequest) => call<TimelineNodesPage>('timeline_nodes', { request }),
+  exportTimelineItems: async (kinds?: string[]) => {
+    const epoch = useUiStore.getState().projectEpoch
+    const root = useUiStore.getState().projectRoot
+    const items: TimelineItem[] = []
+    let after: number | undefined
+    while (true) {
+      const page = await call<TimelineItem[]>('timeline', { after: after ?? null, limit: 500 })
+      // Issue15: an export may span several IPC reads; never stitch workspaces.
+      if (useUiStore.getState().projectEpoch !== epoch || useUiStore.getState().projectRoot !== root) throw new Error('Project changed during timeline export')
+      if (!page.length) break
+      items.push(...page.filter(item => !kinds || kinds.includes(item.event.kind)))
+      const cursor = page.at(-1)!.event.id
+      if (after != null && cursor <= after) throw new Error('Timeline export cursor did not advance')
+      after = cursor
+      if (page.length < 500) break
+    }
+    return items
+  },
   dataBoundary: () => call<DataBoundary>('data_boundary'),
   ping: () => call<string>('core_ping'),
   openProject: (dir: string, name: string, roles: [string, string][], packJson?: string) =>
-    call<void>('open_project', { dir, name, roles, packJson: packJson ?? null }),
+    switchProject(() => call<void>('open_project', { dir, name, roles, packJson: packJson ?? null })),
   timeline: (after?: number, limit = 500) =>
     call<TimelineItem[]>('timeline', { after: after ?? null, limit }),
+  browserSelectionStart: (expectedProjectRoot: string, sessionId: string, labels: { element: string; region: string; done: string; hint: string }) =>
+    call<void>('browser_selection_start', { expectedProjectRoot, sessionId, labels }),
+  browserSelectionPoll: (expectedProjectRoot: string, sessionId: string) =>
+    call<ElementRef[]>('browser_selection_poll', { expectedProjectRoot, sessionId }),
+  browserSelectionDiscard: (expectedProjectRoot: string, ids: string[]) =>
+    call<void>('browser_selection_discard', { expectedProjectRoot, ids }),
+  sendElementMessage: (body: string, attachments: AttachRef[], elementIds: string[], expectedProjectRoot: string) =>
+    call<number>('send_message', { body, attachments, elementIds, expectedProjectRoot }),
   sendMessage: (body: string, attachments: AttachRef[] = []) =>
     call<number>('send_message', { body, attachments }),
   // 票 03：粘贴/拖拽图片先暂存 .hexagon/inbox/，发送时带引用
@@ -194,6 +299,25 @@ export const api = {
   writeRepoFile: (path: string, content: string) => call<void>('write_repo_file', { path, content }),
   createRepoFile: (path: string) => call<void>('create_repo_file', { path }),
   createRepoDir: (path: string) => call<void>('create_repo_dir', { path }),
+  permissionShapeSuggestion: (questionId: string) => call<PermissionShapeSuggestion | null>('permission_shape_suggestion', { questionId }),
+  approvalMode: () => call<ApprovalModeStatus>('approval_mode'),
+  setApprovalMode: (mode: ApprovalMode, expectedProjectRoot: string) => call<ApprovalModeStatus>('set_approval_mode', { mode, expectedProjectRoot }),
+  designDirection: () => call<DesignDirection>('design_direction'),
+  chooseDesignDirection: (questionId: string, revision: number, optionId?: string | null, existingGuidance?: string | null) => call<DesignDirection>('choose_design_direction', { questionId, revision, optionId: optionId ?? null, existingGuidance: existingGuidance ?? null }),
+  desktopPreviewTarget: (expectedProjectRoot: string) => call<NativePreviewTarget | null>('desktop_preview_target', { expectedProjectRoot }),
+  desktopPreview: (expectedProjectRoot: string, windowId: number, processId: number) => call<NativePreviewFrame>('desktop_preview', { expectedProjectRoot, windowId, processId }),
+  desktopPreviewStop: (expectedProjectRoot: string) => call<void>('desktop_preview_stop', { expectedProjectRoot }),
+  desktopPreviewFocus: (expectedProjectRoot: string, windowId: number, processId: number) => call<void>('desktop_preview_focus', { expectedProjectRoot, windowId, processId }),
+  desktopScreenshot: (name: string, expectedProjectRoot: string) => call<DesktopScreenshot>('desktop_screenshot', { name, expectedProjectRoot }),
+  browserStatus: (expectedProjectRoot: string) => call<BrowserSession | null>('browser_status', { expectedProjectRoot }),
+  browserOpen: (expectedProjectRoot: string, mode: BrowserMode, labels: BrowserLabels) => call<BrowserSession>('browser_open', { expectedProjectRoot, mode, labels }),
+  browserDetach: (expectedProjectRoot: string, sessionId: string) => call<void>('browser_detach', { expectedProjectRoot, sessionId }),
+  browserPreview: (expectedProjectRoot: string, sessionId: string) => call<BrowserPreview>('browser_preview', { expectedProjectRoot, sessionId }),
+  browserFocus: (expectedProjectRoot: string, sessionId: string) => call<void>('browser_focus', { expectedProjectRoot, sessionId }),
+  desktopStatus: () => call<DesktopStatus>('desktop_status'),
+  desktopControl: (action: DesktopControl, expectedProjectRoot: string) => call<DesktopStatus>('desktop_control', { action, expectedProjectRoot }),
+  desktopPermissions: () => call<DesktopPermissions>('desktop_permissions'),
+  desktopOpenSettings: (permission: DesktopPermission) => call<void>('desktop_open_settings', { permission }),
   sandboxStatus: () => call<SandboxStatus>('sandbox_status'),
   answerPermission: (questionId: string, allow: boolean, rememberShape?: string, scope = 'activation') =>
     call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
@@ -252,6 +376,7 @@ export const api = {
   scanExternalMcp: () => call<ExtMcpRow[]>('scan_external_mcp'),
   importMcp: (references: string[]) => call<ImportReport>('import_mcp', { references }),
   openMcpMarket: () => call<void>('open_mcp_market'),
+  openBrowserExtensionStore: () => call<void>('open_browser_extension_store'),
   usage: () => call<UsageSummary>('usage'),
   usageContextPressure: () => call<ContextPressure>('usage_context_pressure'),
   usageSeries: (granularity: 'day' | 'hour' = 'day', from?: string | null, to?: string | null) =>
@@ -310,7 +435,7 @@ export const api = {
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<void>('reconcile_tool_action', { actionId }),
-  abandonToolAction: (actionId: string, reason: string) => call<void>('abandon_tool_action', { actionId, reason }),
+  abandonToolAction: (actionId: string, reason: string, expectedProjectRoot: string) => call<void>('abandon_tool_action', { actionId, reason, expectedProjectRoot }),
   retryToolAction: (actionId: string, reason: string, acceptsDuplicate: boolean) => call<void>('retry_tool_action', { actionId, reason, acceptsDuplicate }),
   resumeToolAction: (actionId: string) => call<void>('resume_tool_action', { actionId }),
   // ---- 失速卡（stall-watch 票 02/04）：再试一次 / 知道了 ----
@@ -358,9 +483,9 @@ export const api = {
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
-  openRecent: (dir: string) => call<void>('open_recent', { dir }),
+  openRecent: (dir: string) => switchProject(() => call<void>('open_recent', { dir })),
   removeRecent: (dir: string) => call<void>('remove_recent', { dir }),
-  closeProject: () => call<void>('close_project'),
+  closeProject: () => switchProject(() => call<void>('close_project'), true),
   // ---- 快速通道（票 26）----
   projectInfo: () => call<ProjectInfo>('project_info'),
   dispatch: (role: string, input: string, attachments: AttachRef[] = []) =>
@@ -403,7 +528,7 @@ export const api = {
   /// 按项目说明批量起草勾选角色的职责段落（只回草稿；ADR 0075 起不产 globs）。
   draftRoleDefs: (brief: string, roles: RoleDef[]) =>
     call<RoleSeedDraft[]>('draft_role_defs', { brief, roles }),
-  draftFlow: (sentence: string) => call<PackDef>('draft_flow', { sentence }),
+  draftFlow: (sentence: string, roles: string[]) => call<PackDef>('draft_flow', { sentence, roles }),
   readInstructionFile: (dir: string) => call<string>('read_instruction_file', { dir }),
   draftRoleDuty: (name: string, hint: string) =>
     call<string>('draft_role_duty', { name, hint }),
@@ -448,11 +573,11 @@ export const api = {
     if (!isTauri) {
       // 浏览器 dev 没有壳层通道。按核的顺序当场报告再返回，不另睡假装耗时。
       for (const step of CREATE_STEPS) onStep?.(step)
-      return call<void>('create_project', args)
+      return switchProject(() => call<void>('create_project', args))
     }
     const onProgress = new Channel<CreateStep>()
     onProgress.onmessage = (step) => onStep?.(step)
-    return invoke<void>('create_project', { ...args, onProgress })
+    return switchProject(() => invoke<void>('create_project', { ...args, onProgress }))
   },
 }
 
@@ -496,7 +621,7 @@ const mkMsg = (
   author: string, body: string, hhmm: string,
 ): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id, stage_run_id, payload: {}, created_at: `${T0}${hhmm}:00Z` },
-  message: { id, author, body, tokens: [], attachments: [], created_at: `${T0}${hhmm}:00Z`, thinking: '' },
+  message: { id, author, body, tokens: [], attachments: [], element_refs: [], created_at: `${T0}${hhmm}:00Z`, thinking: '' },
 })
 
 const ART_CONTENT: Record<string, Record<number, string>> = {
@@ -763,6 +888,18 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'art15', path: 'docs/markdown-demo.md', kind: '结构说明', tier: 'freeform', stage_run_id: 'r1', author: 'a1', version: 1, status: 'valid', upstream_id: null },
         { id: 'art16', path: 'docs/impl-notes.md', kind: '结构说明', tier: 'freeform', stage_run_id: 'r3', author: 'a3', version: 1, status: 'valid', upstream_id: null },
       ] as T
+    case 'timeline_window_metadata': {
+      const request = args!.request as TimelineWindowMetadataRequest
+      const all = mock<TimelineItem[]>('timeline', {limit: Number.MAX_SAFE_INTEGER})
+      const pages = request.event_ids.map(event_id => mockTimelineWindow(all, {expected_project_root:request.expected_project_root,filter:'all',agent_id:null,cursor:{kind:'around',event_id},limit:1}))
+      return {project_root:request.expected_project_root,watermark:all.at(-1)?.event.id ?? 0,
+        boundary_pairs:[...new Map(pages.flatMap(page=>page.boundary_pairs).map(item=>[item.event.id,item])).values()],
+        turn_windows:[...new Map(pages.flatMap(page=>page.turn_windows).map(turn=>[turn.start_id,turn])).values()],
+        steered_message_ids:[...new Set(pages.flatMap(page=>page.steered_message_ids))]} as T
+    }
+    case 'timeline_window': return mockTimelineWindow(mock<TimelineItem[]>('timeline', {limit: Number.MAX_SAFE_INTEGER}), args!.request as TimelineWindowRequest) as T
+    case 'timeline_facts': return mockTimelineFacts(mock<TimelineItem[]>('timeline', {limit: Number.MAX_SAFE_INTEGER}), args!.request as TimelineFactsRequest) as T
+    case 'timeline_nodes': return mockTimelineNodes(mock<TimelineItem[]>('timeline', {limit: Number.MAX_SAFE_INTEGER}), args!.request as TimelineNodesRequest) as T
     case 'timeline': {
       // mock 也尊重 after/limit（票 07 增量通道）：真实后端同语义，
       // dev/测试里才能演练游标归并。
@@ -1053,6 +1190,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'save_mcp_service':
     case 'delete_mcp_service':
+    case 'open_browser_extension_store':
     case 'open_mcp_market':
       return null as T
     case 'scan_external_mcp':
@@ -1104,6 +1242,28 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'create_repo_file':
     case 'create_repo_dir':
       return null as T
+    case 'permission_shape_suggestion':
+      return null as T
+    case 'approval_mode':
+      return { project_id: 'p1', project_root: '/mock', mode: 'restricted' } as T
+    case 'set_approval_mode':
+      return { project_id: 'p1', project_root: '/mock', mode: args?.mode } as T
+    case 'design_direction':
+      return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null } as T
+    case 'choose_design_direction':
+    case 'desktop_screenshot':
+      throw new Error('Desktop app required')
+    case 'browser_selection_poll': return [] as T
+    case 'browser_selection_start':
+    case 'browser_selection_discard': return undefined as T
+    case 'desktop_status':
+      return { project_root: '/mock', enabled: false, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0 } as T
+    case 'desktop_control':
+      throw new Error('Desktop app required')
+    case 'desktop_permissions':
+      return { host_name: 'Hexagon', supported: false, available: false, accessibility: false, screen_recording: false, input_events: false, ready: false, error: 'Desktop app required' } as T
+    case 'desktop_open_settings':
+      throw new Error('Desktop app required')
     case 'sandbox_status':
       return { mode: 'seatbelt', available: true, note: 'mock sandboxed' } as T
     case 'list_skills':

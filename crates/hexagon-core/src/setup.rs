@@ -556,16 +556,13 @@ fn parse_role_seeds(text: &str, roles: &[RoleDef]) -> Result<Vec<RoleSeedDraft>,
 }
 
 /// 流程起草提示词（ADR 0071：英文，阶段名用界面语言）。
-pub(crate) fn flow_prompt(sentence: &str) -> String {
-    let roles = preset_roles()
-        .map(|rs| {
-            rs.into_iter()
-                .filter(|r| r.name != crate::pm_route::PM_ROLE)
-                .map(|r| r.name)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
+pub(crate) fn flow_prompt(sentence: &str, roles: &[String]) -> String {
+    let roles = roles
+        .iter()
+        .filter(|r| r.as_str() != crate::pm_route::PM_ROLE)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "From the project description below, output one process pack as JSON and nothing else. \
          Fields: name, version, stages. version is an integer (1), not a dotted string. \
@@ -592,6 +589,7 @@ pub(crate) fn duty_prompt(name: &str, hint: &str) -> String {
 /// 只返回草稿，不写盘。检验命令、产物清单和回填边不在这张草稿的编辑面上。
 pub fn draft_flow(
     sentence: &str,
+    roles: &[String],
     provider: &dyn crate::provider::ModelProvider,
 ) -> Result<crate::orchestra::PackDef, SetupError> {
     let sentence = sentence.trim();
@@ -603,13 +601,43 @@ pub fn draft_flow(
         messages: vec![crate::provider::Message {
             role: crate::provider::Role::User,
             content: vec![crate::provider::ContentBlock::Text {
-                text: flow_prompt(sentence),
+                text: flow_prompt(sentence, roles),
             }],
         }],
         tools: vec![],
     };
+    let t0 = std::time::Instant::now();
     let resp = provider.complete(&req)?;
-    parse_flow_draft(&crate::intake::response_text(&resp))
+    let pack = parse_flow_draft(&crate::intake::response_text(&resp))?;
+    // 2026-09-30 原生验收：全模板名单让已取消角色复活；不能只靠提示词或 UI 删 chip。
+    // 偏向拒止：误拒花一次人工重起草，误放会让未选角色/不可达产物进入流程。
+    for stage in &pack.stages {
+        let mut referenced = stage
+            .roles
+            .iter()
+            .chain(stage.consult_wake.iter())
+            .chain(stage.reviews.iter().map(|r| &r.reviewer))
+            .chain(stage.backfill_edges.iter().flat_map(|(a, b)| [a, b]));
+        if stage.roles.is_empty()
+            || referenced.any(|r| !roles.contains(r) || r == crate::pm_route::PM_ROLE)
+        {
+            crate::diag::note(
+                crate::diag::CLASS_HOST,
+                true,
+                None,
+                None,
+                None,
+                None,
+                "flow_draft",
+                "unselected_role",
+                t0,
+            );
+            return Err(SetupError::BadFlow(
+                "stage references an unselected role or has no active role".into(),
+            ));
+        }
+    }
+    Ok(pack)
 }
 
 /// 2026-09-24 活测：`flow_draft`（qwen3.7-plus）把 version 写成 `"1.0"` /
@@ -617,6 +645,7 @@ pub fn draft_flow(
 /// 这里仍把主版本号收成整数，把本该是字符串数组的单值收成一项。
 /// 钉住的流程包副本不走这条，继续严格反序列化。
 fn parse_flow_draft(text: &str) -> Result<crate::orchestra::PackDef, SetupError> {
+    let started = std::time::Instant::now();
     let text = text.trim();
     let json_text = text
         .strip_prefix("```json")
@@ -636,7 +665,30 @@ fn parse_flow_draft(text: &str) -> Result<crate::orchestra::PackDef, SetupError>
     }
     if let Some(stages) = v.get_mut("stages").and_then(|s| s.as_array_mut()) {
         for stage in stages {
-            for key in ["roles", "due", "checks", "consult_wake"] {
+            // Ticket 04 review, 2026-10-01: Wizard shows no command editor.
+            // Model-supplied checks once survived its confirmation and ran as
+            // owner-approved commands (including network access). Strip only at
+            // this untrusted generation boundary; manual pack imports retain
+            // their explicit contracts. False rejection costs configuration;
+            // false authorization executes an unreviewed side effect.
+            if let Some(fields) = stage.as_object_mut() {
+                let checks = fields.remove("checks").is_some();
+                let quality = fields.remove("quality_checks").is_some();
+                if checks || quality {
+                    crate::diag::note(
+                        crate::diag::CLASS_REJECT,
+                        true,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "flow_draft",
+                        "unreviewed_runners_removed",
+                        started,
+                    );
+                }
+            }
+            for key in ["roles", "due", "consult_wake"] {
                 let Some(field) = stage.get_mut(key) else {
                     continue;
                 };
@@ -1103,6 +1155,54 @@ mod tests {
         .unwrap()
     }
 
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+        #[test]
+        fn model_flow_commands_never_enter_owner_execution(token in "[a-z]{1,12}", malformed in proptest::bool::ANY) {
+            let command = format!("printf '{token}' > hidden.txt");
+            let mut value = json!({"name":"generated", "version":1, "stages":[{
+                "name":"delivery", "roles":["dev"], "due":[], "stamp_point":true,
+                "checks":[command], "quality_checks":{"tests":command}
+            }]});
+            if malformed {
+                value["stages"][0]["checks"] = json!({"not":"a command list"});
+                value["stages"][0]["quality_checks"] = json!(42);
+            }
+            let provider = crate::provider::ScriptedProvider::new(vec![crate::turn::text_response(&value.to_string())]);
+            let pack = draft_flow("a project", &["dev".into()], &provider).unwrap();
+            proptest::prop_assert!(pack.stages[0].checks.is_empty());
+            proptest::prop_assert!(pack.stages[0].quality_checks.is_empty());
+            let dir = tempfile::tempdir().unwrap();
+            let wb = Workbench::for_test(dir.path(), &["dev"], Some(pack)).unwrap();
+            wb.open_stage(0).unwrap();
+            std::fs::write(dir.path().join("source.rs"), "fn main() {}").unwrap();
+            proptest::prop_assert!(matches!(wb.advance().unwrap(), crate::orchestra::StageAction::Incomplete { .. }), "missing owner runner must block");
+            proptest::prop_assert!(!dir.path().join("hidden.txt").exists());
+        }
+    }
+
+    #[test]
+    fn manual_flow_contract_still_executes_explicit_owner_runner() {
+        // The fix belongs to generated drafts, never general PackDef parsing.
+        let pack: PackDef = serde_json::from_value(json!({"name":"owner pack", "version":1,
+            "stages":[{"name":"delivery", "roles":["dev"], "due":[], "stamp_point":true,
+                "quality_checks":{"tests":"mkdir -p target && printf approved > target/owner-marker"}}]})).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["dev"], Some(pack)).unwrap();
+        wb.open_stage(0).unwrap();
+        std::fs::write(dir.path().join("source.rs"), "fn main() {}").unwrap();
+        wb.advance().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("target/owner-marker")).unwrap(),
+            "approved"
+        );
+        let evidence = wb.stage_evidence().unwrap().unwrap();
+        assert!(evidence
+            .checks
+            .iter()
+            .any(|c| c.cmd == "quality:tests" && c.state == crate::orchestra::CheckState::Passed));
+    }
+
     #[test]
     fn flow_draft_accepts_dotted_version_string() {
         for raw in [r#""1.0""#, r#""1.0.0""#, "1"] {
@@ -1120,7 +1220,7 @@ mod tests {
         .unwrap();
         assert_eq!(dated.stages[0].due, vec!["2024-06-01".to_string()]);
         assert_eq!(dated.stages[0].roles, vec!["产品策划".to_string()]);
-        let prompt = flow_prompt("论坛");
+        let prompt = flow_prompt("论坛", &["产品策划".into()]);
         assert!(prompt.contains("产品策划"), "{prompt}");
         assert!(prompt.contains("stamp_point is a boolean"), "{prompt}");
         assert!(prompt.contains("Do not put 项目经理"), "{prompt}");
@@ -1129,6 +1229,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(stripped.stages[0].roles, vec!["产品策划".to_string()]);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn flow_draft_uses_only_selected_roles(selected in proptest::collection::vec("[a-z]{1,8}", 1..8), foreign in "[A-Z]{1,8}", location in 0usize..4) {
+            let mut value = serde_json::json!({"name":"test", "version":1, "stages":[{"name":"build", "roles":selected, "due":[]}]});
+            let valid = crate::provider::ScriptedProvider::new(vec![crate::turn::text_response(&value.to_string())]);
+            proptest::prop_assert!(draft_flow("test", &selected, &valid).is_ok());
+            let stage = &mut value["stages"][0];
+            match location {
+                0 => stage["roles"] = serde_json::json!([foreign]),
+                1 => stage["consult_wake"] = serde_json::json!([foreign]),
+                2 => stage["reviews"] = serde_json::json!([{"artifact_kind":"code", "reviewer":foreign}]),
+                _ => stage["backfill_edges"] = serde_json::json!([[selected[0], foreign]]),
+            }
+            let invalid = crate::provider::ScriptedProvider::new(vec![crate::turn::text_response(&value.to_string())]);
+            proptest::prop_assert!(draft_flow("test", &selected, &invalid).is_err());
+            let prompt = flow_prompt("test", &selected);
+            proptest::prop_assert!(prompt.contains(&selected.join(", ")));
+            proptest::prop_assert!(!prompt.contains("架构师"));
+        }
     }
 
     #[test]

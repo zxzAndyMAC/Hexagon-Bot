@@ -162,8 +162,12 @@ pub(crate) fn validate_request(
     }
     use crate::provider::ContentBlock;
     if chat.messages.iter().flat_map(|m| &m.content).any(|b| {
-        matches!(b, ContentBlock::Image { .. } | ContentBlock::Opaque { .. })
-            || matches!(b,ContentBlock::ToolResult{images,..} if !images.is_empty())
+        matches!(
+            b,
+            ContentBlock::Image { .. }
+                | ContentBlock::ComputerImage { .. }
+                | ContentBlock::Opaque { .. }
+        ) || matches!(b,ContentBlock::ToolResult{images,..} if !images.is_empty())
     }) {
         return Err(rejected("paid_billing_dimension_unsupported"));
     }

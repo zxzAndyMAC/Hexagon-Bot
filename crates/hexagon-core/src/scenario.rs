@@ -387,6 +387,8 @@ mod tests {
 
     #[test]
     fn scenario_deliver_and_assert() {
+        // Live acceptance 2026-10-01: complete evidence advances at turn end;
+        // the final stage sleeps its team without a redundant owner advance.
         // reliability 01: owner_message opens the first stage and runs its lead.
         // Do not replay that same activation with open_stage/run_all_active.
         let dir = tempfile::tempdir().unwrap();
@@ -405,8 +407,7 @@ mod tests {
             "steps": [
                 {"do":"owner_message","text":"开工"},
                 {"do":"assert_event","kind":"artifact_delivered","contains":{"path":"specs/prd.md"}},
-                {"do":"assert_agent_status","role":"产品策划","status":"active"},
-                {"do":"advance"},
+                {"do":"assert_agent_status","role":"产品策划","status":"sleeping"},
                 {"do":"assert_stage","seq":0,"state":"done"}
             ]
         }))
@@ -609,6 +610,8 @@ mod tests {
 
     #[test]
     fn scenario_deny_and_missing_role_skip() {
+        // Live acceptance 2026-10-01: an empty ready stage now advances at
+        // turn end, including the following stage's missing-role skip.
         let dir = tempfile::tempdir().unwrap();
         let sc: Scenario = serde_json::from_value(serde_json::json!({
             "roles": ["产品策划"],           // 无 UI → 阶段 1 跳过
@@ -620,7 +623,6 @@ mod tests {
             "steps": [
                 {"do":"open_stage","seq":0},
                 {"do":"run_all_active"},
-                {"do":"advance"},
                 {"do":"assert_stage","seq":0,"state":"done"},
                 {"do":"assert_stage","seq":1,"state":"skipped"},
                 {"do":"assert_event","kind":"stage_skipped"},

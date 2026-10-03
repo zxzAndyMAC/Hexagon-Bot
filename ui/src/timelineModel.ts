@@ -1,5 +1,8 @@
 // 时间线密度变换与语义节点的纯函数层（ADR 0051）：过滤、tool call 折叠、节点刻度。
 import type { TimelineItem } from './api'
+import type { TimelineWindowPage } from './gen/TimelineWindowPage'
+import { pairToolCalls } from './agentSteps'
+import { parseTime } from './usage'
 import type { IconName } from './components/Icon'
 
 export type Filter = 'all' | 'messages' | 'decisions' | 'story'
@@ -21,18 +24,6 @@ export function stampedByAutonomy(payload: { by?: unknown } | null | undefined):
   return payload?.by === 'autonomy'
 }
 
-// hands-free 票 06：过长思考收成一行。按字符，不靠 scrollHeight
-// （happy-dom 测不出布局）。短思考原样，不假装要折叠。
-export const THINKING_COLLAPSE_AT = 72
-
-export function thinkingCollapsed(text: string): { long: boolean; line: string } {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  const chars = [...flat]
-  const long = /[\r\n]/.test(text) || chars.length > THINKING_COLLAPSE_AT
-  const line = long ? `${chars.slice(0, THINKING_COLLAPSE_AT).join('')}…` : flat
-  return { long, line }
-}
-
 // hands-free 票 06：状态行只读工作台状态（阶段行、未收束回合、tool_called）。
 // 否决：从模型回复里抽「下一步 / 阶段」——那是自述计划，不是正在发生的事。
 export type WorkbenchStatus = {
@@ -45,6 +36,7 @@ export type StatusSources = {
   stages: { stage: string; seq: number; state: string }[]
   team: { id: string; role: string }[]
   timeline: TimelineItem[]
+  timelineCaughtUp?: boolean
   streams: Record<string, Record<number, string>>
   thinkings: Record<string, Record<number, string>>
   streamDone: Record<string, unknown>
@@ -77,11 +69,19 @@ function liveAgent(src: StatusSources): string | null {
 // 忙碌态都要「未收束回合」判定；at=turn_started 时间戳给 LoadingState 起表。
 // exec-cards 票 03 修：并发回合交错——开窗按 agent 分槽，单栈会把
 // 先开的回合误关（AgentTab 忙碌徽标漏报）。
-export function openTurns(timeline: TimelineItem[]): Map<string | null, number | null> {
+export function openTurns(timeline: TimelineItem[], caughtUp = true): Map<string | null, number | null> {
   const m = new Map<string | null, number | null>()
+  // Live acceptance 2026-10-01: a 500-row history page ended at a 588-minute-old
+  // fs_read. Its completion lived on the next page, not in a running process.
+  if (!caughtUp) return m
   for (const it of timeline) {
-    if (it.event.kind === 'turn_started') {
-      m.set(it.event.agent_id, Date.parse(it.event.created_at) || null)
+    // 2026-10-01 live acceptance #17: crash leftovers stayed busy after
+    // team sleep or stage replacement. These boundaries retire old UI turns.
+    if (it.event.kind === 'team_slept' || it.event.kind === 'stage_started') {
+      m.clear()
+    } else if (it.event.kind === 'turn_started') {
+      m.delete(it.event.agent_id)
+      m.set(it.event.agent_id, parseTime(it.event.created_at) || null)
     } else if (it.event.kind === 'turn_finished' || it.event.kind === 'turn_failed') {
       m.delete(it.event.agent_id)
     }
@@ -89,16 +89,16 @@ export function openTurns(timeline: TimelineItem[]): Map<string | null, number |
   return m
 }
 
-export function openTurn(timeline: TimelineItem[]): { agentId: string | null; at: number | null } {
+export function openTurn(timeline: TimelineItem[], caughtUp = true): { agentId: string | null; at: number | null } {
   // 兼容单展示位（WaitingReply 只冒一个气泡）：取最后开的那个。
   let agentId: string | null = null
   let at: number | null = null
-  for (const [a, t] of openTurns(timeline)) { agentId = a; at = t }
+  for (const [a, t] of openTurns(timeline, caughtUp)) { agentId = a; at = t }
   return { agentId, at }
 }
 
-function openTurnAgent(timeline: TimelineItem[]): string | null {
-  return openTurn(timeline).agentId
+function openTurnAgent(timeline: TimelineItem[], caughtUp = true): string | null {
+  return openTurn(timeline, caughtUp).agentId
 }
 
 function currentTool(timeline: TimelineItem[], agentId: string): string | null {
@@ -135,9 +135,9 @@ function currentTool(timeline: TimelineItem[], agentId: string): string | null {
 
 export function deriveWorkbenchStatus(src: StatusSources): WorkbenchStatus {
   const stage = currentStage(src.stages)
-  const agentId = liveAgent(src) ?? openTurnAgent(src.timeline)
+  const agentId = liveAgent(src) ?? openTurnAgent(src.timeline, src.timelineCaughtUp)
   const role = agentId ? (src.team.find((m) => m.id === agentId)?.role ?? agentId) : null
-  const tool = agentId ? currentTool(src.timeline, agentId) : null
+  const tool = agentId && src.timelineCaughtUp !== false ? currentTool(src.timeline, agentId) : null
   return { stage, role, tool }
 }
 
@@ -154,10 +154,13 @@ const SPECIAL_KINDS = new Set([
 // 与 trace.rs SYSTEM_SUBKINDS 登记表同步维护。
 export const SYS_HIGH_RISK = new Set(['invariant_violation', 'tool_breaker', 'context_denied'])
 
+// 2026-09-30 原生验收：供应商拒绝被折成系统事件计数，负责人误以为团队仍在工作。
 const isHighRiskSys = (it: TimelineItem) =>
-  it.event.kind === 'system' && SYS_HIGH_RISK.has(String(it.event.payload?.kind ?? ''))
+  it.event.kind === 'turn_failed' ||
+  (it.event.kind === 'system' && SYS_HIGH_RISK.has(String(it.event.payload?.kind ?? '')))
 
 const isSysItem = (it: TimelineItem) =>
+  it.event.payload.kind !== 'agent_plan' &&
   !TOOL_KINDS.has(it.event.kind) &&
   !SPECIAL_KINDS.has(it.event.kind) &&
   it.message == null &&
@@ -173,12 +176,12 @@ export type Row =
   | { type: 'chapter'; idx: number; n: number; agentId: string | null; stage: string }
   // exec-cards 票 03：已收束回合的执行行收成一条摘要行（Cursor Worked-for-Xs
   // 借形）。folded 保留被折的原始行供展开还原；calls/secs/failed 是窗口统计。
-  | { type: 'turnsummary'; idx: number; agentId: string | null; calls: number; secs: number | null; failed: boolean; folded: Row[] }
+  | { type: 'turnsummary'; idx: number; agentId: string | null; calls: number; secs: number | null; failed: boolean; folded: Row[]; partial?: boolean }
 
 // exec-cards 票 03：回合窗口表——turn_started 开窗、turn_finished/failed 关窗
 // （openTurn 同族逻辑，但这里要的是全部已收束窗口而非当前开着的那个）。
 // 未收束窗口不进表 = 执行中过程永不折叠。
-type TurnWindow = { startId: number; endId: number; agentId: string | null; failed: boolean; secs: number | null }
+type TurnWindow = { startId: number; endId: number; agentId: string | null; failed: boolean; secs: number | null; calls?: number }
 
 function settledTurns(timeline: TimelineItem[]): TurnWindow[] {
   const wins: TurnWindow[] = []
@@ -188,12 +191,12 @@ function settledTurns(timeline: TimelineItem[]): TurnWindow[] {
   for (const it of timeline) {
     const ev = it.event
     if (ev.kind === 'turn_started') {
-      open.set(ev.agent_id, { startId: ev.id, startAt: Date.parse(ev.created_at) || 0 })
+      open.set(ev.agent_id, { startId: ev.id, startAt: parseTime(ev.created_at) || 0 })
     } else if (ev.kind === 'turn_finished' || ev.kind === 'turn_failed') {
       const cur = open.get(ev.agent_id)
       if (!cur) continue
       open.delete(ev.agent_id)
-      const endAt = Date.parse(ev.created_at) || 0
+      const endAt = parseTime(ev.created_at) || 0
       wins.push({
         startId: cur.startId,
         endId: ev.id,
@@ -206,13 +209,31 @@ function settledTurns(timeline: TimelineItem[]): TurnWindow[] {
   return wins
 }
 
-export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
+export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<TimelineWindowPage, 'boundary_pairs' | 'turn_windows' | 'chapter_base'>): Row[] {
+  // Owner Q6 / 2026-10-02: pagination is a projection, not a new fold policy.
+  // A result at the page boundary must still expose its off-page call evidence.
+  if (page?.boundary_pairs.length && filter === 'all') {
+    const visible = new Set(timeline.map(it => it.event.id))
+    const calls = pairToolCalls([...timeline, ...page.boundary_pairs].sort((a, b) => a.event.id - b.event.id))
+    const emitted = new Set<number>()
+    timeline = timeline.flatMap(it => {
+      if (it.event.kind !== 'tool_result') return [it]
+      const call = calls.find(c => !visible.has(c.called.event.id) && !emitted.has(c.called.event.id) && (
+        typeof it.event.payload.action_id === 'string'
+          ? c.called.event.project_id === it.event.project_id && c.called.event.agent_id === it.event.agent_id
+            && c.called.event.payload.action_id === it.event.payload.action_id
+          : c.result?.event.id === it.event.id))
+      if (!call) return [it]
+      emitted.add(call.called.event.id)
+      return [call.called, it]
+    })
+  }
   // 票 18（方向卡 3）：story 档——慢读复盘面。tool/sys 行全移除
   //（05 的高危子类豁免保留：invariant_violation 等仍可见），
   // turn_started 在消息流间插章节分隔。
   if (filter === 'story') {
     const rows: Row[] = []
-    let n = 0
+    let n = page?.chapter_base ?? 0
     for (const it of timeline) {
       if (it.event.kind === 'turn_started') {
         n++
@@ -250,6 +271,10 @@ export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
   const out: Row[] = []
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
+    // Native 2026-10-01: permission/system events can split a call from its
+    // result. Results are attached through the full call index; a result-only
+    // group renders null and breaks Virtuoso's nonzero-height requirement.
+    if (r.type === 'toolgroup' && !r.items.some((it) => it.event.kind === 'tool_called')) continue
     if (r.type === 'item' && isSysItem(r.item)) {
       let j = i
       while (j < rows.length) {
@@ -270,7 +295,12 @@ export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
   // 行，落在最后被折行的槽位（Cursor 语法：执行块收在它与最终回复之间）；
   // 消息行与其余 item 原位保留——agent_message 是交付内容，折叠等于藏答案。
   if (filter !== 'all') return out
-  const wins = settledTurns(timeline)
+  const wins: TurnWindow[] = page ? page.turn_windows.flatMap(w => w.end_id == null ? [] : [{
+    startId: w.start_id, endId: w.end_id, agentId: w.agent_id, failed: w.failed,
+    secs: w.ended_at && parseTime(w.started_at) && parseTime(w.ended_at)
+      ? Math.max(0, (parseTime(w.ended_at) - parseTime(w.started_at)) / 1000) : null,
+    calls: w.tool_call_count,
+  }]) : settledTurns(timeline)
   if (!wins.length) return out
   const winOf = (r: Row): TurnWindow | null => {
     if (r.type !== 'toolgroup' && r.type !== 'sysgroup') return null
@@ -305,15 +335,15 @@ export function buildRows(timeline: TimelineItem[], filter: Filter): Row[] {
     )
     final.splice(b.pos, 0, {
       type: 'turnsummary', idx: w.endId, agentId: w.agentId,
-      calls, secs: w.secs, failed: w.failed, folded: b.folded,
+      calls: w.calls ?? calls, secs: w.secs, failed: w.failed, folded: b.folded, partial: w.calls != null && calls < w.calls,
     })
   }
   return final
 }
 
-export type NodeMark = { rowIdx: number; icon: IconName; label: string; pending?: boolean }
+export type NodeMark = { eventId?: number; rowIdx: number; icon: IconName; label: string; pending?: boolean }
 
-const NODE_ICONS: Record<string, IconName> = {
+export const NODE_ICONS: Record<string, IconName> = {
   stage_started: 'stamp',
   stamped: 'check',
   artifact_delivered: 'artifact',
@@ -339,4 +369,50 @@ export function nodeMarks(timeline: TimelineItem[], rows: Row[], pendingCount: n
     marks.push({ rowIdx: ri, icon, label })
   }
   return marks
+}
+
+/** Source identities survive prepend regrouping and result-only boundary cards. */
+export function rowContainsEvent(row: Row, id: number): boolean {
+  if (row.type === 'chapter') return row.idx === id
+  if (row.type === 'item') return row.item.event.id === id
+  if (row.type === 'toolgroup' || row.type === 'sysgroup') return row.items.some(it => it.event.id === id)
+  if (row.type === 'turnsummary') return row.folded.some(child => rowContainsEvent(child, id))
+  return false
+}
+
+export function rowKey(row: Row): string { return `${row.type}:${row.idx}` }
+
+/** Virtuoso counts rendered rows, not event records. Common rows keep their index. */
+export function prependedRowCount(previous: Row[], next: Row[]): number {
+  const positions = new Map(next.map((row, index) => [rowKey(row), index]))
+  for (let index = 0; index < previous.length; index++) {
+    const position = positions.get(rowKey(previous[index]))
+    if (position != null) return position - index
+  }
+  return Math.max(0, next.length - previous.length)
+}
+
+/** Q6: prepending may change a group's first event/key, not its owner's choice. */
+export function expandedAfterPrepend(previous: Row[], next: Row[], expanded: Set<number>): Set<number> {
+  const openEvents = new Set<number>()
+  const collect = (row: Row) => {
+    if ((row.type === 'toolgroup' || row.type === 'sysgroup') && expanded.has(row.idx)) {
+      for (const item of row.items) openEvents.add(item.event.id)
+    }
+    if (row.type === 'turnsummary') row.folded.forEach(collect)
+  }
+  previous.forEach(collect)
+  const result = new Set(expanded)
+  const retain = (row: Row) => {
+    if ((row.type === 'toolgroup' || row.type === 'sysgroup') && row.items.some(item => openEvents.has(item.event.id))) result.add(row.idx)
+    if (row.type === 'turnsummary') row.folded.forEach(retain)
+  }
+  next.forEach(retain)
+  return result
+}
+
+export function rowAnchorEvent(row: Row): number {
+  if (row.type === 'toolgroup' || row.type === 'sysgroup') return row.items[0].event.id
+  if (row.type === 'turnsummary' && row.folded.length) return rowAnchorEvent(row.folded[0])
+  return row.idx
 }

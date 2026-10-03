@@ -10,5 +10,10 @@ license = "MIT"
 [profile.dev]
 incremental = true
 
+# 2026-10-01 live acceptance #15: debug SHA-256 dominated repeated delivery
+# scans. Optimize this dependency without dropping any files or evidence checks.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 lto = true

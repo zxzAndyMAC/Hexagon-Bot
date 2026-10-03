@@ -167,6 +167,13 @@ pub fn to_yaml(pack: &PackDef) -> String {
         if !s.checks.is_empty() {
             y.push_str(&format!("    checks: {}\n", list(&s.checks)));
         }
+        if !s.quality_checks.is_empty() {
+            // JSON flow maps are valid YAML and retain exact shell quoting.
+            y.push_str(&format!(
+                "    quality_checks: {}\n",
+                serde_json::to_string(&s.quality_checks).expect("string map serialization")
+            ));
+        }
         if !s.reviews.is_empty() {
             y.push_str("    reviews:\n");
             for r in &s.reviews {
@@ -216,7 +223,7 @@ pub fn draft_summary(pack: &PackDef) -> Value {
         "knobs": pack.knobs,
         "stages": pack.stages.iter().map(|s| serde_json::json!({
             "name": s.name, "roles": s.roles, "due": s.due,
-            "checks": s.checks, "stamp_point": s.stamp_point,
+            "checks": s.checks, "quality_checks": s.quality_checks, "stamp_point": s.stamp_point,
             "reviews": s.reviews, "consult_wake": s.consult_wake,
             "backfill_edges": s.backfill_edges,
         })).collect::<Vec<_>>(),

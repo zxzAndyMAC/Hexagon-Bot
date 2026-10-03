@@ -16,6 +16,7 @@
 //! 指令，与 permission_rules 同类。
 
 use std::collections::{BTreeMap, HashSet};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 /// 技能名长度上限（store.py `_MAX_NAME` 同值）。
@@ -68,6 +69,8 @@ pub fn experience_dir_name(role: &str) -> String {
 pub struct Skill {
     pub name: String,
     pub description: String,
+    /// Owner-only invocation metadata; never inferred from model tool input.
+    pub disable_model_invocation: bool,
     /// 完整正文——按需加载，不进系统提示。
     pub instructions: String,
     /// Digest of the exact source bytes parsed, before governed loading filters.
@@ -171,38 +174,161 @@ impl SkillLoader {
             .collect()
     }
 
-    /// 一行式 catalog；空目录/全 mute → None（不占提示词）。
+    /// 2026-10-01 owner ticket 02: the imported catalog reached 159 KB.
+    /// Bounded pointers + explicit search replace injecting every installed skill.
     pub fn catalog_text(&self, muted: &HashSet<String>) -> Option<String> {
-        let visible: Vec<_> = self
-            .skills
-            .values()
-            .filter(|s| !muted.contains(&s.name))
-            .collect();
-        let multi = visible
+        self.catalog_for_task(muted, "", &[], &HashSet::new())
+    }
+
+    pub fn catalog_for_task(
+        &self,
+        muted: &HashSet<String>,
+        query: &str,
+        preferred: &[String],
+        manual: &HashSet<String>,
+    ) -> Option<String> {
+        let candidates = self.ranked(query, muted, preferred, manual);
+        let mut text = String::from(
+            "Skills: select a small relevant set before substantial work; call search_skills(query) for task-specific candidates (use English synonyms when useful), then load_skill(name). Search is discovery, load is reading instructions, neither proves the skill workflow was completed. All roles may discover skills. Respect the owner’s chosen design, role boundaries and permissions; ask when skills conflict or a design decision is required. Skills marked manual-only require an explicit owner $skill-name invocation. Candidate pointers (bounded; not the entire catalog):\n",
+        );
+        let multi = candidates
             .iter()
             .filter(|s| s.name.starts_with("经验-"))
             .count()
             > 1;
-        let lines: Vec<String> = visible
-            .iter()
+        for skill in candidates.into_iter().take(24) {
+            let line = format!(
+                "- {}: {}\n",
+                experience_catalog_label(&skill.name, multi),
+                excerpt(&skill.description, 180)
+            );
+            if text.len() + line.len() > 8192 {
+                break;
+            }
+            text.push_str(&line);
+        }
+        Some(text)
+    }
+
+    /// One deterministic ranking serves both initial pointers and on-demand search.
+    /// Search metadata never includes skill bodies, and exact names always win.
+    pub fn search(
+        &self,
+        query: &str,
+        muted: &HashSet<String>,
+        manual: &HashSet<String>,
+    ) -> Vec<&Skill> {
+        self.ranked(query, muted, &[], manual)
+            .into_iter()
+            .take(12)
+            .collect()
+    }
+
+    fn ranked(
+        &self,
+        query: &str,
+        muted: &HashSet<String>,
+        preferred: &[String],
+        manual: &HashSet<String>,
+    ) -> Vec<&Skill> {
+        let query = query.chars().take(2048).collect::<String>().to_lowercase();
+        let mut terms: Vec<String> = query
+            .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+            .filter(|s| s.chars().count() >= 2)
+            .take(64)
+            .map(str::to_string)
+            .collect();
+        // The installed catalog is often English while owner requests are Chinese.
+        // These are search synonyms, not authority or a claim that a skill fits.
+        for (needle, synonyms) in [
+            ("设计", "design ui ux"),
+            ("界面", "design ui frontend"),
+            ("性能", "performance profiling"),
+            ("测试", "test testing qa"),
+            ("安全", "security"),
+            ("文档", "documentation writing"),
+            ("前端", "frontend react"),
+            ("后端", "backend api"),
+            ("调试", "debug diagnosing"),
+            ("研究", "research"),
+        ] {
+            if query.contains(needle) {
+                terms.extend(synonyms.split_whitespace().map(str::to_string));
+            }
+        }
+        terms.sort();
+        terms.dedup();
+        let mut ranked: Vec<_> = self
+            .skills
+            .values()
+            .filter(|s| {
+                !muted.contains(&s.name)
+                    && (!s.disable_model_invocation || manual.contains(&s.name))
+            })
             .map(|s| {
-                let shown = experience_catalog_label(&s.name, multi);
-                format!("- {shown}: {}", s.description)
+                let name = s.name.to_lowercase();
+                let description = s.description.to_lowercase();
+                let score = usize::from(!query.is_empty() && name == query) * 10000
+                    + usize::from(manual.contains(&s.name)) * 5000
+                    + usize::from(preferred.contains(&s.name)) * 1000
+                    + terms
+                        .iter()
+                        .map(|term| {
+                            usize::from(name.contains(term)) * 10
+                                + usize::from(description.contains(term)) * 2
+                        })
+                        .sum::<usize>();
+                (score, s)
             })
             .collect();
-        if lines.is_empty() {
-            return None;
-        }
-        Some(format!(
-            "Available skills — when one is relevant to the current task, call load_skill(name) for its full instructions:\n{}",
-            lines.join("\n")
-        ))
+        ranked.sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then(a.name.cmp(&b.name)));
+        ranked
+            .into_iter()
+            .filter(|(score, _)| query.trim().is_empty() || *score > 0)
+            .map(|(_, s)| s)
+            .collect()
     }
+}
+
+fn unquote(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(value)
+}
+
+/// Explicit invocation spelling in authenticated owner messages: $name or [$name].
+/// Skill bodies, filenames, role prose and model-supplied flags grant nothing.
+pub(crate) fn explicit_invocations(body: &str) -> HashSet<String> {
+    body.split('$')
+        .skip(1)
+        .filter_map(|part| {
+            let name: String = part
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_'))
+                .collect();
+            validate_name(&name).ok()
+        })
+        .collect()
+}
+
+fn excerpt(text: &str, max: usize) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max)
+        .collect()
 }
 
 /// frontmatter 解析：只认 `---` 头块里的 name/description，
 /// 缺 name 用目录名兜底（与 OpenWorker `_parse_skill` 同语义）。
 fn parse_skill(md: &Path) -> Option<Skill> {
+    parse_skill_source(md, false)
+}
+
+fn parse_skill_source(md: &Path, header_only: bool) -> Option<Skill> {
     // reliability 03: metadata and instructions are content reads too. An
     // innocent SKILL.md alias must not import credential bytes into the prompt.
     let started = std::time::Instant::now();
@@ -219,7 +345,27 @@ fn parse_skill(md: &Path) -> Option<Skill> {
             return None;
         }
     }
-    let text = std::fs::read_to_string(md).ok()?;
+    // Owner issue09 (2026-10-02): detail selection previously rebuilt every
+    // skill body through SkillLoader. Read only fresh headers while resolving
+    // aliases; the selected source is then fully parsed with the same read guards.
+    // No authorization or manual-only metadata is cached between calls.
+    let text = if header_only {
+        let mut reader = std::io::BufReader::new(std::fs::File::open(md).ok()?);
+        let mut header = String::new();
+        reader.read_line(&mut header).ok()?;
+        if !header.trim_start_matches('\u{feff}').starts_with("---") {
+            header.clear();
+        } else {
+            while !header.contains("\n---") {
+                if reader.read_line(&mut header).ok()? == 0 {
+                    break;
+                }
+            }
+        }
+        header
+    } else {
+        std::fs::read_to_string(md).ok()?
+    };
     let fallback = md
         .parent()
         .and_then(|p| p.file_name())
@@ -231,20 +377,44 @@ fn parse_skill(md: &Path) -> Option<Skill> {
 /// 正文解析（内置技能从常量字符串来，`path` 传空路径作 builtin 标记）。
 fn parse_skill_text(text: &str, fallback_name: &str, path: PathBuf) -> Option<Skill> {
     let mut name = fallback_name.to_string();
+    let mut disable_model_invocation = false;
     let (mut description, mut body) = (String::new(), text);
-    if let Some(rest) = text.strip_prefix("---") {
-        if let Some(end) = rest.find("\n---") {
-            let fm = &rest[..end];
-            body = rest[end + 4..].trim_start_matches('\n');
-            for line in fm.lines() {
-                let Some((k, v)) = line.split_once(':') else {
-                    continue;
-                };
-                match k.trim().to_ascii_lowercase().as_str() {
-                    "name" if !v.trim().is_empty() => name = v.trim().to_string(),
-                    "description" => description = v.trim().to_string(),
-                    _ => {}
+    if let Some(rest) = text.trim_start_matches('\u{feff}').strip_prefix("---") {
+        // Review 2026-10-01 / ticket02: a truncated header formerly fell
+        // through with disable_model_invocation=false, silently enabling an
+        // explicitly manual-only skill. False negatives cost a repaired file;
+        // false positives execute owner-disabled instructions. Reject the file.
+        let Some(end) = rest.find("\n---") else {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                None,
+                None,
+                None,
+                None,
+                "skill_metadata",
+                "unclosed_frontmatter",
+                std::time::Instant::now(),
+            );
+            return None;
+        };
+        let fm = &rest[..end];
+        body = rest[end + 4..].trim_start_matches('\n');
+        for line in fm.lines() {
+            let Some((k, v)) = line.split_once(':') else {
+                continue;
+            };
+            match unquote(k.trim()).to_ascii_lowercase().as_str() {
+                "name" if !v.trim().is_empty() => name = unquote(v.trim()).to_string(),
+                "description" => description = unquote(v.trim()).to_string(),
+                // Owner ticket 02: malformed or repeated restrictive metadata
+                // stays manual-only. A false negative costs another owner action;
+                // a false positive runs a workflow the owner explicitly disabled.
+                "disable-model-invocation" => {
+                    let value = v.split(" #").next().unwrap_or(v).trim();
+                    disable_model_invocation |= !unquote(value).eq_ignore_ascii_case("false");
                 }
+                _ => {}
             }
         }
     }
@@ -254,6 +424,7 @@ fn parse_skill_text(text: &str, fallback_name: &str, path: PathBuf) -> Option<Sk
     Some(Skill {
         name,
         description,
+        disable_model_invocation,
         instructions: body.trim().to_string(),
         source_digest: crate::evaluation::config::digest(&text).ok()?,
         path,
@@ -402,8 +573,37 @@ fn skill_of(name: &str, repo_root: Option<&Path>) -> Option<Skill> {
         Some(root) => skill_dirs(root),
         None => global_dir().into_iter().collect(),
     };
-    let loader = SkillLoader::new(dirs);
-    loader.get(name).cloned()
+    skill_of_in_dirs(name, &dirs)
+}
+
+fn skill_of_in_dirs(name: &str, dirs: &[PathBuf]) -> Option<Skill> {
+    // Match the loader's precedence exactly, including frontmatter names which
+    // differ from directory names and duplicate aliases within one layer.
+    for dir in dirs.iter().rev() {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut paths: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        paths.sort();
+        for path in paths.into_iter().rev() {
+            let md = path.join("SKILL.md");
+            if parse_skill_source(&md, true).is_some_and(|s| s.name == name) {
+                if let Some(skill) = parse_skill(&md).filter(|s| s.name == name) {
+                    return Some(skill);
+                }
+            }
+        }
+    }
+    crate::presets::SKILL_FILES
+        .iter()
+        .rev()
+        .find_map(|(fallback, text)| {
+            parse_skill_text(text, fallback, PathBuf::new()).filter(|s| s.name == name)
+        })
 }
 
 /// 技能包文件清单（详情面文件树）：有界遍历——≤400 条目、不跟 symlink、
@@ -1193,5 +1393,160 @@ mod evaluation_isolation_tests {
             skill_dirs(home.path()),
             vec![home.path().join(".hexagon/skills")]
         );
+    }
+}
+
+#[cfg(test)]
+mod truncated_metadata_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn loader_rejects_unclosed_manual_only_metadata_and_recovers_after_repair() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("manual-truncated");
+        std::fs::create_dir(&path).unwrap();
+        let md = path.join("SKILL.md");
+        std::fs::write(
+            &md,
+            "---\nname: manual-truncated\ndisable-model-invocation: true\nowner-only instruction",
+        )
+        .unwrap();
+        let mut loader = SkillLoader::new(vec![root.path().to_path_buf()]);
+        assert!(loader.get("manual-truncated").is_none());
+        assert!(!loader
+            .visible_names(&HashSet::new())
+            .contains(&"manual-truncated".into()));
+        std::fs::write(&md, "---\nname: manual-truncated\ndisable-model-invocation: true\n---\nowner-only instruction").unwrap();
+        loader.rescan();
+        assert!(
+            loader
+                .get("manual-truncated")
+                .unwrap()
+                .disable_model_invocation
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn truncated_frontmatter_never_becomes_automatically_invocable(
+            prefix in prop::sample::select(vec!["", "\u{feff}"]),
+            flag in prop::sample::select(vec!["true", "false", "TRUE", "", "invalid"]),
+            tail in "[a-zA-Z0-9 :\n]{0,120}",
+        ) {
+            let text = format!("{prefix}---\nname: truncated\ndisable-model-invocation: {flag}\n{tail}");
+            prop_assert!(parse_skill_text(&text, "truncated", PathBuf::new()).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod settings_performance_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn write_source(dir: &Path, folder: &str, name: &str, manual: bool, body: &str) {
+        let base = dir.join(folder);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("SKILL.md"), format!("---\nname: {name}\ndescription: fixture\ndisable-model-invocation: {manual}\n---\n{body}")).unwrap();
+    }
+
+    #[test]
+    fn selected_detail_observes_alias_overrides_removal_and_fresh_metadata() {
+        let global = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let dirs = vec![global.path().to_path_buf(), project.path().to_path_buf()];
+        write_source(global.path(), "folder-a", "alias", false, "global");
+        assert_eq!(
+            skill_of_in_dirs("alias", &dirs).unwrap().instructions,
+            "global"
+        );
+        write_source(project.path(), "folder-z", "alias", true, "project");
+        let current = skill_of_in_dirs("alias", &dirs).unwrap();
+        assert!(current.disable_model_invocation);
+        assert_eq!(current.instructions, "project");
+        write_source(project.path(), "folder-z", "alias", false, "updated");
+        let updated = skill_of_in_dirs("alias", &dirs).unwrap();
+        assert!(!updated.disable_model_invocation);
+        assert_ne!(current.source_digest, updated.source_digest);
+        std::fs::remove_file(project.path().join("folder-z/SKILL.md")).unwrap();
+        assert_eq!(
+            skill_of_in_dirs("alias", &dirs).unwrap().instructions,
+            "global"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_detail_rechecks_sensitive_alias_after_previous_success() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("skills");
+        let dirs = vec![dir.clone()];
+        write_source(&dir, "visible", "visible", false, "ordinary");
+        assert!(skill_of_in_dirs("visible", &dirs).is_some());
+        let secret = root.path().join(".env");
+        std::fs::write(&secret, "---\nname: visible\n---\nPRIVATE_KEY=secret").unwrap();
+        let source = dir.join("visible/SKILL.md");
+        std::fs::remove_file(&source).unwrap();
+        std::os::unix::fs::symlink(secret, source).unwrap();
+        assert!(skill_of_in_dirs("visible", &dirs).is_none());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+        #[test]
+        fn selected_resolver_matches_full_loader_precedence_and_permissions(
+            candidates in prop::collection::vec((0usize..2, 0usize..3, any::<bool>(), any::<bool>()), 1..10),
+            wanted in 0usize..3,
+        ) {
+            let root = tempfile::tempdir().unwrap();
+            let dirs = vec![root.path().join("global"), root.path().join("project")];
+            for (i, (layer, alias, manual, malformed)) in candidates.iter().enumerate() {
+                let name = format!("alias-{alias}");
+                write_source(&dirs[*layer], &format!("folder-{i}"), &name, *manual, "instructions");
+                if *malformed {
+                    std::fs::write(dirs[*layer].join(format!("folder-{i}/SKILL.md")), format!("---\nname: {name}\ndisable-model-invocation: true\n")).unwrap();
+                }
+            }
+            let name = format!("alias-{wanted}");
+            let loader = SkillLoader::new(dirs.clone());
+            let selected = skill_of_in_dirs(&name, &dirs);
+            prop_assert_eq!(selected.as_ref().map(|s| (&s.path, &s.instructions, s.disable_model_invocation)),
+                loader.get(&name).map(|s| (&s.path, &s.instructions, s.disable_model_invocation)));
+        }
+    }
+
+    #[test]
+    fn settings_1024_skill_disk_benchmark() {
+        let root = tempfile::tempdir().unwrap();
+        let body = "reference instruction\n".repeat(1600);
+        for i in 0..1024 {
+            write_source(
+                root.path(),
+                &format!("folder-{i:04}"),
+                &format!("fixture-{i:04}"),
+                false,
+                &body,
+            );
+        }
+        let dirs = vec![root.path().to_path_buf()];
+        let cold = std::time::Instant::now();
+        let first = SkillLoader::new(dirs.clone());
+        let cold_ms = cold.elapsed().as_secs_f64() * 1000.0;
+        assert!(first.skills.len() >= 1024);
+        let warm = std::time::Instant::now();
+        let second = SkillLoader::new(dirs.clone());
+        let warm_ms = warm.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(first.skills.len(), second.skills.len());
+        let details = std::time::Instant::now();
+        // Worst-to-best source positions, including the full directory header scan.
+        for name in ["fixture-0000", "fixture-0512", "fixture-1023"] {
+            assert_eq!(
+                skill_of_in_dirs(name, &dirs).unwrap().instructions,
+                body.trim()
+            );
+        }
+        let detail_ms = details.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("skills-disk-only n=1024 first_list_ms={cold_ms:.2} warm_list_ms={warm_ms:.2} three_details_ms={detail_ms:.2}; OS cache not flushed, excludes IPC/rendering");
     }
 }

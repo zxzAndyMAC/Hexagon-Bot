@@ -17,3 +17,7 @@ ui/dist/
 *.log
 .devin/config.local.json
 docs/
+
+# Prepared pinned browser/Node bundle (recreated by build:browser -- --release)
+src-tauri/resources/browser/*
+!src-tauri/resources/browser/.gitkeep

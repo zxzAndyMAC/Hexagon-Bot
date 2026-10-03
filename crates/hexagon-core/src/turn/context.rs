@@ -9,21 +9,51 @@ use crate::trace::EventKind;
 use crate::turn::{TurnError, TurnOutcome};
 use serde_json::json;
 
-/// 上下文估算上限（US37）：~120k tok；超了轻量裁剪后仍超 → 暂停问负责人。
-/// 票 02 / ADR 0068 起这是**全局纪律上限 + 窗口未知时的回落值**，实际闸是
-/// [`effective_cap`] = min(所服务模型窗口×0.8, 本值)——大窗口模型不放开
-/// 吃满，小窗口模型提前撞闸走升级卡而不是被 API 400。
-pub(super) const CONTEXT_CAP_TOKENS: usize = 120_000;
-
-/// 槽位实际撞限闸（票 02）。`window` 来自所服务模型的元数据
-/// （ModelProvider::model_meta → ModelEntry.context_window/前缀表）。
-/// ×0.8 余量：输入把窗口吃满的请求连输出空间都没留，必然被端点拒。
+/// Owner decision 2026-10-01: raise the old 120K ceiling to 1M. Known smaller
+/// model windows still reserve 20% for replies instead of advertising unusable space.
+pub(super) const CONTEXT_CAP_TOKENS: usize = 1_000_000;
 pub(crate) fn effective_cap(window: Option<u64>) -> usize {
-    window
-        .and_then(|w| usize::try_from(w.saturating_mul(8) / 10).ok())
-        .map(|w| w.min(CONTEXT_CAP_TOKENS))
+    let window = window.unwrap_or(CONTEXT_CAP_TOKENS as u64);
+    usize::try_from(window.saturating_mul(8) / 10)
         .unwrap_or(CONTEXT_CAP_TOKENS)
+        .min(CONTEXT_CAP_TOKENS)
 }
+
+#[derive(Debug, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct ContextSnapshot {
+    #[ts(type = "number")]
+    pub used_tokens: usize,
+    #[ts(type = "number")]
+    pub window_tokens: u64,
+    #[ts(type = "number")]
+    pub compact_at_tokens: usize,
+    pub model_slot: String,
+}
+
+pub(super) fn with_usage(
+    mut envelope: serde_json::Value,
+    req: &crate::provider::ChatRequest,
+    window: Option<u64>,
+) -> serde_json::Value {
+    // Estimate the actual outbound messages and tool schemas, not cumulative billing.
+    let used_tokens = estimate_tokens(&req.messages) + tool_tokens(req);
+    envelope["context"] = serde_json::to_value(ContextSnapshot {
+        used_tokens,
+        window_tokens: window.unwrap_or(CONTEXT_CAP_TOKENS as u64),
+        compact_at_tokens: effective_cap(window),
+        model_slot: req.model_slot.clone(),
+    })
+    .expect("context snapshot contains only finite integers and text");
+    envelope
+}
+pub(super) fn tool_tokens(req: &crate::provider::ChatRequest) -> usize {
+    encoded_len(
+        tiktoken_rs::cl100k_base_singleton(),
+        &serde_json::to_string(&req.tools).unwrap_or_default(),
+    )
+}
+
 /// 轻量裁剪的单块上限（字符）：超长 tool_result 截断带标记，其余不动。
 const TRIM_BLOCK_CHARS: usize = 4_000;
 
@@ -139,7 +169,9 @@ pub(super) fn estimate_tokens(messages: &[Message]) -> usize {
             ContentBlock::ToolResult {
                 content, images, ..
             } => encoded_len(bpe, content) + images.len() * IMAGE_TOKEN_ALLOWANCE,
-            ContentBlock::Image { .. } => IMAGE_TOKEN_ALLOWANCE,
+            ContentBlock::Image { .. } | ContentBlock::ComputerImage { .. } => {
+                IMAGE_TOKEN_ALLOWANCE
+            }
             // 票 04：server 工具块按序列化文本计
             ContentBlock::Opaque { raw } => encoded_len(bpe, &raw.to_string()),
         })
@@ -200,9 +232,10 @@ pub(super) fn tool_record_may_drop(block: &ContentBlock) -> bool {
         ContentBlock::ToolUse { .. }
         | ContentBlock::ToolResult { .. }
         | ContentBlock::Opaque { .. } => true,
-        ContentBlock::Text { .. } | ContentBlock::Image { .. } | ContentBlock::Thinking { .. } => {
-            false
-        }
+        ContentBlock::Text { .. }
+        | ContentBlock::Image { .. }
+        | ContentBlock::ComputerImage { .. }
+        | ContentBlock::Thinking { .. } => false,
     }
 }
 
@@ -287,6 +320,7 @@ fn oldest_tool_group(messages: &[Message]) -> Option<Vec<(usize, usize)>> {
                 }),
                 ContentBlock::Text { .. }
                 | ContentBlock::Image { .. }
+                | ContentBlock::ComputerImage { .. }
                 | ContentBlock::Thinking { .. } => {}
             }
         }
@@ -390,7 +424,8 @@ fn write_transcript(ctx: &ToolContext, removed: &[Message]) -> Option<String> {
                         images.len()
                     ));
                 }
-                ContentBlock::Image { media_type, .. } => {
+                ContentBlock::Image { media_type, .. }
+                | ContentBlock::ComputerImage { media_type, .. } => {
                     // transcript 记图元信息不落字节——transcript 是文本档案
                     s.push_str(&format!("[image {media_type}]\n"));
                 }

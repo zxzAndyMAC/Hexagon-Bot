@@ -2,6 +2,45 @@
 // mod 渲染按平台展开：macOS ⌘，其他 Ctrl。票 29 扩成可重映射全量表。
 
 export type ActionId =
+  | 'timelineLoadOlder'
+  | 'timelineRetry'
+  | 'timelineLatest'
+  | 'browserPanel'
+  | 'browserManaged'
+  | 'browserConnect'
+  | 'browserInstallExtension'
+  | 'browserContinueConnection'
+  | 'browserDetach'
+  | 'selectBrowserElement'
+  | 'removeBrowserElement'
+  | 'viewBrowserElement'
+  | 'closeBrowserElement'
+  | 'agentScreen'
+  | 'agentScreenExpand'
+  | 'agentScreenHide'
+  | 'agentScreenFocus'
+  | 'agentScreenMove'
+  | 'agentScreenSource'
+  | 'previewDesignMockup'
+  | 'closeDesignPreview'
+  | 'chooseDesignDirection'
+  | 'closeDesktopScreenshot'
+  | 'retrySkillsLoad'
+  | 'viewDesktopScreenshot'
+  | 'desktopPanel'
+  | 'desktopEnable'
+  | 'desktopDisable'
+  | 'desktopPause'
+  | 'desktopResume'
+  | 'desktopRelease'
+  | 'desktopClear'
+
+  | 'confirmBroadAccess'
+  | 'cancelBroadAccess'
+  | 'approvalMode'
+  | 'desktopPermissions'
+  | 'desktopAccessibility'
+  | 'desktopScreenRecording'
   | 'approve'
   | 'reject'
   | 'commandPalette'
@@ -38,6 +77,43 @@ export type ActionId =
   | 'openPolicyReport'
 
 const DEFAULTS: Record<ActionId, string> = {
+  timelineLoadOlder: '', timelineRetry: '', timelineLatest: '',
+  selectBrowserElement: 'alt+mod+shift+l',
+  removeBrowserElement: '',
+  viewBrowserElement: '',
+  closeBrowserElement: '',
+  agentScreen: 'alt+mod+shift+f',
+  agentScreenExpand: '',
+  agentScreenHide: '',
+  agentScreenFocus: '',
+  agentScreenMove: '',
+  agentScreenSource: '',
+  previewDesignMockup: '',
+  closeDesignPreview: 'Escape',
+  chooseDesignDirection: '',
+  closeDesktopScreenshot: 'Escape',
+  retrySkillsLoad: '',
+  viewDesktopScreenshot: '',
+  desktopPanel: 'alt+mod+shift+u',
+  desktopEnable: 'alt+mod+shift+1',
+  desktopDisable: 'alt+mod+shift+2',
+  desktopPause: 'alt+mod+shift+p',
+  desktopResume: 'alt+mod+shift+j',
+  desktopRelease: 'alt+mod+shift+3',
+  desktopClear: 'alt+mod+shift+4',
+
+  confirmBroadAccess: '',
+  cancelBroadAccess: '',
+  browserPanel: 'alt+mod+shift+b',
+  browserManaged: '',
+  browserConnect: '',
+  browserInstallExtension: '',
+  browserContinueConnection: '',
+  browserDetach: '',
+  approvalMode: 'alt+mod+shift+m',
+  desktopPermissions: 'alt+mod+shift+d',
+  desktopAccessibility: 'alt+mod+shift+a',
+  desktopScreenRecording: 'alt+mod+shift+v',
   openRelatedExperience: 'alt+mod+shift+o',
   openExperienceSource: 'alt+mod+o',
   refreshExperienceHistory: 'alt+mod+shift+h',
@@ -88,6 +164,45 @@ export const isMac = uaData ? uaData.platform === 'macOS' : /Mac|iPhone|iPad/.te
 
 /** 设置页「键盘」分区的全量动作表（顺序 = 展示顺序） */
 export const ACTIONS: { id: ActionId; labelKey: string }[] = [
+  { id: 'timelineLoadOlder', labelKey: 'timeline.loadOlder' },
+  { id: 'timelineRetry', labelKey: 'timeline.retry' },
+  { id: 'timelineLatest', labelKey: 'timeline.toBottom' },
+  { id: 'selectBrowserElement', labelKey: 'elementContext.select' },
+  { id: 'removeBrowserElement', labelKey: 'elementContext.remove' },
+  { id: 'viewBrowserElement', labelKey: 'elementContext.view' },
+  { id: 'closeBrowserElement', labelKey: 'elementContext.close' },
+  { id: 'agentScreen', labelKey: 'agentScreen.title' },
+  { id: 'agentScreenExpand', labelKey: 'agentScreen.expand' },
+  { id: 'agentScreenHide', labelKey: 'agentScreen.hide' },
+  { id: 'agentScreenFocus', labelKey: 'agentScreen.open' },
+  { id: 'agentScreenMove', labelKey: 'agentScreen.move' },
+  { id: 'agentScreenSource', labelKey: 'agentScreen.source' },
+  { id: 'previewDesignMockup', labelKey: 'design.preview' },
+  { id: 'closeDesignPreview', labelKey: 'design.closePreview' },
+  { id: 'chooseDesignDirection', labelKey: 'design.choose' },
+  { id: 'closeDesktopScreenshot', labelKey: 'computer.closeScreenshot' },
+  { id: 'retrySkillsLoad', labelKey: 'skills.retryLoad' },
+  { id: 'viewDesktopScreenshot', labelKey: 'computer.viewScreenshot' },
+  { id: 'confirmBroadAccess', labelKey: 'approvalMode.confirmAction' },
+  { id: 'cancelBroadAccess', labelKey: 'agent.cancel' },
+  { id: 'browserPanel', labelKey: 'browser.title' },
+  { id: 'browserManaged', labelKey: 'browser.managed' },
+  { id: 'browserConnect', labelKey: 'browser.extension' },
+  { id: 'browserInstallExtension', labelKey: 'browser.installExtension' },
+  { id: 'browserContinueConnection', labelKey: 'browser.continueConnection' },
+  { id: 'browserDetach', labelKey: 'browser.detach' },
+  { id: 'approvalMode', labelKey: 'approvalMode.label' },
+  { id: 'desktopPanel', labelKey: 'computer.title' },
+  { id: 'desktopEnable', labelKey: 'computer.enable' },
+  { id: 'desktopDisable', labelKey: 'computer.disable' },
+  { id: 'desktopPause', labelKey: 'computer.pause' },
+  { id: 'desktopResume', labelKey: 'computer.resume' },
+  { id: 'desktopRelease', labelKey: 'computer.release' },
+  { id: 'desktopClear', labelKey: 'computer.clear_screenshots' },
+
+  { id: 'desktopPermissions', labelKey: 'desktop.check' },
+  { id: 'desktopAccessibility', labelKey: 'desktop.openAccessibility' },
+  { id: 'desktopScreenRecording', labelKey: 'desktop.openScreen' },
   { id: 'commandPalette', labelKey: 'keys.palette' },
   { id: 'toggleRail', labelKey: 'keys.rail' },
   { id: 'splitEditor', labelKey: 'keys.split' },
@@ -136,6 +251,17 @@ export function resetBinding(a: ActionId) {
   localStorage.removeItem(`hexagon.key.${a}`)
 }
 
+function shortcutKey(e: KeyboardEvent | React.KeyboardEvent): string {
+  // 2026-10-01 Settings pause acceptance: macOS Option changes key (P → ∏),
+  // so character-only matching silently disabled the emergency shortcut.
+  // Resolve only Command+Option letter/digit codes; matches still checks every
+  // modifier exactly (especially Ctrl vs Command) before accepting an action.
+  if (isMac && e.metaKey && e.altKey && /^(Key[A-Z]|Digit[0-9])$/.test(e.code)) {
+    return e.code.replace(/^(Key|Digit)/, '').toLowerCase()
+  }
+  return e.key === ' ' ? 'space' : e.key.length === 1 ? e.key.toLowerCase() : e.key
+}
+
 /** KeyboardEvent → 规范形 `mod+x`；纯修饰键返回 null（继续等下一个键） */
 export function normalizeEvent(e: KeyboardEvent | React.KeyboardEvent): string | null {
   if (['Meta', 'Control', 'Shift', 'Alt'].includes(e.key)) return null
@@ -143,7 +269,7 @@ export function normalizeEvent(e: KeyboardEvent | React.KeyboardEvent): string |
   if (e.metaKey || e.ctrlKey) mods.push('mod')
   if (e.altKey) mods.push('alt')
   if (e.shiftKey) mods.push('shift')
-  const key = e.key === ' ' ? 'space' : e.key.length === 1 ? e.key.toLowerCase() : e.key
+  const key = shortcutKey(e)
   return [...mods, key].join('+')
 }
 
@@ -182,6 +308,6 @@ export function matches(e: KeyboardEvent | React.KeyboardEvent, binding: string)
   if (modHit !== wantMod || otherMod) return false
   if (e.shiftKey !== wantShift) return false
   if (e.altKey !== wantAlt) return false
-  const evKey = e.key === ' ' ? 'space' : e.key.toLowerCase()
+  const evKey = shortcutKey(e).toLowerCase()
   return evKey === key.toLowerCase()
 }

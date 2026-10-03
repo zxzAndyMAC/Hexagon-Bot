@@ -11,6 +11,7 @@
 //! - 阶段动作：退回/跳过/暂停/恢复，全落事件。
 
 mod exception;
+mod quality;
 pub use exception::{
     accept as accept_delivery_exception, cancel as cancel_acceptance_exception,
     request as request_acceptance_exception,
@@ -18,6 +19,7 @@ pub use exception::{
 pub use exception::{
     ExceptionAcceptance, ExceptionCandidate, ExceptionRequest, ExceptionRequirement,
 };
+pub use quality::QualityEvidence;
 
 use crate::db::Db;
 use crate::trace::{EventKind, TraceError};
@@ -68,6 +70,27 @@ pub struct ReviewDecl {
     pub reviewer: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+#[serde(rename_all = "snake_case")]
+pub enum QualityCategory {
+    Tests,
+    Performance,
+    Accessibility,
+    Security,
+}
+
+impl QualityCategory {
+    fn key(&self) -> &'static str {
+        match self {
+            Self::Tests => "tests",
+            Self::Performance => "performance",
+            Self::Accessibility => "accessibility",
+            Self::Security => "security",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct StageDef {
@@ -79,6 +102,10 @@ pub struct StageDef {
     /// 检验命令（包内声明 = 负责人批准，直接执行不过权限管线）
     #[serde(default)]
     pub checks: Vec<String>,
+    /// Owner-approved category/runner contracts. A command's name, arguments,
+    /// comments or output cannot assign it a quality category (ticket 04).
+    #[serde(default)]
+    pub quality_checks: std::collections::BTreeMap<QualityCategory, String>,
     /// 声明复审
     #[serde(default)]
     pub reviews: Vec<ReviewDecl>,
@@ -332,6 +359,7 @@ pub fn open_stage(
     seq: usize,
 ) -> Result<(String, bool), OrchError> {
     let stage = pack.stages.get(seq).ok_or(OrchError::BadSeq(seq as i64))?;
+    quality::capture_baseline(db, project_id, false)?;
     let rid = format!("sr{}", db.next_id("sr")?);
 
     // 团队名单：项目 agents 表 role 集合
@@ -541,6 +569,22 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
     let runs = evidence_runs(db, project_id, pack, &run)?;
     let mut missing = Vec::new();
+    // Owner Q2/Q5: only an actually requested visual direction blocks delivery;
+    // backend-only projects without design work do not acquire this gate.
+    if crate::design::pending(db, project_id)? {
+        missing.push("design:owner_choice_required".into());
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(project_id),
+            None,
+            Some(&run.id),
+            None,
+            "design_direction",
+            "delivery_waits_for_owner",
+            std::time::Instant::now(),
+        );
+    }
     let started = std::time::Instant::now();
     let unresolved = crate::actions::unresolved_delivery_actions(
         db,
@@ -700,7 +744,7 @@ fn evaluate_run(
     }
 
     // D08: historical exit=0 requires stable, current delivery evidence.
-    for cmd in failing_checks(db, project_id, &run.id, stage)? {
+    for cmd in failing_checks(db, project_id, &run.id, stage, pack)? {
         if !accepted.contains(&ExceptionRequirement::Check {
             run_id: run.id.clone(),
             cmd: cmd.clone(),
@@ -802,6 +846,9 @@ pub struct CheckEvidence {
     pub event_id: Option<i64>,
     pub exit_code: Option<i32>,
     pub state: CheckState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub quality: Option<QualityEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -856,10 +903,22 @@ fn check_evidence(
     project: &str,
     run: &str,
     stage: &StageDef,
+    pack: &PackDef,
 ) -> Result<Vec<CheckEvidence>, OrchError> {
     let started = std::time::Instant::now();
     use rusqlite::OptionalExtension;
-    if stage.checks.is_empty() {
+    let requirements = quality::requirements(db, project, run, stage, pack)?;
+    // 2026-10-01 ticket 04 regression: sorting while adding quality aliases
+    // reordered owner-declared checks in the read model. Preserve their order.
+    let mut seen = std::collections::BTreeSet::new();
+    let commands: Vec<String> = stage
+        .checks
+        .iter()
+        .cloned()
+        .chain(requirements.iter().map(|r| r.key.clone()))
+        .filter(|command| seen.insert(command.clone()))
+        .collect();
+    if commands.is_empty() {
         return Ok(Vec::new());
     }
     let root: String =
@@ -875,14 +934,15 @@ fn check_evidence(
         &required_kinds(stage),
     )
     .ok();
+    type RecordedCheck = (i64, Option<i32>, Option<String>, bool, String);
     let mut rows = Vec::new();
-    for cmd in &stage.checks {
-        let latest: Option<(i64,Option<i32>,Option<String>,bool)> = db.conn().query_row(
-            "SELECT id,json_extract(payload,'$.exit_code'),json_extract(payload,'$.fingerprint'),COALESCE(json_extract(payload,'$.stable'),0)
+    for cmd in &commands {
+        let latest: Option<RecordedCheck> = db.conn().query_row(
+            "SELECT id,json_extract(payload,'$.exit_code'),json_extract(payload,'$.fingerprint'),COALESCE(json_extract(payload,'$.stable'),0),payload
              FROM events WHERE project_id=?1 AND stage_run_id=?2 AND kind='test_ran' AND json_extract(payload,'$.cmd')=?3 ORDER BY id DESC LIMIT 1",
-            rusqlite::params![project,run,cmd], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-        let (event_id, exit_code, recorded, stable) = latest
-            .map(|(id, exit, fp, stable)| (Some(id), exit, fp, stable))
+            rusqlite::params![project,run,cmd], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        let (event_id, exit_code, recorded, stable, payload) = latest
+            .map(|(id, exit, fp, stable, payload)| (Some(id), exit, fp, stable, payload))
             .unwrap_or_default();
         let state = check_state(
             event_id.is_some(),
@@ -913,6 +973,11 @@ fn check_evidence(
             reason,
             started,
         );
+        let payload: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+        let quality = requirements
+            .iter()
+            .find(|r| r.key == *cmd)
+            .map(|r| quality::describe(r, &state, &payload));
         rows.push(CheckEvidence {
             run_id: run.into(),
             stage: stage.name.clone(),
@@ -920,6 +985,7 @@ fn check_evidence(
             event_id,
             exit_code,
             state,
+            quality,
         });
     }
     Ok(rows)
@@ -930,8 +996,9 @@ fn failing_checks(
     project: &str,
     run: &str,
     stage: &StageDef,
+    pack: &PackDef,
 ) -> Result<Vec<String>, OrchError> {
-    Ok(check_evidence(db, project, run, stage)?
+    Ok(check_evidence(db, project, run, stage, pack)?
         .into_iter()
         .filter(|c| c.state != CheckState::Passed)
         .map(|c| c.cmd)
@@ -992,7 +1059,7 @@ pub fn stage_evidence(
             .stages
             .get(target.seq as usize)
             .ok_or(OrchError::BadSeq(target.seq))?;
-        checks.extend(check_evidence(db, project, &target.id, stage)?);
+        checks.extend(check_evidence(db, project, &target.id, stage, pack)?);
     }
     let mut missing = match evaluate(db, project, pack)? {
         StageEval::Ready => Vec::new(),
@@ -1080,6 +1147,40 @@ pub fn run_checks(
     repo_root: &Path,
     pack: &PackDef,
 ) -> Result<Vec<CheckResult>, OrchError> {
+    run_checks_inner(db, project_id, repo_root, pack, false)
+}
+
+/// Ticket 04: only owner-declared runners may enter the owner execution lane.
+/// A changed package.json is evidence to inspect, never new execution consent.
+pub(crate) fn run_quality_checks(
+    db: &Db,
+    project_id: &str,
+    repo_root: &Path,
+    pack: &PackDef,
+) -> Result<(), OrchError> {
+    if is_paused(db, project_id)? {
+        return Err(OrchError::Paused);
+    }
+    let Some(run) = db.active_stage_run(project_id)? else {
+        return Ok(());
+    };
+    let Some(stage) = pack.stages.get(run.seq as usize) else {
+        return Ok(());
+    };
+    if quality::requirements(db, project_id, &run.id, stage, pack)?.is_empty() {
+        return Ok(());
+    }
+    run_checks_inner(db, project_id, repo_root, pack, true)?;
+    Ok(())
+}
+
+fn run_checks_inner(
+    db: &Db,
+    project_id: &str,
+    repo_root: &Path,
+    pack: &PackDef,
+    automatic: bool,
+) -> Result<Vec<CheckResult>, OrchError> {
     let lease = std::sync::Arc::new(write_boundary(db, project_id)?);
     let sessions = crate::sessions::SessionTable::default();
     let run = db
@@ -1094,7 +1195,33 @@ pub fn run_checks(
             .stages
             .get(run.seq as usize)
             .ok_or(OrchError::BadSeq(run.seq))?;
+        let requirements = quality::requirements(db, project_id, &run.id, stage, pack)?;
+        let evidence = check_evidence(db, project_id, &run.id, stage, pack)?;
+        let mut jobs = std::collections::BTreeMap::<String, Vec<&quality::Requirement>>::new();
         for cmd in &stage.checks {
+            jobs.entry(cmd.clone()).or_default();
+        }
+        for requirement in &requirements {
+            if let Some(command) = &requirement.command {
+                jobs.entry(command.clone()).or_default().push(requirement);
+            }
+        }
+        for (cmd, aliases) in jobs {
+            let job_started = std::time::Instant::now();
+            // An unchanged failed run is still a completed attempt. Retrying it
+            // every role handoff used to burn time without changing evidence.
+            // Manual rerun remains available; actual source changes invalidate it.
+            let attempted = |key: &str| {
+                evidence.iter().any(|e| {
+                    e.cmd == key && matches!(e.state, CheckState::Passed | CheckState::Failed)
+                })
+            };
+            if automatic
+                && (!stage.checks.contains(&cmd) || attempted(&cmd))
+                && aliases.iter().all(|a| attempted(&a.key))
+            {
+                continue;
+            }
             let before = crate::artifacts::fingerprint::capture(
                 db,
                 repo_root,
@@ -1111,18 +1238,49 @@ pub fn run_checks(
                 write_lease: Some(lease.clone()),
                 ..Default::default()
             };
-            // D08: raw sh.output() returned while redirected background children
-            // were still writing. Use the existing owned, confined process tree.
-            let res = sessions
-                .run_oneshot(db, &ctx, cmd, std::time::Duration::from_secs(300), true)
-                .map_err(std::io::Error::other)?;
-            let code = if res["timed_out"] == true {
-                -1
+            let performance = aliases.iter().any(|r| r.category == "performance");
+            let signature = if performance {
+                Some(quality::measurement_signature(repo_root, &cmd)?)
             } else {
-                res["exit_code"]
-                    .as_i64()
-                    .and_then(|n| i32::try_from(n).ok())
-                    .unwrap_or(-1)
+                None
+            };
+            let baseline = if performance {
+                quality::performance_baseline(db, project_id, &cmd)?
+            } else {
+                None
+            };
+            let mut samples = Vec::new();
+            let mut code = 0;
+            let mut stdout = String::new();
+            for _ in 0..if performance { 3 } else { 1 } {
+                // D08: owned process-tree cleanup is part of evidence stability.
+                let res = sessions
+                    .run_oneshot(db, &ctx, &cmd, std::time::Duration::from_secs(300), true)
+                    .map_err(std::io::Error::other)?;
+                samples.push(res["command_elapsed_ms"].as_f64().unwrap_or(f64::NAN));
+                code = if res["timed_out"] == true {
+                    -1
+                } else {
+                    res["exit_code"]
+                        .as_i64()
+                        .and_then(|n| i32::try_from(n).ok())
+                        .unwrap_or(-1)
+                };
+                stdout = res["stdout"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(2000)
+                    .collect();
+                if code != 0 {
+                    break;
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            let median = if samples.iter().all(|n| n.is_finite() && *n > 0.0) {
+                samples[samples.len() / 2]
+            } else {
+                f64::NAN
             };
             let after = crate::artifacts::fingerprint::capture(
                 db,
@@ -1134,18 +1292,52 @@ pub fn run_checks(
             .ok();
             let stable =
                 crate::artifacts::fingerprint::current(before.as_deref(), true, after.as_deref());
-            db.append_event(
-            project_id,
-            EventKind::TestRan,
-            json!({"cmd": cmd, "exit_code": code, "fingerprint": before, "stable": stable,
-                   "stdout": res["stdout"].as_str().unwrap_or("").chars().take(2000).collect::<String>()}),
-            None,
-            Some(&run.id),
-        )?;
-            out.push(CheckResult {
-                cmd: cmd.clone(),
-                exit_code: code,
-            });
+            if stage.checks.contains(&cmd) {
+                db.append_event(project_id, EventKind::TestRan,
+                    json!({"cmd":cmd,"exit_code":code,"fingerprint":before,"stable":stable,"stdout":stdout}), None, Some(&run.id))?;
+                out.push(CheckResult {
+                    cmd: cmd.clone(),
+                    exit_code: code,
+                });
+            }
+            for requirement in aliases {
+                let (verdict, accepted_code) = if requirement.category == "performance" {
+                    quality::performance_verdict(
+                        code,
+                        signature.as_deref().unwrap_or(""),
+                        median,
+                        baseline.as_ref(),
+                    )
+                } else if code == 0 {
+                    ("passed", 0)
+                } else {
+                    ("execution_failed", code)
+                };
+                let details = json!({"category":requirement.category,"command":cmd,"verdict":verdict,
+                    "execution_exit_code":code,"signature":signature,"measurement":"owned_process_leader_ms","samples_ms":samples,"median_ms":median,
+                    "baseline_event_id":baseline.as_ref().map(|b| b.event_id),"baseline_ms":baseline.as_ref().map(|b| b.median_ms)});
+                let id = db.append_event(project_id, EventKind::TestRan,
+                    json!({"cmd":requirement.key,"exit_code":accepted_code,"fingerprint":before,"stable":stable,"stdout":stdout,"quality":details}),None,Some(&run.id))?;
+                crate::diag::note(
+                    if accepted_code == 0 {
+                        crate::diag::CLASS_JUDGE
+                    } else {
+                        crate::diag::CLASS_REJECT
+                    },
+                    accepted_code != 0,
+                    Some(project_id),
+                    Some("owner"),
+                    Some(&run.id),
+                    Some(&id.to_string()),
+                    "quality_check",
+                    verdict,
+                    job_started,
+                );
+                out.push(CheckResult {
+                    cmd: requirement.key.clone(),
+                    exit_code: accepted_code,
+                });
+            }
         }
     }
     Ok(out)
@@ -1291,6 +1483,7 @@ pub fn open_next(
     let mut seq = from_seq;
     loop {
         if seq >= pack.stages.len() {
+            quality::capture_baseline(db, project_id, true)?;
             // 全程跑完：全员休眠
             write_team_sleeping(db, project_id)?;
             db.append_event(
@@ -1390,9 +1583,45 @@ pub fn rewind(
     pack: &PackDef,
     to_seq: usize,
 ) -> Result<StageAction, OrchError> {
-    let run = db
-        .active_stage_run(project_id)?
-        .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
+    // 2026-10-01 live acceptance #18: an owner could discover a defect after
+    // final acceptance but had no way back into the delivery flow. Only an
+    // explicitly targeted rewind may use the latest completed final stage.
+    // False negatives cost a manual retry; false positives could bypass a
+    // recovery decision, so interrupted/rejected/latest non-final runs fail closed.
+    let run = match db.active_stage_run(project_id)? {
+        Some(run) => run,
+        None => {
+            use rusqlite::OptionalExtension;
+            let started = std::time::Instant::now();
+            let latest: Option<StageRun> = db.conn().query_row(
+                "SELECT id,seq,stage_name,state FROM stage_runs WHERE project_id=?1 ORDER BY rowid DESC LIMIT 1",
+                [project_id],
+                |r| Ok(StageRun { id:r.get(0)?, seq:r.get(1)?, stage_name:r.get(2)?, state:r.get(3)? }),
+            ).optional()?;
+            let completed =
+                latest.filter(|run| run.state == "done" && run.seq == pack.stages.len() as i64 - 1);
+            crate::diag::note(
+                if completed.is_some() {
+                    crate::diag::CLASS_JUDGE
+                } else {
+                    crate::diag::CLASS_REJECT
+                },
+                completed.is_none(),
+                Some(project_id),
+                None,
+                None,
+                None,
+                "completed_rewind",
+                if completed.is_some() {
+                    "owner_rework"
+                } else {
+                    "latest_run_not_complete"
+                },
+                started,
+            );
+            completed.ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?
+        }
+    };
     if to_seq >= pack.stages.len() || to_seq as i64 >= run.seq {
         return Err(OrchError::BadSeq(to_seq as i64));
     }
@@ -1663,6 +1892,16 @@ pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
         .collect::<Result<_, _>>()?;
     let mut n = 0;
     for (run_id, agent_id) in dangling {
+        // 2026-10-01 live acceptance #17: an extra turn can crash while its
+        // stage is waiting for a stamp. Close that dead turn as well; only an
+        // active stage needs a recovery card. Never reopen a completed stage.
+        db.append_event(
+            project_id,
+            EventKind::TurnFailed,
+            json!({"reason": "interrupted_shutdown"}),
+            agent_id.as_deref(),
+            Some(&run_id),
+        )?;
         // 只收编仍 active 的 run；waiting_stamp/done 等已收束态不动
         let state: Option<String> = db
             .conn()
@@ -1679,13 +1918,6 @@ pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
             "SELECT stage_name FROM stage_runs WHERE id=?1",
             [&run_id],
             |r| r.get(0),
-        )?;
-        db.append_event(
-            project_id,
-            EventKind::TurnFailed,
-            json!({"reason": "interrupted_shutdown"}),
-            agent_id.as_deref(),
-            Some(&run_id),
         )?;
         db.conn().execute(
             "UPDATE stage_runs SET state='interrupted' WHERE id=?1",
@@ -2044,7 +2276,13 @@ mod tests {
             other => panic!("only .hexagon/index.html must stay missing, got {other:?}"),
         }
         std::fs::write(root.join("index.html"), "<html></html>").unwrap();
-        assert_eq!(evaluate(&db, "p1", &p).unwrap(), StageEval::Ready);
+        // Ticket 04 (2026-10-01): the actual file fulfills the artifact, while
+        // untested new UI must still fail the independent quality gate.
+        let StageEval::Incomplete { missing } = evaluate(&db, "p1", &p).unwrap() else {
+            panic!("new UI still requires quality evidence");
+        };
+        assert!(!missing.iter().any(|m| m == "artifact:HTML/CSS/JS源码"));
+        assert!(missing.iter().any(|m| m == "check:quality:tests"));
     }
 
     #[test]
@@ -2096,10 +2334,11 @@ mod tests {
             }
             _ => panic!(),
         }
-        // 换一条必过的命令验证通过路径
+        // Ticket 04: a real source-presence assertion replaces `true`; a no-op
+        // cannot fulfill the additional tests requirement for new source code.
         let p2 = serde_json::from_value::<PackDef>(json!({
             "name":"t","version":1,"stages":[{"name":"实现","roles":["前端"],"due":["代码"],
-             "checks":["true"]}]}))
+             "checks":["test -s src/b.rs"],"quality_checks":{"tests":"test -s src/b.rs"}}]}))
         .unwrap();
         // 不删行（events/artifacts 外键引用），直接关掉当前 run 再开新场景
         db.conn()

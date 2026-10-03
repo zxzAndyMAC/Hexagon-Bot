@@ -283,17 +283,27 @@ pub fn wrap_command(cmd: &mut Command, spec: &SandboxSpec) -> std::io::Result<Co
         };
     }
     #[cfg(target_os = "macos")]
-    if let Some(developer) = developer_directory() {
-        // reliability 03: Apple's /usr/bin/git shim invokes xcrun, which writes
-        // host caches and loads unrelated Xcode frameworks. Use the selected
-        // toolchain's actual executables inside the existing read/write scope.
+    {
+        // Live acceptance 2026-10-01: Finder-launched apps inherit a system-only
+        // PATH, so installed Homebrew Node/npm were invisible. Append conventional
+        // tool directories, not a login shell (which executes user startup scripts
+        // and can reintroduce secrets). Existing explicit PATH order is preserved.
         let current = c
             .get_envs()
             .find(|(k, _)| *k == "PATH")
             .and_then(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
             .unwrap_or_default();
-        let paths =
-            std::iter::once(developer.join("usr/bin")).chain(std::env::split_paths(&current));
+        let mut paths: Vec<PathBuf> = std::env::split_paths(&current).collect();
+        for path in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            let path = PathBuf::from(path);
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        // reliability 03: avoid Apple's git/xcrun shim writing outside the sandbox.
+        if let Some(developer) = developer_directory() {
+            paths.insert(0, developer.join("usr/bin"));
+        }
         c.env(
             "PATH",
             std::env::join_paths(paths).map_err(std::io::Error::other)?,
@@ -305,8 +315,18 @@ pub fn wrap_command(cmd: &mut Command, spec: &SandboxSpec) -> std::io::Result<Co
     c.env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1");
     #[cfg(target_os = "macos")]
-    if matches!(spec, SandboxSpec::Seatbelt(profile) if profile.contains(PROCESS_GROUP_RULES)) {
-        c.env("NODE_OPTIONS", node_options(None));
+    if let SandboxSpec::Seatbelt(profile) = spec {
+        // Live acceptance 2026-10-01: Homebrew's shared OpenSSL CA lookup reads
+        // PEM files denied by credential isolation, so npm fails certificate
+        // verification. Select Node's bundled public roots; never allow private
+        // PEM/keychain reads or turn off TLS verification to make installs work.
+        let mut options = if profile.contains(PROCESS_GROUP_RULES) {
+            node_options(None)
+        } else {
+            std::ffi::OsString::new()
+        };
+        options.push(" --use-bundled-ca");
+        c.env("NODE_OPTIONS", options);
     }
     #[cfg(unix)]
     {
@@ -831,6 +851,56 @@ print('runtime isolated')
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn gui_launch_path_can_find_installed_node() {
+        if !Path::new("/opt/homebrew/bin/node").exists()
+            && !Path::new("/usr/local/bin/node").exists()
+        {
+            return;
+        }
+        let repo = tempfile::tempdir().unwrap();
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "command -v node && node --version"])
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .current_dir(repo.path());
+        let out = wrap_command(&mut command, &spec_for(repo.path(), &[], false))
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "GUI launch could not find Node: {:?}",
+            out
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[ignore = "requires installed Node and access to the public npm registry"]
+    fn sandbox_node_can_verify_public_registry_tls() {
+        let node = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
+            .into_iter()
+            .find(|path| Path::new(path).exists())
+            .expect("installed Node");
+        let repo = tempfile::tempdir().unwrap();
+        let mut command = Command::new(node);
+        // This reproduced UNABLE_TO_GET_ISSUER_CERT_LOCALLY before selecting
+        // bundled public roots. Real TLS validation stays enabled.
+        command.args(["-e", "const h=require('node:https'); const timer=setTimeout(()=>process.exit(2),15000); h.get('https://registry.npmjs.org/react',r=>{if(r.statusCode!==200)process.exitCode=1;r.resume();r.on('end',()=>clearTimeout(timer))}).on('error',e=>{console.error(e.code);clearTimeout(timer);process.exitCode=1})"])
+            .current_dir(repo.path());
+        let out = wrap_command(&mut command, &spec_for(repo.path(), &[], true))
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
     fn unavailable_never_returns_an_executable_command() {
         let mut command = Command::new("sh");
         command.args(["-c", "exit 0"]);
@@ -865,6 +935,21 @@ print('runtime isolated')
             for line in profile.lines().filter(|line| line.starts_with("(allow file-write*")) {
                 prop_assert!(!line.contains("(subpath \"/private/tmp\")"));
                 prop_assert!(!line.contains("(subpath \"/private/tmp/project\")"));
+            }
+        }
+    }
+
+    #[test]
+    fn built_in_role_scopes_are_representable_by_the_sandbox() {
+        // Live acceptance 2026-10-01: QA's **/*.test.* preset made every
+        // terminal check unavailable. Presets must work without widening scope.
+        for role in crate::presets::preset_roles().unwrap() {
+            for glob in role.globs {
+                assert!(
+                    glob_write_prefix(Path::new("/repo"), &glob).is_some(),
+                    "{} has an unsupported terminal scope: {glob}",
+                    role.name
+                );
             }
         }
     }

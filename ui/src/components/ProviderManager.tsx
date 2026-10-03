@@ -3,7 +3,7 @@
 // 右列=选中供应商详情（密钥/端点/模型目录）——检测、拉取模型列表、能力标记、
 // 编辑模型一应俱全；底部「槽位分配」把角色模型槽绑到 供应商+模型。
 // 数据语义：非密配置存 providers.json；key 使用 active CredentialStore（provider/<id>）。
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ModelEntry, type ProviderView, type ProvidersView, type RoleDef } from '../api'
 import { Icon, type IconName } from './Icon'
@@ -30,10 +30,14 @@ const PRESETS: { name: string; kind: ProviderView['kind']; base_url: string; mod
 
 const CAP_ICONS: Record<string, IconName> = {
   web: 'web', vision: 'vision', reasoning: 'reasoning', tools: 'tool', free: 'free',
+  text_generation: 'tool', classification: 'tool', ocr: 'vision', json_mode: 'tool',
+  embedding: 'bolt', rerank: 'bolt', image_generation: 'vision', audio_input: 'bolt',
+  audio_output: 'bolt', video_input: 'vision', video_generation: 'vision', file_input: 'tool',
+  structured_output: 'tool', moderation: 'tool', batch: 'tool', citations: 'tool', code_execution: 'tool',
 }
-const CAPS = ['web', 'vision', 'reasoning', 'tools', 'free'] as const
+const CAPS = Object.keys(CAP_ICONS)
 
-// context-window 票 02：窗口值显示为 64k / 1M 形；null = 未识别（撞限闸回落 120k）。
+// context-window 票 02：窗口值显示为 64k / 1M 形；null = 未识别（撞限闸回落 1M）。
 const fmtWindow = (v: number) =>
   v >= 1_000_000 ? `${(v / 1_000_000).toFixed(v % 1_000_000 === 0 ? 0 : 1)}M` : `${Math.round(v / 1024)}k`
 
@@ -45,7 +49,7 @@ function emptyDef(): ProviderView {
 }
 
 function emptyModel(): ModelEntry {
-  return { id: '', name: '', group: '', caps: [], context_window: null, max_output: null }
+  return { id: '', name: '', group: '', caps: [], context_window: 1_000_000, max_output: null }
 }
 
 export function ProviderManager() {
@@ -58,6 +62,8 @@ export function ProviderManager() {
   const [showKey, setShowKey] = useState(false)
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null)
   const [editModel, setEditModel] = useState<ModelEntry | null>(null)
+  // Owner 2026-10-01: keep the editor anchored even while its model ID is being edited.
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [q, setQ] = useState('') // settings-3col 票 04：供应商搜索（Cherry 同款）
   const [err, setErr] = useState('')
@@ -155,7 +161,7 @@ export function ProviderManager() {
       const merged = ids.map((m) => {
         const old = byId.get(m.id)
         // 票 02：窗口/输出上限同理——用户手填值不被拉取覆盖，空值才吃推断。
-        return old ? { ...m, caps: old.caps.length ? old.caps : m.caps, name: old.name, context_window: old.context_window ?? m.context_window, max_output: old.max_output ?? m.max_output } : m
+        return old ? { ...m, caps: old.caps, name: old.name ?? m.name, group: old.group ?? m.group, context_window: old.context_window ?? m.context_window, max_output: old.max_output ?? m.max_output } : m
       })
       const def = { ...draft, id: draft.id || slug(draft.name), models: merged }
       await api.saveProvider(def)
@@ -171,7 +177,9 @@ export function ProviderManager() {
 
   const saveModel = async (m: ModelEntry) => {
     if (!draft) return
-    const models = [...draft.models.filter((x) => x.id !== m.id), m]
+    const models = editingId === null
+      ? [...draft.models.filter((x) => x.id !== m.id), m]
+      : draft.models.filter((x) => x.id !== m.id || x.id === editingId).map((x) => x.id === editingId ? m : x)
     const def = { ...draft, models }
     setDraft(def)
     setEditModel(null)
@@ -179,6 +187,22 @@ export function ProviderManager() {
       await api.saveProvider(def).catch((e) => setErr(errText(e)))
       await reload(def.id)
     }
+  }
+
+  const refreshModelMetadata = async () => {
+    if (!draft || !editModel) return
+    const id = editModel.id
+    setBusy(true)
+    setErr('')
+    try {
+      const models = await api.fetchProviderModels(draft.id)
+      const model = models.find((m) => m.id === id)
+      if (!model) throw new Error(t('providers.modelNotFound'))
+      setEditModel((current) => current?.id === id ? {
+        ...current, caps: model.caps, context_window: model.context_window, max_output: model.max_output,
+      } : current)
+    } catch (e) { setErr(errText(e)) }
+    finally { setBusy(false) }
   }
 
   const removeModel = async (id: string) => {
@@ -242,6 +266,59 @@ export function ProviderManager() {
   }, [slotNames, doc])
 
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }
+
+  const modelEditor = editModel && (
+                <div className="panel" style={{ marginTop: 8, padding: '10px 12px', outline: '1px solid var(--accent)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '76px 1fr', gap: '6px 8px', alignItems: 'center', fontSize: 12 }}>
+                    <label className="dim3">{t('providers.modelId')}</label>
+                    <input className="input mono" aria-label={t('providers.modelId')} value={editModel.id} onChange={(e) => setEditModel({ ...editModel, id: e.target.value })} />
+                    <label className="dim3">{t('providers.modelName')}</label>
+                    <input className="input" aria-label={t('providers.modelName')} value={editModel.name ?? ''} onChange={(e) => setEditModel({ ...editModel, name: e.target.value })} />
+                    <label className="dim3">{t('providers.modelGroup')}</label>
+                    <input className="input" aria-label={t('providers.modelGroup')} value={editModel.group ?? ''} onChange={(e) => setEditModel({ ...editModel, group: e.target.value })} />
+                    <label className="dim3">{t('providers.caps')}</label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                      {CAPS.map((c) => (
+                        <label key={c} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+                          <input
+                            type="checkbox"
+                            checked={editModel.caps.includes(c)}
+                            onChange={(e) =>
+                              setEditModel({
+                                ...editModel,
+                                caps: e.target.checked ? [...editModel.caps, c] : editModel.caps.filter((x) => x !== c),
+                              })
+                            }
+                          />
+                          <Icon name={CAP_ICONS[c]} size={10} /> {t(`providers.cap_${c}`)}
+                        </label>
+                      ))}
+                    </div>
+                    {/* 票 02：撞限闸/输出上限的模型元数据（ADR 0068），留空走回落 */}
+                    <label className="dim3">{t('providers.modelWindow')}</label>
+                    <input
+                      className="input mono" type="number" min={0} step={1024}
+                      aria-label={t('providers.modelWindow')} placeholder="1000000"
+                      value={editModel.context_window ?? ''}
+                      onChange={(e) => setEditModel({ ...editModel, context_window: e.target.value === '' ? null : Number(e.target.value) })}
+                    />
+                    <label className="dim3">{t('providers.modelMaxOut')}</label>
+                    <input
+                      className="input mono" type="number" min={0} step={1024}
+                      aria-label={t('providers.modelMaxOut')}
+                      value={editModel.max_output ?? ''}
+                      onChange={(e) => setEditModel({ ...editModel, max_output: e.target.value === '' ? null : Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="dim3" style={{ fontSize: 11, marginTop: 6 }}>{t('providers.capsHint')}</div>
+                  <div className="dim3" style={{ fontSize: 11, marginTop: 6 }}>{t('providers.metaHint')}</div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                    <button className="btn primary" disabled={busy || !editModel.id.trim()} onClick={() => saveModel(editModel)}>{t('providers.save')}</button>
+                    <button className="btn" disabled={busy} onClick={() => setEditModel(null)}>{t('providers.cancel')}</button>
+                    {selConfigured && <button className="btn" disabled={busy || !editModel.id.trim()} onClick={refreshModelMetadata}>{t('providers.refreshMetadata')}</button>}
+                  </div>
+                </div>
+              )
 
   return (
     <div>
@@ -401,11 +478,12 @@ export function ProviderManager() {
                 </button>
                 <button
                   className="btn" style={{ fontSize: 12 }}
-                  onClick={() => setEditModel(emptyModel())}
+                  onClick={() => { setEditingId(null); setEditModel(emptyModel()) }}
                 >
                   <Icon name="plus" size={10} /> {t('providers.addModel')}
                 </button>
               </div>
+              {editingId === null && modelEditor}
               {groups.map(([g, ms]) => (
                 <div key={g} style={{ marginBottom: 4 }}>
                   <div
@@ -415,7 +493,8 @@ export function ProviderManager() {
                     <Icon name={collapsed[g] ? 'chevron-right' : 'chevron-down'} size={10} /> {g}
                   </div>
                   {!collapsed[g] && ms.map((m) => (
-                    <div key={m.id} className="panel" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', marginBottom: 3 }}>
+                    <Fragment key={m.id}>
+                    <div className="panel" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', marginBottom: 3 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div className="mono" style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {m.name || m.id}
@@ -426,7 +505,7 @@ export function ProviderManager() {
                           <Icon name={CAP_ICONS[c] ?? 'bolt'} size={11} />
                         </span>
                       ))}
-                      {/* 票 02：窗口/输出元数据可见性——未识别挂警告标，撞限闸回落 120k 要让人知道 */}
+                      {/* 票 02：窗口/输出元数据可见性——未识别挂警告标，撞限闸回落 1M 要让人知道 */}
                       {m.context_window != null ? (
                         <span className="dim3" title={t('providers.modelWindow')} style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>{fmtWindow(m.context_window)}</span>
                       ) : (
@@ -435,13 +514,15 @@ export function ProviderManager() {
                       {m.max_output != null && (
                         <span className="dim3" title={t('providers.modelMaxOut')} style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>↓{fmtWindow(m.max_output)}</span>
                       )}
-                      <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }} onClick={() => setEditModel({ ...m })}>
+                      <button className="btn" title={t('providers.edit')} aria-label={`${t('providers.edit')} ${m.id}`} style={{ fontSize: 10, padding: '1px 6px' }} onClick={() => { setEditingId(m.id); setEditModel({ ...m }) }}>
                         <Icon name="edit" size={10} />
                       </button>
                       <button className="btn" style={{ fontSize: 10, padding: '1px 6px', color: 'var(--err)' }} onClick={() => removeModel(m.id)}>
                         <Icon name="close" size={10} />
                       </button>
                     </div>
+                    {editingId === m.id && modelEditor}
+                    </Fragment>
                   ))}
                 </div>
               ))}
@@ -449,55 +530,6 @@ export function ProviderManager() {
                 <div className="dim3" style={{ fontSize: 12, padding: '8px 0' }}>{t('providers.noModels')}</div>
               )}
 
-              {/* ---- 编辑模型内联框 ---- */}
-              {editModel && (
-                <div className="panel" style={{ marginTop: 8, padding: '10px 12px', outline: '1px solid var(--accent)' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '76px 1fr', gap: '6px 8px', alignItems: 'center', fontSize: 12 }}>
-                    <label className="dim3">{t('providers.modelId')}</label>
-                    <input className="input mono" value={editModel.id} onChange={(e) => setEditModel({ ...editModel, id: e.target.value })} />
-                    <label className="dim3">{t('providers.modelName')}</label>
-                    <input className="input" value={editModel.name ?? ''} onChange={(e) => setEditModel({ ...editModel, name: e.target.value })} />
-                    <label className="dim3">{t('providers.modelGroup')}</label>
-                    <input className="input" value={editModel.group ?? ''} onChange={(e) => setEditModel({ ...editModel, group: e.target.value })} />
-                    <label className="dim3">{t('providers.caps')}</label>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      {CAPS.map((c) => (
-                        <label key={c} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
-                          <input
-                            type="checkbox"
-                            checked={editModel.caps.includes(c)}
-                            onChange={(e) =>
-                              setEditModel({
-                                ...editModel,
-                                caps: e.target.checked ? [...editModel.caps, c] : editModel.caps.filter((x) => x !== c),
-                              })
-                            }
-                          />
-                          <Icon name={CAP_ICONS[c]} size={10} /> {t(`providers.cap_${c}`)}
-                        </label>
-                      ))}
-                    </div>
-                    {/* 票 02：撞限闸/输出上限的模型元数据（ADR 0068），留空走回落 */}
-                    <label className="dim3">{t('providers.modelWindow')}</label>
-                    <input
-                      className="input mono" type="number" min={0} step={1024}
-                      value={editModel.context_window ?? ''}
-                      onChange={(e) => setEditModel({ ...editModel, context_window: e.target.value === '' ? null : Number(e.target.value) })}
-                    />
-                    <label className="dim3">{t('providers.modelMaxOut')}</label>
-                    <input
-                      className="input mono" type="number" min={0} step={1024}
-                      value={editModel.max_output ?? ''}
-                      onChange={(e) => setEditModel({ ...editModel, max_output: e.target.value === '' ? null : Number(e.target.value) })}
-                    />
-                  </div>
-                  <div className="dim3" style={{ fontSize: 11, marginTop: 6 }}>{t('providers.metaHint')}</div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                    <button className="btn primary" disabled={!editModel.id.trim()} onClick={() => saveModel(editModel)}>{t('providers.save')}</button>
-                    <button className="btn" onClick={() => setEditModel(null)}>{t('providers.cancel')}</button>
-                  </div>
-                </div>
-              )}
 
               {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
               <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>

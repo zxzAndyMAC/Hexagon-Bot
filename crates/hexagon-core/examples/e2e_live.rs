@@ -360,7 +360,11 @@ fn main() {
         let mut pack = None;
         let mut last_err = String::new();
         for attempt in 1..=3 {
-            match hexagon_core::setup::draft_flow(&task, provider.as_ref()) {
+            match hexagon_core::setup::draft_flow(
+                &task,
+                &roles_all.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+                provider.as_ref(),
+            ) {
                 Ok(p) => {
                     pack = Some(p);
                     break;

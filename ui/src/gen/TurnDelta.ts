@@ -29,6 +29,10 @@ done: boolean,
  */
 waiting: boolean, text: string, 
 /**
+ * Internal plan text is displayed separately from the public reply.
+ */
+plan?: string, 
+/**
  * 本帧的思考增量（hands-free 票 06）。空串 = 这一帧没有推理文本，
  * UI 不因此画思考行。与 text 分列，不把推理拼进可见回复。
  */

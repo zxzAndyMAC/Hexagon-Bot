@@ -386,6 +386,33 @@ pub fn owner_waits(db: &Db, project_id: &str) -> Result<bool, crate::cards::Card
     Ok(n > 0)
 }
 
+/// Live acceptance 2026-10-01: completed-pack screenshot follow-ups reached
+/// PM HOLD, then replayed after 60s. Use the orchestra's actual PackFinished
+/// receipt, not an absent active run (which also describes an unstarted pack).
+/// False negatives cost one rescue; false positives suppress unfinished work,
+/// so missing receipts and any subsequent stage opening fail closed.
+pub(crate) fn pack_finished(db: &Db, project: &str) -> Result<bool, rusqlite::Error> {
+    db.conn().query_row(
+        "SELECT EXISTS(SELECT 1 FROM events e WHERE e.project_id=?1
+         AND e.kind='team_slept' AND json_extract(e.payload,'$.reason')='pack finished'
+         AND NOT EXISTS(SELECT 1 FROM events later WHERE later.project_id=e.project_id
+                        AND later.kind='stage_started' AND later.id>e.id))",
+        [project],
+        |row| row.get(0),
+    )
+}
+
+/// Only a successful visible reply followed by a normal HOLD can settle a
+/// completed pack's supplemental episode. Silent/error turns retain rescue.
+pub(crate) fn supplemental_settled(
+    finished_pack: bool,
+    replied: bool,
+    held: bool,
+    outstanding: bool,
+) -> bool {
+    finished_pack && replied && held && !outstanding
+}
+
 /// 复审返工：当前 run 里某份产物最近一次复审结论是驳回。
 pub fn review_rework(db: &Db, project_id: &str) -> Result<bool, rusqlite::Error> {
     let n: i64 = db.conn().query_row(
@@ -651,6 +678,22 @@ mod tests {
             let s = Segment { retriggered: true, investigated: true, retry_used: u };
             let v = judge(&o, l, s, st);
             prop_assert!(v != Verdict::Retrigger && v != Verdict::Investigate);
+        }
+    }
+}
+
+#[cfg(test)]
+mod supplemental_properties {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn supplemental_close_requires_every_host_fact(
+            pack in any::<bool>(), reply in any::<bool>(), held in any::<bool>(), pending in any::<bool>()
+        ) {
+            let closes = supplemental_settled(pack, reply, held, pending);
+            prop_assert_eq!(closes, pack && reply && held && !pending);
+            if !pack || !reply || !held || pending { prop_assert!(!closes); }
         }
     }
 }

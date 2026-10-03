@@ -98,6 +98,9 @@ pub struct ToolContext {
     /// 激活级已读账本（prompt-engineering 票 02）：先读后改判定的依据。
     /// ctx 每回合新建，账本随激活清空。
     pub reads: readstate::ReadLedger,
+    /// Host-authenticated owner $skill grants for this activation. Cloning a
+    /// subagent context copies this set; a child cannot expand its parent grant.
+    pub(crate) manual_skill_invocations: std::collections::HashSet<String>,
 }
 
 impl Default for ToolContext {
@@ -125,6 +128,7 @@ impl Default for ToolContext {
             embedder: None,
             subagent_provider: None,
             reads: Default::default(),
+            manual_skill_invocations: Default::default(),
         }
     }
 }
@@ -179,8 +183,8 @@ pub enum RiskClass {
     /// 任意命令执行：形状记忆可放行，其余必问。
     Exec,
     /// 外部服务调用（mcp:*）：语义由第三方服务器自定。记忆 allow 和规则写入
-    /// 永不生效。自治 L3+ 把这一次询问放行并留轨迹，不等于记住——降回 L2
-    /// 仍逐次必问（票 03 / ADR 0059）。被否决：高档位也弹卡。
+    /// 永不生效。2026-10-01 owner Q3/Q6: 协作自治等级不再替外部动作授权；
+    /// 仅宿主可验证的低风险能力能按项目访问模式放行，未知语义逐次询问。
     External,
 }
 
@@ -283,6 +287,9 @@ impl Registry {
             tools: std::sync::Mutex::new(HashMap::new()),
             schemas: Default::default(),
         };
+        r.register(host::HostRead);
+        r.register(host::HostWrite);
+        r.register(host::HostBash);
         r.register(FsRead);
         r.register(FsFind);
         r.register(FsGrep);
@@ -298,9 +305,19 @@ impl Registry {
         r.register(ArtifactWrite);
         r.register(ArtifactRead);
         r.register(LoadSkill);
+        r.register(SearchSkills);
+        r.register(crate::design::ReadDesignDirection);
+        r.register(crate::design::ProposeDesign);
         r.register(ProposeExperience);
         r.register(WebFetch);
         r.register(crate::git::GitBaselineMerge);
+        r.register(desktop::ComputerSession);
+        r.register(desktop::ComputerObserve);
+        r.register(desktop::ComputerAction);
+        r.register(desktop::ComputerNavigate);
+        r.register(browser::BrowserSession);
+        r.register(browser::BrowserObserve);
+        r.register(browser::BrowserAction);
         r
     }
 
@@ -335,6 +352,8 @@ impl Registry {
         r.register(crate::subagent::RunTest);
         r.register(ArtifactRead);
         r.register(LoadSkill);
+        r.register(SearchSkills);
+        r.register(crate::design::ReadDesignDirection);
         r.register(crate::websearch::WebSearch);
         for tool in isolated {
             r.tools
@@ -554,22 +573,11 @@ impl Registry {
                             ctx.stage_run_id.as_deref(),
                         )?;
                         }
-                        // 票 03：和负责人裁决（via=owner）分开，时间线能看出是档位放行。
-                        crate::permissions::AllowVia::Autonomy {
-                            level,
-                            safety_net,
-                            reason,
-                        } => {
+                        crate::permissions::AllowVia::ApprovalMode { mode } => {
                             db.append_event(
                                 &ctx.project_id,
                                 EventKind::PermissionAllowed,
-                                json!({
-                                    "tool": name,
-                                    "via": "autonomy",
-                                    "level": format!("L{level}"),
-                                    "safety_net": safety_net,
-                                    "reason": reason,
-                                }),
+                                json!({ "tool": name, "via": "approval_mode", "mode": mode }),
                                 Some(&ctx.agent_id),
                                 ctx.stage_run_id.as_deref(),
                             )?;
@@ -959,7 +967,9 @@ fn effect_uncertain(risk: RiskClass, error: &ToolError) -> bool {
 
 // ---------- 子模块（arch-review 票 11 / D14 拆分）----------
 // 护栏层与内建实现各成文件；`pub use` 再导出保 `crate::tools::X` 路径不变。
+pub(crate) mod browser;
 mod builtin;
+pub(crate) mod desktop;
 pub(crate) mod effects;
 pub mod readstate;
 mod safety;
@@ -970,3 +980,5 @@ pub use safety::*;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod host;

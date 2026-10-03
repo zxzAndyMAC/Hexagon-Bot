@@ -552,3 +552,26 @@ describe('SettingsPage 日志分区（diagnostic-records 票 01）', () => {
     root.unmount()
   })
 })
+
+// Owner 2026-10-01: a remembered command must expose its execution scope;
+// the same text must not imply that offline approval also grants network access.
+it('shows remembered shell network, background and session boundaries', async () => {
+  vi.spyOn(api, 'logEnabled').mockResolvedValue(true)
+  vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+  vi.spyOn(api, 'permissionRules').mockResolvedValue([
+    { id: 'offline', agent_id: 'a1', tool: 'bash', shape: 'npm test', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-01', network_allowed: false, background_allowed: false, session_name: null },
+    { id: 'online', agent_id: 'a1', tool: 'bash', shape: 'npm run dev', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-01', network_allowed: true, background_allowed: true, session_name: 'preview' },
+  ])
+  const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+  const nav = [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Permissions')!
+  await act(async () => { nav.click() })
+  expect(el.textContent).toContain('Network disabled')
+  expect(el.textContent).toContain('Foreground only')
+  expect(el.textContent).toContain('No named session')
+  expect(el.textContent).toContain('Network allowed')
+  expect(el.textContent).toContain('Background allowed')
+  expect(el.textContent).toContain('Session: preview')
+  await act(async () => root.unmount())
+  el.remove()
+  vi.restoreAllMocks()
+})

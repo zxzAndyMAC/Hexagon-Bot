@@ -1,0 +1,22 @@
+.element-draft { margin-bottom: 6px; }
+.element-draft-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); gap: 6px; max-height: 106px; overflow: auto; margin-top: 6px; padding: 2px; }
+.element-draft-item { display: flex; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); }
+.element-draft-open { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 6px 8px; border: 0; background: transparent; text-align: left; color: var(--text); cursor: pointer; }
+.element-draft-open > svg { flex-shrink: 0; color: var(--text-2); }
+.element-draft-copy { display: grid; min-width: 0; gap: 2px; }
+.element-draft-copy strong, .element-draft-copy > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.element-draft-copy strong { font-size: 12px; font-weight: 500; }
+.element-draft-copy > span { font-size: 11px; color: var(--text-2); }
+.element-draft-remove { display: grid; place-items: center; width: 30px; flex-shrink: 0; border: 0; background: transparent; color: var(--text-2); cursor: pointer; border-radius: var(--r-md); }
+.element-draft-open:hover, .element-draft-remove:hover { background: var(--bg-3); }
+.element-draft-open:focus-visible, .element-draft-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.element-reference-preview { width: min(560px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--popover); color: var(--text); }
+.element-reference-preview::backdrop { background: rgb(0 0 0 / 55%); }
+.element-reference-preview > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.element-reference { max-width: 320px; }
+.element-reference-preview > .element-reference { max-width: none; }
+.browser-extension-setup { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* Owner issue19: contextual controls share one row, selection left, screen right. */
+.element-draft-tools { display: flex; align-items: center; gap: 8px; }
+.element-draft-tools:empty { display: none; }

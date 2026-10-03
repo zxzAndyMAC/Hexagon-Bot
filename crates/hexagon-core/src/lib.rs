@@ -7,13 +7,18 @@
 
 pub(crate) mod actions;
 pub mod api;
+pub mod approval_mode;
 pub mod artifacts;
 pub mod autonomy;
+pub mod browser;
+pub mod browser_elements;
 pub mod cards;
 pub mod commands;
 pub mod credentials;
 pub mod data_boundary;
 pub mod db;
+pub mod design;
+pub mod desktop;
 pub mod diag;
 pub mod errcode;
 pub mod evaluation;
@@ -31,6 +36,7 @@ pub mod mcp;
 pub mod orchestra;
 pub mod owner_text;
 pub mod packedit;
+pub mod permission_suggestion;
 pub mod permissions;
 pub mod pm_route;
 pub mod policydev;

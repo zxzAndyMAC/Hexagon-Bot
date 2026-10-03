@@ -3,10 +3,13 @@
 // 颜色不内嵌——由调用处的语义 token / className 决定。
 
 const ICONS = {
+  computer: <><rect x="1.5" y="2.5" width="13" height="9" rx="1.5" /><path d="M5 14h6M8 11.5V14" /></>,
+  pause: <path d="M5.5 3v10M10.5 3v10" />,
   // ---- 导航 / 动作 ----
   close: <path d="M4 4l8 8M12 4l-8 8" />,
   'arrow-left': <path d="M10.5 8h-7M6.5 4.5 3 8l3.5 3.5" />,
   'arrow-right': <path d="M5.5 8h7M9.5 4.5 13 8l-3.5 3.5" />,
+  'arrow-up': <path d="M8 13V3M4.5 6.5 8 3l3.5 3.5" />,
   'arrow-down': <path d="M8 3v10M4.5 9.5 8 13l3.5-3.5" />,
   export: <path d="M8 2.5v7M4.8 6.3 8 9.5l3.2-3.2M2.7 10.7v2.1a1.33 1.33 0 0 0 1.33 1.34h7.94a1.33 1.33 0 0 0 1.33-1.34v-2.1" />,
   install: <path d="M8 2v7.3M4.9 6.1 8 9.3l3.1-3.2M3 11.5v1.6a1.5 1.5 0 0 0 1.5 1.5h7a1.5 1.5 0 0 0 1.5-1.5v-1.6M3 13.2h10" />,

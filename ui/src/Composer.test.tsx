@@ -613,3 +613,24 @@ describe('实例点名（可靠性 07）', () => {
     await act(async () => root.unmount())
   })
 })
+
+describe('负责人确认的发送三态', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('提交期间阻止重复发送，失败保留草稿并恢复可发送', async () => {
+    useUiStore.setState({ mcpPending: false, team: [], timeline: [], pending: [] })
+    let reject!: (reason: Error) => void
+    const send = vi.spyOn(api, 'sendMessage').mockImplementation(() => new Promise((_, no) => { reject = no }))
+    const { el, root } = await render(<Composer />)
+    const button = el.querySelector<HTMLButtonElement>('.btn.primary')!
+    expect(button.disabled).toBe(true)
+    await sendText(el, '发送一次')
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    await act(async () => { el.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(send).toHaveBeenCalledTimes(1)
+    await act(async () => { reject(new Error('offline')) })
+    expect(el.querySelector('textarea')!.value).toBe('发送一次')
+    expect(button.disabled).toBe(false)
+    expect(button.getAttribute('aria-busy')).toBe('false')
+    root.unmount()
+  })
+})

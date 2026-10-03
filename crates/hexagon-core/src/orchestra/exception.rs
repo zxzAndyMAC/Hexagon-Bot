@@ -128,7 +128,7 @@ pub(super) fn candidates(
             .get(run.seq as usize)
             .ok_or(OrchError::BadSeq(run.seq))?;
         let accepted = accepted_for_run(db, project, pack, &run.id)?;
-        for check in check_evidence(db, project, &run.id, stage)? {
+        for check in check_evidence(db, project, &run.id, stage, pack)? {
             if check.state == CheckState::Passed {
                 continue;
             }

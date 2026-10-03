@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import { useUiStore } from '../store'
@@ -8,7 +8,9 @@ import { Icon, type IconName } from './Icon'
 import { RoleEditor } from './RoleEditor'
 import { fmtTime as fmtTimeShared } from '../usage'
 import { pairToolCalls, toolOutcome, type ToolOutcome, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
-import { openTurns } from '../timelineModel'
+import { factOpenTurns } from '../timelineFacts'
+import { useTimelineWindow } from '../useTimelineWindow'
+import { bindingFor, formatBinding, matches } from '../keymap'
 import { LoadingState } from './LoadingState'
 import { ExecBody, CallStatus } from './ExecCard'
 
@@ -76,15 +78,37 @@ const fmtTime = (iso: string) => fmtTimeShared(iso, true)
 /** Agent 活动视图：头卡 + 执行链路（步骤按序，可展开看 payload）。 */
 export function AgentTab({ agentId }: { agentId: string }) {
   const { t } = useTranslation()
-  const { team, timeline, invalidate, openTab, pushToast } = useUiStore()
+  const { team, timelineFacts, invalidate, openTab, pushToast } = useUiStore()
+  const window = useTimelineWindow('all', agentId)
+  const timeline = useMemo(() => window.page?.items ?? [], [window.page?.items])
+  const scroll = useRef<HTMLDivElement>(null)
+  const anchor = useRef<{ height: number; top: number } | null>(null)
+  const loadOlder = () => {
+    if (window.olderLoading || !window.page?.has_before) return
+    if (scroll.current) anchor.current = { height: scroll.current.scrollHeight, top: scroll.current.scrollTop }
+    void window.loadOlder()
+  }
+  useLayoutEffect(() => {
+    if (window.change === 'prepend' && anchor.current && scroll.current) {
+      scroll.current.scrollTop = anchor.current.top + scroll.current.scrollHeight - anchor.current.height
+    }
+    anchor.current = null
+  }, [window.revision, window.change])
   const member = team.find((m) => m.id === agentId)
   const fileRef = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [editing, setEditing] = useState(false)
 
   const steps = useMemo(() => {
-    const items = timeline.filter((it) => it.event.agent_id === agentId)
-    const calls = new Map(pairToolCalls(items).map((call) => [call.called.event.id, call]))
+    const primary = timeline.filter((it) => it.event.agent_id === agentId)
+    const pairs = pairToolCalls([...primary, ...(window.page?.boundary_pairs ?? [])].sort((a,b) => a.event.id-b.event.id))
+    const calls = new Map(pairs.map(call => [call.called.event.id, call]))
+    const visibleIds = new Set(primary.map(item => item.event.id))
+    const orphanResults = new Map(pairs.filter(call => call.result && !visibleIds.has(call.called.event.id))
+      .map(call => [call.result!.event.id, call.called]))
+    // A result at the page boundary must still show its call; loading the prior
+    // page replaces this proxy with the real call without a duplicate step.
+    const items = primary.map(item => orphanResults.get(item.event.id) ?? item)
     const evLabel = (k: string) => t(`ev.${k}`, { defaultValue: k.replace(/_/g, ' ') })
     const out: Step[] = []
     for (let i = 0; i < items.length; i++) {
@@ -130,13 +154,17 @@ export function AgentTab({ agentId }: { agentId: string }) {
       })
     }
     return out
-  }, [timeline, agentId, t])
+  }, [timeline, window.page?.boundary_pairs, agentId, t])
 
   // 忙碌 = 该 agent 有未收束回合（beautiful-ui 票 04 第二落位：
   // 头卡状态旁挂像素格，回合一收自动消失）。openTurns per-agent——
   // 并发回合交错时别家的开窗不能遮本家的忙碌态。
-  const turns = useMemo(() => openTurns(timeline), [timeline])
-  const busy = turns.has(agentId)
+  const streams = useUiStore((s) => s.streams[agentId])
+  const thinking = useUiStore((s) => s.thinkings[agentId])
+  const done = useUiStore((s) => s.streamDone[agentId])
+  const turns = useMemo(() => factOpenTurns(timelineFacts), [timelineFacts])
+  const busy = turns.has(agentId) || (done == null &&
+    [streams, thinking].some((buffer) => buffer && Object.values(buffer).some(Boolean)))
   const busyAt = turns.get(agentId)
 
   if (!member) return <div className="dim3" style={{ padding: 14 }}>{agentId}</div>
@@ -221,11 +249,22 @@ export function AgentTab({ agentId }: { agentId: string }) {
       </div>
       {editing && <RoleEditor agentId={agentId} onClose={() => setEditing(false)} />}
       {/* 执行链路 */}
-      <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 8 }}>
+      <div ref={scroll} style={{ flex: 1, overflowY: 'auto', paddingBottom: 8 }} onScroll={event => {
+        if (event.currentTarget.scrollTop < 80) loadOlder()
+      }} onKeyDown={event => {
+        if (matches(event.nativeEvent, bindingFor('timelineLoadOlder'))) { event.preventDefault(); loadOlder() }
+        else if (matches(event.nativeEvent, bindingFor('timelineRetry'))) { event.preventDefault(); void window.retry() }
+      }}>
+        {window.loading && <LoadingState label={t('timeline.loadingRecent')} />}
+        {window.error && <button className="btn" onClick={() => void window.retry()} title={[t('timeline.retry'), formatBinding(bindingFor('timelineRetry'))].filter(Boolean).join(' · ')}>{t('timeline.retry')}</button>}
+        {window.olderError && <p role="status">{t('timeline.olderFailed')}</p>}
+        {window.olderLoading && <LoadingState label={t('timeline.loadingOlder')} />}
+        {!window.olderLoading && window.page?.has_before && <button className="btn" onClick={loadOlder}
+          title={[t('timeline.loadOlder'), formatBinding(bindingFor('timelineLoadOlder'))].filter(Boolean).join(' · ')}>{t(window.olderError ? 'timeline.retry' : 'timeline.loadOlder')}</button>}
         <div className="dim3" style={{ padding: '6px 14px', fontSize: 10, fontWeight: 560 }}>
           {t('agent.chain')}
         </div>
-        {steps.length === 0 && <div className="dim3" style={{ padding: '4px 14px' }}>{t('agent.noEvents')}</div>}
+        {!window.loading && !window.error && steps.length === 0 && <div className="dim3" style={{ padding: '4px 14px' }}>{t('agent.noEvents')}</div>}
         {steps.map((s, i) => s.divider ? (
           <div key={s.id} style={{ padding: '12px 14px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: s.tone, display: 'inline-flex' }}><Icon name={s.icon} size={10} /></span>

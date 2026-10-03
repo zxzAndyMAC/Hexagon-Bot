@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AgentScreen } from './AgentScreen'
+import { ElementDraft } from './ElementReferences'
+import type { ElementRef } from '../gen/ElementRef'
+import { ProjectApprovalMode } from './ProjectApprovalMode'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
+import { ContextMeter } from './ContextMeter'
 import type { AttachRef } from '../gen/AttachRef'
 import {
   atomicDeletion,
@@ -68,12 +73,21 @@ function fit(ta: HTMLTextAreaElement) {
 
 export function Composer() {
   const { t } = useTranslation()
-  const { team, invalidate, pushToast, mcpPending } = useUiStore()
+  const team = useUiStore((s) => s.team)
+  const invalidate = useUiStore((s) => s.invalidate)
+  const pushToast = useUiStore((s) => s.pushToast)
+  const mcpPending = useUiStore((s) => s.mcpPending)
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
   const [text, setText] = useState('')
   const [popup, setPopup] = useState<{ kind: '@' | '#'; items: { label: string; hint: string }[] } | null>(null)
   const [sel, setSel] = useState(0)
+  const popupId = useId()
+  const suggestions = useRef<HTMLDivElement>(null)
+  useEffect(() => { suggestions.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }) }, [popup, sel])
   const [histIdx, setHistIdx] = useState(-1)
   const [attachments, setAttachments] = useState<Staged[]>([])
+  const [elements, setElements] = useState<ElementRef[]>([])
   const [zoom, setZoom] = useState<Staged | null>(null)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -195,6 +209,7 @@ export function Composer() {
   // 票 03：文件 → chip。前端先拦（类型/尺寸/数量），过了才调
   // stage_attachment 落盘——核内魔数复核仍在（双判不信任前端）。
   const addFiles = async (files: File[]) => {
+    if (submittingRef.current) return
     for (const f of files) {
       if (attachments.length >= ATTACH_MAX) {
         pushToast(t('composer.attachTooMany', { max: ATTACH_MAX }), 'err')
@@ -221,27 +236,35 @@ export function Composer() {
   }
 
   const removeAttachment = async (ref: AttachRef) => {
+    if (submittingRef.current) return
     setZoom((z) => (z?.path === ref.path ? null : z))
     setAttachments((a) => a.filter((x) => x.path !== ref.path))
     await api.discardAttachments([ref]).catch(() => {})
   }
 
   const send = async () => {
-    if (!text.trim() && attachments.length === 0) return
+    if (mcpPending || submittingRef.current || (!text.trim() && attachments.length === 0 && elements.length === 0)) return
+    // Owner 2026-10-01: sending and stopping are different actions. The busy
+    // interval ends after message persistence, not after the team's entire run.
+    submittingRef.current = true
+    setSubmitting(true)
     const body = text
     const refs = attachments.map(({ preview: _p, ...r }) => r)
     // ui-audit 票 04（P1-6）：发送失败 toast + 草稿保留——
     // 原先 await 裸抛，文案随输入框状态悬在用户面前却无任何反馈。
     try {
-      await api.sendMessage(body, refs)
+      if (elements.length) await api.sendElementMessage(body, refs, elements.map(item => item.id), elements[0].project_root)
+      else await api.sendMessage(body, refs)
       // 发送成功才贴底。失败走下面的 catch，视口留在用户正在看的地方。
       useUiStore.getState().requestTimelineStick()
       // 票 09：点名、没点名的封闭选择、卸掉项目经理后的接话人，都在
       // send_message → route_unnamed_owner。界面再 dispatch 会双发，
       // 也会把 L0/L1 的角色点名闸重写成「看见 @ 就派」。
       setText('')
+      if (inputRef.current) inputRef.current.style.height = 'auto'
       attachments.forEach((a) => URL.revokeObjectURL(a.preview))
       setAttachments([])
+      setElements([])
       setHistIdx(-1)
       HISTORY.unshift(body)
       if (HISTORY.length > HISTORY_CAP) HISTORY.pop()
@@ -250,6 +273,9 @@ export function Composer() {
       // 票 03：发送失败保留 chip 与已落盘文件——重发直接可用；
       // 未发送的孤儿文件由 inbox 周期清扫兜底（见 stage_attachment）。
       pushToast(errText(e), 'err')
+    } finally {
+      submittingRef.current = false
+      setSubmitting(false)
     }
   }
 
@@ -295,31 +321,8 @@ export function Composer() {
         void addFiles(Array.from(e.dataTransfer?.files ?? []))
       }}
     >
-      {popup && popup.items.length > 0 && (
-        <div className="panel panel-float" style={{ position: 'absolute', bottom: '100%', left: 14, right: 14, marginBottom: 4, overflow: 'hidden', zIndex: 10, boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
-          <div className="sys-row" style={{ padding: '4px 10px' }}>
-            {popup.kind === '@' ? t('composer.mentionHint') : t('composer.pathHint')}
-          </div>
-          {popup.items.map((it, i) => (
-            <div
-              key={it.label}
-              onClick={() => pick(it.label)}
-              style={{
-                padding: '5px 10px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
-                background: i === sel ? 'var(--bg-2)' : 'transparent',
-                color: popup.kind === '@' ? 'var(--accent)' : 'var(--flag)',
-              }}
-            >
-              <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                {popup.kind === '#' && <Icon name={it.label.endsWith('/') ? 'folder' : 'artifact'} size={11} />}
-                {it.label}
-              </span>
-              <span className="dim3" style={{ fontSize: 11 }}>{it.hint}</span>
-            </div>
-          ))}
-        </div>
-      )}
       {/* 票 03 + 票 10：按图显示。关闭钮在图上，只去掉这一张；点图放大。 */}
+      <ElementDraft references={elements} onChange={setElements} submitting={submitting} trailing={<AgentScreen />} />
       {attachments.length > 0 && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           {attachments.map((a) => (
@@ -394,7 +397,35 @@ export function Composer() {
           </button>
         </div>
       )}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+      {/* Owner issue16: suggestions anchor to the input, above the reference shelf. */}
+      <div className="composer-box" style={{ position: 'relative' }}>
+      {popup && popup.items.length > 0 && (
+        <div ref={suggestions} id={popupId} className="panel panel-float composer-suggestions" role="listbox" aria-label={popup.kind === '@' ? t('composer.mentionHint') : t('composer.pathHint')} style={{ position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: 4, maxHeight: 'min(280px, 40vh)', overflow: 'auto', zIndex: 10, boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
+          <div className="sys-row" style={{ padding: '4px 10px' }}>
+            {popup.kind === '@' ? t('composer.mentionHint') : t('composer.pathHint')}
+          </div>
+          {popup.items.map((it, i) => (
+            <div
+              key={it.label}
+              id={`${popupId}-${i}`} role="option" aria-selected={i === sel}
+              onMouseDown={event => event.preventDefault()}
+              onClick={() => pick(it.label)}
+              style={{
+                padding: '5px 10px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
+                background: i === sel ? 'var(--bg-2)' : 'transparent',
+                color: popup.kind === '@' ? 'var(--accent)' : 'var(--flag)',
+              }}
+            >
+              <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                {popup.kind === '#' && <Icon name={it.label.endsWith('/') ? 'folder' : 'artifact'} size={11} />}
+                {it.label}
+              </span>
+              <span className="dim3" style={{ fontSize: 11 }}>{it.hint}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
         {/* ui-audit 票 10（P2-10）：单行 input → 自动增高 textarea（约 6 行上限内滚）。
             出处：Enter 行为变了——单行时代 Enter=发送是唯一语义；多行后
             Enter=发送、Shift+Enter=换行，用户习惯断层（粘 diff/多段指令进不来），
@@ -408,6 +439,9 @@ export function Composer() {
           </div>
           <textarea
             id="composer-input"
+            aria-autocomplete="list"
+            aria-controls={popup?.items.length ? popupId : undefined}
+            aria-activedescendant={popup?.items.length ? `${popupId}-${sel}` : undefined}
             ref={inputRef}
             rows={1}
             value={text}
@@ -464,8 +498,8 @@ export function Composer() {
                 setText(next >= 0 ? HISTORY[next] : '')
               }
             }}
-            placeholder={mcpPending ? t('composer.initializing') : `${t('composer.placeholder')} ${t('composer.multilineHint')}`}
-            disabled={mcpPending}
+            placeholder={mcpPending ? t('composer.initializing') : t('composer.placeholder')}
+            disabled={mcpPending || submitting}
             // 票 03：粘贴图片（clipboardData.files）
             onPaste={(e) => {
               const files = Array.from(e.clipboardData?.files ?? [])
@@ -476,9 +510,19 @@ export function Composer() {
             }}
           />
         </div>
-        <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} disabled={mcpPending} onClick={send}>
-          <Icon name="send" size={12} /> {t('composer.send')}
-        </button>
+        <div className="composer-toolbar">
+          <div className="composer-controls"><ProjectApprovalMode /><span className="composer-hint">{t('composer.multilineHint')}</span></div>
+          <div className="composer-actions">
+            <ContextMeter agentIds={team.filter((member) => atoms.some((atom) => atom.kind === 'mention'
+              && (atom.value === member.role || atom.value === `${member.role}[${member.id}]`))).map((member) => member.id)} />
+            <button className="btn primary composer-send" type="button"
+              aria-label={submitting ? t('composer.sending') : t('composer.send')} aria-busy={submitting}
+              title={`${t('composer.send')} · Enter`}
+              disabled={mcpPending || submitting || (!text.trim() && attachments.length === 0 && elements.length === 0)} onClick={send}>
+              <Icon name={submitting ? 'refresh' : 'arrow-up'} size={18} className={submitting ? 'composer-submit-spin' : undefined} />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

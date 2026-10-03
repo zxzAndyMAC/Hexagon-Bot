@@ -30,6 +30,14 @@ describe('matches 平台精确化（票 15）', () => {
       expect(km.isMac).toBe(true)
       expect(km.matches(ev('Enter', { metaKey: true }), 'mod+Enter')).toBe(true)
       expect(km.matches(ev('Enter', { ctrlKey: true }), 'mod+Enter')).toBe(false)
+      // 2026-10-01 live acceptance: Option+Shift+P produces ∏ on macOS;
+      // the former character-only match left Settings' emergency pause inert.
+      const pause = ev('∏', { code: 'KeyP', metaKey: true, altKey: true, shiftKey: true })
+      expect(km.matches(pause, 'mod+alt+shift+p')).toBe(true)
+      expect(km.normalizeEvent(pause)).toBe('mod+alt+shift+p')
+      expect(km.matches(pause, 'mod+alt+p')).toBe(false)
+      expect(km.matches(ev('∏', { code: 'KeyP', ctrlKey: true, altKey: true, shiftKey: true }), 'mod+alt+shift+p')).toBe(false)
+      expect(km.matches(ev('¡', { code: 'Digit1', metaKey: true, altKey: true, shiftKey: true }), 'mod+alt+shift+1')).toBe(true)
     } finally {
       vi.unstubAllGlobals()
       vi.resetModules()

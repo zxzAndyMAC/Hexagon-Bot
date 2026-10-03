@@ -128,6 +128,17 @@ describe('待决弹窗（hands-free 票 05）', () => {
     expect(el.querySelector('[data-pending-count]')).toBeNull()
   })
 
+  it('原生授权弹窗打开时关闭键不影响背后的待决卡', async () => {
+    useUiStore.setState({ pending: [card()] })
+    const { root: r } = await render(<><PendingDialog /><dialog open>System permissions</dialog></>)
+    root = r
+    expect(useUiStore.getState().pendingDialogOpen).toBe(true)
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', ctrlKey: !isMac, metaKey: isMac, bubbles: true }))
+    })
+    expect(useUiStore.getState().pendingDialogOpen).toBe(true)
+  })
+
   it('关掉之后新卡再次弹出，离开再回来徽标仍在', async () => {
     useUiStore.setState({ pending: [card()] })
     const { el, root: r } = await render(
@@ -277,7 +288,9 @@ it('未知动作显示证据，要求理由和重复风险确认；核对快捷�
   const retry = vi.spyOn(api, 'retryToolAction').mockResolvedValue()
   useUiStore.setState({ invalidate: async () => {}, modalScope: 'settings' })
   const { el, root } = await render(<PendingCard top q={card({ kind: 'recovery', payload: {
-    sub: 'tool_outcome_unknown', action_id: 'action-risk', reconciliation_evidence: 'receipt not found',
+    // 2026-10-01: host-provided project identity is now required to abandon a
+    // recovery card safely while another project may be opening.
+    sub: 'tool_outcome_unknown', action_id: 'action-risk', reconciliation_evidence: 'receipt not found', host_project_root: '/project-a',
   } })} />)
   expect(el.textContent).toContain('receipt not found')
   await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', altKey: true, metaKey: isMac, ctrlKey: !isMac, cancelable: true })) })

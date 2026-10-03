@@ -49,3 +49,36 @@ it('return summary exposes unresolved outcomes and exception history without exp
     expect(el.textContent).toContain('Policy candidates: 1')
   } finally { await act(async () => root.unmount()) }
 })
+
+it('provider failure remains visible outside system-event folds without a click', async () => {
+  // 2026-09-30 原生验收：HTTP400 被折成“9 条系统事件”，负责人看不到为何停住。
+  useUiStore.setState({ timeline: [1, 2, 3, 4].map((id) => ({
+    event: { id, kind: id === 4 ? 'turn_failed' : 'system', project_id: 'p1', agent_id: 'a1', stage_run_id: null, created_at: '',
+      payload: id === 4 ? { outcome: 'refused: HTTP 400' } : { kind: 'request_envelope' } },
+    message: null,
+  })), pending: [], team: [], streams: {}, thinkings: {}, streamDone: {} })
+  const el = document.createElement('div'); const root = createRoot(el)
+  try {
+    await act(async () => root.render(<Timeline />))
+    expect(el.textContent).toContain('turn failed')
+    expect(el.textContent).toContain('HTTP 400')
+  } finally { await act(async () => root.unmount()) }
+})
+
+it('shows browser observation screenshot evidence through the same local thumbnail control', async () => {
+  // Extension12 integration: browser observations persist the same screenshot
+  // envelope as native observations and must not disappear behind a tool prefix.
+  useUiStore.setState({ timeline: [
+    { event: { id: 101, kind: 'tool_called', project_id: 'p1', agent_id: 'a1', stage_run_id: null, created_at: '', payload: { tool: 'browser_observe', action_id: 'browser-image', input: { op: 'observe' } } }, message: null },
+    { event: { id: 102, kind: 'tool_result', project_id: 'p1', agent_id: 'a1', stage_run_id: null, created_at: '2026-10-02T00:00:00Z', payload: { action_id: 'browser-image', ok: true, result: { output: { ok: true, result: { screenshot_path: '/project/.hexagon/computer-use/screenshots/test.png', title: 'Project browser' } } } } }, message: null },
+  ], pending: [], team: [], streams: {}, thinkings: {}, streamDone: {} })
+  const el = document.createElement('div'); const root = createRoot(el)
+  try {
+    await act(async () => root.render(<Timeline />))
+    const group = Array.from(el.querySelectorAll('.sysrow')).find(row => row.textContent?.includes('1 tool calls'))!
+    await act(async () => group.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await act(async () => el.querySelector<HTMLButtonElement>('.tchip-row')!.click())
+    expect(el.querySelector('.desktop-screenshot-thumbnail')).not.toBeNull()
+    expect(el.querySelector('figcaption')?.textContent).toContain('Project browser')
+  } finally { await act(async () => root.unmount()) }
+})

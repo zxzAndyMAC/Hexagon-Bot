@@ -524,7 +524,7 @@ describe('一句话优化成项目说明（票 16）', () => {
         name: '规格',
         roles: ['产品策划'],
         due: ['规格'],
-        checks: ['npm test'],
+        checks: ['npm test'], quality_checks: { tests: 'npm test' },
         reviews: [],
         stamp_point: true,
         backfill_edges: [['QA', '前端']],
@@ -534,6 +534,8 @@ describe('一句话优化成项目说明（票 16）', () => {
     const el = await renderWizard()
     await advance(el, '5 · Flow draft')
     expect(el.querySelector('[data-flow-draft]')).toBeTruthy()
+    // 2026-09-30 原生验收：取消架构师后生成流程仍带架构师；请求必须携带当前名单。
+    expect(api.draftFlow).toHaveBeenCalledWith('一个本地待办', seeded.roles)
     expect(el.textContent).not.toContain('npm test')
     expect(el.textContent).not.toContain('backfill')
     expect([...el.querySelectorAll('input, textarea')].every((n) => (n as HTMLInputElement).value !== 'npm test')).toBe(true)
@@ -567,7 +569,7 @@ describe('一句话优化成项目说明（票 16）', () => {
       version: 1,
       knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
       stages: [{
-        name: '规格', roles: ['产品策划'], due: ['规格'], checks: [],
+        name: '规格', roles: ['产品策划'], due: ['规格'], checks: [], quality_checks: {},
         reviews: [], stamp_point: false, backfill_edges: [], consult_wake: [],
       }],
     }
@@ -600,6 +602,37 @@ describe('一句话优化成项目说明（票 16）', () => {
     expect(el.textContent).not.toContain('桌面端跨平台计算器软件')
   })
 
+  it('已选角色变化后重新生成流程，不沿用含已卸角色的缓存', async () => {
+    const current = { ...seeded, brief: '本地容量台' }
+    const pack: PackDef = {
+      name: '旧团队', version: 1,
+      knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      stages: [{ name: '规格', roles: ['架构师'], due: [], checks: [], quality_checks: {}, reviews: [], stamp_point: true, backfill_edges: [], consult_wake: [] }],
+    }
+    localStorage.setItem('hexagon.wizard', JSON.stringify({
+      ...current, flowPack: pack,
+      flowDraftKey: JSON.stringify([`${current.dir}\0${current.name}\0\0${current.brief}`, ['架构师']]),
+    }))
+    const flow = vi.spyOn(api, 'draftFlow').mockResolvedValue({ ...pack, name: '当前团队', stages: [{ ...pack.stages[0], roles: current.roles }] })
+    const el = await renderWizard()
+    await advance(el, '5 · Flow draft')
+    expect(flow).toHaveBeenCalledWith(current.brief, current.roles)
+    expect(el.textContent).toContain('当前团队')
+    expect(el.textContent).not.toContain('旧团队')
+  })
+
+  it('重起草失败不能携带旧团队流程继续创建', async () => {
+    localStorage.setItem('hexagon.wizard', JSON.stringify({
+      ...seeded, brief: '本地容量台', flowDraftKey: 'old-team',
+      flowPack: { name: '旧团队', version: 1, stages: [{ name: '旧阶段', roles: ['架构师'], due: [] }] },
+    }))
+    vi.spyOn(api, 'draftFlow').mockRejectedValue(new Error('unselected role'))
+    const el = await renderWizard()
+    await advance(el, '5 · Flow draft')
+    expect(el.textContent).toContain('unselected role')
+    expect(nextBtn(el).disabled).toBe(true)
+  })
+
   it('流程起草在途锁跳步，落地才放行', async () => {
     // draft_flow 也是 AI 调用：在途 Back/Next 同锁（owner 2026-09-25）
     localStorage.setItem('hexagon.wizard', JSON.stringify({ ...seeded, brief: '一个本地待办' }))
@@ -619,7 +652,7 @@ describe('一句话优化成项目说明（票 16）', () => {
         version: 1,
         knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
         stages: [{
-          name: '规格', roles: ['产品策划'], due: ['规格'], checks: [],
+          name: '规格', roles: ['产品策划'], due: ['规格'], checks: [], quality_checks: {},
           reviews: [], stamp_point: true, backfill_edges: [], consult_wake: [],
         }],
       })
@@ -642,7 +675,7 @@ describe('一句话优化成项目说明（票 16）', () => {
       stages: [{
         name: '规格',
         roles: ['产品策划', '编外角色'],
-        due: [], checks: [], reviews: [],
+        due: [], checks: [], quality_checks: {}, reviews: [],
         stamp_point: false, backfill_edges: [], consult_wake: [],
       }],
     })

@@ -15,8 +15,10 @@ import { providerStepReady } from '../providerGate'
 import { Icon } from './Icon'
 import { EntityChips } from './EntityPicker'
 import { LoadingState } from './LoadingState'
+import type { QualityCategory } from '../gen/QualityCategory'
 
 const DRAFT_KEY = 'hexagon.wizard'
+const QUALITY_CATEGORIES: QualityCategory[] = ['tests', 'performance', 'accessibility', 'security']
 
 interface Draft {
   dir: string
@@ -87,6 +89,11 @@ function projectKey(d: Pick<Draft, 'dir' | 'name' | 'instructionText' | 'agentsM
   // 一句话和生成稿都算项目身份。只盯其中一份时，改了另一份不会让旧职责过期。
   const text = d.instructionText.trim() || `${d.agentsMd.trim()}\0${d.brief.trim()}`
   return `${d.dir}\0${d.name}\0${text}`
+}
+
+// 2026-09-30 原生验收：角色变更必须使旧流程失效，不能复用全模板名单生成的草稿。
+function flowKey(d: Draft) {
+  return JSON.stringify([projectKey(d), d.roles])
 }
 
 /// 起草用的说明。一句话改了而生成稿还是上一个项目时，以一句话为准，
@@ -194,6 +201,7 @@ function FlowDraft({
           roles: roles.slice(0, 1),
           due: [],
           checks: [],
+          quality_checks: {},
           reviews: [],
           stamp_point: false,
           backfill_edges: [],
@@ -466,7 +474,15 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   // 流程步 draft_flow 落定标记（成功/失败/空都算落定）。在途=进了流程步还没草稿也没落定——
   // 派生值而非 effect 里同步 setState：set-state-in-effect 会触发级联渲染，oxlint 红线
   const [flowDone, setFlowDone] = useState(false)
-  const flowStale = !!draft.flowPack && draft.flowDraftKey !== projectKey(draft)
+  // Live acceptance 2026-10-01 / ADR 0069: the removed PackEditor is not an
+  // approval surface. Only this mount's visible owner input may supply runners;
+  // never hydrate it from a model pack or persisted draft. Changing the project
+  // invalidates it. A false negative costs re-entry; a false positive runs an
+  // unreviewed command with owner authority.
+  const [ownerQuality, setOwnerQuality] = useState<{ scope: string; commands: Partial<Record<QualityCategory, string>> }>({ scope: '', commands: {} })
+  const qualityCommands = ownerQuality.scope === flowKey(draft) ? ownerQuality.commands : {}
+  const approvedQuality = Object.fromEntries(Object.entries(qualityCommands).filter(([, command]) => command.trim()))
+  const flowStale = !!draft.flowPack && draft.flowDraftKey !== flowKey(draft)
   const flowBusy = step === 'flow' && !flowDone && (!draft.flowPack || flowStale)
   const [newRoleBusy, setNewRoleBusy] = useState(false)
   // AI 调用在途即锁跳步（owner 2026-09-25：上一步/下一步/步骤轨回跳全锁），
@@ -586,11 +602,11 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       case 'dir': return !!draft.dir && !!draft.name && !dirBlocked
       case 'roles': return draft.roles.length > 0
       case 'brief': return !!report?.instructions || !!draft.agentsMd.trim() || !!draft.brief.trim()
-      case 'flow': return !!draft.flowPack && draft.flowPack.stages.length > 0
+      case 'flow': return !flowStale && !!draft.flowPack && draft.flowPack.stages.length > 0
       case 'confirm': return !draft.fastPath || !!draft.fastRole
       case 'keys': return unready.length === 0 && slots.length > 0
     }
-  }, [step, draft, dirBlocked, unready, slots, doc, report])
+  }, [step, draft, dirBlocked, unready, slots, doc, report, flowStale])
 
   const existingRepoAlign =
     !!report?.is_git && !report?.empty && draft.roles.includes('产品策划')
@@ -790,7 +806,14 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         // 内置模板同名直传也无损（定义等价）。
         roleOverrides: pickedRoles.map(effDef),
         packName: null,
-        pack: draft.fastPath ? null : draft.flowPack,
+        // Ticket 04: hidden model/legacy commands stay stripped. The separately
+        // displayed owner inputs are the only runner authority at confirmation.
+        pack: draft.fastPath || !draft.flowPack ? null : {
+          ...draft.flowPack,
+          stages: draft.flowPack.stages.map((stage, index) => ({ ...stage, checks: [],
+            quality_checks: index === draft.flowPack!.stages.length - 1 ? approvedQuality : {},
+          })),
+        },
         fastpathRole: draft.fastPath ? draft.fastRole : null,
         initGit: draft.initGit,
         agentsMd: agentsToWrite(),
@@ -810,15 +833,15 @@ export function Wizard({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     if (step !== 'flow') return
-    if (draft.flowPack && draft.flowDraftKey === projectKey(draft)) return
+    if (draft.flowPack && draft.flowDraftKey === flowKey(draft)) return
     let cancelled = false
     // draft_flow 也是 AI 调用：在途由 flowBusy 派生锁跳步，done() 在异步出口落定
     const done = () => { if (!cancelled) setFlowDone(true) }
     const apply = (sentence: string) => {
       const text = sentence.trim()
       if (!text) { done(); return }
-      api.draftFlow(text).then((pack) => {
-        if (!cancelled) set({ flowPack: pack, flowDraftKey: projectKey(draft) })
+      api.draftFlow(text, draft.roles).then((pack) => {
+        if (!cancelled) set({ flowPack: pack, flowDraftKey: flowKey(draft) })
       }).catch((e) => { if (!cancelled) setErr(errText(e)) })
         .finally(done)
     }
@@ -843,7 +866,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     setMakingRole(false)
     setErr('')
     // 再进 flow 步要重试 draft_flow——上次落定标记清掉，flowBusy 派生跟着重立
-    if (s === 'flow' && draft.flowDraftKey !== projectKey(draft)) setFlowDone(false)
+    if (s === 'flow' && draft.flowDraftKey !== flowKey(draft)) setFlowDone(false)
     setStep(s)
   }
   // 定制弹窗只活在 roles 步；角色被卸掉或模板失踪时自动关
@@ -1035,6 +1058,16 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           busy={flowBusy}
           onChange={(flowPack) => set({ flowPack })}
         />
+        {!flowBusy && draft.flowPack && <fieldset style={{ border: '1px solid var(--border)', marginTop: 14, padding: 10 }}>
+          <legend>{t('quality.setupTitle')}</legend>
+          <p className="dim3" style={{ fontSize: 12 }}>{t('quality.setupHint')}</p>
+          {QUALITY_CATEGORIES.map(category => <label key={category} style={{ display: 'block', marginTop: 8 }}>
+            {t(`quality.category.${category}`)}
+            <input className="input mono" style={{ display: 'block', width: '100%', marginTop: 4 }}
+              data-quality-command={category} value={qualityCommands[category] ?? ''}
+              onChange={event => setOwnerQuality({ scope: flowKey(draft), commands: { ...qualityCommands, [category]: event.target.value } })} />
+          </label>)}
+        </fieldset>}
         {err && step === 'flow' && (
           <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 10 }}>{err}</div>
         )}
@@ -1239,6 +1272,14 @@ export function Wizard({ onDone }: { onDone: () => void }) {
               ))}
             </select>
           )}
+          {!draft.fastPath && <div>
+            <strong>{t('quality.setupTitle')}</strong>
+            <p className="dim3">{t('quality.setupReview')}</p>
+            {Object.entries(approvedQuality).length === 0 ? <p>{t('quality.setupNone')}</p> :
+              Object.entries(approvedQuality).map(([category, command]) => <div key={category}>
+                {t(`quality.category.${category}`)}: <code style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{command}</code>
+              </div>)}
+          </div>}
           <div>
             <span className="dim3">{t('wizard.sumAgents')}：</span>
             {report?.instructions

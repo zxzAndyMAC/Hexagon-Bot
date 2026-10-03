@@ -1,21 +1,27 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
+import { ElementReference } from './ElementReferences'
+import { DesktopToolDetails } from './DesktopToolDetails'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Virtuoso } from 'react-virtuoso'
+import { useTimelineWindow } from '../useTimelineWindow'
+import { useTimelineNodes } from '../useTimelineNodes'
+import { useTimelineViewport } from '../useTimelineViewport'
+import { deriveWorkbenchStatusFromFacts, factOpenTurn } from '../timelineFacts'
 import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
 import { api, isTauri } from '../api'
-import { Md, CodeBlock } from './Md'
+import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { useUiStore } from '../store'
-import { buildRows, nodeMarks, deriveWorkbenchStatus, thinkingCollapsed, stampedByAutonomy, openTurn, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
+import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, openTurn, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { Row } from './Row'
-import { bindingFor, formatBinding } from '../keymap'
+import { bindingFor, formatBinding, matches } from '../keymap'
 import { pairToolCalls, toolOutcome, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
 import { CallStatus, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
-import { listOverflows, pinAfterScroll, showStickButton, STICK_BAND_PX, tailScrollTop, TIMELINE_TAIL_PX } from '../timelineStick'
+import { showStickButton, TIMELINE_TAIL_PX } from '../timelineStick'
 import type { TFunction } from 'i18next'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
@@ -40,9 +46,14 @@ const chipCls = (s: string) =>
 // Thinking 升级（beautiful-ui 票 03）：live 态 shimmer 走秒，
 // live→settled 翻转成「思考用时 Ns」；历史消息无计时源，回退原标签。
 // 「思考」只承载推理文本（CONTEXT.md 定名）——工具调用归 ToolChips，不混排。
-export function ThinkingRow({ text, live }: { text: string; live?: boolean }) {
+export function ThinkingRow({ text, live, plan = false }: { text: string; live?: boolean; plan?: boolean }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  // 2026-10-01 用户验收：生成时可读，结束默认收起；手动选择不被增量覆盖。
+  const [choice, setChoice] = useState<boolean | null>(null)
+  const open = choice ?? live === true
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const followTail = useRef(true)
+  const bodyId = useId()
   const [now, setNow] = useState(0)
   const [start, setStart] = useState<number | null>(null)
   const [end, setEnd] = useState<number | null>(null)
@@ -62,28 +73,34 @@ export function ThinkingRow({ text, live }: { text: string; live?: boolean }) {
     const iv = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(iv)
   }, [live])
+  // 2026-10-01: follow committed Markdown, not every incoming token. Reading
+  // scrollHeight before deferred content commits forced layout and missed its tail.
+  const followRenderedTail = useCallback(() => {
+    const body = bodyRef.current
+    if (body && live && open && followTail.current) body.scrollTop = body.scrollHeight
+  }, [live, open])
   if (!hasText) return null
-  const { long, line } = thinkingCollapsed(trimmed)
-  const shown = long && !open ? line : trimmed
   const endAt = end ?? (now > 0 ? now : null)
   const secs = start != null && endAt != null ? Math.max(0, (endAt - start) / 1000) : null
-  const label = live
+  const label = plan ? t(live ? 'timeline.planning' : 'timeline.plan') : live
     ? `${t('timeline.thinking')} · ${Math.floor(secs ?? 0)}s`
     : timed && secs != null
       ? t('timeline.thought', { s: secs < 1 ? '<1' : String(Math.round(secs)) })
       : t('timeline.thinking')
   return (
-    <button
-      type="button"
-      className={`thinking-row${long && !open ? ' thinking-ellipsis' : ''}`}
-      data-thinking=""
-      data-open={long && open ? '1' : '0'}
-      aria-expanded={long ? open : undefined}
-      onClick={() => { if (long) setOpen((v) => !v) }}
-    >
-      <span className={live ? 'shimmer-text' : undefined}>{label}</span>{' '}
-      {long && open ? <span className="thinking-full">{shown}</span> : shown}
-    </button>
+    <div className="thinking-row" data-thinking="" data-open={open ? '1' : '0'}>
+      <button type="button" className="thinking-toggle" aria-expanded={open} aria-controls={bodyId}
+        onClick={() => { setChoice(!open); followTail.current = true }}>
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+        <span className={live ? 'shimmer-text' : undefined}>{label}</span>
+      </button>
+      {open && <div id={bodyId} ref={bodyRef} className="thinking-full" tabIndex={0}
+        role="region" aria-label={t(plan ? 'timeline.plan' : 'timeline.thinking')}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          followTail.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32
+        }}><ReasoningMarkdown text={trimmed} live={live} onRender={followRenderedTail} /></div>}
+    </div>
   )
 }
 
@@ -153,10 +170,14 @@ export function StatusLine() {
   const stages = useUiStore((s) => s.stages)
   const team = useUiStore((s) => s.team)
   const timeline = useUiStore((s) => s.timeline)
+  const timelineCaughtUp = useUiStore((s) => s.timelineCaughtUp)
   const streams = useUiStore((s) => s.streams)
   const thinkings = useUiStore((s) => s.thinkings)
   const streamDone = useUiStore((s) => s.streamDone)
-  const st = deriveWorkbenchStatus({ stages, team, timeline, streams, thinkings, streamDone })
+  const facts = useUiStore(s => s.timelineFacts)
+  const projectRoot = useUiStore(s => s.projectRoot)
+  const st = facts || projectRoot ? deriveWorkbenchStatusFromFacts({ stages, team, facts, streams, thinkings, streamDone })
+    : deriveWorkbenchStatus({ stages, team, timeline, streams, thinkings, streamDone, timelineCaughtUp })
   if (!st.stage && !st.role && !st.tool) return null
   return (
     <div data-status-line="" className="status-line">
@@ -201,14 +222,18 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 「系统」一刀切让 invariant_violation 这类信号淹没在同名行里。
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
-  const highRisk = SYS_HIGH_RISK.has(sub)
+  if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
+    return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
+  }
+  const highRisk = item.event.kind === 'turn_failed' || SYS_HIGH_RISK.has(sub)
   const autoStamp = item.event.kind === 'stamped' && stampedByAutonomy(item.event.payload)
   const label = autoStamp
     ? t('ev.stamped_auto', { stage: String(item.event.payload?.stage ?? '') })
     : sub
       ? trKey(t, `sys.${sub}`, sub)
       : trKey(t, `ev.${item.event.kind}`, item.event.kind)
-  const note = item.event.kind === 'stamp_rejected' ? String(item.event.payload?.note ?? '') : ''
+  const note = item.event.kind === 'stamp_rejected' ? String(item.event.payload?.note ?? '')
+    : item.event.kind === 'turn_failed' ? String(item.event.payload?.error ?? item.event.payload?.outcome ?? item.event.payload?.code ?? '') : ''
   return (
     <div className="sysrow">
       <div className="sysline" />
@@ -415,6 +440,7 @@ export const EventRow = memo(function EventRow({
               )}
             </div>
             <CollapsibleBody text={m.body} unclamped={story} />
+            {m.element_refs?.map(reference => <ElementReference key={reference.id} reference={reference} />)}
             {/* 票 03：图片附件引用 chip（字节在 .hexagon/inbox/，
                 不开 assetProtocol——渲染引用不渲染图本体） */}
             {m.attachments?.length > 0 && (
@@ -467,6 +493,8 @@ function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: n
   const tool = String(p.tool ?? '')
   const res = call.result?.event.payload as Record<string, unknown> | undefined
   const ok = toolOutcome(call.result)
+  const envelope = res?.result as { output?: Record<string, unknown> & { source?: string; status?: string } } | undefined
+  const loadedSkill = tool === 'load_skill' && ok === true && envelope?.output?.status === 'loaded' ? envelope.output : undefined
   const summary = toolInputSummary(p)
   const detail = JSON.stringify({ input: p.input ?? p, ...(res ? { result: res } : {}) }, null, 2)
   return (
@@ -494,6 +522,8 @@ function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: n
       </button>
       {open && (
         <div className="tchip-detail">
+          {(tool.startsWith('computer_') || tool.startsWith('browser_')) && envelope?.output && <DesktopToolDetails key={call.called.event.project_id} projectId={call.called.event.project_id} capturedAt={call.result?.event.created_at} output={envelope.output} />}
+          {loadedSkill && <p>{t('agent.skillLoaded')} · {t('agent.skillSource')}: <code>{loadedSkill.source}</code></p>}
           <CodeBlock code={detail} lang="json" />
         </div>
       )}
@@ -545,9 +575,11 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
           {/* exec-cards 票 02（spec D2）：重负载升 ExecCard，轻量读系保持 chip 行 */}
           {calls.map((c, i) => {
             const tool = String((c.called.event.payload as Record<string, unknown>).tool ?? '')
-            return EXEC_CARD_TOOLS.has(tool)
-              ? <ToolExecCard key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} animate={fresh} />
-              : <ToolChipRow key={c.called.event.id} call={c} delay={Math.min(i, 12) * 45} animate={fresh} />
+            return <div key={c.called.event.id} data-timeline-event={c.called.event.id} data-timeline-result={c.result?.event.id}>
+              {EXEC_CARD_TOOLS.has(tool)
+                ? <ToolExecCard call={c} delay={Math.min(i, 12) * 45} animate={fresh} />
+                : <ToolChipRow call={c} delay={Math.min(i, 12) * 45} animate={fresh} />}
+            </div>
           })}
           {files.length > 0 && (
             <div className="tchip-files">
@@ -592,7 +624,7 @@ export const SysGroupRow = memo(function SysGroupRow({ items, expanded, idx, onT
           <Icon name="list" size={10} /> {t('timeline.sysEvents', { count: items.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
         </span>
       </div>
-      {expanded && items.map((it) => <SystemRow key={it.event.id} item={it} />)}
+      {expanded && items.map((it) => <div key={it.event.id} data-timeline-event={it.event.id}><SystemRow item={it} /></div>)}
     </div>
   )
 })
@@ -638,7 +670,7 @@ const TurnSummaryRow = memo(function TurnSummaryRow({
           <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
         </span>
       </div>
-      {expanded && children}
+      {expanded && <>{children}{row.partial && <div className="dim3" style={{ padding: '4px 14px 8px', fontSize: 11 }}>{t('timeline.partialTurn')}</div>}</>}
     </div>
   )
 })
@@ -767,17 +799,21 @@ export function WaitingReply({ role, startedAt, netWaiting, avatar }: {
 
 function StreamFooter() {
   // 窄订阅：整店订阅会让任何无关 store 更新都重渲 Footer（流式期间每 delta 一次）
+  const plans = useUiStore((s) => s.plans)
   const streams = useUiStore((s) => s.streams)
   const thinkings = useUiStore((s) => s.thinkings)
   const streamDone = useUiStore((s) => s.streamDone)
   const waitingSince = useUiStore((s) => s.waitingSince)
   const team = useUiStore((s) => s.team)
   const timeline = useUiStore((s) => s.timeline)
-  const ids = [...new Set([...Object.keys(streams), ...Object.keys(thinkings)])].filter((id) =>
-    Object.values(streams[id] ?? {}).some((s) => s.length > 0) ||
+  const timelineCaughtUp = useUiStore((s) => s.timelineCaughtUp)
+  const ids = [...new Set([...Object.keys(streams), ...Object.keys(thinkings), ...Object.keys(plans)])].filter((id) =>
+    !!plans[id] || Object.values(streams[id] ?? {}).some((s) => s.length > 0) ||
     Object.values(thinkings[id] ?? {}).some((s) => s.length > 0),
   )
-  const turn = openTurn(timeline)
+  const facts = useUiStore(s => s.timelineFacts)
+  const projectRoot = useUiStore(s => s.projectRoot)
+  const turn = facts || projectRoot ? factOpenTurn(facts) : openTurn(timeline, timelineCaughtUp)
   const waitingId = turn.agentId && !ids.includes(turn.agentId) ? turn.agentId : null
   const waitingMember = waitingId ? team.find((x) => x.id === waitingId) : undefined
   // 底部留白带恒在内容总高里。贴底写的是 scrollHeight，不是最后一行的底边。
@@ -797,8 +833,10 @@ function StreamFooter() {
         const member = team.find((x) => x.id === id)
         const done = streamDone[id] != null
         return (
+          <div key={id}>
+          {plans[id] && <div className="plan-row"><ThinkingRow plan text={plans[id]}
+            live={!done && !Object.keys(streams[id] ?? {}).some((call) => Number(call) > 0)} /></div>}
           <LiveReply
-            key={id}
             role={member?.role ?? id}
             text={joinCalls(streams[id])}
             thinking={joinCalls(thinkings[id])}
@@ -806,6 +844,7 @@ function StreamFooter() {
             netWaiting={waitingSince[id]}
             avatar={member ? <Avatar agentId={id} role={member.role} size={34} /> : undefined}
           />
+          </div>
         )
       })}
       {tail}
@@ -813,236 +852,113 @@ function StreamFooter() {
   )
 }
 
+function TimelineTail() { return <div data-timeline-tail="" style={{ height: TIMELINE_TAIL_PX }} /> }
+
+const EMPTY_TIMELINE: TimelineItem[] = []
+
 // ---- 主体 ----
 
 export function Timeline() {
   const { t } = useTranslation()
-  const { timeline, pending, streams, team } = useUiStore()
-  // reliability 08: recovery results can follow permission/turn events in another group.
-  const callIndex = useMemo(() => new Map(pairToolCalls(timeline).map((call) => [call.called.event.id, call])), [timeline])
-  const stickReq = useUiStore((s) => s.timelineStickReq)
+  const { timeline: legacyTimeline, pending, streams, team, projectRoot, projectEpoch, timelineFacts } = useUiStore()
   const [filter, setFilter] = useState<Filter>('all')
+  const windowState = useTimelineWindow(filter)
+  const { page } = windowState
+  const { nodes } = useTimelineNodes()
+  const timeline = page?.items ?? (projectRoot == null && projectEpoch === 0 ? legacyTimeline : EMPTY_TIMELINE)
+  const callIndex = useMemo(() => new Map(pairToolCalls([...timeline, ...(page?.boundary_pairs ?? [])]
+    .sort((a, b) => a.event.id - b.event.id)).map(call => [call.called.event.id, call])), [timeline, page?.boundary_pairs])
+  const stickReq = useUiStore(s => s.timelineStickReq)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  // 打开项目时钉着：内容高过窗口就落在真底（含留白带），不满一屏则顶对齐。
-  const [pinned, setPinned] = useState(true)
-  const [overflow, setOverflow] = useState(false)
-  const [stickSeen, setStickSeen] = useState(stickReq)
-  const [unseen, setUnseen] = useState(0)
-  const [flash, setFlash] = useState<number | null>(null)
+  const [flash, setFlash] = useState<string | null>(null)
   const [exported, setExported] = useState<number | null>(null)
-  const ref = useRef<VirtuosoHandle>(null)
-  const scrollerEl = useRef<HTMLElement | null>(null)
-  const pinnedRef = useRef(true)
-  const ownScroll = useRef(false)
-  const prevTop = useRef(0)
-  const prevLen = useRef(0)
-  const userUntil = useRef(0)
-  const pointerDown = useRef(false)
-  const detachScroller = useRef<(() => void) | null>(null)
-  const seenStick = useRef(stickReq)
-  // 展开时刻表：入场动画只在「刚展开」播一遍；虚拟列表滚出重挂的行
-  // 不再 fade-up/pop-in 重放（owner 反馈：内容多时快速滚动闪烁抖动）。
+  const [jumpTarget, setJumpTarget] = useState<number | null>(null)
   const expandAt = useRef(new Map<number, number>())
-  const ANIM_MS = 1000 // 覆盖最长 stagger（delay 540 + 300ms 动画）
-
-  const rows = useMemo(() => buildRows(timeline, filter), [timeline, filter])
-  const marks = useMemo(() => nodeMarks(timeline, rows, pending.length), [timeline, rows, pending.length])
-  // 票 05：steering_injected 事件（payload.msg_id）标出已被本回合读到的
-  // owner 消息；turnBoundary = 最近一次 turn_started，其后的 owner 消息
-  // 才是「本回合内发来」的候选。
+  const ANIM_MS = 1000
+  const rows = useMemo(() => buildRows(timeline, filter, projectRoot ? page ?? undefined : undefined), [timeline, filter, page, projectRoot])
+  const [previousRows, setPreviousRows] = useState({ rows, epoch: projectEpoch })
+  if (previousRows.rows !== rows || previousRows.epoch !== projectEpoch) {
+    setPreviousRows({ rows, epoch: projectEpoch })
+    if (previousRows.epoch !== projectEpoch) setExpanded(new Set())
+    else if (windowState.change === 'prepend') setExpanded(expandedAfterPrepend(previousRows.rows, rows, expanded))
+  }
+  const viewport = useTimelineViewport({ rows, generation: windowState.generation, change: windowState.change,
+    loading: windowState.loading || !!windowState.error || (projectEpoch > 0 && projectRoot == null), enabled: projectRoot != null || projectEpoch > 0,
+    hasBefore: page?.has_before ?? false, hasAfter: page?.has_after ?? false,
+    olderLoading: windowState.olderLoading, olderError: windowState.olderError,
+    loadOlder: windowState.loadOlder, loadLatest: windowState.loadLatest,
+    targetEventId: page?.target_event_id ?? null, stickReq })
+  const marks = useMemo(() => projectRoot != null ? [
+    ...(pending.length ? [{ rowIdx: -1, icon: 'warn' as const, label: String(pending.length), pending: true }] : []),
+    ...nodes.map(node => ({ eventId: node.event_id, rowIdx: rows.findIndex(row => rowContainsEvent(row, node.event_id)),
+      icon: NODE_ICONS[node.kind] ?? 'list', label: node.label })),
+  ] : nodeMarks(timeline, rows, pending.length), [projectRoot, nodes, rows, pending.length, timeline])
   const { steered, turnBoundary } = useMemo(() => {
-    const s = new Set<number>()
-    let boundary = -1
+    const injected = new Set<number>(page?.steered_message_ids ?? [])
+    let boundary = timelineFacts?.latest_turn_start_id ?? -1
     for (const it of timeline) {
-      if (it.event.kind === 'turn_started') boundary = it.event.id
+      if (!timelineFacts && it.event.kind === 'turn_started') boundary = it.event.id
       if (it.event.kind === 'system' && it.event.payload?.kind === 'steering_injected') {
         const mid = Number(it.event.payload.msg_id)
-        if (mid) s.add(mid)
+        if (mid) injected.add(mid)
       }
     }
-    return { steered: s, turnBoundary: boundary }
-  }, [timeline])
+    return { steered: injected, turnBoundary: boundary }
+  }, [timeline, page?.steered_message_ids, timelineFacts])
   const turnActive = Object.keys(streams).length > 0
-
+  const watermark = timelineFacts?.latest_event_id ?? timeline.at(-1)?.event.id ?? 0
+  const [seenWatermark, setSeenWatermark] = useState(watermark)
+  useEffect(() => { if (viewport.pinned) setSeenWatermark(watermark) }, [viewport.pinned, watermark])
+  useEffect(() => { setSeenWatermark(watermark) }, [windowState.generation])
+  const unseen = Math.max(0, watermark - seenWatermark)
+  useEffect(() => { viewport.writeTail() }, [streams, viewport.writeTail])
   useEffect(() => {
-    const grew = timeline.length - prevLen.current
-    prevLen.current = timeline.length
-    if (grew > 0 && !pinnedRef.current) setUnseen((u) => u + grew)
-  }, [timeline.length])
+    if (jumpTarget == null || filter !== 'all') return
+    void windowState.jumpAround(jumpTarget)
+    setJumpTarget(null)
+  }, [filter, jumpTarget, windowState.jumpAround])
 
-  // 真底 = scrollHeight，留白带算在里面。直接赋 scrollTop，不用 smooth：
-  // 平滑滚动在流式还在长高时会提前落点（owner 二报「回不到底」）。
-  // followOutput 关掉：它只看见 data 行，落点停在最后一行底边，留白被甩到视口外。
-  // 第一下点击常被 Virtuoso 在同一帧把滚动锚回旧位置，所以 layout 写一次，
-  // 绘制后再写一次——第二次点击才生效，就是少了这一笔补写。
-  const writeTail = useCallback(() => {
-    const el = scrollerEl.current
-    if (!el || !pinnedRef.current) return
-    const top = tailScrollTop(el.scrollHeight, el.clientHeight)
-    if (Math.abs(el.scrollTop - top) <= 1) return
-    ownScroll.current = true
-    el.scrollTop = top
-    ownScroll.current = false
-    prevTop.current = el.scrollTop
-  }, [])
-
-  const releasePin = useCallback(() => {
-    if (!pinnedRef.current) return
-    pinnedRef.current = false
-    setPinned(false)
-  }, [])
-
-  const holdPin = useCallback(() => {
-    pinnedRef.current = true
-    setPinned(true)
-    setUnseen(0)
-    writeTail()
-  }, [writeTail])
-
-  const noteUserScroll = useCallback(() => {
-    userUntil.current = performance.now() + 250
-  }, [])
-
-  // 发送成功：这一轮渲染就把钉合上。效果里再 setState 会多一次级联渲染。
-  if (stickReq !== stickSeen) {
-    setStickSeen(stickReq)
-    if (stickReq > 0) {
-      setPinned(true)
-      setUnseen(0)
-    }
-  }
-
-  const onScrollerScroll = useCallback(() => {
-    const el = scrollerEl.current
-    if (!el) return
-    const previousScrollTop = prevTop.current
-    const scrollTop = el.scrollTop
-    prevTop.current = scrollTop
-    const overflows = listOverflows(el.scrollHeight, el.clientHeight)
-    setOverflow((o) => (o === overflows ? o : overflows))
-    const userMoved = pointerDown.current || performance.now() < userUntil.current
-    // 惯性还在滚时续上这扇窗，松手 250ms 之后的位移才当成布局。
-    if (userMoved) userUntil.current = performance.now() + 250
-    const next = pinAfterScroll({
-      pinned: pinnedRef.current,
-      own: ownScroll.current,
-      userMoved,
-      scrollTop,
-      previousScrollTop,
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
+  const revealRow = useCallback((row: ModelRow) => {
+    setExpanded(previous => {
+      const next = new Set(previous)
+      if (row.type === 'toolgroup' || row.type === 'sysgroup') next.add(row.idx)
+      if (row.type === 'turnsummary') { next.add(row.idx); for (const child of row.folded) next.add(child.idx) }
+      return next
     })
-    if (next !== pinnedRef.current) {
-      pinnedRef.current = next
-      setPinned(next)
-      if (next) setUnseen(0)
-    }
-    // 钉还在，但视口被量高带离了真底：补写。用户往上翻时上面已经松钉，不会拽回去。
-    if (pinnedRef.current && !ownScroll.current) {
-      const distance = el.scrollHeight - el.clientHeight - el.scrollTop
-      if (distance > STICK_BAND_PX) writeTail()
-    }
-  }, [writeTail])
-
-  const bindScroller = useCallback((el: HTMLElement | Window | null) => {
-    const next = el instanceof HTMLElement ? el : null
-    const prev = scrollerEl.current
-    if (prev === next) return
-    detachScroller.current?.()
-    detachScroller.current = null
-    scrollerEl.current = next
-    if (!next) return
-    // 浏览器的 scroll anchoring 会在脚变高时把视口拽离我们刚写的真底。
-    next.style.overflowAnchor = 'none'
-    const onPointerDown = () => { pointerDown.current = true; noteUserScroll() }
-    const onPointerUp = () => { pointerDown.current = false }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Home' || e.key === 'End' || e.key === ' ') {
-        noteUserScroll()
-      }
-    }
-    next.addEventListener('scroll', onScrollerScroll, { passive: true })
-    next.addEventListener('wheel', noteUserScroll, { passive: true })
-    next.addEventListener('pointerdown', onPointerDown)
-    next.addEventListener('pointerup', onPointerUp)
-    next.addEventListener('pointercancel', onPointerUp)
-    next.addEventListener('keydown', onKey)
-    detachScroller.current = () => {
-      next.removeEventListener('scroll', onScrollerScroll)
-      next.removeEventListener('wheel', noteUserScroll)
-      next.removeEventListener('pointerdown', onPointerDown)
-      next.removeEventListener('pointerup', onPointerUp)
-      next.removeEventListener('pointercancel', onPointerUp)
-      next.removeEventListener('keydown', onKey)
-    }
-    if (pinnedRef.current) writeTail()
-  }, [noteUserScroll, onScrollerScroll, writeTail])
-
-  useEffect(() => () => { detachScroller.current?.() }, [])
-
-  useLayoutEffect(() => {
-    if (stickReq !== seenStick.current) {
-      seenStick.current = stickReq
-      if (stickReq > 0) pinnedRef.current = true
-    }
-    if (!pinnedRef.current) return
-    writeTail()
-  }, [stickReq, pinned, rows, streams, filter, writeTail])
-
+  }, [])
   useEffect(() => {
-    if (!pinnedRef.current) return
-    writeTail()
-    const id = requestAnimationFrame(() => writeTail())
-    return () => cancelAnimationFrame(id)
-  }, [stickReq, pinned, rows, streams, filter, writeTail])
-
+    const target = page?.target_event_id
+    if (target == null) return
+    const row = rows.find(row => rowContainsEvent(row, target))
+    if (row) { revealRow(row); setFlash(rowKey(row)) }
+  }, [page?.target_event_id, rows, revealRow])
   useEffect(() => {
-    const el = scrollerEl.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => {
-      const node = scrollerEl.current
-      if (!node) return
-      const overflows = listOverflows(node.scrollHeight, node.clientHeight)
-      setOverflow((o) => (o === overflows ? o : overflows))
-      if (pinnedRef.current) writeTail()
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [writeTail])
-
-  const jump = useCallback((m: NodeMark) => {
-    // 节点轨是用户离开尾巴。先松钉，否则贴底补写会把这次跳转拽回去。
-    releasePin()
-    if (m.rowIdx < 0) {
-      ref.current?.scrollToIndex({ index: 0, align: 'start' })
-      return
+    if (flash == null) return
+    const timer = setTimeout(() => setFlash(null), 1400)
+    return () => clearTimeout(timer)
+  }, [flash])
+  const jumpToEvent = useCallback((id: number) => {
+    const index = rows.findIndex(row => rowContainsEvent(row, id))
+    if (index < 0) { viewport.releasePin(); setFilter('all'); setJumpTarget(id); return }
+    revealRow(rows[index])
+    viewport.jumpToRow(index, id)
+    setFlash(rowKey(rows[index]))
+  }, [rows, revealRow, viewport.releasePin, viewport.jumpToRow])
+  const jump = useCallback((mark: NodeMark) => {
+    if (mark.eventId != null) jumpToEvent(mark.eventId)
+    else if (mark.rowIdx >= 0) jumpToEvent(rows[mark.rowIdx].idx)
+    else viewport.jumpToRow(0)
+  }, [jumpToEvent, rows, viewport.jumpToRow])
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (useUiStore.getState().modalScope !== 'workbench') return
+      if (matches(event, bindingFor('timelineLatest'))) { event.preventDefault(); viewport.holdPin() }
+      else if (matches(event, bindingFor('timelineLoadOlder'))) { event.preventDefault(); viewport.requestOlder() }
+      else if (matches(event, bindingFor('timelineRetry'))) { event.preventDefault(); void windowState.retry() }
     }
-    ref.current?.scrollToIndex({ index: m.rowIdx, align: 'center', behavior: 'smooth' })
-    const item = rows[m.rowIdx]
-    const idx = item.type === 'item' ? item.item.event.id : item.idx
-    setFlash(idx)
-    setTimeout(() => setFlash(null), 1400)
-  }, [rows, releasePin])
-
-  // 票 16：按事件 id 跳转（return_summary 行回跳 since_event 锚点）。
-  const jumpToEvent = useCallback((eid: number) => {
-    const i = rows.findIndex((r) => {
-      if (r.type === 'item') return r.item.event.id === eid
-      if (r.type === 'toolgroup' || r.type === 'sysgroup') return r.items.some((x) => x.event.id === eid)
-      // exec-cards 票 03：目标可能折在回合摘要行里
-      if (r.type === 'turnsummary') {
-        return r.folded.some((f) =>
-          (f.type === 'toolgroup' || f.type === 'sysgroup') && f.items.some((x) => x.event.id === eid))
-      }
-      return false
-    })
-    if (i < 0) return
-    const row = rows[i]
-    // 命中折叠行先展开摘要行再跳，否则落点行不可见。
-    if (row.type === 'turnsummary') setExpanded((s) => new Set(s).add(row.idx))
-    jump({ rowIdx: i, icon: 'list', label: '' })
-  }, [rows, jump])
-
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [viewport.holdPin, viewport.requestOlder, windowState.retry])
   const toggleRow = useCallback((idx: number) => {
     setExpanded((s) => {
       const n = new Set(s)
@@ -1092,7 +1008,7 @@ export function Timeline() {
       )
     }
     return (
-      <div className={flash === row.item.event.id ? 'flash-row' : ''}>
+      <div className={flash === `item:${row.item.event.id}` ? 'flash-row' : ''}>
         <EventRow item={row.item} steered={steered} turnBoundary={turnBoundary} turnActive={turnActive} onJumpEvent={jumpToEvent} story={filter === 'story'} />
       </div>
     )
@@ -1113,7 +1029,7 @@ export function Timeline() {
       if (!path) return
       count = await api.exportEvents({ path, kinds })
     } else {
-      const items = timeline.filter((it) => !kinds || kinds.includes(it.event.kind))
+      const items = await api.exportTimelineItems(kinds)
       const doc = { format: 'hexagon-trace-export', version: 1, count: items.length, events: items.map((i) => i.event) }
       const a = document.createElement('a')
       a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
@@ -1135,7 +1051,7 @@ export function Timeline() {
             key={f}
             className={`btn ${filter === f ? 'primary' : ''}`}
             style={{ padding: '2px 10px', fontSize: 11 }}
-            onClick={() => { setFilter(f); setUnseen(0) }}
+            onClick={() => setFilter(f)}
           >
             {t(`timeline.filter${f[0].toUpperCase()}${f.slice(1)}`)}
           </button>
@@ -1154,30 +1070,49 @@ export function Timeline() {
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+        <div aria-busy={windowState.loading || !viewport.ready} style={{ height: '100%', visibility: viewport.ready ? 'visible' : 'hidden' }}>
         <Virtuoso
-          ref={ref}
-          scrollerRef={bindScroller}
+          key={windowState.generation}
+          ref={viewport.ref}
+          scrollerRef={viewport.bindScroller}
+          firstItemIndex={viewport.firstItemIndex}
+          computeItemKey={(_index, row) => rowKey(row)}
+          totalListHeightChanged={viewport.onHeight}
           data={rows}
           // overscan：快速滚动时预渲视口上下各 600px，行不再贴边「凭空长出」
           increaseViewportBy={600}
-          components={{ Footer: StreamFooter }}
+          components={{ Footer: page?.has_after ? TimelineTail : StreamFooter }}
           // 不满一屏顶对齐（不要 alignToBottom）。贴底由 writeTail 写 scrollHeight，
           // followOutput 看不见 Footer 里的留白带，会把最新一行贴回输入框。
           followOutput={false}
-          itemContent={(_i, row) => rowContent(row)}
+          itemContent={(_i, row) => <div data-timeline-row={rowKey(row)} data-timeline-event={row.type === 'item' || row.type === 'chapter' ? row.idx : undefined} className={flash === rowKey(row) ? 'flash-row' : undefined}>{rowContent(row)}</div>}
         />
+        </div>
+        {!viewport.ready && <div role={windowState.error ? 'alert' : 'status'} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, background: 'var(--bg-1)' }}>
+          {windowState.error ? <><span>{t('timeline.loadFailed')}</span><button className="btn" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button></>
+            : <LoadingState label={t('timeline.loadingRecent')} />}
+        </div>}
+        {/* Owner 2026-10-02: upward intent loads history; only progress or recovery needs a floating surface. */}
+        {viewport.ready && (windowState.olderLoading || windowState.olderError || windowState.tailError) &&
+          <div style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', zIndex: 21 }}>
+            {windowState.olderLoading ? <LoadingState label={t('timeline.loadingOlder')} />
+              : <button className="btn" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`}
+                  onClick={() => void windowState.retry()}>
+                  {windowState.tailError ? `${t('timeline.loadFailed')} · ${t('timeline.retry')}` : t('timeline.olderFailed')}</button>}
+          </div>}
+
         {/* 松钉且高过窗口才显。不满一屏钉着、按钮藏着。 */}
-        {showStickButton(pinned, overflow) && (
+        {viewport.ready && (page?.has_after || showStickButton(viewport.pinned, viewport.overflow)) && (
           <button
             className="btn primary"
             style={{ position: 'absolute', bottom: 12, right: 14, zIndex: 30, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 'var(--r-pill)', boxShadow: '0 4px 14px rgba(0,0,0,.3)' }}
-            title={t('timeline.toBottom')}
-            onClick={holdPin}
+            title={`${t('timeline.toBottom')} ${formatBinding(bindingFor('timelineLatest'))}`}
+            onClick={viewport.holdPin}
           >
             <Icon name="arrow-down" size={11} />{unseen > 0 ? ` ${t('timeline.newEvents', { count: unseen })}` : ''}
           </button>
         )}
-        <NodeRail marks={marks} onJump={jump} />
+        {viewport.ready && <NodeRail marks={marks} onJump={jump} />}
       </div>
     </div>
   )

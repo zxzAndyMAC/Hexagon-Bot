@@ -17,6 +17,8 @@ export function toolInputSummary(p: Record<string, unknown>): string {
     if (o.path != null) return String(o.path)
     // bash 的 cmd 直接取——JSON 序列化会把命令裹成 {"cmd":"…"} 噪声。
     if (o.cmd != null) return String(o.cmd)
+    if (p.tool === 'load_skill' && o.name != null) return String(o.name)
+    if (p.tool === 'search_skills' && o.query != null) return String(o.query)
     const s = JSON.stringify(inp)
     return s.length > 120 ? s.slice(0, 117) + '…' : s
   }
@@ -27,20 +29,28 @@ export function toolInputSummary(p: Record<string, unknown>): string {
 // （fs_read/fs_patch/artifact_write，core tools/builtin.rs 定名）。未登记工具
 // 回退 stepTool/'tool' 图标 + 原始名（不吞新工具）。
 export const TOOL_LABEL: Record<string, string> = {
+  host_fs_read: 'stepHostRead', host_fs_write: 'stepHostWrite', host_bash: 'stepHostBash',
+  propose_design: 'stepProposeDesign', read_design_direction: 'stepReadDesign',
+  computer_observe: 'stepComputerObserve', computer_action: 'stepComputerAction', computer_navigate: 'stepComputerNavigate',
   'fs.read': 'stepRead', 'fs.write': 'stepWrite', 'fs.edit': 'stepWrite',
   'fs.list': 'stepList', 'fs.search': 'stepSearch', bash: 'stepBash',
   fs_read: 'stepRead', fs_write: 'stepWrite', fs_patch: 'stepWrite',
   fs_list: 'stepList', fs_search: 'stepSearch',
   artifact_write: 'stepWrite',
+  load_skill: 'stepLoadSkill', search_skills: 'stepSearchSkills',
   bash_output: 'stepBash', bash_kill: 'stepBash',
 }
 
 export const TOOL_ICON: Record<string, IconName> = {
+  host_fs_read: 'artifact', host_fs_write: 'diff', host_bash: 'tool',
+  propose_design: 'artifact', read_design_direction: 'artifact',
+  computer_observe: 'computer', computer_action: 'computer', computer_navigate: 'computer',
   'fs.read': 'artifact', 'fs.write': 'diff', 'fs.edit': 'diff',
   'fs.list': 'folder', 'fs.search': 'list', bash: 'tool',
   fs_read: 'artifact', fs_write: 'diff', fs_patch: 'diff',
   fs_list: 'folder', fs_search: 'list',
   artifact_write: 'artifact',
+  load_skill: 'artifact', search_skills: 'list',
   bash_output: 'tool', bash_kill: 'tool',
 }
 

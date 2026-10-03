@@ -182,7 +182,7 @@ pub fn catalog() -> Vec<PromptEntry> {
         entry(
             "wizard.flow",
             "wizard",
-            crate::setup::flow_prompt("{project description}"),
+            crate::setup::flow_prompt("{project description}", &["{selected roles}".into()]),
         ),
         entry(
             "wizard.duty",

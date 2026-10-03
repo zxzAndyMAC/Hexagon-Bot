@@ -173,7 +173,14 @@ pub(crate) fn finish(
     } else {
         "failed"
     };
-    let output = result.as_ref().ok().map(Value::to_string);
+    let action = get(db, &ctx.project_id, id)?;
+    // Desktop ticket 07: retain a clearable local evidence path, not duplicate
+    // screenshot bytes in both tool_actions and immutable trace payloads.
+    let persisted = result
+        .as_ref()
+        .ok()
+        .map(|v| crate::desktop::actions::persisted_result(&action.tool, v));
+    let output = persisted.as_ref().map(Value::to_string);
     let error = result.as_ref().err().map(ToString::to_string);
     let tx = db.conn().unchecked_transaction()?;
     let n = db.conn().execute("UPDATE tool_actions SET state=?1,output_json=?2,error=?3 WHERE project_id=?4 AND id=?5 AND state='executing'",
@@ -181,7 +188,6 @@ pub(crate) fn finish(
     if n != 1 {
         return Err(ToolError::OutcomeUnknown(id.into()));
     }
-    let action = get(db, &ctx.project_id, id)?;
     // Ticket 24: bind only a successful native execution's private observation.
     // Reconciliation and plugin-returned JSON cannot manufacture this receipt.
     let native_effect = if uncertain {
@@ -193,7 +199,7 @@ pub(crate) fn finish(
     };
     db.append_event(&ctx.project_id,EventKind::ToolResult,
         json!({"action_id":id,"tool":action.tool,"native_effect":native_effect,"ok":if uncertain {None} else {Some(result.is_ok())},
-            "state":state,"result":{"tool":action.tool,"output":result.as_ref().ok(),"error":error,
+            "state":state,"result":{"tool":action.tool,"output":persisted.as_ref(),"error":error,
                 "code":result.as_ref().err().map(crate::errcode::ErrorCode::code)}}),
         Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
     clear_ready_card(db, ctx, id)?;

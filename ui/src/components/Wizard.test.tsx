@@ -110,4 +110,76 @@ describe('向导创建进度（票 14）', () => {
     expect(onDone).toHaveBeenCalledTimes(1)
     await act(async () => { root.unmount() })
   })
+  it('只提交负责人在可见质量命令表单填写并确认的命令', async () => {
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    const { el, root } = await render(<Wizard onDone={vi.fn()} />)
+    await reachConfirm(el)
+    await clickButton(el, '上一步')
+    await clickButton(el, '上一步')
+    // 2026-10-01 live acceptance: PackEditor was intentionally removed by
+    // ADR 0069; an unreachable editor cannot serve as runner approval.
+    const field = el.querySelector<HTMLInputElement>('[data-quality-command="tests"]')
+    expect(field).not.toBeNull()
+    await act(async () => { setValue(field!, 'npm test') })
+    await clickButton(el, '下一步')
+    await clickButton(el, '下一步')
+    expect(el.textContent).toContain('npm test')
+    await clickButton(el, '创建项目')
+    const stages = create.mock.calls[0][0].pack!.stages
+    expect(stages.at(-1)?.quality_checks).toEqual({ tests: 'npm test' })
+    expect(stages.every(stage => stage.checks.length === 0)).toBe(true)
+    expect(stages.slice(0, -1).every(stage => Object.keys(stage.quality_checks).length === 0)).toBe(true)
+    await act(async () => root.unmount())
+  })
+
+  it('恢复的模型流程草稿不能把隐藏命令当作负责人授权提交', async () => {
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    const draftFlow = vi.spyOn(api, 'draftFlow').mockImplementation(async (_brief, roles) => ({
+      name: 'Hidden execution draft', version: 1, knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      stages: [{ name: 'Build', roles: roles.filter((r) => r !== '项目经理'), due: [],
+        checks: ['printf hidden > marker'], quality_checks: { tests: 'printf hidden > marker' },
+        reviews: [], stamp_point: true, backfill_edges: [], consult_wake: [] }],
+    }))
+    const initial = await render(<Wizard onDone={vi.fn()} />)
+    await reachConfirm(initial.el)
+    // Ticket 04 review: persisted pre-fix drafts can contain commands never shown
+    // by the stage editor. Recovery must not silently approve those commands.
+    expect(JSON.parse(localStorage.getItem('hexagon.wizard')!).flowPack.stages[0].checks).toHaveLength(1)
+    await act(async () => { initial.root.unmount() })
+    const callsBefore = draftFlow.mock.calls.length
+    const restored = await render(<Wizard onDone={vi.fn()} />)
+    await act(async () => { await new Promise((r) => setTimeout(r, 250)) })
+    for (let i = 0; i < 6; i++) {
+      await clickButton(restored.el, '下一步')
+      await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
+    }
+    expect(draftFlow.mock.calls.length).toBe(callsBefore)
+    await clickButton(restored.el, '创建项目')
+    expect(create.mock.calls[0][0].pack?.stages[0].checks).toEqual([])
+    expect(create.mock.calls[0][0].pack?.stages[0].quality_checks).toEqual({})
+    expect(create.mock.calls[0][0].pack?.stages[0].name).toBe('Build')
+    await act(async () => { restored.root.unmount() })
+  })
+
+  it('负责人手填命令不从旧向导存档恢复授权', async () => {
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    const initial = await render(<Wizard onDone={vi.fn()} />)
+    await reachConfirm(initial.el)
+    await clickButton(initial.el, '上一步')
+    await clickButton(initial.el, '上一步')
+    await act(async () => setValue(initial.el.querySelector<HTMLInputElement>('[data-quality-command="tests"]')!, 'node owner-approved-tests.mjs'))
+    expect(localStorage.getItem('hexagon.wizard')).not.toContain('owner-approved-tests')
+    await act(async () => initial.root.unmount())
+    const restored = await render(<Wizard onDone={vi.fn()} />)
+    await act(async () => { await new Promise(r => setTimeout(r, 250)) })
+    for (let i = 0; i < 6; i++) {
+      await clickButton(restored.el, '下一步')
+      await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+    }
+    expect(restored.el.textContent).not.toContain('owner-approved-tests')
+    await clickButton(restored.el, '创建项目')
+    expect(create.mock.calls[0][0].pack?.stages.every(stage => Object.keys(stage.quality_checks).length === 0)).toBe(true)
+    await act(async () => restored.root.unmount())
+  })
+
 })

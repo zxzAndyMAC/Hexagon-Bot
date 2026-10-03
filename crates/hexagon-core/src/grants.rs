@@ -1,19 +1,13 @@
 //! 技能与 MCP 的授权确认（hands-free 票 04 / ADR 0063）。
 //!
 //! 授权是项目内 grants 表的一行，不是权限规则，也不是用户全局清单。
-//! L0–L3 出确认卡，负责人点头才写入。L4 自动写入并留轨迹，不留待决卡。
-//! 两条路都只 `INSERT` 当前项目的 grants 行，不碰 `~/.hexagon/`，
-//! 也不改项目技能目录或项目 MCP 清单——那些是安装的写入面。
-//!
-//! 被否决：L4 调用 `skills::save_global_skill` / `mcp::save_global_mcp`。
-//! 那会把这一档的自动通过写成用户全局。也否决：用 `set_grants` 整表替换，
-//! 一次确认会抹掉该 Agent 已有的同 kind 授权。
-//!
-//! 读档失败按 0（等人）。false negative 多一张卡；false positive 是
-//! 未审授权生效。
+//! 2026-10-01 ticket 05 / Q10：新增能力授权在所有模式下先出负责人确认卡。
+//! 旧固定 L4 自动写入绕过了受限模式。广泛访问也不代表已审阅未知 MCP。
+//! false negative 多一次人工；false positive 是未审能力生效，故偏向确认。
+//! 已安装技能的任务自动选择由 LoadSkill 管理，不经过这里。
 
 use crate::db::Db;
-use crate::harnessgate::{self, HarnessAction};
+use crate::harnessgate::HarnessAction;
 use crate::trace::EventKind;
 use serde_json::json;
 
@@ -134,7 +128,7 @@ pub(crate) fn grant_reviewed_experience(
     )
 }
 
-/// 请求把 `name` 授给这个 Agent。L4 直接写入项目 grants；否则只入队。
+/// 请求新增能力授权；负责人确认前不写 grants。
 pub fn request(
     db: &Db,
     project_id: &str,
@@ -142,16 +136,13 @@ pub fn request(
     kind: &str,
     name: &str,
 ) -> Result<GrantOutcome, GrantError> {
-    let action = action_for(kind)?;
+    action_for(kind)?;
     if !valid_name(name) {
         return Err(GrantError::BadInput(format!("bad grant name: {name}")));
     }
     agent_in_project(db, project_id, agent_id)?;
-    // 读档失败按等人。不把一次查询故障升成未审授权。
+    // Ticket 05: all modes preserve owner review of newly introduced capabilities.
     let started = std::time::Instant::now();
-    let rank = crate::autonomy::rank(db, project_id).unwrap_or(0);
-    // diagnostic-records 票 02：自治放行 vs 排队等人是一条「判定」分支。
-    let auto = harnessgate::auto_passes(rank, action);
     crate::diag::note(
         crate::diag::CLASS_JUDGE,
         false,
@@ -160,18 +151,9 @@ pub fn request(
         None,
         None,
         "grant",
-        if auto { "auto_pass" } else { "queued" },
+        "queued_unknown_capability",
         started,
     );
-    if auto {
-        insert_grant(db, agent_id, kind, name)?;
-        trace(db, project_id, agent_id, kind, name, "autonomy", true)?;
-        return Ok(GrantOutcome {
-            granted: true,
-            question_id: None,
-            via: "autonomy".into(),
-        });
-    }
     let qid = crate::cards::enqueue(
         db,
         project_id,

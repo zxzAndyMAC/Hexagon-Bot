@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 // ---- 票 05：门面读委托已删，测试直连模块函数（老 wb.* 形状由这组 helper 保持） ----
 
 fn send(wb: &Workbench, body: &str) -> Result<UnnamedRoute, String> {
-    let (_id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, body, &[])
+    let (id, cmd) = crate::commands::send_via_control(&wb.db, &wb.project_id, body, &[])
         .map_err(|e| e.to_string())?;
     // 与壳层 send_message 一致：指令走 dispatch_command；其余没点名的话
     // 交给项目经理的封闭选择（票 08）。指令分发失败不吞已落库的消息。
@@ -18,7 +18,7 @@ fn send(wb: &Workbench, body: &str) -> Result<UnnamedRoute, String> {
         let _ = wb.dispatch_command(&c);
         return Ok(UnnamedRoute::Skipped);
     }
-    wb.route_unnamed_owner(body, &[]).map_err(|e| e.to_string())
+    wb.route_queued_owner(id).map_err(|e| e.to_string())
 }
 
 fn events(wb: &Workbench, kinds: Option<&[EventKind]>) -> Result<Vec<Event>, String> {
@@ -232,8 +232,15 @@ fn end_to_end_open_project_to_timeline() {
         "plan, tool round, final reply"
     );
     assert!(provider.recorded()[0].tools.is_empty());
-    let r = serde_json::to_value(wb.advance().unwrap()).unwrap();
-    assert_eq!(r["action"], "pack_finished");
+    // 2026-10-01: normal role handoff now performs the existing readiness gate;
+    // the final non-stamp stage has already completed without an extra API call.
+    assert!(wb.active_run().unwrap().is_none());
+    assert_eq!(
+        events(&wb, Some(&[EventKind::StageFinished]))
+            .unwrap()
+            .len(),
+        1
+    );
     // 产物 + 时间线可读
     assert!(dir.path().join(".hexagon/specs/prd.md").exists());
     let tl = timeline(&wb, None, 50).unwrap();
@@ -682,6 +689,40 @@ fn tool_call(
     wb.registry.call(&wb.db, &ctx, name, input)
 }
 
+// Owner 2026-10-01 Q3/Q10: L4 no longer approves tool side effects.
+// Transport and OS-confinement fixtures approve one real queued action so their
+// original boundary assertions still exercise execution; no remembered rule or
+// global for_test default may replace this explicit owner decision.
+fn owner_approved_tool_call(
+    wb: &Workbench,
+    name: &str,
+    input: Value,
+) -> Result<crate::tools::CallOutcome, crate::tools::ToolError> {
+    owner_approved_tool_call_as(wb, "a0", name, input)
+}
+
+fn owner_approved_tool_call_as(
+    wb: &Workbench,
+    agent: &str,
+    name: &str,
+    input: Value,
+) -> Result<crate::tools::CallOutcome, crate::tools::ToolError> {
+    let ctx = wb.ctx_for(agent, None);
+    match wb.registry.call(&wb.db, &ctx, name, input)? {
+        CallOutcome::Asked(id) => wb.registry.resolve(
+            &wb.db,
+            &ctx,
+            &id,
+            true,
+            None,
+            "activation",
+            wb.pack.as_ref(),
+            "owner",
+        ),
+        outcome => Ok(outcome),
+    }
+}
+
 fn permission_cards(wb: &Workbench) -> Vec<Value> {
     pending_questions(wb)
         .unwrap()
@@ -690,11 +731,11 @@ fn permission_cards(wb: &Workbench) -> Vec<Value> {
         .collect()
 }
 
-/// 票 03 / ADR 0059：L3/L4 放行安全网和新权限询问，时间线留 via=autonomy，
-/// 不入待决、不写 permission_rules。项目否定和内置永不仍拒绝。
-/// 盖章不在本票（见 `l3_and_l4_still_wait_at_stamp_point`）。
+/// Owner 2026-10-01 Q3/Q10 supersedes fixed-L4 permission release.
+/// Restricted defaults queue new permissions and critical operations without
+/// side effects. Coordinator rank, remembered rules and hard denies remain separate.
 #[test]
-fn l3_and_l4_release_safety_net_and_new_asks() {
+fn coordinator_high_rank_cannot_release_restricted_permissions() {
     for lv in ["L3", "L4"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
@@ -709,10 +750,13 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Done(_)),
-            "{lv} delete-repo queued or denied: {out:?}"
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
+            "{lv} delete must queue: {out:?}"
         );
-        assert!(!dir.path().join("victim").exists(), "{lv} rm did not run");
+        assert!(
+            dir.path().join("victim").exists(),
+            "{lv} delete must await owner"
+        );
 
         let out = tool_call(
             &wb,
@@ -721,10 +765,10 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Done(_)),
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
             "{lv} .git write: {out:?}"
         );
-        assert!(dir.path().join(".git/config").is_file(), "{lv}");
+        assert!(!dir.path().join(".git/config").is_file(), "{lv}");
 
         let out = tool_call(
             &wb,
@@ -733,7 +777,7 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Done(_)),
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
             "{lv} git push: {out:?}"
         );
 
@@ -744,46 +788,22 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Done(_)),
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
             "{lv} new ask: {out:?}"
         );
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
-            "hi\n"
-        );
-        assert!(
-            permission_cards(&wb).is_empty(),
-            "{lv} permission cards: {:?}",
-            permission_cards(&wb)
-        );
+        assert!(!dir.path().join("out.txt").exists());
+        assert_eq!(permission_cards(&wb).len(), 4);
         let rules: i64 = wb
             .db
             .conn()
             .query_row("SELECT COUNT(*) FROM permission_rules", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(rules, 0, "{lv} auto-pass must not memorize");
+        assert_eq!(rules, 0, "{lv} pending request must not memorize");
 
-        let allowed = events(&wb, Some(&[EventKind::PermissionAllowed])).unwrap();
-        assert!(
-            allowed.len() >= 4,
-            "{lv} allow traces {}, want >= 4",
-            allowed.len()
-        );
-        assert!(
-            allowed
-                .iter()
-                // 轨迹上的档是放行秩 L4，不是夹具写进列里的那个字符串。
-                .all(|e| e.payload["via"] == "autonomy" && e.payload["level"] == "L4"),
-            "{lv} {:?}",
-            allowed
-                .iter()
-                .map(|e| e.payload.clone())
-                .collect::<Vec<_>>()
-        );
-        assert!(allowed
-            .iter()
-            .any(|e| { e.payload["safety_net"] == true && e.payload["tool"] == "bash" }));
-        assert!(allowed.iter().any(|e| e.payload["safety_net"] == false));
+        // A queued request must never masquerade as an autonomous approval.
+        assert!(events(&wb, Some(&[EventKind::PermissionAllowed]))
+            .unwrap()
+            .is_empty());
 
         for (name, input) in [
             ("fs_read", json!({"path": ".env"})),
@@ -805,7 +825,7 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
             denials.iter().all(|e| e.payload["layer"] == "builtin_deny"),
             "{lv} {denials:?}"
         );
-        assert_eq!(permission_cards(&wb).len(), 0);
+        assert_eq!(permission_cards(&wb).len(), 4);
 
         wb.db
             .conn()
@@ -833,25 +853,19 @@ fn l3_and_l4_release_safety_net_and_new_asks() {
             matches!(d, crate::tools::CallOutcome::Denied(_)),
             "{lv} project deny must beat a new ask: {d:?}"
         );
-        // reliability 08: opaque external failure leaves this chain unknown.
-        // Exercise egress last: later calls must no longer bypass reconciliation.
+        // Owner Q10: restricted egress queues before any network request.
         let fetched = tool_call(
             &wb,
             "web_fetch",
             json!({"url": "http://127.0.0.1:1/new-domain"}),
         );
-        match &fetched {
-            Ok(crate::tools::CallOutcome::Asked(_)) | Ok(crate::tools::CallOutcome::Denied(_)) => {
-                panic!("{lv} new-domain egress must run, got {fetched:?}")
-            }
-            _ => {}
-        }
+        assert!(matches!(fetched, Ok(crate::tools::CallOutcome::Asked(_))));
     }
 }
 
-/// ADR 0069：列写成 L0–L2 也不再把安全网和新询问留下排队。
+/// Owner Q10: stored coordinator rank is not a permission grant.
 #[test]
-fn stored_low_rank_still_releases_safety_net_and_new_asks() {
+fn coordinator_low_rank_cannot_release_restricted_permissions() {
     for lv in ["L0", "L1", "L2"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
@@ -864,10 +878,10 @@ fn stored_low_rank_still_releases_safety_net_and_new_asks() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Done(_)),
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
             "{lv} safety net: {out:?}"
         );
-        assert!(!dir.path().join("victim").exists(), "{lv}");
+        assert!(dir.path().join("victim").exists(), "{lv}");
         let out = tool_call(
             &wb,
             "bash",
@@ -875,27 +889,20 @@ fn stored_low_rank_still_releases_safety_net_and_new_asks() {
         )
         .unwrap();
         assert!(
-            matches!(out, crate::tools::CallOutcome::Done(_)),
+            matches!(out, crate::tools::CallOutcome::Asked(_)),
             "{lv} new ask: {out:?}"
         );
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("queued.txt")).unwrap(),
-            "hi\n"
-        );
+        assert!(!dir.path().join("queued.txt").exists());
         let fetched = tool_call(
             &wb,
             "web_fetch",
             json!({"url": "http://127.0.0.1:1/new-domain"}),
         );
         assert!(
-            !matches!(fetched, Ok(crate::tools::CallOutcome::Asked(_))),
-            "{lv} egress must not queue: {fetched:?}"
+            matches!(fetched, Ok(crate::tools::CallOutcome::Asked(_))),
+            "{lv} unapproved egress must queue: {fetched:?}"
         );
-        assert!(
-            permission_cards(&wb).is_empty(),
-            "{lv} {:?}",
-            permission_cards(&wb)
-        );
+        assert_eq!(permission_cards(&wb).len(), 3);
     }
 }
 
@@ -933,12 +940,9 @@ fn remote_publish_waits_for_human_at_every_level() {
     }
 }
 
-/// 票 04 / ADR 0063：L4 自动通过自然语言安装确认，只写入当前项目。
-/// 曾断言「L4 仍排队」（票 04 落地前的占位）。行为变了：选 L4 就是离开后
-/// 安装确认也不再等人。L0–L3 仍排队。`execution_rank` 继续封顶 2——
-/// 被否决的做法是把封顶抬到 4。装完仍然不写 grants，也不写用户全局。
+/// Ticket 05/Q10 supersedes L4: newly installed capabilities require owner review.
 #[test]
-fn l4_install_confirm_writes_project_only() {
+fn owner_install_confirm_writes_project_only() {
     let dir = tempfile::tempdir().unwrap();
     let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
     pin_stored_rank(&wb, "L4");
@@ -948,6 +952,8 @@ fn l4_install_confirm_writes_project_only() {
     std::fs::create_dir_all(dir.path().join(&name)).unwrap();
     std::fs::write(dir.path().join(&name).join("SKILL.md"), "# t").unwrap();
     let qid = request_install(&wb, &name).unwrap();
+    assert!(!dir.path().join(".hexagon/skills").join(&name).exists());
+    crate::install::resolve_install(&wb.db, "p1", dir.path(), &qid, true).unwrap();
     assert!(dir
         .path()
         .join(".hexagon/skills")
@@ -960,7 +966,7 @@ fn l4_install_confirm_writes_project_only() {
     );
     let done = events(&wb, Some(&[EventKind::InstallCompleted])).unwrap();
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].payload["via"], "autonomy");
+    assert_eq!(done[0].payload["via"], "owner");
     assert_eq!(done[0].payload["scope"], "project");
     let grants: i64 = wb
         .db
@@ -985,9 +991,9 @@ fn l4_install_confirm_writes_project_only() {
     ));
 }
 
-/// ADR 0069：列写成 L0–L3 时，自然语言安装仍按原先 L4 写入当前项目，不入队。
+/// Ticket 05: legacy autonomy ranks cannot bypass new-capability owner review.
 #[test]
-fn stored_low_rank_still_installs_without_a_card() {
+fn stored_low_rank_still_requires_install_card() {
     for lv in ["L0", "L1", "L2", "L3"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
@@ -996,7 +1002,7 @@ fn stored_low_rank_still_installs_without_a_card() {
         std::fs::write(dir.path().join("skillpack/SKILL.md"), "# t").unwrap();
         request_install(&wb, "skillpack").unwrap();
         assert!(
-            dir.path()
+            !dir.path()
                 .join(".hexagon/skills/skillpack/SKILL.md")
                 .is_file(),
             "{lv}"
@@ -1005,19 +1011,21 @@ fn stored_low_rank_still_installs_without_a_card() {
             pending_questions(&wb)
                 .unwrap()
                 .iter()
-                .all(|q| q["kind"] != "install"),
+                .any(|q| q["kind"] == "install"),
             "{lv}"
         );
     }
 }
 
-/// L4 的 npm MCP 安装写项目清单，不写测试期的全局 MCP 路径，也不授权。
+/// Ticket 05: confirmed MCP install remains project-scoped and does not grant.
 #[test]
 fn l4_mcp_install_stays_in_project_manifest() {
     let dir = tempfile::tempdir().unwrap();
     let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
     pin_stored_rank(&wb, "L4");
-    request_install(&wb, "npx @modelcontextprotocol/server-fs").unwrap();
+    let qid = request_install(&wb, "npx @modelcontextprotocol/server-fs").unwrap();
+    assert!(!dir.path().join(".hexagon/mcp.json").exists());
+    crate::install::resolve_install(&wb.db, "p1", dir.path(), &qid, true).unwrap();
     let specs: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join(".hexagon/mcp.json")).unwrap(),
     )
@@ -1721,19 +1729,22 @@ fn grant_names(wb: &Workbench, agent: &str, kind: &str) -> Vec<String> {
         .unwrap()
 }
 
-/// 票 04：L4 自动通过技能与 MCP 授权确认，只出现在当前项目 grants。
-/// L0–L3 出卡，点头才写。不写技能目录，不写用户全局。
+/// Ticket 05: owner review replaces L4 auto-grants, retaining project-only writes.
 #[test]
 fn l4_grant_confirm_is_project_scoped() {
     let dir = tempfile::tempdir().unwrap();
     let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
     pin_stored_rank(&wb, "L4");
     let skill = wb.request_grant("a0", "skill", "spec-writing").unwrap();
-    assert!(skill.granted);
-    assert_eq!(skill.via, "autonomy");
-    assert!(skill.question_id.is_none());
+    assert!(!skill.granted);
+    assert_eq!(skill.via, "queued");
+    assert!(grant_names(&wb, "a0", "skill").is_empty());
+    wb.confirm_grant(skill.question_id.as_deref().unwrap(), true)
+        .unwrap();
     let mcp = wb.request_grant("a0", "mcp", "fake").unwrap();
-    assert!(mcp.granted);
+    assert!(!mcp.granted);
+    wb.confirm_grant(mcp.question_id.as_deref().unwrap(), true)
+        .unwrap();
     assert_eq!(
         grant_names(&wb, "a0", "skill"),
         vec!["spec-writing".to_string()]
@@ -1743,7 +1754,7 @@ fn l4_grant_confirm_is_project_scoped() {
     let ev = events(&wb, Some(&[EventKind::System])).unwrap();
     assert!(ev.iter().any(|e| {
         e.payload["kind"] == "grant_confirmed"
-            && e.payload["via"] == "autonomy"
+            && e.payload["via"] == "owner"
             && e.payload["scope"] == "project"
             && e.payload["allowed"] == true
     }));
@@ -1758,25 +1769,25 @@ fn l4_grant_confirm_is_project_scoped() {
 }
 
 #[test]
-/// ADR 0069：列写成 L0–L3 时，技能和 MCP 授权确认仍写入当前项目，不入队。
-fn stored_low_rank_still_grants_without_a_card() {
+/// Ticket 05: legacy stored ranks do not authorize unknown capabilities.
+fn stored_low_rank_still_requires_grant_card() {
     for lv in ["L0", "L1", "L2", "L3"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         pin_stored_rank(&wb, lv);
         let out = wb.request_grant("a0", "skill", "spec-writing").unwrap();
-        assert!(out.granted, "{lv}");
-        assert_eq!(out.via, "autonomy");
+        assert!(!out.granted, "{lv}");
+        assert_eq!(out.via, "queued");
         assert_eq!(
             grant_names(&wb, "a0", "skill"),
-            vec!["spec-writing".to_string()],
+            Vec::<String>::new(),
             "{lv}"
         );
         assert!(
             pending_questions(&wb)
                 .unwrap()
                 .iter()
-                .all(|q| q["kind"] != "grant"),
+                .any(|q| q["kind"] == "grant"),
             "{lv}"
         );
     }
@@ -2055,7 +2066,8 @@ fn us15_dispatch_plan_not_posted_before_tools() {
     assert_eq!(prov.recorded().len(), 3); // 方案 1 + 执行 2，不阻塞
     assert!(dir.path().join(".hexagon/notes/fix.md").exists());
 
-    // 兜底：执行轮空文本 → 方案落为唯一一条回复（不丢光）
+    // Owner 2026-10-01: even an empty final reply keeps the plan in its own
+    // expandable event; promoting it back to a public message caused the flash.
     let dir2 = tempfile::tempdir().unwrap();
     let mut wb2 = fastpath_wb(dir2.path());
     wb2.register_provider(
@@ -2072,15 +2084,67 @@ fn us15_dispatch_plan_not_posted_before_tools() {
     );
     wb2.dispatch("后端", "x", &[]).unwrap();
     let tl2 = timeline(&wb2, None, 50).unwrap();
-    assert!(
-        tl2.iter().any(|i| {
-            i.message
-                .as_ref()
-                .map(|m| m.body.contains("兜底文本"))
-                .unwrap_or(false)
-        }),
-        "empty final reply should fall back to plan text"
-    );
+    assert!(tl2.iter().any(|i| i.event.payload["kind"] == "agent_plan"
+        && i.event.payload.to_string().contains("兜底文本")));
+    assert!(!tl2
+        .iter()
+        .filter_map(|i| i.message.as_ref())
+        .any(|m| m.body.contains("兜底文本")));
+}
+
+// Live acceptance 2026-10-01, events 4138–4142: the tool-free plan claimed
+// capabilities were unavailable, and execution treated that plan as its final
+// answer because only runtime metadata followed it. Exercise the real dispatch
+// boundary, keeping planning non-executing while making execution explicit.
+#[test]
+fn planned_dispatch_reenters_execution_with_actual_tool_inventory() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = fastpath_wb(dir.path());
+    let prov = Arc::new(ScriptedProvider::new(vec![
+        text_response("No tools are available in this planning request."),
+        tool_response(vec![(
+            "execute-after-plan",
+            "artifact_write",
+            json!({"path":"notes/after-plan.md","content":"---\nkind: 笔记\nauthor: a0\n---\nexecuted"}),
+        )]),
+        text_response("done"),
+    ]));
+    wb.register_provider("default", prov.clone());
+    wb.dispatch("后端", "Write the requested note", &[])
+        .unwrap();
+    let calls = prov.recorded();
+    assert!(calls[0].tools.is_empty(), "planning cannot execute tools");
+    let planning = calls[0]
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .find_map(|b| {
+            if let crate::provider::ContentBlock::Text { text } = b {
+                serde_json::from_str::<Value>(text)
+                    .ok()
+                    .filter(|v| v.get("task").is_some())
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert!(planning["execution_tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t == "artifact_write"));
+    let execution = &calls[1].messages;
+    let plan_index = execution
+        .iter()
+        .position(|m| m.role == crate::provider::Role::Assistant)
+        .unwrap();
+    assert!(execution[plan_index + 1..].iter().any(|m| {
+        m.role == crate::provider::Role::User && m.content.iter().any(|b| {
+            matches!(b, crate::provider::ContentBlock::Text { text }
+                if text.contains("Execute the original task now") && text.contains("not a completed task"))
+        })
+    }), "execution must receive a task continuation after the internal plan");
+    assert!(dir.path().join(".hexagon/notes/after-plan.md").exists());
 }
 
 /// US15：负责人在工具循环期间可暂停——循环每轮顶检 paused 状态。
@@ -2284,7 +2348,9 @@ fn us71_reopen_restores_state() {
     .unwrap();
     let prov = Arc::new(ScriptedProvider::new(vec![text_response("replay?")]));
     wb.register_provider("default", prov.clone());
-    assert_eq!(stage_status(&wb).unwrap()[0]["state"], "active");
+    // Live acceptance 2026-10-01: a ready stage without a stamp now advances
+    // at the turn boundary. Reopening must preserve that completed state.
+    assert_eq!(stage_status(&wb).unwrap()[0]["state"], "done");
     assert_eq!(artifacts(&wb).unwrap().len(), 1);
     assert_eq!(team(&wb).unwrap().len(), 1);
     assert!(!events(&wb, None).unwrap().is_empty());
@@ -2299,9 +2365,11 @@ fn us71_reopen_restores_state() {
 #[test]
 fn us59_interrupted_run_recovers_by_owner() {
     let dir = tempfile::tempdir().unwrap();
+    // Keep evidence outstanding so this recovery test remains active after
+    // the resumed turn; ready-stage advancement has its own regression.
     let pack: PackDef = serde_json::from_value(json!({
         "name":"t","version":1,
-        "stages":[{"name":"规格","roles":["产品策划"],"due":[]}]
+        "stages":[{"name":"规格","roles":["产品策划"],"due":["规格"]}]
     }))
     .unwrap();
     // 第一轮：开阶段，然后落一条无收束的 turn_started——模拟进程被杀时的盘上痕迹
@@ -2410,7 +2478,7 @@ fn us11_pack_editing_draft_template_export() {
     // 编辑保存：加阶段 + 会诊名册 → 写 pack.json（active.json 不变）
     let edited = r#"{"name":"规格驱动","version":2,"stages":[
             {"name":"规格","roles":["产品策划"],"due":["规格"],"stamp_point":true},
-            {"name":"実装","roles":["架构师"],"due":["接口说明"],"checks":["cargo test"],"reviews":[{"artifact_kind":"接口说明","reviewer":"架构师"}],"consult_wake":["产品策划"]}
+            {"name":"実装","roles":["架构师"],"due":["接口说明"],"checks":["cargo test"],"quality_checks":{"tests":"cargo test"},"reviews":[{"artifact_kind":"接口说明","reviewer":"架构师"}],"consult_wake":["产品策划"]}
         ]}"#;
     save_pack_draft(&wb, edited).unwrap();
     assert!(dir.path().join(".hexagon/pack.json").exists());
@@ -2438,6 +2506,8 @@ fn us11_pack_editing_draft_template_export() {
     assert!(yaml.contains("stamp_point: true"));
     assert!(yaml.contains("reviewer: 架构师"));
     assert!(yaml.contains("checks: [cargo test]"));
+    // Ticket 04: exporting a configured runner must preserve its category contract.
+    assert!(yaml.contains(r#"quality_checks: {"tests":"cargo test"}"#));
     std::env::remove_var("HEXAGON_TEMPLATES_DIR");
 }
 
@@ -2713,10 +2783,11 @@ fn us47_install_assistant_owner_gated() {
     assert!(request_install(&wb, "bash -c something").is_err());
     assert!(pending_questions(&wb).unwrap().is_empty());
 
-    // ② 本地目录技能包：按原先 L4 直接写入项目，不入队、不写授权。
+    // Ticket 05: resolve the exact local installation plan before project writes.
     std::fs::create_dir_all(dir.path().join("skillpack")).unwrap();
     std::fs::write(dir.path().join("skillpack/SKILL.md"), "# t").unwrap();
-    request_install(&wb, "skillpack").unwrap();
+    let qid = request_install(&wb, "skillpack").unwrap();
+    crate::install::resolve_install(&wb.db, "p1", dir.path(), &qid, true).unwrap();
     assert!(dir
         .path()
         .join(".hexagon/skills/skillpack/SKILL.md")
@@ -2726,8 +2797,10 @@ fn us47_install_assistant_owner_gated() {
         .iter()
         .all(|q| q["kind"] != "install"));
 
-    // ③ npm MCP：直接写项目清单；grants 永远空
-    request_install(&wb, "npx @modelcontextprotocol/server-fs").unwrap();
+    // ③ Confirmed npm MCP writes project manifest; grants remain empty.
+    let qid = request_install(&wb, "npx @modelcontextprotocol/server-fs").unwrap();
+    assert!(!dir.path().join(".hexagon/mcp.json").exists());
+    crate::install::resolve_install(&wb.db, "p1", dir.path(), &qid, true).unwrap();
     let specs: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join(".hexagon/mcp.json")).unwrap(),
     )
@@ -2747,8 +2820,13 @@ fn us47_install_assistant_owner_gated() {
         2
     );
 
-    // ④ /install 文本指令同路，直接装上。空描述不吞成安装。
+    // ④ /install uses the same owner card; empty descriptions are not installs.
     send(&wb, "/install npx @mcp/other").unwrap();
+    let cards = pending_questions(&wb).unwrap();
+    let qid = cards.iter().find(|q| q["kind"] == "install").unwrap()["id"]
+        .as_str()
+        .unwrap();
+    crate::install::resolve_install(&wb.db, "p1", dir.path(), qid, true).unwrap();
     let specs: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join(".hexagon/mcp.json")).unwrap(),
     )
@@ -4186,20 +4264,19 @@ fn diag_mention_dispatch_recorded() {
     );
 }
 
-/// 票 02：自治放行（秩 4 的 SkillGrant auto-pass）落「判定」记录，
-/// 能看出没等人。
+/// Ticket 05: the formerly automatic grant is now recorded as owner review.
 #[test]
-fn diag_grant_autonomy_autopass_recorded() {
+fn diag_grant_owner_review_recorded() {
     let _g = diag_lock();
     log::set_max_level(log::LevelFilter::Debug);
     let (_dir, wb) = git_wb(&["前端"]);
     let out = crate::grants::request(&wb.db, "p1", "a0", "skill", "pdf-read").unwrap();
-    assert!(out.granted);
+    assert!(!out.granted);
     assert!(
         crate::diag::records(Some("p1"), Some(crate::diag::CLASS_JUDGE))
             .iter()
             .any(|r| r.branch == "grant"
-                && r.code == "auto_pass"
+                && r.code == "queued_unknown_capability"
                 && r.agent.as_deref() == Some("a0"))
     );
 }
@@ -4371,7 +4448,7 @@ fn terminal_respects_owned_paths_and_host_state() {
         .unwrap();
     std::fs::create_dir_all(dir.path().join("ui")).unwrap();
     std::fs::write(dir.path().join("outside.txt"), "original").unwrap();
-    let _ = tool_call(&wb, "bash", json!({"cmd":"printf ok > ui/ok.txt; sh -c 'printf changed > outside.txt'; printf bad > .hexagon/permissions.toml", "timeout_ms":5000})).unwrap();
+    let _ = owner_approved_tool_call(&wb, "bash", json!({"cmd":"printf ok > ui/ok.txt; sh -c 'printf changed > outside.txt'; printf bad > .hexagon/permissions.toml", "timeout_ms":5000})).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join("ui/ok.txt")).unwrap(),
         "ok"
@@ -4423,7 +4500,7 @@ fn project_manager_terminal_is_read_only() {
     let wb = Workbench::for_test(dir.path(), &["项目经理"], None).unwrap();
     pin_stored_rank(&wb, "L4");
     std::fs::write(dir.path().join("source.txt"), "original").unwrap();
-    let out = tool_call(
+    let out = owner_approved_tool_call(
         &wb,
         "bash",
         json!({"cmd":"cat source.txt; printf bad > source.txt", "timeout_ms":5000}),
@@ -4449,7 +4526,7 @@ fn terminal_cannot_write_credentials_or_permission_rules() {
     for name in [".env", "credentials.json", "permission_rules.toml"] {
         std::fs::write(dir.path().join(name), "synthetic-original").unwrap();
     }
-    let out = tool_call(&wb, "bash", json!({
+    let out = owner_approved_tool_call(&wb, "bash", json!({
         "cmd": "printf ok > ordinary.txt; for file in .e?v credentials.jso? permission_rule?.toml; do sh -c 'printf bad > \"$1\"' sh \"$file\"; done",
         "timeout_ms": 5000
     })).unwrap();
@@ -4786,7 +4863,7 @@ fn terminal_read_policy_stops_indirect_secret_reads() {
     std::fs::write(dir.path().join(".npmrc"), secret).unwrap();
     std::fs::write(dir.path().join("normal.txt"), "PUBLIC_TERMINAL_VALUE").unwrap();
     std::os::unix::fs::symlink("credentials.json", dir.path().join("alias.txt")).unwrap();
-    let CallOutcome::Done(out) = tool_call(
+    let CallOutcome::Done(out) = owner_approved_tool_call(
         &wb,
         "bash",
         json!({"cmd":"sh -c 'cat cred*.json alias.txt .hexagon/mcp.json .npmrc normal.txt'", "timeout_ms":5000}),
@@ -4818,7 +4895,7 @@ fn terminal_read_policy_rejects_existing_hardlink_aliases() {
     )
     .unwrap();
     std::fs::write(dir.path().join("ordinary.txt"), "PUBLIC_HARDLINK_CONTROL").unwrap();
-    let CallOutcome::Done(out) = tool_call(&wb, "bash", json!({"cmd":"cat notes.txt external.txt; ln notes.txt copied.txt; cat copied.txt; cat ordinary.txt", "timeout_ms":5000})).unwrap() else { panic!("terminal did not execute") };
+    let CallOutcome::Done(out) = owner_approved_tool_call(&wb, "bash", json!({"cmd":"cat notes.txt external.txt; ln notes.txt copied.txt; cat copied.txt; cat ordinary.txt", "timeout_ms":5000})).unwrap() else { panic!("terminal did not execute") };
     assert!(!out.to_string().contains(secret), "{out}");
     assert!(out.to_string().contains("PUBLIC_HARDLINK_CONTROL"), "{out}");
     assert!(!dir.path().join("copied.txt").exists());
@@ -4859,6 +4936,9 @@ proptest::proptest! {
 fn subagent_test_processes_cannot_modify_source_or_host_state() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = Workbench::for_test(dir.path(), &["研究"], None).unwrap();
+    // Owner-approved execution is required even for a confined child (Q11).
+    wb.set_approval_mode(crate::approval_mode::ApprovalMode::Assisted)
+        .unwrap();
     orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
     std::fs::write(dir.path().join("source.txt"), "original").unwrap();
     std::fs::create_dir_all(dir.path().join(".hexagon")).unwrap();
@@ -5180,9 +5260,9 @@ process.stdin.on('data', chunk => {
         .tools
         .iter()
         .any(|t| t.name == "mcp:isolated:write"));
-    // reliability 05 / Q2: the parent's existing authorized autonomous path
-    // remains usable; child isolation must not add a new routine approval.
-    let parent_out = tool_call(&wb, "mcp:isolated:write", json!({})).unwrap();
+    // Owner Q3/Q10 replaces L4 release: explicitly approve the parent write,
+    // while the child's read-only session above remains independently confined.
+    let parent_out = owner_approved_tool_call(&wb, "mcp:isolated:write", json!({})).unwrap();
     assert!(matches!(parent_out, CallOutcome::Done(_)), "{parent_out:?}");
     assert_eq!(
         std::fs::read_to_string(dir.path().join("source.txt")).unwrap(),
@@ -5349,7 +5429,13 @@ fn same_role_interrupted_run_recovers_exact_owner() {
         .text_since("a1", 0)
         .unwrap()
         .contains("recovered owner B"));
-    assert_eq!(wb.active_run().unwrap().unwrap().id, run_id);
+    // 2026-10-01: the recovered owner completes this no-deliverable stage
+    // through normal handoff. Its completion still belongs to the original run.
+    assert!(wb.active_run().unwrap().is_none());
+    assert!(events(&wb, Some(&[EventKind::StageFinished]))
+        .unwrap()
+        .iter()
+        .any(|event| event.stage_run_id.as_deref() == Some(run_id.as_str())));
 }
 
 #[test]
@@ -5956,6 +6042,8 @@ fn durable_action_unknown_blocks_another_queued_approval() {
 fn durable_action_mcp_lost_response_does_not_resend_effect() {
     let dir = tempfile::tempdir().unwrap();
     let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    // 2026-10-01: direct MCP fixtures must model an active caller; sleep now cancels execution.
+    crate::orchestra::write_agent_status(&wb.db, &wb.project_id, "a0", false).unwrap();
     let script = dir.path().join("lost-response.cjs");
     std::fs::write(&script,r#"
 const fs = require('fs'); let bytes = Buffer.alloc(0);
@@ -5989,7 +6077,7 @@ process.stdin.on('data',chunk=> { bytes=Buffer.concat([bytes,chunk]); while(true
         .conn()
         .execute("UPDATE projects SET autonomy='L4'", [])
         .unwrap();
-    let result = tool_call(&wb, "mcp:lost:change", json!({}));
+    let result = owner_approved_tool_call(&wb, "mcp:lost:change", json!({}));
     assert!(
         matches!(result, Err(crate::tools::ToolError::OutcomeUnknown(_))),
         "{result:?}"
@@ -6017,6 +6105,8 @@ fn mcp_standard_official_sdk_roundtrip() {
     )
     .unwrap();
     let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    // 2026-10-01: direct MCP fixtures must model an active caller; sleep now cancels execution.
+    crate::orchestra::write_agent_status(&wb.db, &wb.project_id, "a0", false).unwrap();
     let services = wb.mcp_services();
     assert_eq!(services[0].status, "up", "{services:?}");
     assert_eq!(services[0].tools, vec!["echo"]);
@@ -6031,7 +6121,9 @@ fn mcp_standard_official_sdk_roundtrip() {
         .conn()
         .execute("UPDATE projects SET autonomy='L4'", [])
         .unwrap();
-    let result = tool_call(&wb, "mcp:sdk:echo", json!({"text":"你好 🦀\nsecond line"})).unwrap();
+    let result =
+        owner_approved_tool_call(&wb, "mcp:sdk:echo", json!({"text":"你好 🦀\nsecond line"}))
+            .unwrap();
     let crate::tools::CallOutcome::Done(result) = result else {
         panic!("{result:?}")
     };
@@ -6066,6 +6158,8 @@ else if(r.method==='tools/call'){{fs.appendFileSync('effects.txt','x');send(r.id
         )
         .unwrap();
         let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        // 2026-10-01: direct MCP fixtures must model an active caller; sleep now cancels execution.
+        crate::orchestra::write_agent_status(&wb.db, &wb.project_id, "a0", false).unwrap();
         assert_eq!(wb.mcp_services()[0].status, "up");
         wb.db.conn().execute("INSERT INTO grants(id,agent_id,kind,name) VALUES ('malformed-grant','a0','mcp','malformed')", []).unwrap();
         wb.db
@@ -6073,7 +6167,7 @@ else if(r.method==='tools/call'){{fs.appendFileSync('effects.txt','x');send(r.id
             .execute("UPDATE projects SET autonomy='L4'", [])
             .unwrap();
         assert!(matches!(
-            tool_call(&wb, "mcp:malformed:write", json!({})),
+            owner_approved_tool_call(&wb, "mcp:malformed:write", json!({})),
             Err(crate::tools::ToolError::OutcomeUnknown(_))
         ));
         assert_eq!(
@@ -6148,6 +6242,8 @@ else if(r.method==='tools/call'){{fs.appendFileSync('effects.txt','x');if({parti
         )
         .unwrap();
         let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        // 2026-10-01: direct MCP fixtures must model an active caller; sleep now cancels execution.
+        crate::orchestra::write_agent_status(&wb.db, &wb.project_id, "a0", false).unwrap();
         assert_eq!(wb.mcp_services()[0].status, "up");
         wb.mcp_timeout = std::time::Duration::from_millis(80);
         if partial {
@@ -6162,7 +6258,7 @@ else if(r.method==='tools/call'){{fs.appendFileSync('effects.txt','x');if({parti
             .unwrap();
         let started = std::time::Instant::now();
         assert!(matches!(
-            tool_call(&wb, "mcp:silent:write", json!({})),
+            owner_approved_tool_call(&wb, "mcp:silent:write", json!({})),
             Err(crate::tools::ToolError::OutcomeUnknown(_))
         ));
         assert!(
@@ -6235,6 +6331,9 @@ for line in sys.stdin:
         None,
     )
     .unwrap();
+    // 2026-10-01: direct MCP fixtures must model an active caller; sleep now cancels execution.
+    crate::orchestra::write_agent_status(&wb.db, &wb.project_id, "a0", false).unwrap();
+    crate::orchestra::write_agent_status(&wb.db, &wb.project_id, "a1", false).unwrap();
     wb.mcp_host
         .as_ref()
         .unwrap()
@@ -6263,7 +6362,7 @@ fn mcp_deadline_control_pause_reclaims_process_and_keeps_independent_service() {
     });
     let started = std::time::Instant::now();
     assert!(matches!(
-        tool_call(&wb, "mcp:silent:write", json!({})),
+        owner_approved_tool_call(&wb, "mcp:silent:write", json!({})),
         Err(crate::tools::ToolError::OutcomeUnknown(_))
     ));
     control.join().unwrap();
@@ -6293,15 +6392,13 @@ fn mcp_deadline_control_pause_reclaims_process_and_keeps_independent_service() {
     );
     wb.dispatch_command(&crate::commands::TextCommand::Resume)
         .unwrap();
-    let result = wb
-        .registry
-        .call(
-            &wb.db,
-            &wb.ctx_for("a1", None),
-            "mcp:healthy:echo",
-            json!({"text":"still available"}),
-        )
-        .unwrap();
+    let result = owner_approved_tool_call_as(
+        &wb,
+        "a1",
+        "mcp:healthy:echo",
+        json!({"text":"still available"}),
+    )
+    .unwrap();
     assert!(matches!(result, crate::tools::CallOutcome::Done(_)));
     let id: String = wb
         .db
@@ -6329,7 +6426,7 @@ fn mcp_deadline_before_dispatch_is_proven_unexecuted() {
     let (dir, mut wb) = silent_mcp_workbench();
     wb.call_deadline = Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
     assert!(matches!(
-        tool_call(&wb, "mcp:silent:write", json!({})),
+        owner_approved_tool_call(&wb, "mcp:silent:write", json!({})),
         Err(crate::tools::ToolError::NotExecuted(_))
     ));
     assert!(!dir.path().join("effects.txt").exists());
@@ -6359,7 +6456,7 @@ fn mcp_deadline_detached_descendant_cannot_outlive_service() {
     let (dir, mut wb) = silent_mcp_workbench();
     wb.mcp_timeout = std::time::Duration::from_millis(180);
     assert!(matches!(
-        tool_call(&wb, "mcp:silent:write", json!({"detach":true})),
+        owner_approved_tool_call(&wb, "mcp:silent:write", json!({"detach":true})),
         Err(crate::tools::ToolError::OutcomeUnknown(_))
     ));
     let pidfile = dir.path().join("detached.pid");
@@ -6425,6 +6522,8 @@ fn mcp_deadline_removed_child_executable_is_not_executed() {
         .unwrap();
     let mut ctx = wb.ctx_for("a0", None);
     ctx.subagent = Some(crate::subagent::Scope {
+        approval_mode: Default::default(),
+        permission_rules: Default::default(),
         halt: Default::default(),
         answer: Default::default(),
         mcp: Arc::new(std::collections::HashSet::from([name.into()])),
@@ -6656,8 +6755,21 @@ fn action_reconciliation_owner_abandon_keeps_unknown_history_and_unblocks_chain(
         .find_map(|q| q.payload["action_id"].as_str())
         .unwrap();
     assert!(wb.abandon_tool_action(action, "").is_err());
+    // 2026-10-01 desktop continuation must distinguish unresolved uncertainty
+    // from an owner-abandoned effect while keeping both outcomes unknown.
+    // This direct-tool fixture has no model request; attach it to the history window.
+    wb.db
+        .conn()
+        .execute("UPDATE tool_actions SET request_id=1 WHERE id=?1", [action])
+        .unwrap();
+    assert!(wb.recorded_activation_history("a0", 0).is_err());
     wb.abandon_tool_action(action, "owner checked externally; no further attempt")
         .unwrap();
+    let history = wb.recorded_activation_history("a0", 0).unwrap();
+    let restored = serde_json::to_string(&history).unwrap();
+    assert!(restored.contains("unknown"));
+    assert!(restored.contains("owner"));
+    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     wb.abandon_tool_action(action, "duplicate owner click")
         .unwrap();
     assert!(matches!(
@@ -6827,7 +6939,7 @@ fn action_reconciliation_new_attempt_rechecks_revoked_permission() {
         .register(ApprovedAction(CountingAction(count.clone())));
     crate::actions::crash_at(crate::actions::CrashPoint::Effect);
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool_call(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner_approved_tool_call(
             &wb,
             "bash",
             json!({"cmd":"echo original"})
@@ -7995,6 +8107,62 @@ fn artifact_metadata_kind_parameter_satisfies_stage_and_matches_receipt() {
 }
 
 #[test]
+fn normal_role_handoff_checks_stage_readiness_and_waits_for_owner() {
+    // 2026-10-01 live acceptance: completed deliveries only reached the PM
+    // routing loop; no normal turn called advance, so no stamp card appeared.
+    for delivered in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({
+            "name":"handoff","version":1,
+            "stages":[{"name":"design","roles":["worker"],"due":["结构说明"],"stamp_point":true}]
+        }))
+        .unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
+        wb.open_stage(0).unwrap();
+        if delivered {
+            let ctx = wb.ctx_for("a0", Some(active_run_id(&wb)));
+            wb.registry
+                .call(
+                    &wb.db,
+                    &ctx,
+                    "artifact_write",
+                    json!({
+                        "path":"design.md","kind":"结构说明","content":"Ready for owner review."
+                    }),
+                )
+                .unwrap();
+        }
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![
+                text_response("Check the delivery and report."),
+                text_response("Ready for owner review."),
+            ])),
+        );
+        wb.dispatch("worker", "Report progress", &[]).unwrap();
+        let run = wb.active_run().unwrap().unwrap();
+        assert_eq!(
+            run.state,
+            if delivered { "waiting_stamp" } else { "active" }
+        );
+        let stamps = pending_questions(&wb)
+            .unwrap()
+            .into_iter()
+            .filter(|q| q["kind"] == "stamp")
+            .count();
+        assert_eq!(stamps, usize::from(delivered));
+        if delivered {
+            wb.continue_after_turn("a0", "worker", 0).unwrap();
+            assert_eq!(
+                pending_questions(&wb).unwrap().len(),
+                1,
+                "repeated handoff must not duplicate or accept the stamp card"
+            );
+        }
+    }
+}
+
+#[test]
 fn artifact_metadata_merges_before_validation_without_partial_delivery() {
     let valid_spec = "---\nauthor: a0\n---\n## 目标\nx\n## 范围\nx\n## 验收\nx";
     for (content, hint, expected) in [
@@ -8298,9 +8466,9 @@ fn approved_write_host_lock_prevents_two_instances_overwriting_same_target() {
         .unwrap();
     let rejected = second.answer_permission(&q2, true, None, "activation");
     let terminal = if crate::sandbox::status().available {
-        Some(second.registry.call(
-            &second.db,
-            &second.ctx_for("a1", None),
+        Some(owner_approved_tool_call_as(
+            &second,
+            "a1",
             "bash",
             json!({"cmd":"printf terminal > shared.txt"}),
         ))
@@ -8337,7 +8505,7 @@ fn approved_write_terminal_exit_cannot_leave_a_late_writer() {
     )
     .unwrap();
     std::fs::write(dir.path().join("shared.txt"), "initial").unwrap();
-    tool_call(
+    owner_approved_tool_call(
         &wb,
         "bash",
         json!({"cmd":"(sleep 0.5; printf late > shared.txt) >/dev/null 2>&1 &"}),
@@ -8372,7 +8540,7 @@ fn approved_write_terminal_lease_blocks_writers_but_not_reads_and_releases_on_cl
         } else {
             json!({"cmd":"sleep 30", "background":true})
         };
-        let result = tool_call(&wb, "bash", input).unwrap();
+        let result = owner_approved_tool_call(&wb, "bash", input).unwrap();
         let CallOutcome::Done(value) = result else {
             panic!("expected execution")
         };
@@ -8389,7 +8557,10 @@ fn approved_write_terminal_lease_blocks_writers_but_not_reads_and_releases_on_cl
         } else {
             json!({"task_id":value["task_id"]})
         };
-        tool_call(&wb, "bash_kill", close).unwrap();
+        // Owner Q10: stopping a shell is also Exec; an unanswered card does
+        // not close the session and cannot release its repository lease.
+        let closed = owner_approved_tool_call(&wb, "bash_kill", close).unwrap();
+        assert!(matches!(closed, CallOutcome::Done(_)), "{closed:?}");
         let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
             if crate::tools::writeguard::repository_lock(&wb.ctx_for("a0", None)).is_ok() {
@@ -8420,6 +8591,8 @@ fn sandbox_node_child_processes_and_npm_complete() {
         None,
     )
     .unwrap();
+    // 2026-10-01: direct MCP fixtures must model an active caller; sleep now cancels execution.
+    crate::orchestra::write_agent_status(&wb.db, &wb.project_id, "a0", false).unwrap();
     let node = std::env::var_os("HEXAGON_TEST_NODE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
@@ -8482,7 +8655,7 @@ const detached = cp.spawn('/bin/sh', ['-c','sleep 1; echo escaped > escaped.txt'
 await once(detached, 'spawn'); detached.unref();
 console.log('NODE_CHILDREN_OK');
 "#).unwrap();
-    let result = tool_call(&wb, "bash", json!({"cmd":"./node probe.mjs"})).unwrap();
+    let result = owner_approved_tool_call(&wb, "bash", json!({"cmd":"./node probe.mjs"})).unwrap();
     assert!(
         format!("{result:?}").contains("NODE_CHILDREN_OK"),
         "{result:?}"
@@ -8507,7 +8680,7 @@ console.log('NODE_CHILDREN_OK');
         .unwrap()
         .success());
     std::fs::write(dir.path().join("package.json"), r#"{"name":"sandbox-probe","version":"1.0.0","scripts":{"test":"node -e \"require('node:child_process').execFileSync(process.execPath,['-e', 'console.log(42)'],{stdio:'inherit'})\""}}"#).unwrap();
-    let result = tool_call(&wb, "bash", json!({"cmd":"PATH=\"$PWD:$PATH\" ./node npm-runtime/bin/npm-cli.js test --offline --ignore-scripts=false"})).unwrap();
+    let result = owner_approved_tool_call(&wb, "bash", json!({"cmd":"PATH=\"$PWD:$PATH\" ./node npm-runtime/bin/npm-cli.js test --offline --ignore-scripts=false"})).unwrap();
     let CallOutcome::Done(value) = result else {
         panic!("npm must execute")
     };
@@ -8535,10 +8708,12 @@ console.log('NODE_CHILDREN_OK');
         .execute("UPDATE projects SET autonomy='L4'", [])
         .unwrap();
     let name = "mcp:node-child:echo";
-    let parent = tool_call(&wb, name, json!({})).unwrap();
+    let parent = owner_approved_tool_call(&wb, name, json!({})).unwrap();
     assert!(format!("{parent:?}").contains("42"), "{parent:?}");
     let mut ctx = wb.ctx_for("a0", None);
     ctx.subagent = Some(crate::subagent::Scope {
+        approval_mode: Default::default(),
+        permission_rules: Default::default(),
         halt: Default::default(),
         answer: Default::default(),
         mcp: Arc::new(std::collections::HashSet::from([name.into()])),
@@ -8578,7 +8753,7 @@ fn sandbox_large_hardlink_inventory_keeps_exact_denials() {
     let cmd = format!(
         "for f in '{folder}'/alias-*.txt; do cat \"$f\" 2>/dev/null; done; printf ok > allowed.txt"
     );
-    let result = tool_call(&wb, "bash", json!({"cmd":cmd})).unwrap();
+    let result = owner_approved_tool_call(&wb, "bash", json!({"cmd":cmd})).unwrap();
     let CallOutcome::Done(value) = result else {
         panic!("terminal must execute")
     };
@@ -8603,7 +8778,7 @@ proptest::proptest! {
         std::fs::hard_link(dir.path().join(".env"), dir.path().join(&name)).unwrap();
         let ordinary = format!("{name}extra");
         std::fs::write(dir.path().join(&ordinary), "ORDINARY").unwrap();
-        let result = tool_call(&wb, "bash", json!({"cmd":format!("cat '{}' 2>/dev/null; cat '{}'",name,ordinary)})).unwrap();
+        let result = owner_approved_tool_call(&wb, "bash", json!({"cmd":format!("cat '{}' 2>/dev/null; cat '{}'",name,ordinary)})).unwrap();
         let CallOutcome::Done(value) = result else { panic!("terminal must execute") };
         proptest::prop_assert_eq!(&value["exit_code"], &json!(0), "{}", value);
         proptest::prop_assert_eq!(&value["stdout"], &json!("ORDINARY"));
@@ -8630,7 +8805,7 @@ require('node:fs').writeFileSync('attempted.txt','attempted');
 const child=spawn('sh',['-c','sleep 0.5; printf escaped > escaped.txt'],{detached:true,stdio:'ignore'});
 child.on('error',()=>{}); child.unref();
 "#).unwrap();
-    tool_call(&wb, "bash", json!({"cmd":"node escape.cjs"})).unwrap();
+    owner_approved_tool_call(&wb, "bash", json!({"cmd":"node escape.cjs"})).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(900));
     assert!(
         dir.path().join("attempted.txt").exists(),
@@ -8653,7 +8828,8 @@ fn approved_write_named_shell_exit_releases_repository_without_manual_close() {
     )
     .unwrap();
     let CallOutcome::Done(value) =
-        tool_call(&wb, "bash", json!({"cmd":"exit 0", "session":"exiting"})).unwrap()
+        owner_approved_tool_call(&wb, "bash", json!({"cmd":"exit 0", "session":"exiting"}))
+            .unwrap()
     else {
         panic!("shell must execute");
     };
@@ -8971,8 +9147,36 @@ fn artifact_recovery_legacy_missing_snapshot_never_borrows_current_body() {
 #[test]
 fn versioned_delivery_requires_every_current_run_file() {
     let dir = tempfile::tempdir().unwrap();
-    let pack: PackDef=serde_json::from_value(json!({"name":"complete delivery","version":1,"stages":[{"name":"build","roles":["worker"],"due":["代码"]}]})).unwrap();
+    // Q8 now requires actual applicable check evidence for UI source. Keep this
+    // file-completeness regression as a tiny valid web fixture with real static
+    // semantics/accessibility/bundle-size checks instead of bypassing quality.
+    let source = |path: &str| {
+        match path {
+        "index.html" => "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Fixture</title><body><main><h1>Example</h1></main></body></html>",
+        "app.js" => "document.documentElement.dataset.ready = 'true';",
+        "style.css" => "body { color: #111; background: #fff; }",
+        _ => unreachable!(),
+    }
+    };
+    for (name, body) in [
+        ("tests.sh", "test -s index.html && test -s app.js && test -s style.css\n"),
+        ("accessibility.sh", "grep -q 'lang=\"en\"' index.html && grep -q '<title>' index.html && grep -q '<main>' index.html\n"),
+        ("performance.sh", "test \"$(wc -c < index.html)\" -lt 1024 && test \"$(wc -c < app.js)\" -lt 1024 && test \"$(wc -c < style.css)\" -lt 1024\n"),
+    ] { std::fs::write(dir.path().join(name),body).unwrap(); }
+    let pack: PackDef=serde_json::from_value(json!({"name":"complete delivery","version":1,"stages":[{"name":"build","roles":["worker"],"due":["代码"],"checks":["sh tests.sh","sh accessibility.sh","sh performance.sh"],"quality_checks":{"tests":"sh tests.sh","accessibility":"sh accessibility.sh","performance":"sh performance.sh"}}]})).unwrap();
     let wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
+    // Owner Q2/Q5 now gates actual UI source delivery. This fixture tests file
+    // completeness under an already confirmed design, not design selection.
+    let direction = crate::design::require(&wb.db, &wb.project_id, "a0").unwrap();
+    super::choose_design_direction(
+        &wb.db,
+        &wb.project_id,
+        direction.question_id.as_deref().unwrap(),
+        direction.revision,
+        None,
+        Some("Existing owner-approved test layout"),
+    )
+    .unwrap();
     wb.open_stage(0).unwrap();
     let ctx = wb.ctx_for("a0", Some(active_run_id(&wb)));
     for path in ["index.html", "app.js", "style.css"] {
@@ -8981,11 +9185,11 @@ fn versioned_delivery_requires_every_current_run_file() {
                 &wb.db,
                 &ctx,
                 "artifact_write",
-                json!({"path":path,"kind":"代码","content":"source"}),
+                json!({"path":path,"kind":"代码","content":source(path)}),
             )
             .unwrap();
     }
-    std::fs::write(dir.path().join("index.html"), "source").unwrap();
+    std::fs::write(dir.path().join("index.html"), source("index.html")).unwrap();
     let result = serde_json::to_value(wb.advance().unwrap()).unwrap();
     assert_eq!(
         result["action"], "incomplete",
@@ -8999,7 +9203,7 @@ fn versioned_delivery_requires_every_current_run_file() {
         .iter()
         .any(|m| m.as_str().unwrap().contains("style.css")));
     for path in ["app.js", "style.css"] {
-        std::fs::write(dir.path().join(path), "source").unwrap();
+        std::fs::write(dir.path().join(path), source(path)).unwrap();
     }
     std::fs::remove_file(dir.path().join(".hexagon/style.css")).unwrap();
     assert_eq!(
@@ -9007,11 +9211,10 @@ fn versioned_delivery_requires_every_current_run_file() {
         "incomplete",
         "registered artifact body must exist too"
     );
-    std::fs::write(dir.path().join(".hexagon/style.css"), "source").unwrap();
-    assert_eq!(
-        serde_json::to_value(wb.advance().unwrap()).unwrap()["action"],
-        "pack_finished"
-    );
+    std::fs::write(dir.path().join(".hexagon/style.css"), source("style.css")).unwrap();
+    wb.run_checks().unwrap();
+    let complete = serde_json::to_value(wb.advance().unwrap()).unwrap();
+    assert_eq!(complete["action"], "pack_finished", "{complete}");
 }
 
 #[test]
@@ -9306,7 +9509,9 @@ fn versioned_reviews_legacy_other_reviewers_and_other_runs_do_not_attest_current
 #[test]
 fn versioned_reviews_code_copy_changes_invalidate_review() {
     let dir = tempfile::tempdir().unwrap();
-    let pack:PackDef=serde_json::from_value(json!({"name":"code review","version":1,"stages":[{"name":"code","roles":["worker","reviewer"],"due":["代码"],"reviews":[{"artifact_kind":"代码","reviewer":"reviewer"}],"stamp_point":true}]})).unwrap();
+    // Ticket 04: review freshness is independent of the real source-presence
+    // check now required before new code can reach a final stamp.
+    let pack:PackDef=serde_json::from_value(json!({"name":"code review","version":1,"stages":[{"name":"code","roles":["worker","reviewer"],"due":["代码"],"checks":["test -s app.rs"],"quality_checks":{"tests":"test -s app.rs"},"reviews":[{"artifact_kind":"代码","reviewer":"reviewer"}],"stamp_point":true}]})).unwrap();
     let wb = Workbench::for_test(dir.path(), &["worker", "reviewer"], Some(pack)).unwrap();
     wb.open_stage(0).unwrap();
     let run = active_run_id(&wb);
@@ -9436,7 +9641,9 @@ fn versioned_checks_include_artifacts_and_ignored_sources_but_exclude_build_outp
     std::fs::write(dir.path().join("target/source.rs"), "tracked source").unwrap();
     std::fs::write(dir.path().join(".gitignore"), "target/\nignored/\n").unwrap();
     crate::git::run(dir.path(), &["add", "-f", "target/source.rs"]).unwrap();
-    let pack:PackDef=serde_json::from_value(json!({"name":"check inputs","version":1,"stages":[{"name":"test","roles":["worker"],"due":["结构说明"],"checks":["mkdir -p target && printf generated > target/cache.bin"],"stamp_point":true}]})).unwrap();
+    // Ticket 04: execute a real input assertion as well as generating output;
+    // output generation alone cannot serve as tests for changed source files.
+    let pack:PackDef=serde_json::from_value(json!({"name":"check inputs","version":1,"stages":[{"name":"test","roles":["worker"],"due":["结构说明"],"checks":["mkdir -p target && printf generated > target/cache.bin && test -s target/source.rs"],"quality_checks":{"tests":"mkdir -p target && printf generated > target/cache.bin && test -s target/source.rs"},"stamp_point":true}]})).unwrap();
     let wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
     wb.open_stage(0).unwrap();
     let ctx = wb.ctx_for("a0", Some(active_run_id(&wb)));
@@ -9594,8 +9801,10 @@ fn versioned_checks_final_acceptance_rechecks_prior_stage_inputs() {
 #[test]
 fn versioned_checks_source_subdirectories_named_like_outputs_remain_inputs() {
     let dir = tempfile::tempdir().unwrap();
+    // Ticket 04: establish real presence evidence first, then prove that even
+    // a still-present source file loses acceptance when its bytes change.
     let pack: PackDef = serde_json::from_value(json!({"name":"sources","version":1,"stages":[
-        {"name":"accept","roles":["worker"],"due":[],"checks":["true"],"stamp_point":true}
+        {"name":"accept","roles":["worker"],"due":[],"checks":["test -s src/build/new.rs"],"quality_checks":{"tests":"test -s src/build/new.rs"},"stamp_point":true}
     ]}))
     .unwrap();
     let wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
@@ -9759,14 +9968,15 @@ fn versioned_checks_symlink_targets_obey_fingerprint_read_budget() {
         evidence.fingerprint.is_none(),
         "a short symlink must not bypass the actual bytes read limit"
     );
+    // Ticket 04 (2026-10-01): unknown source scope now fails before opening a
+    // stamp card, rather than allowing a card that final acceptance rejects.
     assert_eq!(
         serde_json::to_value(wb.advance().unwrap()).unwrap()["action"],
-        "awaiting_stamp"
-    );
-    assert_eq!(
-        serde_json::to_value(wb.stamp().unwrap()).unwrap()["action"],
         "incomplete"
     );
+    assert!(evidence
+        .missing
+        .contains(&"check:quality:change_scope".into()));
 }
 
 #[test]
@@ -11392,9 +11602,15 @@ fn isolated_live_candidate_needs_all_original_attempts_and_never_claims_real_ben
         wb.register_provider("default", task_provider(task));
         let run = wb.evaluate_next_live(&plan.id).unwrap();
         assert_eq!(
-            run.state, "waiting_human",
-            "attempt {index}: {:?}",
-            run.error
+            run.state,
+            "waiting_human",
+            "attempt {index}, task {}: {:?}; evidence={:?}",
+            task.id,
+            run.error,
+            Workbench::open_evaluation_host(Path::new(&run.workspace))
+                .unwrap()
+                .stage_evidence()
+                .unwrap()
         );
         let attention = wb
             .begin_evaluation_attention(&run.id, eval::EvaluationActor::Scripted)
@@ -13476,6 +13692,8 @@ fn local_similarity_interrupts_inference_and_rejects_changed_source() {
         }));
         let mut ctx = wb.ctx_for("a0", None);
         ctx.subagent = Some(crate::subagent::Scope {
+            approval_mode: Default::default(),
+            permission_rules: Default::default(),
             halt,
             answer: Default::default(),
             mcp: Default::default(),
@@ -13980,6 +14198,8 @@ fn scoped_search_rejects_invalid_scope_and_stopped_calls() {
         .is_err());
     ctx.deadline = None;
     ctx.subagent = Some(crate::subagent::Scope {
+        approval_mode: Default::default(),
+        permission_rules: Default::default(),
         halt: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         answer: Default::default(),
         mcp: Default::default(),
@@ -15069,4 +15289,620 @@ fn source_mode_replays_native_reasoning_only_until_fresh_review() {
         .iter()
         .filter_map(|i| i.message.as_ref())
         .all(|m| !m.body.contains("native-")));
+}
+
+struct DesktopApprovalEffect(CountingAction);
+impl crate::tools::Tool for DesktopApprovalEffect {
+    fn name(&self) -> &str {
+        "remote_publish"
+    }
+    fn description(&self) -> &str {
+        "Local counter fixture; never contacts a remote"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    fn risk(&self) -> crate::tools::RiskClass {
+        crate::tools::RiskClass::Exec
+    }
+    fn exec(
+        &self,
+        db: &crate::db::Db,
+        input: &Value,
+        ctx: &crate::tools::ToolContext,
+    ) -> Result<Value, crate::tools::ToolError> {
+        crate::tools::Tool::exec(&self.0, db, input, ctx)
+    }
+}
+
+#[test]
+fn desktop_permission_resumes_with_result_without_replaying_effect() {
+    // Live acceptance 2026-10-01: approval wrote a tool result but left the UI idle.
+    for allow in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // ADR 0069: ordinary local tools auto-run at L4. This synthetic tool
+        // uses the always-Ask name but its only effect is a local counter.
+        wb.registry
+            .register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            text_response("plan"),
+            tool_response(vec![("write", "remote_publish", json!({}))]),
+            text_response("continued after owner decision"),
+        ]));
+        wb.register_provider("default", provider.clone());
+        let out = wb.dispatch("worker", "original task", &[]).unwrap();
+        let TurnOutcome::AwaitingPermission(qid) = out else {
+            panic!(
+                "{out:?}: {:?}",
+                events(
+                    &wb,
+                    Some(&[EventKind::ToolResult, EventKind::PermissionDenied])
+                )
+                .unwrap()
+            )
+        };
+        wb.answer_permission_and_continue(&qid, allow, None, "activation")
+            .unwrap();
+        let requests = provider.recorded();
+        assert!(
+            requests.len() >= 3,
+            "approval must continue the waiting model"
+        );
+        let restored = serde_json::to_string(&requests[2].messages).unwrap();
+        assert!(restored.contains("original task"));
+        assert!(restored.contains("tool_result"));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(allow)
+        );
+        let count = requests.len();
+        assert!(wb
+            .answer_permission_and_continue(&qid, allow, None, "activation")
+            .is_err());
+        assert_eq!(provider.recorded().len(), count);
+        let effects = events(&wb, Some(&[EventKind::ToolCalled])).unwrap();
+        assert_eq!(effects.len(), 1, "continuation must not replay effects");
+    }
+}
+
+#[test]
+fn run_test_rejection_does_not_create_unknown_effect_card() {
+    // Live acceptance 2026-10-01: `cd web && npm run check` was rejected
+    // before spawn, but an opaque Exec error stranded the owner on an unknown card.
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["QA"], None).unwrap();
+    wb.registry.register(crate::subagent::RunTest);
+    let out = owner_approved_tool_call(&wb, "run_test", json!({"cmd":"cd web && npm run check"}));
+    assert!(
+        matches!(out, Err(crate::tools::ToolError::NotExecuted(_))),
+        "{out:?}"
+    );
+    let state: String = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT state FROM tool_actions WHERE tool='run_test'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert!(pending_questions(&wb).unwrap().is_empty());
+}
+
+#[test]
+fn queued_owner_steering_is_not_dispatched_again() {
+    struct OwnerDuringTurn(Arc<std::sync::atomic::AtomicI64>);
+    impl crate::tools::Tool for OwnerDuringTurn {
+        fn name(&self) -> &str {
+            "owner_during_turn"
+        }
+        fn description(&self) -> &str {
+            "test owner control connection"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type":"object"})
+        }
+        fn risk(&self) -> crate::tools::RiskClass {
+            crate::tools::RiskClass::Read
+        }
+        fn exec(
+            &self,
+            db: &Db,
+            _: &Value,
+            ctx: &crate::tools::ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            let (id, _) = crate::commands::send_via_control(
+                db,
+                &ctx.project_id,
+                "@worker finish current task",
+                &[],
+            )
+            .map_err(|e| crate::tools::ToolError::Exec(e.to_string()))?;
+            self.0.store(id, std::sync::atomic::Ordering::SeqCst);
+            Ok(json!({"queued":id}))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let id = Arc::new(std::sync::atomic::AtomicI64::new(0));
+    wb.registry.register(OwnerDuringTurn(id.clone()));
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("plan"),
+        tool_response(vec![("owner", "owner_during_turn", json!({}))]),
+        text_response("finished with steering"),
+        text_response("duplicate plan"),
+        text_response("duplicate delivery"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    wb.dispatch("worker", "initial work", &[]).unwrap();
+    let count = provider.recorded().len();
+    assert_eq!(count, 3);
+    let message_id = id.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(message_id > 0);
+    assert!(events(&wb, None)
+        .unwrap()
+        .iter()
+        .any(|e| e.payload["kind"] == "steering_injected" && e.payload["msg_id"] == message_id));
+    // Live acceptance #16: desktop queued this same message behind the turn,
+    // then dispatched it again after QA had already handed off to review.
+    wb.route_queued_owner(message_id).unwrap();
+    assert_eq!(
+        provider.recorded().len(),
+        count,
+        "already injected owner input must not start a second turn"
+    );
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 24,
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/queued-owner.txt"))),
+        ..proptest::test_runner::Config::default()
+    })]
+    #[test]
+    fn queued_owner_consumption_is_scoped_to_message_and_agent(
+        targets in proptest::collection::vec(proptest::bool::ANY, 3),
+        consumed in proptest::collection::vec(proptest::bool::ANY, 3),
+        matching_message in proptest::bool::ANY,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let roles = ["one", "two", "three"];
+        let mut wb = Workbench::for_test(dir.path(), &roles, None).unwrap();
+        wb.db.conn().execute("UPDATE agents SET model_slot=id", []).unwrap();
+        let providers: Vec<_> = (0..3).map(|i| {
+            let p = Arc::new(ScriptedProvider::new(vec![text_response("plan"),text_response("done")]));
+            wb.register_provider(&format!("a{i}"), p.clone());
+            p
+        }).collect();
+        let body = roles.iter().enumerate().filter(|(i,_)| targets[*i])
+            .map(|(i,r)| format!("@{r}[a{i}]")) .collect::<Vec<_>>().join(" ");
+        proptest::prop_assume!(!body.is_empty());
+        let (id, _) = crate::commands::send_via_control(&wb.db, &wb.project_id, &body, &[]).unwrap();
+        for (i, is_consumed) in consumed.iter().enumerate() {
+            if *is_consumed {
+                wb.db.append_event(&wb.project_id, EventKind::System,
+                    json!({"kind":"steering_injected","msg_id": if matching_message {id} else {id+100},"round":1}),
+                    Some(&format!("a{i}")), None).unwrap();
+            }
+        }
+        wb.route_queued_owner(id).unwrap();
+        for i in 0..3 {
+            let expected = if targets[i] && !(matching_message && consumed[i]) {2} else {0};
+            proptest::prop_assert_eq!(providers[i].recorded().len(), expected);
+        }
+    }
+}
+
+#[test]
+fn queued_owner_text_steering_does_not_consume_attachments() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("plan"),
+        text_response("with attachment"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    let attachments = vec![crate::trace::AttachRef {
+        media_type: "image/png".into(),
+        path: ".hexagon/inbox/not-present.png".into(),
+        bytes: 1,
+        name: "not-present.png".into(),
+    }];
+    let (id, _) = crate::commands::send_via_control(
+        &wb.db,
+        &wb.project_id,
+        "@worker inspect attachment",
+        &attachments,
+    )
+    .unwrap();
+    wb.db
+        .append_event(
+            &wb.project_id,
+            EventKind::System,
+            json!({"kind":"steering_injected","msg_id":id,"round":1}),
+            Some("a0"),
+            None,
+        )
+        .unwrap();
+    // The old steering envelope only contained text. Even a missing attachment
+    // must reach normal attachment diagnostics, not disappear with the text.
+    wb.route_queued_owner(id).unwrap();
+    assert_eq!(provider.recorded().len(), 2);
+}
+
+#[test]
+fn queued_owner_unnamed_steering_does_not_start_another_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let (id, _) =
+        crate::commands::send_via_control(&wb.db, &wb.project_id, "finish current work", &[])
+            .unwrap();
+    wb.db
+        .append_event(
+            &wb.project_id,
+            EventKind::System,
+            json!({"kind":"steering_injected","msg_id":id,"round":1}),
+            Some("a0"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(wb.route_queued_owner(id).unwrap(), UnnamedRoute::Skipped);
+}
+
+// Live acceptance #17: a crash during an extra turn at the final stamp left
+// the UI busy forever. Reopen must close the turn without reopening the stage.
+#[test]
+fn reopen_closes_dangling_turn_at_stamp_without_replaying() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack: PackDef = serde_json::from_value(json!({
+        "name":"t","version":1,
+        "stages":[{"name":"review","roles":["worker"],"due":[],"stamp_point":true}]
+    }))
+    .unwrap();
+    {
+        let wb = Workbench::open(
+            dir.path(),
+            "t",
+            &[("a0".into(), "worker".into())],
+            Some(pack.clone()),
+        )
+        .unwrap();
+        wb.open_stage(0).unwrap();
+        wb.advance().unwrap();
+        let run = wb.active_run().unwrap().unwrap();
+        wb.db
+            .append_event(
+                "p1",
+                EventKind::TurnStarted,
+                json!({"agent":"a0"}),
+                Some("a0"),
+                Some(&run.id),
+            )
+            .unwrap();
+    }
+    for _ in 0..2 {
+        let wb = Workbench::open(
+            dir.path(),
+            "t",
+            &[("a0".into(), "worker".into())],
+            Some(pack.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            events(&wb, Some(&[EventKind::TurnFailed])).unwrap().len(),
+            1
+        );
+        assert_eq!(stage_status(&wb).unwrap()[0]["state"], "waiting_stamp");
+        let pending = pending_questions(&wb).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["kind"], "stamp");
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 24,
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/completed-rewind.txt"))),
+        ..proptest::test_runner::Config::default()
+    })]
+    #[test]
+    fn completed_pack_rewind_requires_a_finished_latest_run(to in 0usize..4, state in 0usize..3) {
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({"name":"t","version":1,"stages":[
+            {"name":"build","roles":["worker"],"due":[]},
+            {"name":"test","roles":["worker"],"due":[]},
+            {"name":"review","roles":["worker"],"due":[],"stamp_point":true}
+        ]})).unwrap();
+        let wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
+        wb.open_stage(0).unwrap();
+        wb.advance().unwrap();
+        wb.advance().unwrap();
+        wb.advance().unwrap();
+        wb.stamp().unwrap();
+        // Owner rework after completion must be possible, but must not bypass
+        // an interrupted/rejected latest run by borrowing an older success.
+        let status = ["done", "interrupted", "rejected"][state];
+        wb.db.conn().execute("UPDATE stage_runs SET state=?1 WHERE seq=2", [status]).unwrap();
+        let result = wb.rewind(to);
+        proptest::prop_assert_eq!(result.is_ok(), state == 0 && to < 2);
+        if state == 0 && to < 2 {
+            proptest::prop_assert_eq!(wb.active_run().unwrap().unwrap().seq, to as i64);
+        } else {
+            proptest::prop_assert!(wb.active_run().unwrap().is_none());
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 12,
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/brief-owner.txt"))),
+        ..proptest::test_runner::Config::default()
+    })]
+    #[test]
+    fn queued_owner_brief_after_permission_is_not_replayed(allow in proptest::bool::ANY) {
+        // Live acceptance #20: permission resume received owner msg59 in its
+        // initial brief, but the desktop queue dispatched it again after handoff.
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker", "other"], None).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls)));
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            text_response("plan"),
+            tool_response(vec![("write", "remote_publish", json!({}))]),
+            text_response("continued with the owner brief"),
+            text_response("duplicate plan"), text_response("duplicate delivery"),
+        ]));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(qid) = wb.dispatch("worker", "original task", &[]).unwrap() else { panic!("expected permission"); };
+        let (id, _) = crate::commands::send_via_control(&wb.db, &wb.project_id, "@worker date patch acceptance", &[]).unwrap();
+        let (other, _) = crate::commands::send_via_control(&wb.db, &wb.project_id, "@other independent work", &[]).unwrap();
+        wb.answer_permission_and_continue(&qid, allow, None, "activation").unwrap();
+        let before = provider.recorded().len();
+        proptest::prop_assert!(serde_json::to_string(&provider.recorded()[2].messages).unwrap().contains("date patch acceptance"));
+        wb.route_queued_owner(id).unwrap();
+        proptest::prop_assert_eq!(provider.recorded().len(), before, "brief delivery must consume this exact owner message");
+        // A cursor also spans unrelated owner input; it must not swallow that work.
+        wb.route_queued_owner(other).unwrap();
+        proptest::prop_assert_eq!(provider.recorded().len(), before + 2);
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn desktop_readiness_never_accepts_missing_or_unknown_grants(bits in proptest::prelude::any::<u32>(), supported in proptest::prelude::any::<bool>()) {
+        let status = super::desktop_permissions_for_test(Ok(bits), supported);
+        proptest::prop_assert_eq!(status.ready, supported && bits == 0x1007);
+        if !status.available { proptest::prop_assert!(!status.ready); }
+    }
+}
+
+#[test]
+fn desktop_component_failure_is_distinct_from_missing_system_grants() {
+    let broken = super::desktop_permissions_for_test(Err("loader failed".into()), true);
+    assert!(!broken.available);
+    assert!(broken.error.is_some());
+    let missing = super::desktop_permissions_for_test(Ok(0x1000), true);
+    assert!(missing.available);
+    assert!(!missing.ready);
+    assert!(missing.error.is_none());
+}
+
+#[test]
+fn desktop_permission_resumes_after_redacted_screenshot_without_panicking_or_replaying() {
+    // Live action1186: the durable screenshot omits pixels, but replay indexed
+    // its absent data key and poisoned the desktop Workbench mutex.
+    struct Observation;
+    impl crate::tools::Tool for Observation {
+        fn name(&self) -> &str {
+            "computer_observe"
+        }
+        fn description(&self) -> &str {
+            "Deterministic screenshot fixture; no native GUI"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type":"object"})
+        }
+        fn risk(&self) -> crate::tools::RiskClass {
+            crate::tools::RiskClass::Read
+        }
+        fn exec(
+            &self,
+            _: &Db,
+            _: &Value,
+            _: &crate::tools::ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            Ok(
+                json!({"image":{"media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jY9sAAAAASUVORK5CYII="}}),
+            )
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["QA"], None).unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(calls.clone())));
+    wb.registry.register(Observation);
+    desktop_control(&wb.db, dir.path(), crate::desktop::DesktopControl::Enable).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("plan"),
+        tool_response(vec![(
+            "observe",
+            "computer_observe",
+            json!({"op":"observe"}),
+        )]),
+        tool_response(vec![("click", "remote_publish", json!({}))]),
+        text_response("continued with a text receipt; new observation required"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    let TurnOutcome::AwaitingPermission(qid) =
+        wb.dispatch("QA", "original ad-hoc task", &[]).unwrap()
+    else {
+        panic!("expected owner approval");
+    };
+    // Exercise the production action persistence/redaction boundary, not a
+    // manually edited receipt. Only the native screenshot provider is replaced.
+    let persisted: String = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT output_json FROM tool_actions WHERE tool='computer_observe'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let receipt: Value = serde_json::from_str(&persisted).unwrap();
+    assert!(receipt["image"].get("data").is_none());
+    assert!(receipt["image"]["omitted"].is_string());
+    let locked = std::sync::Mutex::new(wb);
+    {
+        let wb = locked.lock().unwrap();
+        wb.answer_permission_and_continue(&qid, true, None, "activation")
+            .unwrap();
+    }
+    assert!(!locked.is_poisoned());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let requests = provider.recorded();
+    assert_eq!(requests.len(), 4);
+    let restored = &requests[3].messages;
+    assert!(serde_json::to_string(restored)
+        .unwrap()
+        .contains("observe again for fresh pixels"));
+    for block in restored.iter().flat_map(|message| &message.content) {
+        if let crate::provider::ContentBlock::ToolResult { images, .. } = block {
+            assert!(
+                images.is_empty(),
+                "redacted receipt must not manufacture an image"
+            );
+        }
+    }
+}
+
+// Live acceptance 2026-10-01: abandoning a3's unknown action waited until a2's
+// model turn ended. Exercise the control facade while the execution lock is held.
+fn control_abandon_fixture() -> (tempfile::TempDir, Workbench, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(
+        dir.path(),
+        "control-abandon",
+        &[
+            ("a0".into(), "worker".into()),
+            ("a1".into(), "independent".into()),
+        ],
+        None,
+    )
+    .unwrap();
+    wb.registry.register(CountingAction(Arc::new(
+        std::sync::atomic::AtomicUsize::new(0),
+    )));
+    crate::actions::crash_at(crate::actions::CrashPoint::Effect);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool_call(
+            &wb,
+            "counting_action",
+            json!({})
+        )))
+        .is_err()
+    );
+    drop(wb);
+    let wb = Workbench::open(dir.path(), "control-abandon", &[], None).unwrap();
+    let action = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .iter()
+        .find_map(|q| q.payload["action_id"].as_str().map(str::to_owned))
+        .unwrap();
+    (dir, wb, action)
+}
+
+#[test]
+fn control_abandon_finishes_before_unrelated_model_turn_releases_execution_lock() {
+    let (dir, mut wb, action) = control_abandon_fixture();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    wb.register_provider(
+        "default",
+        Arc::new(HoldProvider {
+            // dispatch uses a plan response followed by an execution response.
+            // Keep the real route and its ordering assertions; both calls need fixtures.
+            inner: ScriptedProvider::new(vec![
+                text_response("Plan: observe once."),
+                text_response("Observed; no changes."),
+            ]),
+            started: Mutex::new(started_tx),
+            release: Mutex::new(release_rx),
+        }),
+    );
+    let db_path = wb.db.path().unwrap().to_path_buf();
+    let root = dir.path().canonicalize().unwrap();
+    let project = wb.project_id.clone();
+    let action2 = action.clone();
+    let writer = std::thread::spawn(move || {
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        let db = Db::open(db_path).unwrap();
+        abandon_tool_action_control(
+            &db,
+            &project,
+            &root,
+            root.to_str().unwrap(),
+            &action2,
+            "owner ends recovery",
+        )
+        .unwrap();
+        // Release the model only after the resolution is committed: no timing-only success.
+        assert!(crate::actions::has_resolution(&db, &action2).unwrap());
+        release_tx.send(()).unwrap();
+    });
+    let execution = Mutex::new(wb);
+    let wb = execution.lock().unwrap();
+    wb.dispatch("independent", "observe once", &[]).unwrap();
+    writer.join().unwrap();
+    assert_eq!(
+        crate::actions::get(&wb.db, &wb.project_id, &action)
+            .unwrap()
+            .state,
+        "unknown"
+    );
+    assert!(!crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .iter()
+        .any(|q| q.payload["action_id"] == action));
+    let all = events(&wb, None).unwrap();
+    let resolved = all
+        .iter()
+        .find(|e| e.payload["action_id"] == action && e.payload["resolution"] == "abandoned")
+        .unwrap()
+        .id;
+    let finished = all
+        .iter()
+        .find(|e| e.kind == EventKind::TurnFinished && e.agent_id.as_deref() == Some("a1"))
+        .unwrap()
+        .id;
+    assert!(resolved < finished);
+    abandon_tool_action_control(
+        &wb.db,
+        &wb.project_id,
+        dir.path(),
+        dir.path().canonicalize().unwrap().to_str().unwrap(),
+        &action,
+        "duplicate click",
+    )
+    .unwrap();
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    #[test]
+    fn control_abandon_rejects_stale_project_identity(reason in "[a-z]{1,24}") {
+        let (dir, wb, action) = control_abandon_fixture();
+        let other = tempfile::tempdir().unwrap();
+        let before = events(&wb, None).unwrap().len();
+        proptest::prop_assert!(abandon_tool_action_control(&wb.db, &wb.project_id, dir.path(), other.path().canonicalize().unwrap().to_str().unwrap(), &action, &reason).is_err());
+        proptest::prop_assert!(!crate::actions::has_resolution(&wb.db, &action).unwrap());
+        proptest::prop_assert_eq!(events(&wb, None).unwrap().len(), before);
+    }
 }

@@ -38,6 +38,10 @@ const RUN_TEST_TIMEOUT_MS: u64 = 120_000;
 
 #[derive(Clone)]
 pub struct Scope {
+    /// Owner Q11: later project widening cannot expand an already dispatched
+    /// child; revocation still takes effect through the current permission gate.
+    pub approval_mode: crate::approval_mode::ApprovalMode,
+    pub permission_rules: Arc<HashSet<String>>,
     /// 停止旗：tasks stop / 激活清场 / Workbench Drop 置位；
     /// 嵌套回合在流 delta 缝与轮顶检查。
     pub halt: Arc<AtomicBool>,
@@ -250,6 +254,15 @@ impl TaskBoard {
             .unwrap()
             .iter()
             .any(|t| t.kind == TaskKind::Subagent && t.status == "running")
+    }
+
+    /// Supplemental completion cannot hide a parent's open todo or unfinished child.
+    pub(crate) fn any_unfinished(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|task| matches!(task.status, "open" | "running" | "failed"))
     }
 
     /// 测试接缝：等所有在跑的派遣线程收尾（join 而不是轮询）。
@@ -547,6 +560,13 @@ fn dispatch(
     }
 
     let scope = Scope {
+        approval_mode: crate::approval_mode::read(db, &ctx.project_id)?.mode,
+        permission_rules: Arc::new(
+            crate::permissions::list_rules(db, &ctx.project_id)?
+                .into_iter()
+                .map(|rule| rule.id)
+                .collect(),
+        ),
         halt: disp.halt,
         answer: disp.answer,
         mcp: Arc::new(pick.clone()),
@@ -991,7 +1011,9 @@ impl crate::tools::Tool for RunTest {
                 "gate_deny",
                 started,
             );
-            return Err(ToolError::Exec(format!("run_test denied: {reason}")));
+            // Live acceptance 2026-10-01: this gate rejects before spawning.
+            // Exec incorrectly created an unknown-effect card for an unexecuted command.
+            return Err(ToolError::NotExecuted(format!("run_test denied: {reason}")));
         }
         let timeout = std::time::Duration::from_millis(
             input["timeout_ms"]

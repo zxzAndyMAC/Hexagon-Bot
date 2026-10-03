@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUiStore } from './store'
 import { api, type TimelineItem, type TurnDelta } from './api'
+import type { TimelineFacts } from './gen/TimelineFacts'
+const originalRefreshFast = useUiStore.getState().refreshFast
+const emptyFacts = (latest_event_id = 0, fields: Partial<TimelineFacts> = {}): TimelineFacts => ({
+  project_root: '/project', latest_event_id, active_turns: [], latest_contexts: [],
+  latest_agent_messages: [], latest_plans: [], settled_tool_streams: [], approval_mode_revision: 0,
+  latest_turn_start_id: null, steered_message_ids: [], ...fields,
+})
+beforeEach(() => useUiStore.setState({ projectRoot: '/project', timelineFacts: emptyFacts(), refreshFast: originalRefreshFast }))
 
 describe('共享原语（ui-audit 票 01）', () => {
   beforeEach(() => useUiStore.setState({ toasts: [], modalScope: 'workbench' }))
@@ -143,14 +151,10 @@ describe('applyDelta（turn-streaming 票 03）', () => {
 
 describe('流式交接（ui-audit 票 08 / P1-7）', () => {
   beforeEach(() =>
-    useUiStore.setState({ streams: {}, thinkings: {}, streamDone: {}, timeline: [], stages: [], pending: [], toasts: [] }),
+    // Issue15: handoff starts from complete facts; the viewport can be empty.
+    useUiStore.setState({ timelineCaughtUp: true, streams: {}, thinkings: {}, streamDone: {}, timeline: [], stages: [], pending: [], toasts: [] }),
   )
   afterEach(() => vi.restoreAllMocks())
-
-  const agentMsg = (id: number, author: string): TimelineItem => ({
-    event: { id, project_id: 'p1', kind: 'agent_message', agent_id: author, stage_run_id: null, payload: {}, created_at: '' },
-    message: { id, author, body: 'done text', tokens: [], attachments: [], created_at: '', thinking: '留下的推理' },
-  })
 
   it('持久消息到达后对应 stream 清除，其余保留', async () => {
     const s = useUiStore.getState()
@@ -159,8 +163,8 @@ describe('流式交接（ui-audit 票 08 / P1-7）', () => {
     s.applyDelta(d({ agent_id: 'a2', text: 'wip', thinking: '还在想' }))
     s.applyDelta(d({ agent_id: 'a2', done: true }))
 
-    const lastId = useUiStore.getState().timeline.at(-1)?.event.id ?? 0
-    vi.spyOn(api, 'timeline').mockResolvedValueOnce([agentMsg(lastId + 1, 'a1')])
+    const lastId = useUiStore.getState().timelineFacts?.latest_event_id ?? 0
+    vi.spyOn(api, 'timelineFacts').mockResolvedValueOnce(emptyFacts(lastId + 1, {latest_agent_messages:[{agent_id:'a1',event_id:lastId+1}]}))
     await useUiStore.getState().refreshFast()
     const st = useUiStore.getState()
     expect(st.streams.a1).toBeUndefined()   // 持久化确认 → 交接
@@ -173,7 +177,7 @@ describe('流式交接（ui-audit 票 08 / P1-7）', () => {
   it('同 agent 旧水位之前的消息不触发交接', async () => {
     // 水位后没有该 agent 的新消息 → 不交接（dev mock 时间线含 a1
     // 历史消息，这里钉住：历史行不算交接凭证，必须 id > 水位）
-    vi.spyOn(api, 'timeline').mockResolvedValue([])
+    vi.spyOn(api, 'timelineFacts').mockResolvedValue(emptyFacts())
     const s = useUiStore.getState()
     s.applyDelta(d({ agent_id: 'a1', text: 'hello' }))
     s.applyDelta(d({ agent_id: 'a1', done: true }))
@@ -183,7 +187,7 @@ describe('流式交接（ui-audit 票 08 / P1-7）', () => {
   })
 
   it('超时兜底：done 超 STREAM_HANDOFF_MS 未持久化 → 清除防泄漏', async () => {
-    vi.spyOn(api, 'timeline').mockResolvedValue([]) // 永不落库的路径
+    vi.spyOn(api, 'timelineFacts').mockResolvedValue(emptyFacts()) // 永不落库的路径
     vi.useFakeTimers()
     try {
       const s = useUiStore.getState()
@@ -210,48 +214,56 @@ const mkItem = (id: number): TimelineItem => ({
   message: null,
 })
 
-describe('refreshFast 增量归并（arch-review 票 07）', () => {
+// Issue15: ASC page accumulation moved into useTimelineWindow.test.tsx. Keep
+// this store seam focused on complete facts and concurrent card/state freshness.
+describe('refreshFast 独立完整事实（issue15）', () => {
   beforeEach(() => useUiStore.setState({ timeline: [], stages: [], pending: [] }))
   afterEach(() => vi.restoreAllMocks())
 
-  it('空时间线首拉全量；之后按末条 id 增量', async () => {
-    const spy = vi.spyOn(api, 'timeline')
+  it('首拍读取完整事实，后续不拉取或重置可见历史', async () => {
+    const legacy = vi.spyOn(api, 'timeline')
+    const facts = vi.spyOn(api, 'timelineFacts')
+    useUiStore.setState({timeline:[mkItem(9999)]})
     await useUiStore.getState().refreshFast()
-    expect(spy).toHaveBeenCalledWith(undefined)
-    const n = useUiStore.getState().timeline.length
-    expect(n).toBeGreaterThan(0)
-    const lastId = useUiStore.getState().timeline.at(-1)!.event.id
-
+    expect(facts).toHaveBeenCalledWith({expected_project_root:'/project',watched_tool_streams:[],watched_message_ids:[]})
+    expect(useUiStore.getState().timelineFacts?.latest_event_id).toBeGreaterThan(0)
     await useUiStore.getState().refreshFast()
-    expect(spy).toHaveBeenLastCalledWith(lastId)
-    expect(useUiStore.getState().timeline.length).toBe(n) // mock 无新事件 → 不增
+    expect(legacy).not.toHaveBeenCalled()
+    expect(useUiStore.getState().timeline.map(item=>item.event.id)).toEqual([9999])
   })
 
-  it('新事件追加；重复返回同批幂等', async () => {
-    const spy = vi.spyOn(api, 'timeline')
-    await useUiStore.getState().refreshFast()
-    const n = useUiStore.getState().timeline.length
-    const lastId = useUiStore.getState().timeline.at(-1)!.event.id
-
-    spy.mockResolvedValueOnce([mkItem(lastId + 1)])
-    await useUiStore.getState().refreshFast()
-    expect(useUiStore.getState().timeline.at(-1)!.event.id).toBe(lastId + 1)
-    expect(useUiStore.getState().timeline.length).toBe(n + 1)
-
-    // 实现漂移返回重复段：客户端 id 闸挡住
-    spy.mockResolvedValueOnce([mkItem(lastId + 1), mkItem(lastId + 2)])
-    await useUiStore.getState().refreshFast()
-    const ids = useUiStore.getState().timeline.map((i) => i.event.id)
-    expect(new Set(ids).size).toBe(ids.length)
-    expect(useUiStore.getState().timeline.at(-1)!.event.id).toBe(lastId + 2)
+  it('重复事实幂等，较旧水位不能回退投影', async () => {
+    const read=vi.spyOn(api,'timelineFacts').mockResolvedValueOnce(emptyFacts(10)).mockResolvedValueOnce(emptyFacts(10)).mockResolvedValueOnce(emptyFacts(9))
+    for(let i=0;i<3;i++) await useUiStore.getState().refreshFast()
+    expect(read).toHaveBeenCalledTimes(3)
+    expect(useUiStore.getState().timelineFacts?.latest_event_id).toBe(10)
+    expect(useUiStore.getState().timeline).toEqual([])
   })
 
-  it('refresh() 全量重置游标', async () => {
-    useUiStore.setState({ timeline: [mkItem(9999)] })
+  // Live acceptance 2026-10-01: reverse poll responses restored stale cards.
+  // Window de-duplication now has a separate hook regression; this keeps the
+  // independently refreshed current-state ordering requirement unchanged.
+  it.each([false, true])('并发刷新乱序=%s 时不回退待决/阶段快照', async reverse => {
+    const original = await api.stageStatus()
+    const newer = original.map((row):typeof row=>({...row,state:'done'}))
+    let first!:(rows:typeof original)=>void
+    let second!:(rows:typeof original)=>void
+    vi.spyOn(api,'stageStatus').mockImplementationOnce(()=>new Promise(yes=>{first=yes})).mockImplementationOnce(()=>new Promise(yes=>{second=yes}))
+    const a=useUiStore.getState().refreshFast(),b=useUiStore.getState().refreshFast()
+    if(reverse){second(newer);await b;first(original);await a}
+    else {first(original);await a;second(newer);await b}
+    expect(useUiStore.getState().stages).toEqual(newer)
+  })
+
+  it('beginProjectSwitch同步清窗口，普通refresh保留当前阅读窗口', async()=>{
+    useUiStore.setState({timeline:[mkItem(9999)]})
     await useUiStore.getState().refresh()
-    const tl = useUiStore.getState().timeline
-    expect(tl[0].event.id).toBe(1) // 回到 mock 首段，假数据被清
-    expect(tl.some((i) => i.event.id === 9999)).toBe(false)
+    expect(useUiStore.getState().timeline[0].event.id).toBe(9999)
+    const epoch=useUiStore.getState().projectEpoch
+    useUiStore.getState().beginProjectSwitch()
+    expect(useUiStore.getState().projectEpoch).toBe(epoch+1)
+    expect(useUiStore.getState().timeline).toEqual([])
+    expect(useUiStore.getState().projectRoot).toBeNull()
   })
 })
 
@@ -259,13 +271,13 @@ describe('invalidate 失效标签（arch-review 票 07）', () => {
   beforeEach(() => useUiStore.setState({ timeline: [], stages: [], pending: [], avatarHashes: {}, avatars: {} }))
   afterEach(() => vi.restoreAllMocks())
 
-  it('refreshFast 稳态打时间线三件，另问开场草案还在不在', async () => {
-    // 票 17：草案是否等人点头跟时间线同一拍，但不算慢切片。
+  it('refreshFast 稳态只打状态与完整事实，另问开场草案还在不在', async () => {
+    // Issue15: facts replaces timeline polling; drafts remain an independent read.
     // 原先这里钉死 3 个端点；多出来的是 intakeDraftPending，慢切片仍然不打。
     const spies = {
       stageStatus: vi.spyOn(api, 'stageStatus'),
       pendingQuestions: vi.spyOn(api, 'pendingQuestions'),
-      timeline: vi.spyOn(api, 'timeline'),
+      timelineFacts: vi.spyOn(api, 'timelineFacts'),
       intakeDraftPending: vi.spyOn(api, 'intakeDraftPending'),
       usage: vi.spyOn(api, 'usage'),
       artifacts: vi.spyOn(api, 'artifacts'),
@@ -276,7 +288,7 @@ describe('invalidate 失效标签（arch-review 票 07）', () => {
     await useUiStore.getState().refreshFast()
     expect(spies.stageStatus).toHaveBeenCalled()
     expect(spies.pendingQuestions).toHaveBeenCalled()
-    expect(spies.timeline).toHaveBeenCalled()
+    expect(spies.timelineFacts).toHaveBeenCalled()
     expect(spies.intakeDraftPending).toHaveBeenCalled()
     for (const k of ['usage', 'artifacts', 'team', 'autonomy', 'projectInfo'] as const) {
       expect(spies[k], k).not.toHaveBeenCalled()
@@ -306,7 +318,7 @@ describe('invalidate 失效标签（arch-review 票 07）', () => {
     const spies = {
       stageStatus: vi.spyOn(api, 'stageStatus'),
       pendingQuestions: vi.spyOn(api, 'pendingQuestions'),
-      timeline: vi.spyOn(api, 'timeline'),
+      timelineFacts: vi.spyOn(api, 'timelineFacts'),
     }
     await useUiStore.getState().invalidate('usage')
     for (const spy of Object.values(spies)) expect(spy).toHaveBeenCalled()
@@ -364,24 +376,14 @@ describe('代际守卫（ui-audit 票 06 / P2-9）', () => {
   beforeEach(() => useUiStore.setState({ toasts: [], timeline: [], stages: [], pending: [] }))
   afterEach(() => vi.restoreAllMocks())
 
-  it('refreshFast 在飞期间调 refresh()：旧响应落地被丢弃', async () => {
-    // 旧项目的慢响应：resolve 时携带一条幽灵事件
-    let resolveStale!: (v: TimelineItem[]) => void
-    const stalePromise = new Promise<TimelineItem[]>((r) => { resolveStale = r })
-    const spy = vi.spyOn(api, 'timeline')
-      .mockImplementationOnce(() => stalePromise)
-
-    const staleCall = useUiStore.getState().refreshFast() // 起飞，捕获旧代际
-    // 切项目：refresh() 递增代际 + 清空游标 + 正常拉新一轮
+  it('refreshFast 在飞期间调 refresh()：旧facts落地被丢弃', async () => {
+    let resolveStale!:(value:TimelineFacts)=>void
+    vi.spyOn(api,'timelineFacts').mockImplementationOnce(()=>new Promise(yes=>{resolveStale=yes}))
+    const stale=useUiStore.getState().refreshFast()
     await useUiStore.getState().refresh()
-    const baseline = useUiStore.getState().timeline.length
-
-    resolveStale([mkItem(99999)]) // 旧响应此刻才回来——必须作废
-    await staleCall
-    const ids = useUiStore.getState().timeline.map((i) => i.event.id)
-    expect(ids).not.toContain(99999)
-    expect(useUiStore.getState().timeline.length).toBe(baseline)
-    spy.mockRestore()
+    const baseline=useUiStore.getState().timelineFacts
+    resolveStale(emptyFacts(99999));await stale
+    expect(useUiStore.getState().timelineFacts).toBe(baseline)
   })
 
   it('refreshSlow 在飞期间 refresh()：旧切片不覆盖新状态', async () => {
@@ -466,4 +468,37 @@ describe('夜航主题（票 21 / 方向卡 6）', () => {
     useUiStore.getState().setThemePref('dark')
     expect(document.documentElement.dataset.theme).toBe('dark')
   })
+})
+
+// Issue15: history pages no longer authorize live-state inference. Current
+// facts are available independently and must not clear still-streaming deltas.
+it('partial history does not delay current facts or clear current deltas', async()=>{
+  vi.restoreAllMocks()
+  useUiStore.setState({timeline:[mkItem(1)],timelineCaughtUp:false,streams:{},thinkings:{},streamDone:{}})
+  vi.spyOn(api,'timelineFacts').mockResolvedValue(emptyFacts(501))
+  useUiStore.getState().applyDelta(d({text:'real current output'}))
+  await originalRefreshFast()
+  expect(useUiStore.getState().timelineFacts?.latest_event_id).toBe(501)
+  expect(useUiStore.getState().timeline.map(item=>item.event.id)).toEqual([1])
+  expect(useUiStore.getState().streams.a1[0]).toBe('real current output')
+})
+
+it('completed streams survive historical receipts until the first complete facts baseline',async()=>{
+  vi.restoreAllMocks()
+  useUiStore.setState({timeline:[mkItem(1000)],timelineFacts:null,streams:{},thinkings:{},streamDone:{}})
+  const read=vi.spyOn(api,'timelineFacts')
+  vi.useFakeTimers()
+  try {
+    useUiStore.getState().applyDelta(d({text:'real completed output'}))
+    useUiStore.getState().applyDelta(d({done:true}))
+    read.mockResolvedValue(emptyFacts(1500,{latest_agent_messages:[{agent_id:'a1',event_id:1001}]}))
+    vi.advanceTimersByTime(20_000)
+    await originalRefreshFast()
+    expect(useUiStore.getState().streams.a1[0]).toBe('real completed output')
+    await originalRefreshFast()
+    expect(useUiStore.getState().streams.a1[0]).toBe('real completed output')
+    vi.advanceTimersByTime(11_000)
+    await originalRefreshFast()
+    expect(useUiStore.getState().streams.a1).toBeUndefined()
+  } finally {read.mockRestore();vi.useRealTimers()}
 })

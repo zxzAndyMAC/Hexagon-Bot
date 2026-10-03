@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildRows, deriveWorkbenchStatus, nodeMarks, stampedByAutonomy, type StatusSources } from './timelineModel'
+import { buildRows, deriveWorkbenchStatus, nodeMarks, openTurn, openTurns, stampedByAutonomy, type StatusSources } from './timelineModel'
 import { severityOf } from './decisions'
 import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api'
 
 const ev = (id: number, kind: EventKind, payload: Record<string, unknown> = {}, author?: string): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id: author ?? null, stage_run_id: null, payload, created_at: '' },
-  message: author ? { id, author, body: 'hi', tokens: [], attachments: [], created_at: '', thinking: '' } : null,
+  message: author ? { id, author, body: 'hi', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } : null,
 })
 
 const q = (id: string, kind: QueuedCard['kind'], payload: Record<string, unknown> = {}): PendingQuestion => ({
@@ -22,6 +22,14 @@ describe('stampedByAutonomy', () => {
 })
 
 describe('buildRows', () => {
+  it('does not send result-only zero-height rows to Virtuoso after a permission boundary', () => {
+    const rows = buildRows([
+      ev(1, 'tool_called', { tool: 'fs_write', seq: 'x' }),
+      ev(2, 'permission_allowed'),
+      ev(3, 'tool_result', { seq: 'x', ok: true }),
+    ], 'all')
+    expect(rows.map((r) => r.type)).toEqual(['toolgroup', 'item'])
+  })
   const tl = [
     ev(1, 'stage_started', { stage: '实现' }),
     ev(2, 'tool_called', { tool: 'read' }),
@@ -165,7 +173,7 @@ describe('parseUnifiedDiff / extractDiffBlock', () => {
 describe('story 档（ui-audit 票 18 / 方向卡 3）', () => {
   const mk = (id: number, kind: string, msg = false): TimelineItem => ({
     event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload: kind === 'turn_started' ? { stage: 'build' } : {}, created_at: '' },
-    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], created_at: '', thinking: '' } : null,
+    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } : null,
   }) as unknown as TimelineItem
 
   it('toolgroup/sysgroup 全移除；高危子类豁免可见；turn_started 成章', () => {
@@ -194,7 +202,7 @@ describe('回合摘要行（exec-cards 票 03）', () => {
   const t = (id: number, kind: EventKind, at: string, payload: Record<string, unknown> = {}): TimelineItem => ({
     event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload, created_at: at },
     message: kind === 'agent_message'
-      ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], created_at: at, thinking: '' }
+      ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], element_refs: [], created_at: at, thinking: '' }
       : null,
   })
 
@@ -316,7 +324,7 @@ describe('deriveWorkbenchStatus（hands-free 票 06）', () => {
       ev(3, 'tool_called', { tool: 'fs_read' }, 'a1'),
     ]
     src.timeline[1].message = {
-      id: 2, author: 'a1', tokens: [], attachments: [], created_at: '',
+      id: 2, author: 'a1', tokens: [], attachments: [], element_refs: [], created_at: '',
       body: '计划：阶段是发布，下一步用 fs_write',
       thinking: '',
     }
@@ -354,4 +362,35 @@ describe('deriveWorkbenchStatus（hands-free 票 06）', () => {
     src.stages.push({ stage: '复审', seq: 3, state: 'active' })
     expect(deriveWorkbenchStatus(src).stage).toBe('复审')
   })
+})
+
+// Live acceptance #17: shutdown during a waiting-stamp turn left a ghost
+// busy indicator even after sleeping the team and opening the next stage.
+describe('openTurns lifecycle boundaries', () => {
+  it('uses the latest start when an existing agent opens a newer turn', () => {
+    expect(openTurn([ev(1, 'turn_started', {}, 'one'), ev(2, 'turn_started', {}, 'two'), ev(3, 'turn_started', {}, 'one')]).agentId).toBe('one')
+  })
+  it.each(['team_slept', 'stage_started'] as const)('retires old turns at %s but keeps later work visible', (kind) => {
+    const timeline = [ev(1, 'turn_started', {}, 'old'), ev(2, kind), ev(3, 'turn_started', {}, 'new')]
+    expect([...openTurns(timeline).keys()]).toEqual(['new'])
+  })
+  it('finishing one concurrent agent does not hide another', () => {
+    expect([...openTurns([ev(1, 'turn_started', {}, 'one'), ev(2, 'turn_started', {}, 'two'), ev(3, 'turn_finished', {}, 'one')]).keys()]).toEqual(['two'])
+  })
+})
+
+// Live acceptance: event1000 is an old fs_read call; its result is page3.
+it('history prefixes never claim live work, but current streamed output remains visible', () => {
+  const src: StatusSources = { stages: [], team: [{ id: 'qa', role: 'QA' }],
+    timeline: [ev(969, 'turn_started', {}, 'qa'), ev(1000, 'tool_called', { tool: 'fs_read' }, 'qa')],
+    streams: {}, thinkings: {}, streamDone: {}, timelineCaughtUp: false }
+  expect(deriveWorkbenchStatus(src)).toEqual({ stage: null, role: null, tool: null })
+  expect(openTurns(src.timeline, false).size).toBe(0)
+  src.streams = { qa: { 0: 'Current response' } }
+  expect(deriveWorkbenchStatus(src)).toEqual({ stage: null, role: 'QA', tool: null })
+  src.timelineCaughtUp = true
+  expect(deriveWorkbenchStatus(src).tool).toBe('fs_read')
+  src.timeline.push(ev(1001, 'tool_result', {}, 'qa'), ev(1006, 'turn_failed', {}, 'qa'))
+  src.streams = {}
+  expect(deriveWorkbenchStatus(src).role).toBeNull()
 })

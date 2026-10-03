@@ -34,7 +34,7 @@ pub enum ProvidersError {
 }
 
 /// 模型目录条目：拉取/手添的模型 + 能力标记。
-/// caps 词表：web（联网）vision（视觉）reasoning（推理）tools（工具调用）free（免费）。
+/// caps 词表见 docs/glossary.html：对话能力、输入/输出模态、嵌入/重排等目录标记。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ModelEntry {
@@ -48,8 +48,8 @@ pub struct ModelEntry {
     #[serde(default)]
     pub caps: Vec<String>,
     /// 上下文窗口 tok（context-window 票 02 / ADR 0068）：拉目录时按
-    /// 内置前缀表兜底填，未识别留空 → 撞限闸回落 120k 全局上限，
-    /// 设置页提示手填。大窗口不放开吃满——120k 仍是刻意纪律上限。
+    /// 内置前缀表兜底填，未识别留空 → 撞限闸回落 1M 全局上限，
+    /// 设置页提示手填。大窗口不放开吃满——1M 仍是刻意纪律上限。
     /// `number | null`：u64 默认被 ts-rs 导成 bigint，与 JSON number 不符。
     #[serde(default)]
     #[ts(type = "number | null")]
@@ -358,7 +358,13 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
 /// Never return raw transport/parser errors, which can contain credentials.
 pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, ProvidersError> {
     let base = def.base_url.trim_end_matches('/');
+    // Gemini's OpenAI-compatible list omits native metadata. Stay on the exact
+    // configured official host; never redirect a proxy's key to another service.
+    let google = url::Url::parse(base).ok().is_some_and(|u| {
+        u.host_str() == Some("generativelanguage.googleapis.com") && u.path() == "/v1beta/openai"
+    });
     let url = match def.kind {
+        ProviderKind::OpenAi if google => format!("{}/models", base.trim_end_matches("/openai")),
         ProviderKind::Anthropic => format!("{base}/v1/models"),
         ProviderKind::OpenAi => format!("{base}/models"),
         // Jev 没有 /models。用一道最小选择题确认钥匙，模型名以响应为准。
@@ -368,43 +374,265 @@ pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
         .timeout_global(Some(std::time::Duration::from_secs(30)))
         .build()
         .into();
-    let req = agent.get(&url);
-    let req = match def.kind {
-        ProviderKind::Anthropic => req
-            .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01"),
-        ProviderKind::OpenAi => req.header("Authorization", &format!("Bearer {key}")),
-        ProviderKind::Jev => unreachable!("jev returns before the models request"),
+    let mut models = Vec::new();
+    let mut after: Option<String> = None;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let req = agent.get(&url);
+        let req = if let Some(cursor) = &after {
+            req.query(if google { "pageToken" } else { "after_id" }, cursor)
+        } else {
+            req
+        };
+        let req = if url::Url::parse(&url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .as_deref()
+            == Some("openrouter.ai")
+        {
+            req.query("output_modalities", "all")
+        } else {
+            req
+        };
+        let req = match def.kind {
+            ProviderKind::Anthropic => req
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01"),
+            ProviderKind::OpenAi if google => req.header("x-goog-api-key", key),
+            ProviderKind::OpenAi => req.header("Authorization", &format!("Bearer {key}")),
+            ProviderKind::Jev => unreachable!("jev returns before the models request"),
+        };
+        let mut resp = req
+            .call()
+            .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
+        let v: Value = resp
+            .body_mut()
+            .read_json()
+            .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
+        let page = v
+            .get("data")
+            .or_else(|| v.get("models"))
+            .unwrap_or(&v)
+            .as_array()
+            .ok_or_else(|| ProvidersError::Http("invalid model catalog".into()))?;
+        models.extend(page.iter().filter_map(catalog_model));
+        let next = if google {
+            match v["nextPageToken"].as_str().filter(|s| !s.is_empty()) {
+                Some(next) => next,
+                None => break,
+            }
+        } else {
+            if !matches!(def.kind, ProviderKind::Anthropic) || v["has_more"].as_bool() != Some(true)
+            {
+                break;
+            }
+            v["last_id"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ProvidersError::Http("invalid model catalog cursor".into()))?
+        };
+        if !seen.insert(next.to_owned()) || seen.len() > 100 {
+            return Err(ProvidersError::Http(
+                "model catalog pagination did not finish".into(),
+            ));
+        }
+        after = Some(next.to_owned());
+    }
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
+    Ok(models)
+}
+
+// Owner 2026-10-01: /models formerly discarded every field except id, incorrectly
+// granting tools to embedding/rerank models. Read documented Anthropic/OpenRouter
+// metadata first. A false negative needs manual correction; a false positive can
+// expose unsupported tools. Explicit false/empty metadata therefore beats guesses.
+// Sources: platform.claude.com/docs/en/api/models/list;
+// openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties.
+fn catalog_model(v: &Value) -> Option<ModelEntry> {
+    let id = v["id"]
+        .as_str()
+        .or_else(|| {
+            v.get("supportedGenerationMethods")?;
+            v["name"]
+                .as_str()
+                .map(|name| name.strip_prefix("models/").unwrap_or(name))
+        })?
+        .trim();
+    if id.is_empty() {
+        return None;
+    }
+    let mut caps = infer_caps(id);
+    let architecture = v.get("architecture").unwrap_or(v);
+    let mut set = |cap: &str, supported: bool| {
+        caps.retain(|c| c != cap);
+        if supported {
+            caps.push(cap.into());
+        }
     };
-    let mut resp = req
-        .call()
-        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
-    let v: Value = resp
-        .body_mut()
-        .read_json()
-        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
-    let mut ids: Vec<String> = v["data"]
+    for (field, mappings) in [
+        (
+            "input_modalities",
+            &[
+                ("image", "vision"),
+                ("audio", "audio_input"),
+                ("video", "video_input"),
+                ("file", "file_input"),
+            ][..],
+        ),
+        (
+            "output_modalities",
+            &[
+                ("image", "image_generation"),
+                ("audio", "audio_output"),
+                ("speech", "audio_output"),
+                ("video", "video_generation"),
+                ("embeddings", "embedding"),
+                ("rerank", "rerank"),
+                ("transcription", "audio_input"),
+            ][..],
+        ),
+    ] {
+        if let Some(values) = architecture[field].as_array() {
+            // Multiple wire modalities may map to one badge (audio/speech).
+            for (_, cap) in mappings {
+                set(
+                    cap,
+                    mappings.iter().any(|(wire, mapped)| {
+                        mapped == cap && values.iter().any(|x| x.as_str() == Some(wire))
+                    }),
+                );
+            }
+        }
+    }
+    if architecture["output_modalities"]
         .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|m| m["id"].as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    ids.sort();
-    ids.dedup();
-    Ok(ids
-        .into_iter()
-        .map(|id| ModelEntry {
-            group: Some(group_of(&id)),
-            caps: infer_caps(&id),
-            // 票 02：前缀表兜底填窗口/输出上限，未识别留空（设置页可手填）。
-            context_window: infer_window(&id),
-            max_output: infer_max_output(&id),
-            name: None,
-            id,
-        })
-        .collect())
+        .is_some_and(|a| !a.iter().any(|m| m.as_str() == Some("text")))
+    {
+        set("tools", false);
+    }
+    if let Some(params) = v["supported_parameters"].as_array() {
+        for (cap, names) in [
+            ("tools", &["tools", "tool_choice"][..]),
+            ("reasoning", &["reasoning", "reasoning_effort"][..]),
+            ("structured_output", &["structured_outputs"][..]),
+        ] {
+            set(
+                cap,
+                params
+                    .iter()
+                    .any(|p| p.as_str().is_some_and(|p| names.contains(&p))),
+            );
+        }
+    }
+    for (wire, cap) in [
+        ("image_input", "vision"),
+        ("thinking", "reasoning"),
+        ("structured_outputs", "structured_output"),
+        ("pdf_input", "file_input"),
+        ("batch", "batch"),
+        ("citations", "citations"),
+        ("code_execution", "code_execution"),
+    ] {
+        if let Some(supported) = v["capabilities"][wire]["supported"].as_bool() {
+            set(cap, supported);
+        }
+    }
+    if let Some(params) = v["supported_parameters"].as_array() {
+        set(
+            "json_mode",
+            params.iter().any(|p| p.as_str() == Some("response_format")),
+        );
+    }
+    // Mistral uses boolean capability fields; Kimi uses top-level supports_*.
+    for (wire, cap) in [
+        ("function_calling", "tools"),
+        ("vision", "vision"),
+        ("classification", "classification"),
+        ("moderation", "moderation"),
+        ("reasoning", "reasoning"),
+        ("ocr", "ocr"),
+        ("completion_chat", "text_generation"),
+        ("audio_transcription", "audio_input"),
+        ("audio_speech", "audio_output"),
+    ] {
+        if let Some(supported) = v["capabilities"][wire].as_bool() {
+            set(cap, supported);
+        }
+    }
+    for (wire, cap) in [
+        ("supports_image_in", "vision"),
+        ("supports_video_in", "video_input"),
+        ("supports_reasoning", "reasoning"),
+    ] {
+        if let Some(supported) = v[wire].as_bool() {
+            set(cap, supported);
+        }
+    }
+    // DeepSeek /models: effort levels exclude 'none' and apply to thinking mode.
+    if let Some(levels) = v["effort"]["supported_levels"].as_array() {
+        set(
+            "reasoning",
+            levels
+                .iter()
+                .any(|x| x.as_str().is_some_and(|s| !s.is_empty() && s != "none")),
+        );
+    }
+    if let Some(thinking) = v["thinking"].as_bool() {
+        set("reasoning", thinking);
+    }
+    if let Some(methods) = v["supportedGenerationMethods"].as_array() {
+        let has = |method| methods.iter().any(|m| m.as_str() == Some(method));
+        set("embedding", has("embedContent"));
+        set("text_generation", has("generateContent"));
+        if !has("generateContent") {
+            set("tools", false);
+        }
+    }
+    // Together / Qianfan expose task type even when output modalities are empty.
+    if let Some(kind) = v["type"].as_str() {
+        let cap = match kind {
+            "embedding" | "embeddings" => Some("embedding"),
+            "rerank" => Some("rerank"),
+            "image" | "text2image" => Some("image_generation"),
+            "image2text" => Some("vision"),
+            "moderation" => Some("moderation"),
+            "chat" | "language" | "code" => Some("text_generation"),
+            _ => None,
+        };
+        if let Some(cap) = cap {
+            set(cap, true);
+        }
+        if matches!(
+            kind,
+            "embedding" | "embeddings" | "rerank" | "image" | "text2image" | "moderation"
+        ) {
+            set("tools", false);
+        }
+    }
+    let positive = |v: &Value| v.as_u64().filter(|n| *n > 0);
+    Some(ModelEntry {
+        id: id.into(),
+        group: Some(group_of(id)),
+        caps,
+        name: v["display_name"]
+            .as_str()
+            .or_else(|| v["displayName"].as_str())
+            .or_else(|| v["name"].as_str())
+            .map(String::from),
+        context_window: positive(&v["inputTokenLimit"])
+            .or_else(|| positive(&v["context_window"]))
+            .or_else(|| positive(&v["max_context_length"]))
+            .or_else(|| positive(&v["max_input_tokens"]))
+            .or_else(|| positive(&v["context_length"]))
+            .or_else(|| infer_window(id)),
+        max_output: positive(&v["outputTokenLimit"])
+            .or_else(|| positive(&v["max_completion_tokens"]))
+            .or_else(|| positive(&v["max_output_tokens"]))
+            .or_else(|| positive(&v["max_tokens"]))
+            .or_else(|| positive(&v["top_provider"]["max_completion_tokens"]))
+            .or_else(|| infer_max_output(id)),
+    })
 }
 
 /// 从模型 id 推断能力标记（拉取时的自动标注，用户可再编辑）。
@@ -438,7 +666,6 @@ pub fn infer_caps(id: &str) -> Vec<String> {
         "claude-opus-4",
         "vl",
         "pixtral",
-        "image",
     ]
     .iter()
     .any(|k| l.contains(k))
@@ -451,10 +678,42 @@ pub fn infer_caps(id: &str) -> Vec<String> {
     if l.contains("claude") {
         caps.push("web".into());
     }
+    // Catalog-only modalities do not imply that Hexagon has an executor for them.
+    for (cap, patterns) in [
+        ("embedding", &["embed", "bge-m3"][..]),
+        ("rerank", &["rerank"][..]),
+        (
+            "image_generation",
+            &["dall-e", "gpt-image", "stable-diffusion", "flux-"][..],
+        ),
+        ("audio_input", &["whisper", "transcribe"][..]),
+        ("audio_output", &["tts"][..]),
+        ("video_generation", &["sora", "veo-"][..]),
+        ("moderation", &["moderation"][..]),
+    ] {
+        if patterns.iter().any(|p| l.contains(p)) {
+            caps.push(cap.into());
+        }
+    }
     // 工具调用：现代对话模型默认带，只排除明确的非对话模型
-    if !["embed", "whisper", "tts", "dall", "moderation", "audio"]
-        .iter()
-        .any(|k| l.contains(k))
+    if ![
+        "embed",
+        "bge-m3",
+        "rerank",
+        "whisper",
+        "transcribe",
+        "tts",
+        "dall",
+        "moderation",
+        "audio",
+        "gpt-image",
+        "stable-diffusion",
+        "flux-",
+        "sora",
+        "veo-",
+    ]
+    .iter()
+    .any(|k| l.contains(k))
     {
         caps.push("tools".into());
     }
@@ -470,9 +729,14 @@ pub fn group_of(id: &str) -> String {
 /// model_prices_and_context_window 登记表的精简 vendor 版——拉目录/解析
 /// 槽位时按 id 子串兜底填默认，用户可在设置页改。
 /// 行 = (id 子串, 窗口 tok, 输出上限 tok)。顺序敏感：具体族在泛名前。
-/// 窗口 ≥150k 时撞限闸行为等价（cap=min(窗×0.8, 120k)），表只为小窗口
+/// 窗口 ≥1.25M 时撞限闸行为等价（cap=min(窗×0.8, 1M)），表只为小窗口
 /// 模型（deepseek 64k、gpt-3.5 16k）兜底精度。
 const MODEL_META_TABLE: &[(&str, u64, u64)] = &[
+    // Live acceptance 2026-10-01: generic DeepSeek limits caused V4 compaction loops.
+    // Official /models gives 1,048,576 context; 32K is Hexagon's fallback request
+    // budget, not the service ceiling/default: api-docs.deepseek.com/api/list-models/
+    ("deepseek-flash", 1_048_576, 32_768),
+    ("deepseek-v4", 1_048_576, 32_768),
     ("deepseek", 65_536, 8_192),
     ("qwen3-coder", 262_144, 65_536),
     ("qwen", 131_072, 8_192),
@@ -734,6 +998,11 @@ mod tests {
         assert_eq!(infer_window("qwen3.7-plus"), Some(131_072));
         assert_eq!(infer_window("glm-5"), Some(131_072));
         assert_eq!(infer_window("deepseek-v3.2"), Some(65_536));
+        // Live acceptance 2026-10-01: V4 inherited V3 limits and repeatedly compacted.
+        for model in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+            assert_eq!(infer_window(model), Some(1_048_576));
+            assert_eq!(infer_max_output(model), Some(32_768));
+        }
         assert_eq!(infer_window("claude-sonnet-4-5"), Some(200_000));
         assert_eq!(infer_window("gpt-3.5-turbo"), Some(16_385));
         assert_eq!(infer_window("mystery-model"), None);
@@ -745,6 +1014,143 @@ mod tests {
         let v: ModelEntry = serde_json::from_str(r#"{"id":"m","caps":["tools"]}"#).unwrap();
         assert_eq!(v.context_window, None);
         assert_eq!(v.max_output, None);
+    }
+
+    #[test]
+    fn anthropic_catalog_follows_pages_and_keeps_metadata() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for page in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = [0; 4096];
+                let n = socket.read(&mut bytes).unwrap();
+                let request = String::from_utf8_lossy(&bytes[..n]);
+                assert!(request.starts_with("GET /v1/models"));
+                if page == 1 {
+                    assert!(request.contains("after_id=model-0"));
+                }
+                let body = serde_json::json!({"data":[{"id":format!("model-{page}"),
+                    "max_input_tokens":123456,"max_tokens":8192}],
+                    "has_more":page == 0,"last_id":format!("model-{page}")})
+                .to_string();
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let def = ProviderDef {
+            id: "test".into(),
+            name: "test".into(),
+            kind: ProviderKind::Anthropic,
+            base_url: format!("http://{address}"),
+            models: vec![],
+            enabled: true,
+        };
+        let models = fetch_models(&def, "synthetic").unwrap();
+        server.join().unwrap();
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().all(|m| m.context_window == Some(123456)));
+    }
+
+    #[test]
+    fn catalog_metadata_overrides_name_guesses() {
+        let m = catalog_model(&serde_json::json!({
+            "id": "claude-reasoning", "name": "Catalog name", "context_length": 123456,
+            "top_provider": {"max_completion_tokens": 4321},
+            "architecture": {"input_modalities": ["text"], "output_modalities": ["embeddings"]},
+            "supported_parameters": []
+        }))
+        .unwrap();
+        assert_eq!(m.name.as_deref(), Some("Catalog name"));
+        assert_eq!(m.context_window, Some(123456));
+        assert_eq!(m.max_output, Some(4321));
+        assert!(m.caps.contains(&"embedding".into()));
+        for cap in ["tools", "vision", "reasoning"] {
+            assert!(!m.caps.contains(&cap.into()));
+        }
+        let m = catalog_model(&serde_json::json!({
+            "id": "claude-sonnet-4", "display_name": "Claude", "max_input_tokens": 1000000,
+            "max_tokens": 64000, "capabilities": {
+                "image_input": {"supported": false}, "thinking": {"supported": true},
+                "structured_outputs": {"supported": true}, "pdf_input": {"supported": true}
+            }
+        }))
+        .unwrap();
+        assert!(!m.caps.contains(&"vision".into()));
+        assert!(m.caps.contains(&"reasoning".into()));
+        assert!(m.caps.contains(&"structured_output".into()));
+        assert!(m.caps.contains(&"file_input".into()));
+        assert_eq!(m.context_window, Some(1000000));
+    }
+
+    #[test]
+    fn direct_vendor_catalogs_supply_explicit_capabilities_and_limits() {
+        for (value, cap, window) in [
+            (
+                serde_json::json!({"id":"deepseek-flash", "context_window":1048576, "max_output_tokens":393216,
+                "input_modalities":["text","image"], "output_modalities":["text"], "effort":{"supported_levels":["high"]}}),
+                "reasoning",
+                1048576,
+            ),
+            (
+                serde_json::json!({"id":"kimi-test", "context_length":256000, "supports_image_in":true,
+                "supports_video_in":true, "supports_reasoning":false}),
+                "video_input",
+                256000,
+            ),
+            (
+                serde_json::json!({"id":"mistral-test", "max_context_length":128000,
+                "capabilities":{"function_calling":false,"vision":true}}),
+                "vision",
+                128000,
+            ),
+        ] {
+            let model = catalog_model(&value).unwrap();
+            assert!(model.caps.contains(&cap.to_string()));
+            assert_eq!(model.context_window, Some(window));
+            if model.id == "mistral-test" {
+                assert!(!model.caps.contains(&"tools".into()));
+            }
+        }
+    }
+
+    #[test]
+    fn google_and_specialist_models_are_not_mistaken_for_tool_agents() {
+        let google = catalog_model(&serde_json::json!({"name":"models/gemini-embedding-test",
+            "displayName":"Embedding", "inputTokenLimit":8192, "outputTokenLimit":1,
+            "supportedGenerationMethods":["embedContent"], "thinking":false}))
+        .unwrap();
+        assert_eq!(google.id, "gemini-embedding-test");
+        assert_eq!(google.context_window, Some(8192));
+        assert!(google.caps.contains(&"embedding".into()));
+        assert!(!google.caps.contains(&"tools".into()));
+        for kind in [
+            "embedding",
+            "embeddings",
+            "rerank",
+            "image",
+            "text2image",
+            "moderation",
+        ] {
+            let model =
+                catalog_model(&serde_json::json!({"id":"specialist", "type":kind})).unwrap();
+            assert!(!model.caps.contains(&"tools".into()), "{kind}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn explicit_capability_denial_always_beats_name(id in "[a-z-]{0,40}") {
+            let m = catalog_model(&serde_json::json!({
+                "id": format!("claude-vision-thinking-{id}"),
+                "capabilities": {"image_input": {"supported": false}, "thinking": {"supported": false}},
+                "supported_parameters": []
+            })).unwrap();
+            proptest::prop_assert!(!m.caps.iter().any(|c| matches!(c.as_str(), "vision" | "reasoning" | "tools")));
+        }
     }
 
     /// 能力推断：免费/推理/视觉/工具各归位，非对话模型不给 tools。

@@ -479,6 +479,12 @@ fn assert_evaluation_permission_resume(allow: bool) {
     let mut wb = Workbench::open_evaluation_host(home.path()).unwrap();
     wb.register_provider("default", Arc::new(ProbeProvider { wrong_model: false }));
     let mut request = priced_request();
+    // 2026-10-01: this fixture verifies permission continuation, not a code
+    // delivery. Inheriting unsolved task checks made only the Full arm fail.
+    for stage in &mut request.full_pack.stages {
+        stage.checks.clear();
+        stage.quality_checks.clear();
+    }
     for case in request.corpora.iter_mut().flat_map(|c| &mut c.cases) {
         case.task.allowed_paths.push("resume-marker.txt".into());
         case.task
@@ -673,6 +679,11 @@ fn evaluation_permission_resume_excludes_previous_activation_and_other_instance(
             let mut next = stage.clone();
             next.name = name.into();
             next.stamp_point = i == 2;
+            // This isolation fixture performs no source edits: its three turns
+            // only request shell permission. Public source checks belong to
+            // the delivery fixtures and must not add a fourth unrelated wait.
+            next.checks.clear();
+            next.quality_checks.clear();
             if i == 1 {
                 next.roles = vec!["前端".into()];
             }
@@ -718,6 +729,7 @@ fn evaluation_permission_resume_excludes_previous_activation_and_other_instance(
         text("Old stage complete"),
         text("Plan other instance"),
         bash("other", "printf other-instance-receipt"),
+        text(unsure),
         text("Other stage complete"),
         text("Plan current stage"),
         bash("current", "/bin/echo current-activation-receipt"),
@@ -726,7 +738,14 @@ fn evaluation_permission_resume_excludes_previous_activation_and_other_instance(
     ])));
     wb.register_provider("default", provider.clone());
     let run = wb.evaluate_next_live(&plan.id).unwrap();
-    for guidance in ["old-stage-owner-guidance", "current-stage-owner-guidance"] {
+    // Owner Q10 (2026-10-01): the middle instance's shell command now also
+    // requires an owner decision. Resolve its own card instead of accidentally
+    // attaching the current-stage guidance to that earlier activation.
+    for guidance in [
+        "old-stage-owner-guidance",
+        "other-instance-owner-guidance",
+        "current-stage-owner-guidance",
+    ] {
         let permission = wb
             .evaluation_pending(&run.id)
             .unwrap()
@@ -755,6 +774,7 @@ fn evaluation_permission_resume_excludes_previous_activation_and_other_instance(
     for unrelated in [
         "old-activation-receipt",
         "other-instance-receipt",
+        "other-instance-owner-guidance",
         "old-stage-owner-guidance",
     ] {
         assert!(

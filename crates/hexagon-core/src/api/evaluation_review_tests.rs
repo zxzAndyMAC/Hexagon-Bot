@@ -130,7 +130,13 @@ fn run_review(verdict: Option<&'static str>, pause: bool) {
         pause,
     });
     wb.register_provider("default", provider.clone());
-    let mut result = wb.evaluate_next_live(&plan.id).unwrap();
+    let mut result = wb.evaluate_next_live(&plan.id).unwrap_or_else(|error| {
+        panic!(
+            "review dispatch failed: {error}; admission recheck={:?}",
+            wb.check_evaluation_configuration(&batch.id, &request)
+                .map(|current| current.blocks)
+        )
+    });
     if pause {
         assert_eq!(result.state, "waiting_human");
         let question = wb
