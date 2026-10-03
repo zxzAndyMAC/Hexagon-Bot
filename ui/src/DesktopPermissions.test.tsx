@@ -70,3 +70,15 @@ it('blocks hidden decisions while the system modal is open, preserving Settings 
     expect(answer).toHaveBeenCalledOnce()
   } finally { window.removeEventListener('keydown', pending); window.removeEventListener('keydown', behind); useUiStore.setState({ modalScope: 'workbench' }) }
 })
+
+it('keeps the compact permission listener out of the topbar layout while retaining its dialog', async () => {
+  vi.spyOn(api, 'desktopPermissions').mockResolvedValue({ host_name: 'HexagonLive', supported: true, available: true, accessibility: true, screen_recording: true, input_events: true, ready: true, error: null })
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<DesktopPermissions compact />))
+  // Owner 2026-10-03: hiding children left the settings section's 33px border/spacing above TopBar.
+  expect(el.children).toHaveLength(0)
+  await act(async () => { window.dispatchEvent(new Event('hexagon:desktop-permissions')) })
+  expect(el.querySelector('dialog[open]')).not.toBeNull()
+  await act(async () => el.querySelector('dialog')!.dispatchEvent(new Event('cancel', { cancelable: true })))
+  expect(el.children).toHaveLength(0)
+})

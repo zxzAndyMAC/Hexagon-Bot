@@ -63,9 +63,13 @@ export function DesktopPermissions({ compact = false }: { compact?: boolean }) {
     return () => window.removeEventListener('keydown', keys)
   }, [open, status, settings, show])
   const tip = (key: 'desktopPermissions' | 'desktopAccessibility' | 'desktopScreenRecording', label: string) => `${label} · ${formatBinding(bindingFor(key))}`
-  return <section className="desktop-permissions">
-    <div hidden={compact}><strong>{t('desktop.title')}</strong><p className="dim3">{t('desktop.summary')}</p></div>
-    <button hidden={compact} ref={trigger} className="btn" onClick={show} title={tip('desktopPermissions', t('desktop.check'))}>{t('desktop.check')}</button>
+  // Owner 2026-10-03: compact is a modal listener, not a settings row.
+  // Hiding only its children left 33px of section spacing/border above TopBar.
+  return <>
+    {!compact && <section className="desktop-permissions">
+    <div><strong>{t('desktop.title')}</strong><p className="dim3">{t('desktop.summary')}</p></div>
+    <button ref={trigger} className="btn" onClick={show} title={tip('desktopPermissions', t('desktop.check'))}>{t('desktop.check')}</button>
+    </section>}
     {open && <dialog ref={dialog} role="dialog" aria-modal="true" aria-labelledby="desktop-permissions-title" className="desktop-permissions-dialog" onCancel={e => { e.preventDefault(); close() }}>
       <h2 id="desktop-permissions-title">{t('desktop.title')}</h2>
       <p>{t('desktop.host', { host: status?.host_name || 'Hexagon' })}</p>
@@ -86,5 +90,5 @@ export function DesktopPermissions({ compact = false }: { compact?: boolean }) {
       </div>
       <div className="desktop-permissions-actions"><button className="btn" disabled={busy} onClick={() => void check()} title={tip('desktopPermissions', t('desktop.recheck'))}>{t('desktop.recheck')}</button><button className="btn primary" onClick={close}>{t('desktop.close')}</button></div>
     </dialog>}
-  </section>
+  </>
 }
