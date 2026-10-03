@@ -1,3 +1,4 @@
+import { PermissionScope } from './PermissionActions'
 import { DesktopControlPanel } from './DesktopControlPanel'
 import { BrowserControlPanel } from './BrowserControlPanel'
 import { pauseDesktop } from '../desktopPause'
@@ -508,9 +509,10 @@ function PermsSection() {
             style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}
           >
             <span className="chip">{r.tool}</span>
+            {r.effect === 'allow' && <span className="chip">{t(r.project_shared ? 'projectPermission.sharedLabel' : 'projectPermission.legacy')}</span>}
             {r.agent_id && <span className="chip">{r.agent_id}</span>}
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.shape}>{r.shape}</div>
+              {r.project_shared ? <PermissionScope tool={r.tool} shape={r.shape} generalized={!r.shape.startsWith('exact:')} /> : <div className="mono" title={r.shape}>{r.shape}</div>}
               {r.tool === 'bash' && <div className="dim3">
                 {t(r.network_allowed ? 'perms.networkAllowed' : 'perms.networkDisabled')} · {t(r.background_allowed ? 'perms.backgroundAllowed' : 'perms.foregroundOnly')} · {r.session_name ? t('perms.namedSession', { name: r.session_name }) : t('perms.noNamedSession')}
               </div>}

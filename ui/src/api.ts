@@ -319,6 +319,7 @@ export const api = {
   desktopPermissions: () => call<DesktopPermissions>('desktop_permissions'),
   desktopOpenSettings: (permission: DesktopPermission) => call<void>('desktop_open_settings', { permission }),
   sandboxStatus: () => call<SandboxStatus>('sandbox_status'),
+  allowProjectPermission: (questionId: string) => call<void>('allow_project_permission', { questionId }),
   answerPermission: (questionId: string, allow: boolean, rememberShape?: string, scope = 'activation') =>
     call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
   advance: () => call<StageAction>('advance'),
@@ -1162,6 +1163,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'reject_publish':
     case 'reject_stamp':
     case 'adjudicate_flag':
+    case 'allow_project_permission':
     case 'answer_permission':
     case 'stamp':
     case 'sleep_all':
@@ -1243,7 +1245,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'create_repo_dir':
       return null as T
     case 'permission_shape_suggestion':
-      return null as T
+      return (args?.questionId === 'q-perm' ? { shape: 'exact:cargo test --workspace', generalized: false, tool: 'bash', project_id: 'p1', agent_id: 'a0' } : null) as T
     case 'approval_mode':
       return { project_id: 'p1', project_root: '/mock', mode: 'restricted' } as T
     case 'set_approval_mode':

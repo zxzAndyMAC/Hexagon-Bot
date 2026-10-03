@@ -1,0 +1,7 @@
+.permission-actions { display: flex; }
+.permission-split { display: flex; flex-wrap: wrap; align-items: flex-start; width: 100%; }
+.permission-split:has([aria-haspopup]) > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.permission-split > .btn[aria-haspopup] { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid var(--accent-border); }
+.permission-split > .danger { margin-left: 8px; }
+.permission-menu { position: relative; bottom: auto; margin-top: 8px; flex-basis: 100%; }
+.permission-scope { overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; }

@@ -1,4 +1,5 @@
 export default {
+  projectPermission: {"allow": "允许本项目", "options": "选择允许范围", "onceHint": "仅当前请求，不保存许可", "shared": "本项目所有角色 · 撤销前有效 · 其他权限限制仍有效", "sharedLabel": "项目共享许可", "legacy": "旧版许可", "onceRequired": "此操作必须逐次确认。", "unavailable": "无法可靠界定可复用范围，请允许一次。", "action_bash": "运行命令：{{target}}", "action_fs_read": "读取文件：{{target}}", "action_fs_write": "写入文件：{{target}}", "action_fs_patch": "修改文件：{{target}}", "action_artifact_read": "读取产物：{{target}}", "action_artifact_write": "写入产物：{{target}}", "action_web_fetch": "访问网页：{{target}}"},
   elementContext: {"select": "选择网页元素", "region": "框选区域", "done": "完成", "hint": "选择后回到工作台发送", "element": "网页元素", "stale": "已过期，请重新选择", "sourceHint": "开发源码提示：{{file}}:{{line}}", "unlocated": "未定位源码", "remove": "移除引用", "starting": "正在开启选择…", "connectFirst": "请先连接项目浏览器", "view": "查看引用", "close": "关闭引用"},
 
   agentScreen: {"title": "Agent Screen", "move": "移动预览 · 方向键", "hide": "隐藏预览", "source": "预览来源", "browser": "浏览器", "native": "桌面应用", "collapse": "收起预览", "expand": "展开预览", "unavailable": "预览暂不可用", "loading": "正在加载预览…", "local": "本地预览", "open": "打开应用"},
@@ -749,8 +750,8 @@ export default {
     foregroundOnly: '仅前台运行',
     namedSession: '会话：{{name}}',
     noNamedSession: '无命名会话',
-    intro: '「记住」的规则会放行同形状的后续请求；撤销后重新弹待决卡。',
-    empty: '还没有已记规则——在待决卡里点「记住」后会出现在这里。',
+    intro: "项目许可按显示范围放行后续请求，可随时撤销。旧版许可保持原范围。",
+    empty: "暂无许可。在待决卡中选择“允许本项目”后会显示在这里。",
     revoke: '撤销', revokeTitle: '撤销这条已记规则？',
     effect_allow: '允许', effect_deny: '拒绝',
     scope_activation: '当次激活', scope_project: '项目长效',

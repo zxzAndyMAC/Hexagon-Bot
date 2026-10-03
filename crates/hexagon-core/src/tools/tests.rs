@@ -233,7 +233,8 @@ fn remember_shape_writes_rule() {
         "project",
         None,
     )
-    .unwrap());
+    .unwrap()
+    .is_some());
 }
 
 #[test]

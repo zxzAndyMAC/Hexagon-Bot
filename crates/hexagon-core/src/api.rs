@@ -1274,6 +1274,96 @@ impl Workbench {
         Ok(())
     }
 
+    /// ADR 0079: derive the shared scope from the real card, never client text.
+    pub fn allow_project_permission(&self, question_id: &str) -> Result<(), ApiError> {
+        self.resolve_project_permission(question_id)?
+            .1
+            .map_or(Ok(()), Err)
+    }
+
+    fn resolve_project_permission(
+        &self,
+        question_id: &str,
+    ) -> Result<(Vec<crate::cards::Card>, Option<ApiError>), ApiError> {
+        let proposal = permission_shape_suggestion(&self.db, &self.project_id, question_id)?
+            .ok_or_else(|| ApiError::BadInput("project permission unavailable".into()))?;
+        let card = crate::cards::get(&self.db, question_id)?;
+        let first_error = self
+            .answer_permission(question_id, true, Some(&proposal.shape), "project_shared")
+            .err();
+        if crate::cards::get(&self.db, question_id)?.state != crate::cards::CardState::Answered {
+            return Err(
+                first_error.unwrap_or_else(|| ApiError::BadInput("permission not answered".into()))
+            );
+        }
+        // ADR 0079: execution may fail after the grant commits. Still sweep its
+        // independent requests, and return the failure after restoring observations.
+        let rule_id: String = self.db.conn().query_row(
+            "SELECT json_extract(payload,'$.rule_id') FROM events WHERE project_id=?1 AND kind='permission_shape_remembered' AND json_extract(payload,'$.question_id')=?2 ORDER BY id DESC LIMIT 1",
+            rusqlite::params![self.project_id, question_id], |r| r.get(0))?;
+        let mut resolved = vec![card];
+        for id in crate::cards::queued_ids(
+            &self.db,
+            &self.project_id,
+            crate::cards::CardKind::Permission,
+        )? {
+            let card = crate::cards::get(&self.db, &id)?;
+            let Some(aid) = card.agent_id.as_deref() else {
+                continue;
+            };
+            let ctx = self.ctx_for(aid, None);
+            let started = std::time::Instant::now();
+            let outcome = self.registry.resolve(
+                &self.db,
+                &ctx,
+                &id,
+                true,
+                None,
+                "activation",
+                None,
+                &format!("project_permission:{rule_id}"),
+            );
+            crate::diag::note(
+                if outcome.is_err() {
+                    crate::diag::CLASS_REJECT
+                } else {
+                    crate::diag::CLASS_JUDGE
+                },
+                outcome.is_err(),
+                Some(&self.project_id),
+                Some(aid),
+                None,
+                None,
+                "project_permission_queue",
+                if outcome.is_ok() {
+                    "released"
+                } else {
+                    "retained_or_failed"
+                },
+                started,
+            );
+            // Execution failures are already action facts; one failure must not
+            // prevent checking independent cards, or replay an already-run effect.
+            if crate::cards::get(&self.db, &id)?.state == crate::cards::CardState::Answered {
+                resolved.push(card);
+            }
+        }
+        Ok((resolved, first_error))
+    }
+
+    pub fn allow_project_permission_and_continue(&self, question_id: &str) -> Result<(), ApiError> {
+        let (cards, mut first_error) = self.resolve_project_permission(question_id)?;
+        let mut resumed = std::collections::HashSet::new();
+        for card in cards {
+            if resumed.insert(card.agent_id.clone()) {
+                if let Err(error) = self.continue_permission_card(card) {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
     /// Desktop owner decisions resume the waiting instance with recorded results.
     /// Evaluation drivers keep using answer_permission and own their next activation.
     pub fn answer_permission_and_continue(
@@ -1285,6 +1375,10 @@ impl Workbench {
     ) -> Result<(), ApiError> {
         let card = crate::cards::get(&self.db, question_id)?;
         self.answer_permission(question_id, allow, remember_shape, scope)?;
+        self.continue_permission_card(card)
+    }
+
+    fn continue_permission_card(&self, card: crate::cards::Card) -> Result<(), ApiError> {
         // Live acceptance 2026-10-01: approval executed the tool but silently left
         // the agent idle. Restore observations, never replay the approved effect.
         let aid = card
@@ -3853,7 +3947,14 @@ pub fn permission_shape_suggestion(
         &card.payload["raw_input"]
     };
     // A redacted display must not be expanded back into a secret-bearing rule.
-    if !card.payload["input"].is_null() && card.payload["input"] != *input {
+    // ADR 0079: write content is intentionally scrubbed; the remembered target
+    // is only the path. Never reconstruct a redacted command, URL or path.
+    let target_key = match tool {
+        "bash" => "cmd",
+        "web_fetch" => "url",
+        _ => "path",
+    };
+    if !card.payload["input"].is_null() && card.payload["input"][target_key] != input[target_key] {
         return Ok(None);
     }
     let proposal = if card.payload["safety_net"] == true {

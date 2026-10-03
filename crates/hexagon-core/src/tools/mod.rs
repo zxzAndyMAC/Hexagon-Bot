@@ -656,6 +656,46 @@ impl Registry {
         if allow {
             crate::actions::ensure_clear_except(db, ctx, &action_id)?;
         }
+        // ADR 0079: a shared grant is not an owner click on every queued card.
+        // Fail closed before answering: false negative costs another decision,
+        // false positive executes an effect the owner never reviewed.
+        if let Some(rule_id) = origin.strip_prefix("project_permission:") {
+            let tool = self
+                .get(&tool_name)
+                .ok_or_else(|| ToolError::NotExecuted("tool unavailable".into()))?;
+            if !crate::permissions::matches_project_permission(
+                db, ctx, &tool_name, &raw_input, rule_id,
+            )? || !matches!(
+                crate::permissions::evaluate_logged(
+                    db,
+                    ctx,
+                    tool.as_ref(),
+                    &tool_name,
+                    &raw_input
+                )?,
+                crate::permissions::Decision::Allow { .. }
+            ) {
+                return Err(ToolError::NotExecuted(
+                    "project permission does not cover request".into(),
+                ));
+            }
+            crate::evaluation::control::checkpoint(&ctx.repo_root)
+                .map_err(|e| ToolError::NotExecuted(e.to_string()))?;
+            // Execution verifies again under its write lease; a changed manifest
+            // here leaves the pending card intact instead of silently consuming it.
+            drop(writeguard::verify(
+                db,
+                ctx,
+                tool.as_ref(),
+                &raw_input,
+                &action_id,
+            )?);
+        }
+        let origin = if origin.starts_with("project_permission:") {
+            "project_permission"
+        } else {
+            origin
+        };
         let tx = db.conn().unchecked_transaction()?;
         crate::cards::answer(db, question_id, origin)?;
 
@@ -688,8 +728,8 @@ impl Registry {
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
-        // 记形：显式 shape 或检验命令自动沉淀；安全网永不进记忆（persist_rule 内拦）
-        if crate::permissions::persist_rule(
+        // ADR 0079: persist only explicitly chosen scopes, never infer consent from checks.
+        if let Some(rule_id) = crate::permissions::persist_rule(
             db,
             ctx,
             &tool_name,
@@ -703,7 +743,8 @@ impl Registry {
                 EventKind::PermissionShapeRemembered,
                 json!({ "tool": tool_name,
                         "shape": remember_shape.or(raw_input["cmd"].as_str()),
-                        "scope": scope }),
+                        "scope": if scope == "project_shared" { "project" } else { scope },
+                        "project_shared": scope == "project_shared", "rule_id": rule_id, "question_id": question_id }),
                 Some(&ctx.agent_id),
                 ctx.stage_run_id.as_deref(),
             )?;

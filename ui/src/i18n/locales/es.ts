@@ -1,4 +1,5 @@
 export default {
+  projectPermission: {"allow": "Permitir en el proyecto", "options": "Elegir alcance", "onceHint": "Solo esta solicitud; no se guarda permiso", "shared": "Todos los roles del proyecto · Hasta revocarlo · Se mantienen los demás límites", "sharedLabel": "Permiso compartido del proyecto", "legacy": "Permiso anterior", "onceRequired": "Esta acción requiere confirmación cada vez.", "unavailable": "No se puede verificar un alcance reutilizable. Permite una vez.", "action_bash": "Ejecutar: {{target}}", "action_fs_read": "Leer archivo: {{target}}", "action_fs_write": "Escribir archivo: {{target}}", "action_fs_patch": "Modificar archivo: {{target}}", "action_artifact_read": "Leer entregable: {{target}}", "action_artifact_write": "Escribir entregable: {{target}}", "action_web_fetch": "Acceder a páginas: {{target}}"},
   elementContext: {"select": "Seleccionar elementos", "region": "Seleccionar región", "done": "Listo", "hint": "Selecciona y envía desde Hexagon", "element": "Elemento de página", "stale": "Referencia caducada — vuelve a seleccionar", "sourceHint": "Pista de desarrollo: {{file}}:{{line}}", "unlocated": "Código fuente no localizado", "remove": "Quitar referencia", "starting": "Iniciando selección…", "connectFirst": "Conecta primero un navegador del proyecto", "view": "Ver referencia", "close": "Cerrar referencia"},
 
   agentScreen: {"title": "Agent Screen", "move": "Mover vista · teclas de flecha", "hide": "Ocultar vista", "source": "Origen de la vista", "browser": "Navegador", "native": "Aplicación de escritorio", "collapse": "Contraer vista", "expand": "Ampliar vista", "unavailable": "Vista no disponible", "loading": "Cargando vista…", "local": "Vista local", "open": "Abrir aplicación"},
@@ -749,8 +750,8 @@ export default {
     foregroundOnly: 'Solo primer plano',
     namedSession: 'Sesión: {{name}}',
     noNamedSession: 'Sin sesión con nombre',
-    intro: 'Las reglas recordadas dejan pasar llamadas de la misma forma; revocarlas vuelve a pedir confirmación.',
-    empty: 'Aún no hay reglas recordadas — aparecen aquí tras pulsar «recordar» en una tarjeta.',
+    intro: "Los permisos del proyecto cubren futuras solicitudes dentro del alcance mostrado y pueden revocarse. Los permisos anteriores conservan su alcance.",
+    empty: "Sin permisos. Elige « Permitir en el proyecto » en una tarjeta pendiente.",
     revoke: 'Revocar', revokeTitle: '¿Revocar esta regla recordada?',
     effect_allow: 'permitir', effect_deny: 'denegar',
     scope_activation: 'esta activación', scope_project: 'proyecto',

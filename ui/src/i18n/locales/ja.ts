@@ -1,4 +1,5 @@
 export default {
+  projectPermission: {"allow": "このプロジェクトで許可", "options": "許可範囲を選択", "onceHint": "今回の要求のみ。許可は保存しません", "shared": "全プロジェクトロール · 取り消すまで有効 · 他の制限は維持", "sharedLabel": "プロジェクト共有許可", "legacy": "旧形式の許可", "onceRequired": "この操作は毎回確認が必要です。", "unavailable": "再利用可能な範囲を確認できません。今回のみ許可してください。", "action_bash": "コマンド実行：{{target}}", "action_fs_read": "ファイル読取：{{target}}", "action_fs_write": "ファイル書込：{{target}}", "action_fs_patch": "ファイル修正：{{target}}", "action_artifact_read": "成果物読取：{{target}}", "action_artifact_write": "成果物書込：{{target}}", "action_web_fetch": "Web ページへのアクセス：{{target}}"},
   elementContext: {"select": "ページ要素を選択", "region": "領域を選択", "done": "完了", "hint": "選択後にHexagonから送信", "element": "ページ要素", "stale": "期限切れ — 再選択してください", "sourceHint": "開発ソースのヒント：{{file}}:{{line}}", "unlocated": "ソース未特定", "remove": "参照を削除", "starting": "選択を開始中…", "connectFirst": "先にプロジェクトのブラウザーを接続してください", "view": "参照を表示", "close": "参照を閉じる"},
 
   agentScreen: {"title": "Agent Screen", "move": "プレビューを移動 · 矢印キー", "hide": "プレビューを隠す", "source": "プレビュー元", "browser": "ブラウザー", "native": "デスクトップアプリ", "collapse": "プレビューを縮小", "expand": "プレビューを拡大", "unavailable": "プレビューを利用できません", "loading": "プレビューを読み込み中…", "local": "ローカルプレビュー", "open": "アプリを開く"},
@@ -749,8 +750,8 @@ export default {
     foregroundOnly: 'フォアグラウンドのみ',
     namedSession: 'セッション: {{name}}',
     noNamedSession: '名前付きセッションなし',
-    intro: '「記憶」したルールは同形状の後続呼び出しを自動許可します。取り消すとカードが再提示されます。',
-    empty: '記憶済みルールはまだありません——カードで「記憶」を押すとここに表示されます。',
+    intro: "プロジェクトの許可は表示された範囲で後続の要求に適用され、いつでも取り消せます。旧形式の許可は元の範囲を維持します。",
+    empty: "許可はありません。保留カードで「このプロジェクトで許可」を選択してください。",
     revoke: '取り消す', revokeTitle: 'この記憶済みルールを取り消しますか？',
     effect_allow: '許可', effect_deny: '拒否',
     scope_activation: '当次アクティベーション', scope_project: 'プロジェクト',

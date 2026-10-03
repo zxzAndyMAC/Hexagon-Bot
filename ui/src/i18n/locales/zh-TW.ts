@@ -1,4 +1,5 @@
 export default {
+  projectPermission: {"allow": "允許本專案", "options": "選擇允許範圍", "onceHint": "僅目前請求，不儲存許可", "shared": "本專案所有角色 · 撤銷前有效 · 其他權限限制仍有效", "sharedLabel": "專案共用許可", "legacy": "舊版許可", "onceRequired": "此操作必須逐次確認。", "unavailable": "無法可靠界定可重用範圍，請允許一次。", "action_bash": "執行指令：{{target}}", "action_fs_read": "讀取檔案：{{target}}", "action_fs_write": "寫入檔案：{{target}}", "action_fs_patch": "修改檔案：{{target}}", "action_artifact_read": "讀取產物：{{target}}", "action_artifact_write": "寫入產物：{{target}}", "action_web_fetch": "存取網頁：{{target}}"},
   elementContext: {"select": "選擇網頁元素", "region": "框選區域", "done": "完成", "hint": "選擇後回到工作台傳送", "element": "網頁元素", "stale": "已過期，請重新選擇", "sourceHint": "開發原始碼提示：{{file}}:{{line}}", "unlocated": "未定位原始碼", "remove": "移除引用", "starting": "正在開啟選擇…", "connectFirst": "請先連線專案瀏覽器", "view": "查看引用", "close": "關閉引用"},
 
   agentScreen: {"title": "Agent Screen", "move": "移動預覽 · 方向鍵", "hide": "隱藏預覽", "source": "預覽來源", "browser": "瀏覽器", "native": "桌面應用程式", "collapse": "收合預覽", "expand": "展開預覽", "unavailable": "預覽暫不可用", "loading": "正在載入預覽…", "local": "本機預覽", "open": "開啟應用程式"},
@@ -749,8 +750,8 @@ export default {
     foregroundOnly: '僅前景執行',
     namedSession: '工作階段：{{name}}',
     noNamedSession: '無命名工作階段',
-    intro: '「記住」的規則會放行同形狀的後續請求；撤銷後重新彈待決卡。',
-    empty: '還沒有已記規則——在待決卡裡點「記住」後會出現在這裡。',
+    intro: "專案許可依顯示範圍放行後續請求，可隨時撤銷。舊版許可維持原範圍。",
+    empty: "尚無許可。在待決卡選擇「允許本專案」後會顯示於此。",
     revoke: '撤銷', revokeTitle: '撤銷這條已記規則？',
     effect_allow: '允許', effect_deny: '拒絕',
     scope_activation: '當次啟用', scope_project: '專案長效',

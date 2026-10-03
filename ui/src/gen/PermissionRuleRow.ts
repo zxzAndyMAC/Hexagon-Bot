@@ -4,4 +4,4 @@
  * 已记权限规则行（设置-权限分区审计面，ui-audit-2 票 03）。
  * effect 一并下发：allow 与项目级 deny 规则同表陈列。
  */
-export type PermissionRuleRow = { id: string, agent_id: string | null, tool: string, shape: string, domain: string | null, effect: string, scope: string, created_at: string, network_allowed: boolean, background_allowed: boolean, session_name: string | null, };
+export type PermissionRuleRow = { id: string, agent_id: string | null, tool: string, shape: string, domain: string | null, effect: string, scope: string, created_at: string, network_allowed: boolean, background_allowed: boolean, session_name: string | null, project_shared: boolean, };

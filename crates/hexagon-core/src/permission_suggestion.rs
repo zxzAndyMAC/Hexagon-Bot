@@ -1,4 +1,4 @@
-//! Owner 2026-10-01 Q12: a suggestion is editable data, never a grant.
+//! ADR 0079: the host generates the scope; the owner chooses once or project.
 //! Generalize only bounded path families. Unknown shell semantics stay exact;
 //! a false negative costs another question, a false positive an unreviewed effect.
 use serde_json::Value;
@@ -61,14 +61,7 @@ pub(crate) fn suggest(tool: &str, input: &Value) -> Option<(String, bool)> {
             {
                 return None;
             }
-            let parent = path.parent()?.to_str()?;
-            let extension = path.extension().and_then(|v| v.to_str());
-            match extension {
-                Some(ext) if !parent.is_empty() && !target.contains(['*', '?', '[', ']']) => {
-                    Some(format!("{parent}/*.{ext}"))
-                }
-                _ => None,
-            }
+            None
         }
     };
     if let Some(shape) = candidate {

@@ -43,8 +43,10 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
   it('P0-1：设置页作用域下 ⌘↵ 不裁决，出提示', async () => {
     useUiStore.setState({ modalScope: 'settings' })
     const spy = vi.spyOn(api, 'answerPermission')
+    const project = vi.spyOn(api, 'allowProjectPermission')
     expect(await handlePendingKey(key('Enter'), [card({})])).toBe('blocked-scope')
     expect(spy).not.toHaveBeenCalled()
+    expect(project).not.toHaveBeenCalled()
     expect(useUiStore.getState().toasts.length).toBe(1)
   })
 
@@ -112,8 +114,10 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
 
   it('正常批准：顶卡 permission → answerPermission(true)', async () => {
     const spy = vi.spyOn(api, 'answerPermission')
+    const project = vi.spyOn(api, 'allowProjectPermission')
     expect(await handlePendingKey(key('Enter'), [card({})])).toBe('approved')
     expect(spy).toHaveBeenCalledWith('q1', true)
+    expect(project).not.toHaveBeenCalled() // ADR 0079: shortcut never persists permission.
   })
 
   it('双发防护：repeat 事件与并发调用都只落一次', async () => {

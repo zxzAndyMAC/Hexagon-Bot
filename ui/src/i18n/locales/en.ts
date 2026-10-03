@@ -1,4 +1,5 @@
 export default {
+  projectPermission: {"allow": "Allow for project", "options": "Choose permission scope", "onceHint": "This request only; no permission saved", "shared": "All project roles · Until revoked · Other limits still apply", "sharedLabel": "Shared project permission", "legacy": "Legacy permission", "onceRequired": "This action requires confirmation every time.", "unavailable": "A reusable scope cannot be verified. Allow once instead.", "action_bash": "Run command: {{target}}", "action_fs_read": "Read file: {{target}}", "action_fs_write": "Write file: {{target}}", "action_fs_patch": "Patch file: {{target}}", "action_artifact_read": "Read deliverable: {{target}}", "action_artifact_write": "Write deliverable: {{target}}", "action_web_fetch": "Access web pages: {{target}}"},
   elementContext: {"select": "Select page elements", "region": "Select region", "done": "Done", "hint": "Select, then send in Hexagon", "element": "Page element", "stale": "Out of date — select again", "sourceHint": "Development hint: {{file}}:{{line}}", "unlocated": "Source not located", "remove": "Remove reference", "starting": "Starting selection…", "connectFirst": "Connect a project browser first", "view": "View reference", "close": "Close reference"},
 
   agentScreen: {"title": "Agent Screen", "move": "Move preview · arrow keys", "hide": "Hide preview", "source": "Preview source", "browser": "Browser", "native": "Desktop app", "collapse": "Collapse preview", "expand": "Expand preview", "unavailable": "Preview unavailable", "loading": "Loading preview…", "local": "Local preview", "open": "Open app"},
@@ -749,8 +750,8 @@ export default {
     foregroundOnly: 'Foreground only',
     namedSession: 'Session: {{name}}',
     noNamedSession: 'No named session',
-    intro: 'Remembered rules let matching calls skip the card; revoking makes them ask again.',
-    empty: 'No remembered rules yet — they appear here after you hit "remember" on a card.',
+    intro: "Project permissions allow future requests within the displayed scope. Revoke anytime. Legacy permissions keep their original scope.",
+    empty: "No permissions yet. Choose “Allow for project” on a pending card to add one.",
     revoke: 'Revoke', revokeTitle: 'Revoke this remembered rule?',
     effect_allow: 'allow', effect_deny: 'deny',
     scope_activation: 'this activation', scope_project: 'project',

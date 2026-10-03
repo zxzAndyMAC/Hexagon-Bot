@@ -1,4 +1,5 @@
 export default {
+  projectPermission: {"allow": "Autoriser pour le projet", "options": "Choisir la portée", "onceHint": "Cette demande uniquement ; aucune permission enregistrée", "shared": "Tous les rôles du projet · Jusqu’à révocation · Autres limites maintenues", "sharedLabel": "Permission partagée du projet", "legacy": "Ancienne permission", "onceRequired": "Cette action exige une confirmation à chaque fois.", "unavailable": "La portée réutilisable ne peut pas être vérifiée. Autorisez une fois.", "action_bash": "Exécuter : {{target}}", "action_fs_read": "Lire le fichier : {{target}}", "action_fs_write": "Écrire le fichier : {{target}}", "action_fs_patch": "Modifier le fichier : {{target}}", "action_artifact_read": "Lire le livrable : {{target}}", "action_artifact_write": "Écrire le livrable : {{target}}", "action_web_fetch": "Accéder aux pages : {{target}}"},
   elementContext: {"select": "Sélectionner des éléments", "region": "Sélectionner une zone", "done": "Terminé", "hint": "Sélectionnez puis envoyez depuis Hexagon", "element": "Élément de page", "stale": "Référence périmée — sélectionnez à nouveau", "sourceHint": "Indice de développement : {{file}}:{{line}}", "unlocated": "Source non localisée", "remove": "Retirer la référence", "starting": "Démarrage de la sélection…", "connectFirst": "Connectez d’abord un navigateur du projet", "view": "Voir la référence", "close": "Fermer la référence"},
 
   agentScreen: {"title": "Agent Screen", "move": "Déplacer l’aperçu · touches fléchées", "hide": "Masquer l’aperçu", "source": "Source de l’aperçu", "browser": "Navigateur", "native": "Application de bureau", "collapse": "Réduire l’aperçu", "expand": "Agrandir l’aperçu", "unavailable": "Aperçu indisponible", "loading": "Chargement de l’aperçu…", "local": "Aperçu local", "open": "Ouvrir l’application"},
@@ -749,8 +750,8 @@ export default {
     foregroundOnly: 'Premier plan uniquement',
     namedSession: 'Session : {{name}}',
     noNamedSession: 'Aucune session nommée',
-    intro: 'Les règles mémorisées laissent passer les appels de même forme ; les révoquer redemande confirmation.',
-    empty: 'Aucune règle mémorisée — elles apparaissent ici après « mémoriser » sur une carte.',
+    intro: "Les permissions du projet couvrent les futures demandes dans la portée affichée et sont révocables. Les anciennes permissions conservent leur portée.",
+    empty: "Aucune permission. Choisissez « Autoriser pour le projet » dans une carte en attente.",
     revoke: 'Révoquer', revokeTitle: 'Révoquer cette règle mémorisée ?',
     effect_allow: 'accorder', effect_deny: 'refuser',
     scope_activation: 'cette activation', scope_project: 'projet',

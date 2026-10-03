@@ -530,6 +530,16 @@ fn answer_permission(
     })
 }
 
+#[tauri::command(async)]
+fn allow_project_permission(
+    state: tauri::State<AppState>,
+    question_id: String,
+) -> Result<(), CmdError> {
+    with_wb(&state, |wb| {
+        wb.allow_project_permission_and_continue(&question_id)
+    })
+}
+
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
 fn advance(
@@ -2396,6 +2406,7 @@ pub fn run() {
             stage_attachment,
             discard_attachments,
             answer_permission,
+            allow_project_permission,
             advance,
             run_checks,
             stamp,

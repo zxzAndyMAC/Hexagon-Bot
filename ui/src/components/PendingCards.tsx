@@ -1,5 +1,5 @@
 import { exceptionLabel } from '../evidenceLabels'
-import type { PermissionShapeSuggestion } from '../gen/PermissionShapeSuggestion'
+import { PermissionActions } from './PermissionActions'
 import { DesignChoices } from './DesignChoices'
 import { ExperienceProposal } from './ExperienceProposal'
 import { useEffect, useRef, useState } from 'react'
@@ -313,34 +313,11 @@ function AcceptanceException({ q, top }: { q: PendingQuestion; top: boolean }) {
 
 export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
-  const [shape, setShape] = useState('')
-  const [shapeSuggestion, setShapeSuggestion] = useState<PermissionShapeSuggestion | null>(null)
-  const shapeEdited = useRef(false)
-  const [shapeReady, setShapeReady] = useState(false)
-  const [shapeQuestionId, setShapeQuestionId] = useState(q.id)
-  const currentShapeSuggestion = shapeQuestionId === q.id ? shapeSuggestion : null
-  useEffect(() => {
-    let active = true
-    shapeEdited.current = false
-    if (q.kind === 'permission' && !q.payload.safety_net) {
-      void api.permissionShapeSuggestion(q.id).then((value) => {
-        if (!active) return
-        setShapeQuestionId(q.id)
-        setShapeSuggestion(value)
-        setShapeReady(true)
-        if (!shapeEdited.current) setShape(value?.shape ?? '')
-      }).catch(() => {
-        if (active) { setShapeQuestionId(q.id); setShapeSuggestion(null); setShapeReady(true) }
-      })
-    }
-    return () => { active = false }
-  }, [q.id, q.kind, q.payload.safety_net])
   const [rejectReason, setRejectReason] = useState('')
   const rewindStageRef = useRef<HTMLSelectElement>(null)
   const rewindStageInputRef = useRef<HTMLInputElement>(null)
   const revisionNoteRef = useRef<HTMLInputElement>(null)
   const stageNames = useUiStore((s) => s.stages)
-  const roles = useUiStore((s) => s.team)
   const p = q.payload
   const approveTip = formatBinding(bindingFor('approve'))
   const rejectTip = formatBinding(bindingFor('reject'))
@@ -363,28 +340,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           {t('cards.writeTargets')} <span className="mono">{p.write_targets.filter((v): v is string => typeof v === 'string').join(' · ')}</span>
         </div>}
         <ProvenanceLines payload={p} />
-        {!safety && shapeQuestionId === q.id && shapeReady && !currentShapeSuggestion && <div className="dim3" style={{ fontSize: 11, marginBottom: 8 }}>{t('cards.shapeUnavailable')}</div>}
-        {!safety && currentShapeSuggestion && <>
-          <div className="dim3" style={{ fontSize: 11, marginBottom: 6 }}>
-            {t('cards.shapeScope', { tool, role: roles.find((agent) => agent.id === currentShapeSuggestion.agent_id)?.role ?? currentShapeSuggestion.agent_id })}
-            {' · '}{t(currentShapeSuggestion.generalized ? 'cards.shapeGeneralized' : 'cards.shapeExact')}
-          </div>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            <input
-              aria-label={t('cards.shapeLabel')}
-              value={shape}
-              onChange={(e) => { shapeEdited.current = true; setShape(e.target.value) }}
-              placeholder={t('cards.shapeHint')}
-              className="mono"
-              style={{ flex: 1, minWidth: 0, fontSize: 11, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}
-            />
-            <Btn disabled={!shape.trim()} onClick={() => api.answerPermission(q.id, true, shape.trim())}>{t('cards.remember')}</Btn>
-          </div>
-        </>}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Btn primary onClick={() => api.answerPermission(q.id, true)}>{t('cards.allowOnce')}{top && ` ${approveTip}`}</Btn>
-          <Btn danger onClick={() => api.answerPermission(q.id, false)}>{t('cards.deny')}{top && ` ${rejectTip}`}</Btn>
-        </div>
+        <PermissionActions key={q.id} q={q} />
       </CardShell>
     )
   }

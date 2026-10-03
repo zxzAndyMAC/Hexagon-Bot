@@ -41,6 +41,7 @@ export type ActionId =
   | 'desktopPermissions'
   | 'desktopAccessibility'
   | 'desktopScreenRecording'
+  | 'permissionOptions'
   | 'approve'
   | 'reject'
   | 'commandPalette'
@@ -118,6 +119,7 @@ const DEFAULTS: Record<ActionId, string> = {
   openExperienceSource: 'alt+mod+o',
   refreshExperienceHistory: 'alt+mod+shift+h',
   nextExperiencePage: 'alt+mod+ArrowDown',
+  permissionOptions: '',
   approve: 'mod+Enter',
   reject: 'mod+Backspace',
   commandPalette: 'mod+K',
@@ -209,6 +211,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'closeTab', labelKey: 'keys.closeTab' },
   { id: 'settings', labelKey: 'keys.settings' },
   { id: 'focusComposer', labelKey: 'keys.composer' },
+  { id: 'permissionOptions', labelKey: 'projectPermission.options' },
   { id: 'approve', labelKey: 'keys.approve' },
   { id: 'reject', labelKey: 'keys.reject' },
   { id: 'stageRewind', labelKey: 'keys.stageRewind' },

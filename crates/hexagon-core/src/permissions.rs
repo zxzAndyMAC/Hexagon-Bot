@@ -745,7 +745,7 @@ fn evaluate_layers(
         }
     }
     // L4 形状化记忆 allow
-    if let Some((shape, scope)) = matching_rule_scoped(db, ctx, tool_name, input, "allow")? {
+    if let Some((shape, scope)) = matching_rule_scoped(db, ctx, tool_name, input, "allow", None)? {
         // External 地板（票 08）：mcp:* 语义由第三方服务器自定，名字只是
         // 标签不是证据——记忆 allow 对本类永不生效，每次调用都是一次外发
         // 判定。（persist_rule 侧同样拒写 mcp 规则，双保险。）
@@ -903,7 +903,17 @@ pub(crate) fn matching_rule(
     input: &Value,
     effect: &str,
 ) -> Result<Option<String>, crate::tools::ToolError> {
-    Ok(matching_rule_scoped(db, ctx, tool, input, effect)?.map(|(s, _)| s))
+    Ok(matching_rule_scoped(db, ctx, tool, input, effect, None)?.map(|(s, _)| s))
+}
+
+pub(crate) fn matches_project_permission(
+    db: &Db,
+    ctx: &ToolContext,
+    tool: &str,
+    input: &Value,
+    rule_id: &str,
+) -> Result<bool, crate::tools::ToolError> {
+    Ok(matching_rule_scoped(db, ctx, tool, input, "allow", Some(rule_id))?.is_some())
 }
 
 fn matching_rule_scoped(
@@ -912,14 +922,15 @@ fn matching_rule_scoped(
     tool: &str,
     input: &Value,
     effect: &str,
+    shared_rule_id: Option<&str>,
 ) -> Result<Option<(String, String)>, crate::tools::ToolError> {
     let mut st = db.conn().prepare(
         "SELECT shape, scope, stage_run_id, domain, network_allowed, background_allowed, session_name, id FROM permission_rules
-         WHERE project_id=?1 AND tool=?2 AND effect=?3 AND (agent_id IS NULL OR agent_id=?4)",
+         WHERE project_id=?1 AND tool=?2 AND effect=?3 AND (agent_id IS NULL OR agent_id=?4) AND (?5 IS NULL OR (project_shared=1 AND id=?5))",
     )?;
     let rules = st
         .query_map(
-            rusqlite::params![ctx.project_id, tool, effect, ctx.agent_id],
+            rusqlite::params![ctx.project_id, tool, effect, ctx.agent_id, shared_rule_id],
             |r| {
                 Ok((
                     r.get(0)?,
@@ -990,8 +1001,8 @@ fn matching_rule_scoped(
     Ok(None)
 }
 
-/// 记形许可写入（resolve 裁决时调用）。安全网调用永不进记忆——返回 false。
-/// 若批准的是包内声明的检验命令，自动沉淀为 project 级 Bash 形（两本账合一）。
+/// 记形许可写入（resolve 裁决时调用）。安全网调用永不进记忆——返回 None。
+/// ADR 0079: single approval never persists, including declared check commands.
 pub fn persist_rule(
     db: &Db,
     ctx: &ToolContext,
@@ -999,32 +1010,58 @@ pub fn persist_rule(
     input: &Value,
     shape: Option<&str>,
     scope: &str,
-    pack: Option<&PackDef>,
-) -> Result<bool, crate::tools::ToolError> {
+    _pack: Option<&PackDef>,
+) -> Result<Option<String>, crate::tools::ToolError> {
     let started = std::time::Instant::now();
     if is_safety_net(tool, input).is_some() {
-        return Ok(false);
+        return Ok(None);
     }
     // External 地板另一半（票 08）：mcp:* 规则根本写不进记忆层——
     // 名字是服务器自己的话，持久豁免等于把判定外包给标签。
     if tool.starts_with("mcp:") {
-        return Ok(false);
+        return Ok(None);
     }
-    let (shape, scope) = if let Some(s) = shape {
-        (s.to_string(), scope.to_string())
-    } else if tool == "bash" {
-        // 检验命令自动沉淀：cmd 命中包声明 checks → project 级精确形
-        let cmd = input["cmd"].as_str().unwrap_or("");
-        let is_check = pack
-            .map(|p| p.stages.iter().any(|st| st.checks.iter().any(|c| c == cmd)))
-            .unwrap_or(false);
-        if !is_check {
-            return Ok(false);
-        }
-        (cmd.to_string(), "project".to_string())
-    } else {
-        return Ok(false);
-    };
+    // ADR 0079 / owner 2026-10-03: once used to silently memorize pack checks.
+    // Only an explicit remembered scope may persist; pack membership is not consent.
+    let Some(shape) = shape else { return Ok(None) };
+    let shape = shape.to_string();
+    let project_shared = scope == "project_shared";
+    if project_shared
+        && crate::permission_suggestion::suggest(tool, input)
+            .is_none_or(|(suggested, _)| suggested != shape)
+    {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "permission_scope",
+            "project_scope_mismatch",
+            started,
+        );
+        return Err(crate::tools::ToolError::BadInput(
+            "project permission scope mismatch".into(),
+        ));
+    }
+    let scope = if project_shared { "project" } else { scope };
+    if !matches!(scope, "project" | "activation") {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "permission_scope",
+            "unknown_scope",
+            started,
+        );
+        return Err(crate::tools::ToolError::BadInput(
+            "unknown permission scope".into(),
+        ));
+    }
     // Owner Q12: an editable suggestion is not authority to widen to arbitrary
     // terminal commands. Reject an empty/global shape and patterns that do not
     // cover the very action being approved; false negative costs another ask.
@@ -1079,24 +1116,26 @@ pub fn persist_rule(
     } else {
         shape.split_once('@').map(|(_, d)| d.to_string())
     };
+    let id = format!("pr{}", db.next_id("pr")?);
     db.conn().execute(
-        "INSERT INTO permission_rules (id, project_id, tool, shape, domain, effect, scope, stage_run_id, agent_id, network_allowed, background_allowed, session_name)
-         VALUES (?1,?2,?3,?4,?5,'allow',?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO permission_rules (id, project_id, tool, shape, domain, effect, scope, stage_run_id, agent_id, network_allowed, background_allowed, session_name, project_shared)
+         VALUES (?1,?2,?3,?4,?5,'allow',?6,?7,?8,?9,?10,?11,?12)",
         rusqlite::params![
-            format!("pr{}", db.next_id("pr")?),
+            id,
             ctx.project_id,
             tool,
             shape,
             domain,
             scope,
             srid,
-            ctx.agent_id,
+            if project_shared { None } else { Some(&ctx.agent_id) },
             tool == "bash" && input["net"].as_bool().unwrap_or(false),
             tool == "bash" && input["background"].as_bool().unwrap_or(false),
-            if tool == "bash" { input["session"].as_str() } else { None }
+            if tool == "bash" { input["session"].as_str() } else { None },
+            project_shared
         ],
     )?;
-    Ok(true)
+    Ok(Some(id))
 }
 
 /// 已记权限规则行（设置-权限分区审计面，ui-audit-2 票 03）。
@@ -1115,13 +1154,14 @@ pub struct PermissionRuleRow {
     pub network_allowed: bool,
     pub background_allowed: bool,
     pub session_name: Option<String>,
+    pub project_shared: bool,
 }
 
 /// 审计面读路径：只读 permission_rules，属主仍是本模块。
 pub fn list_rules(db: &Db, project_id: &str) -> Result<Vec<PermissionRuleRow>, rusqlite::Error> {
     db.conn()
         .prepare(
-            "SELECT id, tool, shape, domain, effect, scope, created_at, agent_id, network_allowed, background_allowed, session_name
+            "SELECT id, tool, shape, domain, effect, scope, created_at, agent_id, network_allowed, background_allowed, session_name, project_shared
              FROM permission_rules WHERE project_id=?1
              ORDER BY created_at DESC, id DESC",
         )?
@@ -1138,6 +1178,7 @@ pub fn list_rules(db: &Db, project_id: &str) -> Result<Vec<PermissionRuleRow>, r
                 network_allowed: r.get(8)?,
                 background_allowed: r.get(9)?,
                 session_name: r.get(10)?,
+                project_shared: r.get(11)?,
             })
         })?
         .collect()
@@ -1338,7 +1379,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(!ok);
+        assert!(ok.is_none());
         let n: i64 = db
             .conn()
             .query_row("SELECT COUNT(*) FROM permission_rules", [], |r| r.get(0))
@@ -1553,11 +1594,11 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(!ok, "External 类规则写不进记忆层");
+        assert!(ok.is_none(), "External 类规则写不进记忆层");
     }
 
     #[test]
-    fn confirmed_check_command_becomes_bash_shape() {
+    fn single_approval_of_check_command_does_not_persist_permission() {
         let (db, ctx, _d) = setup();
         let pack: PackDef = serde_json::from_value(json!({
             "name":"t","version":1,"stages":[{"name":"实现","roles":["后端"],"due":[],
@@ -1573,15 +1614,10 @@ mod tests {
             Some(&pack),
         )
         .unwrap();
-        assert!(ok);
-        // 之后同命令直接放行（project 级沉淀）
+        // ADR 0079: single approval previously silently saved checks as project rules.
+        assert!(ok.is_none());
         let d = bash_ctx(&db, &ctx, "cargo test --quiet");
-        assert!(matches!(
-            d,
-            Decision::Allow {
-                via: AllowVia::Remembered { .. }
-            }
-        ));
+        assert!(matches!(d, Decision::Ask { .. }));
         // 非检验命令不沉淀
         let ok2 = persist_rule(
             &db,
@@ -1593,7 +1629,7 @@ mod tests {
             Some(&pack),
         )
         .unwrap();
-        assert!(!ok2);
+        assert!(ok2.is_none());
     }
 
     #[test]

@@ -559,8 +559,8 @@ it('shows remembered shell network, background and session boundaries', async ()
   vi.spyOn(api, 'logEnabled').mockResolvedValue(true)
   vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
   vi.spyOn(api, 'permissionRules').mockResolvedValue([
-    { id: 'offline', agent_id: 'a1', tool: 'bash', shape: 'npm test', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-01', network_allowed: false, background_allowed: false, session_name: null },
-    { id: 'online', agent_id: 'a1', tool: 'bash', shape: 'npm run dev', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-01', network_allowed: true, background_allowed: true, session_name: 'preview' },
+    { id: 'offline', project_shared: false, agent_id: 'a1', tool: 'bash', shape: 'npm test', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-01', network_allowed: false, background_allowed: false, session_name: null },
+    { id: 'online', project_shared: true, agent_id: null, tool: 'bash', shape: 'exact:npm run dev', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-01', network_allowed: true, background_allowed: true, session_name: 'preview' },
   ])
   const { el, root } = await render(<SettingsPage onBack={() => {}} />)
   const nav = [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Permissions')!
@@ -571,6 +571,10 @@ it('shows remembered shell network, background and session boundaries', async ()
   expect(el.textContent).toContain('Network allowed')
   expect(el.textContent).toContain('Background allowed')
   expect(el.textContent).toContain('Session: preview')
+  // ADR 0079: old rules retain scope, new project rules are visibly shared.
+  expect(el.textContent).toContain('Legacy permission')
+  expect(el.textContent).toContain('Shared project permission')
+  expect(el.textContent).toContain('Run command: npm run dev')
   await act(async () => root.unmount())
   el.remove()
   vi.restoreAllMocks()

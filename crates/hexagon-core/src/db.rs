@@ -225,6 +225,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0055_timeline_receipt_indexes",
         include_str!("../migrations/0055_timeline_receipt_indexes.sql"),
     ),
+    (
+        "0056_project_permissions",
+        include_str!("../migrations/0056_project_permissions.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
