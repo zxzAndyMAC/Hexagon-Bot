@@ -38,6 +38,9 @@ pub(crate) fn sensitive_file_path(path: &Path) -> bool {
         return true;
     }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if crate::db::validate_generic_file_access(&resolved).is_err() {
+        return true;
+    }
     // Desktop ticket 07: ordinary file/search tools must not bypass revocation
     // of screenshot-sharing consent by rereading the clearable private trail.
     let normalized = resolved.to_string_lossy().replace('\\', "/").to_lowercase();
@@ -53,16 +56,6 @@ pub(crate) fn sensitive_file_path(path: &Path) -> bool {
         .is_some_and(|p| p.canonicalize().unwrap_or(p) == resolved)
     {
         return true;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if resolved
-            .metadata()
-            .is_ok_and(|m| m.is_file() && m.nlink() > 1)
-        {
-            return true;
-        }
     }
     false
 }

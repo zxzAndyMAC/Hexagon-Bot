@@ -124,6 +124,8 @@ struct SharedState {
     nonce: Option<String>,
     /// 前台命令/任务已收尾（哨兵到 / 进程退出）。
     done: bool,
+    stdout_eof: bool,
+    stderr_eof: bool,
     exit_code: Option<i32>,
     // Ticket04 (2026-10-01): timing the entire tool call misclassified sandbox
     // setup/cleanup jitter as an application regression. Measure the owned
@@ -246,9 +248,13 @@ fn finish_child(
 fn reader_to_ring<R: Read>(mut r: R, shared: Arc<Shared>, is_out: bool, eof_done: bool) {
     let mut hold: Vec<u8> = Vec::new();
     let mut buf = [0u8; 8192];
+    let mut reached_eof = false;
     loop {
         match r.read(&mut buf) {
-            Ok(0) => break,
+            Ok(0) => {
+                reached_eof = true;
+                break;
+            }
             Ok(n) => {
                 let mut st = shared.st.lock().unwrap();
                 if is_out && st.nonce.is_some() {
@@ -277,8 +283,15 @@ fn reader_to_ring<R: Read>(mut r: R, shared: Arc<Shared>, is_out: bool, eof_done
         }
     }
     let mut st = shared.st.lock().unwrap();
+    if is_out {
+        st.stdout_eof = reached_eof;
+    } else {
+        st.stderr_eof = reached_eof;
+    }
     if is_out && eof_done {
         st.exited = true;
+        st.done = true;
+    } else if st.exited && st.stdout_eof && st.stderr_eof {
         st.done = true;
     }
     shared.cond.notify_all();
@@ -1071,13 +1084,28 @@ fn monitor_child(
             .map(|started| started.elapsed().as_secs_f64() * 1000.0);
         let status = finish_child(child, lease.lock().unwrap().take());
         let mut st = shared.st.lock().unwrap();
-        st.done = true;
-        st.exited = true;
-        st.exit_code = status.ok().and_then(|x| x.code());
-        st.command_elapsed_ms = command_elapsed_ms;
+        record_process_exit(
+            &mut st,
+            status.ok().and_then(|x| x.code()),
+            command_elapsed_ms,
+        );
         drop(st);
         shared.cond.notify_all();
     });
+}
+
+fn record_process_exit(st: &mut SharedState, exit_code: Option<i32>, elapsed: Option<f64>) {
+    // QA 13 / 2026-10-05: the monitor used to publish successful completion
+    // before the independent pipe readers appended the final bytes. Short
+    // --version commands then froze None and falsely drifted on the next read.
+    // Keep leader timing authoritative, but await both drains within the
+    // caller's existing deadline; a stalled pipe must never become success.
+    st.exited = true;
+    st.exit_code = exit_code;
+    st.command_elapsed_ms = elapsed;
+    if st.stdout_eof && st.stderr_eof {
+        st.done = true;
+    }
 }
 
 /// unix 下 pgid==pid（spawn 时 process_group(0)）；非 unix 退化为杀单进程。
@@ -1178,5 +1206,107 @@ fn emit(db: &Db, ctx: &ToolContext, kind: &str, payload: Value) {
         ctx.stage_run_id.as_deref(),
     ) {
         log::warn!("session event {kind} not traced: {e}");
+    }
+}
+
+#[cfg(test)]
+mod output_completion_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn oneshot_reader_error_cannot_publish_successful_completion() {
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("controlled pipe failure"))
+            }
+        }
+        let shared = Shared::new(None);
+        record_process_exit(&mut shared.st.lock().unwrap(), Some(0), Some(1.0));
+        reader_to_ring(
+            std::io::Cursor::new(b"stderr"),
+            shared.clone(),
+            false,
+            false,
+        );
+        reader_to_ring(FailedRead, shared.clone(), true, false);
+        let state = shared.st.lock().unwrap();
+        assert!(state.exited);
+        assert!(!state.done);
+        assert!(!state.stdout_eof);
+    }
+
+    proptest! {
+        #[test]
+        fn oneshot_completion_requires_exit_and_both_drains_in_any_order(
+            order in 0usize..6, code in any::<i32>(), text in "[a-zA-Z0-9]{0,80}"
+        ) {
+            let permutations = [[0,1,2], [0,2,1], [1,0,2], [1,2,0], [2,0,1], [2,1,0]];
+            let shared = Shared::new(None);
+            for (position, step) in permutations[order].iter().enumerate() {
+                match step {
+                    0 => record_process_exit(&mut shared.st.lock().unwrap(), Some(code), Some(1.0)),
+                    1 => reader_to_ring(std::io::Cursor::new(text.as_bytes()), shared.clone(), true, false),
+                    _ => reader_to_ring(std::io::Cursor::new(b"stderr"), shared.clone(), false, false),
+                }
+                prop_assert_eq!(shared.st.lock().unwrap().done, position == 2);
+            }
+            let state = shared.st.lock().unwrap();
+            prop_assert_eq!(state.exit_code, Some(code));
+            prop_assert_eq!(state.out.read_from(0).0, text.as_bytes());
+            prop_assert_eq!(state.err.read_from(0).0, b"stderr");
+        }
+    }
+
+    #[test]
+    fn oneshot_completion_waits_for_delayed_output_readers() {
+        // QA 13 (2026-10-05): version probes raced the pipe readers under a
+        // parallel evaluation suite. Hold both actual pipes until the owned
+        // leader has exited; completion must not expose empty successful output.
+        let root = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let ctx = ToolContext::owner(&db, root.path());
+        let table = SessionTable::default();
+        let spec = table.spec_for(&db, &ctx, false);
+        let mut command = sh_command(root.path(), &spec).unwrap();
+        command
+            .arg("-c")
+            .arg("printf 'Python 3.9.6\\n'; printf 'probe warning\\n' >&2");
+        let mut child = command.spawn().unwrap();
+        let out = child.stdout.take().unwrap();
+        let err = child.stderr.take().unwrap();
+        let shared = Shared::new(None);
+        monitor_child(
+            Arc::new(Mutex::new(Some(child))),
+            Arc::new(Mutex::new(None)),
+            shared.clone(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut state = shared.st.lock().unwrap();
+        while !state.exited {
+            assert!(Instant::now() < deadline, "owned leader did not exit");
+            state = shared
+                .cond
+                .wait_timeout(state, Duration::from_millis(10))
+                .unwrap()
+                .0;
+        }
+        assert_eq!(state.exit_code, Some(0));
+        drop(state);
+        assert!(
+            wait_done(&shared, Instant::now() + Duration::from_millis(20)),
+            "leader exit exposed unread output as complete"
+        );
+        reader_to_ring(out, shared.clone(), true, false);
+        assert!(
+            wait_done(&shared, Instant::now() + Duration::from_millis(20)),
+            "stdout EOF exposed unread stderr as complete"
+        );
+        reader_to_ring(err, shared.clone(), false, false);
+        assert!(!wait_done(&shared, Instant::now() + Duration::from_secs(1)));
+        let state = shared.st.lock().unwrap();
+        assert_eq!(state.out.read_from(0).0, b"Python 3.9.6\n");
+        assert_eq!(state.err.read_from(0).0, b"probe warning\n");
     }
 }

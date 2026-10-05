@@ -22,6 +22,31 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
 }
 fn main() {
     let crate_root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("manifest"));
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("build output"))
+            .join("hexagon-firefox-fork.dylib");
+        let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+            Ok("aarch64") => "arm64",
+            Ok("x86_64") => "x86_64",
+            _ => panic!("unsupported macOS architecture"),
+        };
+        let status = std::process::Command::new("/usr/bin/clang")
+            .args([
+                "-dynamiclib",
+                "-arch",
+                arch,
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-Wno-deprecated-declarations",
+            ])
+            .arg(crate_root.join("src/firefox_fork.c"))
+            .arg("-o")
+            .arg(output)
+            .status()
+            .expect("build Firefox fork adapter");
+        assert!(status.success(), "Firefox fork adapter compilation failed");
+    }
     let root = crate_root
         .parent()
         .and_then(Path::parent)

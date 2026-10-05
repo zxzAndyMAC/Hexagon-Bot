@@ -1,7 +1,8 @@
 import { PermissionScope } from './PermissionActions'
 import { DesktopControlPanel } from './DesktopControlPanel'
 import { BrowserControlPanel } from './BrowserControlPanel'
-import { pauseDesktop } from '../desktopPause'
+import { pauseDesktop, resumeDesktop } from '../desktopPause'
+import { localLogTime } from '../diagTime'
 import { ProjectApprovalMode } from './ProjectApprovalMode'
 import { DesktopPermissions } from './DesktopPermissions'
 import type { ProjectSkillDocument } from '../gen/ProjectSkillDocument'
@@ -1513,7 +1514,7 @@ function LogsSection({ projectless = false }: { projectless?: boolean }) {
                 onClick={() => setOpen(open === rowKey(r) ? null : rowKey(r))}
               >
                 <span className="dim3" style={{ fontSize: 11, width: 60, flexShrink: 0 }}>
-                  {r.ts.slice(11, 19)}
+                  {localLogTime(r.ts, document.documentElement.lang || navigator.language)}
                 </span>
                 <span className={`chip ${r.level === 'warn' ? 'err' : ''}`} style={{ fontSize: 10 }}>
                   {t(`settings.logs_class_${diagClassKey(r.class)}`)}
@@ -1634,6 +1635,10 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false, i
         {!projectless && <button type="button" className="btn" onClick={() => void pauseDesktop()}
           title={`${t('computer.pause')} · ${formatBinding(bindingFor('desktopPause'))}`}>
           <Icon name="pause" size={12} /> {t('computer.pause')}
+        </button>}
+        {!projectless && <button type="button" className="btn" onClick={() => void resumeDesktop()}
+          title={`${t('computer.resume')} · ${formatBinding(bindingFor('desktopResume'))}`}>
+          {t('computer.resume')}
         </button>}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>

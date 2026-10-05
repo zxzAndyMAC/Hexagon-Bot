@@ -19,6 +19,15 @@ export const DECISION_KINDS = new Set([
 
 export const TOOL_KINDS = new Set(['tool_called', 'tool_result'])
 
+/** Fullstack QA 2026-10-05: /pause and sleep deliberately close a turn.
+ * Match only the recorded terminal outcome; a failure merely mentioning
+ * Interrupted must remain an error. Crash recovery is also not a manual stop. */
+export function isInterruptedTurn(item: TimelineItem): boolean {
+  const outcome = item.event.payload.outcome ?? item.event.payload.error
+  return item.event.kind === 'turn_failed' &&
+    (outcome === 'Ok(Interrupted)' || outcome === 'Interrupted')
+}
+
 /** 票 02：自动盖章与负责人亲手盖章都是 `stamped`，靠 payload.by 区分。缺 by 的旧事件当人工。 */
 export function stampedByAutonomy(payload: { by?: unknown } | null | undefined): boolean {
   return payload?.by === 'autonomy'
@@ -201,7 +210,7 @@ function settledTurns(timeline: TimelineItem[]): TurnWindow[] {
         startId: cur.startId,
         endId: ev.id,
         agentId: ev.agent_id,
-        failed: ev.kind === 'turn_failed',
+        failed: ev.kind === 'turn_failed' && !isInterruptedTurn(it),
         secs: cur.startAt && endAt ? Math.max(0, (endAt - cur.startAt) / 1000) : null,
       })
     }
@@ -295,8 +304,10 @@ export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<
   // 行，落在最后被折行的槽位（Cursor 语法：执行块收在它与最终回复之间）；
   // 消息行与其余 item 原位保留——agent_message 是交付内容，折叠等于藏答案。
   if (filter !== 'all') return out
+  const interruptedEnds = new Set(timeline.filter(isInterruptedTurn).map(item => item.event.id))
   const wins: TurnWindow[] = page ? page.turn_windows.flatMap(w => w.end_id == null ? [] : [{
-    startId: w.start_id, endId: w.end_id, agentId: w.agent_id, failed: w.failed,
+    startId: w.start_id, endId: w.end_id, agentId: w.agent_id,
+    failed: w.failed && !interruptedEnds.has(w.end_id),
     secs: w.ended_at && parseTime(w.started_at) && parseTime(w.ended_at)
       ? Math.max(0, (parseTime(w.ended_at) - parseTime(w.started_at)) / 1000) : null,
     calls: w.tool_call_count,

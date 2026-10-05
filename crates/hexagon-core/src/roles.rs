@@ -380,6 +380,7 @@ pub fn agent_avatar(
     ] {
         let p = dir.join(format!("{agent_id}.{ext}"));
         if p.exists() {
+            crate::db::validate_generic_file_access(&p)?;
             let b = std::fs::read(&p)?;
             return Ok(Some(format!(
                 "data:{mime};base64,{}",
@@ -403,6 +404,7 @@ pub fn avatar_hash(
     for ext in ["png", "jpg", "webp", "gif"] {
         let p = dir.join(format!("{agent_id}.{ext}"));
         if p.exists() {
+            crate::db::validate_generic_file_access(&p)?;
             let b = std::fs::read(&p)?;
             let mut h = std::collections::hash_map::DefaultHasher::new();
             b.hash(&mut h);

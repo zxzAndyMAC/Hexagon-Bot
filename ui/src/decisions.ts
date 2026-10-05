@@ -40,6 +40,9 @@ export function policyQualityMessage(q: PendingQuestion) {
 
 export async function approveQuestion(q: PendingQuestion) {
   const p = q.payload
+  // Owner Q4 (2026-10-05): revalidation needs the displayed evidence version;
+  // the generic stage-stamp shortcut previously supplied neither card nor version.
+  if (p.sub === 'quality_revalidation') { useUiStore.getState().pushToast(i18n.t('quality.revalidationHint')); return }
   if (p.sub === 'design_direction') { useUiStore.getState().pushToast(i18n.t('design.chooseHint')); return }
   if (p.policy_recovery === true) {
     useUiStore.getState().pushToast(i18n.t('policy.recovery'))
@@ -71,6 +74,7 @@ export async function approveQuestion(q: PendingQuestion) {
 
 export async function rejectQuestion(q: PendingQuestion) {
   const p = q.payload
+  if (p.sub === 'quality_revalidation') return api.cancelQualityRevalidation(q.id, String(p.project_root ?? ''))
   if (p.sub === 'design_direction') { useUiStore.getState().pushToast(i18n.t('design.chooseHint')); return }
   if (p.sub === 'tool_outcome_unknown') {
     useUiStore.getState().pushToast(i18n.t('cards.actionUnknownHint'))
@@ -98,6 +102,7 @@ export function rejectReasonWithJudge(reason: string, judgeVerdict: string | nul
 
 /** 卡 kind → 卡面标题 i18n key（kbd 目标提示 / sticky 迷你条共用） */
 export function kindTitleKey(q: PendingQuestion): string {
+  if (q.payload.sub === 'quality_revalidation') return 'quality.revalidationTitle'
   if (q.payload.sub === 'design_direction') return 'design.title'
   if (q.payload.sub === 'acceptance_exception') return 'exceptions.title'
   if (q.kind === 'stamp' && q.payload.proposal_id && q.payload.surface === 'pack_copy') return 'policy.title'
@@ -164,6 +169,10 @@ export async function handlePendingKey(
   if (isApprove && q.payload.sub === 'acceptance_exception') {
     useUiStore.getState().pushToast(i18n.t('exceptions.hint'))
     return 'blocked-exception'
+  }
+  if (q.payload.sub === 'quality_revalidation') {
+    useUiStore.getState().pushToast(i18n.t('quality.revalidationHint'))
+    return 'blocked-final'
   }
   if (isApprove && q.kind === 'publish') {
     // L3 对外不可逆：发布不走键盘批准（ADR 0056 确认分级）

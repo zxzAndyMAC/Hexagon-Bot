@@ -362,8 +362,9 @@ describe('一句话优化成项目说明（票 16）', () => {
     expect(back().disabled).toBe(false)
     expect(nextBtn(el).disabled).toBe(false)
     expect(optimize).toHaveBeenCalledWith('Demo', '一个本地待办清单', [
-      { question: '技术栈？', answer: 'React' },
-      { question: '给谁用？', answer: '外婆' },
+      // fullstack QA #01：原选项也是负责人作出选择时的上下文，须随问题保留。
+      { question: '技术栈？\n1. React\n2. Python', answer: 'React' },
+      { question: '给谁用？\n1. 家人', answer: '外婆' },
     ])
     expect(create).not.toHaveBeenCalled()
     const boxes = [...el.querySelectorAll('textarea')]
@@ -386,6 +387,39 @@ describe('一句话优化成项目说明（票 16）', () => {
     expect(md).toContain('- Build:')
     expect(md).toContain('未知')
     expect(md).not.toMatch(/npm|cargo/)
+  })
+
+  it.each(['以上三类都要', '前两类先做'])('起草保留完整选项，让指代答案“%s”有上下文', async (answer) => {
+    // 2026-10-03 fullstack QA #01：只传“以上三类都要”曾让模型声明统计需求未明确。
+    const options = ['工单状态与积压', '成员工作量与完成率', '库存占用与预警', '以上三类都要']
+    vi.spyOn(api, 'briefQuestions').mockResolvedValue([
+      { question: '统计页展示哪些内容？', options },
+    ])
+    const optimize = vi.spyOn(api, 'optimizeAgentsMd').mockResolvedValue(MODEL_DRAFT)
+    const el = await renderWizard()
+    await advance(el, '3 · Project brief')
+    await act(async () => { setTextArea(el.querySelector('textarea')!, '团队交付台') })
+    await act(async () => {
+      [...el.querySelectorAll('button')].find((b) => b.textContent === 'Optimize')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const card = el.querySelector('[data-qa-cards] .card-ask')!
+    await act(async () => {
+      if (options.includes(answer)) {
+        [...card.querySelectorAll('button')].find((b) => b.textContent === answer)!
+          .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      } else {
+        setInput(card.querySelector('input')!, answer)
+      }
+    })
+    await act(async () => {
+      [...el.querySelectorAll('button')].find((b) => b.textContent === 'Draft with these answers')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const qa = optimize.mock.calls[0][2]!
+    expect(qa).toHaveLength(1)
+    expect(qa[0].answer).toBe(answer)
+    for (const option of options) expect(qa[0].question).toContain(option)
   })
 
   it('出题在途时 Back/Next 都锁死，落地才放行', async () => {

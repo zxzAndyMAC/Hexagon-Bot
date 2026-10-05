@@ -215,6 +215,9 @@ fn walk(root: &Path, rel: &str) -> Result<(PathBuf, Vec<String>), RepoFsError> {
             }
         }
     }
+    // QA14: the owner editor used to read SHM before rejecting its NUL bytes,
+    // losing SQLite's live locks. The same guard protects write/create paths.
+    crate::db::validate_generic_file_access(&cur)?;
     Ok((cur, segs))
 }
 

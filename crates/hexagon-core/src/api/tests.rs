@@ -9161,7 +9161,11 @@ fn versioned_delivery_requires_every_current_run_file() {
     for (name, body) in [
         ("tests.sh", "test -s index.html && test -s app.js && test -s style.css\n"),
         ("accessibility.sh", "grep -q 'lang=\"en\"' index.html && grep -q '<title>' index.html && grep -q '<main>' index.html\n"),
-        ("performance.sh", "test \"$(wc -c < index.html)\" -lt 1024 && test \"$(wc -c < app.js)\" -lt 1024 && test \"$(wc -c < style.css)\" -lt 1024\n"),
+        // QA 2026-10-05 batch5: the size-only fixture established a baseline
+        // while its registered CSS body was missing. Later process scheduling
+        // looked like a regression. Require the complete fixture first rather
+        // than weakening the production performance comparison.
+        ("performance.sh", "test -s .hexagon/style.css && test \"$(wc -c < index.html)\" -lt 1024 && test \"$(wc -c < app.js)\" -lt 1024 && test \"$(wc -c < style.css)\" -lt 1024\n"),
     ] { std::fs::write(dir.path().join(name),body).unwrap(); }
     let pack: PackDef=serde_json::from_value(json!({"name":"complete delivery","version":1,"stages":[{"name":"build","roles":["worker"],"due":["代码"],"checks":["sh tests.sh","sh accessibility.sh","sh performance.sh"],"quality_checks":{"tests":"sh tests.sh","accessibility":"sh accessibility.sh","performance":"sh performance.sh"}}]})).unwrap();
     let wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
@@ -9211,10 +9215,177 @@ fn versioned_delivery_requires_every_current_run_file() {
         "incomplete",
         "registered artifact body must exist too"
     );
+    let partial_performance: String = wb.db.conn().query_row(
+        "SELECT payload FROM events WHERE kind='test_ran' AND json_extract(payload,'$.quality.category')='performance' ORDER BY id DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert_ne!(
+        serde_json::from_str::<Value>(&partial_performance).unwrap()["quality"]
+            ["execution_exit_code"],
+        0,
+        "the incomplete fixture must not establish a performance baseline"
+    );
     std::fs::write(dir.path().join(".hexagon/style.css"), source("style.css")).unwrap();
     wb.run_checks().unwrap();
     let complete = serde_json::to_value(wb.advance().unwrap()).unwrap();
     assert_eq!(complete["action"], "pack_finished", "{complete}");
+}
+
+// Fullstack QA 2026-10-05 #12: ordinary later-stage revisions must preserve
+// the original path/kind obligation, never borrow another run's deliverable.
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 18,
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/cross-stage-delivery.txt"))),
+        ..proptest::test_runner::Config::default()
+    })]
+    #[test]
+    fn versioned_cross_stage_delivery_uses_only_anchored_current_versions(
+        suffix in "[a-z]{1,4}",
+        variant in 0u8..8,
+        review in proptest::bool::ANY,
+        fresh_review in proptest::bool::ANY,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let reviews = if review { json!([{ "artifact_kind":"契约", "reviewer":"reviewer" }]) } else { json!([]) };
+        let pack: PackDef=serde_json::from_value(json!({"name":"revision","version":1,"stages":[
+            {"name":"define","roles":["worker","reviewer"],"due":["契约"],"reviews":reviews},
+            {"name":"implement","roles":["worker","reviewer"],"due":["实现记录"]},
+            {"name":"accept","roles":["worker","reviewer"],"due":[],"stamp_point":true}
+        ]})).unwrap();
+        let wb=Workbench::for_test(dir.path(), &["worker","reviewer"], Some(pack)).unwrap();
+        let original=wb.open_stage(0).unwrap().run_id;
+        let path=format!("docs/contract-{suffix}.md");
+        let write=|ctx:&crate::tools::ToolContext, path:&str, kind:&str, content:&str| {
+            wb.registry.call(&wb.db,ctx,"artifact_write",json!({"path":path,"kind":kind,"content":content})).unwrap();
+        };
+        let latest=|| wb.db.conn().query_row("SELECT id FROM artifacts WHERE project_id=?1 AND path=?2 ORDER BY version DESC LIMIT 1",rusqlite::params![wb.project_id,path],|r|r.get::<_,String>(0)).unwrap();
+        if variant != 4 {
+            write(&wb.ctx_for("a0",Some(original.clone())),&path,"契约","v1");
+            if review {
+                crate::review::submit_review(&wb.db,&wb.ctx_for("a1",Some(original.clone())),&latest(),crate::review::Verdict::Pass,"review v1").unwrap();
+            }
+            // A second current file of the same kind must not conceal a
+            // missing/retyped/rejected replacement of the first anchored path.
+            write(&wb.ctx_for("a0",Some(original.clone())), "docs/other-contract.md", "契约", "independent");
+            if review {
+                let other: String = wb.db.conn().query_row("SELECT id FROM artifacts WHERE project_id=?1 AND path='docs/other-contract.md'",[&wb.project_id],|r|r.get(0)).unwrap();
+                crate::review::submit_review(&wb.db,&wb.ctx_for("a1",Some(original.clone())),&other,crate::review::Verdict::Pass,"review independent").unwrap();
+            }
+            wb.advance().unwrap();
+        } else {
+            // Negative fixture: a later stage's same kind is not proof that this
+            // original attempt ever delivered its own required path.
+            wb.open_stage(1).unwrap();
+        }
+        let implementation=active_run_id(&wb);
+        let ctx=wb.ctx_for("a0",if variant==7 { None } else { Some(implementation.clone()) });
+        write(&ctx,&path,if variant==3 {"另一类型"} else {"契约"},"v2");
+        write(&wb.ctx_for("a0",Some(implementation.clone())),"docs/implementation.md","实现记录","implemented");
+        if review && fresh_review && variant != 3 {
+            crate::review::submit_review(&wb.db,&wb.ctx_for("a1",Some(implementation.clone())),&latest(),crate::review::Verdict::Pass,"review v2").unwrap();
+        }
+        wb.advance().unwrap();
+        if variant==1 { std::fs::remove_file(dir.path().join(".hexagon").join(&path)).unwrap(); }
+        if variant==2 {
+            let final_ctx=wb.ctx_for("a0",Some(active_run_id(&wb)));
+            let pending = crate::artifacts::with_fault("replace",|| wb.registry.call(&wb.db,&final_ctx,"artifact_write",json!({"path":path,"kind":"契约","content":"pending v3"})));
+            proptest::prop_assert!(pending.is_err());
+        }
+        if variant==5 {
+            // Rejected workers cannot supply the latest accepted delivery.
+            wb.db.conn().execute("UPDATE stage_runs SET state='rejected' WHERE id=?1",[&implementation]).unwrap();
+        }
+        if variant==6 {
+            // Exercise real new attempts through the facade: the revision from
+            // an older implementation attempt must not supply current evidence.
+            wb.open_stage(1).unwrap();
+            wb.open_stage(2).unwrap();
+        }
+        let evidence=wb.stage_evidence().unwrap().unwrap();
+        let valid=variant==0;
+        proptest::prop_assert_eq!(evidence.missing.iter().any(|m|m.starts_with("artifact:契约")),!valid,"{:?}",evidence.missing);
+        if valid {
+            proptest::prop_assert_eq!(evidence.missing.iter().any(|m|m.starts_with("review:契约")),review && !fresh_review,"{:?}",evidence.missing);
+            if !review || fresh_review {
+                proptest::prop_assert_eq!(&serde_json::to_value(wb.advance().unwrap()).unwrap()["action"],"awaiting_stamp");
+                proptest::prop_assert_eq!(&serde_json::to_value(wb.stamp().unwrap()).unwrap()["action"],"pack_finished");
+            }
+        }
+    }
+}
+
+#[test]
+fn versioned_cross_stage_delivery_expires_prior_checks_and_owner_exceptions() {
+    // QA #12: a later artifact revision must stale a passing check and an
+    // explicitly accepted failing check from the original obligation's scope.
+    let dir = tempfile::tempdir().unwrap();
+    let pack: PackDef =
+        serde_json::from_value(json!({"name":"revision proof","version":1,"stages":[
+            {"name":"define","roles":["worker"],"due":["契约"],"checks":["true","false"]},
+            {"name":"implement","roles":["worker"],"due":[]},
+            {"name":"accept","roles":["worker"],"due":[],"stamp_point":true}
+        ]}))
+        .unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
+    let original = wb.open_stage(0).unwrap().run_id;
+    wb.registry
+        .call(
+            &wb.db,
+            &wb.ctx_for("a0", Some(original.clone())),
+            "artifact_write",
+            json!({"path":"contract.md","kind":"契约","content":"v1"}),
+        )
+        .unwrap();
+    wb.run_checks().unwrap();
+    let fingerprint = wb.stage_evidence().unwrap().unwrap().fingerprint.unwrap();
+    let question = wb
+        .request_acceptance_exception(&fingerprint)
+        .unwrap()
+        .question_id;
+    wb.accept_delivery_exception(
+        &question,
+        &fingerprint,
+        &[crate::orchestra::ExceptionRequirement::Check {
+            run_id: original.clone(),
+            cmd: "false".into(),
+        }],
+        "Known fixture check; only this version",
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(wb.advance().unwrap()).unwrap()["action"],
+        "stage_opened"
+    );
+    assert!(wb.stage_evidence().unwrap().unwrap().missing.is_empty());
+    wb.registry
+        .call(
+            &wb.db,
+            &wb.ctx_for("a0", Some(active_run_id(&wb))),
+            "artifact_write",
+            json!({"path":"contract.md","kind":"契约","content":"v2"}),
+        )
+        .unwrap();
+    wb.advance().unwrap();
+    let evidence = wb.stage_evidence().unwrap().unwrap();
+    assert!(!evidence
+        .missing
+        .iter()
+        .any(|m| m.starts_with("artifact:契约")));
+    assert!(
+        evidence.missing.contains(&"check:true".into()),
+        "v1 passing check cannot attest v2"
+    );
+    assert!(
+        evidence.missing.contains(&"check:false".into()),
+        "v1 owner exception cannot attest v2"
+    );
+    assert!(evidence.exceptions.iter().filter(|c| matches!(&c.requirement,crate::orchestra::ExceptionRequirement::Check{run_id,..} if run_id==&original)).all(|c|!c.accepted));
+    assert_eq!(
+        serde_json::to_value(wb.advance().unwrap()).unwrap()["action"],
+        "incomplete"
+    );
 }
 
 #[test]
@@ -15367,6 +15538,167 @@ fn desktop_permission_resumes_with_result_without_replaying_effect() {
     }
 }
 
+struct PermissionResumeChildFixture;
+impl crate::tools::Tool for PermissionResumeChildFixture {
+    fn name(&self) -> &str {
+        "permission_resume_child_fixture"
+    }
+    fn description(&self) -> &str {
+        "Record a completed child turn in the temporary test DB"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    fn risk(&self) -> crate::tools::RiskClass {
+        crate::tools::RiskClass::Read
+    }
+    fn exec(
+        &self,
+        db: &crate::db::Db,
+        _: &Value,
+        ctx: &crate::tools::ToolContext,
+    ) -> Result<Value, crate::tools::ToolError> {
+        // Child turns share the parent's instance and stage. Record that exact
+        // ordering through the tool loop before the parent's permission request.
+        db.append_event(
+            &ctx.project_id,
+            EventKind::TurnStarted,
+            json!({"subagent":true,"instruction":"/source child-only task","source_mode":true}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        db.append_event(
+            &ctx.project_id,
+            EventKind::TurnFinished,
+            json!({"subagent":true}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        Ok(json!({"child":"complete"}))
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 12,
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/permission-resume-boundary.txt"))),
+        ..proptest::test_runner::Config::default()
+    })]
+    #[test]
+    fn permission_resume_keeps_only_its_active_stage_dispatch(
+        prior_allow in proptest::bool::ANY,
+        current_allow in proptest::bool::ANY,
+        legacy_marker in proptest::bool::ANY,
+        reopen in proptest::bool::ANY,
+        child in proptest::bool::ANY,
+    ) {
+        // Fullstack QA 2026-10-05: staged dispatch markers had a null run, so
+        // permission resume fell back to the stage's first turn and restored
+        // earlier independent tools. The live QA repeated completed clicks.
+        let dir = tempfile::tempdir().unwrap();
+        let pack: PackDef = serde_json::from_value(json!({"name":"t","version":1,"stages":[
+            {"name":"work","roles":["worker"],"due":["unfinished deliverable"]}
+        ]})).unwrap();
+        // A reopen regression needs a durable DB; for_test is intentionally in-memory.
+        let mut wb = Workbench::open_scoped(dir.path(), "t", &[("a0".into(), "worker".into())], Some(pack.clone()), false).unwrap();
+        wb.open_stage(0).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        wb.registry.register(PermissionResumeChildFixture);
+        let mut responses = vec![
+            text_response("prior plan"),
+            tool_response(vec![("prior", "remote_publish", json!({"marker":"obsolete-independent-effect"}))]),
+            text_response("prior complete"),
+            text_response("current plan"),
+        ];
+        // A child completes in an earlier response, before the parent's next
+        // request event. Same-response tool batches share one request marker.
+        if child { responses.push(tool_response(vec![("child", "permission_resume_child_fixture", json!({}))])); }
+        responses.push(tool_response(vec![("current", "remote_publish", json!({"marker":"current-independent-effect"}))]));
+        responses.push(text_response("current complete"));
+        let provider = Arc::new(ScriptedProvider::new(responses));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(prior) = wb.dispatch("worker", "prior task", &[]).unwrap() else { panic!("prior permission"); };
+        wb.answer_permission_and_continue(&prior, prior_allow, None, "activation").unwrap();
+        let TurnOutcome::AwaitingPermission(current) = wb.dispatch("worker", "current task", &[]).unwrap() else { panic!("current permission"); };
+        if legacy_marker {
+            // Upgrade fixture: releases before this fix persisted null stage IDs.
+            wb.db.conn().execute("UPDATE events SET stage_run_id=NULL WHERE kind='fastpath_dispatched'", []).unwrap();
+        }
+        if reopen {
+            wb = Workbench::open(dir.path(), "t", &[("a0".into(), "worker".into())], Some(pack)).unwrap();
+            wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+            wb.registry.register(PermissionResumeChildFixture);
+            wb.register_provider("default", provider.clone());
+        }
+        wb.answer_permission_and_continue(&current, current_allow, None, "activation").unwrap();
+        let requests = provider.recorded();
+        let restored_tools: Vec<_> = requests.last().unwrap().messages.iter().flat_map(|message| &message.content)
+            .filter(|block| matches!(block, crate::provider::ContentBlock::ToolUse { .. })).collect();
+        let restored = serde_json::to_string(&restored_tools).unwrap();
+        proptest::prop_assert!(restored.contains("current-independent-effect"));
+        proptest::prop_assert!(!restored.contains("obsolete-independent-effect"), "previous independent task must stay outside restored tools");
+        let last_parent = events(&wb, Some(&[EventKind::TurnStarted])).unwrap().into_iter().rfind(|event| event.payload["subagent"] != true).unwrap();
+        proptest::prop_assert_eq!(last_parent.payload["instruction"].as_str(), Some("current task"));
+        proptest::prop_assert_eq!(&last_parent.payload["source_mode"], &json!(false));
+        proptest::prop_assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), usize::from(prior_allow) + usize::from(current_allow));
+    }
+
+    #[test]
+    fn permission_resume_never_restarts_a_superseded_dispatch(allow in proptest::bool::ANY) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            text_response("old plan"),
+            tool_response(vec![("old", "remote_publish", json!({}))]),
+            text_response("new plan"), text_response("new independent task complete"),
+            text_response("must not restart old task"),
+        ]));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(old) = wb.dispatch("worker", "old task", &[]).unwrap() else { panic!("old permission"); };
+        wb.dispatch("worker", "new independent task", &[]).unwrap();
+        let before = provider.recorded().len();
+        wb.answer_permission_and_continue(&old, allow, None, "activation").unwrap();
+        proptest::prop_assert_eq!(provider.recorded().len(), before, "the old decision cannot restart a superseded task");
+        proptest::prop_assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), usize::from(allow));
+    }
+
+    #[test]
+    fn permission_resume_requires_a_trustworthy_parent_and_stage(
+        allow in proptest::bool::ANY, missing_boundary in 0u8..3,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = serde_json::from_value(json!({"name":"t","version":1,"stages":[
+            {"name":"work","roles":["worker"],"due":["unfinished deliverable"]}
+        ]})).unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], Some(pack)).unwrap();
+        wb.open_stage(0).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            text_response("plan"), tool_response(vec![("effect", "remote_publish", json!({}))]),
+            text_response("must not restart without a trustworthy boundary"),
+        ]));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(card) = wb.dispatch("worker", "parent task", &[]).unwrap() else { panic!("permission"); };
+        // Temporary fixture corruption represents unavailable legacy evidence;
+        // the actual owner decision still resolves its original tool effect.
+        if missing_boundary == 0 {
+            wb.db.conn().execute("DELETE FROM events WHERE kind='stage_started'", []).unwrap();
+        } else if missing_boundary == 1 {
+            wb.db.conn().execute("UPDATE events SET payload=json_set(payload,'$.subagent',1) WHERE kind='turn_started'", []).unwrap();
+        } else {
+            wb.db.conn().execute("UPDATE tool_actions SET request_id=NULL", []).unwrap();
+        }
+        let before = provider.recorded().len();
+        wb.answer_permission_and_continue(&card, allow, None, "activation").unwrap();
+        proptest::prop_assert_eq!(provider.recorded().len(), before);
+        proptest::prop_assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), usize::from(allow));
+    }
+}
+
 #[test]
 fn run_test_rejection_does_not_create_unknown_effect_card() {
     // Live acceptance 2026-10-01: `cd web && npm run check` was rejected
@@ -15904,5 +16236,266 @@ proptest::proptest! {
         proptest::prop_assert!(abandon_tool_action_control(&wb.db, &wb.project_id, dir.path(), other.path().canonicalize().unwrap().to_str().unwrap(), &action, &reason).is_err());
         proptest::prop_assert!(!crate::actions::has_resolution(&wb.db, &action).unwrap());
         proptest::prop_assert_eq!(events(&wb, None).unwrap().len(), before);
+    }
+}
+
+// QA14 / 2026-10-05: a raw read of state.db-shm closes an unrelated fd in
+// SQLite's process and silently drops its POSIX DMS lock. A later legitimate
+// SQLite client can then truncate the live mapping and cause SIGBUS. Probe the
+// lock from another process; F_GETLK in the owning process would hide its locks.
+#[cfg(unix)]
+#[test]
+fn qa14_external_dms_lock_probe() {
+    use std::os::fd::AsRawFd;
+    let Some(path) = std::env::var_os("HEXAGON_QA14_DMS_PATH") else {
+        return;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as _;
+    lock.l_whence = libc::SEEK_SET as _;
+    // SQLite's Unix WAL format reserves byte 128 for the dead-man-switch lock.
+    lock.l_start = 128;
+    lock.l_len = 1;
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &lock) };
+    assert_eq!(
+        rc, -1,
+        "live SQLite DMS lock was lost by a generic file read"
+    );
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    assert!(matches!(errno, Some(libc::EACCES) | Some(libc::EAGAIN)));
+}
+
+#[cfg(unix)]
+fn qa14_assert_dms_locked(root: &Path) {
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "api::tests::qa14_external_dms_lock_probe",
+            "--nocapture",
+        ])
+        .env("HEXAGON_QA14_DMS_PATH", root.join(".hexagon/state.db-shm"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn qa14_repository_grep_preserves_live_sqlite_dms_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(dir.path(), "wal-lock-probe", &[], None).unwrap();
+    wb.db
+        .conn()
+        .execute("CREATE TABLE qa14_lock_probe(value TEXT)", [])
+        .unwrap();
+    qa14_assert_dms_locked(dir.path());
+    crate::search::search(
+        dir.path(),
+        crate::search::Query::Grep("wal-lock-needle"),
+        ".",
+        None,
+        || Ok(()),
+    )
+    .unwrap();
+    qa14_assert_dms_locked(dir.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn qa14_owner_editor_preserves_live_sqlite_dms_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(dir.path(), "wal-lock-probe", &[], None).unwrap();
+    wb.db
+        .conn()
+        .execute("CREATE TABLE qa14_lock_probe(value TEXT)", [])
+        .unwrap();
+    qa14_assert_dms_locked(dir.path());
+    assert!(crate::files::read_repo_file(dir.path(), ".hexagon/state.db-shm").is_err());
+    qa14_assert_dms_locked(dir.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn qa14_semantic_index_preserves_live_sqlite_dms_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(dir.path(), "wal-lock-probe", &[], None).unwrap();
+    wb.db
+        .conn()
+        .execute("CREATE TABLE qa14_lock_probe(value TEXT)", [])
+        .unwrap();
+    std::fs::write(dir.path().join("ordinary.txt"), "ordinary indexable source").unwrap();
+    qa14_assert_dms_locked(dir.path());
+    crate::semsearch::refresh(&wb.db, dir.path(), &crate::semsearch::HashEmbedder, &|| {
+        Ok(())
+    })
+    .unwrap();
+    qa14_assert_dms_locked(dir.path());
+    let indexed: Vec<String> = wb
+        .db
+        .conn()
+        .prepare("SELECT path FROM code_files")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(indexed.contains(&"ordinary.txt".into()));
+    assert!(!indexed.iter().any(|p| p.contains("state.db")));
+}
+
+#[cfg(unix)]
+#[test]
+fn qa14_fingerprint_refuses_state_alias_before_reading_and_preserves_lock() {
+    for hard in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::open(dir.path(), "wal-lock-probe", &[], None).unwrap();
+        wb.db
+            .conn()
+            .execute("CREATE TABLE qa14_lock_probe(value TEXT)", [])
+            .unwrap();
+        let state = dir.path().join(".hexagon/state.db-shm");
+        let alias = dir.path().join("source-alias");
+        if hard {
+            std::fs::hard_link(&state, &alias).unwrap();
+        } else {
+            std::os::unix::fs::symlink(&state, &alias).unwrap();
+        }
+        qa14_assert_dms_locked(dir.path());
+        // A forbidden source input must fail the check, never silently attest a
+        // smaller inventory. The same guard covers required artifact aliases.
+        assert!(crate::artifacts::fingerprint::source_manifest(dir.path()).is_err());
+        qa14_assert_dms_locked(dir.path());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn qa14_file_and_artifact_tools_preserve_live_sqlite_lock_for_aliases() {
+    use crate::tools::Tool;
+    for artifact in [false, true] {
+        for alias_kind in [0, 1, 2] {
+            let dir = tempfile::tempdir().unwrap();
+            let wb = Workbench::open(dir.path(), "wal-lock-probe", &[], None).unwrap();
+            wb.db
+                .conn()
+                .execute("CREATE TABLE qa14_lock_probe(value TEXT)", [])
+                .unwrap();
+            let state = dir.path().join(".hexagon/state.db-shm");
+            let name = if alias_kind == 0 {
+                "state.db-shm"
+            } else {
+                "alias.txt"
+            };
+            if alias_kind == 1 {
+                std::os::unix::fs::symlink(&state, dir.path().join(".hexagon/alias.txt")).unwrap();
+            }
+            if alias_kind == 2 {
+                std::fs::hard_link(&state, dir.path().join(".hexagon/alias.txt")).unwrap();
+            }
+            let ctx = crate::tools::ToolContext::owner(&wb.db, dir.path());
+            qa14_assert_dms_locked(dir.path());
+            if artifact {
+                assert!(crate::tools::ArtifactRead
+                    .exec(&wb.db, &json!({"path":name}), &ctx)
+                    .is_err());
+            } else {
+                assert!(crate::tools::FsRead
+                    .exec(&wb.db, &json!({"path":format!(".hexagon/{name}")}), &ctx)
+                    .is_err());
+            }
+            qa14_assert_dms_locked(dir.path());
+            // Normal .hexagon text remains accessible; the new fence only
+            // protects database identity, not the whole delivery tree.
+            std::fs::write(dir.path().join(".hexagon/ordinary.md"), "ordinary delivery").unwrap();
+            assert_eq!(
+                crate::tools::ArtifactRead
+                    .exec(&wb.db, &json!({"path":"ordinary.md"}), &ctx)
+                    .unwrap()["content"],
+                "ordinary delivery"
+            );
+            qa14_assert_dms_locked(dir.path());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn qa14_owner_file_mutations_refuse_state_and_preserve_original_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".hexagon")).unwrap();
+    for name in [
+        "state.db",
+        "state.db-shm",
+        "state.db-wal",
+        "state.db-journal",
+    ] {
+        let rel = format!(".hexagon/{name}");
+        let path = dir.path().join(&rel);
+        std::fs::write(&path, "fixture original bytes").unwrap();
+        assert!(crate::files::read_repo_file(dir.path(), &rel).is_err());
+        assert!(crate::files::write_repo_file(dir.path(), &rel, "overwrite").is_err());
+        assert!(crate::files::create_repo_file(dir.path(), &rel).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "fixture original bytes"
+        );
+    }
+    assert!(crate::files::create_repo_file(dir.path(), ".hexagon/state.db-new-journal").is_err());
+    assert!(!dir.path().join(".hexagon/state.db-new-journal").exists());
+    crate::files::create_repo_file(dir.path(), ".hexagon/ordinary.md").unwrap();
+    crate::files::write_repo_file(dir.path(), ".hexagon/ordinary.md", "normal text").unwrap();
+    assert_eq!(
+        crate::files::read_repo_file(dir.path(), ".hexagon/ordinary.md").unwrap(),
+        "normal text"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn qa14_project_probes_refuse_state_aliases_and_preserve_live_lock() {
+    for entry in [
+        "package.json",
+        "AGENTS.md",
+        ".hexagon/avatars/a0.png",
+        ".hexagon/pack-probe.json",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::open(dir.path(), "wal-lock-probe", &[], None).unwrap();
+        wb.db
+            .conn()
+            .execute("CREATE TABLE qa14_lock_probe(value TEXT)", [])
+            .unwrap();
+        let state = dir.path().join(".hexagon/state.db-shm");
+        let alias = dir.path().join(entry);
+        std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&state, &alias).unwrap();
+        qa14_assert_dms_locked(dir.path());
+        match entry {
+            "package.json" => {
+                let _ = crate::intake::read_commands(dir.path());
+            }
+            "AGENTS.md" => {
+                assert!(crate::setup::read_instruction_file(dir.path()).is_err());
+            }
+            ".hexagon/avatars/a0.png" => {
+                assert!(crate::roles::agent_avatar(dir.path(), "a0").is_err());
+                assert!(crate::roles::avatar_hash(dir.path(), "a0").is_err());
+            }
+            _ => {
+                assert!(crate::orchestra::PackDef::load(&alias).is_err());
+            }
+        }
+        assert!(crate::tools::writeguard::digest(&alias).is_err());
+        qa14_assert_dms_locked(dir.path());
     }
 }

@@ -82,3 +82,22 @@ it('shows browser observation screenshot evidence through the same local thumbna
     expect(el.querySelector('figcaption')?.textContent).toContain('Project browser')
   } finally { await act(async () => root.unmount()) }
 })
+
+it('owner interruption displays a neutral stop while a provider failure remains an error', async () => {
+  // Fullstack QA 2026-10-05: /pause appeared as a red failure with the Rust
+  // debug string Ok(Interrupted), making an intentional stop look broken.
+  useUiStore.setState({ timeline: [
+    { event: { id: 201, kind: 'turn_failed', project_id: 'p1', agent_id: 'a1', stage_run_id: null, created_at: '', payload: { error: 'Ok(Interrupted)' } }, message: null },
+    { event: { id: 202, kind: 'turn_failed', project_id: 'p1', agent_id: 'a1', stage_run_id: null, created_at: '', payload: { outcome: 'refused: HTTP 400' } }, message: null },
+  ], pending: [], team: [], streams: {}, thinkings: {}, streamDone: {} })
+  const el = document.createElement('div'); const root = createRoot(el)
+  try {
+    await act(async () => root.render(<Timeline />))
+    const labels = Array.from(el.querySelectorAll<HTMLElement>('.syslabel'))
+    const stopped = labels.find(label => label.textContent === 'turn stopped')
+    expect(stopped).toBeTruthy()
+    expect(stopped!.style.color).toBe('')
+    expect(el.textContent).not.toContain('Ok(Interrupted)')
+    expect(labels.find(label => label.textContent?.includes('HTTP 400'))?.style.color).toBe('var(--err)')
+  } finally { await act(async () => root.unmount()) }
+})

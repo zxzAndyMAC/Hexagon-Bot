@@ -48,6 +48,9 @@ pub(crate) fn node_options(existing: Option<&std::ffi::OsStr>) -> std::ffi::OsSt
     options
 }
 
+#[cfg(target_os = "macos")]
+mod firefox;
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -148,7 +151,9 @@ pub(crate) fn evaluation_spec(root: &Path, paths: &[String]) -> SandboxSpec {
                 "(deny file-read-data (subpath \"{}\"))\n",
                 sbq(&root.join(".hexagon"))
             ));
-            profile.push_str("(deny network*)\n(deny mach-lookup)\n(deny ipc*)\n");
+            profile.push_str(
+                "(deny network*)\n(deny mach-lookup)\n(deny mach-register)\n(deny ipc*)\n",
+            );
             SandboxSpec::Seatbelt(profile)
         }
         // No claim for another backend until its equivalent boundary is proven.
@@ -321,7 +326,29 @@ pub fn wrap_command(cmd: &mut Command, spec: &SandboxSpec) -> std::io::Result<Co
         // verification. Select Node's bundled public roots; never allow private
         // PEM/keychain reads or turn off TLS verification to make installs work.
         let mut options = if profile.contains(PROCESS_GROUP_RULES) {
-            node_options(None)
+            let mut preload = include_str!("node_fork.mjs").to_string();
+            if !profile.contains("(deny mach-register)") {
+                let root = c
+                    .get_current_dir()
+                    .ok_or_else(|| std::io::Error::other("terminal root missing"))?;
+                // QA16 full gate / 2026-10-05: provisioning in every cwd made
+                // host_bash create .hexagon in an external directory, adopting
+                // it as project state. Only an existing project admin directory
+                // owns this adapter; external commands keep the fork preload
+                // without acquiring state or a Firefox capability.
+                if root.join(".hexagon").is_dir() {
+                    let path = firefox::provision(root)?;
+                    preload = preload.replace(
+                        "const firefoxAdapter = null;",
+                        &format!("const firefoxAdapter = {};", serde_json::to_string(&path)?),
+                    );
+                }
+            }
+            use base64::Engine;
+            std::ffi::OsString::from(format!(
+                "--import=data:text/javascript;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(preload)
+            ))
         } else {
             std::ffi::OsString::new()
         };
@@ -571,6 +598,13 @@ fn seatbelt_profile(
     let mut prof = String::from(
         "(version 1)\n(deny default)\n(allow process*)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow mach-lookup)\n(allow ipc-posix-shm)\n(allow file-read-metadata)\n(allow file-ioctl)\n(allow file-write* (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/ptmx\"))\n",
     );
+    // QA follow-up 02 (2026-10-05), Mozilla GeckoChildProcessHost: Firefox
+    // registers a random child handshake in this namespace. No system-service
+    // or arbitrary Mach registration is granted; the process-group fence stays.
+    prof.push_str(
+        r#"(allow mach-register (global-name-regex #"^org\.mozilla\.machname\.[0-9]+$"))"#,
+    );
+    prof.push('\n');
     // reliability 03: global data reads let an external ordinary-name hardlink
     // bypass the repository inventory. Only project data and runtime locations
     // are readable; metadata remains available for ordinary process startup.

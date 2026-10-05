@@ -35,7 +35,7 @@ export type FileTreeAction = 'new-file' | 'new-folder' | 'refresh'
 /// 界面作用域（ui-audit 票 01）：全局快捷键分发按它裁决。
 /// 非 workbench 时裁决类快捷键不得触发——设置页/命令面板打开期间，
 /// 键盘批准会作用于看不见的待决卡（P0-1）。
-export type ModalScope = 'workbench' | 'settings' | 'palette'
+export type ModalScope = 'workbench' | 'settings' | 'palette' | 'flow'
 
 /// toast 通知（ui-audit 票 01/04）：用户发起变更的失败出口。
 /// 轮询类错误不得走这里刷屏（调用方节流）。
@@ -163,6 +163,7 @@ interface UiState {
   activeTab: string
   splitOpen: boolean
   modalScope: ModalScope
+  flowDialogOpen: boolean
   toasts: Toast[]
   confirmReq: ConfirmReq | null
   /// 流式增量缓冲（票 03）：agent → 调用序号 → 累计文本。
@@ -293,6 +294,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   activeTab: 'timeline',
   splitOpen: false,
   modalScope: 'workbench',
+  flowDialogOpen: false,
   confirmReq: null,
   toasts: [],
   setModalScope: (s) => set({ modalScope: s }),

@@ -311,6 +311,38 @@ function AcceptanceException({ q, top }: { q: PendingQuestion; top: boolean }) {
   </CardShell>
 }
 
+function QualityRevalidation({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const { evidence, error } = useStageEvidence(q.id)
+  const container = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (!top || e.repeat || e.defaultPrevented) return
+      const action = matches(e, bindingFor('confirmQualityRevalidation')) ? 'confirm' : matches(e, bindingFor('cancelQualityRevalidation')) ? 'cancel' : null
+      if (!action) return
+      e.preventDefault()
+      if (useUiStore.getState().modalScope !== 'workbench') { useUiStore.getState().pushToast(i18n.t('decisions.scopeBlocked')); return }
+      container.current?.querySelector<HTMLButtonElement>(action === 'confirm' ? 'button.primary' : 'button:not(.primary)')?.click()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [top])
+  const current = evidence?.run_id === q.payload.run_id && !!evidence?.fingerprint
+  return <CardShell tone="stamp" icon="stamp" title={t('quality.revalidationTitle')}>
+    <p>{t('quality.revalidationHint')}</p>
+    <StageArtifacts runId={String(q.payload.run_id ?? '')} />
+    <StageEvidence runId={String(q.payload.run_id ?? '')} />
+    {error && <div role="alert">{error}</div>}
+    <div ref={container}>
+      <Btn primary disabled={!current || !!evidence?.missing.length}
+        title={`${t('quality.revalidationConfirm')} · ${formatBinding(bindingFor('confirmQualityRevalidation'))}`}
+        onClick={() => api.confirmQualityRevalidation(q.id, evidence?.fingerprint ?? '', String(q.payload.project_root ?? ''))}>{t('quality.revalidationConfirm')}</Btn>
+      <Btn title={`${t('quality.revalidationCancel')} · ${formatBinding(bindingFor('cancelQualityRevalidation'))}`}
+        onClick={() => api.cancelQualityRevalidation(q.id, String(q.payload.project_root ?? ''))}>{t('quality.revalidationCancel')}</Btn>
+    </div>
+  </CardShell>
+}
+
 export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const [rejectReason, setRejectReason] = useState('')
@@ -346,6 +378,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   }
 
   if (q.kind === 'stamp' && p.sub === 'acceptance_exception') return <AcceptanceException q={q} top={top} />
+  if (q.kind === 'stamp' && p.sub === 'quality_revalidation') return <QualityRevalidation q={q} top={top} />
 
   if (q.kind === 'stamp' && !p.proposal_id) {
     const finalGate = p.final_acceptance === true

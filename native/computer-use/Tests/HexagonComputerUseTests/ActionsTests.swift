@@ -2,9 +2,78 @@ import Foundation
 import ApplicationServices
 import XCTest
 import PeekabooAutomationKit
+import PeekabooFoundation
 @testable import HexagonComputerUse
 
 final class ActionsTests: XCTestCase {
+    @MainActor
+    func testApprovedClickPreparesApplicationBeforeExactWindowFocus() async throws {
+        // QA action574: foregrounding the app must precede exact-window focus.
+        var steps: [String] = []
+        var focusDispatched = false
+        let result = try await ActionExecutor.focusApprovedWindow(focusDispatched: &focusDispatched, activate: {
+            steps.append("activate")
+            return .confirmedNoChange()
+        }, focus: {
+            steps.append("exact-window")
+            return .confirmedNoChange()
+        })
+        XCTAssertTrue(result.isConfirmed)
+        XCTAssertEqual(steps, ["activate", "exact-window"])
+        XCTAssertFalse(focusDispatched)
+    }
+
+    @MainActor
+    func testUnconfirmedOrRejectedActivationNeverProceedsToWindowFocus() async {
+        var focused = false
+        var focusDispatched = false
+        do {
+            _ = try await ActionExecutor.focusApprovedWindow(focusDispatched: &focusDispatched, activate: { nil }, focus: {
+                focused = true
+                return .confirmedNoChange()
+            })
+            XCTFail("unconfirmed activation accepted")
+        } catch { }
+        XCTAssertFalse(focused)
+        XCTAssertTrue(focusDispatched)
+        focusDispatched = false
+        do {
+            _ = try await ActionExecutor.focusApprovedWindow(focusDispatched: &focusDispatched, activate: {
+                throw ActionError("target_generation_changed")
+            }, focus: {
+                focused = true
+                return .confirmedNoChange()
+            })
+            XCTFail("rejected activation accepted")
+        } catch { }
+        XCTAssertFalse(focused)
+        XCTAssertFalse(focusDispatched)
+    }
+
+    @MainActor
+    func testActivationRefusalAndUnknownDeliveryKeepTheirActualDisposition() async {
+        let failures: [DesktopActionFailure] = [
+            .preDispatchRefusal(reason: .targetUnavailable, message: "activation rejected", hint: "observe"),
+            .indeterminate(delivery: nil, evidence: .completionUnknown, unitCount: .one,
+                message: "activation unknown", hint: "observe")
+        ]
+        for (index, failure) in failures.enumerated() {
+            var focusDispatched = false
+            do {
+                _ = try await ActionExecutor.focusApprovedWindow(focusDispatched: &focusDispatched, activate: { throw failure }, focus: {
+                    XCTFail("failed activation proceeded to focus")
+                    return .confirmedNoChange()
+                })
+                XCTFail("failed activation returned success")
+            } catch let caught as DesktopActionFailure {
+                let reply = ActionExecutor.failedActionReply(caught, focusRestored: false,
+                    focusDispatched: focusDispatched, diagnostic: "")
+                XCTAssertFalse(reply.ok)
+                XCTAssertEqual(reply.outcome_unknown, index == 1)
+                XCTAssertEqual(reply.outcome, failure.outcome)
+            } catch { XCTFail("typed disposition lost: \(error)") }
+        }
+    }
     @MainActor
     func testAbsentOptionalSubroleAllowsOrdinaryFieldButNeverSecureOrReadErrors() {
         // Live action1254: Chrome's ordinary title field returned noValue for
@@ -97,6 +166,55 @@ final class ActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testCanvasWindowHitNeedsExactFocusedWindowIdentity() {
+        for id in 1...100 as ClosedRange<UInt32> {
+            XCTAssertTrue(ActionExecutor.pointerHitMatchesFocusedWindow(role: "AXWindow", parentWindow: nil, ownWindow: id, focusedWindow: id))
+            XCTAssertTrue(ActionExecutor.pointerHitMatchesFocusedWindow(role: "AXButton", parentWindow: id, ownWindow: nil, focusedWindow: id))
+            XCTAssertFalse(ActionExecutor.pointerHitMatchesFocusedWindow(role: "AXWindow", parentWindow: nil, ownWindow: id, focusedWindow: id + 1))
+            XCTAssertFalse(ActionExecutor.pointerHitMatchesFocusedWindow(role: "AXButton", parentWindow: nil, ownWindow: id, focusedWindow: id))
+            XCTAssertFalse(ActionExecutor.pointerHitMatchesFocusedWindow(role: nil, parentWindow: nil, ownWindow: id, focusedWindow: id))
+            XCTAssertFalse(ActionExecutor.pointerHitMatchesFocusedWindow(role: "AXWindow", parentWindow: id + 1, ownWindow: id, focusedWindow: id))
+            XCTAssertFalse(ActionExecutor.pointerHitMatchesFocusedWindow(role: "AXWindow", parentWindow: nil, ownWindow: id, focusedWindow: nil))
+        }
+        XCTAssertFalse(ActionExecutor.pointerHitMatchesFocusedWindow(role: "AXWindow", parentWindow: nil, ownWindow: 0, focusedWindow: 0))
+    }
+
+    @MainActor
+    func testPointerPreparationOnlyWaitsForCoverAndRemainsBounded() async throws {
+        for coveredReads in 0...24 {
+            var reads = 0; var waits = 0
+            do {
+                try await ActionExecutor.awaitPointerReady(validate: {
+                    reads += 1
+                    if reads <= coveredReads { throw ActionError("exact_window_pointer_obscured actual=overlay") }
+                }, wait: { waits += 1 })
+                XCTAssertLessThan(coveredReads, 21)
+            } catch {
+                XCTAssertGreaterThanOrEqual(coveredReads, 21)
+            }
+            XCTAssertEqual(reads, min(coveredReads + 1, 21))
+            XCTAssertEqual(waits, min(coveredReads, 20))
+        }
+        for changed in ["snapshot_stale_after_focus", "exact_window_not_frontmost", "session_locked", "window_inventory_unavailable"] {
+            var waits = 0
+            do {
+                try await ActionExecutor.awaitPointerReady(validate: { throw ActionError(changed) }, wait: { waits += 1 })
+                XCTFail("changed target accepted")
+            } catch { XCTAssertEqual(error.localizedDescription, changed) }
+            XCTAssertEqual(waits, 0)
+        }
+        var reads = 0
+        do {
+            try await ActionExecutor.awaitPointerReady(validate: {
+                reads += 1
+                throw ActionError("exact_window_pointer_obscured actual=overlay")
+            }, wait: { throw CancellationError() })
+            XCTFail("cancelled preparation accepted")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(reads, 1)
+    }
+
+    @MainActor
     func testDockOverlayRequiresExactSystemAndPixelHitEvidence() throws {
         let bounds = CGRect(x: 0, y: 0, width: 1512, height: 982)
         func overlay(layer: Int = 20, frame: CGRect? = nil) -> SystemWindowIdentity {
@@ -125,6 +243,116 @@ final class ActionsTests: XCTestCase {
             #"{"op":"observe_screen","display_index":0}"#,
             #"{"op":"drag","snapshot_id":"x","x":0,"y":0,"to_x":30,"to_y":40,"duration_ms":500}"#
         ] { XCTAssertNoThrow(try request(json).validate()) }
+    }
+
+    func testKeyboardChordMustHaveExactlyOnePrimaryKey() throws {
+        // QA15: malformed chords must be refused before foreground preparation.
+        for keys in ["cmd", "cmd,cmd,a", "a,b", "return,shift"] {
+            let input = try request("{\"op\":\"key\",\"snapshot_id\":\"fresh\",\"keys\":\"\(keys)\"}")
+            XCTAssertThrowsError(try input.validate(), keys)
+        }
+    }
+
+    func testKeyboardReceiverRejectsSiblingWindowsSheetsAndAmbiguousReads() throws {
+        for window in 1...200 {
+            XCTAssertNoThrow(try ApprovedKeyboard.validateReceiver(expected: UInt32(window),
+                actual: UInt32(window), role: "AXWindow", sheetsStatus: .success, sheetCount: 0))
+            for actual: UInt32? in [nil, UInt32(window + 1)] {
+                XCTAssertThrowsError(try ApprovedKeyboard.validateReceiver(expected: UInt32(window),
+                    actual: actual, role: "AXWindow", sheetsStatus: .success, sheetCount: 0))
+            }
+            for (role, status, count): (String?, AXError, Int?) in [
+                ("AXSheet", .success, 0), ("AXWindow", .success, 1),
+                ("AXWindow", .cannotComplete, nil), ("AXWindow", .success, nil),
+                (nil, .success, 0), ("AXWindow", .noValue, 1)
+            ] {
+                XCTAssertThrowsError(try ApprovedKeyboard.validateReceiver(expected: UInt32(window),
+                    actual: UInt32(window), role: role, sheetsStatus: status, sheetCount: count))
+            }
+        }
+    }
+
+    func testKeyboardChordPropertiesAcrossPrimaryKeysAndModifierSubsets() {
+        let primary = Array("abcdefghijklmnopqrstuvwxyz0123456789").map(String.init)
+            + ["return", "tab", "space", "delete", "escape", "home", "end", "pageup", "pagedown",
+               "arrow_left", "arrow_right", "arrow_up", "arrow_down"]
+        let modifiers = ["cmd", "shift", "alt", "ctrl"]
+        for key in primary {
+            for mask in 0..<16 {
+                let prefix = modifiers.enumerated().filter { mask & (1 << $0.offset) != 0 }.map(\.element)
+                let chord = (prefix + [key]).joined(separator: ",")
+                XCTAssertEqual(ApprovedKeyboard.validChord(chord), prefix.count <= 3, chord)
+                XCTAssertFalse(ApprovedKeyboard.validChord(([key] + prefix + [key]).joined(separator: ",")))
+                for modifier in prefix {
+                    XCTAssertFalse(ApprovedKeyboard.validChord(([modifier] + prefix + [key]).joined(separator: ",")))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testKeyboardCancellationAtDispatchAndPIDReuseAfterKeyDown() async throws {
+        var posted: [CGEventType] = []
+        var dispatched = false
+        do {
+            _ = try await ApprovedKeyboard.execute(text: nil, keys: "escape", processID: 100,
+                validate: {}, generationMatches: { true }, onDispatch: { throw CancellationError() },
+                post: { event, _ in posted.append(event.type) })
+            XCTFail("cancelled dispatch accepted")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(posted.isEmpty)
+        var generationMatches = true
+        do {
+            _ = try await ApprovedKeyboard.execute(text: "AB", keys: nil, processID: 100,
+                validate: {}, generationMatches: { generationMatches }, onDispatch: { dispatched = true },
+                post: { event, pid in
+                    XCTAssertEqual(pid, 100)
+                    posted.append(event.type)
+                    generationMatches = false
+                })
+            XCTFail("recycled PID accepted for release")
+        } catch { XCTAssertEqual(error.localizedDescription, "keyboard_process_changed_after_dispatch") }
+        XCTAssertTrue(dispatched)
+        XCTAssertEqual(posted, [.keyDown], "do not send release or next unit to a recycled PID")
+    }
+
+    @MainActor
+    func testApprovedKeyboardValidatesEveryUnitAndStopsWithoutReplay() async throws {
+        var events: [CGEventType] = []
+        var checks = 0
+        var dispatched = 0
+        do {
+            _ = try await ApprovedKeyboard.execute(text: "AB", keys: nil, processID: 100,
+                validate: {
+                    checks += 1
+                    if checks == 2 { throw ActionError("changed_focus") }
+                }, generationMatches: { true }, onDispatch: { dispatched += 1 },
+                post: { event, pid in XCTAssertEqual(pid, 100); events.append(event.type) })
+            XCTFail("changed focus accepted")
+        } catch { XCTAssertEqual(error.localizedDescription, "changed_focus") }
+        XCTAssertEqual(checks, 2)
+        XCTAssertEqual(dispatched, 1)
+        XCTAssertEqual(events, [.keyDown, .keyUp], "first key must release; second must not dispatch")
+    }
+
+    @MainActor
+    func testKeyboardRefusalOrCancelledCheckpointNeverPostsInput() async {
+        for reason in ["cancelled", "secure_field", "window_changed", "generation_changed"] {
+            var posted = false
+            do {
+                _ = try await ApprovedKeyboard.execute(text: nil, keys: "escape", processID: 100,
+                    validate: { throw ActionError(reason) }, generationMatches: { true },
+                    onDispatch: { XCTFail("refusal marked dispatched") }, post: { _, _ in posted = true })
+                XCTFail("refusal accepted")
+            } catch { XCTAssertEqual(error.localizedDescription, reason) }
+            XCTAssertFalse(posted)
+        }
+        do {
+            _ = try await ApprovedKeyboard.execute(text: "A", keys: nil, processID: 100,
+                validate: {}, generationMatches: { false }, onDispatch: { XCTFail("reused PID accepted") },
+                post: { _, _ in XCTFail("reused PID dispatched") })
+            XCTFail("generation change accepted")
+        } catch { }
     }
 
     @MainActor

@@ -12,6 +12,7 @@
 
 mod exception;
 mod quality;
+mod quality_config;
 pub use exception::{
     accept as accept_delivery_exception, cancel as cancel_acceptance_exception,
     request as request_acceptance_exception,
@@ -19,7 +20,12 @@ pub use exception::{
 pub use exception::{
     ExceptionAcceptance, ExceptionCandidate, ExceptionRequest, ExceptionRequirement,
 };
-pub use quality::QualityEvidence;
+pub use quality::{confirm_performance_baseline, PerformanceBaselineConfirmation, QualityEvidence};
+pub use quality_config::cancel_quality_revalidation;
+pub use quality_config::effective_pack as current_process_pack;
+pub use quality_config::{
+    quality_configuration, update_quality_commands, QualityConfiguration, QualityStageConfiguration,
+};
 
 use crate::db::Db;
 use crate::trace::{EventKind, TraceError};
@@ -29,6 +35,10 @@ use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OrchError {
+    #[error("quality configuration changed; reload before confirming")]
+    StaleQualityConfiguration,
+    #[error("quality command contains invalid characters or exceeds the size limit")]
+    InvalidQualityCommand,
     #[error("resolve unknown tool outcomes before accepting delivery exceptions")]
     UnresolvedDeliveryAction,
     #[error("select current requirements and provide a reason in an owner exception card")]
@@ -174,6 +184,8 @@ impl PackDef {
     const STAGE_KNOB_FIELDS: &[&str] = &["stamp_point", "backfill_edges", "consult_wake"];
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, OrchError> {
+        let path = path.as_ref();
+        crate::db::validate_generic_file_access(path)?;
         Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
     }
     /// 钉住副本：快照为 pack.active.json（运行实例只读它）。
@@ -327,6 +339,30 @@ impl Db {
     }
 }
 
+// Q4: completed stages remain historical facts. Revalidation reuses the final
+// accepted run/artifact identities rather than reopening and orphaning them.
+fn acceptance_run(db: &Db, project: &str, pack: &PackDef) -> Result<Option<StageRun>, OrchError> {
+    use rusqlite::OptionalExtension;
+    if let Some(run) = db.active_stage_run(project)? {
+        return Ok(Some(run));
+    }
+    let terminal: Option<(i64, String)> = db
+        .conn()
+        .query_row(
+            "SELECT seq,state FROM stage_runs WHERE project_id=?1 ORDER BY rowid DESC LIMIT 1",
+            [project],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if !terminal.is_some_and(|(seq, state)| {
+        seq >= 0 && seq as usize + 1 == pack.stages.len() && (state == "done" || state == "skipped")
+    }) {
+        return Ok(None);
+    }
+    let run = db.conn().query_row("SELECT id,seq,stage_name,state FROM stage_runs WHERE project_id=?1 AND state='done' ORDER BY rowid DESC LIMIT 1", [project], |r| Ok(StageRun { id:r.get(0)?,seq:r.get(1)?,stage_name:r.get(2)?,state:r.get(3)? })).optional()?;
+    Ok(run)
+}
+
 /// 暂停看事件流：最后一个 Paused/Resumed 决定。
 pub fn is_paused(db: &Db, project_id: &str) -> Result<bool, OrchError> {
     // 两个 MAX(id) 索引探针而非 IN+ORDER BY：后者被规划器选成
@@ -460,10 +496,13 @@ fn missing_artifact_files(
             .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
                 r.get(0)
             })?;
-    let mut st = db.conn().prepare("SELECT path FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')")?;
-    let paths: Vec<String> = st
-        .query_map(rusqlite::params![project_id, run_id, kind], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
+    let deliveries = crate::artifacts::delivery::for_run(db, project_id, run_id, &[kind.into()])?;
+    let paths = deliveries.items.into_iter().map(|d| d.path);
+    let mut unresolved = deliveries
+        .missing
+        .into_iter()
+        .map(|(path, kind)| format!("artifact:{kind}:{path}"))
+        .collect::<Vec<_>>();
     let mut missing = Vec::new();
     for path in paths {
         let relative = path.trim_start_matches('/');
@@ -481,6 +520,7 @@ fn missing_artifact_files(
             }
         }
     }
+    missing.append(&mut unresolved);
     Ok(missing)
 }
 
@@ -494,7 +534,6 @@ fn materialization_gaps(
     run: &str,
     due: &[String],
 ) -> Result<Vec<String>, OrchError> {
-    let started = std::time::Instant::now();
     let mut missing = Vec::new();
     let dir: String =
         db.conn()
@@ -514,12 +553,14 @@ fn materialization_gaps(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     for kind in due {
-        let mut query = db.conn().prepare("SELECT path FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')")?;
-        let paths = query
-            .query_map(rusqlite::params![project, run, kind], |r| {
-                r.get::<_, String>(0)
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let deliveries =
+            crate::artifacts::delivery::for_run(db, project, run, std::slice::from_ref(kind))?;
+        let paths = deliveries
+            .items
+            .into_iter()
+            .map(|d| d.path)
+            .chain(deliveries.missing.into_iter().map(|(path, _)| path))
+            .collect::<Vec<_>>();
         // Reliability 16 upgrade: old rows kept /x and ./x spellings. Compare
         // physical identities without rewriting historical records or merging
         // colliding version chains. An unresolvable identity cannot attest safety.
@@ -540,32 +581,40 @@ fn materialization_gaps(
             missing.push(format!("artifact:{kind}"));
         }
     }
+    Ok(missing)
+}
+
+// QA 2026-10-05: only a control attempt creates a decision diagnostic. Polling
+// evaluate/stage_evidence must not manufacture repeated rejection records.
+fn report_delivery_decision(
+    project: &str,
+    run: &str,
+    branch: &str,
+    ready: bool,
+    started: std::time::Instant,
+) {
     crate::diag::note(
-        if missing.is_empty() {
+        if ready {
             crate::diag::CLASS_JUDGE
         } else {
             crate::diag::CLASS_REJECT
         },
-        !missing.is_empty(),
+        !ready,
         Some(project),
-        None,
+        Some("owner"),
         Some(run),
         None,
-        "artifact_materialization_gate",
-        if missing.is_empty() {
-            "no_pending_delivery"
-        } else {
-            "pending_delivery"
-        },
+        branch,
+        if ready { "current" } else { "missing_or_stale" },
         started,
     );
-    Ok(missing)
 }
 
 /// 阶段成功判定（工作台裁决，非 Agent）。
 pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, OrchError> {
-    let run = db
-        .active_stage_run(project_id)?
+    let effective = quality_config::effective_pack(db, project_id, pack)?;
+    let pack = &effective;
+    let run = acceptance_run(db, project_id, pack)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
     let runs = evidence_runs(db, project_id, pack, &run)?;
     let mut missing = Vec::new();
@@ -573,44 +622,28 @@ pub fn evaluate(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageEval, 
     // backend-only projects without design work do not acquire this gate.
     if crate::design::pending(db, project_id)? {
         missing.push("design:owner_choice_required".into());
-        crate::diag::note(
-            crate::diag::CLASS_REJECT,
-            true,
-            Some(project_id),
-            None,
-            Some(&run.id),
-            None,
-            "design_direction",
-            "delivery_waits_for_owner",
-            std::time::Instant::now(),
-        );
     }
-    let started = std::time::Instant::now();
     let unresolved = crate::actions::unresolved_delivery_actions(
         db,
         project_id,
-        if is_final_acceptance(pack, &run) {
+        if run.state == "done" || is_final_acceptance(pack, &run) {
             None
         } else {
             Some(&run.id)
         },
     )?;
     for id in unresolved {
-        crate::diag::note(
-            crate::diag::CLASS_REJECT,
-            true,
-            Some(project_id),
-            None,
-            Some(&run.id),
-            None,
-            "delivery_evidence",
-            "unknown_action",
-            started,
-        );
         missing.push(format!("action:{id}"));
     }
-    if is_final_acceptance(pack, &run) {
-        for seq in 0..=run.seq {
+    if run.state == "done" || is_final_acceptance(pack, &run) {
+        // Q4: a skipped tail can place the last done run before the end. Still
+        // inspect every latest attempt; otherwise a rejected middle stage hides.
+        let end = if run.state == "done" {
+            pack.stages.len() as i64 - 1
+        } else {
+            run.seq
+        };
+        for seq in 0..=end {
             if !runs.iter().any(|r| r.seq == seq) {
                 missing.push(format!("stage:{seq}"));
             }
@@ -650,7 +683,7 @@ fn evidence_runs(
     pack: &PackDef,
     run: &StageRun,
 ) -> Result<Vec<StageRun>, OrchError> {
-    if !is_final_acceptance(pack, run) {
+    if run.state != "done" && !is_final_acceptance(pack, run) {
         return Ok(vec![run.clone()]);
     }
     let mut query = db.conn().prepare(
@@ -659,14 +692,24 @@ fn evidence_runs(
         WHERE latest.project_id=s.project_id AND latest.seq=s.seq) ORDER BY seq",
     )?;
     let runs = query
-        .query_map(rusqlite::params![project, run.seq], |r| {
-            Ok(StageRun {
-                id: r.get(0)?,
-                seq: r.get(1)?,
-                stage_name: r.get(2)?,
-                state: r.get(3)?,
-            })
-        })?
+        .query_map(
+            rusqlite::params![
+                project,
+                if run.state == "done" {
+                    pack.stages.len() as i64 - 1
+                } else {
+                    run.seq
+                }
+            ],
+            |r| {
+                Ok(StageRun {
+                    id: r.get(0)?,
+                    seq: r.get(1)?,
+                    stage_name: r.get(2)?,
+                    state: r.get(3)?,
+                })
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(runs)
 }
@@ -710,7 +753,6 @@ fn evaluate_run(
     pack: &PackDef,
     run: &StageRun,
 ) -> Result<StageEval, OrchError> {
-    let started = std::time::Instant::now();
     let accepted = exception::accepted_for_run(db, project_id, pack, &run.id)?;
     let stage = pack
         .stages
@@ -718,18 +760,19 @@ fn evaluate_run(
         .ok_or(OrchError::BadSeq(run.seq))?;
     let mut missing = materialization_gaps(db, project_id, &run.id, &stage.due)?;
 
-    // 应交产物齐（本 run 内 valid/stamped）
+    // QA #12: each original path/kind obligation consumes its current version,
+    // including legitimate later-stage revisions, never the superseded body.
     for kind in &stage.due {
         if missing.contains(&format!("artifact:{kind}")) {
             continue;
         }
-        let n: i64 = db.conn().query_row(
-            "SELECT COUNT(*) FROM artifacts
-             WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')",
-            rusqlite::params![project_id, run.id, kind],
-            |r| r.get(0),
+        let deliveries = crate::artifacts::delivery::for_run(
+            db,
+            project_id,
+            &run.id,
+            std::slice::from_ref(kind),
         )?;
-        if n == 0 {
+        if deliveries.items.is_empty() {
             missing.push(format!("artifact:{kind}"));
             continue;
         }
@@ -761,17 +804,22 @@ fn evaluate_run(
                 r.get(0)
             })?;
     for rev in &stage.reviews {
-        let mut query=db.conn().prepare("SELECT id,path FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')")?;
-        let targets = query
-            .query_map(
-                rusqlite::params![project_id, run.id, rev.artifact_kind],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
-        if targets.is_empty() {
+        let targets = crate::artifacts::delivery::for_run(
+            db,
+            project_id,
+            &run.id,
+            std::slice::from_ref(&rev.artifact_kind),
+        )?;
+        if targets.items.is_empty() || !targets.missing.is_empty() {
             missing.push(format!("review:{}", rev.artifact_kind));
         }
-        for (id, path) in targets {
+        for delivery in targets.items {
+            let crate::artifacts::delivery::Delivery {
+                id,
+                path,
+                stage: review_run,
+                ..
+            } = delivery;
             // Reliability 19: an owner review exception cannot attest an
             // unfinished materialization, even while old bytes still match.
             // A false negative needs another owner decision; a false positive
@@ -788,7 +836,7 @@ fn evaluate_run(
                 db,
                 Path::new(&root),
                 project_id,
-                &run.id,
+                &review_run,
                 &id,
                 &rev.reviewer,
             )? && !exception_applies
@@ -797,26 +845,6 @@ fn evaluate_run(
             }
         }
     }
-    crate::diag::note(
-        if missing.is_empty() {
-            crate::diag::CLASS_JUDGE
-        } else {
-            crate::diag::CLASS_REJECT
-        },
-        !missing.is_empty(),
-        Some(project_id),
-        None,
-        Some(&run.id),
-        None,
-        "delivery_evidence",
-        if missing.is_empty() {
-            "current"
-        } else {
-            "missing_or_stale"
-        },
-        started,
-    );
-
     Ok(if missing.is_empty() {
         StageEval::Ready
     } else {
@@ -905,7 +933,6 @@ fn check_evidence(
     stage: &StageDef,
     pack: &PackDef,
 ) -> Result<Vec<CheckEvidence>, OrchError> {
-    let started = std::time::Instant::now();
     use rusqlite::OptionalExtension;
     let requirements = quality::requirements(db, project, run, stage, pack)?;
     // 2026-10-01 ticket 04 regression: sorting while adding quality aliases
@@ -944,40 +971,38 @@ fn check_evidence(
         let (event_id, exit_code, recorded, stable, payload) = latest
             .map(|(id, exit, fp, stable, payload)| (Some(id), exit, fp, stable, payload))
             .unwrap_or_default();
-        let state = check_state(
+        let mut state = check_state(
             event_id.is_some(),
             exit_code,
             recorded.as_deref(),
             stable,
             fingerprint.as_deref(),
         );
-        let reason = match state {
-            CheckState::Missing => "missing",
-            CheckState::Passed => "current_pass",
-            CheckState::Failed => "current_fail",
-            CheckState::Stale => "stale",
-            CheckState::Unavailable => "unavailable",
-        };
-        crate::diag::note(
-            if state == CheckState::Passed {
-                crate::diag::CLASS_JUDGE
-            } else {
-                crate::diag::CLASS_REJECT
-            },
-            state != CheckState::Passed,
-            Some(project),
-            None,
-            Some(run),
-            event_id.map(|id| id.to_string()).as_deref(),
-            "check_evidence",
-            reason,
-            started,
-        );
+        // QA 2026-10-05: evidence is polled every two seconds. Logging this
+        // projection manufactured repeated refusals; execution/decision
+        // boundaries record their actual branch once instead.
         let payload: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
-        let quality = requirements
-            .iter()
-            .find(|r| r.key == *cmd)
-            .map(|r| quality::describe(r, &state, &payload));
+        let binding = quality_config::check_binding(db, project, pack, run, cmd)?;
+        let mut configuration_changed = event_id.is_some()
+            && !quality_config::binding_current(payload["configuration"].as_str(), &binding);
+        if configuration_changed {
+            state = CheckState::Stale;
+        }
+        if let Some(requirement) = requirements.iter().find(|r| r.key == *cmd) {
+            if event_id.is_some()
+                && payload["quality"]["command"].as_str() != requirement.command.as_deref()
+            {
+                state = CheckState::Stale;
+                configuration_changed = true;
+            }
+        }
+        let quality = requirements.iter().find(|r| r.key == *cmd).map(|r| {
+            let mut quality = quality::describe(r, &state, &payload);
+            if configuration_changed {
+                quality.reason = "configuration_changed".into();
+            }
+            quality
+        });
         rows.push(CheckEvidence {
             run_id: run.into(),
             stage: stage.name.clone(),
@@ -1036,7 +1061,11 @@ fn delivery_fingerprint(
     }
     Ok(Some(format!(
         "v1:{:x}",
-        Sha256::digest(serde_json::to_vec(&(pack, inputs))?)
+        Sha256::digest(serde_json::to_vec(&(
+            pack,
+            inputs,
+            quality_config::quality_configuration(db, project, pack)?.version
+        ))?)
     )))
 }
 
@@ -1046,7 +1075,9 @@ pub fn stage_evidence(
     project: &str,
     pack: &PackDef,
 ) -> Result<Option<StageEvidence>, OrchError> {
-    let Some(run) = db.active_stage_run(project)? else {
+    let effective = quality_config::effective_pack(db, project, pack)?;
+    let pack = &effective;
+    let Some(run) = acceptance_run(db, project, pack)? else {
         return Ok(None);
     };
     let before = delivery_fingerprint(db, project, pack, &run)?;
@@ -1158,16 +1189,32 @@ pub(crate) fn run_quality_checks(
     repo_root: &Path,
     pack: &PackDef,
 ) -> Result<(), OrchError> {
+    let effective = quality_config::effective_pack(db, project_id, pack)?;
+    let pack = &effective;
     if is_paused(db, project_id)? {
         return Err(OrchError::Paused);
     }
-    let Some(run) = db.active_stage_run(project_id)? else {
+    let Some(run) = acceptance_run(db, project_id, pack)? else {
         return Ok(());
     };
-    let Some(stage) = pack.stages.get(run.seq as usize) else {
-        return Ok(());
-    };
-    if quality::requirements(db, project_id, &run.id, stage, pack)?.is_empty() {
+    // Q4 review / 2026-10-05: the final run may use its own unchanged runner,
+    // while an earlier completed run owes a changed command. An automatic
+    // checkpoint must inspect the same affected runs as manual execution.
+    let mut required = false;
+    for target in evidence_runs(db, project_id, pack, &run)? {
+        if declared_absence(db, project_id, pack, &target)? {
+            continue;
+        }
+        let stage = pack
+            .stages
+            .get(target.seq as usize)
+            .ok_or(OrchError::BadSeq(target.seq))?;
+        if !quality::requirements(db, project_id, &target.id, stage, pack)?.is_empty() {
+            required = true;
+            break;
+        }
+    }
+    if !required {
         return Ok(());
     }
     run_checks_inner(db, project_id, repo_root, pack, true)?;
@@ -1182,9 +1229,10 @@ fn run_checks_inner(
     automatic: bool,
 ) -> Result<Vec<CheckResult>, OrchError> {
     let lease = std::sync::Arc::new(write_boundary(db, project_id)?);
+    let effective = quality_config::effective_pack(db, project_id, pack)?;
+    let pack = &effective;
     let sessions = crate::sessions::SessionTable::default();
-    let run = db
-        .active_stage_run(project_id)?
+    let run = acceptance_run(db, project_id, pack)?
         .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
     let mut out = Vec::new();
     for run in evidence_runs(db, project_id, pack, &run)? {
@@ -1252,6 +1300,7 @@ fn run_checks_inner(
             let mut samples = Vec::new();
             let mut code = 0;
             let mut stdout = String::new();
+            let mut stderr = String::new();
             for _ in 0..if performance { 3 } else { 1 } {
                 // D08: owned process-tree cleanup is part of evidence stability.
                 let res = sessions
@@ -1267,6 +1316,16 @@ fn run_checks_inner(
                         .unwrap_or(-1)
                 };
                 stdout = res["stdout"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(2000)
+                    .collect();
+                // Fullstack QA 2026-10-05: startup failures and unittest results
+                // were stderr-only, leaving owners an empty check record.
+                // Preserve both bounded streams; diagnostics are trace facts,
+                // never copied into the metadata-only diagnostic log.
+                stderr = res["stderr"]
                     .as_str()
                     .unwrap_or("")
                     .chars()
@@ -1293,14 +1352,18 @@ fn run_checks_inner(
             let stable =
                 crate::artifacts::fingerprint::current(before.as_deref(), true, after.as_deref());
             if stage.checks.contains(&cmd) {
+                let configuration =
+                    quality_config::check_binding(db, project_id, pack, &run.id, &cmd)?;
                 db.append_event(project_id, EventKind::TestRan,
-                    json!({"cmd":cmd,"exit_code":code,"fingerprint":before,"stable":stable,"stdout":stdout}), None, Some(&run.id))?;
+                    json!({"cmd":cmd,"exit_code":code,"fingerprint":before,"stable":stable,"stdout":stdout,"stderr":stderr,"configuration":configuration}), None, Some(&run.id))?;
                 out.push(CheckResult {
                     cmd: cmd.clone(),
                     exit_code: code,
                 });
             }
             for requirement in aliases {
+                let configuration =
+                    quality_config::check_binding(db, project_id, pack, &run.id, &requirement.key)?;
                 let (verdict, accepted_code) = if requirement.category == "performance" {
                     quality::performance_verdict(
                         code,
@@ -1317,7 +1380,7 @@ fn run_checks_inner(
                     "execution_exit_code":code,"signature":signature,"measurement":"owned_process_leader_ms","samples_ms":samples,"median_ms":median,
                     "baseline_event_id":baseline.as_ref().map(|b| b.event_id),"baseline_ms":baseline.as_ref().map(|b| b.median_ms)});
                 let id = db.append_event(project_id, EventKind::TestRan,
-                    json!({"cmd":requirement.key,"exit_code":accepted_code,"fingerprint":before,"stable":stable,"stdout":stdout,"quality":details}),None,Some(&run.id))?;
+                    json!({"cmd":requirement.key,"exit_code":accepted_code,"fingerprint":before,"stable":stable,"stdout":stdout,"stderr":stderr,"quality":details,"configuration":configuration}),None,Some(&run.id))?;
                 crate::diag::note(
                     if accepted_code == 0 {
                         crate::diag::CLASS_JUDGE
@@ -1381,6 +1444,7 @@ pub enum StageAction {
 /// 推进：评估当前阶段 → ready 则盖章点停 or done+开下一阶段。
 /// 返回发生了什么的描述。
 pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
+    let started = std::time::Instant::now();
     let _lease = write_boundary(db, project_id)?;
     // D08: the file lease and an immediate SQLite transaction cover the whole
     // verdict. A failed event/card write previously left a completed stage.
@@ -1390,15 +1454,40 @@ pub fn advance(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction,
         if is_paused(db, project_id)? {
             return Err(OrchError::Paused);
         }
-        let run = db
-            .active_stage_run(project_id)?
+        let run = acceptance_run(db, project_id, pack)?
             .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
         if run.state == "waiting_stamp" {
             return Ok(StageAction::WaitingStamp {
                 stage: run.stage_name,
             });
         }
-        match evaluate(db, project_id, pack)? {
+        let evaluation = evaluate(db, project_id, pack)?;
+        report_delivery_decision(
+            project_id,
+            &run.id,
+            "advance_evidence",
+            matches!(evaluation, StageEval::Ready),
+            started,
+        );
+        if run.state == "done" {
+            if matches!(evaluation, StageEval::Ready)
+                && quality_config::has_unaccepted_change(db, project_id)?
+            {
+                let question_id = quality_config::request_revalidation(db, project_id, &run)?;
+                return Ok(StageAction::AwaitingStamp {
+                    stage: run.stage_name,
+                    question_id,
+                });
+            }
+            return Ok(match evaluation {
+                StageEval::Incomplete { missing } => StageAction::Incomplete {
+                    stage: run.stage_name,
+                    missing,
+                },
+                StageEval::Ready => StageAction::PackFinished,
+            });
+        }
+        match evaluation {
             StageEval::Incomplete { missing } => Ok(StageAction::Incomplete {
                 stage: run.stage_name,
                 missing,
@@ -1505,26 +1594,127 @@ pub fn open_next(
 
 /// 盖章确认：waiting_stamp → done → 推进。
 pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
+    stamp_inner(db, project_id, pack, None)
+}
+
+pub fn confirm_quality_revalidation(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    question: &str,
+    expected: &str,
+) -> Result<StageAction, OrchError> {
+    let started = std::time::Instant::now();
+    let run = crate::cards::get(db, question)
+        .ok()
+        .filter(|card| card.project_id == project_id)
+        .and_then(|card| card.payload["run_id"].as_str().map(str::to_owned));
+    let result = stamp_inner(db, project_id, pack, Some((question, expected)));
+    let code = match &result {
+        Ok(StageAction::PackFinished) => "confirmed",
+        Ok(_) => "missing_or_stale",
+        Err(OrchError::StaleAcceptanceVersion) => "stale_version",
+        Err(OrchError::InvalidAcceptanceException) => "invalid_card",
+        Err(_) => "boundary_refused",
+    };
+    crate::diag::note(
+        if code == "confirmed" {
+            crate::diag::CLASS_JUDGE
+        } else {
+            crate::diag::CLASS_REJECT
+        },
+        code != "confirmed",
+        Some(project_id),
+        Some("owner"),
+        run.as_deref(),
+        None,
+        "quality_revalidation_confirm",
+        code,
+        started,
+    );
+    result
+}
+
+fn stamp_inner(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    confirmation: Option<(&str, &str)>,
+) -> Result<StageAction, OrchError> {
+    let started = std::time::Instant::now();
     let _lease = write_boundary(db, project_id)?;
     // D08: the file lease and an immediate SQLite transaction cover the whole
     // verdict. A failed event/card write previously left a completed stage.
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)?;
     let result = (|| {
-        let run = db
-            .active_stage_run(project_id)?
+        let run = acceptance_run(db, project_id, pack)?
             .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
-        if run.state != "waiting_stamp" {
+        let revalidation =
+            run.state == "done" && quality_config::has_unaccepted_change(db, project_id)?;
+        if run.state != "waiting_stamp" && !revalidation {
             return Err(OrchError::BadSeq(run.seq));
         }
         // D08: waiting for the owner does not freeze files or review evidence.
         let evidence = stage_evidence(db, project_id, pack)?
             .ok_or_else(|| OrchError::NoActiveStage(project_id.into()))?;
+        if let Some((question, expected)) = confirmation {
+            let card = crate::cards::get_queued(db, question, crate::cards::CardKind::Stamp)?;
+            if !revalidation
+                || card.project_id != project_id
+                || card.payload["sub"] != "quality_revalidation"
+                || card.payload["run_id"] != run.id
+            {
+                return Err(OrchError::InvalidAcceptanceException);
+            }
+            if expected.is_empty() || evidence.fingerprint.as_deref() != Some(expected) {
+                return Err(OrchError::StaleAcceptanceVersion);
+            }
+        }
+        if !revalidation {
+            report_delivery_decision(
+                project_id,
+                &run.id,
+                "stamp_evidence",
+                evidence.missing.is_empty(),
+                started,
+            );
+        }
         if !evidence.missing.is_empty() {
             return Ok(StageAction::Incomplete {
                 stage: run.stage_name,
                 missing: evidence.missing,
             });
+        }
+        if revalidation {
+            // Owner Q4 (2026-10-05): a historical run has no ordinary stamp
+            // authority. Require its queued card and displayed current version.
+            // Missing proof costs a retry; accepting stale proof changes delivery.
+            if confirmation.is_none() {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(project_id),
+                    Some("owner"),
+                    Some(&run.id),
+                    None,
+                    "quality_revalidation_confirm",
+                    "missing_confirmation",
+                    started,
+                );
+                return Err(OrchError::InvalidAcceptanceException);
+            }
+            crate::cards::answer_queued_where(
+                db,
+                project_id,
+                crate::cards::CardKind::Stamp,
+                "run_id",
+                &run.id,
+                "owner",
+            )?;
+            db.append_event(project_id, EventKind::Stamped, json!({"stage":run.stage_name,"seq":run.seq,"by":"owner","revalidated":true,"delivery_fingerprint":evidence.fingerprint}),None,Some(&run.id))?;
+            quality::capture_baseline(db, project_id, true)?;
+            return Ok(StageAction::PackFinished);
         }
         db.conn().execute(
             "UPDATE stage_runs SET state='done', finished_at=datetime('now') WHERE id=?1",

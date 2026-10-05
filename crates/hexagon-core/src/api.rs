@@ -1379,6 +1379,7 @@ impl Workbench {
     }
 
     fn continue_permission_card(&self, card: crate::cards::Card) -> Result<(), ApiError> {
+        use rusqlite::OptionalExtension;
         // Live acceptance 2026-10-01: approval executed the tool but silently left
         // the agent idle. Restore observations, never replay the approved effect.
         let aid = card
@@ -1388,24 +1389,116 @@ impl Workbench {
             return Ok(());
         };
         let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
+        let request_id: Option<i64> = self.db.conn().query_row(
+            "SELECT request_id FROM tool_actions WHERE project_id=?1 AND id=?2",
+            rusqlite::params![self.project_id, action_id],
+            |r| r.get(0),
+        )?;
         let active = self.active_run()?.map(|r| r.id);
         if action.stage_run_id != active {
             return Ok(());
         }
+        let started = std::time::Instant::now();
+        // Fullstack QA 2026-10-05: legacy dispatch markers had no stage ID;
+        // requiring an exact run silently restored the entire stage instead.
+        // False negative costs a manual follow-up; false positive revives an
+        // ended task with side effects. Prefer no automatic continuation when
+        // its parent turn is missing or a newer independent dispatch replaced it.
+        let parent: Option<(i64, String)> = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT id,json_extract(payload,'$.instruction') FROM events
+             WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started'
+               AND stage_run_id IS ?3 AND id<=?4
+               AND COALESCE(json_extract(payload,'$.subagent'),0)=0
+             ORDER BY id DESC LIMIT 1",
+                rusqlite::params![self.project_id, aid, action.stage_run_id, request_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let superseded: bool = self.db.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
+             AND kind='fastpath_dispatched' AND id>?3)",
+            rusqlite::params![self.project_id, aid, request_id],
+            |r| r.get(0),
+        )?;
+        let reason = if request_id.is_none() {
+            Some("action_request_missing")
+        } else if parent.is_none() {
+            Some("parent_turn_missing")
+        } else if superseded {
+            Some("dispatch_superseded")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                Some(&aid),
+                action.stage_run_id.as_deref(),
+                Some(action_id),
+                "permission_resume",
+                reason,
+                started,
+            );
+            return Ok(());
+        }
+        let (turn_id, instruction) = parent.expect("parent checked above");
+        let stage_floor: Option<i64> = self.db.conn().query_row(
+            "SELECT MAX(id) FROM events WHERE project_id=?1
+             AND kind='stage_started' AND stage_run_id IS ?2 AND id<=?3",
+            rusqlite::params![self.project_id, action.stage_run_id, request_id],
+            |r| r.get(0),
+        )?;
+        if active.is_some() && stage_floor.is_none() {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                Some(&aid),
+                action.stage_run_id.as_deref(),
+                Some(action_id),
+                "permission_resume",
+                "stage_boundary_missing",
+                started,
+            );
+            return Ok(());
+        }
+        // Only null markers inside this stage's lifetime are upgrade-compatible.
+        // No-marker automatic turns retain their stage-local history, never 0.
         let boundary: i64 = self.db.conn().query_row(
-            "SELECT COALESCE(MAX(id), (SELECT MIN(id) FROM events WHERE project_id=?1 AND agent_id=?2
-               AND kind='turn_started' AND stage_run_id IS ?4),0) FROM events WHERE project_id=?1 AND agent_id=?2
-             AND stage_run_id IS ?4 AND kind='fastpath_dispatched' AND id <= (SELECT request_id FROM tool_actions WHERE id=?3 AND project_id=?1)",
-            rusqlite::params![self.project_id, aid, action_id, action.stage_run_id], |r| r.get(0))?;
-        let history = self.recorded_activation_history(&aid, boundary)?;
-        let instruction: Option<String> = self.db.conn().query_row(
-            "SELECT json_extract(payload,'$.instruction') FROM events WHERE project_id=?1 AND agent_id=?2
-             AND kind='turn_started' AND id <= (SELECT request_id FROM tool_actions WHERE id=?3 AND project_id=?1)
-             ORDER BY id DESC LIMIT 1", rusqlite::params![self.project_id, aid, action_id], |r| r.get(0))?;
-        let instruction = instruction
-            .as_deref()
-            .unwrap_or(crate::turn::RECOVERY_NUDGE);
-        let input = self.source_resume_input(&aid, None, active.as_deref(), instruction)?;
+            "SELECT COALESCE(MAX(id),(SELECT MIN(id) FROM events WHERE project_id=?1
+             AND agent_id=?2 AND kind='turn_started' AND stage_run_id IS ?3 AND id BETWEEN ?5 AND ?4
+             AND COALESCE(json_extract(payload,'$.subagent'),0)=0))
+             FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='fastpath_dispatched'
+             AND id BETWEEN ?5 AND ?4 AND (stage_run_id IS ?3 OR stage_run_id IS NULL)",
+            rusqlite::params![
+                self.project_id,
+                aid,
+                action.stage_run_id,
+                request_id,
+                stage_floor.unwrap_or(0)
+            ],
+            |r| r.get(0),
+        )?;
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            false,
+            Some(&self.project_id),
+            Some(&aid),
+            action.stage_run_id.as_deref(),
+            Some(&boundary.to_string()),
+            "permission_resume",
+            "activation_boundary_restored",
+            started,
+        );
+        let history =
+            self.recorded_activation_history_for_run(&aid, boundary, active.as_deref())?;
+        let input =
+            self.source_resume_input(&aid, Some(turn_id), active.as_deref(), &instruction)?;
         self.run_turn_agent_with_history(&aid, &input, &[], false, &history, true)?;
         Ok(())
     }
@@ -1722,12 +1815,13 @@ impl Workbench {
                 None,
             )?;
         }
+        let run_id = self.active_run()?.map(|run| run.id);
         self.db.append_event(
             &self.project_id,
             EventKind::FastpathDispatched,
             json!({"role": role}),
             Some(aid),
-            None,
+            run_id.as_deref(),
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
         self.run_turn_agent_with_history(aid, input, attachments, true, &[], followup)
@@ -2633,6 +2727,63 @@ impl Workbench {
             &self.project_id,
             self.pack()?,
             expected,
+        )?)
+    }
+    pub fn confirm_performance_baseline(
+        &self,
+        measurement: i64,
+        expected: &str,
+        reason: &str,
+    ) -> Result<orchestra::PerformanceBaselineConfirmation, ApiError> {
+        Ok(orchestra::confirm_performance_baseline(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+            measurement,
+            expected,
+            reason,
+        )?)
+    }
+    pub fn quality_configuration(&self) -> Result<orchestra::QualityConfiguration, ApiError> {
+        Ok(orchestra::quality_configuration(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+        )?)
+    }
+    pub fn cancel_quality_revalidation(&self, question: &str) -> Result<(), ApiError> {
+        Ok(orchestra::cancel_quality_revalidation(
+            &self.db,
+            &self.project_id,
+            question,
+        )?)
+    }
+    pub fn confirm_quality_revalidation(
+        &self,
+        question: &str,
+        expected: &str,
+    ) -> Result<orchestra::StageAction, ApiError> {
+        Ok(orchestra::confirm_quality_revalidation(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+            question,
+            expected,
+        )?)
+    }
+    pub fn update_quality_commands(
+        &self,
+        seq: usize,
+        expected: &str,
+        commands: &std::collections::BTreeMap<orchestra::QualityCategory, String>,
+    ) -> Result<orchestra::QualityConfiguration, ApiError> {
+        Ok(orchestra::update_quality_commands(
+            &self.db,
+            &self.project_id,
+            self.pack()?,
+            seq,
+            expected,
+            commands,
         )?)
     }
     pub fn accept_delivery_exception(
@@ -4018,6 +4169,70 @@ pub fn choose_design_direction(
         option_id,
         existing_guidance,
     )?)
+}
+
+impl Workbench {
+    /// Fullstack QA #04 (2026-10-03): a control-lane selection woke the proposer
+    /// but never scheduled its next turn. The shell queues this after persistence,
+    /// keeping the owner's decision responsive while a prior turn drains.
+    pub fn continue_design_direction(&self, revision: i64) -> Result<(), ApiError> {
+        let started = std::time::Instant::now();
+        let direction = design_direction(&self.db, &self.project_id)?;
+        // Fail closed: a false negative costs a retry; a false positive starts
+        // work for a superseded choice. Resume only the exact confirmed revision.
+        if direction.revision != revision
+            || !matches!(direction.state.as_str(), "selected" | "existing")
+        {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                None,
+                None,
+                None,
+                "design_resume",
+                "stale_selection",
+                started,
+            );
+            return Err(ApiError::BadInput(
+                "design selection changed before continuation".into(),
+            ));
+        }
+        // Review #04: require(implementer) -> propose(designer) has two waiting
+        // tasks. Resume the latest proposer first, then earlier requesters, and
+        // let only the final turn route/advance so it cannot skip a waiting task.
+        let waiting = {
+            let mut query = self.db.conn().prepare(
+                "SELECT submitted_by FROM design_directions WHERE project_id=?1 AND revision<=?2 AND submitted_by IS NOT NULL
+                 GROUP BY submitted_by ORDER BY MAX(revision) DESC",
+            )?;
+            let agents = query
+                .query_map(rusqlite::params![self.project_id, revision], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            agents
+        };
+        let mut predecessors_finished = true;
+        for (index, agent) in waiting.iter().enumerate() {
+            crate::diag::note(
+                crate::diag::CLASS_JUDGE,
+                false,
+                Some(&self.project_id),
+                Some(agent),
+                None,
+                None,
+                "design_resume",
+                "confirmed_selection",
+                started,
+            );
+            // Review #04: another independent waiter can work while this one
+            // awaits permission, but its completion must not advance that wait.
+            let outcome = self.dispatch_instance_with_followup(agent, "The owner confirmed the visual direction. Read the confirmed direction with read_design_direction and continue your original task.", &[], predecessors_finished && index + 1 == waiting.len())?;
+            predecessors_finished &= matches!(outcome, TurnOutcome::Finished);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

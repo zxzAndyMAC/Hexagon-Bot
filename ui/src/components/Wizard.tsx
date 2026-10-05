@@ -709,7 +709,10 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     if (!questions || briefPhase !== 'idle') return
     const qa = questions.flatMap((q, i) => {
       const a = (answers[i] ?? '').trim()
-      return a ? [{ question: q.question, answer: a }] : []
+      // 2026-10-03 fullstack QA #01：只送选中的“以上都要”曾丢失所指，
+      // 起草模型随即把已敲定的统计需求写成未知。自填“前两项”也需要原选项。
+      const question = `${q.question}\n${q.options.map((option, index) => `${index + 1}. ${option}`).join('\n')}`
+      return a ? [{ question, answer: a }] : []
     })
     runOptimize(qa)
   }

@@ -359,6 +359,8 @@ fn read_text(path: &Path, cap_chars: usize) -> Option<String> {
     if is_secret_name(path.file_name()?.to_str()?) {
         return None;
     }
+    // QA14: README/package/instruction aliases must not close a live DB fd.
+    crate::db::validate_generic_file_access(path).ok()?;
     let bytes = std::fs::read(path).ok()?;
     if bytes.is_empty() || bytes.contains(&0) {
         return None;

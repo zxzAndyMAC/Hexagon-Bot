@@ -41,7 +41,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       // 渲染分级 + 执行前过确认层（runStageOp 内部 askConfirm）。
       // ADR 0069：指针操作（退回/跳过/暂停/恢复/阶段盖章）不再进命令面板。
       // 最终验收仍在待决卡。全员休眠留下。
-      { id: 'c-checks', group: 'cmd', label: t('palette.checks'), keywords: ['check', 'verify'], run: () => api.runChecks() },
+      // Fullstack QA 2026-10-05: owners searched “检查”/“测试” and saw
+      // no command. Match ordinary Chinese verbs as well as the label.
+      { id: 'c-checks', group: 'cmd', label: t('palette.checks'), keywords: ['check', 'verify', '检查', '测试', '检验'], run: () => api.runChecks() },
       { id: 'c-sleep', group: 'cmd', label: t('palette.sleepAll'), keywords: ['sleep'], run: () => runStageOp('sleepAll') },
       // ui-audit 票 09（P1-5 残余）：冰山 IPC 补入口——这两条此前只有
       // 纯 invoke 通道，面板不可达。

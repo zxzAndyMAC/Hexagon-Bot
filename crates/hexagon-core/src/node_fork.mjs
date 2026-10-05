@@ -4,6 +4,14 @@
 // still denies setsid/setpgid/posix_spawn even if a program bypasses this shim.
 import cp from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
+import path from 'node:path';
+
+// QA16: substituted by the host only inside a terminal's fenced Seatbelt.
+// Firefox cannot reinitialize macOS Seatbelt after inheriting this outer one.
+// Disable its duplicate initialization before the main Firefox exec, without
+// changing the inherited filesystem/network/session policy. DRM/GMP is outside
+// this tested headless DOM subset and remains unsupported when it needs nesting.
+const firefoxAdapter = null;
 
 if (process.getuid() === process.geteuid()) {
   const uid = process.getuid();
@@ -27,6 +35,19 @@ if (process.getuid() === process.geteuid()) {
       const value = copy.envPairs.find(pair => pair.startsWith('NODE_OPTIONS='));
       copy.envPairs = copy.envPairs.filter(pair => !pair.startsWith('NODE_OPTIONS='));
       copy.envPairs.push(`NODE_OPTIONS=${nodeOptions(value?.slice(13))}`);
+      if (firefoxAdapter && path.basename(String(copy.file)) === 'firefox'
+          && copy.args?.includes('-juggler-pipe')) {
+        const variables = {
+          DYLD_INSERT_LIBRARIES: firefoxAdapter,
+          MOZ_DISABLE_CONTENT_SANDBOX: '1',
+          MOZ_DISABLE_GPU_SANDBOX: '1',
+          MOZ_DISABLE_SOCKET_PROCESS_SANDBOX: '1',
+          MOZ_DISABLE_UTILITY_SANDBOX: '1',
+          MOZ_DISABLE_RDD_SANDBOX: '1',
+        };
+        copy.envPairs = copy.envPairs.filter(pair => !Object.keys(variables).some(key => pair.startsWith(`${key}=`)));
+        copy.envPairs.push(...Object.entries(variables).map(([key, value]) => `${key}=${value}`));
+      }
     }
     return copy;
   };

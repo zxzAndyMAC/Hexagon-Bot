@@ -12,6 +12,7 @@
 
 use crate::db::Db;
 use crate::tools::{ToolContext, ToolError};
+pub(crate) mod delivery;
 pub(crate) mod evidence;
 pub(crate) mod fingerprint;
 pub use evidence::ArtifactReview;

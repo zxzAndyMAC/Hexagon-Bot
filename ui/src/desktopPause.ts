@@ -3,6 +3,21 @@ import i18n from './i18n'
 import { useUiStore } from './store'
 
 let pending: Promise<void> | undefined
+let resuming: Promise<void> | undefined
+
+/** QA17 (2026-10-05): a rejected action releases its preview. Recovery must
+ * still be possible from Settings/global key, using the fresh host root. */
+export function resumeDesktop(): Promise<void> {
+  if (resuming) return resuming
+  resuming = (async () => {
+    try {
+      const status = await api.desktopStatus()
+      await api.desktopControl('resume', status.project_root)
+      useUiStore.getState().pushToast(i18n.t('computer.resumed'))
+    } catch (error) { useUiStore.getState().pushToast(errText(error), 'err') }
+  })().finally(() => { resuming = undefined })
+  return resuming
+}
 
 /** Ticket 07: explicit emergency pause remains available outside the workbench.
  * Bind the command to the fresh host project; switching during IPC fails closed. */

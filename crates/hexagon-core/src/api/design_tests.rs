@@ -37,6 +37,154 @@ fn propose(
     }
 }
 #[test]
+fn owner_design_choice_continues_the_proposers_real_task() {
+    use crate::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason};
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["UI/UX", "前端"], None).unwrap();
+    let ctx = wb.ctx_for("a0", None);
+    let requested = crate::design::require(&wb.db, &wb.project_id, "a1").unwrap();
+    let pending = propose(
+        &wb,
+        &ctx,
+        requested.revision,
+        vec![option("a", "red"), option("b", "blue")],
+    )
+    .unwrap();
+    let response = || ChatResponse {
+        content: vec![ContentBlock::Text {
+            text: "Continue the confirmed design".into(),
+        }],
+        stop: StopReason::EndTurn,
+        usage: Default::default(),
+    };
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        response(),
+        response(),
+        response(),
+        response(),
+    ]));
+    wb.register_provider("default", provider.clone());
+    choose_design_direction(
+        &wb.db,
+        &wb.project_id,
+        pending.question_id.as_deref().unwrap(),
+        pending.revision,
+        Some("a"),
+        None,
+    )
+    .unwrap();
+    // Fullstack QA #04: the shell now queues this turn after the control write.
+    wb.continue_design_direction(pending.revision).unwrap();
+    assert!(
+        !provider.recorded().is_empty(),
+        "selection never started a model turn"
+    );
+    let agents: Vec<String> = wb
+        .db
+        .conn()
+        .prepare("SELECT agent_id FROM events WHERE kind='turn_started' ORDER BY id")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        agents,
+        vec!["a0", "a1"],
+        "both the proposer and original implementer must resume"
+    );
+}
+
+proptest! {
+    #[test]
+    fn stale_design_continuations_never_start_model_work(delta in 1i64..1000) {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["UI/UX"], None).unwrap();
+        let ctx = wb.ctx_for("a0", None);
+        let pending = propose(&wb, &ctx, 0, vec![option("a", "red"), option("b", "blue")]).unwrap();
+        choose_design_direction(&wb.db, &wb.project_id, pending.question_id.as_deref().unwrap(), pending.revision, Some("a"), None).unwrap();
+        prop_assert!(wb.continue_design_direction(pending.revision + delta).is_err());
+        let turns: i64 = wb.db.conn().query_row("SELECT COUNT(*) FROM events WHERE kind='turn_started'", [], |r| r.get(0)).unwrap();
+        prop_assert_eq!(turns, 0);
+    }
+}
+
+#[test]
+fn design_waiters_do_not_advance_past_a_predecessors_permission_wait() {
+    // Review #04: this fixture has the always-Ask name but no remote effects.
+    struct LocalAsk;
+    impl crate::tools::Tool for LocalAsk {
+        fn name(&self) -> &str {
+            "remote_publish"
+        }
+        fn description(&self) -> &str {
+            "Local permission-wait fixture"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn exec(
+            &self,
+            _: &crate::db::Db,
+            _: &serde_json::Value,
+            _: &crate::tools::ToolContext,
+        ) -> Result<serde_json::Value, crate::tools::ToolError> {
+            Ok(json!({"fixture":true}))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let pack = serde_json::from_value(json!({"name":"design-resume","version":1,"stages":[
+        {"name":"implementation","roles":["designer","implementer"],"due":[]},
+        {"name":"next","roles":["implementer"],"due":["next artifact"]}
+    ]}))
+    .unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["designer", "implementer"], Some(pack)).unwrap();
+    wb.open_stage(0).unwrap();
+    let requested = crate::design::require(&wb.db, &wb.project_id, "a1").unwrap();
+    let ctx = wb.ctx_for("a0", Some("sr1".into()));
+    let pending = propose(
+        &wb,
+        &ctx,
+        requested.revision,
+        vec![option("a", "red"), option("b", "blue")],
+    )
+    .unwrap();
+    wb.registry.register(LocalAsk);
+    let provider = Arc::new(crate::provider::ScriptedProvider::new(vec![
+        crate::turn::text_response("designer plan"),
+        crate::turn::tool_response(vec![("ask", "remote_publish", json!({}))]),
+        crate::turn::text_response("implementer plan"),
+        crate::turn::text_response("implementer finished"),
+    ]));
+    wb.register_provider("default", provider);
+    choose_design_direction(
+        &wb.db,
+        &wb.project_id,
+        pending.question_id.as_deref().unwrap(),
+        pending.revision,
+        Some("a"),
+        None,
+    )
+    .unwrap();
+    wb.continue_design_direction(pending.revision).unwrap();
+    assert_eq!(wb.active_run().unwrap().unwrap().seq, 0);
+    assert_eq!(wb.db.queued_questions(&wb.project_id).unwrap().len(), 1);
+    let turns: i64 = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='turn_started'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        turns, 2,
+        "the independent implementer should still get a turn"
+    );
+}
+
+#[test]
 fn design_owner_choice_binds_revision_and_wakes_role_with_durable_brief() {
     let dir = tempfile::tempdir().unwrap();
     let wb = Workbench::for_test(dir.path(), &["UI/UX", "前端"], None).unwrap();

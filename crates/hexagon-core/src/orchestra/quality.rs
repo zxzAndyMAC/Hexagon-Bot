@@ -59,7 +59,13 @@ pub(super) fn capture_baseline(db: &Db, project: &str, accepted: bool) -> Result
         })? {
             let (id, body) = row?;
             let p: Value = serde_json::from_str(&body)?;
-            if p["stable"] != true || p["quality"]["execution_exit_code"] != 0 {
+            // Q2 owner decision 2026-10-05: delivery acceptance is not consent
+            // to a different measurement. Only explicit confirmation below
+            // may adopt changed conditions; keep the old failed fact intact.
+            if p["stable"] != true
+                || p["quality"]["execution_exit_code"] != 0
+                || p["quality"]["verdict"] == "measurement_changed"
+            {
                 continue;
             }
             if let (Some(command), Some(signature), Some(median)) = (
@@ -67,7 +73,13 @@ pub(super) fn capture_baseline(db: &Db, project: &str, accepted: bool) -> Result
                 p["quality"]["signature"].as_str(),
                 p["quality"]["median_ms"].as_f64(),
             ) {
-                if median.is_finite() && median > 0.0 {
+                if median.is_finite()
+                    && median > 0.0
+                    && state
+                        .performance
+                        .get(command)
+                        .is_none_or(|b| b.signature == signature)
+                {
                     state.performance.insert(
                         command.into(),
                         PerformanceBaseline {
@@ -235,16 +247,35 @@ pub(super) fn requirements(
     stage: &StageDef,
     pack: &PackDef,
 ) -> Result<Vec<Requirement>, OrchError> {
-    let active = db.active_stage_run(project)?;
-    let Some(active) = active.filter(|a| a.id == run) else {
+    let Some(active) = acceptance_run(db, project, pack)? else {
         return Ok(Vec::new());
     };
+    let seq: i64 = db.conn().query_row(
+        "SELECT seq FROM stage_runs WHERE project_id=?1 AND id=?2",
+        rusqlite::params![project, run],
+        |r| r.get(0),
+    )?;
+    let seq = usize::try_from(seq)
+        .ok()
+        .filter(|seq| *seq < pack.stages.len())
+        .ok_or(OrchError::BadSeq(seq))?;
+    let configuration_categories = quality_config::unaccepted_categories(db, project, pack, seq)?;
+    // Q4 review / 2026-10-05: a later local runner hid changed historical
+    // quality commands when that stage had no ordinary check. Keep each affected
+    // run's alias (including performance's three samples), while source-change
+    // selection remains on the current acceptance run. Missing proof costs one
+    // recheck; dropping an obligation could accept an untested configuration.
+    let current_acceptance = active.id == run;
+    if !current_acceptance && configuration_categories.is_empty() {
+        return Ok(Vec::new());
+    }
     // Intermediate implementation can proceed to its testing stage. Delivery,
     // explicit check stages and the last stage enforce current obligations.
     if !stage.stamp_point
         && stage.checks.is_empty()
         && stage.quality_checks.is_empty()
-        && active.seq as usize + 1 < pack.stages.len()
+        && configuration_categories.is_empty()
+        && seq + 1 < pack.stages.len()
     {
         return Ok(Vec::new());
     }
@@ -270,9 +301,14 @@ pub(super) fn requirements(
         .cloned()
         .collect();
     let mut grouped: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
-    for path in paths {
-        for category in categories(&path) {
-            grouped.entry(category).or_default().push(path.clone());
+    for category in configuration_categories {
+        grouped.entry(category.key()).or_default();
+    }
+    if current_acceptance {
+        for path in paths {
+            for category in categories(&path) {
+                grouped.entry(category).or_default().push(path.clone());
+            }
         }
     }
     let declared: Vec<(&super::QualityCategory, &String)> = stage
@@ -300,15 +336,16 @@ pub(super) fn performance_baseline(
     command: &str,
 ) -> Result<Option<PerformanceBaseline>, OrchError> {
     let previous = baseline(db, project)?;
-    if let Some(value) = previous
-        .as_ref()
-        .and_then(|(_, b)| b.performance.get(command))
-    {
+    if let Some(value) = previous.as_ref().and_then(|(_, b)| {
+        b.performance
+            .get(command)
+            .or_else(|| b.performance.values().max_by_key(|v| v.event_id))
+    }) {
         return Ok(Some(value.clone()));
     }
     let after = previous.map(|(id, _)| id).unwrap_or(0);
     let row: Option<(i64,String)> = db.conn().query_row(
-        "SELECT id,payload FROM events WHERE project_id=?1 AND id>?2 AND kind='test_ran' AND json_extract(payload,'$.quality.category')='performance' AND json_extract(payload,'$.quality.command')=?3 AND json_extract(payload,'$.quality.verdict')='baseline_established' AND json_extract(payload,'$.stable')=1 ORDER BY id LIMIT 1",
+        "SELECT id,payload FROM events WHERE project_id=?1 AND id>?2 AND kind='test_ran' AND json_extract(payload,'$.quality.category')='performance' AND json_extract(payload,'$.quality.verdict')='baseline_established' AND json_extract(payload,'$.stable')=1 ORDER BY (json_extract(payload,'$.quality.command')=?3) DESC,id LIMIT 1",
         rusqlite::params![project,after,command], |r| Ok((r.get(0)?,r.get(1)?)),
     ).optional()?;
     Ok(row.and_then(|(id, body)| {
@@ -319,6 +356,190 @@ pub(super) fn performance_baseline(
             event_id: id,
         })
     }))
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct PerformanceBaselineConfirmation {
+    #[ts(type = "number")]
+    pub event_id: i64,
+    #[ts(type = "number")]
+    pub measurement_event_id: i64,
+}
+
+fn confirmation_measurement(payload: &Value) -> Option<(String, String, f64)> {
+    let q = &payload["quality"];
+    if payload["stable"] != true
+        || q["category"] != "performance"
+        || q["execution_exit_code"] != 0
+        || q["verdict"] != "measurement_changed"
+    {
+        return None;
+    }
+    let mut samples = q["samples_ms"]
+        .as_array()?
+        .iter()
+        .map(Value::as_f64)
+        .collect::<Option<Vec<_>>>()?;
+    if samples.len() != 3 || samples.iter().any(|n| !n.is_finite() || *n <= 0.0) {
+        return None;
+    }
+    samples.sort_by(f64::total_cmp);
+    let measured = q["median_ms"].as_f64()?;
+    if measured != samples[1] {
+        return None;
+    }
+    Some((
+        q["command"].as_str()?.into(),
+        q["signature"].as_str()?.into(),
+        measured,
+    ))
+}
+
+/// Q2: owner-only control, bound to a current real measurement and version.
+/// False rejection costs another measurement; false acceptance can conceal a
+/// regression. Confirmation updates only the baseline, never execution facts.
+pub fn confirm_performance_baseline(
+    db: &Db,
+    project: &str,
+    pack: &PackDef,
+    measurement: i64,
+    expected: &str,
+    reason: &str,
+) -> Result<PerformanceBaselineConfirmation, OrchError> {
+    let started = std::time::Instant::now();
+    let effective = quality_config::effective_pack(db, project, pack)?;
+    let pack = &effective;
+    let result = (|| {
+        let _lease = write_boundary(db, project)?;
+        let tx = db.conn().unchecked_transaction()?;
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(OrchError::InvalidAcceptanceException);
+        }
+        let evidence =
+            stage_evidence(db, project, pack)?.ok_or(OrchError::InvalidAcceptanceException)?;
+        if expected.is_empty() || evidence.fingerprint.as_deref() != Some(expected) {
+            return Err(OrchError::StaleAcceptanceVersion);
+        }
+        let check = evidence
+            .checks
+            .iter()
+            .find(|c| {
+                c.event_id == Some(measurement)
+                    && c.state == CheckState::Failed
+                    && c.quality.as_ref().is_some_and(|q| {
+                        q.category == "performance" && q.reason == "measurement_changed"
+                    })
+            })
+            .ok_or(OrchError::InvalidAcceptanceException)?;
+        let body: String = db.conn().query_row("SELECT payload FROM events WHERE project_id=?1 AND id=?2 AND kind='test_ran' AND stage_run_id=?3",
+            rusqlite::params![project,measurement,check.run_id], |r| r.get(0))?;
+        let p: Value = serde_json::from_str(&body)?;
+        let (command, signature, median_ms) =
+            confirmation_measurement(&p).ok_or(OrchError::InvalidAcceptanceException)?;
+        let root: String =
+            db.conn()
+                .query_row("SELECT dir FROM projects WHERE id=?1", [project], |r| {
+                    r.get(0)
+                })?;
+        if check.quality.as_ref().and_then(|q| q.command.as_deref()) != Some(command.as_str())
+            || measurement_signature(Path::new(&root), &command)? != signature
+        {
+            return Err(OrchError::StaleAcceptanceVersion);
+        }
+        let previous = baseline(db, project)?.ok_or(OrchError::InvalidAcceptanceException)?;
+        let mut state = previous.1;
+        let old = performance_baseline(db, project, &command)?;
+        state.performance.insert(
+            command.clone(),
+            PerformanceBaseline {
+                signature: signature.clone(),
+                median_ms,
+                event_id: measurement,
+            },
+        );
+        // Never advance source acceptance while changing a comparison reference.
+        if stage_evidence(db, project, pack)?
+            .and_then(|e| e.fingerprint)
+            .as_deref()
+            != Some(expected)
+        {
+            return Err(OrchError::StaleAcceptanceVersion);
+        }
+        let prior: Option<(i64,String)> = db.conn().query_row("SELECT id,payload FROM events WHERE project_id=?1 AND kind='system' AND json_extract(payload,'$.kind')='performance_baseline_confirmed' AND json_extract(payload,'$.measurement_event_id')=?2 ORDER BY id DESC LIMIT 1",
+            rusqlite::params![project,measurement], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+        if let Some((event_id, text)) = prior {
+            let p: Value = serde_json::from_str(&text)?;
+            if p["reason"] != reason || p["fingerprint"] != expected {
+                return Err(OrchError::InvalidAcceptanceException);
+            }
+            return Ok(PerformanceBaselineConfirmation {
+                event_id,
+                measurement_event_id: measurement,
+            });
+        }
+        let event_id = db.append_event(project, EventKind::System,
+            json!({"kind":"performance_baseline_confirmed","by":"owner","reason":reason,"measurement_event_id":measurement,"fingerprint":expected,"command":command,"signature":signature,"median_ms":median_ms,"previous":old}),None,Some(&check.run_id))?;
+        db.conn().execute(
+            "INSERT INTO quality_baselines(project_id,event_id,snapshot_json) VALUES (?1,?2,?3)",
+            rusqlite::params![project, event_id, serde_json::to_string(&state)?],
+        )?;
+        tx.commit()?;
+        Ok(PerformanceBaselineConfirmation {
+            event_id,
+            measurement_event_id: measurement,
+        })
+    })();
+    let code = match &result {
+        Ok(_) => "confirmed",
+        Err(OrchError::StaleAcceptanceVersion) => "stale_version",
+        Err(OrchError::InvalidAcceptanceException) if reason.trim().is_empty() => "missing_reason",
+        Err(OrchError::InvalidAcceptanceException) => "invalid_measurement",
+        Err(_) => "boundary_refused",
+    };
+    let run = db.active_stage_run(project).ok().flatten();
+    crate::diag::note(
+        if result.is_err() {
+            crate::diag::CLASS_REJECT
+        } else {
+            crate::diag::CLASS_JUDGE
+        },
+        result.is_err(),
+        Some(project),
+        Some("owner"),
+        run.as_ref().map(|r| r.id.as_str()),
+        Some(&measurement.to_string()),
+        "performance_baseline_confirm",
+        code,
+        started,
+    );
+    result
+}
+
+#[cfg(test)]
+mod confirmation_tests {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn eligibility_requires_stable_success_and_the_actual_three_sample_median(stable in any::<bool>(), success in any::<bool>(), changed in any::<bool>(), matching_median in any::<bool>(), samples in prop::array::uniform3(0.01f64..10000.0)) {
+            let mut sorted = samples;
+            sorted.sort_by(f64::total_cmp);
+            let median = if matching_median { sorted[1] } else { sorted[1] + 10001.0 };
+            let p = json!({"stable":stable,"quality":{"category":"performance","execution_exit_code":if success {0} else {7},"verdict":if changed {"measurement_changed"} else {"regressed"},"samples_ms":samples,"median_ms":median,"command":"runner","signature":"v1"}});
+            prop_assert_eq!(confirmation_measurement(&p).is_some(), stable && success && changed && matching_median);
+        }
+        #[test]
+        fn failed_or_unstable_measurements_never_qualify(exit in 1i32..255, unstable in any::<bool>(), ms in 0.001f64..10000.0) {
+            let p = json!({"stable":!unstable,"quality":{"category":"performance","execution_exit_code":exit,"verdict":"measurement_changed","samples_ms":[ms,ms,ms],"median_ms":ms,"command":"runner","signature":"v1"}});
+            prop_assert!(confirmation_measurement(&p).is_none());
+            let mut p = p;
+            p["quality"]["execution_exit_code"] = json!(0);
+            p["stable"] = json!(false);
+            prop_assert!(confirmation_measurement(&p).is_none());
+        }
+    }
 }
 
 /// Bind the measurement definition as well as its command. Workload files
@@ -334,7 +555,9 @@ pub(super) fn measurement_signature(root: &Path, command: &str) -> Result<String
         format!("{}:{}", std::env::consts::OS, std::env::consts::ARCH),
     );
     let words: Vec<&str> = command.split_whitespace().collect();
-    let package: Value = std::fs::read(root.join("package.json"))
+    let package_path = root.join("package.json");
+    crate::db::validate_generic_file_access(&package_path)?;
+    let package: Value = std::fs::read(package_path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null);
@@ -424,5 +647,25 @@ pub(super) fn performance_verdict(
         ("regressed", -2)
     } else {
         ("passed", 0)
+    }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn qa14_measurement_definition_refuses_database_aliases() {
+    for hard in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join(".hexagon/state.db-shm");
+        std::fs::create_dir(state.parent().unwrap()).unwrap();
+        std::fs::write(&state, b"fixture not a package definition").unwrap();
+        let package = root.path().join("package.json");
+        if hard {
+            std::fs::hard_link(&state, &package).unwrap();
+        } else {
+            std::os::unix::fs::symlink(&state, &package).unwrap();
+        }
+        // QA14: treating unreadable measurement definitions as absent used to
+        // read/close SHM first and then return a plausible command-only hash.
+        assert!(measurement_signature(root.path(), "npm run performance").is_err());
     }
 }

@@ -709,6 +709,7 @@ pub fn read_instruction_file(dir: &Path) -> Result<String, SetupError> {
     for name in ["AGENTS.md", "CLAUDE.md"] {
         let path = dir.join(name);
         if path.is_file() {
+            crate::db::validate_generic_file_access(&path)?;
             return Ok(std::fs::read_to_string(path)?);
         }
     }
@@ -1030,6 +1031,26 @@ where
             ],
         )?;
         for ((aid, _), def) in pairs.iter().zip(picked.iter()) {
+            // Fullstack QA #02 (2026-10-03): the wizard showed tailored duties,
+            // but only persisted instance fields, so activation/reopen silently
+            // used preset duties (or failed for custom roles). Keep explicit
+            // overrides; untouched presets still resolve from the catalog.
+            if role_overrides.iter().any(|o| o.name == def.name) {
+                let skills =
+                    serde_json::to_string(&def.skills).map_err(crate::api::ApiError::from)?;
+                db.conn().execute(
+                    "INSERT INTO role_defs (project_id, name, duty, reviewer, model_slot, skills, custom)
+                     VALUES ('p1',?1,?2,?3,?4,?5,?6)",
+                    rusqlite::params![
+                        def.name,
+                        def.duty,
+                        def.reviewer,
+                        def.model_slot,
+                        skills,
+                        !presets.iter().any(|p| p.name == def.name),
+                    ],
+                )?;
+            }
             db.conn().execute(
                 "UPDATE agents SET model_slot=?1 WHERE id=?2",
                 rusqlite::params![def.model_slot, aid],
@@ -1629,10 +1650,10 @@ mod tests {
         let custom = RoleDef {
             name: "自建角色".into(),
             duty: "定制职责".into(),
-            reviewer: None,
+            reviewer: Some("后端".into()),
             model_slot: "chat".into(),
             globs: vec!["src/x/**".into()],
-            skills: vec![],
+            skills: vec!["handoff-note".into()],
         };
         // 自定义名不在内置目录 → 无 override 时 UnknownRole；有 override 时建得起来
         let sub = d.path().join("p");
@@ -1679,7 +1700,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(glob, "src/x/**");
+        // fullstack QA #02：agents/globs 齐全不代表向导确认的职责真的落库。
+        let detail = crate::roles::agent_detail(&wb.db, &wb.project_id, "a0").unwrap();
+        assert_eq!(detail.def.duty, custom.duty);
+        assert_eq!(detail.def.reviewer, custom.reviewer);
+        assert_eq!(detail.def.skills, custom.skills);
+        assert_eq!(detail.def.model_slot, custom.model_slot);
+        assert!(detail.custom);
         drop(wb);
+        let reopened = open_existing(&sub).unwrap();
+        let detail = crate::roles::agent_detail(&reopened.db, &reopened.project_id, "a0").unwrap();
+        assert_eq!(detail.def.duty, custom.duty);
+        assert_eq!(detail.def.reviewer, custom.reviewer);
+        assert_eq!(detail.def.skills, custom.skills);
+        drop(reopened);
         // 野 override / 自审 / 幽灵上级
         for (overrides, want) in [
             (vec![custom.clone()], "StrayOverride"),

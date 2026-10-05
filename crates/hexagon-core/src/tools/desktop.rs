@@ -83,7 +83,10 @@ impl Tool for ComputerAction {
         "computer_action"
     }
     fn description(&self) -> &str {
-        "Use when a visible macOS interaction requires one explicitly approved action. Do not use to bypass source ownership, perform background tasks, or replay an unknown outcome. Every mutation requires the owner, regardless of approval mode; GUI input cannot attest file ownership or risk. activate needs discovered app_id. Other actions need the latest unused snapshot_id. Coordinates are returned image pixels. type sends literal text to the observed focused field; key takes chord such as cmd,a. Source editors, terminals and system credential/permission surfaces are refused. Observe afterward; unknown results must never be replayed."
+        // Fullstack QA 2026-10-05: an element ID was repeatedly submitted without
+        // coordinates; AX desktop bounds were then mistaken for image pixels.
+        // Explain the existing contract rather than relaxing its validation.
+        "Use when a visible macOS interaction requires one explicitly approved action. Do not use to bypass source ownership, perform background tasks, or replay an unknown outcome. Every mutation requires the owner, regardless of approval mode; GUI input cannot attest file ownership or risk. activate needs discovered app_id. Other actions need the latest unused snapshot_id. click and drag require x/y in returned screenshot pixels, even when element_id is supplied. AX element bounds are desktop points: for a window observation convert the element center with x=(center_x-bounds.x)*image_width/bounds.width and y=(center_y-bounds.y)*image_height/bounds.height. Do not send absolute desktop coordinates as image pixels. type sends literal text to the observed focused field; key takes chord such as cmd,a. Source editors, terminals and system credential/permission surfaces are refused. Observe afterward; unknown results must never be replayed."
     }
     fn risk(&self) -> RiskClass {
         RiskClass::External
@@ -102,7 +105,7 @@ impl Tool for ComputerAction {
             "text":{"description":"Literal text for the observed focused input field.","type":"string","maxLength":16384},"chord":{"description":"Key chord such as cmd,a; no shell commands.","type":"string","maxLength":80},
             "direction":{"description":"Scroll direction relative to the observed scrollable element.","type":"string","enum":["up","down","left","right"]},
             "amount":{"description":"Number of bounded scroll steps, from 1 to 20.","type":"integer","minimum":1,"maximum":20},
-            "element_id":{"description":"Accessibility element identifier from the latest observation.","type":"string","minLength":1,"maxLength":256},
+            "element_id":{"description":"Observed accessibility identifier, required for scroll. Supplying it for click or drag does not replace the required screenshot x/y coordinates.","type":"string","minLength":1,"maxLength":256},
             "click_type":{"description":"Single, double, or right click.","type":"string","enum":["single","double","right"]}
         },"required":["op"]})
     }

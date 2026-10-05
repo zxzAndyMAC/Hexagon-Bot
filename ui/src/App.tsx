@@ -25,7 +25,7 @@ import { PendingDialog } from './components/PendingCards'
 import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
-import { pauseDesktop } from './desktopPause'
+import { pauseDesktop, resumeDesktop } from './desktopPause'
 
 
 export default function App() {
@@ -35,6 +35,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [computerSettings, setComputerSettings] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
   const [projectOpen, setProjectOpen] = useState<boolean | null>(null)
   const { onKey } = usePendingKeys()
@@ -46,8 +47,8 @@ export default function App() {
   // ui-audit 票 01/02：界面作用域同步进 store——裁决快捷键据此放行/拦截。
   // palette 可在设置页之上再开一层，优先级 palette > settings。
   useEffect(() => {
-    useUiStore.getState().setModalScope(paletteOpen ? 'palette' : settingsOpen ? 'settings' : 'workbench')
-  }, [settingsOpen, paletteOpen])
+    useUiStore.getState().setModalScope(paletteOpen ? 'palette' : settingsOpen ? 'settings' : flowDialogOpen ? 'flow' : 'workbench')
+  }, [settingsOpen, paletteOpen, flowDialogOpen])
 
   // 票 17：工作台已经在了再分析。不等这条命令，输入框不被它挡住。
   useEffect(() => {
@@ -149,6 +150,11 @@ export default function App() {
       if (matches(e, bindingFor('desktopPause'))) {
         e.preventDefault()
         if (!e.repeat && projectOpen === true) void pauseDesktop()
+        return
+      }
+      if (!e.defaultPrevented && matches(e, bindingFor('desktopResume'))) {
+        e.preventDefault()
+        if (!e.repeat && projectOpen === true) void resumeDesktop()
         return
       }
       // Owner issue19: retained keymap actions now navigate to Settings.

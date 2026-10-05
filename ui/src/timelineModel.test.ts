@@ -22,6 +22,23 @@ describe('stampedByAutonomy', () => {
 })
 
 describe('buildRows', () => {
+  it('keeps an intentional interruption neutral in both local and host turn summaries', () => {
+    // A host window's failed flag also covers deliberate interruption. Only
+    // its exact visible stop record overrides it; unknown failures stay errors.
+    const timeline = [ev(1, 'turn_started'), ev(2, 'tool_called', { tool: 'fs_read' }),
+      ev(3, 'tool_result'), ev(4, 'turn_failed', { outcome: 'Ok(Interrupted)' })]
+    const host = { boundary_pairs: [], chapter_base: 0, turn_windows: [{ start_id: 1, end_id: 4,
+      agent_id: null, started_at: '', ended_at: '', failed: true, tool_call_count: 1 }] }
+    for (const page of [undefined, host]) {
+      const summary = buildRows(timeline, 'all', page).find(row => row.type === 'turnsummary')
+      expect(summary?.type === 'turnsummary' && summary.failed).toBe(false)
+    }
+    for (const outcome of ['refused: HTTP 400', 'Err(Exec("Interrupted"))']) {
+      const failure = [...timeline.slice(0, 3), ev(4, 'turn_failed', { outcome })]
+      const summary = buildRows(failure, 'all', host).find(row => row.type === 'turnsummary')
+      expect(summary?.type === 'turnsummary' && summary.failed).toBe(true)
+    }
+  })
   it('does not send result-only zero-height rows to Virtuoso after a permission boundary', () => {
     const rows = buildRows([
       ev(1, 'tool_called', { tool: 'fs_write', seq: 'x' }),

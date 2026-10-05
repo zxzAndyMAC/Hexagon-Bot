@@ -63,6 +63,15 @@ export type ActionId =
   | 'abandonAction'
   | 'retryAction'
   | 'requestException'
+  | 'reviewPerformanceBaseline'
+  | 'reviewQualityCommands'
+  | 'runQualityChecks'
+  | 'confirmQualityRevalidation'
+  | 'cancelQualityRevalidation'
+  | 'confirmQualityCommands'
+  | 'cancelQualityCommands'
+  | 'confirmPerformanceBaseline'
+  | 'cancelPerformanceBaseline'
   | 'acceptException'
   | 'curateLegacyExperience'
   | 'rollbackExperience'
@@ -78,6 +87,10 @@ export type ActionId =
   | 'openPolicyReport'
 
 const DEFAULTS: Record<ActionId, string> = {
+  reviewQualityCommands: '', confirmQualityCommands: '', cancelQualityCommands: '',
+  runQualityChecks: '',
+  confirmQualityRevalidation: '', cancelQualityRevalidation: '',
+  reviewPerformanceBaseline: '', confirmPerformanceBaseline: '', cancelPerformanceBaseline: '',
   timelineLoadOlder: '', timelineRetry: '', timelineLatest: '',
   selectBrowserElement: 'alt+mod+shift+l',
   removeBrowserElement: '',
@@ -199,6 +212,15 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'desktopDisable', labelKey: 'computer.disable' },
   { id: 'desktopPause', labelKey: 'computer.pause' },
   { id: 'desktopResume', labelKey: 'computer.resume' },
+  { id: 'reviewPerformanceBaseline', labelKey: 'quality.reviewBaseline' },
+  { id: 'reviewQualityCommands', labelKey: 'quality.configReview' },
+  { id: 'runQualityChecks', labelKey: 'quality.configRun' },
+  { id: 'confirmQualityRevalidation', labelKey: 'quality.revalidationConfirm' },
+  { id: 'cancelQualityRevalidation', labelKey: 'quality.revalidationCancel' },
+  { id: 'confirmQualityCommands', labelKey: 'quality.configConfirm' },
+  { id: 'cancelQualityCommands', labelKey: 'quality.configCancel' },
+  { id: 'confirmPerformanceBaseline', labelKey: 'quality.confirmBaseline' },
+  { id: 'cancelPerformanceBaseline', labelKey: 'quality.cancelBaseline' },
   { id: 'desktopRelease', labelKey: 'computer.release' },
   { id: 'desktopClear', labelKey: 'computer.clear_screenshots' },
 

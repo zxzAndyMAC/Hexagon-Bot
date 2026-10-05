@@ -667,7 +667,9 @@ fn artifact_proposal_parts(
             |r| r.get(0),
         )
         .map_err(|_| PropError::NotFound(format!("artifact {artifact_id:?}")))?;
-    let content = std::fs::read_to_string(ctx.repo_root.join(".hexagon").join(&path))?;
+    let path = crate::tools::readable_repo_path(&ctx.repo_root, &format!(".hexagon/{path}"))
+        .map_err(std::io::Error::other)?;
+    let content = std::fs::read_to_string(path)?;
     let (s, t, d) = parse_proposal(&content)?;
     Ok((s, t, d, content))
 }

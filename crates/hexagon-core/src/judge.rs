@@ -419,7 +419,9 @@ pub fn judge_proposal(
             .query_row("SELECT path FROM artifacts WHERE id=?1", [&aid], |r| {
                 r.get(0)
             })?;
-    let body = std::fs::read_to_string(repo_root.join(".hexagon").join(&path))?;
+    let path = crate::tools::readable_repo_path(repo_root, &format!(".hexagon/{path}"))
+        .map_err(std::io::Error::other)?;
+    let body = std::fs::read_to_string(path)?;
     let Some(Ok(report)) = crate::proposals::replay_evidence(&body) else {
         // 无证据提案标 judge_skip——不然 sweep 每回合都重读一遍产物
         // 文件（证据在文件里,查询层看不见）。

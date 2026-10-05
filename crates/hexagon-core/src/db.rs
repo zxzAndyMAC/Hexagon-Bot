@@ -6,6 +6,60 @@
 use rusqlite::Connection;
 use std::path::Path;
 
+/// QA14 / 2026-10-05: raw open/read/close of a live SQLite inode clears
+/// this process's POSIX locks, including the WAL SHM dead-man-switch lock.
+/// The isolated reproducer then observed a legitimate client truncate SHM to
+/// 3 bytes and SIGBUS the live mapping. Binary detection after reading and
+/// gitignore exclusions were rejected: neither protects explicit reads/aliases.
+/// Refusing an ambiguous hard link costs an external edit; allowing it can
+/// lose database locks or overwrite state. Prefer refusal before any file open.
+pub(crate) fn validate_generic_file_access(path: &Path) -> std::io::Result<()> {
+    let started = std::time::Instant::now();
+    if generic_file_access_allowed(path) {
+        return Ok(());
+    }
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        None,
+        None,
+        None,
+        None,
+        "generic_file_access",
+        "workbench_state_or_ambiguous_identity",
+        started,
+    );
+    Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "workbench database files and ambiguous hard links require dedicated APIs",
+    ))
+}
+
+fn generic_file_access_allowed(path: &Path) -> bool {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut previous_is_state_dir = false;
+    for part in resolved.components() {
+        let name = part.as_os_str().to_string_lossy().to_ascii_lowercase();
+        // Match the reserved database family, including SQLite's sidecars and
+        // temporary journals; ordinary .hexagon deliverables remain readable.
+        if previous_is_state_dir && name.starts_with("state.db") {
+            return false;
+        }
+        previous_is_state_dir = name == ".hexagon";
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if resolved
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.nlink() > 1)
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// 迁移清单：(版本名, SQL)。追加新迁移 = 往数组尾部加一行，禁止改已发布的项。
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init", include_str!("../migrations/0001_init.sql")),
@@ -404,5 +458,48 @@ mod tests {
             [],
         );
         assert!(r.is_err());
+    }
+}
+
+#[cfg(test)]
+mod generic_file_access_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn qa14_database_family_is_never_generic_file_content(suffix in "[-a-z0-9]{0,18}", upper in any::<bool>(), normalized in any::<bool>()) {
+            let root = tempfile::tempdir().unwrap();
+            let family = format!("state.db{suffix}");
+            let family = if upper { family.to_ascii_uppercase() } else { family };
+            let dir = if upper { ".HEXAGON" } else { ".hexagon" };
+            let path = if normalized { root.path().join(format!("./docs/../{dir}/{family}")) } else { root.path().join(dir).join(family) };
+            prop_assert!(!generic_file_access_allowed(&path));
+        }
+
+        #[test]
+        fn qa14_normal_source_and_deliverables_remain_readable(name in "[a-z]{1,20}") {
+            let root = tempfile::tempdir().unwrap();
+            for rel in [format!("src/{name}.rs"),format!(".hexagon/docs/{name}.md"),"src/state.db".into()] {
+                let path=root.path().join(rel);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path,"ordinary content").unwrap();
+                prop_assert!(generic_file_access_allowed(&path));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    proptest! {
+        #[test]
+        fn qa14_state_symlink_and_hardlink_aliases_are_refused(alias in "[a-z]{1,20}", hard in any::<bool>()) {
+            let root=tempfile::tempdir().unwrap();
+            let state=root.path().join(".hexagon/state.db-shm");
+            std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+            std::fs::write(&state,"fixture").unwrap();
+            let path=root.path().join(alias);
+            if hard {std::fs::hard_link(&state,&path).unwrap();} else {std::os::unix::fs::symlink(&state,&path).unwrap();}
+            prop_assert!(!generic_file_access_allowed(&path));
+        }
     }
 }

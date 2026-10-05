@@ -20,6 +20,8 @@ struct Target {
 }
 
 pub(crate) fn digest(path: &Path) -> std::io::Result<Option<String>> {
+    // QA14: measurement runners and write manifests can name a DB alias too.
+    crate::db::validate_generic_file_access(path)?;
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),

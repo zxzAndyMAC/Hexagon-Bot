@@ -85,12 +85,12 @@ export function StageRail() {
         sorted.map((s, i) => {
           const current = s.state === 'active' || s.state === 'waiting_stamp' || s.state === 'interrupted' || s.state === 'rejected'
           const dim = s.state === 'pending' || s.state === 'skipped'
-          const tag = s.state !== 'done' && s.state !== 'pending'
+          const tag = s.state !== 'pending'
           return (
             <div
               key={s.run_id}
               data-stage-state={s.state}
-              title={`${s.stage} · ${t(`stage.${STATE_KEY[s.state]}`)}`}
+              title={`${s.stage} · ${t(s.state === 'done' ? 'quality.historicalDoneLabel' : `stage.${STATE_KEY[s.state]}`)}`}
               style={{ display: 'flex', alignItems: 'stretch', gap: 9 }}
             >
               <div style={{ width: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
@@ -119,7 +119,7 @@ export function StageRail() {
                       color: s.state === 'rejected' ? 'var(--err)' : s.state === 'skipped' ? 'var(--text-3)' : 'var(--accent)',
                     }}
                   >
-                    {t(`stage.${STATE_KEY[s.state]}`)}
+                    {t(s.state === 'done' ? 'quality.historicalDoneLabel' : `stage.${STATE_KEY[s.state]}`)}
                   </span>
                 )}
               </div>

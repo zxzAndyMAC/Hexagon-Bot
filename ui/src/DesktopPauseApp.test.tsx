@@ -6,7 +6,7 @@ import { api } from './api'
 import { useUiStore } from './store'
 import i18n from './i18n'
 
-vi.mock('./components/TopBar', () => ({ TopBar: ({ onSettings }: { onSettings: () => void }) => <button onClick={onSettings}>Open settings</button> }))
+vi.mock('./components/TopBar', () => ({ TopBar: ({ onSettings }: { onSettings: () => void }) => <><button onClick={onSettings}>Open settings</button><button onClick={() => useUiStore.setState({ flowDialogOpen: true })}>Open flow</button></> }))
 vi.mock('./components/Composer', () => ({ Composer: () => null }))
 vi.mock('./components/SidePanel', () => ({ SidePanel: () => null }))
 vi.mock('./components/Timeline', () => ({ Timeline: () => null }))
@@ -16,7 +16,7 @@ vi.mock('./components/PendingCards', () => ({ PendingDialog: () => null }))
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 let root: ReturnType<typeof createRoot>
 const el = document.createElement('div')
-afterEach(async () => { await act(async () => root?.unmount()); el.remove(); el.replaceChildren(); vi.restoreAllMocks() })
+afterEach(async () => { await act(async () => root?.unmount()); el.remove(); el.replaceChildren(); useUiStore.setState({ flowDialogOpen: false, modalScope: 'workbench' }); vi.restoreAllMocks() })
 it('keeps the explicit computer pause key and button working on the Settings page', async () => {
   await i18n.changeLanguage('en')
   vi.spyOn(api, 'projectOpen').mockResolvedValue(true)
@@ -35,4 +35,21 @@ it('keeps the explicit computer pause key and button working on the Settings pag
   expect(control).toHaveBeenCalledExactlyOnceWith('pause', '/project-a')
   await act(async () => [...el.querySelectorAll('button')].find(button => button.textContent?.includes('Pause computer'))!.click())
   expect(control).toHaveBeenCalledTimes(2)
+})
+
+it('blocks background permission approval while the current-flow configuration is open', async () => {
+  vi.spyOn(api, 'projectOpen').mockResolvedValue(true)
+  vi.spyOn(api, 'runOpeningIntake').mockResolvedValue()
+  vi.spyOn(useUiStore.getState(), 'refresh').mockResolvedValue()
+  vi.spyOn(useUiStore.getState(), 'refreshFast').mockResolvedValue()
+  useUiStore.setState({ flowDialogOpen: false, pending: [{ id: 'q1', kind: 'permission', agent_id: null, state: 'queued', payload: {} }] })
+  const approve = vi.spyOn(api, 'answerPermission').mockResolvedValue()
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<App />))
+  await act(async () => [...el.querySelectorAll('button')].find(button => button.textContent === 'Open flow')!.click())
+  expect(useUiStore.getState().modalScope).toBe('flow')
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, cancelable: true })))
+  expect(approve).not.toHaveBeenCalled()
+  await act(async () => useUiStore.setState({ flowDialogOpen: false }))
+  expect(useUiStore.getState().modalScope).toBe('workbench')
 })

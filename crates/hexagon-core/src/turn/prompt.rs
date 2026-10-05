@@ -208,8 +208,11 @@ pub fn role_layer_text(
         );
     }
     if let Some((stage, kinds)) = due.filter(|(_, k)| !k.is_empty()) {
+        // Fullstack QA #05 (2026-10-03): "Deliver each" made UI repeatedly
+        // debate how to author SQLite/architecture documents. The stage list
+        // belongs to the team; role duties and the assigned task bound its share.
         text += &format!(
-            "\nDeliverables due in stage \"{stage}\": {}. Deliver each with artifact_write and pass the `kind` argument (or start the artifact with the three-line header `---` / `kind: <kind>` / `---`). Use these kind names verbatim; an artifact whose kind does not match is not counted as delivered.",
+            "\nShared team deliverables due in stage \"{stage}\": {}. Contribute the deliverables relevant to your duty and assigned task; let the responsible teammate handle other disciplines. Register your contribution with artifact_write and pass the `kind` argument (or start the artifact with the three-line header `---` / `kind: <kind>` / `---`). Use the listed kind names verbatim when delivering a stage requirement; an artifact whose kind does not match is not counted toward that requirement. Supporting handoffs may use their own descriptive kind.",
             kinds.join(", ")
         );
     }

@@ -9,6 +9,7 @@ import { MultiLine } from './UsageTab'
 import { bindingFor, formatBinding, isMac } from '../keymap'
 import { runStageOp } from '../stageops'
 import { Icon } from './Icon'
+import { QualityCommands } from './QualityCommands'
 
 export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void; onProjectClosed: () => void }) {
   const { t } = useTranslation()
@@ -16,7 +17,13 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
   const pushToast = useUiStore((s) => s.pushToast)
   const [menuOpen, setMenuOpen] = useState(false)
   const [flowOpen, setFlowOpen] = useState(false)
+  useEffect(() => {
+    useUiStore.setState({ flowDialogOpen: flowOpen })
+    return () => { useUiStore.setState({ flowDialogOpen: false }) }
+  }, [flowOpen])
   const [flowPack, setFlowPack] = useState<PackDef | null>(null)
+  const projectEpoch = useUiStore((s) => s.projectEpoch)
+  useEffect(() => { setFlowOpen(false); setFlowPack(null) }, [projectEpoch])
   // 票 17（方向卡 2）：用量 chip 悬停 300ms 出 sparkline 浮层——
   // 数据全部走 store 缓存（usageSeries7d/usageTotal），零新增 IPC。
   const [sparkOpen, setSparkOpen] = useState(false)
@@ -32,7 +39,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
   useEffect(() => {
     if (!flowOpen || mode === 'fastpath') return
     let cancel = false
-    api.packDraft().then((p) => { if (!cancel) setFlowPack(p) }).catch(() => { if (!cancel) setFlowPack(null) })
+    api.currentProcessPack().then((p) => { if (!cancel) setFlowPack(p) }).catch(() => { if (!cancel) setFlowPack(null) })
     return () => { cancel = true }
   }, [flowOpen, mode])
   const menuRef = useRef<HTMLDivElement>(null)
@@ -169,6 +176,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
                   </div>
                 ))}
                 {!flowPack && <div className="dim3" style={{ fontSize: 12 }}>{t('side.noStages')}</div>}
+                <QualityCommands key={projectEpoch} />
               </div>
             )}
           </div>

@@ -645,6 +645,8 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "design_options_proposed",
     "design_direction_selected",
     "quality_source_baseline",
+    "performance_baseline_confirmed",
+    "quality_commands_changed",
     "computer_control",
     "acceptance_exception",
     "artifact_materialization",

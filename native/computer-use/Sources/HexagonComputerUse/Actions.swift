@@ -41,9 +41,7 @@ struct ActionRequest: Decodable, Sendable {
         }
         if op == "type", text == nil || text!.utf8.count > 16_384 { throw ActionError("invalid_text") }
         if op == "key" {
-            let parts = (keys ?? "").split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-            let named = ["cmd", "shift", "alt", "ctrl", "space", "return", "tab", "escape", "delete", "arrow_up", "arrow_down", "arrow_left", "arrow_right", "home", "end", "pageup", "pagedown"]
-            guard !parts.isEmpty, parts.count <= 4, parts.allSatisfy({ named.contains($0) || ($0.count == 1 && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }) }) else { throw ActionError("invalid_keys") }
+            guard ApprovedKeyboard.validChord(keys ?? "") else { throw ActionError("invalid_keys") }
         }
         if op == "scroll" {
             guard ["up", "down", "left", "right"].contains(direction ?? ""),
@@ -262,7 +260,7 @@ final class ActionExecutor {
             if request.op == "drag" {
                 dragTo = try Self.mapPoint(x: request.to_x!, y: request.to_y!, imageSize: current.imageSize, bounds: current.bounds)
             }
-            if request.op == "click" || request.op == "drag" {
+            if request.op == "click" || request.op == "drag" || keyboard != nil {
                 // Ticket 07 / live click 1061: owner approval foregrounds Hexagon,
                 // and activating Chrome alone may select another Chrome window.
                 // Restore the exact observed window, then reject moved/covered
@@ -271,8 +269,23 @@ final class ActionExecutor {
                 try ActionMailbox.shared.checkpoint(id, dispatch: true)
                 let focus: DesktopActionOutcome
                 do {
-                    focus = try await FocusManagementService().focusWindowResult(
-                        windowID: CGWindowID(current.identity.windowID), expectedIdentity: current.identity)
+                    // QA live action574 / 2026-10-05: bare window activation
+                    // timed out when owner approval left another app frontmost.
+                    // Use the existing generation-pinned activation service (with
+                    // verified AX fallback), then restore the exact window. Never
+                    // replace this with an unverified global focus or click retry.
+                    focus = try await Self.focusApprovedWindow(focusDispatched: &focusDispatched, activate: {
+                        let target = ApplicationProcessIdentity(
+                            processIdentifier: current.identity.ownerProcessIdentifier,
+                            processStartIdentity: current.identity.ownerProcessStartIdentity)
+                        let activation = try await self.applications.activateApplicationTargetedResult(
+                            request: ApplicationActivationRequest(
+                                identifier: "PID:\(target.processIdentifier)", expectedIdentity: target)).outcome
+                        return activation
+                    }, focus: {
+                        try await FocusManagementService().focusWindowResult(
+                            windowID: CGWindowID(current.identity.windowID), expectedIdentity: current.identity)
+                    })
                 } catch {
                     // Live action 1183: preserve the original failure accounting;
                     // read-only diagnostics must not retry activation or change focus.
@@ -291,39 +304,72 @@ final class ActionExecutor {
                 try ActionMailbox.shared.checkpoint(id)
                 guard SystemIdentityResolver.validateWindowMutationIdentity(current.identity),
                       SystemIdentityResolver.windowIdentity(CGWindowID(current.identity.windowID))?.bounds == current.bounds else { throw ActionError("snapshot_stale_after_focus") }
-                try Self.validateForegroundPointer(
+                if let point { try await Self.awaitPointerReady(validate: {
+                    try Self.checkSession()
+                    try ActionMailbox.shared.checkpoint(id)
+                    guard Date().timeIntervalSince(current.created) <= 60,
+                          SystemIdentityResolver.validateWindowMutationIdentity(current.identity),
+                          SystemIdentityResolver.windowIdentity(CGWindowID(current.identity.windowID))?.bounds == current.bounds else { throw ActionError("snapshot_stale_after_focus") }
+                    try Self.validateForegroundPointer(
                     windowID: CGWindowID(current.identity.windowID),
                     processID: current.identity.ownerProcessIdentifier, bounds: current.bounds,
-                    points: [point!] + (dragTo.map { [$0] } ?? []),
+                    points: [point] + (dragTo.map { [$0] } ?? []),
                     frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                     windows: Self.visibleWindows(),
                     dockPassThrough: { window, point in
                         Self.dockOverlayPassesThrough(window, at: point, expectedPID: current.identity.ownerProcessIdentifier)
                     })
+                }, wait: { try await Task.sleep(for: .milliseconds(100)) }) }
             }
             if request.op == "scroll", !current.elementIDs.contains(request.element_id!) { throw ActionError("element_not_in_snapshot") }
             try Self.checkSession()
-            try ActionMailbox.shared.checkpoint(id, dispatch: true)
-            dispatched = true
+            try ActionMailbox.shared.checkpoint(id, dispatch: keyboard == nil)
+            dispatched = keyboard == nil
             let outcome: DesktopActionOutcome?
             switch request.op {
             case "drag":
                 outcome = try await automation.dragWithOutcome(DragOperationRequest(from: point!, to: dragTo!, duration: request.duration_ms ?? 500, steps: 20, modifiers: nil, profile: .linear)).outcome
             case "click":
                 outcome = try await foregroundPointer.clickWithOutcome(target: .coordinates(point!), clickType: ClickType(rawValue: request.click_type ?? "single")!, snapshotId: nil).outcome
-            case "type":
-                outcome = try await automation.typeActionsWithOutcome([.text(request.text!)], cadence: .fixed(milliseconds: 0), snapshotId: nil, target: keyboard!).outcome
-            case "key":
-                outcome = try await automation.hotkeyWithOutcome(keys: request.keys!, holdDuration: 50, target: keyboard!).outcome
+            case "type", "key":
+                let expected = keyboard!.focusedElement
+                outcome = try await ApprovedKeyboard.execute(text: request.op == "type" ? request.text : nil,
+                    keys: request.op == "key" ? request.keys : nil,
+                    processID: current.identity.ownerProcessIdentifier, validate: {
+                        try Self.checkSession()
+                        try ActionMailbox.shared.checkpoint(id)
+                        guard SystemIdentityResolver.validateWindowMutationIdentity(current.identity),
+                              SystemIdentityResolver.windowIdentity(CGWindowID(current.identity.windowID))?.bounds == current.bounds,
+                              NSWorkspace.shared.frontmostApplication?.processIdentifier == current.identity.ownerProcessIdentifier,
+                              !Self.protectedApplication(pid: current.identity.ownerProcessIdentifier) else { throw ActionError("keyboard_target_changed") }
+                        let pinned = try await UIAutomationTarget.exactWindow(exact).pinningCurrentFocusedElement(using: self.automation)
+                        guard pinned.exactWindow?.focusedElement == expected,
+                              try Self.focusIsNotSecure(pid: current.identity.ownerProcessIdentifier) else { throw ActionError("keyboard_focus_changed_or_secure") }
+                        try ApprovedKeyboard.requireKeyWindow(processID: current.identity.ownerProcessIdentifier,
+                            windowID: CGWindowID(current.identity.windowID))
+                        // AX awaits can yield: recheck the foreground and window
+                        // after the focus read, immediately before the key pair.
+                        try Self.checkSession()
+                        guard hexagonComputerPermissions() & 7 == 7,
+                              NSWorkspace.shared.frontmostApplication?.processIdentifier == current.identity.ownerProcessIdentifier,
+                              SystemIdentityResolver.validateWindowMutationIdentity(current.identity),
+                              SystemIdentityResolver.windowIdentity(CGWindowID(current.identity.windowID))?.bounds == current.bounds else { throw ActionError("keyboard_target_changed") }
+                    }, generationMatches: {
+                        SystemIdentityResolver.processStartIdentity(current.identity.ownerProcessIdentifier) == current.identity.ownerProcessStartIdentity
+                    }, onDispatch: {
+                        try ActionMailbox.shared.checkpoint(id, dispatch: true)
+                        dispatched = true
+                    })
             case "scroll":
                 outcome = try await automation.scrollWithOutcome(ScrollRequest(direction: ScrollDirection(rawValue: request.direction!)!, amount: request.amount!, target: request.element_id!, snapshotId: current.id, expectedWindow: exact, foreground: false)).outcome
             default: throw ActionError("invalid_operation")
             }
             return NativeReply(ok: true, outcome_unknown: outcome?.isConfirmed != true, outcome: outcome)
         } catch let failure as DesktopActionFailure {
-            return NativeReply(ok: false, error: (focusRestored ? "focus_restored=true; " : "") + failure.message + focusDiagnostic, outcome_unknown: focusDispatched || (failure.outcome.dispatchState.mutationDispatched && !failure.outcome.isConfirmed), outcome: failure.outcome)
+            return Self.failedActionReply(failure, focusRestored: focusRestored,
+                focusDispatched: focusDispatched, diagnostic: focusDiagnostic)
         } catch {
-            return NativeReply(ok: false, error: (focusRestored ? "focus_restored=true; " : "") + error.localizedDescription + focusDiagnostic, outcome_unknown: dispatched, cancelled: error is CancellationError)
+            return NativeReply(ok: false, error: (focusRestored ? "focus_restored=true; " : "") + error.localizedDescription + focusDiagnostic, outcome_unknown: focusDispatched || dispatched, cancelled: error is CancellationError)
         }
     }
 
@@ -418,6 +464,25 @@ final class ActionExecutor {
         }
     }
 
+    // QA action1220 / 2026-10-05: another desktop controller can still own its
+    // approval overlay when focus restoration completes. Await disappearance
+    // before any pointer event; never whitelist that controller or replay input.
+    // Every read checks cancellation/session/receipt/identity again. Persistent
+    // cover remains refused after at most two seconds of sleep; native AX reads
+    // add their own latency. Other failures refuse immediately (fail closed).
+    static func awaitPointerReady(maximumAttempts: Int = 21, validate: () throws -> Void,
+        wait: () async throws -> Void) async throws {
+        for attempt in 0..<maximumAttempts {
+            do { try validate(); return }
+            catch let error as ActionError {
+                guard error.code.hasPrefix("exact_window_pointer_obscured "),
+                      attempt + 1 < maximumAttempts else { throw error }
+            }
+            try await wait()
+        }
+        throw ActionError("pointer_validation_unavailable")
+    }
+
     // False negatives cost a new observation/approval; false positives can
     // click another window. Require every pointer endpoint to remain uncovered.
     static func validateForegroundPointer(windowID: CGWindowID, processID: Int32,
@@ -440,6 +505,28 @@ final class ActionExecutor {
                 throw ActionError("exact_window_pointer_obscured expected_id=\(windowID),expected_pid=\(processID),expected_bounds=\(NSStringFromRect(bounds)),point=\(NSStringFromPoint(point)),point_inside=\(bounds.contains(point)),frontmost_pid=\(frontmostPID ?? -1),actual={\(actual)}")
             }
         }
+    }
+
+    static func focusApprovedWindow(
+        focusDispatched: inout Bool,
+        activate: () async throws -> DesktopActionOutcome?,
+        focus: () async throws -> DesktopActionOutcome
+    ) async throws -> DesktopActionOutcome {
+        let activation = try await activate()
+        // Activation throws its actual dispatch disposition. Do not invent a
+        // dispatch before this call: rejected native/AX requests never ran.
+        focusDispatched = activation?.isConfirmed != true
+        guard activation?.isConfirmed == true else {
+            throw ActionError("application_activation_unconfirmed")
+        }
+        return try await focus()
+    }
+
+    static func failedActionReply(_ failure: DesktopActionFailure, focusRestored: Bool,
+        focusDispatched: Bool, diagnostic: String) -> NativeReply {
+        NativeReply(ok: false, error: (focusRestored ? "focus_restored=true; " : "") + failure.message + diagnostic,
+            outcome_unknown: focusDispatched || (failure.outcome.dispatchState.mutationDispatched && !failure.outcome.isConfirmed),
+            outcome: failure.outcome)
     }
 
     private static func focusFailureDiagnostic(windowID: CGWindowID, processID: Int32) -> String {
@@ -495,6 +582,17 @@ final class ActionExecutor {
             hitPID != window.ownerProcessIdentifier
     }
 
+    // QA15 action1211 / 2026-10-05: custom canvas hit-testing may return its
+    // AXWindow directly, which has no parent AXWindow attribute. The previous
+    // parent-only proof refused legitimate input under Dock's tracking overlay.
+    // Missing identity still costs a retry; a false match could hit another window.
+    static func pointerHitMatchesFocusedWindow(role: String?, parentWindow: CGWindowID?,
+        ownWindow: CGWindowID?, focusedWindow: CGWindowID?) -> Bool {
+        guard let focusedWindow, focusedWindow != 0 else { return false }
+        let hit = parentWindow ?? (role == kAXWindowRole as String ? ownWindow : nil)
+        return hit == focusedWindow
+    }
+
     private static func dockOverlayPassesThrough(_ window: SystemWindowIdentity, at point: CGPoint, expectedPID: Int32) -> Bool {
         guard let app = NSRunningApplication(processIdentifier: window.ownerProcessIdentifier),
               app.bundleIdentifier == "com.apple.dock",
@@ -517,17 +615,22 @@ final class ActionExecutor {
         let application = AXUIElementCreateApplication(expectedPID)
         AXUIElementSetMessagingTimeout(application, 0.2)
         AXUIElementSetMessagingTimeout(hit, 0.2)
-        guard AXUIElementCopyAttributeValue(hit, kAXWindowAttribute as CFString, &hitWindow) == .success,
-              AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
-              let hitWindow, let focusedWindow,
-              CFGetTypeID(hitWindow) == AXUIElementGetTypeID(),
-              CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() else { return false }
+        _ = AXUIElementCopyAttributeValue(hit, kAXWindowAttribute as CFString, &hitWindow)
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+              let focusedWindow, CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() else { return false }
+        var role: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(hit, kAXRoleAttribute as CFString, &role)
+        let resolver = AXWindowResolver()
+        let parentID = hitWindow.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? resolver.windowID(from: unsafeDowncast($0, to: AXUIElement.self)) : nil }
+        let exactHit = pointerHitMatchesFocusedWindow(role: role as? String,
+            parentWindow: parentID, ownWindow: resolver.windowID(from: hit),
+            focusedWindow: resolver.windowID(from: unsafeDowncast(focusedWindow, to: AXUIElement.self)))
         // Bind the actual AX hit to the focused window, then the caller checks
         // the first remaining WindowServer window is the exact receipt ID.
         // Merely belonging to the same Chrome process is insufficient.
         return dockOverlayMayPassThrough(window: window, systemDock: true,
             displayBounds: displayBounds, hitPID: pid, expectedPID: expectedPID,
-            hitFocusedWindow: CFEqual(hitWindow, focusedWindow))
+            hitFocusedWindow: exactHit)
     }
 
     private static func validateScreenTarget(at point: CGPoint, observed: [SystemWindowIdentity]) throws -> SystemWindowIdentity {

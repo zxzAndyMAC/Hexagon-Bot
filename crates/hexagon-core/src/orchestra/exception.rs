@@ -101,7 +101,18 @@ pub(super) fn accepted_for_run(
         if let Ok(items) =
             serde_json::from_value::<Vec<ExceptionRequirement>>(p["requirements"].clone())
         {
-            accepted.extend(items.into_iter().filter(|r| r.run_id() == run));
+            for item in items.into_iter().filter(|r| r.run_id() == run) {
+                if let ExceptionRequirement::Check { cmd, .. } = &item {
+                    let binding = quality_config::check_binding(db, project, pack, run, cmd)?;
+                    if !quality_config::binding_current(
+                        p["check_configurations"][run][cmd].as_str(),
+                        &binding,
+                    ) {
+                        continue;
+                    }
+                }
+                accepted.push(item);
+            }
         }
     }
     Ok(accepted)
@@ -143,14 +154,19 @@ pub(super) fn candidates(
             });
         }
         for review in &stage.reviews {
-            let mut query = db.conn().prepare("SELECT id,path FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND kind=?3 AND status IN ('valid','stamped')")?;
-            let targets = query
-                .query_map(
-                    rusqlite::params![project, run.id, review.artifact_kind],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                )?
-                .collect::<Result<Vec<_>, _>>()?;
-            for (id, path) in targets {
+            let targets = crate::artifacts::delivery::for_run(
+                db,
+                project,
+                &run.id,
+                std::slice::from_ref(&review.artifact_kind),
+            )?;
+            for delivery in targets.items {
+                let crate::artifacts::delivery::Delivery {
+                    id,
+                    path,
+                    stage: review_run,
+                    ..
+                } = delivery;
                 // Missing bodies/identity cannot become a review exception.
                 if crate::artifacts::evidence::capture(db, Path::new(&root), project, &id)?
                     .is_none()
@@ -158,7 +174,7 @@ pub(super) fn candidates(
                         db,
                         Path::new(&root),
                         project,
-                        &run.id,
+                        &review_run,
                         &id,
                         &review.reviewer,
                     )?
@@ -287,15 +303,22 @@ fn accept_inner(
         return Err(OrchError::InvalidAcceptanceException);
     }
     let mut scopes = BTreeMap::new();
+    let mut configurations = BTreeMap::<String, BTreeMap<String, String>>::new();
     for requirement in &selected {
         let run = requirement.run_id();
+        if let ExceptionRequirement::Check { cmd, .. } = requirement {
+            configurations.entry(run.to_string()).or_default().insert(
+                cmd.clone(),
+                quality_config::check_binding(db, project, pack, run, cmd)?,
+            );
+        }
         scopes.insert(
             run.to_string(),
             scope_fingerprint(db, project, pack, run)?.ok_or(OrchError::StaleAcceptanceVersion)?,
         );
     }
     current_evidence(db, project, pack, expected)?;
-    let event_id = db.append_event(project,EventKind::System,json!({"kind":KIND,"question_id":question,"fingerprint":expected,"scopes":scopes,"requirements":selected,"reason":reason,"by":"owner"}),None,Some(&evidence.run_id))?;
+    let event_id = db.append_event(project,EventKind::System,json!({"kind":KIND,"question_id":question,"fingerprint":expected,"scopes":scopes,"check_configurations":configurations,"requirements":selected,"reason":reason,"by":"owner"}),None,Some(&evidence.run_id))?;
     crate::cards::answer(db, question, "owner")?;
     tx.commit()?;
     Ok(ExceptionAcceptance { event_id })
@@ -362,6 +385,8 @@ pub fn request(
     pack: &PackDef,
     expected: &str,
 ) -> Result<ExceptionRequest, OrchError> {
+    let effective = quality_config::effective_pack(db, project, pack)?;
+    let pack = &effective;
     let started = std::time::Instant::now();
     report(
         project,
@@ -379,6 +404,8 @@ pub fn accept(
     selected: &[ExceptionRequirement],
     reason: &str,
 ) -> Result<ExceptionAcceptance, OrchError> {
+    let effective = quality_config::effective_pack(db, project, pack)?;
+    let pack = &effective;
     let started = std::time::Instant::now();
     report(
         project,

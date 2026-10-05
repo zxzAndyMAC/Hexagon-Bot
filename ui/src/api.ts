@@ -58,6 +58,9 @@ import type { StageEvidence } from './gen/StageEvidence'
 import type { ExceptionRequirement } from './gen/ExceptionRequirement'
 import type { ExceptionRequest } from './gen/ExceptionRequest'
 import type { ExceptionAcceptance } from './gen/ExceptionAcceptance'
+import type { PerformanceBaselineConfirmation } from './gen/PerformanceBaselineConfirmation'
+import type { QualityConfiguration } from './gen/QualityConfiguration'
+import type { QualityCategory } from './gen/QualityCategory'
 import type { StageRow } from './gen/StageRow'
 import type { TimelineItem } from './gen/TimelineItem'
 import type { TeamRow } from './gen/TeamRow'
@@ -324,7 +327,7 @@ export const api = {
     call<void>('answer_permission', { questionId, allow, rememberShape: rememberShape ?? null, scope }),
   advance: () => call<StageAction>('advance'),
   openStage: (seq: number) => call<OpenStageOutcome>('open_stage', { seq }),
-  runChecks: () => call<CheckOutcome>('run_checks'),
+  runChecks: (expectedProjectRoot?: string) => call<CheckOutcome>('run_checks', { expectedProjectRoot: expectedProjectRoot ?? null }),
   stamp: () => call<StageAction>('stamp'),
   rewind: (toSeq: number) => call<StageAction>('rewind', { toSeq }),
   skip: () => call<StageAction>('skip'),
@@ -340,6 +343,11 @@ export const api = {
     call<void>('set_agent_sleeping', { agentId, sleeping }),
   team: () => call<TeamRow[]>('team'),
   requestAcceptanceException: (expected: string) => call<ExceptionRequest>('request_acceptance_exception', { expected }),
+  confirmPerformanceBaseline: (measurement: number, expected: string, reason: string) => call<PerformanceBaselineConfirmation>('confirm_performance_baseline', { measurement, expected, reason }),
+  qualityConfiguration: () => call<QualityConfiguration>('quality_configuration'),
+  cancelQualityRevalidation: (question: string, expectedProjectRoot: string) => call<void>('cancel_quality_revalidation', { question, expectedProjectRoot }),
+  confirmQualityRevalidation: (question: string, expected: string, expectedProjectRoot: string) => call<StageAction>('confirm_quality_revalidation', { question, expected, expectedProjectRoot }),
+  updateQualityCommands: (seq: number, expected: string, commands: Partial<Record<QualityCategory, string>>, expectedProjectRoot: string) => call<QualityConfiguration>('update_quality_commands', { seq, expected, commands, expectedProjectRoot }),
   acceptDeliveryException: (question: string, expected: string, selected: ExceptionRequirement[], reason: string) => call<ExceptionAcceptance>('accept_delivery_exception', { question, expected, selected, reason }),
   cancelAcceptanceException: (question: string) => call<void>('cancel_acceptance_exception', { question }),
   stageEvidence: () => call<StageEvidence | null>('stage_evidence'),
@@ -465,6 +473,7 @@ export const api = {
     call<string>('draft_role_def', { agentId, hint }),
   // ---- 流程包编辑（票 31）：draft=pack.json / active=钉住副本，编辑只碰 draft ----
   packDraft: () => call<PackDef>('pack_draft'),
+  currentProcessPack: () => call<PackDef>('current_process_pack'),
   savePackDraft: (packJson: string) => call<void>('save_pack_draft', { packJson }),
   savePackTemplate: (packJson: string) => call<string>('save_pack_template', { packJson }),
   packTemplates: () => call<string[]>('pack_templates'),
@@ -1359,6 +1368,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         def: { duty: '服务端实现', reviewer: '后端技术负责人', model_slot: 'chat', skills: [] },
         globs: ['src/**'], grants: [{ kind: 'skill', name: 'spec-writing' }],
       } as T
+    case 'quality_configuration':
+      return { version: 'mock-quality:1', project_root: '/mock-project', stages: [{ seq: 0, name: '规格', commands: {} }] } as T
+    case 'update_quality_commands':
+      throw new Error(i18n.t('quality.desktopOnly'))
+    case 'current_process_pack':
     case 'pack_draft':
       return { name: '规格驱动', version: 1, stages: [{ name: '规格', roles: ['产品策划'], due: ['规格'], stamp_point: true }] } as T
     case 'pack_templates':

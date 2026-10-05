@@ -208,14 +208,15 @@ fn design_direction(
 }
 #[tauri::command]
 fn choose_design_direction(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     question_id: String,
     revision: i64,
     option_id: Option<String>,
     existing_guidance: Option<String>,
 ) -> Result<hexagon_core::design::DesignDirection, CmdError> {
-    with_conn(&state, |db, _| {
-        hexagon_core::api::choose_design_direction(
+    let (direction, root) = with_conn(&state, |db, root| {
+        let direction = hexagon_core::api::choose_design_direction(
             db,
             PROJECT_ID,
             &question_id,
@@ -223,8 +224,40 @@ fn choose_design_direction(
             option_id.as_deref(),
             existing_guidance.as_deref(),
         )
-        .map_err(cmd_err)
-    })
+        .map_err(cmd_err)?;
+        Ok::<_, CmdError>((direction, root.to_path_buf()))
+    })?;
+    let revision = direction.revision;
+    // Fullstack QA #04: status=active is not a queued turn. Follow the same
+    // short control/write then asynchronous turn pattern as owner messages.
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let result = with_wb(&state, |wb| {
+            let started = std::time::Instant::now();
+            if wb.repo_root != root {
+                hexagon_core::diag::note(
+                    hexagon_core::diag::CLASS_REJECT,
+                    true,
+                    Some(&wb.project_id),
+                    None,
+                    None,
+                    None,
+                    "design_resume",
+                    "project_changed",
+                    started,
+                );
+                return Err(CmdError::internal(
+                    "project changed before design continuation",
+                ));
+            }
+            wb.continue_design_direction(revision).map_err(cmd_err)
+        });
+        if let Err(error) = result {
+            log::warn!("design continuation: {error}");
+        }
+    });
+    Ok(direction)
 }
 #[tauri::command]
 fn desktop_screenshot(
@@ -551,8 +584,15 @@ fn advance(
 #[tauri::command(async)]
 fn run_checks(
     state: tauri::State<AppState>,
+    expected_project_root: Option<String>,
 ) -> Result<hexagon_core::orchestra::CheckOutcome, CmdError> {
-    with_wb(&state, |wb| wb.run_checks())
+    with_wb(&state, |wb| {
+        if let Some(expected) = &expected_project_root {
+            hexagon_core::api::desktop_check_project(&wb.repo_root, expected)
+                .map_err(hexagon_core::api::ApiError::BadInput)?;
+        }
+        wb.run_checks()
+    })
 }
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
@@ -626,6 +666,24 @@ fn stage_evidence(
     let db = hexagon_core::db::Db::open(root.join(".hexagon/state.db")).map_err(cmd_err)?;
     let pack = hexagon_core::orchestra::PackDef::pinned(&root).map_err(cmd_err)?;
     hexagon_core::orchestra::stage_evidence(&db, PROJECT_ID, &pack).map_err(cmd_err)
+}
+#[tauri::command]
+fn quality_configuration(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::orchestra::QualityConfiguration, CmdError> {
+    with_conn(&state, |db, root| {
+        let pack = hexagon_core::orchestra::PackDef::pinned(root).map_err(cmd_err)?;
+        hexagon_core::orchestra::quality_configuration(db, PROJECT_ID, &pack).map_err(cmd_err)
+    })
+}
+#[tauri::command]
+fn current_process_pack(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::orchestra::PackDef, CmdError> {
+    with_conn(&state, |db, root| {
+        let pack = hexagon_core::orchestra::PackDef::pinned(root).map_err(cmd_err)?;
+        hexagon_core::orchestra::current_process_pack(db, PROJECT_ID, &pack).map_err(cmd_err)
+    })
 }
 #[tauri::command]
 fn stage_status(
@@ -896,16 +954,25 @@ fn mcp_services(
 
 /// 全量服务清单（无项目可用）：全局 ∪ 项目（同名项目覆盖全局），
 /// 含禁用与远程条目；origin 标来源。配置清单≠授权（ADR 0010）。
-#[tauri::command]
+#[tauri::command(async)]
 fn list_mcp_entries(
     state: tauri::State<AppState>,
 ) -> Result<Vec<hexagon_core::mcp::McpEntryRow>, CmdError> {
-    // wb 只借 repo_root 读路径，缺省=只看全局层——projectless 可列。
+    mcp_entries_for_state(&state)
+}
+
+fn mcp_entries_for_state(
+    state: &AppState,
+) -> Result<Vec<hexagon_core::mcp::McpEntryRow>, CmdError> {
+    // Fullstack QA #03 (2026-10-03): opening the MCP grant picker during a
+    // model turn blocked the macOS event loop on wb. Snapshot the short control
+    // lane root, then release it before filesystem discovery (also projectless).
     let root = state
-        .wb
+        .conn
         .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|wb| wb.repo_root.clone()));
+        .map_err(|_| CmdError::internal("lock poisoned"))?
+        .as_ref()
+        .map(|c| c.root.clone());
     Ok(hexagon_core::mcp::list_mcp_entries(root.as_deref()))
 }
 
@@ -1019,6 +1086,56 @@ fn request_acceptance_exception(
     expected: String,
 ) -> Result<hexagon_core::orchestra::ExceptionRequest, CmdError> {
     with_wb(&state, |wb| wb.request_acceptance_exception(&expected))
+}
+#[tauri::command(async)]
+fn confirm_performance_baseline(
+    state: tauri::State<AppState>,
+    measurement: i64,
+    expected: String,
+    reason: String,
+) -> Result<hexagon_core::orchestra::PerformanceBaselineConfirmation, CmdError> {
+    with_wb(&state, |wb| {
+        wb.confirm_performance_baseline(measurement, &expected, &reason)
+    })
+}
+#[tauri::command(async)]
+fn update_quality_commands(
+    state: tauri::State<AppState>,
+    seq: usize,
+    expected: String,
+    expected_project_root: String,
+    commands: std::collections::BTreeMap<hexagon_core::orchestra::QualityCategory, String>,
+) -> Result<hexagon_core::orchestra::QualityConfiguration, CmdError> {
+    with_wb(&state, |wb| {
+        hexagon_core::api::desktop_check_project(&wb.repo_root, &expected_project_root)
+            .map_err(hexagon_core::api::ApiError::BadInput)?;
+        wb.update_quality_commands(seq, &expected, &commands)
+    })
+}
+#[tauri::command(async)]
+fn cancel_quality_revalidation(
+    state: tauri::State<AppState>,
+    question: String,
+    expected_project_root: String,
+) -> Result<(), CmdError> {
+    with_wb(&state, |wb| {
+        hexagon_core::api::desktop_check_project(&wb.repo_root, &expected_project_root)
+            .map_err(hexagon_core::api::ApiError::BadInput)?;
+        wb.cancel_quality_revalidation(&question)
+    })
+}
+#[tauri::command(async)]
+fn confirm_quality_revalidation(
+    state: tauri::State<AppState>,
+    question: String,
+    expected: String,
+    expected_project_root: String,
+) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
+    with_wb(&state, |wb| {
+        hexagon_core::api::desktop_check_project(&wb.repo_root, &expected_project_root)
+            .map_err(hexagon_core::api::ApiError::BadInput)?;
+        wb.confirm_quality_revalidation(&question, &expected)
+    })
 }
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
@@ -2421,6 +2538,8 @@ pub fn run() {
             team,
             stage_status,
             stage_evidence,
+            quality_configuration,
+            current_process_pack,
             pending_questions,
             permission_rules,
             permission_shape_suggestion,
@@ -2465,6 +2584,10 @@ pub fn run() {
             stall_ack,
             override_checks,
             request_acceptance_exception,
+            confirm_performance_baseline,
+            update_quality_commands,
+            cancel_quality_revalidation,
+            confirm_quality_revalidation,
             accept_delivery_exception,
             cancel_acceptance_exception,
             agent_detail,
@@ -2747,6 +2870,30 @@ async fn browser_focus(
 #[cfg(test)]
 mod preview_project_lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn mcp_catalog_remains_available_while_an_agent_holds_the_workbench() {
+        // fullstack QA #03：在角色思考时打开授权选择器曾把NS主线程卡在wb锁上。
+        let state = std::sync::Arc::new(AppState {
+            wb: Mutex::new(None),
+            conn: Mutex::new(None),
+        });
+        let turn_lock = state.wb.lock().unwrap(); // D01-exempt: 模拟回合持有长锁
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker_state = state.clone();
+        let worker = std::thread::spawn(move || {
+            send.send(mcp_entries_for_state(&worker_state).map(|rows| rows.len()))
+                .unwrap();
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+        drop(turn_lock);
+        worker.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "MCP catalog waited for the active model turn"
+        );
+        result.unwrap().unwrap();
+    }
 
     #[test]
     fn close_and_swap_cancel_validated_native_focus_before_removing_project() {

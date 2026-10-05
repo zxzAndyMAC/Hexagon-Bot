@@ -26,7 +26,9 @@ pub struct Price {
 /// 从 `.hexagon/prices.json` 读价格表。格式：
 /// `{ "default": {...}, "models": { "<slot>": {...} } }`
 fn price_for(repo_root: &std::path::Path, model_slot: &str) -> Option<Price> {
-    let text = std::fs::read_to_string(repo_root.join(".hexagon/prices.json")).ok()?;
+    let path = repo_root.join(".hexagon/prices.json");
+    crate::db::validate_generic_file_access(&path).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     let entry = v
         .get("models")

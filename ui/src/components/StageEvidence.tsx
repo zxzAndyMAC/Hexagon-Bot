@@ -5,6 +5,7 @@ import { api, errText } from '../api'
 import { useStageEvidence } from '../useStageEvidence'
 import { useUiStore } from '../store'
 import { bindingFor, formatBinding, matches } from '../keymap'
+import { PerformanceBaselineReview } from './PerformanceBaselineReview'
 
 /** D08: render core's current evidence, never infer success from an old exit code. */
 export function StageEvidence({ runId }: { runId?: string }) {
@@ -43,10 +44,14 @@ export function StageEvidence({ runId }: { runId?: string }) {
           {check.exit_code !== null && !check.quality && <span className="dim3"> · {t('evidence.exit', { code: check.exit_code })}</span>}
           {check.quality && <div className="quality-evidence">
             <span>{t(`quality.category.${check.quality.category}`)} · {t(`quality.reason.${check.quality.reason}`)}</span>
-            {check.quality.command && <div className="mono">{check.quality.command}</div>}
             {check.quality.measured_ms != null && <div>{t('quality.measurement', { value: check.quality.measured_ms })}</div>}
             {check.quality.baseline_ms != null && <div>{t('quality.baseline', { value: check.quality.baseline_ms })}</div>}
-            <div className="dim3">{t('quality.changed', { count: check.quality.changed_paths.length })}</div>
+            <details><summary>{t('quality.details')}</summary>
+              {check.quality.command && <div className="mono">{check.quality.command}</div>}
+              <div className="dim3">{t('quality.changed', { count: check.quality.changed_paths.length })}</div>
+            </details>
+            {check.quality.reason === 'measurement_changed' && check.state === 'failed' && check.event_id != null && evidence.fingerprint &&
+              <PerformanceBaselineReview key={`${check.event_id}:${evidence.fingerprint}`} measurement={check.event_id} expected={evidence.fingerprint} />}
           </div>}
         </div>
       ))}

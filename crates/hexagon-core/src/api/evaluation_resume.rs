@@ -25,16 +25,36 @@ impl Workbench {
         aid: &str,
         dispatch: i64,
     ) -> Result<Vec<Message>, ApiError> {
+        let run = self.active_run()?.map(|run| run.id);
+        self.recorded_activation_history_for_run(aid, dispatch, run.as_deref())
+    }
+
+    pub(super) fn recorded_activation_history_for_run(
+        &self,
+        aid: &str,
+        dispatch: i64,
+        run: Option<&str>,
+    ) -> Result<Vec<Message>, ApiError> {
         let started = std::time::Instant::now();
+        // QA 2026-10-05: an activation is bounded by the next independent
+        // dispatch. Older cards must not import a later task or another stage.
+        let end: i64 = self.db.conn().query_row(
+            "SELECT COALESCE(MIN(id),9223372036854775807) FROM events
+             WHERE project_id=?1 AND agent_id=?2 AND kind='fastpath_dispatched' AND id>?3",
+            rusqlite::params![self.project_id, aid, dispatch],
+            |r| r.get(0),
+        )?;
         let ids = {
             let mut st = self.db.conn().prepare(
                 "SELECT id FROM tool_actions WHERE project_id=?1 AND agent_id=?2
-                 AND request_id>?3 ORDER BY request_id,rowid",
+                 AND request_id>?3 AND request_id<?4 AND stage_run_id IS ?5
+                 ORDER BY request_id,rowid",
             )?;
             let ids = st
-                .query_map(rusqlite::params![self.project_id, aid, dispatch], |r| {
-                    r.get::<_, String>(0)
-                })?
+                .query_map(
+                    rusqlite::params![self.project_id, aid, dispatch, end, run],
+                    |r| r.get::<_, String>(0),
+                )?
                 .collect::<Result<Vec<_>, _>>()?;
             ids
         };
@@ -77,9 +97,9 @@ impl Workbench {
             "SELECT m.body FROM messages m JOIN events e
              ON m.id=json_extract(e.payload,'$.message_id')
              WHERE m.project_id=?1 AND e.project_id=?1 AND m.author='owner'
-             AND e.kind='owner_message' AND e.id>?2 ORDER BY e.id",
+             AND e.kind='owner_message' AND e.id>?2 AND e.id<?3 ORDER BY e.id",
         )?;
-        for body in st.query_map(rusqlite::params![self.project_id, dispatch], |r| {
+        for body in st.query_map(rusqlite::params![self.project_id, dispatch, end], |r| {
             r.get::<_, String>(0)
         })? {
             let body = body?;

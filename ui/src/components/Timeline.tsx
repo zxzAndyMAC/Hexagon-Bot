@@ -11,7 +11,7 @@ import type { TimelineItem } from '../api'
 import { api, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { useUiStore } from '../store'
-import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, openTurn, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
+import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
@@ -225,15 +225,16 @@ function SystemRow({ item }: { item: TimelineItem }) {
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
   }
-  const highRisk = item.event.kind === 'turn_failed' || SYS_HIGH_RISK.has(sub)
+  const stopped = isInterruptedTurn(item)
+  const highRisk = (item.event.kind === 'turn_failed' && !stopped) || SYS_HIGH_RISK.has(sub)
   const autoStamp = item.event.kind === 'stamped' && stampedByAutonomy(item.event.payload)
-  const label = autoStamp
+  const label = stopped ? t('ev.turn_interrupted') : autoStamp
     ? t('ev.stamped_auto', { stage: String(item.event.payload?.stage ?? '') })
     : sub
       ? trKey(t, `sys.${sub}`, sub)
       : trKey(t, `ev.${item.event.kind}`, item.event.kind)
   const note = item.event.kind === 'stamp_rejected' ? String(item.event.payload?.note ?? '')
-    : item.event.kind === 'turn_failed' ? String(item.event.payload?.error ?? item.event.payload?.outcome ?? item.event.payload?.code ?? '') : ''
+    : item.event.kind === 'turn_failed' && !stopped ? String(item.event.payload?.error ?? item.event.payload?.outcome ?? item.event.payload?.code ?? '') : ''
   return (
     <div className="sysrow">
       <div className="sysline" />

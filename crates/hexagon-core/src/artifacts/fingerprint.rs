@@ -32,30 +32,19 @@ pub(crate) fn capture(
 ) -> io::Result<String> {
     let root = root.canonicalize()?;
     let mut inputs = source_inputs(&root)?;
-    let mut query=db.conn().prepare("SELECT id,path,kind,author_agent_id,version FROM artifacts WHERE project_id=?1 AND stage_run_id=?2 AND status IN ('valid','stamped') AND kind IN (SELECT value FROM json_each(?3)) ORDER BY id").map_err(io::Error::other)?;
-    let required = serde_json::to_string(required).map_err(io::Error::other)?;
-    let artifacts = query
-        .query_map(rusqlite::params![project, run, required], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<String>>(3)?,
-                r.get::<_, i64>(4)?,
-            ))
-        })
-        .map_err(io::Error::other)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(io::Error::other)?;
-    for (_, path, kind, _, _) in &artifacts {
-        let path = path.trim_start_matches('/');
+    let artifacts =
+        super::delivery::for_run(db, project, run, required).map_err(io::Error::other)?;
+    for artifact in &artifacts.items {
+        let path = artifact.path.trim_start_matches('/');
         inputs.collect(&root.join(format!(".hexagon/{path}")), true)?;
-        if kind == "代码" || super::evidence::runnable_source(path) {
+        if artifact.kind == "代码" || super::evidence::runnable_source(path) {
             inputs.collect(&root.join(path), true)?;
         }
     }
-    let bytes = serde_json::to_vec(&(1, inputs.files, artifacts)).map_err(io::Error::other)?;
-    Ok(format!("v1:{:x}", Sha256::digest(bytes)))
+    // #12: historical check/exception evidence must expire when version
+    // resolution changes. Include the current artifact's stage identity too.
+    let bytes = serde_json::to_vec(&(2, inputs.files, artifacts)).map_err(io::Error::other)?;
+    Ok(format!("v2:{:x}", Sha256::digest(bytes)))
 }
 
 /// Same source inventory as delivery fingerprints, without artifact metadata.
@@ -170,6 +159,9 @@ impl Inputs<'_> {
 // Bound the opened file's actual bytes too, including growth after metadata.
 fn hash_input(path: &Path, remaining: u64) -> io::Result<(String, u64, u32)> {
     use std::io::Read;
+    // QA14: a source alias can resolve to SHM despite lexical .hexagon pruning.
+    // Fail the check before opening it; silently omitting an input attests less.
+    crate::db::validate_generic_file_access(path)?;
     let file = std::fs::File::open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > remaining {

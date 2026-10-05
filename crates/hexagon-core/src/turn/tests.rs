@@ -2572,6 +2572,25 @@ fn pe07_role_layer_is_english_but_names_stay_verbatim() {
     );
 }
 
+#[test]
+fn shared_stage_deliverables_keep_ui_within_its_assigned_task() {
+    // Fullstack QA #05: UI spent minutes interpreting the full architecture
+    // checklist as its own duty because every role was told to deliver each.
+    let kinds = vec!["SQLite数据库设计".into(), "API接口契约".into()];
+    let prompt = super::prompt::role_layer_text(
+        "UI",
+        "视觉规范与前端交接",
+        &[],
+        &[],
+        Some(("技术架构与接口设计", &kinds)),
+    );
+    assert!(prompt.contains("Shared team deliverables"));
+    assert!(prompt.contains("assigned task"));
+    assert!(!prompt.contains("Deliver each"));
+    assert!(prompt.contains("SQLite数据库设计, API接口契约"));
+    assert!(prompt.contains("kind"));
+}
+
 /// 票 05：子代理共享父板但不被提醒（它看不到 tasks 工具）。
 #[test]
 fn pe05_subagent_turn_is_never_reminded() {
