@@ -602,6 +602,7 @@ export default {
     newStage: 'Nueva etapa',
     stages: 'etapas',
     instructionsFound: 'Archivo de instrucciones detectado — los roles lo leerán al arrancar',
+    instructionsRequired: 'Para continuar, esta carpeta necesita instrucciones del proyecto. Selecciona Generar AGENTS.md y revisa el borrador. Los archivos existentes se conservan.',
     briefHint: 'Describe este directorio vacío en una frase. Optimizar rellena un borrador de AGENTS.md con el modelo de chat principal. Los comandos y la pila que no dijiste quedan en blanco o 「未知」. No se escribe nada hasta crear el proyecto.',
     briefPlaceholder: 'El proyecto en una frase',
     optimize: 'Optimizar',

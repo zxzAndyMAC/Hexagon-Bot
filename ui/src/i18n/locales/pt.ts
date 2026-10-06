@@ -602,6 +602,7 @@ export default {
     newStage: 'Nova etapa',
     stages: 'estágios',
     instructionsFound: 'Arquivo de instruções detectado — os papéis o lerão ao iniciar',
+    instructionsRequired: 'Para continuar, esta pasta precisa de instruções do projeto. Selecione Gerar AGENTS.md e confira o rascunho. Os arquivos existentes são preservados.',
     briefHint: 'Descreva este diretório vazio numa frase. Otimizar preenche um rascunho de AGENTS.md com o modelo de chat principal. Comandos e stack que você não disse ficam em branco ou 「未知」. Nada é gravado até criar o projeto.',
     briefPlaceholder: 'O projeto numa frase',
     optimize: 'Otimizar',

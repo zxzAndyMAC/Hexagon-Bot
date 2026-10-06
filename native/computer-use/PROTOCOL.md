@@ -59,10 +59,24 @@ can cross two validated visible windows on the selected display. Keyboard input
 and AX scrolling require an exact-window observation, so screen snapshots cannot
 silently type into whichever field happens to have focus.
 
+Window pointer validation treats the OS cursor as pass-through only when its
+reserved cursor level and kernel-reported protected WindowServer executable
+match, and native AX hit-testing proves the approved PID and exact focused
+window. Dock's existing display and hit proof remains required. Other overlays,
+including another controller's approval surface, still refuse the action.
+
 A global drag is one bounded native operation. Its path can still encounter a
 window or UI change after dispatch; outcome evidence and cancellation remain
 conservative. The backend does not claim an atomic lock on other applications or
 undo already-posted mouse events.
+
+QA 2026-10-06: the host's bounded left-button drag includes relative motion
+fields as well as pointer locations, so AppKit canvases using `deltaX/deltaY`
+receive the displacement. Each movement rechecks the session, cancellation and
+current target; a changed or obscured target stops further movement. Cleanup
+releases at the last delivered point, including after cancellation. A completed
+gesture remains `dispatched_unverified` until a fresh observation verifies its
+effect; partial movement is never undone or automatically replayed.
 
 Each observation permits one mutation, within 60 seconds. A mutation consumes
 the receipt even if it fails. Observe again after any mutation, cancellation,

@@ -2,6 +2,7 @@ import AppKit
 import AXorcist
 @preconcurrency import ApplicationServices
 import Foundation
+import Darwin
 import PeekabooAutomationKit
 import PeekabooFoundation
 
@@ -215,11 +216,20 @@ final class ActionExecutor {
                     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == source.ownerProcessIdentifier else { throw ActionError("activate_source_before_drag") }
                 }
                 try Self.checkSession()
-                try ActionMailbox.shared.checkpoint(id, dispatch: true)
-                dispatched = true
+                try ActionMailbox.shared.checkpoint(id, dispatch: to == nil)
+                dispatched = to == nil
                 let outcome: DesktopActionOutcome?
                 if let to {
-                    outcome = try await automation.dragWithOutcome(DragOperationRequest(from: from, to: to, duration: request.duration_ms ?? 500, steps: 20, modifiers: nil, profile: .linear)).outcome
+                    outcome = try await ApprovedDrag.execute(from: from, to: to, duration: request.duration_ms ?? 500, validate: { point in
+                        try Self.checkSession()
+                        try ActionMailbox.shared.checkpoint(id)
+                        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == source.ownerProcessIdentifier else { throw ActionError("drag_source_not_frontmost") }
+                        _ = try Self.validateScreenTarget(at: from, observed: screen.windows)
+                        _ = try Self.validateScreenTarget(at: point, observed: screen.windows)
+                    }, onDispatch: {
+                        try ActionMailbox.shared.checkpoint(id, dispatch: true)
+                        dispatched = true
+                    })
                 } else {
                     outcome = try await automation.clickWithOutcome(target: .coordinates(from), clickType: ClickType(rawValue: request.click_type ?? "single")!, snapshotId: nil).outcome
                 }
@@ -317,18 +327,33 @@ final class ActionExecutor {
                     frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                     windows: Self.visibleWindows(),
                     dockPassThrough: { window, point in
-                        Self.dockOverlayPassesThrough(window, at: point, expectedPID: current.identity.ownerProcessIdentifier)
+                    Self.systemOverlayPassesThrough(window, at: point, expectedPID: current.identity.ownerProcessIdentifier, expectedWindowID: CGWindowID(current.identity.windowID))
                     })
                 }, wait: { try await Task.sleep(for: .milliseconds(100)) }) }
             }
             if request.op == "scroll", !current.elementIDs.contains(request.element_id!) { throw ActionError("element_not_in_snapshot") }
             try Self.checkSession()
-            try ActionMailbox.shared.checkpoint(id, dispatch: keyboard == nil)
-            dispatched = keyboard == nil
+            let immediateDispatch = keyboard == nil && request.op != "drag"
+            try ActionMailbox.shared.checkpoint(id, dispatch: immediateDispatch)
+            dispatched = immediateDispatch
             let outcome: DesktopActionOutcome?
             switch request.op {
             case "drag":
-                outcome = try await automation.dragWithOutcome(DragOperationRequest(from: point!, to: dragTo!, duration: request.duration_ms ?? 500, steps: 20, modifiers: nil, profile: .linear)).outcome
+                outcome = try await ApprovedDrag.execute(from: point!, to: dragTo!, duration: request.duration_ms ?? 500, validate: { position in
+                    try Self.checkSession()
+                    try ActionMailbox.shared.checkpoint(id)
+                    guard SystemIdentityResolver.validateWindowMutationIdentity(current.identity),
+                          SystemIdentityResolver.windowIdentity(CGWindowID(current.identity.windowID))?.bounds == current.bounds else { throw ActionError("drag_target_changed") }
+                    try Self.validateForegroundPointer(windowID: CGWindowID(current.identity.windowID),
+                        processID: current.identity.ownerProcessIdentifier, bounds: current.bounds,
+                        points: [position], frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                        windows: Self.visibleWindows(), dockPassThrough: { window, point in
+                            Self.systemOverlayPassesThrough(window, at: point, expectedPID: current.identity.ownerProcessIdentifier, expectedWindowID: CGWindowID(current.identity.windowID))
+                        })
+                }, onDispatch: {
+                    try ActionMailbox.shared.checkpoint(id, dispatch: true)
+                    dispatched = true
+                })
             case "click":
                 outcome = try await foregroundPointer.clickWithOutcome(target: .coordinates(point!), clickType: ClickType(rawValue: request.click_type ?? "single")!, snapshotId: nil).outcome
             case "type", "key":
@@ -582,6 +607,21 @@ final class ActionExecutor {
             hitPID != window.ownerProcessIdentifier
     }
 
+    static func cursorExecutableMatches(_ path: String?) -> Bool {
+        let systemPath = "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        // QA action1246: proc_pidpath returns the framework's Versions/A path;
+        // resolve only our protected System constant, never an untrusted path.
+        return path == systemPath || path == URL(fileURLWithPath: systemPath).resolvingSymlinksInPath().path
+    }
+
+    static func cursorOverlayMayPassThrough(window: SystemWindowIdentity, executablePath: String?,
+        hitPID: Int32?, expectedPID: Int32, hitWindowID: CGWindowID?,
+        focusedWindowID: CGWindowID?, expectedWindowID: CGWindowID) -> Bool {
+        cursorExecutableMatches(executablePath) && window.layer == Int(CGWindowLevelForKey(.cursorWindow)) &&
+            expectedPID > 0 && expectedWindowID != 0 && hitWindowID == expectedWindowID && focusedWindowID == expectedWindowID &&
+            hitPID == expectedPID && hitPID != window.ownerProcessIdentifier
+    }
+
     // QA15 action1211 / 2026-10-05: custom canvas hit-testing may return its
     // AXWindow directly, which has no parent AXWindow attribute. The previous
     // parent-only proof refused legitimate input under Dock's tracking overlay.
@@ -593,16 +633,27 @@ final class ActionExecutor {
         return hit == focusedWindow
     }
 
-    private static func dockOverlayPassesThrough(_ window: SystemWindowIdentity, at point: CGPoint, expectedPID: Int32) -> Bool {
-        guard let app = NSRunningApplication(processIdentifier: window.ownerProcessIdentifier),
-              app.bundleIdentifier == "com.apple.dock",
-              app.executableURL?.standardizedFileURL.path == "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock",
-              window.layer == Int(CGWindowLevelForKey(.dockWindow)) else { return false }
+    private static func systemOverlayPassesThrough(_ window: SystemWindowIdentity, at point: CGPoint,
+        expectedPID: Int32, expectedWindowID: CGWindowID) -> Bool {
+        let app = NSRunningApplication(processIdentifier: window.ownerProcessIdentifier)
+        let systemDock = window.layer == Int(CGWindowLevelForKey(.dockWindow)) &&
+            app?.bundleIdentifier == "com.apple.dock" &&
+            app?.executableURL?.standardizedFileURL.path == "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"
+        // QA action1242 / 2026-10-06: the OS cursor was mistaken for an
+        // input-blocking window. Only its reserved level and kernel-reported
+        // protected System executable qualify, never its title, PID or size.
+        // False negatives cost another observation; false positives could send
+        // unaudited input. Missing identity or AX evidence therefore refuses.
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let cursorPath = window.layer == Int(CGWindowLevelForKey(.cursorWindow)) &&
+            proc_pidpath(window.ownerProcessIdentifier, &path, UInt32(path.count)) > 0 ? String(cString: path) : nil
+        let systemCursor = Self.cursorExecutableMatches(cursorPath)
+        guard systemDock || systemCursor else { return false }
         let displayBounds = NSScreen.screens.compactMap { screen -> CGRect? in
             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
             return CGDisplayBounds(id.uint32Value)
         }
-        guard displayBounds.contains(window.bounds) else { return false }
+        guard systemCursor || displayBounds.contains(window.bounds) else { return false }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.2)
         var hit: AXUIElement?
@@ -621,6 +672,7 @@ final class ActionExecutor {
         var role: CFTypeRef?
         _ = AXUIElementCopyAttributeValue(hit, kAXRoleAttribute as CFString, &role)
         let resolver = AXWindowResolver()
+        guard resolver.windowID(from: unsafeDowncast(focusedWindow, to: AXUIElement.self)) == expectedWindowID else { return false }
         let parentID = hitWindow.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? resolver.windowID(from: unsafeDowncast($0, to: AXUIElement.self)) : nil }
         let exactHit = pointerHitMatchesFocusedWindow(role: role as? String,
             parentWindow: parentID, ownWindow: resolver.windowID(from: hit),
@@ -628,9 +680,14 @@ final class ActionExecutor {
         // Bind the actual AX hit to the focused window, then the caller checks
         // the first remaining WindowServer window is the exact receipt ID.
         // Merely belonging to the same Chrome process is insufficient.
-        return dockOverlayMayPassThrough(window: window, systemDock: true,
-            displayBounds: displayBounds, hitPID: pid, expectedPID: expectedPID,
-            hitFocusedWindow: exactHit)
+        return cursorOverlayMayPassThrough(window: window, executablePath: cursorPath,
+            hitPID: pid, expectedPID: expectedPID,
+            hitWindowID: parentID ?? (role as? String == kAXWindowRole as String ? resolver.windowID(from: hit) : nil),
+            focusedWindowID: resolver.windowID(from: unsafeDowncast(focusedWindow, to: AXUIElement.self)),
+            expectedWindowID: expectedWindowID) ||
+            dockOverlayMayPassThrough(window: window, systemDock: systemDock,
+                displayBounds: displayBounds, hitPID: pid, expectedPID: expectedPID,
+                hitFocusedWindow: exactHit)
     }
 
     private static func validateScreenTarget(at point: CGPoint, observed: [SystemWindowIdentity]) throws -> SystemWindowIdentity {

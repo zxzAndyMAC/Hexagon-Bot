@@ -213,6 +213,23 @@ describe('向导目录（ADR 0060）', () => {
     expect(el.querySelectorAll('input.input')).toHaveLength(2) // 目录 + 项目名
   })
 
+  it('已有文件但没有说明时解释停步原因，并在核对草稿后放行', async () => {
+    localStorage.setItem('hexagon.wizard', JSON.stringify({ ...draft, brief: '' }))
+    vi.spyOn(api, 'inspectDir').mockResolvedValue(report({}))
+    const skeleton = vi.spyOn(api, 'agentsMdDraft').mockResolvedValue('# Owner instructions\n')
+    const el = await onDirectory()
+    await act(async () => { nextBtn(el).click() })
+    // Owner QA 2026-10-06: a disabled Next button gave no reason or usable
+    // next step for an existing folder without instructions (issue 06).
+    expect(el.textContent).toContain('To continue, this folder needs project instructions.')
+    expect(nextBtn(el).disabled).toBe(true)
+    expect(skeleton).not.toHaveBeenCalled()
+    await act(async () => { el.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click() })
+    expect(skeleton).toHaveBeenCalledWith('Demo')
+    expect(el.textContent).not.toContain('To continue, this folder needs project instructions.')
+    expect(nextBtn(el).disabled).toBe(false)
+  })
+
   it('已有工作台状态不能下一步新建，打开走 openRecent', async () => {
     vi.spyOn(api, 'inspectDir').mockResolvedValue(report({ has_workbench: true, dirty: true }))
     const open = vi.spyOn(api, 'openRecent').mockResolvedValue(undefined)

@@ -446,3 +446,13 @@ Q1：批准键盘与拖动可恢复精确目标窗口到前台，保留窗口、
 2026-10-06 00:05 五项收口：QA 临时 brief 已通过设置恢复为 chat/deepseek-v4-pro，正常关闭后离线 WAL 快照独立核实 role_defs=chat、12 agents 全 sleeping。真实 drag action1220 与 action1225 均被 Codex 的 CUALockScreenGuardian 全屏保护窗口（PID99122、层2147483629、整屏1512x982）拒绝，not_executed；后者包含最多2秒只读等待，仍遮挡且未派发。fixture仍x90/y150、heldfalse、moves/releases0，不能算成功或中途取消验收。不得通过杀 Guardian、忽略高层或关闭遮挡校验获得通过。根操控与产品操控尚无法完成交接；继续可做的 core/UI 检查。
 
 2026-10-06 00:35 后续五项代码批次最终 `npm run check` + `npm test` 全绿：壳4、核心1380、UI510，核心4项专用环境测试默认忽略，Firefox两项已有独立实测；原生24全绿，78源文件摘要固定。真实拖动action1225仍被CUALockScreenGuardian整屏层拒绝，不能证明位移/中途取消。新隔离主程序最新负责人质量命令/性能确认黄金路径仍受锁屏阻碍。QA已恢复chat原模型且12Agent休眠，Stable正常退出。后续交接/通过与缺口以 `.scratch/qa-five-followups-2026-10-05/handoff.md` 与 `report.md` 为准，不重跑已过全量，不虚称完整验收。
+
+2026-10-06 负责人再次继续并延长8小时：08:11:46 CST 启动 caffeinate -diu -t 28800，PID94794，预计16:11:46释放。pmset三个断言实际核验；防闲置休眠不等于解锁或修改密码策略。
+
+2026-10-06 本地静态QA页面缓存：build后旧窗口即使重开仍可能加载缓存旧index。正常退出并核实进程退出后，仅将该QA bundle的NetworkCache改名保留；不动WebsiteData/LocalStorage、项目、钥匙、TCC或签名。专用:1420静态服务改发no-store，并核对请求的新资产摘要。源码变化不能冒称已部署。
+
+2026-10-06 拖动验收区分三层事实：拒绝且未派发、目标收到手势、目标实际位移。夹具曾收到20次dragged和1次up而位置不变，因为事件缺相对位移；只看moves计数会误判成功。鼠标已经按下后取消或失去目标，必须停止继续移动并释放，保留部分位移和未知结果，不重放。
+
+2026-10-06 五项后续已完成实机验收：拖动action1252使x90→210，fresh observe与独立夹具一致；独立2000ms动作1259在两步后owner暂停，x210→222、held=false、释放计数+1。原unknown/cancelled保留，理由放弃且无新尝试。系统cursor层不是输入遮挡：仅内核报告的受保护WindowServer准确alias/canonical路径、cursor层和AX命中精确批准窗口共同证明通透；其他控制器保护层仍拒绝。内核路径可能是框架Versions/A，不能用ps显示别名替代实际路径。
+
+2026-10-06 最新交付门禁：核心1380/壳4/UI512、原生31通过，七语言1310key、check3与双轴复审通过。实机补修向导阻塞说明、基准确认跨刷新反馈、拖动相对位移和系统光标误判。QA原chat已保存，12角色sleeping、待决空、电脑暂停，固定主正常退出并严格验签；最终只读证据来自关闭+lsof零句柄后的owned副本。截图首次owner签名扫描曾在重负载下阻塞主线程；已保留sample与公开预热接口研究，未弱化OwnerLease，未冒称已消除SDK同步检查停顿。最新完整事实以五项report/handoff与validation-manifest-20261006.json为准。

@@ -602,6 +602,7 @@ export default {
     newStage: '新阶段',
     stages: '阶段',
     instructionsFound: '已检测到说明文件，开跑后角色会读它',
+    instructionsRequired: '此目录还没有项目说明，补充说明后才能继续。勾选“生成 AGENTS.md”，再核对草稿即可。现有文件会保留。',
     briefHint: '用一句话描述这个空目录项目。优化按钮用主对话模型把草稿填进文本框；你没说的命令和技术栈留空或标成「未知」。确认创建之前不会写入磁盘。',
     briefPlaceholder: '用一句话描述项目',
     optimize: '优化',

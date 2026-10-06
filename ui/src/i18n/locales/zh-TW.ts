@@ -602,6 +602,7 @@ export default {
     newStage: '新階段',
     stages: '階段',
     instructionsFound: '已偵測到說明檔案，開跑後角色會讀它',
+    instructionsRequired: '此目錄還沒有專案說明，補充說明後才能繼續。勾選「產生 AGENTS.md」，再核對草稿即可。現有檔案會保留。',
     briefHint: '用一句話描述這個空目錄專案。優化按鈕用主對話模型把草稿填進文字框；你沒說的命令和技術棧留空或標成「未知」。確認建立之前不會寫入磁碟。',
     briefPlaceholder: '用一句話描述專案',
     optimize: '優化',

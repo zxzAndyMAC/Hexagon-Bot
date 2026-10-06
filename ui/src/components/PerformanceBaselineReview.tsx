@@ -29,6 +29,10 @@ export function PerformanceBaselineReview({ measurement, expected }: { measureme
         try {
           await api.confirmPerformanceBaseline(measurement, expected, reason.trim())
           setConfirmed(true); setOpen(false)
+          // Owner QA 2026-10-06 / issue 07: refreshed evidence changes this
+          // component's fingerprint key and loses its local success state.
+          // Keep the actual confirmation and next step visible across remount.
+          useUiStore.getState().pushToast(t('quality.baselineConfirmed'), 'ok')
           await useUiStore.getState().invalidate()
         } catch (error) { useUiStore.getState().pushToast(errText(error), 'err') }
         finally { setBusy(false) }

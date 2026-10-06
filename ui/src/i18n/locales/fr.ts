@@ -602,6 +602,7 @@ export default {
     newStage: 'Nouvelle étape',
     stages: 'étapes',
     instructionsFound: 'Fichier d’instructions détecté — les rôles le liront au démarrage',
+    instructionsRequired: 'Pour continuer, ce dossier a besoin des instructions du projet. Sélectionnez Générer AGENTS.md et vérifiez le brouillon. Les fichiers existants sont conservés.',
     briefHint: 'Décrivez ce dossier vide en une phrase. Optimiser remplit un brouillon AGENTS.md avec le modèle de chat principal. Les commandes et la pile non dites restent vides ou 「未知」. Rien n’est écrit avant la création du projet.',
     briefPlaceholder: 'Le projet en une phrase',
     optimize: 'Optimiser',

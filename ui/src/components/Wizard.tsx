@@ -1140,6 +1140,12 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           </>
         ) : (
           <>
+            {/* Owner QA 2026-10-06 / issue 06: a folder with files but no
+                instructions otherwise showed only a checkbox and disabled
+                Next, leaving the owner no explanation of how to continue. */}
+            {!draft.agentsMd.trim() && !draft.brief.trim() && (
+              <p className="dim3" style={{ fontSize: 12 }}>{t('wizard.instructionsRequired')}</p>
+            )}
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
               <input
                 type="checkbox"

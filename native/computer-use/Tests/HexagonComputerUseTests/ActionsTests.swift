@@ -245,6 +245,64 @@ final class ActionsTests: XCTestCase {
         ] { XCTAssertNoThrow(try request(json).validate()) }
     }
 
+    @MainActor
+    func testCursorOverlayNeedsSystemIdentityExactLayerAndTargetHit() {
+        // Live action1242: the system cursor itself obscured the endpoint.
+        // A controller's approval overlay or a similarly named process is not
+        // a cursor; passing through still requires the exact target AX hit.
+        let systemPath = "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        let realPath = URL(fileURLWithPath: systemPath).resolvingSymlinksInPath().path
+        for layer in [Int(CGWindowLevelForKey(.cursorWindow)), 0, 20, 2147483629] {
+            for path in [String?.none, systemPath, realPath, "/tmp/WindowServer", realPath + "-copy"] {
+                for hit in [Int32?.none, 100, 200, 300] {
+                    for hitWindow in [UInt32?.none, 0, 10, 11] {
+                      for focused in [UInt32?.none, 0, 10, 11] {
+                        let window = SystemWindowIdentity(windowID: 3, ownerProcessIdentifier: 200,
+                            title: "", bounds: CGRect(x: 545, y: 447, width: 28, height: 40),
+                            layer: layer, alpha: 1, isOnScreen: true, sharingState: nil)
+                        XCTAssertEqual(ActionExecutor.cursorOverlayMayPassThrough(window: window,
+                            executablePath: path, hitPID: hit, expectedPID: 100,
+                            hitWindowID: hitWindow, focusedWindowID: focused, expectedWindowID: 10),
+                            (path == systemPath || path == realPath) &&
+                              layer == Int(CGWindowLevelForKey(.cursorWindow)) && hit == 100 && hitWindow == 10 && focused == 10)
+                      }
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testCursorPassThroughStillRejectsGuardianAndAnotherWindow() throws {
+        let bounds = CGRect(x: 300, y: 240, width: 500, height: 392)
+        let point = CGPoint(x: 550, y: 452)
+        func window(_ id: UInt32, pid: Int32, layer: Int, frame: CGRect = CGRect(x: 300, y: 240, width: 500, height: 392)) -> SystemWindowIdentity {
+            SystemWindowIdentity(windowID: id, ownerProcessIdentifier: pid, ownerProcessStartIdentity: 9,
+                title: "", bounds: frame, layer: layer, alpha: 1, isOnScreen: true, sharingState: nil)
+        }
+        let cursor = window(3, pid: 200, layer: Int(CGWindowLevelForKey(.cursorWindow)),
+            frame: CGRect(x: 545, y: 447, width: 28, height: 40))
+        let target = window(10, pid: 100, layer: 0)
+        func validate(_ windows: [SystemWindowIdentity]) throws {
+            try ActionExecutor.validateForegroundPointer(windowID: 10, processID: 100,
+                bounds: bounds, points: [point], frontmostPID: 100, windows: windows,
+                dockPassThrough: { candidate, _ in
+                    ActionExecutor.cursorOverlayMayPassThrough(window: candidate,
+                        executablePath: candidate.ownerProcessIdentifier == 200 ?
+                          "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer" : nil,
+                        hitPID: 100, expectedPID: 100, hitWindowID: 10,
+                        focusedWindowID: 10, expectedWindowID: 10)
+                })
+        }
+        XCTAssertNoThrow(try validate([cursor, target]))
+        XCTAssertThrowsError(try validate([cursor, window(11, pid: 100, layer: 0), target]))
+        for layer in [Int(CGWindowLevelForKey(.cursorWindow)), 2147483629] {
+            let guardian = window(4, pid: 201, layer: layer)
+            XCTAssertThrowsError(try validate([cursor, guardian, target]))
+            XCTAssertThrowsError(try validate([guardian, cursor, target]))
+        }
+    }
+
     func testKeyboardChordMustHaveExactlyOnePrimaryKey() throws {
         // QA15: malformed chords must be refused before foreground preparation.
         for keys in ["cmd", "cmd,cmd,a", "a,b", "return,shift"] {

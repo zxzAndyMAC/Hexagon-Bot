@@ -602,6 +602,7 @@ export default {
     newStage: '新しい段階',
     stages: 'ステージ',
     instructionsFound: '説明ファイルを検出——起動後にロールが読みます',
+    instructionsRequired: 'このフォルダーにはプロジェクトの説明が必要です。「AGENTS.md を生成」を選び、下書きを確認すると続行できます。既存のファイルは保持されます。',
     briefHint: '空のディレクトリを一文で説明する。最適化は主対話モデルで AGENTS.md の下書きを埋める。言っていないコマンドや技術スタックは空欄か「未知」。作成を確定するまでディスクには書かない。',
     briefPlaceholder: 'プロジェクトを一文で',
     optimize: '最適化',

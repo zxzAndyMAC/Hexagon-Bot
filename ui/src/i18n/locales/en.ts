@@ -602,6 +602,7 @@ export default {
     newStage: 'New stage',
     stages: 'stages',
     instructionsFound: 'Instructions file detected — roles will read it once running',
+    instructionsRequired: 'To continue, this folder needs project instructions. Select Generate AGENTS.md and review the draft. Existing files stay unchanged.',
     briefHint: 'One sentence for this empty project. Optimize drafts AGENTS.md with the main chat model. Commands and stack you did not state stay blank or 「未知」. Nothing is written until you create the project.',
     briefPlaceholder: 'One sentence about the project',
     optimize: 'Optimize',
