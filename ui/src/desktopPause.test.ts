@@ -17,3 +17,12 @@ it('does not resume another project when the host rejects the bound root', async
   expect(mocked.control).toHaveBeenCalledTimes(1)
   expect(mocked.toast).toHaveBeenCalledWith('Error: project changed', 'err')
 })
+it('keeps Resume shortcuts consistent with the disabled button until screenshot preparation finishes', async () => {
+  mocked.status.mockResolvedValue({ project_root: '/current/project', paused: true, capture_preparation: 'preparing' })
+  await resumeDesktop()
+  expect(mocked.control).not.toHaveBeenCalled()
+  expect(mocked.toast).toHaveBeenCalled()
+  mocked.status.mockResolvedValue({ project_root: '/current/project', paused: true, capture_preparation: 'ready' })
+  await resumeDesktop()
+  expect(mocked.control).toHaveBeenCalledExactlyOnceWith('resume', '/current/project')
+})

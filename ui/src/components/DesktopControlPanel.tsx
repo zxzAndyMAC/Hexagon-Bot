@@ -9,7 +9,7 @@ import { Icon } from './Icon'
 
 const controlKeys: Partial<Record<DesktopControl, ActionId>> = {
   enable: 'desktopEnable', disable: 'desktopDisable', pause: 'desktopPause',
-  resume: 'desktopResume', release: 'desktopRelease', clear_screenshots: 'desktopClear',
+  resume: 'desktopResume', release: 'desktopRelease', clear_screenshots: 'desktopClear', prepare_capture: 'desktopPrepareCapture',
 }
 export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
   const { t } = useTranslation()
@@ -52,7 +52,7 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
     return () => { mounted.current = false; generation.current++; window.clearInterval(tick); window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
   }, [refresh])
   const control = useCallback(async (action: DesktopControl) => {
-    if (writing.current || !status) return
+    if (writing.current || !status || ((action === 'resume' || action === 'prepare_capture') && status.capture_preparation === 'preparing')) return
     const projectRoot = status.project_root
     const ticket = ++generation.current
     writing.current = true; setPending(true); setError('')
@@ -112,11 +112,13 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
       <p className="dim3">{t('computer.controlHint')}</p>
       {status && <>
         <p>{t(status.enabled ? 'computer.enabled' : 'computer.disabled')}{status.active_agent && ` · ${status.active_agent}`}</p>
+        {status.enabled && status.capture_preparation && <p role="status">{t(`computer.capture_${status.capture_preparation}`)}</p>}
         {status.active_project && <p className="dim3" style={{ overflowWrap: 'anywhere' }}>{status.active_project}</p>}
         {status.outcome_unknown && <p role="status">{t('computer.unknown')}</p>}
         <div className="desktop-control-actions">
           {status.enabled ? button('disable') : button('enable')}
-          {status.paused ? button('resume', status.busy) : button('pause', !status.enabled && !status.active_agent)}
+          {status.paused ? button('resume', status.busy || status.capture_preparation === 'preparing') : button('pause', !status.enabled && !status.active_agent)}
+          {status.enabled && status.capture_preparation !== 'ready' && button('prepare_capture', status.busy || status.capture_preparation === 'preparing')}
           {button('release', status.busy || !status.active_agent)}
         </div>
         <p className="dim3">{t('computer.screenshots', { count: status.screenshot_count })}</p>

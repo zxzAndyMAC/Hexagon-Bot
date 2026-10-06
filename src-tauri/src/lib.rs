@@ -279,6 +279,17 @@ fn desktop_status(
         hexagon_core::api::desktop_status(db, root).map_err(CmdError::internal)
     })
 }
+// QA readiness 2026-10-06: credential lookup can wait on the OS. Keep it off
+// the UI thread and outside the short project connection lock used by Pause.
+#[tauri::command(async)]
+fn computer_models(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::provider_admin::ComputerModels, CmdError> {
+    let context = with_conn(&state, |db, root| {
+        hexagon_core::api::computer_model_context(db, root).map_err(CmdError::internal)
+    })?;
+    hexagon_core::api::computer_models(context).map_err(CmdError::internal)
+}
 #[tauri::command]
 fn desktop_control(
     state: tauri::State<AppState>,
@@ -2501,6 +2512,7 @@ pub fn run() {
             desktop_preview_focus,
             desktop_screenshot,
             desktop_status,
+            computer_models,
             browser_status,
             browser_open,
             browser_detach,

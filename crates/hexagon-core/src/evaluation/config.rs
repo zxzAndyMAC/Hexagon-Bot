@@ -299,12 +299,16 @@ fn versions() -> io::Result<BTreeMap<String, Option<String>>> {
         ));
     }
     let result = crate::sessions::SessionTable::default()
-        .run_oneshot(
+        .run_oneshot_with_spec(
             &db,
             &ctx,
             &script,
             std::time::Duration::from_secs(15),
-            false,
+            (
+                false,
+                Some(crate::sandbox::runtime_version_spec(root.path())),
+                None,
+            ),
         )
         .map_err(err)?;
     if result["exit_code"].as_i64() != Some(0) || result["timed_out"].as_bool() != Some(false) {

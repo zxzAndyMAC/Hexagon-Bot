@@ -402,15 +402,36 @@ pub(crate) fn pack_finished(db: &Db, project: &str) -> Result<bool, rusqlite::Er
     )
 }
 
+// QA incident 2026-10-06: a successful one-shot observation before kickoff
+// was dispatched again after 60s. An absent active run is not enough: a
+// historical unfinished run must retain rescue, even if its row is missing.
+// False close can hide stalled delivery; false open costs one owner rescue.
+// Prefer rescue whenever either independent history fact exists.
+pub(crate) fn supplemental_scope(finished: bool, has_run: bool, has_start: bool) -> bool {
+    finished || (!has_run && !has_start)
+}
+
+pub(crate) fn supplemental_workflow_idle(db: &Db, project: &str) -> Result<bool, rusqlite::Error> {
+    let finished = pack_finished(db, project)?;
+    let (has_run, has_start): (bool, bool) = db.conn().query_row(
+        "SELECT EXISTS(SELECT 1 FROM stage_runs WHERE project_id=?1),
+                EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND kind='stage_started')",
+        [project],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(supplemental_scope(finished, has_run, has_start))
+}
+
 /// Only a successful visible reply followed by a normal HOLD can settle a
-/// completed pack's supplemental episode. Silent/error turns retain rescue.
+/// finished or genuinely unstarted pack's supplemental episode.
+/// Silent/error turns and any outstanding work retain rescue.
 pub(crate) fn supplemental_settled(
-    finished_pack: bool,
+    workflow_idle: bool,
     replied: bool,
     held: bool,
     outstanding: bool,
 ) -> bool {
-    finished_pack && replied && held && !outstanding
+    workflow_idle && replied && held && !outstanding
 }
 
 /// 复审返工：当前 run 里某份产物最近一次复审结论是驳回。
@@ -687,6 +708,16 @@ mod supplemental_properties {
     use super::*;
     use proptest::prelude::*;
     proptest! {
+        #[test]
+        fn unfinished_history_never_settles_supplemental_scope(
+            finished in any::<bool>(), has_run in any::<bool>(), has_start in any::<bool>()
+        ) {
+            let idle = supplemental_scope(finished, has_run, has_start);
+            if !finished && (has_run || has_start) { prop_assert!(!idle); }
+            if !has_run && !has_start { prop_assert!(idle); }
+            if finished { prop_assert!(idle); }
+        }
+
         #[test]
         fn supplemental_close_requires_every_host_fact(
             pack in any::<bool>(), reply in any::<bool>(), held in any::<bool>(), pending in any::<bool>()

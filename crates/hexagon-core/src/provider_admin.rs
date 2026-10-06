@@ -72,6 +72,136 @@ pub fn list(store: &dyn CredentialStore) -> Result<ProvidersView, AdminError> {
     })
 }
 
+/// Advisory metadata before assigning a computer task. Runtime tool capability
+/// checks remain authoritative and no role/global binding is changed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub enum ComputerVision {
+    Ready,
+    NoVision,
+    Unknown,
+    Unconfigured,
+}
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct ComputerRoleModel {
+    pub agent_id: String,
+    pub vision: ComputerVision,
+    pub model: Option<String>,
+}
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct ComputerModels {
+    pub project_root: String,
+    pub roles: Vec<ComputerRoleModel>,
+    pub vision_slots: Vec<String>,
+}
+
+fn computer_vision(
+    doc: &provider_config::ProviderDoc,
+    store: &dyn CredentialStore,
+    slot: &str,
+) -> (ComputerVision, Option<String>) {
+    // Owner QA 2026-10-06: a model name once looked configured while screenshots
+    // were refused at execution. False negative costs an owner check; false
+    // positive wastes a computer task. Missing metadata/key never claims ready.
+    // Do not repeat the fallback chain in the UI or infer ability from names.
+    let Ok((provider, model)) = ready_binding(doc, store, slot) else {
+        return (ComputerVision::Unconfigured, None);
+    };
+    if matches!(provider.kind, crate::provider::ProviderKind::Jev) {
+        return (ComputerVision::Unconfigured, None);
+    }
+    let vision = match provider.models.iter().find(|m| m.id == model) {
+        Some(m) if m.caps.iter().any(|c| c == "vision") => ComputerVision::Ready,
+        Some(_) => ComputerVision::NoVision,
+        None => ComputerVision::Unknown,
+    };
+    (vision, Some(model.into()))
+}
+
+pub fn computer_models(
+    store: &dyn CredentialStore,
+    team: &[crate::orchestra::TeamRow],
+    root: &std::path::Path,
+) -> Result<ComputerModels, AdminError> {
+    let started = std::time::Instant::now();
+    let doc = provider_config::load()?;
+    let roles = team
+        .iter()
+        .map(|role| {
+            let role_started = std::time::Instant::now();
+            let slot = role.model_slot.as_deref().unwrap_or("default");
+            let (vision, model) = computer_vision(&doc, store, slot);
+            if provider_config::fell_back_to_default(&doc.slots, slot) {
+                crate::diag::slot_fallback(
+                    Some(crate::PROJECT_ID),
+                    Some(&role.id),
+                    None,
+                    "computer_model_readiness",
+                    slot,
+                    role_started,
+                );
+            }
+            crate::diag::note(
+                crate::diag::CLASS_SLOT,
+                vision != ComputerVision::Ready,
+                Some(crate::PROJECT_ID),
+                Some(&role.id),
+                None,
+                None,
+                "computer_model_readiness",
+                match vision {
+                    ComputerVision::Ready => "vision_ready",
+                    ComputerVision::NoVision => "model_no_vision",
+                    ComputerVision::Unknown => "capability_unknown",
+                    ComputerVision::Unconfigured => "model_unconfigured",
+                },
+                role_started,
+            );
+            ComputerRoleModel {
+                agent_id: role.id.clone(),
+                vision,
+                model,
+            }
+        })
+        .collect();
+    let mut vision_slots: Vec<_> = doc
+        .slots
+        .keys()
+        .filter(|slot| computer_vision(&doc, store, slot).0 == ComputerVision::Ready)
+        .cloned()
+        .collect();
+    vision_slots.sort();
+    crate::diag::host("computer_use", "model_readiness_checked", started);
+    Ok(ComputerModels {
+        project_root: root.display().to_string(),
+        roles,
+        vision_slots,
+    })
+}
+
+#[cfg(test)]
+mod computer_model_tests {
+    use super::*;
+    use crate::{credentials::MemoryStore, provider::ProviderKind};
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn vision_advisory_requires_enabled_key_and_explicit_metadata(enabled in any::<bool>(), key in any::<bool>(), known in any::<bool>(), vision in any::<bool>(), explicit in any::<bool>(), key_nonempty in any::<bool>(), jev in any::<bool>()) {
+            let store = MemoryStore::default();
+            if key { store.set("provider/test", if key_nonempty {"key"} else {""}).unwrap(); }
+            let doc: provider_config::ProviderDoc = serde_json::from_value(serde_json::json!({
+                "providers": [{"id":"test", "name":"Test", "kind": if jev {ProviderKind::Jev} else {ProviderKind::OpenAi}, "base_url":"https://example.test", "enabled":enabled,
+                  "models":if known { serde_json::json!([{"id":"model", "caps":if vision {vec!["vision"]} else {vec!["text"]}}]) } else {serde_json::json!([])}}],
+                "slots": if explicit {serde_json::json!({"chat":{"provider_id":"test","model":"model"}})} else {serde_json::json!({"default":{"provider_id":"test","model":"model"}})}
+            })).unwrap();
+            prop_assert_eq!(computer_vision(&doc, &store, "chat").0 == ComputerVision::Ready, enabled && key && key_nonempty && known && vision && !jev);
+        }
+    }
+}
+
 /// 保存供应商 + 可选 key（空 key 不写）。热刷新由调用方（壳）另行触发。
 pub fn save(
     def: ProviderDef,

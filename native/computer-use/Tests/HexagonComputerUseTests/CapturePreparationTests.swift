@@ -3,6 +3,31 @@ import XCTest
 @testable import HexagonComputerUse
 
 final class CapturePreparationTests: XCTestCase {
+    @MainActor
+    func testOwnerPrewarmingReportsProgressAndCompletionWithoutCapturing() async throws {
+        let preparation = Preparation()
+        let progress = CapturePreparationProgress(prepare: {
+            preparation.run()
+        })
+        XCTAssertEqual(progress.status, 0)
+        let first = progress.begin()
+        await fulfillment(of: [preparation.entered], timeout: 2)
+        XCTAssertEqual(progress.status, 1)
+        let second = progress.begin()
+        preparation.release.signal()
+        try await first.value
+        try await second.value
+        XCTAssertEqual(progress.status, 2)
+    }
+
+    func testFailedPreparationCanBeExplicitlyCheckedAgain() async {
+        let progress = CapturePreparationProgress(prepare: { throw ActionError("owner_conflict") })
+        for _ in 0..<2 {
+            do { try await progress.begin().value; XCTFail("failed preparation became ready") }
+            catch { XCTAssertEqual(error.localizedDescription, "owner_conflict") }
+            XCTAssertEqual(progress.status, 3)
+        }
+    }
     private final class Preparation: @unchecked Sendable {
         let entered = XCTestExpectation(description: "background preparation entered")
         let finished = XCTestExpectation(description: "background preparation drained")

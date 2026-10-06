@@ -12,6 +12,12 @@ export function resumeDesktop(): Promise<void> {
   resuming = (async () => {
     try {
       const status = await api.desktopStatus()
+      // QA readiness 2026-10-06: a global shortcut once bypassed the panel's
+      // preparation wait. Keep both recovery paths consistent; no action replay.
+      if (status.capture_preparation === 'preparing') {
+        useUiStore.getState().pushToast(i18n.t('computer.capture_preparing'))
+        return
+      }
       await api.desktopControl('resume', status.project_root)
       window.dispatchEvent(new Event('hexagon:desktop-status-changed'))
       useUiStore.getState().pushToast(i18n.t('computer.resumed'))

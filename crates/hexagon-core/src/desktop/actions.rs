@@ -21,6 +21,9 @@ pub struct DesktopStatus {
     pub paused: bool,
     pub outcome_unknown: bool,
     pub screenshot_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub capture_preparation: Option<super::CapturePreparationState>,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -40,6 +43,7 @@ pub enum DesktopControl {
     Resume,
     Release,
     ClearScreenshots,
+    PrepareCapture,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -420,7 +424,10 @@ impl State {
 
     fn control(&mut self, project: &Path, action: DesktopControl) -> Result<Option<u64>, String> {
         if self.owner.as_ref().is_some_and(|v| v.project != project)
-            && matches!(action, DesktopControl::Resume | DesktopControl::Release)
+            && matches!(
+                action,
+                DesktopControl::Resume | DesktopControl::Release | DesktopControl::PrepareCapture
+            )
         {
             return Err("desktop is held by another project".into());
         }
@@ -455,7 +462,14 @@ impl State {
             DesktopControl::ClearScreenshots if self.busy => {
                 return Err("wait for the current capture before clearing screenshots".into());
             }
-            DesktopControl::Enable | DesktopControl::ClearScreenshots => {}
+            DesktopControl::PrepareCapture if self.busy => {
+                return Err(
+                    "wait for the current operation before checking capture readiness".into(),
+                );
+            }
+            DesktopControl::Enable
+            | DesktopControl::ClearScreenshots
+            | DesktopControl::PrepareCapture => {}
         }
         Ok(None)
     }
@@ -746,6 +760,7 @@ pub fn status(db: &Db, root: &Path) -> Result<DesktopStatus, String> {
         paused: state.paused,
         outcome_unknown: state.outcome_unknown,
         screenshot_count: screenshot_files(root)?.len().try_into().unwrap_or(u32::MAX),
+        capture_preparation: Some(super::capture_preparation(false)),
     })
 }
 
@@ -800,7 +815,40 @@ pub fn screenshot(root: &Path, name: &str) -> Result<DesktopScreenshot, String> 
 }
 
 pub fn control(db: &Db, root: &Path, action: DesktopControl) -> Result<DesktopStatus, String> {
+    let started = Instant::now();
+    let result = control_inner(db, root, action);
+    let label = serde_json::to_value(action).unwrap_or(Value::Null);
+    crate::diag::note(
+        if result.is_err() {
+            crate::diag::CLASS_REJECT
+        } else {
+            crate::diag::CLASS_JUDGE
+        },
+        result.is_err(),
+        Some(crate::PROJECT_ID),
+        Some("owner"),
+        None,
+        None,
+        "computer_control",
+        match result.as_ref().err().map(String::as_str) {
+            Some("enable computer access before preparing screenshots") => "prepare_not_enabled",
+            Some("wait for the current operation before checking capture readiness") => {
+                "prepare_busy"
+            }
+            Some("desktop is held by another project") => "foreign_project",
+            Some(_) => "control_failed",
+            None => label.as_str().unwrap_or("invalid"),
+        },
+        started,
+    );
+    result
+}
+
+fn control_inner(db: &Db, root: &Path, action: DesktopControl) -> Result<DesktopStatus, String> {
     let project = project_key(root)?;
+    if matches!(action, DesktopControl::PrepareCapture) && !enabled(db)? {
+        return Err("enable computer access before preparing screenshots".into());
+    }
     if matches!(action, DesktopControl::Disable) {
         super::preview::stop()?;
     }
@@ -825,17 +873,42 @@ pub fn control(db: &Db, root: &Path, action: DesktopControl) -> Result<DesktopSt
     let label = serde_json::to_value(action).map_err(|e| e.to_string())?;
     db.append_event(crate::PROJECT_ID, EventKind::System,
         json!({"kind":"computer_control","actor":"owner","action":label,"enabled":matches!(action,DesktopControl::Enable),"screen_to_selected_model":matches!(action,DesktopControl::Enable)}), None, None).map_err(|e| e.to_string())?;
-    crate::diag::note(
-        crate::diag::CLASS_JUDGE,
-        false,
-        Some(crate::PROJECT_ID),
-        Some("owner"),
-        None,
-        None,
-        "computer_control",
-        label.as_str().unwrap_or("invalid"),
-        started,
-    );
+    if matches!(
+        action,
+        DesktopControl::Enable | DesktopControl::Resume | DesktopControl::PrepareCapture
+    ) && enabled(db)?
+    {
+        // Owner QA 2026-10-06: prewarming only prepares SDK capability. No lane
+        // claim, screenshot or task replay; paused/unknown delivery stays intact.
+        let preparation = super::capture_preparation(true);
+        crate::diag::note(
+            if matches!(
+                preparation,
+                super::CapturePreparationState::Failed
+                    | super::CapturePreparationState::Unavailable
+            ) {
+                crate::diag::CLASS_REJECT
+            } else {
+                crate::diag::CLASS_HOST
+            },
+            matches!(
+                preparation,
+                super::CapturePreparationState::Failed
+                    | super::CapturePreparationState::Unavailable
+            ),
+            Some(crate::PROJECT_ID),
+            Some("owner"),
+            None,
+            None,
+            "computer_use",
+            match preparation {
+                super::CapturePreparationState::Failed => "capture_preparation_failed",
+                super::CapturePreparationState::Unavailable => "capture_preparation_unavailable",
+                _ => "capture_preparation_started",
+            },
+            started,
+        );
+    }
     status(db, root)
 }
 

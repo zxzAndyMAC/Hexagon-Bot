@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
+import { ComputerTaskReadiness } from './components/ComputerTaskReadiness'
 import { Composer } from './components/Composer'
 import { FileTree } from './components/FileTree'
 import { atomicDeletion, findAtoms } from './composerAtoms'
@@ -633,4 +634,83 @@ describe('负责人确认的发送三态', () => {
     expect(button.getAttribute('aria-busy')).toBe('false')
     root.unmount()
   })
+})
+
+it('warns about the mentioned role before sending a computer task without changing model bindings', async () => {
+  const i18n = (await import('./i18n')).default
+  await i18n.changeLanguage('en')
+  useUiStore.setState({ team: [member('QA')], mcpPending: false, projectRoot: '/project-a' })
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue({ project_root: '/project-a', enabled: true, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0, capture_preparation: 'preparing' })
+  vi.spyOn(api, 'computerModels').mockResolvedValue({ project_root: '/project-a', roles: [{ agent_id: 'id-QA', vision: 'no_vision', model: 'text-model' }], vision_slots: ['vision'] })
+  const send = vi.spyOn(api, 'sendMessage')
+  const { el, root } = await render(<Composer />)
+  try {
+    const ta = el.querySelector('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(ta, '@QA inspect the screen')
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(el.textContent).toContain('Preparing screenshots')
+    expect(el.textContent).toContain('does not support screenshots')
+    expect(el.textContent).toContain('vision')
+    expect(send).not.toHaveBeenCalled()
+    expect(useUiStore.getState().team[0].model_slot).toBe('chat')
+  } finally { await act(async () => root.unmount()); el.remove(); vi.restoreAllMocks() }
+})
+
+it('opens team settings for unknown screenshot capability while leaving text sending available', async () => {
+  const i18n = (await import('./i18n')).default
+  await i18n.changeLanguage('en')
+  useUiStore.setState({ team: [member('QA')], mcpPending: false, projectRoot: '/project-a' })
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue({ project_root: '/project-a', enabled: true, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0, capture_preparation: 'ready' })
+  vi.spyOn(api, 'computerModels').mockResolvedValue({ project_root: '/project-a', roles: [{ agent_id: 'id-QA', vision: 'unknown', model: 'custom-model' }], vision_slots: [] })
+  const open = vi.fn()
+  window.addEventListener('hexagon:computer-model-settings', open)
+  const send = vi.spyOn(api, 'sendMessage').mockResolvedValue(1)
+  const { el, root } = await render(<Composer />)
+  try {
+    expect(el.textContent).toContain('screenshot capability is unknown')
+    expect(el.textContent).toContain('No configured vision slot is ready')
+    await act(async () => [...el.querySelectorAll('button')].find(b => b.textContent === 'Check role models')!.click())
+    expect(open).toHaveBeenCalledOnce()
+    await sendText(el, '@QA write a plain text note')
+    expect(send).toHaveBeenCalled()
+    expect(useUiStore.getState().team[0].model_slot).toBe('chat')
+  } finally { window.removeEventListener('hexagon:computer-model-settings', open); await act(async () => root.unmount()); el.remove(); vi.restoreAllMocks() }
+})
+
+it('discards a delayed model preflight after the workspace epoch changes', async () => {
+  const i18n = (await import('./i18n')).default
+  await i18n.changeLanguage('en')
+  useUiStore.setState({ team: [member('QA')], mcpPending: false, projectRoot: '/project-a' })
+  let finish!: (value: Awaited<ReturnType<typeof api.desktopStatus>>) => void
+  const status = vi.spyOn(api, 'desktopStatus').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  const models = vi.spyOn(api, 'computerModels').mockResolvedValue({ project_root: '/project-a', roles: [{ agent_id: 'id-QA', vision: 'no_vision', model: 'old-model' }], vision_slots: [] })
+  const { el, root } = await render(<ComputerTaskReadiness mentions={[]} />)
+  try {
+    const old = finish
+    await act(async () => useUiStore.getState().beginProjectSwitch())
+    await act(async () => old({ project_root: '/project-a', enabled: true, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0, capture_preparation: 'preparing' }))
+    expect(el.textContent).not.toContain('Preparing screenshots')
+    expect(el.textContent).not.toContain('does not support screenshots')
+    expect(models).not.toHaveBeenCalled()
+    expect(status).toHaveBeenCalledOnce() // no query against a transitioning, unknown root
+  } finally { await act(async () => root.unmount()); el.remove(); vi.restoreAllMocks() }
+})
+
+it('offers a direct computer settings entry when the model is ready but screenshots need preparation', async () => {
+  const i18n = (await import('./i18n')).default
+  await i18n.changeLanguage('en')
+  useUiStore.setState({ team: [member('QA')], projectRoot: '/project-a' })
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue({ project_root: '/project-a', enabled: true, active_project: null, active_agent: null, busy: false, paused: true, outcome_unknown: false, screenshot_count: 0, capture_preparation: 'unprepared' })
+  vi.spyOn(api, 'computerModels').mockResolvedValue({ project_root: '/project-a', roles: [{ agent_id: 'id-QA', vision: 'ready', model: 'vision-model' }], vision_slots: ['vision'] })
+  const open = vi.fn()
+  window.addEventListener('hexagon:computer-settings', open)
+  const { el, root } = await render(<ComputerTaskReadiness mentions={[]} />)
+  try {
+    expect(el.textContent).toContain('Recheck screenshots')
+    await act(async () => el.querySelector('button')!.click())
+    expect(open).toHaveBeenCalledOnce()
+    expect(el.textContent).not.toContain('does not support screenshots')
+  } finally { window.removeEventListener('hexagon:computer-settings', open); await act(async () => root.unmount()); el.remove(); vi.restoreAllMocks() }
 })

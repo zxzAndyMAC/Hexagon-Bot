@@ -7,6 +7,36 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+#[test]
+fn computer_model_preflight_owns_context_after_project_connection_closes() {
+    // QA readiness 2026-10-06: keychain/config reads previously retained the
+    // shell connection lock and could queue owner pause behind slow I/O.
+    // Empty fixture configuration avoids consulting real credentials.
+    let _config = crate::provider_config::fixture_document(Default::default());
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["产品", "后端"], None).unwrap();
+    let context = computer_model_context(&wb.db, dir.path()).unwrap();
+    drop(wb);
+    let readiness = computer_models(context).unwrap();
+    assert_eq!(
+        readiness.project_root,
+        dir.path().canonicalize().unwrap().display().to_string()
+    );
+    assert_eq!(
+        readiness
+            .roles
+            .iter()
+            .map(|role| role.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a0", "a1"]
+    );
+    assert!(readiness
+        .roles
+        .iter()
+        .all(|role| role.vision == crate::provider_admin::ComputerVision::Unconfigured));
+    assert!(readiness.vision_slots.is_empty());
+}
+
 // ---- 票 05：门面读委托已删，测试直连模块函数（老 wb.* 形状由这组 helper 保持） ----
 
 fn send(wb: &Workbench, body: &str) -> Result<UnnamedRoute, String> {

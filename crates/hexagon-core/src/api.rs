@@ -2501,12 +2501,13 @@ impl Workbench {
             body.push(']');
         }
         let route = self.route_body(role, Some(aid), &body, &[], false, &[])?;
-        // Live acceptance 2026-10-01: PM HOLD after a completed pack's
-        // successful one-off observation is normal rest, not idle spin.
-        // Keep Silent/error rescue and unfinished-pack HOLD semantics unchanged.
-        let finished_pack =
-            self.pack.is_some() && crate::stallwatch::pack_finished(&self.db, &self.project_id)?;
-        if finished_pack && matches!(route, UnnamedRoute::Held { .. }) {
+        // QA 2026-10-01/06: a successful one-off observation + PM HOLD was
+        // replayed after 60s both after completion and before kickoff.
+        // Require positive completed/never-started evidence, not absence of an
+        // active run; running/historical unfinished stages keep their rescue.
+        let workflow_idle = self.pack.is_some()
+            && crate::stallwatch::supplemental_workflow_idle(&self.db, &self.project_id)?;
+        if workflow_idle && matches!(route, UnnamedRoute::Held { .. }) {
             let started = std::time::Instant::now();
             let new_owner: bool = self.db.conn().query_row(
                 "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND author='owner' AND id>?2)",
@@ -2524,7 +2525,7 @@ impl Workbench {
                 || new_owner
                 || tool_failed;
             let settled =
-                crate::stallwatch::supplemental_settled(finished_pack, replied, true, outstanding);
+                crate::stallwatch::supplemental_settled(workflow_idle, replied, true, outstanding);
             if settled {
                 self.watch().status = crate::stallwatch::Status::Closed;
             }
@@ -2537,7 +2538,11 @@ impl Workbench {
                 None,
                 "stall_supplemental",
                 if settled {
-                    "completed_pack_reply_held"
+                    if crate::stallwatch::pack_finished(&self.db, &self.project_id)? {
+                        "completed_pack_reply_held"
+                    } else {
+                        "unstarted_pack_reply_held"
+                    }
                 } else {
                     "unfinished_or_silent"
                 },
@@ -3967,6 +3972,30 @@ pub fn desktop_settings_url(permission: crate::desktop::DesktopPermission) -> &'
 /// Desktop read lane; never takes the long-running turn lock.
 pub fn desktop_status(db: &Db, root: &Path) -> Result<crate::desktop::DesktopStatus, String> {
     crate::desktop::actions::status(db, root)
+}
+
+/// Host-owned read context, never an IPC argument. Copy under the short read
+/// lock before provider/keychain I/O so owner pause cannot queue behind it.
+pub struct ComputerModelContext {
+    root: std::path::PathBuf,
+    team: Vec<crate::orchestra::TeamRow>,
+}
+
+pub fn computer_model_context(db: &Db, root: &Path) -> Result<ComputerModelContext, String> {
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let team = crate::orchestra::team(db, crate::PROJECT_ID, &root).map_err(|e| e.to_string())?;
+    Ok(ComputerModelContext { root, team })
+}
+
+pub fn computer_models(
+    context: ComputerModelContext,
+) -> Result<crate::provider_admin::ComputerModels, String> {
+    crate::provider_admin::computer_models(
+        crate::credentials::active().as_ref(),
+        &context.team,
+        &context.root,
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub fn desktop_initialize(library: &Path) -> Result<(), String> {

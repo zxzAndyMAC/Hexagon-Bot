@@ -138,6 +138,33 @@ pub fn read_only_spec(repo_root: &Path, net: bool) -> SandboxSpec {
     scoped_spec(repo_root, &[], net, true)
 }
 
+/// Host-owned Python/Node/Git version probe: no build tools are used. Exclude
+/// Rust toolchains/caches from BOTH grants and inventory; retain a fresh inventory
+/// of every readable data-volume runtime on each probe. No cross-call cache.
+/// QA 2026-10-06 / performance-before.sample: lstat of build caches dominated
+/// version checks; dropping alias checks while retaining those grants was rejected.
+pub(crate) fn runtime_version_spec(root: &Path) -> SandboxSpec {
+    if status().mode != "seatbelt" || !status().available {
+        return SandboxSpec::Unavailable;
+    }
+    let Ok(canon) = root.canonicalize() else {
+        return SandboxSpec::Unavailable;
+    };
+    let roots = runtime_read_roots(&canon, false);
+    let Ok(aliases) = hardlink_paths(&roots) else {
+        return SandboxSpec::Unavailable;
+    };
+    let Ok(rules) = hardlink_rules(&aliases) else {
+        return SandboxSpec::Unavailable;
+    };
+    let mut profile = seatbelt_profile_with_roots(root, &canon, &[], false, true, &roots);
+    profile.push_str(&rules);
+    if profile.len() > 64 * 1024 {
+        return SandboxSpec::Unavailable;
+    }
+    SandboxSpec::Seatbelt(profile)
+}
+
 // Ticket 25: execution evidence requires the actual invocation to exclude host
 // state and external IPC, not merely a previously successful isolation probe.
 pub(crate) fn evaluation_spec(root: &Path, paths: &[String]) -> SandboxSpec {
@@ -399,6 +426,10 @@ pub(crate) fn python_interpreter() -> Option<PathBuf> {
 }
 
 fn read_roots(repo: &Path) -> Vec<PathBuf> {
+    runtime_read_roots(repo, true)
+}
+
+fn runtime_read_roots(repo: &Path, build_tools: bool) -> Vec<PathBuf> {
     let mut roots = vec![repo.to_path_buf()];
     roots.extend(
         [
@@ -427,7 +458,7 @@ fn read_roots(repo: &Path) -> Vec<PathBuf> {
             roots.push(python);
         }
     }
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = std::env::var_os("HOME").filter(|_| build_tools) {
         roots.extend(
             [".rustup", ".cargo/bin", ".cargo/registry", ".cargo/git"]
                 .into_iter()
@@ -593,6 +624,17 @@ fn seatbelt_profile(
     net: bool,
     read_only: bool,
 ) -> String {
+    seatbelt_profile_with_roots(repo, canon, globs, net, read_only, &read_roots(canon))
+}
+
+fn seatbelt_profile_with_roots(
+    repo: &Path,
+    canon: &Path,
+    globs: &[String],
+    net: bool,
+    read_only: bool,
+    roots: &[PathBuf],
+) -> String {
     // reliability 05: unrestricted signals let a claimed read-only MCP kill
     // host/parent processes. Only processes in the same sandbox may be signalled.
     let mut prof = String::from(
@@ -609,10 +651,10 @@ fn seatbelt_profile(
     // bypass the repository inventory. Only project data and runtime locations
     // are readable; metadata remains available for ordinary process startup.
     prof.push_str("(allow file-read-data (literal \"/\"))\n");
-    for root in read_roots(canon) {
+    for root in roots {
         prof.push_str(&format!(
             "(allow file-read-data (subpath \"{}\"))\n",
-            sbq(&root)
+            sbq(root)
         ));
     }
     // reliability 03: inventory covers existing aliases; prohibit creating new
@@ -767,6 +809,31 @@ mod tests {
     use proptest::prelude::*;
     use std::path::PathBuf;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn version_probe_refuses_aliases_and_keeps_runtime_versions_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let ordinary = dir.path().join("ordinary.txt");
+        std::fs::write(&ordinary, "synthetic").unwrap();
+        let run = |script: &str| {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", script]).current_dir(dir.path());
+            wrap_command(&mut command, &runtime_version_spec(dir.path()))
+                .unwrap()
+                .output()
+                .unwrap()
+        };
+        assert!(run(&format!("cat '{}'", ordinary.display()))
+            .status
+            .success());
+        let alias = dir.path().join("other.txt");
+        std::fs::hard_link(&ordinary, &alias).unwrap();
+        // A new invocation rebuilds the inventory. No earlier profile/cache may
+        // make a newly created ordinary-name alias readable (reliability 03).
+        assert!(!run(&format!("cat '{}'", alias.display())).status.success());
+        assert!(run("node --version && git --version").status.success());
+    }
+
     fn subs_of(profile: &str) -> Vec<String> {
         profile
             // reliability 03: runtime directories grant data reads, not writes.
@@ -778,6 +845,23 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn version_probe_grants_are_a_read_only_subset(name in "[a-z]{1,12}") {
+            let repo = PathBuf::from(format!("/tmp/{name}"));
+            let roots = runtime_read_roots(&repo, false);
+            let full = read_roots(&repo);
+            prop_assert!(roots.iter().all(|r| full.contains(r)));
+            if let Some(home) = std::env::var_os("HOME") {
+                for rel in [".rustup", ".cargo/bin", ".cargo/registry", ".cargo/git"] {
+                    prop_assert!(!roots.contains(&Path::new(&home).join(rel)));
+                }
+            }
+            let profile = seatbelt_profile_with_roots(&repo, &repo, &[], false, true, &roots);
+            prop_assert!(subs_of(&profile).is_empty());
+            prop_assert!(!profile.contains("(allow network"));
+            prop_assert!(profile.contains("(deny file-link)"));
+        }
+
         // reliability 03: a runtime tree cannot be a less protected data source
         // than the repository. An ordinary alias in either tree stays denied.
         #[cfg(unix)]

@@ -34,6 +34,8 @@ export type ActionId =
   | 'desktopResume'
   | 'desktopRelease'
   | 'desktopClear'
+  | 'desktopPrepareCapture'
+  | 'computerModelSettings'
 
   | 'confirmBroadAccess'
   | 'cancelBroadAccess'
@@ -115,6 +117,8 @@ const DEFAULTS: Record<ActionId, string> = {
   desktopResume: 'alt+mod+shift+j',
   desktopRelease: 'alt+mod+shift+3',
   desktopClear: 'alt+mod+shift+4',
+  desktopPrepareCapture: '',
+  computerModelSettings: '',
 
   confirmBroadAccess: '',
   cancelBroadAccess: '',
@@ -223,6 +227,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'cancelPerformanceBaseline', labelKey: 'quality.cancelBaseline' },
   { id: 'desktopRelease', labelKey: 'computer.release' },
   { id: 'desktopClear', labelKey: 'computer.clear_screenshots' },
+  { id: 'desktopPrepareCapture', labelKey: 'computer.prepare_capture' },
+  { id: 'computerModelSettings', labelKey: 'computer.modelSettings' },
 
   { id: 'desktopPermissions', labelKey: 'desktop.check' },
   { id: 'desktopAccessibility', labelKey: 'desktop.openAccessibility' },

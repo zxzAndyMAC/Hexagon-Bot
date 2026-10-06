@@ -1,3 +1,4 @@
+import { ComputerTaskReadiness } from './ComputerTaskReadiness'
 import { AgentScreen } from './AgentScreen'
 import { ElementDraft } from './ElementReferences'
 import type { ElementRef } from '../gen/ElementRef'
@@ -510,6 +511,7 @@ export function Composer() {
             }}
           />
         </div>
+        <ComputerTaskReadiness mentions={atoms.filter(a => a.kind === 'mention').map(a => a.value)} />
         <div className="composer-toolbar">
           <div className="composer-controls"><ProjectApprovalMode /><span className="composer-hint">{t('composer.multilineHint')}</span></div>
           <div className="composer-actions">

@@ -28,6 +28,16 @@ fn observed(id: &str) -> NativeReply {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]
     #[test]
+    fn preparing_never_resumes_or_clears_unknown_delivery(paused in any::<bool>(), unknown in any::<bool>(), busy in any::<bool>()) {
+        let mut state = State { owner: Some(owner("/first", "qa")), paused, outcome_unknown: unknown, busy, snapshot: Some("old".into()), ..State::default() };
+        prop_assert!(state.control(Path::new("/second"), DesktopControl::PrepareCapture).is_err());
+        prop_assert_eq!(state.control(Path::new("/first"), DesktopControl::PrepareCapture).is_ok(), !busy);
+        prop_assert_eq!(state.paused, paused);
+        prop_assert_eq!(state.outcome_unknown, unknown);
+        prop_assert_eq!(state.snapshot.as_deref(), Some("old"));
+    }
+
+    #[test]
     fn owner_pause_is_global_but_resume_and_disable_respect_project_lease(busy in any::<bool>(), operation in 1u64..u64::MAX) {
         let mut state = State { owner: Some(owner("/first", "qa")), busy, active: busy.then_some(operation), ..State::default() };
         prop_assert_eq!(state.control(Path::new("/second"), DesktopControl::Disable).unwrap(), None);

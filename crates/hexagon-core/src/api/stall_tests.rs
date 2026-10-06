@@ -941,3 +941,208 @@ fn completed_pack_open_todo_keeps_rescue_open() {
     wb.continue_after_turn(&aid, "后端", owner_mark).unwrap();
     assert_eq!(wb.watch().status, crate::stallwatch::Status::Open);
 }
+
+// QA 2026-10-06: a single calculator observation before kickoff was repeated
+// by idle-spin investigation, despite a successful visible reply and PM HOLD.
+#[test]
+fn unstarted_pack_supplemental_reply_and_hold_does_not_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack: PackDef = serde_json::from_value(json!({
+        "name":"supplemental","version":1,
+        "stages":[{"name":"截图准备","roles":["QA"],"due":["测试记录"]}]
+    }))
+    .unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["项目经理", "QA"], Some(pack)).unwrap();
+    let clock = with_clock(&mut wb);
+    let decision = scripted(&mut wb, "decision", &["HOLD", "QA", "HOLD"]);
+    let worker = scripted(
+        &mut wb,
+        "default",
+        &["plan", "observed once", "plan", "observed twice"],
+    );
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    owner_says(
+        &wb,
+        "@QA observe the calculator once, report only in chat, then release",
+    );
+    assert_eq!(turns(&wb, "QA"), 1);
+    let ptr = stage_ptr(&wb);
+    assert!(ptr.is_empty());
+    for _ in 0..3 {
+        clock.advance(PAST);
+        assert_eq!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+    }
+    assert_eq!(turns(&wb, "QA"), 1, "completed one-off must not run again");
+    assert_eq!(decision.recorded().len(), 1);
+    assert_eq!(worker.recorded().len(), 2);
+    assert!(stall_cards(&wb).is_empty());
+    assert_no_side_effects(&wb, &ptr);
+}
+
+fn unstarted_supplemental_fixture(dir: &Path, lines: &[&str]) -> (Workbench, Arc<FakeClock>) {
+    let pack: PackDef = serde_json::from_value(json!({
+        "name":"supplemental","version":1,
+        "stages":[{"name":"规格","roles":["后端"],"due":["规格"]}]
+    }))
+    .unwrap();
+    let mut wb = Workbench::for_test(dir, &["项目经理", "后端"], Some(pack)).unwrap();
+    let clock = with_clock(&mut wb);
+    scripted(&mut wb, "decision", &["HOLD", "HOLD"]);
+    scripted(&mut wb, "default", lines);
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    (wb, clock)
+}
+
+#[test]
+fn unstarted_supplemental_silent_reply_keeps_rescue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, clock) = unstarted_supplemental_fixture(dir.path(), &["plan", ""]);
+    owner_says(&wb, "@后端 inspect once");
+    clock.advance(PAST);
+    assert_ne!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+}
+
+#[test]
+fn unstarted_supplemental_open_todo_keeps_rescue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, clock) = unstarted_supplemental_fixture(dir.path(), &[]);
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            text_response("plan"),
+            crate::turn::tool_response(vec![(
+                "todo",
+                "tasks",
+                json!({"action":"create", "title":"unfinished verification"}),
+            )]),
+            text_response("observed"),
+        ])),
+    );
+    owner_says(&wb, "@后端 inspect once");
+    clock.advance(PAST);
+    assert_ne!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+}
+
+#[test]
+fn supplemental_stage_start_history_cannot_be_erased_by_missing_run_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, clock) = unstarted_supplemental_fixture(dir.path(), &["plan", "observed"]);
+    // Seed incomplete historical storage without disabling foreign keys:
+    // a start receipt without a corresponding row is still started history.
+    wb.db
+        .append_event("p1", EventKind::StageStarted, json!({"seq":0}), None, None)
+        .unwrap();
+    owner_says(&wb, "@后端 inspect once");
+    clock.advance(PAST);
+    assert_ne!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+}
+
+#[test]
+fn unstarted_supplemental_failed_tool_with_visible_reply_keeps_rescue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, clock) = unstarted_supplemental_fixture(dir.path(), &[]);
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            text_response("plan"),
+            crate::turn::tool_response(vec![("missing", "fs_read", json!({"path":"missing.txt"}))]),
+            text_response("observation done"),
+        ])),
+    );
+    owner_says(&wb, "@后端 inspect once");
+    let results = wb
+        .db
+        .timeline("p1", None, 100, Some(&[EventKind::ToolResult]))
+        .unwrap();
+    assert!(results.iter().any(|i| i.event.payload["ok"] == false));
+    clock.advance(PAST);
+    assert_ne!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+}
+
+#[test]
+fn new_owner_message_after_unstarted_supplement_reopens_rescue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, clock) = unstarted_supplemental_fixture(dir.path(), &["plan", "observed"]);
+    owner_says(&wb, "@后端 inspect once");
+    clock.advance(PAST);
+    assert_eq!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+    scripted(&mut wb, "default", &["plan", ""]);
+    owner_says(&wb, "@后端 inspect a different target");
+    assert_eq!(wb.stall_tick().unwrap(), StallTick::Wait("clock"));
+    clock.advance(PAST);
+    assert_ne!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+}
+
+#[test]
+fn new_stage_after_unstarted_supplement_reopens_rescue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, clock) = unstarted_supplemental_fixture(dir.path(), &["plan", "observed"]);
+    owner_says(&wb, "@后端 inspect once");
+    clock.advance(PAST);
+    assert_eq!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+    wb.open_stage(0).unwrap();
+    scripted(&mut wb, "default", &["规格仍在写", ""]);
+    wb.run_turn("后端", "write the stage specification")
+        .unwrap();
+    clock.advance(PAST);
+    assert_ne!(wb.stall_tick().unwrap(), StallTick::Wait("closed"));
+}
+
+#[test]
+fn unstarted_supplemental_unknown_tool_waits_for_owner_instead_of_settling() {
+    struct UnknownObservation;
+    impl crate::tools::Tool for UnknownObservation {
+        fn name(&self) -> &str {
+            "test_unknown_observation"
+        }
+        fn description(&self) -> &str {
+            "synthetic lost observation receipt"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type":"object"})
+        }
+        fn risk(&self) -> crate::tools::RiskClass {
+            crate::tools::RiskClass::WriteLocal
+        }
+        fn exec(
+            &self,
+            _: &crate::db::Db,
+            _: &Value,
+            _: &crate::tools::ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            Err(crate::tools::ToolError::OutcomeUnknown(
+                "observation receipt lost".into(),
+            ))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, clock) = unstarted_supplemental_fixture(dir.path(), &[]);
+    wb.registry.register(UnknownObservation);
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            text_response("plan"),
+            crate::turn::tool_response(vec![("unknown", "test_unknown_observation", json!({}))]),
+            text_response("observed"),
+        ])),
+    );
+    let body = "@后端 inspect once";
+    crate::commands::send_via_control(&wb.db, &wb.project_id, body, &[]).unwrap();
+    assert!(matches!(
+        wb.route_unnamed_owner(body, &[]),
+        Err(ApiError::Turn(crate::turn::TurnError::Tool(
+            crate::tools::ToolError::OutcomeUnknown(_)
+        )))
+    ));
+    let results = wb
+        .db
+        .timeline("p1", None, 100, Some(&[EventKind::ToolResult]))
+        .unwrap();
+    assert!(results
+        .iter()
+        .any(|i| i.event.payload["state"] == "unknown"));
+    clock.advance(PAST);
+    assert_eq!(wb.stall_tick().unwrap(), StallTick::Wait("owner_waits"));
+    assert!(stall_cards(&wb).is_empty());
+    assert_eq!(turns(&wb, "后端"), 1);
+}

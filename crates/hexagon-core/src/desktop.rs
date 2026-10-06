@@ -7,6 +7,72 @@ pub mod actions;
 pub mod preview;
 pub use actions::{DesktopControl, DesktopScreenshot, DesktopStatus};
 
+/// Preparation is readiness only, never permission to capture or replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub enum CapturePreparationState {
+    Unprepared,
+    Preparing,
+    Ready,
+    Failed,
+    Unavailable,
+}
+
+fn decode_preparation(bits: u32) -> CapturePreparationState {
+    // QA action 1284 / 2026-10-06: permission grants once hid cold preparation.
+    // False negative costs a recheck; false positive starts a task without usable
+    // capture readiness. Unknown versions/bits fail closed, never become ready.
+    match bits {
+        0x1000 => CapturePreparationState::Unprepared,
+        0x1001 => CapturePreparationState::Preparing,
+        0x1002 => CapturePreparationState::Ready,
+        0x1003 => CapturePreparationState::Failed,
+        _ => CapturePreparationState::Unavailable,
+    }
+}
+
+pub(crate) fn capture_preparation(start: bool) -> CapturePreparationState {
+    #[cfg(target_os = "macos")]
+    let bits = (|| {
+        let prepare = {
+            let guard = LIBRARY.get()?.lock().ok()?;
+            let library = guard.as_ref()?;
+            // Same process-lifetime ABI rule as request_permission: foreign
+            // calls must not hold the loader mutex across reentrant Swift code.
+            unsafe {
+                *library
+                    .get::<unsafe extern "C" fn(u32) -> u32>(
+                        b"hexagon_computer_capture_preparation_v1\0",
+                    )
+                    .ok()?
+            }
+        };
+        Some(unsafe { prepare(u32::from(start)) })
+    })();
+    #[cfg(not(target_os = "macos"))]
+    let bits: Option<u32> = {
+        let _ = start;
+        None
+    };
+    decode_preparation(bits.unwrap_or(0))
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn only_current_ready_value_reports_ready(bits in prop_oneof![0x1000u32..=0x1003, any::<u32>()]) {
+            prop_assert_eq!(decode_preparation(bits) == CapturePreparationState::Ready, bits == 0x1002);
+            if !(0x1000..=0x1003).contains(&bits) {
+                prop_assert_eq!(decode_preparation(bits), CapturePreparationState::Unavailable);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct DesktopPermissions {

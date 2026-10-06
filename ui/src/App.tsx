@@ -33,7 +33,7 @@ export default function App() {
   const refresh = useUiStore((s) => s.refresh)
   const refreshFast = useUiStore((s) => s.refreshFast)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [computerSettings, setComputerSettings] = useState(false)
+  const [computerSettings, setComputerSettings] = useState<'general' | 'perms' | 'team'>('general')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
   const timelineActive = useUiStore((s) => (s.tabs.find((tab) => tab.id === s.activeTab) ?? s.tabs[0])?.kind === 'timeline')
@@ -44,6 +44,14 @@ export default function App() {
   useEffect(() => {
     api.projectOpen().then(setProjectOpen)
   }, [])
+
+  useEffect(() => {
+    const openModels = () => { if (projectOpen === true) { setComputerSettings('team'); setSettingsOpen(true) } }
+    const openComputer = () => { if (projectOpen === true) { setComputerSettings('perms'); setSettingsOpen(true) } }
+    window.addEventListener('hexagon:computer-model-settings', openModels)
+    window.addEventListener('hexagon:computer-settings', openComputer)
+    return () => { window.removeEventListener('hexagon:computer-model-settings', openModels); window.removeEventListener('hexagon:computer-settings', openComputer) }
+  }, [projectOpen])
 
   // ui-audit 票 01/02：界面作用域同步进 store——裁决快捷键据此放行/拦截。
   // palette 可在设置页之上再开一层，优先级 palette > settings。
@@ -161,7 +169,7 @@ export default function App() {
       // Owner issue19: retained keymap actions now navigate to Settings.
       if (matches(e, bindingFor('desktopPanel')) || matches(e, bindingFor('browserPanel'))) {
         e.preventDefault()
-        if (projectOpen === true) { setComputerSettings(true); setSettingsOpen(true) }
+        if (projectOpen === true) { setComputerSettings('perms'); setSettingsOpen(true) }
         return
       }
       // 保存要在 Monaco 自己的 textarea 里也生效，所以赶在输入框豁免之前。
@@ -255,8 +263,8 @@ export default function App() {
   if (settingsOpen) {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <SettingsPage initialSection={computerSettings ? 'perms' : 'general'}
-          onBack={() => { setSettingsOpen(false); setComputerSettings(false) }}
+        <SettingsPage initialSection={computerSettings}
+          onBack={() => { setSettingsOpen(false); setComputerSettings('general') }}
           // ui-audit-2 票 05：设置-用量「详情」= 回工作台并开用量明细 tab
           onOpenUsageDetail={() => {
             useUiStore.getState().openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') })

@@ -9,6 +9,14 @@ const initial = { project_root: '/project-a', enabled: false, active_project: nu
 const el = document.createElement('div')
 let root: ReturnType<typeof createRoot>
 afterEach(async () => { await act(async () => root?.unmount()); vi.useRealTimers(); vi.restoreAllMocks(); el.remove(); el.replaceChildren() })
+it('shows screenshot preparation before the first task', async () => {
+  await i18n.changeLanguage('en')
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue({ ...initial, enabled: true, capture_preparation: 'preparing' })
+  vi.spyOn(api, 'desktopPermissions').mockResolvedValue({ host_name: 'Hexagon', supported: true, available: true, accessibility: true, input_events: true, screen_recording: true, ready: true, error: null })
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<DesktopControlPanel inline />))
+  expect(el.textContent).toContain('Preparing screenshots')
+})
 it('opens the native permissions dialog instead of enabling screen transmission when a grant is missing', async () => {
   await i18n.changeLanguage('en')
   vi.spyOn(api, 'desktopStatus').mockResolvedValue(initial)
@@ -54,4 +62,17 @@ it.each([true, false])('discards a late permission preflight from an unmounted p
   await act(async () => resolve(permissions))
   expect(control).not.toHaveBeenCalled()
   expect(el.querySelector('dialog')).toBeNull()
+})
+
+it('rechecks a failed preparation without resuming or replaying the paused action', async () => {
+  await i18n.changeLanguage('en')
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue({ ...initial, enabled: true, paused: true, outcome_unknown: true, capture_preparation: 'failed' })
+  vi.spyOn(api, 'desktopPermissions').mockResolvedValue({ host_name: 'Hexagon', supported: true, available: true, accessibility: true, input_events: true, screen_recording: true, ready: true, error: null })
+  const control = vi.spyOn(api, 'desktopControl').mockResolvedValue({ ...initial, enabled: true, paused: true, outcome_unknown: true, capture_preparation: 'preparing' })
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<DesktopControlPanel inline />))
+  await act(async () => [...el.querySelectorAll('button')].find(b => b.textContent === 'Recheck screenshots')!.click())
+  expect(control).toHaveBeenCalledExactlyOnceWith('prepare_capture', '/project-a')
+  expect([...el.querySelectorAll('button')].find(b => b.textContent === 'Resume computer')?.disabled).toBe(true)
+  expect(el.textContent).toContain('Preparing screenshots')
 })

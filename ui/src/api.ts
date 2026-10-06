@@ -17,6 +17,7 @@ import type { NativePreviewTarget } from './gen/NativePreviewTarget'
 import type { NativePreviewFrame } from './gen/NativePreviewFrame'
 import type { DesignDirection } from './gen/DesignDirection'
 import type { DesktopScreenshot } from './gen/DesktopScreenshot'
+import type { ComputerModels } from './gen/ComputerModels'
 import type { DesktopStatus } from './gen/DesktopStatus'
 import type { DesktopControl } from './gen/DesktopControl'
 import type { PermissionShapeSuggestion } from './gen/PermissionShapeSuggestion'
@@ -318,6 +319,7 @@ export const api = {
   browserPreview: (expectedProjectRoot: string, sessionId: string) => call<BrowserPreview>('browser_preview', { expectedProjectRoot, sessionId }),
   browserFocus: (expectedProjectRoot: string, sessionId: string) => call<void>('browser_focus', { expectedProjectRoot, sessionId }),
   desktopStatus: () => call<DesktopStatus>('desktop_status'),
+  computerModels: () => call<ComputerModels>('computer_models'),
   desktopControl: (action: DesktopControl, expectedProjectRoot: string) => call<DesktopStatus>('desktop_control', { action, expectedProjectRoot }),
   desktopPermissions: () => call<DesktopPermissions>('desktop_permissions'),
   desktopOpenSettings: (permission: DesktopPermission) => call<void>('desktop_open_settings', { permission }),
@@ -1267,6 +1269,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'browser_selection_poll': return [] as T
     case 'browser_selection_start':
     case 'browser_selection_discard': return undefined as T
+    case 'computer_models':
+      return { project_root: '/mock', roles: [], vision_slots: [] } as T
     case 'desktop_status':
       return { project_root: '/mock', enabled: false, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0 } as T
     case 'desktop_control':

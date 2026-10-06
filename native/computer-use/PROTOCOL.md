@@ -228,3 +228,28 @@ text values and screenshot content are excluded. Diagnostic collection neither
 activates nor retries. Peekaboo's generic `Timeout while waiting for condition`
 occurs at application activation settlement, before AXRaise/exact-window focus
 verification; an unconfirmed focus must not be treated as a coordinate failure.
+
+## Capture preparation readiness
+
+```c
+uint32_t hexagon_computer_capture_preparation_v1(uint32_t start);
+```
+
+The current marker is `0x1000`; its state is `0` unprepared, `1` preparing,
+`2` ready or `3` failed. Unknown values are unavailable. `start=0` only reads
+state. Explicit owner enable/resume/recheck uses `start=1`, sharing the existing
+background preparation or retrying a failed one. This does not claim a desktop
+lease, capture pixels, resume a pause, or replay any action. The background SDK
+wait is 120 seconds; each capture caller still has its independent eight-second
+preparation deadline and cancellation checkpoint. Late completion can warm
+readiness but cannot enter a cancelled/timed-out caller's capture. Ready means
+preparation finished, not that future grants/target identity are guaranteed;
+every actual capture retains the SDK's live owner and target checks.
+
+Rechecking restarts the host's wait, not the fixed SDK's owner-identity cache.
+A timed-out background scan can finish and then become ready. A genuinely failed
+SDK scan stays cached for that process: close other capture hosts, quit normally,
+and reopen Hexagon. Rechecking never clears an uncoordinated-capture tombstone in the current
+process. Reopening starts a new process that must repeat live owner/target checks;
+it neither deletes safety records nor replays failed actions. The seven-language failure hint states this
+recovery route; do not promise that retrying the same PID rebuilds its capability.
