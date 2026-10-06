@@ -82,8 +82,18 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
         const result = await api.browserOpen(projectRoot, mode, { element: t('elementContext.select'), region: t('elementContext.region'), done: t('elementContext.done'), hint: t('elementContext.hint') })
         if (mounted.current && ticket === generation.current) setSession(result)
       } else if (session) {
-        await api.browserDetach(projectRoot, session.session_id)
-        if (mounted.current && ticket === generation.current) setSession(null)
+        let disconnected: BrowserSession | null = null
+        try { await api.browserDetach(projectRoot, session.session_id) }
+        catch (error) {
+          // Owner 2026-10-06: manually closing Chromium exits its worker before
+          // the next UI poll. A liveness rejection then looked like an internal
+          // detach failure. Reconcile only a host-confirmed closed/absent session;
+          // preserve real failures and any replacement session's identity.
+          try { disconnected = await api.browserStatus(projectRoot) }
+          catch { throw error }
+          if (disconnected && (disconnected.connected || disconnected.project_root !== projectRoot || disconnected.session_id !== session.session_id)) throw error
+        }
+        if (mounted.current && ticket === generation.current) setSession(disconnected)
       }
     } catch (e) { if (mounted.current && ticket === generation.current) setError(errText(e)) }
     finally { writing.current = false; if (mounted.current) setPending(false) }
@@ -111,7 +121,7 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
       <div className="desktop-control-actions">
         <button data-browser-action="browserManaged" className="btn" disabled={pending || !enabled || Boolean(session?.connected)} title={tip('browser.managed', 'browserManaged')} onClick={() => void change('managed')}>{t('browser.managed')}</button>
         <button data-browser-action="browserConnect" className="btn" disabled={pending || Boolean(session?.connected)} title={tip('browser.extension', 'browserConnect')} onClick={() => { setExtensionSetup(true); setError('') }}>{t('browser.extension')}</button>
-        {session && <button data-browser-action="browserDetach" className="btn" disabled={pending} title={tip('browser.detach', 'browserDetach')} onClick={() => void change()}>{t('browser.detach')}</button>}
+        {session?.connected && <button data-browser-action="browserDetach" className="btn" disabled={pending} title={tip('browser.detach', 'browserDetach')} onClick={() => void change()}>{t('browser.detach')}</button>}
       </div>
       {extensionSetup && !session?.connected && <div className="browser-extension-setup">
         <strong>{t('browser.setupTitle')}</strong>

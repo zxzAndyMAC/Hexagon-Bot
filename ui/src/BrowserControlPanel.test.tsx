@@ -122,6 +122,9 @@ it('re-enables launch after browser closure and shows pause or disabled reasons'
   session.mockResolvedValue({ ...browser, connected: false })
   await act(async () => window.dispatchEvent(new Event('focus')))
   expect(managed().disabled).toBe(false)
+  // Owner 2026-10-06: the retained disconnected record is informational;
+  // offering detach here used to call a dead worker and show an internal error.
+  expect(el.querySelector('[data-browser-action=browserDetach]')).toBeNull()
   for (const state of [{ ...desktop, paused: true }, { ...desktop, enabled: false }]) {
     consent.mockResolvedValue(state)
     await act(async () => window.dispatchEvent(new Event('hexagon:desktop-status-changed')))
@@ -148,4 +151,64 @@ it('keeps a known live session protected when its refresh fails', async () => {
   expect(el.querySelector<HTMLButtonElement>('[data-browser-action=browserManaged]')!.disabled).toBe(true)
   await act(async () => el.querySelector<HTMLButtonElement>('[data-browser-action=browserDetach]')!.click())
   expect(detach).toHaveBeenCalledExactlyOnceWith('/a', 's')
+})
+
+it('shows a manually closed browser as disconnected without offering another detach', async () => {
+  await i18n.changeLanguage('zh-CN')
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue(desktop)
+  vi.spyOn(api, 'browserStatus').mockResolvedValue({ ...browser, connected: false })
+  const detach = vi.spyOn(api, 'browserDetach')
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<BrowserControlPanel inline />))
+  expect(el.textContent).toContain(i18n.t('browser.disconnected'))
+  expect(el.querySelector('[data-browser-action=browserDetach]')).toBeNull()
+  expect(el.querySelector<HTMLButtonElement>('[data-browser-action=browserManaged]')!.disabled).toBe(false)
+  expect(detach).not.toHaveBeenCalled()
+})
+
+it('reconciles a browser closed before the next status poll instead of showing an internal error', async () => {
+  await i18n.changeLanguage('zh-CN')
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue(desktop)
+  const read = vi.spyOn(api, 'browserStatus').mockResolvedValue(browser)
+  const detach = vi.spyOn(api, 'browserDetach').mockRejectedValue({ code: 'internal', message: 'browser disconnected; explicitly open a new session' })
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<BrowserControlPanel inline />))
+  // Owner 2026-10-06: closing Chromium leaves a disconnected session record;
+  // the stale UI still sends detach, whose liveness rejection is mapped to internal.
+  read.mockResolvedValue({ ...browser, connected: false })
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-browser-action=browserDetach]')!.click())
+  expect(detach).toHaveBeenCalledExactlyOnceWith('/a', 's')
+  expect(el.querySelector('[role="alert"]')).toBeNull()
+  expect(el.textContent).toContain(i18n.t('browser.disconnected'))
+  expect(el.querySelector('[data-browser-action=browserDetach]')).toBeNull()
+  expect(el.querySelector<HTMLButtonElement>('[data-browser-action=browserManaged]')!.disabled).toBe(false)
+})
+
+it('accepts host-confirmed absence after a stale detach failure', async () => {
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue(desktop)
+  const read = vi.spyOn(api, 'browserStatus').mockResolvedValue(browser)
+  vi.spyOn(api, 'browserDetach').mockRejectedValue(new Error('worker gone'))
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<BrowserControlPanel inline />))
+  read.mockResolvedValue(null)
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-browser-action=browserDetach]')!.click())
+  expect(el.querySelector('[role="alert"]')).toBeNull()
+  expect(el.querySelector('[data-browser-action=browserDetach]')).toBeNull()
+  expect(el.querySelector<HTMLButtonElement>('[data-browser-action=browserManaged]')!.disabled).toBe(false)
+})
+
+it.each(['connected', 'unreadable', 'replacement', 'other project'])('preserves a detach failure when refreshed status is %s', async state => {
+  await i18n.changeLanguage('zh-CN')
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue(desktop)
+  const read = vi.spyOn(api, 'browserStatus').mockResolvedValue(browser)
+  vi.spyOn(api, 'browserDetach').mockRejectedValue({ code: 'internal', message: 'detach failed' })
+  root = createRoot(el); document.body.appendChild(el)
+  await act(async () => root.render(<BrowserControlPanel inline />))
+  if (state === 'unreadable') read.mockRejectedValue(new Error('status unavailable'))
+  else if (state === 'replacement') read.mockResolvedValue({ ...browser, session_id: 'replacement', connected: false })
+  else if (state === 'other project') read.mockResolvedValue({ ...browser, project_root: '/other', connected: false })
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-browser-action=browserDetach]')!.click())
+  expect(el.querySelector('[role="alert"]')!.textContent).toBe(i18n.t('errors.internal'))
+  expect(el.querySelector('[data-browser-action=browserDetach]')).not.toBeNull()
+  expect(el.querySelector<HTMLButtonElement>('[data-browser-action=browserManaged]')!.disabled).toBe(true)
 })
