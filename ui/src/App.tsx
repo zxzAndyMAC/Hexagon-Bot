@@ -36,6 +36,7 @@ export default function App() {
   const [computerSettings, setComputerSettings] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
+  const timelineActive = useUiStore((s) => (s.tabs.find((tab) => tab.id === s.activeTab) ?? s.tabs[0])?.kind === 'timeline')
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
   const [projectOpen, setProjectOpen] = useState<boolean | null>(null)
   const { onKey } = usePendingKeys()
@@ -186,7 +187,18 @@ export default function App() {
       }
       if (matches(e, bindingFor('focusComposer'))) {
         e.preventDefault()
-        document.getElementById('composer-input')?.focus()
+        const s = useUiStore.getState()
+        if (s.modalScope !== 'workbench') return
+        const timeline = s.tabs.find((tab) => tab.kind === 'timeline')
+        if (!timeline) return
+        s.setActiveTab(timeline.id)
+        // Owner 2026-10-06: reveal the timeline before focusing its hidden input.
+        requestAnimationFrame(() => {
+          const current = useUiStore.getState()
+          if (current.modalScope === 'workbench' && current.activeTab === timeline.id) {
+            document.getElementById('composer-input')?.focus()
+          }
+        })
         return
       }
       if (matches(e, bindingFor('toggleRail'))) {
@@ -267,8 +279,12 @@ export default function App() {
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <TabBar />
           <CenterPanes />
-          <IntakeBar />
-          <Composer />
+          {/* Owner 2026-10-06: the input used to take space from every tab.
+              Hide rather than unmount so returning keeps the draft and attachments. */}
+          <div hidden={!timelineActive}>
+            <IntakeBar />
+            <Composer />
+          </div>
         </div>
         <SidePanel />
       </div>
