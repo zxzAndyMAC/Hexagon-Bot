@@ -13,6 +13,7 @@ export function resumeDesktop(): Promise<void> {
     try {
       const status = await api.desktopStatus()
       await api.desktopControl('resume', status.project_root)
+      window.dispatchEvent(new Event('hexagon:desktop-status-changed'))
       useUiStore.getState().pushToast(i18n.t('computer.resumed'))
     } catch (error) { useUiStore.getState().pushToast(errText(error), 'err') }
   })().finally(() => { resuming = undefined })
@@ -27,6 +28,7 @@ export function pauseDesktop(): Promise<void> {
     try {
       const status = await api.desktopStatus()
       await api.desktopControl('pause', status.project_root)
+      window.dispatchEvent(new Event('hexagon:desktop-status-changed'))
       useUiStore.getState().pushToast(i18n.t('computer.paused'))
     } catch (error) { useUiStore.getState().pushToast(errText(error), 'err') }
   })().finally(() => { pending = undefined })

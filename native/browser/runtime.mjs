@@ -48,7 +48,10 @@ export class Runtime {
     try {
       if (request.method === 'open') {
         if (this.session) throw new Error('NOT_EXECUTED: detach current browser first');
-        const server = await createConnection({ extension: p.mode === 'extension', browser: { browserName: 'chromium', isolated: p.mode === 'managed', launchOptions: { headless: this.headless }, contextOptions: { viewport: { width: 1280, height: 800 }, acceptDownloads: false } }, webmcp: false, saveSession: false, codegen: 'none', snapshot: { mode: 'none' }, timeouts: { action: 5000, navigation: 15000, settle: 0 } });
+        // Owner incident 2026-10-06: fixed viewport emulation defaults to DPR=1,
+        // so even scale:'device' still captures a half-size Retina surface (issue17).
+        // Visible windows use native display pixels; only headless fixtures emulate size.
+        const server = await createConnection({ extension: p.mode === 'extension', browser: { browserName: 'chromium', isolated: p.mode === 'managed', launchOptions: { headless: this.headless }, contextOptions: { viewport: this.headless ? { width: 1280, height: 800 } : null, acceptDownloads: false } }, webmcp: false, saveSession: false, codegen: 'none', snapshot: { mode: 'none' }, timeouts: { action: 5000, navigation: 15000, settle: 0 } });
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
         this.client = new Client({ name: 'hexagon-owner-browser', version: '1.0.0' });
         await server.connect(serverTransport);

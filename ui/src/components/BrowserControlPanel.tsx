@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import type { BrowserSession } from '../gen/BrowserSession'
 import type { BrowserMode } from '../gen/BrowserMode'
+import type { DesktopStatus } from '../gen/DesktopStatus'
 import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
 import { Icon } from './Icon'
 
@@ -11,7 +12,7 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
   const [open, setOpen] = useState(inline)
   const [session, setSession] = useState<BrowserSession | null>(null)
   const [root, setRoot] = useState('')
-  const [enabled, setEnabled] = useState(false)
+  const [desktopStatus, setDesktopStatus] = useState<DesktopStatus | null>(null)
   const [pending, setPending] = useState(false)
   const [extensionSetup, setExtensionSetup] = useState(false)
   const [openingStore, setOpeningStore] = useState(false)
@@ -40,31 +41,48 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
       if (polling || writing.current) return
       polling = true
       const ticket = generation.current
+      let consentRead = false
       try {
         const desktop = await api.desktopStatus()
+        if (!active || !mounted.current || ticket !== generation.current) return
+        // Owner 2026-10-06: a disconnected browser read once discarded valid
+        // consent/pause state and permanently greyed both explicit retry paths.
+        setRoot(desktop.project_root); setDesktopStatus(desktop)
+        consentRead = true
+        setSession(previous => previous?.project_root === desktop.project_root ? previous : null)
         const browser = await api.browserStatus(desktop.project_root)
         if (active && mounted.current && ticket === generation.current) {
-          setRoot(desktop.project_root); setEnabled(desktop.enabled && !desktop.paused); setSession(browser)
+          setSession(browser); setError('')
         }
-      } catch (e) { if (active && mounted.current) setError(errText(e)) }
+      } catch (e) {
+        if (active && mounted.current && ticket === generation.current) {
+          if (!consentRead) { setRoot(''); setDesktopStatus(null) }
+          setError(errText(e))
+        }
+      }
       finally { polling = false }
     }
     void refresh()
     const timer = window.setInterval(() => { if (!document.hidden) void refresh() }, 2000)
+    window.addEventListener('focus', refresh)
+    window.addEventListener('hexagon:desktop-status-changed', refresh)
     const outside = (event: PointerEvent) => { if (!inline && event.target instanceof Node && !container.current?.contains(event.target)) setOpen(false) }
     document.addEventListener('pointerdown', outside)
-    return () => { active = false; clearInterval(timer); document.removeEventListener('pointerdown', outside) }
+    return () => { active = false; clearInterval(timer); document.removeEventListener('pointerdown', outside); window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
   }, [open, inline])
   async function change(mode?: BrowserMode) {
-    if (!root || writing.current) return
+    // Owner 2026-10-06: consent reads may fail while a known session is live.
+    // Keep explicit detach bound to that session; only launches need fresh consent.
+    const projectRoot = mode ? root : session?.project_root
+    if (!projectRoot || writing.current) return
     writing.current = true; setPending(true); setError('')
     const ticket = ++generation.current
     try {
       if (mode) {
-        const result = await api.browserOpen(root, mode, { element: t('elementContext.select'), region: t('elementContext.region'), done: t('elementContext.done'), hint: t('elementContext.hint') })
+        const result = await api.browserOpen(projectRoot, mode, { element: t('elementContext.select'), region: t('elementContext.region'), done: t('elementContext.done'), hint: t('elementContext.hint') })
         if (mounted.current && ticket === generation.current) setSession(result)
       } else if (session) {
-        await api.browserDetach(root, session.session_id)
+        await api.browserDetach(projectRoot, session.session_id)
         if (mounted.current && ticket === generation.current) setSession(null)
       }
     } catch (e) { if (mounted.current && ticket === generation.current) setError(errText(e)) }
@@ -78,6 +96,7 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
     finally { if (mounted.current) setOpeningStore(false) }
   }
   const tip = (key: string, action: ActionId) => [t(key), formatBinding(bindingFor(action))].filter(Boolean).join(' · ')
+  const enabled = desktopStatus?.enabled && !desktopStatus.paused
   return <div ref={container} className={`desktop-control${inline ? ' desktop-control-inline' : ''}`} onKeyDown={event => {
     if (!inline && event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus() }
   }}>
@@ -86,7 +105,8 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
     {open && <section className="desktop-control-popover" role={inline ? 'region' : 'dialog'} aria-label={t('browser.title')} aria-busy={pending}>
       <strong>{t('browser.title')}</strong><p>{t('browser.description')}</p>
       <p className="dim3">{t('browser.extensionHint')}</p>
-      {!enabled && <p>{t('browser.enableHint')}</p>}
+      {!desktopStatus && <p>{t('computer.loading')}</p>}
+      {desktopStatus && !enabled && <p role="status">{t(desktopStatus.enabled ? 'computer.paused' : 'computer.disabled')} · {t('browser.enableHint')}</p>}
       {session && <p>{t(session.mode === 'managed' ? 'browser.managed' : 'browser.extension')} · {session.connected ? session.title || session.url : t('browser.disconnected')}</p>}
       <div className="desktop-control-actions">
         <button data-browser-action="browserManaged" className="btn" disabled={pending || !enabled || Boolean(session?.connected)} title={tip('browser.managed', 'browserManaged')} onClick={() => void change('managed')}>{t('browser.managed')}</button>

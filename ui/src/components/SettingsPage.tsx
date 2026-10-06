@@ -1,7 +1,7 @@
 import { PermissionScope } from './PermissionActions'
 import { DesktopControlPanel } from './DesktopControlPanel'
 import { BrowserControlPanel } from './BrowserControlPanel'
-import { pauseDesktop, resumeDesktop } from '../desktopPause'
+import { DesktopPauseButton } from './DesktopPauseButton'
 import { localLogTime } from '../diagTime'
 import { ProjectApprovalMode } from './ProjectApprovalMode'
 import { DesktopPermissions } from './DesktopPermissions'
@@ -1632,14 +1632,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false, i
           <Icon name="arrow-left" size={12} /> {t('settings.back')}
         </button>
         <strong style={{ fontWeight: 510 }}>{t('settings.title')}</strong>
-        {!projectless && <button type="button" className="btn" onClick={() => void pauseDesktop()}
-          title={`${t('computer.pause')} · ${formatBinding(bindingFor('desktopPause'))}`}>
-          <Icon name="pause" size={12} /> {t('computer.pause')}
-        </button>}
-        {!projectless && <button type="button" className="btn" onClick={() => void resumeDesktop()}
-          title={`${t('computer.resume')} · ${formatBinding(bindingFor('desktopResume'))}`}>
-          {t('computer.resume')}
-        </button>}
+        {!projectless && <DesktopPauseButton />}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <div style={{ width: 180, padding: '14px 10px', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 2 }}>

@@ -48,7 +48,8 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
     void refresh()
     const tick = window.setInterval(() => { if (!document.hidden) void refresh() }, 2000)
     window.addEventListener('focus', refresh)
-    return () => { mounted.current = false; generation.current++; window.clearInterval(tick); window.removeEventListener('focus', refresh) }
+    window.addEventListener('hexagon:desktop-status-changed', refresh)
+    return () => { mounted.current = false; generation.current++; window.clearInterval(tick); window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
   }, [refresh])
   const control = useCallback(async (action: DesktopControl) => {
     if (writing.current || !status) return
@@ -64,6 +65,7 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
         if (!permissions.ready) { window.dispatchEvent(new Event('hexagon:desktop-permissions')); return }
       }
       const value = await api.desktopControl(action, projectRoot)
+      window.dispatchEvent(new Event('hexagon:desktop-status-changed'))
       if (mounted.current) {
         setStatus(value)
         if (action === 'clear_screenshots') window.dispatchEvent(new Event('hexagon:screenshots-cleared'))
