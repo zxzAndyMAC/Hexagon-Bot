@@ -5,8 +5,9 @@
 // 且脱离设计语言——ui-audit report P1-8。
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useUiStore } from '../store'
+import { useUiStore, type ConfirmReq } from '../store'
 import { errText } from '../api'
+import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
 
 export function ConfirmDialog({
   title,
@@ -16,6 +17,9 @@ export function ConfirmDialog({
   input,
   onConfirm,
   onCancel,
+  alternate,
+  confirmAction,
+  cancelAction,
 }: {
   title: string
   body?: string
@@ -24,20 +28,38 @@ export function ConfirmDialog({
   input?: { placeholder?: string; required?: boolean }
   onConfirm: (inputValue: string) => unknown | Promise<unknown>
   onCancel: () => void
+  alternate?: ConfirmReq['alternate']
+  confirmAction?: ActionId
+  cancelAction?: ActionId
 }) {
   const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [inputVal, setInputVal] = useState('')
   const confirmRef = useRef<HTMLButtonElement>(null)
+  const alternateRef = useRef<HTMLButtonElement>(null)
+  const hint = (label: string, action?: ActionId) => {
+    const binding = action ? formatBinding(bindingFor(action)) : ''
+    return binding ? `${label} · ${binding}` : label
+  }
 
   useEffect(() => {
     confirmRef.current?.focus()
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+      // I1 / 2026-10-06: native previews occupy the browser's top layer.
+      // Their dismissal must not also cancel an underlying draft decision.
+      if (document.querySelector('dialog[open]')) return
+      if (busy) return
+      if (cancelAction ? matches(e, bindingFor(cancelAction)) : e.key === 'Escape') {
+        e.preventDefault(); e.stopImmediatePropagation(); onCancel()
+      } else if (confirmAction && matches(e, bindingFor(confirmAction))) {
+        e.preventDefault(); e.stopImmediatePropagation(); confirmRef.current?.click()
+      } else if (alternate?.action && matches(e, bindingFor(alternate.action))) {
+        e.preventDefault(); e.stopImmediatePropagation(); alternateRef.current?.click()
+      }
     }
     window.addEventListener('keydown', h, true)
     return () => window.removeEventListener('keydown', h, true)
-  }, [onCancel])
+  }, [onCancel, busy, cancelAction, confirmAction, alternate])
 
   const confirm = async () => {
     if (busy) return // 防双击双发
@@ -57,7 +79,7 @@ export function ConfirmDialog({
         background: 'rgba(0,0,0,.45)', display: 'flex',
         alignItems: 'center', justifyContent: 'center',
       }}
-      onClick={onCancel}
+      onClick={() => { if (!busy) onCancel() }}
       role="presentation"
     >
       <div
@@ -89,11 +111,17 @@ export function ConfirmDialog({
           />
         )}
         <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
-          <button className="btn" disabled={busy} onClick={onCancel}>
+          <button className="btn" title={hint(t('agent.cancel'), cancelAction)} disabled={busy} onClick={onCancel}>
             {t('agent.cancel')}
           </button>
+          {alternate && <button ref={alternateRef} className="btn" title={hint(alternate.label, alternate.action)} disabled={busy} onClick={async () => {
+            if (busy) return
+            setBusy(true)
+            try { await alternate.run() } finally { setBusy(false) }
+          }}>{alternate.label}</button>}
           <button
             ref={confirmRef}
+            title={hint(confirmLabel ?? t('cards.confirm'), confirmAction)}
             className={`btn primary${danger ? ' danger' : ''}`}
             disabled={busy || Boolean(input?.required && !inputVal.trim())}
             onClick={() => void confirm()}
@@ -114,24 +142,31 @@ export function ConfirmHost() {
   const invalidate = useUiStore((s) => s.invalidate)
   const pushToast = useUiStore((s) => s.pushToast)
   if (!req) return null
+  const run = async (action: () => unknown | Promise<unknown>) => {
+    let succeeded = false
+    try {
+      await action()
+      if (!req.skipRefresh) await invalidate()
+      succeeded = true
+    } catch (e) {
+      pushToast(errText(e), 'err')
+    } finally {
+      // An old asynchronous confirmation cannot close a newer dialog.
+      if (useUiStore.getState().confirmReq === req) clear(succeeded)
+    }
+  }
   return (
     <ConfirmDialog
       title={req.title}
       body={req.body}
       danger={req.danger}
       confirmLabel={req.confirmLabel}
+      confirmAction={req.confirmAction}
+      cancelAction={req.cancelAction}
       input={req.input}
-      onCancel={clear}
-      onConfirm={async (v) => {
-        try {
-          await req.run(v)
-          await invalidate()
-        } catch (e) {
-          pushToast(errText(e), 'err')
-        } finally {
-          clear()
-        }
-      }}
+      onCancel={() => clear()}
+      alternate={req.alternate && { ...req.alternate, run: () => run(req.alternate!.run) }}
+      onConfirm={(v) => run(() => req.run(v))}
     />
   )
 }

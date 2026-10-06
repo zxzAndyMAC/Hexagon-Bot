@@ -2066,32 +2066,52 @@ pub fn set_agent_sleeping(
 /// 若是 turn_started 即进程被杀时的盘上痕迹。闭环轨迹（补 turn_failed）、
 /// run 标 interrupted、恢复卡入队。幂等：边界已闭，再开零检出。
 pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
+    // I2 / V05 (2026-10-06): a child finish used to mask its still-running
+    // parent because MAX(boundary) conflated instances of turns. Legacy terminal
+    // rows only close the immediately preceding non-child start; ambiguous child
+    // completion costs an owner recovery, not silent loss of the parent task.
     let mut st = db.conn().prepare(
-        "SELECT stage_run_id, agent_id FROM events e
-         WHERE e.project_id = ?1 AND e.stage_run_id IS NOT NULL
-           AND e.kind = 'turn_started'
-           AND e.id = (
-             SELECT MAX(id) FROM events
-             WHERE project_id = e.project_id
-               AND stage_run_id IS e.stage_run_id
-               AND agent_id IS e.agent_id
-               AND kind IN ('turn_started','turn_finished','turn_failed'))",
+        "SELECT e.stage_run_id,e.agent_id,e.id FROM events e
+         WHERE e.project_id=?1 AND e.stage_run_id IS NOT NULL AND e.kind='turn_started'
+         AND COALESCE(json_extract(e.payload,'$.subagent'),0)=0
+         AND e.id=(SELECT MAX(t.id) FROM events t WHERE t.project_id=e.project_id
+             AND t.stage_run_id IS e.stage_run_id AND t.agent_id IS e.agent_id
+             AND t.kind='turn_started' AND COALESCE(json_extract(t.payload,'$.subagent'),0)=0)
+         AND NOT EXISTS(SELECT 1 FROM events t WHERE t.project_id=e.project_id
+             AND t.stage_run_id IS e.stage_run_id AND t.agent_id IS e.agent_id AND t.id>e.id
+             AND t.kind IN ('turn_finished','turn_failed')
+             AND COALESCE(json_extract(t.payload,'$.subagent'),0)=0
+             AND (json_extract(t.payload,'$.turn_id')=e.id OR
+               (json_extract(t.payload,'$.turn_id') IS NULL AND e.id=(SELECT MAX(s.id)
+                FROM events s WHERE s.project_id=e.project_id AND s.stage_run_id IS e.stage_run_id
+                AND s.agent_id IS e.agent_id AND s.kind='turn_started' AND s.id<t.id))))",
     )?;
-    let dangling: Vec<(String, Option<String>)> = st
-        .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+    let dangling: Vec<(String, Option<String>, i64)> = st
+        .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
     let mut n = 0;
-    for (run_id, agent_id) in dangling {
+    for (run_id, agent_id, turn_id) in dangling {
         // 2026-10-01 live acceptance #17: an extra turn can crash while its
         // stage is waiting for a stamp. Close that dead turn as well; only an
         // active stage needs a recovery card. Never reopen a completed stage.
         db.append_event(
             project_id,
             EventKind::TurnFailed,
-            json!({"reason": "interrupted_shutdown"}),
+            json!({"reason": "interrupted_shutdown", "turn_id":turn_id, "subagent":false}),
             agent_id.as_deref(),
             Some(&run_id),
         )?;
+        crate::diag::note(
+            crate::diag::CLASS_HOST,
+            false,
+            Some(project_id),
+            agent_id.as_deref(),
+            Some(&run_id),
+            Some(&turn_id.to_string()),
+            "activation_recovery",
+            "interrupted_parent_turn",
+            std::time::Instant::now(),
+        );
         // 只收编仍 active 的 run；waiting_stamp/done 等已收束态不动
         let state: Option<String> = db
             .conn()

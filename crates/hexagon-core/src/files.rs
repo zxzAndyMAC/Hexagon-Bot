@@ -9,7 +9,7 @@
 //! 大小上限：内嵌编辑器只做小改（ADR 0031）。放进 webview 的巨型文件会
 //! 卡死界面，比拒一次打开贵，所以超过 [`MAX_TEXT_BYTES`] 直接拒绝。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 单文件读/写上限。1 MiB：够看和改源码，不够把二进制或日志灌进编辑器。
@@ -34,6 +34,18 @@ pub enum RepoEntryKind {
     Link,
 }
 
+/// Owner editor read, including the exact project incarnation and saved text.
+/// The original text is the write precondition, not a refreshed save-time read.
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct RepoFileSnapshot {
+    pub path: String,
+    pub content: String,
+    pub project_root: String,
+    #[ts(type = "number")]
+    pub generation: u64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RepoFsError {
     #[error("path escapes repository: {0}")]
@@ -46,6 +58,10 @@ pub enum RepoFsError {
     NotDir(String),
     #[error("already exists: {0}")]
     AlreadyExists(String),
+    #[error("project changed; reopen the file in the current project")]
+    ProjectChanged,
+    #[error("file changed since it was opened; saved text was not overwritten: {0}")]
+    FileChanged(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -102,6 +118,101 @@ pub fn read_repo_file(root: &Path, rel: &str) -> Result<String, RepoFsError> {
         return Err(RepoFsError::NotText(show(rel)));
     }
     String::from_utf8(bytes).map_err(|_| RepoFsError::NotText(show(rel)))
+}
+
+pub fn read_repo_file_snapshot(
+    root: &Path,
+    generation: u64,
+    rel: &str,
+    expected_project_root: &str,
+) -> Result<RepoFileSnapshot, RepoFsError> {
+    let project_root = root.canonicalize()?.display().to_string();
+    if project_root != expected_project_root {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(crate::PROJECT_ID),
+            Some("owner"),
+            None,
+            None,
+            "owner_editor_read",
+            "project_changed",
+            std::time::Instant::now(),
+        );
+        return Err(RepoFsError::ProjectChanged);
+    }
+    Ok(RepoFileSnapshot {
+        path: rel.into(),
+        content: read_repo_file(root, rel)?,
+        project_root,
+        generation,
+    })
+}
+
+pub fn write_repo_file_snapshot(
+    root: &Path,
+    generation: u64,
+    snapshot: &RepoFileSnapshot,
+    content: &str,
+) -> Result<(), RepoFsError> {
+    let started = std::time::Instant::now();
+    let result = (|| {
+        // Benchmark I1 / owner decision 2026-10-06: path-only saves routed an
+        // old draft into the new project. A root key alone also admits close /
+        // reopen of that root. Missing/mismatched evidence must reject a save:
+        // false negative costs rereading; false positive overwrites owner work.
+        if generation != snapshot.generation
+            || root.canonicalize()?.display().to_string() != snapshot.project_root
+        {
+            return Err(RepoFsError::ProjectChanged);
+        }
+        if content.len() as u64 > MAX_TEXT_BYTES {
+            return Err(RepoFsError::TooLarge(show(&snapshot.path)));
+        }
+        let _lease = crate::tools::writeguard::repository_lock_for_root(root)?;
+        if read_repo_file(root, &snapshot.path)? != snapshot.content {
+            return Err(RepoFsError::FileChanged(show(&snapshot.path)));
+        }
+        let (path, _) = walk(root, &snapshot.path)?;
+        let permissions = std::fs::metadata(&path)?.permissions();
+        let parent = path
+            .parent()
+            .ok_or_else(|| RepoFsError::PathEscape(show(&snapshot.path)))?;
+        // A short write / full disk must not truncate the saved original. Reuse
+        // the installed tempfile mechanism used for experience publication.
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        std::io::Write::write_all(&mut temp, content.as_bytes())?;
+        temp.as_file().set_permissions(permissions)?;
+        temp.as_file().sync_all()?;
+        // Host writers share the lease; external editors do not. Detect a
+        // changed target before replacement without claiming external atomicity.
+        if read_repo_file(root, &snapshot.path)? != snapshot.content {
+            return Err(RepoFsError::FileChanged(show(&snapshot.path)));
+        }
+        temp.persist(&path).map_err(|e| RepoFsError::Io(e.error))?;
+        Ok(())
+    })();
+    crate::diag::note(
+        if result.is_err() {
+            crate::diag::CLASS_REJECT
+        } else {
+            crate::diag::CLASS_JUDGE
+        },
+        result.is_err(),
+        Some(crate::PROJECT_ID),
+        Some("owner"),
+        None,
+        None,
+        "owner_editor_save",
+        match &result {
+            Err(RepoFsError::ProjectChanged) => "project_changed",
+            Err(RepoFsError::FileChanged(_)) => "file_changed",
+            Err(_) => "save_refused",
+            Ok(()) => "saved",
+        },
+        started,
+    );
+    result
 }
 
 /// 读 `rel` 在 git HEAD 的版本，作中栏文件页的对比基线。
@@ -274,6 +385,71 @@ mod tests {
 
     fn root() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    // Benchmark I1 / 2026-10-06: an old editor targeted the current root;
+    // remounting alone loses its draft and still cannot reject a delayed IPC.
+    proptest::proptest! {
+        #[test]
+        fn editor_snapshot_never_overwrites_another_project_or_incarnation(
+            original in "[a-z]{0,64}", replacement in "[A-Z]{1,64}", same_root in proptest::bool::ANY,
+        ) {
+            let a = root();
+            let b = root();
+            fs::write(a.path().join("README.md"), &original).unwrap();
+            fs::write(b.path().join("README.md"), "B owner file").unwrap();
+            let expected_root = a.path().canonicalize().unwrap().display().to_string();
+            let snapshot = read_repo_file_snapshot(a.path(), 1, "README.md", &expected_root).unwrap();
+            let target = if same_root { a.path() } else { b.path() };
+            let generation = if same_root { 2 } else { 1 };
+            proptest::prop_assert!(write_repo_file_snapshot(target, generation, &snapshot, &replacement).is_err());
+            proptest::prop_assert_eq!(read_repo_file(a.path(), "README.md").unwrap(), original);
+            proptest::prop_assert_eq!(read_repo_file(b.path(), "README.md").unwrap(), "B owner file");
+        }
+
+        #[test]
+        fn editor_snapshot_preserves_newer_saved_text(
+            original in "[a-z]{0,64}", replacement in "[A-Z]{1,64}",
+        ) {
+            let dir = root();
+            fs::write(dir.path().join("README.md"), &original).unwrap();
+            let expected = dir.path().canonicalize().unwrap().display().to_string();
+            let snapshot = read_repo_file_snapshot(dir.path(), 7, "README.md", &expected).unwrap();
+            fs::write(dir.path().join("README.md"), &replacement).unwrap();
+            proptest::prop_assert!(matches!(
+                write_repo_file_snapshot(dir.path(), 7, &snapshot, "owner draft"),
+                Err(RepoFsError::FileChanged(_))
+            ));
+            proptest::prop_assert_eq!(read_repo_file(dir.path(), "README.md").unwrap(), replacement);
+        }
+    }
+
+    #[test]
+    fn editor_snapshot_save_reuses_host_lease_and_refreshes_only_after_success() {
+        let dir = root();
+        fs::write(dir.path().join("README.md"), "original").unwrap();
+        let expected = dir.path().canonicalize().unwrap().display().to_string();
+        let mut snapshot = read_repo_file_snapshot(dir.path(), 7, "README.md", &expected).unwrap();
+        let lease = crate::tools::writeguard::repository_lock_for_root(dir.path()).unwrap();
+        assert!(write_repo_file_snapshot(dir.path(), 7, &snapshot, "draft").is_err());
+        assert_eq!(read_repo_file(dir.path(), "README.md").unwrap(), "original");
+        drop(lease);
+        write_repo_file_snapshot(dir.path(), 7, &snapshot, "draft").unwrap();
+        assert!(matches!(
+            write_repo_file_snapshot(dir.path(), 7, &snapshot, "next draft"),
+            Err(RepoFsError::FileChanged(_))
+        ));
+        snapshot.content = "draft".into();
+        write_repo_file_snapshot(dir.path(), 7, &snapshot, "next draft").unwrap();
+        assert_eq!(
+            read_repo_file(dir.path(), "README.md").unwrap(),
+            "next draft"
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2); // README and shared .hexagon lease, no leaked temp.
+        assert!(matches!(
+            read_repo_file_snapshot(dir.path(), 7, "README.md", "/stale/root"),
+            Err(RepoFsError::ProjectChanged)
+        ));
     }
 
     #[test]

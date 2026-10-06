@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { RepoFileSnapshot } from '../gen/RepoFileSnapshot'
 import { api, errText } from '../api'
 import { bindingFor, formatBinding } from '../keymap'
 import { useUiStore } from '../store'
@@ -16,16 +17,18 @@ import { DiffView } from './DiffView'
 /// 预览与对比用 display:none 藏编辑器而不卸载——保住撤销栈与滚动位。
 /// 测试环境不挂 Monaco（happy-dom 没有 worker）；正文用 textarea，
 /// 生产路径动态加载 monacoFile。两路都写同一个 textRef/buf，保存口径一致。
-/// `key={path}` 换文件时整页重挂，避免在 effect 里同步清状态。
+/// 项目身份与路径共同作 key：同一路径不能沿用上一项目的缓冲区。
 export function FileEditor({ path }: { path: string }) {
-  return <FileBody key={path} path={path} />
+  const projectRoot = useUiStore(s => s.projectRoot)
+  const projectEpoch = useUiStore(s => s.projectEpoch)
+  return projectRoot == null ? null : <FileBody key={`${projectEpoch}:${projectRoot}:${path}`} path={path} projectRoot={projectRoot} projectEpoch={projectEpoch} />
 }
 
 type Mode = 'edit' | 'preview' | 'compare'
 /// 对比基线：'saved'=盘上现读、'head'=git HEAD、数字=产物版本号。
 type Base = 'saved' | 'head' | number
 
-function FileBody({ path }: { path: string }) {
+function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRoot: string; projectEpoch: number }) {
   const { t } = useTranslation()
   const pushToast = useUiStore((s) => s.pushToast)
   const saveReq = useUiStore((s) => s.saveFileReq)
@@ -33,8 +36,15 @@ function FileBody({ path }: { path: string }) {
   const artifacts = useUiStore((s) => s.artifacts)
   const hostRef = useRef<HTMLDivElement>(null)
   const textRef = useRef('')
+  const snapshotRef = useRef<RepoFileSnapshot | null>(null)
+  const saving = useRef(false)
+  const liveRef = useRef(true)
+  const currentProject = useCallback(() => liveRef.current && useUiStore.getState().projectRoot === projectRoot && useUiStore.getState().projectEpoch === projectEpoch, [projectRoot, projectEpoch])
+  useEffect(() => { liveRef.current = true; return () => { liveRef.current = false } }, [])
   const seenSave = useRef(saveReq)
-  const saveRef = useRef<() => Promise<void>>(async () => {})
+  const saveRef = useRef<() => Promise<boolean>>(async () => false)
+  const editId = useId()
+  const setFileEdit = useUiStore(s => s.setFileEdit)
   const [text, setText] = useState<string | null>(null)
   const [buf, setBuf] = useState('')
   const [err, setErr] = useState<string | null>(null)
@@ -52,6 +62,11 @@ function FileBody({ path }: { path: string }) {
   const testing = import.meta.env.MODE === 'test'
   const isMd = /\.(md|markdown)$/i.test(path)
 
+  useEffect(() => {
+    setFileEdit(editId, { path, dirty, save: () => saveRef.current() })
+    return () => setFileEdit(editId, null)
+  }, [editId, path, dirty, setFileEdit])
+
   // `.hexagon/specs/x.md` ↔ 产物 path `specs/x.md`：文件页直接给出版本链基线。
   const artPath = path.startsWith('.hexagon/') ? path.slice('.hexagon/'.length) : null
   const versions = useMemo(
@@ -64,16 +79,18 @@ function FileBody({ path }: { path: string }) {
 
   useEffect(() => {
     let live = true
-    api.readRepoFile(path).then((body) => {
-      if (!live) return
+    api.readRepoFileSnapshot(path, projectRoot).then((snapshot) => {
+      if (!live || !currentProject()) return
+      snapshotRef.current = snapshot
+      const body = snapshot.content
       textRef.current = body
       setText(body)
       setBuf(body)
     }).catch((e) => {
-      if (live) setErr(errText(e))
+      if (live && currentProject()) setErr(errText(e))
     })
     return () => { live = false }
-  }, [path])
+  }, [path, projectRoot, projectEpoch, currentProject])
 
   useEffect(() => {
     if (testing || text == null) return
@@ -97,18 +114,29 @@ function FileBody({ path }: { path: string }) {
   }, [path, text, testing])
 
   async function save() {
-    if (text == null || busy) return
+    const snapshot = snapshotRef.current
+    if (!snapshot || saving.current || !currentProject()) return false
+    saving.current = true
     setBusy(true)
     try {
-      await api.writeRepoFile(path, textRef.current)
-      setDirty(false)
+      const saved = textRef.current
+      await api.writeRepoFile(snapshot, saved)
+      if (!currentProject()) return false
+      snapshotRef.current = { ...snapshot, content: saved }
+      // Editing during a pending save must not clear the newer unsaved text.
+      const stillDirty = textRef.current !== saved
+      setDirty(stillDirty)
+      setFileEdit(editId, { path, dirty: stillDirty, save: () => saveRef.current() })
       // 保存会改变「已保存」基线；epoch +1 让开着的对比重拉，免得 diff 说反话。
       setBasesEpoch((e) => e + 1)
       pushToast(t('file.saved'), 'ok')
+      return !stillDirty
     } catch (e) {
-      pushToast(errText(e), 'err')
+      if (currentProject()) pushToast(errText(e), 'err')
+      return false
     } finally {
-      setBusy(false)
+      saving.current = false
+      if (currentProject()) setBusy(false)
     }
   }
 

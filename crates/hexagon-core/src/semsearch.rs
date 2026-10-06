@@ -80,7 +80,10 @@ impl Embedder for HashEmbedder {
                 v[(h as usize) % DIMS] = 1.0;
             }
         } else {
-            for w in chars.windows(3) {
+            for (index, w) in chars.windows(3).enumerate() {
+                if index % 1024 == 0 {
+                    check()?;
+                }
                 let g: String = w.iter().collect();
                 let h = fnv64(&g);
                 let bucket = (h as usize) % DIMS;
@@ -139,26 +142,71 @@ fn unpack(b: &[u8]) -> Vec<f32> {
 
 // A15 review (2026-09-29): indexing, literal evidence and excerpts must read
 // the same text. Strict UTF-8 in only one path silently lost indexed identifiers.
-fn indexed_text(root: &Path, rel: &str) -> Option<String> {
-    let path = crate::tools::agent_readable_repo_path(root, rel).ok()?;
-    if path.metadata().ok()?.len() > INDEX_FILE_BYTES {
-        return None;
+enum IndexedText {
+    Text(String),
+    Large,
+    Binary,
+    Empty,
+}
+
+fn indexed_text(root: &Path, rel: &str) -> Result<IndexedText, crate::tools::ToolError> {
+    let path = crate::tools::agent_readable_repo_path(root, rel)?;
+    if path.metadata()?.len() > INDEX_FILE_BYTES {
+        return Ok(IndexedText::Large);
     }
     let mut bytes = Vec::new();
-    // Bound the read itself as well: an external editor can grow the file after
-    // metadata was checked. Keep the existing 8 KiB binary probe and lossy decode.
-    std::fs::File::open(path)
-        .ok()?
+    // Bound growth after metadata; IO errors are errors, never empty search.
+    std::fs::File::open(path)?
         .take(INDEX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.is_empty()
-        || bytes.len() as u64 > INDEX_FILE_BYTES
-        || bytes[..bytes.len().min(8192)].contains(&0)
-    {
-        return None;
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > INDEX_FILE_BYTES {
+        return Ok(IndexedText::Large);
     }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    if bytes[..bytes.len().min(8192)].contains(&0) {
+        return Ok(IndexedText::Binary);
+    }
+    if bytes.is_empty() {
+        return Ok(IndexedText::Empty);
+    }
+    Ok(IndexedText::Text(
+        String::from_utf8_lossy(&bytes).into_owned(),
+    ))
+}
+
+#[derive(Default, serde::Serialize)]
+pub struct IndexCoverage {
+    pub entries_visited: usize,
+    pub files_discovered: usize,
+    pub files_searched: usize,
+    pub skipped_large: usize,
+    pub skipped_binary: usize,
+    pub excluded_by_policy: usize,
+    pub skipped_changed: usize,
+    pub skipped_unreadable: usize,
+    pub reason: Option<&'static str>,
+    pub truncated: bool,
+    pub complete: bool,
+}
+impl IndexCoverage {
+    pub fn finish(&mut self, changed: usize, hit_limit: bool) {
+        self.skipped_changed = changed;
+        self.reason = self
+            .reason
+            .or(if hit_limit { Some("hit_limit") } else { None });
+        self.truncated = self.reason.is_some();
+        self.complete = !self.truncated
+            && self.skipped_large == 0
+            && self.skipped_binary == 0
+            && self.excluded_by_policy == 0
+            && self.skipped_changed == 0
+            && self.skipped_unreadable == 0;
+    }
+}
+
+pub struct RefreshResult {
+    pub indexed_files: usize,
+    pub coverage: IndexCoverage,
+    pub paths: Vec<String>,
 }
 
 /// 增量刷新索引：新/变文件重嵌，消失文件连带清块，未动文件整文件跳过。
@@ -168,11 +216,15 @@ pub fn refresh(
     root: &Path,
     embedder: &dyn Embedder,
     check: Checkpoint<'_>,
-) -> Result<usize, crate::tools::ToolError> {
-    let files: Vec<String> = crate::search::repo_files(root)
-        .into_iter()
-        .take(crate::search::INDEX_FILE_CAP)
-        .collect();
+) -> Result<RefreshResult, crate::tools::ToolError> {
+    let discovery = crate::search::repo_files_checked(root, crate::search::INDEX_FILE_CAP, check)?;
+    let mut coverage = IndexCoverage {
+        entries_visited: discovery.entries_visited,
+        files_discovered: discovery.paths.len(),
+        excluded_by_policy: discovery.excluded_by_policy,
+        reason: discovery.reason,
+        ..Default::default()
+    };
     // Audit A15 (2026-09-28): per-row commits and a shrinking Vec made refresh
     // needlessly expensive. Keep content hashing: mtime alone misses replacements.
     let mut indexed = 0usize;
@@ -181,11 +233,21 @@ pub fn refresh(
         .prepare("SELECT path FROM code_files")?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
-    for rel in &files {
+    for rel in &discovery.paths {
         check()?;
-        let Some(text) = indexed_text(root, rel) else {
-            continue;
+        let text = match indexed_text(root, rel)? {
+            IndexedText::Text(text) => text,
+            IndexedText::Large => {
+                coverage.skipped_large += 1;
+                continue;
+            }
+            IndexedText::Binary => {
+                coverage.skipped_binary += 1;
+                continue;
+            }
+            IndexedText::Empty => continue,
         };
+        coverage.files_searched += 1;
         stale.remove(rel);
         let sig = format!("{}:{:016x}", embedder.name(), fnv64(&text));
         let cur: Option<String> = db
@@ -207,7 +269,7 @@ pub fn refresh(
         check()?;
         // A15 review 2026-09-29: an editor can replace source while inference
         // runs. Never commit that old vector as though it described new text.
-        if indexed_text(root, rel).as_deref() != Some(text.as_str()) {
+        if !matches!(indexed_text(root, rel)?, IndexedText::Text(current) if current == text) {
             return Err(crate::tools::ToolError::Exec(
                 "source changed during indexing; retry search".into(),
             ));
@@ -231,16 +293,28 @@ pub fn refresh(
         tx.commit()?;
         indexed += 1;
     }
-    // 仓里已消失的文件：行与块一起清（不存在不报错——幂等收尾）。
-    let tx = db.conn().unchecked_transaction()?;
-    for p in stale {
-        db.conn()
-            .execute("DELETE FROM code_files WHERE path=?1", [&p])?;
-        db.conn()
-            .execute("DELETE FROM code_chunks WHERE path=?1", [&p])?;
+    // R7 (2026-10-06): omission by a cap is not evidence of deletion.
+    // ponytail: partial walks retain old cache rows; complete walks prune them.
+    // Query always re-reads/hash-checks rows; retaining a row never trusts old text.
+    if discovery.reason.is_none() {
+        check()?;
+        let tx = db.conn().unchecked_transaction()?;
+        for p in stale {
+            check()?;
+            db.conn()
+                .execute("DELETE FROM code_files WHERE path=?1", [&p])?;
+            db.conn()
+                .execute("DELETE FROM code_chunks WHERE path=?1", [&p])?;
+        }
+        check()?;
+        tx.commit()?;
     }
-    tx.commit()?;
-    Ok(indexed)
+    coverage.finish(0, false);
+    Ok(RefreshResult {
+        indexed_files: indexed,
+        coverage,
+        paths: discovery.paths,
+    })
 }
 
 // Audit A15, 50-query synthetic calibration (2026-09-28): unrelated maxima
@@ -256,6 +330,13 @@ fn candidate_score(engine: &str, score: f32) -> bool {
 
 /// 本地相似检索：默认引擎优先保留字面命中文件，再按全块内积取 top-k。
 /// 字面命中定位实际行；近似命中定位最佳块。分数仍为块余弦，不是置信度。
+pub struct QueryResult {
+    pub hits: Vec<Value>,
+    pub skipped_changed: usize,
+    pub skipped_unreadable: usize,
+    pub truncated: bool,
+}
+
 pub fn query(
     db: &Db,
     root: &Path,
@@ -263,9 +344,16 @@ pub fn query(
     q: &str,
     cap: usize,
     check: Checkpoint<'_>,
-) -> Result<Vec<Value>, crate::tools::ToolError> {
+    paths: &[String],
+) -> Result<QueryResult, crate::tools::ToolError> {
+    check()?;
     if q.trim().is_empty() || cap == 0 {
-        return Ok(Vec::new());
+        return Ok(QueryResult {
+            hits: Vec::new(),
+            skipped_changed: 0,
+            skipped_unreadable: 0,
+            truncated: false,
+        });
     }
     // A15 real-source measurement (2026-09-29): 48-line normalization drowned
     // out literal identifiers (.065 vs .783 alone). Lowering the global floor
@@ -274,16 +362,35 @@ pub fn query(
     check()?;
     let qv = embedder.embed(q, check)?;
     check()?;
+    // R7: retained cache rows outside this walk (new ignores/caps) are not
+    // evidence for this query. Only current discovery can select candidate paths.
+    let paths: std::collections::HashSet<&str> = paths.iter().map(String::as_str).collect();
+    let mut skipped_changed = 0;
+    let mut skipped_unreadable = 0;
     let mut literal_lines = std::collections::HashMap::new();
     let mut valid = std::collections::HashMap::new();
     let mut files = db.conn().prepare("SELECT path, hash FROM code_files")?;
     for row in files.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
         check()?;
         let (path, hash) = row?;
-        let Some(text) = indexed_text(root, &path) else {
+        if !paths.contains(path.as_str()) {
             continue;
+        }
+        let text = match indexed_text(root, &path) {
+            Ok(IndexedText::Text(text)) => text,
+            Err(crate::tools::ToolError::Io(_)) => {
+                skipped_unreadable += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+            Ok(_) => {
+                skipped_changed += 1;
+                continue;
+            }
         };
+
         if hash != format!("{}:{:016x}", embedder.name(), fnv64(&text)) {
+            skipped_changed += 1;
             continue;
         }
         if embedder.name() == "hash-ngram-v1" {
@@ -333,29 +440,47 @@ pub fn query(
             .then_with(|| b.1 .0.total_cmp(&a.1 .0))
             .then_with(|| a.0.cmp(&b.0))
     };
-    if cap < hits.len() {
+    let truncated = cap < hits.len();
+    if truncated {
         hits.select_nth_unstable_by(cap, order);
         hits.truncate(cap);
     }
     hits.sort_by(order);
-    Ok(hits
-        .into_iter()
-        .filter_map(|(path, (score, line_start))| {
-            let text = indexed_text(root, &path)?;
-            if valid.get(&path)? != &format!("{}:{:016x}", embedder.name(), fnv64(&text)) {
-                return None;
+    let mut results = Vec::new();
+    for (path, (score, line_start)) in hits {
+        check()?;
+        let text = match indexed_text(root, &path) {
+            Ok(IndexedText::Text(text)) => text,
+            Err(crate::tools::ToolError::Io(_)) => {
+                skipped_unreadable += 1;
+                continue;
             }
-            let literal = literal_lines.get(&path);
-            let line_start = literal.copied().unwrap_or(line_start);
-            Some(json!({
-                "path": path,
-                "line": line_start,
-                "excerpt": excerpt(&text, line_start),
-                "score": format!("{score:.3}"),
-                "match": if literal.is_some() { "literal" } else { "similarity" },
-            }))
-        })
-        .collect())
+            Err(error) => return Err(error),
+            Ok(_) => {
+                skipped_changed += 1;
+                continue;
+            }
+        };
+
+        if valid.get(&path) != Some(&format!("{}:{:016x}", embedder.name(), fnv64(&text))) {
+            skipped_changed += 1;
+            continue;
+        }
+        let literal = literal_lines.get(&path);
+        let line_start = literal.copied().unwrap_or(line_start);
+        results.push(json!({
+            "path": path, "line": line_start, "excerpt": excerpt(&text, line_start),
+            "score": format!("{score:.3}"),
+            "match": if literal.is_some() { "literal" } else { "similarity" },
+        }));
+    }
+    check()?;
+    Ok(QueryResult {
+        hits: results,
+        skipped_changed,
+        skipped_unreadable,
+        truncated,
+    })
 }
 
 /// 命中块的短摘：从块首行起取非空行拼到 ~240 字符。
@@ -426,12 +551,74 @@ mod tests {
         (db, dir)
     }
 
+    // Competitor benchmark R7 (2026-10-06): discovery used to run before
+    // the first checkpoint; empty repositories could report success on stop.
+    #[test]
+    fn stopped_empty_discovery_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let result = refresh(&db, dir.path(), &HashEmbedder, &|| {
+            Err(crate::tools::ToolError::Exec("fixture stopped".into()))
+        });
+        assert!(
+            result.is_err(),
+            "stop must never become successful empty search"
+        );
+    }
+
+    #[test]
+    fn invalid_ignore_discovery_is_an_error_and_preserves_index() {
+        let (db, dir) = fixture();
+        refresh(&db, dir.path(), &HashEmbedder, &|| Ok(())).unwrap();
+        let before: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM code_files", [], |r| r.get(0))
+            .unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "[z-a]\n").unwrap();
+        let result = refresh(&db, dir.path(), &HashEmbedder, &|| Ok(()));
+        assert!(
+            result.is_err(),
+            "broken ignore rules must not be silently accepted"
+        );
+        let after: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM code_files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn missing_root_is_an_error_and_preserves_index() {
+        let (db, dir) = fixture();
+        refresh(&db, dir.path(), &HashEmbedder, &|| Ok(())).unwrap();
+        let missing = dir.path().join("missing");
+        assert!(refresh(&db, &missing, &HashEmbedder, &|| Ok(())).is_err());
+        let count: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM code_files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 3,
+            "failed discovery must not delete an existing index"
+        );
+    }
+
     #[test]
     fn semantic_hit_returns_path_line_excerpt() {
         let (db, dir) = fixture();
         let emb = Dict(vec![("ruling", 1), ("adjudicate", 1), ("裁决", 1)]);
         refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
-        let hits = query(&db, dir.path(), &emb, "裁决是怎么判定的", 10, &|| Ok(())).unwrap();
+        let hits = query(
+            &db,
+            dir.path(),
+            &emb,
+            "裁决是怎么判定的",
+            10,
+            &|| Ok(()),
+            &crate::search::repo_files(dir.path()),
+        )
+        .unwrap()
+        .hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["path"], "src/orchestra.rs");
         assert_eq!(hits[0]["line"], 1);
@@ -443,16 +630,36 @@ mod tests {
         let (db, dir) = fixture();
         let emb = Dict(vec![("streaming", 2), ("裁决", 1)]);
         let n1 = refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
-        assert_eq!(n1, 3);
+        assert_eq!(n1.indexed_files, 3);
         // 未动文件不重嵌
-        assert_eq!(refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap(), 0);
+        assert_eq!(
+            refresh(&db, dir.path(), &emb, &|| Ok(()))
+                .unwrap()
+                .indexed_files,
+            0
+        );
         // 改一个 → 只重嵌一个
         std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
-        assert_eq!(refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap(), 1);
+        assert_eq!(
+            refresh(&db, dir.path(), &emb, &|| Ok(()))
+                .unwrap()
+                .indexed_files,
+            1
+        );
         // 删一个 → 块清掉
         std::fs::remove_file(dir.path().join("src/turn.rs")).unwrap();
         refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
-        let gone = query(&db, dir.path(), &emb, "streaming", 10, &|| Ok(())).unwrap();
+        let gone = query(
+            &db,
+            dir.path(),
+            &emb,
+            "streaming",
+            10,
+            &|| Ok(()),
+            &crate::search::repo_files(dir.path()),
+        )
+        .unwrap()
+        .hits;
         assert!(!gone.iter().any(|h| h["path"] == "src/turn.rs"));
     }
 
@@ -461,11 +668,18 @@ mod tests {
         let (db, dir) = fixture();
         let emb = Dict(vec![("ruling", 1)]);
         refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
-        assert!(
-            query(&db, dir.path(), &emb, "unrelated needle", 10, &|| Ok(()))
-                .unwrap()
-                .is_empty()
-        );
+        assert!(query(
+            &db,
+            dir.path(),
+            &emb,
+            "unrelated needle",
+            10,
+            &|| Ok(()),
+            &crate::search::repo_files(dir.path())
+        )
+        .unwrap()
+        .hits
+        .is_empty());
     }
 
     #[test]
@@ -478,13 +692,166 @@ mod tests {
         let emb = Dict(vec![("magic", 1)]);
         refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
         assert_eq!(
-            query(&db, dir.path(), &emb, "magic", 3, &|| Ok(()))
-                .unwrap()
-                .len(),
+            query(
+                &db,
+                dir.path(),
+                &emb,
+                "magic",
+                3,
+                &|| Ok(()),
+                &crate::search::repo_files(dir.path())
+            )
+            .unwrap()
+            .hits
+            .len(),
             3
         );
     }
+    #[test]
+    fn index_coverage_exposes_skipped_content_and_capped_hits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("large.rs"),
+            vec![b'x'; INDEX_FILE_BYTES as usize + 1],
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("binary.rs"), b"magic\0").unwrap();
+        std::fs::write(dir.path().join(".env"), "magic secret").unwrap();
+        for name in ["one.rs", "two.rs"] {
+            std::fs::write(dir.path().join(name), "magic").unwrap();
+        }
+        let db = Db::open_in_memory().unwrap();
+        let emb = Dict(vec![("magic", 1)]);
+        let mut result = refresh(&db, dir.path(), &emb, &|| Ok(())).unwrap();
+        assert_eq!(result.coverage.skipped_large, 1);
+        assert_eq!(result.coverage.skipped_binary, 1);
+        assert_eq!(result.coverage.excluded_by_policy, 1);
+        assert!(!result.coverage.complete);
+        let queried = query(
+            &db,
+            dir.path(),
+            &emb,
+            "magic",
+            1,
+            &|| Ok(()),
+            &crate::search::repo_files(dir.path()),
+        )
+        .unwrap();
+        assert_eq!(queried.hits.len(), 1);
+        result
+            .coverage
+            .finish(queried.skipped_changed, queried.truncated);
+        assert_eq!(result.coverage.reason, Some("hit_limit"));
+        assert!(!result.coverage.complete);
+    }
+
+    #[test]
+    fn query_read_failure_is_not_complete_empty_success() {
+        struct Removing(std::path::PathBuf);
+        impl Embedder for Removing {
+            fn name(&self) -> &'static str {
+                "hash-ngram-v1"
+            }
+            fn embed(
+                &self,
+                text: &str,
+                check: Checkpoint<'_>,
+            ) -> Result<Vec<f32>, crate::tools::ToolError> {
+                std::fs::remove_file(&self.0)?;
+                HashEmbedder.embed(text, check)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.rs");
+        std::fs::write(&path, "needle").unwrap();
+        let db = Db::open_in_memory().unwrap();
+        refresh(&db, dir.path(), &HashEmbedder, &|| Ok(())).unwrap();
+        let queried = query(
+            &db,
+            dir.path(),
+            &Removing(path),
+            "needle",
+            1,
+            &|| Ok(()),
+            &crate::search::repo_files(dir.path()),
+        )
+        .unwrap();
+        assert!(queried.hits.is_empty());
+        assert_eq!(queried.skipped_unreadable, 1);
+        let mut coverage = IndexCoverage {
+            skipped_unreadable: queried.skipped_unreadable,
+            ..Default::default()
+        };
+        coverage.finish(queried.skipped_changed, queried.truncated);
+        assert!(!coverage.complete);
+    }
+
+    #[test]
+    fn hash_embedding_checks_stop_inside_long_chunks() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let result = HashEmbedder.embed(&"identifier".repeat(20_000), &|| {
+            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 3 {
+                Err(crate::tools::ToolError::Exec("embedding stopped".into()))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn capped_refresh_keeps_unvisited_cached_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().unwrap();
+        // A formerly indexed source can become ignored while a later walk is
+        // capped. Preserve its cache, but never select it for the current query.
+        std::fs::write(
+            dir.path().join("unvisited.rs"),
+            "private_symbol_after_ignore",
+        )
+        .unwrap();
+        refresh(&db, dir.path(), &HashEmbedder, &|| Ok(())).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "unvisited.rs\n").unwrap();
+        for i in 0..crate::search::INDEX_FILE_CAP {
+            std::fs::write(dir.path().join(format!("f{i}.rs")), "").unwrap();
+        }
+        let result = refresh(&db, dir.path(), &HashEmbedder, &|| Ok(())).unwrap();
+        assert_eq!(result.coverage.reason, Some("file_limit"));
+        let retained: bool = db
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM code_files WHERE path='unvisited.rs')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(retained);
+        let queried = query(
+            &db,
+            dir.path(),
+            &HashEmbedder,
+            "private_symbol_after_ignore",
+            10,
+            &|| Ok(()),
+            &result.paths,
+        )
+        .unwrap();
+        assert!(queried.hits.iter().all(|hit| hit["path"] != "unvisited.rs"));
+    }
+
     proptest::proptest! {
+        #[test]
+        fn incomplete_coverage_never_claims_complete(large in 0usize..8, binary in 0usize..8,
+            excluded in 0usize..8, changed in 0usize..8, unreadable in 0usize..8, file_cap in proptest::bool::ANY, hit_cap in proptest::bool::ANY) {
+            let mut coverage = IndexCoverage {
+                skipped_large: large, skipped_binary: binary, excluded_by_policy: excluded, skipped_unreadable: unreadable,
+                reason: if file_cap { Some("file_limit") } else { None }, ..Default::default()
+            };
+            coverage.finish(changed, hit_cap);
+            proptest::prop_assert_eq!(coverage.complete,
+                large == 0 && binary == 0 && excluded == 0 && changed == 0 && unreadable == 0 && !file_cap && !hit_cap);
+        }
         #[test]
         fn weak_hash_scores_always_require_fallback(score in -1000f32..=0.30f32) {
             proptest::prop_assert!(!candidate_score("hash-ngram-v1", score));

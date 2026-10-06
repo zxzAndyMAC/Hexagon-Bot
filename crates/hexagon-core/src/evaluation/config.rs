@@ -262,6 +262,42 @@ fn public_url(text: &str) -> Option<String> {
     .then(|| url.to_string())
 }
 
+// 2026-10-06 / competitor-improvements 09: measure the real version probe;
+// never substitute fixture versions or cache a previous environment observation.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct VersionProbeObservation {
+    pub elapsed: std::time::Duration,
+    pub in_transaction: bool,
+}
+#[cfg(test)]
+thread_local! {
+    static VERSION_PROBE_OBSERVATIONS: std::cell::RefCell<Option<Vec<VersionProbeObservation>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+pub(crate) struct VersionProbeCapture {
+    previous: Option<Vec<VersionProbeObservation>>,
+    same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+#[cfg(test)]
+impl VersionProbeCapture {
+    pub fn start() -> Self {
+        Self {
+            previous: VERSION_PROBE_OBSERVATIONS.with(|records| records.replace(Some(vec![]))),
+            same_thread: std::marker::PhantomData,
+        }
+    }
+    pub fn observations(&self) -> Vec<VersionProbeObservation> {
+        VERSION_PROBE_OBSERVATIONS.with(|records| records.borrow().clone().unwrap_or_default())
+    }
+}
+#[cfg(test)]
+impl Drop for VersionProbeCapture {
+    fn drop(&mut self) {
+        VERSION_PROBE_OBSERVATIONS.with(|records| *records.borrow_mut() = self.previous.take());
+    }
+}
+
 pub(crate) fn code_fingerprint() -> io::Result<String> {
     // D14 / ticket 17: bind shared core code, not the CLI/Desktop executable.
     // Test builds remain a distinct identity even with identical source inputs.
@@ -432,7 +468,23 @@ fn snapshot(db: &Db, project: &str, request: &FreezeRequest) -> io::Result<Runti
         os: std::env::consts::OS.into(),
         architecture: std::env::consts::ARCH.into(),
         executable_fingerprint: code_fingerprint()?,
-        runtime_versions: versions()?,
+        runtime_versions: {
+            #[cfg(test)]
+            let probe_started = Instant::now();
+            #[cfg(test)]
+            let in_transaction = !db.conn().is_autocommit();
+            let result = versions();
+            #[cfg(test)]
+            VERSION_PROBE_OBSERVATIONS.with(|records| {
+                if let Some(records) = records.borrow_mut().as_mut() {
+                    records.push(VersionProbeObservation {
+                        elapsed: probe_started.elapsed(),
+                        in_transaction,
+                    });
+                }
+            });
+            result?
+        },
         host_policy: HostPolicy {
             supplement_statuses: vec![502, 503, 504],
             reviewer_mode: crate::autonomy::reviewer_mode(db, project).map_err(err)?,

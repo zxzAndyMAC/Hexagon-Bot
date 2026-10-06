@@ -25,37 +25,119 @@ const WALK_CAP: usize = 50_000;
 /// 语义索引收录的文件数上限（票 02）：超界部分只走文本搜索。
 pub const INDEX_FILE_CAP: usize = 4_000;
 
-/// 仓内未被忽略的文件相对路径（正斜杠分隔，与工具层路径口径一致）。
-/// `.git/` 恒跳——它不是仓内容；不跟符号链接（与 `repo_path` 防逃逸同口径）。
-pub fn repo_files(root: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false) // Hidden files remain searchable only after the read policy.
+/// Shared ignore policy for both scoped searches and the compatibility index.
+fn repo_walker(root: &Path) -> ignore::WalkBuilder {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(false)
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true)
         .ignore(true)
         .parents(true)
-        .require_git(false) // 没初始化 git 的目录 .gitignore 照样生效
-        .follow_links(false)
-        .filter_entry(|e| !(e.file_type().is_some_and(|t| t.is_dir()) && e.file_name() == ".git"))
+        .require_git(false)
+        .follow_links(false);
+    builder
+}
+
+pub(crate) struct Discovery {
+    pub paths: Vec<String>,
+    pub entries_visited: usize,
+    pub excluded_by_policy: usize,
+    pub reason: Option<&'static str>,
+}
+
+/// Benchmark R7 (2026-10-06): the old eager walker swallowed errors and ran
+/// before the stop check. Bound callback-visible entries (including excluded
+/// files/directories), stop at the index file cap, and refuse broken ignore rules.
+/// Checkpoints are cooperative between walker yields; filesystem/ignore internals
+/// cannot be hard-interrupted, just as in scoped search.
+pub(crate) fn repo_files_checked(
+    root: &Path,
+    file_cap: usize,
+    check: &dyn Fn() -> Result<(), crate::tools::ToolError>,
+) -> Result<Discovery, crate::tools::ToolError> {
+    use crate::tools::ToolError;
+    check()?;
+    let root = root.canonicalize()?;
+    if !root.metadata()?.is_dir() || file_cap == 0 {
+        return Err(ToolError::BadInput(
+            "index discovery requires a directory and positive cap".into(),
+        ));
+    }
+    check()?;
+    let state = std::sync::Arc::new(std::sync::Mutex::new(Traversal {
+        entries: 1,
+        limited: false,
+        error: None,
+    }));
+    let filter_state = state.clone();
+    let walker = repo_walker(&root)
+        .filter_entry(move |entry| {
+            let mut state = filter_state.lock().unwrap();
+            if state.entries >= WALK_CAP {
+                state.limited = true;
+                return true; // yield instead of silently scanning more siblings
+            }
+            state.entries += 1;
+            !(entry.file_type().is_some_and(|t| t.is_dir()) && entry.file_name() == ".git")
+        })
         .build();
-    for entry in walker.flatten() {
-        if out.len() >= WALK_CAP {
+    let mut found = Discovery {
+        paths: Vec::new(),
+        entries_visited: 1,
+        excluded_by_policy: 0,
+        reason: None,
+    };
+    for entry in walker {
+        check()?;
+        if state.lock().unwrap().limited {
+            found.reason = Some("entry_limit");
             break;
+        }
+        let entry =
+            entry.map_err(|error| ToolError::Exec(format!("index discovery failed: {error}")))?;
+        if entry.error().is_some() {
+            return Err(ToolError::Exec(
+                "repository search cannot apply ignore rules; repair the ignore file".into(),
+            ));
         }
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let Ok(rel) = entry.path().strip_prefix(root) else {
-            continue;
-        };
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        if crate::tools::agent_readable_repo_path(root, &rel).is_ok() {
-            out.push(rel);
+        let rel = entry
+            .path()
+            .strip_prefix(&root)
+            .expect("walker stays in root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        match crate::tools::agent_readable_repo_path(&root, &rel) {
+            Ok(_) => {}
+            Err(ToolError::BadInput(_) | ToolError::PathEscape(_)) => {
+                found.excluded_by_policy += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+        found.paths.push(rel);
+        if found.paths.len() >= file_cap {
+            found.reason = Some("file_limit");
+            break;
         }
     }
-    out
+    check()?;
+    found.entries_visited = state.lock().unwrap().entries;
+    Ok(found)
+}
+
+// Compatibility for the opt-in real-project measurement only. Failed or capped
+// discovery must stop that measurement, not print a misleading complete count.
+#[cfg(test)]
+pub fn repo_files(root: &Path) -> Vec<String> {
+    let found =
+        repo_files_checked(root, WALK_CAP, &|| Ok(())).expect("measurement discovery failed");
+    assert!(found.reason.is_none(), "measurement discovery truncated");
+    found.paths
 }
 
 /// 2026-09-29 owner decision: scoped exploration must prune before caps, not
@@ -133,15 +215,7 @@ pub fn search(
     let filter_state = traversal.clone();
     // Walk from root, rather than scope, so root and intermediate ignore files
     // still apply even when the requested subtree itself is ignored.
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .ignore(true)
-        .parents(true)
-        .require_git(false)
-        .follow_links(false)
+    let walker = repo_walker(root)
         .filter_entry(move |entry| {
             // Returning true on stop makes the iterator yield immediately;
             // returning false would keep scanning rejected siblings internally.
@@ -367,6 +441,76 @@ mod tests {
         });
         assert!(result.is_err());
         assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 11);
+    }
+
+    #[test]
+    fn index_discovery_stops_between_visible_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..100 {
+            std::fs::create_dir(dir.path().join(format!("d{i}"))).unwrap();
+        }
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let found = repo_files_checked(dir.path(), INDEX_FILE_CAP, &|| {
+            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 10 {
+                return Err(crate::tools::ToolError::Exec("discovery stopped".into()));
+            }
+            Ok(())
+        });
+        assert!(found.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 11);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn capped_index_discovery_never_claims_exhaustion(total in 1usize..24, cap in 1usize..16) {
+            let dir = tempfile::tempdir().unwrap();
+            for i in 0..total {
+                std::fs::write(dir.path().join(format!("f{i}.rs")), "marker").unwrap();
+            }
+            let found = repo_files_checked(dir.path(), cap, &|| Ok(())).unwrap();
+            proptest::prop_assert_eq!(found.paths.len(), total.min(cap));
+            proptest::prop_assert_eq!(found.reason, if total >= cap { Some("file_limit") } else { None });
+            proptest::prop_assert!(found.entries_visited <= cap + 1);
+        }
+    }
+
+    // Opt-in performance evidence: directory creation excluded from timing.
+    #[test]
+    #[ignore = "creates 50100 files; run explicitly for index discovery performance evidence"]
+    fn index_discovery_large_repository_benchmark() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..50100 {
+            std::fs::write(dir.path().join(format!("f{i}.rs")), "marker").unwrap();
+        }
+        for trial in 0..6 {
+            let started = std::time::Instant::now();
+            let found = repo_files_checked(dir.path(), INDEX_FILE_CAP, &|| Ok(())).unwrap();
+            assert_eq!(found.paths.len(), INDEX_FILE_CAP);
+            assert_eq!(found.reason, Some("file_limit"));
+            assert_eq!(found.entries_visited, INDEX_FILE_CAP + 1);
+            println!(
+                "index_discovery trial={trial} elapsed_ms={:.2} files={} entries={} reason={:?}",
+                started.elapsed().as_secs_f64() * 1000.,
+                found.paths.len(),
+                found.entries_visited,
+                found.reason
+            );
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            let stopped = std::time::Instant::now();
+            let result = repo_files_checked(dir.path(), INDEX_FILE_CAP, &|| {
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 100 {
+                    Err(crate::tools::ToolError::Exec("fixture stopped".into()))
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(result.is_err());
+            println!(
+                "index_discovery_cancel trial={trial} elapsed_ms={:.2} checkpoints={}",
+                stopped.elapsed().as_secs_f64() * 1000.,
+                calls.load(std::sync::atomic::Ordering::SeqCst)
+            );
+        }
     }
 
     fn fixture() -> tempfile::TempDir {

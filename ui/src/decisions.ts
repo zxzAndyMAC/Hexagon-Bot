@@ -101,6 +101,10 @@ export function rejectReasonWithJudge(reason: string, judgeVerdict: string | nul
 }
 
 /** 卡 kind → 卡面标题 i18n key（kbd 目标提示 / sticky 迷你条共用） */
+export function isActivationResumeCard(q: PendingQuestion): boolean {
+  return q.kind === 'stall' && q.payload.source === 'activation_resume'
+}
+
 export function kindTitleKey(q: PendingQuestion): string {
   if (q.payload.sub === 'quality_revalidation') return 'quality.revalidationTitle'
   if (q.payload.sub === 'design_direction') return 'design.title'
@@ -110,7 +114,7 @@ export function kindTitleKey(q: PendingQuestion): string {
   if (q.kind === 'stamp') return q.payload.proposal_id ? 'cards.proposalStamp' : 'cards.stageStamp'
   if (q.kind === 'publish') return 'cards.publish'
   if (q.kind === 'recovery') return q.payload.sub === 'tool_outcome_unknown' ? 'cards.actionUnknown' : 'cards.recovery'
-  if (q.kind === 'stall') return 'cards.stall'
+  if (q.kind === 'stall') return isActivationResumeCard(q) ? 'cards.resumeWaiting' : 'cards.stall'
   if (q.kind === 'install') return 'cards.install'
   if (q.kind === 'grant') return 'cards.grant'
   if (q.kind === 'escalation') return 'cards.escalation'

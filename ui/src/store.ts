@@ -1,4 +1,5 @@
 import type { TimelineFacts } from './gen/TimelineFacts'
+import type { ProjectIdentity } from './gen/ProjectIdentity'
 import type { TimelineToolStreamKey } from './gen/TimelineToolStreamKey'
 import { watchedTimelineMessages } from './useTimelineWindow'
 import { create } from 'zustand'
@@ -20,6 +21,7 @@ import {
   type UsageTotal,
 } from './api'
 import { daysAgo } from './usage'
+import i18n from './i18n'
 
 export type ThemePref = 'light' | 'dark' | 'night' | 'system'
 
@@ -80,6 +82,17 @@ export interface ConfirmReq {
       required 时空值禁确认（ui-audit-2 票 08：override/驳回理由走此） */
   input?: { placeholder?: string; required?: boolean }
   run: (inputValue?: string) => unknown | Promise<unknown>
+  confirmAction?: import('./keymap').ActionId
+  cancelAction?: import('./keymap').ActionId
+  alternate?: { label: string; action?: import('./keymap').ActionId; run: () => unknown | Promise<unknown> }
+  skipRefresh?: boolean
+  onClose?: (confirmed: boolean) => void
+}
+
+export interface FileEdit {
+  path: string
+  dirty: boolean
+  save: () => Promise<boolean>
 }
 
 export interface WorkTab {
@@ -112,9 +125,10 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
 
 interface UiState {
   projectRoot: string | null
+  projectGeneration: number | null
   projectEpoch: number
   beginProjectSwitch: () => void
-  commitProjectRoot: (root: string | null, epoch: number) => void
+  commitProjectIdentity: (identity: ProjectIdentity | null, epoch: number) => void
   timelineFacts: TimelineFacts | null
   factsError: string | null
   toolStreamKeys: Record<string, TimelineToolStreamKey>
@@ -166,6 +180,9 @@ interface UiState {
   flowDialogOpen: boolean
   toasts: Toast[]
   confirmReq: ConfirmReq | null
+  fileEdits: Record<string, FileEdit>
+  setFileEdit: (id: string, edit: FileEdit | null) => void
+  confirmFileEdits: (ids?: string[]) => Promise<boolean>
   /// 流式增量缓冲（票 03）：agent → 调用序号 → 累计文本。
   /// 瞬时态——不落盘。
   streams: Record<string, Record<number, string>>
@@ -211,7 +228,7 @@ interface UiState {
   pushToast: (text: string, tone?: Toast['tone']) => void
   dismissToast: (id: number) => void
   askConfirm: (r: ConfirmReq) => void
-  clearConfirm: () => void
+  clearConfirm: (confirmed?: boolean) => void
   /// 节点轨聚焦脉冲（票 12）：mod+J 递增 → NodeRail 展开+聚焦首条。
   nodeRailPulse: number
   focusNodeRail: () => void
@@ -245,6 +262,7 @@ function humanKeys(pending: PendingQuestion[], reviewRows: { id: string }[]): st
 
 export const useUiStore = create<UiState>((set, get) => ({
   projectRoot: null,
+  projectGeneration: null,
   projectEpoch: 0,
   timelineFacts: null,
   factsError: null,
@@ -254,11 +272,22 @@ export const useUiStore = create<UiState>((set, get) => ({
     // Same-name projects still have distinct epochs; failed switches never admit
     // old responses when restoring the original root.
     generation++
-    set(s => ({ projectRoot: null, projectEpoch: s.projectEpoch + 1,
+    const priorConfirmation = get().confirmReq
+    set(s => ({ projectRoot: null, projectGeneration: null, projectEpoch: s.projectEpoch + 1,
+      // Benchmark I1: p1 is reused across projects. Clear actionable projections
+      // at the same identity boundary, before a status poll can fail or arrive late.
+      stages: [], pending: [], reviewRows: [], pendingDialogOpen: false, dismissedPendingKeys: [],
+      team: [], artifacts: [], avatars: {}, avatarHashes: {}, providers: null,
+      usageTotal: null, usageRows: [], usageSeries7d: [], contextPressure: null,
+      projectName: '', autonomy: 'L0', mode: 'pack', fastRole: null, packName: null, mcpPending: false,
+      tabs: [TIMELINE_TAB], activeTab: 'timeline', splitOpen: false, flowDialogOpen: false,
+      fileEdits: {}, fileTreeReq: null, confirmReq: null, intakeDraft: false, away: false,
+      evidenceRevision: s.evidenceRevision + 1,
       timelineFacts: null, factsError: null, timeline: [], timelineCaughtUp: false,
       streams: {}, thinkings: {}, streamDone: {}, toolStreams: {}, toolStreamKeys: {}, plans: {}, waitingSince: {} }))
+    priorConfirmation?.onClose?.(false)
   },
-  commitProjectRoot: (root, epoch) => { if (get().projectEpoch === epoch) set({ projectRoot: root }) },
+  commitProjectIdentity: (identity, epoch) => { if (get().projectEpoch === epoch) set({ projectRoot: identity?.project_root ?? null, projectGeneration: identity?.generation ?? null }) },
   themePref: savedPref,
   stages: [],
   team: [],
@@ -296,9 +325,34 @@ export const useUiStore = create<UiState>((set, get) => ({
   modalScope: 'workbench',
   flowDialogOpen: false,
   confirmReq: null,
+  fileEdits: {},
+  confirmFileEdits: async (ids) => {
+    const selected = () => Object.entries(get().fileEdits).filter(([id]) => !ids || ids.includes(id)).map(([, edit]) => edit)
+    if (!selected().some(edit => edit.dirty)) return true
+    return new Promise<boolean>(resolve => get().askConfirm({
+      title: i18n.t('file.leaveTitle'), body: i18n.t('file.leaveBody'),
+      confirmLabel: i18n.t('file.save'), confirmAction: 'saveFile', cancelAction: 'cancelFileEdits', skipRefresh: true,
+      run: async () => {
+        for (const edit of selected()) {
+          if (edit.dirty && !await edit.save()) throw new Error(i18n.t('file.leaveSaveFailed'))
+        }
+        // Saving another file can take time; don't drop a newly edited buffer.
+        if (selected().some(edit => edit.dirty)) throw new Error(i18n.t('file.leaveSaveFailed'))
+      },
+      alternate: {label: i18n.t('file.discard'), action: 'discardFileEdits', run: () => {}},
+      onClose: resolve,
+    }))
+  },
+  setFileEdit: (id, edit) => set(s => {
+    const next = { ...s.fileEdits }
+    if (edit) next[id] = edit
+    else delete next[id]
+    return { fileEdits: next }
+  }),
   toasts: [],
   setModalScope: (s) => set({ modalScope: s }),
   pushToast: (text, tone = 'info') => {
+    if (!text) return // A cancelled local navigation is not an error notification.
     const id = ++toastSeq
     set((s) => ({ toasts: [...s.toasts, { id, text, tone }] }))
     setTimeout(() => {
@@ -306,8 +360,16 @@ export const useUiStore = create<UiState>((set, get) => ({
     }, TOAST_MS)
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
-  askConfirm: (r) => set({ confirmReq: r }),
-  clearConfirm: () => set({ confirmReq: null }),
+  askConfirm: (r) => {
+    const previous = get().confirmReq
+    set({ confirmReq: r })
+    previous?.onClose?.(false)
+  },
+  clearConfirm: (confirmed = false) => {
+    const req = get().confirmReq
+    set({ confirmReq: null })
+    req?.onClose?.(confirmed)
+  },
   // ui-audit 票 12（P2-13）：节点轨键盘入口——脉冲递增通知 NodeRail 展开聚焦。
   nodeRailPulse: 0,
   focusNodeRail: () => set((s) => ({ nodeRailPulse: s.nodeRailPulse + 1 })),
@@ -341,13 +403,21 @@ export const useUiStore = create<UiState>((set, get) => ({
       tabs: s.tabs.some((x) => x.id === t.id) ? s.tabs : [...s.tabs, t],
       activeTab: t.id,
     })),
-  closeTab: (id) =>
-    set((s) => {
-      if (id === 'timeline') return {}
-      const tabs = s.tabs.filter((t) => t.id !== id)
-      const activeTab = s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? 'timeline') : s.activeTab
-      return { tabs, activeTab }
-    }),
+  closeTab: (id) => {
+    if (id === 'timeline') return
+    const current = get()
+    const tab = current.tabs.find(t => t.id === id)
+    const edits = Object.entries(current.fileEdits).filter(([, edit]) => tab?.kind === 'file' && edit.path === tab.path)
+    const close = () => {
+      if (get().projectEpoch !== current.projectEpoch) return
+      set(s => {
+        const tabs = s.tabs.filter(t => t.id !== id)
+        return { tabs, activeTab: s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? 'timeline') : s.activeTab }
+      })
+    }
+    if (!edits.some(([, edit]) => edit.dirty)) close()
+    else void get().confirmFileEdits(edits.map(([key]) => key)).then(allowed => { if (allowed) close() })
+  },
   setActiveTab: (id) => set({ activeTab: id }),
   setSplitOpen: (v) => set({ splitOpen: v }),
   streams: {},
@@ -451,11 +521,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   refresh: async () => {
     generation++
     const epoch = get().projectEpoch
-    if (!get().projectRoot) {
+    if (!get().projectRoot || get().projectGeneration === null) {
       try {
-        const status = await api.desktopStatus()
+        const identity = await api.projectIdentity()
         if (get().projectEpoch !== epoch) return
-        get().commitProjectRoot(status.project_root, epoch)
+        get().commitProjectIdentity(identity, epoch)
       } catch { return }
     }
     await get().invalidate()

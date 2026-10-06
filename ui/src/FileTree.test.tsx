@@ -64,7 +64,11 @@ describe('右栏项目页文件树（票 11）', () => {
   })
 
   function mockTree() {
+    // I1: file editors require a current project and a host-bound snapshot;
+    // an unbound read mock can no longer represent an open workbench.
+    useUiStore.setState({ projectRoot: '/test' })
     vi.spyOn(api, 'listRepoDir').mockImplementation(async (rel = '') => TREE[rel] ?? [])
+    vi.spyOn(api, 'readRepoFileSnapshot').mockImplementation(async (path, project_root) => ({path, project_root, generation: 1, content: '# hi\n'}))
     vi.spyOn(api, 'readRepoFile').mockResolvedValue('# hi\n')
     vi.spyOn(api, 'createRepoFile').mockResolvedValue(undefined)
     vi.spyOn(api, 'createRepoDir').mockResolvedValue(undefined)
@@ -157,7 +161,7 @@ describe('右栏项目页文件树（票 11）', () => {
     expect(center.querySelector('[data-testid=file-editor]')!.getAttribute('data-path')).toBe('README.md')
     expect(rail.querySelector('[data-testid=file-editor]')).toBeNull()
     expect(rail.querySelector('[data-testid=file-tree]')).toBeTruthy()
-    expect(api.readRepoFile).toHaveBeenCalledWith('README.md')
+    expect(api.readRepoFileSnapshot).toHaveBeenCalledWith('README.md', '/test')
 
     // 文件页头部多了视图切换 seg（编辑/预览/对比），保存钮不再稳占
     // 第一个 button——按 ⌘S tooltip 定位，不依赖排版顺序。

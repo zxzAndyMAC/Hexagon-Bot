@@ -145,6 +145,27 @@ pub(crate) fn finish_activity(root: &Path, workspace: &Path, operation: &str) ->
     Ok(())
 }
 
+pub(super) fn finish_unstarted(
+    host: &Db,
+    root: &Path,
+    plan: &plan::EvaluationPlan,
+) -> io::Result<()> {
+    if host.conn().is_autocommit() {
+        return Err(rejected("stopped_allowance_requires_host_transaction"));
+    }
+    // No paid reservations means no authority to close; stopping a configured
+    // but never dispatched plan must not initialize a new global ledger.
+    if !paid_path()?.exists() {
+        return Ok(());
+    }
+    let db = paid_db()?;
+    let tx =
+        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
+            .map_err(err)?;
+    finish_unstarted_rows(&db, root, plan, PAID)?;
+    tx.commit().map_err(err)
+}
+
 pub(crate) fn validate_request(
     provider: &dyn ModelProvider,
     chat: Option<&crate::provider::ChatRequest>,

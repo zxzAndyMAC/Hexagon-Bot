@@ -2,6 +2,8 @@ import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadata
 import type { TimelineWindowMetadata } from './gen/TimelineWindowMetadata'
 import { mockTimelineWindow, mockTimelineFacts, mockTimelineNodes } from './timelineMock'
 import { useUiStore } from './store'
+import type { ProjectTurnDelta } from './gen/ProjectTurnDelta'
+import type { ProjectToolOutputDelta } from './gen/ProjectToolOutputDelta'
 import type { TimelineWindowRequest } from './gen/TimelineWindowRequest'
 import type { TimelineWindowPage } from './gen/TimelineWindowPage'
 import type { TimelineFactsRequest } from './gen/TimelineFactsRequest'
@@ -49,6 +51,8 @@ import i18n from './i18n'
 // ---- IPC DTO（ADR 0054，票 06）：ui/src/gen/* 由 ts-rs 从 Rust DTO 生成 ----
 // 手改禁地——字段要改改 Rust 侧，`cargo test` 重出声明，字段漂移由 tsc 抓。
 // 词表字段（status/state/kind/mode）在 Rust 侧按 schema CHECK 钉了字面量联合。
+import type { RepoFileSnapshot } from './gen/RepoFileSnapshot'
+import type { ProjectIdentity } from './gen/ProjectIdentity'
 import type { CmdError } from './gen/CmdError'
 import type { AttachRef } from './gen/AttachRef'
 import type { SandboxStatus } from './gen/SandboxStatus'
@@ -144,13 +148,21 @@ export type {
 export const isTauri = '__TAURI_INTERNALS__' in window || '__TAURI__' in window
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (isTauri) return invoke<T>(cmd, args)
+  // I1 / 2026-10-06: q1 is local to each project DB. Capture the host-issued
+  // incarnation before dispatch; a delayed approval must not target a new q1.
+  if (isTauri) return invoke<T>(cmd, { ...args, _project: args && '_project' in args ? args._project : currentProjectIdentity() })
   // mock 只可达于 dev 构建：import.meta.env.DEV 在产物里是字面量 false，
   // 此分支为死码被 tree-shake，~560 行夹具不进生产包（arch-review 附录 B4
   // 核验：原先走运行时 isTauri 判，摇不掉）。组件侧的 isTauri 是 UI 显隐
   // 判定，与本门控职责不同，保留运行时检查。
   if (import.meta.env.DEV) return mock<T>(cmd, args)
   throw new Error('non-Tauri production build has no backend')
+}
+
+function currentProjectIdentity(): ProjectIdentity | null {
+  const { projectRoot, projectGeneration } = useUiStore.getState()
+  return projectRoot !== null && projectGeneration !== null
+    ? { project_root: projectRoot, generation: projectGeneration } : null
 }
 
 // ---- 错误信封（ADR 0054，arch-review 票 06）----
@@ -176,10 +188,13 @@ export function asCmdError(e: unknown): CmdError {
 
 /// 面向用户的错误文案唯一出口：组件一律用它，不再 `String(e)`。
 export function errText(e: unknown): string {
+  if (e instanceof ProjectChangeCancelled) return ''
   const { code, message } = asCmdError(e)
   const key = `errors.${code}`
   return i18n.exists(key) ? i18n.t(key) : message
 }
+
+class ProjectChangeCancelled extends Error {}
 
 // ---- 回合流式 delta（turn-streaming 票 03）----
 // 瞬时增量通道：payload 不落库；done=true 是流终信号（成败都发），
@@ -189,17 +204,31 @@ export function errText(e: unknown): string {
 //（不落库只展示，tool_result 仍是持久层）。
 export async function onToolOutput(cb: (d: ToolOutputDelta) => void): Promise<() => void> {
   if (!isTauri) return async () => {}
+  const identity = currentProjectIdentity()
+  if (!identity) return () => {}
   const { listen } = await import('@tauri-apps/api/event')
-  return listen<ToolOutputDelta>('tool-output', (e) => cb(e.payload))
+  return listen<ProjectToolOutputDelta>('tool-output', (e) => {
+    if (sameProjectIdentity(e.payload.identity, identity) && sameProjectIdentity(identity, currentProjectIdentity())) cb(e.payload.delta)
+  })
 }
 
 /// 订阅回合 delta；浏览器 dev 无推送通道，返回 no-op 退订。
 export async function onTurnDelta(cb: (d: TurnDelta) => void): Promise<() => void> {
   if (!isTauri) return () => {}
+  const identity = currentProjectIdentity()
+  if (!identity) return () => {}
   const { listen } = await import('@tauri-apps/api/event')
-  const batch = batchTurnDeltas(cb)
-  const unlisten = await listen<TurnDelta>('turn-delta', (e) => batch.push(e.payload))
+  // Benchmark I1: admission alone cannot revoke queued native events. Bind both
+  // delivery and the 50ms coalescing flush to the originating host generation.
+  const batch = batchTurnDeltas(d => { if (sameProjectIdentity(identity, currentProjectIdentity())) cb(d) })
+  const unlisten = await listen<ProjectTurnDelta>('turn-delta', (e) => {
+    if (sameProjectIdentity(e.payload.identity, identity) && sameProjectIdentity(identity, currentProjectIdentity())) batch.push(e.payload.delta)
+  })
   return () => { unlisten(); batch.cancel() }
+}
+
+function sameProjectIdentity(left: ProjectIdentity | null | undefined, right: ProjectIdentity | null | undefined): boolean {
+  return !!left && !!right && left.project_root === right.project_root && left.generation === right.generation
 }
 
 // 2026-10-01 native profiling: per-token IPC caused thousands of synchronous
@@ -230,26 +259,35 @@ export function batchTurnDeltas(cb: (d: TurnDelta) => void) {
 
 // Project IPCs have one synchronous invalidation boundary, including callers in
 // the wizard/start screen. Reopening the same canonical root is still a new epoch.
-async function switchProject<T>(operation: () => Promise<T>, closing = false): Promise<T> {
+async function switchProject<T>(operation: (source: ProjectIdentity | null) => Promise<T>, closing = false): Promise<T> {
   const store = useUiStore.getState()
+  // I1: the no-edit path must still invalidate identity synchronously.
+  if (Object.values(store.fileEdits).some(edit => edit.dirty) && !await store.confirmFileEdits()) {
+    throw new ProjectChangeCancelled(i18n.t('file.leaveCancelled'))
+  }
+  if (useUiStore.getState().projectEpoch !== store.projectEpoch || useUiStore.getState().projectRoot !== store.projectRoot) {
+    throw new ProjectChangeCancelled(i18n.t('file.leaveCancelled'))
+  }
+  const source = currentProjectIdentity()
   store.beginProjectSwitch()
   const epoch = useUiStore.getState().projectEpoch
   let succeeded = false
   try {
-    const result = await operation()
+    const result = await operation(source)
     succeeded = true
     return result
   } finally {
     if (epoch === useUiStore.getState().projectEpoch && !(closing && succeeded)) {
       try {
-        const status = await call<DesktopStatus>('desktop_status')
-        useUiStore.getState().commitProjectRoot(status.project_root, epoch)
+        const identity = await call<ProjectIdentity | null>('project_identity')
+        useUiStore.getState().commitProjectIdentity(identity, epoch)
       } catch { /* no active project; null keeps old content hidden */ }
     }
   }
 }
 
 export const api = {
+  projectIdentity: () => call<ProjectIdentity | null>('project_identity'),
   timelineWindowMetadata: (request: TimelineWindowMetadataRequest) => call<TimelineWindowMetadata>('timeline_window_metadata', { request }),
   timelineWindow: (request: TimelineWindowRequest) => call<TimelineWindowPage>('timeline_window', { request }),
   timelineFacts: (request: TimelineFactsRequest) => call<TimelineFacts>('timeline_facts', { request }),
@@ -275,7 +313,7 @@ export const api = {
   dataBoundary: () => call<DataBoundary>('data_boundary'),
   ping: () => call<string>('core_ping'),
   openProject: (dir: string, name: string, roles: [string, string][], packJson?: string) =>
-    switchProject(() => call<void>('open_project', { dir, name, roles, packJson: packJson ?? null })),
+    switchProject(source => call<void>('open_project', { dir, name, roles, packJson: packJson ?? null, _project: source })),
   timeline: (after?: number, limit = 500) =>
     call<TimelineItem[]>('timeline', { after: after ?? null, limit }),
   browserSelectionStart: (expectedProjectRoot: string, sessionId: string, labels: { element: string; region: string; done: string; hint: string }) =>
@@ -298,9 +336,11 @@ export const api = {
   // 票 11：右栏文件树。读/建/写都落仓根，路径由核围栏。
   listRepoDir: (rel = '') => call<RepoEntry[]>('list_repo_dir', { rel }),
   readRepoFile: (path: string) => call<string>('read_repo_file', { path }),
+  readRepoFileSnapshot: (path: string, expectedProjectRoot: string) =>
+    call<RepoFileSnapshot>('read_repo_file_snapshot', { path, expectedProjectRoot }),
   /** 文件在 git HEAD 的版本（文件页对比基线）。非仓/未跟踪 → null。 */
   repoFileHead: (path: string) => call<string | null>('repo_file_head', { path }),
-  writeRepoFile: (path: string, content: string) => call<void>('write_repo_file', { path, content }),
+  writeRepoFile: (snapshot: RepoFileSnapshot, content: string) => call<void>('write_repo_file', { snapshot, content }),
   createRepoFile: (path: string) => call<void>('create_repo_file', { path }),
   createRepoDir: (path: string) => call<void>('create_repo_dir', { path }),
   permissionShapeSuggestion: (questionId: string) => call<PermissionShapeSuggestion | null>('permission_shape_suggestion', { questionId }),
@@ -495,9 +535,9 @@ export const api = {
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
-  openRecent: (dir: string) => switchProject(() => call<void>('open_recent', { dir })),
+  openRecent: (dir: string) => switchProject(source => call<void>('open_recent', { dir, _project: source })),
   removeRecent: (dir: string) => call<void>('remove_recent', { dir }),
-  closeProject: () => switchProject(() => call<void>('close_project'), true),
+  closeProject: () => switchProject(source => call<void>('close_project', { _project: source }), true),
   // ---- 快速通道（票 26）----
   projectInfo: () => call<ProjectInfo>('project_info'),
   dispatch: (role: string, input: string, attachments: AttachRef[] = []) =>
@@ -585,11 +625,11 @@ export const api = {
     if (!isTauri) {
       // 浏览器 dev 没有壳层通道。按核的顺序当场报告再返回，不另睡假装耗时。
       for (const step of CREATE_STEPS) onStep?.(step)
-      return switchProject(() => call<void>('create_project', args))
+      return switchProject(source => call<void>('create_project', { ...args, _project: source }))
     }
     const onProgress = new Channel<CreateStep>()
     onProgress.onmessage = (step) => onStep?.(step)
-    return switchProject(() => invoke<void>('create_project', { ...args, onProgress }))
+    return switchProject(source => call<void>('create_project', { ...args, onProgress, _project: source }))
   },
 }
 
@@ -1024,10 +1064,12 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         mkMsg(102, 'agent_message', 'a1', 'r3', 'a1', '今日收口：实现待盖章，`f12` 已升级待裁决，origin/main 已发布。', '11:30'),
         mkEv(103, 'fastpath_dispatched', null, null, { role: '运维', input: '准备部署清单' }, '11:32'),
         mkEv(104, 'return_summary', null, null, {
-          events: 38, pending_todos: 6,
-          artifacts: { valid: 4, stamped: 4, pending: 1 },
-          flags: { open: 1 }, permissions: { asked: 1 }, stages: { waiting_stamp: 1 },
-        }, '11:35'),
+          since_event: 66, deliveries: [], reviews: { passed: 2, rejected: 1 },
+          flags: { submitted: 2, adjudicated: 1, escalated: 1 },
+          permissions: { asked: 1, allowed: 0, denied: 0 },
+          stages: { finished: 2, skipped: 1, rewound: 1 }, pending_todos: [],
+          attention: { unresolved_actions: 0, unknown_cost_records: 0, budget_stops: 0, exception_decisions: 0, policy_candidates: 0 },
+        } satisfies ReturnSummary, '11:35'),
 
         // exec-cards 验收段：已收束回合（执行卡四体齐）+ 在途回合（不折）
         mkEv(105, 'turn_started', 'a3', 'r3', {}, '11:40'),
@@ -1131,7 +1173,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         flags: { submitted: 0, adjudicated: 0, escalated: 0 },
         permissions: { asked: 0, allowed: 0, denied: 0 },
         stages: { finished: 0, skipped: 0, rewound: 0 }, pending_todos: [],
-      } as T
+        attention: { unresolved_actions: 0, unknown_cost_records: 0, budget_stops: 0, exception_decisions: 0, policy_candidates: 0 },
+      } satisfies ReturnSummary as T
     case 'log_enabled':
       return true as T
     case 'diagnostic_records': {
@@ -1248,6 +1291,9 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       }
       return `// ${p}\n` as T
     }
+    case 'read_repo_file_snapshot':
+      return { path: String(args?.path), content: mock<string>('read_repo_file', args),
+        project_root: String(args?.expectedProjectRoot), generation: useUiStore.getState().projectEpoch } as T
     case 'repo_file_head':
       // mock 仓假定每个文本文件都有 HEAD 版：比盘上少一行，diff 可见。
       return `# HEAD 版 ${args?.path}\n` as T
@@ -1309,6 +1355,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     // ---- 项目向导 mock：浏览器 dev 始终「已有项目」，向导只在 Tauri 真开时出现 ----
     case 'project_open':
       return true as T
+    case 'project_identity':
+      return (currentProjectIdentity() ?? { project_root: useUiStore.getState().projectRoot ?? '/tmp/hexagon-demo', generation: 1 }) as T
     case 'recent_projects':
       // 一条存在 + 一条已删目录（exists=false）——浏览器 dev 可目检红标与移除钮
       return [

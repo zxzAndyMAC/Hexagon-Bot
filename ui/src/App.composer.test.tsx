@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from './App'
 import { api } from './api'
+import * as apiModule from './api'
 import { useUiStore, type WorkTab } from './store'
 import i18n from './i18n'
 
@@ -25,7 +26,7 @@ function visible(element: HTMLElement) {
 
 beforeEach(async () => {
   await i18n.changeLanguage('en')
-  useUiStore.setState({ tabs: [timeline], activeTab: 'timeline', splitOpen: false, team: [], pending: [], timeline: [], modalScope: 'workbench', intakeDraft: false })
+  useUiStore.setState({ projectRoot: null, projectGeneration: null, tabs: [timeline], activeTab: 'timeline', splitOpen: false, team: [], pending: [], timeline: [], modalScope: 'workbench', intakeDraft: false })
   vi.spyOn(api, 'projectOpen').mockResolvedValue(true)
   vi.spyOn(api, 'runOpeningIntake').mockResolvedValue()
   vi.spyOn(api, 'mcpServices').mockResolvedValue([])
@@ -76,4 +77,50 @@ it('returns to the timeline when the focus-input shortcut is used from another t
   await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())) })
   expect(useUiStore.getState().activeTab).toBe('timeline')
   expect(document.activeElement).toBe(el.querySelector('#composer-input'))
+})
+
+// Benchmark I1: visiting Settings must not silently discard an editor draft
+// before the project-leave guard can see it.
+it('keeps unsaved file text and its leave guard while visiting settings', async () => {
+  await act(async () => {
+    useUiStore.setState({projectRoot:'/test'})
+    useUiStore.getState().openTab({id:'file:README.md',kind:'file',title:'README.md',path:'README.md'})
+  })
+  const editor=el.querySelector<HTMLTextAreaElement>('textarea[aria-label="README.md"]')!
+  expect(editor).toBeTruthy()
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(editor,'unsaved owner text')
+    editor.dispatchEvent(new Event('input',{bubbles:true}))
+  })
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown',{key:',',ctrlKey:true,bubbles:true,cancelable:true})))
+  expect(useUiStore.getState().modalScope).toBe('settings')
+  expect(Object.values(useUiStore.getState().fileEdits).some(edit=>edit.dirty)).toBe(true)
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown',{key:',',ctrlKey:true,bubbles:true,cancelable:true})))
+  const restored=el.querySelector<HTMLTextAreaElement>('textarea[aria-label="README.md"]')!
+  expect(restored.value).toBe('unsaved owner text')
+})
+
+// Benchmark I1: projectOpen stays true when A is replaced by B. Intake waits
+// for a host token; old asynchronously installed listeners must still detach.
+it('rebinds intake and streams on host generation changes and cleans late subscriptions', async () => {
+  expect(api.runOpeningIntake).not.toHaveBeenCalled()
+  let finishOld!: (stop: () => void) => void
+  const stopOld = vi.fn(), stopNew = vi.fn()
+  const turns = vi.spyOn(apiModule, 'onTurnDelta')
+    .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+    .mockResolvedValue(stopNew)
+  const tools = vi.spyOn(apiModule, 'onToolOutput').mockResolvedValue(() => {})
+  await act(async () => useUiStore.setState({ projectRoot: '/repo/a', projectGeneration: 31 }))
+  expect(api.runOpeningIntake).toHaveBeenCalledTimes(1)
+  expect(turns).toHaveBeenCalledTimes(1)
+  await act(async () => useUiStore.setState({ projectGeneration: 32 }))
+  expect(api.runOpeningIntake).toHaveBeenCalledTimes(2)
+  expect(turns).toHaveBeenCalledTimes(2)
+  expect(tools).toHaveBeenCalledTimes(2)
+  await act(async () => finishOld(stopOld))
+  expect(stopOld).toHaveBeenCalledTimes(1)
+  expect(stopNew).not.toHaveBeenCalled()
+  await act(async () => useUiStore.getState().beginProjectSwitch())
+  expect(stopNew).toHaveBeenCalledTimes(1)
+  expect(api.runOpeningIntake).toHaveBeenCalledTimes(2)
 })

@@ -81,6 +81,8 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 Once the workbench opens, configure your model service in settings. Then use the project wizard to select a directory, team, and workflow. Start with a small task that has clear acceptance criteria, such as “add search to the existing page and cover it with tests.”
 
+Before closing an edited file or switching projects, choose Save, Discard, or Cancel for unsaved changes. Visiting settings keeps your draft. If the file changed on disk, saving preserves that version and asks you to resolve the conflict.
+
 ### Repository exploration
 
 Chinese questions use the configured agent model to derive candidate identifiers,
@@ -129,7 +131,8 @@ Run these commands from the repository root:
 | --- | --- |
 | `npm run dev` | Start the frontend development server and desktop window. |
 | `npm run check` | Check Rust formatting and Clippy, architecture rules, frontend lint and types, design tokens, translation keys, and generated type drift. |
-| `npm test` | Run Rust workspace tests and frontend Vitest tests. |
+| `npm test` | Run Rust workspace, frontend Vitest, browser runtime, and platform computer-use tests. |
+| `npm run test:browser` | Prepare the pinned browser runtime and run its local boundary and lifecycle tests. |
 | `npm run build` | Build the frontend and Rust release artifacts. The current configuration does not produce desktop installers. |
 | `cargo test export_bindings` | Regenerate frontend type bindings after changing Rust DTOs used across IPC. |
 

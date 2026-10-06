@@ -7,6 +7,1195 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    #[test]
+    fn activation_resume_denial_without_provider_is_final_and_offers_exact_continue(stage in proptest::bool::ANY, superseded in proptest::bool::ANY) {
+        let dir=tempfile::tempdir().unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker"],if stage {Some(activation_recovery_pack())}else{None}).unwrap();
+        if stage {wb.open_stage(0).unwrap();} else {orchestra::write_agent_status(&wb.db,"p1","a0",false).unwrap();}
+        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let provider=Arc::new(ScriptedProvider::new(vec![tool_response(vec![("denial","remote_publish",json!({"marker":"deny-admission"}))]),text_response("continued after final denial")]));
+        wb.register_provider("default",provider.clone());
+        let TurnOutcome::AwaitingPermission(card)=wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap() else {panic!("real approval")};
+        let root=events(&wb,Some(&[EventKind::TurnStarted])).unwrap()[0].id;
+        wb.providers.clear();
+        proptest::prop_assert!(matches!(wb.answer_permission_and_continue(&card,false,None,"activation"),Err(ApiError::NoProvider(_))));
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&card).unwrap().state,crate::cards::CardState::Answered,"denial is effective even when the model is absent");
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),0);
+        let retry=crate::cards::queued(&wb.db,"p1").unwrap().into_iter().find(|card|card.payload["source"]=="activation_resume");
+        proptest::prop_assert!(retry.is_some(),"confirmed denial must retain an exact original-task continuation entry");
+        let retry=retry.unwrap();
+        proptest::prop_assert_eq!(retry.payload["trigger_turn_id"].as_i64(),Some(root));
+        proptest::prop_assert_eq!(retry.payload["activation_root_turn_id"].as_i64(),Some(root));
+        proptest::prop_assert!(matches!(wb.stall_retry(&retry.id),Err(ApiError::NoProvider(_))));
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&retry.id).unwrap().state,crate::cards::CardState::Queued);
+        if superseded {
+            let fresh=Arc::new(ScriptedProvider::new(vec![text_response("independent new task completed")]));
+            wb.register_provider("default",fresh.clone());
+            wb.run_instance("a0","NEW_INDEPENDENT_ADMISSION_TASK_613").unwrap();
+            proptest::prop_assert!(wb.stall_retry(&retry.id).is_err(),"a later independent TurnStarted must supersede stale retry");
+            proptest::prop_assert_eq!(fresh.recorded().len(),1);
+        } else {
+            wb.register_provider("default",provider.clone());
+            wb.stall_retry(&retry.id).unwrap();
+            let requests=provider.recorded();
+            proptest::prop_assert_eq!(requests.len(),2);
+            let history=serde_json::to_string(&requests[1].messages).unwrap();
+            proptest::prop_assert!(history.contains("denied"),"confirmed refusal remains a tool observation, never re-execution");
+            let last=events(&wb,Some(&[EventKind::TurnStarted])).unwrap().pop().unwrap();
+            proptest::prop_assert_eq!(last.payload["instruction"].as_str(),Some(ACTIVATION_RECOVERY_TASK));
+            proptest::prop_assert_eq!(last.payload["activation_root_turn_id"].as_i64(),Some(root));
+        }
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),0);
+    }
+
+    #[test]
+    fn activation_resume_context_admission_preserves_waiting_card(stage in proptest::bool::ANY) {
+        struct TinyAdmissionWindow;
+        impl ModelProvider for TinyAdmissionWindow {
+            fn model_meta(&self)->crate::provider::ModelMeta {crate::provider::ModelMeta{context_window:Some(1),max_output:None}}
+            fn complete(&self,_:&crate::provider::ChatRequest)->Result<crate::provider::ChatResponse,ProviderError> {panic!("real pre-request cap")}
+        }
+        let dir=tempfile::tempdir().unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker"],if stage {Some(activation_recovery_pack())}else{None}).unwrap();
+        if stage {wb.open_stage(0).unwrap();} else {orchestra::write_agent_status(&wb.db,"p1","a0",false).unwrap();}
+        wb.register_provider("default",Arc::new(TinyAdmissionWindow));
+        let TurnOutcome::AwaitingPermission(card)=wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap() else {panic!("real overflow")};
+        wb.providers.clear();
+        proptest::prop_assert!(matches!(wb.adjudicate_flag(&card,true),Err(ApiError::NoProvider(_))));
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&card).unwrap().state,crate::cards::CardState::Queued,"model admission must precede context card closure");
+        let next=Arc::new(ScriptedProvider::new(vec![text_response("continued original context-limited task")]));
+        wb.register_provider("default",next.clone());
+        wb.adjudicate_flag(&card,true).unwrap();
+        proptest::prop_assert_eq!(next.recorded().len(),1);
+        let last=events(&wb,Some(&[EventKind::TurnStarted])).unwrap().pop().unwrap();
+        proptest::prop_assert_eq!(last.payload["instruction"].as_str(),Some(ACTIVATION_RECOVERY_TASK));
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+    #[test]
+    fn activation_resume_retry_packet_corruption_never_uses_generic_stall(case in 0u8..10, stage in proptest::bool::ANY) {
+        let dir=tempfile::tempdir().unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker","tester"],if stage {Some(activation_recovery_pack())}else{None}).unwrap();
+        if stage {wb.open_stage(0).unwrap();} else {orchestra::write_agent_status(&wb.db,"p1","a0",false).unwrap();}
+        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let provider=Arc::new(ScriptedProvider::new(vec![tool_response(vec![("denial","remote_publish",json!({"marker":"corruption"}))]),text_response("must never continue malformed packet")]));
+        wb.register_provider("default",provider.clone());
+        let TurnOutcome::AwaitingPermission(permission)=wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap() else {panic!("real approval")};
+        let action=crate::cards::get(&wb.db,&permission).unwrap().payload["action_id"].as_str().unwrap().to_string();
+        wb.providers.clear();
+        proptest::prop_assert!(matches!(wb.answer_permission_and_continue(&permission,false,None,"activation"),Err(ApiError::NoProvider(_))));
+        let retry=crate::cards::queued(&wb.db,"p1").unwrap().into_iter().find(|card|card.payload["source"]=="activation_resume").unwrap();
+        let patch=match case {
+            0=>json!({"trigger_turn_id":0}),
+            1=>json!({"activation_root_turn_id":-99}),
+            2=>json!({"instruction":"forged original task"}),
+            3=>json!({"run_id":"foreign-stage"}),
+            4=>json!({"branch":"idle_spin"}),
+            5=>json!({"source":"forged-source"}),
+            _=>json!({}),
+        };
+        let fields=patch.as_object().unwrap().iter().map(|(key,value)|(key.as_str(),value.clone())).collect::<Vec<_>>();
+        crate::cards::annotate(&wb.db,&retry.id,&fields).unwrap();
+        // API fixture corruption only: production pending writes remain cards.rs.
+        // These changes simulate old/corrupt persisted scope, not owner authority.
+        match case {
+            6=>{wb.db.conn().execute("UPDATE pending_questions SET agent_id='a1' WHERE id=?1",[&retry.id]).unwrap();}
+            7=>{
+                // Keep SQLite FK integrity while testing an accessible foreign
+                // project's card; a nonexistent project is a fixture error.
+                wb.db.conn().execute("INSERT INTO projects(id,dir,name,mode,autonomy) VALUES('foreign-project','foreign-fixture','fixture','pack','L0')",[]).unwrap();
+                wb.db.conn().execute("UPDATE pending_questions SET project_id='foreign-project' WHERE id=?1",[&retry.id]).unwrap();
+            }
+            8=>{wb.db.conn().execute("UPDATE tool_actions SET state='executing' WHERE id=?1",[&action]).unwrap();}
+            9=>{wb.db.append_event("p1",EventKind::FastpathDispatched,json!({"instruction":"independent later task"}),Some("a0"),wb.active_run().unwrap().as_ref().map(|run|run.id.as_str())).unwrap();}
+            _=>{}
+        }
+        wb.register_provider("default",provider.clone());
+        let before=events(&wb,Some(&[EventKind::TurnStarted])).unwrap().len();
+        proptest::prop_assert!(wb.stall_retry(&retry.id).is_err(),"host resume evidence may never degrade to history-free generic Stall: case={}",case);
+        proptest::prop_assert_eq!(provider.recorded().len(),1);
+        proptest::prop_assert_eq!(events(&wb,Some(&[EventKind::TurnStarted])).unwrap().len(),before);
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&retry.id).unwrap().state,crate::cards::CardState::Queued);
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),0);
+    }
+}
+
+struct AdmissionCommandCounter(CountingAction);
+impl crate::tools::Tool for AdmissionCommandCounter {
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "I2 isolated command transport counter; never launches a process"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    fn risk(&self) -> crate::tools::RiskClass {
+        crate::tools::RiskClass::Exec
+    }
+    fn exec(
+        &self,
+        db: &Db,
+        input: &Value,
+        ctx: &crate::tools::ToolContext,
+    ) -> Result<Value, crate::tools::ToolError> {
+        crate::tools::Tool::exec(&self.0, db, input, ctx)
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    #[test]
+    fn activation_resume_project_shared_retains_peer_with_missing_provider(first_available in proptest::bool::ANY) {
+        let dir=tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("input.txt"),"PROJECT_SHARED_OBSERVATION_613").unwrap();
+        let pack:PackDef=serde_json::from_value(json!({"name":"shared-admission","version":1,
+            "stages":[{"name":"work","roles":["worker","tester"],"due":["code"]}]})).unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker","tester"],Some(pack)).unwrap();
+        wb.open_stage(0).unwrap();
+        pin_stored_rank(&wb,"L0");
+        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(AdmissionCommandCounter(CountingAction(calls.clone())));
+        for (aid,slot) in [("a0","first"),("a1","second")] {
+            wb.db.conn().execute("UPDATE agents SET model_slot=?1 WHERE id=?2",[slot,aid]).unwrap();
+        }
+        let script=||vec![tool_response(vec![("read","bash",json!({"cmd":"printf admission"}))]),
+            text_response(r#"{"verdict":"unsure","reason":"owner decision"}"#),text_response("continued confirmed command")];
+        let first_provider=Arc::new(ScriptedProvider::new(script()));
+        let second_provider=Arc::new(ScriptedProvider::new(script()));
+        wb.register_provider("first",first_provider.clone());
+        wb.register_provider("second",second_provider.clone());
+        let TurnOutcome::AwaitingPermission(first)=wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap() else {panic!("first must wait")};
+        let TurnOutcome::AwaitingPermission(second)=wb.run_instance("a1","SECOND_SHARED_ORIGINAL_TASK_613").unwrap() else {panic!("peer must wait")};
+        wb.providers.remove("second");
+        if !first_available {wb.providers.remove("first");}
+        let released=wb.allow_project_permission_and_continue(&first);
+        proptest::prop_assert!(matches!(released,Err(ApiError::NoProvider(_))),"combined continuation must expose peer admission failure");
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&second).unwrap().state,crate::cards::CardState::Queued);
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&first).unwrap().state,
+            if first_available {crate::cards::CardState::Answered}else{crate::cards::CardState::Queued});
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),usize::from(first_available),"unavailable peer remains unstarted");
+        wb.register_provider("first",first_provider.clone());
+        wb.register_provider("second",second_provider.clone());
+        if first_available {wb.answer_permission_and_continue(&second,true,None,"activation").unwrap();}
+        else {wb.allow_project_permission_and_continue(&first).unwrap();}
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),2,"each confirmed command executes exactly once across admission retry");
+        let turns=events(&wb,Some(&[EventKind::TurnStarted])).unwrap();
+        let peer=turns.iter().rfind(|turn|turn.agent_id.as_deref()==Some("a1")).unwrap();
+        proptest::prop_assert_eq!(peer.payload["instruction"].as_str(),Some("SECOND_SHARED_ORIGINAL_TASK_613"));
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    #[test]
+    fn activation_resume_recovery_without_provider_keeps_retry_boundary(configure_after in proptest::bool::ANY) {
+        let dir=tempfile::tempdir().unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker"],Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        let original=Arc::new(ScriptedProvider::new(vec![text_response("delivered before interrupted continuation")]));
+        wb.register_provider("default",original.clone());
+        wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap();
+        let root=events(&wb,Some(&[EventKind::TurnStarted])).unwrap()[0].id;
+        let run=wb.active_run().unwrap().unwrap().id;
+        wb.db.append_event("p1",EventKind::TurnStarted,json!({"instruction":ACTIVATION_RECOVERY_TASK,
+            "resume_from_turn_id":root,"activation_root_turn_id":root,"subagent":false}),Some("a0"),Some(&run)).unwrap();
+        orchestra::detect_interrupted(&wb.db,"p1").unwrap();
+        wb.providers.clear();
+        let before=events(&wb,Some(&[EventKind::TurnStarted])).unwrap().len();
+        let attempted=wb.recover_run(&run);
+        proptest::prop_assert!(matches!(attempted,Err(ApiError::NoProvider(_))),"missing provider must not report recovered success");
+        proptest::prop_assert!(pending_questions(&wb).unwrap().iter().any(|card|card["kind"]=="recovery"));
+        let state:String=wb.db.conn().query_row("SELECT state FROM stage_runs WHERE id=?1",[&run],|r|r.get(0)).unwrap();
+        proptest::prop_assert_eq!(state,"interrupted");
+        proptest::prop_assert_eq!(events(&wb,Some(&[EventKind::TurnStarted])).unwrap().len(),before);
+        if configure_after {
+            let next=Arc::new(ScriptedProvider::new(vec![text_response("resumed original task")]));
+            wb.register_provider("default",next.clone());
+            wb.recover_run(&run).unwrap();
+            proptest::prop_assert_eq!(next.recorded().len(),1);
+            let last=events(&wb,Some(&[EventKind::TurnStarted])).unwrap().pop().unwrap();
+            proptest::prop_assert_eq!(last.payload["instruction"].as_str(),Some(ACTIVATION_RECOVERY_TASK));
+            proptest::prop_assert_eq!(last.payload["activation_root_turn_id"].as_i64(),Some(root));
+        }
+    }
+
+    #[test]
+    fn activation_resume_allow_and_continue_without_provider_retains_card_before_effect(stage in proptest::bool::ANY) {
+        let dir=tempfile::tempdir().unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker"],if stage {Some(activation_recovery_pack())}else{None}).unwrap();
+        if stage {wb.open_stage(0).unwrap();} else {orchestra::write_agent_status(&wb.db,"p1","a0",false).unwrap();}
+        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let provider=Arc::new(ScriptedProvider::new(vec![tool_response(vec![("approval","remote_publish",json!({"marker":"admission"}))]),text_response("continued original task")]));
+        wb.register_provider("default",provider.clone());
+        let TurnOutcome::AwaitingPermission(card)=wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap() else {panic!("real approval")};
+        let root=events(&wb,Some(&[EventKind::TurnStarted])).unwrap()[0].id;
+        wb.providers.clear();
+        proptest::prop_assert!(matches!(wb.answer_permission_and_continue(&card,true,None,"activation"),Err(ApiError::NoProvider(_))));
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),0,"a failed combined admission must leave the authorized effect unstarted");
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&card).unwrap().state,crate::cards::CardState::Queued);
+        wb.register_provider("default",provider.clone());
+        wb.answer_permission_and_continue(&card,true,None,"activation").unwrap();
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),1);
+        proptest::prop_assert_eq!(provider.recorded().len(),2);
+        let last=events(&wb,Some(&[EventKind::TurnStarted])).unwrap().pop().unwrap();
+        proptest::prop_assert_eq!(last.payload["instruction"].as_str(),Some(ACTIVATION_RECOVERY_TASK));
+        proptest::prop_assert_eq!(last.payload["activation_root_turn_id"].as_i64(),Some(root));
+    }
+}
+#[test]
+fn activation_resume_disk_taskboard_receipts_keep_ids_and_never_redispatch_child() {
+    struct BoardProvider {
+        parent: ScriptedProvider,
+        child_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl ModelProvider for BoardProvider {
+        fn is_scripted(&self) -> bool {
+            true
+        }
+        fn complete(
+            &self,
+            request: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            if request.tools.iter().any(|tool| tool.name == "tasks") {
+                self.parent.complete(request)
+            } else {
+                self.child_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(text_response("child completed its readonly observation"))
+            }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("input.txt"), "readonly child scope").unwrap();
+    let child_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider = Arc::new(BoardProvider {
+        child_calls: child_calls.clone(),
+        parent: ScriptedProvider::new(vec![
+            tool_response(vec![
+                (
+                    "create",
+                    "tasks",
+                    json!({"action":"create","title":"MANUAL_TASK_DISK_613"}),
+                ),
+                (
+                    "child",
+                    "subagent",
+                    json!({"task":"readonly input.txt observation","files":["input.txt"]}),
+                ),
+            ]),
+            tool_response(vec![("wait-one", "remote_publish", json!({"wait":1}))]),
+            tool_response(vec![("list-one", "tasks", json!({"action":"list"}))]),
+            tool_response(vec![(
+                "close",
+                "tasks",
+                json!({"action":"close","task_id":"task-1"}),
+            )]),
+            tool_response(vec![("wait-two", "remote_publish", json!({"wait":2}))]),
+            tool_response(vec![("list-two", "tasks", json!({"action":"list"}))]),
+            tool_response(vec![(
+                "new",
+                "tasks",
+                json!({"action":"create","title":"NEW_TASK_AFTER_REOPEN_613"}),
+            )]),
+            tool_response(vec![("list-three", "tasks", json!({"action":"list"}))]),
+            text_response("finished original parent task"),
+        ]),
+    });
+    let first_card;
+    {
+        let mut wb = Workbench::open_scoped(
+            dir.path(),
+            "board-disk",
+            &[("a0".into(), "worker".into())],
+            Some(activation_recovery_pack()),
+            false,
+        )
+        .unwrap();
+        wb.open_stage(0).unwrap();
+        pin_stored_rank(&wb, "L4");
+        wb.registry
+            .register(DesktopApprovalEffect(CountingAction(effects.clone())));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(card) =
+            wb.run_instance("a0", ACTIVATION_RECOVERY_TASK).unwrap()
+        else {
+            panic!("first parent permission")
+        };
+        first_card = card;
+        // Await the real worker before discarding its host board; no dangling
+        // thread is fabricated as cancelled or carried into the reopened host.
+        let start = std::time::Instant::now();
+        while !events(&wb, Some(&[EventKind::TurnFinished]))
+            .unwrap()
+            .iter()
+            .any(|event| event.payload["subagent"] == true)
+        {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "board-disk",
+        &[],
+        Some(activation_recovery_pack()),
+        false,
+    )
+    .unwrap();
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(effects.clone())));
+    wb.register_provider("default", provider.clone());
+    wb.answer_permission_and_continue(&first_card, false, None, "activation")
+        .unwrap();
+    let second = crate::cards::queued(&wb.db, "p1")
+        .unwrap()
+        .into_iter()
+        .find(|card| card.kind == "permission")
+        .unwrap()
+        .id;
+    let requests = provider.parent.recorded();
+    let after_first_list = serde_json::to_string(&requests[3].messages).unwrap();
+    assert!(after_first_list.contains("MANUAL_TASK_DISK_613"));
+    assert!(after_first_list.contains("task-1"));
+    assert!(after_first_list.contains("interrupted"),"a returned running dispatch receipt does not prove the old worker result after host restart");
+    wb.answer_permission_and_continue(&second, false, None, "activation")
+        .unwrap();
+    let requests = provider.parent.recorded();
+    let last = serde_json::to_string(&requests.last().unwrap().messages).unwrap();
+    assert!(last.contains("MANUAL_TASK_DISK_613"));
+    assert!(last.contains("NEW_TASK_AFTER_REOPEN_613"));
+    assert!(
+        last.contains("task-3"),
+        "restoring original ids must advance the generator"
+    );
+    assert_eq!(
+        child_calls.load(Ordering::SeqCst),
+        1,
+        "restoration never dispatches the child again"
+    );
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    let turns = events(&wb, Some(&[EventKind::TurnStarted]))
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.payload["subagent"] != true)
+        .collect::<Vec<_>>();
+    assert_eq!(turns.len(), 3);
+    assert_eq!(
+        turns[2].payload["activation_root_turn_id"].as_i64(),
+        Some(turns[0].id)
+    );
+    let closed:String=wb.db.conn().query_row("SELECT output_json FROM tool_actions WHERE tool='tasks' AND json_extract(input_json,'$.action')='close'",[],|r|r.get(0)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&closed).unwrap()["closed"],
+        true
+    );
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+    #[test]
+    fn activation_resume_legacy_request_identity_never_guesses_across_child_boundary(child in proptest::bool::ANY) {
+        let dir=tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("input.txt"),"LEGACY_RECEIPT_613").unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker"],Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        pin_stored_rank(&wb,"L4");
+        wb.registry.register(PermissionResumeChildFixture);
+        wb.registry.register(DesktopApprovalEffect(CountingAction(Arc::new(std::sync::atomic::AtomicUsize::new(0)))));
+        let mut responses=Vec::new();
+        if child {responses.push(tool_response(vec![("child","permission_resume_child_fixture",json!({}))]));}
+        responses.extend([tool_response(vec![("read","fs_read",json!({"path":"input.txt"}))]),
+            tool_response(vec![("wait","remote_publish",json!({}))])]);
+        let provider=Arc::new(ScriptedProvider::new(responses));
+        wb.register_provider("default",provider.clone());
+        assert!(matches!(wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap(),TurnOutcome::AwaitingPermission(_)));
+        let request:i64=wb.db.conn().query_row("SELECT request_id FROM tool_actions WHERE tool='fs_read'",[],|r|r.get(0)).unwrap();
+        // A real legacy envelope has no trustworthy parent/subagent metadata.
+        // If a child intervened, choosing the latest non-child is a guess.
+        wb.db.conn().execute("DELETE FROM events WHERE json_extract(payload,'$.kind')='activation_observation' AND json_extract(payload,'$.request_id')=?1",[request]).unwrap();
+        wb.db.conn().execute("UPDATE events SET payload=json_remove(payload,'$.turn_id','$.subagent','$.activation_root_turn_id') WHERE id=?1",[request]).unwrap();
+        let parent=events(&wb,Some(&[EventKind::TurnStarted])).unwrap()[0].id;
+        let run=wb.active_run().unwrap().unwrap().id;
+        let restored=wb.activation_resume("a0",Some(&run),Some(parent));
+        proptest::prop_assert_eq!(restored.is_err(),child,"ambiguous legacy child boundary must reject automatic continuation");
+        if !child {proptest::prop_assert!(serde_json::to_string(&restored.unwrap().history).unwrap().contains("LEGACY_RECEIPT_613"));}
+        proptest::prop_assert_eq!(provider.recorded().len(),if child {3}else{2});
+    }
+}
+
+const ACTIVATION_RECOVERY_TASK: &str = "RECOVERY_TASK_613: change total to total_cents; verify boundary 2^53-1; keep unrelated work.\nPreserve this exact constraint: do not publish.";
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    #[test]
+    fn activation_resume_interruption_tracks_only_parent_terminal(
+        children in 0usize..4, parent_finished in proptest::bool::ANY,
+        legacy_child_terminal in proptest::bool::ANY
+    ) {
+        let dir=tempfile::tempdir().unwrap();
+        let wb=Workbench::for_test(dir.path(),&["worker"],Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        let run=wb.active_run().unwrap().unwrap().id;
+        let parent=wb.db.append_event("p1",EventKind::TurnStarted,
+            json!({"subagent":false,"instruction":ACTIVATION_RECOVERY_TASK}),Some("a0"),Some(&run)).unwrap();
+        for _ in 0..children {
+            let child=wb.db.append_event("p1",EventKind::TurnStarted,
+                json!({"subagent":true,"instruction":"child"}),Some("a0"),Some(&run)).unwrap();
+            let payload=if legacy_child_terminal {json!({"outcome":"child done"})}
+                else {json!({"subagent":true,"turn_id":child,"outcome":"child done"})};
+            wb.db.append_event("p1",EventKind::TurnFinished,payload,Some("a0"),Some(&run)).unwrap();
+        }
+        if parent_finished {
+            wb.db.append_event("p1",EventKind::TurnFinished,
+                json!({"subagent":false,"turn_id":parent,"outcome":"parent done"}),Some("a0"),Some(&run)).unwrap();
+        }
+        let detected=orchestra::detect_interrupted(&wb.db,"p1").unwrap();
+        proptest::prop_assert_eq!(detected,u32::from(!parent_finished));
+        proptest::prop_assert_eq!(orchestra::detect_interrupted(&wb.db,"p1").unwrap(),0);
+        if !parent_finished {
+            let terminal=events(&wb,Some(&[EventKind::TurnFailed])).unwrap().pop().unwrap();
+            proptest::prop_assert_eq!(terminal.payload["turn_id"].as_i64(),Some(parent));
+            proptest::prop_assert_eq!(terminal.payload["subagent"].as_bool(),Some(false));
+        }
+    }
+
+    #[test]
+    fn activation_resume_chain_requires_host_scope_and_valid_root(depth in 1usize..4, corruption in 0u8..9) {
+        let dir=tempfile::tempdir().unwrap();
+        let wb=Workbench::for_test(dir.path(),&["worker","worker"],Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        let run=wb.active_run().unwrap().unwrap().id;
+        let root=wb.db.append_event("p1",EventKind::TurnStarted,
+            json!({"instruction":ACTIVATION_RECOVERY_TASK,"subagent":false}),Some("a0"),Some(&run)).unwrap();
+        let mut parent=root;
+        for _ in 0..depth {
+            parent=wb.db.append_event("p1",EventKind::TurnStarted,
+                json!({"instruction":ACTIVATION_RECOVERY_TASK,"resume_from_turn_id":parent,
+                    "activation_root_turn_id":root,"subagent":false}),Some("a0"),Some(&run)).unwrap();
+        }
+        match corruption {
+            1=>{wb.db.conn().execute("UPDATE events SET payload=json_set(payload,'$.instruction','') WHERE id=?1",[root]).unwrap();}
+            2=>{wb.db.conn().execute("UPDATE events SET payload=json_set(payload,'$.resume_from_turn_id',id) WHERE id=?1",[parent]).unwrap();}
+            3=>{wb.db.conn().execute("UPDATE events SET agent_id='a1' WHERE id=?1",[root]).unwrap();}
+            4=>{wb.db.conn().execute("UPDATE events SET stage_run_id=NULL WHERE id=?1",[root]).unwrap();}
+            5=>{wb.db.conn().execute("UPDATE events SET payload=json_set(payload,'$.subagent',json('true')) WHERE id=?1",[parent]).unwrap();}
+            6=>{wb.db.conn().execute("UPDATE events SET payload=json_set(payload,'$.activation_root_turn_id',id) WHERE id=?1",[parent]).unwrap();}
+            7=>{wb.db.append_event("p1",EventKind::FastpathDispatched,json!({"instruction":"new independent task"}),Some("a0"),Some(&run)).unwrap();}
+            8=>{wb.db.conn().execute("DELETE FROM events WHERE kind='stage_started' AND stage_run_id=?1",[&run]).unwrap();}
+            _=>{}
+        }
+        let result=wb.activation_resume("a0",Some(&run),Some(parent));
+        if corruption==0 {
+            let resume=result.unwrap();
+            proptest::prop_assert_eq!(resume.turn_id,parent);
+            proptest::prop_assert_eq!(resume.root_turn_id,root);
+            proptest::prop_assert_eq!(resume.instruction,ACTIVATION_RECOVERY_TASK);
+        } else { proptest::prop_assert!(result.is_err(),"corruption {} must refuse",corruption); }
+    }
+
+    #[test]
+    fn activation_resume_two_permission_waits_keep_native_root_and_unstarted_tail(
+        first_allow in proptest::bool::ANY, second_allow in proptest::bool::ANY,
+        native in "native_[a-z]{1,12}"
+    ) {
+        use crate::provider::ContentBlock;
+        let dir=tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("unstarted.txt"),"TAIL_MUST_NOT_BE_READ_613").unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker"],Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        pin_stored_rank(&wb,"L4");
+        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let mut first=tool_response(vec![("first","remote_publish",json!({"wait":1})),
+            ("tail","fs_read",json!({"path":"unstarted.txt"}))]);
+        first.content.insert(0,ContentBlock::Thinking{text:native.clone(),replay_as_reasoning_content:true});
+        first.content.insert(1,ContentBlock::Thinking{text:"DISPLAY_ONLY_TWICE_613".into(),replay_as_reasoning_content:false});
+        let provider=Arc::new(ScriptedProvider::new(vec![first,
+            tool_response(vec![("second","remote_publish",json!({"wait":2}))]),text_response("complete after two waits")]));
+        wb.register_provider("default",provider.clone());
+        let TurnOutcome::AwaitingPermission(first_card)=wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap() else {panic!("first wait")};
+        wb.answer_permission_and_continue(&first_card,first_allow,None,"activation").unwrap();
+        let second_card=crate::cards::queued(&wb.db,"p1").unwrap().into_iter()
+            .find(|card|card.kind=="permission").unwrap().id;
+        wb.db.append_message("p1","owner","OWNER_SECOND_WAIT_GUIDANCE_613",&[],&[],None,None).unwrap();
+        wb.answer_permission_and_continue(&second_card,second_allow,None,"activation").unwrap();
+        let requests=provider.recorded();
+        proptest::prop_assert_eq!(requests.len(),3);
+        let last=requests.last().unwrap();
+        let wire=crate::provider::openai_shape::to_request(last);
+        proptest::prop_assert!(wire["messages"].as_array().unwrap().iter().any(|m|m["reasoning_content"]==native));
+        let restored=serde_json::to_string(&last.messages).unwrap();
+        proptest::prop_assert!(restored.contains("Host did not prepare or start this call"));
+        proptest::prop_assert!(restored.contains("OWNER_SECOND_WAIT_GUIDANCE_613"));
+        proptest::prop_assert!(!restored.contains("TAIL_MUST_NOT_BE_READ_613"));
+        proptest::prop_assert!(!restored.contains("DISPLAY_ONLY_TWICE_613"));
+        proptest::prop_assert_eq!(calls.load(Ordering::SeqCst),usize::from(first_allow)+usize::from(second_allow));
+        let turns=events(&wb,Some(&[EventKind::TurnStarted])).unwrap();
+        proptest::prop_assert_eq!(turns.len(),3);
+        for turn in &turns[1..] {
+            proptest::prop_assert_eq!(turn.payload["activation_root_turn_id"].as_i64(),Some(turns[0].id));
+            proptest::prop_assert_eq!(turn.payload["instruction"].as_str(),Some(ACTIVATION_RECOVERY_TASK));
+        }
+        proptest::prop_assert_eq!(turns[2].payload["resume_from_turn_id"].as_i64(),Some(turns[1].id));
+    }
+
+    #[test]
+    fn activation_resume_unknown_stops_before_unlock_or_new_model_call(executing in proptest::bool::ANY) {
+        let dir=tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("input.txt"),"confirmed read before simulated interrupted receipt").unwrap();
+        let mut wb=Workbench::for_test(dir.path(),&["worker"],Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        pin_stored_rank(&wb,"L4");
+        let provider=Arc::new(ScriptedProvider::new(vec![tool_response(vec![("read","fs_read",json!({"path":"input.txt"}))]),text_response("done")]));
+        wb.register_provider("default",provider.clone());
+        wb.run_instance("a0",ACTIVATION_RECOVERY_TASK).unwrap();
+        let root=events(&wb,Some(&[EventKind::TurnStarted])).unwrap()[0].id;
+        let run=wb.active_run().unwrap().unwrap().id;
+        let state=if executing {"executing"} else {"unknown"};
+        wb.db.conn().execute("UPDATE tool_actions SET state=?1",[state]).unwrap();
+        wb.db.append_event("p1",EventKind::TurnStarted,json!({"instruction":ACTIVATION_RECOVERY_TASK,
+            "resume_from_turn_id":root,"activation_root_turn_id":root,"subagent":false}),Some("a0"),Some(&run)).unwrap();
+        orchestra::detect_interrupted(&wb.db,"p1").unwrap();
+        let before=provider.recorded().len();
+        proptest::prop_assert!(wb.recover_run(&run).is_err());
+        proptest::prop_assert_eq!(provider.recorded().len(),before);
+        let state:String=wb.db.conn().query_row("SELECT state FROM stage_runs WHERE id=?1",[&run],|r|r.get(0)).unwrap();
+        proptest::prop_assert_eq!(state,"interrupted");
+        proptest::prop_assert!(pending_questions(&wb).unwrap().iter().any(|card|card["kind"]=="recovery"));
+    }
+}
+
+#[test]
+fn activation_resume_source_fresh_review_does_not_revive_draft_reasoning() {
+    use crate::provider::ContentBlock;
+    struct CapAfterDraft {
+        inner: ScriptedProvider,
+        completed: std::sync::atomic::AtomicUsize,
+        root: PathBuf,
+    }
+    impl ModelProvider for CapAfterDraft {
+        fn is_scripted(&self) -> bool {
+            true
+        }
+        fn model_meta(&self) -> crate::provider::ModelMeta {
+            crate::provider::ModelMeta {
+                context_window: Some(50000),
+                max_output: None,
+            }
+        }
+        fn complete(
+            &self,
+            request: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            let response = self.inner.complete(request)?;
+            if self.completed.fetch_add(1, Ordering::SeqCst) == 1 {
+                let db = Db::open(self.root.join(".hexagon/state.db")).unwrap();
+                db.append_message(
+                    "p1",
+                    "owner",
+                    &format!(
+                        "OWNER_FRESH_REVIEW_CONSTRAINT_613 {}",
+                        "keep the exact original requirement 2^53-1. ".repeat(6000)
+                    ),
+                    &[],
+                    &[],
+                    None,
+                    None,
+                )
+                .unwrap();
+            }
+            Ok(response)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sample.rs"), "fn example() {}\n").unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "source-phase",
+        &[("a0".into(), "worker".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let mut read = tool_response(vec![("draft-read", "fs_read", json!({"path":"sample.rs"}))]);
+    read.content.insert(
+        0,
+        ContentBlock::Thinking {
+            text: "NATIVE_DRAFT_MUST_STAY_CLEARED_613".into(),
+            replay_as_reasoning_content: true,
+        },
+    );
+    wb.register_provider(
+        "default",
+        Arc::new(CapAfterDraft {
+            inner: ScriptedProvider::new(vec![read, text_response("See `sample.rs:1`.")]),
+            completed: 0.into(),
+            root: dir.path().to_path_buf(),
+        }),
+    );
+    let TurnOutcome::AwaitingPermission(card) =
+        wb.run_instance("a0", "/source locate example").unwrap()
+    else {
+        panic!("genuine review context cap")
+    };
+    assert_eq!(
+        crate::cards::escalation_sub(&crate::cards::get(&wb.db, &card).unwrap()),
+        crate::cards::EscalationSub::ContextOverflow
+    );
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![("reread", "fs_read", json!({"path":"sample.rs"}))]),
+        text_response("See `sample.rs:1`."),
+        tool_response(vec![(
+            "second-reread",
+            "fs_read",
+            json!({"path":"sample.rs"}),
+        )]),
+        text_response("See `sample.rs:1`."),
+    ]));
+    wb.register_provider("default", provider.clone());
+    wb.adjudicate_flag(&card, true).unwrap();
+    let requests = provider.recorded();
+    let resumed = serde_json::to_string(&requests[0].messages).unwrap();
+    assert!(
+        !resumed.contains("NATIVE_DRAFT_MUST_STAY_CLEARED_613"),
+        "fresh review is a durable protocol reset"
+    );
+    assert!(
+        resumed.contains("Source-answer review"),
+        "restore the fixed host phase policy"
+    );
+    assert_eq!(
+        requests.len(),
+        2,
+        "a resumed review must not start another review phase"
+    );
+}
+
+#[test]
+fn activation_resume_context_missing_parent_keeps_card_and_never_calls_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![text_response(
+        "must not happen",
+    )]));
+    wb.register_provider("default", provider.clone());
+    let card = crate::cards::enqueue(
+        &wb.db,
+        "p1",
+        Some("a0"),
+        crate::cards::CardKind::Escalation,
+        json!({"sub":"context_overflow","role":"worker"}),
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        wb.adjudicate_flag(&card, true),
+        Err(ApiError::BadInput(_))
+    ));
+    assert!(provider.recorded().is_empty());
+    assert_eq!(
+        crate::cards::get(&wb.db, &card).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+}
+
+#[test]
+fn activation_resume_child_terminal_cannot_hide_crashed_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("input.txt"), "OBSERVED_FILE_VERSION_613").unwrap();
+    let crashed = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "api::tests::activation_resume_crash_worker",
+            "--nocapture",
+        ])
+        .env("HEXAGON_TEST_ACTIVATION_CRASH_DIR", dir.path())
+        .env("HEXAGON_TEST_ACTIVATION_CHILD_FINISHED", "1")
+        .output()
+        .unwrap();
+    assert_eq!(crashed.status.code(), Some(71));
+    let wb = Workbench::open_scoped(
+        dir.path(),
+        "recovery",
+        &[("a0".into(), "worker".into())],
+        Some(activation_recovery_pack()),
+        false,
+    )
+    .unwrap();
+    assert!(
+        pending_questions(&wb)
+            .unwrap()
+            .iter()
+            .any(|card| card["kind"] == "recovery"),
+        "a completed child is not the terminal state of its crashed parent"
+    );
+}
+
+#[test]
+fn activation_resume_permission_without_dispatch_excludes_prior_stage_task() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("old.txt"), "OBSOLETE_STAGE_OBSERVATION_613").unwrap();
+    std::fs::write(
+        dir.path().join("current.txt"),
+        "CURRENT_STAGE_OBSERVATION_613",
+    )
+    .unwrap();
+    let mut wb =
+        Workbench::for_test(dir.path(), &["worker"], Some(activation_recovery_pack())).unwrap();
+    wb.open_stage(0).unwrap();
+    pin_stored_rank(&wb, "L4");
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(calls.clone())));
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![("old-read", "fs_read", json!({"path":"old.txt"}))]),
+        text_response("old done"),
+        tool_response(vec![(
+            "current-read",
+            "fs_read",
+            json!({"path":"current.txt"}),
+        )]),
+        tool_response(vec![(
+            "approval",
+            "remote_publish",
+            json!({"marker":"current-task"}),
+        )]),
+        text_response("current continued"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    wb.run_instance("a0", "obsolete stage task").unwrap();
+    let TurnOutcome::AwaitingPermission(card) =
+        wb.run_instance("a0", ACTIVATION_RECOVERY_TASK).unwrap()
+    else {
+        panic!("expected current task permission");
+    };
+    wb.answer_permission_and_continue(&card, false, None, "activation")
+        .unwrap();
+    let requests = provider.recorded();
+    let resumed = serde_json::to_string(&requests.last().unwrap().messages).unwrap();
+    assert!(resumed.contains("CURRENT_STAGE_OBSERVATION_613"));
+    assert!(
+        !resumed.contains("OBSOLETE_STAGE_OBSERVATION_613"),
+        "stage identity is not task identity"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn activation_resume_permission_preserves_native_reasoning_without_display_thinking() {
+    use crate::provider::ContentBlock;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("input.txt"), "OBSERVED_NATIVE_613").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    pin_stored_rank(&wb, "L4");
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(calls.clone())));
+    let mut read = tool_response(vec![(
+        "read-native",
+        "fs_read",
+        json!({"path":"input.txt"}),
+    )]);
+    read.content.insert(
+        0,
+        ContentBlock::Thinking {
+            text: "NATIVE_REASONING_613".into(),
+            replay_as_reasoning_content: true,
+        },
+    );
+    read.content.insert(
+        1,
+        ContentBlock::Thinking {
+            text: "DISPLAY_ONLY_613".into(),
+            replay_as_reasoning_content: false,
+        },
+    );
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("plan"),
+        read,
+        tool_response(vec![(
+            "approval",
+            "remote_publish",
+            json!({"marker":"waiting"}),
+        )]),
+        text_response("continued with denial retained"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    let TurnOutcome::AwaitingPermission(card) = wb
+        .dispatch("worker", ACTIVATION_RECOVERY_TASK, &[])
+        .unwrap()
+    else {
+        panic!("expected the real permission card");
+    };
+    wb.answer_permission_and_continue(&card, false, None, "activation")
+        .unwrap();
+    let requests = provider.recorded();
+    let resumed = requests.last().unwrap();
+    let wire = crate::provider::openai_shape::to_request(resumed);
+    assert!(wire["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|message| message["reasoning_content"] == "NATIVE_REASONING_613"));
+    assert!(!serde_json::to_string(&resumed.messages)
+        .unwrap()
+        .contains("DISPLAY_ONLY_613"));
+    assert!(serde_json::to_string(&resumed.messages)
+        .unwrap()
+        .contains("OBSERVED_NATIVE_613"));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "denied effects never execute"
+    );
+}
+
+#[test]
+fn activation_resume_context_overflow_retains_its_exact_original_instruction() {
+    struct TinyWindow;
+    impl ModelProvider for TinyWindow {
+        fn model_meta(&self) -> crate::provider::ModelMeta {
+            crate::provider::ModelMeta {
+                context_window: Some(1),
+                max_output: None,
+            }
+        }
+        fn complete(
+            &self,
+            _: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            panic!("the genuine context cap must refuse before model dispatch");
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.register_provider("default", Arc::new(TinyWindow));
+    let TurnOutcome::AwaitingPermission(card) =
+        wb.run_instance("a0", ACTIVATION_RECOVERY_TASK).unwrap()
+    else {
+        panic!("expected a real overflow card");
+    };
+    let provider = Arc::new(ScriptedProvider::new(vec![text_response(
+        "continue actual task",
+    )]));
+    wb.register_provider("default", provider.clone());
+    wb.adjudicate_flag(&card, true).unwrap();
+    let requests = provider.recorded();
+    assert_eq!(requests.len(), 1);
+    let first_user: Value = serde_json::from_str(match &requests[0].messages[1].content[0] {
+        crate::provider::ContentBlock::Text { text } => text,
+        _ => panic!("the original owner instruction must stay a user message"),
+    })
+    .unwrap();
+    assert_eq!(first_user["instruction"], ACTIVATION_RECOVERY_TASK);
+}
+
+fn activation_recovery_pack() -> PackDef {
+    serde_json::from_value(json!({"name":"recovery", "version":1,
+        "stages":[{"name":"work", "roles":["worker"], "due":["code"]}]}))
+    .unwrap()
+}
+
+#[test]
+fn activation_resume_crash_worker() {
+    let Some(root) = std::env::var_os("HEXAGON_TEST_ACTIVATION_CRASH_DIR") else {
+        return;
+    };
+    struct CrashAfterRead(std::sync::atomic::AtomicUsize, PathBuf);
+    impl ModelProvider for CrashAfterRead {
+        fn is_scripted(&self) -> bool {
+            true
+        }
+        fn complete(
+            &self,
+            _: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
+                let db = Db::open(self.1.join(".hexagon/state.db")).unwrap();
+                db.append_message(
+                    "p1",
+                    "owner",
+                    "OWNER_GUIDANCE_613: also retain newline and check negative values",
+                    &[],
+                    &[],
+                    None,
+                    None,
+                )
+                .unwrap();
+                if std::env::var_os("HEXAGON_TEST_ACTIVATION_CHILD_FINISHED").is_some() {
+                    let run = db.active_stage_run("p1").unwrap().unwrap().id;
+                    let child = db
+                        .append_event(
+                            "p1",
+                            EventKind::TurnStarted,
+                            json!({"agent":"a0","subagent":true,"instruction":"unrelated child"}),
+                            Some("a0"),
+                            Some(&run),
+                        )
+                        .unwrap();
+                    db.append_event(
+                        "p1",
+                        EventKind::TurnFinished,
+                        json!({"agent":"a0","subagent":true,"turn_id":child}),
+                        Some("a0"),
+                        Some(&run),
+                    )
+                    .unwrap();
+                }
+                std::process::exit(71);
+            }
+            Ok(tool_response(vec![(
+                "first-read",
+                "fs_read",
+                json!({"path":"input.txt"}),
+            )]))
+        }
+    }
+    let root = PathBuf::from(root);
+    let mut wb = Workbench::open_scoped(
+        &root,
+        "recovery",
+        &[("a0".into(), "worker".into())],
+        Some(activation_recovery_pack()),
+        false,
+    )
+    .unwrap();
+    wb.open_stage(0).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(CrashAfterRead(std::sync::atomic::AtomicUsize::new(0), root)),
+    );
+    wb.run_instance("a0", ACTIVATION_RECOVERY_TASK).unwrap();
+    panic!("the worker must exit during the second request");
+}
+
+#[test]
+fn activation_resume_reopen_retains_consumed_instruction_and_confirmed_observation() {
+    // I2 / V05 (2026-10-06): the first response advanced the cursor, then a
+    // crash lost both the original constraints and the successful file read.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("input.txt"), "OBSERVED_FILE_VERSION_613").unwrap();
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "api::tests::activation_resume_crash_worker",
+            "--nocapture",
+        ])
+        .env("HEXAGON_TEST_ACTIVATION_CRASH_DIR", dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        result.status.code(),
+        Some(71),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "recovery",
+        &[],
+        Some(activation_recovery_pack()),
+        false,
+    )
+    .unwrap();
+    let run = pending_questions(&wb)
+        .unwrap()
+        .into_iter()
+        .find(|card| card["kind"] == "recovery")
+        .unwrap()["payload"]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let provider = Arc::new(ScriptedProvider::new(vec![text_response("continued")]));
+    wb.register_provider("default", provider.clone());
+    wb.recover_run(&run).unwrap();
+    let requests = provider.recorded();
+    assert_eq!(requests.len(), 1);
+    let messages = serde_json::to_string(&requests[0].messages).unwrap();
+    let first_user: Value = serde_json::from_str(match &requests[0].messages[1].content[0] {
+        crate::provider::ContentBlock::Text { text } => text,
+        _ => panic!("the original owner instruction must stay a user message"),
+    })
+    .unwrap();
+    assert_eq!(first_user["instruction"], ACTIVATION_RECOVERY_TASK);
+    assert!(messages.contains("OBSERVED_FILE_VERSION_613"));
+    assert!(messages.contains("OWNER_GUIDANCE_613"));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("input.txt")).unwrap(),
+        "OBSERVED_FILE_VERSION_613"
+    );
+}
+
+#[test]
+fn provider_reload_removes_deleted_managed_slot_without_default() {
+    // Competitor improvements 05 / V02 (2026-10-06): a removed binding
+    // previously kept its live HttpProvider and attempted the old supplier.
+    let dir = tempfile::tempdir().unwrap();
+    let _config = crate::provider_config::fixture_path(dir.path().join("providers.json"));
+    crate::provider_config::save_provider(&crate::provider_config::ProviderDef {
+        id: "removed".into(),
+        name: "Removed".into(),
+        kind: crate::provider::ProviderKind::OpenAi,
+        base_url: "http://127.0.0.1:9".into(),
+        models: vec![],
+        enabled: true,
+    })
+    .unwrap();
+    crate::provider_config::set_binding("role_draft", "removed", "old-model").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    wb.attach_providers(Arc::new(crate::credentials::MemoryStore::default()));
+    crate::provider_config::remove_binding("role_draft").unwrap();
+    wb.reload_providers();
+    assert!(matches!(
+        wb.draft_role_def("a0", "must not call the removed supplier"),
+        Err(ApiError::NoProvider(slot)) if slot == "role_draft"
+    ));
+}
+
+#[test]
+fn provider_reload_deleted_slot_uses_only_current_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let _config = crate::provider_config::fixture_path(dir.path().join("providers.json"));
+    for id in ["removed", "current"] {
+        crate::provider_config::save_provider(
+            &provider_reload_document(id, false, false, true).providers[0],
+        )
+        .unwrap();
+    }
+    crate::provider_config::set_binding("role_draft", "removed", "old-model").unwrap();
+    crate::provider_config::set_binding("default", "current", "approved-model").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    wb.attach_providers(Arc::new(crate::credentials::MemoryStore::default()));
+    crate::provider_config::delete_provider("removed").unwrap();
+    wb.reload_providers();
+    // No key means no HTTP request. The observable error identifies which
+    // supplier the ordinary Workbench fallback actually selected.
+    assert!(matches!(
+        wb.draft_role_def("a0", "use the current approved default"),
+        Err(ApiError::Turn(turn::TurnError::Provider(ProviderError::MissingCredential(key))))
+            if key == "provider/current"
+    ));
+    crate::provider_config::delete_provider("current").unwrap();
+    wb.reload_providers();
+    assert!(matches!(
+        wb.draft_role_def("a0", "no replacement supplier"),
+        Err(ApiError::NoProvider(_))
+    ));
+}
+
+#[test]
+fn provider_reload_preserves_explicit_same_named_injection() {
+    for inject_before_attach in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let _config = crate::provider_config::fixture_document(provider_reload_document(
+            "managed", true, true, true,
+        ));
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let scripted = Arc::new(ScriptedProvider::new(vec![
+            text_response("explicit"),
+            text_response("still explicit"),
+        ]));
+        if inject_before_attach {
+            wb.register_provider("role_draft", scripted.clone());
+        }
+        wb.attach_providers(Arc::new(crate::credentials::MemoryStore::default()));
+        if !inject_before_attach {
+            wb.register_provider("role_draft", scripted.clone());
+        }
+        wb.reload_providers();
+        assert_eq!(
+            wb.draft_role_def("a0", "same name as managed slot")
+                .unwrap(),
+            "explicit"
+        );
+        let _removed = crate::provider_config::fixture_document(Default::default());
+        wb.reload_providers();
+        assert_eq!(
+            wb.draft_role_def("a0", "explicit lifetime belongs to caller")
+                .unwrap(),
+            "still explicit"
+        );
+        assert_eq!(scripted.recorded().len(), 2);
+    }
+}
+
+fn provider_reload_document(
+    id: &str,
+    role: bool,
+    default: bool,
+    enabled: bool,
+) -> crate::provider_config::ProviderDoc {
+    let mut doc = crate::provider_config::ProviderDoc {
+        providers: vec![crate::provider_config::ProviderDef {
+            id: id.into(),
+            name: id.into(),
+            kind: crate::provider::ProviderKind::OpenAi,
+            base_url: "http://127.0.0.1:9".into(),
+            models: vec![],
+            enabled,
+        }],
+        ..Default::default()
+    };
+    for (slot, present) in [("role_draft", role), ("default", default)] {
+        if present {
+            doc.slots.insert(
+                slot.into(),
+                crate::provider_config::SlotBinding {
+                    provider_id: id.into(),
+                    model: "configured-model".into(),
+                },
+            );
+        }
+    }
+    doc
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+    /// D12 / competitor improvements 05: config churn can neither retain a
+    /// withdrawn supplier nor revoke an explicit same-named injection.
+    #[test]
+    fn provider_reload_configuration_churn_preserves_only_authorized_sources(
+        explicit in proptest::bool::ANY,
+        changes in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY, proptest::bool::ANY), 1..8),
+    ) {
+        use proptest::prelude::*;
+        let dir = tempfile::tempdir().unwrap();
+        let _config = crate::provider_config::fixture_document(provider_reload_document("initial", true, true, true));
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        wb.attach_providers(Arc::new(crate::credentials::MemoryStore::default()));
+        if explicit {
+            wb.register_provider("role_draft", Arc::new(ScriptedProvider::new(vec![text_response("explicit"); changes.len()])));
+        }
+        for (index, (role, default, enabled)) in changes.into_iter().enumerate() {
+            let id = format!("current-{index}");
+            let _next = crate::provider_config::fixture_document(provider_reload_document(&id, role, default, enabled));
+            wb.reload_providers();
+            let outcome = wb.draft_role_def("a0", "refresh must not retain old authorization");
+            if explicit {
+                prop_assert_eq!(outcome.unwrap(), "explicit");
+            } else if enabled && (role || default) {
+                prop_assert!(matches!(outcome,
+                    Err(ApiError::Turn(turn::TurnError::Provider(ProviderError::MissingCredential(key))))
+                        if key == format!("provider/{id}")), "must resolve only the current approved supplier");
+            } else {
+                prop_assert!(matches!(outcome, Err(ApiError::NoProvider(_))));
+            }
+        }
+    }
+}
+
 #[test]
 fn computer_model_preflight_owns_context_after_project_connection_closes() {
     // QA readiness 2026-10-06: keychain/config reads previously retained the
@@ -2263,13 +3452,25 @@ fn us37_context_resume_continues() {
     let prov = Arc::new(ScriptedProvider::new(vec![text_response("续跑完成")]));
     wb.register_provider("default", prov.clone());
     orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    // I2 / V05: a real cap always carries its exact parent. The old synthetic
+    // card had no trigger/instruction and would now correctly fail closed.
+    let parent = wb
+        .db
+        .append_event(
+            "p1",
+            EventKind::TurnStarted,
+            json!({"agent":"a0","instruction":"complete the current task","subagent":false}),
+            Some("a0"),
+            None,
+        )
+        .unwrap();
     // 手工塞一张 context_overflow 升级卡（等价于回合撞限挂起态）
     let qcx = crate::cards::enqueue(
             &wb.db,
             "p1",
             Some("a0"),
             crate::cards::CardKind::Escalation,
-            json!({"sub":"context_overflow","role":"后端","est_tokens":130000,"cap":120000,"reason":"estimate"}),
+            json!({"sub":"context_overflow","trigger_turn_id":parent,"role":"后端","est_tokens":130000,"cap":120000,"reason":"estimate"}),
             None,
         )
         .unwrap();
@@ -2419,7 +3620,8 @@ fn us59_interrupted_run_recovers_by_owner() {
             .append_event(
                 "p1",
                 EventKind::TurnStarted,
-                json!({"agent": "a0"}),
+                // I2: recovery needs the instruction persisted by every real TurnStarted.
+                json!({"agent": "a0", "instruction":"finish the current specification", "subagent":false}),
                 Some("a0"),
                 Some(&run.id),
             )
@@ -2738,8 +3940,19 @@ fn subagent_nested_scope_readonly() {
     ] {
         assert!(!sub_names.contains(&t.to_string()), "{t} leaked into scope");
     }
+    // I3 / owner contract 2026-10-06: actual turns share the stable host
+    // project/parent/stage/root key. The old bare agent lookup hid this receipt
+    // after activation isolation; preserve all result/confinement assertions.
+    let parent = events(&wb, Some(&[EventKind::TurnStarted]))
+        .unwrap()
+        .into_iter()
+        .find(|event| event.agent_id.as_deref() == Some("a0") && event.payload["subagent"] != true)
+        .unwrap();
+    assert!(parent.payload["resume_from_turn_id"].is_null());
+    let mut parent_ctx = wb.ctx_for("a0", parent.stage_run_id.clone());
+    parent_ctx.activation_root_turn_id = Some(parent.id);
     // 任务清单回执：answer + 实读引用
-    let tasks = wb.tasks.list("a0");
+    let tasks = wb.tasks.list(&crate::subagent::activation_key(&parent_ctx));
     let task = tasks
         .iter()
         .find(|t| t["kind"] == "subagent")
@@ -5351,12 +6564,24 @@ fn same_role_instance_resume_and_reopen_preserve_identity() {
                 .execute("UPDATE agents SET model_slot=?1 WHERE id=?2", [slot, aid])
                 .unwrap();
         }
+        // I2: retain this test's instance assertion with a faithful cap anchor;
+        // missing anchors are separately tested as rejected, never guessed.
+        let parent = wb
+            .db
+            .append_event(
+                "p1",
+                EventKind::TurnStarted,
+                json!({"agent":"a1","instruction":"resume exact owner B","subagent":false}),
+                Some("a1"),
+                None,
+            )
+            .unwrap();
         card = crate::cards::enqueue(
             &wb.db,
             "p1",
             Some("a1"),
             crate::cards::CardKind::Escalation,
-            json!({"sub":"context_overflow", "role":"后端"}),
+            json!({"sub":"context_overflow", "role":"后端", "trigger_turn_id":parent}),
             None,
         )
         .unwrap();
@@ -5439,7 +6664,8 @@ fn same_role_interrupted_run_recovers_exact_owner() {
             .append_event(
                 "p1",
                 EventKind::TurnStarted,
-                json!({"agent":"a1"}),
+                // I2: real crash anchors include the original task, not just a role.
+                json!({"agent":"a1","instruction":"finish exact owner B task","subagent":false}),
                 Some("a1"),
                 Some(&run_id),
             )
@@ -11920,7 +13146,38 @@ fn isolated_live_candidate_needs_all_original_attempts_and_never_claims_real_ben
         .iter()
         .any(|q| q.id == qid));
     std::fs::write(artifact, artifact_before).unwrap();
+    // Ticket 09: count real environment probes around this already qualified
+    // boundary-fixture adoption. Preflight and transaction recheck stay fresh;
+    // sharing one inspect/report observation must not merge those two checks.
+    let version_probes = eval::config::VersionProbeCapture::start();
+    let adoption_started = std::time::Instant::now();
     wb.confirm_proposal(&qid).unwrap();
+    let adoption_elapsed = adoption_started.elapsed();
+    let observations = version_probes.observations();
+    drop(version_probes);
+    let transaction_probes = observations.iter().filter(|p| p.in_transaction).count();
+    let probe_elapsed: std::time::Duration = observations.iter().map(|p| p.elapsed).sum();
+    let transaction_probe_elapsed: std::time::Duration = observations
+        .iter()
+        .filter(|p| p.in_transaction)
+        .map(|p| p.elapsed)
+        .sum();
+    eprintln!(
+        "R8 adoption probes={} transaction_probes={} probe_ms={:.3} transaction_probe_ms={:.3} operation_ms={:.3} probe_fraction={:.6}",
+        observations.len(), transaction_probes, probe_elapsed.as_secs_f64() * 1000.0,
+        transaction_probe_elapsed.as_secs_f64() * 1000.0,
+        adoption_elapsed.as_secs_f64() * 1000.0,
+        probe_elapsed.as_secs_f64() / adoption_elapsed.as_secs_f64(),
+    );
+    assert_eq!(
+        observations.len(),
+        2,
+        "one fresh observation per adoption phase"
+    );
+    assert_eq!(
+        transaction_probes, 1,
+        "transaction revalidation must keep a fresh probe"
+    );
     assert_eq!(
         PackDef::pinned(dir.path()).unwrap().knobs.flag_patience(),
         9
@@ -15020,12 +16277,9 @@ fn source_mode_survives_context_resume_of_its_exact_turn() {
     );
     wb.run_instance("a0", "/source 查明实现").unwrap();
     let original = events(&wb, Some(&[EventKind::TurnStarted])).unwrap()[0].id;
-    // A newer ordinary turn must not change the mode attached to the older card.
-    wb.register_provider(
-        "default",
-        Arc::new(ScriptedProvider::new(vec![text_response("你好")])),
-    );
-    wb.run_instance("a0", "你好").unwrap();
+    // I2 / owner contract 2026-10-06: exact continuation retains source
+    // mode while this activation remains current. A new independent task
+    // supersedes the old card; that refusal is covered separately below.
     let qid = crate::cards::enqueue(
         &wb.db,
         "p1",
@@ -15046,14 +16300,77 @@ fn source_mode_survives_context_resume_of_its_exact_turn() {
         "{result:?}"
     );
     assert_eq!(provider.recorded().len(), 2);
-    assert!(
-        events(&wb, Some(&[EventKind::TurnStarted]))
-            .unwrap()
-            .last()
-            .unwrap()
-            .payload["source_mode"]
-            == true
+    let resumed = events(&wb, Some(&[EventKind::TurnStarted]))
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(resumed.payload["source_mode"], true);
+    assert_eq!(
+        resumed.payload["resume_from_turn_id"].as_i64(),
+        Some(original)
     );
+    assert_eq!(
+        resumed.payload["activation_root_turn_id"].as_i64(),
+        Some(original)
+    );
+    assert_eq!(
+        crate::cards::get(&wb.db, &qid).unwrap().state,
+        crate::cards::CardState::Answered
+    );
+}
+
+#[test]
+fn source_mode_context_resume_rejects_superseded_turn_without_model_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            text_response("未读"),
+            text_response("仍未读"),
+        ])),
+    );
+    wb.run_instance("a0", "/source 查明实现").unwrap();
+    let original = events(&wb, Some(&[EventKind::TurnStarted])).unwrap()[0].id;
+    // I2 / owner contract 2026-10-06: preserve the former fixture's newer
+    // ordinary task, but assert safe refusal rather than reviving its obsolete
+    // source activation. False rejection costs one manual instruction; false
+    // continuation can revive old task side effects.
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![text_response("你好")])),
+    );
+    wb.run_instance("a0", "你好").unwrap();
+    let qid = crate::cards::enqueue(
+        &wb.db,
+        "p1",
+        Some("a0"),
+        crate::cards::CardKind::Escalation,
+        json!({"sub":"context_overflow","role":"worker","trigger_turn_id":original}),
+        None,
+    )
+    .unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("恢复后猜测"),
+        text_response("仍是猜测"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    let before = events(&wb, Some(&[EventKind::TurnStarted])).unwrap();
+    assert_eq!(before[0].payload["source_mode"], true);
+    assert_eq!(before.last().unwrap().payload["source_mode"], false);
+    assert!(matches!(
+        wb.adjudicate_flag(&qid, true),
+        Err(ApiError::BadInput(ref reason)) if reason.contains("dispatch_superseded")
+    ));
+    assert!(provider.recorded().is_empty());
+    let card = crate::cards::get(&wb.db, &qid).unwrap();
+    assert_eq!(card.state, crate::cards::CardState::Queued);
+    assert_eq!(card.payload["trigger_turn_id"].as_i64(), Some(original));
+    let after = events(&wb, Some(&[EventKind::TurnStarted])).unwrap();
+    assert_eq!(after.len(), before.len());
+    assert_eq!(after[0].payload["source_mode"], true);
+    assert_eq!(after.last().unwrap().payload["source_mode"], false);
 }
 
 #[test]
@@ -16528,4 +17845,182 @@ fn qa14_project_probes_refuse_state_aliases_and_preserve_live_lock() {
         assert!(crate::tools::writeguard::digest(&alias).is_err());
         qa14_assert_dms_locked(dir.path());
     }
+}
+
+// Independent Spec review I3, 2026-10-06: a confirmed parent list already
+// observed the async result. Restart must preserve that fact, not redispatch.
+#[test]
+fn disk_resume_preserves_parent_observed_child_receipt_and_citations() {
+    struct ObservedChildProvider {
+        parent: ScriptedProvider,
+        child: ScriptedProvider,
+        barrier_board: Mutex<Option<crate::subagent::TaskBoard>>,
+    }
+    impl ModelProvider for ObservedChildProvider {
+        fn is_scripted(&self) -> bool {
+            true
+        }
+        fn complete(
+            &self,
+            request: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+            if request.tools.iter().any(|tool| tool.name == "tasks") {
+                if self.parent.recorded().len() == 1 {
+                    let board = self.barrier_board.lock().unwrap().take().unwrap();
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while board.any_running_subagent() {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "real child must drain before parent's persistent list"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+                self.parent.complete(request)
+            } else if request.tools.iter().any(|tool| tool.name == "fs_read") {
+                self.child.complete(request)
+            } else {
+                // I3 fixture: the permission reviewer has no tools; its request is
+                // not another child action and must not consume the child script.
+                assert!(request.tools.is_empty());
+                Ok(text_response(
+                    r#"{"verdict":"unsure","reason":"owner decision"}"#,
+                ))
+            }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("input.txt"), "RECEIPT_CITATION_INPUT_613").unwrap();
+    let first_card;
+    let provider;
+    let confirmed;
+    let parent_root;
+    {
+        let mut wb = crate::api::Workbench::open_scoped(
+            dir.path(),
+            "observed-child-disk",
+            &[("a0".into(), "worker".into())],
+            None,
+            false,
+        )
+        .unwrap();
+        crate::orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        provider = Arc::new(ObservedChildProvider {
+            barrier_board: Mutex::new(Some(wb.ctx_for("a0", None).tasks)),
+            parent: ScriptedProvider::new(vec![
+                tool_response(vec![(
+                    "dispatch",
+                    "subagent",
+                    json!({"task":"Read input.txt and return a conclusion"}),
+                )]),
+                tool_response(vec![("observe", "tasks", json!({"action":"list"}))]),
+                tool_response(vec![(
+                    "wait",
+                    "bash",
+                    json!({"cmd":"printf approval-marker"}),
+                )]),
+                tool_response(vec![("recover-list", "tasks", json!({"action":"list"}))]),
+                text_response("original parent task completed after receipt recovery"),
+            ]),
+            child: ScriptedProvider::new(vec![
+                tool_response(vec![("child-read", "fs_read", json!({"path":"input.txt"}))]),
+                text_response("CONFIRMED_CHILD_RESULT_613"),
+            ]),
+        });
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(card) = wb
+            .run_instance(
+                "a0",
+                "Observe child result, retain citations, then await approval",
+            )
+            .unwrap()
+        else {
+            panic!("actual parent permission must wait after the durable list")
+        };
+        first_card = card;
+        parent_root = wb
+            .db
+            .timeline(
+                "p1",
+                None,
+                200,
+                Some(&[crate::trace::EventKind::TurnStarted]),
+            )
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event.payload["subagent"] != true)
+            .unwrap()
+            .event
+            .id;
+        let persisted:String = wb.db.conn().query_row("SELECT output_json FROM tool_actions WHERE tool='tasks' AND json_extract(input_json,'$.action')='list'",[],|row|row.get(0)).unwrap();
+        confirmed = serde_json::from_str::<Value>(&persisted).unwrap()["tasks"][0].clone();
+        assert_eq!(
+            confirmed["status"], "done",
+            "fixture must persist the actual child terminal receipt before restart"
+        );
+        assert_eq!(confirmed["result"]["answer"], "CONFIRMED_CHILD_RESULT_613");
+        assert_eq!(confirmed["result"]["citations"][0]["path"], "input.txt");
+        assert_eq!(provider.child.recorded().len(), 2);
+        assert!(provider.barrier_board.lock().unwrap().is_none());
+    }
+    let mut wb =
+        crate::api::Workbench::open_scoped(dir.path(), "observed-child-disk", &[], None, false)
+            .unwrap();
+    let mut fresh_ctx = wb.ctx_for("a0", None);
+    fresh_ctx.activation_root_turn_id = Some(parent_root);
+    assert!(
+        fresh_ctx
+            .tasks
+            .list(&crate::subagent::activation_key(&fresh_ctx))
+            .is_empty(),
+        "new host has no surviving in-memory board for the original root"
+    );
+    wb.register_provider("default", provider.clone());
+    wb.answer_permission_and_continue(&first_card, false, None, "activation")
+        .unwrap();
+    let requests = provider.parent.recorded();
+    let last = requests.last().unwrap();
+    let tool_results = last
+        .messages
+        .iter()
+        .filter(|message| message.role == crate::provider::Role::Tool)
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            crate::provider::ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                ..
+            } if tool_use_id == "recover-list" => {
+                Some(serde_json::from_str::<Value>(content).unwrap())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(tool_results.len(), 1);
+    let restored = &tool_results[0]["tasks"][0];
+    assert_eq!(restored["id"], confirmed["id"]);
+    assert_eq!(restored["status"], confirmed["status"]);
+    assert_eq!(restored["result"], confirmed["result"]);
+    assert_eq!(restored["error"], confirmed["error"]);
+    assert_eq!(
+        provider.child.recorded().len(),
+        2,
+        "recovery never launches another child request"
+    );
+    let resumed = wb
+        .db
+        .timeline(
+            "p1",
+            None,
+            200,
+            Some(&[crate::trace::EventKind::TurnStarted]),
+        )
+        .unwrap()
+        .into_iter()
+        .rfind(|event| event.event.payload["subagent"] != true)
+        .unwrap();
+    assert_eq!(
+        resumed.event.payload["activation_root_turn_id"].as_i64(),
+        Some(parent_root)
+    );
 }

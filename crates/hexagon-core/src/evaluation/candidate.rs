@@ -256,7 +256,7 @@ pub(crate) fn inspect(
         .filter(|c| c.split == "heldout")
         .flat_map(|c| (1..=3).map(|n| (c.task.id.clone(), n)))
         .collect();
-    let report = report::build(db, Path::new(&source.host), &batch.id)?;
+    let report = report::build_from_checked(db, Path::new(&source.host), &check)?;
     let rows: Vec<_> = report
         .groups
         .into_iter()
@@ -499,6 +499,135 @@ pub(crate) fn refresh_finished_plan(db: &Db, root: &Path, plan_id: &str) -> io::
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    // Ticket 09: no generation or worker/model request is needed to inspect an
+    // original, unstarted heldout plan through the real Workbench boundary.
+    fn unstarted_candidate() -> (tempfile::TempDir, crate::api::Workbench, CandidateSource) {
+        let root = tempfile::tempdir().unwrap();
+        crate::git::init(root.path(), "main").unwrap();
+        std::fs::write(root.path().join("AGENTS.md"), "Owner instructions\n").unwrap();
+        crate::git::commit_all(root.path(), "seed").unwrap();
+        let wb = crate::api::Workbench::for_test(root.path(), &["流程优化"], None).unwrap();
+        let baseline: crate::orchestra::PackDef = serde_json::from_value(serde_json::json!({
+            "name":"policy", "version":1, "stages":[
+                {"name":"accept", "roles":["架构师"], "due":[], "stamp_point":true}
+            ]
+        }))
+        .unwrap();
+        baseline.pin(root.path()).unwrap();
+        let mut candidate = baseline.clone();
+        candidate.knobs.flag_patience = Some(7);
+        let body = format!(
+            "---\nkind: 改进提案\nauthor: a0\nsurface: pack_copy\ntarget: .hexagon/pack.active.json\n---\n## 动机\nTune policy\n## 改动面\n```diff\n+ knobs.flag_patience: 7\n```\n## 预期收益\nCompare independently\n## 验证方法\nFrozen heldout plan\n```replay\n{}\n```\n```judge\n{{\"verdict\":\"needs-human\",\"backend\":\"mechanical\"}}\n```\n```policy\n{}\n```\n",
+            serde_json::json!({"schema":1,"scenario_fingerprint":"fixed","baseline_pack":"policy@v1","candidate_pack":"policy@v1","baseline":{"stages_done":0},"candidate":{"stages_done":1}}),
+            serde_json::json!({"baseline":baseline,"candidate":candidate}),
+        );
+        let ctx = ToolContext::for_agent(&wb.db, root.path(), "a0");
+        let artifact = crate::artifacts::deliver(
+            &wb.db,
+            &ctx,
+            &ctx.tiers,
+            "proposals/policy.md",
+            &body,
+            Some("改进提案"),
+        )
+        .unwrap();
+        let proposal = crate::proposals::submit(&wb.db, &ctx, &artifact, &body).unwrap();
+        let corpora: Vec<serde_json::Value> = [
+            include_str!("../../../../evaluation/corpus/bugs.json"),
+            include_str!("../../../../evaluation/corpus/features.json"),
+            include_str!("../../../../evaluation/corpus/interfaces.json"),
+            include_str!("../../../../evaluation/corpus/dirty-trees.json"),
+        ]
+        .into_iter()
+        .map(|text| serde_json::from_str(text).unwrap())
+        .collect();
+        let request: config::FreezeRequest = serde_json::from_value(serde_json::json!({
+            "corpora":corpora,"main_slot":"default","fast_role":"架构师", "task_owners":["架构师"],
+            "full_pack":baseline,"prices":{},
+            "limits":{"total_mc":20000000,"pilot_mc":2000000,"run_mc":500000,"requests":80,"active_ms":1800000},
+            "statistics_version":"paired-benefit-v1"
+        })).unwrap();
+        let batch = wb.freeze_evaluation(&request, None).unwrap();
+        let generation = wb.prepare_evaluation_generation(&batch.id).unwrap();
+        let source = wb
+            .freeze_policy_evaluation(&proposal, &generation.id)
+            .unwrap();
+        (root, wb, source)
+    }
+
+    #[test]
+    fn candidate_quality_and_report_share_one_current_environment_observation() {
+        let (_root, wb, source) = unstarted_candidate();
+        let capture = config::VersionProbeCapture::start();
+        let started = std::time::Instant::now();
+        let observed = wb.policy_evaluation(&source.proposal_id).unwrap();
+        let elapsed = started.elapsed();
+        let probes = capture.observations();
+        let probe_elapsed: std::time::Duration = probes.iter().map(|p| p.elapsed).sum();
+        eprintln!(
+            "R8 inspect probes={} transaction_probes={} probe_ms={:.3} operation_ms={:.3} probe_fraction={:.6}",
+            probes.len(), probes.iter().filter(|p| p.in_transaction).count(),
+            probe_elapsed.as_secs_f64() * 1000.0, elapsed.as_secs_f64() * 1000.0,
+            probe_elapsed.as_secs_f64() / elapsed.as_secs_f64(),
+        );
+        assert_eq!(observed.state, CandidateQuality::Incomplete);
+        assert!(!observed.adoptable);
+        assert_eq!(observed.original_planned, 24);
+        assert_eq!(
+            probes.len(),
+            1,
+            "quality/report share this call's fresh observation"
+        );
+        assert!(probes.iter().all(|p| !p.in_transaction));
+    }
+
+    #[test]
+    fn standalone_reports_and_candidate_calls_each_observe_the_environment_again() {
+        let (_root, wb, source) = unstarted_candidate();
+        for call in 0..4 {
+            let capture = config::VersionProbeCapture::start();
+            if call % 2 == 0 {
+                assert!(!wb.policy_evaluation(&source.proposal_id).unwrap().adoptable);
+            } else {
+                let report = wb.evaluation_benefit_report(&source.batch_id).unwrap();
+                assert_eq!(report.batch_id, source.batch_id);
+                assert_eq!(report.batch_fingerprint, source.batch_fingerprint);
+            }
+            let observations = capture.observations();
+            assert_eq!(
+                observations.len(),
+                1,
+                "call {call} needs its own fresh probe"
+            );
+            assert!(!observations[0].in_transaction);
+        }
+    }
+
+    #[test]
+    fn new_environment_drift_still_refuses_candidate_quality_and_standalone_report() {
+        let (_root, wb, source) = unstarted_candidate();
+        assert_eq!(
+            wb.policy_evaluation(&source.proposal_id).unwrap().state,
+            CandidateQuality::Incomplete
+        );
+        // Change the real frozen role-definition input, as configuration tests
+        // already do. This supplies no quality receipt or altered verdict.
+        wb.db.conn().execute(
+            "INSERT INTO role_defs(project_id,name,duty,model_slot,skills) VALUES (?1,'架构师','changed environment instructions','default','[]')",
+            [&wb.project_id],
+        ).unwrap();
+        let capture = config::VersionProbeCapture::start();
+        let observed = wb.policy_evaluation(&source.proposal_id).unwrap();
+        assert_eq!(observed.state, CandidateQuality::Stale);
+        assert!(!observed.adoptable);
+        let report = wb.evaluation_benefit_report(&source.batch_id).unwrap();
+        assert!(report
+            .configuration_blocks
+            .contains(&super::super::AdmissionBlock::RuntimeDrift));
+        assert_eq!(capture.observations().len(), 2);
+    }
+
     fn good_rows() -> Vec<BenefitRun> {
         (0..24)
             .map(|position| {

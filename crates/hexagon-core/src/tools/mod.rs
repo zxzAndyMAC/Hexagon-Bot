@@ -101,6 +101,12 @@ pub struct ToolContext {
     /// Host-authenticated owner $skill grants for this activation. Cloning a
     /// subagent context copies this set; a child cannot expand its parent grant.
     pub(crate) manual_skill_invocations: std::collections::HashSet<String>,
+    /// Host-validated same-instance/same-stage parent of a resumed turn.
+    pub(crate) resume_from_turn_id: Option<i64>,
+    /// Stable root of the host-validated activation chain; never model supplied.
+    pub(crate) activation_root_turn_id: Option<i64>,
+    /// A durable host source-review transition, never inferred from model text.
+    pub(crate) source_review_phase: bool,
 }
 
 impl Default for ToolContext {
@@ -129,6 +135,9 @@ impl Default for ToolContext {
             subagent_provider: None,
             reads: Default::default(),
             manual_skill_invocations: Default::default(),
+            resume_from_turn_id: None,
+            activation_root_turn_id: None,
+            source_review_phase: false,
         }
     }
 }
@@ -844,16 +853,11 @@ impl Registry {
             .get(name)
             .cloned()
             .ok_or_else(|| ToolError::BadInput(format!("unknown tool: {name}")))?;
-        // exec-cards 票 04：登记调用归属——bash 三形态 spawn/run_in
-        // 时把输出口子绑进 Shared；执行完即摘，防非 bash 工具吃到
-        // 陈旧 meta（口子只被 sessions 读，登记对它是无成本的）。
-        ctx.sessions.set_call_meta(&ctx.agent_id, call_seq);
         let retry = crate::actions::is_retry(db, action_id)?;
         let allow_recovery = allow_recovery && !retry;
         let permission = crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)?;
         if !retry {
             if let crate::permissions::Decision::Deny { reason, .. } = permission {
-                ctx.sessions.clear_call_meta();
                 crate::actions::denied(db, ctx, action_id, &reason)?;
                 return Err(ToolError::Exec(reason));
             }
@@ -868,7 +872,6 @@ impl Registry {
                 tool.idempotency_contract(),
                 matches!(permission, crate::permissions::Decision::Allow { .. }),
             )? {
-                ctx.sessions.clear_call_meta();
                 return Err(ToolError::OutcomeUnknown(action_id.into()));
             }
         } else {
@@ -876,6 +879,10 @@ impl Registry {
             crate::actions::start(db, ctx, action_id)?;
         }
         let mut execution_ctx = ctx.clone();
+        // Benchmark I3 / 2026-10-06: shared set/clear attributed concurrent
+        // terminal output to another parent. Freeze this call's metadata while
+        // retaining the existing shared process owner and output tap.
+        execution_ctx.sessions = ctx.sessions.for_call(&ctx.agent_id, call_seq);
         execution_ctx.action_key = Some(action_id.into());
         execution_ctx.native_effect = ctx
             .repo_root
@@ -896,7 +903,6 @@ impl Registry {
             Err(error) => Err(error),
         };
         execution_ctx.write_lease.take();
-        ctx.sessions.clear_call_meta();
         let uncertain = result
             .as_ref()
             .err()

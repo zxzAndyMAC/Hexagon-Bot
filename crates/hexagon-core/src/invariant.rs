@@ -195,6 +195,72 @@ mod tests {
     }
 
     #[test]
+    fn legacy_name_only_envelope_remains_self_consistent() {
+        // Report 01/09/20 provenance / 2026-10-06: freeze the OLD producer's
+        // materials, not a new envelope with its definition digest deleted.
+        // Missing historical definitions mean unrecorded, not invalid trace.
+        // Independently computed Python FNV-1a over the old serde_json compact,
+        // sorted-key UTF-8 materials (no preserve_order in this workspace):
+        // {"layers":[],"messages":[],"params":{"model_slot":"default"},"tools":["legacy_tool"]}
+        // Freeze the value: calling production envelope_fingerprint here would
+        // let a future recipe change silently rewrite the historical fixture.
+        let (db, _reg, _ctx, _dir) = setup();
+        let legacy_params = json!({"model_slot":"default"});
+        let legacy = json!({
+            "kind":"request_envelope", "call":0, "model_slot":"default",
+            "layers":[], "messages":[], "tools":["legacy_tool"],
+            "params":legacy_params, "fingerprint":"ff164d3b3123fcd9",
+        });
+        assert!(legacy["params"].get("tool_definitions_sha").is_none());
+        db.append_event("p1", EventKind::System, legacy, Some("a1"), None)
+            .unwrap();
+        assert!(check(&db, "p1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tampered_tool_definition_digest_flags_violation() {
+        // Report 01/09/20 provenance / 2026-10-06: the actual dispatched
+        // definition digest belongs to the existing params fingerprint recipe.
+        // Do not log definitions or reinterpret FNV as cryptographic proof.
+        let (db, reg, ctx, _dir) = setup();
+        let provider = ScriptedProvider::new(vec![text_response("done")]);
+        run_turn(&db, &provider, &reg, &ctx, vec![], "inspect the contract").unwrap();
+        assert_eq!(provider.recorded().len(), 1);
+        assert!(check(&db, "p1").unwrap().is_empty());
+        let (before, digest): (String, Option<String>) = db.conn().query_row(
+            "SELECT json_extract(payload,'$.fingerprint'),json_extract(payload,'$.params.tool_definitions_sha')
+             FROM events WHERE json_extract(payload,'$.kind')='request_envelope'",
+            [], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        let digest = digest.expect("actual tool definitions must be identified before tampering");
+        let tampered = format!("{digest}-changed");
+        db.conn()
+            .execute(
+                "UPDATE events SET payload=json_set(payload,'$.params.tool_definitions_sha',?1)
+             WHERE json_extract(payload,'$.kind')='request_envelope'",
+                [&tampered],
+            )
+            .unwrap();
+        let after: String = db
+            .conn()
+            .query_row(
+                "SELECT json_extract(payload,'$.fingerprint') FROM events
+             WHERE json_extract(payload,'$.kind')='request_envelope'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            before, after,
+            "tampering must leave the total fingerprint unchanged"
+        );
+        let violations = check(&db, "p1").unwrap();
+        assert!(violations
+            .iter()
+            .any(|v| v["check"] == "envelope_self_consistent"));
+    }
+
+    #[test]
     fn tampered_envelope_flags_violation() {
         let (db, reg, ctx, _dir) = setup();
         let provider = ScriptedProvider::new(vec![text_response("done")]);

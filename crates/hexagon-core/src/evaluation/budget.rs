@@ -268,6 +268,23 @@ fn reserve_pair(
             |r| r.get(0),
         )
         .map_err(err)?;
+    if exists {
+        // Ticket06 / 2026-10-06: paid authority commits before the host stop.
+        // A crash can leave this position closed while host still says planned.
+        // Never resurrect its released allowance or create a new started run.
+        let closed: Option<bool> = db
+            .conn()
+            .query_row(
+                "SELECT closed FROM evaluation_budget_runs WHERE pair_id=?1 AND position=?2",
+                params![pair, sql(next.position)?],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(err)?;
+        if closed != Some(false) {
+            return Err(rejected("closed_pair_cannot_reopen"));
+        }
+    }
     if !exists {
         let report = summary(db, scope)?;
         // Ticket 17: a candidate has one Full attempt, comparisons have two arms.
@@ -371,6 +388,105 @@ pub(crate) fn finish(db: &Db, run: &EvaluationResult) -> io::Result<()> {
             params![run.id, workspace],
         )
         .map_err(err)?;
+    Ok(())
+}
+
+pub(crate) fn finish_unstarted(
+    host: &Db,
+    root: &Path,
+    plan: &plan::EvaluationPlan,
+) -> io::Result<()> {
+    if host.conn().is_autocommit() {
+        return Err(rejected("stopped_allowance_requires_host_transaction"));
+    }
+    let scope: Option<String> = host
+        .conn()
+        .query_row(
+            "SELECT scope FROM evaluation_budget_plans WHERE plan_id=?1",
+            [&plan.id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(err)?;
+    match scope.as_deref() {
+        None => Ok(()),
+        Some(DEBUG) => finish_unstarted_rows(host, root, plan, DEBUG),
+        Some(PAID) => live::finish_unstarted(host, root, plan),
+        _ => Err(rejected("unknown_budget_scope")),
+    }
+}
+
+fn stopped_placeholder(
+    entry: &plan::PlannedRun,
+    run: Option<&str>,
+    workspace: Option<&str>,
+    requests: u64,
+) -> bool {
+    entry.state == plan::PlannedState::NotRun
+        && entry.run_id.is_none()
+        && run.is_none()
+        && workspace.is_none()
+        && requests == 0
+}
+
+fn finish_unstarted_rows(
+    authority: &Db,
+    root: &Path,
+    plan: &plan::EvaluationPlan,
+    scope: &str,
+) -> io::Result<()> {
+    let started = std::time::Instant::now();
+    let owner = canonical(root)?;
+    let rows = {
+        let mut q = authority.conn().prepare(
+            "SELECT r.id,r.position,r.run_id,r.workspace,(SELECT COUNT(*) FROM evaluation_budget_requests q WHERE q.run_key=r.id) FROM evaluation_budget_runs r JOIN evaluation_budget_pairs p ON p.id=r.pair_id WHERE p.round_id=?1 AND p.host=?2 AND p.plan_id=?3 AND r.closed=0",
+        ).map_err(err)?;
+        let rows = q
+            .query_map(params![scope, owner, plan.id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    money(r, 1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    money(r, 4)?,
+                ))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        rows
+    };
+    let mut closed = 0;
+    for (key, position, run, workspace, requests) in rows {
+        let Some(entry) = plan.entries.iter().find(|e| e.position as u64 == position) else {
+            continue;
+        };
+        if !stopped_placeholder(entry, run.as_deref(), workspace.as_deref(), requests) {
+            continue;
+        }
+        // A valid driver lease and its run_id are registered in claim's host
+        // transaction together. Holding that lock plus a real not_run/null row
+        // proves this position has no admitted driver/activity lease. Never
+        // infer not_sent for a request: ANY request row keeps its allowance.
+        // False rejection costs inspection; false acceptance can spend twice.
+        closed += authority.conn().execute(
+            "UPDATE evaluation_budget_runs SET closed=1 WHERE id=?1 AND closed=0 AND run_id IS NULL AND workspace IS NULL AND NOT EXISTS(SELECT 1 FROM evaluation_budget_requests WHERE run_key=?1)",
+            [&key],
+        ).map_err(err)?;
+    }
+    if closed > 0 {
+        crate::diag::note(
+            crate::diag::CLASS_HOST,
+            false,
+            Some(crate::PROJECT_ID),
+            None,
+            None,
+            Some(&plan.id),
+            "evaluation_budget",
+            "stopped_unstarted_allowance_closed",
+            started,
+        );
+    }
     Ok(())
 }
 
@@ -1051,6 +1167,32 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     proptest! {
+        #[test]
+        fn stopped_allowance_never_releases_any_request_or_claimed_identity(
+            requests in 1u64..u64::MAX,
+            identity in "[a-z0-9]{1,30}",
+        ) {
+            let entry = plan::PlannedRun {
+                position: 0, task_id: "original-task".into(), repetition: 1,
+                arm: plan::EvaluationArm::Fast, state: plan::PlannedState::NotRun,
+                run_id: None, reason: Some("owner_stopped".into()),
+            };
+            prop_assert!(stopped_placeholder(&entry, None, None, 0));
+            prop_assert!(!stopped_placeholder(&entry, None, None, requests));
+            prop_assert!(!stopped_placeholder(&entry, Some(&identity), None, 0));
+            prop_assert!(!stopped_placeholder(&entry, None, Some(&identity), 0));
+            let mut claimed = entry.clone();
+            claimed.run_id = Some(identity);
+            prop_assert!(!stopped_placeholder(&claimed, None, None, 0));
+            for state in [plan::PlannedState::Planned, plan::PlannedState::Started,
+                plan::PlannedState::Completed, plan::PlannedState::Incomplete,
+                plan::PlannedState::Failed] {
+                let mut current = entry.clone();
+                current.state = state;
+                prop_assert!(!stopped_placeholder(&current, None, None, 0));
+            }
+        }
+
         #[test]
         fn stopped_boundary_cannot_reopen_by_increasing_work(count in any::<u64>(),limit in any::<u64>(),exposure in any::<u64>(),allowance in any::<u64>(),extra in any::<u64>()) {
             if stop_at_boundary(false,false,count,limit,exposure,allowance).is_some() {

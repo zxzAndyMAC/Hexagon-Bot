@@ -10,7 +10,8 @@ const facts = (latest_event_id = 100): TimelineFacts => ({ project_root: '/proje
   latest_turn_start_id: 20, steered_message_ids: [] })
 beforeEach(() => {
   useUiStore.getState().beginProjectSwitch()
-  useUiStore.getState().commitProjectRoot('/project', useUiStore.getState().projectEpoch)
+  // I1 2026-10-06: project admission now commits the host root and generation.
+  useUiStore.getState().commitProjectIdentity({project_root:'/project',generation:1}, useUiStore.getState().projectEpoch)
 })
 afterEach(() => vi.restoreAllMocks())
 it('shows current activity even when no history window is loaded', () => {
@@ -31,7 +32,7 @@ it('cannot restore old-project facts after switching to another project', async 
   vi.spyOn(api,'timelineFacts').mockImplementation(()=>new Promise(yes=>{resolve=yes}))
   const pending=useUiStore.getState().refreshFacts()
   useUiStore.getState().beginProjectSwitch()
-  useUiStore.getState().commitProjectRoot('/other',useUiStore.getState().projectEpoch)
+  useUiStore.getState().commitProjectIdentity({project_root:'/other',generation:2},useUiStore.getState().projectEpoch)
   resolve(facts());await pending
   expect(useUiStore.getState().timelineFacts).toBeNull()
 })

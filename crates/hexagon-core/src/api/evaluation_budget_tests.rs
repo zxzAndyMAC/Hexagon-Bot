@@ -2,6 +2,248 @@
 use super::*;
 
 #[test]
+fn evaluation_stop_releases_unstarted_pair_allowance_but_keeps_unknown_requests() {
+    // 2026-10-06 / ticket06: a stopped second arm was not_run in the host,
+    // yet its empty budget row retained the entire pair allowance forever.
+    // Scripted supplier usage stays unknown; stopping must never refund it.
+    let home = tempfile::tempdir().unwrap();
+    let host = Workbench::open_evaluation_host(home.path()).unwrap();
+    let request = super::evaluation_config_tests::control_only_request();
+    let batch = host.freeze_evaluation(&request, None).unwrap();
+    let plan = host
+        .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)
+        .unwrap();
+    host.enable_evaluation_budget_debug(&plan.id, fixture_price())
+        .unwrap();
+    let run = host
+        .evaluate_next_debug(
+            &plan.id,
+            &[crate::evaluation::DebugActivation {
+                request_baseline_merge: false,
+                role: request.fast_role,
+                writes: Default::default(),
+            }],
+        )
+        .unwrap();
+    let before = host.evaluation_budget_debug().unwrap();
+    assert!(before.unknown_mc > 0);
+    assert!(before
+        .runs
+        .iter()
+        .any(|entry| { entry.run_id.as_deref() == Some(&run.id) && entry.closed }));
+    assert!(before
+        .runs
+        .iter()
+        .any(|entry| entry.run_id.is_none() && !entry.closed));
+    let stopped = host.stop_evaluation_plan(&plan.id).unwrap();
+    assert!(stopped.entries.iter().skip(1).all(|entry| {
+        entry.state == crate::evaluation::PlannedState::NotRun && entry.run_id.is_none()
+    }));
+    let after = host.evaluation_budget_debug().unwrap();
+    assert_eq!(after.known_mc, before.known_mc);
+    assert_eq!(after.unknown_mc, before.unknown_mc);
+    assert_eq!(after.requests, before.requests);
+    assert_eq!(after.reserved_mc, after.unknown_mc + after.in_flight_mc);
+    assert!(after.runs.iter().all(|entry| entry.closed));
+    assert!(after.available_mc > before.available_mc);
+    host.stop_evaluation_plan(&plan.id).unwrap();
+    assert_eq!(
+        serde_json::to_value(host.evaluation_budget_debug().unwrap()).unwrap(),
+        serde_json::to_value(&after).unwrap(),
+        "repeated stop is idempotent, without new coverage or refunds"
+    );
+    assert!(host.evaluate_next_debug(&plan.id, &[]).is_err());
+}
+
+#[test]
+fn evaluation_stop_paid_allowances_are_bound_to_the_same_host_and_stopped_plan() {
+    // Only the existing isolated paid-authority fixture is used. Registering
+    // its host scope is ledger setup, not fake live-model admission evidence.
+    let home = tempfile::tempdir().unwrap();
+    let isolated = Arc::new(tempfile::tempdir().unwrap());
+    let previous = crate::evaluation::budget::paid_fixture();
+    crate::evaluation::budget::inherit_paid_fixture(isolated.clone());
+    let authority = isolated.path().join("authority.db");
+    let mut hosts = Vec::new();
+    for name in ["stopped-host", "other-host"] {
+        let host = Workbench::open_evaluation_host(&home.path().join(name)).unwrap();
+        let batch = host
+            .freeze_evaluation(
+                &super::evaluation_config_tests::control_only_request(),
+                None,
+            )
+            .unwrap();
+        let plan = host
+            .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)
+            .unwrap();
+        host.reserve_evaluation_paid_fixture(&authority, &plan.id, &fixture_price())
+            .unwrap();
+        host.db.conn().execute(
+            "INSERT INTO evaluation_budget_plans(plan_id,price_json,scope) VALUES (?1,?2,'paid_first_round')",
+            rusqlite::params![plan.id, serde_json::to_string(&fixture_price()).unwrap()],
+        ).unwrap();
+        hosts.push((host, plan));
+    }
+    assert_eq!(hosts[0].0.evaluation_budget().unwrap().reserved_mc, 2000000);
+    hosts[0].0.stop_evaluation_plan(&hosts[0].1.id).unwrap();
+    let after = hosts[0].0.evaluation_budget().unwrap();
+    assert_eq!(after.reserved_mc, 1000000);
+    assert_eq!(after.requests, 0);
+    assert_eq!(after.known_mc, 0);
+    assert_eq!(after.runs.iter().filter(|r| r.closed).count(), 2);
+    assert!(hosts[1]
+        .0
+        .evaluation_plan(&hosts[1].1.id)
+        .unwrap()
+        .entries
+        .iter()
+        .all(|e| e.state == crate::evaluation::PlannedState::Planned));
+    hosts[0].0.stop_evaluation_plan(&hosts[0].1.id).unwrap();
+    assert_eq!(hosts[0].0.evaluation_budget().unwrap().reserved_mc, 1000000);
+    crate::evaluation::budget::inherit_paid_fixture(previous);
+}
+
+#[test]
+fn evaluation_closed_paid_pair_cannot_be_reopened_after_host_stop_commit_loss() {
+    let home = tempfile::tempdir().unwrap();
+    let authority = home.path().join("isolated-paid-fixture.db");
+    let host = Workbench::open_evaluation_host(&home.path().join("host")).unwrap();
+    let batch = host
+        .freeze_evaluation(
+            &super::evaluation_config_tests::control_only_request(),
+            None,
+        )
+        .unwrap();
+    let plan = host
+        .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)
+        .unwrap();
+    host.reserve_evaluation_paid_fixture(&authority, &plan.id, &fixture_price())
+        .unwrap();
+    // Ticket06: authority stop committed, but host commit was lost. This is
+    // deliberately a storage crash fixture, never a claim of model execution.
+    crate::db::Db::open(&authority)
+        .unwrap()
+        .conn()
+        .execute(
+            "UPDATE evaluation_budget_runs SET closed=1 WHERE run_id IS NULL AND workspace IS NULL",
+            [],
+        )
+        .unwrap();
+    assert!(host
+        .evaluation_plan(&plan.id)
+        .unwrap()
+        .entries
+        .iter()
+        .all(|e| e.state == crate::evaluation::PlannedState::Planned));
+    assert!(
+        host.reserve_evaluation_paid_fixture(&authority, &plan.id, &fixture_price())
+            .is_err(),
+        "a closed original position cannot reuse or resurrect its allowance"
+    );
+}
+
+thread_local! {
+    // A real SQLite busy callback coordinates competing PUBLIC stop/claim
+    // calls. It neither replaces the production lock nor changes plan state.
+    static STOP_CLAIM_BUSY: std::cell::RefCell<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> = const { std::cell::RefCell::new(None) };
+}
+
+fn stop_claim_busy_once(_attempt: i32) -> bool {
+    STOP_CLAIM_BUSY.with(|slot| {
+        let Some((entered, release)) = slot.borrow_mut().take() else {
+            return false;
+        };
+        entered.send(()).unwrap();
+        release
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_ok()
+    })
+}
+
+#[test]
+fn evaluation_stop_and_claim_use_the_same_host_transaction_before_releasing_allowance() {
+    let home = tempfile::tempdir().unwrap();
+    let host = Workbench::open_evaluation_host(home.path()).unwrap();
+    let batch = host
+        .freeze_evaluation(
+            &super::evaluation_config_tests::control_only_request(),
+            None,
+        )
+        .unwrap();
+    let plan = host
+        .plan_evaluation(&batch.id, crate::evaluation::PlanKind::Pilot)
+        .unwrap();
+    host.enable_evaluation_budget_debug(&plan.id, fixture_price())
+        .unwrap();
+    // Exact crash boundary: pair was reserved inside the real host claim
+    // transaction but the original position was not claimed. No model request.
+    let reserve = rusqlite::Transaction::new_unchecked(
+        host.db.conn(),
+        rusqlite::TransactionBehavior::Immediate,
+    )
+    .unwrap();
+    crate::evaluation::budget::before_claim(&host.db, home.path(), &plan.id).unwrap();
+    reserve.commit().unwrap();
+    assert_eq!(host.evaluation_budget_debug().unwrap().reserved_mc, 1000000);
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let mut threads = Vec::new();
+    let mut controls = Vec::new();
+    for stop in [true, false] {
+        let root = home.path().to_path_buf();
+        let plan_id = plan.id.clone();
+        let ready = ready_tx.clone();
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (busy_tx, busy_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        threads.push(std::thread::spawn(move || {
+            let peer = Workbench::open_evaluation_host(&root).unwrap();
+            peer.db
+                .conn()
+                .busy_handler(Some(stop_claim_busy_once))
+                .unwrap();
+            STOP_CLAIM_BUSY.with(|slot| *slot.borrow_mut() = Some((busy_tx, release_rx)));
+            ready.send(()).unwrap();
+            start_rx.recv().unwrap();
+            if stop {
+                assert!(peer.stop_evaluation_plan(&plan_id).is_ok());
+            } else {
+                assert!(peer.evaluate_next_debug(&plan_id, &[]).is_err());
+            }
+        }));
+        controls.push((start_tx, busy_rx, release_tx));
+    }
+    for _ in 0..2 {
+        ready_rx.recv().unwrap();
+    }
+    let lock = rusqlite::Transaction::new_unchecked(
+        host.db.conn(),
+        rusqlite::TransactionBehavior::Immediate,
+    )
+    .unwrap();
+    for (start, busy, _) in &controls {
+        start.send(()).unwrap();
+        busy.recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+    }
+    lock.commit().unwrap();
+    controls[0].2.send(()).unwrap();
+    threads.remove(0).join().unwrap();
+    controls[1].2.send(()).unwrap();
+    threads.remove(0).join().unwrap();
+    let after = host.evaluation_budget_debug().unwrap();
+    assert_eq!(after.reserved_mc, 0);
+    assert_eq!(after.requests, 0);
+    assert!(after.runs.iter().all(|r| r.closed && r.run_id.is_none()));
+    assert!(host
+        .evaluation_plan(&plan.id)
+        .unwrap()
+        .entries
+        .iter()
+        .all(|e| e.state == crate::evaluation::PlannedState::NotRun && e.run_id.is_none()));
+}
+
+#[test]
 fn evaluation_budget_counts_actual_scripted_requests_in_a_shared_debug_round() {
     let home = tempfile::tempdir().unwrap();
     let wb = Workbench::open_evaluation_host(home.path()).unwrap();

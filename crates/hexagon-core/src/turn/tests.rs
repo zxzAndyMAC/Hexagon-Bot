@@ -1633,6 +1633,202 @@ fn envelopes(db: &Db) -> Vec<Value> {
         .collect()
 }
 
+// Report 01/09/20 / competitor-improvements provenance, 2026-10-06:
+// same-named descriptions/schemas reached the provider but vanished from the
+// envelope identity. This exports a definition only; no tool executes here.
+struct EnvelopeDefinition(crate::provider::ToolDef);
+
+impl crate::tools::Tool for EnvelopeDefinition {
+    fn name(&self) -> &str {
+        &self.0.name
+    }
+    fn description(&self) -> &str {
+        &self.0.description
+    }
+    fn input_schema(&self) -> Value {
+        self.0.input_schema.clone()
+    }
+    fn risk(&self) -> crate::tools::RiskClass {
+        crate::tools::RiskClass::Read
+    }
+    fn exec(&self, _: &Db, _: &Value, _: &ToolContext) -> Result<Value, ToolError> {
+        panic!("definition provenance fixture must not execute")
+    }
+}
+
+fn assert_dispatched_definition_change(schema_change: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let baseline = crate::provider::ToolDef {
+        name: "envelope_definition_fixture".into(),
+        description: "PROVENANCE_DESCRIPTION_ALPHA".into(),
+        input_schema: json!({"type":"object","properties":{"choice":{"const":"SCHEMA_ALPHA"}}}),
+    };
+    let mut changed = baseline.clone();
+    if schema_change {
+        changed.input_schema["properties"]["choice"]["const"] = json!("SCHEMA_BETA");
+    } else {
+        changed.description = "PROVENANCE_DESCRIPTION_BETA".into();
+    }
+    let mut dispatched = Vec::new();
+    for definition in [baseline, changed] {
+        // Two independent initial DBs share ONE owned repo root: neither temp
+        // paths nor an earlier turn's brief may create a spurious fingerprint.
+        let (db, reg, mut ctx, _unused_root) = setup();
+        ctx.repo_root = root.path().to_path_buf();
+        reg.register(EnvelopeDefinition(definition.clone()));
+        let provider = ScriptedProvider::new(vec![text_response("done")]);
+        assert!(matches!(
+            run_turn(&db, &provider, &reg, &ctx, vec![], "inspect the contract").unwrap(),
+            TurnOutcome::Finished
+        ));
+        let calls = provider.recorded();
+        assert_eq!(calls.len(), 1);
+        let req = &calls[0];
+        let actual = req
+            .tools
+            .iter()
+            .find(|t| t.name == definition.name)
+            .unwrap();
+        assert!(
+            serde_json::to_value(actual).unwrap() == serde_json::to_value(&definition).unwrap()
+        );
+        let envs = envelopes(&db);
+        assert_eq!(envs.len(), 1);
+        let mut semantic = req.messages.clone();
+        let ContentBlock::Text { text } = &mut semantic.last_mut().unwrap().content[0] else {
+            panic!("expected the actual dynamic tail")
+        };
+        let mut tail: Value = serde_json::from_str(text).unwrap();
+        // Only the explicitly non-semantic wall clock is normalized. Python,
+        // rounds, all prompt/message text and any evidence remain compared.
+        assert!(tail["env"]
+            .as_object_mut()
+            .unwrap()
+            .remove("unix_time")
+            .is_some());
+        *text = tail.to_string();
+        dispatched.push((
+            req.clone(),
+            serde_json::to_value(semantic).unwrap(),
+            envs[0].clone(),
+        ));
+    }
+    let (before, before_messages, before_env) = &dispatched[0];
+    let (after, after_messages, after_env) = &dispatched[1];
+    assert_eq!(before.model_slot, after.model_slot);
+    assert!(
+        before_messages == after_messages,
+        "non-tool semantic inputs must be identical"
+    );
+    assert_eq!(before_env["layers"], after_env["layers"]);
+    assert_eq!(before_env["messages"], after_env["messages"]);
+    assert_eq!(before_env["tools"], after_env["tools"]);
+    let mut before_params = before_env["params"].clone();
+    let mut after_params = after_env["params"].clone();
+    before_params
+        .as_object_mut()
+        .unwrap()
+        .remove("tool_definitions_sha");
+    after_params
+        .as_object_mut()
+        .unwrap()
+        .remove("tool_definitions_sha");
+    assert_eq!(
+        before_params, after_params,
+        "all pre-existing params must match"
+    );
+    let mut before_tools = serde_json::to_value(&before.tools).unwrap();
+    let mut after_tools = serde_json::to_value(&after.tools).unwrap();
+    assert!(
+        before_tools != after_tools,
+        "the provider received a real definition change"
+    );
+    let erase_changed_field = |tools: &mut Value| {
+        let actual = tools
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|tool| tool["name"] == "envelope_definition_fixture")
+            .unwrap();
+        actual.as_object_mut().unwrap().remove(if schema_change {
+            "input_schema"
+        } else {
+            "description"
+        });
+    };
+    erase_changed_field(&mut before_tools);
+    erase_changed_field(&mut after_tools);
+    assert!(
+        before_tools == after_tools,
+        "only the chosen definition field may differ"
+    );
+    // This is the semantic red assertion, after proving identical other input.
+    assert_ne!(before_env["fingerprint"], after_env["fingerprint"]);
+    for (req, _, env) in &dispatched {
+        let actual = format!(
+            "{:016x}",
+            crate::tools::fnv64(&serde_json::to_string(&req.tools).unwrap())
+        );
+        assert_eq!(env["params"]["tool_definitions_sha"], actual);
+        let encoded = env.to_string();
+        assert!(!encoded.contains("PROVENANCE_DESCRIPTION_"));
+        assert!(!encoded.contains("SCHEMA_ALPHA") && !encoded.contains("SCHEMA_BETA"));
+    }
+}
+
+#[test]
+fn dispatch_envelope_tracks_same_named_description_changes() {
+    assert_dispatched_definition_change(false);
+}
+
+#[test]
+fn dispatch_envelope_tracks_same_named_schema_changes() {
+    assert_dispatched_definition_change(true);
+}
+
+proptest::proptest! {
+    #[test]
+    fn envelope_tool_definition_fingerprints_are_stable_and_sensitive(label in "[a-z]{1,24}") {
+        // Report 01/09/20: content identity, not a cryptographic authenticity
+        // claim. Keep names fixed for the two formerly invisible mutations.
+        let first = crate::provider::ToolDef {
+            name: "first".into(), description: label.clone(),
+            input_schema: json!({"type":"object","properties":{"choice":{"const":label}}}),
+        };
+        let mut second = first.clone();
+        second.name = "second".into();
+        let req = ChatRequest { model_slot:"default".into(), messages:vec![], tools:vec![first, second] };
+        let envelope = |request: &ChatRequest| request_envelope(0, request, &[], &[]);
+        let original = envelope(&req);
+        proptest::prop_assert_eq!(&original, &envelope(&req.clone()));
+        let mut description = req.clone();
+        description.tools[0].description.push('!');
+        let mut schema = req.clone();
+        schema.tools[0].input_schema["properties"]["choice"]["const"] = json!(format!("{label}!"));
+        let mut reordered = req.clone();
+        reordered.tools.reverse();
+        let mut removed = req.clone();
+        removed.tools.pop();
+        let mut added = req.clone();
+        let mut third = added.tools[0].clone();
+        third.name = "third".into();
+        added.tools.push(third);
+        for mutation in [&description, &schema, &reordered, &removed, &added] {
+            let changed = envelope(mutation);
+            proptest::prop_assert_ne!(&original["fingerprint"], &changed["fingerprint"]);
+            proptest::prop_assert_ne!(&original["params"]["tool_definitions_sha"], &changed["params"]["tool_definitions_sha"]);
+        }
+        proptest::prop_assert_eq!(&original["tools"], &envelope(&description)["tools"]);
+        proptest::prop_assert_eq!(&original["tools"], &envelope(&schema)["tools"]);
+        let mut empty = req.clone();
+        empty.tools.clear();
+        let empty_env = envelope(&empty);
+        proptest::prop_assert_eq!(&empty_env, &envelope(&empty.clone()));
+        proptest::prop_assert_eq!(&empty_env["tools"], &json!([]));
+        proptest::prop_assert_eq!(&empty_env["params"]["tool_definitions_sha"], &json!(format!("{:016x}", crate::tools::fnv64("[]"))));
+    }
+}
+
 #[test]
 fn dispatch_persists_request_envelope() {
     let (db, reg, ctx, _dir) = setup();

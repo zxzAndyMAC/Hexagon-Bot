@@ -22,3 +22,8 @@ log = "0.4.34"
 tauri-plugin-dialog = "2"
 ts-rs = "=11.1.0"
 open = "5"
+
+[dev-dependencies]
+# Reuse the workspace-installed temporary directory helper for IPC lifecycle tests.
+tempfile = "3"
+proptest = "1"

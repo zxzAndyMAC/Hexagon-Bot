@@ -61,6 +61,30 @@ it('blocks unresolved policy recovery through both the button and approval short
   } finally { await act(async () => root.unmount()); vi.restoreAllMocks(); useUiStore.setState(saved, true) }
 })
 
+// Benchmark I1 / review P0: an old read cannot open a tab or dismiss the new
+// project's decision dialog, including reopening the same canonical root.
+it('discards a candidate report that arrives after a project switch', async () => {
+  await i18n.changeLanguage('en')
+  const saved = useUiStore.getState()
+  useUiStore.setState({ projectRoot: '/repo/a', projectEpoch: 71, modalScope: 'workbench' })
+  let resolve!: (value: Awaited<ReturnType<typeof api.proposals>>) => void
+  vi.spyOn(api, 'proposals').mockImplementation(() => new Promise(r => { resolve = r }))
+  const el = document.createElement('div'); const root = createRoot(el)
+  try {
+    await act(async () => root.render(<PendingCard q={card} top />))
+    const button = [...el.querySelectorAll('button')].find(b => b.textContent === 'View candidate and replay report')!
+    await act(async () => button.click())
+    await act(async () => {
+      useUiStore.getState().beginProjectSwitch()
+      useUiStore.setState({ projectRoot: '/repo/a', pendingDialogOpen: true })
+      resolve([{ id: 'policy-1', surface: 'pack_copy', target: '.hexagon/pack.active.json',
+        status: 'awaiting_stamp', author: 'a0', artifact_path: 'proposals/old.md' }])
+    })
+    expect(useUiStore.getState().tabs.map(t => t.id)).toEqual(['timeline'])
+    expect(useUiStore.getState().pendingDialogOpen).toBe(true)
+  } finally { await act(async () => root.unmount()); vi.restoreAllMocks(); useUiStore.setState(saved, true) }
+})
+
 // Evaluation 18/D14: status refresh updates both the visible reason and action.
 it('refreshes all quality states and allows only qualified owner adoption', async () => {
   await i18n.changeLanguage('zh-CN')

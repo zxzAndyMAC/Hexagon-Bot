@@ -39,6 +39,8 @@ export default function App() {
   const timelineActive = useUiStore((s) => (s.tabs.find((tab) => tab.id === s.activeTab) ?? s.tabs[0])?.kind === 'timeline')
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
   const [projectOpen, setProjectOpen] = useState<boolean | null>(null)
+  const projectRoot = useUiStore(s => s.projectRoot)
+  const projectGeneration = useUiStore(s => s.projectGeneration)
   const { onKey } = usePendingKeys()
 
   useEffect(() => {
@@ -61,7 +63,7 @@ export default function App() {
 
   // 票 17：工作台已经在了再分析。不等这条命令，输入框不被它挡住。
   useEffect(() => {
-    if (projectOpen !== true) return
+    if (projectOpen !== true || !projectRoot || projectGeneration === null) return
     let cancel = false
     void api.runOpeningIntake().then(() => {
       if (!cancel) void useUiStore.getState().refreshFast()
@@ -69,7 +71,7 @@ export default function App() {
       if (!cancel) useUiStore.getState().pushToast(errText(e), 'err')
     })
     return () => { cancel = true }
-  }, [projectOpen])
+  }, [projectOpen, projectRoot, projectGeneration])
 
   // 进工作台不等 MCP 握手。有服务在 starting 时停输入，状态轮询里更新。
   useEffect(() => {
@@ -113,23 +115,27 @@ export default function App() {
   // 票 03：回合流式 delta 订阅（Tauri 事件 → store 瞬时缓冲；
   // 浏览器 dev 无推送通道，onTurnDelta 返回 no-op）。
   useEffect(() => {
-    if (projectOpen !== true) return
+    if (projectOpen !== true || !projectRoot || projectGeneration === null) return
     let un: (() => void) | undefined
+    let cancelled = false
     onTurnDelta((d) => useUiStore.getState().applyDelta(d)).then((u) => {
-      un = u
+      if (cancelled) u()
+      else un = u
     })
-    return () => un?.()
-  }, [projectOpen])
+    return () => { cancelled = true; un?.() }
+  }, [projectOpen, projectRoot, projectGeneration])
 
   // exec-cards 票 04：bash 输出流订阅——同 turn-delta 纪律（瞬时通道）。
   useEffect(() => {
-    if (projectOpen !== true) return
+    if (projectOpen !== true || !projectRoot || projectGeneration === null) return
     let un: (() => void) | undefined
+    let cancelled = false
     onToolOutput((d) => useUiStore.getState().applyToolOutput(d)).then((u) => {
-      un = u
+      if (cancelled) u()
+      else un = u
     })
-    return () => un?.()
-  }, [projectOpen])
+    return () => { cancelled = true; un?.() }
+  }, [projectOpen, projectRoot, projectGeneration])
 
   // 票 16（方向卡 1）：失焦自动值守——blur 持续 60s 才 owner_away
   //（短抖动不误触发），回焦即 owner_back（markBack 内有 away 守卫）。
@@ -259,26 +265,25 @@ export default function App() {
   if (!projectOpen) {
     return <Launcher onOpen={() => setProjectOpen(true)} />
   }
-  // 设置整页：工作台整体换掉（票 29），arrow-left 返回
-  if (settingsOpen) {
-    return (
-      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <SettingsPage initialSection={computerSettings}
-          onBack={() => { setSettingsOpen(false); setComputerSettings('general') }}
-          // ui-audit-2 票 05：设置-用量「详情」= 回工作台并开用量明细 tab
-          onOpenUsageDetail={() => {
-            useUiStore.getState().openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') })
-            setSettingsOpen(false)
-          }}
-        />
-        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
-      </div>
-    )
-  }
-
+  // Benchmark I1/2026-10-06: unmounting the workbench for Settings lost
+  // unsaved file text before the project-leave guard could see it. Keep the
+  // editor panes; stop native previews by unmounting the side panel as before.
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <DesktopPermissions compact />
+    <>
+      {settingsOpen && (
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <SettingsPage initialSection={computerSettings}
+            onBack={() => { setSettingsOpen(false); setComputerSettings('general') }}
+            onOpenUsageDetail={() => {
+              useUiStore.getState().openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') })
+              setSettingsOpen(false)
+            }}
+          />
+          {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+        </div>
+      )}
+    <div aria-hidden={settingsOpen || undefined} style={{ height: '100%', display: settingsOpen ? 'none' : 'flex', flexDirection: 'column' }}>
+      {!settingsOpen && <DesktopPermissions compact />}
       <TopBar
         onSettings={() => setSettingsOpen(true)}
         onProjectClosed={() => setProjectOpen(false)}
@@ -294,12 +299,13 @@ export default function App() {
             <Composer />
           </div>
         </div>
-        <SidePanel />
+        {!settingsOpen && <SidePanel />}
       </div>
       {/* 票 05：待决是浮层，不插进这条纵栏——高度留给 Tab 和时间线。 */}
-      <PendingDialog />
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+      {!settingsOpen && <PendingDialog />}
+      {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </div>
+    </>
   )
 }
 

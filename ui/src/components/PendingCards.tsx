@@ -11,7 +11,7 @@ import { useUiStore } from '../store'
 import { extractDiffBlock, parseUnifiedDiff, type DiffOp } from '../diff'
 import { DiffView } from './DiffView'
 import { bindingFor, formatBinding, matches } from '../keymap'
-import { kindTitleKey, policyNeedsQuality, policyQualityMessage, rejectReasonWithJudge, severityOf } from '../decisions'
+import { isActivationResumeCard, kindTitleKey, policyNeedsQuality, policyQualityMessage, rejectReasonWithJudge, severityOf } from '../decisions'
 import { Icon, type IconName } from './Icon'
 import { StageEvidence } from './StageEvidence'
 import { useStageEvidence } from '../useStageEvidence'
@@ -82,25 +82,31 @@ function InlineDiff({ proposalId }: { proposalId: string }) {
   const [loaded, setLoaded] = useState(false)
   const [ops, setOps] = useState<DiffOp[] | null>(null)
 
-  const fetchDiff = async (): Promise<{ diff: string | null; artPath: string | null }> => {
+  // Benchmark I1 / 2026-10-06 review: late A reads previously opened tabs in B.
+  // Guard both awaits, so A's artifact path cannot be looked up in B either.
+  const fetchDiff = async (epoch: number): Promise<{ diff: string | null; artPath: string | null }> => {
     const props = await api.proposals()
+    if (useUiStore.getState().projectEpoch !== epoch) return { diff: null, artPath: null }
     const pr = props.find((x) => String(x.id) === proposalId)
     const ap = pr?.artifact_path ? String(pr.artifact_path) : null
     if (!ap) return { diff: null, artPath: null }
     const body = await api.artifactContent(ap)
+    if (useUiStore.getState().projectEpoch !== epoch) return { diff: null, artPath: null }
     return { diff: extractDiffBlock(body), artPath: ap }
   }
 
   const openFull = async () => {
+    const epoch = useUiStore.getState().projectEpoch
     try {
-      const { diff, artPath: ap } = await fetchDiff()
+      const { diff, artPath: ap } = await fetchDiff(epoch)
+      if (useUiStore.getState().projectEpoch !== epoch) return
       if (diff) {
         openTab({ id: `patch:${proposalId}`, kind: 'diff', title: `${proposalId} diff`, patchText: diff })
       } else if (ap) {
         openTab({ id: `art:${ap}`, kind: 'artifact', title: ap, path: ap })
       }
     } catch (e) {
-      pushToast(errText(e), 'err')
+      if (useUiStore.getState().projectEpoch === epoch) pushToast(errText(e), 'err')
     }
   }
 
@@ -108,17 +114,20 @@ function InlineDiff({ proposalId }: { proposalId: string }) {
     if (open) { setOpen(false); return }
     setOpen(true)
     if (loaded || loading) return
+    const epoch = useUiStore.getState().projectEpoch
     setLoading(true)
     try {
-      const { diff } = await fetchDiff()
+      const { diff } = await fetchDiff(epoch)
+      if (useUiStore.getState().projectEpoch !== epoch) return
       setOps(diff ? parseUnifiedDiff(diff) : null)
       setLoaded(true)
     } catch (e) {
+      if (useUiStore.getState().projectEpoch !== epoch) return
       setOpen(false)
       pushToast(errText(e), 'err')
       void openFull() // 回退开 tab 路径（其内部再 toast）
     } finally {
-      setLoading(false)
+      if (useUiStore.getState().projectEpoch === epoch) setLoading(false)
     }
   }
 
@@ -256,12 +265,14 @@ function PolicyReport({ q }: { q: PendingQuestion }) {
     {q.payload.policy_recovery === true && <p role="alert">{t('policy.recovery')}</p>}
     {report && <p className="mono">{t('policy.scores', { baseline: report.baseline_score ?? '—', candidate: report.candidate_score ?? '—' })}</p>}
     <button ref={openButton} className="btn" title={`${t('policy.report')} · ${formatBinding(bindingFor('openPolicyReport'))}`} onClick={async () => {
+      const epoch = useUiStore.getState().projectEpoch
       try {
         const proposal = (await api.proposals()).find((p) => p.id === q.payload.proposal_id)
+        if (useUiStore.getState().projectEpoch !== epoch) return
         if (!proposal?.artifact_path) throw new Error(t('errors.not_found'))
         useUiStore.getState().openTab({ id: `art:${proposal.artifact_path}`, kind: 'artifact', title: proposal.artifact_path, path: proposal.artifact_path })
         useUiStore.getState().closePendingDialog()
-      } catch (e) { useUiStore.getState().pushToast(errText(e), 'err') }
+      } catch (e) { if (useUiStore.getState().projectEpoch === epoch) useUiStore.getState().pushToast(errText(e), 'err') }
     }}>{t('policy.report')}</button>
   </div>
 }
@@ -546,11 +557,14 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   if (q.kind === 'stall') {
     const branch = String(p.branch ?? '')
     const canRetry = p.retry === true
+    // I2 / 2026-10-06: admission did not run a retrigger. The refusal already
+    // took effect; this card offers only continuation of its original task.
+    const resumeWaiting = isActivationResumeCard(q)
     return (
-      <CardShell tone="flag" icon="warn" title={`${t('cards.stall')} · ${t(`cards.stall_${branch}`, { defaultValue: branch })}`}>
+      <CardShell tone="flag" icon="warn" title={resumeWaiting ? t('cards.resumeWaiting') : `${t('cards.stall')} · ${t(`cards.stall_${branch}`, { defaultValue: branch })}`}>
         {p.role != null && <div className="mono dim" style={{ fontSize: 12 }}>{String(p.role)}</div>}
         <div className="dim3" style={{ fontSize: 11, margin: '4px 0 8px' }}>
-          {canRetry ? t('cards.stallHint') : t('cards.stallAckOnly')}
+          {resumeWaiting ? t('cards.resumeWaitingHint') : canRetry ? t('cards.stallHint') : t('cards.stallAckOnly')}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {canRetry && (

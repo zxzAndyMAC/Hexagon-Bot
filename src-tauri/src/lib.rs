@@ -66,19 +66,227 @@ struct AppState {
 struct ControlConn {
     db: hexagon_core::db::Db,
     root: std::path::PathBuf,
+    generation: u64,
+}
+
+static CONTROL_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export, export_to = "../../ui/src/gen/")]
+struct ProjectIdentity {
+    project_root: String,
+    #[ts(type = "number")]
+    generation: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../ui/src/gen/")]
+struct ProjectTurnDelta {
+    identity: ProjectIdentity,
+    // ts-rs 11 resolves dependency export_to in this crate's cwd. Inline the
+    // core-derived shape instead of importing a path outside this workspace.
+    #[ts(inline)]
+    delta: hexagon_core::turn::TurnDelta,
+}
+
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../ui/src/gen/")]
+struct ProjectToolOutputDelta {
+    identity: ProjectIdentity,
+    #[ts(inline)] // same cross-crate export path constraint as ProjectTurnDelta
+    delta: hexagon_core::sessions::ToolOutputDelta,
+}
+
+impl ControlConn {
+    fn identity(&self) -> ProjectIdentity {
+        ProjectIdentity {
+            project_root: self.root.to_string_lossy().into_owned(),
+            generation: self.generation,
+        }
+    }
+}
+
+// Foundation Spec P0 / 2026-10-06: q1 and p1 are local to each database.
+// Clearing UI projections cannot revoke an IPC queued for a previous project.
+// Native CommandArg preserves the originating token without a command-name map.
+struct ProjectState<'a> {
+    state: &'a AppState,
+    identity: Option<ProjectIdentity>,
+}
+
+impl std::ops::Deref for ProjectState<'_> {
+    type Target = AppState;
+    fn deref(&self) -> &Self::Target {
+        self.state
+    }
+}
+
+fn project_identity_argument(
+    body: &tauri::ipc::InvokeBody,
+) -> Result<Option<ProjectIdentity>, CmdError> {
+    let reject = |reason| {
+        hexagon_core::diag::note(
+            hexagon_core::diag::CLASS_REJECT,
+            true,
+            None,
+            None,
+            None,
+            None,
+            "project_identity_argument",
+            reason,
+            std::time::Instant::now(),
+        );
+        CmdError {
+            code: "project_changed".into(),
+            message: "project identity required or malformed".into(),
+        }
+    };
+    let tauri::ipc::InvokeBody::Json(body) = body else {
+        return Err(reject("raw_payload"));
+    };
+    let value = body
+        .get("_project")
+        .ok_or_else(|| reject("identity_missing"))?;
+    serde_json::from_value(value.clone()).map_err(|_| reject("identity_malformed"))
+}
+
+impl<'a, R: tauri::Runtime> tauri::ipc::CommandArg<'a, R> for ProjectState<'a> {
+    fn from_command(
+        command: tauri::ipc::CommandItem<'a, R>,
+    ) -> Result<Self, tauri::ipc::InvokeError> {
+        let identity = project_identity_argument(command.message.payload())
+            .map_err(tauri::ipc::InvokeError::from)?;
+        let state =
+            <tauri::State<'a, AppState> as tauri::ipc::CommandArg<'a, R>>::from_command(command)?;
+        Ok(Self {
+            state: state.inner(),
+            identity,
+        })
+    }
+}
+
+#[tauri::command]
+fn project_identity(state: tauri::State<AppState>) -> Result<Option<ProjectIdentity>, CmdError> {
+    let connection = state
+        .conn
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?;
+    Ok(connection.as_ref().map(ControlConn::identity))
+}
+
+fn with_project_conn<R, E>(
+    state: &ProjectState<'_>,
+    f: impl FnOnce(&hexagon_core::db::Db, &std::path::Path) -> Result<R, E>,
+) -> Result<R, CmdError>
+where
+    E: ErrorCode + std::fmt::Display,
+{
+    with_control(state, |connection| {
+        check_project_identity(Some(connection), state.identity.as_ref(), false)?;
+        f(&connection.db, &connection.root).map_err(cmd_err)
+    })
+}
+
+fn with_wb<R, E>(
+    state: &ProjectState<'_>,
+    f: impl FnOnce(&Workbench) -> Result<R, E>,
+) -> Result<R, CmdError>
+where
+    E: ErrorCode + std::fmt::Display,
+{
+    with_unscoped_wb(state, |wb| {
+        check_project_state(state, false)?;
+        f(wb).map_err(cmd_err)
+    })
+}
+
+fn check_project_state(state: &ProjectState<'_>, allow_absent: bool) -> Result<(), CmdError> {
+    let connection = state
+        .conn
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?;
+    check_project_identity(connection.as_ref(), state.identity.as_ref(), allow_absent)
+}
+
+fn check_project_identity(
+    connection: Option<&ControlConn>,
+    expected: Option<&ProjectIdentity>,
+    allow_absent: bool,
+) -> Result<(), CmdError> {
+    let started = std::time::Instant::now();
+    let reason = match (connection, expected) {
+        (Some(current), Some(expected))
+            if current.root.to_string_lossy() == expected.project_root
+                && current.generation == expected.generation =>
+        {
+            "matched"
+        }
+        (None, None) if allow_absent => "no_previous_project",
+        (Some(current), Some(expected))
+            if current.root.to_string_lossy() == expected.project_root =>
+        {
+            "generation_changed"
+        }
+        (Some(_), Some(_)) => "root_changed",
+        _ => "identity_missing",
+    };
+    let accepted = matches!(reason, "matched" | "no_previous_project");
+    // False rejection costs one retry; false acceptance can approve a new
+    // project's local q1. Never canonicalize/open a client-provided root here.
+    hexagon_core::diag::note(
+        if accepted {
+            hexagon_core::diag::CLASS_JUDGE
+        } else {
+            hexagon_core::diag::CLASS_REJECT
+        },
+        !accepted,
+        Some(PROJECT_ID),
+        None,
+        None,
+        None,
+        "project_identity",
+        reason,
+        started,
+    );
+    if accepted {
+        Ok(())
+    } else {
+        Err(CmdError {
+            code: "project_changed".into(),
+            message: "project changed before command execution".into(),
+        })
+    }
 }
 
 /// 回合 delta → webview（turn-streaming 票 03）：所有 Workbench 构造点
 /// 统一挂 emit。delta 是瞬时展示通道，持久层照旧走 events/messages。
 /// 票 04 同纪律加挂 tool-output：bash 执行中 stdout/stderr 逐段推。
-fn attach_delta_hook(app: &tauri::AppHandle, wb: &Workbench) {
+fn attach_delta_hook(app: &tauri::AppHandle, wb: &Workbench, identity: &ProjectIdentity) {
+    // I1 / 2026-10-06: old queued IPC frames survived clearing the UI and
+    // reused a0 in the next project. Freeze the producing connection, never
+    // look up the current connection at emission time or relabel old output.
+    let turn_identity = identity.clone();
     let h = app.clone();
     wb.set_turn_delta_hook(Some(Box::new(move |d| {
-        let _ = h.emit("turn-delta", d);
+        let _ = h.emit(
+            "turn-delta",
+            ProjectTurnDelta {
+                identity: turn_identity.clone(),
+                delta: d.clone(),
+            },
+        );
     })));
+    let output_identity = identity.clone();
     let h2 = app.clone();
     wb.set_tool_output_hook(Some(Box::new(move |d| {
-        let _ = h2.emit("tool-output", d);
+        let _ = h2.emit(
+            "tool-output",
+            ProjectToolOutputDelta {
+                identity: output_identity.clone(),
+                delta: d.clone(),
+            },
+        );
     })));
 }
 
@@ -87,25 +295,107 @@ fn open_control(dir: &str) -> Result<ControlConn, CmdError> {
     Ok(ControlConn {
         db: hexagon_core::db::Db::open(std::path::Path::new(dir).join(".hexagon/state.db"))
             .map_err(cmd_err)?,
-        root: std::path::PathBuf::from(dir),
+        root: std::path::Path::new(dir)
+            .canonicalize()
+            .map_err(|error| CmdError::internal(error.to_string()))?,
+        generation: CONTROL_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     })
 }
 
-/// Issue14: project replacement is the cancellation boundary. UI unmount runs
-/// after close_project returns, when its project-bound Stop IPC can no longer
-/// pass with_conn. Stop under this lock before removing/replacing the old root.
+/// Project controls must stop while the old connection is still available.
+fn stop_control(connection: &Option<ControlConn>) -> Result<(), CmdError> {
+    hexagon_core::api::desktop_preview_stop().map_err(CmdError::internal)?;
+    if let Some(old) = connection {
+        hexagon_core::api::desktop_close_project(&old.root).map_err(|message| CmdError {
+            code: "project_close_pending".into(),
+            message,
+        })?;
+        hexagon_core::api::browser_close_project(&old.root);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn replace_control(state: &AppState, next: Option<ControlConn>) -> Result<(), CmdError> {
     let mut connection = state
         .conn
         .lock()
         .map_err(|_| CmdError::internal("lock poisoned"))?;
-    hexagon_core::api::desktop_preview_stop().map_err(CmdError::internal)?;
-    let old_root = connection.as_ref().map(|value| value.root.clone());
+    stop_control(&connection)?;
     *connection = next;
-    drop(connection);
-    if let Some(root) = old_root {
-        hexagon_core::api::browser_close_project(&root);
+    Ok(())
+}
+
+/// Benchmark I1: swapping conn before acquiring wb let the old turn keep running
+/// behind a new project's control plane. Reuse the pause gate to stop that turn,
+/// then install both handles under their locks. An unconfirmed native drain keeps
+/// the original project open; it is never reported as a completed cancellation.
+fn replace_project(
+    state: &AppState,
+    next_wb: Option<Workbench>,
+    next: Option<ControlConn>,
+    expected: &Option<ProjectIdentity>,
+) -> Result<(), CmdError> {
+    let started = std::time::Instant::now();
+    let previous = {
+        let connection = state
+            .conn
+            .lock()
+            .map_err(|_| CmdError::internal("lock poisoned"))?;
+        check_project_identity(connection.as_ref(), expected.as_ref(), true)?;
+        let previous = connection
+            .as_ref()
+            .map(|old| {
+                let paused =
+                    hexagon_core::orchestra::is_paused(&old.db, PROJECT_ID).map_err(cmd_err)?;
+                if !paused {
+                    hexagon_core::orchestra::pause(&old.db, PROJECT_ID).map_err(cmd_err)?;
+                }
+                Ok::<_, CmdError>((old.generation, paused))
+            })
+            .transpose()?;
+        stop_control(&connection)?;
+        previous
+    };
+    let mut workbench = state
+        .wb
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?; // D01-ok: project replacement waits for the paused old turn
+    let mut connection = state
+        .conn
+        .lock()
+        .map_err(|_| CmdError::internal("lock poisoned"))?;
+    if connection.as_ref().map(|old| old.generation) != previous.map(|(generation, _)| generation) {
+        hexagon_core::diag::note(
+            hexagon_core::diag::CLASS_REJECT,
+            true,
+            Some(PROJECT_ID),
+            None,
+            None,
+            None,
+            "project_replacement",
+            "generation_changed",
+            started,
+        );
+        return Err(CmdError {
+            code: "project_changed".into(),
+            message: "project changed while stopping the old turn".into(),
+        });
     }
+    if let Some(old_wb) = workbench.as_ref() {
+        old_wb.stop_owned_work();
+    }
+    stop_control(&connection)?;
+    if let (Some(old), Some((_, false))) = (connection.as_ref(), previous) {
+        // No fallible operation after replacing either handle. The old parent
+        // is excluded by wb and its children are halted before restoring pause.
+        hexagon_core::orchestra::resume(&old.db, PROJECT_ID).map_err(cmd_err)?;
+    }
+    *connection = next;
+    // Drop sends halt and closes model-owned processes. This is not proof of
+    // remote billing cancellation, nor of a noncooperative child thread joining.
+    drop(workbench.take());
+    *workbench = next_wb;
     Ok(())
 }
 
@@ -119,6 +409,16 @@ fn with_conn<R, E>(
 where
     E: ErrorCode + std::fmt::Display,
 {
+    with_control(state, |connection| f(&connection.db, &connection.root))
+}
+
+fn with_control<R, E>(
+    state: &AppState,
+    f: impl FnOnce(&ControlConn) -> Result<R, E>,
+) -> Result<R, CmdError>
+where
+    E: ErrorCode + std::fmt::Display,
+{
     let g = state
         .conn
         .lock()
@@ -126,10 +426,10 @@ where
     let c = g
         .as_ref()
         .ok_or_else(|| CmdError::internal("no project open"))?;
-    f(&c.db, &c.root).map_err(cmd_err)
+    f(c).map_err(cmd_err)
 }
 
-fn with_wb<R, E>(
+fn with_unscoped_wb<R, E>(
     state: &AppState,
     f: impl FnOnce(&Workbench) -> Result<R, E>,
 ) -> Result<R, CmdError>
@@ -139,7 +439,7 @@ where
     let g = state
         .wb
         .lock()
-        .map_err(|_| CmdError::internal("lock poisoned"))?;
+        .map_err(|_| CmdError::internal("lock poisoned"))?; // D01-ok: shared Workbench lock for project commands
     let wb = g
         .as_ref()
         .ok_or_else(|| CmdError::internal("no project open"))?;
@@ -147,7 +447,7 @@ where
 }
 
 fn with_wb_mut<R, E>(
-    state: &AppState,
+    state: &ProjectState<'_>,
     f: impl FnOnce(&mut Workbench) -> Result<R, E>,
 ) -> Result<R, CmdError>
 where
@@ -156,10 +456,11 @@ where
     let mut g = state
         .wb
         .lock()
-        .map_err(|_| CmdError::internal("lock poisoned"))?;
+        .map_err(|_| CmdError::internal("lock poisoned"))?; // D01-ok: mutable project command under the Workbench lock
     let wb = g
         .as_mut()
         .ok_or_else(|| CmdError::internal("no project open"))?;
+    check_project_state(state, false)?;
     f(wb).map_err(cmd_err)
 }
 
@@ -209,13 +510,13 @@ fn design_direction(
 #[tauri::command]
 fn choose_design_direction(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     question_id: String,
     revision: i64,
     option_id: Option<String>,
     existing_guidance: Option<String>,
 ) -> Result<hexagon_core::design::DesignDirection, CmdError> {
-    let (direction, root) = with_conn(&state, |db, root| {
+    let direction = with_project_conn(&state, |db, _| {
         let direction = hexagon_core::api::choose_design_direction(
             db,
             PROJECT_ID,
@@ -225,34 +526,20 @@ fn choose_design_direction(
             existing_guidance.as_deref(),
         )
         .map_err(cmd_err)?;
-        Ok::<_, CmdError>((direction, root.to_path_buf()))
+        Ok::<_, CmdError>(direction)
     })?;
     let revision = direction.revision;
     // Fullstack QA #04: status=active is not a queued turn. Follow the same
     // short control/write then asynchronous turn pattern as owner messages.
     let app = app.clone();
+    let identity = state.identity.clone();
     tauri::async_runtime::spawn(async move {
-        let state = app.state::<AppState>();
-        let result = with_wb(&state, |wb| {
-            let started = std::time::Instant::now();
-            if wb.repo_root != root {
-                hexagon_core::diag::note(
-                    hexagon_core::diag::CLASS_REJECT,
-                    true,
-                    Some(&wb.project_id),
-                    None,
-                    None,
-                    None,
-                    "design_resume",
-                    "project_changed",
-                    started,
-                );
-                return Err(CmdError::internal(
-                    "project changed before design continuation",
-                ));
-            }
-            wb.continue_design_direction(revision).map_err(cmd_err)
-        });
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
+        let result = with_wb(&state, |wb| wb.continue_design_direction(revision));
         if let Err(error) = result {
             log::warn!("design continuation: {error}");
         }
@@ -261,11 +548,11 @@ fn choose_design_direction(
 }
 #[tauri::command]
 fn desktop_screenshot(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     name: String,
     expected_project_root: String,
 ) -> Result<hexagon_core::desktop::DesktopScreenshot, CmdError> {
-    with_conn(&state, |db, root| {
+    with_project_conn(&state, |db, root| {
         hexagon_core::api::desktop_screenshot(db, root, &name, &expected_project_root)
             .map_err(CmdError::internal)
     })
@@ -292,11 +579,11 @@ fn computer_models(
 }
 #[tauri::command]
 fn desktop_control(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     action: hexagon_core::desktop::DesktopControl,
     expected_project_root: String,
 ) -> Result<hexagon_core::desktop::DesktopStatus, CmdError> {
-    with_conn(&state, |db, root| {
+    with_project_conn(&state, |db, root| {
         // Ticket 07: check and mutation share the same current-project lock.
         hexagon_core::api::desktop_check_project(root, &expected_project_root)
             .map_err(CmdError::internal)?;
@@ -334,12 +621,13 @@ fn sandbox_status() -> hexagon_core::sandbox::SandboxStatus {
 #[tauri::command(async)]
 fn open_project(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     dir: String,
     name: String,
     roles: Vec<(String, String)>,
     pack_json: Option<String>,
 ) -> Result<(), CmdError> {
+    check_project_state(&state, true)?;
     let pack = pack_json
         .map(|s| serde_json::from_str(&s))
         .transpose()
@@ -353,12 +641,9 @@ fn open_project(
         hexagon_core::credentials::active(),
     )
     .map_err(cmd_err)?;
-    attach_delta_hook(&app, &wb);
-    replace_control(&state, Some(open_control(&dir)?))?;
-    *state
-        .wb
-        .lock()
-        .map_err(|_| CmdError::internal("lock poisoned"))? = Some(wb);
+    let control = open_control(&dir)?;
+    attach_delta_hook(&app, &wb, &control.identity());
+    replace_project(&state, Some(wb), Some(control), &state.identity)?;
     remember_recent(&app, &dir, &name, "pack");
     Ok(())
 }
@@ -426,7 +711,7 @@ fn timeline_nodes(
 #[tauri::command(async)]
 fn send_message(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     body: String,
     attachments: Vec<hexagon_core::trace::AttachRef>,
     element_ids: Option<Vec<String>>,
@@ -440,7 +725,7 @@ fn send_message(
         let expected = expected_project_root
             .as_deref()
             .ok_or_else(|| CmdError::internal("project identity required"))?;
-        let root = with_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+        let root = with_project_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
         Some(
             hexagon_core::browser_elements::send_scope(&root, expected)
                 .map_err(CmdError::internal)?,
@@ -448,7 +733,7 @@ fn send_message(
     } else {
         None
     };
-    let (id, cmd, root) = with_conn(&state, |db, root| {
+    let (id, cmd) = with_project_conn(&state, |db, root| {
         let (id, cmd) = if let Some(ids) = element_ids.as_ref().filter(|ids| !ids.is_empty()) {
             let expected = expected_project_root
                 .as_deref()
@@ -469,19 +754,19 @@ fn send_message(
             hexagon_core::commands::send_via_control(db, PROJECT_ID, &body, &attachments)
                 .map_err(cmd_err)?
         };
-        Ok::<_, CmdError>((id, cmd, root.to_path_buf()))
+        Ok::<_, CmdError>((id, cmd))
     })?;
     // Return after persistence so the composer stays responsive. Live acceptance
     // #16: once the queue drains, route by ID to avoid re-running injected steering.
     let app = app.clone();
+    let identity = state.identity.clone();
     tauri::async_runtime::spawn(async move {
-        let state = app.state::<AppState>();
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
         let res = with_wb(&state, |wb| {
-            // A queued command belongs to its original project, even if another
-            // project was opened while it waited for the workbench lock.
-            if wb.repo_root != root {
-                return Err(CmdError::internal("project changed before owner dispatch"));
-            }
             if let Some(other) = cmd {
                 wb.dispatch_command(&other).map_err(cmd_err)
             } else {
@@ -498,25 +783,25 @@ fn send_message(
 /// Owner-only selection: snapshot root before waiting on the browser runtime.
 #[tauri::command(async)]
 fn browser_selection_start(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     session_id: String,
     labels: serde_json::Value,
 ) -> Result<(), CmdError> {
-    let root = with_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+    let root = with_project_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
     hexagon_core::browser_elements::start(&root, &expected_project_root, &session_id, labels)
         .map_err(CmdError::internal)
 }
 #[tauri::command(async)]
 fn browser_selection_poll(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     session_id: String,
 ) -> Result<Vec<hexagon_core::browser_elements::ElementRef>, CmdError> {
-    let root = with_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+    let root = with_project_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
     let result = hexagon_core::browser_elements::poll(&root, &expected_project_root, &session_id)
         .map_err(CmdError::internal)?;
-    with_conn(&state, |_, current| {
+    with_project_conn(&state, |_, current| {
         hexagon_core::desktop::actions::verify_project(current, &expected_project_root)
             .map_err(CmdError::internal)
     })?;
@@ -524,11 +809,11 @@ fn browser_selection_poll(
 }
 #[tauri::command]
 fn browser_selection_discard(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     ids: Vec<String>,
 ) -> Result<(), CmdError> {
-    with_conn(&state, |_, root| {
+    with_project_conn(&state, |_, root| {
         hexagon_core::desktop::actions::verify_project(root, &expected_project_root)
             .map_err(CmdError::internal)?;
         hexagon_core::browser_elements::discard(root, &ids).map_err(CmdError::internal)
@@ -539,11 +824,11 @@ fn browser_selection_discard(
 /// 壳层只传字节。返回引用供 send_message 落行。
 #[tauri::command]
 fn stage_attachment(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     name: String,
     bytes: Vec<u8>,
 ) -> Result<hexagon_core::trace::AttachRef, CmdError> {
-    with_conn(&state, |db, root| {
+    with_project_conn(&state, |db, root| {
         hexagon_core::commands::stage_attachment(db, root, &name, &bytes)
             .map_err(|e| CmdError::internal(e.to_string()))
     })
@@ -552,10 +837,10 @@ fn stage_attachment(
 /// 票 03：发送失败/取消时清掉已暂存的附件文件（best-effort）。
 #[tauri::command]
 fn discard_attachments(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     refs: Vec<hexagon_core::trace::AttachRef>,
 ) -> Result<(), CmdError> {
-    with_conn(&state, |_db, root| {
+    with_project_conn(&state, |_db, root| {
         hexagon_core::commands::discard_attachments(root, &refs);
         Ok::<(), CmdError>(())
     })
@@ -563,7 +848,7 @@ fn discard_attachments(
 
 #[tauri::command(async)]
 fn answer_permission(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     question_id: String,
     allow: bool,
     remember_shape: Option<String>,
@@ -575,10 +860,7 @@ fn answer_permission(
 }
 
 #[tauri::command(async)]
-fn allow_project_permission(
-    state: tauri::State<AppState>,
-    question_id: String,
-) -> Result<(), CmdError> {
+fn allow_project_permission(state: ProjectState<'_>, question_id: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| {
         wb.allow_project_permission_and_continue(&question_id)
     })
@@ -586,15 +868,13 @@ fn allow_project_permission(
 
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
-fn advance(
-    state: tauri::State<AppState>,
-) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
+fn advance(state: ProjectState<'_>) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
     with_wb(&state, |wb| wb.advance())
 }
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
 fn run_checks(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     expected_project_root: Option<String>,
 ) -> Result<hexagon_core::orchestra::CheckOutcome, CmdError> {
     with_wb(&state, |wb| {
@@ -607,41 +887,41 @@ fn run_checks(
 }
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
-fn stamp(state: tauri::State<AppState>) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
+fn stamp(state: ProjectState<'_>) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
     with_wb(&state, |wb| wb.stamp())
 }
 #[tauri::command]
 fn rewind(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     to_seq: usize,
 ) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
     with_wb(&state, |wb| wb.rewind(to_seq))
 }
 #[tauri::command]
-fn skip(state: tauri::State<AppState>) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
+fn skip(state: ProjectState<'_>) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
     with_wb(&state, |wb| wb.skip())
 }
 #[tauri::command]
-fn skip_review(state: tauri::State<AppState>, artifact_kind: String) -> Result<(), CmdError> {
+fn skip_review(state: ProjectState<'_>, artifact_kind: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.skip_review(&artifact_kind))
 }
 #[tauri::command]
-fn pause(state: tauri::State<AppState>) -> Result<(), CmdError> {
+fn pause(state: ProjectState<'_>) -> Result<(), CmdError> {
     // 暂停按钮是回合中的叫停通道——必须走控制连接，wb 锁正被回合占着
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::orchestra::pause(db, PROJECT_ID).map_err(cmd_err)
     })
 }
 #[tauri::command]
-fn resume(state: tauri::State<AppState>) -> Result<(), CmdError> {
-    with_conn(&state, |db, _| {
+fn resume(state: ProjectState<'_>) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| {
         hexagon_core::orchestra::resume(db, PROJECT_ID).map_err(cmd_err)
     })
 }
 #[tauri::command]
-fn sleep_all(state: tauri::State<AppState>) -> Result<(), CmdError> {
+fn sleep_all(state: ProjectState<'_>) -> Result<(), CmdError> {
     // 全员休眠是干预指令（ADR 0052 控制组）：回合中途也要能落
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::orchestra::sleep_all(db, PROJECT_ID).map_err(cmd_err)
     })
 }
@@ -756,11 +1036,11 @@ fn approval_mode(
 }
 #[tauri::command]
 fn set_approval_mode(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     mode: hexagon_core::approval_mode::ApprovalMode,
     expected_project_root: String,
 ) -> Result<hexagon_core::approval_mode::ApprovalModeStatus, CmdError> {
-    with_conn(&state, |db, root| {
+    with_project_conn(&state, |db, root| {
         // 2026-10-01 review: UI generation only rejects late pixels, not writes.
         // Validate the initiating workspace under the same lock as the mutation.
         hexagon_core::api::set_project_approval_mode(
@@ -787,8 +1067,8 @@ fn permission_rules(
 /// 撤销已记规则：false（不存在/不属本项目）报 internal 而非静默成功——
 /// 「没删却说删了」比报错更糟（fail-closed 偏向显式失败）。
 #[tauri::command]
-fn revoke_permission_rule(state: tauri::State<AppState>, rule_id: String) -> Result<(), CmdError> {
-    with_conn(&state, |db, _| -> Result<(), CmdError> {
+fn revoke_permission_rule(state: ProjectState<'_>, rule_id: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| -> Result<(), CmdError> {
         let ok =
             hexagon_core::permissions::revoke_rule(db, PROJECT_ID, &rule_id).map_err(cmd_err)?;
         if ok {
@@ -915,6 +1195,31 @@ fn read_repo_file(state: tauri::State<AppState>, path: String) -> Result<String,
     })
 }
 
+/// Versioned owner read (read group): incarnation is captured under conn lock.
+#[tauri::command]
+fn read_repo_file_snapshot(
+    state: tauri::State<AppState>,
+    path: String,
+    expected_project_root: String,
+) -> Result<hexagon_core::files::RepoFileSnapshot, CmdError> {
+    read_repo_file_snapshot_for_state(&state, &path, &expected_project_root)
+}
+
+fn read_repo_file_snapshot_for_state(
+    state: &AppState,
+    path: &str,
+    expected_project_root: &str,
+) -> Result<hexagon_core::files::RepoFileSnapshot, CmdError> {
+    with_control(state, |connection| {
+        hexagon_core::files::read_repo_file_snapshot(
+            &connection.root,
+            connection.generation,
+            path,
+            expected_project_root,
+        )
+    })
+}
+
 /// 文件在 git HEAD 的版本（读组，文件页对比基线）。
 /// 非仓/未跟踪/无 HEAD → None，基线缺失不是错误。
 #[tauri::command]
@@ -926,16 +1231,16 @@ fn repo_file_head(state: tauri::State<AppState>, path: String) -> Result<Option<
 
 /// 新建空文件（控制组，落盘）。
 #[tauri::command]
-fn create_repo_file(state: tauri::State<AppState>, path: String) -> Result<(), CmdError> {
-    with_conn(&state, |_db, root| {
+fn create_repo_file(state: ProjectState<'_>, path: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |_db, root| {
         hexagon_core::files::create_repo_file(root, &path)
     })
 }
 
 /// 新建目录（控制组，落盘）。
 #[tauri::command]
-fn create_repo_dir(state: tauri::State<AppState>, path: String) -> Result<(), CmdError> {
-    with_conn(&state, |_db, root| {
+fn create_repo_dir(state: ProjectState<'_>, path: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |_db, root| {
         hexagon_core::files::create_repo_dir(root, &path)
     })
 }
@@ -943,12 +1248,36 @@ fn create_repo_dir(state: tauri::State<AppState>, path: String) -> Result<(), Cm
 /// 小改写回（控制组，落盘）。不写穿符号链接。
 #[tauri::command]
 fn write_repo_file(
-    state: tauri::State<AppState>,
-    path: String,
+    state: ProjectState<'_>,
+    snapshot: hexagon_core::files::RepoFileSnapshot,
     content: String,
 ) -> Result<(), CmdError> {
-    with_conn(&state, |_db, root| {
-        hexagon_core::files::write_repo_file(root, &path, &content)
+    let generation = state
+        .identity
+        .as_ref()
+        .ok_or_else(|| CmdError {
+            code: "project_changed".into(),
+            message: "project identity required".into(),
+        })?
+        .generation;
+    with_project_conn(&state, |_, root| {
+        hexagon_core::files::write_repo_file_snapshot(root, generation, &snapshot, &content)
+    })
+}
+
+#[cfg(test)]
+fn write_repo_file_for_state(
+    state: &AppState,
+    snapshot: &hexagon_core::files::RepoFileSnapshot,
+    content: &str,
+) -> Result<(), CmdError> {
+    with_control(state, |connection| {
+        hexagon_core::files::write_repo_file_snapshot(
+            &connection.root,
+            connection.generation,
+            snapshot,
+            content,
+        )
     })
 }
 
@@ -958,7 +1287,7 @@ fn write_repo_file(
 fn mcp_services(
     state: tauri::State<AppState>,
 ) -> Result<Vec<hexagon_core::mcp::McpServiceRow>, CmdError> {
-    with_wb(&state, |wb| Ok::<_, CmdError>(wb.mcp_services()))
+    with_unscoped_wb(&state, |wb| Ok::<_, CmdError>(wb.mcp_services()))
 }
 
 // ---------- MCP 全局清单（global-config 票 05，ADR 0057） ----------
@@ -1079,28 +1408,28 @@ fn usage_context_pressure(
 
 #[tauri::command]
 fn open_stage(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     seq: usize,
 ) -> Result<hexagon_core::api::OpenStageOutcome, CmdError> {
     with_wb(&state, |wb| wb.open_stage(seq))
 }
 
 #[tauri::command]
-fn recover_run(state: tauri::State<AppState>, run_id: String) -> Result<(), CmdError> {
+fn recover_run(state: ProjectState<'_>, run_id: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.recover_run(&run_id))
 }
 
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
 fn request_acceptance_exception(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     expected: String,
 ) -> Result<hexagon_core::orchestra::ExceptionRequest, CmdError> {
     with_wb(&state, |wb| wb.request_acceptance_exception(&expected))
 }
 #[tauri::command(async)]
 fn confirm_performance_baseline(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     measurement: i64,
     expected: String,
     reason: String,
@@ -1111,7 +1440,7 @@ fn confirm_performance_baseline(
 }
 #[tauri::command(async)]
 fn update_quality_commands(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     seq: usize,
     expected: String,
     expected_project_root: String,
@@ -1125,7 +1454,7 @@ fn update_quality_commands(
 }
 #[tauri::command(async)]
 fn cancel_quality_revalidation(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     question: String,
     expected_project_root: String,
 ) -> Result<(), CmdError> {
@@ -1137,7 +1466,7 @@ fn cancel_quality_revalidation(
 }
 #[tauri::command(async)]
 fn confirm_quality_revalidation(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     question: String,
     expected: String,
     expected_project_root: String,
@@ -1151,7 +1480,7 @@ fn confirm_quality_revalidation(
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
 fn accept_delivery_exception(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     question: String,
     expected: String,
     selected: Vec<hexagon_core::orchestra::ExceptionRequirement>,
@@ -1162,16 +1491,13 @@ fn accept_delivery_exception(
     })
 }
 #[tauri::command]
-fn cancel_acceptance_exception(
-    state: tauri::State<AppState>,
-    question: String,
-) -> Result<(), CmdError> {
+fn cancel_acceptance_exception(state: ProjectState<'_>, question: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.cancel_acceptance_exception(&question))
 }
 
 #[tauri::command]
 fn override_checks(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     reason: String,
 ) -> Result<hexagon_core::orchestra::OverrideOutcome, CmdError> {
     with_wb(&state, |wb| wb.override_checks(&reason))
@@ -1193,34 +1519,34 @@ fn agent_detail(
 
 #[tauri::command]
 fn update_agent(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     agent_id: String,
     patch: hexagon_core::roles::AgentPatch,
 ) -> Result<(), CmdError> {
     // 纯 DB 变更——控制通道直落（票 05：不占 wb 锁）
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::roles::update_agent_def(db, PROJECT_ID, &agent_id, &patch).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn create_role(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     def: hexagon_core::presets::RoleDef,
 ) -> Result<String, CmdError> {
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::roles::create_role(db, PROJECT_ID, &def).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn set_agent_grants(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     agent_id: String,
     kind: String,
     names: Vec<String>,
 ) -> Result<(), CmdError> {
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::roles::set_grants(db, &agent_id, &kind, &names).map_err(cmd_err)
     })
 }
@@ -1228,30 +1554,30 @@ fn set_agent_grants(
 /// 票 04：技能/MCP 授权确认。L4 在核内自动写入项目 grants；L0–L3 只入队。
 #[tauri::command]
 fn request_grant(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     agent_id: String,
     kind: String,
     name: String,
 ) -> Result<hexagon_core::grants::GrantOutcome, CmdError> {
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::grants::request(db, PROJECT_ID, &agent_id, &kind, &name).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn confirm_grant(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     qid: String,
     allow: bool,
 ) -> Result<hexagon_core::grants::GrantOutcome, CmdError> {
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::grants::confirm(db, PROJECT_ID, &qid, allow).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn draft_role_def(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     agent_id: String,
     hint: String,
 ) -> Result<String, CmdError> {
@@ -1266,9 +1592,9 @@ fn pack_draft(state: tauri::State<AppState>) -> Result<hexagon_core::orchestra::
 }
 
 #[tauri::command]
-fn save_pack_draft(state: tauri::State<AppState>, pack_json: String) -> Result<(), CmdError> {
+fn save_pack_draft(state: ProjectState<'_>, pack_json: String) -> Result<(), CmdError> {
     // 草稿写 .hexagon/pack.json（非 active 副本）——控制通道可落
-    with_conn(&state, |db, root| {
+    with_project_conn(&state, |db, root| {
         let pack = hexagon_core::packedit::parse_draft(&pack_json).map_err(cmd_err)?;
         hexagon_core::packedit::save_draft(db, root, PROJECT_ID, &pack).map_err(cmd_err)
     })
@@ -1296,27 +1622,27 @@ fn pack_template(name: String) -> Result<hexagon_core::orchestra::PackDef, CmdEr
 }
 
 #[tauri::command]
-fn export_pack_yaml(state: tauri::State<AppState>, dest: String) -> Result<(), CmdError> {
-    with_conn(&state, |_, root| {
+fn export_pack_yaml(state: ProjectState<'_>, dest: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |_, root| {
         hexagon_core::packedit::export_yaml(root, std::path::Path::new(&dest)).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn resolve_install(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     qid: String,
     allow: bool,
 ) -> Result<hexagon_core::install::InstallOutcome, CmdError> {
     // 放行/驳回 + 落盘执行全在 Db+repo_root——控制通道直落（票 05）
-    with_conn(&state, |db, root| {
+    with_project_conn(&state, |db, root| {
         hexagon_core::install::resolve_install(db, PROJECT_ID, root, &qid, allow).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn export_events(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     path: String,
     stage_run_id: Option<String>,
     agent_id: Option<String>,
@@ -1332,7 +1658,7 @@ fn export_events(
                 .collect::<Result<Vec<_>, CmdError>>()
         })
         .transpose()?;
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         db.export_events(
             PROJECT_ID,
             std::path::Path::new(&path),
@@ -1354,9 +1680,9 @@ fn autonomy(state: tauri::State<AppState>) -> Result<String, CmdError> {
 }
 
 #[tauri::command]
-fn set_autonomy(state: tauri::State<AppState>, level: String) -> Result<(), CmdError> {
+fn set_autonomy(state: ProjectState<'_>, level: String) -> Result<(), CmdError> {
     // 档位是 projects 行旋钮（控制组）：回合途中改档即时落库，下回合生效
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::autonomy::set_level(db, PROJECT_ID, &level).map_err(cmd_err)
     })
 }
@@ -1372,15 +1698,15 @@ fn reviewer_mode(state: tauri::State<AppState>) -> Result<String, CmdError> {
 /// 审查者档位写：live 只在 autonomy ≥ L1 生效（L0+live 在裁决内退化为
 /// shadow——后端 adjudicate 拦，UI 也明示），这里只校验词表。
 #[tauri::command]
-fn set_reviewer_mode(state: tauri::State<AppState>, mode: String) -> Result<(), CmdError> {
-    with_conn(&state, |db, _| {
+fn set_reviewer_mode(state: ProjectState<'_>, mode: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| {
         hexagon_core::autonomy::set_reviewer_mode(db, PROJECT_ID, &mode).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
-fn owner_away(state: tauri::State<AppState>) -> Result<(), CmdError> {
-    with_conn(&state, |db, _| {
+fn owner_away(state: ProjectState<'_>) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| {
         hexagon_core::autonomy::leave(db, PROJECT_ID)
             .map(|_| ())
             .map_err(cmd_err)
@@ -1388,17 +1714,15 @@ fn owner_away(state: tauri::State<AppState>) -> Result<(), CmdError> {
 }
 
 #[tauri::command]
-fn owner_back(
-    state: tauri::State<AppState>,
-) -> Result<hexagon_core::autonomy::ReturnSummary, CmdError> {
-    with_conn(&state, |db, _| {
+fn owner_back(state: ProjectState<'_>) -> Result<hexagon_core::autonomy::ReturnSummary, CmdError> {
+    with_project_conn(&state, |db, _| {
         hexagon_core::autonomy::back(db, PROJECT_ID).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn reject_stamp(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     stage: Option<String>,
     note: Option<String>,
 ) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
@@ -1412,7 +1736,7 @@ fn reject_stamp(
 /// 异步化与否见 report.md 待验证假设，本票不碰语义。
 #[tauri::command]
 fn adjudicate_flag(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     qid: String,
     agree: bool,
 ) -> Result<hexagon_core::api::AdjudicateOutcome, CmdError> {
@@ -1430,7 +1754,7 @@ fn proposals(
 
 #[tauri::command]
 fn curate_legacy_experience(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     request: hexagon_core::experience::ExperienceCuration,
 ) -> Result<hexagon_core::experience::ExperienceSubmission, CmdError> {
     with_wb(&state, |wb| wb.curate_legacy_experience(&request))
@@ -1439,7 +1763,7 @@ fn curate_legacy_experience(
 
 #[tauri::command]
 fn revoke_experience(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     request: hexagon_core::experience::ExperienceRevocation,
 ) -> Result<hexagon_core::experience::ExperienceEntryView, CmdError> {
     with_wb(&state, |wb| wb.revoke_experience(&request))
@@ -1461,7 +1785,7 @@ fn project_skill_document(
 }
 #[tauri::command]
 fn save_project_skill_document(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     document: hexagon_core::experience::ProjectSkillDocument,
 ) -> Result<hexagon_core::experience::ProjectSkillDocument, CmdError> {
     with_wb(&state, |wb| wb.save_project_skill_document(&document))
@@ -1477,7 +1801,7 @@ fn experience_limits(
 }
 #[tauri::command]
 fn set_experience_limits(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     limits: hexagon_core::experience::ExperienceLimits,
 ) -> Result<hexagon_core::experience::ExperienceLimits, CmdError> {
     with_wb(&state, |wb| wb.set_experience_limits(&limits))
@@ -1485,7 +1809,7 @@ fn set_experience_limits(
 
 #[tauri::command]
 fn recover_experience(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
 ) -> Result<Vec<hexagon_core::experience::ExperienceRecovery>, CmdError> {
     with_wb_mut(&state, |wb| wb.recover_experience())
 }
@@ -1547,7 +1871,7 @@ fn experience_proposal(
 
 #[tauri::command]
 fn propose_experience_entry(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     agent_id: String,
     request: hexagon_core::experience::ExperienceRequest,
 ) -> Result<hexagon_core::experience::ExperienceSubmission, CmdError> {
@@ -1562,7 +1886,7 @@ fn propose_experience_entry(
 /// 裁决面是 owner，署名 owner 比冒名复审 agent 诚实。
 #[tauri::command]
 fn review_proposal(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     proposal_id: String,
     pass: bool,
     reason: String,
@@ -1572,17 +1896,13 @@ fn review_proposal(
 }
 
 #[tauri::command]
-fn confirm_proposal(state: tauri::State<AppState>, qid: String) -> Result<String, CmdError> {
+fn confirm_proposal(state: ProjectState<'_>, qid: String) -> Result<String, CmdError> {
     with_wb_mut(&state, |wb| wb.confirm_proposal(&qid))
 }
 
 #[tauri::command]
-fn reject_proposal(
-    state: tauri::State<AppState>,
-    qid: String,
-    reason: String,
-) -> Result<(), CmdError> {
-    with_conn(&state, |db, root| {
+fn reject_proposal(state: ProjectState<'_>, qid: String, reason: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, root| {
         let ctx = hexagon_core::tools::ToolContext::owner(db, root);
         hexagon_core::proposals::reject_at_stamp(db, &ctx, &qid, &reason).map_err(cmd_err)
     })
@@ -1592,9 +1912,9 @@ fn reject_proposal(
 /// 违规明细落 invariant_violation 事件。
 /// ADR 0052 wb 组：回合中段跑会把在途回合误报成悬挂回合——要静止态。
 #[tauri::command]
-fn invariant_check(state: tauri::State<AppState>) -> Result<usize, CmdError> {
+fn invariant_check(state: ProjectState<'_>) -> Result<usize, CmdError> {
     // 独立路径重校验 trace——纯 Db 读+违规事件写，走控制通道（票 05 移出 wb 组）
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::invariant::check_and_log(db, PROJECT_ID).map_err(cmd_err)
     })
 }
@@ -1605,7 +1925,7 @@ fn invariant_check(state: tauri::State<AppState>) -> Result<usize, CmdError> {
 /// ADR 0052 wb 组：内联双回放要锁 wb——异步化见 report.md 待验证假设。
 #[tauri::command]
 fn policydev_propose(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     edits: Vec<Value>,
     scenario: Value,
     motive: String,
@@ -1615,41 +1935,41 @@ fn policydev_propose(
 }
 
 #[tauri::command]
-fn rollback_proposal(state: tauri::State<AppState>, proposal_id: String) -> Result<(), CmdError> {
+fn rollback_proposal(state: ProjectState<'_>, proposal_id: String) -> Result<(), CmdError> {
     with_wb_mut(&state, |wb| wb.rollback_proposal(&proposal_id))
 }
 
 #[tauri::command]
-fn request_publish(state: tauri::State<AppState>, remote: String) -> Result<String, CmdError> {
+fn request_publish(state: ProjectState<'_>, remote: String) -> Result<String, CmdError> {
     // 发布请求只是入队待决卡（控制组）；push 在 confirm_publish（wb 组，要 creds）
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::publish::request(db, PROJECT_ID, &remote).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn confirm_publish(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     qid: String,
 ) -> Result<hexagon_core::publish::PublishOutcome, CmdError> {
     with_wb(&state, |wb| wb.confirm_publish(&qid))
 }
 
 #[tauri::command]
-fn reject_publish(state: tauri::State<AppState>, qid: String) -> Result<(), CmdError> {
-    with_conn(&state, |db, _| {
+fn reject_publish(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| {
         hexagon_core::publish::reject(db, PROJECT_ID, &qid).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
 fn set_agent_avatar(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     agent_id: String,
     data_url: String,
 ) -> Result<(), CmdError> {
     // 纯文件写（avatars/ 目录）——控制通道取 root 即可
-    with_conn(&state, |_, root| {
+    with_project_conn(&state, |_, root| {
         hexagon_core::roles::set_agent_avatar(root, &agent_id, &data_url).map_err(cmd_err)
     })
 }
@@ -1677,23 +1997,20 @@ fn artifact_content_at(
 
 #[tauri::command]
 fn set_agent_sleeping(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     agent_id: String,
     sleeping: bool,
 ) -> Result<(), CmdError> {
     // 休眠/唤醒是干预指令（ADR 0052 控制组）
-    with_conn(&state, |db, _| {
+    with_project_conn(&state, |db, _| {
         hexagon_core::orchestra::set_agent_sleeping(db, PROJECT_ID, &agent_id, sleeping)
             .map_err(cmd_err)
     })
 }
 
 #[tauri::command]
-fn set_usage_limit(
-    state: tauri::State<AppState>,
-    limit_cents: Option<i64>,
-) -> Result<(), CmdError> {
-    with_conn(&state, |db, _| {
+fn set_usage_limit(state: ProjectState<'_>, limit_cents: Option<i64>) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| {
         hexagon_core::usage::set_limit(db, PROJECT_ID, limit_cents).map_err(cmd_err)
     })
 }
@@ -1813,19 +2130,17 @@ fn remove_recent(app: tauri::AppHandle, dir: String) {
 #[tauri::command(async)]
 fn open_recent(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     dir: String,
 ) -> Result<(), CmdError> {
+    check_project_state(&state, true)?;
     // ADR 0060：已有工作台走打开。落库/花名册不在这里重跑；name 以库内为准。
     let mut wb = hexagon_core::setup::open_existing(&dir).map_err(cmd_err)?;
     wb.attach_providers(hexagon_core::credentials::active());
-    attach_delta_hook(&app, &wb);
-    replace_control(&state, Some(open_control(&dir)?))?;
     let info = hexagon_core::orchestra::project_info(&wb.db, PROJECT_ID).map_err(cmd_err)?;
-    *state
-        .wb
-        .lock()
-        .map_err(|_| CmdError::internal("lock poisoned"))? = Some(wb);
+    let control = open_control(&dir)?;
+    attach_delta_hook(&app, &wb, &control.identity());
+    replace_project(&state, Some(wb), Some(control), &state.identity)?;
     remember_recent(&app, &dir, &info.name, &info.mode);
     Ok(())
 }
@@ -1835,14 +2150,8 @@ fn open_recent(
 /// 同步命令钉在主线程上，任何停顿都冻结整个 UI（与 open_recent
 /// 2026-09-22 注释同一事故形态）。
 #[tauri::command(async)]
-fn close_project(state: tauri::State<AppState>) -> Result<(), CmdError> {
-    replace_control(&state, None)?;
-    *state
-        .wb
-        .lock()
-        .map_err(|_| CmdError::internal("lock poisoned"))? = None;
-
-    Ok(())
+fn close_project(state: ProjectState<'_>) -> Result<(), CmdError> {
+    replace_project(&state, None, None, &state.identity)
 }
 
 fn load_log_enabled(app: &tauri::AppHandle) -> bool {
@@ -2129,10 +2438,11 @@ fn draft_flow(
 #[tauri::command(async)]
 fn create_project(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     opts: hexagon_core::setup::CreateProjectOpts,
     on_progress: tauri::ipc::Channel<hexagon_core::setup::CreateStep>,
 ) -> Result<(), CmdError> {
+    check_project_state(&state, true)?;
     use hexagon_core::setup;
     // 说明文件在核里、而且在「空不空」判定之后才写。先写的话，空目录的
     // 一句话会把目录变成非空，误走开场分析（票 17）。
@@ -2171,12 +2481,9 @@ fn create_project(
     .map_err(cmd_err)?;
     // 接线尾步归 Workbench：凭据库 + 按文档注册运行槽位（票 05）
     wb.attach_providers(hexagon_core::credentials::active());
-    attach_delta_hook(&app, &wb);
-    replace_control(&state, Some(open_control(&opts.dir)?))?;
-    *state
-        .wb
-        .lock()
-        .map_err(|_| CmdError::internal("lock poisoned"))? = Some(wb); // D01-ok: 创建成功才装入工作台
+    let control = open_control(&opts.dir)?;
+    attach_delta_hook(&app, &wb, &control.identity());
+    replace_project(&state, Some(wb), Some(control), &state.identity)?;
     remember_recent(
         &app,
         &opts.dir,
@@ -2193,19 +2500,9 @@ fn create_project(
 /// 票 17：进工作台之后的只读开场分析。模型调用不占工作台锁，
 /// 负责人这时仍能经控制连接把字写进时间线。
 #[tauri::command(async)]
-fn run_opening_intake(state: tauri::State<AppState>) -> Result<(), CmdError> {
+fn run_opening_intake(state: ProjectState<'_>) -> Result<(), CmdError> {
     use hexagon_core::api::IntakePrepared;
-    let prepared = {
-        let g = match state.wb.lock() {
-            // D01-ok: 准备开场分析；模型调用不在这把锁里，免得挡住打字
-            Ok(g) => g,
-            Err(_) => return Err(CmdError::internal("lock poisoned")),
-        };
-        let wb = g
-            .as_ref()
-            .ok_or_else(|| CmdError::internal("no project open"))?;
-        wb.prepare_opening_intake().map_err(cmd_err)?
-    };
+    let prepared = with_wb(&state, |wb| wb.prepare_opening_intake())?;
     match prepared {
         IntakePrepared::Finished(_) => Ok(()),
         IntakePrepared::Call {
@@ -2221,40 +2518,25 @@ fn run_opening_intake(state: tauri::State<AppState>) -> Result<(), CmdError> {
             ) {
                 Ok(resp) => resp,
                 Err(e) => {
-                    let g = match state.wb.lock() {
-                        // D01-ok: 模型失败，把开场分析收回 pending
-                        Ok(g) => g,
-                        Err(_) => return Err(CmdError::internal("lock poisoned")),
-                    };
-                    if let Some(wb) = g.as_ref() {
-                        let _ = wb.abort_opening_intake();
-                    }
+                    let _ = with_wb(&state, |wb| wb.abort_opening_intake());
                     return Err(cmd_err(e));
                 }
             };
             let text = hexagon_core::intake::response_text(&resp);
-            let g = match state.wb.lock() {
-                // D01-ok: 开场分析写入时间线
-                Ok(g) => g,
-                Err(_) => return Err(CmdError::internal("lock poisoned")),
-            };
-            let wb = g
-                .as_ref()
-                .ok_or_else(|| CmdError::internal("no project open"))?;
-            match wb.commit_opening_intake(&text) {
+            with_wb(&state, |wb| match wb.commit_opening_intake(&text) {
                 Ok(_) => Ok(()),
-                Err(e) => {
+                Err(error) => {
                     let _ = wb.abort_opening_intake();
-                    Err(cmd_err(e))
+                    Err(error)
                 }
-            }
+            })
         }
     }
 }
 
 /// 负责人点头后才把开场草案写成 AGENTS.md。L4 不走这里。
 #[tauri::command]
-fn confirm_intake_brief(state: tauri::State<AppState>) -> Result<(), CmdError> {
+fn confirm_intake_brief(state: ProjectState<'_>) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.confirm_intake_brief())
 }
 
@@ -2290,7 +2572,7 @@ fn project_info(
 }
 
 #[tauri::command(async)]
-fn reconcile_tool_action(state: tauri::State<AppState>, action_id: String) -> Result<(), CmdError> {
+fn reconcile_tool_action(state: ProjectState<'_>, action_id: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| match wb.reconcile_tool_action(&action_id) {
         // A completed read-only check may leave uncertainty. The refreshed card
         // shows its evidence; it is not a failed UI command or execution success.
@@ -2303,14 +2585,14 @@ fn reconcile_tool_action(state: tauri::State<AppState>, action_id: String) -> Re
 
 #[tauri::command(async)]
 fn abandon_tool_action(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     action_id: String,
     reason: String,
     expected_project_root: String,
 ) -> Result<(), CmdError> {
     // Live acceptance 2026-10-01: pure owner resolution must not queue behind
     // another role's whole model turn. Execution/reconciliation remain on wb.
-    with_conn(&state, |db, root| {
+    with_project_conn(&state, |db, root| {
         hexagon_core::api::abandon_tool_action_control(
             db,
             PROJECT_ID,
@@ -2324,7 +2606,7 @@ fn abandon_tool_action(
 
 #[tauri::command(async)]
 fn retry_tool_action(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     action_id: String,
     reason: String,
     accepts_duplicate: bool,
@@ -2336,13 +2618,13 @@ fn retry_tool_action(
 }
 
 #[tauri::command(async)]
-fn resume_tool_action(state: tauri::State<AppState>, action_id: String) -> Result<(), CmdError> {
+fn resume_tool_action(state: ProjectState<'_>, action_id: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.resume_tool_action(&action_id).map(|_| ()))
 }
 
 #[tauri::command(async)]
 fn dispatch(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     role: String,
     input: String,
     attachments: Vec<hexagon_core::trace::AttachRef>,
@@ -2351,7 +2633,7 @@ fn dispatch(
 }
 
 #[tauri::command]
-fn upgrade_to_pack(state: tauri::State<AppState>, pack_name: String) -> Result<(), CmdError> {
+fn upgrade_to_pack(state: ProjectState<'_>, pack_name: String) -> Result<(), CmdError> {
     let pack = hexagon_core::presets::preset_packs()
         .map_err(cmd_err)?
         .into_iter()
@@ -2362,13 +2644,13 @@ fn upgrade_to_pack(state: tauri::State<AppState>, pack_name: String) -> Result<(
 
 /// 失速卡「再试一次」（stall-watch 票 02/04）：会跑回合或唤醒项目经理，turn 组。
 #[tauri::command(async)]
-fn stall_retry(state: tauri::State<AppState>, question_id: String) -> Result<(), CmdError> {
+fn stall_retry(state: ProjectState<'_>, question_id: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.stall_retry(&question_id).map(|_| ()))
 }
 
 /// 失速卡「知道了」：写注记、销卡、收场。要改工作台里的监视状态，走 wb。
 #[tauri::command(async)]
-fn stall_ack(state: tauri::State<AppState>, question_id: String) -> Result<(), CmdError> {
+fn stall_ack(state: ProjectState<'_>, question_id: String) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.stall_ack(&question_id))
 }
 
@@ -2502,6 +2784,7 @@ pub fn run() {
             conn: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
+            project_identity,
             core_ping,
             sandbox_status,
             design_direction,
@@ -2580,6 +2863,7 @@ pub fn run() {
             repo_paths,
             list_repo_dir,
             read_repo_file,
+            read_repo_file_snapshot,
             repo_file_head,
             create_repo_file,
             create_repo_dir,
@@ -2706,12 +2990,12 @@ fn desktop_preview_target(
 }
 #[tauri::command]
 async fn desktop_preview(
-    state: tauri::State<'_, AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     window_id: u32,
     process_id: i32,
 ) -> Result<hexagon_core::desktop::preview::NativePreviewFrame, CmdError> {
-    let target = with_conn(&state, |db, root| {
+    let target = with_project_conn(&state, |db, root| {
         hexagon_core::api::desktop_preview_validate(
             db,
             root,
@@ -2728,7 +3012,7 @@ async fn desktop_preview(
             .await
             .map_err(|error| CmdError::internal(error.to_string()))?
             .map_err(CmdError::internal)?;
-    let current = with_conn(&state, |db, root| {
+    let current = with_project_conn(&state, |db, root| {
         hexagon_core::api::desktop_preview_validate(
             db,
             root,
@@ -2745,10 +3029,10 @@ async fn desktop_preview(
 }
 #[tauri::command]
 fn desktop_preview_stop(
-    state: tauri::State<AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
 ) -> Result<(), CmdError> {
-    with_conn(&state, |_, root| {
+    with_project_conn(&state, |_, root| {
         hexagon_core::api::desktop_check_project(root, &expected_project_root)
             .map_err(CmdError::internal)?;
         hexagon_core::api::desktop_preview_stop().map_err(CmdError::internal)
@@ -2756,12 +3040,12 @@ fn desktop_preview_stop(
 }
 #[tauri::command]
 async fn desktop_preview_focus(
-    state: tauri::State<'_, AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     window_id: u32,
     process_id: i32,
 ) -> Result<(), CmdError> {
-    let target = with_conn(&state, |db, root| {
+    let target = with_project_conn(&state, |db, root| {
         hexagon_core::api::desktop_preview_validate(
             db,
             root,
@@ -2778,11 +3062,11 @@ async fn desktop_preview_focus(
 }
 
 fn browser_project(
-    state: &AppState,
+    state: &ProjectState<'_>,
     expected: &str,
     require_consent: bool,
 ) -> Result<std::path::PathBuf, CmdError> {
-    with_conn(state, |db, root| {
+    with_project_conn(state, |db, root| {
         hexagon_core::api::desktop_check_project(root, expected).map_err(CmdError::internal)?;
         if require_consent
             && !hexagon_core::api::desktop_status(db, root)
@@ -2799,7 +3083,7 @@ fn browser_project(
 
 #[tauri::command]
 async fn browser_status(
-    state: tauri::State<'_, AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
 ) -> Result<Option<hexagon_core::browser::BrowserSession>, CmdError> {
     let root = browser_project(&state, &expected_project_root, false)?;
@@ -2813,7 +3097,7 @@ async fn browser_status(
 }
 #[tauri::command]
 async fn browser_open(
-    state: tauri::State<'_, AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     mode: hexagon_core::browser::BrowserMode,
     labels: hexagon_core::browser::BrowserLabels,
@@ -2829,14 +3113,16 @@ async fn browser_open(
     .map_err(|e| CmdError::internal(e.to_string()))?
     .map_err(CmdError::internal)?;
     if let Err(error) = browser_project(&state, &expected_project_root, true) {
-        hexagon_core::api::browser_close_project(&cleanup);
+        // I1 scope review: same-root reopening may already own a new session.
+        // Clean up only this completed launch, never every session at its root.
+        let _ = hexagon_core::api::browser_detach(&cleanup, &result.session_id);
         return Err(error);
     }
     Ok(result)
 }
 #[tauri::command]
 async fn browser_detach(
-    state: tauri::State<'_, AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     session_id: String,
 ) -> Result<(), CmdError> {
@@ -2850,7 +3136,7 @@ async fn browser_detach(
 }
 #[tauri::command]
 async fn browser_preview(
-    state: tauri::State<'_, AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     session_id: String,
 ) -> Result<hexagon_core::browser::BrowserPreview, CmdError> {
@@ -2866,7 +3152,7 @@ async fn browser_preview(
 }
 #[tauri::command]
 async fn browser_focus(
-    state: tauri::State<'_, AppState>,
+    state: ProjectState<'_>,
     expected_project_root: String,
     session_id: String,
 ) -> Result<(), CmdError> {
@@ -2880,8 +3166,324 @@ async fn browser_focus(
 }
 
 #[cfg(test)]
+mod project_identity_tests {
+    use super::*;
+    use hexagon_core::provider::{ChatResponse, ContentBlock, ScriptedProvider, StopReason, Usage};
+    use hexagon_core::tools::{RiskClass, Tool, ToolContext, ToolError};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct OwnerEffect(Arc<AtomicUsize>);
+    impl Tool for OwnerEffect {
+        fn name(&self) -> &str {
+            "remote_publish"
+        }
+        fn description(&self) -> &str {
+            "Explicitly approved isolated counter"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type":"object","properties":{},"additionalProperties":false})
+        }
+        fn risk(&self) -> RiskClass {
+            // Same existing safety-net fixture as the core permission tests:
+            // no network, and no shadow-review model call consumes the script.
+            RiskClass::Exec
+        }
+        fn exec(
+            &self,
+            _: &hexagon_core::db::Db,
+            _: &Value,
+            _: &ToolContext,
+        ) -> Result<Value, ToolError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({"confirmed":true}))
+        }
+    }
+
+    fn waiting_project(root: &std::path::Path, effects: Arc<AtomicUsize>) -> (Workbench, String) {
+        let mut wb = Workbench::open_evaluation_host(root).unwrap();
+        wb.db
+            .conn()
+            .execute(
+                "INSERT INTO agents(id,project_id,role,status) VALUES('a0','p1','worker','active')",
+                [],
+            )
+            .unwrap();
+        wb.registry.register(OwnerEffect(effects));
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![
+                ChatResponse {
+                    content: vec![ContentBlock::ToolUse {
+                        id: "effect".into(),
+                        name: "remote_publish".into(),
+                        input: serde_json::json!({}),
+                    }],
+                    stop: StopReason::ToolUse,
+                    usage: Usage::default(),
+                },
+                ChatResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "original task complete".into(),
+                    }],
+                    stop: StopReason::EndTurn,
+                    usage: Usage::default(),
+                },
+            ])),
+        );
+        let hexagon_core::turn::TurnOutcome::AwaitingPermission(card) = wb
+            .run_instance("a0", "Perform the isolated approved counter once")
+            .unwrap()
+        else {
+            panic!("real permission required")
+        };
+        (wb, card)
+    }
+
+    fn identity(root: &std::path::Path, generation: u64) -> ProjectIdentity {
+        ProjectIdentity {
+            project_root: root.canonicalize().unwrap().to_string_lossy().into_owned(),
+            generation,
+        }
+    }
+
+    #[test]
+    fn delayed_permission_cannot_approve_another_projects_same_local_question() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let effects_a = Arc::new(AtomicUsize::new(0));
+        let effects_b = Arc::new(AtomicUsize::new(0));
+        let (wa, qa) = waiting_project(a.path(), effects_a.clone());
+        let (wb, qb) = waiting_project(b.path(), effects_b.clone());
+        assert_eq!(qa, qb, "database-local ids collide in real projects");
+        let state = AppState {
+            wb: Mutex::new(Some(wb)),
+            conn: Mutex::new(Some(ControlConn {
+                db: hexagon_core::db::Db::open(b.path().join(".hexagon/state.db")).unwrap(),
+                root: b.path().canonicalize().unwrap(),
+                generation: 42,
+            })),
+        };
+        // A's previously captured invocation is released only after B is current.
+        let delayed = ProjectState {
+            state: &state,
+            identity: Some(identity(a.path(), 41)),
+        };
+        let result = with_wb(&delayed, |wb| {
+            wb.answer_permission_and_continue(&qa, true, None, "activation")
+        });
+        assert_eq!(effects_a.load(Ordering::SeqCst), 0);
+        assert_eq!(effects_b.load(Ordering::SeqCst), 0);
+        assert_eq!(result.unwrap_err().code, "project_changed");
+        let current = ProjectState {
+            state: &state,
+            identity: Some(identity(b.path(), 42)),
+        };
+        with_wb(&current, |wb| {
+            assert_eq!(
+                hexagon_core::cards::get(&wb.db, &qb).unwrap().state,
+                hexagon_core::cards::CardState::Queued
+            );
+            wb.answer_permission_and_continue(&qb, true, None, "activation")
+        })
+        .unwrap();
+        assert_eq!(effects_b.load(Ordering::SeqCst), 1);
+        assert!(with_wb(&current, |wb| wb.answer_permission_and_continue(
+            &qb,
+            true,
+            None,
+            "activation"
+        ))
+        .is_err());
+        assert_eq!(effects_b.load(Ordering::SeqCst), 1);
+        drop(wa);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+        #[test]
+        fn missing_wrong_root_or_reopened_generation_cannot_pause_the_current_project(case in 0u8..3, generation in 1u64..1000) {
+            let a=tempfile::tempdir().unwrap();
+            let b=tempfile::tempdir().unwrap();
+            let wb=Workbench::open_evaluation_host(b.path()).unwrap();
+            let state=AppState { wb:Mutex::new(Some(wb)),conn:Mutex::new(Some(ControlConn { db:hexagon_core::db::Db::open(b.path().join(".hexagon/state.db")).unwrap(),root:b.path().canonicalize().unwrap(),generation })) };
+            let scope=ProjectState { state:&state,identity:match case {0=>None,1=>Some(identity(a.path(),generation)),_=>Some(identity(b.path(),generation+1))} };
+            let result=with_project_conn(&scope,|db,_|hexagon_core::orchestra::pause(db,PROJECT_ID));
+            proptest::prop_assert!(matches!(result,Err(CmdError{ref code,..}) if code=="project_changed"), "invalid scope must reject before pause");
+            proptest::prop_assert!(!hexagon_core::orchestra::is_paused(&state.conn.lock().unwrap().as_ref().unwrap().db,PROJECT_ID).unwrap());
+        }
+    }
+
+    #[test]
+    fn absent_or_malformed_identity_is_not_a_lifecycle_null_token() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"_project":{"project_root":"x","generation":"1"}}),
+            serde_json::json!({"_project":{"project_root":"x"}}),
+        ] {
+            assert!(project_identity_argument(&tauri::ipc::InvokeBody::Json(value)).is_err());
+        }
+        assert!(project_identity_argument(&tauri::ipc::InvokeBody::Raw(vec![])).is_err());
+        assert!(project_identity_argument(&tauri::ipc::InvokeBody::Json(
+            serde_json::json!({"_project":null})
+        ))
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn delayed_lifecycle_close_cannot_close_a_new_project_or_a_reopened_root() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        for current_root in [b.path(), a.path()] {
+            let wb = Workbench::open_evaluation_host(current_root).unwrap();
+            let state = AppState {
+                wb: Mutex::new(Some(wb)),
+                conn: Mutex::new(Some(ControlConn {
+                    db: hexagon_core::db::Db::open(current_root.join(".hexagon/state.db")).unwrap(),
+                    root: current_root.canonicalize().unwrap(),
+                    generation: 22,
+                })),
+            };
+            let stale = Some(identity(a.path(), 21));
+            assert_eq!(
+                replace_project(&state, None, None, &stale)
+                    .unwrap_err()
+                    .code,
+                "project_changed"
+            );
+            assert_eq!(state.conn.lock().unwrap().as_ref().unwrap().generation, 22);
+            assert!(
+                !hexagon_core::orchestra::is_paused(
+                    &state.conn.lock().unwrap().as_ref().unwrap().db,
+                    PROJECT_ID
+                )
+                .unwrap(),
+                "refusal must precede pausing the new project"
+            );
+            assert_eq!(
+                replace_project(&state, None, None, &None).unwrap_err().code,
+                "project_changed"
+            );
+            replace_project(&state, None, None, &Some(identity(current_root, 22))).unwrap();
+            assert!(state.conn.lock().unwrap().is_none());
+        }
+    }
+}
+
+#[cfg(test)]
 mod preview_project_lifecycle_tests {
     use super::*;
+
+    fn project_connection(root: &std::path::Path, generation: u64) -> ControlConn {
+        let root = root.canonicalize().unwrap();
+        let db = hexagon_core::db::Db::open(root.join("state.db")).unwrap();
+        db.conn().execute(
+            "INSERT INTO projects(id,dir,name,mode,autonomy) VALUES(?1,?2,'lifecycle','pack','L0')",
+            [PROJECT_ID, root.to_str().unwrap()],
+        ).unwrap();
+        ControlConn {
+            db,
+            root,
+            generation,
+        }
+    }
+
+    #[test]
+    fn project_replacement_pauses_before_waiting_and_installs_both_handles_together() {
+        // Benchmark I1: the former conn-first swap exposed the new project while
+        // its predecessor still held wb. A real second connection observes pause.
+        for initially_paused in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let connection = project_connection(directory.path(), 17);
+            let observer = hexagon_core::db::Db::open(connection.root.join("state.db")).unwrap();
+            if initially_paused {
+                hexagon_core::orchestra::pause(&observer, PROJECT_ID).unwrap();
+            }
+            let state = std::sync::Arc::new(AppState {
+                wb: Mutex::new(None),
+                conn: Mutex::new(Some(connection)),
+            });
+            let turn_lock = state.wb.lock().unwrap(); // D01-exempt: simulate the old parent turn
+            let (send, receive) = std::sync::mpsc::channel();
+            let worker_state = state.clone();
+            let expected = Some(ProjectIdentity {
+                project_root: directory
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                generation: 17,
+            });
+            let worker = std::thread::spawn(move || {
+                send.send(replace_project(&worker_state, None, None, &expected))
+                    .unwrap();
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !hexagon_core::orchestra::is_paused(&observer, PROJECT_ID).unwrap()
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert!(hexagon_core::orchestra::is_paused(&observer, PROJECT_ID).unwrap());
+            assert_eq!(state.conn.lock().unwrap().as_ref().unwrap().generation, 17);
+            assert!(matches!(
+                receive.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+            drop(turn_lock);
+            receive
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            worker.join().unwrap();
+            assert!(state.conn.lock().unwrap().is_none());
+            assert!(state.wb.lock().unwrap().is_none()); // D01-exempt: inspect final replacement
+            assert_eq!(
+                hexagon_core::orchestra::is_paused(&observer, PROJECT_ID).unwrap(),
+                initially_paused
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_changed_while_waiting_cannot_be_closed_by_the_previous_request() {
+        let old = tempfile::tempdir().unwrap();
+        let new = tempfile::tempdir().unwrap();
+        let connection = project_connection(old.path(), 31);
+        let observer = hexagon_core::db::Db::open(connection.root.join("state.db")).unwrap();
+        let state = std::sync::Arc::new(AppState {
+            wb: Mutex::new(None),
+            conn: Mutex::new(Some(connection)),
+        });
+        let turn_lock = state.wb.lock().unwrap(); // D01-exempt: simulate the old parent turn
+        let worker_state = state.clone();
+        let expected = Some(ProjectIdentity {
+            project_root: old
+                .path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            generation: 31,
+        });
+        let worker =
+            std::thread::spawn(move || replace_project(&worker_state, None, None, &expected));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !hexagon_core::orchestra::is_paused(&observer, PROJECT_ID).unwrap()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(hexagon_core::orchestra::is_paused(&observer, PROJECT_ID).unwrap());
+        *state.conn.lock().unwrap() = Some(project_connection(new.path(), 32));
+        drop(turn_lock);
+        assert_eq!(worker.join().unwrap().unwrap_err().code, "project_changed");
+        assert_eq!(state.conn.lock().unwrap().as_ref().unwrap().generation, 32);
+    }
 
     #[test]
     fn mcp_catalog_remains_available_while_an_agent_holds_the_workbench() {
@@ -2908,6 +3510,55 @@ mod preview_project_lifecycle_tests {
     }
 
     #[test]
+    fn editor_ipc_rejects_old_project_and_same_root_reopening() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("README.md"), "A saved").unwrap();
+        std::fs::write(b.path().join("README.md"), "B saved").unwrap();
+        let source_root = a.path().canonicalize().unwrap();
+        let state = AppState {
+            wb: Mutex::new(None),
+            conn: Mutex::new(Some(ControlConn {
+                db: hexagon_core::db::Db::open_in_memory().unwrap(),
+                root: source_root.clone(),
+                generation: 7,
+            })),
+        };
+        let snapshot = read_repo_file_snapshot_for_state(
+            &state,
+            "README.md",
+            &source_root.display().to_string(),
+        )
+        .unwrap();
+        write_repo_file_for_state(&state, &snapshot, "A draft").unwrap();
+        for root in [b.path().canonicalize().unwrap(), source_root.clone()] {
+            replace_control(
+                &state,
+                Some(ControlConn {
+                    db: hexagon_core::db::Db::open_in_memory().unwrap(),
+                    root,
+                    generation: 8,
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                write_repo_file_for_state(&state, &snapshot, "late old draft")
+                    .unwrap_err()
+                    .code,
+                "project_changed"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(a.path().join("README.md")).unwrap(),
+            "A draft"
+        );
+        assert_eq!(
+            std::fs::read_to_string(b.path().join("README.md")).unwrap(),
+            "B saved"
+        );
+    }
+
+    #[test]
     fn close_and_swap_cancel_validated_native_focus_before_removing_project() {
         for close in [true, false] {
             let root = std::env::current_dir().unwrap().canonicalize().unwrap();
@@ -2919,9 +3570,19 @@ mod preview_project_lifecycle_tests {
                 conn: Mutex::new(Some(ControlConn {
                     db,
                     root: root.clone(),
+                    generation: 1,
                 })),
             };
-            let ticket = with_conn(&state, |db, path| {
+            // I1 scoped host migration: this existing native fixture obtains
+            // its preview through the current project token before swapping.
+            let scope = ProjectState {
+                state: &state,
+                identity: Some(ProjectIdentity {
+                    project_root: root.display().to_string(),
+                    generation: 1,
+                }),
+            };
+            let ticket = with_project_conn(&scope, |db, path| {
                 use hexagon_core::trace::EventKind;
                 db.append_event(PROJECT_ID, EventKind::System, serde_json::json!({"kind":"computer_control","action":"enable","enabled":true,"actor":"owner","screen_to_selected_model":true}),None,None).unwrap();
                 db.append_event(PROJECT_ID, EventKind::ToolCalled, serde_json::json!({"tool":"computer_observe","action_id":7}),None,None).unwrap();
@@ -2934,6 +3595,7 @@ mod preview_project_lifecycle_tests {
                 Some(ControlConn {
                     db: hexagon_core::db::Db::open_in_memory().unwrap(),
                     root,
+                    generation: 2,
                 })
             };
             replace_control(&state, replacement).unwrap();

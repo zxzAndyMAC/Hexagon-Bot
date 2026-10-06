@@ -928,7 +928,27 @@ fn completed_pack_open_todo_keeps_rescue_open() {
     owner_says(&wb, "@后端 inspect the page");
     wb.watch().status = crate::stallwatch::Status::Open;
     let aid = wb.agent_by_role("后端").unwrap();
-    wb.tasks.create_manual(&aid, "pending verification");
+    // I3 / owner contract 2026-10-06: this pending item belongs to the actual
+    // supplemental activation, not an opaque agent key. Rescue assertions stay.
+    let parent = wb
+        .db
+        .timeline(&wb.project_id, None, 1000, Some(&[EventKind::TurnStarted]))
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|item| {
+            item.event.agent_id.as_deref() == Some(aid.as_str())
+                && item.event.payload["subagent"] != true
+        })
+        .unwrap()
+        .event;
+    assert!(parent.payload["resume_from_turn_id"].is_null());
+    let mut ctx = wb.ctx_for(&aid, parent.stage_run_id.clone());
+    ctx.activation_root_turn_id = Some(parent.id);
+    wb.tasks.create_manual(
+        &crate::subagent::activation_key(&ctx),
+        "pending verification",
+    );
     let owner_mark: i64 = wb
         .db
         .conn()

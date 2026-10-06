@@ -18,6 +18,10 @@ pub enum ExperienceFault {
 }
 #[cfg(test)]
 thread_local! { static NEXT_FAULT: std::cell::Cell<Option<ExperienceFault>> = const { std::cell::Cell::new(None) }; }
+// Ticket 07: pause a real file observation while another DB connection approves
+// a new receipt. The hook changes scheduling only, never bytes or SQL results.
+#[cfg(test)]
+thread_local! { static AFTER_ENTRY_FILE_READ: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
 #[cfg(test)]
 pub fn fail_next(point: ExperienceFault) {
     NEXT_FAULT.with(|f| f.set(Some(point)));
@@ -41,6 +45,10 @@ pub(super) fn fault(point: ExperienceFault) -> Result<(), PropError> {
 
 const OPEN: &str = "<!-- hexagon-experience:v1 -->\n";
 const CLOSE: &str = "\n<!-- /hexagon-experience -->";
+
+// Ticket 07: snapshot, invalidation CAS and loading recheck share this receipt
+// acknowledgement rule. Row equality alone is not a transaction-wide snapshot.
+const RECEIPT_PENDING_SQL: &str = "(EXISTS(SELECT 1 FROM experience_operations o WHERE o.project_id=e.project_id AND json_valid(o.intent_json) AND (json_extract(o.intent_json,'$.entry.entry_id')=e.entry_id OR json_extract(o.intent_json,'$.predecessor.entry_id')=e.entry_id OR EXISTS(SELECT 1 FROM json_each(o.intent_json,'$.siblings') sibling WHERE json_extract(sibling.value,'$.entry.entry_id')=e.entry_id OR json_extract(sibling.value,'$.predecessor.entry_id')=e.entry_id)) AND o.state!='complete') OR NOT EXISTS(SELECT 1 FROM proposals p WHERE p.id=e.proposal_id AND p.status='active'))";
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
@@ -568,11 +576,47 @@ fn block_identities(text: &str) -> Option<std::collections::HashMap<String, usiz
     Some(ids)
 }
 
+fn stale_observation(ctx: &ToolContext) -> PropError {
+    crate::diag::note(
+        crate::diag::CLASS_REJECT,
+        true,
+        Some(&ctx.project_id),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+        None,
+        "experience_integrity",
+        "observation_version_changed",
+        std::time::Instant::now(),
+    );
+    PropError::StaleExperience
+}
+
 pub fn entries(
     db: &Db,
     ctx: &ToolContext,
     skill: &str,
 ) -> Result<Vec<ExperienceEntryView>, PropError> {
+    // 2026-10-06 / competitor-improvements ticket 07: file-first observation
+    // paired old bytes with a newly approved receipt and permanently invalidated
+    // that new revision. Snapshot the receipt before reading, then CAS only that
+    // exact reviewed record (same revision can gain sources/change proposal).
+    // False rejection costs one reread; false acceptance injects unreviewed advice.
+    // Prefer a stale-observation error, never revoke a newer receipt or silently
+    // clear the sticky invalidation after externally restored bytes.
+    // Governance 04 regression: a committed receipt may precede the proposal
+    // acknowledgement. Keep it pending until recovery reconciles both facts.
+    let mut query = db.conn().prepare(&format!("SELECT record_json,state,invalidated,{RECEIPT_PENDING_SQL},proposal_id FROM experience_entries e WHERE project_id=?1 AND skill=?2 ORDER BY entry_id"))?;
+    let records = query
+        .query_map(params![ctx.project_id, skill], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, bool>(2)?,
+                r.get::<_, bool>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     let candidate = super::role_skill::prospective(ctx, skill)?;
     let text = if !candidate.exists() {
         // Governance 16/P1: missing bytes are an observed integrity change,
@@ -583,22 +627,15 @@ pub fn entries(
         std::fs::read_to_string(target_path(ctx, skill)?)?
     };
     let identities = block_identities(&text);
-    // Governance 04 regression: a committed receipt may precede the proposal
-    // acknowledgement. Keep it pending until recovery reconciles both facts.
-    let mut query=db.conn().prepare("SELECT record_json,state,invalidated,(EXISTS(SELECT 1 FROM experience_operations o WHERE o.project_id=e.project_id AND json_valid(o.intent_json) AND (json_extract(o.intent_json,'$.entry.entry_id')=e.entry_id OR json_extract(o.intent_json,'$.predecessor.entry_id')=e.entry_id OR EXISTS(SELECT 1 FROM json_each(o.intent_json,'$.siblings') sibling WHERE json_extract(sibling.value,'$.entry.entry_id')=e.entry_id OR json_extract(sibling.value,'$.predecessor.entry_id')=e.entry_id)) AND o.state!='complete') OR NOT EXISTS(SELECT 1 FROM proposals p WHERE p.id=e.proposal_id AND p.status='active')) FROM experience_entries e WHERE project_id=?1 AND skill=?2 ORDER BY entry_id")?;
-    let records = query
-        .query_map(params![ctx.project_id, skill], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, bool>(2)?,
-                r.get::<_, bool>(3)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(test)]
+    AFTER_ENTRY_FILE_READ.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
     let context = super::matching::context(db, ctx)?;
     let mut result = Vec::new();
-    for (record, state, invalidated, pending) in records {
+    for (record, state, invalidated, pending, proposal) in records {
         let entry: ExperienceEntry =
             serde_json::from_str(&record).map_err(|_| PropError::UngovernedExperience)?;
         let control_pending: bool = db.conn().query_row("SELECT EXISTS(SELECT 1 FROM experience_controls WHERE project_id=?1 AND state!='complete' AND ((skill=?2 AND entry_id=?3) OR EXISTS(SELECT 1 FROM json_each(payload_json,'$.siblings') sibling WHERE json_extract(sibling.value,'$.skill')=?2 AND json_extract(sibling.value,'$.rollback.entry.entry_id')=?3)))",params![ctx.project_id,skill,entry.entry_id],|r|r.get(0))?;
@@ -609,7 +646,10 @@ pub fn entries(
         if !pending && !control_pending && !invalidated && broken {
             // Governance 08 regression: observing a mutation permanently breaks
             // this receipt; putting the original bytes back is not a new review.
-            db.conn().execute("UPDATE experience_entries SET invalidated=1 WHERE project_id=?1 AND skill=?2 AND entry_id=?3",params![ctx.project_id,skill,entry.entry_id])?;
+            let changed = db.conn().execute(&format!("UPDATE experience_entries AS e SET invalidated=1 WHERE project_id=?1 AND skill=?2 AND entry_id=?3 AND revision=?4 AND record_json=?5 AND proposal_id=?6 AND state=?7 AND invalidated=0 AND {RECEIPT_PENDING_SQL}=?8"),params![ctx.project_id,skill,entry.entry_id,entry.revision,record,proposal,state,pending])?;
+            if changed == 0 {
+                return Err(stale_observation(ctx));
+            }
             crate::diag::note(
                 crate::diag::CLASS_REJECT,
                 true,
@@ -621,6 +661,17 @@ pub fn entries(
                 "observed_changed",
                 std::time::Instant::now(),
             );
+        }
+        // Even a matching file must not load an obsolete receipt after another
+        // connection revokes/revises it or begins an unacknowledged operation.
+        // Ticket 07 pending regression: identical file/receipt bytes can still
+        // have a newly pending write intent. This is a recheck, not a write retry.
+        let current: bool = db.conn().query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM experience_entries e WHERE project_id=?1 AND skill=?2 AND entry_id=?3 AND revision=?4 AND record_json=?5 AND proposal_id=?6 AND state=?7 AND invalidated=?8 AND {RECEIPT_PENDING_SQL}=?9)"),
+            params![ctx.project_id,skill,entry.entry_id,entry.revision,record,proposal,state,invalidated || (!pending && !control_pending && broken),pending], |row| row.get(0),
+        )?;
+        if !current {
+            return Err(stale_observation(ctx));
         }
         let state = if state == "revoked" || state == "superseded" {
             state
@@ -1055,6 +1106,373 @@ fn rollback_target(
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    fn approve(
+        wb: &mut crate::api::Workbench,
+        request: &super::super::ExperienceRequest,
+    ) -> String {
+        let id = wb.propose_experience_entry("a0", request).unwrap();
+        let status: String = wb
+            .db
+            .conn()
+            .query_row("SELECT status FROM proposals WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        if status == "in_review" {
+            wb.review_proposal(&id, true, "review exact experience version")
+                .unwrap();
+        }
+        let card = wb
+            .db
+            .queued_questions(&wb.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|card| card.payload["proposal_id"] == id)
+            .unwrap();
+        wb.confirm_proposal(&card.id).unwrap();
+        id
+    }
+
+    fn approved_fixture() -> (tempfile::TempDir, crate::api::Workbench, String) {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::init(dir.path(), "main").unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "Owner instructions\n").unwrap();
+        crate::git::commit_all(dir.path(), "seed").unwrap();
+        let mut wb =
+            crate::api::Workbench::for_test(dir.path(), &["worker", "reviewer"], None).unwrap();
+        let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = "---\nname: alpha\ndescription: fixture\n---\n# Owner\nKeep owner text\n";
+        std::fs::write(&path, original).unwrap();
+        wb.db
+            .conn()
+            .execute(
+                "INSERT INTO role_defs(project_id,name,skills) VALUES('p1','worker','[\"alpha\"]')",
+                [],
+            )
+            .unwrap();
+        let ctx = ToolContext::for_agent(&wb.db, dir.path(), "a0");
+        let crate::tools::CallOutcome::Done(out) = wb.registry.call(&wb.db, &ctx, "artifact_write",
+            serde_json::json!({"path":"reviewed-work.md","kind":"结构说明","content":"Reviewed actual work"})).unwrap()
+            else { panic!("artifact write refused") };
+        crate::review::submit_review(
+            &wb.db,
+            &ToolContext::for_agent(&wb.db, dir.path(), "a1"),
+            out["artifact_id"].as_str().unwrap(),
+            crate::review::Verdict::Pass,
+            "Reviewed actual work",
+        )
+        .unwrap();
+        let request = super::super::ExperienceRequest {
+            create_role_skill: false,
+            body: "APPROVED_FIRST_VERSION".into(),
+            notes: String::new(),
+            conditions: Default::default(),
+            review_event: None,
+            targets: vec![super::super::ExperienceTarget {
+                skill: "alpha".into(),
+                change: None,
+                expected_digest: hash(original),
+                reason: "Relevant to reviewed work".into(),
+            }],
+        };
+        let proposal = approve(&mut wb, &request);
+        let db_path = dir.path().join(".hexagon/state.db");
+        wb.db
+            .conn()
+            .execute("VACUUM INTO ?1", [db_path.to_str().unwrap()])
+            .unwrap();
+        wb.db = Db::open(&db_path).unwrap();
+        (dir, wb, proposal)
+    }
+
+    #[test]
+    fn experience_old_file_observation_cannot_invalidate_new_approved_revision() {
+        use std::sync::mpsc;
+        let (dir, mut writer, proposal) = approved_fixture();
+        let first = writer.experience_entries("alpha").unwrap().remove(0).entry;
+        let reader_root = dir.path().to_path_buf();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut reader =
+                crate::api::Workbench::for_test(&reader_root, &["worker", "reviewer"], None)
+                    .unwrap();
+            reader.db = Db::open(reader_root.join(".hexagon/state.db")).unwrap();
+            AFTER_ENTRY_FILE_READ.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    observed_tx.send(()).unwrap();
+                    continue_rx
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap();
+                }))
+            });
+            reader.experience_entries("alpha")
+        });
+        observed_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        let mut request = writer
+            .experience_proposal(&proposal)
+            .unwrap()
+            .unwrap()
+            .request;
+        request.body = "APPROVED_NEW_VERSION".into();
+        request.targets[0].expected_digest = hash(
+            &std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap(),
+        );
+        request.targets[0].change = Some(super::super::ExperienceChange {
+            kind: super::super::ExperienceChangeKind::Revise,
+            entry_id: first.entry_id.clone(),
+            expected_revision: first.revision,
+            reason: "Reviewed correction".into(),
+        });
+        approve(&mut writer, &request);
+        continue_tx.send(()).unwrap();
+        let observed = reader.join().unwrap();
+        let current = writer.experience_entries("alpha").unwrap().remove(0);
+        assert_eq!(current.entry.entry_id, first.entry_id);
+        assert_eq!(current.entry.revision, 2);
+        assert_eq!(current.entry.body, "APPROVED_NEW_VERSION");
+        assert_eq!(
+            current.state, "active",
+            "an older file observation must not revoke the newly reviewed receipt"
+        );
+        assert!(matches!(
+            observed,
+            Err(error) if crate::errcode::ErrorCode::code(&error) == "stale_experience"
+        ));
+    }
+    // Workbench seam with real target bytes and two SQLite connections. Vary
+    // both revised records and duplicate approvals that retain the revision.
+    fn assert_new_receipt_survives_observation(
+        suffix: &str,
+        broken: bool,
+        revise: bool,
+        new_source: bool,
+    ) {
+        use std::sync::mpsc;
+        let (dir, mut writer, proposal) = approved_fixture();
+        let first = writer.experience_entries("alpha").unwrap().remove(0).entry;
+        let path = dir.path().join(".hexagon/skills/alpha/SKILL.md");
+        if broken {
+            let original = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(
+                &path,
+                original.replace("APPROVED_FIRST_VERSION", "UNREVIEWED_EXTERNAL_EDIT"),
+            )
+            .unwrap();
+        }
+        let reader_root = dir.path().to_path_buf();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut reader =
+                crate::api::Workbench::for_test(&reader_root, &["worker", "reviewer"], None)
+                    .unwrap();
+            reader.db = Db::open(reader_root.join(".hexagon/state.db")).unwrap();
+            AFTER_ENTRY_FILE_READ.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    observed_tx.send(()).unwrap();
+                    continue_rx
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap();
+                }))
+            });
+            reader.experience_entries("alpha")
+        });
+        observed_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        if new_source {
+            let ctx = ToolContext::for_agent(&writer.db, dir.path(), "a0");
+            let crate::tools::CallOutcome::Done(work) = writer.registry.call(&writer.db, &ctx, "artifact_write",
+                serde_json::json!({"path":"second-reviewed-work.md","kind":"结构说明","content":"A distinct reviewed source"})).unwrap()
+                else { panic!("second artifact refused") };
+            crate::review::submit_review(
+                &writer.db,
+                &ToolContext::for_agent(&writer.db, dir.path(), "a1"),
+                work["artifact_id"].as_str().unwrap(),
+                crate::review::Verdict::Pass,
+                "Reviewed second source",
+            )
+            .unwrap();
+        }
+        let mut request = writer
+            .experience_proposal(&proposal)
+            .unwrap()
+            .unwrap()
+            .request;
+        request.targets[0].expected_digest = hash(&std::fs::read_to_string(&path).unwrap());
+        if revise {
+            request.body = format!("APPROVED_NEW_{suffix}");
+            request.targets[0].change = Some(super::super::ExperienceChange {
+                kind: super::super::ExperienceChangeKind::Revise,
+                entry_id: first.entry_id.clone(),
+                expected_revision: first.revision,
+                reason: "Reviewed correction".into(),
+            });
+        }
+        approve(&mut writer, &request);
+        continue_tx.send(()).unwrap();
+        let observed = reader.join().unwrap();
+        let current = writer.experience_entries("alpha").unwrap().remove(0);
+        assert_eq!(current.entry.entry_id, first.entry_id);
+        assert_eq!(current.entry.revision, if revise { 2 } else { 1 });
+        assert_eq!(current.entry.body, request.body);
+        assert_eq!(
+            current.entry.sources.len(),
+            if new_source && !revise { 2 } else { 1 }
+        );
+        assert_eq!(
+            current.state, "active",
+            "stale integrity observations must not invalidate an approved receipt"
+        );
+        assert!(matches!(
+            observed,
+            Err(error) if crate::errcode::ErrorCode::code(&error) == "stale_experience"
+        ));
+        let ctx = ToolContext::for_agent(&writer.db, dir.path(), "a0");
+        let crate::tools::CallOutcome::Done(loaded) = writer
+            .registry
+            .call(
+                &writer.db,
+                &ctx,
+                "load_skill",
+                serde_json::json!({"name":"alpha"}),
+            )
+            .unwrap()
+        else {
+            panic!("skill load refused")
+        };
+        let instructions = loaded["instructions"].as_str().unwrap();
+        assert!(instructions.contains(&request.body));
+        assert!(!instructions.contains("UNREVIEWED_EXTERNAL_EDIT"));
+    }
+
+    #[test]
+    fn experience_broken_snapshot_cannot_invalidate_reapproved_receipt() {
+        assert_new_receipt_survives_observation("replacement", true, true, false);
+    }
+
+    #[test]
+    fn experience_same_revision_approval_requires_a_current_receipt_observation() {
+        for new_source in [false, true] {
+            assert_new_receipt_survives_observation("duplicate", false, false, new_source);
+        }
+    }
+
+    fn assert_pending_observation(suffix: &str, replaced: bool) {
+        use std::sync::mpsc;
+        let (dir, mut writer, proposal) = approved_fixture();
+        let first = writer.experience_entries("alpha").unwrap().remove(0).entry;
+        let reader_root = dir.path().to_path_buf();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut reader =
+                crate::api::Workbench::for_test(&reader_root, &["worker", "reviewer"], None)
+                    .unwrap();
+            reader.db = Db::open(reader_root.join(".hexagon/state.db")).unwrap();
+            AFTER_ENTRY_FILE_READ.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    observed_tx.send(()).unwrap();
+                    continue_rx
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap();
+                }))
+            });
+            reader.experience_entries("alpha")
+        });
+        observed_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        let mut request = writer
+            .experience_proposal(&proposal)
+            .unwrap()
+            .unwrap()
+            .request;
+        request.body = format!("NEW_PENDING_{suffix}");
+        request.targets[0].expected_digest = hash(
+            &std::fs::read_to_string(dir.path().join(".hexagon/skills/alpha/SKILL.md")).unwrap(),
+        );
+        request.targets[0].change = Some(super::super::ExperienceChange {
+            kind: super::super::ExperienceChangeKind::Revise,
+            entry_id: first.entry_id,
+            expected_revision: first.revision,
+            reason: "Reviewed correction".into(),
+        });
+        let id = writer.propose_experience_entry("a0", &request).unwrap();
+        let status: String = writer
+            .db
+            .conn()
+            .query_row("SELECT status FROM proposals WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        if status == "in_review" {
+            writer
+                .review_proposal(&id, true, "review pending version")
+                .unwrap();
+        }
+        let card = writer
+            .db
+            .queued_questions(&writer.project_id)
+            .unwrap()
+            .into_iter()
+            .find(|card| card.payload["proposal_id"] == id)
+            .unwrap();
+        writer.fail_next_experience(if replaced {
+            ExperienceFault::AfterReplace
+        } else {
+            ExperienceFault::AfterIntent
+        });
+        assert!(writer.confirm_proposal(&card.id).is_err());
+        continue_tx.send(()).unwrap();
+        let observed = reader.join().unwrap();
+        assert_eq!(
+            writer.experience_entries("alpha").unwrap()[0].state,
+            "pending_recovery"
+        );
+        assert!(matches!(
+            observed,
+            Err(error) if crate::errcode::ErrorCode::code(&error) == "stale_experience"
+        ), "a pending intent changed the loading contract even though receipt and file still match");
+    }
+
+    #[test]
+    fn experience_observation_cannot_load_a_receipt_after_a_new_pending_intent() {
+        assert_pending_observation("version", false);
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 4,
+            failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/experience-observation.txt"))),
+            ..proptest::test_runner::Config::default()
+        })]
+        #[test]
+        fn experience_pending_operations_require_a_current_loading_observation(
+            suffix in "[a-z]{1,10}", replaced in proptest::bool::ANY,
+        ) {
+            assert_pending_observation(&suffix, replaced);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 8,
+            failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/experience-observation.txt"))),
+            ..proptest::test_runner::Config::default()
+        })]
+        #[test]
+        fn experience_receipt_observations_bind_revision_record_and_proposal(
+            suffix in "[a-z]{1,10}", broken in proptest::bool::ANY, revise in proptest::bool::ANY, new_source in proptest::bool::ANY,
+        ) {
+            assert_new_receipt_survives_observation(&suffix, broken, revise || broken, new_source);
+        }
+    }
     proptest! {
         #[test]
         fn duplicate_block_identities_never_remain_unique(body in "[a-zA-Z]{1,30}") {

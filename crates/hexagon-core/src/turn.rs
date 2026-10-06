@@ -728,13 +728,6 @@ fn run_turn_impl(
         log::warn!("turn blocked by usage cap: agent={}", ctx.agent_id);
         return Ok(TurnOutcome::SkippedCap);
     }
-    // 票 07：激活任务清单随激活生灭——父级回合起跑线即激活边界，
-    // 残留条目（含上次没收尾的子代理派遣）先 halt 再清空。
-    // 子代理回合（ctx.subagent 在场）共享父板，不得清场。
-    if ctx.subagent.is_none() {
-        ctx.tasks
-            .begin_activation(&crate::subagent::activation_key(ctx));
-    }
     log::info!(
         "turn start: agent={} run={:?}",
         ctx.agent_id,
@@ -760,10 +753,24 @@ fn run_turn_impl(
     let trigger_turn_id = db.append_event(
         &ctx.project_id,
         EventKind::TurnStarted,
-        json!({ "agent": ctx.agent_id, "source_mode": source_mode, "subagent": ctx.subagent.is_some(), "instruction": user_input, "manual_skill_invocations": ctx.manual_skill_invocations }),
+        json!({ "agent": ctx.agent_id, "source_mode": source_mode, "subagent": ctx.subagent.is_some(), "instruction": user_input, "manual_skill_invocations": ctx.manual_skill_invocations,
+            "resume_from_turn_id": if ctx.subagent.is_none() { ctx.resume_from_turn_id } else { None },
+            "activation_root_turn_id": ctx.activation_root_turn_id, "source_review_phase":ctx.source_review_phase }),
         Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
     )?;
+
+    if ctx.activation_root_turn_id.is_none() {
+        ctx.activation_root_turn_id = Some(trigger_turn_id);
+    }
+
+    // I3 / 2026-10-06: board identity uses the stable host root, known only
+    // after a fresh TurnStarted. Child contexts inherit it; same-root resumes
+    // retain their board and a new independent root gets a separate activation.
+    if ctx.subagent.is_none() {
+        ctx.tasks
+            .begin_activation(&crate::subagent::activation_key(ctx));
+    }
 
     // 票 07（prompt-engineering）：工作台基础层 + 回复语言段在装配点统一
     // 注入——所有走回合内核的入口（派活、点名、恢复重触发、子代理）同享。
@@ -874,6 +881,9 @@ fn run_turn_impl(
     // Rehydrate recorded observations before steering/cap handling, instead of
     // silently losing the task's tool receipts whenever the CLI is reopened.
     messages.extend_from_slice(history);
+    if source_mode && ctx.source_review_phase {
+        apply_source_review_policy(&mut messages);
+    }
 
     // 票 03：负责人附件注入。vision 槽 → Image 块进首条 user 消息；
     // 非 vision 槽 → [image: name](path) 降级文本 + attachments_degraded
@@ -971,11 +981,15 @@ fn run_turn_impl(
                 ..req_base.clone()
             };
             // 票 03 信封：方案派发也落指纹（call=0）。
-            db.append_event(
+            let plan_request_id = db.append_event(
                 &ctx.project_id,
                 EventKind::System,
                 context::with_usage(
-                    request_envelope(0, &plan_req, &plan_req.messages, &env_layers),
+                    activation_envelope(
+                        request_envelope(0, &plan_req, &plan_req.messages, &env_layers),
+                        ctx,
+                        trigger_turn_id,
+                    ),
                     &plan_req,
                     provider.model_meta().context_window,
                 ),
@@ -999,6 +1013,14 @@ fn run_turn_impl(
                     Err(TurnError::Suspended) => return Ok(TurnOutcome::Suspended),
                     Err(e) => return Err(e),
                 };
+            persist_activation_observation(
+                db,
+                ctx,
+                trigger_turn_id,
+                plan_request_id,
+                0,
+                &resp.content,
+            )?;
             absorb_thinking(&resp.content, &mut carried_thinking);
             // 方案独立持久化；模型仍将其作为执行上下文。
             let plan_text = visible_text(&resp.content);
@@ -1035,7 +1057,7 @@ fn run_turn_impl(
         // An explicit owner-selected mode, not a language/keyword classifier.
         // Filename listing and ordinary conversation must remain valid without reads.
         let mut source_repair = false;
-        let mut source_reviewed = false;
+        let mut source_reviewed = ctx.source_review_phase;
         let breaker = |db: &Db, tool: &str, sig: &str| -> Result<TurnOutcome, TurnError> {
             db.append_event(
                 &ctx.project_id,
@@ -1165,11 +1187,15 @@ fn run_turn_impl(
                 &ctx.project_id,
                 EventKind::System,
                 context::with_usage(
-                    request_envelope(
-                        round + usize::from(plan_first),
-                        &req,
-                        &messages,
-                        &env_layers,
+                    activation_envelope(
+                        request_envelope(
+                            round + usize::from(plan_first),
+                            &req,
+                            &messages,
+                            &env_layers,
+                        ),
+                        ctx,
+                        trigger_turn_id,
                     ),
                     &req,
                     provider.model_meta().context_window,
@@ -1211,6 +1237,14 @@ fn run_turn_impl(
                 resp.usage.prompt_tokens,
                 resp.usage.completion_tokens
             );
+            persist_activation_observation(
+                db,
+                ctx,
+                trigger_turn_id,
+                request_id,
+                round + usize::from(plan_first),
+                &resp.content,
+            )?;
             // 票 10：首个响应到手 = brief 送达模型——推进游标到组装水位。
             // 早了丢增量（下次激活漏读），晚了只是重送——这个点是正确侧。
             if round == 0 {
@@ -1406,17 +1440,21 @@ fn run_turn_impl(
                         // v14 supplied-source/Workbench comparison: normalize the
                         // phase policy into the leading host system message. Preserve
                         // all existing instructions; never promote question/tool data.
-                        let review_policy = "The cited draft has NOT been delivered. Answer the owner's original question again from fresh implementation reads; the positive draft is omitted. For each requested point, first select its implementation evidence, then give the direct answer with a supporting `repo/path.rs:12-18` citation. Check actual return/error branches before summarizing: comments and tests describe intent/examples, not all outcomes. Qualify a success-path description when an error path differs; never strengthen a conditional behavior into an unconditional guarantee or infer an uninspected caller/callee. Include only requested facts, with no extra background, UI behavior or test descriptions. Unless the owner asks for detail or another format, use one short bullet per requested point: one direct sentence with its citations, without a preface, headings, code excerpts or repeated summary. Treat each explicit question clause as an answer slot and fill only those slots. A location question needs the location, not lifecycle limits; a yes/no question needs the answer and branch evidence, not an exhaustive alternative list. Mention concrete error types, thresholds and tests only when expressly requested. Preserve conditions necessary to make the requested answer true. If the implementation was not located, perform relevant fs_grep and fs_read calls and return exactly {\"source_not_found\":true}; the host reports the bounded investigation. This is one review within the existing round budget, not a correctness verdict.";
-                        let system = messages
-                            .iter_mut()
-                            .find(|m| m.role == Role::System)
-                            .expect("turn retains its leading host system message");
-                        system.content = vec![ContentBlock::Text {
-                            text: format!(
-                                "{}\n\n# Source-answer review\n{review_policy}",
-                                visible_text(&system.content)
-                            ),
-                        }];
+                        // I2 / V05: persist the host phase transition before
+                        // replacing the in-memory request; a crash must not
+                        // resurrect draft reasoning or start another review.
+                        db.append_event(
+                            &ctx.project_id,
+                            EventKind::System,
+                            json!({"kind":"activation_observation","turn_id":trigger_turn_id,
+                                "activation_root_turn_id":ctx.activation_root_turn_id,
+                                "subagent":ctx.subagent.is_some(),"request_id":request_id,
+                                "call":round+usize::from(plan_first),"source_reviewed":true,
+                                "reset_history":fresh,"content":[]}),
+                            Some(&ctx.agent_id),
+                            ctx.stage_run_id.as_deref(),
+                        )?;
+                        apply_source_review_policy(&mut messages);
                         continue;
                     }
                     source_repair = true;
@@ -1680,7 +1718,9 @@ fn run_turn_impl(
         // 叫停=人已经裁决过的 ambiguous;模型/基建意外失败=ambiguous
         // （hard-blocked 留给结构性死路,由升级路径携带）。
         {
-            let mut p = json!({ "agent": ctx.agent_id, "outcome": format!("{outcome:?}") });
+            let mut p = json!({ "agent": ctx.agent_id, "outcome": format!("{outcome:?}"),
+                "turn_id": trigger_turn_id, "subagent": ctx.subagent.is_some(),
+                "activation_root_turn_id": ctx.activation_root_turn_id });
             let code = match &outcome {
                 // Reliability 13: admission failure has a budget reason, not ambiguity.
                 Ok(TurnOutcome::Truncated)
@@ -1702,6 +1742,51 @@ fn run_turn_impl(
         ctx.stage_run_id.as_deref(),
     )?;
     outcome
+}
+
+// I2 / V05 (2026-10-06): request hashes and display thinking cannot restore
+// native protocol blocks or the unprepared tail of a tool batch. Persist the
+// complete adapter response before effects, then restore only durable receipts.
+fn apply_source_review_policy(messages: &mut [Message]) {
+    let review_policy = "The cited draft has NOT been delivered. Answer the owner's original question again from fresh implementation reads; the positive draft is omitted. For each requested point, first select its implementation evidence, then give the direct answer with a supporting `repo/path.rs:12-18` citation. Check actual return/error branches before summarizing: comments and tests describe intent/examples, not all outcomes. Qualify a success-path description when an error path differs; never strengthen a conditional behavior into an unconditional guarantee or infer an uninspected caller/callee. Include only requested facts, with no extra background, UI behavior or test descriptions. Unless the owner asks for detail or another format, use one short bullet per requested point: one direct sentence with its citations, without a preface, headings, code excerpts or repeated summary. Treat each explicit question clause as an answer slot and fill only those slots. A location question needs the location, not lifecycle limits; a yes/no question needs the answer and branch evidence, not an exhaustive alternative list. Mention concrete error types, thresholds and tests only when expressly requested. Preserve conditions necessary to make the requested answer true. If the implementation was not located, perform relevant fs_grep and fs_read calls and return exactly {\"source_not_found\":true}; the host reports the bounded investigation. This is one review within the existing round budget, not a correctness verdict.";
+    let system = messages
+        .iter_mut()
+        .find(|message| message.role == Role::System)
+        .expect("turn retains its leading host system message");
+    system.content = vec![ContentBlock::Text {
+        text: format!(
+            "{}\n\n# Source-answer review\n{review_policy}",
+            visible_text(&system.content)
+        ),
+    }];
+}
+
+fn activation_envelope(mut payload: Value, ctx: &ToolContext, turn_id: i64) -> Value {
+    payload["turn_id"] = json!(turn_id);
+    payload["subagent"] = json!(ctx.subagent.is_some());
+    payload["activation_root_turn_id"] = json!(ctx.activation_root_turn_id);
+    payload
+}
+
+fn persist_activation_observation(
+    db: &Db,
+    ctx: &ToolContext,
+    turn_id: i64,
+    request_id: i64,
+    call: usize,
+    content: &[ContentBlock],
+) -> Result<(), TurnError> {
+    db.append_event(
+        &ctx.project_id,
+        EventKind::System,
+        json!({"kind":"activation_observation", "turn_id":turn_id,
+            "activation_root_turn_id":ctx.activation_root_turn_id,
+            "subagent":ctx.subagent.is_some(), "request_id":request_id,
+            "call":call, "content":content}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )?;
+    Ok(())
 }
 
 /// 未关闭条目（open/running）的提醒文案；没有则 None。

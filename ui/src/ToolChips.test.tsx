@@ -1,7 +1,7 @@
 // beautiful-ui 票 02：ToolGroupRow chip 化行为面——
 // 调用对计数、逐行 chip、行展开明细、文件片开 tab、在途蓝点。
 import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
@@ -9,6 +9,7 @@ import { ToolGroupRow } from './components/Timeline'
 import { AgentTab } from './components/AgentTab'
 import { useUiStore } from './store'
 import type { TimelineItem } from './api'
+import { api } from './api'
 import type { EventKind } from './gen/EventKind'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -140,4 +141,36 @@ it('agent activity preserves unknown across unrelated events', async () => {
   expect(el.textContent).toContain('Tool outcome unknown')
   expect(el.querySelector('.chip.ok')).toBeNull()
   await act(async () => root.unmount())
+})
+
+// Benchmark I1: image decoding happens before the IPC token is captured. An A
+// FileReader finishing in B must not use B's valid token to change the same a1.
+it.each([false, true])('avatar file reading respects the originating project (switch=%s)', async (switchProject) => {
+  const saved = useUiStore.getState()
+  useUiStore.setState({ projectRoot: '/repo/a', projectGeneration: 31, projectEpoch: 50, invalidate: async () => {} })
+  let reader!: { onload: (() => Promise<void>) | null; result: string }
+  vi.stubGlobal('FileReader', class {
+    onload: (() => Promise<void>) | null = null
+    result = 'data:image/png;base64,AAAA'
+    readAsDataURL = vi.fn()
+    constructor() { reader = this }
+  })
+  const write = vi.spyOn(api, 'setAgentAvatar').mockResolvedValue()
+  const { el, root } = await render(<AgentTab agentId="a1" />)
+  try {
+    const input = el.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(input, 'files', { value: [new File(['image'], 'avatar.png', { type: 'image/png' })] })
+    await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+    expect(write).not.toHaveBeenCalled()
+    if (switchProject) await act(async () => {
+      useUiStore.getState().beginProjectSwitch()
+      useUiStore.setState({ projectRoot: '/repo/b', projectGeneration: 32,
+        team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null }] })
+    })
+    await act(async () => reader.onload?.())
+    if (switchProject) expect(write).not.toHaveBeenCalled()
+    else expect(write).toHaveBeenCalledExactlyOnceWith('a1', 'data:image/png;base64,AAAA')
+  } finally {
+    await act(async () => root.unmount()); el.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); useUiStore.setState(saved, true)
+  }
 })

@@ -415,6 +415,74 @@ pub fn initialize(library: &Path) -> Result<(), String> {
 }
 
 impl State {
+    fn close_project(&mut self, project: &Path) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        let agent = self.owner.as_ref().map(|owner| owner.agent.clone());
+        let activation = self.active.map(|id| id.to_string());
+        let mut reason = "owner_released";
+        let result = (|| {
+            // Benchmark I1 / 2026-10-06: preview Stop never reached a role's
+            // active executor. A false rejection costs retrying Close; accepting an
+            // undrained operation allows a later input into another project.
+            if self
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.project != project)
+            {
+                reason = "foreign_owner_untouched";
+                return Ok(());
+            }
+            let Some(owner) = self.owner.clone() else {
+                reason = if self.busy {
+                    "focus_drain_pending"
+                } else {
+                    "no_owner"
+                };
+                return if self.busy {
+                    Err("computer focus has not stopped yet".into())
+                } else {
+                    Ok(())
+                };
+            };
+            self.paused = true;
+            self.snapshot = None;
+            if let Some(id) = self.active {
+                self.cancel_active(id).inspect_err(|_| {
+                    reason = "native_cancel_failed";
+                })?;
+            }
+            if self.busy {
+                reason = "native_drain_pending";
+                return Err("computer operation has not stopped yet; retry after it drains".into());
+            }
+            // Existing session release preserves pause/unknown and drops the lease.
+            // Owner Release resets unknown, so it cannot stand in for verified drain.
+            self.session(&owner, "release")
+                .map(|_| ())
+                .inspect_err(|_| {
+                    reason = "owner_release_failed";
+                })
+        })();
+        // AGENTS / benchmark I1: cancellation asks the executor to stop; this
+        // record identifies the actual branch without claiming it has drained.
+        crate::diag::note(
+            if result.is_err() {
+                crate::diag::CLASS_REJECT
+            } else {
+                crate::diag::CLASS_HOST
+            },
+            result.is_err(),
+            Some(crate::PROJECT_ID),
+            agent.as_deref(),
+            None,
+            activation.as_deref(),
+            "desktop_project_close",
+            reason,
+            started,
+        );
+        result
+    }
+
     fn cancel_active(&self, id: u64) -> Result<(), String> {
         if let Some(backend) = self.active_backend.as_ref() {
             backend.cancel(id)?;
@@ -699,6 +767,19 @@ impl Controller {
             }
         }
     }
+}
+
+/// Host project-leave boundary. Retain the old root while its executor drains;
+/// cancellation is a request, never evidence that an operation already stopped.
+pub fn close_project(root: &Path) -> Result<(), String> {
+    // The shell retained the canonical root when it opened the project. It may
+    // have been removed since then; leaving must not reopen that filesystem path.
+    let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    controller()
+        .state
+        .lock()
+        .map_err(|_| "desktop state unavailable")?
+        .close_project(&project)
 }
 
 fn project_key(root: &Path) -> Result<PathBuf, String> {

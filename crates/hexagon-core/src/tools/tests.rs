@@ -900,12 +900,13 @@ fn background_task_output_cursor_and_kill() {
 
 #[test]
 fn timeout_kills_and_traces() {
-    let (db, _reg, ctx, _dir) = setup();
+    let (db, _reg, mut ctx, _dir) = setup();
     // 2026-09-29 hosted CI: runtime inventory can take over 10s before spawn.
     // The execution deadline starts after preparation. Observe command startup
     // through the existing output tap instead of enlarging the timeout bound.
     let (started, observed) = std::sync::mpsc::channel();
-    ctx.sessions.set_call_meta(&ctx.agent_id, None);
+    // I3: bind this call without mutating shared attribution.
+    ctx.sessions = ctx.sessions.for_call(&ctx.agent_id, None);
     ctx.sessions.set_output_tap(Some(Box::new(move |delta| {
         if delta.stream == "stdout" {
             started.send(std::time::Instant::now()).unwrap();
@@ -1146,15 +1147,14 @@ fn bash_output_streams_deltas_with_call_attribution() {
             ));
         },
     )));
-    let run = |cmd: &str| {
-        ctx.sessions
+    let run = |sessions: &crate::sessions::SessionTable, cmd: &str| {
+        sessions
             .run_oneshot(&db, &ctx, cmd, std::time::Duration::from_secs(5), false)
             .unwrap();
     };
 
-    ctx.sessions.set_call_meta("a1", Some("r1:i0"));
-    run("printf 'hello-out'; printf 'oops-err' >&2");
-    ctx.sessions.clear_call_meta();
+    let bound = ctx.sessions.for_call("a1", Some("r1:i0"));
+    run(&bound, "printf 'hello-out'; printf 'oops-err' >&2");
     {
         let v = got.lock().unwrap();
         assert!(
@@ -1167,8 +1167,8 @@ fn bash_output_streams_deltas_with_call_attribution() {
             "stderr delta missing: {v:?}"
         );
     }
-    // meta 摘后口子不绑——无归属的调用零 delta（防陈旧归属串线）
-    run("printf 'after-clear'");
+    // I3: the shared owner stays unbound after another frozen call completes.
+    run(&ctx.sessions, "printf 'after-clear'");
     {
         let v = got.lock().unwrap();
         assert!(
@@ -1176,10 +1176,9 @@ fn bash_output_streams_deltas_with_call_attribution() {
             "{v:?}"
         );
     }
-    // resolve 路径形态：set_call_meta(agent, None) → delta 带 agent 无 seq
-    ctx.sessions.set_call_meta("a1", None);
-    run("printf 'resolved-path'");
-    ctx.sessions.clear_call_meta();
+    // Resolve calls freeze agent attribution without a sequence.
+    let resolved = ctx.sessions.for_call("a1", None);
+    run(&resolved, "printf 'resolved-path'");
     {
         let v = got.lock().unwrap();
         assert!(
@@ -1188,6 +1187,61 @@ fn bash_output_streams_deltas_with_call_attribution() {
             "{v:?}"
         );
     }
+}
+
+// I3: an actual OS EBADF-like read on a write-only file after a real shell
+// side effect must travel through Registry to unknown, never succeeded/replayed.
+#[test]
+fn terminal_os_pipe_failure_preserves_registry_unknown() {
+    struct FaultyTerminal;
+    impl Tool for FaultyTerminal {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn description(&self) -> &str {
+            "owned terminal read fault fixture"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]})
+        }
+        fn risk(&self) -> RiskClass {
+            RiskClass::Exec
+        }
+        fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+            crate::sessions::terminal_os_read_failure_for_test(db, ctx, str_arg(input, "cmd")?)
+        }
+    }
+    let (db, reg, ctx, dir) = setup();
+    reg.register(FaultyTerminal);
+    let out = reg
+        .call(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd":"printf changed > marker; printf ready"}),
+        )
+        .unwrap();
+    let CallOutcome::Asked(id) = out else {
+        panic!("expected actual owner approval")
+    };
+    let result = reg.resolve(&db, &ctx, &id, true, None, "project", None, "owner");
+    assert!(
+        matches!(result, Err(ToolError::OutcomeUnknown(_))),
+        "{result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("marker")).unwrap(),
+        "changed"
+    );
+    let state: String = db
+        .conn()
+        .query_row(
+            "SELECT state FROM tool_actions WHERE tool='bash'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "unknown");
 }
 
 // ---- prompt-engineering 票 03：入参校验早于权限 ----

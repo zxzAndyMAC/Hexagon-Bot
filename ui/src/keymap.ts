@@ -60,6 +60,8 @@ export type ActionId =
   | 'treeNewFolder'
   | 'treeRefresh'
   | 'saveFile'
+  | 'discardFileEdits'
+  | 'cancelFileEdits'
   | 'confirmIntake'
   | 'reconcileAction'
   | 'abandonAction'
@@ -158,6 +160,8 @@ const DEFAULTS: Record<ActionId, string> = {
   treeNewFolder: 'alt+mod+f',
   treeRefresh: 'alt+mod+r',
   saveFile: 'mod+s',
+  discardFileEdits: '',
+  cancelFileEdits: 'Escape',
   // 票 17：确认开场草案。mod+Enter 已是待决批准，加 shift 才不会误写 AGENTS.md。
   confirmIntake: 'mod+shift+Enter',
   reconcileAction: 'alt+mod+i',
@@ -250,6 +254,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'treeNewFolder', labelKey: 'keys.treeNewFolder' },
   { id: 'treeRefresh', labelKey: 'keys.treeRefresh' },
   { id: 'saveFile', labelKey: 'keys.saveFile' },
+  { id: 'discardFileEdits', labelKey: 'file.discard' },
+  { id: 'cancelFileEdits', labelKey: 'agent.cancel' },
   { id: 'confirmIntake', labelKey: 'keys.confirmIntake' },
   { id: 'reconcileAction', labelKey: 'cards.reconcileAction' },
   { id: 'abandonAction', labelKey: 'cards.abandonAction' },

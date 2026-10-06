@@ -306,6 +306,15 @@ pub fn register_all(
     creds: Arc<dyn CredentialStore>,
 ) {
     let Ok(doc) = load() else { return };
+    register_document(&doc, providers, creds);
+}
+
+/// 接线使用调用方已读取的同一份配置，避免热刷期间二次 load 跨越配置版本。
+pub(crate) fn register_document(
+    doc: &ProviderDoc,
+    providers: &mut HashMap<String, Arc<dyn ModelProvider>>,
+    creds: Arc<dyn CredentialStore>,
+) {
     for (slot, b) in &doc.slots {
         if let Some(p) = doc.providers.iter().find(|p| p.id == b.provider_id) {
             if p.enabled {

@@ -242,9 +242,24 @@ fn range(values: &[f64]) -> Option<(f64, f64)> {
 }
 
 pub(crate) fn build(db: &Db, root: &Path, batch_id: &str) -> io::Result<BenefitReport> {
-    let started = std::time::Instant::now();
     let frozen = config::read(db, batch_id)?;
     let current = config::check(db, crate::PROJECT_ID, batch_id, &frozen.request)?;
+    build_from_checked(db, root, &current)
+}
+
+// 2026-10-06 / competitor-improvements 09: inspect previously checked this
+// environment, then this report ran the identical isolated probe again. Share
+// only the caller's just-checked batch inside that one observation. Standalone
+// reports still check above; adoption's preflight and write transaction each
+// call inspect anew. Never persist/reuse this observation across those phases.
+pub(crate) fn build_from_checked(
+    db: &Db,
+    root: &Path,
+    current: &super::EvaluationBatch,
+) -> io::Result<BenefitReport> {
+    let started = std::time::Instant::now();
+    let frozen = current;
+    let batch_id = &frozen.id;
     let scripted = budget::summary(db, "scripted_debug")?;
     let paid = budget::paid_summary()?;
     let host = root.canonicalize()?.to_string_lossy().into_owned();
@@ -457,7 +472,7 @@ pub(crate) fn build(db: &Db, root: &Path, batch_id: &str) -> io::Result<BenefitR
             })
         })
         .collect::<io::Result<Vec<_>>>()?;
-    Ok(BenefitReport{version:1,runtime_fingerprint:config::digest(&frozen.runtime)?,main_slot:frozen.request.main_slot.clone(),fast_role:frozen.request.fast_role.clone(),full_pack_fingerprint:config::digest(&frozen.request.full_pack)?,models:frozen.runtime.models.clone(),task_sources,batch_id:batch_id.into(),batch_fingerprint:frozen.fingerprint,statistics_version:frozen.request.statistics_version,configuration_blocks:current.blocks,groups,paid_round:paid,scripted_round:scripted,limitations:vec!["Only two heldout tasks per category; exploratory evidence, not statistical significance or general software coverage.".into(),"Balanced first-side order limits but does not remove owner learning effects; retain task/repetition detail.".into(),"Original failures remain in success and cost denominators; supplements never replace original attempts.".into(),"Scripted calls and missing human measurements cannot prove human-time savings; paid and scripted spend stay separate.".into(),"Standalone development runs without this frozen batch binding are excluded, not relabelled as formal evidence.".into(),"This report never changes product defaults, models, roles or workflows.".into()]})
+    Ok(BenefitReport{version:1,runtime_fingerprint:config::digest(&frozen.runtime)?,main_slot:frozen.request.main_slot.clone(),fast_role:frozen.request.fast_role.clone(),full_pack_fingerprint:config::digest(&frozen.request.full_pack)?,models:frozen.runtime.models.clone(),task_sources,batch_id:batch_id.clone(),batch_fingerprint:frozen.fingerprint.clone(),statistics_version:frozen.request.statistics_version.clone(),configuration_blocks:current.blocks.clone(),groups,paid_round:paid,scripted_round:scripted,limitations:vec!["Only two heldout tasks per category; exploratory evidence, not statistical significance or general software coverage.".into(),"Balanced first-side order limits but does not remove owner learning effects; retain task/repetition detail.".into(),"Original failures remain in success and cost denominators; supplements never replace original attempts.".into(),"Scripted calls and missing human measurements cannot prove human-time savings; paid and scripted spend stay separate.".into(),"Standalone development runs without this frozen batch binding are excluded, not relabelled as formal evidence.".into(),"This report never changes product defaults, models, roles or workflows.".into()]})
 }
 fn arm(rows: &[&BenefitRun], which: EvaluationArm) -> ArmBenefits {
     let selected: Vec<_> = rows.iter().copied().filter(|r| r.arm == which).collect();

@@ -70,8 +70,12 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
 
   const backToLauncher = async () => {
     setMenuOpen(false)
-    await api.closeProject().catch(() => {})
-    onProjectClosed()
+    try {
+      await api.closeProject()
+      onProjectClosed()
+    } catch (e) {
+      pushToast(errText(e), 'err')
+    }
   }
 
   // 已删目录（exists=false）不进切换菜单——清理入口在启动页，不在这里

@@ -834,13 +834,15 @@ pub fn build_brief_context(
 
 /// 请求信封（rsi-research 票 03）：每次模型派发落一条
 /// System{kind:"request_envelope"} 事件——layer 来源清单（层级/key/
-/// 内容 hash/字节数）+ 逐消息指纹 + 工具名单 + 模型参数 + 总指纹。
-/// 信封只含 hash 不含正文：不变量伴随件（票 07）用同一构造函数从
-/// trace 侧重建素材比对,指纹不符即 invariant_violation。
+/// 内容 hash/字节数）+ 逐消息指纹 + 工具名单/有序完整定义指纹 + 槽/证据参数 + 总指纹。
+/// 信封只含 hash 不含正文：不变量伴随件（票 07）从已落盘素材重算
+/// 总指纹的自洽性,不符即 invariant_violation；不能由此还原正文。
 /// hash 用 fnv64 不用 DefaultHasher——后者种子随进程变,指纹要跨
 /// 重启/回放稳定。
 /// layer 元数据在 build_system_prompt 消费 layers 前预取——
 /// 信封只存指纹素材,不存正文。
+/// 工具定义指纹覆盖内部 ChatRequest；不含供应商适配追加的 server tools/
+/// wire 参数，也不将缺该字段的旧信封解释为已记录历史定义。
 pub(super) fn layer_meta(layers: &[PromptLayer]) -> Vec<Value> {
     layers
         .iter()
@@ -880,6 +882,8 @@ pub(crate) fn envelope_fingerprint(
 /// 不是输入语义；尾部的证据与约束则另取 hash 进 params，纳入指纹。
 /// pub(crate)：judge.rs 的 LLM 判定派发也走同一信封（票 03「派发路径
 /// 100% 落信封」——judge 调用也是模型派发，不许旁路）。
+/// req.tools 的完整有序定义只以 params.tool_definitions_sha 记录；
+/// tools 保留名称展示，旧信封缺该字段时不补造历史定义身份。
 pub(crate) fn request_envelope(
     call: usize,
     req: &ChatRequest,
@@ -898,6 +902,13 @@ pub(crate) fn request_envelope(
         .collect();
     let tools: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
     let mut params = json!({"model_slot": req.model_slot});
+    // Report 01/09/20 / competitor-improvements, 2026-10-06 real red:
+    // same-named description/schema changes reached the provider but retained
+    // the old fingerprint. Keep the actual ordered definitions hash-only; this
+    // is content identity, not cryptographic proof or a complete wire archive.
+    let definitions = serde_json::to_string(&req.tools)
+        .expect("ToolDef contains only strings and JSON values; never silently omit definitions");
+    params["tool_definitions_sha"] = json!(format!("{:016x}", crate::tools::fnv64(&definitions)));
     // 2026-09-30: the old dynamic tail contained only environment metadata.
     // Evidence now changes answer semantics: fingerprint it, still excluding
     // wall-clock time and keeping raw paths/queries out of this hash-only envelope.

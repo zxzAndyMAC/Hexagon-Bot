@@ -126,6 +126,8 @@ struct SharedState {
     done: bool,
     stdout_eof: bool,
     stderr_eof: bool,
+    /// I3: a failed pipe read is not EOF or proof of command completion.
+    read_error: Option<&'static str>,
     exit_code: Option<i32>,
     // Ticket04 (2026-10-01): timing the entire tool call misclassified sandbox
     // setup/cleanup jitter as an application regression. Measure the owned
@@ -241,10 +243,9 @@ fn finish_child(
     status
 }
 
-/// `eof_done`：stdout EOF 是否即判收尾——会话成立（sh 死则命令边界消失，
-/// 哨兵永远等不到），任务不成立（退出码权威在 monitor 的 wait()；
-/// 若由 EOF 置 done，oneshot 会在 wait 写回 exit_code 前抢跑——
-/// 回归：bash_asks_then_executes_on_allow 曾因此拿到 -1）。
+/// Named commands use a nonce sentinel; shell EOF still awaits monitor status
+/// and both drains, exactly as a oneshot does. `eof_done` also flushes a held
+/// partial sentinel suffix when the persistent shell's output pipe closes.
 fn reader_to_ring<R: Read>(mut r: R, shared: Arc<Shared>, is_out: bool, eof_done: bool) {
     let mut hold: Vec<u8> = Vec::new();
     let mut buf = [0u8; 8192];
@@ -279,7 +280,14 @@ fn reader_to_ring<R: Read>(mut r: R, shared: Arc<Shared>, is_out: bool, eof_done
                     (t.cb.lock().unwrap())(&d);
                 }
             }
-            Err(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                let mut st = shared.st.lock().unwrap();
+                st.read_error = Some(if is_out { "stdout" } else { "stderr" });
+                st.done = false;
+                shared.cond.notify_all();
+                break;
+            }
         }
     }
     let mut st = shared.st.lock().unwrap();
@@ -288,10 +296,13 @@ fn reader_to_ring<R: Read>(mut r: R, shared: Arc<Shared>, is_out: bool, eof_done
     } else {
         st.stderr_eof = reached_eof;
     }
-    if is_out && eof_done {
-        st.exited = true;
-        st.done = true;
-    } else if st.exited && st.stdout_eof && st.stderr_eof {
+    // I3: named stdout EOF used to invent completion before the monitor
+    // supplied the shell status. Preserve exit/respawn, await both pipe drains
+    // and authoritative wait status; a normal command still uses its sentinel.
+    if is_out && eof_done && !hold.is_empty() {
+        st.out.push(&hold);
+    }
+    if st.read_error.is_none() && st.exited && st.stdout_eof && st.stderr_eof {
         st.done = true;
     }
     shared.cond.notify_all();
@@ -312,7 +323,8 @@ fn feed_out(hold: &mut Vec<u8>, st: &mut SharedState) {
                 Some(end) => {
                     let code = String::from_utf8_lossy(&hold[after..after + end]).into_owned();
                     st.exit_code = code.trim().parse().ok();
-                    st.done = true;
+                    // I3: a stdout sentinel cannot erase a stderr read failure.
+                    st.done = st.read_error.is_none();
                     st.nonce = None;
                     let mut rest = after + end + 2;
                     if hold.get(rest) == Some(&b'\n') {
@@ -435,6 +447,7 @@ impl Drop for Session {
 #[derive(Clone, Default)]
 pub struct SessionTable {
     inner: Arc<Mutex<TableState>>,
+    call_meta: Option<(String, Option<String>)>,
 }
 
 impl std::fmt::Debug for SessionTable {
@@ -452,11 +465,8 @@ struct TableState {
     sessions: HashMap<String, Arc<Session>>,
     tasks: HashMap<String, Arc<TaskHandle>>,
     seq: u64,
-    /// 票 04：表级口子回调（Workbench 开库后挂一次）+ 当次调用归属。
-    /// exec 前 set_call_meta、exec 后 clear；spawn/exec_on 起 Shared 时
-    /// 把当前 (tap, meta) 绑进去。
+    /// Shared output callback; call attribution lives on the immutable adapter.
     tap: Option<OutputTap>,
-    meta: Option<(String, Option<String>)>,
 }
 
 /// Monitor 与取消共享未回收的 Child；拿走句柄后取消不能再信号旧 PID。
@@ -476,22 +486,46 @@ impl TaskHandle {
 }
 
 impl SessionTable {
+    fn read_result(shared: &Shared, ctx: &ToolContext) -> Result<(), ToolError> {
+        let stream = shared.st.lock().unwrap().read_error;
+        if let Some(stream) = stream {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "terminal_result",
+                if stream == "stdout" {
+                    "stdout_read_failed_unknown"
+                } else {
+                    "stderr_read_failed_unknown"
+                },
+                Instant::now(),
+            );
+            return Err(ToolError::Exec(format!(
+                "terminal {stream} read failed after execution; outcome unknown"
+            )));
+        }
+        Ok(())
+    }
     /// 票 04：Workbench 开库后挂一次输出口子（壳层 emit 到 webview）。
     pub fn set_output_tap(&self, cb: Option<OutputTapCb>) {
         self.inner.lock().unwrap().tap = cb.map(|c| Arc::new(Mutex::new(c)) as OutputTap);
     }
 
-    /// exec_and_log 包边：调用前登记归属，spawn/run_in 据此把
-    /// (tap, meta) 绑进新 Shared；调用结束 clear 防陈旧 meta 串线。
-    pub fn set_call_meta(&self, agent_id: &str, seq: Option<&str>) {
-        self.inner.lock().unwrap().meta = Some((agent_id.into(), seq.map(Into::into)));
-    }
-    pub fn clear_call_meta(&self) {
-        self.inner.lock().unwrap().meta = None;
+    /// I3 / 2026-10-06: shared set/clear let concurrent calls steal each
+    /// other's output. Share process ownership, freeze attribution per call.
+    pub fn for_call(&self, agent_id: &str, seq: Option<&str>) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            call_meta: Some((agent_id.into(), seq.map(Into::into))),
+        }
     }
     fn bound_tap(&self) -> Option<BoundTap> {
         let t = self.inner.lock().unwrap();
-        match (&t.tap, &t.meta) {
+        match (&t.tap, self.call_meta.as_ref()) {
             (Some(cb), Some((a, s))) => Some(BoundTap {
                 agent_id: a.clone(),
                 seq: s.clone(),
@@ -653,6 +687,11 @@ impl SessionTable {
             return Err(ToolError::Exec(format!("evaluation interrupted: {e}")));
         }
         let timed_out = waiting.unwrap();
+        if let Err(error) = Self::read_result(&task.shared, ctx) {
+            task.kill();
+            self.inner.lock().unwrap().tasks.remove(&id);
+            return Err(error);
+        }
         if timed_out {
             task.kill();
             wait_done(&task.shared, Instant::now() + Duration::from_secs(2));
@@ -784,14 +823,14 @@ impl SessionTable {
         }
         // nonce 先于命令落 shared——读线程从命令第一个字节起就在剥哨兵
         let script = format!("{cmd}\necho \"__HX_DONE_{nonce}_$?__\"\n");
+        // Bind before writing: a short command can emit before write_all returns.
+        *sess.shared.tap.lock().unwrap() = self.bound_tap();
         if let Err(e) = sess.stdin.lock().unwrap().write_all(script.as_bytes()) {
+            *sess.shared.tap.lock().unwrap() = None;
             let mut st = sess.shared.st.lock().unwrap();
             st.nonce = None;
             return Err(ToolError::Exec(format!("write to session {name}: {e}")));
         }
-        // 票 04：会话 Shared 跨命令复用——本条命令期间口子绑当前
-        // 调用归属，收尾即摘，防下一条命令吃到上条的 seq。
-        *sess.shared.tap.lock().unwrap() = self.bound_tap();
         let deadline = Instant::now() + timeout;
         let waiting = wait_controlled(&sess.shared, deadline, &ctx.repo_root);
         if let Err(e) = waiting {
@@ -802,6 +841,19 @@ impl SessionTable {
         }
         let timed_out = waiting.unwrap();
         *sess.shared.tap.lock().unwrap() = None;
+        if let Err(error) = Self::read_result(&sess.shared, ctx) {
+            sess.kill();
+            self.inner.lock().unwrap().sessions.remove(name);
+            return Err(error);
+        }
+        // I3: shell EOF without a sentinel has no authoritative command status.
+        if sess.shared.st.lock().unwrap().exit_code.is_none() && !timed_out {
+            sess.kill();
+            self.inner.lock().unwrap().sessions.remove(name);
+            return Err(ToolError::Exec(
+                "session exited without a command result; outcome unknown".into(),
+            ));
+        }
         if timed_out {
             sess.kill();
             emit(
@@ -931,7 +983,9 @@ impl SessionTable {
             "cursor_out": co,
             "cursor_err": ce,
             "lost": lo || le,
-            "done": st.done,
+            "done": st.done && st.read_error.is_none(),
+            "read_error": st.read_error,
+            "outcome_unknown": st.read_error.is_some(),
             "exited": st.exited,
             "exit_code": st.exit_code,
         }))
@@ -1002,6 +1056,63 @@ impl SessionTable {
             h.kill();
         }
     }
+}
+
+/// A real OS read fault on an owned test shell, using the production reader
+/// and result classifier. No global FD manipulation or unsafe double-close.
+#[cfg(test)]
+pub(crate) fn terminal_os_read_failure_for_test(
+    db: &Db,
+    ctx: &ToolContext,
+    cmd: &str,
+) -> Result<Value, ToolError> {
+    struct FaultAfterOutput {
+        pipe: std::process::ChildStdout,
+        invalid_reader: std::fs::File,
+        read_once: bool,
+    }
+    impl Read for FaultAfterOutput {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.read_once {
+                self.read_once = true;
+                self.pipe.read(buf)
+            } else {
+                self.invalid_reader.read(buf)
+            }
+        }
+    }
+    let table = ctx.sessions.clone();
+    let spec = table.spec_for(db, ctx, false);
+    let mut command = sh_command(&ctx.repo_root, &spec)?;
+    command.arg("-c").arg(cmd);
+    let mut child = command.spawn()?;
+    let pipe = child.stdout.take().unwrap();
+    let shared = Shared::new(table.bound_tap());
+    let invalid_reader = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(ctx.repo_root.join("read-fault-fixture"))?;
+    reader_to_ring(
+        FaultAfterOutput {
+            pipe,
+            invalid_reader,
+            read_once: false,
+        },
+        shared.clone(),
+        true,
+        false,
+    );
+    let status = child.wait()?;
+    record_process_exit(&mut shared.st.lock().unwrap(), status.code(), None);
+    assert!(
+        shared.st.lock().unwrap().read_error.is_some(),
+        "OS fault fixture must reach the failed-read branch, not a fallback Exec"
+    );
+    SessionTable::read_result(&shared, ctx)?;
+    Err(ToolError::Exec(
+        "OS fault fixture did not fail its read".into(),
+    ))
 }
 
 /// 任务 spawn：monitor 先观察退出再收割，进程组消失后才释放写租约。
@@ -1103,7 +1214,7 @@ fn record_process_exit(st: &mut SharedState, exit_code: Option<i32>, elapsed: Op
     st.exited = true;
     st.exit_code = exit_code;
     st.command_elapsed_ms = elapsed;
-    if st.stdout_eof && st.stderr_eof {
+    if st.read_error.is_none() && st.stdout_eof && st.stderr_eof {
         st.done = true;
     }
 }
@@ -1151,7 +1262,7 @@ fn wait_controlled(shared: &Shared, deadline: Instant, root: &Path) -> std::io::
 fn wait_done(shared: &Shared, deadline: Instant) -> bool {
     let mut st = shared.st.lock().unwrap();
     loop {
-        if st.done {
+        if st.done || st.read_error.is_some() {
             return false;
         }
         let now = Instant::now();
@@ -1235,6 +1346,98 @@ mod output_completion_tests {
         assert!(state.exited);
         assert!(!state.done);
         assert!(!state.stdout_eof);
+    }
+
+    #[test]
+    fn separate_command_contexts_never_steal_output_attribution() {
+        let table = SessionTable::default();
+        let deltas = Arc::new(Mutex::new(Vec::new()));
+        let observed = deltas.clone();
+        table.set_output_tap(Some(Box::new(move |delta| {
+            observed.lock().unwrap().push((
+                delta.agent_id.clone(),
+                delta.seq.clone(),
+                delta.text.clone(),
+            ));
+        })));
+        for index in 0..100 {
+            let aseq = format!("a{index}");
+            let bseq = format!("b{index}");
+            let a = table.for_call("parent-a", Some(&aseq));
+            let b = table.for_call("parent-b", Some(&bseq));
+            let ashared = Shared::new(a.bound_tap());
+            let bshared = Shared::new(b.bound_tap());
+            reader_to_ring(std::io::Cursor::new(b"A"), ashared, true, false);
+            reader_to_ring(std::io::Cursor::new(b"B"), bshared, true, false);
+            let actual = deltas.lock().unwrap();
+            assert_eq!(
+                actual[index * 2],
+                ("parent-a".into(), Some(aseq), "A".into())
+            );
+            assert_eq!(
+                actual[index * 2 + 1],
+                ("parent-b".into(), Some(bseq), "B".into())
+            );
+        }
+    }
+
+    #[test]
+    fn named_reader_error_must_reach_the_tool_as_uncertain() {
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("controlled pipe failure"))
+            }
+        }
+        let shared = Shared::new(None);
+        reader_to_ring(FailedRead, shared.clone(), true, true);
+        let state = shared.st.lock().unwrap();
+        assert!(
+            !state.done,
+            "reader error cannot masquerade as named command completion"
+        );
+        assert!(!state.stdout_eof);
+    }
+
+    proptest! {
+        #[test]
+        fn named_sentinel_cannot_override_pipe_error_in_either_order(
+            error_first in any::<bool>(), code in any::<i32>(), text in "[a-zA-Z0-9]{0,80}"
+        ) {
+            struct FailedRead;
+            impl Read for FailedRead {
+                fn read(&mut self,_:&mut[u8])->std::io::Result<usize> { Err(std::io::Error::other("fixture")) }
+            }
+            let shared = Shared::new(None);
+            shared.st.lock().unwrap().nonce = Some("fixture-nonce".into());
+            let output = format!("{text}__HX_DONE_fixture-nonce_{code}__\n");
+            if error_first { reader_to_ring(FailedRead,shared.clone(),false,false); }
+            reader_to_ring(std::io::Cursor::new(output.as_bytes()),shared.clone(),true,true);
+            if !error_first { reader_to_ring(FailedRead,shared.clone(),false,false); }
+            let st = shared.st.lock().unwrap();
+            prop_assert!(!st.done);
+            prop_assert_eq!(st.read_error,Some("stderr"));
+            prop_assert_eq!(st.exit_code,Some(code));
+            prop_assert_eq!(st.out.read_from(0).0,text.as_bytes());
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn pipe_failure_never_becomes_success_after_monitor_or_eof(
+            is_out in any::<bool>(), named in any::<bool>(), exit_first in any::<bool>(), code in any::<i32>()
+        ) {
+            struct FailedRead;
+            impl Read for FailedRead { fn read(&mut self,_:&mut[u8])->std::io::Result<usize> { Err(std::io::Error::other("fixture")) } }
+            let shared = Shared::new(None);
+            if exit_first { record_process_exit(&mut shared.st.lock().unwrap(),Some(code),None); }
+            reader_to_ring(FailedRead,shared.clone(),is_out,named);
+            reader_to_ring(std::io::Cursor::new(b""),shared.clone(),!is_out,false);
+            record_process_exit(&mut shared.st.lock().unwrap(),Some(code),None);
+            prop_assert!(!shared.st.lock().unwrap().done);
+            prop_assert!(shared.st.lock().unwrap().read_error.is_some());
+            prop_assert!(!wait_done(&shared,Instant::now()+Duration::from_secs(1)));
+        }
     }
 
     proptest! {

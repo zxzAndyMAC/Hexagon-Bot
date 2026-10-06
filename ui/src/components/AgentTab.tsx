@@ -203,13 +203,17 @@ export function AgentTab({ agentId }: { agentId: string }) {
               e.target.value = ''
               return
             }
+            // Benchmark I1 / 2026-10-06 Spec: a delayed A FileReader previously
+            // fetched B's IPC identity and wrote B's same-named agent avatar.
+            const epoch = useUiStore.getState().projectEpoch
             const r = new FileReader()
             r.onload = async () => {
+              if (useUiStore.getState().projectEpoch !== epoch) return
               try {
                 await api.setAgentAvatar(agentId, String(r.result))
-                await invalidate('team')
+                if (useUiStore.getState().projectEpoch === epoch) await invalidate('team')
               } catch (err) {
-                pushToast(errText(err), 'err')
+                if (useUiStore.getState().projectEpoch === epoch) pushToast(errText(err), 'err')
               }
             }
             r.readAsDataURL(f)

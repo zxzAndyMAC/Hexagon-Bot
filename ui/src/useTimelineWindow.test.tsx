@@ -19,7 +19,8 @@ function page(ids: number[], extra: Partial<TimelineWindowPage> = {}): TimelineW
 function facts(id: number): TimelineFacts { return {project_root:'/project',latest_event_id:id,active_turns:[],latest_contexts:[],latest_agent_messages:[],latest_plans:[],settled_tool_streams:[],approval_mode_revision:0,latest_turn_start_id:null,steered_message_ids:[]} }
 beforeEach(() => {
   useUiStore.getState().beginProjectSwitch()
-  useUiStore.getState().commitProjectRoot('/project',useUiStore.getState().projectEpoch)
+  // I1 2026-10-06: use the same host identity admission as the workbench.
+  useUiStore.getState().commitProjectIdentity({project_root:'/project',generation:1},useUiStore.getState().projectEpoch)
   root=createRoot(el)
 })
 afterEach(async () => { await act(async()=>root.unmount()); vi.restoreAllMocks() })

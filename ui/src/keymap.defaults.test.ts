@@ -10,7 +10,9 @@ it('never assigns the new computer controls an existing default action binding',
     if (!binding) continue
     // Owner extension 11 (2026-10-02): these native modal dialogs are mutually
     // exclusive and capture Escape before globals; sharing dismissal is safe.
-    if (action.id === 'closeDesktopScreenshot' && binding === 'escape'
+    // I1: draft confirmation also captures dismissal; an open native dialog
+    // takes precedence so Escape cannot discard a background draft prompt.
+    if ((action.id === 'closeDesktopScreenshot' || action.id === 'cancelFileEdits') && binding === 'escape'
       && occupied.get(binding) === 'closeDesignPreview') continue
     expect(occupied.get(binding), `${action.id} conflicts at ${binding}`).toBeUndefined()
     occupied.set(binding, action.id)

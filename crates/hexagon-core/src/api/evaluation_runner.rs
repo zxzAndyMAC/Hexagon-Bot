@@ -115,6 +115,7 @@ impl Workbench {
     pub fn stop_evaluation_plan(&self, id: &str) -> Result<eval::EvaluationPlan, ApiError> {
         Ok(eval::plan::stop(
             &self.db,
+            &self.repo_root,
             id,
             eval::plan::PlanStopReason::OwnerStopped,
         )?)
@@ -560,13 +561,15 @@ pub(super) fn drive_evaluation(
             };
             let started = std::time::Instant::now();
             let outcome = if consumed > 0 {
-                let history = worker.evaluation_resume_history(&aid)?;
+                let resume_run = worker.active_run()?.map(|run| run.id);
+                let resume = worker.activation_resume(&aid, resume_run.as_deref(), None)?;
                 worker.run_turn_agent_with_history(
                     &aid,
-                    &instruction,
+                    &resume.instruction,
                     &[],
                     false,
-                    &history,
+                    &resume.history,
+                    Some(&resume),
                     false,
                 )?
             } else {

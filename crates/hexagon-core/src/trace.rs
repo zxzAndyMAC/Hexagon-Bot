@@ -667,6 +667,7 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "net_wait_exit",
     "provider_retry",
     "request_envelope",
+    "activation_observation",
     "agent_plan",
     "run_suspended",
     "sandbox_unavailable",
@@ -993,6 +994,7 @@ mod tests {
         // 本回合至少覆盖 request_envelope/provider_retry/instructions_degraded
         for want in [
             "request_envelope",
+            "activation_observation",
             "provider_retry",
             "instructions_degraded",
         ] {

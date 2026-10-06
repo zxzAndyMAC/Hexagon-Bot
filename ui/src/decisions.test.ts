@@ -1,6 +1,6 @@
 // ui-audit 票 02：键盘裁决守卫——作用域 / publish 禁键 / 双发防护。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { handlePendingKey, rejectReasonWithJudge, severityOf } from './decisions'
+import { handlePendingKey, kindTitleKey, rejectReasonWithJudge, severityOf } from './decisions'
 import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 
@@ -26,6 +26,12 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
   beforeEach(() => {
     useUiStore.setState({ modalScope: 'workbench', toasts: [] })
     vi.restoreAllMocks()
+  })
+
+  it('labels the original-task continuation consistently with its card, preserving ordinary stalls', () => {
+    expect(kindTitleKey(card({ kind: 'stall', payload: { source: 'activation_resume', retry: true } }))).toBe('cards.resumeWaiting')
+    expect(kindTitleKey(card({ kind: 'stall', payload: { branch: 'no_reply', retry: true } }))).toBe('cards.stall')
+    expect(kindTitleKey(card({ kind: 'permission', payload: { source: 'activation_resume' } }))).toBe('cards.ask')
   })
 
   it('非裁决键静默放行', async () => {

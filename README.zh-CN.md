@@ -81,6 +81,8 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 打开工作台后，在设置中配置模型服务，再通过项目向导选择目录、团队和流程。可以从一个验收要求明确的小任务开始，例如“为现有页面增加搜索，并补上测试”。
 
+关闭已编辑文件或切换项目前，未保存内容会提供保存、放弃、取消三种选择；进入设置页会保留脏稿。如果文件已在盘上改变，保存会保留盘上版本，等待你处理冲突。
+
 ### 数据与凭据
 
 项目文件、流程状态和轨迹保存在本机；模型请求与外部工具调用会把所需内容发送给你配置的服务。本机存储不等于所有模型推理都离线进行。
@@ -99,7 +101,8 @@ export PATH="$HOME/.cargo/bin:$PATH"
 | --- | --- |
 | `npm run dev` | 启动前端开发服务与桌面窗口。 |
 | `npm run check` | 检查 Rust 格式与 Clippy、架构规则、前端 lint 与类型、设计 token、多语言 key 和生成类型漂移。 |
-| `npm test` | 运行 Rust workspace 测试与前端 Vitest。 |
+| `npm test` | 运行 Rust workspace、前端 Vitest、浏览器运行时及平台电脑操作测试。 |
+| `npm run test:browser` | 准备固定版本浏览器运行时，运行本地边界与生命周期测试。 |
 | `npm run build` | 构建前端与 Rust release 产物；当前配置不生成桌面安装包。 |
 | `cargo test export_bindings` | 修改跨 IPC 的 Rust DTO 后，重新生成前端类型绑定。 |
 

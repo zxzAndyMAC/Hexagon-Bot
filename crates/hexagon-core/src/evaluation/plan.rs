@@ -38,7 +38,12 @@ pub enum PlanStopReason {
     ConfigurationBlocked,
 }
 
-pub(crate) fn stop(db: &Db, id: &str, reason: PlanStopReason) -> io::Result<EvaluationPlan> {
+pub(crate) fn stop(
+    db: &Db,
+    root: &std::path::Path,
+    id: &str,
+    reason: PlanStopReason,
+) -> io::Result<EvaluationPlan> {
     let started = std::time::Instant::now();
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)
@@ -52,6 +57,10 @@ pub(crate) fn stop(db: &Db, id: &str, reason: PlanStopReason) -> io::Result<Eval
     // Ticket 07 review: stopping must preserve unstarted coverage as facts.
     // In-flight runs are not relabelled or cancelled here (tickets 12/13).
     tx.execute("UPDATE evaluation_plan_runs SET state='not_run',reason=?2 WHERE plan_id=?1 AND state='planned'",rusqlite::params![id,code]).map_err(err)?;
+    // Ticket06 / 2026-10-06: stopped pairs kept an empty second-arm allowance
+    // forever. Hold the SAME host IMMEDIATE lock used by claim/before_claim;
+    // a UI status or a process-list observation cannot establish no claimant.
+    super::budget::finish_unstarted(db, root, &read(db, id)?)?;
     tx.commit().map_err(err)?;
     crate::diag::note(
         crate::diag::CLASS_JUDGE,

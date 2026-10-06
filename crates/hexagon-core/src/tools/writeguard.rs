@@ -69,39 +69,7 @@ fn targets(ctx: &ToolContext, paths: &[String]) -> Result<Vec<Target>, ToolError
 /// lived shells must finish/close before another writer proceeds (D09 review).
 pub(crate) fn repository_lock(ctx: &ToolContext) -> std::io::Result<File> {
     let started = std::time::Instant::now();
-    let result = (|| {
-        let dir = ctx.repo_root.join(".hexagon/write-locks");
-        let path = dir.join("repository.lock");
-        if [&dir, &path].iter().any(|p| {
-            p.symlink_metadata()
-                .is_ok_and(|m| m.file_type().is_symlink())
-        }) {
-            return Err(std::io::Error::other("write lock path is an alias"));
-        }
-        std::fs::create_dir_all(&dir)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)?;
-        // Reliability 15: concurrent fork/exec can briefly inherit a held
-        // flock descriptor until CLOEXEC closes it. Bound acquisition waiting;
-        // this retries no action and never refreshes approval evidence.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-        loop {
-            match file.try_lock() {
-                Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline =>
-                    std::thread::sleep(std::time::Duration::from_millis(5)),
-                Err(std::fs::TryLockError::WouldBlock) => return Err(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    "repository has an active writer; stop/wait for terminal sessions before writing")),
-                Err(std::fs::TryLockError::Error(error)) => return Err(error),
-            }
-        }
-        Ok(file)
-    })();
+    let result = repository_lock_for_root(&ctx.repo_root);
     crate::diag::note(
         if result.is_err() {
             crate::diag::CLASS_REJECT
@@ -122,6 +90,43 @@ pub(crate) fn repository_lock(ctx: &ToolContext) -> std::io::Result<File> {
         started,
     );
     result
+}
+
+/// Same host writer lease for owner edits and Agent writes.
+pub(crate) fn repository_lock_for_root(root: &Path) -> std::io::Result<File> {
+    let dir = root.join(".hexagon/write-locks");
+    let path = dir.join("repository.lock");
+    if [&dir, &path].iter().any(|p| {
+        p.symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+    }) {
+        return Err(std::io::Error::other("write lock path is an alias"));
+    }
+    std::fs::create_dir_all(&dir)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    // Reliability 15: concurrent fork/exec can briefly inherit a held
+    // flock descriptor until CLOEXEC closes it. Bound acquisition waiting;
+    // this retries no action and never refreshes approval evidence.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5))
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "repository has an active writer; stop/wait for terminal sessions before writing",
+            )),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
+    Ok(file)
 }
 
 fn locks(ctx: &ToolContext, _paths: &[String]) -> Result<Vec<File>, ToolError> {

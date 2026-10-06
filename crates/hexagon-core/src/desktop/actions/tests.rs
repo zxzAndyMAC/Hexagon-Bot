@@ -608,3 +608,66 @@ proptest! {
         prop_assert!(state.claim_lane(&caller,&lifecycle).is_err());
     }
 }
+
+// Benchmark I1: preview Stop did not cancel the executor that owned a real
+// role operation. Closing must retain its lease until completion is observed.
+#[test]
+fn closing_project_cancels_its_backend_and_waits_for_actual_drain() {
+    let backend = Arc::new(NoncooperativeBackend {
+        complete: AtomicBool::new(false),
+        cancelled: AtomicBool::new(false),
+        starts: AtomicUsize::new(0),
+    });
+    let controller = Arc::new(Controller {
+        backend: backend.clone(),
+        state: Mutex::new(State::default()),
+    });
+    let running = controller.clone();
+    let worker = std::thread::spawn(move || {
+        running.run(
+            owner("/old", "qa"),
+            &request("observe", None),
+            Duration::from_secs(2),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while backend.starts.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    {
+        let mut state = controller.state.lock().unwrap();
+        assert!(state.close_project(Path::new("/old")).is_err());
+        assert!(state.busy);
+        assert!(state.owner.is_some());
+        assert!(backend.cancelled.load(Ordering::SeqCst));
+    }
+    backend.complete.store(true, Ordering::SeqCst);
+    worker.join().unwrap().unwrap();
+    let mut state = controller.state.lock().unwrap();
+    state.outcome_unknown = true;
+    state.close_project(Path::new("/old")).unwrap();
+    assert!(state.owner.is_none());
+    assert!(!state.busy);
+    assert!(state.paused);
+    assert!(state.outcome_unknown);
+    assert!(state.snapshot.is_none());
+}
+
+proptest! {
+    #[test]
+    fn closing_never_releases_foreign_control_or_erases_unknown(unknown in any::<bool>(), busy in any::<bool>()) {
+        let mut state = State { owner: Some(owner("/old", "qa")), paused: false, busy, outcome_unknown: unknown, snapshot: Some("old".into()), ..State::default() };
+        prop_assert!(state.close_project(Path::new("/other")).is_ok());
+        prop_assert_eq!(state.owner.as_ref().map(|o|o.project.as_path()), Some(Path::new("/old")));
+        prop_assert!(!state.paused);
+        prop_assert_eq!(state.outcome_unknown, unknown);
+        prop_assert_eq!(state.busy, busy);
+        if !busy {
+            prop_assert!(state.close_project(Path::new("/old")).is_ok());
+            prop_assert!(state.owner.is_none());
+            prop_assert!(state.paused);
+            prop_assert_eq!(state.outcome_unknown, unknown);
+            prop_assert!(state.snapshot.is_none());
+        }
+    }
+}

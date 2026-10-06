@@ -13,7 +13,7 @@ use crate::trace::{EventKind, TraceError};
 use crate::turn::{self, TurnOutcome};
 use serde_json::json;
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -274,6 +274,8 @@ pub struct Workbench {
     /// 票 05：槽位表不外泄——壳层热刷新走 reload_providers()，
     /// 测试注入走 register_provider()，直改本字段的路已断（ADR 0053）。
     pub(crate) providers: HashMap<String, Arc<dyn ModelProvider>>,
+    /// 配置文档拥有的运行槽；register_provider 的显式注入不属于文档。
+    managed_provider_slots: HashSet<String>,
     pub creds: Arc<dyn crate::credentials::CredentialStore>,
     pub project_id: String,
     pub repo_root: PathBuf,
@@ -317,12 +319,19 @@ pub struct Workbench {
 
 impl Drop for Workbench {
     fn drop(&mut self) {
-        self.tasks.halt_all();
-        self.sessions.kill_all();
+        self.stop_owned_work();
     }
 }
 
 impl Workbench {
+    /// Benchmark I1: project replacement must halt children and owned processes
+    /// while both old handles remain valid. Reuse Drop's cleanup through the
+    /// facade; the shell must not reach into private session ownership.
+    pub fn stop_owned_work(&self) {
+        self.tasks.halt_all();
+        self.sessions.kill_all();
+    }
+
     /// 打开/初始化项目：db 落 `<dir>/.hexagon/state.db`，钉住包副本。
     pub fn open(
         dir: impl AsRef<Path>,
@@ -406,6 +415,7 @@ impl Workbench {
             db,
             registry,
             providers: HashMap::new(),
+            managed_provider_slots: HashSet::new(),
             creds: if external_services {
                 crate::credentials::active()
             } else {
@@ -453,14 +463,40 @@ impl Workbench {
     }
 
     /// 热刷新运行中的供应商注册（保存/删除/绑定变更后调）：
-    /// 清掉文档覆盖的槽再按现状重挂——文档外的槽位（测试注入的
-    /// ScriptedProvider）原样保留。
+    /// 撤掉上次文档拥有的槽再按单次快照重挂；显式注入原样保留。
     pub fn reload_providers(&mut self) {
+        let started = std::time::Instant::now();
         let doc = crate::provider_config::load().unwrap_or_default();
-        for slot in doc.slots.keys() {
-            self.providers.remove(slot);
+        // Competitor improvements 05 / V02 (2026-10-06): deleting only keys
+        // still present in the new document left removed suppliers executable.
+        // Ownership, not the new key set, decides what gets revoked. Explicit
+        // injection wins even for a same-named configured slot; replacing it
+        // during refresh would silently switch the caller's chosen supplier.
+        for slot in self.managed_provider_slots.drain() {
+            self.providers.remove(&slot);
         }
-        crate::provider_config::register_all(&mut self.providers, self.creds.clone());
+        let mut configured = HashMap::new();
+        crate::provider_config::register_document(&doc, &mut configured, self.creds.clone());
+        for (slot, provider) in configured {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                self.providers.entry(slot.clone())
+            {
+                entry.insert(provider);
+                self.managed_provider_slots.insert(slot);
+            } else {
+                crate::diag::note(
+                    crate::diag::CLASS_HOST,
+                    false,
+                    Some(&self.project_id),
+                    None,
+                    None,
+                    None,
+                    "provider_reload",
+                    &format!("preserve_explicit:{slot}"),
+                    started,
+                );
+            }
+        }
         // 票 03：web 搜索槽随 providers 文档热刷——配置变了即重建，
         // 未配置即 None（工具回报槽未配置而不是隐式失败）。
         self.websearch = crate::websearch::configured(self.creds.clone());
@@ -517,6 +553,7 @@ impl Workbench {
             db,
             registry,
             providers: HashMap::new(),
+            managed_provider_slots: HashSet::new(),
             creds: Arc::new(crate::credentials::MemoryStore::default()),
             project_id: crate::PROJECT_ID.into(),
             repo_root: dir.to_path_buf(),
@@ -555,6 +592,7 @@ impl Workbench {
     }
 
     pub fn register_provider(&mut self, slot: &str, p: Arc<dyn ModelProvider>) {
+        self.managed_provider_slots.remove(slot);
         self.providers.insert(slot.into(), p);
     }
 
@@ -903,14 +941,37 @@ impl Workbench {
             ));
         }
         if crate::cards::escalation_sub(&card) == crate::cards::EscalationSub::ContextOverflow {
-            let role = pv["role"].as_str().unwrap_or_default().to_string();
-            let resume_id = if agree {
-                let aid = match card.agent_id.as_deref() {
-                    Some(id) => id.to_string(),
-                    None => self.agent_by_role(&role)?,
-                };
-                self.instance_role(&aid)?;
-                Some(aid)
+            let started = std::time::Instant::now();
+            let missing = |reason: &str| {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&self.project_id),
+                    card.agent_id.as_deref(),
+                    None,
+                    Some(qid),
+                    "context_resume",
+                    reason,
+                    started,
+                );
+                ApiError::BadInput(format!("context overflow: {reason}"))
+            };
+            let resume = if agree {
+                let aid = card
+                    .agent_id
+                    .as_deref()
+                    .ok_or_else(|| missing("instance_missing"))?;
+                self.instance_role(aid)?;
+                let turn = pv["trigger_turn_id"]
+                    .as_i64()
+                    .filter(|id| *id > 0)
+                    .ok_or_else(|| missing("parent_turn_missing"))?;
+                let run = self.active_run()?.map(|run| run.id);
+                let resume = self.activation_resume(aid, run.as_deref(), Some(turn))?;
+                // I2 admission: the original context card remains the retry
+                // boundary until a model can actually enter the exact task.
+                self.turn_provider(aid)?;
+                Some(resume)
             } else {
                 None
             };
@@ -934,16 +995,22 @@ impl Workbench {
                     outcome: None,
                 });
             }
-            // 放行：以「继续」指令续跑一回合（上下文重建自带轻量裁剪）
-            // reliability 06: use the card owner, never another same-role peer.
-            let aid = resume_id.expect("agree resolves the instance before answering");
-            let input = self.source_resume_input(
-                &aid,
-                pv["trigger_turn_id"].as_i64(),
-                None,
-                "上下文撞限已由负责人放行。请接着完成未竟任务（上下文已重建+裁剪）。",
+            // I2 / V05: approving a real cap resumes its recorded task and
+            // observations. A generic nudge lost the question after cursor delivery.
+            let aid = card
+                .agent_id
+                .as_deref()
+                .expect("agree validated the instance");
+            let resume = resume.expect("agree validates the exact activation before answering");
+            let out = self.run_turn_agent_with_history(
+                aid,
+                &resume.instruction,
+                &[],
+                false,
+                &resume.history,
+                Some(&resume),
+                true,
             )?;
-            let out = self.run_turn_agent(&aid, &input, &[], false)?;
             return Ok(AdjudicateOutcome::Resumed {
                 resumed: true,
                 outcome: Some(format!("{out:?}")),
@@ -1088,6 +1155,9 @@ impl Workbench {
             subagent_provider: None,
             reads: Default::default(),
             manual_skill_invocations: Default::default(),
+            resume_from_turn_id: None,
+            activation_root_turn_id: None,
+            source_review_phase: false,
         }
     }
 
@@ -1276,7 +1346,7 @@ impl Workbench {
 
     /// ADR 0079: derive the shared scope from the real card, never client text.
     pub fn allow_project_permission(&self, question_id: &str) -> Result<(), ApiError> {
-        self.resolve_project_permission(question_id)?
+        self.resolve_project_permission(question_id, false)?
             .1
             .map_or(Ok(()), Err)
     }
@@ -1284,11 +1354,15 @@ impl Workbench {
     fn resolve_project_permission(
         &self,
         question_id: &str,
+        continue_work: bool,
     ) -> Result<(Vec<crate::cards::Card>, Option<ApiError>), ApiError> {
         let proposal = permission_shape_suggestion(&self.db, &self.project_id, question_id)?
             .ok_or_else(|| ApiError::BadInput("project permission unavailable".into()))?;
         let card = crate::cards::get(&self.db, question_id)?;
-        let first_error = self
+        if continue_work {
+            self.permission_resume_admission(&card)?;
+        }
+        let mut first_error = self
             .answer_permission(question_id, true, Some(&proposal.shape), "project_shared")
             .err();
         if crate::cards::get(&self.db, question_id)?.state != crate::cards::CardState::Answered {
@@ -1312,6 +1386,26 @@ impl Workbench {
                 continue;
             };
             let ctx = self.ctx_for(aid, None);
+            // I2 admission / ADR0079: a shared grant does not make a peer's
+            // combined continuation enterable. Keep a matching unavailable
+            // peer queued; independent/nonmatching cards retain their contract.
+            if continue_work {
+                if let Some(action_id) = card.payload["action_id"].as_str() {
+                    let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
+                    if crate::permissions::matches_project_permission(
+                        &self.db,
+                        &ctx,
+                        &action.tool,
+                        &action.input,
+                        &rule_id,
+                    )? {
+                        if let Err(error) = self.permission_resume_admission(&card) {
+                            first_error.get_or_insert(error);
+                            continue;
+                        }
+                    }
+                }
+            }
             let started = std::time::Instant::now();
             let outcome = self.registry.resolve(
                 &self.db,
@@ -1352,7 +1446,7 @@ impl Workbench {
     }
 
     pub fn allow_project_permission_and_continue(&self, question_id: &str) -> Result<(), ApiError> {
-        let (cards, mut first_error) = self.resolve_project_permission(question_id)?;
+        let (cards, mut first_error) = self.resolve_project_permission(question_id, true)?;
         let mut resumed = std::collections::HashSet::new();
         for card in cards {
             if resumed.insert(card.agent_id.clone()) {
@@ -1374,14 +1468,17 @@ impl Workbench {
         scope: &str,
     ) -> Result<(), ApiError> {
         let card = crate::cards::get(&self.db, question_id)?;
+        // Owner 2026-10-06 / I2: allow+continue is admitted before its effect;
+        // denial is an independent decision and must take effect immediately.
+        if allow {
+            self.permission_resume_admission(&card)?;
+        }
         self.answer_permission(question_id, allow, remember_shape, scope)?;
         self.continue_permission_card(card)
     }
 
     fn continue_permission_card(&self, card: crate::cards::Card) -> Result<(), ApiError> {
         use rusqlite::OptionalExtension;
-        // Live acceptance 2026-10-01: approval executed the tool but silently left
-        // the agent idle. Restore observations, never replay the approved effect.
         let aid = card
             .agent_id
             .ok_or_else(|| ApiError::BadInput("permission has no owner".into()))?;
@@ -1389,117 +1486,63 @@ impl Workbench {
             return Ok(());
         };
         let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
-        let request_id: Option<i64> = self.db.conn().query_row(
-            "SELECT request_id FROM tool_actions WHERE project_id=?1 AND id=?2",
-            rusqlite::params![self.project_id, action_id],
-            |r| r.get(0),
-        )?;
         let active = self.active_run()?.map(|r| r.id);
-        if action.stage_run_id != active {
-            return Ok(());
-        }
         let started = std::time::Instant::now();
-        // Fullstack QA 2026-10-05: legacy dispatch markers had no stage ID;
-        // requiring an exact run silently restored the entire stage instead.
-        // False negative costs a manual follow-up; false positive revives an
-        // ended task with side effects. Prefer no automatic continuation when
-        // its parent turn is missing or a newer independent dispatch replaced it.
-        let parent: Option<(i64, String)> = self
+        let parent: Option<i64> = self
             .db
             .conn()
             .query_row(
-                "SELECT id,json_extract(payload,'$.instruction') FROM events
-             WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started'
-               AND stage_run_id IS ?3 AND id<=?4
-               AND COALESCE(json_extract(payload,'$.subagent'),0)=0
-             ORDER BY id DESC LIMIT 1",
-                rusqlite::params![self.project_id, aid, action.stage_run_id, request_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                "SELECT e.id FROM tool_actions a JOIN events r ON r.id=a.request_id
+             JOIN events e ON e.id=COALESCE(json_extract(r.payload,'$.turn_id'),
+               (SELECT MAX(t.id) FROM events t WHERE t.project_id=a.project_id
+                AND t.agent_id=a.agent_id AND t.stage_run_id IS a.stage_run_id
+                AND t.kind='turn_started' AND t.id<a.request_id))
+             WHERE a.project_id=?1 AND a.id=?2 AND a.agent_id=?3
+             AND r.project_id=a.project_id AND r.agent_id=a.agent_id
+             AND r.stage_run_id IS a.stage_run_id
+             AND json_extract(r.payload,'$.kind')='request_envelope'
+             AND COALESCE(json_extract(r.payload,'$.subagent'),0)=0",
+                rusqlite::params![self.project_id, action_id, aid],
+                |r| r.get(0),
             )
             .optional()?;
-        let superseded: bool = self.db.conn().query_row(
-            "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
-             AND kind='fastpath_dispatched' AND id>?3)",
-            rusqlite::params![self.project_id, aid, request_id],
-            |r| r.get(0),
-        )?;
-        let reason = if request_id.is_none() {
-            Some("action_request_missing")
-        } else if parent.is_none() {
-            Some("parent_turn_missing")
-        } else if superseded {
-            Some("dispatch_superseded")
-        } else {
-            None
+        // I2 / V05, 2026-10-06: stage membership is not task identity. The
+        // earliest turn/zero fallback imported an unrelated task. Missing proof
+        // costs a manual follow-up; guessing can revive an obsolete side effect.
+        if action.stage_run_id != active || parent.is_none() {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                Some(&aid),
+                action.stage_run_id.as_deref(),
+                Some(action_id),
+                "permission_resume",
+                "parent_request_scope_missing",
+                started,
+            );
+            return Ok(());
+        }
+        let resume = match self.activation_resume(&aid, active.as_deref(), parent) {
+            Ok(resume) => resume,
+            Err(ApiError::BadInput(_)) => return Ok(()),
+            Err(error) => return Err(error),
         };
-        if let Some(reason) = reason {
-            crate::diag::note(
-                crate::diag::CLASS_REJECT,
-                true,
-                Some(&self.project_id),
-                Some(&aid),
-                action.stage_run_id.as_deref(),
-                Some(action_id),
-                "permission_resume",
-                reason,
-                started,
-            );
-            return Ok(());
+        if let Err(error) = self.turn_provider(&aid) {
+            if matches!(error, ApiError::NoProvider(_)) {
+                self.queue_activation_resume(&aid, active.as_deref(), &resume)?;
+            }
+            return Err(error);
         }
-        let (turn_id, instruction) = parent.expect("parent checked above");
-        let stage_floor: Option<i64> = self.db.conn().query_row(
-            "SELECT MAX(id) FROM events WHERE project_id=?1
-             AND kind='stage_started' AND stage_run_id IS ?2 AND id<=?3",
-            rusqlite::params![self.project_id, action.stage_run_id, request_id],
-            |r| r.get(0),
-        )?;
-        if active.is_some() && stage_floor.is_none() {
-            crate::diag::note(
-                crate::diag::CLASS_REJECT,
-                true,
-                Some(&self.project_id),
-                Some(&aid),
-                action.stage_run_id.as_deref(),
-                Some(action_id),
-                "permission_resume",
-                "stage_boundary_missing",
-                started,
-            );
-            return Ok(());
-        }
-        // Only null markers inside this stage's lifetime are upgrade-compatible.
-        // No-marker automatic turns retain their stage-local history, never 0.
-        let boundary: i64 = self.db.conn().query_row(
-            "SELECT COALESCE(MAX(id),(SELECT MIN(id) FROM events WHERE project_id=?1
-             AND agent_id=?2 AND kind='turn_started' AND stage_run_id IS ?3 AND id BETWEEN ?5 AND ?4
-             AND COALESCE(json_extract(payload,'$.subagent'),0)=0))
-             FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='fastpath_dispatched'
-             AND id BETWEEN ?5 AND ?4 AND (stage_run_id IS ?3 OR stage_run_id IS NULL)",
-            rusqlite::params![
-                self.project_id,
-                aid,
-                action.stage_run_id,
-                request_id,
-                stage_floor.unwrap_or(0)
-            ],
-            |r| r.get(0),
-        )?;
-        crate::diag::note(
-            crate::diag::CLASS_JUDGE,
+        self.run_turn_agent_with_history(
+            &aid,
+            &resume.instruction,
+            &[],
             false,
-            Some(&self.project_id),
-            Some(&aid),
-            action.stage_run_id.as_deref(),
-            Some(&boundary.to_string()),
-            "permission_resume",
-            "activation_boundary_restored",
-            started,
-        );
-        let history =
-            self.recorded_activation_history_for_run(&aid, boundary, active.as_deref())?;
-        let input =
-            self.source_resume_input(&aid, Some(turn_id), active.as_deref(), &instruction)?;
-        self.run_turn_agent_with_history(&aid, &input, &[], false, &history, true)?;
+            &resume.history,
+            Some(&resume),
+            true,
+        )?;
         Ok(())
     }
 
@@ -1536,44 +1579,55 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
-        self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], true)
+        self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], None, true)
     }
 
-    /// 2026-09-30: recovery nudges replaced /source and silently dropped its gate.
-    /// Restore only the card's exact turn, or the latest parent turn of its run;
-    /// never infer a mode from arbitrary conversation text or another agent.
-    fn source_resume_input(
+    fn permission_resume_admission(&self, card: &crate::cards::Card) -> Result<(), ApiError> {
+        let aid = card
+            .agent_id
+            .as_deref()
+            .ok_or_else(|| ApiError::BadInput("permission has no owner".into()))?;
+        self.instance_role(aid)?;
+        self.turn_provider(aid).map(|_| ())
+    }
+
+    /// I2 admission (2026-10-06): use the same resolver before owner effects and
+    /// in the real dispatch. NoProvider is configuration failure, not a completed
+    /// recovery or a network timeout; normal configured default remains legal.
+    fn turn_provider(
         &self,
         aid: &str,
-        turn_id: Option<i64>,
-        run_id: Option<&str>,
-        input: &str,
-    ) -> Result<String, ApiError> {
-        use rusqlite::OptionalExtension;
-        if turn_id.is_none() && run_id.is_none() {
-            return Ok(input.to_string());
+    ) -> Result<(Option<String>, Arc<dyn ModelProvider>), ApiError> {
+        let started = std::time::Instant::now();
+        let slot: Option<String> = self.db.conn().query_row(
+            "SELECT model_slot FROM agents WHERE project_id=?1 AND id=?2",
+            rusqlite::params![self.project_id, aid],
+            |r| r.get(0),
+        )?;
+        let provider = crate::provider_config::resolve_slot(
+            &self.providers,
+            slot.as_deref().unwrap_or("default"),
+        );
+        match provider {
+            Some(provider) => Ok((slot, provider.clone())),
+            None => {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&self.project_id),
+                    Some(aid),
+                    self.active_run()?.as_ref().map(|run| run.id.as_str()),
+                    None,
+                    "turn_admission",
+                    "provider_unavailable",
+                    started,
+                );
+                Err(ApiError::NoProvider(slot.unwrap_or_default()))
+            }
         }
-        let required = self
-            .db
-            .conn()
-            .query_row(
-                "SELECT COALESCE(json_extract(payload,'$.source_mode'),0) FROM events
-             WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started'
-               AND (?3 IS NULL OR id=?3) AND (?4 IS NULL OR stage_run_id=?4)
-               AND (?3 IS NOT NULL OR COALESCE(json_extract(payload,'$.subagent'),0)=0)
-             ORDER BY id DESC LIMIT 1",
-                rusqlite::params![self.project_id, aid, turn_id, run_id],
-                |r| r.get::<_, bool>(0),
-            )
-            .optional()?
-            .unwrap_or(false);
-        Ok(if required {
-            format!("/source {input}")
-        } else {
-            input.to_string()
-        })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_turn_agent_with_history(
         &self,
         aid: &str,
@@ -1581,6 +1635,7 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
         history: &[crate::provider::Message],
+        resume: Option<&evaluation_resume::ActivationResume>,
         followup: bool,
     ) -> Result<TurnOutcome, ApiError> {
         // reliability 06: resumed work retains its stored instance ID. Re-read
@@ -1610,22 +1665,26 @@ impl Workbench {
         }
         let run = self.active_run()?;
         let ctx = self.ctx_for(aid, run.as_ref().map(|r| r.id.clone()));
-        let slot: Option<String> =
-            self.db
-                .conn()
-                .query_row("SELECT model_slot FROM agents WHERE id=?1", [aid], |r| {
-                    r.get(0)
-                })?;
+        let (slot, provider) = self.turn_provider(aid)?;
         // diagnostic-records 票 03：槽未绑 → resolve_slot 落 default 是正常回退，
         // 记 Debug 并说清哪个槽回退了。只在解析成功后记（没绑到任何东西是
         // NoProvider，不是回退）。
         let slot_name = slot.as_deref().unwrap_or("default").to_string();
         let started = std::time::Instant::now();
-        let provider = crate::provider_config::resolve_slot(&self.providers, &slot_name)
-            .ok_or_else(|| ApiError::NoProvider(slot.clone().unwrap_or_default()))?;
         // 子代理线程派遣要移动 provider——父回合解析出的就是子代理的模型
         // （票 04：同主对话模型，不开新槽）。Arc 克隆后注入 ctx。
         let mut ctx = ctx;
+        ctx.resume_from_turn_id = resume.map(|resume| resume.turn_id);
+        ctx.activation_root_turn_id = resume.map(|resume| resume.root_turn_id);
+        ctx.source_review_phase = resume.is_some_and(|resume| resume.source_reviewed);
+        if let Some(resume) = resume {
+            // I2/I3: same validated stable root, no stage scan or model todo text.
+            // The turn kernel's subsequent begin is idempotent for this root.
+            let key = crate::subagent::activation_key(&ctx);
+            ctx.tasks.begin_activation(&key);
+            ctx.tasks
+                .restore_operations(&key, &resume.task_operations)?;
+        }
         ctx.subagent_provider = Some(provider.clone());
         if crate::provider_config::fell_back_to_default(&self.providers, &slot_name) {
             crate::diag::slot_fallback(
@@ -1824,7 +1883,7 @@ impl Workbench {
             run_id.as_deref(),
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
-        self.run_turn_agent_with_history(aid, input, attachments, true, &[], followup)
+        self.run_turn_agent_with_history(aid, input, attachments, true, &[], None, followup)
     }
 
     /// Dispatch a persisted owner message after the desktop workbench queue drains.
@@ -2848,39 +2907,30 @@ impl Workbench {
         Ok(orchestra::skip(&self.db, &self.project_id, self.pack()?)?)
     }
 
-    /// 恢复中断的阶段 run（票 37）：负责人按「继续」重激活。
-    /// 票 NR-03：恢复即重触发——恢复卡携的归属 agent 自动起新回合；
-    /// 原始指令上下文靠「游标没推进」自然重读（首个模型响应没到，
-    /// 简报 cursor 未消费，原指令仍待在 unread 段）。卡无 agent
-    /// （悬空 run）→ 解锁但不重启。重触发失败只留 warn——恢复本身
-    /// 已完成，不回滚解锁状态。
+    /// Resume the exact interrupted activation. Preflight its observations before
+    /// unlocking: an unknown effect must keep its recovery/reconciliation boundary.
     pub fn recover_run(&self, run_id: &str) -> Result<(), ApiError> {
-        // 先读卡再恢复——answer_queued_where 销卡后归属就读不到了。
         let agent = orchestra::recovery_agent(&self.db, &self.project_id, run_id)?;
+        let resume = agent
+            .as_deref()
+            .map(|aid| {
+                self.instance_role(aid)?;
+                let resume = self.activation_resume(aid, Some(run_id), None)?;
+                self.turn_provider(aid)?;
+                Ok::<_, ApiError>(resume)
+            })
+            .transpose()?;
         orchestra::recover_run(&self.db, &self.project_id, run_id)?;
-        if let Some(aid) = agent {
-            match self
-                .db
-                .conn()
-                .query_row("SELECT role FROM agents WHERE id=?1", [&aid], |r| {
-                    r.get::<_, String>(0)
-                }) {
-                Ok(_) => {
-                    let input = self.source_resume_input(
-                        &aid,
-                        None,
-                        Some(run_id),
-                        crate::turn::RECOVERY_NUDGE,
-                    )?;
-                    // 按卡上 agent_id 精确重触发（同名角色的别的 Agent 不替班）。
-                    if let Err(e) = self.run_turn_agent(&aid, &input, &[], false) {
-                        log::warn!("retrigger after recover failed: agent={aid} run={run_id}: {e}");
-                    }
-                }
-                Err(e) => {
-                    log::warn!("retrigger after recover skipped: agent {aid} role lookup: {e}")
-                }
-            }
+        if let (Some(aid), Some(resume)) = (agent, resume) {
+            self.run_turn_agent_with_history(
+                &aid,
+                &resume.instruction,
+                &[],
+                false,
+                &resume.history,
+                Some(&resume),
+                true,
+            )?;
         }
         Ok(())
     }
@@ -3719,6 +3769,15 @@ impl Workbench {
     pub fn stall_retry(&self, qid: &str) -> Result<StallTick, ApiError> {
         use crate::stallwatch::Branch;
         let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Stall)?;
+        // I2 corruption regression: a host packet with a damaged source marker
+        // once fell through to generic history-free retrigger. Rejection costs
+        // owner correction; guessing loses confirmed facts/authority boundaries.
+        if card.payload.get("source").is_some()
+            || card.payload.get("trigger_turn_id").is_some()
+            || card.payload.get("activation_root_turn_id").is_some()
+        {
+            return self.retry_activation_resume(&card);
+        }
         let p = &card.payload;
         if p["retry"] != json!(true) {
             return Err(ApiError::BadInput("this stall card offers no retry".into()));
@@ -4346,6 +4405,10 @@ pub fn desktop_preview(
 }
 pub fn desktop_preview_stop() -> Result<(), String> {
     crate::desktop::preview::stop()
+}
+/// Project leave stops the executor which owns the old project's operation.
+pub fn desktop_close_project(root: &Path) -> Result<(), String> {
+    crate::desktop::actions::close_project(root)
 }
 pub fn desktop_preview_focus(
     target: &crate::desktop::preview::NativePreviewTarget,

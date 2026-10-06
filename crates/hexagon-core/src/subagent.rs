@@ -15,7 +15,7 @@
 //! - mcp:* 勾选集只在本次派遣生效：不写授权表、不沉淀、不带到下一次。
 //!
 //! 任务清单（票 07）挂同一模块：它只为「父代理派了什么活/收回什么」服务，
-//! 随激活生灭，不碰阶段指针，不是第二个后台任务系统。
+//! 同 root 续接保留，确认的手建待办由既有工具回执恢复；不碰阶段指针。
 
 use crate::db::Db;
 use crate::provider::ModelProvider;
@@ -57,12 +57,29 @@ pub struct Scope {
 
 // ---------- 激活任务清单（票 07）----------
 
-/// 任务键 = 激活标识：阶段 run 在场用 run id（同一激活跨回合共享），
-/// 快速通道用 agent id（该 Agent 当前激活）。
+/// Benchmark I3 / ticket 04: a stage is shared by parents; a resume turn is
+/// not a new activation. The host validates and supplies the stable root.
+/// None is reserved for direct host/test calls, never substituted with a parent id.
 pub fn activation_key(ctx: &ToolContext) -> String {
-    ctx.stage_run_id
-        .clone()
-        .unwrap_or_else(|| ctx.agent_id.clone())
+    json!([
+        ctx.project_id,
+        ctx.agent_id,
+        ctx.stage_run_id,
+        ctx.activation_root_turn_id
+    ])
+    .to_string()
+}
+
+fn same_parent(a: &str, b: &str) -> bool {
+    match (
+        serde_json::from_str::<Value>(a),
+        serde_json::from_str::<Value>(b),
+    ) {
+        (Ok(Value::Array(a)), Ok(Value::Array(b))) if a.len() == 4 && b.len() == 4 => {
+            a[0] == b[0] && a[1] == b[1]
+        }
+        _ => a == b, // Existing internal direct-call keys remain isolated.
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,6 +101,8 @@ struct Task {
     error: Option<String>,
     halt: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
+    worker_pending: bool,
+    retired: bool,
 }
 
 /// 激活内任务清单。`Clone` 共享同一内表——ctx 各层克隆看到的
@@ -104,16 +123,296 @@ pub struct Dispatched {
 }
 
 impl TaskBoard {
-    /// 新激活起跑清场：该键下残留条目 halt + 清空。
-    /// 「激活结束清单随之清空」的落点——激活边界就是回合起跑线：
-    /// 一次激活里可以开多回合吗？当前实现每回合即一次激活派发单位，
-    /// 清在回合起跑线保守且可观测（票 07：不留到下一个激活）。
+    /// Same-root resumes retain their board. A fresh root retires only this
+    /// parent's old board; a halt request must not free a live worker's slot.
     pub fn begin_activation(&self, key: &str) {
+        self.reap_finished();
         let mut tasks = self.inner.lock().unwrap();
-        for t in tasks.iter_mut().filter(|t| t.key == key) {
+        for t in tasks
+            .iter_mut()
+            .filter(|t| t.key != key && same_parent(&t.key, key))
+        {
             t.halt.store(true, Ordering::Relaxed);
+            t.retired = true;
         }
-        tasks.retain(|t| t.key != key);
+        tasks.retain(|t| !t.retired || Self::in_flight(t));
+    }
+
+    fn in_flight(t: &Task) -> bool {
+        t.kind == TaskKind::Subagent
+            && (t.status == "running"
+                || t.worker_pending && t.handle.as_ref().is_none_or(|h| !h.is_finished()))
+    }
+
+    /// Only join proven finished workers, outside the board lock. Publishing a
+    /// result precedes thread destructors, so result status alone is insufficient.
+    fn reap_finished(&self) {
+        let handles = {
+            let mut tasks = self.inner.lock().unwrap();
+            tasks
+                .iter_mut()
+                .filter_map(|t| {
+                    if t.handle.as_ref().is_some_and(|h| h.is_finished()) {
+                        t.worker_pending = false;
+                        Some((t.key.clone(), t.id.clone(), t.handle.take().unwrap()))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        for (key, id, handle) in handles {
+            if handle.join().is_err() {
+                self.finish(
+                    &key,
+                    &id,
+                    "failed",
+                    None,
+                    Some("child worker panicked".into()),
+                );
+            }
+        }
+        self.inner
+            .lock()
+            .unwrap()
+            .retain(|t| !t.retired || Self::in_flight(t));
+    }
+
+    /// Confirmed receipts only; validation and application share this parser.
+    /// I3 fail-closed: refusing an incomplete chain costs one investigation;
+    /// inventing a completed child hides a lost task. Never replay unknown work.
+    fn restored_tasks(operations: &[(Value, Value)]) -> Result<Vec<Task>, ToolError> {
+        let mut restored: Vec<Task> = Vec::new();
+        for (input, output) in operations {
+            if input["host_tool"] == "subagent" {
+                // I2/I3 Spec sibling 2026-10-06: native refusals succeed as
+                // model feedback but do not allocate a child. Requiring their
+                // task_id blocked resume; ignoring dispatched:false instead
+                // accepted contradictory fake done receipts. Accept only the
+                // three producer contracts, retaining the input task gate.
+                // Fail closed: one investigation is cheaper than invented
+                // completion hiding an unfinished task. Historical feedback
+                // stays in tool_actions/history; this only projects the board.
+                if output["dispatched"] == false {
+                    let expected = match output["reason"].as_str() {
+                        Some("capacity full") => json!({
+                            "dispatched":false,"reason":"capacity full","running":MAX_CHILDREN
+                        }),
+                        Some("parent agent sleeping") => {
+                            json!({"dispatched":false,"reason":"parent agent sleeping"})
+                        }
+                        Some("subagents cannot dispatch") => {
+                            json!({"dispatched":false,"reason":"subagents cannot dispatch"})
+                        }
+                        _ => {
+                            return Err(ToolError::Exec(
+                                "unknown confirmed dispatch refusal".into(),
+                            ))
+                        }
+                    };
+                    if output != &expected
+                        || !input["task"]
+                            .as_str()
+                            .is_some_and(|task| !task.trim().is_empty())
+                    {
+                        return Err(ToolError::Exec(
+                            "confirmed undispatched child receipt invalid".into(),
+                        ));
+                    }
+                    continue;
+                }
+                let id = crate::tools::str_arg(output, "task_id")?;
+                let title = input["title"]
+                    .as_str()
+                    .or(input["task"].as_str())
+                    .ok_or_else(|| ToolError::Exec("confirmed child missing task".into()))?;
+                let status = match output["status"].as_str() {
+                    Some("done") => "done",
+                    Some("failed") => "failed",
+                    Some("stopped") => "stopped",
+                    // Dispatch success proves acceptance, not final child completion.
+                    Some("running" | "interrupted") => "interrupted",
+                    _ => return Err(ToolError::Exec("confirmed child status invalid".into())),
+                };
+                if !restored.iter().any(|t| t.id == id) {
+                    restored.push(Task {
+                        key: String::new(),
+                        id: id.into(),
+                        title: title.into(),
+                        kind: TaskKind::Subagent,
+                        status,
+                        result: output.get("result").cloned(),
+                        error: if status == "interrupted" {
+                            Some("child outcome unknown after restart; not redispatched".into())
+                        } else {
+                            output["error"].as_str().map(Into::into)
+                        },
+                        halt: Arc::new(AtomicBool::new(false)),
+                        handle: None,
+                        worker_pending: false,
+                        retired: false,
+                    });
+                }
+                continue;
+            }
+            if input.get("host_tool").is_some_and(|v| v != "tasks") {
+                return Err(ToolError::Exec("invalid confirmed task tool".into()));
+            }
+            match input["action"].as_str() {
+                Some("create") => {
+                    let id = crate::tools::str_arg(output, "task_id")?;
+                    let title = crate::tools::str_arg(input, "title")?;
+                    if !restored.iter().any(|t| t.id == id) {
+                        restored.push(Task {
+                            key: String::new(),
+                            id: id.into(),
+                            title: title.into(),
+                            kind: TaskKind::Manual,
+                            status: "open",
+                            result: None,
+                            error: None,
+                            halt: Arc::new(AtomicBool::new(false)),
+                            handle: None,
+                            worker_pending: false,
+                            retired: false,
+                        });
+                    }
+                }
+                Some(op @ ("close" | "stop"))
+                    if output[if op == "close" { "closed" } else { "stopped" }] == true =>
+                {
+                    let id = crate::tools::str_arg(input, "task_id")?;
+                    let Some(task) = restored.iter_mut().find(|t| t.id == id) else {
+                        return Err(ToolError::Exec(
+                            "confirmed task operation refers to an unrestored child".into(),
+                        ));
+                    };
+                    if op == "close" && task.kind != TaskKind::Manual {
+                        return Err(ToolError::Exec(
+                            "confirmed close cannot complete a child".into(),
+                        ));
+                    }
+                    if task.status == "open"
+                        || op == "stop" && matches!(task.status, "interrupted" | "failed")
+                    {
+                        task.status = if op == "close" { "done" } else { "stopped" };
+                    }
+                }
+                Some("list") => {
+                    // I3 Spec review 2026-10-06: a parent's successful list is a
+                    // durable receipt, not merely UI output. Ignoring it lost
+                    // done/result/citations after restart. Only a registered
+                    // child can gain a terminal fact; in_flight never proves
+                    // completion or historical OS cleanup. A false negative
+                    // costs an investigation; a false positive hides lost work.
+                    let entries = output["tasks"].as_array().ok_or_else(|| {
+                        ToolError::Exec("confirmed task list missing entries".into())
+                    })?;
+                    for entry in entries {
+                        if entry["kind"] != "subagent" {
+                            continue;
+                        }
+                        let status = match entry["status"].as_str() {
+                            Some("done") => "done",
+                            Some("failed") => "failed",
+                            Some("stopped") => "stopped",
+                            _ => continue,
+                        };
+                        let Some(task) = restored.iter_mut().find(|task| {
+                            task.kind == TaskKind::Subagent
+                                && entry["id"].as_str() == Some(task.id.as_str())
+                                && task.status == "interrupted"
+                        }) else {
+                            continue;
+                        };
+                        task.status = status;
+                        task.result = entry.get("result").cloned();
+                        task.error = entry["error"].as_str().map(Into::into);
+                    }
+                }
+                Some("close" | "stop") => {}
+                _ => return Err(ToolError::Exec("invalid confirmed task operation".into())),
+            }
+        }
+        Ok(restored)
+    }
+
+    pub(crate) fn validate_operations(operations: &[(Value, Value)]) -> Result<(), ToolError> {
+        Self::restored_tasks(operations).map(|_| ())
+    }
+
+    /// Restore the validated host root chain, never history prose or tool calls.
+    pub(crate) fn restore_operations(
+        &self,
+        key: &str,
+        operations: &[(Value, Value)],
+    ) -> Result<(), ToolError> {
+        let started = std::time::Instant::now();
+        let restored = Self::restored_tasks(operations)?;
+        let confirmed_not_dispatched = operations.iter().any(|(input, output)| {
+            input["host_tool"] == "subagent" && output["dispatched"] == false
+        });
+        let mut confirmed_terminal = false;
+        let mut max_seq = 0;
+        let mut tasks = self.inner.lock().unwrap();
+        for mut task in restored {
+            if let Some(seq) = task
+                .id
+                .strip_prefix("task-")
+                .and_then(|n| n.parse::<u64>().ok())
+            {
+                max_seq = max_seq.max(seq);
+            }
+            if let Some(current) = tasks.iter_mut().find(|t| t.key == key && t.id == task.id) {
+                // I3 Spec: repeated recovery can extend the confirmed chain.
+                // Fill an unknown restored child, never replace a live worker,
+                // manual entry, or already published terminal receipt.
+                if current.kind == TaskKind::Subagent
+                    && current.status == "interrupted"
+                    && current.handle.is_none()
+                    && !current.worker_pending
+                    && task.kind == TaskKind::Subagent
+                    && matches!(task.status, "done" | "failed" | "stopped")
+                {
+                    current.status = task.status;
+                    current.result = task.result;
+                    current.error = task.error;
+                    confirmed_terminal = true;
+                }
+                continue;
+            }
+            confirmed_terminal |= task.kind == TaskKind::Subagent
+                && matches!(task.status, "done" | "failed" | "stopped");
+            task.key = key.into();
+            tasks.push(task);
+        }
+        let mut seq = self.seq.lock().unwrap();
+        *seq = (*seq).max(max_seq);
+        drop(seq);
+        drop(tasks);
+        if confirmed_terminal || confirmed_not_dispatched {
+            let identity = serde_json::from_str::<Value>(key).ok();
+            for code in [
+                confirmed_terminal.then_some("confirmed_terminal"),
+                confirmed_not_dispatched.then_some("confirmed_not_dispatched"),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                crate::diag::note(
+                    crate::diag::CLASS_HOST,
+                    false,
+                    identity.as_ref().and_then(|value| value[0].as_str()),
+                    identity.as_ref().and_then(|value| value[1].as_str()),
+                    Some(key),
+                    None,
+                    "task_receipt_restore",
+                    code,
+                    started,
+                );
+            }
+        }
+        Ok(())
     }
 
     /// 手建条目（父代理的「待办」标记）。返回任务 id。
@@ -129,6 +428,8 @@ impl TaskBoard {
             error: None,
             halt: Arc::new(AtomicBool::new(false)),
             handle: None,
+            worker_pending: false,
+            retired: false,
         });
         id
     }
@@ -136,10 +437,11 @@ impl TaskBoard {
     /// 子代理派遣登记（容量闸内聚在锁里：查数与落位同一临界区，
     /// 并发派遣不会越过上限）。满 → None。
     pub fn dispatch(&self, key: &str, title: &str) -> Option<Dispatched> {
+        self.reap_finished();
         let mut tasks = self.inner.lock().unwrap();
         let running = tasks
             .iter()
-            .filter(|t| t.key == key && t.kind == TaskKind::Subagent && t.status == "running")
+            .filter(|t| same_parent(&t.key, key) && Self::in_flight(t))
             .count();
         if running >= MAX_CHILDREN {
             return None;
@@ -158,6 +460,8 @@ impl TaskBoard {
             error: None,
             halt: halt.clone(),
             handle: None,
+            worker_pending: false,
+            retired: false,
         });
         Some(Dispatched {
             id,
@@ -167,23 +471,37 @@ impl TaskBoard {
         })
     }
 
-    pub fn attach(&self, id: &str, handle: std::thread::JoinHandle<()>) {
+    pub fn attach(&self, key: &str, id: &str, handle: std::thread::JoinHandle<()>) {
         let mut tasks = self.inner.lock().unwrap();
-        if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
+        if let Some(t) = tasks.iter_mut().find(|t| t.key == key && t.id == id) {
+            t.worker_pending = true;
             t.handle = Some(handle);
+        }
+    }
+
+    fn mark_worker_pending(&self, key: &str, id: &str) {
+        if let Some(t) = self
+            .inner
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|t| t.key == key && t.id == id)
+        {
+            t.worker_pending = true;
         }
     }
 
     /// 收尾：线程与内联路径同一出口。
     pub fn finish(
         &self,
+        key: &str,
         id: &str,
         status: &'static str,
         result: Option<Value>,
         error: Option<String>,
     ) {
         let mut tasks = self.inner.lock().unwrap();
-        if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
+        if let Some(t) = tasks.iter_mut().find(|t| t.key == key && t.id == id) {
             t.status = status;
             t.result = result;
             t.error = error;
@@ -198,7 +516,11 @@ impl TaskBoard {
             return false;
         };
         t.halt.store(true, Ordering::Relaxed);
-        if t.kind == TaskKind::Manual && t.status == "open" {
+        if t.kind == TaskKind::Manual && t.status == "open"
+            || t.kind == TaskKind::Subagent
+                && !Self::in_flight(t)
+                && matches!(t.status, "failed" | "interrupted")
+        {
             t.status = "stopped";
         }
         true
@@ -219,6 +541,7 @@ impl TaskBoard {
 
     /// 该激活的任务视图（父代理的工具结果；测试读回同一份）。
     pub fn list(&self, key: &str) -> Vec<Value> {
+        self.reap_finished();
         self.inner
             .lock()
             .unwrap()
@@ -230,6 +553,7 @@ impl TaskBoard {
                     "title": t.title,
                     "kind": if t.kind == TaskKind::Subagent { "subagent" } else { "manual" },
                     "status": t.status,
+                    "in_flight": Self::in_flight(t),
                     "result": t.result,
                     "error": t.error,
                 })
@@ -238,31 +562,30 @@ impl TaskBoard {
     }
 
     pub fn running_subagents(&self, key: &str) -> usize {
+        self.reap_finished();
         self.inner
             .lock()
             .unwrap()
             .iter()
-            .filter(|t| t.key == key && t.kind == TaskKind::Subagent && t.status == "running")
+            .filter(|t| same_parent(&t.key, key) && Self::in_flight(t))
             .count()
     }
 
     /// 任一激活还有子代理没交还（失速监视用：子代理未交还不算失速，ADR 0074）。
     /// 派遣线程可以比父回合活得久，父回合收口不代表子代理已交还。
     pub fn any_running_subagent(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|t| t.kind == TaskKind::Subagent && t.status == "running")
+        self.reap_finished();
+        self.inner.lock().unwrap().iter().any(Self::in_flight)
     }
 
     /// Supplemental completion cannot hide a parent's open todo or unfinished child.
     pub(crate) fn any_unfinished(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|task| matches!(task.status, "open" | "running" | "failed"))
+        self.reap_finished();
+        self.inner.lock().unwrap().iter().any(|task| {
+            Self::in_flight(task)
+                || !task.retired
+                    && matches!(task.status, "open" | "running" | "failed" | "interrupted")
+        })
     }
 
     /// 测试接缝：等所有在跑的派遣线程收尾（join 而不是轮询）。
@@ -271,13 +594,36 @@ impl TaskBoard {
         loop {
             let handle = {
                 let mut tasks = self.inner.lock().unwrap();
-                tasks.iter_mut().find_map(|t| t.handle.take())
+                tasks
+                    .iter_mut()
+                    .find_map(|t| t.handle.take().map(|h| (t.key.clone(), t.id.clone(), h)))
             };
             match handle {
-                Some(h) => {
-                    let _ = h.join();
+                Some((key, id, h)) => {
+                    let failed = h.join().is_err();
+                    if let Some(task) = self
+                        .inner
+                        .lock()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|t| t.key == key && t.id == id)
+                    {
+                        task.worker_pending = false;
+                    }
+                    if failed {
+                        self.finish(
+                            &key,
+                            &id,
+                            "failed",
+                            None,
+                            Some("child worker panicked".into()),
+                        );
+                    }
                 }
-                None => return,
+                None => {
+                    self.reap_finished();
+                    return;
+                }
             }
         }
     }
@@ -349,10 +695,17 @@ fn finish_child(outcome: Result<TurnOutcome, crate::turn::TurnError>, scope: &Sc
     let citations: Vec<Value> = reads.into_iter().map(|p| json!({"path": p})).collect();
     let clip = |s: String| -> String { s.chars().take(ANSWER_CAP).collect() };
     match outcome {
-        Ok(TurnOutcome::Finished) | Ok(TurnOutcome::Truncated) => ChildDone {
+        // I3 / ticket 04: a step budget used to masquerade as completed work.
+        // Finished is a child receipt, never the parent's acceptance verdict.
+        Ok(TurnOutcome::Finished) => ChildDone {
             status: "done",
             result: Some(json!({"answer": clip(answer), "citations": citations})),
             error: None,
+        },
+        Ok(TurnOutcome::Truncated) => ChildDone {
+            status: "failed",
+            result: None,
+            error: Some("child execution budget exhausted; task incomplete".into()),
         },
         // 叫停/暂停/挂起都是「没收尾」——halt 旗置位的是主动停止。
         Ok(TurnOutcome::Interrupted) => ChildDone {
@@ -580,6 +933,7 @@ fn dispatch(
     // reserved dispatch slot instead of spawning a child after that wait.
     if let Err(error) = crate::evaluation::control::checkpoint(&ctx.repo_root) {
         ctx.tasks.finish(
+            &key,
             &id,
             "interrupted",
             None,
@@ -594,6 +948,8 @@ fn dispatch(
         (Some(path), Some(prov)) => {
             let board = ctx.tasks.clone();
             let id2 = id.clone();
+            let key2 = key.clone();
+            ctx.tasks.mark_worker_pending(&key, &id);
             let handle = std::thread::spawn(move || {
                 let _evaluation_work = evaluation_work;
                 let done = match Db::open(&path) {
@@ -604,9 +960,9 @@ fn dispatch(
                         error: Some(format!("db open: {e}")),
                     },
                 };
-                board.finish(&id2, done.status, done.result, done.error);
+                board.finish(&key2, &id2, done.status, done.result, done.error);
             });
-            ctx.tasks.attach(&id, handle);
+            ctx.tasks.attach(&key, &id, handle);
             Ok(json!({
                 "dispatched": true, "task_id": id, "status": "running",
                 "mcp_selected": pick.iter().collect::<Vec<_>>(),
@@ -618,8 +974,13 @@ fn dispatch(
             // 内联路径（内存库/无 Arc provider 的直测）：同一块板、同一收尾，
             // 只是派遣调用同步返回带结果——测试不需要跨连接可见性。
             let done = run_child(db, provider, &sub_registry, &nctx, &task);
-            ctx.tasks
-                .finish(&id, done.status, done.result.clone(), done.error.clone());
+            ctx.tasks.finish(
+                &key,
+                &id,
+                done.status,
+                done.result.clone(),
+                done.error.clone(),
+            );
             Ok(json!({
                 "dispatched": true, "task_id": id, "status": done.status,
                 "mcp_selected": pick.iter().collect::<Vec<_>>(),
@@ -677,7 +1038,7 @@ impl crate::tools::Tool for Tasks {
         r#"The activation task list: your own to-do items plus subagent dispatches and their results.
 - Use when: the work has 3 or more steps (create items, close each as you finish it), or to collect subagent results.
 - Do not use: for a single trivial step.
-- `action`: "list" shows every task with its status and result; "create" adds an item (`title`); "close" marks an item done (`task_id`); "stop" halts a running task (`task_id`). The list is cleared when the activation ends.
+- `action`: "list" shows every task with its status and result; "create" adds an item (`title`); "close" marks an item done (`task_id`); "stop" halts a running task (`task_id`). Same-root resumes preserve the list. A new task starts a separate list; `in_flight` remains true until a stopped child actually drains.
 - Errors: an unknown action or task_id is reported."#
     }
     fn input_schema(&self) -> Value {
@@ -725,7 +1086,7 @@ impl crate::tools::Tool for SemSearch {
         r#"Optional local similarity search; prefer scoped fs_find/fs_grep followed by fs_read for repository exploration. Character n-gram similarity only; no model weights. No network or paid calls.
 - Use when: you have approximate source text to match. For Chinese questions about English source, derive candidate English terms and use fs_find/fs_grep/fs_read; this tool does not translate or understand synonyms.
 - Do not use: when you know the literal text, identifier or filename — prefer fs_grep or fs_find.
-- Returns file path, line number, excerpt and match kind (literal or similarity). With built-in engines, case-sensitive literal matches in indexed files come first and point to the matching line. Scores are chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find. Unchanged files reuse persisted vectors."#
+- Returns file path, line number, excerpt and match kind (literal or similarity). With built-in engines, case-sensitive literal matches in indexed files come first and point to the matching line. Scores are chunk similarity, not relevance confidence or the sole sort key. Verify each excerpt; for weak or empty hits fall back to fs_grep or fs_find. Unchanged files reuse persisted vectors. Inspect coverage: capped discovery, skipped large/binary/policy files and changed sources make results incomplete; empty hits never prove repository-wide absence. Stops, indexing read failures and broken ignore rules are errors; query read failures are counted in coverage.skipped_unreadable."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
@@ -781,12 +1142,26 @@ impl crate::tools::Tool for SemSearch {
                 embedder.name(),
                 started,
             );
-            let indexed = crate::semsearch::refresh(db, &ctx.repo_root, embedder.as_ref(), &check)?;
-            let hits =
-                crate::semsearch::query(db, &ctx.repo_root, embedder.as_ref(), query, cap, &check)?;
+            let mut refreshed =
+                crate::semsearch::refresh(db, &ctx.repo_root, embedder.as_ref(), &check)?;
+            let queried = crate::semsearch::query(
+                db,
+                &ctx.repo_root,
+                embedder.as_ref(),
+                query,
+                cap,
+                &check,
+                &refreshed.paths,
+            )?;
+            refreshed.coverage.skipped_unreadable += queried.skipped_unreadable;
+            refreshed
+                .coverage
+                .finish(queried.skipped_changed, queried.truncated);
+            let hits = queried.hits;
             Ok(json!({
                 "count": hits.len(),
-                "indexed_files": indexed,
+                "indexed_files": refreshed.indexed_files,
+                "coverage": refreshed.coverage,
                 "engine": embedder.name(),
                 "hits": hits,
                 "fallback": hits.is_empty(),
@@ -963,6 +1338,19 @@ pub fn test_cmd_gate(cmd: &str, ctx: &ToolContext) -> Result<(), String> {
     Ok(())
 }
 
+// I3: a completed process or a zero exit code cannot prove output was read.
+// Refusing an unknown result costs one investigation; accepting it can falsely
+// certify a failing test. Keep the existing terminal unknown contract.
+fn test_output_known(out: &Value) -> Result<(), ToolError> {
+    if out["outcome_unknown"] == true || out.get("read_error").is_some_and(|e| !e.is_null()) {
+        Err(ToolError::Exec(
+            "test output read failed; outcome unknown".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// `run_test` 工具（票 05）：只在子代理注册表里。跑「明显是测试」的
 /// 命令，回 exit_code + 尾部摘录——完整日志不落回执（任务清单不是
 /// 日志通道；要看全文父代理自己跑）。
@@ -1040,6 +1428,21 @@ impl crate::tools::Tool for RunTest {
             let out = ctx
                 .sessions
                 .read_output(db, ctx, Some(&task_id), None, 0, 0)?;
+            if let Err(error) = test_output_known(&out) {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&ctx.project_id),
+                    Some(&ctx.agent_id),
+                    ctx.stage_run_id.as_deref(),
+                    None,
+                    "subagent_run_test",
+                    "output_unknown",
+                    started,
+                );
+                let _ = ctx.sessions.kill(db, ctx, Some(&task_id), None);
+                return Err(error);
+            }
             let done = out["done"].as_bool().unwrap_or(false);
             last = out;
             if done {
@@ -1055,6 +1458,19 @@ impl crate::tools::Tool for RunTest {
                 let out = ctx
                     .sessions
                     .read_output(db, ctx, Some(&task_id), None, 0, 0)?;
+                test_output_known(&out).inspect_err(|_| {
+                    crate::diag::note(
+                        crate::diag::CLASS_REJECT,
+                        true,
+                        Some(&ctx.project_id),
+                        Some(&ctx.agent_id),
+                        ctx.stage_run_id.as_deref(),
+                        None,
+                        "subagent_run_test",
+                        "output_unknown_after_kill",
+                        started,
+                    );
+                })?;
                 last = out;
                 break;
             }
@@ -1095,6 +1511,349 @@ mod tests {
         let wb = crate::api::Workbench::for_test(dir.path(), &["研究"], None).unwrap();
         crate::orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         (wb, dir)
+    }
+
+    // Benchmark I3, 2026-10-06: stage ids identify shared workflow runs,
+    // not parents or activations. A second parent must not erase another's todo.
+    #[test]
+    fn same_stage_parents_never_clear_each_other() {
+        let (wb, _dir) = setup();
+        let mut a = wb.ctx_for("a0", None);
+        a.stage_run_id = Some("shared-stage".into());
+        a.activation_root_turn_id = Some(101);
+        let mut b = a.clone();
+        b.agent_id = "a1".into();
+        b.activation_root_turn_id = Some(102);
+        let akey = activation_key(&a);
+        let bkey = activation_key(&b);
+        a.tasks.begin_activation(&akey);
+        let id = a.tasks.create_manual(&akey, "A remaining acceptance");
+        b.tasks.begin_activation(&bkey);
+        assert_eq!(a.tasks.list(&akey).len(), 1);
+        assert_eq!(a.tasks.list(&akey)[0]["id"], id);
+        assert!(b.tasks.list(&bkey).is_empty());
+    }
+
+    #[test]
+    fn repeated_resume_preserves_the_original_activation_todo() {
+        let (wb, _dir) = setup();
+        let mut ctx = wb.ctx_for("a0", None);
+        ctx.activation_root_turn_id = Some(101);
+        let key = activation_key(&ctx);
+        ctx.tasks.begin_activation(&key);
+        let id = ctx
+            .tasks
+            .create_manual(&key, "must retain original constraint");
+        for parent in [101, 120, 130] {
+            ctx.resume_from_turn_id = Some(parent);
+            ctx.tasks.begin_activation(&activation_key(&ctx));
+            assert_eq!(ctx.tasks.list(&key).len(), 1);
+            assert_eq!(ctx.tasks.list(&key)[0]["id"], id);
+        }
+    }
+
+    #[test]
+    fn cancel_cannot_hide_an_undrained_child() {
+        let board = TaskBoard::default();
+        let key = "parent-activation";
+        let dispatched = board.dispatch(key, "blocked child").unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let worker_board = board.clone();
+        let id = dispatched.id.clone();
+        let handle = std::thread::spawn(move || {
+            let _ = wait.recv();
+            worker_board.finish(key, &id, "stopped", None, None);
+        });
+        board.attach(key, &dispatched.id, handle);
+        assert!(board.stop(key, &dispatched.id));
+        board.begin_activation(key);
+        let observed = board.any_running_subagent();
+        release.send(()).unwrap();
+        board.join_pending();
+        assert!(
+            observed,
+            "a stop request is not evidence that a child has drained"
+        );
+    }
+
+    #[test]
+    fn completed_child_still_counts_until_worker_cleanup_finishes() {
+        let board = TaskBoard::default();
+        let dispatched = board.dispatch("key", "child").unwrap();
+        let (completed, done) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let worker_board = board.clone();
+        let id = dispatched.id.clone();
+        let handle = std::thread::spawn(move || {
+            worker_board.finish("key", &id, "done", Some(json!({"answer":"ready"})), None);
+            completed.send(()).unwrap();
+            let _ = wait.recv();
+        });
+        board.attach("key", &dispatched.id, handle);
+        done.recv().unwrap();
+        let observed = board.any_running_subagent();
+        release.send(()).unwrap();
+        board.join_pending();
+        assert!(
+            observed,
+            "publishing a result must not hide in-flight cleanup"
+        );
+    }
+
+    #[test]
+    fn production_list_reaps_finished_workers_without_test_join() {
+        let board = TaskBoard::default();
+        let dispatched = board.dispatch("key", "child").unwrap();
+        let worker_board = board.clone();
+        let id = dispatched.id.clone();
+        board.attach(
+            "key",
+            &dispatched.id,
+            std::thread::spawn(move || {
+                worker_board.finish("key", &id, "done", Some(json!({"answer":"done"})), None);
+            }),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let finished = board.inner.lock().unwrap()[0]
+                .handle
+                .as_ref()
+                .unwrap()
+                .is_finished();
+            if finished {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "owned fixture worker failed to exit"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(board.list("key")[0]["in_flight"], false);
+        let tasks = board.inner.lock().unwrap();
+        assert!(tasks[0].handle.is_none());
+        assert!(!tasks[0].worker_pending);
+    }
+
+    #[test]
+    fn confirmed_task_receipts_restore_without_reopening_or_id_collision() {
+        let board = TaskBoard::default();
+        let other = board.create_manual("other", "other parent");
+        let ops = vec![
+            (
+                json!({"action":"create","title":"A"}),
+                json!({"task_id":"task-1"}),
+            ),
+            (
+                json!({"action":"close","task_id":"task-1"}),
+                json!({"closed":true}),
+            ),
+            (
+                json!({"action":"create","title":"B"}),
+                json!({"task_id":"task-9"}),
+            ),
+        ];
+        board.restore_operations("restored", &ops).unwrap();
+        board.restore_operations("restored", &ops).unwrap();
+        assert_eq!(board.list("restored").len(), 2);
+        assert_eq!(board.list("restored")[0]["status"], "done");
+        assert_eq!(board.list("other")[0]["id"], other);
+        assert_eq!(board.list("other")[0]["status"], "open");
+        assert_eq!(board.create_manual("restored", "C"), "task-10");
+        let before = board.list("restored");
+        let unknown = vec![(
+            json!({"action":"stop","task_id":"unrestored-child"}),
+            json!({"stopped":true}),
+        )];
+        assert!(board.restore_operations("restored", &unknown).is_err());
+        assert_eq!(board.list("restored"), before);
+    }
+
+    #[test]
+    fn confirmed_dispatch_restore_is_unknown_without_restarting_worker() {
+        let board = TaskBoard::default();
+        let ops = vec![(
+            json!({"host_tool":"subagent","task":"read dependencies"}),
+            json!({"task_id":"task-12","status":"running","dispatched":true}),
+        )];
+        TaskBoard::validate_operations(&ops).unwrap();
+        board.restore_operations("root", &ops).unwrap();
+        assert_eq!(board.list("root")[0]["kind"], "subagent");
+        assert_eq!(board.list("root")[0]["status"], "interrupted");
+        assert_eq!(board.list("root")[0]["in_flight"], false);
+        assert!(board.any_unfinished());
+        assert!(!board.any_running_subagent());
+        assert!(board.stop("root", "task-12"));
+        assert!(!board.any_unfinished());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn confirmed_list_preserves_terminal_receipts_without_creating_workers(
+            terminal in 0usize..3, in_flight in proptest::prelude::any::<bool>(),
+            answer in "[a-zA-Z0-9]{1,80}"
+        ) {
+            use proptest::prelude::*;
+            let status=["done","failed","stopped"][terminal];
+            let result=json!({"answer":answer,"citations":[{"path":"input.txt"}]});
+            let board=TaskBoard::default();
+            let operations=vec![
+                (json!({"host_tool":"subagent","task":"read"}),json!({"task_id":"task-1","status":"running"})),
+                (json!({"host_tool":"tasks","action":"list"}),json!({"tasks":[{"id":"task-1","kind":"subagent","status":status,"in_flight":in_flight,"result":result,"error":null}]})),
+            ];
+            // The same root can first restore an unobserved dispatch, then
+            // receive a confirmed terminal list in the longer validated chain.
+            board.restore_operations("key",&operations[..1]).unwrap();
+            board.restore_operations("key",&operations).unwrap();
+            board.restore_operations("key",&operations).unwrap();
+            let mut older_running = operations.clone();
+            older_running.push((json!({"host_tool":"tasks","action":"list"}),
+                json!({"tasks":[{"id":"task-1","kind":"subagent","status":"running","result":null,"error":null}]})));
+            board.restore_operations("key",&older_running).unwrap();
+            let tasks=board.list("key");
+            prop_assert_eq!(&tasks[0]["status"],&json!(status));
+            prop_assert_eq!(&tasks[0]["result"],&result);
+            prop_assert!(!board.any_running_subagent());
+            prop_assert!(board.inner.lock().unwrap()[0].handle.is_none());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn list_cannot_create_workers_or_promote_unconfirmed_entries(nonterminal in 0usize..4) {
+            use proptest::prelude::*;
+            let status=["open","running","interrupted","unknown"][nonterminal];
+            let operations=vec![
+                (json!({"host_tool":"subagent","task":"read"}),json!({"task_id":"task-1","status":"running"})),
+                (json!({"host_tool":"tasks","action":"list"}),json!({"tasks":[
+                    {"id":"task-1","kind":"subagent","status":status,"in_flight":false,"result":null,"error":null},
+                    {"id":"unregistered","kind":"subagent","status":"done","result":{"answer":"not a registered child"}},
+                    {"id":"task-1","kind":"manual","status":"done","result":{"answer":"wrong kind"}}
+                ]})),
+            ];
+            let board=TaskBoard::default();
+            board.restore_operations("root",&operations).unwrap();
+            let tasks=board.list("root");
+            prop_assert_eq!(tasks.len(),1);
+            prop_assert_eq!(&tasks[0]["status"],&json!("interrupted"));
+            prop_assert!(board.any_unfinished());
+            prop_assert!(!board.any_running_subagent());
+        }
+    }
+
+    #[test]
+    fn list_receipts_do_not_cross_roots_or_overwrite_manual_or_live_work() {
+        let dispatch = (
+            json!({"host_tool":"subagent","task":"read"}),
+            json!({"task_id":"task-1","status":"running"}),
+        );
+        let list = (
+            json!({"host_tool":"tasks","action":"list"}),
+            json!({"tasks":[{"id":"task-1","kind":"subagent","status":"done","result":{"answer":"confirmed"},"error":null}]}),
+        );
+        let board = TaskBoard::default();
+        board
+            .restore_operations("root-a", std::slice::from_ref(&dispatch))
+            .unwrap();
+        board
+            .restore_operations("root-b", std::slice::from_ref(&list))
+            .unwrap();
+        assert_eq!(board.list("root-a")[0]["status"], "interrupted");
+        assert!(board.list("root-b").is_empty());
+        let manual = TaskBoard::default();
+        assert_eq!(manual.create_manual("root", "manual"), "task-1");
+        manual
+            .restore_operations("root", &[dispatch.clone(), list.clone()])
+            .unwrap();
+        assert_eq!(manual.list("root")[0]["kind"], "manual");
+        assert_eq!(manual.list("root")[0]["status"], "open");
+        let live = TaskBoard::default();
+        assert_eq!(live.dispatch("root", "live").unwrap().id, "task-1");
+        live.restore_operations("root", &[dispatch, list]).unwrap();
+        assert_eq!(live.list("root")[0]["status"], "running");
+        assert!(live.any_running_subagent());
+    }
+
+    #[test]
+    fn fresh_root_retains_old_workers_capacity_until_reaped() {
+        let board = TaskBoard::default();
+        let old = json!(["p", "a", "s", 1]).to_string();
+        let fresh = json!(["p", "a", "s", 2]).to_string();
+        let mut releases = Vec::new();
+        for _ in 0..MAX_CHILDREN {
+            let d = board.dispatch(&old, "old child").unwrap();
+            let (release, wait) = std::sync::mpsc::channel();
+            let b = board.clone();
+            let id = d.id.clone();
+            let key = old.clone();
+            board.attach(
+                &old,
+                &d.id,
+                std::thread::spawn(move || {
+                    wait.recv().unwrap();
+                    b.finish(&key, &id, "stopped", None, None);
+                }),
+            );
+            releases.push(release);
+        }
+        board.begin_activation(&fresh);
+        let fifth_refused = board.dispatch(&fresh, "fifth").is_none();
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        board.join_pending();
+        assert!(fifth_refused);
+        assert!(board.dispatch(&fresh, "after cleanup").is_some());
+        assert!(board.list(&old).is_empty());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn activation_identity_and_resume_preservation(
+            parent in "[a-z]{1,12}", other in "[a-z]{1,12}", stage in "[a-z]{0,12}",
+            root in 1i64..100000, resumes in 1usize..20
+        ) {
+            use proptest::prelude::*;
+            let a = json!(["p",parent,stage,root]).to_string();
+            let b = json!(["p",other,stage,root]).to_string();
+            prop_assert_eq!(same_parent(&a,&b), parent == other);
+            let board = TaskBoard::default();
+            let id = board.create_manual(&a,"acceptance");
+            for _ in 0..resumes { board.begin_activation(&a); }
+            prop_assert_eq!(board.list(&a).len(),1);
+            prop_assert_eq!(&board.list(&a)[0]["id"], &json!(id));
+        }
+    }
+
+    #[test]
+    fn truncated_child_does_not_report_a_completed_task() {
+        let scope = Scope {
+            approval_mode: crate::approval_mode::ApprovalMode::Restricted,
+            permission_rules: Default::default(),
+            halt: Arc::new(AtomicBool::new(false)),
+            answer: Arc::new(Mutex::new(Some("partial answer".into()))),
+            mcp: Default::default(),
+            reads: Default::default(),
+        };
+        let done = finish_child(Ok(TurnOutcome::Truncated), &scope);
+        assert_eq!(done.status, "failed");
+        assert!(done.result.is_none());
+        assert!(done.error.is_some());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn unknown_test_output_cannot_become_a_passed_check(
+            done in proptest::prelude::any::<bool>(), code in proptest::prelude::any::<i32>(),
+            flag in proptest::prelude::any::<bool>(), stream in "stdout|stderr"
+        ) {
+            use proptest::prelude::*;
+            let out = json!({"done":done,"exit_code":code,"outcome_unknown":flag,
+                "read_error":if flag { Value::Null } else { json!(stream) }});
+            prop_assert!(test_output_known(&out).is_err());
+            prop_assert!(test_output_known(&json!({"done":done,"exit_code":code,
+                "outcome_unknown":false,"read_error":null})).is_ok(), "known terminal output must remain readable");
+        }
     }
 
     /// 内联派遣（内存库）：子代理回合吃脚本、回执进任务清单、
@@ -1167,6 +1926,167 @@ mod tests {
         assert_eq!(v["dispatched"], false);
         assert_eq!(v["reason"], "capacity full");
         assert!(provider.recorded().is_empty());
+    }
+
+    // I2/I3 Spec sibling: a succeeded dispatch refusal is a model-visible
+    // receipt, not an accepted child. Feed the actual native producer output
+    // through the shared recovery parser rather than inventing a task id.
+    #[test]
+    fn confirmed_capacity_refusal_preserves_existing_tasks() {
+        let (wb, _dir) = setup();
+        let ctx = wb.ctx_for("a0", None);
+        let key = activation_key(&ctx);
+        let mut operations = Vec::new();
+        for _ in 0..MAX_CHILDREN {
+            let accepted = ctx.tasks.dispatch(&key, "existing").unwrap();
+            operations.push((
+                json!({"host_tool":"subagent","task":"existing"}),
+                json!({"dispatched":true,"task_id":accepted.id,"status":"running"}),
+            ));
+        }
+        let provider = ScriptedProvider::new(vec![text_response("must not run")]);
+        let CallOutcome::Done(receipt) = call_nested(
+            &wb.db,
+            &provider,
+            &wb.registry,
+            &ctx,
+            json!({"task":"fifth"}),
+        )
+        .unwrap() else {
+            panic!("refusal must remain a successful tool receipt")
+        };
+        assert_eq!(
+            receipt,
+            json!({"dispatched":false,"reason":"capacity full","running":MAX_CHILDREN})
+        );
+        let state: String = wb
+            .db
+            .conn()
+            .query_row(
+                "SELECT state FROM tool_actions WHERE tool='subagent' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "succeeded");
+        assert!(provider.recorded().is_empty());
+        operations.push((json!({"host_tool":"subagent","task":"fifth"}), receipt));
+        TaskBoard::validate_operations(&operations).unwrap();
+        let restored = TaskBoard::default();
+        restored.restore_operations(&key, &operations).unwrap();
+        assert_eq!(restored.list(&key).len(), MAX_CHILDREN);
+        assert!(restored
+            .list(&key)
+            .iter()
+            .all(|task| task["status"] == "interrupted"));
+        assert!(!restored.any_running_subagent());
+        assert_eq!(
+            restored.create_manual(&key, "next"),
+            format!("task-{}", MAX_CHILDREN + 1)
+        );
+    }
+
+    #[test]
+    fn confirmed_scope_refusals_do_not_create_children() {
+        let (wb, _dir) = setup();
+        let provider = ScriptedProvider::new(vec![text_response("must not run")]);
+        let mut operations = Vec::new();
+        for child_scope in [false, true] {
+            crate::orchestra::write_agent_status(&wb.db, "p1", "a0", !child_scope).unwrap();
+            let mut ctx = wb.ctx_for("a0", None);
+            if child_scope {
+                ctx.subagent = Some(Scope {
+                    approval_mode: crate::approval_mode::ApprovalMode::Restricted,
+                    permission_rules: Default::default(),
+                    halt: Arc::new(AtomicBool::new(false)),
+                    answer: Default::default(),
+                    mcp: Default::default(),
+                    reads: Default::default(),
+                });
+            }
+            let CallOutcome::Done(receipt) = call_nested(
+                &wb.db,
+                &provider,
+                &wb.registry,
+                &ctx,
+                json!({"task":"denied scope"}),
+            )
+            .unwrap() else {
+                panic!("scope refusal is a successful tool receipt")
+            };
+            assert_eq!(
+                receipt,
+                json!({"dispatched":false,"reason":if child_scope {"subagents cannot dispatch"}else{"parent agent sleeping"}})
+            );
+            operations.push((
+                json!({"host_tool":"subagent","task":"denied scope"}),
+                receipt,
+            ));
+        }
+        assert!(provider.recorded().is_empty());
+        TaskBoard::validate_operations(&operations).unwrap();
+        let restored = TaskBoard::default();
+        restored.restore_operations("root", &operations).unwrap();
+        assert!(restored.list("root").is_empty());
+        assert!(!restored.any_running_subagent());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn known_undispatched_receipts_do_not_complete_or_create_children(reason in 0usize..3) {
+            use proptest::prelude::*;
+            let receipt=match reason {
+                0=>json!({"dispatched":false,"reason":"capacity full","running":MAX_CHILDREN}),
+                1=>json!({"dispatched":false,"reason":"parent agent sleeping"}),
+                _=>json!({"dispatched":false,"reason":"subagents cannot dispatch"}),
+            };
+            let operations=vec![
+                (json!({"host_tool":"tasks","action":"create","title":"acceptance"}),json!({"task_id":"task-1"})),
+                (json!({"host_tool":"subagent","task":"prior"}),json!({"task_id":"task-2","status":"running"})),
+                (json!({"host_tool":"subagent","task":"refused"}),receipt),
+            ];
+            let board=TaskBoard::default();
+            prop_assert!(TaskBoard::validate_operations(&operations).is_ok());
+            board.restore_operations("root",&operations).unwrap();
+            let tasks=board.list("root");
+            prop_assert_eq!(tasks.len(),2);
+            prop_assert_eq!(tasks[0]["status"].as_str(),Some("open"));
+            prop_assert_eq!(tasks[1]["status"].as_str(),Some("interrupted"));
+            prop_assert!(!board.any_running_subagent());
+            prop_assert_eq!(board.create_manual("root","next"),"task-3");
+        }
+
+        #[test]
+        fn unknown_or_malformed_undispatched_receipts_remain_rejected(shape in 0usize..15) {
+            use proptest::prelude::*;
+            let receipt=match shape {
+                0=>json!({"dispatched":false,"reason":"unknown refusal"}),
+                1=>json!({"dispatched":false,"reason":"capacity full"}),
+                2=>json!({"dispatched":false,"reason":"capacity full","running":MAX_CHILDREN-1}),
+                3=>json!({"dispatched":false,"reason":"capacity full","running":"4"}),
+                4=>json!({"dispatched":false,"reason":"parent agent sleeping","task_id":"task-1","status":"done","result":{"answer":"invented"}}),
+                5=>json!({"dispatched":false,"reason":"subagents cannot dispatch","status":"done"}),
+                6=>json!({"dispatched":"false","reason":"parent agent sleeping"}),
+                7=>json!({"dispatched":false}),
+                8=>json!({"reason":"parent agent sleeping"}),
+                9=>json!({"dispatched":false,"reason":"capacity full","running":MAX_CHILDREN,"unexpected":true}),
+                _=>json!({"dispatched":false,"reason":"parent agent sleeping"}),
+            };
+            let input=match shape {
+                10=>json!({"host_tool":"subagent","task":null}),
+                11=>json!({"host_tool":"subagent"}),
+                12=>json!({"host_tool":"subagent","task":""}),
+                13=>json!({"host_tool":"subagent","task":"  \n\t"}),
+                14=>json!({"host_tool":"subagent","task":42}),
+                _=>json!({"host_tool":"subagent","task":"refused"}),
+            };
+            let operations=[(input,receipt)];
+            prop_assert!(TaskBoard::validate_operations(&operations).is_err());
+            let board=TaskBoard::default();
+            prop_assert!(board.restore_operations("root",&operations).is_err());
+            prop_assert!(board.list("root").is_empty());
+            prop_assert!(!board.any_running_subagent());
+        }
     }
 
     /// mcp 勾选过滤：未授权/不在场的名字进 dropped 不进选择集。
@@ -1295,9 +2215,18 @@ mod tests {
             .unwrap()["closed"]
             .as_bool()
             .unwrap());
-        // 激活边界清场
+        // I3: starting another turn of this root used to erase the board.
         ctx.tasks.begin_activation(&activation_key(&ctx));
         let list = t.exec(db, &json!({"action": "list"}), &ctx).unwrap();
-        assert!(list["tasks"].as_array().unwrap().is_empty());
+        assert_eq!(list["tasks"].as_array().unwrap().len(), 1);
+        let mut fresh = ctx.clone();
+        fresh.activation_root_turn_id = Some(900);
+        fresh.tasks.begin_activation(&activation_key(&fresh));
+        assert!(
+            t.exec(db, &json!({"action":"list"}), &fresh).unwrap()["tasks"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 }
