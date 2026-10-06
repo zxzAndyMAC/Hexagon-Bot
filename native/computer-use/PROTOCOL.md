@@ -143,10 +143,28 @@ leave that AX snapshot behind. The host's persistent screenshot trail is separat
 
 ## Validation and current limits
 
-`swift test --package-path native/computer-use --jobs 4` covers ABI rejection,
+`npm run test:computer-use` prepares the fixed dependency and verified capture
+patch, then runs the native tests. It is also included in `npm test` and the
+macOS CI job. Non-macOS reports the native suite as skipped.
+The tests cover ABI rejection,
 coordinate conversion, cancellation before/after dispatch and noncooperative
 operation serialization. These tests synthesize no input and do not capture the
 desktop. Compilation and these tests do not constitute real macOS acceptance.
+
+QA 2026-10-06 / action1235: the entire first owner preparation runs off the main
+actor, with an independent eight-second caller deadline. Failure, timeout or
+cancellation cannot publish a new screenshot receipt; late preparation can only
+warm the SDK cache. Window, frontmost and screen observations all checkpoint
+their original mailbox and the desktop session again before capture.
+
+The reviewed patch in `patches/` moves the fixed SDK's **actual** owner claims
+off MainActor, including the recheck at each SCK leaf. It preserves process
+generation, signature, conflict, capability and process-lifetime lock validation.
+Successful preparation never replaces a later claim. Cancelling a noncooperative
+claim keeps awaiting that scan before the mailbox can drain, then suppresses SCK
+dispatch; the UI remains responsive throughout. This is not a guarantee that
+macOS Security itself finishes within eight seconds. Revision/source hash drift
+refuses build/test preparation rather than silently applying a patch.
 
 Current action slice provides running-app inventory/activation, exact-window and
 whole-display observations, validated click/drag, pinned keyboard input and AX

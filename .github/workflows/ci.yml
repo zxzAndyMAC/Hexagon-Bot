@@ -32,6 +32,7 @@ jobs:
       # reliability 01: same entrypoints locally and in CI, including architecture,
       # tokens, seven-language keys and regenerated DTO drift.
       - run: npm run check
+      # Includes the fixed-SDK patch verifier and headless native action tests.
       - run: npm test
       - run: npm --prefix ui run build
 

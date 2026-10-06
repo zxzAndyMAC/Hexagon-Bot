@@ -1,0 +1,7 @@
+{
+  "revision": "f3c6b1b32528290a959244d1ac12d54af3d42928",
+  "file": "Core/PeekabooAutomationKit/Sources/PeekabooAutomationKit/Services/Capture/ScreenCaptureKitCaptureGate.swift",
+  "before": "640b59b6be44692cb9147c79cd69a281a6598d4129badbbb8ad14f7a093de064",
+  "after": "cb67c7385acc9d3857542e09667364a36aa5f802dc35109119df3957b3be0724",
+  "patch": "capture-owner-background.patch"
+}

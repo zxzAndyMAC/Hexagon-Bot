@@ -2,10 +2,12 @@ import { spawnSync } from 'node:child_process'
 import { copyFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { prepareComputerUse } from './prepare-computer-use.mjs'
 
 // Desktop ticket 07: lock public AutomationKit, never install a rolling CLI or
 // borrow another application's Bridge. Non-macOS retains explicit unsupported UI.
 if (process.platform === 'darwin') {
+  prepareComputerUse()
   const root = fileURLToPath(new URL('..', import.meta.url))
   const configuration = process.argv.includes('--release') ? 'release' : 'debug'
   const result = spawnSync('swift', ['build', '--package-path', path.join(root, 'native/computer-use'), '--configuration', configuration, '--jobs', '4', '--disable-automatic-resolution'], { stdio: 'inherit' })

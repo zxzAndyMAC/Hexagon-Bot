@@ -406,11 +406,14 @@ final class ActionExecutor {
 
     private func observe(_ request: ActionRequest, id: UInt64) async throws -> NativeObservation {
         await clearReceipt()
-        let captured: CaptureResult
-        if let window = request.window_id {
-            captured = try await capture.captureWindow(windowID: window)
-        } else {
-            captured = try await capture.captureFrontmost()
+        let captured = try await CapturePreparation.capture(checkpoint: {
+            try ActionMailbox.shared.checkpoint(id)
+            try Self.checkSession()
+        }) {
+            if let window = request.window_id {
+                return try await capture.captureWindow(windowID: window)
+            }
+            return try await capture.captureFrontmost()
         }
         try ActionMailbox.shared.checkpoint(id)
         guard let window = captured.metadata.windowInfo,
@@ -708,7 +711,10 @@ final class ActionExecutor {
     private func observeScreen(_ request: ActionRequest, id: UInt64) async throws -> NativeObservation {
         await clearReceipt()
         let windows = try Self.visibleWindows()
-        let captured = try await capture.captureScreen(displayIndex: request.display_index)
+        let captured = try await CapturePreparation.capture(checkpoint: {
+            try ActionMailbox.shared.checkpoint(id)
+            try Self.checkSession()
+        }) { try await capture.captureScreen(displayIndex: request.display_index) }
         try ActionMailbox.shared.checkpoint(id)
         guard let display = captured.metadata.displayInfo else { throw ActionError("capture_identity_missing") }
         var count: UInt32 = 0

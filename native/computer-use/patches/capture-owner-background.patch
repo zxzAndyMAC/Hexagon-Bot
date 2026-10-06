@@ -1,0 +1,86 @@
+--- a/Core/PeekabooAutomationKit/Sources/PeekabooAutomationKit/Services/Capture/ScreenCaptureKitCaptureGate.swift
++++ b/Core/PeekabooAutomationKit/Sources/PeekabooAutomationKit/Services/Capture/ScreenCaptureKitCaptureGate.swift
+@@ -5,0 +6,9 @@
++
++// Hexagon QA 2026-10-06 review: a coordinator's independent operationTask
++// does not inherit its caller's cancellation. Bind owner validation to the
++// coordinator's terminal proof AND drain that scan before returning its lane.
++protocol ScreenCaptureKitOwnerValidationLifecycle: Sendable {
++    func beginOwnerValidation() throws
++    func checkOwnerValidation() throws
++    func endOwnerValidation()
++}
+@@ -15,0 +25,2 @@
++    @TaskLocal static var ownerValidation: (any ScreenCaptureKitOwnerValidationLifecycle)?
++    @TaskLocal static var processOwnerLeaseOverride: ScreenCaptureKitOwnerLease?
+@@ -33 +44 @@
+-        operationName: String) throws -> ScreenCaptureKitOwnerLease.OwnerReceipt
++        operationName: String) async throws -> ScreenCaptureKitOwnerLease.OwnerReceipt
+@@ -39 +50,17 @@
+-            return try self.processOwnerLease.get().claim().receipt
++            // Hexagon QA 2026-10-06 / action1235: cold AND dynamic signature
++            // scans blocked MainActor before the capture coordinator's timeout.
++            // Prewarming alone leaves new processes uncovered. Preserve every
++            // real claim and keep awaiting a noncooperative scan (lane stays held),
++            // then reject cancellation before any SCK dispatch. False refusal
++            // costs another observation; a false pass permits an unsafe SCK owner.
++            let validation = self.ownerValidation
++            try Task.checkCancellation()
++            try validation?.beginOwnerValidation()
++            defer { validation?.endOwnerValidation() }
++            let leaseOverride = self.processOwnerLeaseOverride
++            let receipt = try await Task.detached(priority: .userInitiated) {
++                try (leaseOverride ?? self.processOwnerLease.get()).claim().receipt
++            }.value
++            try Task.checkCancellation()
++            try validation?.checkOwnerValidation()
++            return receipt
+@@ -50 +77 @@
+-        try self.requireProcessOwner(operationName: operationName)
++        try await self.requireProcessOwner(operationName: operationName)
+@@ -62 +89,2 @@
+-                try self.requireProcessOwner(operationName: operationName)
++                try await self.requireProcessOwner(operationName: operationName)
++                try self.ownerValidation?.checkOwnerValidation()
+@@ -372 +400,3 @@
+-                        let value = try await operation()
++                        let value = try await ScreenCaptureKitCaptureGate.$ownerValidation.withValue(race) {
++                            try await operation()
++                        }
+@@ -458 +488 @@
+-final class ScreenCaptureKitTimeoutRace<T: Sendable>: @unchecked Sendable {
++final class ScreenCaptureKitTimeoutRace<T: Sendable>: @unchecked Sendable, ScreenCaptureKitOwnerValidationLifecycle {
+@@ -464,0 +495,24 @@
++    private var isValidatingOwner = false
++
++    func beginOwnerValidation() throws {
++        try self.lock.withLock {
++            guard !self.didFinish else { throw CancellationError() }
++            self.isValidatingOwner = true
++        }
++    }
++
++    func checkOwnerValidation() throws {
++        try self.lock.withLock {
++            guard !self.didFinish else { throw CancellationError() }
++        }
++    }
++
++    func endOwnerValidation() {
++        self.lock.lock()
++        self.isValidatingOwner = false
++        let pending = self.didFinish ? self.continuation : nil
++        let result = self.terminalResult
++        if self.didFinish { self.continuation = nil }
++        self.lock.unlock()
++        if let pending, let result { pending.resume(with: result) }
++    }
+@@ -518 +572,4 @@
+-        continuation = self.continuation
++        // A timed-out/cancelled pre-dispatch scan must drain before the
++        // caller can consume its native mailbox result. Actual SCK work keeps
++        // the upstream prompt-return + quarantine contract once dispatched.
++        continuation = self.isValidatingOwner ? nil : self.continuation
+@@ -520 +577 @@
+-        self.continuation = nil
++        if !self.isValidatingOwner { self.continuation = nil }

@@ -283,19 +283,59 @@ fn versions() -> io::Result<BTreeMap<String, Option<String>>> {
         "'{}' --version",
         interpreter.to_string_lossy().replace('\'', "'\\''")
     );
-    let mut versions = BTreeMap::new();
+    // QA 2026-10-06 / core-0906-sample: three separate sessions inventoried
+    // the same runtime/hardlink trees three times on EVERY drift check. One
+    // session keeps the real isolation and fresh versions, without a cache that
+    // could hide tool replacement or unread output (QA13). NUL framing binds
+    // each command's exit status and stdout; a failed probe stays unknown.
+    let mut script = String::new();
     for (name, command) in [
         ("python", python.as_str()),
         ("node", "node --version"),
         ("git", "git --version"),
     ] {
-        let result = crate::sessions::SessionTable::default()
-            .run_oneshot(&db, &ctx, command, std::time::Duration::from_secs(5), false)
-            .map_err(err)?;
-        let version = (result["exit_code"].as_i64() == Some(0)
-            && result["timed_out"].as_bool() == Some(false))
-        .then(|| result["stdout"].as_str().unwrap_or("").trim().to_owned())
-        .filter(|s| !s.is_empty());
+        script.push_str(&format!(
+            "hexagon_probe_output=$({command}); hexagon_probe_status=$?; printf '%s\\0%s\\0%s\\0' '{name}' \"$hexagon_probe_status\" \"$hexagon_probe_output\"\n"
+        ));
+    }
+    let result = crate::sessions::SessionTable::default()
+        .run_oneshot(
+            &db,
+            &ctx,
+            &script,
+            std::time::Duration::from_secs(15),
+            false,
+        )
+        .map_err(err)?;
+    if result["exit_code"].as_i64() != Some(0) || result["timed_out"].as_bool() != Some(false) {
+        return Ok(["python", "node", "git"]
+            .into_iter()
+            .map(|name| (name.into(), None))
+            .collect());
+    }
+    parse_versions(result["stdout"].as_str().unwrap_or(""))
+}
+
+fn parse_versions(output: &str) -> io::Result<BTreeMap<String, Option<String>>> {
+    let fields: Vec<_> = output
+        .strip_suffix('\0')
+        .ok_or_else(|| err("runtime version output is incomplete"))?
+        .split('\0')
+        .collect();
+    if fields.len() != 9 {
+        return Err(err("runtime version output has invalid framing"));
+    }
+    let mut versions = BTreeMap::new();
+    for (name, record) in ["python", "node", "git"].into_iter().zip(fields.chunks(3)) {
+        if record[0] != name {
+            return Err(err("runtime version output has invalid tool identity"));
+        }
+        let status = record[1]
+            .parse::<i32>()
+            .map_err(|_| err("runtime version output has invalid exit status"))?;
+        let version = (status == 0)
+            .then(|| record[2].trim().to_owned())
+            .filter(|s| !s.is_empty());
         versions.insert(name.into(), version);
     }
     Ok(versions)
@@ -625,6 +665,47 @@ mod tests {
             let userinfo = format!("https://user:{secret}@host.test/");
             prop_assert!(public_url(&query).is_none());
             prop_assert!(public_url(&userinfo).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn missing_or_failed_output_never_becomes_a_known_version() {
+        let output =
+            "python\0".to_owned() + "0\0Python 3.13\0node\0" + "1\0partial\0git\0" + "0\0\0";
+        let versions = parse_versions(&output).unwrap();
+        assert_eq!(versions["python"].as_deref(), Some("Python 3.13"));
+        assert_eq!(versions["node"], None);
+        assert_eq!(versions["git"], None);
+        assert!(parse_versions(output.trim_end_matches('\0')).is_err());
+        assert!(parse_versions(&output.replace("node\0", "python\0")).is_err());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn failed_probe_cannot_borrow_another_tools_version(
+            python in "[A-Za-z0-9 .]{1,80}", node in "[A-Za-z0-9 .]{1,80}",
+            git in "[A-Za-z0-9 .]{1,80}", failed in 0_usize..3,
+        ) {
+            let names = ["python", "node", "git"];
+            let values = [python, node, git];
+            let mut output = String::new();
+            for index in 0..3 {
+                output.push_str(&format!("{}\0{}\0{}\0", names[index],
+                    if index == failed { 1 } else { 0 }, values[index]));
+            }
+            let versions = parse_versions(&output).unwrap();
+            for index in 0..3 {
+                let expected = (index != failed).then(|| values[index].trim())
+                    .filter(|s| !s.is_empty());
+                proptest::prop_assert_eq!(versions[names[index]].as_deref(), expected);
+            }
+            output.pop();
+            proptest::prop_assert!(parse_versions(&output).is_err());
         }
     }
 }
