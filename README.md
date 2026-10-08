@@ -28,7 +28,7 @@
 
 Hexagon-Bot is a local desktop workbench for software development. As the project owner, you choose roles, assign models, and select a project directory. Agents work through a defined workflow, handing off specifications, designs, code, and test records. You can redirect the work, resolve pending decisions, and perform final acceptance at any time.
 
-**The project is in early development. The instructions below run it from source.** Full desktop quality checks currently run in macOS CI. Linux has dedicated isolation tests; Windows is not yet covered by CI. Desktop operation and tool execution still need separate verification on each platform.
+**The project is in early development. The instructions below run it from source.** Full desktop quality checks currently run in macOS CI. Linux CI checks that terminal operations are refused when required read isolation cannot be enforced; Windows is not yet covered by CI. Desktop operation and tool execution still need separate verification on each platform.
 
 ## Features
 
@@ -39,6 +39,7 @@ Hexagon-Bot is a local desktop workbench for software development. As the projec
 | Inspect deliverables | Specifications, designs, and code are saved to disk. Review and validation records are tied to specific artifact versions, so changes require fresh evidence. |
 | Stay in control | Handle permissions and decisions through pending cards, read a return summary, or pause the team. Final acceptance stays with you. |
 | Use a local workspace | View the group chat, file tree, code, artifacts, execution traces, and model usage in one workbench. Workflow state is stored locally in SQLite. |
+| Control browser and computer actions | Connect a browser, check computer readiness, and authorize actions within project permissions. Native computer control is currently available on macOS only. |
 | Extend the tools | Add capabilities through skills and MCP services, with tool permissions managed per project. |
 | Choose your language | Use the interface in seven languages while keeping project content and artifacts in their original language. |
 
@@ -59,7 +60,8 @@ Local merges, `git push`, and remote publishing are separate operations. Remote 
 - **Node.js 24 and npm**, matching the current CI environment.
 - **Stable Rust**, installed through rustup, including `rustfmt` and `clippy`.
 - **Git**.
-- **Tauri 2 system dependencies**: follow the [official prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system. Xcode Command Line Tools are sufficient for desktop development on macOS.
+- **Tauri 2 system dependencies**: follow the [official prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system. Desktop targets can use Xcode Command Line Tools on macOS.
+- **macOS 15+ and Swift 6.2+ for macOS builds**: the development and build commands also compile the native computer-use helper. These additional requirements come from its [Swift package manifest](native/computer-use/Package.swift); the selected developer toolchain must provide a compatible `swift` executable.
 - A working model service and any credentials it requires. Model usage costs depend on your chosen provider.
 
 ### Start the workbench
@@ -71,7 +73,7 @@ npm ci --prefix ui
 npm run dev
 ```
 
-`npm run dev` starts Vite on port `1420` and opens the Tauri desktop window. The first launch needs to compile the Rust dependencies.
+`npm run dev` builds the native computer-use helper on macOS, prepares the pinned browser runtime, then starts Vite on port `1420` and opens the Tauri desktop window. A fresh checkout needs network access to fetch browser dependencies, Chromium, and Rust/Swift dependencies, plus time for the initial compilation.
 
 If your macOS or Linux terminal cannot find `cargo`, run:
 
@@ -83,11 +85,22 @@ Once the workbench opens, configure your model service in settings. Then use the
 
 Before closing an edited file or switching projects, choose Save, Discard, or Cancel for unsaved changes. Visiting settings keeps your draft. If the file changed on disk, saving preserves that version and asks you to resolve the conflict.
 
+### Continuing interrupted work
+
+If a card says **Decision applied; original task waiting**, the decision has already taken effect. Configure an available model, then use the card's retry action to continue the original task. Inspect the execution record before retrying an action whose outcome is unknown: it may already have taken effect.
+
+For native computer control on macOS, check the workbench's computer status and grant the required Accessibility and Screen Recording permissions. System permissions and project action approvals are separate; readiness alone does not authorize an action.
+
 ### Repository exploration
 
 Chinese questions use the configured agent model to derive candidate identifiers,
 then scoped `fs_find` / `fs_grep` and `fs_read` to inspect actual implementations.
 No separate embedding model or model-weight installation is required.
+
+`fs_grep` searches one literal substring, not a regular expression or `|` alternatives.
+Results are capped at 100 matches; inspect `coverage` for truncation or skipped
+files before interpreting a non-finding.
+
 `sem_search` remains an optional character-similarity tool for compatibility; it
 cannot translate Chinese concepts into English code or establish semantic truth.
 It reports `hash-ngram-v1`, preserves literal matches and reuses unchanged indexed
@@ -133,6 +146,7 @@ Run these commands from the repository root:
 | `npm run check` | Check Rust formatting and Clippy, architecture rules, frontend lint and types, design tokens, translation keys, and generated type drift. |
 | `npm test` | Run Rust workspace, frontend Vitest, browser runtime, and platform computer-use tests. |
 | `npm run test:browser` | Prepare the pinned browser runtime and run its local boundary and lifecycle tests. |
+| `npm run test:computer-use` | Test SDK preparation; on macOS, verify the pinned SDK patch and run Swift native tests. |
 | `npm run build` | Build the frontend and Rust release artifacts. The current configuration does not produce desktop installers. |
 | `cargo test export_bindings` | Regenerate frontend type bindings after changing Rust DTOs used across IPC. |
 
@@ -145,6 +159,8 @@ crates/hexagon-core/  Business logic: orchestration, turns, artifacts, permissio
 src-tauri/           Desktop shell: windows and IPC forwarding
 ui/                  React + TypeScript interface
 ui/src/gen/          TypeScript types generated from Rust DTOs
+native/browser/      Browser runtime and boundary/lifecycle tests
+native/computer-use/ Swift computer-use helper, pinned SDK patch, and native tests
 evaluation/          Task comparison and retrieval evaluation materials
 scripts/             Architecture, binding, and other development checks
 ```
