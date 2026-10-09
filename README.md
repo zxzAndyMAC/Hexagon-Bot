@@ -89,6 +89,10 @@ Before closing an edited file or switching projects, choose Save, Discard, or Ca
 
 If a card says **Decision applied; original task waiting**, the decision has already taken effect. Configure an available model, then use the card's retry action to continue the original task. Inspect the execution record before retrying an action whose outcome is unknown: it may already have taken effect.
 
+When a model dispatch fails, Hexagon keeps the original choice and task identity in a visible recovery item shared by the pending area and timeline. Retry reuses that choice once the project, stage, roster, and receiving agent are still valid; it does not replay a task that already has a durable worker admission. The details show the real model when known, otherwise the model slot, together with a request ID and safe error category.
+
+Project-managed execution is a separate opt-in mode. It may use already signed-in browser, Figma, Blender, and other project-adjacent applications to create, edit, overwrite, save, and export task material. Deleting external files, directories, projects, or cloud documents remains blocked; deleting layers, model objects, or text inside an application is an edit. Account administration, purchases, raw credentials, and new publishing targets remain outside that grant.
+
 For native computer control on macOS, check the workbench's computer status and grant the required Accessibility and Screen Recording permissions. System permissions and project action approvals are separate; readiness alone does not authorize an action.
 
 ### Structured artifact delivery
