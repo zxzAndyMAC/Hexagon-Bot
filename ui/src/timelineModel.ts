@@ -169,6 +169,10 @@ const isHighRiskSys = (it: TimelineItem) =>
   (it.event.kind === 'system' && SYS_HIGH_RISK.has(String(it.event.payload?.kind ?? '')))
 
 const isSysItem = (it: TimelineItem) =>
+  // test3/04: saving a decision is visible before the background tool runs;
+  // folding it hid the only acknowledgement during a peer's long model call.
+  !(it.event.kind === 'permission_allowed' && it.event.payload.execution === 'queued') &&
+  it.event.payload.kind !== 'tool_execution_started' &&
   it.event.payload.kind !== 'agent_plan' &&
   !TOOL_KINDS.has(it.event.kind) &&
   !SPECIAL_KINDS.has(it.event.kind) &&

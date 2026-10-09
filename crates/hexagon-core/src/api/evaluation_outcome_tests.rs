@@ -686,9 +686,14 @@ fn evaluation_preflight_rejection_has_no_unknown_effect_after_reopen() {
     );
     let worker = Workbench::open_evaluation_host(Path::new(&run.workspace)).unwrap();
     let ctx = worker.ctx_for("a0", None);
+    // Test3/02: schema rejection now proves no execution via a typed error;
+    // evaluation safety and reopen must retain the same preflight boundary.
     assert!(matches!(
         worker.registry.call(&worker.db, &ctx, "fs_read", json!({})),
-        Err(crate::tools::ToolError::BadInput(_))
+        Err(crate::tools::ToolError::RepairableInput {
+            code: "schema_invalid",
+            ..
+        })
     ));
     let checked = host.inspect_evaluation_outcome(&run.id).unwrap();
     assert_eq!(

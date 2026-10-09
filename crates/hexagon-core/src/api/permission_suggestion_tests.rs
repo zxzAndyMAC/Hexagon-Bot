@@ -491,3 +491,74 @@ fn project_permission_continues_every_resolved_agent_without_replaying_effects()
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn project_permission_short_save_queues_peers_and_continues_after_ordinary_failure() {
+    use crate::provider::ScriptedProvider;
+    use crate::turn::{text_response, tool_response};
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker", "tester"], None).unwrap();
+    wb.registry
+        .register(FailFirstCommand(std::sync::atomic::AtomicBool::new(true)));
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("plan first"),
+        tool_response(vec![("first", "bash", json!({"cmd":"printf resume"}))]),
+        text_response(r#"{"verdict":"unsure","reason":"owner decision"}"#),
+        text_response("plan second"),
+        tool_response(vec![("second", "bash", json!({"cmd":"printf resume"}))]),
+        text_response(r#"{"verdict":"unsure","reason":"owner decision"}"#),
+        text_response("continued first"),
+        text_response("continued second"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    let TurnOutcome::AwaitingPermission(first) =
+        wb.dispatch("worker", "first original task", &[]).unwrap()
+    else {
+        panic!("first must wait");
+    };
+    assert!(matches!(
+        wb.dispatch("tester", "second original task", &[]).unwrap(),
+        TurnOutcome::AwaitingPermission(_)
+    ));
+    let saved = wb
+        .permission_control()
+        .save_project_permission(&wb.db, &first)
+        .unwrap();
+    assert_eq!(saved.len(), 2);
+    assert_eq!(
+        provider.recorded().len(),
+        6,
+        "save must not send either continuation"
+    );
+    assert!(crate::cards::queued(&wb.db, "p1").unwrap().is_empty());
+    assert!(
+        wb.db
+            .events("p1", Some(&[EventKind::ToolResult]))
+            .unwrap()
+            .is_empty(),
+        "saving does not run the tools"
+    );
+    assert!(wb.continue_saved_permission(&saved[0]).is_err());
+    wb.continue_saved_permission(&saved[1]).unwrap();
+    for card in saved {
+        wb.continue_saved_permission(&card).unwrap();
+    }
+    let requests = provider.recorded();
+    assert_eq!(requests.len(), 8);
+    for (request, task) in requests[6..]
+        .iter()
+        .zip(["first original task", "second original task"])
+    {
+        let history = serde_json::to_string(&request.messages).unwrap();
+        assert!(history.contains(task));
+        assert!(history.contains("tool_result"));
+    }
+    assert_eq!(
+        wb.db
+            .events("p1", Some(&[EventKind::ToolResult]))
+            .unwrap()
+            .len(),
+        2
+    );
+}

@@ -65,6 +65,31 @@ it('provider failure remains visible outside system-event folds without a click'
   } finally { await act(async () => root.unmount()) }
 })
 
+it('a saved permission exposes background continuation without claiming execution success', async () => {
+  useUiStore.setState({ timeline: [1, 2, 3, 4].map(id => ({
+    event: { id, kind: id === 2 ? 'permission_allowed' : 'system', project_id: 'p1', agent_id: 'a0', stage_run_id: null, created_at: '',
+      payload: id === 2 ? { action_id: 'A', tool: 'bash', execution: 'queued' } : { kind: 'request_envelope' } }, message: null,
+  })), pending: [], team: [], streams: {}, thinkings: {}, streamDone: {} })
+  const el = document.createElement('div'); const root = createRoot(el)
+  try {
+    await act(async () => root.render(<Timeline />))
+    expect(el.textContent).toContain('Decision saved · bash queued to continue')
+    expect(el.textContent).not.toContain('bash completed')
+  } finally { await act(async () => root.unmount()) }
+})
+
+it('exposes the actual execution start after a saved permission', async () => {
+  useUiStore.setState({ timeline: [1, 2, 3, 4, 5].map(id => ({
+    event: { id, kind: 'system', project_id: 'p1', agent_id: 'a0', stage_run_id: null, created_at: '',
+      payload: id === 3 ? { kind: 'tool_execution_started', tool: 'bash', action_id: 'A' } : { kind: 'request_envelope' } }, message: null,
+  })), pending: [], team: [], streams: {}, thinkings: {}, streamDone: {} })
+  const el = document.createElement('div'); const root = createRoot(el)
+  try {
+    await act(async () => root.render(<Timeline />))
+    expect(el.textContent).toContain('bash started executing')
+  } finally { await act(async () => root.unmount()) }
+})
+
 it('shows browser observation screenshot evidence through the same local thumbnail control', async () => {
   // Extension12 integration: browser observations persist the same screenshot
   // envelope as native observations and must not disappear behind a tool prefix.

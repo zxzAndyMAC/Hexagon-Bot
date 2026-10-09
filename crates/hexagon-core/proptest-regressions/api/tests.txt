@@ -9,3 +9,4 @@ cc bc95e83377656a8c81cb89471f309746e9af81d9e26d3fda42a9e6c60344f216 # shrinks to
 cc 6e8391d26418d30312261e4d0f7932886bf5455b464d7403b40e4d0b9670f853 # shrinks to suffix = "a", punct = "\""
 cc e3ff4b0a716c677cece82a2d737de71df927d6e37e3ee7589d34dff49a90f207 # shrinks to search = true, read = true
 cc bde63875577140d9c4e653abee02084ca0c67859a29be6dd273873b7c8fe8f5e # shrinks to case = 7, stage = false
+cc 3b8ab3ac744be5936a55118e1310b45573b40bc3b4dc7fa368c1168f239ed997 # shrinks to case = 4

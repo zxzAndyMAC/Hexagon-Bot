@@ -36,8 +36,11 @@ pub enum ArtifactError {
     MaterializationPending,
     #[error("missing required field in header: {0}")]
     MissingField(&'static str),
-    #[error("skeleton requires section: {0}")]
-    MissingSection(&'static str),
+    #[error("skeleton requires section: {section}; use a level-2 Markdown heading such as ## 1. {section} or ## {section}（note）; body text and code fences do not count; recognized level-2 headings: {recognized:?}")]
+    MissingSection {
+        section: &'static str,
+        recognized: Vec<String>,
+    },
     #[error(transparent)]
     Tool(#[from] ToolError),
     #[error(transparent)]
@@ -105,13 +108,89 @@ impl TierMap {
 }
 
 /// skeleton 档各 kind 的必备 `## ` 节。
-fn required_sections(kind: &str) -> &'static [&'static str] {
-    match kind {
-        "规格" => &["目标", "范围", "验收"],
-        "接口说明" => &["资源", "端点", "错误码"],
-        "技术裁定记录" => &["背景", "决定", "后果"],
-        _ => &[],
+pub(crate) const SECTION_CONTRACTS: &[(&str, &[&str])] = &[
+    ("规格", &["目标", "范围", "验收"]),
+    ("接口说明", &["资源", "端点", "错误码"]),
+    ("技术裁定记录", &["背景", "决定", "后果"]),
+];
+
+pub(crate) fn required_sections(kind: &str) -> &'static [&'static str] {
+    SECTION_CONTRACTS
+        .iter()
+        .find(|(name, _)| *name == kind)
+        .map_or(&[], |(_, sections)| *sections)
+}
+
+// test3-2026-10-09/01 (Q3/Q9): exact text rejected numbered ADR headings.
+// False negatives cost a corrected delivery; false positives admit missing
+// requirements. Ignore code, preserve canonical names, never use synonyms.
+fn section_headings(body: &str) -> Vec<&str> {
+    let mut fence: Option<(char, usize)> = None;
+    let mut headings = Vec::new();
+    for line in body.lines() {
+        let text = line.trim_start_matches(' ');
+        if line.len() - text.len() > 3 {
+            continue;
+        }
+        if let Some((mark, size)) = fence {
+            let count = text.chars().take_while(|c| *c == mark).count();
+            if count >= size && text[count..].trim().is_empty() {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(mark @ ('`' | '~')) = text.chars().next() {
+            let count = text.chars().take_while(|c| *c == mark).count();
+            if count >= 3 {
+                fence = Some((mark, count));
+                continue;
+            }
+        }
+        if let Some(title) = text
+            .strip_prefix("##")
+            .filter(|s| s.starts_with(char::is_whitespace))
+        {
+            headings.push(title.trim());
+        }
     }
+    headings
+}
+
+fn matches_section(mut title: &str, section: &str) -> bool {
+    let digits = title.bytes().take_while(u8::is_ascii_digit).count();
+    if digits > 0 && title[..digits].bytes().any(|b| b != b'0') {
+        let tail = title[digits..].trim_start();
+        if let Some(rest) = tail.strip_prefix(['.', '．', '、']) {
+            title = rest.trim_start();
+        }
+    }
+    let Some(suffix) = title.strip_prefix(section) else {
+        return false;
+    };
+    let suffix = suffix.trim();
+    if suffix.is_empty() {
+        return true;
+    }
+    if !suffix.starts_with(['(', '（']) {
+        return false;
+    }
+    let mut brackets = Vec::new();
+    for (offset, c) in suffix.char_indices() {
+        match c {
+            '(' => brackets.push(')'),
+            '（' => brackets.push('）'),
+            ')' | '）' => {
+                if brackets.pop() != Some(c) {
+                    return false;
+                }
+                if brackets.is_empty() {
+                    return offset + c.len_utf8() == suffix.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 #[derive(Debug, Clone)]
@@ -200,12 +279,13 @@ fn validate(
         return Err(ArtifactError::MissingField("author"));
     }
     if tier == Tier::Skeleton {
+        let headings = section_headings(body);
         for sec in required_sections(&meta.kind) {
-            let needle = format!("## {sec}");
-            if !body.lines().any(|l| {
-                l.trim_start() == needle || l.trim_start().starts_with(&format!("{needle} "))
-            }) {
-                return Err(ArtifactError::MissingSection(sec));
+            if !headings.iter().any(|title| matches_section(title, sec)) {
+                return Err(ArtifactError::MissingSection {
+                    section: sec,
+                    recognized: headings.iter().map(|s| (*s).into()).collect(),
+                });
             }
         }
     }
@@ -475,7 +555,14 @@ mod tests {
         let tiers = TierMap::new();
         let bad = "---\nkind: 规格\nauthor: a1\n---\n## 目标\nx\n"; // 缺 范围/验收
         let err = deliver(&db, &ctx, &tiers, "specs/prd.md", bad, None).unwrap_err();
-        assert!(matches!(err, ArtifactError::MissingSection("范围")));
+        // test3/01 now retains recognized headings in the corrective feedback.
+        assert!(matches!(
+            err,
+            ArtifactError::MissingSection {
+                section: "范围",
+                ..
+            }
+        ));
     }
 
     #[test]

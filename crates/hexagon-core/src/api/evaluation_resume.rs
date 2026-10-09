@@ -4,7 +4,12 @@ use crate::provider::{ContentBlock, Message, Role};
 use crate::tools::CallOutcome;
 use serde_json::Value;
 
-type RestoredObservations = (Vec<Message>, bool, Vec<(Value, Value)>);
+type RestoredObservations = (
+    Vec<Message>,
+    bool,
+    Vec<(Value, Value)>,
+    Vec<crate::tools::effects::EffectReceipt>,
+);
 
 pub(super) struct ActivationResume {
     pub turn_id: i64,
@@ -13,6 +18,7 @@ pub(super) struct ActivationResume {
     pub history: Vec<Message>,
     pub source_reviewed: bool,
     pub task_operations: Vec<(Value, Value)>,
+    pub edit_receipts: Vec<crate::tools::effects::EffectReceipt>,
 }
 
 impl Workbench {
@@ -24,6 +30,7 @@ impl Workbench {
         aid: &str,
         run: Option<&str>,
         resume: &ActivationResume,
+        reason: &str,
     ) -> Result<(), ApiError> {
         let started = std::time::Instant::now();
         let key = format!(
@@ -44,7 +51,7 @@ impl Workbench {
             Some(aid),
             crate::cards::CardKind::Stall,
             json!({"branch":"no_reply","retry":true,"role":role,"instruction":resume.instruction,
-                "run_id":run,"source":"activation_resume","reason":"resume_provider_unavailable",
+                "run_id":run,"source":"activation_resume","reason":reason,
                 "trigger_turn_id":resume.turn_id,"activation_root_turn_id":resume.root_turn_id}),
             Some(&key),
         )?;
@@ -54,7 +61,7 @@ impl Workbench {
             &self.project_id,
             EventKind::System,
             json!({"kind":"stall_carded","branch":"no_reply","question_id":qid,"retry":true,
-                "source":"activation_resume","reason":"resume_provider_unavailable",
+                "source":"activation_resume","reason":reason,
                 "turn_id":resume.turn_id,"activation_root_turn_id":resume.root_turn_id}),
             Some(aid),
             run,
@@ -125,22 +132,68 @@ impl Workbench {
         {
             return Err(reject("packet_identity_mismatch"));
         }
+        // Test3/04: denial is durable while stopped, but its continuation card
+        // must remain queued until the owner actually resumes this task.
+        if orchestra::is_paused(&self.db, &self.project_id)?
+            || self.db.conn().query_row(
+                "SELECT status='sleeping' FROM agents WHERE project_id=?1 AND id=?2",
+                rusqlite::params![self.project_id, aid],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            return Err(reject("task_paused_or_sleeping"));
+        }
         self.turn_provider(aid)?;
         // Missing configuration keeps the card queued and does not consume the
         // ordinary stall episode retry. Only admitted execution closes this card.
         crate::cards::answer(&self.db, &card.id, "owner")?;
-        self.run_turn_agent_with_history(
+        self.run_activation_continuation(aid, run, &resume)?;
+        Ok(StallTick::Retriggered {
+            agent_id: aid.to_string(),
+        })
+    }
+
+    pub(super) fn run_activation_continuation(
+        &self,
+        aid: &str,
+        run: Option<&str>,
+        resume: &ActivationResume,
+    ) -> Result<(), ApiError> {
+        let outcome = self.run_turn_agent_with_history(
             aid,
             &resume.instruction,
             &[],
             false,
             &resume.history,
-            Some(&resume),
+            Some(resume),
             true,
         )?;
-        Ok(StallTick::Retriggered {
-            agent_id: aid.to_string(),
-        })
+        // Test3/04 review: pause can win after the card is consumed and the
+        // child starts. Retain that child's exact history, never reuse its parent
+        // or report Interrupted as a completed/retriggered task.
+        if outcome == TurnOutcome::Interrupted {
+            let child: Option<i64> = self.db.conn().query_row(
+                "SELECT MAX(id) FROM events WHERE project_id=?1 AND agent_id=?2
+                 AND stage_run_id IS ?3 AND kind='turn_started'
+                 AND json_extract(payload,'$.resume_from_turn_id')=?4
+                 AND COALESCE(json_extract(payload,'$.subagent'),0)=0",
+                rusqlite::params![self.project_id, aid, run, resume.turn_id],
+                |row| row.get(0),
+            )?;
+            let interrupted = self.activation_resume(
+                aid,
+                run,
+                Some(child.ok_or_else(|| {
+                    ApiError::BadInput("interrupted child identity missing".into())
+                })?),
+            )?;
+            self.queue_activation_resume(aid, run, &interrupted, "task_interrupted")?;
+            return Err(crate::tools::ToolError::NotExecuted(
+                "original task interrupted; exact recovery retained".into(),
+            )
+            .into());
+        }
+        Ok(())
     }
 
     /// I2 / V05 (2026-10-06): cursors prove delivery, not retained task state.
@@ -234,18 +287,12 @@ impl Workbench {
                 return Err(reject("stage_boundary_missing"));
             }
         }
-        let superseded: bool = self.db.conn().query_row(
-            "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
-             AND id>?3 AND (kind='fastpath_dispatched' OR
-               (kind='turn_started' AND COALESCE(json_extract(payload,'$.subagent'),0)=0
-                AND json_extract(payload,'$.resume_from_turn_id') IS NULL)))",
-            rusqlite::params![self.project_id, aid, root],
-            |r| r.get(0),
-        )?;
+        let superseded =
+            crate::actions::activation_superseded(&self.db, &self.project_id, aid, root)?;
         if superseded {
             return Err(reject("dispatch_superseded"));
         }
-        let (history, source_reviewed, task_operations) = self
+        let (history, source_reviewed, task_operations, edit_receipts) = self
             .exact_activation_history(aid, root, run, &turns)
             .inspect_err(|_| {
                 crate::diag::note(
@@ -278,6 +325,7 @@ impl Workbench {
             history,
             source_reviewed,
             task_operations,
+            edit_receipts,
         })
     }
 
@@ -313,6 +361,7 @@ impl Workbench {
         let mut timeline: Vec<(i64, Vec<Message>)> = Vec::new();
         let mut source_reviewed = false;
         let mut task_operations = Vec::new();
+        let mut edit_receipts = Vec::new();
         let mut observed_requests = std::collections::HashSet::new();
         let mut st = self.db.conn().prepare(
             "SELECT id,payload FROM events WHERE project_id=?1 AND agent_id=?2
@@ -399,6 +448,9 @@ impl Workbench {
                             let result = self.activation_action_result(&action, call_id)?;
                             if let Some(operation) = confirmed_task_operation(&action) {
                                 task_operations.push(operation);
+                            }
+                            if let Some(receipt) = self.confirmed_edit_receipt(&action)? {
+                                edit_receipts.push(receipt);
                             }
                             result
                         } else {
@@ -499,6 +551,9 @@ impl Workbench {
             if let Some(operation) = confirmed_task_operation(&action) {
                 task_operations.push(operation);
             }
+            if let Some(receipt) = self.confirmed_edit_receipt(&action)? {
+                edit_receipts.push(receipt);
+            }
             timeline.push((
                 request,
                 vec![
@@ -550,7 +605,106 @@ impl Workbench {
                 .collect(),
             source_reviewed,
             task_operations,
+            edit_receipts,
         ))
+    }
+
+    // Test3/03: only exact successful native actions in this validated history
+    // may grant editing. Model JSON/current stat/legacy results cannot supply proof.
+    fn confirmed_edit_receipt(
+        &self,
+        action: &crate::actions::Action,
+    ) -> Result<Option<crate::tools::effects::EffectReceipt>, ApiError> {
+        use crate::tools::effects::{EffectReceipt, NativeEffect};
+        if action.state != "succeeded"
+            || !matches!(action.tool.as_str(), "fs_read" | "fs_write" | "fs_patch")
+        {
+            return Ok(None);
+        }
+        let started = std::time::Instant::now();
+        let reject = |reason: &str| {
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                Some(&action.agent_id),
+                action.stage_run_id.as_deref(),
+                Some(&action.id),
+                "activation_edit_proof",
+                reason,
+                started,
+            );
+            Ok(None)
+        };
+        let Ok(Some(CallOutcome::Done(output))) = crate::actions::replay(action) else {
+            return reject("action_output_invalid");
+        };
+        let mut query = self.db.conn().prepare(
+            "SELECT payload FROM events WHERE project_id=?1 AND agent_id=?2
+             AND stage_run_id IS ?3 AND kind='tool_result'
+             AND json_extract(payload,'$.action_id')=?4 ORDER BY id",
+        )?;
+        let results = query
+            .query_map(
+                rusqlite::params![
+                    self.project_id,
+                    action.agent_id,
+                    action.stage_run_id,
+                    action.id
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        if results.len() != 1 {
+            return reject("receipt_event_missing_or_duplicate");
+        }
+        let event: Value = serde_json::from_str(&results[0])?;
+        let Ok(receipt) = serde_json::from_value::<EffectReceipt>(event["native_effect"].clone())
+        else {
+            return reject("receipt_missing_or_malformed");
+        };
+        if event["ok"] != true
+            || event["state"] != "succeeded"
+            || event["tool"] != action.tool
+            || event["result"]["output"] != output
+            || !receipt.binds(
+                &self.repo_root,
+                &action.id,
+                &action.tool,
+                &action.input,
+                &output,
+            )
+        {
+            return reject("receipt_binding_mismatch");
+        }
+        let path = match &receipt.effect {
+            NativeEffect::FileRead { path, .. } if action.tool == "fs_read" => path,
+            NativeEffect::FileWrite { path, .. }
+                if matches!(action.tool.as_str(), "fs_write" | "fs_patch") =>
+            {
+                path
+            }
+            _ => return reject("receipt_effect_mismatch"),
+        };
+        let expected = action.input["path"]
+            .as_str()
+            .and_then(|raw| crate::tools::agent_readable_repo_path(&self.repo_root, raw).ok());
+        let actual = crate::tools::agent_readable_repo_path(&self.repo_root, path).ok();
+        // Test3/03 alias regression: equal bytes at a retargeted symlink are
+        // not the original canonical file that produced this host receipt.
+        let original = self
+            .repo_root
+            .canonicalize()
+            .ok()
+            .map(|root| root.join(path));
+        if std::path::Path::new(path).is_absolute()
+            || expected.is_none()
+            || expected != actual
+            || original != actual
+        {
+            return reject("receipt_path_or_alias_changed");
+        }
+        Ok(Some(receipt))
     }
 
     fn activation_action_result(

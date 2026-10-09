@@ -128,6 +128,7 @@ pub(super) fn model_visible(e: &ToolError) -> bool {
         ToolError::PathEscape(_)
             | ToolError::Io(_)
             | ToolError::BadInput(_)
+            | ToolError::RepairableInput { .. }
             | ToolError::Exec(_)
             | ToolError::Artifact(_)
             | ToolError::UnknownQuestion(_)

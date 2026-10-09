@@ -26,6 +26,10 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
     #[error("bad input: {0}")]
     BadInput(String),
+    // test3/02 Q4: only a host-owned pre-effect check may emit this proof;
+    // opaque BadInput/IO from executed tools must retain their old guards.
+    #[error("bad input: {message}")]
+    RepairableInput { code: &'static str, message: String },
     #[error("exec: {0}")]
     Exec(String),
     #[error(transparent)]
@@ -48,6 +52,12 @@ pub enum ToolError {
     ActionReady(String),
     #[error("tool was not executed: {0}")]
     NotExecuted(String),
+}
+
+#[derive(Clone)]
+pub(crate) struct SavedPermissionAdmission {
+    pub root_turn_id: i64,
+    pub slots: Arc<std::sync::RwLock<std::collections::HashMap<String, ()>>>,
 }
 
 #[derive(Clone)]
@@ -107,6 +117,9 @@ pub struct ToolContext {
     pub(crate) activation_root_turn_id: Option<i64>,
     /// A durable host source-review transition, never inferred from model text.
     pub(crate) source_review_phase: bool,
+    /// Test3/04: revalidate the exact task and current control state after
+    /// waiting for write targets, atomically with claiming its saved action.
+    pub(crate) saved_permission_admission: Option<SavedPermissionAdmission>,
 }
 
 impl Default for ToolContext {
@@ -138,6 +151,7 @@ impl Default for ToolContext {
             resume_from_turn_id: None,
             activation_root_turn_id: None,
             source_review_phase: false,
+            saved_permission_admission: None,
         }
     }
 }
@@ -421,9 +435,9 @@ impl Registry {
                     &format!("schema_invalid:{name}"),
                     started,
                 );
-                ToolError::BadInput(format!(
+                ToolError::RepairableInput { code: "schema_invalid", message: format!(
                     "invalid arguments for {name}: {why}. Fix the arguments to match the tool's input schema and call again."
-                ))
+                ) }
             })
     }
 
@@ -621,6 +635,40 @@ impl Registry {
         pack: Option<&crate::orchestra::PackDef>,
         origin: &str,
     ) -> Result<CallOutcome, ToolError> {
+        let action_id = self.decide_permission(
+            db,
+            ctx,
+            question_id,
+            allow,
+            remember_shape,
+            scope,
+            pack,
+            origin,
+            false,
+        )?;
+        self.resume_action(db, ctx, &action_id)
+    }
+
+    /// test3/04: commit a decision without running a tool or model. Taking the
+    /// writer transaction before reading queued state gives competing clicks
+    /// one winner across the execution and short control connections.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn decide_permission(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        question_id: &str,
+        allow: bool,
+        remember_shape: Option<&str>,
+        scope: &str,
+        pack: Option<&crate::orchestra::PackDef>,
+        origin: &str,
+        continue_original: bool,
+    ) -> Result<String, ToolError> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            db.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         let card = crate::cards::get_queued(db, question_id, crate::cards::CardKind::Permission)
             .map_err(|e| match e {
                 crate::cards::CardsError::NotQueued { state, .. } => {
@@ -649,6 +697,7 @@ impl Registry {
                     Some(&format!("legacy:{question_id}")),
                 )?;
                 crate::cards::annotate(db, question_id, &[("action_id", json!(action.id))])?;
+                crate::actions::set_question(db, ctx, &action.id, question_id)?;
                 action.id
             }
         };
@@ -656,6 +705,11 @@ impl Registry {
         if action.agent_id != ctx.agent_id || action.tool != tool_name || action.input != raw_input
         {
             return Err(ToolError::BadInput("permission action mismatch".into()));
+        }
+        if action.state != "pending" {
+            return Err(ToolError::BadInput(
+                "permission action is not pending".into(),
+            ));
         }
         let mut origin_ctx = ctx.clone();
         origin_ctx.stage_run_id = action.stage_run_id;
@@ -705,8 +759,10 @@ impl Registry {
         } else {
             origin
         };
-        let tx = db.conn().unchecked_transaction()?;
         crate::cards::answer(db, question_id, origin)?;
+        if continue_original {
+            crate::cards::annotate(db, question_id, &[("continue_original", json!(true))])?;
+        }
 
         if !allow {
             db.append_event(
@@ -727,13 +783,13 @@ impl Registry {
             let reason = format!("(owner): {msg}");
             crate::actions::denied(db, ctx, &action_id, &reason)?;
             tx.commit()?;
-            return Ok(CallOutcome::Denied(reason));
+            return Ok(action_id);
         }
 
         db.append_event(
             &ctx.project_id,
             EventKind::PermissionAllowed,
-            json!({ "tool": tool_name, "question_id": question_id, "via": origin }),
+            json!({ "tool": tool_name, "question_id": question_id, "via": origin, "action_id":action_id, "execution":"queued" }),
             Some(&ctx.agent_id),
             ctx.stage_run_id.as_deref(),
         )?;
@@ -761,8 +817,7 @@ impl Registry {
 
         crate::actions::authorize(db, ctx, &action_id)?;
         tx.commit()?;
-        self.exec_and_log(db, ctx, &tool_name, raw_input, None, &action_id, true)
-            .map(CallOutcome::Done)
+        Ok(action_id)
     }
 
     pub(crate) fn resume_action(
@@ -775,6 +830,9 @@ impl Registry {
         if action.agent_id != ctx.agent_id {
             return Err(ToolError::BadInput("action owner mismatch".into()));
         }
+        let mut origin_ctx = ctx.clone();
+        origin_ctx.stage_run_id = action.stage_run_id.clone();
+        let ctx = &origin_ctx;
         if let Some(result) = crate::actions::replay(&action)? {
             return Ok(result);
         }
@@ -864,6 +922,20 @@ impl Registry {
         }
         #[cfg(test)]
         crate::actions::checkpoint(crate::actions::CrashPoint::Authorization);
+        if !retry {
+            crate::actions::capture_retry_contract(db, action_id, tool.idempotency_contract())?;
+        }
+        // Test3/04 review: target verification can wait while owner control
+        // saves a stop. Claim execution only after that wait has finished.
+        let verified = writeguard::verify(db, ctx, tool.as_ref(), &input, action_id);
+        if ctx.saved_permission_admission.is_some() {
+            if let crate::permissions::Decision::Deny { reason, .. } =
+                crate::permissions::evaluate_logged(db, ctx, tool.as_ref(), name, &input)?
+            {
+                crate::actions::denied(db, ctx, action_id, &reason)?;
+                return Err(ToolError::Exec(reason));
+            }
+        }
         if retry {
             if !crate::actions::start_retry(
                 db,
@@ -875,7 +947,6 @@ impl Registry {
                 return Err(ToolError::OutcomeUnknown(action_id.into()));
             }
         } else {
-            crate::actions::capture_retry_contract(db, action_id, tool.idempotency_contract())?;
             crate::actions::start(db, ctx, action_id)?;
         }
         let mut execution_ctx = ctx.clone();
@@ -884,16 +955,15 @@ impl Registry {
         // retaining the existing shared process owner and output tap.
         execution_ctx.sessions = ctx.sessions.for_call(&ctx.agent_id, call_seq);
         execution_ctx.action_key = Some(action_id.into());
-        execution_ctx.native_effect = ctx
-            .repo_root
-            .join(".hexagon/evaluation-worker")
-            .is_file()
-            .then(|| Arc::new(std::sync::Mutex::new(None)));
+        // Test3/03: ordinary native file calls also need successful host
+        // receipts. Do not turn receipt recording into a host-worker grant.
+        let record_native = ctx.repo_root.join(".hexagon/evaluation-worker").is_file()
+            || matches!(name, "fs_read" | "fs_write" | "fs_patch");
+        execution_ctx.native_effect = record_native.then(|| Arc::new(std::sync::Mutex::new(None)));
         // Reliability 15: approval is bound to the original target snapshot.
         // Keep the host locks until execution returns; an empty fresh read ledger
         // on the control connection cannot waive the persisted precondition.
-        let result = match writeguard::verify(db, &execution_ctx, tool.as_ref(), &input, action_id)
-        {
+        let result = match verified {
             Ok(mut locks) => {
                 execution_ctx.write_lease = locks.pop().map(Arc::new);
                 crate::evaluation::control::checkpoint(&ctx.repo_root)
@@ -997,6 +1067,7 @@ fn effect_uncertain(risk: RiskClass, error: &ToolError) -> bool {
     }
     match error {
         ToolError::BadInput(_)
+        | ToolError::RepairableInput { .. }
         | ToolError::PathEscape(_)
         | ToolError::NotExecuted(_)
         | ToolError::WriteConflict { .. } => false,
@@ -1006,7 +1077,7 @@ fn effect_uncertain(risk: RiskClass, error: &ToolError) -> bool {
                 | crate::artifacts::ArtifactError::MetadataConflict
                 | crate::artifacts::ArtifactError::StaleReview
                 | crate::artifacts::ArtifactError::MissingField(_)
-                | crate::artifacts::ArtifactError::MissingSection(_)
+                | crate::artifacts::ArtifactError::MissingSection { .. }
         ),
         _ => true,
     }

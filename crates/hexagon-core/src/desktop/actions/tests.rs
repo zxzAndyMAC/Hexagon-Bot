@@ -125,6 +125,8 @@ fn missing_consent_or_vision_never_reaches_native_backend() {
     let wb = crate::api::Workbench::for_test(dir.path(), &["QA"], None).unwrap();
     let mut ctx = wb.ctx_for("a0", None);
     let observe = crate::tools::desktop::ComputerObserve;
+    // The owner's configured default can have vision; this fixture tests its absence.
+    ctx.caps.remove("vision");
     assert!(observe
         .precondition(&json!({"op":"observe"}), &ctx)
         .is_err());

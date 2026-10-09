@@ -454,9 +454,11 @@ fn completed_quality_revalidation_checks_all_stages_with_or_without_a_stamp_or_s
 #[test]
 fn completed_historical_performance_change_requires_real_samples_and_owner_confirmation() {
     let dir = tempfile::tempdir().unwrap();
+    // 2026-10-09 full-suite incident: 1ms samples measured scheduler noise
+    // (35ms -> 105ms). Keep real measurements and thresholds, with a stable workload.
     for (name, body) in [
-        ("old.sh", "sleep 0.03\n"),
-        ("new.sh", "sleep 0.001\n"),
+        ("old.sh", "sleep 1\n"),
+        ("new.sh", "sleep 0.5\n"),
         ("later.sh", "exit 0\n"),
     ] {
         std::fs::write(dir.path().join(name), body).unwrap();

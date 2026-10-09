@@ -640,6 +640,7 @@ impl Db {
 /// （如失速监视的门面测试）写入 System 事件后也要对账这一张表。
 #[cfg(test)]
 pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
+    "tool_execution_started",
     "approval_mode_changed",
     "design_direction_requested",
     "design_options_proposed",

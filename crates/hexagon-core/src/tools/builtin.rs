@@ -193,7 +193,10 @@ fn require_fresh_read(ctx: &ToolContext, rel: &str) -> Result<(), ToolError> {
         verdict.code(),
         started,
     );
-    Err(ToolError::BadInput(msg))
+    Err(ToolError::RepairableInput {
+        code: verdict.code(),
+        message: msg,
+    })
 }
 
 pub struct FsWrite;
@@ -314,7 +317,11 @@ impl Tool for FsPatch {
         FsWrite.builtin_deny(input, ctx)
     }
     fn precondition(&self, input: &Value, ctx: &ToolContext) -> Result<(), ToolError> {
-        require_fresh_read(ctx, str_arg(input, "path")?)
+        let rel = str_arg(input, "path")?;
+        // test3 action424: fs_write may create; fs_patch must have a target.
+        // Do not change shared readstate's new-file rule or rewrite old unknowns.
+        std::fs::metadata(repo_path(&ctx.repo_root, rel)?).map_err(|e| ToolError::RepairableInput { code: "patch_target_unreadable", message: format!("{rel}: patch requires an existing readable target: {e}. Use fs_write for a new repository file or artifact_write for a deliverable.") })?;
+        require_fresh_read(ctx, rel)
     }
     fn exec(&self, _db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let p = repo_path(&ctx.repo_root, str_arg(input, "path")?)?;
@@ -322,24 +329,34 @@ impl Tool for FsPatch {
         let new = str_arg(input, "new")?;
         let replace_all = input["replace_all"].as_bool().unwrap_or(false);
         if old.is_empty() {
-            return Err(ToolError::BadInput("`old` must not be empty".into()));
+            return Err(ToolError::RepairableInput {
+                code: "patch_empty_old",
+                message: "`old` must not be empty".into(),
+            });
         }
-        let content = std::fs::read_to_string(&p)?;
+        // Still before any write, including a target removed after preflight.
+        let content = std::fs::read_to_string(&p).map_err(|e| ToolError::RepairableInput {
+            code: "patch_target_unreadable",
+            message: format!(
+                "patch target {} could not be read before writing: {e}",
+                str_arg(input, "path").unwrap_or("")
+            ),
+        })?;
         // 票 02（prompt-engineering）：描述一直承诺 old 唯一，旧写法却是
         // `replacen(old, new, 1)`——多处匹配时静默改第一处，可能改错位置。
         let matches = content.matches(old).count();
         if matches == 0 {
             let head: String = old.chars().take(200).collect();
-            return Err(ToolError::BadInput(format!(
+            return Err(ToolError::RepairableInput { code: "patch_old_missing", message: format!(
                 "`old` not found in {}. Your copy of the text is stale or mistyped — re-read the file with fs_read and copy the exact text. old starts with: {head:?}",
                 str_arg(input, "path")?
-            )));
+            ) });
         }
         if matches > 1 && !replace_all {
-            return Err(ToolError::BadInput(format!(
+            return Err(ToolError::RepairableInput { code: "patch_old_ambiguous", message: format!(
                 "`old` is ambiguous: {matches} matches in {}. Add surrounding lines to make it unique, or set replace_all: true to change every occurrence.",
                 str_arg(input, "path")?
-            )));
+            ) });
         }
         let patched = if replace_all {
             content.replace(old, new)
@@ -649,13 +666,18 @@ impl Tool for ArtifactWrite {
         "artifact_write"
     }
     fn description(&self) -> &str {
-        r#"Deliver an artifact to .hexagon/<path>: checks the metadata header, registers the artifact and supersedes earlier versions.
+        static DESCRIPTION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        DESCRIPTION.get_or_init(|| {
+            let sections = crate::artifacts::SECTION_CONTRACTS.iter().map(|(kind, names)| format!("{kind}: {}", names.join(" / "))).collect::<Vec<_>>().join("; ");
+            format!(r#"Deliver an artifact to .hexagon/<path>: checks the metadata header, registers the artifact and supersedes earlier versions.
 - Use when: producing a deliverable of the current stage or a handoff for another role.
 - Do not use: for ordinary repository files (fs_write, fs_patch). For small changes to an existing artifact, prefer fs_patch on its file. Runnable code (html, css, js, and kind 代码) also needs the same relative path written at the repository root with fs_write; a copy that exists only under .hexagon/ does not satisfy the stage.
 - Pass `kind` equal to the due deliverable name, verbatim (for example 范围说明), or start `content` with the header: line 1 `---`, line 2 `kind: <name>`, line 3 `---`. Without either it registers as misc and does not count toward the stage.
 - The kind parameter fills a missing header kind; conflicting kinds are rejected before writing. Freeform kinds may omit the header. 复审意见/测试记录/打回/改进提案 require a header with author; 规格/接口说明/技术裁定记录 also require their mandatory sections. A kind parameter never bypasses these requirements.
 - Reviews require target, verdict (pass/reject), and target_evidence copied from artifact_read; a changed target requires a new read and review.
-- Errors: malformed headers, conflicting kinds, missing author or required sections are rejected without changing the file. Fix metadata and deliver again."#
+- Required level-2 sections: {sections}. Use exact names, optionally preceded by a positive decimal number with . / ． / 、 and followed by a balanced parenthesized note, for example ## 2. 决定（强制性约束）. Body text, code fences and synonyms do not satisfy sections.
+- Errors: malformed headers, conflicting kinds, missing author or required sections are rejected without changing the file. Fix metadata and deliver again."#)
+        }).as_str()
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string","description":"artifact path under .hexagon/ (without the prefix)"},"content":{"type":"string","description":"artifact content"},"kind":{"type":"string","description":"due deliverable name, verbatim"}},"required":["path","content"]})

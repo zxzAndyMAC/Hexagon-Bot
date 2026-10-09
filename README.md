@@ -91,6 +91,30 @@ If a card says **Decision applied; original task waiting**, the decision has alr
 
 For native computer control on macOS, check the workbench's computer status and grant the required Accessibility and Screen Recording permissions. System permissions and project action approvals are separate; readiness alone does not authorize an action.
 
+### Structured artifact delivery
+
+The `artifact_write` tool lists the required sections for each structured artifact.
+Use their exact names in level-2 Markdown headings. Numbering and balanced
+parenthesized notes are accepted, such as `## 2. 决定（强制性约束）`.
+Body text, code fences, synonyms and missing metadata cannot substitute for the
+required sections. A rejected submission reports the missing section and the
+headings it recognized without replacing the previously registered version.
+
+### Editing after a permission wait
+
+Continuing the original task restores successful native file-read/write proof
+only when its recorded identity and current file contents still match. Changed
+files, missing receipts, independent tasks and child agents require a fresh read.
+Completed tools are restored as observations and are not replayed.
+
+### Saving permission decisions
+
+Allowing or denying a pending tool request saves the decision before continuing
+the action and original task in the background. A busy peer does not delay the
+save. The timeline acknowledges the queued action; execution failures and stops
+retain their recorded result or recovery entry. A project switch, changed target
+or obsolete task cannot redirect an approved action to new work.
+
 ### Repository exploration
 
 Chinese questions use the configured agent model to derive candidate identifiers,

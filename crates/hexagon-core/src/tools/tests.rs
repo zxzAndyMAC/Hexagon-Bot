@@ -1266,7 +1266,8 @@ fn pe03_missing_required_arg_rejected_before_permission() {
         .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("cmd"), "{msg}");
-    assert!(matches!(err, ToolError::BadInput(_)));
+    // test3/02: schema proof is distinct from opaque execution BadInput.
+    assert!(matches!(err, ToolError::RepairableInput { .. }));
     assert_eq!(events_of(&db, "permission_asked"), 0);
     assert_eq!(crate::cards::count_queued(&db, "p1", None).unwrap(), 0);
 }
