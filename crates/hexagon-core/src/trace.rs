@@ -642,6 +642,7 @@ impl Db {
 pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "model_request_failed",
     "model_request_recovered",
+    "tool_execution_started",
     "approval_mode_changed",
     "design_direction_requested",
     "design_options_proposed",

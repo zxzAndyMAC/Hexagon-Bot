@@ -139,13 +139,98 @@ pub(crate) fn set_question(
 }
 
 pub(crate) fn start(db: &Db, ctx: &ToolContext, id: &str) -> Result<(), ToolError> {
+    let tx = ctx
+        .saved_permission_admission
+        .as_ref()
+        .map(|_| {
+            rusqlite::Transaction::new_unchecked(
+                db.conn(),
+                rusqlite::TransactionBehavior::Immediate,
+            )
+        })
+        .transpose()?;
+    saved_permission_admission(db, ctx)?;
     let n = db.conn().execute("UPDATE tool_actions SET state='executing' WHERE project_id=?1 AND id=?2 AND state='authorized'", [&ctx.project_id,id])?;
     if n != 1 {
         return Err(ToolError::ActionInProgress(id.into()));
     }
+    let action = get(db, &ctx.project_id, id)?;
+    if action
+        .question_id
+        .as_deref()
+        .is_some_and(|qid| crate::cards::get(db, qid).is_ok_and(|card| card.kind == "permission"))
+    {
+        db.append_event(
+            &ctx.project_id,
+            EventKind::System,
+            json!({"kind":"tool_execution_started","action_id":id,"tool":action.tool}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+    }
+    if let Some(tx) = tx {
+        tx.commit()?;
+    }
     #[cfg(test)]
     checkpoint(CrashPoint::Intent);
     Ok(())
+}
+
+// Test3/04: a false refusal preserves recovery; a false acceptance can
+// start an obsolete side effect. Both first claims and keyed resends fail closed.
+fn saved_permission_admission(db: &Db, ctx: &ToolContext) -> Result<(), ToolError> {
+    if let Some(admission) = &ctx.saved_permission_admission {
+        // Test3/04 review: a stop committed during target verification wins
+        // against this execution claim. Later stops apply to the in-flight action.
+        let stopped = crate::orchestra::is_paused(db, &ctx.project_id)
+            .map_err(|error| ToolError::NotExecuted(error.to_string()))?
+            || db.conn().query_row(
+                "SELECT status='sleeping' FROM agents WHERE project_id=?1 AND id=?2",
+                [&ctx.project_id, &ctx.agent_id],
+                |row| row.get::<_, bool>(0),
+            )?;
+        let current = db.active_stage_run(&ctx.project_id)?.map(|run| run.id);
+        let slot: Option<String> = db.conn().query_row(
+            "SELECT model_slot FROM agents WHERE project_id=?1 AND id=?2",
+            [&ctx.project_id, &ctx.agent_id],
+            |row| row.get(0),
+        )?;
+        if stopped
+            || current != ctx.stage_run_id
+            || activation_superseded(db, &ctx.project_id, &ctx.agent_id, admission.root_turn_id)?
+        {
+            return Err(ToolError::NotExecuted(
+                "original task stopped or superseded before execution".into(),
+            ));
+        }
+        if crate::provider_config::resolve_slot(
+            &admission.slots.read().unwrap(),
+            slot.as_deref().unwrap_or("default"),
+        )
+        .is_none()
+        {
+            return Err(ToolError::NotExecuted(
+                "original task model unavailable before execution".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn activation_superseded(
+    db: &Db,
+    project: &str,
+    agent: &str,
+    root: i64,
+) -> rusqlite::Result<bool> {
+    db.conn().query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
+         AND id>?3 AND (kind='fastpath_dispatched' OR
+           (kind='turn_started' AND COALESCE(json_extract(payload,'$.subagent'),0)=0
+            AND json_extract(payload,'$.resume_from_turn_id') IS NULL)))",
+        rusqlite::params![project, agent, root],
+        |row| row.get(0),
+    )
 }
 
 pub(crate) fn denied(db: &Db, ctx: &ToolContext, id: &str, reason: &str) -> Result<(), ToolError> {
@@ -277,17 +362,7 @@ pub(crate) fn recover(db: &Db, project: &str) -> Result<(), ToolError> {
             db.append_event(project,EventKind::ToolResult,json!({"action_id":id,"tool":action.tool,"state":"unknown","ok":null,"result":{"error":"execution interrupted; outcome requires reconciliation"}}),Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
         }
         if action.state == "authorized" && !recovered_retry {
-            let key = format!("ready:{id}");
-            if crate::cards::find_by_idem(db, &ctx.agent_id, &key)?.is_none() {
-                crate::cards::enqueue(
-                    db,
-                    project,
-                    Some(&ctx.agent_id),
-                    crate::cards::CardKind::Recovery,
-                    json!({"sub":"tool_action_ready","action_id":id,"stage_run_id":ctx.stage_run_id}),
-                    Some(&key),
-                )?;
-            }
+            expose_ready(db, &ctx, &id)?;
         } else {
             // Every interrupted intent supersedes a prior ready card, including
             // a first execution resumed from an earlier authorization crash.
@@ -296,6 +371,52 @@ pub(crate) fn recover(db: &Db, project: &str) -> Result<(), ToolError> {
         }
         tx.commit()?;
     }
+    Ok(())
+}
+
+/// test3/04: a saved permission can wait for pause/model repair without losing
+/// its original action or pretending that an already sent action is unsent.
+pub(crate) fn expose_ready(db: &Db, ctx: &ToolContext, id: &str) -> Result<(), ToolError> {
+    if get(db, &ctx.project_id, id)?.state != "authorized" || is_retry(db, id)? {
+        return Ok(());
+    }
+    let key = format!("ready:{id}");
+    if !crate::cards::find_by_idem(db, &ctx.agent_id, &key)?.is_some_and(|card| {
+        card.project_id == ctx.project_id && card.state == crate::cards::CardState::Queued
+    }) {
+        crate::cards::enqueue(
+            db,
+            &ctx.project_id,
+            Some(&ctx.agent_id),
+            crate::cards::CardKind::Recovery,
+            json!({"sub":"tool_action_ready","action_id":id,"stage_run_id":ctx.stage_run_id}),
+            Some(&key),
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn fail_authorized(
+    db: &Db,
+    ctx: &ToolContext,
+    id: &str,
+    reason: &str,
+) -> Result<(), ToolError> {
+    // test3/04: the host rejects this unsent action after task/target validation.
+    // CAS must never erase a concurrent execution's uncertain outcome.
+    let tx = db.conn().unchecked_transaction()?;
+    let changed = db.conn().execute(
+        "UPDATE tool_actions SET state='failed',error=?3 WHERE project_id=?1 AND id=?2 AND state='authorized'",
+        rusqlite::params![ctx.project_id,id,reason],
+    )?;
+    if changed == 1 {
+        let action = get(db, &ctx.project_id, id)?;
+        db.append_event(&ctx.project_id, EventKind::ToolResult,
+            json!({"action_id":id,"tool":action.tool,"state":"failed","ok":false,"error":reason,"reason":"saved_permission_not_executed"}),
+            Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
+        clear_ready_card(db, ctx, id)?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -691,6 +812,7 @@ pub(crate) fn fail_unstarted_attempt(
     if !matches!(
         error,
         ToolError::BadInput(_)
+            | ToolError::RepairableInput { .. }
             | ToolError::PathEscape(_)
             | ToolError::NotExecuted(_)
             | ToolError::Io(_)
@@ -740,7 +862,11 @@ pub(crate) fn start_retry(
     permitted: bool,
 ) -> Result<bool, ToolError> {
     let started = std::time::Instant::now();
-    let tx = db.conn().unchecked_transaction()?;
+    let tx =
+        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)?;
+    // Test3/04 review: stopping during reconciliation forbids even a keyed
+    // resend, while retaining the first attempt's unknown historical result.
+    let permitted = permitted && saved_permission_admission(db, ctx).is_ok();
     let version = contract
         .filter(|c| !c.version.is_empty() && !c.validity.is_zero())
         .map(|c| c.version);

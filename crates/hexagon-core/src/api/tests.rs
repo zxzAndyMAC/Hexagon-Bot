@@ -7,6 +7,262 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+// test3-2026-10-09 ticket01: action56 had the correct numbered sections but
+// was still rejected, exhausting the architect's correction opportunities.
+#[test]
+fn numbered_artifact_sections_deliver_through_the_real_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["架构师"], None).unwrap();
+    let content = "---\nkind: 技术裁定记录\nauthor: a0\n---\n## 1. 背景\ncontext\n## 2. 决定（强制性约束）\ndecision\n## 3. 后果\nconsequences\n";
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![(
+            "deliver",
+            "artifact_write",
+            json!({"path":"notes/decision.md","content":content}),
+        )]),
+        text_response("architecture delivered"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.run_instance("a0", "Deliver the architecture decision.")
+        .unwrap();
+    let requests = provider.recorded();
+    let description = &requests[0]
+        .tools
+        .iter()
+        .find(|tool| tool.name == "artifact_write")
+        .unwrap()
+        .description;
+    for required in [
+        "规格: 目标 / 范围 / 验收",
+        "接口说明: 资源 / 端点 / 错误码",
+        "技术裁定记录: 背景 / 决定 / 后果",
+    ] {
+        assert!(
+            description.contains(required),
+            "model must receive the canonical contract: {description}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".hexagon/notes/decision.md")).unwrap(),
+        content
+    );
+    let rows = artifacts(&wb).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["kind"], "技术裁定记录");
+    assert_eq!(rows[0]["status"], "valid");
+    assert_eq!(
+        events(&wb, Some(&[EventKind::ArtifactDelivered]))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(events(&wb, Some(&[EventKind::ArtifactRejected]))
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn repairable_write_batch_gets_feedback_before_breaker() {
+    // test3/02: UX action119-121 failed in one response; no model opportunity
+    // to read existed before the former per-call breaker terminated the task.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("script.js"), "old").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let input = json!({"path":"script.js", "old":"old", "new":"fixed"});
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![
+            ("edit1", "fs_patch", input.clone()),
+            ("edit2", "fs_patch", input.clone()),
+            ("edit3", "fs_patch", input.clone()),
+        ]),
+        tool_response(vec![("read", "fs_read", json!({"path":"script.js"}))]),
+        tool_response(vec![("fix", "fs_patch", input)]),
+        text_response("corrected after reading"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    assert_eq!(
+        wb.run_instance("a0", "Correct the existing script.")
+            .unwrap(),
+        TurnOutcome::Finished
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("script.js")).unwrap(),
+        "fixed"
+    );
+    let requests = provider.recorded();
+    let errors: Vec<_> = requests[1]
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|b| {
+            if let crate::provider::ContentBlock::ToolResult {
+                tool_use_id,
+                is_error: true,
+                ..
+            } = b
+            {
+                Some(tool_use_id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(errors, vec!["edit1", "edit2", "edit3"]);
+}
+
+#[test]
+fn patch_missing_target_is_preexecution_failure_not_unknown() {
+    // test3 action424 failed while reading, before any file could be written.
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let result = tool_call(
+        &wb,
+        "fs_patch",
+        json!({"path":"absent.js", "old":"old", "new":"new"}),
+    );
+    assert!(
+        // A distinct host pre-effect proof permits repair; generic NotExecuted
+        // also covers stops/budget failures that must not get this exception.
+        matches!(result, Err(crate::tools::ToolError::RepairableInput { .. })),
+        "{result:?}"
+    );
+    assert!(!dir.path().join("absent.js").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn actual_file_write_failure_is_not_a_repairable_input_proof() {
+    use std::os::unix::fs::PermissionsExt;
+    // test3/02: only host-proven pre-effect failures get the repair allowance;
+    // an actual write error still needs durable outcome recovery.
+    for tool in ["fs_write", "fs_patch"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("draft.txt");
+        std::fs::write(&path, "original draft").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        let input = if tool == "fs_write" {
+            json!({"path":"draft.txt", "content":"revised draft"})
+        } else {
+            json!({"path":"draft.txt", "old":"original", "new":"revised"})
+        };
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            tool_response(vec![("read", "fs_read", json!({"path":"draft.txt"}))]),
+            tool_response(vec![("write", tool, input)]),
+        ]));
+        wb.register_provider("default", provider.clone());
+        let result = wb.run_instance("a0", "revise this existing draft");
+        assert!(
+            matches!(
+                result,
+                Err(ApiError::Turn(turn::TurnError::Tool(
+                    crate::tools::ToolError::OutcomeUnknown(_)
+                )))
+            ),
+            "actual {tool} I/O failure must remain unknown: {result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original draft");
+        assert_eq!(provider.recorded().len(), 2);
+        let cards = pending_questions(&wb).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0]["kind"], "recovery");
+        assert_eq!(cards[0]["payload"]["sub"], "tool_outcome_unknown");
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+    #[test]
+    fn numbered_artifact_contract_preserves_canonical_sections_and_rejected_versions(
+        number in 1u32..9999,
+        separator in proptest::sample::select(vec![".", "．", "、"]),
+        annotation in proptest::sample::select(vec!["", " (required)", "（强制性约束）", "（约束 (required)）"]),
+        bad in proptest::sample::select(vec!["## 上下文", "## 背景扩展", "### 背景", "    ## 背景", "背景", "## 0. 背景", "## 背景 unexpected", "## 背景（unclosed", "```markdown\n## 背景\n```", "~~~~\n## 背景\n~~~\n## 背景", "## 背景（a)(b）"])
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["架构师"], None).unwrap();
+        let header="---\nkind: 技术裁定记录\nauthor: a0\n---\n";
+        let content=format!("{header}## {number}{separator} 背景{annotation}\nx\n## 2. 决定\nx\n## 3. 后果\nx\n");
+        let result=tool_call(&wb,"artifact_write",json!({"path":"notes/decision.md","content":content}));
+        proptest::prop_assert!(matches!(result,Ok(CallOutcome::Done(_))),"{:?}",result);
+        let invalid=format!("{header}{bad}\nx\n## 决定\nx\n## 后果\nx\n");
+        let result=tool_call(&wb,"artifact_write",json!({"path":"notes/decision.md","content":invalid}));
+        proptest::prop_assert!(matches!(result,Err(crate::tools::ToolError::Artifact(ref error)) if matches!(error.as_ref(),crate::artifacts::ArtifactError::MissingSection { .. })),"{:?}",result);
+        proptest::prop_assert_eq!(artifact_content(&wb,"notes/decision.md").unwrap(),content);
+        let rows=artifacts(&wb).unwrap();
+        proptest::prop_assert_eq!(rows.len(),1);
+        proptest::prop_assert_eq!(&rows[0]["version"],&json!(1));
+        proptest::prop_assert_eq!(events(&wb,Some(&[EventKind::ArtifactRejected])).unwrap().len(),1);
+        let feedback = result.unwrap_err().to_string();
+        proptest::prop_assert!(feedback.contains("skeleton requires section: 背景") && feedback.contains("recognized level-2 headings:"), "{}", feedback);
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    #[test]
+    fn typed_preexecution_failures_count_feedback_rounds(batch_size in 1usize..7, rounds in 1usize..4, kind in 0usize..3) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("script.js"),"old").unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        orchestra::write_agent_status(&wb.db,"p1","a0",false).unwrap();
+        let (tool,input)=match kind {
+            0 => ("fs_patch",json!({"path":"script.js","old":"old","new":"new"})),
+            1 => ("artifact_write",json!({"path":"notes/adr.md","content":"---\nkind: 技术裁定记录\nauthor: a0\n---\n## 决定\nx\n## 后果\nx\n"})),
+            _ => ("fs_read",json!({})),
+        };
+        let mut responses=Vec::new();
+        for round in 0..rounds {
+            let ids=(0..batch_size).map(|n|format!("error-{round}-{n}")).collect::<Vec<_>>();
+            responses.push(tool_response(ids.iter().map(|id|(id.as_str(),tool,input.clone())).collect()));
+        }
+        responses.push(text_response("input correction required"));
+        let provider=Arc::new(ScriptedProvider::new(responses));
+        wb.register_provider("default",provider.clone());
+        let outcome=wb.run_instance("a0","Try the supplied input.").unwrap();
+        proptest::prop_assert_eq!(outcome==TurnOutcome::Finished, rounds<3);
+        proptest::prop_assert_eq!(provider.recorded().len(),if rounds<3 {rounds+1}else{3});
+        proptest::prop_assert_eq!(std::fs::read_to_string(dir.path().join("script.js")).unwrap(),"old");
+        proptest::prop_assert!(artifacts(&wb).unwrap().is_empty());
+        if rounds<3 {
+            let requests=provider.recorded();
+            let count=requests[1].messages.iter().flat_map(|m|&m.content).filter(|b|matches!(b,crate::provider::ContentBlock::ToolResult { is_error:true, .. })).count();
+            proptest::prop_assert_eq!(count,batch_size);
+        }
+    }
+}
+
+#[test]
+fn repairable_batch_success_cancels_that_tools_pending_breaker() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("script.js"), "old").unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let input = json!({"path":"script.js","old":"old","new":"new"});
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![("bad1", "fs_patch", input.clone())]),
+        tool_response(vec![("bad2", "fs_patch", input.clone())]),
+        tool_response(vec![
+            ("bad3", "fs_patch", input.clone()),
+            ("read", "fs_read", json!({"path":"script.js"})),
+            ("fixed", "fs_patch", input),
+        ]),
+        text_response("corrected in the final batch"),
+    ]));
+    wb.register_provider("default", provider);
+    assert_eq!(
+        wb.run_instance("a0", "Correct the script.").unwrap(),
+        TurnOutcome::Finished
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("script.js")).unwrap(),
+        "new"
+    );
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(12))]
     #[test]
@@ -6539,9 +6795,25 @@ fn model_context_rejects_sensitive_instruction_and_attachment_aliases() {
         !input.contains("secret-attachment.png"),
         "sensitive attachment entered model context"
     );
+    // The owner's default slot may have vision: a valid attachment then becomes
+    // pixels, while a text-only slot retains its name. Both must exclude the alias.
+    let image_counts: Vec<_> = provider
+        .recorded()
+        .iter()
+        .map(|request| {
+            request
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .filter(|block| matches!(block, crate::provider::ContentBlock::Image { .. }))
+                .count()
+        })
+        .collect();
+    let image_count = image_counts.iter().copied().max().unwrap_or(0);
     assert!(
-        input.contains("normal-attachment.png"),
-        "ordinary attachment was lost"
+        (image_count == 1 && !input.contains("normal-attachment.png"))
+            || (image_count == 0 && input.contains("normal-attachment.png")),
+        "exactly the ordinary attachment must survive, as pixels or a text reference: {image_counts:?}"
     );
 }
 
@@ -6759,7 +7031,9 @@ proptest::proptest! {
         // reliability 04: unknown output declarations are rejected by the
         // shared schema boundary before any process or directory is created.
         let out = registry.call(&wb.db, &ctx, "run_test", input);
-        let denied = matches!(out, Err(crate::tools::ToolError::BadInput(_)));
+        // test3/02 types schema rejection as repairable before execution;
+        // the unknown declaration is still rejected, never given authority.
+        let denied = matches!(out, Err(crate::tools::ToolError::RepairableInput { .. }));
         prop_assert!(denied);
         prop_assert!(!dir.path().join(name).exists());
     }
@@ -17262,6 +17536,966 @@ fn source_mode_replays_native_reasoning_only_until_fresh_review() {
 }
 
 struct DesktopApprovalEffect(CountingAction);
+
+#[test]
+fn permission_control_saves_before_a_peer_model_releases_the_execution_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "short-decision",
+        &[("a0".into(), "worker".into()), ("a1".into(), "peer".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    for aid in ["a0", "a1"] {
+        orchestra::write_agent_status(&wb.db, "p1", aid, false).unwrap();
+    }
+    pin_stored_rank(&wb, "L4");
+    let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(effects.clone())));
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![tool_response(vec![(
+            "wait",
+            "remote_publish",
+            json!({}),
+        )])])),
+    );
+    let TurnOutcome::AwaitingPermission(card) =
+        wb.run_instance("a0", "original waiting task").unwrap()
+    else {
+        panic!("permission must come from the real task")
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    wb.register_provider(
+        "default",
+        Arc::new(HoldProvider {
+            inner: ScriptedProvider::new(vec![text_response("peer finished")]),
+            started: Mutex::new(started_tx),
+            release: Mutex::new(release_rx),
+        }),
+    );
+    let control = wb.permission_control();
+    let db_path = wb.db.path().unwrap().to_path_buf();
+    let saved_card = card.clone();
+    let saved_effects = effects.clone();
+    let writer = std::thread::spawn(move || {
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        let db = Db::open(db_path).unwrap();
+        control
+            .save(&db, &saved_card, true, None, "activation")
+            .unwrap();
+        assert_eq!(
+            crate::cards::get(&db, &saved_card).unwrap().state,
+            crate::cards::CardState::Answered
+        );
+        assert_eq!(
+            saved_effects.load(Ordering::SeqCst),
+            0,
+            "saving a decision must not execute the tool"
+        );
+        // The peer's model can return only AFTER the durable decision above.
+        release_tx.send(()).unwrap();
+    });
+    let execution = Mutex::new(wb);
+    execution
+        .lock()
+        .unwrap()
+        .run_instance("a1", "independent peer task")
+        .unwrap();
+    writer.join().unwrap();
+    let mut wb = execution.into_inner().unwrap();
+    let resumed = Arc::new(ScriptedProvider::new(vec![text_response(
+        "original task complete",
+    )]));
+    wb.register_provider("default", resumed.clone());
+    wb.continue_saved_permission(&card).unwrap();
+    wb.continue_saved_permission(&card).unwrap();
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(resumed.recorded().len(), 1);
+    let history = serde_json::to_string(&resumed.recorded()[0].messages).unwrap();
+    assert!(history.contains("original waiting task"));
+    assert!(history.contains("confirmed"));
+}
+
+fn saved_permission_fixture() -> (
+    tempfile::TempDir,
+    Workbench,
+    String,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<ScriptedProvider>,
+) {
+    saved_permission_fixture_with_tool(false)
+}
+
+struct McpApprovalEffect(CountingAction);
+impl crate::tools::Tool for McpApprovalEffect {
+    fn name(&self) -> &str {
+        "mcp:external:counter"
+    }
+    fn description(&self) -> &str {
+        "isolated MCP grant fixture; no external service"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    fn exec(
+        &self,
+        db: &Db,
+        input: &Value,
+        ctx: &ToolContext,
+    ) -> Result<Value, crate::tools::ToolError> {
+        crate::tools::Tool::exec(&self.0, db, input, ctx)
+    }
+}
+
+fn saved_permission_fixture_with_tool(
+    mcp: bool,
+) -> (
+    tempfile::TempDir,
+    Workbench,
+    String,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<ScriptedProvider>,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "saved-permission",
+        &[("a0".into(), "worker".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tool = if mcp {
+        wb.registry
+            .register(McpApprovalEffect(CountingAction(effects.clone())));
+        crate::roles::set_grants(&wb.db, "a0", "mcp", &["external".into()]).unwrap();
+        "mcp:external:counter"
+    } else {
+        wb.registry
+            .register(DesktopApprovalEffect(CountingAction(effects.clone())));
+        "remote_publish"
+    };
+    let mut responses = vec![tool_response(vec![("wait", tool, json!({}))])];
+    // Non-safety-net MCP calls also use the real shadow reviewer before the
+    // permission wait; its closed choice must not consume the task continuation.
+    if mcp {
+        responses.push(text_response(
+            r#"{"verdict":"unsure","reason":"owner decision"}"#,
+        ));
+    }
+    responses.push(text_response("original task continued"));
+    let provider = Arc::new(ScriptedProvider::new(responses));
+    wb.register_provider("default", provider.clone());
+    let TurnOutcome::AwaitingPermission(card) =
+        wb.run_instance("a0", "original waiting task").unwrap()
+    else {
+        panic!("expected permission");
+    };
+    (dir, wb, card, effects, provider)
+}
+
+#[test]
+fn saved_permission_competing_decisions_have_one_durable_winner() {
+    let (_dir, wb, card, effects, _) = saved_permission_fixture();
+    let control = wb.permission_control();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let mut threads = Vec::new();
+    for allow in [true, false] {
+        let (control, path, card, barrier) = (
+            control.clone(),
+            wb.db.path().unwrap().to_path_buf(),
+            card.clone(),
+            barrier.clone(),
+        );
+        threads.push(std::thread::spawn(move || {
+            let db = Db::open(path).unwrap();
+            barrier.wait();
+            control.save(&db, &card, allow, None, "activation").is_ok()
+        }));
+    }
+    barrier.wait();
+    assert_eq!(
+        threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .filter(|won| *won)
+            .count(),
+        1
+    );
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    let decisions = events(
+        &wb,
+        Some(&[EventKind::PermissionAllowed, EventKind::PermissionDenied]),
+    )
+    .unwrap();
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|event| event.payload["question_id"] == card)
+            .count(),
+        1
+    );
+    wb.continue_saved_permission(&card).unwrap();
+    assert!(effects.load(Ordering::SeqCst) <= 1);
+}
+
+#[test]
+fn saved_permission_stop_and_missing_provider_retain_the_original_action() {
+    for stop in [true, false] {
+        let (_dir, mut wb, card, effects, provider) = saved_permission_fixture();
+        wb.permission_control()
+            .save(&wb.db, &card, true, None, "activation")
+            .unwrap();
+        if stop {
+            orchestra::pause(&wb.db, "p1").unwrap();
+        } else {
+            let _config = crate::provider_config::fixture_document(Default::default());
+            // Explicit injections belong to the caller; the test withdraws it
+            // through the same runtime update used by configuration refresh.
+            wb.managed_provider_slots.insert("default".into());
+            wb.reload_providers();
+        }
+        assert!(wb.continue_saved_permission(&card).is_err());
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+        assert_eq!(provider.recorded().len(), 1);
+        let pending = pending_questions(&wb).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["payload"]["sub"], "tool_action_ready");
+        let id = pending[0]["payload"]["action_id"].as_str().unwrap();
+        assert_eq!(
+            crate::actions::get(&wb.db, "p1", id).unwrap().state,
+            "authorized"
+        );
+    }
+}
+
+#[test]
+fn saved_permission_recovery_button_keeps_stop_and_resumes_the_original_task() {
+    let (_dir, wb, card, effects, provider) = saved_permission_fixture();
+    wb.permission_control()
+        .save(&wb.db, &card, true, None, "activation")
+        .unwrap();
+    orchestra::pause(&wb.db, "p1").unwrap();
+    assert!(wb.continue_saved_permission(&card).is_err());
+    let pending = pending_questions(&wb).unwrap();
+    let id = pending[0]["payload"]["action_id"].as_str().unwrap();
+    assert!(wb.resume_tool_action(id).is_err());
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    orchestra::resume(&wb.db, "p1").unwrap();
+    wb.resume_tool_action(id).unwrap();
+    wb.resume_tool_action(id).unwrap();
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.recorded().len(), 2);
+    assert!(pending_questions(&wb).unwrap().is_empty());
+}
+
+#[test]
+fn saved_permission_denial_while_paused_retains_original_task_recovery() {
+    let (_dir, wb, card, effects, provider) = saved_permission_fixture();
+    orchestra::pause(&wb.db, "p1").unwrap();
+    wb.permission_control()
+        .save(&wb.db, &card, false, None, "activation")
+        .unwrap();
+    assert!(wb.continue_saved_permission(&card).is_err());
+    let pending = pending_questions(&wb).unwrap();
+    let recovery = pending
+        .iter()
+        .find(|card| card["payload"]["source"] == "activation_resume")
+        .expect("the recorded denial still needs original-task continuation");
+    let id = recovery["id"].as_str().unwrap();
+    assert!(wb.stall_retry(id).is_err());
+    assert_eq!(
+        crate::cards::get(&wb.db, id).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+    assert_eq!(provider.recorded().len(), 1);
+    orchestra::resume(&wb.db, "p1").unwrap();
+    wb.stall_retry(id).unwrap();
+    assert_eq!(provider.recorded().len(), 2);
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    assert!(serde_json::to_string(&provider.recorded()[1].messages)
+        .unwrap()
+        .contains("denied"));
+}
+
+#[test]
+fn saved_permission_stop_after_effect_keeps_its_result_and_task_recovery() {
+    struct PauseAfterEffect(DesktopApprovalEffect);
+    impl crate::tools::Tool for PauseAfterEffect {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        fn description(&self) -> &str {
+            self.0.description()
+        }
+        fn input_schema(&self) -> Value {
+            self.0.input_schema()
+        }
+        fn exec(
+            &self,
+            db: &Db,
+            input: &Value,
+            ctx: &ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            let result = self.0.exec(db, input, ctx)?;
+            orchestra::pause(db, "p1").unwrap();
+            Ok(result)
+        }
+    }
+    let (_dir, wb, card, effects, provider) = saved_permission_fixture();
+    wb.registry
+        .register(PauseAfterEffect(DesktopApprovalEffect(CountingAction(
+            effects.clone(),
+        ))));
+    wb.permission_control()
+        .save(&wb.db, &card, true, None, "activation")
+        .unwrap();
+    assert!(wb.continue_saved_permission(&card).is_err());
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.recorded().len(), 1);
+    let pending = pending_questions(&wb).unwrap();
+    let recovery = pending
+        .iter()
+        .find(|card| card["payload"]["source"] == "activation_resume")
+        .expect("successful action is feedback for the stopped original task");
+    orchestra::resume(&wb.db, "p1").unwrap();
+    wb.stall_retry(recovery["id"].as_str().unwrap()).unwrap();
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.recorded().len(), 2);
+}
+
+#[test]
+fn saved_permission_late_model_stop_retains_the_exact_child_after_reopen() {
+    struct LatePauseSchema {
+        path: std::path::PathBuf,
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl crate::tools::Tool for LatePauseSchema {
+        fn name(&self) -> &str {
+            "late_pause_schema"
+        }
+        fn description(&self) -> &str {
+            "barrier during real child-turn preparation"
+        }
+        fn input_schema(&self) -> Value {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                let db = Db::open(&self.path).unwrap();
+                orchestra::pause(&db, "p1").unwrap();
+            }
+            json!({"type":"object"})
+        }
+        fn exec(
+            &self,
+            _: &Db,
+            _: &Value,
+            _: &ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            panic!("barrier tool is never executed")
+        }
+    }
+    for direct in [false, true] {
+        let (dir, wb, card, effects, provider) = saved_permission_fixture();
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        wb.registry.register(LatePauseSchema {
+            path: wb.db.path().unwrap(),
+            armed: armed.clone(),
+        });
+        wb.permission_control()
+            .save(&wb.db, &card, direct, None, "activation")
+            .unwrap();
+        if direct {
+            armed.store(true, Ordering::SeqCst);
+            assert!(wb.continue_saved_permission(&card).is_err());
+        } else {
+            orchestra::pause(&wb.db, "p1").unwrap();
+            assert!(wb.continue_saved_permission(&card).is_err());
+            let ready = pending_questions(&wb).unwrap();
+            let id = ready[0]["id"].as_str().unwrap();
+            orchestra::resume(&wb.db, "p1").unwrap();
+            armed.store(true, Ordering::SeqCst);
+            assert!(wb.stall_retry(id).is_err());
+            assert_eq!(
+                crate::cards::get(&wb.db, id).unwrap().state,
+                crate::cards::CardState::Answered
+            );
+        }
+        assert_eq!(
+            provider.recorded().len(),
+            1,
+            "late stop must precede a new model send"
+        );
+        assert_eq!(effects.load(Ordering::SeqCst), usize::from(direct));
+        let pending = pending_questions(&wb).unwrap();
+        let retry = pending
+            .iter()
+            .find(|card| card["payload"]["source"] == "activation_resume")
+            .expect("interrupted child needs a new exact recovery entry");
+        let child = retry["payload"]["trigger_turn_id"].as_i64().unwrap();
+        let parent: i64 = wb
+            .db
+            .conn()
+            .query_row(
+                "SELECT json_extract(payload,'$.resume_from_turn_id') FROM events WHERE id=?1",
+                [child],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(child > parent);
+        let retry_id = retry["id"].as_str().unwrap().to_string();
+        drop(wb);
+        let mut reopened =
+            Workbench::open_scoped(dir.path(), "saved-permission", &[], None, false).unwrap();
+        let resumed = Arc::new(ScriptedProvider::new(vec![text_response(
+            "exact task resumed",
+        )]));
+        reopened.register_provider("default", resumed.clone());
+        reopened
+            .registry
+            .register(DesktopApprovalEffect(CountingAction(effects.clone())));
+        assert!(resumed.recorded().is_empty());
+        orchestra::resume(&reopened.db, "p1").unwrap();
+        reopened.stall_retry(&retry_id).unwrap();
+        assert_eq!(resumed.recorded().len(), 1);
+        assert_eq!(effects.load(Ordering::SeqCst), usize::from(direct));
+        let history = serde_json::to_string(&resumed.recorded()[0].messages).unwrap();
+        assert!(history.contains("original waiting task"));
+        assert!(history.contains(if direct { "confirmed" } else { "denied" }));
+    }
+}
+
+#[test]
+fn saved_permission_idempotent_retry_obeys_a_stop_during_reconciliation() {
+    struct PausingKeyedTool(Arc<std::sync::atomic::AtomicUsize>);
+    impl crate::tools::Tool for PausingKeyedTool {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn description(&self) -> &str {
+            "synthetic command with an explicit keyed contract"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]})
+        }
+        fn risk(&self) -> crate::tools::RiskClass {
+            crate::tools::RiskClass::Exec
+        }
+        fn idempotency_contract(&self) -> Option<crate::tools::IdempotencyContract> {
+            Some(crate::tools::IdempotencyContract {
+                version: "keyed-v1".into(),
+                validity: std::time::Duration::from_secs(60),
+            })
+        }
+        fn exec(
+            &self,
+            _: &Db,
+            _: &Value,
+            ctx: &ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            assert!(ctx.action_key.is_some());
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(crate::tools::ToolError::Exec(
+                "reply lost after dispatch".into(),
+            ))
+        }
+        fn reconcile(
+            &self,
+            db: &Db,
+            _: &Value,
+            _: &ToolContext,
+            _: &str,
+        ) -> Result<crate::tools::Reconciliation, crate::tools::ToolError> {
+            orchestra::pause(db, "p1").unwrap();
+            Ok(crate::tools::Reconciliation::Unresolved {
+                evidence: "receipt not confirmed".into(),
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "keyed-stop",
+        &[("a0".into(), "worker".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry.register(PausingKeyedTool(requests.clone()));
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![("cmd", "bash", json!({"cmd":"echo original"}))]),
+        text_response(r#"{"verdict":"unsure","reason":"owner decision"}"#),
+    ]));
+    wb.register_provider("default", provider.clone());
+    let TurnOutcome::AwaitingPermission(card) =
+        wb.run_instance("a0", "original keyed task").unwrap()
+    else {
+        panic!("must wait");
+    };
+    wb.permission_control()
+        .save(&wb.db, &card, true, Some("echo original"), "project")
+        .unwrap();
+    assert!(wb.continue_saved_permission(&card).is_err());
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "stop before a keyed retry forbids another send"
+    );
+    let id = crate::cards::get(&wb.db, &card).unwrap().payload["action_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        crate::actions::get(&wb.db, "p1", &id).unwrap().state,
+        "unknown"
+    );
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .any(|card| card["payload"]["sub"] == "tool_outcome_unknown"));
+}
+
+fn assert_late_permission_stop(sleeping: bool) {
+    struct LateStop {
+        inner: ApprovedFiles,
+        path: std::path::PathBuf,
+        armed: Arc<std::sync::atomic::AtomicBool>,
+        sleeping: bool,
+    }
+    impl crate::tools::Tool for LateStop {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn description(&self) -> &str {
+            self.inner.description()
+        }
+        fn input_schema(&self) -> Value {
+            self.inner.input_schema()
+        }
+        fn write_targets(&self, input: &Value) -> Result<Vec<String>, crate::tools::ToolError> {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                let db = Db::open(&self.path).unwrap();
+                if self.sleeping {
+                    orchestra::set_agent_sleeping(&db, "p1", "a0", true).unwrap();
+                } else {
+                    orchestra::pause(&db, "p1").unwrap();
+                }
+            }
+            self.inner.write_targets(input)
+        }
+        fn exec(
+            &self,
+            db: &Db,
+            input: &Value,
+            ctx: &ToolContext,
+        ) -> Result<Value, crate::tools::ToolError> {
+            self.inner.exec(db, input, ctx)
+        }
+    }
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::open_scoped(
+            dir.path(),
+            "late-stop",
+            &[("a0".into(), "worker".into())],
+            None,
+            false,
+        )
+        .unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        std::fs::write(dir.path().join("draft.txt"), "original").unwrap();
+        let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        wb.registry.register(LateStop {
+            inner: ApprovedFiles(effects.clone()),
+            path: wb.db.path().unwrap(),
+            armed: armed.clone(),
+            sleeping,
+        });
+        let provider = Arc::new(ScriptedProvider::new(vec![tool_response(vec![(
+            "write",
+            "git_baseline_merge",
+            json!({"paths":["draft.txt"],"content":"changed"}),
+        )])]));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(card) =
+            wb.run_instance("a0", "original file task").unwrap()
+        else {
+            panic!("must wait");
+        };
+        wb.permission_control()
+            .save(&wb.db, &card, true, None, "activation")
+            .unwrap();
+        armed.store(true, Ordering::SeqCst);
+        assert!(wb.continue_saved_permission(&card).is_err());
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+        assert_eq!(provider.recorded().len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("draft.txt")).unwrap(),
+            "original"
+        );
+        let action = crate::cards::get(&wb.db, &card).unwrap().payload["action_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            crate::actions::get(&wb.db, "p1", &action).unwrap().state,
+            "authorized"
+        );
+        assert!(pending_questions(&wb)
+            .unwrap()
+            .iter()
+            .any(|card| card["payload"]["sub"] == "tool_action_ready"));
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    #[test]
+    fn saved_permission_rechecks_a_stop_arriving_during_target_verification(sleeping in proptest::bool::ANY) {
+        // Test3/04 review: every generated stop must win after initial admission
+        // and before execution, leaving a durable, provably unsent action.
+        assert_late_permission_stop(sleeping);
+    }
+
+    #[test]
+    fn permission_control_tracks_actual_registered_slot_changes(
+        changes in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY, proptest::bool::ANY), 1..5),
+    ) {
+        use proptest::prelude::*;
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        pin_stored_rank(&wb, "L4");
+        wb.db.conn().execute("UPDATE agents SET model_slot='role_draft' WHERE id='a0'", []).unwrap();
+        let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry.register(DesktopApprovalEffect(CountingAction(effects.clone())));
+        let control = wb.permission_control();
+        for (role, default, enabled) in changes {
+            let _config = crate::provider_config::fixture_document(provider_reload_document("current", role, default, enabled));
+            wb.attach_providers(Arc::new(crate::credentials::MemoryStore::default()));
+            let CallOutcome::Asked(card) = tool_call(&wb, "remote_publish", json!({})).unwrap() else { panic!("must wait"); };
+            let result = control.save(&wb.db, &card, true, None, "activation");
+            prop_assert_eq!(result.is_ok(), enabled && (role || default));
+            if result.is_err() {
+                prop_assert_eq!(crate::cards::get(&wb.db, &card).unwrap().state, crate::cards::CardState::Queued);
+                control.save(&wb.db, &card, false, None, "activation").unwrap();
+            }
+            prop_assert!(control.save(&wb.db, &card, false, None, "activation").is_err());
+            prop_assert_eq!(effects.load(Ordering::SeqCst), 0);
+            // Each unsent authorized action is finalized through the existing
+            // host rejection seam so the next independent case can be prepared.
+            let id = crate::cards::get(&wb.db, &card).unwrap().payload["action_id"].as_str().unwrap().to_string();
+            crate::actions::fail_authorized(&wb.db, &wb.ctx_for("a0", None), &id, "test task ended before execution").unwrap();
+        }
+    }
+
+    #[test]
+    fn saved_permission_dispatch_rechecks_task_stop_and_current_denial(case in 0u8..5) {
+        use proptest::prelude::*;
+        let (_dir, wb, card, effects, provider) = saved_permission_fixture_with_tool(case == 4);
+        let before = provider.recorded().len();
+        wb.permission_control().save(&wb.db, &card, true, None, "activation").unwrap();
+        match case {
+            1 => orchestra::pause(&wb.db, "p1").unwrap(),
+            2 => orchestra::set_agent_sleeping(&wb.db, "p1", "a0", true).unwrap(),
+            3 => { prop_assert!(wb.dispatch("worker", "NEW_INDEPENDENT_TASK", &[]).is_err(), "an authorized action gates the new dispatch after recording its superseding intent"); },
+            4 => crate::roles::set_grants(&wb.db, "a0", "mcp", &[]).unwrap(),
+            _ => {},
+        }
+        let outcome = wb.continue_saved_permission(&card);
+        prop_assert_eq!(effects.load(Ordering::SeqCst), usize::from(case == 0));
+        let requests = provider.recorded();
+        prop_assert_eq!(requests.len(), before + usize::from(!matches!(case,1..=3)));
+        let id = crate::cards::get(&wb.db, &card).unwrap().payload["action_id"].as_str().unwrap().to_string();
+        let action = crate::actions::get(&wb.db,"p1",&id).unwrap();
+        prop_assert_eq!(action.state.as_str(), match case {0=>"succeeded",1|2=>"authorized",3=>"failed",_=>"denied"});
+        if matches!(case,1|2|4) { prop_assert!(outcome.is_err()); }
+        else { prop_assert!(outcome.is_ok()); }
+        if case == 4 {
+            prop_assert!(serde_json::to_string(&requests.last().unwrap().messages).unwrap().contains("denied"), "revocation is feedback, not an unknown success");
+            let delivered = timeline(&wb,None,100).unwrap();
+            let finished = delivered.iter().filter(|item|item.message.as_ref().is_some_and(|message|
+                message.author == "a0" && message.body.contains("original task continued"))).count();
+            prop_assert_eq!(finished,1, "the original task must actually finish after its denial feedback");
+        }
+    }
+}
+
+#[test]
+fn saved_permission_reopen_sends_nothing_and_changed_manifest_preserves_owner_edit() {
+    // test3/04: use the real host manifest and disk reopen, not a client flag.
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "saved-write",
+        &[("a0".into(), "worker".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    std::fs::write(dir.path().join("draft.txt"), "original").unwrap();
+    let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry.register(ApprovedFiles(effects.clone()));
+    let provider = Arc::new(ScriptedProvider::new(vec![tool_response(vec![(
+        "write",
+        "git_baseline_merge",
+        json!({"paths":["draft.txt"],"content":"model edit"}),
+    )])]));
+    wb.register_provider("default", provider.clone());
+    let TurnOutcome::AwaitingPermission(card) = wb
+        .run_instance("a0", "original approved file task")
+        .unwrap()
+    else {
+        panic!("must wait");
+    };
+    wb.permission_control()
+        .save(&wb.db, &card, true, None, "activation")
+        .unwrap();
+    std::fs::write(dir.path().join("draft.txt"), "owner revision").unwrap();
+    drop(wb);
+    let mut wb = Workbench::open_scoped(dir.path(), "saved-write", &[], None, false).unwrap();
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.recorded().len(), 1);
+    let ready = pending_questions(&wb).unwrap();
+    assert!(ready
+        .iter()
+        .any(|q| q["payload"]["sub"] == "tool_action_ready"));
+    wb.registry.register(ApprovedFiles(effects.clone()));
+    let resumed = Arc::new(ScriptedProvider::new(vec![text_response(
+        "reread before a new edit",
+    )]));
+    wb.register_provider("default", resumed.clone());
+    assert!(wb.continue_saved_permission(&card).is_err());
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("draft.txt")).unwrap(),
+        "owner revision"
+    );
+    assert_eq!(resumed.recorded().len(), 1);
+    let history = serde_json::to_string(&resumed.recorded()[0].messages).unwrap();
+    assert!(history.contains("write conflict"), "{history}");
+}
+
+#[test]
+fn original_task_edit_proof_survives_a_permission_wait() {
+    for wrote in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        if !wrote {
+            std::fs::write(dir.path().join("draft.txt"), "original draft").unwrap();
+        }
+        let mut wb =
+            Workbench::for_test(dir.path(), &["worker"], Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        pin_stored_rank(&wb, "L4");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        wb.registry
+            .register(DesktopApprovalEffect(CountingAction(calls.clone())));
+        let initial = if wrote {
+            tool_response(vec![(
+                "create",
+                "fs_write",
+                json!({"path":"draft.txt","content":"original draft"}),
+            )])
+        } else {
+            tool_response(vec![("read", "fs_read", json!({"path":"draft.txt"}))])
+        };
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            initial,
+            tool_response(vec![("wait", "remote_publish", json!({}))]),
+            tool_response(vec![(
+                "edit",
+                "fs_patch",
+                json!({"path":"draft.txt","old":"original","new":"revised"}),
+            )]),
+            text_response("finished original task"),
+        ]));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(card) =
+            wb.run_instance("a0", "revise my draft").unwrap()
+        else {
+            panic!("expected a real permission wait after reading or creating the draft")
+        };
+        wb.answer_permission_and_continue(&card, false, None, "activation")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("draft.txt")).unwrap(),
+            "revised draft",
+            "confirmed original-task edit qualification was lost (wrote={wrote})"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let results = events(&wb, Some(&[EventKind::ToolResult])).unwrap();
+        assert!(results
+            .iter()
+            .any(|event| event.payload["tool"] == "fs_patch" && event.payload["ok"] == true));
+        assert_eq!(provider.recorded().len(), 4);
+    }
+}
+
+#[test]
+fn original_task_edit_proof_reopens_but_does_not_grant_a_new_task() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("draft.txt"), "original draft").unwrap();
+    let mut wb = Workbench::open(
+        dir.path(),
+        "original proof",
+        &[("a0".into(), "worker".into())],
+        Some(activation_recovery_pack()),
+    )
+    .unwrap();
+    wb.open_stage(0).unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(calls.clone())));
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![("read", "fs_read", json!({"path":"draft.txt"}))]),
+        tool_response(vec![("wait", "remote_publish", json!({}))]),
+        tool_response(vec![(
+            "edit",
+            "fs_patch",
+            json!({"path":"draft.txt","old":"original","new":"revised"}),
+        )]),
+        text_response("original task finished"),
+        tool_response(vec![(
+            "independent",
+            "fs_patch",
+            json!({"path":"draft.txt","old":"revised","new":"independent"}),
+        )]),
+        text_response("new task needs its own read"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    let TurnOutcome::AwaitingPermission(card) = wb.run_instance("a0", "revise my draft").unwrap()
+    else {
+        panic!("permission wait")
+    };
+    drop(wb);
+    let mut wb = Workbench::open(dir.path(), "original proof", &[], None).unwrap();
+    assert_eq!(
+        provider.recorded().len(),
+        2,
+        "manual reopen must not send a request"
+    );
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(calls.clone())));
+    wb.register_provider("default", provider.clone());
+    wb.answer_permission_and_continue(&card, false, None, "activation")
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("draft.txt")).unwrap(),
+        "revised draft"
+    );
+    wb.run_instance("a0", "independent new edit").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("draft.txt")).unwrap(),
+        "revised draft",
+        "a new task cannot inherit another task's edit proof"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let patches: Vec<_> = events(&wb, Some(&[EventKind::ToolResult]))
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.payload["tool"] == "fs_patch")
+        .collect();
+    assert_eq!(patches.len(), 2);
+    assert_eq!(patches[0].payload["ok"], true);
+    assert_eq!(patches[1].payload["ok"], false);
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config {
+        cases: 12,
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct("proptest-regressions/original-edit-proof.txt"))),
+        ..proptest::test_runner::Config::default()
+    })]
+    #[test]
+    fn original_task_edit_proof_requires_current_bytes_and_bound_host_receipt(
+        wrote in proptest::bool::ANY,
+        corruption in 0u8..16,
+        suffix in "[a-z]{1,8}",
+    ) {
+        // The discovered alias counterexample is replayed on every generated case.
+        for corruption in [corruption, 15] {
+        let dir = tempfile::tempdir().unwrap();
+        let body = format!("original draft {suffix}");
+        if !wrote {
+            std::fs::write(dir.path().join("draft.txt"), &body).unwrap();
+        }
+        std::fs::write(dir.path().join("other.txt"), &body).unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["worker", "peer"], Some(activation_recovery_pack())).unwrap();
+        wb.open_stage(0).unwrap();
+        pin_stored_rank(&wb, "L4");
+        wb.registry.register(DesktopApprovalEffect(CountingAction(Arc::new(std::sync::atomic::AtomicUsize::new(0)))));
+        let first = if wrote {
+            tool_response(vec![("create", "fs_write", json!({"path":"draft.txt","content":body}))])
+        } else {
+            tool_response(vec![("read", "fs_read", json!({"path":"draft.txt"}))])
+        };
+        let provider = Arc::new(ScriptedProvider::new(vec![first,
+            tool_response(vec![("wait", "remote_publish", json!({}))]),
+            tool_response(vec![("edit", "fs_patch", json!({"path":"draft.txt","old":"original","new":"revised"}))]),
+            text_response("finished original task")
+        ]));
+        wb.register_provider("default", provider.clone());
+        let TurnOutcome::AwaitingPermission(card) = wb.run_instance("a0", "revise my draft").unwrap() else { panic!("permission wait") };
+        let read = events(&wb, Some(&[EventKind::ToolResult])).unwrap().into_iter()
+            .find(|event| matches!(event.payload["tool"].as_str(),Some("fs_read"|"fs_write"))).unwrap();
+        let mut payload = read.payload.clone();
+        match corruption {
+            1 => { std::fs::write(dir.path().join("draft.txt"), format!("original external {suffix}")).unwrap(); }
+            2 => { payload.as_object_mut().unwrap().remove("native_effect"); }
+            3 => { payload["native_effect"]["version"] = json!(2); }
+            4 => { payload["native_effect"]["action_id"] = json!("another-action"); }
+            5 => { payload["native_effect"]["root"] = json!("/another/project"); }
+            6 => { payload["native_effect"]["input_digest"] = json!("wrong-input"); }
+            7 => { payload["native_effect"]["output_digest"] = json!("wrong-output"); }
+            8 => { payload["native_effect"]["effect"]["path"] = json!("other.txt"); }
+            9 => { payload["native_effect"]["effect"]["digest"] = json!("0".repeat(64)); }
+            10 => { payload["tool"] = json!("fs_grep"); }
+            11 => { payload["result"]["output"] = json!({"forged":"output"}); }
+            12 => { wb.db.conn().execute("UPDATE events SET agent_id='a1' WHERE id=?1", [read.id]).unwrap(); }
+            13 | 14 => { wb.db.conn().execute("UPDATE tool_actions SET state=?1 WHERE id=?2",
+                rusqlite::params![if corruption == 13 {"failed"} else {"unknown"},read.payload["action_id"].as_str().unwrap()]).unwrap(); }
+            15 => {
+                #[cfg(unix)] {
+                    std::fs::remove_file(dir.path().join("draft.txt")).unwrap();
+                    std::os::unix::fs::symlink("other.txt", dir.path().join("draft.txt")).unwrap();
+                }
+                #[cfg(not(unix))] {
+                    wb.db.conn().execute("UPDATE tool_actions SET state='failed' WHERE id=?1",[read.payload["action_id"].as_str().unwrap()]).unwrap();
+                }
+            }
+            _ => {}
+        }
+        if (2..12).contains(&corruption) {
+            wb.db.conn().execute("UPDATE events SET payload=?1 WHERE id=?2",rusqlite::params![payload.to_string(),read.id]).unwrap();
+        }
+        let result = wb.answer_permission_and_continue(&card, false, None, "activation");
+        let expected = if corruption == 0 {format!("revised draft {suffix}")}
+            else if corruption == 1 {format!("original external {suffix}")} else {body};
+        proptest::prop_assert_eq!(std::fs::read_to_string(dir.path().join("draft.txt")).unwrap(),expected);
+        proptest::prop_assert_eq!(std::fs::read_to_string(dir.path().join("other.txt")).unwrap(),format!("original draft {suffix}"));
+        if corruption == 14 {
+            proptest::prop_assert!(result.is_err(),"unknown original action must stop before any resume call");
+            proptest::prop_assert_eq!(provider.recorded().len(),2);
+        } else {
+            proptest::prop_assert!(result.is_ok(),"{result:?}");
+            let results = events(&wb, Some(&[EventKind::ToolResult])).unwrap();
+            let patch = results.iter().find(|event| event.payload["tool"] == "fs_patch").unwrap();
+            proptest::prop_assert_eq!(patch.payload["ok"].as_bool(),Some(corruption == 0));
+        }
+        }
+    }
+}
+
 impl crate::tools::Tool for DesktopApprovalEffect {
     fn name(&self) -> &str {
         "remote_publish"

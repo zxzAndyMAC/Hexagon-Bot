@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+mod permission_control;
+pub use permission_control::PermissionControl;
+
 /// 一条派活链上最多再派这么多次。
 ///
 /// 代价：再放行 = 模型互相点名可以无人值守烧完额度（false continue）；
@@ -270,10 +273,11 @@ pub enum IntakePrepared {
 /// 工作台实例：一个打开的项目。
 pub struct Workbench {
     pub db: Db,
-    pub registry: Registry,
+    pub registry: Arc<Registry>,
     /// 票 05：槽位表不外泄——壳层热刷新走 reload_providers()，
     /// 测试注入走 register_provider()，直改本字段的路已断（ADR 0053）。
     pub(crate) providers: HashMap<String, Arc<dyn ModelProvider>>,
+    permission_slots: Arc<std::sync::RwLock<HashMap<String, ()>>>,
     /// 配置文档拥有的运行槽；register_provider 的显式注入不属于文档。
     managed_provider_slots: HashSet<String>,
     pub creds: Arc<dyn crate::credentials::CredentialStore>,
@@ -399,7 +403,7 @@ impl Workbench {
         // ui-audit-2 票 06：MCP 端到端——`.hexagon/mcp.json` 配置的服务
         // 在 open 时 spawn+握手，工具注册进统一管线（权限照常求值，
         // grants 表 mcp 授权闸门在 evaluate L0）。
-        let registry = Registry::builtin();
+        let registry = Arc::new(Registry::builtin());
         let specs = if external_services {
             crate::mcp::load_specs(&dir)
         } else {
@@ -415,6 +419,7 @@ impl Workbench {
             db,
             registry,
             providers: HashMap::new(),
+            permission_slots: Default::default(),
             managed_provider_slots: HashSet::new(),
             creds: if external_services {
                 crate::credentials::active()
@@ -467,6 +472,9 @@ impl Workbench {
     pub fn reload_providers(&mut self) {
         let started = std::time::Instant::now();
         let doc = crate::provider_config::load().unwrap_or_default();
+        // test3/04: hold only the runtime-registration update, never a model
+        // call; the short owner control must not see a withdrawn slot.
+        let mut permission_slots = self.permission_slots.write().unwrap();
         // Competitor improvements 05 / V02 (2026-10-06): deleting only keys
         // still present in the new document left removed suppliers executable.
         // Ownership, not the new key set, decides what gets revoked. Explicit
@@ -497,6 +505,12 @@ impl Workbench {
                 );
             }
         }
+        *permission_slots = self
+            .providers
+            .keys()
+            .map(|slot| (slot.clone(), ()))
+            .collect();
+        drop(permission_slots);
         // 票 03：web 搜索槽随 providers 文档热刷——配置变了即重建，
         // 未配置即 None（工具回报槽未配置而不是隐式失败）。
         self.websearch = crate::websearch::configured(self.creds.clone());
@@ -542,7 +556,7 @@ impl Workbench {
         }
         // for_test 同样接 MCP（票 06）——测试仓写 .hexagon/mcp.json
         // 即得端到端覆盖；无配置则 None。
-        let registry = Registry::builtin();
+        let registry = Arc::new(Registry::builtin());
         let specs = crate::mcp::load_specs(dir);
         let mcp_host = if specs.is_empty() {
             None
@@ -553,6 +567,7 @@ impl Workbench {
             db,
             registry,
             providers: HashMap::new(),
+            permission_slots: Default::default(),
             managed_provider_slots: HashSet::new(),
             creds: Arc::new(crate::credentials::MemoryStore::default()),
             project_id: crate::PROJECT_ID.into(),
@@ -592,8 +607,10 @@ impl Workbench {
     }
 
     pub fn register_provider(&mut self, slot: &str, p: Arc<dyn ModelProvider>) {
+        let mut permission_slots = self.permission_slots.write().unwrap();
         self.managed_provider_slots.remove(slot);
         self.providers.insert(slot.into(), p);
+        permission_slots.insert(slot.into(), ());
     }
 
     /// 项目经理的决策槽（票 08）。`None` 或空白 = 没配，封闭选择改走主对话槽。
@@ -1158,6 +1175,7 @@ impl Workbench {
             resume_from_turn_id: None,
             activation_root_turn_id: None,
             source_review_phase: false,
+            saved_permission_admission: None,
         }
     }
 
@@ -1314,6 +1332,28 @@ impl Workbench {
     ) -> Result<crate::tools::CallOutcome, ApiError> {
         let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
         self.instance_role(&action.agent_id)?;
+        // Test3/04 review: the recovery button must use the saved permission's
+        // admission and original-task continuation, including after disk reopen.
+        if let Some(question) = action.question_id.as_deref() {
+            let card = crate::cards::get(&self.db, question)?;
+            let model_action: bool = self.db.conn().query_row(
+                "SELECT request_id IS NOT NULL FROM tool_actions WHERE project_id=?1 AND id=?2",
+                [&self.project_id, action_id],
+                |row| row.get(0),
+            )?;
+            if card.kind == "permission"
+                && card.state == crate::cards::CardState::Answered
+                && (card.payload["continue_original"] == true || model_action)
+            {
+                self.continue_saved_permission(question)?;
+                return crate::actions::replay(&crate::actions::get(
+                    &self.db,
+                    &self.project_id,
+                    action_id,
+                )?)?
+                .ok_or_else(|| ApiError::BadInput("saved action has no result".into()));
+            }
+        }
         let ctx = self.ctx_for(&action.agent_id, action.stage_run_id.clone());
         Ok(self.registry.resume_action(&self.db, &ctx, action_id)?)
     }
@@ -1477,13 +1517,17 @@ impl Workbench {
         self.continue_permission_card(card)
     }
 
-    fn continue_permission_card(&self, card: crate::cards::Card) -> Result<(), ApiError> {
+    fn permission_activation(
+        &self,
+        card: &crate::cards::Card,
+    ) -> Result<Option<evaluation_resume::ActivationResume>, ApiError> {
         use rusqlite::OptionalExtension;
         let aid = card
             .agent_id
+            .as_deref()
             .ok_or_else(|| ApiError::BadInput("permission has no owner".into()))?;
         let Some(action_id) = card.payload["action_id"].as_str() else {
-            return Ok(());
+            return Ok(None);
         };
         let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
         let active = self.active_run()?.map(|r| r.id);
@@ -1514,36 +1558,74 @@ impl Workbench {
                 crate::diag::CLASS_REJECT,
                 true,
                 Some(&self.project_id),
-                Some(&aid),
+                Some(aid),
                 action.stage_run_id.as_deref(),
                 Some(action_id),
                 "permission_resume",
                 "parent_request_scope_missing",
                 started,
             );
-            return Ok(());
+            return Ok(None);
         }
-        let resume = match self.activation_resume(&aid, active.as_deref(), parent) {
+        let child_exists: bool = self.db.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
+             AND kind='turn_started' AND json_extract(payload,'$.resume_from_turn_id')=?3
+             AND COALESCE(json_extract(payload,'$.subagent'),0)=0)",
+            rusqlite::params![self.project_id, aid, parent],
+            |row| row.get(0),
+        )?;
+        if child_exists {
+            return Ok(None);
+        }
+        let resume = match self.activation_resume(aid, active.as_deref(), parent) {
             Ok(resume) => resume,
-            Err(ApiError::BadInput(_)) => return Ok(()),
+            Err(ApiError::BadInput(_)) => return Ok(None),
             Err(error) => return Err(error),
         };
-        if let Err(error) = self.turn_provider(&aid) {
+        Ok(Some(resume))
+    }
+
+    fn continue_permission_card(&self, card: crate::cards::Card) -> Result<(), ApiError> {
+        let aid = card
+            .agent_id
+            .as_deref()
+            .ok_or_else(|| ApiError::BadInput("permission has no owner".into()))?;
+        let Some(resume) = self.permission_activation(&card)? else {
+            return Ok(());
+        };
+        let active = self.active_run()?.map(|run| run.id);
+        // Test3/04: a stop can arrive during the approved tool itself. Keep
+        // its settled observation and an exact continuation instead of dropping it.
+        if orchestra::is_paused(&self.db, &self.project_id)?
+            || self.db.conn().query_row(
+                "SELECT status='sleeping' FROM agents WHERE project_id=?1 AND id=?2",
+                rusqlite::params![self.project_id, aid],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            self.queue_activation_resume(
+                aid,
+                active.as_deref(),
+                &resume,
+                "task_paused_or_sleeping",
+            )?;
+            return Err(crate::tools::ToolError::NotExecuted(
+                "original task paused or sleeping".into(),
+            )
+            .into());
+        }
+        if let Err(error) = self.turn_provider(aid) {
             if matches!(error, ApiError::NoProvider(_)) {
-                self.queue_activation_resume(&aid, active.as_deref(), &resume)?;
+                self.queue_activation_resume(
+                    aid,
+                    active.as_deref(),
+                    &resume,
+                    "resume_provider_unavailable",
+                )?;
             }
             return Err(error);
         }
-        self.run_turn_agent_with_history(
-            &aid,
-            &resume.instruction,
-            &[],
-            false,
-            &resume.history,
-            Some(&resume),
-            true,
-        )?;
-        Ok(())
+        self.run_activation_continuation(aid, active.as_deref(), &resume)
     }
 
     /// 跑某角色一回合（若激活）。有 interrupted run 未恢复时硬挡（票 37 恢复闸）。
@@ -1684,6 +1766,29 @@ impl Workbench {
             ctx.tasks.begin_activation(&key);
             ctx.tasks
                 .restore_operations(&key, &resume.task_operations)?;
+            for receipt in &resume.edit_receipts {
+                let started = std::time::Instant::now();
+                let restored = receipt.restore_edit_read(&ctx);
+                crate::diag::note(
+                    if restored {
+                        crate::diag::CLASS_JUDGE
+                    } else {
+                        crate::diag::CLASS_REJECT
+                    },
+                    !restored,
+                    Some(&self.project_id),
+                    Some(aid),
+                    ctx.stage_run_id.as_deref(),
+                    Some(&receipt.action_id),
+                    "activation_edit_proof",
+                    if restored {
+                        "confirmed_current_bytes"
+                    } else {
+                        "receipt_stale_or_missing_file"
+                    },
+                    started,
+                );
+            }
         }
         ctx.subagent_provider = Some(provider.clone());
         if crate::provider_config::fell_back_to_default(&self.providers, &slot_name) {

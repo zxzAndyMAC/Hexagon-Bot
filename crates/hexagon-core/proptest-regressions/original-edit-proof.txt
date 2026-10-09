@@ -1,0 +1,3 @@
+# Test3/03 known counterexample: wrote=false, corruption=15, suffix="a".
+# A canonical file replaced by a symlink to equal bytes must not inherit editing proof.
+# The property replays this corruption on every case; future random failures persist here.

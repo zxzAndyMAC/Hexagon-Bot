@@ -425,11 +425,14 @@ mod tests {
                     per_role.push((role.clone(), kind.clone()));
                     if let Some(k) = kind {
                         // skeleton 档 kind 有必备节（artifacts::required_sections）
-                        let sections = match k.as_str() {
-                            "规格" => "## 目标\nx\n## 范围\nx\n## 验收\nx\n",
-                            "接口说明" => "## 资源\nx\n## 端点\nx\n## 错误码\nx\n",
-                            "技术裁定记录" => "## 背景\nx\n## 决定\nx\n## 后果\nx\n",
-                            _ => "## 概述\nx\n",
+                        let required = crate::artifacts::required_sections(&k);
+                        let sections = if required.is_empty() {
+                            "## 概述\nx\n".into()
+                        } else {
+                            required
+                                .iter()
+                                .map(|name| format!("## {name}\nx\n"))
+                                .collect::<String>()
                         };
                         let content = format!("---\nkind: {k}\nauthor: {role}\n---\n{sections}");
                         let path = format!("docs/{}/{k}.md", st.name);

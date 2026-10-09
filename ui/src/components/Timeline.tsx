@@ -230,7 +230,8 @@ function SystemRow({ item }: { item: TimelineItem }) {
   const stopped = isInterruptedTurn(item)
   const highRisk = (item.event.kind === 'turn_failed' && !stopped) || SYS_HIGH_RISK.has(sub)
   const autoStamp = item.event.kind === 'stamped' && stampedByAutonomy(item.event.payload)
-  const label = stopped ? t('ev.turn_interrupted') : autoStamp
+  const savedPermission = item.event.kind === 'permission_allowed' && item.event.payload.execution === 'queued'
+  const label = sub === 'tool_execution_started' ? t('ev.permission_executing', { tool: String(item.event.payload.tool ?? '') }) : savedPermission ? t('ev.permission_saved', { tool: String(item.event.payload.tool ?? '') }) : stopped ? t('ev.turn_interrupted') : autoStamp
     ? t('ev.stamped_auto', { stage: String(item.event.payload?.stage ?? '') })
     : sub
       ? trKey(t, `sys.${sub}`, sub)

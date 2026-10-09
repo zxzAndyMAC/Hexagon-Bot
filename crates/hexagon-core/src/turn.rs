@@ -560,6 +560,27 @@ fn bump_streak(
     *streak
 }
 
+// test3/02 Q4/Q7: classification is a host proof of a repairable pre-effect
+// failure. A false negative costs another correction; a false positive may
+// prolong side effects, so generic BadInput/IO/Denied/Exec are excluded.
+fn repairable_feedback(tool: &str, error: &ToolError) -> bool {
+    match error {
+        ToolError::RepairableInput { .. } => true,
+        ToolError::Io(e) => {
+            matches!(tool, "fs_read" | "fs_find" | "fs_grep")
+                && e.kind() == std::io::ErrorKind::NotFound
+        }
+        ToolError::Artifact(e) => matches!(
+            e.as_ref(),
+            crate::artifacts::ArtifactError::MissingHeader
+                | crate::artifacts::ArtifactError::MetadataConflict
+                | crate::artifacts::ArtifactError::MissingField(_)
+                | crate::artifacts::ArtifactError::MissingSection { .. }
+        ),
+        _ => false,
+    }
+}
+
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(ts_rs::TS)]
@@ -1049,6 +1070,8 @@ fn run_turn_impl(
         // 同工具同错熔断状态：跨 round 连击计数（US57）
         let mut last_fail: Option<(String, String)> = None;
         let mut streak = 0usize;
+        let mut repairable_streaks: std::collections::HashMap<String, (String, usize)> =
+            Default::default();
         // 票 13：截断续推有上限（OPE-171 连败防循环；票 04 起上限 3）
         let mut trunc_count = 0usize;
         // 票 05：最近一次调用 tasks（或上次提醒）所在轮。
@@ -1504,7 +1527,8 @@ fn run_turn_impl(
 
             // 执行工具调用，结果回喂；同工具同错连 BREAKER_STREAK 次熔断（US57）
             let mut results = Vec::new();
-            let mut previous_missing_read = None;
+            let mut batch_repairable: std::collections::HashMap<String, String> =
+                Default::default();
             // reliability 08: round/index collide across fresh turns and fast
             // paths. Persisted request identity scopes the provider's call ID.
             for (id, name, input) in tool_uses {
@@ -1538,23 +1562,6 @@ fn run_turn_impl(
                 } else {
                     registry.call_with_seq(db, ctx, &name, input, Some(&seq))
                 };
-                // 2026-09-30 s11: three missing-path searches in one batch
-                // exhausted the breaker before the model saw any feedback.
-                // Count adjacent identical missing-read errors once per batch.
-                // False rejection prevents correction; broad dedup could prolong
-                // side effects, so execution/write errors and Denied stay per-call.
-                let missing_read = match &called {
-                    Err(ToolError::Io(e))
-                        if matches!(name.as_str(), "fs_read" | "fs_find" | "fs_grep")
-                            && e.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        Some((name.clone(), e.to_string()))
-                    }
-                    _ => None,
-                };
-                let repeated_missing_read =
-                    missing_read.is_some() && missing_read == previous_missing_read;
-                previous_missing_read = missing_read;
                 match called {
                     Ok(CallOutcome::Done(v)) => {
                         if let Some(input) = evidence_input.filter(|_| source_mode) {
@@ -1562,9 +1569,13 @@ fn run_turn_impl(
                         }
                         last_fail = None;
                         streak = 0;
+                        repairable_streaks.remove(&name);
+                        batch_repairable.remove(&name);
                         results.push(tool_result_block(id, &name, &v))
                     }
                     Ok(CallOutcome::Denied(reason)) => {
+                        repairable_streaks.remove(&name);
+                        batch_repairable.remove(&name);
                         let sig = format!("denied {reason}");
                         if bump_streak(&mut last_fail, &mut streak, &name, &sig) >= BREAKER_STREAK {
                             return breaker(db, &name, &sig);
@@ -1631,7 +1642,9 @@ fn run_turn_impl(
                     Err(e) if model_visible(&e) => {
                         // 模型可自救的错回喂，下轮换参/换法；同错连击熔断
                         let sig = e.to_string();
-                        if repeated_missing_read {
+                        let repairable = repairable_feedback(&name, &e);
+                        let repeated = repairable && batch_repairable.get(&name) == Some(&sig);
+                        if repeated {
                             crate::diag::note(
                                 crate::diag::CLASS_JUDGE,
                                 false,
@@ -1640,15 +1653,31 @@ fn run_turn_impl(
                                 ctx.stage_run_id.as_deref(),
                                 Some(&request_id.to_string()),
                                 "tool_feedback",
-                                "batch_missing_path",
+                                "batch_repairable_input",
                                 tool_started,
                             );
                         }
-                        if !repeated_missing_read
-                            && bump_streak(&mut last_fail, &mut streak, &name, &sig)
+                        if repairable {
+                            last_fail = None;
+                            streak = 0;
+                            if !repeated {
+                                let state = repairable_streaks
+                                    .entry(name.clone())
+                                    .or_insert_with(|| (sig.clone(), 0));
+                                if state.0 != sig {
+                                    *state = (sig.clone(), 0);
+                                }
+                                state.1 += 1;
+                                batch_repairable.insert(name.clone(), sig.clone());
+                            }
+                        } else {
+                            repairable_streaks.remove(&name);
+                            batch_repairable.remove(&name);
+                            if bump_streak(&mut last_fail, &mut streak, &name, &sig)
                                 >= BREAKER_STREAK
-                        {
-                            return breaker(db, &name, &sig);
+                            {
+                                return breaker(db, &name, &sig);
+                            }
                         }
                         results.push(ContentBlock::ToolResult {
                             tool_use_id: id,
@@ -1670,10 +1699,21 @@ fn run_turn_impl(
                 })
                 .sum();
             crate::usage::record_tools(db, ctx, &req_base.model_slot, tool_bytes)?;
+            // Finish the whole feedback batch before judging correction
+            // opportunities; a later success cancels that tool's streak.
+            let exhausted = batch_repairable.keys().find_map(|name| {
+                repairable_streaks
+                    .get(name)
+                    .filter(|(_, n)| *n >= BREAKER_STREAK)
+                    .map(|(sig, _)| (name.clone(), sig.clone()))
+            });
             messages.push(Message {
                 role: Role::Tool,
                 content: results,
             });
+            if let Some((name, sig)) = exhausted {
+                return breaker(db, &name, &sig);
+            }
         }
         Ok(TurnOutcome::Failed(format!(
             "tool-loop exceeded {MAX_TOOL_ROUNDS} rounds"

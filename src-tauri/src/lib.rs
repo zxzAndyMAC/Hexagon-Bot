@@ -67,6 +67,7 @@ struct ControlConn {
     db: hexagon_core::db::Db,
     root: std::path::PathBuf,
     generation: u64,
+    permission: Option<hexagon_core::api::PermissionControl>,
 }
 
 static CONTROL_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -291,7 +292,7 @@ fn attach_delta_hook(app: &tauri::AppHandle, wb: &Workbench, identity: &ProjectI
 }
 
 /// 打开控制通道：项目库的第二连接。与 wb 内连接同参数（WAL+busy_timeout）。
-fn open_control(dir: &str) -> Result<ControlConn, CmdError> {
+fn open_control(dir: &str, wb: &Workbench) -> Result<ControlConn, CmdError> {
     Ok(ControlConn {
         db: hexagon_core::db::Db::open(std::path::Path::new(dir).join(".hexagon/state.db"))
             .map_err(cmd_err)?,
@@ -299,6 +300,7 @@ fn open_control(dir: &str) -> Result<ControlConn, CmdError> {
             .canonicalize()
             .map_err(|error| CmdError::internal(error.to_string()))?,
         generation: CONTROL_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        permission: Some(wb.permission_control()),
     })
 }
 
@@ -641,7 +643,7 @@ fn open_project(
         hexagon_core::credentials::active(),
     )
     .map_err(cmd_err)?;
-    let control = open_control(&dir)?;
+    let control = open_control(&dir, &wb)?;
     attach_delta_hook(&app, &wb, &control.identity());
     replace_project(&state, Some(wb), Some(control), &state.identity)?;
     remember_recent(&app, &dir, &name, "pack");
@@ -848,22 +850,82 @@ fn discard_attachments(
 
 #[tauri::command(async)]
 fn answer_permission(
+    app: tauri::AppHandle,
     state: ProjectState<'_>,
     question_id: String,
     allow: bool,
     remember_shape: Option<String>,
     scope: String,
 ) -> Result<(), CmdError> {
-    with_wb(&state, |wb| {
-        wb.answer_permission_and_continue(&question_id, allow, remember_shape.as_deref(), &scope)
+    let identity = save_permission_decision(
+        &state,
+        &question_id,
+        allow,
+        remember_shape.as_deref(),
+        &scope,
+    )?;
+    dispatch_saved_permissions(app, identity, vec![question_id]);
+    Ok(())
+}
+
+fn save_permission_decision(
+    state: &ProjectState<'_>,
+    question_id: &str,
+    allow: bool,
+    remember_shape: Option<&str>,
+    scope: &str,
+) -> Result<ProjectIdentity, CmdError> {
+    with_control(state, |connection| {
+        check_project_identity(Some(connection), state.identity.as_ref(), false)?;
+        connection
+            .permission
+            .as_ref()
+            .ok_or_else(|| CmdError::internal("permission control unavailable"))?
+            .save(&connection.db, question_id, allow, remember_shape, scope)
+            .map_err(cmd_err)?;
+        Ok::<_, CmdError>(connection.identity())
     })
 }
 
+fn dispatch_saved_permissions(
+    app: tauri::AppHandle,
+    identity: ProjectIdentity,
+    questions: Vec<String>,
+) {
+    // test3/04: the IPC returns after commit. Capture the same generation for
+    // the queued execution so a project switch cannot redirect local q1/a0.
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity: Some(identity),
+        };
+        for question in questions {
+            if let Err(error) = with_wb(&state, |wb| wb.continue_saved_permission(&question)) {
+                log::warn!("saved permission continuation: {error}");
+            }
+        }
+    });
+}
+
 #[tauri::command(async)]
-fn allow_project_permission(state: ProjectState<'_>, question_id: String) -> Result<(), CmdError> {
-    with_wb(&state, |wb| {
-        wb.allow_project_permission_and_continue(&question_id)
-    })
+fn allow_project_permission(
+    app: tauri::AppHandle,
+    state: ProjectState<'_>,
+    question_id: String,
+) -> Result<(), CmdError> {
+    let (identity, questions) = with_control(&state, |connection| {
+        check_project_identity(Some(connection), state.identity.as_ref(), false)?;
+        let questions = connection
+            .permission
+            .as_ref()
+            .ok_or_else(|| CmdError::internal("permission control unavailable"))?
+            .save_project_permission(&connection.db, &question_id)
+            .map_err(cmd_err)?;
+        Ok::<_, CmdError>((connection.identity(), questions))
+    })?;
+    dispatch_saved_permissions(app, identity, questions);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2182,7 +2244,7 @@ fn open_recent(
     let mut wb = hexagon_core::setup::open_existing(&dir).map_err(cmd_err)?;
     wb.attach_providers(hexagon_core::credentials::active());
     let info = hexagon_core::orchestra::project_info(&wb.db, PROJECT_ID).map_err(cmd_err)?;
-    let control = open_control(&dir)?;
+    let control = open_control(&dir, &wb)?;
     attach_delta_hook(&app, &wb, &control.identity());
     replace_project(&state, Some(wb), Some(control), &state.identity)?;
     remember_recent(&app, &dir, &info.name, &info.mode);
@@ -2525,7 +2587,7 @@ fn create_project(
     .map_err(cmd_err)?;
     // 接线尾步归 Workbench：凭据库 + 按文档注册运行槽位（票 05）
     wb.attach_providers(hexagon_core::credentials::active());
-    let control = open_control(&opts.dir)?;
+    let control = open_control(&opts.dir, &wb)?;
     attach_delta_hook(&app, &wb, &control.identity());
     replace_project(&state, Some(wb), Some(control), &state.identity)?;
     remember_recent(
@@ -3304,12 +3366,14 @@ mod project_identity_tests {
         let (wa, qa) = waiting_project(a.path(), effects_a.clone());
         let (wb, qb) = waiting_project(b.path(), effects_b.clone());
         assert_eq!(qa, qb, "database-local ids collide in real projects");
+        let permission = wb.permission_control();
         let state = AppState {
             wb: Mutex::new(Some(wb)),
             conn: Mutex::new(Some(ControlConn {
                 db: hexagon_core::db::Db::open(b.path().join(".hexagon/state.db")).unwrap(),
                 root: b.path().canonicalize().unwrap(),
                 generation: 42,
+                permission: Some(permission),
             })),
         };
         // A's previously captured invocation is released only after B is current.
@@ -3317,9 +3381,7 @@ mod project_identity_tests {
             state: &state,
             identity: Some(identity(a.path(), 41)),
         };
-        let result = with_wb(&delayed, |wb| {
-            wb.answer_permission_and_continue(&qa, true, None, "activation")
-        });
+        let result = save_permission_decision(&delayed, &qa, true, None, "activation");
         assert_eq!(effects_a.load(Ordering::SeqCst), 0);
         assert_eq!(effects_b.load(Ordering::SeqCst), 0);
         assert_eq!(result.unwrap_err().code, "project_changed");
@@ -3327,14 +3389,14 @@ mod project_identity_tests {
             state: &state,
             identity: Some(identity(b.path(), 42)),
         };
-        with_wb(&current, |wb| {
-            assert_eq!(
-                hexagon_core::cards::get(&wb.db, &qb).unwrap().state,
-                hexagon_core::cards::CardState::Queued
-            );
-            wb.answer_permission_and_continue(&qb, true, None, "activation")
-        })
-        .unwrap();
+        {
+            // test3/04: the same shell helper used by button/shortcut IPC saves
+            // while the execution mutex is unavailable, without running effects.
+            let _busy_turn = state.wb.lock().unwrap(); // D01-ok: controlled test contention
+            save_permission_decision(&current, &qb, true, None, "activation").unwrap();
+            assert_eq!(effects_b.load(Ordering::SeqCst), 0);
+        }
+        with_wb(&current, |wb| wb.continue_saved_permission(&qb)).unwrap();
         assert_eq!(effects_b.load(Ordering::SeqCst), 1);
         assert!(with_wb(&current, |wb| wb.answer_permission_and_continue(
             &qb,
@@ -3354,7 +3416,7 @@ mod project_identity_tests {
             let a=tempfile::tempdir().unwrap();
             let b=tempfile::tempdir().unwrap();
             let wb=Workbench::open_evaluation_host(b.path()).unwrap();
-            let state=AppState { wb:Mutex::new(Some(wb)),conn:Mutex::new(Some(ControlConn { db:hexagon_core::db::Db::open(b.path().join(".hexagon/state.db")).unwrap(),root:b.path().canonicalize().unwrap(),generation })) };
+            let state=AppState { wb:Mutex::new(Some(wb)),conn:Mutex::new(Some(ControlConn { db:hexagon_core::db::Db::open(b.path().join(".hexagon/state.db")).unwrap(),root:b.path().canonicalize().unwrap(),generation,permission:None })) };
             let scope=ProjectState { state:&state,identity:match case {0=>None,1=>Some(identity(a.path(),generation)),_=>Some(identity(b.path(),generation+1))} };
             let result=with_project_conn(&scope,|db,_|hexagon_core::orchestra::pause(db,PROJECT_ID));
             proptest::prop_assert!(matches!(result,Err(CmdError{ref code,..}) if code=="project_changed"), "invalid scope must reject before pause");
@@ -3391,6 +3453,7 @@ mod project_identity_tests {
                     db: hexagon_core::db::Db::open(current_root.join(".hexagon/state.db")).unwrap(),
                     root: current_root.canonicalize().unwrap(),
                     generation: 22,
+                    permission: None,
                 })),
             };
             let stale = Some(identity(a.path(), 21));
@@ -3434,6 +3497,7 @@ mod preview_project_lifecycle_tests {
             db,
             root,
             generation,
+            permission: None,
         }
     }
 
@@ -3568,6 +3632,7 @@ mod preview_project_lifecycle_tests {
                 db: hexagon_core::db::Db::open_in_memory().unwrap(),
                 root: source_root.clone(),
                 generation: 7,
+                permission: None,
             })),
         };
         let snapshot = read_repo_file_snapshot_for_state(
@@ -3584,6 +3649,7 @@ mod preview_project_lifecycle_tests {
                     db: hexagon_core::db::Db::open_in_memory().unwrap(),
                     root,
                     generation: 8,
+                    permission: None,
                 }),
             )
             .unwrap();
@@ -3617,6 +3683,7 @@ mod preview_project_lifecycle_tests {
                     db,
                     root: root.clone(),
                     generation: 1,
+                    permission: None,
                 })),
             };
             // I1 scoped host migration: this existing native fixture obtains
@@ -3642,6 +3709,7 @@ mod preview_project_lifecycle_tests {
                     db: hexagon_core::db::Db::open_in_memory().unwrap(),
                     root,
                     generation: 2,
+                    permission: None,
                 })
             };
             replace_control(&state, replacement).unwrap();

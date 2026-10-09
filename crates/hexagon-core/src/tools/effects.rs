@@ -101,6 +101,45 @@ pub(crate) fn receipt(
 }
 
 impl EffectReceipt {
+    /// Test3/03: the caller supplies only receipts from the validated original
+    /// parent chain. Missing/stale proof costs a reread; false acceptance loses edits.
+    pub(crate) fn restore_edit_read(&self, ctx: &ToolContext) -> bool {
+        use sha2::{Digest, Sha256};
+        let (path, digest) = match &self.effect {
+            NativeEffect::FileRead { path, digest } if self.tool == "fs_read" => (path, digest),
+            NativeEffect::FileWrite { path, digest }
+                if matches!(self.tool.as_str(), "fs_write" | "fs_patch") =>
+            {
+                (path, digest)
+            }
+            _ => return false,
+        };
+        let Ok(root) = ctx.repo_root.canonicalize() else {
+            return false;
+        };
+        let Ok(target) = super::agent_readable_repo_path(&ctx.repo_root, path) else {
+            return false;
+        };
+        // Recheck after collection: a later alias swap cannot redirect the proof.
+        if Path::new(path).is_absolute() || target != root.join(path) {
+            return false;
+        }
+        let path = target;
+        let Some(before) = super::readstate::stamp(&path) else {
+            return false;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        if format!("{:x}", Sha256::digest(&bytes)) != *digest
+            || super::readstate::stamp(&path) != Some(before)
+        {
+            return false;
+        }
+        ctx.reads.record_stamp(&path, before);
+        true
+    }
+
     pub(crate) fn binds(
         &self,
         root: &Path,
