@@ -1,3 +1,4 @@
+import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
 import type { TimelineWindowMetadata } from './gen/TimelineWindowMetadata'
 import { mockTimelineWindow, mockTimelineFacts, mockTimelineNodes } from './timelineMock'
@@ -395,6 +396,8 @@ export const api = {
   stageEvidence: () => call<StageEvidence | null>('stage_evidence'),
   stageStatus: () => call<StageRow[]>('stage_status'),
   pendingQuestions: () => call<PendingQuestion[]>('pending_questions'),
+  modelRequestRecovery: (qid: string) => call<ModelRequestRecovery>('model_request_recovery', { qid }),
+  retryModelRequest: (qid: string, expectedProjectRoot: string) => call<ModelRequestRecovery>('retry_model_request', { qid, expectedProjectRoot }),
   // ui-audit-2 票 03：已记权限规则审计面
   permissionRules: () => call<PermissionRuleRow[]>('permission_rules'),
   revokePermissionRule: (ruleId: string) =>

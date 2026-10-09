@@ -231,6 +231,18 @@ export default {
     stall_carded: 'atasco pasado a ti',
     stall_closed: 'atasco cerrado',
   },
+  modelRecovery: {
+    title: "Falló la asignación",
+    recovered: "Recuperado",
+    hint: "{{target}} aún no recibió esta tarea. El reintento continúa la selección original.",
+    recoveredHint: "Se recuperó la selección original. No se repite el trabajo completado.",
+    retry: "Reintentar solicitud original",
+    retrying: "Reintentando…",
+    details: "Historial de fallos y detalles técnicos",
+    nextRole: "Siguiente rol",
+    notSent: "Sin enviar",
+    modelSlot: "Ranura del modelo: {{slot}}",
+  },
   cards: {
     shapeLabel: "Regla recordada", shapeScope: "Solo este proyecto · {{role}} · {{tool}}", shapeGeneralized: "Conserva los límites de dominio y carpeta; editable", shapeExact: "Coincidencia exacta; contenido original después de exact:", shapeUnavailable: "No se puede recordar esta llamada de forma segura. Aprueba solo esta vez.",
     writeTargets: 'Los archivos se verifican antes de escribir. Si cambiaron, vuelve a leerlos y crea una acción nueva.',

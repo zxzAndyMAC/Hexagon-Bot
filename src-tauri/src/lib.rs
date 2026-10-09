@@ -866,6 +866,45 @@ fn allow_project_permission(state: ProjectState<'_>, question_id: String) -> Res
     })
 }
 
+#[tauri::command]
+fn model_request_recovery(
+    state: ProjectState<'_>,
+    qid: String,
+) -> Result<hexagon_core::api::ModelRequestRecovery, CmdError> {
+    with_project_conn(&state, |db, _| {
+        hexagon_core::api::model_request_recovery(db, PROJECT_ID, &qid)
+    })
+}
+
+#[tauri::command]
+async fn retry_model_request(
+    app: tauri::AppHandle,
+    state: ProjectState<'_>,
+    qid: String,
+    expected_project_root: String,
+) -> Result<hexagon_core::api::ModelRequestRecovery, CmdError> {
+    let identity = state.identity.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
+        with_wb(&state, |wb| {
+            let view = hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)?;
+            if view.project_root != expected_project_root {
+                return Err(hexagon_core::api::ApiError::BadInput(
+                    "model recovery project changed".into(),
+                ));
+            }
+            wb.retry_model_request(&qid)?;
+            hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)
+        })
+    })
+    .await
+    .map_err(|error| CmdError::internal(error.to_string()))?
+}
+
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
 fn advance(state: ProjectState<'_>) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
@@ -998,6 +1037,11 @@ fn pending_questions(
         // Live acceptance 2026-10-01: bind recovery clicks to the same snapshot's
         // host identity; a later independent identity read could target a new project.
         for card in &mut cards {
+            if card.kind == "recovery" && card.payload["sub"] == "model_request" {
+                if let Some(payload) = card.payload.as_object_mut() {
+                    payload.remove("packet");
+                }
+            }
             if card.kind == "recovery" {
                 if let Some(payload) = card.payload.as_object_mut() {
                     payload.insert("host_project_root".into(), project_root.clone().into());
@@ -2836,6 +2880,7 @@ pub fn run() {
             quality_configuration,
             current_process_pack,
             pending_questions,
+            model_request_recovery,
             permission_rules,
             permission_shape_suggestion,
             approval_mode,
@@ -2872,6 +2917,7 @@ pub fn run() {
             usage_context_pressure,
             open_stage,
             recover_run,
+            retry_model_request,
             reconcile_tool_action,
             abandon_tool_action,
             retry_tool_action,

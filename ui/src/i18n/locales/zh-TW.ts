@@ -231,6 +231,18 @@ export default {
     stall_carded: '失速交給負責人',
     stall_closed: '失速收場',
   },
+  modelRecovery: {
+    title: "派活失敗",
+    recovered: "已恢復",
+    hint: "{{target}}尚未收到此任務。重試只繼續原來的派活選擇。",
+    recoveredHint: "原派活選擇已恢復；已完成的工作不會重放。",
+    retry: "重試原請求",
+    retrying: "正在重試…",
+    details: "失敗歷史與技術詳情",
+    nextRole: "下一位角色",
+    notSent: "尚未傳送",
+    modelSlot: "模型槽位：{{slot}}",
+  },
   cards: {
     shapeLabel: "記住的規則", shapeScope: "僅此專案 · {{role}} · {{tool}}", shapeGeneralized: "已保留目錄與網域邊界，可編輯", shapeExact: "精確匹配本次呼叫，exact: 後為原始內容", shapeUnavailable: "此呼叫無法安全記住，請使用批准一次。",
     writeTargets: '寫入前會重新核對目標；若已變更，須重讀並發起新動作。',

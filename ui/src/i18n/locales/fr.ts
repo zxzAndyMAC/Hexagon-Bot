@@ -231,6 +231,18 @@ export default {
     stall_carded: 'blocage transmis',
     stall_closed: 'blocage clos',
   },
+  modelRecovery: {
+    title: "Échec de l’attribution",
+    recovered: "Rétabli",
+    hint: "{{target}} n’a pas reçu cette tâche. La nouvelle tentative reprend le choix initial.",
+    recoveredHint: "Le choix initial a été rétabli. Le travail terminé n’est pas rejoué.",
+    retry: "Réessayer la requête initiale",
+    retrying: "Nouvelle tentative…",
+    details: "Historique des échecs et détails techniques",
+    nextRole: "Rôle suivant",
+    notSent: "Non envoyé",
+    modelSlot: "Créneau de modèle : {{slot}}",
+  },
   cards: {
     shapeLabel: "Règle mémorisée", shapeScope: "Ce projet uniquement · {{role}} · {{tool}}", shapeGeneralized: "Limites de domaine et de dossier conservées ; modifiable", shapeExact: "Correspondance exacte ; contenu original après exact:", shapeUnavailable: "Impossible de mémoriser cet appel de façon sûre. Approuvez-le une fois.",
     writeTargets: 'Les fichiers cibles sont revérifiés avant écriture. En cas de changement, relisez-les et créez une nouvelle action.',

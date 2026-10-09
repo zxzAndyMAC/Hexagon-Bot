@@ -103,7 +103,7 @@ pub struct ToolDef {
     pub input_schema: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub model_slot: String,
     pub messages: Vec<Message>,

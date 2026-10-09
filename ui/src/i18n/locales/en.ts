@@ -231,6 +231,18 @@ export default {
     stall_carded: 'stall handed to you',
     stall_closed: 'stall closed',
   },
+  modelRecovery: {
+    title: "Dispatch failed",
+    recovered: "Recovered",
+    hint: "{{target}} has not received this task. Retry continues the original dispatch choice.",
+    recoveredHint: "The original dispatch choice recovered. Completed work is not replayed.",
+    retry: "Retry original request",
+    retrying: "Retrying…",
+    details: "Failure history and technical details",
+    nextRole: "Next role",
+    notSent: "Not sent",
+    modelSlot: "Model slot: {{slot}}",
+  },
   cards: {
     shapeLabel: "Remembered rule", shapeScope: "This project only · {{role}} · {{tool}}", shapeGeneralized: "Domain and directory boundaries retained; editable", shapeExact: "Exact match for this call; original content follows exact:", shapeUnavailable: "This call cannot be safely remembered. Approve once instead.",
     writeTargets: 'Write targets are rechecked before execution. If changed, reread and create a new action.',

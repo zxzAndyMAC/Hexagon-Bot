@@ -231,6 +231,18 @@ export default {
     stall_carded: '停滞をオーナーへ',
     stall_closed: '停滞を終了',
   },
+  modelRecovery: {
+    title: "タスク割り当てに失敗",
+    recovered: "復旧済み",
+    hint: "{{target}}はまだこのタスクを受け取っていません。元の割り当て選択のみを再試行します。",
+    recoveredHint: "元の割り当て選択が復旧しました。完了した作業は再実行しません。",
+    retry: "元のリクエストを再試行",
+    retrying: "再試行中…",
+    details: "失敗履歴と技術詳細",
+    nextRole: "次の担当",
+    notSent: "未送信",
+    modelSlot: "モデルスロット: {{slot}}",
+  },
   cards: {
     shapeLabel: "記憶するルール", shapeScope: "このプロジェクトのみ · {{role}} · {{tool}}", shapeGeneralized: "ドメインとディレクトリの境界を保持。編集可能", shapeExact: "今回の呼び出しとの完全一致。exact: の後は元の内容", shapeUnavailable: "安全に記憶できません。今回のみ承認してください。",
     writeTargets: '書き込み直前に対象を再確認します。変更されている場合は再読込し、新しい操作を作成してください。',

@@ -231,6 +231,18 @@ export default {
     stall_carded: 'travamento passado a você',
     stall_closed: 'travamento encerrado',
   },
+  modelRecovery: {
+    title: "Falha na atribuição",
+    recovered: "Recuperado",
+    hint: "{{target}} ainda não recebeu esta tarefa. A nova tentativa retoma a escolha original.",
+    recoveredHint: "A escolha original foi recuperada. O trabalho concluído não é repetido.",
+    retry: "Repetir solicitação original",
+    retrying: "Tentando novamente…",
+    details: "Histórico de falhas e detalhes técnicos",
+    nextRole: "Próximo papel",
+    notSent: "Não enviado",
+    modelSlot: "Slot do modelo: {{slot}}",
+  },
   cards: {
     shapeLabel: "Regra lembrada", shapeScope: "Somente este projeto · {{role}} · {{tool}}", shapeGeneralized: "Limites de domínio e pasta mantidos; editável", shapeExact: "Correspondência exata; conteúdo original após exact:", shapeUnavailable: "Não é possível lembrar esta chamada com segurança. Aprove apenas uma vez.",
     writeTargets: 'Os arquivos são verificados antes da gravação. Se mudaram, releia e crie uma nova ação.',

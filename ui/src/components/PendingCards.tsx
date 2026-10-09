@@ -1,3 +1,4 @@
+import { ModelRecoveryStatus } from './ModelRecoveryStatus'
 import { exceptionLabel } from '../evidenceLabels'
 import { PermissionActions } from './PermissionActions'
 import { DesignChoices } from './DesignChoices'
@@ -364,6 +365,8 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const p = q.payload
   const approveTip = formatBinding(bindingFor('approve'))
   const rejectTip = formatBinding(bindingFor('reject'))
+
+  if (q.kind === 'recovery' && p.sub === 'model_request') return <CardShell tone="ask" icon="warn" title={t('modelRecovery.title')}><ModelRecoveryStatus id={q.id} payload={p} top={top} /></CardShell>
 
   if (q.kind === 'permission') {
     const tool = String(p.tool ?? '')

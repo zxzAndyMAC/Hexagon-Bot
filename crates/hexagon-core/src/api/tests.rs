@@ -4277,6 +4277,458 @@ fn scripted_choice(
 }
 
 #[test]
+fn pm_route_failure_is_visible_before_any_worker_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(
+        dir.path(),
+        &["项目经理", "产品策划", "后端"],
+        Some(pm_pack()),
+    )
+    .unwrap();
+    let decision = Arc::new(ScriptedDecision::new(vec![Err("unexpected EOF".into())]));
+    wb.register_provider("decision", decision);
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    assert_eq!(
+        events(&wb, Some(&[EventKind::StageStarted])).unwrap().len(),
+        1
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 0);
+    let cards = crate::cards::queued(&wb.db, &wb.project_id).unwrap();
+    let failure = cards
+        .iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .expect("首次派活失败必须持久可见");
+    assert_eq!(failure.kind, "recovery");
+    assert_eq!(failure.payload["purpose"], "pm_route");
+    assert_eq!(failure.payload["state"], "failed");
+    assert_eq!(failure.payload["history"][0]["code"], "transport");
+    let request = failure.payload["history"][0]["request_id"]
+        .as_str()
+        .unwrap();
+    assert!(request.starts_with("request"));
+    assert!(events(&wb, Some(&[EventKind::System]))
+        .unwrap()
+        .iter()
+        .any(|e| e.payload["kind"] == "model_request_failed"
+            && e.payload["recovery_id"] == failure.id));
+}
+
+#[test]
+fn pm_route_retry_keeps_one_failure_and_dispatches_original_input_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(
+        dir.path(),
+        &["项目经理", "产品策划", "后端"],
+        Some(pm_pack()),
+    )
+    .unwrap();
+    let decision = Arc::new(ScriptedDecision::new(vec![
+        Err("unexpected EOF".into()),
+        Err("connection reset".into()),
+        Ok("产品策划".into()),
+        Ok("HOLD".into()),
+    ]));
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案：编写需求"),
+        text_response("需求已写好"),
+    ]));
+    wb.register_provider("decision", decision.clone());
+    wb.register_provider("default", worker.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .unwrap();
+    let retry_error = wb.retry_model_request(&card.id).unwrap_err();
+    assert!(retry_error.to_string().contains("connection reset"));
+    let failed = crate::cards::get(&wb.db, &card.id).unwrap();
+    assert_eq!(failed.payload["history"].as_array().unwrap().len(), 2);
+    assert_eq!(turns_for(&wb, "产品策划"), 0);
+    assert!(
+        matches!(wb.retry_model_request(&card.id).unwrap(), UnnamedRoute::Dispatched {role, ..} if role == "产品策划")
+    );
+    assert_eq!(
+        events(&wb, Some(&[EventKind::StageStarted])).unwrap().len(),
+        1
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 1);
+    assert!(worker
+        .recorded()
+        .iter()
+        .all(|r| req_text(r).contains("让我们开始吧")));
+    let recovered = crate::cards::get(&wb.db, &card.id).unwrap();
+    assert_eq!(recovered.state, crate::cards::CardState::Answered);
+    assert_eq!(recovered.payload["state"], "recovered");
+    let count = decision.decides();
+    assert!(wb.retry_model_request(&card.id).is_err());
+    assert_eq!(decision.decides(), count);
+    assert!(crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .iter()
+        .all(|q| q.payload["sub"] != "model_request"));
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+    #[test]
+    fn pm_route_recovery_never_sends_for_an_invalid_origin(case in 0u8..4) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wb = Workbench::for_test(dir.path(), &["项目经理", "产品策划", "后端"], Some(pm_pack())).unwrap();
+        let decision = Arc::new(ScriptedDecision::new(vec![Err("EOF".into()),Ok("产品策划".into())]));
+        wb.register_provider("decision",decision.clone());
+        wb.set_decision_slot("项目经理",Some("decision")).unwrap();
+        assert!(send(&wb,"让我们开始吧").is_err());
+        let card = crate::cards::queued(&wb.db,&wb.project_id).unwrap().into_iter().find(|q|q.payload["sub"]=="model_request").unwrap();
+        let mut packet = card.payload["packet"].clone();
+        match case {
+            0 => packet["run_id"] = json!("foreign-run"),
+            1 => packet["pm_id"] = json!("foreign-agent"),
+            2 => packet["body"] = json!("replace original task"),
+            _ => packet["origin_trace_id"] = json!(999999),
+        }
+        crate::cards::annotate(&wb.db,&card.id,&[("packet",packet)]).unwrap();
+        proptest::prop_assert!(wb.retry_model_request(&card.id).is_err());
+        proptest::prop_assert_eq!(decision.decides(),1);
+        proptest::prop_assert_eq!(turns_for(&wb,"产品策划"),0);
+        proptest::prop_assert_eq!(crate::cards::get(&wb.db,&card.id).unwrap().state,crate::cards::CardState::Queued);
+    }
+}
+
+#[test]
+fn pm_route_recovery_survives_reopen_without_sending() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open(
+        dir.path(),
+        "t",
+        &[
+            ("a0".into(), "项目经理".into()),
+            ("a1".into(), "产品策划".into()),
+            ("a2".into(), "后端".into()),
+        ],
+        Some(pm_pack()),
+    )
+    .unwrap();
+    wb.register_provider(
+        "decision",
+        Arc::new(ScriptedDecision::new(vec![Err("EOF".into())])),
+    );
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .unwrap();
+    drop(wb);
+    let mut reopened = Workbench::open(
+        dir.path(),
+        "t",
+        &[
+            ("a0".into(), "项目经理".into()),
+            ("a1".into(), "产品策划".into()),
+            ("a2".into(), "后端".into()),
+        ],
+        Some(pm_pack()),
+    )
+    .unwrap();
+    let decision = Arc::new(ScriptedDecision::new(vec![
+        Ok("HOLD".into()),
+        Ok("HOLD".into()),
+    ]));
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案"),
+        text_response("完成"),
+    ]));
+    reopened.register_provider("decision", decision.clone());
+    reopened.register_provider("default", worker);
+    assert_eq!(decision.decides(), 0);
+    assert_eq!(
+        crate::cards::get(&reopened.db, &card.id).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+    // MR-01: original kickoff intent survives HOLD; reopening itself never wakes a worker.
+    assert!(
+        matches!(reopened.retry_model_request(&card.id).unwrap(),UnnamedRoute::Dispatched{role,..} if role=="产品策划")
+    );
+    assert_eq!(
+        events(&reopened, Some(&[EventKind::StageStarted]))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(turns_for(&reopened, "产品策划"), 1);
+}
+
+#[test]
+fn pm_route_recovery_rejects_a_concurrent_attempt_through_another_workbench() {
+    struct PausedChoice {
+        calls: std::sync::atomic::AtomicUsize,
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl ModelProvider for PausedChoice {
+        fn is_scripted(&self) -> bool {
+            true
+        }
+        fn complete(
+            &self,
+            _req: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            unreachable!()
+        }
+        fn uses_decision_api(&self) -> bool {
+            true
+        }
+        fn decide(
+            &self,
+            _state: &str,
+            _options: &[(&str, &str)],
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Err(ProviderError::Transport("EOF".into()));
+            }
+            self.entered.send(()).unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            Ok(text_response("HOLD"))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let roles = [
+        ("a0".into(), "项目经理".into()),
+        ("a1".into(), "产品策划".into()),
+    ];
+    let mut wb = Workbench::open(dir.path(), "t", &roles, Some(pm_pack())).unwrap();
+    wb.open_stage(0).unwrap();
+    let (entered, ready) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let decision = Arc::new(PausedChoice {
+        calls: Default::default(),
+        entered,
+        release: Mutex::new(wait),
+    });
+    wb.register_provider("decision", decision.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .unwrap();
+    let path = dir.path().to_path_buf();
+    let qid = card.id.clone();
+    let peer = decision.clone();
+    let running = std::thread::spawn(move || {
+        let mut other = Workbench::open(&path, "t", &roles, Some(pm_pack())).unwrap();
+        other.register_provider("decision", peer);
+        other
+            .set_decision_slot("项目经理", Some("decision"))
+            .unwrap();
+        other.retry_model_request(&qid)
+    });
+    ready
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let duplicate = wb.retry_model_request(&card.id);
+    release.send(()).unwrap();
+    assert!(duplicate
+        .unwrap_err()
+        .to_string()
+        .contains("already_running"));
+    assert!(matches!(
+        running.join().unwrap().unwrap(),
+        UnnamedRoute::Held { .. }
+    ));
+    assert_eq!(decision.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        crate::cards::get(&wb.db, &card.id).unwrap().state,
+        crate::cards::CardState::Answered
+    );
+}
+
+#[test]
+fn pm_route_saved_choice_waits_for_worker_without_repeating_the_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = pm_wb(dir.path());
+    let decision = Arc::new(ScriptedDecision::new(vec![
+        Err("EOF".into()),
+        Ok("产品策划".into()),
+        Ok("HOLD".into()),
+    ]));
+    wb.register_provider("decision", decision.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .unwrap();
+    assert!(wb.retry_model_request(&card.id).is_err());
+    assert_eq!(decision.decides(), 2);
+    assert_eq!(
+        crate::cards::get(&wb.db, &card.id).unwrap().payload["state"],
+        "failed"
+    );
+    assert!(
+        crate::diag::records(Some(crate::PROJECT_ID), Some(crate::diag::CLASS_REJECT))
+            .iter()
+            .any(|r| r.code == "worker_provider_unavailable")
+    );
+    assert_eq!(
+        crate::cards::get(&wb.db, &card.id).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 0);
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            text_response("方案"),
+            text_response("完成"),
+        ])),
+    );
+    assert!(
+        matches!(wb.retry_model_request(&card.id).unwrap(),UnnamedRoute::Dispatched {role,..} if role=="产品策划")
+    );
+    assert_eq!(
+        decision.decides(),
+        3,
+        "third call is the worker follow-up HOLD, not another recovered choice"
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 1);
+    assert_eq!(
+        crate::cards::get(&wb.db, &card.id).unwrap().state,
+        crate::cards::CardState::Answered
+    );
+}
+
+#[test]
+fn pm_route_reopen_after_worker_admission_never_replays_the_task() {
+    struct CrashAfterAdmission;
+    impl ModelProvider for CrashAfterAdmission {
+        fn output_token_limit(&self) -> Option<u64> {
+            panic!("simulated process exit after durable TurnStarted")
+        }
+        fn complete(
+            &self,
+            _: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            unreachable!()
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let roles = [
+        ("a0".into(), "项目经理".into()),
+        ("a1".into(), "产品策划".into()),
+    ];
+    let mut wb = Workbench::open(dir.path(), "t", &roles, Some(pm_pack())).unwrap();
+    let choice = Arc::new(ScriptedDecision::new(vec![
+        Err("EOF".into()),
+        Ok("产品策划".into()),
+    ]));
+    wb.register_provider("decision", choice.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    let card = crate::cards::queued(&wb.db, crate::PROJECT_ID)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .unwrap();
+    wb.register_provider("default", Arc::new(CrashAfterAdmission));
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wb.retry_model_request(&card.id)
+    }));
+    assert!(crashed.is_err());
+    assert_eq!(turns_for(&wb, "产品策划"), 1);
+    drop(wb);
+    let reopened = Workbench::open(dir.path(), "t", &roles, Some(pm_pack())).unwrap();
+    assert!(
+        reopened.retry_model_request(&card.id).is_err(),
+        "interrupted stage remains a separate recovery gate"
+    );
+    let run = card.payload["packet"]["run_id"].as_str().unwrap();
+    orchestra::recover_run(&reopened.db, crate::PROJECT_ID, run).unwrap();
+    // MR-01 review: receipt is durable even without current providers; PM
+    // recovery must acknowledge it without replaying the unfinished worker.
+    assert_eq!(choice.decides(), 2);
+    assert!(matches!(
+        reopened.retry_model_request(&card.id).unwrap(),
+        UnnamedRoute::Dispatched { .. }
+    ));
+    assert_eq!(turns_for(&reopened, "产品策划"), 1);
+    assert_eq!(
+        crate::cards::get(&reopened.db, &card.id).unwrap().state,
+        crate::cards::CardState::Answered
+    );
+}
+
+#[test]
+fn pm_route_late_team_sleep_does_not_dispatch_the_saved_choice() {
+    struct StopChoice {
+        root: PathBuf,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl ModelProvider for StopChoice {
+        fn complete(
+            &self,
+            _req: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            unreachable!()
+        }
+        fn uses_decision_api(&self) -> bool {
+            true
+        }
+        fn decide(
+            &self,
+            _state: &str,
+            _options: &[(&str, &str)],
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Err(ProviderError::Transport("EOF".into()));
+            }
+            let control = Db::open(self.root.join(".hexagon/state.db")).unwrap();
+            orchestra::sleep_all(&control, crate::PROJECT_ID).unwrap();
+            Ok(text_response("产品策划"))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let roles = [
+        ("a0".into(), "项目经理".into()),
+        ("a1".into(), "产品策划".into()),
+    ];
+    let mut wb = Workbench::open(dir.path(), "t", &roles, Some(pm_pack())).unwrap();
+    let choice = Arc::new(StopChoice {
+        root: dir.path().to_path_buf(),
+        calls: Default::default(),
+    });
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案"),
+        text_response("完成"),
+    ]));
+    wb.register_provider("decision", choice);
+    wb.register_provider("default", worker.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .unwrap();
+    assert!(wb.retry_model_request(&card.id).is_err());
+    assert_eq!(turns_for(&wb, "产品策划"), 0);
+    assert!(worker.recorded().is_empty());
+    assert_eq!(
+        crate::cards::get(&wb.db, &card.id).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+}
+
+#[test]
 fn unnamed_owner_message_routes_outside_activation_list() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = pm_wb(dir.path());

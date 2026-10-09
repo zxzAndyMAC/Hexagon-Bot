@@ -60,6 +60,7 @@ export async function approveQuestion(q: PendingQuestion) {
     useUiStore.getState().pushToast(i18n.t('exceptions.hint'))
     return
   }
+  if (q.kind === 'recovery' && p.sub === 'model_request') return api.retryModelRequest(q.id, String((p.view as {project_root?:unknown} | undefined)?.project_root ?? p.project_root ?? p.host_project_root ?? ''))
   if (q.kind === 'permission') return api.answerPermission(q.id, true)
   if (q.kind === 'stamp' && !p.proposal_id) return api.stamp()
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
@@ -106,6 +107,7 @@ export function isActivationResumeCard(q: PendingQuestion): boolean {
 }
 
 export function kindTitleKey(q: PendingQuestion): string {
+  if (q.kind === 'recovery' && q.payload.sub === 'model_request') return 'modelRecovery.title'
   if (q.payload.sub === 'quality_revalidation') return 'quality.revalidationTitle'
   if (q.payload.sub === 'design_direction') return 'design.title'
   if (q.payload.sub === 'acceptance_exception') return 'exceptions.title'

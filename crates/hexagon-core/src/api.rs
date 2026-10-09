@@ -1926,7 +1926,18 @@ impl Workbench {
                 std::time::Instant::now(),
             );
         }
-        self.route_body("owner", None, &body, &attachments, true, &consumed)
+        self.route_body(
+            "owner",
+            None,
+            &body,
+            &attachments,
+            &consumed,
+            model_recovery::ChoiceOrigin {
+                from_owner: true,
+                source_message: Some(message_id),
+                kickoff_lead: None,
+            },
+        )
     }
 
     /// 负责人发言的下一手（票 08 / 票 09 / ADR 0065）。
@@ -1946,7 +1957,17 @@ impl Workbench {
         body: &str,
         attachments: &[crate::trace::AttachRef],
     ) -> Result<UnnamedRoute, ApiError> {
-        self.route_body("owner", None, body, attachments, true, &[])
+        self.route_body(
+            "owner",
+            None,
+            body,
+            attachments,
+            &[],
+            model_recovery::ChoiceOrigin {
+                from_owner: true,
+                ..Default::default()
+            },
+        )
     }
 
     fn route_body(
@@ -1955,9 +1976,11 @@ impl Workbench {
         speaker_id: Option<&str>,
         body: &str,
         attachments: &[crate::trace::AttachRef],
-        from_owner: bool,
         consumed: &[String],
+        origin: model_recovery::ChoiceOrigin,
     ) -> Result<UnnamedRoute, ApiError> {
+        let from_owner = origin.from_owner;
+        let source_message = origin.source_message;
         if from_owner {
             if let Some(cmd) = crate::commands::parse_command(body) {
                 // diagnostic-records 票 02：整句是指令 → 不进路由，也是一支「没派」。
@@ -2082,9 +2105,13 @@ impl Workbench {
                             speaker,
                             body,
                             attachments,
-                            from_owner,
                             &roster,
                             Some(&candidates),
+                            model_recovery::ChoiceOrigin {
+                                from_owner,
+                                source_message,
+                                kickoff_lead: None,
+                            },
                         )?;
                         if !matches!(result, UnnamedRoute::Dispatched { .. }) {
                             return Ok(result);
@@ -2133,20 +2160,21 @@ impl Workbench {
         // 先打开第一阶段，选择仍先不派活时交给该阶段激活名单的第一位。
         let kickoff = self.maybe_open_first_stage(from_owner)?;
         if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
-            let route =
-                self.closed_choice(speaker, body, attachments, from_owner, &roster, None)?;
+            let route = self.closed_choice(
+                speaker,
+                body,
+                attachments,
+                &roster,
+                None,
+                model_recovery::ChoiceOrigin {
+                    from_owner,
+                    source_message,
+                    kickoff_lead: kickoff.then(|| self.kickoff_lead(&roster)).flatten(),
+                },
+            )?;
             // ADR 0074：正常派活时的「先不派活」仍是空转信号。调查里的先不派活
             // 不走这里（stall_investigate 直调 closed_choice 并就地收场）。
             if matches!(route, UnnamedRoute::Held { .. }) {
-                if kickoff {
-                    if let Some(role) = self.kickoff_lead(&roster) {
-                        self.dispatch(&role, body, attachments)?;
-                        return Ok(UnnamedRoute::Dispatched {
-                            role,
-                            via: "decision".into(),
-                        });
-                    }
-                }
                 self.stall_note_held(from_owner.then_some(body));
             }
             return Ok(route);
@@ -2211,10 +2239,11 @@ impl Workbench {
         speaker: &str,
         body: &str,
         attachments: &[crate::trace::AttachRef],
-        from_owner: bool,
         roster: &[String],
         instances: Option<&[(String, String)]>,
+        origin: model_recovery::ChoiceOrigin,
     ) -> Result<UnnamedRoute, ApiError> {
+        let from_owner = origin.from_owner;
         let _in_flight = InFlight::enter(&self.turn_depth);
         let pm_id = self.agent_by_role(crate::pm_route::PM_ROLE)?;
         let decision_slot: Option<String> = self.db.conn().query_row(
@@ -2316,149 +2345,26 @@ impl Workbench {
             Some(&pm_id),
             run_id,
         )?;
-        let trace = trace_id.to_string();
-        let route_started = std::time::Instant::now();
-        let usage_ctx = crate::tools::ToolContext {
-            project_id: self.project_id.clone(),
-            agent_id: pm_id.clone(),
-            repo_root: self.repo_root.clone(),
-            stage_run_id: run.as_ref().map(|r| r.id.clone()),
-            owned_globs: vec![],
-            tiers: crate::artifacts::TierMap::new(),
-            sessions: Default::default(),
-            caps: Default::default(),
-            ..Default::default()
+        let packet = model_recovery::ChoicePacket {
+            root: self.repo_root.canonicalize()?,
+            pm_id,
+            run_id: run.as_ref().map(|r| r.id.clone()),
+            speaker: speaker.to_string(),
+            body: body.to_string(),
+            attachments: attachments.to_vec(),
+            roster: roster.to_vec(),
+            instances: instances.map(<[_]>::to_vec),
+            request: req,
+            stage_name,
+            activation,
+            choosable,
+            use_jev,
+            slot_name,
+            via: via.to_string(),
+            origin_trace_id: trace_id,
+            origin,
         };
-        let resp = crate::usage::request(
-            &self.db,
-            &usage_ctx,
-            &slot_name,
-            "pm_route",
-            provider.as_ref(),
-            if use_jev { None } else { Some(&req) },
-            || {
-                if use_jev {
-                    let state = crate::pm_route::choice_state(
-                        stage_name.as_deref(),
-                        &activation,
-                        speaker_label,
-                        body,
-                    );
-                    let mut options: Vec<(&str, &str)> = choosable
-                        .iter()
-                        .map(|r| (r.as_str(), "eligible target"))
-                        .collect();
-                    if instances.is_none() {
-                        options.push((crate::pm_route::HOLD_TOKEN, "wake no one for now"));
-                    }
-                    provider.decide(&state, &options)
-                } else {
-                    provider.complete(&req)
-                }
-            },
-        )
-        .map_err(|e| ApiError::Decision(e.to_string()))?;
-        let raw = crate::pm_route::choice_text(&resp);
-        // reliability 07 / Q8: a mistaken refusal asks for selection; accepting
-        // an out-of-role or stale ID starts an unauthorized instance. Fail closed.
-        let choice = crate::pm_route::parse_route_choice(&raw, &choosable).filter(|c| {
-            instances.is_none() || matches!(c, crate::pm_route::RouteChoice::Dispatch(id)
-                if instances.is_some_and(|xs| xs.iter().any(|(aid,role)| aid == id && self.instance_role(aid).ok().as_ref() == Some(role))))
-        });
-        let mut eligible = choosable.clone();
-        if instances.is_none() {
-            eligible.push(crate::pm_route::HOLD.to_string());
-        }
-        let (held, rejected, role) = match &choice {
-            Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
-                (false, false, Some(role.clone()))
-            }
-            Some(crate::pm_route::RouteChoice::Hold) => (true, false, None),
-            None => (false, true, None),
-        };
-        // diagnostic-records 票 02：unparsed 记拒绝/Warn——模型回了花名册外
-        // 的字符串等于这次路由被拒，关 Debug 也得看得见；dispatch 原因码带
-        // 派给的角色，回答「派给谁」。
-        crate::diag::note(
-            if rejected { "拒绝" } else { "判定" },
-            rejected,
-            Some(&self.project_id),
-            Some(&pm_id),
-            run_id,
-            Some(&trace),
-            "pm_route",
-            &if rejected {
-                "unparsed".to_string()
-            } else if held {
-                "hold".into()
-            } else {
-                format!("dispatch:{}", role.as_deref().unwrap_or("?"))
-            },
-            route_started,
-        );
-        let mut payload = json!({
-            "held": held,
-            "rejected": rejected,
-            "via": via,
-            "role": role,
-            "raw": raw,
-        });
-        if let Some(candidates) = instances {
-            // reliability 07: role remains a role in the historical event
-            // contract; the selected instance has its own field.
-            let selected_agent_id = role.as_deref();
-            let selected_role = candidates
-                .iter()
-                .find(|(id, _)| Some(id.as_str()) == selected_agent_id)
-                .map(|(_, role)| role);
-            payload["role"] = json!(selected_role);
-            payload["agent_id"] = json!(selected_agent_id);
-            payload["scope"] = json!("role_instances");
-        }
-        // 拒绝的输出不是一次决策：不写 decision，免得花名册外的字符串
-        // 被回放当成 chosen。接受/先不派活才落闭集决策。
-        if let Some(chosen) = choice.as_ref().map(|c| match c {
-            crate::pm_route::RouteChoice::Dispatch(role) => role.clone(),
-            crate::pm_route::RouteChoice::Hold => crate::pm_route::HOLD.to_string(),
-        }) {
-            payload["choice"] = json!(chosen);
-            payload["decision"] = json!({
-                "kind": "pm_route",
-                "eligible": eligible,
-                "chosen": chosen,
-                "via": via,
-            });
-        }
-        self.db.append_event(
-            &self.project_id,
-            EventKind::PmRouted,
-            payload,
-            Some(&pm_id),
-            run_id,
-        )?;
-        match choice {
-            Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
-                let role = if instances.is_some() {
-                    let actual_role = self.instance_role(&role)?;
-                    self.dispatch_instance(&role, body, attachments)?;
-                    actual_role
-                } else {
-                    self.dispatch(&role, body, attachments)?;
-                    role
-                };
-                Ok(UnnamedRoute::Dispatched {
-                    role,
-                    via: via.to_string(),
-                })
-            }
-            Some(crate::pm_route::RouteChoice::Hold) => Ok(UnnamedRoute::Held {
-                via: via.to_string(),
-            }),
-            None => Ok(UnnamedRoute::Rejected {
-                raw,
-                via: via.to_string(),
-            }),
-        }
+        self.execute_saved_pm_choice(&packet, provider.as_ref(), None)
     }
 
     /// 没有进行中的阶段时，负责人的下一句话打开流程的第一阶段。
@@ -2559,7 +2465,14 @@ impl Workbench {
             body.push_str(&serde_json::to_string(&quality_failures)?);
             body.push(']');
         }
-        let route = self.route_body(role, Some(aid), &body, &[], false, &[])?;
+        let route = self.route_body(
+            role,
+            Some(aid),
+            &body,
+            &[],
+            &[],
+            model_recovery::ChoiceOrigin::default(),
+        )?;
         // QA 2026-10-01/06: a successful one-off observation + PM HOLD was
         // replayed after 60s both after completion and before kickoff.
         // Require positive completed/never-started evidence, not absence of an
@@ -3588,9 +3501,9 @@ impl Workbench {
             crate::stallwatch::INVESTIGATION_SPEAKER,
             &body,
             &[],
-            false,
             &roster,
             None,
+            model_recovery::ChoiceOrigin::default(),
         );
         let retry = !self.watch().seg.retry_used;
         match res {
@@ -4502,3 +4415,7 @@ pub fn timeline_window_metadata(
     check_timeline_project(root, &request.expected_project_root)?;
     crate::trace::window::metadata(db, crate::PROJECT_ID, request)
 }
+
+mod model_recovery;
+
+pub use model_recovery::{model_request_recovery, ModelRequestFailure, ModelRequestRecovery};
