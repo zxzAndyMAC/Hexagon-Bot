@@ -1,0 +1,10 @@
+.delegation { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--border); }
+.delegation-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.delegation-head strong { font-size: 13px; font-weight: 500; color: var(--text); }
+.delegation-note, .delegation-error, .delegation-empty { font-size: 12px; line-height: 1.5; color: var(--text-2); margin: 0; }
+.delegation-error { color: var(--err); }
+.delegation-on { color: var(--accent); border-color: var(--accent-border); background: var(--accent-soft); }
+.delegation-confirm { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--accent-border); border-radius: var(--r-md); background: var(--bg-2); }
+.delegation-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.delegation-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--text-2); }
+.delegation-list li { display: flex; gap: 8px; }

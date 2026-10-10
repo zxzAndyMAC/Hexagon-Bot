@@ -4,6 +4,7 @@ import { BrowserControlPanel } from './BrowserControlPanel'
 import { DesktopPauseButton } from './DesktopPauseButton'
 import { localLogTime } from '../diagTime'
 import { ProjectApprovalMode } from './ProjectApprovalMode'
+import { ProjectDelegation } from './ProjectDelegation'
 import { DesktopPermissions } from './DesktopPermissions'
 import type { ProjectSkillDocument } from '../gen/ProjectSkillDocument'
 import { ExperienceEntries } from './ExperienceEntries'
@@ -1603,7 +1604,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false, i
     ),
     team: <TeamSection projectless={projectless} />,
     models: <ProviderManager />, // 全局 providers.json，无项目也可用
-    perms: <>{projectless && <DesktopPermissions />}{gated(<><DesktopControlPanel inline /><BrowserControlPanel inline /><ProjectApprovalMode placement="below" /><PermsSection /></>)}</>,
+    perms: <>{projectless && <DesktopPermissions />}{gated(<><DesktopControlPanel inline /><BrowserControlPanel inline /><ProjectApprovalMode placement="below" /><ProjectDelegation /><PermsSection /></>)}</>,
     skills: <SkillsSection />, // 全局层无项目也可用（ADR 0057）
     mcp: <McpSection projectless={projectless} />, // 全局清单无项目可配（ADR 0057）
     autonomy: gated(<AutonomySection />),

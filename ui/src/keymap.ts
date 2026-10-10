@@ -40,6 +40,7 @@ export type ActionId =
   | 'confirmBroadAccess'
   | 'cancelBroadAccess'
   | 'approvalMode'
+  | 'projectDelegation'
   | 'desktopPermissions'
   | 'desktopAccessibility'
   | 'desktopScreenRecording'
@@ -137,6 +138,7 @@ const DEFAULTS: Record<ActionId, string> = {
   browserContinueConnection: '',
   browserDetach: '',
   approvalMode: 'alt+mod+shift+m',
+  projectDelegation: 'alt+mod+shift+g',
   desktopPermissions: 'alt+mod+shift+d',
   desktopAccessibility: 'alt+mod+shift+a',
   desktopScreenRecording: 'alt+mod+shift+v',
@@ -231,6 +233,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'browserContinueConnection', labelKey: 'browser.continueConnection' },
   { id: 'browserDetach', labelKey: 'browser.detach' },
   { id: 'approvalMode', labelKey: 'approvalMode.label' },
+  { id: 'projectDelegation', labelKey: 'delegation.label' },
   { id: 'desktopPanel', labelKey: 'computer.title' },
   { id: 'desktopEnable', labelKey: 'computer.enable' },
   { id: 'desktopDisable', labelKey: 'computer.disable' },

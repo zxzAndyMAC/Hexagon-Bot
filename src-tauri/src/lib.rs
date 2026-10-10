@@ -1188,7 +1188,8 @@ fn pending_questions(
     state: tauri::State<AppState>,
 ) -> Result<Vec<hexagon_core::cards::QueuedCard>, CmdError> {
     with_conn(&state, |db, root| {
-        let mut cards = db.queued_questions(PROJECT_ID).map_err(cmd_err)?;
+        // Test3/17: cards taken over by project delegation are not owner cards.
+        let mut cards = hexagon_core::api::owner_pending(db, PROJECT_ID).map_err(cmd_err)?;
         let project_root = root
             .canonicalize()
             .map_err(|error| CmdError::internal(error.to_string()))?
@@ -1253,6 +1254,55 @@ fn set_approval_mode(
             root,
             &expected_project_root,
             mode,
+        )
+        .map_err(cmd_err)
+    })
+}
+
+/// Test3/17: project delegation read (read connection, no turn lock).
+#[tauri::command]
+fn project_delegation(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::delegation::DelegationStatus, CmdError> {
+    with_conn(&state, |db, _| {
+        Ok::<_, CmdError>(hexagon_core::api::project_delegation(db, PROJECT_ID))
+    })
+}
+
+/// Test3/17: recent managed decisions (read connection).
+#[tauri::command]
+fn managed_history(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::api::ManagedRecord>, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::api::managed_history(db, PROJECT_ID, 20).map_err(cmd_err)
+    })
+}
+
+/// Test3/17: cards the managed processor currently holds (read connection).
+#[tauri::command]
+fn managed_processing(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::cards::QueuedCard>, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::api::managed_processing(db, PROJECT_ID).map_err(cmd_err)
+    })
+}
+
+/// Test3/17: the owner's delegation switch; identity checked under the lock.
+#[tauri::command]
+fn set_project_delegation(
+    state: ProjectState<'_>,
+    enabled: bool,
+    expected_project_root: String,
+) -> Result<hexagon_core::delegation::DelegationStatus, CmdError> {
+    with_project_conn(&state, |db, root| {
+        hexagon_core::api::set_project_delegation(
+            db,
+            PROJECT_ID,
+            root,
+            &expected_project_root,
+            enabled,
         )
         .map_err(cmd_err)
     })
@@ -2892,6 +2942,51 @@ fn spawn_stall_watch(app: tauri::AppHandle) {
     });
 }
 
+/// Test3/17 managed processor beat. Plan under a try_lock (a turn in flight
+/// skips the beat, like the stall watch), let the model decide with no lock
+/// held, then commit under a short lock that re-checks project, grant
+/// generation and card state. Rejected: deciding under the workbench lock —
+/// a slow model would freeze every owner command for the whole round.
+const MANAGED_TICK: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn spawn_managed_watch(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(MANAGED_TICK);
+        let state = app.state::<AppState>();
+        let planned = {
+            let Ok(g) = state.wb.try_lock() else {
+                // D01-ok: managed beat is a mutation path; a held lock = turn in flight
+                continue;
+            };
+            g.as_ref()
+                .map(|wb| wb.managed_plan().map(|plan| (wb.managed_route(), plan)))
+        };
+        let (route, plan) = match planned {
+            Some(Ok((route, plan))) if !plan.is_empty() => (route, plan),
+            Some(Err(e)) => {
+                log::warn!("managed plan: {e}");
+                continue;
+            }
+            _ => continue,
+        };
+        for candidate in plan {
+            let decision = hexagon_core::api::managed_decide(
+                &route.providers,
+                &route.root,
+                &route.project_id,
+                &candidate,
+            );
+            let g = state.wb.lock().unwrap_or_else(|e| e.into_inner());
+            // D01-ok: managed commit is a mutation path through owner facades
+            if let Some(wb) = g.as_ref() {
+                if let Err(e) = wb.managed_commit_for(&route, &candidate, decision) {
+                    log::warn!("managed commit: {e}");
+                }
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2991,6 +3086,7 @@ pub fn run() {
                 boot,
             );
             spawn_stall_watch(app.handle().clone());
+            spawn_managed_watch(app.handle().clone());
             Ok(())
         })
         .manage(AppState {
@@ -3055,6 +3151,10 @@ pub fn run() {
             permission_shape_suggestion,
             approval_mode,
             set_approval_mode,
+            project_delegation,
+            set_project_delegation,
+            managed_history,
+            managed_processing,
             revoke_permission_rule,
             list_skills,
             set_skill_muted,

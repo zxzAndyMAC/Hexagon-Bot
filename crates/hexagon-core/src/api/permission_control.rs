@@ -212,6 +212,19 @@ impl PermissionControl {
         self.save_with_origin(db, question_id, true, None, "activation", "reviewer")
     }
 
+    /// Test3/17: a managed decision under the current delegation grant. Never
+    /// remembered as a shape (one decision, not a standing rule); the actor
+    /// is the grant (`managed:<id>:<generation>`), never `owner`.
+    pub(super) fn save_by_managed(
+        &self,
+        db: &Db,
+        question_id: &str,
+        allow: bool,
+        actor: &str,
+    ) -> Result<(), ApiError> {
+        self.save_with_origin(db, question_id, allow, None, "activation", actor)
+    }
+
     pub fn save(
         &self,
         db: &Db,

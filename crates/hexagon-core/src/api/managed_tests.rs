@@ -1,0 +1,246 @@
+//! Test3/17: managed permission decisions. The model only picks inside the
+//! closed set; every other path ends in deny, never back with the owner and
+//! never an implicit allow. A decision prepared under an old grant never lands.
+use super::*;
+use crate::provider::{ModelProvider, ScriptedProvider};
+use crate::tools::CallOutcome;
+use crate::turn::text_response;
+use serde_json::json;
+
+fn wb_with(reply: Option<&str>) -> (tempfile::TempDir, Workbench, Option<Arc<ScriptedProvider>>) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let chat = reply.map(|text| Arc::new(ScriptedProvider::new(vec![text_response(text)])));
+    if let Some(chat) = &chat {
+        wb.register_provider("default", chat.clone() as Arc<dyn ModelProvider>);
+    }
+    (dir, wb, chat)
+}
+
+fn ask(wb: &Workbench, tool: &str, input: serde_json::Value) -> String {
+    let ctx = wb.ctx_for("a0", None);
+    match wb.registry.call(&wb.db, &ctx, tool, input).unwrap() {
+        CallOutcome::Asked(qid) => qid,
+        other => panic!("expected a permission card, got {other:?}"),
+    }
+}
+
+fn managed_events(wb: &Workbench) -> Vec<serde_json::Value> {
+    wb.db
+        .events(crate::PROJECT_ID, Some(&[EventKind::System]))
+        .unwrap()
+        .into_iter()
+        .map(|event| event.payload)
+        .filter(|payload| payload["kind"] == "managed_decision")
+        .collect()
+}
+
+#[test]
+fn delegation_off_leaves_every_card_with_the_owner() {
+    let (_dir, wb, chat) = wb_with(Some("allow"));
+    let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+    assert!(wb.managed_tick().unwrap().is_empty());
+    let card = crate::cards::get(&wb.db, &qid).unwrap();
+    assert_eq!(card.state, crate::cards::CardState::Queued);
+    assert!(
+        chat.unwrap().recorded().is_empty(),
+        "no model call while off"
+    );
+}
+
+#[test]
+fn a_model_allow_runs_the_real_action_and_continues_the_original_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "managed",
+        &[("a0".into(), "worker".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![crate::turn::tool_response(
+            vec![("c1", "bash", json!({"cmd":"printf managed > managed.txt"}))],
+        )])),
+    );
+    let TurnOutcome::AwaitingPermission(qid) = wb.run_instance("a0", "write the marker").unwrap()
+    else {
+        panic!("the permission must come from the real task")
+    };
+    // One script for both sends: the managed choice, then the resumed task.
+    let chat = Arc::new(ScriptedProvider::new(vec![
+        text_response("allow"),
+        text_response("original task complete"),
+    ]));
+    wb.register_provider("default", chat.clone());
+    let status = crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let decisions = wb.managed_tick().unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].action, "allow", "{decisions:?}");
+    assert_eq!(decisions[0].via, "model");
+    let card = crate::cards::get(&wb.db, &qid).unwrap();
+    let actor = format!(
+        "managed:{}:{}",
+        status.delegation_id.unwrap(),
+        status.generation
+    );
+    assert_eq!(
+        card.answered_by.as_deref(),
+        Some(actor.as_str()),
+        "never `owner`"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("managed.txt")).unwrap(),
+        "managed",
+        "the real action ran"
+    );
+    assert_eq!(
+        chat.recorded().len(),
+        2,
+        "decision + exactly one continuation"
+    );
+    let events = managed_events(&wb);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["actor"], actor);
+    let history = managed_history(&wb.db, crate::PROJECT_ID, 10).unwrap();
+    assert_eq!(history[0].card_id, qid);
+    assert_eq!(history[0].outcome, "allowed_and_continued");
+    // A second beat finds nothing left to decide.
+    assert!(wb.managed_tick().unwrap().is_empty());
+}
+
+#[test]
+fn an_out_of_set_answer_or_no_model_denies() {
+    for reply in [Some("sure, go ahead"), None] {
+        let (_dir, wb, _chat) = wb_with(reply);
+        let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+        crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+        let decisions = wb.managed_tick().unwrap();
+        assert_eq!(decisions[0].action, "deny", "{reply:?}");
+        assert_eq!(decisions[0].via, "fallback");
+        assert!(decisions[0].reason.starts_with("managed_route_failed:"));
+        let card = crate::cards::get(&wb.db, &qid).unwrap();
+        assert_eq!(
+            card.state,
+            crate::cards::CardState::Answered,
+            "not back to the owner"
+        );
+    }
+}
+
+#[test]
+fn a_host_shell_is_denied_without_asking_the_model() {
+    let (dir, wb, chat) = wb_with(Some("allow"));
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let ctx = wb.ctx_for("a0", None);
+    let outcome = wb
+        .registry
+        .call(
+            &wb.db,
+            &ctx,
+            "host_bash",
+            json!({"cmd":"ls","cwd":outside.path().to_string_lossy()}),
+        )
+        .unwrap();
+    assert!(matches!(outcome, CallOutcome::Asked(_)), "{outcome:?}");
+    let decisions = wb.managed_tick().unwrap();
+    assert_eq!(decisions[0].action, "deny");
+    assert_eq!(decisions[0].via, "host");
+    assert!(chat.unwrap().recorded().is_empty());
+    drop(dir);
+}
+
+#[test]
+fn a_decision_prepared_under_an_old_grant_never_lands() {
+    let (_dir, wb, _chat) = wb_with(Some("allow"));
+    let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let plan = wb.managed_plan().unwrap();
+    let decision = ManagedDecision {
+        action: "allow".into(),
+        reason: "model_choice".into(),
+        via: "model".into(),
+    };
+    // Off and on again between decide and commit: a new generation.
+    crate::delegation::disable(&wb.db, crate::PROJECT_ID).unwrap();
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    assert!(wb.managed_commit(&plan[0], decision).unwrap().is_none());
+    let card = crate::cards::get(&wb.db, &qid).unwrap();
+    assert_eq!(card.state, crate::cards::CardState::Queued);
+    assert!(managed_events(&wb).is_empty());
+}
+
+#[test]
+fn an_exhausted_budget_denies_and_survives_off_on() {
+    let (_dir, wb, chat) = wb_with(Some("allow"));
+    let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let key = wb.managed_plan().unwrap()[0].decision_key.clone();
+    for _ in 0..crate::delegation::MAX_ROUNDS {
+        crate::delegation::spend_round(&wb.db, crate::PROJECT_ID, &key).unwrap();
+    }
+    crate::delegation::disable(&wb.db, crate::PROJECT_ID).unwrap();
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let decisions = wb.managed_tick().unwrap();
+    assert_eq!(decisions[0].action, "deny");
+    assert_eq!(decisions[0].reason, "budget_exhausted");
+    assert!(chat.unwrap().recorded().is_empty());
+    assert_eq!(
+        crate::cards::get(&wb.db, &qid).unwrap().state,
+        crate::cards::CardState::Answered
+    );
+}
+
+#[test]
+fn taken_over_cards_leave_the_owner_view_and_return_when_off() {
+    let (_dir, wb, _chat) = wb_with(None);
+    let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+    let ids =
+        |cards: Vec<crate::cards::QueuedCard>| cards.into_iter().map(|c| c.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(owner_pending(&wb.db, crate::PROJECT_ID).unwrap()),
+        vec![qid.clone()]
+    );
+    assert!(managed_processing(&wb.db, crate::PROJECT_ID)
+        .unwrap()
+        .is_empty());
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    assert!(owner_pending(&wb.db, crate::PROJECT_ID).unwrap().is_empty());
+    assert_eq!(
+        ids(managed_processing(&wb.db, crate::PROJECT_ID).unwrap()),
+        vec![qid.clone()]
+    );
+    crate::delegation::disable(&wb.db, crate::PROJECT_ID).unwrap();
+    assert_eq!(
+        ids(owner_pending(&wb.db, crate::PROJECT_ID).unwrap()),
+        vec![qid]
+    );
+}
+
+#[test]
+fn the_owner_pause_stops_new_decisions_and_late_commits() {
+    let (_dir, wb, chat) = wb_with(Some("allow"));
+    let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let plan = wb.managed_plan().unwrap();
+    orchestra::pause(&wb.db, crate::PROJECT_ID).unwrap();
+    assert!(
+        wb.managed_plan().unwrap().is_empty(),
+        "no new decisions while paused"
+    );
+    let late = ManagedDecision {
+        action: "allow".into(),
+        reason: "model_choice".into(),
+        via: "model".into(),
+    };
+    assert!(wb.managed_commit(&plan[0], late).unwrap().is_none());
+    assert_eq!(
+        crate::cards::get(&wb.db, &qid).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+    assert!(chat.unwrap().recorded().is_empty());
+}

@@ -4245,6 +4245,43 @@ pub fn set_approval_mode(
     Ok(status)
 }
 
+/// Test3/17: delegation read for the shell's read connection.
+pub fn project_delegation(db: &Db, project_id: &str) -> crate::delegation::DelegationStatus {
+    crate::delegation::status(db, project_id)
+}
+
+/// Test3/17: the owner's switch. Same project-identity check as the access
+/// mode (a queued click must not flip another project after a switch). Only
+/// this shell entry writes the grant; no model or tool path reaches it.
+pub fn set_project_delegation(
+    db: &Db,
+    project_id: &str,
+    root: &Path,
+    expected_root: &str,
+    enabled: bool,
+) -> Result<crate::delegation::DelegationStatus, ApiError> {
+    if crate::desktop::actions::verify_project(root, expected_root).is_err() {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(project_id),
+            None,
+            None,
+            None,
+            "delegation",
+            "project_mismatch",
+            std::time::Instant::now(),
+        );
+        return Err(ApiError::BadInput("delegation project mismatch".into()));
+    }
+    let status = if enabled {
+        crate::delegation::enable(db, project_id)?
+    } else {
+        crate::delegation::disable(db, project_id)?
+    };
+    Ok(status)
+}
+
 /// Shell keeps its project lock across identity validation and mode persistence.
 /// Review 2026-10-01: all local DBs share PROJECT_ID, so that ID cannot prevent
 /// a queued broad-access click from project A modifying project B after switch.
@@ -4618,6 +4655,11 @@ pub fn timeline_window_metadata(
 }
 
 mod action_recovery;
+mod managed;
+pub use managed::{
+    managed_decide, managed_history, managed_processing, owner_pending, ManagedCandidate,
+    ManagedDecision, ManagedRecord, ManagedRoute,
+};
 mod model_recovery;
 pub use action_recovery::{ReconcileReport, ReconcileVerdict};
 

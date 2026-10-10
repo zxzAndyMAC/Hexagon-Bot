@@ -17,11 +17,15 @@ fn mode(db: &Db, ctx: &ToolContext) -> Result<(), ToolError> {
             "host access is not delegated to a subagent or evaluation worker",
         ));
     }
+    // Test3/17 (Q19–Q21): project delegation also covers external files for
+    // reading/creating/overwriting; these tools have no delete operation and
+    // checked_path keeps other projects' policy/state and credentials closed.
     if crate::approval_mode::read(db, &ctx.project_id)?.mode
         != crate::approval_mode::ApprovalMode::Broad
+        && crate::delegation::current(db, &ctx.project_id).is_none()
     {
         return Err(reject(
-            "host access requires this project's owner-selected Broad access mode",
+            "host access requires this project's owner-selected Broad access mode or project delegation",
         ));
     }
     Ok(())
