@@ -48,8 +48,8 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     const tr = vi.spyOn(api, 'translatePrompts').mockResolvedValue({
       no_model: false,
       entries: [
-        { id: 'workbench.base', text: '# Hexagon 工作台', error: null },
-        { id: 'tool.fs_patch', text: '替换一段精确字符串', error: null },
+        { id: 'workbench.base', text: '# Hexagon 工作台', error: null, cached: false },
+        { id: 'tool.fs_patch', text: '替换一段精确字符串', error: null, cached: false },
       ],
     })
     const { el, root } = await render()
@@ -70,15 +70,15 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
   it('切语言时丢弃上一种语言迟到的译文', async () => {
     await i18n.changeLanguage('ja')
     vi.spyOn(api, 'promptCatalog').mockResolvedValue(CATALOG)
-    let releaseJa: (v: { no_model: boolean; entries: { id: string; text: string | null; error: string | null }[] }) => void = () => {}
+    let releaseJa: (v: { no_model: boolean; entries: { id: string; text: string | null; error: string | null; cached: boolean }[] }) => void = () => {}
     vi.spyOn(api, 'translatePrompts').mockImplementation((lang: string) =>
       lang === 'ja'
         ? new Promise((r) => { releaseJa = r })
-        : Promise.resolve({ no_model: false, entries: [{ id: 'workbench.base', text: 'FR', error: null }, { id: 'tool.fs_patch', text: 'FR2', error: null }] }),
+        : Promise.resolve({ no_model: false, entries: [{ id: 'workbench.base', text: 'FR', error: null, cached: false }, { id: 'tool.fs_patch', text: 'FR2', error: null, cached: false }] }),
     )
     const { el, root } = await render()
     await act(async () => { await i18n.changeLanguage('fr') })
-    await act(async () => { releaseJa({ no_model: false, entries: [{ id: 'workbench.base', text: 'JA', error: null }, { id: 'tool.fs_patch', text: 'JA2', error: null }] }) })
+    await act(async () => { releaseJa({ no_model: false, entries: [{ id: 'workbench.base', text: 'JA', error: null, cached: false }, { id: 'tool.fs_patch', text: 'JA2', error: null, cached: false }] }) })
     await act(async () => { tabs(el)[1].click() })
     expect(el.querySelector('[data-translation]')!.textContent).toBe('FR')
     await act(async () => { pick(el, 'tool.fs_patch').click() })
