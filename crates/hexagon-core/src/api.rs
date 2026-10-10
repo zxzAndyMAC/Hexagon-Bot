@@ -154,9 +154,6 @@ pub struct OpenStageOutcome {
 pub enum ApiError {
     #[error("data boundary configuration unavailable")]
     DataBoundaryUnavailable,
-    /// MR-08: an auxiliary model request failed; IPC code `model_<code>`.
-    #[error(transparent)]
-    ModelRequest(crate::model_failure::GenerationFailure),
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
     #[error(transparent)]
@@ -3055,9 +3052,10 @@ impl Workbench {
             tools: vec![],
         };
         let ctx = self.ctx_for(agent_id, None);
-        // MR-08: owner-started auxiliary draft — bounded transient retry and
-        // a typed failure the agent panel can explain; nothing is written
-        // until the owner confirms the draft.
+        // MR-08: owner-started auxiliary draft — bounded transient retry only.
+        // The error keeps its provider type (errcode recurses to e.g.
+        // `missing_credential`), which also proves which supplier resolved;
+        // nothing is written until the owner confirms the draft.
         let resp = crate::model_failure::bounded_call(&self.db, &ctx, || {
             crate::usage::request(
                 &self.db,
@@ -3069,11 +3067,7 @@ impl Workbench {
                 || provider.complete(&req),
             )
         })
-        .map_err(|error| {
-            ApiError::ModelRequest(crate::model_failure::GenerationFailure::from_error(
-                &error, 1,
-            ))
-        })?;
+        .map_err(turn::TurnError::from)?;
         let text = resp
             .content
             .iter()
