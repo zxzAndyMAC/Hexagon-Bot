@@ -110,7 +110,7 @@ impl Tool for DependencyFetch {
         let scratch = std::env::temp_dir().join("hexagon-fetch").join(format!(
             "{}-{}",
             ctx.project_id,
-            std::process::id()
+            crate::tools::run_nonce()
         ));
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch)
@@ -253,7 +253,7 @@ fn install(
     let scratch = std::env::temp_dir().join("hexagon-exec").join(format!(
         "{}-install-{}",
         ctx.project_id,
-        std::process::id()
+        crate::tools::run_nonce()
     ));
     std::fs::create_dir_all(&scratch)
         .map_err(|e| ToolError::NotExecuted(format!("scratch: {e}")))?;

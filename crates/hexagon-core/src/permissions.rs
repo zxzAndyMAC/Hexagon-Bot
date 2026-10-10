@@ -682,7 +682,7 @@ fn release_in_approval_mode(
                 || known_navigation
                 || matches!(
                     tool_name,
-                    "web_fetch" | "web_search" | "run_test" | "dependency_fetch"
+                    "web_fetch" | "web_search" | "run_test" | "dependency_fetch" | "browser_verify"
                 )
         }
     };

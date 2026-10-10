@@ -1189,6 +1189,7 @@ impl Workbench {
             trigger_turn_id: None,
             exec_scratch: None,
             install_cache: None,
+            browser_runtime: None,
         }
     }
 
@@ -4200,6 +4201,8 @@ pub(crate) fn desktop_permissions_for_test(
 
 #[cfg(test)]
 mod approval_mode_tests;
+#[cfg(test)]
+mod browser_verify_tests;
 #[cfg(test)]
 mod dependency_fetch_tests;
 #[cfg(test)]

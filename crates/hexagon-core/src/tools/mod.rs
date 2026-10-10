@@ -129,6 +129,9 @@ pub struct ToolContext {
     /// Test3/15: the public dependency cache an offline project install may
     /// read; also lets the install remove only `node_modules`.
     pub(crate) install_cache: Option<std::path::PathBuf>,
+    /// Test3/16: the verified browser runtime (read-only) for a fenced
+    /// verification run, and whether the entry is a loopback URL.
+    pub(crate) browser_runtime: Option<(std::path::PathBuf, bool)>,
 }
 
 impl Default for ToolContext {
@@ -164,6 +167,7 @@ impl Default for ToolContext {
             trigger_turn_id: None,
             exec_scratch: None,
             install_cache: None,
+            browser_runtime: None,
         }
     }
 }
@@ -352,6 +356,7 @@ impl Registry {
         r.register(ProposeExperience);
         r.register(WebFetch);
         r.register(deps::DependencyFetch);
+        r.register(verify_browser::BrowserVerify);
         r.register(crate::git::GitBaselineMerge);
         r.register(desktop::ComputerSession);
         r.register(desktop::ComputerObserve);
@@ -1056,6 +1061,9 @@ impl Registry {
             .join(format!("{}-{action_id}", ctx.project_id));
         std::fs::create_dir_all(&scratch)
             .map_err(|e| ToolError::NotExecuted(format!("scratch unavailable: {e}")))?;
+        let scratch = scratch
+            .canonicalize()
+            .map_err(|e| ToolError::NotExecuted(format!("scratch unavailable: {e}")))?;
         let mut fenced = ctx.clone();
         fenced.exec_scratch = Some(scratch.clone());
         let result = self.exec_and_log(db, &fenced, name, input, call_seq, action_id, true);
@@ -1209,6 +1217,7 @@ pub(crate) mod effects;
 pub mod readstate;
 mod safety;
 pub(crate) mod schema;
+pub mod verify_browser;
 pub(crate) mod writeguard;
 pub use builtin::*;
 pub use safety::*;
@@ -1217,6 +1226,21 @@ pub use safety::*;
 mod tests;
 
 pub(crate) mod host;
+
+/// Test3/15/16: a per-run scratch identity. Process id alone collided when
+/// two runs of one project overlapped (one run's cleanup killed the other).
+pub(crate) fn run_nonce() -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{}-{nanos:x}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
 
 /// A short, display-only target for tools without a host write manifest.
 fn unknown_target_summary(input: &Value) -> String {

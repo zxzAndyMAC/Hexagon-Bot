@@ -150,8 +150,9 @@ pub fn fenced_exec_spec(repo_root: &Path, owned_globs: &[String], scratch: &Path
     };
     match spec_for(repo_root, owned_globs, false) {
         SandboxSpec::Seatbelt(mut profile) => {
+            // Read too: host scripts and temp files live in the scratch.
             profile.push_str(&format!(
-                "(allow file-write* (subpath \"{}\"))\n",
+                "(allow file-read-data file-write* (subpath \"{}\"))\n",
                 sbq(&scratch)
             ));
             for root in [repo_root, canon.as_path()] {
@@ -231,6 +232,34 @@ pub fn fetch_spec(scratch: &Path, cache: &Path) -> SandboxSpec {
     #[cfg(target_os = "macos")]
     profile.push_str(PROCESS_GROUP_RULES);
     SandboxSpec::Seatbelt(profile)
+}
+
+/// Test3/16: real-browser verification — the 14 fence plus read-only access
+/// to the verified runtime; network only to loopback when the entry is the
+/// project's own dev server. Never the whole /Applications, never off-machine.
+pub fn browser_verify_spec(
+    repo_root: &Path,
+    owned_globs: &[String],
+    scratch: &Path,
+    runtime: &Path,
+    loopback: bool,
+) -> SandboxSpec {
+    let Ok(runtime) = runtime.canonicalize() else {
+        return SandboxSpec::Unavailable;
+    };
+    match fenced_exec_spec(repo_root, owned_globs, scratch) {
+        SandboxSpec::Seatbelt(mut profile) => {
+            profile.push_str(&format!(
+                "(allow file-read-data (subpath \"{}\"))\n",
+                sbq(&runtime)
+            ));
+            if loopback {
+                profile.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n(allow network-inbound (local ip \"localhost:*\"))\n");
+            }
+            SandboxSpec::Seatbelt(profile)
+        }
+        other => other,
+    }
 }
 
 /// Whether the deletion-fenced profile can actually be enforced here.

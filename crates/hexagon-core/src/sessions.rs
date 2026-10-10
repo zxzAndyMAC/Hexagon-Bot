@@ -553,6 +553,17 @@ impl SessionTable {
             crate::permissions::agent_role(db, ctx).as_deref() == Some(crate::pm_route::PM_ROLE);
         let spec = if read_only {
             crate::sandbox::read_only_spec(&ctx.repo_root, net)
+        } else if let (Some(scratch), Some((runtime, loopback))) =
+            (&ctx.exec_scratch, &ctx.browser_runtime)
+        {
+            // Test3/16: read-only verified runtime; loopback only if asked.
+            crate::sandbox::browser_verify_spec(
+                &ctx.repo_root,
+                &ctx.owned_globs,
+                scratch,
+                runtime,
+                *loopback,
+            )
         } else if let (Some(scratch), Some(cache)) = (&ctx.exec_scratch, &ctx.install_cache) {
             // Test3/15: offline install reads the fetched cache only.
             crate::sandbox::fenced_install_spec(&ctx.repo_root, &ctx.owned_globs, scratch, cache)
