@@ -2277,15 +2277,20 @@ fn fast_wait(probe_ms: u64, budget_ms: u64) -> WaitPolicy {
 }
 
 /// 事件流里某 System 子 kind 的载荷序列（按落库顺序）。
+// Test3 batch C: the new tool definitions pushed a turn checkpoint past the
+// 64KB spill threshold, so raw rows held only a pointer and this helper read
+// `checkpoint` as Null. Read events the way the product does (hydrated).
 fn sys_events(db: &Db, kind: &str) -> Vec<Value> {
     let mut st = db
         .conn()
-        .prepare("SELECT payload FROM events WHERE kind='system' ORDER BY id")
+        .prepare("SELECT project_id, payload FROM events WHERE kind='system' ORDER BY id")
         .unwrap();
-    st.query_map([], |r| r.get::<_, String>(0))
+    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .unwrap()
         .flatten()
-        .map(|p| serde_json::from_str::<Value>(&p).unwrap())
+        .map(|(project, p)| {
+            db.hydrate_payload(&project, serde_json::from_str::<Value>(&p).unwrap())
+        })
         .filter(|p| p["kind"] == kind)
         .collect()
 }
