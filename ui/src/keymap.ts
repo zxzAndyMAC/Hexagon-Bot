@@ -69,6 +69,7 @@ export type ActionId =
   | 'continueOriginalTask'
   | 'followNewInstruction'
   | 'retryWithChatModel'
+  | 'rejudgeAfterModelFailure'
   | 'requestException'
   | 'reviewPerformanceBaseline'
   | 'reviewQualityCommands'
@@ -175,6 +176,8 @@ const DEFAULTS: Record<ActionId, string> = {
   followNewInstruction: 'alt+mod+u',
   // MR-05: explicit model switch for one request; `approve` never does this.
   retryWithChatModel: 'alt+mod+m',
+  // MR-06: explicit re-judge after an internal judge request failed.
+  rejudgeAfterModelFailure: 'alt+mod+j',
   requestException: 'alt+mod+e',
   acceptException: 'alt+mod+shift+Enter',
   openPolicyReport: 'alt+mod+p',
@@ -271,6 +274,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'continueOriginalTask', labelKey: 'modelRecovery.continueOriginal' },
   { id: 'followNewInstruction', labelKey: 'modelRecovery.followNew' },
   { id: 'retryWithChatModel', labelKey: 'modelRecovery.useChatModelAction' },
+  { id: 'rejudgeAfterModelFailure', labelKey: 'judgeFailure.rejudge' },
   { id: 'requestException', labelKey: 'exceptions.request' },
   { id: 'acceptException', labelKey: 'exceptions.accept' },
   { id: 'curateLegacyExperience', labelKey: 'experience.curate' },

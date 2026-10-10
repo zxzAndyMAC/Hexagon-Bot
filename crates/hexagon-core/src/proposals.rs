@@ -654,6 +654,56 @@ pub fn review(
     Ok(())
 }
 
+/// MR-06 (test3 10): re-run the execute judgment after the owner card says
+/// the judge request failed. Only the same pending proposal with the same
+/// body may be judged again; the verdict uses the original closed choice and
+/// grants nothing a successful first call could not have. The failed card is
+/// closed only after the new outcome exists, so exactly one owner item stays.
+pub(crate) fn rejudge_after_model_failure(
+    db: &Db,
+    ctx: &ToolContext,
+    question_id: &str,
+    jev: Option<&dyn crate::provider::ModelProvider>,
+) -> Result<crate::execute::Effect, PropError> {
+    let card = crate::cards::get_queued(db, question_id, crate::cards::CardKind::Stamp)?;
+    let proposal_id = card.payload["proposal_id"]
+        .as_str()
+        .ok_or_else(|| PropError::NotFound(question_id.into()))?
+        .to_string();
+    let (status, artifact_id): (String, Option<String>) = db
+        .conn()
+        .query_row(
+            "SELECT status, artifact_id FROM proposals WHERE id=?1 AND project_id=?2",
+            params![proposal_id, ctx.project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| PropError::NotFound(proposal_id.clone()))?;
+    if status != "awaiting_stamp" {
+        return Err(PropError::BadState(status));
+    }
+    let (surface, _target, diff, body) = artifact_proposal_parts(db, ctx, artifact_id.as_deref())?;
+    if card.payload["judged_body_digest"].as_str()
+        != Some(crate::execute::body_digest(&body).as_str())
+    {
+        return Err(PropError::BadState("proposal_changed".into()));
+    }
+    let evidence = replay_evidence(&body)
+        .and_then(|r| r.ok())
+        .map(|r| evidence_summary(&r));
+    let effect = crate::execute::judge_passed(
+        db,
+        ctx,
+        &proposal_id,
+        &surface,
+        &diff,
+        &body,
+        evidence.as_ref(),
+        jev,
+    )?;
+    crate::cards::answer(db, question_id, "rejudge")?;
+    Ok(effect)
+}
+
 fn artifact_proposal_parts(
     db: &Db,
     ctx: &ToolContext,

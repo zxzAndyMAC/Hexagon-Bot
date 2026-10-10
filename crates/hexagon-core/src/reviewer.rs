@@ -158,6 +158,9 @@ pub struct Verdict {
     pub error: bool,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    /// MR-06: typed request-failure fact when `error` came from the model
+    /// request (never provider prose).
+    pub model_failure: Option<Value>,
 }
 
 fn fail_closed(reason: &str, error: bool) -> Verdict {
@@ -167,6 +170,7 @@ fn fail_closed(reason: &str, error: bool) -> Verdict {
         error,
         tokens_in: 0,
         tokens_out: 0,
+        model_failure: None,
     }
 }
 
@@ -208,6 +212,7 @@ pub fn parse_verdict(text: &str) -> Verdict {
         error: false,
         tokens_in: 0,
         tokens_out: 0,
+        model_failure: None,
     }
 }
 
@@ -482,6 +487,18 @@ pub fn adjudicate(
         "reviewer_unsure"
     };
     let _ = crate::cards::annotate(db, question_id, &[(field, json!(v.reason))]);
+    // MR-06: the request-failure fact (and the original request text a
+    // re-judge needs) lives on the same card; a later success clears it.
+    let failure = match &v.model_failure {
+        Some(failure) => vec![
+            ("model_failure", failure.clone()),
+            ("review_input", json!(user_input)),
+        ],
+        None => vec![("model_failure", Value::Null)],
+    };
+    if let Err(e) = crate::cards::annotate(db, question_id, &failure) {
+        log::warn!("reviewer model failure not persisted: {e}");
+    }
     if live && v.kind == VerdictKind::Deny {
         let streak = denial_streak(db, &ctx.project_id, ctx.stage_run_id.as_deref());
         if streak >= REVIEWER_TRIP {
@@ -548,15 +565,17 @@ fn review_with_usage(
         model_slot,
     );
     let response = match ledger {
-        Some((db, ctx)) => crate::usage::request(
-            db,
-            ctx,
-            model_slot,
-            "action_review",
-            provider,
-            Some(&req),
-            || provider.complete(&req),
-        ),
+        Some((db, ctx)) => crate::model_failure::bounded_call(db, ctx, || {
+            crate::usage::request(
+                db,
+                ctx,
+                model_slot,
+                "action_review",
+                provider,
+                Some(&req),
+                || provider.complete(&req),
+            )
+        }),
         None => provider.complete(&req),
     };
     match response {
@@ -574,7 +593,16 @@ fn review_with_usage(
             v.tokens_out = resp.usage.completion_tokens;
             v
         }
-        Err(e) => fail_closed(&format!("reviewer error: {e}"), true),
+        // MR-06 (test3 10): the old reason embedded provider prose in the
+        // owner card. Keep fail-closed (unsure → owner) with a typed fact.
+        Err(e) => Verdict {
+            model_failure: Some(crate::model_failure::judge_failure(
+                "action_review",
+                &e,
+                model_slot,
+            )),
+            ..fail_closed("model_request_failed", true)
+        },
     }
 }
 
@@ -845,6 +873,43 @@ mod tests {
             .unwrap();
         assert_eq!(evs[0].event.payload["mode"], "live");
         assert_eq!(evs[0].event.payload["verdict"], "allow");
+    }
+
+    /// MR-06 (test3 10): a failed review request is a typed request fact on
+    /// the card, never provider prose and never an allow.
+    #[test]
+    fn live_model_failure_is_a_typed_fact_not_a_verdict() {
+        struct Down;
+        impl crate::provider::ModelProvider for Down {
+            fn complete(
+                &self,
+                _: &crate::provider::ChatRequest,
+            ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+                Err(crate::provider::ProviderError::Refused(
+                    "upstream said secret-token-123".into(),
+                ))
+            }
+        }
+        let (db, ctx, _d) = setup();
+        let q1 = live_setup(
+            &db,
+            json!({"tool":"bash","raw_input":{"cmd":"cargo test"},"safety_net":false}),
+            "live",
+            "L1",
+        );
+        assert!(matches!(
+            adjudicate(&db, &ctx, &Down, "s", &q1, "跑测试"),
+            ReviewOutcome::Held
+        ));
+        let card = crate::cards::get(&db, &q1).unwrap();
+        assert_eq!(card.payload["reviewer_unsure"], "model_request_failed");
+        assert_eq!(card.payload["model_failure"]["purpose"], "action_review");
+        assert_eq!(card.payload["model_failure"]["code"], "provider_error");
+        assert_eq!(card.payload["review_input"], "跑测试");
+        assert!(!card.payload.to_string().contains("secret-token-123"));
+        let ok = verdict_provider("unsure");
+        adjudicate(&db, &ctx, &ok, "s", &q1, "跑测试");
+        assert!(crate::cards::get(&db, &q1).unwrap().payload["model_failure"].is_null());
     }
 
     #[test]

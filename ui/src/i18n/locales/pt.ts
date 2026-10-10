@@ -233,6 +233,24 @@ export default {
     stall_carded: 'travamento passado a você',
     stall_closed: 'travamento encerrado',
   },
+  judgeFailure: {
+    title: "Falha na solicitação ao modelo de {{purpose}}",
+    hint: "É uma falha de solicitação, não um veredito. Você ainda pode decidir aqui; julgar de novo primeiro revisa o alvo e as evidências originais.",
+    rejudge: "Julgar de novo",
+    rejudgeHint: "Executa o mesmo julgamento sobre o alvo inalterado. Não pode conceder mais do que um primeiro julgamento bem-sucedido.",
+    advice: "Sem conselho: a solicitação ao modelo de conselho falhou ({{code}}). Não é uma recomendação.",
+    purpose: {
+      action_review: "revisão de ações",
+      execute_judgment: "julgamento de execução",
+    },
+    outcome: {
+      allowed: "A revisão permitiu; a tarefa original continua.",
+      held: "O julgamento ainda deixa esta decisão com você.",
+      executed: "A proposta foi escrita.",
+      rejected: "A proposta foi rejeitada.",
+      handed: "O julgamento entregou esta proposta a você.",
+    },
+  },
   modelRecovery: {
     title: "Falha na atribuição",
     retryingTitle: "Reconectando",

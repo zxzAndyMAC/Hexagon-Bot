@@ -967,6 +967,36 @@ async fn retry_model_request(
     .map_err(|error| CmdError::internal(error.to_string()))?
 }
 
+/// MR-06: re-run a failed internal judge on its unchanged original target.
+#[tauri::command]
+async fn rejudge_after_model_failure(
+    app: tauri::AppHandle,
+    state: ProjectState<'_>,
+    qid: String,
+    expected_project_root: String,
+) -> Result<hexagon_core::api::RejudgeOutcome, CmdError> {
+    let identity = state.identity.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
+        with_wb(&state, |wb| {
+            if hexagon_core::api::desktop_check_project(&wb.repo_root, &expected_project_root)
+                .is_err()
+            {
+                return Err(hexagon_core::api::ApiError::BadInput(
+                    "judge recovery project changed".into(),
+                ));
+            }
+            wb.rejudge_after_model_failure(&qid)
+        })
+    })
+    .await
+    .map_err(|error| CmdError::internal(error.to_string()))?
+}
+
 /// MR-05: explicit one-off chat-model retry of a failed decision choice.
 #[tauri::command]
 async fn retry_model_request_with_chat_model(
@@ -3042,6 +3072,7 @@ pub fn run() {
             open_stage,
             recover_run,
             retry_model_request,
+            rejudge_after_model_failure,
             retry_model_request_with_chat_model,
             resolve_model_request_choice,
             reconcile_tool_action,

@@ -2831,7 +2831,10 @@ fn execute_judgment_is_a_closed_choice_and_does_not_fall_back_to_chat() {
 
     let (dir, mut wb, chat) = judgment_wb();
     let pid = submit_proposal(&wb, "art-err", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
-    let jev = jev_on(&mut wb, Err("down"));
+    // MR-06 behaviour change: a transport failure ("down") now gets one
+    // bounded retry; this case is about a call that stays failed, so use a
+    // non-retryable failure.
+    let jev = jev_on(&mut wb, Err("permanent"));
     wb.review_proposal(&pid, true, "可以").unwrap();
     assert_eq!(proposal_status(&wb, &pid), "awaiting_stamp");
     assert_eq!(
@@ -6435,6 +6438,128 @@ fn diag_jev_unbound_is_warn_and_survives_toggle() {
     log::set_max_level(log::LevelFilter::Debug);
 }
 
+/// MR-06 (test3 10): an execute-judgment request failure is labelled on the
+/// owner card (not a verdict); re-judging the unchanged proposal applies the
+/// judge's own closed choice once and leaves exactly one owner item.
+#[test]
+fn execute_judgment_model_failure_is_labelled_and_rejudge_applies_once() {
+    let (dir, mut wb, _chat) = judgment_wb();
+    let pid = submit_proposal(&wb, "art-mf", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
+    let _down = jev_on(&mut wb, Err("permanent"));
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    let stamp = pending_questions(&wb)
+        .unwrap()
+        .into_iter()
+        .find(|q| q["kind"] == "stamp")
+        .unwrap();
+    assert_eq!(
+        stamp["payload"]["model_failure"]["purpose"],
+        "execute_judgment"
+    );
+    assert_eq!(stamp["payload"]["model_failure"]["code"], "provider_error");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+        "line1\n"
+    );
+    let qid = stamp["id"].as_str().unwrap().to_string();
+    let jev = jev_on(&mut wb, Ok("执行"));
+    assert_eq!(
+        wb.rejudge_after_model_failure(&qid).unwrap(),
+        RejudgeOutcome::Executed
+    );
+    assert_eq!(jev.decides(), 1);
+    assert!(std::fs::read_to_string(dir.path().join("AGENTS.md"))
+        .unwrap()
+        .contains("line2"));
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .all(|q| q["kind"] != "stamp"));
+    assert!(
+        wb.rejudge_after_model_failure(&qid).is_err(),
+        "a closed card never re-judges"
+    );
+}
+
+#[test]
+fn execute_judgment_rejudge_refuses_a_changed_proposal() {
+    let (dir, mut wb, _chat) = judgment_wb();
+    let pid = submit_proposal(&wb, "art-mf2", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
+    let _down = jev_on(&mut wb, Err("permanent"));
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    let qid = pending_questions(&wb)
+        .unwrap()
+        .into_iter()
+        .find(|q| q["kind"] == "stamp")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let file = dir.path().join(".hexagon/props/art-mf2.md");
+    let changed = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace("line2", "line2 changed");
+    std::fs::write(&file, changed).unwrap();
+    let jev = jev_on(&mut wb, Ok("执行"));
+    assert!(wb.rejudge_after_model_failure(&qid).is_err());
+    assert_eq!(jev.decides(), 0, "stale evidence is never judged");
+    assert!(pending_questions(&wb)
+        .unwrap()
+        .iter()
+        .any(|q| q["id"] == qid.as_str()));
+}
+
+#[test]
+fn transient_execute_judgment_failure_retries_inside_its_window() {
+    let (dir, mut wb, _chat) = judgment_wb();
+    wb.wait_policy = crate::turn::WaitPolicy {
+        probe_interval: std::time::Duration::from_millis(1),
+        budget: std::time::Duration::from_secs(5),
+        tick: std::time::Duration::from_millis(1),
+    };
+    let pid = submit_proposal(&wb, "art-mf3", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
+    let jev = Arc::new(ScriptedDecision::new(vec![
+        Err("unexpected EOF".into()),
+        Ok("执行".into()),
+    ]));
+    wb.register_provider(crate::provider_config::JEV_SLOT, jev.clone());
+    wb.review_proposal(&pid, true, "可以").unwrap();
+    assert_eq!(jev.decides(), 2, "one transient retry, separately recorded");
+    assert!(std::fs::read_to_string(dir.path().join("AGENTS.md"))
+        .unwrap()
+        .contains("line2"));
+}
+
+#[test]
+fn action_review_rejudge_never_reaches_safety_net_or_shadow_mode() {
+    let (_dir, wb) = git_wb(&["前端"]);
+    let card = |safety_net: bool| {
+        crate::cards::enqueue(
+            &wb.db,
+            &wb.project_id,
+            Some("a0"),
+            crate::cards::CardKind::Permission,
+            json!({"tool":"bash","raw_input":{"cmd":"cargo test"},"safety_net":safety_net,
+                "model_failure":{"purpose":"action_review","code":"transport"},"review_input":"run tests"}),
+            None,
+        )
+        .unwrap()
+    };
+    let shadow = card(false);
+    let error = wb
+        .rejudge_after_model_failure(&shadow)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("reviewer_not_live"), "{error}");
+    crate::autonomy::set_reviewer_mode(&wb.db, &wb.project_id, "live").unwrap();
+    let net = card(true);
+    let error = wb
+        .rejudge_after_model_failure(&net)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("safety_net"), "{error}");
+}
+
 /// 票 03：Jev 调用失败 → Warn 的「槽位」记录（不是判定分支）。
 #[test]
 fn diag_jev_call_failed_is_warn() {
@@ -6442,7 +6567,7 @@ fn diag_jev_call_failed_is_warn() {
     log::set_max_level(log::LevelFilter::Debug);
     let (_dir, mut wb, _chat) = judgment_wb();
     let pid = submit_proposal(&wb, "art-diag3", "agents_md", "AGENTS.md", PROPOSAL_DIFF).unwrap();
-    let _jev = jev_on(&mut wb, Err("down"));
+    let _jev = jev_on(&mut wb, Err("permanent"));
     wb.review_proposal(&pid, true, "可以").unwrap();
     // 槽位失败不再另写一条「判定」——失败口已在绑定/调用路径上说过。
     // 测试线程各有一本账（diag.rs sink_path），这里读回的只有本用例写的。
@@ -9346,7 +9471,10 @@ fn request_usage_failed_execute_judgment_is_still_one_unknown_request() {
         PROPOSAL_DIFF,
     )
     .unwrap();
-    let jev = jev_on(&mut wb, Err("response lost"));
+    // MR-06 behaviour change: transport errors retry once in a bounded
+    // window (each send its own ledger row); a non-retryable failure is one
+    // unknown request.
+    let jev = jev_on(&mut wb, Err("permanent"));
     wb.review_proposal(&pid, true, "review accepted").unwrap();
     assert_eq!(jev.decides(), 1);
     let summary = crate::usage::project_summary(&wb.db, "p1").unwrap();

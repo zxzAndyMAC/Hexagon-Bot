@@ -233,6 +233,24 @@ export default {
     stall_carded: '失速交給負責人',
     stall_closed: '失速收場',
   },
+  judgeFailure: {
+    title: "{{purpose}}模型請求失敗",
+    hint: "這是請求失敗，不是判定結論。你仍可在此直接裁決；重新判定會先核對原目標和證據。",
+    rejudge: "重新判定",
+    rejudgeHint: "對未變化的原目標再跑一次同一判定，權限不會超過第一次成功判定能給的範圍。",
+    advice: "暫無建議：建議模型請求失敗（{{code}}），這不是推薦結論。",
+    purpose: {
+      action_review: "動作審查",
+      execute_judgment: "執行判定",
+    },
+    outcome: {
+      allowed: "審查已放行，原任務繼續。",
+      held: "判定仍交由你裁決。",
+      executed: "提案已寫入。",
+      rejected: "提案已駁回。",
+      handed: "判定已把此提案交給你裁決。",
+    },
+  },
   modelRecovery: {
     title: "派活失敗",
     retryingTitle: "正在重新連線派活",

@@ -233,6 +233,24 @@ export default {
     stall_carded: 'stall handed to you',
     stall_closed: 'stall closed',
   },
+  judgeFailure: {
+    title: "{{purpose}} model request failed",
+    hint: "This is a request failure, not a verdict. You can still decide here; re-judge first re-checks the original target and evidence.",
+    rejudge: "Re-judge",
+    rejudgeHint: "Run the same judge again on the unchanged target. It cannot grant more than a successful first judgement.",
+    advice: "Advice unavailable: the advice model request failed ({{code}}). This is not a recommendation.",
+    purpose: {
+      action_review: "Action review",
+      execute_judgment: "Execute judgment",
+    },
+    outcome: {
+      allowed: "Allowed by the reviewer; the original task continues.",
+      held: "The judge still leaves this decision to you.",
+      executed: "The proposal was written.",
+      rejected: "The proposal was rejected.",
+      handed: "The judge handed this proposal to you.",
+    },
+  },
   modelRecovery: {
     title: "Dispatch failed",
     retryingTitle: "Dispatch reconnecting",

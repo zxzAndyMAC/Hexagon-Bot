@@ -86,61 +86,7 @@ pub(super) fn retry_budget_allows(
     elapsed < budget
 }
 
-/// MR-02 failure vocabulary shared by every recovery purpose (core, UI entry
-/// buttons and i18n read the same codes). Typed causes win over HTTP status:
-/// the same status can mean quota or rate limiting, so a confirmed quota code
-/// is never retried as a temporary limit (test3 05/06 review).
-pub(super) fn failure_code(error: &crate::provider::ProviderError) -> &'static str {
-    use crate::provider::ProviderError as E;
-    match error.cause() {
-        E::QuotaUnavailable => return "quota",
-        E::Unsupported(_) => return "configuration",
-        E::InvalidResponse(_) => return "invalid_response",
-        _ => {}
-    }
-    match error.http_status() {
-        Some(401 | 403) => "authentication",
-        Some(402) => "quota",
-        Some(429) => "rate_limited",
-        Some(500..=599) => "provider_unavailable",
-        Some(400..=499) => "request_rejected",
-        _ => match error.cause() {
-            E::Transport(_) => "transport",
-            E::MissingCredential(_) => "missing_credential",
-            E::CredentialStore(_) => "credential_store",
-            E::BudgetUnavailable => "budget_unavailable",
-            E::Interrupted => "interrupted",
-            E::Deadline => "deadline",
-            _ => "provider_error",
-        },
-    }
-}
-
-/// One persisted attempt. MR-01: provider text can contain URLs, response
-/// bodies or secrets; keep structured status and safe categories only.
-pub(super) fn failure_entry(
-    code: &str,
-    error: Option<&crate::provider::ProviderError>,
-    request_id: Option<String>,
-    model: Option<&str>,
-    slot: &str,
-) -> Value {
-    let message = match error.map(|e| e.cause()) {
-        Some(crate::provider::ProviderError::Transport(text))
-            if text.to_lowercase().contains("unexpected eof") =>
-        {
-            "unexpected EOF"
-        }
-        Some(crate::provider::ProviderError::Transport(text))
-            if text.to_lowercase().contains("connection reset") =>
-        {
-            "connection reset"
-        }
-        _ => code,
-    };
-    json!({"request_id":request_id,"code":code,"http_status":error.and_then(|e| e.http_status()),
-        "model":model,"model_slot":slot,"message":message})
-}
+pub(super) use crate::model_failure::{failure_code, failure_entry};
 
 /// Wall-clock end of the current automatic retry window, for progress display.
 pub(super) fn retry_deadline_ms(remaining: std::time::Duration) -> i64 {
@@ -539,7 +485,9 @@ impl Workbench {
     }
 }
 
+mod judgment;
 mod pm;
 mod role_turn;
 mod supersession;
+pub use judgment::RejudgeOutcome;
 pub(in crate::api) use role_turn::TurnRecoveryPacket;

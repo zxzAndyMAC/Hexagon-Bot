@@ -285,7 +285,15 @@ impl JudgeBackend for LlmJudge<'_> {
         };
         let resp = match response {
             Ok(r) => r,
-            Err(e) => return needs_human(&e.to_string()),
+            // MR-06 (test3 10): advice only, never a gate. A failed request
+            // stays "needs human", typed as a request failure; provider text
+            // (URLs, bodies, secrets) is never persisted in the verdict.
+            Err(e) => {
+                let mut verdict = needs_human("model_request_failed");
+                verdict.reason = Some(json!({"code": "model_request_failed",
+                    "failure": crate::model_failure::failure_code(&e)}));
+                return verdict;
+            }
         };
         let text: String = resp
             .content

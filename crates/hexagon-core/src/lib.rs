@@ -33,6 +33,7 @@ pub mod intake;
 pub mod invariant;
 pub mod judge;
 pub mod mcp;
+pub mod model_failure;
 pub mod orchestra;
 pub mod owner_text;
 pub mod packedit;

@@ -233,6 +233,24 @@ export default {
     stall_carded: 'atasco pasado a ti',
     stall_closed: 'atasco cerrado',
   },
+  judgeFailure: {
+    title: "Falló la solicitud al modelo de {{purpose}}",
+    hint: "Es un fallo de la solicitud, no un veredicto. Puedes decidir aquí; volver a juzgar primero revisa el objetivo y la evidencia originales.",
+    rejudge: "Volver a juzgar",
+    rejudgeHint: "Ejecuta el mismo juicio sobre el objetivo sin cambios. No puede conceder más que un primer juicio exitoso.",
+    advice: "Sin consejo: falló la solicitud al modelo de consejo ({{code}}). No es una recomendación.",
+    purpose: {
+      action_review: "revisión de acciones",
+      execute_judgment: "juicio de ejecución",
+    },
+    outcome: {
+      allowed: "La revisión lo permitió; la tarea original continúa.",
+      held: "El juicio sigue dejando esta decisión en tus manos.",
+      executed: "Se escribió la propuesta.",
+      rejected: "Se rechazó la propuesta.",
+      handed: "El juicio te entregó esta propuesta.",
+    },
+  },
   modelRecovery: {
     title: "Falló la asignación",
     retryingTitle: "Reconectando",

@@ -233,6 +233,24 @@ export default {
     stall_carded: '停滞をオーナーへ',
     stall_closed: '停滞を終了',
   },
+  judgeFailure: {
+    title: "{{purpose}}のモデル要求に失敗しました",
+    hint: "これは要求の失敗であり、判定結果ではありません。ここで直接決定できます。再判定は元の対象と証拠を先に確認します。",
+    rejudge: "再判定",
+    rejudgeHint: "変更されていない元の対象に同じ判定をもう一度実行します。最初の判定が成功した場合を超える権限は与えません。",
+    advice: "助言なし：助言モデルの要求に失敗しました（{{code}}）。推奨ではありません。",
+    purpose: {
+      action_review: "アクション審査",
+      execute_judgment: "実行判定",
+    },
+    outcome: {
+      allowed: "審査が許可し、元のタスクを続行します。",
+      held: "判定はこの決定をあなたに委ねています。",
+      executed: "提案を書き込みました。",
+      rejected: "提案を却下しました。",
+      handed: "判定はこの提案をあなたに委ねました。",
+    },
+  },
   modelRecovery: {
     title: "タスク割り当てに失敗",
     retryingTitle: "再接続中",

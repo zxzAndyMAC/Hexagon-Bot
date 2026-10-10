@@ -233,6 +233,24 @@ export default {
     stall_carded: 'blocage transmis',
     stall_closed: 'blocage clos',
   },
+  judgeFailure: {
+    title: "Échec de la requête modèle de {{purpose}}",
+    hint: "C’est un échec de requête, pas un verdict. Vous pouvez décider ici ; un nouveau jugement revérifie d’abord la cible et les preuves d’origine.",
+    rejudge: "Juger à nouveau",
+    rejudgeHint: "Relance le même jugement sur la cible inchangée. Il ne peut pas accorder plus qu’un premier jugement réussi.",
+    advice: "Pas d’avis : la requête au modèle d’avis a échoué ({{code}}). Ce n’est pas une recommandation.",
+    purpose: {
+      action_review: "revue d’action",
+      execute_judgment: "jugement d’exécution",
+    },
+    outcome: {
+      allowed: "La revue l’a autorisé ; la tâche d’origine continue.",
+      held: "Le jugement vous laisse toujours cette décision.",
+      executed: "La proposition a été écrite.",
+      rejected: "La proposition a été rejetée.",
+      handed: "Le jugement vous a confié cette proposition.",
+    },
+  },
   modelRecovery: {
     title: "Échec de l’attribution",
     retryingTitle: "Reconnexion",

@@ -4588,4 +4588,6 @@ pub fn timeline_window_metadata(
 
 mod model_recovery;
 
-pub use model_recovery::{model_request_recovery, ModelRequestFailure, ModelRequestRecovery};
+pub use model_recovery::{
+    model_request_recovery, ModelRequestFailure, ModelRequestRecovery, RejudgeOutcome,
+};
