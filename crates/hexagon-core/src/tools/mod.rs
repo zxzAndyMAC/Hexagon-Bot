@@ -126,6 +126,9 @@ pub struct ToolContext {
     /// Test3/14: host scratch for a broad-access fenced execution. Its
     /// presence selects the deletion-fenced profile and sets TMPDIR.
     pub(crate) exec_scratch: Option<std::path::PathBuf>,
+    /// Test3/15: the public dependency cache an offline project install may
+    /// read; also lets the install remove only `node_modules`.
+    pub(crate) install_cache: Option<std::path::PathBuf>,
 }
 
 impl Default for ToolContext {
@@ -160,6 +163,7 @@ impl Default for ToolContext {
             saved_permission_admission: None,
             trigger_turn_id: None,
             exec_scratch: None,
+            install_cache: None,
         }
     }
 }
@@ -347,6 +351,7 @@ impl Registry {
         r.register(crate::design::ProposeDesign);
         r.register(ProposeExperience);
         r.register(WebFetch);
+        r.register(deps::DependencyFetch);
         r.register(crate::git::GitBaselineMerge);
         r.register(desktop::ComputerSession);
         r.register(desktop::ComputerObserve);
@@ -1198,6 +1203,7 @@ fn effect_uncertain(risk: RiskClass, error: &ToolError) -> bool {
 // 护栏层与内建实现各成文件；`pub use` 再导出保 `crate::tools::X` 路径不变。
 pub(crate) mod browser;
 mod builtin;
+pub mod deps;
 pub(crate) mod desktop;
 pub(crate) mod effects;
 pub mod readstate;

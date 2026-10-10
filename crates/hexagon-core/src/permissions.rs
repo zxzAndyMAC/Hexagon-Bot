@@ -675,10 +675,15 @@ fn release_in_approval_mode(
         }
         // Network reads and sandboxed test execution have host-enforced tool
         // contracts. A command merely named "test" has no such guarantee.
+        // Test3/15 (Q5/Q10): the controlled public fetch is host-enforced
+        // (isolated fetch side, offline fenced install); no download card.
         ApprovalMode::Broad => {
             known_read
                 || known_navigation
-                || matches!(tool_name, "web_fetch" | "web_search" | "run_test")
+                || matches!(
+                    tool_name,
+                    "web_fetch" | "web_search" | "run_test" | "dependency_fetch"
+                )
         }
     };
     if !allowed && mode == ApprovalMode::Broad && fenced_exec_eligible(db, ctx, tool_name, input) {

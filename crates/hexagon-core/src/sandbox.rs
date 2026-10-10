@@ -170,6 +170,69 @@ pub fn fenced_exec_spec(repo_root: &Path, owned_globs: &[String], scratch: &Path
     }
 }
 
+/// Test3/15: the offline project install — the 14 fence plus read/write of
+/// the public package cache and removal only under `node_modules` (a
+/// host-identified dependency output, never source or delivery).
+pub fn fenced_install_spec(
+    repo_root: &Path,
+    owned_globs: &[String],
+    scratch: &Path,
+    cache: &Path,
+) -> SandboxSpec {
+    let (Ok(canon), Ok(cache)) = (repo_root.canonicalize(), cache.canonicalize()) else {
+        return SandboxSpec::Unavailable;
+    };
+    match fenced_exec_spec(repo_root, owned_globs, scratch) {
+        SandboxSpec::Seatbelt(mut profile) => {
+            profile.push_str(&format!(
+                "(allow file-read-data file-write* (subpath \"{}\"))\n",
+                sbq(&cache)
+            ));
+            for root in [repo_root, canon.as_path()] {
+                profile.push_str(&format!(
+                    "(allow file-write-unlink (subpath \"{}\"))\n",
+                    sbq(&root.join("node_modules"))
+                ));
+            }
+            SandboxSpec::Seatbelt(profile)
+        }
+        other => other,
+    }
+}
+
+/// Test3/15: the dependency fetch side. Network on, but it can read only
+/// runtimes, its empty scratch and the cache — never a project or the user's
+/// home, credentials or npm configs — and write only scratch and cache.
+pub fn fetch_spec(scratch: &Path, cache: &Path) -> SandboxSpec {
+    if status().mode != "seatbelt" || !status().available {
+        return SandboxSpec::Unavailable;
+    }
+    let (Ok(scratch), Ok(cache)) = (scratch.canonicalize(), cache.canonicalize()) else {
+        return SandboxSpec::Unavailable;
+    };
+    let mut profile = String::from(
+        "(version 1)\n(deny default)\n(allow process*)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow mach-lookup)\n(allow ipc-posix-shm)\n(allow file-read-metadata)\n(allow file-ioctl)\n(allow file-write* (literal \"/dev/null\"))\n(allow file-read-data (literal \"/\"))\n(allow file-read-data (subpath \"/private/etc\"))\n",
+    );
+    let mut roots = runtime_read_roots(&scratch, false);
+    roots.push(cache.clone());
+    for root in roots {
+        profile.push_str(&format!(
+            "(allow file-read-data (subpath \"{}\"))\n",
+            sbq(&root)
+        ));
+    }
+    for root in [&scratch, &cache] {
+        profile.push_str(&format!(
+            "(allow file-write* (subpath \"{}\"))\n",
+            sbq(root)
+        ));
+    }
+    profile.push_str("(deny process-info* (target others))\n(allow network*)\n");
+    #[cfg(target_os = "macos")]
+    profile.push_str(PROCESS_GROUP_RULES);
+    SandboxSpec::Seatbelt(profile)
+}
+
 /// Whether the deletion-fenced profile can actually be enforced here.
 pub fn fence_available() -> bool {
     status().mode == "seatbelt" && status().available
