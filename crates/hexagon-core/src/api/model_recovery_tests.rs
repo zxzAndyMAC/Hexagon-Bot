@@ -752,3 +752,105 @@ fn a_transient_refusal_keeps_the_entry_and_says_why() {
         .iter()
         .any(|c| c.id == qid));
 }
+
+// ---- MR-05 (test3 09): explicit one-off chat-model retry ----------------
+
+fn decision_failed(wb: &mut Workbench) -> (Arc<Faulty>, String) {
+    let decision = Arc::new(Faulty::deciding(vec![
+        Step::Fail(http(401)),
+        Step::Reply(text_response("HOLD")),
+    ]));
+    wb.register_provider("decision", decision.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(wb, "Hold for now").is_err());
+    (decision, pm_card(wb).id)
+}
+
+#[test]
+fn chat_model_retry_completes_the_same_choice_once_and_changes_no_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = pm_wb(dir.path());
+    let (decision, qid) = decision_failed(&mut wb);
+    assert_eq!(view(&wb, &qid).chat_model_slot.as_deref(), Some("default"));
+    let chat = Arc::new(Faulty::new(vec![Step::Reply(text_response("HOLD"))]));
+    wb.register_provider("default", chat.clone());
+    assert!(matches!(
+        wb.retry_model_request_with_chat_model(&qid).unwrap(),
+        UnnamedRoute::Held { .. }
+    ));
+    assert_eq!(
+        chat.sent().len(),
+        1,
+        "one chat send for the same closed choice"
+    );
+    assert_eq!(
+        decision.decides(),
+        1,
+        "the decision model was not called again"
+    );
+    let item = view(&wb, &qid);
+    assert_eq!(item.state, "recovered");
+    assert_eq!(
+        item.history[0].model_slot, "decision",
+        "history keeps the failed attempt"
+    );
+    let slot: Option<String> = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT decision_slot FROM agents WHERE role='项目经理'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        slot.as_deref(),
+        Some("decision"),
+        "no slot configuration changed"
+    );
+    send(&wb, "Hold again").unwrap();
+    assert_eq!(
+        decision.decides(),
+        2,
+        "later tasks still use the decision model"
+    );
+    assert_eq!(chat.sent().len(), 1);
+}
+
+#[test]
+fn chat_model_retry_refuses_a_decision_only_transport_and_keeps_the_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = pm_wb(dir.path());
+    let (_, qid) = decision_failed(&mut wb);
+    let not_chat = Arc::new(Faulty::deciding(vec![Step::Reply(text_response("HOLD"))]));
+    wb.register_provider("default", not_chat.clone());
+    let error = wb
+        .retry_model_request_with_chat_model(&qid)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("chat_provider_unavailable"), "{error}");
+    assert_eq!(not_chat.decides(), 0);
+    let item = view(&wb, &qid);
+    assert_eq!(item.state, "failed");
+    assert_eq!(
+        item.last_refusal.as_deref(),
+        Some("chat_provider_unavailable")
+    );
+}
+
+#[test]
+fn chat_model_retry_does_not_apply_to_a_chat_slot_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = pm_wb(dir.path());
+    let chat = Arc::new(Faulty::new(vec![Step::Fail(http(401))]));
+    wb.register_provider("default", chat.clone());
+    assert!(send(&wb, "Hold for now").is_err());
+    let qid = pm_card(&wb).id;
+    assert_eq!(view(&wb, &qid).chat_model_slot, None);
+    let error = wb
+        .retry_model_request_with_chat_model(&qid)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("chat_fallback_not_applicable"), "{error}");
+    assert_eq!(chat.sent().len(), 1);
+}

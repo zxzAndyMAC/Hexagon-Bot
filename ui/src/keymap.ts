@@ -68,6 +68,7 @@ export type ActionId =
   | 'retryAction'
   | 'continueOriginalTask'
   | 'followNewInstruction'
+  | 'retryWithChatModel'
   | 'requestException'
   | 'reviewPerformanceBaseline'
   | 'reviewQualityCommands'
@@ -172,6 +173,8 @@ const DEFAULTS: Record<ActionId, string> = {
   // MR-04: explicit owner choice for a held instruction; never `approve`.
   continueOriginalTask: 'alt+mod+c',
   followNewInstruction: 'alt+mod+u',
+  // MR-05: explicit model switch for one request; `approve` never does this.
+  retryWithChatModel: 'alt+mod+m',
   requestException: 'alt+mod+e',
   acceptException: 'alt+mod+shift+Enter',
   openPolicyReport: 'alt+mod+p',
@@ -267,6 +270,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'retryAction', labelKey: 'cards.retryAction' },
   { id: 'continueOriginalTask', labelKey: 'modelRecovery.continueOriginal' },
   { id: 'followNewInstruction', labelKey: 'modelRecovery.followNew' },
+  { id: 'retryWithChatModel', labelKey: 'modelRecovery.useChatModelAction' },
   { id: 'requestException', labelKey: 'exceptions.request' },
   { id: 'acceptException', labelKey: 'exceptions.accept' },
   { id: 'curateLegacyExperience', labelKey: 'experience.curate' },

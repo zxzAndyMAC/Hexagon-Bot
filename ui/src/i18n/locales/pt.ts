@@ -268,6 +268,9 @@ export default {
     superseded: "Não é mais válida",
     instruction: "Instrução original: {{text}}",
     lastRefusal: "Não foi possível continuar: {{reason}}",
+    useChatModel: "Tentar de novo com o modelo de chat ({{slot}})",
+    useChatModelAction: "Tentar de novo com o modelo de chat",
+    chatModelHint: "Só esta solicitação usa o modelo de chat para concluir a mesma escolha de atribuição. Nenhuma configuração de modelo muda.",
     reason: {
       stage_changed: "A etapa da tarefa original terminou ou uma nova começou, então esta entrada não pode mais enviar.",
       superseded_by_new_task: "Este papel começou uma nova tarefa ou continuou em outro lugar, então esta entrada não pode mais enviar.",
@@ -275,6 +278,7 @@ export default {
     },
     refusal: {
       original_task_changed: "a evidência de projeto, papel ou etapa da tarefa original não corresponde mais",
+      chat_provider_unavailable: "o modelo de chat não está disponível para esta solicitação",
       paused: "o projeto está pausado",
       agent_sleeping: "o papel está em repouso",
       tool_outcome_unknown: "o resultado de uma ferramenta ainda é desconhecido; resolva esse item primeiro",

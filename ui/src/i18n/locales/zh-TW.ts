@@ -268,6 +268,9 @@ export default {
     superseded: "已失效",
     instruction: "原指令：{{text}}",
     lastRefusal: "暫時無法繼續：{{reason}}",
+    useChatModel: "改用主對話模型重試（{{slot}}）",
+    useChatModelAction: "改用主對話模型重試",
+    chatModelHint: "僅本次請求改用主對話模型完成同一次派活選擇，不更改任何模型設定。",
     reason: {
       stage_changed: "原任務所在階段已結束或已開啟新階段，此入口不能再傳送。",
       superseded_by_new_task: "該角色已開始新任務或已在別處繼續，此入口不能再傳送。",
@@ -275,6 +278,7 @@ export default {
     },
     refusal: {
       original_task_changed: "原任務的專案、角色或階段證據已不一致",
+      chat_provider_unavailable: "主對話模型目前無法用於本次請求",
       paused: "專案已暫停",
       agent_sleeping: "角色在休眠",
       tool_outcome_unknown: "仍有工具結果未知，請先處理那一項",

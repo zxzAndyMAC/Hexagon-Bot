@@ -74,6 +74,9 @@ pub struct ModelRequestRecovery {
     pub superseded_reason: Option<String>,
     /// The held owner instruction awaiting continue-original/follow-new.
     pub held_instruction: Option<String>,
+    /// MR-05: chat-model slot offered for the explicit one-off retry of a
+    /// failed decision-model choice; None when the action does not apply.
+    pub chat_model_slot: Option<String>,
 }
 
 pub(super) fn retry_budget_allows(
@@ -185,6 +188,23 @@ impl RetryWindow {
     }
 }
 
+fn chat_model_offer(db: &Db, card: &crate::cards::Card) -> Result<Option<String>, ApiError> {
+    let open = card.state == crate::cards::CardState::Queued
+        && matches!(
+            card.payload["state"].as_str(),
+            Some("failed" | "stopped" | "unknown")
+        );
+    if card.payload["purpose"] != "pm_route"
+        || card.payload["packet"]["via"] != "decision"
+        || !card.payload["saved_choice"].is_null()
+        || !open
+    {
+        return Ok(None);
+    }
+    let pm = card.payload["packet"]["pm_id"].as_str().unwrap_or_default();
+    pm::pm_chat_slot(db, pm).map(Some)
+}
+
 pub fn model_request_recovery(
     db: &Db,
     project_id: &str,
@@ -226,6 +246,7 @@ pub fn model_request_recovery(
     } else {
         return Err(ApiError::BadInput("model recovery purpose invalid".into()));
     };
+    let chat_model_slot = chat_model_offer(db, &card)?;
     Ok(ModelRequestRecovery {
         recovery_id: card.id,
         project_root: project_root.to_string_lossy().into_owned(),
@@ -253,6 +274,7 @@ pub fn model_request_recovery(
         held_instruction: card.payload["conflict"]["input"]
             .as_str()
             .map(str::to_string),
+        chat_model_slot,
     })
 }
 
@@ -414,10 +436,25 @@ impl Workbench {
             return Err(self.reject_recovery(&card, "scope_invalid", started));
         }
         match card.payload["purpose"].as_str() {
-            Some("pm_route") => self.retry_pm_choice(&card, started),
+            Some("pm_route") => self.retry_pm_choice(&card, started, false),
             Some("turn") => self.retry_turn_model_request(&card, started),
             _ => Err(self.reject_recovery(&card, "scope_invalid", started)),
         }
+    }
+
+    /// MR-05: the explicit one-off "retry with the chat model" action for a
+    /// failed decision-model dispatch choice. See `retry_pm_choice_with_chat`.
+    pub fn retry_model_request_with_chat_model(&self, qid: &str) -> Result<UnnamedRoute, ApiError> {
+        let started = std::time::Instant::now();
+        let _in_flight = InFlight::enter(&self.turn_depth);
+        let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Recovery)?;
+        if card.project_id != self.project_id
+            || card.payload["sub"] != "model_request"
+            || card.payload["purpose"] != "pm_route"
+        {
+            return Err(self.reject_recovery(&card, "chat_fallback_not_applicable", started));
+        }
+        self.retry_pm_choice(&card, started, true)
     }
 
     /// Every refused recovery is a Warn diagnostic with a reason code only.

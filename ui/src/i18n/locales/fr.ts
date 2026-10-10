@@ -268,6 +268,9 @@ export default {
     superseded: "N’est plus valide",
     instruction: "Instruction d’origine : {{text}}",
     lastRefusal: "Impossible de continuer : {{reason}}",
+    useChatModel: "Réessayer avec le modèle de chat ({{slot}})",
+    useChatModelAction: "Réessayer avec le modèle de chat",
+    chatModelHint: "Seule cette requête utilise le modèle de chat pour terminer le même choix d’affectation. Aucun réglage de modèle ne change.",
     reason: {
       stage_changed: "L’étape de la tâche d’origine est terminée ou une nouvelle a commencé ; cette entrée ne peut plus envoyer.",
       superseded_by_new_task: "Ce rôle a commencé une nouvelle tâche ou a continué ailleurs ; cette entrée ne peut plus envoyer.",
@@ -275,6 +278,7 @@ export default {
     },
     refusal: {
       original_task_changed: "les éléments de projet, de rôle ou d’étape de la tâche d’origine ne correspondent plus",
+      chat_provider_unavailable: "le modèle de chat n’est pas disponible pour cette requête",
       paused: "le projet est en pause",
       agent_sleeping: "le rôle est en veille",
       tool_outcome_unknown: "le résultat d’un outil est encore inconnu ; traitez d’abord cet élément",

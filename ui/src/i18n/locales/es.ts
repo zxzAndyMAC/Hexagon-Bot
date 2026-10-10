@@ -268,6 +268,9 @@ export default {
     superseded: "Ya no es válida",
     instruction: "Instrucción original: {{text}}",
     lastRefusal: "No se pudo continuar: {{reason}}",
+    useChatModel: "Reintentar con el modelo de chat ({{slot}})",
+    useChatModelAction: "Reintentar con el modelo de chat",
+    chatModelHint: "Solo esta solicitud usa el modelo de chat para completar la misma elección de asignación. No cambia ningún ajuste de modelos.",
     reason: {
       stage_changed: "La etapa de la tarea original terminó o empezó una nueva, así que esta entrada ya no puede enviar.",
       superseded_by_new_task: "Este rol empezó una tarea nueva o continuó en otro lugar, así que esta entrada ya no puede enviar.",
@@ -275,6 +278,7 @@ export default {
     },
     refusal: {
       original_task_changed: "la evidencia de proyecto, rol o etapa de la tarea original ya no coincide",
+      chat_provider_unavailable: "el modelo de chat no está disponible para esta solicitud",
       paused: "el proyecto está en pausa",
       agent_sleeping: "el rol está dormido",
       tool_outcome_unknown: "el resultado de una herramienta sigue desconocido; resuelve primero ese elemento",

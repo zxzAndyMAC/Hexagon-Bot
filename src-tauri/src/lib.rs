@@ -967,6 +967,36 @@ async fn retry_model_request(
     .map_err(|error| CmdError::internal(error.to_string()))?
 }
 
+/// MR-05: explicit one-off chat-model retry of a failed decision choice.
+#[tauri::command]
+async fn retry_model_request_with_chat_model(
+    app: tauri::AppHandle,
+    state: ProjectState<'_>,
+    qid: String,
+    expected_project_root: String,
+) -> Result<hexagon_core::api::ModelRequestRecovery, CmdError> {
+    let identity = state.identity.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
+        with_wb(&state, |wb| {
+            let view = hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)?;
+            if view.project_root != expected_project_root {
+                return Err(hexagon_core::api::ApiError::BadInput(
+                    "model recovery project changed".into(),
+                ));
+            }
+            wb.retry_model_request_with_chat_model(&qid)?;
+            hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)
+        })
+    })
+    .await
+    .map_err(|error| CmdError::internal(error.to_string()))?
+}
+
 /// MR-04: the owner explicitly chooses continue-original or follow-new for a
 /// held instruction; same project/session identity checks as retry.
 #[tauri::command]
@@ -3012,6 +3042,7 @@ pub fn run() {
             open_stage,
             recover_run,
             retry_model_request,
+            retry_model_request_with_chat_model,
             resolve_model_request_choice,
             reconcile_tool_action,
             abandon_tool_action,

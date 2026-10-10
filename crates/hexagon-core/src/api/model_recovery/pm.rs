@@ -62,6 +62,49 @@ impl Workbench {
         }
     }
 
+    /// MR-05 (test3 09): the owner explicitly re-sends the same closed choice
+    /// through the PM's chat-model slot, once. The send uses a copy of the
+    /// packet; the stored packet and every slot configuration stay as they
+    /// were, so the default retry and later tasks still use the decision
+    /// model. Never a silent fallback, never reachable from `approve`.
+    fn retry_pm_choice_with_chat(
+        &self,
+        qid: &str,
+        packet: &ChoicePacket,
+        started: std::time::Instant,
+    ) -> Result<UnnamedRoute, ApiError> {
+        let card = crate::cards::get(&self.db, qid)?;
+        let reject = |code: &str| self.reject_recovery(&card, code, started);
+        let slot = pm_chat_slot(&self.db, &packet.pm_id)?;
+        let provider = crate::provider_config::resolve_slot(&self.providers, &slot).cloned();
+        let facts = ChatFallbackFacts {
+            decision_request: packet.via == "decision",
+            chat_available: provider.is_some(),
+            chat_is_decision_api: provider.as_ref().is_some_and(|p| p.uses_decision_api()),
+        };
+        if let Some(code) = chat_fallback_refusal(&facts) {
+            return Err(reject(code));
+        }
+        let provider = provider.ok_or_else(|| reject("chat_provider_unavailable"))?;
+        let mut once = packet.clone();
+        once.use_jev = false;
+        once.via = "chat_override".into();
+        once.request.model_slot = slot.clone();
+        once.slot_name = slot;
+        crate::diag::note(
+            crate::diag::CLASS_JUDGE,
+            false,
+            Some(&self.project_id),
+            Some(&packet.pm_id),
+            packet.run_id.as_deref(),
+            Some(qid),
+            "model_recovery",
+            "owner_chat_model_once",
+            started,
+        );
+        self.execute_saved_pm_choice(&once, provider, Some(qid))
+    }
+
     /// Stall investigation: one attempt bounded by the owner window, no
     /// model-request card. Its failure keeps the stall card contract, and
     /// stall_tick must not block for the five-minute background window.
@@ -142,6 +185,7 @@ impl Workbench {
         &self,
         card: &crate::cards::Card,
         started: std::time::Instant,
+        use_chat: bool,
     ) -> Result<UnnamedRoute, ApiError> {
         let qid = card.id.as_str();
         let reject = |code: &str| self.reject_recovery(card, code, started);
@@ -194,6 +238,10 @@ impl Workbench {
             started,
         );
         let saved = crate::cards::get(&self.db, qid)?.payload["saved_choice"].clone();
+        if use_chat && !saved.is_null() {
+            // The choice already exists; only its handoff is pending.
+            return Err(reject("selection_already_saved"));
+        }
         if !saved.is_null() {
             let raw = saved["raw"]
                 .as_str()
@@ -211,6 +259,9 @@ impl Workbench {
             }
             let _lock = self.lock_pm_request(&packet)?;
             return self.deliver_pm_choice(&packet, raw.to_string(), Some(qid), Some(event));
+        }
+        if use_chat {
+            return self.retry_pm_choice_with_chat(qid, &packet, started);
         }
         let provider = if packet.via == "decision" {
             self.providers.get(&packet.slot_name)
@@ -779,4 +830,59 @@ fn pm_choice_stopped_at(db: &Db, project: &str, packet: &ChoicePacket) -> Result
     }
     let stopped = db.conn().query_row("SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND kind='team_slept' AND id>?2) AND NOT EXISTS(SELECT 1 FROM agents WHERE project_id=?1 AND status!='sleeping')", rusqlite::params![project, packet.origin_trace_id], |r| r.get(0))?;
     Ok(stopped)
+}
+
+/// The PM's chat-model slot name as configured (resolution, including the
+/// default fallback, stays in `provider_config::resolve_slot`).
+pub(super) fn pm_chat_slot(db: &Db, pm_id: &str) -> Result<String, ApiError> {
+    let slot: Option<String> =
+        db.conn()
+            .query_row("SELECT model_slot FROM agents WHERE id=?1", [pm_id], |r| {
+                r.get(0)
+            })?;
+    // D13-exempt: names the default slot; the fallback chain itself is resolve_slot.
+    Ok(slot
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "default".into()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ChatFallbackFacts {
+    pub decision_request: bool,
+    pub chat_available: bool,
+    pub chat_is_decision_api: bool,
+}
+
+/// MR-05 admission. A false refusal costs one owner retry with the default
+/// model; a false admit would send through a decision-only transport or turn
+/// a chat-slot failure into a pointless second chat send. Fail closed.
+pub(super) fn chat_fallback_refusal(facts: &ChatFallbackFacts) -> Option<&'static str> {
+    if !facts.decision_request {
+        Some("chat_fallback_not_applicable")
+    } else if !facts.chat_available || facts.chat_is_decision_api {
+        Some("chat_provider_unavailable")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn chat_fallback_needs_a_decision_request_and_a_real_chat_model(
+            decision_request in any::<bool>(),
+            chat_available in any::<bool>(),
+            chat_is_decision_api in any::<bool>(),
+        ) {
+            let facts = ChatFallbackFacts { decision_request, chat_available, chat_is_decision_api };
+            prop_assert_eq!(
+                chat_fallback_refusal(&facts).is_none(),
+                decision_request && chat_available && !chat_is_decision_api
+            );
+        }
+    }
 }

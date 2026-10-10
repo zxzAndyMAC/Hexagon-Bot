@@ -268,6 +268,9 @@ export default {
     superseded: "無効になりました",
     instruction: "元の指示：{{text}}",
     lastRefusal: "続行できません：{{reason}}",
+    useChatModel: "チャットモデルで再試行（{{slot}}）",
+    useChatModelAction: "チャットモデルで再試行",
+    chatModelHint: "この要求だけチャットモデルで同じ割り当て選択を完了します。モデル設定は変更しません。",
     reason: {
       stage_changed: "元のタスクのステージが終了したか新しいステージが始まったため、この入口からは送信できません。",
       superseded_by_new_task: "このロールは新しいタスクを開始したか別の場所で続行したため、この入口からは送信できません。",
@@ -275,6 +278,7 @@ export default {
     },
     refusal: {
       original_task_changed: "元のタスクのプロジェクト、ロール、またはステージの証拠が一致しません",
+      chat_provider_unavailable: "チャットモデルはこの要求に使用できません",
       paused: "プロジェクトが一時停止中です",
       agent_sleeping: "ロールが休止中です",
       tool_outcome_unknown: "結果不明のツールがあります。先にその項目を処理してください",

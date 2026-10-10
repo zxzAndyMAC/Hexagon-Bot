@@ -398,6 +398,7 @@ export const api = {
   pendingQuestions: () => call<PendingQuestion[]>('pending_questions'),
   modelRequestRecovery: (qid: string) => call<ModelRequestRecovery>('model_request_recovery', { qid }),
   retryModelRequest: (qid: string, expectedProjectRoot: string) => call<ModelRequestRecovery>('retry_model_request', { qid, expectedProjectRoot }),
+  retryModelRequestWithChatModel: (qid: string, expectedProjectRoot: string) => call<ModelRequestRecovery>('retry_model_request_with_chat_model', { qid, expectedProjectRoot }),
   resolveModelRequestChoice: (qid: string, followNew: boolean, expectedProjectRoot: string) => call<ModelRequestRecovery>('resolve_model_request_choice', { qid, followNew, expectedProjectRoot }),
   // ui-audit-2 票 03：已记权限规则审计面
   permissionRules: () => call<PermissionRuleRow[]>('permission_rules'),

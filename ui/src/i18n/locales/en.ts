@@ -268,6 +268,9 @@ export default {
     superseded: "No longer valid",
     instruction: "Original instruction: {{text}}",
     lastRefusal: "Could not continue: {{reason}}",
+    useChatModel: "Retry with chat model ({{slot}})",
+    useChatModelAction: "Retry with chat model",
+    chatModelHint: "Only this request uses the chat model to finish the same dispatch choice. No model settings change.",
     reason: {
       stage_changed: "The original task’s stage finished or a new stage started, so this entry can no longer send.",
       superseded_by_new_task: "This role started a new task or continued elsewhere, so this entry can no longer send.",
@@ -275,6 +278,7 @@ export default {
     },
     refusal: {
       original_task_changed: "the original task’s project, role or stage evidence no longer matches",
+      chat_provider_unavailable: "the chat model is not available for this request",
       paused: "the project is paused",
       agent_sleeping: "the role is asleep",
       tool_outcome_unknown: "a tool result is still unknown — resolve that item first",

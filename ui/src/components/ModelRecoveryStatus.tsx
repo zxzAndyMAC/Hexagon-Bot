@@ -54,12 +54,18 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const choosing = state === 'needs_choice'
   const canRetry = recovery.can_retry !== false && !['recovered', 'retrying', 'superseded', 'needs_choice'].includes(state)
   const shortcut = top && canRetry ? formatBinding(bindingFor('approve')) : ''
+  const chatOffer = canRetry ? recovery.chat_model_slot : null
+  const useChat = () => run(() => api.retryModelRequestWithChatModel(id, recovery.project_root))
   const choose = (followNew: boolean) => run(() => api.resolveModelRequestChoice(id, followNew, recovery.project_root))
   // ADR 0051: the explicit choice has its own bindings on the top item only.
   useEffect(() => {
-    if (!top || !choosing) return
+    if (!top || (!choosing && !chatOffer)) return
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat || e.defaultPrevented) return
+      if (chatOffer && matches(e, bindingFor('retryWithChatModel'))) {
+        e.preventDefault(); void useChat(); return
+      }
+      if (!choosing) return
       const followNew = matches(e, bindingFor('followNewInstruction'))
       if (!followNew && !matches(e, bindingFor('continueOriginalTask'))) return
       e.preventDefault()
@@ -93,6 +99,9 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
       title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void run(() => api.retryModelRequest(id, recovery.project_root)) }}>
       {busy ? t('modelRecovery.retrying') : label}{shortcut && ` ${shortcut}`}
     </button>}
+    {chatOffer && <button type="button" className="btn" disabled={busy} data-chat-model
+      title={[t('modelRecovery.chatModelHint'), top ? formatBinding(bindingFor('retryWithChatModel')) : ''].filter(Boolean).join(' · ')}
+      onClick={() => { void useChat() }}>{t('modelRecovery.useChatModel', { slot: chatOffer })}</button>}
     {choosing && <>
       <button type="button" className="btn primary" disabled={busy} title={[t('modelRecovery.continueOriginal'), formatBinding(bindingFor('continueOriginalTask'))].join(' · ')}
         onClick={() => { void choose(false) }}>{t('modelRecovery.continueOriginal')}</button>
