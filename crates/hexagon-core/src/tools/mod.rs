@@ -120,6 +120,9 @@ pub struct ToolContext {
     /// Test3/04: revalidate the exact task and current control state after
     /// waiting for write targets, atomically with claiming its saved action.
     pub(crate) saved_permission_admission: Option<SavedPermissionAdmission>,
+    /// MR-03: this activation step's TurnStarted id, bound into a model
+    /// failure checkpoint so recovery resumes the exact chain position.
+    pub(crate) trigger_turn_id: Option<i64>,
 }
 
 impl Default for ToolContext {
@@ -152,6 +155,7 @@ impl Default for ToolContext {
             activation_root_turn_id: None,
             source_review_phase: false,
             saved_permission_admission: None,
+            trigger_turn_id: None,
         }
     }
 }

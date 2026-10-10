@@ -276,7 +276,7 @@ fn pause_stops_the_clock_and_resume_restarts_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = pack_wb(dir.path(), &["产品策划"]);
     let clock = with_clock(&mut wb);
-    scripted(&mut wb, "default", &["", ""]);
+    scripted(&mut wb, "default", &[""]);
     wb.run_turn("产品策划", "写规格").unwrap();
     clock.advance(Duration::from_secs(30));
     orchestra::pause(&wb.db, &wb.project_id).unwrap();
@@ -541,7 +541,11 @@ fn acknowledge_then_dispatch_reopens_the_clock() {
         panic!()
     };
     wb.stall_ack(&question_id).unwrap();
-    scripted(&mut wb, "default", &["", ""]);
+    // MR-03 behaviour change: dispatch also gives the same-stage continuation
+    // a planned turn (plan + reply). An exhausted script is a provider failure
+    // and now leaves a legitimate model-recovery card that holds the clock, so
+    // script every call this clock test expects.
+    scripted(&mut wb, "default", &["", "", "", ""]);
     wb.dispatch("后端", "修登录", &[]).unwrap();
     assert_eq!(
         wb.stall_tick().unwrap(),
@@ -769,16 +773,10 @@ fn investigation_that_never_opens_cards_after_budget() {
     let dir = tempfile::tempdir().unwrap();
     let (wb, clock, decision, _w) = pm_fixture(dir.path(), &["先不派活"], &[]);
     owner_says(&wb, "有人吗");
-    // 决策槽指向没注册的槽：调查连回合都开不了。
+    // 决策槽指向没注册的槽：模型恢复票会先落可操作恢复卡，
+    // 不再把确定的配置错误伪装成一段等待中的调查。
     wb.set_decision_slot("项目经理", Some("gone")).unwrap();
     clock.advance(PAST);
-    assert_eq!(wb.stall_tick().unwrap(), StallTick::InvestigationPending);
-    clock.advance(Duration::from_secs(30));
-    assert_eq!(
-        wb.stall_tick().unwrap(),
-        StallTick::Wait("investigation_pending")
-    );
-    clock.advance(Duration::from_secs(31));
     let t = wb.stall_tick().unwrap();
     assert!(
         matches!(

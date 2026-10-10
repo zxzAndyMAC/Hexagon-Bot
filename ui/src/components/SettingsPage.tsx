@@ -42,7 +42,7 @@ const LANG_NAMES: Record<string, string> = {
   fr: 'Français',
 }
 
-type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'autonomy' | 'usage' | 'logs' | 'prompts' | 'about'
+export type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'autonomy' | 'usage' | 'logs' | 'prompts' | 'about'
 const SECTIONS: Section[] = ['general', 'keys', 'team', 'models', 'perms', 'skills', 'mcp', 'autonomy', 'usage', 'logs', 'prompts', 'about']
 /// settings-3col 票 01：list|detail 分区放宽到 980（760 塞中列后详情太挤）；
 /// 平铺分区保持 760 居中。

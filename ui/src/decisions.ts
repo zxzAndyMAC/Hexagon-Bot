@@ -60,6 +60,19 @@ export async function approveQuestion(q: PendingQuestion) {
     useUiStore.getState().pushToast(i18n.t('exceptions.hint'))
     return
   }
+  if (q.kind === 'recovery' && p.sub === 'model_request' && (p.view as {state?: unknown} | undefined)?.state === 'needs_choice') {
+    // MR-04: an ambiguous new instruction is the owner's explicit choice;
+    // the approve shortcut must not pick "continue original" for them.
+    useUiStore.getState().pushToast(i18n.t('modelRecovery.chooseHint'))
+    return
+  }
+  if (q.kind === 'recovery' && p.sub === 'model_request' && (p.view as {state?: unknown} | undefined)?.state === 'retrying') {
+    // test3 05/06 review: core rejects a second in-flight attempt; say so
+    // instead of surfacing an already_running error toast.
+    useUiStore.getState().pushToast(i18n.t('modelRecovery.alreadyRetrying'))
+    return
+  }
+  if (q.kind === 'recovery' && p.sub === 'model_request') return api.retryModelRequest(q.id, String((p.view as {project_root?:unknown} | undefined)?.project_root ?? p.project_root ?? p.host_project_root ?? ''))
   if (q.kind === 'permission') return api.answerPermission(q.id, true)
   if (q.kind === 'stamp' && !p.proposal_id) return api.stamp()
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
@@ -106,6 +119,7 @@ export function isActivationResumeCard(q: PendingQuestion): boolean {
 }
 
 export function kindTitleKey(q: PendingQuestion): string {
+  if (q.kind === 'recovery' && q.payload.sub === 'model_request') return q.payload.purpose === 'turn' ? 'modelRecovery.titleTurn' : 'modelRecovery.title'
   if (q.payload.sub === 'quality_revalidation') return 'quality.revalidationTitle'
   if (q.payload.sub === 'design_direction') return 'design.title'
   if (q.payload.sub === 'acceptance_exception') return 'exceptions.title'

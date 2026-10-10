@@ -255,6 +255,20 @@ pub fn request(
     chat: Option<&crate::provider::ChatRequest>,
     send: impl FnOnce() -> Result<crate::provider::ChatResponse, crate::provider::ProviderError>,
 ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+    request_with_id(db, ctx, model_slot, purpose, provider, chat, |_| send())
+}
+
+// MR-01: bind transport failures to this actual send, never the most recent
+// shared ledger row, which may belong to another concurrent agent.
+pub(crate) fn request_with_id(
+    db: &Db,
+    ctx: &ToolContext,
+    model_slot: &str,
+    purpose: &str,
+    provider: &dyn crate::provider::ModelProvider,
+    chat: Option<&crate::provider::ChatRequest>,
+    send: impl FnOnce(&str) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError>,
+) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
     use crate::provider::ProviderError;
     let started = std::time::Instant::now();
     let _evaluation_work = crate::evaluation::control::work_lease(&ctx.repo_root)
@@ -419,7 +433,7 @@ pub fn request(
             .map_err(|e| ledger_error(e.to_string()))?;
     // No blocking host preparation remains between this check and transport.
     authorize_desktop_dispatch(db, ctx, &id, chat, &mut evaluation, started)?;
-    let result = send();
+    let result = send(&id);
     #[cfg(test)]
     crate::evaluation::recovery::crash_at(crate::evaluation::recovery::CrashPoint::Returned);
     let usage = match &result {
@@ -439,7 +453,14 @@ pub fn request(
     let state = match &result {
         Ok(_) => "succeeded",
         Err(error) if matches!(error.cause(), ProviderError::Interrupted) => "interrupted",
-        Err(error) if matches!(error.cause(), ProviderError::MissingCredential(_)) => "not_sent",
+        Err(error)
+            if matches!(
+                error.cause(),
+                ProviderError::MissingCredential(_) | ProviderError::CredentialStore(_)
+            ) =>
+        {
+            "not_sent"
+        }
         Err(_) => "failed",
     };
     db.conn().execute("UPDATE usage SET reserved_mc=0,prompt_tokens=?1,completion_tokens=?2,cost_millicents=?3,cost_known=?4,request_state=?5,prompt_known=?7,completion_known=?8 WHERE request_id=?6 AND request_state='pending'",params![usage.map(|u|u.prompt_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),usage.map(|u|u.completion_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),cost.unwrap_or(0),cost.is_some() && !unpriced,state,id,usage.is_some_and(|u|u.prompt_reported),usage.is_some_and(|u|u.completion_reported)]).map_err(|e|ledger_error(e.to_string()))?;

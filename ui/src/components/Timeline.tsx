@@ -1,3 +1,4 @@
+import { ModelRecoveryStatus } from './ModelRecoveryStatus'
 import { ElementReference } from './ElementReferences'
 import { DesktopToolDetails } from './DesktopToolDetails'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -11,7 +12,7 @@ import type { TimelineItem } from '../api'
 import { api, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { useUiStore } from '../store'
-import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
+import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
@@ -222,6 +223,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 「系统」一刀切让 invariant_violation 这类信号淹没在同名行里。
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
+  if (MODEL_RECOVERY_KINDS.includes(sub)) return <div style={{margin: '8px 14px'}}><ModelRecoveryStatus id={String(item.event.payload.recovery_id)} payload={item.event.payload} top /></div>
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
   }

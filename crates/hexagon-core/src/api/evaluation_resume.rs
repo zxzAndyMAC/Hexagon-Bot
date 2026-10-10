@@ -12,6 +12,7 @@ type RestoredObservations = (
 );
 
 pub(super) struct ActivationResume {
+    pub model_continuation: Option<crate::turn::ModelContinuation>,
     pub turn_id: i64,
     pub root_turn_id: i64,
     pub instruction: String,
@@ -167,6 +168,7 @@ impl Workbench {
             &resume.history,
             Some(resume),
             true,
+            None,
         )?;
         // Test3/04 review: pause can win after the card is consumed and the
         // child starts. Retain that child's exact history, never reuse its parent
@@ -319,6 +321,7 @@ impl Workbench {
             started,
         );
         Ok(ActivationResume {
+            model_continuation: None,
             turn_id: parent,
             root_turn_id: root,
             instruction,

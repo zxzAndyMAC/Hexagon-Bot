@@ -17,6 +17,18 @@ use serde_json::{json, Value};
 pub mod context;
 pub mod prompt;
 
+/// MR-03: native request material, never reconstructed from a display summary.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ModelContinuation {
+    pub request: ChatRequest,
+    pub messages: Vec<Message>,
+    pub purpose: String,
+    pub call: usize,
+    /// Tool-loop round of the failed call (0 for planning).
+    #[serde(default)]
+    pub round: usize,
+}
+
 // 兼容再导出（arch 票 03 纯位移）：原 crate::turn::* 平铺路径上的 pub 项
 // 保持可用，下游不必跟着子模块路径走。
 pub use context::repair_dangling_tool_uses;
@@ -226,6 +238,50 @@ fn leave_wait(
     });
 }
 
+/// The terminal attempt's identity and the text it streamed before failing.
+struct Failure<'a> {
+    request_id: Option<&'a str>,
+    partial_text: &'a str,
+}
+
+/// MR-03: persist the minimum material to continue a failed role call: the
+/// exact request and the pre-tail messages, bound to this TurnStarted step.
+/// Only the terminal attempt writes one; retried attempts are not positions.
+fn save_checkpoint(
+    db: &Db,
+    ctx: &ToolContext,
+    req: &ChatRequest,
+    messages: &[Message],
+    (call, round): (usize, usize),
+    purpose: &str,
+    failure: Failure<'_>,
+) -> Result<(), TurnError> {
+    // Screen consent: pixels may not become durable recovery material. Refuse
+    // exact replay rather than strip inputs; the item then says re-observe.
+    let contains_screen = req.messages.iter().chain(messages).flat_map(|m| &m.content).any(|block| {
+        matches!(block, ContentBlock::ComputerImage { .. })
+            || matches!(block, ContentBlock::ToolResult { images, .. } if images.iter().any(|image| image.computer_screenshot))
+    });
+    let checkpoint = (!contains_screen).then(|| ModelContinuation {
+        request: req.clone(),
+        messages: messages.to_vec(),
+        purpose: purpose.into(),
+        call,
+        round,
+    });
+    db.append_event(
+        &ctx.project_id,
+        EventKind::System,
+        json!({"kind":"model_request_checkpoint", "checkpoint":checkpoint,
+            "request_id":failure.request_id, "partial_text":failure.partial_text, "unfinished":true,
+            "reason":contains_screen.then_some("screen_observation_required"),
+            "turn_id":ctx.trigger_turn_id, "activation_root_turn_id":ctx.activation_root_turn_id}),
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )?;
+    Ok(())
+}
+
 /// 模型调用（流式）+ 两段式重试（US57 + network-resilience 票 01）。
 ///
 /// 为什么两段而不是无限退避：快重试（100/250/500ms）吃亚秒级抖动，
@@ -240,11 +296,16 @@ fn stream_with_retry(
     ctx: &ToolContext,
     provider: &dyn ModelProvider,
     req: &ChatRequest,
-    call: usize,
+    messages: &[Message],
+    (call, round): (usize, usize),
     purpose: &str,
     sink: &mut DeltaSink<'_>,
 ) -> Result<ChatResponse, TurnError> {
     let mut attempt = 0usize;
+    // MR-02/MR-03: the window covers this request's first send, fast retries
+    // and network waits. It used to start only at the first network wait, so
+    // a failing request could run past its owner/background budget.
+    let request_started = std::time::Instant::now();
     // 等网态三要素：起点（时长/预算）、探针数、是否已进入（事件只发一次）。
     let mut waiting_since: Option<std::time::Instant> = None;
     let mut probes = 0usize;
@@ -262,14 +323,17 @@ fn stream_with_retry(
             return Err(crate::provider::ProviderError::Interrupted.into());
         }
         let mut emitted = false;
-        let r = crate::usage::request(
+        let mut partial_text = String::new();
+        let mut request_id = None;
+        let r = crate::usage::request_with_id(
             db,
             ctx,
             &req.model_slot,
             purpose,
             provider,
             Some(req),
-            || {
+            |id| {
+                request_id = Some(id.to_string());
                 provider.stream(req, &mut |d| {
                     // 票 04：delta 间隙叫停检查——流循环阻塞在读上时，这里是
                     // 唯一能让负责人暂停生效的缝。is_paused 读库失败按未暂停
@@ -284,6 +348,7 @@ fn stream_with_retry(
                         crate::provider::StreamDelta::Thinking(t) => (String::new(), t.clone()),
                     };
                     emitted = true;
+                    partial_text.push_str(&text);
                     sink(&TurnDelta {
                         agent_id: ctx.agent_id.clone(),
                         stage_run_id: ctx.stage_run_id.clone(),
@@ -389,7 +454,7 @@ fn stream_with_retry(
                     });
                 }
                 let since = waiting_since.unwrap();
-                if since.elapsed() > ctx.wait.budget {
+                if request_started.elapsed() >= ctx.wait.budget {
                     // 预算耗尽：等网转挂起。run 标 interrupted + 恢复卡入队
                     // 归 orchestra::suspend_run（属主模块），本层不碰两表。
                     // 挂起复用 interrupted 终态不是第三种 run 状态词：
@@ -407,6 +472,18 @@ fn stream_with_retry(
                         "suspend_budget",
                         since,
                     );
+                    // MR-03 (test3 07): a top-level role keeps its exact
+                    // continuation on the model-request item. Suspending the
+                    // run fed the history-less stage retrigger, which replayed
+                    // successful tools. Subagents keep the parent's suspend.
+                    if ctx.subagent.is_none() {
+                        let failure = Failure {
+                            request_id: request_id.as_deref(),
+                            partial_text: &partial_text,
+                        };
+                        save_checkpoint(db, ctx, req, messages, (call, round), purpose, failure)?;
+                        return Err(e.into());
+                    }
                     if let Some(run_id) = ctx.stage_run_id.as_deref() {
                         crate::orchestra::suspend_run(db, &ctx.project_id, run_id, &ctx.agent_id)?;
                     }
@@ -431,6 +508,13 @@ fn stream_with_retry(
                 if let Some(since) = waiting_since.take() {
                     leave_wait(db, ctx, sink, call, since, probes, "error");
                 }
+                if ctx.subagent.is_none() {
+                    let failure = Failure {
+                        request_id: request_id.as_deref(),
+                        partial_text: &partial_text,
+                    };
+                    save_checkpoint(db, ctx, req, messages, (call, round), purpose, failure)?;
+                }
                 return Err(e.into());
             }
         }
@@ -449,7 +533,8 @@ pub(crate) fn stream_request_for_test(
         ctx,
         provider,
         request,
-        0,
+        &request.messages,
+        (0, 0),
         "desktop_transmission_test",
         &mut |_| {},
     )
@@ -607,6 +692,9 @@ pub enum TurnOutcome {
     /// interrupted + 恢复卡入队；回合以「没正常完」收口但与
     /// Interrupted（人主动叫停）可区分。
     Suspended,
+    /// MR-04: an owner instruction met this role's open failed request; it
+    /// did not run and waits for the owner's choice on that item (qid).
+    HeldForChoice(String),
 }
 
 /// 跑一个回合。provider 是接缝（测试给 ScriptedProvider）。
@@ -629,6 +717,7 @@ pub fn run_turn(
         false,
         None,
         &[],
+        None,
     )
 }
 
@@ -653,6 +742,7 @@ pub fn run_turn_planned(
         true,
         None,
         &[],
+        None,
     )
 }
 
@@ -681,6 +771,7 @@ pub fn run_turn_streaming(
         plan_first,
         sink,
         &[],
+        None,
     )
 }
 
@@ -698,6 +789,7 @@ pub(crate) fn run_turn_streaming_with_history(
     plan_first: bool,
     sink: Option<&mut DeltaSink<'_>>,
     history: &[Message],
+    continuation: Option<&ModelContinuation>,
 ) -> Result<TurnOutcome, TurnError> {
     run_turn_impl(
         db,
@@ -710,6 +802,7 @@ pub(crate) fn run_turn_streaming_with_history(
         plan_first,
         sink,
         history,
+        continuation,
     )
 }
 
@@ -725,6 +818,7 @@ fn run_turn_impl(
     plan_first: bool,
     sink: Option<&mut DeltaSink<'_>>,
     history: &[Message],
+    continuation: Option<&ModelContinuation>,
 ) -> Result<TurnOutcome, TurnError> {
     let mut noop = |_d: &TurnDelta| {};
     let sink: &mut DeltaSink = match sink {
@@ -784,6 +878,7 @@ fn run_turn_impl(
     if ctx.activation_root_turn_id.is_none() {
         ctx.activation_root_turn_id = Some(trigger_turn_id);
     }
+    ctx.trigger_turn_id = Some(trigger_turn_id);
 
     // I3 / 2026-10-06: board identity uses the stable host root, known only
     // after a fresh TurnStarted. Child contexts inherit it; same-root resumes
@@ -969,6 +1064,9 @@ fn run_turn_impl(
     let cap = context::effective_cap(provider.model_meta().context_window);
     let tool_tokens = context::tool_tokens(&req_base);
 
+    if let Some(saved) = continuation {
+        messages = saved.messages.clone();
+    }
     let outcome = (|| -> Result<TurnOutcome, TurnError> {
         // 票 05 steering 水位：回合起跑线之后新来的 owner 消息在
         // 每轮顶注入出站副本。只追加进本轮出站 messages——
@@ -983,7 +1081,7 @@ fn run_turn_impl(
         )?;
         // US15 方案预告：剥掉工具要一段方案，落群聊（不阻塞），方案进执行上下文
         if plan_first {
-            let plan_req = ChatRequest {
+            let plan_req = continuation.filter(|saved| saved.purpose == "planning").map(|saved| saved.request.clone()).unwrap_or_else(|| ChatRequest {
                 messages: vec![
                     messages[0].clone(),
                     Message {
@@ -1000,7 +1098,7 @@ fn run_turn_impl(
                 ],
                 tools: vec![],
                 ..req_base.clone()
-            };
+            });
             // 票 03 信封：方案派发也落指纹（call=0）。
             let plan_request_id = db.append_event(
                 &ctx.project_id,
@@ -1019,21 +1117,29 @@ fn run_turn_impl(
             )?;
             // 2026-10-01 用户验收：内部计划曾先当正文流出再清空，造成发言闪退。
             // 2026-10-01 负责人续决：计划独立成可折叠区，不与执行回复混排。
-            let resp =
-                match stream_with_retry(db, ctx, provider, &plan_req, 0, "planning", &mut |d| {
+            let resp = match stream_with_retry(
+                db,
+                ctx,
+                provider,
+                &plan_req,
+                &messages,
+                (0, 0),
+                "planning",
+                &mut |d| {
                     let mut d = d.clone();
                     d.plan = Some(std::mem::take(&mut d.text));
                     sink(&d);
-                }) {
-                    Ok(r) => r,
-                    // 票 04：流中被叫停 → Interrupted 终态（不上抛成错误）
-                    Err(TurnError::Provider(crate::provider::ProviderError::Interrupted)) => {
-                        return Ok(TurnOutcome::Interrupted);
-                    }
-                    // 票 01：等网超预算 → Suspended（run 已在 suspend_run 收口）
-                    Err(TurnError::Suspended) => return Ok(TurnOutcome::Suspended),
-                    Err(e) => return Err(e),
-                };
+                },
+            ) {
+                Ok(r) => r,
+                // 票 04：流中被叫停 → Interrupted 终态（不上抛成错误）
+                Err(TurnError::Provider(crate::provider::ProviderError::Interrupted)) => {
+                    return Ok(TurnOutcome::Interrupted);
+                }
+                // 票 01：等网超预算 → Suspended（run 已在 suspend_run 收口）
+                Err(TurnError::Suspended) => return Ok(TurnOutcome::Suspended),
+                Err(e) => return Err(e),
+            };
             persist_activation_observation(
                 db,
                 ctx,
@@ -1093,7 +1199,12 @@ fn run_turn_impl(
                 "tool breaker: {tool} failed {BREAKER_STREAK}x consecutively: {sig}"
             )))
         };
-        for round in 0..MAX_TOOL_ROUNDS {
+        // MR-03: resume the failed round itself (its call index includes the
+        // planning offset, the round does not).
+        let start_round = continuation
+            .filter(|saved| saved.purpose != "planning")
+            .map_or(0, |saved| saved.round);
+        for round in start_round..MAX_TOOL_ROUNDS {
             // 负责人在工具循环期间可暂停（US15）：每轮顶检，叫停即收回合。
             // 票 04：Interrupted 终态取代 Failed——叫停不是失败。
             // 票 04（code-search）：子代理停旗同闸——tasks stop 在轮顶生效。
@@ -1197,15 +1308,18 @@ fn run_turn_impl(
             repair_dangling_tool_uses(&mut messages);
             // 票 03 信封：对「实际发送物」（裁剪/修复/动态尾之后）取指纹——
             // 信封的语义是「这次往线上发了什么」,不是「想发什么」。
-            let req = ChatRequest {
-                messages: with_dynamic_tail(
-                    &messages,
-                    round,
-                    MAX_TOOL_ROUNDS,
-                    source_mode.then_some(&repository_evidence),
-                ),
-                ..req_base.clone()
-            };
+            let req = continuation
+                .filter(|saved| saved.purpose != "planning" && round == start_round)
+                .map(|saved| saved.request.clone())
+                .unwrap_or_else(|| ChatRequest {
+                    messages: with_dynamic_tail(
+                        &messages,
+                        round,
+                        MAX_TOOL_ROUNDS,
+                        source_mode.then_some(&repository_evidence),
+                    ),
+                    ..req_base.clone()
+                });
             let request_id = db.append_event(
                 &ctx.project_id,
                 EventKind::System,
@@ -1231,8 +1345,9 @@ fn run_turn_impl(
                 ctx,
                 provider,
                 &req,
+                &messages,
                 // 票 03：call 序号——plan_first 的方案占用 0，循环轮顺延。
-                round + usize::from(plan_first),
+                (round + usize::from(plan_first), round),
                 // Reliability 12: call index zero is also an ordinary first
                 // turn. Purpose comes from this dispatch site, not its index.
                 if ctx.subagent.is_some() {
@@ -1742,6 +1857,8 @@ fn run_turn_impl(
             Ok(TurnOutcome::AwaitingPermission(_)) => EventKind::TurnFinished,
             Ok(TurnOutcome::SkippedSleeping) => EventKind::TurnFinished,
             Ok(TurnOutcome::SkippedCap) => EventKind::TurnFinished,
+            // Facade-only outcome (never produced inside a turn); zero calls.
+            Ok(TurnOutcome::HeldForChoice(_)) => EventKind::TurnFinished,
             // 票 13：截断终态=没说完——归 TurnFailed，轨迹里与正常完成可区分。
             // 票 04：Interrupted 也归 TurnFailed（收束语义=回合没正常完），
             // 但 outcome 载荷带 Interrupted 字样可区分主动叫停与真失败。

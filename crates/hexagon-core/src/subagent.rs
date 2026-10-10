@@ -732,6 +732,11 @@ fn finish_child(outcome: Result<TurnOutcome, crate::turn::TurnError>, scope: &Sc
             result: None,
             error: Some("usage cap reached".into()),
         },
+        Ok(TurnOutcome::HeldForChoice(_)) => ChildDone {
+            status: "failed",
+            result: None,
+            error: Some("held for owner choice".into()),
+        },
         Ok(TurnOutcome::AwaitingPermission(_)) => ChildDone {
             status: "failed",
             result: None,

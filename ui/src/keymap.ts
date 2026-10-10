@@ -66,6 +66,8 @@ export type ActionId =
   | 'reconcileAction'
   | 'abandonAction'
   | 'retryAction'
+  | 'continueOriginalTask'
+  | 'followNewInstruction'
   | 'requestException'
   | 'reviewPerformanceBaseline'
   | 'reviewQualityCommands'
@@ -167,6 +169,9 @@ const DEFAULTS: Record<ActionId, string> = {
   reconcileAction: 'alt+mod+i',
   abandonAction: 'alt+mod+Backspace',
   retryAction: 'alt+mod+Enter',
+  // MR-04: explicit owner choice for a held instruction; never `approve`.
+  continueOriginalTask: 'alt+mod+c',
+  followNewInstruction: 'alt+mod+u',
   requestException: 'alt+mod+e',
   acceptException: 'alt+mod+shift+Enter',
   openPolicyReport: 'alt+mod+p',
@@ -260,6 +265,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'reconcileAction', labelKey: 'cards.reconcileAction' },
   { id: 'abandonAction', labelKey: 'cards.abandonAction' },
   { id: 'retryAction', labelKey: 'cards.retryAction' },
+  { id: 'continueOriginalTask', labelKey: 'modelRecovery.continueOriginal' },
+  { id: 'followNewInstruction', labelKey: 'modelRecovery.followNew' },
   { id: 'requestException', labelKey: 'exceptions.request' },
   { id: 'acceptException', labelKey: 'exceptions.accept' },
   { id: 'curateLegacyExperience', labelKey: 'experience.curate' },

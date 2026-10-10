@@ -319,6 +319,9 @@ pub struct Workbench {
     /// 重开时上一次的回合早已结束，拿旧锚点一开就判失速是误报。
     stall: Mutex<crate::stallwatch::Watch>,
     turn_depth: AtomicUsize,
+    /// MR-04: the owner message being routed right now, so a dispatch that
+    /// meets an open failed role request can ask the owner instead of running.
+    owner_message: Mutex<Option<i64>>,
 }
 
 impl Drop for Workbench {
@@ -415,7 +418,7 @@ impl Workbench {
         } else {
             Some(crate::mcp::McpHost::begin(specs))
         };
-        Ok(Self {
+        let wb = Self {
             db,
             registry,
             providers: HashMap::new(),
@@ -443,7 +446,12 @@ impl Workbench {
             stall_clock: Arc::new(crate::stallwatch::SystemClock),
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
-        })
+            owner_message: Mutex::new(None),
+        };
+        // MR-04: reopening restores entries but never sends; an attempt that
+        // was in flight at exit becomes `unknown`, never `retrying` or failed.
+        wb.reconcile_model_requests_after_reopen()?;
+        Ok(wb)
     }
 
     /// 打开 + 接线（壳层 open_project/open_recent 共用序列，票 05）：
@@ -589,6 +597,7 @@ impl Workbench {
             stall_clock: Arc::new(crate::stallwatch::SystemClock),
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
+            owner_message: Mutex::new(None),
         })
     }
 
@@ -1027,6 +1036,7 @@ impl Workbench {
                 &resume.history,
                 Some(&resume),
                 true,
+                None,
             )?;
             return Ok(AdjudicateOutcome::Resumed {
                 resumed: true,
@@ -1176,6 +1186,7 @@ impl Workbench {
             activation_root_turn_id: None,
             source_review_phase: false,
             saved_permission_admission: None,
+            trigger_turn_id: None,
         }
     }
 
@@ -1661,7 +1672,7 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
-        self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], None, true)
+        self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], None, true, None)
     }
 
     fn permission_resume_admission(&self, card: &crate::cards::Card) -> Result<(), ApiError> {
@@ -1719,18 +1730,23 @@ impl Workbench {
         history: &[crate::provider::Message],
         resume: Option<&evaluation_resume::ActivationResume>,
         followup: bool,
+        recovery_id: Option<&str>,
     ) -> Result<TurnOutcome, ApiError> {
         // reliability 06: resumed work retains its stored instance ID. Re-read
         // its current role only for templates; stale/deleted IDs cannot retarget.
         let current_role = self.instance_role(aid)?;
         let role = current_role.as_str();
+        // MR-02/MR-03: request nature is fixed before dispatch. Owner-started
+        // top-level turns and every manual recovery are interactive (1 min);
+        // follow-ups, stall retriggers and background continuations are
+        // background (5 min). Agent identity and emitted text never change it.
+        let top_level = self.turn_depth.load(Ordering::SeqCst) == 0;
         let _in_flight = InFlight::enter(&self.turn_depth);
         // 失速监视（票 01）：重触发回合记的是原指令，不是包了提示的入参。
-        let instruction = self
-            .watch()
-            .retrigger_original
-            .take()
-            .unwrap_or_else(|| input.to_string());
+        let retriggered = self.watch().retrigger_original.take();
+        let interactive =
+            recovery_id.is_some() || (top_level && resume.is_none() && retriggered.is_none());
+        let instruction = retriggered.unwrap_or_else(|| input.to_string());
         let mode_input = (turn::prompt::source_mode(&instruction)
             && !turn::prompt::source_mode(input))
         .then(|| format!("/source {input}"));
@@ -1756,6 +1772,7 @@ impl Workbench {
         // 子代理线程派遣要移动 provider——父回合解析出的就是子代理的模型
         // （票 04：同主对话模型，不开新槽）。Arc 克隆后注入 ctx。
         let mut ctx = ctx;
+        ctx.wait.budget = self.request_budget(interactive);
         ctx.resume_from_turn_id = resume.map(|resume| resume.turn_id);
         ctx.activation_root_turn_id = resume.map(|resume| resume.root_turn_id);
         ctx.source_review_phase = resume.is_some_and(|resume| resume.source_reviewed);
@@ -1842,6 +1859,7 @@ impl Workbench {
             plan_first,
             sink,
             history,
+            resume.and_then(|resume| resume.model_continuation.as_ref()),
         );
         // 票 08：回合扫尾——本轮若落了带回放证据的待盖章提案,
         // 按包旋钮跑判定层。判定失败不挡回合（judge 是建议不是闸）。
@@ -1868,7 +1886,7 @@ impl Workbench {
         }
         // 失败的回合也落地：没有可见回复就是无回复的起点。记在续派之前，
         // 续派出去的下一位会覆盖成它自己的动静。
-        self.stall_note_turn(aid, role, instruction, watermark, fp_before);
+        self.stall_note_turn(aid, role, instruction.clone(), watermark, fp_before);
         // Reliability 13/23 regression: admission refused by the budget is a
         // known stop, not an unexplained silent model. Re-triggering cannot
         // create funds and used to produce a false stall card. A new owner
@@ -1893,6 +1911,30 @@ impl Workbench {
             );
         }
 
+        if let Err(turn::TurnError::Provider(error)) = &run {
+            let packet = model_recovery::TurnRecoveryPacket {
+                root: self.repo_root.canonicalize()?,
+                agent_id: aid.to_string(),
+                role: role.to_string(),
+                run_id: ctx.stage_run_id.clone(),
+                origin_turn_id: self.db.conn().query_row(
+                    "SELECT COALESCE(MAX(id),0) FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started' AND COALESCE(json_extract(payload,'$.subagent'),0)=0",
+                    rusqlite::params![self.project_id, aid],
+                    |row| row.get(0),
+                )?,
+                input: instruction.clone(),
+                attachments: attachments.to_vec(),
+                plan_first,
+                partial_text: None,
+            };
+            self.note_turn_model_failure(
+                &packet,
+                recovery_id,
+                error,
+                &slot_name,
+                provider.billing_model(),
+            )?;
+        }
         let outcome = run?;
         // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
         // 续派失败不推翻已经说完的这一回合——否则脚本耗尽会让成功的回复变成错误。
@@ -1938,6 +1980,9 @@ impl Workbench {
         followup: bool,
     ) -> Result<TurnOutcome, ApiError> {
         let role = self.instance_role(aid)?;
+        if let Some(qid) = self.hold_for_recovery_choice(aid, input, attachments)? {
+            return Ok(TurnOutcome::HeldForChoice(qid));
+        }
         // reliability 07: unavailable model used to wake a sleeping instance and
         // record dispatch before failing. Prove dispatchability before mutation.
         let slot: Option<String> = self.db.conn().query_row(
@@ -1988,11 +2033,19 @@ impl Workbench {
             run_id.as_deref(),
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
-        self.run_turn_agent_with_history(aid, input, attachments, true, &[], None, followup)
+        self.run_turn_agent_with_history(aid, input, attachments, true, &[], None, followup, None)
     }
 
     /// Dispatch a persisted owner message after the desktop workbench queue drains.
     pub fn route_queued_owner(&self, message_id: i64) -> Result<UnnamedRoute, ApiError> {
+        // MR-04: mark this owner instruction for the duration of routing.
+        *self.owner_message.lock().unwrap_or_else(|e| e.into_inner()) = Some(message_id);
+        let routed = self.route_queued_owner_inner(message_id);
+        *self.owner_message.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        routed
+    }
+
+    fn route_queued_owner_inner(&self, message_id: i64) -> Result<UnnamedRoute, ApiError> {
         let (body, attachments, elements): (String, String, String) = self.db.conn().query_row(
             "SELECT body,attachments,element_refs FROM messages WHERE id=?1 AND project_id=?2 AND author='owner'",
             rusqlite::params![message_id, self.project_id],
@@ -2031,7 +2084,19 @@ impl Workbench {
                 std::time::Instant::now(),
             );
         }
-        self.route_body("owner", None, &body, &attachments, true, &consumed)
+        self.route_body(
+            "owner",
+            None,
+            &body,
+            &attachments,
+            &consumed,
+            model_recovery::ChoiceOrigin {
+                from_owner: true,
+                source_message: Some(message_id),
+                kickoff_lead: None,
+                stall_investigation: false,
+            },
+        )
     }
 
     /// 负责人发言的下一手（票 08 / 票 09 / ADR 0065）。
@@ -2051,7 +2116,17 @@ impl Workbench {
         body: &str,
         attachments: &[crate::trace::AttachRef],
     ) -> Result<UnnamedRoute, ApiError> {
-        self.route_body("owner", None, body, attachments, true, &[])
+        self.route_body(
+            "owner",
+            None,
+            body,
+            attachments,
+            &[],
+            model_recovery::ChoiceOrigin {
+                from_owner: true,
+                ..Default::default()
+            },
+        )
     }
 
     fn route_body(
@@ -2060,9 +2135,11 @@ impl Workbench {
         speaker_id: Option<&str>,
         body: &str,
         attachments: &[crate::trace::AttachRef],
-        from_owner: bool,
         consumed: &[String],
+        origin: model_recovery::ChoiceOrigin,
     ) -> Result<UnnamedRoute, ApiError> {
+        let from_owner = origin.from_owner;
+        let source_message = origin.source_message;
         if from_owner {
             if let Some(cmd) = crate::commands::parse_command(body) {
                 // diagnostic-records 票 02：整句是指令 → 不进路由，也是一支「没派」。
@@ -2187,9 +2264,14 @@ impl Workbench {
                             speaker,
                             body,
                             attachments,
-                            from_owner,
                             &roster,
                             Some(&candidates),
+                            model_recovery::ChoiceOrigin {
+                                from_owner,
+                                source_message,
+                                kickoff_lead: None,
+                                stall_investigation: false,
+                            },
                         )?;
                         if !matches!(result, UnnamedRoute::Dispatched { .. }) {
                             return Ok(result);
@@ -2238,20 +2320,22 @@ impl Workbench {
         // 先打开第一阶段，选择仍先不派活时交给该阶段激活名单的第一位。
         let kickoff = self.maybe_open_first_stage(from_owner)?;
         if roster.iter().any(|r| r == crate::pm_route::PM_ROLE) {
-            let route =
-                self.closed_choice(speaker, body, attachments, from_owner, &roster, None)?;
+            let route = self.closed_choice(
+                speaker,
+                body,
+                attachments,
+                &roster,
+                None,
+                model_recovery::ChoiceOrigin {
+                    from_owner,
+                    source_message,
+                    kickoff_lead: kickoff.then(|| self.kickoff_lead(&roster)).flatten(),
+                    stall_investigation: false,
+                },
+            )?;
             // ADR 0074：正常派活时的「先不派活」仍是空转信号。调查里的先不派活
             // 不走这里（stall_investigate 直调 closed_choice 并就地收场）。
             if matches!(route, UnnamedRoute::Held { .. }) {
-                if kickoff {
-                    if let Some(role) = self.kickoff_lead(&roster) {
-                        self.dispatch(&role, body, attachments)?;
-                        return Ok(UnnamedRoute::Dispatched {
-                            role,
-                            via: "decision".into(),
-                        });
-                    }
-                }
                 self.stall_note_held(from_owner.then_some(body));
             }
             return Ok(route);
@@ -2316,10 +2400,11 @@ impl Workbench {
         speaker: &str,
         body: &str,
         attachments: &[crate::trace::AttachRef],
-        from_owner: bool,
         roster: &[String],
         instances: Option<&[(String, String)]>,
+        origin: model_recovery::ChoiceOrigin,
     ) -> Result<UnnamedRoute, ApiError> {
+        let from_owner = origin.from_owner;
         let _in_flight = InFlight::enter(&self.turn_depth);
         let pm_id = self.agent_by_role(crate::pm_route::PM_ROLE)?;
         let decision_slot: Option<String> = self.db.conn().query_row(
@@ -2337,12 +2422,7 @@ impl Workbench {
         // 回退会让决策调用和主对话合成同一个供应商（CONTEXT「模型槽」Avoid）。
         // 槽名写了但没注册 → NoProvider，不假装没配。
         let (provider, slot_name, via) = if let Some(slot) = decision_slot {
-            let p = self
-                .providers
-                .get(&slot)
-                .cloned()
-                .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
-            (p, slot, "decision")
+            (self.providers.get(&slot).cloned(), slot, "decision")
         } else {
             let started = std::time::Instant::now();
             crate::diag::note(
@@ -2358,9 +2438,7 @@ impl Workbench {
             );
             let slot = model_slot.unwrap_or_else(|| "default".into());
             let started = std::time::Instant::now();
-            let p = crate::provider_config::resolve_slot(&self.providers, &slot)
-                .cloned()
-                .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
+            let p = crate::provider_config::resolve_slot(&self.providers, &slot).cloned();
             // diagnostic-records 票 03：主对话槽也没绑，落到了 default。
             if crate::provider_config::fell_back_to_default(&self.providers, &slot) {
                 crate::diag::slot_fallback(
@@ -2410,7 +2488,7 @@ impl Workbench {
             prompt
         };
         let req = crate::pm_route::choice_request(&slot_name, &prompt);
-        let use_jev = provider.uses_decision_api();
+        let use_jev = provider.as_ref().is_some_and(|p| p.uses_decision_api());
         let run_id = run.as_ref().map(|r| r.id.as_str());
         // 选择也是一次模型派发：信封在调用前落，用量在成功后记到项目经理头上。
         // 不走 run_turn——那会把选择写成聊天回复。
@@ -2421,149 +2499,36 @@ impl Workbench {
             Some(&pm_id),
             run_id,
         )?;
-        let trace = trace_id.to_string();
-        let route_started = std::time::Instant::now();
-        let usage_ctx = crate::tools::ToolContext {
-            project_id: self.project_id.clone(),
-            agent_id: pm_id.clone(),
-            repo_root: self.repo_root.clone(),
-            stage_run_id: run.as_ref().map(|r| r.id.clone()),
-            owned_globs: vec![],
-            tiers: crate::artifacts::TierMap::new(),
-            sessions: Default::default(),
-            caps: Default::default(),
-            ..Default::default()
+        let packet = model_recovery::ChoicePacket {
+            root: self.repo_root.canonicalize()?,
+            pm_id,
+            run_id: run.as_ref().map(|r| r.id.clone()),
+            speaker: speaker.to_string(),
+            body: body.to_string(),
+            attachments: attachments.to_vec(),
+            roster: roster.to_vec(),
+            instances: instances.map(<[_]>::to_vec),
+            request: req,
+            stage_name,
+            activation,
+            choosable,
+            use_jev,
+            slot_name,
+            via: via.to_string(),
+            origin_trace_id: trace_id,
+            origin,
         };
-        let resp = crate::usage::request(
-            &self.db,
-            &usage_ctx,
-            &slot_name,
-            "pm_route",
-            provider.as_ref(),
-            if use_jev { None } else { Some(&req) },
-            || {
-                if use_jev {
-                    let state = crate::pm_route::choice_state(
-                        stage_name.as_deref(),
-                        &activation,
-                        speaker_label,
-                        body,
-                    );
-                    let mut options: Vec<(&str, &str)> = choosable
-                        .iter()
-                        .map(|r| (r.as_str(), "eligible target"))
-                        .collect();
-                    if instances.is_none() {
-                        options.push((crate::pm_route::HOLD_TOKEN, "wake no one for now"));
-                    }
-                    provider.decide(&state, &options)
-                } else {
-                    provider.complete(&req)
-                }
-            },
-        )
-        .map_err(|e| ApiError::Decision(e.to_string()))?;
-        let raw = crate::pm_route::choice_text(&resp);
-        // reliability 07 / Q8: a mistaken refusal asks for selection; accepting
-        // an out-of-role or stale ID starts an unauthorized instance. Fail closed.
-        let choice = crate::pm_route::parse_route_choice(&raw, &choosable).filter(|c| {
-            instances.is_none() || matches!(c, crate::pm_route::RouteChoice::Dispatch(id)
-                if instances.is_some_and(|xs| xs.iter().any(|(aid,role)| aid == id && self.instance_role(aid).ok().as_ref() == Some(role))))
-        });
-        let mut eligible = choosable.clone();
-        if instances.is_none() {
-            eligible.push(crate::pm_route::HOLD.to_string());
+        if packet.origin.stall_investigation {
+            let provider =
+                provider.ok_or_else(|| ApiError::NoProvider(packet.slot_name.clone()))?;
+            return self.execute_stall_choice(&packet, provider);
         }
-        let (held, rejected, role) = match &choice {
-            Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
-                (false, false, Some(role.clone()))
-            }
-            Some(crate::pm_route::RouteChoice::Hold) => (true, false, None),
-            None => (false, true, None),
+        let Some(provider) = provider else {
+            let error = crate::provider::ProviderError::Unsupported("provider unavailable".into());
+            self.save_pm_failure(&packet, None, None, &error, None)?;
+            return Err(ApiError::NoProvider(packet.slot_name));
         };
-        // diagnostic-records 票 02：unparsed 记拒绝/Warn——模型回了花名册外
-        // 的字符串等于这次路由被拒，关 Debug 也得看得见；dispatch 原因码带
-        // 派给的角色，回答「派给谁」。
-        crate::diag::note(
-            if rejected { "拒绝" } else { "判定" },
-            rejected,
-            Some(&self.project_id),
-            Some(&pm_id),
-            run_id,
-            Some(&trace),
-            "pm_route",
-            &if rejected {
-                "unparsed".to_string()
-            } else if held {
-                "hold".into()
-            } else {
-                format!("dispatch:{}", role.as_deref().unwrap_or("?"))
-            },
-            route_started,
-        );
-        let mut payload = json!({
-            "held": held,
-            "rejected": rejected,
-            "via": via,
-            "role": role,
-            "raw": raw,
-        });
-        if let Some(candidates) = instances {
-            // reliability 07: role remains a role in the historical event
-            // contract; the selected instance has its own field.
-            let selected_agent_id = role.as_deref();
-            let selected_role = candidates
-                .iter()
-                .find(|(id, _)| Some(id.as_str()) == selected_agent_id)
-                .map(|(_, role)| role);
-            payload["role"] = json!(selected_role);
-            payload["agent_id"] = json!(selected_agent_id);
-            payload["scope"] = json!("role_instances");
-        }
-        // 拒绝的输出不是一次决策：不写 decision，免得花名册外的字符串
-        // 被回放当成 chosen。接受/先不派活才落闭集决策。
-        if let Some(chosen) = choice.as_ref().map(|c| match c {
-            crate::pm_route::RouteChoice::Dispatch(role) => role.clone(),
-            crate::pm_route::RouteChoice::Hold => crate::pm_route::HOLD.to_string(),
-        }) {
-            payload["choice"] = json!(chosen);
-            payload["decision"] = json!({
-                "kind": "pm_route",
-                "eligible": eligible,
-                "chosen": chosen,
-                "via": via,
-            });
-        }
-        self.db.append_event(
-            &self.project_id,
-            EventKind::PmRouted,
-            payload,
-            Some(&pm_id),
-            run_id,
-        )?;
-        match choice {
-            Some(crate::pm_route::RouteChoice::Dispatch(role)) => {
-                let role = if instances.is_some() {
-                    let actual_role = self.instance_role(&role)?;
-                    self.dispatch_instance(&role, body, attachments)?;
-                    actual_role
-                } else {
-                    self.dispatch(&role, body, attachments)?;
-                    role
-                };
-                Ok(UnnamedRoute::Dispatched {
-                    role,
-                    via: via.to_string(),
-                })
-            }
-            Some(crate::pm_route::RouteChoice::Hold) => Ok(UnnamedRoute::Held {
-                via: via.to_string(),
-            }),
-            None => Ok(UnnamedRoute::Rejected {
-                raw,
-                via: via.to_string(),
-            }),
-        }
+        self.execute_saved_pm_choice(&packet, provider, None)
     }
 
     /// 没有进行中的阶段时，负责人的下一句话打开流程的第一阶段。
@@ -2664,7 +2629,14 @@ impl Workbench {
             body.push_str(&serde_json::to_string(&quality_failures)?);
             body.push(']');
         }
-        let route = self.route_body(role, Some(aid), &body, &[], false, &[])?;
+        let route = self.route_body(
+            role,
+            Some(aid),
+            &body,
+            &[],
+            &[],
+            model_recovery::ChoiceOrigin::default(),
+        )?;
         // QA 2026-10-01/06: a successful one-off observation + PM HOLD was
         // replayed after 60s both after completion and before kickoff.
         // Require positive completed/never-started evidence, not absence of an
@@ -3035,6 +3007,7 @@ impl Workbench {
                 &resume.history,
                 Some(&resume),
                 true,
+                None,
             )?;
         }
         Ok(())
@@ -3693,9 +3666,12 @@ impl Workbench {
             crate::stallwatch::INVESTIGATION_SPEAKER,
             &body,
             &[],
-            false,
             &roster,
             None,
+            model_recovery::ChoiceOrigin {
+                stall_investigation: true,
+                ..Default::default()
+            },
         );
         let retry = !self.watch().seg.retry_used;
         match res {
@@ -3958,6 +3934,8 @@ pub fn data_boundary(
     Ok(crate::data_boundary::read(root, store, &doc))
 }
 
+#[cfg(test)]
+mod model_recovery_tests;
 #[cfg(test)]
 mod stall_tests;
 #[cfg(test)]
@@ -4607,3 +4585,7 @@ pub fn timeline_window_metadata(
     check_timeline_project(root, &request.expected_project_root)?;
     crate::trace::window::metadata(db, crate::PROJECT_ID, request)
 }
+
+mod model_recovery;
+
+pub use model_recovery::{model_request_recovery, ModelRequestFailure, ModelRequestRecovery};

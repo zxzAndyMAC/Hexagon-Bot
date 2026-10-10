@@ -103,7 +103,7 @@ pub struct ToolDef {
     pub input_schema: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub model_slot: String,
     pub messages: Vec<Message>,
@@ -340,13 +340,33 @@ pub enum ProviderError {
     BudgetUnavailable,
     #[error("missing credential: {0}")]
     MissingCredential(String),
+    #[error("credential store unavailable: {0}")]
+    CredentialStore(String),
+    #[error("supplier quota unavailable")]
+    QuotaUnavailable,
     /// 流被 sink 叫停（票 04）：显式终态——不是传输故障不可重试，
     /// 也不是拒绝；turn 层映射为 Interrupted 终态。
     #[error("interrupted")]
     Interrupted,
+    /// MR-02: elapsed wall-clock budget is not a transient transport failure.
+    #[error("request deadline exhausted")]
+    Deadline,
+    /// test3 05/06 review: a missing slot or a transport without deadline or
+    /// decision support is configuration, not a supplier refusal. The owner's
+    /// remedy is model settings; retrying the same setup cannot succeed.
+    #[error("provider unsupported: {0}")]
+    Unsupported(String),
+    /// test3 05/06 review: the supplier answered, but outside the saved
+    /// contract (e.g. a choice outside the eligible set). Not configuration.
+    #[error("invalid model response: {0}")]
+    InvalidResponse(String),
 }
 
 impl ProviderError {
+    pub(crate) fn retryable(&self) -> bool {
+        matches!(self.cause(), Self::Transport(_))
+    }
+
     fn with_usage(self, usage: &Usage) -> Self {
         if matches!(self, Self::WithUsage(..))
             || !(usage.prompt_reported || usage.completion_reported)
@@ -433,6 +453,41 @@ pub trait ModelProvider: Send + Sync {
     }
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
 
+    /// MR-02: production transports override this with an actual IO timeout.
+    fn complete_with_timeout(
+        &self,
+        req: &ChatRequest,
+        _timeout: std::time::Duration,
+    ) -> Result<ChatResponse, ProviderError> {
+        // MR-02: refusing a transport without deadline support costs a setup
+        // repair; accepting it can keep sending after stop. Fail closed.
+        if self.is_scripted() {
+            self.complete(req)
+        } else {
+            Err(ProviderError::Unsupported(
+                "provider has no deadline support".into(),
+            ))
+        }
+    }
+
+    fn decide_with_timeout(
+        &self,
+        state: &str,
+        options: &[(&str, &str)],
+        _timeout: std::time::Duration,
+    ) -> Result<ChatResponse, ProviderError> {
+        // MR-02: same cost model as complete_with_timeout — a refused
+        // deadline-less decision provider costs a setup repair; accepting it
+        // could keep a closed choice running after stop. Fail closed.
+        if self.is_scripted() {
+            self.decide(state, options)
+        } else {
+            Err(ProviderError::Unsupported(
+                "provider has no deadline support".into(),
+            ))
+        }
+    }
+
     /// 所服务模型的元数据（见 [`ModelMeta`]）。默认全 None = 未知。
     fn model_meta(&self) -> ModelMeta {
         ModelMeta::default()
@@ -473,7 +528,7 @@ pub trait ModelProvider: Send + Sync {
         _state: &str,
         _options: &[(&str, &str)],
     ) -> Result<ChatResponse, ProviderError> {
-        Err(ProviderError::Refused(
+        Err(ProviderError::Unsupported(
             "this provider has no decision API".into(),
         ))
     }
@@ -647,6 +702,23 @@ impl ModelProvider for ScriptedProvider {
             .unwrap()
             .pop_front()
             .ok_or(ProviderError::ScriptExhausted)
+    }
+
+    fn complete_with_timeout(
+        &self,
+        req: &ChatRequest,
+        _timeout: std::time::Duration,
+    ) -> Result<ChatResponse, ProviderError> {
+        self.complete(req)
+    }
+
+    fn decide_with_timeout(
+        &self,
+        state: &str,
+        options: &[(&str, &str)],
+        _timeout: std::time::Duration,
+    ) -> Result<ChatResponse, ProviderError> {
+        self.decide(state, options)
     }
 
     fn stream(
@@ -1367,6 +1439,7 @@ pub enum ProviderKind {
 }
 
 /// 真实 HTTP 供应商：同步 ureq 叶子调用，key 在每次调用时从 creds 现取。
+#[derive(Clone)]
 pub struct HttpProvider {
     kind: ProviderKind,
     base_url: String,
@@ -1387,6 +1460,7 @@ impl HttpProvider {
         meta: ModelMeta,
     ) -> Self {
         let agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
             .timeout_global(Some(std::time::Duration::from_secs(180)))
             .build()
             .into();
@@ -1399,6 +1473,16 @@ impl HttpProvider {
             agent,
             meta,
         }
+    }
+
+    fn with_timeout(&self, timeout: std::time::Duration) -> Self {
+        let mut bounded = self.clone();
+        bounded.agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(timeout.min(std::time::Duration::from_secs(180))))
+            .build()
+            .into();
+        bounded
     }
 
     fn apply_openai_output_limit(&self, body: &mut Value) {
@@ -1428,7 +1512,11 @@ impl HttpProvider {
         match e {
             // D11: retain the actual status alongside the existing retry class.
             ureq::Error::StatusCode(c) => {
-                let cause = if (400..500).contains(&c) && c != 429 {
+                // test3 05/06 review: 402 is the supplier's payment/quota
+                // signal, not this workbench's local admission budget.
+                let cause = if c == 402 {
+                    ProviderError::QuotaUnavailable
+                } else if (400..500).contains(&c) && c != 429 {
                     ProviderError::Refused(format!("HTTP {c}"))
                 } else {
                     ProviderError::Transport(format!("HTTP {c}"))
@@ -1439,10 +1527,33 @@ impl HttpProvider {
         }
     }
 
+    fn check_response(
+        mut response: ureq::http::Response<ureq::Body>,
+    ) -> Result<ureq::http::Response<ureq::Body>, ProviderError> {
+        let status = response.status().as_u16();
+        if !(400..600).contains(&status) {
+            return Ok(response);
+        }
+        // MR-02: inspect only bounded, structured supplier error codes. Prose
+        // and response bodies may contain secrets and never enter the ledger.
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(16_384)
+            .read_json::<Value>()
+            .unwrap_or(Value::Null);
+        Err(supplier_failure(status, &body))
+    }
+
     fn api_key(&self) -> Result<String, ProviderError> {
         self.creds
             .get(&self.key_name)
-            .map_err(|e| ProviderError::Transport(e.to_string()))?
+            .map_err(|e| match e {
+                crate::credentials::CredError::Missing(name) => {
+                    ProviderError::MissingCredential(name)
+                }
+                other => ProviderError::CredentialStore(other.to_string()),
+            })?
             .ok_or_else(|| ProviderError::MissingCredential(self.key_name.clone()))
     }
 
@@ -1454,6 +1565,32 @@ impl HttpProvider {
             .map(|t| t.contains("text/event-stream"))
             .unwrap_or(false)
     }
+}
+
+fn supplier_failure(status: u16, body: &Value) -> ProviderError {
+    let quota = status == 402
+        || ["code", "type"].iter().any(|field| {
+            matches!(
+                body["error"][field].as_str(),
+                Some(
+                    "insufficient_quota"
+                        | "quota_exceeded"
+                        | "credit_balance_too_low"
+                        | "insufficient_balance"
+                        | "billing_hard_limit_reached"
+                )
+            )
+        });
+    // MR-02: guessing quota from arbitrary prose could stop a recoverable
+    // request; treating a confirmed quota code as rate limiting wastes budget.
+    let cause = if quota {
+        ProviderError::QuotaUnavailable
+    } else if status == 429 || (500..600).contains(&status) {
+        ProviderError::Transport(format!("HTTP {status}"))
+    } else {
+        ProviderError::Refused(format!("HTTP {status}"))
+    };
+    ProviderError::HttpStatus(Box::new(cause), status, None)
 }
 
 /// 非流式端点回退（票 02）：整段文本一发——delta 通道语义不变，
@@ -1469,6 +1606,29 @@ fn emit_fallback(
 }
 
 impl ModelProvider for HttpProvider {
+    fn complete_with_timeout(
+        &self,
+        req: &ChatRequest,
+        timeout: std::time::Duration,
+    ) -> Result<ChatResponse, ProviderError> {
+        if timeout.is_zero() {
+            return Err(ProviderError::Deadline);
+        }
+        self.with_timeout(timeout).complete(req)
+    }
+
+    fn decide_with_timeout(
+        &self,
+        state: &str,
+        options: &[(&str, &str)],
+        timeout: std::time::Duration,
+    ) -> Result<ChatResponse, ProviderError> {
+        if timeout.is_zero() {
+            return Err(ProviderError::Deadline);
+        }
+        self.with_timeout(timeout).decide(state, options)
+    }
+
     fn output_token_limit(&self) -> Option<u64> {
         (self.kind != ProviderKind::Jev).then_some(self.meta.max_output.unwrap_or(8_192).max(1))
     }
@@ -1514,7 +1674,8 @@ impl ModelProvider for HttpProvider {
                     .header("x-api-key", &key)
                     .header("anthropic-version", "2023-06-01")
                     .send_json(&body)
-                    .map_err(Self::map_err)?;
+                    .map_err(Self::map_err)
+                    .and_then(Self::check_response)?;
                 let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                 anthropic_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
@@ -1530,11 +1691,12 @@ impl ModelProvider for HttpProvider {
                     .post(&url)
                     .header("Authorization", &format!("Bearer {key}"))
                     .send_json(&body)
-                    .map_err(Self::map_err)?;
+                    .map_err(Self::map_err)
+                    .and_then(Self::check_response)?;
                 let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                 openai_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
-            ProviderKind::Jev => Err(ProviderError::Refused(
+            ProviderKind::Jev => Err(ProviderError::Unsupported(
                 "Jev only answers closed choices, not chat".into(),
             )),
         }
@@ -1565,7 +1727,8 @@ impl ModelProvider for HttpProvider {
                     .header("x-api-key", &key)
                     .header("anthropic-version", "2023-06-01")
                     .send_json(&body)
-                    .map_err(Self::map_err)?;
+                    .map_err(Self::map_err)
+                    .and_then(Self::check_response)?;
                 if !Self::is_sse(&resp) {
                     let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                     return emit_fallback(
@@ -1605,7 +1768,8 @@ impl ModelProvider for HttpProvider {
                     .post(&url)
                     .header("Authorization", &format!("Bearer {key}"))
                     .send_json(&body)
-                    .map_err(Self::map_err)?;
+                    .map_err(Self::map_err)
+                    .and_then(Self::check_response)?;
                 if !Self::is_sse(&resp) {
                     let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                     return emit_fallback(
@@ -1632,7 +1796,7 @@ impl ModelProvider for HttpProvider {
                     .map(|r| restore_tool_names(req, r))
                     .map_err(|e| e.with_usage(&usage))
             }
-            ProviderKind::Jev => Err(ProviderError::Refused(
+            ProviderKind::Jev => Err(ProviderError::Unsupported(
                 "Jev only answers closed choices, not chat".into(),
             )),
         }
@@ -1644,7 +1808,7 @@ impl ModelProvider for HttpProvider {
 
     fn decide(&self, state: &str, options: &[(&str, &str)]) -> Result<ChatResponse, ProviderError> {
         if self.kind != ProviderKind::Jev {
-            return Err(ProviderError::Refused(
+            return Err(ProviderError::Unsupported(
                 "decision API is only for Jev".into(),
             ));
         }
@@ -1709,7 +1873,8 @@ fn jev_choice(
         .post(&url)
         .header("Authorization", &format!("Bearer {key}"))
         .send_json(&body)
-        .map_err(HttpProvider::map_err)?;
+        .map_err(HttpProvider::map_err)
+        .and_then(HttpProvider::check_response)?;
     let v: Value = resp.body_mut().read_json().map_err(HttpProvider::map_err)?;
     let choice = v["answers"]["route"]["choice"]
         .as_str()
@@ -1725,6 +1890,46 @@ fn jev_choice(
 
 #[cfg(test)]
 mod tests {
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+        #[test]
+        fn supplier_quota_is_never_retried(status in 400u16..600, secret in ".{0,30}") {
+            let error = supplier_failure(status, &serde_json::json!({"error": {
+                "code":"insufficient_quota", "message":secret
+            }}));
+            proptest::prop_assert!(!error.retryable());
+            proptest::prop_assert!(matches!(error.cause(), ProviderError::QuotaUnavailable));
+            proptest::prop_assert_eq!(error.http_status(), Some(status));
+        }
+    }
+
+    #[test]
+    fn supplier_429_distinguishes_quota_from_temporary_rate_limit() {
+        for (body, retryable) in [
+            (
+                r#"{"error":{"code":"insufficient_quota","message":"do not persist"}}"#,
+                false,
+            ),
+            (
+                r#"{"error":{"code":"rate_limit_exceeded","message":"do not persist"}}"#,
+                true,
+            ),
+        ] {
+            let base = serve_once(429, "application/json", body);
+            let p = http_provider(ProviderKind::OpenAi, &base);
+            let error = p
+                .complete(&ChatRequest {
+                    model_slot: "default".into(),
+                    messages: vec![],
+                    tools: vec![],
+                })
+                .unwrap_err();
+            assert_eq!(error.http_status(), Some(429));
+            assert_eq!(error.retryable(), retryable);
+            assert!(!error.to_string().contains("do not persist"));
+        }
+    }
     use super::*;
     use crate::credentials::CredentialStore;
     use serde_json::json;
