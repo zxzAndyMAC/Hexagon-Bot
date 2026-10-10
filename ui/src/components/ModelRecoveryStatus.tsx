@@ -12,7 +12,10 @@ const SETTINGS_CODES = new Set(['missing_credential', 'credential_store', 'authe
 const USAGE_CODES = new Set(['budget_unavailable', 'quota'])
 
 /** Title/hint keys per item state; `turn` items name the role request. */
-function copyKeys(state: string, turn: boolean): [string, string] {
+function copyKeys(state: string, turn: boolean, intake: boolean): [string, string] {
+  if (intake && state !== 'retrying') {
+    return state === 'recovered' ? ['modelRecovery.recovered', 'modelRecovery.recoveredHintIntake'] : ['modelRecovery.titleIntake', 'modelRecovery.hintIntake']
+  }
   switch (state) {
     case 'recovered': return ['modelRecovery.recovered', turn ? 'modelRecovery.recoveredHintTurn' : 'modelRecovery.recoveredHint']
     case 'retrying': return [turn ? 'modelRecovery.retryingTitleTurn' : 'modelRecovery.retryingTitle', 'modelRecovery.waitingHint']
@@ -54,12 +57,18 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const choosing = state === 'needs_choice'
   const canRetry = recovery.can_retry !== false && !['recovered', 'retrying', 'superseded', 'needs_choice'].includes(state)
   const shortcut = top && canRetry ? formatBinding(bindingFor('approve')) : ''
+  const chatOffer = canRetry ? recovery.chat_model_slot : null
+  const retryWithChat = () => run(() => api.retryModelRequestWithChatModel(id, recovery.project_root))
   const choose = (followNew: boolean) => run(() => api.resolveModelRequestChoice(id, followNew, recovery.project_root))
   // ADR 0051: the explicit choice has its own bindings on the top item only.
   useEffect(() => {
-    if (!top || !choosing) return
+    if (!top || (!choosing && !chatOffer)) return
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat || e.defaultPrevented) return
+      if (chatOffer && matches(e, bindingFor('retryWithChatModel'))) {
+        e.preventDefault(); void retryWithChat(); return
+      }
+      if (!choosing) return
       const followNew = matches(e, bindingFor('followNewInstruction'))
       if (!followNew && !matches(e, bindingFor('continueOriginalTask'))) return
       e.preventDefault()
@@ -70,7 +79,8 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   })
   const turn = recovery.purpose === 'turn'
   const target = recovery.target_role ?? t('modelRecovery.nextRole')
-  const [title, hint] = copyKeys(state, turn)
+  const intake = recovery.purpose === 'opening_intake'
+  const [title, hint] = copyKeys(state, turn, intake)
   const reason = state === 'superseded' && recovery.superseded_reason ? t(`modelRecovery.reason.${recovery.superseded_reason}`, { defaultValue: recovery.superseded_reason }) : ''
   const refusal = recovery.last_refusal && !['recovered', 'superseded'].includes(state)
     ? t('modelRecovery.lastRefusal', { reason: t(`modelRecovery.refusal.${recovery.last_refusal}`, { defaultValue: recovery.last_refusal }) }) : ''
@@ -90,9 +100,12 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
       </div>)}
     </details>
     {canRetry && <button type="button" className="btn primary" disabled={busy}
-      title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void run(() => api.retryModelRequest(id, recovery.project_root)) }}>
+      title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void run(() => intake ? api.runOpeningIntake() : api.retryModelRequest(id, recovery.project_root)) }}>
       {busy ? t('modelRecovery.retrying') : label}{shortcut && ` ${shortcut}`}
     </button>}
+    {chatOffer && <button type="button" className="btn" disabled={busy} data-chat-model
+      title={[t('modelRecovery.chatModelHint'), top ? formatBinding(bindingFor('retryWithChatModel')) : ''].filter(Boolean).join(' · ')}
+      onClick={() => { void retryWithChat() }}>{t('modelRecovery.useChatModel', { slot: chatOffer })}</button>}
     {choosing && <>
       <button type="button" className="btn primary" disabled={busy} title={[t('modelRecovery.continueOriginal'), formatBinding(bindingFor('continueOriginalTask'))].join(' · ')}
         onClick={() => { void choose(false) }}>{t('modelRecovery.continueOriginal')}</button>

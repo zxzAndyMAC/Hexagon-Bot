@@ -48,8 +48,8 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     const tr = vi.spyOn(api, 'translatePrompts').mockResolvedValue({
       no_model: false,
       entries: [
-        { id: 'workbench.base', text: '# Hexagon 工作台', error: null },
-        { id: 'tool.fs_patch', text: '替换一段精确字符串', error: null },
+        { id: 'workbench.base', text: '# Hexagon 工作台', error: null, cached: false },
+        { id: 'tool.fs_patch', text: '替换一段精确字符串', error: null, cached: false },
       ],
     })
     const { el, root } = await render()
@@ -70,15 +70,15 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
   it('切语言时丢弃上一种语言迟到的译文', async () => {
     await i18n.changeLanguage('ja')
     vi.spyOn(api, 'promptCatalog').mockResolvedValue(CATALOG)
-    let releaseJa: (v: { no_model: boolean; entries: { id: string; text: string | null; error: string | null }[] }) => void = () => {}
+    let releaseJa: (v: { no_model: boolean; entries: { id: string; text: string | null; error: string | null; cached: boolean }[] }) => void = () => {}
     vi.spyOn(api, 'translatePrompts').mockImplementation((lang: string) =>
       lang === 'ja'
         ? new Promise((r) => { releaseJa = r })
-        : Promise.resolve({ no_model: false, entries: [{ id: 'workbench.base', text: 'FR', error: null }, { id: 'tool.fs_patch', text: 'FR2', error: null }] }),
+        : Promise.resolve({ no_model: false, entries: [{ id: 'workbench.base', text: 'FR', error: null, cached: false }, { id: 'tool.fs_patch', text: 'FR2', error: null, cached: false }] }),
     )
     const { el, root } = await render()
     await act(async () => { await i18n.changeLanguage('fr') })
-    await act(async () => { releaseJa({ no_model: false, entries: [{ id: 'workbench.base', text: 'JA', error: null }, { id: 'tool.fs_patch', text: 'JA2', error: null }] }) })
+    await act(async () => { releaseJa({ no_model: false, entries: [{ id: 'workbench.base', text: 'JA', error: null, cached: false }, { id: 'tool.fs_patch', text: 'JA2', error: null, cached: false }] }) })
     await act(async () => { tabs(el)[1].click() })
     expect(el.querySelector('[data-translation]')!.textContent).toBe('FR')
     await act(async () => { pick(el, 'tool.fs_patch').click() })
@@ -102,8 +102,8 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     vi.spyOn(api, 'translatePrompts').mockResolvedValue({
       no_model: false,
       entries: [
-        { id: 'workbench.base', text: null, error: 'not_json' },
-        { id: 'tool.fs_patch', text: '正確な文字列を置換', error: null },
+        { id: 'workbench.base', text: null, error: 'not_json', cached: false },
+        { id: 'tool.fs_patch', text: '正確な文字列を置換', error: null, cached: false },
       ],
     })
     const second = await render()
@@ -114,5 +114,29 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     await act(async () => { pick(second.el, 'tool.fs_patch').click() })
     expect(second.el.querySelector('[data-translation]')!.textContent).toBe('正確な文字列を置換')
     act(() => second.root.unmount())
+  })
+
+  it('MR-08：重译失败保留缓存译文并标明是缓存，凭据类失败给出模型设置入口', async () => {
+    await i18n.changeLanguage('zh-CN')
+    vi.spyOn(api, 'promptCatalog').mockResolvedValue(CATALOG)
+    vi.spyOn(api, 'translatePrompts').mockResolvedValue({
+      no_model: false,
+      entries: [
+        { id: 'workbench.base', text: '缓存的译文', error: 'model_authentication', cached: true },
+        { id: 'tool.fs_patch', text: null, error: 'model_transport', cached: false },
+      ],
+    })
+    const go = vi.fn()
+    const { el, root } = await render(go)
+    await act(async () => { tabs(el)[1].click() })
+    expect(el.textContent).toContain('重新翻译失败')
+    expect(el.textContent).toContain('模型供应商拒绝了凭据')
+    expect(el.querySelector('[data-cached]')!.textContent).toBe('缓存的译文')
+    const settings = [...el.querySelectorAll('button')].find((b) => b.textContent === '打开模型服务')
+    expect(settings).toBeTruthy()
+    await act(async () => { pick(el, 'tool.fs_patch').click() })
+    expect(el.querySelector('[data-cached]')).toBeNull()
+    expect(el.textContent).toContain('与模型的连接中断了')
+    act(() => root.unmount())
   })
 })

@@ -82,7 +82,8 @@ export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
   const effTab: Tab = hasTr ? tab : 'original'
   const cur = entries.find((e) => e.id === sel) ?? entries[0]
   const tr = cur ? byId[cur.id] : undefined
-  const reason = (code: string) => t(`settings.prompts_err_${code}`, { defaultValue: code })
+  const reason = (code: string) => code.startsWith('model_') ? t(`errors.${code}`, { defaultValue: code }) : t(`settings.prompts_err_${code}`, { defaultValue: code })
+  const settingsCode = (code?: string | null) => !!code && ['model_missing_credential', 'model_credential_store', 'model_authentication', 'model_configuration', 'model_request_rejected', 'model_quota'].includes(code)
 
   return (
     <div data-testid="prompts-section" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -162,7 +163,13 @@ export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
                 {effTab === 'original' ? (
                   <pre className="mono" style={preStyle}>{cur.text}</pre>
                 ) : tr?.error ? (
-                  <div role="alert" style={{ color: 'var(--err)', fontSize: 12 }}>{t('settings.prompts_failed', { error: reason(tr.error) })}</div>
+                  <>
+                    <div role="alert" style={{ color: 'var(--err)', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span>{t(tr.cached ? 'settings.prompts_failedCached' : 'settings.prompts_failed', { error: reason(tr.error) })}</span>
+                      {settingsCode(tr.error) && <button className="btn" onClick={onGoModels}>{t('settings.prompts_goModels')}</button>}
+                    </div>
+                    {tr.cached && tr.text && <pre data-translation data-cached className="mono" style={{ ...preStyle, marginTop: 8 }}>{tr.text}</pre>}
+                  </>
                 ) : busy && !tr?.text ? (
                   <div className="dim3" style={{ fontSize: 12 }}>{t('settings.prompts_translating')}</div>
                 ) : (

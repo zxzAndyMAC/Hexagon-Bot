@@ -206,6 +206,12 @@ impl PermissionControl {
         Ok(saved)
     }
 
+    /// MR-06: a live action-review allow after a re-judge. Same actor and
+    /// no shape memory as the in-turn reviewer allow (ticket 05 rule).
+    pub(super) fn save_by_reviewer(&self, db: &Db, question_id: &str) -> Result<(), ApiError> {
+        self.save_with_origin(db, question_id, true, None, "activation", "reviewer")
+    }
+
     pub fn save(
         &self,
         db: &Db,

@@ -15,7 +15,7 @@ vi.mock('react-virtuoso', () => ({
   Virtuoso: ({data,itemContent}: {data: unknown[];itemContent: (i:number,row:unknown)=>ReactNode}) => <div>{data.map((r,i)=><div key={i}>{itemContent(i,r)}</div>)}</div>,
 }))
 ;(globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true
-const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true,partial_text:null,unfinished:false,retry_deadline_ms:null,instruction:null,last_refusal:null,superseded_reason:null,held_instruction:null}
+const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true,partial_text:null,unfinished:false,retry_deadline_ms:null,instruction:null,last_refusal:null,superseded_reason:null,held_instruction:null,chat_model_slot:null}
 const payload={...view,sub:'model_request'}
 const card: PendingQuestion={id:'q1',kind:'recovery',agent_id:'pm',payload,state:'queued'}
 afterEach(()=>vi.restoreAllMocks())
@@ -151,5 +151,39 @@ it('marks an attempt interrupted by exit as unknown and keeps the original input
   expect(el.textContent).toContain('Original instruction: Draft the spec.')
   expect(el.querySelector('[data-refusal]')?.textContent).toContain('no exact material')
   expect(Array.from(el.querySelectorAll('button')).some(b=>b.textContent?.includes('Retry original request'))).toBe(true)
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('offers the chat model only as an explicit action the approve shortcut never takes', async () => {
+ const retry=vi.spyOn(api,'retryModelRequest').mockResolvedValue(view)
+ const chat=vi.spyOn(api,'retryModelRequestWithChatModel').mockResolvedValue(view)
+ const offer={...payload,chat_model_slot:'default'}
+ const failed: PendingQuestion={...card,payload:{...offer,view:offer}}
+ useUiStore.setState({pending:[failed],toasts:[],modalScope:'workbench'})
+ const el=document.createElement('div'); const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={offer} top />))
+  const button=el.querySelector('button[data-chat-model]') as HTMLButtonElement
+  expect(button.textContent).toContain('Retry with chat model (default)')
+  expect(button.title).toContain('No model settings change')
+  await approveQuestion(failed)
+  expect(retry).toHaveBeenCalledWith('q1','/project'); expect(chat).not.toHaveBeenCalled()
+  await act(async()=>{ window.dispatchEvent(new KeyboardEvent('keydown',{key:'m',code:'KeyM',altKey:true,metaKey:isMac,ctrlKey:!isMac})) })
+  expect(chat).toHaveBeenCalledWith('q1','/project')
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('re-runs a failed opening analysis through its own lock-free command', async () => {
+ const intake=vi.spyOn(api,'runOpeningIntake').mockResolvedValue(undefined)
+ const retry=vi.spyOn(api,'retryModelRequest').mockResolvedValue(view)
+ const failed={...payload,purpose:'opening_intake',target_role:null}
+ const item: PendingQuestion={...card,payload:{...failed,view:failed}}
+ useUiStore.setState({pending:[item],toasts:[],modalScope:'workbench'})
+ const el=document.createElement('div'); const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={failed} top />))
+  expect(el.textContent).toContain('Opening analysis failed')
+  await approveQuestion(item)
+  expect(intake).toHaveBeenCalledTimes(1); expect(retry).not.toHaveBeenCalled()
  } finally { await act(async()=>root.unmount()) }
 })

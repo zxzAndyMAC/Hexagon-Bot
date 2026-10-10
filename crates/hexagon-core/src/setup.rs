@@ -71,7 +71,13 @@ pub enum SetupError {
     BadRoleDefs(String),
     #[error(transparent)]
     Model(#[from] crate::provider::ProviderError),
+    /// MR-07: a wizard generation request failed (typed; see generation.rs).
+    #[error(transparent)]
+    Generation(generation::GenerationFailure),
 }
+
+mod generation;
+pub use generation::{host_generate, stop_generation, GenerationFailure};
 
 /// 目录体检报告：向导每一步的判定依据。
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -233,7 +239,7 @@ pub fn optimize_agents_md(
         ],
         tools: vec![],
     };
-    let resp = provider.complete(&req)?;
+    let resp = generation::generate("optimize_agents_md", provider, &req)?;
     let text: String = resp
         .content
         .iter()
@@ -293,7 +299,7 @@ pub fn brief_questions(
         ],
         tools: vec![],
     };
-    let resp = provider.complete(&req)?;
+    let resp = generation::generate("brief_questions", provider, &req)?;
     parse_brief_questions(&crate::intake::response_text(&resp))
 }
 
@@ -489,7 +495,7 @@ fn draft_seeds_once(
         ],
         tools: vec![],
     };
-    let resp = provider.complete(&req)?;
+    let resp = generation::generate("draft_role_defs", provider, &req)?;
     parse_role_seeds(&crate::intake::response_text(&resp), roles)
 }
 
@@ -607,7 +613,7 @@ pub fn draft_flow(
         tools: vec![],
     };
     let t0 = std::time::Instant::now();
-    let resp = provider.complete(&req)?;
+    let resp = generation::generate("draft_flow", provider, &req)?;
     let pack = parse_flow_draft(&crate::intake::response_text(&resp))?;
     // 2026-09-30 原生验收：全模板名单让已取消角色复活；不能只靠提示词或 UI 删 chip。
     // 偏向拒止：误拒花一次人工重起草，误放会让未选角色/不可达产物进入流程。
@@ -732,7 +738,7 @@ pub fn draft_role_duty(
         }],
         tools: vec![],
     };
-    let resp = provider.complete(&req)?;
+    let resp = generation::generate("draft_role_duty", provider, &req)?;
     let text = crate::intake::response_text(&resp);
     if text.trim().is_empty() {
         return Err(SetupError::EmptyDraft);

@@ -1,3 +1,4 @@
+import type { RejudgeOutcome } from './gen/RejudgeOutcome'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
 import type { TimelineWindowMetadata } from './gen/TimelineWindowMetadata'
@@ -398,6 +399,9 @@ export const api = {
   pendingQuestions: () => call<PendingQuestion[]>('pending_questions'),
   modelRequestRecovery: (qid: string) => call<ModelRequestRecovery>('model_request_recovery', { qid }),
   retryModelRequest: (qid: string, expectedProjectRoot: string) => call<ModelRequestRecovery>('retry_model_request', { qid, expectedProjectRoot }),
+  retryModelRequestWithChatModel: (qid: string, expectedProjectRoot: string) => call<ModelRequestRecovery>('retry_model_request_with_chat_model', { qid, expectedProjectRoot }),
+  rejudgeAfterModelFailure: (qid: string, expectedProjectRoot: string) => call<RejudgeOutcome>('rejudge_after_model_failure', { qid, expectedProjectRoot }),
+  stopWizardGeneration: () => call<void>('stop_wizard_generation'),
   resolveModelRequestChoice: (qid: string, followNew: boolean, expectedProjectRoot: string) => call<ModelRequestRecovery>('resolve_model_request_choice', { qid, followNew, expectedProjectRoot }),
   // ui-audit-2 票 03：已记权限规则审计面
   permissionRules: () => call<PermissionRuleRow[]>('permission_rules'),

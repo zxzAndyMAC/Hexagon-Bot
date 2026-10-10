@@ -4,4 +4,8 @@
  * 一段的参考译文；`text` 与 `error` 恰有一个。`error` 是原因码
  * （`not_json` / `missing` / `provider`），界面按码取 i18n 文案。
  */
-export type PromptTranslation = { id: string, text: string | null, error: string | null, };
+export type PromptTranslation = { id: string, text: string | null, error: string | null, 
+/**
+ * `text` is an earlier cached translation and this run failed.
+ */
+cached: boolean, };

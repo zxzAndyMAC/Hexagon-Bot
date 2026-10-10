@@ -76,6 +76,12 @@ pub(crate) fn judgment_state(proposal_id: &str, surface: &str, body: &str) -> St
     )
 }
 
+/// MR-06: evidence binding for a later re-judgement of the same proposal.
+pub(crate) fn body_digest(body: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(body.as_bytes()))
+}
+
 /// 封闭集合精确匹配：英文令牌（现行）与中文原文（旧脚本/旧回放）都收，
 /// 其余一律 None → 交给负责人。
 fn choice_of(text: &str) -> Option<&'static str> {
@@ -156,31 +162,46 @@ pub fn judge_passed(
     let state = judgment_state(proposal_id, surface, body);
     // 没配或这次调用失败是槽位失败，记 Warn。对不上三个字才是判定上的交给负责人。
     // 被否决：两种都记成「判定 / 交给负责人」。那样日志里看不出 Jev 根本没跑。
+    // MR-06 (test3 10): a failed request is a request fact, not a verdict.
+    // Transient failures retry inside a bounded window; whatever is left
+    // still hands the proposal to the owner, now labelled as a model failure.
+    let mut model_failure = None;
     let (parsed, slot_failure) = match jev {
-        Some(p) if p.uses_decision_api() => match crate::usage::request(
-            db,
-            ctx,
-            crate::provider_config::JEV_SLOT,
-            "execute_judgment",
-            p,
-            None,
-            || {
-                p.decide(
-                    &state,
-                    &[
-                        (EXECUTE_TOKEN, "write the proposal to disk"),
-                        (REJECT_TOKEN, "leave the project unchanged"),
-                        (OWNER_TOKEN, "hand the decision to the owner"),
-                    ],
+        Some(p) if p.uses_decision_api() => {
+            match crate::model_failure::bounded_call(db, ctx, || {
+                crate::usage::request(
+                    db,
+                    ctx,
+                    crate::provider_config::JEV_SLOT,
+                    "execute_judgment",
+                    p,
+                    None,
+                    || {
+                        p.decide(
+                            &state,
+                            &[
+                                (EXECUTE_TOKEN, "write the proposal to disk"),
+                                (REJECT_TOKEN, "leave the project unchanged"),
+                                (OWNER_TOKEN, "hand the decision to the owner"),
+                            ],
+                        )
+                    },
                 )
-            },
-        ) {
-            Ok(resp) => {
-                let text = crate::pm_route::choice_text(&resp);
-                (choice_of(&text), false)
+            }) {
+                Ok(resp) => {
+                    let text = crate::pm_route::choice_text(&resp);
+                    (choice_of(&text), false)
+                }
+                Err(error) => {
+                    model_failure = Some(crate::model_failure::judge_failure(
+                        "execute_judgment",
+                        &error,
+                        crate::provider_config::JEV_SLOT,
+                    ));
+                    (None, true)
+                }
             }
-            Err(_) => (None, true),
-        },
+        }
         _ => (None, true),
     };
     if slot_failure {
@@ -254,6 +275,17 @@ pub fn judge_passed(
         }
         _ => {
             let qid = proposals::queue_for_owner(db, ctx, proposal_id, diff, surface, evidence)?;
+            if let Some(failure) = model_failure {
+                // The re-judge entry binds to exactly this proposal text.
+                crate::cards::annotate(
+                    db,
+                    &qid,
+                    &[
+                        ("model_failure", failure),
+                        ("judged_body_digest", json!(body_digest(body))),
+                    ],
+                )?;
+            }
             Ok(Effect::Handed { question_id: qid })
         }
     }

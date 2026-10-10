@@ -938,6 +938,12 @@ fn model_request_recovery(
     })
 }
 
+/// MR-07: stop wizard generation in flight; late results are discarded.
+#[tauri::command]
+fn stop_wizard_generation() {
+    hexagon_core::setup::stop_generation();
+}
+
 #[tauri::command]
 async fn retry_model_request(
     app: tauri::AppHandle,
@@ -960,6 +966,66 @@ async fn retry_model_request(
                 ));
             }
             wb.retry_model_request(&qid)?;
+            hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)
+        })
+    })
+    .await
+    .map_err(|error| CmdError::internal(error.to_string()))?
+}
+
+/// MR-06: re-run a failed internal judge on its unchanged original target.
+#[tauri::command]
+async fn rejudge_after_model_failure(
+    app: tauri::AppHandle,
+    state: ProjectState<'_>,
+    qid: String,
+    expected_project_root: String,
+) -> Result<hexagon_core::api::RejudgeOutcome, CmdError> {
+    let identity = state.identity.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
+        with_wb(&state, |wb| {
+            if hexagon_core::api::desktop_check_project(&wb.repo_root, &expected_project_root)
+                .is_err()
+            {
+                return Err(hexagon_core::api::ApiError::BadInput(
+                    "judge recovery project changed".into(),
+                ));
+            }
+            wb.rejudge_after_model_failure(&qid)
+        })
+    })
+    .await
+    .map_err(|error| CmdError::internal(error.to_string()))?
+}
+
+/// MR-05: explicit one-off chat-model retry of a failed decision choice.
+#[tauri::command]
+async fn retry_model_request_with_chat_model(
+    app: tauri::AppHandle,
+    state: ProjectState<'_>,
+    qid: String,
+    expected_project_root: String,
+) -> Result<hexagon_core::api::ModelRequestRecovery, CmdError> {
+    let identity = state.identity.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
+        with_wb(&state, |wb| {
+            let view = hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)?;
+            if view.project_root != expected_project_root {
+                return Err(hexagon_core::api::ApiError::BadInput(
+                    "model recovery project changed".into(),
+                ));
+            }
+            wb.retry_model_request_with_chat_model(&qid)?;
             hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)
         })
     })
@@ -2656,13 +2722,14 @@ fn run_opening_intake(state: ProjectState<'_>) -> Result<(), CmdError> {
             ) {
                 Ok(resp) => resp,
                 Err(e) => {
-                    let _ = with_wb(&state, |wb| wb.abort_opening_intake());
+                    // MR-08: persist the failure as a recovery item.
+                    let _ = with_wb(&state, |wb| wb.note_opening_intake_failure(&e));
                     return Err(cmd_err(e));
                 }
             };
             let text = hexagon_core::intake::response_text(&resp);
             with_wb(&state, |wb| match wb.commit_opening_intake(&text) {
-                Ok(_) => Ok(()),
+                Ok(_) => wb.finish_opening_intake_recovery(),
                 Err(error) => {
                     let _ = wb.abort_opening_intake();
                     Err(error)
@@ -3012,6 +3079,9 @@ pub fn run() {
             open_stage,
             recover_run,
             retry_model_request,
+            stop_wizard_generation,
+            rejudge_after_model_failure,
+            retry_model_request_with_chat_model,
             resolve_model_request_choice,
             reconcile_tool_action,
             abandon_tool_action,

@@ -3052,15 +3052,21 @@ impl Workbench {
             tools: vec![],
         };
         let ctx = self.ctx_for(agent_id, None);
-        let resp = crate::usage::request(
-            &self.db,
-            &ctx,
-            &req.model_slot,
-            "role_draft",
-            provider.as_ref(),
-            Some(&req),
-            || provider.complete(&req),
-        )
+        // MR-08: owner-started auxiliary draft — bounded transient retry only.
+        // The error keeps its provider type (errcode recurses to e.g.
+        // `missing_credential`), which also proves which supplier resolved;
+        // nothing is written until the owner confirms the draft.
+        let resp = crate::model_failure::bounded_call(&self.db, &ctx, || {
+            crate::usage::request(
+                &self.db,
+                &ctx,
+                &req.model_slot,
+                "role_draft",
+                provider.as_ref(),
+                Some(&req),
+                || provider.complete(&req),
+            )
+        })
         .map_err(turn::TurnError::from)?;
         let text = resp
             .content
@@ -3091,23 +3097,29 @@ impl Workbench {
                 provider,
                 context,
             } => {
-                let resp = match crate::usage::request(
-                    &self.db,
-                    &context,
-                    &request.model_slot,
-                    "opening_intake",
-                    provider.as_ref(),
-                    Some(&request),
-                    || provider.complete(&request),
-                ) {
+                let resp = match crate::model_failure::bounded_call(&self.db, &context, || {
+                    crate::usage::request(
+                        &self.db,
+                        &context,
+                        &request.model_slot,
+                        "opening_intake",
+                        provider.as_ref(),
+                        Some(&request),
+                        || provider.complete(&request),
+                    )
+                }) {
                     Ok(resp) => resp,
                     Err(e) => {
-                        let _ = self.abort_opening_intake();
+                        // MR-08: a persistent item, not a silent reset.
+                        self.note_opening_intake_failure(&e)?;
                         return Err(ApiError::Turn(e.into()));
                     }
                 };
                 match self.commit_opening_intake(&crate::intake::response_text(&resp)) {
-                    Ok(run) => Ok(run),
+                    Ok(run) => {
+                        self.finish_opening_intake_recovery()?;
+                        Ok(run)
+                    }
                     Err(e) => {
                         let _ = self.abort_opening_intake();
                         Err(e)
@@ -4588,4 +4600,6 @@ pub fn timeline_window_metadata(
 
 mod model_recovery;
 
-pub use model_recovery::{model_request_recovery, ModelRequestFailure, ModelRequestRecovery};
+pub use model_recovery::{
+    model_request_recovery, ModelRequestFailure, ModelRequestRecovery, RejudgeOutcome,
+};

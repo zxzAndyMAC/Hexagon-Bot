@@ -22,4 +22,9 @@ superseded_reason: string | null,
 /**
  * The held owner instruction awaiting continue-original/follow-new.
  */
-held_instruction: string | null, };
+held_instruction: string | null, 
+/**
+ * MR-05: chat-model slot offered for the explicit one-off retry of a
+ * failed decision-model choice; None when the action does not apply.
+ */
+chat_model_slot: string | null, };

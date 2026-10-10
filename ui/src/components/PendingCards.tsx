@@ -1,4 +1,5 @@
 import { ModelRecoveryStatus } from './ModelRecoveryStatus'
+import { JudgeModelFailure } from './JudgeModelFailure'
 import { exceptionLabel } from '../evidenceLabels'
 import { PermissionActions } from './PermissionActions'
 import { DesignChoices } from './DesignChoices'
@@ -386,6 +387,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           {t('cards.writeTargets')} <span className="mono">{p.write_targets.filter((v): v is string => typeof v === 'string').join(' · ')}</span>
         </div>}
         <ProvenanceLines payload={p} />
+        <JudgeModelFailure q={q} top={top} />
         <PermissionActions key={q.id} q={q} />
       </CardShell>
     )
@@ -451,6 +453,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           {t('cards.proposal')} · {t(`cards.surface_${String(p.surface)}`, { defaultValue: String(p.surface ?? '') })}
         </div>
         {policy && <PolicyReport q={q} />}
+        <JudgeModelFailure q={q} top={top} />
         {warnings.length > 0 && (
           <div className="accent" style={{ fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'center', gap: 5 }}>
             <Icon name="warn" size={11} /> {warnings.length
