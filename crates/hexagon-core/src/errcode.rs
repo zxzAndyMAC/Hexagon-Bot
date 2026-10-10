@@ -190,6 +190,7 @@ impl_error_code!(
     Io,
     Autonomy,
     Model,
+    Generation,
 );
 impl_error_code!(
     crate::tools::ToolError,

@@ -15,6 +15,7 @@ import { providerStepReady } from '../providerGate'
 import { Icon } from './Icon'
 import { EntityChips } from './EntityPicker'
 import { LoadingState } from './LoadingState'
+import { GenerationRetry, StopGeneration, type GenerationFailure } from './WizardGeneration'
 import type { QualityCategory } from '../gen/QualityCategory'
 
 const DRAFT_KEY = 'hexagon.wizard'
@@ -474,6 +475,14 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   // 流程步 draft_flow 落定标记（成功/失败/空都算落定）。在途=进了流程步还没草稿也没落定——
   // 派生值而非 effect 里同步 setState：set-state-in-effect 会触发级联渲染，oxlint 红线
   const [flowDone, setFlowDone] = useState(false)
+  // MR-07: the failed generation of the current step and its retry; a retry
+  // reuses the retained input and never confirms a draft on its own.
+  const [genFail, setGenFail] = useState<GenerationFailure | null>(null)
+  const [flowAttempt, setFlowAttempt] = useState(0)
+  const noteGenFail = (step: string, e: unknown, retry: () => void) => {
+    const { code } = asCmdError(e)
+    setGenFail(code.startsWith('model_') ? { step, code, retry: () => { setGenFail(null); retry() } } : null)
+  }
   // Live acceptance 2026-10-01 / ADR 0069: the removed PackEditor is not an
   // approval surface. Only this mount's visible owner input may supply runners;
   // never hydrate it from a model pack or persisted draft. Changing the project
@@ -493,6 +502,9 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [createDone, setCreateDone] = useState<CreateStep[]>([])
   const [createFail, setCreateFail] = useState<{ step: CreateStep; reason: string } | null>(null)
 
+  // MR-07: a late draft for an older one-line brief never overwrites newer input.
+  const briefRef = useRef(draft.brief)
+  briefRef.current = draft.brief
   const set = useCallback(
     (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch })),
     [],
@@ -662,18 +674,23 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   }
 
   /// 起草 AGENTS.md 本体。qa=答问卡收齐的答案（可空）。草稿只进文本框。
-  async function runOptimize(qa: BriefQA[]) {
+  async function runOptimize(qa: BriefQA[]): Promise<boolean> {
     const sentence = draft.brief.trim()
-    if (!sentence || report?.instructions) return
+    if (!sentence || report?.instructions) return false
     setBriefPhase('drafting')
     setErr('')
+    setGenFail(null)
     try {
       const md = await api.optimizeAgentsMd(draft.name, sentence, qa)
+      if (briefRef.current.trim() !== sentence) return false
       set({ agentsMd: md, genAgents: true })
       setQuestions(null)
       setAnswers({})
+      return true
     } catch (e) {
       setErr(errText(e))
+      noteGenFail('brief', e, () => { void runOptimize(qa) })
+      return false
     } finally {
       setBriefPhase('idle')
     }
@@ -688,14 +705,18 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     setErr('')
     setBriefPhase('asking')
     let qs: BriefQuestion[] = []
+    // MR-07: questions are a bonus, not a gate, but their failure is shown
+    // instead of silently skipped.
+    let skipped = ''
     try {
       qs = await api.briefQuestions(draft.name, sentence)
-    } catch {
+    } catch (e) {
       qs = []
+      skipped = errText(e)
     }
     const answerable = qs.filter((q) => q.question.trim() && q.options.length > 0)
     if (answerable.length === 0) {
-      await runOptimize([])
+      if (await runOptimize([]) && skipped) setErr(t('wizard.questionsSkipped', { reason: skipped }))
       return
     }
     setQuestions(answerable)
@@ -730,6 +751,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     const targets = pickedRoles.filter((tp) => !human(tp.def.name)).map((tp) => tp.def)
     if (rolesBusy || targets.length === 0) return
     setErr('')
+    setGenFail(null)
     setRolesBusy(true)
     try {
       let instructionText = draft.instructionText
@@ -784,6 +806,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       }
     } catch (e) {
       setErr(errText(e))
+      noteGenFail('roles', e, () => { void draftRoleSeeds() })
     } finally {
       setRolesBusy(false)
     }
@@ -845,7 +868,11 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       if (!text) { done(); return }
       api.draftFlow(text, draft.roles).then((pack) => {
         if (!cancelled) set({ flowPack: pack, flowDraftKey: flowKey(draft) })
-      }).catch((e) => { if (!cancelled) setErr(errText(e)) })
+      }).catch((e) => {
+        if (cancelled) return
+        setErr(errText(e))
+        noteGenFail('flow', e, () => { setErr(''); setFlowDone(false); setFlowAttempt((n) => n + 1) })
+      })
         .finally(done)
     }
     // 一句话换了项目、生成稿还是上一个时，以一句话为准。否则模型按旧稿
@@ -858,7 +885,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       }).catch(() => { if (!cancelled) apply(draft.name) })
     } else apply(draft.name)
     return () => { cancelled = true }
-  }, [step, draft, report, set])
+    // flowAttempt: an explicit owner retry after a failed draft_flow.
+  }, [step, draft, report, set, flowAttempt])
 
   const idx = STEPS.indexOf(step)
   // 跳步即收起侧弹卡——未保存编辑按「取消」语义丢弃（新建角色卡同此；
@@ -1051,6 +1079,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         {err && step === 'roles' && (
           <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 10 }}>{err}</div>
         )}
+        <GenerationRetry failure={genFail} step="roles" />
       </>
     ),
     flow: (
@@ -1074,6 +1103,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         {err && step === 'flow' && (
           <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 10 }}>{err}</div>
         )}
+        <GenerationRetry failure={genFail} step="flow" />
       </>
     ),
     brief: (
@@ -1137,6 +1167,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
               </>
             )}
             {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
+            <GenerationRetry failure={genFail} step="brief" />
           </>
         ) : (
           <>
@@ -1381,6 +1412,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         {/* 滚动体留 4px 呼吸位：focus 环(2+2)与选中描边在滚口边缘不被裁 */}
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 4, margin: -4 }}>{body[step]}</div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <StopGeneration busy={aiBusy} />
           {idx > 0 && (
             <button className="btn" disabled={aiBusy} onClick={() => go(STEPS[idx - 1])}>
               {t('wizard.back')}

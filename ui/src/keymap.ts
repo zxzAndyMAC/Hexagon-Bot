@@ -70,6 +70,8 @@ export type ActionId =
   | 'followNewInstruction'
   | 'retryWithChatModel'
   | 'rejudgeAfterModelFailure'
+  | 'retryWizardGeneration'
+  | 'stopWizardGeneration'
   | 'requestException'
   | 'reviewPerformanceBaseline'
   | 'reviewQualityCommands'
@@ -178,6 +180,9 @@ const DEFAULTS: Record<ActionId, string> = {
   retryWithChatModel: 'alt+mod+m',
   // MR-06: explicit re-judge after an internal judge request failed.
   rejudgeAfterModelFailure: 'alt+mod+j',
+  // MR-07: wizard generation recovery on the current step.
+  retryWizardGeneration: 'alt+mod+y',
+  stopWizardGeneration: 'alt+mod+x',
   requestException: 'alt+mod+e',
   acceptException: 'alt+mod+shift+Enter',
   openPolicyReport: 'alt+mod+p',
@@ -275,6 +280,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'followNewInstruction', labelKey: 'modelRecovery.followNew' },
   { id: 'retryWithChatModel', labelKey: 'modelRecovery.useChatModelAction' },
   { id: 'rejudgeAfterModelFailure', labelKey: 'judgeFailure.rejudge' },
+  { id: 'retryWizardGeneration', labelKey: 'wizard.retryGeneration' },
+  { id: 'stopWizardGeneration', labelKey: 'wizard.stopGeneration' },
   { id: 'requestException', labelKey: 'exceptions.request' },
   { id: 'acceptException', labelKey: 'exceptions.accept' },
   { id: 'curateLegacyExperience', labelKey: 'experience.curate' },

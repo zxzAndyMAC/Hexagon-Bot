@@ -132,6 +132,44 @@ describe('向导创建进度（票 14）', () => {
     await act(async () => root.unmount())
   })
 
+  it('MR-07：流程草稿生成失败停在本步，保留输入，重试复用原输入且不自动确认', async () => {
+    const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
+    const stop = vi.spyOn(api, 'stopWizardGeneration').mockResolvedValue(undefined)
+    const pack = (roles: string[]) => ({
+      name: 'Recovered flow', version: 1, knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
+      stages: [{ name: 'Build', roles: roles.filter((r) => r !== '项目经理'), due: [], checks: [], quality_checks: {},
+        reviews: [], stamp_point: true, backfill_edges: [], consult_wake: [] }],
+    })
+    const draftFlow = vi.spyOn(api, 'draftFlow')
+      .mockRejectedValueOnce({ code: 'model_authentication', message: 'model generation failed: authentication after 1 attempt(s)' })
+      .mockImplementation(async (_brief, roles) => pack(roles))
+    const { el, root } = await render(<Wizard onDone={vi.fn()} />)
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    await clickButton(el, '下一步')
+    const fields = [...el.querySelectorAll('input')].filter((i) => i.type !== 'checkbox')
+    await act(async () => { setValue(fields[0], '/tmp/hex-gen'); setValue(fields[1], '示例') })
+    await act(async () => { await new Promise((r) => setTimeout(r, 250)) })
+    await clickButton(el, '下一步')
+    await clickButton(el, '下一步')
+    const box = el.querySelector('input[type=checkbox]') as HTMLInputElement
+    await act(async () => { box.click() })
+    await clickButton(el, '下一步')
+    await act(async () => { await new Promise((r) => setTimeout(r, 80)) })
+    expect(el.textContent).toContain('模型供应商拒绝了凭据')
+    expect(el.querySelector('[data-generation-failure="model_authentication"]')).not.toBeNull()
+    expect(el.textContent).toContain('打开模型设置')
+    expect(el.querySelector('[data-stop-generation]')).toBeNull()
+    const firstArgs = draftFlow.mock.calls[0]
+    await clickButton(el, '重新生成')
+    await act(async () => { await new Promise((r) => setTimeout(r, 80)) })
+    expect(draftFlow).toHaveBeenCalledTimes(2)
+    expect(draftFlow.mock.calls[1]).toEqual(firstArgs)
+    expect(el.querySelector('[data-generation-failure]')).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
   it('恢复的模型流程草稿不能把隐藏命令当作负责人授权提交', async () => {
     const create = vi.spyOn(api, 'createProject').mockResolvedValue(undefined)
     const draftFlow = vi.spyOn(api, 'draftFlow').mockImplementation(async (_brief, roles) => ({

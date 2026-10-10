@@ -938,6 +938,12 @@ fn model_request_recovery(
     })
 }
 
+/// MR-07: stop wizard generation in flight; late results are discarded.
+#[tauri::command]
+fn stop_wizard_generation() {
+    hexagon_core::setup::stop_generation();
+}
+
 #[tauri::command]
 async fn retry_model_request(
     app: tauri::AppHandle,
@@ -3072,6 +3078,7 @@ pub fn run() {
             open_stage,
             recover_run,
             retry_model_request,
+            stop_wizard_generation,
             rejudge_after_model_failure,
             retry_model_request_with_chat_model,
             resolve_model_request_choice,
