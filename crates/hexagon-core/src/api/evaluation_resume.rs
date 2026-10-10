@@ -720,7 +720,7 @@ impl Workbench {
             Ok(Some(CallOutcome::Denied(reason)))=>resume_error(id,format!("denied: {reason}")),
             Err(crate::tools::ToolError::Exec(reason)) if action.state=="failed"=>resume_error(id,format!("error: {reason}")),
             Err(crate::tools::ToolError::OutcomeUnknown(_)) if crate::actions::has_resolution(&self.db,&action.id)?=>
-                resume_error(id,"Outcome remains unknown; the owner resolved this action. Do not replay it or assume success.".into()),
+                self.resolved_unknown_result(id, &action.id)?,
             Err(error)=>{
                 crate::diag::note(crate::diag::CLASS_REJECT,true,Some(&self.project_id),Some(&action.agent_id),
                     action.stage_run_id.as_deref(),Some(&action.id),"activation_resume","action_result_unconfirmed",std::time::Instant::now());
@@ -728,6 +728,38 @@ impl Workbench {
             }
             _=>resume_error(id,format!("No execution result recorded; action state: {}. This is not evidence of success.",action.state)),
         })
+    }
+
+    /// Test3/13: continue with the real resolution, not a generic line. A
+    /// linked new attempt contributes its own settled result; the original
+    /// effect stays unknown and is never replayed or assumed successful.
+    fn resolved_unknown_result(&self, id: &str, action_id: &str) -> Result<ContentBlock, ApiError> {
+        const KEEP: &str =
+            "The original effect remains unknown: do not replay it or assume it succeeded.";
+        let Some((decision, reason, next)) = crate::actions::resolution(&self.db, action_id)?
+        else {
+            return Ok(resume_error(id, KEEP.into()));
+        };
+        if decision == "new_attempt" {
+            if let Some(next) = next {
+                let attempt = crate::actions::get(&self.db, &self.project_id, &next)?;
+                let outcome = match crate::actions::replay(&attempt) {
+                    Ok(Some(CallOutcome::Done(value))) => format!("succeeded: {value}"),
+                    Ok(Some(CallOutcome::Denied(r))) => format!("denied: {r}"),
+                    _ => format!("state {}", attempt.state),
+                };
+                return Ok(resume_error(
+                    id,
+                    format!(
+                    "The owner ran a new attempt ({next}, reason: {reason}); it {outcome}. {KEEP}"
+                ),
+                ));
+            }
+        }
+        Ok(resume_error(
+            id,
+            format!("The owner {decision} this action (reason: {reason}). {KEEP}"),
+        ))
     }
 
     // Test-only durable receipt projection for legacy action fixtures (including

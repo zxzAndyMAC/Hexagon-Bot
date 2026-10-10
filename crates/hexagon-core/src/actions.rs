@@ -289,7 +289,8 @@ pub(crate) fn finish(
         Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
     clear_ready_card(db, ctx, id)?;
     if uncertain {
-        expose_unknown(db, ctx, id, started)?;
+        let code = result.as_ref().err().map(crate::errcode::ErrorCode::code);
+        expose_unknown(db, ctx, id, &action.tool, code.as_deref(), started)?;
     }
     tx.commit()?;
     Ok(())
@@ -299,6 +300,8 @@ fn expose_unknown(
     db: &Db,
     ctx: &ToolContext,
     id: &str,
+    tool: &str,
+    error_code: Option<&str>,
     started: std::time::Instant,
 ) -> Result<(), ToolError> {
     let key = format!("unknown:{id}");
@@ -312,7 +315,10 @@ fn expose_unknown(
             &ctx.project_id,
             Some(&ctx.agent_id),
             crate::cards::CardKind::Recovery,
-            json!({"sub":"tool_outcome_unknown","action_id":id,"stage_run_id":ctx.stage_run_id}),
+            // Test3/13: the card names the real tool and the error class; the
+            // raw error text stays in the trace (technical evidence, folded).
+            json!({"sub":"tool_outcome_unknown","action_id":id,"stage_run_id":ctx.stage_run_id,
+                "tool":tool,"error_code":error_code}),
             Some(&key),
         )?;
     }
@@ -367,7 +373,7 @@ pub(crate) fn recover(db: &Db, project: &str) -> Result<(), ToolError> {
             // Every interrupted intent supersedes a prior ready card, including
             // a first execution resumed from an earlier authorization crash.
             clear_ready_card(db, &ctx, &id)?;
-            expose_unknown(db, &ctx, &id, started)?;
+            expose_unknown(db, &ctx, &id, &action.tool, Some("interrupted"), started)?;
         }
         tx.commit()?;
     }
@@ -452,7 +458,14 @@ fn migrate_legacy_cards(db: &Db, project: &str) -> Result<(), ToolError> {
                     "UPDATE tool_actions SET state='unknown' WHERE id=?1",
                     [&action.id],
                 )?;
-                expose_unknown(db, &ctx, &action.id, started)?;
+                expose_unknown(
+                    db,
+                    &ctx,
+                    &action.id,
+                    &action.tool,
+                    Some("legacy_unconfirmed"),
+                    started,
+                )?;
             }
         }
         tx.commit()?;
@@ -719,6 +732,22 @@ pub(crate) fn abandon(db: &Db, project: &str, id: &str, reason: &str) -> Result<
     Ok(())
 }
 
+/// Test3/13: the owner's resolution of an unknown action, if any:
+/// (decision, reason, next attempt id).
+pub(crate) fn resolution(
+    db: &Db,
+    id: &str,
+) -> Result<Option<(String, String, Option<String>)>, ToolError> {
+    Ok(db
+        .conn()
+        .query_row(
+            "SELECT decision,reason,next_action_id FROM action_resolutions WHERE action_id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?)
+}
+
 pub(crate) fn has_resolution(db: &Db, id: &str) -> Result<bool, ToolError> {
     Ok(db.conn().query_row(
         "SELECT EXISTS(SELECT 1 FROM action_resolutions WHERE action_id=?1)",
@@ -875,7 +904,15 @@ pub(crate) fn start_retry(
         db.conn().execute("UPDATE tool_actions SET state='unknown' WHERE id=?1 AND project_id=?2 AND state='authorized'",[id,&ctx.project_id])?;
         if !has_resolution(db, id)? {
             clear_ready_card(db, ctx, id)?;
-            expose_unknown(db, ctx, id, started)?;
+            let tool = get(db, &ctx.project_id, id)?.tool;
+            expose_unknown(
+                db,
+                ctx,
+                id,
+                &tool,
+                Some("retry_contract_unavailable"),
+                started,
+            )?;
         }
     }
     tx.commit()?;

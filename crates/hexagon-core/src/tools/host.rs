@@ -293,6 +293,9 @@ impl Tool for HostWrite {
         }
         Ok(())
     }
+    fn supports_reconcile(&self) -> bool {
+        true
+    }
     fn reconcile(
         &self,
         db: &Db,

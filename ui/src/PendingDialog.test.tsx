@@ -269,7 +269,9 @@ it('动作恢复卡区分未知与已授权未执行（可靠性 08）', async (
   expect(buttons.map((b) => b.textContent)).toEqual(['核对结果', '放弃动作', '发起新尝试'])
   expect(buttons[1].disabled).toBe(true)
   expect(buttons[2].disabled).toBe(true)
-  expect(buttons[0].title).toBe(formatBinding(bindingFor('reconcileAction')))
+  // Test3/13: the tooltip names the action (and any block reason) before
+  // its binding; the binding itself is still shown.
+  expect(buttons[0].title).toContain(formatBinding(bindingFor('reconcileAction')))
   await act(async () => unknown.root.unmount())
   const ready = await render(<PendingCard q={card({ kind: 'recovery', payload: { sub: 'tool_action_ready', action_id: 'action2' } })} top />)
   const button = ready.el.querySelector('button')!
@@ -284,7 +286,7 @@ it('动作恢复卡区分未知与已授权未执行（可靠性 08）', async (
 it('未知动作显示证据，要求理由和重复风险确认；核对快捷键受界面范围约束', async () => {
   await i18n.changeLanguage('zh-CN')
   const saved = useUiStore.getState()
-  const reconcile = vi.spyOn(api, 'reconcileToolAction').mockResolvedValue()
+  const reconcile = vi.spyOn(api, 'reconcileToolAction').mockResolvedValue({ action_id: 'action-risk', verdict: 'still_unknown', reason: 'evidence_inconclusive', check_count: 1, checked_at_ms: 0, continue_offered: false })
   const retry = vi.spyOn(api, 'retryToolAction').mockResolvedValue()
   useUiStore.setState({ invalidate: async () => {}, modalScope: 'settings' })
   const { el, root } = await render(<PendingCard top q={card({ kind: 'recovery', payload: {

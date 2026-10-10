@@ -250,6 +250,12 @@ pub trait Tool: Send + Sync {
     /// `get`/`update` 这类名字禁用；宁可 `entries`/`todo_list`。
     fn input_schema(&self) -> Value;
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError>;
+    /// Test3/13: whether `reconcile` is a real read-only check. The unknown
+    /// card says so up front instead of offering a check that can only
+    /// repeat "no contract" (a false "supported" wastes an owner action).
+    fn supports_reconcile(&self) -> bool {
+        false
+    }
     /// Must only read a receipt/postcondition; never execute the original action.
     fn reconcile(
         &self,
@@ -888,6 +894,7 @@ impl Registry {
             .is_some_and(|e| effect_uncertain(RiskClass::Exec, e));
         crate::actions::finish(db, ctx, &action.id, &result, uncertain)?;
         if uncertain {
+            self.note_unknown_capability(db, ctx, &action.id)?;
             return Err(ToolError::OutcomeUnknown(action.id));
         }
         result.map(CallOutcome::Done)
@@ -989,6 +996,9 @@ impl Registry {
         // In particular NotExecuted here must not erase the original unknown.
         let uncertain = uncertain || (!allow_recovery && result.is_err());
         crate::actions::finish(db, &execution_ctx, action_id, &result, uncertain)?;
+        if uncertain {
+            self.note_unknown_capability(db, &execution_ctx, action_id)?;
+        }
         if uncertain && !allow_recovery {
             return Err(ToolError::OutcomeUnknown(action_id.into()));
         }
@@ -1005,6 +1015,45 @@ impl Registry {
 
     /// Recovery keeps the original identity; neither this API nor its default
     /// contract executes the uncertain operation again (D05 / ticket 11).
+    /// Test3/13: host facts for the unknown card — the real tool, its
+    /// target and whether a read-only check exists. Never model supplied.
+    pub(crate) fn note_unknown_capability(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        action_id: &str,
+    ) -> Result<(), ToolError> {
+        let action = crate::actions::get(db, &ctx.project_id, action_id)?;
+        let Some(card) =
+            crate::cards::find_by_idem(db, &ctx.agent_id, &format!("unknown:{action_id}"))?
+        else {
+            return Ok(());
+        };
+        let tool = self.get(&action.tool);
+        let targets = tool
+            .as_ref()
+            .and_then(|tool| tool.write_targets(&action.input).ok())
+            .unwrap_or_default();
+        let target = if targets.is_empty() {
+            unknown_target_summary(&action.input)
+        } else {
+            targets.join(", ")
+        };
+        crate::cards::annotate(
+            db,
+            &card.id,
+            &[
+                ("tool", serde_json::json!(action.tool)),
+                ("target", serde_json::json!(target)),
+                (
+                    "reconcile_supported",
+                    serde_json::json!(tool.is_some_and(|tool| tool.supports_reconcile())),
+                ),
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn reconcile_action(
         &self,
         db: &Db,
@@ -1104,3 +1153,12 @@ pub use safety::*;
 mod tests;
 
 pub(crate) mod host;
+
+/// A short, display-only target for tools without a host write manifest.
+fn unknown_target_summary(input: &Value) -> String {
+    let raw = ["path", "url", "cmd", "command", "target"]
+        .iter()
+        .find_map(|key| input[*key].as_str())
+        .unwrap_or_default();
+    raw.chars().take(160).collect()
+}

@@ -248,6 +248,9 @@ impl Tool for FsWrite {
     fn precondition(&self, input: &Value, ctx: &ToolContext) -> Result<(), ToolError> {
         require_fresh_read(ctx, str_arg(input, "path")?)
     }
+    fn supports_reconcile(&self) -> bool {
+        true
+    }
     fn reconcile(
         &self,
         _db: &Db,
@@ -715,6 +718,9 @@ impl Tool for ArtifactWrite {
             return Some("artifact aliases cannot change the delivery target".into());
         }
         FsWrite.builtin_deny(&json!({"path":eff}), ctx)
+    }
+    fn supports_reconcile(&self) -> bool {
+        true
     }
     fn reconcile(
         &self,

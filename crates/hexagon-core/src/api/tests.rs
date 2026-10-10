@@ -185,6 +185,165 @@ fn patch_missing_target_is_preexecution_failure_not_unknown() {
     assert!(!dir.path().join("absent.js").exists());
 }
 
+/// Test3/13 fixture: a real fs_write whose write fails mid-effect inside a
+/// role turn, leaving one unknown action and its card.
+#[cfg(unix)]
+fn unknown_write_in_a_turn(dir: &std::path::Path) -> (Workbench, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("draft.txt");
+    std::fs::write(&path, "original draft").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let mut wb = Workbench::for_test(dir, &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![
+            tool_response(vec![("read", "fs_read", json!({"path":"draft.txt"}))]),
+            tool_response(vec![(
+                "write",
+                "fs_write",
+                json!({"path":"draft.txt","content":"revised"}),
+            )]),
+        ])),
+    );
+    assert!(wb.run_instance("a0", "revise this existing draft").is_err());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.payload["sub"] == "tool_outcome_unknown")
+        .expect("unknown card");
+    (wb, card.payload["action_id"].as_str().unwrap().to_string())
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_card_names_the_host_facts_and_every_check_reports() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, action) = unknown_write_in_a_turn(dir.path());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.payload["action_id"] == action.as_str())
+        .unwrap();
+    assert_eq!(card.payload["tool"], "fs_write");
+    assert_eq!(card.payload["target"], "draft.txt");
+    assert_eq!(card.payload["reconcile_supported"], true);
+    assert!(card.payload["error_code"].is_string());
+    // Original bytes remain: fs_write cannot prove "never ran", so the
+    // honest result is still unknown — and it is reported, not swallowed.
+    let first = wb.reconcile_tool_action_report(&action).unwrap();
+    assert_eq!(first.verdict, ReconcileVerdict::StillUnknown, "{first:?}");
+    assert_eq!(first.reason, "evidence_inconclusive");
+    assert_eq!(first.check_count, 1);
+    assert!(!first.continue_offered);
+    let again = wb.reconcile_tool_action_report(&action).unwrap();
+    assert_eq!(
+        again.check_count, 2,
+        "same evidence, still a new visible result"
+    );
+    // The intended bytes are present: the receipt now proves the effect.
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.path().join("draft.txt");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(&path, "revised").unwrap();
+    let proven = wb.reconcile_tool_action_report(&action).unwrap();
+    assert_eq!(
+        proven.verdict,
+        ReconcileVerdict::ProvenSucceeded,
+        "{proven:?}"
+    );
+    assert_eq!(proven.check_count, 3);
+    assert!(
+        proven.continue_offered,
+        "the original task can continue explicitly"
+    );
+    let settled = wb.reconcile_tool_action_report(&action).unwrap();
+    assert_eq!(settled.reason, "already_settled");
+    let resume = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.payload["source"] == "activation_resume")
+        .collect::<Vec<_>>();
+    assert_eq!(resume.len(), 1, "one continue entry, not one per check");
+    assert_eq!(resume[0].payload["reason"], "unknown_action_resolved");
+}
+
+#[cfg(unix)]
+#[test]
+fn abandon_offers_continuation_but_an_unfinished_new_attempt_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, action) = unknown_write_in_a_turn(dir.path());
+    // The owner resolves by abandoning (reason recorded with the decision).
+    wb.abandon_tool_action(&action, "checked the file by hand")
+        .unwrap();
+    let offers = |wb: &Workbench| {
+        crate::cards::queued(&wb.db, &wb.project_id)
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.payload["source"] == "activation_resume")
+            .count()
+    };
+    assert_eq!(offers(&wb), 1);
+    let history = wb.recorded_activation_history("a0", 0).unwrap();
+    let text = serde_json::to_string(&history).unwrap();
+    assert!(
+        text.contains("checked the file by hand") && text.contains("remains unknown"),
+        "{text}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, action) = unknown_write_in_a_turn(dir.path());
+    crate::actions::new_owner_attempt(&wb.db, &wb.ctx_for("a0", None), &action, "retry", true)
+        .unwrap();
+    assert!(
+        !wb.offer_continue_after_unknown(&action).unwrap(),
+        "pending attempt blocks continuation"
+    );
+    assert_eq!(offers(&wb), 0);
+}
+
+#[test]
+fn a_tool_without_a_check_says_so_instead_of_an_empty_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::open(
+        dir.path(),
+        "nocheck",
+        &[("a0".into(), "worker".into())],
+        None,
+    )
+    .unwrap();
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    wb.registry.register(CountingAction(count.clone()));
+    crate::actions::crash_at(crate::actions::CrashPoint::Effect);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool_call(
+            &wb,
+            "counting_action",
+            json!({})
+        )))
+        .is_err()
+    );
+    drop(wb);
+    let wb = Workbench::open(dir.path(), "nocheck", &[], None).unwrap();
+    wb.registry.register(CountingAction(count.clone()));
+    let action = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find_map(|c| c.payload["action_id"].as_str().map(str::to_string))
+        .unwrap();
+    for n in 1..=2 {
+        let report = wb.reconcile_tool_action_report(&action).unwrap();
+        assert_eq!(report.verdict, ReconcileVerdict::Unsupported);
+        assert_eq!(report.reason, "no_reconciliation_contract");
+        assert_eq!(report.check_count, n);
+    }
+    assert_eq!(
+        count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "no replay"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn actual_file_write_failure_is_not_a_repairable_input_proof() {
