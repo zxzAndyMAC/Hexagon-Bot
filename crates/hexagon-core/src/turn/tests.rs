@@ -2360,10 +2360,12 @@ fn outage_enters_wait_then_resumes() {
     assert!(!got.last().unwrap().waiting);
 }
 
-/// 预算耗尽 → run 挂起（interrupted + 恢复卡 reason=network_timeout），
-/// 回合以 Suspended 收口而非失败上抛。
+/// 预算耗尽（MR-03 / test3 07 行为变更）：顶层角色回合不再挂起 run。
+/// 旧语义 interrupted + network_timeout 恢复卡走无历史重触发，会重放成功
+/// 工具；现在回合以供应商错误收口，留下精确续接检查点，run 保持 active，
+/// 由门面写模型请求恢复事项（api 层断言）。
 #[test]
-fn wait_budget_exhaustion_suspends_run() {
+fn wait_budget_exhaustion_keeps_exact_continuation() {
     let (db, reg, mut ctx, _dir) = setup();
     db.conn()
         .execute(
@@ -2384,24 +2386,23 @@ fn wait_budget_exhaustion_suspends_run() {
         &[],
         false,
         None,
-    )
-    .unwrap();
-    assert!(matches!(out, TurnOutcome::Suspended));
+    );
+    assert!(matches!(out, Err(TurnError::Provider(ref e)) if e.retryable()));
     let state: String = db
         .conn()
         .query_row("SELECT state FROM stage_runs WHERE id='r1'", [], |r| {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(state, "interrupted");
-    // 恢复卡经属主 API 读回（D04/D09：pending_questions 查询面归 cards.rs）。
-    let queued = crate::cards::queued(&db, "p1").unwrap();
-    assert_eq!(queued.len(), 1);
-    let card = &queued[0];
-    assert_eq!(card.kind, "recovery");
-    let payload = &card.payload;
-    assert_eq!(payload["reason"], "network_timeout");
-    assert_eq!(payload["run_id"], "r1");
+    assert_eq!(state, "active", "no history-less stage recovery");
+    assert!(crate::cards::queued(&db, "p1").unwrap().is_empty());
+    let checkpoints = sys_events(&db, "model_request_checkpoint");
+    assert_eq!(
+        checkpoints.len(),
+        1,
+        "only the terminal attempt is a position"
+    );
+    assert_eq!(checkpoints[0]["checkpoint"]["round"], 0);
     let exits = sys_events(&db, "net_wait_exit");
     assert_eq!(exits.len(), 1);
     assert_eq!(exits[0]["reason"], "timeout");

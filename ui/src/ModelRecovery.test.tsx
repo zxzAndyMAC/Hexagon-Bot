@@ -14,7 +14,7 @@ vi.mock('react-virtuoso', () => ({
   Virtuoso: ({data,itemContent}: {data: unknown[];itemContent: (i:number,row:unknown)=>ReactNode}) => <div>{data.map((r,i)=><div key={i}>{itemContent(i,r)}</div>)}</div>,
 }))
 ;(globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true
-const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true}
+const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true,partial_text:null,unfinished:false,retry_deadline_ms:null}
 const payload={...view,sub:'model_request'}
 const card: PendingQuestion={id:'q1',kind:'recovery',agent_id:'pm',payload,state:'queued'}
 afterEach(()=>vi.restoreAllMocks())
@@ -57,5 +57,53 @@ it('offers direct settings entry for a non-retryable credential failure', async 
   await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={credential} />))
   expect(el.textContent).toContain('Open model settings')
   expect(el.textContent).not.toContain('Open usage')
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('labels a partial role reply as unfinished and keeps it outside the delivered answer', async () => {
+ const el=document.createElement('div'); const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={{...view,purpose:'turn',unfinished:true,partial_text:'half written'}} />))
+  expect(el.textContent).toContain('Unfinished partial reply')
+  expect(el.textContent).toContain('half written')
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('titles a role request failure and continues it without claiming a dispatch', async () => {
+ const el=document.createElement('div'); const root=createRoot(el)
+ const turnCard: PendingQuestion={...card,payload:{...payload,purpose:'turn',target_role:'Writer'}}
+ try {
+  await act(async()=>root.render(<PendingCard q={turnCard} top />))
+  expect(el.textContent).toContain('Role model request failed')
+  expect(el.textContent).toContain('tools that already succeeded are not run again')
+  expect(el.textContent).not.toContain('Dispatch failed')
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('shows retry progress and offers no second attempt while retrying', async () => {
+ const retry=vi.spyOn(api,'retryModelRequest').mockResolvedValue(view)
+ const retrying={...payload,state:'retrying',can_retry:false,retry_deadline_ms:Date.now()+60_000}
+ const running: PendingQuestion={...card,payload:{...retrying,view:retrying}}
+ useUiStore.setState({pending:[running],toasts:[],modalScope:'workbench'})
+ const el=document.createElement('div'); const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={retrying} top />))
+  expect(el.querySelector('[data-retry-progress]')?.textContent).toContain('Attempt 2')
+  expect(Array.from(el.querySelectorAll('button')).some(b=>b.textContent?.includes('Retry original request'))).toBe(false)
+  await approveQuestion(running)
+  expect(retry).not.toHaveBeenCalled()
+  expect(useUiStore.getState().toasts.at(-1)?.text).toContain('already retrying')
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('routes configuration to model settings but not a temporary outage', async () => {
+ const el=document.createElement('div'); const root=createRoot(el)
+ const withCode=(code:string)=>({...payload,history:[{...payload.history[0],code}]})
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={withCode('configuration')} />))
+  expect(el.textContent).toContain('Open model settings')
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={withCode('provider_unavailable')} />))
+  expect(el.textContent).not.toContain('Open model settings')
+  expect(el.textContent).toContain('Retry original request')
  } finally { await act(async()=>root.unmount()) }
 })

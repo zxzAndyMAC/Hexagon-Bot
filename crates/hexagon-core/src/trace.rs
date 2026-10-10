@@ -640,6 +640,7 @@ impl Db {
 /// （如失速监视的门面测试）写入 System 事件后也要对账这一张表。
 #[cfg(test)]
 pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
+    "model_request_checkpoint",
     "model_request_failed",
     "model_request_retrying",
     "model_request_recovered",

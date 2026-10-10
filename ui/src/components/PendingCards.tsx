@@ -366,7 +366,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const approveTip = formatBinding(bindingFor('approve'))
   const rejectTip = formatBinding(bindingFor('reject'))
 
-  if (q.kind === 'recovery' && p.sub === 'model_request') return <CardShell tone="ask" icon="warn" title={t('modelRecovery.title')}><ModelRecoveryStatus id={q.id} payload={p} top={top} /></CardShell>
+  if (q.kind === 'recovery' && p.sub === 'model_request') return <CardShell tone="ask" icon="warn" title={t(p.purpose === 'turn' ? 'modelRecovery.titleTurn' : 'modelRecovery.title')}><ModelRecoveryStatus id={q.id} payload={p} top={top} /></CardShell>
 
   if (q.kind === 'permission') {
     const tool = String(p.tool ?? '')

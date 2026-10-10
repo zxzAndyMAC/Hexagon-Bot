@@ -351,6 +351,15 @@ pub enum ProviderError {
     /// MR-02: elapsed wall-clock budget is not a transient transport failure.
     #[error("request deadline exhausted")]
     Deadline,
+    /// test3 05/06 review: a missing slot or a transport without deadline or
+    /// decision support is configuration, not a supplier refusal. The owner's
+    /// remedy is model settings; retrying the same setup cannot succeed.
+    #[error("provider unsupported: {0}")]
+    Unsupported(String),
+    /// test3 05/06 review: the supplier answered, but outside the saved
+    /// contract (e.g. a choice outside the eligible set). Not configuration.
+    #[error("invalid model response: {0}")]
+    InvalidResponse(String),
 }
 
 impl ProviderError {
@@ -455,7 +464,7 @@ pub trait ModelProvider: Send + Sync {
         if self.is_scripted() {
             self.complete(req)
         } else {
-            Err(ProviderError::Refused(
+            Err(ProviderError::Unsupported(
                 "provider has no deadline support".into(),
             ))
         }
@@ -467,10 +476,13 @@ pub trait ModelProvider: Send + Sync {
         options: &[(&str, &str)],
         _timeout: std::time::Duration,
     ) -> Result<ChatResponse, ProviderError> {
+        // MR-02: same cost model as complete_with_timeout — a refused
+        // deadline-less decision provider costs a setup repair; accepting it
+        // could keep a closed choice running after stop. Fail closed.
         if self.is_scripted() {
             self.decide(state, options)
         } else {
-            Err(ProviderError::Refused(
+            Err(ProviderError::Unsupported(
                 "provider has no deadline support".into(),
             ))
         }
@@ -516,7 +528,7 @@ pub trait ModelProvider: Send + Sync {
         _state: &str,
         _options: &[(&str, &str)],
     ) -> Result<ChatResponse, ProviderError> {
-        Err(ProviderError::Refused(
+        Err(ProviderError::Unsupported(
             "this provider has no decision API".into(),
         ))
     }
@@ -1500,8 +1512,10 @@ impl HttpProvider {
         match e {
             // D11: retain the actual status alongside the existing retry class.
             ureq::Error::StatusCode(c) => {
+                // test3 05/06 review: 402 is the supplier's payment/quota
+                // signal, not this workbench's local admission budget.
                 let cause = if c == 402 {
-                    ProviderError::BudgetUnavailable
+                    ProviderError::QuotaUnavailable
                 } else if (400..500).contains(&c) && c != 429 {
                     ProviderError::Refused(format!("HTTP {c}"))
                 } else {
@@ -1682,7 +1696,7 @@ impl ModelProvider for HttpProvider {
                 let v: Value = resp.body_mut().read_json().map_err(Self::map_err)?;
                 openai_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
-            ProviderKind::Jev => Err(ProviderError::Refused(
+            ProviderKind::Jev => Err(ProviderError::Unsupported(
                 "Jev only answers closed choices, not chat".into(),
             )),
         }
@@ -1782,7 +1796,7 @@ impl ModelProvider for HttpProvider {
                     .map(|r| restore_tool_names(req, r))
                     .map_err(|e| e.with_usage(&usage))
             }
-            ProviderKind::Jev => Err(ProviderError::Refused(
+            ProviderKind::Jev => Err(ProviderError::Unsupported(
                 "Jev only answers closed choices, not chat".into(),
             )),
         }
@@ -1794,7 +1808,7 @@ impl ModelProvider for HttpProvider {
 
     fn decide(&self, state: &str, options: &[(&str, &str)]) -> Result<ChatResponse, ProviderError> {
         if self.kind != ProviderKind::Jev {
-            return Err(ProviderError::Refused(
+            return Err(ProviderError::Unsupported(
                 "decision API is only for Jev".into(),
             ));
         }

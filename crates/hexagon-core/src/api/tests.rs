@@ -7,6 +7,60 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+#[test]
+fn role_model_recovery_preserves_successful_tool_results() {
+    // MR-03: a failed follow-up must carry the successful write receipt. A
+    // fresh turn from the original instruction silently lost that evidence.
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let first = Arc::new(ScriptedProvider::new(vec![tool_response(vec![(
+        "write-once",
+        "fs_write",
+        json!({"path":"result.txt","content":"written once"}),
+    )])]));
+    wb.register_provider("default", first);
+    assert!(wb
+        .run_instance("a0", "Write result.txt once, then report.")
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("result.txt")).unwrap(),
+        "written once"
+    );
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|card| card.payload["purpose"] == "turn")
+        .unwrap();
+    let next = Arc::new(ScriptedProvider::new(vec![text_response(
+        "The write succeeded.",
+    )]));
+    wb.register_provider("default", next.clone());
+    assert!(matches!(
+        wb.retry_model_request(&card.id).unwrap(),
+        UnnamedRoute::Dispatched { .. }
+    ));
+    let requests = next.recorded();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].messages.iter().flat_map(|message| &message.content).any(|block|
+        matches!(block, crate::provider::ContentBlock::ToolResult { tool_use_id, is_error:false, .. } if tool_use_id == "write-once")
+    ), "retry must retain the confirmed result, not restart the instruction");
+    let writes: i64 = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM tool_actions WHERE tool='fs_write' AND state='succeeded'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(writes, 1);
+    assert_eq!(
+        crate::cards::get(&wb.db, &card.id).unwrap().state,
+        crate::cards::CardState::Answered
+    );
+}
+
 // test3-2026-10-09 ticket01: action56 had the correct numbered sections but
 // was still rejected, exhausting the architect's correction opportunities.
 #[test]

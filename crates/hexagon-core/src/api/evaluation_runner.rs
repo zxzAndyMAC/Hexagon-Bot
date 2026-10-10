@@ -571,6 +571,7 @@ pub(super) fn drive_evaluation(
                     &resume.history,
                     Some(&resume),
                     false,
+                    None,
                 )?
             } else {
                 worker.dispatch_instance_with_followup(&aid, &instruction, &[], false)?

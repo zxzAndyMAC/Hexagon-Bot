@@ -1027,6 +1027,7 @@ impl Workbench {
                 &resume.history,
                 Some(&resume),
                 true,
+                None,
             )?;
             return Ok(AdjudicateOutcome::Resumed {
                 resumed: true,
@@ -1176,6 +1177,7 @@ impl Workbench {
             activation_root_turn_id: None,
             source_review_phase: false,
             saved_permission_admission: None,
+            trigger_turn_id: None,
         }
     }
 
@@ -1661,7 +1663,7 @@ impl Workbench {
         attachments: &[crate::trace::AttachRef],
         plan_first: bool,
     ) -> Result<TurnOutcome, ApiError> {
-        self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], None, true)
+        self.run_turn_agent_with_history(aid, input, attachments, plan_first, &[], None, true, None)
     }
 
     fn permission_resume_admission(&self, card: &crate::cards::Card) -> Result<(), ApiError> {
@@ -1719,18 +1721,23 @@ impl Workbench {
         history: &[crate::provider::Message],
         resume: Option<&evaluation_resume::ActivationResume>,
         followup: bool,
+        recovery_id: Option<&str>,
     ) -> Result<TurnOutcome, ApiError> {
         // reliability 06: resumed work retains its stored instance ID. Re-read
         // its current role only for templates; stale/deleted IDs cannot retarget.
         let current_role = self.instance_role(aid)?;
         let role = current_role.as_str();
+        // MR-02/MR-03: request nature is fixed before dispatch. Owner-started
+        // top-level turns and every manual recovery are interactive (1 min);
+        // follow-ups, stall retriggers and background continuations are
+        // background (5 min). Agent identity and emitted text never change it.
+        let top_level = self.turn_depth.load(Ordering::SeqCst) == 0;
         let _in_flight = InFlight::enter(&self.turn_depth);
         // 失速监视（票 01）：重触发回合记的是原指令，不是包了提示的入参。
-        let instruction = self
-            .watch()
-            .retrigger_original
-            .take()
-            .unwrap_or_else(|| input.to_string());
+        let retriggered = self.watch().retrigger_original.take();
+        let interactive =
+            recovery_id.is_some() || (top_level && resume.is_none() && retriggered.is_none());
+        let instruction = retriggered.unwrap_or_else(|| input.to_string());
         let mode_input = (turn::prompt::source_mode(&instruction)
             && !turn::prompt::source_mode(input))
         .then(|| format!("/source {input}"));
@@ -1756,6 +1763,7 @@ impl Workbench {
         // 子代理线程派遣要移动 provider——父回合解析出的就是子代理的模型
         // （票 04：同主对话模型，不开新槽）。Arc 克隆后注入 ctx。
         let mut ctx = ctx;
+        ctx.wait.budget = self.request_budget(interactive);
         ctx.resume_from_turn_id = resume.map(|resume| resume.turn_id);
         ctx.activation_root_turn_id = resume.map(|resume| resume.root_turn_id);
         ctx.source_review_phase = resume.is_some_and(|resume| resume.source_reviewed);
@@ -1842,6 +1850,7 @@ impl Workbench {
             plan_first,
             sink,
             history,
+            resume.and_then(|resume| resume.model_continuation.as_ref()),
         );
         // 票 08：回合扫尾——本轮若落了带回放证据的待盖章提案,
         // 按包旋钮跑判定层。判定失败不挡回合（judge 是建议不是闸）。
@@ -1868,7 +1877,7 @@ impl Workbench {
         }
         // 失败的回合也落地：没有可见回复就是无回复的起点。记在续派之前，
         // 续派出去的下一位会覆盖成它自己的动静。
-        self.stall_note_turn(aid, role, instruction, watermark, fp_before);
+        self.stall_note_turn(aid, role, instruction.clone(), watermark, fp_before);
         // Reliability 13/23 regression: admission refused by the budget is a
         // known stop, not an unexplained silent model. Re-triggering cannot
         // create funds and used to produce a false stall card. A new owner
@@ -1893,6 +1902,30 @@ impl Workbench {
             );
         }
 
+        if let Err(turn::TurnError::Provider(error)) = &run {
+            let packet = model_recovery::TurnRecoveryPacket {
+                root: self.repo_root.canonicalize()?,
+                agent_id: aid.to_string(),
+                role: role.to_string(),
+                run_id: ctx.stage_run_id.clone(),
+                origin_turn_id: self.db.conn().query_row(
+                    "SELECT COALESCE(MAX(id),0) FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started' AND COALESCE(json_extract(payload,'$.subagent'),0)=0",
+                    rusqlite::params![self.project_id, aid],
+                    |row| row.get(0),
+                )?,
+                input: instruction.clone(),
+                attachments: attachments.to_vec(),
+                plan_first,
+                partial_text: None,
+            };
+            self.note_turn_model_failure(
+                &packet,
+                recovery_id,
+                error,
+                &slot_name,
+                provider.billing_model(),
+            )?;
+        }
         let outcome = run?;
         // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
         // 续派失败不推翻已经说完的这一回合——否则脚本耗尽会让成功的回复变成错误。
@@ -1988,7 +2021,7 @@ impl Workbench {
             run_id.as_deref(),
         )?;
         // US15：动手前先发不阻塞方案消息，负责人有打断窗口
-        self.run_turn_agent_with_history(aid, input, attachments, true, &[], None, followup)
+        self.run_turn_agent_with_history(aid, input, attachments, true, &[], None, followup, None)
     }
 
     /// Dispatch a persisted owner message after the desktop workbench queue drains.
@@ -2041,6 +2074,7 @@ impl Workbench {
                 from_owner: true,
                 source_message: Some(message_id),
                 kickoff_lead: None,
+                stall_investigation: false,
             },
         )
     }
@@ -2216,6 +2250,7 @@ impl Workbench {
                                 from_owner,
                                 source_message,
                                 kickoff_lead: None,
+                                stall_investigation: false,
                             },
                         )?;
                         if !matches!(result, UnnamedRoute::Dispatched { .. }) {
@@ -2275,6 +2310,7 @@ impl Workbench {
                     from_owner,
                     source_message,
                     kickoff_lead: kickoff.then(|| self.kickoff_lead(&roster)).flatten(),
+                    stall_investigation: false,
                 },
             )?;
             // ADR 0074：正常派活时的「先不派活」仍是空转信号。调查里的先不派活
@@ -2462,10 +2498,14 @@ impl Workbench {
             origin_trace_id: trace_id,
             origin,
         };
+        if packet.origin.stall_investigation {
+            let provider =
+                provider.ok_or_else(|| ApiError::NoProvider(packet.slot_name.clone()))?;
+            return self.execute_stall_choice(&packet, provider);
+        }
         let Some(provider) = provider else {
-            let error = crate::provider::ProviderError::Refused("provider unavailable".into());
-            let qid = self.save_pm_failure(&packet, None, None, &error, None)?;
-            self.publish_pm_wait_state(&qid, &packet, "failed")?;
+            let error = crate::provider::ProviderError::Unsupported("provider unavailable".into());
+            self.save_pm_failure(&packet, None, None, &error, None)?;
             return Err(ApiError::NoProvider(packet.slot_name));
         };
         self.execute_saved_pm_choice(&packet, provider, None)
@@ -2947,6 +2987,7 @@ impl Workbench {
                 &resume.history,
                 Some(&resume),
                 true,
+                None,
             )?;
         }
         Ok(())
@@ -3607,7 +3648,10 @@ impl Workbench {
             &[],
             &roster,
             None,
-            model_recovery::ChoiceOrigin::default(),
+            model_recovery::ChoiceOrigin {
+                stall_investigation: true,
+                ..Default::default()
+            },
         );
         let retry = !self.watch().seg.retry_used;
         match res {
@@ -3870,6 +3914,8 @@ pub fn data_boundary(
     Ok(crate::data_boundary::read(root, store, &doc))
 }
 
+#[cfg(test)]
+mod model_recovery_tests;
 #[cfg(test)]
 mod stall_tests;
 #[cfg(test)]
