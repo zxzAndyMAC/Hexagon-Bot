@@ -888,7 +888,11 @@ fn declared_quality_runners_produce_real_evidence_and_retest_regressions() {
         "sleep \"$(cat duration)\"\n",
     )
     .unwrap();
-    std::fs::write(dir.path().join("duration"), "0.01").unwrap();
+    // test3 batch A (2026-10-10): a 10 ms baseline let process-spawn noise
+    // dominate. Under the full parallel suite the 1 ms "repair" measured 70 ms
+    // against a 54 ms baseline and was judged regressed. Keep the real sleep,
+    // but make the baseline large enough that spawn jitter cannot flip it.
+    std::fs::write(dir.path().join("duration"), "0.5").unwrap();
     let pack: PackDef = serde_json::from_value(json!({"name":"quality fixture","version":1,"stages":[{"name":"delivery","roles":["dev"],"due":[],"checks":["sh tests.sh","sh accessibility.sh","sh performance.sh"],"quality_checks":{"tests":"sh tests.sh","accessibility":"sh accessibility.sh","performance":"sh performance.sh"},"stamp_point":true}]})).unwrap();
     let wb = Workbench::for_test(dir.path(), &["dev"], Some(pack)).unwrap();
     wb.open_stage(0).unwrap();
@@ -920,7 +924,7 @@ fn declared_quality_runners_produce_real_evidence_and_retest_regressions() {
     let baseline_event = performance.event_id;
 
     std::fs::write(&page, "export const Page = () => <button>Slow</button>").unwrap();
-    std::fs::write(dir.path().join("duration"), "2.0").unwrap();
+    std::fs::write(dir.path().join("duration"), "3.0").unwrap();
     wb.run_checks().unwrap();
     let evidence = wb.stage_evidence().unwrap().unwrap();
     let performance = evidence
@@ -944,7 +948,7 @@ fn declared_quality_runners_produce_real_evidence_and_retest_regressions() {
         .contains(&"check:quality:performance".into()));
 
     std::fs::write(&page, "export const Page = () => <button>Fixed</button>").unwrap();
-    std::fs::write(dir.path().join("duration"), "0.001").unwrap();
+    std::fs::write(dir.path().join("duration"), "0.05").unwrap();
     wb.run_checks().unwrap();
     let evidence = wb.stage_evidence().unwrap().unwrap();
     let performance = evidence

@@ -967,6 +967,38 @@ async fn retry_model_request(
     .map_err(|error| CmdError::internal(error.to_string()))?
 }
 
+/// MR-04: the owner explicitly chooses continue-original or follow-new for a
+/// held instruction; same project/session identity checks as retry.
+#[tauri::command]
+async fn resolve_model_request_choice(
+    app: tauri::AppHandle,
+    state: ProjectState<'_>,
+    qid: String,
+    follow_new: bool,
+    expected_project_root: String,
+) -> Result<hexagon_core::api::ModelRequestRecovery, CmdError> {
+    let identity = state.identity.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed = app.state::<AppState>();
+        let state = ProjectState {
+            state: managed.inner(),
+            identity,
+        };
+        with_wb(&state, |wb| {
+            let view = hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)?;
+            if view.project_root != expected_project_root {
+                return Err(hexagon_core::api::ApiError::BadInput(
+                    "model recovery project changed".into(),
+                ));
+            }
+            wb.resolve_model_request_choice(&qid, follow_new)?;
+            hexagon_core::api::model_request_recovery(&wb.db, PROJECT_ID, &qid)
+        })
+    })
+    .await
+    .map_err(|error| CmdError::internal(error.to_string()))?
+}
+
 // Live acceptance #15: delivery hashing/check execution must not block the window.
 #[tauri::command(async)]
 fn advance(state: ProjectState<'_>) -> Result<hexagon_core::orchestra::StageAction, CmdError> {
@@ -2980,6 +3012,7 @@ pub fn run() {
             open_stage,
             recover_run,
             retry_model_request,
+            resolve_model_request_choice,
             reconcile_tool_action,
             abandon_tool_action,
             retry_tool_action,

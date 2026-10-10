@@ -65,6 +65,15 @@ pub struct ModelRequestRecovery {
     /// MR-02 progress: end of the automatic retry window while `retrying`.
     #[ts(type = "number | null")]
     pub retry_deadline_ms: Option<i64>,
+    /// The original role instruction, so a missing-material item still keeps
+    /// the owner's input (MR-04). PM items show their choice target instead.
+    pub instruction: Option<String>,
+    /// Why the last retry was refused while the item stays open.
+    pub last_refusal: Option<String>,
+    /// Why a retired item can no longer be sent.
+    pub superseded_reason: Option<String>,
+    /// The held owner instruction awaiting continue-original/follow-new.
+    pub held_instruction: Option<String>,
 }
 
 pub(super) fn retry_budget_allows(
@@ -229,10 +238,21 @@ pub fn model_request_recovery(
         // test3 05/06 review: a retrying card is already running; offering the
         // shortcut only produced an already_running error toast.
         can_retry: card.state == crate::cards::CardState::Queued
-            && card.payload["state"] != "retrying",
+            && !matches!(
+                card.payload["state"].as_str(),
+                Some("retrying" | "needs_choice")
+            ),
         unfinished: partial_text.is_some() && unfinished,
         partial_text,
         retry_deadline_ms: card.payload["retry_deadline_ms"].as_i64(),
+        instruction: card.payload["packet"]["input"].as_str().map(str::to_string),
+        last_refusal: card.payload["last_refusal"].as_str().map(str::to_string),
+        superseded_reason: card.payload["superseded_reason"]
+            .as_str()
+            .map(str::to_string),
+        held_instruction: card.payload["conflict"]["input"]
+            .as_str()
+            .map(str::to_string),
     })
 }
 
@@ -418,6 +438,9 @@ impl Workbench {
             code,
             started,
         );
+        if let Err(error) = self.note_refusal(card, code) {
+            log::warn!("model recovery {}: refusal not persisted: {error}", card.id);
+        }
         ApiError::BadInput(format!("cannot recover model request: {code}"))
     }
 
@@ -481,4 +504,5 @@ impl Workbench {
 
 mod pm;
 mod role_turn;
+mod supersession;
 pub(in crate::api) use role_turn::TurnRecoveryPacket;

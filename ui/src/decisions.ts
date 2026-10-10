@@ -60,6 +60,12 @@ export async function approveQuestion(q: PendingQuestion) {
     useUiStore.getState().pushToast(i18n.t('exceptions.hint'))
     return
   }
+  if (q.kind === 'recovery' && p.sub === 'model_request' && (p.view as {state?: unknown} | undefined)?.state === 'needs_choice') {
+    // MR-04: an ambiguous new instruction is the owner's explicit choice;
+    // the approve shortcut must not pick "continue original" for them.
+    useUiStore.getState().pushToast(i18n.t('modelRecovery.chooseHint'))
+    return
+  }
   if (q.kind === 'recovery' && p.sub === 'model_request' && (p.view as {state?: unknown} | undefined)?.state === 'retrying') {
     // test3 05/06 review: core rejects a second in-flight attempt; say so
     // instead of surfacing an already_running error toast.

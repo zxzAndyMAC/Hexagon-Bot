@@ -27,6 +27,11 @@ pub(in crate::api) struct TurnRecoveryPacket {
 pub(super) struct TurnRecoveryFacts {
     pub already_recovered: bool,
     pub same_task: bool,
+    /// The original stage run ended or another run is active: proven change.
+    pub stage_changed: bool,
+    /// A newer independent task, or a later step of this activation, exists
+    /// for the role: the saved position is no longer the task's frontier.
+    pub superseded: bool,
     pub paused: bool,
     pub agent_sleeping: bool,
     pub unknown_tool_pending: bool,
@@ -42,7 +47,9 @@ pub(super) struct TurnRecoveryFacts {
 pub(super) fn turn_recovery_refusal(facts: &TurnRecoveryFacts) -> Option<&'static str> {
     let checks = [
         (facts.already_recovered, "already_recovered"),
+        (facts.stage_changed, "stage_changed"),
         (!facts.same_task, "original_task_changed"),
+        (facts.superseded, "superseded_by_new_task"),
         (facts.paused, "paused"),
         (facts.agent_sleeping, "agent_sleeping"),
         // Unknown tool outcomes keep their own reconcile/idempotency contract;
@@ -181,6 +188,12 @@ impl Workbench {
         let facts = TurnRecoveryFacts {
             already_recovered: card.payload["state"] == "recovered",
             same_task: self.turn_recovery_same_task(card, &packet)?,
+            stage_changed: self.stage_changed(packet.run_id.as_deref())?,
+            superseded: checkpoint
+                .as_ref()
+                .map(|c| self.turn_superseded(&packet.agent_id, c))
+                .transpose()?
+                .unwrap_or(false),
             paused: orchestra::is_paused(&self.db, &self.project_id)?,
             agent_sleeping: self.agent_sleeping(&packet.agent_id),
             unknown_tool_pending: self.unknown_tool_pending(&packet.agent_id)?,
@@ -299,6 +312,47 @@ impl Workbench {
             && self.active_run()?.map(|run| run.id) == packet.run_id)
     }
 
+    /// MR-04: the original stage run is finished/rejected, or a different run
+    /// is active. A crash-interrupted run with nothing newer is not a change.
+    fn stage_changed(&self, run_id: Option<&str>) -> Result<bool, ApiError> {
+        let Some(run_id) = run_id else {
+            return Ok(false);
+        };
+        let state: Option<String> =
+            rusqlite::OptionalExtension::optional(self.db.conn().query_row(
+                "SELECT state FROM stage_runs WHERE id=?1 AND project_id=?2",
+                rusqlite::params![run_id, self.project_id],
+                |row| row.get(0),
+            ))?;
+        let Some(state) = state else {
+            return Ok(false);
+        };
+        let other_active = self.active_run()?.is_some_and(|run| run.id != run_id);
+        Ok(matches!(state.as_str(), "done" | "rejected") || other_active)
+    }
+
+    /// MR-04: a later independent dispatch (or a later step that continued
+    /// the same activation elsewhere, e.g. the crash-resume entry) means this
+    /// saved position must never be sent again.
+    fn turn_superseded(&self, agent_id: &str, checkpoint: &Value) -> Result<bool, ApiError> {
+        let (Some(turn), Some(root)) = (
+            checkpoint["turn_id"].as_i64(),
+            checkpoint["activation_root_turn_id"].as_i64(),
+        ) else {
+            return Ok(false);
+        };
+        if crate::actions::activation_superseded(&self.db, &self.project_id, agent_id, root)? {
+            return Ok(true);
+        }
+        Ok(self.db.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND agent_id=?2
+             AND kind='turn_started' AND id>?3
+             AND COALESCE(json_extract(payload,'$.subagent'),0)=0)",
+            rusqlite::params![self.project_id, agent_id, turn],
+            |row| row.get(0),
+        )?)
+    }
+
     fn agent_sleeping(&self, agent_id: &str) -> bool {
         // Unreadable status counts as sleeping: same fail-closed model as the
         // turn kernel's halt check (a false stop costs one manual retry).
@@ -347,7 +401,7 @@ mod tests {
         // MR-03: any single invalid fact refuses; admission requires all of
         // them. A refused retry never sends, so refusal is always safe.
         #[test]
-        fn any_invalid_fact_refuses(bits in proptest::collection::vec(any::<bool>(), 8)) {
+        fn any_invalid_fact_refuses(bits in proptest::collection::vec(any::<bool>(), 10)) {
             let facts = TurnRecoveryFacts {
                 already_recovered: bits[0],
                 same_task: bits[1],
@@ -357,10 +411,12 @@ mod tests {
                 checkpoint_present: bits[5],
                 native_material: bits[6],
                 chain_matches: bits[7],
+                superseded: bits[8],
+                stage_changed: bits[9],
             };
             prop_assert_eq!(turn_recovery_refusal(&facts).is_none(), facts == admitted());
             if facts.unknown_tool_pending && !facts.already_recovered && facts.same_task
-                && !facts.paused && !facts.agent_sleeping {
+                && !facts.stage_changed && !facts.superseded && !facts.paused && !facts.agent_sleeping {
                 prop_assert_eq!(turn_recovery_refusal(&facts), Some("tool_outcome_unknown"));
             }
         }

@@ -552,3 +552,203 @@ fn stall_investigation_failure_keeps_the_stall_contract() {
         .iter()
         .all(|card| card.payload["sub"] != "model_request"));
 }
+
+// ---- MR-04 (test3 08): reopen and supersession -------------------------
+
+fn open_worker(dir: &Path) -> Workbench {
+    let wb = Workbench::open(dir, "t", &[("a0".into(), "worker".into())], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb
+}
+
+#[test]
+fn reopen_restores_the_role_item_and_sends_nothing_until_chosen() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = open_worker(dir.path());
+    let qid = failed_turn(&mut wb).id;
+    drop(wb);
+    let mut reopened = open_worker(dir.path());
+    let probe = Arc::new(Faulty::new(vec![Step::Reply(text_response("done"))]));
+    reopened.register_provider("default", probe.clone());
+    assert_eq!(probe.sent().len(), 0, "opening a project sends nothing");
+    let item = view(&reopened, &qid);
+    assert_eq!(item.state, "failed");
+    assert_eq!(item.instruction.as_deref(), Some("Do the task."));
+    reopened.retry_model_request(&qid).unwrap();
+    assert_eq!(probe.sent().len(), 1);
+    assert_eq!(view(&reopened, &qid).state, "recovered");
+}
+
+#[test]
+fn an_attempt_in_flight_at_exit_reopens_as_unknown_and_retryable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = open_worker(dir.path());
+    let qid = failed_turn(&mut wb).id;
+    // Process ended mid-retry: the durable state still says `retrying`.
+    crate::cards::annotate(&wb.db, &qid, &[("state", json!("retrying"))]).unwrap();
+    drop(wb);
+    let reopened = open_worker(dir.path());
+    let item = view(&reopened, &qid);
+    assert_eq!(
+        item.state, "unknown",
+        "not retrying, not failed-before-send"
+    );
+    assert!(item.can_retry);
+    assert_eq!(item.history.len(), 1, "no attempt is invented or erased");
+}
+
+fn owner_says(wb: &Workbench, body: &str) -> Result<UnnamedRoute, ApiError> {
+    send(wb, body)
+}
+
+#[test]
+fn a_new_owner_instruction_to_the_failed_role_waits_for_an_explicit_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = worker_wb(dir.path());
+    let qid = failed_turn(&mut wb).id;
+    // Following the new instruction is a planned dispatch: plan, then reply.
+    let probe = Arc::new(Faulty::new(vec![
+        Step::Reply(text_response("plan")),
+        Step::Reply(text_response("new work done")),
+    ]));
+    wb.register_provider("default", probe.clone());
+    owner_says(&wb, "@worker write the changelog instead").unwrap();
+    assert_eq!(probe.sent().len(), 0, "neither task runs before the choice");
+    let item = view(&wb, &qid);
+    assert_eq!(item.state, "needs_choice");
+    assert_eq!(
+        item.held_instruction.as_deref(),
+        Some("@worker write the changelog instead")
+    );
+    assert!(!item.can_retry, "plain retry cannot pick for the owner");
+
+    wb.resolve_model_request_choice(&qid, true).unwrap();
+    let sent = request_text(&probe.sent()[0]);
+    assert!(
+        sent.contains("write the changelog instead"),
+        "the new instruction runs"
+    );
+    let retired = view(&wb, &qid);
+    assert_eq!(retired.state, "superseded");
+    assert_eq!(
+        retired.superseded_reason.as_deref(),
+        Some("owner_chose_new")
+    );
+    assert!(crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .iter()
+        .all(|c| c.id != qid));
+    assert!(
+        wb.retry_model_request(&qid).is_err(),
+        "a retired entry never sends again"
+    );
+}
+
+#[test]
+fn choosing_the_original_continues_it_and_leaves_the_new_instruction_unexecuted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = worker_wb(dir.path());
+    let qid = failed_turn(&mut wb).id;
+    let probe = Arc::new(Faulty::new(vec![Step::Reply(text_response(
+        "original done",
+    ))]));
+    wb.register_provider("default", probe.clone());
+    owner_says(&wb, "@worker also check the docs").unwrap();
+    wb.resolve_model_request_choice(&qid, false).unwrap();
+    assert_eq!(probe.sent().len(), 1);
+    assert!(!request_text(&probe.sent()[0]).contains("also check the docs"));
+    assert_eq!(view(&wb, &qid).state, "recovered");
+}
+
+fn two_stage_pm_wb(dir: &Path) -> Workbench {
+    let pack: PackDef = serde_json::from_value(json!({"name":"t","version":1,"stages":[
+        {"name":"spec","roles":["产品策划"],"due":[]},
+        {"name":"build","roles":["产品策划"],"due":[]}]}))
+    .unwrap();
+    let wb = Workbench::for_test(dir, &["项目经理", "产品策划"], Some(pack)).unwrap();
+    wb.open_stage(0).unwrap();
+    let writer = wb.agent_by_role("产品策划").unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", &writer, false).unwrap();
+    wb
+}
+
+fn failed_writer(wb: &mut Workbench) -> String {
+    wb.register_provider(
+        "default",
+        Arc::new(Faulty::new(vec![Step::Fail(http(401))])),
+    );
+    let writer = wb.agent_by_role("产品策划").unwrap();
+    assert!(wb.run_instance(&writer, "Draft the spec.").is_err());
+    turn_card(wb).id
+}
+
+#[test]
+fn an_ordinary_question_keeps_the_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = two_stage_pm_wb(dir.path());
+    let qid = failed_writer(&mut wb);
+    let decision = Arc::new(Faulty::deciding(vec![Step::Reply(text_response("HOLD"))]));
+    wb.register_provider("decision", decision);
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    let probe = Arc::new(Faulty::new(vec![]));
+    wb.register_provider("default", probe.clone());
+    owner_says(&wb, "How is it going?").unwrap();
+    assert_eq!(probe.sent().len(), 0);
+    assert_eq!(
+        view(&wb, &qid).state,
+        "failed",
+        "not cancelled by a question"
+    );
+}
+
+#[test]
+fn a_stage_change_retires_the_entry_with_its_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = two_stage_pm_wb(dir.path());
+    let qid = failed_writer(&mut wb);
+    wb.open_stage(1).unwrap();
+    let (error, sends) = refused(&mut wb, &qid);
+    assert!(error.contains("stage_changed"), "{error}");
+    assert_eq!(sends, 0);
+    let item = view(&wb, &qid);
+    assert_eq!(item.state, "superseded");
+    assert_eq!(item.superseded_reason.as_deref(), Some("stage_changed"));
+}
+
+#[test]
+fn a_newer_task_for_the_role_supersedes_the_saved_position() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = worker_wb(dir.path());
+    let qid = failed_turn(&mut wb).id;
+    wb.register_provider(
+        "default",
+        Arc::new(Faulty::new(vec![
+            Step::Reply(text_response("plan")),
+            Step::Reply(text_response("other task done")),
+        ])),
+    );
+    // A background dispatch (not an owner instruction) runs immediately.
+    wb.dispatch("worker", "Run the nightly check.", &[])
+        .unwrap();
+    let (error, sends) = refused(&mut wb, &qid);
+    assert!(error.contains("superseded_by_new_task"), "{error}");
+    assert_eq!(sends, 0);
+    assert_eq!(view(&wb, &qid).state, "superseded");
+}
+
+#[test]
+fn a_transient_refusal_keeps_the_entry_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = worker_wb(dir.path());
+    let qid = failed_turn(&mut wb).id;
+    orchestra::pause(&wb.db, &wb.project_id).unwrap();
+    let (error, _) = refused(&mut wb, &qid);
+    assert!(error.contains("paused"));
+    let item = view(&wb, &qid);
+    assert_eq!(item.state, "failed");
+    assert_eq!(item.last_refusal.as_deref(), Some("paused"));
+    assert!(crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .iter()
+        .any(|c| c.id == qid));
+}

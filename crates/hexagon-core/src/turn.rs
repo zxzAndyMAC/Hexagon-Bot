@@ -692,6 +692,9 @@ pub enum TurnOutcome {
     /// interrupted + 恢复卡入队；回合以「没正常完」收口但与
     /// Interrupted（人主动叫停）可区分。
     Suspended,
+    /// MR-04: an owner instruction met this role's open failed request; it
+    /// did not run and waits for the owner's choice on that item (qid).
+    HeldForChoice(String),
 }
 
 /// 跑一个回合。provider 是接缝（测试给 ScriptedProvider）。
@@ -1854,6 +1857,8 @@ fn run_turn_impl(
             Ok(TurnOutcome::AwaitingPermission(_)) => EventKind::TurnFinished,
             Ok(TurnOutcome::SkippedSleeping) => EventKind::TurnFinished,
             Ok(TurnOutcome::SkippedCap) => EventKind::TurnFinished,
+            // Facade-only outcome (never produced inside a turn); zero calls.
+            Ok(TurnOutcome::HeldForChoice(_)) => EventKind::TurnFinished,
             // 票 13：截断终态=没说完——归 TurnFailed，轨迹里与正常完成可区分。
             // 票 04：Interrupted 也归 TurnFailed（收束语义=回合没正常完），
             // 但 outcome 载荷带 Interrupted 字样可区分主动叫停与真失败。

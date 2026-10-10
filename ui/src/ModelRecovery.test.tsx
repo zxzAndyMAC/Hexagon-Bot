@@ -9,12 +9,13 @@ import { ModelRecoveryStatus } from './components/ModelRecoveryStatus'
 import { Timeline } from './components/Timeline'
 import { approveQuestion } from './decisions'
 import { useUiStore } from './store'
+import { isMac } from './keymap'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({data,itemContent}: {data: unknown[];itemContent: (i:number,row:unknown)=>ReactNode}) => <div>{data.map((r,i)=><div key={i}>{itemContent(i,r)}</div>)}</div>,
 }))
 ;(globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true
-const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true,partial_text:null,unfinished:false,retry_deadline_ms:null}
+const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true,partial_text:null,unfinished:false,retry_deadline_ms:null,instruction:null,last_refusal:null,superseded_reason:null,held_instruction:null}
 const payload={...view,sub:'model_request'}
 const card: PendingQuestion={id:'q1',kind:'recovery',agent_id:'pm',payload,state:'queued'}
 afterEach(()=>vi.restoreAllMocks())
@@ -105,5 +106,50 @@ it('routes configuration to model settings but not a temporary outage', async ()
   await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={withCode('provider_unavailable')} />))
   expect(el.textContent).not.toContain('Open model settings')
   expect(el.textContent).toContain('Retry original request')
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('asks the owner to choose and never lets the shortcut pick for them', async () => {
+ const resolve=vi.spyOn(api,'resolveModelRequestChoice').mockResolvedValue(view)
+ const retry=vi.spyOn(api,'retryModelRequest').mockResolvedValue(view)
+ const choosing={...payload,purpose:'turn',state:'needs_choice',can_retry:false,held_instruction:'write the changelog instead'}
+ const held: PendingQuestion={...card,payload:{...choosing,view:choosing}}
+ useUiStore.setState({pending:[held],toasts:[],modalScope:'workbench'})
+ const el=document.createElement('div'); const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={choosing} top />))
+  expect(el.textContent).toContain('write the changelog instead')
+  await approveQuestion(held)
+  expect(retry).not.toHaveBeenCalled(); expect(resolve).not.toHaveBeenCalled()
+  expect(useUiStore.getState().toasts.at(-1)?.text).toContain('Choose to continue the original task')
+  const follow=Array.from(el.querySelectorAll('button')).find(b=>b.textContent==='Follow new instruction')!
+  expect(follow.title).toContain('·')
+  await act(async()=>follow.click())
+  expect(resolve).toHaveBeenCalledWith('q1',true,'/project')
+  await act(async()=>{ window.dispatchEvent(new KeyboardEvent('keydown',{key:'c',code:'KeyC',altKey:true,metaKey:isMac,ctrlKey:!isMac})) })
+  expect(resolve).toHaveBeenLastCalledWith('q1',false,'/project')
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('shows why a retired entry can no longer send and offers no action', async () => {
+ const el=document.createElement('div'); const root=createRoot(el)
+ const retired={...payload,purpose:'turn',state:'superseded',can_retry:false,superseded_reason:'stage_changed'}
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={retired} top />))
+  expect(el.textContent).toContain('No longer valid')
+  expect(el.textContent).toContain('a new stage started')
+  expect(el.querySelectorAll('button')).toHaveLength(0)
+ } finally { await act(async()=>root.unmount()) }
+})
+
+it('marks an attempt interrupted by exit as unknown and keeps the original input', async () => {
+ const el=document.createElement('div'); const root=createRoot(el)
+ const unknown={...payload,purpose:'turn',state:'unknown',instruction:'Draft the spec.',last_refusal:'checkpoint_missing'}
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={unknown} />))
+  expect(el.textContent).toContain('Result unknown')
+  expect(el.textContent).toContain('Original instruction: Draft the spec.')
+  expect(el.querySelector('[data-refusal]')?.textContent).toContain('no exact material')
+  expect(Array.from(el.querySelectorAll('button')).some(b=>b.textContent?.includes('Retry original request'))).toBe(true)
  } finally { await act(async()=>root.unmount()) }
 })

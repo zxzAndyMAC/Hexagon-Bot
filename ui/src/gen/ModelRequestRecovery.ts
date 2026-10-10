@@ -5,4 +5,21 @@ export type ModelRequestRecovery = { recovery_id: string, project_root: string, 
 /**
  * MR-02 progress: end of the automatic retry window while `retrying`.
  */
-retry_deadline_ms: number | null, };
+retry_deadline_ms: number | null, 
+/**
+ * The original role instruction, so a missing-material item still keeps
+ * the owner's input (MR-04). PM items show their choice target instead.
+ */
+instruction: string | null, 
+/**
+ * Why the last retry was refused while the item stays open.
+ */
+last_refusal: string | null, 
+/**
+ * Why a retired item can no longer be sent.
+ */
+superseded_reason: string | null, 
+/**
+ * The held owner instruction awaiting continue-original/follow-new.
+ */
+held_instruction: string | null, };

@@ -319,6 +319,9 @@ pub struct Workbench {
     /// 重开时上一次的回合早已结束，拿旧锚点一开就判失速是误报。
     stall: Mutex<crate::stallwatch::Watch>,
     turn_depth: AtomicUsize,
+    /// MR-04: the owner message being routed right now, so a dispatch that
+    /// meets an open failed role request can ask the owner instead of running.
+    owner_message: Mutex<Option<i64>>,
 }
 
 impl Drop for Workbench {
@@ -415,7 +418,7 @@ impl Workbench {
         } else {
             Some(crate::mcp::McpHost::begin(specs))
         };
-        Ok(Self {
+        let wb = Self {
             db,
             registry,
             providers: HashMap::new(),
@@ -443,7 +446,12 @@ impl Workbench {
             stall_clock: Arc::new(crate::stallwatch::SystemClock),
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
-        })
+            owner_message: Mutex::new(None),
+        };
+        // MR-04: reopening restores entries but never sends; an attempt that
+        // was in flight at exit becomes `unknown`, never `retrying` or failed.
+        wb.reconcile_model_requests_after_reopen()?;
+        Ok(wb)
     }
 
     /// 打开 + 接线（壳层 open_project/open_recent 共用序列，票 05）：
@@ -589,6 +597,7 @@ impl Workbench {
             stall_clock: Arc::new(crate::stallwatch::SystemClock),
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
+            owner_message: Mutex::new(None),
         })
     }
 
@@ -1971,6 +1980,9 @@ impl Workbench {
         followup: bool,
     ) -> Result<TurnOutcome, ApiError> {
         let role = self.instance_role(aid)?;
+        if let Some(qid) = self.hold_for_recovery_choice(aid, input, attachments)? {
+            return Ok(TurnOutcome::HeldForChoice(qid));
+        }
         // reliability 07: unavailable model used to wake a sleeping instance and
         // record dispatch before failing. Prove dispatchability before mutation.
         let slot: Option<String> = self.db.conn().query_row(
@@ -2026,6 +2038,14 @@ impl Workbench {
 
     /// Dispatch a persisted owner message after the desktop workbench queue drains.
     pub fn route_queued_owner(&self, message_id: i64) -> Result<UnnamedRoute, ApiError> {
+        // MR-04: mark this owner instruction for the duration of routing.
+        *self.owner_message.lock().unwrap_or_else(|e| e.into_inner()) = Some(message_id);
+        let routed = self.route_queued_owner_inner(message_id);
+        *self.owner_message.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        routed
+    }
+
+    fn route_queued_owner_inner(&self, message_id: i64) -> Result<UnnamedRoute, ApiError> {
         let (body, attachments, elements): (String, String, String) = self.db.conn().query_row(
             "SELECT body,attachments,element_refs FROM messages WHERE id=?1 AND project_id=?2 AND author='owner'",
             rusqlite::params![message_id, self.project_id],
