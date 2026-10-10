@@ -252,6 +252,9 @@ export default {
     },
   },
   modelRecovery: {
+    titleIntake: "開場分析失敗",
+    hintIntake: "專案已經開啟，開場分析還沒完成。重試只重新分析，不會重複寫入已完成的內容。",
+    recoveredHintIntake: "開場分析已完成。",
     title: "派活失敗",
     retryingTitle: "正在重新連線派活",
     waitingHint: "正在等待下一次有界重試。",
@@ -608,6 +611,7 @@ export default {
     prompts_translating: '翻譯中…',
     prompts_noModel: '沒有可用的翻譯模型。綁定翻譯槽或預設槽後即可顯示參考譯文。',
     prompts_goModels: '開啟模型服務',
+    prompts_failedCached: "重新翻譯失敗（{{error}}）。下方顯示的是先前快取的譯文。",
     prompts_failed: '翻譯失敗：{{error}}',
     prompts_err_provider: '翻譯模型呼叫失敗',
     prompts_err_not_json: '翻譯結果不是有效的 JSON',

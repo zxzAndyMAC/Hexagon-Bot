@@ -165,15 +165,18 @@ pub fn complete_project_request(
     // control-connection mutex during network IO. Use its own project ledger.
     let db = Db::open(ctx.repo_root.join(".hexagon/state.db"))
         .map_err(|e| crate::provider::ProviderError::Refused(format!("request ledger: {e}")))?;
-    request(
-        &db,
-        ctx,
-        &req.model_slot,
-        purpose,
-        provider,
-        Some(req),
-        || provider.complete(req),
-    )
+    // MR-08: bounded transient retry; each send keeps its own ledger row.
+    crate::model_failure::bounded_call(&db, ctx, || {
+        request(
+            &db,
+            ctx,
+            &req.model_slot,
+            purpose,
+            provider,
+            Some(req),
+            || provider.complete(req),
+        )
+    })
 }
 
 /// Owner revocation governs every outgoing request carrying computer pixels,

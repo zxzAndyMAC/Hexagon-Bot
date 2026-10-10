@@ -252,6 +252,9 @@ export default {
     },
   },
   modelRecovery: {
+    titleIntake: "L’analyse d’ouverture a échoué",
+    hintIntake: "Le projet est ouvert ; son analyse d’ouverture n’est pas terminée. Réessayer relance seulement l’analyse et ne répète jamais le contenu déjà écrit.",
+    recoveredHintIntake: "L’analyse d’ouverture est terminée.",
     title: "Échec de l’attribution",
     retryingTitle: "Reconnexion",
     waitingHint: "En attente de la prochaine nouvelle tentative bornée.",
@@ -608,6 +611,7 @@ export default {
     prompts_translating: 'Traduction…',
     prompts_noModel: 'Aucun modèle disponible pour traduire. Liez l’emplacement de traduction ou l’emplacement par défaut pour afficher les traductions de référence.',
     prompts_goModels: 'Ouvrir les services de modèles',
+    prompts_failedCached: "La nouvelle traduction a échoué ({{error}}). La traduction en cache précédente est affichée ci-dessous.",
     prompts_failed: 'Échec de la traduction : {{error}}',
     prompts_err_provider: 'l’appel au modèle de traduction a échoué',
     prompts_err_not_json: 'la réponse de traduction n’était pas un JSON valide',

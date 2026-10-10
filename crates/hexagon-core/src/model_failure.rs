@@ -7,6 +7,41 @@ use crate::provider::ProviderError;
 use crate::tools::ToolContext;
 use serde_json::{json, Value};
 
+/// A typed host/auxiliary model failure. IPC code is `model_<code>` so the
+/// originating screen shows the matching remedy without provider prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationFailure {
+    pub code: String,
+    pub attempts: u32,
+}
+
+impl std::fmt::Display for GenerationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "model generation failed: {} after {} attempt(s)",
+            self.code, self.attempts
+        )
+    }
+}
+
+impl std::error::Error for GenerationFailure {}
+
+impl crate::errcode::ErrorCode for GenerationFailure {
+    fn code(&self) -> String {
+        format!("model_{}", self.code)
+    }
+}
+
+impl GenerationFailure {
+    pub fn from_error(error: &ProviderError, attempts: u32) -> Self {
+        Self {
+            code: failure_code(error).into(),
+            attempts,
+        }
+    }
+}
+
 /// MR-02 failure vocabulary shared by every recovery purpose (core, UI entry
 /// buttons and i18n read the same codes). Typed causes win over HTTP status:
 /// the same status can mean quota or rate limiting, so a confirmed quota code

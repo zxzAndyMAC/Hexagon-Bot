@@ -252,6 +252,9 @@ export default {
     },
   },
   modelRecovery: {
+    titleIntake: "Opening analysis failed",
+    hintIntake: "The project is open; its opening analysis has not finished. Retry runs only the analysis and never repeats content already written.",
+    recoveredHintIntake: "The opening analysis finished.",
     title: "Dispatch failed",
     retryingTitle: "Dispatch reconnecting",
     waitingHint: "The request is waiting for the next bounded retry.",
@@ -608,6 +611,7 @@ export default {
     prompts_translating: 'Translating…',
     prompts_noModel: 'No model is available for translation. Bind the translation slot or the default slot to see reference translations.',
     prompts_goModels: 'Open model services',
+    prompts_failedCached: "Re-translation failed ({{error}}). Showing the earlier cached translation below.",
     prompts_failed: 'Translation failed: {{error}}',
     prompts_err_provider: 'the translation model call failed',
     prompts_err_not_json: 'the translation reply was not valid JSON',

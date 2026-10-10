@@ -252,6 +252,9 @@ export default {
     },
   },
   modelRecovery: {
+    titleIntake: "オープニング分析に失敗しました",
+    hintIntake: "プロジェクトは開いていますが、オープニング分析はまだ終わっていません。再試行は分析だけを行い、書き込み済みの内容は繰り返しません。",
+    recoveredHintIntake: "オープニング分析が完了しました。",
     title: "タスク割り当てに失敗",
     retryingTitle: "再接続中",
     waitingHint: "次の制限付き再試行を待っています。",
@@ -608,6 +611,7 @@ export default {
     prompts_translating: '翻訳中…',
     prompts_noModel: '翻訳に使えるモデルがありません。翻訳スロットか既定スロットを設定すると参考訳を表示できます。',
     prompts_goModels: 'モデルサービスを開く',
+    prompts_failedCached: "再翻訳に失敗しました（{{error}}）。以下は以前のキャッシュされた訳文です。",
     prompts_failed: '翻訳に失敗しました：{{error}}',
     prompts_err_provider: '翻訳モデルの呼び出しに失敗しました',
     prompts_err_not_json: '翻訳結果の形式が正しくありません',

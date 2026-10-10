@@ -12,7 +12,10 @@ const SETTINGS_CODES = new Set(['missing_credential', 'credential_store', 'authe
 const USAGE_CODES = new Set(['budget_unavailable', 'quota'])
 
 /** Title/hint keys per item state; `turn` items name the role request. */
-function copyKeys(state: string, turn: boolean): [string, string] {
+function copyKeys(state: string, turn: boolean, intake: boolean): [string, string] {
+  if (intake && state !== 'retrying') {
+    return state === 'recovered' ? ['modelRecovery.recovered', 'modelRecovery.recoveredHintIntake'] : ['modelRecovery.titleIntake', 'modelRecovery.hintIntake']
+  }
   switch (state) {
     case 'recovered': return ['modelRecovery.recovered', turn ? 'modelRecovery.recoveredHintTurn' : 'modelRecovery.recoveredHint']
     case 'retrying': return [turn ? 'modelRecovery.retryingTitleTurn' : 'modelRecovery.retryingTitle', 'modelRecovery.waitingHint']
@@ -76,7 +79,8 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   })
   const turn = recovery.purpose === 'turn'
   const target = recovery.target_role ?? t('modelRecovery.nextRole')
-  const [title, hint] = copyKeys(state, turn)
+  const intake = recovery.purpose === 'opening_intake'
+  const [title, hint] = copyKeys(state, turn, intake)
   const reason = state === 'superseded' && recovery.superseded_reason ? t(`modelRecovery.reason.${recovery.superseded_reason}`, { defaultValue: recovery.superseded_reason }) : ''
   const refusal = recovery.last_refusal && !['recovered', 'superseded'].includes(state)
     ? t('modelRecovery.lastRefusal', { reason: t(`modelRecovery.refusal.${recovery.last_refusal}`, { defaultValue: recovery.last_refusal }) }) : ''
@@ -96,7 +100,7 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
       </div>)}
     </details>
     {canRetry && <button type="button" className="btn primary" disabled={busy}
-      title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void run(() => api.retryModelRequest(id, recovery.project_root)) }}>
+      title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void run(() => intake ? api.runOpeningIntake() : api.retryModelRequest(id, recovery.project_root)) }}>
       {busy ? t('modelRecovery.retrying') : label}{shortcut && ` ${shortcut}`}
     </button>}
     {chatOffer && <button type="button" className="btn" disabled={busy} data-chat-model

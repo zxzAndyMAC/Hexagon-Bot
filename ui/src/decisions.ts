@@ -72,6 +72,8 @@ export async function approveQuestion(q: PendingQuestion) {
     useUiStore.getState().pushToast(i18n.t('modelRecovery.alreadyRetrying'))
     return
   }
+  // MR-08 / D01: the opening analysis re-runs through its lock-free command.
+  if (q.kind === 'recovery' && p.sub === 'model_request' && p.purpose === 'opening_intake') return api.runOpeningIntake()
   if (q.kind === 'recovery' && p.sub === 'model_request') return api.retryModelRequest(q.id, String((p.view as {project_root?:unknown} | undefined)?.project_root ?? p.project_root ?? p.host_project_root ?? ''))
   if (q.kind === 'permission') return api.answerPermission(q.id, true)
   if (q.kind === 'stamp' && !p.proposal_id) return api.stamp()

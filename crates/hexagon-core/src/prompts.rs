@@ -42,6 +42,8 @@ pub struct PromptTranslation {
     pub id: String,
     pub text: Option<String>,
     pub error: Option<String>,
+    /// `text` is an earlier cached translation and this run failed.
+    pub cached: bool,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -195,7 +197,6 @@ pub fn catalog() -> Vec<PromptEntry> {
 }
 
 /// 失败原因码（界面 `settings.prompts_err_<code>`）。
-const ERR_PROVIDER: &str = "provider";
 const ERR_NOT_JSON: &str = "not_json";
 const ERR_MISSING: &str = "missing";
 
@@ -249,9 +250,11 @@ fn translate_group(
         ],
         tools: vec![],
     };
-    let resp = provider
-        .complete(&req)
-        .map_err(|_| ERR_PROVIDER.to_string())?;
+    // MR-08 (test3 12): same host contract as the wizard (bounded transient
+    // retry, typed failure). The code reaches the settings page as
+    // `model_<code>`; provider prose never does.
+    let resp = crate::setup::host_generate("prompt_translation", provider, &req)
+        .map_err(|failure| format!("model_{}", failure.code))?;
     let text = crate::intake::response_text(&resp);
     let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) else {
         return Err(ERR_NOT_JSON.into());
@@ -314,13 +317,13 @@ pub fn translate_with(
         .iter()
         .map(|e| {
             let error = errors.get(&e.id).cloned();
+            // MR-08: a failed re-translation keeps a still-valid cached
+            // text (same source hash) and says it is the cache, not this run.
+            let text = cache.get(&cache_key(lang, e)).cloned();
             PromptTranslation {
                 id: e.id.clone(),
-                text: if error.is_none() {
-                    cache.get(&cache_key(lang, e)).cloned()
-                } else {
-                    None
-                },
+                cached: error.is_some() && text.is_some(),
+                text,
                 error,
             }
         })
@@ -425,6 +428,11 @@ mod tests {
         }
     }
     impl ModelProvider for Echo {
+        // MR-08: translation now runs under the host deadline contract, which
+        // refuses transports without deadline support; this double is scripted.
+        fn is_scripted(&self) -> bool {
+            true
+        }
         fn complete(
             &self,
             req: &ChatRequest,
@@ -523,6 +531,37 @@ mod tests {
         assert!(out[0].error.is_some() && out[0].text.is_none());
         assert!(out[1].error.is_some());
         assert_eq!(out[2].text.as_deref(), Some("ガンマ"));
+    }
+
+    #[test]
+    fn failed_retranslation_keeps_the_cached_text_and_says_so() {
+        let d = tempfile::tempdir().unwrap();
+        let cache = d.path().join("c.json");
+        translate_with(&cache, &sample(), "ja", &Echo::new("ja:"), false);
+        struct Down;
+        impl ModelProvider for Down {
+            fn is_scripted(&self) -> bool {
+                true
+            }
+            fn complete(
+                &self,
+                _: &ChatRequest,
+            ) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+                Err(crate::provider::ProviderError::HttpStatus(
+                    Box::new(crate::provider::ProviderError::Refused(
+                        "key sk-secret".into(),
+                    )),
+                    401,
+                    None,
+                ))
+            }
+        }
+        let out = translate_with(&cache, &sample(), "ja", &Down, true);
+        assert!(out.iter().all(|t| t.cached && t.text.is_some()));
+        assert!(out
+            .iter()
+            .all(|t| t.error.as_deref() == Some("model_authentication")));
+        assert!(!serde_json::to_string(&out).unwrap().contains("sk-secret"));
     }
 
     #[test]

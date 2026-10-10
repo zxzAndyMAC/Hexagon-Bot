@@ -5780,6 +5780,56 @@ fn analysis_body(wb: &Workbench) -> (String, String) {
     (msg.author.clone(), msg.body.clone())
 }
 
+/// MR-08 (test3 12): a failed opening analysis is a persistent recovery item
+/// (it used to be a toast plus a silent reset); retry runs only the analysis
+/// and a finished analysis is never repeated.
+#[test]
+fn failed_opening_analysis_is_an_item_and_retry_runs_it_once() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_nonempty(dir.path());
+    let mut wb = open_made(
+        dir.path(),
+        &["项目经理", "产品策划"],
+        Some(intake_pack(&["产品策划"])),
+        None,
+    );
+    wb.open_stage(0).unwrap();
+    let decision = std::sync::Arc::new(ScriptedProvider::new(vec![text_response("先不派活")]));
+    wb.register_provider("decision", decision);
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    wb.register_provider(
+        "chat",
+        std::sync::Arc::new(ScriptedDecision::new(vec![Err("permanent".into())])),
+    );
+    assert!(wb.run_opening_intake().is_err());
+    let item = crate::cards::queued(&wb.db, "p1")
+        .unwrap()
+        .into_iter()
+        .find(|c| c.payload["purpose"] == "opening_intake")
+        .expect("opening analysis failure stays actionable");
+    let view = model_request_recovery(&wb.db, "p1", &item.id).unwrap();
+    assert_eq!(view.state, "failed");
+    assert_eq!(view.history[0].code, "provider_error");
+    let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response(
+        "这是一个前端小项目。\n",
+    )]));
+    wb.register_provider("chat", chat.clone());
+    wb.retry_model_request(&item.id).unwrap();
+    assert_eq!(chat.recorded().len(), 1);
+    assert_eq!(
+        model_request_recovery(&wb.db, "p1", &item.id)
+            .unwrap()
+            .state,
+        "recovered"
+    );
+    assert_eq!(
+        wb.run_opening_intake().unwrap(),
+        IntakeRun::Skipped,
+        "never analysed twice"
+    );
+    assert_eq!(chat.recorded().len(), 1);
+}
+
 #[test]
 fn nonempty_repo_gets_one_readonly_intake_and_l4_does_not_write_the_draft() {
     let dir = tempfile::tempdir().unwrap();

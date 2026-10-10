@@ -11,31 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// A typed generation failure. IPC code is `model_<code>` so the wizard can
-/// show the matching remedy without parsing provider prose.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GenerationFailure {
-    pub code: String,
-    pub attempts: u32,
-}
-
-impl std::fmt::Display for GenerationFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "model generation failed: {} after {} attempt(s)",
-            self.code, self.attempts
-        )
-    }
-}
-
-impl std::error::Error for GenerationFailure {}
-
-impl crate::errcode::ErrorCode for GenerationFailure {
-    fn code(&self) -> String {
-        format!("model_{}", self.code)
-    }
-}
+pub use crate::model_failure::GenerationFailure;
 
 const BUDGET: Duration = Duration::from_secs(60);
 
@@ -99,11 +75,11 @@ impl Drop for Claim {
     }
 }
 
-fn fail(code: &str, attempts: u32) -> super::SetupError {
-    super::SetupError::Generation(GenerationFailure {
+fn fail(code: &str, attempts: u32) -> GenerationFailure {
+    GenerationFailure {
         code: code.into(),
         attempts,
-    })
+    }
 }
 
 /// Run one wizard generation request under the MR-07 contract.
@@ -112,6 +88,16 @@ pub(super) fn generate(
     provider: &dyn ModelProvider,
     req: &ChatRequest,
 ) -> Result<ChatResponse, super::SetupError> {
+    host_generate(kind, provider, req).map_err(super::SetupError::Generation)
+}
+
+/// The same contract for any host request without a project (wizard,
+/// settings prompt translation): nothing is written to a project.
+pub fn host_generate(
+    kind: &'static str,
+    provider: &dyn ModelProvider,
+    req: &ChatRequest,
+) -> Result<ChatResponse, GenerationFailure> {
     let _claim = Claim::take(kind).ok_or_else(|| fail("already_running", 0))?;
     let epoch = stop_epoch();
     let stopped = || stop_epoch() != epoch;

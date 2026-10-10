@@ -189,6 +189,16 @@ pub fn model_request_recovery(
             None,
             false,
         )
+    } else if purpose == "opening_intake" {
+        let packet = &card.payload["packet"];
+        (
+            PathBuf::from(packet["root"].as_str().unwrap_or_default()),
+            packet["agent_id"].as_str().unwrap_or_default().to_string(),
+            None,
+            None,
+            None,
+            false,
+        )
     } else {
         return Err(ApiError::BadInput("model recovery purpose invalid".into()));
     };
@@ -384,6 +394,7 @@ impl Workbench {
         match card.payload["purpose"].as_str() {
             Some("pm_route") => self.retry_pm_choice(&card, started, false),
             Some("turn") => self.retry_turn_model_request(&card, started),
+            Some("opening_intake") => self.retry_opening_intake(&card, started),
             _ => Err(self.reject_recovery(&card, "scope_invalid", started)),
         }
     }
@@ -485,6 +496,7 @@ impl Workbench {
     }
 }
 
+mod auxiliary;
 mod judgment;
 mod pm;
 mod role_turn;

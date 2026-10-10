@@ -2722,13 +2722,14 @@ fn run_opening_intake(state: ProjectState<'_>) -> Result<(), CmdError> {
             ) {
                 Ok(resp) => resp,
                 Err(e) => {
-                    let _ = with_wb(&state, |wb| wb.abort_opening_intake());
+                    // MR-08: persist the failure as a recovery item.
+                    let _ = with_wb(&state, |wb| wb.note_opening_intake_failure(&e));
                     return Err(cmd_err(e));
                 }
             };
             let text = hexagon_core::intake::response_text(&resp);
             with_wb(&state, |wb| match wb.commit_opening_intake(&text) {
-                Ok(_) => Ok(()),
+                Ok(_) => wb.finish_opening_intake_recovery(),
                 Err(error) => {
                     let _ = wb.abort_opening_intake();
                     Err(error)

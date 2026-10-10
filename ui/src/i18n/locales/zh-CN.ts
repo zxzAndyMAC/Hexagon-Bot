@@ -252,6 +252,9 @@ export default {
     },
   },
   modelRecovery: {
+    titleIntake: "开场分析失败",
+    hintIntake: "项目已经打开，开场分析还没完成。重试只重新分析，不会重复写入已完成的内容。",
+    recoveredHintIntake: "开场分析已完成。",
     title: "派活失败",
     retryingTitle: "正在重连派活",
     waitingHint: "正在等待下一次有界重试。",
@@ -608,6 +611,7 @@ export default {
     prompts_translating: '翻译中…',
     prompts_noModel: '没有可用的翻译模型。绑定翻译槽或默认槽后即可显示参考译文。',
     prompts_goModels: '打开模型服务',
+    prompts_failedCached: "重新翻译失败（{{error}}）。下方显示的是此前缓存的译文。",
     prompts_failed: '翻译失败：{{error}}',
     prompts_err_provider: '翻译模型调用失败',
     prompts_err_not_json: '翻译结果不是有效的 JSON',

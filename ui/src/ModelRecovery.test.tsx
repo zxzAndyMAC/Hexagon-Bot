@@ -172,3 +172,18 @@ it('offers the chat model only as an explicit action the approve shortcut never 
   expect(chat).toHaveBeenCalledWith('q1','/project')
  } finally { await act(async()=>root.unmount()) }
 })
+
+it('re-runs a failed opening analysis through its own lock-free command', async () => {
+ const intake=vi.spyOn(api,'runOpeningIntake').mockResolvedValue(undefined)
+ const retry=vi.spyOn(api,'retryModelRequest').mockResolvedValue(view)
+ const failed={...payload,purpose:'opening_intake',target_role:null}
+ const item: PendingQuestion={...card,payload:{...failed,view:failed}}
+ useUiStore.setState({pending:[item],toasts:[],modalScope:'workbench'})
+ const el=document.createElement('div'); const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={failed} top />))
+  expect(el.textContent).toContain('Opening analysis failed')
+  await approveQuestion(item)
+  expect(intake).toHaveBeenCalledTimes(1); expect(retry).not.toHaveBeenCalled()
+ } finally { await act(async()=>root.unmount()) }
+})

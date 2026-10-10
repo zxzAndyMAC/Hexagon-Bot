@@ -154,6 +154,9 @@ pub struct OpenStageOutcome {
 pub enum ApiError {
     #[error("data boundary configuration unavailable")]
     DataBoundaryUnavailable,
+    /// MR-08: an auxiliary model request failed; IPC code `model_<code>`.
+    #[error(transparent)]
+    ModelRequest(crate::model_failure::GenerationFailure),
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
     #[error(transparent)]
@@ -3052,16 +3055,25 @@ impl Workbench {
             tools: vec![],
         };
         let ctx = self.ctx_for(agent_id, None);
-        let resp = crate::usage::request(
-            &self.db,
-            &ctx,
-            &req.model_slot,
-            "role_draft",
-            provider.as_ref(),
-            Some(&req),
-            || provider.complete(&req),
-        )
-        .map_err(turn::TurnError::from)?;
+        // MR-08: owner-started auxiliary draft — bounded transient retry and
+        // a typed failure the agent panel can explain; nothing is written
+        // until the owner confirms the draft.
+        let resp = crate::model_failure::bounded_call(&self.db, &ctx, || {
+            crate::usage::request(
+                &self.db,
+                &ctx,
+                &req.model_slot,
+                "role_draft",
+                provider.as_ref(),
+                Some(&req),
+                || provider.complete(&req),
+            )
+        })
+        .map_err(|error| {
+            ApiError::ModelRequest(crate::model_failure::GenerationFailure::from_error(
+                &error, 1,
+            ))
+        })?;
         let text = resp
             .content
             .iter()
@@ -3091,23 +3103,29 @@ impl Workbench {
                 provider,
                 context,
             } => {
-                let resp = match crate::usage::request(
-                    &self.db,
-                    &context,
-                    &request.model_slot,
-                    "opening_intake",
-                    provider.as_ref(),
-                    Some(&request),
-                    || provider.complete(&request),
-                ) {
+                let resp = match crate::model_failure::bounded_call(&self.db, &context, || {
+                    crate::usage::request(
+                        &self.db,
+                        &context,
+                        &request.model_slot,
+                        "opening_intake",
+                        provider.as_ref(),
+                        Some(&request),
+                        || provider.complete(&request),
+                    )
+                }) {
                     Ok(resp) => resp,
                     Err(e) => {
-                        let _ = self.abort_opening_intake();
+                        // MR-08: a persistent item, not a silent reset.
+                        self.note_opening_intake_failure(&e)?;
                         return Err(ApiError::Turn(e.into()));
                     }
                 };
                 match self.commit_opening_intake(&crate::intake::response_text(&resp)) {
-                    Ok(run) => Ok(run),
+                    Ok(run) => {
+                        self.finish_opening_intake_recovery()?;
+                        Ok(run)
+                    }
                     Err(e) => {
                         let _ = self.abort_opening_intake();
                         Err(e)

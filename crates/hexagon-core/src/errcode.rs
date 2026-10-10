@@ -78,6 +78,7 @@ impl ErrorCode for serde_json::Error {
 
 impl_error_code!(
     crate::api::ApiError,
+    ModelRequest,
     Db,
     Trace,
     Orch,

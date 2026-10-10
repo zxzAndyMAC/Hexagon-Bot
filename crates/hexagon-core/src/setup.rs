@@ -77,7 +77,7 @@ pub enum SetupError {
 }
 
 mod generation;
-pub use generation::{stop_generation, GenerationFailure};
+pub use generation::{host_generate, stop_generation, GenerationFailure};
 
 /// 目录体检报告：向导每一步的判定依据。
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]

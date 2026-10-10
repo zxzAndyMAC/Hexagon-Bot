@@ -252,6 +252,9 @@ export default {
     },
   },
   modelRecovery: {
+    titleIntake: "A análise inicial falhou",
+    hintIntake: "O projeto está aberto; a análise inicial ainda não terminou. Tentar de novo só refaz a análise e nunca repete conteúdo já escrito.",
+    recoveredHintIntake: "A análise inicial terminou.",
     title: "Falha na atribuição",
     retryingTitle: "Reconectando",
     waitingHint: "Aguardando a próxima tentativa limitada.",
@@ -608,6 +611,7 @@ export default {
     prompts_translating: 'Traduzindo…',
     prompts_noModel: 'Nenhum modelo disponível para tradução. Vincule o slot de tradução ou o padrão para ver as traduções de referência.',
     prompts_goModels: 'Abrir serviços de modelo',
+    prompts_failedCached: "A nova tradução falhou ({{error}}). Abaixo está a tradução anterior em cache.",
     prompts_failed: 'Falha na tradução: {{error}}',
     prompts_err_provider: 'a chamada ao modelo de tradução falhou',
     prompts_err_not_json: 'a resposta da tradução não era JSON válido',

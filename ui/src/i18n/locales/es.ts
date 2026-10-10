@@ -252,6 +252,9 @@ export default {
     },
   },
   modelRecovery: {
+    titleIntake: "Falló el análisis inicial",
+    hintIntake: "El proyecto está abierto; su análisis inicial no ha terminado. Reintentar solo repite el análisis y nunca duplica contenido ya escrito.",
+    recoveredHintIntake: "El análisis inicial terminó.",
     title: "Falló la asignación",
     retryingTitle: "Reconectando",
     waitingHint: "Esperando el siguiente reintento acotado.",
@@ -608,6 +611,7 @@ export default {
     prompts_translating: 'Traduciendo…',
     prompts_noModel: 'No hay ningún modelo disponible para traducir. Vincula la ranura de traducción o la predeterminada para ver las traducciones de referencia.',
     prompts_goModels: 'Abrir servicios de modelos',
+    prompts_failedCached: "La nueva traducción falló ({{error}}). Abajo se muestra la traducción guardada en caché.",
     prompts_failed: 'Error al traducir: {{error}}',
     prompts_err_provider: 'falló la llamada al modelo de traducción',
     prompts_err_not_json: 'la respuesta de traducción no era JSON válido',
