@@ -641,6 +641,7 @@ impl Db {
 #[cfg(test)]
 pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "model_request_failed",
+    "model_request_retrying",
     "model_request_recovered",
     "tool_execution_started",
     "approval_mode_changed",

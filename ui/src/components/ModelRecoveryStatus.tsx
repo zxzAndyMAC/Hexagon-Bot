@@ -13,6 +13,10 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
   const recovered = recovery.state === 'recovered'
+  const retrying = recovery.state === 'retrying'
+  const stopped = recovery.state === 'stopped'
+  const latestCode = recovery.history?.at(-1)?.code
+  const openSettings = (section: 'models' | 'usage') => window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: section }))
   const retry = async () => {
     if (inFlight.current) return
     if (useUiStore.getState().modalScope !== 'workbench') {
@@ -32,9 +36,9 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const label = t('modelRecovery.retry')
   const shortcut = top ? formatBinding(bindingFor('approve')) : ''
   return <div data-model-recovery={id} aria-busy={busy}>
-    <div style={{fontWeight: 510, color: recovered ? 'var(--ok)' : 'var(--accent)'}}>{t(recovered ? 'modelRecovery.recovered' : 'modelRecovery.title')}</div>
+    <div style={{fontWeight: 510, color: recovered ? 'var(--ok)' : 'var(--accent)'}}>{t(recovered ? 'modelRecovery.recovered' : retrying ? 'modelRecovery.retryingTitle' : stopped ? 'modelRecovery.stopped' : 'modelRecovery.title')}</div>
     <div className="dim3" style={{fontSize: 12, margin: '4px 0 8px'}}>
-      {t(recovered ? 'modelRecovery.recoveredHint' : 'modelRecovery.hint', { target: recovery.target_role ?? t('modelRecovery.nextRole') })}
+      {t(recovered ? 'modelRecovery.recoveredHint' : retrying ? 'modelRecovery.waitingHint' : stopped ? 'modelRecovery.stoppedHint' : 'modelRecovery.hint', { target: recovery.target_role ?? t('modelRecovery.nextRole') })}
     </div>
     <details className="dim3" style={{fontSize: 11, marginBottom: 8}}>
       <summary>{t('modelRecovery.details')}</summary>
@@ -43,9 +47,11 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
         {failure.http_status != null && ` · HTTP ${failure.http_status}`} · {failure.message}
       </div>)}
     </details>
-    {!recovered && <button type="button" className="btn primary" disabled={busy}
+    {!recovered && !retrying && <button type="button" className="btn primary" disabled={busy}
       title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void retry() }}>
       {busy ? t('modelRecovery.retrying') : label}{shortcut && ` ${shortcut}`}
     </button>}
+    {(latestCode === 'missing_credential' || latestCode === 'credential_store' || latestCode === 'authentication' || latestCode === 'provider_error') && <button type="button" className="btn" title={t('modelRecovery.openModels')} onClick={() => openSettings('models')}>{t('modelRecovery.openModels')}</button>}
+    {(latestCode === 'budget_unavailable' || latestCode === 'quota') && <button type="button" className="btn" title={t('modelRecovery.openUsage')} onClick={() => openSettings('usage')}>{t('modelRecovery.openUsage')}</button>}
   </div>
 }

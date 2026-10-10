@@ -453,7 +453,14 @@ pub(crate) fn request_with_id(
     let state = match &result {
         Ok(_) => "succeeded",
         Err(error) if matches!(error.cause(), ProviderError::Interrupted) => "interrupted",
-        Err(error) if matches!(error.cause(), ProviderError::MissingCredential(_)) => "not_sent",
+        Err(error)
+            if matches!(
+                error.cause(),
+                ProviderError::MissingCredential(_) | ProviderError::CredentialStore(_)
+            ) =>
+        {
+            "not_sent"
+        }
         Err(_) => "failed",
     };
     db.conn().execute("UPDATE usage SET reserved_mc=0,prompt_tokens=?1,completion_tokens=?2,cost_millicents=?3,cost_known=?4,request_state=?5,prompt_known=?7,completion_known=?8 WHERE request_id=?6 AND request_state='pending'",params![usage.map(|u|u.prompt_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),usage.map(|u|u.completion_tokens.min(i64::MAX as u64) as i64).unwrap_or(0),cost.unwrap_or(0),cost.is_some() && !unpriced,state,id,usage.is_some_and(|u|u.prompt_reported),usage.is_some_and(|u|u.completion_reported)]).map_err(|e|ledger_error(e.to_string()))?;

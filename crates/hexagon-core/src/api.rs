@@ -2366,12 +2366,7 @@ impl Workbench {
         // 回退会让决策调用和主对话合成同一个供应商（CONTEXT「模型槽」Avoid）。
         // 槽名写了但没注册 → NoProvider，不假装没配。
         let (provider, slot_name, via) = if let Some(slot) = decision_slot {
-            let p = self
-                .providers
-                .get(&slot)
-                .cloned()
-                .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
-            (p, slot, "decision")
+            (self.providers.get(&slot).cloned(), slot, "decision")
         } else {
             let started = std::time::Instant::now();
             crate::diag::note(
@@ -2387,9 +2382,7 @@ impl Workbench {
             );
             let slot = model_slot.unwrap_or_else(|| "default".into());
             let started = std::time::Instant::now();
-            let p = crate::provider_config::resolve_slot(&self.providers, &slot)
-                .cloned()
-                .ok_or_else(|| ApiError::NoProvider(slot.clone()))?;
+            let p = crate::provider_config::resolve_slot(&self.providers, &slot).cloned();
             // diagnostic-records 票 03：主对话槽也没绑，落到了 default。
             if crate::provider_config::fell_back_to_default(&self.providers, &slot) {
                 crate::diag::slot_fallback(
@@ -2439,7 +2432,7 @@ impl Workbench {
             prompt
         };
         let req = crate::pm_route::choice_request(&slot_name, &prompt);
-        let use_jev = provider.uses_decision_api();
+        let use_jev = provider.as_ref().is_some_and(|p| p.uses_decision_api());
         let run_id = run.as_ref().map(|r| r.id.as_str());
         // 选择也是一次模型派发：信封在调用前落，用量在成功后记到项目经理头上。
         // 不走 run_turn——那会把选择写成聊天回复。
@@ -2469,7 +2462,13 @@ impl Workbench {
             origin_trace_id: trace_id,
             origin,
         };
-        self.execute_saved_pm_choice(&packet, provider.as_ref(), None)
+        let Some(provider) = provider else {
+            let error = crate::provider::ProviderError::Refused("provider unavailable".into());
+            let qid = self.save_pm_failure(&packet, None, None, &error, None)?;
+            self.publish_pm_wait_state(&qid, &packet, "failed")?;
+            return Err(ApiError::NoProvider(packet.slot_name));
+        };
+        self.execute_saved_pm_choice(&packet, provider, None)
     }
 
     /// 没有进行中的阶段时，负责人的下一句话打开流程的第一阶段。

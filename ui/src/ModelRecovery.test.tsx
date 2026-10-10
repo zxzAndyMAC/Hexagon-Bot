@@ -5,6 +5,7 @@ import './i18n'
 import { api, type PendingQuestion, type TimelineItem } from './api'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import { PendingCard } from './components/PendingCards'
+import { ModelRecoveryStatus } from './components/ModelRecoveryStatus'
 import { Timeline } from './components/Timeline'
 import { approveQuestion } from './decisions'
 import { useUiStore } from './store'
@@ -47,4 +48,14 @@ it('shows one recovered timeline item with its failure history outside system fo
   expect(details.textContent).toContain('request1')
   expect(el.querySelector('button[title*="Retry original request"]')).toBeNull()
  }finally{await act(async()=>root.unmount())}
+})
+
+it('offers direct settings entry for a non-retryable credential failure', async () => {
+ const el=document.createElement('div'); const root=createRoot(el)
+ const credential={...payload,history:[{...payload.history[0],code:'missing_credential'}]}
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={credential} />))
+  expect(el.textContent).toContain('Open model settings')
+  expect(el.textContent).not.toContain('Open usage')
+ } finally { await act(async()=>root.unmount()) }
 })

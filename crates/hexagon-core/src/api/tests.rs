@@ -2652,6 +2652,9 @@ impl ScriptedDecision {
 }
 
 impl ModelProvider for ScriptedDecision {
+    fn is_scripted(&self) -> bool {
+        true
+    }
     fn complete(
         &self,
         _req: &crate::provider::ChatRequest,
@@ -2671,6 +2674,7 @@ impl ModelProvider for ScriptedDecision {
         self.states.lock().unwrap().push(state.to_string());
         match self.lines.lock().unwrap().pop_front() {
             Some(Ok(text)) => Ok(text_response(&text)),
+            Some(Err(e)) if e == "permanent" => Err(ProviderError::Refused(e)),
             Some(Err(e)) => Err(ProviderError::Transport(e)),
             None => Err(ProviderError::ScriptExhausted),
         }
@@ -4532,6 +4536,60 @@ fn scripted_choice(
     (decision, chat, worker)
 }
 
+// MR-02: the public send path retries transient choice failures without an
+// owner click, and closes the same visible recovery item on success.
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+    #[test]
+    fn pm_route_retry_budget_never_admits_after_deadline(elapsed in 0u64..10_000, budget in 0u64..10_000) {
+        let admitted = super::model_recovery::retry_budget_allows(
+            std::time::Duration::from_millis(elapsed),
+            std::time::Duration::from_millis(budget),
+        );
+        proptest::prop_assert_eq!(admitted, elapsed < budget);
+    }
+}
+
+#[test]
+fn pm_route_transient_failure_recovers_automatically_on_the_same_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = pm_wb(dir.path());
+    wb.wait_policy = crate::turn::WaitPolicy {
+        probe_interval: std::time::Duration::from_millis(1),
+        budget: std::time::Duration::from_secs(1),
+        tick: std::time::Duration::from_millis(1),
+    };
+    let decision = Arc::new(ScriptedDecision::new(vec![
+        Err("unexpected EOF".into()),
+        Err("connection reset".into()),
+        Ok("HOLD".into()),
+    ]));
+    wb.register_provider("decision", decision.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(matches!(
+        send(&wb, "先别派活").unwrap(),
+        UnnamedRoute::Held { .. }
+    ));
+    assert_eq!(decision.decides(), 3);
+    let recovery_events = events(&wb, Some(&[EventKind::System])).unwrap();
+    let initial = recovery_events
+        .iter()
+        .find(|e| e.payload["kind"] == "model_request_failed")
+        .unwrap();
+    let qid = initial.payload["recovery_id"].as_str().unwrap();
+    let view = model_request_recovery(&wb.db, &wb.project_id, qid).unwrap();
+    assert_eq!(view.state, "recovered");
+    assert_eq!(view.history.len(), 2);
+    assert_ne!(view.history[0].request_id, view.history[1].request_id);
+    assert!(crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .is_empty());
+    assert!(recovery_events
+        .iter()
+        .any(|e| e.payload["kind"] == "model_request_retrying"));
+    assert_eq!(turns_for(&wb, "产品策划"), 0);
+}
+
 #[test]
 fn pm_route_failure_is_visible_before_any_worker_starts() {
     let dir = tempfile::tempdir().unwrap();
@@ -4580,8 +4638,8 @@ fn pm_route_retry_keeps_one_failure_and_dispatches_original_input_once() {
     )
     .unwrap();
     let decision = Arc::new(ScriptedDecision::new(vec![
-        Err("unexpected EOF".into()),
-        Err("connection reset".into()),
+        Err("permanent".into()),
+        Err("permanent".into()),
         Ok("产品策划".into()),
         Ok("HOLD".into()),
     ]));
@@ -4599,7 +4657,7 @@ fn pm_route_retry_keeps_one_failure_and_dispatches_original_input_once() {
         .find(|q| q.payload["sub"] == "model_request")
         .unwrap();
     let retry_error = wb.retry_model_request(&card.id).unwrap_err();
-    assert!(retry_error.to_string().contains("connection reset"));
+    assert!(retry_error.to_string().contains("refused: permanent"));
     let failed = crate::cards::get(&wb.db, &card.id).unwrap();
     assert_eq!(failed.payload["history"].as_array().unwrap().len(), 2);
     assert_eq!(turns_for(&wb, "产品策划"), 0);
@@ -4633,7 +4691,7 @@ proptest::proptest! {
     fn pm_route_recovery_never_sends_for_an_invalid_origin(case in 0u8..4) {
         let dir = tempfile::tempdir().unwrap();
         let mut wb = Workbench::for_test(dir.path(), &["项目经理", "产品策划", "后端"], Some(pm_pack())).unwrap();
-        let decision = Arc::new(ScriptedDecision::new(vec![Err("EOF".into()),Ok("产品策划".into())]));
+        let decision = Arc::new(ScriptedDecision::new(vec![Err("permanent".into()),Ok("产品策划".into())]));
         wb.register_provider("decision",decision.clone());
         wb.set_decision_slot("项目经理",Some("decision")).unwrap();
         assert!(send(&wb,"让我们开始吧").is_err());
@@ -4744,7 +4802,7 @@ fn pm_route_recovery_rejects_a_concurrent_attempt_through_another_workbench() {
             _options: &[(&str, &str)],
         ) -> Result<crate::provider::ChatResponse, ProviderError> {
             if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                return Err(ProviderError::Transport("EOF".into()));
+                return Err(ProviderError::Refused("permanent".into()));
             }
             self.entered.send(()).unwrap();
             self.release
@@ -4930,6 +4988,9 @@ fn pm_route_late_team_sleep_does_not_dispatch_the_saved_choice() {
         calls: std::sync::atomic::AtomicUsize,
     }
     impl ModelProvider for StopChoice {
+        fn is_scripted(&self) -> bool {
+            true
+        }
         fn complete(
             &self,
             _req: &crate::provider::ChatRequest,
@@ -4975,6 +5036,10 @@ fn pm_route_late_team_sleep_does_not_dispatch_the_saved_choice() {
         .into_iter()
         .find(|q| q.payload["sub"] == "model_request")
         .unwrap();
+    assert_eq!(
+        crate::cards::get(&wb.db, &card.id).unwrap().payload["state"],
+        "stopped"
+    );
     assert!(wb.retry_model_request(&card.id).is_err());
     assert_eq!(turns_for(&wb, "产品策划"), 0);
     assert!(worker.recorded().is_empty());
@@ -9492,6 +9557,9 @@ fn request_usage_first_turn_is_not_mislabeled_as_planning() {
 fn request_usage_transport_retry_counts_each_attempt() {
     struct RetryOnce(std::sync::atomic::AtomicUsize);
     impl ModelProvider for RetryOnce {
+        fn is_scripted(&self) -> bool {
+            true
+        }
         fn complete(
             &self,
             _: &crate::provider::ChatRequest,

@@ -14,7 +14,7 @@ import { FileEditor } from './components/FileEditor'
 import { parseUnifiedDiff } from './diff'
 import { SidePanel } from './components/SidePanel'
 import { Composer } from './components/Composer'
-import { SettingsPage } from './components/SettingsPage'
+import { SettingsPage, type Section } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
 import { CommandPalette } from './components/CommandPalette'
 import { api, errText, onTurnDelta, onToolOutput } from './api'
@@ -33,7 +33,7 @@ export default function App() {
   const refresh = useUiStore((s) => s.refresh)
   const refreshFast = useUiStore((s) => s.refreshFast)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [computerSettings, setComputerSettings] = useState<'general' | 'perms' | 'team'>('general')
+  const [computerSettings, setComputerSettings] = useState<Section>('general')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
   const timelineActive = useUiStore((s) => (s.tabs.find((tab) => tab.id === s.activeTab) ?? s.tabs[0])?.kind === 'timeline')
@@ -50,9 +50,21 @@ export default function App() {
   useEffect(() => {
     const openModels = () => { if (projectOpen === true) { setComputerSettings('team'); setSettingsOpen(true) } }
     const openComputer = () => { if (projectOpen === true) { setComputerSettings('perms'); setSettingsOpen(true) } }
+    const openSection = (event: Event) => {
+      if (projectOpen !== true) return
+      const section = (event as CustomEvent<unknown>).detail
+      if (section !== 'models' && section !== 'usage') return
+      setComputerSettings(section)
+      setSettingsOpen(true)
+    }
     window.addEventListener('hexagon:computer-model-settings', openModels)
     window.addEventListener('hexagon:computer-settings', openComputer)
-    return () => { window.removeEventListener('hexagon:computer-model-settings', openModels); window.removeEventListener('hexagon:computer-settings', openComputer) }
+    window.addEventListener('hexagon:open-settings-section', openSection)
+    return () => {
+      window.removeEventListener('hexagon:computer-model-settings', openModels)
+      window.removeEventListener('hexagon:computer-settings', openComputer)
+      window.removeEventListener('hexagon:open-settings-section', openSection)
+    }
   }, [projectOpen])
 
   // ui-audit 票 01/02：界面作用域同步进 store——裁决快捷键据此放行/拦截。

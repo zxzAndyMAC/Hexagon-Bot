@@ -161,7 +161,7 @@ const SPECIAL_KINDS = new Set([
 // 折进 ≥3 折叠组会被扫读漏掉。取「提出组外」而非组标红计数——
 // 组外零交互成本可见，红计数仍要求一次点击才看到是哪条违规。
 // 与 trace.rs SYSTEM_SUBKINDS 登记表同步维护。
-export const SYS_HIGH_RISK = new Set(['model_request_failed', 'model_request_recovered', 'invariant_violation', 'tool_breaker', 'context_denied'])
+export const SYS_HIGH_RISK = new Set(['model_request_failed', 'model_request_retrying', 'model_request_recovered', 'invariant_violation', 'tool_breaker', 'context_denied'])
 
 // 2026-09-30 原生验收：供应商拒绝被折成系统事件计数，负责人误以为团队仍在工作。
 const isHighRiskSys = (it: TimelineItem) =>
@@ -227,10 +227,10 @@ export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<
   // each recovery once, retaining every attempt in its folded details.
   const latestRecovery = new Map<string, number>()
   for (const it of timeline) if (it.event.kind === 'system' &&
-    ['model_request_failed', 'model_request_recovered'].includes(String(it.event.payload.kind)) &&
+    ['model_request_failed', 'model_request_retrying', 'model_request_recovered'].includes(String(it.event.payload.kind)) &&
     typeof it.event.payload.recovery_id === 'string') latestRecovery.set(it.event.payload.recovery_id, it.event.id)
   timeline = timeline.filter(it => it.event.kind !== 'system' ||
-    !['model_request_failed', 'model_request_recovered'].includes(String(it.event.payload.kind)) ||
+    !['model_request_failed', 'model_request_retrying', 'model_request_recovered'].includes(String(it.event.payload.kind)) ||
     latestRecovery.get(String(it.event.payload.recovery_id)) === it.event.id)
   // Owner Q6 / 2026-10-02: pagination is a projection, not a new fold policy.
   // A result at the page boundary must still expose its off-page call evidence.

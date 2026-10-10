@@ -56,6 +56,13 @@ pub struct ModelRequestRecovery {
     pub can_retry: bool,
 }
 
+pub(super) fn retry_budget_allows(
+    elapsed: std::time::Duration,
+    budget: std::time::Duration,
+) -> bool {
+    elapsed < budget
+}
+
 pub fn model_request_recovery(
     db: &Db,
     project_id: &str,
@@ -90,84 +97,264 @@ impl Workbench {
     pub(super) fn execute_saved_pm_choice(
         &self,
         packet: &ChoicePacket,
-        provider: &dyn ModelProvider,
+        provider: Arc<dyn ModelProvider>,
         recovery_id: Option<&str>,
     ) -> Result<UnnamedRoute, ApiError> {
-        let pm_id = &packet.pm_id;
-        let speaker = packet.speaker.as_str();
-        let body = packet.body.as_str();
-        let instances = packet.instances.as_deref();
-        let req = &packet.request;
-        let stage_name = packet.stage_name.as_deref();
-        let activation = &packet.activation;
-        let choosable = &packet.choosable;
-        let use_jev = packet.use_jev;
-        let slot_name = packet.slot_name.as_str();
-        let speaker_label = if packet.origin.from_owner {
-            "The owner"
-        } else {
-            speaker
-        };
-        let usage_ctx = crate::tools::ToolContext {
+        // MR-02: a budget includes admission, every send and every wait. A
+        // manual retry always gets a fresh owner budget, even for background work.
+        let started = std::time::Instant::now();
+        let budget = self.wait_policy.budget.min(std::time::Duration::from_secs(
+            if recovery_id.is_some() || packet.origin.from_owner {
+                60
+            } else {
+                300
+            },
+        ));
+        let deadline = started + budget;
+        let lock = Arc::new(self.lock_pm_choice_with_diag(packet)?);
+        let mut recovery = recovery_id.map(str::to_string);
+        loop {
+            let (request_id, result) =
+                self.pm_request_attempt(packet, provider.clone(), deadline, lock.clone());
+            match result {
+                Ok(response) => {
+                    // A late result is accounting evidence, never permission to
+                    // revive a stopped/superseded task.
+                    if self.pm_choice_stopped(packet)? {
+                        let qid = self.save_pm_failure(
+                            packet,
+                            recovery.as_deref(),
+                            request_id,
+                            &crate::provider::ProviderError::Interrupted,
+                            provider.billing_model(),
+                        )?;
+                        self.publish_pm_wait_state(&qid, packet, "stopped")?;
+                        return Err(ApiError::Decision("interrupted".into()));
+                    }
+                    return self.deliver_pm_choice(
+                        packet,
+                        crate::pm_route::choice_text(&response),
+                        recovery.as_deref(),
+                        None,
+                    );
+                }
+                Err(error) => {
+                    let qid = self.save_pm_failure(
+                        packet,
+                        recovery.as_deref(),
+                        request_id,
+                        &error,
+                        provider.billing_model(),
+                    )?;
+                    recovery = Some(qid.clone());
+                    if !error.retryable() || !retry_budget_allows(started.elapsed(), budget) {
+                        if matches!(error.cause(), crate::provider::ProviderError::Interrupted) {
+                            self.publish_pm_wait_state(&qid, packet, "stopped")?;
+                        }
+                        return Err(ApiError::Decision(error.to_string()));
+                    }
+                    self.publish_pm_wait_state(&qid, packet, "retrying")?;
+                    let next =
+                        (std::time::Instant::now() + self.wait_policy.probe_interval).min(deadline);
+                    while std::time::Instant::now() < next {
+                        if self.pm_choice_stopped(packet)? {
+                            self.publish_pm_wait_state(&qid, packet, "stopped")?;
+                            return Err(ApiError::Decision("interrupted".into()));
+                        }
+                        std::thread::sleep(
+                            self.wait_policy
+                                .tick
+                                .max(std::time::Duration::from_millis(1))
+                                .min(next.saturating_duration_since(std::time::Instant::now())),
+                        );
+                    }
+                    if !retry_budget_allows(started.elapsed(), budget) {
+                        self.publish_pm_wait_state(&qid, packet, "failed")?;
+                        return Err(ApiError::Decision(error.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    fn lock_pm_choice(&self, packet: &ChoicePacket) -> Result<std::fs::File, ApiError> {
+        // MR-02: automatic and manual recovery lock the original request, not
+        // just its later card. Detached accounting retains this lock until IO ends.
+        let dir = self.repo_root.join(".hexagon/request-locks");
+        let path = dir.join(format!("pm-route-{}.lock", packet.origin_trace_id));
+        if dir
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+            || path
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(ApiError::BadInput("lock_path_invalid".into()));
+        }
+        std::fs::create_dir_all(dir)?;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        lock.try_lock()
+            .map_err(|_| ApiError::BadInput("already_running".into()))?;
+        Ok(lock)
+    }
+
+    fn lock_pm_choice_with_diag(&self, packet: &ChoicePacket) -> Result<std::fs::File, ApiError> {
+        let started = std::time::Instant::now();
+        match self.lock_pm_choice(packet) {
+            Ok(lock) => Ok(lock),
+            Err(error) => {
+                let code = if error.to_string().contains("already_running") {
+                    "already_running"
+                } else if error.to_string().contains("lock_path_invalid") {
+                    "lock_path_invalid"
+                } else {
+                    "lock_unavailable"
+                };
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&self.project_id),
+                    Some(&packet.pm_id),
+                    packet.run_id.as_deref(),
+                    Some(&packet.origin_trace_id.to_string()),
+                    "model_recovery",
+                    code,
+                    started,
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn pm_request_attempt(
+        &self,
+        packet: &ChoicePacket,
+        provider: Arc<dyn ModelProvider>,
+        deadline: std::time::Instant,
+        lock: Arc<std::fs::File>,
+    ) -> (
+        Option<String>,
+        Result<crate::provider::ChatResponse, crate::provider::ProviderError>,
+    ) {
+        use crate::provider::ProviderError;
+        let ctx = crate::tools::ToolContext {
             project_id: self.project_id.clone(),
-            agent_id: pm_id.clone(),
+            agent_id: packet.pm_id.clone(),
             repo_root: self.repo_root.clone(),
             stage_run_id: packet.run_id.clone(),
-            owned_globs: vec![],
-            tiers: crate::artifacts::TierMap::new(),
-            sessions: Default::default(),
-            caps: Default::default(),
             ..Default::default()
         };
-        let mut request_id = None;
-        let resp = crate::usage::request_with_id(
-            &self.db,
-            &usage_ctx,
-            slot_name,
-            "pm_route",
-            provider,
-            if use_jev { None } else { Some(req) },
-            |id| {
-                request_id = Some(id.to_string());
-                // MR-01: ledger admission can wait; a stop committed during
-                // that wait must prevent the actual transport send.
-                if self.pm_choice_stopped(packet).unwrap_or(true) {
-                    return Err(crate::provider::ProviderError::Interrupted);
-                }
-                if use_jev {
-                    let state =
-                        crate::pm_route::choice_state(stage_name, activation, speaker_label, body);
-                    let mut options: Vec<(&str, &str)> = choosable
-                        .iter()
-                        .map(|r| (r.as_str(), "eligible target"))
-                        .collect();
-                    if instances.is_none() {
-                        options.push((crate::pm_route::HOLD_TOKEN, "wake no one for now"));
+        // Existing synthetic in-memory seams stay inline. Real workbenches
+        // settle on a separate initialized DB connection, including late usage.
+        let Some(path) = self.db.path() else {
+            let mut id = None;
+            let result = crate::usage::request_with_id(
+                &self.db,
+                &ctx,
+                &packet.slot_name,
+                "pm_route",
+                provider.as_ref(),
+                (!packet.use_jev).then_some(&packet.request),
+                |request| {
+                    id = Some(request.to_string());
+                    if self.pm_choice_stopped(packet).unwrap_or(true) {
+                        return Err(ProviderError::Interrupted);
                     }
-                    provider.decide(&state, &options)
-                } else {
-                    provider.complete(req)
-                }
-            },
-        )
-        .map_err(|e| {
-            match self.save_pm_failure(
-                packet,
-                recovery_id,
-                request_id,
-                &e,
-                provider.billing_model(),
-            ) {
-                Ok(_) => ApiError::Decision(e.to_string()),
-                Err(error) => error,
+                    send_pm_choice(provider.as_ref(), packet, deadline)
+                },
+            );
+            return (id, result);
+        };
+        let (sent, received) = std::sync::mpsc::channel();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let halt = cancelled.clone();
+        let saved = packet.clone();
+        std::thread::spawn(move || {
+            let _lock = lock;
+            let result = Db::open_current(path)
+                .map_err(|_| ProviderError::Refused("request ledger unavailable".into()))
+                .and_then(|db| {
+                    crate::usage::request_with_id(
+                        &db,
+                        &ctx,
+                        &saved.slot_name,
+                        "pm_route",
+                        provider.as_ref(),
+                        (!saved.use_jev).then_some(&saved.request),
+                        |request| {
+                            let _ = sent.send(PmAttemptEvent::Admitted(request.to_string()));
+                            if halt.load(Ordering::SeqCst)
+                                || pm_choice_stopped_at(&db, &ctx.project_id, &saved)
+                                    .unwrap_or(true)
+                            {
+                                return Err(ProviderError::Interrupted);
+                            }
+                            send_pm_choice(provider.as_ref(), &saved, deadline)
+                        },
+                    )
+                });
+            let _ = sent.send(PmAttemptEvent::Finished(result));
+        });
+        let mut id = None;
+        loop {
+            let failure = if self.pm_choice_stopped(packet).unwrap_or(true) {
+                Some(ProviderError::Interrupted)
+            } else if std::time::Instant::now() >= deadline {
+                Some(ProviderError::Deadline)
+            } else {
+                None
+            };
+            if let Some(error) = failure {
+                cancelled.store(true, Ordering::SeqCst);
+                return (id, Err(error));
             }
-        })?;
-        self.deliver_pm_choice(
-            packet,
-            crate::pm_route::choice_text(&resp),
-            recovery_id,
-            None,
-        )
+            let slice = self
+                .wait_policy
+                .tick
+                .max(std::time::Duration::from_millis(1))
+                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+            match received.recv_timeout(slice) {
+                Ok(PmAttemptEvent::Admitted(request)) => id = Some(request),
+                Ok(PmAttemptEvent::Finished(result)) => return (id, result),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (),
+                Err(_) => {
+                    return (
+                        id,
+                        Err(ProviderError::Refused("request worker exited".into())),
+                    )
+                }
+            }
+        }
+    }
+
+    pub(super) fn publish_pm_wait_state(
+        &self,
+        qid: &str,
+        packet: &ChoicePacket,
+        state: &str,
+    ) -> Result<(), ApiError> {
+        crate::cards::annotate(&self.db, qid, &[("state", json!(state))])?;
+        let view = model_request_recovery(&self.db, &self.project_id, qid)?;
+        crate::cards::annotate(&self.db, qid, &[("view", serde_json::to_value(&view)?)])?;
+        let mut event = serde_json::to_value(view)?;
+        event["kind"] = json!(if state == "retrying" {
+            "model_request_retrying"
+        } else {
+            "model_request_failed"
+        });
+        self.db.append_event(
+            &self.project_id,
+            EventKind::System,
+            event,
+            Some(&packet.pm_id),
+            packet.run_id.as_deref(),
+        )?;
+        Ok(())
     }
 
     fn deliver_pm_choice(
@@ -358,13 +545,7 @@ impl Workbench {
     }
 
     fn pm_choice_stopped(&self, packet: &ChoicePacket) -> Result<bool, ApiError> {
-        if orchestra::is_paused(&self.db, &self.project_id)?
-            || self.active_run()?.map(|r| r.id) != packet.run_id
-        {
-            return Ok(true);
-        }
-        let stopped: bool = self.db.conn().query_row("SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND kind='team_slept' AND id>?2) AND NOT EXISTS(SELECT 1 FROM agents WHERE project_id=?1 AND status!='sleeping')",rusqlite::params![self.project_id,packet.origin_trace_id],|r|r.get(0))?;
-        Ok(stopped)
+        pm_choice_stopped_at(&self.db, &self.project_id, packet)
     }
 
     fn handoff_recovered_choice(
@@ -503,7 +684,7 @@ impl Workbench {
         );
     }
 
-    fn save_pm_failure(
+    pub(super) fn save_pm_failure(
         &self,
         packet: &ChoicePacket,
         recovery_id: Option<&str>,
@@ -513,11 +694,21 @@ impl Workbench {
     ) -> Result<String, ApiError> {
         let started = std::time::Instant::now();
         let code = match error.cause() {
-            crate::provider::ProviderError::Transport(_) => "transport",
-            crate::provider::ProviderError::MissingCredential(_) => "missing_credential",
-            crate::provider::ProviderError::BudgetUnavailable => "budget_unavailable",
-            crate::provider::ProviderError::Interrupted => "interrupted",
-            _ => "provider_error",
+            crate::provider::ProviderError::QuotaUnavailable => "quota",
+            _ => match error.http_status() {
+                Some(401 | 403) => "authentication",
+                Some(402) => "quota",
+                Some(429) => "rate_limited",
+                _ => match error.cause() {
+                    crate::provider::ProviderError::Transport(_) => "transport",
+                    crate::provider::ProviderError::MissingCredential(_) => "missing_credential",
+                    crate::provider::ProviderError::CredentialStore(_) => "credential_store",
+                    crate::provider::ProviderError::BudgetUnavailable => "budget_unavailable",
+                    crate::provider::ProviderError::Interrupted => "interrupted",
+                    crate::provider::ProviderError::Deadline => "deadline",
+                    _ => "provider_error",
+                },
+            },
         };
         let mut history = match recovery_id {
             Some(qid) => crate::cards::get(&self.db, qid)?.payload["history"]
@@ -661,32 +852,10 @@ impl Workbench {
                 return Err(reject("owner_message_changed"));
             }
         }
-        // MR-01: the lock lives through send and dispatch, across separate
-        // workbenches/processes; process exit releases it without sending on reopen.
-        let lock_dir = self.repo_root.join(".hexagon/request-locks");
-        let lock_path = lock_dir.join(format!("model-recovery-{qid}.lock"));
-        if lock_dir
-            .symlink_metadata()
-            .is_ok_and(|m| m.file_type().is_symlink())
-            || lock_path
-                .symlink_metadata()
-                .is_ok_and(|m| m.file_type().is_symlink())
-        {
-            return Err(reject("lock_path_invalid"));
-        }
-        std::fs::create_dir_all(&lock_dir)?;
-        let lock = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock_path)?;
-        lock.try_lock().map_err(|_| reject("already_running"))?;
         let latest = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Recovery)?;
         if latest.payload["state"] == "recovered" {
             return Err(reject("already_recovered"));
         }
-        crate::cards::annotate(&self.db, qid, &[("state", json!("running"))])?;
         crate::diag::note(
             crate::diag::CLASS_JUDGE,
             false,
@@ -714,6 +883,7 @@ impl Workbench {
             {
                 return Err(reject("selection_binding_changed"));
             }
+            let _lock = self.lock_pm_choice_with_diag(&packet)?;
             return self.deliver_pm_choice(&packet, raw.to_string(), Some(qid), Some(event));
         }
         let provider = if packet.via == "decision" {
@@ -738,6 +908,56 @@ impl Workbench {
                 started,
             );
         }
-        self.execute_saved_pm_choice(&packet, provider.as_ref(), Some(qid))
+        self.execute_saved_pm_choice(&packet, provider, Some(qid))
     }
+}
+
+enum PmAttemptEvent {
+    Admitted(String),
+    Finished(Result<crate::provider::ChatResponse, crate::provider::ProviderError>),
+}
+
+fn send_pm_choice(
+    provider: &dyn ModelProvider,
+    packet: &ChoicePacket,
+    deadline: std::time::Instant,
+) -> Result<crate::provider::ChatResponse, crate::provider::ProviderError> {
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    // MR-02: fixtures and transports obey the same admission boundary.
+    if remaining.is_zero() {
+        return Err(crate::provider::ProviderError::Deadline);
+    }
+    if packet.use_jev {
+        let state = crate::pm_route::choice_state(
+            packet.stage_name.as_deref(),
+            &packet.activation,
+            if packet.origin.from_owner {
+                "The owner"
+            } else {
+                &packet.speaker
+            },
+            &packet.body,
+        );
+        let mut options: Vec<_> = packet
+            .choosable
+            .iter()
+            .map(|r| (r.as_str(), "eligible target"))
+            .collect();
+        if packet.instances.is_none() {
+            options.push((crate::pm_route::HOLD_TOKEN, "wake no one for now"));
+        }
+        provider.decide_with_timeout(&state, &options, remaining)
+    } else {
+        provider.complete_with_timeout(&packet.request, remaining)
+    }
+}
+
+fn pm_choice_stopped_at(db: &Db, project: &str, packet: &ChoicePacket) -> Result<bool, ApiError> {
+    if orchestra::is_paused(db, project)?
+        || db.active_stage_run(project)?.map(|r| r.id) != packet.run_id
+    {
+        return Ok(true);
+    }
+    let stopped = db.conn().query_row("SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND kind='team_slept' AND id>?2) AND NOT EXISTS(SELECT 1 FROM agents WHERE project_id=?1 AND status!='sleeping')", rusqlite::params![project, packet.origin_trace_id], |r| r.get(0))?;
+    Ok(stopped)
 }
