@@ -54,6 +54,9 @@ pub enum AllowVia {
     ApprovalMode {
         mode: crate::approval_mode::ApprovalMode,
     },
+    /// Test3/14: a broad-access project command run under the host deletion
+    /// fence, offline, in the role's write scope (see sandbox::fenced_exec_spec).
+    FencedExec,
 }
 
 /// Owner Q3: safety-net commands and paths always require owner confirmation,
@@ -678,12 +681,79 @@ fn release_in_approval_mode(
                 || matches!(tool_name, "web_fetch" | "web_search" | "run_test")
         }
     };
+    if !allowed && mode == ApprovalMode::Broad && fenced_exec_eligible(db, ctx, tool_name, input) {
+        return Ok(Decision::Allow {
+            via: AllowVia::FencedExec,
+        });
+    }
     if !allowed {
+        // Test3/14: say why broad access still asks (one stable code).
+        let reason = if mode == ApprovalMode::Broad && tool_name == "bash" {
+            match fenced_exec_refusal(&fenced_facts(db, ctx, tool_name, input)) {
+                Some(code) => format!("{reason} (broad access: {code})"),
+                None => reason,
+            }
+        } else {
+            reason
+        };
         return Ok(Decision::Ask { reason, safety_net });
     }
     Ok(Decision::Allow {
         via: AllowVia::ApprovalMode { mode },
     })
+}
+
+/// Test3/14 (spec 03): broad access runs ordinary project commands (Python,
+/// Node, builds, tests) without a card only when the host can enforce the
+/// whole boundary on the real process: one foreground command (a named
+/// session or background task outlives the per-call fence), offline, top
+/// level (subagents keep their dispatch snapshot), not the read-only PM, and
+/// a backend that expresses the deletion fence. The command name is never the
+/// evidence. Cost model: a false refusal is one owner question; a false allow
+/// is an unreviewed effect — every unproven condition keeps asking.
+fn fenced_exec_eligible(db: &Db, ctx: &ToolContext, tool_name: &str, input: &Value) -> bool {
+    fenced_exec_refusal(&fenced_facts(db, ctx, tool_name, input)).is_none()
+}
+
+fn fenced_facts(db: &Db, ctx: &ToolContext, tool_name: &str, input: &Value) -> FencedFacts {
+    FencedFacts {
+        bash: tool_name == "bash",
+        net: input["net"] == true,
+        session: input.get("session").is_some(),
+        background: input["background"] == true,
+        subagent: ctx.subagent.is_some(),
+        read_only_role: agent_role(db, ctx).as_deref() == Some(crate::pm_route::PM_ROLE),
+        fence: crate::sandbox::fence_available(),
+    }
+}
+
+/// The shape facts of one call; pure so proptest pins the rule.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FencedFacts {
+    pub bash: bool,
+    pub net: bool,
+    pub session: bool,
+    pub background: bool,
+    pub subagent: bool,
+    pub read_only_role: bool,
+    pub fence: bool,
+}
+
+/// Why broad access did not run this call automatically (shown on the card).
+pub(crate) fn fenced_exec_refusal(f: &FencedFacts) -> Option<&'static str> {
+    let checks = [
+        (!f.bash, "not_a_project_command"),
+        (f.net, "needs_network"),
+        (f.session, "named_session_outlives_fence"),
+        (f.background, "background_task_outlives_fence"),
+        (f.subagent, "subagent_dispatch_snapshot"),
+        (f.read_only_role, "read_only_role"),
+        (!f.fence, "deletion_fence_unavailable"),
+    ];
+    checks
+        .into_iter()
+        .find(|(failed, _)| *failed)
+        .map(|(_, code)| code)
 }
 
 /// A deliberately exact vocabulary, not prefix matching. Git options/config,
@@ -828,6 +898,7 @@ pub fn evaluate_logged(
                 AllowVia::Default => "default_allow",
                 AllowVia::Remembered { .. } => "remembered",
                 AllowVia::ApprovalMode { .. } => "approval_mode_allow",
+                AllowVia::FencedExec => "fenced_exec_allow",
             }
         }
     };
@@ -2349,6 +2420,25 @@ mod tests {
                     "{level} net={net} => {d:?}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod fenced_exec_rule_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // Test3/14: automatic execution needs every enforced condition; any
+        // missing one keeps asking with that reason.
+        #[test]
+        fn fenced_exec_needs_every_condition(bits in proptest::collection::vec(any::<bool>(), 7)) {
+            let f = FencedFacts { bash: bits[0], net: bits[1], session: bits[2], background: bits[3],
+                subagent: bits[4], read_only_role: bits[5], fence: bits[6] };
+            let allowed = fenced_exec_refusal(&f).is_none();
+            prop_assert_eq!(allowed, f.bash && !f.net && !f.session && !f.background
+                && !f.subagent && !f.read_only_role && f.fence);
         }
     }
 }

@@ -1187,6 +1187,7 @@ impl Workbench {
             source_review_phase: false,
             saved_permission_admission: None,
             trigger_turn_id: None,
+            exec_scratch: None,
         }
     }
 
@@ -4198,6 +4199,8 @@ pub(crate) fn desktop_permissions_for_test(
 
 #[cfg(test)]
 mod approval_mode_tests;
+#[cfg(test)]
+mod fenced_exec_tests;
 
 #[cfg(test)]
 mod skill_discovery_tests;

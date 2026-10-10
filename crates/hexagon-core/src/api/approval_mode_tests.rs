@@ -86,7 +86,16 @@ proptest! {
             });
         }
         let result = crate::permissions::evaluate(&wb.db, &ctx, &crate::tools::Bash, "bash", &json!({"cmd":cmd})).unwrap();
-        prop_assert!(matches!(result, Decision::Ask { .. }), "{mode:?}: {cmd}: {result:?}");
+        // Test3/14 behaviour change (owner Q1/Q6, 2026-10-09): a top-level
+        // Broad command now runs offline under the host deletion fence instead
+        // of asking. The grant comes from the approval mode and the enforced
+        // OS fence, never from coordinator autonomy; every other mode, and any
+        // subagent, still asks.
+        if mode == ApprovalMode::Broad && !child && crate::sandbox::fence_available() {
+            prop_assert!(matches!(result, Decision::Allow { via: AllowVia::FencedExec }), "{mode:?}: {cmd}: {result:?}");
+        } else {
+            prop_assert!(matches!(result, Decision::Ask { .. }), "{mode:?}: {cmd}: {result:?}");
+        }
     }
 }
 

@@ -134,6 +134,47 @@ pub fn spec_for(repo_root: &Path, owned_globs: &[String], net: bool) -> SandboxS
     scoped_spec(repo_root, owned_globs, net, false)
 }
 
+/// Test3/14 (spec 03, Q1/Q6): broad-access automatic execution. Same role
+/// confinement (owned write scope, no network, credential/.hexagon denies,
+/// process-group fence) plus a deletion fence probed on real processes
+/// (sh/Python/Node; .scratch/test3-integrated-2026-10-09/14-fence-probe.md):
+/// nothing under the project may be unlinked, renamed over or rmdir'd; only
+/// the host scratch for this action may. Seatbelt only — bwrap cannot express
+/// it, so other backends stay Unavailable and the command keeps asking.
+pub fn fenced_exec_spec(repo_root: &Path, owned_globs: &[String], scratch: &Path) -> SandboxSpec {
+    if status().mode != "seatbelt" || !status().available {
+        return SandboxSpec::Unavailable;
+    }
+    let (Ok(canon), Ok(scratch)) = (repo_root.canonicalize(), scratch.canonicalize()) else {
+        return SandboxSpec::Unavailable;
+    };
+    match spec_for(repo_root, owned_globs, false) {
+        SandboxSpec::Seatbelt(mut profile) => {
+            profile.push_str(&format!(
+                "(allow file-write* (subpath \"{}\"))\n",
+                sbq(&scratch)
+            ));
+            for root in [repo_root, canon.as_path()] {
+                profile.push_str(&format!(
+                    "(deny file-write-unlink (subpath \"{}\"))\n",
+                    sbq(root)
+                ));
+            }
+            profile.push_str(&format!(
+                "(allow file-write-unlink (subpath \"{}\"))\n",
+                sbq(&scratch)
+            ));
+            SandboxSpec::Seatbelt(profile)
+        }
+        other => other,
+    }
+}
+
+/// Whether the deletion-fenced profile can actually be enforced here.
+pub fn fence_available() -> bool {
+    status().mode == "seatbelt" && status().available
+}
+
 pub fn read_only_spec(repo_root: &Path, net: bool) -> SandboxSpec {
     scoped_spec(repo_root, &[], net, true)
 }
@@ -336,6 +377,9 @@ pub fn wrap_command(cmd: &mut Command, spec: &SandboxSpec) -> std::io::Result<Co
         if let Some(developer) = developer_directory() {
             paths.insert(0, developer.join("usr/bin"));
         }
+        if let Some(shim) = python_shim_dir() {
+            paths.insert(0, shim);
+        }
         c.env(
             "PATH",
             std::env::join_paths(paths).map_err(std::io::Error::other)?,
@@ -425,6 +469,30 @@ pub(crate) fn python_interpreter() -> Option<PathBuf> {
     }
 }
 
+/// Test3/14: `python3`/`python` on the sandbox PATH resolve the actual
+/// interpreter above instead of Apple's posix_spawn launcher, so project
+/// scripts that call `python3` run under the unchanged process-group fence.
+/// A host-owned symlink directory outside every project, read-only to the
+/// sandbox; it grants nothing beyond the interpreter already in read_roots.
+pub(crate) fn python_shim_dir() -> Option<PathBuf> {
+    static SHIM: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    SHIM.get_or_init(|| {
+        let target = python_interpreter()?;
+        let dir = std::env::temp_dir().join("hexagon-python-shim");
+        std::fs::create_dir_all(&dir).ok()?;
+        for name in ["python3", "python"] {
+            let link = dir.join(name);
+            if std::fs::read_link(&link).ok().as_deref() != Some(target.as_path()) {
+                let _ = std::fs::remove_file(&link);
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&target, &link).ok()?;
+            }
+        }
+        dir.canonicalize().ok()
+    })
+    .clone()
+}
+
 fn read_roots(repo: &Path) -> Vec<PathBuf> {
     runtime_read_roots(repo, true)
 }
@@ -457,6 +525,10 @@ fn runtime_read_roots(repo: &Path, build_tools: bool) -> Vec<PathBuf> {
         if python.exists() {
             roots.push(python);
         }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(shim) = python_shim_dir() {
+        roots.push(shim);
     }
     if let Some(home) = std::env::var_os("HOME").filter(|_| build_tools) {
         roots.extend(
