@@ -1,7 +1,7 @@
 //! MR-02/MR-06: the model-request failure vocabulary and bounded transient
 //! retry shared by every model purpose — dispatch, role turns and internal
 //! judges. It lives below `api` so judge modules can use it without
-//! depending on the facade (AGENTS 架构接缝: core must not `use crate::api`).
+//! depending on the facade (AGENTS 架构接缝 D08: core modules never import the api facade).
 use crate::db::Db;
 use crate::provider::ProviderError;
 use crate::tools::ToolContext;
