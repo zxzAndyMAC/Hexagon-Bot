@@ -73,7 +73,8 @@ impl Tool for DependencyFetch {
     }
     fn description(&self) -> &str {
         r#"Fetch public npm packages through the host's controlled channel, then install them into this project offline.
-- Use when: the project needs npm dependencies. Do not run `npm install` with network in bash.
+- Use when: the project needs npm dependencies.
+- Do not use: `npm install` with network in bash, git/file/tarball sources, private registries or global installs.
 - Input: exact `name@version` specs only (e.g. "chalk@4.1.2"). Ranges, tags, git/file/tarball URLs, private registries and global installs are refused.
 - Only package names, exact versions and the public registry host leave the machine; the fetch side cannot read project files.
 - The install runs offline in the project. Install scripts npm does not run are listed in the result."#

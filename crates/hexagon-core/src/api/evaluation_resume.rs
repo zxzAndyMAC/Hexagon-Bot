@@ -241,7 +241,9 @@ impl Workbench {
         let mut claimed_roots = Vec::new();
         loop {
             turns.insert(current.0);
-            let payload: Value = serde_json::from_str(&current.1)?;
+            let payload: Value = self
+                .db
+                .hydrate_payload(&self.project_id, serde_json::from_str(&current.1)?);
             if let Some(claimed) = payload["activation_root_turn_id"].as_i64() {
                 claimed_roots.push(claimed);
             }
@@ -272,7 +274,9 @@ impl Workbench {
         if claimed_roots.iter().any(|claimed| *claimed != root) {
             return Err(reject("root_chain_mismatch"));
         }
-        let payload: Value = serde_json::from_str(&current.1)?;
+        let payload: Value = self
+            .db
+            .hydrate_payload(&self.project_id, serde_json::from_str(&current.1)?);
         let instruction = payload["instruction"]
             .as_str()
             .filter(|s| !s.trim().is_empty())

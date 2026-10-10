@@ -87,17 +87,18 @@ impl Tool for BrowserVerify {
     fn description(&self) -> &str {
         r#"Verify the real delivery entry in a real browser (Firefox) run by the host inside the project sandbox.
 - Use when: you must prove a page actually loads and behaves — never conclude this from a Node self-check, `ls`, or a script that only builds.
+- Do not use: for pages outside the project, remote websites, or as a substitute for an explicitly required Chrome result.
 - entry: a project HTML file path (e.g. "ux/prototype.html") or a loopback URL (http://127.0.0.1:PORT/...).
 - checks: [{selector, text?}] — each selector must exist (and contain text if given). type: [{selector, text}] types with the keyboard. keys: ["ArrowLeft", ...] presses keys on the page.
 - Result status is "verified" only when launch, navigation and every check pass; otherwise "failed" or "unverified" with the reason. Chrome is not available in the sandbox and is reported as unverified."#
     }
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{
-            "entry":{"type":"string"},
-            "browser":{"type":"string","enum":["firefox","chrome"]},
-            "checks":{"type":"array","items":{"type":"object","properties":{"selector":{"type":"string"},"text":{"type":"string"}},"required":["selector"]}},
-            "type":{"type":"array","items":{"type":"object","properties":{"selector":{"type":"string"},"text":{"type":"string"}},"required":["selector","text"]}},
-            "keys":{"type":"array","items":{"type":"string"}}},
+            "entry":{"type":"string","description":"project HTML file path, or a loopback http URL"},
+            "browser":{"type":"string","enum":["firefox","chrome"],"description":"firefox (default, verified); chrome is reported unverified"},
+            "checks":{"type":"array","description":"elements that must exist (and contain text if given)","items":{"type":"object","properties":{"selector":{"type":"string"},"text":{"type":"string"}},"required":["selector"]}},
+            "type":{"type":"array","description":"type text into elements with the keyboard","items":{"type":"object","properties":{"selector":{"type":"string"},"text":{"type":"string"}},"required":["selector","text"]}},
+            "keys":{"type":"array","description":"keys to press on the page, e.g. ArrowRight","items":{"type":"string"}}},
             "required":["entry"]})
     }
     fn risk(&self) -> RiskClass {
