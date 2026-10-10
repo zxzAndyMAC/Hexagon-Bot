@@ -2777,15 +2777,24 @@ fn project_info(
 }
 
 #[tauri::command(async)]
-fn reconcile_tool_action(state: ProjectState<'_>, action_id: String) -> Result<(), CmdError> {
-    with_wb(&state, |wb| match wb.reconcile_tool_action(&action_id) {
-        // A completed read-only check may leave uncertainty. The refreshed card
-        // shows its evidence; it is not a failed UI command or execution success.
-        Err(hexagon_core::api::ApiError::Tool(hexagon_core::tools::ToolError::OutcomeUnknown(
-            _,
-        ))) => Ok(()),
-        result => result.map(|_| ()),
-    })
+fn reconcile_tool_action(
+    state: ProjectState<'_>,
+    action_id: String,
+) -> Result<hexagon_core::api::ReconcileReport, CmdError> {
+    // Test3/13: an explicit check result. The old command swallowed
+    // OutcomeUnknown into an empty success, so a repeated check looked like
+    // nothing happened.
+    with_wb(&state, |wb| wb.reconcile_tool_action_report(&action_id))
+}
+
+/// Test3/13: after the control-connection abandon, offer the explicit
+/// "continue original task" entry (needs the workbench activation chain).
+#[tauri::command(async)]
+fn offer_continue_after_unknown(
+    state: ProjectState<'_>,
+    action_id: String,
+) -> Result<bool, CmdError> {
+    with_wb(&state, |wb| wb.offer_continue_after_unknown(&action_id))
 }
 
 #[tauri::command(async)]
@@ -3084,6 +3093,7 @@ pub fn run() {
             retry_model_request_with_chat_model,
             resolve_model_request_choice,
             reconcile_tool_action,
+            offer_continue_after_unknown,
             abandon_tool_action,
             retry_tool_action,
             resume_tool_action,

@@ -234,7 +234,7 @@ impl Db {
     ) -> Result<i64, TraceError> {
         let mut text = serde_json::to_string(&payload)?;
         if text.len() > Self::EVENT_PAYLOAD_CAP {
-            text = self.spill_payload(project_id, &text);
+            text = self.spill_payload(project_id, &text, payload["kind"].as_str());
         }
         self.conn().execute(
             "INSERT INTO events (project_id, stage_run_id, agent_id, kind, payload, schema_version)
@@ -253,7 +253,7 @@ impl Db {
 
     /// 超限载荷落 .hexagon/spill/event-<hash>.json，返回指针 JSON 文本。
     /// 项目目录不可得 → 截断保指针信息（fail toward 留痕不丢事件）。
-    fn spill_payload(&self, project_id: &str, text: &str) -> String {
+    fn spill_payload(&self, project_id: &str, text: &str, kind: Option<&str>) -> String {
         let dir: Option<String> = self
             .conn()
             .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
@@ -275,7 +275,11 @@ impl Db {
                 }
                 let file = spill.join(format!("event-{h:016x}.json"));
                 if std::fs::write(&file, text).is_ok() {
+                    // test3 batch C: keep the System subkind on the pointer.
+                    // A spilled model-request checkpoint lost its kind and
+                    // recovery could no longer find it ("checkpoint_missing").
                     return serde_json::to_string(&serde_json::json!({
+                        "kind": kind,
                         "spilled": file.to_string_lossy(),
                         "bytes": text.len(),
                     }))
@@ -293,6 +297,37 @@ impl Db {
             &text[..end],
             text.len()
         )
+    }
+
+    /// Read back a spilled event payload written by `spill_payload`. Only a
+    /// host spill file inside this project's `.hexagon/spill` is trusted.
+    pub(crate) fn hydrate_payload(&self, project_id: &str, payload: Value) -> Value {
+        let Some(path) = payload["spilled"].as_str() else {
+            return payload;
+        };
+        let dir: Option<String> = self
+            .conn()
+            .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
+                r.get(0)
+            })
+            .ok();
+        let inside = dir.is_some_and(|dir| {
+            let spill = std::path::Path::new(&dir).join(".hexagon/spill");
+            match (
+                spill.canonicalize(),
+                std::path::Path::new(path).canonicalize(),
+            ) {
+                (Ok(spill), Ok(file)) => file.starts_with(spill),
+                _ => false,
+            }
+        });
+        if !inside {
+            return payload;
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or(payload)
     }
 
     /// 写消息：messages 行 + 一个配对事件（时间线序因此只需 events.id）。

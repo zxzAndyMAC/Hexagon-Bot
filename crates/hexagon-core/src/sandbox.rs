@@ -134,6 +134,139 @@ pub fn spec_for(repo_root: &Path, owned_globs: &[String], net: bool) -> SandboxS
     scoped_spec(repo_root, owned_globs, net, false)
 }
 
+/// Test3/14 (spec 03, Q1/Q6): broad-access automatic execution. Same role
+/// confinement (owned write scope, no network, credential/.hexagon denies,
+/// process-group fence) plus a deletion fence probed on real processes
+/// (sh/Python/Node; .scratch/test3-integrated-2026-10-09/14-fence-probe.md):
+/// nothing under the project may be unlinked, renamed over or rmdir'd; only
+/// the host scratch for this action may. Seatbelt only — bwrap cannot express
+/// it, so other backends stay Unavailable and the command keeps asking.
+pub fn fenced_exec_spec(repo_root: &Path, owned_globs: &[String], scratch: &Path) -> SandboxSpec {
+    if status().mode != "seatbelt" || !status().available {
+        return SandboxSpec::Unavailable;
+    }
+    let (Ok(canon), Ok(scratch)) = (repo_root.canonicalize(), scratch.canonicalize()) else {
+        return SandboxSpec::Unavailable;
+    };
+    match spec_for(repo_root, owned_globs, false) {
+        SandboxSpec::Seatbelt(mut profile) => {
+            // Read too: host scripts and temp files live in the scratch.
+            profile.push_str(&format!(
+                "(allow file-read-data file-write* (subpath \"{}\"))\n",
+                sbq(&scratch)
+            ));
+            for root in [repo_root, canon.as_path()] {
+                profile.push_str(&format!(
+                    "(deny file-write-unlink (subpath \"{}\"))\n",
+                    sbq(root)
+                ));
+            }
+            profile.push_str(&format!(
+                "(allow file-write-unlink (subpath \"{}\"))\n",
+                sbq(&scratch)
+            ));
+            SandboxSpec::Seatbelt(profile)
+        }
+        other => other,
+    }
+}
+
+/// Test3/15: the offline project install — the 14 fence plus read/write of
+/// the public package cache and removal only under `node_modules` (a
+/// host-identified dependency output, never source or delivery).
+pub fn fenced_install_spec(
+    repo_root: &Path,
+    owned_globs: &[String],
+    scratch: &Path,
+    cache: &Path,
+) -> SandboxSpec {
+    let (Ok(canon), Ok(cache)) = (repo_root.canonicalize(), cache.canonicalize()) else {
+        return SandboxSpec::Unavailable;
+    };
+    match fenced_exec_spec(repo_root, owned_globs, scratch) {
+        SandboxSpec::Seatbelt(mut profile) => {
+            profile.push_str(&format!(
+                "(allow file-read-data file-write* (subpath \"{}\"))\n",
+                sbq(&cache)
+            ));
+            for root in [repo_root, canon.as_path()] {
+                profile.push_str(&format!(
+                    "(allow file-write-unlink (subpath \"{}\"))\n",
+                    sbq(&root.join("node_modules"))
+                ));
+            }
+            SandboxSpec::Seatbelt(profile)
+        }
+        other => other,
+    }
+}
+
+/// Test3/15: the dependency fetch side. Network on, but it can read only
+/// runtimes, its empty scratch and the cache — never a project or the user's
+/// home, credentials or npm configs — and write only scratch and cache.
+pub fn fetch_spec(scratch: &Path, cache: &Path) -> SandboxSpec {
+    if status().mode != "seatbelt" || !status().available {
+        return SandboxSpec::Unavailable;
+    }
+    let (Ok(scratch), Ok(cache)) = (scratch.canonicalize(), cache.canonicalize()) else {
+        return SandboxSpec::Unavailable;
+    };
+    let mut profile = String::from(
+        "(version 1)\n(deny default)\n(allow process*)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow mach-lookup)\n(allow ipc-posix-shm)\n(allow file-read-metadata)\n(allow file-ioctl)\n(allow file-write* (literal \"/dev/null\"))\n(allow file-read-data (literal \"/\"))\n(allow file-read-data (subpath \"/private/etc\"))\n",
+    );
+    let mut roots = runtime_read_roots(&scratch, false);
+    roots.push(cache.clone());
+    for root in roots {
+        profile.push_str(&format!(
+            "(allow file-read-data (subpath \"{}\"))\n",
+            sbq(&root)
+        ));
+    }
+    for root in [&scratch, &cache] {
+        profile.push_str(&format!(
+            "(allow file-write* (subpath \"{}\"))\n",
+            sbq(root)
+        ));
+    }
+    profile.push_str("(deny process-info* (target others))\n(allow network*)\n");
+    #[cfg(target_os = "macos")]
+    profile.push_str(PROCESS_GROUP_RULES);
+    SandboxSpec::Seatbelt(profile)
+}
+
+/// Test3/16: real-browser verification — the 14 fence plus read-only access
+/// to the verified runtime; network only to loopback when the entry is the
+/// project's own dev server. Never the whole /Applications, never off-machine.
+pub fn browser_verify_spec(
+    repo_root: &Path,
+    owned_globs: &[String],
+    scratch: &Path,
+    runtime: &Path,
+    loopback: bool,
+) -> SandboxSpec {
+    let Ok(runtime) = runtime.canonicalize() else {
+        return SandboxSpec::Unavailable;
+    };
+    match fenced_exec_spec(repo_root, owned_globs, scratch) {
+        SandboxSpec::Seatbelt(mut profile) => {
+            profile.push_str(&format!(
+                "(allow file-read-data (subpath \"{}\"))\n",
+                sbq(&runtime)
+            ));
+            if loopback {
+                profile.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n(allow network-inbound (local ip \"localhost:*\"))\n");
+            }
+            SandboxSpec::Seatbelt(profile)
+        }
+        other => other,
+    }
+}
+
+/// Whether the deletion-fenced profile can actually be enforced here.
+pub fn fence_available() -> bool {
+    status().mode == "seatbelt" && status().available
+}
+
 pub fn read_only_spec(repo_root: &Path, net: bool) -> SandboxSpec {
     scoped_spec(repo_root, &[], net, true)
 }
@@ -336,6 +469,9 @@ pub fn wrap_command(cmd: &mut Command, spec: &SandboxSpec) -> std::io::Result<Co
         if let Some(developer) = developer_directory() {
             paths.insert(0, developer.join("usr/bin"));
         }
+        if let Some(shim) = python_shim_dir() {
+            paths.insert(0, shim);
+        }
         c.env(
             "PATH",
             std::env::join_paths(paths).map_err(std::io::Error::other)?,
@@ -425,6 +561,30 @@ pub(crate) fn python_interpreter() -> Option<PathBuf> {
     }
 }
 
+/// Test3/14: `python3`/`python` on the sandbox PATH resolve the actual
+/// interpreter above instead of Apple's posix_spawn launcher, so project
+/// scripts that call `python3` run under the unchanged process-group fence.
+/// A host-owned symlink directory outside every project, read-only to the
+/// sandbox; it grants nothing beyond the interpreter already in read_roots.
+pub(crate) fn python_shim_dir() -> Option<PathBuf> {
+    static SHIM: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    SHIM.get_or_init(|| {
+        let target = python_interpreter()?;
+        let dir = std::env::temp_dir().join("hexagon-python-shim");
+        std::fs::create_dir_all(&dir).ok()?;
+        for name in ["python3", "python"] {
+            let link = dir.join(name);
+            if std::fs::read_link(&link).ok().as_deref() != Some(target.as_path()) {
+                let _ = std::fs::remove_file(&link);
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&target, &link).ok()?;
+            }
+        }
+        dir.canonicalize().ok()
+    })
+    .clone()
+}
+
 fn read_roots(repo: &Path) -> Vec<PathBuf> {
     runtime_read_roots(repo, true)
 }
@@ -457,6 +617,10 @@ fn runtime_read_roots(repo: &Path, build_tools: bool) -> Vec<PathBuf> {
         if python.exists() {
             roots.push(python);
         }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(shim) = python_shim_dir() {
+        roots.push(shim);
     }
     if let Some(home) = std::env::var_os("HOME").filter(|_| build_tools) {
         roots.extend(

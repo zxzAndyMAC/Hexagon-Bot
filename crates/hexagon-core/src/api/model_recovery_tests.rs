@@ -854,3 +854,28 @@ fn chat_model_retry_does_not_apply_to_a_chat_slot_choice() {
     assert!(error.contains("chat_fallback_not_applicable"), "{error}");
     assert_eq!(chat.sent().len(), 1);
 }
+
+#[test]
+fn a_spilled_large_checkpoint_still_continues_exactly() {
+    // test3 batch C regression: a checkpoint over the 64 KB event cap was
+    // spilled to a file and lost its kind, so recovery reported
+    // checkpoint_missing for any large request.
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = worker_wb(dir.path());
+    let first = Arc::new(Faulty::new(vec![Step::Fail(http(401))]));
+    wb.register_provider("default", first.clone());
+    let huge = format!("Summarize this: {}", "x".repeat(80_000));
+    assert!(wb.run_instance("a0", &huge).is_err());
+    let card = turn_card(&wb);
+    assert!(
+        card.payload["checkpoint_event_id"].is_i64(),
+        "checkpoint found despite spill"
+    );
+    let next = Arc::new(Faulty::new(vec![Step::Reply(text_response("done"))]));
+    wb.register_provider("default", next.clone());
+    wb.retry_model_request(&card.id).unwrap();
+    assert_eq!(
+        request_text(&next.sent()[0]),
+        request_text(&first.sent()[0])
+    );
+}

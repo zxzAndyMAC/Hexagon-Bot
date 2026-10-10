@@ -9,6 +9,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
 import { api, errText, type PendingQuestion } from '../api'
+import type { ReconcileReport } from '../gen/ReconcileReport'
 import { useUiStore } from '../store'
 import { extractDiffBlock, parseUnifiedDiff, type DiffOp } from '../diff'
 import { DiffView } from './DiffView'
@@ -215,40 +216,98 @@ function MotionCard({ children, itemRef, current }: {
   )
 }
 
+// Test3/13 (spec 06): the unknown-action card states what was attempted,
+// whether a read-only check exists, why a button is unavailable, and the
+// result of every check — even when the evidence did not change.
 function ActionRecovery({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
+  const p = q.payload
   const [reason, setReason] = useState('')
   const [acceptsDuplicate, setAcceptsDuplicate] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const inFlight = useRef(false)
+  const [report, setReport] = useState<ReconcileReport | null>((p.last_reconcile as ReconcileReport | undefined) ?? null)
   const container = useRef<HTMLDivElement>(null)
-  const id = String(q.payload.action_id)
-  const projectRoot = typeof q.payload.host_project_root === 'string' ? q.payload.host_project_root : ''
+  const id = String(p.action_id)
+  const projectRoot = typeof p.host_project_root === 'string' ? p.host_project_root : ''
+  const supported = p.reconcile_supported !== false
+  const run = async (action: () => Promise<unknown>) => {
+    if (inFlight.current) return
+    if (useUiStore.getState().modalScope !== 'workbench') { useUiStore.getState().pushToast(i18n.t('decisions.scopeBlocked')); return }
+    inFlight.current = true; setBusy(true)
+    try { await action() } catch (e) {
+      useUiStore.getState().pushToast(i18n.t('errors.actionFailed', { detail: errText(e) }), 'err')
+    } finally {
+      try { await useUiStore.getState().invalidate() } finally { inFlight.current = false; setBusy(false) }
+    }
+  }
+  const reconcile = () => run(async () => {
+    const next = await api.reconcileToolAction(id)
+    setReport(next)
+    useUiStore.getState().pushToast(t('actionRecovery.checked', { n: next.check_count, verdict: t(`actionRecovery.verdict.${next.verdict}`) }))
+  })
+  const abandon = () => run(async () => {
+    await api.abandonToolAction(id, reason, projectRoot)
+    await api.offerContinueAfterUnknown(id).catch(() => false)
+  })
+  const retry = () => run(() => api.retryToolAction(id, reason, acceptsDuplicate))
+  const needReason = !reason.trim()
+  const abandonBlock = needReason ? 'needReason' : !projectRoot ? 'projectUnknown' : ''
+  const retryBlock = needReason ? 'needReason' : !acceptsDuplicate ? 'needRisk' : ''
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!top || e.repeat || e.defaultPrevented) return
-      const index = (['reconcileAction', 'abandonAction', 'retryAction'] as const).findIndex((action) => matches(e, bindingFor(action)))
-      if (index < 0) return
+      const action = (['reconcileAction', 'abandonAction', 'retryAction'] as const).find((a) => matches(e, bindingFor(a)))
+      if (!action) return
       e.preventDefault()
-      if (useUiStore.getState().modalScope !== 'workbench') {
-        useUiStore.getState().pushToast(i18n.t('decisions.scopeBlocked'))
+      const button = container.current?.querySelector<HTMLButtonElement>(`button[data-action="${action}"]`)
+      if (!button || button.disabled) {
+        useUiStore.getState().pushToast(t(button ? `actionRecovery.blocked.${button.dataset.block}` : 'actionRecovery.noCheck'))
         return
       }
-      container.current?.querySelectorAll('button')[index]?.click()
+      button.click()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [top])
+  }, [top, t])
+  const label = (action: 'reconcileAction' | 'abandonAction' | 'retryAction', text: string, block: string) =>
+    [text, block ? t(`actionRecovery.blocked.${block}`) : '', formatBinding(bindingFor(action))].filter(Boolean).join(' · ')
   return <CardShell tone="ask" icon="warn" title={t('cards.actionUnknown')}>
-    <div ref={container}>
-      <div className="dim3">{t('cards.actionUnknownHint')}</div>
-      <code>{id}</code>
-      {q.payload.reconciliation_evidence != null && <p>{String(q.payload.reconciliation_evidence)}</p>}
-      <label>{t('cards.actionReason')}<input value={reason} onChange={(e) => setReason(e.target.value)} /></label>
-      <label><input type="checkbox" checked={acceptsDuplicate} onChange={(e) => setAcceptsDuplicate(e.target.checked)} />{t('cards.duplicateRisk')}</label>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <Btn title={formatBinding(bindingFor('reconcileAction'))} onClick={() => api.reconcileToolAction(id)}>{t('cards.reconcileAction')}</Btn>
-        <Btn danger disabled={!reason.trim() || !projectRoot} title={formatBinding(bindingFor('abandonAction'))} onClick={() => api.abandonToolAction(id, reason, projectRoot)}>{t('cards.abandonAction')}</Btn>
-        <Btn danger disabled={!reason.trim() || !acceptsDuplicate} title={formatBinding(bindingFor('retryAction'))} onClick={() => api.retryToolAction(id, reason, acceptsDuplicate)}>{t('cards.retryAction')}</Btn>
+    <div ref={container} aria-busy={busy}>
+      <div style={{ fontSize: 12 }} data-action-facts>
+        <strong className="mono">{String(p.tool ?? t('actionRecovery.toolUnknown'))}</strong>
+        {p.target ? <span className="mono dim"> · {String(p.target)}</span> : null}
       </div>
+      <div className="dim3" style={{ fontSize: 12, margin: '4px 0' }}>
+        {t('actionRecovery.errorClass', { code: String(p.error_code ?? t('actionRecovery.errorUnknown')) })}
+      </div>
+      <div className="dim3" style={{ fontSize: 12, marginBottom: 6 }}>{t('cards.actionUnknownHint')}</div>
+      <div style={{ fontSize: 12, marginBottom: 6 }} data-capability>{t(supported ? 'actionRecovery.canCheck' : 'actionRecovery.noCheck')}</div>
+      {report && <div role="status" data-last-check style={{ fontSize: 12, marginBottom: 6 }}>
+        {t('actionRecovery.lastCheck', { n: report.check_count, verdict: t(`actionRecovery.verdict.${report.verdict}`), reason: t(`actionRecovery.reason.${report.reason}`, { defaultValue: report.reason }) })}
+        {report.continue_offered && ` ${t('actionRecovery.continueOffered')}`}
+      </div>}
+      <details className="dim3" style={{ fontSize: 11, marginBottom: 6 }}>
+        <summary>{t('actionRecovery.technical')}</summary>
+        <code>{id}</code>
+        {p.reconciliation_evidence != null && <p>{String(p.reconciliation_evidence)}</p>}
+      </details>
+      <label style={{ display: 'block', fontSize: 12 }}>{t('cards.actionReason')}
+        <input className="input" style={{ display: 'block', width: '100%', marginTop: 4 }} value={reason} onChange={(e) => setReason(e.target.value)} />
+      </label>
+      <div className="dim3" style={{ fontSize: 11, margin: '2px 0 6px' }}>{t('actionRecovery.reasonHint')}</div>
+      <label style={{ fontSize: 12 }}><input type="checkbox" checked={acceptsDuplicate} onChange={(e) => setAcceptsDuplicate(e.target.checked)} />{t('cards.duplicateRisk')}</label>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        {supported && <button type="button" className="btn" data-action="reconcileAction" data-block="" disabled={busy}
+          title={label('reconcileAction', t('cards.reconcileAction'), '')} onClick={() => { void reconcile() }}>{busy ? t('actionRecovery.working') : t('cards.reconcileAction')}</button>}
+        <button type="button" className="btn danger" data-action="abandonAction" data-block={abandonBlock} disabled={busy || !!abandonBlock}
+          title={label('abandonAction', t('cards.abandonAction'), abandonBlock)} onClick={() => { void abandon() }}>{t('cards.abandonAction')}</button>
+        <button type="button" className="btn danger" data-action="retryAction" data-block={retryBlock} disabled={busy || !!retryBlock}
+          title={label('retryAction', t('cards.retryAction'), retryBlock)} onClick={() => { void retry() }}>{t('cards.retryAction')}</button>
+      </div>
+      {(abandonBlock || retryBlock) && <div className="dim3" data-blocked style={{ fontSize: 11, marginTop: 4 }}>
+        {t(`actionRecovery.blocked.${abandonBlock || retryBlock}`)}
+      </div>}
     </div>
   </CardShell>
 }

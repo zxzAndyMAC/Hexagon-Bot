@@ -1,3 +1,4 @@
+import type { ReconcileReport } from './gen/ReconcileReport'
 import type { RejudgeOutcome } from './gen/RejudgeOutcome'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
@@ -493,7 +494,8 @@ export const api = {
   rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
-  reconcileToolAction: (actionId: string) => call<void>('reconcile_tool_action', { actionId }),
+  reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
+  offerContinueAfterUnknown: (actionId: string) => call<boolean>('offer_continue_after_unknown', { actionId }),
   abandonToolAction: (actionId: string, reason: string, expectedProjectRoot: string) => call<void>('abandon_tool_action', { actionId, reason, expectedProjectRoot }),
   retryToolAction: (actionId: string, reason: string, acceptsDuplicate: boolean) => call<void>('retry_tool_action', { actionId, reason, acceptsDuplicate }),
   resumeToolAction: (actionId: string) => call<void>('resume_tool_action', { actionId }),

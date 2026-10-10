@@ -1187,6 +1187,9 @@ impl Workbench {
             source_review_phase: false,
             saved_permission_admission: None,
             trigger_turn_id: None,
+            exec_scratch: None,
+            install_cache: None,
+            browser_runtime: None,
         }
     }
 
@@ -1311,17 +1314,17 @@ impl Workbench {
         if current.state != "pending" || current.question_id.is_some() {
             crate::actions::close_resolved_card(&self.db, &ctx, action_id)?;
         }
+        // Test3/13: a settled new attempt unblocks the original task; offer
+        // the explicit continue entry (pending/unknown attempts do not).
+        self.offer_continue_after_unknown(action_id)?;
         Ok(result?)
     }
 
     /// Resolve the blocking decision, without rewriting uncertain history.
     pub fn abandon_tool_action(&self, action_id: &str, reason: &str) -> Result<(), ApiError> {
-        Ok(crate::actions::abandon(
-            &self.db,
-            &self.project_id,
-            action_id,
-            reason,
-        )?)
+        crate::actions::abandon(&self.db, &self.project_id, action_id, reason)?;
+        self.offer_continue_after_unknown(action_id)?;
+        Ok(())
     }
 
     /// Owner-triggered read-only reconciliation of an uncertain action.
@@ -1532,7 +1535,6 @@ impl Workbench {
         &self,
         card: &crate::cards::Card,
     ) -> Result<Option<evaluation_resume::ActivationResume>, ApiError> {
-        use rusqlite::OptionalExtension;
         let aid = card
             .agent_id
             .as_deref()
@@ -1540,6 +1542,17 @@ impl Workbench {
         let Some(action_id) = card.payload["action_id"].as_str() else {
             return Ok(None);
         };
+        self.action_activation(aid, action_id)
+    }
+
+    /// The validated original activation of a recorded action (permission
+    /// continuation, test3/04; unknown-action continuation, test3/13).
+    fn action_activation(
+        &self,
+        aid: &str,
+        action_id: &str,
+    ) -> Result<Option<evaluation_resume::ActivationResume>, ApiError> {
+        use rusqlite::OptionalExtension;
         let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
         let active = self.active_run()?.map(|r| r.id);
         let started = std::time::Instant::now();
@@ -4188,6 +4201,12 @@ pub(crate) fn desktop_permissions_for_test(
 
 #[cfg(test)]
 mod approval_mode_tests;
+#[cfg(test)]
+mod browser_verify_tests;
+#[cfg(test)]
+mod dependency_fetch_tests;
+#[cfg(test)]
+mod fenced_exec_tests;
 
 #[cfg(test)]
 mod skill_discovery_tests;
@@ -4598,7 +4617,9 @@ pub fn timeline_window_metadata(
     crate::trace::window::metadata(db, crate::PROJECT_ID, request)
 }
 
+mod action_recovery;
 mod model_recovery;
+pub use action_recovery::{ReconcileReport, ReconcileVerdict};
 
 pub use model_recovery::{
     model_request_recovery, ModelRequestFailure, ModelRequestRecovery, RejudgeOutcome,

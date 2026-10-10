@@ -137,8 +137,11 @@ impl Workbench {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        row.map(|(id, payload)| Ok((id, serde_json::from_str(&payload)?)))
-            .transpose()
+        row.map(|(id, payload)| {
+            let payload: Value = serde_json::from_str(&payload)?;
+            Ok((id, self.db.hydrate_payload(&self.project_id, payload)))
+        })
+        .transpose()
     }
 
     /// Owner stop (Interrupted) is not a failure and creates no item, but a
@@ -298,7 +301,9 @@ impl Workbench {
             )
             .optional()?;
         // A corrupt payload is missing material, not an error to surface raw.
-        Ok(payload.and_then(|text| serde_json::from_str(&text).ok()))
+        Ok(payload
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .map(|payload| self.db.hydrate_payload(&self.project_id, payload)))
     }
 
     fn turn_recovery_same_task(

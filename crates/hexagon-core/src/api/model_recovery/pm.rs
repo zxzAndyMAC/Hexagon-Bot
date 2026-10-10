@@ -660,7 +660,11 @@ impl Workbench {
         let next: Option<i64> = self.db.conn().query_row("SELECT MIN(id) FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='fastpath_dispatched' AND id>?3",rusqlite::params![self.project_id,aid,marker],|r|r.get(0))?;
         let child: Option<String> = self.db.conn().query_row("SELECT payload FROM events WHERE project_id=?1 AND agent_id=?2 AND stage_run_id IS ?3 AND kind='turn_started' AND id>?4 AND (?5 IS NULL OR id<?5) AND COALESCE(json_extract(payload,'$.subagent'),0)=0 ORDER BY id LIMIT 1",rusqlite::params![self.project_id,aid,packet.run_id,marker,next],|r|r.get(0)).optional()?;
         if let Some(child) = child {
-            if serde_json::from_str::<serde_json::Value>(&child)?["instruction"] != packet.body {
+            // A large instruction may have been spilled out of the event row.
+            let child = self
+                .db
+                .hydrate_payload(&self.project_id, serde_json::from_str(&child)?);
+            if child["instruction"] != packet.body {
                 drop(tx);
                 self.note_handoff_failure(qid, packet, "worker_binding_changed");
                 return Err(ApiError::BadInput("worker task binding changed".into()));

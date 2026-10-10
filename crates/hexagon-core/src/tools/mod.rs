@@ -123,6 +123,15 @@ pub struct ToolContext {
     /// MR-03: this activation step's TurnStarted id, bound into a model
     /// failure checkpoint so recovery resumes the exact chain position.
     pub(crate) trigger_turn_id: Option<i64>,
+    /// Test3/14: host scratch for a broad-access fenced execution. Its
+    /// presence selects the deletion-fenced profile and sets TMPDIR.
+    pub(crate) exec_scratch: Option<std::path::PathBuf>,
+    /// Test3/15: the public dependency cache an offline project install may
+    /// read; also lets the install remove only `node_modules`.
+    pub(crate) install_cache: Option<std::path::PathBuf>,
+    /// Test3/16: the verified browser runtime (read-only) for a fenced
+    /// verification run, and whether the entry is a loopback URL.
+    pub(crate) browser_runtime: Option<(std::path::PathBuf, bool)>,
 }
 
 impl Default for ToolContext {
@@ -156,6 +165,9 @@ impl Default for ToolContext {
             source_review_phase: false,
             saved_permission_admission: None,
             trigger_turn_id: None,
+            exec_scratch: None,
+            install_cache: None,
+            browser_runtime: None,
         }
     }
 }
@@ -250,6 +262,12 @@ pub trait Tool: Send + Sync {
     /// `get`/`update` 这类名字禁用；宁可 `entries`/`todo_list`。
     fn input_schema(&self) -> Value;
     fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError>;
+    /// Test3/13: whether `reconcile` is a real read-only check. The unknown
+    /// card says so up front instead of offering a check that can only
+    /// repeat "no contract" (a false "supported" wastes an owner action).
+    fn supports_reconcile(&self) -> bool {
+        false
+    }
     /// Must only read a receipt/postcondition; never execute the original action.
     fn reconcile(
         &self,
@@ -337,6 +355,8 @@ impl Registry {
         r.register(crate::design::ProposeDesign);
         r.register(ProposeExperience);
         r.register(WebFetch);
+        r.register(deps::DependencyFetch);
+        r.register(verify_browser::BrowserVerify);
         r.register(crate::git::GitBaselineMerge);
         r.register(desktop::ComputerSession);
         r.register(desktop::ComputerObserve);
@@ -609,9 +629,23 @@ impl Registry {
                                 ctx.stage_run_id.as_deref(),
                             )?;
                         }
+                        crate::permissions::AllowVia::FencedExec => {
+                            db.append_event(
+                                &ctx.project_id,
+                                EventKind::PermissionAllowed,
+                                json!({ "tool": name, "via": "fenced_exec", "mode": "broad" }),
+                                Some(&ctx.agent_id),
+                                ctx.stage_run_id.as_deref(),
+                            )?;
+                        }
                         crate::permissions::AllowVia::Default => {}
                     }
                     crate::actions::authorize(db, ctx, &action.id)?;
+                    if matches!(via, crate::permissions::AllowVia::FencedExec) {
+                        return self
+                            .exec_fenced(db, ctx, name, input, call_seq, &action.id)
+                            .map(CallOutcome::Done);
+                    }
                     self.exec_and_log(db, ctx, name, input, call_seq, &action.id, true)
                         .map(CallOutcome::Done)
                 }
@@ -888,6 +922,7 @@ impl Registry {
             .is_some_and(|e| effect_uncertain(RiskClass::Exec, e));
         crate::actions::finish(db, ctx, &action.id, &result, uncertain)?;
         if uncertain {
+            self.note_unknown_capability(db, ctx, &action.id)?;
             return Err(ToolError::OutcomeUnknown(action.id));
         }
         result.map(CallOutcome::Done)
@@ -989,6 +1024,9 @@ impl Registry {
         // In particular NotExecuted here must not erase the original unknown.
         let uncertain = uncertain || (!allow_recovery && result.is_err());
         crate::actions::finish(db, &execution_ctx, action_id, &result, uncertain)?;
+        if uncertain {
+            self.note_unknown_capability(db, &execution_ctx, action_id)?;
+        }
         if uncertain && !allow_recovery {
             return Err(ToolError::OutcomeUnknown(action_id.into()));
         }
@@ -1005,6 +1043,88 @@ impl Registry {
 
     /// Recovery keeps the original identity; neither this API nor its default
     /// contract executes the uncertain operation again (D05 / ticket 11).
+    /// Test3/14: run a broad-access command under the deletion fence with a
+    /// host scratch as TMPDIR, then remove that scratch. The scratch has a
+    /// host identity (this action), so cleaning it needs no owner question;
+    /// project files are never deleted here.
+    fn exec_fenced(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        name: &str,
+        input: Value,
+        call_seq: Option<&str>,
+        action_id: &str,
+    ) -> Result<Value, ToolError> {
+        let scratch = std::env::temp_dir()
+            .join("hexagon-exec")
+            .join(format!("{}-{action_id}", ctx.project_id));
+        std::fs::create_dir_all(&scratch)
+            .map_err(|e| ToolError::NotExecuted(format!("scratch unavailable: {e}")))?;
+        let scratch = scratch
+            .canonicalize()
+            .map_err(|e| ToolError::NotExecuted(format!("scratch unavailable: {e}")))?;
+        let mut fenced = ctx.clone();
+        fenced.exec_scratch = Some(scratch.clone());
+        let result = self.exec_and_log(db, &fenced, name, input, call_seq, action_id, true);
+        let cleaned = std::fs::remove_dir_all(&scratch).is_ok();
+        db.append_event(
+            &ctx.project_id,
+            EventKind::System,
+            json!({"kind":"fenced_exec","action_id":action_id,"scratch_cleaned":cleaned,
+                "ok":result.is_ok()}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )?;
+        result.map(|mut value| {
+            value["broad_access"] = json!({
+                "deletions": "project files cannot be deleted, renamed over or removed in automatic runs; ask the owner for a deletion",
+                "scratch": "TMPDIR is a host scratch removed after the command",
+                "scratch_cleaned": cleaned,
+            });
+            value
+        })
+    }
+
+    /// Test3/13: host facts for the unknown card — the real tool, its
+    /// target and whether a read-only check exists. Never model supplied.
+    pub(crate) fn note_unknown_capability(
+        &self,
+        db: &Db,
+        ctx: &ToolContext,
+        action_id: &str,
+    ) -> Result<(), ToolError> {
+        let action = crate::actions::get(db, &ctx.project_id, action_id)?;
+        let Some(card) =
+            crate::cards::find_by_idem(db, &ctx.agent_id, &format!("unknown:{action_id}"))?
+        else {
+            return Ok(());
+        };
+        let tool = self.get(&action.tool);
+        let targets = tool
+            .as_ref()
+            .and_then(|tool| tool.write_targets(&action.input).ok())
+            .unwrap_or_default();
+        let target = if targets.is_empty() {
+            unknown_target_summary(&action.input)
+        } else {
+            targets.join(", ")
+        };
+        crate::cards::annotate(
+            db,
+            &card.id,
+            &[
+                ("tool", serde_json::json!(action.tool)),
+                ("target", serde_json::json!(target)),
+                (
+                    "reconcile_supported",
+                    serde_json::json!(tool.is_some_and(|tool| tool.supports_reconcile())),
+                ),
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn reconcile_action(
         &self,
         db: &Db,
@@ -1091,11 +1211,13 @@ fn effect_uncertain(risk: RiskClass, error: &ToolError) -> bool {
 // 护栏层与内建实现各成文件；`pub use` 再导出保 `crate::tools::X` 路径不变。
 pub(crate) mod browser;
 mod builtin;
+pub mod deps;
 pub(crate) mod desktop;
 pub(crate) mod effects;
 pub mod readstate;
 mod safety;
 pub(crate) mod schema;
+pub mod verify_browser;
 pub(crate) mod writeguard;
 pub use builtin::*;
 pub use safety::*;
@@ -1104,3 +1226,27 @@ pub use safety::*;
 mod tests;
 
 pub(crate) mod host;
+
+/// Test3/15/16: a per-run scratch identity. Process id alone collided when
+/// two runs of one project overlapped (one run's cleanup killed the other).
+pub(crate) fn run_nonce() -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{}-{nanos:x}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
+/// A short, display-only target for tools without a host write manifest.
+fn unknown_target_summary(input: &Value) -> String {
+    let raw = ["path", "url", "cmd", "command", "target"]
+        .iter()
+        .find_map(|key| input[*key].as_str())
+        .unwrap_or_default();
+    raw.chars().take(160).collect()
+}

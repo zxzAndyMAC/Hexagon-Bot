@@ -553,6 +553,23 @@ impl SessionTable {
             crate::permissions::agent_role(db, ctx).as_deref() == Some(crate::pm_route::PM_ROLE);
         let spec = if read_only {
             crate::sandbox::read_only_spec(&ctx.repo_root, net)
+        } else if let (Some(scratch), Some((runtime, loopback))) =
+            (&ctx.exec_scratch, &ctx.browser_runtime)
+        {
+            // Test3/16: read-only verified runtime; loopback only if asked.
+            crate::sandbox::browser_verify_spec(
+                &ctx.repo_root,
+                &ctx.owned_globs,
+                scratch,
+                runtime,
+                *loopback,
+            )
+        } else if let (Some(scratch), Some(cache)) = (&ctx.exec_scratch, &ctx.install_cache) {
+            // Test3/15: offline install reads the fetched cache only.
+            crate::sandbox::fenced_install_spec(&ctx.repo_root, &ctx.owned_globs, scratch, cache)
+        } else if let Some(scratch) = &ctx.exec_scratch {
+            // Test3/14: never widen — the fenced run is offline by contract.
+            crate::sandbox::fenced_exec_spec(&ctx.repo_root, &ctx.owned_globs, scratch)
         } else {
             crate::sandbox::spec_for(&ctx.repo_root, &ctx.owned_globs, net)
         };
@@ -1131,6 +1148,13 @@ fn spawn_task_handle(
     };
     let mut c = sh_command(&ctx.repo_root, spec)?;
     c.arg("-c").arg(cmd);
+    if let Some(scratch) = &ctx.exec_scratch {
+        // Test3/14: temporary files go to the host scratch, the only place
+        // the fenced profile allows deleting.
+        c.env("TMPDIR", scratch)
+            .env("TMP", scratch)
+            .env("TEMP", scratch);
+    }
     if let Some(output) = output {
         // Host-generated paths after environment sanitization; test input
         // cannot inject arbitrary environment or filesystem capabilities.
