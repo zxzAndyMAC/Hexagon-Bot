@@ -10,6 +10,14 @@
 use crate::db::Db;
 use rusqlite::OptionalExtension;
 
+#[derive(Debug, thiserror::Error)]
+pub enum DelegationError {
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("trace: {0}")]
+    Trace(#[from] crate::trace::TraceError),
+}
+
 /// The correction rounds one business decision may spend (spec: 三轮).
 pub const MAX_ROUNDS: i64 = 3;
 
@@ -80,8 +88,11 @@ pub fn actor_is_current(db: &Db, project_id: &str, actor: &str) -> bool {
     current(db, project_id).is_some_and(|grant| grant.actor() == actor)
 }
 
-fn set(db: &Db, project_id: &str, enabled: bool) -> Result<DelegationStatus, rusqlite::Error> {
+fn set(db: &Db, project_id: &str, enabled: bool) -> Result<DelegationStatus, DelegationError> {
     let started = std::time::Instant::now();
+    // The switch and its trace record land together: a grant without its
+    // `delegation_changed` fact once could not be explained afterwards.
+    let tx = db.conn().unchecked_transaction()?;
     let previous = status(db, project_id).generation;
     let id = format!("d{:x}{:x}", previous + 1, nanos());
     db.conn().execute(
@@ -92,14 +103,15 @@ fn set(db: &Db, project_id: &str, enabled: bool) -> Result<DelegationStatus, rus
         rusqlite::params![project_id, id, previous + 1, enabled as i64],
     )?;
     let after = status(db, project_id);
-    let _ = db.append_event(
+    db.append_event(
         project_id,
         crate::trace::EventKind::System,
         serde_json::json!({"kind":"delegation_changed","enabled":enabled,
             "generation":after.generation,"delegation_id":after.delegation_id,"actor":"owner"}),
         None,
         None,
-    );
+    )?;
+    tx.commit()?;
     crate::diag::note(
         crate::diag::CLASS_JUDGE,
         false,
@@ -115,13 +127,13 @@ fn set(db: &Db, project_id: &str, enabled: bool) -> Result<DelegationStatus, rus
 }
 
 /// Owner turns delegation on: a fresh grant and generation.
-pub fn enable(db: &Db, project_id: &str) -> Result<DelegationStatus, rusqlite::Error> {
+pub fn enable(db: &Db, project_id: &str) -> Result<DelegationStatus, DelegationError> {
     set(db, project_id, true)
 }
 
 /// Owner turns delegation off: the generation moves on, so any decision still
 /// in flight under the old grant fails its commit check.
-pub fn disable(db: &Db, project_id: &str) -> Result<DelegationStatus, rusqlite::Error> {
+pub fn disable(db: &Db, project_id: &str) -> Result<DelegationStatus, DelegationError> {
     set(db, project_id, false)
 }
 
@@ -132,15 +144,24 @@ fn nanos() -> u128 {
         .unwrap_or(0)
 }
 
-/// Rounds already spent on one business decision.
+/// Rounds already spent on one business decision. Cost model: an
+/// unreadable budget reads as exhausted — a false "exhausted" ends one item
+/// with its fixed fallback; a false "fresh" lets a decision loop past the
+/// three-round contract. A missing row is a genuine zero.
 pub fn rounds(db: &Db, project_id: &str, key: &str) -> i64 {
-    db.conn()
+    use rusqlite::OptionalExtension;
+    match db
+        .conn()
         .query_row(
             "SELECT rounds FROM managed_budgets WHERE project_id=?1 AND decision_key=?2",
             rusqlite::params![project_id, key],
             |r| r.get(0),
         )
-        .unwrap_or(0)
+        .optional()
+    {
+        Ok(found) => found.unwrap_or(0),
+        Err(_) => MAX_ROUNDS,
+    }
 }
 
 /// Spend one round; returns the count after spending. Never decreases.

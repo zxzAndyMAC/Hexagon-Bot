@@ -13,6 +13,11 @@
 use super::*;
 use serde::Serialize;
 
+mod act;
+mod routes;
+// Glob re-export keeps each item's own visibility (pub for the IPC reads).
+pub use routes::*;
+
 /// One card the processor will decide. Data only: safe to carry across the
 /// unlocked model step.
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +69,34 @@ pub struct ManagedRecord {
     pub via: String,
     pub outcome: String,
     pub actor: String,
+    /// done | incomplete | failed — computed here from one closed table so
+    /// the UI never guesses from outcome strings (test3/23 review).
+    pub result: String,
+}
+
+/// Outcomes where the decision was made but the business item did not
+/// complete. Everything else that did not fail is a landed effect.
+const INCOMPLETE_OUTCOMES: &[&str] = &[
+    "incomplete",
+    "still_incomplete",
+    "checks_ran_still_incomplete",
+    "kept_checks_required",
+    "ended_unexecuted",
+    "not_published",
+    "new_attempt_awaits_permission",
+    "ended",
+];
+
+/// An empty pending list is never business success: only a landed effect is
+/// "done" (spec ticket 23).
+pub(crate) fn result_of(action: &str, outcome: &str) -> &'static str {
+    if outcome.starts_with("failed") {
+        "failed"
+    } else if action == "incomplete" || INCOMPLETE_OUTCOMES.contains(&outcome) {
+        "incomplete"
+    } else {
+        "done"
+    }
 }
 
 /// Newest first, at most `limit` records.
@@ -86,441 +119,16 @@ pub fn managed_history(
             via: text(&event.payload["via"]),
             outcome: text(&event.payload["outcome"]),
             actor: text(&event.payload["actor"]),
+            result: result_of(
+                event.payload["action"].as_str().unwrap_or_default(),
+                event.payload["outcome"].as_str().unwrap_or_default(),
+            )
+            .into(),
         })
         .collect();
     records.reverse();
     records.truncate(limit);
     Ok(records)
-}
-
-/// Q19–Q21 (spec 托管外部边界): entries where the host cannot prove an
-/// action will not delete an external file, directory, project or cloud
-/// document. Under delegation they are refused and reported as a capability
-/// gap; a model label is never proof. Cost model: a false refusal leaves one
-/// task incomplete with a visible reason; a false allow is an unreviewed
-/// external deletion. Entries with host-provable contracts (project tools,
-/// host_fs_read/host_fs_write, which have no delete operation) are not here.
-pub(crate) fn unprovable_external(tool: &str) -> Option<&'static str> {
-    match tool {
-        "host_bash" => Some("host_shell_cannot_exclude_external_deletion"),
-        "browser_action" => Some("browser_page_action_cannot_exclude_deletion"),
-        "computer_action" | "computer_navigate" => Some("native_input_cannot_exclude_deletion"),
-        _ if tool.starts_with("mcp:") => Some("mcp_semantics_cannot_exclude_deletion"),
-        _ => None,
-    }
-}
-
-/// The stable business key a card's decisions are budgeted under, if the
-/// processor takes this card over. Same key across new card ids, restarts and
-/// off/on, so three rounds stay three rounds (spec: 同一业务决定最多三轮).
-pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
-    let p = &card.payload;
-    let action = || p["action_id"].as_str().map(str::to_string);
-    match (card.kind.as_str(), p["sub"].as_str()) {
-        ("permission", _) => Some(format!(
-            "permission:{}",
-            action().unwrap_or_else(|| card.id.clone())
-        )),
-        ("recovery", Some("tool_outcome_unknown")) => action().map(|a| format!("unknown:{a}")),
-        ("recovery", Some("tool_action_ready")) => action().map(|a| format!("ready:{a}")),
-        // An in-flight retry is the processor's own work, not a new decision.
-        // Interrupted stage run (crash or network suspension).
-        ("recovery", None) if p["run_id"].is_string() => {
-            Some(format!("run:{}", p["run_id"].as_str().unwrap_or_default()))
-        }
-        ("recovery", Some("model_request")) => Some(format!("model_request:{}", card.id)),
-        ("stall", _) if p["source"] == "activation_resume" => Some(format!(
-            "resume:{}:{}",
-            p["activation_root_turn_id"], p["trigger_turn_id"]
-        )),
-        ("stall", _) => Some(format!("stall:{}", card.id)),
-        // Proposal confirmations share kind=stamp (cards.rs overload note).
-        ("stamp", _) if !p["proposal_id"].is_null() => {
-            p["proposal_id"].as_str().map(|id| format!("proposal:{id}"))
-        }
-        // One budget per stage across reworked runs and new cards.
-        ("stamp", None) => p["stage"].as_str().map(|s| format!("stage:{s}")),
-        ("stamp", Some("quality_revalidation")) => {
-            p["run_id"].as_str().map(|r| format!("revalidation:{r}"))
-        }
-        ("stamp", Some("acceptance_exception")) => Some(format!("exception:{}", card.id)),
-        ("escalation", Some("design_direction")) => Some(format!("design:{}", p["revision"])),
-        ("escalation", Some("context_overflow")) => {
-            Some(format!("context:{}", p["trigger_turn_id"]))
-        }
-        ("publish", _) => Some(format!(
-            "publish:{}:{}",
-            p["remote"].as_str().unwrap_or_default(),
-            p["commit"].as_str().unwrap_or(&card.id)
-        )),
-        ("install", _) => Some(format!(
-            "install:{}:{}",
-            p["plan_kind"].as_str().unwrap_or_default(),
-            p["name"].as_str().unwrap_or(&card.id)
-        )),
-        ("grant", _) => Some(format!(
-            "grant:{}:{}:{}",
-            p["agent_id"].as_str().unwrap_or_default(),
-            p["grant_kind"].as_str().unwrap_or_default(),
-            p["name"].as_str().unwrap_or_default()
-        )),
-        // Back-and-forth bounces on one artifact share one budget.
-        ("escalation", _) => Some(format!("flag:{}", p["target"].as_str().unwrap_or(&card.id))),
-        // Test3/23: an unregistered kind/sub is still taken over — it ends
-        // incomplete and is reported, never approved by default.
-        _ => Some(format!("unrouted:{}", card.id)),
-    }
-}
-
-/// Taken over = routed and still inside its budget plus the one forced
-/// fallback round. A card whose fallback also failed returns to the owner:
-/// a host defect must stay visible rather than be hidden forever.
-pub(crate) fn takes_over(db: &Db, project_id: &str, card: &crate::cards::QueuedCard) -> bool {
-    decision_key(card).is_some_and(|key| {
-        crate::delegation::rounds(db, project_id, &key) <= crate::delegation::MAX_ROUNDS
-    })
-}
-
-/// The owner's pending read: while delegation is on, cards the processor
-/// owns are shown in the delegation panel as processing, not as owner cards.
-pub fn owner_pending(db: &Db, project_id: &str) -> Result<Vec<crate::cards::QueuedCard>, ApiError> {
-    let cards = crate::cards::queued(db, project_id)?;
-    if crate::delegation::current(db, project_id).is_none() {
-        return Ok(cards);
-    }
-    Ok(cards
-        .into_iter()
-        .filter(|card| !takes_over(db, project_id, card))
-        .collect())
-}
-
-/// Cards currently held by the processor (empty while delegation is off).
-pub fn managed_processing(
-    db: &Db,
-    project_id: &str,
-) -> Result<Vec<crate::cards::QueuedCard>, ApiError> {
-    if crate::delegation::current(db, project_id).is_none() {
-        return Ok(vec![]);
-    }
-    Ok(crate::cards::queued(db, project_id)?
-        .into_iter()
-        .filter(|card| takes_over(db, project_id, card))
-        .collect())
-}
-
-/// Cost model for the closed-set parser: an unrecognised answer becomes the
-/// fallback (a refusal); accepting a near-miss could run an action nobody
-/// chose. Exact token match only.
-pub(crate) fn parse_choice(text: &str, options: &[(String, String)]) -> Option<String> {
-    let first = text
-        .trim()
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .trim_matches(['"', '`', '.']);
-    options
-        .iter()
-        .find(|(token, _)| token == first)
-        .map(|(token, _)| token.clone())
-}
-
-/// One card type's closed set (token, meaning), host-decided action and
-/// fixed automatic terminal action.
-struct Route {
-    options: Vec<(String, String)>,
-    state: String,
-    forced: Option<(&'static str, &'static str)>,
-    fallback: &'static str,
-}
-
-fn opts(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|(a, b)| (a.to_string(), b.to_string()))
-        .collect()
-}
-
-fn permission_route(p: &serde_json::Value) -> Route {
-    let tool = p["tool"].as_str().unwrap_or_default();
-    let input = serde_json::to_string(&p["raw_input"]).unwrap_or_default();
-    Route {
-        options: opts(&[("allow", "run the action as requested"), ("deny", "refuse the action")]),
-        state: format!(
-            "You act for the project owner under project delegation. Decide one pending permission.\n\
-             Tool: {tool}\nInput: {}\nWhy it needs approval: {}\nSafety-net action: {}\n\
-             Allow it only if it is needed for the project task and does not delete files outside the project, \
-             manage accounts, pay, or publish to a new target. Answer with exactly one token: allow or deny.",
-            input.chars().take(2000).collect::<String>(),
-            p["reason"].as_str().unwrap_or_default(),
-            p["safety_net"] == true,
-        ),
-        forced: unprovable_external(tool).map(|gap| ("deny", gap)),
-        fallback: "deny",
-    }
-}
-
-/// Facts that decide what the processor may do with an unknown action.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UnknownFacts {
-    /// This action is itself the one linked new attempt of another.
-    pub linked_attempt: bool,
-    /// An existing resolution of this action, if any.
-    pub resolution: Option<String>,
-    /// The tool cannot prove it will not delete external content.
-    pub external_gap: Option<&'static str>,
-}
-
-/// Spec 托管 Q14/Q18: abandon or at most one linked new attempt; the old
-/// unknown stays. Cost model: a false "abandon" leaves the task to continue
-/// without that effect (visible); a false "new attempt" may repeat a real
-/// external effect, so a second attempt and unprovable entries are refused.
-pub(crate) fn unknown_forced(facts: &UnknownFacts) -> Option<(&'static str, &'static str)> {
-    match facts.resolution.as_deref() {
-        // Continue the one existing attempt idempotently, never a second.
-        Some("new_attempt") => return Some(("new_attempt", "linked_attempt_in_flight")),
-        Some(_) => return Some(("abandon", "already_abandoned")),
-        None => {}
-    }
-    if facts.linked_attempt {
-        return Some(("abandon", "new_attempt_already_used"));
-    }
-    facts.external_gap.map(|gap| ("abandon", gap))
-}
-
-fn unknown_route(tool: &str, facts: &UnknownFacts) -> Route {
-    Route {
-        options: opts(&[
-            ("abandon", "accept the unknown outcome and continue without it"),
-            ("new_attempt", "run the action once more, accepting a possible duplicate"),
-        ]),
-        state: format!(
-            "You act for the project owner under project delegation. A tool action's outcome is unknown \
-             (it may or may not have happened). Tool: {tool}.\n\
-             Choose new_attempt only if repeating it is harmless or clearly needed; otherwise abandon. \
-             Answer with exactly one token: abandon or new_attempt."
-        ),
-        forced: unknown_forced(facts),
-        fallback: "abandon",
-    }
-}
-
-fn stall_route(p: &serde_json::Value) -> Route {
-    let retry = p["retry"] == true;
-    Route {
-        options: opts(&[
-            ("retry", "wake the role or project manager once more"),
-            ("end", "end this stall"),
-        ]),
-        state: format!(
-            "You act for the project owner under project delegation. The project stalled ({}). \
-             Choose retry to try once more, or end. Answer with exactly one token: retry or end.",
-            p["branch"].as_str().unwrap_or("unknown")
-        ),
-        forced: (!retry).then_some(("end", "retry_not_offered")),
-        fallback: "end",
-    }
-}
-
-/// Test3/19 (spec Q15/Q18): the host's acceptance rule. Never lowers the
-/// bar — only complete current evidence is accepted; runnable gaps are run;
-/// failures and other gaps go back for rework. Cost model: a false rework
-/// costs one more round (bounded by the stage budget); a false accept ships
-/// an unchecked delivery.
-pub(crate) fn stamp_forced(
-    evidence: Option<&orchestra::StageEvidence>,
-) -> (&'static str, &'static str) {
-    let Some(evidence) = evidence else {
-        return ("incomplete", "no_active_stage");
-    };
-    if evidence.missing.is_empty() {
-        return ("accept", "evidence_complete");
-    }
-    if evidence
-        .checks
-        .iter()
-        .any(|c| c.state == orchestra::CheckState::Failed)
-    {
-        return ("rework", "checks_failed");
-    }
-    let runnable = !evidence.checks.is_empty()
-        && evidence
-            .checks
-            .iter()
-            .all(|c| c.state != orchestra::CheckState::Unavailable);
-    if runnable
-        && evidence.checks.iter().any(|c| {
-            matches!(
-                c.state,
-                orchestra::CheckState::Missing | orchestra::CheckState::Stale
-            )
-        })
-    {
-        return ("run_checks", "checks_missing_or_stale");
-    }
-    ("rework", "requirements_missing")
-}
-
-/// Facts a delegated proposal decision may not override.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProposalFacts {
-    /// Independent quality state of a policy candidate (None = not a policy).
-    pub policy_quality: Option<crate::proposals::PolicyQualityState>,
-    pub role_review_missing: bool,
-}
-
-/// Test3/20 (Q15/Q18): a model's advice never completes a policy decision.
-/// A policy candidate is adopted only with qualified independent quality and
-/// otherwise ends incomplete; a role definition without its superior review
-/// ends incomplete. Cost model: a false "incomplete" costs one regenerated
-/// proposal; a false adopt changes the process without independent evidence.
-pub(crate) fn proposal_forced(facts: &ProposalFacts) -> Option<(&'static str, &'static str)> {
-    use crate::proposals::PolicyQualityState as Q;
-    match facts.policy_quality {
-        Some(Q::Qualified) => return Some(("adopt", "independent_quality_qualified")),
-        Some(Q::Failed) => return Some(("reject", "independent_quality_failed")),
-        Some(_) => return Some(("incomplete", "independent_quality_missing")),
-        None => {}
-    }
-    facts
-        .role_review_missing
-        .then_some(("incomplete", "superior_review_missing"))
-}
-
-/// Test3/21: an install the host cannot complete without the owner's login
-/// or secrets ends incomplete (spec: 缺登录/凭据自动未完成), never queued.
-pub(crate) fn install_needs_credentials(plan: &serde_json::Value) -> bool {
-    plan["creds"] == true
-        || plan["spec"]["env"]
-            .as_object()
-            .is_some_and(|env| !env.is_empty())
-        || plan["spec"]["headers"]
-            .as_object()
-            .is_some_and(|headers| !headers.is_empty())
-}
-
-fn install_route(p: &serde_json::Value) -> Route {
-    Route {
-        options: opts(&[("install", "install into this project"), ("reject", "do not install")]),
-        state: format!(
-            "You act for the project owner under project delegation. A role asks to install a capability into \
-             this project only.\nKind: {}\nName: {}\nWhy: {}\nNetwork: {}\n\
-             Install only if the current task needs it. Answer with exactly one token: install or reject.",
-            p["plan_kind"].as_str().unwrap_or_default(),
-            p["name"].as_str().unwrap_or_default(),
-            p["desc"].as_str().unwrap_or_default(),
-            p["net"] == true,
-        ),
-        forced: install_needs_credentials(p).then_some(("incomplete", "credentials_or_login_required")),
-        fallback: "reject",
-    }
-}
-
-/// Installed in this project (skills dir) or configured and spawnable (MCP).
-/// A grant never stands in for availability.
-fn capability_present(root: &Path, kind: &str, name: &str) -> bool {
-    match kind {
-        "skill" => root.join(".hexagon/skills").join(name).is_dir(),
-        "mcp" => crate::mcp::load_specs(root)
-            .iter()
-            .any(|spec| spec.name == name),
-        _ => false,
-    }
-}
-
-fn grant_route(p: &serde_json::Value, present: bool) -> Route {
-    Route {
-        options: opts(&[("allow", "let this role use it in this project"), ("deny", "do not grant")]),
-        state: format!(
-            "You act for the project owner under project delegation. A role asks to use a capability in this \
-             project.\nRole: {}\nKind: {}\nName: {}\n\
-             Grant only if the role's current task needs it. Answer with exactly one token: allow or deny.",
-            p["agent_id"].as_str().unwrap_or_default(),
-            p["grant_kind"].as_str().unwrap_or_default(),
-            p["name"].as_str().unwrap_or_default(),
-        ),
-        forced: (!present).then_some(("incomplete", "capability_not_installed")),
-        fallback: "deny",
-    }
-}
-
-/// Host-verified facts for a delegated publish (no secret values).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct PublishFacts {
-    pub target_configured: bool,
-    pub credential_present: bool,
-    pub delivery_accepted: bool,
-    pub baseline_unchanged: bool,
-    pub commit_unchanged: bool,
-}
-
-/// Test3/22 (Q13/Q20): publish only to an existing project target with its
-/// project credential, after final acceptance, for the exact version that was
-/// requested. Never a new target, a personal login, or an accepted-by-model
-/// shortcut. Cost model: a false refusal leaves an unpublished but accepted
-/// delivery (visible, retryable by the owner); a false publish is an
-/// irreversible external effect.
-pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static str) {
-    let checks = [
-        (facts.target_configured, "target_missing"),
-        (facts.credential_present, "credential_missing"),
-        (facts.delivery_accepted, "delivery_not_accepted"),
-        (facts.baseline_unchanged, "target_drifted"),
-        (facts.commit_unchanged, "delivery_changed"),
-    ];
-    match checks.iter().find(|(ok, _)| !ok) {
-        Some((_, reason)) => ("incomplete", reason),
-        None => ("publish", "configured_target_accepted_delivery"),
-    }
-}
-
-fn design_route(direction: &crate::design::DesignDirection) -> Route {
-    let listed = direction
-        .options
-        .iter()
-        .map(|o| {
-            format!(
-                "- {}: {} — {} (layout: {}; type: {}; palette: {})",
-                o.id, o.title, o.description, o.layout, o.typography, o.palette
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Route {
-        options: direction
-            .options
-            .iter()
-            .map(|o| (o.id.clone(), o.title.clone()))
-            .collect(),
-        state: format!(
-            "You act for the project owner under project delegation. Choose the visual direction that best fits \
-             the project's stated goals.\n{listed}\nAnswer with exactly one option id."
-        ),
-        forced: direction
-            .options
-            .is_empty()
-            .then_some(("incomplete", "no_versioned_options")),
-        fallback: "incomplete",
-    }
-}
-
-fn flag_route(p: &serde_json::Value) -> Route {
-    Route {
-        options: opts(&[
-            ("agree", "uphold the review: rework the flagged artifact"),
-            ("reject", "overrule the review: continue as is"),
-        ]),
-        state: format!(
-            "You act for the project owner under project delegation. A reviewer flagged an artifact.\n\
-             Target: {}\nReason: {}\nUphold (agree) unless the flag is clearly wrong. \
-             Answer with exactly one token: agree or reject.",
-            p["target"].as_str().unwrap_or_default(),
-            p["reason"].as_str().unwrap_or_default(),
-        ),
-        forced: None,
-        // A failed decision keeps the reviewer's standard, never overrules it.
-        fallback: "agree",
-    }
 }
 
 impl Workbench {
@@ -548,14 +156,23 @@ impl Workbench {
         card: &crate::cards::QueuedCard,
         grant: &crate::delegation::Grant,
     ) -> Result<Option<ManagedCandidate>, ApiError> {
-        if !takes_over(&self.db, &self.project_id, card) {
+        if !takes_over(card) {
             return Ok(None);
         }
         let Some(key) = decision_key(card) else {
             return Ok(None);
         };
-        let Some(route) = self.route_for(card)? else {
-            return Ok(None);
+        // One unreadable card (e.g. its action row is gone) must not stall
+        // every other decision: it becomes its own incomplete item.
+        let route = match self.route_for(card) {
+            Ok(Some(route)) => route,
+            Ok(None) => return Ok(None),
+            Err(_) => Route {
+                options: opts(&[("incomplete", "end the unreadable item")]),
+                state: String::new(),
+                forced: Some(("incomplete", "route_unavailable")),
+                fallback: "incomplete",
+            },
         };
         let exhausted = crate::delegation::rounds(&self.db, &self.project_id, &key)
             >= crate::delegation::MAX_ROUNDS;
@@ -575,220 +192,6 @@ impl Workbench {
             forced,
             fallback: route.fallback.into(),
         }))
-    }
-
-    /// The closed set, host-decided action and fallback for one card.
-    fn route_for(&self, card: &crate::cards::QueuedCard) -> Result<Option<Route>, ApiError> {
-        let p = &card.payload;
-        Ok(Some(match (card.kind.as_str(), p["sub"].as_str()) {
-            ("permission", _) => permission_route(p),
-            ("recovery", Some("tool_outcome_unknown")) => {
-                let action_id = p["action_id"].as_str().unwrap_or_default();
-                let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
-                let facts = UnknownFacts {
-                    linked_attempt: crate::actions::linked_origin(&self.db, action_id)?.is_some(),
-                    resolution: crate::actions::resolution(&self.db, action_id)?.map(|r| r.0),
-                    external_gap: unprovable_external(&action.tool),
-                };
-                unknown_route(&action.tool, &facts)
-            }
-            ("recovery", None) if p["run_id"].is_string() => Route {
-                options: opts(&[
-                    ("resume_run", "resume the interrupted stage and its task"),
-                    ("end", "leave it interrupted"),
-                ]),
-                state: String::new(),
-                forced: Some(("resume_run", "interrupted_run_recoverable")),
-                fallback: "end",
-            },
-            ("recovery", Some("tool_action_ready")) => {
-                let action_id = p["action_id"].as_str().unwrap_or_default();
-                let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
-                Route {
-                    options: opts(&[
-                        ("resume", "run the saved, provably unsent action"),
-                        ("end", "leave it unexecuted"),
-                    ]),
-                    state: String::new(),
-                    forced: Some(match unprovable_external(&action.tool) {
-                        Some(gap) => ("end", gap),
-                        None => ("resume", "host_proves_not_executed"),
-                    }),
-                    fallback: "end",
-                }
-            }
-            // An in-flight retry is already being worked; hold, don't decide.
-            ("recovery", Some("model_request")) if p["state"] == "retrying" => return Ok(None),
-            ("recovery", Some("model_request")) => Route {
-                options: opts(&[
-                    ("retry", "send the failed request again"),
-                    ("end", "stop as incomplete"),
-                ]),
-                state: String::new(),
-                forced: Some(match p["state"].as_str() {
-                    // The owner's newer instruction is their current intent.
-                    Some("needs_choice") => ("follow_new", "owner_newer_instruction"),
-                    _ if p["can_retry"] == false => ("end", "retry_not_available"),
-                    _ => ("retry", "bounded_model_retry"),
-                }),
-                fallback: "end",
-            },
-            ("stall", _) if p["source"] == "activation_resume" => Route {
-                options: opts(&[
-                    ("continue", "continue the original task"),
-                    ("end", "end it"),
-                ]),
-                state: String::new(),
-                forced: Some(("continue", "continue_original_task")),
-                fallback: "end",
-            },
-            ("stall", _) => stall_route(p),
-            ("stamp", _) if !p["proposal_id"].is_null() => self.proposal_route(p)?,
-            ("stamp", None) => {
-                let evidence = orchestra::stage_evidence(&self.db, &self.project_id, self.pack()?)?;
-                Route {
-                    options: opts(&[
-                        ("accept", "accept the stage with complete current evidence"),
-                        (
-                            "run_checks",
-                            "run the approved checks for the current version",
-                        ),
-                        ("rework", "send the stage back for rework"),
-                        ("incomplete", "stop: the stage cannot meet its requirements"),
-                    ]),
-                    state: String::new(),
-                    forced: Some(stamp_forced(evidence.as_ref())),
-                    fallback: "incomplete",
-                }
-            }
-            ("stamp", Some("quality_revalidation")) => {
-                let evidence = orchestra::stage_evidence(&self.db, &self.project_id, self.pack()?)?;
-                let forced = match stamp_forced(evidence.as_ref()) {
-                    ("accept", why) => ("confirm", why),
-                    ("run_checks", why) => ("run_checks", why),
-                    (_, why) => ("cancel", why),
-                };
-                Route {
-                    options: opts(&[
-                        ("confirm", "accept current evidence"),
-                        ("cancel", "keep the new checks required"),
-                    ]),
-                    state: String::new(),
-                    forced: Some(forced),
-                    fallback: "cancel",
-                }
-            }
-            // Acceptance never lowers the bar: exception requests are refused.
-            ("stamp", Some("acceptance_exception")) => Route {
-                options: opts(&[("refuse", "refuse the exception request")]),
-                state: String::new(),
-                forced: Some(("refuse", "acceptance_never_lowered")),
-                fallback: "refuse",
-            },
-            ("escalation", Some("design_direction")) => {
-                let direction = crate::design::read(&self.db, &self.project_id)?;
-                design_route(&direction)
-            }
-            ("escalation", Some("context_overflow")) => Route {
-                options: opts(&[
-                    ("resume", "continue the original task"),
-                    ("end", "end the task"),
-                ]),
-                state: String::new(),
-                forced: Some(("resume", "continue_original_task")),
-                fallback: "end",
-            },
-            ("escalation", _) => flag_route(p),
-            ("publish", _) => {
-                let facts = self.publish_facts(p)?;
-                Route {
-                    options: opts(&[
-                        ("publish", "push to the configured target"),
-                        ("incomplete", "do not publish"),
-                    ]),
-                    state: String::new(),
-                    forced: Some(publish_forced(&facts)),
-                    fallback: "incomplete",
-                }
-            }
-            ("install", _) => install_route(p),
-            ("grant", _) => {
-                let present = capability_present(
-                    &self.repo_root,
-                    p["grant_kind"].as_str().unwrap_or_default(),
-                    p["name"].as_str().unwrap_or_default(),
-                );
-                grant_route(p, present)
-            }
-            _ => Route {
-                options: opts(&[("end", "end the unregistered item")]),
-                state: String::new(),
-                forced: Some(("end", "unrouted_card_type")),
-                fallback: "end",
-            },
-        }))
-    }
-
-    fn publish_facts(&self, p: &serde_json::Value) -> Result<PublishFacts, ApiError> {
-        let remote = p["remote"].as_str().unwrap_or_default();
-        let git =
-            |args: &[&str]| crate::git::run(&self.repo_root, args).map(|o| o.trim().to_string());
-        let latest: Option<(i64, String)> = self
-            .db
-            .conn()
-            .query_row(
-                "SELECT seq,state FROM stage_runs WHERE project_id=?1 ORDER BY rowid DESC LIMIT 1",
-                [&self.project_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .ok();
-        let final_seq = self.pack.as_ref().map(|pack| pack.stages.len() as i64 - 1);
-        Ok(PublishFacts {
-            target_configured: !remote.is_empty() && git(&["remote", "get-url", remote]).is_ok(),
-            credential_present: self
-                .creds
-                .get(&format!("publish/{remote}"))
-                .is_ok_and(|value| value.is_some()),
-            delivery_accepted: matches!((latest, final_seq), (Some((seq, state)), Some(last)) if state == "done" && seq == last),
-            baseline_unchanged: crate::git::baseline_branch(&self.repo_root)
-                .is_ok_and(|branch| p["baseline"] == branch.as_str()),
-            commit_unchanged: p["commit"].is_string()
-                && git(&["rev-parse", "HEAD"]).is_ok_and(|head| p["commit"] == head.as_str()),
-        })
-    }
-
-    fn proposal_route(&self, p: &serde_json::Value) -> Result<Route, ApiError> {
-        let pid = p["proposal_id"].as_str().unwrap_or_default();
-        let (surface, status): (String, String) = self.db.conn().query_row(
-            "SELECT surface,status FROM proposals WHERE id=?1 AND project_id=?2",
-            rusqlite::params![pid, self.project_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        let facts = ProposalFacts {
-            policy_quality: crate::proposals::quality_for(
-                &self.db,
-                &self.project_id,
-                pid,
-                &surface,
-                &status,
-            ),
-            role_review_missing: surface == "role_def"
-                && !crate::rolesurf::reviewed(&self.db, pid)?,
-        };
-        Ok(Route {
-            options: opts(&[("adopt", "apply the proposal"), ("reject", "do not apply it")]),
-            state: format!(
-                "You act for the project owner under project delegation. An agent proposes an improvement.\n\
-                 Surface: {surface}\nExecution judgment (advice only): {}\nWarnings: {}\nEvidence: {}\n\
-                 Adopt only if the evidence shows it improves the project without widening permissions or \
-                 weakening safeguards. Answer with exactly one token: adopt or reject.",
-                p["judge_verdict"].as_str().unwrap_or("none"),
-                p["warnings"],
-                serde_json::to_string(&p["evidence"]).unwrap_or_default().chars().take(2000).collect::<String>(),
-            ),
-            forced: proposal_forced(&facts),
-            fallback: "reject",
-        })
     }
 
     /// Everything the unlocked decision step needs, plus the project identity
@@ -865,10 +268,23 @@ impl Workbench {
             let _acting = self.acting_as(&candidate.actor);
             self.managed_act(candidate, &decision)
         };
-        let outcome = match &result {
+        let mut outcome = match &result {
             Ok(outcome) => outcome.clone(),
             Err(error) => format!("failed: {}", crate::errcode::ErrorCode::code(error)),
         };
+        // The forced fallback itself failed after the budget: end the item as
+        // incomplete instead of leaving it for an owner (no needs-human).
+        if result.is_err()
+            && crate::delegation::rounds(&self.db, &self.project_id, &candidate.decision_key)
+                > crate::delegation::MAX_ROUNDS
+        {
+            let _acting = self.acting_as(&candidate.actor);
+            let card = crate::cards::get(&self.db, &candidate.card_id)?;
+            if card.state == crate::cards::CardState::Queued {
+                self.end_card_incomplete(&card)?;
+                outcome.push_str("; ended_incomplete");
+            }
+        }
         let card = crate::cards::get(&self.db, &candidate.card_id)?;
         self.db.append_event(
             &self.project_id,
@@ -879,358 +295,29 @@ impl Workbench {
             card.agent_id.as_deref(),
             None,
         )?;
+        // Refusals, fallbacks and failures are Warn; landed choices Debug.
+        let refused = result_of(&decision.action, &outcome) != "done"
+            || decision.via == "fallback"
+            || matches!(
+                decision.action.as_str(),
+                "deny" | "reject" | "abandon" | "refuse" | "end"
+            );
         crate::diag::note(
-            crate::diag::CLASS_JUDGE,
-            false,
+            if refused {
+                crate::diag::CLASS_REJECT
+            } else {
+                crate::diag::CLASS_JUDGE
+            },
+            refused,
             Some(&self.project_id),
             card.agent_id.as_deref(),
             None,
             Some(&candidate.card_id),
             "managed_decision",
-            &format!("{}:{}", candidate.kind, decision.action),
+            &format!("{}:{}:{}", candidate.kind, decision.action, decision.reason),
             started,
         );
         Ok(Some(decision))
-    }
-
-    /// Act through the card owner's facade. Each branch re-validates its own
-    /// target (action state, permission, activation chain) at execution.
-    fn managed_act(
-        &mut self,
-        candidate: &ManagedCandidate,
-        decision: &ManagedDecision,
-    ) -> Result<String, ApiError> {
-        let card = crate::cards::get(&self.db, &candidate.card_id)?;
-        let p = &card.payload;
-        let reason = format!("managed: {}", decision.reason);
-        let action_id = || {
-            p["action_id"]
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| ApiError::BadInput("recovery card without an action".into()))
-        };
-        let outcome = match (
-            card.kind.as_str(),
-            p["sub"].as_str(),
-            decision.action.as_str(),
-        ) {
-            ("permission", _, _) => return self.managed_permission(candidate, decision),
-            ("recovery", Some("tool_outcome_unknown"), "new_attempt") => {
-                match self.retry_tool_action(&action_id()?, &reason, true)? {
-                    crate::tools::CallOutcome::Asked(_) => "new_attempt_awaits_permission",
-                    _ => "new_attempt_dispatched",
-                }
-            }
-            ("recovery", Some("tool_outcome_unknown"), _) => {
-                self.abandon_tool_action(&action_id()?, &reason)?;
-                "abandoned"
-            }
-            ("recovery", Some("tool_action_ready"), "resume") => {
-                self.resume_tool_action(&action_id()?)?;
-                "resumed"
-            }
-            ("recovery", Some("tool_action_ready"), _) => {
-                let id = action_id()?;
-                let action = crate::actions::get(&self.db, &self.project_id, &id)?;
-                let ctx = self.ctx_for(&action.agent_id, action.stage_run_id.clone());
-                crate::actions::fail_authorized(&self.db, &ctx, &id, &reason)?;
-                "ended_unexecuted"
-            }
-            ("recovery", Some("model_request"), "retry") => {
-                self.retry_model_request(&card.id)?;
-                "retried"
-            }
-            ("recovery", Some("model_request"), "follow_new") => {
-                self.resolve_model_request_choice(&card.id, true)?;
-                "followed_newer_instruction"
-            }
-            ("recovery", Some("model_request"), _) => {
-                self.retire_model_request_incomplete(&card)?;
-                "incomplete"
-            }
-            ("stamp", _, "adopt") if !p["proposal_id"].is_null() => {
-                self.managed_adopt(&card.id)?;
-                "adopted"
-            }
-            ("stamp", _, "reject") if !p["proposal_id"].is_null() => {
-                let ctx = self.ctx_for("owner", None);
-                crate::proposals::reject_at_stamp_by(
-                    &self.db,
-                    &ctx,
-                    &card.id,
-                    &reason,
-                    &self.decider(),
-                )?;
-                "rejected"
-            }
-            ("stamp", _, _) if !p["proposal_id"].is_null() => {
-                self.end_card_incomplete(&card)?;
-                "incomplete"
-            }
-            ("stamp", None, action) => return self.managed_stage(&card, action, &reason),
-            ("stamp", Some("quality_revalidation"), action) => {
-                return self.managed_revalidation(&card, action)
-            }
-            ("stamp", Some("acceptance_exception"), _) => {
-                orchestra::cancel_acceptance_exception_by(
-                    &self.db,
-                    &self.project_id,
-                    &card.id,
-                    &self.decider(),
-                )?;
-                "exception_refused"
-            }
-            ("escalation", Some("design_direction"), "incomplete") => {
-                self.end_card_incomplete(&card)?;
-                "incomplete"
-            }
-            ("escalation", Some("design_direction"), option) => {
-                let revision = p["revision"].as_i64().unwrap_or_default();
-                crate::design::choose_by(
-                    &self.db,
-                    &self.project_id,
-                    &card.id,
-                    revision,
-                    Some(option),
-                    None,
-                    &self.decider(),
-                )?;
-                self.continue_design_direction(revision)?;
-                "direction_chosen_and_continued"
-            }
-            ("escalation", Some("context_overflow"), action) => {
-                self.adjudicate_flag(&card.id, action == "resume")?;
-                if action == "resume" {
-                    "resumed"
-                } else {
-                    "ended"
-                }
-            }
-            ("escalation", _, "agree" | "reject") => {
-                self.adjudicate_flag(&card.id, decision.action == "agree")?;
-                if decision.action == "agree" {
-                    "rework_requested"
-                } else {
-                    "flag_overruled"
-                }
-            }
-            ("escalation", _, _) => {
-                self.end_card_incomplete(&card)?;
-                "incomplete"
-            }
-            ("publish", _, "publish") => {
-                crate::publish::confirm_by(
-                    &self.db,
-                    &self.project_id,
-                    &card.id,
-                    self.creds.as_ref(),
-                    &self.decider(),
-                )?;
-                "published"
-            }
-            ("publish", _, _) => {
-                crate::publish::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
-                "not_published"
-            }
-            ("install", _, "install" | "reject") => {
-                let installed = crate::install::resolve_install_by(
-                    &self.db,
-                    &self.project_id,
-                    &self.repo_root,
-                    &card.id,
-                    decision.action == "install",
-                    &self.decider(),
-                )?;
-                if installed.installed {
-                    "installed"
-                } else {
-                    "install_rejected"
-                }
-            }
-            ("grant", _, "allow" | "deny") => {
-                let granted = crate::grants::confirm_by(
-                    &self.db,
-                    &self.project_id,
-                    &card.id,
-                    decision.action == "allow",
-                    &self.decider(),
-                )?;
-                if granted.granted {
-                    "granted"
-                } else {
-                    "grant_denied"
-                }
-            }
-            ("install" | "grant", _, _) => {
-                self.end_card_incomplete(&card)?;
-                "incomplete"
-            }
-            ("recovery", None, "resume_run") => {
-                let run = p["run_id"].as_str().unwrap_or_default().to_string();
-                self.recover_run(&run)?;
-                "run_resumed"
-            }
-            ("stall", _, "continue" | "retry") => {
-                self.stall_retry(&card.id)?;
-                "continued"
-            }
-            ("stall", _, _) => {
-                self.stall_ack(&card.id)?;
-                "ended"
-            }
-            _ => {
-                self.end_card_incomplete(&card)?;
-                "incomplete"
-            }
-        };
-        Ok(outcome.into())
-    }
-
-    fn managed_stage(
-        &self,
-        card: &crate::cards::Card,
-        action: &str,
-        reason: &str,
-    ) -> Result<String, ApiError> {
-        let by = self.decider();
-        let pack = self.pack()?;
-        let stage_outcome = |result: orchestra::StageAction| match result {
-            orchestra::StageAction::Incomplete { .. } => "still_incomplete",
-            _ => "accepted",
-        };
-        Ok(match action {
-            "accept" => stage_outcome(orchestra::stamp_by(&self.db, &self.project_id, pack, &by)?),
-            "run_checks" => {
-                orchestra::run_checks(&self.db, &self.project_id, &self.repo_root, pack)?;
-                match stage_outcome(orchestra::stamp_by(&self.db, &self.project_id, pack, &by)?) {
-                    "accepted" => "checks_ran_and_accepted",
-                    _ => "checks_ran_still_incomplete",
-                }
-            }
-            "rework" => {
-                let evidence = orchestra::stage_evidence(&self.db, &self.project_id, pack)?;
-                if card.payload["final_acceptance"] == true {
-                    let stage = evidence
-                        .as_ref()
-                        .and_then(|e| {
-                            e.checks
-                                .iter()
-                                .find(|c| c.state == orchestra::CheckState::Failed)
-                                .map(|c| c.stage.clone())
-                        })
-                        .or_else(|| card.payload["stage"].as_str().map(str::to_string))
-                        .unwrap_or_default();
-                    let note = format!(
-                        "{reason}; unmet: {}",
-                        evidence.map(|e| e.missing.join(", ")).unwrap_or_default()
-                    );
-                    crate::review::reject_final_by(
-                        &self.db,
-                        &self.project_id,
-                        pack,
-                        &stage,
-                        &note,
-                        &by,
-                    )?;
-                } else {
-                    crate::review::reject_stamp_by(&self.db, &self.project_id, pack, &by)?;
-                }
-                "rework_requested"
-            }
-            _ => {
-                self.end_card_incomplete(card)?;
-                "incomplete"
-            }
-        }
-        .into())
-    }
-
-    fn managed_revalidation(
-        &self,
-        card: &crate::cards::Card,
-        action: &str,
-    ) -> Result<String, ApiError> {
-        let by = self.decider();
-        let pack = self.pack()?;
-        let confirm = |db: &Db| -> Result<&'static str, ApiError> {
-            let fingerprint = orchestra::stage_evidence(db, &self.project_id, pack)?
-                .and_then(|e| e.fingerprint)
-                .unwrap_or_default();
-            Ok(
-                match orchestra::confirm_quality_revalidation_by(
-                    db,
-                    &self.project_id,
-                    pack,
-                    &card.id,
-                    &fingerprint,
-                    &by,
-                )? {
-                    orchestra::StageAction::PackFinished => "revalidated",
-                    _ => "still_incomplete",
-                },
-            )
-        };
-        Ok(match action {
-            "confirm" => confirm(&self.db)?,
-            "run_checks" => {
-                orchestra::run_checks(&self.db, &self.project_id, &self.repo_root, pack)?;
-                confirm(&self.db)?
-            }
-            _ => {
-                orchestra::cancel_quality_revalidation_by(
-                    &self.db,
-                    &self.project_id,
-                    &card.id,
-                    &by,
-                )?;
-                "kept_checks_required"
-            }
-        }
-        .into())
-    }
-
-    /// Same controlled adoption as the owner's, recorded under the grant.
-    fn managed_adopt(&mut self, qid: &str) -> Result<(), ApiError> {
-        crate::proposals::recover_policy(&self.db, &self.repo_root, &self.project_id)?;
-        self.refresh_policy()?;
-        let by = self.decider();
-        crate::proposals::activate_by(&self.db, &self.ctx_for("owner", None), qid, &by)?;
-        self.refresh_policy()?;
-        Ok(())
-    }
-
-    /// The type's terminal "incomplete": the card is answered by the grant
-    /// actor and marked, the target stays unaccepted. Visible in the panel.
-    fn end_card_incomplete(&self, card: &crate::cards::Card) -> Result<(), ApiError> {
-        crate::cards::annotate(
-            &self.db,
-            &card.id,
-            &[("managed_outcome", json!("incomplete"))],
-        )?;
-        crate::cards::answer(&self.db, &card.id, &self.decider())?;
-        Ok(())
-    }
-
-    fn managed_permission(
-        &self,
-        candidate: &ManagedCandidate,
-        decision: &ManagedDecision,
-    ) -> Result<String, ApiError> {
-        let allow = decision.action == "allow";
-        // The saved-decision path executes the action in the background and
-        // continues the original task (ticket 04); the actor is the grant.
-        self.permission_control().save_by_managed(
-            &self.db,
-            &candidate.card_id,
-            allow,
-            &candidate.actor,
-        )?;
-        if allow {
-            self.continue_saved_permission(&candidate.card_id)?;
-            Ok("allowed_and_continued".into())
-        } else {
-            Ok("denied".into())
-        }
     }
 }
 
@@ -1249,6 +336,26 @@ pub fn managed_decide(
         return managed_decide_on(&db, providers, root, project_id, candidate);
     }
     managed_decide_on_forced(candidate)
+}
+
+/// A delegated decision that fell to the type's fallback: Warn, code only.
+fn note_route(
+    project_id: &str,
+    candidate: &ManagedCandidate,
+    code: &str,
+    started: std::time::Instant,
+) {
+    crate::diag::note(
+        crate::diag::CLASS_SLOT,
+        true,
+        Some(project_id),
+        Some(&candidate.agent_id),
+        None,
+        Some(&candidate.card_id),
+        "managed_route",
+        code,
+        started,
+    );
 }
 
 fn route_failed(candidate: &ManagedCandidate, code: &str) -> ManagedDecision {
@@ -1288,9 +395,25 @@ pub(crate) fn managed_decide_on(
             crate::provider_config::resolve_slot(providers, "default")
                 .map(|p| (p.clone(), "default".to_string()))
         });
+    let started = std::time::Instant::now();
     let Some((provider, slot)) = route else {
+        note_route(project_id, candidate, "no_model", started);
         return route_failed(candidate, "no_model");
     };
+    if slot != crate::provider_config::JEV_SLOT {
+        // Normal slot fallback (no decision model configured): Debug.
+        crate::diag::note(
+            crate::diag::CLASS_SLOT,
+            false,
+            Some(project_id),
+            Some(&candidate.agent_id),
+            None,
+            Some(&candidate.card_id),
+            "managed_route",
+            "chat_slot_without_decision_model",
+            started,
+        );
+    }
     let ctx = crate::tools::ToolContext {
         project_id: project_id.into(),
         agent_id: candidate.agent_id.clone(),
@@ -1337,9 +460,16 @@ pub(crate) fn managed_decide_on(
                 reason: "model_choice".into(),
                 via: "model".into(),
             },
-            None => route_failed(candidate, "out_of_set"),
+            None => {
+                note_route(project_id, candidate, "out_of_set", started);
+                route_failed(candidate, "out_of_set")
+            }
         },
-        Err(error) => route_failed(candidate, crate::model_failure::failure_code(&error)),
+        Err(error) => {
+            let code = crate::model_failure::failure_code(&error);
+            note_route(project_id, candidate, code, started);
+            route_failed(candidate, code)
+        }
     }
 }
 
@@ -1364,6 +494,10 @@ mod managed_install_tests;
 mod managed_publish_tests;
 
 #[cfg(test)]
+#[path = "managed_external_tests.rs"]
+mod managed_external_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
@@ -1385,9 +519,24 @@ mod tests {
     }
 
     #[test]
+    fn only_landed_effects_count_as_done() {
+        assert_eq!(result_of("allow", "allowed_and_continued"), "done");
+        assert_eq!(result_of("deny", "denied"), "done");
+        assert_eq!(
+            result_of("run_checks", "checks_ran_still_incomplete"),
+            "incomplete"
+        );
+        assert_eq!(
+            result_of("new_attempt", "new_attempt_awaits_permission"),
+            "incomplete"
+        );
+        assert_eq!(result_of("incomplete", "incomplete"), "incomplete");
+        assert_eq!(result_of("publish", "failed: git"), "failed");
+    }
+
+    #[test]
     fn unprovable_entries_are_named_and_project_tools_are_not() {
         for tool in [
-            "host_bash",
             "browser_action",
             "computer_action",
             "computer_navigate",

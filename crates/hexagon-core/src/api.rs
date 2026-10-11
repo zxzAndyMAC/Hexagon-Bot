@@ -201,6 +201,8 @@ pub enum ApiError {
     #[error(transparent)]
     Grant(#[from] crate::grants::GrantError),
     #[error(transparent)]
+    Delegation(#[from] crate::delegation::DelegationError),
+    #[error(transparent)]
     Roles(#[from] crate::roles::RoleError),
     #[error(transparent)]
     PackEdit(#[from] crate::packedit::PackEditError),

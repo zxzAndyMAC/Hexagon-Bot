@@ -39,7 +39,7 @@ it('a failed save keeps the previous state and shows managed history', async () 
   vi.spyOn(api, 'approvalMode').mockResolvedValue({ project_id: 'p1', project_root: '/proj', mode: 'restricted' })
   vi.spyOn(api, 'projectDelegation').mockResolvedValue({ enabled: true, generation: 3, delegation_id: 'g' })
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    { event_id: 9, card_id: 'q7', card_kind: 'permission', action: 'deny', reason: 'budget_exhausted', via: 'host', outcome: 'denied', actor: 'managed:g:3' },
+    { event_id: 9, card_id: 'q7', card_kind: 'permission', action: 'deny', reason: 'budget_exhausted', via: 'host', outcome: 'denied', actor: 'managed:g:3', result: 'done' },
   ])
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([{ id: 'q8', kind: 'permission', agent_id: 'a0', payload: {}, state: 'queued' }])
   vi.spyOn(api, 'setProjectDelegation').mockRejectedValue(new Error('mismatch'))
@@ -49,6 +49,7 @@ it('a failed save keeps the previous state and shows managed history', async () 
   expect(el.textContent).toContain('host rule')
   expect(el.textContent).toContain('Done')
   expect(el.textContent).toContain('budget_exhausted')
+  expect(el.textContent).toContain('1 done')
   await act(async () => el.querySelector<HTMLButtonElement>('button[aria-pressed]')!.click())
   expect(el.textContent).toContain('Could not save')
   expect(el.querySelector('button[aria-pressed]')!.textContent).toBe('Delegation on')

@@ -382,6 +382,20 @@ impl Tool for HostBash {
         // a .hexagon directory that would masquerade as another project later.
         scoped.write_lease = Some(Arc::new(writeguard::repository_lock(ctx)?));
         let spec = host_spec(&scoped.repo_root, net)?;
+        // Test3/23 (Q19–Q21): delegated decisions may edit external files but
+        // never delete them; the owner's own Broad approval keeps its scope.
+        let spec = if crate::delegation::current(db, &ctx.project_id).is_some() {
+            match crate::sandbox::delegated_host_fence(spec, &scoped.repo_root) {
+                crate::sandbox::SandboxSpec::Unavailable => {
+                    return Err(reject(
+                        "project delegation cannot fence external deletion on this platform",
+                    ))
+                }
+                fenced => fenced,
+            }
+        } else {
+            spec
+        };
         let spec = crate::design::guard_shell(db, &scoped, spec);
         let timeout = std::time::Duration::from_millis(
             input["timeout_ms"]

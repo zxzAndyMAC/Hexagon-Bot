@@ -132,29 +132,6 @@ fn an_out_of_set_answer_or_no_model_denies() {
 }
 
 #[test]
-fn a_host_shell_is_denied_without_asking_the_model() {
-    let (dir, mut wb, chat) = wb_with(Some("allow"));
-    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
-    let outside = tempfile::tempdir().unwrap();
-    let ctx = wb.ctx_for("a0", None);
-    let outcome = wb
-        .registry
-        .call(
-            &wb.db,
-            &ctx,
-            "host_bash",
-            json!({"cmd":"ls","cwd":outside.path().to_string_lossy()}),
-        )
-        .unwrap();
-    assert!(matches!(outcome, CallOutcome::Asked(_)), "{outcome:?}");
-    let decisions = wb.managed_tick().unwrap();
-    assert_eq!(decisions[0].action, "deny");
-    assert_eq!(decisions[0].via, "host");
-    assert!(chat.unwrap().recorded().is_empty());
-    drop(dir);
-}
-
-#[test]
 fn a_decision_prepared_under_an_old_grant_never_lands() {
     let (_dir, mut wb, _chat) = wb_with(Some("allow"));
     let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
@@ -232,6 +209,11 @@ fn the_owner_pause_stops_new_decisions_and_late_commits() {
         wb.managed_plan().unwrap().is_empty(),
         "no new decisions while paused"
     );
+    // Paused cards return to the owner rather than sit under "processing".
+    assert_eq!(owner_pending(&wb.db, crate::PROJECT_ID).unwrap().len(), 1);
+    assert!(managed_processing(&wb.db, crate::PROJECT_ID)
+        .unwrap()
+        .is_empty());
     let late = ManagedDecision {
         action: "allow".into(),
         reason: "model_choice".into(),
@@ -520,4 +502,40 @@ fn reopening_a_delegated_project_resumes_interrupted_work() {
     assert!(crate::cards::queued(&wb.db, crate::PROJECT_ID)
         .unwrap()
         .is_empty());
+}
+
+/// Review fix: one unreadable card ends incomplete on its own and does not
+/// stall the decisions for every other card.
+#[test]
+fn an_unreadable_card_ends_incomplete_without_blocking_others() {
+    let (_dir, mut wb, _chat) = wb_with(Some("allow"));
+    let good = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+    crate::cards::enqueue(
+        &wb.db,
+        crate::PROJECT_ID,
+        Some("a0"),
+        crate::cards::CardKind::Recovery,
+        json!({"sub":"tool_outcome_unknown","action_id":"missing-action"}),
+        None,
+    )
+    .unwrap();
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let done = wb.managed_tick().unwrap();
+    assert!(
+        done.iter().any(|d| d.reason == "route_unavailable"),
+        "{done:?}"
+    );
+    assert!(done.iter().any(|d| d.action == "allow"), "{done:?}");
+    assert_ne!(
+        crate::cards::get(&wb.db, &good).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+    let history = managed_history(&wb.db, crate::PROJECT_ID, 10).unwrap();
+    assert!(history.iter().any(|r| r.result == "incomplete"));
+    // The allowed bash leaves its own ready card (the test agent is asleep);
+    // only the unreadable card must be gone.
+    assert!(crate::cards::queued(&wb.db, crate::PROJECT_ID)
+        .unwrap()
+        .iter()
+        .all(|c| c.payload["action_id"] != "missing-action"));
 }

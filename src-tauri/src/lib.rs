@@ -1269,13 +1269,16 @@ fn project_delegation(
     })
 }
 
+/// How many recent delegated decisions the panel shows.
+const MANAGED_HISTORY_ROWS: usize = 20;
+
 /// Test3/17: recent managed decisions (read connection).
 #[tauri::command]
 fn managed_history(
     state: tauri::State<AppState>,
 ) -> Result<Vec<hexagon_core::api::ManagedRecord>, CmdError> {
     with_conn(&state, |db, _| {
-        hexagon_core::api::managed_history(db, PROJECT_ID, 20).map_err(cmd_err)
+        hexagon_core::api::managed_history(db, PROJECT_ID, MANAGED_HISTORY_ROWS).map_err(cmd_err)
     })
 }
 

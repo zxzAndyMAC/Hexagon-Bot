@@ -49,7 +49,9 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
     .unwrap_or_else(|_| "main".into());
     // Test3/22: the delivered version at request time, so a delegated
     // publish can refuse a commit that changed after the request.
-    let commit = crate::git::run(&project_dir(db, project_id)?, &["rev-parse", "HEAD"])
+    // The commit of the branch that is actually pushed, not HEAD (review:
+    // checking HEAD while pushing the baseline left a gap).
+    let commit = crate::git::run(&project_dir(db, project_id)?, &["rev-parse", &baseline])
         .map(|out| out.trim().to_string())
         .ok();
     let qid = crate::cards::enqueue(
