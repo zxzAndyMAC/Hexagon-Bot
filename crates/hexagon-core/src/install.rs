@@ -228,15 +228,28 @@ pub fn resolve_install(
     qid: &str,
     allow: bool,
 ) -> Result<InstallOutcome, InstallError> {
+    resolve_install_by(db, project_id, repo_root, qid, allow, "owner")
+}
+
+/// Test3/21: the same install decision by a non-owner decider (project
+/// delegation). Installs stay in this project; only the recorded actor differs.
+pub fn resolve_install_by(
+    db: &Db,
+    project_id: &str,
+    repo_root: &Path,
+    qid: &str,
+    allow: bool,
+    by: &str,
+) -> Result<InstallOutcome, InstallError> {
     let plan = crate::cards::get_queued(db, qid, crate::cards::CardKind::Install)
         .map_err(|_| InstallError::UnknownQuestion(qid.into()))?
         .payload;
-    crate::cards::answer(db, qid, "owner")?;
+    crate::cards::answer(db, qid, by)?;
     if !allow {
         db.append_event(
             project_id,
             EventKind::InstallRejected,
-            json!({"question_id": qid, "plan": plan["name"]}),
+            json!({"question_id": qid, "plan": plan["name"], "by": by}),
             None,
             None,
         )?;
@@ -247,7 +260,7 @@ pub fn resolve_install(
     }
 
     execute_plan(repo_root, &plan)?;
-    record_completed(db, project_id, qid, &plan, "owner")?;
+    record_completed(db, project_id, qid, &plan, by)?;
     Ok(InstallOutcome {
         installed: true,
         plan: plan["name"].as_str().map(String::from),

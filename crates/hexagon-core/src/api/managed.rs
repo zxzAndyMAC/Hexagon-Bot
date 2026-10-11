@@ -146,6 +146,17 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         ("escalation", Some("context_overflow")) => {
             Some(format!("context:{}", p["trigger_turn_id"]))
         }
+        ("install", _) => Some(format!(
+            "install:{}:{}",
+            p["plan_kind"].as_str().unwrap_or_default(),
+            p["name"].as_str().unwrap_or(&card.id)
+        )),
+        ("grant", _) => Some(format!(
+            "grant:{}:{}:{}",
+            p["agent_id"].as_str().unwrap_or_default(),
+            p["grant_kind"].as_str().unwrap_or_default(),
+            p["name"].as_str().unwrap_or_default()
+        )),
         // Back-and-forth bounces on one artifact share one budget.
         ("escalation", _) => Some(format!("flag:{}", p["target"].as_str().unwrap_or(&card.id))),
         _ => None,
@@ -367,6 +378,63 @@ pub(crate) fn proposal_forced(facts: &ProposalFacts) -> Option<(&'static str, &'
         .then_some(("incomplete", "superior_review_missing"))
 }
 
+/// Test3/21: an install the host cannot complete without the owner's login
+/// or secrets ends incomplete (spec: 缺登录/凭据自动未完成), never queued.
+pub(crate) fn install_needs_credentials(plan: &serde_json::Value) -> bool {
+    plan["creds"] == true
+        || plan["spec"]["env"]
+            .as_object()
+            .is_some_and(|env| !env.is_empty())
+        || plan["spec"]["headers"]
+            .as_object()
+            .is_some_and(|headers| !headers.is_empty())
+}
+
+fn install_route(p: &serde_json::Value) -> Route {
+    Route {
+        options: opts(&[("install", "install into this project"), ("reject", "do not install")]),
+        state: format!(
+            "You act for the project owner under project delegation. A role asks to install a capability into \
+             this project only.\nKind: {}\nName: {}\nWhy: {}\nNetwork: {}\n\
+             Install only if the current task needs it. Answer with exactly one token: install or reject.",
+            p["plan_kind"].as_str().unwrap_or_default(),
+            p["name"].as_str().unwrap_or_default(),
+            p["desc"].as_str().unwrap_or_default(),
+            p["net"] == true,
+        ),
+        forced: install_needs_credentials(p).then_some(("incomplete", "credentials_or_login_required")),
+        fallback: "reject",
+    }
+}
+
+/// Installed in this project (skills dir) or configured and spawnable (MCP).
+/// A grant never stands in for availability.
+fn capability_present(root: &Path, kind: &str, name: &str) -> bool {
+    match kind {
+        "skill" => root.join(".hexagon/skills").join(name).is_dir(),
+        "mcp" => crate::mcp::load_specs(root)
+            .iter()
+            .any(|spec| spec.name == name),
+        _ => false,
+    }
+}
+
+fn grant_route(p: &serde_json::Value, present: bool) -> Route {
+    Route {
+        options: opts(&[("allow", "let this role use it in this project"), ("deny", "do not grant")]),
+        state: format!(
+            "You act for the project owner under project delegation. A role asks to use a capability in this \
+             project.\nRole: {}\nKind: {}\nName: {}\n\
+             Grant only if the role's current task needs it. Answer with exactly one token: allow or deny.",
+            p["agent_id"].as_str().unwrap_or_default(),
+            p["grant_kind"].as_str().unwrap_or_default(),
+            p["name"].as_str().unwrap_or_default(),
+        ),
+        forced: (!present).then_some(("incomplete", "capability_not_installed")),
+        fallback: "deny",
+    }
+}
+
 fn design_route(direction: &crate::design::DesignDirection) -> Route {
     let listed = direction
         .options
@@ -581,6 +649,15 @@ impl Workbench {
                 fallback: "end",
             },
             ("escalation", _) => flag_route(p),
+            ("install", _) => install_route(p),
+            ("grant", _) => {
+                let present = capability_present(
+                    &self.repo_root,
+                    p["grant_kind"].as_str().unwrap_or_default(),
+                    p["name"].as_str().unwrap_or_default(),
+                );
+                grant_route(p, present)
+            }
             _ => return Ok(None),
         }))
     }
@@ -843,6 +920,39 @@ impl Workbench {
                 }
             }
             ("escalation", _, _) => {
+                self.end_card_incomplete(&card)?;
+                "incomplete"
+            }
+            ("install", _, "install" | "reject") => {
+                let installed = crate::install::resolve_install_by(
+                    &self.db,
+                    &self.project_id,
+                    &self.repo_root,
+                    &card.id,
+                    decision.action == "install",
+                    &self.decider(),
+                )?;
+                if installed.installed {
+                    "installed"
+                } else {
+                    "install_rejected"
+                }
+            }
+            ("grant", _, "allow" | "deny") => {
+                let granted = crate::grants::confirm_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    decision.action == "allow",
+                    &self.decider(),
+                )?;
+                if granted.granted {
+                    "granted"
+                } else {
+                    "grant_denied"
+                }
+            }
+            ("install" | "grant", _, _) => {
                 self.end_card_incomplete(&card)?;
                 "incomplete"
             }
@@ -1129,6 +1239,10 @@ mod managed_acceptance_tests;
 mod managed_proposal_tests;
 
 #[cfg(test)]
+#[path = "managed_install_tests.rs"]
+mod managed_install_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
@@ -1195,6 +1309,17 @@ mod tests {
     }
 
     proptest! {
+        // Test3/21: any non-empty secret slot (env or headers) means the host
+        // cannot complete the install by itself.
+        #[test]
+        fn any_secret_slot_needs_the_owner_login(key in "[A-Z_]{1,12}", headers in any::<bool>()) {
+            let field = if headers { "headers" } else { "env" };
+            let plan = serde_json::json!({"plan_kind":"config","spec":{field:{key:""}}});
+            prop_assert!(install_needs_credentials(&plan));
+            let plain = serde_json::json!({"plan_kind":"skill-dir","creds":false});
+            prop_assert!(!install_needs_credentials(&plain));
+        }
+
         // Test3/20: a policy candidate is adopted only with qualified
         // independent quality; never left to model advice.
         #[test]

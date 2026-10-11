@@ -387,7 +387,9 @@ pub(crate) fn request_with_id(
         .open(lock_path)
         .map_err(|e| ledger_error(e.to_string()))?;
     lock.try_lock().map_err(|e| ledger_error(e.to_string()))?;
-    db.conn().execute("INSERT INTO usage(project_id,agent_id,model,prompt_tokens,completion_tokens,tool_output_tokens,cost_millicents,stage_run_id,record_kind,request_id,purpose,request_state,price_basis,cost_known,actual_model) VALUES (?1,?2,?3,0,0,0,0,?4,'request',?5,?6,'pending',?7,0,?8)",params![ctx.project_id,ctx.agent_id,model_slot,ctx.stage_run_id,id,purpose,basis,provider.billing_model()]).map_err(|e|ledger_error(e.to_string()))?;
+    // Test3/21: a project-level request (a delegated decision on a card no
+    // role owns) books NULL, not "", which the agents foreign key rejects.
+    db.conn().execute("INSERT INTO usage(project_id,agent_id,model,prompt_tokens,completion_tokens,tool_output_tokens,cost_millicents,stage_run_id,record_kind,request_id,purpose,request_state,price_basis,cost_known,actual_model) VALUES (?1,?2,?3,0,0,0,0,?4,'request',?5,?6,'pending',?7,0,?8)",params![ctx.project_id,(!ctx.agent_id.is_empty()).then_some(&ctx.agent_id),model_slot,ctx.stage_run_id,id,purpose,basis,provider.billing_model()]).map_err(|e|ledger_error(e.to_string()))?;
     db.conn().execute("UPDATE usage SET reserved_mc=?2,estimated_prompt_tokens=?3,output_limit=?4 WHERE request_id=?1",params![id,reserved_mc,estimated_prompt,output_limit]).map_err(|e|ledger_error(e.to_string()))?;
     tx.commit().map_err(|e| ledger_error(e.to_string()))?;
     let _pending = PendingRequest {
