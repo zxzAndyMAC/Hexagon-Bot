@@ -30,6 +30,7 @@ import type { ApprovalMode } from './gen/ApprovalMode'
 import type { ApprovalModeStatus } from './gen/ApprovalModeStatus'
 import type { DelegationStatus } from './gen/DelegationStatus'
 import type { ManagedRecord } from './gen/ManagedRecord'
+import type { ExternalOperation } from './gen/ExternalOperation'
 import type { DesktopPermissions } from './gen/DesktopPermissions'
 import type { DesktopPermission } from './gen/DesktopPermission'
 import type { ExperienceSourceRequest } from './gen/ExperienceSourceRequest'
@@ -354,6 +355,7 @@ export const api = {
   projectDelegation: () => call<DelegationStatus>('project_delegation'),
   setProjectDelegation: (enabled: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation', { enabled, expectedProjectRoot }),
   managedHistory: () => call<ManagedRecord[]>('managed_history'),
+  managedExternalOps: () => call<ExternalOperation[]>('managed_external_ops'),
   managedProcessing: () => call<PendingQuestion[]>('managed_processing'),
   setProjectDelegationPaused: (paused: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation_paused', { paused, expectedProjectRoot }),
   stopModelRequest: (questionId: string) => call<null>('stop_model_request', { questionId }),
@@ -1334,6 +1336,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'stop_model_request':
       return null as T
     case 'managed_history':
+    case 'managed_external_ops':
     case 'managed_processing':
       return [] as T
     case 'design_direction':

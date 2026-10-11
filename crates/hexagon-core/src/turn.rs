@@ -205,6 +205,35 @@ pub(crate) fn halted(db: &Db, ctx: &ToolContext) -> bool {
         || crate::evaluation::control::checkpoint(&ctx.repo_root).is_err()
 }
 
+/// Managed-followups ticket 03 (spec T4): the turn kernel's handle on the
+/// model-request item of a top-level role turn, implemented by the facade
+/// (the kernel never builds cards or views itself). It lets the owner stop
+/// this one request while it waits for the network, without pausing the
+/// project or putting the role to sleep.
+pub(crate) trait RecoveryItem: Send + Sync {
+    /// The item this request is (or now becomes) visible as. The first
+    /// network wait publishes it as `retrying`; a retry passes its own item.
+    fn locate_or_publish(&self, db: &Db, retry_deadline_ms: i64) -> Option<String>;
+    /// The waited-for request went through: close an item the wait opened.
+    fn recovered(&self, db: &Db, item: &str);
+}
+
+/// The owner's per-item stop. An unreadable item counts as stopped: a false
+/// stop costs one manual retry; a false "keep going" keeps sending after the
+/// owner said stop (ticket 03, same model as the PM wait loop).
+fn item_stopped(db: &Db, item: &str) -> bool {
+    crate::cards::get(db, item)
+        .map(|card| card.payload["stop_requested"] == true)
+        .unwrap_or(true)
+}
+
+fn deadline_ms(remaining: std::time::Duration) -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    i64::try_from((now + remaining).as_millis()).unwrap_or(i64::MAX)
+}
+
 /// 等网退出留痕（票 01）：一条系统事件带探针数与等网时长 + 一帧清旗。
 /// 进入/退出各一条；失败探针不逐条落事件——5s 一次的探针刷屏没有信息量，
 /// 「等了多久、探了几次、怎么退出的」在退出事件里一次说清。
@@ -309,6 +338,8 @@ fn stream_with_retry(
     // 等网态三要素：起点（时长/预算）、探针数、是否已进入（事件只发一次）。
     let mut waiting_since: Option<std::time::Instant> = None;
     let mut probes = 0usize;
+    // Ticket 03: the item this wait is visible as (top-level role turns only).
+    let mut item: Option<String> = None;
     loop {
         if halted(db, ctx) {
             if let Some(since) = waiting_since.take() {
@@ -370,6 +401,9 @@ fn stream_with_retry(
                 // 早随失败发过了，这里只收旗标。
                 if let Some(since) = waiting_since.take() {
                     leave_wait(db, ctx, sink, call, since, probes, "resumed");
+                }
+                if let (Some(hook), Some(id)) = (&ctx.model_recovery, &item) {
+                    hook.recovered(db, id);
                 }
                 return Ok(resp);
             }
@@ -439,6 +473,14 @@ fn stream_with_retry(
                         plan: None,
                         thinking: String::new(),
                     });
+                    if let Some(hook) = ctx
+                        .model_recovery
+                        .as_ref()
+                        .filter(|_| ctx.subagent.is_none())
+                    {
+                        let left = ctx.wait.budget.saturating_sub(request_started.elapsed());
+                        item = hook.locate_or_publish(db, deadline_ms(left));
+                    }
                 } else if emitted {
                     // 等网中某次探针吐了半截又挂：重发前作废它。
                     sink(&TurnDelta {
@@ -497,6 +539,28 @@ fn stream_with_retry(
                     left -= slice;
                     if halted(db, ctx) {
                         leave_wait(db, ctx, sink, call, since, probes, "paused");
+                        return Err(crate::provider::ProviderError::Interrupted.into());
+                    }
+                    // Ticket 03: the owner stopped this one request. Keep the
+                    // exact position so an explicit retry continues it.
+                    if item.as_deref().is_some_and(|id| item_stopped(db, id)) {
+                        crate::diag::note(
+                            crate::diag::CLASS_JUDGE,
+                            false,
+                            Some(&ctx.project_id),
+                            Some(&ctx.agent_id),
+                            ctx.stage_run_id.as_deref(),
+                            item.as_deref(),
+                            "net_wait",
+                            "owner_stopped_item",
+                            since,
+                        );
+                        leave_wait(db, ctx, sink, call, since, probes, "stopped");
+                        let failure = Failure {
+                            request_id: request_id.as_deref(),
+                            partial_text: &partial_text,
+                        };
+                        save_checkpoint(db, ctx, req, messages, (call, round), purpose, failure)?;
                         return Err(crate::provider::ProviderError::Interrupted.into());
                     }
                 }

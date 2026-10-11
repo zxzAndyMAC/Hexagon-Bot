@@ -782,6 +782,8 @@ impl Workbench {
             run_id: packet.run_id.as_deref(),
             dedupe: format!("pm_route:{}", packet.origin_trace_id),
             packet: serde_json::to_value(packet)?,
+            // Ticket 04: a PM dispatch is one task per dispatch source trace.
+            task_key: Some(format!("dispatch:{}", packet.origin_trace_id)),
         };
         self.record_failed_attempt(&scope, recovery_id, entry, &[])
     }

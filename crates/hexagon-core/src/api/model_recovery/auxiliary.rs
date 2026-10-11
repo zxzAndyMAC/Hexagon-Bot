@@ -33,6 +33,8 @@ impl Workbench {
             run_id: None,
             dedupe: DEDUPE.into(),
             packet: json!({"root": self.repo_root.canonicalize()?, "agent_id": agent}),
+            // One opening intake item at a time (fixed dedupe): its id is the task.
+            task_key: None,
         };
         let entry = failure_entry(failure_code(error), Some(error), None, None, "intake");
         self.record_failed_attempt(

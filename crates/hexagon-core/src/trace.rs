@@ -682,6 +682,8 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "model_request_superseded",
     "delegation_changed",
     "managed_decision",
+    // managed-followups 票 02：host_fs_trash 移入系统废纸篓的事实
+    "host_trashed",
     "tool_execution_started",
     "approval_mode_changed",
     "design_direction_requested",

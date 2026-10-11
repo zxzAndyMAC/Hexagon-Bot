@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './i18n'
 import { TopBar } from './components/TopBar'
+import { TIMELINE_JUMP_EVENT } from './timelineJump'
 
 import { Timeline } from './components/Timeline'
 import { TabBar } from './components/TabBar'
@@ -57,10 +58,14 @@ export default function App() {
       setComputerSettings(section)
       setSettingsOpen(true)
     }
+    // Ticket 05: a report entry asked for its timeline row; the timeline jumps.
+    const toTimeline = () => setSettingsOpen(false)
     window.addEventListener('hexagon:computer-model-settings', openModels)
     window.addEventListener('hexagon:computer-settings', openComputer)
     window.addEventListener('hexagon:open-settings-section', openSection)
+    window.addEventListener(TIMELINE_JUMP_EVENT, toTimeline)
     return () => {
+      window.removeEventListener(TIMELINE_JUMP_EVENT, toTimeline)
       window.removeEventListener('hexagon:computer-model-settings', openModels)
       window.removeEventListener('hexagon:computer-settings', openComputer)
       window.removeEventListener('hexagon:open-settings-section', openSection)

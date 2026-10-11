@@ -302,6 +302,20 @@ pub fn get(db: &Db, qid: &str) -> Result<Card, CardsError> {
         )
 }
 
+/// The queued card holding one idempotency key, if any (managed-followups
+/// ticket 03: a role's model-request item is located by its request key).
+pub fn queued_by_key(db: &Db, project_id: &str, key: &str) -> Result<Option<String>, CardsError> {
+    use rusqlite::OptionalExtension;
+    Ok(db
+        .conn()
+        .query_row(
+            "SELECT id FROM pending_questions WHERE project_id=?1 AND idem_key=?2 AND state='queued'",
+            rusqlite::params![project_id, key],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// 按 id + kind + queued 态取卡（裁决入口的标准前置闸）。
 pub fn get_queued(db: &Db, qid: &str, kind: CardKind) -> Result<Card, CardsError> {
     let card = get(db, qid)?;

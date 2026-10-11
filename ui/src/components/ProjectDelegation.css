@@ -19,3 +19,7 @@
 .managed-pill { color: var(--text-2); border: 1px solid var(--border-strong); background: var(--bg-3); }
 .managed-pill-paused { opacity: .6; }
 .managed-pill-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; width: min(380px, calc(100vw - 48px)); max-height: 60vh; overflow: auto; padding: 12px; display: grid; gap: 8px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--popover); }
+.delegation-external { margin-top: 12px; }
+.delegation-external h4 { margin: 0 0 6px; font-size: 12px; font-weight: 560; color: var(--text); }
+.delegation-external .delegation-list li { flex-wrap: wrap; align-items: baseline; }
+.delegation-unverified { color: var(--text-2); }

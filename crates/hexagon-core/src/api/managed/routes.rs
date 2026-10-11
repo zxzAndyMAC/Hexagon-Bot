@@ -9,13 +9,21 @@ pub(super) const PROMPT_EXCERPT_CHARS: usize = 2000;
 /// How much of a free-text field may shape a budget key.
 pub(super) const KEY_TEXT_CHARS: usize = 120;
 
-/// Q19–Q21 (spec 托管外部边界): entries where the host cannot prove an
-/// action will not delete an external file, directory, project or cloud
-/// document. Under delegation they are refused and reported as a capability
-/// gap; a model label is never proof. Cost model: a false refusal leaves one
-/// task incomplete with a visible reason; a false allow is an unreviewed
-/// external deletion. Entries with host-provable contracts (project tools,
-/// host_fs_read/host_fs_write, which have no delete operation) are not here.
+/// Q19–Q21 (spec 托管外部边界), revised by ADR0087 / managed-followups
+/// ticket 01 (2026-10-11 owner ruling 完全放权). Delegation no longer
+/// force-refuses third-party MCP, browser page actions or native input because
+/// the host cannot prove they will not delete external content: they take the
+/// same delegated permission decision as every other card and are reported as
+/// "host did not verify deletion" (ticket 05). The earlier rule (three
+/// `*_cannot_exclude_deletion` codes) left delegated external production with
+/// only the fenced shell and file read/write, which defeated Q20.
+/// What stays is the one entry whose *local* deletion the host still cannot
+/// fence: the host shell where seatbelt is unavailable (Linux, ADR0087 known
+/// limitation). Cost model: a false refusal leaves one task incomplete with a
+/// visible reason; a false allow is an unfenced local deletion, so this side
+/// stays fail-closed. Tool-layer hard refusals (editor/terminal input,
+/// credential surfaces, password/file fields, uploads, scripts) run before any
+/// card exists and carry no delegation exemption.
 pub(crate) fn unprovable_external(tool: &str) -> Option<&'static str> {
     match tool {
         // Test3/23: the host shell runs under the delegated deletion fence
@@ -23,12 +31,18 @@ pub(crate) fn unprovable_external(tool: &str) -> Option<&'static str> {
         "host_bash" if !crate::sandbox::fence_available() => {
             Some("host_shell_cannot_exclude_external_deletion")
         }
-        "browser_action" => Some("browser_page_action_cannot_exclude_deletion"),
-        "computer_action" | "computer_navigate" => Some("native_input_cannot_exclude_deletion"),
-        _ if tool.starts_with("mcp:") => Some("mcp_semantics_cannot_exclude_deletion"),
         _ => None,
     }
 }
+
+/// ADR0087: boundaries the host cannot enforce for external apps, MCP and
+/// browser actions, stated in every delegated permission decision. They bind
+/// the model; the external-operations report (ticket 05) is how the owner
+/// checks them afterwards.
+pub(crate) const DELEGATED_CONSTRAINTS: &str =
+    "Never manage accounts, pay, or publish to a new target. \
+Deleting inside an application may only move items to that application's own trash or recycle bin. \
+Delete local files only with the host_fs_trash tool (system Trash), never with shell commands.";
 
 /// The stable business key a card's decisions are budgeted under, if the
 /// processor takes this card over. Same key across new card ids, restarts and
@@ -47,7 +61,12 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         ("recovery", None) if p["run_id"].is_string() => {
             Some(format!("run:{}", p["run_id"].as_str().unwrap_or_default()))
         }
-        ("recovery", Some("model_request")) => Some(format!("model_request:{}", card.id)),
+        // Ticket 04 (spec T5): one budget per task, across every item a new
+        // turn opens for it. Items written before task keys budget alone.
+        ("recovery", Some("model_request")) => Some(format!(
+            "model_request:{}",
+            p["task_key"].as_str().unwrap_or(&card.id)
+        )),
         ("stall", _) if p["source"] == "activation_resume" => Some(format!(
             "resume:{}:{}",
             p["activation_root_turn_id"], p["trigger_turn_id"]
@@ -188,8 +207,8 @@ pub(super) fn permission_route(p: &serde_json::Value) -> Route {
         state: format!(
             "You act for the project owner under project delegation. Decide one pending permission.\n\
              Tool: {tool}\nInput: {}\nWhy it needs approval: {}\nSafety-net action: {}\n\
-             Allow it only if it is needed for the project task and does not delete files outside the project, \
-             manage accounts, pay, or publish to a new target. Answer with exactly one token: allow or deny.",
+             Allow it only if it is needed for the project task. {DELEGATED_CONSTRAINTS}\n\
+             Answer with exactly one token: allow or deny.",
             input.chars().take(PROMPT_EXCERPT_CHARS).collect::<String>(),
             p["reason"].as_str().unwrap_or_default(),
             p["safety_net"] == true,
@@ -355,19 +374,7 @@ pub(super) fn install_route(p: &serde_json::Value) -> Route {
     }
 }
 
-/// Installed in this project (skills dir) or configured and spawnable (MCP).
-/// A grant never stands in for availability.
-pub(super) fn capability_present(root: &Path, kind: &str, name: &str) -> bool {
-    match kind {
-        "skill" => root.join(".hexagon/skills").join(name).is_dir(),
-        "mcp" => crate::mcp::load_specs(root)
-            .iter()
-            .any(|spec| spec.name == name),
-        _ => false,
-    }
-}
-
-pub(super) fn grant_route(p: &serde_json::Value, present: bool) -> Route {
+pub(super) fn grant_route(p: &serde_json::Value, present: bool, direct: bool) -> Route {
     Route {
         options: opts(&[("allow", "let this role use it in this project"), ("deny", "do not grant")]),
         state: format!(
@@ -378,7 +385,15 @@ pub(super) fn grant_route(p: &serde_json::Value, present: bool) -> Route {
             p["grant_kind"].as_str().unwrap_or_default(),
             p["name"].as_str().unwrap_or_default(),
         ),
-        forced: (!present).then_some(("incomplete", "capability_not_installed")),
+        // Ticket 01 (ADR0087): while delegation is active an installed
+        // capability is used directly; the card ends without a grant row.
+        forced: if !present {
+            Some(("incomplete", "capability_not_installed"))
+        } else if direct {
+            Some(("direct_use", "installed_capability_direct_use"))
+        } else {
+            None
+        },
         fallback: "deny",
     }
 }
@@ -607,12 +622,12 @@ impl Workbench {
             }
             ("install", _) => install_route(p),
             ("grant", _) => {
-                let present = capability_present(
-                    &self.repo_root,
-                    p["grant_kind"].as_str().unwrap_or_default(),
-                    p["name"].as_str().unwrap_or_default(),
-                );
-                grant_route(p, present)
+                let kind = p["grant_kind"].as_str().unwrap_or_default();
+                let name = p["name"].as_str().unwrap_or_default();
+                let present = crate::grants::installed(&self.repo_root, kind, name);
+                let direct =
+                    present && crate::delegation::current(&self.db, &self.project_id).is_some();
+                grant_route(p, present, direct)
             }
             _ => Route {
                 options: opts(&[("end", "end the unregistered item")]),

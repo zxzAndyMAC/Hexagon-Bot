@@ -66,6 +66,144 @@ pub(super) fn turn_recovery_refusal(facts: &TurnRecoveryFacts) -> Option<&'stati
         .map(|(_, code)| code)
 }
 
+/// Ticket 04 (spec T5): which task a role's model request serves. Inside a
+/// stage the stage run is the task; outside one, the activation that woke the
+/// role (its dispatch or mention) is, and every later turn of that activation
+/// shares its root. None when the checkpoint is missing: the item then
+/// budgets alone, which is the old behaviour, never a shared unbounded key.
+pub(super) fn turn_task_key(run_id: Option<&str>, checkpoint: Option<&Value>) -> Option<String> {
+    if let Some(run) = run_id {
+        return Some(format!("run:{run}"));
+    }
+    let checkpoint = checkpoint?;
+    checkpoint["activation_root_turn_id"]
+        .as_i64()
+        .or_else(|| checkpoint["turn_id"].as_i64())
+        .map(|root| format!("activation:{root}"))
+}
+
+/// One role model request's item key: one item per origin step, whether the
+/// first network wait or the final failure creates it.
+pub(in crate::api) fn turn_request_key(origin_turn_id: i64) -> String {
+    format!("turn_model:{origin_turn_id}")
+}
+
+/// The newest top-level TurnStarted of a role: the request's origin step.
+pub(in crate::api) fn origin_turn_id(
+    db: &Db,
+    project_id: &str,
+    agent_id: &str,
+) -> Result<i64, ApiError> {
+    Ok(db.conn().query_row(
+        "SELECT COALESCE(MAX(id),0) FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started' AND COALESCE(json_extract(payload,'$.subagent'),0)=0",
+        rusqlite::params![project_id, agent_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// Managed-followups ticket 03 (spec T4): the role turn's model-request item
+/// as the turn kernel sees it. On the first network wait it publishes the
+/// item as `retrying` (same request key as a later failure, so one request
+/// is one item) — that is what the owner's per-item stop acts on before any
+/// failure has been recorded. A retry passes its existing item instead.
+pub(in crate::api) struct TurnWaitItem {
+    pub project_id: String,
+    pub root: PathBuf,
+    pub agent_id: String,
+    pub role: String,
+    pub run_id: Option<String>,
+    pub input: String,
+    pub attachments: Vec<crate::trace::AttachRef>,
+    pub plan_first: bool,
+    pub activation_root: Option<i64>,
+    pub existing: Option<String>,
+}
+
+impl TurnWaitItem {
+    fn publish(&self, db: &Db, retry_deadline_ms: i64) -> Result<String, ApiError> {
+        let origin = origin_turn_id(db, &self.project_id, &self.agent_id)?;
+        let dedupe = turn_request_key(origin);
+        if let Some(open) = crate::cards::queued_by_key(db, &self.project_id, &dedupe)? {
+            return Ok(open);
+        }
+        let packet = TurnRecoveryPacket {
+            root: self.root.clone(),
+            agent_id: self.agent_id.clone(),
+            role: self.role.clone(),
+            run_id: self.run_id.clone(),
+            origin_turn_id: origin,
+            input: self.input.clone(),
+            attachments: self.attachments.clone(),
+            plan_first: self.plan_first,
+            partial_text: None,
+        };
+        let task_key = turn_task_key(
+            self.run_id.as_deref(),
+            Some(&json!({"activation_root_turn_id": self.activation_root, "turn_id": origin})),
+        );
+        let qid = crate::cards::enqueue(
+            db,
+            &self.project_id,
+            Some(&self.agent_id),
+            crate::cards::CardKind::Recovery,
+            json!({"sub":"model_request","purpose":"turn","packet":packet,"state":"retrying",
+                "history":[],"retry_deadline_ms":retry_deadline_ms,"task_key":task_key}),
+            Some(&dedupe),
+        )?;
+        publish_view(
+            db,
+            &self.project_id,
+            &qid,
+            &self.agent_id,
+            self.run_id.as_deref(),
+            "model_request_retrying",
+        )?;
+        Ok(qid)
+    }
+}
+
+impl crate::turn::RecoveryItem for TurnWaitItem {
+    fn locate_or_publish(&self, db: &Db, retry_deadline_ms: i64) -> Option<String> {
+        if let Some(existing) = &self.existing {
+            return Some(existing.clone());
+        }
+        // A missing item only removes the per-item stop for this wait; the
+        // project pause and role sleep still stop it.
+        self.publish(db, retry_deadline_ms)
+            .map_err(|error| log::warn!("model request item not published: {error}"))
+            .ok()
+    }
+
+    fn recovered(&self, db: &Db, item: &str) {
+        // A retry's own item is closed by run_recovered_turn.
+        if self.existing.is_some() {
+            return;
+        }
+        let closed = (|| -> Result<(), ApiError> {
+            crate::cards::annotate(
+                db,
+                item,
+                &[
+                    ("state", json!("recovered")),
+                    ("retry_deadline_ms", Value::Null),
+                ],
+            )?;
+            crate::cards::answer(db, item, "host")?;
+            publish_view(
+                db,
+                &self.project_id,
+                item,
+                &self.agent_id,
+                self.run_id.as_deref(),
+                "model_request_recovered",
+            )
+        })();
+        if let Err(error) = closed {
+            log::warn!("model request item {item} not closed: {error}");
+        }
+    }
+}
+
 impl Workbench {
     /// Persist a terminal role model-request failure on its recovery item.
     /// The checkpoint is the one written by this attempt's TurnStarted scope;
@@ -100,8 +238,12 @@ impl Workbench {
             purpose: "turn",
             agent_id: &packet.agent_id,
             run_id: packet.run_id.as_deref(),
-            dedupe: format!("turn_model:{}", packet.origin_turn_id),
+            dedupe: turn_request_key(packet.origin_turn_id),
             packet: serde_json::to_value(&packet)?,
+            task_key: turn_task_key(
+                packet.run_id.as_deref(),
+                checkpoint.as_ref().map(|(_, payload)| payload),
+            ),
         };
         let checkpoint_id = checkpoint.map(|(id, _)| id);
         self.record_failed_attempt(
@@ -157,13 +299,33 @@ impl Workbench {
     ) -> Result<(), ApiError> {
         if matches!(error.cause(), crate::provider::ProviderError::Interrupted) {
             if let Some(qid) = recovery_id {
-                let run_id = packet.run_id.as_deref();
-                self.publish_recovery_state(qid, &packet.agent_id, run_id, "stopped", None)?;
+                self.stop_turn_item(qid, &packet.agent_id, packet.run_id.as_deref())?;
             }
             return Ok(());
         }
         self.save_turn_failure(packet, recovery_id, error, slot, model)?;
         Ok(())
+    }
+
+    /// A stopped or interrupted request: its item becomes `stopped`, honest
+    /// and not revived by stall rescue, autonomy or delegation. Ticket 03: an
+    /// item the first wait opened has no position yet; the kernel saved one
+    /// when it stopped, so an explicit retry continues the same call.
+    pub(in crate::api) fn stop_turn_item(
+        &self,
+        qid: &str,
+        agent_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<(), ApiError> {
+        if crate::cards::get(&self.db, qid)?.payload["checkpoint_event_id"].is_null() {
+            let checkpoint = self.latest_turn_checkpoint(agent_id, run_id)?;
+            crate::cards::annotate(
+                &self.db,
+                qid,
+                &[("checkpoint_event_id", json!(checkpoint.map(|(id, _)| id)))],
+            )?;
+        }
+        self.publish_recovery_state(qid, agent_id, run_id, "stopped", None)
     }
 
     pub(super) fn retry_turn_model_request(
@@ -261,6 +423,14 @@ impl Workbench {
                     role: packet.role.clone(),
                     via: "model_recovery".into(),
                 })
+            }
+            // Ticket 03: the owner stopped this retry (or paused/slept the
+            // team) — stopped, never "failed".
+            Ok(TurnOutcome::Interrupted) => {
+                self.stop_turn_item(qid, &packet.agent_id, run_id)?;
+                Err(ApiError::Decision(
+                    "model recovery stopped: Interrupted".into(),
+                ))
             }
             Ok(other) => {
                 self.publish_recovery_state(qid, &packet.agent_id, run_id, "failed", None)?;

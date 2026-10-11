@@ -20,6 +20,7 @@ beforeEach(async () => {
   vi.spyOn(api, 'approvalMode').mockResolvedValue({ project_id: 'p1', project_root: '/proj', mode: 'assisted' })
   useUiStore.setState({ projectRoot: '/proj' })
   vi.spyOn(api, 'managedHistory').mockResolvedValue([])
+  vi.spyOn(api, 'managedExternalOps').mockResolvedValue([])
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([])
 })
 afterEach(async () => { await act(async () => root?.unmount()); el.replaceChildren(); el.remove(); vi.restoreAllMocks() })
@@ -45,6 +46,11 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   const dialog = el.querySelector('.managed-confirm')!
   expect(dialog.textContent).toContain('The system will not')
   expect(dialog.textContent).toContain('at most 3 correction rounds')
+  // ADR0087 (ticket 01): full release is stated honestly before turning on.
+  expect(dialog.textContent).toContain('only go to the system Trash')
+  expect(dialog.textContent).toContain('MCP servers and skills installed in this project')
+  expect(dialog.querySelector('[data-external-deletion]')!.textContent).toContain('cannot block deletions')
+  expect(dialog.querySelector('[data-linux-limit]')!.textContent).toContain('Linux')
   expect(document.activeElement?.textContent).toBe('Cancel')
   const confirm = [...dialog.querySelectorAll('button')].find(b => b.textContent === 'Turn on delegation')!
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
@@ -99,4 +105,32 @@ it('settings shows status and the report, not a second switch', async () => {
   expect(el.textContent).toContain('approval mode menu')
   expect(el.textContent).toContain('Refused')
   expect(el.textContent).toContain('1 done')
+})
+
+it('the report lists external operations with honest verification and jumps to the decision row', async () => {
+  // Managed-followups ticket 05 (ADR0087): app/MCP/browser are unverified; a
+  // host trash is recoverable and says where the item is.
+  vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
+  vi.spyOn(api, 'managedHistory').mockResolvedValue([
+    { event_id: 11, card_id: 'q1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed_and_continued', actor: 'managed:g:1', result: 'done' },
+  ])
+  vi.spyOn(api, 'managedExternalOps').mockResolvedValue([
+    { event_id: 11, card_id: 'q1', kind: 'local_trash', target: '/Users/me/old.png', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-11 12:00:00', verification: 'host_verified_recoverable', trash_path: '/Users/me/.Trash/old.png' },
+    { event_id: 12, card_id: 'q2', kind: 'mcp', target: 'figma:update_node', action: 'update_node', decision: 'allow', result: 'done', at: '2026-10-11 12:01:00', verification: 'host_unverified_deletion', trash_path: null },
+  ])
+  const jumped: number[] = []
+  const listen = (event: Event) => jumped.push((event as CustomEvent<number>).detail)
+  window.addEventListener('hexagon:timeline-jump', listen)
+  try {
+    await mount(<ProjectDelegation />)
+    const section = el.querySelector('[data-external-ops]')!
+    expect(section.textContent).toContain('External operations')
+    expect(el.querySelector('[data-external-kind="local_trash"]')!.textContent).toContain('recoverable from Trash')
+    expect(el.querySelector('[data-external-kind="local_trash"]')!.textContent).toContain('/Users/me/.Trash/old.png')
+    expect(el.querySelector('[data-external-kind="mcp"]')!.textContent).toContain('Host did not verify whether anything was deleted')
+    const button = el.querySelector<HTMLButtonElement>('[data-external-kind="mcp"] button')!
+    expect(button.title).toBe('Show in timeline')
+    await act(async () => button.click())
+    expect(jumped).toEqual([12])
+  } finally { window.removeEventListener('hexagon:timeline-jump', listen) }
 })

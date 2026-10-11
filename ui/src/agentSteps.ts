@@ -29,7 +29,7 @@ export function toolInputSummary(p: Record<string, unknown>): string {
 // （fs_read/fs_patch/artifact_write，core tools/builtin.rs 定名）。未登记工具
 // 回退 stepTool/'tool' 图标 + 原始名（不吞新工具）。
 export const TOOL_LABEL: Record<string, string> = {
-  host_fs_read: 'stepHostRead', host_fs_write: 'stepHostWrite', host_bash: 'stepHostBash',
+  host_fs_read: 'stepHostRead', host_fs_write: 'stepHostWrite', host_fs_trash: 'stepHostTrash', host_bash: 'stepHostBash',
   propose_design: 'stepProposeDesign', read_design_direction: 'stepReadDesign',
   computer_observe: 'stepComputerObserve', computer_action: 'stepComputerAction', computer_navigate: 'stepComputerNavigate',
   'fs.read': 'stepRead', 'fs.write': 'stepWrite', 'fs.edit': 'stepWrite',
@@ -42,7 +42,7 @@ export const TOOL_LABEL: Record<string, string> = {
 }
 
 export const TOOL_ICON: Record<string, IconName> = {
-  host_fs_read: 'artifact', host_fs_write: 'diff', host_bash: 'tool',
+  host_fs_read: 'artifact', host_fs_write: 'diff', host_fs_trash: 'tool', host_bash: 'tool',
   propose_design: 'artifact', read_design_direction: 'artifact',
   computer_observe: 'computer', computer_action: 'computer', computer_navigate: 'computer',
   'fs.read': 'artifact', 'fs.write': 'diff', 'fs.edit': 'diff',

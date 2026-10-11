@@ -204,3 +204,18 @@ it('stops automatic retries even while a retry is in flight, with its own bindin
   expect(keys.bindingFor('retryWithChatModel')).not.toBe(keys.bindingFor('approve'))
  }finally {await act(async()=>root.unmount())}
 })
+it('a role turn item waiting for the network has the same stop entry and binding', async () => {
+ // Managed-followups ticket 03: the per-item stop is no longer PM-only.
+ const stop=vi.spyOn(api,'stopModelRequest').mockResolvedValue(null)
+ const keys=await import('./keymap')
+ const turn={...payload,purpose:'turn',agent_id:'a0',target_role:'Designer',state:'retrying',can_retry:false,retry_deadline_ms:Date.now()+60_000,history:[]}
+ useUiStore.setState({pending:[],team:[],toasts:[],modalScope:'workbench'})
+ const el=document.createElement('div');document.body.appendChild(el);const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q2" payload={turn} top />))
+  const button=el.querySelector<HTMLButtonElement>('[data-stop-retry]')!
+  expect(button.title).toContain(keys.formatBinding(keys.bindingFor('modelRecoveryStop')))
+  await act(async()=>button.click())
+  expect(stop).toHaveBeenCalledWith('q2')
+ }finally {await act(async()=>root.unmount()); el.remove()}
+})

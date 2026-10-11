@@ -14,7 +14,9 @@ use super::*;
 use serde::Serialize;
 
 mod act;
+mod external;
 mod routes;
+pub use external::{managed_external_ops, ExternalOperation};
 // Glob re-export keeps each item's own visibility (pub for the IPC reads).
 pub use routes::*;
 
@@ -502,6 +504,18 @@ mod managed_external_tests;
 mod managed_golden_tests;
 
 #[cfg(test)]
+#[path = "managed_budget_tests.rs"]
+mod managed_budget_tests;
+
+#[cfg(test)]
+#[path = "managed_capability_tests.rs"]
+mod managed_capability_tests;
+
+#[cfg(test)]
+#[path = "managed_report_tests.rs"]
+mod managed_report_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
@@ -539,25 +553,29 @@ mod tests {
     }
 
     #[test]
-    fn unprovable_entries_are_named_and_project_tools_are_not() {
+    fn only_the_unfenced_host_shell_stays_unprovable() {
+        // Ticket 01 (ADR0087) changed this: MCP, browser page actions and
+        // native input used to be force-refused here; they now take the
+        // delegated permission decision and are reported as unverified.
         for tool in [
             "browser_action",
             "computer_action",
             "computer_navigate",
             "mcp:figma:delete_node",
-        ] {
-            assert!(unprovable_external(tool).is_some(), "{tool}");
-        }
-        for tool in [
             "bash",
             "fs_write",
             "host_fs_write",
             "host_fs_read",
+            "host_fs_trash",
             "browser_observe",
             "dependency_fetch",
         ] {
             assert!(unprovable_external(tool).is_none(), "{tool}");
         }
+        assert_eq!(
+            unprovable_external("host_bash").is_some(),
+            !crate::sandbox::fence_available()
+        );
     }
 
     fn check_state() -> impl Strategy<Value = orchestra::CheckState> {
@@ -670,11 +688,15 @@ mod tests {
             }
         }
 
-        // Any third-party MCP tool, whatever it claims to be, is refused.
+        // Ticket 01 (ADR0087) rewrote "every MCP tool is refused": a
+        // delegated MCP permission is now the model's closed-set choice, and
+        // its prompt always carries the host's fixed constraints.
         #[test]
-        fn every_mcp_tool_is_unprovable(server in "[a-z]{1,8}", tool in "\\PC{0,20}") {
-            let name = format!("mcp:{server}:{tool}");
-            prop_assert!(unprovable_external(&name).is_some());
+        fn mcp_permissions_are_decided_within_the_constraints(server in "[a-z]{1,8}", tool in "[a-z_]{1,20}") {
+            let route = permission_route(&serde_json::json!({"tool": format!("mcp:{server}:{tool}")}));
+            prop_assert!(route.forced.is_none());
+            prop_assert_eq!(route.fallback, "deny");
+            prop_assert!(route.state.contains(DELEGATED_CONSTRAINTS));
         }
 
         // Whatever the model says, the parsed action is inside the closed set.

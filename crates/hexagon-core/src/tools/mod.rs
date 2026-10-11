@@ -132,6 +132,9 @@ pub struct ToolContext {
     /// Test3/16: the verified browser runtime (read-only) for a fenced
     /// verification run, and whether the entry is a loopback URL.
     pub(crate) browser_runtime: Option<(std::path::PathBuf, bool)>,
+    /// Managed-followups ticket 03: the model-request item of a top-level
+    /// role turn (None for subagents and direct tool contexts).
+    pub(crate) model_recovery: Option<Arc<dyn crate::turn::RecoveryItem>>,
 }
 
 impl Default for ToolContext {
@@ -168,6 +171,7 @@ impl Default for ToolContext {
             exec_scratch: None,
             install_cache: None,
             browser_runtime: None,
+            model_recovery: None,
         }
     }
 }
@@ -334,6 +338,7 @@ impl Registry {
         };
         r.register(host::HostRead);
         r.register(host::HostWrite);
+        r.register(host::HostTrash);
         r.register(host::HostBash);
         r.register(FsRead);
         r.register(FsFind);

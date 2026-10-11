@@ -2815,3 +2815,11 @@ fn pe05_subagent_turn_is_never_reminded() {
     assert!(provider.recorded().iter().all(|r| !has_reminder(r)));
     assert_eq!(system_events(&db, "task_reminder"), 0);
 }
+
+/// Managed-followups ticket 03: an unreadable item counts as stopped
+/// (a false stop costs one manual retry; a false go keeps sending).
+#[test]
+fn an_unreadable_recovery_item_reads_as_stopped() {
+    let db = Db::open_in_memory().unwrap();
+    assert!(super::item_stopped(&db, "q-missing"));
+}

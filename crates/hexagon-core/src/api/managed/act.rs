@@ -176,6 +176,12 @@ impl Workbench {
                     "grant_denied"
                 }
             }
+            // Ticket 01: no grants row — direct use lasts only while
+            // delegation is active (grants::managed_direct_use).
+            ("grant", _, "direct_use") => {
+                crate::cards::answer(&self.db, &card.id, &self.decider())?;
+                "direct_use_without_grant"
+            }
             ("install" | "grant", _, _) => {
                 self.end_card_incomplete(&card)?;
                 "incomplete"

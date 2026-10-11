@@ -31,6 +31,35 @@ fn mode(db: &Db, ctx: &ToolContext) -> Result<(), ToolError> {
     Ok(())
 }
 
+/// One lower-cased path component naming credentials, policy or agent state.
+fn protected_part(part: &str) -> bool {
+    let part = part
+        .strip_suffix("-wal")
+        .or_else(|| part.strip_suffix("-shm"))
+        .unwrap_or(part);
+    matches!(
+        part,
+        ".hexagon"
+            | ".agents"
+            | ".codex"
+            | ".claude"
+            | "agents.md"
+            | "claude.md"
+            | "skill.md"
+            | "cookies"
+            | "cookies.sqlite"
+            | "login data"
+            | "logins.json"
+            | "key4.db"
+            | "auth.json"
+            | ".git-credentials"
+            | ".docker"
+            | ".kube"
+            | ".azure"
+            | "gcloud"
+    )
+}
+
 /// Resolve through the existing canonical path primitive, then keep external
 /// tools away from all project/policy roots. False negatives require opening the
 /// correct project; false positives bypass a role or expose host credentials.
@@ -42,33 +71,7 @@ fn checked_path(ctx: &ToolContext, raw: &str, directory: bool) -> Result<PathBuf
     let lower = resolved.to_string_lossy().to_ascii_lowercase();
     if sensitive_file_path(&resolved)
         || is_permission_rule_path(&lower)
-        || lower.split('/').any(|part| {
-            let part = part
-                .strip_suffix("-wal")
-                .or_else(|| part.strip_suffix("-shm"))
-                .unwrap_or(part);
-            matches!(
-                part,
-                ".hexagon"
-                    | ".agents"
-                    | ".codex"
-                    | ".claude"
-                    | "agents.md"
-                    | "claude.md"
-                    | "skill.md"
-                    | "cookies"
-                    | "cookies.sqlite"
-                    | "login data"
-                    | "logins.json"
-                    | "key4.db"
-                    | "auth.json"
-                    | ".git-credentials"
-                    | ".docker"
-                    | ".kube"
-                    | ".azure"
-                    | "gcloud"
-            )
-        })
+        || lower.split('/').any(protected_part)
     {
         return Err(reject(
             "host credentials, policy and agent state are protected",
@@ -200,7 +203,10 @@ pub(crate) fn guard(
     name: &str,
     input: &Value,
 ) -> Result<Option<String>, ToolError> {
-    if !matches!(name, "host_fs_read" | "host_fs_write" | "host_bash") {
+    if !matches!(
+        name,
+        "host_fs_read" | "host_fs_write" | "host_fs_trash" | "host_bash"
+    ) {
         return Ok(None);
     }
     let started = std::time::Instant::now();
@@ -213,11 +219,15 @@ pub(crate) fn guard(
                 "project manager cannot use host write/terminal capabilities",
             ));
         }
-        path(
-            ctx,
-            str_arg(input, if name == "host_bash" { "cwd" } else { "path" })?,
-            name == "host_bash",
-        )?;
+        if name == "host_fs_trash" {
+            trash_target(ctx, str_arg(input, "path")?)?;
+        } else {
+            path(
+                ctx,
+                str_arg(input, if name == "host_bash" { "cwd" } else { "path" })?,
+                name == "host_bash",
+            )?;
+        }
         if name == "host_bash" && bash_hits_credentials(str_arg(input, "cmd")?) {
             return Err(reject("command touches credential material"));
         }
@@ -357,6 +367,179 @@ impl Tool for HostWrite {
     }
 }
 
+/// Fixed guidance appended to a failing delegated host shell result: the fence
+/// silently refuses unlink/rename-away/rmdir, and a model that is not told why
+/// burns correction rounds retrying `rm` (ticket 02 / spec T2).
+pub(crate) const TRASH_GUIDANCE: &str = "Under project delegation this shell cannot delete, rename away or remove directories outside the project (deletion fence). To delete a local file or folder, call host_fs_trash with its absolute path; it moves the item to the system Trash where the owner can restore it.";
+
+/// Entries walked before a directory trash gives up verifying (same bound as
+/// the host shell's nested-project inventory): an unverifiable tree fails
+/// closed rather than being trashed unchecked.
+const TRASH_WALK_LIMIT: usize = 20000;
+
+/// Top-level and system locations the trash tool never touches, beyond the
+/// shared credential/policy/project rules of `checked_path`.
+const SYSTEM_ROOTS: &[&str] = &[
+    "/System",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/etc",
+    "/private/etc",
+    "/Library",
+    "/Applications",
+    "/opt",
+    "/cores",
+    "/dev",
+    "/Volumes",
+];
+
+/// Managed-followups ticket 02 (ADR0087 本机删除只进废纸篓): validate one
+/// trash target. Same canonical rules as host_fs_write (absolute, outside the
+/// current and any other Hexagon project, no credential/policy/agent state),
+/// plus: it must exist and not be a symlink (the link, not its target, would
+/// be the effect), it may not be a system root, the home directory, its
+/// Library or the Trash itself, and a directory may not contain protected
+/// state or a nested project anywhere below it. Cost model: a false refusal
+/// costs one owner action in Finder; a false accept trashes credentials or a
+/// whole project — the walk is bounded and fails closed when it is too large.
+pub(crate) fn trash_target(ctx: &ToolContext, raw: &str) -> Result<PathBuf, ToolError> {
+    let started = std::time::Instant::now();
+    let result = (|| {
+        if !Path::new(raw).is_absolute() {
+            return Err(reject("host path must be absolute"));
+        }
+        let meta =
+            std::fs::symlink_metadata(raw).map_err(|_| reject("trash target does not exist"))?;
+        if meta.file_type().is_symlink() {
+            return Err(reject(
+                "symlinks are not moved to the Trash; trash the real path",
+            ));
+        }
+        let resolved = checked_path(ctx, raw, false)?;
+        let project = ctx.repo_root.canonicalize()?;
+        if project.starts_with(&resolved) {
+            return Err(reject(
+                "the trash target cannot enclose the current project",
+            ));
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = home.as_deref();
+        let forbidden = resolved.components().count() <= 2
+            || SYSTEM_ROOTS.iter().any(|root| resolved.starts_with(root))
+            || home.is_some_and(|home| {
+                home.starts_with(&resolved)
+                    || resolved.starts_with(home.join("Library"))
+                    || resolved.starts_with(home.join(".Trash"))
+            });
+        if forbidden {
+            return Err(reject("system, home and Trash locations are protected"));
+        }
+        if meta.is_dir() {
+            let mut queue = vec![resolved.clone()];
+            let mut seen = 0usize;
+            while let Some(dir) = queue.pop() {
+                for entry in std::fs::read_dir(&dir)? {
+                    let entry = entry?;
+                    seen += 1;
+                    if seen > TRASH_WALK_LIMIT {
+                        return Err(reject(
+                            "trash target is too large to verify; trash narrower paths",
+                        ));
+                    }
+                    let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                    if protected_part(&name) || sensitive_file_path(&entry.path()) {
+                        return Err(reject(
+                            "trash target contains credentials, policy, agent state or a project",
+                        ));
+                    }
+                    if entry.file_type()?.is_dir() {
+                        queue.push(entry.path());
+                    }
+                }
+            }
+        }
+        Ok(resolved)
+    })();
+    if result.is_err() {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&ctx.project_id),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+            None,
+            "host_trash",
+            "protected_or_invalid_target",
+            started,
+        );
+    }
+    result
+}
+
+/// The system Trash API keeps the original name and "Put Back" information.
+/// It is a single rename on the item's own volume: on failure (missing
+/// target, permission, a volume without Trash) nothing moved.
+#[cfg(target_os = "macos")]
+fn move_to_trash(path: &Path) -> Result<PathBuf, ToolError> {
+    use objc2_foundation::{NSFileManager, NSURL};
+    let url = NSURL::from_file_path(path).ok_or_else(|| reject("invalid host path"))?;
+    let mut out = None;
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, Some(&mut out))
+        .map_err(|error| {
+            ToolError::NotExecuted(format!(
+                "system Trash refused the item: {}",
+                error.localizedDescription()
+            ))
+        })?;
+    out.and_then(|url| url.to_file_path())
+        .ok_or_else(|| ToolError::Exec("moved to the Trash but its new location is unknown".into()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn move_to_trash(_: &Path) -> Result<PathBuf, ToolError> {
+    // Spec T2: Windows Recycle Bin and Linux desktop trash are out of scope.
+    Err(reject("host_fs_trash is only available on macOS"))
+}
+
+pub struct HostTrash;
+impl Tool for HostTrash {
+    fn name(&self) -> &str {
+        "host_fs_trash"
+    }
+    fn description(&self) -> &str {
+        "Use when a local file or folder outside the project must be deleted: moves it to the system Trash (macOS), where the owner can restore it. The only allowed way to delete local files under project delegation; shell deletion is fenced. Always asks for approval. Current/other Hexagon projects, credentials, agent policy, system and home locations are refused. Do not use for project files (use project tools) or symlinks."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{"path":{"type":"string","description":"Absolute path of an existing external file or folder to move to the system Trash."}},"required":["path"]})
+    }
+    fn risk(&self) -> RiskClass {
+        RiskClass::WriteLocal
+    }
+    fn precondition(&self, input: &Value, ctx: &ToolContext) -> Result<(), ToolError> {
+        trash_target(ctx, str_arg(input, "path")?).map(|_| ())
+    }
+    fn exec(&self, db: &Db, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        mode(db, ctx)?;
+        let target = trash_target(ctx, str_arg(input, "path")?)?;
+        let trashed = move_to_trash(&target)?;
+        // Ticket 02/05: the trace fact is the report's source — paths and
+        // time only, never file contents.
+        db.append_event(
+            &ctx.project_id,
+            crate::trace::EventKind::System,
+            json!({"kind":"host_trashed","path":target,"trash_path":trashed,
+                "action_id":ctx.action_key,
+                "managed_actor":crate::delegation::current(db, &ctx.project_id).map(|grant| grant.actor())}),
+            Some(&ctx.agent_id),
+            ctx.stage_run_id.as_deref(),
+        )
+        .map_err(|error| ToolError::Exec(format!("moved to the Trash; trace not recorded: {error}")))?;
+        Ok(json!({"trashed":target,"trash_path":trashed,"recoverable":true}))
+    }
+}
+
 pub struct HostBash;
 impl Tool for HostBash {
     fn name(&self) -> &str {
@@ -384,7 +567,8 @@ impl Tool for HostBash {
         let spec = host_spec(&scoped.repo_root, net)?;
         // Test3/23 (Q19–Q21): delegated decisions may edit external files but
         // never delete them; the owner's own Broad approval keeps its scope.
-        let spec = if crate::delegation::current(db, &ctx.project_id).is_some() {
+        let fenced = crate::delegation::current(db, &ctx.project_id).is_some();
+        let spec = if fenced {
             match crate::sandbox::delegated_host_fence(spec, &scoped.repo_root) {
                 crate::sandbox::SandboxSpec::Unavailable => {
                     return Err(reject(
@@ -403,13 +587,19 @@ impl Tool for HostBash {
                 .unwrap_or(30000)
                 .clamp(1, 600000),
         );
-        ctx.sessions.run_oneshot_with_spec(
+        let mut out = ctx.sessions.run_oneshot_with_spec(
             db,
             &scoped,
             str_arg(input, "cmd")?,
             timeout,
             (net, Some(spec), Some(ctx.repo_root.clone())),
-        )
+        )?;
+        // Only a failing command can have hit the fence; successful runs
+        // stay unchanged (review: the hint on every result was noise).
+        if fenced && out["exit_code"].as_i64() != Some(0) {
+            out["deletion_fence"] = json!(TRASH_GUIDANCE);
+        }
+        Ok(out)
     }
 }
 

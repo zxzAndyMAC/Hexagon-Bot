@@ -128,6 +128,57 @@ pub(crate) fn grant_reviewed_experience(
     )
 }
 
+/// Installed in this project (skills dir) or configured and spawnable (MCP).
+/// A grant never stands in for availability.
+pub(crate) fn installed(root: &std::path::Path, kind: &str, name: &str) -> bool {
+    match kind {
+        "skill" => valid_name(name) && root.join(".hexagon/skills").join(name).is_dir(),
+        "mcp" => crate::mcp::load_specs(root)
+            .iter()
+            .any(|spec| spec.name == name),
+        _ => false,
+    }
+}
+
+/// Managed-followups ticket 01 (ADR0087, owner Q11 2026-10-11: agents may
+/// call installed MCP on demand; skills follow the same rule). While project
+/// delegation is active (on and not paused), any role may use a capability
+/// that is really installed in this project as if granted: no grant card and
+/// no grants row, so turning delegation off or pausing it restores the
+/// original per-role grant checks. The host fact decides, never the model.
+/// Cost model: a false "not direct" costs one delegated grant decision; a
+/// false "direct" uses an installed capability the owner delegated anyway —
+/// unreadable delegation state reads as off (delegation::current).
+pub(crate) fn managed_direct_use(
+    db: &Db,
+    project_id: &str,
+    root: &std::path::Path,
+    agent_id: &str,
+    kind: &str,
+    name: &str,
+) -> bool {
+    let started = std::time::Instant::now();
+    if crate::delegation::current(db, project_id).is_none() || !installed(root, kind, name) {
+        return false;
+    }
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(project_id),
+        Some(agent_id),
+        None,
+        None,
+        "grant",
+        if kind == "mcp" {
+            "managed_installed_mcp_direct"
+        } else {
+            "managed_installed_skill_direct"
+        },
+        started,
+    );
+    true
+}
+
 /// 请求新增能力授权；负责人确认前不写 grants。
 pub fn request(
     db: &Db,

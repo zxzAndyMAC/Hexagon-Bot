@@ -43,6 +43,9 @@ export function ManagedConfirmation({ pending, error, onCancel, onConfirm }: {
         <section><h3>{t('delegation.canTitle')}</h3><ul>{can.map(line => <li key={line}>{line}</li>)}</ul></section>
         <section><h3>{t('delegation.cannotTitle')}</h3><ul>{cannot.map(line => <li key={line}>{line}</li>)}</ul></section>
       </div>
+      {/* ADR0087: the host cannot block deletions inside external apps; say so before turning on. */}
+      <p data-external-deletion>{t('delegation.externalDeletion')}</p>
+      <p data-linux-limit>{t('delegation.linuxLimit')}</p>
       <p>{t('delegation.limits')}</p>
     </div>
     {error && <p role="alert" className="approval-mode-error">{t('delegation.failed')}</p>}

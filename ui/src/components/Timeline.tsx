@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
 import { api, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
+import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useUiStore } from '../store'
 import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Avatar } from './Avatar'
@@ -948,6 +949,16 @@ export function Timeline() {
     viewport.jumpToRow(index, id)
     setFlash(rowKey(rows[index]))
   }, [rows, revealRow, viewport.releasePin, viewport.jumpToRow])
+  // Managed-followups ticket 05: the delegation report links an external
+  // operation to its delegated decision row.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const id = (event as CustomEvent<unknown>).detail
+      if (typeof id === 'number') jumpToEvent(id)
+    }
+    window.addEventListener(TIMELINE_JUMP_EVENT, handler)
+    return () => window.removeEventListener(TIMELINE_JUMP_EVENT, handler)
+  }, [jumpToEvent])
   const jump = useCallback((mark: NodeMark) => {
     if (mark.eventId != null) jumpToEvent(mark.eventId)
     else if (mark.rowIdx >= 0) jumpToEvent(rows[mark.rowIdx].idx)

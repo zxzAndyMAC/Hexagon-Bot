@@ -937,6 +937,22 @@ impl Workbench {
         kind: &str,
         name: &str,
     ) -> Result<crate::grants::GrantOutcome, ApiError> {
+        // Managed-followups ticket 01 (ADR0087): while delegation is active an
+        // installed capability is usable directly — no card, no grants row.
+        if crate::grants::managed_direct_use(
+            &self.db,
+            &self.project_id,
+            &self.repo_root,
+            agent_id,
+            kind,
+            name,
+        ) {
+            return Ok(crate::grants::GrantOutcome {
+                granted: true,
+                question_id: None,
+                via: "managed_installed".into(),
+            });
+        }
         Ok(crate::grants::request(
             &self.db,
             &self.project_id,
@@ -1231,6 +1247,7 @@ impl Workbench {
             exec_scratch: None,
             install_cache: None,
             browser_runtime: None,
+            model_recovery: None,
         }
     }
 
@@ -1875,6 +1892,20 @@ impl Workbench {
             }
         }
         ctx.subagent_provider = Some(provider.clone());
+        // Managed-followups ticket 03: the per-item stop reaches this
+        // request's network wait through its model-request item.
+        ctx.model_recovery = Some(Arc::new(model_recovery::TurnWaitItem {
+            project_id: self.project_id.clone(),
+            root: self.repo_root.canonicalize()?,
+            agent_id: aid.to_string(),
+            role: role.to_string(),
+            run_id: ctx.stage_run_id.clone(),
+            input: instruction.clone(),
+            attachments: attachments.to_vec(),
+            plan_first,
+            activation_root: resume.map(|resume| resume.root_turn_id),
+            existing: recovery_id.map(str::to_string),
+        }));
         if crate::provider_config::fell_back_to_default(&self.providers, &slot_name) {
             crate::diag::slot_fallback(
                 Some(&self.project_id),
@@ -1984,23 +2015,41 @@ impl Workbench {
                 agent_id: aid.to_string(),
                 role: role.to_string(),
                 run_id: ctx.stage_run_id.clone(),
-                origin_turn_id: self.db.conn().query_row(
-                    "SELECT COALESCE(MAX(id),0) FROM events WHERE project_id=?1 AND agent_id=?2 AND kind='turn_started' AND COALESCE(json_extract(payload,'$.subagent'),0)=0",
-                    rusqlite::params![self.project_id, aid],
-                    |row| row.get(0),
-                )?,
+                origin_turn_id: model_recovery::origin_turn_id(&self.db, &self.project_id, aid)?,
                 input: instruction.clone(),
                 attachments: attachments.to_vec(),
                 plan_first,
                 partial_text: None,
             };
+            // Ticket 03: the item the first network wait opened, if any.
+            let waited = match recovery_id {
+                Some(_) => None,
+                None => crate::cards::queued_by_key(
+                    &self.db,
+                    &self.project_id,
+                    &model_recovery::turn_request_key(packet.origin_turn_id),
+                )?,
+            };
             self.note_turn_model_failure(
                 &packet,
-                recovery_id,
+                recovery_id.or(waited.as_deref()),
                 error,
                 &slot_name,
                 provider.billing_model(),
             )?;
+        }
+        // Ticket 03: a request stopped while its first network wait was
+        // visible leaves that item `stopped` (a retry's own item is handled
+        // by run_recovered_turn).
+        if recovery_id.is_none() && matches!(run, Ok(TurnOutcome::Interrupted)) {
+            let origin = model_recovery::origin_turn_id(&self.db, &self.project_id, aid)?;
+            if let Some(item) = crate::cards::queued_by_key(
+                &self.db,
+                &self.project_id,
+                &model_recovery::turn_request_key(origin),
+            )? {
+                self.stop_turn_item(&item, aid, ctx.stage_run_id.as_deref())?;
+            }
         }
         let outcome = run?;
         // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
@@ -4575,6 +4624,12 @@ mod desktop_actions_tests;
 #[cfg(test)]
 mod host_scope_tests;
 
+#[cfg(test)]
+mod host_trash_tests;
+
+#[cfg(test)]
+mod model_recovery_stop_tests;
+
 /// Validate the UI workspace identity while the shell retains its project lock.
 pub fn desktop_check_project(root: &Path, expected: &str) -> Result<(), String> {
     crate::desktop::actions::verify_project(root, expected)
@@ -4741,8 +4796,8 @@ pub fn timeline_window_metadata(
 mod action_recovery;
 mod managed;
 pub use managed::{
-    managed_decide, managed_history, managed_processing, owner_pending, ManagedCandidate,
-    ManagedDecision, ManagedRecord, ManagedRoute,
+    managed_decide, managed_external_ops, managed_history, managed_processing, owner_pending,
+    ExternalOperation, ManagedCandidate, ManagedDecision, ManagedRecord, ManagedRoute,
 };
 mod model_recovery;
 pub use action_recovery::{ReconcileReport, ReconcileVerdict};

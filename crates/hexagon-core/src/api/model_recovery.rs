@@ -234,6 +234,24 @@ pub fn model_request_recovery(
     })
 }
 
+/// Store the derived view on the card and append the matching timeline row
+/// (free so the turn kernel's item hook can publish on its own connection).
+pub(super) fn publish_view(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    agent_id: &str,
+    run_id: Option<&str>,
+    kind: &str,
+) -> Result<(), ApiError> {
+    let view = model_request_recovery(db, project_id, qid)?;
+    crate::cards::annotate(db, qid, &[("view", serde_json::to_value(&view)?)])?;
+    let mut event = serde_json::to_value(view)?;
+    event["kind"] = json!(kind);
+    db.append_event(project_id, EventKind::System, event, Some(agent_id), run_id)?;
+    Ok(())
+}
+
 /// Who owns a recovery item: one card per original request (dedupe key).
 pub(super) struct RecoveryScope<'a> {
     pub purpose: &'static str,
@@ -241,6 +259,11 @@ pub(super) struct RecoveryScope<'a> {
     pub run_id: Option<&'a str>,
     pub dedupe: String,
     pub packet: Value,
+    /// Managed-followups ticket 04: the task this request serves, so
+    /// delegation budgets all of a task's items together (new cards for new
+    /// turns once reset the three rounds). None = not derivable; the item
+    /// then budgets under its own id (the old behaviour) with a diagnostic.
+    pub task_key: Option<String>,
 }
 
 impl Workbench {
@@ -280,8 +303,21 @@ impl Workbench {
             crate::cards::annotate(&self.db, qid, &fields)?;
             qid.to_string()
         } else {
-            let mut payload =
-                json!({"sub":"model_request","purpose":scope.purpose,"packet":scope.packet});
+            if scope.task_key.is_none() {
+                crate::diag::note(
+                    crate::diag::CLASS_JUDGE,
+                    false,
+                    Some(&self.project_id),
+                    Some(scope.agent_id),
+                    scope.run_id,
+                    None,
+                    "model_recovery_task",
+                    "task_key_fallback_item",
+                    started,
+                );
+            }
+            let mut payload = json!({"sub":"model_request","purpose":scope.purpose,"packet":scope.packet,
+                    "task_key":scope.task_key});
             for (key, value) in &fields {
                 payload[*key] = value.clone();
             }
@@ -318,18 +354,7 @@ impl Workbench {
         run_id: Option<&str>,
         kind: &str,
     ) -> Result<(), ApiError> {
-        let view = model_request_recovery(&self.db, &self.project_id, qid)?;
-        crate::cards::annotate(&self.db, qid, &[("view", serde_json::to_value(&view)?)])?;
-        let mut event = serde_json::to_value(view)?;
-        event["kind"] = json!(kind);
-        self.db.append_event(
-            &self.project_id,
-            EventKind::System,
-            event,
-            Some(agent_id),
-            run_id,
-        )?;
-        Ok(())
+        publish_view(&self.db, &self.project_id, qid, agent_id, run_id, kind)
     }
 
     /// Move an item between non-terminal states (retrying/stopped/failed).
@@ -507,4 +532,6 @@ mod pm;
 mod role_turn;
 mod supersession;
 pub use judgment::RejudgeOutcome;
-pub(in crate::api) use role_turn::TurnRecoveryPacket;
+pub(in crate::api) use role_turn::{
+    origin_turn_id, turn_request_key, TurnRecoveryPacket, TurnWaitItem,
+};

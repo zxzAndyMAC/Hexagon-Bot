@@ -70,6 +70,12 @@ pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
     if tool == "host_fs_write" && input.get("expected_sha256").is_some() {
         return Some("external file replacement");
     }
+    // Managed-followups ticket 02 (ADR0087): moving a local item to the
+    // Trash is a deletion — it asks in every mode and never becomes a
+    // remembered rule; under delegation the delegated decision answers it.
+    if tool == "host_fs_trash" {
+        return Some("external deletion to Trash");
+    }
     match tool {
         // Owner Q3/Q6/Q15 + desktop ticket 07: pixels and model descriptions
         // cannot attest publishing, deletion, payment or role write ownership.
@@ -555,6 +561,18 @@ fn pre_memory_guards(
             )
             .map(|n| n > 0)
             .unwrap_or(false);
+        // Managed-followups ticket 01 (ADR0087): under active delegation an
+        // installed service needs no grant row; the call still goes through
+        // every later guard and the delegated permission decision.
+        let granted = granted
+            || crate::grants::managed_direct_use(
+                db,
+                &ctx.project_id,
+                &ctx.repo_root,
+                &ctx.agent_id,
+                "mcp",
+                service,
+            );
         if !granted {
             return Ok(GuardVerdict::Deny {
                 reason: format!("no grant for mcp service: {service}"),

@@ -674,7 +674,16 @@ fn selectable(
         )
         .map(|n| n > 0)
         .unwrap_or(false);
-    Ok(granted)
+    // Ticket 01: same rule as the L0 gate (installed + active delegation).
+    Ok(granted
+        || crate::grants::managed_direct_use(
+            db,
+            &ctx.project_id,
+            &ctx.repo_root,
+            &ctx.agent_id,
+            "mcp",
+            service,
+        ))
 }
 
 /// 一次子代理回合的结尾（线程/内联共用）：outcome → 任务状态 + 回执。

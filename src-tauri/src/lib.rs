@@ -1310,6 +1310,18 @@ fn managed_history(
     })
 }
 
+/// Managed-followups ticket 05: delegated external operations for the
+/// report (read connection).
+#[tauri::command]
+fn managed_external_ops(
+    state: tauri::State<AppState>,
+) -> Result<Vec<hexagon_core::api::ExternalOperation>, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::api::managed_external_ops(db, PROJECT_ID, MANAGED_HISTORY_ROWS)
+            .map_err(cmd_err)
+    })
+}
+
 /// Test3/17: cards the managed processor currently holds (read connection).
 #[tauri::command]
 fn managed_processing(
@@ -3185,6 +3197,7 @@ pub fn run() {
             project_delegation,
             set_project_delegation,
             managed_history,
+            managed_external_ops,
             managed_processing,
             set_project_delegation_paused,
             stop_model_request,

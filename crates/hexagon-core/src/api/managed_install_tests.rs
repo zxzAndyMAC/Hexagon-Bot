@@ -28,12 +28,12 @@ fn local_skill(dir: &Path) -> String {
 }
 
 #[test]
-fn install_then_grant_are_two_real_decisions_under_the_grant_actor() {
+fn install_is_a_real_decision_and_the_installed_skill_needs_no_grant_row() {
     let dir = tempfile::tempdir().unwrap();
     let mut wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
     let name = local_skill(dir.path());
     wb.request_install(&name).unwrap();
-    replies(&mut wb, &["install", "allow"]);
+    replies(&mut wb, &["install"]);
     let status = crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
     assert!(owner_pending(&wb.db, crate::PROJECT_ID).unwrap().is_empty());
     let first = wb.managed_tick().unwrap();
@@ -56,11 +56,17 @@ fn install_then_grant_are_two_real_decisions_under_the_grant_actor() {
         .unwrap();
     assert_eq!(installed[0].payload["via"], actor.as_str());
     assert_eq!(installed[0].payload["scope"], "project");
-    // The role now asks to use it: a separate decision.
-    wb.request_grant("a0", "skill", &name).unwrap();
-    let second = wb.managed_tick().unwrap();
-    assert_eq!(second[0].action, "allow", "{second:?}");
-    assert_eq!(grant_rows(&wb), 1);
+    // Ticket 01 (ADR0087) changed the second step: this used to be a
+    // separate delegated grant decision that wrote a grants row. Now an
+    // installed capability is used directly while delegation is active —
+    // still no grant row, so turning delegation off restores the grant card.
+    let used = wb.request_grant("a0", "skill", &name).unwrap();
+    assert_eq!(
+        (used.granted, used.via.as_str()),
+        (true, "managed_installed")
+    );
+    assert!(wb.managed_tick().unwrap().is_empty(), "no grant card");
+    assert_eq!(grant_rows(&wb), 0);
     if let Some(home) = std::env::var_os("HOME") {
         assert!(
             !Path::new(&home)
