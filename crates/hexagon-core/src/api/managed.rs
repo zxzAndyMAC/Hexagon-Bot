@@ -124,9 +124,11 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         ("recovery", Some("tool_outcome_unknown")) => action().map(|a| format!("unknown:{a}")),
         ("recovery", Some("tool_action_ready")) => action().map(|a| format!("ready:{a}")),
         // An in-flight retry is the processor's own work, not a new decision.
-        ("recovery", Some("model_request")) if p["state"] != "retrying" => {
-            Some(format!("model_request:{}", card.id))
+        // Interrupted stage run (crash or network suspension).
+        ("recovery", None) if p["run_id"].is_string() => {
+            Some(format!("run:{}", p["run_id"].as_str().unwrap_or_default()))
         }
+        ("recovery", Some("model_request")) => Some(format!("model_request:{}", card.id)),
         ("stall", _) if p["source"] == "activation_resume" => Some(format!(
             "resume:{}:{}",
             p["activation_root_turn_id"], p["trigger_turn_id"]
@@ -164,7 +166,9 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         )),
         // Back-and-forth bounces on one artifact share one budget.
         ("escalation", _) => Some(format!("flag:{}", p["target"].as_str().unwrap_or(&card.id))),
-        _ => None,
+        // Test3/23: an unregistered kind/sub is still taken over — it ends
+        // incomplete and is reported, never approved by default.
+        _ => Some(format!("unrouted:{}", card.id)),
     }
 }
 
@@ -588,6 +592,15 @@ impl Workbench {
                 };
                 unknown_route(&action.tool, &facts)
             }
+            ("recovery", None) if p["run_id"].is_string() => Route {
+                options: opts(&[
+                    ("resume_run", "resume the interrupted stage and its task"),
+                    ("end", "leave it interrupted"),
+                ]),
+                state: String::new(),
+                forced: Some(("resume_run", "interrupted_run_recoverable")),
+                fallback: "end",
+            },
             ("recovery", Some("tool_action_ready")) => {
                 let action_id = p["action_id"].as_str().unwrap_or_default();
                 let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
@@ -604,6 +617,8 @@ impl Workbench {
                     fallback: "end",
                 }
             }
+            // An in-flight retry is already being worked; hold, don't decide.
+            ("recovery", Some("model_request")) if p["state"] == "retrying" => return Ok(None),
             ("recovery", Some("model_request")) => Route {
                 options: opts(&[
                     ("retry", "send the failed request again"),
@@ -705,7 +720,12 @@ impl Workbench {
                 );
                 grant_route(p, present)
             }
-            _ => return Ok(None),
+            _ => Route {
+                options: opts(&[("end", "end the unregistered item")]),
+                state: String::new(),
+                forced: Some(("end", "unrouted_card_type")),
+                fallback: "end",
+            },
         }))
     }
 
@@ -1045,6 +1065,11 @@ impl Workbench {
                 self.end_card_incomplete(&card)?;
                 "incomplete"
             }
+            ("recovery", None, "resume_run") => {
+                let run = p["run_id"].as_str().unwrap_or_default().to_string();
+                self.recover_run(&run)?;
+                "run_resumed"
+            }
             ("stall", _, "continue" | "retry") => {
                 self.stall_retry(&card.id)?;
                 "continued"
@@ -1053,7 +1078,10 @@ impl Workbench {
                 self.stall_ack(&card.id)?;
                 "ended"
             }
-            _ => "unrouted",
+            _ => {
+                self.end_card_incomplete(&card)?;
+                "incomplete"
+            }
         };
         Ok(outcome.into())
     }

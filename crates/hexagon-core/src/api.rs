@@ -3062,7 +3062,7 @@ impl Workbench {
                 Ok::<_, ApiError>(resume)
             })
             .transpose()?;
-        orchestra::recover_run(&self.db, &self.project_id, run_id)?;
+        orchestra::recover_run_by(&self.db, &self.project_id, run_id, &self.decider())?;
         if let (Some(aid), Some(resume)) = (agent, resume) {
             self.run_turn_agent_with_history(
                 &aid,

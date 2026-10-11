@@ -2174,6 +2174,11 @@ pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
 /// 负责人按「继续」：interrupted run 回 active、恢复卡销、落 Resumed。
 /// 不重放模型调用——回合上下文已随进程死，下一步由人发起。
 pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchError> {
+    recover_run_by(db, project_id, run_id, "owner")
+}
+
+/// Test3/23: the same crash recovery by a non-owner decider.
+pub fn recover_run_by(db: &Db, project_id: &str, run_id: &str, by: &str) -> Result<(), OrchError> {
     let state: String = db.conn().query_row(
         "SELECT state FROM stage_runs WHERE id=?1 AND project_id=?2",
         rusqlite::params![run_id, project_id],
@@ -2191,12 +2196,12 @@ pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchEr
         crate::cards::CardKind::Recovery,
         "run_id",
         run_id,
-        "owner",
+        by,
     )?;
     db.append_event(
         project_id,
         EventKind::Resumed,
-        json!({"run_id": run_id, "reason": "crash_recovery"}),
+        json!({"run_id": run_id, "reason": "crash_recovery", "by": by}),
         None,
         Some(run_id),
     )?;

@@ -423,3 +423,101 @@ fn a_ready_action_is_resumed_after_the_pause_ends() {
     );
     assert_eq!(chat.recorded().len(), 1, "the original task continued once");
 }
+
+/// Test3/23: an unregistered card type is taken over and ended as
+/// incomplete — never left with the owner and never approved by default.
+#[test]
+fn an_unregistered_card_type_is_ended_not_approved() {
+    let (_dir, mut wb, chat) = wb_with(Some("allow"));
+    crate::cards::enqueue(
+        &wb.db,
+        crate::PROJECT_ID,
+        Some("a0"),
+        crate::cards::CardKind::Recovery,
+        json!({"sub":"from_a_future_version"}),
+        None,
+    )
+    .unwrap();
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    assert!(owner_pending(&wb.db, crate::PROJECT_ID).unwrap().is_empty());
+    let done = wb.managed_tick().unwrap();
+    assert_eq!(
+        (done[0].action.as_str(), done[0].reason.as_str()),
+        ("end", "unrouted_card_type")
+    );
+    assert!(chat.unwrap().recorded().is_empty());
+    assert_eq!(
+        managed_history(&wb.db, crate::PROJECT_ID, 1).unwrap()[0].outcome,
+        "incomplete"
+    );
+    assert!(crate::cards::queued(&wb.db, crate::PROJECT_ID)
+        .unwrap()
+        .is_empty());
+}
+
+/// Test3/23: delegation survives a restart. A run interrupted by the crash is
+/// resumed by host rule on reopen and its task continues — without replaying
+/// a completed tool; a decision prepared before the restart cannot land.
+#[test]
+fn reopening_a_delegated_project_resumes_interrupted_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack: PackDef = serde_json::from_value(json!({"name":"resume","version":1,
+        "stages":[{"name":"build","roles":["worker"],"due":["规格"],"stamp_point":true}]}))
+    .unwrap();
+    let roles = [("a0".to_string(), "worker".to_string())];
+    let (run, stale) = {
+        let mut wb =
+            Workbench::open_scoped(dir.path(), "resume", &roles, Some(pack.clone()), false)
+                .unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![text_response(
+                "started the build",
+            )])),
+        );
+        wb.open_stage(0).unwrap();
+        wb.run_instance("a0", "build it").unwrap();
+        let run = wb.active_run().unwrap().unwrap().id;
+        crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+        // The process dies mid-turn: a turn started and never finished.
+        wb.db
+            .append_event(
+                crate::PROJECT_ID,
+                EventKind::TurnStarted,
+                json!({"instruction":"build it"}),
+                Some("a0"),
+                Some(&run),
+            )
+            .unwrap();
+        let stale = wb.managed_plan().unwrap();
+        (run, stale)
+    };
+    let mut wb = Workbench::open_scoped(dir.path(), "resume", &roles, Some(pack), false).unwrap();
+    let chat = Arc::new(ScriptedProvider::new(vec![text_response(
+        "continued the build",
+    )]));
+    wb.register_provider("default", chat.clone());
+    assert!(
+        crate::delegation::current(&wb.db, crate::PROJECT_ID).is_some(),
+        "delegation persists"
+    );
+    // Turning it off and on again in between invalidates the old decision.
+    crate::delegation::disable(&wb.db, crate::PROJECT_ID).unwrap();
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let late = ManagedDecision {
+        action: "resume_run".into(),
+        reason: "stale".into(),
+        via: "host".into(),
+    };
+    if let Some(old) = stale.first() {
+        assert!(wb.managed_commit(old, late).unwrap().is_none());
+    }
+    let done = wb.managed_tick().unwrap();
+    assert_eq!(done[0].action, "resume_run", "{done:?}");
+    assert_eq!(wb.active_run().unwrap().unwrap().id, run);
+    assert_eq!(chat.recorded().len(), 1, "the original task continued once");
+    assert!(crate::cards::queued(&wb.db, crate::PROJECT_ID)
+        .unwrap()
+        .is_empty());
+}

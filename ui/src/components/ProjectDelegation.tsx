@@ -7,6 +7,14 @@ import type { DelegationStatus } from '../gen/DelegationStatus'
 import type { ManagedRecord } from '../gen/ManagedRecord'
 import './ProjectDelegation.css'
 
+/** Test3/23: a decision is only "done" when its real effect landed; an
+ * empty pending list is never reported as business success. */
+function resultOf(record: ManagedRecord): 'done' | 'incomplete' | 'failed' {
+  if (record.outcome.startsWith('failed')) return 'failed'
+  if (record.outcome === 'incomplete' || record.action === 'incomplete' || record.outcome === 'still_incomplete') return 'incomplete'
+  return 'done'
+}
+
 /** Test3/17: project delegation is a separate owner switch, never a new
  * meaning of an approval mode. Turning it on always needs an explicit second
  * click; the host persists the grant before the UI claims it is on. */
@@ -73,11 +81,15 @@ export function ProjectDelegation() {
     {on && processing > 0 && <p className="delegation-note" role="status">{t('delegation.processing', { count: processing })}</p>}
     {failed && <p className="delegation-error" role="alert">{t('delegation.failed')}</p>}
     {history.length === 0 ? <p className="delegation-empty">{t('delegation.empty')}</p> : <ul className="delegation-list">
-      {history.map(record => <li key={record.event_id}>
-        <span>{t(`delegation.action.${record.action}`, { defaultValue: record.action })}</span>
-        <span>{t(`delegation.via.${record.via}`, { defaultValue: record.via })}</span>
-        <span>{record.card_id}</span>
-      </li>)}
+      {history.map(record => {
+        const result = resultOf(record)
+        return <li key={record.event_id} className={result === 'done' ? undefined : 'delegation-unfinished'}>
+          <span>{t(`delegation.result.${result}`)}</span>
+          <span>{t(`delegation.action.${record.action}`, { defaultValue: record.action })}</span>
+          <span>{t(`delegation.via.${record.via}`, { defaultValue: record.via })}</span>
+          <code title={record.outcome}>{record.reason}</code>
+        </li>
+      })}
     </ul>}
   </section>
 }
