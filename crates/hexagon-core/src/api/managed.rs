@@ -498,6 +498,10 @@ mod managed_publish_tests;
 mod managed_external_tests;
 
 #[cfg(test)]
+#[path = "managed_golden_tests.rs"]
+mod managed_golden_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
