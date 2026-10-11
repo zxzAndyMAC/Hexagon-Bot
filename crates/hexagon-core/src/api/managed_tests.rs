@@ -37,7 +37,7 @@ fn managed_events(wb: &Workbench) -> Vec<serde_json::Value> {
 
 #[test]
 fn delegation_off_leaves_every_card_with_the_owner() {
-    let (_dir, wb, chat) = wb_with(Some("allow"));
+    let (_dir, mut wb, chat) = wb_with(Some("allow"));
     let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
     assert!(wb.managed_tick().unwrap().is_empty());
     let card = crate::cards::get(&wb.db, &qid).unwrap();
@@ -115,7 +115,7 @@ fn a_model_allow_runs_the_real_action_and_continues_the_original_task() {
 #[test]
 fn an_out_of_set_answer_or_no_model_denies() {
     for reply in [Some("sure, go ahead"), None] {
-        let (_dir, wb, _chat) = wb_with(reply);
+        let (_dir, mut wb, _chat) = wb_with(reply);
         let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
         crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
         let decisions = wb.managed_tick().unwrap();
@@ -133,7 +133,7 @@ fn an_out_of_set_answer_or_no_model_denies() {
 
 #[test]
 fn a_host_shell_is_denied_without_asking_the_model() {
-    let (dir, wb, chat) = wb_with(Some("allow"));
+    let (dir, mut wb, chat) = wb_with(Some("allow"));
     crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
     let outside = tempfile::tempdir().unwrap();
     let ctx = wb.ctx_for("a0", None);
@@ -156,7 +156,7 @@ fn a_host_shell_is_denied_without_asking_the_model() {
 
 #[test]
 fn a_decision_prepared_under_an_old_grant_never_lands() {
-    let (_dir, wb, _chat) = wb_with(Some("allow"));
+    let (_dir, mut wb, _chat) = wb_with(Some("allow"));
     let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
     crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
     let plan = wb.managed_plan().unwrap();
@@ -176,7 +176,7 @@ fn a_decision_prepared_under_an_old_grant_never_lands() {
 
 #[test]
 fn an_exhausted_budget_denies_and_survives_off_on() {
-    let (_dir, wb, chat) = wb_with(Some("allow"));
+    let (_dir, mut wb, chat) = wb_with(Some("allow"));
     let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
     crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
     let key = wb.managed_plan().unwrap()[0].decision_key.clone();
@@ -223,7 +223,7 @@ fn taken_over_cards_leave_the_owner_view_and_return_when_off() {
 
 #[test]
 fn the_owner_pause_stops_new_decisions_and_late_commits() {
-    let (_dir, wb, chat) = wb_with(Some("allow"));
+    let (_dir, mut wb, chat) = wb_with(Some("allow"));
     let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
     crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
     let plan = wb.managed_plan().unwrap();

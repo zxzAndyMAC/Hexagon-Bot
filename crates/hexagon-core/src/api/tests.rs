@@ -2730,16 +2730,17 @@ fn l4_mcp_install_stays_in_project_manifest() {
     assert!(pending_questions(&wb).unwrap().is_empty());
 }
 
-fn proposal_body(surface: &str, target: &str, diff: &str) -> String {
+pub(crate) fn proposal_body(surface: &str, target: &str, diff: &str) -> String {
     format!(
         "---\nkind: 改进提案\nauthor: a0\nsurface: {surface}\ntarget: {target}\n---\n\
          ## 动机\n改进提示词\n\n## 改动面\n```diff\n{diff}\n```\n\n## 预期收益\n更准\n\n## 验证方法\n跑测\n"
     )
 }
 
-const PROPOSAL_DIFF: &str = "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n line1\n+line2";
+pub(crate) const PROPOSAL_DIFF: &str =
+    "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n line1\n+line2";
 
-fn git_wb(roles: &[&str]) -> (tempfile::TempDir, Workbench) {
+pub(crate) fn git_wb(roles: &[&str]) -> (tempfile::TempDir, Workbench) {
     let dir = tempfile::tempdir().unwrap();
     crate::git::init(dir.path(), "main").unwrap();
     std::fs::write(dir.path().join("AGENTS.md"), "line1\n").unwrap();
@@ -2748,7 +2749,7 @@ fn git_wb(roles: &[&str]) -> (tempfile::TempDir, Workbench) {
     (dir, wb)
 }
 
-fn submit_proposal(
+pub(crate) fn submit_proposal(
     wb: &Workbench,
     art_id: &str,
     surface: &str,
@@ -2772,7 +2773,7 @@ fn submit_proposal(
     crate::proposals::submit(&wb.db, &ctx, art_id, &content).map_err(|e| e.to_string())
 }
 
-fn proposal_status(wb: &Workbench, pid: &str) -> String {
+pub(crate) fn proposal_status(wb: &Workbench, pid: &str) -> String {
     wb.db
         .conn()
         .query_row("SELECT status FROM proposals WHERE id=?1", [pid], |r| {

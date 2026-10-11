@@ -132,8 +132,10 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
             p["activation_root_turn_id"], p["trigger_turn_id"]
         )),
         ("stall", _) => Some(format!("stall:{}", card.id)),
-        // Proposal confirmations share kind=stamp; ticket 20 routes them.
-        ("stamp", _) if !p["proposal_id"].is_null() => None,
+        // Proposal confirmations share kind=stamp (cards.rs overload note).
+        ("stamp", _) if !p["proposal_id"].is_null() => {
+            p["proposal_id"].as_str().map(|id| format!("proposal:{id}"))
+        }
         // One budget per stage across reworked runs and new cards.
         ("stamp", None) => p["stage"].as_str().map(|s| format!("stage:{s}")),
         ("stamp", Some("quality_revalidation")) => {
@@ -339,6 +341,32 @@ pub(crate) fn stamp_forced(
     ("rework", "requirements_missing")
 }
 
+/// Facts a delegated proposal decision may not override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProposalFacts {
+    /// Independent quality state of a policy candidate (None = not a policy).
+    pub policy_quality: Option<crate::proposals::PolicyQualityState>,
+    pub role_review_missing: bool,
+}
+
+/// Test3/20 (Q15/Q18): a model's advice never completes a policy decision.
+/// A policy candidate is adopted only with qualified independent quality and
+/// otherwise ends incomplete; a role definition without its superior review
+/// ends incomplete. Cost model: a false "incomplete" costs one regenerated
+/// proposal; a false adopt changes the process without independent evidence.
+pub(crate) fn proposal_forced(facts: &ProposalFacts) -> Option<(&'static str, &'static str)> {
+    use crate::proposals::PolicyQualityState as Q;
+    match facts.policy_quality {
+        Some(Q::Qualified) => return Some(("adopt", "independent_quality_qualified")),
+        Some(Q::Failed) => return Some(("reject", "independent_quality_failed")),
+        Some(_) => return Some(("incomplete", "independent_quality_missing")),
+        None => {}
+    }
+    facts
+        .role_review_missing
+        .then_some(("incomplete", "superior_review_missing"))
+}
+
 fn design_route(direction: &crate::design::DesignDirection) -> Route {
     let listed = direction
         .options
@@ -497,6 +525,7 @@ impl Workbench {
                 fallback: "end",
             },
             ("stall", _) => stall_route(p),
+            ("stamp", _) if !p["proposal_id"].is_null() => self.proposal_route(p)?,
             ("stamp", None) => {
                 let evidence = orchestra::stage_evidence(&self.db, &self.project_id, self.pack()?)?;
                 Route {
@@ -556,6 +585,40 @@ impl Workbench {
         }))
     }
 
+    fn proposal_route(&self, p: &serde_json::Value) -> Result<Route, ApiError> {
+        let pid = p["proposal_id"].as_str().unwrap_or_default();
+        let (surface, status): (String, String) = self.db.conn().query_row(
+            "SELECT surface,status FROM proposals WHERE id=?1 AND project_id=?2",
+            rusqlite::params![pid, self.project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let facts = ProposalFacts {
+            policy_quality: crate::proposals::quality_for(
+                &self.db,
+                &self.project_id,
+                pid,
+                &surface,
+                &status,
+            ),
+            role_review_missing: surface == "role_def"
+                && !crate::rolesurf::reviewed(&self.db, pid)?,
+        };
+        Ok(Route {
+            options: opts(&[("adopt", "apply the proposal"), ("reject", "do not apply it")]),
+            state: format!(
+                "You act for the project owner under project delegation. An agent proposes an improvement.\n\
+                 Surface: {surface}\nExecution judgment (advice only): {}\nWarnings: {}\nEvidence: {}\n\
+                 Adopt only if the evidence shows it improves the project without widening permissions or \
+                 weakening safeguards. Answer with exactly one token: adopt or reject.",
+                p["judge_verdict"].as_str().unwrap_or("none"),
+                p["warnings"],
+                serde_json::to_string(&p["evidence"]).unwrap_or_default().chars().take(2000).collect::<String>(),
+            ),
+            forced: proposal_forced(&facts),
+            fallback: "reject",
+        })
+    }
+
     /// Everything the unlocked decision step needs, plus the project identity
     /// the commit step re-checks (a project switch between steps never lands).
     pub fn managed_route(&self) -> ManagedRoute {
@@ -568,7 +631,7 @@ impl Workbench {
 
     /// Commit only into the project the decision was prepared for.
     pub fn managed_commit_for(
-        &self,
+        &mut self,
         route: &ManagedRoute,
         candidate: &ManagedCandidate,
         decision: ManagedDecision,
@@ -580,7 +643,7 @@ impl Workbench {
     }
 
     /// Plan, decide and commit every candidate (tests and simple drivers).
-    pub fn managed_tick(&self) -> Result<Vec<ManagedDecision>, ApiError> {
+    pub fn managed_tick(&mut self) -> Result<Vec<ManagedDecision>, ApiError> {
         let providers = self.providers.clone();
         let mut done = vec![];
         for candidate in self.managed_plan()? {
@@ -601,7 +664,7 @@ impl Workbench {
     /// Re-verify and act. Returns None when the grant or card moved on (a late
     /// decision never lands).
     pub fn managed_commit(
-        &self,
+        &mut self,
         candidate: &ManagedCandidate,
         decision: ManagedDecision,
     ) -> Result<Option<ManagedDecision>, ApiError> {
@@ -661,7 +724,7 @@ impl Workbench {
     /// Act through the card owner's facade. Each branch re-validates its own
     /// target (action state, permission, activation chain) at execution.
     fn managed_act(
-        &self,
+        &mut self,
         candidate: &ManagedCandidate,
         decision: &ManagedDecision,
     ) -> Result<String, ApiError> {
@@ -711,6 +774,25 @@ impl Workbench {
             }
             ("recovery", Some("model_request"), _) => {
                 self.retire_model_request_incomplete(&card)?;
+                "incomplete"
+            }
+            ("stamp", _, "adopt") if !p["proposal_id"].is_null() => {
+                self.managed_adopt(&card.id)?;
+                "adopted"
+            }
+            ("stamp", _, "reject") if !p["proposal_id"].is_null() => {
+                let ctx = self.ctx_for("owner", None);
+                crate::proposals::reject_at_stamp_by(
+                    &self.db,
+                    &ctx,
+                    &card.id,
+                    &reason,
+                    &self.decider(),
+                )?;
+                "rejected"
+            }
+            ("stamp", _, _) if !p["proposal_id"].is_null() => {
+                self.end_card_incomplete(&card)?;
                 "incomplete"
             }
             ("stamp", None, action) => return self.managed_stage(&card, action, &reason),
@@ -880,6 +962,16 @@ impl Workbench {
         .into())
     }
 
+    /// Same controlled adoption as the owner's, recorded under the grant.
+    fn managed_adopt(&mut self, qid: &str) -> Result<(), ApiError> {
+        crate::proposals::recover_policy(&self.db, &self.repo_root, &self.project_id)?;
+        self.refresh_policy()?;
+        let by = self.decider();
+        crate::proposals::activate_by(&self.db, &self.ctx_for("owner", None), qid, &by)?;
+        self.refresh_policy()?;
+        Ok(())
+    }
+
     /// The type's terminal "incomplete": the card is answered by the grant
     /// actor and marked, the target stays unaccepted. Visible in the panel.
     fn end_card_incomplete(&self, card: &crate::cards::Card) -> Result<(), ApiError> {
@@ -1033,6 +1125,10 @@ mod managed_tests;
 mod managed_acceptance_tests;
 
 #[cfg(test)]
+#[path = "managed_proposal_tests.rs"]
+mod managed_proposal_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
@@ -1086,7 +1182,36 @@ mod tests {
         ]
     }
 
+    fn quality() -> impl Strategy<Value = Option<crate::proposals::PolicyQualityState>> {
+        use crate::proposals::PolicyQualityState as Q;
+        proptest::option::of(prop_oneof![
+            Just(Q::Unverified),
+            Just(Q::Incomplete),
+            Just(Q::Failed),
+            Just(Q::Stale),
+            Just(Q::Qualified),
+            Just(Q::Historical),
+        ])
+    }
+
     proptest! {
+        // Test3/20: a policy candidate is adopted only with qualified
+        // independent quality; never left to model advice.
+        #[test]
+        fn policy_adoption_needs_qualified_independent_quality(q in quality(), review_missing in any::<bool>()) {
+            let facts = ProposalFacts { policy_quality: q, role_review_missing: review_missing };
+            let forced = proposal_forced(&facts);
+            if q.is_some() {
+                prop_assert!(forced.is_some(), "policy is always host-decided");
+            }
+            if matches!(forced, Some(("adopt", _))) {
+                prop_assert_eq!(q, Some(crate::proposals::PolicyQualityState::Qualified));
+            }
+            if q.is_none() && review_missing {
+                prop_assert_eq!(forced.map(|f| f.0), Some("incomplete"));
+            }
+        }
+
         // Test3/19: acceptance never lowers the bar — "accept" iff nothing is
         // missing; a failed check is never "re-run until lucky", it is rework.
         #[test]

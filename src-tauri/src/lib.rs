@@ -2976,9 +2976,9 @@ fn spawn_managed_watch(app: tauri::AppHandle) {
                 &route.project_id,
                 &candidate,
             );
-            let g = state.wb.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = state.wb.lock().unwrap_or_else(|e| e.into_inner());
             // D01-ok: managed commit is a mutation path through owner facades
-            if let Some(wb) = g.as_ref() {
+            if let Some(wb) = g.as_mut() {
                 if let Err(e) = wb.managed_commit_for(&route, &candidate, decision) {
                     log::warn!("managed commit: {e}");
                 }

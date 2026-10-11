@@ -236,10 +236,11 @@ fn finish(
     pid: &str,
     qid: Option<&str>,
     operation: &str,
+    by: &str,
 ) -> Result<(), PropError> {
     if operation == "adopt" {
         let qid = qid.ok_or(PropError::PolicyRecovery)?;
-        crate::cards::answer(db, qid, "owner")?;
+        crate::cards::answer(db, qid, by)?;
         db.conn().execute(
             "UPDATE proposals SET status='active',decided_at=datetime('now') WHERE id=?1",
             [pid],
@@ -247,14 +248,14 @@ fn finish(
         db.append_event(
             &ctx.project_id,
             EventKind::ProposalStamped,
-            json!({"proposal_id":pid,"question_id":qid,"by":"owner","policy_change":id}),
+            json!({"proposal_id":pid,"question_id":qid,"by":by,"policy_change":id}),
             None,
             None,
         )?;
         db.append_event(
             &ctx.project_id,
             EventKind::ProposalActivated,
-            json!({"proposal_id":pid,"effective_path":TARGET,"by":"owner","policy_change":id}),
+            json!({"proposal_id":pid,"effective_path":TARGET,"by":by,"policy_change":id}),
             None,
             None,
         )?;
@@ -266,7 +267,7 @@ fn finish(
         db.append_event(
             &ctx.project_id,
             EventKind::ProposalRolledBack,
-            json!({"proposal_id":pid,"restored":TARGET,"by":"owner","policy_change":id}),
+            json!({"proposal_id":pid,"restored":TARGET,"by":by,"policy_change":id}),
             None,
             None,
         )?;
@@ -309,7 +310,7 @@ pub(crate) fn recover(db: &Db, root: &Path, project: &str) -> Result<(), PropErr
     let mut ctx = ToolContext::owner(db, root);
     ctx.project_id = project.into();
     let _lease = crate::tools::writeguard::repository_lock(&ctx)?;
-    let mut query=db.conn().prepare("SELECT id,proposal_id,question_id,operation,before_content,after_content FROM policy_changes WHERE project_id=?1 AND state IN ('pending','conflict') ORDER BY rowid")?;
+    let mut query=db.conn().prepare("SELECT id,proposal_id,question_id,operation,before_content,after_content,actor FROM policy_changes WHERE project_id=?1 AND state IN ('pending','conflict') ORDER BY rowid")?;
     let rows = query
         .query_map([project], |r| {
             Ok((
@@ -319,10 +320,11 @@ pub(crate) fn recover(db: &Db, root: &Path, project: &str) -> Result<(), PropErr
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
                 r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    for (id, pid, qid, operation, before, after) in rows {
+    for (id, pid, qid, operation, before, after, by) in rows {
         let started = std::time::Instant::now();
         let actual = target(&ctx).ok().and_then(|path| std::fs::read(path).ok());
         if actual.as_deref() == Some(after.as_bytes()) {
@@ -330,7 +332,7 @@ pub(crate) fn recover(db: &Db, root: &Path, project: &str) -> Result<(), PropErr
                 db.conn(),
                 rusqlite::TransactionBehavior::Immediate,
             )?;
-            finish(db, &ctx, &id, &pid, qid.as_deref(), &operation)?;
+            finish(db, &ctx, &id, &pid, qid.as_deref(), &operation, &by)?;
             tx.commit()?;
             recovery_note(&ctx, false, "observed_replacement", started);
         } else if actual.as_deref() == Some(before.as_bytes()) {
@@ -370,6 +372,7 @@ fn recovery_note(ctx: &ToolContext, refused: bool, code: &str, started: std::tim
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn perform(
     db: &Db,
     ctx: &ToolContext,
@@ -378,6 +381,7 @@ fn perform(
     operation: &str,
     before: &[u8],
     after: &[u8],
+    by: &str,
 ) -> Result<(), PropError> {
     let unresolved:bool=db.conn().query_row("SELECT EXISTS(SELECT 1 FROM policy_changes WHERE project_id=?1 AND state IN ('pending','conflict'))",[&ctx.project_id],|r|r.get(0))?;
     if unresolved {
@@ -388,9 +392,9 @@ fn perform(
     let after_text = std::str::from_utf8(after).map_err(|_| PropError::PolicyConstraint)?;
     // Commit owner intent before touching the file. A crash after replace can
     // then finish the original decision exactly once, without executing again.
-    let inserted = db.conn().execute("INSERT INTO policy_changes(id,project_id,proposal_id,question_id,operation,before_content,after_content,state)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,'pending') ON CONFLICT(id) DO UPDATE SET before_content=excluded.before_content,after_content=excluded.after_content,question_id=excluded.question_id,state='pending' WHERE policy_changes.state='aborted'",
-        params![id,ctx.project_id,pid,qid,operation,before_text,after_text])?;
+    let inserted = db.conn().execute("INSERT INTO policy_changes(id,project_id,proposal_id,question_id,operation,before_content,after_content,state,actor)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,'pending',?8) ON CONFLICT(id) DO UPDATE SET before_content=excluded.before_content,after_content=excluded.after_content,question_id=excluded.question_id,actor=excluded.actor,state='pending' WHERE policy_changes.state='aborted'",
+        params![id,ctx.project_id,pid,qid,operation,before_text,after_text,by])?;
     if inserted != 1 {
         return Err(PropError::PolicyRecovery);
     }
@@ -439,7 +443,7 @@ fn perform(
         }
         replace(&path, after)?;
         checkpoint(&path)?;
-        finish(db, ctx, &id, pid, qid, operation)?;
+        finish(db, ctx, &id, pid, qid, operation, by)?;
         tx.commit()?;
         Ok::<_, PropError>(())
     })();
@@ -489,6 +493,7 @@ fn apply_bound_adoption(
     pid: &str,
     qid: &str,
     binding: &Binding,
+    by: &str,
 ) -> Result<String, PropError> {
     let path = target(ctx)?;
     let before = std::fs::read(&path)?;
@@ -506,7 +511,7 @@ fn apply_bound_adoption(
             .to_string()
             .as_bytes(),
     )?;
-    perform(db, ctx, pid, Some(qid), "adopt", &before, &after)?;
+    perform(db, ctx, pid, Some(qid), "adopt", &before, &after, by)?;
     Ok(pid.to_string())
 }
 
@@ -528,7 +533,7 @@ pub(crate) fn replay_pre_quality_adoption(
     let (_, _, _, body) = artifact_proposal_parts(db, ctx, Some(&artifact))?;
     let binding = bound(db, ctx, pid, &body)?;
     let _history = HistoricalOperation::enter();
-    apply_bound_adoption(db, ctx, pid, qid, &binding)
+    apply_bound_adoption(db, ctx, pid, qid, &binding, "owner")
 }
 
 // Evaluation18: old persisted-intent recovery fixtures remain isolated from
@@ -555,6 +560,7 @@ pub(super) fn activate(
     ctx: &ToolContext,
     pid: &str,
     qid: &str,
+    by: &str,
 ) -> Result<String, PropError> {
     let started = std::time::Instant::now();
     let result = (|| {
@@ -577,7 +583,7 @@ pub(super) fn activate(
         if let Some((path, bytes)) = AFTER_QUALITY_EDIT.with(|edit| edit.borrow_mut().take()) {
             std::fs::write(path, bytes)?;
         }
-        apply_bound_adoption(db, ctx, pid, qid, &binding)
+        apply_bound_adoption(db, ctx, pid, qid, &binding, by)
     })();
     crate::diag::note(
         if result.is_err() {
@@ -625,7 +631,7 @@ pub(super) fn rollback(db: &Db, ctx: &ToolContext, pid: &str) -> Result<(), Prop
         if manifest["after"] != digest(&current) || manifest["before"] != digest(&before) {
             return Err(PropError::PolicyStale);
         }
-        perform(db, ctx, pid, None, "rollback", &current, &before)
+        perform(db, ctx, pid, None, "rollback", &current, &before, "owner")
     })();
     crate::diag::note(
         if result.is_err() {

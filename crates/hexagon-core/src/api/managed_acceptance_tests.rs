@@ -44,7 +44,7 @@ fn run_states(wb: &Workbench) -> Vec<String> {
 #[test]
 fn complete_current_evidence_is_accepted_under_the_grant_actor() {
     let dir = tempfile::tempdir().unwrap();
-    let wb = checked_wb(dir.path(), "true");
+    let mut wb = checked_wb(dir.path(), "true");
     wb.run_checks().unwrap();
     awaiting(&wb);
     let status = crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
@@ -67,7 +67,7 @@ fn complete_current_evidence_is_accepted_under_the_grant_actor() {
 #[test]
 fn stale_evidence_is_checked_again_then_accepted() {
     let dir = tempfile::tempdir().unwrap();
-    let wb = checked_wb(dir.path(), "true");
+    let mut wb = checked_wb(dir.path(), "true");
     wb.run_checks().unwrap();
     awaiting(&wb);
     std::fs::write(dir.path().join("input.txt"), "changed after the check").unwrap();
@@ -84,7 +84,7 @@ fn stale_evidence_is_checked_again_then_accepted() {
 #[test]
 fn evidence_that_changes_before_commit_is_not_accepted() {
     let dir = tempfile::tempdir().unwrap();
-    let wb = checked_wb(dir.path(), "true");
+    let mut wb = checked_wb(dir.path(), "true");
     wb.run_checks().unwrap();
     awaiting(&wb);
     crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
@@ -124,7 +124,7 @@ fn regress_after_stamp_card(wb: &Workbench, dir: &Path) {
 #[test]
 fn a_failed_check_is_reworked_and_passes_after_the_fix() {
     let dir = tempfile::tempdir().unwrap();
-    let wb = checked_wb(dir.path(), "test -f ok.txt");
+    let mut wb = checked_wb(dir.path(), "test -f ok.txt");
     regress_after_stamp_card(&wb, dir.path());
     crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
     let first = wb.managed_tick().unwrap();
@@ -173,7 +173,7 @@ fn a_failed_check_is_reworked_and_passes_after_the_fix() {
 #[test]
 fn a_stage_that_cannot_pass_ends_incomplete_after_three_rounds() {
     let dir = tempfile::tempdir().unwrap();
-    let wb = checked_wb(dir.path(), "test -f ok.txt");
+    let mut wb = checked_wb(dir.path(), "test -f ok.txt");
     crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
     regress_after_stamp_card(&wb, dir.path());
     assert_eq!(wb.managed_tick().unwrap()[0].action, "run_checks");

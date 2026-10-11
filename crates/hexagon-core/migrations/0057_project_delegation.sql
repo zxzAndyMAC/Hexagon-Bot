@@ -20,3 +20,8 @@ CREATE TABLE IF NOT EXISTS managed_budgets (
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (project_id, decision_key)
 );
+
+-- test3/20: who decided a policy adoption. Crash recovery finishes the
+-- recorded decision, so the decider must survive with it (default: owner,
+-- which is what every pre-delegation row was).
+ALTER TABLE policy_changes ADD COLUMN actor TEXT NOT NULL DEFAULT 'owner';

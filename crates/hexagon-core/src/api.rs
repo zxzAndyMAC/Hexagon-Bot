@@ -325,13 +325,13 @@ pub struct Workbench {
     /// Test3/18: who is deciding through the owner facades right now. None =
     /// the owner. The managed processor sets its grant actor for one commit so
     /// recovery paths record `managed:<id>:<generation>`, never a fake owner.
-    decider: Mutex<Option<String>>,
+    decider: Arc<Mutex<Option<String>>>,
 }
 
 /// Restores the owner as decider when a managed commit ends (also on error).
-pub(crate) struct ActingAs<'a>(&'a Mutex<Option<String>>);
+pub(crate) struct ActingAs(Arc<Mutex<Option<String>>>);
 
-impl Drop for ActingAs<'_> {
+impl Drop for ActingAs {
     fn drop(&mut self) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -460,7 +460,7 @@ impl Workbench {
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
             owner_message: Mutex::new(None),
-            decider: Mutex::new(None),
+            decider: Arc::new(Mutex::new(None)),
         };
         // MR-04: reopening restores entries but never sends; an attempt that
         // was in flight at exit becomes `unknown`, never `retrying` or failed.
@@ -612,7 +612,7 @@ impl Workbench {
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
             owner_message: Mutex::new(None),
-            decider: Mutex::new(None),
+            decider: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -1177,9 +1177,9 @@ impl Workbench {
     }
 
     /// Scope `actor` as the decider until the guard drops.
-    pub(crate) fn acting_as(&self, actor: &str) -> ActingAs<'_> {
+    pub(crate) fn acting_as(&self, actor: &str) -> ActingAs {
         *self.decider.lock().unwrap_or_else(|e| e.into_inner()) = Some(actor.into());
-        ActingAs(&self.decider)
+        ActingAs(self.decider.clone())
     }
 
     pub(crate) fn ctx_for(&self, agent_id: &str, stage_run_id: Option<String>) -> ToolContext {
