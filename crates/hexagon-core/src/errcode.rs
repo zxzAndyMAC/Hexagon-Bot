@@ -98,7 +98,9 @@ impl_error_code!(
     Roles,
     PackEdit,
     Judge,
+    Delegation,
 );
+impl_error_code!(crate::delegation::DelegationError, Sqlite, Trace);
 impl_error_code!(crate::judge::JudgeError, Sqlite, Io, Trace, Cards,);
 impl_error_code!(crate::artifacts::ArtifactError, Tool, Trace, Db, Sqlite, Io,);
 impl_error_code!(

@@ -174,12 +174,16 @@ impl Workbench {
             .as_ref()
             .and_then(|(d, _, next)| (d == "new_attempt").then_some(next.clone()))
         {
-            Some(Some(next)) => !matches!(
-                crate::actions::get(&self.db, &self.project_id, &next)?
-                    .state
-                    .as_str(),
-                "succeeded" | "failed" | "denied"
-            ),
+            // A new attempt that itself ended unknown and was then resolved
+            // (abandoned) no longer blocks the original task (test3/18).
+            Some(Some(next)) => {
+                !matches!(
+                    crate::actions::get(&self.db, &self.project_id, &next)?
+                        .state
+                        .as_str(),
+                    "succeeded" | "failed" | "denied"
+                ) && !crate::actions::has_resolution(&self.db, &next)?
+            }
             Some(None) => true,
             None => false,
         };

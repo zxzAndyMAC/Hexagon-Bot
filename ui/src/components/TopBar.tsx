@@ -9,6 +9,7 @@ import { MultiLine } from './UsageTab'
 import { bindingFor, formatBinding, isMac } from '../keymap'
 import { runStageOp } from '../stageops'
 import { Icon } from './Icon'
+import { ManagedPill } from './ManagedPill'
 import { QualityCommands } from './QualityCommands'
 
 export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void; onProjectClosed: () => void }) {
@@ -251,6 +252,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
         )}
       </div>
       <div data-tauri-drag-region style={{ flex: 1, alignSelf: 'stretch' }} />
+      <ManagedPill />
       {(pending.length + reviewRows.length) > 0 && (
         <button
           className="chip chip-btn amber"

@@ -40,6 +40,13 @@ export type ActionId =
   | 'confirmBroadAccess'
   | 'cancelBroadAccess'
   | 'approvalMode'
+  | 'managedEnable'
+  | 'confirmManaged'
+  | 'managedPause'
+  | 'managedResume'
+  | 'managedDisable'
+  | 'managedReport'
+  | 'modelRecoveryStop'
   | 'desktopPermissions'
   | 'desktopAccessibility'
   | 'desktopScreenRecording'
@@ -137,6 +144,15 @@ const DEFAULTS: Record<ActionId, string> = {
   browserContinueConnection: '',
   browserDetach: '',
   approvalMode: 'alt+mod+shift+m',
+  // 2026-10-11 UI alignment: no direct shortcut turns delegation on (the
+  // explanation is mandatory); safe-direction actions are owner-assignable.
+  managedEnable: '',
+  confirmManaged: '',
+  managedPause: '',
+  managedResume: '',
+  managedDisable: '',
+  managedReport: '',
+  modelRecoveryStop: '',
   desktopPermissions: 'alt+mod+shift+d',
   desktopAccessibility: 'alt+mod+shift+a',
   desktopScreenRecording: 'alt+mod+shift+v',
@@ -231,6 +247,13 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'browserContinueConnection', labelKey: 'browser.continueConnection' },
   { id: 'browserDetach', labelKey: 'browser.detach' },
   { id: 'approvalMode', labelKey: 'approvalMode.label' },
+  { id: 'managedEnable', labelKey: 'delegation.turnOn' },
+  { id: 'confirmManaged', labelKey: 'delegation.confirmAction' },
+  { id: 'managedPause', labelKey: 'delegation.pause' },
+  { id: 'managedResume', labelKey: 'delegation.resume' },
+  { id: 'managedDisable', labelKey: 'delegation.turnOff' },
+  { id: 'managedReport', labelKey: 'delegation.report' },
+  { id: 'modelRecoveryStop', labelKey: 'modelRecovery.stop' },
   { id: 'desktopPanel', labelKey: 'computer.title' },
   { id: 'desktopEnable', labelKey: 'computer.enable' },
   { id: 'desktopDisable', labelKey: 'computer.disable' },

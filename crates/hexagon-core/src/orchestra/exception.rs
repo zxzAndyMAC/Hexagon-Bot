@@ -325,7 +325,7 @@ fn accept_inner(
 }
 
 /// Cancellation consumes only the exception request, never a stage stamp card.
-fn cancel_inner(db: &Db, project: &str, question: &str) -> Result<(), OrchError> {
+fn cancel_inner(db: &Db, project: &str, question: &str, by: &str) -> Result<(), OrchError> {
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)?;
     let card = crate::cards::get(db, question)?;
@@ -336,11 +336,11 @@ fn cancel_inner(db: &Db, project: &str, question: &str) -> Result<(), OrchError>
         return Ok(());
     }
     crate::cards::get_queued(db, question, crate::cards::CardKind::Stamp)?;
-    crate::cards::answer(db, question, "owner")?;
+    crate::cards::answer(db, question, by)?;
     db.append_event(
         project,
         EventKind::PermissionDenied,
-        json!({"kind":KIND,"question_id":question,"by":"owner"}),
+        json!({"kind":KIND,"question_id":question,"by":by}),
         None,
         card.payload["run_id"].as_str(),
     )?;
@@ -415,11 +415,17 @@ pub fn accept(
     )
 }
 pub fn cancel(db: &Db, project: &str, question: &str) -> Result<(), OrchError> {
+    cancel_by(db, project, question, "owner")
+}
+
+/// Test3/19: delegation refuses exception requests (acceptance never lowers
+/// the bar); the cancellation records the real decider.
+pub fn cancel_by(db: &Db, project: &str, question: &str, by: &str) -> Result<(), OrchError> {
     let started = std::time::Instant::now();
     report(
         project,
         "exception_cancel",
         started,
-        cancel_inner(db, project, question),
+        cancel_inner(db, project, question, by),
     )
 }

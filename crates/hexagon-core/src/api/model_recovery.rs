@@ -376,7 +376,7 @@ impl Workbench {
                 ("retry_deadline_ms", Value::Null),
             ],
         )?;
-        crate::cards::answer(&self.db, qid, "owner")?;
+        crate::cards::answer(&self.db, qid, &self.decider())?;
         self.publish_recovery_view(qid, agent_id, run_id, "model_request_recovered")?;
         tx.commit()?;
         Ok(())
@@ -390,6 +390,11 @@ impl Workbench {
         let card = crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Recovery)?;
         if card.project_id != self.project_id || card.payload["sub"] != "model_request" {
             return Err(self.reject_recovery(&card, "scope_invalid", started));
+        }
+        // An explicit retry is the owner's (or delegation's) new go after a
+        // stop; the stop flag only ever ends automatic retries.
+        if card.payload["stop_requested"] == true {
+            crate::cards::annotate(&self.db, qid, &[("stop_requested", json!(false))])?;
         }
         match card.payload["purpose"].as_str() {
             Some("pm_route") => self.retry_pm_choice(&card, started, false),

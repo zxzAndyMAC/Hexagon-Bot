@@ -680,6 +680,8 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "model_request_retrying",
     "model_request_recovered",
     "model_request_superseded",
+    "delegation_changed",
+    "managed_decision",
     "tool_execution_started",
     "approval_mode_changed",
     "design_direction_requested",

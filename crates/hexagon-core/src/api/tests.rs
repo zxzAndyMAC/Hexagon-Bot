@@ -188,7 +188,7 @@ fn patch_missing_target_is_preexecution_failure_not_unknown() {
 /// Test3/13 fixture: a real fs_write whose write fails mid-effect inside a
 /// role turn, leaving one unknown action and its card.
 #[cfg(unix)]
-fn unknown_write_in_a_turn(dir: &std::path::Path) -> (Workbench, String) {
+pub(crate) fn unknown_write_in_a_turn(dir: &std::path::Path) -> (Workbench, String) {
     use std::os::unix::fs::PermissionsExt;
     let path = dir.join("draft.txt");
     std::fs::write(&path, "original draft").unwrap();
@@ -293,8 +293,15 @@ fn abandon_offers_continuation_but_an_unfinished_new_attempt_does_not() {
 
     let dir = tempfile::tempdir().unwrap();
     let (wb, action) = unknown_write_in_a_turn(dir.path());
-    crate::actions::new_owner_attempt(&wb.db, &wb.ctx_for("a0", None), &action, "retry", true)
-        .unwrap();
+    crate::actions::new_owner_attempt(
+        &wb.db,
+        &wb.ctx_for("a0", None),
+        &action,
+        "retry",
+        true,
+        "owner",
+    )
+    .unwrap();
     assert!(
         !wb.offer_continue_after_unknown(&action).unwrap(),
         "pending attempt blocks continuation"
@@ -2723,16 +2730,17 @@ fn l4_mcp_install_stays_in_project_manifest() {
     assert!(pending_questions(&wb).unwrap().is_empty());
 }
 
-fn proposal_body(surface: &str, target: &str, diff: &str) -> String {
+pub(crate) fn proposal_body(surface: &str, target: &str, diff: &str) -> String {
     format!(
         "---\nkind: 改进提案\nauthor: a0\nsurface: {surface}\ntarget: {target}\n---\n\
          ## 动机\n改进提示词\n\n## 改动面\n```diff\n{diff}\n```\n\n## 预期收益\n更准\n\n## 验证方法\n跑测\n"
     )
 }
 
-const PROPOSAL_DIFF: &str = "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n line1\n+line2";
+pub(crate) const PROPOSAL_DIFF: &str =
+    "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n line1\n+line2";
 
-fn git_wb(roles: &[&str]) -> (tempfile::TempDir, Workbench) {
+pub(crate) fn git_wb(roles: &[&str]) -> (tempfile::TempDir, Workbench) {
     let dir = tempfile::tempdir().unwrap();
     crate::git::init(dir.path(), "main").unwrap();
     std::fs::write(dir.path().join("AGENTS.md"), "line1\n").unwrap();
@@ -2741,7 +2749,7 @@ fn git_wb(roles: &[&str]) -> (tempfile::TempDir, Workbench) {
     (dir, wb)
 }
 
-fn submit_proposal(
+pub(crate) fn submit_proposal(
     wb: &Workbench,
     art_id: &str,
     surface: &str,
@@ -2765,7 +2773,7 @@ fn submit_proposal(
     crate::proposals::submit(&wb.db, &ctx, art_id, &content).map_err(|e| e.to_string())
 }
 
-fn proposal_status(wb: &Workbench, pid: &str) -> String {
+pub(crate) fn proposal_status(wb: &Workbench, pid: &str) -> String {
     wb.db
         .conn()
         .query_row("SELECT status FROM proposals WHERE id=?1", [pid], |r| {
@@ -20167,5 +20175,103 @@ fn disk_resume_preserves_parent_observed_child_receipt_and_citations() {
     assert_eq!(
         resumed.event.payload["activation_root_turn_id"].as_i64(),
         Some(parent_root)
+    );
+}
+
+/// 2026-10-11 UI alignment (ticket 06): the owner's per-item stop ends the
+/// automatic retries between attempts; the item stays for an explicit retry,
+/// which clears the stop and dispatches normally.
+#[test]
+fn pm_route_owner_stop_ends_automatic_retries_until_an_explicit_retry() {
+    struct StopAfterTwo {
+        root: PathBuf,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl ModelProvider for StopAfterTwo {
+        fn is_scripted(&self) -> bool {
+            true
+        }
+        fn complete(
+            &self,
+            _req: &crate::provider::ChatRequest,
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            unreachable!()
+        }
+        fn uses_decision_api(&self) -> bool {
+            true
+        }
+        fn decide(
+            &self,
+            _state: &str,
+            _options: &[(&str, &str)],
+        ) -> Result<crate::provider::ChatResponse, ProviderError> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 1 {
+                // The owner presses stop while the item is retrying.
+                let control = Db::open(self.root.join(".hexagon/state.db")).unwrap();
+                let card = crate::cards::queued(&control, crate::PROJECT_ID)
+                    .unwrap()
+                    .into_iter()
+                    .find(|q| q.payload["sub"] == "model_request")
+                    .unwrap();
+                stop_model_request(&control, crate::PROJECT_ID, &card.id).unwrap();
+            }
+            if n >= 3 {
+                return Ok(text_response("产品策划"));
+            }
+            Err(ProviderError::Transport("EOF".into()))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let roles = [
+        ("a0".into(), "项目经理".into()),
+        ("a1".into(), "产品策划".into()),
+    ];
+    let mut wb = Workbench::open(dir.path(), "t", &roles, Some(pm_pack())).unwrap();
+    wb.wait_policy = crate::turn::WaitPolicy {
+        probe_interval: std::time::Duration::from_millis(20),
+        budget: std::time::Duration::from_secs(30),
+        tick: std::time::Duration::from_millis(1),
+    };
+    let choice = Arc::new(StopAfterTwo {
+        root: dir.path().to_path_buf(),
+        calls: Default::default(),
+    });
+    let worker = Arc::new(ScriptedProvider::new(vec![
+        text_response("方案"),
+        text_response("完成"),
+    ]));
+    wb.register_provider("decision", choice.clone());
+    wb.register_provider("default", worker.clone());
+    wb.set_decision_slot("项目经理", Some("decision")).unwrap();
+    assert!(send(&wb, "让我们开始吧").is_err());
+    let card = crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|q| q.payload["sub"] == "model_request")
+        .unwrap();
+    assert_eq!(
+        choice.calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "no automatic send after the stop"
+    );
+    let stopped = crate::cards::get(&wb.db, &card.id).unwrap();
+    assert_eq!(stopped.payload["state"], "stopped");
+    assert_eq!(
+        stopped.state,
+        crate::cards::CardState::Queued,
+        "kept for a manual retry"
+    );
+    assert_eq!(turns_for(&wb, "产品策划"), 0);
+    // The explicit retry is a new go: it clears the stop.
+    choice.calls.store(3, std::sync::atomic::Ordering::SeqCst);
+    wb.retry_model_request(&card.id).unwrap();
+    assert!(
+        turns_for(&wb, "产品策划") >= 1,
+        "the explicit retry dispatched"
+    );
+    assert_ne!(
+        crate::cards::get(&wb.db, &card.id).unwrap().payload["stop_requested"],
+        true
     );
 }

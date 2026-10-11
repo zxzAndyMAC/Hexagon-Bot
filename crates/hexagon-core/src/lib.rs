@@ -17,6 +17,7 @@ pub mod commands;
 pub mod credentials;
 pub mod data_boundary;
 pub mod db;
+pub mod delegation;
 pub mod design;
 pub mod desktop;
 pub mod diag;

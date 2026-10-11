@@ -201,6 +201,8 @@ pub enum ApiError {
     #[error(transparent)]
     Grant(#[from] crate::grants::GrantError),
     #[error(transparent)]
+    Delegation(#[from] crate::delegation::DelegationError),
+    #[error(transparent)]
     Roles(#[from] crate::roles::RoleError),
     #[error(transparent)]
     PackEdit(#[from] crate::packedit::PackEditError),
@@ -322,6 +324,19 @@ pub struct Workbench {
     /// MR-04: the owner message being routed right now, so a dispatch that
     /// meets an open failed role request can ask the owner instead of running.
     owner_message: Mutex<Option<i64>>,
+    /// Test3/18: who is deciding through the owner facades right now. None =
+    /// the owner. The managed processor sets its grant actor for one commit so
+    /// recovery paths record `managed:<id>:<generation>`, never a fake owner.
+    decider: Arc<Mutex<Option<String>>>,
+}
+
+/// Restores the owner as decider when a managed commit ends (also on error).
+pub(crate) struct ActingAs(Arc<Mutex<Option<String>>>);
+
+impl Drop for ActingAs {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 impl Drop for Workbench {
@@ -447,6 +462,7 @@ impl Workbench {
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
             owner_message: Mutex::new(None),
+            decider: Arc::new(Mutex::new(None)),
         };
         // MR-04: reopening restores entries but never sends; an attempt that
         // was in flight at exit becomes `unknown`, never `retrying` or failed.
@@ -598,6 +614,7 @@ impl Workbench {
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
             owner_message: Mutex::new(None),
+            decider: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -1143,6 +1160,30 @@ impl Workbench {
         }
     }
 
+    /// The actor recorded for a decision made through an owner facade.
+    pub(crate) fn decider(&self) -> String {
+        self.decider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| "owner".into())
+    }
+
+    /// The scoped decider, or `default` when nobody is acting (host paths).
+    pub(crate) fn acting_or(&self, default: &str) -> String {
+        self.decider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| default.into())
+    }
+
+    /// Scope `actor` as the decider until the guard drops.
+    pub(crate) fn acting_as(&self, actor: &str) -> ActingAs {
+        *self.decider.lock().unwrap_or_else(|e| e.into_inner()) = Some(actor.into());
+        ActingAs(self.decider.clone())
+    }
+
     pub(crate) fn ctx_for(&self, agent_id: &str, stage_run_id: Option<String>) -> ToolContext {
         ToolContext {
             project_id: self.project_id.clone(),
@@ -1299,6 +1340,7 @@ impl Workbench {
             action_id,
             reason,
             accepts_duplicate,
+            &self.decider(),
         )?;
         let result = self.registry.call_with_seq(
             &self.db,
@@ -1322,8 +1364,20 @@ impl Workbench {
 
     /// Resolve the blocking decision, without rewriting uncertain history.
     pub fn abandon_tool_action(&self, action_id: &str, reason: &str) -> Result<(), ApiError> {
-        crate::actions::abandon(&self.db, &self.project_id, action_id, reason)?;
+        crate::actions::abandon(
+            &self.db,
+            &self.project_id,
+            action_id,
+            reason,
+            &self.decider(),
+        )?;
         self.offer_continue_after_unknown(action_id)?;
+        // Test3/18: abandoning the one linked new attempt also resolves its
+        // origin, whose task waited on that attempt. Before this, the origin
+        // stayed "attempt pending" forever and its task never continued.
+        if let Some(origin) = crate::actions::linked_origin(&self.db, action_id)? {
+            self.offer_continue_after_unknown(&origin)?;
+        }
         Ok(())
     }
 
@@ -3010,7 +3064,7 @@ impl Workbench {
                 Ok::<_, ApiError>(resume)
             })
             .transpose()?;
-        orchestra::recover_run(&self.db, &self.project_id, run_id)?;
+        orchestra::recover_run_by(&self.db, &self.project_id, run_id, &self.decider())?;
         if let (Some(aid), Some(resume)) = (agent, resume) {
             self.run_turn_agent_with_history(
                 &aid,
@@ -3893,7 +3947,7 @@ impl Workbench {
             .and_then(Branch::from_name)
             .ok_or_else(|| ApiError::BadInput("stall card without a branch".into()))?;
         let instruction = p["instruction"].as_str().unwrap_or_default().to_string();
-        crate::cards::answer(&self.db, qid, "owner")?;
+        crate::cards::answer(&self.db, qid, &self.decider())?;
         let started = std::time::Instant::now();
         let fp = crate::stallwatch::fingerprint(&self.db, &self.project_id)?;
         {
@@ -3924,16 +3978,16 @@ impl Workbench {
                     [&aid],
                     |r| r.get(0),
                 )?;
-                self.stall_retrigger(&aid, &role, &instruction, "owner", started)
+                self.stall_retrigger(&aid, &role, &instruction, &self.decider(), started)
             }
-            _ => self.stall_investigate("owner", started),
+            _ => self.stall_investigate(&self.decider(), started),
         }
     }
 
     /// 失速卡「知道了」：这一次失速收场。
     pub fn stall_ack(&self, qid: &str) -> Result<(), ApiError> {
         crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Stall)?;
-        crate::cards::answer(&self.db, qid, "owner")?;
+        crate::cards::answer(&self.db, qid, &self.decider())?;
         self.stall_close("ack", crate::owner_text::stall_ack_closed())
     }
 
@@ -4245,6 +4299,71 @@ pub fn set_approval_mode(
     Ok(status)
 }
 
+/// Test3/17: delegation read for the shell's read connection.
+pub fn project_delegation(db: &Db, project_id: &str) -> crate::delegation::DelegationStatus {
+    crate::delegation::status(db, project_id)
+}
+
+/// Test3/17: the owner's switch. Same project-identity check as the access
+/// mode (a queued click must not flip another project after a switch). Only
+/// this shell entry writes the grant; no model or tool path reaches it.
+pub fn set_project_delegation(
+    db: &Db,
+    project_id: &str,
+    root: &Path,
+    expected_root: &str,
+    enabled: bool,
+) -> Result<crate::delegation::DelegationStatus, ApiError> {
+    if crate::desktop::actions::verify_project(root, expected_root).is_err() {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(project_id),
+            None,
+            None,
+            None,
+            "delegation",
+            "project_mismatch",
+            std::time::Instant::now(),
+        );
+        return Err(ApiError::BadInput("delegation project mismatch".into()));
+    }
+    let status = if enabled {
+        crate::delegation::enable(db, project_id)?
+    } else {
+        crate::delegation::disable(db, project_id)?
+    };
+    Ok(status)
+}
+
+/// 2026-10-11 UI alignment: the owner pauses or resumes delegation (same
+/// project-identity check as the switch). Paused cards return to the owner.
+pub fn set_project_delegation_paused(
+    db: &Db,
+    project_id: &str,
+    root: &Path,
+    expected_root: &str,
+    paused: bool,
+) -> Result<crate::delegation::DelegationStatus, ApiError> {
+    if crate::desktop::actions::verify_project(root, expected_root).is_err() {
+        return Err(ApiError::BadInput("delegation project mismatch".into()));
+    }
+    Ok(crate::delegation::set_paused(db, project_id, paused)?)
+}
+
+/// Test3/06 + 2026-10-11 UI alignment: stop the automatic retries of one
+/// model-request item. A durable flag the retry wait reads (control lane, no
+/// workbench lock); the item stays for an explicit manual retry, and neither
+/// the retry loop, stall rescue nor autonomy may clear it.
+pub fn stop_model_request(db: &Db, project_id: &str, qid: &str) -> Result<(), ApiError> {
+    let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Recovery)?;
+    if card.project_id != project_id || card.payload["sub"] != "model_request" {
+        return Err(ApiError::BadInput("model recovery scope invalid".into()));
+    }
+    crate::cards::annotate(db, qid, &[("stop_requested", serde_json::json!(true))])?;
+    Ok(())
+}
+
 /// Shell keeps its project lock across identity validation and mode persistence.
 /// Review 2026-10-01: all local DBs share PROJECT_ID, so that ID cannot prevent
 /// a queued broad-access click from project A modifying project B after switch.
@@ -4491,7 +4610,9 @@ pub fn abandon_tool_action_control(
             "action resolution workspace changed".into(),
         ));
     }
-    Ok(crate::actions::abandon(db, project_id, action_id, reason)?)
+    Ok(crate::actions::abandon(
+        db, project_id, action_id, reason, "owner",
+    )?)
 }
 
 /// Owner Agent Screen preview: current-project read, independent of model turns.
@@ -4618,6 +4739,11 @@ pub fn timeline_window_metadata(
 }
 
 mod action_recovery;
+mod managed;
+pub use managed::{
+    managed_decide, managed_history, managed_processing, owner_pending, ManagedCandidate,
+    ManagedDecision, ManagedRecord, ManagedRoute,
+};
 mod model_recovery;
 pub use action_recovery::{ReconcileReport, ReconcileVerdict};
 

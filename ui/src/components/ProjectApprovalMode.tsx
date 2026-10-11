@@ -5,6 +5,7 @@ import { useUiStore } from '../store'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import type { ApprovalModeStatus } from '../gen/ApprovalModeStatus'
 import { ApprovalModeSelector } from './ApprovalModeSelector'
+import { useDelegation } from '../useDelegation'
 
 /** Mounted afresh with each workspace. Never inherit another project's broad mode. */
 export function ProjectApprovalMode({ placement = 'above' }: { placement?: 'above' | 'below' }) {
@@ -13,6 +14,7 @@ export function ProjectApprovalMode({ placement = 'above' }: { placement?: 'abov
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   const revision = useUiStore(s => s.timelineFacts?.approval_mode_revision ?? 0)
+  const delegation = useDelegation()
   const container = useRef<HTMLDivElement>(null)
   const generation = useRef(0)
   const mounted = useRef(true)
@@ -25,6 +27,11 @@ export function ProjectApprovalMode({ placement = 'above' }: { placement?: 'abov
   }, [revision, retry])
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
+      if (!event.defaultPrevented && matches(event, bindingFor('managedEnable'))) {
+        event.preventDefault(); container.current?.querySelector('button')?.click()
+        window.setTimeout(() => container.current?.querySelector<HTMLInputElement>('input[role="switch"]:not(:checked)')?.click())
+        return
+      }
       if (!event.defaultPrevented && matches(event, bindingFor('approvalMode'))) {
         event.preventDefault(); container.current?.querySelector('button')?.click()
       }
@@ -35,6 +42,11 @@ export function ProjectApprovalMode({ placement = 'above' }: { placement?: 'abov
   return <div ref={container}>
     {status && !failed ? <ApprovalModeSelector key={status.project_root} value={status.mode} placement={placement}
       shortcut={formatBinding(bindingFor('approvalMode'))}
+      managed={delegation.status ? {
+        enabled: delegation.status.enabled,
+        onEnable: () => delegation.apply(root => api.setProjectDelegation(true, root)),
+        onDisable: () => delegation.apply(root => api.setProjectDelegation(false, root)),
+      } : undefined}
       onChange={async mode => {
         // Supersede any stale read before waiting for the host's persisted result.
         if (!mounted.current || !status.project_root) throw new Error('Workspace identity unavailable')

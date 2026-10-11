@@ -4,18 +4,30 @@ import { useTranslation } from 'react-i18next'
 import type { ApprovalMode } from '../gen/ApprovalMode'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { Icon } from './Icon'
+import { ManagedConfirmation } from './ManagedConfirmation'
+import './ProjectDelegation.css'
 import './ApprovalModeSelector.css'
 
 const modes: ApprovalMode[] = ['restricted', 'assisted', 'broad']
 
 /** The parent supplies the persisted project value. Never optimistically claim
  * broader access before the host has accepted and persisted the change. */
-export function ApprovalModeSelector({ value, onChange, disabled = false, shortcut = '', placement = 'above' }: {
+/** 2026-10-11 UI alignment: delegation is a separate switch in this menu,
+ * never a fourth mode — the three modes and the one in force stay as they
+ * are, so turning delegation off returns to exactly that mode. */
+export type ManagedControl = {
+  enabled: boolean
+  onEnable: () => Promise<void>
+  onDisable: () => Promise<void>
+}
+
+export function ApprovalModeSelector({ value, onChange, disabled = false, shortcut = '', placement = 'above', managed }: {
   value: ApprovalMode
   onChange: (mode: ApprovalMode) => Promise<void>
   disabled?: boolean
   shortcut?: string
   placement?: 'above' | 'below'
+  managed?: ManagedControl
 }) {
   const { t } = useTranslation()
   const id = useId()
@@ -23,6 +35,9 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
   const trigger = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [confirmBroad, setConfirmBroad] = useState(false)
+  const [confirmManaged, setConfirmManaged] = useState(false)
+  const [managedPending, setManagedPending] = useState(false)
+  const [managedError, setManagedError] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState(false)
   const inFlight = useRef(false)
@@ -63,6 +78,20 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
       setPending(false)
     }
   }
+  async function switchManaged(enable: boolean) {
+    if (!managed || managedPending) return
+    setManagedPending(true); setManagedError(false)
+    try {
+      // The host persists and re-verifies the grant first; only its answer
+      // (through the parent) changes what this menu shows.
+      await (enable ? managed.onEnable() : managed.onDisable())
+      setConfirmManaged(false)
+    } catch {
+      setManagedError(true)
+    } finally {
+      setManagedPending(false)
+    }
+  }
   return <div ref={container} className="approval-mode" onKeyDown={(event) => {
     if (event.key === 'Escape' && open) {
       event.preventDefault()
@@ -77,12 +106,15 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
       aria-label={`${t('approvalMode.label')}: ${t(`approvalMode.${value}`)}`}
       onClick={() => { setError(false); setOpen(!open) }}>
       <Icon name={value === 'broad' ? 'warn' : 'shield'} />
-      <span>{t(`approvalMode.${value}`)}</span>
+      <span>{t(`approvalMode.${value}`)}{managed?.enabled && ` | ${t('delegation.short')}`}</span>
       <Icon name="chevron-down" />
     </button>
     {confirmBroad && <BroadConfirmation pending={pending} error={error}
       onCancel={() => { setConfirmBroad(false); setError(false); trigger.current?.focus() }}
       onConfirm={() => { void choose('broad', true) }} />}
+    {confirmManaged && <ManagedConfirmation pending={managedPending} error={managedError}
+      onCancel={() => { setConfirmManaged(false); setManagedError(false); trigger.current?.focus() }}
+      onConfirm={() => { void switchManaged(true) }} />}
     {open && <div id={id} className={`approval-mode-menu approval-mode-menu-${placement}`} role="menu"
       aria-label={t('approvalMode.label')} aria-busy={pending}
       onKeyDown={(event) => {
@@ -102,6 +134,22 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
         {value === mode && <Icon name="check" />}
       </button>)}
       <p className="approval-mode-boundary">{t('approvalMode.boundary')}</p>
+      {managed && <div className="approval-mode-managed" role="group" aria-label={t('delegation.label')}>
+        <label className="approval-mode-managed-row">
+          <span className="approval-mode-option-copy"><strong>{t('delegation.label')}</strong>
+            <span>{t('delegation.description')}</span></span>
+          <input type="checkbox" role="switch" className="switch" checked={managed.enabled}
+            disabled={managedPending || disabled}
+            title={[t(managed.enabled ? 'delegation.turnOff' : 'delegation.turnOn'),
+              formatBinding(bindingFor(managed.enabled ? 'managedDisable' : 'managedEnable'))].filter(Boolean).join(' · ')}
+            onChange={() => {
+              // Turning on always passes the explanation; off is the safe direction.
+              if (managed.enabled) void switchManaged(false)
+              else { setOpen(false); setConfirmManaged(true) }
+            }} />
+        </label>
+        {managedError && !confirmManaged && <p role="alert" className="approval-mode-error">{t('delegation.failed')}</p>}
+      </div>}
       {error && <p role="alert" className="approval-mode-error">{t('approvalMode.failed')}</p>}
     </div>}
   </div>

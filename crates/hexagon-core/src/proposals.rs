@@ -731,6 +731,17 @@ pub fn reject_at_stamp(
     qid: &str,
     reason: &str,
 ) -> Result<(), PropError> {
+    reject_at_stamp_by(db, ctx, qid, reason, "owner")
+}
+
+/// Test3/20: the same proposal rejection by a non-owner decider.
+pub fn reject_at_stamp_by(
+    db: &Db,
+    ctx: &ToolContext,
+    qid: &str,
+    reason: &str,
+    by: &str,
+) -> Result<(), PropError> {
     // Evaluation 17 regression: owner is not an Agent row. Recording it as
     // event.agent_id violated the FK after the card had already been answered.
     let tx = db.conn().unchecked_transaction()?;
@@ -742,7 +753,7 @@ pub fn reject_at_stamp(
         .as_str()
         .ok_or_else(|| PropError::Rejected("question is not a proposal stamp".into()))?
         .to_string();
-    crate::cards::answer(db, qid, "owner")?;
+    crate::cards::answer(db, qid, by)?;
     db.conn().execute(
         "UPDATE proposals SET status='rejected', decided_at=datetime('now') WHERE id=?1",
         [&pid],
@@ -750,7 +761,7 @@ pub fn reject_at_stamp(
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalRejected,
-        json!({"proposal_id": pid, "pass": false, "reason": reason, "question_id": qid}),
+        json!({"proposal_id": pid, "pass": false, "reason": reason, "question_id": qid, "by": by}),
         (ctx.agent_id != "owner").then_some(ctx.agent_id.as_str()),
         ctx.stage_run_id.as_deref(),
     )?;
@@ -760,6 +771,12 @@ pub fn reject_at_stamp(
 
 /// 盖章确认：快照 → 应用 diff → active。qid 是 kind='stamp' 且 payload 带 proposal_id 的卡。
 pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropError> {
+    activate_by(db, ctx, qid, "owner")
+}
+
+/// Test3/20: adoption by a non-owner decider (project delegation). Same
+/// revalidation and independent quality gate; only the recorded `by` differs.
+pub fn activate_by(db: &Db, ctx: &ToolContext, qid: &str, by: &str) -> Result<String, PropError> {
     let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Stamp)
         .ok()
         .filter(|c| c.project_id == ctx.project_id)
@@ -776,7 +793,7 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
         })
         .unwrap_or_default();
     if surface == "pack_copy" {
-        return policy::activate(db, ctx, &pid, qid);
+        return policy::activate(db, ctx, &pid, qid, by);
     }
     if surface == "role_def" && !crate::rolesurf::reviewed(db, &pid)? {
         return Err(PropError::Rejected(
@@ -786,12 +803,12 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
     // Reliability 20: failed source revalidation must leave the card queued.
     // Owner is not an agents row; record owner in payload, not the agent FK.
     let target = materialize(db, ctx, &pid)?;
-    crate::cards::answer(db, qid, "owner")?;
+    crate::cards::answer(db, qid, by)?;
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalStamped,
         // by=owner 与 L4 自动通过的 by=autonomy 区分。
-        json!({"proposal_id": pid, "question_id": qid, "by": "owner"}),
+        json!({"proposal_id": pid, "question_id": qid, "by": by}),
         (ctx.agent_id != "owner").then_some(ctx.agent_id.as_str()),
         ctx.stage_run_id.as_deref(),
     )?;
@@ -799,7 +816,7 @@ pub fn activate(db: &Db, ctx: &ToolContext, qid: &str) -> Result<String, PropErr
     db.append_event(
         &ctx.project_id,
         EventKind::ProposalActivated,
-        json!({"proposal_id": pid, "effective_path": target, "by": "owner"}),
+        json!({"proposal_id": pid, "effective_path": target, "by": by}),
         (ctx.agent_id != "owner").then_some(ctx.agent_id.as_str()),
         ctx.stage_run_id.as_deref(),
     )?;

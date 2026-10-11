@@ -181,6 +181,17 @@ pub fn confirm(
     qid: &str,
     allow: bool,
 ) -> Result<GrantOutcome, GrantError> {
+    confirm_by(db, project_id, qid, allow, "owner")
+}
+
+/// Test3/21: the same project grant decision by a non-owner decider.
+pub fn confirm_by(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    allow: bool,
+    by: &str,
+) -> Result<GrantOutcome, GrantError> {
     let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Grant)
         .map_err(|_| GrantError::BadInput(format!("unknown grant question: {qid}")))?;
     if card.project_id != project_id {
@@ -198,14 +209,14 @@ pub fn confirm(
     if !valid_name(&name) {
         return Err(GrantError::BadInput(format!("bad grant name: {name}")));
     }
-    crate::cards::answer(db, qid, "owner")?;
+    crate::cards::answer(db, qid, by)?;
     if allow {
         insert_grant(db, &agent_id, &kind, &name)?;
     }
-    trace(db, project_id, &agent_id, &kind, &name, "owner", allow)?;
+    trace(db, project_id, &agent_id, &kind, &name, by, allow)?;
     Ok(GrantOutcome {
         granted: allow,
         question_id: Some(qid.to_string()),
-        via: "owner".into(),
+        via: by.into(),
     })
 }

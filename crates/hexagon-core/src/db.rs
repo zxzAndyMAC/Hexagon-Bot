@@ -283,6 +283,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0056_project_permissions",
         include_str!("../migrations/0056_project_permissions.sql"),
     ),
+    (
+        "0057_project_delegation",
+        include_str!("../migrations/0057_project_delegation.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

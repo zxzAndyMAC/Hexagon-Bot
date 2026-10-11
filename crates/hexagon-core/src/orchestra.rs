@@ -15,14 +15,14 @@ mod quality;
 mod quality_config;
 pub use exception::{
     accept as accept_delivery_exception, cancel as cancel_acceptance_exception,
-    request as request_acceptance_exception,
+    cancel_by as cancel_acceptance_exception_by, request as request_acceptance_exception,
 };
 pub use exception::{
     ExceptionAcceptance, ExceptionCandidate, ExceptionRequest, ExceptionRequirement,
 };
 pub use quality::{confirm_performance_baseline, PerformanceBaselineConfirmation, QualityEvidence};
-pub use quality_config::cancel_quality_revalidation;
 pub use quality_config::effective_pack as current_process_pack;
+pub use quality_config::{cancel_quality_revalidation, cancel_quality_revalidation_by};
 pub use quality_config::{
     quality_configuration, update_quality_commands, QualityConfiguration, QualityStageConfiguration,
 };
@@ -1594,7 +1594,18 @@ pub fn open_next(
 
 /// 盖章确认：waiting_stamp → done → 推进。
 pub fn stamp(db: &Db, project_id: &str, pack: &PackDef) -> Result<StageAction, OrchError> {
-    stamp_inner(db, project_id, pack, None)
+    stamp_inner(db, project_id, pack, None, "owner")
+}
+
+/// Test3/19: the same acceptance with a non-owner decider (project
+/// delegation). Evidence rules are identical; only the recorded `by` differs.
+pub fn stamp_by(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    by: &str,
+) -> Result<StageAction, OrchError> {
+    stamp_inner(db, project_id, pack, None, by)
 }
 
 pub fn confirm_quality_revalidation(
@@ -1604,12 +1615,23 @@ pub fn confirm_quality_revalidation(
     question: &str,
     expected: &str,
 ) -> Result<StageAction, OrchError> {
+    confirm_quality_revalidation_by(db, project_id, pack, question, expected, "owner")
+}
+
+pub fn confirm_quality_revalidation_by(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    question: &str,
+    expected: &str,
+    by: &str,
+) -> Result<StageAction, OrchError> {
     let started = std::time::Instant::now();
     let run = crate::cards::get(db, question)
         .ok()
         .filter(|card| card.project_id == project_id)
         .and_then(|card| card.payload["run_id"].as_str().map(str::to_owned));
-    let result = stamp_inner(db, project_id, pack, Some((question, expected)));
+    let result = stamp_inner(db, project_id, pack, Some((question, expected)), by);
     let code = match &result {
         Ok(StageAction::PackFinished) => "confirmed",
         Ok(_) => "missing_or_stale",
@@ -1640,6 +1662,7 @@ fn stamp_inner(
     project_id: &str,
     pack: &PackDef,
     confirmation: Option<(&str, &str)>,
+    by: &str,
 ) -> Result<StageAction, OrchError> {
     let started = std::time::Instant::now();
     let _lease = write_boundary(db, project_id)?;
@@ -1710,9 +1733,9 @@ fn stamp_inner(
                 crate::cards::CardKind::Stamp,
                 "run_id",
                 &run.id,
-                "owner",
+                by,
             )?;
-            db.append_event(project_id, EventKind::Stamped, json!({"stage":run.stage_name,"seq":run.seq,"by":"owner","revalidated":true,"delivery_fingerprint":evidence.fingerprint}),None,Some(&run.id))?;
+            db.append_event(project_id, EventKind::Stamped, json!({"stage":run.stage_name,"seq":run.seq,"by":by,"revalidated":true,"delivery_fingerprint":evidence.fingerprint}),None,Some(&run.id))?;
             quality::capture_baseline(db, project_id, true)?;
             return Ok(StageAction::PackFinished);
         }
@@ -1729,13 +1752,13 @@ fn stamp_inner(
             crate::cards::CardKind::Stamp,
             "run_id",
             &run.id,
-            "owner",
+            by,
         )?;
         db.append_event(
             project_id,
             EventKind::Stamped,
             // 票 02：by=owner 与自动通过的 by=autonomy 区分。缺 by 的旧事件当人工。
-            json!({"stage": run.stage_name, "seq": run.seq, "by": "owner", "delivery_fingerprint": evidence.fingerprint}),
+            json!({"stage": run.stage_name, "seq": run.seq, "by": by, "delivery_fingerprint": evidence.fingerprint}),
             None,
             Some(&run.id),
         )?;
@@ -2151,6 +2174,11 @@ pub fn detect_interrupted(db: &Db, project_id: &str) -> Result<u32, OrchError> {
 /// 负责人按「继续」：interrupted run 回 active、恢复卡销、落 Resumed。
 /// 不重放模型调用——回合上下文已随进程死，下一步由人发起。
 pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchError> {
+    recover_run_by(db, project_id, run_id, "owner")
+}
+
+/// Test3/23: the same crash recovery by a non-owner decider.
+pub fn recover_run_by(db: &Db, project_id: &str, run_id: &str, by: &str) -> Result<(), OrchError> {
     let state: String = db.conn().query_row(
         "SELECT state FROM stage_runs WHERE id=?1 AND project_id=?2",
         rusqlite::params![run_id, project_id],
@@ -2168,12 +2196,12 @@ pub fn recover_run(db: &Db, project_id: &str, run_id: &str) -> Result<(), OrchEr
         crate::cards::CardKind::Recovery,
         "run_id",
         run_id,
-        "owner",
+        by,
     )?;
     db.append_event(
         project_id,
         EventKind::Resumed,
-        json!({"run_id": run_id, "reason": "crash_recovery"}),
+        json!({"run_id": run_id, "reason": "crash_recovery", "by": by}),
         None,
         Some(run_id),
     )?;

@@ -262,6 +262,29 @@ pub fn browser_verify_spec(
     }
 }
 
+/// Test3/23 (Q19–Q21, spec 托管外部边界): under project delegation an
+/// external host command may create, edit and overwrite files in its cwd but
+/// never delete them — no unlink, rename-over, rmdir or move-out (moving to
+/// the Trash is a rename). The same seatbelt rule as the ticket 14 fence,
+/// applied to the external cwd; other backends cannot express it, so the
+/// caller refuses (Unavailable). Real-process probes:
+/// api/managed_external_tests.rs.
+pub fn delegated_host_fence(spec: SandboxSpec, cwd: &Path) -> SandboxSpec {
+    let SandboxSpec::Seatbelt(mut profile) = spec else {
+        return SandboxSpec::Unavailable;
+    };
+    let Ok(canon) = cwd.canonicalize() else {
+        return SandboxSpec::Unavailable;
+    };
+    for root in [cwd, canon.as_path()] {
+        profile.push_str(&format!(
+            "(deny file-write-unlink (subpath \"{}\"))\n",
+            sbq(root)
+        ));
+    }
+    SandboxSpec::Seatbelt(profile)
+}
+
 /// Whether the deletion-fenced profile can actually be enforced here.
 pub fn fence_available() -> bool {
     status().mode == "seatbelt" && status().available

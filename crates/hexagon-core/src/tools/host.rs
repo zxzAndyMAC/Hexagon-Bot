@@ -17,11 +17,15 @@ fn mode(db: &Db, ctx: &ToolContext) -> Result<(), ToolError> {
             "host access is not delegated to a subagent or evaluation worker",
         ));
     }
+    // Test3/17 (Q19–Q21): project delegation also covers external files for
+    // reading/creating/overwriting; these tools have no delete operation and
+    // checked_path keeps other projects' policy/state and credentials closed.
     if crate::approval_mode::read(db, &ctx.project_id)?.mode
         != crate::approval_mode::ApprovalMode::Broad
+        && crate::delegation::current(db, &ctx.project_id).is_none()
     {
         return Err(reject(
-            "host access requires this project's owner-selected Broad access mode",
+            "host access requires this project's owner-selected Broad access mode or project delegation",
         ));
     }
     Ok(())
@@ -378,6 +382,20 @@ impl Tool for HostBash {
         // a .hexagon directory that would masquerade as another project later.
         scoped.write_lease = Some(Arc::new(writeguard::repository_lock(ctx)?));
         let spec = host_spec(&scoped.repo_root, net)?;
+        // Test3/23 (Q19–Q21): delegated decisions may edit external files but
+        // never delete them; the owner's own Broad approval keeps its scope.
+        let spec = if crate::delegation::current(db, &ctx.project_id).is_some() {
+            match crate::sandbox::delegated_host_fence(spec, &scoped.repo_root) {
+                crate::sandbox::SandboxSpec::Unavailable => {
+                    return Err(reject(
+                        "project delegation cannot fence external deletion on this platform",
+                    ))
+                }
+                fenced => fenced,
+            }
+        } else {
+            spec
+        };
         let spec = crate::design::guard_shell(db, &scoped, spec);
         let timeout = std::time::Duration::from_millis(
             input["timeout_ms"]

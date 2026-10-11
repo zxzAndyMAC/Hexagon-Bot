@@ -28,6 +28,8 @@ import type { DesktopControl } from './gen/DesktopControl'
 import type { PermissionShapeSuggestion } from './gen/PermissionShapeSuggestion'
 import type { ApprovalMode } from './gen/ApprovalMode'
 import type { ApprovalModeStatus } from './gen/ApprovalModeStatus'
+import type { DelegationStatus } from './gen/DelegationStatus'
+import type { ManagedRecord } from './gen/ManagedRecord'
 import type { DesktopPermissions } from './gen/DesktopPermissions'
 import type { DesktopPermission } from './gen/DesktopPermission'
 import type { ExperienceSourceRequest } from './gen/ExperienceSourceRequest'
@@ -349,6 +351,12 @@ export const api = {
   permissionShapeSuggestion: (questionId: string) => call<PermissionShapeSuggestion | null>('permission_shape_suggestion', { questionId }),
   approvalMode: () => call<ApprovalModeStatus>('approval_mode'),
   setApprovalMode: (mode: ApprovalMode, expectedProjectRoot: string) => call<ApprovalModeStatus>('set_approval_mode', { mode, expectedProjectRoot }),
+  projectDelegation: () => call<DelegationStatus>('project_delegation'),
+  setProjectDelegation: (enabled: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation', { enabled, expectedProjectRoot }),
+  managedHistory: () => call<ManagedRecord[]>('managed_history'),
+  managedProcessing: () => call<PendingQuestion[]>('managed_processing'),
+  setProjectDelegationPaused: (paused: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation_paused', { paused, expectedProjectRoot }),
+  stopModelRequest: (questionId: string) => call<null>('stop_model_request', { questionId }),
   designDirection: () => call<DesignDirection>('design_direction'),
   chooseDesignDirection: (questionId: string, revision: number, optionId?: string | null, existingGuidance?: string | null) => call<DesignDirection>('choose_design_direction', { questionId, revision, optionId: optionId ?? null, existingGuidance: existingGuidance ?? null }),
   desktopPreviewTarget: (expectedProjectRoot: string) => call<NativePreviewTarget | null>('desktop_preview_target', { expectedProjectRoot }),
@@ -1317,6 +1325,17 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return { project_id: 'p1', project_root: '/mock', mode: 'restricted' } as T
     case 'set_approval_mode':
       return { project_id: 'p1', project_root: '/mock', mode: args?.mode } as T
+    case 'project_delegation':
+      return { enabled: false, paused: false, generation: 0, delegation_id: null } as T
+    case 'set_project_delegation':
+      return { enabled: Boolean(args?.enabled), paused: false, generation: 1, delegation_id: args?.enabled ? 'mock-grant' : null } as T
+    case 'set_project_delegation_paused':
+      return { enabled: true, paused: Boolean(args?.paused), generation: 2, delegation_id: 'mock-grant' } as T
+    case 'stop_model_request':
+      return null as T
+    case 'managed_history':
+    case 'managed_processing':
+      return [] as T
     case 'design_direction':
       return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null } as T
     case 'choose_design_direction':

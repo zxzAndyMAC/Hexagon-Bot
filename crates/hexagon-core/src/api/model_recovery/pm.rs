@@ -164,7 +164,12 @@ impl Workbench {
         let next =
             std::time::Instant::now() + self.wait_policy.probe_interval.min(window.remaining());
         while std::time::Instant::now() < next {
-            if self.pm_choice_stopped(packet)? {
+            // 2026-10-11 UI alignment: the owner's per-item stop ends the
+            // automatic retries too; an unreadable card counts as stopped.
+            let item_stopped = crate::cards::get(&self.db, qid)
+                .map(|card| card.payload["stop_requested"] == true)
+                .unwrap_or(true);
+            if item_stopped || self.pm_choice_stopped(packet)? {
                 self.publish_pm_wait_state(qid, packet, "stopped")?;
                 return Ok(false);
             }
