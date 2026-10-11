@@ -272,7 +272,7 @@ export default function App() {
   if (projectOpen === null) {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
-        <span style={{ color: 'var(--accent)', display: 'inline-flex', animation: 'pulse-amber 1.6s infinite' }}>
+        <span style={{ color: 'var(--legacy-accent)', display: 'inline-flex', animation: 'pulse-amber 1.6s infinite' }}>
           <Icon name="hex" size={30} />
         </span>
         <span className="dim3" style={{ fontSize: 12 }}>{t('app.loading')}</span>

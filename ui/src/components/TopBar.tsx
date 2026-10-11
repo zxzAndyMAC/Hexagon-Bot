@@ -240,7 +240,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
                   style={{
                     height: '100%',
                     width: `${limitMc ? Math.min(100, ((usageTotal?.spent_mc ?? 0) / limitMc) * 100) : 0}%`,
-                    background: capped ? 'var(--err)' : 'var(--accent)',
+                    background: capped ? 'var(--err)' : 'var(--legacy-accent)',
                   }}
                 />
               </div>
@@ -257,7 +257,7 @@ export function TopBar({ onSettings, onProjectClosed }: { onSettings: () => void
         <button
           className="chip chip-btn amber"
           data-pending-count={pending.length + reviewRows.length}
-          style={{ border: '1px solid var(--accent-border)', animation: 'pulse-amber 1.6s infinite' }}
+          style={{ border: '1px solid var(--legacy-accent-border)', animation: 'pulse-amber 1.6s infinite' }}
           onClick={openPendingDialog}
           title={t('cards.pendingReopen', {
             approve: formatBinding(bindingFor('approve')),

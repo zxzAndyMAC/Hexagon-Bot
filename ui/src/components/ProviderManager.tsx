@@ -268,7 +268,7 @@ export function ProviderManager() {
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }
 
   const modelEditor = editModel && (
-                <div className="panel" style={{ marginTop: 8, padding: '10px 12px', outline: '1px solid var(--accent)' }}>
+                <div className="panel" style={{ marginTop: 8, padding: '10px 12px', outline: '1px solid var(--legacy-accent)' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '76px 1fr', gap: '6px 8px', alignItems: 'center', fontSize: 12 }}>
                     <label className="dim3">{t('providers.modelId')}</label>
                     <input className="input mono" aria-label={t('providers.modelId')} value={editModel.id} onChange={(e) => setEditModel({ ...editModel, id: e.target.value })} />
@@ -345,8 +345,8 @@ export function ProviderManager() {
                 style={{
                   ...row,
                   // 票 10：选中锚定用左竖条+底色（outline 会让行高跳）
-                  boxShadow: sel === p.id ? 'inset 2px 0 0 var(--accent)' : 'inset 2px 0 0 transparent',
-                  background: sel === p.id ? 'var(--accent-soft)' : undefined,
+                  boxShadow: sel === p.id ? 'inset 2px 0 0 var(--legacy-accent)' : 'inset 2px 0 0 transparent',
+                  background: sel === p.id ? 'var(--legacy-accent-soft)' : undefined,
                   opacity: p.enabled ? 1 : 0.55,
                 }}
                 onClick={() => pick(p.id)}
@@ -380,8 +380,8 @@ export function ProviderManager() {
                 className="dim3"
                 style={{
                   ...row,
-                  boxShadow: sel === `preset:${p.name}` ? 'inset 2px 0 0 var(--accent)' : 'inset 2px 0 0 transparent',
-                  background: sel === `preset:${p.name}` ? 'var(--accent-soft)' : undefined,
+                  boxShadow: sel === `preset:${p.name}` ? 'inset 2px 0 0 var(--legacy-accent)' : 'inset 2px 0 0 transparent',
+                  background: sel === `preset:${p.name}` ? 'var(--legacy-accent-soft)' : undefined,
                 }}
                 onClick={() => pick(`preset:${p.name}`)}
               >

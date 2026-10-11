@@ -19,7 +19,7 @@ const tabBtn = (active: boolean): CSSProperties => ({
   borderRadius: 0,
   padding: '7px 2px',
   marginBottom: -1,
-  borderBottom: `2px solid ${active ? 'var(--accent)' : 'transparent'}`,
+  borderBottom: `2px solid ${active ? 'var(--legacy-accent)' : 'transparent'}`,
   color: active ? 'var(--text)' : 'var(--text-3)',
   fontWeight: active ? 560 : 400,
 })

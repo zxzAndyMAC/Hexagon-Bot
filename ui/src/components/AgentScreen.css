@@ -13,4 +13,4 @@
 .agent-screen footer .btn { font-size: 11px; }
 .agent-screen select { width: calc(100% - 16px); margin: 6px 8px; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-md); }
 .agent-screen-reopen { margin-left: auto; display: flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--popover); color: var(--text-2); padding: 7px 10px; font-size: 11px; cursor: pointer; }
-.agent-screen button:focus-visible, .agent-screen-reopen:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.agent-screen button:focus-visible, .agent-screen-reopen:focus-visible { outline: 2px solid var(--legacy-accent); outline-offset: -2px; }

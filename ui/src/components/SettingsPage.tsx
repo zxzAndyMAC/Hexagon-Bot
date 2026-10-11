@@ -117,8 +117,8 @@ function ListDetail<T>({
                   style={{
                     display: 'flex', alignItems: 'center', gap: 8,
                     padding: '9px 10px', borderRadius: 8, cursor: 'pointer',
-                    boxShadow: sel ? 'inset 2px 0 0 var(--accent)' : 'inset 2px 0 0 transparent',
-                    background: sel ? 'var(--accent-soft)' : undefined,
+                    boxShadow: sel ? 'inset 2px 0 0 var(--legacy-accent)' : 'inset 2px 0 0 transparent',
+                    background: sel ? 'var(--legacy-accent-soft)' : undefined,
                   }}
                 >
                   {renderItem(it)}
@@ -181,7 +181,7 @@ function KeyRow({ id, onChanged }: { id: ActionId; onChanged: () => void }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
       <div style={{ flex: 1, fontSize: 13 }}>{t(label)}</div>
       {conflict && (
-        <span style={{ color: 'var(--accent)', fontSize: 12 }}>
+        <span style={{ color: 'var(--legacy-accent)', fontSize: 12 }}>
           {t('settings.keyConflict', {
             action: t(ACTIONS.find((a) => a.id === conflict)?.labelKey ?? conflict),
           })}

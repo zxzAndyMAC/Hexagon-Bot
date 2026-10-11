@@ -37,7 +37,7 @@ const STEP_META: Record<string, { icon: IconName; tone: string }> = {
   agent_activated: { icon: 'bolt', tone: 'var(--ok)' },
   agent_slept: { icon: 'sleep', tone: 'var(--text-3)' },
   consult_wakeup: { icon: 'sleep', tone: 'var(--warn)' },
-  stage_finished: { icon: 'stamp', tone: 'var(--accent)' },
+  stage_finished: { icon: 'stamp', tone: 'var(--legacy-accent)' },
   artifact_delivered: { icon: 'artifact', tone: 'var(--ok)' },
   artifact_rejected: { icon: 'artifact', tone: 'var(--err)' },
   review_passed: { icon: 'check', tone: 'var(--ok)' },
@@ -51,9 +51,9 @@ const STEP_META: Record<string, { icon: IconName; tone: string }> = {
   permission_shape_remembered: { icon: 'check', tone: 'var(--text-3)' },
   escalated: { icon: 'escalate', tone: 'var(--err)' },
   test_ran: { icon: 'check', tone: 'var(--ok)' },
-  proposal_queued: { icon: 'diff', tone: 'var(--accent)' },
+  proposal_queued: { icon: 'diff', tone: 'var(--legacy-accent)' },
   proposal_reviewed: { icon: 'diff', tone: 'var(--warn)' },
-  proposal_stamped: { icon: 'stamp', tone: 'var(--accent)' },
+  proposal_stamped: { icon: 'stamp', tone: 'var(--legacy-accent)' },
   proposal_rejected: { icon: 'diff', tone: 'var(--err)' },
   proposal_activated: { icon: 'bolt', tone: 'var(--ok)' },
   proposal_rolled_back: { icon: 'arrow-left', tone: 'var(--err)' },
@@ -63,8 +63,8 @@ const STEP_META: Record<string, { icon: IconName; tone: string }> = {
   publish_failed: { icon: 'publish', tone: 'var(--err)' },
   backfill_executed: { icon: 'refresh', tone: 'var(--text-2)' },
   usage_cap_hit: { icon: 'yen', tone: 'var(--err)' },
-  owner_command: { icon: 'send', tone: 'var(--accent)' },
-  fastpath_dispatched: { icon: 'bolt', tone: 'var(--accent)' },
+  owner_command: { icon: 'send', tone: 'var(--legacy-accent)' },
+  fastpath_dispatched: { icon: 'bolt', tone: 'var(--legacy-accent)' },
   system: { icon: 'list', tone: 'var(--text-3)' },
 }
 
@@ -118,11 +118,11 @@ export function AgentTab({ agentId }: { agentId: string }) {
       const time = fmtTime(ev.created_at)
       const base = { id: ev.id, kind: ev.kind, time }
       if (it.message) {
-        out.push({ ...base, icon: 'agent', tone: 'var(--accent)', label: evLabel('agent_message'), message: it.message.body })
+        out.push({ ...base, icon: 'agent', tone: 'var(--legacy-accent)', label: evLabel('agent_message'), message: it.message.body })
         continue
       }
       if (ev.kind === 'turn_started') {
-        out.push({ ...base, icon: 'bolt', tone: 'var(--accent)', label: `${evLabel('turn_started')} · ${String(p.stage ?? '')}`, divider: true })
+        out.push({ ...base, icon: 'bolt', tone: 'var(--legacy-accent)', label: `${evLabel('turn_started')} · ${String(p.stage ?? '')}`, divider: true })
         continue
       }
       if (ev.kind === 'tool_called') {

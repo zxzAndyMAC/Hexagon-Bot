@@ -258,7 +258,7 @@ const StageHeader = memo(function StageHeader({ item }: { item: TimelineItem }) 
   const n = runId ? artifacts.filter((a) => a.stage_run_id === runId).length : 0
   return (
     <div style={{ padding: '18px 14px 6px', display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ color: 'var(--accent)', display: 'inline-flex' }}><Icon name="stamp" size={11} /></span>
+      <span style={{ color: 'var(--legacy-accent)', display: 'inline-flex' }}><Icon name="stamp" size={11} /></span>
       <span style={{ fontWeight: 560, fontSize: 13 }}>{String(p.stage ?? '')}</span>
       {n > 0 && <span className="chip ok">{n} {t('side.artifacts').toLowerCase()}</span>}
       <div className="sysline" style={{ flex: 1 }} />
@@ -297,7 +297,7 @@ function ReturnSummaryRow({ item, onJumpEvent }: { item: TimelineItem; onJumpEve
   }
   return (
     <Row className="card-ask" style={{ margin: '6px 14px', padding: '8px 14px', cursor: 'pointer' }} onClick={() => setOpen(!open)}>
-      <div style={{ fontWeight: 510, color: 'var(--accent)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
+      <div style={{ fontWeight: 510, color: 'var(--legacy-accent)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
         <Icon name="list" size={11} /> {t('cards.returnSummary')}
         {deliveries.length > 0 && <span className="chip ok">{deliveries.length} {t('side.artifacts').toLowerCase()}</span>}
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={9} />
@@ -384,7 +384,7 @@ export const EventRow = memo(function EventRow({
       >
         <div className="sysline" />
         <span className="syslabel" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span className="mono" style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: 3 }}>
+          <span className="mono" style={{ color: 'var(--legacy-accent)', textDecoration: 'underline', textUnderlineOffset: 3 }}>
             {path}
           </span>
           <span className={`chip ${chipCls(status)}`}>{status}</span>
@@ -726,7 +726,7 @@ function NodeRail({ marks, onJump }: { marks: NodeMark[]; onJump: (m: NodeMark) 
           {marks.map((m, i) => (
             // ADR 0056-3：待决=琥珀 accent（需人注意专色）；
             // --warn 蓝留给 steering_queued 这类信息性排队态。
-            <span key={i} style={{ color: m.pending ? 'var(--accent)' : 'var(--text-3)', display: 'inline-flex' }}>
+            <span key={i} style={{ color: m.pending ? 'var(--legacy-accent)' : 'var(--text-3)', display: 'inline-flex' }}>
               <Icon name={m.icon} size={8} />
             </span>
           ))}
@@ -745,7 +745,7 @@ function NodeRail({ marks, onJump }: { marks: NodeMark[]; onJump: (m: NodeMark) 
               style={{
                 display: 'flex', gap: 6, alignItems: 'center', padding: '3px 4px', borderRadius: 4,
                 cursor: 'pointer', fontSize: 11,
-                color: m.pending ? 'var(--accent)' : 'var(--text)',
+                color: m.pending ? 'var(--legacy-accent)' : 'var(--text)',
                 animation: m.pending ? 'pulse-amber 1.6s infinite' : undefined,
               }}
             >

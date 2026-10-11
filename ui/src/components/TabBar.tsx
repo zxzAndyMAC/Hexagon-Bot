@@ -77,7 +77,7 @@ export function TabBar() {
                 display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
                 fontSize: 12, cursor: 'pointer', userSelect: 'none',
                 color: active ? 'var(--text)' : 'var(--text-3)',
-                borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
+                borderBottom: active ? '2px solid var(--legacy-accent)' : '2px solid transparent',
                 fontWeight: active ? 560 : 400,
                 flex: '0 1 auto', minWidth: 88, maxWidth: 200,
               }}

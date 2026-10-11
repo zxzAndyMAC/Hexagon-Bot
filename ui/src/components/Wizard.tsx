@@ -438,8 +438,8 @@ function Chip({ ok, warn, children }: { ok?: boolean; warn?: boolean; children: 
     <span
       style={{
         fontSize: 11, padding: '2px 8px', borderRadius: 8,
-        background: warn ? 'var(--accent-soft)' : ok ? 'var(--ok-soft)' : 'var(--bg-2)',
-        color: warn ? 'var(--accent)' : ok ? 'var(--ok)' : 'var(--text-2)',
+        background: warn ? 'var(--legacy-accent-soft)' : ok ? 'var(--ok-soft)' : 'var(--bg-2)',
+        color: warn ? 'var(--legacy-accent)' : ok ? 'var(--ok)' : 'var(--text-2)',
       }}
     >
       {children}
@@ -1017,7 +1017,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                 className="panel"
                 style={{
                   display: 'flex', gap: 8, padding: '8px 10px',
-                  outline: picked ? '1px solid var(--accent)' : undefined,
+                  outline: picked ? '1px solid var(--legacy-accent)' : undefined,
                 }}
               >
                 <label style={{ display: 'flex', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer' }}>
@@ -1267,7 +1267,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
             <button className="btn primary" onClick={() => api.openSettings().catch(() => {})}>
               {t('wizard.goSettings')}
             </button>
-            <span style={{ color: 'var(--accent)', fontSize: 12 }}>{t('wizard.keysBlocked')}</span>
+            <span style={{ color: 'var(--legacy-accent)', fontSize: 12 }}>{t('wizard.keysBlocked')}</span>
           </div>
         )}
       </>
@@ -1399,7 +1399,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
               onKeyDown={jumpable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(s) } } : undefined}
               style={{
                 flex: 1, height: 3, borderRadius: 2,
-                background: i <= idx ? 'var(--accent)' : 'var(--bg-2)',
+                background: i <= idx ? 'var(--legacy-accent)' : 'var(--bg-2)',
                 cursor: jumpable ? 'pointer' : 'default',
               }}
             />
@@ -1625,7 +1625,7 @@ function ProviderFirstStep({ doc, loaded, onRefresh }: {
         </div>
       ) : (
         <>
-          <div style={{ color: 'var(--accent)', fontSize: 12, marginBottom: 8 }}>{t('wizard.providersBlocked')}</div>
+          <div style={{ color: 'var(--legacy-accent)', fontSize: 12, marginBottom: 8 }}>{t('wizard.providersBlocked')}</div>
           {doc.providers.length === 0
             ? <NewProviderForm onRefresh={onRefresh} />
             : <FixProviderForm doc={doc} onRefresh={onRefresh} />}

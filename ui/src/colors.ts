@@ -11,3 +11,8 @@ export function hashHue(s: string): number {
 
 export const agentColor = (agentId: string, light = 42) =>
   `hsl(${hashHue(agentId)}, 45%, ${light}%)`
+
+/** 规范 foundations §1.5：新头像只用 c1–c8 八色（`--agent-c{n}`），按同一哈希扩散取号。
+ *  旧 agentColor 留给旧界面与用量折线，票 15 收缩时一并迁走。 */
+export const agentSwatch = (agentId: string): number =>
+  (Math.floor(hashHue(agentId) / 45) % 8) + 1

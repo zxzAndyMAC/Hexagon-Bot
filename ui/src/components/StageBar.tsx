@@ -43,20 +43,20 @@ function Node({ state }: { state: State }) {
       )
     case 'active':
       return (
-        <span style={ring('var(--accent-border)')}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)', animation: 'pulse-amber 1.2s infinite' }} />
+        <span style={ring('var(--legacy-accent-border)')}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--legacy-accent)', animation: 'pulse-amber 1.2s infinite' }} />
         </span>
       )
     case 'waiting_stamp':
       return (
-        <span style={ring('var(--accent-border)', 'var(--accent-soft)')}>
-          <Icon name="stamp" size={9} style={{ color: 'var(--accent)' }} />
+        <span style={ring('var(--legacy-accent-border)', 'var(--legacy-accent-soft)')}>
+          <Icon name="stamp" size={9} style={{ color: 'var(--legacy-accent)' }} />
         </span>
       )
     case 'interrupted':
       return (
-        <span style={ring('var(--accent-border)', 'var(--accent-soft)')}>
-          <Icon name="warn" size={9} style={{ color: 'var(--accent)' }} />
+        <span style={ring('var(--legacy-accent-border)', 'var(--legacy-accent-soft)')}>
+          <Icon name="warn" size={9} style={{ color: 'var(--legacy-accent)' }} />
         </span>
       )
     case 'rejected':
@@ -116,7 +116,7 @@ export function StageRail() {
                     style={{
                       fontSize: 10,
                       flexShrink: 0,
-                      color: s.state === 'rejected' ? 'var(--err)' : s.state === 'skipped' ? 'var(--text-3)' : 'var(--accent)',
+                      color: s.state === 'rejected' ? 'var(--err)' : s.state === 'skipped' ? 'var(--text-3)' : 'var(--legacy-accent)',
                     }}
                   >
                     {t(s.state === 'done' ? 'quality.historicalDoneLabel' : `stage.${STATE_KEY[s.state]}`)}

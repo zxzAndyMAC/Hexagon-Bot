@@ -70,7 +70,7 @@ export function UsageTab({ onDetail }: { onDetail?: () => void }) {
         </div>}
         <UsageUncertainty />
         <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', marginTop: 6, overflow: 'hidden' }}>
-          <div style={{ width: `${pct}%`, height: '100%', background: capped ? 'var(--err)' : 'var(--accent)', transition: 'width .3s' }} />
+          <div style={{ width: `${pct}%`, height: '100%', background: capped ? 'var(--err)' : 'var(--legacy-accent)', transition: 'width .3s' }} />
         </div>
         <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
           {editing ? (
@@ -166,7 +166,7 @@ function BarRow({ label, value, max }: { label: string; value: number; max: numb
         <span className="mono dim">{fmtTok(value)}</span>
       </div>
       <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', marginTop: 3 }}>
-        <div style={{ width: `${(value / max) * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 2 }} />
+        <div style={{ width: `${(value / max) * 100}%`, height: '100%', background: 'var(--legacy-accent)', borderRadius: 2 }} />
       </div>
     </div>
   )

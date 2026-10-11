@@ -94,7 +94,7 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
     ? t('modelRecovery.lastRefusal', { reason: t(`modelRecovery.refusal.${recovery.last_refusal}`, { defaultValue: recovery.last_refusal }) }) : ''
   const deadline = state === 'retrying' && recovery.retry_deadline_ms != null ? new Date(recovery.retry_deadline_ms).toLocaleTimeString() : null
   return <div data-model-recovery={id} data-state={state} aria-busy={busy}>
-    <div style={{fontWeight: 510, color: state === 'recovered' ? 'var(--ok)' : 'var(--accent)'}}>{t(title)}</div>
+    <div style={{fontWeight: 510, color: state === 'recovered' ? 'var(--ok)' : 'var(--legacy-accent)'}}>{t(title)}</div>
     <div className="dim3" style={{fontSize: 12, margin: '4px 0 8px'}}>{reason || (hint && t(hint, { target, instruction: recovery.held_instruction ?? '' }))}</div>
     {refusal && <div className="dim3" data-refusal style={{fontSize: 12, marginBottom: 8}}>{refusal}</div>}
     {deadline && <div className="dim3" data-retry-progress style={{fontSize: 12, marginBottom: 8}}>{t('modelRecovery.attempt', { count: (recovery.history?.length ?? 0) + 1, time: deadline })}</div>}

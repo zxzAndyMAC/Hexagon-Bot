@@ -31,7 +31,7 @@ export function PracticeGround() {
       onKeyDown={onKeyDown}
       style={{ marginTop: 14, padding: '10px 14px', outline: 'none' }}
     >
-      <div style={{ fontWeight: 510, color: 'var(--accent)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ fontWeight: 510, color: 'var(--legacy-accent)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
         <Icon name="warn" size={12} /> {t('settings.practiceCard')}
         {ok && <span className="chip ok" style={{ fontSize: 10 }}>✓</span>}
       </div>

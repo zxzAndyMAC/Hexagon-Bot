@@ -86,7 +86,7 @@ export function UsageDetailTab() {
   }
   const legend = { textStyle: { color: text2, fontSize: 11 }, itemWidth: 14, itemHeight: 8, icon: 'roundRect' }
   const grid = { left: 8, right: 16, top: 32, bottom: 4, containLabel: true }
-  const palette = [cssVar('--accent'), cssVar('--ok'), cssVar('--flag'), cssVar('--err')]
+  const palette = [cssVar('--legacy-accent'), cssVar('--ok'), cssVar('--flag'), cssVar('--err')]
   const short = (b: string) => (granularity === 'hour' ? b.slice(11) : b.slice(5))
 
   const boardOption: EChartsCoreOption = board === 'model'
@@ -150,7 +150,7 @@ export function UsageDetailTab() {
 
         {/* 总览卡 */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-          <Stat icon="usage" tint="var(--accent)" tintBg="var(--accent-soft)"
+          <Stat icon="usage" tint="var(--legacy-accent)" tintBg="var(--legacy-accent-soft)"
             label={t('usage.totalTokens')} value={fmtTok(totalTok)} sub={`${totalCalls} ${t('usage.calls')}`} />
           <Stat icon="bolt" tint="var(--flag)" tintBg="var(--flag-soft)"
             label={t('usage.todayTokens')} value={fmtTok(todayTok)} sub={today} />
@@ -160,7 +160,7 @@ export function UsageDetailTab() {
             sub={capped ? t('usage.capHit') : undefined} />
           {/* 预算卡：唯一钱口径 + 进度条 + 上限编辑 */}
           <div className="u-card" style={{ padding: '12px 14px', display: 'flex', gap: 10 }}>
-            <span className="stat-ic" style={{ color: capped ? 'var(--err)' : 'var(--accent)', background: capped ? 'var(--err-soft)' : 'var(--accent-soft)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="yen" size={15} /></span>
+            <span className="stat-ic" style={{ color: capped ? 'var(--err)' : 'var(--legacy-accent)', background: capped ? 'var(--err-soft)' : 'var(--legacy-accent-soft)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="yen" size={15} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="dim3" style={{ fontSize: 10 }}>{t('usage.knownAmount')}</div>
               <div className="mono" style={{ fontSize: 15, fontWeight: 560, marginTop: 2 }}>
@@ -168,7 +168,7 @@ export function UsageDetailTab() {
               </div>
               <UsageUncertainty />
               <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', marginTop: 6, overflow: 'hidden' }}>
-                <div style={{ width: `${pct}%`, height: '100%', background: capped ? 'var(--err)' : 'var(--accent)' }} />
+                <div style={{ width: `${pct}%`, height: '100%', background: capped ? 'var(--err)' : 'var(--legacy-accent)' }} />
               </div>
               {editing ? (
                 <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
@@ -233,7 +233,7 @@ export function UsageDetailTab() {
                   <span className="mono dim3">{fmtTok(tok)}</span>
                 </div>
                 <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
-                  <div style={{ width: `${(tok / (byStage[0]?.[1] || 1)) * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 2 }} />
+                  <div style={{ width: `${(tok / (byStage[0]?.[1] || 1)) * 100}%`, height: '100%', background: 'var(--legacy-accent)', borderRadius: 2 }} />
                 </div>
               </div>
             ))}
@@ -324,8 +324,8 @@ function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) =
               <button key={key} className="icon-btn"
                 style={{
                   textAlign: 'center', fontSize: 11, padding: '6px 4px', borderRadius: 6,
-                  color: range.preset === key ? 'var(--accent)' : 'var(--text-2)',
-                  background: range.preset === key ? 'var(--accent-soft)' : 'transparent',
+                  color: range.preset === key ? 'var(--legacy-accent)' : 'var(--text-2)',
+                  background: range.preset === key ? 'var(--legacy-accent-soft)' : 'transparent',
                 }}
                 onClick={() => { onChange(mk()); setOpen(false) }}>
                 {t(`usage.p_${key}`)}

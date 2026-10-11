@@ -45,7 +45,7 @@ export function JudgeModelFailure({ q, top }: { q: PendingQuestion; top: boolean
   }
   const label = t('judgeFailure.rejudge')
   return <div data-judge-failure={failure.purpose} style={{fontSize: 12, margin: '4px 0 8px'}}>
-    <div style={{fontWeight: 510, color: 'var(--accent)'}}>{t('judgeFailure.title', { purpose: t(`judgeFailure.purpose.${failure.purpose}`, { defaultValue: failure.purpose ?? '' }) })}</div>
+    <div style={{fontWeight: 510, color: 'var(--legacy-accent)'}}>{t('judgeFailure.title', { purpose: t(`judgeFailure.purpose.${failure.purpose}`, { defaultValue: failure.purpose ?? '' }) })}</div>
     <div className="dim3" style={{margin: '2px 0 6px'}}>{t('judgeFailure.hint')}</div>
     <div className="dim3 mono" style={{fontSize: 11, marginBottom: 6}}>{failure.code} · {failure.model_slot} · {failure.request_id ?? t('modelRecovery.notSent')}</div>
     <button type="button" className="btn" disabled={busy}

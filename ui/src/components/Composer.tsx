@@ -297,7 +297,7 @@ export function Composer() {
       style={{
         position: 'relative', padding: '10px 14px', borderTop: '1px solid var(--border)',
         background: dragging ? 'var(--bg-2)' : 'var(--bg-1)',
-        outline: dragging ? '1px dashed var(--accent)' : 'none',
+        outline: dragging ? '1px dashed var(--legacy-accent)' : 'none',
         outlineOffset: -4,
       }}
       // 票 03：拖拽图片进 Composer（dragover 必须 preventDefault 才会触发 drop）。
@@ -414,7 +414,7 @@ export function Composer() {
               style={{
                 padding: '5px 10px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
                 background: i === sel ? 'var(--bg-2)' : 'transparent',
-                color: popup.kind === '@' ? 'var(--accent)' : 'var(--flag)',
+                color: popup.kind === '@' ? 'var(--legacy-accent)' : 'var(--flag)',
               }}
             >
               <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>

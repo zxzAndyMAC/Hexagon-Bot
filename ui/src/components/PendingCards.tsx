@@ -62,7 +62,7 @@ function CardShell({ tone, icon, title, children }: {
   children: React.ReactNode
 }) {
   const cls = { ask: 'card-ask', stamp: 'card-stamp', flag: 'card-flag', danger: 'card-danger' }[tone]
-  const color = { ask: 'var(--accent)', stamp: 'var(--accent)', flag: 'var(--flag)', danger: 'var(--err)' }[tone]
+  const color = { ask: 'var(--legacy-accent)', stamp: 'var(--legacy-accent)', flag: 'var(--flag)', danger: 'var(--err)' }[tone]
   return (
     <div className={cls} style={{ padding: '10px 14px', margin: '6px 14px 0', ...(tone === 'danger' ? { borderColor: 'var(--err)' } : {}) }}>
       <div style={{ fontWeight: 510, color, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -139,7 +139,7 @@ function InlineDiff({ proposalId }: { proposalId: string }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
         <button
           className="icon-btn"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--accent)' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--legacy-accent)' }}
           title={t('cards.inlineDiff')}
           onClick={() => void toggle()}
         >

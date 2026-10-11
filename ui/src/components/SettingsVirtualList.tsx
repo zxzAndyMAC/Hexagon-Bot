@@ -38,8 +38,8 @@ export function SettingsVirtualList<T>({ items, itemKey, selected, onSelect, ren
           }}
           style={{ display: 'flex', alignItems: 'center', gap: 8, height: 60, boxSizing: 'border-box',
             padding: '9px 10px', borderRadius: 8, cursor: 'pointer',
-            boxShadow: active ? 'inset 2px 0 0 var(--accent)' : 'inset 2px 0 0 transparent',
-            background: active ? 'var(--accent-soft)' : undefined }}>
+            boxShadow: active ? 'inset 2px 0 0 var(--legacy-accent)' : 'inset 2px 0 0 transparent',
+            background: active ? 'var(--legacy-accent-soft)' : undefined }}>
           {renderItem(item)}
         </div>
       }} />

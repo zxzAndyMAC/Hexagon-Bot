@@ -61,7 +61,7 @@ export function SidePanel() {
             className="btn"
             style={{
               padding: '2px 6px', fontSize: 11, border: 'none', background: 'none', flexShrink: 0,
-              color: tab === k ? 'var(--accent)' : 'var(--text-3)',
+              color: tab === k ? 'var(--legacy-accent)' : 'var(--text-3)',
               fontWeight: tab === k ? 560 : 400,
             }}
             onClick={() => setTab(k)}
