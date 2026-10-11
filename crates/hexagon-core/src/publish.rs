@@ -30,6 +30,15 @@ pub enum PublishError {
     UnknownQuestion(String),
 }
 
+fn project_dir(db: &Db, project_id: &str) -> Result<std::path::PathBuf, PublishError> {
+    Ok(db
+        .conn()
+        .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
+            r.get::<_, String>(0)
+        })?
+        .into())
+}
+
 /// 发起发布：只入队确认卡，不执行任何东西。
 pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, PublishError> {
     let baseline = crate::git::baseline_branch(std::path::Path::new(&db.conn().query_row(
@@ -38,6 +47,11 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
         |r| r.get::<_, String>(0),
     )?))
     .unwrap_or_else(|_| "main".into());
+    // Test3/22: the delivered version at request time, so a delegated
+    // publish can refuse a commit that changed after the request.
+    let commit = crate::git::run(&project_dir(db, project_id)?, &["rev-parse", "HEAD"])
+        .map(|out| out.trim().to_string())
+        .ok();
     let qid = crate::cards::enqueue(
         db,
         project_id,
@@ -46,6 +60,7 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
         json!({
             "remote": remote,
             "baseline": baseline,
+            "commit": commit,
             "warning": "远程发布不可逆：代码与产物将推送到项目外部",
         }),
         None,
@@ -77,6 +92,19 @@ pub fn confirm(
     qid: &str,
     store: &dyn CredentialStore,
 ) -> Result<PublishOutcome, PublishError> {
+    confirm_by(db, project_id, qid, store, "owner")
+}
+
+/// Test3/22: the same publish by a non-owner decider (project delegation).
+/// Same credential gate and push; the card is answered before the push, so a
+/// failure is recorded and never silently re-sent.
+pub fn confirm_by(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    store: &dyn CredentialStore,
+    by: &str,
+) -> Result<PublishOutcome, PublishError> {
     // 卡表读写归 cards.rs（arch-review 票 04）
     let p = crate::cards::get_queued(db, qid, crate::cards::CardKind::Publish)
         .map_err(|_| PublishError::UnknownQuestion(qid.into()))?
@@ -84,7 +112,7 @@ pub fn confirm(
     let remote = p["remote"].as_str().unwrap_or("origin").to_string();
     let baseline = p["baseline"].as_str().unwrap_or("main").to_string();
 
-    crate::cards::answer(db, qid, "owner")?;
+    crate::cards::answer(db, qid, by)?;
 
     let dir: String =
         db.conn()
@@ -111,7 +139,7 @@ pub fn confirm(
             db.append_event(
                 project_id,
                 EventKind::PublishConfirmed,
-                json!({"remote": remote, "baseline": baseline, "question_id": qid}),
+                json!({"remote": remote, "baseline": baseline, "question_id": qid, "by": by}),
                 None,
                 None,
             )?;
@@ -122,7 +150,7 @@ pub fn confirm(
             db.append_event(
                 project_id,
                 EventKind::PublishFailed,
-                json!({"remote": remote, "question_id": qid, "error": e.to_string()}),
+                json!({"remote": remote, "question_id": qid, "error": e.to_string(), "by": by}),
                 None,
                 None,
             )?;
@@ -134,16 +162,21 @@ pub fn confirm(
 
 /// 拒绝发布：标记已答 + 轨迹。
 pub fn reject(db: &Db, project_id: &str, qid: &str) -> Result<(), PublishError> {
+    reject_by(db, project_id, qid, "owner")
+}
+
+/// Test3/22: a publish refusal by a non-owner decider.
+pub fn reject_by(db: &Db, project_id: &str, qid: &str, by: &str) -> Result<(), PublishError> {
     // kind+queued+project 三闸保持原语义（未知/已答/跨项目卡都报 UnknownQuestion）
     crate::cards::get_queued(db, qid, crate::cards::CardKind::Publish)
         .ok()
         .filter(|c| c.project_id == project_id)
         .ok_or_else(|| PublishError::UnknownQuestion(qid.into()))?;
-    crate::cards::answer(db, qid, "owner")?;
+    crate::cards::answer(db, qid, by)?;
     db.append_event(
         project_id,
         EventKind::PublishRejected,
-        json!({"question_id": qid}),
+        json!({"question_id": qid, "by": by}),
         None,
         None,
     )?;

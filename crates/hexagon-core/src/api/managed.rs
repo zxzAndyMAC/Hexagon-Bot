@@ -146,6 +146,11 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         ("escalation", Some("context_overflow")) => {
             Some(format!("context:{}", p["trigger_turn_id"]))
         }
+        ("publish", _) => Some(format!(
+            "publish:{}:{}",
+            p["remote"].as_str().unwrap_or_default(),
+            p["commit"].as_str().unwrap_or(&card.id)
+        )),
         ("install", _) => Some(format!(
             "install:{}:{}",
             p["plan_kind"].as_str().unwrap_or_default(),
@@ -435,6 +440,36 @@ fn grant_route(p: &serde_json::Value, present: bool) -> Route {
     }
 }
 
+/// Host-verified facts for a delegated publish (no secret values).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PublishFacts {
+    pub target_configured: bool,
+    pub credential_present: bool,
+    pub delivery_accepted: bool,
+    pub baseline_unchanged: bool,
+    pub commit_unchanged: bool,
+}
+
+/// Test3/22 (Q13/Q20): publish only to an existing project target with its
+/// project credential, after final acceptance, for the exact version that was
+/// requested. Never a new target, a personal login, or an accepted-by-model
+/// shortcut. Cost model: a false refusal leaves an unpublished but accepted
+/// delivery (visible, retryable by the owner); a false publish is an
+/// irreversible external effect.
+pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static str) {
+    let checks = [
+        (facts.target_configured, "target_missing"),
+        (facts.credential_present, "credential_missing"),
+        (facts.delivery_accepted, "delivery_not_accepted"),
+        (facts.baseline_unchanged, "target_drifted"),
+        (facts.commit_unchanged, "delivery_changed"),
+    ];
+    match checks.iter().find(|(ok, _)| !ok) {
+        Some((_, reason)) => ("incomplete", reason),
+        None => ("publish", "configured_target_accepted_delivery"),
+    }
+}
+
 fn design_route(direction: &crate::design::DesignDirection) -> Route {
     let listed = direction
         .options
@@ -649,6 +684,18 @@ impl Workbench {
                 fallback: "end",
             },
             ("escalation", _) => flag_route(p),
+            ("publish", _) => {
+                let facts = self.publish_facts(p)?;
+                Route {
+                    options: opts(&[
+                        ("publish", "push to the configured target"),
+                        ("incomplete", "do not publish"),
+                    ]),
+                    state: String::new(),
+                    forced: Some(publish_forced(&facts)),
+                    fallback: "incomplete",
+                }
+            }
             ("install", _) => install_route(p),
             ("grant", _) => {
                 let present = capability_present(
@@ -660,6 +707,34 @@ impl Workbench {
             }
             _ => return Ok(None),
         }))
+    }
+
+    fn publish_facts(&self, p: &serde_json::Value) -> Result<PublishFacts, ApiError> {
+        let remote = p["remote"].as_str().unwrap_or_default();
+        let git =
+            |args: &[&str]| crate::git::run(&self.repo_root, args).map(|o| o.trim().to_string());
+        let latest: Option<(i64, String)> = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT seq,state FROM stage_runs WHERE project_id=?1 ORDER BY rowid DESC LIMIT 1",
+                [&self.project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        let final_seq = self.pack.as_ref().map(|pack| pack.stages.len() as i64 - 1);
+        Ok(PublishFacts {
+            target_configured: !remote.is_empty() && git(&["remote", "get-url", remote]).is_ok(),
+            credential_present: self
+                .creds
+                .get(&format!("publish/{remote}"))
+                .is_ok_and(|value| value.is_some()),
+            delivery_accepted: matches!((latest, final_seq), (Some((seq, state)), Some(last)) if state == "done" && seq == last),
+            baseline_unchanged: crate::git::baseline_branch(&self.repo_root)
+                .is_ok_and(|branch| p["baseline"] == branch.as_str()),
+            commit_unchanged: p["commit"].is_string()
+                && git(&["rev-parse", "HEAD"]).is_ok_and(|head| p["commit"] == head.as_str()),
+        })
     }
 
     fn proposal_route(&self, p: &serde_json::Value) -> Result<Route, ApiError> {
@@ -922,6 +997,20 @@ impl Workbench {
             ("escalation", _, _) => {
                 self.end_card_incomplete(&card)?;
                 "incomplete"
+            }
+            ("publish", _, "publish") => {
+                crate::publish::confirm_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    self.creds.as_ref(),
+                    &self.decider(),
+                )?;
+                "published"
+            }
+            ("publish", _, _) => {
+                crate::publish::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
+                "not_published"
             }
             ("install", _, "install" | "reject") => {
                 let installed = crate::install::resolve_install_by(
@@ -1243,6 +1332,10 @@ mod managed_proposal_tests;
 mod managed_install_tests;
 
 #[cfg(test)]
+#[path = "managed_publish_tests.rs"]
+mod managed_publish_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
@@ -1309,6 +1402,19 @@ mod tests {
     }
 
     proptest! {
+        // Test3/22: publish iff every host fact holds.
+        #[test]
+        fn publish_needs_every_host_fact(bits in proptest::collection::vec(any::<bool>(), 5)) {
+            let facts = PublishFacts {
+                target_configured: bits[0],
+                credential_present: bits[1],
+                delivery_accepted: bits[2],
+                baseline_unchanged: bits[3],
+                commit_unchanged: bits[4],
+            };
+            prop_assert_eq!(publish_forced(&facts).0 == "publish", bits.iter().all(|b| *b));
+        }
+
         // Test3/21: any non-empty secret slot (env or headers) means the host
         // cannot complete the install by itself.
         #[test]
