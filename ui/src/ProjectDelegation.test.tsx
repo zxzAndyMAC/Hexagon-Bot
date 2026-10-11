@@ -49,6 +49,8 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   // ADR0087 (ticket 01): full release is stated honestly before turning on.
   expect(dialog.textContent).toContain('only go to the system Trash')
   expect(dialog.textContent).toContain('MCP servers and skills installed in this project')
+  // ADR0087 实施修订 2: delegation never lifts a skill's manual-only gate.
+  expect(dialog.textContent).toContain('skills marked manual-only')
   expect(dialog.querySelector('[data-external-deletion]')!.textContent).toContain('cannot block deletions')
   expect(dialog.querySelector('[data-linux-limit]')!.textContent).toContain('Linux')
   expect(document.activeElement?.textContent).toBe('Cancel')

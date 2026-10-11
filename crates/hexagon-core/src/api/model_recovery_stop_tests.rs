@@ -211,3 +211,69 @@ fn a_wait_that_recovers_closes_its_item() {
         .count();
     assert_eq!(recovered, 1);
 }
+
+/// ADR0087 实施修订 5: with autonomy levels gone, "autonomy" is the
+/// automatic follow-up after another role's turn. Handing work to the
+/// stopped role starts its new turn; it never resends the stopped request.
+#[test]
+fn an_automatic_follow_up_to_the_stopped_role_never_revives_its_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "stop",
+        &[
+            ("a0".into(), "worker".into()),
+            ("a1".into(), "helper".into()),
+        ],
+        None,
+        false,
+    )
+    .unwrap();
+    for agent in ["a0", "a1"] {
+        orchestra::write_agent_status(&wb.db, "p1", agent, false).unwrap();
+    }
+    wb.wait_policy = crate::turn::WaitPolicy {
+        probe_interval: Duration::from_millis(5),
+        budget: Duration::from_secs(60),
+        tick: Duration::from_millis(1),
+    };
+    wb.register_provider("default", stopping(dir.path(), FIRST_PROBE));
+    stopped_turn(&wb);
+    let item = open_item(&wb.db).unwrap();
+    let after_stop = |wb: &Workbench, kind: &str| {
+        wb.db
+            .events(crate::PROJECT_ID, Some(&[EventKind::System]))
+            .unwrap()
+            .into_iter()
+            .filter(|event| {
+                event.payload["kind"] == kind && event.payload["recovery_id"] == item.as_str()
+            })
+            .count()
+    };
+    let retrying_before = after_stop(&wb, "model_request_retrying");
+    let replies = Arc::new(crate::provider::ScriptedProvider::new(vec![
+        crate::turn::text_response("plan: hand the render back"),
+        crate::turn::text_response("@worker[a0] please pick the render up again"),
+        crate::turn::text_response("plan: start over"),
+        crate::turn::text_response("picked up as a new task"),
+    ]));
+    wb.register_provider("default", replies.clone());
+    let routed = wb.dispatch_instance("a1", "check the scene", &[]);
+    assert!(routed.is_ok(), "{routed:?}");
+    let worker_turns = wb
+        .db
+        .events(crate::PROJECT_ID, Some(&[EventKind::TurnStarted]))
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.agent_id.as_deref() == Some("a0"))
+        .count();
+    assert_eq!(
+        worker_turns, 2,
+        "the follow-up really reached the stopped role"
+    );
+    let card = crate::cards::get(&wb.db, &item).unwrap();
+    assert_eq!(card.payload["state"], "stopped");
+    assert_eq!(card.payload["stop_requested"], true);
+    assert_eq!(after_stop(&wb, "model_request_retrying"), retrying_before);
+    assert_eq!(after_stop(&wb, "model_request_recovered"), 0);
+}
