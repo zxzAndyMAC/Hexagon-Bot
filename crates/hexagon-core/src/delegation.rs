@@ -25,6 +25,8 @@ pub const MAX_ROUNDS: i64 = 3;
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct DelegationStatus {
     pub enabled: bool,
+    /// Enabled but paused by the owner: no new decisions, cards with the owner.
+    pub paused: bool,
     #[ts(type = "number")]
     pub generation: i64,
     pub delegation_id: Option<String>,
@@ -44,29 +46,32 @@ impl Grant {
 }
 
 pub fn status(db: &Db, project_id: &str) -> DelegationStatus {
-    let row: Option<(String, i64, i64)> = db
+    let row: Option<(String, i64, i64, i64)> = db
         .conn()
         .query_row(
-            "SELECT delegation_id, generation, enabled FROM project_delegations WHERE project_id=?1",
+            "SELECT delegation_id, generation, enabled, paused FROM project_delegations WHERE project_id=?1",
             [project_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
         .ok()
         .flatten();
     match row {
-        Some((id, generation, 1)) => DelegationStatus {
+        Some((id, generation, 1, paused)) => DelegationStatus {
             enabled: true,
+            paused: paused == 1,
             generation,
             delegation_id: Some(id),
         },
-        Some((_, generation, _)) => DelegationStatus {
+        Some((_, generation, _, _)) => DelegationStatus {
             enabled: false,
+            paused: false,
             generation,
             delegation_id: None,
         },
         None => DelegationStatus {
             enabled: false,
+            paused: false,
             generation: 0,
             delegation_id: None,
         },
@@ -76,7 +81,7 @@ pub fn status(db: &Db, project_id: &str) -> DelegationStatus {
 /// The active grant, if delegation is on.
 pub fn current(db: &Db, project_id: &str) -> Option<Grant> {
     let s = status(db, project_id);
-    s.enabled.then_some(())?;
+    (s.enabled && !s.paused).then_some(())?;
     Some(Grant {
         delegation_id: s.delegation_id?,
         generation: s.generation,
@@ -88,25 +93,43 @@ pub fn actor_is_current(db: &Db, project_id: &str, actor: &str) -> bool {
     current(db, project_id).is_some_and(|grant| grant.actor() == actor)
 }
 
-fn set(db: &Db, project_id: &str, enabled: bool) -> Result<DelegationStatus, DelegationError> {
+fn set(
+    db: &Db,
+    project_id: &str,
+    enabled: bool,
+    paused: bool,
+) -> Result<DelegationStatus, DelegationError> {
     let started = std::time::Instant::now();
     // The switch and its trace record land together: a grant without its
     // `delegation_changed` fact once could not be explained afterwards.
     let tx = db.conn().unchecked_transaction()?;
-    let previous = status(db, project_id).generation;
-    let id = format!("d{:x}{:x}", previous + 1, nanos());
+    let before = status(db, project_id);
+    // Every change (on/off/pause/resume) moves the generation, so a decision
+    // prepared before it can never commit. Turning on mints a fresh grant id;
+    // pause/resume keep the grant the owner explained once.
+    let id = match (&before.delegation_id, enabled && before.enabled) {
+        (Some(id), true) => id.clone(),
+        _ => format!("d{:x}{:x}", before.generation + 1, nanos()),
+    };
     db.conn().execute(
-        "INSERT INTO project_delegations(project_id, delegation_id, generation, enabled)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO project_delegations(project_id, delegation_id, generation, enabled, paused)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(project_id) DO UPDATE SET delegation_id=excluded.delegation_id,
-           generation=excluded.generation, enabled=excluded.enabled, changed_at=datetime('now')",
-        rusqlite::params![project_id, id, previous + 1, enabled as i64],
+           generation=excluded.generation, enabled=excluded.enabled, paused=excluded.paused,
+           changed_at=datetime('now')",
+        rusqlite::params![
+            project_id,
+            id,
+            before.generation + 1,
+            enabled as i64,
+            (enabled && paused) as i64
+        ],
     )?;
     let after = status(db, project_id);
     db.append_event(
         project_id,
         crate::trace::EventKind::System,
-        serde_json::json!({"kind":"delegation_changed","enabled":enabled,
+        serde_json::json!({"kind":"delegation_changed","enabled":after.enabled,"paused":after.paused,
             "generation":after.generation,"delegation_id":after.delegation_id,"actor":"owner"}),
         None,
         None,
@@ -120,7 +143,11 @@ fn set(db: &Db, project_id: &str, enabled: bool) -> Result<DelegationStatus, Del
         None,
         None,
         "delegation",
-        if enabled { "enabled" } else { "disabled" },
+        match (after.enabled, after.paused) {
+            (true, false) => "enabled",
+            (true, true) => "paused",
+            _ => "disabled",
+        },
         started,
     );
     Ok(after)
@@ -128,13 +155,25 @@ fn set(db: &Db, project_id: &str, enabled: bool) -> Result<DelegationStatus, Del
 
 /// Owner turns delegation on: a fresh grant and generation.
 pub fn enable(db: &Db, project_id: &str) -> Result<DelegationStatus, DelegationError> {
-    set(db, project_id, true)
+    set(db, project_id, true, false)
 }
 
 /// Owner turns delegation off: the generation moves on, so any decision still
 /// in flight under the old grant fails its commit check.
 pub fn disable(db: &Db, project_id: &str) -> Result<DelegationStatus, DelegationError> {
-    set(db, project_id, false)
+    set(db, project_id, false, false)
+}
+
+/// Owner pauses or resumes an enabled delegation. Paused = no new decisions
+/// and taken-over cards back with the owner; resuming keeps the grant id.
+/// Pausing a disabled delegation is a no-op change that still records state.
+pub fn set_paused(
+    db: &Db,
+    project_id: &str,
+    paused: bool,
+) -> Result<DelegationStatus, DelegationError> {
+    let enabled = status(db, project_id).enabled;
+    set(db, project_id, enabled, paused)
 }
 
 fn nanos() -> u128 {

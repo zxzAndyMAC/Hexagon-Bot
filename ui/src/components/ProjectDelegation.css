@@ -10,3 +10,12 @@
 .delegation-list li { display: flex; gap: 8px; }
 .delegation-unfinished { color: var(--err); }
 .delegation-list code { font-size: 11px; color: var(--text-2); }
+.approval-mode-managed { border-top: 1px solid var(--border); margin: 6px 4px 0; padding-top: 6px; }
+.approval-mode-managed-row { display: flex; align-items: center; gap: 12px; padding: 8px 6px; cursor: pointer; color: var(--text); }
+.managed-confirm-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.managed-confirm-columns h3 { font-size: 13px; font-weight: 500; margin: 0 0 4px; color: var(--text); }
+.managed-confirm-columns ul { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.6; color: var(--text-2); }
+.managed-pill-wrap { position: relative; }
+.managed-pill { color: var(--text-2); border: 1px solid var(--border-strong); background: var(--bg-3); }
+.managed-pill-paused { opacity: .6; }
+.managed-pill-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; width: min(380px, calc(100vw - 48px)); max-height: 60vh; overflow: auto; padding: 12px; display: grid; gap: 8px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--popover); }

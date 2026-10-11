@@ -4336,6 +4336,34 @@ pub fn set_project_delegation(
     Ok(status)
 }
 
+/// 2026-10-11 UI alignment: the owner pauses or resumes delegation (same
+/// project-identity check as the switch). Paused cards return to the owner.
+pub fn set_project_delegation_paused(
+    db: &Db,
+    project_id: &str,
+    root: &Path,
+    expected_root: &str,
+    paused: bool,
+) -> Result<crate::delegation::DelegationStatus, ApiError> {
+    if crate::desktop::actions::verify_project(root, expected_root).is_err() {
+        return Err(ApiError::BadInput("delegation project mismatch".into()));
+    }
+    Ok(crate::delegation::set_paused(db, project_id, paused)?)
+}
+
+/// Test3/06 + 2026-10-11 UI alignment: stop the automatic retries of one
+/// model-request item. A durable flag the retry wait reads (control lane, no
+/// workbench lock); the item stays for an explicit manual retry, and neither
+/// the retry loop, stall rescue nor autonomy may clear it.
+pub fn stop_model_request(db: &Db, project_id: &str, qid: &str) -> Result<(), ApiError> {
+    let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Recovery)?;
+    if card.project_id != project_id || card.payload["sub"] != "model_request" {
+        return Err(ApiError::BadInput("model recovery scope invalid".into()));
+    }
+    crate::cards::annotate(db, qid, &[("stop_requested", serde_json::json!(true))])?;
+    Ok(())
+}
+
 /// Shell keeps its project lock across identity validation and mode persistence.
 /// Review 2026-10-01: all local DBs share PROJECT_ID, so that ID cannot prevent
 /// a queued broad-access click from project A modifying project B after switch.

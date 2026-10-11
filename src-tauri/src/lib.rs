@@ -1269,6 +1269,34 @@ fn project_delegation(
     })
 }
 
+/// 2026-10-11 UI alignment: owner pause/resume of delegation (control lane).
+#[tauri::command]
+fn set_project_delegation_paused(
+    state: ProjectState<'_>,
+    paused: bool,
+    expected_project_root: String,
+) -> Result<hexagon_core::delegation::DelegationStatus, CmdError> {
+    with_project_conn(&state, |db, root| {
+        hexagon_core::api::set_project_delegation_paused(
+            db,
+            PROJECT_ID,
+            root,
+            &expected_project_root,
+            paused,
+        )
+        .map_err(cmd_err)
+    })
+}
+
+/// Ticket 06: stop one item's automatic model retries. Control lane: the
+/// retry may be holding the workbench lock while it waits.
+#[tauri::command]
+fn stop_model_request(state: ProjectState<'_>, question_id: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| {
+        hexagon_core::api::stop_model_request(db, PROJECT_ID, &question_id).map_err(cmd_err)
+    })
+}
+
 /// How many recent delegated decisions the panel shows.
 const MANAGED_HISTORY_ROWS: usize = 20;
 
@@ -3158,6 +3186,8 @@ pub fn run() {
             set_project_delegation,
             managed_history,
             managed_processing,
+            set_project_delegation_paused,
+            stop_model_request,
             revoke_permission_rule,
             list_skills,
             set_skill_muted,

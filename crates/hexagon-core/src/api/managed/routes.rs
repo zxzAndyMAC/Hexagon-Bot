@@ -519,6 +519,9 @@ impl Workbench {
                 forced: Some(match p["state"].as_str() {
                     // The owner's newer instruction is their current intent.
                     Some("needs_choice") => ("follow_new", "owner_newer_instruction"),
+                    // The owner stopped this item's retries: delegation does
+                    // not revive it (ticket 06: no revival by autonomy).
+                    _ if p["stop_requested"] == true => ("end", "owner_stopped_retries"),
                     _ if p["can_retry"] == false => ("end", "retry_not_available"),
                     _ => ("retry", "bounded_model_retry"),
                 }),

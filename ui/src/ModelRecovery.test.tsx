@@ -187,3 +187,20 @@ it('re-runs a failed opening analysis through its own lock-free command', async 
   expect(intake).toHaveBeenCalledTimes(1); expect(retry).not.toHaveBeenCalled()
  } finally { await act(async()=>root.unmount()) }
 })
+it('stops automatic retries even while a retry is in flight, with its own binding', async () => {
+ const stop=vi.spyOn(api,'stopModelRequest').mockResolvedValue(null)
+ const retrying={...payload,state:'retrying',can_retry:false,retry_deadline_ms:Date.now()+60_000}
+ useUiStore.setState({pending:[],team:[],toasts:[],modalScope:'workbench'})
+ const el=document.createElement('div');const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={retrying} top />))
+  const button=el.querySelector<HTMLButtonElement>('[data-stop-retry]')!
+  expect(button.textContent).toBe('Stop retrying')
+  expect(button.disabled).toBe(false)
+  await act(async()=>button.click())
+  expect(stop).toHaveBeenCalledWith('q1')
+  // Ticket 09 / alignment: the chat-model retry never shares the approve key.
+  const keys=await import('./keymap')
+  expect(keys.bindingFor('retryWithChatModel')).not.toBe(keys.bindingFor('approve'))
+ }finally {await act(async()=>root.unmount())}
+})

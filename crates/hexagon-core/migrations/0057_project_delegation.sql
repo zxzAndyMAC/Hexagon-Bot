@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS project_delegations (
   delegation_id TEXT NOT NULL,
   generation INTEGER NOT NULL CHECK (generation >= 1),
   enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  -- Owner pause (2026-10-11 UI alignment): the grant stays, decisions stop
+  -- and taken-over cards return to the owner until resumed.
+  paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
   changed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -355,6 +355,8 @@ export const api = {
   setProjectDelegation: (enabled: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation', { enabled, expectedProjectRoot }),
   managedHistory: () => call<ManagedRecord[]>('managed_history'),
   managedProcessing: () => call<PendingQuestion[]>('managed_processing'),
+  setProjectDelegationPaused: (paused: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation_paused', { paused, expectedProjectRoot }),
+  stopModelRequest: (questionId: string) => call<null>('stop_model_request', { questionId }),
   designDirection: () => call<DesignDirection>('design_direction'),
   chooseDesignDirection: (questionId: string, revision: number, optionId?: string | null, existingGuidance?: string | null) => call<DesignDirection>('choose_design_direction', { questionId, revision, optionId: optionId ?? null, existingGuidance: existingGuidance ?? null }),
   desktopPreviewTarget: (expectedProjectRoot: string) => call<NativePreviewTarget | null>('desktop_preview_target', { expectedProjectRoot }),
@@ -1324,9 +1326,13 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'set_approval_mode':
       return { project_id: 'p1', project_root: '/mock', mode: args?.mode } as T
     case 'project_delegation':
-      return { enabled: false, generation: 0, delegation_id: null } as T
+      return { enabled: false, paused: false, generation: 0, delegation_id: null } as T
     case 'set_project_delegation':
-      return { enabled: Boolean(args?.enabled), generation: 1, delegation_id: args?.enabled ? 'mock-grant' : null } as T
+      return { enabled: Boolean(args?.enabled), paused: false, generation: 1, delegation_id: args?.enabled ? 'mock-grant' : null } as T
+    case 'set_project_delegation_paused':
+      return { enabled: true, paused: Boolean(args?.paused), generation: 2, delegation_id: 'mock-grant' } as T
+    case 'stop_model_request':
+      return null as T
     case 'managed_history':
     case 'managed_processing':
       return [] as T

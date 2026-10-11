@@ -539,3 +539,42 @@ fn an_unreadable_card_ends_incomplete_without_blocking_others() {
         .iter()
         .all(|c| c.payload["action_id"] != "missing-action"));
 }
+
+/// 2026-10-11 UI alignment: pausing delegation keeps the grant, stops new
+/// decisions and returns taken-over cards to the owner; resuming takes them
+/// back under the same grant id with a new generation.
+#[test]
+fn pausing_delegation_returns_cards_and_resume_keeps_the_grant() {
+    let (_dir, mut wb, chat) = wb_with(Some("allow"));
+    let qid = ask(&wb, "bash", json!({"cmd":"echo hi"}));
+    let on = crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let plan = wb.managed_plan().unwrap();
+    let paused = crate::delegation::set_paused(&wb.db, crate::PROJECT_ID, true).unwrap();
+    assert!(paused.enabled && paused.paused);
+    assert!(crate::delegation::current(&wb.db, crate::PROJECT_ID).is_none());
+    assert_eq!(
+        owner_pending(&wb.db, crate::PROJECT_ID).unwrap().len(),
+        1,
+        "back with the owner"
+    );
+    assert!(wb.managed_tick().unwrap().is_empty());
+    let late = ManagedDecision {
+        action: "allow".into(),
+        reason: "model_choice".into(),
+        via: "model".into(),
+    };
+    assert!(
+        wb.managed_commit(&plan[0], late).unwrap().is_none(),
+        "pre-pause decision never lands"
+    );
+    let resumed = crate::delegation::set_paused(&wb.db, crate::PROJECT_ID, false).unwrap();
+    assert_eq!(resumed.delegation_id, on.delegation_id, "same grant");
+    assert!(resumed.generation > paused.generation);
+    assert!(owner_pending(&wb.db, crate::PROJECT_ID).unwrap().is_empty());
+    assert_eq!(wb.managed_tick().unwrap()[0].action, "allow");
+    assert_ne!(
+        crate::cards::get(&wb.db, &qid).unwrap().state,
+        crate::cards::CardState::Queued
+    );
+    assert_eq!(chat.unwrap().recorded().len(), 1);
+}

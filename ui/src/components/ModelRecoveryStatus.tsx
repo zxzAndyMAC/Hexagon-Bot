@@ -59,12 +59,20 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const shortcut = top && canRetry ? formatBinding(bindingFor('approve')) : ''
   const chatOffer = canRetry ? recovery.chat_model_slot : null
   const retryWithChat = () => run(() => api.retryModelRequestWithChatModel(id, recovery.project_root))
+  // Ticket 06: stop this item's automatic retries (control lane; the item
+  // stays for an explicit retry and nothing else revives it).
+  // Not through `run`: the retry it would stop holds the in-flight guard.
+  const stop = () => api.stopModelRequest(id)
+    .catch(error => useUiStore.getState().pushToast(t('errors.actionFailed', { detail: errText(error) }), 'err'))
   const choose = (followNew: boolean) => run(() => api.resolveModelRequestChoice(id, followNew, recovery.project_root))
   // ADR 0051: the explicit choice has its own bindings on the top item only.
   useEffect(() => {
-    if (!top || (!choosing && !chatOffer)) return
+    if (!top || (!choosing && !chatOffer && state !== 'retrying')) return
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat || e.defaultPrevented) return
+      if (state === 'retrying' && matches(e, bindingFor('modelRecoveryStop'))) {
+        e.preventDefault(); void stop(); return
+      }
       if (chatOffer && matches(e, bindingFor('retryWithChatModel'))) {
         e.preventDefault(); void retryWithChat(); return
       }
@@ -99,6 +107,9 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
         {failure.http_status != null && ` · HTTP ${failure.http_status}`} · {failure.message}
       </div>)}
     </details>
+    {state === 'retrying' && <button type="button" className="btn" data-stop-retry
+      title={[t('modelRecovery.stopHint'), top ? formatBinding(bindingFor('modelRecoveryStop')) : ''].filter(Boolean).join(' · ')}
+      onClick={() => { void stop() }}>{t('modelRecovery.stop')}</button>}
     {canRetry && <button type="button" className="btn primary" disabled={busy}
       title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void run(() => intake ? api.runOpeningIntake() : api.retryModelRequest(id, recovery.project_root)) }}>
       {busy ? t('modelRecovery.retrying') : label}{shortcut && ` ${shortcut}`}
