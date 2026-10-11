@@ -239,6 +239,7 @@ fn choose_inner(
     revision: i64,
     option_id: Option<&str>,
     existing_guidance: Option<&str>,
+    by: &str,
 ) -> Result<DesignDirection, ToolError> {
     let started = std::time::Instant::now();
     let tx = db.conn().unchecked_transaction()?;
@@ -264,7 +265,7 @@ fn choose_inner(
         }
     };
     db.conn().execute("UPDATE design_directions SET state=?1,selected_option=?2,existing_guidance=?3,selected_at=datetime('now') WHERE project_id=?4 AND revision=?5 AND state='pending'",rusqlite::params![state,option_id,existing_guidance,project,revision])?;
-    crate::cards::answer(db, question, "owner")?;
+    crate::cards::answer(db, question, by)?;
     // A frontend role can request the decision and a design role can replace
     // that empty card with mockups. Wake both originators, not only the latest
     // proposer; otherwise the implementer remains asleep after owner selection.
@@ -282,7 +283,7 @@ fn choose_inner(
         db.append_event(
             project,
             EventKind::AgentActivated,
-            json!({"by":"owner_design_choice","revision":revision,"question_id":question}),
+            json!({"by":if by == "owner" { "owner_design_choice".to_string() } else { by.to_string() },"revision":revision,"question_id":question}),
             Some(&agent),
             None,
         )?;
@@ -380,6 +381,28 @@ pub fn choose(
     option_id: Option<&str>,
     existing_guidance: Option<&str>,
 ) -> Result<DesignDirection, ToolError> {
+    choose_by(
+        db,
+        project,
+        question,
+        revision,
+        option_id,
+        existing_guidance,
+        "owner",
+    )
+}
+
+/// Test3/19: a versioned choice by a non-owner decider (project delegation).
+/// The event keeps `by` distinct from the owner's own choice.
+pub fn choose_by(
+    db: &Db,
+    project: &str,
+    question: &str,
+    revision: i64,
+    option_id: Option<&str>,
+    existing_guidance: Option<&str>,
+    by: &str,
+) -> Result<DesignDirection, ToolError> {
     let started = std::time::Instant::now();
     let result = choose_inner(
         db,
@@ -388,6 +411,7 @@ pub fn choose(
         revision,
         option_id,
         existing_guidance,
+        by,
     );
     if result.is_err() {
         crate::diag::note(

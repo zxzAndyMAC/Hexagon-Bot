@@ -488,6 +488,16 @@ pub fn reject_stamp(
     project_id: &str,
     pack: &PackDef,
 ) -> Result<orchestra::StageAction, ReviewError> {
+    reject_stamp_by(db, project_id, pack, "owner")
+}
+
+/// Test3/19: the same reject with a non-owner decider (project delegation).
+pub fn reject_stamp_by(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    by: &str,
+) -> Result<orchestra::StageAction, ReviewError> {
     let (rid, seq, name) = waiting_stamp(db, project_id)?;
     if seq >= 0 && crate::stampgate::is_final_stamp(&stamp_flags(pack), seq as usize) {
         return Err(ReviewError::BadReject(
@@ -501,7 +511,7 @@ pub fn reject_stamp(
     db.append_event(
         project_id,
         EventKind::StampRejected,
-        json!({"stage": name, "seq": seq}),
+        json!({"stage": name, "seq": seq, "by": by}),
         None,
         Some(&rid),
     )?;
@@ -521,6 +531,18 @@ pub fn reject_final(
     pack: &PackDef,
     stage_name: &str,
     note: &str,
+) -> Result<orchestra::StageAction, ReviewError> {
+    reject_final_by(db, project_id, pack, stage_name, note, "owner")
+}
+
+/// Test3/19: the same named-stage reject with a non-owner decider.
+pub fn reject_final_by(
+    db: &Db,
+    project_id: &str,
+    pack: &PackDef,
+    stage_name: &str,
+    note: &str,
+    by: &str,
 ) -> Result<orchestra::StageAction, ReviewError> {
     let stage_name = stage_name.trim();
     let note = note.trim();
@@ -551,7 +573,7 @@ pub fn reject_final(
         crate::cards::CardKind::Stamp,
         "run_id",
         &rid,
-        "owner",
+        by,
     )?;
     db.append_event(
         project_id,
@@ -562,7 +584,7 @@ pub fn reject_final(
             "to_stage": stage_name,
             "to_seq": to_seq,
             "note": note,
-            "by": "owner",
+            "by": by,
         }),
         None,
         Some(&rid),

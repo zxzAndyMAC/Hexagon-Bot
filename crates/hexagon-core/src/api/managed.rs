@@ -132,6 +132,20 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
             p["activation_root_turn_id"], p["trigger_turn_id"]
         )),
         ("stall", _) => Some(format!("stall:{}", card.id)),
+        // Proposal confirmations share kind=stamp; ticket 20 routes them.
+        ("stamp", _) if !p["proposal_id"].is_null() => None,
+        // One budget per stage across reworked runs and new cards.
+        ("stamp", None) => p["stage"].as_str().map(|s| format!("stage:{s}")),
+        ("stamp", Some("quality_revalidation")) => {
+            p["run_id"].as_str().map(|r| format!("revalidation:{r}"))
+        }
+        ("stamp", Some("acceptance_exception")) => Some(format!("exception:{}", card.id)),
+        ("escalation", Some("design_direction")) => Some(format!("design:{}", p["revision"])),
+        ("escalation", Some("context_overflow")) => {
+            Some(format!("context:{}", p["trigger_turn_id"]))
+        }
+        // Back-and-forth bounces on one artifact share one budget.
+        ("escalation", _) => Some(format!("flag:{}", p["target"].as_str().unwrap_or(&card.id))),
         _ => None,
     }
 }
@@ -192,17 +206,24 @@ pub(crate) fn parse_choice(text: &str, options: &[(String, String)]) -> Option<S
 /// One card type's closed set (token, meaning), host-decided action and
 /// fixed automatic terminal action.
 struct Route {
-    options: Vec<(&'static str, &'static str)>,
+    options: Vec<(String, String)>,
     state: String,
     forced: Option<(&'static str, &'static str)>,
     fallback: &'static str,
+}
+
+fn opts(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
 }
 
 fn permission_route(p: &serde_json::Value) -> Route {
     let tool = p["tool"].as_str().unwrap_or_default();
     let input = serde_json::to_string(&p["raw_input"]).unwrap_or_default();
     Route {
-        options: vec![("allow", "run the action as requested"), ("deny", "refuse the action")],
+        options: opts(&[("allow", "run the action as requested"), ("deny", "refuse the action")]),
         state: format!(
             "You act for the project owner under project delegation. Decide one pending permission.\n\
              Tool: {tool}\nInput: {}\nWhy it needs approval: {}\nSafety-net action: {}\n\
@@ -247,10 +268,10 @@ pub(crate) fn unknown_forced(facts: &UnknownFacts) -> Option<(&'static str, &'st
 
 fn unknown_route(tool: &str, facts: &UnknownFacts) -> Route {
     Route {
-        options: vec![
+        options: opts(&[
             ("abandon", "accept the unknown outcome and continue without it"),
             ("new_attempt", "run the action once more, accepting a possible duplicate"),
-        ],
+        ]),
         state: format!(
             "You act for the project owner under project delegation. A tool action's outcome is unknown \
              (it may or may not have happened). Tool: {tool}.\n\
@@ -265,10 +286,10 @@ fn unknown_route(tool: &str, facts: &UnknownFacts) -> Route {
 fn stall_route(p: &serde_json::Value) -> Route {
     let retry = p["retry"] == true;
     Route {
-        options: vec![
+        options: opts(&[
             ("retry", "wake the role or project manager once more"),
             ("end", "end this stall"),
-        ],
+        ]),
         state: format!(
             "You act for the project owner under project delegation. The project stalled ({}). \
              Choose retry to try once more, or end. Answer with exactly one token: retry or end.",
@@ -276,6 +297,94 @@ fn stall_route(p: &serde_json::Value) -> Route {
         ),
         forced: (!retry).then_some(("end", "retry_not_offered")),
         fallback: "end",
+    }
+}
+
+/// Test3/19 (spec Q15/Q18): the host's acceptance rule. Never lowers the
+/// bar — only complete current evidence is accepted; runnable gaps are run;
+/// failures and other gaps go back for rework. Cost model: a false rework
+/// costs one more round (bounded by the stage budget); a false accept ships
+/// an unchecked delivery.
+pub(crate) fn stamp_forced(
+    evidence: Option<&orchestra::StageEvidence>,
+) -> (&'static str, &'static str) {
+    let Some(evidence) = evidence else {
+        return ("incomplete", "no_active_stage");
+    };
+    if evidence.missing.is_empty() {
+        return ("accept", "evidence_complete");
+    }
+    if evidence
+        .checks
+        .iter()
+        .any(|c| c.state == orchestra::CheckState::Failed)
+    {
+        return ("rework", "checks_failed");
+    }
+    let runnable = !evidence.checks.is_empty()
+        && evidence
+            .checks
+            .iter()
+            .all(|c| c.state != orchestra::CheckState::Unavailable);
+    if runnable
+        && evidence.checks.iter().any(|c| {
+            matches!(
+                c.state,
+                orchestra::CheckState::Missing | orchestra::CheckState::Stale
+            )
+        })
+    {
+        return ("run_checks", "checks_missing_or_stale");
+    }
+    ("rework", "requirements_missing")
+}
+
+fn design_route(direction: &crate::design::DesignDirection) -> Route {
+    let listed = direction
+        .options
+        .iter()
+        .map(|o| {
+            format!(
+                "- {}: {} — {} (layout: {}; type: {}; palette: {})",
+                o.id, o.title, o.description, o.layout, o.typography, o.palette
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Route {
+        options: direction
+            .options
+            .iter()
+            .map(|o| (o.id.clone(), o.title.clone()))
+            .collect(),
+        state: format!(
+            "You act for the project owner under project delegation. Choose the visual direction that best fits \
+             the project's stated goals.\n{listed}\nAnswer with exactly one option id."
+        ),
+        forced: direction
+            .options
+            .is_empty()
+            .then_some(("incomplete", "no_versioned_options")),
+        fallback: "incomplete",
+    }
+}
+
+fn flag_route(p: &serde_json::Value) -> Route {
+    Route {
+        options: opts(&[
+            ("agree", "uphold the review: rework the flagged artifact"),
+            ("reject", "overrule the review: continue as is"),
+        ]),
+        state: format!(
+            "You act for the project owner under project delegation. A reviewer flagged an artifact.\n\
+             Target: {}\nReason: {}\nUphold (agree) unless the flag is clearly wrong. \
+             Answer with exactly one token: agree or reject.",
+            p["target"].as_str().unwrap_or_default(),
+            p["reason"].as_str().unwrap_or_default(),
+        ),
+        forced: None,
+        // A failed decision keeps the reviewer's standard, never overrules it.
+        fallback: "agree",
     }
 }
 
@@ -326,11 +435,7 @@ impl Workbench {
             decision_key: key,
             actor: grant.actor(),
             agent_id: card.agent_id.clone().unwrap_or_default(),
-            options: route
-                .options
-                .iter()
-                .map(|(a, b)| (a.to_string(), b.to_string()))
-                .collect(),
+            options: route.options,
             state: route.state,
             forced,
             fallback: route.fallback.into(),
@@ -356,10 +461,10 @@ impl Workbench {
                 let action_id = p["action_id"].as_str().unwrap_or_default();
                 let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
                 Route {
-                    options: vec![
+                    options: opts(&[
                         ("resume", "run the saved, provably unsent action"),
                         ("end", "leave it unexecuted"),
-                    ],
+                    ]),
                     state: String::new(),
                     forced: Some(match unprovable_external(&action.tool) {
                         Some(gap) => ("end", gap),
@@ -369,10 +474,10 @@ impl Workbench {
                 }
             }
             ("recovery", Some("model_request")) => Route {
-                options: vec![
+                options: opts(&[
                     ("retry", "send the failed request again"),
                     ("end", "stop as incomplete"),
-                ],
+                ]),
                 state: String::new(),
                 forced: Some(match p["state"].as_str() {
                     // The owner's newer instruction is their current intent.
@@ -383,15 +488,70 @@ impl Workbench {
                 fallback: "end",
             },
             ("stall", _) if p["source"] == "activation_resume" => Route {
-                options: vec![
+                options: opts(&[
                     ("continue", "continue the original task"),
                     ("end", "end it"),
-                ],
+                ]),
                 state: String::new(),
                 forced: Some(("continue", "continue_original_task")),
                 fallback: "end",
             },
             ("stall", _) => stall_route(p),
+            ("stamp", None) => {
+                let evidence = orchestra::stage_evidence(&self.db, &self.project_id, self.pack()?)?;
+                Route {
+                    options: opts(&[
+                        ("accept", "accept the stage with complete current evidence"),
+                        (
+                            "run_checks",
+                            "run the approved checks for the current version",
+                        ),
+                        ("rework", "send the stage back for rework"),
+                        ("incomplete", "stop: the stage cannot meet its requirements"),
+                    ]),
+                    state: String::new(),
+                    forced: Some(stamp_forced(evidence.as_ref())),
+                    fallback: "incomplete",
+                }
+            }
+            ("stamp", Some("quality_revalidation")) => {
+                let evidence = orchestra::stage_evidence(&self.db, &self.project_id, self.pack()?)?;
+                let forced = match stamp_forced(evidence.as_ref()) {
+                    ("accept", why) => ("confirm", why),
+                    ("run_checks", why) => ("run_checks", why),
+                    (_, why) => ("cancel", why),
+                };
+                Route {
+                    options: opts(&[
+                        ("confirm", "accept current evidence"),
+                        ("cancel", "keep the new checks required"),
+                    ]),
+                    state: String::new(),
+                    forced: Some(forced),
+                    fallback: "cancel",
+                }
+            }
+            // Acceptance never lowers the bar: exception requests are refused.
+            ("stamp", Some("acceptance_exception")) => Route {
+                options: opts(&[("refuse", "refuse the exception request")]),
+                state: String::new(),
+                forced: Some(("refuse", "acceptance_never_lowered")),
+                fallback: "refuse",
+            },
+            ("escalation", Some("design_direction")) => {
+                let direction = crate::design::read(&self.db, &self.project_id)?;
+                design_route(&direction)
+            }
+            ("escalation", Some("context_overflow")) => Route {
+                options: opts(&[
+                    ("resume", "continue the original task"),
+                    ("end", "end the task"),
+                ]),
+                state: String::new(),
+                forced: Some(("resume", "continue_original_task")),
+                fallback: "end",
+            },
+            ("escalation", _) => flag_route(p),
             _ => return Ok(None),
         }))
     }
@@ -553,6 +713,57 @@ impl Workbench {
                 self.retire_model_request_incomplete(&card)?;
                 "incomplete"
             }
+            ("stamp", None, action) => return self.managed_stage(&card, action, &reason),
+            ("stamp", Some("quality_revalidation"), action) => {
+                return self.managed_revalidation(&card, action)
+            }
+            ("stamp", Some("acceptance_exception"), _) => {
+                orchestra::cancel_acceptance_exception_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    &self.decider(),
+                )?;
+                "exception_refused"
+            }
+            ("escalation", Some("design_direction"), "incomplete") => {
+                self.end_card_incomplete(&card)?;
+                "incomplete"
+            }
+            ("escalation", Some("design_direction"), option) => {
+                let revision = p["revision"].as_i64().unwrap_or_default();
+                crate::design::choose_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    revision,
+                    Some(option),
+                    None,
+                    &self.decider(),
+                )?;
+                self.continue_design_direction(revision)?;
+                "direction_chosen_and_continued"
+            }
+            ("escalation", Some("context_overflow"), action) => {
+                self.adjudicate_flag(&card.id, action == "resume")?;
+                if action == "resume" {
+                    "resumed"
+                } else {
+                    "ended"
+                }
+            }
+            ("escalation", _, "agree" | "reject") => {
+                self.adjudicate_flag(&card.id, decision.action == "agree")?;
+                if decision.action == "agree" {
+                    "rework_requested"
+                } else {
+                    "flag_overruled"
+                }
+            }
+            ("escalation", _, _) => {
+                self.end_card_incomplete(&card)?;
+                "incomplete"
+            }
             ("stall", _, "continue" | "retry") => {
                 self.stall_retry(&card.id)?;
                 "continued"
@@ -564,6 +775,121 @@ impl Workbench {
             _ => "unrouted",
         };
         Ok(outcome.into())
+    }
+
+    fn managed_stage(
+        &self,
+        card: &crate::cards::Card,
+        action: &str,
+        reason: &str,
+    ) -> Result<String, ApiError> {
+        let by = self.decider();
+        let pack = self.pack()?;
+        let stage_outcome = |result: orchestra::StageAction| match result {
+            orchestra::StageAction::Incomplete { .. } => "still_incomplete",
+            _ => "accepted",
+        };
+        Ok(match action {
+            "accept" => stage_outcome(orchestra::stamp_by(&self.db, &self.project_id, pack, &by)?),
+            "run_checks" => {
+                orchestra::run_checks(&self.db, &self.project_id, &self.repo_root, pack)?;
+                match stage_outcome(orchestra::stamp_by(&self.db, &self.project_id, pack, &by)?) {
+                    "accepted" => "checks_ran_and_accepted",
+                    _ => "checks_ran_still_incomplete",
+                }
+            }
+            "rework" => {
+                let evidence = orchestra::stage_evidence(&self.db, &self.project_id, pack)?;
+                if card.payload["final_acceptance"] == true {
+                    let stage = evidence
+                        .as_ref()
+                        .and_then(|e| {
+                            e.checks
+                                .iter()
+                                .find(|c| c.state == orchestra::CheckState::Failed)
+                                .map(|c| c.stage.clone())
+                        })
+                        .or_else(|| card.payload["stage"].as_str().map(str::to_string))
+                        .unwrap_or_default();
+                    let note = format!(
+                        "{reason}; unmet: {}",
+                        evidence.map(|e| e.missing.join(", ")).unwrap_or_default()
+                    );
+                    crate::review::reject_final_by(
+                        &self.db,
+                        &self.project_id,
+                        pack,
+                        &stage,
+                        &note,
+                        &by,
+                    )?;
+                } else {
+                    crate::review::reject_stamp_by(&self.db, &self.project_id, pack, &by)?;
+                }
+                "rework_requested"
+            }
+            _ => {
+                self.end_card_incomplete(card)?;
+                "incomplete"
+            }
+        }
+        .into())
+    }
+
+    fn managed_revalidation(
+        &self,
+        card: &crate::cards::Card,
+        action: &str,
+    ) -> Result<String, ApiError> {
+        let by = self.decider();
+        let pack = self.pack()?;
+        let confirm = |db: &Db| -> Result<&'static str, ApiError> {
+            let fingerprint = orchestra::stage_evidence(db, &self.project_id, pack)?
+                .and_then(|e| e.fingerprint)
+                .unwrap_or_default();
+            Ok(
+                match orchestra::confirm_quality_revalidation_by(
+                    db,
+                    &self.project_id,
+                    pack,
+                    &card.id,
+                    &fingerprint,
+                    &by,
+                )? {
+                    orchestra::StageAction::PackFinished => "revalidated",
+                    _ => "still_incomplete",
+                },
+            )
+        };
+        Ok(match action {
+            "confirm" => confirm(&self.db)?,
+            "run_checks" => {
+                orchestra::run_checks(&self.db, &self.project_id, &self.repo_root, pack)?;
+                confirm(&self.db)?
+            }
+            _ => {
+                orchestra::cancel_quality_revalidation_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    &by,
+                )?;
+                "kept_checks_required"
+            }
+        }
+        .into())
+    }
+
+    /// The type's terminal "incomplete": the card is answered by the grant
+    /// actor and marked, the target stays unaccepted. Visible in the panel.
+    fn end_card_incomplete(&self, card: &crate::cards::Card) -> Result<(), ApiError> {
+        crate::cards::annotate(
+            &self.db,
+            &card.id,
+            &[("managed_outcome", json!("incomplete"))],
+        )?;
+        crate::cards::answer(&self.db, &card.id, &self.decider())?;
+        Ok(())
     }
 
     fn managed_permission(
@@ -703,6 +1029,10 @@ pub(crate) fn managed_decide_on(
 mod managed_tests;
 
 #[cfg(test)]
+#[path = "managed_acceptance_tests.rs"]
+mod managed_acceptance_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
@@ -746,7 +1076,42 @@ mod tests {
         }
     }
 
+    fn check_state() -> impl Strategy<Value = orchestra::CheckState> {
+        prop_oneof![
+            Just(orchestra::CheckState::Missing),
+            Just(orchestra::CheckState::Passed),
+            Just(orchestra::CheckState::Failed),
+            Just(orchestra::CheckState::Stale),
+            Just(orchestra::CheckState::Unavailable),
+        ]
+    }
+
     proptest! {
+        // Test3/19: acceptance never lowers the bar — "accept" iff nothing is
+        // missing; a failed check is never "re-run until lucky", it is rework.
+        #[test]
+        fn delegated_acceptance_takes_only_complete_evidence(
+            states in proptest::collection::vec(check_state(), 0..5),
+            other_missing in any::<bool>(),
+        ) {
+            let checks: Vec<orchestra::CheckEvidence> = states.iter().map(|state| orchestra::CheckEvidence {
+                run_id: "r".into(), stage: "s".into(), cmd: "c".into(), event_id: None,
+                exit_code: None, state: state.clone(), quality: None,
+            }).collect();
+            let mut missing: Vec<String> = states.iter()
+                .filter(|s| **s != orchestra::CheckState::Passed)
+                .map(|_| "check".to_string()).collect();
+            if other_missing { missing.push("review".into()); }
+            let evidence = orchestra::StageEvidence {
+                run_id: "r".into(), fingerprint: None, checks, exceptions: vec![], missing: missing.clone(),
+            };
+            let (action, _) = stamp_forced(Some(&evidence));
+            prop_assert_eq!(action == "accept", missing.is_empty());
+            if states.contains(&orchestra::CheckState::Failed) {
+                prop_assert_eq!(action, "rework");
+            }
+        }
+
         // Test3/18: a fresh new attempt is only ever the model's choice for an
         // unresolved, non-linked, provable action; the host itself only
         // continues an existing attempt, never starts a second one.

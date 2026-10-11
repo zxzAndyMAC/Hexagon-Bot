@@ -253,12 +253,21 @@ pub fn cancel_quality_revalidation(
     project: &str,
     question: &str,
 ) -> Result<(), OrchError> {
+    cancel_quality_revalidation_by(db, project, question, "owner")
+}
+
+pub fn cancel_quality_revalidation_by(
+    db: &Db,
+    project: &str,
+    question: &str,
+    by: &str,
+) -> Result<(), OrchError> {
     let started = std::time::Instant::now();
     let run = crate::cards::get(db, question)
         .ok()
         .filter(|card| card.project_id == project)
         .and_then(|card| card.payload["run_id"].as_str().map(str::to_owned));
-    let result = cancel_revalidation_inner(db, project, question);
+    let result = cancel_revalidation_inner(db, project, question, by);
     crate::diag::note(
         if result.is_ok() {
             crate::diag::CLASS_JUDGE
@@ -281,7 +290,12 @@ pub fn cancel_quality_revalidation(
     result
 }
 
-fn cancel_revalidation_inner(db: &Db, project: &str, question: &str) -> Result<(), OrchError> {
+fn cancel_revalidation_inner(
+    db: &Db,
+    project: &str,
+    question: &str,
+    by: &str,
+) -> Result<(), OrchError> {
     let _lease = write_boundary(db, project)?;
     let tx = db.conn().unchecked_transaction()?;
     let card = crate::cards::get(db, question)?;
@@ -295,11 +309,11 @@ fn cancel_revalidation_inner(db: &Db, project: &str, question: &str) -> Result<(
         return Ok(());
     }
     crate::cards::get_queued(db, question, crate::cards::CardKind::Stamp)?;
-    crate::cards::answer(db, question, "owner")?;
+    crate::cards::answer(db, question, by)?;
     db.append_event(
         project,
         EventKind::PermissionDenied,
-        json!({"kind":"quality_revalidation","question_id":question,"by":"owner"}),
+        json!({"kind":"quality_revalidation","question_id":question,"by":by}),
         None,
         card.payload["run_id"].as_str(),
     )?;
