@@ -147,7 +147,7 @@ impl Workbench {
         self.turn_provider(aid)?;
         // Missing configuration keeps the card queued and does not consume the
         // ordinary stall episode retry. Only admitted execution closes this card.
-        crate::cards::answer(&self.db, &card.id, "owner")?;
+        crate::cards::answer(&self.db, &card.id, &self.decider())?;
         self.run_activation_continuation(aid, run, &resume)?;
         Ok(StallTick::Retriggered {
             agent_id: aid.to_string(),

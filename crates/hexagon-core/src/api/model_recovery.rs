@@ -376,7 +376,7 @@ impl Workbench {
                 ("retry_deadline_ms", Value::Null),
             ],
         )?;
-        crate::cards::answer(&self.db, qid, "owner")?;
+        crate::cards::answer(&self.db, qid, &self.decider())?;
         self.publish_recovery_view(qid, agent_id, run_id, "model_request_recovered")?;
         tx.commit()?;
         Ok(())

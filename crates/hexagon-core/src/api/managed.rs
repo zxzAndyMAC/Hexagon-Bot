@@ -110,11 +110,39 @@ pub(crate) fn unprovable_external(tool: &str) -> Option<&'static str> {
     }
 }
 
-/// Card kinds the processor takes over while delegation is on. The owner's
-/// pending view hides exactly these, so a taken-over card never counts as
-/// waiting for a human; turning delegation off returns them unchanged.
-pub(crate) fn takes_over(kind: &str) -> bool {
-    kind == "permission"
+/// The stable business key a card's decisions are budgeted under, if the
+/// processor takes this card over. Same key across new card ids, restarts and
+/// off/on, so three rounds stay three rounds (spec: 同一业务决定最多三轮).
+pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
+    let p = &card.payload;
+    let action = || p["action_id"].as_str().map(str::to_string);
+    match (card.kind.as_str(), p["sub"].as_str()) {
+        ("permission", _) => Some(format!(
+            "permission:{}",
+            action().unwrap_or_else(|| card.id.clone())
+        )),
+        ("recovery", Some("tool_outcome_unknown")) => action().map(|a| format!("unknown:{a}")),
+        ("recovery", Some("tool_action_ready")) => action().map(|a| format!("ready:{a}")),
+        // An in-flight retry is the processor's own work, not a new decision.
+        ("recovery", Some("model_request")) if p["state"] != "retrying" => {
+            Some(format!("model_request:{}", card.id))
+        }
+        ("stall", _) if p["source"] == "activation_resume" => Some(format!(
+            "resume:{}:{}",
+            p["activation_root_turn_id"], p["trigger_turn_id"]
+        )),
+        ("stall", _) => Some(format!("stall:{}", card.id)),
+        _ => None,
+    }
+}
+
+/// Taken over = routed and still inside its budget plus the one forced
+/// fallback round. A card whose fallback also failed returns to the owner:
+/// a host defect must stay visible rather than be hidden forever.
+pub(crate) fn takes_over(db: &Db, project_id: &str, card: &crate::cards::QueuedCard) -> bool {
+    decision_key(card).is_some_and(|key| {
+        crate::delegation::rounds(db, project_id, &key) <= crate::delegation::MAX_ROUNDS
+    })
 }
 
 /// The owner's pending read: while delegation is on, cards the processor
@@ -126,7 +154,7 @@ pub fn owner_pending(db: &Db, project_id: &str) -> Result<Vec<crate::cards::Queu
     }
     Ok(cards
         .into_iter()
-        .filter(|card| !takes_over(&card.kind))
+        .filter(|card| !takes_over(db, project_id, card))
         .collect())
 }
 
@@ -140,7 +168,7 @@ pub fn managed_processing(
     }
     Ok(crate::cards::queued(db, project_id)?
         .into_iter()
-        .filter(|card| takes_over(&card.kind))
+        .filter(|card| takes_over(db, project_id, card))
         .collect())
 }
 
@@ -159,6 +187,96 @@ pub(crate) fn parse_choice(text: &str, options: &[(String, String)]) -> Option<S
         .iter()
         .find(|(token, _)| token == first)
         .map(|(token, _)| token.clone())
+}
+
+/// One card type's closed set (token, meaning), host-decided action and
+/// fixed automatic terminal action.
+struct Route {
+    options: Vec<(&'static str, &'static str)>,
+    state: String,
+    forced: Option<(&'static str, &'static str)>,
+    fallback: &'static str,
+}
+
+fn permission_route(p: &serde_json::Value) -> Route {
+    let tool = p["tool"].as_str().unwrap_or_default();
+    let input = serde_json::to_string(&p["raw_input"]).unwrap_or_default();
+    Route {
+        options: vec![("allow", "run the action as requested"), ("deny", "refuse the action")],
+        state: format!(
+            "You act for the project owner under project delegation. Decide one pending permission.\n\
+             Tool: {tool}\nInput: {}\nWhy it needs approval: {}\nSafety-net action: {}\n\
+             Allow it only if it is needed for the project task and does not delete files outside the project, \
+             manage accounts, pay, or publish to a new target. Answer with exactly one token: allow or deny.",
+            input.chars().take(2000).collect::<String>(),
+            p["reason"].as_str().unwrap_or_default(),
+            p["safety_net"] == true,
+        ),
+        forced: unprovable_external(tool).map(|gap| ("deny", gap)),
+        fallback: "deny",
+    }
+}
+
+/// Facts that decide what the processor may do with an unknown action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnknownFacts {
+    /// This action is itself the one linked new attempt of another.
+    pub linked_attempt: bool,
+    /// An existing resolution of this action, if any.
+    pub resolution: Option<String>,
+    /// The tool cannot prove it will not delete external content.
+    pub external_gap: Option<&'static str>,
+}
+
+/// Spec 托管 Q14/Q18: abandon or at most one linked new attempt; the old
+/// unknown stays. Cost model: a false "abandon" leaves the task to continue
+/// without that effect (visible); a false "new attempt" may repeat a real
+/// external effect, so a second attempt and unprovable entries are refused.
+pub(crate) fn unknown_forced(facts: &UnknownFacts) -> Option<(&'static str, &'static str)> {
+    match facts.resolution.as_deref() {
+        // Continue the one existing attempt idempotently, never a second.
+        Some("new_attempt") => return Some(("new_attempt", "linked_attempt_in_flight")),
+        Some(_) => return Some(("abandon", "already_abandoned")),
+        None => {}
+    }
+    if facts.linked_attempt {
+        return Some(("abandon", "new_attempt_already_used"));
+    }
+    facts.external_gap.map(|gap| ("abandon", gap))
+}
+
+fn unknown_route(tool: &str, facts: &UnknownFacts) -> Route {
+    Route {
+        options: vec![
+            ("abandon", "accept the unknown outcome and continue without it"),
+            ("new_attempt", "run the action once more, accepting a possible duplicate"),
+        ],
+        state: format!(
+            "You act for the project owner under project delegation. A tool action's outcome is unknown \
+             (it may or may not have happened). Tool: {tool}.\n\
+             Choose new_attempt only if repeating it is harmless or clearly needed; otherwise abandon. \
+             Answer with exactly one token: abandon or new_attempt."
+        ),
+        forced: unknown_forced(facts),
+        fallback: "abandon",
+    }
+}
+
+fn stall_route(p: &serde_json::Value) -> Route {
+    let retry = p["retry"] == true;
+    Route {
+        options: vec![
+            ("retry", "wake the role or project manager once more"),
+            ("end", "end this stall"),
+        ],
+        state: format!(
+            "You act for the project owner under project delegation. The project stalled ({}). \
+             Choose retry to try once more, or end. Answer with exactly one token: retry or end.",
+            p["branch"].as_str().unwrap_or("unknown")
+        ),
+        forced: (!retry).then_some(("end", "retry_not_offered")),
+        fallback: "end",
+    }
 }
 
 impl Workbench {
@@ -186,44 +304,95 @@ impl Workbench {
         card: &crate::cards::QueuedCard,
         grant: &crate::delegation::Grant,
     ) -> Result<Option<ManagedCandidate>, ApiError> {
-        if !takes_over(&card.kind) {
-            // Tickets 18–23 route the remaining kinds through this processor.
+        if !takes_over(&self.db, &self.project_id, card) {
             return Ok(None);
         }
-        let p = &card.payload;
-        let tool = p["tool"].as_str().unwrap_or_default().to_string();
-        let key = format!("permission:{}", p["action_id"].as_str().unwrap_or(&card.id));
-        let mut forced = None;
-        if crate::delegation::rounds(&self.db, &self.project_id, &key)
-            >= crate::delegation::MAX_ROUNDS
-        {
-            forced = Some(("deny".to_string(), "budget_exhausted".to_string()));
-        } else if let Some(gap) = unprovable_external(&tool) {
-            forced = Some(("deny".to_string(), gap.to_string()));
-        }
-        let input = serde_json::to_string(&p["raw_input"]).unwrap_or_default();
-        let state = format!(
-            "You act for the project owner under project delegation. Decide one pending permission.\n\
-             Tool: {tool}\nInput: {}\nWhy it needs approval: {}\nSafety-net action: {}\n\
-             Allow it only if it is needed for the project task and does not delete files outside the project, \
-             manage accounts, pay, or publish to a new target. Answer with exactly one token: allow or deny.",
-            input.chars().take(2000).collect::<String>(),
-            p["reason"].as_str().unwrap_or_default(),
-            p["safety_net"] == true,
-        );
+        let Some(key) = decision_key(card) else {
+            return Ok(None);
+        };
+        let Some(route) = self.route_for(card)? else {
+            return Ok(None);
+        };
+        let exhausted = crate::delegation::rounds(&self.db, &self.project_id, &key)
+            >= crate::delegation::MAX_ROUNDS;
+        let forced = if exhausted {
+            Some((route.fallback.to_string(), "budget_exhausted".to_string()))
+        } else {
+            route.forced.map(|(a, r)| (a.to_string(), r.to_string()))
+        };
         Ok(Some(ManagedCandidate {
             card_id: card.id.clone(),
             kind: card.kind.clone(),
             decision_key: key,
             actor: grant.actor(),
             agent_id: card.agent_id.clone().unwrap_or_default(),
-            options: vec![
-                ("allow".into(), "run the action as requested".into()),
-                ("deny".into(), "refuse the action".into()),
-            ],
-            state,
+            options: route
+                .options
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            state: route.state,
             forced,
-            fallback: "deny".into(),
+            fallback: route.fallback.into(),
+        }))
+    }
+
+    /// The closed set, host-decided action and fallback for one card.
+    fn route_for(&self, card: &crate::cards::QueuedCard) -> Result<Option<Route>, ApiError> {
+        let p = &card.payload;
+        Ok(Some(match (card.kind.as_str(), p["sub"].as_str()) {
+            ("permission", _) => permission_route(p),
+            ("recovery", Some("tool_outcome_unknown")) => {
+                let action_id = p["action_id"].as_str().unwrap_or_default();
+                let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
+                let facts = UnknownFacts {
+                    linked_attempt: crate::actions::linked_origin(&self.db, action_id)?.is_some(),
+                    resolution: crate::actions::resolution(&self.db, action_id)?.map(|r| r.0),
+                    external_gap: unprovable_external(&action.tool),
+                };
+                unknown_route(&action.tool, &facts)
+            }
+            ("recovery", Some("tool_action_ready")) => {
+                let action_id = p["action_id"].as_str().unwrap_or_default();
+                let action = crate::actions::get(&self.db, &self.project_id, action_id)?;
+                Route {
+                    options: vec![
+                        ("resume", "run the saved, provably unsent action"),
+                        ("end", "leave it unexecuted"),
+                    ],
+                    state: String::new(),
+                    forced: Some(match unprovable_external(&action.tool) {
+                        Some(gap) => ("end", gap),
+                        None => ("resume", "host_proves_not_executed"),
+                    }),
+                    fallback: "end",
+                }
+            }
+            ("recovery", Some("model_request")) => Route {
+                options: vec![
+                    ("retry", "send the failed request again"),
+                    ("end", "stop as incomplete"),
+                ],
+                state: String::new(),
+                forced: Some(match p["state"].as_str() {
+                    // The owner's newer instruction is their current intent.
+                    Some("needs_choice") => ("follow_new", "owner_newer_instruction"),
+                    _ if p["can_retry"] == false => ("end", "retry_not_available"),
+                    _ => ("retry", "bounded_model_retry"),
+                }),
+                fallback: "end",
+            },
+            ("stall", _) if p["source"] == "activation_resume" => Route {
+                options: vec![
+                    ("continue", "continue the original task"),
+                    ("end", "end it"),
+                ],
+                state: String::new(),
+                forced: Some(("continue", "continue_original_task")),
+                fallback: "end",
+            },
+            ("stall", _) => stall_route(p),
+            _ => return Ok(None),
         }))
     }
 
@@ -296,9 +465,10 @@ impl Workbench {
             return Ok(None);
         }
         crate::delegation::spend_round(&self.db, &self.project_id, &candidate.decision_key)?;
-        let result = match candidate.kind.as_str() {
-            "permission" => self.managed_permission(candidate, &decision),
-            _ => Ok("unrouted".to_string()),
+        // Every owner facade below records the grant actor, never `owner`.
+        let result = {
+            let _acting = self.acting_as(&candidate.actor);
+            self.managed_act(candidate, &decision)
         };
         let outcome = match &result {
             Ok(outcome) => outcome.clone(),
@@ -326,6 +496,74 @@ impl Workbench {
             started,
         );
         Ok(Some(decision))
+    }
+
+    /// Act through the card owner's facade. Each branch re-validates its own
+    /// target (action state, permission, activation chain) at execution.
+    fn managed_act(
+        &self,
+        candidate: &ManagedCandidate,
+        decision: &ManagedDecision,
+    ) -> Result<String, ApiError> {
+        let card = crate::cards::get(&self.db, &candidate.card_id)?;
+        let p = &card.payload;
+        let reason = format!("managed: {}", decision.reason);
+        let action_id = || {
+            p["action_id"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| ApiError::BadInput("recovery card without an action".into()))
+        };
+        let outcome = match (
+            card.kind.as_str(),
+            p["sub"].as_str(),
+            decision.action.as_str(),
+        ) {
+            ("permission", _, _) => return self.managed_permission(candidate, decision),
+            ("recovery", Some("tool_outcome_unknown"), "new_attempt") => {
+                match self.retry_tool_action(&action_id()?, &reason, true)? {
+                    crate::tools::CallOutcome::Asked(_) => "new_attempt_awaits_permission",
+                    _ => "new_attempt_dispatched",
+                }
+            }
+            ("recovery", Some("tool_outcome_unknown"), _) => {
+                self.abandon_tool_action(&action_id()?, &reason)?;
+                "abandoned"
+            }
+            ("recovery", Some("tool_action_ready"), "resume") => {
+                self.resume_tool_action(&action_id()?)?;
+                "resumed"
+            }
+            ("recovery", Some("tool_action_ready"), _) => {
+                let id = action_id()?;
+                let action = crate::actions::get(&self.db, &self.project_id, &id)?;
+                let ctx = self.ctx_for(&action.agent_id, action.stage_run_id.clone());
+                crate::actions::fail_authorized(&self.db, &ctx, &id, &reason)?;
+                "ended_unexecuted"
+            }
+            ("recovery", Some("model_request"), "retry") => {
+                self.retry_model_request(&card.id)?;
+                "retried"
+            }
+            ("recovery", Some("model_request"), "follow_new") => {
+                self.resolve_model_request_choice(&card.id, true)?;
+                "followed_newer_instruction"
+            }
+            ("recovery", Some("model_request"), _) => {
+                self.retire_model_request_incomplete(&card)?;
+                "incomplete"
+            }
+            ("stall", _, "continue" | "retry") => {
+                self.stall_retry(&card.id)?;
+                "continued"
+            }
+            ("stall", _, _) => {
+                self.stall_ack(&card.id)?;
+                "ended"
+            }
+            _ => "unrouted",
+        };
+        Ok(outcome.into())
     }
 
     fn managed_permission(
@@ -509,6 +747,27 @@ mod tests {
     }
 
     proptest! {
+        // Test3/18: a fresh new attempt is only ever the model's choice for an
+        // unresolved, non-linked, provable action; the host itself only
+        // continues an existing attempt, never starts a second one.
+        #[test]
+        fn the_host_never_starts_a_second_new_attempt(
+            linked in any::<bool>(),
+            resolution in proptest::option::of(prop_oneof![Just("new_attempt"), Just("abandoned")]),
+            gap in any::<bool>(),
+        ) {
+            let facts = UnknownFacts {
+                linked_attempt: linked,
+                resolution: resolution.map(str::to_string),
+                external_gap: gap.then_some("host_shell_cannot_exclude_external_deletion"),
+            };
+            match unknown_forced(&facts) {
+                Some(("new_attempt", _)) => prop_assert_eq!(facts.resolution.as_deref(), Some("new_attempt")),
+                Some(_) => prop_assert!(facts.resolution.is_some() || linked || gap),
+                None => prop_assert!(facts.resolution.is_none() && !linked && !gap),
+            }
+        }
+
         // Any third-party MCP tool, whatever it claims to be, is refused.
         #[test]
         fn every_mcp_tool_is_unprovable(server in "[a-z]{1,8}", tool in "\\PC{0,20}") {

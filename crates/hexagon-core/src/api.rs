@@ -322,6 +322,19 @@ pub struct Workbench {
     /// MR-04: the owner message being routed right now, so a dispatch that
     /// meets an open failed role request can ask the owner instead of running.
     owner_message: Mutex<Option<i64>>,
+    /// Test3/18: who is deciding through the owner facades right now. None =
+    /// the owner. The managed processor sets its grant actor for one commit so
+    /// recovery paths record `managed:<id>:<generation>`, never a fake owner.
+    decider: Mutex<Option<String>>,
+}
+
+/// Restores the owner as decider when a managed commit ends (also on error).
+pub(crate) struct ActingAs<'a>(&'a Mutex<Option<String>>);
+
+impl Drop for ActingAs<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 impl Drop for Workbench {
@@ -447,6 +460,7 @@ impl Workbench {
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
             owner_message: Mutex::new(None),
+            decider: Mutex::new(None),
         };
         // MR-04: reopening restores entries but never sends; an attempt that
         // was in flight at exit becomes `unknown`, never `retrying` or failed.
@@ -598,6 +612,7 @@ impl Workbench {
             stall: Default::default(),
             turn_depth: AtomicUsize::new(0),
             owner_message: Mutex::new(None),
+            decider: Mutex::new(None),
         })
     }
 
@@ -1143,6 +1158,30 @@ impl Workbench {
         }
     }
 
+    /// The actor recorded for a decision made through an owner facade.
+    pub(crate) fn decider(&self) -> String {
+        self.decider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| "owner".into())
+    }
+
+    /// The scoped decider, or `default` when nobody is acting (host paths).
+    pub(crate) fn acting_or(&self, default: &str) -> String {
+        self.decider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| default.into())
+    }
+
+    /// Scope `actor` as the decider until the guard drops.
+    pub(crate) fn acting_as(&self, actor: &str) -> ActingAs<'_> {
+        *self.decider.lock().unwrap_or_else(|e| e.into_inner()) = Some(actor.into());
+        ActingAs(&self.decider)
+    }
+
     pub(crate) fn ctx_for(&self, agent_id: &str, stage_run_id: Option<String>) -> ToolContext {
         ToolContext {
             project_id: self.project_id.clone(),
@@ -1299,6 +1338,7 @@ impl Workbench {
             action_id,
             reason,
             accepts_duplicate,
+            &self.decider(),
         )?;
         let result = self.registry.call_with_seq(
             &self.db,
@@ -1322,8 +1362,20 @@ impl Workbench {
 
     /// Resolve the blocking decision, without rewriting uncertain history.
     pub fn abandon_tool_action(&self, action_id: &str, reason: &str) -> Result<(), ApiError> {
-        crate::actions::abandon(&self.db, &self.project_id, action_id, reason)?;
+        crate::actions::abandon(
+            &self.db,
+            &self.project_id,
+            action_id,
+            reason,
+            &self.decider(),
+        )?;
         self.offer_continue_after_unknown(action_id)?;
+        // Test3/18: abandoning the one linked new attempt also resolves its
+        // origin, whose task waited on that attempt. Before this, the origin
+        // stayed "attempt pending" forever and its task never continued.
+        if let Some(origin) = crate::actions::linked_origin(&self.db, action_id)? {
+            self.offer_continue_after_unknown(&origin)?;
+        }
         Ok(())
     }
 
@@ -3893,7 +3945,7 @@ impl Workbench {
             .and_then(Branch::from_name)
             .ok_or_else(|| ApiError::BadInput("stall card without a branch".into()))?;
         let instruction = p["instruction"].as_str().unwrap_or_default().to_string();
-        crate::cards::answer(&self.db, qid, "owner")?;
+        crate::cards::answer(&self.db, qid, &self.decider())?;
         let started = std::time::Instant::now();
         let fp = crate::stallwatch::fingerprint(&self.db, &self.project_id)?;
         {
@@ -3924,16 +3976,16 @@ impl Workbench {
                     [&aid],
                     |r| r.get(0),
                 )?;
-                self.stall_retrigger(&aid, &role, &instruction, "owner", started)
+                self.stall_retrigger(&aid, &role, &instruction, &self.decider(), started)
             }
-            _ => self.stall_investigate("owner", started),
+            _ => self.stall_investigate(&self.decider(), started),
         }
     }
 
     /// 失速卡「知道了」：这一次失速收场。
     pub fn stall_ack(&self, qid: &str) -> Result<(), ApiError> {
         crate::cards::get_queued(&self.db, qid, crate::cards::CardKind::Stall)?;
-        crate::cards::answer(&self.db, qid, "owner")?;
+        crate::cards::answer(&self.db, qid, &self.decider())?;
         self.stall_close("ack", crate::owner_text::stall_ack_closed())
     }
 
@@ -4528,7 +4580,9 @@ pub fn abandon_tool_action_control(
             "action resolution workspace changed".into(),
         ));
     }
-    Ok(crate::actions::abandon(db, project_id, action_id, reason)?)
+    Ok(crate::actions::abandon(
+        db, project_id, action_id, reason, "owner",
+    )?)
 }
 
 /// Owner Agent Screen preview: current-project read, independent of model turns.

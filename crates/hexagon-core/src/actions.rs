@@ -296,7 +296,7 @@ pub(crate) fn finish(
     Ok(())
 }
 
-fn expose_unknown(
+pub(crate) fn expose_unknown(
     db: &Db,
     ctx: &ToolContext,
     id: &str,
@@ -679,7 +679,13 @@ pub(crate) fn authorize_idempotent_retry(
     Ok(changed == 1)
 }
 
-pub(crate) fn abandon(db: &Db, project: &str, id: &str, reason: &str) -> Result<(), ToolError> {
+pub(crate) fn abandon(
+    db: &Db,
+    project: &str,
+    id: &str,
+    reason: &str,
+    actor: &str,
+) -> Result<(), ToolError> {
     let started = std::time::Instant::now();
     if reason.trim().is_empty() {
         return Err(ToolError::BadInput(
@@ -706,7 +712,7 @@ pub(crate) fn abandon(db: &Db, project: &str, id: &str, reason: &str) -> Result<
             "action already has a linked attempt".into(),
         ));
     }
-    let changed = db.conn().execute("INSERT OR IGNORE INTO action_resolutions(action_id,decision,reason,actor) VALUES (?1,'abandoned',?2,'owner')", [id,reason])?;
+    let changed = db.conn().execute("INSERT OR IGNORE INTO action_resolutions(action_id,decision,reason,actor) VALUES (?1,'abandoned',?2,?3)", [id,reason,actor])?;
     let ctx = ToolContext {
         project_id: project.into(),
         agent_id: action.agent_id,
@@ -714,7 +720,7 @@ pub(crate) fn abandon(db: &Db, project: &str, id: &str, reason: &str) -> Result<
         ..Default::default()
     };
     if changed > 0 {
-        db.append_event(project, EventKind::ToolResult, json!({"action_id":id,"tool":action.tool,"state":"unknown","ok":null,"resolution":"abandoned","actor":"owner","reason":reason}), Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
+        db.append_event(project, EventKind::ToolResult, json!({"action_id":id,"tool":action.tool,"state":"unknown","ok":null,"resolution":"abandoned","actor":actor,"reason":reason}), Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
         clear_ready_card(db, &ctx, id)?;
     }
     tx.commit()?;
@@ -748,6 +754,18 @@ pub(crate) fn resolution(
         .optional()?)
 }
 
+/// Test3/18: the action this one is the linked new attempt of, if any.
+pub(crate) fn linked_origin(db: &Db, id: &str) -> Result<Option<String>, ToolError> {
+    Ok(db
+        .conn()
+        .query_row(
+            "SELECT action_id FROM action_resolutions WHERE next_action_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 pub(crate) fn has_resolution(db: &Db, id: &str) -> Result<bool, ToolError> {
     Ok(db.conn().query_row(
         "SELECT EXISTS(SELECT 1 FROM action_resolutions WHERE action_id=?1)",
@@ -762,6 +780,7 @@ pub(crate) fn new_owner_attempt(
     id: &str,
     reason: &str,
     accepts_duplicate: bool,
+    actor: &str,
 ) -> Result<Action, ToolError> {
     let started = std::time::Instant::now();
     if !accepts_duplicate || reason.trim().is_empty() {
@@ -804,8 +823,8 @@ pub(crate) fn new_owner_attempt(
         &original.input,
         Some(&format!("owner-new-attempt:{id}")),
     )?;
-    db.conn().execute("INSERT INTO action_resolutions(action_id,decision,reason,actor,next_action_id) VALUES (?1,'new_attempt',?2,'owner',?3)", [id,reason,&next.id])?;
-    db.append_event(&ctx.project_id,EventKind::ToolResult,json!({"action_id":id,"tool":original.tool,"state":"unknown","ok":null,"resolution":"new_attempt","actor":"owner","reason":reason,"next_action_id":next.id}),Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
+    db.conn().execute("INSERT INTO action_resolutions(action_id,decision,reason,actor,next_action_id) VALUES (?1,'new_attempt',?2,?4,?3)", [id,reason,&next.id,actor])?;
+    db.append_event(&ctx.project_id,EventKind::ToolResult,json!({"action_id":id,"tool":original.tool,"state":"unknown","ok":null,"resolution":"new_attempt","actor":actor,"reason":reason,"next_action_id":next.id}),Some(&ctx.agent_id),ctx.stage_run_id.as_deref())?;
     // Keep the original recovery card until dispatch succeeds. A crash between
     // linking and sending leaves a durable pending attempt and an owner entry.
     tx.commit()?;

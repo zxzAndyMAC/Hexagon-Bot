@@ -188,7 +188,7 @@ fn patch_missing_target_is_preexecution_failure_not_unknown() {
 /// Test3/13 fixture: a real fs_write whose write fails mid-effect inside a
 /// role turn, leaving one unknown action and its card.
 #[cfg(unix)]
-fn unknown_write_in_a_turn(dir: &std::path::Path) -> (Workbench, String) {
+pub(crate) fn unknown_write_in_a_turn(dir: &std::path::Path) -> (Workbench, String) {
     use std::os::unix::fs::PermissionsExt;
     let path = dir.join("draft.txt");
     std::fs::write(&path, "original draft").unwrap();
@@ -293,8 +293,15 @@ fn abandon_offers_continuation_but_an_unfinished_new_attempt_does_not() {
 
     let dir = tempfile::tempdir().unwrap();
     let (wb, action) = unknown_write_in_a_turn(dir.path());
-    crate::actions::new_owner_attempt(&wb.db, &wb.ctx_for("a0", None), &action, "retry", true)
-        .unwrap();
+    crate::actions::new_owner_attempt(
+        &wb.db,
+        &wb.ctx_for("a0", None),
+        &action,
+        "retry",
+        true,
+        "owner",
+    )
+    .unwrap();
     assert!(
         !wb.offer_continue_after_unknown(&action).unwrap(),
         "pending attempt blocks continuation"

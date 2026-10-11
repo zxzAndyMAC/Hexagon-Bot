@@ -244,3 +244,182 @@ fn the_owner_pause_stops_new_decisions_and_late_commits() {
     );
     assert!(chat.unwrap().recorded().is_empty());
 }
+
+fn resolution_actor(wb: &Workbench, action: &str) -> String {
+    wb.db
+        .conn()
+        .query_row(
+            "SELECT actor FROM action_resolutions WHERE action_id=?1",
+            [action],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+fn queued_where(wb: &Workbench, f: impl Fn(&crate::cards::QueuedCard) -> bool) -> usize {
+    crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .iter()
+        .filter(|c| f(c))
+        .count()
+}
+
+/// Test3/18: the model chooses one linked new attempt for an unknown write.
+/// The attempt runs outside the original activation, so the edit guard
+/// refuses it as an ordinary failure — feedback, not a blocker — and the
+/// original task continues without any owner check.
+#[cfg(unix)]
+#[test]
+fn an_unknown_action_gets_one_new_attempt_and_the_task_continues() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, action) = super::super::tests::unknown_write_in_a_turn(dir.path());
+    let chat = Arc::new(ScriptedProvider::new(vec![
+        text_response("new_attempt"),
+        text_response("will re-read and edit"),
+    ]));
+    wb.register_provider("default", chat.clone());
+    let status = crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let first = wb.managed_tick().unwrap();
+    assert_eq!(first[0].action, "new_attempt", "{first:?}");
+    let actor = format!(
+        "managed:{}:{}",
+        status.delegation_id.unwrap(),
+        status.generation
+    );
+    assert_eq!(resolution_actor(&wb, &action), actor, "never `owner`");
+    let next = crate::actions::resolution(&wb.db, &action)
+        .unwrap()
+        .unwrap()
+        .2
+        .unwrap();
+    assert_eq!(
+        crate::actions::get(&wb.db, crate::PROJECT_ID, &next)
+            .unwrap()
+            .state,
+        "failed"
+    );
+    assert_eq!(
+        queued_where(&wb, |c| c.payload["sub"] == "tool_outcome_unknown"),
+        0
+    );
+    // The continue entry is the processor's next decision, not an owner card.
+    assert!(owner_pending(&wb.db, crate::PROJECT_ID).unwrap().is_empty());
+    let second = wb.managed_tick().unwrap();
+    assert_eq!(second[0].action, "continue", "{second:?}");
+    assert_eq!(second[0].via, "host");
+    assert_eq!(chat.recorded().len(), 2, "one decision + one continuation");
+    assert_eq!(queued_where(&wb, |_| true), 0);
+}
+
+/// Test3/18: the one new attempt is itself unknown. There is never a second
+/// attempt: host rule abandons it, which also resolves the origin, and the
+/// original task continues.
+#[cfg(unix)]
+#[test]
+fn a_new_attempt_that_is_unknown_again_is_abandoned_without_a_second_try() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, action) = super::super::tests::unknown_write_in_a_turn(dir.path());
+    // The same state the product reaches when a dispatched attempt's effect
+    // becomes uncertain: linked pending attempt -> unknown, origin card closed.
+    let ctx = wb.ctx_for("a0", None);
+    let next = crate::actions::new_owner_attempt(&wb.db, &ctx, &action, "retry", true, "owner")
+        .unwrap()
+        .id;
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE tool_actions SET state='unknown' WHERE id=?1",
+            [&next],
+        )
+        .unwrap();
+    crate::actions::expose_unknown(
+        &wb.db,
+        &ctx,
+        &next,
+        "fs_write",
+        None,
+        std::time::Instant::now(),
+    )
+    .unwrap();
+    crate::actions::close_resolved_card(&wb.db, &ctx, &action).unwrap();
+    let chat = Arc::new(ScriptedProvider::new(vec![text_response(
+        "continued without the write",
+    )]));
+    wb.register_provider("default", chat.clone());
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    let first = wb.managed_tick().unwrap();
+    assert_eq!(first[0].action, "abandon", "{first:?}");
+    assert_eq!(first[0].reason, "new_attempt_already_used");
+    assert!(
+        chat.recorded().is_empty(),
+        "the forced abandon asks no model"
+    );
+    // Abandoning the linked attempt resolves the origin: its task continues.
+    let second = wb.managed_tick().unwrap();
+    assert_eq!(second[0].action, "continue", "{second:?}");
+    assert_eq!(chat.recorded().len(), 1);
+    let attempts: i64 = wb
+        .db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM action_resolutions WHERE decision='new_attempt'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(attempts, 1, "never a second new attempt");
+}
+
+/// Test3/18: a saved permission that provably never ran (the project was
+/// paused) is resumed by the host once the pause ends, then the task goes on.
+#[test]
+fn a_ready_action_is_resumed_after_the_pause_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::open_scoped(
+        dir.path(),
+        "managed",
+        &[("a0".into(), "worker".into())],
+        None,
+        false,
+    )
+    .unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![crate::turn::tool_response(
+            vec![("c1", "bash", json!({"cmd":"printf ready > ready.txt"}))],
+        )])),
+    );
+    let TurnOutcome::AwaitingPermission(qid) = wb.run_instance("a0", "write the marker").unwrap()
+    else {
+        panic!("the permission must come from the real task")
+    };
+    orchestra::pause(&wb.db, crate::PROJECT_ID).unwrap();
+    wb.permission_control()
+        .save(&wb.db, &qid, true, None, "activation")
+        .unwrap();
+    assert!(
+        wb.continue_saved_permission(&qid).is_err(),
+        "paused: not executed"
+    );
+    assert_eq!(
+        queued_where(&wb, |c| c.payload["sub"] == "tool_action_ready"),
+        1
+    );
+    crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    assert!(
+        wb.managed_tick().unwrap().is_empty(),
+        "nothing while paused"
+    );
+    assert!(!dir.path().join("ready.txt").exists());
+    orchestra::resume(&wb.db, crate::PROJECT_ID).unwrap();
+    let chat = Arc::new(ScriptedProvider::new(vec![text_response("marker written")]));
+    wb.register_provider("default", chat.clone());
+    let decisions = wb.managed_tick().unwrap();
+    assert_eq!(decisions[0].action, "resume", "{decisions:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("ready.txt")).unwrap(),
+        "ready"
+    );
+    assert_eq!(chat.recorded().len(), 1, "the original task continued once");
+}

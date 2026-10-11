@@ -69,10 +69,21 @@ impl Workbench {
                 ("retry_deadline_ms", Value::Null),
             ],
         )?;
-        crate::cards::answer(&self.db, qid, "host")?;
+        crate::cards::answer(&self.db, qid, &self.acting_or("host"))?;
         self.publish_recovery_view(qid, agent_id, run_id, "model_request_superseded")?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Test3/18: delegation ends an item it could not recover (budget spent,
+    /// retry unavailable) as incomplete; it never sends again.
+    pub(in crate::api) fn retire_model_request_incomplete(
+        &self,
+        card: &crate::cards::Card,
+    ) -> Result<(), ApiError> {
+        let agent = card.agent_id.clone().unwrap_or_default();
+        let run_id = card.payload["view"]["stage_run_id"].as_str();
+        self.retire_recovery(&card.id, &agent, run_id, "managed_incomplete")
     }
 
     /// An owner instruction is about to reach `agent_id` while that role's

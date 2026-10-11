@@ -879,3 +879,42 @@ fn a_spilled_large_checkpoint_still_continues_exactly() {
         request_text(&first.sent()[0])
     );
 }
+
+/// Test3/18: under delegation a failed role request is retried by host rule
+/// within the three-round business budget (each retry keeps the failed
+/// position), then ends as incomplete — never a new request loop, never an
+/// owner card, recorded under the grant actor.
+#[test]
+fn delegation_retries_a_failed_request_within_budget_then_ends_incomplete() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = worker_wb(dir.path());
+    let card = failed_turn(&mut wb);
+    let probe = Arc::new(Faulty::new(vec![
+        Step::Fail(http(401)),
+        Step::Fail(http(401)),
+        Step::Fail(http(401)),
+    ]));
+    wb.register_provider("default", probe.clone());
+    let status = crate::delegation::enable(&wb.db, crate::PROJECT_ID).unwrap();
+    for round in 0..crate::delegation::MAX_ROUNDS {
+        let done = wb.managed_tick().unwrap();
+        assert_eq!(done[0].action, "retry", "round {round}: {done:?}");
+        assert_eq!(done[0].via, "host");
+    }
+    assert_eq!(probe.sent().len(), 3, "one send per round, no extra loop");
+    let last = wb.managed_tick().unwrap();
+    assert_eq!(last[0].action, "end");
+    assert_eq!(last[0].reason, "budget_exhausted");
+    let ended = crate::cards::get(&wb.db, &card.id).unwrap();
+    assert_eq!(ended.state, crate::cards::CardState::Answered);
+    assert_eq!(ended.payload["state"], "superseded");
+    assert_eq!(ended.payload["superseded_reason"], "managed_incomplete");
+    let actor = format!(
+        "managed:{}:{}",
+        status.delegation_id.unwrap(),
+        status.generation
+    );
+    assert_eq!(ended.answered_by.as_deref(), Some(actor.as_str()));
+    assert!(wb.managed_tick().unwrap().is_empty());
+    assert_eq!(probe.sent().len(), 3, "an ended item never sends again");
+}
