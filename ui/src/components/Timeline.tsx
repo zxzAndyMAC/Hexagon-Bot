@@ -1111,7 +1111,7 @@ export function Timeline() {
         </IconButton>
       </div>
       {pinned && (
-        <div className="tl-col" style={{ width: '100%', boxSizing: 'border-box' }}>
+        <div className="tl-col tl-pin" style={{ width: '100%', boxSizing: 'border-box' }}>
           <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />
         </div>
       )}

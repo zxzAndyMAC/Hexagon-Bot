@@ -280,3 +280,6 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl-intake-h b { font-size: 13px; font-weight: 600; }
 .tl-intake-f { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .tl-intake-f .tl-grow { font-size: 12px; color: var(--ink-3); }
+
+/* 钉顶的归来摘要不挤掉时间线：最多占主区一半多一点，超出在卡内滚动 */
+.tl-pin { flex: none; max-height: 55%; overflow-y: auto; overscroll-behavior: contain; }

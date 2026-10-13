@@ -10,7 +10,8 @@ import { api } from '../api'
 import { useUiStore } from '../store'
 import { bindingFor, matches } from '../keymap'
 import { kindTitleKey } from '../decisions'
-import { fmtTime, fmtYuan } from '../usage'
+import i18n from '../i18n'
+import { fmtYuan, parseTime } from '../usage'
 import { fillComposer } from '../composerFill'
 import { ATTENTION_KEYS, attentionRows, awayRange, readSummary, suggestions, type AttentionTone } from '../returnSummaryModel'
 import { Icon, type IconName } from './Icon'
@@ -45,14 +46,20 @@ function useAwayCost(from: string | null): { loading: boolean; mc: number | null
   return { loading: from != null && state.key !== from, mc: state.key === from ? state.mc : null }
 }
 
+/** 区间只写时分（workbench#return「13:40 – 14:02」）；跨日时 Intl 自带日期前缀没有意义，归来摘要只覆盖一次离开。 */
+function hm(iso: string): string {
+  const d = new Date(parseTime(iso))
+  return Number.isNaN(d.getTime()) ? '' : new Intl.DateTimeFormat(i18n.language, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d)
+}
+
 function rangeText(t: (k: string, o?: Record<string, unknown>) => string, item: TimelineItem, items: readonly TimelineItem[]) {
   const r = awayRange(item, items)
-  const to = fmtTime(r.to, false)
+  const to = hm(r.to)
   return {
     from: r.from,
     minutes: r.minutes,
     text: r.from && r.minutes != null
-      ? t('returnSummary.range', { from: fmtTime(r.from, false), to, minutes: r.minutes })
+      ? t('returnSummary.range', { from: hm(r.from), to, minutes: r.minutes })
       : t('returnSummary.rangeUntil', { to }),
   }
 }
