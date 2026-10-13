@@ -317,6 +317,105 @@ fn stop_control(connection: &Option<ControlConn>) -> Result<(), CmdError> {
     Ok(())
 }
 
+const MAIN_WINDOW: &str = "main";
+
+/// What closing the main window means for the host (Wayfinder-07 Addendum A,
+/// owner ruling 2026-10-12). macOS keeps a Dock icon to reopen from, so the
+/// close hides the window and the process stays alive for live-host trigger
+/// wakes. Elsewhere there is no reopen surface without a tray, so the close is
+/// an application exit. Cost model: a false "alive" would run a trigger nobody
+/// can see; a false "exit" only leaves the trigger expired for an explicit
+/// Continue, so anything unsure is treated as exit. Rejected: tray icon on
+/// every platform (new UI surface, out of this batch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowClosePolicy {
+    HideAndPause,
+    ExitProcess,
+}
+
+/// Golden path 2026-10-13: on macOS ⌘Q terminates through NSApplication,
+/// which Tauri reports as `RunEvent::Exit`; `ExitRequested` only follows the
+/// last window being destroyed or `app.exit()`. The exit hook listened to
+/// `ExitRequested` alone, so a real quit never recorded `process_exit`.
+/// Both are handled; the transition is idempotent.
+fn is_process_exit(event: &tauri::RunEvent) -> bool {
+    matches!(
+        event,
+        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+    )
+}
+
+fn window_close_policy(macos: bool) -> WindowClosePolicy {
+    if macos {
+        WindowClosePolicy::HideAndPause
+    } else {
+        WindowClosePolicy::ExitProcess
+    }
+}
+
+/// Native window close is a UI pause boundary; `process_exit` marks the
+/// application stop instead. The durable host state stays paused for the next
+/// open; no generic background service is started.
+fn pause_active_session_for_window_close(state: &AppState, process_exit: bool) {
+    // Golden path 2026-10-13: this used to lock the Workbench, which a running
+    // turn holds, so a close froze the main thread until the turn ended and
+    // the pause never reached the turn. The host pause and the orchestra pause
+    // are written through the control connection (the same intervention lane
+    // as the pause button); the running turn stops at its next pause check.
+    match state.conn.lock() {
+        Ok(control) => {
+            if let Some(control) = control.as_ref() {
+                record_window_close(&control.db, process_exit);
+            }
+        }
+        Err(_) => log::warn!("session pause on window close: control lock poisoned"),
+    }
+    // Owned work is stopped only when no turn holds the Workbench; otherwise
+    // the turn's own pause check stops it. Never wait here.
+    match state.wb.try_lock() {
+        // D01-ok: close boundary stops owned work without waiting for a turn
+        Ok(guard) => {
+            if let Some(wb) = guard.as_ref() {
+                wb.stop_owned_work();
+            }
+        }
+        Err(_) => log::info!("window close: a turn is running; it stops at its pause check"),
+    }
+}
+
+fn record_window_close(db: &hexagon_core::db::Db, process_exit: bool) {
+    match hexagon_core::session_host::current(db, PROJECT_ID) {
+        Ok(Some(session))
+            if matches!(
+                session.status,
+                hexagon_core::session_host::SessionStatus::Running
+                    | hexagon_core::session_host::SessionStatus::WaitingUser
+                    | hexagon_core::session_host::SessionStatus::Reconnecting
+            ) =>
+        {
+            let action = if process_exit {
+                hexagon_core::session_host::Transition::ProcessExit
+            } else {
+                hexagon_core::session_host::Transition::Pause
+            };
+            if let Err(error) =
+                hexagon_core::session_host::transition(db, &session.session_id, action, 0)
+            {
+                log::warn!("session pause on window close: {error}");
+                return;
+            }
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("session pause on window close: {error}");
+            return;
+        }
+    }
+    if let Err(error) = hexagon_core::orchestra::pause(db, PROJECT_ID) {
+        log::warn!("orchestra pause on window close: {error}");
+    }
+}
+
 #[cfg(test)]
 fn replace_control(state: &AppState, next: Option<ControlConn>) -> Result<(), CmdError> {
     let mut connection = state
@@ -352,6 +451,24 @@ fn replace_project(
                     hexagon_core::orchestra::is_paused(&old.db, PROJECT_ID).map_err(cmd_err)?;
                 if !paused {
                     hexagon_core::orchestra::pause(&old.db, PROJECT_ID).map_err(cmd_err)?;
+                }
+                if let Some(session) =
+                    hexagon_core::session_host::current(&old.db, PROJECT_ID).map_err(cmd_err)?
+                {
+                    if matches!(
+                        session.status,
+                        hexagon_core::session_host::SessionStatus::Running
+                            | hexagon_core::session_host::SessionStatus::WaitingUser
+                            | hexagon_core::session_host::SessionStatus::Reconnecting
+                    ) {
+                        hexagon_core::session_host::transition(
+                            &old.db,
+                            &session.session_id,
+                            hexagon_core::session_host::Transition::Pause,
+                            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        )
+                        .map_err(cmd_err)?;
+                    }
                 }
                 Ok::<_, CmdError>((old.generation, paused))
             })
@@ -464,6 +581,366 @@ where
         .ok_or_else(|| CmdError::internal("no project open"))?;
     check_project_state(state, false)?;
     f(wb).map_err(cmd_err)
+}
+
+/// Read-only capability projection for the recovery surface. Adapter health
+/// is deliberately independent from grants; unknown probes stay unknown.
+fn session_capabilities(
+    db: &hexagon_core::db::Db,
+    root: &std::path::Path,
+    session: Option<&hexagon_core::session_host::SessionRecord>,
+) -> Vec<hexagon_core::capabilities::CapabilityStatus> {
+    let binding = format!("project:{}", root.display());
+    let mut out = Vec::new();
+    let runtime_capabilities = session
+        .and_then(|value| value.runtime.as_ref())
+        .map(|runtime| runtime.capabilities.as_slice())
+        .unwrap_or(&[]);
+    let browser = hexagon_core::api::browser_status(root);
+    out.push(hexagon_core::capabilities::browser(
+        "browser",
+        match browser {
+            Ok(Some(value)) => Some(value.connected),
+            Ok(None) => Some(false),
+            Err(_) => None,
+        },
+        None,
+        &binding,
+    ));
+
+    let reconnecting = session.is_some_and(|value| {
+        value.status == hexagon_core::session_host::SessionStatus::Reconnecting
+    });
+    match hexagon_core::api::desktop_status(db, root) {
+        Ok(status) => out.push(hexagon_core::capabilities::computer_use(
+            "computer_use",
+            // Capture preparation is the only component evidence in this read
+            // lane. Native OS permission still needs its own probe.
+            status
+                .capture_preparation
+                .map(|state| state != hexagon_core::desktop::CapturePreparationState::Unavailable),
+            None,
+            Some(status.enabled),
+            status.paused,
+            reconnecting,
+            &binding,
+        )),
+        Err(_) => out.push(hexagon_core::capabilities::computer_use(
+            "computer_use",
+            Some(false),
+            None,
+            None,
+            false,
+            reconnecting,
+            &binding,
+        )),
+    }
+
+    match hexagon_core::provider_admin::list(hexagon_core::credentials::active().as_ref()) {
+        Ok(view) if !view.providers.is_empty() => out.extend(view.providers.into_iter().map(|p| {
+            hexagon_core::capabilities::provider(
+                &p.def.id,
+                Some(p.def.enabled),
+                Some(p.key_set),
+                None,
+                &binding,
+            )
+        })),
+        Ok(_) => out.push(hexagon_core::capabilities::provider(
+            "provider",
+            Some(false),
+            Some(false),
+            None,
+            &binding,
+        )),
+        Err(_) => out.push(hexagon_core::capabilities::provider(
+            "provider", None, None, None, &binding,
+        )),
+    }
+
+    let entries = hexagon_core::mcp::list_mcp_entries(Some(root));
+    if entries.is_empty() {
+        out.push(hexagon_core::capabilities::mcp("mcp", None, None, &binding));
+    } else {
+        out.extend(entries.into_iter().map(|entry| {
+            // Live MCP health is persisted by the owned Workbench beat. Before
+            // the first beat, the control connection intentionally stays unknown.
+            if let Some(observed) = runtime_capabilities.iter().find(|status| {
+                status.kind == hexagon_core::capabilities::CapabilityKind::Mcp
+                    && status.id == entry.name
+            }) {
+                return observed.clone();
+            }
+            let live = entry.disabled.then_some(false);
+            hexagon_core::capabilities::mcp(&entry.name, live, None, &binding)
+        }));
+    }
+    out
+}
+
+/// Pending dock tier, lower is more severe. Mirrors `ui/src/decisions.ts`
+/// SEVERITY and the CONTEXT「待决坞」ruling (2026-10-12): recovery = stall =
+/// publish = worktree = install = grant, then stage stamp, escalation,
+/// permission, proposal stamp. Re-audit 2026-10-13: the earlier ranking
+/// put recovery and stall below permission and mislabelled the summary.
+fn pending_tier(card: &hexagon_core::cards::QueuedCard) -> (u8, &'static str) {
+    match card.kind.as_str() {
+        "recovery" | "stall" | "publish" | "worktree" | "install" | "grant" => (0, "critical"),
+        "stamp"
+            if card
+                .payload
+                .get("proposal_id")
+                .is_some_and(|v| !v.is_null()) =>
+        {
+            (4, "proposal")
+        }
+        "stamp" => (1, "stamp"),
+        "escalation" => (2, "escalation"),
+        "permission" => (3, "permission"),
+        _ => (9, "other"),
+    }
+}
+
+#[tauri::command]
+fn session_summary(
+    state: ProjectState<'_>,
+) -> Result<hexagon_core::session_host::SessionSummary, CmdError> {
+    with_project_conn(&state, |db, root| {
+        let session = hexagon_core::session_host::current(db, PROJECT_ID).map_err(cmd_err)?;
+        // Owner-facing cards only: delegated items are not the owner's
+        // pending work (interaction §托管 / ADR 0089).
+        let cards = hexagon_core::api::owner_pending(db, PROJECT_ID).map_err(cmd_err)?;
+        let highest = cards
+            .iter()
+            .map(pending_tier)
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, name)| name.to_string());
+        let recovery_run_id = cards
+            .iter()
+            .find(|card| card.kind == "recovery")
+            .and_then(|card| card.payload["run_id"].as_str())
+            .map(str::to_owned);
+        let diagnostics = session
+            .as_ref()
+            .map(|value| hexagon_core::diag::records_for_session(PROJECT_ID, &value.session_id, 20))
+            .unwrap_or_default();
+        let triggers = session
+            .as_ref()
+            .map(|value| hexagon_core::session_host::list_triggers(db, &value.session_id))
+            .transpose()
+            .map_err(cmd_err)?
+            .unwrap_or_default();
+        let capabilities = session_capabilities(db, root, session.as_ref());
+        let unknown_worktree = session.as_ref().is_some_and(|value| {
+            value.worktree_intent.as_ref().is_some_and(|intent| {
+                intent.state == hexagon_core::session_host::WorktreeIntentState::Executing
+            })
+        });
+        let next_action = session.as_ref().and_then(|value| match value.status {
+            _ if unknown_worktree => Some("verify_worktree".to_string()),
+            hexagon_core::session_host::SessionStatus::WaitingUser => {
+                Some("review_pending".to_string())
+            }
+            hexagon_core::session_host::SessionStatus::Paused => Some("resume_session".into()),
+            hexagon_core::session_host::SessionStatus::Reconnecting => Some("wait_runtime".into()),
+            // An exhausted budget is terminal for this chain: the next step
+            // is a new instruction (a new task chain), not a reconnect.
+            hexagon_core::session_host::SessionStatus::Failed
+                if value.last_reason_code.as_deref() == Some("reconnect_budget_exhausted") =>
+            {
+                Some("start_new_task".into())
+            }
+            hexagon_core::session_host::SessionStatus::Failed => Some("inspect_failure".into()),
+            _ => None,
+        });
+        Ok::<_, CmdError>(hexagon_core::session_host::summary(
+            session,
+            recovery_run_id,
+            cards.len() as u64,
+            highest,
+            diagnostics,
+            capabilities,
+            triggers,
+            next_action,
+        ))
+    })
+}
+
+#[tauri::command]
+fn capability_statuses(
+    state: ProjectState<'_>,
+) -> Result<Vec<hexagon_core::capabilities::CapabilityStatus>, CmdError> {
+    with_project_conn(&state, |db, root| {
+        let session = hexagon_core::session_host::current(db, PROJECT_ID).map_err(cmd_err)?;
+        Ok::<_, CmdError>(session_capabilities(db, root, session.as_ref()))
+    })
+}
+
+#[tauri::command]
+fn session_diagnostics(
+    state: ProjectState<'_>,
+    limit: Option<u32>,
+) -> Result<Vec<hexagon_core::diag::DiagRecord>, CmdError> {
+    with_project_conn(&state, |db, _| {
+        let session = hexagon_core::session_host::current(db, PROJECT_ID).map_err(cmd_err)?;
+        Ok::<_, CmdError>(
+            session
+                .as_ref()
+                .map(|value| {
+                    hexagon_core::diag::records_for_session(
+                        PROJECT_ID,
+                        &value.session_id,
+                        limit.unwrap_or(20).min(300) as usize,
+                    )
+                })
+                .unwrap_or_default(),
+        )
+    })
+}
+
+// Native QA 2026-10-13: a running turn owns `wb`; keep SessionHost controls
+// off the WebView thread so IPC stays responsive while that turn finishes.
+#[tauri::command(async)]
+fn session_pause(
+    state: ProjectState<'_>,
+) -> Result<hexagon_core::session_host::SessionRecord, CmdError> {
+    let paused = with_project_conn(&state, |db, _| {
+        let session = hexagon_core::session_host::current(db, PROJECT_ID)
+            .map_err(cmd_err)?
+            .ok_or_else(|| hexagon_core::session_host::SessionError::NotFound(PROJECT_ID.into()))
+            .map_err(cmd_err)?;
+        hexagon_core::session_host::transition(
+            db,
+            &session.session_id,
+            hexagon_core::session_host::Transition::Pause,
+            0,
+        )
+        .map_err(cmd_err)
+    })?;
+    // D01-ok: only stop owned work after the host accepted the pause.
+    with_wb(&state, |wb| {
+        hexagon_core::orchestra::pause(&wb.db, PROJECT_ID)?;
+        wb.stop_owned_work();
+        Ok::<_, hexagon_core::api::ApiError>(())
+    })?;
+    Ok(paused)
+}
+
+#[tauri::command(async)]
+fn session_reconnect(
+    state: ProjectState<'_>,
+) -> Result<hexagon_core::session_host::SessionRecord, CmdError> {
+    with_wb(&state, |wb| {
+        let session = hexagon_core::session_host::current(&wb.db, PROJECT_ID)
+            .map_err(cmd_err)?
+            .ok_or_else(|| hexagon_core::session_host::SessionError::NotFound(PROJECT_ID.into()))
+            .map_err(cmd_err)?;
+        let baseline =
+            hexagon_core::git::baseline_branch(&wb.repo_root).unwrap_or_else(|_| "main".into());
+        hexagon_core::session_host::validate_worktree(
+            &wb.db,
+            &session.session_id,
+            &wb.repo_root.to_string_lossy(),
+            &baseline,
+        )
+        .map_err(cmd_err)?;
+        wb.validate_session_worktree().map_err(cmd_err)?;
+        hexagon_core::session_host::reconnect(
+            &wb.db,
+            &session.session_id,
+            &wb.repo_root.to_string_lossy(),
+            &baseline,
+            0,
+        )
+        .map_err(cmd_err)
+    })
+}
+
+#[tauri::command]
+fn session_triggers(
+    state: ProjectState<'_>,
+) -> Result<Vec<hexagon_core::session_host::OneTimeTrigger>, CmdError> {
+    with_project_conn(&state, |db, _| {
+        let session = hexagon_core::session_host::current(db, PROJECT_ID)
+            .map_err(cmd_err)?
+            .ok_or_else(|| hexagon_core::session_host::SessionError::NotFound(PROJECT_ID.into()))
+            .map_err(cmd_err)?;
+        hexagon_core::session_host::list_triggers(db, &session.session_id).map_err(cmd_err)
+    })
+}
+
+/// Turn: explicit owner resume of the paused host. Core owns the binding,
+/// worktree and permission rechecks, lifts the close-time orchestra pause,
+/// and re-enters `run_id` when the pause came from an interrupted run.
+#[tauri::command(async)]
+fn session_resume(
+    state: ProjectState<'_>,
+    run_id: Option<String>,
+) -> Result<hexagon_core::session_host::SessionRecord, CmdError> {
+    let run_id = run_id
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty());
+    with_wb(&state, |wb| wb.resume_session(run_id.as_deref()))
+}
+
+/// Control: schedule one "continue later" for the current session. Only the
+/// idempotence key and fire time cross IPC; core derives the audit fields.
+#[tauri::command(async)]
+fn session_schedule_once(
+    state: ProjectState<'_>,
+    trigger_id: String,
+    fire_at: u64,
+) -> Result<hexagon_core::session_host::OneTimeTrigger, CmdError> {
+    with_wb(&state, |wb| {
+        wb.schedule_session_trigger(&trigger_id, fire_at)
+    })
+}
+
+#[tauri::command(async)]
+fn session_continue_trigger(
+    state: ProjectState<'_>,
+    trigger_id: String,
+) -> Result<hexagon_core::session_host::OneTimeTrigger, CmdError> {
+    with_wb(&state, |wb| {
+        wb.continue_session_trigger_once(&trigger_id)
+            .map_err(cmd_err)
+    })
+}
+
+/// Control: validate and enqueue one `worktree` confirmation card. No
+/// filesystem write happens here (Wayfinder-07 Addendum A).
+#[tauri::command(async)]
+fn session_request_worktree(
+    state: ProjectState<'_>,
+    operation: hexagon_core::session_host::WorktreeOperation,
+    path: Option<String>,
+) -> Result<hexagon_core::api::WorktreeRequest, CmdError> {
+    with_wb(&state, |wb| {
+        wb.request_session_worktree(operation, path.as_deref())
+    })
+}
+
+/// Control: the owner answers a `worktree` card from the pending dock. Core
+/// rechecks the bound facts and owns the git write.
+#[tauri::command(async)]
+fn confirm_worktree(
+    state: ProjectState<'_>,
+    qid: String,
+) -> Result<hexagon_core::session_host::SessionRecord, CmdError> {
+    with_wb(&state, |wb| wb.confirm_session_worktree(&qid))
+}
+
+#[tauri::command(async)]
+fn reject_worktree(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.reject_session_worktree(&qid))
+}
+
+/// Control: read-only settlement of an interrupted worktree intent.
+#[tauri::command(async)]
+fn session_verify_worktree(
+    state: ProjectState<'_>,
+) -> Result<hexagon_core::session_host::SessionRecord, CmdError> {
+    with_wb(&state, |wb| wb.verify_session_worktree())
 }
 
 #[tauri::command]
@@ -1713,7 +2190,7 @@ fn open_stage(
 
 #[tauri::command]
 fn recover_run(state: ProjectState<'_>, run_id: String) -> Result<(), CmdError> {
-    with_wb(&state, |wb| wb.recover_run(&run_id))
+    with_wb(&state, |wb| wb.recover_run(&run_id).map(|_| ()))
 }
 
 // Live acceptance #15: delivery hashing/check execution must not block the window.
@@ -2977,6 +3454,12 @@ fn spawn_stall_watch(app: tauri::AppHandle) {
                 continue;
             };
             if let Some(wb) = g.as_ref() {
+                if let Err(e) = wb.session_runtime_beat() {
+                    log::warn!("session runtime beat: {e}");
+                }
+                if let Err(e) = wb.session_trigger_beat() {
+                    log::warn!("session trigger beat: {e}");
+                }
                 if let Err(e) = wb.stall_tick() {
                     log::warn!("stall tick: {e}");
                 }
@@ -3051,6 +3534,30 @@ pub fn run() {
                 .level(log::LevelFilter::Debug)
                 .build(),
         )
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != MAIN_WINDOW {
+                    return;
+                }
+                let Some(state) = window.try_state::<AppState>() else {
+                    return;
+                };
+                match window_close_policy(cfg!(target_os = "macos")) {
+                    WindowClosePolicy::HideAndPause => {
+                        // Keep the process, beats and SessionHost alive; the
+                        // Dock Reopen handler shows this same window again.
+                        api.prevent_close();
+                        pause_active_session_for_window_close(state.inner(), false);
+                        if let Err(error) = window.hide() {
+                            log::warn!("hide main window on close: {error}");
+                        }
+                    }
+                    WindowClosePolicy::ExitProcess => {
+                        pause_active_session_for_window_close(state.inner(), true);
+                    }
+                }
+            }
+        })
         .setup(|app| {
             // Computer Use has a fixed bundled path. Missing components remain
             // visible as unavailable; startup itself still works without them.
@@ -3138,6 +3645,23 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             project_identity,
+            // SessionHost read lane: control connection only (D01-exempt).
+            session_summary,
+            capability_statuses,
+            session_diagnostics,
+            // SessionHost control lane: durable pause/reconnect only.
+            session_pause,
+            session_reconnect,
+            session_request_worktree,
+            confirm_worktree,
+            reject_worktree,
+            session_verify_worktree,
+            session_schedule_once,
+            // SessionHost read lane for expired/scheduled one-time requests.
+            session_triggers,
+            // SessionHost turn lane: continuation re-enters the Workbench owner.
+            session_continue_trigger,
+            session_resume,
             core_ping,
             sandbox_status,
             design_direction,
@@ -3341,8 +3865,29 @@ pub fn run() {
             remove_recent,
             close_project,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            ref exit if is_process_exit(exit) => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    pause_active_session_for_window_close(state.inner(), true);
+                }
+            }
+            // Dock click after a hide-on-close: show the same window. The UI's
+            // focus handler refreshes the SessionSummary (Wayfinder-07 A).
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                    if let Err(error) = window.show().and_then(|_| window.set_focus()) {
+                        log::warn!("reopen main window: {error}");
+                    }
+                }
+            }
+            _ => {}
+        });
 }
 
 #[tauri::command]
@@ -3530,6 +4075,321 @@ async fn browser_focus(
     .await
     .map_err(|e| CmdError::internal(e.to_string()))?
     .map_err(CmdError::internal)
+}
+
+#[cfg(test)]
+mod session_host_command_tests {
+    use super::*;
+
+    /// Native QA 2026-10-13: Continue held the UI thread behind an active turn.
+    /// Exercise IPC dispatch itself; directly calling the function misses this.
+    #[test]
+    fn session_commands_leave_ipc_dispatch_free_while_a_turn_owns_the_workbench() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        use tauri::test::{mock_builder, mock_context, noop_assets};
+
+        let app = mock_builder()
+            .manage(AppState {
+                wb: Mutex::new(None),
+                conn: Mutex::new(None),
+            })
+            .invoke_handler(tauri::generate_handler![
+                session_schedule_once,
+                session_continue_trigger,
+                session_request_worktree,
+                confirm_worktree,
+                reject_worktree,
+                session_verify_worktree,
+            ])
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let mut blocked = Vec::new();
+        for cmd in [
+            "session_schedule_once",
+            "session_continue_trigger",
+            "session_request_worktree",
+            "confirm_worktree",
+            "reject_worktree",
+            "session_verify_worktree",
+        ] {
+            let state = app.state::<AppState>();
+            let turn = state.wb.lock().unwrap(); // D01-exempt: simulate a running turn
+            let webview = window.as_ref().clone();
+            let (dispatched_tx, dispatched_rx) = mpsc::channel();
+            let (response_tx, response_rx) = mpsc::channel();
+            let dispatch = std::thread::spawn(move || {
+                webview.on_message(
+                    tauri::webview::InvokeRequest {
+                        cmd: cmd.into(),
+                        callback: tauri::ipc::CallbackFn(0),
+                        error: tauri::ipc::CallbackFn(1),
+                        url: if cfg!(windows) {
+                            "http://tauri.localhost"
+                        } else {
+                            "tauri://localhost"
+                        }
+                        .parse()
+                        .unwrap(),
+                        body: tauri::ipc::InvokeBody::Json(serde_json::json!({
+                            "_project": null, "triggerId": "duplicate", "fireAt": 1,
+                            "operation": "create", "path": null, "qid": "q1",
+                        })),
+                        headers: Default::default(),
+                        invoke_key: tauri::test::INVOKE_KEY.into(),
+                    },
+                    Box::new(move |_, _, response, _, _| response_tx.send(response).unwrap()),
+                );
+                dispatched_tx.send(()).unwrap();
+            });
+            if dispatched_rx
+                .recv_timeout(Duration::from_millis(500))
+                .is_err()
+            {
+                blocked.push(cmd);
+            }
+            // Always release the simulated turn, including the failing path.
+            drop(turn);
+            dispatch.join().unwrap();
+            let response = response_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(matches!(response, tauri::ipc::InvokeResponse::Err(_)));
+        }
+        assert!(
+            blocked.is_empty(),
+            "commands blocked IPC dispatch: {blocked:?}"
+        );
+    }
+
+    #[test]
+    fn pending_tiers_follow_the_dock_ruling() {
+        let card = |kind: &str, payload: serde_json::Value| hexagon_core::cards::QueuedCard {
+            id: "q".into(),
+            kind: kind.into(),
+            agent_id: None,
+            payload,
+            state: "queued".into(),
+        };
+        for kind in [
+            "recovery", "stall", "publish", "worktree", "install", "grant",
+        ] {
+            assert_eq!(
+                pending_tier(&card(kind, serde_json::json!({}))),
+                (0, "critical")
+            );
+        }
+        let order = [
+            pending_tier(&card("stamp", serde_json::json!({}))).0,
+            pending_tier(&card("escalation", serde_json::json!({}))).0,
+            pending_tier(&card("permission", serde_json::json!({}))).0,
+            pending_tier(&card("stamp", serde_json::json!({"proposal_id": "P-1"}))).0,
+        ];
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    }
+
+    #[test]
+    fn menu_quit_counts_as_process_exit() {
+        assert!(is_process_exit(&tauri::RunEvent::Exit));
+        assert!(!is_process_exit(&tauri::RunEvent::Ready));
+    }
+
+    #[test]
+    fn main_window_close_hides_on_macos_and_exits_elsewhere() {
+        assert_eq!(window_close_policy(true), WindowClosePolicy::HideAndPause);
+        assert_eq!(window_close_policy(false), WindowClosePolicy::ExitProcess);
+    }
+
+    fn running_host(root: &std::path::Path) -> (AppState, String) {
+        let wb = Workbench::open_evaluation_host(root).unwrap();
+        let session = wb.ensure_session().unwrap();
+        hexagon_core::session_host::transition(
+            &wb.db,
+            &session.session_id,
+            hexagon_core::session_host::Transition::Start,
+            0,
+        )
+        .unwrap();
+        let control = ControlConn {
+            db: hexagon_core::db::Db::open(root.join(".hexagon/state.db")).unwrap(),
+            root: root.canonicalize().unwrap(),
+            generation: 1,
+            permission: None,
+        };
+        let state = AppState {
+            wb: Mutex::new(Some(wb)),
+            conn: Mutex::new(Some(control)),
+        };
+        (state, session.session_id)
+    }
+
+    /// Golden path 2026-10-13: closing the window while a turn ran blocked the
+    /// main thread on the Workbench lock until the turn ended, and the pause
+    /// never interrupted the turn. The close boundary must answer at once
+    /// through the control connection.
+    #[test]
+    fn window_close_does_not_wait_for_a_running_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let (state, session_id) = running_host(root.path());
+        let state = std::sync::Arc::new(state);
+        let held = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let turn = {
+            let state = state.clone();
+            let held = held.clone();
+            std::thread::spawn(move || {
+                let _turn = state.wb.lock().unwrap(); // D01-exempt: test simulates a running turn
+                held.wait();
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            })
+        };
+        held.wait();
+        let started = std::time::Instant::now();
+        pause_active_session_for_window_close(&state, false);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(800),
+            "close waited {:?} for the turn",
+            started.elapsed()
+        );
+        let control = state.conn.lock().unwrap();
+        let db = &control.as_ref().unwrap().db;
+        let paused = hexagon_core::session_host::current(db, PROJECT_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(paused.session_id, session_id);
+        assert_eq!(
+            paused.status,
+            hexagon_core::session_host::SessionStatus::Paused
+        );
+        assert!(hexagon_core::orchestra::is_paused(db, PROJECT_ID).unwrap());
+        drop(control);
+        turn.join().unwrap();
+    }
+
+    fn host_status(state: &AppState) -> hexagon_core::session_host::SessionRecord {
+        let guard = state.wb.lock().unwrap(); // D01-exempt: test reads host state
+        hexagon_core::session_host::current(&guard.as_ref().unwrap().db, PROJECT_ID)
+            .unwrap()
+            .unwrap()
+    }
+
+    /// macOS close then ⌘Q: the close already paused the host, so the later
+    /// exit must not overwrite the owner-visible reason or create a session.
+    #[test]
+    fn window_close_then_exit_keeps_one_paused_session() {
+        let root = tempfile::tempdir().unwrap();
+        let (state, session_id) = running_host(root.path());
+        pause_active_session_for_window_close(&state, false);
+        let closed = host_status(&state);
+        assert_eq!(closed.session_id, session_id);
+        assert_eq!(
+            closed.status,
+            hexagon_core::session_host::SessionStatus::Paused
+        );
+        assert_eq!(closed.last_reason_code.as_deref(), Some("owner_paused"));
+        {
+            let guard = state.wb.lock().unwrap(); // D01-exempt: test reads host state
+            assert!(
+                hexagon_core::orchestra::is_paused(&guard.as_ref().unwrap().db, PROJECT_ID)
+                    .unwrap()
+            );
+        }
+        pause_active_session_for_window_close(&state, true);
+        let exited = host_status(&state);
+        assert_eq!(exited.session_id, session_id);
+        assert_eq!(exited.last_reason_code.as_deref(), Some("owner_paused"));
+    }
+
+    /// Non-macOS close (or ⌘Q while running) is recorded as an application
+    /// stop, distinguishable from a window pause in trace/diag.
+    #[test]
+    fn process_exit_from_running_records_process_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let (state, session_id) = running_host(root.path());
+        pause_active_session_for_window_close(&state, true);
+        let exited = host_status(&state);
+        assert_eq!(exited.session_id, session_id);
+        assert_eq!(
+            exited.status,
+            hexagon_core::session_host::SessionStatus::Paused
+        );
+        assert_eq!(exited.last_reason_code.as_deref(), Some("process_exit"));
+    }
+
+    #[test]
+    fn session_summary_serializes_as_a_structured_ipc_payload() {
+        let summary = hexagon_core::session_host::summary(
+            None,
+            None,
+            0,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Some("wait_runtime".into()),
+        );
+        let json = serde_json::to_value(summary).unwrap();
+        assert!(json.get("session").is_some());
+        assert_eq!(json["pending_count"], 0);
+        assert_eq!(json["next_action"], "wait_runtime");
+    }
+
+    #[test]
+    fn command_errors_keep_the_structured_error_envelope() {
+        let error = CmdError::internal("session binding changed");
+        let json = serde_json::to_value(error).unwrap();
+        assert_eq!(json["code"], "internal");
+        assert_eq!(json["message"], "session binding changed");
+    }
+
+    #[test]
+    fn capability_projection_keeps_health_separate_from_unproven_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let db = hexagon_core::db::Db::open_in_memory().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO projects(id,dir,name,mode,autonomy) VALUES(?1,?2,'preview','pack','L0')",
+                [hexagon_core::PROJECT_ID, root.path().to_str().unwrap()],
+            )
+            .unwrap();
+        db.append_event(
+            hexagon_core::PROJECT_ID,
+            hexagon_core::trace::EventKind::System,
+            serde_json::json!({
+                "kind": "computer_control",
+                "actor": "owner",
+                "action": "enable",
+                "enabled": true,
+                "screen_to_selected_model": true,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let statuses = session_capabilities(&db, root.path(), None);
+        let browser = statuses
+            .iter()
+            .find(|status| status.kind == hexagon_core::capabilities::CapabilityKind::Browser)
+            .unwrap();
+        assert_eq!(
+            browser.health,
+            hexagon_core::session_host::CapabilityHealth::Unavailable
+        );
+        assert!(!browser.granted);
+
+        let computer = statuses
+            .iter()
+            .find(|status| status.kind == hexagon_core::capabilities::CapabilityKind::ComputerUse)
+            .unwrap();
+        assert!(matches!(
+            computer.health,
+            hexagon_core::session_host::CapabilityHealth::Unavailable
+                | hexagon_core::session_host::CapabilityHealth::Unknown
+        ));
+        assert!(!computer.granted);
+        assert!(computer.requires_user_action);
+    }
 }
 
 #[cfg(test)]

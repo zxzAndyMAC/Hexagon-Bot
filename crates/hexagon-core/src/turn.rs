@@ -109,6 +109,8 @@ pub enum TurnError {
     Orch(#[from] crate::orchestra::OrchError),
     #[error(transparent)]
     Cards(#[from] crate::cards::CardsError),
+    #[error(transparent)]
+    Session(#[from] crate::session_host::SessionError),
     /// 断网等网超预算挂起（network-resilience 票 01）：哨兵错误——
     /// run 已在 suspend_run 里收口，这里只负责把终态带回调用方。
     #[error("suspended: network wait budget exhausted")]
@@ -943,6 +945,12 @@ fn run_turn_impl(
         ctx.activation_root_turn_id = Some(trigger_turn_id);
     }
     ctx.trigger_turn_id = Some(trigger_turn_id);
+
+    // SessionHost owns the durable current-turn binding; the turn event id is
+    // the only identity that exists before the model loop starts.
+    if let Some(session) = crate::session_host::current(db, &ctx.project_id)? {
+        crate::session_host::bind_turn(db, &session.session_id, &trigger_turn_id.to_string())?;
+    }
 
     // I3 / 2026-10-06: board identity uses the stable host root, known only
     // after a fresh TurnStarted. Child contexts inherit it; same-root resumes

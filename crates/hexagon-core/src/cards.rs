@@ -48,6 +48,10 @@ pub enum CardKind {
     /// 自治不代点。没有复用 escalation{sub}——升级卡的批准是「同意打回」，
     /// 键盘批准键打在失速卡上语义不同，分卡种界面与词典都不必再猜 sub。
     Stall,
+    /// 工作树确认卡（SessionHost Wayfinder-07 补充 A）：负责人请求会话工作树
+    /// 的物理 create/cleanup，不挂 Agent，每次必问、永不记忆。卡 id 就是这次
+    /// 物理动作的 action identity。被否决：权限卡 + 注册表工具（要冒名 Agent）。
+    Worktree,
 }
 
 impl CardKind {
@@ -61,6 +65,7 @@ impl CardKind {
             Self::Publish => "publish",
             Self::Grant => "grant",
             Self::Stall => "stall",
+            Self::Worktree => "worktree",
         }
     }
 
@@ -75,6 +80,7 @@ impl CardKind {
             "publish" => Ok(Self::Publish),
             "grant" => Ok(Self::Grant),
             "stall" => Ok(Self::Stall),
+            "worktree" => Ok(Self::Worktree),
             other => Err(CardsError::BadInput(format!("unknown card kind: {other}"))),
         }
     }
@@ -216,7 +222,7 @@ pub fn annotate_queued_where(
 pub struct QueuedCard {
     pub id: String,
     #[ts(
-        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish' | 'grant' | 'stall'"
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish' | 'grant' | 'stall' | 'worktree'"
     )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,

@@ -244,6 +244,19 @@ pub fn records(project: Option<&str>, class: Option<&str>) -> Vec<DiagRecord> {
     out
 }
 
+/// Session recovery reads only the host evidence carrying that stable session
+/// trace id; project-wide log views keep their existing host inclusion rules.
+pub fn records_for_session(project: &str, session_id: &str, limit: usize) -> Vec<DiagRecord> {
+    records(Some(project), None)
+        .into_iter()
+        .filter(|record| {
+            record.project.as_deref() == Some(project)
+                && record.trace.as_deref() == Some(session_id)
+        })
+        .take(limit)
+        .collect()
+}
+
 /// epoch 秒 → RFC3339 UTC（不落 chrono；天→民用日期用标准换算）。
 fn now_iso() -> String {
     let secs = std::time::SystemTime::now()
@@ -290,6 +303,55 @@ mod tests {
         let s = now_iso();
         assert_eq!(s.len(), 20, "{s}");
         assert!(s.ends_with('Z') && s.contains('T'));
+    }
+
+    #[test]
+    fn session_records_filter_by_trace_identity() {
+        let _g = TEST_LEVEL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_level(log::LevelFilter::Debug);
+        let t = std::time::Instant::now();
+        note(
+            CLASS_HOST,
+            false,
+            Some("p1"),
+            None,
+            None,
+            Some("s-1"),
+            "session",
+            "one",
+            t,
+        );
+        note(
+            CLASS_HOST,
+            false,
+            Some("p1"),
+            None,
+            None,
+            Some("s-2"),
+            "session",
+            "two",
+            t,
+        );
+        note(
+            CLASS_HOST,
+            false,
+            Some("another-project"),
+            None,
+            None,
+            Some("s-1"),
+            "session",
+            "foreign-session",
+            t,
+        );
+        let rs = records_for_session("p1", "s-1", 10);
+        assert!(rs
+            .iter()
+            .all(|record| record.project.as_deref() == Some("p1")));
+        assert!(rs
+            .iter()
+            .all(|record| record.trace.as_deref() == Some("s-1")));
+        assert!(rs.iter().any(|record| record.code == "one"));
+        assert!(!rs.iter().any(|record| record.code == "two"));
     }
 
     #[test]

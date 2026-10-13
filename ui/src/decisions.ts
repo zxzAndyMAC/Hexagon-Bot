@@ -10,6 +10,7 @@ const SEVERITY: Record<string, number> = {
   recovery: 0,
   stall: 0,
   publish: 0,
+  worktree: 0,
   install: 0,
   grant: 0,
   stamp_stage: 1,
@@ -79,6 +80,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp' && !p.proposal_id) return api.stamp()
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
   if (q.kind === 'publish') return api.confirmPublish(q.id)
+  if (q.kind === 'worktree') return api.confirmWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
   if (q.kind === 'recovery' && p.sub === 'tool_action_ready') return api.resumeToolAction(String(p.action_id))
   if (q.kind === 'recovery') return api.recoverRun(String(p.run_id))
@@ -100,6 +102,7 @@ export async function rejectQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp' && !p.proposal_id) return api.rejectStamp()
   if (q.kind === 'stamp') return api.rejectProposal(q.id, 'owner rejected')
   if (q.kind === 'publish') return api.rejectPublish(q.id)
+  if (q.kind === 'worktree') return api.rejectWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, false)
   if (q.kind === 'install') return api.resolveInstall(q.id, false)
   if (q.kind === 'grant') return api.confirmGrant(q.id, false)
@@ -129,6 +132,7 @@ export function kindTitleKey(q: PendingQuestion): string {
   if (q.kind === 'permission') return 'cards.ask'
   if (q.kind === 'stamp') return q.payload.proposal_id ? 'cards.proposalStamp' : 'cards.stageStamp'
   if (q.kind === 'publish') return 'cards.publish'
+  if (q.kind === 'worktree') return q.payload.operation === 'cleanup' ? 'cards.worktreeCleanup' : 'cards.worktreeCreate'
   if (q.kind === 'recovery') return q.payload.sub === 'tool_outcome_unknown' ? 'cards.actionUnknown' : 'cards.recovery'
   if (q.kind === 'stall') return isActivationResumeCard(q) ? 'cards.resumeWaiting' : 'cards.stall'
   if (q.kind === 'install') return 'cards.install'

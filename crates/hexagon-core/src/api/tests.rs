@@ -8,6 +8,213 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 #[test]
+fn session_host_real_turn_binding_survives_reopen_without_model_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let session_id;
+    let turn_id;
+    {
+        let mut wb =
+            Workbench::open(dir.path(), "t", &[("a0".into(), "worker".into())], None).unwrap();
+        orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+        wb.register_provider(
+            "default",
+            Arc::new(ScriptedProvider::new(vec![text_response("done")])),
+        );
+        wb.run_instance("a0", "hello").unwrap();
+        let session = crate::session_host::current(&wb.db, "p1").unwrap().unwrap();
+        session_id = session.session_id;
+        turn_id = session.current_turn_id.unwrap();
+        let trace = wb.db.timeline("p1", None, 100, None).unwrap();
+        assert!(trace
+            .iter()
+            .any(|row| row.event.kind == EventKind::TurnStarted
+                && row.event.id.to_string() == turn_id));
+    }
+    let wb = Workbench::open(dir.path(), "t", &[("a0".into(), "worker".into())], None).unwrap();
+    let session = crate::session_host::current(&wb.db, "p1").unwrap().unwrap();
+    assert_eq!(session.session_id, session_id);
+    assert_eq!(session.current_turn_id.as_deref(), Some(turn_id.as_str()));
+}
+
+#[test]
+fn session_permission_recheck_never_mints_proof_while_a_decision_is_queued() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    crate::cards::enqueue(
+        &wb.db,
+        &wb.project_id,
+        Some("a0"),
+        crate::cards::CardKind::Permission,
+        json!({"tool":"fs_write"}),
+        None,
+    )
+    .unwrap();
+    let error = wb.recheck_session_permissions().unwrap_err();
+    assert!(error.to_string().contains("decision is still pending"));
+    crate::cards::queued(&wb.db, &wb.project_id)
+        .unwrap()
+        .into_iter()
+        .for_each(|card| crate::cards::answer(&wb.db, &card.id, "owner").unwrap());
+    assert!(wb.recheck_session_permissions().is_ok());
+}
+
+#[test]
+fn session_host_maps_real_turn_approval_and_completion_without_identity_rollover() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.registry
+        .register(DesktopApprovalEffect(CountingAction(Arc::new(
+            std::sync::atomic::AtomicUsize::new(0),
+        ))));
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        tool_response(vec![("approval", "remote_publish", json!({}))]),
+        text_response("continued after approval"),
+    ]));
+    wb.register_provider("default", provider);
+
+    let TurnOutcome::AwaitingPermission(question_id) =
+        wb.run_instance("a0", "complete this task").unwrap()
+    else {
+        panic!("the real turn must wait for the permission card");
+    };
+    let session = crate::session_host::current(&wb.db, "p1").unwrap().unwrap();
+    assert_eq!(
+        session.status,
+        crate::session_host::SessionStatus::WaitingUser
+    );
+    let session_id = session.session_id.clone();
+
+    wb.answer_permission_and_continue(&question_id, true, None, "activation")
+        .unwrap();
+    let session = crate::session_host::current(&wb.db, "p1").unwrap().unwrap();
+    assert_eq!(session.session_id, session_id);
+    assert_eq!(
+        session.status,
+        crate::session_host::SessionStatus::Completed
+    );
+}
+
+/// Behaviour change 2026-10-13 (SessionHost re-audit): this test used to
+/// assert that three model-request failures exhaust the runtime reconnect
+/// budget and that the failed session then refuses every later instruction.
+/// That blocked ADR 0083 model-request recovery and managed retries (the
+/// `managed_budget_tests`/`managed_tests` regressions). A model-request
+/// failure is an owner decision (its recovery item is queued), so the host
+/// waits for the user and keeps the budget for runtime worker exits, which
+/// only the runtime beat observes (see `session_runtime_beat` tests).
+#[test]
+fn model_request_failures_wait_for_the_owner_without_spending_runtime_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![]));
+    wb.register_provider("default", provider);
+    assert!(wb.run_instance("a0", "network failure").is_err());
+    let session = crate::session_host::current(&wb.db, "p1").unwrap().unwrap();
+    assert_eq!(
+        session.status,
+        crate::session_host::SessionStatus::WaitingUser
+    );
+    assert_eq!(session.reconnect_attempts, 0);
+    for _ in 0..3 {
+        assert!(wb.run_instance("a0", "network failure again").is_err());
+    }
+    let again = crate::session_host::current(&wb.db, "p1").unwrap().unwrap();
+    assert_eq!(again.session_id, session.session_id);
+    assert_eq!(again.reconnect_attempts, 0);
+    assert_eq!(
+        again.status,
+        crate::session_host::SessionStatus::WaitingUser
+    );
+}
+
+/// A new owner instruction is a new task: a failed chain is superseded (its
+/// old recovery entry cannot continue, ADR 0083), and a paused chain resumes.
+/// Only continuations of a failed chain go through explicit reconnect.
+#[test]
+fn new_owner_instruction_supersedes_a_failed_chain_and_resumes_a_paused_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("first"),
+        text_response("second"),
+    ]));
+    wb.register_provider("default", provider);
+    let failed = wb.ensure_session().unwrap();
+    for action in [
+        crate::session_host::Transition::Start,
+        crate::session_host::Transition::Fail,
+    ] {
+        crate::session_host::transition(&wb.db, &failed.session_id, action, 0).unwrap();
+    }
+    wb.run_instance("a0", "start over").unwrap();
+    let next = crate::session_host::current(&wb.db, "p1").unwrap().unwrap();
+    assert_ne!(next.session_id, failed.session_id);
+    assert!(
+        !crate::session_host::get(&wb.db, &failed.session_id)
+            .unwrap()
+            .is_current
+    );
+
+    let paused = wb.ensure_session().unwrap();
+    if paused.status != crate::session_host::SessionStatus::Running {
+        // The finished first turn completed that chain; start the next one.
+        crate::session_host::transition(
+            &wb.db,
+            &paused.session_id,
+            crate::session_host::Transition::Start,
+            0,
+        )
+        .unwrap();
+    }
+    crate::session_host::transition(
+        &wb.db,
+        &paused.session_id,
+        crate::session_host::Transition::Pause,
+        0,
+    )
+    .unwrap();
+    wb.run_instance("a0", "carry on").unwrap();
+    let resumed = crate::session_host::get(&wb.db, &paused.session_id).unwrap();
+    assert_ne!(resumed.status, crate::session_host::SessionStatus::Paused);
+    assert_eq!(
+        crate::session_host::current(&wb.db, "p1")
+            .unwrap()
+            .unwrap()
+            .session_id,
+        paused.session_id
+    );
+}
+
+#[test]
+fn runtime_beat_keeps_active_session_unknown_without_live_probe() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let session =
+        crate::session_host::ensure_current(&wb.db, "p1", &dir.path().to_string_lossy(), "main", 2)
+            .unwrap();
+    crate::session_host::transition(
+        &wb.db,
+        &session.session_id,
+        crate::session_host::Transition::Start,
+        0,
+    )
+    .unwrap();
+
+    wb.session_runtime_beat().unwrap();
+    let current = crate::session_host::get(&wb.db, &session.session_id).unwrap();
+    let runtime = current.runtime.unwrap();
+    assert_eq!(current.status, crate::session_host::SessionStatus::Running);
+    assert_eq!(
+        runtime.health,
+        crate::session_host::CapabilityHealth::Unknown
+    );
+    assert_eq!(runtime.last_error.as_deref(), Some("runtime_probe_unknown"));
+}
+
+#[test]
 fn role_model_recovery_preserves_successful_tool_results() {
     // MR-03: a failed follow-up must carry the successful write receipt. A
     // fresh turn from the original instruction silently lost that evidence.
@@ -362,7 +569,8 @@ fn actual_file_write_failure_is_not_a_repairable_input_proof() {
         let path = dir.path().join("draft.txt");
         std::fs::write(&path, "original draft").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
-        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let mut wb =
+            Workbench::open(dir.path(), "t", &[("a0".into(), "worker".into())], None).unwrap();
         orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         let input = if tool == "fs_write" {
             json!({"path":"draft.txt", "content":"revised draft"})
@@ -17394,7 +17602,7 @@ proptest::proptest! {
     #[test]
     fn source_mode_expands_only_unambiguous_read_basenames(ambiguous in proptest::bool::ANY) {
         let dir = tempfile::tempdir().unwrap();
-        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let mut wb = Workbench::open(dir.path(), "t", &[("a0".into(), "worker".into())], None).unwrap();
         orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         std::fs::create_dir(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/sample.rs"), "first\n").unwrap();
@@ -17843,7 +18051,7 @@ proptest::proptest! {
     #[test]
     fn recoverable_tool_breaker_counts_feedback_opportunities(batch_size in 1usize..7, rounds in 1usize..4, tool_index in 0usize..3) {
         let dir = tempfile::tempdir().unwrap();
-        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let mut wb = Workbench::open(dir.path(), "t", &[("a0".into(), "worker".into())], None).unwrap();
         orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         let mut responses = Vec::new();
         let tool = ["fs_read", "fs_find", "fs_grep"][tool_index];
@@ -17880,7 +18088,7 @@ proptest::proptest! {
     #[test]
     fn other_tool_errors_and_denials_remain_per_call(batch_size in 1usize..7, rounds in 1usize..4, denied in proptest::bool::ANY) {
         let dir = tempfile::tempdir().unwrap();
-        let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+        let mut wb = Workbench::open(dir.path(), "t", &[("a0".into(), "worker".into())], None).unwrap();
         orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
         let (tool, input) = if denied {
             ("fs_read", json!({"path":".env"}))
@@ -20274,4 +20482,101 @@ fn pm_route_owner_stop_ends_automatic_retries_until_an_explicit_retry() {
         crate::cards::get(&wb.db, &card.id).unwrap().payload["stop_requested"],
         true
     );
+}
+
+/// Golden path 2026-10-13: the owner's new instruction was refused at
+/// admission because an authorized action had to be resumed first (test3/04
+/// gate), and SessionHost recorded the refusal as `turn_failed`, failing the
+/// fresh chain. A refusal that leaves an owner card queued is a decision the
+/// owner has to make, so the host waits for the user instead.
+#[test]
+fn a_turn_refused_while_an_owner_card_waits_does_not_fail_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    let session = wb.ensure_session().unwrap();
+    crate::session_host::transition(
+        &wb.db,
+        &session.session_id,
+        crate::session_host::Transition::Start,
+        0,
+    )
+    .unwrap();
+    crate::cards::enqueue(
+        &wb.db,
+        "p1",
+        Some("a0"),
+        crate::cards::CardKind::Recovery,
+        json!({"sub":"tool_action_ready","action_id":"action9"}),
+        None,
+    )
+    .unwrap();
+    let refusal = turn::TurnError::Tool(crate::tools::ToolError::NotExecuted(
+        "authorized action must be resumed before new work".into(),
+    ));
+    wb.session_turn_error(&refusal).unwrap();
+    let current = crate::session_host::get(&wb.db, &session.session_id).unwrap();
+    assert_eq!(
+        current.status,
+        crate::session_host::SessionStatus::WaitingUser
+    );
+
+    // Without an owner card the same error is a real task failure.
+    let other =
+        Workbench::for_test(tempfile::tempdir().unwrap().path(), &["worker"], None).unwrap();
+    let lone = other.ensure_session().unwrap();
+    crate::session_host::transition(
+        &other.db,
+        &lone.session_id,
+        crate::session_host::Transition::Start,
+        0,
+    )
+    .unwrap();
+    other.session_turn_error(&refusal).unwrap();
+    assert_eq!(
+        crate::session_host::get(&other.db, &lone.session_id)
+            .unwrap()
+            .status,
+        crate::session_host::SessionStatus::Failed
+    );
+}
+
+/// Golden path 2026-10-13: after a window close and reopen the owner's next
+/// instruction stopped at once ("回合已停止") because the close-time orchestra
+/// pause was still set; the session had been resumed but the turn could not
+/// run. A new owner instruction is the explicit resume of a paused host, so it
+/// lifts that pause too.
+#[test]
+fn a_new_instruction_resumes_a_window_closed_host_and_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        text_response("first"),
+        text_response("after reopen"),
+    ]));
+    wb.register_provider("default", provider.clone());
+    wb.run_instance("a0", "first task").unwrap();
+    let session = wb.ensure_session().unwrap();
+    crate::session_host::transition(
+        &wb.db,
+        &session.session_id,
+        crate::session_host::Transition::Start,
+        0,
+    )
+    .unwrap();
+    crate::session_host::transition(
+        &wb.db,
+        &session.session_id,
+        crate::session_host::Transition::Pause,
+        0,
+    )
+    .unwrap();
+    orchestra::pause(&wb.db, "p1").unwrap();
+
+    assert_eq!(
+        wb.run_instance("a0", "carry on after reopen").unwrap(),
+        TurnOutcome::Finished
+    );
+    assert_eq!(provider.recorded().len(), 2);
+    assert!(!orchestra::is_paused(&wb.db, "p1").unwrap());
 }

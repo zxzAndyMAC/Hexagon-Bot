@@ -9,7 +9,7 @@ export type ExternalOperation = {
  */
 event_id: number, card_id: string, 
 /**
- * local_trash | app | mcp | browser
+ * local_trash | local_worktree | app | mcp | browser
  */
 kind: string, 
 /**
@@ -30,7 +30,8 @@ decision: string,
 result: string, at: string, 
 /**
  * host_verified_recoverable | host_verified_not_moved |
- * host_unverified_deletion
+ * host_unverified_deletion | host_verified_worktree_created |
+ * host_verified_lossless_removal
  */
 verification: string, 
 /**

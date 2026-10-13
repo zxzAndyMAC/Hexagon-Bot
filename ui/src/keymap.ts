@@ -36,6 +36,14 @@ export type ActionId =
   | 'desktopClear'
   | 'desktopPrepareCapture'
   | 'computerModelSettings'
+  | 'sessionPause'
+  | 'sessionReconnect'
+  | 'sessionResume'
+  | 'sessionContinueTrigger'
+  | 'sessionCleanupWorktree'
+  | 'sessionScheduleOnce'
+  | 'sessionCreateWorktree'
+  | 'sessionVerifyWorktree'
 
   | 'confirmBroadAccess'
   | 'cancelBroadAccess'
@@ -134,6 +142,14 @@ const DEFAULTS: Record<ActionId, string> = {
   desktopClear: 'alt+mod+shift+4',
   desktopPrepareCapture: '',
   computerModelSettings: '',
+  sessionPause: 'alt+mod+shift+9',
+  sessionReconnect: 'alt+mod+shift+0',
+  sessionResume: 'alt+mod+shift+8',
+  sessionContinueTrigger: 'alt+mod+shift+7',
+  sessionCleanupWorktree: 'alt+mod+shift+6',
+  sessionScheduleOnce: 'alt+mod+shift+5',
+  sessionCreateWorktree: 'alt+mod+shift+w',
+  sessionVerifyWorktree: 'alt+mod+shift+k',
 
   confirmBroadAccess: '',
   cancelBroadAccess: '',
@@ -272,6 +288,14 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'desktopClear', labelKey: 'computer.clear_screenshots' },
   { id: 'desktopPrepareCapture', labelKey: 'computer.prepare_capture' },
   { id: 'computerModelSettings', labelKey: 'computer.modelSettings' },
+  { id: 'sessionPause', labelKey: 'session.pause' },
+  { id: 'sessionReconnect', labelKey: 'session.reconnect' },
+  { id: 'sessionResume', labelKey: 'session.resume' },
+  { id: 'sessionContinueTrigger', labelKey: 'session.continue' },
+  { id: 'sessionCleanupWorktree', labelKey: 'session.worktreeCleanup' },
+  { id: 'sessionScheduleOnce', labelKey: 'session.scheduleLater' },
+  { id: 'sessionCreateWorktree', labelKey: 'session.worktreeCreate' },
+  { id: 'sessionVerifyWorktree', labelKey: 'session.worktreeVerify' },
 
   { id: 'desktopPermissions', labelKey: 'desktop.check' },
   { id: 'desktopAccessibility', labelKey: 'desktop.openAccessibility' },

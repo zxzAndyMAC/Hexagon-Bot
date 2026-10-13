@@ -614,6 +614,18 @@ struct ManagedProcess {
     child: Mutex<Option<Child>>,
 }
 impl ManagedProcess {
+    // SessionHost P1-3, 2026-10-12: idle peers can exit after handshake.
+    // WNOWAIT preserves the PID pin until terminate signals the process group.
+    fn alive(&self) -> Option<bool> {
+        let child = self.child.lock().ok()?;
+        let Some(child) = child.as_ref() else {
+            return Some(false);
+        };
+        crate::sessions::child_exited(child)
+            .ok()
+            .map(|exited| !exited)
+    }
+
     fn terminate(&self) {
         let Some(mut child) = self.child.lock().unwrap().take() else {
             return;
@@ -1374,15 +1386,35 @@ impl McpHost {
         let inner = self.inner.lock().unwrap();
         let mut statuses = inner.statuses.clone();
         for row in &mut statuses {
-            if row.status == "up"
-                && inner.servers.iter().any(|server| {
-                    server.spec.name == row.name
-                        && server.failed.load(std::sync::atomic::Ordering::Acquire)
-                })
-            {
-                row.status = "down".into();
-                row.error =
-                    Some("mcp: session interrupted; check action outcome before retrying".into());
+            if row.status != "up" {
+                continue;
+            }
+            let alive = inner
+                .servers
+                .iter()
+                .find(|server| server.spec.name == row.name)
+                .and_then(|server| {
+                    if server.failed.load(Ordering::Acquire) {
+                        return Some(false);
+                    }
+                    let alive = server.process.alive();
+                    if alive == Some(false) {
+                        server.failed.store(true, Ordering::Release);
+                    }
+                    alive
+                });
+            match alive {
+                Some(true) => {}
+                Some(false) => {
+                    row.status = "down".into();
+                    row.error = Some(
+                        "mcp: session interrupted; check action outcome before retrying".into(),
+                    );
+                }
+                None => {
+                    row.status = "unknown".into();
+                    row.error = Some("mcp: process status unavailable".into());
+                }
             }
         }
         statuses
@@ -1625,6 +1657,39 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name.starts_with("mcp:incompatible:")));
         }
+    }
+
+    #[test]
+    fn idle_mcp_process_exit_is_observed_by_status_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("exit_after_handshake.cjs");
+        let peer = r#"
+const rl=require('readline').createInterface({input:process.stdin});
+const send=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\n');
+rl.on('line',line=>{const r=JSON.parse(line);if(r.id===undefined)return;
+if(r.method==='initialize')send(r.id,{protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'exit',version:'1'}});
+else if(r.method==='tools/list'){send(r.id,{tools:[]});setTimeout(()=>process.exit(0),20);}
+});
+"#;
+        std::fs::write(&script, peer).unwrap();
+        let host = McpHost::start(
+            vec![McpSpec {
+                name: "exit".into(),
+                command: "node".into(),
+                args: vec![script.to_string_lossy().into()],
+                ..Default::default()
+            }],
+            &Registry::builtin(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && host.status()[0].status == "up" {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(host.status()[0].status, "down");
+        assert_eq!(
+            host.status()[0].error.as_deref(),
+            Some("mcp: session interrupted; check action outcome before retrying")
+        );
     }
 
     fn setup(grant: bool) -> (Db, Registry, ToolContext, tempfile::TempDir, McpHost) {

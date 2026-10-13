@@ -179,7 +179,7 @@ fn sh_command(dir: &Path, spec: &crate::sandbox::SandboxSpec) -> std::io::Result
 // Reliability 15: observe without reaping so the owned leader pins the PID
 // until the group has been signalled. A cached PID after wait() can be reused.
 #[cfg(unix)]
-fn child_exited(child: &Child) -> std::io::Result<bool> {
+pub(crate) fn child_exited(child: &Child) -> std::io::Result<bool> {
     // SAFETY: zeroed siginfo is writable; P_PID refers to our unreaped child.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let rc = unsafe {
@@ -196,7 +196,7 @@ fn child_exited(child: &Child) -> std::io::Result<bool> {
     Ok(unsafe { info.si_pid() } != 0)
 }
 #[cfg(not(unix))]
-fn child_exited(_child: &Child) -> std::io::Result<bool> {
+pub(crate) fn child_exited(_child: &Child) -> std::io::Result<bool> {
     Ok(false)
 }
 

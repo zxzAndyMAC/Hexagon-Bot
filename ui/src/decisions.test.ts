@@ -89,6 +89,18 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).toHaveBeenCalledWith('q1')
   })
 
+  it('worktree 确认卡：批准键走 confirmWorktree，驳回键走 rejectWorktree，与发布同属最高档', async () => {
+    const confirm = vi.spyOn(api, 'confirmWorktree').mockResolvedValue({} as never)
+    const reject = vi.spyOn(api, 'rejectWorktree').mockResolvedValue(undefined)
+    const wt = card({ kind: 'worktree', payload: { operation: 'cleanup', path: '/w', baseline_commit: 'abc' } })
+    expect(await handlePendingKey(key('Enter'), [wt])).toBe('approved')
+    expect(confirm).toHaveBeenCalledWith('q1')
+    expect(await handlePendingKey(key('Backspace'), [card({ id: 'q2', kind: 'worktree', payload: { operation: 'create' } })])).toBe('rejected')
+    expect(reject).toHaveBeenCalledWith('q2')
+    expect(severityOf(wt)).toBe(severityOf(card({ kind: 'publish' })))
+    expect(kindTitleKey(wt)).toBe('cards.worktreeCleanup')
+  })
+
   it('顶卡为授权确认时批准键调用 confirmGrant', async () => {
     const spy = vi.spyOn(api, 'confirmGrant').mockResolvedValue({ granted: true, question_id: 'q1', via: 'owner' })
     expect(await handlePendingKey(key('Enter'), [card({ kind: 'grant', payload: { name: 'spec-writing', grant_kind: 'skill' } })])).toBe('approved')

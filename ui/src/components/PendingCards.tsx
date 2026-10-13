@@ -590,6 +590,26 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     )
   }
 
+  if (q.kind === 'worktree') {
+    // Wayfinder-07 Addendum A: the owner's physical worktree request. Always
+    // asked; the card states the absolute path and the bound baseline commit.
+    const cleanup = p.operation === 'cleanup'
+    const commit = String(p.baseline_commit ?? '').slice(0, 8)
+    return (
+      <CardShell tone="danger" icon="warn" title={t(cleanup ? 'cards.worktreeCleanup' : 'cards.worktreeCreate')}>
+        <div className="mono" style={{ fontSize: 12 }} title={String(p.path ?? '')}>{String(p.path ?? '')}</div>
+        <div className="dim3 mono" style={{ fontSize: 12 }}>{t('cards.worktreeBaseline', { baseline: String(p.baseline ?? ''), commit })}</div>
+        {cleanup && <div className="dim3" style={{ fontSize: 12, margin: '4px 0' }}>{t('cards.worktreeCleanupNote')}</div>}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <Btn primary danger={cleanup} onClick={() => api.confirmWorktree(q.id)}>
+            {t(cleanup ? 'cards.worktreeCleanupConfirm' : 'cards.worktreeCreateConfirm')}{top && ` ${approveTip}`}
+          </Btn>
+          <Btn danger onClick={() => api.rejectWorktree(q.id)}>{t('cards.reject')}{top && ` ${rejectTip}`}</Btn>
+        </div>
+      </CardShell>
+    )
+  }
+
   if (q.kind === 'recovery' && p.sub === 'tool_outcome_unknown') {
     return <ActionRecovery q={q} top={top} />
   }

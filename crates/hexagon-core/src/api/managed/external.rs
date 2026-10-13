@@ -17,7 +17,7 @@ pub struct ExternalOperation {
     #[ts(type = "number")]
     pub event_id: i64,
     pub card_id: String,
-    /// local_trash | app | mcp | browser
+    /// local_trash | local_worktree | app | mcp | browser
     pub kind: String,
     /// Original path, app id, `server:tool`, or site host.
     pub target: String,
@@ -29,7 +29,8 @@ pub struct ExternalOperation {
     pub result: String,
     pub at: String,
     /// host_verified_recoverable | host_verified_not_moved |
-    /// host_unverified_deletion
+    /// host_unverified_deletion | host_verified_worktree_created |
+    /// host_verified_lossless_removal
     pub verification: String,
     /// Where a trashed item now is, for the owner's restore.
     pub trash_path: Option<String>,
@@ -137,9 +138,68 @@ pub fn managed_external_ops(
             ))
         })
         .collect();
+    // worktree card id -> settled System kind (Wayfinder-07 Addendum A).
+    let worktree_results: HashMap<String, String> = events
+        .iter()
+        .filter_map(|event| {
+            let kind = event.payload["kind"].as_str()?;
+            matches!(
+                kind,
+                "worktree_created"
+                    | "worktree_deleted"
+                    | "worktree_create_failed"
+                    | "worktree_delete_failed"
+            )
+            .then(|| {
+                Some((
+                    event.payload["question_id"].as_str()?.to_string(),
+                    kind.to_string(),
+                ))
+            })?
+        })
+        .collect();
     let mut out = vec![];
     for event in events.iter().rev() {
         let p = &event.payload;
+        if p["kind"] == "managed_decision"
+            && p["card_kind"] == "worktree"
+            && p["actor"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("managed:"))
+        {
+            let card_id = p["card_id"].as_str().unwrap_or_default();
+            let Ok(card) = crate::cards::get(db, card_id) else {
+                continue;
+            };
+            let settled = worktree_results.get(card_id).map(String::as_str);
+            // A delegated removal only runs on a clean tree detached at the
+            // bound commit, so nothing is lost (ADR0087 recoverability).
+            let (result, verification) = match settled {
+                Some("worktree_created") => ("done", "host_verified_worktree_created"),
+                Some("worktree_deleted") => ("done", "host_verified_lossless_removal"),
+                Some(_) => ("failed", "host_verified_not_moved"),
+                None => ("incomplete", "host_verified_not_moved"),
+            };
+            out.push(ExternalOperation {
+                event_id: event.id,
+                card_id: card_id.into(),
+                kind: "local_worktree".into(),
+                target: card.payload["path"].as_str().unwrap_or_default().into(),
+                action: card.payload["operation"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                decision: p["action"].as_str().unwrap_or_default().into(),
+                result: result.into(),
+                at: event.created_at.clone(),
+                verification: verification.into(),
+                trash_path: None,
+            });
+            if out.len() >= limit {
+                break;
+            }
+            continue;
+        }
         if p["kind"] != "managed_decision"
             || p["card_kind"] != "permission"
             || !p["actor"]

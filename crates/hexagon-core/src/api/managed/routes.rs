@@ -107,6 +107,13 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
             p["remote"].as_str().unwrap_or_default(),
             p["commit"].as_str().unwrap_or(&card.id)
         )),
+        // One business decision per session/operation/path, across new cards.
+        ("worktree", _) => Some(format!(
+            "worktree:{}:{}:{}",
+            p["session_id"].as_str().unwrap_or_default(),
+            p["operation"].as_str().unwrap_or_default(),
+            p["path"].as_str().unwrap_or(&card.id)
+        )),
         ("install", _) => Some(format!(
             "install:{}:{}",
             p["plan_kind"].as_str().unwrap_or_default(),
@@ -428,6 +435,25 @@ pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static st
     }
 }
 
+/// Wayfinder-07 Addendum A (owner ruling 2026-10-12): under delegation the
+/// decider may confirm a worktree card only when the host has just rechecked
+/// every bound fact (session, canonical root/path, baseline commit, and for
+/// cleanup ownership, registration and a clean tree). Any failed fact forces
+/// a refusal the model cannot override. Cost model as `publish_forced`: a
+/// false refusal leaves the owner one more request; a false confirm writes or
+/// deletes a directory on a stale decision.
+pub(crate) fn worktree_forced(check: &Result<(), WorktreeError>) -> (&'static str, &'static str) {
+    use super::WorktreeError as E;
+    match check {
+        Ok(()) => ("confirm", "host_verified_worktree_binding"),
+        Err(E::WorktreeBindingDrift(_)) => ("incomplete", "worktree_binding_drift"),
+        Err(E::WorktreeDirty(_)) => ("incomplete", "worktree_dirty"),
+        Err(E::WorktreeNotOwned) => ("incomplete", "worktree_not_owned"),
+        Err(E::WorktreeOutcomeUnknown) => ("incomplete", "worktree_outcome_unknown"),
+        Err(_) => ("incomplete", "worktree_facts_unproven"),
+    }
+}
+
 pub(super) fn design_route(direction: &crate::design::DesignDirection) -> Route {
     let listed = direction
         .options
@@ -617,6 +643,18 @@ impl Workbench {
                     ]),
                     state: String::new(),
                     forced: Some(publish_forced(&facts)),
+                    fallback: "incomplete",
+                }
+            }
+            ("worktree", _) => {
+                let check = self.recheck_worktree_card(&card.id).map(|_| ());
+                Route {
+                    options: opts(&[
+                        ("confirm", "run the requested worktree operation"),
+                        ("incomplete", "do not run it"),
+                    ]),
+                    state: String::new(),
+                    forced: Some(worktree_forced(&check)),
                     fallback: "incomplete",
                 }
             }

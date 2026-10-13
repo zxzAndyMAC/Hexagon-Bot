@@ -27,6 +27,7 @@ import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
+import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
 
 export default function App() {
@@ -307,6 +308,7 @@ export default function App() {
       />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 10, padding: '10px 14px' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <SessionRecoveryStrip />
           <TabBar />
           <CenterPanes />
           {/* Owner 2026-10-06: the input used to take space from every tab.

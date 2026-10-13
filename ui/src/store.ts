@@ -19,6 +19,7 @@ import {
   type UsageBucket,
   type UsageRow,
   type UsageTotal,
+  type SessionSummary,
 } from './api'
 import { daysAgo } from './usage'
 import i18n from './i18n'
@@ -131,6 +132,8 @@ interface UiState {
   commitProjectIdentity: (identity: ProjectIdentity | null, epoch: number) => void
   timelineFacts: TimelineFacts | null
   factsError: string | null
+  sessionSummary: SessionSummary | null
+  sessionError: string | null
   toolStreamKeys: Record<string, TimelineToolStreamKey>
   refreshFacts: () => Promise<void>
   themePref: ThemePref
@@ -266,6 +269,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   projectEpoch: 0,
   timelineFacts: null,
   factsError: null,
+  sessionSummary: null,
+  sessionError: null,
   toolStreamKeys: {},
   beginProjectSwitch: () => {
     // Issue15/14: invalidate synchronously before the first project IPC awaits.
@@ -283,7 +288,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       tabs: [TIMELINE_TAB], activeTab: 'timeline', splitOpen: false, flowDialogOpen: false,
       fileEdits: {}, fileTreeReq: null, confirmReq: null, intakeDraft: false, away: false,
       evidenceRevision: s.evidenceRevision + 1,
-      timelineFacts: null, factsError: null, timeline: [], timelineCaughtUp: false,
+      timelineFacts: null, factsError: null, sessionSummary: null, sessionError: null, timeline: [], timelineCaughtUp: false,
       streams: {}, thinkings: {}, streamDone: {}, toolStreams: {}, toolStreamKeys: {}, plans: {}, waitingSince: {} }))
     priorConfirmation?.onClose?.(false)
   },
@@ -660,12 +665,16 @@ export const useUiStore = create<UiState>((set, get) => ({
     // projection owns its failure state; facts is independently race checked.
     const facts = get().refreshFacts()
     const draft = api.intakeDraftPending().catch(() => get().intakeDraft)
+    const session = api.sessionSummary().then(value => ({ value })).catch(error => ({ error }))
     try {
-      const [stages, pending, intakeDraft] = await Promise.all([api.stageStatus(), api.pendingQuestions(), draft])
+      const [stages, pending, intakeDraft, sessionResult] = await Promise.all([api.stageStatus(), api.pendingQuestions(), draft, session])
       if (gen !== generation || request < lastAppliedFastRequest) return
       lastAppliedFastRequest = request
       fastFailStreak = 0
-      set({ stages, pending, intakeDraft })
+      set({ stages, pending, intakeDraft,
+        sessionSummary: 'value' in sessionResult ? sessionResult.value : get().sessionSummary,
+        sessionError: 'error' in sessionResult ? errText(sessionResult.error) : null,
+      })
     } catch (error) {
       if (gen !== generation || request < lastAppliedFastRequest) return
       fastFailStreak++

@@ -11,6 +11,7 @@ use crate::provider::ModelProvider;
 use crate::tools::{Registry, ToolContext};
 use crate::trace::{EventKind, TraceError};
 use crate::turn::{self, TurnOutcome};
+use rusqlite::OptionalExtension;
 use serde_json::json;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -20,7 +21,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 mod permission_control;
+mod session_resume;
+mod session_schedule;
+mod session_worktree;
 pub use permission_control::PermissionControl;
+pub use session_worktree::{WorktreeError, WorktreeRequest};
 
 /// 一条派活链上最多再派这么多次。
 ///
@@ -180,6 +185,8 @@ pub enum ApiError {
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
     Cards(#[from] crate::cards::CardsError),
+    #[error(transparent)]
+    Worktree(#[from] WorktreeError),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("io: {0}")]
@@ -202,6 +209,10 @@ pub enum ApiError {
     Grant(#[from] crate::grants::GrantError),
     #[error(transparent)]
     Delegation(#[from] crate::delegation::DelegationError),
+    #[error(transparent)]
+    Session(#[from] crate::session_host::SessionError),
+    #[error(transparent)]
+    Git(#[from] crate::git::GitError),
     #[error(transparent)]
     Roles(#[from] crate::roles::RoleError),
     #[error(transparent)]
@@ -273,6 +284,89 @@ pub enum IntakePrepared {
 }
 
 /// 工作台实例：一个打开的项目。
+/// What the runtime beat saw on its previous run in this process.
+#[derive(Debug)]
+struct RuntimeObserved {
+    seen: HashMap<String, crate::session_host::CapabilityHealth>,
+    /// While reconnecting, at most one budget slot per window. Golden path
+    /// 2026-10-13: spending one per 2-second beat exhausted the budget in six
+    /// seconds, before the owner could reopen the project (the only way a
+    /// lost MCP worker comes back; the host does not restart workers).
+    reconnect_window: std::time::Duration,
+    last_spent: Option<std::time::Instant>,
+    /// capability key -> safe reason, for capabilities seen healthy and then
+    /// unavailable and not yet healthy again.
+    lost: std::collections::BTreeMap<String, &'static str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeObservation {
+    newly_lost: bool,
+    lost_code: Option<&'static str>,
+}
+
+impl Default for RuntimeObserved {
+    fn default() -> Self {
+        Self {
+            seen: HashMap::new(),
+            reconnect_window: std::time::Duration::from_secs(30),
+            last_spent: None,
+            lost: Default::default(),
+        }
+    }
+}
+
+impl RuntimeObserved {
+    /// Whether a still-lost capability may spend another budget slot now.
+    fn may_spend(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if self
+            .last_spent
+            .is_some_and(|at| now.duration_since(at) < self.reconnect_window)
+        {
+            return false;
+        }
+        self.last_spent = Some(now);
+        true
+    }
+
+    fn observe(
+        &mut self,
+        capabilities: &[crate::capabilities::CapabilityStatus],
+    ) -> RuntimeObservation {
+        use crate::session_host::CapabilityHealth as H;
+        let mut newly_lost = false;
+        let mut seen = HashMap::new();
+        for cap in capabilities {
+            let key = format!("{:?}:{}", cap.kind, cap.id);
+            match cap.health {
+                H::Healthy => {
+                    self.lost.remove(&key);
+                }
+                H::Unavailable if self.seen.get(&key) == Some(&H::Healthy) => {
+                    let code = match cap.kind {
+                        crate::capabilities::CapabilityKind::Browser => "browser_worker_exited",
+                        _ => "mcp_worker_exited",
+                    };
+                    newly_lost |= self.lost.insert(key.clone(), code).is_none();
+                }
+                _ => {}
+            }
+            seen.insert(key, cap.health);
+        }
+        // A lost capability that is no longer reported at all cannot prove
+        // recovery; it stays lost until it is observed healthy.
+        self.seen = seen;
+        if self.lost.is_empty() {
+            self.last_spent = None;
+        }
+        RuntimeObservation {
+            newly_lost,
+            lost_code: self.lost.values().next().copied(),
+        }
+    }
+}
+
 pub struct Workbench {
     pub db: Db,
     pub registry: Arc<Registry>,
@@ -300,6 +394,11 @@ pub struct Workbench {
     /// 开场分析已经领走、还没落时间线的接话人。模型调用在壳层的锁外面，
     /// 所以接话人不能只放在栈上。
     intake_speaker: Mutex<Option<(String, String)>>,
+    /// Per-process runtime observation for the SessionHost beat: what each
+    /// capability looked like on the previous beat and which ones were seen
+    /// healthy and then lost. Deliberately not persisted (a new process has
+    /// new workers).
+    runtime_observed: Mutex<RuntimeObserved>,
     /// 激活任务清单（code-search 票 07）：Workbench 级共享——同一激活的
     /// 各回合 ctx 看到同一块板；激活边界在回合起跑线清场。
     pub tasks: crate::subagent::TaskBoard,
@@ -354,6 +453,527 @@ impl Workbench {
         self.sessions.kill_all();
     }
 
+    /// Open the durable host identity once per project task chain. The host
+    /// records context; turn admission still owns provider and grant checks.
+    pub fn ensure_session(&self) -> Result<crate::session_host::SessionRecord, ApiError> {
+        let baseline =
+            crate::git::baseline_branch(&self.repo_root).unwrap_or_else(|_| "main".to_string());
+        Ok(crate::session_host::ensure_current(
+            &self.db,
+            &self.project_id,
+            &self.repo_root.to_string_lossy(),
+            &baseline,
+            3,
+        )?)
+    }
+
+    /// Recheck the same owner decision surface before a recovery side effect.
+    /// A queued permission or capability grant is still awaiting the owner, so
+    /// the shell must not manufacture a resume proof from an IPC boolean.
+    pub fn recheck_session_permissions(
+        &self,
+    ) -> Result<crate::session_host::PermissionRecheck, ApiError> {
+        self.recheck_session_permissions_for("generic")
+    }
+
+    /// Bind the proof to the concrete side effect before a physical or
+    /// recovery mutation. A later caller cannot reuse it for another action.
+    pub fn recheck_session_permissions_for(
+        &self,
+        operation: &'static str,
+    ) -> Result<crate::session_host::PermissionRecheck, ApiError> {
+        let pending = crate::cards::queued(&self.db, &self.project_id)?;
+        if pending
+            .iter()
+            .any(|card| matches!(card.kind.as_str(), "permission" | "grant"))
+        {
+            return Err(crate::session_host::SessionError::DecisionPending.into());
+        }
+        Ok(crate::session_host::PermissionRecheck::confirmed_for(
+            operation,
+        ))
+    }
+
+    /// Verify the persisted worktree against current git state before a
+    /// recovery or trigger can re-enter the original turn.
+    pub fn validate_session_worktree(&self) -> Result<(), ApiError> {
+        let Some(session) = crate::session_host::current(&self.db, &self.project_id)? else {
+            return Ok(());
+        };
+        crate::session_host::validate_worktree(
+            &self.db,
+            &session.session_id,
+            &self.repo_root.to_string_lossy(),
+            &session.baseline,
+        )?;
+        // An executing intent seen outside its own confirmation means the
+        // process stopped between git and metadata: settle it first.
+        if session.worktree_intent.as_ref().is_some_and(|intent| {
+            intent.state == crate::session_host::WorktreeIntentState::Executing
+        }) {
+            return Err(WorktreeError::WorktreeOutcomeUnknown.into());
+        }
+        let Some(attachment) = session.worktree else {
+            return Ok(());
+        };
+        let root = crate::git::canonical_root(&self.repo_root)?;
+        let path = crate::git::canonical_worktree_path(std::path::Path::new(&attachment.path))?;
+        let entry = crate::git::worktree_registered(&root, &path)?;
+        let baseline_commit = crate::git::baseline_commit(&root, &session.baseline)?;
+        let drifted = match entry {
+            None => Some("worktree is no longer registered"),
+            Some(entry) if entry.head != baseline_commit => Some("worktree HEAD moved"),
+            Some(_) if attachment.baseline_commit.as_deref() != Some(baseline_commit.as_str()) => {
+                Some("baseline moved")
+            }
+            Some(_) => None,
+        };
+        if let Some(detail) = drifted {
+            self.db.append_event(
+                &self.project_id,
+                crate::trace::EventKind::System,
+                serde_json::json!({
+                    "kind": "worktree_binding_drift",
+                    "session_id": session.session_id,
+                    "path": attachment.path,
+                    "baseline_commit": attachment.baseline_commit,
+                    "branch": "worktree_validate",
+                    "reason_code": "worktree_binding_drift",
+                }),
+                None,
+                None,
+            )?;
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                None,
+                None,
+                Some(&session.session_id),
+                "worktree_validate",
+                "worktree_binding_drift",
+                std::time::Instant::now(),
+            );
+            return Err(WorktreeError::WorktreeBindingDrift(detail.into()).into());
+        }
+        Ok(())
+    }
+
+    /// Observe owned adapters from the existing managed/stall beat. A session
+    /// status alone is not runtime evidence: no active probe stays unknown,
+    /// while an observed worker exit consumes the normal reconnect budget.
+    pub fn session_runtime_beat(&self) -> Result<(), ApiError> {
+        let Some(session) = crate::session_host::current(&self.db, &self.project_id)? else {
+            return Ok(());
+        };
+        let binding = format!("project:{}", self.repo_root.display());
+        let mut capabilities = Vec::new();
+        match crate::api::browser_status(&self.repo_root) {
+            Ok(Some(browser)) => capabilities.push(crate::capabilities::browser(
+                "browser",
+                Some(browser.connected),
+                None,
+                &binding,
+            )),
+            Ok(None) => {}
+            // A probe error is evidence of uncertainty, never a healthy
+            // adapter. Keep the error code safe; details stay in logs.
+            Err(_) => capabilities.push(crate::capabilities::browser(
+                "browser", None, None, &binding,
+            )),
+        }
+        if let Some(host) = self.mcp_host.as_ref() {
+            for row in host.status() {
+                let (live, health, error) = match row.status.as_str() {
+                    "up" => (true, crate::session_host::CapabilityHealth::Healthy, None),
+                    "down" => (
+                        false,
+                        crate::session_host::CapabilityHealth::Unavailable,
+                        Some("mcp_worker_exited"),
+                    ),
+                    _ => (
+                        false,
+                        crate::session_host::CapabilityHealth::Unknown,
+                        Some("mcp_starting"),
+                    ),
+                };
+                capabilities.push(crate::capabilities::mcp_observed(
+                    &row.name, live, health, error, &binding,
+                ));
+            }
+        }
+        // Re-audit 2026-10-13 (golden path): every "down" row used to count
+        // as a worker exit, so a global MCP server that never started failed
+        // any running session within three 2-second beats. Only a capability
+        // this process saw healthy and then unavailable is a runtime loss;
+        // one that never came up is shown as unavailable and leaves the
+        // session alone. Cost model: a missed loss leaves the turn to fail on
+        // its own tool call; a false loss fails unrelated work.
+        let mut memory = self
+            .runtime_observed
+            .lock()
+            .map_err(|_| ApiError::BadInput("runtime observation lock poisoned".into()))?;
+        let observation = memory.observe(&capabilities);
+        let observed = !capabilities.is_empty();
+        let probe_unknown = capabilities
+            .iter()
+            .any(|cap| cap.health == crate::session_host::CapabilityHealth::Unknown);
+        let all_healthy = capabilities
+            .iter()
+            .all(|cap| cap.health == crate::session_host::CapabilityHealth::Healthy);
+        let failure_code = observation.lost_code;
+
+        let mut durable = session;
+        let first_loss = durable.status == crate::session_host::SessionStatus::Running
+            && durable.current_turn_id.is_some()
+            && observation.newly_lost;
+        let still_lost = durable.status == crate::session_host::SessionStatus::Reconnecting
+            && failure_code.is_some();
+        if first_loss || (still_lost && memory.may_spend()) {
+            if first_loss {
+                memory.last_spent = Some(std::time::Instant::now());
+            }
+            self.session_runtime_failed()?;
+            durable =
+                crate::session_host::current(&self.db, &self.project_id)?.ok_or_else(|| {
+                    crate::session_host::SessionError::NotFound(self.project_id.clone())
+                })?;
+        } else if durable.status == crate::session_host::SessionStatus::Reconnecting
+            && observed
+            && failure_code.is_none()
+            && !probe_unknown
+        {
+            durable = crate::session_host::transition(
+                &self.db,
+                &durable.session_id,
+                crate::session_host::Transition::Reconnected,
+                0,
+            )?;
+        }
+        let (health, reason) = match durable.status {
+            crate::session_host::SessionStatus::Reconnecting => (
+                crate::session_host::CapabilityHealth::Reconnecting,
+                Some(failure_code.unwrap_or("runtime_reconnecting")),
+            ),
+            crate::session_host::SessionStatus::Failed => (
+                crate::session_host::CapabilityHealth::Unavailable,
+                Some(failure_code.unwrap_or("runtime_failed")),
+            ),
+            crate::session_host::SessionStatus::Running if observed && all_healthy => {
+                (crate::session_host::CapabilityHealth::Healthy, None)
+            }
+            crate::session_host::SessionStatus::Running if observed && !probe_unknown => (
+                crate::session_host::CapabilityHealth::Degraded,
+                Some("capability_unavailable"),
+            ),
+            crate::session_host::SessionStatus::Running => (
+                crate::session_host::CapabilityHealth::Unknown,
+                Some("runtime_probe_unknown"),
+            ),
+            _ => (
+                crate::session_host::CapabilityHealth::Unknown,
+                Some("runtime_idle"),
+            ),
+        };
+        crate::session_host::runtime_beat_with_capabilities(
+            &self.db,
+            &durable.session_id,
+            "session_host",
+            health,
+            reason,
+            durable.reconnect_attempts,
+            capabilities,
+        )?;
+        Ok(())
+    }
+
+    /// The first admitted turn moves a newly-created host into `running`;
+    /// approval and grant decisions remain owned by their existing seams.
+    ///
+    /// `continuation` is a re-entry of the current chain (recovery item,
+    /// permission continuation, trigger); otherwise this is a new owner
+    /// instruction. Re-audit 2026-10-13: the earlier version refused every
+    /// turn on a paused or failed host, which blocked ADR 0083 model-request
+    /// recovery, managed retries and the owner's next instruction. SessionHost
+    /// records and coordinates; it does not take over those paths.
+    fn ensure_session_running(
+        &self,
+        continuation: bool,
+    ) -> Result<crate::session_host::SessionRecord, ApiError> {
+        use crate::session_host::{SessionStatus, Transition};
+        let session = if continuation {
+            self.ensure_session()?
+        } else {
+            let baseline =
+                crate::git::baseline_branch(&self.repo_root).unwrap_or_else(|_| "main".to_string());
+            crate::session_host::start_task_chain(
+                &self.db,
+                &self.project_id,
+                &self.repo_root.to_string_lossy(),
+                &baseline,
+                3,
+            )?
+        };
+        let step = |action| -> Result<crate::session_host::SessionRecord, ApiError> {
+            Ok(crate::session_host::transition(
+                &self.db,
+                &session.session_id,
+                action,
+                0,
+            )?)
+        };
+        match session.status {
+            SessionStatus::Created => step(Transition::Start),
+            SessionStatus::Running | SessionStatus::Reconnecting => Ok(session),
+            SessionStatus::WaitingUser if !continuation => Ok(session),
+            SessionStatus::WaitingUser => {
+                // Saved permission/grant controls answer the card first and
+                // then re-enter this same activation. While such a decision
+                // card is still queued, the continuation must wait for it.
+                let pending = crate::cards::queued(&self.db, &self.project_id)?
+                    .into_iter()
+                    .any(|card| matches!(card.kind.as_str(), "permission" | "grant"));
+                if pending {
+                    Err(crate::session_host::SessionError::InvalidTransition {
+                        from: session.status,
+                        action: "start_turn",
+                        code: "transition_not_allowed",
+                    }
+                    .into())
+                } else {
+                    step(Transition::Resume)
+                }
+            }
+            // Any admitted turn on a paused host is an explicit owner act
+            // (instruction, recovery click, or the owner's own trigger);
+            // automatic flows are already stopped by the orchestra pause.
+            // A new instruction also lifts the pause the host set (window
+            // close / session pause): otherwise the turn stops at its first
+            // pause check and the instruction is lost (golden path
+            // 2026-10-13). Continuations keep the existing gate: recovery and
+            // triggers lift it through `resume_session` and the trigger path.
+            SessionStatus::Paused => {
+                let resumed = step(Transition::Resume)?;
+                if !continuation && orchestra::is_paused(&self.db, &self.project_id)? {
+                    orchestra::resume(&self.db, &self.project_id)?;
+                }
+                Ok(resumed)
+            }
+            // A continuation of a failed chain is the explicit reconnect of
+            // the state table; an exhausted budget stays terminal and the
+            // owner starts a new task instead.
+            SessionStatus::Failed => {
+                self.validate_session_worktree()?;
+                Ok(crate::session_host::reconnect(
+                    &self.db,
+                    &session.session_id,
+                    &session.project_root,
+                    &session.baseline,
+                    0,
+                )?)
+            }
+            SessionStatus::Completed => Err(crate::session_host::SessionError::InvalidTransition {
+                from: session.status,
+                action: "start_turn",
+                code: "terminal_session",
+            }
+            .into()),
+        }
+    }
+
+    /// Host bookkeeping must not rewrite a turn's real result: a failure to
+    /// record is logged and kept in diag, and the caller's outcome stands.
+    fn session_note(&self, branch: &'static str, result: Result<(), ApiError>) {
+        if let Err(error) = result {
+            log::warn!("session host {branch}: {error}");
+            crate::diag::note(
+                crate::diag::CLASS_REJECT,
+                true,
+                Some(&self.project_id),
+                None,
+                None,
+                None,
+                branch,
+                "session_record_failed",
+                std::time::Instant::now(),
+            );
+        }
+    }
+
+    fn session_chain_complete(&self) -> Result<bool, ApiError> {
+        Ok(self.active_run()?.is_none()
+            && crate::cards::queued(&self.db, &self.project_id)?.is_empty()
+            && !self.tasks.any_unfinished())
+    }
+
+    fn session_runtime_failed(&self) -> Result<(), ApiError> {
+        let Some(session) = crate::session_host::current(&self.db, &self.project_id)? else {
+            return Ok(());
+        };
+        match session.status {
+            crate::session_host::SessionStatus::Running => {
+                crate::session_host::transition(
+                    &self.db,
+                    &session.session_id,
+                    crate::session_host::Transition::RuntimeFailed,
+                    0,
+                )?;
+            }
+            crate::session_host::SessionStatus::Reconnecting => {
+                // The last retry is a distinct state-machine action so the
+                // reconnect budget is visible in trace/diag, rather than a
+                // generic turn failure (P0-1, 2026-10-12).
+                let action =
+                    if session.reconnect_attempts.saturating_add(1) >= session.reconnect_budget {
+                        crate::session_host::Transition::ReconnectExhausted
+                    } else {
+                        crate::session_host::Transition::RuntimeFailed
+                    };
+                crate::session_host::transition(&self.db, &session.session_id, action, 0)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn session_turn_error(&self, error: &turn::TurnError) -> Result<(), ApiError> {
+        let Some(session) = crate::session_host::current(&self.db, &self.project_id)? else {
+            return Ok(());
+        };
+        use crate::session_host::{SessionStatus, Transition};
+        match error {
+            // ADR 0083: the failed request is a queued owner decision, not a
+            // runtime outage; waiting keeps the reconnect budget for workers.
+            turn::TurnError::Provider(_) => {
+                if matches!(
+                    session.status,
+                    SessionStatus::Running | SessionStatus::Reconnecting
+                ) {
+                    crate::session_host::transition(
+                        &self.db,
+                        &session.session_id,
+                        Transition::WaitUser,
+                        0,
+                    )?;
+                }
+                Ok(())
+            }
+            // Network suspension already has its own wait-and-resume; the
+            // host shows reconnecting once and does not escalate from here.
+            turn::TurnError::Suspended => {
+                if session.status == SessionStatus::Running {
+                    crate::session_host::transition(
+                        &self.db,
+                        &session.session_id,
+                        Transition::RuntimeFailed,
+                        0,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => self.session_turn_failed(&session),
+        }
+    }
+
+    /// A turn error is a task failure unless an owner card is waiting: then
+    /// the error is the existing gate asking the owner first (e.g. test3/04
+    /// "authorized action must be resumed before new work"), and failing the
+    /// chain would discard a task that only needs a decision (golden path
+    /// 2026-10-13).
+    fn session_turn_failed(
+        &self,
+        session: &crate::session_host::SessionRecord,
+    ) -> Result<(), ApiError> {
+        if session.status == crate::session_host::SessionStatus::Running {
+            let owner_waits = !owner_pending(&self.db, &self.project_id)?.is_empty();
+            let action = if owner_waits {
+                crate::session_host::Transition::WaitUser
+            } else {
+                crate::session_host::Transition::Fail
+            };
+            crate::session_host::transition(&self.db, &session.session_id, action, 0)?;
+        }
+        Ok(())
+    }
+
+    fn session_turn_outcome(&self, outcome: &TurnOutcome) -> Result<(), ApiError> {
+        let Some(mut session) = crate::session_host::current(&self.db, &self.project_id)? else {
+            return Ok(());
+        };
+        // A successful provider response proves the reconnect, but the task
+        // outcome still decides whether the chain waits, fails, or completes.
+        if session.status == crate::session_host::SessionStatus::Reconnecting
+            && !matches!(outcome, TurnOutcome::Interrupted | TurnOutcome::Suspended)
+        {
+            session = crate::session_host::transition(
+                &self.db,
+                &session.session_id,
+                crate::session_host::Transition::Reconnected,
+                0,
+            )?;
+        }
+        match outcome {
+            TurnOutcome::AwaitingPermission(_) | TurnOutcome::HeldForChoice(_) => {
+                if session.status == crate::session_host::SessionStatus::Running {
+                    crate::session_host::transition(
+                        &self.db,
+                        &session.session_id,
+                        crate::session_host::Transition::WaitUser,
+                        0,
+                    )?;
+                }
+            }
+            TurnOutcome::Finished => {
+                if session.status == crate::session_host::SessionStatus::Running
+                    && self.session_chain_complete()?
+                {
+                    crate::session_host::transition(
+                        &self.db,
+                        &session.session_id,
+                        crate::session_host::Transition::Complete,
+                        0,
+                    )?;
+                }
+            }
+            TurnOutcome::Failed(_) | TurnOutcome::Truncated => {
+                if session.status == crate::session_host::SessionStatus::Running {
+                    crate::session_host::transition(
+                        &self.db,
+                        &session.session_id,
+                        crate::session_host::Transition::Fail,
+                        0,
+                    )?;
+                }
+            }
+            // The owner stopped or paused the turn: that is a pause, not a
+            // runtime outage, and it must not spend the reconnect budget.
+            TurnOutcome::Interrupted => {
+                if session.status == crate::session_host::SessionStatus::Running {
+                    crate::session_host::transition(
+                        &self.db,
+                        &session.session_id,
+                        crate::session_host::Transition::Pause,
+                        0,
+                    )?;
+                }
+            }
+            // Network suspension: show reconnecting once; the existing net
+            // wait resumes it and a later success records Reconnected.
+            TurnOutcome::Suspended => {
+                if session.status == crate::session_host::SessionStatus::Running {
+                    crate::session_host::transition(
+                        &self.db,
+                        &session.session_id,
+                        crate::session_host::Transition::RuntimeFailed,
+                        0,
+                    )?;
+                }
+            }
+            TurnOutcome::SkippedSleeping | TurnOutcome::SkippedCap => {}
+        }
+        Ok(())
+    }
+
     /// 打开/初始化项目：db 落 `<dir>/.hexagon/state.db`，钉住包副本。
     pub fn open(
         dir: impl AsRef<Path>,
@@ -373,8 +993,8 @@ impl Workbench {
         pack: Option<PackDef>,
         external_services: bool,
     ) -> Result<Self, ApiError> {
-        let dir = dir.to_path_buf();
         std::fs::create_dir_all(dir.join(".hexagon"))?;
+        let dir = dir.canonicalize()?;
         let db = Db::open(dir.join(".hexagon/state.db"))?;
         let project_id = crate::PROJECT_ID.to_string();
         // 票 01 / ADR 0064：省略 autonomy → 列默认 L4。再次打开走 OR IGNORE，不改已选档。
@@ -389,6 +1009,9 @@ impl Workbench {
                 rusqlite::params![aid, crate::PROJECT_ID, role],
             )?;
         }
+        // A reopened project only marks due one-time requests expired; it never
+        // starts a continuation or bypasses the existing approval/grant path.
+        crate::session_host::expire_due_now(&db, &project_id)?;
         // Reliability 21: reopening must not rewrite the evidence of an
         // interrupted policy replacement before recovery inspects it.
         let recovering_policy: bool = db.conn().query_row(
@@ -451,6 +1074,7 @@ impl Workbench {
             mcp_host,
             sessions: Default::default(),
             intake_speaker: Mutex::new(None),
+            runtime_observed: Mutex::new(RuntimeObserved::default()),
             tasks: Default::default(),
             wait_policy: Default::default(),
             call_deadline: None,
@@ -601,6 +1225,7 @@ impl Workbench {
             mcp_host,
             sessions: Default::default(),
             intake_speaker: Mutex::new(None),
+            runtime_observed: Mutex::new(RuntimeObserved::default()),
             tasks: Default::default(),
             wait_policy: Default::default(),
             call_deadline: None,
@@ -1451,6 +2076,17 @@ impl Workbench {
         remember_shape: Option<&str>,
         scope: &str,
     ) -> Result<(), ApiError> {
+        self.answer_permission_inner(question_id, allow, remember_shape, scope, true)
+    }
+
+    fn answer_permission_inner(
+        &self,
+        question_id: &str,
+        allow: bool,
+        remember_shape: Option<&str>,
+        scope: &str,
+        _standalone: bool,
+    ) -> Result<(), ApiError> {
         // 列里存的是 agent_id（变量曾误名 payload——arch-review 票 01 订正）
         let agent_id = crate::cards::get(&self.db, question_id)?
             .agent_id
@@ -1466,6 +2102,19 @@ impl Workbench {
             self.pack.as_ref(),
             "owner",
         )?;
+        if let Some(session) = crate::session_host::current(&self.db, &self.project_id)? {
+            if session.status == crate::session_host::SessionStatus::WaitingUser {
+                let action = if allow {
+                    crate::session_host::Transition::Approve
+                } else {
+                    // A denial is an observation fed back to the same model
+                    // activation; only its continuation outcome can fail the
+                    // task. Do not mint a new session for that continuation.
+                    crate::session_host::Transition::Resume
+                };
+                crate::session_host::transition(&self.db, &session.session_id, action, 0)?;
+            }
+        }
         Ok(())
     }
 
@@ -1598,7 +2247,7 @@ impl Workbench {
         if allow {
             self.permission_resume_admission(&card)?;
         }
-        self.answer_permission(question_id, allow, remember_shape, scope)?;
+        self.answer_permission_inner(question_id, allow, remember_shape, scope, false)?;
         self.continue_permission_card(card)
     }
 
@@ -1721,6 +2370,7 @@ impl Workbench {
             return Err(error);
         }
         self.run_activation_continuation(aid, active.as_deref(), &resume)
+            .map(|_| ())
     }
 
     /// 跑某角色一回合（若激活）。有 interrupted run 未恢复时硬挡（票 37 恢复闸）。
@@ -1848,6 +2498,7 @@ impl Workbench {
         let run = self.active_run()?;
         let ctx = self.ctx_for(aid, run.as_ref().map(|r| r.id.clone()));
         let (slot, provider) = self.turn_provider(aid)?;
+        let _session = self.ensure_session_running(resume.is_some())?;
         // diagnostic-records 票 03：槽未绑 → resolve_slot 落 default 是正常回退，
         // 记 Debug 并说清哪个槽回退了。只在解析成功后记（没绑到任何东西是
         // NoProvider，不是回退）。
@@ -2051,7 +2702,13 @@ impl Workbench {
                 self.stop_turn_item(&item, aid, ctx.stage_run_id.as_deref())?;
             }
         }
-        let outcome = run?;
+        let outcome = match run {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.session_note("session_turn_error", self.session_turn_error(&error));
+                return Err(error.into());
+            }
+        };
         // 票 09：说完且没有点名下一位，再走与负责人没点名时相同的下一手。
         // 续派失败不推翻已经说完的这一回合——否则脚本耗尽会让成功的回复变成错误。
         // 2026-09-28 evaluation issue 23: the persisted evaluation cursor owns
@@ -2062,6 +2719,7 @@ impl Workbench {
                 log::warn!("continue after {role}: {e}");
             }
         }
+        self.session_note("session_turn_outcome", self.session_turn_outcome(&outcome));
         Ok(outcome)
     }
 
@@ -2126,6 +2784,7 @@ impl Workbench {
             );
             return Err(ApiError::NoProvider(slot.unwrap_or_default()));
         }
+        let _session = self.ensure_session_running(false)?;
         let status: String =
             self.db
                 .conn()
@@ -3102,7 +3761,7 @@ impl Workbench {
 
     /// Resume the exact interrupted activation. Preflight its observations before
     /// unlocking: an unknown effect must keep its recovery/reconciliation boundary.
-    pub fn recover_run(&self, run_id: &str) -> Result<(), ApiError> {
+    pub fn recover_run(&self, run_id: &str) -> Result<TurnOutcome, ApiError> {
         let agent = orchestra::recovery_agent(&self.db, &self.project_id, run_id)?;
         let resume = agent
             .as_deref()
@@ -3115,7 +3774,7 @@ impl Workbench {
             .transpose()?;
         orchestra::recover_run_by(&self.db, &self.project_id, run_id, &self.decider())?;
         if let (Some(aid), Some(resume)) = (agent, resume) {
-            self.run_turn_agent_with_history(
+            let outcome = self.run_turn_agent_with_history(
                 &aid,
                 &resume.instruction,
                 &[],
@@ -3125,6 +3784,174 @@ impl Workbench {
                 true,
                 None,
             )?;
+            // Preserve the recovery caller's failure contract. The turn seam
+            // already persisted the SessionHost transition; returning success
+            // here would hide a failed continuation from Tauri/tests.
+            if matches!(
+                outcome,
+                TurnOutcome::Failed(_) | TurnOutcome::Truncated | TurnOutcome::Suspended
+            ) {
+                return Err(ApiError::BadInput(format!(
+                    "recovery continuation did not complete: {outcome:?}"
+                )));
+            }
+            return Ok(outcome);
+        }
+        Ok(TurnOutcome::SkippedSleeping)
+    }
+
+    /// Continue the exact activation identified by the SessionHost's current
+    /// turn event. The event carries the original agent/run identity; no new
+    /// instruction or session is manufactured from trigger metadata.
+    pub fn continue_session_trigger(&self) -> Result<TurnOutcome, ApiError> {
+        self.validate_session_worktree()?;
+        let session = crate::session_host::current(&self.db, &self.project_id)?
+            .ok_or_else(|| crate::session_host::SessionError::NotFound(self.project_id.clone()))?;
+        let turn_id = session
+            .current_turn_id
+            .as_deref()
+            .ok_or_else(|| ApiError::BadInput("session has no recoverable turn".into()))?
+            .parse::<i64>()
+            .map_err(|_| ApiError::BadInput("session turn identity is not recoverable".into()))?;
+        let row: Option<(String, Option<String>)> = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT agent_id,stage_run_id FROM events WHERE project_id=?1 AND id=?2 AND kind='turn_started'",
+                rusqlite::params![self.project_id, turn_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (aid, run_id) =
+            row.ok_or_else(|| ApiError::BadInput("recoverable turn event missing".into()))?;
+        let resume = self.activation_resume(&aid, run_id.as_deref(), Some(turn_id))?;
+        self.run_activation_continuation(&aid, run_id.as_deref(), &resume)
+    }
+
+    /// Consume and continue one trigger through the core owner seam. The shell
+    /// only supplies the trigger id; binding, permission recheck, pause
+    /// admission and activation identity stay in this facade.
+    pub fn continue_session_trigger_once(
+        &self,
+        trigger_id: &str,
+    ) -> Result<crate::session_host::OneTimeTrigger, ApiError> {
+        self.validate_session_worktree()?;
+        let session = crate::session_host::current(&self.db, &self.project_id)?
+            .ok_or_else(|| crate::session_host::SessionError::NotFound(self.project_id.clone()))?;
+        let trigger = crate::session_host::list_triggers(&self.db, &session.session_id)?
+            .into_iter()
+            .find(|trigger| trigger.trigger_id == trigger_id)
+            .ok_or_else(|| crate::session_host::SessionError::NotFound(trigger_id.to_owned()))?;
+        if trigger.state == crate::session_host::OneTimeTriggerState::Consumed {
+            return Ok(trigger);
+        }
+        if matches!(
+            session.status,
+            crate::session_host::SessionStatus::Completed
+                | crate::session_host::SessionStatus::Failed
+        ) {
+            return Err(crate::session_host::SessionError::InvalidTransition {
+                from: session.status,
+                action: "trigger_continue",
+                code: "terminal_session",
+            }
+            .into());
+        }
+        let proof = self.recheck_session_permissions_for("trigger_consume")?;
+        let consumed = crate::session_host::consume_once(
+            &self.db,
+            &session.session_id,
+            &session.project_root,
+            &session.baseline,
+            trigger_id,
+            proof,
+        )?;
+        if session.status == crate::session_host::SessionStatus::Paused {
+            let resume_proof = self.recheck_session_permissions_for("resume")?;
+            crate::session_host::resume(
+                &self.db,
+                &session.session_id,
+                &session.project_root,
+                &session.baseline,
+                0,
+                resume_proof,
+            )?;
+            // A paused host was stopped by the owner or the window-close
+            // boundary, which also paused orchestration. The trigger is the
+            // owner's earlier explicit "continue later", so lift that pause
+            // here; otherwise the turn stops at its first pause check and the
+            // trigger is consumed without continuing (Wayfinder-07 A).
+            if orchestra::is_paused(&self.db, &self.project_id)? {
+                orchestra::resume(&self.db, &self.project_id)?;
+            }
+        }
+        let admitted_status =
+            crate::session_host::current(&self.db, &self.project_id)?.map(|current| current.status);
+        match self.continue_session_trigger() {
+            Ok(TurnOutcome::Failed(_) | TurnOutcome::Truncated | TurnOutcome::Suspended) => Err(
+                ApiError::BadInput("trigger continuation did not complete".into()),
+            ),
+            Ok(_) => Ok(consumed),
+            Err(error) => {
+                // The turn seam already records provider/runtime failures. If
+                // activation validation failed before a turn was admitted,
+                // make that failure visible once here.
+                if let Some(current) = crate::session_host::current(&self.db, &self.project_id)? {
+                    if matches!(
+                        current.status,
+                        crate::session_host::SessionStatus::Running
+                            | crate::session_host::SessionStatus::Reconnecting
+                    ) && Some(current.status) == admitted_status
+                    {
+                        self.session_runtime_failed()?;
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Existing managed/stall beat hook for live-host due triggers. Reopening
+    /// only marks scheduled rows expired, so this consumes only rows that this
+    /// live beat just expired; an exited app therefore still requires Continue.
+    /// `Paused` is included: on macOS a window close pauses while the process
+    /// lives on, and the owner's trigger is what should wake it (Wayfinder-07
+    /// Addendum A, 2026-10-12). Rejected: skipping paused hosts, which made a
+    /// close-then-wait trigger expire silently on the next reopen.
+    pub fn session_trigger_beat(&self) -> Result<(), ApiError> {
+        let Some(session) = crate::session_host::current(&self.db, &self.project_id)? else {
+            return Ok(());
+        };
+        if !matches!(
+            session.status,
+            crate::session_host::SessionStatus::Running
+                | crate::session_host::SessionStatus::WaitingUser
+                | crate::session_host::SessionStatus::Paused
+        ) {
+            return Ok(());
+        }
+        let expired = crate::session_host::expire_due_now(&self.db, &self.project_id)?;
+        for trigger in expired {
+            if self
+                .recheck_session_permissions_for("trigger_consume")
+                .is_err()
+            {
+                continue;
+            }
+            if let Err(error) = self.continue_session_trigger_once(&trigger.trigger_id) {
+                crate::diag::note(
+                    crate::diag::CLASS_REJECT,
+                    true,
+                    Some(&self.project_id),
+                    Some(&trigger.trigger_id),
+                    Some(&trigger.trace_id),
+                    Some(&session.session_id),
+                    "trigger_continue",
+                    "continuation_failed",
+                    std::time::Instant::now(),
+                );
+                log::warn!("session trigger continuation failed: {error}");
+            }
         }
         Ok(())
     }
@@ -4064,6 +4891,12 @@ pub fn data_boundary(
 
 #[cfg(test)]
 mod model_recovery_tests;
+#[cfg(test)]
+mod session_runtime_tests;
+#[cfg(test)]
+mod session_trigger_tests;
+#[cfg(test)]
+mod session_worktree_tests;
 #[cfg(test)]
 mod stall_tests;
 #[cfg(test)]

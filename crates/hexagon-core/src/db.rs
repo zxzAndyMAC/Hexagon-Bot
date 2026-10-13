@@ -287,6 +287,18 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0057_project_delegation",
         include_str!("../migrations/0057_project_delegation.sql"),
     ),
+    (
+        "0058_session_host",
+        include_str!("../migrations/0058_session_host.sql"),
+    ),
+    (
+        "0059_session_triggers",
+        include_str!("../migrations/0059_session_triggers.sql"),
+    ),
+    (
+        "0060_worktree_card",
+        include_str!("../migrations/0060_worktree_card.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

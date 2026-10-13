@@ -159,7 +159,7 @@ impl Workbench {
         aid: &str,
         run: Option<&str>,
         resume: &ActivationResume,
-    ) -> Result<(), ApiError> {
+    ) -> Result<TurnOutcome, ApiError> {
         let outcome = self.run_turn_agent_with_history(
             aid,
             &resume.instruction,
@@ -195,7 +195,7 @@ impl Workbench {
             )
             .into());
         }
-        Ok(())
+        Ok(outcome)
     }
 
     /// I2 / V05 (2026-10-06): cursors prove delivery, not retained task state.

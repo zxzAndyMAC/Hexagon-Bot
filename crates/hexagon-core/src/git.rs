@@ -5,7 +5,7 @@
 //!   未决 stamp 问题）+ 安全网必问（`git_baseline_merge` 天生安全网，永不记忆）；
 //! - **指针回拨不动 git**：rewind 只改 stage_runs，代码回滚是独立显式操作。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
@@ -21,6 +21,12 @@ pub enum GitError {
     NotRepo(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    pub head: String,
 }
 
 /// 跑一次 git，成功返回 stdout。失败带 stderr 报错。
@@ -99,6 +105,206 @@ pub fn commit_all(repo: &Path, msg: &str) -> Result<bool, GitError> {
 
 pub fn head(repo: &Path) -> Result<String, GitError> {
     run(repo, &["rev-parse", "HEAD"])
+}
+
+/// Return the repository root reported by git, then canonicalize it so a
+/// symlinked project cannot bind a worktree to a different identity.
+pub fn canonical_root(repo: &Path) -> Result<PathBuf, GitError> {
+    let root = run(repo, &["rev-parse", "--show-toplevel"])?;
+    Ok(PathBuf::from(root).canonicalize()?)
+}
+
+/// Canonicalize a worktree path before it exists by resolving its nearest
+/// existing ancestor, so a symlinked parent cannot create a second binding
+/// identity. Missing components are appended verbatim (git creates them on
+/// add); `.`/`..` in the missing part is refused because it could not be
+/// resolved against the real filesystem. Golden path 2026-10-13: requiring the
+/// direct parent to exist refused the UI's default `<project>-worktrees/<id>`.
+pub fn canonical_worktree_path(path: &Path) -> Result<PathBuf, GitError> {
+    if path.exists() {
+        return Ok(path.canonicalize()?);
+    }
+    let invalid =
+        |why: &str| GitError::Cli("worktree path".into(), format!("{why}: {}", path.display()));
+    if path.file_name().is_none() {
+        return Err(invalid("worktree path has no final component"));
+    }
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    while !ancestor.exists() {
+        match ancestor.components().next_back() {
+            Some(std::path::Component::Normal(name)) => missing.push(name.to_owned()),
+            _ => return Err(invalid("worktree path has an unresolvable component")),
+        }
+        ancestor = ancestor
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+    }
+    let mut resolved = ancestor.canonicalize()?;
+    for name in missing.iter().rev() {
+        resolved.push(name);
+    }
+    Ok(resolved)
+}
+
+pub fn baseline_commit(repo: &Path, baseline: &str) -> Result<String, GitError> {
+    run(repo, &["rev-parse", &format!("{baseline}^{{commit}}")])
+}
+
+/// List registered worktrees and their checked-out commit. The porcelain
+/// format is stable and avoids trusting a path merely because it exists.
+pub fn worktree_list(repo: &Path) -> Result<Vec<WorktreeEntry>, GitError> {
+    let output = run(repo, &["worktree", "list", "--porcelain"])?;
+    let mut entries = Vec::new();
+    let mut path = None;
+    let mut commit = None;
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("worktree ") {
+            if let (Some(path), Some(head)) = (path.take(), commit.take()) {
+                entries.push(WorktreeEntry { path, head });
+            }
+            path = Some(PathBuf::from(value));
+        } else if let Some(value) = line.strip_prefix("HEAD ") {
+            commit = Some(value.to_string());
+        }
+    }
+    if let (Some(path), Some(head)) = (path, commit) {
+        entries.push(WorktreeEntry { path, head });
+    }
+    Ok(entries)
+}
+
+pub fn worktree_registered(repo: &Path, path: &Path) -> Result<Option<WorktreeEntry>, GitError> {
+    let expected = canonical_worktree_path(path)?;
+    Ok(worktree_list(repo)?.into_iter().find(|entry| {
+        entry
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| entry.path.clone())
+            == expected
+    }))
+}
+
+pub fn worktree_add(repo: &Path, path: &Path, commit: &str) -> Result<(), GitError> {
+    if path.exists() {
+        return Err(GitError::Cli(
+            "worktree add".into(),
+            format!("worktree path already exists: {}", path.display()),
+        ));
+    }
+    let path_text = path.to_string_lossy().to_string();
+    run(repo, &["worktree", "add", "--detach", &path_text, commit])?;
+    Ok(())
+}
+
+/// Fail-closed cleanliness for deletion: unlike `is_dirty`, a failed
+/// `git status` is an error, never "clean" (Wayfinder-07 Addendum A review,
+/// 2026-10-12: the earlier `is_dirty` gate let an unreadable tree be removed).
+pub fn worktree_clean(path: &Path) -> Result<bool, GitError> {
+    Ok(run(path, &["status", "--porcelain", "--untracked-files=all"])?.is_empty())
+}
+
+/// Remove a clean registered worktree. No `--force`: git's own refusal of
+/// modified or untracked content is a second fail-closed layer under ours.
+pub fn worktree_remove(repo: &Path, path: &Path) -> Result<(), GitError> {
+    if path.exists() && !worktree_clean(path)? {
+        return Err(GitError::Cli(
+            "worktree remove".into(),
+            format!(
+                "worktree has uncommitted or untracked files: {}",
+                path.display()
+            ),
+        ));
+    }
+    let path_text = path.to_string_lossy().to_string();
+    run(repo, &["worktree", "remove", &path_text])?;
+    Ok(())
+}
+
+/// Physical writes require a proof sealed to this exact session/path/baseline.
+/// The generic metadata-only proof is intentionally rejected here.
+pub fn worktree_add_verified(
+    repo: &Path,
+    path: &Path,
+    commit: &str,
+    session_id: &str,
+    proof: &crate::session_host::PermissionRecheck,
+) -> Result<(), GitError> {
+    let root = canonical_root(repo)?;
+    let path = canonical_worktree_path(path)?;
+    if !proof.permits_worktree(
+        "worktree_create",
+        session_id,
+        &root.to_string_lossy(),
+        &path.to_string_lossy(),
+        commit,
+    ) {
+        return Err(GitError::Cli(
+            "worktree add".into(),
+            "operation-bound permission proof required".into(),
+        ));
+    }
+    worktree_add(&root, &path, commit)
+}
+
+/// Physical deletes require a proof sealed to this exact session/path/baseline.
+pub fn worktree_remove_verified(
+    repo: &Path,
+    path: &Path,
+    commit: &str,
+    session_id: &str,
+    proof: &crate::session_host::PermissionRecheck,
+) -> Result<(), GitError> {
+    let root = canonical_root(repo)?;
+    let path = canonical_worktree_path(path)?;
+    if !proof.permits_worktree(
+        "worktree_cleanup",
+        session_id,
+        &root.to_string_lossy(),
+        &path.to_string_lossy(),
+        commit,
+    ) {
+        return Err(GitError::Cli(
+            "worktree remove".into(),
+            "operation-bound permission proof required".into(),
+        ));
+    }
+    worktree_remove(&root, &path)
+}
+
+/// Undo this card's own create when its post-create verification or the
+/// metadata write failed. It accepts only the create proof of the same card,
+/// path and commit, and only a clean tree still at that commit; anything else
+/// is left for explicit cleanup rather than deleted on a guess.
+pub fn worktree_rollback_created(
+    repo: &Path,
+    path: &Path,
+    commit: &str,
+    session_id: &str,
+    proof: &crate::session_host::PermissionRecheck,
+) -> Result<(), GitError> {
+    let root = canonical_root(repo)?;
+    let path = canonical_worktree_path(path)?;
+    if !proof.permits_worktree(
+        "worktree_create",
+        session_id,
+        &root.to_string_lossy(),
+        &path.to_string_lossy(),
+        commit,
+    ) {
+        return Err(GitError::Cli(
+            "worktree rollback".into(),
+            "operation-bound permission proof required".into(),
+        ));
+    }
+    match worktree_registered(&root, &path)? {
+        Some(entry) if entry.head == commit => worktree_remove(&root, &path),
+        _ => Err(GitError::Cli(
+            "worktree rollback".into(),
+            "worktree no longer matches this create; explicit cleanup required".into(),
+        )),
+    }
 }
 
 /// 探测基线分支：main > master > 当前分支。
@@ -358,5 +564,89 @@ mod tests {
         crate::orchestra::rewind(&db, "p", &pack, 0).unwrap();
         assert_eq!(head(d.path()).unwrap(), before); // git 状态不变
         assert!(!is_dirty(d.path()));
+    }
+
+    #[test]
+    fn physical_worktree_lifecycle_is_registered_and_removed() {
+        let repo = repo();
+        let target = tempfile::tempdir().unwrap();
+        let path = target.path().join("session-worktree");
+        let baseline = baseline_commit(repo.path(), "main").unwrap();
+        assert_eq!(
+            canonical_root(repo.path()).unwrap(),
+            repo.path().canonicalize().unwrap()
+        );
+        worktree_add(repo.path(), &path, &baseline).unwrap();
+        let entry = worktree_registered(repo.path(), &path).unwrap().unwrap();
+        assert_eq!(entry.head, baseline);
+        worktree_remove(repo.path(), &path).unwrap();
+        assert!(worktree_registered(repo.path(), &path).unwrap().is_none());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn physical_worktree_remove_refuses_dirty_contents() {
+        let repo = repo();
+        let target = tempfile::tempdir().unwrap();
+        let path = target.path().join("dirty-worktree");
+        let baseline = baseline_commit(repo.path(), "main").unwrap();
+        worktree_add(repo.path(), &path, &baseline).unwrap();
+        std::fs::write(path.join("untracked.txt"), "keep me").unwrap();
+        assert!(worktree_remove(repo.path(), &path).is_err());
+        assert!(path.exists());
+        std::fs::remove_file(path.join("untracked.txt")).unwrap();
+        worktree_remove(repo.path(), &path).unwrap();
+    }
+
+    #[test]
+    fn worktree_clean_is_an_error_when_status_cannot_be_read() {
+        let missing = tempfile::tempdir().unwrap();
+        // Not a repository: the old `is_dirty` returned false ("clean") here.
+        assert!(worktree_clean(missing.path()).is_err());
+        assert!(!is_dirty(missing.path()));
+    }
+
+    #[test]
+    fn physical_writes_refuse_a_proof_without_the_matching_card() {
+        let repo = repo();
+        let target = tempfile::tempdir().unwrap();
+        let path = target.path().join("proof-tree");
+        let commit = baseline_commit(repo.path(), "main").unwrap();
+        let root = canonical_root(repo.path()).unwrap();
+        let canonical = canonical_worktree_path(&path).unwrap();
+        let generic = crate::session_host::PermissionRecheck::confirmed_for("worktree_create");
+        assert!(worktree_add_verified(repo.path(), &path, &commit, "s1", &generic).is_err());
+        let no_card = crate::session_host::PermissionRecheck::confirmed_for_worktree(
+            "worktree_create",
+            "",
+            "s1",
+            &root.to_string_lossy(),
+            &canonical.to_string_lossy(),
+            &commit,
+        );
+        assert!(worktree_add_verified(repo.path(), &path, &commit, "s1", &no_card).is_err());
+        let other_session = crate::session_host::PermissionRecheck::confirmed_for_worktree(
+            "worktree_create",
+            "q1",
+            "s2",
+            &root.to_string_lossy(),
+            &canonical.to_string_lossy(),
+            &commit,
+        );
+        assert!(worktree_add_verified(repo.path(), &path, &commit, "s1", &other_session).is_err());
+        assert!(!path.exists());
+        let proof = crate::session_host::PermissionRecheck::confirmed_for_worktree(
+            "worktree_create",
+            "q1",
+            "s1",
+            &root.to_string_lossy(),
+            &canonical.to_string_lossy(),
+            &commit,
+        );
+        worktree_add_verified(repo.path(), &path, &commit, "s1", &proof).unwrap();
+        // The create proof cannot delete; only its own rollback may.
+        assert!(worktree_remove_verified(repo.path(), &path, &commit, "s1", &proof).is_err());
+        worktree_rollback_created(repo.path(), &path, &commit, "s1", &proof).unwrap();
+        assert!(!path.exists());
     }
 }

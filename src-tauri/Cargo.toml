@@ -24,6 +24,7 @@ ts-rs = "=11.1.0"
 open = "5"
 
 [dev-dependencies]
+tauri = { version = "2", features = ["test"] }
 # Reuse the workspace-installed temporary directory helper for IPC lifecycle tests.
 tempfile = "3"
 proptest = "1"

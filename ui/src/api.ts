@@ -130,6 +130,13 @@ import type { RepoEntry } from './gen/RepoEntry'
 import type { BriefQA } from './gen/BriefQA'
 import type { BriefQuestion } from './gen/BriefQuestion'
 import type { RoleSeedDraft } from './gen/RoleSeedDraft'
+import type { SessionSummary } from './gen/SessionSummary'
+import type { CapabilityStatus } from './gen/CapabilityStatus'
+import type { OneTimeTrigger } from './gen/OneTimeTrigger'
+import type { WorktreeAttachment } from './gen/WorktreeAttachment'
+import type { WorktreeOperation } from './gen/WorktreeOperation'
+import type { WorktreeRequest } from './gen/WorktreeRequest'
+import type { SessionRecord } from './gen/SessionRecord'
 
 /** 旧名薄壳——新代码直接用 QueuedCard。 */
 export type PendingQuestion = QueuedCard
@@ -148,6 +155,9 @@ export type {
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
   RepoEntry, DiagRecord, PromptEntry, TranslateOutcome,
   BriefQA, BriefQuestion, RoleSeedDraft,
+  SessionSummary, CapabilityStatus,
+  OneTimeTrigger,
+  WorktreeAttachment, WorktreeOperation, WorktreeRequest, SessionRecord,
 }
 
 
@@ -294,6 +304,24 @@ async function switchProject<T>(operation: (source: ProjectIdentity | null) => P
 
 export const api = {
   projectIdentity: () => call<ProjectIdentity | null>('project_identity'),
+  sessionSummary: () => call<SessionSummary>('session_summary'),
+  capabilityStatuses: () => call<CapabilityStatus[]>('capability_statuses'),
+  sessionPause: () => call<void>('session_pause'),
+  sessionReconnect: () => call<void>('session_reconnect'),
+  sessionResume: (runId: string | null) => call<void>('session_resume', { runId }),
+  sessionTriggers: () => call<OneTimeTrigger[]>('session_triggers'),
+  // Core derives model slot, permission package and trace from the current
+  // turn; IPC only carries the idempotence key and the fire time.
+  sessionScheduleOnce: (triggerId: string, fireAt: number) =>
+    call<OneTimeTrigger>('session_schedule_once', { triggerId, fireAt }),
+  sessionContinueTrigger: (triggerId: string) => call<OneTimeTrigger>('session_continue_trigger', { triggerId }),
+  // Wayfinder-07 Addendum A: requests only enqueue a `worktree` card; the
+  // pending dock's confirm/reject answer it and core owns the git write.
+  sessionRequestWorktree: (operation: WorktreeOperation, path?: string) =>
+    call<WorktreeRequest>('session_request_worktree', { operation, path: path ?? null }),
+  confirmWorktree: (qid: string) => call<SessionRecord>('confirm_worktree', { qid }),
+  rejectWorktree: (qid: string) => call<void>('reject_worktree', { qid }),
+  sessionVerifyWorktree: () => call<SessionRecord>('session_verify_worktree'),
   timelineWindowMetadata: (request: TimelineWindowMetadataRequest) => call<TimelineWindowMetadata>('timeline_window_metadata', { request }),
   timelineWindow: (request: TimelineWindowRequest) => call<TimelineWindowPage>('timeline_window', { request }),
   timelineFacts: (request: TimelineFactsRequest) => call<TimelineFacts>('timeline_facts', { request }),
@@ -655,6 +683,24 @@ export const api = {
 
 // ---- 浏览器 dev mock：覆盖全部事件 kind / 全部待决卡 / 产物版本链 / 代码文件 ----
 // a1（架构师）是「完整 agent」样板：回合、工具组、消息、交付、权限、复审、打回、提案全有。
+
+// Browser preview only: a running session with one capability per kind so
+// the recovery strip renders without the native host.
+const MOCK_SESSION_SUMMARY: SessionSummary = {
+  session: {
+    session_id: 'session-mock', project_id: 'p1', project_root: '/mock/project', baseline: 'main', status: 'running',
+    current_turn_id: '512', worktree: null, worktree_intent: null, runtime: null, reconnect_attempts: 0, reconnect_budget: 3,
+    is_current: true, created_at: '', updated_at: '', last_branch: 'session_transition', last_reason_code: 'session_started', last_elapsed_ms: 0,
+  },
+  recovery_run_id: null, pending_count: 2, highest_pending_severity: 'critical', recent_diagnostics: [],
+  capabilities: [
+    { kind: 'browser', id: 'browser', available: true, granted: false, health: 'healthy', last_error: null, requires_user_action: false, binding_hint: 'project:/mock/project' },
+    { kind: 'computer_use', id: 'desktop', available: true, granted: false, health: 'unknown', last_error: null, requires_user_action: false, binding_hint: 'project:/mock/project' },
+    { kind: 'provider', id: 'default', available: true, granted: false, health: 'healthy', last_error: null, requires_user_action: false, binding_hint: 'default' },
+    { kind: 'mcp', id: 'docs', available: true, granted: false, health: 'unavailable', last_error: 'mcp_worker_exited', requires_user_action: true, binding_hint: 'project:/mock/project' },
+  ],
+  triggers: [], next_action: null,
+}
 
 const mockAvatars: Record<string, string> = {
   // a1 预置自定义头像，走通 agentAvatar data URL 通路
@@ -1227,6 +1273,17 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
       return (ART_CONTENT[String(args?.path)]?.[Number(args?.version)] ?? null) as T
+    case 'session_summary': return MOCK_SESSION_SUMMARY as T
+    case 'session_pause':
+    case 'session_reconnect':
+    case 'session_resume':
+    case 'session_continue_trigger':
+    case 'session_schedule_once':
+    case 'session_request_worktree':
+    case 'confirm_worktree':
+    case 'reject_worktree':
+    case 'session_verify_worktree':
+      return null as T
     case 'set_agent_sleeping':
     case 'review_proposal':
     case 'confirm_proposal':

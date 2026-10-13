@@ -6,6 +6,7 @@ import i18n from './i18n'
 import App from './App'
 import { TopBar } from './components/TopBar'
 import { PendingCard, PendingCards, PendingDialog } from './components/PendingCards'
+import { TooltipProvider } from './components/ui/tooltip'
 import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, formatBinding, isMac } from './keymap'
@@ -25,7 +26,7 @@ async function render(node: React.ReactNode) {
   const el = document.createElement('div')
   document.body.appendChild(el)
   const root = createRoot(el)
-  await act(async () => { root.render(node) })
+  await act(async () => { root.render(<TooltipProvider>{node}</TooltipProvider>) })
   return { el, root }
 }
 

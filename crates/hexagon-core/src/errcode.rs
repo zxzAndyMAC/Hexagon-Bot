@@ -88,9 +88,12 @@ impl_error_code!(
     Autonomy,
     Proposal,
     Review,
+    Session,
+    Git,
     PolicyDev,
     Sqlite,
     Cards,
+    Worktree,
     Json,
     Io,
     Install,
@@ -115,6 +118,8 @@ impl_error_code!(crate::cards::CardsError, Sqlite, Json, Db);
 impl_error_code!(crate::commands::RouteError, Trace, Orch);
 impl_error_code!(crate::credentials::CredError, Sqlite, Cards);
 impl_error_code!(crate::db::DbError, Sqlite);
+impl_error_code!(crate::session_host::SessionError, Sqlite);
+impl_error_code!(crate::api::WorktreeError);
 impl_error_code!(
     crate::install::InstallError,
     Io,
@@ -215,6 +220,7 @@ impl_error_code!(
     Json,
     Orch,
     Cards,
+    Session,
 );
 
 /// `git` 壳命令失败是高频可修错误（推送冲突/无远端等），`Cli` 变体名

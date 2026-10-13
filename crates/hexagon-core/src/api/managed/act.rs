@@ -147,6 +147,15 @@ impl Workbench {
                 crate::publish::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
                 "not_published"
             }
+            // The confirmation rechecks its own facts again at execution.
+            ("worktree", _, "confirm") => {
+                self.confirm_session_worktree_by(&card.id, &self.decider())?;
+                "worktree_confirmed"
+            }
+            ("worktree", _, _) => {
+                self.reject_session_worktree_by(&card.id, &self.decider())?;
+                "worktree_not_confirmed"
+            }
             ("install", _, "install" | "reject") => {
                 let installed = crate::install::resolve_install_by(
                     &self.db,
