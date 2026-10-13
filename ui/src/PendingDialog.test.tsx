@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import './i18n'
 import i18n from './i18n'
 import App from './App'
-import { TopBar } from './components/TopBar'
+import { Sidebar } from './components/shell/Sidebar'
 import { PendingCard, PendingCards, PendingDialog } from './components/PendingCards'
 import { TooltipProvider } from './components/ui/tooltip'
 import { api, type PendingQuestion } from './api'
@@ -80,7 +80,7 @@ describe('待决弹窗（hands-free 票 05）', () => {
     })
     const { el, root: r } = await render(
       <>
-        <TopBar onSettings={() => {}} onProjectClosed={() => {}} />
+        <Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} />
         <PendingDialog />
       </>,
     )
@@ -91,11 +91,11 @@ describe('待决弹窗（hands-free 票 05）', () => {
     expect(dialog).not.toBeNull()
     expect(dialog?.getAttribute('aria-label')).toBe(i18n.t('cards.pendingDialog'))
 
-    const badge = el.querySelector('[data-pending-count]') as HTMLButtonElement
+    // ADR 0088（票 02）：徽标从顶栏迁到侧栏「待决」导航项。旧顶栏徽标 title 里的 ⌘↵ / ⌘⌫ 提示
+    // 不随迁——侧栏徽标只计数（B1），裁决键位写在待决卡按钮上（D6/D8，票 04 的坞里同样如此）。
+    const badge = el.querySelector('[data-pending-count]') as HTMLElement
     expect(badge.getAttribute('data-pending-count')).toBe('2')
     expect(badge.textContent).toContain('2')
-    expect(badge.title).toContain(formatBinding(bindingFor('approve')))
-    expect(badge.title).toContain(formatBinding(bindingFor('reject')))
 
     const deny = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('拒绝'))
     expect(deny).toBeTruthy()
@@ -119,7 +119,7 @@ describe('待决弹窗（hands-free 票 05）', () => {
   it('没有待决时不弹出，数量为空', async () => {
     const { el, root: r } = await render(
       <>
-        <TopBar onSettings={() => {}} onProjectClosed={() => {}} />
+        <Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} />
         <PendingDialog />
       </>,
     )
@@ -144,7 +144,7 @@ describe('待决弹窗（hands-free 票 05）', () => {
     useUiStore.setState({ pending: [card()] })
     const { el, root: r } = await render(
       <>
-        <TopBar onSettings={() => {}} onProjectClosed={() => {}} />
+        <Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} />
         <PendingDialog />
       </>,
     )

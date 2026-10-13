@@ -2,7 +2,6 @@ import { DesktopPermissions } from './components/DesktopPermissions'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './i18n'
-import { TopBar } from './components/TopBar'
 import { TIMELINE_JUMP_EVENT } from './timelineJump'
 
 import { Timeline } from './components/Timeline'
@@ -13,7 +12,13 @@ import { UsageDetailTab } from './components/UsageDetailTab'
 import { DiffView } from './components/DiffView'
 import { FileEditor } from './components/FileEditor'
 import { parseUnifiedDiff } from './diff'
-import { SidePanel } from './components/SidePanel'
+import { Sidebar } from './components/shell/Sidebar'
+import { SidebarHandle } from './components/shell/SidebarHandle'
+import { Header } from './components/shell/Header'
+import { InterimCanvas } from './components/shell/InterimCanvas'
+import { FlowDialog } from './components/shell/FlowDialog'
+import { CapBanner } from './components/shell/UsageEntry'
+import { TooltipProvider } from './components/ui/tooltip'
 import { Composer } from './components/Composer'
 import { SettingsPage, type Section } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
@@ -233,9 +238,15 @@ export default function App() {
         })
         return
       }
-      if (matches(e, bindingFor('toggleRail'))) {
+      // ADR 0088（票 02）：⌘B 由「开关右栏」改为「开关左侧栏」；⌥⌘B 开关画布（票 02 是画布占位）。
+      if (matches(e, bindingFor('toggleSidebar'))) {
         e.preventDefault()
-        useUiStore.getState().setRailOpen(!useUiStore.getState().railOpen)
+        if (projectOpen === true) useUiStore.getState().toggleSidebar()
+        return
+      }
+      if (matches(e, bindingFor('toggleCanvas'))) {
+        e.preventDefault()
+        if (projectOpen === true) useUiStore.getState().setCanvasOpen(!useUiStore.getState().canvasOpen)
         return
       }
       if (matches(e, bindingFor('splitEditor'))) {
@@ -286,8 +297,12 @@ export default function App() {
   // Benchmark I1/2026-10-06: unmounting the workbench for Settings lost
   // unsaved file text before the project-leave guard could see it. Keep the
   // editor panes; stop native previews by unmounting the side panel as before.
+  // ui-redesign 票 02（ADR 0088）：顶栏与右栏五页签撤掉 → 左侧栏（B1）+ 分割线（B8）+ 主区头部（B5）。
+  // 中栏 Tab 容器与分屏仍在，票 03 换成主区常驻对话 + 右侧画布。
+  const openSettings = () => setSettingsOpen(true)
+  const raiseCap = () => { setComputerSettings('usage'); setSettingsOpen(true) }
   return (
-    <>
+    <TooltipProvider>
       {settingsOpen && (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
           <SettingsPage initialSection={computerSettings}
@@ -300,31 +315,39 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
         </div>
       )}
-    <div aria-hidden={settingsOpen || undefined} style={{ height: '100%', display: settingsOpen ? 'none' : 'flex', flexDirection: 'column' }}>
-      {!settingsOpen && <DesktopPermissions compact />}
-      <TopBar
-        onSettings={() => setSettingsOpen(true)}
-        onProjectClosed={() => setProjectOpen(false)}
-      />
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 10, padding: '10px 14px' }}>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <SessionRecoveryStrip />
-          <TabBar />
-          <CenterPanes />
-          {/* Owner 2026-10-06: the input used to take space from every tab.
-              Hide rather than unmount so returning keeps the draft and attachments. */}
-          <div hidden={!timelineActive}>
-            <IntakeBar />
-            <Composer />
+    <div aria-hidden={settingsOpen || undefined} data-workbench style={{ height: '100%', display: settingsOpen ? 'none' : 'flex' }}>
+      {!settingsOpen && (
+        <>
+          <Sidebar onSearch={() => setPaletteOpen(true)} onSettings={openSettings} onProjectClosed={() => setProjectOpen(false)} />
+          <SidebarHandle />
+        </>
+      )}
+      <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--app-main)' }}>
+        {!settingsOpen && <DesktopPermissions compact />}
+        <Header />
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', padding: '10px 14px' }}>
+            <SessionRecoveryStrip />
+            <TabBar />
+            <CenterPanes />
+            {/* Owner 2026-10-06: the input used to take space from every tab.
+                Hide rather than unmount so returning keeps the draft and attachments. */}
+            <div hidden={!timelineActive}>
+              {/* B4 触顶横幅：输入条正上方（interaction §10） */}
+              <CapBanner onRaise={raiseCap} />
+              <IntakeBar />
+              <Composer />
+            </div>
           </div>
+          {!settingsOpen && <InterimCanvas />}
         </div>
-        {!settingsOpen && <SidePanel />}
-      </div>
+      </main>
       {/* 票 05：待决是浮层，不插进这条纵栏——高度留给 Tab 和时间线。 */}
       {!settingsOpen && <PendingDialog />}
+      {!settingsOpen && <FlowDialog />}
       {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </div>
-    </>
+    </TooltipProvider>
   )
 }
 

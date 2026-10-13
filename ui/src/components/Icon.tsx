@@ -12,6 +12,8 @@ import {
 // 票 10 启动页与向导（foundations §7 映射：sparkle / undo→rotate-ccw / message→message-circle /
 // circleCheck / circleX / info / left→chevron-left / more 竖→ellipsis-vertical）
 import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircle, RotateCcw, Sparkle } from 'lucide-react'
+// ui-redesign 票 02 外壳（foundations §7 原型名 search / sidebar / more / clock / expand）
+import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -85,6 +87,12 @@ const ICONS = {
   info: Info,
   'chevron-left': ChevronLeft,
   'more-vertical': EllipsisVertical,
+  // ---- 外壳（票 02）：侧栏收起、搜索与命令、头部 ⋯、阶段 chip、查看流程 ----
+  'panel-left': PanelLeft,
+  search: Search,
+  more: Ellipsis,
+  clock: Clock,
+  expand: Maximize2,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
