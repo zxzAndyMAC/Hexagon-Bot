@@ -10,6 +10,10 @@ import type { ProvidersView } from './gen/ProvidersView'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
+// ui-redesign 票 10 核对（ADR 0091）：本文件测的是工作台 / 设置里已建项目的角色编辑器，
+// 「保存」把改动写进已打开项目，不属于 ADR 0091 的范围（它只推翻向导定制卡的「保存才写 override /
+// 取消丢弃」）。向导侧的即改即生效、「恢复模板」与 roleHandTuned 回归在 Wizard.roles.test.tsx。
+
 async function render(node: React.ReactNode) {
   const el = document.createElement('div')
   document.body.appendChild(el)

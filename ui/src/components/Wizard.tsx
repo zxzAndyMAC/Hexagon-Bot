@@ -595,7 +595,11 @@ export function Wizard({ onDone, onCancel, seed }: {
         aiDraftedNames={aiDraftedNames}
         selected={selectedName}
         onSelect={(name) => { setMakingRole(false); setSelectedRole(name) }}
-        onToggle={(name, on) => set({ roles: on ? [...draft.roles.filter((x) => x !== name), name] : draft.roles.filter((x) => x !== name) })}
+        onToggle={(name, on) => {
+          // 勾选不改详情区：默认选中是派生值，先钉住它，免得勾上排在前面的角色时详情跳走
+          if (!selectedRole) setSelectedRole(selectedName)
+          set({ roles: on ? [...draft.roles.filter((x) => x !== name), name] : draft.roles.filter((x) => x !== name) })
+        }}
         onSelectAll={() => set({ roles: tpls.map((tp) => tp.def.name) })}
         makingRole={makingRole}
         onNewRole={() => setMakingRole((v) => !v)}
