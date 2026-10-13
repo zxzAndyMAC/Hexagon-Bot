@@ -44,3 +44,15 @@ describe('matches 平台精确化（票 15）', () => {
     }
   })
 })
+
+describe('流程阶段行键盘移动（ui-redesign 票 10，components E10 补设计）', () => {
+  it('默认 alt+↑/↓，方向键渲染成箭头而不是 ARROWUP', async () => {
+    const { bindingFor, formatBinding } = await import('./keymap')
+    expect(bindingFor('moveStageUp')).toBe('alt+ArrowUp')
+    expect(bindingFor('moveStageDown')).toBe('alt+ArrowDown')
+    expect(formatBinding('alt+ArrowUp')).toMatch(/↑$/)
+    expect(formatBinding('alt+ArrowDown')).toMatch(/↓$/)
+    expect(matches(ev('ArrowUp', { altKey: true }), 'alt+ArrowUp')).toBe(true)
+    expect(matches(ev('ArrowUp'), 'alt+ArrowUp')).toBe(false)
+  })
+})

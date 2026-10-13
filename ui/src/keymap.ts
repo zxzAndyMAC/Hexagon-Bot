@@ -87,6 +87,8 @@ export type ActionId =
   | 'rejudgeAfterModelFailure'
   | 'retryWizardGeneration'
   | 'stopWizardGeneration'
+  | 'moveStageUp'
+  | 'moveStageDown'
   | 'requestException'
   | 'reviewPerformanceBaseline'
   | 'reviewQualityCommands'
@@ -215,6 +217,10 @@ const DEFAULTS: Record<ActionId, string> = {
   // MR-07: wizard generation recovery on the current step.
   retryWizardGeneration: 'alt+mod+y',
   stopWizardGeneration: 'alt+mod+x',
+  // ui-redesign 票 10（components E10 补设计）：流程草稿阶段行拖拽排序的键盘替代
+  // （accessibility §3）。只在焦点落在阶段行内时生效，裸 alt+↑↓ 不占全局。
+  moveStageUp: 'alt+ArrowUp',
+  moveStageDown: 'alt+ArrowDown',
   requestException: 'alt+mod+e',
   acceptException: 'alt+mod+shift+Enter',
   openPolicyReport: 'alt+mod+p',
@@ -329,6 +335,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'rejudgeAfterModelFailure', labelKey: 'judgeFailure.rejudge' },
   { id: 'retryWizardGeneration', labelKey: 'wizard.retryGeneration' },
   { id: 'stopWizardGeneration', labelKey: 'wizard.stopGeneration' },
+  { id: 'moveStageUp', labelKey: 'wizard.moveUp' },
+  { id: 'moveStageDown', labelKey: 'wizard.moveDown' },
   { id: 'requestException', labelKey: 'exceptions.request' },
   { id: 'acceptException', labelKey: 'exceptions.accept' },
   { id: 'curateLegacyExperience', labelKey: 'experience.curate' },
@@ -394,7 +402,7 @@ export function formatBinding(b: string): string {
   const mods = parts.slice(0, -1)
   const sym = (m: string) =>
     m === 'mod' ? (isMac ? '⌘' : 'Ctrl+') : m === 'shift' ? (isMac ? '⇧' : 'Shift+') : m === 'alt' ? (isMac ? '⌥' : 'Alt+') : m
-  const keySym = { Enter: isMac ? '↵' : 'Enter', Backspace: isMac ? '⌫' : 'Backspace', Escape: 'Esc', '\\': '\\' }[key] ?? key.toUpperCase()
+  const keySym = { Enter: isMac ? '↵' : 'Enter', Backspace: isMac ? '⌫' : 'Backspace', Escape: 'Esc', '\\': '\\', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' }[key] ?? key.toUpperCase()
   return mods.map(sym).join('') + keySym
 }
 

@@ -1,24 +1,44 @@
-// 启动页（票 29）：最近项目列表 + 打开目录/新建项目入口。
-// 未开项目时的全屏界面；「新建项目」→ 项目向导 Wizard。
+// 启动页（票 29；ui-redesign 票 10 按 entry#launcher / components E11 / interaction §11 重做）：
+// 一句话开局 + 打开已有项目 + 空白新建 + 最近项目。未开项目时的全屏界面。
+// 一句话写进向导草稿的 brief（WCAG 2.2 redundant-entry），「选择目录」chip 写进 dir；
+// 向导第一步仍是模型服务商（放行条件不变）。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, isTauri } from '../api'
 import type { RecentProject } from '../gen/RecentProject'
+import { useUiStore } from '../store'
+import { recentTime } from '../recentTime'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { Spinner } from '@/components/ui/spinner'
 import { Wizard } from './Wizard'
 import { Icon } from './Icon'
 import { SettingsPage } from './SettingsPage'
-import { Row } from './Row'
-import { bindingFor, formatBinding } from '../keymap'
+import { dirName, type DraftSeed } from './wizard/draft'
+
+async function pickDirectory(): Promise<string | null> {
+  if (!isTauri) return null
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const picked = await open({ directory: true })
+  return typeof picked === 'string' ? picked : null
+}
 
 export function Launcher({ onOpen }: { onOpen: () => void }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [recents, setRecents] = useState<RecentProject[]>([])
-  const [wizard, setWizard] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  // 向导：null = 启动页；seed 为启动页一句话带入的种子（空白新建不带）
+  const [wizard, setWizard] = useState<{ seed?: DraftSeed } | null>(null)
   const [settings, setSettings] = useState(false)
-  const [err, setErr] = useState('')
+  const [sentence, setSentence] = useState('')
+  const [pickedDir, setPickedDir] = useState('')
+  const [opening, setOpening] = useState<string | null>(null)
+  const [now] = useState(() => Date.now())
 
   useEffect(() => {
-    api.recentProjects().then(setRecents).catch(() => {})
+    api.recentProjects().then(setRecents).catch(() => {}).finally(() => setLoaded(true))
     // 向导 keys 步等处的「去设置」与未开项目时的 ⌘, 都走 hexagon:open-settings
     // 广播（App.tsx 在项目未开时改发此事件）；收成 toggle 与工作台同键语义一致。
     const h = () => setSettings((v) => !v)
@@ -27,121 +47,117 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
   }, [])
 
   const openDir = async (dir?: string) => {
-    setErr('')
     try {
-      let d = dir
-      if (!d) {
-        if (!isTauri) return
-        const { open } = await import('@tauri-apps/plugin-dialog')
-        const picked = await open({ directory: true })
-        if (typeof picked !== 'string') return
-        d = picked
-      }
+      const d = dir ?? await pickDirectory()
+      if (!d) return
+      setOpening(d)
       await api.openRecent(d)
       onOpen()
     } catch (e) {
-      setErr(errText(e))
+      // E11 错误态：打开失败 toast 红字；「从最近项目移除」动作待反馈层票（行尾 × 仍在）
+      useUiStore.getState().pushToast(errText(e), 'err')
+    } finally {
+      setOpening(null)
     }
+  }
+
+  const remove = (dir: string) => {
+    void api.removeRecent(dir)
+      .then(() => api.recentProjects())
+      .then(setRecents)
+      .catch((x) => useUiStore.getState().pushToast(errText(x), 'err'))
+  }
+
+  const start = () => {
+    const brief = sentence.trim()
+    if (!brief) return
+    setWizard({ seed: { brief, dir: pickedDir || undefined } })
   }
 
   // 设置与工作台内同一个 SettingsPage——不另开一套（术语表：设置页 §19）。
   // 盖在向导上而不替换：向导保持挂载，步序与草稿不丢；返回时 keys 步轮询自刷新。
   const body = wizard ? (
-    <Wizard onDone={onOpen} />
+    <Wizard onDone={onOpen} onCancel={() => setWizard(null)} seed={wizard.seed} />
   ) : (
-    <div
-      data-tauri-drag-region
-      style={{
-        position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', background: 'var(--bg)',
-      }}
-    >
-      <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Hexagon-Bot</div>
-      <div className="dim3" style={{ fontSize: 12, marginBottom: 28 }}>{t('launch.title')}</div>
+    <div data-tauri-drag-region className="fixed inset-0 overflow-auto bg-[var(--app-main)] text-ink">
+      <div className="flex flex-col items-center px-4 pt-[110px] pb-16">
+        <div className="grid size-10 place-items-center rounded-[12px] bg-ink text-page"><Icon name="hex" size={20} /></div>
+        <h1 className="mt-[18px] mb-1.5 text-[28px] font-medium tracking-[-.02em]">{t('launch.heading')}</h1>
+        <div className="text-[12.5px] text-ink-3">Hexagon-Bot · {t('launch.title')}</div>
 
-      <div className="panel" style={{ width: 520, padding: '14px 16px' }}>
-        <div style={{ fontWeight: 510, fontSize: 13, marginBottom: 8 }}>{t('launch.recents')}</div>
-        {recents.length === 0 && (
-          <div className="dim3" style={{ fontSize: 12, padding: '12px 0' }}>{t('launch.empty')}</div>
-        )}
-        {/* 列表限高滚动：超过 ~7 行内部滚动，面板高度不随条数无限涨 */}
-        <div style={{ maxHeight: 320, overflowY: 'auto', marginRight: -4, paddingRight: 4 }}>
-          {recents.map((r) => {
-          const removeBtn = (
+        <div className="mt-6 w-[640px] max-w-full rounded-[18px] bg-surface shadow-[var(--shadow-raised)] focus-within:shadow-[var(--shadow-raised),0_0_0_4px_var(--accent-tint)]">
+          <textarea
+            autoFocus
+            data-launch-prompt
+            aria-label={t('launch.prompt')}
+            placeholder={t('launch.prompt')}
+            value={sentence}
+            rows={2}
+            onChange={(e) => setSentence(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                start()
+              }
+            }}
+            className="field-sizing-content block max-h-[200px] min-h-16 w-full resize-none bg-transparent px-4 pt-3.5 pb-1.5 text-[14px] leading-[1.55] text-ink outline-none placeholder:text-ink-3"
+          />
+          <div className="flex items-center gap-1.5 pt-1.5 pr-2 pb-2 pl-2.5">
+            {isTauri && (
+              <Button
+                size="xs"
+                variant="ghost"
+                data-pick-dir
+                title={pickedDir || undefined}
+                onClick={() => { void pickDirectory().then((d) => { if (d) setPickedDir(d) }) }}
+              >
+                <Icon name="folder" />
+                {pickedDir ? t('launch.pickedDir', { dir: dirName(pickedDir) }) : t('launch.pickDir')}
+              </Button>
+            )}
+            <span className="flex-1" />
+            <span className="text-[12px] text-ink-3">↵ {t('launch.start')}</span>
             <button
-              className="icon-btn"
-              style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
-              title={t('launch.remove')}
-              aria-label={t('launch.remove')}
-              onClick={(e) => {
-                e.stopPropagation()
-                void api.removeRecent(r.dir)
-                  .then(() => api.recentProjects())
-                  .then(setRecents)
-                  .catch((x) => setErr(errText(x)))
-              }}
+              type="button"
+              data-launch-start
+              aria-label={t('launch.start')}
+              aria-disabled={!sentence.trim() || undefined}
+              onClick={start}
+              className={cn(
+                'hx-press hx-focus grid size-8 place-items-center rounded-full',
+                sentence.trim() ? 'cursor-pointer bg-ink text-page' : 'cursor-default bg-hover-2 text-ink-3',
+              )}
             >
-              <Icon name="close" size={11} />
+              <Icon name="send" size={16} />
             </button>
-          )
-          const info = (
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 510, color: r.exists ? undefined : 'var(--err)' }}>{r.name}</div>
-              <div
-                className="dim3 mono"
-                style={{
-                  fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  color: r.exists ? undefined : 'var(--err)', opacity: r.exists ? undefined : 0.8,
-                }}
-              >
-                {r.dir}
-              </div>
-            </div>
-          )
-          // 目录已删（exists=false）：不是可激活控件（open_recent 必报错），
-          // 渲染成纯展示行——红字 + missing chip，只剩 × 移除钮可操作
-          if (!r.exists) {
-            return (
-              <div
-                key={r.dir}
-                className="recent-row"
-                data-missing="1"
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8 }}
-              >
-                {info}
-                <span className="chip err">{t('launch.missing')}</span>
-                {removeBtn}
-              </div>
-            )
-          }
-          return (
-            <Row
-              key={r.dir}
-              role="listitem"
-              onClick={() => openDir(r.dir)}
-              className="recent-row"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
-                borderRadius: 8, cursor: 'pointer',
-              }}
-            >
-              {info}
-              <span className="chip mono">{t(`launch.mode_${r.mode}`)}</span>
-              {removeBtn}
-            </Row>
-          )
-        })}
+          </div>
         </div>
-        {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
-        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+
+        <div className="mt-3 flex gap-1.5">
           {isTauri && (
-            <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={() => openDir()}>
-              <Icon name="folder" size={12} /> {t('launch.openDir')}
-            </button>
+            <Button size="sm" onClick={() => { void openDir() }}><Icon name="folder" />{t('launch.openExisting')}</Button>
           )}
-          <button className="btn primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={() => setWizard(true)}>
-            <Icon name="plus" size={12} /> {t('launch.newProject')}
-          </button>
+          <Button size="sm" data-blank-new onClick={() => setWizard({})}><Icon name="plus" />{t('launch.blank')}</Button>
+        </div>
+
+        <div className="mt-7 w-[640px] max-w-full">
+          {loaded && recents.length === 0 ? (
+            <div className="flex flex-col items-center px-5 py-7 text-center">
+              <div className="grid size-11 place-items-center rounded-[12px] bg-canvas text-ink-2 shadow-[inset_0_0_0_1px_var(--line)]"><Icon name="folder" size={20} /></div>
+              <div className="mt-3 text-[14px] font-semibold">{t('launch.emptyTitle')}</div>
+              <div className="mt-1 max-w-[280px] text-[13px] text-ink-3">{t('launch.emptyBody')}</div>
+              {isTauri && <Button size="sm" className="mt-3" onClick={() => { void openDir() }}>{t('launch.openExisting')}</Button>}
+            </div>
+          ) : recents.length > 0 && (
+            <>
+              <div className="flex px-3 pb-1.5 text-[12px] text-ink-3">
+                {t('launch.recents')}<span className="flex-1" />{t('launch.recentCount', { count: recents.length })}
+              </div>
+              <ul role="list" className="m-0 list-none rounded-[14px] bg-[var(--app-card)] p-1 shadow-[var(--shadow-card)]">
+                {recents.map((r) => <RecentRow key={r.dir} r={r} when={recentTime(r.opened_at, now, i18n.language)} opening={opening === r.dir} onOpen={() => { void openDir(r.dir) }} onRemove={() => remove(r.dir)} />)}
+              </ul>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -152,19 +168,66 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
       {body}
       {/* 设置钮对启动页与向导全程恒显（owner 2026-09-30：向导期间也要能进
           设置）。zIndex 70：压过向导层 60；设置覆盖层 80 打开时自然盖住它。 */}
-      <button
-        className="btn"
-        title={`${t('launch.settings')} ${formatBinding(bindingFor('settings'))}`}
-        style={{ position: 'fixed', top: 16, right: 16, zIndex: 70, display: 'inline-flex', alignItems: 'center', gap: 5 }}
-        onClick={() => setSettings(true)}
-      >
-        <Icon name="settings" size={13} /> {t('launch.settings')}
-      </button>
+      <div className="fixed top-2 right-3.5 z-[70]">
+        <IconButton label={t('launch.settings')} action="settings" data-launch-settings onClick={() => setSettings(true)}>
+          <Icon name="settings" />
+        </IconButton>
+      </div>
       {settings && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)' }}>
           <SettingsPage onBack={() => setSettings(false)} projectless />
         </div>
       )}
     </>
+  )
+}
+
+/// 最近项目行（E11 `rec`）：悬停 --hover 底、相邻分隔线隐去；目录已删（exists=false）是只读展示行——
+/// open_recent 必报错，红字 + err chip，只剩 × 移除可操作。
+function RecentRow({ r, when, opening, onOpen, onRemove }: {
+  r: RecentProject
+  when: string
+  opening: boolean
+  onOpen: () => void
+  onRemove: () => void
+}) {
+  const { t } = useTranslation()
+  const missing = !r.exists
+  const row = 'group/rec flex items-center gap-3 rounded-[var(--r-card)] px-3 py-2.5 [&+&]:shadow-[0_-1px_0_var(--line-soft)] [&:hover+&]:shadow-none'
+  const icon = (
+    <span className={cn('grid size-[30px] flex-none place-items-center rounded-[8px]', missing ? 'bg-red-tint text-red' : r.mode === 'fastpath' ? 'bg-hover-2 text-ink' : 'bg-ink text-page')}>
+      <Icon name={missing ? 'warn' : r.mode === 'fastpath' ? 'bolt' : 'hex'} size={12} />
+    </span>
+  )
+  const info = (
+    <div className="min-w-0 flex-1 text-left">
+      <div className={cn('truncate text-[13px] font-medium', missing && 'text-red')}>{r.name}</div>
+      <div className={cn('truncate font-mono text-[12px]', missing ? 'text-red' : 'text-ink-3')} title={r.dir}>{r.dir}</div>
+    </div>
+  )
+  const removeBtn = (
+    <IconButton size="sm" label={t('launch.remove')} onClick={(e) => { e.stopPropagation(); onRemove() }}>
+      <Icon name="close" />
+    </IconButton>
+  )
+  if (missing) {
+    return (
+      <li className={cn(row, 'recent-row opacity-80')} data-missing="1">
+        {icon}{info}
+        <Badge variant="err">{t('launch.missing')}</Badge>
+        {removeBtn}
+      </li>
+    )
+  }
+  return (
+    <li className={cn(row, 'recent-row hx-press hx-focus cursor-pointer live:hover:bg-hover')} tabIndex={0} aria-busy={opening || undefined}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); onOpen() } }}
+    >
+      {icon}{info}
+      <Badge>{t(`launch.mode_${r.mode}`)}</Badge>
+      {when && <span className="w-[72px] flex-none text-right text-[12px] text-ink-3">{when}</span>}
+      {opening ? <Spinner /> : <span className="opacity-0 group-hover/rec:opacity-100 group-focus-within/rec:opacity-100">{removeBtn}</span>}
+    </li>
   )
 }

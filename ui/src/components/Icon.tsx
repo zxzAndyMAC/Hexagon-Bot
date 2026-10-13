@@ -9,6 +9,9 @@ import {
   List, Monitor, Moon, Package, PanelRight, Pause, Pencil, Plus, RefreshCw, Rocket, Settings, Shield,
   Stamp, Tag, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
 } from 'lucide-react'
+// 票 10 启动页与向导（foundations §7 映射：sparkle / undo→rotate-ccw / message→message-circle /
+// circleCheck / circleX / info / left→chevron-left / more 竖→ellipsis-vertical）
+import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircle, RotateCcw, Sparkle } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -73,6 +76,15 @@ const ICONS = {
   link: Link,
   copy: Copy,
   name: Tag,
+  // ---- 票 10 启动页与向导 ----
+  sparkle: Sparkle,
+  undo: RotateCcw,
+  message: MessageCircle,
+  'circle-check': CircleCheck,
+  'circle-x': CircleX,
+  info: Info,
+  'chevron-left': ChevronLeft,
+  'more-vertical': EllipsisVertical,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
