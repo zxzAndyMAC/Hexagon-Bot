@@ -796,7 +796,7 @@ export default {
     heading: {"providers": "モデルプロバイダーを接続", "dir": "プロジェクトフォルダーを選択", "brief": "プロジェクト説明", "roles": "チームの役割を選ぶ", "flow": "フロー下書き", "keys": "モデルキーの確認", "confirm": "確認して作成"},
     lead: {"dir": "このフォルダーにプロジェクトを作成します。ワークベンチ状態のあるフォルダーは開くだけです。", "briefAsk": "下書きの前にいくつか確認します。下書きはここに表示され、AGENTS.md は作成時にだけ書き込まれます。", "briefDraft": "下書きは直接編集できます。言及していないコマンドや技術スタックは「未知」と記されます。", "roles": "チェックで参加を決め、行をクリックするとこのプロジェクト用にカスタマイズできます。", "flow": "プロジェクト説明から生成します。検査コマンドは下で別に入力します。", "confirm": "内容を確認してください。作成するまでフォルダーには書き込みません。"},
     qa: {"edit": "修正", "answered": "{{count}} 問回答済み：{{list}}", "expand": "展開", "collapse": "折りたたむ", "prev": "前の質問", "next": "次の質問", "keysHint": "1–{{n}} で選択 · ↵ で続行", "continue": "続行", "other": "その他（自由入力）…", "usedForDraft": "{{count}} 問回答 · 下書きに使用", "view": "表示", "redraft": "下書きし直す", "draftTitle": "AGENTS.md の下書き", "notWritten": "未保存"},
-    roles: {"listHead": "テンプレート · {{picked}} / {{total}} 選択", "selectAll": "すべて選択", "new": "新規", "aiChip": "AI 下書き", "fromTemplate": "テンプレート「{{name}}」から", "localCustom": "このプロジェクト用にカスタマイズ", "pickHint": "左の役割をクリックしてカスタマイズします。", "newHint": "グローバルテンプレートに保存され、今後のすべてのプロジェクトで使えます。", "skills": "スキル"},
+    roles: {"listHead": "テンプレート · {{picked}} / {{total}} 選択", "selectAll": "すべて選択", "new": "新規", "aiChip": "AI 下書き", "fromTemplate": "テンプレート「{{name}}」から", "localCustom": "このプロジェクト用にカスタマイズ", "pickHint": "左の役割をクリックしてカスタマイズします。", "newHint": "グローバルテンプレートに保存され、今後のすべてのプロジェクトで使えます。", "create": "役割を作成", "skills": "スキル"},
     flow: {"drag": "ドラッグで並べ替え", "stamp": "承認", "auto": "自動"},
     retryGeneration: "もう一度生成",
     generationKept: "入力と下書きは保持されています。",

@@ -247,7 +247,7 @@ function NewRoleForm({ names, doc, onDone, onCancel, onBusy }: {
       <div className="flex items-center justify-end gap-2 pt-1">
         <Button size="sm" variant="ghost" onClick={onCancel}>{t('agent.cancel')}</Button>
         <Button size="sm" data-create-role disabled={!name.trim() || drafting} loading={saving} onClick={create}>
-          {t('agent.createRole')}
+          {t('wizard.roles.create')}
         </Button>
       </div>
     </div>

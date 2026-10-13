@@ -796,7 +796,7 @@ export default {
     heading: {"providers": "连接一个模型服务商", "dir": "选择项目目录", "brief": "项目说明", "roles": "选团队角色", "flow": "流程草稿", "keys": "密钥检查", "confirm": "确认创建"},
     lead: {"dir": "新项目在这个目录里创建；已有工作台状态的目录只能打开。", "briefAsk": "起草前先确认几件事。答完会在这里生成草稿，确认创建时才写入 AGENTS.md。", "briefDraft": "草稿可以直接改；你没提到的命令和技术栈标为「未知」。", "roles": "勾选决定要不要；点整行进行定制，只作用于本项目。", "flow": "按项目说明生成。检验命令单独在下方填写。", "confirm": "核对一遍。创建项目时才写入目录。"},
     qa: {"edit": "修改", "answered": "已答 {{count}} 题：{{list}}", "expand": "展开", "collapse": "收起", "prev": "上一题", "next": "下一题", "keysHint": "1–{{n}} 选择 · ↵ 继续", "continue": "继续", "other": "其他，自己填写…", "usedForDraft": "已答 {{count}} 题 · 用于起草", "view": "查看", "redraft": "重新起草", "draftTitle": "AGENTS.md 草稿", "notWritten": "未落盘"},
-    roles: {"listHead": "模板 · 已选 {{picked}} / {{total}}", "selectAll": "全选", "new": "新建", "aiChip": "AI 起草", "fromTemplate": "来自模板「{{name}}」", "localCustom": "本项目定制", "pickHint": "点左侧一行定制该角色。", "newHint": "写入全局模板库，以后所有新项目都能用。", "skills": "技能"},
+    roles: {"listHead": "模板 · 已选 {{picked}} / {{total}}", "selectAll": "全选", "new": "新建", "aiChip": "AI 起草", "fromTemplate": "来自模板「{{name}}」", "localCustom": "本项目定制", "pickHint": "点左侧一行定制该角色。", "newHint": "写入全局模板库，以后所有新项目都能用。", "create": "创建角色", "skills": "技能"},
     flow: {"drag": "拖动排序", "stamp": "盖章", "auto": "自动"},
     retryGeneration: "重新生成",
     generationKept: "你的输入和草稿都已保留。",

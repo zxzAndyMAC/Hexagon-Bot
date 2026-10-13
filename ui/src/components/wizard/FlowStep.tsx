@@ -17,19 +17,9 @@ import { Input } from '@/components/ui/input'
 import { EntityPicker } from '../EntityPicker'
 import { Icon } from '../Icon'
 import { CardLoading } from './CardLoading'
+import { QUALITY_CATEGORIES, moveStage } from './draft'
 
 type Stage = PackDef['stages'][number]
-export const QUALITY_CATEGORIES: QualityCategory[] = ['tests', 'performance', 'accessibility', 'security']
-
-/// 纯函数：把第 from 行挪到 to（越界夹紧）。拖拽与键盘共用。
-export function moveStage(stages: Stage[], from: number, to: number): Stage[] {
-  const target = Math.max(0, Math.min(stages.length - 1, to))
-  if (from === target) return stages
-  const next = stages.slice()
-  const [row] = next.splice(from, 1)
-  next.splice(target, 0, row)
-  return next
-}
 
 export function FlowDraft({ pack, roles, busy, onChange }: {
   pack: PackDef | null

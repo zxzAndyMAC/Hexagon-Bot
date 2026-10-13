@@ -1,6 +1,7 @@
 // 向导草稿（localStorage `hexagon.wizard`）：形状、读档迁移、项目身份键、角色定制规则。
 // 从 Wizard.tsx 拆出（ui-redesign 票 10）：草稿规则是纯逻辑，组件只负责渲染与调用。
 import type { PackDef, RoleDef } from '../../api'
+import type { QualityCategory } from '../../gen/QualityCategory'
 
 export const DRAFT_KEY = 'hexagon.wizard'
 
@@ -143,3 +144,17 @@ export function restoreRoleTemplate<T extends RoleState>(d: T, name: string): T 
     roleHandTuned: d.roleHandTuned.filter((n) => n !== name),
   }
 }
+
+type Stage = PackDef['stages'][number]
+export const QUALITY_CATEGORIES: QualityCategory[] = ['tests', 'performance', 'accessibility', 'security']
+
+/// 纯函数：把第 from 行挪到 to（越界夹紧）。拖拽与键盘共用。
+export function moveStage(stages: Stage[], from: number, to: number): Stage[] {
+  const target = Math.max(0, Math.min(stages.length - 1, to))
+  if (from === target) return stages
+  const next = stages.slice()
+  const [row] = next.splice(from, 1)
+  next.splice(target, 0, row)
+  return next
+}
+
