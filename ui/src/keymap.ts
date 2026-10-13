@@ -64,7 +64,8 @@ export type ActionId =
   | 'approve'
   | 'reject'
   | 'commandPalette'
-  | 'toggleRail'
+  | 'toggleSidebar'
+  | 'toggleCanvas'
   | 'splitEditor'
   | 'closeTab'
   | 'settings'
@@ -184,7 +185,10 @@ const DEFAULTS: Record<ActionId, string> = {
   approve: 'mod+Enter',
   reject: 'mod+Backspace',
   commandPalette: 'mod+K',
-  toggleRail: 'mod+B',
+  // ADR 0088（ui-redesign 票 02）：⌘B 由「开关右栏」改为「开关左侧栏」，动作 id 随之改名；
+  // 旧 id 的用户重映射由 migrateLegacyBindings 迁过来。⌥⌘B 开关画布（03 接入画布本体）。
+  toggleSidebar: 'mod+B',
+  toggleCanvas: 'alt+mod+B',
   splitEditor: 'mod+\\',
   closeTab: 'mod+W',
   settings: 'mod+,',
@@ -307,7 +311,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'desktopAccessibility', labelKey: 'desktop.openAccessibility' },
   { id: 'desktopScreenRecording', labelKey: 'desktop.openScreen' },
   { id: 'commandPalette', labelKey: 'keys.palette' },
-  { id: 'toggleRail', labelKey: 'keys.rail' },
+  { id: 'toggleSidebar', labelKey: 'keys.sidebar' },
+  { id: 'toggleCanvas', labelKey: 'keys.canvas' },
   { id: 'splitEditor', labelKey: 'keys.split' },
   { id: 'closeTab', labelKey: 'keys.closeTab' },
   { id: 'settings', labelKey: 'keys.settings' },
@@ -350,6 +355,23 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'recoverExperience', labelKey: 'experience.recover' },
   { id: 'openPolicyReport', labelKey: 'policy.report' },
 ]
+
+/** 改名动作的旧 id → 新 id（ADR 0088：toggleRail → toggleSidebar）。 */
+const RENAMED: Record<string, ActionId> = { toggleRail: 'toggleSidebar' }
+
+/**
+ * 把用户对已改名动作的重映射搬到新 id，删除旧键。新 id 已有用户绑定时以新的为准，旧键只清掉。
+ * 模块加载时跑一次；幂等，没有旧键时什么也不做。
+ */
+export function migrateLegacyBindings() {
+  for (const [from, to] of Object.entries(RENAMED)) {
+    const old = localStorage.getItem(`hexagon.key.${from}`)
+    if (old == null) continue
+    if (localStorage.getItem(`hexagon.key.${to}`) == null) localStorage.setItem(`hexagon.key.${to}`, old)
+    localStorage.removeItem(`hexagon.key.${from}`)
+  }
+}
+migrateLegacyBindings()
 
 export function bindingFor(a: ActionId): string {
   return localStorage.getItem(`hexagon.key.${a}`) ?? DEFAULTS[a]

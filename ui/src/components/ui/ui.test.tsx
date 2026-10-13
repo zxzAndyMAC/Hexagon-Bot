@@ -79,8 +79,8 @@ describe('Button（A1）', () => {
 
 describe('IconButton（A2）', () => {
   it('可读名 + tooltip 显示用户当前绑定（ADR 0051），开态 aria-pressed', async () => {
-    localStorage.setItem('hexagon.key.toggleRail', 'mod+shift+j')
-    await render(<IconButton label="开关侧栏" action="toggleRail" on>x</IconButton>)
+    localStorage.setItem('hexagon.key.toggleSidebar', 'mod+shift+j')
+    await render(<IconButton label="开关侧栏" action="toggleSidebar" on>x</IconButton>)
     const b = $('button[aria-label="开关侧栏"]')
     expect(b.getAttribute('aria-pressed')).toBe('true')
     await act(async () => { b.focus() })

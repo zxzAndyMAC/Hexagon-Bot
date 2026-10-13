@@ -4,7 +4,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import i18n from './i18n'
 import { api } from './api'
 import { CenterTab } from './App'
-import { SidePanel } from './components/SidePanel'
+import { Sidebar } from './components/shell/Sidebar'
+import { InterimCanvas } from './components/shell/InterimCanvas'
+import { TooltipProvider } from './components/ui/tooltip'
 import { bindingFor, formatBinding } from './keymap'
 import { useUiStore } from './store'
 import type { ArtifactRow } from './gen/ArtifactRow'
@@ -29,12 +31,14 @@ function Harness() {
   const activeTab = useUiStore((s) => s.activeTab)
   const tab = tabs.find((t) => t.id === activeTab) ?? tabs[0]
   return (
-    <div>
+    <TooltipProvider>
+      {/* ADR 0088（票 02）：右栏「项目」页签撤掉，树在侧栏「项目文件」打开的画布占位里 */}
+      <Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} />
       <main data-testid="center">
         {tab.kind === 'file' && <CenterTab tab={tab} />}
       </main>
-      <SidePanel />
-    </div>
+      <InterimCanvas />
+    </TooltipProvider>
   )
 }
 
@@ -81,14 +85,15 @@ describe('右栏项目页文件树（票 11）', () => {
       id: 'a1', path: '.hexagon/specs/plan.md', kind: 'doc', tier: 'freeform',
       stage_run_id: null, author: null, version: 1, status: 'valid', upstream_id: null,
     }
-    useUiStore.setState({ artifacts: [row], railOpen: true, sideTab: 'artifacts' })
+    useUiStore.setState({ artifacts: [row], canvasOpen: true, canvasPane: 'artifacts' })
     ;({ el, root } = await render(<Harness />))
 
     expect(el!.textContent).toContain('.hexagon/specs/plan.md')
     expect(el!.querySelector('[data-testid=file-tree]')).toBeNull()
 
-    const project = [...el!.querySelectorAll('button')].find((b) => b.textContent === '项目')
-    await act(async () => { project!.click() })
+    // ADR 0088：切到树的入口从右栏「项目」页签改为侧栏「项目文件」
+    const project = el!.querySelector('[data-nav="files"]') as HTMLButtonElement
+    await act(async () => { project.click() })
     expect(el!.querySelector('[data-testid=file-tree]')).toBeTruthy()
     expect(el!.textContent).not.toContain('.hexagon/specs/plan.md')
     expect(el!.textContent).not.toMatch(/调试器|debugger|插件/)
@@ -109,7 +114,7 @@ describe('右栏项目页文件树（票 11）', () => {
 
   it('新建文件、新建目录、刷新打到仓库命令，按钮带键位', async () => {
     mockTree()
-    useUiStore.setState({ railOpen: true, sideTab: 'files' })
+    useUiStore.setState({ canvasOpen: true, canvasPane: 'files' })
     ;({ el, root } = await render(<Harness />))
 
     const newFile = el!.querySelector('button[title*="新建文件"]') as HTMLButtonElement
@@ -146,7 +151,7 @@ describe('右栏项目页文件树（票 11）', () => {
 
   it('点文件在中栏打开编辑器，右栏仍只是树', async () => {
     mockTree()
-    useUiStore.setState({ railOpen: true, sideTab: 'files' })
+    useUiStore.setState({ canvasOpen: true, canvasPane: 'files' })
     ;({ el, root } = await render(<Harness />))
 
     await act(async () => { treeitem(el!, 'README.md').click() })

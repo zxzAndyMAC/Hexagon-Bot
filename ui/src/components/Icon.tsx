@@ -7,8 +7,10 @@ import {
   CircleHelp, Columns2, Copy, Download, Eye, EyeOff, File, FileCode, FileCog, FileImage, FileJson,
   FileText, Flag, Folder, GitCompare, Globe, Hexagon, Inbox, JapaneseYen, Layers, Lightbulb, Link,
   List, Monitor, Moon, Package, PanelRight, Pause, Pencil, Plus, RefreshCw, Rocket, Settings, Shield,
-  Search, Sparkle, Stamp, Tag, Terminal, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
+  Sparkle, Stamp, Tag, Terminal, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
 } from 'lucide-react'
+// ui-redesign 票 02 外壳（foundations §7 原型名 search / sidebar / more / clock / expand）
+import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -24,10 +26,9 @@ const ICONS = {
   edit: Pencil,
   'chevron-down': ChevronDown,
   'chevron-right': ChevronRight,
-  // 票 05：思考折叠 ▴、工具行失败、读类搜索 / 执行类命令（foundations §7 原型名 up/circleX/search/terminal/sparkle）
+  // 票 05：思考折叠 ▴、工具行失败、执行类命令（foundations §7 原型名 up/circleX/terminal/sparkle；search 见票 02 段）
   'chevron-up': ChevronUp,
   'circle-x': CircleX,
-  search: Search,
   terminal: Terminal,
   sparkle: Sparkle,
   refresh: RefreshCw,
@@ -79,6 +80,12 @@ const ICONS = {
   link: Link,
   copy: Copy,
   name: Tag,
+  // ---- 外壳（票 02）：侧栏收起、搜索与命令、头部 ⋯、阶段 chip、查看流程 ----
+  'panel-left': PanelLeft,
+  search: Search,
+  more: Ellipsis,
+  clock: Clock,
+  expand: Maximize2,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
