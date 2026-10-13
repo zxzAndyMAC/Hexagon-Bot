@@ -9,12 +9,34 @@ import {
   List, Monitor, Moon, Package, PanelRight, Pause, Pencil, Plus, RefreshCw, Rocket, Settings, Shield,
   Stamp, Tag, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
 } from 'lucide-react'
+// ui-redesign 票 11 设置（foundations §7 原型名 keyboard / cpu / users / message2 / book / plug / logs / info / key / sun / moon / image / terminal / filter / external / gauge）
+import {
+  Book, Cpu, ExternalLink, Funnel, Gauge, Image, Info, Key, Keyboard, Logs, MessagesSquare, Plug, Sun,
+  Terminal, Users,
+} from 'lucide-react'
 // ui-redesign 票 02 外壳（foundations §7 原型名 search / sidebar / more / clock / expand）
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
   pause: Pause,
+  // ---- 设置（票 11）：分区导航、数据去向行、主题分段、能力图标、筛选 ----
+  keyboard: Keyboard,
+  cpu: Cpu,
+  users: Users,
+  messages: MessagesSquare,
+  book: Book,
+  plug: Plug,
+  logs: Logs,
+  info: Info,
+  key: Key,
+  sun: Sun,
+  moon: Moon,
+  image: Image,
+  terminal: Terminal,
+  filter: Funnel,
+  external: ExternalLink,
+  gauge: Gauge,
   // ---- 导航 / 动作 ----
   close: X,
   'arrow-left': ArrowLeft,

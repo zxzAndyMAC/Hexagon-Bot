@@ -1,0 +1,38 @@
+// 设置「键盘」分区的动作分组（ui-redesign 票 11；settings#keys、components E7）。
+// keymap.ts 的 ACTIONS 是扁平表，分区按 id 规则归组后自动列出——新增或改名的动作（票 02 toggleSidebar /
+// toggleCanvas、票 03 canvasFullWidth / focusMode）不需要改这里也会出现；认不出的进「其他」，不会漏列。
+import type { ActionId } from '../../keymap'
+
+export const KEY_GROUPS = ['decide', 'layout', 'managed', 'computer', 'session', 'files', 'other'] as const
+export type KeyGroup = (typeof KEY_GROUPS)[number]
+
+const DECIDE = new Set<string>([
+  'approve', 'reject', 'dismissPending', 'permissionOptions', 'stageStamp', 'stageRewind', 'confirmIntake',
+  'reconcileAction', 'abandonAction', 'retryAction', 'continueOriginalTask', 'followNewInstruction',
+  'retryWithChatModel', 'rejudgeAfterModelFailure', 'requestException', 'acceptException',
+])
+const LAYOUT = new Set<string>([
+  'commandPalette', 'settings', 'toggleSidebar', 'toggleCanvas', 'canvasFullWidth', 'focusMode', 'splitEditor',
+  'closeTab', 'focusComposer', 'nodeRail',
+])
+
+/** 第一条命中的规则决定分组。 */
+export function keyGroupOf(id: string): KeyGroup {
+  if (DECIDE.has(id)) return 'decide'
+  if (LAYOUT.has(id) || id.startsWith('timeline')) return 'layout'
+  if (id.startsWith('managed') || id === 'confirmManaged' || id === 'approvalMode' || /BroadAccess$/.test(id) || id === 'modelRecoveryStop') return 'managed'
+  if (/^(desktop|browser|agentScreen)/.test(id) || /(BrowserElement|DesktopScreenshot)$/.test(id) || id === 'computerModelSettings') return 'computer'
+  if (id.startsWith('session')) return 'session'
+  if (id.startsWith('tree') || /FileEdits?$/.test(id) || id === 'saveFile') return 'files'
+  return 'other'
+}
+
+/** 按 KEY_GROUPS 顺序分组，组内保持 ACTIONS 原顺序；空组不出。 */
+export function groupActions<T extends { id: ActionId | string }>(actions: readonly T[]): { group: KeyGroup; actions: T[] }[] {
+  return KEY_GROUPS
+    .map((group) => ({ group, actions: actions.filter((a) => keyGroupOf(a.id) === group) }))
+    .filter((g) => g.actions.length > 0)
+}
+
+/** 系统保留组合：录制时拒绝写入（E7 禁用行「系统保留组合不可录」）。 */
+export const RESERVED_BINDINGS = new Set(['mod+q', 'mod+h', 'mod+m', 'mod+tab', 'mod+space', 'mod+c', 'mod+v', 'mod+x', 'mod+z', 'mod+a'])
