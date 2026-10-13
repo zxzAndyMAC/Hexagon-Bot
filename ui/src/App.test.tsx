@@ -62,11 +62,12 @@ describe('i18n dictionaries', () => {
 
   it('resolves a key after switching language', async () => {
     await i18n.changeLanguage('zh-CN')
-    expect(i18n.t('topbar.sleepAll')).toBe('全员休眠')
+    // ADR 0088（票 02）：顶栏撤掉，「全员休眠」词条随入口迁到头部 ⋯ 菜单（header.sleepAll）
+    expect(i18n.t('header.sleepAll')).toBe('全员休眠')
     await i18n.changeLanguage('fr')
-    expect(i18n.t('topbar.sleepAll')).toBe('Tout suspendre')
+    expect(i18n.t('header.sleepAll')).toBe('Mettre tout le monde en veille')
     await i18n.changeLanguage('en')
-    expect(i18n.t('topbar.sleepAll')).toBe('Sleep all')
+    expect(i18n.t('header.sleepAll')).toBe('Put everyone to sleep')
   })
 })
 

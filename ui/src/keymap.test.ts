@@ -44,3 +44,38 @@ describe('matches 平台精确化（票 15）', () => {
     }
   })
 })
+
+describe('toggleRail → toggleSidebar（票 02，ADR 0088：⌘B 由右栏改为侧栏）', () => {
+  it('默认 mod+B 绑在 toggleSidebar；toggleRail 不再是动作；新增 toggleCanvas alt+mod+B', async () => {
+    const km = await import('./keymap')
+    const ids = km.ACTIONS.map((a) => a.id as string)
+    expect(ids).toContain('toggleSidebar')
+    expect(ids).not.toContain('toggleRail')
+    expect(km.bindingFor('toggleSidebar')).toBe('mod+B')
+    expect(km.bindingFor('toggleCanvas')).toBe('alt+mod+B')
+  })
+
+  it('用户对 toggleRail 的重映射迁到 toggleSidebar，旧键删除，只迁一次', async () => {
+    const km = await import('./keymap')
+    localStorage.setItem('hexagon.key.toggleRail', 'mod+shift+L')
+    km.migrateLegacyBindings()
+    expect(localStorage.getItem('hexagon.key.toggleRail')).toBeNull()
+    expect(km.bindingFor('toggleSidebar')).toBe('mod+shift+L')
+    // 已有新 id 的绑定时不覆盖，只清旧键
+    localStorage.setItem('hexagon.key.toggleRail', 'mod+shift+X')
+    km.migrateLegacyBindings()
+    expect(km.bindingFor('toggleSidebar')).toBe('mod+shift+L')
+    expect(localStorage.getItem('hexagon.key.toggleRail')).toBeNull()
+    km.resetBinding('toggleSidebar')
+  })
+
+  it('模块加载时自动迁移', async () => {
+    localStorage.setItem('hexagon.key.toggleRail', 'mod+shift+Y')
+    vi.resetModules()
+    const km = await import('./keymap')
+    expect(km.bindingFor('toggleSidebar')).toBe('mod+shift+Y')
+    expect(localStorage.getItem('hexagon.key.toggleRail')).toBeNull()
+    km.resetBinding('toggleSidebar')
+    vi.resetModules()
+  })
+})

@@ -148,6 +148,19 @@ export function AgentScreen() {
 
   const hide = useCallback(() => { if (root.current) hiddenProjects.add(root.current); setVisible(false); setFrame(null); setError(''); queueMicrotask(() => reopen.current?.focus()) }, [])
   const show = useCallback(() => { if (root.current) hiddenProjects.delete(root.current); setVisible(true) }, [])
+  // ui-redesign 票 02（components B5）：头部「屏幕」按钮只在有目标时渲染，点它与 agentScreen 键同效。
+  const hasTarget = target != null
+  useEffect(() => {
+    useUiStore.setState({ agentScreenAvailable: hasTarget })
+    return () => useUiStore.setState({ agentScreenAvailable: false })
+  }, [hasTarget])
+  const screenReq = useUiStore(state => state.agentScreenReq)
+  const lastReq = useRef(screenReq)
+  useEffect(() => {
+    if (screenReq === lastReq.current) return
+    lastReq.current = screenReq
+    if (visible) hide(); else show()
+  }, [screenReq, visible, hide, show])
   const focusTarget = useCallback(async () => {
     const selected = currentTarget.current
     if (!selected || useUiStore.getState().projectEpoch !== targetEpoch) return
