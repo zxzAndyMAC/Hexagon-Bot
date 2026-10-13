@@ -226,7 +226,7 @@ function RecentRow({ r, when, opening, onOpen, onRemove }: {
     >
       {icon}{info}
       <Badge>{t(`launch.mode_${r.mode}`)}</Badge>
-      {when && <span className="w-[72px] flex-none text-right text-[12px] text-ink-3">{when}</span>}
+      {when && <span className="flex-none text-[12px] text-ink-3">{when}</span>}
       {opening ? <Spinner /> : <span className="opacity-0 group-hover/rec:opacity-100 group-focus-within/rec:opacity-100">{removeBtn}</span>}
     </li>
   )

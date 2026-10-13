@@ -104,7 +104,7 @@ export function BriefQaCard({ questions, index, answers, onIndex, onAnswer, onCo
                 aria-hidden
                 className={cn(
                   'grid size-[18px] flex-none place-items-center rounded-[5px] font-mono text-[10.5px] font-medium',
-                  on ? 'bg-accent text-white' : 'text-ink-3 shadow-[inset_0_0_0_1px_var(--line)]',
+                  on ? 'bg-primary text-white' : 'text-ink-3 shadow-[inset_0_0_0_1px_var(--line)]',
                 )}
               >
                 {i + 1}

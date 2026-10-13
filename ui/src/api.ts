@@ -1443,13 +1443,15 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
       return 'shadow' as T
     // ---- 项目向导 mock：浏览器 dev 始终「已有项目」，向导只在 Tauri 真开时出现 ----
     case 'project_open':
-      return true as T
+      // ui-redesign 票 10：`?launcher` 让浏览器 dev 落到启动页，用来和原型 entry#launcher 截图比对
+      return !new URLSearchParams(location.search).has('launcher') as T
     case 'project_identity':
       return (currentProjectIdentity() ?? { project_root: useUiStore.getState().projectRoot ?? '/tmp/hexagon-demo', generation: 1 }) as T
     case 'recent_projects':
       // 一条存在 + 一条已删目录（exists=false）——浏览器 dev 可目检红标与移除钮
       return [
-        { dir: '/tmp/hexagon-demo', name: 'hexagon-demo', mode: 'pack', opened_at: 1, exists: true },
+        { dir: '/tmp/hexagon-demo', name: 'hexagon-demo', mode: 'pack', opened_at: Math.floor(Date.now() / 1000) - 7200, exists: true },
+        { dir: '/tmp/landing-page', name: 'landing-page', mode: 'fastpath', opened_at: Math.floor(Date.now() / 1000) - 86400, exists: true },
         { dir: '/gone/deleted-proj', name: 'deleted-proj', mode: 'fastpath', opened_at: 0, exists: false },
       ] as T
     case 'open_recent':
@@ -1475,6 +1477,10 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         knobs: { judge: null, flag_patience: null, auto_backfill: null, consult_auto_wake: null },
       } as T
     case 'inspect_dir':
+      // 目录名含 empty 时按空目录体检：浏览器 dev 可走到项目说明步的答问卡（票 10 截图比对）
+      if (String(args?.dir ?? '').includes('empty')) {
+        return { exists: true, empty: true, is_git: true, dirty: false, has_workbench: false, instructions: null } as T
+      }
       return { exists: true, empty: false, is_git: true, dirty: false, has_workbench: false, instructions: 'AGENTS.md' } as T
     case 'preset_roles':
       return [

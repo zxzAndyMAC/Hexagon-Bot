@@ -38,7 +38,7 @@ export function WizardShell({ steps, step, locked, onJump, children, foot }: {
                     className={cn(
                       'grid size-5 flex-none place-items-center rounded-full text-[11px] font-semibold',
                       done && 'bg-ink text-page',
-                      current && 'text-accent shadow-[inset_0_0_0_1.5px_var(--accent)]',
+                      current && 'text-primary shadow-[inset_0_0_0_1.5px_var(--accent)]',
                       !done && !current && 'shadow-[inset_0_0_0_1.5px_var(--line-strong)]',
                     )}
                   >
