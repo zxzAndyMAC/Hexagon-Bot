@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
-export function openUsageDetail(title: string) {
+function openUsageDetail(title: string) {
   useUiStore.getState().openTab({ id: 'usage', kind: 'usage', title })
 }
 

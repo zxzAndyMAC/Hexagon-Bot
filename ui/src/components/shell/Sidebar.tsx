@@ -13,7 +13,8 @@ import { isMac } from '../../keymap'
 import { Icon, type IconName } from '../Icon'
 import { ProjectBlock, Hexmark } from './ProjectBlock'
 import { StageList } from './StageList'
-import { TeamList, useAddRole, useWorkingAgents } from './TeamList'
+import { TeamList } from './TeamList'
+import { useAddRole, useWorkingAgents } from './teamHooks'
 import { UsageButton } from './UsageEntry'
 import { Avatar } from '@/components/ui/avatar'
 import { IconButton } from '@/components/ui/icon-button'
@@ -29,7 +30,7 @@ export type SidebarProps = {
 }
 
 /** 负责人事项数：待决卡 + 待复审提案（与待决界面同一口径）。 */
-export function useOwnerPendingCount() {
+function useOwnerPendingCount() {
   return useUiStore((s) => s.pending.length + s.reviewRows.length)
 }
 

@@ -2,44 +2,15 @@
 // 34 高：24 头像（含状态点）+ 名 13px + 右侧状态：工作中 = 像素格；休眠 = 「休眠」11 ink-3 且整行 opacity .5。
 // 点击打开该 Agent（票 02 仍在中栏页签打开，03 改在画布打开）；当前打开的成员 --hover-2 底。
 // 悬停名片（B3 写 HoverCard）暂用 A15 Tooltip 显示「角色 · 模型」——基础件里还没有 HoverCard，对账表票 02 记录。
-import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../../store'
 import type { TeamRow } from '../../gen/TeamRow'
-import { factOpenTurns } from '../../timelineFacts'
-import { openTurns } from '../../timelineModel'
 import { slotLabel } from '../../modelpick'
-import { CreateRoleForm } from '../RoleEditor'
+import { useWorkingAgents } from './teamHooks'
 import { Avatar } from '@/components/ui/avatar'
 import { PixelGrid } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-
-/**
- * 正在工作的成员 id：有未收束回合（宿主 facts；无 facts 的 dev 回退时间线扫描），
- * 或流式缓冲里已有输出 / 思考 / 计划。与时间线 StreamFooter 的「在说话」口径一致。
- */
-export function useWorkingAgents(): ReadonlySet<string> {
-  const facts = useUiStore((s) => s.timelineFacts)
-  const projectRoot = useUiStore((s) => s.projectRoot)
-  const timeline = useUiStore((s) => s.timeline)
-  const caughtUp = useUiStore((s) => s.timelineCaughtUp)
-  const streams = useUiStore((s) => s.streams)
-  const thinkings = useUiStore((s) => s.thinkings)
-  const plans = useUiStore((s) => s.plans)
-  return useMemo(() => {
-    const ids = new Set<string>()
-    const open = facts || projectRoot ? factOpenTurns(facts) : openTurns(timeline, caughtUp)
-    for (const id of open.keys()) if (id) ids.add(id)
-    const speaking = (m: Record<string, Record<number, string>>) => {
-      for (const [id, parts] of Object.entries(m)) if (Object.values(parts).some((x) => x.length > 0)) ids.add(id)
-    }
-    speaking(streams)
-    speaking(thinkings)
-    for (const [id, plan] of Object.entries(plans)) if (plan) ids.add(id)
-    return ids
-  }, [facts, projectRoot, timeline, caughtUp, streams, thinkings, plans])
-}
 
 function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
   const { t } = useTranslation()
@@ -87,16 +58,4 @@ export function TeamList() {
       {team.map((m) => <MemberRow key={m.id} m={m} working={working.has(m.id) && m.status !== 'sleeping'} />)}
     </ul>
   )
-}
-
-/** 「+ 添加角色」：沿用旧右栏团队页的内联创建表单（RoleEditor，向导与设置共用的 E4 换皮在票 10/11）。 */
-export function useAddRole() {
-  const [creating, setCreating] = useState(false)
-  const invalidate = useUiStore((s) => s.invalidate)
-  const form = creating ? (
-    <div className="px-2.5 pb-2">
-      <CreateRoleForm onDone={() => { setCreating(false); invalidate('team') }} />
-    </div>
-  ) : null
-  return { creating, toggle: () => setCreating((v) => !v), form }
 }

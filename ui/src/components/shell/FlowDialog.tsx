@@ -15,16 +15,17 @@ export function FlowDialog() {
   const mode = useUiStore((s) => s.mode)
   const packName = useUiStore((s) => s.packName)
   const projectEpoch = useUiStore((s) => s.projectEpoch)
-  const [flowPack, setFlowPack] = useState<PackDef | null>(null)
+  const [loaded, setFlowPack] = useState<{ epoch: number; pack: PackDef | null }>({ epoch: -1, pack: null })
+  // 切项目后旧流程包作废：按 epoch 过滤，而不是在 effect 里清空
+  const flowPack = loaded.epoch === projectEpoch ? loaded.pack : null
   const close = () => useUiStore.getState().setFlowDialogOpen(false)
 
-  useEffect(() => { setFlowPack(null) }, [projectEpoch])
   useEffect(() => {
     if (!open || mode === 'fastpath') return
     let cancel = false
-    api.currentProcessPack().then((p) => { if (!cancel) setFlowPack(p) }).catch(() => { if (!cancel) setFlowPack(null) })
+    api.currentProcessPack().then((p) => { if (!cancel) setFlowPack({ epoch: projectEpoch, pack: p }) }).catch(() => { if (!cancel) setFlowPack({ epoch: projectEpoch, pack: null }) })
     return () => { cancel = true }
-  }, [open, mode])
+  }, [open, mode, projectEpoch])
   useEffect(() => {
     if (!open) return
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); close() } }
