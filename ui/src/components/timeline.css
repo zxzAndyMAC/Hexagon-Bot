@@ -1,0 +1,228 @@
+/* 时间线行（ui-redesign 票 05）：components C1–C13、interaction §4 §7。
+   取值逐项对齐 docs/design/beautiful-ui/proto.css 的 msg / me / atom / sys / stagehead /
+   think / tools / trow / exec / turnsum / deliver 段，只引用 foundations 的 token。
+   全部挂在 .tl 作用域下：旧全局类（.sysrow .chip .exec-card .tchip-row …）是测试与
+   其它旧界面（AgentTab 等，票 07 画布换皮前）的钩子，这里只在时间线内覆盖它们的外观。
+   无层级的 CSS 胜过 Tailwind 的 @layer utilities，所以这些规则不与 shadcn 组件打架：
+   组件（Button / Badge / CodeChip / Card / Avatar）不带这些类名。 */
+
+.tl { background: var(--app-main); color: var(--ink); }
+
+/* §5 对话阅读列 720，左右 24（foundations §5） */
+.tl-col { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+/* 工具组 / 回合摘要随消息正文列对齐：30 头像 + 12 间距 */
+.tl-indent { padding-left: 42px; }
+
+/* ---- 过滤条（A7 + A2，与导出钮同排，贴在对话列上沿） ---- */
+.tl-bar { display: flex; align-items: center; gap: 8px; padding-top: 12px; padding-bottom: 6px; }
+.tl-bar .tl-sp { flex: 1; }
+
+/* ---- C1 消息 ---- */
+.tl-msg { display: flex; gap: 12px; padding: 10px 0; }
+.tl-grow { flex: 1; min-width: 0; }
+.tl-who { display: flex; align-items: center; gap: 6px; min-height: 20px; font-size: 13px; margin-bottom: 3px; }
+.tl-who b { font-weight: 600; }
+.tl-who .t { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.tl-who .tl-copy { margin-left: auto; opacity: 0; }
+.tl-msg:hover .tl-who .tl-copy, .tl-who .tl-copy:focus-visible { opacity: 1; }
+.tl .msg-body {
+  max-width: none; padding: 0; border: 0; border-radius: 0; background: none;
+  font-size: 14px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere;
+}
+.tl .msg-body p { margin: 0; }
+.tl .msg-body p + p, .tl .msg-body p + ul, .tl .msg-body ul + p { margin-top: 6px; }
+.tl .msg-body ul, .tl .msg-body ol { padding-left: 18px; margin: 4px 0; }
+.tl .msg-body code { font: 12.5px var(--mono); padding: 1px 5px; border-radius: 5px; background: var(--canvas); border: 0; }
+.tl .msg-body a { color: var(--accent-ink); }
+.tl .msg-body blockquote { border-left-color: var(--line-strong); color: var(--ink-2); }
+.tl .msg-body th, .tl .msg-body td { border-color: var(--line); }
+.tl .msg-body th { background: var(--inset); }
+.tl .msg-body.live > :last-child::after { background: var(--ink-2); }
+.tl .msg-toggle { font-size: 12px; color: var(--ink-3); background: none; border: 0; padding: 4px 0 0; cursor: pointer; }
+.tl .msg-toggle:hover { color: var(--ink); }
+.tl-mention { color: var(--accent-ink); font-weight: 500; }
+.tl-note { margin-top: 4px; font-size: 12.5px; color: var(--ink-2); }
+
+/* ---- C2 负责人消息：右对齐灰胶囊，最宽 78% ---- */
+.tl-me { display: flex; flex-direction: column; align-items: flex-end; padding: 10px 0; }
+.tl-me-row { display: flex; align-items: flex-start; gap: 6px; max-width: 100%; justify-content: flex-end; }
+.tl-me-row .tl-copy { opacity: 0; align-self: center; }
+.tl-me:hover .tl-copy, .tl-me .tl-copy:focus-visible { opacity: 1; }
+.tl-bub {
+  max-width: 78%; padding: 9px 14px; border-radius: 18px; background: var(--bubble);
+  font-size: 14px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tl-bub .msg-body { white-space: normal; }
+.tl-me-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; font-size: 11.5px; color: var(--ink-3); }
+.tl-me-files { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
+
+/* ---- C3 原子块 ---- */
+.tl-atom {
+  display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; height: 21px; border-radius: 6px;
+  font-size: 12.5px; font-weight: 500; vertical-align: 1px; white-space: nowrap;
+}
+.tl-atom.m { background: var(--accent-tint); color: var(--accent-ink); }
+.tl-atom.p { background: var(--violet-tint); color: var(--violet); font-family: var(--mono); font-weight: 400; font-size: 12px; }
+button.tl-atom.p { border: 0; cursor: pointer; }
+button.tl-atom.p:hover { text-decoration: underline; text-underline-offset: 2px; }
+button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* ---- C4 标记：阶段头与系统行 ---- */
+.tl-stagehead { display: flex; align-items: center; gap: 10px; padding: 22px 0 10px; }
+.tl-stagehead .ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--orange-tint); color: var(--orange); flex: none; }
+.tl-stagehead b { font-size: 13px; font-weight: 600; }
+.tl-stagehead::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.tl .tl-sys { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 12px; color: var(--ink-3); }
+.tl .tl-sys::before, .tl .tl-sys::after { content: ""; flex: 1; min-width: 24px; height: 1px; background: var(--line); }
+.tl .tl-sys.left::before { display: none; }
+.tl .tl-sys.risk { color: var(--red); }
+.tl .tl-sys > .tl-sys-l { display: inline-flex; align-items: center; gap: 6px; max-width: 85%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl .tl-sys .dim3 { color: var(--ink-3); }
+.tl .tl-sys button.tl-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent-ink); cursor: pointer; }
+.tl .tl-sys button.tl-link:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 4px; }
+/* 可点的系统行（展开系统事件组）：整行是按钮 */
+.tl button.tl-sys { width: 100%; border: 0; background: none; font: inherit; cursor: pointer; border-radius: 6px; }
+.tl button.tl-sys:hover { color: var(--ink-2); }
+.tl button.tl-sys:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* ---- C6 思考 ---- */
+.tl .thinking-row { margin: 0 0 4px; color: var(--ink-2); font-size: 13px; }
+.tl .thinking-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; background: none;
+  font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer; border-radius: 6px;
+}
+.tl .thinking-toggle:hover { color: var(--ink); }
+.tl .thinking-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.tl .thinking-full {
+  margin: 6px 0 4px 6px; padding: 0 0 0 16px; border-left: 1.5px solid var(--line);
+  max-height: 12rem; font-size: 13px; line-height: 1.6; color: var(--ink-2);
+}
+.tl .plan-row { padding: 0; }
+
+/* ---- C7 工具组 ---- */
+.tl-tools { margin: 6px 0; }
+.tl .tl-sum {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; margin: 0 0 6px -4px;
+  border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink-2); cursor: pointer; border-radius: 6px;
+}
+.tl .tl-sum:hover { background: var(--hover); color: var(--ink); }
+.tl .tl-sum:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.tl .tchip-row {
+  display: flex; width: 100%; align-items: center; gap: 8px; height: 28px; padding: 0 6px; margin-left: -6px;
+  box-sizing: content-box; border: 0; border-radius: 6px; background: none; font: inherit; font-size: 13px;
+  color: var(--ink); text-align: left; cursor: pointer;
+}
+.tl .tchip-row:hover { background: var(--hover); }
+.tl .tchip-row:active { transform: scale(.98); }
+.tl .tchip-row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.tl .tchip-row > svg { color: var(--ink-2); }
+.tl .tchip-label { font-weight: 500; white-space: nowrap; }
+.tl .tl-st { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.tl .tchip-detail { margin: 2px 0 6px; padding: 8px 10px; background: var(--inset); border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-soft); font-size: 12px; }
+.tl .tchip-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 0; border: 0; }
+/* 文件 chip：surface 底 + card 环（workbench#running .files） */
+.tl .tchip-files .chip-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border: 0; border-radius: 6px;
+  font: 11.5px var(--mono); color: var(--ink); background: var(--surface); box-shadow: var(--shadow-card); cursor: pointer;
+}
+.tl .tchip-files .chip-btn:hover { background: var(--hover); }
+.tl .tchip-files .chip-btn:focus-visible { outline: none; box-shadow: var(--shadow-card), var(--focus-ring); }
+
+/* 运行环：--line-strong 轨 + --ink-2 弧（A14 .ring），不再用旧 --warn 蓝 */
+.tl .spinner-ring circle:first-child { stroke: var(--line-strong); }
+.tl .spinner-ring circle:last-child { stroke: var(--ink-2); }
+
+/* ---- A4 胶囊（时间线内的旧 .chip 钩子换成 A4 形制） ---- */
+.tl .chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; border-radius: var(--r-pill);
+  font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--canvas); color: var(--ink-2);
+}
+.tl .chip.ok { background: var(--green-tint); color: var(--green); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--green) calc(28% * var(--tint-ring)), transparent); }
+.tl .chip.warn, .tl .chip.amber { background: var(--orange-tint); color: var(--orange); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--orange) calc(30% * var(--tint-ring)), transparent); }
+.tl .chip.err { background: var(--red-tint); color: var(--red); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--red) calc(26% * var(--tint-ring)), transparent); }
+.tl .chip.info { background: var(--accent-tint); color: var(--accent-ink); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) calc(24% * var(--tint-ring)), transparent); }
+.tl .chip.flag { background: var(--violet-tint); color: var(--violet); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--violet) calc(24% * var(--tint-ring)), transparent); }
+/* 工具行右侧的落定状态是纯文字（✓ 耗时 / ✕ 失败），只借 .chip.ok/.err 作钩子 */
+.tl .tl-st .chip { height: auto; padding: 0; background: none; box-shadow: none; font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
+.tl .tl-st .chip.err { color: var(--red); }
+.tl .tl-st .chip.warn { color: var(--ink-2); }
+
+/* ---- C8 执行卡 ---- */
+.tl .exec-card { margin: 6px 0; border: 0; border-radius: var(--r-card); background: var(--app-card); box-shadow: var(--shadow-card); overflow: hidden; }
+.tl .exec-head { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px 0 12px; }
+.tl .exec-head:hover { background: var(--hover); }
+.tl .exec-toggle { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; height: 100%; padding: 0; border: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; text-align: left; }
+.tl .exec-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 6px; }
+.tl .exec-toggle > svg { color: var(--ink-2); }
+.tl .exec-name { font-weight: 500; white-space: nowrap; }
+.tl .exec-title { font-size: 11.5px; min-width: 0; }
+.tl .exec-chev { color: var(--ink-3); background: none; border: 0; padding: 0; display: inline-flex; cursor: pointer; }
+.tl .exec-stat { font: 500 11.5px var(--mono); }
+.tl .exec-stat.ins { color: var(--green); }
+.tl .exec-stat.del { color: var(--red); }
+.tl .exec-body { background: var(--inset); border-top: 1px solid var(--line-soft); font: 12px/1.65 var(--mono); color: var(--ink-2); }
+.tl .exec-cmd { padding: 10px 12px 0; border: 0; color: var(--ink); font: 12px/1.65 var(--mono); }
+.tl .exec-cmd::before { content: "$ "; color: var(--ink-3); }
+.tl .exec-out { padding: 6px 12px 10px; font: 12px/1.65 var(--mono); color: var(--ink-2); }
+
+/* ---- C9 等待位与回合摘要 ---- */
+.tl .loading-state { gap: 8px; font-size: 13px; color: var(--ink-2); }
+.tl .loading-grid { grid-template-columns: repeat(3, 3px); gap: 1.5px; }
+.tl .loading-cell { width: 3px; height: 3px; border-radius: .5px; background: var(--ink); }
+.tl .shimmer-text { background-image: linear-gradient(90deg, var(--ink-3) 0%, var(--ink) 45%, var(--ink-3) 90%); }
+.tl .loading-elapsed { font: 12px var(--mono); color: var(--ink-3); }
+.tl-wait.net .shimmer-text { background-image: none; color: var(--orange); }
+.tl .turn-summary {
+  display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; margin: 4px 0; border-radius: var(--r-sm);
+  font-size: 12.5px; color: var(--ink-2); background: var(--inset); box-shadow: inset 0 0 0 1px var(--line-soft); cursor: pointer; user-select: none;
+}
+.tl .turn-summary:hover { background: var(--hover); }
+.tl .turn-summary:active { transform: scale(.98); }
+.tl .turn-summary:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--line-soft), var(--focus-ring); }
+.tl .turn-summary .tl-sp { flex: 1; }
+.tl .turn-summary .tl-ts-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- C10 等网角标 ---- */
+.tl .net-waiting { height: 20px; }
+.tl .net-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--orange); animation: tl-pulse 1.6s ease-in-out infinite; }
+
+/* ---- C11 交付卡 ---- */
+.tl-deliver {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; margin: 8px 0; border: 0; border-radius: var(--r-card);
+  background: var(--app-card); box-shadow: var(--shadow-card); color: var(--ink); text-align: left; font: inherit; cursor: pointer;
+}
+.tl-deliver:hover { background: var(--hover); }
+.tl-deliver:active { transform: scale(.98); }
+.tl-deliver:focus-visible { outline: none; box-shadow: var(--shadow-card), var(--focus-ring); }
+.tl-deliver .fi { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: var(--canvas); color: var(--ink-2); flex: none; }
+.tl-deliver .p { font: 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-deliver .s { font-size: 12px; color: var(--ink-3); }
+.tl-deliver .tl-grow { min-width: 0; }
+.tl-deliver[data-superseded] { opacity: .6; }
+.tl-deliver > svg:last-child { color: var(--ink-3); }
+
+/* ---- 异议卡（C5 块形的提示色，无独立组件条目：沿用 flag 胶囊 + inset 卡） ---- */
+.tl-flag { margin: 6px 0; padding: 10px 12px; border-radius: var(--r-card); background: var(--violet-tint); font-size: 13px; }
+.tl-flag .tl-note { color: var(--ink-2); }
+
+/* ---- 节点轨跳转闪烁（沿用现有 flash，foundations §6），底色换成新 token ---- */
+.tl .flash-row { animation: tl-flash 1.4s ease-out; }
+@keyframes tl-flash { 0% { background: var(--accent-tint); } 100% { background: transparent; } }
+
+/* ---- A20 骨架（首屏 / 补载更早内容） ---- */
+.tl-skl { display: flex; gap: 12px; padding: 10px 0; }
+.tl-skl i {
+  display: block; height: 10px; border-radius: 6px;
+  background: linear-gradient(90deg, var(--canvas), var(--hover-2), var(--canvas)); background-size: 200% 100%;
+  animation: tl-skl 1.4s linear infinite;
+}
+.tl-skl .av { width: 30px; height: 30px; border-radius: 9px; flex: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-skl i { animation: none; background: var(--canvas); }
+  .tl .net-dot { animation: none; }
+}
+
+/* 关键帧与 foundations §6 同值；@theme 里的 hx-* 只在用到对应 Tailwind 工具类时才输出，这里自带一份 */
+@keyframes tl-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes tl-skl { from { background-position: 100% 0; } to { background-position: -100% 0; } }
