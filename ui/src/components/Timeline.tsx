@@ -879,7 +879,7 @@ const EMPTY_TIMELINE: TimelineItem[] = []
 
 export function Timeline() {
   const { t } = useTranslation()
-  const { timeline: legacyTimeline, pending, streams, team, projectRoot, projectEpoch, timelineFacts } = useUiStore()
+  const { timeline: legacyTimeline, timelineCaughtUp, pending, streams, team, projectRoot, projectEpoch, timelineFacts } = useUiStore()
   const [filter, setFilter] = useState<Filter>('all')
   const windowState = useTimelineWindow(filter)
   const { page } = windowState
@@ -1088,7 +1088,9 @@ export function Timeline() {
   }
 
   const pinned = useMemo(() => pinnedSummary(timeline), [timeline])
-  const fresh = useMemo(() => isFreshProject(timeline, projectRoot != null && page != null && !page.has_before), [timeline, projectRoot, page])
+  // 完整历史才判首屏：有窗口页就看它没有更早一页；无窗口的旧口径看 legacy 时间线已追平。
+  const fullHistory = page != null ? !page.has_before : projectRoot == null && projectEpoch === 0 && timelineCaughtUp && timeline.length > 0
+  const fresh = useMemo(() => isFreshProject(timeline, fullHistory), [timeline, fullHistory])
   const Header = useMemo(() => (fresh ? FreshHeader : undefined), [fresh])
 
   return (

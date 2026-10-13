@@ -677,7 +677,7 @@ export default {
     splitNeedsWidth: '分割表示には 720px 以上の幅が必要です', },
   art: { reviewPassed: "現在の版のレビュー承認", reviewRejected: "現在の版のレビュー却下", reviewStale: "レビューは期限切れ", currentWorktree: "現在の作業ツリー", pendingRecovery: "納品の登録が未完了です。現在のファイルは保持され、状態を確認して復旧するまで検収には使えません。", content: '内容', compare: '比較', version: 'v{{n}}', vs: '↔', unavailable: '内容がありません', preview: 'プレビュー', source: 'ソース' },
   md: { copy: 'コピー', copied: 'コピーしました' },
-  exec: { exit: 'exit {{code}}', noOutput: '（出力なし）', tail: '… 末尾 32KB を表示' },
+  exec: { done: '完了', exit: 'exit {{code}}', noOutput: '（出力なし）', tail: '… 末尾 32KB を表示' },
   agent: {
     stepHostRead: "ホストファイルを読む",
     stepHostWrite: "ホストファイルを書く",

@@ -11,7 +11,8 @@ import { Icon, type IconName } from './Icon'
 import { CodeBlock } from './Md'
 import { DiffView } from './DiffView'
 import { SpinnerRing } from './SpinnerRing'
-import { toolInputSummary, toolOutcome, TOOL_ICON, type ToolCall, type ToolOutcome } from '../agentSteps'
+import { CodeChip } from './ui/code-chip'
+import { toolInputSummary, toolOutcome, TOOL_ICON, TOOL_LABEL, type ToolCall, type ToolOutcome } from '../agentSteps'
 
 // 渲染上限（票 04）：实时流/结果体只渲末 32KB——长输出（cargo test 全量）
 // 不炸 DOM；缓冲层另有 128KB 尾留（store.toolStreams）。
@@ -40,7 +41,8 @@ export function CallStatus({ ok }: { ok: ToolOutcome }) {
       className={`chip ${ok ? 'ok' : 'err'}`}
       style={{ animation: 'pop-in 250ms cubic-bezier(0.23,1,0.32,1) both' }}
     >
-      <Icon name={ok ? 'check' : 'close'} size={8} />{ok ? 'ok' : 'err'}
+      {/* 票 05（C7/C8）：✓ 完成 / ✕ 失败，不再是 ok/err 代号 */}
+      <Icon name={ok ? 'check' : 'circle-x'} size={12} />{ok ? t('exec.done') : t('timeline.turnFailed')}
     </span>
   )
 }
@@ -76,8 +78,10 @@ function CopyBtn({ text }: { text: string }) {
 /** 执行卡壳：收态=一行（与 chip 行同密度），展开出体。 */
 export function ExecCard({
   icon,
+  name,
   title,
   meta,
+  result,
   ok,
   copyText,
   delay = 0,
@@ -85,8 +89,12 @@ export function ExecCard({
   children,
 }: {
   icon: IconName
+  /** C8 动作名（「运行命令」「改文件」）；参数（命令 / 路径）走 title 的代码 chip。 */
+  name?: string
   title: string
   meta?: ReactNode
+  /** 落定后的结果 chip（bash：退出码）；缺省走通用 CallStatus。在途一律是运行环。 */
+  result?: ReactNode
   ok: ToolOutcome
   copyText?: string
   delay?: number
@@ -101,11 +109,12 @@ export function ExecCard({
     <div className="exec-card" style={animate ? { animation: `fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${delay}ms both` } : undefined}>
       <div className="exec-head">
         <button type="button" className="exec-toggle" aria-expanded={open} onClick={toggle}>
-          <span className="dim3" style={{ display: 'inline-flex' }}><Icon name={icon} size={10} /></span>
-          <span className="exec-title mono" title={title}>{title}</span>
+          <Icon name={icon} size={14} />
+          {name && <span className="exec-name">{name}</span>}
+          {name ? <CodeChip className="exec-title">{title}</CodeChip> : <span className="exec-title mono" title={title}>{title}</span>}
           {meta}
           <span style={{ flex: 1 }} />
-          <CallStatus ok={ok} />
+          {ok != null && result ? result : <CallStatus ok={ok} />}
         </button>
         {copyText != null && <CopyBtn text={copyText} />}
         <button type="button" className="exec-chev" tabIndex={-1} aria-hidden onClick={toggle}>
@@ -225,8 +234,10 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
         copyText={cmd || undefined}
         delay={delay}
         animate={animate}
-        meta={typeof code === 'number' && code !== 0
-          ? <span className="chip err">{t('exec.exit', { code })}</span>
+        name={t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })}
+        // C8 结果 chip：✓「退出 0」/ 红「退出 1」；没有退出码时回落通用状态
+        result={typeof code === 'number'
+          ? <span className={`chip ${code === 0 ? 'ok' : 'err'}`}><Icon name={code === 0 ? 'check' : 'circle-x'} size={12} />{t('exec.exit', { code })}</span>
           : undefined}
       >
         <BashBody call={call} />
@@ -246,7 +257,7 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
       </>
     )
     return (
-      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || tool} ok={ok} delay={delay} animate={animate}
+      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} name={t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })} title={path || tool} ok={ok} delay={delay} animate={animate}
         copyText={typeof inp.new === 'string' ? inp.new : undefined} meta={stats}>
         <PatchBody call={call} />
       </ExecCard>
@@ -261,7 +272,7 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
       </>
     )
     return (
-      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || tool} ok={ok} delay={delay} animate={animate}
+      <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} name={t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })} title={path || tool} ok={ok} delay={delay} animate={animate}
         copyText={path || undefined}
         meta={<>{artVersion > 0 && <span className="chip mono">v{artVersion}</span>}{stats}</>}>
         <ArtifactBody call={call} onOps={setArtOps} />
@@ -272,7 +283,7 @@ export function ToolExecCard({ call, delay = 0, animate = true }: { call: ToolCa
   // fs_write 与其余重负载兜底：bytes 徽标 + JSON 明细（D4 不装伪 diff）。
   const bytes = typeof inp.bytes === 'number' ? inp.bytes : null
   return (
-    <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} title={path || toolInputSummary(p) || tool} ok={ok} delay={delay} animate={animate}
+    <ExecCard icon={TOOL_ICON[tool] ?? 'tool'} name={t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })} title={path || toolInputSummary(p) || tool} ok={ok} delay={delay} animate={animate}
       copyText={path || undefined}
       meta={bytes != null ? <span className="chip mono">{fmtBytes(bytes)}</span> : undefined}>
       <JsonBody call={call} />

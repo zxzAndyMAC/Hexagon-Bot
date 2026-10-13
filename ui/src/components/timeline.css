@@ -15,7 +15,7 @@
 
 /* ---- 过滤条（A7 + A2，与导出钮同排，贴在对话列上沿） ---- */
 .tl-bar { display: flex; align-items: center; gap: 8px; padding-top: 12px; padding-bottom: 6px; }
-.tl-bar .tl-sp { flex: 1; }
+.tl-sp { flex: 1; }
 
 /* ---- C1 消息 ---- */
 .tl-msg { display: flex; gap: 12px; padding: 10px 0; }

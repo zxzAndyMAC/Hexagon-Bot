@@ -677,7 +677,7 @@ export default {
     splitNeedsWidth: '分栏需要更宽的窗口（≥720px）', },
   art: { reviewPassed: "当前版本复审通过", reviewRejected: "当前版本复审驳回", reviewStale: "复审已过期", currentWorktree: "当前工作树", pendingRecovery: "交付登记未完成。当前文件已保留；恢复并核对状态前，此产物不能用于验收。", content: '内容', compare: '对比', version: 'v{{n}}', vs: '↔', unavailable: '内容不可用', preview: '预览', source: '源码' },
   md: { copy: '复制', copied: '已复制' },
-  exec: { exit: '退出 {{code}}', noOutput: '（无输出）', tail: '… 仅显示末 32KB' },
+  exec: { done: '完成', exit: '退出 {{code}}', noOutput: '（无输出）', tail: '… 仅显示末 32KB' },
   agent: {
     stepHostRead: "读取电脑文件",
     stepHostWrite: "写入电脑文件",

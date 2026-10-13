@@ -677,7 +677,7 @@ export default {
     splitNeedsWidth: 'Split needs a wider window (≥720px)', },
   art: { reviewPassed: "Review passed", reviewRejected: "Review rejected", reviewStale: "Review outdated", currentWorktree: "Current worktree", pendingRecovery: "Delivery registration is incomplete. Current files are preserved; this artifact cannot be accepted until recovery proves its state.", content: 'Content', compare: 'Compare', version: 'v{{n}}', vs: 'vs', unavailable: 'content unavailable', preview: 'Preview', source: 'Source' },
   md: { copy: 'Copy', copied: 'Copied' },
-  exec: { exit: 'exit {{code}}', noOutput: '(no output)', tail: '… showing last 32 KB' },
+  exec: { done: 'done', exit: 'exit {{code}}', noOutput: '(no output)', tail: '… showing last 32 KB' },
   agent: {
     stepHostRead: "Read host file",
     stepHostWrite: "Write host file",

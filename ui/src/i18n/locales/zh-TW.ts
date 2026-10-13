@@ -677,7 +677,7 @@ export default {
     splitNeedsWidth: '分欄需要更寬的視窗（≥720px）', },
   art: { reviewPassed: "目前版本複審通過", reviewRejected: "目前版本複審駁回", reviewStale: "複審已過期", currentWorktree: "目前工作樹", pendingRecovery: "交付登記尚未完成。目前檔案已保留；恢復並核對狀態前，此產物不能用於驗收。", content: '內容', compare: '對比', version: 'v{{n}}', vs: '↔', unavailable: '內容不可用', preview: '預覽', source: '原始碼' },
   md: { copy: '複製', copied: '已複製' },
-  exec: { exit: '退出 {{code}}', noOutput: '（無輸出）', tail: '… 僅顯示末 32KB' },
+  exec: { done: '完成', exit: '退出 {{code}}', noOutput: '（無輸出）', tail: '… 僅顯示末 32KB' },
   agent: {
     stepHostRead: "讀取電腦檔案",
     stepHostWrite: "寫入電腦檔案",

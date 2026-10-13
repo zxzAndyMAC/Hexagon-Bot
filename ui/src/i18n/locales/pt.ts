@@ -677,7 +677,7 @@ export default {
     splitNeedsWidth: 'A divisão precisa de uma janela mais larga (≥720px)', },
   art: { reviewPassed: "Revisão aprovada", reviewRejected: "Revisão rejeitada", reviewStale: "Revisão desatualizada", currentWorktree: "Árvore de trabalho atual", pendingRecovery: "O registro da entrega está incompleto. Os arquivos atuais são preservados; o artefato não pode ser aceito até seu estado ser verificado.", content: 'Conteúdo', compare: 'Comparar', version: 'v{{n}}', vs: '↔', unavailable: 'conteúdo indisponível', preview: 'Prévia', source: 'Fonte' },
   md: { copy: 'Copiar', copied: 'Copiado' },
-  exec: { exit: 'exit {{code}}', noOutput: '(sem saída)', tail: '… últimos 32 KB' },
+  exec: { done: 'concluido', exit: 'exit {{code}}', noOutput: '(sem saída)', tail: '… últimos 32 KB' },
   agent: {
     stepHostRead: "Ler arquivo do computador",
     stepHostWrite: "Gravar arquivo do computador",
