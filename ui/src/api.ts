@@ -1560,7 +1560,11 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
             base_url: 'https://api.anthropic.com', enabled: false, key_set: false, models: [],
           },
         ],
-        slots: { chat: { provider_id: 'openrouter', model: 'deepseek/deepseek-chat' } },
+        slots: {
+          chat: { provider_id: 'openrouter', model: 'deepseek/deepseek-chat' },
+          // `?launcher`（票 10 截图比对）下 default 槽就绪，向导能走过模型服务商步
+          ...(new URLSearchParams(location.search).has('launcher') ? { default: { provider_id: 'openrouter', model: 'deepseek/deepseek-chat' } } : {}),
+        },
       } as T
     case 'save_provider':
     case 'delete_provider':

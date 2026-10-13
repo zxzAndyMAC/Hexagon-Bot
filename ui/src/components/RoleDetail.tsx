@@ -71,6 +71,8 @@ export function RoleDetail({ def, tplName, names, doc, customized, aiDrafted, ed
         <NativeSelect aria-label={t('agent.reviewer')} disabled={busy} value={def.reviewer ?? ''} onChange={(e) => upd({ reviewer: e.target.value || null })}>
           <option value="">{t('agent.noReviewer')}</option>
           {names.filter((n) => n !== def.name).map((n) => <option key={n} value={n}>{n}</option>)}
+          {/* 模板指向的上级不在本次模板目录里时也要显示，否则下拉显示成「直达负责人」而实际值不是 */}
+          {def.reviewer && !names.includes(def.reviewer) && <option value={def.reviewer}>{def.reviewer}</option>}
         </NativeSelect>
       </Field>
       <Field label={t('agent.modelSlot')}>
