@@ -82,4 +82,4 @@ function Field({
   )
 }
 
-export { Field, Input, Textarea }
+export { Field, Input, Textarea, fieldShell }
