@@ -56,15 +56,22 @@ describe('runStageOp 确认分级（ADR 0056）', () => {
     expect(useUiStore.getState().confirmReq?.danger).toBe(true)
   })
 
-  it('pause/sleepAll 为 L1 可逆——直执行不弹确认', async () => {
+  it('pause 为 L1 可逆——直执行不弹确认', async () => {
     useUiStore.setState({ stages: [stage('active')] })
     expect(runStageOp('pause')).toBe(true)
-    expect(runStageOp('sleepAll')).toBe(true)
     expect(useUiStore.getState().confirmReq).toBeNull()
-    await vi.waitFor(() => {
-      expect(api.pause).toHaveBeenCalled()
-      expect(api.sleepAll).toHaveBeenCalled()
-    })
+    await vi.waitFor(() => expect(api.pause).toHaveBeenCalled())
+  })
+
+  // 断言改动（ui-redesign 票 02，ADR 0088 落地）：全员休眠由「直执行」改为二次确认——规范 D18 / interaction §13
+  // 与票 02 验收条要求；仍可逆，所以是非 danger 的安全类确认。旧断言见 ADR 0056 L1。
+  it('sleepAll 先挂非 danger 确认，确认后才调 api.sleepAll', async () => {
+    expect(runStageOp('sleepAll')).toBe(true)
+    expect(api.sleepAll).not.toHaveBeenCalled()
+    const req = useUiStore.getState().confirmReq!
+    expect(req.danger).toBeFalsy()
+    await req.run()
+    expect(api.sleepAll).toHaveBeenCalled()
   })
 
   it('stamp 仅在 waiting_stamp 态可用', async () => {

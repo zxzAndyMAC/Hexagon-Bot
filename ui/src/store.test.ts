@@ -502,3 +502,41 @@ it('completed streams survive historical receipts until the first complete facts
     expect(useUiStore.getState().streams.a1).toBeUndefined()
   } finally {read.mockRestore();vi.useRealTimers()}
 })
+
+// ui-redesign 票 02（ADR 0088）：右栏撤掉，⌘B 改开关左侧栏。侧栏宽度与收起存 `hexagon.layout.side`，
+// 旧右栏开关记忆 `hexagon.rail` 在 store 初始化时迁移一次后删除。
+describe('侧栏布局切片（票 02）', () => {
+  afterEach(() => {
+    localStorage.removeItem('hexagon.layout.side')
+    localStorage.removeItem('hexagon.rail')
+    vi.resetModules()
+  })
+
+  it('初始化时把旧 hexagon.rail=0 迁成侧栏收起，并删除旧键', async () => {
+    localStorage.removeItem('hexagon.layout.side')
+    localStorage.setItem('hexagon.rail', '0')
+    vi.resetModules()
+    const { useUiStore: fresh } = await import('./store')
+    expect(fresh.getState().sideLayout).toEqual({ width: 252, collapsed: true })
+    expect(localStorage.getItem('hexagon.rail')).toBeNull()
+    expect(JSON.parse(localStorage.getItem('hexagon.layout.side')!)).toEqual({ width: 252, collapsed: true })
+  })
+
+  it('toggleSidebar 与 setSideLayout 持久化到新键', () => {
+    const s = useUiStore.getState()
+    s.setSideLayout({ width: 300, collapsed: false })
+    s.toggleSidebar()
+    expect(useUiStore.getState().sideLayout).toEqual({ width: 300, collapsed: true })
+    expect(JSON.parse(localStorage.getItem('hexagon.layout.side')!)).toEqual({ width: 300, collapsed: true })
+    useUiStore.getState().toggleSidebar()
+    expect(useUiStore.getState().sideLayout.collapsed).toBe(false)
+  })
+
+  it('文件树快捷键打开画布占位的文件页，不再写旧键', () => {
+    useUiStore.setState({ canvasOpen: false, canvasPane: 'artifacts' })
+    useUiStore.getState().requestFileTree('refresh')
+    expect(useUiStore.getState().canvasOpen).toBe(true)
+    expect(useUiStore.getState().canvasPane).toBe('files')
+    expect(localStorage.getItem('hexagon.rail')).toBeNull()
+  })
+})

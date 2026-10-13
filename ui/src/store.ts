@@ -22,6 +22,7 @@ import {
   type SessionSummary,
 } from './api'
 import { daysAgo } from './usage'
+import { readSideLayout, writeSideLayout, type SideLayout } from './layout'
 import i18n from './i18n'
 
 export type ThemePref = 'light' | 'dark' | 'night' | 'system'
@@ -32,7 +33,9 @@ export type SlowSlice = 'usage' | 'artifacts' | 'team' | 'info'
 
 // 中栏选项卡（ADR 0051）：timeline 固定主 tab，其余可关。
 export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent' | 'usage' | 'file'
-export type SideTab = 'artifacts' | 'team' | 'usage' | 'files' | 'stages'
+/// 画布占位的两种内容（ui-redesign 票 02）：侧栏「产物」「项目文件」打开它。
+/// 03 把它换成真正的画布页签（产物 / 文件 / Agent / diff）。
+export type CanvasPane = 'artifacts' | 'files'
 export type FileTreeAction = 'new-file' | 'new-folder' | 'refresh'
 
 /// 界面作用域（ui-audit 票 01）：全局快捷键分发按它裁决。
@@ -160,8 +163,17 @@ interface UiState {
   mode: 'pack' | 'fastpath'
   fastRole: string | null
   packName: string | null
-  railOpen: boolean
-  sideTab: SideTab
+  /// 左侧栏宽度与收起（ADR 0088；`hexagon.layout.side`，旧 `hexagon.rail` 迁移一次，见 layout.ts）。
+  sideLayout: SideLayout
+  /// 画布占位开关（票 02 过渡态，不持久化；03 接入真画布与 `hexagon.layout.canvas`）。
+  canvasOpen: boolean
+  canvasPane: CanvasPane
+  /// Agent Screen 有目标时头部才出「屏幕」按钮（components B5 禁用行）；req 脉冲让浮窗切换显隐。
+  agentScreenAvailable: boolean
+  agentScreenReq: number
+  /// 快通道（阶段 + 待决）最近一次读取失败（components B1 错误行，补设计）：
+  /// 侧栏待决徽标此时不显示数字，侧栏底出「状态读取失败 · 重试」。下次读成功即清除。
+  statusError: boolean
   usageRows: UsageRow[]
   /// 7 日 token 序列缓存（票 17 / 方向卡 2）：随 usage 慢切片一起拉，
   /// 顶栏 sparkline 悬停零新增 IPC。
@@ -208,12 +220,16 @@ interface UiState {
   waitingSince: Record<string, number>
   applyToolOutput: (d: ToolOutputDelta) => void
   setThemePref: (p: ThemePref) => void
-  setRailOpen: (v: boolean) => void
+  setSideLayout: (next: SideLayout) => void
+  toggleSidebar: () => void
+  openCanvas: (pane: CanvasPane) => void
+  setCanvasOpen: (v: boolean) => void
+  setFlowDialogOpen: (v: boolean) => void
+  requestAgentScreen: () => void
   openPendingDialog: () => void
   closePendingDialog: () => void
   noteReviewRows: (rows: ProposalRow[]) => void
   syncPendingDialog: () => void
-  setSideTab: (t: SideTab) => void
   /// 右栏文件树命令（票 11）：快捷键与按钮共用。n 递增，FileTree 消费一次。
   fileTreeReq: { n: number; action: FileTreeAction } | null
   requestFileTree: (action: FileTreeAction) => void
@@ -281,7 +297,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     set(s => ({ projectRoot: null, projectGeneration: null, projectEpoch: s.projectEpoch + 1,
       // Benchmark I1: p1 is reused across projects. Clear actionable projections
       // at the same identity boundary, before a status poll can fail or arrive late.
-      stages: [], pending: [], reviewRows: [], pendingDialogOpen: false, dismissedPendingKeys: [],
+      stages: [], pending: [], reviewRows: [], pendingDialogOpen: false, dismissedPendingKeys: [], statusError: false,
       team: [], artifacts: [], avatars: {}, avatarHashes: {}, providers: null,
       usageTotal: null, usageRows: [], usageSeries7d: [], contextPressure: null,
       projectName: '', autonomy: 'L0', mode: 'pack', fastRole: null, packName: null, mcpPending: false,
@@ -313,8 +329,12 @@ export const useUiStore = create<UiState>((set, get) => ({
   mode: 'pack',
   fastRole: null,
   packName: null,
-  railOpen: localStorage.getItem('hexagon.rail') !== '0',
-  sideTab: 'artifacts',
+  sideLayout: readSideLayout(localStorage),
+  canvasOpen: false,
+  canvasPane: 'artifacts',
+  agentScreenAvailable: false,
+  agentScreenReq: 0,
+  statusError: false,
   fileTreeReq: null,
   saveFileReq: 0,
   timelineStickReq: 0,
@@ -479,10 +499,18 @@ export const useUiStore = create<UiState>((set, get) => ({
       else delete waitingSince[d.agent_id]
       return { streams, thinkings, plans, waitingSince }
     }),
-  setRailOpen: (v) => {
-    localStorage.setItem('hexagon.rail', v ? '1' : '0')
-    set({ railOpen: v })
+  setSideLayout: (next) => {
+    writeSideLayout(localStorage, next)
+    set({ sideLayout: next })
   },
+  toggleSidebar: () => {
+    const cur = get().sideLayout
+    get().setSideLayout({ ...cur, collapsed: !cur.collapsed })
+  },
+  openCanvas: (pane) => set({ canvasOpen: true, canvasPane: pane }),
+  setCanvasOpen: (v) => set({ canvasOpen: v }),
+  setFlowDialogOpen: (v) => set({ flowDialogOpen: v }),
+  requestAgentScreen: () => set((s) => ({ agentScreenReq: s.agentScreenReq + 1 })),
   openPendingDialog: () => set({ pendingDialogOpen: true }),
   closePendingDialog: () => {
     const s = get()
@@ -507,12 +535,11 @@ export const useUiStore = create<UiState>((set, get) => ({
       set({ pendingDialogOpen: true })
     }
   },
-  setSideTab: (t) => set({ sideTab: t }),
   requestFileTree: (action) => {
-    localStorage.setItem('hexagon.rail', '1')
+    // 文件树快捷键先把树亮出来（票 11）；票 02 起树在画布占位里，不再写旧 `hexagon.rail`。
     set((s) => ({
-      railOpen: true,
-      sideTab: 'files',
+      canvasOpen: true,
+      canvasPane: 'files',
       fileTreeReq: { n: (s.fileTreeReq?.n ?? 0) + 1, action },
     }))
   },
@@ -671,13 +698,14 @@ export const useUiStore = create<UiState>((set, get) => ({
       if (gen !== generation || request < lastAppliedFastRequest) return
       lastAppliedFastRequest = request
       fastFailStreak = 0
-      set({ stages, pending, intakeDraft,
+      set({ stages, pending, intakeDraft, statusError: false,
         sessionSummary: 'value' in sessionResult ? sessionResult.value : get().sessionSummary,
         sessionError: 'error' in sessionResult ? errText(sessionResult.error) : null,
       })
     } catch (error) {
       if (gen !== generation || request < lastAppliedFastRequest) return
       fastFailStreak++
+      set({ statusError: true })
       if (fastFailStreak === FAST_FAIL_TOAST_AT) get().pushToast(errText(error), 'err')
     } finally { await facts }
   },

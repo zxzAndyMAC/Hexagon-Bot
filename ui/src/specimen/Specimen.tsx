@@ -107,7 +107,7 @@ const ROWS: Row[] = [
     id: 'A2', name: '图标按钮 IconButton',
     render: (s) => s === '错误' ? '不适用（错误由所属区域显示）' : (
       <>
-        <IconButton label="开关画布" action="toggleRail" disabled={s === '禁用'} disabledReason="没有打开的项目" loading={s === '加载'}>
+        <IconButton label="开关画布" action="toggleCanvas" disabled={s === '禁用'} disabledReason="没有打开的项目" loading={s === '加载'}>
           <Icon name="panel-right" size={16} />
         </IconButton>
         <IconButton label="开关画布" on disabled={s === '禁用'} loading={s === '加载'}><Icon name="panel-right" size={16} /></IconButton>

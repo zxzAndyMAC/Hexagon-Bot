@@ -24,7 +24,7 @@ interface Item {
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
-  const { team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, tabs, activeTab, closeTab, invalidate, pushToast, pending } = useUiStore()
+  const { team, artifacts, openTab, toggleSidebar, setSplitOpen, setActiveTab, splitOpen, tabs, activeTab, closeTab, invalidate, pushToast, pending } = useUiStore()
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -66,7 +66,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         },
       },
       // 导航
-      { id: 'n-rail', group: 'nav', label: t('palette.rail'), hint: bind('toggleRail'), run: () => setRailOpen(!railOpen) },
+      // ADR 0088（票 02）：⌘B 由「开关右栏」改为「开关左侧栏」
+      { id: 'n-sidebar', group: 'nav', label: t('palette.sidebar'), hint: bind('toggleSidebar'), run: () => toggleSidebar() },
       { id: 'n-split', group: 'nav', label: t('palette.split'), hint: bind('splitEditor'), run: () => setSplitOpen(!splitOpen) },
       { id: 'n-timeline', group: 'nav', label: t('palette.timeline'), run: () => setActiveTab('timeline') },
       {
@@ -87,7 +88,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     ]
     void tabs
     return list
-  }, [t, team, artifacts, openTab, setRailOpen, setSplitOpen, setActiveTab, railOpen, splitOpen, closeTab, activeTab, tabs, pending, pushToast, invalidate])
+  }, [t, team, artifacts, openTab, toggleSidebar, setSplitOpen, setActiveTab, splitOpen, closeTab, activeTab, tabs, pending, pushToast, invalidate])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。

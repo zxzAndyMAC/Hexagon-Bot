@@ -4,7 +4,9 @@ import { createRoot } from 'react-dom/client'
 import { ProjectApprovalMode } from './components/ProjectApprovalMode'
 import { ManagedPill } from './components/ManagedPill'
 import { ProjectDelegation } from './components/ProjectDelegation'
-import { TopBar } from './components/TopBar'
+import { Header } from './components/shell/Header'
+import { Sidebar } from './components/shell/Sidebar'
+import { TooltipProvider } from './components/ui/tooltip'
 import { api } from './api'
 import { useUiStore } from './store'
 import i18n from './i18n'
@@ -91,8 +93,10 @@ it('the pending badge counts only owner items; delegated ones show in the pill',
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([{ id: 'q9', kind: 'permission', agent_id: 'a0', payload: {}, state: 'queued' }])
   vi.spyOn(api, 'sandboxStatus').mockResolvedValue({ available: false, mode: 'none', note: '' })
   // The host's pending read already excludes delegated cards (owner_pending).
-  useUiStore.setState({ projectName: 'p', packName: 'x', mode: 'pack', pending: [], reviewRows: [], team: [], railOpen: false, projectRoot: '/proj' })
-  await mount(<TopBar onSettings={() => {}} onProjectClosed={() => {}} />)
+  useUiStore.setState({ projectName: 'p', packName: 'x', mode: 'pack', pending: [], reviewRows: [], team: [], projectRoot: '/proj' })
+  // ADR 0088（票 02）：顶栏撤掉——待决徽标迁到侧栏「待决」，托管胶囊原样迁到头部。口径不变。
+  await mount(<TooltipProvider><Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} /><Header /></TooltipProvider>)
+  expect(el.querySelector('[data-header] .managed-pill')).not.toBeNull()
   expect(el.querySelector('[data-pending-count]')).toBeNull()
   expect(el.querySelector('.managed-pill')).not.toBeNull()
 })
