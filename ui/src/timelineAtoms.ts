@@ -31,7 +31,8 @@ export function splitAtoms(value: string, { roles, owner }: AtomOptions): MdNode
   let last = 0
   for (const m of value.matchAll(TOKEN)) {
     const at = m.index ?? 0
-    if (at > 0 && !/\s/.test(value[at - 1]) && !/[（(「“"']/.test(value[at - 1])) continue
+    // 前一个字是 ASCII 字母数字时不认（邮箱 a@b、锚点 x#y）；中文紧贴、标点之后都认
+    if (at > 0 && /[A-Za-z0-9_]/.test(value[at - 1])) continue
     const raw = m[0]
     let token: string | null = null
     let node: MdNode | null = null

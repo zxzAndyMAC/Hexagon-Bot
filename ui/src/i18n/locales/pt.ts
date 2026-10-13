@@ -202,6 +202,19 @@ export default {
     routedTo: 'encaminhado a {{role}}',
     routeHold: 'sem despacho',
     routeRejected: 'escolha fora da equipe — ninguém foi acordado',
+    // ui-redesign 票 05
+    netWaiting: "Aguardando rede",
+    netNote: "A rede caiu. O texto já recebido é mantido e a recepção continua ao reconectar.",
+    waitingFirstToken: "Pensando",
+    copyMessage: "Copiar mensagem",
+    stageArtifacts: "{{count}} entregáveis",
+    deliveryPassed: "Aprovado",
+    deliveryRejected: "Devolvido",
+    deliveryPending: "Aguardando revisão",
+    deliverySuperseded: "Substituído",
+    callDenied: "Negado",
+    filterLabel: "Filtro da linha do tempo",
+    olderFailedLabel: "Não foi possível carregar a atividade anterior",
   },
   ev: {
     turn_started: 'turno iniciado',
@@ -1145,10 +1158,9 @@ export default {
     done: 'OK', empty: 'Sem resultados', count: '{{n}} selecionados',
     title_skills: 'Selecionar habilidades', title_mcp: 'Selecionar serviços MCP',
   },
-  intake: {
-    confirm: 'Gravar as instruções do projeto',
-    confirmHint: 'A análise de abertura anexou um rascunho. Ele não vai ao disco até você confirmar, nem no L4.',
-  },
+  intake: {"confirm": "Gravar AGENTS.md", "confirmHint": "Rascunho da análise inicial (texto completo na mensagem dela). Só é gravado na raiz do repositório após você confirmar; arquivos existentes nunca são sobrescritos.", "title": "Rascunho das instruções do projeto", "unsaved": "Não gravado", "later": "Agora não", "laterHint": "Oculta por enquanto; volta ao reabrir o projeto", "edit": "Editar", "editUnavailable": "O rascunho só pode ser gravado inteiro; edite o AGENTS.md depois de gravá-lo"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} min", "rangeUntil": "até {{to}}", "collapse": "Recolher resumo", "toggle": "Recolher ou expandir o resumo de retorno", "headline": "A equipe avançou <b>{{stages}} etapa(s)</b> e entregou {{deliveries}} entregável(is); <o>{{pending}} item(ns)</o> aguardam sua decisão.", "headlineClear": "A equipe avançou <b>{{stages}} etapa(s)</b> e entregou {{deliveries}} entregável(is); nada aguarda sua decisão.", "kpiStages": "Etapas", "kpiStagesValue": "{{count}} concluídas", "kpiDeliveries": "Entregas", "kpiDeliveriesValue": "{{count}}", "kpiReviews": "Revisões", "kpiReviewsPassed": "{{count}} aprovadas", "kpiReviewsRejected": "{{count}} devolvidas", "kpiCost": "Gasto", "costLoading": "Carregando gasto", "costUnknown": "Não foi possível obter o gasto durante sua ausência", "needsYou": "Precisa de você", "nothingNeeded": "Nada aguarda sua decisão.", "next": "Próximos passos sugeridos", "fillHint": "Preenche a entrada; nada é enviado", "collapsedLine": "Enquanto você esteve fora · {{minutes}} min · {{count}} aguardando você", "collapsedLineNoTime": "Enquanto você esteve fora · {{count}} aguardando você", "suggest": {"rejected": "Explique como corrigir os {{count}} entregáveis devolvidos", "escalated": "Explique as {{count}} objeções escaladas", "delivery": "Resuma o que mudou em {{path}}", "stage": "Resuma esta etapa e avance para a próxima", "keepGoing": "Continue a etapa atual"}},
+  fresh: {"greeting": "Sua equipe está pronta. Por onde começamos?", "sub": "{{roles}} papéis · {{stages}} etapas", "specTitle": "Começar por uma especificação", "specDesc": "Transforme uma ideia em critérios de aceitação", "specFill": "Escreva uma especificação a partir desta ideia e liste os critérios de aceitação: ", "repoTitle": "Analisar o repositório", "repoDesc": "Leia a estrutura, os comandos e as dependências", "repoFill": "Primeiro analise o repositório existente: estrutura, comandos e dependências."},
   keys: {
     palette: 'Paleta de comandos',
     rail: 'Alternar painel lateral',

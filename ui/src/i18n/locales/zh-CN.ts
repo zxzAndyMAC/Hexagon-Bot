@@ -202,6 +202,19 @@ export default {
     routedTo: '派给 {{role}}',
     routeHold: '先不派活',
     routeRejected: '封闭选择不在花名册，没有派活',
+    // ui-redesign 票 05
+    netWaiting: "等网",
+    netNote: "网络中断，已收到的文字会保留，恢复后继续接收。",
+    waitingFirstToken: "正在思考",
+    copyMessage: "复制消息",
+    stageArtifacts: "{{count}} 份产物",
+    deliveryPassed: "通过",
+    deliveryRejected: "已退回",
+    deliveryPending: "待复审",
+    deliverySuperseded: "已被替代",
+    callDenied: "已拒绝",
+    filterLabel: "时间线筛选",
+    olderFailedLabel: "更早的内容加载失败",
   },
   ev: {
     turn_started: '回合开始',
@@ -1145,10 +1158,9 @@ export default {
     done: '确定', empty: '无匹配项', count: '已选 {{n}} 项',
     title_skills: '选择技能', title_mcp: '选择 MCP 服务',
   },
-  intake: {
-    confirm: '写入项目说明',
-    confirmHint: '开场分析附了一份草案。点头之前不会落盘，自治 L4 也不会自动写上。',
-  },
+  intake: {"confirm": "写入 AGENTS.md", "confirmHint": "由开场分析起草（全文在那条开场消息里）；确认后写入仓库根目录，不会覆盖已有文件。", "title": "项目说明草案", "unsaved": "未落盘", "later": "先不写", "laterHint": "本次先收起，重新打开项目时还会出现", "edit": "编辑", "editUnavailable": "草案只能整份写入；写入后可直接编辑 AGENTS.md"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分钟", "rangeUntil": "截至 {{to}}", "collapse": "收起摘要", "toggle": "收起或展开归来摘要", "headline": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；有 <o>{{pending}} 件</o>等你拍板。", "headlineClear": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；没有等你处理的事项。", "kpiStages": "阶段", "kpiStagesValue": "完成 {{count}} 个", "kpiDeliveries": "交付", "kpiDeliveriesValue": "{{count}} 份", "kpiReviews": "复审", "kpiReviewsPassed": "{{count}} 过", "kpiReviewsRejected": "{{count}} 退", "kpiCost": "花费", "costLoading": "正在读取花费", "costUnknown": "离开期间的花费读取不到", "needsYou": "需要你处理", "nothingNeeded": "没有等你处理的事项。", "next": "建议下一步", "fillHint": "填入输入条，不会发送", "collapsedLine": "离开期间 · {{minutes}} 分钟 · {{count}} 件待你处理", "collapsedLineNoTime": "离开期间 · {{count}} 件待你处理", "suggest": {"rejected": "说说被退回的 {{count}} 份产物要怎么改", "escalated": "解释一下升级给我的 {{count}} 条异议", "delivery": "讲讲 {{path}} 这次改了什么", "stage": "总结这一阶段的产出，再推进下一阶段", "keepGoing": "继续推进当前阶段"}},
+  fresh: {"greeting": "团队已就位，要从哪里开始？", "sub": "{{roles}} 个角色 · {{stages}} 个阶段", "specTitle": "先写规格", "specDesc": "从一句话需求展开验收标准", "specFill": "从这句需求开始写规格，列出验收标准：", "repoTitle": "先分析现有仓库", "repoDesc": "读目录结构、命令与依赖", "repoFill": "先分析现有仓库：目录结构、命令和依赖。"},
   keys: {
     palette: '命令面板',
     rail: '折叠/展开右栏',

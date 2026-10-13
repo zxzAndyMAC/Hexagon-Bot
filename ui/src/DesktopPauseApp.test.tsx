@@ -10,7 +10,6 @@ vi.mock('./components/TopBar', () => ({ TopBar: ({ onSettings }: { onSettings: (
 vi.mock('./components/Composer', () => ({ Composer: () => null }))
 vi.mock('./components/SidePanel', () => ({ SidePanel: () => null }))
 vi.mock('./components/Timeline', () => ({ Timeline: () => null }))
-vi.mock('./components/IntakeBar', () => ({ IntakeBar: () => null }))
 vi.mock('./components/TabBar', () => ({ TabBar: () => null }))
 vi.mock('./components/PendingCards', () => ({ PendingDialog: () => null }))
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true

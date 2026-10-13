@@ -14,7 +14,6 @@ import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useUiStore } from '../store'
 import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
-import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { Row } from './Row'
@@ -33,9 +32,9 @@ import { Segmented, SegmentedItem } from './ui/toggle-group'
 import { TooltipProvider } from './ui/tooltip'
 import type { AtomOptions } from '../timelineAtoms'
 import { ReturnSummaryCard, ReturnSummaryMarker } from './ReturnSummary'
-import { FreshStart, useFreshStart } from './FreshStart'
+import { FreshStart } from './FreshStart'
 import { IntakeCard } from './IntakeCard'
-import { pinnedSummary } from '../returnSummaryModel'
+import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
 import { parseTime } from '../usage'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
@@ -53,9 +52,6 @@ function trKey(t: TFunction, key: string, raw: string): string {
 // ---- 渲染 ----
 
 // 票 14：fmtTime 收敛到 usage.ts（Intl 本地语序）。
-
-const chipCls = (s: string) =>
-  s === 'passed' ? 'ok' : s === 'queued' ? 'warn' : s === 'rejected' || s === 'failed' ? 'err' : 'err'
 
 // Thinking 升级（beautiful-ui 票 03）：live 态 shimmer 走秒，
 // live→settled 翻转成「思考用时 Ns」；历史消息无计时源，回退原标签。
@@ -123,7 +119,7 @@ export function ThinkingRow({ text, live, plan = false }: { text: string; live?:
 // 断网等网角标（network-resilience 票 02 → components C10）：消息头行右侧 warn 胶囊，
 // 7px 橙脉冲点 +「等网 0:18」。与「回复中」同一槽位互斥切换：等网期间
 // 流式增量本来就停，两个状态叠着报只会互相撒谎。
-export function fmtClock(ms: number): string {
+function fmtClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
@@ -941,14 +937,36 @@ export function Timeline() {
     setJumpTarget(null)
   }, [filter, jumpTarget, windowState.jumpAround])
 
+  // C7：在途回合的工具组默认展开，已收束回合默认收起（收进 C9 摘要）。expanded 集合记录
+  // 「与默认相反」的行：在途组在集合里 = 被负责人手动收起。贴底语义不变——展开只是行高变化，
+  // 由 writeTail / onHeight 照旧接管（Timeline.scroll 测试守）。
+  const liveGroups = useMemo(() => {
+    const open = new Map<string | null, number>()
+    for (const it of timeline) {
+      const k = it.event.kind
+      if (k === 'team_slept' || k === 'stage_started') open.clear()
+      else if (k === 'turn_started') open.set(it.event.agent_id, it.event.id)
+      else if (k === 'turn_finished' || k === 'turn_failed') open.delete(it.event.agent_id)
+    }
+    const live = new Set<number>()
+    for (const row of rows) {
+      if (row.type !== 'toolgroup' || !row.items.length) continue
+      const start = open.get(row.items[0].event.agent_id)
+      if (start != null && row.items[0].event.id > start) live.add(row.idx)
+    }
+    return live
+  }, [timeline, rows])
+  const isOpen = (idx: number) => liveGroups.has(idx) !== expanded.has(idx)
+
   const revealRow = useCallback((row: ModelRow) => {
     setExpanded(previous => {
       const next = new Set(previous)
-      if (row.type === 'toolgroup' || row.type === 'sysgroup') next.add(row.idx)
+      const show = (idx: number) => { if (liveGroups.has(idx)) next.delete(idx); else next.add(idx) }
+      if (row.type === 'toolgroup' || row.type === 'sysgroup') show(row.idx)
       if (row.type === 'turnsummary') { next.add(row.idx); for (const child of row.folded) next.add(child.idx) }
       return next
     })
-  }, [])
+  }, [liveGroups])
   useEffect(() => {
     const target = page?.target_event_id
     if (target == null) return
@@ -982,16 +1000,48 @@ export function Timeline() {
     else if (mark.rowIdx >= 0) jumpToEvent(rows[mark.rowIdx].idx)
     else viewport.jumpToRow(0)
   }, [jumpToEvent, rows, viewport.jumpToRow])
+  // 轨迹导出（US54）：kind 过滤随当前筛选档；Tauri 走保存对话框，浏览器 dev 合成 Blob 下载
+  const doExport = useCallback(async () => {
+    const kinds = filter === 'messages' ? ['owner_message', 'agent_message']
+      : filter === 'decisions' ? [...DECISION_KINDS]
+      : undefined
+    try {
+      let count: number
+      if (isTauri) {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const path = await save({
+          defaultPath: 'hexagon-trace.json',
+          filters: [{ name: 'JSON', extensions: ['json'] }],
+        })
+        if (!path) return
+        count = await api.exportEvents({ path, kinds })
+      } else {
+        const items = await api.exportTimelineItems(kinds)
+        const doc = { format: 'hexagon-trace-export', version: 1, count: items.length, events: items.map((i) => i.event) }
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
+        a.download = 'hexagon-trace.json'
+        a.click()
+        URL.revokeObjectURL(a.href)
+        count = items.length
+      }
+      setExported(count)
+      setTimeout(() => setExported(null), 2500)
+    } catch (e) {
+      useUiStore.getState().pushToast(errText(e), 'err')
+    }
+  }, [filter])
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (useUiStore.getState().modalScope !== 'workbench') return
       if (matches(event, bindingFor('timelineLatest'))) { event.preventDefault(); viewport.holdPin() }
       else if (matches(event, bindingFor('timelineLoadOlder'))) { event.preventDefault(); viewport.requestOlder() }
       else if (matches(event, bindingFor('timelineRetry'))) { event.preventDefault(); void windowState.retry() }
+      else if (matches(event, bindingFor('timelineExport'))) { event.preventDefault(); void doExport() }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [viewport.holdPin, viewport.requestOlder, windowState.retry])
+  }, [viewport.holdPin, viewport.requestOlder, windowState.retry, doExport])
   const toggleRow = useCallback((idx: number) => {
     setExpanded((s) => {
       const n = new Set(s)
@@ -1015,18 +1065,10 @@ export function Timeline() {
   const rowContent = (row: ModelRow): ReactNode => {
     if (row.type === 'chapter') {
       const role = team.find((m) => m.id === row.agentId)?.role ?? row.agentId ?? ''
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 14px 4px' }}>
-          <div className="sysline" style={{ flex: 1 }} />
-          <span className="dim3" style={{ fontSize: 10, fontWeight: 560, whiteSpace: 'nowrap' }}>
-            {t('timeline.chapter', { n: row.n, agent: role })}{row.stage ? ` · ${row.stage}` : ''}
-          </span>
-          <div className="sysline" style={{ flex: 1 }} />
-        </div>
-      )
+      return <Marker>{t('timeline.chapter', { n: row.n, agent: role })}{row.stage ? ` · ${row.stage}` : ''}</Marker>
     }
     if (row.type === 'toolgroup') {
-      return <ToolGroupRow items={row.items} callIndex={callIndex} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} fresh={isFreshExpand(row.idx)} />
+      return <ToolGroupRow items={row.items} callIndex={callIndex} expanded={isOpen(row.idx)} idx={row.idx} onToggle={toggleRow} fresh={isFreshExpand(row.idx)} />
     }
     if (row.type === 'sysgroup') {
       return <SysGroupRow items={row.items} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} />
@@ -1034,9 +1076,7 @@ export function Timeline() {
     if (row.type === 'turnsummary') {
       return (
         <TurnSummaryRow row={row} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow}>
-          {row.folded.map((r) => (
-            <div key={r.idx} style={{ paddingLeft: 12 }}>{rowContent(r)}</div>
-          ))}
+          {row.folded.map((r) => <div key={r.idx}>{rowContent(r)}</div>)}
         </TurnSummaryRow>
       )
     }
@@ -1047,61 +1087,34 @@ export function Timeline() {
     )
   }
 
-  // 轨迹导出（US54）：kind 过滤随当前筛选档；Tauri 走保存对话框，浏览器 dev 合成 Blob 下载
-  const doExport = async () => {
-    const kinds = filter === 'messages' ? ['owner_message', 'agent_message']
-      : filter === 'decisions' ? [...DECISION_KINDS]
-      : undefined
-    let count: number
-    if (isTauri) {
-      const { save } = await import('@tauri-apps/plugin-dialog')
-      const path = await save({
-        defaultPath: 'hexagon-trace.json',
-        filters: [{ name: 'JSON', extensions: ['json'] }],
-      })
-      if (!path) return
-      count = await api.exportEvents({ path, kinds })
-    } else {
-      const items = await api.exportTimelineItems(kinds)
-      const doc = { format: 'hexagon-trace-export', version: 1, count: items.length, events: items.map((i) => i.event) }
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
-      a.download = 'hexagon-trace.json'
-      a.click()
-      URL.revokeObjectURL(a.href)
-      count = items.length
-    }
-    setExported(count)
-    setTimeout(() => setExported(null), 2500)
-  }
+  const pinned = useMemo(() => pinnedSummary(timeline), [timeline])
+  const fresh = useMemo(() => isFreshProject(timeline, projectRoot != null && page != null && !page.has_before), [timeline, projectRoot, page])
+  const Header = useMemo(() => (fresh ? FreshHeader : undefined), [fresh])
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      <StatusLine />
-      <div style={{ display: 'flex', gap: 4, padding: '6px 14px 0', alignItems: 'center' }}>
-        {(['all', 'messages', 'decisions', 'story'] as const).map((f) => (
-          <button
-            key={f}
-            className={`btn ${filter === f ? 'primary' : ''}`}
-            style={{ padding: '2px 10px', fontSize: 11 }}
-            onClick={() => setFilter(f)}
-          >
-            {t(`timeline.filter${f[0].toUpperCase()}${f.slice(1)}`)}
-          </button>
-        ))}
-        <div style={{ flex: 1 }} />
-        {exported != null && (
-          <span className="chip ok" style={{ fontSize: 10 }}>{t('timeline.exported', { count: exported })}</span>
-        )}
-        <button
-          className="icon-btn"
-          style={{ padding: '2px 6px', display: 'inline-flex', alignItems: 'center' }}
-          title={t('timeline.export')}
-          onClick={doExport}
-        >
-          <Icon name="export" size={12} />
-        </button>
+    <TooltipProvider>
+    <FreshContext.Provider value={fresh}>
+    <div className="tl" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      {/* 过滤（A7 全部 / 消息 / 决策）与导出钮同排，贴在对话列上沿（interaction §1）。
+          故事线档（票 18）在模型层保留，界面入口按规范收为三档——见 reconciliation §5 票 05。 */}
+      <div className="tl-col tl-bar" style={{ width: '100%', boxSizing: 'border-box' }}>
+        <Segmented value={filter === 'story' ? 'all' : filter} onValueChange={(v) => setFilter(v as Filter)} aria-label={t('timeline.filterLabel')}>
+          {(['all', 'messages', 'decisions'] as const).map((f) => (
+            <SegmentedItem key={f} value={f}>{t(`timeline.filter${f[0].toUpperCase()}${f.slice(1)}`)}</SegmentedItem>
+          ))}
+        </Segmented>
+        <span className="tl-sp" />
+        <StatusLine />
+        {exported != null && <span className="chip ok" role="status">{t('timeline.exported', { count: exported })}</span>}
+        <IconButton size="sm" label={t('timeline.export')} action="timelineExport" onClick={() => void doExport()}>
+          <Icon name="export" size={14} />
+        </IconButton>
       </div>
+      {pinned && (
+        <div className="tl-col" style={{ width: '100%', boxSizing: 'border-box' }}>
+          <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />
+        </div>
+      )}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div aria-busy={windowState.loading || !viewport.ready} style={{ height: '100%', visibility: viewport.ready ? 'visible' : 'hidden' }}>
         <Virtuoso
@@ -1114,27 +1127,32 @@ export function Timeline() {
           data={rows}
           // overscan：快速滚动时预渲视口上下各 600px，行不再贴边「凭空长出」
           increaseViewportBy={600}
-          components={{ Footer: page?.has_after ? TimelineTail : StreamFooter }}
+          components={{ Header, Footer: page?.has_after ? TimelineTail : StreamFooter }}
           // 不满一屏顶对齐（不要 alignToBottom）。贴底由 writeTail 写 scrollHeight，
           // followOutput 看不见 Footer 里的留白带，会把最新一行贴回输入框。
           followOutput={false}
-          itemContent={(_i, row) => <div data-timeline-row={rowKey(row)} data-timeline-event={row.type === 'item' || row.type === 'chapter' ? row.idx : undefined} className={flash === rowKey(row) ? 'flash-row' : undefined}>{rowContent(row)}</div>}
+          itemContent={(_i, row) => <div data-timeline-row={rowKey(row)} data-timeline-event={row.type === 'item' || row.type === 'chapter' ? row.idx : undefined} className={`tl-col${flash === rowKey(row) ? ' flash-row' : ''}`}>{rowContent(row)}</div>}
         />
         </div>
-        {!viewport.ready && <div role={windowState.error ? 'alert' : 'status'} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, background: 'var(--bg-1)' }}>
-          {windowState.error ? <><span>{t('timeline.loadFailed')}</span><button className="btn" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button></>
-            : <LoadingState label={t('timeline.loadingRecent')} />}
+        {/* A20：首屏用骨架；读取失败是 C5 行内错误 + 重试，不伪装成空时间线 */}
+        {!viewport.ready && <div role={windowState.error ? 'alert' : 'status'} aria-label={windowState.error ? undefined : t('timeline.loadingRecent')} style={{ position: 'absolute', inset: 0, background: 'var(--app-main)' }}>
+          {windowState.error
+            ? <div className="tl-col"><div className="sysrow tl-sys risk"><span className="tl-sys-l">{t('timeline.loadFailed')} · <button type="button" className="tl-link" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button></span></div></div>
+            : <div className="tl-col"><SkeletonRows /></div>}
         </div>}
         {/* Owner 2026-10-02: upward intent loads history; only progress or recovery needs a floating surface. */}
         {viewport.ready && (windowState.olderLoading || windowState.olderError || windowState.tailError) &&
-          <div style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', zIndex: 21 }}>
-            {windowState.olderLoading ? <LoadingState label={t('timeline.loadingOlder')} />
-              : <button className="btn" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`}
-                  onClick={() => void windowState.retry()}>
-                  {windowState.tailError ? `${t('timeline.loadFailed')} · ${t('timeline.retry')}` : t('timeline.olderFailed')}</button>}
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21, background: 'var(--app-main)' }}>
+            <div className="tl-col">
+              {windowState.olderLoading ? <div role="status" aria-label={t('timeline.loadingOlder')}><SkeletonRows count={1} /></div>
+                : <div className="sysrow tl-sys" role="alert"><span className="tl-sys-l">
+                    {windowState.tailError ? t('timeline.loadFailed') : t('timeline.olderFailedLabel')} · <button type="button" className="tl-link"
+                      title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button>
+                  </span></div>}
+            </div>
           </div>}
 
-        {/* 松钉且高过窗口才显。不满一屏钉着、按钮藏着。 */}
+        {/* 松钉且高过窗口才显。不满一屏钉着、按钮藏着。（位置与三态属票 06 回到底部） */}
         {viewport.ready && (page?.has_after || showStickButton(viewport.pinned, viewport.overflow)) && (
           <button
             className="btn primary"
@@ -1148,5 +1166,27 @@ export function Timeline() {
         {viewport.ready && <NodeRail marks={marks} onJump={jump} />}
       </div>
     </div>
+    </FreshContext.Provider>
+    </TooltipProvider>
   )
+}
+
+/** A20 骨架：头像块 + 三条（feedback#loading「时间线首屏 / 补载更早内容」）。 */
+function SkeletonRows({ count = 3 }: { count?: number }) {
+  return (
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="tl-skl" aria-hidden>
+          <i className="av" />
+          <div className="tl-grow" style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
+            <i style={{ width: '40%' }} /><i style={{ width: '90%' }} /><i style={{ width: '70%' }} />
+          </div>
+        </div>
+      ))}
+    </>
+  )
+}
+
+function FreshHeader() {
+  return <div className="tl-col"><FreshStart /></div>
 }

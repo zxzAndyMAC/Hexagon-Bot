@@ -60,7 +60,7 @@ export function awayRange(summary: TimelineItem, items: readonly TimelineItem[])
 
 /** 建议下一步（补设计：core 不产出建议，UI 由摘要事实推导，只填入输入条不发送）。
  *  key 是 i18n 键尾，params 是插值；最多 3 条，按「先处理返工 → 再看交付 → 再推进」。 */
-export type Suggestion = { key: 'rejected' | 'escalated' | 'delivery' | 'stage' | 'continue'; params: Record<string, string | number> }
+export type Suggestion = { key: 'rejected' | 'escalated' | 'delivery' | 'stage' | 'keepGoing'; params: Record<string, string | number> }
 
 export function suggestions(s: ReturnSummary): Suggestion[] {
   const out: Suggestion[] = []
@@ -69,7 +69,7 @@ export function suggestions(s: ReturnSummary): Suggestion[] {
   const firstPath = s.deliveries.find((d) => d.path)?.path
   if (firstPath) out.push({ key: 'delivery', params: { path: firstPath } })
   if (s.stages.finished > 0) out.push({ key: 'stage', params: {} })
-  if (!out.length) out.push({ key: 'continue', params: {} })
+  if (!out.length) out.push({ key: 'keepGoing', params: {} })
   return out.slice(0, 3)
 }
 
@@ -82,4 +82,10 @@ export function pinnedSummary(items: readonly TimelineItem[]): TimelineItem | nu
     if (it.event.kind === 'owner_message' || it.message?.author === 'owner') return null
   }
   return null
+}
+
+/** 首屏引导（C13）：负责人还没发过任何指令。只在拿到完整历史（没有更早一页）时判定，
+ *  否则窗口外的旧指令会让老项目误显示问候。 */
+export function isFreshProject(items: readonly TimelineItem[], fullHistory: boolean): boolean {
+  return fullHistory && !items.some((it) => it.event.kind === 'owner_message' || it.message?.author === 'owner')
 }

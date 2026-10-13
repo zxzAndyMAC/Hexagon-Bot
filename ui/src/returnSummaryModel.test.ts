@@ -34,7 +34,7 @@ describe('建议下一步', () => {
   })
 
   it('什么都没发生时给一条「继续推进」，不编造事实', () => {
-    expect(suggestions(readSummary({})).map((x) => x.key)).toEqual(['continue'])
+    expect(suggestions(readSummary({})).map((x) => x.key)).toEqual(['keepGoing'])
   })
 })
 

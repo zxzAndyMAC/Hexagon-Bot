@@ -202,6 +202,19 @@ export default {
     routedTo: 'routed to {{role}}',
     routeHold: 'not routing yet',
     routeRejected: 'closed choice outside the roster — nobody was woken',
+    // ui-redesign 票 05
+    netWaiting: "Waiting for network",
+    netNote: "Network interrupted. Text received so far is kept; streaming resumes when the connection returns.",
+    waitingFirstToken: "Thinking",
+    copyMessage: "Copy message",
+    stageArtifacts: "{{count}} deliverables",
+    deliveryPassed: "Passed",
+    deliveryRejected: "Sent back",
+    deliveryPending: "Awaiting review",
+    deliverySuperseded: "Superseded",
+    callDenied: "Denied",
+    filterLabel: "Timeline filter",
+    olderFailedLabel: "Could not load earlier activity",
   },
   ev: {
     turn_started: 'turn started',
@@ -1145,10 +1158,9 @@ export default {
     done: 'Done', empty: 'No matches', count: '{{n}} selected',
     title_skills: 'Select skills', title_mcp: 'Select MCP services',
   },
-  intake: {
-    confirm: 'Write project instructions',
-    confirmHint: 'The opening analysis attached a draft. It stays off disk until you confirm, including at L4.',
-  },
+  intake: {"confirm": "Write AGENTS.md", "confirmHint": "Drafted by the opening analysis (full text in its message). Written to the repository root only after you confirm; existing files are never overwritten.", "title": "Project instructions draft", "unsaved": "Not on disk", "later": "Not now", "laterHint": "Hides the draft for now; it comes back when you reopen the project", "edit": "Edit", "editUnavailable": "The draft can only be written as a whole; edit AGENTS.md after writing it"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} min", "rangeUntil": "until {{to}}", "collapse": "Collapse summary", "toggle": "Collapse or expand the return summary", "headline": "The team finished <b>{{stages}} stage(s)</b> and delivered {{deliveries}} deliverable(s); <o>{{pending}} item(s)</o> are waiting for your decision.", "headlineClear": "The team finished <b>{{stages}} stage(s)</b> and delivered {{deliveries}} deliverable(s); nothing is waiting for you.", "kpiStages": "Stages", "kpiStagesValue": "{{count}} done", "kpiDeliveries": "Delivered", "kpiDeliveriesValue": "{{count}}", "kpiReviews": "Reviews", "kpiReviewsPassed": "{{count}} passed", "kpiReviewsRejected": "{{count}} sent back", "kpiCost": "Spent", "costLoading": "Loading spend", "costUnknown": "Spend while away is unavailable", "needsYou": "Needs you", "nothingNeeded": "Nothing is waiting for you.", "next": "Suggested next steps", "fillHint": "Fills the input; nothing is sent", "collapsedLine": "While you were away · {{minutes}} min · {{count}} waiting for you", "collapsedLineNoTime": "While you were away · {{count}} waiting for you", "suggest": {"rejected": "Explain how to fix the {{count}} sent-back deliverable(s)", "escalated": "Walk me through the {{count}} escalated flag(s)", "delivery": "Summarize what changed in {{path}}", "stage": "Summarize this stage, then move to the next one", "keepGoing": "Continue the current stage"}},
+  fresh: {"greeting": "Your team is ready. Where should we start?", "sub": "{{roles}} roles · {{stages}} stages", "specTitle": "Start with a spec", "specDesc": "Turn a one-line idea into acceptance criteria", "specFill": "Write a spec from this idea and list acceptance criteria: ", "repoTitle": "Analyze the existing repository", "repoDesc": "Read the layout, commands and dependencies", "repoFill": "Analyze the existing repository first: layout, commands and dependencies."},
   keys: {
     palette: 'Command palette',
     rail: 'Toggle side panel',

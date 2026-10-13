@@ -226,3 +226,57 @@ button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 /* 关键帧与 foundations §6 同值；@theme 里的 hx-* 只在用到对应 Tailwind 工具类时才输出，这里自带一份 */
 @keyframes tl-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 @keyframes tl-skl { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* ---- C12 归来摘要（workbench#return：raised 卡，圆角取原型 14 = --r-panel） ---- */
+.tl-rs { margin: 16px 0 8px; padding: 16px 18px; border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--shadow-raised); }
+.tl-rs-h { display: flex; align-items: center; gap: 8px; }
+.tl-rs-h b { font-size: 15px; font-weight: 600; }
+.tl-rs-range { font-size: 13px; color: var(--ink-3); background: none; border: 0; padding: 0; font-variant-numeric: tabular-nums; }
+button.tl-rs-range { cursor: pointer; border-radius: 6px; }
+button.tl-rs-range:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.tl-rs-lead { margin: 8px 0 0; font-size: 13px; color: var(--ink-2); }
+.tl-rs-em { color: var(--ink); font-weight: 600; }
+.tl-rs-kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
+.tl-rs-cell { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-radius: var(--r-card); background: var(--inset); box-shadow: inset 0 0 0 1px var(--line-soft); min-width: 0; }
+.tl-rs-cell > span { font-size: 12px; color: var(--ink-3); }
+.tl-rs-cell > b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-rs-skl { display: block; height: 18px; width: 60%; border-radius: 6px; background: linear-gradient(90deg, var(--canvas), var(--hover-2), var(--canvas)); background-size: 200% 100%; animation: tl-skl 1.4s linear infinite; }
+.tl-rs-label { margin: 16px 0 8px; font-size: 12px; color: var(--ink-3); }
+.tl-rs-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.tl-rs-list li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--r-card); font-size: 13px; }
+.tl-rs-list li .tl-grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-rs-list li b { font-weight: 600; }
+.tl-rs-next { display: flex; flex-direction: column; }
+.tl-rs-next button {
+  display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px; margin: 0 -6px; border: 0; border-top: 1px solid var(--line-soft);
+  background: none; font: inherit; font-size: 13px; color: var(--ink); text-align: left; cursor: pointer; border-radius: 0;
+}
+.tl-rs-next button > svg { color: var(--ink-3); }
+.tl-rs-next button:hover { background: var(--hover); }
+.tl-rs-next button:active { transform: scale(.98); }
+.tl-rs-next button:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 6px; }
+@media (prefers-reduced-motion: reduce) { .tl-rs-skl { animation: none; background: var(--canvas); } }
+
+/* ---- 头像按钮（点开 Agent 详情）与状态行 ---- */
+.tl-face { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 9px; height: 30px; flex: none; }
+.tl-face:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.tl .status-line { display: flex; gap: 10px; padding: 0; font-size: 12px; color: var(--ink-3); border: 0; background: none; min-width: 0; overflow: hidden; white-space: nowrap; }
+
+/* ---- C13 首屏引导与开场草案卡 ---- */
+.tl-fresh { padding: 40px 0 8px; }
+.tl-fresh-hero { text-align: center; margin-bottom: 22px; }
+.tl-fresh-hero .hexmark { width: 44px; height: 44px; border-radius: 13px; margin: 0 auto 12px; background: var(--ink); color: var(--page); display: grid; place-items: center; }
+.tl-fresh-hero h2 { margin: 0; font-size: 22px; font-weight: 500; letter-spacing: -.02em; }
+.tl-fresh-hero p { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-3); }
+.tl-fresh-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.tl-fresh-grid button { display: flex; align-items: flex-start; gap: 10px; padding: 12px; }
+.tl-fresh-grid .ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--canvas); color: var(--ink-2); flex: none; }
+.tl-fresh-grid b { display: block; font-size: 13px; font-weight: 500; }
+.tl-fresh-grid small { display: block; font-size: 12px; color: var(--ink-3); }
+.tl-intake { margin: 8px 0; padding: 14px 16px; border-radius: var(--r-panel); background: var(--app-card); box-shadow: var(--shadow-card); }
+.tl-intake-h { display: flex; align-items: center; gap: 8px; }
+.tl-intake-h .ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-tint); color: var(--accent-ink); flex: none; }
+.tl-intake-h b { font-size: 13px; font-weight: 600; }
+.tl-intake-f { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.tl-intake-f .tl-grow { font-size: 12px; color: var(--ink-3); }

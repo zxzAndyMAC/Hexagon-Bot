@@ -19,7 +19,6 @@ import { SettingsPage, type Section } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
 import { CommandPalette } from './components/CommandPalette'
 import { api, errText, onTurnDelta, onToolOutput } from './api'
-import { IntakeBar } from './components/IntakeBar'
 import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
 import { PendingDialog } from './components/PendingCards'
@@ -314,7 +313,6 @@ export default function App() {
           {/* Owner 2026-10-06: the input used to take space from every tab.
               Hide rather than unmount so returning keeps the draft and attachments. */}
           <div hidden={!timelineActive}>
-            <IntakeBar />
             <Composer />
           </div>
         </div>
