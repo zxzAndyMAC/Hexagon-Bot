@@ -8,8 +8,8 @@
 
 .tl { background: var(--app-main); color: var(--ink); }
 
-/* §5 对话阅读列 720，左右 24（foundations §5） */
-.tl-col { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+/* §5 对话阅读列 720，左右 24（foundations §5）；画布并排时 560——读 App 主区挂的 --col-w（票 07 接入） */
+.tl-col { max-width: var(--col-w, 720px); margin: 0 auto; padding: 0 24px; }
 /* 工具组 / 回合摘要随消息正文列对齐：30 头像 + 12 间距 */
 .tl-indent { padding-left: 42px; }
 

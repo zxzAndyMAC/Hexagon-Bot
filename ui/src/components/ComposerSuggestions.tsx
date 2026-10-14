@@ -9,14 +9,7 @@ import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { Button } from '@/components/ui/button'
 
-export type MentionItem = { kind: '@'; label: string; agentId: string; name: string; inst: string | null; sleeping: boolean }
-export type PathItem = { kind: '#'; label: string; path: string; dir: boolean; artifact: number | null }
-export type SuggestItem = MentionItem | PathItem
-export type SuggestPopup = { kind: '@' | '#'; items: SuggestItem[]; loading?: boolean; error?: boolean }
-
-/** 弹层是否该画出来：有结果、首屏加载或错误时。空结果不出空壳。 */
-export const popupVisible = (p: SuggestPopup | null): p is SuggestPopup =>
-  !!p && (p.items.length > 0 || !!p.loading || !!p.error)
+import type { SuggestPopup } from '../composerSuggest'
 
 export const ComposerSuggestions = forwardRef<HTMLDivElement, {
   id: string

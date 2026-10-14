@@ -56,14 +56,17 @@ export function ComputerTaskReadiness({ mentions, onSend }: { mentions: string[]
     return () => { active = false; window.clearInterval(tick); window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
   }, [team, providers, projectEpoch, projectRoot])
   const openModels = useCallback(() => window.dispatchEvent(new Event('hexagon:computer-model-settings')), [])
+  // 设置 › 模型服务（App 的 hexagon:open-settings-section 只收 'models' / 'usage'）
+  const openServices = useCallback(() => window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: 'models' })), [])
   useEffect(() => {
     if (!status?.enabled) return
     const key = (event: KeyboardEvent) => {
       if (!event.defaultPrevented && matches(event, bindingFor('computerModelSettings'))) { event.preventDefault(); openModels() }
+      else if (!event.defaultPrevented && matches(event, bindingFor('computerModelServices'))) { event.preventDefault(); openServices() }
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [status?.enabled, openModels])
+  }, [status?.enabled, openModels, openServices])
   const selected = team.filter(role => mentions.length === 0 || mentions.includes(role.role) || mentions.includes(`${role.role}[${role.id}]`))
   const warnings = selected.flatMap(role => {
     const model = models ? models.roles.find(m => m.agent_id === role.id) ?? { agent_id: role.id, vision: 'unknown' as const, model: null } : null
@@ -76,7 +79,7 @@ export function ComputerTaskReadiness({ mentions, onSend }: { mentions: string[]
   if (!status?.enabled || (!capture && !modelIssue) || dismissed === signature) return null
   return <TooltipProvider>
     <aside aria-label={t('computer.title')} data-readiness
-      className="mx-2 mt-2 rounded-[var(--r-panel)] bg-surface px-4 py-3.5 text-[13px] shadow-[var(--shadow-card)]">
+      className="rounded-[var(--r-panel)] bg-surface px-4 py-3.5 text-[13px] shadow-[var(--shadow-card)]">
       <div className="flex items-center gap-2.5">
         <span className="grid size-7 flex-none place-items-center rounded-[var(--r-sm)] bg-orange-tint text-orange"><Icon name="image" size={14} /></span>
         <b className="flex-1 text-[13px] font-semibold">{t(modelIssue ? 'control.readinessTitle' : 'control.readinessCapture')}</b>
@@ -94,8 +97,12 @@ export function ComputerTaskReadiness({ mentions, onSend }: { mentions: string[]
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         {capture && <ActionButton variant="ghost" size="sm" label={t('computer.title')} action="desktopPanel" data-readiness-computer
           onClick={() => window.dispatchEvent(new Event('hexagon:computer-settings'))}><Icon name="computer" size={12} />{t('computer.title')}</ActionButton>}
+        {/* control#readiness 原型「打开模型服务」（票 07 补回）：换成支持视觉的模型先去设置 › 模型服务；
+            角色绑的是哪个槽仍在设置 › 团队（「检查角色模型」，票 14 落点保留）。 */}
+        {modelIssue && <ActionButton variant="ghost" size="sm" label={t('computer.modelServices')} action="computerModelServices" data-readiness-services
+          onClick={openServices}><Icon name="cpu" size={12} />{t('computer.modelServices')}</ActionButton>}
         {modelIssue && <ActionButton variant="ghost" size="sm" label={t('computer.modelSettings')} action="computerModelSettings" data-readiness-models
-          onClick={openModels}><Icon name="cpu" size={12} />{t('computer.modelSettings')}</ActionButton>}
+          onClick={openModels}><Icon name="agent" size={12} />{t('computer.modelSettings')}</ActionButton>}
         <span className="flex-1" />
         {onSend && <Button size="sm" data-readiness-send onClick={() => { setDismissed(signature); onSend() }}>{t('control.sendAnyway')}</Button>}
       </div>
