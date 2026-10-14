@@ -4,6 +4,7 @@ export default {
   elementContext: {"select": "選擇網頁元素", "region": "框選區域", "done": "完成", "hint": "選擇後回到工作台傳送", "element": "網頁元素", "stale": "已過期，請重新選擇", "sourceHint": "開發原始碼提示：{{file}}:{{line}}", "unlocated": "未定位原始碼", "remove": "移除引用", "starting": "正在開啟選擇…", "connectFirst": "請先連線專案瀏覽器", "view": "查看引用", "close": "關閉引用"},
 
   agentScreen: {"title": "Agent Screen", "move": "移動預覽 · 方向鍵", "hide": "隱藏預覽", "source": "預覽來源", "browser": "瀏覽器", "native": "桌面應用程式", "collapse": "收合預覽", "expand": "展開預覽", "unavailable": "預覽暫不可用", "loading": "正在載入預覽…", "local": "本機預覽", "open": "開啟應用程式"},
+  control: {"activeBrowser":"{{agent}} 正在控制瀏覽器","activeComputer":"{{agent}} 正在控制電腦","elsewhere":"另一個專案正在控制電腦","paused":"電腦操作已暫停","idleComputer":"電腦操作已啟用","idleBrowser":"專案瀏覽器已連線","pause":"暫停電腦操作","panel":"電腦操作與瀏覽器","statusEnabled":"已啟用","statusPaused":"已暫停","statusDisabled":"未啟用","statusBusy":"工作中","grantAccessibility":"輔助使用","grantInput":"輸入事件","grantScreen":"螢幕錄製","consentRow":"本專案截圖傳給模型","granted":"已授權","consented":"已同意","agree":"同意","revoke":"撤回同意","openSettings":"前往系統設定","controller":"目前控制者","noController":"沒有 Agent 在控制","otherProject":"其他專案","host":"實際承載授權的應用程式：{{host}}","managedTitle":"託管 Chromium（隔離）","managedBody":"獨立設定，不帶你的登入狀態。開啟和關閉都需要你批准。","extensionTitle":"連接我的 Chrome / Edge","extensionBody":"需要安裝 Microsoft 官方 Playwright 擴充功能","open":"開啟","connect":"連接","warnTitle":"連接前請了解","connected":"已連線 · {{target}}","blockedPaused":"電腦操作已暫停：恢復後才能開啟或連接瀏覽器。","blockedDisabled":"電腦操作未啟用：先在電腦操作裡同意，才能開啟或連接瀏覽器。","blockedLoading":"正在讀取電腦操作狀態…","screenTitle":"Agent 的螢幕","screenWorking":"工作中","screenPaused":"已暫停","openApp":"開啟實際應用程式","evidence":"截圖證據 · {{label}}","evidenceHint":"點擊放大，Esc 關閉","readinessTitle":"這項任務需要看截圖","readinessCapture":"截圖還沒準備好","sendAnyway":"仍然傳送","dismiss":"關閉提示"},
   design: {"preview": "放大視覺稿", "previewPage": "預覽 {{page}}", "closePreview": "關閉預覽", "title": "選擇視覺方向", "intro": "先確認關鍵頁面視覺稿，再進入完整介面開發。", "loading": "正在載入視覺方案…", "stale": "方案已更新，請查看最新版本。", "layout": "版面", "typography": "字體", "palette": "配色", "choose": "採用此方案", "existingLabel": "已有品牌或設計規範", "existingPlaceholder": "填寫需要沿用的規範、設計檔案或明確方向。", "useExisting": "確認沿用這些規範", "empty": "等待角色提供 2–3 個視覺方案，也可以確認已有規範。", "revision": "方案版本 {{revision}}", "selected": "已確認方向", "chooseHint": "請在卡片中明確選擇視覺方案，或確認沿用已有規範。"},
   quality: {"setupTitle": "品質檢查命令", "setupHint": "選填：僅填入你允許本專案在適用品質關卡自動執行的命令。必需類別留空時仍顯示缺少證據；效能工作負載會執行三次。重新開啟精靈或變更專案後需重新填寫。", "setupReview": "建立專案即確認以下命令。不會採用模型產生的隱藏命令，也不開放通用流程編輯。", "setupNone": "未設定命令；必需檢查仍需補充證據或由負責人說明理由後例外接受。", "category": {"tests": "測試", "performance": "效能", "accessibility": "無障礙", "security": "安全", "change_scope": "變更範圍"}, "reason": {"missing_runner": "尚未設定已批准的檢查", "not_run": "本次交付尚未執行", "configuration_changed": "檢查設定已變更", "source_changed": "檢查後原始碼已變更", "scope_unavailable": "無法驗證變更範圍", "execution_failed": "檢查執行失敗", "measurement_changed": "測量工作負載已變更", "regressed": "效能發生退化", "baseline_established": "已建立首次實測基線，暫無歷史對比", "passed": "本次交付已驗證"}, "required": "必要檢查：{{category}}", "measurement": "本次工作負載耗時中位數：{{value}} 毫秒", "baseline": "可比基線：{{value}} 毫秒", "changed": "變更路徑：{{count}}", "reviewBaseline": "審閱基準變化", "confirmBaseline": "確認新基準", "cancelBaseline": "取消", "baselineReason": "測量條件為什麼變化？", "baselineConfirmation": "確認以上實測結果作為新基準。舊失敗和舊基準保留在歷史中；交付前仍需重新執行效能檢查。", "baselineConfirmed": "基準已確認。請重新執行效能檢查；舊失敗記錄保留。", "details": "技術細節", "desktopOnly": "請在桌面應用程式中修改品質檢查命令", "revalidationTitle": "已完成交付的重新驗收", "revalidationHint": "檢查命令已修改。請核對目前證據再重新驗收，原完成紀錄、產物與歷史保留。取消本次請求仍需新檢查。", "revalidationConfirm": "驗收目前證據", "revalidationCancel": "取消本次請求", "configTitle": "目前流程品質檢查", "configHint": "填寫命令後先核對再確認。必要但未設定的類別仍需檢查證據或負責人例外。", "configStage": "受影響階段", "configReview": "核對修改", "configConfirm": "確認用於目前流程", "configCancel": "取消", "configBlank": "未設定", "configImpact": "這些類別的修改會使相關檢查與負責人例外過期，也包括借用這些命令的階段。驗收前需重新檢查，產物與歷史保留。", "configRun": "執行目前檢查", "configChecked": "本次檢查已結束。請查看目前證據，再處理待驗收事項。", "configSaved": "設定已儲存。驗收前請重新執行受影響的檢查。", "historicalDoneLabel": "先前完成", "historicalDone": "先前已完成；目前檢查證據另行顯示"},
   browser: {"title": "專案瀏覽器", "description": "Agent 可依任務需要開啟和關閉獨立的專案 Chromium，也可在此手動管理。瀏覽器共用電腦操控授權與暫停，每次修改仍需核准。", "extensionHint": "連接現有 Chrome 或 Edge 時，需透過官方 Playwright 擴充功能明確選擇分頁。中斷不會關閉現有分頁。", "enableHint": "請先啟用並恢復電腦操作。", "managed": "開啟託管 Chromium", "extension": "連接現有 Chrome / Edge", "detach": "中斷連線", "connecting": "正在連接…請完成瀏覽器擴充功能提示。", "disconnected": "已中斷", "setupTitle": "準備連接瀏覽器", "setupBody": "在要連接的 Chrome / Edge 設定檔中安裝 Microsoft 官方 Playwright Extension，然後回到這裡繼續。", "extensionAccess": "擴充功能授權可能涵蓋整個瀏覽器，包括其他分頁與登入工作階段。請閱讀擴充功能確認頁；Hexagon 本次操作綁定所選分頁。", "installExtension": "安裝官方擴充功能", "continueConnection": "已安裝，繼續連接"},
@@ -195,6 +196,19 @@ export default {
     routedTo: '派給 {{role}}',
     routeHold: '先不派活',
     routeRejected: '封閉選擇不在花名冊，沒有派活',
+    // ui-redesign 票 05
+    netWaiting: "等網路",
+    netNote: "網路中斷，已收到的文字會保留，恢復後繼續接收。",
+    waitingFirstToken: "正在思考",
+    copyMessage: "複製訊息",
+    stageArtifacts: "{{count}} 份產物",
+    deliveryPassed: "通過",
+    deliveryRejected: "已退回",
+    deliveryPending: "待複審",
+    deliverySuperseded: "已被取代",
+    callDenied: "已拒絕",
+    filterLabel: "時間線篩選",
+    olderFailedLabel: "較早的內容載入失敗",
   },
   ev: {
     turn_started: '回合開始',
@@ -665,7 +679,7 @@ export default {
     splitNeedsWidth: '分欄需要更寬的視窗（≥720px）', },
   art: { reviewPassed: "目前版本複審通過", reviewRejected: "目前版本複審駁回", reviewStale: "複審已過期", currentWorktree: "目前工作樹", pendingRecovery: "交付登記尚未完成。目前檔案已保留；恢復並核對狀態前，此產物不能用於驗收。", content: '內容', compare: '對比', version: 'v{{n}}', vs: '↔', unavailable: '內容不可用', preview: '預覽', source: '原始碼' },
   md: { copy: '複製', copied: '已複製' },
-  exec: { exit: '退出 {{code}}', noOutput: '（無輸出）', tail: '… 僅顯示末 32KB' },
+  exec: { done: '完成', exit: '退出 {{code}}', noOutput: '（無輸出）', tail: '… 僅顯示末 32KB' },
   agent: {
     stepHostRead: "讀取電腦檔案",
     stepHostWrite: "寫入電腦檔案",
@@ -1138,10 +1152,9 @@ export default {
     done: '確定', empty: '無符合項目', count: '已選 {{n}} 項',
     title_skills: '選擇技能', title_mcp: '選擇 MCP 服務',
   },
-  intake: {
-    confirm: '寫入專案說明',
-    confirmHint: '開場分析附了一份草案。點頭之前不會落盤，自治 L4 也不會自動寫上。',
-  },
+  intake: {"confirm": "寫入 AGENTS.md", "confirmHint": "由開場分析起草（全文在那則開場訊息裡）；確認後寫入倉庫根目錄，不會覆寫既有檔案。", "title": "專案說明草案", "unsaved": "未落盤", "later": "先不寫", "laterHint": "本次先收起，重新開啟專案時還會出現", "edit": "編輯", "editUnavailable": "草案只能整份寫入；寫入後可直接編輯 AGENTS.md"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分鐘", "rangeUntil": "截至 {{to}}", "collapse": "收起摘要", "toggle": "收起或展開歸來摘要", "headline": "團隊推進了 <b>{{stages}} 個階段</b>，交付 {{deliveries}} 份產物；有 <o>{{pending}} 件</o>等你拍板。", "headlineClear": "團隊推進了 <b>{{stages}} 個階段</b>，交付 {{deliveries}} 份產物；沒有等你處理的事項。", "kpiStages": "階段", "kpiStagesValue": "完成 {{count}} 個", "kpiDeliveries": "交付", "kpiDeliveriesValue": "{{count}} 份", "kpiReviews": "複審", "kpiReviewsPassed": "{{count}} 過", "kpiReviewsRejected": "{{count}} 退", "kpiCost": "花費", "costLoading": "正在讀取花費", "costUnknown": "讀取不到離開期間的花費", "needsYou": "需要你處理", "nothingNeeded": "沒有等你處理的事項。", "next": "建議下一步", "fillHint": "填入輸入列，不會送出", "collapsedLine": "離開期間 · {{minutes}} 分鐘 · {{count}} 件待你處理", "collapsedLineNoTime": "離開期間 · {{count}} 件待你處理", "suggest": {"rejected": "說說被退回的 {{count}} 份產物要怎麼改", "escalated": "解釋一下升級給我的 {{count}} 條異議", "delivery": "講講 {{path}} 這次改了什麼", "stage": "總結這一階段的產出，再推進下一階段", "keepGoing": "繼續推進目前階段"}},
+  fresh: {"greeting": "團隊已就位，要從哪裡開始？", "sub": "{{roles}} 個角色 · {{stages}} 個階段", "specTitle": "先寫規格", "specDesc": "從一句話需求展開驗收標準", "specFill": "從這句需求開始寫規格，列出驗收標準：", "repoTitle": "先分析現有倉庫", "repoDesc": "讀目錄結構、命令與相依套件", "repoFill": "先分析現有倉庫：目錄結構、命令和相依套件。"},
   keys: {
     palette: '命令面板',
     sidebar: "開關側欄",

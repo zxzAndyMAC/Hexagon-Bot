@@ -4,6 +4,7 @@ export default {
   elementContext: {"select": "选择网页元素", "region": "框选区域", "done": "完成", "hint": "选择后回到工作台发送", "element": "网页元素", "stale": "已过期，请重新选择", "sourceHint": "开发源码提示：{{file}}:{{line}}", "unlocated": "未定位源码", "remove": "移除引用", "starting": "正在开启选择…", "connectFirst": "请先连接项目浏览器", "view": "查看引用", "close": "关闭引用"},
 
   agentScreen: {"title": "Agent Screen", "move": "移动预览 · 方向键", "hide": "隐藏预览", "source": "预览来源", "browser": "浏览器", "native": "桌面应用", "collapse": "收起预览", "expand": "展开预览", "unavailable": "预览暂不可用", "loading": "正在加载预览…", "local": "本地预览", "open": "打开应用"},
+  control: {"activeBrowser":"{{agent}} 正在控制浏览器","activeComputer":"{{agent}} 正在控制电脑","elsewhere":"另一个项目正在控制电脑","paused":"电脑操作已暂停","idleComputer":"电脑操作已启用","idleBrowser":"项目浏览器已连接","pause":"暂停电脑操作","panel":"电脑操作与浏览器","statusEnabled":"已启用","statusPaused":"已暂停","statusDisabled":"未启用","statusBusy":"工作中","grantAccessibility":"辅助功能","grantInput":"输入事件","grantScreen":"屏幕录制","consentRow":"本项目截图发给模型","granted":"已授权","consented":"已同意","agree":"同意","revoke":"撤回同意","openSettings":"前往系统设置","controller":"当前控制者","noController":"没有 Agent 在控制","otherProject":"其他项目","host":"实际承载授权的应用：{{host}}","managedTitle":"托管 Chromium（隔离）","managedBody":"独立配置，不带你的登录状态。打开和关闭都要你批准。","extensionTitle":"连接我的 Chrome / Edge","extensionBody":"需要安装 Microsoft 官方 Playwright 扩展","open":"打开","connect":"连接","warnTitle":"连接前请了解","connected":"已连接 · {{target}}","blockedPaused":"电脑操作已暂停：恢复后才能打开或连接浏览器。","blockedDisabled":"电脑操作未启用：先在电脑操作里同意，才能打开或连接浏览器。","blockedLoading":"正在读取电脑操作状态…","screenTitle":"Agent 的屏幕","screenWorking":"工作中","screenPaused":"已暂停","openApp":"打开真实应用","evidence":"截图证据 · {{label}}","evidenceHint":"点击放大，Esc 关闭","readinessTitle":"这项任务需要看截图","readinessCapture":"截图还没准备好","sendAnyway":"仍然发送","dismiss":"关闭提示"},
   design: {"preview": "放大视觉稿", "previewPage": "预览 {{page}}", "closePreview": "关闭预览", "title": "选择视觉方向", "intro": "先确认关键页面视觉稿，再进入完整界面开发。", "loading": "正在加载视觉方案…", "stale": "方案已更新，请查看最新版本。", "layout": "布局", "typography": "字体", "palette": "配色", "choose": "采用此方案", "existingLabel": "已有品牌或设计规范", "existingPlaceholder": "填写需要沿用的规范、设计文件或明确方向。", "useExisting": "确认沿用这些规范", "empty": "等待角色提供 2–3 个视觉方案，也可以确认已有规范。", "revision": "方案版本 {{revision}}", "selected": "已确认方向", "chooseHint": "请在卡片中明确选择视觉方案，或确认沿用已有规范。"},
   quality: {"setupTitle": "质量检查命令", "setupHint": "可选：仅填写你允许本项目在适用质量关卡自动执行的命令。必需类别留空时仍显示缺证据；性能工作负载会执行三次。重新打开向导或改变项目后需重新填写。", "setupReview": "创建项目即确认以下命令。不会采用模型生成的隐藏命令，也不开放通用流程编辑。", "setupNone": "未配置命令；必需检查仍需补充证据或由负责人说明理由后例外接受。", "category": {"tests": "测试", "performance": "性能", "accessibility": "可访问性", "security": "安全", "change_scope": "变更范围"}, "reason": {"missing_runner": "尚未配置已批准的检查", "not_run": "本次交付尚未运行", "configuration_changed": "检查配置已变化", "source_changed": "检查后源码已变化", "scope_unavailable": "无法验证变更范围", "execution_failed": "检查执行失败", "measurement_changed": "测量工作负载已变化", "regressed": "性能发生退化", "baseline_established": "已建立首次实测基线，暂无历史对比", "passed": "本次交付已验证"}, "required": "必需检查：{{category}}", "measurement": "本次工作负载耗时中位数：{{value}} 毫秒", "baseline": "可比基线：{{value}} 毫秒", "changed": "变更路径：{{count}}", "reviewBaseline": "审阅基准变化", "confirmBaseline": "确认新基准", "cancelBaseline": "取消", "baselineReason": "测量条件为什么变化？", "baselineConfirmation": "确认以上实测结果作为新基准。旧失败和旧基准保留在历史中；交付前仍需重新运行性能检查。", "baselineConfirmed": "基准已确认。请重新运行性能检查；旧失败记录保留。", "details": "技术细节", "desktopOnly": "请在桌面应用中修改质量检查命令", "revalidationTitle": "已完成交付的重新验收", "revalidationHint": "检查命令已修改。请核对当前证据再重新验收，原完成记录、产物和历史保留。取消本次请求仍需新检查。", "revalidationConfirm": "验收当前证据", "revalidationCancel": "取消本次请求", "configTitle": "当前流程质量检查", "configHint": "填写命令后先核对再确认。必需但未配置的类别仍需检查证据或负责人例外。", "configStage": "受影响阶段", "configReview": "核对修改", "configConfirm": "确认用于当前流程", "configCancel": "取消", "configBlank": "未配置", "configImpact": "这些类别的修改会使相关检查与负责人例外过期，也包括借用这些命令的阶段。验收前需重新检查，产物与历史保留。", "configRun": "运行当前检查", "configChecked": "本次检查已结束。请查看当前证据，再处理待验收事项。", "configSaved": "配置已保存。验收前请重新运行受影响的检查。", "historicalDoneLabel": "此前完成", "historicalDone": "此前已完成；当前检查证据单独显示"},
   browser: {"title": "项目浏览器", "description": "Agent 可按任务需要打开和关闭独立的项目 Chromium，也可在此手动管理。浏览器共用电脑操控授权与暂停，每次修改仍需批准。", "extensionHint": "连接已有 Chrome 或 Edge 时，需通过官方 Playwright 扩展明确选择标签页。断开不会关闭已有标签页。", "enableHint": "请先开启并恢复电脑操作。", "managed": "打开托管 Chromium", "extension": "连接已有 Chrome / Edge", "detach": "断开连接", "connecting": "正在连接…请完成浏览器扩展提示。", "disconnected": "已断开", "setupTitle": "准备连接浏览器", "setupBody": "在要连接的 Chrome / Edge 配置中安装 Microsoft 官方 Playwright Extension，然后回到这里继续。", "extensionAccess": "扩展授权可能覆盖整个浏览器，包括其他标签和登录会话。请阅读扩展确认页；Hexagon 本次操作绑定所选标签。", "installExtension": "安装官方扩展", "continueConnection": "已安装，继续连接"},
@@ -195,6 +196,19 @@ export default {
     routedTo: '派给 {{role}}',
     routeHold: '先不派活',
     routeRejected: '封闭选择不在花名册，没有派活',
+    // ui-redesign 票 05
+    netWaiting: "等网",
+    netNote: "网络中断，已收到的文字会保留，恢复后继续接收。",
+    waitingFirstToken: "正在思考",
+    copyMessage: "复制消息",
+    stageArtifacts: "{{count}} 份产物",
+    deliveryPassed: "通过",
+    deliveryRejected: "已退回",
+    deliveryPending: "待复审",
+    deliverySuperseded: "已被替代",
+    callDenied: "已拒绝",
+    filterLabel: "时间线筛选",
+    olderFailedLabel: "更早的内容加载失败",
   },
   ev: {
     turn_started: '回合开始',
@@ -665,7 +679,7 @@ export default {
     splitNeedsWidth: '分栏需要更宽的窗口（≥720px）', },
   art: { reviewPassed: "当前版本复审通过", reviewRejected: "当前版本复审驳回", reviewStale: "复审已过期", currentWorktree: "当前工作树", pendingRecovery: "交付登记未完成。当前文件已保留；恢复并核对状态前，此产物不能用于验收。", content: '内容', compare: '对比', version: 'v{{n}}', vs: '↔', unavailable: '内容不可用', preview: '预览', source: '源码' },
   md: { copy: '复制', copied: '已复制' },
-  exec: { exit: '退出 {{code}}', noOutput: '（无输出）', tail: '… 仅显示末 32KB' },
+  exec: { done: '完成', exit: '退出 {{code}}', noOutput: '（无输出）', tail: '… 仅显示末 32KB' },
   agent: {
     stepHostRead: "读取电脑文件",
     stepHostWrite: "写入电脑文件",
@@ -1138,10 +1152,9 @@ export default {
     done: '确定', empty: '无匹配项', count: '已选 {{n}} 项',
     title_skills: '选择技能', title_mcp: '选择 MCP 服务',
   },
-  intake: {
-    confirm: '写入项目说明',
-    confirmHint: '开场分析附了一份草案。点头之前不会落盘，自治 L4 也不会自动写上。',
-  },
+  intake: {"confirm": "写入 AGENTS.md", "confirmHint": "由开场分析起草（全文在那条开场消息里）；确认后写入仓库根目录，不会覆盖已有文件。", "title": "项目说明草案", "unsaved": "未落盘", "later": "先不写", "laterHint": "本次先收起，重新打开项目时还会出现", "edit": "编辑", "editUnavailable": "草案只能整份写入；写入后可直接编辑 AGENTS.md"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分钟", "rangeUntil": "截至 {{to}}", "collapse": "收起摘要", "toggle": "收起或展开归来摘要", "headline": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；有 <o>{{pending}} 件</o>等你拍板。", "headlineClear": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；没有等你处理的事项。", "kpiStages": "阶段", "kpiStagesValue": "完成 {{count}} 个", "kpiDeliveries": "交付", "kpiDeliveriesValue": "{{count}} 份", "kpiReviews": "复审", "kpiReviewsPassed": "{{count}} 过", "kpiReviewsRejected": "{{count}} 退", "kpiCost": "花费", "costLoading": "正在读取花费", "costUnknown": "离开期间的花费读取不到", "needsYou": "需要你处理", "nothingNeeded": "没有等你处理的事项。", "next": "建议下一步", "fillHint": "填入输入条，不会发送", "collapsedLine": "离开期间 · {{minutes}} 分钟 · {{count}} 件待你处理", "collapsedLineNoTime": "离开期间 · {{count}} 件待你处理", "suggest": {"rejected": "说说被退回的 {{count}} 份产物要怎么改", "escalated": "解释一下升级给我的 {{count}} 条异议", "delivery": "讲讲 {{path}} 这次改了什么", "stage": "总结这一阶段的产出，再推进下一阶段", "keepGoing": "继续推进当前阶段"}},
+  fresh: {"greeting": "团队已就位，要从哪里开始？", "sub": "{{roles}} 个角色 · {{stages}} 个阶段", "specTitle": "先写规格", "specDesc": "从一句话需求展开验收标准", "specFill": "从这句需求开始写规格，列出验收标准：", "repoTitle": "先分析现有仓库", "repoDesc": "读目录结构、命令与依赖", "repoFill": "先分析现有仓库：目录结构、命令和依赖。"},
   keys: {
     palette: '命令面板',
     sidebar: "开关侧栏",

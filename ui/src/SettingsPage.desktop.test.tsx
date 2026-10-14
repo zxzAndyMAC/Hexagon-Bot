@@ -37,7 +37,8 @@ it('uses one settings button for pause and resume, reflecting project disable im
   expect(buttons()[0].textContent).toContain('Resume computer')
   await act(async () => buttons()[0].click())
   expect(buttons()[0].textContent).toContain('Pause computer')
-  const disable = [...el.querySelectorAll('button')].find(button => button.textContent!.trim() === 'Disable')!
+  // 票 ui-redesign 14（D19）：撤回项目同意移到「本项目截图发给模型」勾选行（原「停用」按钮），语义不变
+  const disable = el.querySelector<HTMLButtonElement>('[data-desktop-action=disable]')!
   await act(async () => disable.click())
   expect(buttons()).toHaveLength(1)
   expect(buttons()[0].textContent).toContain('Computer access disabled')

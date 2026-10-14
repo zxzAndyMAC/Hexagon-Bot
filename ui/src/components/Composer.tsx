@@ -1,5 +1,4 @@
 import { ComputerTaskReadiness } from './ComputerTaskReadiness'
-import { AgentScreen } from './AgentScreen'
 import { ElementDraft } from './ElementReferences'
 import type { ElementRef } from '../gen/ElementRef'
 import { ProjectApprovalMode } from './ProjectApprovalMode'
@@ -9,6 +8,7 @@ import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
 import { ContextMeter } from './ContextMeter'
+import { COMPOSER_FILL_EVENT, mergeFill } from '../composerFill'
 import type { AttachRef } from '../gen/AttachRef'
 import {
   atomicDeletion,
@@ -280,6 +280,24 @@ export function Composer() {
     }
   }
 
+  // ui-redesign 票 05：归来摘要建议 / 首屏建议卡只填入草稿、聚焦，不发送。
+  useEffect(() => {
+    const onFill = (e: Event) => {
+      const fill = (e as CustomEvent<unknown>).detail
+      if (typeof fill !== 'string' || !fill) return
+      setText((draft) => {
+        const next = mergeFill(draft, fill)
+        pendingCaret.current = next.length
+        return next
+      })
+      setHistIdx(-1)
+      setPopup(null)
+      inputRef.current?.focus()
+    }
+    window.addEventListener(COMPOSER_FILL_EVENT, onFill)
+    return () => window.removeEventListener(COMPOSER_FILL_EVENT, onFill)
+  }, [])
+
   // 票 12：未聚焦时插到文末（拖进来的人多半没把光标点在半截词上）。
   // 聚焦时插在光标处，并补收束空格，使这块和手打路径用同一次退格删掉。
   const insertDroppedPath = (path: string) => {
@@ -323,7 +341,7 @@ export function Composer() {
       }}
     >
       {/* 票 03 + 票 10：按图显示。关闭钮在图上，只去掉这一张；点图放大。 */}
-      <ElementDraft references={elements} onChange={setElements} submitting={submitting} trailing={<AgentScreen />} />
+      <ElementDraft references={elements} onChange={setElements} submitting={submitting} />
       {attachments.length > 0 && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           {attachments.map((a) => (
@@ -511,7 +529,7 @@ export function Composer() {
             }}
           />
         </div>
-        <ComputerTaskReadiness mentions={atoms.filter(a => a.kind === 'mention').map(a => a.value)} />
+        <ComputerTaskReadiness mentions={atoms.filter(a => a.kind === 'mention').map(a => a.value)} onSend={() => void send()} />
         <div className="composer-toolbar">
           <div className="composer-controls"><ProjectApprovalMode /><span className="composer-hint">{t('composer.multilineHint')}</span></div>
           <div className="composer-actions">

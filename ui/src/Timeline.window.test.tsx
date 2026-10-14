@@ -53,10 +53,14 @@ it('loads older history on upward intent without a persistent button, keeping fa
     const scroller=el.querySelector('[data-testid=history-scroller]')!
     await act(async()=>scroller.dispatchEvent(new WheelEvent('wheel',{deltaY:-100,bubbles:true})))
     expect(load).toHaveBeenCalledTimes(2)
-    const retry=[...el.querySelectorAll('button')].find(button=>button.textContent===i18n.t('timeline.olderFailed'))!
+    // ui-redesign 票 05（components A20/C5，feedback#errors）：失败改为行内错误「更早的内容加载失败 · 重试」，
+    // 重试是行内链接按钮，文案只剩「重试」；原断言找整句按钮（ADR 0088 对话主区换皮，语义不变）。
+    const alert=el.querySelector('[role=alert]')!
+    expect(alert.textContent).toContain(i18n.t('timeline.olderFailedLabel'))
+    const retry=[...alert.querySelectorAll('button')].find(button=>button.textContent===i18n.t('timeline.retry'))!
     expect(retry).toBeTruthy()
     await act(async()=>retry.click())
     expect(load).toHaveBeenCalledTimes(3)
-    expect(el.textContent).not.toContain(i18n.t('timeline.olderFailed'))
+    expect(el.textContent).not.toContain(i18n.t('timeline.olderFailedLabel'))
   } finally {await act(async()=>root.unmount())}
 })
