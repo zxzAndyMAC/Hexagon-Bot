@@ -409,8 +409,8 @@ describe('SettingsPage list|detail 分区', () => {
     const { el, root } = await render(<SettingsPage onBack={() => {}} projectless />)
     await clickNav(el, 'Team')
     await clickText(el, '插画师')
-    // 已选值渲染为 chip，不再逗号文本框
-    const chip = [...el.querySelectorAll('.chip')].find((c) => c.textContent?.includes('my-lint'))
+    // 已选值渲染为 chip，不再逗号文本框（票 11：chip 换成 A4 line Badge，按 data-entity-chip 找）
+    const chip = el.querySelector('[data-entity-chip="my-lint"]')
     expect(chip).toBeTruthy()
     // 「+ Add」开弹窗——惰性加载清单
     const addBtn = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === '+ Add')!
@@ -424,7 +424,7 @@ describe('SettingsPage list|detail 分区', () => {
     const done = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Done')!
     await act(async () => { done.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(el.querySelector('[role="dialog"]')).toBeNull()
-    const chips = [...el.querySelectorAll('.chip')].map((c) => c.textContent)
+    const chips = [...el.querySelectorAll('[data-entity-chip]')].map((c) => c.textContent)
     expect(chips.some((c) => c?.includes('spec-writing'))).toBe(true)
     root.unmount()
   })
