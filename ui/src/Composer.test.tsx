@@ -5,6 +5,7 @@ import './i18n'
 import { ComputerTaskReadiness } from './components/ComputerTaskReadiness'
 import { Composer } from './components/Composer'
 import { FileTree } from './components/FileTree'
+import { TooltipProvider } from './components/ui/tooltip'
 import { atomicDeletion, findAtoms } from './composerAtoms'
 import { useUiStore } from './store'
 import { api } from './api'
@@ -20,7 +21,8 @@ async function render(node: React.ReactNode) {
   const el = document.createElement('div')
   document.body.appendChild(el)
   const root = createRoot(el)
-  await act(async () => { root.render(node) })
+  // 票 09（D14）：文件树树头换成带 tooltip 的 IconButton，需要 TooltipProvider
+  await act(async () => { root.render(<TooltipProvider>{node}</TooltipProvider>) })
   return { el, root }
 }
 
