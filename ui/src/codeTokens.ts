@@ -9,15 +9,18 @@ import { getHighlighter } from './highlight'
 export type CodeToken = { content: string; color?: string }
 
 const THEME = 'hexagon-tokens'
-const theme = createCssVariablesTheme({ name: THEME, variablePrefix: '--hx-code-' })
+const PREFIX = '--hx-code-'
+const theme = createCssVariablesTheme({ name: THEME, variablePrefix: PREFIX })
 
 /** Shiki css-variables 类别 → 规范语法色；其余类别（变量、标点、常量）随正文 --ink。 */
+// 键名拼出来写：Shiki 主题回传的是 `var(<前缀>token-keyword)` 这样的字面串，这里不是 token 引用（check-tokens 只认 index.css 定义）。
+const CAT = (name: string) => `var(${PREFIX}${name})`
 const COLOR: Record<string, string> = {
-  'var(--hx-code-token-keyword)': 'var(--tk-k)',
-  'var(--hx-code-token-string)': 'var(--tk-s)',
-  'var(--hx-code-token-string-expression)': 'var(--tk-s)',
-  'var(--hx-code-token-function)': 'var(--tk-f)',
-  'var(--hx-code-token-comment)': 'var(--tk-c)',
+  [CAT('token-keyword')]: 'var(--tk-k)',
+  [CAT('token-string')]: 'var(--tk-s)',
+  [CAT('token-string-expression')]: 'var(--tk-s)',
+  [CAT('token-function')]: 'var(--tk-f)',
+  [CAT('token-comment')]: 'var(--tk-c)',
 }
 
 const CACHE_CAP = 64
