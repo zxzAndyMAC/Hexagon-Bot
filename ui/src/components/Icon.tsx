@@ -16,6 +16,8 @@ import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircl
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
+// ui-redesign 票 07 输入条与命令面板（foundations §7 原型名 crosshair / flow→workflow / test→test-tube；focus 为补设计：专注模式）
+import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -105,6 +107,11 @@ const ICONS = {
   image: Image,
   cpu: Cpu,
   collapse: Minimize2,
+  // ---- 输入条与命令面板（票 07） ----
+  crosshair: Crosshair,
+  flow: Workflow,
+  test: TestTube,
+  focus: Focus,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

@@ -3,6 +3,13 @@ import { ElementDraft } from './ElementReferences'
 import type { ElementRef } from '../gen/ElementRef'
 import { ProjectApprovalMode } from './ProjectApprovalMode'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ComposerSuggestions, popupVisible, type SuggestPopup } from './ComposerSuggestions'
+import { IconButton } from '@/components/ui/icon-button'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { Spinner } from '@/components/ui/spinner'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { bindingFor, formatBinding } from '../keymap'
+import './composer.css'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import { api, errText } from '../api'
@@ -81,7 +88,10 @@ export function Composer() {
   const [submitting, setSubmitting] = useState(false)
   const submittingRef = useRef(false)
   const [text, setText] = useState('')
-  const [popup, setPopup] = useState<{ kind: '@' | '#'; items: { label: string; hint: string }[] } | null>(null)
+  const [popup, setPopup] = useState<SuggestPopup | null>(null)
+  const artifacts = useUiStore((s) => s.artifacts)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const pathQuery = useRef('')
   const [sel, setSel] = useState(0)
   const popupId = useId()
   const suggestions = useRef<HTMLDivElement>(null)
@@ -107,21 +117,24 @@ export function Composer() {
 
   const fetchPaths = (q: string) => {
     if (pathTimer.current) clearTimeout(pathTimer.current)
+    pathQuery.current = q
     const seq = ++pathSeq.current
     pathTimer.current = setTimeout(() => {
       api.repoPaths(q)
         .then((ps) => {
           if (pathSeq.current !== seq) return // 晚到的旧查询不盖新结果
+          // 产物路径在右侧标「产物 vN」（composer#path）；其余文件不写类型
+          const versions = new Map(artifacts.map((a) => [a.path, a.version]))
           setPopup({
             kind: '#',
             items: ps.map((p) => ({
-              label: `#${p}`,
-              hint: p.endsWith('/') ? t('composer.directory') : t('composer.file'),
+              kind: '#' as const, label: `#${p}`, path: p, dir: p.endsWith('/'), artifact: versions.get(p) ?? null,
             })),
           })
           setSel(0)
         })
-        .catch(() => { if (pathSeq.current === seq) setPopup(null) })
+        // A16 错误态：菜单内单行红字 + 「重试」（旧行为是静默关掉弹层）
+        .catch(() => { if (pathSeq.current === seq) setPopup({ kind: '#', items: [], error: true }) })
     }, 120)
   }
 
@@ -133,11 +146,18 @@ export function Composer() {
         kind: '@',
         items: team
           .filter((m) => m.role.includes(q) || m.id.includes(q))
-          .map((m) => ({ label: mentionTokenText(mentionName(m)), hint: t('composer.mentionHint') })),
+          .map((m) => {
+            const name = mentionName(m)
+            return {
+              kind: '@' as const, label: mentionTokenText(name), agentId: m.id, name: m.role,
+              inst: name === m.role ? null : m.id, sleeping: m.status === 'sleeping',
+            }
+          }),
       })
       setSel(0)
     } else if (last.startsWith('#')) {
-      setPopup({ kind: '#', items: [] }) // 先开空壳，结果异步到
+      // components A16 加载态：首屏出骨架；防抖期间保持旧结果，不闪成空壳
+      setPopup((prev) => ({ kind: '#', items: prev?.kind === '#' ? prev.items : [], loading: true }))
       fetchPaths(last.slice(1))
     } else {
       setPopup(null)

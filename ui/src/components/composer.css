@@ -1,0 +1,153 @@
+/* 输入条（ui-redesign 票 07）：components D1–D5、D19 预检卡位置、interaction §3。
+   取值逐项对齐 docs/design/beautiful-ui/proto.css 的 composer-wrap / composer / bt / send /
+   mode-pill / cring / toolrow / hint-foot / pop / mi 段，只引用 foundations 的 token。
+   列宽读主区挂的 --col-w（画布并排 560，否则 720；票 03 layout），时间线 .tl-col 同读。
+   无层级 CSS 胜过 Tailwind utilities；shadcn 组件（Button / IconButton / Dialog）不带这些类名。 */
+
+.composer-wrap { flex: none; position: relative; padding: 0 24px 16px; }
+.composer-wrap[data-dragging] .composer { box-shadow: var(--shadow-raised), 0 0 0 4px var(--accent-tint); }
+
+/* 可选工具行 toolrow：最宽同输入条，下距 8。仅有目标时显示（interaction §3） */
+.composer-toolrow { max-width: var(--col-w, 720px); margin: 0 auto 8px; display: flex; align-items: center; gap: 6px; }
+.composer-toolrow:empty { display: none; }
+.composer-toolrow .host { font-size: 12px; color: var(--ink-3); }
+
+/* 预检卡（D19）与工具行同列：输入条正上方，下距 8 */
+.composer-above { max-width: var(--col-w, 720px); margin: 0 auto 8px; }
+
+/* D1 外壳：圆角 18、--surface、--shadow-raised；聚焦追加 4px accent-tint 外圈（不加 1px 实线） */
+.composer {
+  position: relative; max-width: var(--col-w, 720px); margin: 0 auto;
+  border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-raised);
+  transition: box-shadow 150ms var(--ease);
+}
+.composer:focus-within { box-shadow: var(--shadow-raised), 0 0 0 4px var(--accent-tint); }
+
+/* 输入 in：padding 14 16 6、最小 52 高、14/1.55。镜像层与 textarea 同格叠字（票 10 原子块） */
+.composer .composer-field > textarea,
+.composer .composer-field > .composer-mirror {
+  border: 0; border-radius: 0; background: transparent;
+  min-height: 52px; padding: 14px 16px 6px;
+  font-size: 14px; line-height: 1.55;
+}
+.composer .composer-field > textarea { caret-color: var(--ink); }
+.composer .composer-field > textarea::placeholder { color: var(--ink-3); }
+.composer .composer-field > .composer-mirror { color: var(--ink); }
+/* C3 原子块配色（点名 accent、路径 violet）；镜像层不加 padding / 换字体，否则光标错位 */
+.composer .atom-token[data-kind='mention'] { color: var(--accent-ink); background: var(--accent-tint); box-shadow: none; border-radius: 4px; }
+.composer .atom-token[data-kind='path'] { color: var(--violet); background: var(--violet-tint); box-shadow: none; border-radius: 4px; }
+
+/* 底栏 bt：padding 6 8 8 10；+ 附件 · 批准模式胶囊 · 弹簧 · 圆环 + 百分比 · 发送 */
+.composer-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px 8px 10px; }
+.composer-bar .sp { flex: 1; }
+
+/* 发送 32 圆：--ink 底 --page 箭头（深色下自然反相：白底黑箭头）；禁用 --hover-2 底 ink-3 */
+.composer-send {
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%;
+  background: var(--ink); color: var(--page); cursor: pointer; flex: none;
+  transition: opacity 150ms var(--ease), transform 80ms var(--ease);
+}
+.composer-send:hover:not(:disabled) { opacity: .92; }
+.composer-send:active:not(:disabled) { transform: scale(.96); }
+.composer-send:disabled { background: var(--hover-2); color: var(--ink-3); cursor: default; }
+.composer-send[aria-busy='true'] { background: var(--hover-2); }
+.composer-send:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+
+/* D3 引用区：图片附件 56×56 + 网页引用卡 eref；最多两行，超出滚动 */
+.composer-refs { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 0; max-height: 108px; overflow: auto; }
+.composer-refs .element-draft-list { display: contents; }
+.attach-chip { position: relative; width: 56px; height: 56px; flex: none; }
+.attach-thumb {
+  display: block; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 10px; overflow: hidden;
+  background: var(--canvas); box-shadow: inset 0 0 0 1px var(--line); cursor: zoom-in;
+}
+.attach-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.attach-thumb:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--line), 0 0 0 3px var(--accent-tint), 0 0 0 1px var(--accent); }
+.attach-remove {
+  position: absolute; top: -6px; right: -6px; display: grid; place-items: center;
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  background: var(--ink); color: var(--page); box-shadow: 0 0 0 2px var(--surface); cursor: pointer;
+}
+.attach-remove:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+
+.composer .element-draft-item {
+  display: flex; align-items: center; gap: 4px; height: 44px; max-width: 260px; min-width: 0;
+  padding: 4px 4px 4px 4px; border: 0; border-radius: 10px; background: var(--inset); box-shadow: inset 0 0 0 1px var(--line);
+}
+.composer .element-draft-item:hover { background: var(--hover); }
+.composer .element-draft-open { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; height: 36px; padding: 0 4px 0 0; border: 0; border-radius: 7px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.composer .element-draft-open:hover { background: transparent; }
+.composer .element-draft-open:focus-visible, .composer .element-draft-remove:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.eref-th { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 7px; color: var(--ink-3); background: var(--canvas); box-shadow: inset 0 0 0 1px var(--line); }
+.composer .element-draft-copy { display: grid; min-width: 0; gap: 1px; }
+.composer .element-draft-copy strong { font-size: 12.5px; font-weight: 500; color: var(--ink); }
+.composer .element-draft-copy > span { font: 11px var(--mono); color: var(--ink-3); }
+.composer .element-draft-copy > span[data-stale] { font-family: var(--font); color: var(--orange); }
+.composer .element-draft-remove { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); cursor: pointer; }
+.composer .element-draft-remove:hover { background: var(--hover-2); color: var(--ink); }
+
+.composer-hint-foot { max-width: var(--col-w, 720px); margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--ink-3); }
+
+/* D2 建议弹层：A16 菜单形，贴输入条上沿（下距 8），宽同输入条 */
+.composer-suggestions {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 20;
+  max-height: min(320px, 40vh); overflow: auto; padding: 5px;
+  border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-overlay);
+}
+.composer-pop-sec { padding: 8px 9px 4px; font-size: 11.5px; color: var(--ink-3); }
+.composer-pop-sep { height: 1px; margin: 4px 2px; background: var(--line); }
+.composer-pop-foot { padding: 4px 9px; font-size: 12px; color: var(--ink-3); }
+.composer-pop-row {
+  display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 9px; border-radius: 7px;
+  font-size: 13px; color: var(--ink); cursor: pointer; min-width: 0;
+}
+.composer-pop-row[aria-selected='true'], .composer-pop-row:hover { background: var(--hover); }
+.composer-pop-row b { font-weight: 500; white-space: nowrap; }
+.composer-pop-row .desc { font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.composer-pop-row .d { margin-left: auto; font-size: 12px; color: var(--ink-3); flex: none; display: inline-flex; align-items: center; }
+.composer-pop-row .mono { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.composer-pop-row .inst { font-family: var(--mono); font-weight: 400; color: var(--ink-3); }
+.composer-pop-row .on-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.composer-pop-row .ic-dir { color: var(--violet); }
+.composer-pop-row .ic-file { color: var(--ink-2); }
+.composer-pop-skel { height: 32px; margin: 0 0 0; padding: 0 9px; display: flex; align-items: center; }
+.composer-pop-skel i {
+  display: block; height: 10px; width: 60%; border-radius: 5px;
+  background: var(--hover-2);
+}
+.composer-pop-err { display: flex; align-items: center; gap: 8px; padding: 6px 9px; font-size: 12.5px; color: var(--red); }
+
+/* D5 上下文圆环：22 圆，conic 进度，中心 16 圆 --surface；右侧百分比 11 等宽 ink-3 */
+.context-meter { position: relative; align-self: center; display: flex; align-items: center; }
+.context-meter-trigger {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px; border: 0; border-radius: 99px;
+  background: transparent; color: var(--ink-3); font: 11px var(--mono); cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.context-meter-trigger:focus-visible { outline: none; }
+.context-meter-trigger:focus-visible .cring, .context-meter[data-open] .cring { box-shadow: 0 0 0 3px var(--accent-tint); }
+.cring {
+  width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: conic-gradient(var(--ring-c, var(--ink-2)) calc(var(--p, 0) * 1%), var(--hover-2) 0);
+}
+.cring::after { content: ""; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); }
+.cring[data-over] { --ring-c: var(--orange); }
+/* 悬停卡（HoverCard 形，A16 pop，260 宽，padding 12 14） */
+.context-meter-detail {
+  position: absolute; bottom: calc(100% + 10px); right: -40px; z-index: 25; width: 260px; padding: 12px 14px;
+  border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font-size: 13px; line-height: 1.5;
+}
+.context-meter-detail::after { content: ""; position: absolute; height: 10px; top: 100%; left: 0; right: 0; }
+.context-meter-role + .context-meter-role { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.context-meter-head { display: flex; align-items: center; gap: 8px; }
+.context-meter-head b { font-size: 13px; font-weight: 600; }
+.context-meter-head time { margin-left: auto; font: 12px var(--mono); color: var(--ink-3); }
+.context-meter-bar { display: flex; align-items: center; gap: 8px; margin-top: 12px; font: 12px var(--mono); }
+.context-meter-bar > span:first-child { flex: 1; height: 4px; border-radius: 99px; background: var(--hover-2); overflow: hidden; }
+.context-meter-bar > span:first-child > i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.context-meter-bar[data-over] > span:first-child > i { background: var(--orange); }
+.context-meter-kv { display: grid; grid-template-columns: 80px 1fr; gap: 4px 8px; margin: 10px 0 0; font-size: 12.5px; }
+.context-meter-kv dt { color: var(--ink-3); }
+.context-meter-kv dd { margin: 0; font-family: var(--mono); }
+.context-meter-detail p { margin: 8px 0 0; font-size: 12px; color: var(--ink-3); }
+
+@media (prefers-reduced-motion: reduce) { .composer, .composer-send { transition: none; } }
