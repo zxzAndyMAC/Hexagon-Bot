@@ -3,12 +3,15 @@
 // 新图标一律进 ICONS 注册表起语义名；UI 里禁写 Unicode 几何字符（✕ ◆ ⚠ 等）。
 // 颜色不内嵌——由调用处的语义 token / className 决定。文件类型图标例外，走 FileTypeIcon。
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bot, ChartColumn, Check, ChevronDown, ChevronRight,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bot, ChartColumn, Check, ChevronDown, ChevronRight, ChevronUp,
   CircleHelp, Columns2, Copy, Download, Eye, EyeOff, File, FileCode, FileCog, FileImage, FileJson,
   FileText, Flag, Folder, GitCompare, Globe, Hexagon, Inbox, JapaneseYen, Layers, Lightbulb, Link,
   List, Monitor, Moon, Package, PanelRight, Pause, Pencil, Plus, RefreshCw, Rocket, Settings, Shield,
-  Stamp, Tag, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
+  Stamp, Tag, Terminal, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
 } from 'lucide-react'
+// 票 10 启动页与向导（foundations §7 映射：sparkle / undo→rotate-ccw / message→message-circle /
+// circleCheck / circleX / info / left→chevron-left / more 竖→ellipsis-vertical）
+import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircle, RotateCcw, Sparkle } from 'lucide-react'
 // ui-redesign 票 02 外壳（foundations §7 原型名 search / sidebar / more / clock / expand）
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 circleCheck / external / image / cpu；collapse 为补设计）
@@ -28,6 +31,9 @@ const ICONS = {
   edit: Pencil,
   'chevron-down': ChevronDown,
   'chevron-right': ChevronRight,
+  // 票 05：思考折叠 ▴、执行类命令（foundations §7 原型名 up / terminal；sparkle、circle-x 见票 10 段，search 见票 02 段）
+  'chevron-up': ChevronUp,
+  terminal: Terminal,
   refresh: RefreshCw,
   // 发送 = 上箭头（composer#mention 的墨色圆钮），不再是纸飞机
   send: ArrowUp,
@@ -77,6 +83,15 @@ const ICONS = {
   link: Link,
   copy: Copy,
   name: Tag,
+  // ---- 票 10 启动页与向导 ----
+  sparkle: Sparkle,
+  undo: RotateCcw,
+  message: MessageCircle,
+  'circle-check': CircleCheck,
+  'circle-x': CircleX,
+  info: Info,
+  'chevron-left': ChevronLeft,
+  'more-vertical': EllipsisVertical,
   // ---- 外壳（票 02）：侧栏收起、搜索与命令、头部 ⋯、阶段 chip、查看流程 ----
   'panel-left': PanelLeft,
   search: Search,

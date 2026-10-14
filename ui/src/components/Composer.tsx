@@ -8,6 +8,7 @@ import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
 import { ContextMeter } from './ContextMeter'
+import { COMPOSER_FILL_EVENT, mergeFill } from '../composerFill'
 import type { AttachRef } from '../gen/AttachRef'
 import {
   atomicDeletion,
@@ -278,6 +279,24 @@ export function Composer() {
       setSubmitting(false)
     }
   }
+
+  // ui-redesign 票 05：归来摘要建议 / 首屏建议卡只填入草稿、聚焦，不发送。
+  useEffect(() => {
+    const onFill = (e: Event) => {
+      const fill = (e as CustomEvent<unknown>).detail
+      if (typeof fill !== 'string' || !fill) return
+      setText((draft) => {
+        const next = mergeFill(draft, fill)
+        pendingCaret.current = next.length
+        return next
+      })
+      setHistIdx(-1)
+      setPopup(null)
+      inputRef.current?.focus()
+    }
+    window.addEventListener(COMPOSER_FILL_EVENT, onFill)
+    return () => window.removeEventListener(COMPOSER_FILL_EVENT, onFill)
+  }, [])
 
   // 票 12：未聚焦时插到文末（拖进来的人多半没把光标点在半截词上）。
   // 聚焦时插在光标处，并补收束空格，使这块和手打路径用同一次退格删掉。

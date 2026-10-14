@@ -79,7 +79,7 @@ export function EntityChips({
   )
 }
 
-function EntityPicker({
+export function EntityPicker({
   source,
   options,
   title,
