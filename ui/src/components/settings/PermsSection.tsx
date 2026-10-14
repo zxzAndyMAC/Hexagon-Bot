@@ -19,7 +19,8 @@ import { DesktopControlPanel } from '../DesktopControlPanel'
 import { DesktopPermissions } from '../DesktopPermissions'
 import { PermissionScope } from '../PermissionActions'
 import { ProjectDelegation } from '../ProjectDelegation'
-import { Empty, Group, InlineError, NeedsProject, SetHead, SetWrap, SkeletonRows, SRow, tableCls } from './kit'
+import { Empty, Group, InlineError, NeedsProject, SetHead, SetWrap, SkeletonRows, SRow } from './kit'
+import { tableCls } from './styles'
 
 /** 边界胶囊（settings#perms notes）：联网 warn + globe、禁止联网 / 后台 / 仅前台 / 命名会话 neutral。 */
 function Boundaries({ r }: { r: PermissionRuleRow }) {

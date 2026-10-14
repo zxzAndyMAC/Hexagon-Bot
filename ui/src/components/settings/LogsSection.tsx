@@ -13,7 +13,8 @@ import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { Switch } from '@/components/ui/switch'
 import { Icon } from '../Icon'
 import { cn } from '@/lib/utils'
-import { Empty, tableCls } from './kit'
+import { Empty } from './kit'
+import { tableCls } from './styles'
 
 /// 诊断分类四档（词表定名，core diag.rs 同源）。显示走 i18n，
 /// 发往 core 的 class 参数是字面量本身——记录里存的就是这四个词。
