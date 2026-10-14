@@ -241,3 +241,32 @@ it('已授权未执行动作恢复原 ID（可靠性 08）', async () => {
   expect(await handlePendingKey(key('Enter'), [ready])).toBe('approved')
   expect(resume).toHaveBeenCalledWith('action1')
 })
+
+// 票 04（ADR 0089，interaction §2「保存即消卡」）
+describe('visiblePending / settleDecision', () => {
+  it('drops cards being saved and keeps stable severity order', async () => {
+    const { visiblePending } = await import('./decisions')
+    const list = [card({ id: 'p1' }), card({ id: 'w', kind: 'worktree' }), card({ id: 'p2' })]
+    expect(visiblePending(list).map((q) => q.id)).toEqual(['w', 'p1', 'p2'])
+    expect(visiblePending(list, ['w']).map((q) => q.id)).toEqual(['p1', 'p2'])
+  })
+
+  it('hides during the call, re-reads, and reports a failure on the card or by toast when the card is gone', async () => {
+    const { settleDecision } = await import('./decisions')
+    const saved = useUiStore.getState()
+    let seen: string[] = []
+    useUiStore.setState({ pending: [card({ id: 'x' })], hiddenPending: [], pendingError: null, toasts: [], invalidate: async () => {} })
+    try {
+      expect(await settleDecision('x', async () => { seen = useUiStore.getState().hiddenPending })).toBe(true)
+      expect(seen).toEqual(['x'])
+      expect(useUiStore.getState().hiddenPending).toEqual([])
+      expect(await settleDecision('x', async () => { throw new Error('nope') })).toBe(false)
+      expect(useUiStore.getState().pendingError?.id).toBe('x')
+      expect(useUiStore.getState().toasts).toHaveLength(0)
+      // D8 工作树：确认时事实已漂移，core 收起了卡——红字无处可挂，走 toast
+      useUiStore.setState({ invalidate: async () => { useUiStore.setState({ pending: [] }) } })
+      await settleDecision('x', async () => { throw new Error('worktree_binding_drift') })
+      expect(useUiStore.getState().toasts.at(-1)?.text).toContain('worktree_binding_drift')
+    } finally { useUiStore.setState(saved, true) }
+  })
+})

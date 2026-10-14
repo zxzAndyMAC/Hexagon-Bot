@@ -222,7 +222,7 @@ function WorktreeCard({ q, top }: { q: PendingQuestion; top: boolean }) {
       </>}>
       <KeyValues rows={[
         [t('dock.kvOperation'), t(cleanup ? 'dock.opCleanup' : 'dock.opCreate')],
-        [t('dock.kvPath'), <span title={String(p.path ?? '')}>{String(p.path ?? '')}</span>, 'mono'],
+        [t('dock.kvPath'), <span key="path" title={String(p.path ?? '')}>{String(p.path ?? '')}</span>, 'mono'],
         [t('dock.kvBaseline'), t('cards.worktreeBaseline', { baseline: String(p.baseline ?? ''), commit }), 'mono'],
         ...(p.session_id != null ? [[t('dock.kvSession'), String(p.session_id), 'mono'] as [string, string, string]] : []),
       ]} />

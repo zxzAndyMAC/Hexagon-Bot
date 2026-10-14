@@ -51,3 +51,19 @@ describe('钉顶与区间', () => {
     expect(awayRange(summary, [summary]).minutes).toBeNull()
   })
 })
+
+describe('withHandled（票 04，C12 禁用态）', () => {
+  it('keeps a row that left pending for 30 s after its live rows, then drops it', async () => {
+    const { withHandled, HANDLED_TTL_MS } = await import('./returnSummaryModel')
+    const a = attentionRows([q('pub', 'publish'), q('perm', 'permission')])
+    const first = withHandled([], a, 0)
+    expect(first.map((r) => [r.question.id, r.handledAt])).toEqual([['pub', null], ['perm', null]])
+    const rest = attentionRows([q('perm', 'permission')])
+    const second = withHandled(first, rest, 1000)
+    expect(second.map((r) => [r.question.id, r.handledAt])).toEqual([['perm', null], ['pub', 1000]])
+    expect(withHandled(second, rest, 1000 + HANDLED_TTL_MS - 1)).toHaveLength(2)
+    expect(withHandled(second, rest, 1000 + HANDLED_TTL_MS).map((r) => r.question.id)).toEqual(['perm'])
+    // 回到 pending 的行（例：裁决失败）重新算待处理
+    expect(withHandled(second, a, 2000).every((r) => r.handledAt == null)).toBe(true)
+  })
+})
