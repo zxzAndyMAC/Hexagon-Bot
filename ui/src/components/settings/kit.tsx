@@ -332,16 +332,3 @@ export function ScanPanel({ title, hint, rows, actions }: {
     </div>
   )
 }
-
-/** 原生 select 套 A9 Field 外观（Select 基础件尚未进 ui/，见对账表票 11）。 */
-export function NativeSelect({ className, children, ...props }: React.ComponentProps<'select'>) {
-  return (
-    <span data-slot="native-select" className={cn(
-      'relative flex h-[34px] items-center rounded-[var(--r-sm)] bg-field text-[13px] text-ink shadow-[var(--shadow-inset-field),inset_0_0_0_1px_var(--line)] hover:shadow-[var(--shadow-inset-field),inset_0_0_0_1px_var(--line-strong)] focus-within:bg-surface focus-within:shadow-[var(--focus-ring)]',
-      className,
-    )}>
-      <select className="h-full w-full min-w-0 cursor-pointer appearance-none bg-transparent pr-7 pl-[11px] outline-none" {...props}>{children}</select>
-      <Icon name="chevron-down" size={12} className="pointer-events-none absolute right-2.5 text-ink-3" />
-    </span>
-  )
-}

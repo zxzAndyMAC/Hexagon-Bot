@@ -7,7 +7,8 @@ import { useUiStore, type ThemePref } from '../../store'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { Icon, type IconName } from '../Icon'
 import { DataBoundary } from '../DataBoundary'
-import { Group, NativeSelect, SetHead, SetWrap, SRow } from './kit'
+import { NativeSelect } from '@/components/ui/native-select'
+import { Group, SetHead, SetWrap, SRow } from './kit'
 
 const LANG_NAMES: Record<string, string> = {
   'zh-CN': '简体中文',
