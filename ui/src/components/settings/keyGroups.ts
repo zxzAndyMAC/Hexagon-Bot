@@ -1,7 +1,7 @@
 // 设置「键盘」分区的动作分组（ui-redesign 票 11；settings#keys、components E7）。
 // keymap.ts 的 ACTIONS 是扁平表，分区按 id 规则归组后自动列出——新增或改名的动作（票 02 toggleSidebar /
 // toggleCanvas、票 03 canvasFullWidth / focusMode）不需要改这里也会出现；认不出的进「其他」，不会漏列。
-import type { ActionId } from '../../keymap'
+import { ACTIONS, bindingFor, type ActionId } from '../../keymap'
 
 export const KEY_GROUPS = ['decide', 'layout', 'managed', 'computer', 'session', 'files', 'other'] as const
 export type KeyGroup = (typeof KEY_GROUPS)[number]
@@ -36,3 +36,24 @@ export function groupActions<T extends { id: ActionId | string }>(actions: reado
 
 /** 系统保留组合：录制时拒绝写入（E7 禁用行「系统保留组合不可录」）。 */
 export const RESERVED_BINDINGS = new Set(['mod+q', 'mod+h', 'mod+m', 'mod+tab', 'mod+space', 'mod+c', 'mod+v', 'mod+x', 'mod+z', 'mod+a'])
+
+/** 规范形比较：修饰键集合相同、主键不分大小写（默认表写 `mod+K`，录制得到 `mod+k`）。 */
+export function sameBinding(a: string, b: string): boolean {
+  if (!a || !b) return false
+  const norm = (x: string) => {
+    const parts = x.split('+')
+    const key = parts.pop()!.toLowerCase()
+    return [...parts.map((m) => m.toLowerCase()).sort(), key].join('+')
+  }
+  return norm(a) === norm(b)
+}
+
+/**
+ * 录制冲突：b 已被别的动作占用则返回那个动作。
+ * 修复即文档（票 11）：keymap.conflictFor 用 `===` 比较，默认表的大写主键（`mod+K`）与录制得到的小写（`mod+k`）
+ * 永远不相等——把 ⌘K 录给别的动作时冲突提示不出现，两个动作共用一个键。这里按规范形比较。
+ */
+export function findConflict(id: ActionId, b: string): ActionId | null {
+  for (const a of ACTIONS) if (a.id !== id && sameBinding(bindingFor(a.id), b)) return a.id
+  return null
+}

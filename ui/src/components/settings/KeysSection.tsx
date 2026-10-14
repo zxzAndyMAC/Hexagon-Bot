@@ -4,13 +4,13 @@
 // 系统保留组合不可录。旁边是练习场（PracticeGround）。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ACTIONS, bindingFor, conflictFor, formatBinding, normalizeEvent, resetBinding, setBinding, type ActionId } from '../../keymap'
+import { ACTIONS, bindingFor, formatBinding, normalizeEvent, resetBinding, setBinding, type ActionId } from '../../keymap'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Icon } from '../Icon'
 import { PracticeGround } from '../PracticeGround'
 import { GroupTitle, SetHead, SetWrap } from './kit'
-import { groupActions, RESERVED_BINDINGS } from './keyGroups'
+import { findConflict, groupActions, RESERVED_BINDINGS } from './keyGroups'
 
 type Problem = { kind: 'conflict'; action: ActionId } | { kind: 'reserved'; combo: string } | null
 
@@ -27,8 +27,8 @@ function KeyRow({ id, label, onChanged }: { id: ActionId; label: string; onChang
       if (e.key === 'Escape') { setCapturing(false); return }
       const b = normalizeEvent(e)
       if (!b) return // 纯修饰键，继续等
-      if (RESERVED_BINDINGS.has(b)) { setProblem({ kind: 'reserved', combo: b }); setCapturing(false); return }
-      const c = conflictFor(id, b)
+      if (RESERVED_BINDINGS.has(b.toLowerCase())) { setProblem({ kind: 'reserved', combo: b }); setCapturing(false); return }
+      const c = findConflict(id, b)
       if (c) { setProblem({ kind: 'conflict', action: c }); setCapturing(false); return }
       setBinding(id, b)
       setProblem(null)
