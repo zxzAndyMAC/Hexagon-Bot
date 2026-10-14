@@ -1,5 +1,5 @@
 // 原 SidePanel.test（ADR 0088：右栏五页签撤掉）。断言迁到新落点并注明原因：
-// - 产物长名 / 待恢复：右栏「产物」页签 → 画布占位的产物清单（侧栏「产物」打开；票 03 换真画布）。
+// - 产物长名 / 待恢复：右栏「产物」页签 → 画布的「产物」清单页签（侧栏「产物」打开；票 03 起是真画布）。
 // - 阶段进度：右栏「阶段」页签 → 侧栏「流程」分组常驻（B2，只读，不再是单独页签）。
 // 另加侧栏本身（B1/B3/B4）的行为：待决徽标口径、团队行状态、用量入口三档。
 import { describe, expect, it, afterEach } from 'vitest'
@@ -7,7 +7,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import './i18n'
 import { Sidebar } from './components/shell/Sidebar'
-import { InterimCanvas } from './components/shell/InterimCanvas'
+import { Canvas } from './components/shell/Canvas'
 import { TooltipProvider } from './components/ui/tooltip'
 import { useUiStore } from './store'
 import type { ArtifactRow } from './gen/ArtifactRow'
@@ -26,6 +26,11 @@ async function render(node: React.ReactNode) {
   return el
 }
 const sidebar = <Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} />
+// 票 03：画布占位换成真画布（B7），宿主按 store 的 canvasOpen 显隐
+function CanvasHost() {
+  const open = useUiStore((s) => s.canvasOpen)
+  return <Canvas open={open} mode="side" width={600} />
+}
 
 const snap = useUiStore.getState()
 afterEach(async () => {
@@ -43,13 +48,15 @@ describe('产物清单长名（ADR 0088：右栏页签 → 侧栏「产物」打
       id: 'a1', path, kind: 'doc', tier: 'freeform', stage_run_id: null,
       author: null, version: 1, status: 'superseded', upstream_id: null,
     }
-    useUiStore.setState({ artifacts: [row], canvasOpen: false })
-    const host = await render(<>{sidebar}<InterimCanvas /></>)
+    useUiStore.setState({ artifacts: [row], canvasOpen: false, tabs: [], activeTab: null })
+    const host = await render(<>{sidebar}<CanvasHost /></>)
     const nav = host.querySelector('[data-nav="artifacts"]') as HTMLButtonElement
     expect(nav.textContent).toContain('1')
     await act(async () => { nav.click() })
     expect(nav.getAttribute('aria-current')).toBe('true')
-    const canvas = host.querySelector('[data-interim-canvas="artifacts"]')!
+    // 票 03（ADR 0088）：画布占位撤掉，「产物」是画布里的清单页签
+    expect(useUiStore.getState().activeTab).toBe('artifacts')
+    const canvas = host.querySelector('[data-canvas] [role=tabpanel]:not([hidden])')!
 
     const name = canvas.querySelector('span.mono[title]') as HTMLElement
     expect(name.getAttribute('title')).toBe(path)
@@ -65,8 +72,9 @@ describe('产物清单长名（ADR 0088：右栏页签 → 侧栏「产物」打
       id: 'pending-art', path: 'notes.md', kind: 'doc', tier: 'freeform' as const,
       stage_run_id: null, author: null, version: 2, status: 'pending' as const, upstream_id: null,
     }, { materialization: 'pending_recovery' })
-    useUiStore.setState({ artifacts: [row], canvasOpen: true, canvasPane: 'artifacts' })
-    const host = await render(<InterimCanvas />)
+    useUiStore.setState({ artifacts: [row], tabs: [], activeTab: null })
+    useUiStore.getState().openCanvas('artifacts')
+    const host = await render(<CanvasHost />)
     expect(host.textContent).toMatch(/Pending recovery|待恢复/)
   })
 })

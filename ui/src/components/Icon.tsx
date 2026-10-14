@@ -98,6 +98,8 @@ const ICONS = {
   more: Ellipsis,
   clock: Clock,
   expand: Maximize2,
+  // ui-redesign 票 03 画布（foundations §7：columns → columns-2「与对话并排」；「对话」页签复用票 10 的 message）
+  columns: Columns2,
   // ---- 电脑操控（票 14） ----
   external: ExternalLink,
   image: Image,

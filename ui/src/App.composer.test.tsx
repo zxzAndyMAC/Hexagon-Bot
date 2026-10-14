@@ -6,6 +6,7 @@ import { api } from './api'
 import * as apiModule from './api'
 import { useUiStore, type WorkTab } from './store'
 import i18n from './i18n'
+import { mainView } from './layout'
 
 // happy-dom has no canvas renderer; exercise real tabs with the chart SDK stubbed.
 vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) }))
@@ -15,7 +16,6 @@ vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn()
 let root: ReturnType<typeof createRoot>
 let el: HTMLDivElement
 const initial = useUiStore.getState()
-const timeline: WorkTab = { id: 'timeline', kind: 'timeline', title: '' }
 
 function visible(element: HTMLElement) {
   for (let node: HTMLElement | null = element; node; node = node.parentElement) {
@@ -26,7 +26,10 @@ function visible(element: HTMLElement) {
 
 beforeEach(async () => {
   await i18n.changeLanguage('en')
-  useUiStore.setState({ projectRoot: null, projectGeneration: null, tabs: [timeline], activeTab: 'timeline', splitOpen: false, team: [], pending: [], timeline: [], modalScope: 'workbench', intakeDraft: false })
+  localStorage.removeItem('hexagon.layout.canvas')
+  useUiStore.setState({ projectRoot: null, projectGeneration: null, tabs: [], activeTab: null, canvasOpen: false,
+    canvasLayout: { width: null, full: false }, usageView: false, focusSnapshot: null,
+    team: [], pending: [], timeline: [], modalScope: 'workbench', intakeDraft: false })
   vi.spyOn(api, 'projectOpen').mockResolvedValue(true)
   vi.spyOn(api, 'runOpeningIntake').mockResolvedValue()
   vi.spyOn(api, 'mcpServices').mockResolvedValue([])
@@ -45,37 +48,48 @@ afterEach(async () => {
   useUiStore.setState(initial)
 })
 
-// Owner 2026-10-06: Composer formerly occupied every tab's content area.
-// Switching tabs must release that space without deleting the unsent draft.
-it('shows the input only on the timeline and keeps the draft when returning', async () => {
+// ADR 0090（ui-redesign 票 03）：改写 Owner 2026-10-06「非时间线 Tab 隐藏输入条」。
+// 时间线不再是页签，输入条跟着对话常驻：画布并排打开任何页签时都在；
+// 只在画布全宽或用量详情占满主区时随对话收起，回来后草稿、附件、网页引用原样保留（隐藏不卸载）。
+it('keeps the input beside every canvas tab, hides it only for full-width canvas and usage detail, and keeps the draft', async () => {
   const input = el.querySelector<HTMLTextAreaElement>('#composer-input')!
   expect(visible(input)).toBe(true)
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'Unsent draft')
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
-  const otherTabs: WorkTab[] = [
+  const canvasTabs: WorkTab[] = [
     { id: 'file:README.md', kind: 'file', title: 'README.md', path: 'README.md' },
     { id: 'art:spec.md', kind: 'artifact', title: 'spec.md', path: 'spec.md' },
     { id: 'agent:a1', kind: 'agent', title: 'Agent', agentId: 'a1' },
-    { id: 'usage', kind: 'usage', title: 'Usage' },
     { id: 'diff:spec', kind: 'diff', title: 'Diff', patchText: '' },
   ]
-  for (const tab of otherTabs) {
+  for (const tab of canvasTabs) {
     await act(async () => useUiStore.getState().openTab(tab))
-    expect(visible(input), tab.kind).toBe(false)
+    expect(visible(input), tab.kind).toBe(true)
   }
-  await act(async () => useUiStore.getState().setActiveTab('timeline'))
+  await act(async () => useUiStore.getState().toggleCanvasFull())
+  expect(visible(input), 'full-width canvas').toBe(false)
+  await act(async () => useUiStore.getState().showConversation())
+  expect(visible(input)).toBe(true)
+  await act(async () => useUiStore.getState().openUsageDetail())
+  expect(visible(input), 'usage detail').toBe(false)
+  await act(async () => useUiStore.getState().showConversation())
   const restored = el.querySelector<HTMLTextAreaElement>('#composer-input')!
+  expect(restored).toBe(input)
   expect(visible(restored)).toBe(true)
   expect(restored.value).toBe('Unsent draft')
 })
 
-it('returns to the timeline when the focus-input shortcut is used from another tab', async () => {
-  await act(async () => useUiStore.getState().openTab({ id: 'diff:spec', kind: 'diff', title: 'Diff', patchText: '' }))
-  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true, cancelable: true })))
+// ADR 0090：⌘N 先退出画布全宽 / 用量详情，再聚焦输入条（interaction §3 §12）。
+it.each([
+  ['full-width canvas', () => { useUiStore.getState().openTab({ id: 'diff:spec', kind: 'diff', title: 'Diff', patchText: '' }); useUiStore.getState().toggleCanvasFull() }],
+  ['usage detail', () => useUiStore.getState().openUsageDetail()],
+])('returns to the conversation when the focus-input shortcut is used from %s', async (_name, enter) => {
+  await act(async () => enter())
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, metaKey: false, bubbles: true, cancelable: true })))
   await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())) })
-  expect(useUiStore.getState().activeTab).toBe('timeline')
+  expect(mainView(useUiStore.getState())).toBe('chat')
   expect(document.activeElement).toBe(el.querySelector('#composer-input'))
 })
 

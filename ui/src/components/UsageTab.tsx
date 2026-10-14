@@ -24,7 +24,7 @@ export function UsageUncertainty() {
 
 export function UsageTab({ onDetail }: { onDetail?: () => void }) {
   const { t } = useTranslation()
-  const { usageRows, usageTotal, contextPressure, team, invalidate, openTab } = useUiStore()
+  const { usageRows, usageTotal, contextPressure, team, invalidate } = useUiStore()
   const [series, setSeries] = useState<UsageBucket[]>([])
   const [editLimit, setEditLimit] = useState('')
   const [editing, setEditing] = useState(false)
@@ -104,7 +104,7 @@ export function UsageTab({ onDetail }: { onDetail?: () => void }) {
                 className="btn"
                 style={{ fontSize: 11, marginLeft: 'auto' }}
                 // 设置页嵌入时（ui-audit-2 票 05）：详情按钮回工作台开明细 tab
-                onClick={() => (onDetail ? onDetail() : openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') }))}
+                onClick={() => (onDetail ? onDetail() : useUiStore.getState().openUsageDetail())}
               >
                 {t('usage.detail')}
               </button>

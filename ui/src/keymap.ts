@@ -66,7 +66,8 @@ export type ActionId =
   | 'commandPalette'
   | 'toggleSidebar'
   | 'toggleCanvas'
-  | 'splitEditor'
+  | 'canvasFullWidth'
+  | 'focusMode'
   | 'closeTab'
   | 'settings'
   | 'focusComposer'
@@ -191,7 +192,11 @@ const DEFAULTS: Record<ActionId, string> = {
   // 旧 id 的用户重映射由 migrateLegacyBindings 迁过来。⌥⌘B 开关画布（03 接入画布本体）。
   toggleSidebar: 'mod+B',
   toggleCanvas: 'alt+mod+B',
-  splitEditor: 'mod+\\',
+  // 票 03（R-04）：分屏随中栏 Tab 容器撤掉，⌘\ 改给画布全宽 ↔ 并排；旧 splitEditor 的重映射丢弃（DROPPED）。
+  canvasFullWidth: 'mod+\\',
+  // 票 03（R-06）：专注模式只留对话与输入条，再按恢复。
+  focusMode: 'mod+.',
+  // 票 03（ADR 0088）：⌘W 关画布当前页签（时间线不再是页签）。
   closeTab: 'mod+W',
   settings: 'mod+,',
   focusComposer: 'mod+N',
@@ -319,7 +324,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'commandPalette', labelKey: 'keys.palette' },
   { id: 'toggleSidebar', labelKey: 'keys.sidebar' },
   { id: 'toggleCanvas', labelKey: 'keys.canvas' },
-  { id: 'splitEditor', labelKey: 'keys.split' },
+  { id: 'canvasFullWidth', labelKey: 'keys.canvasFullWidth' },
+  { id: 'focusMode', labelKey: 'keys.focusMode' },
   { id: 'closeTab', labelKey: 'keys.closeTab' },
   { id: 'settings', labelKey: 'keys.settings' },
   { id: 'focusComposer', labelKey: 'keys.composer' },
@@ -366,6 +372,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
 
 /** 改名动作的旧 id → 新 id（ADR 0088：toggleRail → toggleSidebar）。 */
 const RENAMED: Record<string, ActionId> = { toggleRail: 'toggleSidebar' }
+/** 撤掉的动作（票 03，R-04：分屏随中栏 Tab 容器撤掉）：用户对它的重映射直接丢弃，不迁到新动作。 */
+const DROPPED = ['splitEditor'] as const
 
 /**
  * 把用户对已改名动作的重映射搬到新 id，删除旧键。新 id 已有用户绑定时以新的为准，旧键只清掉。
@@ -378,6 +386,7 @@ export function migrateLegacyBindings() {
     if (localStorage.getItem(`hexagon.key.${to}`) == null) localStorage.setItem(`hexagon.key.${to}`, old)
     localStorage.removeItem(`hexagon.key.${from}`)
   }
+  for (const gone of DROPPED) localStorage.removeItem(`hexagon.key.${gone}`)
 }
 migrateLegacyBindings()
 

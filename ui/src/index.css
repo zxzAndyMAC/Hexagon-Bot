@@ -352,6 +352,11 @@
 /* §6 减少动效：本文件旧有的全局 prefers-reduced-motion 规则已把 animation/transition 全关，新组件同吃；
    像素格基础 opacity 为 1，即停在全亮帧。 */
 
+/* 专注模式（⌘.，R-06，interaction §1；ui-redesign 票 03）：节点轨隐藏，只留对话与输入条；再按 ⌘. 恢复。 */
+[data-focus-mode] [data-node-rail] {
+  display: none !important; /* 节点轨根节点用内联 display:flex，只能用 !important 盖过 */
+}
+
 [data-theme='night'] .sysrow,
 [data-theme='night'] .sysline {
   opacity: 0.65;

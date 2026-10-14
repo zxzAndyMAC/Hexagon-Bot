@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { api } from './api'
-import { useUiStore, type WorkTab } from './store'
+import { useUiStore } from './store'
 import { isMac } from './keymap'
 import i18n from './i18n'
 
@@ -18,7 +18,7 @@ vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn()
 let root: ReturnType<typeof createRoot>
 let el: HTMLDivElement
 const initial = useUiStore.getState()
-const timeline: WorkTab = { id: 'timeline', kind: 'timeline', title: '' }
+
 
 const sidebar = () => el.querySelector('[data-sidebar]') as HTMLElement
 const handle = () => el.querySelector('[role="separator"][aria-label]') as HTMLElement
@@ -32,7 +32,7 @@ beforeEach(async () => {
   await i18n.changeLanguage('en')
   localStorage.removeItem('hexagon.layout.side')
   useUiStore.setState({
-    projectRoot: null, projectGeneration: null, tabs: [timeline], activeTab: 'timeline', splitOpen: false, team: [], pending: [],
+    projectRoot: null, projectGeneration: null, tabs: [], activeTab: null, canvasOpen: false, usageView: false, focusSnapshot: null, team: [], pending: [],
     timeline: [], modalScope: 'workbench', intakeDraft: false, sideLayout: { width: 252, collapsed: false }, usageTotal: null, confirmReq: null,
   })
   vi.spyOn(api, 'projectOpen').mockResolvedValue(true)
@@ -143,7 +143,9 @@ describe('用量触顶横幅（B4，usage_summary）', () => {
     expect(banner.nextElementSibling).not.toBeNull()
     const view = [...banner.querySelectorAll('button')].find((b) => b.textContent === 'View usage')!
     await act(async () => { view.click() })
-    expect(useUiStore.getState().activeTab).toBe('usage')
+    // ADR 0090（票 03）：用量详情由中栏页签改为占满主区的视图。
+    expect(useUiStore.getState().usageView).toBe(true)
+    expect(el.querySelector('[data-usage-view]')).toBeTruthy()
   })
 })
 

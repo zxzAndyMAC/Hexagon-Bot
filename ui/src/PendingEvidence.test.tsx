@@ -128,7 +128,8 @@ it.each(['proposal', 'artifact'] as const)('discards a late %s diff after switch
       if (delay === 'proposal') finishProposal(proposal)
       else finishArtifact('```diff\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n```')
     })
-    expect(useUiStore.getState().tabs.map(t => t.id)).toEqual(['timeline'])
+    // 票 03（ADR 0088）：时间线不再是页签；换项目后画布无页签，迟到的 diff 不得开出页签。
+    expect(useUiStore.getState().tabs).toEqual([])
     if (delay === 'proposal') expect(content).toHaveBeenCalledTimes(reads)
   } finally { await act(async () => root.unmount()); vi.restoreAllMocks(); useUiStore.setState(saved, true) }
 })

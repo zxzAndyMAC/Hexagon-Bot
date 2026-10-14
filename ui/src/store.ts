@@ -22,7 +22,7 @@ import {
   type SessionSummary,
 } from './api'
 import { daysAgo } from './usage'
-import { readSideLayout, writeSideLayout, type SideLayout } from './layout'
+import { readCanvasLayout, readSideLayout, writeCanvasLayout, writeSideLayout, type CanvasLayout, type SideLayout } from './layout'
 import i18n from './i18n'
 
 export type ThemePref = 'light' | 'dark' | 'night' | 'system'
@@ -31,10 +31,11 @@ export type ThemePref = 'light' | 'dark' | 'night' | 'system'
 /// usage=账本；artifacts=产物表；team=花名册+头像；info=项目元信息+autonomy。
 export type SlowSlice = 'usage' | 'artifacts' | 'team' | 'info'
 
-// 中栏选项卡（ADR 0051）：timeline 固定主 tab，其余可关。
-export type TabKind = 'timeline' | 'artifact' | 'diff' | 'agent' | 'usage' | 'file'
-/// 画布占位的两种内容（ui-redesign 票 02）：侧栏「产物」「项目文件」打开它。
-/// 03 把它换成真正的画布页签（产物 / 文件 / Agent / diff）。
+// 画布页签（ui-redesign 票 03，ADR 0088；components B7）：中栏 Tab 容器撤掉，时间线不再是页签（主区常驻），
+// 用量详情不进画布（主区视图，interaction §10）。id 规则沿用旧 WorkTab。
+// `artifacts` / `files` 是侧栏「产物」「项目文件」打开的清单页签（id 同名，各至多一个）。
+export type TabKind = 'artifact' | 'diff' | 'agent' | 'file' | 'artifacts' | 'files'
+/// 侧栏「产物」「项目文件」在画布里打开的清单页签。
 export type CanvasPane = 'artifacts' | 'files'
 export type FileTreeAction = 'new-file' | 'new-folder' | 'refresh'
 
@@ -100,7 +101,7 @@ export interface FileEdit {
 }
 
 export interface WorkTab {
-  id: string // timeline | art:<path> | diff:<path>:<a>-<b> | agent:<id> | patch:<proposalId> | file:<path>
+  id: string // art:<path> | diff:<path>:<a>-<b> | agent:<id> | patch:<proposalId> | file:<path> | artifacts | files
   kind: TabKind
   title: string
   path?: string
@@ -112,7 +113,11 @@ export interface WorkTab {
   patchText?: string
 }
 
-const TIMELINE_TAB: WorkTab = { id: 'timeline', kind: 'timeline', title: '' } // title 渲染时走 i18n
+/// 专注模式（⌘.，R-06）进入前的布局快照；只在内存，不跨重启。
+export interface FocusSnapshot { canvasOpen: boolean }
+
+/// 清单页签的标题渲染时走 i18n（sidebar.artifacts / sidebar.files）。
+const paneTab = (pane: CanvasPane): WorkTab => ({ id: pane, kind: pane, title: '' })
 
 function resolve(pref: ThemePref): 'light' | 'dark' | 'night' {
   if (pref !== 'system') return pref
@@ -165,9 +170,14 @@ interface UiState {
   packName: string | null
   /// 左侧栏宽度与收起（ADR 0088；`hexagon.layout.side`，旧 `hexagon.rail` 迁移一次，见 layout.ts）。
   sideLayout: SideLayout
-  /// 画布占位开关（票 02 过渡态，不持久化；03 接入真画布与 `hexagon.layout.canvas`）。
+  /// 画布开关（票 03，components B7）。不持久化——页签不跨重启，开着一个空画布没有意义。
   canvasOpen: boolean
-  canvasPane: CanvasPane
+  /// 画布宽度与全宽（`hexagon.layout.canvas`，interaction §1）。
+  canvasLayout: CanvasLayout
+  /// 用量详情占满主区（interaction §10）；与画布全宽一起构成主区视图三态（layout.ts mainView）。
+  usageView: boolean
+  /// 专注模式（⌘.，R-06）：非 null 即开启——侧栏隐藏、画布关闭、节点轨隐藏。
+  focusSnapshot: FocusSnapshot | null
   /// Agent Screen 有目标时头部才出「屏幕」按钮（components B5 禁用行）；req 脉冲让浮窗切换显隐。
   agentScreenAvailable: boolean
   agentScreenReq: number
@@ -188,9 +198,10 @@ interface UiState {
   /// 供应商+槽位文档视图（ui-audit-2 票 01）：随 team 切片拉取——
   /// 团队行/角色编辑器据此把槽位名翻译成「供应商+模型」标签。
   providers: ProvidersView | null
+  /// 画布页签（票 03）。时间线不在其中。
   tabs: WorkTab[]
-  activeTab: string
-  splitOpen: boolean
+  /// 画布当前页签；null = 没有页签。
+  activeTab: string | null
   modalScope: ModalScope
   flowDialogOpen: boolean
   toasts: Toast[]
@@ -222,8 +233,19 @@ interface UiState {
   setThemePref: (p: ThemePref) => void
   setSideLayout: (next: SideLayout) => void
   toggleSidebar: () => void
+  /// 侧栏「产物」并排打开，「项目文件」以全宽打开（canvas#file）。
   openCanvas: (pane: CanvasPane) => void
   setCanvasOpen: (v: boolean) => void
+  /// ⌥⌘B 与头部画布开关：画布可见（开着且没被用量详情盖住）就关，否则打开。
+  toggleCanvas: () => void
+  setCanvasLayout: (next: CanvasLayout) => void
+  /// ⌘\（`canvasFullWidth`，R-04）：全宽 ↔ 并排；画布关着时以全宽打开。
+  toggleCanvasFull: () => void
+  /// 回到对话：退出画布全宽与用量详情（⌘N、全宽时的「对话」页签）。
+  showConversation: () => void
+  openUsageDetail: () => void
+  /// ⌘.（`focusMode`）：只留对话与输入条，再按恢复进入前的布局。
+  toggleFocusMode: () => void
   setFlowDialogOpen: (v: boolean) => void
   requestAgentScreen: () => void
   openPendingDialog: () => void
@@ -242,7 +264,6 @@ interface UiState {
   openTab: (t: WorkTab) => void
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
-  setSplitOpen: (v: boolean) => void
   setModalScope: (s: ModalScope) => void
   pushToast: (text: string, tone?: Toast['tone']) => void
   dismissToast: (id: number) => void
@@ -251,9 +272,6 @@ interface UiState {
   /// 节点轨聚焦脉冲（票 12）：mod+J 递增 → NodeRail 展开+聚焦首条。
   nodeRailPulse: number
   focusNodeRail: () => void
-  /// 分栏右栏 tab id（票 15）：上移 store，进出设置页后选择保持。
-  splitId: string | null
-  setSplitId: (id: string | null) => void
   /// 值守态（票 16 / 方向卡 1）：owner_away/back 的 UI 侧开关。
   /// 手动 chip + 窗口 blur>60s/focus 自动；markBack 后 refreshFast 拉
   /// return_summary 行。失败走 pushToast（票 04 错误出口约定）。
@@ -301,7 +319,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       team: [], artifacts: [], avatars: {}, avatarHashes: {}, providers: null,
       usageTotal: null, usageRows: [], usageSeries7d: [], contextPressure: null,
       projectName: '', autonomy: 'L0', mode: 'pack', fastRole: null, packName: null, mcpPending: false,
-      tabs: [TIMELINE_TAB], activeTab: 'timeline', splitOpen: false, flowDialogOpen: false,
+      tabs: [], activeTab: null, canvasOpen: false, usageView: false, flowDialogOpen: false,
       fileEdits: {}, fileTreeReq: null, confirmReq: null, intakeDraft: false, away: false,
       evidenceRevision: s.evidenceRevision + 1,
       timelineFacts: null, factsError: null, sessionSummary: null, sessionError: null, timeline: [], timelineCaughtUp: false,
@@ -331,7 +349,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   packName: null,
   sideLayout: readSideLayout(localStorage),
   canvasOpen: false,
-  canvasPane: 'artifacts',
+  canvasLayout: readCanvasLayout(localStorage),
+  usageView: false,
+  focusSnapshot: null,
   agentScreenAvailable: false,
   agentScreenReq: 0,
   statusError: false,
@@ -344,9 +364,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   avatars: {},
   avatarHashes: {},
   providers: null,
-  tabs: [TIMELINE_TAB],
-  activeTab: 'timeline',
-  splitOpen: false,
+  tabs: [],
+  activeTab: null,
   modalScope: 'workbench',
   flowDialogOpen: false,
   confirmReq: null,
@@ -398,8 +417,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   // ui-audit 票 12（P2-13）：节点轨键盘入口——脉冲递增通知 NodeRail 展开聚焦。
   nodeRailPulse: 0,
   focusNodeRail: () => set((s) => ({ nodeRailPulse: s.nodeRailPulse + 1 })),
-  splitId: null,
-  setSplitId: (id) => set({ splitId: id }),
   intakeDraft: false,
   away: false,
   markAway: async () => {
@@ -423,13 +440,16 @@ export const useUiStore = create<UiState>((set, get) => ({
       s.pushToast(errText(e), 'err')
     }
   },
+  // 票 03（ADR 0088）：打开页签 = 打开画布；用量详情占着主区时先回到对话（画布要和对话并排或全宽）。
   openTab: (t) =>
     set((s) => ({
       tabs: s.tabs.some((x) => x.id === t.id) ? s.tabs : [...s.tabs, t],
       activeTab: t.id,
+      canvasOpen: true,
+      usageView: false,
     })),
+  // 最后一个页签关闭时画布关闭（interaction §6）。未保存的文件先过离开确认（canvas#leave）。
   closeTab: (id) => {
-    if (id === 'timeline') return
     const current = get()
     const tab = current.tabs.find(t => t.id === id)
     const edits = Object.entries(current.fileEdits).filter(([, edit]) => tab?.kind === 'file' && edit.path === tab.path)
@@ -437,14 +457,14 @@ export const useUiStore = create<UiState>((set, get) => ({
       if (get().projectEpoch !== current.projectEpoch) return
       set(s => {
         const tabs = s.tabs.filter(t => t.id !== id)
-        return { tabs, activeTab: s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? 'timeline') : s.activeTab }
+        const activeTab = s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? null) : s.activeTab
+        return { tabs, activeTab, canvasOpen: tabs.length > 0 && s.canvasOpen }
       })
     }
     if (!edits.some(([, edit]) => edit.dirty)) close()
     else void get().confirmFileEdits(edits.map(([key]) => key)).then(allowed => { if (allowed) close() })
   },
   setActiveTab: (id) => set({ activeTab: id }),
-  setSplitOpen: (v) => set({ splitOpen: v }),
   streams: {},
   plans: {},
   thinkings: {},
@@ -504,11 +524,48 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ sideLayout: next })
   },
   toggleSidebar: () => {
+    // 专注模式里侧栏是隐藏的：⌘B 先退出专注模式（恢复原布局），不在看不见的侧栏上翻状态（票 03）。
+    if (get().focusSnapshot) { get().toggleFocusMode(); return }
     const cur = get().sideLayout
     get().setSideLayout({ ...cur, collapsed: !cur.collapsed })
   },
-  openCanvas: (pane) => set({ canvasOpen: true, canvasPane: pane }),
-  setCanvasOpen: (v) => set({ canvasOpen: v }),
+  openCanvas: (pane) => {
+    get().openTab(paneTab(pane))
+    const cur = get().canvasLayout
+    const full = pane === 'files'
+    if (cur.full !== full) get().setCanvasLayout({ ...cur, full })
+  },
+  // ⌥⌘B：开画布不新增页签（无页签时显示空态，interaction §6）；从用量详情打开时先回对话。
+  setCanvasOpen: (v) => set(v ? { canvasOpen: true, usageView: false } : { canvasOpen: false }),
+  toggleCanvas: () => {
+    const s = get()
+    s.setCanvasOpen(!(s.canvasOpen && !s.usageView))
+  },
+  setCanvasLayout: (next) => {
+    writeCanvasLayout(localStorage, next)
+    set({ canvasLayout: next })
+  },
+  toggleCanvasFull: () => {
+    const s = get()
+    if (!s.canvasOpen || s.usageView) {
+      set({ canvasOpen: true, usageView: false })
+      if (!s.canvasLayout.full) get().setCanvasLayout({ ...s.canvasLayout, full: true })
+      return
+    }
+    get().setCanvasLayout({ ...s.canvasLayout, full: !s.canvasLayout.full })
+  },
+  showConversation: () => {
+    const s = get()
+    if (s.usageView) set({ usageView: false })
+    if (s.canvasOpen && s.canvasLayout.full) get().setCanvasLayout({ ...s.canvasLayout, full: false })
+  },
+  openUsageDetail: () => set({ usageView: true }),
+  // 只关画布、藏侧栏与节点轨，不动侧栏 / 画布的布局记忆：恢复时原样回来（R-06：纯界面态）。
+  toggleFocusMode: () => {
+    const s = get()
+    if (s.focusSnapshot) set({ focusSnapshot: null, canvasOpen: s.focusSnapshot.canvasOpen })
+    else set({ focusSnapshot: { canvasOpen: s.canvasOpen }, canvasOpen: false, usageView: false })
+  },
   setFlowDialogOpen: (v) => set({ flowDialogOpen: v }),
   requestAgentScreen: () => set((s) => ({ agentScreenReq: s.agentScreenReq + 1 })),
   openPendingDialog: () => set({ pendingDialogOpen: true }),
@@ -536,12 +593,12 @@ export const useUiStore = create<UiState>((set, get) => ({
     }
   },
   requestFileTree: (action) => {
-    // 文件树快捷键先把树亮出来（票 11）；票 02 起树在画布占位里，不再写旧 `hexagon.rail`。
-    set((s) => ({
-      canvasOpen: true,
-      canvasPane: 'files',
-      fileTreeReq: { n: (s.fileTreeReq?.n ?? 0) + 1, action },
-    }))
+    // 文件树快捷键先把树亮出来（票 11）；票 03 起树在画布「项目文件」页签里，不再写旧 `hexagon.rail`。
+    // 已在文件页签（树就在左边）时不跳走。
+    const s = get()
+    const onTree = s.canvasOpen && (s.activeTab === 'files' || s.activeTab?.startsWith('file:'))
+    if (!onTree) s.openTab(paneTab('files'))
+    set((st) => ({ fileTreeReq: { n: (st.fileTreeReq?.n ?? 0) + 1, action } }))
   },
   requestSaveFile: () => set((s) => ({ saveFileReq: s.saveFileReq + 1 })),
   requestTimelineStick: () => set((s) => ({ timelineStickReq: s.timelineStickReq + 1 })),

@@ -33,6 +33,8 @@ type ResizeHandleProps = {
   tipExtra?: string
   /** 进入吸附区时提示与宽度标签改成这句（「松开以收起侧栏」）。 */
   snapLabel?: string
+  /** 拖到上限再推进入全宽区时的提示（画布「松开以展开到全宽」，票 03；limits.push 给了才会出现）。 */
+  fullLabel?: string
   /** 收起为图标列时：只响应单击（展开），不拖动（B8 禁用行）。 */
   collapsed?: boolean
   /** 第二个参数是拖动开始时的宽度（吸附收起时调用方据此保留展开宽度）。 */
@@ -54,6 +56,7 @@ function ResizeHandle({
   tipBinding,
   tipExtra,
   snapLabel,
+  fullLabel,
   collapsed = false,
   onDrag,
   onCommit,
@@ -141,6 +144,7 @@ function ResizeHandle({
   const edge = drag?.edge
   const badge = drag
     ? edge === "snap" ? snapLabel ?? ""
+      : edge === "full" ? fullLabel ?? ""
       : edge === "min" ? t("layout.min", { n: drag.width })
       : edge === "max" ? t("layout.max", { n: drag.width })
       : t("layout.px", { n: drag.width })
