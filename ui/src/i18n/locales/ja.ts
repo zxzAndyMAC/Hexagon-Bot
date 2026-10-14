@@ -194,6 +194,19 @@ export default {
     routedTo: '{{role}} に割り当て',
     routeHold: '今は振らない',
     routeRejected: '名簿外の選択は却下、誰も起こさない',
+    // ui-redesign 票 05
+    netWaiting: "ネットワーク待ち",
+    netNote: "ネットワークが切断されました。受信済みのテキストは保持され、復旧後に受信を再開します。",
+    waitingFirstToken: "考え中",
+    copyMessage: "メッセージをコピー",
+    stageArtifacts: "成果物 {{count}} 件",
+    deliveryPassed: "合格",
+    deliveryRejected: "差し戻し",
+    deliveryPending: "レビュー待ち",
+    deliverySuperseded: "置き換え済み",
+    callDenied: "拒否済み",
+    filterLabel: "タイムラインの絞り込み",
+    olderFailedLabel: "以前の内容を読み込めませんでした",
   },
   ev: {
     turn_started: 'ターン開始',
@@ -664,7 +677,7 @@ export default {
     splitNeedsWidth: '分割表示には 720px 以上の幅が必要です', },
   art: { reviewPassed: "現在の版のレビュー承認", reviewRejected: "現在の版のレビュー却下", reviewStale: "レビューは期限切れ", currentWorktree: "現在の作業ツリー", pendingRecovery: "納品の登録が未完了です。現在のファイルは保持され、状態を確認して復旧するまで検収には使えません。", content: '内容', compare: '比較', version: 'v{{n}}', vs: '↔', unavailable: '内容がありません', preview: 'プレビュー', source: 'ソース' },
   md: { copy: 'コピー', copied: 'コピーしました' },
-  exec: { exit: 'exit {{code}}', noOutput: '（出力なし）', tail: '… 末尾 32KB を表示' },
+  exec: { done: '完了', exit: 'exit {{code}}', noOutput: '（出力なし）', tail: '… 末尾 32KB を表示' },
   agent: {
     stepHostRead: "ホストファイルを読む",
     stepHostWrite: "ホストファイルを書く",
@@ -1137,10 +1150,9 @@ export default {
     done: '完了', empty: '一致する項目がありません', count: '{{n}} 件選択中',
     title_skills: 'スキルを選択', title_mcp: 'MCP サービスを選択',
   },
-  intake: {
-    confirm: 'プロジェクト説明を書き込む',
-    confirmHint: '開始分析が草案を添付しました。確認するまでディスクには書きません。L4 でも自動では書きません。',
-  },
+  intake: {"confirm": "AGENTS.md に書き込む", "confirmHint": "初回分析が作成した下書きです（全文はその初回メッセージ内）。確認後にリポジトリ直下へ書き込み、既存ファイルは上書きしません。", "title": "プロジェクト説明の下書き", "unsaved": "未保存", "later": "今は書かない", "laterHint": "今回は隠します。プロジェクトを開き直すと再表示されます", "edit": "編集", "editUnavailable": "下書きは丸ごと書き込む形式のみです。書き込み後に AGENTS.md を編集してください"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分", "rangeUntil": "{{to}} まで", "collapse": "サマリーを折りたたむ", "toggle": "帰還サマリーの折りたたみ／展開", "headline": "チームは <b>{{stages}} 段階</b>を進め、成果物を {{deliveries}} 件納品しました。<o>{{pending}} 件</o>があなたの判断待ちです。", "headlineClear": "チームは <b>{{stages}} 段階</b>を進め、成果物を {{deliveries}} 件納品しました。あなたの対応待ちはありません。", "kpiStages": "段階", "kpiStagesValue": "{{count}} 完了", "kpiDeliveries": "納品", "kpiDeliveriesValue": "{{count}} 件", "kpiReviews": "レビュー", "kpiReviewsPassed": "合格 {{count}}", "kpiReviewsRejected": "差し戻し {{count}}", "kpiCost": "費用", "costLoading": "費用を読み込み中", "costUnknown": "離席中の費用を取得できません", "needsYou": "対応が必要", "nothingNeeded": "対応待ちの項目はありません。", "next": "次のおすすめ", "fillHint": "入力欄に入れるだけで、送信はしません", "collapsedLine": "離席中 · {{minutes}} 分 · 対応待ち {{count}} 件", "collapsedLineNoTime": "離席中 · 対応待ち {{count}} 件", "suggest": {"rejected": "差し戻された成果物 {{count}} 件の直し方を説明して", "escalated": "エスカレートされた指摘 {{count}} 件を説明して", "delivery": "{{path}} の変更点をまとめて", "stage": "この段階の成果をまとめてから次の段階へ進めて", "keepGoing": "現在の段階を続けて"}},
+  fresh: {"greeting": "チームの準備ができました。どこから始めますか？", "sub": "{{roles}} ロール · {{stages}} 段階", "specTitle": "仕様から始める", "specDesc": "一文の要望から受け入れ基準を作る", "specFill": "この要望から仕様を書き、受け入れ基準を挙げて：", "repoTitle": "既存リポジトリを分析", "repoDesc": "構成・コマンド・依存関係を読む", "repoFill": "まず既存リポジトリを分析して：構成、コマンド、依存関係。"},
   keys: {
     palette: 'コマンドパレット',
     sidebar: "サイドバーの切り替え",

@@ -1,7 +1,7 @@
 import { ModelRecoveryStatus } from './ModelRecoveryStatus'
 import { ElementReference } from './ElementReferences'
 import { DesktopToolDetails } from './DesktopToolDetails'
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { useTimelineWindow } from '../useTimelineWindow'
 import { useTimelineNodes } from '../useTimelineNodes'
@@ -9,12 +9,11 @@ import { useTimelineViewport } from '../useTimelineViewport'
 import { deriveWorkbenchStatusFromFacts, factOpenTurn } from '../timelineFacts'
 import { useTranslation } from 'react-i18next'
 import type { TimelineItem } from '../api'
-import { api, isTauri } from '../api'
+import { api, errText, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useUiStore } from '../store'
 import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
-import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { Row } from './Row'
@@ -25,6 +24,18 @@ import i18n from '../i18n'
 import { fmtTime } from '../usage'
 import { showStickButton, TIMELINE_TAIL_PX } from '../timelineStick'
 import type { TFunction } from 'i18next'
+import './timeline.css'
+import { Avatar as Face } from './ui/avatar'
+import { IconButton } from './ui/icon-button'
+import { CodeChip } from './ui/code-chip'
+import { Segmented, SegmentedItem } from './ui/toggle-group'
+import { TooltipProvider } from './ui/tooltip'
+import type { AtomOptions } from '../timelineAtoms'
+import { ReturnSummaryCard, ReturnSummaryMarker } from './ReturnSummary'
+import { FreshStart } from './FreshStart'
+import { IntakeCard } from './IntakeCard'
+import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
+import { parseTime } from '../usage'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
 // console.warn 一次/key，开发期漏译能被看见而不是静默吞掉。
@@ -41,9 +52,6 @@ function trKey(t: TFunction, key: string, raw: string): string {
 // ---- 渲染 ----
 
 // 票 14：fmtTime 收敛到 usage.ts（Intl 本地语序）。
-
-const chipCls = (s: string) =>
-  s === 'passed' ? 'ok' : s === 'queued' ? 'warn' : s === 'rejected' || s === 'failed' ? 'err' : 'err'
 
 // Thinking 升级（beautiful-ui 票 03）：live 态 shimmer 走秒，
 // live→settled 翻转成「思考用时 Ns」；历史消息无计时源，回退原标签。
@@ -93,8 +101,10 @@ export function ThinkingRow({ text, live, plan = false }: { text: string; live?:
     <div className="thinking-row" data-thinking="" data-open={open ? '1' : '0'}>
       <button type="button" className="thinking-toggle" aria-expanded={open} aria-controls={bodyId}
         onClick={() => { setChoice(!open); followTail.current = true }}>
-        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+        {/* C6：sparkle + 「思考 6 秒」 + ▾；执行计划同形 */}
+        <Icon name={plan ? 'list' : 'sparkle'} size={14} />
         <span className={live ? 'shimmer-text' : undefined}>{label}</span>
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} />
       </button>
       {open && <div id={bodyId} ref={bodyRef} className="thinking-full" tabIndex={0}
         role="region" aria-label={t(plan ? 'timeline.plan' : 'timeline.thinking')}
@@ -106,9 +116,14 @@ export function ThinkingRow({ text, live, plan = false }: { text: string; live?:
   )
 }
 
-// 断网等网角标（network-resilience 票 02）：等网中气泡转「重连中」——
-// 琥珀脉点 + 等网时长计时。与「回复中」同一槽位互斥切换：等网期间
+// 断网等网角标（network-resilience 票 02 → components C10）：消息头行右侧 warn 胶囊，
+// 7px 橙脉冲点 +「等网 0:18」。与「回复中」同一槽位互斥切换：等网期间
 // 流式增量本来就停，两个状态叠着报只会互相撒谎。
+function fmtClock(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
 function ReconnectChip({ since }: { since: number }) {
   const { t } = useTranslation()
   const [now, setNow] = useState(() => Date.now())
@@ -116,17 +131,22 @@ function ReconnectChip({ since }: { since: number }) {
     const iv = setInterval(() => setNow(Date.now()), 500)
     return () => clearInterval(iv)
   }, [])
-  const s = Math.max(0, now - since) / 1000
-  const elapsed = s < 60 ? `${s.toFixed(0)}s` : `${Math.floor(s / 60)}m ${(s % 60).toFixed(0)}s`
   return (
-    <span data-net-waiting="" className="stream-live net-waiting">
-      <span className="stream-live-dot net-waiting-dot" />
-      {t('timeline.reconnecting')} · {elapsed}
+    <span data-net-waiting="" className="chip warn net-waiting">
+      <span className="net-dot" aria-hidden />
+      {t('timeline.netWaiting')} <span className="mono">{fmtClock(now - since)}</span>
     </span>
   )
 }
 
-// 进行中的一条回复（hands-free 票 06）：增量追加在同一气泡，不另起多条。
+/** C1 头像：30（md），自定义头像走 store.avatars，读取失败回退首字。 */
+export function AgentFace({ agentId, role }: { agentId: string; role: string }) {
+  const src = useUiStore((s) => s.avatars[agentId])
+  return <Face agentId={agentId} name={role} size={30} src={src} />
+}
+
+// 进行中的一条回复（hands-free 票 06）：增量追加在同一段，不另起多条。
+// C1：Agent 回复不加气泡；头行 名 + 状态胶囊；等网时下方补一句说明（C10）。
 export function LiveReply({
   role,
   text,
@@ -140,21 +160,21 @@ export function LiveReply({
   thinking: string
   generating: boolean
   /// 等网进入时刻（票 NR-02）：非空 = 该 agent 在等网——气泡不切走、
-  /// 已收文本保留，只把状态角标换成「重连中」。
+  /// 已收文本保留，只把状态角标换成「等网」。
   netWaiting?: number
   avatar?: ReactNode
 }) {
   const { t } = useTranslation()
+  const waitingNet = generating && netWaiting != null
   return (
-    <div className="msg" data-live-reply="" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
+    <div className="tl-msg" data-live-reply="">
       {avatar}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
-          <span style={{ fontWeight: 560, fontSize: 12 }}>{role}</span>
-          {generating && netWaiting != null && <ReconnectChip since={netWaiting} />}
+      <div className="tl-grow">
+        <div className="tl-who">
+          <b>{role}</b>
+          {waitingNet && <ReconnectChip since={netWaiting} />}
           {generating && netWaiting == null && (
-            <span data-generating="" className="stream-live">
-              <span className="stream-live-dot" />
+            <span data-generating="" className="chip info">
               {t('timeline.streaming')}
             </span>
           )}
@@ -162,6 +182,7 @@ export function LiveReply({
         {/* 思考 live = 回合在跑且正文未出（正文一到即落定计时） */}
         <ThinkingRow text={thinking} live={generating && !text} />
         {text ? <CollapsibleBody text={text} live={generating} /> : null}
+        {waitingNet && text ? <div className="tl-note">{t('timeline.netNote')}</div> : null}
       </div>
     </div>
   )
@@ -192,7 +213,7 @@ export function StatusLine() {
 
 // ui-audit 票 11（P3-23）：超高消息体渐隐夹持 + 展开/收起。
 // 原实现 max-height+内滚——滚到底才看得见尾巴，扫读时不知道藏了内容。
-function CollapsibleBody({ text, unclamped, live }: { text: string; unclamped?: boolean; live?: boolean }) {
+function CollapsibleBody({ text, unclamped, live, atoms }: { text: string; unclamped?: boolean; live?: boolean; atoms?: AtomOptions }) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const [tall, setTall] = useState(false)
@@ -207,7 +228,7 @@ function CollapsibleBody({ text, unclamped, live }: { text: string; unclamped?: 
     <>
       {/* live=流式生成中（票 06）：最新块 stream-in + 尾端 caret，均由 CSS 驱动 */}
       <div ref={ref} className={`msg-body${live ? ' live' : ''}${tall && !open ? ' clamped' : ''}`}>
-        <Md>{text}</Md>
+        <Md atoms={atoms}>{text}</Md>
       </div>
       {tall && (
         <button className="msg-toggle" onClick={() => setOpen(!open)}>
@@ -224,7 +245,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 「系统」一刀切让 invariant_violation 这类信号淹没在同名行里。
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
-  if (MODEL_RECOVERY_KINDS.includes(sub)) return <div style={{margin: '8px 14px'}}><ModelRecoveryStatus id={String(item.event.payload.recovery_id)} payload={item.event.payload} top /></div>
+  if (MODEL_RECOVERY_KINDS.includes(sub)) return <div style={{ margin: '8px 0' }}><ModelRecoveryStatus id={String(item.event.payload.recovery_id)} payload={item.event.payload} top /></div>
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
   }
@@ -239,13 +260,22 @@ function SystemRow({ item }: { item: TimelineItem }) {
       : trKey(t, `ev.${item.event.kind}`, item.event.kind)
   const note = item.event.kind === 'stamp_rejected' ? String(item.event.payload?.note ?? '')
     : item.event.kind === 'turn_failed' && !stopped ? String(item.event.payload?.error ?? item.event.payload?.outcome ?? item.event.payload?.code ?? '') : ''
+  // C4 系统行：12px ink-3、两侧细线；高风险子类（SYS_HIGH_RISK / 回合失败）文字 --red。
   return (
-    <div className="sysrow">
-      <div className="sysline" />
-      <span className="syslabel" style={highRisk ? { color: 'var(--err)' } : undefined}>
+    <div className={`sysrow tl-sys${highRisk ? ' risk' : ''}`}>
+      <span className="syslabel tl-sys-l" style={highRisk ? { color: 'var(--red)' } : undefined} title={note ? `${label} · ${note}` : label}>
         {label}
         {note && <span className="dim3"> · {note}</span>}
       </span>
+    </div>
+  )
+}
+
+/** C4 系统行的通用壳（派活、异议裁决等不走 SystemRow 的事件）。 */
+function Marker({ children, risk, ...rest }: { children: ReactNode; risk?: boolean } & HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div className={`sysrow tl-sys${risk ? ' risk' : ''}`} {...rest}>
+      <span className="syslabel tl-sys-l">{children}</span>
     </div>
   )
 }
@@ -256,77 +286,136 @@ const StageHeader = memo(function StageHeader({ item }: { item: TimelineItem }) 
   const p = item.event.payload
   const runId = String(p.run_id ?? '')
   const n = runId ? artifacts.filter((a) => a.stage_run_id === runId).length : 0
+  // C4 阶段头：26 橙底方块 + stamp、名 13/600、产物数 chip、右侧细线延伸
   return (
-    <div style={{ padding: '18px 14px 6px', display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ color: 'var(--legacy-accent)', display: 'inline-flex' }}><Icon name="stamp" size={11} /></span>
-      <span style={{ fontWeight: 560, fontSize: 13 }}>{String(p.stage ?? '')}</span>
-      {n > 0 && <span className="chip ok">{n} {t('side.artifacts').toLowerCase()}</span>}
-      <div className="sysline" style={{ flex: 1 }} />
+    <div className="tl-stagehead">
+      <span className="ic"><Icon name="stamp" size={14} /></span>
+      <b>{String(p.stage ?? '')}</b>
+      {n > 0 && <span className="chip">{t('timeline.stageArtifacts', { count: n })}</span>}
     </div>
   )
 })
 
-function ReturnSummaryRow({ item, onJumpEvent }: { item: TimelineItem; onJumpEvent?: (eventId: number) => void }) {
+/** 复制 ibtn sm（C1/C2 悬停出现；沿用 CodeBlock 复制形制）。 */
+function CopyMessage({ text }: { text: string }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const p = item.event.payload as Record<string, unknown>
-  // 票 16（方向卡 1）：since_event = 离开时刻锚点，行点击跳回该位置。
-  const sinceEvent = Number(p.since_event ?? 0)
-  // 票 13（P2-16）：载荷形状 = autonomy.rs ReturnSummary——
-  // reviews/flags/permissions/stages 计数组 + deliveries[{path,kind}]
-  // + pending_todos[{kind,count}]（数组！旧代码当数字读 → NaN 角标）。
-  // 组/字段名走 rs.group.*/rs.key.*；未知字段回退原值 + warn（不吞新字段）。
-  const lines: string[] = []
-  for (const g of ['reviews', 'flags', 'permissions', 'stages'] as const) {
-    const m = p[g] as Record<string, unknown> | undefined
-    if (!m) continue
-    for (const [k, v] of Object.entries(m)) {
-      if (Number(v) > 0) lines.push(`${trKey(t, `rs.group.${g}`, g)} · ${trKey(t, `rs.key.${k}`, k)}: ${v}`)
-    }
-  }
-  const deliveries = Array.isArray(p.deliveries) ? (p.deliveries as { path?: unknown }[]) : []
-  for (const d of deliveries) {
-    if (d?.path) lines.push(`${trKey(t, 'rs.group.deliveries', 'deliveries')} · ${String(d.path)}`)
-  }
-  const todos = Array.isArray(p.pending_todos) ? (p.pending_todos as { kind?: unknown; count?: unknown }[]) : []
-  const attention = p.attention as Record<string, unknown> | undefined
-  const attentionKeys = ['unresolved_actions', 'unknown_cost_records', 'budget_stops', 'exception_decisions', 'policy_candidates'] as const
-  const pendingN = todos.reduce((s, x) => s + Number(x?.count ?? 0), 0)
-  for (const x of todos) {
-    if (Number(x?.count) > 0) lines.push(`${trKey(t, 'rs.group.todos', 'todos')} · ${String(x.kind)}: ${x.count}`)
+  const pushToast = useUiStore((s) => s.pushToast)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return (
+    <IconButton size="sm" className="tl-copy" label={copied ? t('md.copied') : t('timeline.copyMessage')}
+      onClick={() => { navigator.clipboard.writeText(text).then(() => setCopied(true), (e) => pushToast(errText(e), 'err')) }}>
+      <Icon name={copied ? 'check' : 'copy'} size={12} />
+    </IconButton>
+  )
+}
+
+/** 花名册 → 点名识别口径（同输入条：角色名与 角色[id] 两种写法）。引用稳定才不破 Md 的 memo。 */
+function useAtomOptions(owner: boolean): AtomOptions {
+  const team = useUiStore((s) => s.team)
+  return useMemo(() => ({ owner, roles: new Set(team.flatMap((m) => [m.role, `${m.role}[${m.id}]`])) }), [team, owner])
+}
+
+// C11 交付卡：状态 → 胶囊。valid/pending/queued = 待复审 warn；退回/失败 err；通过 ok。
+function deliveryChip(status: string): { tone: string; key: string } {
+  if (status === 'passed' || status === 'stamped') return { tone: 'ok', key: 'timeline.deliveryPassed' }
+  if (status === 'rejected' || status === 'failed') return { tone: 'err', key: 'timeline.deliveryRejected' }
+  return { tone: 'warn', key: 'timeline.deliveryPending' }
+}
+
+function DeliveryCard({ item }: { item: TimelineItem }) {
+  const { t } = useTranslation()
+  const openTab = useUiStore((s) => s.openTab)
+  const p = item.event.payload
+  const path = String(p.path ?? '')
+  const version = Number(p.version ?? 0)
+  // 已被同路径更高版本取代：opacity .6 + neutral chip（C11 禁用态）
+  const superseded = useUiStore((s) => version > 0 && s.artifacts.some((a) => a.path === path && a.version > version))
+  const chip = superseded ? { tone: '', key: 'timeline.deliverySuperseded' } : deliveryChip(String(p.status ?? ''))
+  const sub = [String(p.kind ?? ''), version > 0 ? `v${version}` : ''].filter(Boolean).join(' · ')
+  return (
+    <button type="button" className="tl-deliver" title={path} data-superseded={superseded ? '' : undefined}
+      onClick={() => path && openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}>
+      <span className="fi"><Icon name="file-text" size={16} /></span>
+      <span className="tl-grow"><span className="p" style={{ display: 'block' }}>{path}</span>{sub && <span className="s">{sub}</span>}</span>
+      <span className={`chip ${chip.tone}`}>{t(chip.key)}</span>
+      <Icon name="chevron-right" size={14} />
+    </button>
+  )
+}
+
+function OwnerMessage({ item, steered, turnBoundary, turnActive, story }: {
+  item: TimelineItem; steered?: Set<number>; turnBoundary?: number; turnActive?: boolean; story?: boolean
+}) {
+  const { t } = useTranslation()
+  const openTab = useUiStore((s) => s.openTab)
+  const atoms = useAtomOptions(true)
+  const m = item.message!
+  const time = fmtTime(item.event.created_at)
+  const delivered = steered?.has(m.id)
+  const queued = !delivered && turnActive && item.event.id > (turnBoundary ?? -1)
+  // C3：时间线内路径块可点，打开文件（委托到气泡，Md 产出的是普通 button）
+  const onAtom = (e: MouseEvent<HTMLDivElement>) => {
+    const path = (e.target as HTMLElement).closest<HTMLElement>('[data-atom-path]')?.dataset.atomPath
+    if (path) openTab({ id: `file:${path}`, kind: 'file', title: path.split('/').pop() || path, path })
   }
   return (
-    <Row className="card-ask" style={{ margin: '6px 14px', padding: '8px 14px', cursor: 'pointer' }} onClick={() => setOpen(!open)}>
-      <div style={{ fontWeight: 510, color: 'var(--legacy-accent)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
-        <Icon name="list" size={11} /> {t('cards.returnSummary')}
-        {deliveries.length > 0 && <span className="chip ok">{deliveries.length} {t('side.artifacts').toLowerCase()}</span>}
-        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={9} />
-        {pendingN > 0 && <span className="chip amber" style={{ marginLeft: 4 }}>{t('cards.pending', { count: pendingN })}</span>}
-      </div>
-      {attention && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
-        {attentionKeys.filter((key) => Number(attention[key]) > 0).map((key) => <span
-          key={key} className={`chip ${key === 'unresolved_actions' ? 'err' : 'warn'}`}>
-          {t(`returnAttention.${key}`, { count: Number(attention[key]) })}
-        </span>)}
-      </div>}
-      {open && (
-        <div className="mono dim" style={{ fontSize: 11, marginTop: 6 }}>
-          {lines.length
-            ? lines.map((ln, i) => (
-                <Row
-                  key={i}
-                  role="button"
-                  title={t('rs.jumpToMark')}
-                  onClick={(e) => { e.stopPropagation(); if (sinceEvent > 0) onJumpEvent?.(sinceEvent) }}
-                  style={{ cursor: sinceEvent > 0 ? 'pointer' : 'default', padding: '1px 4px', borderRadius: 3, whiteSpace: 'pre-wrap' }}
-                >
-                  {ln}
-                </Row>
-              ))
-            : '—'}
+    <div className="tl-me" aria-label={t('timeline.owner')}>
+      {m.element_refs?.map(reference => <ElementReference key={reference.id} reference={reference} />)}
+      {/* 票 03：图片附件引用 chip（D3 只读形，在气泡上方）——字节在 .hexagon/inbox/，渲染引用不渲染图本体 */}
+      {m.attachments?.length > 0 && (
+        <div className="tl-me-files">
+          {m.attachments.map((a) => <CodeChip key={a.path} file>{a.name}</CodeChip>)}
         </div>
       )}
-    </Row>
+      <div className="tl-me-row">
+        <CopyMessage text={m.body} />
+        <div className="tl-bub" title={time || undefined} onClick={onAtom}>
+          <CollapsibleBody text={m.body} unclamped={story} atoms={atoms} />
+        </div>
+      </div>
+      {/* 票 05 steering 状态：steering_injected 事件到 → 已送达；回合进行中未注入 → 下回合生效 */}
+      {(delivered || queued) && (
+        <div className="tl-me-meta">
+          {delivered && <span className="chip ok">{t('timeline.steeringDelivered')}</span>}
+          {queued && <span className="chip info">{t('timeline.steeringQueued')}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) {
+  const { t } = useTranslation()
+  const team = useUiStore((s) => s.team)
+  const openTab = useUiStore((s) => s.openTab)
+  const atoms = useAtomOptions(false)
+  const m = item.message!
+  const member = team.find((x) => x.id === m.author)
+  const title = member?.role ?? m.author
+  const time = fmtTime(item.event.created_at)
+  return (
+    <div className="tl-msg">
+      {member && (
+        <button type="button" className="tl-face" title={t('agent.openTab')} aria-label={`${t('agent.openTab')} · ${member.role}`}
+          onClick={() => openTab({ id: `agent:${member.id}`, kind: 'agent', title: member.role, agentId: member.id, role: member.role })}>
+          <AgentFace agentId={m.author} role={member.role} />
+        </button>
+      )}
+      <div className="tl-grow">
+        <div className="tl-who">
+          <b>{title}</b>
+          {time && <span className="t">{time}</span>}
+          <CopyMessage text={m.body} />
+        </div>
+        <ThinkingRow text={m.thinking} />
+        <CollapsibleBody text={m.body} unclamped={story} atoms={atoms} />
+      </div>
+    </div>
   )
 }
 
@@ -348,8 +437,6 @@ export const EventRow = memo(function EventRow({
   story?: boolean
 }) {
   const { t } = useTranslation()
-  const team = useUiStore((s) => s.team)
-  const openTab = useUiStore((s) => s.openTab)
   const k = item.event.kind
   // 票 08：封闭选择的结果单独成行，不折进系统事件组——负责人要一眼看到派给了谁。
   if (k === 'pm_routed') {
@@ -363,46 +450,22 @@ export const EventRow = memo(function EventRow({
       : held
         ? t('timeline.routeHold')
         : t('timeline.routedTo', { role: target })
-    return (
-      <div className="sysrow" data-route={rejected ? 'rejected' : held ? 'hold' : role}>
-        <div className="sysline" />
-        <span className="syslabel">{label}</span>
-      </div>
-    )
+    return <Marker data-route={rejected ? 'rejected' : held ? 'hold' : role}>{label}</Marker>
   }
   if (k === 'stage_started') return <StageHeader item={item} />
-  if (k === 'return_summary') return <ReturnSummaryRow item={item} onJumpEvent={onJumpEvent} />
-  if (k === 'artifact_delivered') {
-    const status = String(item.event.payload.status ?? '')
-    const path = String(item.event.payload.path ?? '')
-    return (
-      <div
-        className="sysrow"
-        style={{ cursor: 'pointer' }}
-        title={path}
-        onClick={() => path && openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}
-      >
-        <div className="sysline" />
-        <span className="syslabel" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span className="mono" style={{ color: 'var(--legacy-accent)', textDecoration: 'underline', textUnderlineOffset: 3 }}>
-            {path}
-          </span>
-          <span className={`chip ${chipCls(status)}`}>{status}</span>
-        </span>
-      </div>
-    )
-  }
+  if (k === 'return_summary') return <ReturnSummaryMarker item={item} onJumpEvent={onJumpEvent} />
+  if (k === 'artifact_delivered') return <DeliveryCard item={item} />
   if (k === 'flag_submitted') {
     const ev = item.event
     const severity = String(ev.payload.severity ?? '')
     return (
-      <div className="card card-flag" style={{ margin: '4px 14px', padding: '8px 12px' }}>
-        <div style={{ fontSize: 12 }}>
-          <span className={`chip ${chipCls(severity)}`} style={{ marginRight: 8 }}>{severity}</span>
-          {String(ev.payload.target ?? '')}
-          {ev.payload.section ? ` · ${String(ev.payload.section)}` : ''}
+      <div className="tl-flag">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span className="chip flag"><Icon name="flag" size={12} />{severity}</span>
+          <span className="mono">{String(ev.payload.target ?? '')}</span>
+          {ev.payload.section ? <span className="tl-note" style={{ margin: 0 }}>· {String(ev.payload.section)}</span> : null}
         </div>
-        <div className="dim" style={{ marginTop: 4, fontSize: 12 }}>{String(ev.payload.reason ?? '')}</div>
+        <div className="tl-note">{String(ev.payload.reason ?? '')}</div>
       </div>
     )
   }
@@ -410,79 +473,21 @@ export const EventRow = memo(function EventRow({
     const ev = item.event
     const agree = Boolean(ev.payload.agree)
     return (
-      <div className="sysrow">
-        <div className="sysline" />
-        <span className="syslabel" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <Icon name="flag" size={9} />
-          <span className={`chip ${agree ? 'ok' : 'err'}`}>
-            {agree ? t('cards.agreeContinue') : t('cards.rejectContinue')}
-          </span>
-          <span className="mono">{String(ev.payload.flag_id ?? '')}</span>
-          <span className="dim3">· {String(ev.payload.by ?? '')}</span>
+      <Marker>
+        <Icon name="flag" size={12} />
+        <span className={`chip ${agree ? 'ok' : 'err'}`}>
+          {agree ? t('cards.agreeContinue') : t('cards.rejectContinue')}
         </span>
-      </div>
+        <span className="mono">{String(ev.payload.flag_id ?? '')}</span>
+        {ev.payload.by ? <span className="dim3">· {String(ev.payload.by)}</span> : null}
+      </Marker>
     )
   }
   if (item.message) {
-    const m = item.message
-    const isOwner = item.event.kind === 'owner_message' || m.author === 'owner'
-    const member = team.find((x) => x.id === m.author)
-    const title = isOwner ? t('timeline.owner') : (member?.role ?? m.author)
-    const time = fmtTime(item.event.created_at)
-    if (isOwner) {
-      return (
-        <div className="msg" style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-start', gap: 9 }}>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-            <div className="msg-author dim" style={{ textAlign: 'right' }}>
-              {title}{time && <span className="dim3" style={{ marginLeft: 6 }}>{time}</span>}
-              {/* 票 05 steering 状态：steering_injected 事件到 → 已送达；
-                  回合进行中未注入 → 下回合生效（可能提前——下一检查点即排水） */}
-              {steered?.has(m.id) && (
-                <span className="chip ok" style={{ marginLeft: 6, fontSize: 10 }}>{t('timeline.steeringDelivered')}</span>
-              )}
-              {!steered?.has(m.id) && turnActive && item.event.id > (turnBoundary ?? -1) && (
-                <span className="chip warn" style={{ marginLeft: 6, fontSize: 10 }}>{t('timeline.steeringQueued')}</span>
-              )}
-            </div>
-            <CollapsibleBody text={m.body} unclamped={story} />
-            {m.element_refs?.map(reference => <ElementReference key={reference.id} reference={reference} />)}
-            {/* 票 03：图片附件引用 chip（字节在 .hexagon/inbox/，
-                不开 assetProtocol——渲染引用不渲染图本体） */}
-            {m.attachments?.length > 0 && (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4, justifyContent: 'flex-end' }}>
-                {m.attachments.map((a) => (
-                  <span key={a.path} className="chip" style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }} title={a.path}>
-                    <Icon name="artifact" size={10} /> {a.name}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          <Avatar agentId="owner" role={title} size={34} />
-        </div>
-      )
-    }
-    return (
-      <div className="msg" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
-        {member && (
-          <span
-            style={{ cursor: 'pointer', flexShrink: 0 }}
-            title={t('agent.openTab')}
-            onClick={() => openTab({ id: `agent:${member.id}`, kind: 'agent', title: member.role, agentId: member.id, role: member.role })}
-          >
-            <Avatar agentId={m.author} role={member.role} size={34} />
-          </span>
-        )}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
-            <span style={{ fontWeight: 560, fontSize: 12 }}>{title}</span>
-            {time && <span className="dim3" style={{ fontSize: 10 }}>{time}</span>}
-          </div>
-          <ThinkingRow text={m.thinking} />
-          <CollapsibleBody text={m.body} unclamped={story} />
-        </div>
-      </div>
-    )
+    const isOwner = item.event.kind === 'owner_message' || item.message.author === 'owner'
+    return isOwner
+      ? <OwnerMessage item={item} steered={steered} turnBoundary={turnBoundary} turnActive={turnActive} story={story} />
+      : <AgentMessage item={item} story={story} />
   }
   return <SystemRow item={item} />
 })
@@ -491,6 +496,31 @@ export const EventRow = memo(function EventRow({
 // 折叠组展开成逐行 chip——图标+定名+mono 参数片，行点开看 input/result 明细，
 // 组尾文件片点开产物 tab。原作的悬停 diff 预览未移植：core 把 fs_write 的
 // content scrub 成 bytes（safety.rs），事件里没有增删行数据，不做假预览。
+function callSecs(call: ToolCall): string | null {
+  if (!call.result) return null
+  const ms = parseTime(call.result.event.created_at) - parseTime(call.called.event.created_at)
+  if (!Number.isFinite(ms) || ms < 0) return null
+  return ms < 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`
+}
+
+/** C7 工具行右侧状态：在途 .ring；落定 ✓ + 耗时；失败 circleX 红「失败」；被拒 neutral「已拒绝」；
+ *  结果未知沿用 CallStatus 的 warn 胶囊（unknown 不是成功，可靠性票 08）。 */
+function ToolRowStatus({ call }: { call: ToolCall }) {
+  const { t } = useTranslation()
+  const ok = toolOutcome(call.result)
+  if (ok === 'unknown' || ok == null) return <span className="tl-st"><CallStatus ok={ok} /></span>
+  const res = call.result?.event.payload as Record<string, unknown> | undefined
+  if (ok === false && (res?.state === 'denied' || res?.denied === true)) return <span className="tl-st"><span className="chip">{t('timeline.callDenied')}</span></span>
+  const secs = callSecs(call)
+  return (
+    <span className="tl-st">
+      {ok
+        ? <span className="chip ok"><Icon name="check" size={12} />{secs}</span>
+        : <span className="chip err"><Icon name="circle-x" size={12} />{t('timeline.turnFailed')}</span>}
+    </span>
+  )
+}
+
 function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: number; animate?: boolean }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -500,6 +530,7 @@ function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: n
   const ok = toolOutcome(call.result)
   const envelope = res?.result as { output?: Record<string, unknown> & { source?: string; status?: string } } | undefined
   const loadedSkill = tool === 'load_skill' && ok === true && envelope?.output?.status === 'loaded' ? envelope.output : undefined
+  // host_fs_trash：参数显示原路径（C7 补设计，978bd3e）——toolInputSummary 取 path 即原路径
   const summary = toolInputSummary(p)
   const detail = JSON.stringify({ input: p.input ?? p, ...(res ? { result: res } : {}) }, null, 2)
   return (
@@ -510,20 +541,12 @@ function ToolChipRow({ call, delay, animate = true }: { call: ToolCall; delay: n
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="dim3" style={{ display: 'inline-flex' }}>
-          <Icon name={TOOL_ICON[tool] ?? 'tool'} size={10} />
-        </span>
+        <Icon name={TOOL_ICON[tool] ?? 'tool'} size={14} />
         <span className="tchip-label">
           {t(`agent.${TOOL_LABEL[tool] ?? 'stepTool'}`, { defaultValue: tool })}
         </span>
-        {summary && <span className="tool-chip">{summary}</span>}
-        {/* 票 05 TaskRows 状态机：无 result=在途运行环（--warn 蓝槽）；
-            落定翻 check/X 徽标 pop-in。琥珀是「在等你」专色不给在途。
-            exec-cards 票 02 起与 ExecCard 共用 CallStatus。 */}
-        <CallStatus ok={ok} />
-        <span className="dim3" style={{ display: 'inline-flex' }}>
-          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={9} />
-        </span>
+        {summary && <CodeChip>{summary}</CodeChip>}
+        <ToolRowStatus call={call} />
       </button>
       {open && (
         <div className="tchip-detail">
@@ -547,10 +570,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
   fresh?: boolean
 }) {
   const { t } = useTranslation()
-  const team = useUiStore((s) => s.team)
   const openTab = useUiStore((s) => s.openTab)
-  const agentId = items[0]?.event.agent_id
-  const member = agentId ? team.find((x) => x.id === agentId) : undefined
   // 计数按调用对（called 吸收 result），不按事件条数——旧版 2N 的数会翻倍。
   const calls = useMemo(() => pairToolCalls(items).map((call) => callIndex?.get(call.called.event.id) ?? call), [items, callIndex])
   const files = useMemo(() => {
@@ -562,21 +582,15 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
     return [...seen]
   }, [calls])
   if (!calls.length) return null
+  // C7：汇总行 ▾ +「N 次工具调用」→ 逐行（读类 chip 行 / 写与执行类 C8 执行卡）→ 文件 chip 行
   return (
-    <div>
-      <div
-        className="sysrow"
-        style={{ cursor: 'pointer', userSelect: 'none' }}
-        onClick={() => onToggle(idx)}
-      >
-        <div className="sysline" />
-        <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-          {member && <Avatar agentId={member.id} role={member.role} size={14} />}
-          <Icon name="tool" size={10} /> {t('timeline.toolCalls', { count: calls.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
-        </span>
-      </div>
+    <div className="tl-tools tl-indent">
+      <button type="button" className="sysrow tl-sum" aria-expanded={expanded} onClick={() => onToggle(idx)}>
+        <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
+        {t('timeline.toolCalls', { count: calls.length })}
+      </button>
       {expanded && (
-        <div style={{ paddingLeft: 24, paddingRight: 14 }}>
+        <div>
           {/* exec-cards 票 02（spec D2）：重负载升 ExecCard，轻量读系保持 chip 行 */}
           {calls.map((c, i) => {
             const tool = String((c.called.event.payload as Record<string, unknown>).tool ?? '')
@@ -593,13 +607,11 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
                   key={path}
                   type="button"
                   className="chip chip-btn mono"
-                  style={fresh
-                    ? { fontSize: 10, animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 60}ms both` }
-                    : { fontSize: 10 }}
+                  style={fresh ? { animation: `pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${Math.min(i, 10) * 60}ms both` } : undefined}
                   title={path}
                   onClick={() => openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}
                 >
-                  <Icon name="file" size={9} /> {path}
+                  {path.split('/').pop() || path}
                 </button>
               ))}
             </div>
@@ -619,16 +631,11 @@ export const SysGroupRow = memo(function SysGroupRow({ items, expanded, idx, onT
   const { t } = useTranslation()
   return (
     <div>
-      <div
-        className="sysrow"
-        style={{ cursor: 'pointer', userSelect: 'none' }}
-        onClick={() => onToggle(idx)}
-      >
-        <div className="sysline" />
-        <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-          <Icon name="list" size={10} /> {t('timeline.sysEvents', { count: items.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
+      <button type="button" className="sysrow tl-sys" aria-expanded={expanded} onClick={() => onToggle(idx)}>
+        <span className="syslabel tl-sys-l">
+          {t('timeline.sysEvents', { count: items.length })} <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
         </span>
-      </div>
+      </button>
       {expanded && items.map((it) => <div key={it.event.id} data-timeline-event={it.event.id}><SystemRow item={it} /></div>)}
     </div>
   )
@@ -636,7 +643,7 @@ export const SysGroupRow = memo(function SysGroupRow({ items, expanded, idx, onT
 
 // exec-cards 票 03：回合摘要行（Cursor Worked-for-Xs 借形）——已收束回合的
 // 执行行收成单行（角色 · 工具数 · 耗时），点开就地展开还原被折行。
-// 中性色：摘要是收纳不是信号；failed 回合挂 err 徽标（唯一需扫读区分的状态）。
+// C9：32 高 inset 条 + zap；中性色：摘要是收纳不是信号；failed 回合挂 err「失败」。
 const TurnSummaryRow = memo(function TurnSummaryRow({
   row,
   expanded,
@@ -656,26 +663,22 @@ const TurnSummaryRow = memo(function TurnSummaryRow({
   const role = member?.role ?? row.agentId ?? ''
   const secs = row.secs == null ? '?' : row.secs < 1 ? '<1' : String(Math.round(row.secs))
   return (
-    <div>
+    <div className="tl-indent">
       <div
         className="sysrow turn-summary"
-        style={{ cursor: 'pointer', userSelect: 'none' }}
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
         onClick={() => onToggle(idx)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(idx) } }}
       >
-        <div className="sysline" />
-        <span className="syslabel dim" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-          {member && <Avatar agentId={member.id} role={member.role} size={14} />}
-          <Icon name="bolt" size={10} />
-          {t('timeline.turnSummary', { role, count: row.calls, secs })}
-          {row.failed && <span className="chip err">{t('timeline.turnFailed')}</span>}
-          <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={9} />
-        </span>
+        <Icon name="bolt" size={14} />
+        <span className="tl-ts-l">{t('timeline.turnSummary', { role, count: row.calls, secs })}</span>
+        <span className="tl-sp" />
+        {row.failed && <span className="chip err">{t('timeline.turnFailed')}</span>}
+        <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
       </div>
-      {expanded && <>{children}{row.partial && <div className="dim3" style={{ padding: '4px 14px 8px', fontSize: 11 }}>{t('timeline.partialTurn')}</div>}</>}
+      {expanded && <div style={{ marginLeft: -42 }}>{children}{row.partial && <div className="tl-note" style={{ padding: '4px 0 8px 42px' }}>{t('timeline.partialTurn')}</div>}</div>}
     </div>
   )
 })
@@ -786,15 +789,14 @@ export function WaitingReply({ role, startedAt, netWaiting, avatar }: {
   avatar?: ReactNode
 }) {
   const { t } = useTranslation()
+  // C9 等待位：头像 + 名 + 像素格 + shimmer「正在思考」+ 等宽计时；等网时标签「重连中」（橙）
   return (
-    <div className="msg" data-waiting="" style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 9 }}>
+    <div className={`tl-msg tl-wait${netWaiting != null ? ' net' : ''}`} data-waiting="">
       {avatar}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
-          <span style={{ fontWeight: 560, fontSize: 12 }}>{role}</span>
-        </div>
+      <div className="tl-grow">
+        <div className="tl-who"><b>{role}</b></div>
         <LoadingState
-          label={netWaiting != null ? t('timeline.reconnecting') : t('timeline.working')}
+          label={netWaiting != null ? t('timeline.reconnecting') : t('timeline.waitingFirstToken')}
           startedAt={netWaiting ?? startedAt ?? undefined}
         />
       </div>
@@ -823,15 +825,18 @@ function StreamFooter() {
   const waitingMember = waitingId ? team.find((x) => x.id === waitingId) : undefined
   // 底部留白带恒在内容总高里。贴底写的是 scrollHeight，不是最后一行的底边。
   const tail = <div data-timeline-tail="" style={{ height: TIMELINE_TAIL_PX }} />
-  if (!ids.length && !waitingId) return tail
+  const intake = <IntakeFooter />
+  if (!ids.length && !waitingId) return <>{intake}{tail}</>
   return (
     <div>
+      {intake}
+      <div className="tl-col">
       {waitingId && (
         <WaitingReply
           role={waitingMember?.role ?? waitingId}
           startedAt={turn.at}
           netWaiting={waitingSince[waitingId]}
-          avatar={waitingMember ? <Avatar agentId={waitingId} role={waitingMember.role} size={34} /> : undefined}
+          avatar={waitingMember ? <AgentFace agentId={waitingId} role={waitingMember.role} /> : undefined}
         />
       )}
       {ids.map((id) => {
@@ -839,7 +844,7 @@ function StreamFooter() {
         const done = streamDone[id] != null
         return (
           <div key={id}>
-          {plans[id] && <div className="plan-row"><ThinkingRow plan text={plans[id]}
+          {plans[id] && <div className="plan-row tl-indent"><ThinkingRow plan text={plans[id]}
             live={!done && !Object.keys(streams[id] ?? {}).some((call) => Number(call) > 0)} /></div>}
           <LiveReply
             role={member?.role ?? id}
@@ -847,14 +852,23 @@ function StreamFooter() {
             thinking={joinCalls(thinkings[id])}
             generating={!done}
             netWaiting={waitingSince[id]}
-            avatar={member ? <Avatar agentId={id} role={member.role} size={34} /> : undefined}
+            avatar={member ? <AgentFace agentId={id} role={member.role} /> : undefined}
           />
           </div>
         )
       })}
+      </div>
       {tail}
     </div>
   )
+}
+
+// C13 开场草案卡：首屏时随 FreshStart 居中出现；负责人已开口后仍未处理的草案停在对话尾部。
+const FreshContext = createContext(false)
+function IntakeFooter() {
+  const fresh = useContext(FreshContext)
+  if (fresh) return null
+  return <div className="tl-col"><IntakeCard /></div>
 }
 
 function TimelineTail() { return <div data-timeline-tail="" style={{ height: TIMELINE_TAIL_PX }} /> }
@@ -865,7 +879,7 @@ const EMPTY_TIMELINE: TimelineItem[] = []
 
 export function Timeline() {
   const { t } = useTranslation()
-  const { timeline: legacyTimeline, pending, streams, team, projectRoot, projectEpoch, timelineFacts } = useUiStore()
+  const { timeline: legacyTimeline, timelineCaughtUp, pending, streams, team, projectRoot, projectEpoch, timelineFacts } = useUiStore()
   const [filter, setFilter] = useState<Filter>('all')
   const windowState = useTimelineWindow(filter)
   const { page } = windowState
@@ -923,14 +937,36 @@ export function Timeline() {
     setJumpTarget(null)
   }, [filter, jumpTarget, windowState.jumpAround])
 
+  // C7：在途回合的工具组默认展开，已收束回合默认收起（收进 C9 摘要）。expanded 集合记录
+  // 「与默认相反」的行：在途组在集合里 = 被负责人手动收起。贴底语义不变——展开只是行高变化，
+  // 由 writeTail / onHeight 照旧接管（Timeline.scroll 测试守）。
+  const liveGroups = useMemo(() => {
+    const open = new Map<string | null, number>()
+    for (const it of timeline) {
+      const k = it.event.kind
+      if (k === 'team_slept' || k === 'stage_started') open.clear()
+      else if (k === 'turn_started') open.set(it.event.agent_id, it.event.id)
+      else if (k === 'turn_finished' || k === 'turn_failed') open.delete(it.event.agent_id)
+    }
+    const live = new Set<number>()
+    for (const row of rows) {
+      if (row.type !== 'toolgroup' || !row.items.length) continue
+      const start = open.get(row.items[0].event.agent_id)
+      if (start != null && row.items[0].event.id > start) live.add(row.idx)
+    }
+    return live
+  }, [timeline, rows])
+  const isOpen = (idx: number) => liveGroups.has(idx) !== expanded.has(idx)
+
   const revealRow = useCallback((row: ModelRow) => {
     setExpanded(previous => {
       const next = new Set(previous)
-      if (row.type === 'toolgroup' || row.type === 'sysgroup') next.add(row.idx)
+      const show = (idx: number) => { if (liveGroups.has(idx)) next.delete(idx); else next.add(idx) }
+      if (row.type === 'toolgroup' || row.type === 'sysgroup') show(row.idx)
       if (row.type === 'turnsummary') { next.add(row.idx); for (const child of row.folded) next.add(child.idx) }
       return next
     })
-  }, [])
+  }, [liveGroups])
   useEffect(() => {
     const target = page?.target_event_id
     if (target == null) return
@@ -964,16 +1000,48 @@ export function Timeline() {
     else if (mark.rowIdx >= 0) jumpToEvent(rows[mark.rowIdx].idx)
     else viewport.jumpToRow(0)
   }, [jumpToEvent, rows, viewport.jumpToRow])
+  // 轨迹导出（US54）：kind 过滤随当前筛选档；Tauri 走保存对话框，浏览器 dev 合成 Blob 下载
+  const doExport = useCallback(async () => {
+    const kinds = filter === 'messages' ? ['owner_message', 'agent_message']
+      : filter === 'decisions' ? [...DECISION_KINDS]
+      : undefined
+    try {
+      let count: number
+      if (isTauri) {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const path = await save({
+          defaultPath: 'hexagon-trace.json',
+          filters: [{ name: 'JSON', extensions: ['json'] }],
+        })
+        if (!path) return
+        count = await api.exportEvents({ path, kinds })
+      } else {
+        const items = await api.exportTimelineItems(kinds)
+        const doc = { format: 'hexagon-trace-export', version: 1, count: items.length, events: items.map((i) => i.event) }
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
+        a.download = 'hexagon-trace.json'
+        a.click()
+        URL.revokeObjectURL(a.href)
+        count = items.length
+      }
+      setExported(count)
+      setTimeout(() => setExported(null), 2500)
+    } catch (e) {
+      useUiStore.getState().pushToast(errText(e), 'err')
+    }
+  }, [filter])
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (useUiStore.getState().modalScope !== 'workbench') return
       if (matches(event, bindingFor('timelineLatest'))) { event.preventDefault(); viewport.holdPin() }
       else if (matches(event, bindingFor('timelineLoadOlder'))) { event.preventDefault(); viewport.requestOlder() }
       else if (matches(event, bindingFor('timelineRetry'))) { event.preventDefault(); void windowState.retry() }
+      else if (matches(event, bindingFor('timelineExport'))) { event.preventDefault(); void doExport() }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [viewport.holdPin, viewport.requestOlder, windowState.retry])
+  }, [viewport.holdPin, viewport.requestOlder, windowState.retry, doExport])
   const toggleRow = useCallback((idx: number) => {
     setExpanded((s) => {
       const n = new Set(s)
@@ -997,18 +1065,10 @@ export function Timeline() {
   const rowContent = (row: ModelRow): ReactNode => {
     if (row.type === 'chapter') {
       const role = team.find((m) => m.id === row.agentId)?.role ?? row.agentId ?? ''
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 14px 4px' }}>
-          <div className="sysline" style={{ flex: 1 }} />
-          <span className="dim3" style={{ fontSize: 10, fontWeight: 560, whiteSpace: 'nowrap' }}>
-            {t('timeline.chapter', { n: row.n, agent: role })}{row.stage ? ` · ${row.stage}` : ''}
-          </span>
-          <div className="sysline" style={{ flex: 1 }} />
-        </div>
-      )
+      return <Marker>{t('timeline.chapter', { n: row.n, agent: role })}{row.stage ? ` · ${row.stage}` : ''}</Marker>
     }
     if (row.type === 'toolgroup') {
-      return <ToolGroupRow items={row.items} callIndex={callIndex} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} fresh={isFreshExpand(row.idx)} />
+      return <ToolGroupRow items={row.items} callIndex={callIndex} expanded={isOpen(row.idx)} idx={row.idx} onToggle={toggleRow} fresh={isFreshExpand(row.idx)} />
     }
     if (row.type === 'sysgroup') {
       return <SysGroupRow items={row.items} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow} />
@@ -1016,9 +1076,7 @@ export function Timeline() {
     if (row.type === 'turnsummary') {
       return (
         <TurnSummaryRow row={row} expanded={expanded.has(row.idx)} idx={row.idx} onToggle={toggleRow}>
-          {row.folded.map((r) => (
-            <div key={r.idx} style={{ paddingLeft: 12 }}>{rowContent(r)}</div>
-          ))}
+          {row.folded.map((r) => <div key={r.idx}>{rowContent(r)}</div>)}
         </TurnSummaryRow>
       )
     }
@@ -1029,61 +1087,36 @@ export function Timeline() {
     )
   }
 
-  // 轨迹导出（US54）：kind 过滤随当前筛选档；Tauri 走保存对话框，浏览器 dev 合成 Blob 下载
-  const doExport = async () => {
-    const kinds = filter === 'messages' ? ['owner_message', 'agent_message']
-      : filter === 'decisions' ? [...DECISION_KINDS]
-      : undefined
-    let count: number
-    if (isTauri) {
-      const { save } = await import('@tauri-apps/plugin-dialog')
-      const path = await save({
-        defaultPath: 'hexagon-trace.json',
-        filters: [{ name: 'JSON', extensions: ['json'] }],
-      })
-      if (!path) return
-      count = await api.exportEvents({ path, kinds })
-    } else {
-      const items = await api.exportTimelineItems(kinds)
-      const doc = { format: 'hexagon-trace-export', version: 1, count: items.length, events: items.map((i) => i.event) }
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
-      a.download = 'hexagon-trace.json'
-      a.click()
-      URL.revokeObjectURL(a.href)
-      count = items.length
-    }
-    setExported(count)
-    setTimeout(() => setExported(null), 2500)
-  }
+  const pinned = useMemo(() => pinnedSummary(timeline), [timeline])
+  // 完整历史才判首屏：有窗口页就看它没有更早一页；无窗口的旧口径看 legacy 时间线已追平。
+  const fullHistory = page != null ? !page.has_before : projectRoot == null && projectEpoch === 0 && timelineCaughtUp && timeline.length > 0
+  const fresh = useMemo(() => isFreshProject(timeline, fullHistory), [timeline, fullHistory])
+  const Header = useMemo(() => (fresh ? FreshHeader : undefined), [fresh])
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      <StatusLine />
-      <div style={{ display: 'flex', gap: 4, padding: '6px 14px 0', alignItems: 'center' }}>
-        {(['all', 'messages', 'decisions', 'story'] as const).map((f) => (
-          <button
-            key={f}
-            className={`btn ${filter === f ? 'primary' : ''}`}
-            style={{ padding: '2px 10px', fontSize: 11 }}
-            onClick={() => setFilter(f)}
-          >
-            {t(`timeline.filter${f[0].toUpperCase()}${f.slice(1)}`)}
-          </button>
-        ))}
-        <div style={{ flex: 1 }} />
-        {exported != null && (
-          <span className="chip ok" style={{ fontSize: 10 }}>{t('timeline.exported', { count: exported })}</span>
-        )}
-        <button
-          className="icon-btn"
-          style={{ padding: '2px 6px', display: 'inline-flex', alignItems: 'center' }}
-          title={t('timeline.export')}
-          onClick={doExport}
-        >
-          <Icon name="export" size={12} />
-        </button>
+    <TooltipProvider>
+    <FreshContext.Provider value={fresh}>
+    <div className="tl" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      {/* 过滤（A7 全部 / 消息 / 决策）与导出钮同排，贴在对话列上沿（interaction §1）。
+          故事线档（票 18）在模型层保留，界面入口按规范收为三档——见 reconciliation §5 票 05。 */}
+      <div className="tl-col tl-bar" style={{ width: '100%', boxSizing: 'border-box' }}>
+        <Segmented value={filter === 'story' ? 'all' : filter} onValueChange={(v) => setFilter(v as Filter)} aria-label={t('timeline.filterLabel')}>
+          {(['all', 'messages', 'decisions'] as const).map((f) => (
+            <SegmentedItem key={f} value={f}>{t(`timeline.filter${f[0].toUpperCase()}${f.slice(1)}`)}</SegmentedItem>
+          ))}
+        </Segmented>
+        <span className="tl-sp" />
+        <StatusLine />
+        {exported != null && <span className="chip ok" role="status">{t('timeline.exported', { count: exported })}</span>}
+        <IconButton size="sm" label={t('timeline.export')} action="timelineExport" onClick={() => void doExport()}>
+          <Icon name="export" size={14} />
+        </IconButton>
       </div>
+      {pinned && (
+        <div className="tl-col tl-pin" style={{ width: '100%', boxSizing: 'border-box' }}>
+          <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />
+        </div>
+      )}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div aria-busy={windowState.loading || !viewport.ready} style={{ height: '100%', visibility: viewport.ready ? 'visible' : 'hidden' }}>
         <Virtuoso
@@ -1096,27 +1129,32 @@ export function Timeline() {
           data={rows}
           // overscan：快速滚动时预渲视口上下各 600px，行不再贴边「凭空长出」
           increaseViewportBy={600}
-          components={{ Footer: page?.has_after ? TimelineTail : StreamFooter }}
+          components={{ Header, Footer: page?.has_after ? TimelineTail : StreamFooter }}
           // 不满一屏顶对齐（不要 alignToBottom）。贴底由 writeTail 写 scrollHeight，
           // followOutput 看不见 Footer 里的留白带，会把最新一行贴回输入框。
           followOutput={false}
-          itemContent={(_i, row) => <div data-timeline-row={rowKey(row)} data-timeline-event={row.type === 'item' || row.type === 'chapter' ? row.idx : undefined} className={flash === rowKey(row) ? 'flash-row' : undefined}>{rowContent(row)}</div>}
+          itemContent={(_i, row) => <div data-timeline-row={rowKey(row)} data-timeline-event={row.type === 'item' || row.type === 'chapter' ? row.idx : undefined} className={`tl-col${flash === rowKey(row) ? ' flash-row' : ''}`}>{rowContent(row)}</div>}
         />
         </div>
-        {!viewport.ready && <div role={windowState.error ? 'alert' : 'status'} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, background: 'var(--bg-1)' }}>
-          {windowState.error ? <><span>{t('timeline.loadFailed')}</span><button className="btn" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button></>
-            : <LoadingState label={t('timeline.loadingRecent')} />}
+        {/* A20：首屏用骨架；读取失败是 C5 行内错误 + 重试，不伪装成空时间线 */}
+        {!viewport.ready && <div role={windowState.error ? 'alert' : 'status'} aria-label={windowState.error ? undefined : t('timeline.loadingRecent')} style={{ position: 'absolute', inset: 0, background: 'var(--app-main)' }}>
+          {windowState.error
+            ? <div className="tl-col"><div className="sysrow tl-sys risk"><span className="tl-sys-l">{t('timeline.loadFailed')} · <button type="button" className="tl-link" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button></span></div></div>
+            : <div className="tl-col"><SkeletonRows /></div>}
         </div>}
         {/* Owner 2026-10-02: upward intent loads history; only progress or recovery needs a floating surface. */}
         {viewport.ready && (windowState.olderLoading || windowState.olderError || windowState.tailError) &&
-          <div style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', zIndex: 21 }}>
-            {windowState.olderLoading ? <LoadingState label={t('timeline.loadingOlder')} />
-              : <button className="btn" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`}
-                  onClick={() => void windowState.retry()}>
-                  {windowState.tailError ? `${t('timeline.loadFailed')} · ${t('timeline.retry')}` : t('timeline.olderFailed')}</button>}
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21, background: 'var(--app-main)' }}>
+            <div className="tl-col">
+              {windowState.olderLoading ? <div role="status" aria-label={t('timeline.loadingOlder')}><SkeletonRows count={1} /></div>
+                : <div className="sysrow tl-sys" role="alert"><span className="tl-sys-l">
+                    {windowState.tailError ? t('timeline.loadFailed') : t('timeline.olderFailedLabel')} · <button type="button" className="tl-link"
+                      title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button>
+                  </span></div>}
+            </div>
           </div>}
 
-        {/* 松钉且高过窗口才显。不满一屏钉着、按钮藏着。 */}
+        {/* 松钉且高过窗口才显。不满一屏钉着、按钮藏着。（位置与三态属票 06 回到底部） */}
         {viewport.ready && (page?.has_after || showStickButton(viewport.pinned, viewport.overflow)) && (
           <button
             className="btn primary"
@@ -1130,5 +1168,27 @@ export function Timeline() {
         {viewport.ready && <NodeRail marks={marks} onJump={jump} />}
       </div>
     </div>
+    </FreshContext.Provider>
+    </TooltipProvider>
   )
+}
+
+/** A20 骨架：头像块 + 三条（feedback#loading「时间线首屏 / 补载更早内容」）。 */
+function SkeletonRows({ count = 3 }: { count?: number }) {
+  return (
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="tl-skl" aria-hidden>
+          <i className="av" />
+          <div className="tl-grow" style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
+            <i style={{ width: '40%' }} /><i style={{ width: '90%' }} /><i style={{ width: '70%' }} />
+          </div>
+        </div>
+      ))}
+    </>
+  )
+}
+
+function FreshHeader() {
+  return <div className="tl-col"><FreshStart /></div>
 }

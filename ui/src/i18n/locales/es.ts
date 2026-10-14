@@ -194,6 +194,19 @@ export default {
     routedTo: 'asignado a {{role}}',
     routeHold: 'aún no se asigna',
     routeRejected: 'la elección está fuera del equipo — nadie fue despertado',
+    // ui-redesign 票 05
+    netWaiting: "Esperando red",
+    netNote: "Se perdió la red. El texto recibido se conserva y la recepción continúa al reconectar.",
+    waitingFirstToken: "Pensando",
+    copyMessage: "Copiar mensaje",
+    stageArtifacts: "{{count}} entregables",
+    deliveryPassed: "Aprobado",
+    deliveryRejected: "Devuelto",
+    deliveryPending: "Pendiente de revisión",
+    deliverySuperseded: "Reemplazado",
+    callDenied: "Denegado",
+    filterLabel: "Filtro de la línea de tiempo",
+    olderFailedLabel: "No se pudo cargar la actividad anterior",
   },
   ev: {
     turn_started: 'turno iniciado',
@@ -664,7 +677,7 @@ export default {
     splitNeedsWidth: 'La vista dividida necesita una ventana más ancha (≥720px)', },
   art: { reviewPassed: "Revisión aprobada", reviewRejected: "Revisión rechazada", reviewStale: "Revisión desactualizada", currentWorktree: "Árbol de trabajo actual", pendingRecovery: "El registro de la entrega está incompleto. Los archivos actuales se conservan; el artefacto no se puede aceptar hasta verificar su estado.", content: 'Contenido', compare: 'Comparar', version: 'v{{n}}', vs: '↔', unavailable: 'contenido no disponible', preview: 'Vista previa', source: 'Fuente' },
   md: { copy: 'Copiar', copied: 'Copiado' },
-  exec: { exit: 'exit {{code}}', noOutput: '(sin salida)', tail: '… últimos 32 KB' },
+  exec: { done: 'hecho', exit: 'exit {{code}}', noOutput: '(sin salida)', tail: '… últimos 32 KB' },
   agent: {
     stepHostRead: "Leer archivo del equipo",
     stepHostWrite: "Escribir archivo del equipo",
@@ -1137,10 +1150,9 @@ export default {
     done: 'Aceptar', empty: 'Sin coincidencias', count: '{{n}} seleccionados',
     title_skills: 'Seleccionar habilidades', title_mcp: 'Seleccionar servicios MCP',
   },
-  intake: {
-    confirm: 'Escribir las instrucciones del proyecto',
-    confirmHint: 'El análisis de apertura adjuntó un borrador. No se guarda hasta que confirmes, ni siquiera en L4.',
-  },
+  intake: {"confirm": "Escribir AGENTS.md", "confirmHint": "Borrador del análisis inicial (texto completo en su mensaje). Se escribe en la raíz del repositorio solo tras confirmar; nunca sobrescribe archivos existentes.", "title": "Borrador de instrucciones del proyecto", "unsaved": "Sin guardar", "later": "Ahora no", "laterHint": "Lo oculta por ahora; vuelve al reabrir el proyecto", "edit": "Editar", "editUnavailable": "El borrador solo se escribe completo; edita AGENTS.md después de escribirlo"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} min", "rangeUntil": "hasta {{to}}", "collapse": "Contraer resumen", "toggle": "Contraer o expandir el resumen de regreso", "headline": "El equipo avanzó <b>{{stages}} etapa(s)</b> y entregó {{deliveries}} entregable(s); <o>{{pending}} asunto(s)</o> esperan tu decisión.", "headlineClear": "El equipo avanzó <b>{{stages}} etapa(s)</b> y entregó {{deliveries}} entregable(s); nada espera tu decisión.", "kpiStages": "Etapas", "kpiStagesValue": "{{count}} completadas", "kpiDeliveries": "Entregas", "kpiDeliveriesValue": "{{count}}", "kpiReviews": "Revisiones", "kpiReviewsPassed": "{{count}} aprobadas", "kpiReviewsRejected": "{{count}} devueltas", "kpiCost": "Gasto", "costLoading": "Cargando gasto", "costUnknown": "No se puede obtener el gasto durante tu ausencia", "needsYou": "Requiere tu atención", "nothingNeeded": "Nada espera tu decisión.", "next": "Próximos pasos sugeridos", "fillHint": "Rellena la entrada; no se envía nada", "collapsedLine": "Mientras no estabas · {{minutes}} min · {{count}} esperan por ti", "collapsedLineNoTime": "Mientras no estabas · {{count}} esperan por ti", "suggest": {"rejected": "Explica cómo corregir los {{count}} entregables devueltos", "escalated": "Explícame las {{count}} objeciones escaladas", "delivery": "Resume qué cambió en {{path}}", "stage": "Resume esta etapa y pasa a la siguiente", "keepGoing": "Continúa con la etapa actual"}},
+  fresh: {"greeting": "Tu equipo está listo. ¿Por dónde empezamos?", "sub": "{{roles}} roles · {{stages}} etapas", "specTitle": "Empezar con una especificación", "specDesc": "Convierte una idea en criterios de aceptación", "specFill": "Escribe una especificación a partir de esta idea y lista los criterios de aceptación: ", "repoTitle": "Analizar el repositorio", "repoDesc": "Lee la estructura, los comandos y las dependencias", "repoFill": "Primero analiza el repositorio existente: estructura, comandos y dependencias."},
   keys: {
     palette: 'Paleta de comandos',
     sidebar: "Mostrar u ocultar la barra lateral",

@@ -194,6 +194,19 @@ export default {
     routedTo: '派給 {{role}}',
     routeHold: '先不派活',
     routeRejected: '封閉選擇不在花名冊，沒有派活',
+    // ui-redesign 票 05
+    netWaiting: "等網路",
+    netNote: "網路中斷，已收到的文字會保留，恢復後繼續接收。",
+    waitingFirstToken: "正在思考",
+    copyMessage: "複製訊息",
+    stageArtifacts: "{{count}} 份產物",
+    deliveryPassed: "通過",
+    deliveryRejected: "已退回",
+    deliveryPending: "待複審",
+    deliverySuperseded: "已被取代",
+    callDenied: "已拒絕",
+    filterLabel: "時間線篩選",
+    olderFailedLabel: "較早的內容載入失敗",
   },
   ev: {
     turn_started: '回合開始',
@@ -664,7 +677,7 @@ export default {
     splitNeedsWidth: '分欄需要更寬的視窗（≥720px）', },
   art: { reviewPassed: "目前版本複審通過", reviewRejected: "目前版本複審駁回", reviewStale: "複審已過期", currentWorktree: "目前工作樹", pendingRecovery: "交付登記尚未完成。目前檔案已保留；恢復並核對狀態前，此產物不能用於驗收。", content: '內容', compare: '對比', version: 'v{{n}}', vs: '↔', unavailable: '內容不可用', preview: '預覽', source: '原始碼' },
   md: { copy: '複製', copied: '已複製' },
-  exec: { exit: '退出 {{code}}', noOutput: '（無輸出）', tail: '… 僅顯示末 32KB' },
+  exec: { done: '完成', exit: '退出 {{code}}', noOutput: '（無輸出）', tail: '… 僅顯示末 32KB' },
   agent: {
     stepHostRead: "讀取電腦檔案",
     stepHostWrite: "寫入電腦檔案",
@@ -1137,10 +1150,9 @@ export default {
     done: '確定', empty: '無符合項目', count: '已選 {{n}} 項',
     title_skills: '選擇技能', title_mcp: '選擇 MCP 服務',
   },
-  intake: {
-    confirm: '寫入專案說明',
-    confirmHint: '開場分析附了一份草案。點頭之前不會落盤，自治 L4 也不會自動寫上。',
-  },
+  intake: {"confirm": "寫入 AGENTS.md", "confirmHint": "由開場分析起草（全文在那則開場訊息裡）；確認後寫入倉庫根目錄，不會覆寫既有檔案。", "title": "專案說明草案", "unsaved": "未落盤", "later": "先不寫", "laterHint": "本次先收起，重新開啟專案時還會出現", "edit": "編輯", "editUnavailable": "草案只能整份寫入；寫入後可直接編輯 AGENTS.md"},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分鐘", "rangeUntil": "截至 {{to}}", "collapse": "收起摘要", "toggle": "收起或展開歸來摘要", "headline": "團隊推進了 <b>{{stages}} 個階段</b>，交付 {{deliveries}} 份產物；有 <o>{{pending}} 件</o>等你拍板。", "headlineClear": "團隊推進了 <b>{{stages}} 個階段</b>，交付 {{deliveries}} 份產物；沒有等你處理的事項。", "kpiStages": "階段", "kpiStagesValue": "完成 {{count}} 個", "kpiDeliveries": "交付", "kpiDeliveriesValue": "{{count}} 份", "kpiReviews": "複審", "kpiReviewsPassed": "{{count}} 過", "kpiReviewsRejected": "{{count}} 退", "kpiCost": "花費", "costLoading": "正在讀取花費", "costUnknown": "讀取不到離開期間的花費", "needsYou": "需要你處理", "nothingNeeded": "沒有等你處理的事項。", "next": "建議下一步", "fillHint": "填入輸入列，不會送出", "collapsedLine": "離開期間 · {{minutes}} 分鐘 · {{count}} 件待你處理", "collapsedLineNoTime": "離開期間 · {{count}} 件待你處理", "suggest": {"rejected": "說說被退回的 {{count}} 份產物要怎麼改", "escalated": "解釋一下升級給我的 {{count}} 條異議", "delivery": "講講 {{path}} 這次改了什麼", "stage": "總結這一階段的產出，再推進下一階段", "keepGoing": "繼續推進目前階段"}},
+  fresh: {"greeting": "團隊已就位，要從哪裡開始？", "sub": "{{roles}} 個角色 · {{stages}} 個階段", "specTitle": "先寫規格", "specDesc": "從一句話需求展開驗收標準", "specFill": "從這句需求開始寫規格，列出驗收標準：", "repoTitle": "先分析現有倉庫", "repoDesc": "讀目錄結構、命令與相依套件", "repoFill": "先分析現有倉庫：目錄結構、命令和相依套件。"},
   keys: {
     palette: '命令面板',
     sidebar: "開關側欄",

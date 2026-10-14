@@ -5,6 +5,8 @@ export type ActionId =
   | 'timelineLoadOlder'
   | 'timelineRetry'
   | 'timelineLatest'
+  | 'timelineExport'
+  | 'returnSummaryToggle'
   | 'browserPanel'
   | 'browserManaged'
   | 'browserConnect'
@@ -120,6 +122,8 @@ const DEFAULTS: Record<ActionId, string> = {
   confirmQualityRevalidation: '', cancelQualityRevalidation: '',
   reviewPerformanceBaseline: '', confirmPerformanceBaseline: '', cancelPerformanceBaseline: '',
   timelineLoadOlder: '', timelineRetry: '', timelineLatest: '',
+  // 票 05：导出轨迹、收起/展开归来摘要——默认无绑定，负责人可在设置·键盘指定
+  timelineExport: '', returnSummaryToggle: '',
   selectBrowserElement: 'alt+mod+shift+l',
   removeBrowserElement: '',
   viewBrowserElement: '',
@@ -248,6 +252,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'timelineLoadOlder', labelKey: 'timeline.loadOlder' },
   { id: 'timelineRetry', labelKey: 'timeline.retry' },
   { id: 'timelineLatest', labelKey: 'timeline.toBottom' },
+  { id: 'timelineExport', labelKey: 'timeline.export' },
+  { id: 'returnSummaryToggle', labelKey: 'returnSummary.toggle' },
   { id: 'selectBrowserElement', labelKey: 'elementContext.select' },
   { id: 'removeBrowserElement', labelKey: 'elementContext.remove' },
   { id: 'viewBrowserElement', labelKey: 'elementContext.view' },
