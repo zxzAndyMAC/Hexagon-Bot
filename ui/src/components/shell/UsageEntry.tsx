@@ -60,7 +60,7 @@ export function CapBanner({ onRaise }: { onRaise: () => void }) {
     <div
       role="alert"
       data-cap-banner
-      className="mx-auto mb-2 flex w-full max-w-(--col-w) items-center gap-2 rounded-[12px] bg-red-tint py-2 pr-2 pl-3 text-[13px] text-red"
+      className="mx-auto mb-2 flex w-[calc(100%-48px)] max-w-(--col-w) items-center gap-2 rounded-[12px] bg-red-tint py-2 pr-2 pl-3 text-[13px] text-red"
     >
       <Icon name="warn" size={16} />
       <span className="min-w-0 flex-1">{t('usage.capBanner', { limit: fmtYuan(total.limit_cents * MC_PER_CENT) })}</span>

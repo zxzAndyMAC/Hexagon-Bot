@@ -345,15 +345,13 @@ export default function App() {
             <Header side={shell.side} />
             {/* 票 07：对话列宽只由 --col-w 决定（时间线 .tl-col、恢复条、触顶横幅、输入条同读），主区不再加左右内距 */}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              {/* C12a：钉在对话列顶部、归来摘要（时间线顶部）上方；与时间线同列对齐 */}
-              <div data-recovery-col style={{ width: '100%', maxWidth: 'var(--col-w, 720px)', margin: '0 auto', padding: '0 24px', boxSizing: 'border-box' }}>
-                <SessionRecoveryStrip />
-              </div>
+              {/* C12a：钉在对话列顶部、归来摘要（时间线顶部）上方；与时间线同列对齐（列宽规则在 timeline.css） */}
+              <SessionRecoveryStrip />
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <Timeline />
               </div>
               {/* B4 触顶横幅：输入条正上方（interaction §10） */}
-              <div style={{ padding: '0 24px' }}><CapBanner onRaise={raiseCap} /></div>
+              <CapBanner onRaise={raiseCap} />
               <Composer />
             </div>
           </main>
@@ -368,7 +366,7 @@ export default function App() {
       {/* 票 05：待决是浮层，不插进这条纵栏——高度留给 Tab 和时间线。 */}
       {!settingsOpen && <PendingDialog />}
       {!settingsOpen && <FlowDialog />}
-      {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+      {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSettings={openSettings} />}
     </div>
     </TooltipProvider>
   )
