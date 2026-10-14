@@ -354,7 +354,7 @@
 
 /* 专注模式（⌘.，R-06，interaction §1；ui-redesign 票 03）：节点轨隐藏，只留对话与输入条；再按 ⌘. 恢复。 */
 [data-focus-mode] [data-node-rail] {
-  display: none;
+  display: none !important; /* 节点轨根节点用内联 display:flex，只能用 !important 盖过 */
 }
 
 [data-theme='night'] .sysrow,

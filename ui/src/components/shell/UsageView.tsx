@@ -18,7 +18,7 @@ export function UsageView({ narrowLead = false }: { narrowLead?: boolean }) {
           <Icon name="arrow-left" size={14} />{t('canvas.backToChat')}
         </Button>
         <div data-tauri-drag-region className="flex min-w-0 items-center gap-1.5 text-[13px] text-ink-2">
-          <b className="font-semibold text-ink">{t('usage.detail')}</b>
+          <b className="font-semibold text-ink">{t('usageEntry.labelPlain')}</b>
           {projectName && <span className="truncate text-ink-3">{projectName}</span>}
         </div>
       </header>

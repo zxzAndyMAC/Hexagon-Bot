@@ -119,8 +119,13 @@ export function Sidebar({ onSearch, onSettings, onProjectClosed, forceCollapsed 
   const width = useUiStore((s) => s.sideLayout.width)
   const collapsed = useUiStore((s) => s.sideLayout.collapsed) || forceCollapsed
   const artifacts = useUiStore((s) => s.artifacts.length)
-  // 票 03：「产物」「项目文件」是画布里的清单页签，当前项 = 画布开着且停在该页签
-  const canvasPane = useUiStore((s) => (s.canvasOpen && !s.usageView ? s.activeTab : null))
+  // 票 03：「产物」「项目文件」是画布里的清单页签；当前项 = 画布可见且停在该清单或它打开的产物 / 文件页签
+  // （canvas#artifact、canvas#file 侧栏高亮）
+  const canvasPane = useUiStore((s) => {
+    if (!s.canvasOpen || s.usageView) return null
+    const kind = s.tabs.find((x) => x.id === s.activeTab)?.kind
+    return kind === 'artifacts' || kind === 'artifact' ? 'artifacts' : kind === 'files' || kind === 'file' ? 'files' : null
+  })
   const pendingCount = useOwnerPendingCount()
   const statusError = useUiStore((s) => s.statusError)
   const addRole = useAddRole()

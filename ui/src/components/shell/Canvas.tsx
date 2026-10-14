@@ -202,6 +202,12 @@ export function Canvas({ open, mode, width, narrowLead = false }: {
       if (back instanceof HTMLElement && back.isConnected && lost) back.focus()
     }
   }, [open])
+  // 焦点停在页签列上时跟着当前页签走（从清单打开新页签后，焦点环不留在旧页签上）
+  useEffect(() => {
+    const focused = document.activeElement
+    if (!open || !(focused instanceof HTMLElement) || focused.getAttribute('role') !== 'tab' || !root.current?.contains(focused)) return
+    root.current.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+  }, [open, active])
   const showTree = activeKind === 'file' || activeKind === 'files'
   return (
     <aside
