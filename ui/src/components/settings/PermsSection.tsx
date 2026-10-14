@@ -22,6 +22,12 @@ import { ProjectDelegation } from '../ProjectDelegation'
 import { Empty, Group, InlineError, NeedsProject, SetHead, SetWrap, SkeletonRows, SRow } from './kit'
 import { tableCls } from './styles'
 
+/** 时间列（settings#perms「10/10 14:22」）：带时分的取 MM/DD HH:mm，只有日期的照原样。 */
+const shortTime = (at: string) => {
+  const m = /^\d{4}-(\d\d)-(\d\d)[ T](\d\d:\d\d)/.exec(at)
+  return m ? `${m[1]}/${m[2]} ${m[3]}` : at.slice(0, 10)
+}
+
 /** 边界胶囊（settings#perms notes）：联网 warn + globe、禁止联网 / 后台 / 仅前台 / 命名会话 neutral。 */
 function Boundaries({ r }: { r: PermissionRuleRow }) {
   const { t } = useTranslation()
@@ -120,7 +126,7 @@ function RulesTable() {
                       {r.project_shared ? <PermissionScope tool={r.tool} shape={r.shape} generalized={!r.shape.startsWith('exact:')} /> : r.shape}
                     </td>
                     <td className={tableCls.td}><Boundaries r={r} /></td>
-                    <td className={cn(tableCls.td, 'whitespace-nowrap text-[12px] text-ink-3')}>{r.created_at.slice(0, 10)}</td>
+                    <td className={cn(tableCls.td, 'whitespace-nowrap text-[12px] text-ink-3')}>{shortTime(r.created_at)}</td>
                     <td className={cn(tableCls.td, 'text-right')}>
                       <Button size="xs" variant="ghost" onClick={() => revoke(r)}>{t('perms.revoke')}</Button>
                     </td>

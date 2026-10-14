@@ -241,7 +241,7 @@ export function ListDetail<T>(p: ListDetailProps<T>) {
               aria-label={p.searchPlaceholder}
             />
           )}
-          <div role="listbox" aria-label={p.label} onKeyDown={listKey} className="min-h-0 flex-1 overflow-y-auto pb-2">
+          <div role="listbox" aria-label={p.label} onKeyDown={listKey} className={cn('min-h-0 flex-1 overflow-y-auto pb-2', !p.searchPlaceholder && !p.head && 'pt-3')}>
             {p.error ? (
               <InlineError {...p.error} />
             ) : p.loading && p.items.length === 0 ? (
