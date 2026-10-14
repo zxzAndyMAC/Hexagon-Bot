@@ -1,43 +1,66 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import type { PromptEntry } from '../gen/PromptEntry'
 import type { PromptTranslation } from '../gen/PromptTranslation'
+import { Button } from '@/components/ui/button'
+import { Dot } from '@/components/ui/dot'
+import { cn } from '@/lib/utils'
+import { Icon } from './Icon'
+import { InlineError, ListDetail } from './settings/kit'
 
 // ADR 0071：发给模型的固定提示词是英文。这一页给负责人看原文和参考译文，
 // 只读——提示词不在这里改（工作台约束不进改进提案的面，ADR 0045）。
 // 布局（2026-09 owner 报告）：左侧按组列条目、右侧详情——原先全量平铺 +
 // 原文|译文并排双列，长文被砍半宽还两列各滚各的。改清单-详情后译文走页签，
 // 页签态跨条目保持（审译文的人逐条过不用每行点一次）。
+// ui-redesign 票 11（components E8，settings#logs 右半）：E2 列表 | 详情（分组），详情头右侧 A7 形页签
+// 「原文 / 参考译文」（界面英文或没有可用模型时不出译文页签），inset 等宽正文，脚注 + 重新翻译 xs。
+// 译文失败（D11 设置形）：原地红字写原因，保留缓存译文并标明是缓存，凭据类失败给「打开模型服务」。
 const GROUPS = ['workbench', 'subagent', 'runtime', 'tools', 'judges', 'wizard', 'translator'] as const
 
 type Tab = 'original' | 'tr'
 
-const tabBtn = (active: boolean): CSSProperties => ({
-  border: 'none',
-  background: 'transparent',
-  borderRadius: 0,
-  padding: '7px 2px',
-  marginBottom: -1,
-  borderBottom: `2px solid ${active ? 'var(--legacy-accent)' : 'transparent'}`,
-  color: active ? 'var(--text)' : 'var(--text-3)',
-  fontWeight: active ? 560 : 400,
-})
-
-const preStyle: CSSProperties = {
-  whiteSpace: 'pre-wrap',
-  fontSize: 11,
-  margin: 0,
-  padding: 10,
-  background: 'var(--bg)',
-  borderRadius: 4,
+/** A7 分段控件外形的页签（A22「卡片内页签用 A7 形态」）：role=tab，←→ 切换。 */
+function PromptTabs({ tab, hasTr, onTab }: { tab: Tab; hasTr: boolean; onTab: (t: Tab) => void }) {
+  const { t } = useTranslation()
+  const item = (value: Tab, label: string) => (
+    <button
+      key={value}
+      type="button"
+      role="tab"
+      aria-selected={tab === value}
+      tabIndex={tab === value ? 0 : -1}
+      onClick={() => onTab(value)}
+      onKeyDown={(e) => {
+        if (!hasTr || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
+        e.preventDefault()
+        onTab(tab === 'original' ? 'tr' : 'original')
+      }}
+      className={cn(
+        'hx-press hx-focus inline-flex h-6 cursor-pointer items-center rounded-full px-2.5 text-[12px] whitespace-nowrap text-ink-2 live:hover:text-ink',
+        tab === value && 'bg-surface font-medium text-ink [--hx-shadow:var(--shadow-btn)]',
+      )}
+    >
+      {label}
+    </button>
+  )
+  return (
+    <div role="tablist" className="inline-flex w-fit flex-none items-center rounded-full bg-canvas p-0.5 shadow-[inset_0_0_0_1px_var(--line-soft)]">
+      {item('original', t('settings.prompts_original'))}
+      {hasTr && item('tr', t('settings.prompts_reference'))}
+    </div>
+  )
 }
+
+const preCls = 'm-0 whitespace-pre-wrap rounded-[var(--r-card)] bg-inset p-3 font-mono text-[12px] leading-[1.7] text-ink-2 shadow-[inset_0_0_0_1px_var(--line-soft)]'
 
 export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const english = lang === 'en'
   const [entries, setEntries] = useState<PromptEntry[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [byId, setById] = useState<Record<string, PromptTranslation>>({})
   const [busy, setBusy] = useState(false)
   const [noModel, setNoModel] = useState(false)
@@ -48,7 +71,7 @@ export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
   const seq = useRef(0)
 
   useEffect(() => {
-    api.promptCatalog().then(setEntries).catch((e) => setFailure(errText(e)))
+    api.promptCatalog().then(setEntries).catch((e) => setFailure(errText(e))).finally(() => setLoaded(true))
   }, [])
 
   const translate = async (force: boolean) => {
@@ -84,102 +107,74 @@ export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
   const tr = cur ? byId[cur.id] : undefined
   const reason = (code: string) => code.startsWith('model_') ? t(`errors.${code}`, { defaultValue: code }) : t(`settings.prompts_err_${code}`, { defaultValue: code })
   const settingsCode = (code?: string | null) => !!code && ['model_missing_credential', 'model_credential_store', 'model_authentication', 'model_configuration', 'model_request_rejected', 'model_quota'].includes(code)
+  const ordered = GROUPS.flatMap((g) => entries.filter((e) => e.group === g))
 
   return (
-    <div data-testid="prompts-section" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <div className="dim3" style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.6, flexShrink: 0 }}>{t('settings.prompts_intro')}</div>
-      {hasTr && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexShrink: 0 }}>
-          <button className="btn" disabled={busy} onClick={() => void translate(true)}>
-            {busy ? t('settings.prompts_translating') : t('settings.prompts_retranslate')}
-          </button>
-          <span className="dim3" style={{ fontSize: 11 }}>{t('settings.prompts_reference')}</span>
-        </div>
-      )}
-      {noModel && (
-        <div className="row-line" role="alert" style={{ padding: '8px 10px', marginBottom: 12, fontSize: 12, display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
-          <span>{t('settings.prompts_noModel')}</span>
-          <button className="btn" onClick={onGoModels}>{t('settings.prompts_goModels')}</button>
-        </div>
-      )}
-      {failure && <div role="alert" style={{ color: 'var(--err)', fontSize: 12, marginBottom: 12, flexShrink: 0 }}>{t('settings.prompts_failed', { error: failure })}</div>}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-1)', overflow: 'hidden' }}>
-        <div style={{ width: 232, flexShrink: 0, borderRight: '1px solid var(--border)', overflowY: 'auto', padding: '4px' }}>
-          {GROUPS.map((g) => {
-            const rows = entries.filter((e) => e.group === g)
-            if (rows.length === 0) return null
-            return (
-              <div key={g}>
-                <div className="dim3" style={{ fontSize: 11, fontWeight: 560, padding: '8px 8px 3px' }}>{t(`settings.prompts_group_${g}`)}</div>
-                {rows.map((r) => {
-                  const active = cur?.id === r.id
-                  const errCode = hasTr ? byId[r.id]?.error : undefined
-                  return (
-                    <button
-                      key={r.id}
-                      data-prompt-id={r.id}
-                      className="btn"
-                      onClick={() => setSel(r.id)}
-                      style={{
-                        display: 'flex',
-                        width: '100%',
-                        alignItems: 'center',
-                        gap: 6,
-                        border: 'none',
-                        borderRadius: 5,
-                        background: active ? 'var(--bg-2)' : 'transparent',
-                        color: active ? 'var(--text)' : 'var(--text-2)',
-                        padding: '5px 8px',
-                        textAlign: 'left',
-                      }}
-                    >
-                      <span className="mono" style={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.id}</span>
-                      {errCode && <span className="dot" style={{ background: 'var(--err)', flexShrink: 0 }} title={reason(errCode)} />}
-                    </button>
-                  )
-                })}
+    <div data-testid="prompts-section" className="flex min-h-0 flex-1 flex-col">
+      <ListDetail<PromptEntry>
+        label={t('settings.nav_prompts')}
+        items={ordered}
+        loading={!loaded}
+        itemKey={(e) => e.id}
+        filterText={(e) => `${e.id} ${e.text}`}
+        groupOf={(e) => e.group}
+        groupLabel={(g) => t(`settings.prompts_group_${g}`)}
+        selected={cur?.id ?? null}
+        onSelect={(k) => setSel(k)}
+        renderItem={(r) => {
+          const errCode = hasTr ? byId[r.id]?.error : undefined
+          return (
+            <span data-prompt-id={r.id} className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{r.id}</span>
+              {errCode && <span title={reason(errCode)} className="inline-flex"><Dot tone="err" /></span>}
+            </span>
+          )
+        }}
+      >
+        <p className="mb-4 text-[12.5px] leading-[1.6] text-ink-3">{t('settings.prompts_intro')}</p>
+        {noModel && (
+          <div role="alert" className="mb-4 flex items-center gap-2.5 rounded-[var(--r-card)] bg-orange-tint px-3 py-2 text-[12.5px] text-ink">
+            <Icon name="warn" size={14} className="flex-none text-orange" />
+            <span className="min-w-0 flex-1">{t('settings.prompts_noModel')}</span>
+            <Button size="xs" onClick={onGoModels}>{t('settings.prompts_goModels')}</Button>
+          </div>
+        )}
+        {failure && <InlineError text={t('settings.prompts_failed', { error: failure })} />}
+        {cur && (
+          <div data-prompt-detail={cur.id}>
+            <div className="flex items-center gap-2">
+              <b className="min-w-0 flex-1 truncate font-mono text-[13px] font-semibold text-ink">{cur.id}</b>
+              <PromptTabs tab={effTab} hasTr={hasTr} onTab={setTab} />
+            </div>
+            <div className="mt-3">
+              {effTab === 'original' ? (
+                <pre className={preCls}>{cur.text}</pre>
+              ) : tr?.error ? (
+                <>
+                  <div role="alert" className="flex flex-wrap items-center gap-2 text-[12.5px] text-red">
+                    <Icon name="warn" size={14} className="flex-none" />
+                    <span>{t(tr.cached ? 'settings.prompts_failedCached' : 'settings.prompts_failed', { error: reason(tr.error) })}</span>
+                    {settingsCode(tr.error) && <Button size="xs" onClick={onGoModels}>{t('settings.prompts_goModels')}</Button>}
+                  </div>
+                  {tr.cached && tr.text && <pre data-translation data-cached className={cn(preCls, 'mt-2')}>{tr.text}</pre>}
+                </>
+              ) : busy && !tr?.text ? (
+                <div className="text-[12.5px] text-ink-3">{t('settings.prompts_translating')}</div>
+              ) : (
+                <pre data-translation className={preCls}>{tr?.text ?? ''}</pre>
+              )}
+            </div>
+            {hasTr && (
+              <div className="mt-3 flex items-center gap-2">
+                <span className="min-w-0 flex-1 text-[12px] text-ink-3">{t('settingsUi.promptsReferenceNote')}</span>
+                <Button size="xs" loading={busy} onClick={() => void translate(true)}>
+                  {!busy && <Icon name="refresh" />}{busy ? t('settings.prompts_translating') : t('settings.prompts_retranslate')}
+                </Button>
               </div>
-            )
-          })}
-        </div>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          {cur && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px 8px', flexShrink: 0 }}>
-                <span className="mono" style={{ fontSize: 12, fontWeight: 560 }}>{cur.id}</span>
-                <span className="chip" style={{ fontSize: 10 }}>{t(`settings.prompts_group_${cur.group}`)}</span>
-              </div>
-              <div role="tablist" style={{ display: 'flex', gap: 14, padding: '0 14px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-                <button role="tab" aria-selected={effTab === 'original'} className="btn" style={tabBtn(effTab === 'original')} onClick={() => setTab('original')}>
-                  {t('settings.prompts_original')}
-                </button>
-                {hasTr && (
-                  <button role="tab" aria-selected={effTab === 'tr'} className="btn" style={tabBtn(effTab === 'tr')} onClick={() => setTab('tr')}>
-                    {t('settings.prompts_reference')}
-                  </button>
-                )}
-              </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px 14px 14px' }}>
-                {effTab === 'original' ? (
-                  <pre className="mono" style={preStyle}>{cur.text}</pre>
-                ) : tr?.error ? (
-                  <>
-                    <div role="alert" style={{ color: 'var(--err)', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <span>{t(tr.cached ? 'settings.prompts_failedCached' : 'settings.prompts_failed', { error: reason(tr.error) })}</span>
-                      {settingsCode(tr.error) && <button className="btn" onClick={onGoModels}>{t('settings.prompts_goModels')}</button>}
-                    </div>
-                    {tr.cached && tr.text && <pre data-translation data-cached className="mono" style={{ ...preStyle, marginTop: 8 }}>{tr.text}</pre>}
-                  </>
-                ) : busy && !tr?.text ? (
-                  <div className="dim3" style={{ fontSize: 12 }}>{t('settings.prompts_translating')}</div>
-                ) : (
-                  <pre data-translation className="mono" style={preStyle}>{tr?.text ?? ''}</pre>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+            )}
+          </div>
+        )}
+      </ListDetail>
     </div>
   )
 }

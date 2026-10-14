@@ -1,4 +1,4 @@
-// 供应商管理（共享件）：设置页「模型与凭据」分区与启动页设置同用。
+// 供应商管理：设置页「模型服务」分区（向导服务商步 ProviderStep 另有精简形，只共用 slug 规则）。
 // 布局对齐 Cherry Studio：左列=内置常见供应商+已配置供应商+底部固定「添加」；
 // 右列=选中供应商详情（密钥/端点/模型目录）——检测、拉取模型列表、能力标记、
 // 编辑模型一应俱全；底部「槽位分配」把角色模型槽绑到 供应商+模型。
@@ -9,6 +9,16 @@ import { api, errText, type ModelEntry, type ProviderView, type ProvidersView, t
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
 import { BUILTIN_SLOTS, DEDICATED_PREFIX, isBuiltinSlot, isDedicatedSlot } from '../modelpick'
+import { Avatar } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Dot } from '@/components/ui/dot'
+import { IconButton } from '@/components/ui/icon-button'
+import { Field, Input } from '@/components/ui/input'
+import { NativeSelect } from '@/components/ui/native-select'
+import { Switch } from '@/components/ui/switch'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { DetailHead, Empty, ListDetail, SubHead } from './settings/kit'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。
 const PRESETS: { name: string; kind: ProviderView['kind']; base_url: string; model?: string }[] = [
@@ -65,7 +75,6 @@ export function ProviderManager() {
   // Owner 2026-10-01: keep the editor anchored even while its model ID is being edited.
   const [editingId, setEditingId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [q, setQ] = useState('') // settings-3col 票 04：供应商搜索（Cherry 同款）
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -265,298 +274,88 @@ export function ProviderManager() {
     return { total: slotNames.length, bound, blocked, missingKey }
   }, [slotNames, doc])
 
-  const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }
+  // ui-redesign 票 11（settings#models，components E2 + E3 + A21）：列表 =「已配置 / 内置目录」两组（状态点
+  // ● 已存钥匙 / ◐ 缺钥匙橙 / ○ 停用 + 字母头像 + 行内开关），详情 = 头（大字母头像 + 名 + 端点「· 自动推导」+ 删除）、
+  // API Key 与「检测并拉取模型」、模型卡（等宽名 + 窗口 chip + 能力图标 + 编辑）、槽位绑定表。
+  type Item = { key: string; preset: boolean; p: ProviderView | (typeof PRESETS)[number] }
+  const items: Item[] = [
+    ...doc.providers.map((p) => ({ key: p.id, preset: false, p })),
+    ...unconfiguredPresets.map((p) => ({ key: `preset:${p.name}`, preset: true, p })),
+  ]
+  const isLocal = (url: string) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])/i.test(url)
 
   const modelEditor = editModel && (
-                <div className="panel" style={{ marginTop: 8, padding: '10px 12px', outline: '1px solid var(--legacy-accent)' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '76px 1fr', gap: '6px 8px', alignItems: 'center', fontSize: 12 }}>
-                    <label className="dim3">{t('providers.modelId')}</label>
-                    <input className="input mono" aria-label={t('providers.modelId')} value={editModel.id} onChange={(e) => setEditModel({ ...editModel, id: e.target.value })} />
-                    <label className="dim3">{t('providers.modelName')}</label>
-                    <input className="input" aria-label={t('providers.modelName')} value={editModel.name ?? ''} onChange={(e) => setEditModel({ ...editModel, name: e.target.value })} />
-                    <label className="dim3">{t('providers.modelGroup')}</label>
-                    <input className="input" aria-label={t('providers.modelGroup')} value={editModel.group ?? ''} onChange={(e) => setEditModel({ ...editModel, group: e.target.value })} />
-                    <label className="dim3">{t('providers.caps')}</label>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                      {CAPS.map((c) => (
-                        <label key={c} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
-                          <input
-                            type="checkbox"
-                            checked={editModel.caps.includes(c)}
-                            onChange={(e) =>
-                              setEditModel({
-                                ...editModel,
-                                caps: e.target.checked ? [...editModel.caps, c] : editModel.caps.filter((x) => x !== c),
-                              })
-                            }
-                          />
-                          <Icon name={CAP_ICONS[c]} size={10} /> {t(`providers.cap_${c}`)}
-                        </label>
-                      ))}
-                    </div>
-                    {/* 票 02：撞限闸/输出上限的模型元数据（ADR 0068），留空走回落 */}
-                    <label className="dim3">{t('providers.modelWindow')}</label>
-                    <input
-                      className="input mono" type="number" min={0} step={1024}
-                      aria-label={t('providers.modelWindow')} placeholder="1000000"
-                      value={editModel.context_window ?? ''}
-                      onChange={(e) => setEditModel({ ...editModel, context_window: e.target.value === '' ? null : Number(e.target.value) })}
-                    />
-                    <label className="dim3">{t('providers.modelMaxOut')}</label>
-                    <input
-                      className="input mono" type="number" min={0} step={1024}
-                      aria-label={t('providers.modelMaxOut')}
-                      value={editModel.max_output ?? ''}
-                      onChange={(e) => setEditModel({ ...editModel, max_output: e.target.value === '' ? null : Number(e.target.value) })}
-                    />
-                  </div>
-                  <div className="dim3" style={{ fontSize: 11, marginTop: 6 }}>{t('providers.capsHint')}</div>
-                  <div className="dim3" style={{ fontSize: 11, marginTop: 6 }}>{t('providers.metaHint')}</div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                    <button className="btn primary" disabled={busy || !editModel.id.trim()} onClick={() => saveModel(editModel)}>{t('providers.save')}</button>
-                    <button className="btn" disabled={busy} onClick={() => setEditModel(null)}>{t('providers.cancel')}</button>
-                    {selConfigured && <button className="btn" disabled={busy || !editModel.id.trim()} onClick={refreshModelMetadata}>{t('providers.refreshMetadata')}</button>}
-                  </div>
-                </div>
-              )
-
-  return (
-    <div>
-      <div className="dim3" style={{ fontSize: 12, marginBottom: 10 }}>{t('providers.hint')}<p>{t('dataBoundary.edit')}</p></div>
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-        {/* ---- 左列：供应商列表（Cherry 式，settings-3col 票 04 对齐 ListDetail） ---- */}
-        <div
-          className="panel"
-          style={{ width: 270, flexShrink: 0, display: 'flex', flexDirection: 'column', maxHeight: 440 }}
-        >
-          <div style={{ padding: '6px 6px 2px' }}>
-            <input
-              className="input"
-              style={{ width: '100%' }}
-              placeholder={t('providers.filter')}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          </div>
-          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 4px' }}>
-            {doc.providers.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).map((p) => (
-              <div
-                key={p.id}
-                style={{
-                  ...row,
-                  // 票 10：选中锚定用左竖条+底色（outline 会让行高跳）
-                  boxShadow: sel === p.id ? 'inset 2px 0 0 var(--legacy-accent)' : 'inset 2px 0 0 transparent',
-                  background: sel === p.id ? 'var(--legacy-accent-soft)' : undefined,
-                  opacity: p.enabled ? 1 : 0.55,
-                }}
-                onClick={() => pick(p.id)}
-              >
-                {/* 配置状态点：●已配 key / ◐缺 key（琥珀）/ ○停用——不用点进去就知道能不能用 */}
-                <span
-                  className={`dot ${!p.enabled ? 'off' : p.key_set ? 'on' : 'warn'}`}
-                  title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : t('providers.keyMissing')}
-                />
-                <div style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.name}
-                </div>
-                {!p.enabled && <span className="chip" style={{ fontSize: 10 }}>{t('providers.disabledTag')}</span>}
-                <input
-                  type="checkbox"
-                  className="switch"
-                  checked={p.enabled}
-                  title={t('providers.enabled')}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={() => toggleEnabled(p)}
-                />
-              </div>
-            ))}
-            {unconfiguredPresets.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).length > 0
-              && doc.providers.length > 0 && (
-              <div style={{ borderTop: '1px solid var(--border)', margin: '4px 6px' }} />
-            )}
-            {unconfiguredPresets.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).map((p) => (
-              <div
-                key={p.name}
-                className="dim3"
-                style={{
-                  ...row,
-                  boxShadow: sel === `preset:${p.name}` ? 'inset 2px 0 0 var(--legacy-accent)' : 'inset 2px 0 0 transparent',
-                  background: sel === `preset:${p.name}` ? 'var(--legacy-accent-soft)' : undefined,
-                }}
-                onClick={() => pick(`preset:${p.name}`)}
-              >
-                <div style={{ flex: 1, fontSize: 13 }}>{p.name}</div>
-                <span className="chip" style={{ fontSize: 10 }}>{t('providers.preset')}</span>
-              </div>
-            ))}
-          </div>
-          <div style={{ borderTop: '1px solid var(--border)', padding: 6 }}>
-            <button
-              className="btn" style={{ width: '100%', fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
-              onClick={() => pick('new')}
-            >
-              <Icon name="plus" size={11} /> {t('providers.add')}
-            </button>
-          </div>
-        </div>
-
-        {/* ---- 右列：供应商详情（ui-polish-3：统一 .panel 圆角边线卡） ---- */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {!draft && <div className="dim3" style={{ fontSize: 12, padding: '30px 0', textAlign: 'center' }}>{t('providers.pickHint')}</div>}
-          {draft && (
-            <div className="panel" style={{ padding: '12px 14px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <input
-                  className="input" style={{ fontWeight: 560, flex: '0 1 240px' }}
-                  value={draft.name} placeholder={t('providers.name')}
-                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                />
-                <span className="chip">{draft.kind}</span>
-                <span className="chip" style={draft.key_set ? { color: 'var(--ok)' } : { color: 'var(--err)' }}>
-                  {draft.key_set ? t('providers.keySet') : t('providers.keyMissing')}
-                </span>
-                <div style={{ flex: 1 }} />
-                {selConfigured && (
-                  <button className="btn" style={{ fontSize: 12, color: 'var(--err)' }} onClick={del}>{t('providers.delete')}</button>
-                )}
-              </div>
-
-              <label className="dim3" style={{ fontSize: 12 }}>{t('providers.key')}</label>
-              <div style={{ display: 'flex', gap: 6, margin: '4px 0 10px' }}>
-                <input
-                  className="input mono" style={{ flex: 1 }}
-                  type={showKey ? 'text' : 'password'}
-                  value={secret}
-                  placeholder={draft.key_set ? t('providers.keyKeep') : 'sk-…'}
-                  onChange={(e) => setSecret(e.target.value)}
-                />
-                <button className="btn" title={t(showKey ? 'providers.hideKey' : 'providers.showKey')} onClick={() => setShowKey((s) => !s)}>
-                  <Icon name={showKey ? 'vision' : 'vision-off'} size={12} />
-                </button>
-                <button
-                  className="btn" disabled={probeDisabled} onClick={probeAndMerge}
-                  title={probeDisabled && !busy ? t('providers.checkNeedsKey') : undefined}
-                >
-                  {t('providers.check')}
-                </button>
-              </div>
-              {probe && (
-                <div style={{ fontSize: 12, marginBottom: 8, color: probe.ok ? 'var(--ok)' : 'var(--err)' }}>{probe.text}</div>
-              )}
-
-              <label className="dim3" style={{ fontSize: 12 }}>{t('providers.kind')}</label>
-              <select
-                className="input" style={{ margin: '4px 0 10px', width: 'auto', minWidth: 220 }}
-                value={draft.kind}
-                onChange={(e) => setDraft({ ...draft, kind: e.target.value as ProviderView['kind'] })}
-              >
-                <option value="openai">OpenAI 兼容</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="jev">Jev</option>
-              </select>
-              {draft.kind === 'jev' && (
-                <div className="dim3" style={{ fontSize: 12, marginTop: -6, marginBottom: 10 }}>{t('providers.jevHint')}</div>
-              )}
-
-              <label className="dim3" style={{ fontSize: 12 }}>{t('providers.baseUrl')}</label>
+    <div data-model-editor className="mt-1 mb-2 rounded-[var(--r-card)] bg-surface p-3.5 shadow-[var(--focus-ring)]">
+      <div className="grid grid-cols-[96px_1fr] items-center gap-x-2.5 gap-y-2 text-[12.5px]">
+        <label className="text-ink-3">{t('providers.modelId')}</label>
+        <Input className="h-[30px] font-mono" aria-label={t('providers.modelId')} value={editModel.id} onChange={(e) => setEditModel({ ...editModel, id: e.target.value })} />
+        <label className="text-ink-3">{t('providers.modelName')}</label>
+        <Input className="h-[30px]" aria-label={t('providers.modelName')} value={editModel.name ?? ''} onChange={(e) => setEditModel({ ...editModel, name: e.target.value })} />
+        <label className="text-ink-3">{t('providers.modelGroup')}</label>
+        <Input className="h-[30px]" aria-label={t('providers.modelGroup')} value={editModel.group ?? ''} onChange={(e) => setEditModel({ ...editModel, group: e.target.value })} />
+        <label className="self-start pt-1 text-ink-3">{t('providers.caps')}</label>
+        <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+          {CAPS.map((c) => (
+            <label key={c} className="flex cursor-pointer items-center gap-1 text-[12px] text-ink-2">
               <input
-                className="input mono" style={{ marginTop: 4 }}
-                value={draft.base_url} placeholder="https://…/v1"
-                onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
+                type="checkbox"
+                className="accent-[var(--accent)]"
+                checked={editModel.caps.includes(c)}
+                onChange={(e) =>
+                  setEditModel({
+                    ...editModel,
+                    caps: e.target.checked ? [...editModel.caps, c] : editModel.caps.filter((x) => x !== c),
+                  })
+                }
               />
-              {draft.base_url && (
-                <div className="dim3 mono" style={{ fontSize: 10, marginTop: 3 }}>
-                  {t('providers.preview')}: {previewUrl} · {t('providers.autoUrl')}
-                </div>
-              )}
-
-              {/* ---- 模型目录 ---- */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 6px' }}>
-                <label className="dim3" style={{ fontSize: 12, flex: 1 }}>{t('providers.models')}</label>
-                <button className="btn" style={{ fontSize: 12 }} disabled={busy} onClick={probeAndMerge}>
-                  <Icon name="refresh" size={10} /> {t('providers.fetch')}
-                </button>
-                <button
-                  className="btn" style={{ fontSize: 12 }}
-                  onClick={() => { setEditingId(null); setEditModel(emptyModel()) }}
-                >
-                  <Icon name="plus" size={10} /> {t('providers.addModel')}
-                </button>
-              </div>
-              {editingId === null && modelEditor}
-              {groups.map(([g, ms]) => (
-                <div key={g} style={{ marginBottom: 4 }}>
-                  <div
-                    className="dim3" style={{ fontSize: 12, padding: '4px 2px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
-                    onClick={() => setCollapsed((c) => ({ ...c, [g]: !c[g] }))}
-                  >
-                    <Icon name={collapsed[g] ? 'chevron-right' : 'chevron-down'} size={10} /> {g}
-                  </div>
-                  {!collapsed[g] && ms.map((m) => (
-                    <Fragment key={m.id}>
-                    <div className="panel" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', marginBottom: 3 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="mono" style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {m.name || m.id}
-                        </div>
-                      </div>
-                      {m.caps.map((c) => (
-                        <span key={c} title={t(`providers.cap_${c}`)} style={{ color: 'var(--text-2)', display: 'inline-flex' }}>
-                          <Icon name={CAP_ICONS[c] ?? 'bolt'} size={11} />
-                        </span>
-                      ))}
-                      {/* 票 02：窗口/输出元数据可见性——未识别挂警告标，撞限闸回落 1M 要让人知道 */}
-                      {m.context_window != null ? (
-                        <span className="dim3" title={t('providers.modelWindow')} style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>{fmtWindow(m.context_window)}</span>
-                      ) : (
-                        <span className="chip warn" style={{ fontSize: 10 }} title={t('providers.windowUnknownHint')}>{t('providers.windowUnknown')}</span>
-                      )}
-                      {m.max_output != null && (
-                        <span className="dim3" title={t('providers.modelMaxOut')} style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>↓{fmtWindow(m.max_output)}</span>
-                      )}
-                      <button className="btn" title={t('providers.edit')} aria-label={`${t('providers.edit')} ${m.id}`} style={{ fontSize: 10, padding: '1px 6px' }} onClick={() => { setEditingId(m.id); setEditModel({ ...m }) }}>
-                        <Icon name="edit" size={10} />
-                      </button>
-                      <button className="btn" style={{ fontSize: 10, padding: '1px 6px', color: 'var(--err)' }} onClick={() => removeModel(m.id)}>
-                        <Icon name="close" size={10} />
-                      </button>
-                    </div>
-                    {editingId === m.id && modelEditor}
-                    </Fragment>
-                  ))}
-                </div>
-              ))}
-              {draft.models.length === 0 && (
-                <div className="dim3" style={{ fontSize: 12, padding: '8px 0' }}>{t('providers.noModels')}</div>
-              )}
-
-
-              {err && <div style={{ color: 'var(--err)', fontSize: 12, marginTop: 8 }}>{err}</div>}
-              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-                <button
-                  className="btn primary" disabled={busy || !draft.name.trim() || !draft.base_url.trim()}
-                  onClick={() => save(secret.trim() || undefined)}
-                >
-                  {t('providers.save')}
-                </button>
-                {!selConfigured && <span className="dim3" style={{ fontSize: 12, alignSelf: 'center' }}>{t('providers.unsaved')}</span>}
-              </div>
-            </div>
-          )}
+              <Icon name={CAP_ICONS[c]} size={12} /> {t(`providers.cap_${c}`)}
+            </label>
+          ))}
         </div>
+        {/* 票 02：撞限闸/输出上限的模型元数据（ADR 0068），留空走回落 */}
+        <label className="text-ink-3">{t('providers.modelWindow')}</label>
+        <Input
+          className="h-[30px] font-mono" type="number" min={0} step={1024}
+          aria-label={t('providers.modelWindow')} placeholder="1000000"
+          value={editModel.context_window ?? ''}
+          onChange={(e) => setEditModel({ ...editModel, context_window: e.target.value === '' ? null : Number(e.target.value) })}
+        />
+        <label className="text-ink-3">{t('providers.modelMaxOut')}</label>
+        <Input
+          className="h-[30px] font-mono" type="number" min={0} step={1024}
+          aria-label={t('providers.modelMaxOut')}
+          value={editModel.max_output ?? ''}
+          onChange={(e) => setEditModel({ ...editModel, max_output: e.target.value === '' ? null : Number(e.target.value) })}
+        />
       </div>
+      <p className="mt-2 text-[12px] text-ink-3">{t('providers.capsHint')}</p>
+      <p className="mt-1 text-[12px] text-ink-3">{t('providers.metaHint')}</p>
+      <div className="mt-3 flex gap-2">
+        {selConfigured && <Button size="xs" variant="ghost" disabled={busy || !editModel.id.trim()} onClick={refreshModelMetadata}>{t('providers.refreshMetadata')}</Button>}
+        <span className="flex-1" />
+        <Button size="xs" variant="quiet" disabled={busy} onClick={() => setEditModel(null)}>{t('providers.cancel')}</Button>
+        <Button size="xs" variant="primary" disabled={busy || !editModel.id.trim()} onClick={() => saveModel(editModel)}>{t('providers.save')}</Button>
+      </div>
+    </div>
+  )
 
-      {/* ---- 槽位分配：角色模型槽 → 供应商+模型（Cherry「默认模型」位） ---- */}
-      <div className="panel" style={{ marginTop: 14, padding: '12px 14px' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 2 }}>
-          <div style={{ fontWeight: 560, fontSize: 12 }}>{t('providers.slots')}</div>
-          {/* 票 10：两步任务联动——绑不了常因上游供应商缺 key，汇总行把因果摆上台面 */}
-          <div className="dim3" style={{ fontSize: 12 }}>
-            {t('providers.slotsSummary', { bound: slotStats.bound, total: slotStats.total })}
-            {slotStats.missingKey > 0 && ` · ${t('providers.slotsMissingKey', { count: slotStats.missingKey })}`}
-          </div>
+  const slots = (
+    <>
+      <SubHead aside={
+        <span className="text-[12px] text-ink-3">
+          {t('providers.slotsSummary', { bound: slotStats.bound, total: slotStats.total })}
+          {slotStats.missingKey > 0 && <span className="text-orange"> · {t('providers.slotsMissingKey', { count: slotStats.missingKey })}</span>}
+        </span>
+      }>{t('providers.slots')}</SubHead>
+      <p className="-mt-1 mb-2 text-[12px] text-ink-3">{t('providers.slotsHint')}</p>
+      <div aria-label={t('providers.slots')} className="rounded-[var(--r-card)] bg-[var(--app-card)] text-[13px] shadow-[var(--shadow-card)]">
+        <div className="grid grid-cols-[minmax(120px,1.1fr)_minmax(110px,1fr)_minmax(120px,1.3fr)_auto_auto] items-center gap-2 border-b border-line px-3 py-[9px] text-[12px] font-medium text-ink-3">
+          <span>{t('providers.slot')}</span>
+          <span>{t('settingsUi.colProvider')}</span>
+          <span>{t('providers.model')}</span>
+          <span><span className="sr-only">{t('providers.bind')}</span></span>
+          <span>{t('settingsUi.colStatus')}</span>
         </div>
-        <div className="dim3" style={{ fontSize: 12, marginBottom: 8 }}>{t('providers.slotsHint')}</div>
         {slotNames.map((slot) => {
           const b = doc.slots[slot]
           const bp = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
@@ -568,6 +367,7 @@ export function ProviderManager() {
               key={JSON.stringify([slot, b?.provider_id, b?.model])}
               slot={slot}
               binding={b}
+              bindingProvider={bp}
               providers={doc.providers}
               ready={ready}
               onBind={bind}
@@ -576,16 +376,197 @@ export function ProviderManager() {
           )
         })}
       </div>
-    </div>
+    </>
+  )
+
+  // TooltipProvider：本组件也被单独挂载（ProviderManager.test），IconButton 的 tooltip 需要 Provider
+  return (
+    <TooltipProvider>
+    <ListDetail<Item>
+      label={t('settings.nav_models')}
+      items={items}
+      itemKey={(it) => it.key}
+      filterText={(it) => it.p.name}
+      groupOf={(it) => (it.preset ? 'preset' : 'configured')}
+      groupLabel={(g) => t(g === 'preset' ? 'settingsUi.providersCatalog' : 'settingsUi.providersConfigured')}
+      itemDim={(it) => !it.preset && !(it.p as ProviderView).enabled}
+      selected={sel && sel !== 'new' ? sel : null}
+      onSelect={(k) => { if (k) pick(k) }}
+      searchPlaceholder={t('providers.filter')}
+      emptyText={t('providers.empty')}
+      foot={
+        <Button size="sm" className="flex-1" onClick={() => pick('new')}><Icon name="plus" />{t('providers.add')}</Button>
+      }
+      renderItem={(it) => {
+        if (it.preset) {
+          return (
+            <>
+              <span className="grid size-[18px] flex-none place-items-center rounded-[5px] bg-hover-2 text-[10px] font-semibold text-ink-2">{it.p.name.slice(0, 1)}</span>
+              <div className="min-w-0 flex-1 truncate text-ink-3">{it.p.name}</div>
+              {isLocal(it.p.base_url) && <span className="text-[12px] text-ink-3">{t('settingsUi.local')}</span>}
+            </>
+          )
+        }
+        const p = it.p as ProviderView
+        return (
+          <>
+            {/* 配置状态点：●已配 key / ◐缺 key（橙）/ ○停用——不用点进去就知道能不能用 */}
+            <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : t('providers.keyMissing')}>
+              <Dot tone={!p.enabled ? 'off' : p.key_set || isLocal(p.base_url) ? 'on' : 'warn'} />
+            </span>
+            <Avatar agentId={p.id} name={p.name} size={18} />
+            <div className="min-w-0 flex-1 truncate">{p.name}</div>
+            <Switch
+              aria-label={`${t('providers.enabled')} ${p.name}`}
+              checked={p.enabled}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+              onCheckedChange={() => toggleEnabled(p)}
+            />
+          </>
+        )
+      }}
+    >
+      <div data-provider-detail className="max-w-[720px]">
+        {!draft ? (
+          <Empty icon="cpu" title={t('settings.nav_models')} desc={t('providers.hint')} />
+        ) : (
+          <>
+            <DetailHead
+              lead={<Avatar agentId={draft.id || draft.name} name={draft.name || '?'} size={40} />}
+              title={draft.name || t('providers.add')}
+              sub={draft.base_url ? `${previewUrl} · ${t('providers.autoUrl')}` : t('providers.unsaved')}
+              mono={!!draft.base_url}
+              actions={selConfigured && (
+                <Button size="sm" variant="ghost" className="text-red" onClick={del}><Icon name="trash" />{t('providers.delete')}</Button>
+              )}
+            />
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <Field label={t('providers.name')}>
+                <Input aria-label={t('providers.name')} value={draft.name} placeholder={t('providers.name')}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+              </Field>
+              <Field label={t('providers.kind')} help={draft.kind === 'jev' ? t('providers.jevHint') : undefined}>
+                <NativeSelect aria-label={t('providers.kind')} value={draft.kind}
+                  onChange={(e) => setDraft({ ...draft, kind: e.target.value as ProviderView['kind'] })}>
+                  <option value="openai">OpenAI 兼容</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="jev">Jev</option>
+                </NativeSelect>
+              </Field>
+            </div>
+            <Field className="mt-3" label={t('providers.baseUrl')}>
+              <Input aria-label={t('providers.baseUrl')} className="font-mono text-[12px]" value={draft.base_url} placeholder="https://…/v1"
+                onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} />
+            </Field>
+            <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-3">
+              <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : t('providers.keyMissing')}>
+                <Input
+                  aria-label={t('providers.key')}
+                  className="font-mono"
+                  type={showKey ? 'text' : 'password'}
+                  value={secret}
+                  placeholder={draft.key_set ? '••••••••' : 'sk-…'}
+                  onChange={(e) => setSecret(e.target.value)}
+                  trailing={
+                    <IconButton size="sm" label={t(showKey ? 'providers.hideKey' : 'providers.showKey')} onClick={() => setShowKey((s) => !s)}>
+                      <Icon name={showKey ? 'vision' : 'vision-off'} size={14} />
+                    </IconButton>
+                  }
+                />
+              </Field>
+              <Button
+                className="mb-[22px]" disabled={probeDisabled} loading={busy} onClick={probeAndMerge}
+                title={probeDisabled && !busy ? t('providers.checkNeedsKey') : undefined}
+              >
+                {!busy && <Icon name="refresh" />}{t('providers.check')}
+              </Button>
+            </div>
+            {probe && (
+              <div role="status" className={`mt-1 text-[12.5px] ${probe.ok ? 'text-green' : 'text-red'}`}>{probe.text}</div>
+            )}
+
+            {/* ---- 模型目录 ---- */}
+            <SubHead aside={
+              <>
+                <Button size="xs" variant="ghost" disabled={busy} onClick={probeAndMerge}><Icon name="refresh" />{t('providers.fetch')}</Button>
+                <Button size="xs" variant="ghost" onClick={() => { setEditingId(null); setEditModel(emptyModel()) }}><Icon name="plus" />{t('providers.addModel')}</Button>
+              </>
+            }>{t('settingsUi.modelsN', { count: draft.models.length })}</SubHead>
+            {editingId === null && modelEditor}
+            {draft.models.length === 0 ? (
+              <div className="py-2 text-[12.5px] text-ink-3">{t('providers.noModels')}</div>
+            ) : (
+              <div className="rounded-[var(--r-card)] bg-[var(--app-card)] shadow-[var(--shadow-card)]">
+                {groups.map(([g, ms]) => (
+                  <div key={g} className="border-t border-line-soft first:border-t-0">
+                    {groups.length > 1 && (
+                      <button type="button" aria-expanded={!collapsed[g]}
+                        className="hx-focus flex w-full cursor-pointer items-center gap-1 px-3.5 pt-2 pb-1 text-left text-[12px] text-ink-3"
+                        onClick={() => setCollapsed((c) => ({ ...c, [g]: !c[g] }))}>
+                        <Icon name={collapsed[g] ? 'chevron-right' : 'chevron-down'} size={12} /> {g}
+                      </button>
+                    )}
+                    {!collapsed[g] && ms.map((m) => (
+                      <Fragment key={m.id}>
+                        <div data-model-row={m.id} className="flex min-h-11 items-center gap-2 border-t border-line-soft px-3.5 py-2 first:border-t-0">
+                          <b className="min-w-0 flex-1 truncate font-mono text-[12.5px] font-medium text-ink">{m.name || m.id}</b>
+                          {/* 票 02：窗口/输出元数据可见性——未识别挂警告标，撞限闸回落 1M 要让人知道 */}
+                          {m.context_window != null ? (
+                            <Badge title={t('providers.modelWindow')} className="tabular-nums">{fmtWindow(m.context_window)}</Badge>
+                          ) : (
+                            <Badge variant="warn" title={t('providers.windowUnknownHint')}><Icon name="warn" size={12} />{t('providers.windowUnknown')}</Badge>
+                          )}
+                          {m.max_output != null && (
+                            <span className="text-[12px] text-ink-3 tabular-nums" title={t('providers.modelMaxOut')}>↓{fmtWindow(m.max_output)}</span>
+                          )}
+                          {m.caps.map((c) => (
+                            <span key={c} title={t(`providers.cap_${c}`)} className="inline-flex text-ink-3">
+                              <Icon name={CAP_ICONS[c] ?? 'bolt'} size={14} />
+                            </span>
+                          ))}
+                          <IconButton size="sm" label={`${t('providers.edit')} ${m.id}`} onClick={() => { setEditingId(m.id); setEditModel({ ...m }) }}>
+                            <Icon name="edit" size={12} />
+                          </IconButton>
+                          <IconButton size="sm" label={`${t('providers.delete')} ${m.id}`} className="text-red" onClick={() => removeModel(m.id)}>
+                            <Icon name="close" size={12} />
+                          </IconButton>
+                        </div>
+                        {editingId === m.id && modelEditor}
+                      </Fragment>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {err && <div role="alert" className="mt-2 text-[12.5px] text-red">{err}</div>}
+            <div className="mt-4 flex items-center gap-2">
+              {!selConfigured && <span className="text-[12px] text-ink-3">{t('providers.unsaved')}</span>}
+              <span className="flex-1" />
+              <Button size="sm" variant="primary" disabled={busy || !draft.name.trim() || !draft.base_url.trim()}
+                onClick={() => save(secret.trim() || undefined)}>
+                {t('providers.save')}
+              </Button>
+            </div>
+          </>
+        )}
+        {/* ---- 槽位分配：角色模型槽 → 供应商+模型（Cherry「默认模型」位） ---- */}
+        {slots}
+      </div>
+    </ListDetail>
+    </TooltipProvider>
   )
 }
 
-/// 一个槽位的绑定行：供应商下拉 + 模型输入（datalist 供选）+ 状态。
+/// 一个槽位的绑定行（A21 行形）：槽名 code + 供应商下拉 + 模型输入（datalist 供选）+ 绑定 / 解绑 + 状态。
+/// 状态：就绪 ok · 绑定的供应商缺钥匙或停用 warn · default 未绑 warn · 其他未绑走默认回退 neutral。
 function SlotRow({
-  slot, binding, providers, ready, onBind, onUnbind,
+  slot, binding, bindingProvider, providers, ready, onBind, onUnbind,
 }: {
   slot: string
   binding?: { provider_id: string; model: string }
+  bindingProvider?: ProviderView
   providers: ProviderView[]
   ready: boolean
   onBind: (slot: string, providerId: string, model: string) => void
@@ -606,49 +587,43 @@ function SlotRow({
     : isBuiltinSlot(slot)
       ? t(`providers.slot_${slot}`)
       : slot
+  const state = binding ? 'bound' : slot === 'jev' ? 'empty' : 'default'
+  const chip = binding
+    ? ready
+      ? <Badge variant="ok">{t('settingsUi.slotReady')}</Badge>
+      : <Badge variant="warn">{bindingProvider && !bindingProvider.enabled ? t('providers.disabledTag') : t('settingsUi.slotMissingKey')}</Badge>
+    : slot === 'jev'
+      ? <Badge>{t('providers.jevEmpty')}</Badge>
+      : slot === 'default'
+        ? <Badge variant="warn">{t('providers.unbound')}</Badge>
+        : <Badge>{t('settingsUi.slotFallback')}</Badge>
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-      <code style={{ fontSize: 12, minWidth: 150, flexShrink: 0 }}>
+    <div data-slot-row={slot} className="grid grid-cols-[minmax(120px,1.1fr)_minmax(110px,1fr)_minmax(120px,1.3fr)_auto_auto] items-center gap-2 border-t border-line-soft px-3 py-2 first:border-t-0 live:hover:bg-hover">
+      <code className="min-w-0 truncate font-sans text-[13px] text-ink">
         {label}
-        {isBuiltinSlot(slot) && <span className="dim3" style={{ fontSize: 10 }}> {slot}</span>}
+        {isBuiltinSlot(slot) && <span className="font-mono text-[11px] text-ink-3"> {slot}</span>}
       </code>
-      <select className="input" style={{ flex: '0 1 190px', width: 'auto' }} value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
+      <NativeSelect aria-label={`${label} · ${t('settingsUi.colProvider')}`} className="h-[30px]" value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
         <option value="">{t('providers.pickProvider')}</option>
         {enabled.map((p) => (
           <option key={p.id} value={p.id}>{p.name}</option>
         ))}
-      </select>
-      <input
-        className="input mono" style={{ flex: 1 }} list={`models-${slot}`}
+      </NativeSelect>
+      <Input
+        aria-label={`${label} · ${t('providers.model')}`}
+        className="h-[30px] font-mono text-[12px]" list={`models-${slot}`}
         value={model} placeholder={t('providers.pickModel')}
         onChange={(e) => setModel(e.target.value)}
       />
       <datalist id={`models-${slot}`}>
         {provider?.models.map((m) => <option key={m.id} value={m.id} />)}
       </datalist>
-      <button
-        className="btn" style={{ fontSize: 12 }}
-        disabled={!pid || !model.trim()}
-        onClick={() => onBind(slot, pid, model.trim())}
-      >
-        {t('providers.bind')}
-      </button>
-      {binding && (
-        <button className="btn" style={{ fontSize: 12 }} onClick={() => onUnbind(slot)}>{t('providers.unbind')}</button>
-      )}
-      <span
-        className="chip"
-        data-slot-state={binding ? 'bound' : slot === 'jev' ? 'empty' : 'default'}
-        style={ready ? { color: 'var(--ok)' } : { color: 'var(--err)' }}
-      >
-        {binding
-          ? t('providers.bound')
-          : slot === 'jev'
-            ? t('providers.jevEmpty')
-            : slot === 'default'
-              ? t('providers.unbound')
-              : t('providers.usingDefault')}
+      <span className="flex gap-1">
+        <Button size="xs" disabled={!pid || !model.trim()} onClick={() => onBind(slot, pid, model.trim())}>{t('providers.bind')}</Button>
+        {binding && <Button size="xs" variant="ghost" onClick={() => onUnbind(slot)}>{t('providers.unbind')}</Button>}
       </span>
+      {/* data-slot-state 挂在行的直接子元素上：测试按 parentElement 回到行 */}
+      <span data-slot-state={state} className="inline-flex justify-end">{chip}</span>
     </div>
   )
 }
