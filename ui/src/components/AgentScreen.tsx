@@ -2,11 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import { isBrowserReadBusy } from '../browserRead'
-import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
-import { pauseDesktop } from '../desktopPause'
+import { bindingFor, matches } from '../keymap'
 import { useUiStore } from '../store'
 import { Icon } from './Icon'
-import './AgentScreen.css'
+import { Badge } from '@/components/ui/badge'
+import { IconButton } from '@/components/ui/icon-button'
+import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
+import { Spinner } from '@/components/ui/spinner'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { cn } from '@/lib/utils'
 
 type Target = { key: string; root: string; title: string } & (
   { kind: 'browser'; session: string; tab: string; navigation: number }
@@ -17,6 +21,9 @@ type Target = { key: string; root: string; title: string } & (
 // This is a session-local UI preference, never permission or a persisted frame.
 const hiddenProjects = new Set<string>()
 
+// Agent Screen 浮窗（components D19，control#screen；票 ui-redesign 14 换皮）：300 宽、--r-panel、overlay 阴影、padding 8；
+// 画面 16:10 圆角 9；标签行「Agent 的屏幕」+ 工作中 / 已暂停 chip + 打开真实应用 / 展开 / 隐藏 ibtn sm；标签行可拖动
+// （拖动中 opacity .9；accessibility.md：拖动的替代是展开 / 隐藏与方向键移动）。暂停电脑操作在头部（D19），浮窗不再重复。
 /** Owner 2026-10-02 / extension14: these frames are local, disposable previews.
  * Hiding stops capture, not the agent. No frame goes to the store, trace or model.
  * A single sequential request avoids a growing queue while the app is busy. */
@@ -37,7 +44,7 @@ export function AgentScreen() {
   const [pageVisible, setPageVisible] = useState(!document.hidden)
   const mounted = useRef(true)
   const panel = useRef<HTMLElement>(null)
-  const reopen = useRef<HTMLButtonElement>(null)
+  const [dragging, setDragging] = useState(false)
   const root = useRef<string | null>(null)
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
   // Issue14 P2: the project API invalidates its epoch before awaiting IPC.
@@ -146,7 +153,12 @@ export function AgentScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, pageVisible, targetKey, projectEpoch])
 
-  const hide = useCallback(() => { if (root.current) hiddenProjects.add(root.current); setVisible(false); setFrame(null); setError(''); queueMicrotask(() => reopen.current?.focus()) }, [])
+  // 票 14：隐藏后焦点回到头部「屏幕」按钮（输入条旁的「显示 Agent Screen」重复入口已撤，ADR 0088 偏差 9 收口）。
+  const hide = useCallback(() => {
+    if (root.current) hiddenProjects.add(root.current)
+    setVisible(false); setFrame(null); setError('')
+    queueMicrotask(() => document.querySelector<HTMLButtonElement>('[data-header-screen]')?.focus())
+  }, [])
   const show = useCallback(() => { if (root.current) hiddenProjects.delete(root.current); setVisible(true) }, [])
   // ui-redesign 票 02（components B5）：头部「屏幕」按钮只在有目标时渲染，点它与 agentScreen 键同效。
   const hasTarget = target != null
@@ -169,14 +181,6 @@ export function AgentScreen() {
       else await api.desktopPreviewFocus(selected.root, selected.window, selected.process)
     } catch (e) { if (mounted.current && root.current === selected.root) useUiStore.getState().pushToast(errText(e), 'err') }
   }, [targetEpoch])
-  const resume = async () => {
-    const selected = currentTarget.current
-    if (!selected || useUiStore.getState().projectEpoch !== targetEpoch) return
-    try {
-      const status = await api.desktopControl('resume', selected.root)
-      if (mounted.current && root.current === selected.root) { setPaused(status.paused); setError('') }
-    } catch (e) { if (mounted.current && root.current === selected.root) useUiStore.getState().pushToast(errText(e), 'err') }
-  }
   useEffect(() => {
     const keys = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return
@@ -185,47 +189,53 @@ export function AgentScreen() {
       if (matches(e, bindingFor('agentScreenExpand'))) { e.preventDefault(); setExpanded(v => !v) }
       if (matches(e, bindingFor('agentScreenHide'))) { e.preventDefault(); hide() }
       if (matches(e, bindingFor('agentScreenFocus'))) { e.preventDefault(); void focusTarget() }
-      if (matches(e, bindingFor('agentScreenMove'))) { e.preventDefault(); panel.current?.querySelector<HTMLButtonElement>('.agent-screen-drag')?.focus() }
-      if (matches(e, bindingFor('agentScreenSource'))) { e.preventDefault(); panel.current?.querySelector('select')?.focus() }
+      if (matches(e, bindingFor('agentScreenMove'))) { e.preventDefault(); panel.current?.querySelector<HTMLButtonElement>('[data-screen-drag]')?.focus() }
+      if (matches(e, bindingFor('agentScreenSource'))) { e.preventDefault(); panel.current?.querySelector<HTMLButtonElement>('[data-screen-source] button')?.focus() }
     }
     window.addEventListener('keydown', keys)
     return () => window.removeEventListener('keydown', keys)
   }, [visible, hide, show, focusTarget])
-  const tip = (action: ActionId, label: string) => [label, formatBinding(bindingFor(action))].filter(Boolean).join(' · ')
-  const width = Math.min(expanded ? 560 : 268, Math.max(180, viewport.width - 24))
-  const height = expanded ? 500 : 310
+  // D19：浮窗 300 宽（展开 560），默认锚点头部下方右上角（right 20 · top 64，control#screen）。
+  const width = Math.min(expanded ? 560 : 300, Math.max(180, viewport.width - 24))
+  const height = Math.round((width - 16) * 10 / 16) + 52 + (targets.length > 1 ? 34 : 0)
   const clamp = (x: number, y: number) => ({ x: Math.max(12, Math.min(x, viewport.width - width - 12)), y: Math.max(12, Math.min(y, viewport.height - height - 12)) })
-  const location = clamp(position?.x ?? viewport.width - width - 26, position?.y ?? viewport.height - height - 110)
+  const location = clamp(position?.x ?? viewport.width - width - 20, position?.y ?? 64)
   const shownFrame = visible && pageVisible && frame && frame.key === targetKey ? frame.url : null
   // Owner issue19: an unavailable target must not leave a permanent empty control.
-  if (!target) return null
-  if (!visible) return <button ref={reopen} type="button" className="agent-screen-reopen"
-    disabled={!target} title={tip('agentScreen', t(target ? 'agentScreen.title' : 'agentScreen.unavailable'))} onClick={show}><Icon name="computer" />{t('agentScreen.title')}</button>
-  return <aside ref={panel} className={`agent-screen${expanded ? ' agent-screen-expanded' : ''}`} aria-label={t('agentScreen.title')}
-    style={{ left: location.x, top: location.y, width }}>
-    <header>
-      <button type="button" className="agent-screen-drag" aria-label={t('agentScreen.move')} title={tip('agentScreenMove', t('agentScreen.move'))}
-        onPointerDown={e => { if (e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, left: location.x, top: location.y }; e.currentTarget.setPointerCapture?.(e.pointerId) }}
-        onPointerMove={e => { if (drag.current) setPosition(clamp(drag.current.left + e.clientX - drag.current.x, drag.current.top + e.clientY - drag.current.y)) }}
-        onPointerUp={e => { drag.current = null; e.currentTarget.releasePointerCapture?.(e.pointerId) }} onPointerCancel={() => { drag.current = null }}
-        onKeyDown={e => { const delta = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[e.key]; if (delta) { e.preventDefault(); setPosition(clamp(location.x + delta[0], location.y + delta[1])) } }}>
-        <Icon name="computer" /><strong>{t('agentScreen.title')}</strong>
+  // 票 14：隐藏时不再留输入条旁的重开按钮——头部「屏幕」按钮（有目标才渲染）是唯一重开入口。
+  if (!target || !visible) return null
+  return <TooltipProvider>
+    <aside ref={panel} aria-label={t('control.screenTitle')} data-agent-screen data-expanded={expanded || undefined}
+      className={cn('fixed z-40 rounded-[var(--r-panel)] bg-surface p-2 text-ink shadow-[var(--shadow-overlay)]', dragging && 'opacity-90')}
+      style={{ left: location.x, top: location.y, width }}>
+      <button type="button" data-screen-picture onClick={() => setExpanded(v => !v)}
+        aria-label={t(expanded ? 'agentScreen.collapse' : 'agentScreen.expand')}
+        className={cn('hx-focus grid w-full place-items-center overflow-hidden rounded-[9px] bg-inset text-[12px] text-ink-3 aspect-[16/10]', expanded ? 'cursor-zoom-out' : 'cursor-zoom-in')}>
+        {shownFrame ? <img src={shownFrame} alt={target.title} decoding="async" className="size-full object-contain" />
+          : <span role="status" className="inline-flex items-center gap-1.5">{!error && <Spinner />}{t(error ? 'agentScreen.unavailable' : 'agentScreen.loading')}</span>}
       </button>
-      <button type="button" onClick={hide} title={tip('agentScreenHide', t('agentScreen.hide'))} aria-label={t('agentScreen.hide')}>×</button>
-    </header>
-    {targets.length > 1 && <select aria-label={t('agentScreen.source')} title={tip('agentScreenSource', t('agentScreen.source'))} value={target.kind} onChange={e => { setSource(e.target.value as 'browser' | 'native'); setFrame(null); setError('') }}>
-      <option value="browser">{t('agentScreen.browser')}</option><option value="native">{t('agentScreen.native')}</option>
-    </select>}
-    <button type="button" className="agent-screen-picture" title={tip('agentScreenExpand', t(expanded ? 'agentScreen.collapse' : 'agentScreen.expand'))}
-      onClick={() => setExpanded(v => !v)}>
-      {shownFrame ? <img src={shownFrame} alt={target.title} decoding="async" /> : <span role="status">{t(error ? 'agentScreen.unavailable' : 'agentScreen.loading')}</span>}
-    </button>
-    <div className="agent-screen-caption"><span title={target.title}>{target.title}</span><span>{t(paused ? 'computer.paused' : 'agentScreen.local')}</span></div>
-    <footer>
-      <button type="button" className="btn" onClick={() => void focusTarget()} title={tip('agentScreenFocus', t('agentScreen.open'))}>{t('agentScreen.open')}</button>
-      <button type="button" className="btn" onClick={() => void (paused ? resume() : pauseDesktop())}
-        onKeyDown={e => { if (paused && matches(e.nativeEvent, bindingFor('desktopResume'))) { e.preventDefault(); e.stopPropagation(); void resume() } }}
-        title={tip(paused ? 'desktopResume' : 'desktopPause', t(paused ? 'computer.resume' : 'computer.pause'))}>{t(paused ? 'computer.resume' : 'computer.pause')}</button>
-    </footer>
-  </aside>
+      {targets.length > 1 && <div className="px-1 pt-2" data-screen-source>
+        <Segmented aria-label={t('agentScreen.source')} value={target.kind} onValueChange={v => { setSource(v as 'browser' | 'native'); setFrame(null); setError('') }}>
+          <SegmentedItem value="browser">{t('agentScreen.browser')}</SegmentedItem>
+          <SegmentedItem value="native">{t('agentScreen.native')}</SegmentedItem>
+        </Segmented>
+      </div>}
+      <div className="flex items-center gap-1.5 px-1 pt-2 pb-0.5">
+        <button type="button" data-screen-drag aria-label={t('agentScreen.move')} title={`${target.title} · ${t('agentScreen.move')}`}
+          className="hx-focus flex min-w-0 flex-1 cursor-grab touch-none items-center gap-1.5 rounded-[var(--r-xs)] text-left active:cursor-grabbing"
+          onPointerDown={e => { if (e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, left: location.x, top: location.y }; setDragging(true); e.currentTarget.setPointerCapture?.(e.pointerId) }}
+          onPointerMove={e => { if (drag.current) setPosition(clamp(drag.current.left + e.clientX - drag.current.x, drag.current.top + e.clientY - drag.current.y)) }}
+          onPointerUp={e => { drag.current = null; setDragging(false); e.currentTarget.releasePointerCapture?.(e.pointerId) }}
+          onPointerCancel={() => { drag.current = null; setDragging(false) }}
+          onKeyDown={e => { const delta = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[e.key]; if (delta) { e.preventDefault(); setPosition(clamp(location.x + delta[0], location.y + delta[1])) } }}>
+          <b className="truncate text-[13px] font-semibold">{t('control.screenTitle')}</b>
+          <Badge variant={paused ? 'neutral' : 'ok'} className="h-5">{t(paused ? 'control.screenPaused' : 'control.screenWorking')}</Badge>
+        </button>
+        <IconButton size="sm" label={t('control.openApp')} action="agentScreenFocus" data-screen-open onClick={() => void focusTarget()}><Icon name="external" size={12} /></IconButton>
+        <IconButton size="sm" label={t(expanded ? 'agentScreen.collapse' : 'agentScreen.expand')} action="agentScreenExpand" on={expanded}
+          onClick={() => setExpanded(v => !v)}><Icon name={expanded ? 'collapse' : 'expand'} size={12} /></IconButton>
+        <IconButton size="sm" label={t('agentScreen.hide')} action="agentScreenHide" onClick={hide}><Icon name="close" size={12} /></IconButton>
+      </div>
+    </aside>
+  </TooltipProvider>
 }
