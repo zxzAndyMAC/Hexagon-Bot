@@ -139,11 +139,9 @@ export function Sidebar({ onSearch, onSettings, onProjectClosed, forceCollapsed 
       style={{ width }}
       className="flex min-h-0 flex-none flex-col bg-sidebar"
     >
-      <WinBar>
-        <IconButton size="sm" label={t('sidebar.collapse')} action="toggleSidebar" onClick={() => st().toggleSidebar()}>
-          <Icon name="panel-left" size={14} />
-        </IconButton>
-      </WinBar>
+      {/* 侧栏开关已移到头部左端（2026-10-14 负责人裁决，修原型 bug：按钮在侧栏里时，收起为图标列 /
+          专注模式后随侧栏消失，只能靠键盘恢复）。拖拽栏只留 macOS 红绿灯位。 */}
+      <WinBar />
       <ProjectBlock onProjectClosed={onProjectClosed} />
       <div className="flex flex-col gap-px px-2.5">
         <NavItem icon="search" label={t('sidebar.search')} onClick={onSearch} data="search"
