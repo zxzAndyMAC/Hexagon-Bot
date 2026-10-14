@@ -191,12 +191,15 @@ export function Canvas({ open, mode, width, narrowLead = false }: {
   const opener = useRef<Element | null>(null)
   useEffect(() => {
     if (!open) return
+    const aside = root.current
     opener.current = document.activeElement
-    root.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+    aside?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
     return () => {
       const back = opener.current
       opener.current = null
-      if (back instanceof HTMLElement && back.isConnected && root.current?.contains(document.activeElement)) back.focus()
+      // 焦点还在画布里（或画布刚被隐藏、焦点掉到 body）才还给触发处；负责人已经点去别处就不抢。
+      const lost = document.activeElement === document.body || aside?.contains(document.activeElement)
+      if (back instanceof HTMLElement && back.isConnected && lost) back.focus()
     }
   }, [open])
   const showTree = activeKind === 'file' || activeKind === 'files'
