@@ -9,10 +9,10 @@ export type SelectionAnchor = { sel: CanvasSelection; x: number; y: number; bott
  * DOM 选区（Markdown 预览、产物代码视图）：松开鼠标 / 键盘选择后读 window.getSelection()，
  * 只认落在 root 内的选区。代码视图行带 data-line，能给出行号区间。
  */
-export function useDomSelection(root: RefObject<HTMLElement | null>, path: string, onPick: (a: SelectionAnchor | null) => void) {
+export function useDomSelection(root: RefObject<HTMLElement | null>, path: string, onPick: (a: SelectionAnchor | null) => void, active: unknown = true) {
   useEffect(() => {
     const el = root.current
-    if (!el) return
+    if (!el || !active) return
     const read = () => {
       const s = window.getSelection()
       if (!s || s.isCollapsed || s.rangeCount === 0) { onPick(null); return }
@@ -38,7 +38,7 @@ export function useDomSelection(root: RefObject<HTMLElement | null>, path: strin
     el.addEventListener('mouseup', read)
     el.addEventListener('keyup', onKey)
     return () => { el.removeEventListener('mouseup', read); el.removeEventListener('keyup', onKey) }
-  }, [root, path, onPick])
+  }, [root, path, onPick, active])
 }
 
 /** textarea 选区（测试环境与无 Monaco 时的编辑器）：selectionStart/End 换行号，浮条放在指针处。 */

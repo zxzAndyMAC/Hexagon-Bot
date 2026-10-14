@@ -138,12 +138,16 @@ function langOf(path: string): string {
   return map[ext] ?? 'plaintext'
 }
 
+/** 编辑器选区（票 09 选区浮条）：文字、1 起行号区间、选区起点在宿主元素内的坐标（px）。 */
+export type EditorSelection = { text: string; startLine: number; endLine: number; x: number; y: number; bottom: number }
+
 export function mountFileEditor(
   el: HTMLElement,
   path: string,
   value: string,
   onChange: (next: string) => void,
-): { dispose: () => void } {
+  onSelection?: (sel: EditorSelection | null) => void,
+): { dispose: () => void; setValue: (next: string) => void } {
   ensureEnv()
   ensureThemeSync()
   const ed = monaco.editor.create(el, {
@@ -166,11 +170,30 @@ export function mountFileEditor(
     tabSize: 2,
     fixedOverflowWidgets: true,
   })
-  const sub = ed.onDidChangeModelContent(() => onChange(ed.getValue()))
+  // 「放弃修改」回填已保存文本（票 09 离开守卫）：程序写入不算负责人编辑，不触发 onChange 置脏。
+  let silent = false
+  const sub = ed.onDidChangeModelContent(() => { if (!silent) onChange(ed.getValue()) })
+  const selSub = ed.onDidChangeCursorSelection(({ selection }) => {
+    if (!onSelection) return
+    const model = ed.getModel()
+    const text = model && !selection.isEmpty() ? model.getValueInRange(selection) : ''
+    if (!text.trim()) { onSelection(null); return }
+    const at = ed.getScrolledVisiblePosition(selection.getStartPosition())
+    const end = ed.getScrolledVisiblePosition(selection.getEndPosition())
+    if (!at) { onSelection(null); return }
+    // 整行选中止于下一行行首时不把下一行算进去
+    const endLine = selection.endColumn === 1 && selection.endLineNumber > selection.startLineNumber ? selection.endLineNumber - 1 : selection.endLineNumber
+    onSelection({ text, startLine: selection.startLineNumber, endLine, x: at.left, y: at.top, bottom: (end?.top ?? at.top) + (end?.height ?? at.height) })
+  })
   return {
     dispose: () => {
       sub.dispose()
+      selSub.dispose()
       ed.dispose()
+    },
+    setValue: (next: string) => {
+      silent = true
+      try { ed.setValue(next) } finally { silent = false }
     },
   }
 }

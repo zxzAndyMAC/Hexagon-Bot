@@ -32,7 +32,7 @@ export async function tokenize(text: string, lang: string): Promise<CodeToken[][
   themeLoaded ??= hl.loadTheme(theme)
   await themeLoaded
   const l = hl.getLoadedLanguages().includes(lang) ? lang : 'text'
-  const lines = hl.codeToTokensBase(text, { lang: l as never, theme: THEME })
+  const lines = hl.codeToTokensBase(text, { lang: l as never, theme: THEME as never })
     .map((line) => line.map((tk) => ({ content: tk.content, color: tk.color ? COLOR[tk.color] : undefined })))
   if (cache.size >= CACHE_CAP) for (const k of [...cache.keys()].slice(0, CACHE_CAP / 2)) cache.delete(k)
   cache.set(key, lines)

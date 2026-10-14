@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type RepoEntry } from '../api'
-import { bindingFor, formatBinding } from '../keymap'
 import { useUiStore } from '../store'
 import { TREE_DRAG_MIME, treeDragPayload } from '../composerAtoms'
 import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
 import { Row } from './Row'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { Spinner } from '@/components/ui/spinner'
+import { cn } from '@/lib/utils'
 
 function parentOf(path: string): string {
   const i = path.lastIndexOf('/')
@@ -25,6 +28,12 @@ export function FileTree() {
   const { t } = useTranslation()
   const openTab = useUiStore((s) => s.openTab)
   const pushToast = useUiStore((s) => s.pushToast)
+  const projectName = useUiStore((s) => s.projectName)
+  // 当前文件 = 画布当前文件页签（D14 选中行）
+  const currentPath = useUiStore((s) => (s.activeTab?.startsWith('file:') ? s.activeTab.slice('file:'.length) : null))
+  const [refreshing, setRefreshing] = useState(false)
+  // D14 加载行：展开中的目录 chevron 换 xs 环
+  const [loadingDir, setLoadingDir] = useState<string | null>(null)
   const [root, setRoot] = useState<RepoEntry[] | null>(null)
   const [kids, setKids] = useState<Record<string, RepoEntry[]>>({})
   const [anchor, setAnchor] = useState('')
@@ -45,12 +54,15 @@ export function FileTree() {
   }, [])
 
   const refresh = useCallback(async () => {
+    setRefreshing(true)
     try {
       await load('')
       const open = Object.keys(kids)
       await Promise.all(open.map((rel) => load(rel)))
     } catch (e) {
       pushToast(errText(e), 'err')
+    } finally {
+      setRefreshing(false)
     }
   }, [kids, load, pushToast])
 
@@ -82,10 +94,13 @@ export function FileTree() {
       })
       return
     }
+    setLoadingDir(rel)
     try {
       await load(rel)
     } catch (e) {
       pushToast(errText(e), 'err')
+    } finally {
+      setLoadingDir((cur) => (cur === rel ? null : cur))
     }
   }
 
@@ -108,47 +123,24 @@ export function FileTree() {
     }
   }
 
-  const tip = (action: 'treeNewFile' | 'treeNewFolder' | 'treeRefresh', label: string) =>
-    `${label} ${formatBinding(bindingFor(action))}`
-
   return (
-    <div data-testid="file-tree" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', gap: 4, padding: '4px 8px', alignItems: 'center' }}>
-        <button
-          className="btn"
-          type="button"
-          title={tip('treeNewFile', t('tree.newFile'))}
-          style={{ fontSize: 11, padding: '2px 6px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-          onClick={() => { setCreating('file'); setDraft('') }}
-        >
-          <Icon name="plus" size={11} /> {t('tree.newFile')}
-        </button>
-        <button
-          className="btn"
-          type="button"
-          title={tip('treeNewFolder', t('tree.newFolder'))}
-          style={{ fontSize: 11, padding: '2px 6px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-          onClick={() => { setCreating('dir'); setDraft('') }}
-        >
-          <Icon name="folder" size={11} /> {t('tree.newFolder')}
-        </button>
-        <button
-          className="icon-btn"
-          type="button"
-          title={tip('treeRefresh', t('tree.refresh'))}
-          style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center' }}
-          onClick={() => void refresh()}
-        >
+    <div data-testid="file-tree" className="flex min-h-0 flex-1 flex-col px-1.5 py-2 text-[13px]">
+      {/* 根行：项目名 + 新建文件 ⌥⌘N / 新建目录 ⌥⌘F / 刷新 ⌥⌘R（D14；新建目录是补设计，原型只画了新建与刷新） */}
+      <div className="flex items-center gap-0.5 px-1.5 pt-0.5 pb-2">
+        <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{projectName || t('sidebar.files')}</span>
+        <IconButton size="sm" label={t('tree.newFile')} action="treeNewFile" onClick={() => { setCreating('file'); setDraft('') }}>
+          <Icon name="plus" size={12} />
+        </IconButton>
+        <IconButton size="sm" label={t('tree.newFolder')} action="treeNewFolder" onClick={() => { setCreating('dir'); setDraft('') }}>
+          <Icon name="folder" size={12} />
+        </IconButton>
+        <IconButton size="sm" label={t('tree.refresh')} action="treeRefresh" loading={refreshing} onClick={() => void refresh()}>
           <Icon name="refresh" size={12} />
-        </button>
+        </IconButton>
       </div>
       {creating && (
-        <form
-          onSubmit={(e) => { e.preventDefault(); void commit() }}
-          style={{ display: 'flex', gap: 4, padding: '0 8px 6px', alignItems: 'center' }}
-        >
+        <form onSubmit={(e) => { e.preventDefault(); void commit() }} className="flex items-center gap-1 px-1.5 pb-1.5">
           <input
-            className="input"
             autoFocus
             aria-label={t('tree.namePh')}
             placeholder={anchor ? `${anchor}/` : t('tree.namePh')}
@@ -157,22 +149,21 @@ export function FileTree() {
             onKeyDown={(e) => {
               if (e.key === 'Escape') { e.preventDefault(); setCreating(null) }
             }}
-            style={{ flex: 1, width: 'auto', fontSize: 12, padding: '3px 6px' }}
+            className="hx-focus h-7 min-w-0 flex-1 rounded-[var(--r-xs)] bg-surface px-2 text-[12.5px] text-ink shadow-[inset_0_0_0_1px_var(--line-strong)] outline-none placeholder:text-ink-3"
           />
-          <button className="btn primary" type="submit" style={{ fontSize: 11, padding: '2px 6px' }}>
-            {t('tree.create')}
-          </button>
+          <Button type="submit" variant="primary" size="xs">{t('tree.create')}</Button>
         </form>
       )}
-      <div role="tree" style={{ flex: 1, overflowY: 'auto' }}>
-        {root?.length === 0 && <div className="dim3" style={{ padding: '14px 12px', fontSize: 11 }}>{t('tree.emptyDir')}</div>}
-        {root == null && <div className="dim3" style={{ padding: '14px 12px', fontSize: 11 }}>{t('file.loading')}</div>}
+      <div role="tree" aria-label={t('sidebar.files')} className="min-h-0 flex-1 overflow-y-auto">
+        {root?.length === 0 && <div className="px-2 py-3 text-[12.5px] text-ink-3">{t('tree.emptyDir')}</div>}
+        {root == null && <div className="flex items-center gap-2 px-2 py-3 text-[12.5px] text-ink-3"><Spinner size={12} />{t('file.loading')}</div>}
         {root && (
           <TreeList
             entries={root}
             depth={0}
             kids={kids}
-            anchor={anchor}
+            loading={loadingDir}
+            current={currentPath}
             onDir={(entry) => { setAnchor(entry.path); void toggle(entry.path) }}
             onFile={(entry) => {
               setAnchor(parentOf(entry.path))
@@ -185,11 +176,13 @@ export function FileTree() {
   )
 }
 
-function TreeList({ entries, depth, kids, anchor, onDir, onFile }: {
+/** 行（D14 `tn`）：28 高、圆角 6、13px ink-2；当前文件 --accent-tint 底 --ink；悬停 --hover。 */
+function TreeList({ entries, depth, kids, loading, current, onDir, onFile }: {
   entries: RepoEntry[]
   depth: number
   kids: Record<string, RepoEntry[]>
-  anchor: string
+  loading: string | null
+  current: string | null
   onDir: (e: RepoEntry) => void
   onFile: (e: RepoEntry) => void
 }) {
@@ -198,8 +191,9 @@ function TreeList({ entries, depth, kids, anchor, onDir, onFile }: {
     // 票 12：文件和目录可拖进输入框。链接不拖——拖了也没有一条仓内路径可指。
     // copy 不是 move：拖走的是路径文本，树上的条目和磁盘文件都留在原地。
     const drag = treeDragPayload(e)
+    const on = e.kind === 'file' && current === e.path
     return (
-      <div key={e.path}>
+      <div key={e.path} role="none">
         <Row
           role="treeitem"
           draggable={drag != null}
@@ -209,36 +203,31 @@ function TreeList({ entries, depth, kids, anchor, onDir, onFile }: {
             ev.dataTransfer.setData('text/plain', drag.token)
             ev.dataTransfer.effectAllowed = 'copy'
           }}
-          selected={anchor === e.path}
+          selected={on}
           onClick={() => (e.kind === 'dir' ? onDir(e) : e.kind === 'file' ? onFile(e) : undefined)}
-          style={{
-            padding: '3px 8px',
-            paddingLeft: 8 + depth * 12,
-            display: 'flex',
-            gap: 6,
-            alignItems: 'center',
-            cursor: e.kind === 'link' ? 'default' : 'pointer',
-            opacity: e.kind === 'link' ? 0.55 : 1,
-          }}
+          className={cn(
+            'hx-focus flex h-7 items-center gap-1.5 rounded-[6px] pr-1.5 whitespace-nowrap',
+            on ? 'bg-accent-tint text-ink' : 'text-ink-2 live:hover:bg-hover',
+            e.kind === 'link' ? 'cursor-default opacity-55' : 'cursor-pointer',
+          )}
+          style={{ paddingLeft: 6 + depth * 8 + (e.kind === 'dir' ? 0 : 14) }}
         >
-          {e.kind === 'dir'
-            ? <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
-            : <span style={{ width: 11, flexShrink: 0 }} />}
+          {e.kind === 'dir' && (loading === e.path
+            ? <Spinner size={12} />
+            : <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} className="flex-none text-ink-3" />)}
           {e.kind === 'link'
             // 主题资产无链接形，回退描边体系
-            ? <span data-icon="link" data-kind={e.kind} style={{ display: 'inline-flex' }}><Icon name="link" size={13} /></span>
-            : <FileTypeIcon name={e.name} kind={e.kind} open={open} size={13} />}
-          <span className="mono" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
+            ? <span data-icon="link" data-kind={e.kind} className="inline-flex"><Icon name="link" size={14} /></span>
+            : <FileTypeIcon name={e.name} kind={e.kind} open={open} size={14} />}
+          <span className="min-w-0 truncate">{e.name}</span>
         </Row>
-        {open && kids[e.path].length === 0 && (
-          <div className="dim3" style={{ paddingLeft: 28 + depth * 12, fontSize: 11 }} />
-        )}
         {open && (
           <TreeList
             entries={kids[e.path]}
             depth={depth + 1}
             kids={kids}
-            anchor={anchor}
+            loading={loading}
+            current={current}
             onDir={onDir}
             onFile={onFile}
           />
