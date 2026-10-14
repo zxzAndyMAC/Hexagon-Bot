@@ -4,11 +4,15 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { useUiStore } from '../store'
-import './DesktopToolDetails.css'
+import { Button } from '@/components/ui/button'
+import { ShortcutKbd } from '@/components/ui/kbd'
 
 type Props = { output: Record<string, unknown>; projectId?: string; capturedAt?: string }
 type ScreenshotResult = { screenshot_path?: string; title?: string; bundle_id?: string }
 
+// 截图证据（components D19「截图证据」，control#screen；票 ui-redesign 14 换皮）：工具行下 120 宽缩略
+// （16:10、--r-sm、card 阴影）+ 说明「截图证据 · 应用 · 时间」「点击放大，Esc 关闭」；放大是居中模态，
+// 放大时裁决快捷键被拦（blockBackgroundDecision）——「放大时不触发裁决」。
 /** Owner 2026-10-02, extension 11: pixels are local, ephemeral evidence.
  * Never persist the image in the trace or infer success from dispatched input. */
 export function DesktopToolDetails(props: Props) {
@@ -70,18 +74,19 @@ function DesktopScreenshotDetails({ output, capturedAt }: Props) {
   const label = [result?.bundle_id || t('computer.screenshotUnknownApp'), result?.title,
     capturedAt ? new Date(capturedAt).toLocaleString() : t('computer.screenshotUnknownTime')].filter(Boolean).join(' · ')
   const title = [t('computer.viewScreenshot'), formatBinding(bindingFor('viewDesktopScreenshot'))].filter(Boolean).join(' · ')
-  return <div className="desktop-tool-details">
-    {output.requires_observation === true && <p role="status">{t('computer.needsObservation')}</p>}
-    {name && <figure>
-      <button ref={trigger} className="desktop-screenshot-thumbnail" type="button" disabled={failed} aria-busy={busy}
+  return <div className="desktop-tool-details mt-1">
+    {output.requires_observation === true && <p role="status" className="text-[12px] text-orange">{t('computer.needsObservation')}</p>}
+    {name && <figure className="mt-1 flex items-center gap-2">
+      <button ref={trigger} className="desktop-screenshot-thumbnail hx-focus grid aspect-[16/10] w-[120px] flex-none cursor-zoom-in place-items-center overflow-hidden rounded-[var(--r-sm)] bg-inset p-0 text-[11px] text-ink-3 shadow-[var(--shadow-card)] disabled:cursor-default disabled:opacity-45"
+        type="button" disabled={failed} aria-busy={busy}
         aria-label={t('computer.viewScreenshot')} title={title}
         onClick={event => { event.currentTarget.focus(); setPreview(true); if (!image) void load() }}
         onKeyDown={event => { if (matches(event.nativeEvent, bindingFor('viewDesktopScreenshot'))) { event.preventDefault(); event.currentTarget.click() } }}>
-        {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
+        {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" className="size-full object-cover" /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
       </button>
-      <figcaption>{label}</figcaption>
+      <figcaption className="min-w-0 text-[12px] text-ink-3 [overflow-wrap:anywhere]">{t('control.evidence', { label })}<br />{t('control.evidenceHint')}</figcaption>
     </figure>}
-    {failed && <p role="status">{t('computer.screenshotUnavailable')}</p>}
+    {failed && <p role="status" className="mt-1 text-[12px] text-ink-3">{t('computer.screenshotUnavailable')}</p>}
     {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} />}
   </div>
 }
@@ -112,10 +117,16 @@ function ScreenshotPreview({ image, label, onClose }: { image: string; label: st
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus()
     }
   }, [onClose, t])
-  return <dialog ref={dialog} className="desktop-screenshot-preview" aria-modal="true" aria-label={t('computer.viewScreenshot')}
+  return <dialog ref={dialog} aria-modal="true" aria-label={t('computer.viewScreenshot')}
+    className="desktop-screenshot-preview m-auto max-h-[94vh] w-[min(1400px,94vw)] max-w-[94vw] rounded-[var(--r-panel)] bg-surface p-3 text-ink shadow-[var(--shadow-overlay)] backdrop:bg-scrim"
     onCancel={event => { event.preventDefault(); onClose() }}>
-    <header><span>{label}</span><button ref={closeButton} className="btn" type="button" onClick={onClose}
-      title={[t('computer.closeScreenshot'), formatBinding(bindingFor('closeDesktopScreenshot'))].filter(Boolean).join(' · ')}>{t('computer.closeScreenshot')}</button></header>
-    <img src={image} alt={label} decoding="async" />
+    <header className="mb-2.5 flex items-center justify-between gap-4 text-[13px] text-ink-2 [overflow-wrap:anywhere]">
+      <span>{label}</span>
+      <Button ref={closeButton} size="sm" className="flex-none" onClick={onClose}
+        title={[t('computer.closeScreenshot'), formatBinding(bindingFor('closeDesktopScreenshot'))].filter(Boolean).join(' · ')}>
+        {t('computer.closeScreenshot')}<ShortcutKbd binding={bindingFor('closeDesktopScreenshot') || 'Escape'} />
+      </Button>
+    </header>
+    <img src={image} alt={label} decoding="async" className="block max-h-[calc(90vh-80px)] w-full rounded-[var(--r-sm)] object-contain" />
   </dialog>
 }

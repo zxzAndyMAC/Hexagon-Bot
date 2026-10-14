@@ -14,6 +14,8 @@ import {
 import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircle, RotateCcw, Sparkle } from 'lucide-react'
 // ui-redesign 票 02 外壳（foundations §7 原型名 search / sidebar / more / clock / expand）
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
+// ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
+import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -98,6 +100,11 @@ const ICONS = {
   expand: Maximize2,
   // ui-redesign 票 03 画布（foundations §7：columns → columns-2「与对话并排」；「对话」页签复用票 10 的 message）
   columns: Columns2,
+  // ---- 电脑操控（票 14） ----
+  external: ExternalLink,
+  image: Image,
+  cpu: Cpu,
+  collapse: Minimize2,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
