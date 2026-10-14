@@ -81,6 +81,10 @@ export type ActionId =
   | 'saveFile'
   | 'discardFileEdits'
   | 'cancelFileEdits'
+  | 'selectionExplain'
+  | 'selectionRewrite'
+  | 'selectionSend'
+  | 'copyArtifact'
   | 'confirmIntake'
   | 'reconcileAction'
   | 'abandonAction'
@@ -215,6 +219,9 @@ const DEFAULTS: Record<ActionId, string> = {
   saveFile: 'mod+s',
   discardFileEdits: '',
   cancelFileEdits: 'Escape',
+  // ui-redesign 票 09（D13 / D14）：画布选区浮条与产物复制。默认不绑定（只填输入条、不发送，没有抢键的必要），
+  // 负责人可在设置·键盘指定；按钮 tooltip 读当前绑定。
+  selectionExplain: '', selectionRewrite: '', selectionSend: '', copyArtifact: '',
   // 票 17：确认开场草案。mod+Enter 已是待决批准，加 shift 才不会误写 AGENTS.md。
   confirmIntake: 'mod+shift+Enter',
   reconcileAction: 'alt+mod+i',
@@ -342,6 +349,10 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'saveFile', labelKey: 'keys.saveFile' },
   { id: 'discardFileEdits', labelKey: 'file.discard' },
   { id: 'cancelFileEdits', labelKey: 'agent.cancel' },
+  { id: 'selectionExplain', labelKey: 'canvas.sel.explain' },
+  { id: 'selectionRewrite', labelKey: 'canvas.sel.rewrite' },
+  { id: 'selectionSend', labelKey: 'canvas.sel.toComposer' },
+  { id: 'copyArtifact', labelKey: 'canvas.copy' },
   { id: 'confirmIntake', labelKey: 'keys.confirmIntake' },
   { id: 'reconcileAction', labelKey: 'cards.reconcileAction' },
   { id: 'abandonAction', labelKey: 'cards.abandonAction' },

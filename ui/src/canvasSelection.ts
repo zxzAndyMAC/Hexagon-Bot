@@ -2,6 +2,8 @@
 // 「解释 / 改写 / 描述修改」三个动作都只把选区作为引用填进输入条（fillComposer），由负责人决定发给谁——
 // 画布里没有任何直接发送的路径（spec 用户故事 54）。被否决：「改写」直接派给作者 Agent——
 // 绕过输入条就绕过了点名与批准模式，负责人看不到发出去的是什么。
+import { fillComposer } from './composerFill'
+import { useUiStore } from './store'
 
 export type CanvasSelection = {
   /** 仓库相对路径（文件）或产物路径。 */
@@ -50,4 +52,15 @@ export function selectionFill(
   if (action === 'describe' && desc) return `${t('canvas.sel.describeFill', { ref, note: desc })}\n${quote}`
   const key = action === 'explain' ? 'canvas.sel.explainFill' : 'canvas.sel.rewriteFill'
   return `${t(key, { ref })}\n${quote}`
+}
+
+/**
+ * 浮条动作的唯一出口：先回到对话（全宽时回并排——输入条在全宽时随对话收起，interaction §3），
+ * 再把文字填进输入条并聚焦。只填不发：这里绝不调 api.sendMessage。
+ * 输入条是「只隐藏不卸载」（ADR 0090），所以填入同步生效；聚焦要等对话重新显示，放到下一帧。
+ */
+export function sendSelectionToComposer(text: string) {
+  useUiStore.getState().showConversation()
+  fillComposer(text)
+  requestAnimationFrame(() => document.getElementById('composer-input')?.focus())
 }
