@@ -87,12 +87,13 @@ describe('列表 | 详情分割线（E2，interaction §1）', () => {
 })
 
 describe('键盘分区（E7）', () => {
-  it('从 keymap 自动列出全部动作（含票 02 的 toggleSidebar / toggleCanvas）', async () => {
+  it('从 keymap 自动列出全部动作（含 02、03 新增和改名的动作；splitEditor 已撤，R-04）', async () => {
     await act(async () => root.render(<SettingsPage onBack={() => {}} initialSection="keys" />))
     const rows = [...el.querySelectorAll('[data-key-row]')].map((r) => r.getAttribute('data-key-row'))
     expect(rows.sort()).toEqual(ACTIONS.map((a) => a.id).sort())
-    expect(rows).toContain('toggleSidebar')
-    expect(rows).toContain('toggleCanvas')
+    for (const id of ['toggleSidebar', 'toggleCanvas', 'canvasFullWidth', 'focusMode']) expect(rows).toContain(id)
+    expect(rows).not.toContain('splitEditor')
+    expect(rows).not.toContain('toggleRail')
   })
 
   it('录制：冲突就地红字不写入；Esc 取消；新组合写入', async () => {

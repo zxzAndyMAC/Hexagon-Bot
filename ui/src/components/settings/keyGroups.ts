@@ -12,7 +12,7 @@ const DECIDE = new Set<string>([
   'retryWithChatModel', 'rejudgeAfterModelFailure', 'requestException', 'acceptException',
 ])
 const LAYOUT = new Set<string>([
-  'commandPalette', 'settings', 'toggleSidebar', 'toggleCanvas', 'canvasFullWidth', 'focusMode', 'splitEditor',
+  'commandPalette', 'settings', 'toggleSidebar', 'toggleCanvas', 'canvasFullWidth', 'focusMode',
   'closeTab', 'focusComposer', 'nodeRail',
 ])
 
