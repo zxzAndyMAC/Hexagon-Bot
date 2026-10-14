@@ -236,6 +236,8 @@ interface UiState {
   /// 侧栏「产物」并排打开，「项目文件」以全宽打开（canvas#file）。
   openCanvas: (pane: CanvasPane) => void
   setCanvasOpen: (v: boolean) => void
+  /// ⌥⌘B 与头部画布开关：画布可见（开着且没被用量详情盖住）就关，否则打开。
+  toggleCanvas: () => void
   setCanvasLayout: (next: CanvasLayout) => void
   /// ⌘\（`canvasFullWidth`，R-04）：全宽 ↔ 并排；画布关着时以全宽打开。
   toggleCanvasFull: () => void
@@ -535,6 +537,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   // ⌥⌘B：开画布不新增页签（无页签时显示空态，interaction §6）；从用量详情打开时先回对话。
   setCanvasOpen: (v) => set(v ? { canvasOpen: true, usageView: false } : { canvasOpen: false }),
+  toggleCanvas: () => {
+    const s = get()
+    s.setCanvasOpen(!(s.canvasOpen && !s.usageView))
+  },
   setCanvasLayout: (next) => {
     writeCanvasLayout(localStorage, next)
     set({ canvasLayout: next })
@@ -557,7 +563,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   // 只关画布、藏侧栏与节点轨，不动侧栏 / 画布的布局记忆：恢复时原样回来（R-06：纯界面态）。
   toggleFocusMode: () => {
     const s = get()
-    if (s.focusSnapshot) set({ focusSnapshot: null, canvasOpen: s.focusSnapshot.canvasOpen && s.tabs.length > 0 })
+    if (s.focusSnapshot) set({ focusSnapshot: null, canvasOpen: s.focusSnapshot.canvasOpen })
     else set({ focusSnapshot: { canvasOpen: s.canvasOpen }, canvasOpen: false, usageView: false })
   },
   setFlowDialogOpen: (v) => set({ flowDialogOpen: v }),

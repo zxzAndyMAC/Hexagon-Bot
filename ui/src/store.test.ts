@@ -597,6 +597,16 @@ describe('画布与主区视图切片（票 03）', () => {
     expect(useUiStore.getState()).toMatchObject({ activeTab: 'artifacts', canvasLayout: { full: false } })
   })
 
+  it('⌥⌘B：无页签也能打开（空态）；用量详情盖着时先回对话再显示画布', () => {
+    useUiStore.getState().toggleCanvas()
+    expect(useUiStore.getState().canvasOpen).toBe(true)
+    useUiStore.getState().openUsageDetail()
+    useUiStore.getState().toggleCanvas()
+    expect(useUiStore.getState()).toMatchObject({ canvasOpen: true, usageView: false })
+    useUiStore.getState().toggleCanvas()
+    expect(useUiStore.getState().canvasOpen).toBe(false)
+  })
+
   it('用量详情占满主区，返回对话', () => {
     useUiStore.getState().openUsageDetail()
     expect(useUiStore.getState().usageView).toBe(true)

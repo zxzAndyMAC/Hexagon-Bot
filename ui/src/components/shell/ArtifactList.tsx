@@ -1,16 +1,11 @@
-// 画布占位（票 02 过渡态，ADR 0088）：右栏五页签撤掉后，侧栏「产物」「项目文件」与头部画布开关打开这里。
-// 内容沿用旧右栏的产物交接清单与文件树（原样），点产物 / 文件仍在中栏页签打开。
-// 票 03 换成真正的画布（B7：页签栏、全宽 / 并排、分割线、`hexagon.layout.canvas`），本文件随之删除。
-// 旧右栏的「团队」「阶段」进了侧栏（B2/B3），「用量」改由侧栏用量入口打开用量详情。
+// 产物清单：侧栏「产物」在画布里打开的清单页签（票 03；原「画布占位」InterimCanvas 的内容原样迁来，换皮在票 09）。
+// 点一行在画布打开该产物页签（`art:<path>`）。
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../../store'
-import { FileTree } from '../FileTree'
 import { FileTypeIcon } from '../FileTypeIcon'
 import { Row } from '../Row'
-import { Icon } from '../Icon'
-import { IconButton } from '@/components/ui/icon-button'
 
-function ArtifactList() {
+export function ArtifactList() {
   const { t } = useTranslation()
   const artifacts = useUiStore((s) => s.artifacts)
   const openTab = useUiStore((s) => s.openTab)
@@ -40,28 +35,5 @@ function ArtifactList() {
         </Row>
       ))}
     </div>
-  )
-}
-
-export function InterimCanvas() {
-  const { t } = useTranslation()
-  const open = useUiStore((s) => s.canvasOpen)
-  const pane = useUiStore((s) => s.canvasPane)
-  if (!open) return null
-  return (
-    <aside
-      data-interim-canvas={pane}
-      aria-label={t(pane === 'files' ? 'sidebar.files' : 'sidebar.artifacts')}
-      className="flex w-[300px] min-h-0 flex-none flex-col overflow-hidden border-l border-line bg-[var(--app-main)]"
-    >
-      <div className="flex h-12 flex-none items-center gap-1.5 border-b border-line-soft pr-2 pl-3.5 text-[13px] font-medium text-ink">
-        <Icon name={pane === 'files' ? 'folder' : 'layers'} size={14} />
-        <span className="flex-1 truncate">{t(pane === 'files' ? 'sidebar.files' : 'sidebar.artifacts')}</span>
-        <IconButton size="sm" label={t('header.closeCanvas')} action="toggleCanvas" onClick={() => useUiStore.getState().setCanvasOpen(false)}>
-          <Icon name="close" size={14} />
-        </IconButton>
-      </div>
-      {pane === 'files' ? <FileTree /> : <ArtifactList />}
-    </aside>
   )
 }

@@ -91,12 +91,15 @@ function MoreMenu() {
   )
 }
 
-export function Header() {
+/** side（票 03）：侧栏实际形态（含被窗口逼成图标列、专注模式隐藏），决定 macOS 红绿灯让位。 */
+export function Header({ side }: { side?: 'expanded' | 'collapsed' | 'hidden' } = {}) {
   const { t } = useTranslation()
   const crumb = useCrumb()
-  const canvasOpen = useUiStore((s) => s.canvasOpen)
+  // 票 03：头部开关反映画布是否可见；与 ⌥⌘B 同一动作（store.toggleCanvas）
+  const canvasOpen = useUiStore((s) => s.canvasOpen && !s.usageView)
   const screen = useUiStore((s) => s.agentScreenAvailable)
-  const sideCollapsed = useUiStore((s) => s.sideLayout.collapsed)
+  const storedCollapsed = useUiStore((s) => s.sideLayout.collapsed)
+  const sideCollapsed = side ? side !== 'expanded' : storedCollapsed
   const st = useUiStore.getState
   return (
     <header
@@ -105,7 +108,7 @@ export function Header() {
       className={cn(
         'flex h-12 flex-none items-center gap-2 border-b border-line-soft pr-3 pl-4',
         // macOS overlay 红绿灯约占左上 0–70px：侧栏收成 56 宽图标列时头部左侧让出余量
-        isMac && sideCollapsed && 'pl-7',
+        isMac && sideCollapsed && (side === 'hidden' ? 'pl-20' : 'pl-7'),
       )}
     >
       <div data-tauri-drag-region className="flex min-w-0 items-center gap-1.5 text-[13px] text-ink-2">
@@ -130,7 +133,7 @@ export function Header() {
         </Tooltip>
       )}
       <IconButton label={t(canvasOpen ? 'header.closeCanvas' : 'header.openCanvas')} action="toggleCanvas" on={canvasOpen}
-        data-header-canvas onClick={() => st().setCanvasOpen(!canvasOpen)}>
+        data-header-canvas onClick={() => st().toggleCanvas()}>
         <Icon name="panel-right" size={16} />
       </IconButton>
       <MoreMenu />

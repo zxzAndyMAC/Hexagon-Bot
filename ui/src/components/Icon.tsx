@@ -10,7 +10,7 @@ import {
   Stamp, Tag, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
 } from 'lucide-react'
 // ui-redesign 票 02 外壳（foundations §7 原型名 search / sidebar / more / clock / expand）
-import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
+import { Clock, Ellipsis, Maximize2, MessageCircle, PanelLeft, Search } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -81,6 +81,9 @@ const ICONS = {
   more: Ellipsis,
   clock: Clock,
   expand: Maximize2,
+  // ui-redesign 票 03 画布（foundations §7：columns → columns-2「与对话并排」，message → message-circle「对话」页签）
+  columns: Columns2,
+  message: MessageCircle,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

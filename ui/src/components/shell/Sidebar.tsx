@@ -27,6 +27,8 @@ export type SidebarProps = {
   onSearch: () => void
   onSettings: () => void
   onProjectClosed: () => void
+  /** 窗口过窄被逼成图标列（票 03，interaction §1 让位顺序第二步）；不改 `hexagon.layout.side`。 */
+  forceCollapsed?: boolean
 }
 
 /** 负责人事项数：待决卡 + 待复审提案（与待决界面同一口径）。 */
@@ -112,13 +114,13 @@ function StatusError() {
   )
 }
 
-export function Sidebar({ onSearch, onSettings, onProjectClosed }: SidebarProps) {
+export function Sidebar({ onSearch, onSettings, onProjectClosed, forceCollapsed = false }: SidebarProps) {
   const { t } = useTranslation()
   const width = useUiStore((s) => s.sideLayout.width)
-  const collapsed = useUiStore((s) => s.sideLayout.collapsed)
+  const collapsed = useUiStore((s) => s.sideLayout.collapsed) || forceCollapsed
   const artifacts = useUiStore((s) => s.artifacts.length)
-  const canvasOpen = useUiStore((s) => s.canvasOpen)
-  const canvasPane = useUiStore((s) => s.canvasPane)
+  // 票 03：「产物」「项目文件」是画布里的清单页签，当前项 = 画布开着且停在该页签
+  const canvasPane = useUiStore((s) => (s.canvasOpen && !s.usageView ? s.activeTab : null))
   const pendingCount = useOwnerPendingCount()
   const statusError = useUiStore((s) => s.statusError)
   const addRole = useAddRole()
@@ -144,10 +146,10 @@ export function Sidebar({ onSearch, onSettings, onProjectClosed }: SidebarProps)
         <NavItem icon="inbox" label={t('sidebar.pending')} onClick={() => st().openPendingDialog()} data="pending"
           trailing={!statusError && pendingCount > 0 ? <PendingBadge count={pendingCount} /> : undefined} />
         <NavItem icon="layers" label={t('sidebar.artifacts')} data="artifacts"
-          on={canvasOpen && canvasPane === 'artifacts'} onClick={() => st().openCanvas('artifacts')}
+          on={canvasPane === 'artifacts'} onClick={() => st().openCanvas('artifacts')}
           trailing={<span className="text-[12px] text-ink-3">{artifacts}</span>} />
         <NavItem icon="folder" label={t('sidebar.files')} data="files"
-          on={canvasOpen && canvasPane === 'files'} onClick={() => st().openCanvas('files')} />
+          on={canvasPane === 'files'} onClick={() => st().openCanvas('files')} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         <SectionTitle label={t('sidebar.flow')} action={
