@@ -349,7 +349,7 @@ export function ProviderManager() {
       }>{t('providers.slots')}</SubHead>
       <p className="-mt-1 mb-2 text-[12px] text-ink-3">{t('providers.slotsHint')}</p>
       <div aria-label={t('providers.slots')} className="rounded-[var(--r-card)] bg-[var(--app-card)] text-[13px] shadow-[var(--shadow-card)]">
-        <div className="grid grid-cols-[minmax(120px,1.1fr)_minmax(110px,1fr)_minmax(120px,1.3fr)_auto_auto] items-center gap-2 border-b border-line px-3 py-[9px] text-[12px] font-medium text-ink-3">
+        <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.3fr)_112px_92px] items-center gap-2 border-b border-line px-3 py-[9px] text-[12px] font-medium text-ink-3">
           <span>{t('providers.slot')}</span>
           <span>{t('settingsUi.colProvider')}</span>
           <span>{t('providers.model')}</span>
@@ -598,7 +598,7 @@ function SlotRow({
         ? <Badge variant="warn">{t('providers.unbound')}</Badge>
         : <Badge>{t('settingsUi.slotFallback')}</Badge>
   return (
-    <div data-slot-row={slot} className="grid grid-cols-[minmax(120px,1.1fr)_minmax(110px,1fr)_minmax(120px,1.3fr)_auto_auto] items-center gap-2 border-t border-line-soft px-3 py-2 first:border-t-0 live:hover:bg-hover">
+    <div data-slot-row={slot} className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.3fr)_112px_92px] items-center gap-2 border-t border-line-soft px-3 py-2 first:border-t-0 live:hover:bg-hover">
       <code className="min-w-0 truncate font-sans text-[13px] text-ink">
         {label}
         {isBuiltinSlot(slot) && <span className="font-mono text-[11px] text-ink-3"> {slot}</span>}

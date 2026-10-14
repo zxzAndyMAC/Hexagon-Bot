@@ -4,30 +4,25 @@ import { api, errText, type AgentDetail, type ProvidersView, type RoleDef } from
 import { useUiStore } from '../store'
 import { dedicatedSlot, isDedicatedSlot, resolveBinding, sharedSlots, slotLabel } from '../modelpick'
 import { EntityChips } from './EntityPicker'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Field, Input, Textarea } from '@/components/ui/input'
+import { NativeSelect } from '@/components/ui/native-select'
 
 // 逗号串 ↔ 字符串数组：名单字段持久化仍是 CSV（def.skills 数组落库前在此转换）
 const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
 
-/* 表单控件两档密度（settings-density 01，owner 裁决）：sm=工作台紧凑（默认），
-   md=设置页放大档。RoleEditor 同时被 AgentTab（工作台）与设置页团队分区复用，故密度走 props。 */
+/* 表单控件两档密度（settings-density 01，owner 裁决）：sm=工作台紧凑（默认，侧栏「+ 添加角色」与画布 Agent 详情），
+   md=设置页放大档。ui-redesign 票 11（components E4）：字段换成 A9 Field / Textarea / NativeSelect，按钮换 A1；
+   密度只剩控件高度与按钮尺寸两档差别。 */
 type Density = 'sm' | 'md'
-// 凹槽井质感（ui-polish-2 ③）：--bg 底 + border-strong——bg-1 底在面板上隐形曾被 owner 点名
-const inputSm: React.CSSProperties = {
-  width: '100%', padding: '5px 8px', fontSize: 12,
-  background: 'var(--bg)', border: '1px solid var(--border-strong)', borderRadius: 6,
-  color: 'var(--text)', fontFamily: 'inherit',
-}
-const labelSm: React.CSSProperties = { fontSize: 10, fontWeight: 560, color: 'var(--text-3)', marginTop: 8 }
-const fieldStyles = (density: Density) => ({
-  input: density === 'md' ? { ...inputSm, padding: '7px 10px', fontSize: 13 } : inputSm,
-  label: density === 'md' ? { ...labelSm, fontSize: 12, marginTop: 10 } : labelSm,
-})
+const fieldCls = (density: Density) => density === 'md' ? '' : 'h-[30px] text-[12.5px]'
+const btnSize = (density: Density) => (density === 'md' ? 'sm' : 'xs') as 'sm' | 'xs'
 
 /** 角色编辑器（票 30）：项目覆盖行 + 实例字段 + 授权名单。
  *  编辑后下次激活生效；globs/grants 即时按新值判。 */
 export function RoleEditor({ agentId, onClose, density = 'sm' }: { agentId: string; onClose: () => void; density?: Density }) {
   const { t } = useTranslation()
-  const { input, label } = fieldStyles(density)
   const { team, invalidate } = useUiStore()
   const [d, setD] = useState<AgentDetail | null>(null)
   const [duty, setDuty] = useState('')
@@ -112,56 +107,56 @@ export function RoleEditor({ agentId, onClose, density = 'sm' }: { agentId: stri
     } catch (e) { setErr(errText(e)) } finally { setBusy(false) }
   }
 
-  if (!d && !err) return <div className="dim3" style={{ padding: 12, fontSize: 11 }}>…</div>
-  // ui-polish-3：右列详情统一 .panel 圆角边线卡（原 borderTop+bg-1 是底栏驻留期残留）
+  if (!d && !err) return <div className="p-3 text-[12px] text-ink-3">…</div>
+  const fc = fieldCls(density)
+  const bs = btnSize(density)
   return (
-    <div className="panel" style={{ padding: '12px 14px' }}>
-      {err && <div className="chip err" style={{ display: 'block', fontSize: 11, marginBottom: 8 }}>{err}</div>}
-      {msg && <div className="chip ok" style={{ display: 'inline-block', fontSize: 11, marginBottom: 8 }}>{msg}</div>}
-      {d?.custom && <div className="chip amber" style={{ fontSize: 10, marginBottom: 6 }}>{t('agent.customRole')}</div>}
-      <div style={label}>{t('agent.duty')}</div>
-      <textarea value={duty} onChange={(e) => setDuty(e.target.value)} rows={2} style={{ ...input, resize: 'vertical' }} />
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1 }}>
-          <div style={label}>{t('agent.reviewer')}</div>
-          <select value={reviewer} onChange={(e) => setReviewer(e.target.value)} style={input}>
+    <div data-role-editor className="flex flex-col gap-3">
+      {err && <div role="alert" className="text-[12.5px] text-red">{err}</div>}
+      {msg && <div role="status"><Badge variant="ok">{msg}</Badge></div>}
+      {d?.custom && <div><Badge variant="info">{t('agent.customRole')}</Badge></div>}
+      <Field label={t('agent.duty')}>
+        <Textarea aria-label={t('agent.duty')} value={duty} onChange={(e) => setDuty(e.target.value)} />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={t('agent.reviewer')}>
+          <NativeSelect aria-label={t('agent.reviewer')} className={fc} value={reviewer} onChange={(e) => setReviewer(e.target.value)}>
             <option value="">{t('agent.noReviewer')}</option>
             {team.filter((m) => m.role !== d?.role).map((m) => (
               <option key={m.id} value={m.role}>{m.role}</option>
             ))}
-          </select>
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={label}>{t('agent.modelSlot')}</div>
-          <select value={mode} onChange={(e) => setMode(e.target.value as 'follow' | 'dedicated')} style={input}>
+          </NativeSelect>
+        </Field>
+        <Field label={t('agent.modelSlot')}>
+          <NativeSelect aria-label={t('agent.modelSlot')} className={fc} value={mode} onChange={(e) => setMode(e.target.value as 'follow' | 'dedicated')}>
             <option value="follow">{t('agent.modelFollow')}</option>
             <option value="dedicated">{t('agent.modelDedicated')}</option>
-          </select>
-        </div>
+          </NativeSelect>
+        </Field>
       </div>
       {mode === 'follow' ? (
-        <div>
-          <select value={slot} onChange={(e) => setSlot(e.target.value)} style={input}>
+        <Field help={t('agent.modelFollowHint')}>
+          <NativeSelect aria-label={t('agent.modelFollow')} className={fc} value={slot} onChange={(e) => setSlot(e.target.value)}>
             {sharedSlots(pv?.slots ?? {}, slot).map((s) => (
               <option key={s} value={s}>{slotLabel(s, pv, t('agent.dedicatedTag'))}</option>
             ))}
-          </select>
-          <div className="dim3" style={{ fontSize: 10, marginTop: 3 }}>{t('agent.modelFollowHint')}</div>
-        </div>
+          </NativeSelect>
+        </Field>
       ) : (
-        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-          <select value={dPid} onChange={(e) => setDPid(e.target.value)} style={{ ...input, flex: 1 }}>
+        <div className="grid grid-cols-2 gap-3">
+          <NativeSelect aria-label={t('agent.pickProvider')} className={fc} value={dPid} onChange={(e) => setDPid(e.target.value)}>
             <option value="">{t('agent.pickProvider')}</option>
             {(pv?.providers ?? []).filter((p) => p.enabled).map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
-          </select>
-          <input
+          </NativeSelect>
+          <Input
+            aria-label={t('providers.model')}
+            className={`${fc} font-mono`}
             value={dModel}
             onChange={(e) => setDModel(e.target.value)}
             placeholder={t('providers.model')}
             list="role-models"
-            style={{ ...input, flex: 1 }}
           />
           <datalist id="role-models">
             {(pv?.providers.find((p) => p.id === dPid)?.models ?? []).map((m) => (
@@ -170,21 +165,29 @@ export function RoleEditor({ agentId, onClose, density = 'sm' }: { agentId: stri
           </datalist>
         </div>
       )}
-      <div style={label}>{t('agent.globs')}</div>
-      <textarea value={globs} onChange={(e) => setGlobs(e.target.value)} rows={2}
-        placeholder="src/**" style={{ ...input, fontFamily: 'monospace', resize: 'vertical' }} />
-      <div style={label}>{t('agent.skills')}</div>
-      <EntityChips value={csv(skills)} onChange={(ids) => setSkills(ids.join(', '))} source="skills" />
-      <div style={label}>{t('agent.grantsMcp')}</div>
-      <EntityChips value={csv(mcpG)} onChange={(ids) => setMcpG(ids.join(', '))} source="mcp" />
-      <div style={label}>{t('agent.grantsSkill')}</div>
-      <EntityChips value={csv(skillG)} onChange={(ids) => setSkillG(ids.join(', '))} source="skills" />
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <button className="btn primary" disabled={busy} onClick={save}>{t('agent.saveRole')}</button>
-        <button className="btn" disabled={busy} onClick={draft}>{t('agent.draftAi')}</button>
-        <button className="btn" onClick={onClose}>{t('agent.cancel')}</button>
+      <Field label={t('agent.globs')}>
+        <Textarea aria-label={t('agent.globs')} className="font-mono text-[12px]" value={globs} onChange={(e) => setGlobs(e.target.value)} placeholder="src/**" />
+      </Field>
+      <RoleChips label={t('agent.skills')}><EntityChips value={csv(skills)} onChange={(ids) => setSkills(ids.join(', '))} source="skills" /></RoleChips>
+      <RoleChips label={t('agent.grantsMcp')}><EntityChips value={csv(mcpG)} onChange={(ids) => setMcpG(ids.join(', '))} source="mcp" /></RoleChips>
+      <RoleChips label={t('agent.grantsSkill')}><EntityChips value={csv(skillG)} onChange={(ids) => setSkillG(ids.join(', '))} source="skills" /></RoleChips>
+      <div className="flex items-center gap-2">
+        <Button size={bs} variant="ghost" disabled={busy} onClick={draft}>{t('agent.draftAi')}</Button>
+        <span className="flex-1" />
+        <Button size={bs} variant="quiet" onClick={onClose}>{t('agent.cancel')}</Button>
+        <Button size={bs} variant="primary" disabled={busy} loading={busy} onClick={save}>{t('agent.saveRole')}</Button>
       </div>
-      <div className="dim3" style={{ fontSize: 10, marginTop: 6 }}>{t('agent.editHint')}</div>
+      <div className="text-[12px] text-ink-3">{t('agent.editHint')}</div>
+    </div>
+  )
+}
+
+/** 名单字段：label 12.5/500 + chip 行（E4「技能（chip 行 + 添加）」）。 */
+function RoleChips({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <span className="mb-1.5 text-[12.5px] font-medium text-ink">{label}</span>
+      {children}
     </div>
   )
 }
@@ -192,8 +195,9 @@ export function RoleEditor({ agentId, onClose, density = 'sm' }: { agentId: stri
 /** 自建角色表单（票 30）：空表填 RoleDef → 校验入团队（休眠创建）。 */
 export function CreateRoleForm({ onDone, density = 'sm' }: { onDone: () => void; density?: Density }) {
   const { t } = useTranslation()
-  const { input, label } = fieldStyles(density)
   const { team } = useUiStore()
+  const fc = fieldCls(density)
+  const bs = btnSize(density)
   const [name, setName] = useState('')
   const [duty, setDuty] = useState('')
   const [reviewer, setReviewer] = useState('')
@@ -223,38 +227,37 @@ export function CreateRoleForm({ onDone, density = 'sm' }: { onDone: () => void;
   }
 
   return (
-    <div className="panel" style={{ padding: '12px 14px' }}>
-      {err && <div className="chip err" style={{ display: 'block', fontSize: 11, marginBottom: 8 }}>{err}</div>}
-      <div style={label}>{t('agent.roleName')}</div>
-      <input value={name} onChange={(e) => setName(e.target.value)} style={input} />
-      <div style={label}>{t('agent.duty')}</div>
-      <textarea value={duty} onChange={(e) => setDuty(e.target.value)} rows={2} style={{ ...input, resize: 'vertical' }} />
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1 }}>
-          <div style={label}>{t('agent.reviewer')}</div>
-          <select value={reviewer} onChange={(e) => setReviewer(e.target.value)} style={input}>
+    <div data-create-role className="flex flex-col gap-3">
+      {err && <div role="alert" className="text-[12.5px] text-red">{err}</div>}
+      <Field label={t('agent.roleName')}>
+        <Input aria-label={t('agent.roleName')} className={fc} value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label={t('agent.duty')}>
+        <Textarea aria-label={t('agent.duty')} value={duty} onChange={(e) => setDuty(e.target.value)} />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={t('agent.reviewer')}>
+          <NativeSelect aria-label={t('agent.reviewer')} className={fc} value={reviewer} onChange={(e) => setReviewer(e.target.value)}>
             <option value="">{t('agent.noReviewer')}</option>
             {team.map((m) => <option key={m.id} value={m.role}>{m.role}</option>)}
-          </select>
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={label}>{t('agent.modelSlot')}</div>
-          <select value={slot} onChange={(e) => setSlot(e.target.value)} style={input}>
+          </NativeSelect>
+        </Field>
+        <Field label={t('agent.modelSlot')} help={t('agent.modelFollowHint')}>
+          <NativeSelect aria-label={t('agent.modelSlot')} className={fc} value={slot} onChange={(e) => setSlot(e.target.value)}>
             {sharedSlots(pv?.slots ?? {}, slot).map((s) => (
               <option key={s} value={s}>{slotLabel(s, pv, t('agent.dedicatedTag'))}</option>
             ))}
-          </select>
-          <div className="dim3" style={{ fontSize: 10, marginTop: 3 }}>{t('agent.modelFollowHint')}</div>
-        </div>
+          </NativeSelect>
+        </Field>
       </div>
-      <div style={label}>{t('agent.globs')}</div>
-      <textarea value={globs} onChange={(e) => setGlobs(e.target.value)} rows={2}
-        placeholder="docs/**" style={{ ...input, fontFamily: 'monospace', resize: 'vertical' }} />
-      <div style={label}>{t('agent.skills')}</div>
-      <EntityChips value={csv(skills)} onChange={(ids) => setSkills(ids.join(', '))} source="skills" />
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <button className="btn primary" disabled={busy || !name.trim()} onClick={create}>{t('agent.createRole')}</button>
-        <button className="btn" onClick={onDone}>{t('agent.cancel')}</button>
+      <Field label={t('agent.globs')}>
+        <Textarea aria-label={t('agent.globs')} className="font-mono text-[12px]" value={globs} onChange={(e) => setGlobs(e.target.value)} placeholder="docs/**" />
+      </Field>
+      <RoleChips label={t('agent.skills')}><EntityChips value={csv(skills)} onChange={(ids) => setSkills(ids.join(', '))} source="skills" /></RoleChips>
+      <div className="flex items-center gap-2">
+        <span className="flex-1" />
+        <Button size={bs} variant="quiet" onClick={onDone}>{t('agent.cancel')}</Button>
+        <Button size={bs} variant="primary" disabled={busy || !name.trim()} onClick={create}>{t('agent.createRole')}</Button>
       </div>
     </div>
   )
