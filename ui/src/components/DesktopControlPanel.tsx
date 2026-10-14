@@ -27,6 +27,13 @@ const controlKeys: Partial<Record<DesktopControl, ActionId>> = {
   resume: 'desktopResume', release: 'desktopRelease', clear_screenshots: 'desktopClear', prepare_capture: 'desktopPrepareCapture',
 }
 
+// 系统授权三行（control#panels）：输入事件与辅助功能在 macOS 同一设置面板里授予。
+const GRANT_ROWS = [
+  { field: 'accessibility', label: 'control.grantAccessibility', pane: 'accessibility', action: 'desktopAccessibility' },
+  { field: 'input_events', label: 'control.grantInput', pane: 'accessibility', action: 'desktopAccessibility' },
+  { field: 'screen_recording', label: 'control.grantScreen', pane: 'screen_recording', action: 'desktopScreenRecording' },
+] as const satisfies readonly { field: keyof Permissions; label: string; pane: DesktopPermission; action: ActionId }[]
+
 const basename = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
 
 export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
@@ -142,18 +149,12 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
           {grants && !grants.supported && <CheckRow ok={false} label={t('desktop.unsupported')} />}
           {grants && grants.supported && !grants.available && <CheckRow ok={false} label={t('desktop.unavailable')} />}
           {grants?.supported && grants.available && <>
-            <CheckRow ok={grants.accessibility} label={t('control.grantAccessibility')}>
-              {grants.accessibility ? <span className="text-ink-3">{t('control.granted')}</span>
-                : <ActionButton size="xs" label={t('control.openSettings')} action="desktopAccessibility" onClick={() => void openSettings('accessibility')} />}
-            </CheckRow>
-            <CheckRow ok={grants.input_events} label={t('control.grantInput')}>
-              {grants.input_events ? <span className="text-ink-3">{t('control.granted')}</span>
-                : <ActionButton size="xs" label={t('control.openSettings')} action="desktopAccessibility" onClick={() => void openSettings('accessibility')} />}
-            </CheckRow>
-            <CheckRow ok={grants.screen_recording} label={t('control.grantScreen')}>
-              {grants.screen_recording ? <span className="text-ink-3">{t('control.granted')}</span>
-                : <ActionButton size="xs" label={t('control.openSettings')} action="desktopScreenRecording" onClick={() => void openSettings('screen_recording')} />}
-            </CheckRow>
+            {GRANT_ROWS.map(({ field, label, pane, action }) => (
+              <CheckRow key={field} ok={grants[field]} label={t(label)}>
+                {grants[field] ? <span className="text-ink-3">{t('control.granted')}</span>
+                  : <ActionButton size="xs" label={t('control.openSettings')} action={action} onClick={() => void openSettings(pane)} />}
+              </CheckRow>
+            ))}
           </>}
           {status && <CheckRow ok={status.enabled} label={t('control.consentRow')} data-consent>
             {status.enabled

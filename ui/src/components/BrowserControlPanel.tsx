@@ -116,7 +116,7 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
   const reason = block ? t(BLOCK_TEXT[block]) : undefined
   const connected = Boolean(session?.connected)
   const option = (mode: BrowserMode, title: string, body: string, button: ReactNode) => (
-    <div className={cn('flex items-start gap-2.5 rounded-[7px] px-[9px] py-2', (session?.mode === mode && connected) || (mode === 'extension' && extensionSetup && !connected) ? 'bg-hover' : '')}
+    <div className={cn('flex items-start gap-2.5 rounded-[var(--r-sm)] px-[9px] py-2', (session?.mode === mode && connected) || (mode === 'extension' && extensionSetup && !connected) ? 'bg-hover' : '')}
       data-browser-option={mode}>
       <span aria-hidden className={cn('mt-0.5 size-4 flex-none rounded-full',
         session?.mode === mode && connected ? 'shadow-[inset_0_0_0_5px_var(--accent)]' : 'shadow-[inset_0_0_0_1.5px_var(--line-strong)]')} />
