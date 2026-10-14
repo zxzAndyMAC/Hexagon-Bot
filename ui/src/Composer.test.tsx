@@ -709,8 +709,33 @@ it('offers a direct computer settings entry when the model is ready but screensh
   const { el, root } = await render(<ComputerTaskReadiness mentions={[]} />)
   try {
     expect(el.textContent).toContain('Recheck screenshots')
-    await act(async () => el.querySelector('button')!.click())
+    // 票 ui-redesign 14（D19 预检卡）：卡首是关闭 x，电脑操作入口改按标记取
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-readiness-computer]')!.click())
     expect(open).toHaveBeenCalledOnce()
     expect(el.textContent).not.toContain('does not support screenshots')
   } finally { window.removeEventListener('hexagon:computer-settings', open); await act(async () => root.unmount()); el.remove(); vi.restoreAllMocks() }
+})
+
+// 票 ui-redesign 14（control#readiness）：预检卡只提示不拦截——「仍然发送」走输入条自己的发送，关闭 x 收起同一组提示。
+it('lets the readiness card send anyway or be dismissed without changing bindings', async () => {
+  const i18n = (await import('./i18n')).default
+  await i18n.changeLanguage('en')
+  useUiStore.setState({ team: [member('QA')], projectRoot: '/project-a' })
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue({ project_root: '/project-a', enabled: true, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0, capture_preparation: 'ready' })
+  vi.spyOn(api, 'computerModels').mockResolvedValue({ project_root: '/project-a', roles: [{ agent_id: 'id-QA', vision: 'no_vision', model: 'text-model' }], vision_slots: [] })
+  const onSend = vi.fn()
+  const { el, root } = await render(<ComputerTaskReadiness mentions={[]} onSend={onSend} />)
+  try {
+    expect(el.textContent).toContain('This task needs screenshots')
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-readiness-send]')!.click())
+    expect(onSend).toHaveBeenCalledOnce()
+    expect(el.querySelector('[data-readiness]')).toBeNull()
+    expect(useUiStore.getState().team[0].model_slot).toBe('chat')
+  } finally { await act(async () => root.unmount()); el.remove() }
+  const again = await render(<ComputerTaskReadiness mentions={[]} />)
+  try {
+    expect(again.el.querySelector('[data-readiness-send]')).toBeNull() // 没有输入条发送就不出「仍然发送」
+    await act(async () => again.el.querySelector<HTMLButtonElement>('[aria-label="Dismiss"]')!.click())
+    expect(again.el.querySelector('[data-readiness]')).toBeNull()
+  } finally { await act(async () => again.root.unmount()); again.el.remove(); vi.restoreAllMocks() }
 })

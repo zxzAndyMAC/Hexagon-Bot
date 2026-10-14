@@ -14,7 +14,6 @@ vi.mock('./api', () => ({
     browserFocus: vi.fn(), desktopPreviewFocus: vi.fn(), desktopControl: vi.fn(),
   },
 }))
-vi.mock('./desktopPause', () => ({ pauseDesktop: vi.fn().mockResolvedValue(undefined) }))
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 let root: ReturnType<typeof createRoot>
 let el: HTMLDivElement
@@ -34,10 +33,12 @@ beforeEach(async () => {
   el = document.createElement('div'); document.body.append(el); root = createRoot(el)
 })
 afterEach(async () => { await act(async () => root.unmount()); el.remove(); vi.useRealTimers(); vi.restoreAllMocks() })
+// 票 ui-redesign 14（D19、ADR 0088 偏差 9 收口）：隐藏后不再留输入条旁的重开按钮，重开只走头部「屏幕」按钮
+// （store.requestAgentScreen，与 agentScreen 键同效）。隐藏选择按项目跨重挂保留，所以先前用例隐藏过的要重新打开。
+const reopen = () => act(async () => useUiStore.getState().requestAgentScreen())
 const render = async () => {
   await act(async () => root.render(<AgentScreen />))
-  const reopen = el.querySelector<HTMLButtonElement>('.agent-screen-reopen')
-  if (reopen && !reopen.disabled) await act(async () => reopen.click())
+  if (!el.querySelector('[data-agent-screen]') && useUiStore.getState().agentScreenAvailable) await reopen()
 }
 const hide = () => act(async () => el.querySelector<HTMLButtonElement>('[aria-label="Hide preview"]')!.click())
 
@@ -51,7 +52,7 @@ it('displays only local preview, stops capture while hidden and resumes explicit
   expect(api.browserPreview).toHaveBeenCalledTimes(count)
   expect(el.querySelector('img')).toBeNull()
   expect(api.desktopControl).not.toHaveBeenCalled()
-  await act(async () => el.querySelector<HTMLButtonElement>('.agent-screen-reopen')!.click())
+  await reopen()
   expect(api.browserPreview).toHaveBeenCalledTimes(count + 1)
 })
 
@@ -80,18 +81,16 @@ it('rejects a frame for a different navigation and clears pixels when access is 
   expect(el.querySelector('img')).toBeNull()
 })
 
+// 票 ui-redesign 14（D19）：浮窗底栏的暂停 / 恢复撤掉——暂停在头部控制状态，恢复在电脑操作面板；
+// 浮窗只留「打开真实应用」并用 chip 显示「已暂停」。暂停期间仍允许本地预览（语义不变）。
 it('binds app focus to the preview session and permits preview during owner pause', async () => {
   vi.mocked(api.desktopStatus).mockResolvedValue({ ...status, paused: true })
   await render()
   expect(el.querySelector('img')).not.toBeNull()
-  expect(el.textContent).toContain('Computer paused')
-  const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('footer button'))
-  expect(buttons[1].textContent).toContain('Resume computer')
-  await act(async () => buttons[0].click())
+  expect(el.textContent).toContain('Paused')
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-screen-open]')!.click())
   expect(api.browserFocus).toHaveBeenCalledWith('/a', 'session1')
-  vi.mocked(api.desktopControl).mockResolvedValue(status)
-  await act(async () => buttons[1].click())
-  expect(api.desktopControl).toHaveBeenCalledWith('resume', '/a')
+  expect(api.desktopControl).not.toHaveBeenCalled()
 })
 
 it('ignores pending pixels from a prior project after the status switches', async () => {
@@ -156,7 +155,7 @@ it('clears cached pixels and focus immediately at beginProjectSwitch before host
   await act(async () => useUiStore.getState().beginProjectSwitch())
   expect(api.desktopStatus).toHaveBeenCalledTimes(before)
   expect(el.querySelector('img')).toBeNull()
-  expect(el.querySelector('footer')).toBeNull()
+  expect(el.querySelector('[data-screen-open]')).toBeNull()
   expect(api.browserFocus).not.toHaveBeenCalled()
   await act(async () => resolveOld(frame))
   expect(el.querySelector('img')).toBeNull()
@@ -175,7 +174,7 @@ it('rejects an old metadata response after beginProjectSwitch even before replac
   await act(async () => resolveOld(browser))
   expect(el.querySelector('img')).toBeNull()
   expect(api.browserPreview).not.toHaveBeenCalled()
-  expect(el.querySelector('footer')).toBeNull()
+  expect(el.querySelector('[data-screen-open]')).toBeNull()
 })
 
 // Owner 2026-10-02: local picker polling and preview share one browser worker.

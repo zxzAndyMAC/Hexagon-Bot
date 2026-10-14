@@ -510,7 +510,7 @@ export function Composer() {
             }}
           />
         </div>
-        <ComputerTaskReadiness mentions={atoms.filter(a => a.kind === 'mention').map(a => a.value)} />
+        <ComputerTaskReadiness mentions={atoms.filter(a => a.kind === 'mention').map(a => a.value)} onSend={() => void send()} />
         <div className="composer-toolbar">
           <div className="composer-controls"><ProjectApprovalMode /><span className="composer-hint">{t('composer.multilineHint')}</span></div>
           <div className="composer-actions">
