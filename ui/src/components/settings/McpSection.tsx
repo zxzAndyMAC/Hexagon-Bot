@@ -229,7 +229,7 @@ export function McpSection({ projectless }: { projectless: boolean }) {
   const selEntry = entries?.find((e) => `${e.origin}:${e.name}` === sel) ?? null
   const selLive = selEntry ? liveOf(selEntry) : undefined
   const sub = (e: McpEntryRow) => {
-    const n = Object.keys(e.headers).length
+    const n = Object.keys(e.headers ?? {}).length
     const transport = e.transport === 'remote' ? t('settingsUi.transportRemote') : 'stdio'
     return [transport, n > 0 ? t('mcp.headersN', { n }) : '', e.disabled ? t('mcp.disabledTag') : ''].filter(Boolean).join(' · ')
   }
@@ -291,8 +291,8 @@ export function McpSection({ projectless }: { projectless: boolean }) {
               <span className="font-medium text-ink">{r.name}</span>
               <Badge className="h-[18px] px-1.5 text-[11px]">{r.origin}</Badge>
               {r.transport === 'remote' && <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">{t('mcp.remote')}</Badge>}
-              {Object.keys(r.headers).length > 0 && (
-                <Badge className="h-[18px] px-1.5 text-[11px]">{t('mcp.headersN', { n: Object.keys(r.headers).length })}</Badge>
+              {Object.keys(r.headers ?? {}).length > 0 && (
+                <Badge className="h-[18px] px-1.5 text-[11px]">{t('mcp.headersN', { n: Object.keys(r.headers ?? {}).length })}</Badge>
               )}
               {r.conflict && <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">{t('mcp.conflict')}</Badge>}
               <span className="min-w-0 flex-1 truncate font-mono text-ink-3">{r.transport === 'remote' ? r.url : `${r.command} ${r.args.join(' ')}`}</span>

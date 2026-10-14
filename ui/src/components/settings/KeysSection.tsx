@@ -2,7 +2,7 @@
 // 全部动作从 keymap ACTIONS 自动列出（按 keyGroups 归组），所以 02、03 新增和改名的动作不用改这里。
 // 点绑定进入录制：绑定位换成 A9 聚焦形「按下新键位…」+ 取消；Esc 取消；冲突就地红字「已被『…』占用」不写入；
 // 系统保留组合不可录。旁边是练习场（PracticeGround）。
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ACTIONS, bindingFor, formatBinding, normalizeEvent, resetBinding, setBinding, type ActionId } from '../../keymap'
 import { Button } from '@/components/ui/button'
@@ -84,6 +84,16 @@ function KeyRow({ id, label, onChanged }: { id: ActionId; label: string; onChang
   )
 }
 
+function Practice() {
+  const { t } = useTranslation()
+  return (
+    <section aria-label={t('settings.practiceTitle')} className="mb-6">
+      <GroupTitle>{t('settings.practiceTitle')}</GroupTitle>
+      <PracticeGround />
+    </section>
+  )
+}
+
 export function KeysSection() {
   const { t } = useTranslation()
   const [q, setQ] = useState('')
@@ -108,16 +118,19 @@ export function KeysSection() {
         }
       />
       {groupActions(shown).map((g) => (
-        <section key={g.group} aria-label={t(`settingsUi.keyGroup_${g.group}`)} className="mb-5">
+        <Fragment key={g.group}>
+        <section aria-label={t(`settingsUi.keyGroup_${g.group}`)} className="mb-5">
           <GroupTitle>{t(`settingsUi.keyGroup_${g.group}`)}</GroupTitle>
           <div className="rounded-[var(--r-card)] bg-[var(--app-card)] shadow-[var(--shadow-card)]">
             {g.actions.map((a) => <KeyRow key={a.id} id={a.id} label={a.label} onChanged={bump} />)}
           </div>
         </section>
+        {/* 练习场紧跟「裁决」组（settings#keys：裁决 → 练习场） */}
+        {g.group === 'decide' && <Practice />}
+        </Fragment>
       ))}
       {shown.length === 0 && <div className="py-6 text-center text-[12.5px] text-ink-3">{t('settingsUi.noMatches')}</div>}
-      <GroupTitle className="mt-5">{t('settings.practiceTitle')}</GroupTitle>
-      <PracticeGround />
+      {!shown.some((a) => a.id === 'approve') && <Practice />}
     </SetWrap>
   )
 }
