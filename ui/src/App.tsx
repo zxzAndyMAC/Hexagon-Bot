@@ -23,7 +23,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { api, errText, onTurnDelta, onToolOutput } from './api'
 import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
-import { PendingDialog } from './components/PendingCards'
+import { PendingDock } from './components/PendingDock'
 import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { bindingFor, matches } from './keymap'
@@ -351,6 +351,8 @@ export default function App() {
               </div>
               {/* B4 触顶横幅：输入条正上方（interaction §10） */}
               <CapBanner onRaise={raiseCap} />
+              {/* 票 04（ADR 0089，D6）：待决坞停在输入条正上方，不遮挡时间线；Tab 序 对话 → 坞 → 输入条 */}
+              <PendingDock />
               <Composer />
             </div>
           </main>
@@ -362,8 +364,6 @@ export default function App() {
           )}
         </div>
       </div>
-      {/* 票 05：待决是浮层，不插进这条纵栏——高度留给 Tab 和时间线。 */}
-      {!settingsOpen && <PendingDialog />}
       {!settingsOpen && <FlowDialog />}
       {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </div>

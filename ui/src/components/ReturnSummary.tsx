@@ -13,7 +13,7 @@ import { kindTitleKey } from '../decisions'
 import i18n from '../i18n'
 import { fmtYuan, parseTime } from '../usage'
 import { fillComposer } from '../composerFill'
-import { ATTENTION_KEYS, attentionRows, awayRange, readSummary, suggestions, type AttentionTone } from '../returnSummaryModel'
+import { ATTENTION_KEYS, HANDLED_TTL_MS, attentionRows, awayRange, readSummary, suggestions, withHandled, type AttentionRow, type AttentionTone, type ShownRow } from '../returnSummaryModel'
 import { Icon, type IconName } from './Icon'
 import { IconButton } from './ui/icon-button'
 import { ShortcutKbd } from './ui/kbd'
@@ -46,6 +46,19 @@ function useAwayCost(from: string | null): { loading: boolean; mc: number | null
   return { loading: from != null && state.key !== from, mc: state.key === from ? state.mc : null }
 }
 
+/** 已处理的行保留 30 秒（C12 禁用态）：每次 pending 变化合并一次，最早到期时再合并一次把它移除。 */
+function useShownRows(rows: AttentionRow[]): ShownRow[] {
+  const [shown, setShown] = useState<ShownRow[]>(() => withHandled([], rows, Date.now()))
+  useEffect(() => { setShown((prev) => withHandled(prev, rows, Date.now())) }, [rows])
+  useEffect(() => {
+    const due = shown.filter((r) => r.handledAt != null).map((r) => (r.handledAt as number) + HANDLED_TTL_MS)
+    if (!due.length) return
+    const timer = setTimeout(() => setShown((prev) => withHandled(prev, rows, Date.now())), Math.max(0, Math.min(...due) - Date.now()) + 10)
+    return () => clearTimeout(timer)
+  }, [shown, rows])
+  return shown
+}
+
 /** 区间只写时分（workbench#return「13:40 – 14:02」）；跨日时 Intl 自带日期前缀没有意义，归来摘要只覆盖一次离开。 */
 function hm(iso: string): string {
   const d = new Date(parseTime(iso))
@@ -72,9 +85,12 @@ export function ReturnSummaryCard({ item, items, onJumpEvent, pinned = true }: {
 }) {
   const { t } = useTranslation()
   const pending = useUiStore((s) => s.pending)
+  // 「保存即消卡」途中的卡已离坞（票 04）：这里同步按已处理划除，首行始终 = 坞顶卡
+  const hidden = useUiStore((s) => s.hiddenPending)
   const [collapsed, setCollapsed] = useState(false)
   const summary = useMemo(() => readSummary(item.event.payload as Record<string, unknown>), [item])
-  const rows = useMemo(() => attentionRows(pending), [pending])
+  const rows = useMemo(() => attentionRows(pending.filter((q) => !hidden.includes(q.id))), [pending, hidden])
+  const shown = useShownRows(rows)
   const next = useMemo(() => suggestions(summary), [summary])
   const range = rangeText(t, item, items)
   const cost = useAwayCost(range.from)
@@ -134,19 +150,22 @@ export function ReturnSummaryCard({ item, items, onJumpEvent, pinned = true }: {
         </div>
       </div>
       <div className="tl-rs-label">{t('returnSummary.needsYou')}</div>
-      {rows.length === 0 && attention.length === 0
+      {shown.length === 0 && attention.length === 0
         ? <div className="tl-note">{t('returnSummary.nothingNeeded')}</div>
         : (
           <ul className="tl-rs-list">
-            {rows.map(({ question, tone }, i) => {
+            {shown.map(({ question, tone, handledAt }, i) => {
               const style = TONE[tone]
               const detail = pendingDetail(question)
+              const done = handledAt != null
               return (
-                <li key={question.id} data-attention={tone} style={{ background: style.bg }}>
-                  <Icon name={style.icon} size={14} style={{ color: style.fg }} />
+                <li key={question.id} data-attention={tone} data-handled={done || undefined}
+                  title={done ? t('returnSummary.handled') : undefined}
+                  style={{ background: done ? 'var(--canvas)' : style.bg }}>
+                  <Icon name={done ? 'check' : style.icon} size={14} style={{ color: done ? 'var(--ink-3)' : style.fg }} />
                   <span className="tl-grow"><b>{t(kindTitleKey(question))}</b>{detail && <> · <span className={tone === 'irreversible' ? undefined : 'mono'}>{detail}</span></>}</span>
                   {/* 首行 = 坞顶卡：显示当前 approve 绑定（ADR 0051，按平台渲染 ⌘ / Ctrl） */}
-                  {i === 0 && <ShortcutKbd binding={bindingFor('approve')} />}
+                  {i === 0 && !done && <ShortcutKbd binding={bindingFor('approve')} />}
                 </li>
               )
             })}

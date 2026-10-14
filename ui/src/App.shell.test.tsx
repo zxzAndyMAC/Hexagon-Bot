@@ -10,7 +10,7 @@ import { isMac } from './keymap'
 import i18n from './i18n'
 
 // 待决浮层的进出场动画在 happy-dom 里卸载时抛 AbortError；本文件只测外壳，浮层换桩。
-vi.mock('./components/PendingCards', () => ({ PendingDialog: () => null }))
+vi.mock('./components/PendingDock', () => ({ PendingDock: () => null }))
 vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) }))
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true

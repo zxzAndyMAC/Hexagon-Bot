@@ -4,7 +4,7 @@ export default {
 
   agentScreen: {"title": "Agent Screen", "move": "移动预览 · 方向键", "hide": "隐藏预览", "source": "预览来源", "browser": "浏览器", "native": "桌面应用", "collapse": "收起预览", "expand": "展开预览", "unavailable": "预览暂不可用", "loading": "正在加载预览…", "local": "本地预览", "open": "打开应用"},
   control: {"activeBrowser":"{{agent}} 正在控制浏览器","activeComputer":"{{agent}} 正在控制电脑","elsewhere":"另一个项目正在控制电脑","paused":"电脑操作已暂停","idleComputer":"电脑操作已启用","idleBrowser":"项目浏览器已连接","pause":"暂停电脑操作","panel":"电脑操作与浏览器","statusEnabled":"已启用","statusPaused":"已暂停","statusDisabled":"未启用","statusBusy":"工作中","grantAccessibility":"辅助功能","grantInput":"输入事件","grantScreen":"屏幕录制","consentRow":"本项目截图发给模型","granted":"已授权","consented":"已同意","agree":"同意","revoke":"撤回同意","openSettings":"前往系统设置","controller":"当前控制者","noController":"没有 Agent 在控制","otherProject":"其他项目","host":"实际承载授权的应用：{{host}}","managedTitle":"托管 Chromium（隔离）","managedBody":"独立配置，不带你的登录状态。打开和关闭都要你批准。","extensionTitle":"连接我的 Chrome / Edge","extensionBody":"需要安装 Microsoft 官方 Playwright 扩展","open":"打开","connect":"连接","warnTitle":"连接前请了解","connected":"已连接 · {{target}}","blockedPaused":"电脑操作已暂停：恢复后才能打开或连接浏览器。","blockedDisabled":"电脑操作未启用：先在电脑操作里同意，才能打开或连接浏览器。","blockedLoading":"正在读取电脑操作状态…","screenTitle":"Agent 的屏幕","screenWorking":"工作中","screenPaused":"已暂停","openApp":"打开真实应用","evidence":"截图证据 · {{label}}","evidenceHint":"点击放大，Esc 关闭","readinessTitle":"这项任务需要看截图","readinessCapture":"截图还没准备好","sendAnyway":"仍然发送","dismiss":"关闭提示"},
-  design: {"preview": "放大视觉稿", "previewPage": "预览 {{page}}", "closePreview": "关闭预览", "title": "选择视觉方向", "intro": "先确认关键页面视觉稿，再进入完整界面开发。", "loading": "正在加载视觉方案…", "stale": "方案已更新，请查看最新版本。", "layout": "布局", "typography": "字体", "palette": "配色", "choose": "采用此方案", "existingLabel": "已有品牌或设计规范", "existingPlaceholder": "填写需要沿用的规范、设计文件或明确方向。", "useExisting": "确认沿用这些规范", "empty": "等待角色提供 2–3 个视觉方案，也可以确认已有规范。", "revision": "方案版本 {{revision}}", "selected": "已确认方向", "chooseHint": "请在卡片中明确选择视觉方案，或确认沿用已有规范。"},
+  design: {"sub": "{{role}} · {{count}} 个方案 · 方向未定前不写界面文件", "compare": "放大对比", "picked": "已选", "preview": "放大视觉稿", "previewPage": "预览 {{page}}", "closePreview": "关闭预览", "title": "选择视觉方向", "intro": "先确认关键页面视觉稿，再进入完整界面开发。", "loading": "正在加载视觉方案…", "stale": "方案已更新，请查看最新版本。", "layout": "布局", "typography": "字体", "palette": "配色", "choose": "采用此方案", "existingLabel": "已有品牌或设计规范", "existingPlaceholder": "填写需要沿用的规范、设计文件或明确方向。", "useExisting": "确认沿用这些规范", "empty": "等待角色提供 2–3 个视觉方案，也可以确认已有规范。", "revision": "方案版本 {{revision}}", "selected": "已确认方向", "chooseHint": "请在卡片中明确选择视觉方案，或确认沿用已有规范。"},
   quality: {"setupTitle": "质量检查命令", "setupHint": "可选：仅填写你允许本项目在适用质量关卡自动执行的命令。必需类别留空时仍显示缺证据；性能工作负载会执行三次。重新打开向导或改变项目后需重新填写。", "setupReview": "创建项目即确认以下命令。不会采用模型生成的隐藏命令，也不开放通用流程编辑。", "setupNone": "未配置命令；必需检查仍需补充证据或由负责人说明理由后例外接受。", "category": {"tests": "测试", "performance": "性能", "accessibility": "可访问性", "security": "安全", "change_scope": "变更范围"}, "reason": {"missing_runner": "尚未配置已批准的检查", "not_run": "本次交付尚未运行", "configuration_changed": "检查配置已变化", "source_changed": "检查后源码已变化", "scope_unavailable": "无法验证变更范围", "execution_failed": "检查执行失败", "measurement_changed": "测量工作负载已变化", "regressed": "性能发生退化", "baseline_established": "已建立首次实测基线，暂无历史对比", "passed": "本次交付已验证"}, "required": "必需检查：{{category}}", "measurement": "本次工作负载耗时中位数：{{value}} 毫秒", "baseline": "可比基线：{{value}} 毫秒", "changed": "变更路径：{{count}}", "reviewBaseline": "审阅基准变化", "confirmBaseline": "确认新基准", "cancelBaseline": "取消", "baselineReason": "测量条件为什么变化？", "baselineConfirmation": "确认以上实测结果作为新基准。旧失败和旧基准保留在历史中；交付前仍需重新运行性能检查。", "baselineConfirmed": "基准已确认。请重新运行性能检查；旧失败记录保留。", "details": "技术细节", "desktopOnly": "请在桌面应用中修改质量检查命令", "revalidationTitle": "已完成交付的重新验收", "revalidationHint": "检查命令已修改。请核对当前证据再重新验收，原完成记录、产物和历史保留。取消本次请求仍需新检查。", "revalidationConfirm": "验收当前证据", "revalidationCancel": "取消本次请求", "configTitle": "当前流程质量检查", "configHint": "填写命令后先核对再确认。必需但未配置的类别仍需检查证据或负责人例外。", "configStage": "受影响阶段", "configReview": "核对修改", "configConfirm": "确认用于当前流程", "configCancel": "取消", "configBlank": "未配置", "configImpact": "这些类别的修改会使相关检查与负责人例外过期，也包括借用这些命令的阶段。验收前需重新检查，产物与历史保留。", "configRun": "运行当前检查", "configChecked": "本次检查已结束。请查看当前证据，再处理待验收事项。", "configSaved": "配置已保存。验收前请重新运行受影响的检查。", "historicalDoneLabel": "此前完成", "historicalDone": "此前已完成；当前检查证据单独显示"},
   browser: {"title": "项目浏览器", "description": "Agent 可按任务需要打开和关闭独立的项目 Chromium，也可在此手动管理。浏览器共用电脑操控授权与暂停，每次修改仍需批准。", "extensionHint": "连接已有 Chrome 或 Edge 时，需通过官方 Playwright 扩展明确选择标签页。断开不会关闭已有标签页。", "enableHint": "请先开启并恢复电脑操作。", "managed": "打开托管 Chromium", "extension": "连接已有 Chrome / Edge", "detach": "断开连接", "connecting": "正在连接…请完成浏览器扩展提示。", "disconnected": "已断开", "setupTitle": "准备连接浏览器", "setupBody": "在要连接的 Chrome / Edge 配置中安装 Microsoft 官方 Playwright Extension，然后回到这里继续。", "extensionAccess": "扩展授权可能覆盖整个浏览器，包括其他标签和登录会话。请阅读扩展确认页；Hexagon 本次操作绑定所选标签。", "installExtension": "安装官方扩展", "continueConnection": "已安装，继续连接"},
   computer: {
@@ -379,6 +379,7 @@ export default {
     blocked: {
       needReason: "请先填写理由。",
       needRisk: "请先确认接受重复执行的风险。",
+      needAbandonAck: "请先勾选「我了解放弃追查后不会重放该动作」。",
       projectUnknown: "无法确认当前项目，请重新打开项目。",
     },
   },
@@ -444,6 +445,7 @@ export default {
       team_stopped: "团队已停止",
     },
   },
+  dock: {"label": "待决 {{n}}/{{total}}", "pager": "第 {{n}} 张，共 {{total}} 张", "prev": "上一张", "next": "下一张", "collapse": "收起待决坞", "collapsed": "{{count}} 件待决 · 最严重：{{kind}}", "askTitle": "{{who}} 请求使用 {{tool}}", "kind": {"permission": "权限询问"}, "onceNote": "批准后只放行这一次调用", "reason": "理由：{{reason}}", "judgeSub": "这不是判定结论 · {{code}}", "judgeOriginal": "原卡仍在等你：{{who}} 请求使用 {{tool}}", "stampTitle": "「{{stage}}」阶段等你盖章", "finalSub": "最终验收", "artifactCount": "{{count}} 份产物", "stamp": "盖章", "surface": "生效面：{{surface}}", "adopt": "采纳", "adoptBlocked": "缺独立质量证据，暂不可采纳", "publishSub": "发布确认 · 不可撤回", "kvBaseline": "基线", "kvTarget": "目标", "kvOperation": "操作", "kvPath": "路径", "kvSession": "会话", "worktreeSub": "工作树确认", "opCreate": "创建", "opCleanup": "清理", "modelUnavailable": "模型不可用", "openModels": "打开模型服务", "continueOriginal": "继续原任务", "installTitle": "安装 MCP 服务 {{name}}", "installSub": "安装确认", "escalationSub": "升级裁决", "estimate": "估算", "recoveryTitle": "上次运行在「{{stage}}」中断", "recoverySub": "恢复 · 不重放已发出的动作", "modelRequestSub": "模型请求恢复", "qualitySub": "质量重新验收", "unknownSub": "未知动作", "canCheck": "支持核对", "noCheck": "不支持核对", "kvWho": "谁", "kvWhat": "做了什么", "kvCanCheck": "能否核对", "reasonRequired": "处理理由（必填）", "reasonPh": "例如：文件已存在且内容正确", "abandonAck": "我了解放弃追查后不会重放该动作"},
   cards: {
     worktreeCreate: "创建工作树",
     worktreeCleanup: "清理工作树",
@@ -519,9 +521,9 @@ export default {
     handoff: '交接',
     recovery: '中断',
         actionReadyHint: "此动作已获授权，但尚未开始执行。继续时复核当前权限，并恢复同一动作。",
-        reconcileAction: "核对结果",
-        abandonAction: "放弃动作",
-        retryAction: "发起新尝试",
+        reconcileAction: "核对",
+        abandonAction: "放弃追查",
+        retryAction: "重试",
         actionReason: "负责人处理理由",
         duplicateRisk: "我接受新尝试可能重复产生原动作的副作用。",
         actionUnknown: "工具结果未知",
@@ -1152,7 +1154,7 @@ export default {
     title_skills: '选择技能', title_mcp: '选择 MCP 服务',
   },
   intake: {"confirm": "写入 AGENTS.md", "confirmHint": "由开场分析起草（全文在那条开场消息里）；确认后写入仓库根目录，不会覆盖已有文件。", "title": "项目说明草案", "unsaved": "未落盘", "later": "先不写", "laterHint": "本次先收起，重新打开项目时还会出现", "edit": "编辑", "editUnavailable": "草案只能整份写入；写入后可直接编辑 AGENTS.md"},
-  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分钟", "rangeUntil": "截至 {{to}}", "collapse": "收起摘要", "toggle": "收起或展开归来摘要", "headline": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；有 <o>{{pending}} 件</o>等你拍板。", "headlineClear": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；没有等你处理的事项。", "kpiStages": "阶段", "kpiStagesValue": "完成 {{count}} 个", "kpiDeliveries": "交付", "kpiDeliveriesValue": "{{count}} 份", "kpiReviews": "复审", "kpiReviewsPassed": "{{count}} 过", "kpiReviewsRejected": "{{count}} 退", "kpiCost": "花费", "costLoading": "正在读取花费", "costUnknown": "离开期间的花费读取不到", "needsYou": "需要你处理", "nothingNeeded": "没有等你处理的事项。", "next": "建议下一步", "fillHint": "填入输入条，不会发送", "collapsedLine": "离开期间 · {{minutes}} 分钟 · {{count}} 件待你处理", "collapsedLineNoTime": "离开期间 · {{count}} 件待你处理", "suggest": {"rejected": "说说被退回的 {{count}} 份产物要怎么改", "escalated": "解释一下升级给我的 {{count}} 条异议", "delivery": "讲讲 {{path}} 这次改了什么", "stage": "总结这一阶段的产出，再推进下一阶段", "keepGoing": "继续推进当前阶段"}},
+  returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分钟", "rangeUntil": "截至 {{to}}", "collapse": "收起摘要", "toggle": "收起或展开归来摘要", "headline": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；有 <o>{{pending}} 件</o>等你拍板。", "headlineClear": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；没有等你处理的事项。", "kpiStages": "阶段", "kpiStagesValue": "完成 {{count}} 个", "kpiDeliveries": "交付", "kpiDeliveriesValue": "{{count}} 份", "kpiReviews": "复审", "kpiReviewsPassed": "{{count}} 过", "kpiReviewsRejected": "{{count}} 退", "kpiCost": "花费", "costLoading": "正在读取花费", "costUnknown": "离开期间的花费读取不到", "needsYou": "需要你处理", "handled": "已处理", "nothingNeeded": "没有等你处理的事项。", "next": "建议下一步", "fillHint": "填入输入条，不会发送", "collapsedLine": "离开期间 · {{minutes}} 分钟 · {{count}} 件待你处理", "collapsedLineNoTime": "离开期间 · {{count}} 件待你处理", "suggest": {"rejected": "说说被退回的 {{count}} 份产物要怎么改", "escalated": "解释一下升级给我的 {{count}} 条异议", "delivery": "讲讲 {{path}} 这次改了什么", "stage": "总结这一阶段的产出，再推进下一阶段", "keepGoing": "继续推进当前阶段"}},
   fresh: {"greeting": "团队已就位，要从哪里开始？", "sub": "{{roles}} 个角色 · {{stages}} 个阶段", "specTitle": "先写规格", "specDesc": "从一句话需求展开验收标准", "specFill": "从这句需求开始写规格，列出验收标准：", "repoTitle": "先分析现有仓库", "repoDesc": "读目录结构、命令与依赖", "repoFill": "先分析现有仓库：目录结构、命令和依赖。"},
   keys: {
     palette: '命令面板',
@@ -1169,7 +1171,7 @@ export default {
     stageSkip: '跳过当前阶段',
     stageStamp: '阶段盖章',
     nodeRail: '聚焦节点轨',
-    dismissPending: '关闭待决弹窗',
+    dismissPending: "收起待决坞",
     treeNewFile: '新建文件',
     treeNewFolder: '新建目录',
     treeRefresh: '刷新项目树',

@@ -27,6 +27,22 @@ export function attentionRows(pending: readonly PendingQuestion[]): AttentionRow
     .map(({ question }) => ({ question, tone: attentionTone(question) }))
 }
 
+/** C12 禁用态（补设计，票 04 收口票 05 的缺口）：处理掉的「需要你处理」行划除并转 ink-3，保留 30 秒可读后移除。 */
+export const HANDLED_TTL_MS = 30_000
+
+export type ShownRow = AttentionRow & { handledAt: number | null }
+
+/** 上一帧显示的行 + 当下待决 → 这一帧的行：仍待决的按严重度在前（首行 = 坞顶卡），
+ *  刚离开 pending 的记下离开时刻排在后面，超过 ttl 的丢弃。纯函数，时间由调用方给。 */
+export function withHandled(prev: readonly ShownRow[], rows: readonly AttentionRow[], now: number, ttl = HANDLED_TTL_MS): ShownRow[] {
+  const live = new Set(rows.map((r) => r.question.id))
+  const handled = prev
+    .filter((r) => !live.has(r.question.id))
+    .map((r) => (r.handledAt == null ? { ...r, handledAt: now } : r))
+    .filter((r) => now - (r.handledAt ?? now) < ttl)
+  return [...rows.map((r) => ({ ...r, handledAt: null })), ...handled]
+}
+
 /** 载荷里可能缺字段（旧轨迹、测试夹具）——缺的一律按 0，不臆造。 */
 export function readSummary(payload: Record<string, unknown>): ReturnSummary {
   const group = <T extends Record<string, number>>(key: string, keys: (keyof T)[]): T => {
