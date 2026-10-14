@@ -171,7 +171,7 @@ export function EntityPicker({
           {shown.map((o) => (
             <label key={o.id} className="flex cursor-pointer items-center gap-2.5 rounded-[7px] px-1.5 py-[7px] live:hover:bg-hover">
               <input type="checkbox" className="accent-[var(--accent)]" checked={sel.has(o.id)} onChange={() => toggle(o.id)} />
-              <span className="flex-none font-mono text-[12px] text-ink">{o.id}</span>
+              <span data-picker-id className="flex-none font-mono text-[12px] text-ink">{o.id}</span>
               {o.badge && <Badge variant={o.badgeOk ? 'ok' : 'neutral'} className="h-[18px] px-1.5 text-[11px]">{o.badge}</Badge>}
               <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{o.desc}</span>
             </label>
