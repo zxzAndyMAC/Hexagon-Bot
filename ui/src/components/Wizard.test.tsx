@@ -6,6 +6,7 @@ import i18n from '../i18n'
 import { Wizard } from './Wizard'
 import { api } from '../api'
 import { CREATE_STEPS } from '../createProgress'
+import { TooltipProvider } from './ui/tooltip'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -13,7 +14,7 @@ async function render(node: React.ReactNode) {
   const el = document.createElement('div')
   document.body.appendChild(el)
   const root = createRoot(el)
-  await act(async () => { root.render(node) })
+  await act(async () => { root.render(<TooltipProvider>{node}</TooltipProvider>) })
   return { el, root }
 }
 
@@ -23,10 +24,14 @@ function setValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+const isOff = (b: Element) => (b as HTMLButtonElement).disabled || b.getAttribute('aria-disabled') === 'true'
+
 async function clickButton(el: HTMLElement, label: string) {
+  // 票 10：按钮可带键位 Kbd（「重新生成⌥⌘Y」），按文字前缀找；A1 禁用走 aria-disabled
   const btn = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
+    ?? [...el.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith(label))
   if (!btn) throw new Error(`missing button ${label}`)
-  if ((btn as HTMLButtonElement).disabled) throw new Error(`disabled button ${label}`)
+  if (isOff(btn)) throw new Error(`disabled button ${label}`)
   await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 }
 
@@ -48,7 +53,7 @@ describe('向导创建进度（票 14）', () => {
   async function reachConfirm(el: HTMLElement) {
     await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
     await clickButton(el, '下一步')
-    const fields = [...el.querySelectorAll('input')].filter((i) => i.type !== 'checkbox')
+    const fields = [...el.querySelectorAll<HTMLInputElement>('[data-slot=input] input')]
     await act(async () => {
       setValue(fields[0], '/tmp/hex-create')
       setValue(fields[1], '示例')
@@ -58,7 +63,7 @@ describe('向导创建进度（票 14）', () => {
     // 重排（2026-09-25）：brief=3 在 roles=4 前。dev mock 目录带 AGENTS.md，
     // brief 步是检出分支（无 checkbox）；卸角色挪到 roles 步。
     await clickButton(el, '下一步')
-    const box = el.querySelector('input[type=checkbox]') as HTMLInputElement
+    const box = el.querySelector('[role=listbox] [role=checkbox]') as HTMLElement
     await act(async () => { box.click() })
     await clickButton(el, '下一步')
     await act(async () => { await new Promise((r) => setTimeout(r, 80)) })
@@ -87,7 +92,7 @@ describe('向导创建进度（票 14）', () => {
     expect(step('recheck_keys').dataset.state).toBe('running')
     expect(step('open_project').dataset.state).toBe('pending')
     const back = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === '上一步')!
-    expect((back as HTMLButtonElement).disabled).toBe(false)
+    expect(isOff(back)).toBe(false)
     expect(onDone).not.toHaveBeenCalled()
 
     const reason = '缺模型密钥，补齐或拿掉对应角色才能开跑: chat'
@@ -146,12 +151,12 @@ describe('向导创建进度（票 14）', () => {
     const { el, root } = await render(<Wizard onDone={vi.fn()} />)
     await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
     await clickButton(el, '下一步')
-    const fields = [...el.querySelectorAll('input')].filter((i) => i.type !== 'checkbox')
+    const fields = [...el.querySelectorAll<HTMLInputElement>('[data-slot=input] input')]
     await act(async () => { setValue(fields[0], '/tmp/hex-gen'); setValue(fields[1], '示例') })
     await act(async () => { await new Promise((r) => setTimeout(r, 250)) })
     await clickButton(el, '下一步')
     await clickButton(el, '下一步')
-    const box = el.querySelector('input[type=checkbox]') as HTMLInputElement
+    const box = el.querySelector('[role=listbox] [role=checkbox]') as HTMLElement
     await act(async () => { box.click() })
     await clickButton(el, '下一步')
     await act(async () => { await new Promise((r) => setTimeout(r, 80)) })
