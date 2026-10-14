@@ -146,7 +146,6 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
           <div className="mx-1 my-1.5 rounded-[var(--r-card)] bg-orange-tint p-3" data-browser-setup>
             <div className="flex items-center gap-1.5 text-[13px] font-medium text-orange"><Icon name="warn" size={14} />{t('control.warnTitle')}</div>
             <p className="mt-1 text-[12px] text-ink-2">{t('browser.extensionAccess')}</p>
-            <p className="mt-1 text-[12px] text-ink-2">{t('browser.setupBody')}</p>
             <p className="mt-1 text-[12px] text-ink-3">{t('browser.extensionHint')}</p>
             <div className="mt-2 flex gap-1.5">
               <ActionButton size="xs" label={t('browser.installExtension')} action="browserInstallExtension" data-browser-action="browserInstallExtension"

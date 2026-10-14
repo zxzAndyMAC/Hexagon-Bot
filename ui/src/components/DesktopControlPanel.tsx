@@ -65,6 +65,9 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
   }, [])
   useEffect(() => {
     mounted.current = true
+    // 票 14：StrictMode 的挂载→卸载→再挂载会留下首个请求的 polling 标记，弹层首屏因此卡在「正在读取」2 秒；
+    // 旧请求已被 generation 作废，这里放行新挂载的首读。
+    polling.current = false
     void refresh()
     const tick = window.setInterval(() => { if (!document.hidden) void refresh() }, 2000)
     window.addEventListener('focus', refresh)
