@@ -73,7 +73,8 @@ describe('画布开关与页签（B7，interaction §6 §12）', () => {
     expect(canvasVisible()).toBe(true)
     expect(canvas()!.dataset.canvas).toBe('side')
     expect(el.querySelector('[data-canvas-empty]')!.textContent).toMatch(/Nothing open yet/)
-    expect(el.querySelector('[data-header-canvas]')!.getAttribute('aria-pressed')).toBe('true')
+    // aria-pressed → aria-expanded：开关按披露控件表达状态（2026-10-14 负责人裁决，components B5）
+    expect(el.querySelector('[data-header-canvas]')!.getAttribute('aria-expanded')).toBe('true')
     await key('b', { ...mod, altKey: true })
     expect(canvasVisible()).toBe(false)
   })
@@ -223,6 +224,20 @@ describe('专注模式 ⌘.（R-06）', () => {
     expect(canvasVisible()).toBe(true)
     expect(useUiStore.getState().activeTab).toBe('art:spec.md')
     expect([localStorage.getItem('hexagon.layout.side'), localStorage.getItem('hexagon.layout.canvas')]).toEqual(before)
+  })
+
+  // 修原型 bug（2026-10-14 负责人）：专注模式下侧栏整个隐藏，原先唯一的收起按钮也跟着消失，只能靠键盘恢复。
+  it('专注模式下头部仍有侧栏开关，点击退出专注并恢复原布局', async () => {
+    await act(async () => useUiStore.getState().openTab(art))
+    await key('.', mod)
+    const btn = el.querySelector('[data-header-sidebar]') as HTMLButtonElement
+    expect(btn).toBeTruthy()
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => { btn.click() })
+    expect(el.querySelector('[data-workbench]')!.hasAttribute('data-focus-mode')).toBe(false)
+    expect(el.querySelector('[data-sidebar]')!.getAttribute('data-sidebar')).toBe('expanded')
+    expect(canvasVisible()).toBe(true)
+    expect(useUiStore.getState().activeTab).toBe('art:spec.md')
   })
 })
 

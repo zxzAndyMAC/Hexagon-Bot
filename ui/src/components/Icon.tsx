@@ -18,6 +18,19 @@ import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
 // ui-redesign 票 07 输入条与命令面板（foundations §7 原型名 crosshair / flow→workflow / test→test-tube；focus 为补设计：专注模式）
 import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
+import { createLucideIcon } from 'lucide-react'
+
+// 2026-10-14 负责人裁决（foundations §7 补设计）：侧栏 / 画布开关图标表状态——打开 = 对应一侧窗格实心，
+// 关闭 = 只剩分隔线（panel-left / panel-right）。Lucide 无「实心窗格」款，按其 24 视窗与 1.75 描边自绘；
+// 被否决：PanelLeftOpen/Close 的箭头款（箭头表「点了会怎样」而非当前状态）。
+const PanelLeftFilled = createLucideIcon('panel-left-filled', [
+  ['rect', { x: '3', y: '3', width: '18', height: '18', rx: '2', key: 'frame' }],
+  ['rect', { x: '6', y: '6', width: '4.5', height: '12', rx: '1', fill: 'currentColor', stroke: 'none', key: 'pane' }],
+])
+const PanelRightFilled = createLucideIcon('panel-right-filled', [
+  ['rect', { x: '3', y: '3', width: '18', height: '18', rx: '2', key: 'frame' }],
+  ['rect', { x: '13.5', y: '6', width: '4.5', height: '12', rx: '1', fill: 'currentColor', stroke: 'none', key: 'pane' }],
+])
 
 const ICONS = {
   computer: Monitor,
@@ -96,6 +109,8 @@ const ICONS = {
   'more-vertical': EllipsisVertical,
   // ---- 外壳（票 02）：侧栏收起、搜索与命令、头部 ⋯、阶段 chip、查看流程 ----
   'panel-left': PanelLeft,
+  'panel-left-open': PanelLeftFilled,
+  'panel-right-open': PanelRightFilled,
   search: Search,
   more: Ellipsis,
   clock: Clock,
