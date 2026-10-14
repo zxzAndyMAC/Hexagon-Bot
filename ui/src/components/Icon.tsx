@@ -16,6 +16,8 @@ import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircl
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
+// ui-redesign 票 12 用量（foundations §7 原型名 calendar / trend→trending-up；trend-down 为补设计：环比下降时的对称字形）
+import { Calendar, TrendingDown, TrendingUp } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -105,6 +107,10 @@ const ICONS = {
   image: Image,
   cpu: Cpu,
   collapse: Minimize2,
+  // ---- 用量（票 12） ----
+  calendar: Calendar,
+  trend: TrendingUp,
+  'trend-down': TrendingDown,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

@@ -3,6 +3,8 @@ import type { UsageBucket, UsageRow } from './api'
 import {
   capReached, centsToMc, daysAgo, fmtTime, fmtTok, fmtYuan, groupCost, groupTokens,
   isoDay, parseLimitInput, perAgentSeries, seriesMax, tokenTypeSeries, tokensOf, utcMonthRange,
+  RANGE_PRESETS, presetRange, customRange, previousRange, dayAxis, stackRows, topAgentRows,
+  sumTokens, tokenShare, pctChange, weekOverWeek, bucketTick, stageProgress,
 } from './usage'
 
 describe('usage units', () => {
@@ -157,5 +159,102 @@ describe('toolInputSummary（票 15）', () => {
     const long = toolInputSummary({ input: { blob: 'x'.repeat(200) } })
     expect(long.endsWith('…')).toBe(true)
     expect(long.length).toBeLessThanOrEqual(120)
+  })
+})
+
+// ui-redesign 票 12（usage#detail / usage#range / usage#agents）：图表换 Recharts 后，
+// 时间范围、分桶补齐、环比、每 Agent 前 N 名都收进 usage.ts 纯函数；日界仍是 UTC（票 14 裁决不变）。
+describe('usage range（票 12，A23）', () => {
+  // 2026-10-10 15:00 UTC——UTC+8 本地已是 10/11 凌晨，断言仍按 UTC 日界
+  const now = Date.UTC(2026, 9, 10, 15, 0)
+
+  it('presetRange 八个预设都按 UTC 日界给出含当日的闭区间', () => {
+    expect(RANGE_PRESETS).toEqual(['today', 'yesterday', '7d', '14d', '30d', 'month', 'lastMonth', 'all'])
+    expect(presetRange('today', now)).toEqual({ from: '2026-10-10', to: '2026-10-10', preset: 'today' })
+    expect(presetRange('yesterday', now)).toEqual({ from: '2026-10-09', to: '2026-10-09', preset: 'yesterday' })
+    expect(presetRange('7d', now)).toEqual({ from: '2026-10-04', to: '2026-10-10', preset: '7d' })
+    expect(presetRange('14d', now)).toEqual({ from: '2026-09-27', to: '2026-10-10', preset: '14d' })
+    expect(presetRange('30d', now)).toEqual({ from: '2026-09-11', to: '2026-10-10', preset: '30d' })
+    expect(presetRange('month', now)).toEqual({ from: '2026-10-01', to: '2026-10-10', preset: 'month' })
+    expect(presetRange('lastMonth', now)).toEqual({ from: '2026-09-01', to: '2026-09-30', preset: 'lastMonth' })
+    expect(presetRange('all', now)).toEqual({ from: null, to: null, preset: 'all' })
+  })
+
+  it('customRange 起止颠倒自动纠正（A23 错误行：沿用现有行为，不报错）', () => {
+    expect(customRange('2026-10-05', '2026-09-30')).toEqual({ from: '2026-09-30', to: '2026-10-05', preset: 'custom' })
+    expect(customRange('2026-09-30', '2026-09-30')).toEqual({ from: '2026-09-30', to: '2026-09-30', preset: 'custom' })
+  })
+
+  it('previousRange 取紧挨着的等长区间；全部时间没有上一周期', () => {
+    expect(previousRange({ from: '2026-09-11', to: '2026-10-10' })).toEqual({ from: '2026-08-12', to: '2026-09-10' })
+    expect(previousRange({ from: '2026-10-10', to: '2026-10-10' })).toEqual({ from: '2026-10-09', to: '2026-10-09' })
+    expect(previousRange({ from: null, to: null })).toBeNull()
+  })
+
+  it('dayAxis 补齐区间内每个 UTC 日（无数据日也占位）', () => {
+    expect(dayAxis('2026-09-29', '2026-10-02')).toEqual(['2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02'])
+    expect(dayAxis('2026-10-02', '2026-10-02')).toEqual(['2026-10-02'])
+  })
+})
+
+describe('usage chart rows（票 12，E13）', () => {
+  const b = (bucket: string, agent: string, p: number, c = 0, t = 0): UsageBucket =>
+    ({ bucket, agent_id: agent, prompt_tokens: p, completion_tokens: c, tool_output_tokens: t, cost_mc: 0 })
+  const buckets = [b('2026-10-01', 'a0', 10, 5, 1), b('2026-10-01', 'a1', 20), b('2026-10-03', 'a1', 0, 30, 7)]
+
+  it('stackRows：按轴补零，输入 / 输出 / 工具输出三层', () => {
+    expect(stackRows(buckets, ['2026-10-01', '2026-10-02', '2026-10-03'])).toEqual([
+      { bucket: '2026-10-01', input: 30, output: 5, tool: 1 },
+      { bucket: '2026-10-02', input: 0, output: 0, tool: 0 },
+      { bucket: '2026-10-03', input: 0, output: 30, tool: 7 },
+    ])
+  })
+
+  it('stackRows 不给轴时取数据里出现的桶（按小时粒度）', () => {
+    const rows = stackRows([b('2026-10-01 09:00', 'a0', 1), b('2026-10-01 08:00', 'a0', 2)])
+    expect(rows.map((r) => r.bucket)).toEqual(['2026-10-01 08:00', '2026-10-01 09:00'])
+  })
+
+  it('topAgentRows：只取总量前 N 名，按总量降序，各自一列', () => {
+    const { agents, rows } = topAgentRows(buckets, ['2026-10-01', '2026-10-02', '2026-10-03'], 1)
+    expect(agents).toEqual(['a1'])
+    expect(rows).toEqual([
+      { bucket: '2026-10-01', a1: 20 },
+      { bucket: '2026-10-02', a1: 0 },
+      { bucket: '2026-10-03', a1: 37 },
+    ])
+  })
+
+  it('sumTokens / tokenShare：区间合计与输入输出占比（整数百分比）', () => {
+    expect(sumTokens(buckets)).toBe(73)
+    expect(tokenShare(buckets)).toEqual({ input: 41, output: 48 })
+    expect(tokenShare([])).toBeNull()
+  })
+
+  it('pctChange：上一周期为 0 时不给环比（不伪造 ∞%）', () => {
+    expect(pctChange(118.4, 100)).toBeCloseTo(18.4)
+    expect(pctChange(50, 100)).toBe(-50)
+    expect(pctChange(10, 0)).toBeNull()
+  })
+
+  it('weekOverWeek：截至 to 的近 7 个 UTC 日 vs 再往前 7 日；小时桶按日归并', () => {
+    const rows = [
+      b('2026-09-27', 'a', 100), // 前一周（9/27–10/03）
+      b('2026-10-04 10:00', 'a', 60), b('2026-10-10', 'a', 60), // 本周（10/04–10/10）
+      b('2026-09-26', 'a', 999), // 两周之外，不计
+    ]
+    expect(weekOverWeek(rows, '2026-10-10')).toBeCloseTo(20)
+    expect(weekOverWeek([b('2026-10-10', 'a', 5)], '2026-10-10')).toBeNull()
+  })
+
+  it('bucketTick：按天给 月/日（UTC），按小时给 时:分', () => {
+    expect(bucketTick('2026-09-11', 'day', 'en')).toBe('9/11')
+    expect(bucketTick('2026-09-11 14:00', 'hour', 'en')).toBe('14:00')
+  })
+
+  it('stageProgress：已完成 / 总数（跳过算完成）', () => {
+    const s = (stage: string, state: 'done' | 'active' | 'pending' | 'skipped') => ({ run_id: 'r', stage, seq: 0, state })
+    expect(stageProgress([s('spec', 'done'), s('ia', 'skipped'), s('ui', 'active'), s('impl', 'pending')]))
+      .toEqual({ done: 2, total: 4 })
   })
 })
