@@ -5,6 +5,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { bindingFor, formatBinding, matches, type ActionId } from '../../keymap'
 import { Icon, type IconName } from '../Icon'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -104,9 +105,10 @@ export function NeedsProject({ onOpen }: { onOpen?: () => void }) {
 }
 
 /** A20 骨架条（减少动效时静止为 --canvas，见 index.css 的 hx 规则）。 */
-export function SkeletonRows({ rows = 5, className }: { rows?: number; className?: string }) {
+export function SkeletonRows({ rows = 5, label, className }: { rows?: number; label?: string; className?: string }) {
   return (
     <div aria-busy="true" className={cn('flex flex-col gap-2 p-3', className)}>
+      {label && <span className="sr-only">{label}</span>}
       {Array.from({ length: rows }, (_, i) => (
         <span key={i} className="h-[30px] animate-pulse rounded-[6px] bg-canvas motion-reduce:animate-none" />
       ))}
@@ -114,14 +116,25 @@ export function SkeletonRows({ rows = 5, className }: { rows?: number; className
   )
 }
 
-/** C5 行内错误（列表 / 表体加载失败）+ 「重新加载」。 */
-export function InlineError({ text, onRetry, retryLabel }: { text: string; onRetry?: () => void; retryLabel?: string }) {
+export type RetrySpec = { text: string; onRetry: () => void; retryLabel?: string; retryAction?: ActionId }
+
+/** C5 行内错误（列表 / 表体加载失败）+ 「重新加载」；给了 keymap 动作时按钮 title 带当前绑定、聚焦时按键即重试。 */
+export function InlineError({ text, onRetry, retryLabel, retryAction }: Omit<RetrySpec, 'onRetry'> & { onRetry?: () => void }) {
   const { t } = useTranslation()
+  const label = retryLabel ?? t('settingsUi.reload')
   return (
     <div role="alert" className="m-3 flex items-center gap-2 text-[12.5px] text-red">
       <Icon name="warn" size={14} className="flex-none" />
       <span className="min-w-0 flex-1">{text}</span>
-      {onRetry && <Button size="xs" variant="ghost" onClick={onRetry}>{retryLabel ?? t('settingsUi.reload')}</Button>}
+      {onRetry && (
+        <Button size="xs" variant="ghost" onClick={onRetry}
+          title={retryAction ? [label, formatBinding(bindingFor(retryAction))].filter(Boolean).join(' · ') : undefined}
+          onKeyDown={retryAction ? (e) => {
+            if (matches(e.nativeEvent, bindingFor(retryAction))) { e.preventDefault(); e.stopPropagation(); onRetry() }
+          } : undefined}>
+          {label}
+        </Button>
+      )}
     </div>
   )
 }
@@ -164,7 +177,9 @@ type ListDetailProps<T> = {
   emptyText?: string
   virtualized?: boolean
   loading?: boolean
-  error?: { text: string; onRetry: () => void }
+  /** 加载骨架的读屏文案（「正在加载技能…」）。 */
+  loadingLabel?: string
+  error?: RetrySpec
   /** 详情区底下额外的整宽块（扫描结果）。 */
   below?: React.ReactNode
   children: React.ReactNode
@@ -244,9 +259,9 @@ export function ListDetail<T>(p: ListDetailProps<T>) {
           )}
           <div role="listbox" aria-label={p.label} onKeyDown={listKey} className="min-h-0 flex-1 overflow-y-auto pb-2">
             {p.error ? (
-              <InlineError text={p.error.text} onRetry={p.error.onRetry} />
+              <InlineError {...p.error} />
             ) : p.loading && p.items.length === 0 ? (
-              <SkeletonRows />
+              <SkeletonRows label={p.loadingLabel} />
             ) : shown.length === 0 ? (
               <div className="px-[18px] py-3 text-[12.5px] text-ink-3">{p.emptyText ?? t('settingsUi.noMatches')}</div>
             ) : p.virtualized && shown.length > 100 ? (

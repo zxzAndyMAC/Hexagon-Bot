@@ -100,8 +100,9 @@ describe('SettingsPage list|detail 分区', () => {
     const btn = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
     await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
   }
+  // ui-redesign 票 11（components E2）：列表是 listbox，条目从 role=button 改为 role=option。
   const clickText = async (el: HTMLElement, text: string) => {
-    const btn = [...el.querySelectorAll<HTMLElement>('[role="button"], button')]
+    const btn = [...el.querySelectorAll<HTMLElement>('[role="option"], [role="button"], button')]
       .find((b) => b.textContent?.includes(text))!
     await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
   }
@@ -268,7 +269,8 @@ describe('SettingsPage list|detail 分区', () => {
     const mute = vi.spyOn(api, 'setSkillMuted').mockResolvedValue(undefined)
     const { el, root } = await render(<SettingsPage onBack={() => {}} />)
     await clickNav(el, 'Skills')
-    const sw = el.querySelector('input.switch')!
+    // 票 11：行内开关换成 A10 Switch（role=switch），不再是 input.switch
+    const sw = el.querySelector('[role="switch"]')!
     await act(async () => { sw.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(mute).toHaveBeenCalledWith('my-lint', true)
     root.unmount()
@@ -276,6 +278,8 @@ describe('SettingsPage list|detail 分区', () => {
 
   // 详情面板限高 72vh：头行/文件签钉住，滚动只发生在内容区——
   // 长 SKILL.md 不再把整个设置列顶出视口。
+  // ui-redesign 票 11（components E2，settings#skills）：列表 | 详情铺满设置右侧，详情位 ld-detail 自己滚动，
+  // 列表不随之滚走——「不把整个设置列顶出去」由两栏各自滚动保证，72vh 卡片限高随原型撤掉。
   it('Skills 详情：面板限高且只有内容区滚动', async () => {
     vi.spyOn(api, 'listSkills').mockResolvedValue([
       { name: 'my-lint', description: '自建', origin: 'global', enabled: true },
@@ -285,13 +289,11 @@ describe('SettingsPage list|detail 分区', () => {
     const { el, root } = await render(<SettingsPage onBack={() => {}} />)
     await clickNav(el, 'Skills')
     await clickText(el, 'my-lint')
-    const detail = [...el.querySelectorAll<HTMLElement>('.panel')]
-      .find((p) => p.querySelector('strong')?.textContent === 'my-lint')!
-    expect(detail.style.maxHeight).toBe('72vh')
-    const scrollers = [...detail.querySelectorAll<HTMLElement>('div')]
-      .filter((d) => d.style.overflowY === 'auto')
-    expect(scrollers).toHaveLength(1)
-    expect(scrollers[0].textContent).toContain('x')
+    const detail = el.querySelector<HTMLElement>('[data-skill-detail="my-lint"]')!
+    const pane = detail.closest<HTMLElement>('[data-ld-detail]')!
+    expect(pane.className).toContain('overflow-y-auto')
+    expect(el.querySelector('[data-ld-list]')!.contains(detail)).toBe(false)
+    expect(detail.querySelector('[data-skill-body]')!.textContent).toContain('x')
     root.unmount()
   })
 
@@ -310,9 +312,8 @@ describe('SettingsPage list|detail 分区', () => {
     const { el, root } = await render(<SettingsPage onBack={() => {}} />)
     await clickNav(el, 'Skills')
     await clickText(el, 'my-lint')
-    const detail = () =>
-      [...el.querySelectorAll<HTMLElement>('.panel')]
-        .find((p) => p.querySelector('strong')?.textContent === 'my-lint')!
+    // 票 11：详情不再是 .panel，按 data-skill-detail 找
+    const detail = () => el.querySelector<HTMLElement>('[data-skill-detail="my-lint"]')!
     const btn = (label: string) =>
       [...detail().querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
     const setVal = (node: HTMLInputElement | HTMLTextAreaElement, v: string) => {
@@ -327,8 +328,8 @@ describe('SettingsPage list|detail 分区', () => {
     const descInput = [...detail().querySelectorAll('input')].find((i) => i.value === 'orig desc')!
     const ta = detail().querySelector('textarea')!
     expect(ta.value).toBe('# orig body')
-    // 编辑态 textarea 撑高（取代原 rows=14 的矮框）
-    expect(ta.style.minHeight).toBe('40vh')
+    // 编辑态 textarea 撑高（取代原 rows=14 的矮框）；票 11：撑高写在 A9 Textarea 外壳上
+    expect(ta.closest('[data-slot="textarea"]')!.className).toContain('min-h-[40vh]')
     await act(async () => { setVal(descInput, 'changed'); setVal(ta, '# changed') })
     await act(async () => { btn('Cancel').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(save).not.toHaveBeenCalled()
@@ -383,12 +384,12 @@ describe('SettingsPage list|detail 分区', () => {
     const scanBtn = [...el.querySelectorAll('button')]
       .find((b) => b.textContent?.trim() === 'Scan local skills')!
     await act(async () => { scanBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    const panel = [...el.querySelectorAll<HTMLElement>('.panel')]
-      .find((p) => p.textContent?.includes('ext-0'))!
-    expect(panel.style.maxHeight).toBe('40vh')
-    const scrollers = [...panel.querySelectorAll<HTMLElement>('div')]
-      .filter((d) => d.style.overflowY === 'auto')
+    // 票 11：扫描面板换成 ScanPanel（限高 max-h-[40vh]，行列表 data-scan-rows 单独滚）
+    const panel = el.querySelector<HTMLElement>('[data-scan-panel]')!
+    expect(panel.className).toContain('max-h-[40vh]')
+    const scrollers = [...panel.querySelectorAll<HTMLElement>('[data-scan-rows]')]
     expect(scrollers).toHaveLength(1)
+    expect(scrollers[0].className).toContain('overflow-y-auto')
     expect(scrollers[0].textContent).toContain('ext-19')
     // 底部操作行在滚动区外
     expect(scrollers[0].textContent).not.toContain('Import')
@@ -463,12 +464,12 @@ describe('SettingsPage 日志分区（diagnostic-records 票 01）', () => {
 
   it('左栏有「日志」；开关在此页而不在通用页', async () => {
     const { el, root } = await render(<SettingsPage onBack={() => {}} />)
-    // 通用页不再有诊断开关（票 01：搬家）。
+    // 通用页不再有诊断开关（票 01：搬家）。票 11：开关换成 A10 Switch（role=switch）。
     expect(el.textContent).not.toContain('Diagnostic logging')
-    expect(el.querySelector('input[type=checkbox]')).toBeNull()
+    expect(el.querySelector('[role="switch"]')).toBeNull()
     await clickNav(el, 'Logs')
     expect(el.textContent).toContain('Diagnostic logging')
-    const box = el.querySelector('input[type=checkbox]')
+    const box = el.querySelector('[role="switch"]')
     expect(box).toBeTruthy()
     root.unmount()
   })
@@ -522,14 +523,13 @@ describe('SettingsPage 日志分区（diagnostic-records 票 01）', () => {
   it('只有记录列表滚动：开关与筛选条钉在滚动区外', async () => {
     const { el, root } = await render(<SettingsPage onBack={() => {}} />)
     await clickNav(el, 'Logs')
-    // 滚动容器 = 含记录行且 overflowY:auto 的那一层。
-    const scroller = [...el.querySelectorAll('div')].find(
-      (d) => d.style.overflowY === 'auto' && d.textContent?.includes('app_start'),
-    )!
-    expect(scroller).toBeTruthy()
-    // 开关和筛选按钮不在滚动区里。
-    expect(scroller.querySelector('input[type=checkbox]')).toBeNull()
-    const refresh = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Refresh')!
+    // 滚动容器 = 含记录行的表体卡（票 11：A21 表格，data-logs-scroll）。
+    const scroller = el.querySelector<HTMLElement>('[data-logs-scroll]')!
+    expect(scroller.className).toContain('overflow-y-auto')
+    expect(scroller.textContent).toContain('app_start')
+    // 开关和筛选按钮不在滚动区里。票 11：开关是 role=switch，刷新是带可读名的图标按钮。
+    expect(scroller.querySelector('[role="switch"]')).toBeNull()
+    const refresh = el.querySelector('button[aria-label="Refresh"]')!
     expect(scroller.contains(refresh)).toBe(false)
     // 记录行在滚动区里。
     const row = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('app_start'))!
@@ -541,7 +541,7 @@ describe('SettingsPage 日志分区（diagnostic-records 票 01）', () => {
     const setSpy = vi.spyOn(api, 'setLogEnabled').mockResolvedValue(undefined)
     const { el, root } = await render(<SettingsPage onBack={() => {}} />)
     await clickNav(el, 'Logs')
-    const box = el.querySelector<HTMLInputElement>('input[type=checkbox]')!
+    const box = el.querySelector<HTMLButtonElement>('[role="switch"]')!
     await act(async () => {
       box.click()
       // onChange 是异步链（setLogEnabled → refresh）——给一轮微任务再断言，

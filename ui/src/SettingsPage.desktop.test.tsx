@@ -11,7 +11,8 @@ import { useUiStore } from './store'
 let root: ReturnType<typeof createRoot>
 let el: HTMLDivElement
 const status = { project_root: '/project-a', enabled: true, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0 }
-const header = () => el.firstElementChild!.firstElementChild!
+// ui-redesign 票 11（components E5）：「暂停电脑操作」从设置顶栏移到权限分区标题行（SetHead）。
+const header = () => el.querySelector('[data-set-wrap]')!.firstElementChild!
 const buttons = () => [...header().querySelectorAll('button')].filter(button => ['Pause computer', 'Resume computer', 'Computer access disabled'].includes(button.textContent!.trim()))
 
 beforeEach(async () => {

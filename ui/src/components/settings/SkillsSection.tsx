@@ -294,7 +294,6 @@ export function SkillsSection() {
   }
 
   const selSkill = skills?.find((s) => s.name === selected) ?? null
-  const retryTitle = [t('skills.retryLoad'), formatBinding(bindingFor('retrySkillsLoad'))].filter(Boolean).join(' · ')
 
   return (
     <ListDetail<SkillRow>
@@ -302,7 +301,8 @@ export function SkillsSection() {
       virtualized
       items={skills ?? []}
       loading={loading}
-      error={loadError ? { text: loadError, onRetry: () => void load() } : undefined}
+      loadingLabel={t('skills.loadingList')}
+      error={loadError ? { text: loadError, onRetry: () => void load(), retryLabel: t('skills.retryLoad'), retryAction: 'retrySkillsLoad' } : undefined}
       itemKey={(s) => s.name}
       filterText={(s) => `${s.name} ${s.description}`}
       selected={creating ? null : selected}
@@ -374,10 +374,7 @@ export function SkillsSection() {
       ) : selSkill ? (
         <SkillDetail key={selSkill.name} skill={selSkill} onSaved={load} />
       ) : (
-        <Empty icon="book" title={t('settings.nav_skills')} desc={t('skills.intro')}
-          action={loadError ? <Button size="sm" title={retryTitle} onClick={() => void load()}
-            onKeyDown={(e) => { if (matches(e.nativeEvent, bindingFor('retrySkillsLoad'))) { e.preventDefault(); e.stopPropagation(); void load() } }}>
-            {t('skills.retryLoad')}</Button> : undefined} />
+        <Empty icon="book" title={t('settings.nav_skills')} desc={t('skills.intro')} />
       )}
     </ListDetail>
   )
