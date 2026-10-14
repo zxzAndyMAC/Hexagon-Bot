@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type UsageBucket } from '../../api'
 import { useUiStore } from '../../store'
-import { agentSwatch } from '../../colors'
+import { agentVar } from '../../colors'
 import { AreaTrend } from './AreaTrend'
 import { ChartCard, ChartSkeleton, UsageEmpty, UsageLoadError } from './parts'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
@@ -35,7 +35,7 @@ export function AgentRecent({ refreshKey }: { refreshKey: number }) {
 
   const roleOf = (id: string) => team.find((m) => m.id === id)?.role ?? id
   const { agents, rows } = topAgentRows(series, dayAxis(daysAgo(days - 1), daysAgo(0)), TOP_N)
-  const lines = agents.map((id) => ({ key: id, label: roleOf(id), color: `var(--agent-c${agentSwatch(id)})` }))
+  const lines = agents.map((id) => ({ key: id, label: roleOf(id), color: agentVar(id) }))
   const aria = t('usageDetail.agentsAria', {
     days,
     parts: agents.map((id) => `${roleOf(id)} ${fmtTok(rows.reduce((s, r) => s + Number(r[id] ?? 0), 0))}`).join(', '),

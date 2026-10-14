@@ -1,7 +1,7 @@
 // 图表 Chart（components E13，usage#detail / usage#agents / usage#quick）：shadcn Chart（Recharts）按 Hexagon token 改写。
 // 只画横向网格 --grid；X 刻度 11 ink-3；悬停竖向虚线参考线 --line-strong 3 3；
 // 提示 ctip：最小 150、圆角 9、overlay 面、日期 500 + 每行色点 + 名 + 等宽值；图例下方居中 12 ink-2（8 方块圆角 2）。
-// 票 12：ECharts 迁到 Recharts（spec「图表从 ECharts 迁到 shadcn Chart」）。颜色直接写 var(--chart-n) / var(--agent-cN)，
+// 票 12：ECharts 迁到 Recharts（spec「图表从 ECharts 迁到 shadcn Chart」）。颜色直接写 chart-1..3 / agent-c1..8 的 CSS 变量，
 // 深浅两主题由 CSS 变量本身切换，不走 shadcn 的 THEMES 选择器（应用用 html[data-theme]，不是 .dark）。
 import * as React from "react"
 import * as RechartsPrimitive from "recharts"

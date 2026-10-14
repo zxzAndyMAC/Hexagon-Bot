@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { Cell, Label, Pie, PieChart } from 'recharts'
 import type { UsageBucket } from '../../api'
 import { useUiStore } from '../../store'
-import { agentSwatch } from '../../colors'
+import { agentVar } from '../../colors'
 import { ChartCard, HBar, UsageEmpty } from './parts'
 import { Avatar } from '@/components/ui/avatar'
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart'
@@ -50,7 +50,7 @@ export function Leaderboard({ series }: { series: UsageBucket[] }) {
               <HBar key={id}
                 label={<><Avatar agentId={id} name={roleOf(id)} size={18} src={avatars[id]} /><span className="truncate">{roleOf(id)}</span></>}
                 value={fmtTok(tok)} exact={`${roleOf(id)} · ${tok.toLocaleString()}`}
-                max={(tok / top) * 100} color={`var(--agent-c${agentSwatch(id)})`} />
+                max={(tok / top) * 100} color={agentVar(id)} />
             ))
           : <ModelDonut rows={rows} />}
       </div>
