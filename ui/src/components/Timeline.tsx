@@ -712,6 +712,7 @@ function NodeRail({ marks, onJump }: { marks: NodeMark[]; onJump: (m: NodeMark) 
   }, [open])
   return (
     <div
+      data-node-rail
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       style={{

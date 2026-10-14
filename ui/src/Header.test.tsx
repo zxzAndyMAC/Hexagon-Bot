@@ -103,13 +103,42 @@ describe('头部 crumb 与画布开关（B5）', () => {
     expect(host.querySelector('[data-stage-chip]')).toBeNull()
   })
 
-  it('画布开关 tooltip 带 ⌥⌘B 绑定，开时 aria-pressed', async () => {
+  // 2026-10-14 负责人裁决（components B5）：开关是展开 / 收起面板的披露控件，状态由图标（窗格实心 / 只剩分隔线）
+  // 与 aria-expanded 表达；原 aria-pressed 的「按下底色」断言随之改为 aria-expanded + 图标态。
+  it('画布开关：关时 aria-expanded=false、开时 true，图标与 tooltip 随状态变', async () => {
     const host = await render(<Header />)
     const btn = host.querySelector('[data-header-canvas]') as HTMLButtonElement
-    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+    expect(btn.dataset.state).toBe('closed')
+    expect(btn.getAttribute('aria-label')).toBe(i18n.t('header.openCanvas'))
     await act(async () => { btn.click() })
     expect(useUiStore.getState().canvasOpen).toBe(true)
-    expect(btn.getAttribute('aria-pressed')).toBe('true')
+    expect(btn.getAttribute('aria-expanded')).toBe('true')
+    expect(btn.dataset.state).toBe('open')
+    expect(btn.getAttribute('aria-label')).toBe(i18n.t('header.closeCanvas'))
+  })
+
+  // 修原型 bug（2026-10-14）：侧栏开关原在侧栏顶栏，收起为图标列 / 专注模式后随侧栏消失，只能靠键盘恢复。
+  it('侧栏开关常驻头部左端：展开 / 图标列 / 专注三态都在，图标与 tooltip 随状态变', async () => {
+    const host = await render(<Header side="expanded" />)
+    const btn = () => host.querySelector('[data-header-sidebar]') as HTMLButtonElement
+    expect(btn().getAttribute('aria-expanded')).toBe('true')
+    expect(btn().dataset.state).toBe('open')
+    expect(btn().getAttribute('aria-label')).toBe(i18n.t('sidebar.collapse'))
+    await act(async () => root!.render(<TooltipProvider><Header side="collapsed" /></TooltipProvider>))
+    expect(btn().getAttribute('aria-expanded')).toBe('false')
+    expect(btn().dataset.state).toBe('closed')
+    expect(btn().getAttribute('aria-label')).toBe(i18n.t('sidebar.expand'))
+    await act(async () => root!.render(<TooltipProvider><Header side="hidden" /></TooltipProvider>))
+    expect(btn().getAttribute('aria-label')).toBe(i18n.t('header.exitFocus'))
+    const toggle = vi.spyOn(useUiStore.getState(), 'toggleSidebar')
+    await act(async () => { btn().click() })
+    expect(toggle).toHaveBeenCalled()
+  })
+
+  it('侧栏顶栏不再有收起按钮（开关移到头部）', async () => {
+    const host = await render(<Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} />)
+    expect(host.querySelector(`[aria-label="${i18n.t('sidebar.collapse')}"]`)).toBeNull()
   })
 
   it('没有 Agent Screen 目标时不渲染「屏幕」；有目标时点它发切换请求', async () => {

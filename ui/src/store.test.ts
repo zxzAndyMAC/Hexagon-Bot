@@ -532,11 +532,105 @@ describe('侧栏布局切片（票 02）', () => {
     expect(useUiStore.getState().sideLayout.collapsed).toBe(false)
   })
 
-  it('文件树快捷键打开画布占位的文件页，不再写旧键', () => {
-    useUiStore.setState({ canvasOpen: false, canvasPane: 'artifacts' })
+  // 票 03（ADR 0088）：画布占位撤掉，文件树在画布「项目文件」页签里（canvas#file）。
+  it('文件树快捷键打开画布的项目文件页签，不再写旧键', () => {
+    useUiStore.setState({ canvasOpen: false, tabs: [], activeTab: null })
     useUiStore.getState().requestFileTree('refresh')
     expect(useUiStore.getState().canvasOpen).toBe(true)
-    expect(useUiStore.getState().canvasPane).toBe('files')
+    expect(useUiStore.getState().activeTab).toBe('files')
     expect(localStorage.getItem('hexagon.rail')).toBeNull()
+  })
+})
+
+// ui-redesign 票 03（ADR 0088 / 0090；interaction §1 §3 §6 §12，components B7）。
+describe('画布与主区视图切片（票 03）', () => {
+  const art = { id: 'art:a.md', kind: 'artifact' as const, title: 'a.md', path: 'a.md' }
+  const agent = { id: 'agent:a1', kind: 'agent' as const, title: 'QA', agentId: 'a1' }
+  beforeEach(() => {
+    localStorage.removeItem('hexagon.layout.canvas')
+    useUiStore.setState({ tabs: [], activeTab: null, canvasOpen: false, canvasLayout: { width: null, full: false }, usageView: false, focusSnapshot: null,
+      sideLayout: { width: 252, collapsed: false } })
+  })
+
+  it('openTab 按 id 去重、打开画布并切回对话视图；时间线不是页签', () => {
+    const s = useUiStore.getState()
+    s.openUsageDetail()
+    s.openTab(art)
+    s.openTab(agent)
+    s.openTab(art)
+    const st = useUiStore.getState()
+    expect(st.tabs.map((t) => t.id)).toEqual(['art:a.md', 'agent:a1'])
+    expect(st.activeTab).toBe('art:a.md')
+    expect(st.canvasOpen).toBe(true)
+    expect(st.usageView).toBe(false)
+    expect(st.tabs.some((t) => (t.kind as string) === 'timeline')).toBe(false)
+  })
+
+  it('关掉最后一个页签时画布关闭', () => {
+    const s = useUiStore.getState()
+    s.openTab(art)
+    s.openTab(agent)
+    s.closeTab('agent:a1')
+    expect(useUiStore.getState().activeTab).toBe('art:a.md')
+    useUiStore.getState().closeTab('art:a.md')
+    expect(useUiStore.getState().canvasOpen).toBe(false)
+    expect(useUiStore.getState().activeTab).toBeNull()
+  })
+
+  it('全宽 ↔ 并排写入 hexagon.layout.canvas；宽度一并持久化', () => {
+    const s = useUiStore.getState()
+    s.openTab(art)
+    s.toggleCanvasFull()
+    expect(useUiStore.getState().canvasLayout.full).toBe(true)
+    useUiStore.getState().setCanvasLayout({ width: 500, full: true })
+    expect(JSON.parse(localStorage.getItem('hexagon.layout.canvas')!)).toEqual({ width: 500, full: true })
+    useUiStore.getState().showConversation()
+    expect(useUiStore.getState().canvasLayout).toEqual({ width: 500, full: false })
+    expect(useUiStore.getState().canvasOpen).toBe(true)
+  })
+
+  it('侧栏「项目文件」以全宽打开，「产物」并排', () => {
+    useUiStore.getState().openCanvas('files')
+    expect(useUiStore.getState()).toMatchObject({ canvasOpen: true, activeTab: 'files', canvasLayout: { full: true } })
+    useUiStore.getState().showConversation()
+    useUiStore.getState().openCanvas('artifacts')
+    expect(useUiStore.getState()).toMatchObject({ activeTab: 'artifacts', canvasLayout: { full: false } })
+  })
+
+  it('⌥⌘B：无页签也能打开（空态）；用量详情盖着时先回对话再显示画布', () => {
+    useUiStore.getState().toggleCanvas()
+    expect(useUiStore.getState().canvasOpen).toBe(true)
+    useUiStore.getState().openUsageDetail()
+    useUiStore.getState().toggleCanvas()
+    expect(useUiStore.getState()).toMatchObject({ canvasOpen: true, usageView: false })
+    useUiStore.getState().toggleCanvas()
+    expect(useUiStore.getState().canvasOpen).toBe(false)
+  })
+
+  it('用量详情占满主区，返回对话', () => {
+    useUiStore.getState().openUsageDetail()
+    expect(useUiStore.getState().usageView).toBe(true)
+    useUiStore.getState().showConversation()
+    expect(useUiStore.getState().usageView).toBe(false)
+  })
+
+  it('专注模式：隐藏侧栏、关画布；再按恢复原布局；不写布局记忆', () => {
+    const s = useUiStore.getState()
+    s.openTab(art)
+    s.setSideLayout({ width: 300, collapsed: false })
+    const before = localStorage.getItem('hexagon.layout.side')
+    useUiStore.getState().toggleFocusMode()
+    expect(useUiStore.getState().focusSnapshot).not.toBeNull()
+    expect(useUiStore.getState().canvasOpen).toBe(false)
+    expect(localStorage.getItem('hexagon.layout.side')).toBe(before)
+    useUiStore.getState().toggleFocusMode()
+    expect(useUiStore.getState()).toMatchObject({ focusSnapshot: null, canvasOpen: true, activeTab: 'art:a.md', sideLayout: { width: 300, collapsed: false } })
+  })
+
+  it('换项目清空画布页签与主区视图', () => {
+    useUiStore.getState().openTab(art)
+    useUiStore.getState().openUsageDetail()
+    useUiStore.getState().beginProjectSwitch()
+    expect(useUiStore.getState()).toMatchObject({ tabs: [], activeTab: null, canvasOpen: false, usageView: false })
   })
 })

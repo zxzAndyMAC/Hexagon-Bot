@@ -5,17 +5,14 @@ import './i18n'
 import { TIMELINE_JUMP_EVENT } from './timelineJump'
 
 import { Timeline } from './components/Timeline'
-import { TabBar } from './components/TabBar'
-import { ArtifactTab } from './components/ArtifactTab'
-import { AgentTab } from './components/AgentTab'
-import { UsageDetailTab } from './components/UsageDetailTab'
-import { DiffView } from './components/DiffView'
-import { FileEditor } from './components/FileEditor'
-import { parseUnifiedDiff } from './diff'
 import { Sidebar } from './components/shell/Sidebar'
 import { SidebarHandle } from './components/shell/SidebarHandle'
 import { Header } from './components/shell/Header'
-import { InterimCanvas } from './components/shell/InterimCanvas'
+import { Canvas } from './components/shell/Canvas'
+import { CanvasHandle } from './components/shell/CanvasHandle'
+import { UsageView } from './components/shell/UsageView'
+import { useShellLayout } from './components/shell/useShellLayout'
+import { mainView } from './layout'
 import { FlowDialog } from './components/shell/FlowDialog'
 import { CapBanner } from './components/shell/UsageEntry'
 import { TooltipProvider } from './components/ui/tooltip'
@@ -42,7 +39,12 @@ export default function App() {
   const [computerSettings, setComputerSettings] = useState<Section>('general')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
-  const timelineActive = useUiStore((s) => (s.tabs.find((tab) => tab.id === s.activeTab) ?? s.tabs[0])?.kind === 'timeline')
+  // ADR 0088 / 0090（票 03）：主区视图三态——对话 / 画布全宽 / 用量详情；后两种时对话与输入条一起让出主区。
+  const view = useUiStore(mainView)
+  const shell = useShellLayout()
+  const hasTabs = useUiStore((s) => s.tabs.length > 0)
+  const canvasOpen = useUiStore((s) => s.canvasOpen)
+  const focusMode = useUiStore((s) => s.focusSnapshot != null)
   // 启动闸：null=未查，false=未开项目→启动页，true=工作台。mock 恒 true。
   const [projectOpen, setProjectOpen] = useState<boolean | null>(null)
   const projectRoot = useUiStore(s => s.projectRoot)
@@ -225,19 +227,18 @@ export default function App() {
         e.preventDefault()
         const s = useUiStore.getState()
         if (s.modalScope !== 'workbench') return
-        const timeline = s.tabs.find((tab) => tab.kind === 'timeline')
-        if (!timeline) return
-        s.setActiveTab(timeline.id)
-        // Owner 2026-10-06: reveal the timeline before focusing its hidden input.
+        // ADR 0090（票 03，interaction §3）：画布全宽 / 用量详情时先回到对话，再聚焦输入条。
+        s.showConversation()
+        // Owner 2026-10-06: reveal the conversation before focusing its hidden input.
         requestAnimationFrame(() => {
           const current = useUiStore.getState()
-          if (current.modalScope === 'workbench' && current.activeTab === timeline.id) {
+          if (current.modalScope === 'workbench' && mainView(current) === 'chat') {
             document.getElementById('composer-input')?.focus()
           }
         })
         return
       }
-      // ADR 0088（票 02）：⌘B 由「开关右栏」改为「开关左侧栏」；⌥⌘B 开关画布（票 02 是画布占位）。
+      // ADR 0088（票 02）：⌘B 由「开关右栏」改为「开关左侧栏」；⌥⌘B 开关画布（票 03 接入画布本体）。
       if (matches(e, bindingFor('toggleSidebar'))) {
         e.preventDefault()
         if (projectOpen === true) useUiStore.getState().toggleSidebar()
@@ -245,18 +246,26 @@ export default function App() {
       }
       if (matches(e, bindingFor('toggleCanvas'))) {
         e.preventDefault()
-        if (projectOpen === true) useUiStore.getState().setCanvasOpen(!useUiStore.getState().canvasOpen)
+        if (projectOpen === true) useUiStore.getState().toggleCanvas()
         return
       }
-      if (matches(e, bindingFor('splitEditor'))) {
+      // 票 03（R-04）：分屏撤掉，⌘\ 改为画布全宽 ↔ 并排；R-06：⌘. 专注模式。
+      // 设置页 / 命令面板盖着时不动看不见的布局。
+      if (matches(e, bindingFor('canvasFullWidth'))) {
         e.preventDefault()
-        useUiStore.getState().setSplitOpen(!useUiStore.getState().splitOpen)
+        if (projectOpen === true && useUiStore.getState().modalScope === 'workbench') useUiStore.getState().toggleCanvasFull()
         return
       }
+      if (matches(e, bindingFor('focusMode'))) {
+        e.preventDefault()
+        if (projectOpen === true && useUiStore.getState().modalScope === 'workbench') useUiStore.getState().toggleFocusMode()
+        return
+      }
+      // ADR 0088（票 03）：⌘W 关画布当前页签；画布看不见时不关（时间线不再是页签，没有可关的）。
       if (matches(e, bindingFor('closeTab'))) {
         e.preventDefault()
         const s = useUiStore.getState()
-        s.closeTab(s.activeTab) // timeline tab 在 closeTab 内被拦
+        if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView && s.activeTab) s.closeTab(s.activeTab)
         return
       }
       // ADR 0069：退回/跳过/盖章不再有快捷键。最终验收留在待决卡。
@@ -296,10 +305,12 @@ export default function App() {
   // Benchmark I1/2026-10-06: unmounting the workbench for Settings lost
   // unsaved file text before the project-leave guard could see it. Keep the
   // editor panes; stop native previews by unmounting the side panel as before.
-  // ui-redesign 票 02（ADR 0088）：顶栏与右栏五页签撤掉 → 左侧栏（B1）+ 分割线（B8）+ 主区头部（B5）。
-  // 中栏 Tab 容器与分屏仍在，票 03 换成主区常驻对话 + 右侧画布。
+  // 票 03 起编辑器在画布里：画布进设置页时同样不卸载（只随工作台 display:none）。
+  // ui-redesign 票 02 / 03（ADR 0088 / 0090）：左侧栏（B1）+ 分割线（B8）+ 主区（B6：头部 + 常驻对话 + 输入条）
+  // + 分割线 + 右侧画布（B7）。窗口变窄时按 layout.ts resolveShell 让位，对话主区始终 ≥ 480。
   const openSettings = () => setSettingsOpen(true)
   const raiseCap = () => { setComputerSettings('usage'); setSettingsOpen(true) }
+  const narrowLead = shell.side !== 'expanded'
   return (
     <TooltipProvider>
       {settingsOpen && (
@@ -307,107 +318,55 @@ export default function App() {
           <SettingsPage initialSection={computerSettings}
             onBack={() => { setSettingsOpen(false); setComputerSettings('general') }}
             onOpenUsageDetail={() => {
-              useUiStore.getState().openTab({ id: 'usage', kind: 'usage', title: t('usage.detail') })
+              useUiStore.getState().openUsageDetail()
               setSettingsOpen(false)
             }}
           />
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
         </div>
       )}
-    <div aria-hidden={settingsOpen || undefined} data-workbench style={{ height: '100%', display: settingsOpen ? 'none' : 'flex' }}>
-      {!settingsOpen && (
+    <div aria-hidden={settingsOpen || undefined} data-workbench data-main-view={view} data-focus-mode={focusMode || undefined}
+      style={{ height: '100%', display: settingsOpen ? 'none' : 'flex' }}>
+      {!settingsOpen && shell.side !== 'hidden' && (
         <>
-          <Sidebar onSearch={() => setPaletteOpen(true)} onSettings={openSettings} onProjectClosed={() => setProjectOpen(false)} />
-          <SidebarHandle />
+          <Sidebar onSearch={() => setPaletteOpen(true)} onSettings={openSettings} onProjectClosed={() => setProjectOpen(false)}
+            forceCollapsed={shell.sideForced} />
+          <SidebarHandle forced={shell.sideForced} />
         </>
       )}
-      <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--app-main)' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--app-main)' }}>
         {!settingsOpen && <DesktopPermissions compact />}
-        <Header />
-        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', padding: '10px 14px' }}>
-            <SessionRecoveryStrip />
-            <TabBar />
-            <CenterPanes />
-            {/* Owner 2026-10-06: the input used to take space from every tab.
-                Hide rather than unmount so returning keeps the draft and attachments. */}
-            <div hidden={!timelineActive}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
+          {/* 主区对话（B6）：画布全宽 / 用量详情时随输入条一起收起——隐藏不卸载，草稿、附件、网页引用都保留（ADR 0090）。 */}
+          <main hidden={view !== 'chat'} data-conversation
+            style={{ flex: 1, minWidth: 0, display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column',
+              // 画布并排时对话列 560，否则 720（interaction §6）；时间线（票 05）读 --col-w
+              ['--col-w' as string]: shell.canvas === 'side' ? '560px' : '720px' }}>
+            <Header side={shell.side} />
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '10px 14px' }}>
+              {/* C12a：钉在对话列顶部、归来摘要（时间线顶部）上方 */}
+              <SessionRecoveryStrip />
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <Timeline />
+              </div>
               {/* B4 触顶横幅：输入条正上方（interaction §10） */}
               <CapBanner onRaise={raiseCap} />
               <Composer />
             </div>
-          </div>
-          {!settingsOpen && <InterimCanvas />}
+          </main>
+          {view === 'usage' && <UsageView narrowLead={narrowLead} />}
+          {shell.canvas === 'side' && <CanvasHandle width={shell.canvasWidth} max={shell.canvasMax} />}
+          {(hasTabs || canvasOpen) && (
+            <Canvas open={shell.canvas !== 'none'} mode={shell.canvas === 'none' ? 'side' : shell.canvas}
+              width={shell.canvasWidth} narrowLead={narrowLead} />
+          )}
         </div>
-      </main>
+      </div>
       {/* 票 05：待决是浮层，不插进这条纵栏——高度留给 Tab 和时间线。 */}
       {!settingsOpen && <PendingDialog />}
       {!settingsOpen && <FlowDialog />}
       {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </div>
     </TooltipProvider>
-  )
-}
-
-export function CenterTab({ tab }: { tab: ReturnType<typeof useUiStore.getState>['tabs'][number] }) {
-  switch (tab.kind) {
-    case 'file':
-      return <FileEditor path={tab.path!} />
-    case 'artifact':
-      return <ArtifactTab path={tab.path!} />
-    case 'agent':
-      return <AgentTab agentId={tab.agentId!} />
-    case 'usage':
-      return <UsageDetailTab />
-    case 'diff':
-      return (
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div className="row-line mono" style={{ padding: '8px 14px', fontSize: 12, fontWeight: 560, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Icon name="diff" size={12} /> {tab.title}
-          </div>
-          <DiffView ops={parseUnifiedDiff(tab.patchText ?? '')} />
-        </div>
-      )
-    default:
-      return <Timeline />
-  }
-}
-
-function CenterPanes() {
-  const { tabs, activeTab, splitOpen } = useUiStore()
-  const active = tabs.find((t) => t.id === activeTab) ?? tabs[0]
-  // 分屏右栏默认给「另一个最近 tab」；本地状态记右栏选中
-  // 票 15（P3）：splitId 上移 store——进出设置页后右栏选择保持。
-  const splitId = useUiStore((s) => s.splitId)
-  const setSplitId = useUiStore((s) => s.setSplitId)
-  const others = tabs.filter((t) => t.id !== active.id)
-  const splitTab = others.find((t) => t.id === splitId) ?? others[others.length - 1] ?? tabs[0]
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {tabs.map((t) => (
-          <div key={t.id} style={{ display: t.id === active.id ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
-            <CenterTab tab={t} />
-          </div>
-        ))}
-      </div>
-      {splitOpen && (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderLeft: '1px solid var(--border-strong)' }}>
-          <div className="row-line" style={{ display: 'flex', gap: 4, padding: '4px 8px', alignItems: 'center' }}>
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                className={`chip ${t.id === splitTab.id ? 'amber' : ''}`}
-                style={{ cursor: 'pointer', fontSize: 10 }}
-                onClick={() => setSplitId(t.id)}
-              >
-                {t.kind === 'agent' ? (t.role ?? t.title) : t.kind === 'timeline' ? <Icon name="list" size={10} /> : t.title}
-              </button>
-            ))}
-          </div>
-          <CenterTab tab={splitTab} />
-        </div>
-      )}
-    </div>
   )
 }

@@ -94,12 +94,33 @@ function MoreMenu() {
   )
 }
 
-export function Header() {
+/**
+ * 侧栏开关（components B5 左端；2026-10-14 负责人裁决，修原型 bug）：原在侧栏顶栏，收起为图标列或 ⌘. 专注后
+ * 随侧栏消失，鼠标无法恢复。现常驻头部左端、与右端画布开关镜像。专注模式（hidden）下点击走 store.toggleSidebar，
+ * 它按 interaction §1 等同 ⌘.：退出专注并恢复原布局，不在看不见的侧栏上翻收起状态。
+ */
+function SidebarToggle({ side }: { side: 'expanded' | 'collapsed' | 'hidden' }) {
+  const { t } = useTranslation()
+  const open = side === 'expanded'
+  const label = side === 'hidden' ? t('header.exitFocus') : t(open ? 'sidebar.collapse' : 'sidebar.expand')
+  return (
+    <IconButton label={label} action={side === 'hidden' ? 'focusMode' : 'toggleSidebar'}
+      aria-expanded={open} data-state={open ? 'open' : 'closed'} data-header-sidebar
+      onClick={() => useUiStore.getState().toggleSidebar()}>
+      <Icon name={open ? 'panel-left-open' : 'panel-left'} size={16} />
+    </IconButton>
+  )
+}
+
+/** side（票 03）：侧栏实际形态（含被窗口逼成图标列、专注模式隐藏），决定 macOS 红绿灯让位。 */
+export function Header({ side }: { side?: 'expanded' | 'collapsed' | 'hidden' } = {}) {
   const { t } = useTranslation()
   const crumb = useCrumb()
-  const canvasOpen = useUiStore((s) => s.canvasOpen)
+  // 票 03：头部开关反映画布是否可见；与 ⌥⌘B 同一动作（store.toggleCanvas）
+  const canvasOpen = useUiStore((s) => s.canvasOpen && !s.usageView)
   const screen = useUiStore((s) => s.agentScreenAvailable)
-  const sideCollapsed = useUiStore((s) => s.sideLayout.collapsed)
+  const storedCollapsed = useUiStore((s) => s.sideLayout.collapsed)
+  const sideCollapsed = side ? side !== 'expanded' : storedCollapsed
   const st = useUiStore.getState
   return (
     <header
@@ -108,9 +129,10 @@ export function Header() {
       className={cn(
         'flex h-12 flex-none items-center gap-2 border-b border-line-soft pr-3 pl-4',
         // macOS overlay 红绿灯约占左上 0–70px：侧栏收成 56 宽图标列时头部左侧让出余量
-        isMac && sideCollapsed && 'pl-7',
+        isMac && sideCollapsed && (side === 'hidden' ? 'pl-20' : 'pl-7'),
       )}
     >
+      <SidebarToggle side={side ?? (storedCollapsed ? 'collapsed' : 'expanded')} />
       <div data-tauri-drag-region className="flex min-w-0 items-center gap-1.5 text-[13px] text-ink-2">
         <b className="truncate font-semibold text-ink">{crumb.title || t('app.untitledProject')}</b>
         {crumb.step && (
@@ -133,9 +155,11 @@ export function Header() {
           <TooltipContent>{t('agentScreen.title')}<ShortcutKbd binding={bindingFor('agentScreen')} /></TooltipContent>
         </Tooltip>
       )}
-      <IconButton label={t(canvasOpen ? 'header.closeCanvas' : 'header.openCanvas')} action="toggleCanvas" on={canvasOpen}
-        data-header-canvas onClick={() => st().setCanvasOpen(!canvasOpen)}>
-        <Icon name="panel-right" size={16} />
+      {/* 2026-10-14 负责人裁决（B5）：与左端侧栏开关镜像；状态由图标（右窗格实心 / 只剩分隔线）+ aria-expanded 表达 */}
+      <IconButton label={t(canvasOpen ? 'header.closeCanvas' : 'header.openCanvas')} action="toggleCanvas"
+        aria-expanded={canvasOpen} data-state={canvasOpen ? 'open' : 'closed'}
+        data-header-canvas onClick={() => st().toggleCanvas()}>
+        <Icon name={canvasOpen ? 'panel-right-open' : 'panel-right'} size={16} />
       </IconButton>
       <MoreMenu />
       <AgentScreen />

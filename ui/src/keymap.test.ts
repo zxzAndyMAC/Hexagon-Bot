@@ -81,6 +81,21 @@ describe('toggleRail → toggleSidebar（票 02，ADR 0088：⌘B 由右栏改�
     km.resetBinding('toggleSidebar')
   })
 
+  // 票 03（R-04 / R-06，interaction §12）：分屏撤掉，⌘\ 改绑画布全宽；新增专注模式 ⌘.。
+  it('splitEditor 撤掉、用户重映射丢弃；canvasFullWidth mod+\\、focusMode mod+.', async () => {
+    const km = await import('./keymap')
+    const ids = km.ACTIONS.map((a) => a.id as string)
+    expect(ids).not.toContain('splitEditor')
+    expect(ids).toEqual(expect.arrayContaining(['canvasFullWidth', 'focusMode']))
+    expect(km.bindingFor('canvasFullWidth')).toBe('mod+\\')
+    expect(km.bindingFor('focusMode')).toBe('mod+.')
+    localStorage.setItem('hexagon.key.splitEditor', 'mod+shift+\\')
+    km.migrateLegacyBindings()
+    expect(localStorage.getItem('hexagon.key.splitEditor')).toBeNull()
+    expect(km.bindingFor('canvasFullWidth')).toBe('mod+\\')
+    expect(km.matches(new KeyboardEvent('keydown', { key: '.', ...(km.isMac ? { metaKey: true } : { ctrlKey: true }) }), 'mod+.')).toBe(true)
+  })
+
   it('模块加载时自动迁移', async () => {
     localStorage.setItem('hexagon.key.toggleRail', 'mod+shift+Y')
     vi.resetModules()

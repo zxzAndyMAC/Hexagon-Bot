@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from './App'
 import { api, type PendingQuestion, type TimelineItem } from './api'
-import { useUiStore, type WorkTab } from './store'
+import { useUiStore } from './store'
 import { bindingFor, formatBinding } from './keymap'
 import i18n from './i18n'
 import { MotionGlobalConfig } from 'motion/react'
@@ -18,7 +18,7 @@ MotionGlobalConfig.skipAnimations = true
 let root: ReturnType<typeof createRoot>
 let el: HTMLDivElement
 const initial = useUiStore.getState()
-const tab: WorkTab = { id: 'timeline', kind: 'timeline', title: '' }
+// 票 03（ADR 0088）：时间线不再是页签，夹具只清空画布。
 
 const summary: TimelineItem = {
   event: { id: 20, kind: 'return_summary', project_id: 'p1', agent_id: null, stage_run_id: null, created_at: '2026-10-13 14:02:00',
@@ -34,7 +34,7 @@ const pending = [
 
 beforeEach(async () => {
   await i18n.changeLanguage('en')
-  useUiStore.setState({ projectRoot: null, projectGeneration: null, tabs: [tab], activeTab: 'timeline', splitOpen: false, team: [], pending, timeline: [summary], modalScope: 'workbench', intakeDraft: false })
+  useUiStore.setState({ projectRoot: null, projectGeneration: null, tabs: [], activeTab: null, canvasOpen: false, usageView: false, focusSnapshot: null, team: [], pending, timeline: [summary], modalScope: 'workbench', intakeDraft: false })
   vi.spyOn(api, 'projectOpen').mockResolvedValue(true)
   vi.spyOn(api, 'runOpeningIntake').mockResolvedValue()
   vi.spyOn(api, 'mcpServices').mockResolvedValue([])

@@ -12,26 +12,31 @@ const LIMITS = { min: SIDE.min, max: SIDE.max, snap: SIDE.snap, collapsedWidth: 
 
 const toLayout = (r: DragResult, start: number) => (r.collapsed ? { width: start, collapsed: true } : { width: r.width, collapsed: false })
 
-export function SidebarHandle() {
+/**
+ * forced（票 03）：窗口过窄、侧栏被逼成图标列。此时展开会立刻又被让位规则收回，
+ * 所以分割线只报读状态，不响应单击 / ↵（不去翻负责人存的收起记忆）。
+ */
+export function SidebarHandle({ forced = false }: { forced?: boolean }) {
   const { t } = useTranslation()
   const layout = useUiStore((s) => s.sideLayout)
   const st = useUiStore.getState
+  const toggle = forced ? undefined : () => st().toggleSidebar()
   return (
     <ResizeHandle
       label={t('sidebar.width')}
       value={layout.width}
       limits={LIMITS}
       direction={1}
-      collapsed={layout.collapsed}
-      tipTitle={t(layout.collapsed ? 'sidebar.expand' : 'sidebar.hide')}
+      collapsed={layout.collapsed || forced}
+      tipTitle={t(layout.collapsed || forced ? 'sidebar.expand' : 'sidebar.hide')}
       tipBinding={bindingFor('toggleSidebar')}
       tipExtra={t('layout.resetHint')}
       snapLabel={t('sidebar.releaseToCollapse')}
       onDrag={(r, start) => useUiStore.setState({ sideLayout: toLayout(r, start) })}
       onCommit={(r, start) => st().setSideLayout(toLayout(r, start))}
-      onClick={() => st().toggleSidebar()}
-      onDoubleClick={() => st().setSideLayout(DEFAULT_SIDE_LAYOUT)}
-      onToggle={() => st().toggleSidebar()}
+      onClick={toggle}
+      onDoubleClick={forced ? undefined : () => st().setSideLayout(DEFAULT_SIDE_LAYOUT)}
+      onToggle={toggle}
     />
   )
 }

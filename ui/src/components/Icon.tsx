@@ -19,6 +19,19 @@ import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircl
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
+import { createLucideIcon } from 'lucide-react'
+
+// 2026-10-14 负责人裁决（foundations §7 补设计）：侧栏 / 画布开关图标表状态——打开 = 对应一侧窗格实心，
+// 关闭 = 只剩分隔线（panel-left / panel-right）。Lucide 无「实心窗格」款，按其 24 视窗与 1.75 描边自绘；
+// 被否决：PanelLeftOpen/Close 的箭头款（箭头表「点了会怎样」而非当前状态）。
+const PanelLeftFilled = createLucideIcon('panel-left-filled', [
+  ['rect', { x: '3', y: '3', width: '18', height: '18', rx: '2', key: 'frame' }],
+  ['rect', { x: '6', y: '6', width: '4.5', height: '12', rx: '1', fill: 'currentColor', stroke: 'none', key: 'pane' }],
+])
+const PanelRightFilled = createLucideIcon('panel-right-filled', [
+  ['rect', { x: '3', y: '3', width: '18', height: '18', rx: '2', key: 'frame' }],
+  ['rect', { x: '13.5', y: '6', width: '4.5', height: '12', rx: '1', fill: 'currentColor', stroke: 'none', key: 'pane' }],
+])
 
 const ICONS = {
   computer: Monitor,
@@ -109,10 +122,14 @@ const ICONS = {
   'more-vertical': EllipsisVertical,
   // ---- 外壳（票 02）：侧栏收起、搜索与命令、头部 ⋯、阶段 chip、查看流程 ----
   'panel-left': PanelLeft,
+  'panel-left-open': PanelLeftFilled,
+  'panel-right-open': PanelRightFilled,
   search: Search,
   more: Ellipsis,
   clock: Clock,
   expand: Maximize2,
+  // ui-redesign 票 03 画布（foundations §7：columns → columns-2「与对话并排」；「对话」页签复用票 10 的 message）
+  columns: Columns2,
   // ---- 电脑操控（票 14） ----
   external: ExternalLink,
   image: Image,

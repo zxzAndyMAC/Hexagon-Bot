@@ -80,7 +80,8 @@ it('discards a candidate report that arrives after a project switch', async () =
       resolve([{ id: 'policy-1', surface: 'pack_copy', target: '.hexagon/pack.active.json',
         status: 'awaiting_stamp', author: 'a0', artifact_path: 'proposals/old.md' }])
     })
-    expect(useUiStore.getState().tabs.map(t => t.id)).toEqual(['timeline'])
+    // 票 03（ADR 0088）：时间线不再是页签；迟到的报告不得在新项目里开出画布页签。
+    expect(useUiStore.getState().tabs).toEqual([])
     expect(useUiStore.getState().pendingDialogOpen).toBe(true)
   } finally { await act(async () => root.unmount()); vi.restoreAllMocks(); useUiStore.setState(saved, true) }
 })
