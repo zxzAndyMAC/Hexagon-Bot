@@ -16,6 +16,8 @@ import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircl
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
+// ui-redesign 票 04 待决坞（foundations §7 原型名 palette / test→test-tube / key / branch→git-branch）
+import { GitBranch, Key, Palette, TestTube } from 'lucide-react'
 
 const ICONS = {
   computer: Monitor,
@@ -105,6 +107,11 @@ const ICONS = {
   image: Image,
   cpu: Cpu,
   collapse: Minimize2,
+  // ---- 待决坞决策卡（票 04，components D8 / D12） ----
+  palette: Palette,
+  test: TestTube,
+  key: Key,
+  branch: GitBranch,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

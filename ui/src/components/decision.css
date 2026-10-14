@@ -1,0 +1,118 @@
+/* 待决坞与决策卡（ui-redesign 票 04）：components D6 / D8 / D12、interaction §2。
+   取值逐项对齐 docs/design/beautiful-ui/proto.css 的 dock / dock-h / dock-b / dock-f / pager / ic / dc / kv 段，
+   只引用 foundations 的 token；16（dock）/ 12（收起胶囊行）/ 14（dc）是 foundations §4 列名的组件常量圆角。
+   卡内仍有旧子组件（StageEvidence、ModelRecoveryStatus、ExperienceProposal…）带旧共享类（.dim3 .mono .chip），
+   这里只在 .dock / .dc 作用域内把它们换成新 token 外观，不改它们在其它界面的样子。 */
+
+/* ---- D6 坞外壳：输入条正上方，最宽 720（与输入条同列），下距 10 ---- */
+.dock { width: 100%; max-width: 720px; margin: 0 auto 10px; border-radius: 16px; background: var(--surface);
+  box-shadow: var(--shadow-overlay); display: flex; flex-direction: column; position: relative;
+  /* 补设计：坞不挤掉时间线——最高 55% 主区，正文卡内滚动（与 C12 钉顶卡同口径） */
+  max-height: 55vh; }
+.dock .dock-card { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.dock .dock-card > .dock-b { overflow-y: auto; min-height: 0; flex: 1; }
+
+/* ---- 头 ---- */
+.dock-h { display: flex; align-items: center; gap: 10px; padding: 14px 16px 6px; }
+.dock-ic { width: 28px; height: 28px; border-radius: var(--r-sm); display: grid; place-items: center; flex: none; }
+.dock-ic.warn { background: var(--orange-tint); color: var(--orange); }
+.dock-ic.err { background: var(--red-tint); color: var(--red); }
+.dock-ic.flag { background: var(--violet-tint); color: var(--violet); }
+.dock-ic.info { background: var(--accent-tint); color: var(--accent-ink); }
+.dock-ic.ok { background: var(--green-tint); color: var(--green); }
+.dock-ic.mute { background: var(--canvas); color: var(--ink-2); }
+.dock-hl { flex: 1; min-width: 0; }
+.dock-h h4 { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-sub { font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-pager { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.dock-pager > span { min-width: 34px; text-align: center; }
+
+/* ---- 正文：坞内左缩 54（对齐标题），独立形 16 ---- */
+.dock-b { padding: 4px 16px 12px 54px; font-size: 13px; line-height: 1.55; color: var(--ink-2); overflow-wrap: anywhere; }
+.dc .dock-b { padding-left: 16px; }
+.dock-b p { margin: 0; }
+.dock-b p + p, .dock-b > * + p { margin-top: 8px; }
+.dock-cmd { display: block; width: 100%; padding: 8px 10px; border-radius: var(--r-xs); background: var(--inset);
+  box-shadow: inset 0 0 0 1px var(--line); font: 12.5px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dock-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+.dock-hint { margin-top: 8px; font-size: 12px; color: var(--ink-3); }
+.dock-warn { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--red-tint); color: var(--red); font-size: 12.5px; }
+.dock-unknown { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--canvas); font-size: 12.5px; }
+.dock-list { margin-top: 2px; padding: 4px 0; border-radius: var(--r-card); background: var(--inset); box-shadow: inset 0 0 0 1px var(--line-soft); }
+.dock-list > div { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 10px; }
+.dock-list .mono { flex: 1; min-width: 0; font: 12.5px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-meter { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.dock-meter > i { flex: 1; height: 6px; border-radius: 99px; background: var(--canvas); overflow: hidden; }
+.dock-meter > i > b { display: block; height: 100%; background: var(--orange); }
+
+/* kv（decisions#cards）：72 列标签 */
+.dock-kv { display: grid; gap: 4px; margin: 8px 0 0; font-size: 12.5px; }
+.dock-kv:first-child { margin-top: 0; }
+.dock-kv-row { display: grid; grid-template-columns: 72px 1fr; gap: 10px; }
+.dock-kv[data-wide] .dock-kv-row { grid-template-columns: 84px 1fr; }
+.dock-kv dt { color: var(--ink-3); }
+.dock-kv dd { margin: 0; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.dock-kv dd.mono { font: 12.5px var(--mono); }
+
+/* 理由（A9 必填）与确认勾选（A11） */
+.dock-field { margin-top: 12px; }
+.dock-check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
+
+/* ---- 错误：底栏上方红字（D6 / D8 错误态） ---- */
+.dock-err { padding: 0 16px 8px 54px; font-size: 12.5px; color: var(--red); }
+.dc .dock-err { padding-left: 16px; }
+
+/* ---- 底 ---- */
+.dock-f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px 10px 16px; border-top: 1px solid var(--line-soft); }
+.dock-note { flex: 1; min-width: 0; font-size: 12px; color: var(--ink-3); }
+
+/* ---- D8 独立形 dc（归来摘要、练习场、测试里单独渲染的卡） ---- */
+.dc { border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--shadow-raised); overflow: hidden; }
+.dc[data-danger], .dock-card[data-danger] { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent); }
+.dc[data-danger] { box-shadow: 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent), var(--shadow-md); }
+.dc + .dc { margin-top: 12px; }
+
+/* ---- 收起态：输入条上沿一枚胶囊行（圆角 12，overlay；橙点 + 「N 件待决 · 最严重：…」+ ▴） ---- */
+.dock-pill-row { display: flex; justify-content: center; margin: 0 auto 10px; max-width: 720px; width: 100%; }
+.dock-pill { box-shadow: 0 0 0 1px color-mix(in oklch, var(--orange) 40%, transparent), var(--shadow-sm); }
+
+/* ---- 卡内旧子组件换皮（只在坞 / dc 作用域） ---- */
+:is(.dock, .dc) .dim, :is(.dock, .dc) .dim3 { color: var(--ink-3); }
+:is(.dock, .dc) .mono { font-family: var(--mono); }
+:is(.dock, .dc) .chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; border-radius: 99px;
+  background: var(--canvas); color: var(--ink-2); font-size: 12px; font-weight: 500; }
+:is(.dock, .dc) .chip.ok { background: var(--green-tint); color: var(--green); }
+:is(.dock, .dc) .chip.warn { background: var(--orange-tint); color: var(--orange); }
+:is(.dock, .dc) .chip.err { background: var(--red-tint); color: var(--red); }
+:is(.dock, .dc) .chip.info { background: var(--accent-tint); color: var(--accent-ink); }
+:is(.dock, .dc) .chip.flag { background: var(--violet-tint); color: var(--violet); }
+:is(.dock, .dc) details > summary { cursor: pointer; color: var(--ink-3); font-size: 12px; }
+:is(.dock, .dc) select, :is(.dock, .dc) .dock-input { height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-sm); background: var(--field);
+  box-shadow: var(--shadow-inset-field), inset 0 0 0 1px var(--line); font-size: 12.5px; color: var(--ink); outline: none; }
+:is(.dock, .dc) select:focus-visible, :is(.dock, .dc) .dock-input:focus { background: var(--surface); box-shadow: var(--focus-ring); }
+:is(.dock, .dc) textarea { width: 100%; }
+
+/* ---- 权限底栏：左说明 + 拒绝 + 「允许一次 ▾」组合按钮（A1 split）+ 向上弹的范围菜单（A16） ---- */
+.dock-perm { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; position: relative; }
+.dock-split { display: inline-flex; }
+.dock-split[data-split] > [data-variant='primary']:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 8px; }
+.dock-caret { display: inline-grid; place-items: center; height: 28px; padding: 0 8px 0 6px; margin-left: 1px; border: 0;
+  border-radius: 0 99px 99px 0; background: var(--accent); color: white; cursor: pointer; }
+.dock-caret:hover { opacity: .92; }
+.dock-caret:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.dock-caret:disabled { opacity: .45; cursor: default; }
+.dock-menu { position: absolute; right: 0; bottom: calc(100% + 14px); z-index: 30; width: 300px; padding: 4px; border-radius: 12px;
+  background: var(--surface); box-shadow: var(--shadow-overlay); }
+.dock-mi { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: none;
+  color: var(--ink); text-align: left; font-size: 13px; cursor: pointer; }
+.dock-mi:hover, .dock-mi:focus-visible { background: var(--hover); outline: none; }
+.dock-mi > svg { margin-top: 2px; }
+.dock-mi-pad { width: 14px; flex: none; }
+.dock-mi > span:last-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dock-mi strong { font-weight: 500; }
+.dock-mi > span:last-child > span { font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
+
+/* 卡内 diff 手风琴 */
+.dock-diff-body { display: flex; min-height: 0; max-height: 200px; overflow-y: auto; margin-top: 4px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px var(--line); }
