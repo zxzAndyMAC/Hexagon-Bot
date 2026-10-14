@@ -29,6 +29,6 @@ it('只有最后一个未收尾回合且正忙时才算进行中', () => {
 })
 
 it('回合外的零散事件各成一行', () => {
-  const g = groupTasks([s(1, 'agent_slept', { label: '休眠' }), s(2, 'tool_called', { label: 'Run', ok: false })], false)
-  expect(g.map((x) => [x.title, x.state, x.turn])).toEqual([['休眠', 'done', false], ['Run', 'failed', false]])
+  const g = groupTasks([s(1, 'agent_slept', { label: '休眠' }), s(2, 'tool_called', { label: 'Run', ok: false }), s(3, 'tool_called', { label: 'Read', ok: 'unknown' })], false)
+  expect(g.map((x) => [x.title, x.state, x.turn, x.step?.id])).toEqual([['休眠', 'done', false, 1], ['Run', 'failed', false, 2], ['Read', 'unknown', false, 3]])
 })

@@ -16,7 +16,8 @@ export type TaskStep = {
   ok?: boolean | 'unknown' | null
 }
 
-export type TaskState = 'running' | 'done' | 'failed'
+/** unknown = 回合外的工具调用结果未知（宿主报 state=unknown）：不画成功勾，免得把未知当成功。 */
+export type TaskState = 'running' | 'done' | 'failed' | 'unknown'
 
 export type TaskGroup<S extends TaskStep = TaskStep> = {
   id: number
@@ -29,6 +30,8 @@ export type TaskGroup<S extends TaskStep = TaskStep> = {
   time: string
   /** 回合开始事件的阶段名（turn_started 的 label 已带）。 */
   turn: boolean
+  /** 回合外的零散事件本身（行上直接显示它的调用结果）。 */
+  step?: S
 }
 
 const firstLine = (s: string) => s.split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find(Boolean) ?? ''
@@ -71,12 +74,13 @@ export function groupTasks<S extends TaskStep>(steps: S[], busy: boolean): TaskG
     out.push({
       id: s.id,
       title: clip(s.message ? firstLine(s.message) : s.summary ? `${s.label} · ${s.summary}` : s.label),
-      state: s.kind === 'turn_failed' || s.ok === false ? 'failed' : 'done',
+      state: s.kind === 'turn_failed' || s.ok === false ? 'failed' : s.ok === 'unknown' ? 'unknown' : 'done',
       steps: [],
       calls: s.kind === 'tool_called' ? 1 : 0,
       delivered: s.kind === 'artifact_delivered',
       time: s.time,
       turn: false,
+      step: s,
     })
   }
   if (open) close(open.start, open.steps, null)

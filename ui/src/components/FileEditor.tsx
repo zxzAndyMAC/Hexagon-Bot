@@ -77,6 +77,16 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null)
   const closeBar = useCallback(() => setAnchor(null), [])
   const pointer = useRef<{ x: number; y: number } | undefined>(undefined)
+  // textarea 选区用原生 select 事件（React 的 onSelect 走 selectionchange 合成，元素没聚焦时不触发）
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const hasText = text != null
+  useEffect(() => {
+    const ta = taRef.current
+    if (!ta) return
+    const onSelect = () => setAnchor(bodyRef.current ? textareaSelection(ta, path, bodyRef.current, pointer.current) : null)
+    ta.addEventListener('select', onSelect)
+    return () => ta.removeEventListener('select', onSelect)
+  }, [path, hasText])
 
   useEffect(() => {
     setFileEdit(editId, { path, dirty, save: () => saveRef.current(), discard: () => discardRef.current() })
@@ -299,8 +309,8 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
                   setBuf(e.target.value)
                   setDirty(true)
                 }}
+                ref={taRef}
                 onMouseUp={(e) => { pointer.current = { x: e.clientX, y: e.clientY } }}
-                onSelect={(e) => setAnchor(bodyRef.current ? textareaSelection(e.currentTarget, path, bodyRef.current, pointer.current) : null)}
                 className="min-h-0 flex-1 resize-none bg-transparent p-3.5 font-mono text-[12px] leading-[1.75] text-ink outline-none"
               />
             ) : (

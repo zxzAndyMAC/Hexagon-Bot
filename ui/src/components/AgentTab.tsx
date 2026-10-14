@@ -255,7 +255,9 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
                 <TaskCircle state={g.state} />
                 <b className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">{g.title}</b>
                 <span className="flex-none text-[12px] text-ink-3">{meta}</span>
-                {g.state === 'failed' ? <Badge variant="err">{t('agentDetail.failed')}</Badge>
+                {/* 回合外的工具调用：行上直接给调用结果（含「结果未知」，票 05 状态机） */}
+                {g.step?.kind === 'tool_called' ? <CallStatus ok={g.step.ok} />
+                  : g.state === 'failed' ? <Badge variant="err">{t('agentDetail.failed')}</Badge>
                   : g.delivered && g.state === 'done' ? <Badge variant="ok">{t('agentDetail.delivered')}</Badge> : null}
                 {expandable && <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} className="flex-none text-ink-3" />}
               </button>
@@ -302,6 +304,7 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
 /** 状态圆（Task Rows）：完成绿实心勾 / 进行中环 / 失败红 x。 */
 function TaskCircle({ state }: { state: TaskGroup['state'] }) {
   if (state === 'running') return <Spinner size={18} />
+  if (state === 'unknown') return <span className="grid size-[18px] flex-none place-items-center rounded-full bg-orange text-white"><Icon name="help" size={12} /></span>
   return (
     <span className={cn('grid size-[18px] flex-none place-items-center rounded-full text-white', state === 'done' ? 'bg-green' : 'bg-red')}>
       <Icon name={state === 'done' ? 'check' : 'close'} size={12} />

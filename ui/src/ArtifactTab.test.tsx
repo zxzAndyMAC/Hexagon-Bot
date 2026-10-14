@@ -5,9 +5,11 @@ import i18n from './i18n'
 import { api } from './api'
 import { useUiStore } from './store'
 import { ArtifactTab } from './components/ArtifactTab'
+import { TooltipProvider } from './components/ui/tooltip'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
+// 票 09（D13）：版本链胶囊、分段控件与按钮带 tooltip，渲染要包 TooltipProvider。
 it('shows current worktree by default and explicit older snapshots separately', async () => {
   await i18n.changeLanguage('en')
   const saved = useUiStore.getState()
@@ -21,7 +23,7 @@ it('shows current worktree by default and explicit older snapshots separately', 
   const el = document.createElement('div')
   document.body.append(el)
   const root = createRoot(el)
-  await act(async () => root.render(<ArtifactTab path="notes.txt" />))
+  await act(async () => root.render(<TooltipProvider><ArtifactTab path="notes.txt" /></TooltipProvider>))
   expect(el.textContent).toContain('Owner worktree edit')
   expect(el.textContent).toContain('Current worktree')
   const older = [...el.querySelectorAll('button')].find((button) => button.textContent === 'v1')
@@ -47,7 +49,7 @@ it('shows stale review evidence with the reviewed version and reviewer', async (
   vi.spyOn(api, 'artifactContent').mockResolvedValue('Current document')
   const el = document.createElement('div')
   const root = createRoot(el)
-  await act(async () => root.render(<ArtifactTab path="notes.txt" />))
+  await act(async () => root.render(<TooltipProvider><ArtifactTab path="notes.txt" /></TooltipProvider>))
   expect(el.textContent).toContain('Review outdated')
   expect(el.textContent).toContain('Reviewer · v1')
   await act(async () => root.unmount())
@@ -67,7 +69,7 @@ it('withdraws the selected governed contribution only after the owner confirms',
   vi.spyOn(api, 'artifactContentAt').mockResolvedValue('Reviewed proposal')
   const rollback = vi.spyOn(api, 'rollbackProposal').mockResolvedValue(undefined)
   const host = document.createElement('div'); const root = createRoot(host)
-  await act(async () => root.render(<ArtifactTab path="props/lesson.md" />))
+  await act(async () => root.render(<TooltipProvider><ArtifactTab path="props/lesson.md" /></TooltipProvider>))
   const button = [...host.querySelectorAll('button')].find((b) => b.textContent === i18n.t('experience.withdraw'))!
   expect(button.title).toContain(i18n.t('experience.withdraw'))
   await act(async () => button.click())
