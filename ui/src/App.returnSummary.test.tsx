@@ -10,7 +10,6 @@ import { bindingFor, formatBinding } from './keymap'
 import i18n from './i18n'
 import { MotionGlobalConfig } from 'motion/react'
 
-vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) }))
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 // 待决坞（PendingCards）的入场动画在 happy-dom 里被取消会抛 AbortError；这里只测摘要，跳过动画。
 MotionGlobalConfig.skipAnimations = true

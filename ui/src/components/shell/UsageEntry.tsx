@@ -1,12 +1,15 @@
 // 用量入口 UsageButton 与触顶横幅 CapBanner（components B4，usage#quick；interaction §10）。
 // 入口在侧栏底部设置旁：ok 只图标 · warn ≥80% 橙底百分比 · cap 红底「上限」；圆环只留给上下文仪表。
-// 点击：规范是弹出用量卡（D20，票 12）。票 02 过渡：直接打开现有的「用量详情」（票 03 起是主区视图），对账表票 02 记录。
+// 点击：弹出用量卡（Popover，D20，票 12）；卡里「详情」进入占满主区的用量详情（票 02 过渡态「直接开详情」到此结束）。
 // 横幅：输入条正上方，触顶时出现——会阻断新的模型请求，所以不能只靠角落图标。
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../../store'
 import { fmtYuan, MC_PER_CENT } from '../../usage'
 import { usageTier } from '../../usageEntry'
 import { Icon } from '../Icon'
+import { openUsageSettings, UsageCard } from '../UsageTab'
+import { useState } from 'react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -27,14 +30,16 @@ export function UsageButton() {
   const title = !total ? t('usageEntry.labelPlain')
     : limit ? t('usageEntry.title', { spent: fmtYuan(total.spent_mc), limit })
     : t('usageEntry.titleNoLimit', { spent: fmtYuan(total.spent_mc) })
+  const [open, setOpen] = useState(false)
   return (
+    <Popover open={open} onOpenChange={setOpen}>
     <Tooltip>
       <TooltipTrigger asChild>
+        <PopoverTrigger asChild>
         <button
           type="button"
           data-usage-tier={tier}
           aria-label={label}
-          onClick={() => openUsageDetail()}
           className={cn(
             'hx-press hx-focus inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1 rounded-[8px] px-1.5 font-mono text-[11.5px] leading-none font-medium text-ink-2',
             (tier === 'ok' || tier === 'unknown') && 'live:hover:bg-hover live:hover:text-ink',
@@ -46,9 +51,15 @@ export function UsageButton() {
           {tier === 'warn' && `${pct}%`}
           {tier === 'cap' && t('usageEntry.cap')}
         </button>
+        </PopoverTrigger>
       </TooltipTrigger>
       <TooltipContent>{title}</TooltipContent>
     </Tooltip>
+      <PopoverContent side="top" align="end" data-usage-popover aria-label={t('usageCard.title')}
+        className={cn('w-[300px] px-4 py-3.5', tier === 'cap' && 'shadow-[0_0_0_1px_color-mix(in_oklch,var(--red)_40%,transparent),var(--shadow-overlay)]')}>
+        <UsageCard onDetail={() => { setOpen(false); openUsageDetail() }} onRaise={() => { setOpen(false); openUsageSettings() }} />
+      </PopoverContent>
+    </Popover>
   )
 }
 

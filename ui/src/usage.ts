@@ -76,36 +76,6 @@ export const fmtTok = (n: number): string => {
 export const tokensOf = (b: UsageBucket) =>
   b.prompt_tokens + b.completion_tokens + b.tool_output_tokens
 
-/** 序列整形：去重排序的 bucket 轴 + 每个 agent 一条 (bucket→tokens) 序列。 */
-export function perAgentSeries(rows: UsageBucket[]): {
-  labels: string[]
-  series: { agentId: string; points: number[] }[]
-} {
-  const labels = [...new Set(rows.map((r) => r.bucket))].sort()
-  const idx = new Map(labels.map((l, i) => [l, i]))
-  const byAgent = new Map<string, number[]>()
-  for (const r of rows) {
-    const id = r.agent_id ?? '—'
-    if (!byAgent.has(id)) byAgent.set(id, new Array(labels.length).fill(0))
-    byAgent.get(id)![idx.get(r.bucket)!] += tokensOf(r)
-  }
-  return { labels, series: [...byAgent.entries()].map(([agentId, points]) => ({ agentId, points })) }
-}
-
-/** 三类 token 各自一条序列（跨 agent 聚合）：prompt / completion / tool_output。 */
-export function tokenTypeSeries(rows: UsageBucket[]): { labels: string[]; series: number[][] } {
-  const labels = [...new Set(rows.map((r) => r.bucket))].sort()
-  const idx = new Map(labels.map((l, i) => [l, i]))
-  const out = [new Array(labels.length).fill(0), new Array(labels.length).fill(0), new Array(labels.length).fill(0)]
-  for (const r of rows) {
-    const i = idx.get(r.bucket)!
-    out[0][i] += r.prompt_tokens
-    out[1][i] += r.completion_tokens
-    out[2][i] += r.tool_output_tokens
-  }
-  return { labels, series: out }
-}
-
 /** 按键聚合 token（榜单/分解用），按 token 降序。 */
 export function groupTokens(
   rows: { prompt_tokens?: number; completion_tokens?: number; tool_output_tokens?: number; agent_id?: string | null; model?: string | null; stage?: string | null }[],
@@ -118,9 +88,6 @@ export function groupTokens(
   }
   return [...out.entries()].sort((a, b) => b[1] - a[1])
 }
-
-/** 曲线最大值（归一化用），空序列回 1 防除零。 */
-export const seriesMax = (points: UsageBucket[]) => Math.max(1, ...points.map((p) => p.cost_mc))
 
 // ───────── ui-redesign 票 12：用量详情（usage#detail / usage#range / usage#agents） ─────────
 // ECharts → Recharts 迁移时把整形逻辑从组件里抽出来；日界、分桶口径与票 14 一致（UTC，后端 date()/strftime 无 localtime）。

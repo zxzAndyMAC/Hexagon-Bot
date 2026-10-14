@@ -77,7 +77,7 @@ export function LimitEditor({ onDone }: { onDone: () => void }) {
   )
 }
 
-const openUsageSettings = () =>
+export const openUsageSettings = () =>
   window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: 'usage' }))
 
 /** D20 卡体。onDetail 进入用量详情；onRaise 默认打开设置「用量」分区改上限。 */

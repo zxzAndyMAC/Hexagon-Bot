@@ -9,7 +9,6 @@ import i18n from './i18n'
 import { mainView } from './layout'
 
 // happy-dom has no canvas renderer; exercise real tabs with the chart SDK stubbed.
-vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) }))
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 

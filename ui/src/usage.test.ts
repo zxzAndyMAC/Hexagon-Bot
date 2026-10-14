@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { UsageBucket, UsageRow } from './api'
 import {
   capReached, centsToMc, daysAgo, fmtTime, fmtTok, fmtYuan, groupCost, groupTokens,
-  isoDay, parseLimitInput, perAgentSeries, seriesMax, tokenTypeSeries, tokensOf, utcMonthRange,
+  isoDay, parseLimitInput, tokensOf, utcMonthRange,
   RANGE_PRESETS, presetRange, customRange, previousRange, dayAxis, stackRows, topAgentRows,
   sumTokens, tokenShare, pctChange, weekOverWeek, bucketTick, stageProgress,
 } from './usage'
@@ -107,22 +107,8 @@ describe('usage series', () => {
     expect(tokensOf(buckets[2])).toBe(37)
   })
 
-  it('perAgentSeries fills missing buckets with 0', () => {
-    const { labels, series } = perAgentSeries(buckets)
-    expect(labels).toEqual(['2025-07-01', '2025-07-02'])
-    const a0 = series.find((s) => s.agentId === 'a0')!
-    const a1 = series.find((s) => s.agentId === 'a1')!
-    expect(a0.points).toEqual([15, 0])
-    expect(a1.points).toEqual([20, 37])
-  })
-
-  it('tokenTypeSeries aggregates across agents', () => {
-    const { labels, series } = tokenTypeSeries(buckets)
-    expect(labels).toEqual(['2025-07-01', '2025-07-02'])
-    expect(series[0]).toEqual([30, 0]) // prompt
-    expect(series[1]).toEqual([5, 30]) // completion
-    expect(series[2]).toEqual([0, 7]) // tool_output
-  })
+  // 票 12：perAgentSeries / tokenTypeSeries 随 ECharts 一起退役，由 stackRows / topAgentRows 接替
+  //（同一分桶口径：按 bucket 聚合、缺桶补 0，见下方「usage chart rows」）。
 })
 
 describe('usage input', () => {
@@ -135,14 +121,7 @@ describe('usage input', () => {
     expect(parseLimitInput('0')).toBeNull()
   })
 
-  it('seriesMax never returns 0', () => {
-    expect(seriesMax([])).toBe(1)
-    expect(seriesMax([{ bucket: '2025-07-01', agent_id: 'a', prompt_tokens: 0, completion_tokens: 0, tool_output_tokens: 0, cost_mc: 0 }])).toBe(1)
-    expect(seriesMax([
-      { bucket: '2025-07-01', agent_id: 'a', prompt_tokens: 0, completion_tokens: 0, tool_output_tokens: 0, cost_mc: 7 },
-      { bucket: '2025-07-02', agent_id: 'a', prompt_tokens: 0, completion_tokens: 0, tool_output_tokens: 0, cost_mc: 42 },
-    ])).toBe(42)
-  })
+  // 票 12：seriesMax 只服务旧手绘折线（ECharts 前的 MultiLine），随之删除。
 })
 
 // 票 15（P3）：AgentTab 步骤摘要的对象入参不再渲染 [object Object]
