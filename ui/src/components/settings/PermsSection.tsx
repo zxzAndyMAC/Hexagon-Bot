@@ -16,7 +16,6 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../Icon'
 import { BrowserControlPanel } from '../BrowserControlPanel'
 import { DesktopControlPanel } from '../DesktopControlPanel'
-import { DesktopPauseButton } from '../DesktopPauseButton'
 import { DesktopPermissions } from '../DesktopPermissions'
 import { PermissionScope } from '../PermissionActions'
 import { ProjectDelegation } from '../ProjectDelegation'
@@ -146,7 +145,6 @@ export function PermsSection({ projectless, onOpenProject }: { projectless: bool
       <SetHead
         title={t('settings.nav_perms')}
         desc={t('settingsUi.permsDesc')}
-        actions={!projectless && <DesktopPauseButton />}
       />
       {projectless ? (
         <>

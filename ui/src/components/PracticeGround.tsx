@@ -27,10 +27,11 @@ export function PracticeGround() {
     const combo = normalizeEvent(e)
     if (!combo || !/(^|\+)(mod|alt)\+/.test(combo)) return
     const which = matches(e, approveB) ? approveB : matches(e, rejectB) ? rejectB : null
+    setTries((n) => n + 1)
+    // 非裁决键只记一次尝试、不拦截（命令面板等全局键照常可用）
+    if (!which) return
     e.preventDefault()
     e.stopPropagation()
-    setTries((n) => n + 1)
-    if (!which) return
     setHits((n) => n + 1)
     setHit(which)
     clearTimeout(timer.current)
@@ -58,7 +59,7 @@ export function PracticeGround() {
           </div>
         </div>
         {hit && (
-          <Badge variant="ok" role="status">
+          <Badge variant="ok" role="status" data-practice-hit>
             <Icon name="check" size={12} />
             {t('settingsUi.practiceHit', { key: formatBinding(hit) })}
           </Badge>

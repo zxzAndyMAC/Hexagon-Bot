@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Icon, type IconName } from './Icon'
+import { DesktopPauseButton } from './DesktopPauseButton'
 import { ProviderManager } from './ProviderManager'
 import { PromptsSection } from './PromptsSection'
 import { UsageTab } from './UsageTab'
@@ -81,7 +82,7 @@ function SettingsNav({ section, onSection, onBack, projectless }: {
     <aside data-set-nav className="flex w-[220px] flex-none flex-col border-r border-line bg-sidebar">
       <div data-tauri-drag-region className={cn('h-11 flex-none', isMac && 'pl-[84px]')} />
       <Button size="sm" variant="ghost" className="mx-2.5 mb-2.5 justify-start" onClick={onBack}>
-        <Icon name="arrow-left" size={14} />{projectless ? t('settingsUi.backLauncher') : t('settings.back')}
+        <Icon name="arrow-left" size={14} />{t('settings.back')}
       </Button>
       <nav aria-label={t('settings.title')} className="flex flex-col gap-px overflow-y-auto px-2.5 pb-3"
         onKeyDown={(e) => {
@@ -109,6 +110,13 @@ function SettingsNav({ section, onSection, onBack, projectless }: {
           </button>
         ))}
       </nav>
+      {/* 「暂停电脑操作」在设置的任何分区都能点（票 14 验收：暂停按钮在任何页面都能点）——放在导航底部，
+          权限分区不再重复放（原型 settings#perms 放在权限标题行，对账表票 11 偏差）。 */}
+      {!projectless && (
+        <div data-set-nav-foot className="mt-auto flex flex-none border-t border-line p-2.5">
+          <DesktopPauseButton />
+        </div>
+      )}
     </aside>
   )
 }
