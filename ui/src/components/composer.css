@@ -126,8 +126,9 @@
 .context-meter-trigger:focus-visible { outline: none; }
 .context-meter-trigger:focus-visible .cring, .context-meter[data-open] .cring { box-shadow: 0 0 0 3px var(--accent-tint); }
 .cring {
+  --ring-c: var(--ink-2);
   width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none;
-  background: conic-gradient(var(--ring-c, var(--ink-2)) calc(var(--p, 0) * 1%), var(--hover-2) 0);
+  background: conic-gradient(var(--ring-c) calc(var(--p) * 1%), var(--hover-2) 0);
 }
 .cring::after { content: ""; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); }
 .cring[data-over] { --ring-c: var(--orange); }
