@@ -13,6 +13,9 @@ import { runStageOp } from '../../stageops'
 import { exportTrace } from '../../traceExport'
 import { Icon } from '../Icon'
 import { ManagedPill } from '../ManagedPill'
+// 票 14（D19）：头部控制状态 + 暂停电脑操作；Agent Screen 浮窗随头部挂载（输入条旁的重复入口撤掉）
+import { ComputerControlStatus } from '../ComputerControlStatus'
+import { AgentScreen } from '../AgentScreen'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -117,6 +120,7 @@ export function Header() {
           </Badge>
         )}
       </div>
+      <ComputerControlStatus />
       <ManagedPill />
       <span data-tauri-drag-region className="flex-1 self-stretch" />
       {screen && (
@@ -134,6 +138,7 @@ export function Header() {
         <Icon name="panel-right" size={16} />
       </IconButton>
       <MoreMenu />
+      <AgentScreen />
     </header>
   )
 }

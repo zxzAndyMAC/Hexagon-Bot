@@ -1,5 +1,4 @@
 import { ComputerTaskReadiness } from './ComputerTaskReadiness'
-import { AgentScreen } from './AgentScreen'
 import { ElementDraft } from './ElementReferences'
 import type { ElementRef } from '../gen/ElementRef'
 import { ProjectApprovalMode } from './ProjectApprovalMode'
@@ -323,7 +322,7 @@ export function Composer() {
       }}
     >
       {/* 票 03 + 票 10：按图显示。关闭钮在图上，只去掉这一张；点图放大。 */}
-      <ElementDraft references={elements} onChange={setElements} submitting={submitting} trailing={<AgentScreen />} />
+      <ElementDraft references={elements} onChange={setElements} submitting={submitting} />
       {attachments.length > 0 && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           {attachments.map((a) => (
