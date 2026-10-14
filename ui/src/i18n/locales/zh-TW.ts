@@ -557,7 +557,7 @@ export default {
     stallNoRetry: '這張失速卡沒有「再試一次」，請點「知道了」',
   },
   sidebar: {"label":"側欄","collapse":"收起側欄","expand":"展開側欄","hide":"隱藏側欄","width":"側欄寬度","releaseToCollapse":"放開以收起側欄","projectMenu":"專案選單","recentProjects":"最近專案","backToLauncher":"返回啟動頁","pack":"流程包 · {{name}}","fastpath":"快速通道","search":"搜尋與命令","pending":"待決","pendingCount":"待決 {{count}} 件","artifacts":"產物","files":"專案檔案","flow":"流程","viewFlow":"檢視流程","team":"團隊","addRole":"新增角色","sleeping":"休眠","working":"工作中","owner":"負責人","settings":"設定","noStages":"還沒有流程階段","noMembers":"還沒有成員","stageTip":"{{stage}} · {{state}} · 產物 {{count}} 份","stateFailed":"狀態讀取失敗","retry":"重試"},
-  header: {"stageChip":"階段 {{n}} / {{total}}","screen":"螢幕","openCanvas":"開啟畫布","closeCanvas":"關閉畫布","more":"更多","sleepAll":"全員休眠","sleepAllConfirm":"讓全員休眠？","sleepAllBody":"所有 Agent 在目前這一步之後停下。可以在團隊列表裡隨時喚醒。","exportTrace":"匯出軌跡"},
+  header: {"exitFocus":"退出專注模式","stageChip":"階段 {{n}} / {{total}}","screen":"螢幕","openCanvas":"開啟畫布","closeCanvas":"關閉畫布","more":"更多","sleepAll":"全員休眠","sleepAllConfirm":"讓全員休眠？","sleepAllBody":"所有 Agent 在目前這一步之後停下。可以在團隊列表裡隨時喚醒。","exportTrace":"匯出軌跡"},
   layout: {"dragHint":"拖動以調整大小","resetHint":"雙擊還原","px":"{{n}}px","min":"{{n}}px · 最小","max":"{{n}}px · 最大"},
   canvas: {"label":"畫布","tabs":"畫布分頁","width":"畫布寬度","close":"關閉畫布","expand":"展開到全寬","sideBySide":"與對話並排","conversation":"對話","empty":"還沒有開啟的內容","emptyHint":"從側欄或交付卡開啟產物、專案檔案或團隊成員。","recent":"最近產物","releaseToClose":"放開以關閉畫布","releaseToFull":"放開以展開到全寬","pickFile":"從左側檔案樹選擇檔案","closeTab":"關閉 {{name}}","backToChat":"返回對話"},
   usageEntry: {"label":"用量 {{pct}}%","labelPlain":"用量","capLabel":"已達用量上限","cap":"上限","title":"本月 {{spent}} / {{limit}}","titleNoLimit":"本月 {{spent}} · 未設上限","view":"檢視用量","raise":"提高上限"},
