@@ -61,6 +61,28 @@ export function diffLines(a: string[], b: string[]): DiffOp[] {
   return ops
 }
 
+/**
+ * 统一 diff 的行号（components D15，canvas#artifact）：新增与等同行显示新文件行号，删除行显示旧文件行号；
+ * `a` / `b` 是该行在旧 / 新文本里的下标，用来取各自的语法高亮（两边分别着色，删除行不能拿新文件的 token）。
+ */
+export type NumberedOp = DiffOp & { line: number; a: number | null; b: number | null }
+
+export function numberDiff(ops: DiffOp[]): NumberedOp[] {
+  let a = 0
+  let b = 0
+  return ops.map((o) => {
+    if (o.type === 'del') return { ...o, line: ++a, a: a - 1, b: null }
+    if (o.type === 'ins') return { ...o, line: ++b, a: null, b: b - 1 }
+    a++
+    return { ...o, line: ++b, a: a - 1, b: b - 1 }
+  })
+}
+
+/** 子头的「+N −N」（D13）。 */
+export function diffStats(ops: DiffOp[]): { add: number; del: number } {
+  return ops.reduce((s, o) => ({ add: s.add + (o.type === 'ins' ? 1 : 0), del: s.del + (o.type === 'del' ? 1 : 0) }), { add: 0, del: 0 })
+}
+
 /** 解析统一 diff 文本为 op 序列（提案卡的 ```diff 块）。 */
 export function parseUnifiedDiff(text: string): DiffOp[] {
   return text.split('\n').map((l): DiffOp => {
