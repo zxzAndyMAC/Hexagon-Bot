@@ -154,9 +154,10 @@ export function PermsSection({ projectless, onOpenProject }: { projectless: bool
         </>
       ) : (
         <>
+          {/* 两行的标题、状态 chip 与按钮由票 14 的面板自己渲染（D19），这里只给 E1 分组卡与行线，不再重复行名。 */}
           <Group>
-            <SRow icon="computer" label={t('settingsUi.computerRow')} hint={t('settingsUi.computerRowHint')} body={<DesktopControlPanel inline />} />
-            <SRow icon="web" label={t('browser.title')} hint={t('settingsUi.browserRowHint')} body={<BrowserControlPanel inline />} />
+            <div data-srow className="px-4 py-[13px]"><DesktopControlPanel inline /></div>
+            <div data-srow className="border-t border-line-soft px-4 py-[13px]"><BrowserControlPanel inline /></div>
           </Group>
           <ProjectDelegation />
           <RulesTable />
