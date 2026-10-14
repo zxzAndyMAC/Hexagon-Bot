@@ -41,17 +41,19 @@ export const TOOL_LABEL: Record<string, string> = {
   bash_output: 'stepBash', bash_kill: 'stepBash',
 }
 
+// 票 05（workbench#running）：读 = eye、搜 = search、写 = pencil、命令 = terminal；
+// host_fs_trash 用 trash（components C7 补设计，978bd3e）。
 export const TOOL_ICON: Record<string, IconName> = {
-  host_fs_read: 'artifact', host_fs_write: 'diff', host_fs_trash: 'tool', host_bash: 'tool',
+  host_fs_read: 'vision', host_fs_write: 'edit', host_fs_trash: 'trash', host_bash: 'terminal',
   propose_design: 'artifact', read_design_direction: 'artifact',
   computer_observe: 'computer', computer_action: 'computer', computer_navigate: 'computer',
-  'fs.read': 'artifact', 'fs.write': 'diff', 'fs.edit': 'diff',
-  'fs.list': 'folder', 'fs.search': 'list', bash: 'tool',
-  fs_read: 'artifact', fs_write: 'diff', fs_patch: 'diff',
-  fs_list: 'folder', fs_search: 'list',
+  'fs.read': 'vision', 'fs.write': 'edit', 'fs.edit': 'edit',
+  'fs.list': 'folder', 'fs.search': 'search', bash: 'terminal',
+  fs_read: 'vision', fs_write: 'edit', fs_patch: 'edit',
+  fs_list: 'folder', fs_search: 'search',
   artifact_write: 'artifact',
-  load_skill: 'artifact', search_skills: 'list',
-  bash_output: 'tool', bash_kill: 'tool',
+  load_skill: 'artifact', search_skills: 'search',
+  bash_output: 'terminal', bash_kill: 'terminal',
 }
 
 // security-delivery-reliability 08: durable action identity owns the result.

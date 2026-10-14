@@ -21,7 +21,6 @@ import { SettingsPage, type Section } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
 import { CommandPalette } from './components/CommandPalette'
 import { api, errText, onTurnDelta, onToolOutput } from './api'
-import { IntakeBar } from './components/IntakeBar'
 import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
 import { PendingDialog } from './components/PendingCards'
@@ -352,7 +351,6 @@ export default function App() {
               </div>
               {/* B4 触顶横幅：输入条正上方（interaction §10） */}
               <CapBanner onRaise={raiseCap} />
-              <IntakeBar />
               <Composer />
             </div>
           </main>

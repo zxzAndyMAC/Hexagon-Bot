@@ -1,5 +1,6 @@
-import { isValidElement, memo, useDeferredValue, useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { isValidElement, memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { remarkAtoms, type AtomOptions } from '../timelineAtoms'
+import ReactMarkdown, { type Options as MdOptions } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
 import { getHighlighter, useTheme } from '../highlight'
@@ -92,9 +93,12 @@ const mdComponents = {
 /** GFM + 코드 하이라이트가 적용된 공용 마크다운 렌더러. */
 // memo：时间线 atBottom 翻转/flash 等父级重渲时跳过 remark 重解析
 //（重挂载仍要解析——组件实例不跨卸载存活，配合 Virtuoso overscan 摊掉）。
-export const Md = memo(function Md({ children }: { children: string }) {
+// ui-redesign 票 05：atoms = 时间线正文的点名 / 路径原子块（timelineAtoms.ts）；
+// 调用方要保证 atoms 引用稳定，否则 memo 失效、每次重渲都重解析。
+export const Md = memo(function Md({ children, atoms }: { children: string; atoms?: AtomOptions }) {
+  const plugins = useMemo<NonNullable<MdOptions['remarkPlugins']>>(() => (atoms ? [remarkGfm, [remarkAtoms, atoms]] : [remarkGfm]), [atoms])
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+    <ReactMarkdown remarkPlugins={plugins} components={mdComponents}>
       {children}
     </ReactMarkdown>
   )
