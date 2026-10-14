@@ -131,15 +131,17 @@ it('full-history export rejects a project switch during a later page',async()=>{
 it('project replacement clears every actionable old card and file tab', () => {
   const prior = useUiStore.getState()
   useUiStore.setState({ pendingDialogOpen: true, dismissedPendingKeys: ['q:old'],
-    tabs: [{id:'timeline',kind:'timeline',title:''},{id:'file:README.md',kind:'file',title:'README.md',path:'README.md'}],
-    activeTab:'file:README.md', projectName:'old project', splitOpen:true })
+    tabs: [{id:'file:README.md',kind:'file',title:'README.md',path:'README.md'}],
+    activeTab:'file:README.md', projectName:'old project', canvasOpen:true, usageView:true })
   useUiStore.getState().beginProjectSwitch()
   const current=useUiStore.getState()
   expect(current.pendingDialogOpen).toBe(false)
   expect(current.dismissedPendingKeys).toEqual([])
-  expect(current.tabs.map(tab=>tab.id)).toEqual(['timeline'])
-  expect(current.activeTab).toBe('timeline')
+  // ADR 0088（票 03）：时间线不再是页签、分屏撤掉——换项目后画布清空关闭，主区回到对话。
+  expect(current.tabs).toEqual([])
+  expect(current.activeTab).toBeNull()
   expect(current.projectName).toBe('')
-  expect(current.splitOpen).toBe(false)
+  expect(current.canvasOpen).toBe(false)
+  expect(current.usageView).toBe(false)
   useUiStore.setState(prior, true)
 })

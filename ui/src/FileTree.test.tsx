@@ -3,9 +3,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from './i18n'
 import { api } from './api'
-import { CenterTab } from './App'
+import { Canvas } from './components/shell/Canvas'
 import { Sidebar } from './components/shell/Sidebar'
-import { InterimCanvas } from './components/shell/InterimCanvas'
 import { TooltipProvider } from './components/ui/tooltip'
 import { bindingFor, formatBinding } from './keymap'
 import { useUiStore } from './store'
@@ -27,17 +26,13 @@ async function render(node: React.ReactNode) {
 }
 
 function Harness() {
-  const tabs = useUiStore((s) => s.tabs)
-  const activeTab = useUiStore((s) => s.activeTab)
-  const tab = tabs.find((t) => t.id === activeTab) ?? tabs[0]
+  const open = useUiStore((s) => s.canvasOpen)
   return (
     <TooltipProvider>
-      {/* ADR 0088（票 02）：右栏「项目」页签撤掉，树在侧栏「项目文件」打开的画布占位里 */}
+      {/* ADR 0088（票 02 / 03）：右栏「项目」页签撤掉，树在侧栏「项目文件」打开的画布页签里；
+          文件编辑器也进画布，树在编辑器左侧（canvas#file）。 */}
       <Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} />
-      <main data-testid="center">
-        {tab.kind === 'file' && <CenterTab tab={tab} />}
-      </main>
-      <InterimCanvas />
+      <Canvas open={open} mode="side" width={600} />
     </TooltipProvider>
   )
 }
@@ -85,7 +80,7 @@ describe('右栏项目页文件树（票 11）', () => {
       id: 'a1', path: '.hexagon/specs/plan.md', kind: 'doc', tier: 'freeform',
       stage_run_id: null, author: null, version: 1, status: 'valid', upstream_id: null,
     }
-    useUiStore.setState({ artifacts: [row], canvasOpen: true, canvasPane: 'artifacts' })
+    useUiStore.setState({ artifacts: [row] }); useUiStore.getState().openCanvas('artifacts')
     ;({ el, root } = await render(<Harness />))
 
     expect(el!.textContent).toContain('.hexagon/specs/plan.md')
@@ -95,7 +90,9 @@ describe('右栏项目页文件树（票 11）', () => {
     const project = el!.querySelector('[data-nav="files"]') as HTMLButtonElement
     await act(async () => { project.click() })
     expect(el!.querySelector('[data-testid=file-tree]')).toBeTruthy()
-    expect(el!.textContent).not.toContain('.hexagon/specs/plan.md')
+    // 票 03（ADR 0088）：画布页签切走不卸载（产物清单页签仍在，只是隐藏），所以只看当前可见的页签面板。
+    const visiblePanel = el!.querySelector('[role=tabpanel]:not([hidden])')!
+    expect(visiblePanel.textContent).not.toContain('.hexagon/specs/plan.md')
     expect(el!.textContent).not.toMatch(/调试器|debugger|插件/)
 
     // 断言值更新（ui-file-icons）：图标从描边 Icon 换成 vendored
@@ -114,7 +111,7 @@ describe('右栏项目页文件树（票 11）', () => {
 
   it('新建文件、新建目录、刷新打到仓库命令，按钮带键位', async () => {
     mockTree()
-    useUiStore.setState({ canvasOpen: true, canvasPane: 'files' })
+    useUiStore.getState().openCanvas('files')
     ;({ el, root } = await render(<Harness />))
 
     const newFile = el!.querySelector('button[title*="新建文件"]') as HTMLButtonElement
@@ -149,23 +146,25 @@ describe('右栏项目页文件树（票 11）', () => {
     expect(api.createRepoDir).toHaveBeenCalledWith('notes')
   })
 
-  it('点文件在中栏打开编辑器，右栏仍只是树', async () => {
+  // 票 03（ADR 0088，canvas#file）：原断言「编辑器在中栏、右栏只是树」改为
+  // 「编辑器在画布文件页签，树留在编辑器左侧」；时间线不再是页签。
+  it('点文件在画布打开编辑器页签，文件树留在编辑器左侧', async () => {
     mockTree()
-    useUiStore.setState({ canvasOpen: true, canvasPane: 'files' })
+    useUiStore.getState().openCanvas('files')
     ;({ el, root } = await render(<Harness />))
 
     await act(async () => { treeitem(el!, 'README.md').click() })
     await act(async () => { await Promise.resolve() })
 
-    const center = el!.querySelector('[data-testid=center]')!
-    const rail = el!.querySelector('aside')!
+    const center = el!.querySelector('[role=tabpanel]:not([hidden])')!
+    const tree = el!.querySelector('[data-canvas-tree]')!
     expect(useUiStore.getState().activeTab).toBe('file:README.md')
-    expect(useUiStore.getState().tabs.some((t) => t.kind === 'timeline')).toBe(true)
+    expect(useUiStore.getState().tabs.some((t) => (t.kind as string) === 'timeline')).toBe(false)
     expect(useUiStore.getState().tabs.find((t) => t.id === 'file:README.md')?.kind).toBe('file')
     expect(center.querySelector('[data-testid=file-editor]')).toBeTruthy()
     expect(center.querySelector('[data-testid=file-editor]')!.getAttribute('data-path')).toBe('README.md')
-    expect(rail.querySelector('[data-testid=file-editor]')).toBeNull()
-    expect(rail.querySelector('[data-testid=file-tree]')).toBeTruthy()
+    expect(tree.querySelector('[data-testid=file-editor]')).toBeNull()
+    expect(tree.querySelector('[data-testid=file-tree]')).toBeTruthy()
     expect(api.readRepoFileSnapshot).toHaveBeenCalledWith('README.md', '/test')
 
     // 文件页头部多了视图切换 seg（编辑/预览/对比），保存钮不再稳占

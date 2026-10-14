@@ -24,7 +24,7 @@ interface Item {
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
-  const { team, artifacts, openTab, toggleSidebar, setSplitOpen, setActiveTab, splitOpen, tabs, activeTab, closeTab, invalidate, pushToast, pending } = useUiStore()
+  const { team, artifacts, openTab, toggleSidebar, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, closeTab, invalidate, pushToast, pending } = useUiStore()
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -68,12 +68,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       // 导航
       // ADR 0088（票 02）：⌘B 由「开关右栏」改为「开关左侧栏」
       { id: 'n-sidebar', group: 'nav', label: t('palette.sidebar'), hint: bind('toggleSidebar'), run: () => toggleSidebar() },
-      { id: 'n-split', group: 'nav', label: t('palette.split'), hint: bind('splitEditor'), run: () => setSplitOpen(!splitOpen) },
-      { id: 'n-timeline', group: 'nav', label: t('palette.timeline'), run: () => setActiveTab('timeline') },
-      {
-        id: 'n-close', group: 'nav', label: t('palette.closeTab'), hint: bind('closeTab'),
+      // 票 03（ADR 0088，R-04 / R-06）：分屏撤掉 → 画布全宽 ↔ 并排；「回到时间线」→ 回到对话；新增专注模式。
+      { id: 'n-canvas-full', group: 'nav', label: t('palette.canvasFull'), hint: bind('canvasFullWidth'), run: () => toggleCanvasFull() },
+      { id: 'n-conversation', group: 'nav', label: t('palette.conversation'), hint: bind('focusComposer'), run: () => showConversation() },
+      { id: 'n-focus', group: 'nav', label: t('palette.focusMode'), hint: bind('focusMode'), run: () => toggleFocusMode() },
+      ...(activeTab ? [{
+        id: 'n-close', group: 'nav' as const, label: t('palette.closeTab'), hint: bind('closeTab'),
         run: () => closeTab(activeTab),
-      },
+      }] : []),
       // 快速打开
       ...team.map((m) => ({
         id: `o-a-${m.id}`, group: 'open' as const,
@@ -86,9 +88,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         run: () => openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path }),
       })),
     ]
-    void tabs
     return list
-  }, [t, team, artifacts, openTab, toggleSidebar, setSplitOpen, setActiveTab, splitOpen, closeTab, activeTab, tabs, pending, pushToast, invalidate])
+  }, [t, team, artifacts, openTab, toggleSidebar, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, pending, pushToast, invalidate])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。

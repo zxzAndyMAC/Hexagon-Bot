@@ -10,10 +10,9 @@ import i18n from './i18n'
 vi.mock('./components/shell/Sidebar', () => ({ Sidebar: ({ onSettings }: { onSettings: () => void }) => <><button onClick={onSettings}>Open settings</button><button onClick={() => useUiStore.setState({ flowDialogOpen: true })}>Open flow</button></> }))
 vi.mock('./components/shell/Header', () => ({ Header: () => null }))
 vi.mock('./components/Composer', () => ({ Composer: () => null }))
-vi.mock('./components/shell/InterimCanvas', () => ({ InterimCanvas: () => null }))
+vi.mock('./components/shell/Canvas', () => ({ Canvas: () => null }))
 vi.mock('./components/Timeline', () => ({ Timeline: () => null }))
 vi.mock('./components/IntakeBar', () => ({ IntakeBar: () => null }))
-vi.mock('./components/TabBar', () => ({ TabBar: () => null }))
 vi.mock('./components/PendingCards', () => ({ PendingDialog: () => null }))
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 let root: ReturnType<typeof createRoot>
