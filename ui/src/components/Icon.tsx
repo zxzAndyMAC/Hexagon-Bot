@@ -21,6 +21,8 @@ import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
 // ui-redesign 票 09 画布选区浮条（foundations §7 原型名 wand → wand）
 import { Wand } from 'lucide-react'
+// ui-redesign 票 12 用量（foundations §7 原型名 calendar / trend→trending-up；trend-down 为补设计：环比下降时的对称字形）
+import { Calendar, TrendingDown, TrendingUp } from 'lucide-react'
 // ui-redesign 票 07 输入条与命令面板（foundations §7 原型名 crosshair / flow→workflow / test→test-tube；focus 为补设计：专注模式）
 import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
 import { createLucideIcon } from 'lucide-react'
@@ -140,6 +142,10 @@ const ICONS = {
   cpu: Cpu,
   wand: Wand,
   collapse: Minimize2,
+  // ---- 用量（票 12） ----
+  calendar: Calendar,
+  trend: TrendingUp,
+  'trend-down': TrendingDown,
   // ---- 输入条与命令面板（票 07） ----
   crosshair: Crosshair,
   flow: Workflow,

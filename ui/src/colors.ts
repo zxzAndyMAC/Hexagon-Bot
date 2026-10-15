@@ -16,3 +16,10 @@ export const agentColor = (agentId: string, light = 42) =>
  *  旧 agentColor 留给旧界面与用量折线，票 15 收缩时一并迁走。 */
 export const agentSwatch = (agentId: string): number =>
   (Math.floor(hashHue(agentId) / 45) % 8) + 1
+
+/** 图表里的 Agent 确定色（票 12：消费榜单条 / 每 Agent 最近使用的线）：c1–c8 写成字面量，token 守门能对账。 */
+const AGENT_VARS = [
+  'var(--agent-c1)', 'var(--agent-c2)', 'var(--agent-c3)', 'var(--agent-c4)',
+  'var(--agent-c5)', 'var(--agent-c6)', 'var(--agent-c7)', 'var(--agent-c8)',
+] as const
+export const agentVar = (agentId: string): string => AGENT_VARS[agentSwatch(agentId) - 1]
