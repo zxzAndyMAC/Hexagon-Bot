@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import { bindingFor, matches, type ActionId } from '../keymap'
 import { useUiStore } from '../store'
-import type { DesktopStatus } from '../gen/DesktopStatus'
+import { publishDesktopStatus, useDesktopStatus } from '../useDesktopStatus'
 import type { DesktopControl } from '../gen/DesktopControl'
 import type { DesktopPermissions as Permissions } from '../gen/DesktopPermissions'
 import type { DesktopPermission } from '../gen/DesktopPermission'
@@ -39,48 +39,34 @@ const basename = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ??
 export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
   const { t } = useTranslation()
   const team = useUiStore((s) => s.team)
-  const [status, setStatus] = useState<DesktopStatus | null>(null)
+  // 功能缺口 C4：状态来自共享读（useDesktopStatus），面板不再自开 2 秒定时器；系统授权随每次共享读复查。
+  const { status, stamp, error: readError, refresh } = useDesktopStatus()
   const [grants, setGrants] = useState<Permissions | null>(null)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const mounted = useRef(true)
   const generation = useRef(0)
   const writing = useRef(false)
-  const polling = useRef(false)
   const permissionsWarning = useRef(false)
-  const refresh = useCallback(async () => {
-    if (polling.current || writing.current) return
-    polling.current = true
-    const ticket = generation.current
-    try {
-      const value = await api.desktopStatus()
-      if (mounted.current && ticket === generation.current) {
-        setStatus(value); setError('')
-        // 票 14：勾选行要显示系统授权，所以停用时也读（只读检测，不弹系统提示）。
-        // 缺授权的提醒对话框仍只在已启用时自动弹出（旧语义）。
-        const permissions = await api.desktopPermissions()
-        if (mounted.current && ticket === generation.current) {
-          setGrants(permissions)
-          if (value.enabled) {
-            if (!permissions.ready && !permissionsWarning.current) window.dispatchEvent(new Event('hexagon:desktop-permissions'))
-            permissionsWarning.current = !permissions.ready
-          }
-        }
-      }
-    } catch (e) { if (mounted.current && ticket === generation.current) setError(errText(e)) }
-    finally { polling.current = false }
-  }, [])
   useEffect(() => {
     mounted.current = true
-    // 票 14：StrictMode 的挂载→卸载→再挂载会留下首个请求的 polling 标记，弹层首屏因此卡在「正在读取」2 秒；
-    // 旧请求已被 generation 作废，这里放行新挂载的首读。
-    polling.current = false
-    void refresh()
-    const tick = window.setInterval(() => { if (!document.hidden) void refresh() }, 2000)
-    window.addEventListener('focus', refresh)
-    window.addEventListener('hexagon:desktop-status-changed', refresh)
-    return () => { mounted.current = false; generation.current++; window.clearInterval(tick); window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
-  }, [refresh])
+    return () => { mounted.current = false; generation.current++ }
+  }, [])
+  const enabled = status?.enabled ?? false
+  useEffect(() => {
+    if (!stamp || writing.current) return
+    const ticket = generation.current
+    // 票 14：勾选行要显示系统授权，所以停用时也读（只读检测，不弹系统提示）。
+    // 缺授权的提醒对话框仍只在已启用时自动弹出（旧语义）。
+    api.desktopPermissions().then((permissions) => {
+      if (!mounted.current || ticket !== generation.current) return
+      setGrants(permissions); setError('')
+      if (enabled) {
+        if (!permissions.ready && !permissionsWarning.current) window.dispatchEvent(new Event('hexagon:desktop-permissions'))
+        permissionsWarning.current = !permissions.ready
+      }
+    }, (e) => { if (mounted.current && ticket === generation.current) setError(errText(e)) })
+  }, [stamp, enabled])
   const control = useCallback(async (action: DesktopControl) => {
     if (writing.current || !status || ((action === 'resume' || action === 'prepare_capture') && status.capture_preparation === 'preparing')) return
     const projectRoot = status.project_root
@@ -95,11 +81,9 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
         if (!permissions.ready) { window.dispatchEvent(new Event('hexagon:desktop-permissions')); return }
       }
       const value = await api.desktopControl(action, projectRoot)
+      publishDesktopStatus(value)
       window.dispatchEvent(new Event('hexagon:desktop-status-changed'))
-      if (mounted.current) {
-        setStatus(value)
-        if (action === 'clear_screenshots') window.dispatchEvent(new Event('hexagon:screenshots-cleared'))
-      }
+      if (mounted.current && action === 'clear_screenshots') window.dispatchEvent(new Event('hexagon:screenshots-cleared'))
     } catch (e) { if (mounted.current) setError(errText(e)) }
     finally { writing.current = false; if (mounted.current) setPending(false) }
   }, [status])
@@ -127,6 +111,7 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
     <ActionButton key={name} size="sm" variant={variant} className="flex-1" label={t(`computer.${name}`)} action={controlKeys[name]}
       data-desktop-action={name} disabled={pending || disabled} onClick={() => void control(name)} />
   )
+  const shownError = error || readError
   const chip = !status ? null
     : status.paused ? <Badge variant="neutral">{t('control.statusPaused')}</Badge>
     : status.active_agent ? <Badge variant="warn">{t('control.statusBusy')}</Badge>
@@ -144,7 +129,7 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
           <b className="flex-1 text-[13px] font-semibold">{t('computer.title')}</b>
           {chip}
         </div>
-        {!status && !error && <p role="status" className="px-2.5 pb-2 text-[12px] text-ink-3">{t('computer.loading')}</p>}
+        {!status && !shownError && <p role="status" className="px-2.5 pb-2 text-[12px] text-ink-3">{t('computer.loading')}</p>}
         <div className={cn(insetBlock, 'mx-1 py-1')} data-desktop-grants>
           {grants && !grants.supported && <CheckRow ok={false} label={t('desktop.unsupported')} />}
           {grants && grants.supported && !grants.available && <CheckRow ok={false} label={t('desktop.unavailable')} />}
@@ -204,8 +189,8 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
             {grants?.host_name && <> · {t('control.host', { host: grants.host_name })}</>}
           </p>
         </>}
-        {error && <p role="alert" className="px-2.5 pb-2 text-[12px] text-red">{error}</p>}
-        {error && !status && <div className="px-1.5 pb-1.5"><Button size="xs" onClick={() => void refresh()}>{t('desktop.recheck')}</Button></div>}
+        {shownError && <p role="alert" className="px-2.5 pb-2 text-[12px] text-red">{shownError}</p>}
+        {shownError && !status && <div className="px-1.5 pb-1.5"><Button size="xs" onClick={() => void refresh()}>{t('desktop.recheck')}</Button></div>}
         {inline && <DesktopPermissions compact />}
       </section>
     </TooltipProvider>

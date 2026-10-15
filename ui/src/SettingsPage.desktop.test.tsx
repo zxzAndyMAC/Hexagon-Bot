@@ -73,9 +73,11 @@ it('discards earlier status responses across refreshes and project switches', as
   let switched!: (value: typeof status) => void
   vi.mocked(api.desktopStatus).mockImplementationOnce(() => new Promise(resolve => { switched = resolve }))
   const epoch = useUiStore.getState().projectEpoch
-  await act(async () => useUiStore.setState({ projectEpoch: epoch + 1 }))
+  // 功能缺口 C4：状态改由共享读提供，切项目进行中（epoch>0 且根未知）不发读（宿主此刻可能仍是旧项目）。
+  // 这里模拟已落定的切换：新 epoch 带上新项目根，共享读随之重读。
+  await act(async () => useUiStore.setState({ projectEpoch: epoch + 1, projectRoot: '/project-b' }))
   expect(el.querySelector('button')!.disabled).toBe(true)
   await act(async () => switched({ ...status, project_root: '/project-b', enabled: false }))
   expect(el.querySelector('button')!.textContent).toContain('Computer access disabled')
-  await act(async () => useUiStore.setState({ projectEpoch: epoch }))
+  await act(async () => useUiStore.setState({ projectEpoch: epoch, projectRoot: null }))
 })

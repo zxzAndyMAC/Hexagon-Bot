@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import type { BrowserSession } from '../gen/BrowserSession'
 import type { BrowserMode } from '../gen/BrowserMode'
-import type { DesktopStatus } from '../gen/DesktopStatus'
+import { refreshDesktopStatus, useDesktopStatus } from '../useDesktopStatus'
 import { bindingFor, matches } from '../keymap'
 import { browserLaunchBlock } from '../computerControl'
 import { ActionButton } from './ComputerParts'
@@ -21,9 +21,11 @@ const BLOCK_TEXT = { loading: 'control.blockedLoading', disabled: 'control.block
 
 export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
   const { t } = useTranslation()
+  // 功能缺口 C4：电脑状态与浏览器会话来自共享读（useDesktopStatus），面板不再自开 2 秒定时器。
+  // 本地 session 只承接自己的打开 / 断开结果，下一次共享读到来时以宿主为准（写进行中不覆盖）。
+  const { status: desktopStatus, browser, browserError, error: readError, stamp } = useDesktopStatus()
+  const root = desktopStatus?.project_root ?? ''
   const [session, setSession] = useState<BrowserSession | null>(null)
-  const [root, setRoot] = useState('')
-  const [desktopStatus, setDesktopStatus] = useState<DesktopStatus | null>(null)
   const [pending, setPending] = useState(false)
   const [extensionSetup, setExtensionSetup] = useState(false)
   const [openingStore, setOpeningStore] = useState(false)
@@ -45,38 +47,14 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
     return () => window.removeEventListener('keydown', key)
   }, [])
   useEffect(() => {
-    let active = true, polling = false
-    const refresh = async () => {
-      if (polling || writing.current) return
-      polling = true
-      const ticket = generation.current
-      let consentRead = false
-      try {
-        const desktop = await api.desktopStatus()
-        if (!active || !mounted.current || ticket !== generation.current) return
-        // Owner 2026-10-06: a disconnected browser read once discarded valid
-        // consent/pause state and permanently greyed both explicit retry paths.
-        setRoot(desktop.project_root); setDesktopStatus(desktop)
-        consentRead = true
-        setSession(previous => previous?.project_root === desktop.project_root ? previous : null)
-        const browser = await api.browserStatus(desktop.project_root)
-        if (active && mounted.current && ticket === generation.current) {
-          setSession(browser); setError('')
-        }
-      } catch (e) {
-        if (active && mounted.current && ticket === generation.current) {
-          if (!consentRead) { setRoot(''); setDesktopStatus(null) }
-          setError(errText(e))
-        }
-      }
-      finally { polling = false }
-    }
-    void refresh()
-    const timer = window.setInterval(() => { if (!document.hidden) void refresh() }, 2000)
-    window.addEventListener('focus', refresh)
-    window.addEventListener('hexagon:desktop-status-changed', refresh)
-    return () => { active = false; clearInterval(timer); window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
-  }, [])
+    if (!stamp || writing.current) return
+    // Owner 2026-10-06: a disconnected browser read once discarded valid
+    // consent/pause state and permanently greyed both explicit retry paths.
+    // 浏览器读失败只报原因，不作废电脑状态；会话也保留到宿主给出新读。
+    if (browserError) setSession(previous => previous?.project_root === root ? previous : null)
+    else setSession(browser)
+    setError(readError || browserError)
+  }, [stamp, browser, browserError, readError, root])
   async function change(mode?: BrowserMode) {
     // Owner 2026-10-06: consent reads may fail while a known session is live.
     // Keep explicit detach bound to that session; only launches need fresh consent.
@@ -103,7 +81,12 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
         if (mounted.current && ticket === generation.current) setSession(disconnected)
       }
     } catch (e) { if (mounted.current && ticket === generation.current) setError(errText(e)) }
-    finally { writing.current = false; if (mounted.current) setPending(false) }
+    finally {
+      writing.current = false
+      if (mounted.current) setPending(false)
+      // 头部 chip 读同一份共享状态：写完立即补读，不等下一拍。
+      void refreshDesktopStatus()
+    }
   }
   async function installExtension() {
     if (openingStore) return
