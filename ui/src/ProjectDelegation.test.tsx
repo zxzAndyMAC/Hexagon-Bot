@@ -45,9 +45,11 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   expect(toggle.checked).toBe(false)
   await act(async () => toggle.click())
   expect(save).not.toHaveBeenCalled()
-  const dialog = el.querySelector('.managed-confirm')!
+  // 票 08（components D10 / A17）：说明从原生 <dialog> 换到共享 AlertDialog，经 portal 挂到 body。
+  const dialog = document.querySelector('.managed-confirm')!
   expect(dialog.textContent).toContain('The system will not')
-  expect(dialog.textContent).toContain('at most 3 correction rounds')
+  // 票 08（D10）：上限从一句 limits 拆成三行信息（refresh / usage / flag），句首大写。
+  expect(dialog.textContent).toMatch(/at most 3 correction rounds/i)
   // ADR0087 (ticket 01): full release is stated honestly before turning on.
   expect(dialog.textContent).toContain('only go to the system Trash')
   expect(dialog.textContent).toContain('MCP servers and skills installed in this project')
@@ -55,7 +57,8 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   expect(dialog.textContent).toContain('skills marked manual-only')
   expect(dialog.querySelector('[data-external-deletion]')!.textContent).toContain('cannot block deletions')
   expect(dialog.querySelector('[data-linux-limit]')!.textContent).toContain('Linux')
-  expect(document.activeElement?.textContent).toBe('Cancel')
+  // 票 08（A17）：「取消」按钮带 Esc 键位块。
+  expect(document.activeElement?.textContent).toBe('CancelEsc')
   const confirm = [...dialog.querySelectorAll('button')].find(b => b.textContent === 'Turn on delegation')!
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   await act(async () => confirm.click())
