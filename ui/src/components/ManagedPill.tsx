@@ -11,6 +11,10 @@ import { Dot } from './ui/dot'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { Spinner } from './ui/spinner'
+import { Progress } from './ui/progress'
+import { fmtYuan } from '../usage'
+import { sessionMinutes } from '../managedView'
+import type { ManagedSummary } from '../gen/ManagedSummary'
 import './ProjectDelegation.css'
 
 const tip = (label: string, action: ActionId) =>
@@ -28,7 +32,7 @@ type Busy = 'pause' | 'off' | null
  * 转回人工的件数。宿主确认后才变外观（行内环形加载，不乐观更新）。 */
 export function ManagedPill() {
   const { t } = useTranslation()
-  const { status, processing, apply } = useDelegation()
+  const { status, processing, summary, apply } = useDelegation()
   const [open, setOpen] = useState(false)
   const [report, setReport] = useState(false)
   const [busy, setBusy] = useState<Busy>(null)
@@ -78,7 +82,7 @@ export function ManagedPill() {
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[340px] p-1.5" aria-label={label}>
-        <PillMenu paused={paused} processing={processing} busy={busy} label={label}
+        <PillMenu paused={paused} processing={processing} busy={busy} label={label} summary={summary}
           onReport={() => { setOpen(false); setReport(true) }}
           onPause={() => { void pause(!paused) }} onOff={() => { void disable() }} />
       </PopoverContent>
@@ -93,12 +97,13 @@ export function ManagedPill() {
   </>
 }
 
-function PillMenu({ paused, processing, busy, label, onReport, onPause, onOff }: {
-  paused: boolean; processing: number; busy: Busy; label: string
+function PillMenu({ paused, processing, busy, label, summary, onReport, onPause, onOff }: {
+  paused: boolean; processing: number; busy: Busy; label: string; summary: ManagedSummary | null
   onReport: () => void; onPause: () => void; onOff: () => void
 }) {
   const { t } = useTranslation()
   const { history } = useManagedHistory()
+  const minutes = summary ? sessionMinutes(summary.started_at, summary.ended_at) : null
   const [mode, setMode] = useState<string | null>(null)
   useEffect(() => {
     let live = true
@@ -110,12 +115,14 @@ function PillMenu({ paused, processing, busy, label, onReport, onPause, onOff }:
     <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-1.5">
       <span className="mg-av sm"><Icon name="bot" size={12} /></span>
       <b className="flex-1 text-[13px] font-semibold text-ink">{label}</b>
-      {/* 「已 N 分钟」缺宿主的开启时刻（DelegationStatus 无 enabled_at），功能缺口，不猜。 */}
+      {/* gap A2：宿主给的托管开启时刻（managed_summary.started_at，暂停 / 继续不断开）。 */}
+      {minutes != null && <span className="text-[12px] text-ink-3" data-managed-elapsed>{t('delegation.elapsed', { count: minutes })}</span>}
     </div>
     <div className="m-1 rounded-[10px] bg-inset px-3 py-2.5 text-[12px]">
       <div className="flex"><span className="flex-1 text-ink-3">{t('delegation.kvProcessing')}</span><span>{paused ? t('delegation.pausedNote') : t('delegation.items', { count: processing })}</span></div>
-      {/* 预算 kv 缺宿主数据（功能缺口），不写假数。 */}
       <div className="mt-1 flex"><span className="flex-1 text-ink-3">{t('delegation.kvDecisions')}</span><span>{history ? t('delegation.times', { count: history.length }) : '—'}</span></div>
+      {/* gap A3：项目预算 = 项目累计花费 / 项目用量上限（托管「仍受项目用量预算约束」）；未设上限不画进度条。 */}
+      {summary && <BudgetRow summary={summary} />}
     </div>
     <button type="button" className={row} onClick={onReport} title={tip(t('delegation.report'), 'managedReport')}>
       <Icon name="list" size={16} className="text-ink-2" />{t('delegation.report')}
@@ -133,5 +140,19 @@ function PillMenu({ paused, processing, busy, label, onReport, onPause, onOff }:
       {mode && <span className="ml-auto pl-3 text-[12px] text-ink-3">{t('delegation.turnOffDesc', { mode: t(`approvalMode.${mode}`) })}</span>}
     </button>
     <p className="px-2.5 pt-1 pb-2 text-[12px] text-ink-3">{t('delegation.exitNote')}</p>
+  </div>
+}
+
+function BudgetRow({ summary }: { summary: ManagedSummary }) {
+  const { t } = useTranslation()
+  const spent = fmtYuan(summary.spent_mc)
+  const limitMc = summary.limit_cents == null ? null : summary.limit_cents * 1000
+  const pct = limitMc ? Math.min(100, (summary.spent_mc / limitMc) * 100) : 0
+  return <div data-managed-budget>
+    <div className="mt-1 flex"><span className="flex-1 text-ink-3">{t('delegation.kvBudget')}</span>
+      <span className="font-mono">{limitMc == null ? t('delegation.budgetNoLimit', { spent }) : t('delegation.budgetOf', { spent, limit: fmtYuan(limitMc) })}</span>
+    </div>
+    {limitMc != null && <Progress className="mt-2" value={pct} tone={pct >= 100 ? 'cap' : 'accent'}
+      aria-label={t('delegation.kvBudget')} />}
   </div>
 }

@@ -30,6 +30,7 @@ import type { ApprovalMode } from './gen/ApprovalMode'
 import type { ApprovalModeStatus } from './gen/ApprovalModeStatus'
 import type { DelegationStatus } from './gen/DelegationStatus'
 import type { ManagedRecord } from './gen/ManagedRecord'
+import type { ManagedSummary } from './gen/ManagedSummary'
 import type { ExternalOperation } from './gen/ExternalOperation'
 import type { DesktopPermissions } from './gen/DesktopPermissions'
 import type { DesktopPermission } from './gen/DesktopPermission'
@@ -384,6 +385,10 @@ export const api = {
   setProjectDelegation: (enabled: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation', { enabled, expectedProjectRoot }),
   managedHistory: () => call<ManagedRecord[]>('managed_history'),
   managedExternalOps: () => call<ExternalOperation[]>('managed_external_ops'),
+  /** gap A2/A3：托管时段、项目预算与本次托管花费（read 组）。 */
+  managedSummary: () => call<ManagedSummary>('managed_summary'),
+  /** gap A4：把 UI 生成的托管报告 Markdown 写到负责人在保存对话框里选的路径。 */
+  exportManagedReport: (path: string, markdown: string) => call<null>('export_managed_report', { path, markdown }),
   managedProcessing: () => call<PendingQuestion[]>('managed_processing'),
   setProjectDelegationPaused: (paused: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation_paused', { paused, expectedProjectRoot }),
   stopModelRequest: (questionId: string) => call<null>('stop_model_request', { questionId }),
@@ -961,9 +966,9 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
 const mockManaged = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockmanaged')
 let MOCK_MANAGED = { enabled: true, paused: false }
 const MOCK_MANAGED_HISTORY = [
-  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'no_configured_target', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete' },
-  { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'model_choice', via: 'model', outcome: 'stamped', actor: 'managed:g1:1', result: 'done' },
-  { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done' },
+  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'target_missing', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule' },
+  { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'evidence_complete', via: 'host', outcome: 'stamped', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'real_check' },
+  { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
 ]
 const MOCK_MANAGED_EXTERNAL = [
   { event_id: 122, card_id: 'q-m1', kind: 'local_trash', target: '~/Downloads/old-build.zip', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-14 03:58:00', verification: 'host_verified_recoverable', trash_path: '~/.Trash/old-build.zip' },
@@ -1467,6 +1472,14 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return (mockManaged() ? MOCK_MANAGED_HISTORY : []) as T
     case 'managed_external_ops':
       return (mockManaged() ? MOCK_MANAGED_EXTERNAL : []) as T
+    case 'managed_summary': {
+      const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace('T', ' ')
+      return (mockManaged()
+        ? { started_at: at(42 * 60_000), ended_at: MOCK_MANAGED.enabled ? null : at(0), limit_cents: 10_000, spent_mc: 4_540_000, session_spent_mc: 680_000, cost_unknown: false }
+        : { started_at: null, ended_at: null, limit_cents: null, spent_mc: 0, session_spent_mc: 0, cost_unknown: false }) as T
+    }
+    case 'export_managed_report':
+      return null as T
     case 'managed_processing':
       return (mockManaged() && MOCK_MANAGED.enabled ? [
         { id: 'q-m4', kind: 'stamp', agent_id: 'a3', payload: { stage: '测试' }, state: 'queued' },

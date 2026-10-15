@@ -131,7 +131,7 @@ it('the pending badge counts only owner items; delegated ones show in the pill',
 it('settings shows status and the report, not a second switch', async () => {
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    { event_id: 9, card_id: 'q7', card_kind: 'permission', action: 'deny', reason: 'budget_exhausted', via: 'host', outcome: 'denied', actor: 'managed:g:3', result: 'done' },
+    { event_id: 9, card_id: 'q7', card_kind: 'permission', action: 'deny', reason: 'budget_exhausted', via: 'host', outcome: 'denied', actor: 'managed:g:3', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
   ])
   await mount(<ProjectDelegation />)
   expect(el.querySelector('input[role="switch"]')).toBeNull()
@@ -146,7 +146,7 @@ it('the report lists external operations with honest verification and jumps to t
   // host trash is recoverable and says where the item is.
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    { event_id: 11, card_id: 'q1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed_and_continued', actor: 'managed:g:1', result: 'done' },
+    { event_id: 11, card_id: 'q1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed_and_continued', actor: 'managed:g:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
   ])
   vi.spyOn(api, 'managedExternalOps').mockResolvedValue([
     { event_id: 11, card_id: 'q1', kind: 'local_trash', target: '/Users/me/old.png', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-11 12:00:00', verification: 'host_verified_recoverable', trash_path: '/Users/me/.Trash/old.png' },

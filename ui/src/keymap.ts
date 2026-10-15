@@ -58,6 +58,7 @@ export type ActionId =
   | 'managedResume'
   | 'managedDisable'
   | 'managedReport'
+  | 'managedExport'
   | 'modelRecoveryStop'
   | 'desktopPermissions'
   | 'desktopAccessibility'
@@ -188,6 +189,7 @@ const DEFAULTS: Record<ActionId, string> = {
   managedResume: '',
   managedDisable: '',
   managedReport: '',
+  managedExport: '',
   modelRecoveryStop: '',
   desktopPermissions: 'alt+mod+shift+d',
   desktopAccessibility: 'alt+mod+shift+a',
@@ -309,6 +311,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'managedResume', labelKey: 'delegation.resume' },
   { id: 'managedDisable', labelKey: 'delegation.turnOff' },
   { id: 'managedReport', labelKey: 'delegation.report' },
+  { id: 'managedExport', labelKey: 'delegation.exportReport' },
   { id: 'modelRecoveryStop', labelKey: 'modelRecovery.stop' },
   { id: 'desktopPanel', labelKey: 'computer.title' },
   { id: 'desktopEnable', labelKey: 'computer.enable' },
