@@ -212,6 +212,12 @@ export function bucketTick(bucket: string, granularity: 'day' | 'hour', loc?: st
     .format(new Date(parseDay(bucket.slice(0, 10))))
 }
 
+/** 时间范围触发钮文字：预设走 usage.p_*，自定义区间「9/11 – 10/10」。 */
+export function rangeLabel(range: UsageRange, t: (k: string) => string): string {
+  if (range.preset !== 'custom') return t(`usage.p_${range.preset}`)
+  return `${bucketTick(range.from ?? '', 'day')} – ${bucketTick(range.to ?? '', 'day')}`
+}
+
 /** 按阶段卡头「已完成 3 / 6」：跳过的阶段也算走完。 */
 export function stageProgress(stages: { state: string }[]): { done: number; total: number } {
   return { done: stages.filter((s) => s.state === 'done' || s.state === 'skipped').length, total: stages.length }

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { bucketTick, customRange, daysAgo, presetRange, RANGE_PRESETS, type UsageRange } from '../../usage'
+import { bucketTick, customRange, daysAgo, presetRange, RANGE_PRESETS, rangeLabel, type UsageRange } from '../../usage'
 
 const LOCALES = { 'zh-CN': zhCN, 'zh-TW': zhTW, ja, es, fr, pt, en: enUS } as const
 
@@ -22,11 +22,6 @@ const toLocal = (day: string) => {
 /** 日历选中的本地 Date → 同年月日的日期串（当 UTC 日用）。 */
 const toDay = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-
-export function rangeLabel(range: UsageRange, t: (k: string) => string): string {
-  if (range.preset !== 'custom') return t(`usage.p_${range.preset}`)
-  return `${bucketTick(range.from ?? '', 'day')} – ${bucketTick(range.to ?? '', 'day')}`
-}
 
 export function RangePicker({ range, onChange, ...rest }: {
   range: UsageRange

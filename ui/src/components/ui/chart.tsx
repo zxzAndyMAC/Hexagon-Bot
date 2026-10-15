@@ -134,4 +134,4 @@ function ChartLegendContent({ payload, className }: { payload?: ReadonlyArray<{ 
   )
 }
 
-export { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent, useChart }
+export { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent }

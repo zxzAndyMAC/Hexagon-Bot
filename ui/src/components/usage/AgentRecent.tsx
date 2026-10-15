@@ -23,7 +23,6 @@ export function AgentRecent({ refreshKey }: { refreshKey: number }) {
 
   const load = useCallback(async () => {
     const id = ++req.current
-    setStatus((s) => (s === 'ok' ? s : 'loading'))
     try {
       const rows = await api.usageSeries('day', daysAgo(days - 1), daysAgo(0))
       if (id === req.current) { setSeries(rows); setStatus('ok') }
@@ -54,7 +53,7 @@ export function AgentRecent({ refreshKey }: { refreshKey: number }) {
     >
       <div className="px-3 pt-4 pb-1">
         {status === 'loading' ? <ChartSkeleton height={200} />
-          : status === 'error' ? <div className="px-1.5 pb-3"><UsageLoadError onRetry={() => void load()} /></div>
+          : status === 'error' ? <div className="px-1.5 pb-3"><UsageLoadError onRetry={() => { setStatus('loading'); void load() }} /></div>
           : agents.length === 0 ? <UsageEmpty />
           : <AreaTrend stacked={false} height={200} data={rows} series={lines} ariaLabel={aria}
               tick={(b) => bucketTick(b, 'day')} />}

@@ -9,7 +9,7 @@ import { isMac } from '../../keymap'
 import { Icon } from '../Icon'
 import { AreaTrend } from '../usage/AreaTrend'
 import { AgentRecent } from '../usage/AgentRecent'
-import { RangePicker, rangeLabel } from '../usage/RangePicker'
+import { RangePicker } from '../usage/RangePicker'
 import { Leaderboard, StageBreakdown } from '../usage/UsageBoards'
 import { UsageStats } from '../usage/UsageStats'
 import { ChartCard, ChartSkeleton, Delta, UsageEmpty, UsageLoadError } from '../usage/parts'
@@ -18,7 +18,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 import {
-  bucketTick, dayAxis, daysAgo, fmtTok, presetRange, previousRange, stackRows, sumTokens, weekOverWeek,
+  bucketTick, dayAxis, rangeLabel, daysAgo, fmtTok, presetRange, previousRange, stackRows, sumTokens, weekOverWeek,
   type UsageRange,
 } from '../../usage'
 
@@ -43,7 +43,6 @@ export function UsageView({ narrowLead = false }: { narrowLead?: boolean }) {
 
   const load = useCallback(async () => {
     const id = ++req.current
-    setStatus((s) => (s === 'ok' ? s : 'loading'))
     const prev = previousRange(range)
     try {
       const [cur, before] = await Promise.all([
@@ -123,7 +122,7 @@ export function UsageView({ narrowLead = false }: { narrowLead?: boolean }) {
           >
             <div className="px-3 pt-4 pb-1">
               {status === 'loading' ? <ChartSkeleton height={230} />
-                : status === 'error' ? <div className="px-1.5 pb-3"><UsageLoadError onRetry={() => void load()} /></div>
+                : status === 'error' ? <div className="px-1.5 pb-3"><UsageLoadError onRetry={() => { setStatus('loading'); void load() }} /></div>
                 : total === 0 ? <UsageEmpty
                     actionLabel={range.preset === 'all' ? undefined : t('usage.p_all')}
                     onAction={range.preset === 'all' ? undefined : () => setRange(presetRange('all'))} />

@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import { useUiStore } from '../store'
 import { Icon } from './Icon'
+import { openUsageSettings } from '../usageEntry'
 import { AreaTrend } from './usage/AreaTrend'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -76,9 +77,6 @@ export function LimitEditor({ onDone }: { onDone: () => void }) {
     </div>
   )
 }
-
-export const openUsageSettings = () =>
-  window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: 'usage' }))
 
 /** D20 卡体。onDetail 进入用量详情；onRaise 默认打开设置「用量」分区改上限。 */
 export function UsageCard({ onDetail, onRaise = openUsageSettings }: { onDetail: () => void; onRaise?: () => void }) {
@@ -176,7 +174,8 @@ export function UsageTab({ onDetail }: { onDetail?: () => void }) {
   const [editing, setEditing] = useState(false)
   const detail = onDetail ?? (() => useUiStore.getState().openUsageDetail())
   return (
-    <div className="flex-1 overflow-y-auto p-4">
+    <div>
+      {/* 设置页的 SetWrap 已给外边距与滚动（票 11）；这里只放卡 */}
       <Card className="max-w-[420px] px-4 py-3.5" data-usage-settings>
         <UsageCard onDetail={detail} onRaise={() => setEditing(true)} />
         {editing

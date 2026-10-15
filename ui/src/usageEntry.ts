@@ -13,6 +13,10 @@ export type UsageTier = {
   pct: number | null
 }
 
+/** 「提高上限」：打开设置「用量」分区（App 监听 hexagon:open-settings-section，票 12）。 */
+export const openUsageSettings = () =>
+  window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: 'usage' }))
+
 export function usageTier(total: UsageTotal | null): UsageTier {
   if (!total) return { tier: 'unknown', pct: null }
   if (total.limit_cents == null) return { tier: 'ok', pct: null }
