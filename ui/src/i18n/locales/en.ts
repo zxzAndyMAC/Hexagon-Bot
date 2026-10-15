@@ -1178,6 +1178,7 @@ export default {
     stageSkip: 'Skip stage',
     stageStamp: 'Stamp stage',
     nodeRail: 'Focus node rail',
+    focusToasts: "Jump to notifications",
     dismissPending: "Collapse pending dock",
     treeNewFile: 'New file',
     treeNewFolder: 'New folder',
@@ -1261,4 +1262,5 @@ export default {
     already_exists: 'Already exists',
     not_dir: 'Not a directory',
   },
+  feedback: {"region": "Notifications", "removeRecent": "Remove from recent projects", "switchWaitTitle": "Switching projects has to wait", "switchWaitBody": ": {{project}} still has computer actions in progress. The switch happens once they finish.", "stayHere": "Stay in this project", "treeEmptyBody": "This folder has no files yet. Create one to start.", "searchEmptyBody": "Try another keyword, or clear the search to see everything.", "pickerEmptyBody": "Nothing to choose yet. Items added in Settings show up here.", "clearSearch": "Clear search"},
 }

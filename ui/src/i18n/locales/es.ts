@@ -1178,6 +1178,7 @@ export default {
     stageSkip: 'Omitir etapa',
     stageStamp: 'Sellar etapa',
     nodeRail: 'Enfocar el raíl de nodos',
+    focusToasts: "Ir a las notificaciones",
     dismissPending: "Contraer el dock de pendientes",
     treeNewFile: 'Nuevo archivo',
     treeNewFolder: 'Nueva carpeta',
@@ -1261,4 +1262,5 @@ export default {
     already_exists: 'Ya existe',
     not_dir: 'No es un directorio',
   },
+  feedback: {"region": "Notificaciones", "removeRecent": "Quitar de proyectos recientes", "switchWaitTitle": "El cambio de proyecto debe esperar", "switchWaitBody": ": {{project}} todavía tiene acciones del equipo en curso. El cambio se hará cuando terminen.", "stayHere": "Quedarse en este proyecto", "treeEmptyBody": "Esta carpeta aún no tiene archivos. Crea uno para empezar.", "searchEmptyBody": "Prueba otra palabra clave o borra la búsqueda para ver todo.", "pickerEmptyBody": "Aún no hay opciones. Lo que añadas en Ajustes aparecerá aquí.", "clearSearch": "Borrar búsqueda"},
 }

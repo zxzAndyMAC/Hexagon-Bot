@@ -1178,6 +1178,7 @@ export default {
     stageSkip: 'ステージをスキップ',
     stageStamp: 'ステージに捺印',
     nodeRail: 'ノードレールにフォーカス',
+    focusToasts: "通知へ移動",
     dismissPending: "未決ドックを折りたたむ",
     treeNewFile: '新規ファイル',
     treeNewFolder: '新規フォルダ',
@@ -1261,4 +1262,5 @@ export default {
     already_exists: '既に存在します',
     not_dir: 'ディレクトリではありません',
   },
+  feedback: {"region": "通知", "removeRecent": "最近のプロジェクトから削除", "switchWaitTitle": "プロジェクトの切り替えを待っています", "switchWaitBody": "：{{project}} にまだ完了していないコンピューター操作があります。完了後に切り替えます。", "stayHere": "このプロジェクトにとどまる", "treeEmptyBody": "このフォルダーにはまだファイルがありません。新しく作成して始めましょう。", "searchEmptyBody": "別のキーワードを試すか、検索をクリアしてすべて表示します。", "pickerEmptyBody": "まだ選択肢がありません。設定で追加するとここに表示されます。", "clearSearch": "検索をクリア"},
 }

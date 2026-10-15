@@ -91,8 +91,12 @@ describe('启动页最近项目：已删目录容错（owner 反馈）', () => {
     const onOpen = vi.fn()
     ;({ el, root } = await render(<Launcher onOpen={onOpen} />))
     await act(async () => { recentRow(el!, 'ok-proj').click() })
-    expect(push).toHaveBeenCalledWith('打不开', 'err')
+    // 票 13（feedback#toast / A18）：失败 toast 带「从最近项目移除」动作（原断言只有文案与 tone，ADR 0051 规范补齐）。
+    expect(push).toHaveBeenCalledWith('打不开', 'err', expect.objectContaining({ action: expect.objectContaining({ label: '从最近项目移除' }) }))
     expect(onOpen).not.toHaveBeenCalled()
+    const rm = vi.spyOn(api, 'removeRecent').mockResolvedValue(undefined as never)
+    await act(async () => { await push.mock.calls[0][2]!.action!.run() })
+    expect(rm).toHaveBeenCalledWith('/tmp/ok-proj')
   })
 
   it('没有最近项目时显示空态', async () => {

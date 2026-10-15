@@ -1,10 +1,12 @@
 // 用量详情的小件（票 12）：图表卡 E13 外壳、统计卡 E12、榜单行 hbar、加载骨架 A20、空态 A19、行内错误 C5（块形）。
-// A19 / A20 / C5 的通用组件归票 13（反馈层）；这里按同一规范写最小本地版，票 13 落地后改用共享件。
+// A19 / A20 / C5 已改用票 13 的共享件（ui/empty、ui/skeleton、ui/inline-error）。
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Icon } from '../Icon'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Empty } from '@/components/ui/empty'
+import { InlineError } from '@/components/ui/inline-error'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
 /** E13 chart-card：头 chart-h（标题 14/600 + 说明 12.5 ink-3 + 右侧控件）/ 体 / 尾 chart-f。 */
@@ -82,41 +84,27 @@ export function HBar({ label, value, max, color, exact, muted = false }: {
   )
 }
 
-/** A20 骨架：圆角 6 条块扫光；容器 aria-busy。 */
+/** A20 骨架（共享件 ui/skeleton，票 13）：三条自底向上；容器 aria-busy。 */
 export function ChartSkeleton({ height }: { height: number }) {
   const { t } = useTranslation()
   return (
     <div role="status" aria-busy="true" aria-label={t('usageDetail.loading')} data-usage-loading className="flex flex-col justify-end gap-2" style={{ height }}>
-      {[0.55, 0.8, 1].map((w) => (
-        <span key={w} className="block h-3 animate-hx-skl rounded-[6px] bg-[linear-gradient(90deg,var(--canvas),var(--hover-2),var(--canvas))] bg-[length:200%_100%]" style={{ width: `${w * 100}%` }} />
-      ))}
+      {[0.55, 0.8, 1].map((w) => <Skeleton key={w} className="h-3" style={{ width: `${w * 100}%` }} />)}
     </div>
   )
 }
 
-/** A19 空态：44 图标块 + 14/600 标题 + 13 ink-3 说明 + 一个动作。 */
+/** A19 空态（共享件 ui/empty，票 13）。 */
 export function UsageEmpty({ onAction, actionLabel }: { onAction?: () => void; actionLabel?: string }) {
   const { t } = useTranslation()
   return (
-    <div data-usage-empty className="flex flex-col items-center px-5 py-7 text-center">
-      <span className="grid size-11 place-items-center rounded-[12px] bg-canvas text-ink-2 shadow-[inset_0_0_0_1px_var(--line)]">
-        <Icon name="chart-column" size={20} />
-      </span>
-      <div className="mt-3 text-[14px] font-semibold text-ink">{t('usageDetail.empty')}</div>
-      <p className="mt-1 max-w-[280px] text-[13px] text-ink-3">{t('usageDetail.emptyHint')}</p>
-      {onAction && actionLabel && <Button size="sm" className="mt-3" onClick={onAction}>{actionLabel}</Button>}
-    </div>
+    <Empty data-usage-empty icon="chart-column" title={t('usageDetail.empty')} desc={t('usageDetail.emptyHint')}
+      action={onAction && actionLabel && <Button size="sm" onClick={onAction}>{actionLabel}</Button>} />
   )
 }
 
-/** C5 块形：--red-tint 底圆角 10；临时性错误给「重试」。 */
+/** C5 块形（共享件 ui/inline-error，票 13）：临时性错误给「重试」。 */
 export function UsageLoadError({ onRetry, retrying }: { onRetry: () => void; retrying?: boolean }) {
   const { t } = useTranslation()
-  return (
-    <div role="alert" data-usage-error className="flex items-center gap-2 rounded-[10px] bg-red-tint px-3 py-2.5 text-red">
-      <Icon name="circle-x" size={16} />
-      <span className="min-w-0 flex-1 text-[13px] font-medium">{t('usageDetail.loadFailed')}</span>
-      <Button size="xs" loading={retrying} onClick={onRetry}>{t('usageDetail.retry')}</Button>
-    </div>
-  )
+  return <InlineError data-usage-error title={t('usageDetail.loadFailed')} onRetry={onRetry} retryLabel={t('usageDetail.retry')} retrying={retrying} />
 }

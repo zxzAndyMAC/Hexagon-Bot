@@ -5,6 +5,7 @@
 // 开发工具页：文案不进 i18n（不随产品发布，生产构建里整页被摇掉）。
 import { useEffect, useState, type ReactNode } from 'react'
 import { Icon } from '@/components/Icon'
+import { FeedbackSpecimen } from './FeedbackSpecimen'
 import { Button, SplitButton } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Kbd, KbdGroup, ShortcutKbd } from '@/components/ui/kbd'
@@ -446,6 +447,7 @@ export default function Specimen() {
         <h2 className="mb-3 text-[14px] font-semibold">字号层级与形制 <span className="font-normal text-ink-3">index#type</span></h2>
         <TypeStage />
       </section>
+      <FeedbackSpecimen />
       <h2 className="px-8 pt-8 text-[14px] font-semibold">状态矩阵 <span className="font-normal text-ink-3">components A1–A17 · 顶部切主题看深色</span></h2>
       <table className="w-full border-separate border-spacing-x-4 border-spacing-y-0 px-4">
         <thead>

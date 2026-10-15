@@ -711,20 +711,6 @@ input, textarea { font: inherit; color: var(--text); }
   background: var(--popover); border-bottom: 1px solid var(--legacy-accent-border);
 }
 
-/* toast 出口（ui-audit 票 01/04）：composer 上方浮层，点击可提前关闭 */
-.toast-host {
-  position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%);
-  z-index: 90; display: flex; flex-direction: column; gap: 6px; align-items: center;
-  pointer-events: none;
-}
-.toast {
-  font: inherit; font-size: 12px; pointer-events: auto; cursor: pointer;
-  padding: 7px 14px; border-radius: var(--r-pill); max-width: min(560px, 80vw);
-  background: var(--popover); color: var(--text); border: 1px solid var(--border-strong);
-  box-shadow: 0 8px 24px rgba(0,0,0,.28);
-}
-.toast.err { border-color: var(--err-border); color: var(--err); }
-.toast.ok { border-color: var(--ok-border); color: var(--ok); }
 
 @keyframes pulse-amber {
   0%, 100% { opacity: 1; }

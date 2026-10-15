@@ -46,13 +46,27 @@ export type ModalScope = 'workbench' | 'settings' | 'palette' | 'flow'
 
 /// toast 通知（ui-audit 票 01/04）：用户发起变更的失败出口。
 /// 轮询类错误不得走这里刷屏（调用方节流）。
-export interface Toast {
+/// ui-redesign 票 13（A18 Sonner 形制）：队列仍在 store（测试与调用方读它），
+/// 寿命归 ToastHost/Sonner——约 3.5s、悬停暂停；Sonner 关闭时回调 dismissToast。
+/// 曾经的写法：store 自己 setTimeout 3.5s 删项——悬停暂停无从实现（计时不在渲染层）。
+export interface ToastAction {
+  label: string
+  run: () => unknown | Promise<unknown>
+}
+export interface ToastOpts {
+  /** 原因码（C5「<原因>（<码>）」）：只放已登记的领域码，如 worktree_binding_drift（D8）。 */
+  code?: string
+  /** 一个文字动作（「撤回」「从最近项目移除」）。 */
+  action?: ToastAction
+  /** 前置图标：默认按 tone（ok=circleCheck / err=circleX）；undo = 撤销类结果。 */
+  icon?: 'undo'
+}
+export interface Toast extends ToastOpts {
   id: number
   text: string
   tone: 'info' | 'ok' | 'err'
 }
 let toastSeq = 0
-const TOAST_MS = 3500
 
 // ui-audit 票 04（P1-6）：轮询类失败的噪音节流——快通道 2s 一拍，
 // 断网时裸 Promise.all 会每拍抛一次 unhandled rejection 且用户无感知。
@@ -281,7 +295,7 @@ interface UiState {
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
   setModalScope: (s: ModalScope) => void
-  pushToast: (text: string, tone?: Toast['tone']) => void
+  pushToast: (text: string, tone?: Toast['tone'], opts?: ToastOpts) => void
   dismissToast: (id: number) => void
   askConfirm: (r: ConfirmReq) => void
   clearConfirm: (confirmed?: boolean) => void
@@ -418,13 +432,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   }),
   toasts: [],
   setModalScope: (s) => set({ modalScope: s }),
-  pushToast: (text, tone = 'info') => {
+  pushToast: (text, tone = 'info', opts) => {
     if (!text) return // A cancelled local navigation is not an error notification.
     const id = ++toastSeq
-    set((s) => ({ toasts: [...s.toasts, { id, text, tone }] }))
-    setTimeout(() => {
-      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
-    }, TOAST_MS)
+    set((s) => ({ toasts: [...s.toasts, { ...opts, id, text, tone }] }))
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   askConfirm: (r) => {

@@ -36,6 +36,8 @@ import { FreshStart } from './FreshStart'
 import { IntakeCard } from './IntakeCard'
 import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
 import { parseTime } from '../usage'
+import { SkeletonRows } from '@/components/ui/skeleton'
+import { InlineError } from '@/components/ui/inline-error'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
 // console.warn 一次/key，开发期漏译能被看见而不是静默吞掉。
@@ -1138,20 +1140,18 @@ export function Timeline() {
         />
         </div>
         {/* A20：首屏用骨架；读取失败是 C5 行内错误 + 重试，不伪装成空时间线 */}
-        {!viewport.ready && <div role={windowState.error ? 'alert' : 'status'} aria-label={windowState.error ? undefined : t('timeline.loadingRecent')} style={{ position: 'absolute', inset: 0, background: 'var(--app-main)' }}>
+        {!viewport.ready && <div role={windowState.error ? undefined : 'status'} aria-label={windowState.error ? undefined : t('timeline.loadingRecent')} style={{ position: 'absolute', inset: 0, background: 'var(--app-main)' }}>
           {windowState.error
-            ? <div className="tl-col"><div className="sysrow tl-sys risk"><span className="tl-sys-l">{t('timeline.loadFailed')} · <button type="button" className="tl-link" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button></span></div></div>
-            : <div className="tl-col"><SkeletonRows /></div>}
+            ? <div className="tl-col pt-3"><InlineError title={t('timeline.loadFailed')} onRetry={() => void windowState.retry()} retryLabel={t('timeline.retry')} retryTitle={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} /></div>
+            : <div className="tl-col" aria-busy="true"><SkeletonRows /></div>}
         </div>}
         {/* Owner 2026-10-02: upward intent loads history; only progress or recovery needs a floating surface. */}
         {viewport.ready && (windowState.olderLoading || windowState.olderError || windowState.tailError) &&
           <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21, background: 'var(--app-main)' }}>
             <div className="tl-col">
-              {windowState.olderLoading ? <div role="status" aria-label={t('timeline.loadingOlder')}><SkeletonRows count={1} /></div>
-                : <div className="sysrow tl-sys" role="alert"><span className="tl-sys-l">
-                    {windowState.tailError ? t('timeline.loadFailed') : t('timeline.olderFailedLabel')} · <button type="button" className="tl-link"
-                      title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button>
-                  </span></div>}
+              {windowState.olderLoading ? <div role="status" aria-busy="true" aria-label={t('timeline.loadingOlder')}><SkeletonRows count={1} /></div>
+                : <InlineError variant="row" title={windowState.tailError ? t('timeline.loadFailed') : t('timeline.olderFailedLabel')}
+                    onRetry={() => void windowState.retry()} retryLabel={t('timeline.retry')} retryTitle={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} />}
             </div>
           </div>}
 
@@ -1171,22 +1171,6 @@ export function Timeline() {
     </div>
     </FreshContext.Provider>
     </TooltipProvider>
-  )
-}
-
-/** A20 骨架：头像块 + 三条（feedback#loading「时间线首屏 / 补载更早内容」）。 */
-function SkeletonRows({ count = 3 }: { count?: number }) {
-  return (
-    <>
-      {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="tl-skl" aria-hidden>
-          <i className="av" />
-          <div className="tl-grow" style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
-            <i style={{ width: '40%' }} /><i style={{ width: '90%' }} /><i style={{ width: '70%' }} />
-          </div>
-        </div>
-      ))}
-    </>
   )
 }
 

@@ -4,7 +4,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../../store'
-import { api, errText } from '../../api'
+import { api } from '../../api'
+import { switchProject } from '../../projectSwitch'
+import { toastError } from '../../toast'
 import type { RecentProject } from '../../gen/RecentProject'
 import { Icon } from '../Icon'
 import {
@@ -28,21 +30,14 @@ export function ProjectBlock({ onProjectClosed }: { onProjectClosed: () => void 
   const name = projectName || t('app.untitledProject')
   const sub = mode === 'fastpath' ? t('sidebar.fastpath') : packName ? t('sidebar.pack', { name: packName }) : t('topbar.pack')
 
-  const switchTo = async (dir: string) => {
-    // TOCTOU：列出后目录被删仍会失败——toast 报出而不是静默拒绝
-    try {
-      await api.openRecent(dir)
-      await useUiStore.getState().refresh()
-    } catch (e) {
-      useUiStore.getState().pushToast(errText(e), 'err')
-    }
-  }
+  // 票 13：有未排空的电脑动作时先出阻塞横条再切（projectSwitch.ts）；失败走 toast。
+  const switchTo = (dir: string) => switchProject(dir)
   const backToLauncher = async () => {
     try {
       await api.closeProject()
       onProjectClosed()
     } catch (e) {
-      useUiStore.getState().pushToast(errText(e), 'err')
+      toastError(e)
     }
   }
   const others = recents.filter((r) => r.exists && r.name !== projectName)
