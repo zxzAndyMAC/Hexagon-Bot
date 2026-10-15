@@ -943,7 +943,26 @@ const artLatest = (path: string): string | null => {
   return vs[Math.max(...Object.keys(vs).map(Number))]
 }
 
+// 票 04 黄金标准手测：`?mockdecide` 时 mock 记住已裁决的卡，pending_questions 不再返回它们
+// （默认关：既有测试依赖静态夹具）。键 = 卡 id；recover_run / stamp 按夹具里对应卡反查。
+const MOCK_DECIDED = new Set<string>()
+const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> = {
+  answer_permission: (a) => String(a.questionId), allow_project_permission: (a) => String(a.questionId),
+  confirm_publish: (a) => String(a.qid), reject_publish: (a) => String(a.qid),
+  confirm_worktree: (a) => String(a.qid), reject_worktree: (a) => String(a.qid),
+  adjudicate_flag: (a) => String(a.qid), confirm_proposal: (a) => String(a.qid), reject_proposal: (a) => String(a.qid),
+  stall_retry: (a) => String(a.questionId), stall_ack: (a) => String(a.questionId),
+  recover_run: () => 'q-rec', stamp: () => 'q-stamp', reject_stamp: () => 'q-stamp',
+}
+
 function mock<T>(cmd: string, args?: Record<string, unknown>): T {
+  if (MOCK_DECIDE_CMDS[cmd] && typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdecide')) {
+    MOCK_DECIDED.add(MOCK_DECIDE_CMDS[cmd](args ?? {}))
+  }
+  return mockReply<T>(cmd, args)
+}
+
+function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
   switch (cmd) {
     case 'core_ping':
       return 'hexagon-core ok' as T
@@ -1180,7 +1199,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
         { id: 'q-perm2', kind: 'permission', agent_id: 'a1', payload: { tool: 'bash', input: { cmd: 'rm -rf target && cargo build' }, reason: '构建产物损坏，安全网必问', safety_net: true }, state: 'queued' },
         { id: 'q-prop', kind: 'stamp', agent_id: 'a1', payload: { proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }, state: 'queued' },
-      ] as T
+      ].filter((q) => !MOCK_DECIDED.has(q.id)) as T
     case 'usage':
       return {
         rows: [
