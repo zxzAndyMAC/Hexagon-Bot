@@ -19,7 +19,7 @@ import type { TeamRow } from './gen/TeamRow'
 let el: HTMLDivElement
 let root: Root
 const member = (role: string, id = `id-${role}`, status: 'active' | 'sleeping' = 'active'): TeamRow =>
-  ({ id, role, model_slot: 'chat', status, avatar_hash: null, model: null, duty: null })
+  ({ id, role, model_slot: 'chat', status, avatar_hash: null, model: null, duty: null, superior: null })
 
 async function mount(node: React.ReactNode) {
   el = document.createElement('div')

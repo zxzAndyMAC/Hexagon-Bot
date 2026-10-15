@@ -114,7 +114,7 @@ it('removing all references also dismisses a reference inspection',async()=>{
 })
 
 it('keeps keyboard suggestion focus in the editor with multiple references',async()=>{
-  useUiStore.setState({mode:'pack',fastRole:null,team:[{id:'a',role:'QA',model_slot:'chat',status:'sleeping',avatar_hash: null, model: null, duty: null},{id:'b',role:'UX',model_slot:'chat',status:'sleeping',avatar_hash: null, model: null, duty: null}],pending:[],timeline:[]})
+  useUiStore.setState({mode:'pack',fastRole:null,team:[{id:'a',role:'QA',model_slot:'chat',status:'sleeping',avatar_hash: null, model: null, duty: null, superior: null},{id:'b',role:'UX',model_slot:'chat',status:'sleeping',avatar_hash: null, model: null, duty: null, superior: null}],pending:[],timeline:[]})
   vi.mocked(api.browserSelectionPoll).mockResolvedValueOnce([reference,{...reference,id:'second',text:'second'}])
   await act(async()=>root.render(<Composer/>))
   const textarea=el.querySelector('textarea')!

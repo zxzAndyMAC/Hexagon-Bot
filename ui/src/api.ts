@@ -1042,6 +1042,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         avatar_hash: mockAvatars[r.id] ? mockHash(mockAvatars[r.id]) : null,
         // gap B2：团队行带解析后的模型展示名（dev 样例对照 workbench#running 消息头）
         model: ({ chat: 'Claude Sonnet 5.5', code: 'Claude Sonnet 5.5', ops: 'DeepSeek V4' } as Record<string, string>)[r.model_slot] ?? null,
+        superior: ({ 后端: '后端技术负责人', 前端: '架构师', UX: '产品策划', QA: '架构师' } as Record<string, string>)[r.role] ?? null,
       })) as T
     case 'artifacts':
       return [

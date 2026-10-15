@@ -15,7 +15,7 @@ import type { RepoEntry } from './gen/RepoEntry'
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const member = (role: string, status: 'active' | 'sleeping' = 'active'): TeamRow =>
-  ({ id: `id-${role}`, role, model_slot: 'chat', status, avatar_hash: null, model: null, duty: null })
+  ({ id: `id-${role}`, role, model_slot: 'chat', status, avatar_hash: null, model: null, duty: null, superior: null })
 
 async function render(node: React.ReactNode) {
   const el = document.createElement('div')

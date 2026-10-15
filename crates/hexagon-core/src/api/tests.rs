@@ -6461,7 +6461,7 @@ fn discarded_intake_draft_stays_gone_after_reopen() {
     assert!(!again.intake_draft_pending().unwrap());
 }
 
-/// gap B2/B6/B7（ui-redesign 2026-10-15）：团队行带当前模型展示名与职责首行。
+/// gap B2/B6/B7（ui-redesign 2026-10-15）：团队行带当前模型展示名、职责首行与上级。
 /// 之前只有槽位 id，消息头 / 成员悬停卡 / @ 弹层都显示不了模型和职责。
 #[test]
 fn team_rows_carry_model_label_and_duty_line() {
@@ -6513,6 +6513,11 @@ fn team_rows_carry_model_label_and_duty_line() {
         row("项目经理")["model"],
         "raw-default",
         "实例槽为空走 default；目录无条目用模型 id"
+    );
+    assert_eq!(
+        row("产品策划")["superior"].as_str(),
+        crate::roles::superior_of(&wb.db, "p1", "产品策划").as_deref(),
+        "上级与提案路由同一解析"
     );
     for r in &rows {
         let duty = r["duty"].as_str().expect("预置角色有职责");

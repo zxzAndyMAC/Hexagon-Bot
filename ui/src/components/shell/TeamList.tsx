@@ -1,7 +1,8 @@
 // 团队成员行 MemberRow（components B3，workbench#running）与侧栏「团队」分组。
 // 34 高：24 头像（含状态点）+ 名 13px + 右侧状态：工作中 = 像素格；休眠 = 「休眠」11 ink-3 且整行 opacity .5。
 // 点击打开该 Agent（票 02 仍在中栏页签打开，03 改在画布打开）；当前打开的成员 --hover-2 底。
-// 悬停名片（B3 写 HoverCard）暂用 A15 Tooltip 显示「角色 · 模型」——基础件里还没有 HoverCard，对账表票 02 记录。
+// 悬停名片 HoverCard（B3；gap B6 2026-10-15 起替代票 02 的过渡 Tooltip「角色 · 模型」）：
+// 头像 + 角色 + 状态，下列 模型 / 上级 / 职责（TeamRow.model / superior / duty）。聚焦同样打开。
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../../store'
 import type { TeamRow } from '../../gen/TeamRow'
@@ -9,7 +10,7 @@ import { slotLabel } from '../../modelpick'
 import { useWorkingAgents } from './teamHooks'
 import { Avatar } from '@/components/ui/avatar'
 import { PixelGrid } from '@/components/ui/spinner'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { cn } from '@/lib/utils'
 
 function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
@@ -21,8 +22,8 @@ function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
   const sleeping = m.status === 'sleeping'
   return (
     <li>
-      <Tooltip>
-        <TooltipTrigger asChild>
+      <HoverCard>
+        <HoverCardTrigger asChild>
           <button
             type="button"
             data-member={m.id}
@@ -41,9 +42,27 @@ function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
               {working ? <PixelGrid label={t('sidebar.working')} /> : sleeping ? t('sidebar.sleeping') : null}
             </span>
           </button>
-        </TooltipTrigger>
-        <TooltipContent side="right">{m.role} · {slotLabel(m.model_slot, providers, t('agent.dedicatedTag'))}</TooltipContent>
-      </Tooltip>
+        </HoverCardTrigger>
+        <HoverCardContent side="right" align="start" data-member-card={m.id} className="w-[260px] px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <Avatar agentId={m.id} name={m.role} size={24} src={src} status={sleeping ? 'sleep' : 'online'} />
+            <b className="min-w-0 truncate text-[13px] font-semibold">{m.role}</b>
+            <span className="ml-auto shrink-0 text-[11px] text-ink-3">
+              {working ? t('sidebar.working') : sleeping ? t('sidebar.sleeping') : t('sidebar.memberOnline')}
+            </span>
+          </div>
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
+            <dt className="text-ink-3">{t('sidebar.memberModel')}</dt>
+            <dd className="min-w-0 truncate">{m.model ?? slotLabel(m.model_slot, providers, t('agent.dedicatedTag'))}</dd>
+            <dt className="text-ink-3">{t('sidebar.memberSuperior')}</dt>
+            <dd className="min-w-0 truncate">{m.superior ?? t('sidebar.memberNoSuperior')}</dd>
+            {m.duty && <>
+              <dt className="text-ink-3">{t('sidebar.memberDuty')}</dt>
+              <dd className="min-w-0 text-ink-2">{m.duty}</dd>
+            </>}
+          </dl>
+        </HoverCardContent>
+      </HoverCard>
     </li>
   )
 }

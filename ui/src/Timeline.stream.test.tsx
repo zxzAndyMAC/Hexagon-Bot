@@ -160,7 +160,7 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
         { run_id: 'r1', stage: '规格', seq: 1, state: 'done' },
         { run_id: 'r2', stage: '实现', seq: 2, state: 'active' },
       ],
-      team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null }],
+      team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null }],
       streams: { a1: { 1: '写' } },
       thinkings: {},
       streamDone: {},
@@ -206,7 +206,7 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
   // gap B2（ui-redesign 2026-10-15）：消息头显示模型名（原先团队行只有槽位 id，头行不显示模型）
   it('消息头与进行中回复的头行显示成员当前模型', async () => {
     useUiStore.setState({
-      team: [{ id: 'a1', role: '后端开发', model_slot: 'code', status: 'active', avatar_hash: null, model: 'DeepSeek V4', duty: null }],
+      team: [{ id: 'a1', role: '后端开发', model_slot: 'code', status: 'active', avatar_hash: null, model: 'DeepSeek V4', duty: null, superior: null }],
     })
     const item = {
       event: { id: 9, project_id: 'p1', kind: 'agent_message', agent_id: 'a1', stage_run_id: null, payload: {}, created_at: '' },

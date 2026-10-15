@@ -45,7 +45,7 @@ const CALLS: TimelineItem[] = [
 beforeEach(() => {
   document.body.innerHTML = ''
   useUiStore.setState({
-    team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null }],
+    team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null }],
     tabs: [{ id: 'timeline', kind: 'timeline', title: 'timeline' }] as never,
     activeTab: 'timeline',
   })
@@ -167,7 +167,7 @@ it.each([false, true])('avatar file reading respects the originating project (sw
     if (switchProject) await act(async () => {
       useUiStore.getState().beginProjectSwitch()
       useUiStore.setState({ projectRoot: '/repo/b', projectGeneration: 32,
-        team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null }] })
+        team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null }] })
     })
     await act(async () => reader.onload?.())
     if (switchProject) expect(write).not.toHaveBeenCalled()
