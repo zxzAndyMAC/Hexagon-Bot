@@ -3167,6 +3167,12 @@ fn probe_provider_key(
     .map_err(cmd_err)
 }
 
+/// gap B8：内置服务商预设（静态表，读组，不碰工作台）。
+#[tauri::command]
+fn provider_presets() -> Vec<hexagon_core::provider_admin::ProviderPreset> {
+    hexagon_core::provider_admin::presets()
+}
+
 #[tauri::command]
 fn agents_md_draft(name: String) -> String {
     hexagon_core::setup::agents_md_draft(&name)
@@ -3916,6 +3922,7 @@ pub fn run() {
             remove_search_backend,
             fetch_provider_models,
             probe_provider_key,
+            provider_presets,
             agents_md_draft,
             optimize_agents_md,
             brief_questions,
