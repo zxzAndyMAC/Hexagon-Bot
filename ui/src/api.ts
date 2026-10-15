@@ -1222,6 +1222,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(119, 'tool_result', 'a4', 'r3', { tool: 'fs_read', ok: true, result: { output: { content: '# 接口说明 v2\n…' } } }, '11:55'),
         mkEv(120, 'tool_called', 'a4', 'r3', { tool: 'bash', input: { cmd: 'cargo test --workspace' }, seq: 'r5:i1' }, '11:56'),
       ]
+      // gap B1/B3 截图比对（workbench#fresh）：`?mockintake` 时只留开场三条——负责人还没开口，出首屏 + 草案卡
+      if (mockIntakeDraft() !== null) all.splice(3)
       // 票 08 截图比对（managed#running）：`?mockmanaged` 时追加托管开启事实与托管决定行
       if (mockManaged()) all.push(
         mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false }, '11:57'),
