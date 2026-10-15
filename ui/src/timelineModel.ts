@@ -367,34 +367,168 @@ export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<
   return final
 }
 
-export type NodeMark = { eventId?: number; rowIdx: number; icon: IconName; label: string; pending?: boolean }
-
-export const NODE_ICONS: Record<string, IconName> = {
-  stage_started: 'stamp',
-  stamped: 'check',
-  artifact_delivered: 'artifact',
-  flag_submitted: 'flag',
-  flag_adjudicated: 'flag',
-  escalated: 'warn',
-  check_overridden: 'warn',
-  install_completed: 'install',
+// ---- 节点轨（ui-redesign 票 06，components C15，interaction §5，workbench#rail）----
+// 刻度长度 = 层级：阶段 s（24）· 负责人发言 m（16）· 事件 e（10）。只有待决（warn 橙）、
+// 失败（err 红）带色，托管决定 mg（accent）；颜色之外预览卡标题写明状态（accessibility §1）。
+export type MarkTier = 's' | 'm' | 'e'
+export type MarkTone = 'warn' | 'err' | 'mg'
+/** 类型名的 i18n 后缀（`rail.type.<type>`）；`events` 是合并后的事件刻度。 */
+export type MarkType = 'stage' | 'stamp' | 'deliver' | 'flag' | 'adjudicate' | 'escalate' | 'override' | 'install'
+  | 'owner' | 'managed' | 'failed' | 'pending' | 'events'
+export type NodeMark = {
+  eventId?: number
+  /** 在当前 rows 里的行号；-1 = 不在已加载窗口（跳转先补载）。 */
+  rowIdx: number
+  icon: IconName
+  label: string
+  tier: MarkTier
+  type: MarkType
+  tone?: MarkTone
+  agentId?: string | null
+  at?: string
+  /** 预览卡两行摘要（原话 / 理由）。 */
+  summary?: string
+  pending?: boolean
+  /** 合并刻度包含的原始刻度（compactMarks）。 */
+  merged?: NodeMark[]
 }
 
-export function nodeMarks(timeline: TimelineItem[], rows: Row[], pendingCount: number): NodeMark[] {
-  const marks: NodeMark[] = []
-  if (pendingCount > 0) marks.push({ rowIdx: -1, icon: 'warn', label: `${pendingCount}`, pending: true })
-  const rowIndexByItem = new Map<number, number>()
-  rows.forEach((r, i) => {
-    if (r.type === 'item') rowIndexByItem.set(r.item.event.id, i)
-  })
-  for (const it of timeline) {
-    const icon = NODE_ICONS[it.event.kind]
-    const ri = rowIndexByItem.get(it.event.id)
-    if (!icon || ri == null) continue
-    const label = String(it.event.payload.stage ?? it.event.payload.path ?? it.event.payload.flag_id ?? it.event.kind)
-    marks.push({ rowIdx: ri, icon, label })
+type KindMeta = { type: MarkType; tier: MarkTier; icon: IconName }
+const KIND_META: Record<string, KindMeta> = {
+  stage_started: { type: 'stage', tier: 's', icon: 'stamp' },
+  stamped: { type: 'stamp', tier: 's', icon: 'check' },
+  artifact_delivered: { type: 'deliver', tier: 'e', icon: 'artifact' },
+  flag_submitted: { type: 'flag', tier: 'e', icon: 'flag' },
+  flag_adjudicated: { type: 'adjudicate', tier: 'e', icon: 'flag' },
+  escalated: { type: 'escalate', tier: 'e', icon: 'warn' },
+  check_overridden: { type: 'override', tier: 'e', icon: 'warn' },
+  install_completed: { type: 'install', tier: 'e', icon: 'install' },
+}
+
+/** 宿主节点读（timeline_nodes）覆盖的 kind 与图标；现有 kind 全部保留（interaction §5）。 */
+export const NODE_ICONS: Record<string, IconName> = Object.fromEntries(Object.entries(KIND_META).map(([k, m]) => [k, m.icon]))
+
+const isOwnerItem = (it: TimelineItem) => it.event.kind === 'owner_message' || it.message?.author === 'owner'
+const firstLine = (text: string) => text.trim().split('\n')[0].slice(0, 80)
+
+/** 一道刻度进不进当前筛选——与 buildRows 的过滤同一口径（「跟随时间线筛选」）。 */
+function markInFilter(filter: Filter, kind: string, hasMessage: boolean, highRisk: boolean): boolean {
+  if (filter === 'all') return true
+  if (filter === 'messages') return hasMessage
+  if (filter === 'decisions') return DECISION_KINDS.has(kind)
+  return hasMessage || highRisk || DECISION_KINDS.has(kind)
+}
+
+const errorText = (payload: Record<string, unknown>) => String(payload.error ?? payload.reason ?? '')
+
+/** 票 06 新增三类：负责人发言、托管决定、失败（turn_failed 未恢复、模型请求停止）。只从已加载窗口派生。 */
+function extraMark(it: TimelineItem, timeline: TimelineItem[], index: number): Omit<NodeMark, 'rowIdx'> | null {
+  const ev = it.event
+  const base = { eventId: ev.id, agentId: ev.agent_id, at: ev.created_at }
+  if (isOwnerItem(it)) {
+    const body = it.message?.body ?? String(ev.payload.body ?? '')
+    return { ...base, type: 'owner', tier: 'm', icon: 'message', label: firstLine(body), summary: body }
   }
-  return marks
+  if (ev.kind === 'system' && ev.payload.kind === 'managed_decision') {
+    const label = [ev.payload.card_kind, ev.payload.action].filter(v => typeof v === 'string' && v).join(' · ')
+    return { ...base, type: 'managed', tier: 'e', tone: 'mg', icon: 'bot', label: label || 'managed_decision',
+      summary: typeof ev.payload.reason === 'string' ? ev.payload.reason : undefined }
+  }
+  const later = timeline.slice(index + 1)
+  // 「未恢复」：同一 Agent 之后没有正常收束的回合。主动停止（isInterruptedTurn）不算失败。
+  if (ev.kind === 'turn_failed' && !isInterruptedTurn(it) &&
+    !later.some(next => next.event.kind === 'turn_finished' && next.event.agent_id === ev.agent_id)) {
+    const error = errorText(ev.payload)
+    return { ...base, type: 'failed', tier: 'e', tone: 'err', icon: 'warn', label: firstLine(error) || 'turn_failed', summary: error || undefined }
+  }
+  // 模型请求恢复项（MR-01..04）：一个 recovery_id 只看最后一个状态；停在 failed = 停止 / 失败。
+  if (ev.kind === 'system' && ev.payload.kind === 'model_request_failed' &&
+    !later.some(next => next.event.kind === 'system' && next.event.payload.recovery_id === ev.payload.recovery_id &&
+      MODEL_RECOVERY_KINDS.includes(String(next.event.payload.kind)))) {
+    const error = errorText(ev.payload)
+    return { ...base, type: 'failed', tier: 'e', tone: 'err', icon: 'warn', label: firstLine(error) || 'model_request_failed', summary: error || undefined }
+  }
+  return null
+}
+
+/** 宿主节点（完整历史，kind + label）。缺省时从已加载时间线派生（无项目的旧口径 / 测试）。 */
+export type HostNode = { event_id: number; kind: string; label: string }
+
+/**
+ * 节点轨刻度，按事件顺序从上到下。基础 kind 来自宿主节点读（完整历史）；三类新节点只从已加载窗口派生
+ * （C15「时间线窗口未补全时只显示已加载部分」，宿主节点读不改 IPC）。待决刻度在最下（「现在」），点它打开坞；
+ * 待决数取宿主 owner_pending 读，托管事项已被排除（interaction §8，2026-10-11 对齐说明第 2 条）——
+ * 托管决定只出 mg 刻度，绝不出 warn。跟随时间线筛选：与 buildRows 同一过滤口径。
+ */
+export function nodeMarks(timeline: TimelineItem[], rows: Row[], pendingCount: number, opts: { hostNodes?: HostNode[]; filter?: Filter } = {}): NodeMark[] {
+  const filter = opts.filter ?? 'all'
+  const rowIndex = (id: number) => rows.findIndex(row => rowContainsEvent(row, id))
+  const byId = new Map(timeline.map(it => [it.event.id, it]))
+  const marks = new Map<number, NodeMark>()
+  const base = opts.hostNodes ?? timeline.filter(it => KIND_META[it.event.kind]).map(it => ({
+    event_id: it.event.id, kind: it.event.kind,
+    label: String(it.event.payload.stage ?? it.event.payload.path ?? it.event.payload.flag_id ?? it.event.kind),
+  }))
+  for (const node of base) {
+    const meta = KIND_META[node.kind]
+    if (!meta || !markInFilter(filter, node.kind, false, false)) continue
+    const item = byId.get(node.event_id)
+    const summary = item ? String(item.event.payload.summary ?? item.event.payload.note ?? item.event.payload.reason ?? '') : ''
+    marks.set(node.event_id, { eventId: node.event_id, rowIdx: rowIndex(node.event_id), ...meta, label: node.label,
+      agentId: item?.event.agent_id, at: item?.event.created_at, summary: summary || undefined })
+  }
+  timeline.forEach((it, index) => {
+    if (marks.has(it.event.id)) return
+    if (!markInFilter(filter, it.event.kind, it.message != null, isHighRiskSys(it))) return
+    const mark = extraMark(it, timeline, index)
+    if (mark) marks.set(it.event.id, { ...mark, rowIdx: rowIndex(it.event.id) })
+  })
+  const out = [...marks.values()].sort((a, b) => (a.eventId ?? 0) - (b.eventId ?? 0))
+  if (pendingCount > 0) out.push({ rowIdx: -1, type: 'pending', tier: 'e', tone: 'warn', icon: 'warn', label: String(pendingCount), pending: true })
+  return out
+}
+
+const TONE_RANK: Record<MarkTone, number> = { err: 3, warn: 2, mg: 1 }
+
+/**
+ * 刻度多时合并事件刻度（interaction §5「最多约 40 道」）：阶段与负责人发言始终保留，
+ * 两道保留刻度之间连续的事件刻度并成一道（带其中最严重的色，跳到这段第一条）。待决刻度点开的是坞，不参与合并。
+ */
+export function compactMarks(marks: NodeMark[], max = 40): NodeMark[] {
+  if (marks.length <= max) return marks
+  const out: NodeMark[] = []
+  let run: NodeMark[] = []
+  const flush = () => {
+    if (run.length === 1) out.push(run[0])
+    else if (run.length > 1) {
+      const tone = run.map(m => m.tone).filter((t): t is MarkTone => !!t).sort((a, b) => TONE_RANK[b] - TONE_RANK[a])[0]
+      out.push({ eventId: run[0].eventId, rowIdx: run[0].rowIdx, type: 'events', tier: 'e', tone, icon: 'layers',
+        label: String(run.length), merged: run })
+    }
+    run = []
+  }
+  for (const mark of marks) {
+    if (mark.tier === 'e' && !mark.pending) run.push(mark)
+    else { flush(); out.push(mark) }
+  }
+  flush()
+  return out
+}
+
+/** 视口内提亮：可见行范围内的刻度 `in`，最贴近阅读位置（视口中线）的一道 `cur`。 */
+export function markHighlights(marks: NodeMark[], range: { start: number; end: number } | null): ('cur' | 'in' | undefined)[] {
+  if (!range) return marks.map(() => undefined)
+  const rowsOf = (m: NodeMark) => (m.merged ?? [m]).map(x => x.rowIdx).filter(r => r >= 0)
+  const inside = marks.map(m => rowsOf(m).some(r => r >= range.start && r <= range.end))
+  const middle = (range.start + range.end) / 2
+  let cur = -1
+  let best = Infinity
+  marks.forEach((m, i) => {
+    if (!inside[i]) return
+    const distance = Math.min(...rowsOf(m).map(r => Math.abs(r - middle)))
+    if (distance < best) { best = distance; cur = i }
+  })
+  return marks.map((_, i) => i === cur ? 'cur' : inside[i] ? 'in' : undefined)
 }
 
 /** Source identities survive prepend regrouping and result-only boundary cards. */
