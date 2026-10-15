@@ -10,6 +10,8 @@ import { Icon, type IconName } from '../Icon'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Empty } from '@/components/ui/empty'
+import { InlineError as SharedInlineError } from '@/components/ui/inline-error'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { readSettingsListWidth, SETTINGS_LIST, writeSettingsListWidth } from '../../settingsLayout'
 import { SettingsVirtualList } from '../SettingsVirtualList'
@@ -91,13 +93,12 @@ export function NeedsProject({ onOpen }: { onOpen?: () => void }) {
 }
 
 /** A20 骨架条（减少动效时静止为 --canvas，见 index.css 的 hx 规则）。 */
+/** A20 骨架（共享件 ui/skeleton，票 13）：列表 / 表体加载中的 30 高条块。 */
 export function SkeletonRows({ rows = 5, label, className }: { rows?: number; label?: string; className?: string }) {
   return (
-    <div aria-busy="true" className={cn('flex flex-col gap-2 p-3', className)}>
+    <div role="status" aria-busy="true" className={cn('flex flex-col gap-2 p-3', className)}>
       {label && <span className="sr-only">{label}</span>}
-      {Array.from({ length: rows }, (_, i) => (
-        <span key={i} className="h-[30px] animate-pulse rounded-[6px] bg-canvas motion-reduce:animate-none" />
-      ))}
+      {Array.from({ length: rows }, (_, i) => <Skeleton key={i} className="h-[30px]" />)}
     </div>
   )
 }
@@ -108,20 +109,17 @@ export type RetrySpec = { text: string; onRetry: () => void; retryLabel?: string
 export function InlineError({ text, onRetry, retryLabel, retryAction }: Omit<RetrySpec, 'onRetry'> & { onRetry?: () => void }) {
   const { t } = useTranslation()
   const label = retryLabel ?? t('settingsUi.reload')
+  // C5 块形（共享件 ui/inline-error，票 13）；重试钮保留 keymap 绑定提示与聚焦按键即重试。
   return (
-    <div role="alert" className="m-3 flex items-center gap-2 text-[12.5px] text-red">
-      <Icon name="warn" size={14} className="flex-none" />
-      <span className="min-w-0 flex-1">{text}</span>
-      {onRetry && (
-        <Button size="xs" variant="ghost" onClick={onRetry}
-          title={retryAction ? [label, formatBinding(bindingFor(retryAction))].filter(Boolean).join(' · ') : undefined}
-          onKeyDown={retryAction ? (e) => {
-            if (matches(e.nativeEvent, bindingFor(retryAction))) { e.preventDefault(); e.stopPropagation(); onRetry() }
-          } : undefined}>
-          {label}
-        </Button>
-      )}
-    </div>
+    <SharedInlineError className="m-3" title={text} actions={onRetry && (
+      <Button size="xs" onClick={onRetry}
+        title={retryAction ? [label, formatBinding(bindingFor(retryAction))].filter(Boolean).join(' · ') : undefined}
+        onKeyDown={retryAction ? (e) => {
+          if (matches(e.nativeEvent, bindingFor(retryAction))) { e.preventDefault(); e.stopPropagation(); onRetry() }
+        } : undefined}>
+        {label}
+      </Button>
+    )} />
   )
 }
 

@@ -39,7 +39,8 @@ function InlineError({ title, code, meta, desc, actions, onRetry, retryLabel, re
       </div>
     )
   }
-  const footer = Boolean(desc || actions)
+  // 有说明时补救按钮另起一行（feedback#errors 块形）；只有标题时按钮跟在标题行尾。
+  const footer = Boolean(desc)
   return (
     <div role="alert" data-slot="inline-error" data-variant="block" className={cn("rounded-[10px] bg-red-tint px-3 py-2.5", className)} {...rest}>
       <div className="flex items-center gap-2">
@@ -48,6 +49,7 @@ function InlineError({ title, code, meta, desc, actions, onRetry, retryLabel, re
           {title}{code && <span className="font-normal">（{code}）</span>}
         </b>
         {meta && <span className="font-mono text-[12px] text-ink-3">{meta}</span>}
+        {!footer && actions}
         {!footer && retry}
       </div>
       {desc && <p className="mt-1 text-[12.5px] text-ink-2">{desc}</p>}
