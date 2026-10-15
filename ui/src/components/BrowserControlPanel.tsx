@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import type { BrowserSession } from '../gen/BrowserSession'
 import type { BrowserMode } from '../gen/BrowserMode'
-import { refreshDesktopStatus, useDesktopStatus } from '../useDesktopStatus'
+import { useDesktopStatus } from '../useDesktopStatus'
 import { bindingFor, matches } from '../keymap'
 import { browserLaunchBlock } from '../computerControl'
 import { ActionButton } from './ComputerParts'
@@ -51,9 +51,11 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
     // Owner 2026-10-06: a disconnected browser read once discarded valid
     // consent/pause state and permanently greyed both explicit retry paths.
     // 浏览器读失败只报原因，不作废电脑状态；会话也保留到宿主给出新读。
+    // 电脑状态读失败：已知会话保留（显式断开仍可用），只报原因。
+    if (readError) { setError(readError); return }
     if (browserError) setSession(previous => previous?.project_root === root ? previous : null)
     else setSession(browser)
-    setError(readError || browserError)
+    setError(browserError)
   }, [stamp, browser, browserError, readError, root])
   async function change(mode?: BrowserMode) {
     // Owner 2026-10-06: consent reads may fail while a known session is live.
@@ -81,12 +83,9 @@ export function BrowserControlPanel({ inline = false }: { inline?: boolean }) {
         if (mounted.current && ticket === generation.current) setSession(disconnected)
       }
     } catch (e) { if (mounted.current && ticket === generation.current) setError(errText(e)) }
-    finally {
-      writing.current = false
-      if (mounted.current) setPending(false)
-      // 头部 chip 读同一份共享状态：写完立即补读，不等下一拍。
-      void refreshDesktopStatus()
-    }
+    // 不在写后立即补读：写结果（含断开失败的原因）由本面板直接显示，宿主状态随下一拍共享读对齐
+    // （换皮前同样不在写后重读；立即重读会用读结果覆盖刚报出的失败原因）。
+    finally { writing.current = false; if (mounted.current) setPending(false) }
   }
   async function installExtension() {
     if (openingStore) return
