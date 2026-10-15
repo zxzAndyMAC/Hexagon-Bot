@@ -24,6 +24,10 @@ pub struct DesktopStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub capture_preparation: Option<super::CapturePreparationState>,
+    /// Gap C1: open project-leave checkpoint awaiting the owner's Continue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checkpoint: Option<checkpoint::DesktopCheckpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -213,6 +217,7 @@ pub struct NativeReply {
     pub outcome: Option<Value>,
 }
 
+pub mod checkpoint;
 mod lease;
 
 pub(crate) trait Backend: Send + Sync {
@@ -771,15 +776,25 @@ impl Controller {
 
 /// Host project-leave boundary. Retain the old root while its executor drains;
 /// cancellation is a request, never evidence that an operation already stopped.
-pub fn close_project(root: &Path) -> Result<(), String> {
+/// Gap C1: every leave path (switch, close, wizard open) records the checkpoint
+/// in the leaving project's db, not only the UI's early `leave_project` call.
+pub fn close_project(db: &Db, root: &Path) -> Result<(), String> {
     // The shell retained the canonical root when it opened the project. It may
     // have been removed since then; leaving must not reopen that filesystem path.
     let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    controller()
-        .state
-        .lock()
-        .map_err(|_| "desktop state unavailable")?
-        .close_project(&project)
+    let pending = {
+        let mut state = controller()
+            .state
+            .lock()
+            .map_err(|_| "desktop state unavailable")?;
+        let pending = state.checkpoint_facts(&project);
+        state.close_project(&project)?;
+        pending
+    };
+    match pending {
+        Some(pending) => checkpoint::save(db, &pending, "project_close"),
+        None => Ok(()),
+    }
 }
 
 fn project_key(root: &Path) -> Result<PathBuf, String> {
@@ -842,6 +857,7 @@ pub fn status(db: &Db, root: &Path) -> Result<DesktopStatus, String> {
         outcome_unknown: state.outcome_unknown,
         screenshot_count: screenshot_files(root)?.len().try_into().unwrap_or(u32::MAX),
         capture_preparation: Some(super::capture_preparation(false)),
+        checkpoint: checkpoint::open(db)?,
     })
 }
 
@@ -950,6 +966,11 @@ fn control_inner(db: &Db, root: &Path, action: DesktopControl) -> Result<Desktop
                 std::fs::remove_file(file).map_err(|e| e.to_string())?;
             }
         }
+    }
+    match action {
+        DesktopControl::Resume => checkpoint::settle(db, "resumed")?,
+        DesktopControl::Release => checkpoint::settle(db, "released")?,
+        _ => {}
     }
     let label = serde_json::to_value(action).map_err(|e| e.to_string())?;
     db.append_event(crate::PROJECT_ID, EventKind::System,

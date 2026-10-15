@@ -308,9 +308,11 @@ fn open_control(dir: &str, wb: &Workbench) -> Result<ControlConn, CmdError> {
 fn stop_control(connection: &Option<ControlConn>) -> Result<(), CmdError> {
     hexagon_core::api::desktop_preview_stop().map_err(CmdError::internal)?;
     if let Some(old) = connection {
-        hexagon_core::api::desktop_close_project(&old.root).map_err(|message| CmdError {
-            code: "project_close_pending".into(),
-            message,
+        hexagon_core::api::desktop_close_project(&old.db, &old.root).map_err(|message| {
+            CmdError {
+                code: "project_close_pending".into(),
+                message,
+            }
         })?;
         hexagon_core::api::browser_close_project(&old.root);
     }
@@ -1067,6 +1069,21 @@ fn desktop_control(
         hexagon_core::api::desktop_check_project(root, &expected_project_root)
             .map_err(CmdError::internal)?;
         hexagon_core::api::desktop_control(db, root, action).map_err(CmdError::internal)
+    })
+}
+
+/// Gap C1 (owner ruling 2026-10-14): switching projects pauses this project's
+/// computer lane and records a checkpoint. Control group: project-bound check
+/// and mutation share the current-project lock, like `desktop_control`.
+#[tauri::command]
+fn desktop_leave_project(
+    state: ProjectState<'_>,
+    expected_project_root: String,
+) -> Result<hexagon_core::desktop::DesktopStatus, CmdError> {
+    with_project_conn(&state, |db, root| {
+        hexagon_core::api::desktop_check_project(root, &expected_project_root)
+            .map_err(CmdError::internal)?;
+        hexagon_core::api::desktop_leave_project(db, root).map_err(CmdError::internal)
     })
 }
 
@@ -3692,6 +3709,7 @@ pub fn run() {
             browser_preview,
             browser_focus,
             desktop_control,
+            desktop_leave_project,
             desktop_permissions,
             desktop_open_settings,
             data_boundary,

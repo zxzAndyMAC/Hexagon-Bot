@@ -693,6 +693,8 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "performance_baseline_confirmed",
     "quality_commands_changed",
     "computer_control",
+    // ui-redesign gap C1：切换项目时电脑操控暂停留下的 checkpoint（saved/resumed/released）
+    "computer_checkpoint",
     "acceptance_exception",
     "artifact_materialization",
     "policy_recovery",
