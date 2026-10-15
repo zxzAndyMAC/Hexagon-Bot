@@ -248,7 +248,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 「系统」一刀切让 invariant_violation 这类信号淹没在同名行里。
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
-  if (MODEL_RECOVERY_KINDS.includes(sub)) return <div style={{ margin: '8px 0' }}><ModelRecoveryStatus id={String(item.event.payload.recovery_id)} payload={item.event.payload} top /></div>
+  if (MODEL_RECOVERY_KINDS.includes(sub)) return <ModelRecoveryRow item={item} />
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
   }
@@ -270,6 +270,29 @@ function SystemRow({ item }: { item: TimelineItem }) {
         {label}
         {note && <span className="dim3"> · {note}</span>}
       </span>
+    </div>
+  )
+}
+
+/** components D11 时间线形：消息式头（头像 + 角色 + 用途 chip）→ 状态块（票 08）。 */
+function ModelRecoveryRow({ item }: { item: TimelineItem }) {
+  const { t } = useTranslation()
+  const team = useUiStore((s) => s.team)
+  const p = item.event.payload
+  const view = (p.view ?? p) as Record<string, unknown>
+  const agentId = String(view.agent_id ?? item.event.agent_id ?? '')
+  const member = team.find((x) => x.id === agentId)
+  const purpose = String(view.purpose ?? '')
+  return (
+    <div className="tl-msg" style={{ margin: '8px 0' }}>
+      {member && <span className="tl-face"><AgentFace agentId={member.id} role={member.role} /></span>}
+      <div className="tl-grow">
+        <div className="tl-who">
+          <b>{member?.role ?? agentId}</b>
+          {purpose && <span className="t">{t(`modelRecovery.purpose.${purpose}`, { defaultValue: purpose })}</span>}
+        </div>
+        <ModelRecoveryStatus id={String(p.recovery_id)} payload={p} top />
+      </div>
     </div>
   )
 }

@@ -386,6 +386,7 @@ export default {
     },
   },
   modelRecovery: {
+    purpose: {"pm_route":"派活","turn":"角色请求","opening_intake":"开场分析"},
     retriedCount: "已自动重试 {{count}} 次",
     historyTitle: "尝试历史（{{count}}）",
     chatModelNote: "换模型只作用于这一次请求，不改模型槽配置。",

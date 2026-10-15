@@ -386,6 +386,7 @@ export default {
     },
   },
   modelRecovery: {
+    purpose: {"pm_route":"割り当て","turn":"ロールのリクエスト","opening_intake":"冒頭の分析"},
     retriedCount: "自動で {{count}} 回再試行しました",
     historyTitle: "試行履歴（{{count}}）",
     chatModelNote: "モデルの切り替えはこのリクエストだけに適用され、モデルスロットの設定は変わりません。",

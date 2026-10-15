@@ -386,6 +386,7 @@ export default {
     },
   },
   modelRecovery: {
+    purpose: {"pm_route":"Atribuição","turn":"Solicitação do papel","opening_intake":"Análise inicial"},
     retriedCount: "Repetido automaticamente {{count}} vez(es)",
     historyTitle: "Histórico de tentativas ({{count}})",
     chatModelNote: "Trocar de modelo vale só para esta solicitação; os slots de modelo não mudam.",

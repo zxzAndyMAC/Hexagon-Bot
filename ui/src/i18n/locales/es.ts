@@ -386,6 +386,7 @@ export default {
     },
   },
   modelRecovery: {
+    purpose: {"pm_route":"Asignación","turn":"Solicitud del rol","opening_intake":"Análisis inicial"},
     retriedCount: "Reintentado automáticamente {{count}} vez/veces",
     historyTitle: "Historial de intentos ({{count}})",
     chatModelNote: "Cambiar de modelo solo afecta a esta solicitud; las ranuras de modelo no cambian.",

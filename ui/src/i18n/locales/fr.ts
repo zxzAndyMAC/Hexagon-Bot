@@ -386,6 +386,7 @@ export default {
     },
   },
   modelRecovery: {
+    purpose: {"pm_route":"Répartition","turn":"Requête du rôle","opening_intake":"Analyse d’ouverture"},
     retriedCount: "Relancé automatiquement {{count}} fois",
     historyTitle: "Historique des tentatives ({{count}})",
     chatModelNote: "Changer de modèle ne s’applique qu’à cette requête ; les emplacements de modèle ne changent pas.",

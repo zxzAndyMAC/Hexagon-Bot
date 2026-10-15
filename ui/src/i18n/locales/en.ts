@@ -386,6 +386,7 @@ export default {
     },
   },
   modelRecovery: {
+    purpose: {"pm_route":"Dispatch","turn":"Role request","opening_intake":"Opening analysis"},
     retriedCount: "Retried automatically {{count}} time(s)",
     historyTitle: "Attempt history ({{count}})",
     chatModelNote: "Switching model applies to this request only; model slots are unchanged.",
