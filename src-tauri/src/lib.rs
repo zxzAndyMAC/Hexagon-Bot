@@ -2171,6 +2171,19 @@ fn usage(state: tauri::State<AppState>) -> Result<hexagon_core::usage::UsageSumm
     })
 }
 
+/// 票 12（2026-10-14 负责人裁决）：用量详情的模型环 / 按阶段跟所选范围走。read 组，不碰 wb。
+#[tauri::command]
+fn usage_rows(
+    state: tauri::State<AppState>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<Vec<hexagon_core::usage::UsageRow>, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::usage::summarize_range(db, PROJECT_ID, from.as_deref(), to.as_deref())
+            .map_err(cmd_err)
+    })
+}
+
 #[tauri::command]
 fn usage_context_pressure(
     state: tauri::State<AppState>,
@@ -3828,6 +3841,7 @@ pub fn run() {
             set_agent_sleeping,
             set_usage_limit,
             usage_series,
+            usage_rows,
             set_log_enabled,
             log_enabled,
             diagnostic_records,

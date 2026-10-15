@@ -3,7 +3,7 @@
 // 统计四卡 E12 → Token 趋势 E13（三层堆叠）→ 消费榜单 / 按阶段 → 每 Agent 最近使用。日期按 UTC 日界对齐后端分桶。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type UsageBucket } from '../../api'
+import { api, type UsageBucket, type UsageRow } from '../../api'
 import { useUiStore } from '../../store'
 import { isMac } from '../../keymap'
 import { Icon } from '../Icon'
@@ -36,6 +36,8 @@ export function UsageView({ narrowLead = false }: { narrowLead?: boolean }) {
   const [range, setRange] = useState<UsageRange>(() => presetRange('30d'))
   const [series, setSeries] = useState<UsageBucket[]>([])
   const [prevSeries, setPrevSeries] = useState<UsageBucket[] | null>(null)
+  // 模型环 / 按阶段 / 调用次数跟所选范围（2026-10-14 负责人裁决，新 IPC usage_rows）
+  const [rangeRows, setRangeRows] = useState<UsageRow[]>([])
   const [status, setStatus] = useState<Status>('loading')
   const [refreshing, setRefreshing] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -45,13 +47,15 @@ export function UsageView({ narrowLead = false }: { narrowLead?: boolean }) {
     const id = ++req.current
     const prev = previousRange(range)
     try {
-      const [cur, before] = await Promise.all([
+      const [cur, before, rows] = await Promise.all([
         api.usageSeries(granularity, range.from, range.to),
         prev ? api.usageSeries('day', prev.from, prev.to) : Promise.resolve(null),
+        api.usageRows(range.from, range.to),
       ])
       if (id !== req.current) return
       setSeries(cur)
       setPrevSeries(before)
+      setRangeRows(rows)
       setStatus('ok')
     } catch {
       if (id === req.current) setStatus('error')
@@ -106,7 +110,7 @@ export function UsageView({ narrowLead = false }: { narrowLead?: boolean }) {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto flex max-w-[1080px] flex-col gap-4">
-          <UsageStats series={series} prevSeries={prevSeries} />
+          <UsageStats series={series} prevSeries={prevSeries} rows={rangeRows} />
           <ChartCard
             data-usage-trend
             title={t('usage.tokenTrend')}
@@ -131,8 +135,8 @@ export function UsageView({ narrowLead = false }: { narrowLead?: boolean }) {
             </div>
           </ChartCard>
           <div className="grid grid-cols-2 gap-3">
-            <Leaderboard series={series} />
-            <StageBreakdown />
+            <Leaderboard series={series} rows={rangeRows} />
+            <StageBreakdown rows={rangeRows} />
           </div>
           <AgentRecent refreshKey={refreshKey} />
         </div>
