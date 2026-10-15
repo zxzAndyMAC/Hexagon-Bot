@@ -105,7 +105,7 @@ function TemplateEditor({ def, names, isCustom, onDone }: {
       <div className="mt-1 flex items-center gap-2">
         {isCustom && (
           <Button size="sm" variant="ghost" className="text-red" disabled={busy} onClick={del}>
-            <Icon name="trash" />{t('teamTpl.delTpl')}
+            <Icon name="trash" size={14} />{t('teamTpl.delTpl')}
           </Button>
         )}
         <span className="flex-1" />
@@ -154,7 +154,7 @@ function TemplateLibrary({ head }: { head?: React.ReactNode }) {
       emptyText={t('teamTpl.empty')}
       foot={
         <Button size="sm" className="flex-1" onClick={() => { setCreating(true); setSel(null) }}>
-          <Icon name="plus" />{t('teamTpl.newTpl')}
+          <Icon name="plus" size={14} />{t('teamTpl.newTpl')}
         </Button>
       }
       renderItem={(tp) => (
@@ -222,7 +222,7 @@ function ProjectTeam({ head }: { head: React.ReactNode }) {
       foot={
         <>
           <Button size="sm" className="flex-1" onClick={() => { setMode('addTpl'); setSel(null); setEditTpl(null) }}>
-            <Icon name="plus" />{t('teamTpl.fromTpl')}
+            <Icon name="plus" size={14} />{t('teamTpl.fromTpl')}
           </Button>
           <Button size="sm" className="flex-1" onClick={() => { setMode('create'); setSel(null); setEditTpl(null) }}>
             {t('agent.createRole')}

@@ -678,7 +678,7 @@ export function Wizard({ onDone, onCancel, seed }: {
     <>
       {idx > 0 ? (
         <Button size="sm" variant="ghost" disabled={locked} onClick={() => go(STEPS[idx - 1])}>
-          <Icon name="arrow-left" />{t('wizard.back')}
+          <Icon name="arrow-left" size={14} />{t('wizard.back')}
         </Button>
       ) : onCancel ? (
         <Button size="sm" variant="ghost" onClick={onCancel}>{t('wizard.shell.cancel')}</Button>
@@ -692,7 +692,7 @@ export function Wizard({ onDone, onCancel, seed }: {
         </Button>
       ) : (
         <Button size="sm" variant="primary" disabled={!canNext || locked} onClick={() => go(STEPS[idx + 1])}>
-          {t('wizard.next')}<Icon name="arrow-right" />
+          {t('wizard.next')}<Icon name="arrow-right" size={14} />
         </Button>
       )}
     </>

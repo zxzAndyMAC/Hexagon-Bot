@@ -67,7 +67,7 @@ export function RolesStep(p: {
           <div className="text-[12px] text-ink-3">{t('wizard.lead.roles')}</div>
         </div>
         <Button size="sm" data-ai-draft disabled={p.aiDraft.disabled} title={p.aiDraft.title} loading={p.rolesBusy} onClick={p.aiDraft.onClick}>
-          {!p.rolesBusy && <Icon name="sparkle" />}{p.aiDraft.label}
+          {!p.rolesBusy && <Icon name="sparkle" size={14} />}{p.aiDraft.label}
         </Button>
       </div>
       <div className="flex min-h-0 flex-1">
@@ -78,7 +78,7 @@ export function RolesStep(p: {
             </span>
             <Button size="xs" variant="ghost" onClick={p.onSelectAll}>{t('wizard.roles.selectAll')}</Button>
             <Button size="xs" variant="ghost" data-new-role aria-pressed={p.makingRole} onClick={p.onNewRole}>
-              <Icon name="plus" />{t('wizard.roles.new')}
+              <Icon name="plus" size={14} />{t('wizard.roles.new')}
             </Button>
           </div>
           <div
@@ -225,7 +225,7 @@ function NewRoleForm({ names, doc, onDone, onCancel, onBusy }: {
         )}
       </Field>
       <Button size="xs" className="-mt-1 self-start" disabled={!name.trim() || drafting} onClick={draftDuty}>
-        <Icon name="sparkle" />{t('agent.draftAi')}
+        <Icon name="sparkle" size={14} />{t('agent.draftAi')}
       </Button>
       <Field label={t('agent.reviewer')}>
         <NativeSelect aria-label={t('agent.reviewer')} value={reviewer} onChange={(e) => setReviewer(e.target.value)}>

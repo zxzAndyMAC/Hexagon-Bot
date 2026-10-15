@@ -28,7 +28,7 @@ function ensureEnv() {
   }
 }
 
-/** CSS 变量值 → RGBA。只认本仓 token 的两种写法：#hex 与 rgb()/rgba()。 */
+/** CSS 变量值 → RGBA。#hex 与 rgb()/rgba() 直接解析，其余（oklch 等）走 rasterize。 */
 function parseColor(raw: string): { r: number; g: number; b: number; a: number } | null {
   const s = raw.trim()
   const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i)
@@ -44,7 +44,23 @@ function parseColor(raw: string): { r: number; g: number; b: number; a: number }
   }
   const fn = s.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i)
   if (fn) return { r: +fn[1], g: +fn[2], b: +fn[3], a: fn[4] != null ? +fn[4] : 1 }
-  return null
+  return rasterize(s)
+}
+
+/** 其余写法（规范 token 是 oklch，foundations §1）交给 canvas 画一个像素再读回 sRGB。
+ *  修复即文档（票 15）：旧 token 是 #hex/rgba，本函数原先只认这两种；换成 oklch 后
+ *  parseColor 返回 null，编辑器壳色整片落成透明 #00000000。 */
+let probe: CanvasRenderingContext2D | null = null
+function rasterize(s: string): { r: number; g: number; b: number; a: number } | null {
+  if (!s) return null
+  probe ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true })
+  if (!probe) return null
+  probe.clearRect(0, 0, 1, 1)
+  probe.fillStyle = '#00000000'
+  probe.fillStyle = s
+  probe.fillRect(0, 0, 1, 1)
+  const [r, g, b, a] = probe.getImageData(0, 0, 1, 1).data
+  return { r, g, b, a: a / 255 }
 }
 
 const hex2 = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')
@@ -67,47 +83,47 @@ function syncTheme() {
     inherit: true,
     rules: [
       // 语法 token 沿用基底 monarch 配色，只把注释压到产品的第三级灰。
-      { token: 'comment', foreground: c('--text-3').slice(1, 7) },
+      { token: 'comment', foreground: c('--ink-3').slice(1, 7) },
     ],
     colors: {
-      'editor.background': c('--bg'),
-      'editor.foreground': c('--text'),
-      'editorGutter.background': c('--bg'),
-      'editorLineNumber.foreground': c('--text-3', 0.8),
-      'editorLineNumber.activeForeground': c('--text-2'),
-      'editorCursor.foreground': c('--legacy-accent'),
-      'editor.selectionBackground': c('--legacy-accent', 0.32),
-      'editor.inactiveSelectionBackground': c('--legacy-accent', 0.16),
-      'editor.selectionHighlightBackground': c('--legacy-accent', 0.14),
-      'editor.wordHighlightBackground': c('--legacy-accent', 0.14),
-      'editor.findMatchHighlightBackground': c('--legacy-accent', 0.3),
-      'editor.lineHighlightBackground': c('--bg-2'),
+      'editor.background': c('--surface'),
+      'editor.foreground': c('--ink'),
+      'editorGutter.background': c('--surface'),
+      'editorLineNumber.foreground': c('--ink-3', 0.8),
+      'editorLineNumber.activeForeground': c('--ink-2'),
+      'editorCursor.foreground': c('--accent'),
+      'editor.selectionBackground': c('--accent', 0.32),
+      'editor.inactiveSelectionBackground': c('--accent', 0.16),
+      'editor.selectionHighlightBackground': c('--accent', 0.14),
+      'editor.wordHighlightBackground': c('--accent', 0.14),
+      'editor.findMatchHighlightBackground': c('--accent', 0.3),
+      'editor.lineHighlightBackground': c('--inset'),
       'editor.lineHighlightBorder': '#00000000',
-      'editorIndentGuide.background1': c('--border'),
-      'editorIndentGuide.activeBackground1': c('--border-strong'),
-      'editorWhitespace.foreground': c('--border-strong'),
-      'editorBracketMatch.background': c('--legacy-accent-soft'),
-      'editorBracketMatch.border': c('--legacy-accent-border'),
-      'editorBracketHighlight.foreground1': c('--legacy-accent'),
-      'editorBracketHighlight.foreground2': c('--ok'),
-      'editorBracketHighlight.foreground3': c('--warn'),
-      'editorWidget.background': c('--popover'),
-      'editorWidget.border': c('--border-strong'),
-      'editorSuggestWidget.background': c('--popover'),
-      'editorSuggestWidget.border': c('--border-strong'),
-      'editorSuggestWidget.selectedBackground': c('--legacy-accent-soft'),
-      'editorSuggestWidget.selectedForeground': c('--text'),
-      'editorHoverWidget.background': c('--popover'),
-      'editorHoverWidget.border': c('--border-strong'),
-      'input.background': c('--bg'),
-      'input.border': c('--border-strong'),
-      'inputOption.activeBorder': c('--legacy-accent'),
-      'focusBorder': c('--legacy-accent'),
-      'scrollbarSlider.background': c('--border-strong', 0.6),
-      'scrollbarSlider.hoverBackground': c('--text-3', 0.6),
-      'scrollbarSlider.activeBackground': c('--text-2', 0.6),
-      'editorError.foreground': c('--err'),
-      'editorWarning.foreground': c('--warn'),
+      'editorIndentGuide.background1': c('--line'),
+      'editorIndentGuide.activeBackground1': c('--line-strong'),
+      'editorWhitespace.foreground': c('--line-strong'),
+      'editorBracketMatch.background': c('--accent-tint'),
+      'editorBracketMatch.border': c('--accent', 0.35),
+      'editorBracketHighlight.foreground1': c('--accent'),
+      'editorBracketHighlight.foreground2': c('--green'),
+      'editorBracketHighlight.foreground3': c('--accent-ink'),
+      'editorWidget.background': c('--surface'),
+      'editorWidget.border': c('--line-strong'),
+      'editorSuggestWidget.background': c('--surface'),
+      'editorSuggestWidget.border': c('--line-strong'),
+      'editorSuggestWidget.selectedBackground': c('--accent-tint'),
+      'editorSuggestWidget.selectedForeground': c('--ink'),
+      'editorHoverWidget.background': c('--surface'),
+      'editorHoverWidget.border': c('--line-strong'),
+      'input.background': c('--surface'),
+      'input.border': c('--line-strong'),
+      'inputOption.activeBorder': c('--accent'),
+      'focusBorder': c('--accent'),
+      'scrollbarSlider.background': c('--line-strong', 0.6),
+      'scrollbarSlider.hoverBackground': c('--ink-3', 0.6),
+      'scrollbarSlider.activeBackground': c('--ink-2', 0.6),
+      'editorError.foreground': c('--red'),
+      'editorWarning.foreground': c('--orange'),
     },
   })
   monaco.editor.setTheme('hexagon')

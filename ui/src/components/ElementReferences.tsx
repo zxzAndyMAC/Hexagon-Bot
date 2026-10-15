@@ -129,7 +129,7 @@ export function ElementDraft({ references, onChange, submitting, trailing, child
           onClick={() => setInspected(reference.id)} onKeyDown={event => {
             if (matches(event.nativeEvent,bindingFor('viewBrowserElement'))) { event.preventDefault(); setInspected(reference.id) }
           }}>
-          <span className="eref-th"><Icon name={reference.kind === 'region' ? 'image' : 'crosshair'} /></span>
+          <span className="eref-th"><Icon name={reference.kind === 'region' ? 'image' : 'crosshair'} size={14} /></span>
           <span className="element-draft-copy"><strong>{referenceTitle(reference, t)}</strong>
             {isStale(reference) ? <span data-stale="">{t('elementContext.stale')}</span>
               : <span>{reference.source_hint ? `${reference.source_hint.file}:${reference.source_hint.line}` : t('elementContext.unlocated')}</span>}</span>

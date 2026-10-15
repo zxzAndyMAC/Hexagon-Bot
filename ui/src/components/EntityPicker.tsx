@@ -1,7 +1,7 @@
 // 名单字段勾选器（.scratch/settings-density 02，owner 裁决 2026-09）：
 // 技能/MCP 授权等名单曾是逗号分隔文本输入——owner 裁决「技能不应该是输入框，
 // 做成添加按钮 → 弹窗搜索+勾选+添加」。已选项渲染为 chip 行（× 移除）。
-// 弹层外壳复用 ConfirmDialog 模式（fixed 遮罩 + Esc/点遮罩关 + --popover 不透明底）。
+// 弹层外壳复用 ConfirmDialog 模式（fixed 遮罩 + Esc/点遮罩关 + --surface 不透明底）。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'

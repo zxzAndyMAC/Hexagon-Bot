@@ -113,7 +113,7 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
       aria-label={`${t('approvalMode.label')}: ${t(`approvalMode.${value}`)}`}
       onClick={() => { setError(false); setOpen(!open) }}>
       {/* components D4：shield 14 + 模式名 + ▾/▴；托管中「帮我批准 | 托管」，托管段 --accent-ink */}
-      <Icon name="shield" />
+      <Icon name="shield" size={14} />
       <span>{t(`approvalMode.${value}`)}{managed?.enabled && <><span className="sep"> | </span><span className="managed">{t('delegation.short')}</span></>}</span>
       <Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} />
     </button>
@@ -139,7 +139,7 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
         className="approval-mode-option" aria-checked={value === mode}
         disabled={pending || disabled} onClick={() => { void choose(mode) }}>
         {/* D4 加载：宿主复验前保持原选择，行内 ring（不乐观更新） */}
-        <span className="tick">{value === mode && (pending ? <Spinner size={12} /> : <Icon name="check" />)}</span>
+        <span className="tick">{value === mode && (pending ? <Spinner size={12} /> : <Icon name="check" size={14} />)}</span>
         <span className="approval-mode-option-copy"><strong>{t(`approvalMode.${mode}`)}</strong>
           <span>{t(`approvalMode.description.${mode}`)}</span></span>
         {mode === 'broad' && value !== 'broad' && <Badge variant="warn" className="approval-mode-chip">{t('approvalMode.needsConfirm')}</Badge>}
@@ -148,7 +148,7 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
       <div className="approval-mode-sepline" />
       <div className="approval-mode-managed" role="group" aria-label={t('delegation.label')}>
         <label className="approval-mode-managed-row">
-          <Icon name="bot" />
+          <Icon name="bot" size={14} />
           <span className="approval-mode-option-copy"><strong>{t('delegation.label')}</strong>
             <span>{t('delegation.description')}</span></span>
           <input type="checkbox" role="switch" className="switch" checked={managed.enabled}
@@ -198,7 +198,7 @@ function BroadConfirmation({ pending, error, onCancel, onConfirm }: {
     <AlertDialogContent busy={pending} className="approval-mode-confirm w-[min(440px,calc(100vw-48px))] gap-0 px-[22px] pt-[22px] pb-4"
       onCloseAutoFocus={(event) => event.preventDefault()}>
       <div className="flex items-start gap-3">
-        <AlertDialogIcon tone="warn" className="size-9 rounded-[10px]"><Icon name="shield" /></AlertDialogIcon>
+        <AlertDialogIcon tone="warn" className="size-9 rounded-[10px]"><Icon name="shield" size={14} /></AlertDialogIcon>
         <div>
           <AlertDialogTitle>{t('approvalMode.confirmTitle')}</AlertDialogTitle>
           <AlertDialogDescription className="mt-1">{t('approvalMode.confirmBody')}</AlertDialogDescription>

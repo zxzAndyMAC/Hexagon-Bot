@@ -124,11 +124,11 @@ export function FlowDraft({ pack, roles, busy, onChange }: {
               className="hx-press hx-focus cursor-pointer justify-self-start rounded-full"
             >
               {st.stamp_point
-                ? <Badge variant="warn"><Icon name="stamp" />{t('wizard.flow.stamp')}</Badge>
+                ? <Badge variant="warn"><Icon name="stamp" size={14} />{t('wizard.flow.stamp')}</Badge>
                 : <Badge>{t('wizard.flow.auto')}</Badge>}
             </button>
             <IconButton size="sm" label={t('wizard.removeStage')} onClick={() => update(stages.filter((_, j) => j !== i))}>
-              <Icon name="close" />
+              <Icon name="close" size={14} />
             </IconButton>
           </div>
         ))}
@@ -150,7 +150,7 @@ export function FlowDraft({ pack, roles, busy, onChange }: {
           consult_wake: [],
         }])}
       >
-        <Icon name="plus" />{t('wizard.addStage')}
+        <Icon name="plus" size={14} />{t('wizard.addStage')}
       </Button>
       {picking !== null && stages[picking] && (
         <EntityPicker

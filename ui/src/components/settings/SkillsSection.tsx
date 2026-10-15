@@ -144,7 +144,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
             )}
             {editable && (
               <Button size="sm" onClick={() => void toggleEdit()} title={editTip}>
-                <Icon name={editing ? 'vision' : 'edit'} />{editing ? t('skills.view') : t('skills.edit')}
+                <Icon name={editing ? 'vision' : 'edit'} size={14} />{editing ? t('skills.view') : t('skills.edit')}
               </Button>
             )}
           </>
@@ -311,7 +311,7 @@ export function SkillsSection() {
       emptyText={t('skills.empty')}
       foot={
         <>
-          <Button size="xs" className="flex-1" onClick={() => { setCreating(true); setSelected(null) }}><Icon name="plus" />{t('skills.new')}</Button>
+          <Button size="xs" className="flex-1" onClick={() => { setCreating(true); setSelected(null) }}><Icon name="plus" size={14} />{t('skills.new')}</Button>
           <Button size="xs" className="flex-1" loading={scanning} onClick={scan}>{scanning ? t('skills.scanning') : t('skills.scan')}</Button>
           {isTauri && (
             <>

@@ -395,7 +395,7 @@ export function ProviderManager() {
       searchPlaceholder={t('providers.filter')}
       emptyText={t('providers.empty')}
       foot={
-        <Button size="sm" className="flex-1" onClick={() => pick('new')}><Icon name="plus" />{t('providers.add')}</Button>
+        <Button size="sm" className="flex-1" onClick={() => pick('new')}><Icon name="plus" size={14} />{t('providers.add')}</Button>
       }
       renderItem={(it) => {
         if (it.preset) {
@@ -438,7 +438,7 @@ export function ProviderManager() {
               sub={draft.base_url ? `${previewUrl} · ${t('providers.autoUrl')}` : t('providers.unsaved')}
               mono={!!draft.base_url}
               actions={selConfigured && (
-                <Button size="sm" variant="ghost" className="text-red" onClick={del}><Icon name="trash" />{t('providers.delete')}</Button>
+                <Button size="sm" variant="ghost" className="text-red" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
               )}
             />
             <div className="mt-4 grid grid-cols-2 gap-3">
@@ -479,7 +479,7 @@ export function ProviderManager() {
                 className="mb-[22px]" disabled={probeDisabled} loading={busy} onClick={probeAndMerge}
                 title={probeDisabled && !busy ? t('providers.checkNeedsKey') : undefined}
               >
-                {!busy && <Icon name="refresh" />}{t('providers.check')}
+                {!busy && <Icon name="refresh" size={14} />}{t('providers.check')}
               </Button>
             </div>
             {probe && (
@@ -489,8 +489,8 @@ export function ProviderManager() {
             {/* ---- 模型目录 ---- */}
             <SubHead aside={
               <>
-                <Button size="xs" variant="ghost" disabled={busy} onClick={probeAndMerge}><Icon name="refresh" />{t('providers.fetch')}</Button>
-                <Button size="xs" variant="ghost" onClick={() => { setEditingId(null); setEditModel(emptyModel()) }}><Icon name="plus" />{t('providers.addModel')}</Button>
+                <Button size="xs" variant="ghost" disabled={busy} onClick={probeAndMerge}><Icon name="refresh" size={14} />{t('providers.fetch')}</Button>
+                <Button size="xs" variant="ghost" onClick={() => { setEditingId(null); setEditModel(emptyModel()) }}><Icon name="plus" size={14} />{t('providers.addModel')}</Button>
               </>
             }>{t('settingsUi.modelsN', { count: draft.models.length })}</SubHead>
             {editingId === null && modelEditor}

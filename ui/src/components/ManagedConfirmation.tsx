@@ -51,7 +51,7 @@ export function ManagedConfirmation({ pending, error, onCancel, onConfirm }: {
     <AlertDialogContent busy={pending} className="managed-confirm w-[min(560px,calc(100vw-48px))] gap-0 px-[22px] pt-[22px] pb-4"
       onCloseAutoFocus={(event) => event.preventDefault()}>
       <div className="flex items-start gap-3">
-        <AlertDialogIcon tone="info" className="size-9 rounded-[10px]"><Icon name="bot" /></AlertDialogIcon>
+        <AlertDialogIcon tone="info" className="size-9 rounded-[10px]"><Icon name="bot" size={14} /></AlertDialogIcon>
         <div className="min-w-0">
           <AlertDialogTitle>{project ? t('delegation.confirmTitleProject', { name: project }) : t('delegation.confirmTitle')}</AlertDialogTitle>
           <AlertDialogDescription className="mt-1">{t('delegation.confirmBody')}</AlertDialogDescription>

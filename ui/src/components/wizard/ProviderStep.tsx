@@ -45,7 +45,7 @@ function KeyInput({ value, onChange }: { value: string; onChange: (v: string) =>
         onChange={(e) => onChange(e.target.value)}
         trailing={
           <IconButton size="sm" label={t(shown ? 'providers.hideKey' : 'providers.showKey')} onClick={() => setShown((s) => !s)}>
-            <Icon name={shown ? 'vision' : 'vision-off'} />
+            <Icon name={shown ? 'vision' : 'vision-off'} size={14} />
           </IconButton>
         }
       />
@@ -101,7 +101,7 @@ export function ProviderFirstStep({ doc, loaded, onRefresh }: {
   if (ready && bound && binding) {
     return (
       <div className="flex items-center gap-2 text-[13px]">
-        <Badge variant="ok"><Icon name="check" />{t('wizard.providersReady')}</Badge>
+        <Badge variant="ok"><Icon name="check" size={14} />{t('wizard.providersReady')}</Badge>
         <span>{bound.name} · {binding.model}</span>
       </div>
     )
@@ -113,7 +113,7 @@ export function ProviderFirstStep({ doc, loaded, onRefresh }: {
         ? <NewProviderForm onRefresh={onRefresh} />
         : <FixProviderForm doc={doc} onRefresh={onRefresh} />}
       <Button size="sm" variant="ghost" className="self-start" onClick={() => api.openSettings().catch(() => {})}>
-        <Icon name="settings" />{t('wizard.goSettings')}
+        <Icon name="settings" size={14} />{t('wizard.goSettings')}
       </Button>
     </div>
   )

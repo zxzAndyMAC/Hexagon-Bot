@@ -1,6 +1,6 @@
 /* 托管（ui-redesign 票 08，components D7 / D9 / D10；managed#running / #report / #exit）。
    只用 foundations 的 token；mg-* 外形照原型 proto.css。 */
-.delegation-note, .delegation-empty { font-size: 12px; line-height: 1.5; color: var(--ink-3); margin: 0; }
+.delegation-empty { font-size: 12px; line-height: 1.5; color: var(--ink-3); margin: 0; }
 .approval-mode-managed { border-top: 1px solid var(--line); margin: 6px 4px 0; padding-top: 6px; }
 .approval-mode-managed-row { display: flex; align-items: center; gap: 12px; padding: 8px 6px; cursor: pointer; color: var(--ink); }
 

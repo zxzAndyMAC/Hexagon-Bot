@@ -161,7 +161,7 @@ const ICONS = {
 export type IconName = keyof typeof ICONS
 export const ICON_NAMES = Object.keys(ICONS) as IconName[]
 
-export function Icon({ name, size = 14, className, style }: {
+export function Icon({ name, size = 16, className, style }: {
   name: IconName
   size?: number
   className?: string

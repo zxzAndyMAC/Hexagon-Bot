@@ -71,7 +71,7 @@ export function ProjectBlock({ onProjectClosed }: { onProjectClosed: () => void 
             <DropdownMenuSeparator />
           </>
         )}
-        <DropdownMenuItem icon={<Icon name="arrow-left" />} onSelect={() => void backToLauncher()}>
+        <DropdownMenuItem icon={<Icon name="arrow-left" size={14} />} onSelect={() => void backToLauncher()}>
           {t('sidebar.backToLauncher')}
         </DropdownMenuItem>
       </DropdownMenuContent>

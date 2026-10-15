@@ -50,7 +50,7 @@ export function sameBinding(a: string, b: string): boolean {
 
 /**
  * 录制冲突：b 已被别的动作占用则返回那个动作。
- * 修复即文档（票 11）：keymap.conflictFor 用 `===` 比较，默认表的大写主键（`mod+K`）与录制得到的小写（`mod+k`）
+ * 修复即文档（票 11）：原 keymap.conflictFor（无调用方，票 15 已删）用 `===` 比较，默认表的大写主键（`mod+K`）与录制得到的小写（`mod+k`）
  * 永远不相等——把 ⌘K 录给别的动作时冲突提示不出现，两个动作共用一个键。这里按规范形比较。
  */
 export function findConflict(id: ActionId, b: string): ActionId | null {

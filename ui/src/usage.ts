@@ -1,4 +1,4 @@
-import type { UsageBucket, UsageRow } from './api'
+import type { UsageBucket } from './api'
 import i18n from './i18n'
 
 /** 账本单位：成本以 millicents 计，上限以 cents 计。1 ¥ = 100 cents = 100_000 mc。 */
@@ -39,25 +39,10 @@ export const fmtTime = (iso: string, withSeconds = false, loc?: string): string 
 export const isoDay = (d: Date) => d.toISOString().slice(0, 10)
 export const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 864e5))
 
-/** UTC 月份区间：offset=0 本月首日~今日由调用方拼；offset=-1 上月首~末日。 */
-export const utcMonthRange = (offset: 0 | -1): [string, string] => {
-  const d = new Date()
-  const y = d.getUTCFullYear()
-  const m = d.getUTCMonth() + offset
-  return [isoDay(new Date(Date.UTC(y, m, 1))), isoDay(new Date(Date.UTC(y, m + 1, 0)))]
-}
-
 export const centsToMc = (cents: number) => cents * MC_PER_CENT
 
 export const capReached = (spentMc: number, limitCents: number | null | undefined) =>
   limitCents != null && spentMc >= centsToMc(limitCents)
-
-/** 按键聚合成本（模型分解用），按成本降序。 */
-export function groupCost(rows: UsageRow[], key: (r: UsageRow) => string): [string, number][] {
-  const out = new Map<string, number>()
-  for (const r of rows) out.set(key(r), (out.get(key(r)) ?? 0) + (r.cost_mc ?? 0))
-  return [...out.entries()].sort((a, b) => b[1] - a[1])
-}
 
 /** token 数动态单位：999 → "999"，84_400 → "84.4K"，3_530_000_000 → "3.53B"。 */
 export const fmtTok = (n: number): string => {

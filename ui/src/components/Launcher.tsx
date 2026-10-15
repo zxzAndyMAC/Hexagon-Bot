@@ -115,7 +115,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
                 title={pickedDir || undefined}
                 onClick={() => { void pickDirectory().then((d) => { if (d) setPickedDir(d) }) }}
               >
-                <Icon name="folder" />
+                <Icon name="folder" size={14} />
                 {pickedDir ? t('launch.pickedDir', { dir: dirName(pickedDir) }) : t('launch.pickDir')}
               </Button>
             )}
@@ -139,9 +139,9 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
 
         <div className="mt-3 flex gap-1.5">
           {isTauri && (
-            <Button size="sm" onClick={() => { void openDir() }}><Icon name="folder" />{t('launch.openExisting')}</Button>
+            <Button size="sm" onClick={() => { void openDir() }}><Icon name="folder" size={14} />{t('launch.openExisting')}</Button>
           )}
-          <Button size="sm" data-blank-new onClick={() => setWizard({})}><Icon name="plus" />{t('launch.blank')}</Button>
+          <Button size="sm" data-blank-new onClick={() => setWizard({})}><Icon name="plus" size={14} />{t('launch.blank')}</Button>
         </div>
 
         <div className="mt-7 w-[640px] max-w-full">
@@ -172,11 +172,11 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
           设置）。zIndex 70：压过向导层 60；设置覆盖层 80 打开时自然盖住它。 */}
       <div className="fixed top-2 right-3.5 z-[70]">
         <IconButton label={t('launch.settings')} action="settings" data-launch-settings onClick={() => setSettings(true)}>
-          <Icon name="settings" />
+          <Icon name="settings" size={14} />
         </IconButton>
       </div>
       {settings && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)' }}>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--page)' }}>
           <SettingsPage onBack={() => setSettings(false)} projectless />
         </div>
       )}
@@ -209,7 +209,7 @@ function RecentRow({ r, when, opening, onOpen, onRemove }: {
   )
   const removeBtn = (
     <IconButton size="sm" label={t('launch.remove')} onClick={(e) => { e.stopPropagation(); onRemove() }}>
-      <Icon name="close" />
+      <Icon name="close" size={14} />
     </IconButton>
   )
   if (missing) {
