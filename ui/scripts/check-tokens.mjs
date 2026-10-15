@@ -10,6 +10,11 @@ const ui = join(dirname(fileURLToPath(import.meta.url)), '..')
 const css = readFileSync(join(ui, 'src/index.css'), 'utf8')
 const defined = new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]))
 
+// 票 15（ui-redesign 收缩）：Linear 派生旧 token 已从 index.css 删净，只认 foundations 的新 token。
+// 旧名不只出现在 var() 里——monacoFile.ts 曾用 c('--text') 这类字面量读 :root，var() 对账抓不到，
+// 静默落成透明色。所以旧名在任何引号或 var() 里出现都拒绝，index.css 重新定义旧名也拒绝。
+const LEGACY = /(?<![\w-])--(legacy-[\w-]+|bg(?:-[123])?|text(?:-[23])?|border(?:-strong)?|(?:ok|err|flag|warn)(?:-soft|-border)?|on-accent|popover|r-md|r-lg|r-xl)(?![\w-])/g
+
 const files = []
 const walk = (d) => {
   for (const e of readdirSync(d)) {
@@ -26,6 +31,9 @@ for (const f of files) {
   for (const m of src.matchAll(/var\((--[\w-]+)/g)) {
     if (!defined.has(m[1])) bad.push(`${f.replace(ui + '/', '')}: var(${m[1]})`)
   }
+  // 注释里的旧名是出处说明（「旧 --err 迁到 --red」），不算引用
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+  for (const m of code.matchAll(LEGACY)) bad.push(`${f.replace(ui + '/', '')}: legacy token ${m[0]} (foundations §10)`)
 }
 if (bad.length) {
   console.error('undeclared design tokens referenced:\n' + bad.map((b) => '  ' + b).join('\n'))

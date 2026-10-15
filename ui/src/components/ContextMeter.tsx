@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import type { ContextSnapshot } from '../gen/ContextSnapshot'
 import { parseTime } from '../usage'
-import { Avatar } from './Avatar'
+import { Avatar } from '@/components/ui/avatar'
 
 export function ContextMeter({ agentIds = [] }: { agentIds?: string[] }) {
   const { t } = useTranslation()
@@ -14,6 +14,7 @@ export function ContextMeter({ agentIds = [] }: { agentIds?: string[] }) {
   const open = (hovered || focused) && !dismissed
   const facts = useUiStore((s) => s.timelineFacts)
   const team = useUiStore((s) => s.team)
+  const avatars = useUiStore((s) => s.avatars)
   const requests = useMemo(() => {
     const latest = new Map((facts?.latest_contexts ?? []).map(item => [item.agent_id, item]))
     const recent = [...latest.values()].sort((a, b) => b.event_id - a.event_id)[0]?.agent_id ?? null
@@ -57,7 +58,7 @@ export function ContextMeter({ agentIds = [] }: { agentIds?: string[] }) {
         const hot = !!value && value.used_tokens >= value.compact_at_tokens
         return <div className="context-meter-role" key={id}>
           <div className="context-meter-head">
-            {id && <Avatar agentId={id} role={role} size={18} />}
+            {id && <Avatar agentId={id} name={role} size={18} src={avatars[id]} />}
             <b>{t('context.heading', { role })}</b>
             {value && Number.isFinite(parseTime(at)) && <time dateTime={new Date(parseTime(at)).toISOString()}>{fmtClock(at)}</time>}
           </div>

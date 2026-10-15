@@ -122,7 +122,7 @@ function McpServiceForm({ entry, readOnly = false, onDone, onCancel, onDelete }:
         <div className="flex items-center gap-2">
           {onDelete && (
             <Button size="sm" variant="ghost" className="text-red" disabled={busy} onClick={onDelete}>
-              <Icon name="trash" />{t('mcp.del')}
+              <Icon name="trash" size={14} />{t('mcp.del')}
             </Button>
           )}
           <span className="flex-1" />
@@ -248,9 +248,9 @@ export function McpSection({ projectless }: { projectless: boolean }) {
       emptyText={t('mcp.empty')}
       foot={
         <>
-          <Button size="xs" className="flex-1" onClick={() => { setCreating(true); setSel(null) }}><Icon name="plus" />{t('mcp.new')}</Button>
+          <Button size="xs" className="flex-1" onClick={() => { setCreating(true); setSel(null) }}><Icon name="plus" size={14} />{t('mcp.new')}</Button>
           <Button size="xs" className="flex-1" loading={scanning} onClick={scan}>{scanning ? t('mcp.scanning') : t('mcp.scan')}</Button>
-          {isTauri && <Button size="xs" className="flex-1" onClick={openMarket}><Icon name="external" />{t('mcp.market')}</Button>}
+          {isTauri && <Button size="xs" className="flex-1" onClick={openMarket}><Icon name="external" size={14} />{t('mcp.market')}</Button>}
         </>
       }
       renderItem={(s) => {

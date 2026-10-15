@@ -44,7 +44,7 @@ export function BriefStep(p: {
   if (report?.instructions) {
     return (
       <div className="flex flex-col gap-2 text-[13px]">
-        <Badge variant="ok" className="self-start"><Icon name="check" />{report.instructions}</Badge>
+        <Badge variant="ok" className="self-start"><Icon name="check" size={14} />{report.instructions}</Badge>
         <div className="text-ink-2">{t('wizard.instructionsFound', { file: report.instructions })}</div>
       </div>
     )
@@ -85,7 +85,7 @@ export function BriefStep(p: {
           />
           <div className="flex items-center gap-2">
             <Button size="sm" disabled={!sentence} onClick={p.onOptimize}>
-              <Icon name="sparkle" />{t('wizard.optimize')}
+              <Icon name="sparkle" size={14} />{t('wizard.optimize')}
             </Button>
           </div>
         </div>
@@ -108,7 +108,7 @@ export function BriefStep(p: {
             >
               <Button size="xs" variant="ghost" aria-expanded={showAnswered} onClick={() => setShowAnswered((v) => !v)}>
                 {t(showAnswered ? 'wizard.qa.collapse' : 'wizard.qa.expand')}
-                <Icon name={showAnswered ? 'chevron-down' : 'chevron-right'} />
+                <Icon name={showAnswered ? 'chevron-down' : 'chevron-right'} size={14} />
               </Button>
             </AnsweredRow>
           )}
@@ -150,7 +150,7 @@ export function BriefStep(p: {
               <Button size="xs" variant="ghost" aria-expanded={showAnswered} onClick={() => setShowAnswered((v) => !v)}>
                 {t('wizard.qa.view')}
               </Button>
-              <Button size="xs" variant="ghost" onClick={p.onRedraft}><Icon name="refresh" />{t('wizard.qa.redraft')}</Button>
+              <Button size="xs" variant="ghost" onClick={p.onRedraft}><Icon name="refresh" size={14} />{t('wizard.qa.redraft')}</Button>
             </AnsweredRow>
           )}
           {!composing && showAnswered && p.lastQa && (
@@ -165,7 +165,7 @@ export function BriefStep(p: {
           )}
           {!composing && !(p.lastQa && p.lastQa.length > 0) && (
             <div className="flex justify-end">
-              <Button size="xs" variant="ghost" onClick={p.onRedraft}><Icon name="refresh" />{t('wizard.qa.redraft')}</Button>
+              <Button size="xs" variant="ghost" onClick={p.onRedraft}><Icon name="refresh" size={14} />{t('wizard.qa.redraft')}</Button>
             </div>
           )}
           <AgentsDraft value={draft.agentsMd} onChange={(agentsMd) => set({ agentsMd })} />

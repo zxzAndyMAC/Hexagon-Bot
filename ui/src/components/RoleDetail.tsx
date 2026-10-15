@@ -57,7 +57,7 @@ export function RoleDetail({ def, tplName, names, doc, customized, aiDrafted, ed
           )}
         </div>
         <Button size="xs" variant="ghost" disabled={!customized && !edited} onClick={onRestore} data-restore-template>
-          <Icon name="undo" />{t('wizard.resetTpl')}
+          <Icon name="undo" size={14} />{t('wizard.resetTpl')}
         </Button>
       </div>
       <Field label={t('agent.duty')}>

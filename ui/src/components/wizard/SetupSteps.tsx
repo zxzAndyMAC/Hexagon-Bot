@@ -27,7 +27,7 @@ export function DirStep({ draft, set, report, busy, err, onBrowse, onOpenExistin
       <Field label={t('wizard.dirLabel')}>
         <div className="flex gap-2">
           <Input aria-label={t('wizard.dirLabel')} value={draft.dir} placeholder={t('wizard.dirPlaceholder')} onChange={(e) => set({ dir: e.target.value })} />
-          {isTauri && <Button size="sm" className="h-[34px]" onClick={onBrowse}><Icon name="folder" />{t('wizard.browse')}</Button>}
+          {isTauri && <Button size="sm" className="h-[34px]" onClick={onBrowse}><Icon name="folder" size={14} />{t('wizard.browse')}</Button>}
         </div>
       </Field>
       <Field label={t('wizard.nameLabel')}>
@@ -96,7 +96,7 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
                   {r && viaDefault && ` · ${t('wizard.viaDefault')}`}
                 </div>
               </div>
-              {ready && <Badge variant="ok"><Icon name="check" />{t('wizard.keyOk')}</Badge>}
+              {ready && <Badge variant="ok"><Icon name="check" size={14} />{t('wizard.keyOk')}</Badge>}
               {r && !r.provider.enabled && <Badge variant="warn">{t('providers.disabledTag')}</Badge>}
             </div>
             {r && r.provider.enabled && !r.provider.key_set && <KeyRow provider={r.provider} busy={busy} onSave={onSaveKey} />}
@@ -106,7 +106,7 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
       })}
       {unready.length > 0 && (
         <div className="mt-1 flex items-center gap-2.5">
-          <Button size="sm" onClick={() => api.openSettings().catch(() => {})}><Icon name="settings" />{t('wizard.goSettings')}</Button>
+          <Button size="sm" onClick={() => api.openSettings().catch(() => {})}><Icon name="settings" size={14} />{t('wizard.goSettings')}</Button>
           <span className="text-[12.5px] text-orange">{t('wizard.keysBlocked')}</span>
         </div>
       )}
@@ -132,7 +132,7 @@ function KeyRow({ provider, busy, onSave }: {
         onChange={(e) => setSecret(e.target.value)}
         trailing={
           <IconButton size="sm" label={t(shown ? 'providers.hideKey' : 'providers.showKey')} onClick={() => setShown((s) => !s)}>
-            <Icon name={shown ? 'vision' : 'vision-off'} />
+            <Icon name={shown ? 'vision' : 'vision-off'} size={14} />
           </IconButton>
         }
       />

@@ -72,7 +72,7 @@ function StaticModal({ state }: { state: State }) {
             className="w-[244px] p-4"
           >
             <DialogHeader>
-              <DialogIcon tone="err"><Icon name="publish" /></DialogIcon>
+              <DialogIcon tone="err"><Icon name="publish" size={14} /></DialogIcon>
               <DialogTitle>发布到生产？</DialogTitle>
             </DialogHeader>
             <DialogDescription>发布不可撤回，外部用户会立即看到。</DialogDescription>
@@ -112,7 +112,7 @@ const ROWS: Row[] = [
           <Icon name="panel-right" size={16} />
         </IconButton>
         <IconButton label="开关画布" on disabled={s === '禁用'} loading={s === '加载'}><Icon name="panel-right" size={16} /></IconButton>
-        <IconButton label="复制" size="sm" disabled={s === '禁用'} loading={s === '加载'}><Icon name="copy" /></IconButton>
+        <IconButton label="复制" size="sm" disabled={s === '禁用'} loading={s === '加载'}><Icon name="copy" size={14} /></IconButton>
       </>
     ),
   },
@@ -416,7 +416,7 @@ function LiveConfirm() {
       <AlertDialogTrigger asChild><Button size="sm">打开真实确认层</Button></AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogIcon tone="warn"><Icon name="warn" /></AlertDialogIcon>
+          <AlertDialogIcon tone="warn"><Icon name="warn" size={14} /></AlertDialogIcon>
           <AlertDialogTitle>回退到「设计」阶段？</AlertDialogTitle>
         </AlertDialogHeader>
         <AlertDialogDescription>之后阶段的产物会标为已作废。</AlertDialogDescription>
@@ -433,7 +433,7 @@ export default function Specimen() {
   return (
     <div className="h-full overflow-auto bg-page font-sans text-[14px] leading-normal text-ink antialiased">
       <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-line bg-page px-8 py-4">
-        <span className="grid size-7 place-items-center rounded-[8px] bg-ink text-page"><Icon name="hex" /></span>
+        <span className="grid size-7 place-items-center rounded-[8px] bg-ink text-page"><Icon name="hex" size={14} /></span>
         <h1 className="text-[20px] font-semibold tracking-[-.01em]">组件标本 · components A1–A17</h1>
         <span className="flex-1" />
         <LiveConfirm />

@@ -1,6 +1,6 @@
 /* D12 推荐卡（票 04，decisions#design）：方案三列，选中 = 缩略图 --accent 1.5px 内环 + 「已选」info chip + 实心 radio。
    截图比对修正（2026-10-14）：内环与 accent-tint 原先落在整列 article 上，tint 底吞掉同色 info chip；按原型改落缩略图，
-   整列只留 hover 底（reconciliation 票 04 记录）。radio 按原型 .radio 自绘（index.css 全局 radio 原语仍吃 --legacy-accent，选中点是旧琥珀色；此处覆盖边框与 ::after）。 */
+   整列只留 hover 底（reconciliation 票 04 记录）。radio 按原型 .radio 自绘（覆盖 index.css 全局 A11 radio 原语的边框与 ::after）。 */
 .design-choices p { margin: 0 0 8px; }
 .design-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin-top: 4px; }
 .design-option { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-card); min-width: 0; }

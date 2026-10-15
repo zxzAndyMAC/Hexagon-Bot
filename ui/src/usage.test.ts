@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { UsageBucket, UsageRow } from './api'
 import {
-  capReached, centsToMc, daysAgo, fmtTime, fmtTok, fmtYuan, groupCost, groupTokens,
-  isoDay, parseLimitInput, tokensOf, utcMonthRange,
+  capReached, centsToMc, daysAgo, fmtTime, fmtTok, fmtYuan, groupTokens,
+  isoDay, parseLimitInput, tokensOf,
   RANGE_PRESETS, presetRange, customRange, previousRange, dayAxis, stackRows, topAgentRows,
   sumTokens, tokenShare, pctChange, weekOverWeek, bucketTick, stageProgress,
 } from './usage'
@@ -24,9 +24,7 @@ describe('usage units', () => {
     expect(daysAgo(0)).toBe(new Date().toISOString().slice(0, 10))
     expect(daysAgo(1)).toBe(new Date(Date.now() - 864e5).toISOString().slice(0, 10))
     expect(isoDay(new Date(Date.UTC(2026, 0, 5, 23, 59)))).toBe('2026-01-05')
-    const [f, l] = utcMonthRange(-1)
-    expect(f.endsWith('-01')).toBe(true)
-    expect(l >= f).toBe(true)
+    // 票 15：utcMonthRange 随 ECharts 时代的月度视图一起删除（无生产调用方，knip --production 判死）
   })
 
   it('fmtTime 本地语序（票 14）', () => {
@@ -80,13 +78,7 @@ describe('usage rows', () => {
     { agent_id: 'a1', model: 'm2', stage: null, prompt_tokens: 0, completion_tokens: 0, tool_output_tokens: 5, cost_mc: 50, calls: 1, unknown_requests: 0, legacy_unknown_records: 0, unknown_token_records: 0 },
   ]
 
-  it('groupCost sums cost_mc by key and sorts desc', () => {
-    expect(groupCost(rows, (r) => r.model ?? '')).toEqual([
-      ['m1', 400],
-      ['m2', 50],
-    ])
-  })
-
+  // 票 15：groupCost（旧模型成本分解）无生产调用方，随死代码删除；groupTokens 仍在用
   it('groupTokens sums the three token columns', () => {
     expect(groupTokens(rows, (r) => r.model ?? '')).toEqual([
       ['m1', 32],

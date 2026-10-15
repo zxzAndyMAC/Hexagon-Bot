@@ -13,7 +13,7 @@ import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
 import { Icon, type IconName } from './Icon'
-import { Avatar } from './Avatar'
+import { Avatar } from '@/components/ui/avatar'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -162,9 +162,10 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
 
 /** D18 行 = 图标 + 名 13/500 + 灰描述 + 右侧 kbd；高亮 = --hover 底（cmdk data-selected，同 A16 mi.on）。 */
 function PaletteRow({ item, onRun }: { item: Item; onRun: () => void }) {
+  const avatars = useUiStore((s) => s.avatars)
   let lead: ReactNode = null
-  if (item.agent) lead = <Avatar agentId={item.agent.id} role={item.agent.role} size={18} />
-  else if (item.icon) lead = <Icon name={item.icon} className="text-ink-2" />
+  if (item.agent) lead = <Avatar agentId={item.agent.id} name={item.agent.role} size={18} src={avatars[item.agent.id]} />
+  else if (item.icon) lead = <Icon name={item.icon} className="text-ink-2" size={14} />
   return (
     <CommandItem value={item.id} onSelect={onRun}>
       <span className="grid w-[18px] shrink-0 place-items-center">{lead}</span>
