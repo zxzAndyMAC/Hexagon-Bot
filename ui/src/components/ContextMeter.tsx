@@ -2,7 +2,8 @@ import { useId, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../store'
 import type { ContextSnapshot } from '../gen/ContextSnapshot'
-import { fmtTime, parseTime } from '../usage'
+import { parseTime } from '../usage'
+import { Avatar } from './Avatar'
 
 export function ContextMeter({ agentIds = [] }: { agentIds?: string[] }) {
   const { t } = useTranslation()
@@ -34,31 +35,56 @@ export function ContextMeter({ agentIds = [] }: { agentIds?: string[] }) {
   })
   const first = snapshots[0]?.value
   const percent = first ? Math.min(100, Math.round(first.used_tokens / first.window_tokens * 100)) : null
-  return <div className="context-meter"
+  const over = !!first && first.used_tokens >= first.compact_at_tokens
+  const [pinned, setPinned] = useState(false)
+  const shown = open || pinned
+  // components D5（composer#mode）：22 圆环 + 11 等宽百分比；悬停 / 聚焦出 HoverCard 形详情，
+  // 点击固定（补设计，便于键盘读取），Esc 收起。≥ 压缩阈值环色 --orange（只改色不改形）。
+  return <div className="context-meter" data-open={shown || undefined}
     onMouseEnter={() => { setHovered(true); setDismissed(false) }}
     onMouseLeave={() => setHovered(false)}
-    onKeyDown={(event) => { if (event.key === 'Escape') { setDismissed(true); event.stopPropagation() } }}>
-    <button type="button" className="context-meter-trigger" aria-label={t('context.title')}
-      aria-describedby={open ? tipId : undefined}
-      onFocus={() => { setFocused(true); setDismissed(false) }} onBlur={() => setFocused(false)}>
-      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-        <circle cx="10" cy="10" r="7" fill="none" stroke="var(--border-strong)" strokeWidth="2" />
-        {percent != null && <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="2"
-          pathLength="100" strokeDasharray={`${percent} 100`} transform="rotate(-90 10 10)" />}
-      </svg>
+    onKeyDown={(event) => { if (event.key === 'Escape') { setDismissed(true); setPinned(false); event.stopPropagation() } }}>
+    <button type="button" className="context-meter-trigger" aria-label={t('context.title')} aria-expanded={pinned}
+      aria-describedby={shown ? tipId : undefined}
+      onClick={() => { setPinned(v => !v); setDismissed(false) }}
+      onFocus={() => { setFocused(true); setDismissed(false) }} onBlur={() => { setFocused(false); setPinned(false) }}>
+      <span className="cring" data-over={over || undefined} style={{ ['--p' as string]: percent ?? 0 }} aria-hidden />
       <span>{percent == null ? '—' : `${percent}%`}</span>
     </button>
-    {open && <div id={tipId} role="tooltip" className="context-meter-detail">
-      <strong>{t('context.title')}</strong>
-      {snapshots.map(({ id, role, value, at }) => <div className="context-meter-role" key={id}>
-        <div>{role}</div>
-        {value ? <>
-          {Number.isFinite(parseTime(at)) && <time dateTime={new Date(parseTime(at)).toISOString()}>{fmtTime(at)}</time>}
-          <div>{t('context.usage', { used: value.used_tokens.toLocaleString(), total: value.window_tokens.toLocaleString() })}</div>
-          <div>{t('context.compact', { count: value.compact_at_tokens.toLocaleString() })}</div>
-        </> : <p>{t('context.empty')}</p>}
-      </div>)}
+    {shown && !dismissed && <div id={tipId} role="tooltip" className="context-meter-detail">
+      {snapshots.map(({ id, role, value, at }) => {
+        const pct = value ? Math.min(100, Math.round(value.used_tokens / value.window_tokens * 100)) : null
+        const hot = !!value && value.used_tokens >= value.compact_at_tokens
+        return <div className="context-meter-role" key={id}>
+          <div className="context-meter-head">
+            {id && <Avatar agentId={id} role={role} size={18} />}
+            <b>{t('context.heading', { role })}</b>
+            {value && Number.isFinite(parseTime(at)) && <time dateTime={new Date(parseTime(at)).toISOString()}>{fmtClock(at)}</time>}
+          </div>
+          {value ? <>
+            <div className="context-meter-bar" data-over={hot || undefined}><span><i style={{ width: `${pct}%` }} /></span><span>{pct}%</span></div>
+            <dl className="context-meter-kv">
+              <dt>{t('context.used')}</dt><dd>{fmtTokens(value.used_tokens)}</dd>
+              <dt>{t('context.window')}</dt><dd>{fmtTokens(value.window_tokens)}</dd>
+              <dt>{t('context.compactAt')}</dt><dd title={value.compact_at_tokens.toLocaleString()}>{value.compact_at_tokens.toLocaleString()}</dd>
+            </dl>
+          </> : <p>{t('context.empty')}</p>}
+        </div>
+      })}
       <p>{t('context.estimate')}</p>
     </div>}
   </div>
+}
+
+/** 等宽紧凑写法：84K / 1.2M（composer#mode 悬停卡）。 */
+function fmtTokens(n: number) {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`
+  return String(n)
+}
+
+/** 悬停卡头部只写时刻（HH:MM），日期留在 dateTime 属性里。 */
+function fmtClock(at: string) {
+  const d = new Date(parseTime(at))
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }

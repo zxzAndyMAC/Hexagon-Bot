@@ -8,8 +8,10 @@
 
 .tl { background: var(--app-main); color: var(--ink); }
 
-/* §5 对话阅读列 720，左右 24（foundations §5） */
-.tl-col { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+/* §5 对话阅读列 720，左右 24（foundations §5）；画布并排时 560——读 App 主区挂的 --col-w（票 07 接入） */
+.tl-col { max-width: var(--col-w, 720px); margin: 0 auto; padding: 0 24px; }
+/* C12a 恢复条与时间线同列（票 07）：主区不再加左右内距，这里扣掉列的 24 内距对齐正文 */
+[data-conversation] [data-session-recovery] { width: calc(100% - 48px); max-width: calc(var(--col-w, 720px) - 48px); margin-left: auto; margin-right: auto; }
 /* 工具组 / 回合摘要随消息正文列对齐：30 头像 + 12 间距 */
 .tl-indent { padding-left: 42px; }
 

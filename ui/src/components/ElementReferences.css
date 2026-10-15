@@ -10,8 +10,11 @@
 .element-draft-remove { display: grid; place-items: center; width: 30px; flex-shrink: 0; border: 0; background: transparent; color: var(--text-2); cursor: pointer; border-radius: var(--r-md); }
 .element-draft-open:hover, .element-draft-remove:hover { background: var(--bg-3); }
 .element-draft-open:focus-visible, .element-draft-remove:focus-visible { outline: 2px solid var(--legacy-accent); outline-offset: -2px; }
-.element-reference-preview { width: min(560px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--popover); color: var(--text); }
-.element-reference-preview::backdrop { background: rgb(0 0 0 / 55%); }
+/* 票 07（components A17 查看类外观）：原生 dialog 保留（Esc / 焦点回原处由它负责），外壳取模态 token */
+.element-reference-preview { width: min(560px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 20px; border: 0; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); font-size: 13px; }
+.element-reference-preview::backdrop { background: var(--scrim); }
+.element-reference-preview > header strong { font-size: 15px; font-weight: 600; }
+.element-draft-status { font-size: 12px; color: var(--ink-3); }
 .element-reference-preview > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .element-reference { max-width: 320px; }
 .element-reference-preview > .element-reference { max-width: none; }

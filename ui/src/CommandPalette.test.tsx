@@ -21,13 +21,15 @@ it.each(['检查', '测试', '检验'])('lets a Chinese owner find and execute q
   const root = createRoot(el)
   try {
     await act(async () => root.render(<CommandPalette onClose={() => {}} />))
-    const input = el.querySelector('input')!
+    // ui-redesign 票 07（components D18）：面板换成 Command in Dialog，内容挂在 body 的 portal 里，按 document 查；
+    // 行上多了灰描述「测试 · 性能 · 可访问性」，所以名字断言改为包含。
+    const input = document.querySelector<HTMLInputElement>('[data-command-palette] input')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, query)
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    const option = el.querySelector('[role="option"]')
-    expect(option?.textContent).toBe('跑检验')
+    const option = document.querySelector('[role="option"]')
+    expect(option?.textContent).toContain('跑检验')
     await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     expect(run).toHaveBeenCalledExactlyOnceWith()
   } finally {
