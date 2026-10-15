@@ -20778,3 +20778,35 @@ fn agent_replies_record_the_model_they_were_sent_with() {
         ]
     );
 }
+
+/// gap B10（ui-redesign 2026-10-15）：「先不写」是软删，「已丢弃 · 撤销」原样恢复；
+/// 恢复后仍要点头才落盘，确认写入后没有可恢复的正文。
+#[test]
+fn discarded_intake_draft_can_be_restored_until_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = intake_with_draft(dir.path());
+    let draft = wb.intake_draft().unwrap().expect("draft stored");
+    assert!(matches!(
+        wb.restore_intake_draft().unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+    wb.discard_intake_draft().unwrap();
+    wb.discard_intake_draft().unwrap(); // 幂等：不拿 NULL 覆盖已丢弃的正文
+    assert!(!wb.intake_draft_pending().unwrap());
+    wb.restore_intake_draft().unwrap();
+    assert_eq!(wb.intake_draft().unwrap().as_deref(), Some(draft.as_str()));
+    assert!(!dir.path().join("AGENTS.md").exists(), "恢复不落盘");
+    assert!(matches!(
+        wb.restore_intake_draft().unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+
+    wb.discard_intake_draft().unwrap();
+    wb.restore_intake_draft().unwrap();
+    wb.confirm_intake_brief().unwrap();
+    assert!(dir.path().join("AGENTS.md").exists());
+    assert!(matches!(
+        wb.restore_intake_draft().unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+}

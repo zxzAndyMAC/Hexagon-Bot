@@ -3401,6 +3401,12 @@ fn discard_intake_draft(state: ProjectState<'_>) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.discard_intake_draft())
 }
 
+/// 「已丢弃 · 撤销」：把刚丢弃的草案挪回（gap B10）。control 组：写库走工作台。
+#[tauri::command]
+fn restore_intake_draft(state: ProjectState<'_>) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.restore_intake_draft())
+}
+
 #[tauri::command]
 fn project_open(state: tauri::State<AppState>) -> bool {
     // D01-exempt: read 侧 is_some 探针——只为答「有没有开着的项目」，
@@ -3937,6 +3943,7 @@ pub fn run() {
             intake_draft,
             update_intake_draft,
             discard_intake_draft,
+            restore_intake_draft,
             project_open,
             project_info,
             dispatch,
