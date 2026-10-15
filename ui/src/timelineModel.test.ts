@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRows, deriveWorkbenchStatus, nodeMarks, openTurn, openTurns, stampedByAutonomy, type StatusSources } from './timelineModel'
+import { buildRows, compactMarks, deriveWorkbenchStatus, markHighlights, nodeMarks, openTurn, openTurns, stampedByAutonomy, type StatusSources } from './timelineModel'
 import { severityOf } from './decisions'
 import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api'
 
@@ -130,12 +130,111 @@ describe('nodeMarks', () => {
     ]
     const rows = buildRows(tl, 'all')
     const marks = nodeMarks(tl, rows, 2)
-    expect(marks[0].pending).toBe(true)
-    expect(marks[0].rowIdx).toBe(-1)
-    expect(marks.map((m) => m.icon)).toEqual(['warn', 'stamp', 'artifact', 'check', 'flag'])
-    expect(marks[1].label).toBe('实现')
+    // ui-redesign 票 06（ADR 0088 节点轨节，interaction §5）：轨道按时间从上到下，待决刻度代表「现在」，
+    // 从首位移到末位、点开的是待决坞；原断言 marks[0] 为待决。
+    expect(marks.at(-1)!.pending).toBe(true)
+    expect(marks.at(-1)!.rowIdx).toBe(-1)
+    expect(marks.at(-1)!.tone).toBe('warn')
+    expect(marks.map((m) => m.icon)).toEqual(['stamp', 'artifact', 'check', 'flag', 'warn'])
+    expect(marks[0].label).toBe('实现')
     // tool_called 不进刻度
     expect(marks).toHaveLength(5)
+  })
+
+  it('刻度长度表示层级：阶段 s、负责人发言 m、事件 e', () => {
+    const tl = [
+      ev(1, 'stage_started', { stage: '实现' }),
+      { ...ev(2, 'owner_message', {}, 'owner'), message: { id: 2, author: 'owner', body: '先做列表页\n再说', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } } as TimelineItem,
+      ev(3, 'artifact_delivered', { path: 'src/TodoList.tsx' }),
+      ev(4, 'stamped', { stage: '实现' }),
+    ]
+    const marks = nodeMarks(tl, buildRows(tl, 'all'), 0)
+    expect(marks.map((m) => [m.type, m.tier])).toEqual([['stage', 's'], ['owner', 'm'], ['deliver', 'e'], ['stamp', 's']])
+    expect(marks[1].label).toBe('先做列表页')
+    expect(marks[1].summary).toBe('先做列表页\n再说')
+    expect(marks.every((m) => m.rowIdx >= 0)).toBe(true)
+  })
+
+  it('新增三类节点：负责人发言、托管决定（mg）、失败（未恢复的 turn_failed 与停止的模型请求，err）', () => {
+    const tl = [
+      ev(1, 'owner_message', {}, 'owner'),
+      ev(2, 'system', { kind: 'managed_decision', card_kind: 'permission', action: 'allow', reason: '只读命令' }, 'fe'),
+      ev(3, 'turn_failed', { error: 'provider 500' }, 'fe'),
+      ev(4, 'turn_failed', { error: 'transient' }, 'be'),
+      ev(5, 'turn_finished', {}, 'be'),
+      ev(6, 'system', { kind: 'model_request_failed', recovery_id: 'r1', error: 'quota' }),
+      ev(7, 'system', { kind: 'model_request_failed', recovery_id: 'r2' }),
+      ev(8, 'system', { kind: 'model_request_recovered', recovery_id: 'r2' }),
+    ]
+    // message 作者为 Agent 的普通发言不是节点
+    tl[1] = { ...tl[1], message: null }
+    tl[2] = { ...tl[2], message: null }
+    tl[3] = { ...tl[3], message: null }
+    tl[4] = { ...tl[4], message: null }
+    const marks = nodeMarks(tl, buildRows(tl, 'all'), 0)
+    expect(marks.map((m) => [m.eventId, m.type, m.tone])).toEqual([
+      [1, 'owner', undefined], [2, 'managed', 'mg'], [3, 'failed', 'err'], [6, 'failed', 'err'],
+    ])
+    expect(marks[1].label).toBe('permission · allow')
+    expect(marks[1].summary).toBe('只读命令')
+  })
+
+  it('托管事项不进待决刻度：托管决定只出 mg，待决数取宿主已排除托管的 owner_pending', () => {
+    const tl = [ev(1, 'system', { kind: 'managed_decision', card_kind: 'permission', action: 'allow' })]
+    // 宿主的 owner_pending 读已把托管处理中的事项排除：托管中待决数为 0
+    const marks = nodeMarks(tl, buildRows(tl, 'all'), 0)
+    expect(marks.some((m) => m.tone === 'warn' || m.pending)).toBe(false)
+    expect(marks.map((m) => m.tone)).toEqual(['mg'])
+  })
+
+  it('跟随时间线筛选：与 buildRows 同一口径', () => {
+    const tl = [
+      ev(1, 'stage_started', { stage: '实现' }),
+      ev(2, 'owner_message', {}, 'owner'),
+      ev(3, 'flag_submitted', { flag_id: 'f1' }),
+      ev(4, 'system', { kind: 'managed_decision', action: 'allow' }),
+    ]
+    const types = (filter: 'all' | 'messages' | 'decisions') =>
+      nodeMarks(tl, buildRows(tl, filter), 1, { filter }).map((m) => m.type)
+    expect(types('all')).toEqual(['stage', 'owner', 'flag', 'managed', 'pending'])
+    expect(types('messages')).toEqual(['owner', 'pending'])
+    expect(types('decisions')).toEqual(['flag', 'pending'])
+  })
+
+  it('宿主节点覆盖未加载的历史（rowIdx -1），已加载的补上谁与何时；三类新节点只取已加载窗口', () => {
+    const tl = [{ ...ev(30, 'artifact_delivered', { path: 'a.md' }, 'fe'), message: null }, ev(31, 'owner_message', {}, 'owner')]
+    const marks = nodeMarks(tl, buildRows(tl, 'all'), 0, { hostNodes: [
+      { event_id: 2, kind: 'stage_started', label: '设计' },
+      { event_id: 30, kind: 'artifact_delivered', label: 'a.md' },
+    ] })
+    expect(marks.map((m) => [m.eventId, m.type, m.rowIdx])).toEqual([[2, 'stage', -1], [30, 'deliver', 0], [31, 'owner', 1]])
+    expect(marks[1].agentId).toBe('fe')
+  })
+})
+
+describe('compactMarks', () => {
+  const mark = (id: number, tier: 's' | 'm' | 'e', tone?: 'err' | 'warn' | 'mg') =>
+    ({ eventId: id, rowIdx: id, icon: 'flag' as const, label: String(id), tier, type: 'flag' as const, tone })
+  it('不超上限时原样返回', () => {
+    const marks = [mark(1, 's'), mark(2, 'e')]
+    expect(compactMarks(marks, 40)).toBe(marks)
+  })
+  it('超出时合并相邻事件刻度，阶段与负责人发言始终保留，合并刻度带最严重的色', () => {
+    const marks = [mark(1, 's'), mark(2, 'e'), mark(3, 'e', 'mg'), mark(4, 'e', 'err'), mark(5, 'm'), mark(6, 'e'), mark(7, 's')]
+    const out = compactMarks(marks, 5)
+    expect(out.map((m) => [m.tier, m.type])).toEqual([['s', 'flag'], ['e', 'events'], ['m', 'flag'], ['e', 'flag'], ['s', 'flag']])
+    expect(out[1].merged).toHaveLength(3)
+    expect(out[1].tone).toBe('err')
+    expect(out[1].eventId).toBe(2)
+  })
+})
+
+describe('markHighlights', () => {
+  const mark = (rowIdx: number) => ({ rowIdx, icon: 'flag' as const, label: '', tier: 'e' as const, type: 'flag' as const })
+  it('视口内刻度提亮，最贴近视口中线的一道为 cur', () => {
+    const marks = [mark(0), mark(10), mark(14), mark(30), mark(-1)]
+    expect(markHighlights(marks, { start: 8, end: 20 })).toEqual([undefined, 'in', 'cur', undefined, undefined])
+    expect(markHighlights(marks, null)).toEqual([undefined, undefined, undefined, undefined, undefined])
   })
 })
 

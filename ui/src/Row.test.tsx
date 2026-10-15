@@ -52,21 +52,33 @@ describe('NodeRail 键盘入口（票 12）', () => {
     })
   })
 
-  it('focusNodeRail 递增脉冲 → 轨道展开且首条 option 聚焦；Enter 跳转后轨道收起', async () => {
+  // ui-redesign 票 06（ADR 0088 节点轨节取代 0051，components C15）：「悬停展开 180px listbox」改为常显刻度列
+  // （role=toolbar，每道刻度是 button + 可读名）；⌘J 聚焦首道刻度并出预览卡，原 listbox/option 断言随之改写。
+  it('focusNodeRail 递增脉冲 → 首道刻度聚焦并出预览卡；↑↓ 移动；Esc 回输入条', async () => {
+    const composer = document.createElement('div')
+    composer.className = 'composer-wrap'
+    const input = document.createElement('textarea')
+    composer.appendChild(input)
+    document.body.appendChild(composer)
+    useUiStore.setState({ timeline: [stamped(1), stamped(2)] })
     const { el, root } = await render(<Timeline />)
-    // 折叠态：无 listbox
-    expect(el.querySelector('[role="listbox"]')).toBeNull()
+    const rail = el.querySelector('[data-node-rail]')!
+    expect(rail.getAttribute('role')).toBe('toolbar')
+    expect(el.querySelector('[data-rail-card]')).toBeNull()
     await act(async () => { useUiStore.getState().focusNodeRail() })
-    // rAF 聚焦
     await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
-    const list = el.querySelector('[role="listbox"]')
-    expect(list).toBeTruthy()
-    const opt = el.querySelector('[role="option"]')!
-    expect(document.activeElement).toBe(opt)
-    await act(async () => { key(opt, 'Enter') })
-    // jump 后轨道收起（open=false → listbox 消失）
-    expect(el.querySelector('[role="listbox"]')).toBeNull()
+    const ticks = [...el.querySelectorAll<HTMLElement>('[data-tick]')]
+    expect(ticks).toHaveLength(2)
+    expect(document.activeElement).toBe(ticks[0])
+    expect(ticks[0].getAttribute('aria-label')).toContain('build')
+    expect(el.querySelector('[data-rail-card]')).not.toBeNull()
+    await act(async () => { key(ticks[0], 'ArrowDown') })
+    expect(document.activeElement).toBe(ticks[1])
+    await act(async () => { key(ticks[1], 'Escape') })
+    expect(document.activeElement).toBe(input)
+    expect(el.querySelector('[data-rail-card]')).toBeNull()
     root.unmount()
+    composer.remove()
   })
 })
 

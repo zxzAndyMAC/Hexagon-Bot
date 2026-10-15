@@ -11,6 +11,8 @@ import { agentSwatch } from "@/colors"
 
 const SIZES = {
   18: "size-[18px] rounded-[5px] text-[10px]",
+  // 补设计（票 06）：回到底部的叠放头像 20（C14 / workbench#jump `.jump .stack .av` 圆角 6、字 10）
+  20: "size-5 rounded-[6px] text-[10px]",
   24: "size-6 rounded-[7px] text-[11.5px]",
   30: "size-[30px] rounded-[9px] text-[13px]",
   40: "size-10 rounded-[11px] text-[16px]",

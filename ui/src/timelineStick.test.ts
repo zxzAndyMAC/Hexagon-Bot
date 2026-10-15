@@ -1,11 +1,48 @@
 import { describe, expect, it } from 'vitest'
 import {
   TIMELINE_TAIL_PX,
+  freshTally,
+  jumpFace,
   listOverflows,
   pinAfterScroll,
   showStickButton,
   tailScrollTop,
 } from './timelineStick'
+import type { EventKind, TimelineItem } from './api'
+
+const item = (id: number, kind: EventKind, opts: { agent?: string; author?: string; payload?: Record<string, unknown> } = {}): TimelineItem => ({
+  event: { id, project_id: 'p', kind, agent_id: opts.agent ?? null, stage_run_id: null, payload: opts.payload ?? {}, created_at: '' },
+  message: opts.author ? { id, author: opts.author, body: 'x', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } : null,
+})
+
+describe('回到底部计数口径（票 06）', () => {
+  it('只算消息、决策、交付；工具调用与系统注记不计；负责人自己的发言不计', () => {
+    const items = [
+      item(1, 'agent_message', { author: 'fe', agent: 'fe' }),
+      item(2, 'agent_message', { author: 'qa', agent: 'qa' }),
+      item(3, 'tool_called', { agent: 'qa' }),
+      item(4, 'tool_result', { agent: 'qa' }),
+      item(5, 'system', { payload: { kind: 'note' } }),
+      item(6, 'flag_submitted', { agent: 'qa' }),
+      item(7, 'artifact_delivered', { agent: 'be' }),
+      item(8, 'owner_message', { author: 'owner' }),
+      item(9, 'agent_message', { author: 'fe', agent: 'fe' }),
+    ]
+    expect(freshTally(items, 1)).toEqual({ count: 4, speakers: ['fe', 'be', 'qa'] })
+    expect(freshTally(items, 9)).toEqual({ count: 0, speakers: [] })
+  })
+
+  it('发言者头像最多 3 个，最近的在前', () => {
+    const items = ['a', 'b', 'c', 'd'].map((who, i) => item(i + 1, 'agent_message', { author: who, agent: who }))
+    expect(freshTally(items, 0).speakers).toEqual(['d', 'c', 'b'])
+  })
+
+  it('三态：正在回复优先于新内容，否则只有箭头', () => {
+    expect(jumpFace({ count: 0, speakers: [] }, null)).toEqual({ kind: 'round' })
+    expect(jumpFace({ count: 3, speakers: ['fe'] }, null)).toEqual({ kind: 'fresh', count: 3, speakers: ['fe'] })
+    expect(jumpFace({ count: 3, speakers: ['fe'] }, 'be')).toEqual({ kind: 'replying', agentId: 'be' })
+  })
+})
 
 describe('时间线贴底', () => {
   it('贴底落点把留白带留在视口里，而不是停在最后一行的底边', () => {

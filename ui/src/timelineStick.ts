@@ -1,3 +1,6 @@
+import type { TimelineItem } from './api'
+import { DECISION_KINDS } from './timelineModel'
+
 /** 底部留白带。输入框在时间线下面、不重叠，固定这段空隙，不跟视口成比例。 */
 export const TIMELINE_TAIL_PX = 96
 
@@ -50,4 +53,43 @@ export function pinAfterScroll(s: StickScroll): boolean {
   const delta = s.scrollTop - s.previousScrollTop
   if (delta < -0.5) return false
   return s.pinned && delta >= -0.5
+}
+
+// ---- 回到底部三态（ui-redesign 票 06，components C14，interaction §4，workbench#jump）----
+
+/** 松钉以来的新内容。speakers：最近的发言者在前，去重，最多 3 个（头像叠放）。 */
+export type FreshTally = { count: number; speakers: string[] }
+
+const MAX_SPEAKERS = 3
+
+/**
+ * 计数口径：只算有意义的行——消息、决策、交付各算一条；工具调用、系统注记不计
+ * （原型「避免『27 条新事件』这种噪音」）。负责人自己的发言不是「新消息」。
+ */
+export function freshTally(items: TimelineItem[], afterId: number): FreshTally {
+  let count = 0
+  const speakers: string[] = []
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    const ev = it.event
+    if (ev.id <= afterId) break
+    if (ev.kind === 'owner_message' || it.message?.author === 'owner') continue
+    if (it.message == null && !DECISION_KINDS.has(ev.kind) && ev.kind !== 'artifact_delivered') continue
+    count++
+    const who = it.message?.author ?? ev.agent_id
+    if (who && !speakers.includes(who) && speakers.length < MAX_SPEAKERS) speakers.push(who)
+  }
+  return { count, speakers }
+}
+
+export type JumpFace =
+  | { kind: 'round' }
+  | { kind: 'fresh'; count: number; speakers: string[] }
+  | { kind: 'replying'; agentId: string }
+
+/** 三态：底部有流式输出时「某某 正在回复」优先；其次有新内容；否则只有箭头。 */
+export function jumpFace(tally: FreshTally, replying: string | null): JumpFace {
+  if (replying) return { kind: 'replying', agentId: replying }
+  if (tally.count > 0) return { kind: 'fresh', count: tally.count, speakers: tally.speakers }
+  return { kind: 'round' }
 }
