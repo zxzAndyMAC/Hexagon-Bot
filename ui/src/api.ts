@@ -115,6 +115,7 @@ import type { AgentDetail } from './gen/AgentDetail'
 import type { ModelEntry } from './gen/ModelEntry'
 import type { ProviderDef } from './gen/ProviderDef'
 import type { KeyProbe } from './gen/KeyProbe'
+import type { ProviderPreset } from './gen/ProviderPreset'
 import type { ProviderView } from './gen/ProviderView'
 import type { ProvidersView } from './gen/ProvidersView'
 import type { SlotBinding } from './gen/SlotBinding'
@@ -152,7 +153,7 @@ export type {
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
   PermissionRuleRow, SkillRow, McpServiceRow,
-  AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
+  AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding, ProviderPreset,
   CreateProjectOpts, CreateStepDto, Event, EventKind, MessageRow, MessageToken, ExportFilter,
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
   RepoEntry, DiagRecord, PromptEntry, TranslateOutcome,
@@ -629,6 +630,8 @@ export const api = {
   // gap B4：向导服务商步实时密钥检测（请求一次模型目录；secret 空 = 用已存钥匙）
   probeProviderKey: (provider: ProviderDef, secret: string | undefined, model: string) =>
     call<KeyProbe>('probe_provider_key', { provider, secret: secret || null, model }),
+  // gap B8：内置服务商预设（向导服务商下拉；静态表，读组）
+  providerPresets: () => call<ProviderPreset[]>('provider_presets'),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
   /// 2026-09-25 答问优化流：qa 携带答问卡收集的答案（可选）。
@@ -1690,6 +1693,14 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return (String(args?.secret ?? '').includes('bad')
         ? { ok: false, failure: 'authentication', status: 401, model_listed: null, window: null }
         : { ok: true, failure: null, status: null, model_listed: true, window: 200000 }) as T
+    case 'provider_presets':
+      return [
+        { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },
+        { id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '' },
+        { id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '' },
+        { id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '' },
+        { id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '' },
+      ] as T
     case 'fetch_provider_models':
       return [
         { id: 'deepseek/deepseek-chat', group: 'deepseek', caps: ['tools'] },

@@ -747,6 +747,7 @@ export default {
   },
   wizard: {
     keyHelp: "存进系统钥匙串，不写入项目目录。",
+    providerField: {"label": "服务商", "configured": "已配置", "presets": "内置预设", "custom": "自定义…"},
     probe: {"running": "检测中…", "ok": "检测通过", "okWindow": "检测通过 · {{window}} 窗口", "unlisted": "目录里没有这个模型", "unlistedHelp": "钥匙可用，但服务商的模型目录里没有这个名字；仍可保存，先确认没有拼错。", "failed": "检测失败", "failedWith": "检测没有完成：{{reason}}", "reason": {"authentication": "服务商拒绝了这把钥匙，检查是否复制完整、是否已过期。", "quota": "服务商账户额度不足，到服务商后台检查账单。", "rate_limited": "服务商正在限流，稍等片刻会自动重新检测。", "provider_unavailable": "服务商暂时不可用，稍后再试。", "request_rejected": "服务商拒绝了这次请求，检查服务商类型是否选对。", "endpoint_not_found": "这个地址上没有模型目录接口，检查 Base URL（常见是少了或多了 /v1）。", "transport": "连不上服务商，检查网络和 Base URL。", "deadline": "服务商 30 秒内没有回应，检查网络后再试。", "invalid_response": "服务商的回应不是模型目录，检查 Base URL 和服务商类型。", "invalid_url": "Base URL 不是有效地址。", "missing_credential": "还没有钥匙，填上 API Key 后会自动检测。"}},
     savedToDraft: "改动已存入向导草稿 · 只作用于本项目",
     shell: {"title": "新建项目", "cancel": "取消", "autosave": "草稿自动保存", "aiLocked": "AI 正在生成，完成前先锁定", "qaLocked": "答问期间先锁定", "picked": "已选 {{count}} 个"},
@@ -764,7 +765,6 @@ export default {
     providersHint: '先配置模型服务商，再选目录。启用的供应商、已存的钥匙和 default 槽三项齐全才能继续。',
     providersReady: '已就绪',
     providersBlocked: '还缺启用的供应商、钥匙或 default 槽，不能进入下一步。',
-    providersPick: 'default 槽使用的供应商',
     providersApply: '保存并绑定 default',
     dirLabel: '项目目录',
     dirPlaceholder: '/path/to/project',

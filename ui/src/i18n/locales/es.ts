@@ -747,6 +747,7 @@ export default {
   },
   wizard: {
     keyHelp: "Se guarda en el llavero del sistema, nunca en la carpeta del proyecto.",
+    providerField: {"label": "Proveedor", "configured": "Configurados", "presets": "Ajustes predefinidos", "custom": "Personalizado…"},
     probe: {"running": "Comprobando…", "ok": "La clave funciona", "okWindow": "La clave funciona · ventana {{window}}", "unlisted": "Modelo fuera del catálogo", "unlistedHelp": "La clave funciona, pero el proveedor no lista este modelo; puedes guardar igualmente — revisa antes la ortografía.", "failed": "Falló la comprobación", "failedWith": "La comprobación no terminó: {{reason}}", "reason": {"authentication": "El proveedor rechazó esta clave. Comprueba que esté completa y no haya caducado.", "quota": "La cuenta del proveedor no tiene saldo. Revisa la facturación en su consola.", "rate_limited": "El proveedor está limitando peticiones. Espera un momento; se vuelve a comprobar al editar.", "provider_unavailable": "El proveedor no está disponible por ahora. Inténtalo más tarde.", "request_rejected": "El proveedor rechazó la petición. Comprueba el tipo de proveedor.", "endpoint_not_found": "No hay catálogo de modelos en esta dirección. Revisa la Base URL (a menudo sobra o falta /v1).", "transport": "No se pudo contactar con el proveedor. Revisa la red y la Base URL.", "deadline": "El proveedor no respondió en 30 segundos. Revisa la red e inténtalo de nuevo.", "invalid_response": "La respuesta no es un catálogo de modelos. Revisa la Base URL y el tipo.", "invalid_url": "La Base URL no es una dirección válida.", "missing_credential": "Aún no hay clave. Escribe la clave API y se comprobará automáticamente."}},
     savedToDraft: "Guardado en el borrador del asistente · solo este proyecto",
     shell: {"title": "Nuevo proyecto", "cancel": "Cancelar", "autosave": "El borrador se guarda solo", "aiLocked": "La IA está generando; bloqueado hasta que termine", "qaLocked": "Bloqueado mientras respondes", "picked": "{{count}} seleccionados"},
@@ -764,7 +765,6 @@ export default {
     providersHint: 'Configura un proveedor de modelo antes de elegir el directorio. Para continuar hacen falta un proveedor activado, una clave guardada y el slot default.',
     providersReady: 'Listo',
     providersBlocked: 'Falta un proveedor activado, la clave o el slot default.',
-    providersPick: 'Proveedor del slot default',
     providersApply: 'Guardar y vincular default',
     dirLabel: 'Directorio del proyecto',
     dirPlaceholder: '/path/to/project',

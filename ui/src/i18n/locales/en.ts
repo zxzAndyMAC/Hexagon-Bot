@@ -747,6 +747,7 @@ export default {
   },
   wizard: {
     keyHelp: "Stored in the system keychain, never in the project folder.",
+    providerField: {"label": "Provider", "configured": "Configured", "presets": "Built-in presets", "custom": "Custom…"},
     probe: {"running": "Checking…", "ok": "Key works", "okWindow": "Key works · {{window}} window", "unlisted": "Model not in catalog", "unlistedHelp": "The key works, but the provider does not list this model; you can still save — check the spelling first.", "failed": "Check failed", "failedWith": "The check did not finish: {{reason}}", "reason": {"authentication": "The provider rejected this key. Check that it was copied in full and has not expired.", "quota": "The provider account is out of credit. Check billing in the provider console.", "rate_limited": "The provider is rate limiting. Wait a moment; the check runs again when you edit.", "provider_unavailable": "The provider is temporarily unavailable. Try again later.", "request_rejected": "The provider rejected the request. Check that the provider type is right.", "endpoint_not_found": "There is no model catalog at this address. Check the Base URL (often a missing or extra /v1).", "transport": "Could not reach the provider. Check your network and the Base URL.", "deadline": "The provider did not answer within 30 seconds. Check your network and try again.", "invalid_response": "The provider did not return a model catalog. Check the Base URL and provider type.", "invalid_url": "The Base URL is not a valid address.", "missing_credential": "No key yet. Enter the API key and it is checked automatically."}},
     savedToDraft: "Saved to the wizard draft · this project only",
     shell: {"title": "New project", "cancel": "Cancel", "autosave": "Draft saves automatically", "aiLocked": "AI is generating — locked until it finishes", "qaLocked": "Locked while you answer", "picked": "{{count}} selected"},
@@ -764,7 +765,6 @@ export default {
     providersHint: 'Configure a model provider before picking a directory. Continue needs an enabled provider, a saved key, and a default slot.',
     providersReady: 'Ready',
     providersBlocked: 'An enabled provider, a saved key, and the default slot are all required.',
-    providersPick: 'Provider for the default slot',
     providersApply: 'Save and bind default',
     dirLabel: 'Project directory',
     dirPlaceholder: '/path/to/project',
