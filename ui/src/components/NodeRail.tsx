@@ -49,7 +49,9 @@ function PreviewCard({ mark, top, roleOf }: { mark: NodeMark; top: number; roleO
   const avatars = useUiStore(s => s.avatars)
   const who = whoOf(mark, t, roleOf)
   const when = clock(mark.at, i18n.language)
-  const summary = mark.merged ? mark.merged.map(m => m.label).join(' · ') : mark.summary
+  const raw = mark.merged ? mark.merged.map(m => m.label).join(' · ') : mark.summary
+  // 一行的负责人原话已经是标题，不再重复一遍摘要
+  const summary = raw?.trim() === mark.label.trim() ? undefined : raw
   return (
     <div className="rail-card" style={{ top }} aria-hidden data-rail-card>
       <div className="rail-card-k">
@@ -58,7 +60,7 @@ function PreviewCard({ mark, top, roleOf }: { mark: NodeMark; top: number; roleO
         <span className="rail-sp" />
         <Kbd>↵ {t('rail.jump')}</Kbd>
       </div>
-      <div className="rail-card-t">{titleOf(mark, t)}</div>
+      <div className="rail-card-t" data-mono={mark.type === 'deliver' || undefined}>{titleOf(mark, t)}</div>
       {summary && <div className="rail-card-p">{summary}</div>}
       {(who || when || mark.tone) && (
         <div className="rail-card-f">
