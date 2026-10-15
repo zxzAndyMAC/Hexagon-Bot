@@ -228,7 +228,9 @@
   /* 组件自身的底阴影（hx-focus 叠焦点环时保留它）；@property 关掉继承，免得子组件吃到父组件的阴影 */
   --hx-shadow: 0 0 #0000;
 }
-@property --hx-shadow { syntax: '*'; inherits: false; }
+/* 修复即文档（票 15 截图核对）：原先没有 initial-value——inherits:false 时非根元素拿到的是
+   guaranteed-invalid，`box-shadow: var(--hx-shadow), var(--focus-ring)` 整条失效，键盘焦点环从不出现。 */
+@property --hx-shadow { syntax: '*'; inherits: false; initial-value: 0 0 #0000; }
 
 /* components §0 通用状态约定的三件套：
    hx-press = 底色 150ms + 按下 80ms scale(.98)；hx-focus = 原阴影 + 焦点环（鼠标点击不出环）；
