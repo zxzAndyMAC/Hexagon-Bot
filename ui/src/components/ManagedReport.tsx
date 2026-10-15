@@ -5,9 +5,13 @@ import { useUiStore } from '../store'
 import type { ExternalOperation } from '../gen/ExternalOperation'
 import type { ManagedRecord } from '../gen/ManagedRecord'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
-import { useManagedHistory } from '../useDelegation'
+import { useDelegation, useManagedHistory } from '../useDelegation'
 import { kindTitleKey } from '../decisions'
-import { parseTraceTime } from '../managedView'
+import { parseTraceTime, sessionMinutes } from '../managedView'
+import { exportManagedReport, managedReportMarkdown, spendText } from '../managedReportExport'
+import { bindingFor, formatBinding, matches } from '../keymap'
+import { toastError } from '../toast'
+import type { ManagedSummary } from '../gen/ManagedSummary'
 import { Icon } from './Icon'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -27,6 +31,7 @@ const show = (eventId: number) => window.dispatchEvent(new CustomEvent(TIMELINE_
 export function ManagedReport({ card = false, onClose }: { card?: boolean; onClose?: () => void }) {
   const { t } = useTranslation()
   const { history, failed } = useManagedHistory()
+  const { summary } = useDelegation()
   const [external, setExternal] = useState<ExternalOperation[]>([])
   const [more, setMore] = useState(false)
   const latest = useUiStore(s => s.timelineFacts?.latest_event_id ?? 0)
@@ -39,6 +44,26 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
   const unfinished = records.filter(r => r.result !== 'done')
   const done = records.filter(r => r.result === 'done')
   const shownDone = more ? done : done.slice(0, DONE_SHOWN)
+  const period = periodText(t, summary)
+  const exportReport = async () => {
+    try {
+      const markdown = managedReportMarkdown(t, { title: t('delegation.report'), period, records, external, summary,
+        recordTitle: record => recordTitle(t, record) })
+      if (await exportManagedReport(markdown)) useUiStore.getState().pushToast(t('delegation.exportDone'))
+    } catch (error) { toastError(error) }
+  }
+  const exportRef = useRef(exportReport)
+  useEffect(() => { exportRef.current = exportReport })
+  useEffect(() => {
+    if (!card) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || !matches(event, bindingFor('managedExport'))) return
+      event.preventDefault(); void exportRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [card])
+  const exportTip = [t('delegation.exportReport'), formatBinding(bindingFor('managedExport'))].filter(Boolean).join(' · ')
   const close = onClose
     ? (eventId: number) => { onClose(); show(eventId) }
     : show
@@ -52,8 +77,9 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
           <div className="grid grid-cols-4 gap-2.5" data-managed-kpi>
             <Kpi label={t('delegation.kpiDecisions')} value={records.length} />
             <Kpi label={t('delegation.kpiDone')} value={done.length} tone="text-green" />
-            <Kpi label={t('delegation.kpiIncomplete')} value={unfinished.filter(r => r.result === 'incomplete').length} tone="text-red" />
-            <Kpi label={t('delegation.kpiFailed')} value={unfinished.filter(r => r.result === 'failed').length} tone="text-red" />
+            {/* gap A3（managed#report）：第四格由「失败」换成「花费」（本次托管时段）；失败并入「未完成」。 */}
+            <Kpi label={t('delegation.kpiIncomplete')} value={unfinished.length} tone="text-red" />
+            <Kpi label={t('delegation.kpiSpend')} value={summary ? spendText(t, summary) : '—'} />
           </div>
           <p className="mt-1.5 text-[12px] text-ink-3">{t('delegation.recent', { count: records.length })}</p>
           {unfinished.length > 0 && <>
@@ -78,7 +104,8 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
                   title={t('delegation.showInTimeline')} onClick={() => close(record.event_id)}>
                   <Icon name="circle-check" size={14} className="flex-none text-green" />
                   <span className="min-w-0 flex-1 truncate">{recordTitle(t, record)}</span>
-                  <span className="text-[12px] text-ink-3">{t(`delegation.via.${record.via}`, { defaultValue: record.via })}</span>
+                  {/* gap A5：依据用宿主的证据分类（真实检查 / 有质量证据 / 宿主已核实 / 项目内 / 模型选择 / 宿主规则）。 */}
+                  <span className="text-[12px] text-ink-3" data-evidence={record.evidence}>{t(`delegation.evidence.${record.evidence}`)}</span>
                 </button>
               </li>)}
             </ul>
@@ -93,8 +120,11 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
     {card && <div className="mb-3 flex items-center gap-2">
       <span className="mg-av"><Icon name="bot" size={12} /></span>
       <b className="text-[15px] font-semibold text-ink">{t('delegation.report')}</b>
-      {/* 时段缺宿主开启时刻（功能缺口），不写。 */}
+      {period && <span className="text-[13px] text-ink-3" data-managed-period>{period}</span>}
       <span className="flex-1" />
+      {records.length > 0 && <Button size="xs" variant="ghost" onClick={() => { void exportReport() }} title={exportTip}>
+        <Icon name="export" size={12} />{t('delegation.export')}
+      </Button>}
       {onClose && <Button size="xs" variant="ghost" onClick={onClose} title={t('topbar.flowClose')} aria-label={t('topbar.flowClose')}>
         <Icon name="close" size={12} />
       </Button>}
@@ -104,7 +134,17 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
   </section>
 }
 
-function Kpi({ label, value, tone }: { label: string; value: number; tone?: string }) {
+/** gap A2：报告头时段「14:20 – 15:02 · 42 分钟」；仍在托管时止于现在。 */
+function periodText(t: (key: string, opts?: Record<string, unknown>) => string, summary: ManagedSummary | null): string | null {
+  const from = summary?.started_at ? parseTraceTime(summary.started_at) : null
+  const minutes = summary ? sessionMinutes(summary.started_at, summary.ended_at) : null
+  if (!summary || !from || minutes == null) return null
+  const to = summary.ended_at ? parseTraceTime(summary.ended_at) ?? new Date() : new Date()
+  const hm = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return t('delegation.period', { from: hm(from), to: hm(to), count: minutes })
+}
+
+function Kpi({ label, value, tone }: { label: string; value: number | string; tone?: string }) {
   return <div className="rounded-[10px] bg-inset p-3">
     <div className="text-[12px] text-ink-3">{label}</div>
     <div className={`text-[15px] font-semibold tabular-nums ${tone ?? 'text-ink'}`}>{value}</div>

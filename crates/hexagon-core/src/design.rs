@@ -8,8 +8,12 @@ use crate::{
 use rusqlite::OptionalExtension;
 use serde_json::json;
 mod guard;
+mod guidance;
 mod preview;
 pub(crate) use guard::{guard_shell, guard_write};
+pub use guidance::PreviousGuidance;
+#[cfg(test)]
+pub(crate) use guidance::TEST_PATH as GUIDANCE_TEST_PATH;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
@@ -62,6 +66,9 @@ pub struct DesignDirection {
     pub selected_option: Option<String>,
     pub existing_guidance: Option<String>,
     pub selected_at: Option<String>,
+    /// Gap A7: the owner's last confirmed visual guidance (any project), only
+    /// while this project's direction is still open. See `design/guidance.rs`.
+    pub previous_guidance: Option<PreviousGuidance>,
 }
 fn invalid(message: &str) -> ToolError {
     ToolError::BadInput(message.into())
@@ -85,6 +92,7 @@ pub fn read(db: &Db, project: &str) -> Result<DesignDirection, ToolError> {
             existing_guidance,
             selected_at,
         )) => Ok(DesignDirection {
+            previous_guidance: open_guidance(&state),
             project_id: project.into(),
             revision,
             question_id,
@@ -104,8 +112,15 @@ pub fn read(db: &Db, project: &str) -> Result<DesignDirection, ToolError> {
             selected_option: None,
             existing_guidance: None,
             selected_at: None,
+            previous_guidance: open_guidance("unconfirmed"),
         }),
     }
+}
+
+fn open_guidance(state: &str) -> Option<PreviousGuidance> {
+    matches!(state, "unconfirmed" | "pending")
+        .then(guidance::last)
+        .flatten()
 }
 
 pub fn pending(db: &Db, project: &str) -> rusqlite::Result<bool> {
@@ -128,6 +143,10 @@ pub fn brief(db: &Db, project: &str) -> Result<serde_json::Value, ToolError> {
     Ok(
         json!({"state":direction.state,"revision":direction.revision,
         "owner_confirmed":direction.selected_at.is_some(),"existing_guidance":direction.existing_guidance,
+        // Gap A7: while the direction is open, proposals start from the owner's last confirmed guidance
+        // (the D12 card tells the owner so); it is a starting point, never an approval for this project.
+        "previous_owner_guidance":direction.previous_guidance.as_ref().map(|g| json!({"source":g.source,"title":g.title,"summary":g.summary,
+            "use":"start proposals from this unless the project brief says otherwise; the owner must still choose"})),
         "selected":selected.map(|option| json!({"id":option.id,"title":option.title,"description":option.description,"layout":option.layout,"typography":option.typography,"palette":option.palette,
             "mockups":option.mockups.iter().map(|image| json!({"page":image.page,"digest":image.digest})).collect::<Vec<_>>() }))}),
     )
@@ -301,7 +320,11 @@ fn choose_inner(
         "owner_selected",
         started,
     );
-    read(db, project)
+    let direction = read(db, project)?;
+    if by == "owner" {
+        guidance::remember(&direction);
+    }
+    Ok(direction)
 }
 
 pub struct ProposeDesign;

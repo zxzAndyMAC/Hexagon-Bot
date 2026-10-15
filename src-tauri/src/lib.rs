@@ -1787,6 +1787,25 @@ fn managed_history(
     })
 }
 
+/// Gap A2/A3 (ui-redesign 2026-10-15): managed session window, project budget
+/// and session spend for the pill popover and the report (read connection).
+#[tauri::command]
+fn managed_summary(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::api::ManagedSummary, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::api::managed_summary(db, PROJECT_ID).map_err(cmd_err)
+    })
+}
+
+/// Gap A4: write the UI-rendered managed report to the path the owner picked
+/// in the save dialog (same contract as export_events). No ledger access.
+#[tauri::command]
+fn export_managed_report(path: String, markdown: String) -> Result<(), CmdError> {
+    hexagon_core::api::export_managed_report(std::path::Path::new(&path), &markdown)
+        .map_err(cmd_err)
+}
+
 /// Managed-followups ticket 05: delegated external operations for the
 /// report (read connection).
 #[tauri::command]
@@ -3770,6 +3789,8 @@ pub fn run() {
             set_project_delegation,
             managed_history,
             managed_external_ops,
+            managed_summary,
+            export_managed_report,
             managed_processing,
             set_project_delegation_paused,
             stop_model_request,

@@ -15,8 +15,13 @@ use serde::Serialize;
 
 mod act;
 mod external;
+mod report;
 mod routes;
 pub use external::{managed_external_ops, ExternalOperation};
+pub use report::{
+    classify as classify_managed, export_managed_report, managed_summary, ManagedEvidence,
+    ManagedScope, ManagedSummary,
+};
 // Glob re-export keeps each item's own visibility (pub for the IPC reads).
 pub use routes::*;
 
@@ -74,6 +79,9 @@ pub struct ManagedRecord {
     /// done | incomplete | failed — computed here from one closed table so
     /// the UI never guesses from outcome strings (test3/23 review).
     pub result: String,
+    /// Gap A5: closed classification from (action, reason, via) — see `report::classify`.
+    pub scope: ManagedScope,
+    pub evidence: ManagedEvidence,
 }
 
 /// Outcomes where the decision was made but the business item did not
@@ -112,20 +120,29 @@ pub fn managed_history(
         .events(project_id, Some(&[EventKind::System]))?
         .into_iter()
         .filter(|event| event.payload["kind"] == "managed_decision")
-        .map(|event| ManagedRecord {
-            event_id: event.id,
-            card_id: text(&event.payload["card_id"]),
-            card_kind: text(&event.payload["card_kind"]),
-            action: text(&event.payload["action"]),
-            reason: text(&event.payload["reason"]),
-            via: text(&event.payload["via"]),
-            outcome: text(&event.payload["outcome"]),
-            actor: text(&event.payload["actor"]),
-            result: result_of(
+        .map(|event| {
+            let (scope, evidence) = report::classify(
                 event.payload["action"].as_str().unwrap_or_default(),
-                event.payload["outcome"].as_str().unwrap_or_default(),
-            )
-            .into(),
+                event.payload["reason"].as_str().unwrap_or_default(),
+                event.payload["via"].as_str().unwrap_or_default(),
+            );
+            ManagedRecord {
+                event_id: event.id,
+                card_id: text(&event.payload["card_id"]),
+                card_kind: text(&event.payload["card_kind"]),
+                action: text(&event.payload["action"]),
+                reason: text(&event.payload["reason"]),
+                via: text(&event.payload["via"]),
+                outcome: text(&event.payload["outcome"]),
+                actor: text(&event.payload["actor"]),
+                result: result_of(
+                    event.payload["action"].as_str().unwrap_or_default(),
+                    event.payload["outcome"].as_str().unwrap_or_default(),
+                )
+                .into(),
+                scope,
+                evidence,
+            }
         })
         .collect();
     records.reverse();

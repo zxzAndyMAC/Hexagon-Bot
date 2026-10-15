@@ -13,7 +13,7 @@ const el = document.createElement('div')
 let root: ReturnType<typeof createRoot>
 afterEach(() => { act(() => root?.unmount()); el.replaceChildren(); el.remove(); vi.restoreAllMocks() })
 const card: PendingQuestion = { id: 'q-design', kind: 'escalation', agent_id: 'a0', state: 'queued', payload: { sub: 'design_direction', revision: 2 } }
-const direction: DesignDirection = { project_id: 'p', revision: 2, question_id: 'q-design', state: 'pending', selected_option: null, selected_at: null, existing_guidance: null, options: [
+const direction: DesignDirection = { project_id: 'p', revision: 2, question_id: 'q-design', state: 'pending', selected_option: null, selected_at: null, existing_guidance: null, previous_guidance: null, options: [
   { id: 'calm', title: 'Calm editorial', description: 'Quiet reading', layout: 'Two columns', typography: 'Serif headings', palette: 'Warm grey', mockups: [{ page: 'Dashboard', mime: 'image/png', digest: 'abc', data_url: 'data:image/png;base64,YQ==' }] },
   { id: 'dense', title: 'Dense dashboard', description: 'Expert controls', layout: 'Grid', typography: 'Sans', palette: 'Ink', mockups: [] },
 ] }
@@ -32,6 +32,23 @@ it('requires an explicit choice and submits the displayed immutable revision', a
   expect(el.querySelector('article[data-selected]')).not.toBeNull()
   await act(async () => { use.click() })
   expect(choose).toHaveBeenCalledWith('q-design', 2, 'calm', undefined)
+})
+// gap A7（2026-10-15，decisions#design 底栏）：宿主给出上次视觉指导时出信号，否则仍写方案版本。
+it('footer signals the owner\'s last visual guidance from the host, else the revision', async () => {
+  vi.spyOn(api, 'designDirection').mockResolvedValue({ ...direction,
+    previous_guidance: { source: 'selected', title: 'Calm editorial', summary: 'Quiet reading', recorded_at: '2026-10-01 09:00:00' } })
+  root = createRoot(el)
+  await act(async () => { root.render(<DesignChoices q={card} />) })
+  const signal = el.querySelector('[data-previous-guidance="selected"]')!
+  expect(signal.textContent).toBe('Builds on your last visual guidance')
+  expect(signal.getAttribute('title')).toContain('Quiet reading')
+  expect(signal.querySelectorAll('.design-signal-bars i')).toHaveLength(3)
+  act(() => root.unmount())
+  vi.spyOn(api, 'designDirection').mockResolvedValue(direction)
+  root = createRoot(el)
+  await act(async () => { root.render(<DesignChoices q={card} />) })
+  expect(el.querySelector('[data-previous-guidance]')).toBeNull()
+  expect(el.textContent).toMatch(/2/)
 })
 it('never offers choices from a superseded card', async () => {
   vi.spyOn(api, 'designDirection').mockResolvedValue({ ...direction, revision: 3, question_id: 'new-q' })

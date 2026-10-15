@@ -30,6 +30,7 @@ import type { ApprovalMode } from './gen/ApprovalMode'
 import type { ApprovalModeStatus } from './gen/ApprovalModeStatus'
 import type { DelegationStatus } from './gen/DelegationStatus'
 import type { ManagedRecord } from './gen/ManagedRecord'
+import type { ManagedSummary } from './gen/ManagedSummary'
 import type { ExternalOperation } from './gen/ExternalOperation'
 import type { DesktopPermissions } from './gen/DesktopPermissions'
 import type { DesktopPermission } from './gen/DesktopPermission'
@@ -385,6 +386,10 @@ export const api = {
   setProjectDelegation: (enabled: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation', { enabled, expectedProjectRoot }),
   managedHistory: () => call<ManagedRecord[]>('managed_history'),
   managedExternalOps: () => call<ExternalOperation[]>('managed_external_ops'),
+  /** gap A2/A3：托管时段、项目预算与本次托管花费（read 组）。 */
+  managedSummary: () => call<ManagedSummary>('managed_summary'),
+  /** gap A4：把 UI 生成的托管报告 Markdown 写到负责人在保存对话框里选的路径。 */
+  exportManagedReport: (path: string, markdown: string) => call<null>('export_managed_report', { path, markdown }),
   managedProcessing: () => call<PendingQuestion[]>('managed_processing'),
   setProjectDelegationPaused: (paused: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation_paused', { paused, expectedProjectRoot }),
   stopModelRequest: (questionId: string) => call<null>('stop_model_request', { questionId }),
@@ -969,9 +974,9 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
 const mockManaged = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockmanaged')
 let MOCK_MANAGED = { enabled: true, paused: false }
 const MOCK_MANAGED_HISTORY = [
-  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'no_configured_target', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete' },
-  { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'model_choice', via: 'model', outcome: 'stamped', actor: 'managed:g1:1', result: 'done' },
-  { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done' },
+  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'target_missing', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule' },
+  { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'evidence_complete', via: 'host', outcome: 'stamped', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'real_check' },
+  { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
 ]
 const MOCK_MANAGED_EXTERNAL = [
   { event_id: 122, card_id: 'q-m1', kind: 'local_trash', target: '~/Downloads/old-build.zip', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-14 03:58:00', verification: 'host_verified_recoverable', trash_path: '~/.Trash/old-build.zip' },
@@ -1257,7 +1262,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
         { id: 'q-stall', kind: 'stall', agent_id: 'a3', payload: { branch: 'no_reply', retry: true, role: '前端', instruction: '把列表过滤修一下' }, state: 'queued' },
-        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
+        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', commit_count: 12, stage_count: 3, warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
         { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
         { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
         { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
@@ -1489,6 +1494,14 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return (mockManaged() ? MOCK_MANAGED_HISTORY : []) as T
     case 'managed_external_ops':
       return (mockManaged() ? MOCK_MANAGED_EXTERNAL : []) as T
+    case 'managed_summary': {
+      const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace('T', ' ')
+      return (mockManaged()
+        ? { started_at: at(42 * 60_000), ended_at: MOCK_MANAGED.enabled ? null : at(0), limit_cents: 10_000, spent_mc: 4_540_000, session_spent_mc: 680_000, cost_unknown: false }
+        : { started_at: null, ended_at: null, limit_cents: null, spent_mc: 0, session_spent_mc: 0, cost_unknown: false }) as T
+    }
+    case 'export_managed_report':
+      return null as T
     case 'managed_processing':
       return (mockManaged() && MOCK_MANAGED.enabled ? [
         { id: 'q-m4', kind: 'stamp', agent_id: 'a3', payload: { stage: '测试' }, state: 'queued' },
@@ -1496,8 +1509,9 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] : []) as T
     case 'design_direction':
       // 票 04 截图比对（decisions#design）：`?mockdesign` 时给一张 D12 视觉方向卡的三套方案；默认关，既有测试依赖空夹具
-      if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS } as T
-      return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null } as T
+      if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS,
+        previous_guidance: { source: 'selected', title: '清爽工具', summary: 'Inter · 蓝灰 · 8px 圆角', recorded_at: '2026-10-01 09:00:00' } } as T
+      return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null, previous_guidance: null } as T
     case 'choose_design_direction':
     case 'desktop_screenshot':
       throw new Error('Desktop app required')

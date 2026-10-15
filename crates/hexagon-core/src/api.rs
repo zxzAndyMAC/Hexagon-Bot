@@ -5645,6 +5645,9 @@ pub fn timeline_nodes(
 }
 
 #[cfg(test)]
+#[path = "api/timeline_nodes_tests.rs"]
+mod timeline_nodes_tests;
+#[cfg(test)]
 #[path = "api/timeline_window_tests.rs"]
 mod timeline_window_tests;
 
@@ -5660,8 +5663,9 @@ pub fn timeline_window_metadata(
 mod action_recovery;
 mod managed;
 pub use managed::{
-    managed_decide, managed_external_ops, managed_history, managed_processing, owner_pending,
-    ExternalOperation, ManagedCandidate, ManagedDecision, ManagedRecord, ManagedRoute,
+    classify_managed, export_managed_report, managed_decide, managed_external_ops, managed_history,
+    managed_processing, managed_summary, owner_pending, ExternalOperation, ManagedCandidate,
+    ManagedDecision, ManagedEvidence, ManagedRecord, ManagedRoute, ManagedScope, ManagedSummary,
 };
 mod model_recovery;
 pub use action_recovery::{ReconcileReport, ReconcileVerdict};

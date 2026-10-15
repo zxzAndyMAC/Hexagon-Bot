@@ -7,6 +7,7 @@ import type { TimelineFactsRequest } from './gen/TimelineFactsRequest'
 import type { TimelineFacts } from './gen/TimelineFacts'
 import type { TimelineNodesRequest } from './gen/TimelineNodesRequest'
 import type { TimelineNodesPage } from './gen/TimelineNodesPage'
+import { timelineNodesOf } from './timelineModel'
 import type { TimelineTurnWindow } from './gen/TimelineTurnWindow'
 import type { ContextSnapshot } from './gen/ContextSnapshot'
 import { DECISION_KINDS, SYS_HIGH_RISK } from './timelineModel'
@@ -93,7 +94,10 @@ export function mockTimelineFacts(all: TimelineItem[], request: TimelineFactsReq
   return facts
 }
 export function mockTimelineNodes(all: TimelineItem[], request: TimelineNodesRequest): TimelineNodesPage {
-  const kinds = ['stage_started','stamped','artifact_delivered','flag_submitted','flag_adjudicated','escalated','check_overridden','install_completed']
+  const after = request.after_event_id ?? 0
+  const open = new Set(timelineNodesOf(all).map(n => n.event_id))
+  const before = timelineNodesOf(all.filter(item => item.event.id <= after))
   return { project_root: request.expected_project_root, watermark: all.at(-1)?.event.id ?? 0,
-    nodes: all.filter(item => item.event.id > (request.after_event_id ?? 0) && kinds.includes(item.event.kind)).map(({event}) => ({ event_id: event.id, kind: event.kind, label: String(event.payload.stage ?? event.payload.path ?? event.payload.flag_id ?? event.kind) })) }
+    nodes: timelineNodesOf(all).filter(n => n.event_id > after),
+    retired: before.filter(n => n.class === 'failed' && !open.has(n.event_id)).map(n => n.event_id) }
 }
