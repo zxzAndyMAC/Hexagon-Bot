@@ -19,7 +19,9 @@ describe('Icon registry (Lucide)', () => {
     expect(svg).not.toBeNull()
     expect(svg.getAttribute('aria-hidden')).toBe('true')
     expect(svg.getAttribute('stroke-width')).toBe('1.75')
-    expect(svg.getAttribute('width')).toBe('14')
+    // 票 15：默认尺寸 14 → 16（foundations §7 默认 `.i` = 16）。票 01 为不动旧调用处暂留 14
+    // （reconciliation §5 票 01 偏差 4，已随本票删除）；仍要 14 的调用处已显式写 size={14}。
+    expect(svg.getAttribute('width')).toBe('16')
     expect(svg.querySelectorAll('path, circle, rect, line, polyline, polygon, ellipse').length).toBeGreaterThan(0)
   })
 })

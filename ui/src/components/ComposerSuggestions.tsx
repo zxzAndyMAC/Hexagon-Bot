@@ -44,7 +44,7 @@ export const ComposerSuggestions = forwardRef<HTMLDivElement, {
             <b>{it.name}{it.inst && <> <span className="inst">[{it.inst}]</span></>}</b>
             <span className="d">{it.sleeping ? t('composer.sleeping') : <span className="on-dot" aria-label={t('composer.awake')} />}</span>
           </> : <>
-            {it.dir ? <Icon name="folder" className="ic-dir" /> : <Icon name={it.artifact != null ? 'file-text' : 'file'} className="ic-file" />}
+            {it.dir ? <Icon name="folder" className="ic-dir" size={14} /> : <Icon name={it.artifact != null ? 'file-text' : 'file'} className="ic-file" size={14} />}
             <span className="mono">{it.path}</span>
             {(it.dir || it.artifact != null) && <span className="d">
               {it.dir ? t('composer.directory') : t('composer.artifactVersion', { version: it.artifact })}

@@ -139,10 +139,10 @@ export function BriefQaCard({ questions, index, answers, onIndex, onAnswer, onCo
       <div className="flex flex-none items-center gap-2 border-t border-line-soft py-2.5 pr-3 pl-3.5">
         <span className="inline-flex items-center gap-0.5">
           <IconButton size="sm" label={t('wizard.qa.prev')} disabled={index === 0} onClick={() => onIndex(index - 1)}>
-            <Icon name="chevron-left" />
+            <Icon name="chevron-left" size={14} />
           </IconButton>
           <IconButton size="sm" label={t('wizard.qa.next')} disabled={index >= questions.length - 1} onClick={() => onIndex(index + 1)}>
-            <Icon name="chevron-right" />
+            <Icon name="chevron-right" size={14} />
           </IconButton>
         </span>
         <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">

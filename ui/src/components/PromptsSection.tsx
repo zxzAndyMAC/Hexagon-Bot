@@ -167,7 +167,7 @@ export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
               <div className="mt-3 flex items-center gap-2">
                 <span className="min-w-0 flex-1 text-[12px] text-ink-3">{t('settingsUi.promptsReferenceNote')}</span>
                 <Button size="xs" loading={busy} onClick={() => void translate(true)}>
-                  {!busy && <Icon name="refresh" />}{busy ? t('settings.prompts_translating') : t('settings.prompts_retranslate')}
+                  {!busy && <Icon name="refresh" size={14} />}{busy ? t('settings.prompts_translating') : t('settings.prompts_retranslate')}
                 </Button>
               </div>
             )}

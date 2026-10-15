@@ -71,12 +71,12 @@ function MoreMenu() {
       </Tooltip>
       <DropdownMenuContent align="end" className="w-[260px]">
         {/* 全员休眠仍要二次确认：runStageOp 走现有确认层（票 13 换成 AlertDialog） */}
-        <DropdownMenuItem icon={<Icon name="sleep" />} onSelect={() => runStageOp('sleepAll')}>{t('header.sleepAll')}</DropdownMenuItem>
-        <DropdownMenuItem icon={<Icon name="export" />} onSelect={() => void doExport()}>{t('header.exportTrace')}</DropdownMenuItem>
-        <DropdownMenuItem icon={<Icon name="expand" />} onSelect={() => st().setFlowDialogOpen(true)}>{t('sidebar.viewFlow')}</DropdownMenuItem>
+        <DropdownMenuItem icon={<Icon name="sleep" size={14} />} onSelect={() => runStageOp('sleepAll')}>{t('header.sleepAll')}</DropdownMenuItem>
+        <DropdownMenuItem icon={<Icon name="export" size={14} />} onSelect={() => void doExport()}>{t('header.exportTrace')}</DropdownMenuItem>
+        <DropdownMenuItem icon={<Icon name="expand" size={14} />} onSelect={() => st().setFlowDialogOpen(true)}>{t('sidebar.viewFlow')}</DropdownMenuItem>
         <DropdownMenuSeparator />
         {/* 票 16（方向卡 1）：值守切换。失焦 60 秒自动值守，回焦自动归来；这里是手动入口 */}
-        <DropdownMenuItem icon={<Icon name="sleep" />} description={t('topbar.awayHint')} tall
+        <DropdownMenuItem icon={<Icon name="sleep" size={14} />} description={t('topbar.awayHint')} tall
           data-away={away || undefined}
           onSelect={() => void (away ? st().markBack() : st().markAway())}>
           {t(away ? 'topbar.awayActive' : 'topbar.away')}

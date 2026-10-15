@@ -164,7 +164,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
 function PaletteRow({ item, onRun }: { item: Item; onRun: () => void }) {
   let lead: ReactNode = null
   if (item.agent) lead = <Avatar agentId={item.agent.id} role={item.agent.role} size={18} />
-  else if (item.icon) lead = <Icon name={item.icon} className="text-ink-2" />
+  else if (item.icon) lead = <Icon name={item.icon} className="text-ink-2" size={14} />
   return (
     <CommandItem value={item.id} onSelect={onRun}>
       <span className="grid w-[18px] shrink-0 place-items-center">{lead}</span>
