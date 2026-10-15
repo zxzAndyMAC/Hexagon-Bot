@@ -100,6 +100,36 @@ describe('开场草案卡（票 17 → ui-redesign 票 05）', () => {
     expect(useUiStore.getState().intakeDraft).toBe(false)
   })
 
+  // gap B10：丢弃后出撤销类 toast；撤销走 restore_intake_draft，草案卡回来（B1 时丢弃即永久）
+  it('先不写后 toast「已丢弃 · 撤销」，撤销恢复草案', async () => {
+    useUiStore.setState({ intakeDraft: true, projectRoot: '/p/u', toasts: [] })
+    vi.spyOn(api, 'intakeDraft').mockResolvedValue('## Purpose\nx\n')
+    vi.spyOn(api, 'discardIntakeDraft').mockResolvedValue(undefined)
+    const restore = vi.spyOn(api, 'restoreIntakeDraft').mockResolvedValue(undefined)
+    const { el } = await render(<IntakeCard />)
+    await act(async () => { button(el, 'Not now').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const toast = useUiStore.getState().toasts.at(-1)!
+    expect(toast.text).toBe('Draft discarded')
+    expect(toast.icon).toBe('undo')
+    expect(toast.action?.label).toBe('Undo')
+    await act(async () => { await toast.action!.run() })
+    expect(restore).toHaveBeenCalledOnce()
+    expect(useUiStore.getState().intakeDraft).toBe(true)
+    expect(el.querySelector('[data-testid=intake-preview]')?.textContent).toContain('Purpose')
+  })
+
+  it('撤销失败（已有新草案或已写入）报错，不假装恢复', async () => {
+    useUiStore.setState({ intakeDraft: true, projectRoot: '/p/v', toasts: [] })
+    vi.spyOn(api, 'intakeDraft').mockResolvedValue('## Purpose\nx\n')
+    vi.spyOn(api, 'discardIntakeDraft').mockResolvedValue(undefined)
+    vi.spyOn(api, 'restoreIntakeDraft').mockRejectedValue(new Error('no intake draft'))
+    const { el } = await render(<IntakeCard />)
+    await act(async () => { button(el, 'Not now').dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await act(async () => { await useUiStore.getState().toasts.at(-1)!.action!.run() })
+    expect(useUiStore.getState().intakeDraft).toBe(false)
+    expect(useUiStore.getState().toasts.at(-1)?.tone).toBe('err')
+  })
+
   it('丢弃失败时卡片留着并报错', async () => {
     useUiStore.setState({ intakeDraft: true, projectRoot: '/p/e' })
     vi.spyOn(api, 'intakeDraft').mockResolvedValue('## Purpose\nx\n')

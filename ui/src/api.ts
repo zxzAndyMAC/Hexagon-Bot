@@ -655,6 +655,8 @@ export const api = {
   intakeDraft: () => call<string | null>('intake_draft'),
   updateIntakeDraft: (body: string) => call<void>('update_intake_draft', { body }),
   discardIntakeDraft: () => call<void>('discard_intake_draft'),
+  // gap B10：「已丢弃 · 撤销」——把刚丢弃的草案挪回待点头（不落盘）
+  restoreIntakeDraft: () => call<void>('restore_intake_draft'),
   /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
   /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
   /// 票 01：`autonomy` 缺省由核落 L4。非法档位核拒绝且不建项目。
@@ -986,7 +988,7 @@ const MOCK_MANAGED_EXTERNAL = [
   { event_id: 122, card_id: 'q-m1', kind: 'local_trash', target: '~/Downloads/old-build.zip', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-14 03:58:00', verification: 'host_verified_recoverable', trash_path: '~/.Trash/old-build.zip' },
   { event_id: 123, card_id: 'q-m2', kind: 'mcp', target: 'figma:update_node', action: 'update_node', decision: 'allow', result: 'done', at: '2026-10-14 03:59:00', verification: 'host_unverified_deletion', trash_path: null },
 ]
-const mockIntake: { draft: string | null | undefined } = { draft: undefined }
+const mockIntake: { draft: string | null | undefined; discarded?: string | null } = { draft: undefined }
 const mockIntakeDraft = (): string | null => {
   if (mockIntake.draft === undefined) {
     mockIntake.draft = typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockintake')
@@ -1727,8 +1729,19 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     // gap B1：`?mockintake` 给 dev 一份未落盘草案（对照 workbench#fresh）
     case 'confirm_intake_brief':
-    case 'discard_intake_draft':
       mockIntake.draft = null
+      mockIntake.discarded = null
+      return null as T
+    case 'discard_intake_draft': {
+      const current = mockIntakeDraft()
+      if (current !== null) mockIntake.discarded = current
+      mockIntake.draft = null
+      return null as T
+    }
+    case 'restore_intake_draft':
+      if (mockIntakeDraft() !== null || !mockIntake.discarded) throw { code: 'no_intake_draft', message: 'no intake draft' }
+      mockIntake.draft = mockIntake.discarded
+      mockIntake.discarded = null
       return null as T
     case 'update_intake_draft':
       mockIntake.draft = String(args?.body ?? '')
