@@ -5,6 +5,7 @@ import i18n from './i18n'
 import { api } from './api'
 import { FileEditor } from './components/FileEditor'
 import { ConfirmHost } from './components/ConfirmDialog'
+import { TooltipProvider } from './components/ui/tooltip'
 import { useUiStore } from './store'
 import type { ArtifactRow } from './gen/ArtifactRow'
 
@@ -20,12 +21,17 @@ async function render(node: React.ReactNode) {
   const el = document.createElement('div')
   document.body.appendChild(el)
   const root = createRoot(el)
-  await act(async () => { root.render(node) })
+  // 票 09：子头换成 A7 分段控件与 A1 按钮（带 tooltip），需要 TooltipProvider
+  await act(async () => { root.render(<TooltipProvider>{node}</TooltipProvider>) })
   return { el, root }
 }
 
+// 票 09（D14 / A7）：旧 `.seg button` 换成 Segmented（data-slot=segmented-item）；
+// 未保存标记从 `.dot.warn` 换成子头「● 未保存」（data-unsaved）；离开守卫换成 D17 LeaveGuard（Radix 挂 body，按 data-leave 取钮）。
+const unsaved = (el: Element) => el.querySelector('[data-unsaved]')
+const leaveBtn = (choice: string) => document.querySelector<HTMLButtonElement>(`[data-leave="${choice === '保存' ? 'save' : choice === '放弃修改' ? 'discard' : 'cancel'}"]`)!
 function segBtn(el: HTMLElement, label: string) {
-  return [...el.querySelectorAll('.seg button')].find((b) => b.textContent === label) as HTMLButtonElement | undefined
+  return [...el.querySelectorAll('[data-slot="segmented-item"]')].find((b) => b.textContent === label) as HTMLButtonElement | undefined
 }
 
 async function type(el: HTMLElement, value: string) {
@@ -63,7 +69,7 @@ describe('文件页三态视图（预览/对比回归）', () => {
 
     // 先改未保存，再切预览——预览必须渲染编辑缓冲区而不是盘上旧文。
     await type(el!, '# 标题\n\n新写的段落\n')
-    expect(el!.querySelector('.dot.warn')).toBeTruthy()
+    expect(unsaved(el!)).toBeTruthy()
     await act(async () => { segBtn(el!, '预览')!.click() })
     await act(async () => {})
 
@@ -74,13 +80,16 @@ describe('文件页三态视图（预览/对比回归）', () => {
     expect(body.textContent).not.toContain('原文')
   })
 
-  it('非 md 文件没有预览档，只有编辑/对比', async () => {
+  // 票 09（components D14 禁用行「非 md 文件『预览』禁用」）：原断言「没有预览档」改为「预览档在、禁用并写原因」。
+  it('非 md 文件的预览档禁用，只能编辑/对比', async () => {
     vi.spyOn(api, 'readRepoFile').mockResolvedValue('const a = 1\n')
     vi.spyOn(api, 'repoFileHead').mockResolvedValue(null)
     ;({ el, root } = await render(<FileEditor path="src/a.ts" />))
     expect(segBtn(el!, '编辑')).toBeTruthy()
     expect(segBtn(el!, '对比')).toBeTruthy()
-    expect(segBtn(el!, '预览')).toBeUndefined()
+    expect(segBtn(el!, '预览')!.getAttribute('aria-disabled')).toBe('true')
+    await act(async () => { segBtn(el!, '预览')!.click() })
+    expect(el!.querySelector('[data-file-preview]')).toBeNull()
   })
 
   it('对比默认基线=已保存，现读盘上内容 vs 当前缓冲区', async () => {
@@ -151,11 +160,11 @@ describe('文件页三态视图（预览/对比回归）', () => {
     ;({ el, root } = await render(<FileEditor path="src/a.ts" />))
 
     await type(el!, 'a\nb\n')
-    expect(el!.querySelector('.dot.warn')).toBeTruthy()
+    expect(unsaved(el!)).toBeTruthy()
     const save = [...el!.querySelectorAll('button')].find((b) => b.title.includes('保存'))!
     await act(async () => { save.click() })
     expect(write).toHaveBeenCalledWith({ path: 'src/a.ts', project_root: '/test', generation: 1, content: 'a\n' }, 'a\nb\n')
-    expect(el!.querySelector('.dot.warn')).toBeNull()
+    expect(unsaved(el!)).toBeNull()
   })
 
   it('未保存编辑在负责人选择前拦住关闭，取消后仍可继续编辑', async () => {
@@ -187,7 +196,7 @@ describe('文件页三态视图（预览/对比回归）', () => {
     await type(el!, 'unsaved')
     let leaving!: Promise<void>
     await act(async () => { leaving = api.closeProject() })
-    const button = [...el!.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(b => b.textContent === choice)!
+    const button = leaveBtn(choice)
     await act(async () => { button.click(); await leaving })
     expect(useUiStore.getState().projectRoot).toBeNull()
     expect(saved).toEqual(choice === '保存' ? [{ root: '/project/A', content: 'unsaved' }] : [])
@@ -201,11 +210,11 @@ describe('文件页三态视图（预览/对比回归）', () => {
     await type(el!, 'unsaved')
     let leaving!: Promise<string>
     await act(async () => { leaving = api.closeProject().then(() => 'closed', () => 'cancelled') })
-    const save = [...el!.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(b => b.textContent === '保存')!
+    const save = leaveBtn('保存')
     await act(async () => { save.click(); await leaving })
     expect(useUiStore.getState().projectRoot).toBe('/project/A')
     expect(el!.querySelector('textarea')!.value).toBe('unsaved')
-    expect(el!.querySelector('.dot.warn')).toBeTruthy()
+    expect(unsaved(el!)).toBeTruthy()
   })
 
   it('保存等待期间新编辑不能被误清为已保存', async () => {
@@ -219,7 +228,7 @@ describe('文件页三态视图（预览/对比回归）', () => {
     await type(el!, 'newer edit')
     await act(async () => finish())
     expect(el!.querySelector('textarea')!.value).toBe('newer edit')
-    expect(el!.querySelector('.dot.warn')).toBeTruthy()
+    expect(unsaved(el!)).toBeTruthy()
   })
 
   it('迟到旧项目读取不能进入同路径的新项目缓冲', async () => {
@@ -244,7 +253,7 @@ describe('文件页三态视图（预览/对比回归）', () => {
     await act(async () => button.click())
     expect(write.mock.calls[1]).toEqual([{ path: 'README.md', project_root: '/test', generation: 1, content: 'first edit' }, 'second edit'])
     expect(el!.querySelector('textarea')!.value).toBe('second edit')
-    expect(el!.querySelector('.dot.warn')).toBeTruthy()
+    expect(unsaved(el!)).toBeTruthy()
   })
 
   it('保存第二份文件期间重新修改第一份文件，不能丢稿离开', async () => {
@@ -259,14 +268,14 @@ describe('文件页三态视图（预览/对比回归）', () => {
     await type(editors[1], 'second draft')
     let leaving!: Promise<string>
     await act(async () => { leaving = api.closeProject().then(() => 'closed', () => 'cancelled') })
-    const save = [...el!.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(b => b.textContent === '保存')!
+    const save = leaveBtn('保存')
     await act(async () => { save.click(); await ready })
     await type(editors[0], 'newer first draft')
     await act(async () => { finish(); await leaving })
     expect(await leaving).toBe('cancelled')
     expect(useUiStore.getState().projectRoot).toBe('/test')
     expect(editors[0].querySelector('textarea')!.value).toBe('newer first draft')
-    expect(editors[0].querySelector('.dot.warn')).toBeTruthy()
+    expect(unsaved(editors[0])).toBeTruthy()
   })
 
 
@@ -277,9 +286,10 @@ describe('文件页三态视图（预览/对比回归）', () => {
     await type(el!, 'unsaved')
     await act(async () => useUiStore.getState().closeTab('file:README.md'))
     expect(useUiStore.getState().tabs.some(tab=>tab.id==='file:README.md')).toBe(true)
-    const dialog=el!.querySelector('[role="alertdialog"]')!
+    const dialog=document.querySelector('[role="alertdialog"]')!
     expect(dialog).toBeTruthy()
-    const cancel=[...dialog.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='取消')!
+    expect(dialog.textContent).toContain('README.md 有未保存的修改')
+    const cancel=leaveBtn('取消')
     await act(async () => cancel.click())
     expect(useUiStore.getState().tabs.some(tab=>tab.id==='file:README.md')).toBe(true)
     expect(el!.querySelector('textarea')!.value).toBe('unsaved')

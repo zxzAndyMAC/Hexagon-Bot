@@ -11,7 +11,6 @@ import { isMac } from './keymap'
 import i18n from './i18n'
 
 vi.mock('./components/PendingDock', () => ({ PendingDock: () => null }))
-vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) }))
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CANVAS_LAYOUT_KEY, keyTarget, LEGACY_RAIL_KEY, mainView, readCanvasLayout, readSideLayout, resolveDrag, resolveShell, SIDE, SIDE_LAYOUT_KEY, writeCanvasLayout, writeSideLayout } from './layout'
+import { CANVAS_LAYOUT_KEY, keyTarget, LEGACY_RAIL_KEY, mainView, readCanvasLayout, readSideLayout, readTreeWidth, resolveDrag, resolveShell, SIDE, SIDE_LAYOUT_KEY, TREE, TREE_LAYOUT_KEY, writeCanvasLayout, writeSideLayout, writeTreeWidth } from './layout'
 
 function mem(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init))
@@ -136,5 +136,24 @@ describe('外壳让位 resolveShell（interaction §1）', () => {
     expect(mainView({ canvasOpen: false, canvasLayout: { width: null, full: true }, usageView: false })).toBe('chat')
     expect(mainView({ canvasOpen: true, canvasLayout: { width: null, full: false }, usageView: false })).toBe('chat')
     expect(mainView({ canvasOpen: true, canvasLayout: { width: null, full: true }, usageView: true })).toBe('usage')
+  })
+})
+
+describe('文件树宽度 hexagon.layout.tree（票 09，D14 / interaction §1）', () => {
+  it('无记忆时 210；越界夹回 160–360；损坏回默认；写入取整', () => {
+    const s = mem()
+    expect(readTreeWidth(s)).toBe(210)
+    writeTreeWidth(s, 233.6)
+    expect(s.getItem(TREE_LAYOUT_KEY)).toBe('234')
+    expect(readTreeWidth(s)).toBe(234)
+    s.setItem(TREE_LAYOUT_KEY, '999')
+    expect(readTreeWidth(s)).toBe(360)
+    s.setItem(TREE_LAYOUT_KEY, '12')
+    expect(readTreeWidth(s)).toBe(160)
+    s.setItem(TREE_LAYOUT_KEY, 'junk')
+    expect(readTreeWidth(s)).toBe(210)
+  })
+  it('拖动停在下限，不吸附', () => {
+    expect(resolveDrag(100, { min: TREE.min, max: TREE.max })).toEqual({ width: 160, collapsed: false, edge: 'min' })
   })
 })

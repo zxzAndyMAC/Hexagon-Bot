@@ -38,8 +38,9 @@ describe('UsageTab 撞限压力行（context-window 票 03 / ADR 0068）', () =>
     })
     ;({ el, root } = await render(<UsageTab />))
     const text = el!.textContent ?? ''
-    // 两个计数成行渲染
-    expect(text).toMatch(/Overflow cards\s*2/)
+    // 两个计数成行渲染。票 12（D20 用量卡，usage#quick）：撞限计数的标签写明 14 天窗口（原型「14 天撞限」），
+    // 所以断言从「Overflow cards 2」改为「Overflow cards · 14 days 2」——计数口径不变，只是标签补了窗口。
+    expect(text).toMatch(/Overflow cards · 14 days\s*2/)
     expect(text).toMatch(/Compactions\s*5/)
     // 阈值说明：≥2 触发恢复设计票
     expect(text).toContain('two weeks')
@@ -50,7 +51,7 @@ describe('UsageTab 撞限压力行（context-window 票 03 / ADR 0068）', () =>
     useUiStore.setState({ contextPressure: null, usageRows: [], usageTotal: null, team: [] })
     ;({ el, root } = await render(<UsageTab />))
     const text = el!.textContent ?? ''
-    expect(text).toMatch(/Overflow cards\s*0/)
+    expect(text).toMatch(/Overflow cards · 14 days\s*0/)
     expect(text).toMatch(/Compactions\s*0/)
   })
   it.each([null, 100])('未知费用持续显示，预算为 %s 时也不伪装成免费', async (limit) => {

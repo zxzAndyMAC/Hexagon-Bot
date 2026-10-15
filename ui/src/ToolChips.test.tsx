@@ -1,5 +1,6 @@
 // beautiful-ui 票 02：ToolGroupRow chip 化行为面——
 // 调用对计数、逐行 chip、行展开明细、文件片开 tab、在途蓝点。
+import { TooltipProvider } from './components/ui/tooltip'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -18,7 +19,8 @@ async function render(node: ReactNode) {
   const el = document.createElement('div')
   document.body.appendChild(el)
   const root = createRoot(el)
-  await act(async () => { root.render(node) })
+  // 票 09（D16）：Agent 详情头卡与分段控件带 tooltip，需要 TooltipProvider
+  await act(async () => { root.render(<TooltipProvider>{node}</TooltipProvider>) })
   await act(async () => {})
   return { el, root }
 }

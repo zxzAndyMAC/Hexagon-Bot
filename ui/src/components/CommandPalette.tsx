@@ -3,8 +3,9 @@
 // /stamp /skip /rewind /pause /resume /sleep 走的都是这些 api.*。
 // 外壳：共享 Dialog（居中偏上、宽 560、overlay、背景裁决快捷键被拦）；搜索行 48 高（search + 输入 + Esc kbd）
 // → 分组（组标题 11.5 ink-3）→ 底栏（inset 底：↑↓ 移动 ↵ 执行 + 危险指令说明）。
-// 没有引入 cmdk：shadcn Command 依赖它，加依赖会动构建链；这里用同一外观 + listbox / aria-activedescendant 自绘。
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+// 2026-10-14 负责人裁决引入 cmdk（shadcn Command）：键盘 ↑↓↵、选中态、option 语义交给 cmdk；
+// 过滤仍走 filterPaletteItems（shouldFilter=false）——keywords 匹配与最近使用置顶（ui-audit 票 09）是本仓语义，cmdk 的模糊打分会打乱。
+import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import { useUiStore } from '../store'
@@ -15,6 +16,7 @@ import { Icon, type IconName } from './Icon'
 import { Avatar } from './Avatar'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 
 interface Item {
   id: string
@@ -38,13 +40,6 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
   const { t } = useTranslation()
   const { team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, closeTab, invalidate, pushToast, pending, setFlowDialogOpen } = useUiStore()
   const [q, setQ] = useState('')
-  const [sel, setSel] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const listId = useId()
-
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
 
   const items = useMemo<Item[]>(() => {
     const bind = (a: ActionId) => formatBinding(bindingFor(a))
@@ -115,13 +110,6 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
     { key: 'nav', title: t('palette.nav') },
     { key: 'open', title: t('palette.open') },
   ]
-  // 显示顺序 = 分组顺序；键盘高亮按显示顺序走（旧版按匹配序，分组后 ↓ 会跳行）
-  const ordered = groups.flatMap((g) => filtered.filter((i) => i.group === g.key))
-
-  useEffect(() => {
-    document.getElementById(`${listId}-${sel}`)?.scrollIntoView?.({ block: 'nearest' })
-  }, [sel, listId])
-
   const runItem = async (i: Item) => {
     onClose()
     // 票 09：执行失败走 toast 出口而非静默
@@ -136,61 +124,33 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
     await invalidate()
   }
 
-  let flatIdx = -1
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent aria-describedby={undefined} data-command-palette
-        className="top-[90px] w-[min(560px,calc(100vw-48px))] translate-y-0 gap-0 overflow-hidden p-0"
-        onOpenAutoFocus={(e) => { e.preventDefault(); inputRef.current?.focus() }}>
+        className="top-[90px] w-[min(560px,calc(100vw-48px))] translate-y-0 gap-0 overflow-hidden p-0">
         <DialogTitle className="sr-only">{t('palette.title')}</DialogTitle>
-        <div className="flex h-12 items-center gap-2.5 border-b border-line px-3.5">
-          <Icon name="search" size={16} className="text-ink-3" />
-          <input
-            ref={inputRef}
-            value={q}
-            role="combobox"
-            aria-expanded
-            aria-controls={listId}
-            aria-activedescendant={ordered[sel] ? `${listId}-${sel}` : undefined}
-            placeholder={t('palette.placeholder')}
-            onChange={(e) => { setQ(e.target.value); setSel(0) }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') { e.preventDefault(); onClose(); return }
-              if (e.key === 'ArrowDown') { e.preventDefault(); setSel((sel + 1) % Math.max(ordered.length, 1)); return }
-              if (e.key === 'ArrowUp') { e.preventDefault(); setSel((sel - 1 + ordered.length) % Math.max(ordered.length, 1)); return }
-              if (e.key === 'Enter' && ordered[sel]) { e.preventDefault(); void runItem(ordered[sel]) }
-            }}
-            style={{ outline: "none" }}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[15px] text-ink placeholder:text-ink-3"
-          />
-          <Kbd>Esc</Kbd>
-        </div>
-        <div id={listId} role="listbox" aria-label={t('palette.title')} className="max-h-[min(420px,56vh)] overflow-y-auto p-1.5">
-          {ordered.length === 0 && (
-            // A19 空态小号（feedback#empty）
-            <div className="flex flex-col items-center gap-1.5 px-4 py-6 text-center text-[13px] text-ink-3">
-              <Icon name="search" size={20} />
-              <span>{q.trim() ? t('palette.emptyFor', { q: q.trim() }) : t('palette.empty')}</span>
-            </div>
-          )}
-          {groups.map((g) => {
-            const rows = ordered.filter((i) => i.group === g.key)
-            if (!rows.length) return null
-            return (
-              <div key={g.key} role="group" aria-label={g.title}>
-                <div className="px-[9px] pt-2 pb-1 text-[11.5px] text-ink-3">{g.title}</div>
-                {rows.map((i) => {
-                  flatIdx += 1
-                  const idx = flatIdx
-                  return (
-                    <PaletteRow key={i.id} id={`${listId}-${idx}`} item={i} selected={idx === sel}
-                      onRun={() => void runItem(i)} onHover={() => setSel(idx)} />
-                  )
-                })}
-              </div>
-            )
-          })}
-        </div>
+        <Command shouldFilter={false} loop label={t('palette.title')}>
+          <CommandInput autoFocus value={q} onValueChange={setQ} placeholder={t('palette.placeholder')} trailing={<Kbd>Esc</Kbd>} />
+          <CommandList aria-label={t('palette.title')}>
+            {/* A19 空态小号（feedback#empty） */}
+            <CommandEmpty>
+              <span className="flex flex-col items-center gap-1.5">
+                <Icon name="search" size={20} />
+                <span>{q.trim() ? t('palette.emptyFor', { q: q.trim() }) : t('palette.empty')}</span>
+              </span>
+            </CommandEmpty>
+            {/* 显示顺序 = 分组顺序；组内保持 filterPaletteItems 的排序（最近使用在前） */}
+            {groups.map((g) => {
+              const rows = filtered.filter((i) => i.group === g.key)
+              if (!rows.length) return null
+              return (
+                <CommandGroup key={g.key} heading={g.title}>
+                  {rows.map((i) => <PaletteRow key={i.id} item={i} onRun={() => void runItem(i)} />)}
+                </CommandGroup>
+              )
+            })}
+          </CommandList>
+        </Command>
         <div className="flex h-9 items-center gap-1.5 border-t border-line bg-inset px-3.5 text-[12px] text-ink-3">
           <Kbd>↑↓</Kbd>{t('palette.move')}<Kbd className="ml-1.5">↵</Kbd>{t('palette.run')}
           <span className="flex-1" />{t('palette.dangerNote')}
@@ -200,24 +160,19 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
   )
 }
 
-/** D18 行 = 图标 + 名 13/500 + 灰描述 + 右侧 kbd；高亮 = --hover 底（A16 mi.on）。 */
-function PaletteRow({ id, item, selected, onRun, onHover }: {
-  id: string; item: Item; selected: boolean; onRun: () => void; onHover: () => void
-}) {
+/** D18 行 = 图标 + 名 13/500 + 灰描述 + 右侧 kbd；高亮 = --hover 底（cmdk data-selected，同 A16 mi.on）。 */
+function PaletteRow({ item, onRun }: { item: Item; onRun: () => void }) {
   let lead: ReactNode = null
   if (item.agent) lead = <Avatar agentId={item.agent.id} role={item.agent.role} size={18} />
   else if (item.icon) lead = <Icon name={item.icon} className="text-ink-2" />
   return (
-    // ui-audit 票 12（P2-13）：条目报选中态（aria-selected）；焦点留在搜索框，aria-activedescendant 指过来
-    <div id={id} role="option" aria-selected={selected} data-selected={selected || undefined}
-      onMouseDown={(e) => e.preventDefault()} onClick={onRun} onMouseMove={onHover}
-      className="flex h-8 cursor-pointer items-center gap-[9px] rounded-[7px] px-[9px] text-[13px] font-medium text-ink data-selected:bg-hover">
+    <CommandItem value={item.id} onSelect={onRun}>
       <span className="grid w-[18px] shrink-0 place-items-center">{lead}</span>
       <span className={`min-w-0 truncate ${item.mono ? 'font-mono font-normal text-[12.5px]' : ''} ${item.risk === 'danger' ? 'text-red' : ''}`}>{item.label}</span>
       <span className="ml-auto flex shrink-0 items-center gap-2 text-[12px] font-normal text-ink-3">
         {item.desc && <span>{item.desc}</span>}
         {item.hint && <Kbd>{item.hint}</Kbd>}
       </span>
-    </div>
+    </CommandItem>
   )
 }

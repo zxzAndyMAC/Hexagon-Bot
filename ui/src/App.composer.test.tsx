@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from './App'
+import { isMac } from './keymap'
 import { api } from './api'
 import * as apiModule from './api'
 import { useUiStore, type WorkTab } from './store'
@@ -9,7 +10,6 @@ import i18n from './i18n'
 import { mainView } from './layout'
 
 // happy-dom has no canvas renderer; exercise real tabs with the chart SDK stubbed.
-vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) }))
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -106,10 +106,14 @@ it('keeps unsaved file text and its leave guard while visiting settings', async 
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(editor,'unsaved owner text')
     editor.dispatchEvent(new Event('input',{bubbles:true}))
   })
-  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown',{key:',',ctrlKey:true,bubbles:true,cancelable:true})))
-  expect(useUiStore.getState().modalScope).toBe('settings')
+  // 票 09（components D17，interaction §6「离开未保存」）：进设置也过离开守卫。原断言「带着脏稿进设置、回来稿还在」
+  // 改为「进设置先弹三选一；取消则留在工作台、稿还在」——工作台在设置下仍不卸载（Benchmark I1），守卫只是多一道确认。
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown',{key:',',ctrlKey:!isMac,metaKey:isMac,bubbles:true,cancelable:true})))
+  expect(useUiStore.getState().confirmReq?.variant).toBe('leave')
+  expect(useUiStore.getState().modalScope).toBe('workbench')
+  await act(async () => useUiStore.getState().clearConfirm())
+  expect(useUiStore.getState().modalScope).toBe('workbench')
   expect(Object.values(useUiStore.getState().fileEdits).some(edit=>edit.dirty)).toBe(true)
-  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown',{key:',',ctrlKey:true,bubbles:true,cancelable:true})))
   const restored=el.querySelector<HTMLTextAreaElement>('textarea[aria-label="README.md"]')!
   expect(restored.value).toBe('unsaved owner text')
 })

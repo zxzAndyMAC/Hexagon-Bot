@@ -1,5 +1,5 @@
 import { DesktopPermissions } from './components/DesktopPermissions'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './i18n'
 import { TIMELINE_JUMP_EVENT } from './timelineJump'
@@ -36,6 +36,8 @@ export default function App() {
   const refresh = useUiStore((s) => s.refresh)
   const refreshFast = useUiStore((s) => s.refreshFast)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsOpenRef = useRef(false)
+  useEffect(() => { settingsOpenRef.current = settingsOpen }, [settingsOpen])
   const [computerSettings, setComputerSettings] = useState<Section>('general')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
@@ -50,20 +52,27 @@ export default function App() {
   const projectRoot = useUiStore(s => s.projectRoot)
   const projectGeneration = useUiStore(s => s.projectGeneration)
   const { onKey } = usePendingKeys()
+  // 票 09（D17，interaction §6）：进设置也过离开守卫——设置页盖住工作台时编辑器不卸载（Benchmark I1），
+  // 但负责人看不见画布里的脏稿，可能就此忘掉；先三选一再进。取消 = 留在工作台。
+  const enterSettings = useCallback(async (section?: Section) => {
+    const s = useUiStore.getState()
+    if (Object.values(s.fileEdits).some((edit) => edit.dirty) && !await s.confirmFileEdits()) return
+    if (section) setComputerSettings(section)
+    setSettingsOpen(true)
+  }, [])
 
   useEffect(() => {
     api.projectOpen().then(setProjectOpen)
   }, [])
 
   useEffect(() => {
-    const openModels = () => { if (projectOpen === true) { setComputerSettings('team'); setSettingsOpen(true) } }
-    const openComputer = () => { if (projectOpen === true) { setComputerSettings('perms'); setSettingsOpen(true) } }
+    const openModels = () => { if (projectOpen === true) void enterSettings('team') }
+    const openComputer = () => { if (projectOpen === true) void enterSettings('perms') }
     const openSection = (event: Event) => {
       if (projectOpen !== true) return
       const section = (event as CustomEvent<unknown>).detail
       if (section !== 'models' && section !== 'usage') return
-      setComputerSettings(section)
-      setSettingsOpen(true)
+      void enterSettings(section)
     }
     // Ticket 05: a report entry asked for its timeline row; the timeline jumps.
     const toTimeline = () => setSettingsOpen(false)
@@ -77,7 +86,7 @@ export default function App() {
       window.removeEventListener('hexagon:computer-settings', openComputer)
       window.removeEventListener('hexagon:open-settings-section', openSection)
     }
-  }, [projectOpen])
+  }, [projectOpen, enterSettings])
 
   // ui-audit 票 01/02：界面作用域同步进 store——裁决快捷键据此放行/拦截。
   // palette 可在设置页之上再开一层，优先级 palette > settings。
@@ -199,7 +208,7 @@ export default function App() {
       // Owner issue19: retained keymap actions now navigate to Settings.
       if (matches(e, bindingFor('desktopPanel')) || matches(e, bindingFor('browserPanel'))) {
         e.preventDefault()
-        if (projectOpen === true) { setComputerSettings('perms'); setSettingsOpen(true) }
+        if (projectOpen === true) void enterSettings('perms')
         return
       }
       // 保存要在 Monaco 自己的 textarea 里也生效，所以赶在输入框豁免之前。
@@ -219,7 +228,10 @@ export default function App() {
         // 启动页/向导期 settingsOpen 是死状态——渲染先落 Launcher 分支，
         // 原地 toggle 只留 armed 标记，项目一开设置页误弹（owner 2026-09-30）。
         // 该期间改发 hexagon:open-settings，由 Launcher 的设置覆盖层接。
-        if (projectOpen === true) setSettingsOpen((v) => !v)
+        if (projectOpen === true) {
+          if (settingsOpenRef.current) setSettingsOpen(false)
+          else void enterSettings()
+        }
         else if (projectOpen === false) void api.openSettings()
         return
       }
@@ -285,7 +297,7 @@ export default function App() {
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [onKey, projectOpen])
+  }, [onKey, projectOpen, enterSettings])
 
   // ui-audit 票 06（P2-14）：冷启动骨架屏——projectOpen 查询期间
   // 不再渲染纯白窗口（曾被当成崩溃）。
@@ -308,8 +320,8 @@ export default function App() {
   // 票 03 起编辑器在画布里：画布进设置页时同样不卸载（只随工作台 display:none）。
   // ui-redesign 票 02 / 03（ADR 0088 / 0090）：左侧栏（B1）+ 分割线（B8）+ 主区（B6：头部 + 常驻对话 + 输入条）
   // + 分割线 + 右侧画布（B7）。窗口变窄时按 layout.ts resolveShell 让位，对话主区始终 ≥ 480。
-  const openSettings = () => setSettingsOpen(true)
-  const raiseCap = () => { setComputerSettings('usage'); setSettingsOpen(true) }
+  const openSettings = () => void enterSettings()
+  const raiseCap = () => void enterSettings('usage')
   const narrowLead = shell.side !== 'expanded'
   return (
     <TooltipProvider>

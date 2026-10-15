@@ -1240,19 +1240,23 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
           mk('2026-09-18 11:00', 'a5', 2800, 900, 0, 1400),
         ] as T
       }
-      return [
-        mk('2026-09-15', 'a0', 5200, 1400, 0, 2400),
-        mk('2026-09-15', 'a1', 8800, 2900, 600, 5600),
-        mk('2026-09-16', 'a0', 6900, 1500, 0, 2800),
-        mk('2026-09-16', 'a1', 19400, 6300, 900, 11400),
-        mk('2026-09-16', 'a2', 12400, 4800, 0, 6800),
-        mk('2026-09-17', 'a1', 9900, 3100, 500, 6200),
-        mk('2026-09-17', 'a3', 18200, 7200, 2600, 10400),
-        mk('2026-09-18', 'a1', 32800, 11200, 1500, 13800),
-        mk('2026-09-18', 'a3', 21600, 8100, 3400, 12600),
-        mk('2026-09-18', 'a4', 16800, 5900, 2200, 9200),
-        mk('2026-09-18', 'a5', 6400, 1800, 0, 2900),
-      ] as T
+      // 票 12：按天的 mock 改为相对今天的近 60 个 UTC 日并按 from/to 过滤——用量详情的 30 天面积图、
+      // 环比与「每 Agent 最近使用」在浏览器预览里才有可看的形状（只影响 dev mock）。
+      const from = (args?.from as string | null | undefined) ?? null
+      const to = (args?.to as string | null | undefined) ?? null
+      const weights: [string, number][] = [['a1', 1], ['a3', 0.78], ['a0', 0.48], ['a2', 0.41], ['a4', 0.24], ['a5', 0.12]]
+      const out: ReturnType<typeof mk>[] = []
+      for (let back = 59; back >= 0; back--) {
+        const day = new Date(Date.now() - back * 864e5).toISOString().slice(0, 10)
+        if ((from && day < from) || (to && day > to)) continue
+        const i = 59 - back
+        const wave = 0.55 + 0.45 * Math.sin(i / 4.2) ** 2 + i / 120 - (new Date(`${day}T00:00:00Z`).getUTCDay() % 6 === 0 ? 0.35 : 0)
+        for (const [agent, w] of weights) {
+          const p = Math.round(9000 * w * wave)
+          out.push(mk(day, agent, p, Math.round(p * 0.44), Math.round(p * 0.2), Math.round(p * 0.6)))
+        }
+      }
+      return out as T
     }
     case 'set_usage_limit':
       return null as T

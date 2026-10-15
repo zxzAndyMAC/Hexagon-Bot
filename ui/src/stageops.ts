@@ -55,7 +55,8 @@ export function runStageOp(op: StageOp): boolean {
       // ui-redesign 票 02（2026-10-13）：全员休眠回到二次确认——规范 components D18「全员休眠等危险指令
       // 需二次确认」、interaction §13 确认层清单、票 02 验收条「全员休眠仍要二次确认」。它仍可逆（团队列表随时
       // 唤醒），所以是非 danger 的安全类确认（A17：首焦主按钮，↵ 直接确认），不是 L2 流程破坏的红色确认。
-      // 被改写的旧裁决：ADR 0056 L1「直执行」（修过原生 confirm 的倒挂）；对账表 §5 票 02 记录，待负责人复核。
+      // 被改写的旧裁决：ADR 0056 L1「直执行」（修过原生 confirm 的倒挂）。2026-10-14 负责人裁决维持确认
+      // （ADR 0056 附录）——不要再改回直执行，也不要换成原生 confirm。
       st.askConfirm({
         title: i18n.t('header.sleepAllConfirm'),
         body: i18n.t('header.sleepAllBody'),

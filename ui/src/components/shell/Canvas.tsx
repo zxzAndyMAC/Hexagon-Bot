@@ -5,7 +5,7 @@
 //
 // 关着的画布不卸载（hidden）：未保存的文件草稿要留到离开确认能看见（Benchmark I1 同理），
 // 所以 App 只要有页签就渲染本组件，用 open 控制显隐。
-import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore, type WorkTab } from '../../store'
 import { isMac } from '../../keymap'
@@ -18,6 +18,13 @@ import { DiffView } from '../DiffView'
 import { FileEditor } from '../FileEditor'
 import { FileTree } from '../FileTree'
 import { ArtifactList } from './ArtifactList'
+// 票 09（协调裁决：票 03 偏差 4）：全宽时头部随对话收起，电脑控制状态与托管胶囊挪到页签栏右侧，
+// Agent 操控电脑、托管开着时负责人在任何主区视图都看得见。Header 在全宽时不渲染这两件，免得双挂
+// （ManagedPill 注册全局暂停 / 关闭键，挂两份会一键执行两次）。
+import { ComputerControlStatus } from '../ComputerControlStatus'
+import { ManagedPill } from '../ManagedPill'
+import { TREE, readTreeWidth, writeTreeWidth } from '../../layout'
+import { ResizeHandle } from '@/components/ui/resize-handle'
 import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
@@ -102,6 +109,12 @@ function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead: boolea
         })}
       </div>
       <span data-tauri-drag-region className="flex-1 self-stretch" />
+      {mode === 'full' && (
+        <div data-canvas-status className="flex flex-none items-center gap-1.5 pr-1">
+          <ComputerControlStatus />
+          <ManagedPill />
+        </div>
+      )}
       {mode === 'full' ? (
         <IconButton size="sm" label={t('canvas.sideBySide')} action="canvasFullWidth" data-canvas-side-by-side onClick={() => st().toggleCanvasFull()}>
           <Icon name="columns" size={14} />
@@ -141,6 +154,30 @@ function TabBody({ tab }: { tab: WorkTab }) {
         </div>
       )
   }
+}
+
+/** 画布内文件树（D14）：宽 210，160–360 可拖，停在下限不吸附；双击还原；宽度存 `hexagon.layout.tree`。 */
+function TreePane() {
+  const { t } = useTranslation()
+  const [width, setWidth] = useState(() => readTreeWidth(localStorage))
+  const commit = (w: number) => { setWidth(w); writeTreeWidth(localStorage, w) }
+  return (
+    <>
+      <div data-canvas-tree style={{ width }} className="flex min-h-0 flex-none flex-col overflow-hidden">
+        <FileTree />
+      </div>
+      <ResizeHandle
+        label={t('canvas.treeWidth')}
+        value={width}
+        limits={{ min: TREE.min, max: TREE.max }}
+        tipTitle={t('canvas.treeWidth')}
+        tipExtra={t('layout.resetHint')}
+        onDrag={(r) => setWidth(r.width)}
+        onCommit={(r) => commit(r.width)}
+        onDoubleClick={() => commit(TREE.default)}
+      />
+    </>
+  )
 }
 
 /** 空态（A19，interaction §6 补设计）：说明为什么空 + 一个动作（打开项目文件）+ 最近产物。 */
@@ -228,11 +265,7 @@ export function Canvas({ open, mode, width, narrowLead = false }: {
       {tabs.length === 0 ? <CanvasEmpty /> : (
         <div className="flex min-h-0 flex-1">
           {/* canvas#file：文件树在编辑器左侧，所有文件页签共用一棵（只挂一次，免得树命令被消费两遍） */}
-          {showTree && (
-            <div data-canvas-tree className="flex w-[210px] min-h-0 flex-none flex-col overflow-hidden border-r border-line-soft">
-              <FileTree />
-            </div>
-          )}
+          {showTree && <TreePane />}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {tabs.map((tab) => (
               <div key={tab.id} role="tabpanel" hidden={tab.id !== active} className="flex min-h-0 flex-1 flex-col">
