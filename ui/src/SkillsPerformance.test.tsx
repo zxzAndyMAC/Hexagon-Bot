@@ -16,9 +16,10 @@ function deferred<T>() {
   const promise = new Promise<T>(r => { resolve = r })
   return { promise, resolve }
 }
+// ui-redesign 票 11（components E2）：列表条目是 listbox 的 role=option。
 async function click(text: string) {
-  const node = [...el.querySelectorAll<HTMLElement>('button,[role="button"]')].find(node => node.textContent?.trim() === text)
-    ?? [...el.querySelectorAll<HTMLElement>('button,[role="button"]')].find(node => node.textContent?.includes(text))
+  const node = [...el.querySelectorAll<HTMLElement>('button,[role="button"],[role="option"]')].find(node => node.textContent?.trim() === text)
+    ?? [...el.querySelectorAll<HTMLElement>('button,[role="button"],[role="option"]')].find(node => node.textContent?.includes(text))
   expect(node).toBeTruthy()
   await act(async () => node!.click())
 }
@@ -54,14 +55,15 @@ it('renders a bounded 1024-skill list and searches unmounted names, preserving s
   expect(rendered).toBeGreaterThan(0)
   expect(rendered).toBeLessThan(25)
   expect(el.textContent).not.toContain('fixture-1023')
-  const first = el.querySelector<HTMLElement>('[data-item-index] [role="button"]')!
+  const first = el.querySelector<HTMLElement>('[data-item-index] [role="option"]')!
   await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
   expect(api.skillFiles).toHaveBeenLastCalledWith('fixture-1023')
   const searchStart = performance.now()
   await input(el.querySelector<HTMLInputElement>('input[placeholder="Filter skills…"]')!, 'fixture-1023')
   expect(el.textContent).toContain('fixture-1023')
   expect(el.textContent).not.toContain('fixture-0000')
-  const checkbox = el.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+  // 票 11：行内开关是 A10 Switch（role=switch）
+  const checkbox = el.querySelector<HTMLButtonElement>('[role="switch"]')!
   await act(async () => checkbox.click())
   expect(muted).toHaveBeenCalledWith('fixture-1023', false)
   console.info(`skills-ui-layout-stub n=1024 mount_ms=${mountMs.toFixed(2)} search_and_toggle_ms=${(performance.now() - searchStart).toFixed(2)} mounted_rows=${rendered}; excludes disk/IPC and native layout`)
@@ -89,7 +91,7 @@ it('keeps the newest list when an initial read arrives after a create refresh', 
   vi.spyOn(api, 'saveGlobalSkill').mockResolvedValue(undefined)
   await mount()
   expect(el.textContent).toContain('Loading skills…')
-  await click('+ New skill')
+  await click('New skill') // 票 11：「+」换成 plus 图标
   await input(el.querySelector<HTMLInputElement>('input[placeholder="my-skill"]')!, 'created-skill')
   await click('Create')
   expect(el.textContent).toContain('created-skill')

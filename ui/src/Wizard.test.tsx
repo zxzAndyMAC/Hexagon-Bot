@@ -688,8 +688,9 @@ describe('一句话优化成项目说明（票 16 · 票 10 卡内逐题）', ()
     await click(rolesBtn())
     const dialog = el.querySelector('[role="dialog"]')!
     expect(dialog).toBeTruthy()
+    // ui-redesign 票 11：EntityPicker 换皮，条目名不再挂旧 .mono 类，按 data-picker-id 找
     const rowFor = (name: string) =>
-      [...dialog.querySelectorAll('label')].find((l) => l.querySelector('.mono')?.textContent === name)!
+      [...dialog.querySelectorAll('label')].find((l) => l.querySelector('[data-picker-id]')?.textContent === name)!
     // 名单=第三步勾选角色；编外名以 custom 行出现可取消
     expect(rowFor('QA')).toBeTruthy()
     await act(async () => { (rowFor('QA').querySelector('input') as HTMLInputElement).click() })
