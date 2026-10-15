@@ -1,76 +1,156 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api'
+import { api, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
 import type { ExternalOperation } from '../gen/ExternalOperation'
 import type { ManagedRecord } from '../gen/ManagedRecord'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
+import { useManagedHistory } from '../useDelegation'
+import { kindTitleKey } from '../decisions'
+import { delegationSince, parseTraceTime } from '../managedView'
+import { Icon } from './Icon'
+import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import { SkeletonRows } from './settings/kit'
+import './ProjectDelegation.css'
 
+/** How many completed items show before「另外 N 项」. */
+const DONE_SHOWN = 3
+
+const show = (eventId: number) => window.dispatchEvent(new CustomEvent(TIMELINE_JUMP_EVENT, { detail: eventId }))
 
 /** Test3/23: what delegation decided and what really happened. Only a
- * landed effect is "done"; an empty pending list is never success. */
-export function ManagedReport() {
+ * landed effect is "done"; an empty pending list is never success.
+ * ui-redesign 票 08（components D9 / managed#report）：头（bot + 托管报告 + 时段）→ KPI 四格 →
+ * 「未完成」置前（原因 + 下一步）→「已完成」（依据 chip）+「另外 N 项」→ 外部操作（核实标记）。
+ * `card`：独立卡形（胶囊弹出的报告对话框、归来置顶）；否则平铺（设置 · 权限的折叠内）。 */
+export function ManagedReport({ card = false, onClose }: { card?: boolean; onClose?: () => void }) {
   const { t } = useTranslation()
-  const [history, setHistory] = useState<ManagedRecord[]>([])
+  const { history, failed } = useManagedHistory()
   const [external, setExternal] = useState<ExternalOperation[]>([])
+  const [more, setMore] = useState(false)
   const latest = useUiStore(s => s.timelineFacts?.latest_event_id ?? 0)
+  const timeline = useUiStore(s => s.timeline)
+  const since = useMemo(() => delegationSince(timeline), [timeline])
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   useEffect(() => {
-    void api.managedHistory().then(records => { if (mounted.current) setHistory(records) }).catch(() => {})
     void api.managedExternalOps().then(ops => { if (mounted.current) setExternal(ops) }).catch(() => {})
   }, [latest])
-  if (history.length === 0) return <p className="delegation-empty">{t('delegation.empty')}</p>
-  return <>
-    <p className="delegation-note">{t('delegation.summary', {
-      done: history.filter(r => r.result === 'done').length,
-      incomplete: history.filter(r => r.result === 'incomplete').length,
-      failed: history.filter(r => r.result === 'failed').length,
-    })}</p>
-    <ul className="delegation-list">
-      {history.map(record => <li key={record.event_id} className={record.result === 'done' ? undefined : 'delegation-unfinished'}>
-        <span>{t(`delegation.result.${record.result}`)}</span>
-        <span>{t(`delegation.action.${record.action}`, { defaultValue: record.action })}</span>
-        <span>{t(`delegation.via.${record.via}`, { defaultValue: record.via })}</span>
-        <code title={record.outcome}>{record.reason}</code>
-        {record.result !== 'done' && <span>{t(`delegation.next.${record.result}`)}</span>}
-      </li>)}
-    </ul>
-    <ExternalOperations ops={external} />
-  </>
+  const records = history ?? []
+  const unfinished = records.filter(r => r.result !== 'done')
+  const done = records.filter(r => r.result === 'done')
+  const shownDone = more ? done : done.slice(0, DONE_SHOWN)
+  const close = onClose
+    ? (eventId: number) => { onClose(); show(eventId) }
+    : show
+  const body = failed
+    ? <p role="alert" className="flex items-center gap-2 text-[12.5px] text-red"><Icon name="warn" size={14} />{t('delegation.readFailed')}</p>
+    : history === null
+      ? <SkeletonRows rows={3} label={t('delegation.report')} className="p-0" />
+      : records.length === 0
+        ? <p className="delegation-empty">{t('delegation.empty')}</p>
+        : <>
+          <div className="grid grid-cols-4 gap-2.5" data-managed-kpi>
+            <Kpi label={t('delegation.kpiDecisions')} value={records.length} />
+            <Kpi label={t('delegation.kpiDone')} value={done.length} tone="text-green" />
+            <Kpi label={t('delegation.kpiIncomplete')} value={unfinished.filter(r => r.result === 'incomplete').length} tone="text-red" />
+            <Kpi label={t('delegation.kpiFailed')} value={unfinished.filter(r => r.result === 'failed').length} tone="text-red" />
+          </div>
+          <p className="mt-1.5 text-[12px] text-ink-3">{t('delegation.recent', { count: records.length })}</p>
+          {unfinished.length > 0 && <>
+            <h4 className="mt-4 mb-2 text-[12px] font-normal text-ink-3">{t('delegation.groupUnfinished')}</h4>
+            <ul className="m-0 list-none overflow-hidden rounded-[12px] bg-[var(--app-card)] p-0 shadow-[var(--shadow-card)]" data-managed-unfinished>
+              {unfinished.map(record => <li key={record.event_id} data-managed-record={record.event_id}
+                className="delegation-unfinished flex min-h-[52px] items-center gap-3.5 px-4 py-2.5 [&+li]:border-t [&+li]:border-line-soft">
+                <Icon name="circle-x" size={14} className="flex-none text-red" />
+                <div className="min-w-0 flex-1">
+                  <b className="block text-[13px] font-medium text-ink">{recordTitle(t, record)}</b>
+                  <span className="block text-[12.5px] text-ink-2">{t(`delegation.next.${record.result}`)} · <code className="text-[11.5px]">{record.reason}</code></span>
+                </div>
+                <Button size="xs" title={t('delegation.showInTimeline')} onClick={() => close(record.event_id)}>{t('delegation.showInTimeline')}</Button>
+              </li>)}
+            </ul>
+          </>}
+          {done.length > 0 && <>
+            <h4 className="mt-4 mb-2 text-[12px] font-normal text-ink-3">{t('delegation.groupDone')}</h4>
+            <ul className="m-0 flex list-none flex-col p-0 text-[13px]" data-managed-done>
+              {shownDone.map(record => <li key={record.event_id} data-managed-record={record.event_id}>
+                <button type="button" className="hx-focus flex h-8 w-full items-center gap-2 rounded-[6px] px-1 text-left live:hover:bg-hover"
+                  title={t('delegation.showInTimeline')} onClick={() => close(record.event_id)}>
+                  <Icon name="circle-check" size={14} className="flex-none text-green" />
+                  <span className="min-w-0 flex-1 truncate">{recordTitle(t, record)}</span>
+                  <span className="text-[12px] text-ink-3">{t(`delegation.via.${record.via}`, { defaultValue: record.via })}</span>
+                </button>
+              </li>)}
+            </ul>
+            {done.length > DONE_SHOWN && <button type="button" className="hx-focus mt-1 flex items-center gap-1 rounded-[6px] text-[12px] text-ink-2 live:hover:text-ink"
+              aria-expanded={more} onClick={() => setMore(!more)}>
+              <Icon name={more ? 'chevron-up' : 'chevron-down'} size={12} />{t('delegation.more', { count: done.length - DONE_SHOWN })}
+            </button>}
+          </>}
+        </>
+  const sinceAt = since ? since.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
+  return <section data-managed-report className={card ? 'rounded-[14px] bg-surface px-[18px] py-4 shadow-[var(--shadow-raised)]' : undefined}
+    aria-label={t('delegation.report')}>
+    {card && <div className="mb-3 flex items-center gap-2">
+      <span className="mg-av"><Icon name="bot" size={12} /></span>
+      <b className="text-[15px] font-semibold text-ink">{t('delegation.report')}</b>
+      {sinceAt && <span className="text-[13px] text-ink-3">{t('delegation.since', { time: sinceAt })}</span>}
+      <span className="flex-1" />
+      {onClose && <Button size="xs" variant="ghost" onClick={onClose} title={t('topbar.flowClose')} aria-label={t('topbar.flowClose')}>
+        <Icon name="close" size={12} />
+      </Button>}
+    </div>}
+    {body}
+    <ExternalOperations ops={external} onShow={close} />
+  </section>
 }
 
-/** Trace timestamps are SQLite UTC (`YYYY-MM-DD HH:MM:SS`); show local time. */
-function localTime(at: string): string {
-  const parsed = new Date(`${at.replace(' ', 'T')}Z`)
-  return Number.isNaN(parsed.getTime()) ? at : parsed.toLocaleString()
+function Kpi({ label, value, tone }: { label: string; value: number; tone?: string }) {
+  return <div className="rounded-[10px] bg-inset p-3">
+    <div className="text-[12px] text-ink-3">{label}</div>
+    <div className={`text-[15px] font-semibold tabular-nums ${tone ?? 'text-ink'}`}>{value}</div>
+  </div>
+}
+
+function recordTitle(t: (key: string, opts?: Record<string, unknown>) => string, record: ManagedRecord): string {
+  const kind = t(kindTitleKey({ id: record.card_id, kind: record.card_kind, agent_id: null, payload: {}, state: 'queued' } as unknown as PendingQuestion),
+    { defaultValue: record.card_kind, who: '', tool: '', stage: '', name: '' })
+  return `${t(`delegation.action.${record.action}`, { defaultValue: record.action })} · ${kind}`
+}
+
+const VERIFY_TONE: Record<string, 'ok' | 'neutral' | 'warn'> = {
+  host_verified_recoverable: 'ok', host_verified_worktree_created: 'ok', host_verified_lossless_removal: 'ok',
+  host_verified_not_moved: 'neutral', host_unverified_deletion: 'warn',
 }
 
 /** Ticket 05: what delegation did outside the project. Local items moved to
  * the Trash are recoverable; app, MCP and browser actions are not verified
- * by the host, and the report says so on every entry. */
-function ExternalOperations({ ops }: { ops: ExternalOperation[] }) {
+ * by the host, and the report says so on every entry (D9 外部操作 · 三种核实标记). */
+function ExternalOperations({ ops, onShow }: { ops: ExternalOperation[]; onShow: (eventId: number) => void }) {
   const { t } = useTranslation()
-  const show = (eventId: number) => window.dispatchEvent(new CustomEvent(TIMELINE_JUMP_EVENT, { detail: eventId }))
-  return <section className="delegation-external" data-external-ops>
-    <h4>{t('delegation.externalTitle')}</h4>
+  return <section className="mt-4" data-external-ops>
+    <h4 className="mb-2 text-[12px] font-normal text-ink-3">{t('delegation.externalTitle')}</h4>
     {ops.length === 0
       ? <p className="delegation-empty">{t('delegation.externalEmpty')}</p>
-      : <ul className="delegation-list">
+      : <ul className="m-0 flex list-none flex-col gap-1 p-0 text-[12.5px] text-ink-2">
         {ops.map(op => <li key={op.event_id} data-external-kind={op.kind} data-verification={op.verification}
-          className={op.verification === 'host_unverified_deletion' ? 'delegation-unverified' : undefined}>
-          <span>{t(`delegation.externalKind.${op.kind}`, { defaultValue: op.kind })}</span>
-          <code>{op.target}</code>
+          className="flex flex-wrap items-center gap-2 rounded-[8px] px-1 py-1 live:hover:bg-hover">
+          <Badge shape="sq">{t(`delegation.externalKind.${op.kind}`, { defaultValue: op.kind })}</Badge>
+          <code className="min-w-0 truncate font-mono text-[12px] text-ink">{op.target}</code>
           {/* MCP tool names are the service's own identifiers: shown as is. */}
           <span>{t(`delegation.externalAction.${op.action}`, { defaultValue: op.action })}</span>
           <span>{t(`delegation.action.${op.decision}`, { defaultValue: op.decision })}</span>
-          <span>{t(`delegation.result.${op.result}`, { defaultValue: op.result })}</span>
-          <span>{t(`delegation.verification.${op.verification}`, { defaultValue: op.verification })}</span>
+          <Badge variant={op.result === 'done' ? 'ok' : op.result === 'failed' ? 'err' : 'warn'}>{t(`delegation.result.${op.result}`, { defaultValue: op.result })}</Badge>
+          <Badge variant={VERIFY_TONE[op.verification] ?? 'warn'} title={t(`delegation.verification.${op.verification}`, { defaultValue: op.verification })}>
+            {t(`delegation.verifyChip.${op.verification}`, { defaultValue: op.verification })}
+          </Badge>
           {op.trash_path && <span>{t('delegation.trashedTo', { path: op.trash_path })}</span>}
-          <time dateTime={op.at}>{localTime(op.at)}</time>
-          <button type="button" className="btn" title={t('delegation.showInTimeline')} onClick={() => show(op.event_id)}>
+          <time className="text-[11.5px] text-ink-3" dateTime={op.at}>{parseTraceTime(op.at)?.toLocaleString() ?? op.at}</time>
+          <Button size="xs" variant="ghost" title={t('delegation.showInTimeline')} onClick={() => onShow(op.event_id)}>
             {t('delegation.showInTimeline')}
-          </button>
+          </Button>
         </li>)}
       </ul>}
   </section>
