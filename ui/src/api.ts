@@ -1487,8 +1487,9 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] : []) as T
     case 'design_direction':
       // 票 04 截图比对（decisions#design）：`?mockdesign` 时给一张 D12 视觉方向卡的三套方案；默认关，既有测试依赖空夹具
-      if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS } as T
-      return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null } as T
+      if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS,
+        previous_guidance: { source: 'selected', title: '清爽工具', summary: 'Inter · 蓝灰 · 8px 圆角', recorded_at: '2026-10-01 09:00:00' } } as T
+      return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null, previous_guidance: null } as T
     case 'choose_design_direction':
     case 'desktop_screenshot':
       throw new Error('Desktop app required')
