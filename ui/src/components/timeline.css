@@ -287,3 +287,36 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 
 /* 钉顶的归来摘要不挤掉时间线：最多占主区一半多一点，超出在卡内滚动 */
 .tl-pin { flex: none; max-height: 55%; overflow-y: auto; overscroll-behavior: contain; }
+
+/* ---- 回到底部 C14（票 06，workbench#jump）：对话列正中，bottom 由 useJumpOffset 量出（最上一块底部表面上沿 + 12） ---- */
+.tl .jump { position: absolute; left: 50%; transform: translateX(-50%); z-index: 12; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: var(--surface); box-shadow: var(--shadow-overlay); font: inherit; font-size: 13px; color: var(--ink); white-space: nowrap; cursor: pointer; transition: background-color 150ms; animation: tl-jumpin 180ms var(--ease); }
+.tl .jump:hover { background: var(--hover); }
+.tl .jump:active { transform: translateX(-50%) scale(.98); }
+.tl .jump:focus-visible { outline: none; box-shadow: var(--shadow-overlay), var(--focus-ring); }
+.tl .jump[data-jump="round"] { width: 34px; padding: 0; justify-content: center; }
+.tl .jump .jump-nd { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.tl .jump .jump-ar { color: var(--ink-3); }
+:is([data-theme='dark'], [data-theme='night']) .tl .jump { box-shadow: var(--shadow-overlay), inset 0 0 0 1px oklch(100% 0 0 / .15); }
+@keyframes tl-jumpin { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* ---- 节点轨 C15（票 06，workbench#rail）：右缘垂直居中；刻度按钮 9 高 = 2px 刻度 + 原型 gap 7 的点击区 ---- */
+.tl .rail { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); z-index: 11; display: flex; flex-direction: column; align-items: flex-end; padding: 8px 6px; border-radius: 10px; }
+.tl .rail:hover { background: color-mix(in oklch, var(--app-main) 85%, transparent); }
+.tl .rail[data-compact]:not(:focus-within) { opacity: 0; pointer-events: none; }
+.tl .rail .tk { display: block; height: 9px; padding: 0; border: 0; background: none; cursor: pointer; position: relative; border-radius: 2px; }
+.tl .rail .tk::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); border-radius: 2px; background: var(--ink-3); opacity: .55; }
+.tl .rail .tk[data-tier="s"] { width: 24px; }
+.tl .rail .tk[data-tier="m"] { width: 16px; }
+.tl .rail .tk[data-tier="e"] { width: 10px; }
+.tl .rail .tk[data-hl="in"]::before { background: var(--ink-2); opacity: 1; }
+.tl .rail .tk[data-hl="cur"]::before, .tl .rail .tk:focus-visible::before { background: var(--ink); opacity: 1; height: 2.5px; }
+.tl .rail .tk[data-tone="warn"]::before { background: var(--orange); opacity: 1; }
+.tl .rail .tk[data-tone="err"]::before { background: var(--red); opacity: 1; }
+.tl .rail .tk[data-tone="mg"]::before { background: var(--accent); opacity: .9; }
+.tl .rail .tk:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.tl .rail-card { position: absolute; right: calc(100% + 6px); z-index: 13; width: 300px; padding: 12px 14px; border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--shadow-overlay); text-align: left; pointer-events: none; }
+.tl .rail-card-k { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
+.tl .rail-card-t { font-size: 14px; font-weight: 600; margin-top: 6px; color: var(--ink); overflow-wrap: anywhere; }
+.tl .rail-card-p { font-size: 13px; color: var(--ink-2); margin-top: 4px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.tl .rail-card-f { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--ink-3); }
+.tl .rail-sp { flex: 1; }

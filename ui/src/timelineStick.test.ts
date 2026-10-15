@@ -18,22 +18,22 @@ const item = (id: number, kind: EventKind, opts: { agent?: string; author?: stri
 describe('回到底部计数口径（票 06）', () => {
   it('只算消息、决策、交付；工具调用与系统注记不计；负责人自己的发言不计', () => {
     const items = [
-      item(1, 'message', { author: 'fe', agent: 'fe' }),
-      item(2, 'message', { author: 'qa', agent: 'qa' }),
+      item(1, 'agent_message', { author: 'fe', agent: 'fe' }),
+      item(2, 'agent_message', { author: 'qa', agent: 'qa' }),
       item(3, 'tool_called', { agent: 'qa' }),
       item(4, 'tool_result', { agent: 'qa' }),
       item(5, 'system', { payload: { kind: 'note' } }),
       item(6, 'flag_submitted', { agent: 'qa' }),
       item(7, 'artifact_delivered', { agent: 'be' }),
-      item(8, 'message', { author: 'owner' }),
-      item(9, 'message', { author: 'fe', agent: 'fe' }),
+      item(8, 'owner_message', { author: 'owner' }),
+      item(9, 'agent_message', { author: 'fe', agent: 'fe' }),
     ]
     expect(freshTally(items, 1)).toEqual({ count: 4, speakers: ['fe', 'be', 'qa'] })
     expect(freshTally(items, 9)).toEqual({ count: 0, speakers: [] })
   })
 
   it('发言者头像最多 3 个，最近的在前', () => {
-    const items = ['a', 'b', 'c', 'd'].map((who, i) => item(i + 1, 'message', { author: who, agent: who }))
+    const items = ['a', 'b', 'c', 'd'].map((who, i) => item(i + 1, 'agent_message', { author: who, agent: who }))
     expect(freshTally(items, 0).speakers).toEqual(['d', 'c', 'b'])
   })
 

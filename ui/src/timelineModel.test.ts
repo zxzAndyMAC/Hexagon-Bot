@@ -144,7 +144,7 @@ describe('nodeMarks', () => {
   it('刻度长度表示层级：阶段 s、负责人发言 m、事件 e', () => {
     const tl = [
       ev(1, 'stage_started', { stage: '实现' }),
-      { ...ev(2, 'message', {}, 'owner'), message: { id: 2, author: 'owner', body: '先做列表页\n再说', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } } as TimelineItem,
+      { ...ev(2, 'owner_message', {}, 'owner'), message: { id: 2, author: 'owner', body: '先做列表页\n再说', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } } as TimelineItem,
       ev(3, 'artifact_delivered', { path: 'src/TodoList.tsx' }),
       ev(4, 'stamped', { stage: '实现' }),
     ]
@@ -157,7 +157,7 @@ describe('nodeMarks', () => {
 
   it('新增三类节点：负责人发言、托管决定（mg）、失败（未恢复的 turn_failed 与停止的模型请求，err）', () => {
     const tl = [
-      ev(1, 'message', {}, 'owner'),
+      ev(1, 'owner_message', {}, 'owner'),
       ev(2, 'system', { kind: 'managed_decision', card_kind: 'permission', action: 'allow', reason: '只读命令' }, 'fe'),
       ev(3, 'turn_failed', { error: 'provider 500' }, 'fe'),
       ev(4, 'turn_failed', { error: 'transient' }, 'be'),
@@ -190,7 +190,7 @@ describe('nodeMarks', () => {
   it('跟随时间线筛选：与 buildRows 同一口径', () => {
     const tl = [
       ev(1, 'stage_started', { stage: '实现' }),
-      ev(2, 'message', {}, 'owner'),
+      ev(2, 'owner_message', {}, 'owner'),
       ev(3, 'flag_submitted', { flag_id: 'f1' }),
       ev(4, 'system', { kind: 'managed_decision', action: 'allow' }),
     ]
@@ -202,7 +202,7 @@ describe('nodeMarks', () => {
   })
 
   it('宿主节点覆盖未加载的历史（rowIdx -1），已加载的补上谁与何时；三类新节点只取已加载窗口', () => {
-    const tl = [{ ...ev(30, 'artifact_delivered', { path: 'a.md' }, 'fe'), message: null }, ev(31, 'message', {}, 'owner')]
+    const tl = [{ ...ev(30, 'artifact_delivered', { path: 'a.md' }, 'fe'), message: null }, ev(31, 'owner_message', {}, 'owner')]
     const marks = nodeMarks(tl, buildRows(tl, 'all'), 0, { hostNodes: [
       { event_id: 2, kind: 'stage_started', label: '设计' },
       { event_id: 30, kind: 'artifact_delivered', label: 'a.md' },
