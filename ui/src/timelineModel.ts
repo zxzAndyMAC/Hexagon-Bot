@@ -4,6 +4,8 @@ import type { TimelineWindowPage } from './gen/TimelineWindowPage'
 import { pairToolCalls } from './agentSteps'
 import { parseTime } from './usage'
 import type { IconName } from './components/Icon'
+import type { TimelineNode } from './gen/TimelineNode'
+import type { TimelineNodeClass } from './gen/TimelineNodeClass'
 
 export type Filter = 'all' | 'messages' | 'decisions' | 'story'
 
@@ -427,68 +429,78 @@ function markInFilter(filter: Filter, kind: string, hasMessage: boolean, highRis
 
 const errorText = (payload: Record<string, unknown>) => String(payload.error ?? payload.reason ?? '')
 
-/** 票 06 新增三类：负责人发言、托管决定、失败（turn_failed 未恢复、模型请求停止）。只从已加载窗口派生。 */
-function extraMark(it: TimelineItem, timeline: TimelineItem[], index: number): Omit<NodeMark, 'rowIdx'> | null {
+/** 刻度元数据按宿主节点类别（gap A1：类别由 core `timeline_nodes` 判定，UI 不再重判「未恢复」）。 */
+const CLASS_META: Record<Exclude<TimelineNodeClass, 'milestone'>, KindMeta & { tone?: MarkTone }> = {
+  owner: { type: 'owner', tier: 'm', icon: 'message' },
+  managed: { type: 'managed', tier: 'e', tone: 'mg', icon: 'bot' },
+  failed: { type: 'failed', tier: 'e', tone: 'err', icon: 'warn' },
+}
+
+const node = (ev: TimelineItem['event'], cls: TimelineNodeClass, label: string, summary?: string): HostNode =>
+  ({ event_id: ev.id, kind: ev.kind, class: cls, label, summary: summary || null, agent_id: ev.agent_id, created_at: ev.created_at })
+
+/** 一条已加载事件对应的节点（与 core `trace/window/nodes.rs` 同口径）；不是节点返回 null。 */
+function itemNode(it: TimelineItem, timeline: TimelineItem[], index: number): HostNode | null {
   const ev = it.event
-  const base = { eventId: ev.id, agentId: ev.agent_id, at: ev.created_at }
+  if (KIND_META[ev.kind]) {
+    const p = ev.payload
+    return node(ev, 'milestone', String(p.stage ?? p.path ?? p.flag_id ?? ev.kind), String(p.summary ?? p.note ?? p.reason ?? ''))
+  }
   if (isOwnerItem(it)) {
     const body = it.message?.body ?? String(ev.payload.body ?? '')
-    return { ...base, type: 'owner', tier: 'm', icon: 'message', label: firstLine(body), summary: body }
+    return node(ev, 'owner', firstLine(body), body)
   }
   if (ev.kind === 'system' && ev.payload.kind === 'managed_decision') {
     const label = [ev.payload.card_kind, ev.payload.action].filter(v => typeof v === 'string' && v).join(' · ')
-    return { ...base, type: 'managed', tier: 'e', tone: 'mg', icon: 'bot', label: label || 'managed_decision',
-      summary: typeof ev.payload.reason === 'string' ? ev.payload.reason : undefined }
+    return node(ev, 'managed', label || 'managed_decision', typeof ev.payload.reason === 'string' ? ev.payload.reason : undefined)
   }
   const later = timeline.slice(index + 1)
   // 「未恢复」：同一 Agent 之后没有正常收束的回合。主动停止（isInterruptedTurn）不算失败。
   if (ev.kind === 'turn_failed' && !isInterruptedTurn(it) &&
     !later.some(next => next.event.kind === 'turn_finished' && next.event.agent_id === ev.agent_id)) {
     const error = errorText(ev.payload)
-    return { ...base, type: 'failed', tier: 'e', tone: 'err', icon: 'warn', label: firstLine(error) || 'turn_failed', summary: error || undefined }
+    return node(ev, 'failed', firstLine(error) || 'turn_failed', error)
   }
   // 模型请求恢复项（MR-01..04）：一个 recovery_id 只看最后一个状态；停在 failed = 停止 / 失败。
   if (ev.kind === 'system' && ev.payload.kind === 'model_request_failed' &&
     !later.some(next => next.event.kind === 'system' && next.event.payload.recovery_id === ev.payload.recovery_id &&
       MODEL_RECOVERY_KINDS.includes(String(next.event.payload.kind)))) {
     const error = errorText(ev.payload)
-    return { ...base, type: 'failed', tier: 'e', tone: 'err', icon: 'warn', label: firstLine(error) || 'model_request_failed', summary: error || undefined }
+    return node(ev, 'failed', firstLine(error) || 'model_request_failed', error)
   }
   return null
 }
 
-/** 宿主节点（完整历史，kind + label）。缺省时从已加载时间线派生（无项目的旧口径 / 测试）。 */
-export type HostNode = { event_id: number; kind: string; label: string }
+/** 从已加载时间线派生节点：无项目的旧口径、测试、dev mock 的 timeline_nodes 投影共用。 */
+export function timelineNodesOf(timeline: TimelineItem[]): HostNode[] {
+  return timeline.flatMap((it, index) => { const n = itemNode(it, timeline, index); return n ? [n] : [] })
+}
+
+/** 宿主节点（完整历史）。 */
+export type HostNode = TimelineNode
 
 /**
- * 节点轨刻度，按事件顺序从上到下。基础 kind 来自宿主节点读（完整历史）；三类新节点只从已加载窗口派生
- * （C15「时间线窗口未补全时只显示已加载部分」，宿主节点读不改 IPC）。待决刻度在最下（「现在」），点它打开坞；
+ * 节点轨刻度，按事件顺序从上到下。四类节点（里程碑、负责人发言、托管决定、未恢复失败）都来自宿主节点读
+ * （gap A1，2026-10-15：覆盖全历史，取代票 06「三类新节点只从已加载窗口派生」）；宿主读水位之后才到的事件
+ * 先从已加载窗口补上，下一次节点读到来时被宿主节点覆盖。待决刻度在最下（「现在」），点它打开坞；
  * 待决数取宿主 owner_pending 读，托管事项已被排除（interaction §8，2026-10-11 对齐说明第 2 条）——
  * 托管决定只出 mg 刻度，绝不出 warn。跟随时间线筛选：与 buildRows 同一过滤口径。
  */
-export function nodeMarks(timeline: TimelineItem[], rows: Row[], pendingCount: number, opts: { hostNodes?: HostNode[]; filter?: Filter } = {}): NodeMark[] {
+export function nodeMarks(timeline: TimelineItem[], rows: Row[], pendingCount: number,
+  opts: { hostNodes?: HostNode[]; hostWatermark?: number; filter?: Filter } = {}): NodeMark[] {
   const filter = opts.filter ?? 'all'
   const rowIndex = (id: number) => rows.findIndex(row => rowContainsEvent(row, id))
-  const byId = new Map(timeline.map(it => [it.event.id, it]))
+  const derived = timelineNodesOf(timeline)
+  const fresh = opts.hostNodes ? derived.filter(n => n.event_id > (opts.hostWatermark ?? 0)) : []
   const marks = new Map<number, NodeMark>()
-  const base = opts.hostNodes ?? timeline.filter(it => KIND_META[it.event.kind]).map(it => ({
-    event_id: it.event.id, kind: it.event.kind,
-    label: String(it.event.payload.stage ?? it.event.payload.path ?? it.event.payload.flag_id ?? it.event.kind),
-  }))
-  for (const node of base) {
-    const meta = KIND_META[node.kind]
-    if (!meta || !markInFilter(filter, node.kind, false, false)) continue
-    const item = byId.get(node.event_id)
-    const summary = item ? String(item.event.payload.summary ?? item.event.payload.note ?? item.event.payload.reason ?? '') : ''
-    marks.set(node.event_id, { eventId: node.event_id, rowIdx: rowIndex(node.event_id), ...meta, label: node.label,
-      agentId: item?.event.agent_id, at: item?.event.created_at, summary: summary || undefined })
+  for (const n of [...(opts.hostNodes ?? derived), ...fresh]) {
+    const meta = n.class === 'milestone' ? KIND_META[n.kind] : CLASS_META[n.class]
+    if (!meta || marks.has(n.event_id)) continue
+    const highRisk = n.class === 'failed'
+    if (!markInFilter(filter, n.kind, n.class === 'owner', highRisk)) continue
+    marks.set(n.event_id, { eventId: n.event_id, rowIdx: rowIndex(n.event_id), ...meta, label: n.label,
+      agentId: n.agent_id, at: n.created_at, summary: n.summary || undefined })
   }
-  timeline.forEach((it, index) => {
-    if (marks.has(it.event.id)) return
-    if (!markInFilter(filter, it.event.kind, it.message != null, isHighRiskSys(it))) return
-    const mark = extraMark(it, timeline, index)
-    if (mark) marks.set(it.event.id, { ...mark, rowIdx: rowIndex(it.event.id) })
-  })
   const out = [...marks.values()].sort((a, b) => (a.eventId ?? 0) - (b.eventId ?? 0))
   if (pendingCount > 0) out.push({ rowIdx: -1, type: 'pending', tier: 'e', tone: 'warn', icon: 'warn', label: String(pendingCount), pending: true })
   return out

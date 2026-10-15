@@ -24,7 +24,7 @@ it('a real project with its initial window pending renders one loading surface w
   // Issue15: a fresh [] fallback changed row identity on every render and
   // recursively reset the virtualizer before the initial IPC could finish.
   vi.spyOn(api, 'timelineWindow').mockImplementation(() => new Promise(() => {}))
-  vi.spyOn(api, 'timelineNodes').mockResolvedValue({ project_root: '/window-initial', watermark: 0, nodes: [] })
+  vi.spyOn(api, 'timelineNodes').mockResolvedValue({ project_root: '/window-initial', watermark: 0, nodes: [], retired: [] })
   useUiStore.setState({ projectRoot: '/window-initial', projectEpoch: 10, timeline: [], timelineFacts: null,
     pending: [], team: [], streams: {}, thinkings: {}, plans: {}, streamDone: {}, stages: [] })
   const el = document.createElement('div'), root = createRoot(el)
@@ -41,7 +41,7 @@ it('a real project with its initial window pending renders one loading surface w
 it('loads older history on upward intent without a persistent button, keeping failure retry visible',async()=>{
   const page: TimelineWindowPage={project_root:'/history',items:[{event:{id:50,project_id:'p1',stage_run_id:null,agent_id:null,kind:'system',payload:{kind:'fixture'},created_at:'2026-10-02T00:00:00Z'},message:null}],boundary_pairs:[],turn_windows:[],chapter_base:0,has_before:true,has_after:false,watermark:50,target_event_id:null,steered_message_ids:[]}
   const load=vi.spyOn(api,'timelineWindow').mockResolvedValueOnce(page).mockRejectedValueOnce(new Error('offline')).mockResolvedValue({...page,has_before:false})
-  vi.spyOn(api,'timelineNodes').mockResolvedValue({project_root:'/history',watermark:50,nodes:[]})
+  vi.spyOn(api,'timelineNodes').mockResolvedValue({project_root:'/history',watermark:50,nodes:[],retired:[]})
   useUiStore.setState({projectRoot:'/history',projectEpoch:20,timeline:[],timelineFacts:null,pending:[],team:[],streams:{},thinkings:{},plans:{},streamDone:{},stages:[]})
   const el=document.createElement('div'),root=createRoot(el)
   try {

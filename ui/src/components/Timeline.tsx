@@ -838,7 +838,7 @@ export function Timeline() {
   const [filter, setFilter] = useState<Filter>('all')
   const windowState = useTimelineWindow(filter)
   const { page } = windowState
-  const { nodes } = useTimelineNodes()
+  const { nodes, watermark: nodesWatermark } = useTimelineNodes()
   const timeline = page?.items ?? (projectRoot == null && projectEpoch === 0 ? legacyTimeline : EMPTY_TIMELINE)
   const callIndex = useMemo(() => new Map(pairToolCalls([...timeline, ...(page?.boundary_pairs ?? [])]
     .sort((a, b) => a.event.id - b.event.id)).map(call => [call.called.event.id, call])), [timeline, page?.boundary_pairs])
@@ -862,9 +862,9 @@ export function Timeline() {
     olderLoading: windowState.olderLoading, olderError: windowState.olderError,
     loadOlder: windowState.loadOlder, loadLatest: windowState.loadLatest,
     targetEventId: page?.target_event_id ?? null, stickReq })
-  // 票 06（C15）：宿主节点读给完整历史的基础刻度；负责人发言 / 托管决定 / 失败从已加载窗口派生；跟随筛选；超 40 道合并事件刻度。
+  // 票 06（C15）+ gap A1：宿主节点读给完整历史的四类刻度（水位之后的新事件先从窗口补）；跟随筛选；超 40 道合并事件刻度。
   const marks = useMemo(() => compactMarks(nodeMarks(timeline, rows, pending.length,
-    { hostNodes: projectRoot != null ? nodes : undefined, filter })), [projectRoot, nodes, rows, pending.length, timeline, filter])
+    { hostNodes: projectRoot != null ? nodes : undefined, hostWatermark: nodesWatermark, filter })), [projectRoot, nodes, nodesWatermark, rows, pending.length, timeline, filter])
   const [range, setRange] = useState<{ start: number; end: number } | null>(null)
   const highlights = useMemo(() => markHighlights(marks, range), [marks, range])
   const areaRef = useRef<HTMLDivElement>(null)
