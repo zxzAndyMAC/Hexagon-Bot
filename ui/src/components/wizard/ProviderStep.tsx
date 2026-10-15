@@ -81,8 +81,8 @@ function ModelProbeField({ value, onChange, probe, list }: {
       ? <Badge variant="err" data-probe="failed">{t('wizard.probe.failed')}</Badge>
       : undefined
   return (
-    <Field label={t('providers.model')} error={reason} help={unlisted ? t('wizard.probe.unlistedHelp') : undefined}>
-      <Input aria-label={t('providers.model')} placeholder={t('providers.pickModel')} value={value} list={list}
+    <Field label={t('wizard.providerField.model')} error={reason} help={unlisted ? t('wizard.probe.unlistedHelp') : undefined}>
+      <Input aria-label={t('wizard.providerField.model')} placeholder={t('providers.pickModel')} value={value} list={list}
         aria-invalid={failed || undefined}
         loadingLabel={probe.phase === 'running' ? t('wizard.probe.running') : undefined}
         trailing={chip}

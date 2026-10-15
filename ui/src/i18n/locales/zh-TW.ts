@@ -748,7 +748,7 @@ export default {
   },
   wizard: {
     keyHelp: "存進系統鑰匙圈，不寫入專案目錄。",
-    providerField: {"label": "服務商", "configured": "已設定", "presets": "內建預設", "custom": "自訂…"},
+    providerField: {"label": "服務商", "configured": "已設定", "presets": "內建預設", "custom": "自訂…", "model": "預設模型"},
     probe: {"running": "檢測中…", "ok": "檢測通過", "okWindow": "檢測通過 · {{window}} 視窗", "unlisted": "目錄裡沒有這個模型", "unlistedHelp": "鑰匙可用，但服務商的模型目錄裡沒有這個名字；仍可儲存，先確認沒有拼錯。", "failed": "檢測失敗", "failedWith": "檢測沒有完成：{{reason}}", "reason": {"authentication": "服務商拒絕了這把鑰匙，檢查是否複製完整、是否已過期。", "quota": "服務商帳戶額度不足，到服務商後台檢查帳單。", "rate_limited": "服務商正在限流，稍等片刻會自動重新檢測。", "provider_unavailable": "服務商暫時不可用，稍後再試。", "request_rejected": "服務商拒絕了這次請求，檢查服務商類型是否選對。", "endpoint_not_found": "這個位址上沒有模型目錄介面，檢查 Base URL（常見是少了或多了 /v1）。", "transport": "連不上服務商，檢查網路和 Base URL。", "deadline": "服務商 30 秒內沒有回應，檢查網路後再試。", "invalid_response": "服務商的回應不是模型目錄，檢查 Base URL 和服務商類型。", "invalid_url": "Base URL 不是有效位址。", "missing_credential": "還沒有鑰匙，填上 API Key 後會自動檢測。"}},
     savedToDraft: "變更已存入精靈草稿 · 僅作用於本專案",
     shell: {"title": "新建專案", "cancel": "取消", "autosave": "草稿自動儲存", "aiLocked": "AI 正在生成，完成前先鎖定", "qaLocked": "答問期間先鎖定", "picked": "已選 {{count}} 個"},

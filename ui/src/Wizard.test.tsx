@@ -128,7 +128,7 @@ describe('向导先配模型服务商（票 13）', () => {
     const bind = vi.spyOn(api, 'setSlotBinding').mockResolvedValue(undefined)
     const el = await renderWizard()
     expect(providerSelect(el).value).toBe('preset:anthropic')
-    const model = el.querySelector('input[aria-label="Model"]') as HTMLInputElement
+    const model = el.querySelector('input[aria-label="Default model"]') as HTMLInputElement
     expect(model.value).toBe('claude-opus-5-5')
     await act(async () => { setInput(password(el) as HTMLInputElement, 'sk-test') })
     await click(button(el, 'Save and bind default'))

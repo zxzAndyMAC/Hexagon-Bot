@@ -748,7 +748,7 @@ export default {
   },
   wizard: {
     keyHelp: "システムのキーチェーンに保存し、プロジェクトフォルダーには書き込みません。",
-    providerField: {"label": "プロバイダー", "configured": "設定済み", "presets": "組み込みプリセット", "custom": "カスタム…"},
+    providerField: {"label": "プロバイダー", "configured": "設定済み", "presets": "組み込みプリセット", "custom": "カスタム…", "model": "デフォルトモデル"},
     probe: {"running": "確認中…", "ok": "確認済み", "okWindow": "確認済み · {{window}} ウィンドウ", "unlisted": "カタログにないモデル", "unlistedHelp": "キーは有効ですが、このモデル名はプロバイダーのカタログにありません。保存はできます。まず綴りを確認してください。", "failed": "確認に失敗", "failedWith": "確認が完了しませんでした：{{reason}}", "reason": {"authentication": "プロバイダーがこのキーを拒否しました。全体をコピーしたか、期限切れでないか確認してください。", "quota": "プロバイダーの残高が不足しています。管理画面で請求を確認してください。", "rate_limited": "プロバイダーがレート制限中です。少し待ってから編集すると再確認します。", "provider_unavailable": "プロバイダーが一時的に利用できません。後でもう一度お試しください。", "request_rejected": "プロバイダーがリクエストを拒否しました。プロバイダー種別を確認してください。", "endpoint_not_found": "このアドレスにモデルカタログがありません。Base URL を確認してください（/v1 の過不足がよくあります）。", "transport": "プロバイダーに接続できません。ネットワークと Base URL を確認してください。", "deadline": "30 秒以内に応答がありませんでした。ネットワークを確認して再試行してください。", "invalid_response": "応答がモデルカタログではありません。Base URL と種別を確認してください。", "invalid_url": "Base URL が有効なアドレスではありません。", "missing_credential": "キーがまだありません。API キーを入力すると自動で確認します。"}},
     savedToDraft: "ウィザードの下書きに保存しました · このプロジェクトのみ",
     shell: {"title": "新規プロジェクト", "cancel": "キャンセル", "autosave": "下書きは自動保存されます", "aiLocked": "AI が生成中です。完了までロックします", "qaLocked": "回答中はロックします", "picked": "{{count}} 件を選択"},

@@ -1664,6 +1664,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'create_project':
       return null as T
     case 'list_providers':
+      // gap B8：`?mocknoprovider` 给 dev 一份空供应商表，看向导服务商步三字段表单（对照 entry#wz-provider）
+      if (new URLSearchParams(location.search).has('mocknoprovider')) return { providers: [], slots: {} } as T
       return {
         providers: [
           {
