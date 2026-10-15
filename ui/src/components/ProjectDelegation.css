@@ -1,25 +1,28 @@
-.delegation { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--border); }
-.delegation-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.delegation-head strong { font-size: 13px; font-weight: 500; color: var(--text); }
-.delegation-note, .delegation-error, .delegation-empty { font-size: 12px; line-height: 1.5; color: var(--text-2); margin: 0; }
-.delegation-error { color: var(--err); }
-.delegation-on { color: var(--legacy-accent); border-color: var(--legacy-accent-border); background: var(--legacy-accent-soft); }
-.delegation-confirm { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--legacy-accent-border); border-radius: var(--r-md); background: var(--bg-2); }
-.delegation-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.delegation-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--text-2); }
-.delegation-list li { display: flex; gap: 8px; }
-.delegation-unfinished { color: var(--err); }
-.delegation-list code { font-size: 11px; color: var(--text-2); }
-.approval-mode-managed { border-top: 1px solid var(--border); margin: 6px 4px 0; padding-top: 6px; }
-.approval-mode-managed-row { display: flex; align-items: center; gap: 12px; padding: 8px 6px; cursor: pointer; color: var(--text); }
-.managed-confirm-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.managed-confirm-columns h3 { font-size: 13px; font-weight: 500; margin: 0 0 4px; color: var(--text); }
-.managed-confirm-columns ul { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.6; color: var(--text-2); }
-.managed-pill-wrap { position: relative; }
-.managed-pill { color: var(--text-2); border: 1px solid var(--border-strong); background: var(--bg-3); }
-.managed-pill-paused { opacity: .6; }
-.managed-pill-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; width: min(380px, calc(100vw - 48px)); max-height: 60vh; overflow: auto; padding: 12px; display: grid; gap: 8px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--popover); }
-.delegation-external { margin-top: 12px; }
-.delegation-external h4 { margin: 0 0 6px; font-size: 12px; font-weight: 560; color: var(--text); }
-.delegation-external .delegation-list li { flex-wrap: wrap; align-items: baseline; }
-.delegation-unverified { color: var(--text-2); }
+/* 托管（ui-redesign 票 08，components D7 / D9 / D10；managed#running / #report / #exit）。
+   只用 foundations 的 token；mg-* 外形照原型 proto.css。 */
+.delegation-note, .delegation-empty { font-size: 12px; line-height: 1.5; color: var(--ink-3); margin: 0; }
+.approval-mode-managed { border-top: 1px solid var(--line); margin: 6px 4px 0; padding-top: 6px; }
+.approval-mode-managed-row { display: flex; align-items: center; gap: 12px; padding: 8px 6px; cursor: pointer; color: var(--ink); }
+
+/* D7 胶囊：accent 身份色（R-08）；暂停转灰。深色 tint 叠加、无描边。 */
+.mg-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; border-radius: 99px;
+  font-size: 12.5px; font-weight: 500; color: var(--accent-ink); background: var(--accent-tint);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent); cursor: pointer; }
+.mg-chip:hover { color: var(--accent); }
+.mg-chip.paused { color: var(--ink-2); background: var(--canvas); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.mg-chip.paused:hover { color: var(--ink); }
+[data-theme='dark'] .mg-chip:not(.paused), [data-theme='night'] .mg-chip:not(.paused) { box-shadow: none; }
+.mg-av { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; flex: none;
+  background: var(--accent-tint); color: var(--accent-ink); }
+.mg-av.sm { width: 22px; height: 22px; }
+
+/* D7 细条：待决坞让位给它（interaction §8）。 */
+.mg-strip { width: 100%; max-width: var(--col-w, 720px); margin: 0 auto 8px; box-sizing: border-box; display: flex; align-items: center;
+  gap: 10px; height: 40px; padding: 0 8px 0 12px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-raised); font-size: 13px; }
+.mg-strip .txt { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+
+/* D9 托管决定行。 */
+.mg-row { border-radius: 12px; background: var(--app-card); box-shadow: var(--shadow-card); padding: 10px 12px; margin: 6px 0; }
+.mg-row .h { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.mg-row .h b { font-weight: 600; color: var(--ink); }
+.mg-row .r { font-size: 12.5px; color: var(--ink-2); margin: 4px 0 0 32px; }
