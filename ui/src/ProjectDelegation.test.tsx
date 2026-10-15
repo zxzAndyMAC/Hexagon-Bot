@@ -45,9 +45,11 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   expect(toggle.checked).toBe(false)
   await act(async () => toggle.click())
   expect(save).not.toHaveBeenCalled()
-  const dialog = el.querySelector('.managed-confirm')!
+  // 票 08（components D10 / A17）：说明从原生 <dialog> 换到共享 AlertDialog，经 portal 挂到 body。
+  const dialog = document.querySelector('.managed-confirm')!
   expect(dialog.textContent).toContain('The system will not')
-  expect(dialog.textContent).toContain('at most 3 correction rounds')
+  // 票 08（D10）：上限从一句 limits 拆成三行信息（refresh / usage / flag），句首大写。
+  expect(dialog.textContent).toMatch(/at most 3 correction rounds/i)
   // ADR0087 (ticket 01): full release is stated honestly before turning on.
   expect(dialog.textContent).toContain('only go to the system Trash')
   expect(dialog.textContent).toContain('MCP servers and skills installed in this project')
@@ -55,7 +57,8 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   expect(dialog.textContent).toContain('skills marked manual-only')
   expect(dialog.querySelector('[data-external-deletion]')!.textContent).toContain('cannot block deletions')
   expect(dialog.querySelector('[data-linux-limit]')!.textContent).toContain('Linux')
-  expect(document.activeElement?.textContent).toBe('Cancel')
+  // 票 08（A17）：「取消」按钮带 Esc 键位块。
+  expect(document.activeElement?.textContent).toBe('CancelEsc')
   const confirm = [...dialog.querySelectorAll('button')].find(b => b.textContent === 'Turn on delegation')!
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   await act(async () => confirm.click())
@@ -65,27 +68,51 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   expect(trigger.textContent).toBe('Help me approve | Delegation')
 })
 
-it('the resident pill is neutral, pauses and turns off through the host', async () => {
+it('the resident pill wears the accent identity, pauses and turns off through the host', async () => {
+  // 票 08（components D7，R-08 拍板）：胶囊从中性灰改为 accent 身份色（仍不是待决的橙）；
+  // 弹层改 A16 Popover（portal → 查 document）；关闭后 toast 转回人工件数，报告作收场弹出。
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([{ id: 'q1', kind: 'permission', agent_id: 'a0', payload: {}, state: 'queued' }])
   const pause = vi.spyOn(api, 'setProjectDelegationPaused').mockResolvedValue({ ...on, paused: true, generation: 2 })
   const disable = vi.spyOn(api, 'setProjectDelegation').mockResolvedValue(off)
+  useUiStore.setState({ toasts: [] })
   await mount(<ManagedPill />)
   const pill = el.querySelector<HTMLButtonElement>('.managed-pill')!
   expect(pill.textContent).toContain('Delegating')
+  expect(pill.className).toContain('mg-chip')
   expect(pill.className).not.toContain('amber')
   await act(async () => pill.click())
-  expect(el.textContent).toContain('Processing 1 pending')
-  const pauseButton = [...el.querySelectorAll('button')].find(b => b.textContent === 'Pause delegation')!
+  const menu = document.querySelector('[data-managed-menu]')!
+  expect(menu.textContent).toContain('1 item(s)')
+  const pauseButton = [...menu.querySelectorAll('button')].find(b => b.textContent?.startsWith('Pause delegation'))!
   vi.spyOn(api, 'projectDelegation').mockResolvedValue({ ...on, paused: true, generation: 2 })
   await act(async () => pauseButton.click())
   expect(pause).toHaveBeenCalledWith(true, '/proj')
   expect(el.querySelector('[data-managed-state]')!.getAttribute('data-managed-state')).toBe('paused')
-  const offButton = [...el.querySelectorAll('button')].find(b => b.textContent === 'Turn off project delegation')!
+  expect(el.querySelector('.managed-pill')!.className).toContain('paused')
+  const offButton = [...document.querySelectorAll('[data-managed-menu] button')].find(b => b.textContent?.startsWith('Turn off project delegation'))!
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(off)
-  await act(async () => offButton.click())
+  await act(async () => (offButton as HTMLButtonElement).click())
   expect(disable).toHaveBeenCalledWith(false, '/proj')
   expect(el.querySelector('.managed-pill')).toBeNull()
+  expect(useUiStore.getState().toasts.map(x => x.text)).toContain('Delegation off · 1 item(s) back with you')
+  expect(document.querySelector('[data-managed-report]')).not.toBeNull()
+})
+
+it('pause and turn-off keys fire in any modal scope; there is no direct turn-on key', async () => {
+  vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
+  const pause = vi.spyOn(api, 'setProjectDelegationPaused').mockResolvedValue({ ...on, paused: true, generation: 2 })
+  const { setBinding, resetBinding, bindingFor, isMac } = await import('./keymap')
+  setBinding('managedPause', 'alt+mod+p')
+  try {
+    useUiStore.setState({ modalScope: 'settings' })
+    await mount(<ManagedPill />)
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', code: 'KeyP', altKey: true, metaKey: isMac, ctrlKey: !isMac, bubbles: true })) })
+    expect(pause).toHaveBeenCalledWith(true, '/proj')
+  } finally { resetBinding('managedPause'); useUiStore.setState({ modalScope: 'workbench' }) }
+  resetBinding('managedEnable'); resetBinding('confirmManaged')
+  expect(bindingFor('managedEnable')).toBe('')
+  expect(bindingFor('confirmManaged')).toBe('')
 })
 
 it('the pending badge counts only owner items; delegated ones show in the pill', async () => {
@@ -110,7 +137,8 @@ it('settings shows status and the report, not a second switch', async () => {
   expect(el.querySelector('input[role="switch"]')).toBeNull()
   expect(el.textContent).toContain('approval mode menu')
   expect(el.textContent).toContain('Refused')
-  expect(el.textContent).toContain('1 done')
+  // 票 08（D9）：一句「Recent: 1 done …」换成 KPI 四格。
+  expect(el.querySelector('[data-managed-kpi]')!.textContent).toContain('Done1')
 })
 
 it('the report lists external operations with honest verification and jumps to the decision row', async () => {
@@ -131,10 +159,12 @@ it('the report lists external operations with honest verification and jumps to t
     await mount(<ProjectDelegation />)
     const section = el.querySelector('[data-external-ops]')!
     expect(section.textContent).toContain('External operations')
-    expect(el.querySelector('[data-external-kind="local_trash"]')!.textContent).toContain('recoverable from Trash')
+    expect(el.querySelector('[data-external-kind="local_trash"]')!.textContent).toContain('Recoverable from Trash')
     expect(el.querySelector('[data-external-kind="local_trash"]')!.textContent).toContain('/Users/me/.Trash/old.png')
-    expect(el.querySelector('[data-external-kind="mcp"]')!.textContent).toContain('Host did not verify whether anything was deleted')
-    const button = el.querySelector<HTMLButtonElement>('[data-external-kind="mcp"] button')!
+    expect(el.querySelector('[data-external-kind="mcp"]')!.textContent).toContain('Host did not verify')
+    // 票 08（D9 核实标记）：chip 用短标签，完整说明在 title。
+    expect(el.querySelector('[data-external-kind="mcp"] [title]')!.getAttribute('title')).toBe('Host did not verify whether anything was deleted')
+    const button = [...el.querySelectorAll<HTMLButtonElement>('[data-external-kind="mcp"] button')].at(-1)!
     expect(button.title).toBe('Show in timeline')
     await act(async () => button.click())
     expect(jumped).toEqual([12])

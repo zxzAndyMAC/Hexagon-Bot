@@ -24,6 +24,7 @@ import { api, errText, onTurnDelta, onToolOutput } from './api'
 import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
 import { PendingDock } from './components/PendingDock'
+import { ManagedStrip } from './components/ManagedStrip'
 import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
@@ -367,6 +368,8 @@ export default function App() {
               </div>
               {/* B4 触顶横幅：输入条正上方（interaction §10） */}
               <CapBanner onRaise={raiseCap} />
+              {/* 票 08（D7）：托管生效时细条替坞占位；坞只在仍有负责人事项时同时出现 */}
+              <ManagedStrip />
               {/* 票 04（ADR 0089，D6）：待决坞停在输入条正上方，不遮挡时间线；Tab 序 对话 → 坞 → 输入条 */}
               <PendingDock />
               <Composer />

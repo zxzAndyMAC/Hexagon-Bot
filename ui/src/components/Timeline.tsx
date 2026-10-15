@@ -13,7 +13,7 @@ import { api, errText, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useUiStore } from '../store'
-import { buildRows, compactMarks, expandedAfterPrepend, markHighlights, nodeMarks, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
+import { buildRows, compactMarks, expandedAfterPrepend, markHighlights, nodeMarks, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, isManagedDecision, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { bindingFor, formatBinding, matches } from '../keymap'
@@ -37,6 +37,9 @@ import { ReturnSummaryCard, ReturnSummaryMarker } from './ReturnSummary'
 import { FreshStart } from './FreshStart'
 import { IntakeCard } from './IntakeCard'
 import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
+import { useDelegation } from '../useDelegation'
+import { ManagedRow } from './ManagedRow'
+import { ManagedReport } from './ManagedReport'
 import { parseTime } from '../usage'
 import { SkeletonRows } from '@/components/ui/skeleton'
 import { InlineError } from '@/components/ui/inline-error'
@@ -249,7 +252,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 「系统」一刀切让 invariant_violation 这类信号淹没在同名行里。
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
-  if (MODEL_RECOVERY_KINDS.includes(sub)) return <div style={{ margin: '8px 0' }}><ModelRecoveryStatus id={String(item.event.payload.recovery_id)} payload={item.event.payload} top /></div>
+  if (MODEL_RECOVERY_KINDS.includes(sub)) return <ModelRecoveryRow item={item} />
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
   }
@@ -271,6 +274,29 @@ function SystemRow({ item }: { item: TimelineItem }) {
         {label}
         {note && <span className="dim3"> · {note}</span>}
       </span>
+    </div>
+  )
+}
+
+/** components D11 时间线形：消息式头（头像 + 角色 + 用途 chip）→ 状态块（票 08）。 */
+function ModelRecoveryRow({ item }: { item: TimelineItem }) {
+  const { t } = useTranslation()
+  const team = useUiStore((s) => s.team)
+  const p = item.event.payload
+  const view = (p.view ?? p) as Record<string, unknown>
+  const agentId = String(view.agent_id ?? item.event.agent_id ?? '')
+  const member = team.find((x) => x.id === agentId)
+  const purpose = String(view.purpose ?? '')
+  return (
+    <div className="tl-msg" style={{ margin: '8px 0' }}>
+      {member && <span className="tl-face"><AgentFace agentId={member.id} role={member.role} /></span>}
+      <div className="tl-grow">
+        <div className="tl-who">
+          <b>{member?.role ?? agentId}</b>
+          {purpose && <span className="t">{t(`modelRecovery.purpose.${purpose}`, { defaultValue: purpose })}</span>}
+        </div>
+        <ModelRecoveryStatus id={String(p.recovery_id)} payload={p} top />
+      </div>
     </div>
   )
 }
@@ -487,6 +513,7 @@ export const EventRow = memo(function EventRow({
       </Marker>
     )
   }
+  if (isManagedDecision(item)) return <ManagedRow item={item} />
   if (item.message) {
     const isOwner = item.event.kind === 'owner_message' || item.message.author === 'owner'
     return isOwner
@@ -1037,6 +1064,7 @@ export function Timeline() {
   }
 
   const pinned = useMemo(() => pinnedSummary(timeline), [timeline])
+  const delegating = useDelegation().status?.enabled ?? false
   // 完整历史才判首屏：有窗口页就看它没有更早一页；无窗口的旧口径看 legacy 时间线已追平。
   const fullHistory = page != null ? !page.has_before : projectRoot == null && projectEpoch === 0 && timelineCaughtUp && timeline.length > 0
   const fresh = useMemo(() => isFreshProject(timeline, fullHistory), [timeline, fullHistory])
@@ -1063,7 +1091,10 @@ export function Timeline() {
       </div>
       {pinned && (
         <div className="tl-col tl-pin" style={{ width: '100%', boxSizing: 'border-box' }}>
-          <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />
+          {/* 票 08（interaction §7 / §8）：托管期间归来，置顶的是托管报告而不是普通归来摘要 */}
+          {delegating
+            ? <ManagedReport key={pinned.event.id} card />
+            : <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />}
         </div>
       )}
       <div ref={areaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
