@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { DataBoundary as Boundary } from '../gen/DataBoundary'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Group, GroupTitle, SRow } from './settings/kit'
 
 type Recipient = Boundary['recipients'][number]
@@ -10,7 +11,8 @@ type Recipient = Boundary['recipients'][number]
 /** Reliability 22: a read-only explanation of actual storage and configured exits.
  * ui-redesign 票 11（settings#general「数据去向」）：分组卡四行——模型凭据 / 模型请求 / MCP 服务 / 工作台运营方，
  * 右侧状态 chip；原有的逐条说明（本机、终端网络、保留期）原文保留在分组下方的脚注里，不删减。 */
-export function DataBoundary() {
+/** onGo（功能缺口 C3，A19）：空接收方行给一个去处——设置里跳到「模型服务」/「MCP 服务」分区。 */
+export function DataBoundary({ onGo }: { onGo?: (section: 'models' | 'mcp') => void } = {}) {
   const { t } = useTranslation()
   const [value, setValue] = useState<Boundary | null>(null)
   const [failed, setFailed] = useState(false)
@@ -45,9 +47,11 @@ export function DataBoundary() {
               )}
             </SRow>
             <SRow icon="cpu" label={t('settingsUi.modelRequests')} hint={value && <span className="font-mono">{line(models)}</span>}>
+              {value && models.length === 0 && onGo && <Button size="xs" data-boundary-go="models" onClick={() => onGo('models')}>{t('dataBoundary.addModels')}</Button>}
               {value && <Badge>{t('settingsUi.recipients', { count: models.length })}</Badge>}
             </SRow>
             <SRow icon="plug" label={t('settings.nav_mcp')} hint={value && <span className="font-mono">{line(mcp)}</span>}>
+              {value && mcp.length === 0 && onGo && <Button size="xs" data-boundary-go="mcp" onClick={() => onGo('mcp')}>{t('dataBoundary.addMcp')}</Button>}
               {value && mcp.length > 0 && <Badge variant="warn">{t('settingsUi.plaintext')}</Badge>}
             </SRow>
             {search.length > 0 && (

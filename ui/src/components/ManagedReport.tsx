@@ -12,6 +12,7 @@ import { exportManagedReport, managedReportMarkdown, spendText } from '../manage
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { toastError } from '../toast'
 import type { ManagedSummary } from '../gen/ManagedSummary'
+import { Empty } from '@/components/ui/empty'
 import { Icon } from './Icon'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -72,7 +73,8 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
     : history === null
       ? <SkeletonRows rows={3} label={t('delegation.report')} className="p-0" />
       : records.length === 0
-        ? <p className="delegation-empty">{t('delegation.empty')}</p>
+        // 功能缺口 C3（A19）：托管期间没有可给的动作——决定由 Agent 在托管下做出；说明写明它们会记在这里。
+        ? <Empty size="sm" icon="inbox" title={t('delegation.empty')} desc={t('delegation.emptyBody')} data-managed-empty />
         : <>
           <div className="grid grid-cols-4 gap-2.5" data-managed-kpi>
             <Kpi label={t('delegation.kpiDecisions')} value={records.length} />

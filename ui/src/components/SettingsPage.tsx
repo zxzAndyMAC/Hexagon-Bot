@@ -144,7 +144,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false, i
 
   const body = (() => {
     switch (section) {
-      case 'general': return <GeneralSection />
+      case 'general': return <GeneralSection onGo={setSection} />
       case 'keys': return <KeysSection />
       case 'team': return <TeamSection projectless={projectless} />
       case 'models': return <ProviderManager /> // 全局 providers.json，无项目也可用

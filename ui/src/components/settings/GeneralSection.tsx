@@ -26,7 +26,7 @@ const THEMES: { pref: ThemePref; icon: IconName }[] = [
   { pref: 'system', icon: 'computer' },
 ]
 
-export function GeneralSection() {
+export function GeneralSection({ onGo }: { onGo?: (section: 'models' | 'mcp') => void } = {}) {
   const { t } = useTranslation()
   const themePref = useUiStore((s) => s.themePref)
   const setThemePref = useUiStore((s) => s.setThemePref)
@@ -51,7 +51,7 @@ export function GeneralSection() {
           </Segmented>
         </SRow>
       </Group>
-      <DataBoundary />
+      <DataBoundary onGo={onGo} />
     </SetWrap>
   )
 }
