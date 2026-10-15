@@ -6,6 +6,10 @@ import { ApprovalModeSelector } from './components/ApprovalModeSelector'
 import './i18n'
 import { setBinding, resetBinding } from './keymap'
 
+// ui-redesign 票 07（composer#broad，components A17，ADR 0090）：广泛访问确认由原生 <dialog> 换成共享
+// AlertDialog（Radix）。内容挂在 body 的 portal 里，所以按 document 查；原生 cancel 事件改为 Esc 键。
+const dialogButtons = () => document.querySelectorAll<HTMLButtonElement>('[role=alertdialog] button')
+
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 const el = document.createElement('div')
 let root: ReturnType<typeof createRoot>
@@ -37,15 +41,15 @@ it('waits for persistence, blocks duplicates and keeps current value when saving
   const broad = el.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[2]
   // Issue 10: selecting Broad now opens consent; only its explicit action saves.
   await act(async () => { broad.click() })
-  const confirm = el.querySelectorAll<HTMLButtonElement>('[role=alertdialog] button')[1]
+  const confirm = dialogButtons()[1]
   await act(async () => { confirm.click(); confirm.click() })
   expect(change).toHaveBeenCalledTimes(1)
   expect(change).toHaveBeenCalledWith('broad')
   expect(el.querySelector('.approval-mode-trigger')?.textContent).not.toContain('Broad access')
-  expect(el.querySelector('[role="alertdialog"]')?.getAttribute('aria-busy')).toBe('true')
+  expect(document.querySelector('[role="alertdialog"]')?.getAttribute('aria-busy')).toBe('true')
   await act(async () => { reject(new Error('db unavailable')) })
-  expect(el.querySelector('[role="alert"]')).not.toBeNull()
-  expect(el.querySelector('[role="alertdialog"]')).not.toBeNull()
+  expect(document.querySelector('[role=alertdialog] [role="alert"]')).not.toBeNull() // 票 07：portal 内
+  expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
 })
 it('returns focus after a successful persisted change', async () => {
   document.body.appendChild(el)
@@ -70,7 +74,7 @@ it('requires explicit consent on every transition, defaults to cancel and blocks
   }
   await openBroad()
   await assertModalBlocksIntake()
-  let buttons = el.querySelectorAll<HTMLButtonElement>('[role=alertdialog] button')
+  let buttons = dialogButtons()
   expect(document.activeElement).toBe(buttons[0])
   expect(change).not.toHaveBeenCalled()
   const background = vi.fn()
@@ -84,21 +88,21 @@ it('requires explicit consent on every transition, defaults to cancel and blocks
   expect(change).not.toHaveBeenCalled()
   expect(document.activeElement).toBe(trigger)
   await openBroad()
-  buttons = el.querySelectorAll<HTMLButtonElement>('[role=alertdialog] button')
+  buttons = dialogButtons()
   await act(async () => buttons[1].click())
   expect(change).toHaveBeenCalledExactlyOnceWith('broad')
   expect(document.activeElement).toBe(trigger)
   await act(async () => root.render(<ApprovalModeSelector value="broad" onChange={change} />))
   expect(trigger.classList.contains('approval-mode-broad')).toBe(true)
-  expect(el.querySelector('[role=alertdialog]')).toBeNull()
+  expect(document.querySelector('[role=alertdialog]')).toBeNull()
   await act(async () => trigger.click())
   await act(async () => el.querySelectorAll<HTMLButtonElement>('[role=menuitemradio]')[2].click())
-  expect(el.querySelector('[role=alertdialog]')).toBeNull()
+  expect(document.querySelector('[role=alertdialog]')).toBeNull()
   await act(async () => root.render(<ApprovalModeSelector value="restricted" onChange={change} />))
   await openBroad()
-  expect(el.querySelector('[role=alertdialog]')).not.toBeNull()
-  await act(async () => el.querySelector('dialog')!.dispatchEvent(new Event('cancel', { cancelable: true })))
-  expect(el.querySelector('[role=alertdialog]')).toBeNull()
+  expect(document.querySelector('[role=alertdialog]')).not.toBeNull()
+  await act(async () => document.querySelector('[role=alertdialog]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  expect(document.querySelector('[role=alertdialog]')).toBeNull()
   expect(change).toHaveBeenCalledTimes(1)
 })
 
@@ -116,9 +120,9 @@ it('honors remapped confirmation and cancel only while its dialog is open', asyn
       await act(async () => el.querySelectorAll<HTMLButtonElement>('[role=menuitemradio]')[2].click())
     }
     await open()
-    expect(el.querySelectorAll('dialog button')[1].getAttribute('title')).toContain('Y')
+    expect(dialogButtons()[1].getAttribute('title')).toContain('Y')
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', altKey: true, shiftKey: true, cancelable: true })))
-    expect(el.querySelector('dialog')).toBeNull()
+    expect(document.querySelector('[role=alertdialog]')).toBeNull()
     expect(change).not.toHaveBeenCalled()
     await open()
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Y', altKey: true, shiftKey: true, cancelable: true })))

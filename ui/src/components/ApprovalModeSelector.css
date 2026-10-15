@@ -1,23 +1,59 @@
+/* 批准模式胶囊与菜单（ui-redesign 票 07）：components D4、A16 菜单形、A10 开关、A17 广泛访问确认。
+   取值对齐 proto.css 的 mode-pill / pop / mi 段（composer#mode、composer#broad）。 */
+/* D4 批准模式胶囊：28 高、pill、内环 --line-strong、12.5 ink-2 */
 .approval-mode { position: relative; flex-shrink: 0; }
-.approval-mode-trigger { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid transparent; border-radius: var(--r-md); background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
-.approval-mode-trigger:hover { background: var(--bg-3); color: var(--text); }
-.approval-mode-trigger:disabled { opacity: .5; cursor: default; }
-.approval-mode-trigger:focus-visible, .approval-mode-option:focus-visible { outline: 2px solid var(--legacy-accent); outline-offset: 2px; }
-.approval-mode-menu { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40; width: min(340px, calc(100vw - 48px)); padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--popover);  }
-.approval-mode-option { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.approval-mode-option:hover, .approval-mode-option[aria-checked="true"] { background: var(--bg-3); }
-.approval-mode-option:disabled { cursor: wait; opacity: .6; }
-.approval-mode-option-copy { flex: 1; display: grid; gap: 4px; }
-.approval-mode-option-copy strong { font-size: 13px; font-weight: 500; }
-.approval-mode-option-copy > span, .approval-mode-boundary, .approval-mode-error { font-size: 12px; line-height: 1.5; color: var(--text-2); }
-.approval-mode-boundary { border-top: 1px solid var(--border); margin: 6px 4px 0; padding: 10px 6px 4px; }
-.approval-mode-error { padding: 4px 10px; color: var(--err); }
+.approval-mode-trigger {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px;
+  border: 0; border-radius: 99px; background: transparent; color: var(--ink-2);
+  box-shadow: inset 0 0 0 1px var(--line-strong); font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.approval-mode-trigger:hover:not(:disabled), .approval-mode-trigger[aria-expanded='true'] { background: var(--hover); }
+.approval-mode-trigger:disabled { opacity: .45; cursor: default; }
+.approval-mode-trigger:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--line-strong), 0 0 0 2px var(--accent); }
+.approval-mode-trigger .managed { color: var(--accent-ink); }
+.approval-mode-trigger .sep { color: var(--ink-3); }
+/* 广泛访问（补设计，票 07）：胶囊形不变，只把 shield 染 --orange，提醒当前放权 */
+.approval-mode-broad > svg:first-child { color: var(--orange); }
 
+/* 菜单（A16，宽 330）：头「工具批准方式 · 本项目」+ 三行高行 + 分隔线后「托管」一节 */
+.approval-mode-menu {
+  position: absolute; bottom: calc(100% + 8px); left: -8px; z-index: 40; width: min(330px, calc(100vw - 48px));
+  padding: 5px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink);
+}
 .approval-mode-menu-below { bottom: auto; top: calc(100% + 8px); }
+.approval-mode-sec { padding: 8px 9px 4px; font-size: 11.5px; color: var(--ink-3); }
+.approval-mode-option {
+  display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 8px 9px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.approval-mode-option:hover:not(:disabled), .approval-mode-option:focus-visible { background: var(--hover); outline: none; }
+.approval-mode-option:disabled { cursor: default; opacity: .6; }
+.approval-mode-option .tick { width: 14px; height: 14px; margin-top: 2px; flex: none; display: grid; place-items: center; }
+.approval-mode-option-copy { flex: 1; display: grid; gap: 1px; min-width: 0; }
+.approval-mode-option-copy strong { font-size: 13px; font-weight: 500; }
+.approval-mode-option-copy > span { font-size: 12px; line-height: 1.45; color: var(--ink-3); }
+.approval-mode-chip { margin-top: 2px; flex: none; }
+.approval-mode-sepline { height: 1px; margin: 4px 2px; background: var(--line); }
+.approval-mode-managed-row { display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px; border-radius: 7px; cursor: pointer; }
+.approval-mode-managed-row:hover { background: var(--hover); }
+.approval-mode-managed-row > svg { margin-top: 2px; color: var(--ink-2); flex: none; }
+.approval-mode-error { margin: 0; padding: 4px 9px 6px; font-size: 12px; line-height: 1.5; color: var(--red); }
+/* A10 开关外观（原生 checkbox role=switch 保留：键位 managedEnable 与测试点它）：30×18 轨、14 滑块 */
+.approval-mode .switch {
+  appearance: none; position: relative; flex: none; width: 30px; height: 18px; margin: 2px 0 0; border: 0; border-radius: 99px;
+  background: var(--hover-2); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; transition: background-color 150ms var(--ease);
+}
+.approval-mode .switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: white; box-shadow: 0 1px 2px oklch(0% 0 0 / .25); transition: transform 200ms var(--ease);
+}
+.approval-mode .switch:checked { background: var(--accent); box-shadow: none; }
+.approval-mode .switch:checked::after { left: 2px; transform: translateX(12px); background: white; }
+.approval-mode .switch:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--line), 0 0 0 2px var(--accent); }
+.approval-mode .switch:disabled { opacity: .45; cursor: default; }
 
-.approval-mode-broad, .approval-mode-broad:hover { color: var(--legacy-accent); border-color: var(--legacy-accent-border); background: var(--legacy-accent-soft); }
-.approval-mode-confirm { max-height: calc(100dvh - 48px); overflow: auto; width: min(440px, calc(100vw - 48px)); padding: 20px; color: var(--text); background: var(--popover); border: 1px solid var(--legacy-accent-border); border-radius: var(--r-lg); }
-.approval-mode-confirm::backdrop { background: var(--bg-2); opacity: .75; }
-.approval-mode-confirm h2 { display: flex; align-items: center; gap: 8px; color: var(--legacy-accent); font-size: 16px; margin: 0; }
-.approval-mode-confirm p { font-size: 13px; line-height: 1.6; color: var(--text-2); }
-.approval-mode-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+/* 广泛访问确认（A17 AlertDialog 变体 composer#broad）：勾选行 */
+.broad-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0 0 0 48px; list-style: none; font-size: 13px; color: var(--ink); }
+.broad-list li { display: flex; align-items: flex-start; gap: 8px; }
+.broad-list li > svg { margin-top: 3px; color: var(--green); }
+

@@ -56,9 +56,11 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
 
   it('左列状态点三态：已配 key=on / 缺 key=warn / 停用=off', async () => {
     const { el, root } = await render(<ProviderManager />)
-    expect(el.querySelectorAll('.dot.on')).toHaveLength(1)
-    expect(el.querySelectorAll('.dot.warn')).toHaveLength(1)
-    expect(el.querySelectorAll('.dot.off')).toHaveLength(1)
+    // ui-redesign 票 11（components E2/E3、A1 §0）：列表状态点换成 Dot（data-tone），按钮换成 Button（禁用走 aria-disabled、
+    // 变体在 data-variant），模型行 / 编辑框不再是 .panel 而是 data-model-row / data-model-editor。断言语义不变。
+    expect(el.querySelectorAll('[data-slot="dot"][data-tone="on"]')).toHaveLength(1)
+    expect(el.querySelectorAll('[data-slot="dot"][data-tone="warn"]')).toHaveLength(1)
+    expect(el.querySelectorAll('[data-slot="dot"][data-tone="off"]')).toHaveLength(1)
     // 汇总行：default 已绑但缺钥匙。列表里还有 decision、三个起草槽和 jev，共 6 个。
     const text = el.textContent ?? ''
     // prompt-engineering 票 11：内置槽位新增 translate（提示词参考译文），6 → 7。
@@ -123,10 +125,11 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     expect(nameInput).toBeTruthy() // 行点击真触发了 pick
     const checkBtn = () =>
       [...el.querySelectorAll('button')].find((b) => /check|检测/i.test(b.textContent ?? ''))!
-    expect(checkBtn().disabled).toBe(true)
+    // 票 11：Button 禁用走 aria-disabled（components §0「禁用仍可聚焦以读出原因」）
+    expect(checkBtn().getAttribute('aria-disabled')).toBe('true')
     // 点 ReadyCo（key_set=true）→ 检测可用
     await act(async () => row('ReadyCo').dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    expect(checkBtn().disabled).toBe(false)
+    expect(checkBtn().getAttribute('aria-disabled')).toBeNull()
     root.unmount()
   })
 
@@ -177,9 +180,10 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
         .dispatchEvent(new MouseEvent('click', { bubbles: true })))
       for (const id of ['deepseek-chat', 'mystery-x']) {
         await act(async () => el.querySelector<HTMLButtonElement>(`button[aria-label="Edit ${id}"]`)!.click())
-        const editor = el.querySelector('input[aria-label="Context window"]')!.closest('.panel')!
+        // 票 11：模型行 / 编辑框改为 data-model-row / data-model-editor（原 .panel）
+        const editor = el.querySelector('input[aria-label="Context window"]')!.closest('[data-model-editor]')!
         const button = el.querySelector(`button[aria-label="Edit ${id}"]`)!
-        expect(button.closest('.panel')!.nextElementSibling).toBe(editor)
+        expect(button.closest('[data-model-row]')!.nextElementSibling).toBe(editor)
       }
     } finally {
       await act(async () => root.unmount())
@@ -198,13 +202,14 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'renamed-model')
         input.dispatchEvent(new Event('input', { bubbles: true }))
       })
-      const editor = input.closest('.panel')!
-      expect(el.querySelector('button[aria-label="Edit deepseek-chat"]')!.closest('.panel')!.nextElementSibling).toBe(editor)
+      // 票 11：data-model-row / data-model-editor 取代 .panel；保存钮按 data-variant 找
+      const editor = input.closest('[data-model-editor]')!
+      expect(el.querySelector('button[aria-label="Edit deepseek-chat"]')!.closest('[data-model-row]')!.nextElementSibling).toBe(editor)
       for (const label of ['Embeddings', 'Reranking']) {
         const checkbox = [...editor.querySelectorAll('label')].find((l) => l.textContent?.includes(label))!.querySelector('input')!
         await act(async () => checkbox.click())
       }
-      await act(async () => editor.querySelector<HTMLButtonElement>('button.primary')!.click())
+      await act(async () => editor.querySelector<HTMLButtonElement>('button[data-variant="primary"]')!.click())
       const saved = vi.mocked(api.saveProvider).mock.calls.at(-1)![0]
       expect(saved.models!.map((m) => m.id)).toEqual(['renamed-model', 'mystery-x'])
       expect(saved.models![0].caps).toEqual(expect.arrayContaining(['embedding', 'rerank']))
@@ -239,8 +244,9 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
       await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Use provider metadata')!.click())
       expect(el.querySelector<HTMLInputElement>('input[aria-label="Context window"]')!.value).toBe('1048576')
       expect(api.saveProvider).not.toHaveBeenCalled()
-      const editor = el.querySelector('input[aria-label="Context window"]')!.closest('.panel')!
-      await act(async () => editor.querySelector<HTMLButtonElement>('button.primary')!.click())
+      // 票 11：data-model-editor 取代 .panel；保存钮按 data-variant 找
+      const editor = el.querySelector('input[aria-label="Context window"]')!.closest('[data-model-editor]')!
+      await act(async () => editor.querySelector<HTMLButtonElement>('button[data-variant="primary"]')!.click())
       expect(vi.mocked(api.saveProvider).mock.calls.at(-1)![0].models![0].caps).toEqual(['reasoning'])
     } finally { await act(async () => root.unmount()); el.remove() }
   })
@@ -272,9 +278,8 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
     const row = (name: string) =>
       [...el.querySelectorAll('div')].find((d) => d.textContent === name)!.closest('div')!
     await act(async () => row('ReadyCo').dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    // mystery-x 行的编辑钮（行内第一枚按钮）。含此文本的 .panel 有外层
-    // 详情卡和行本体两级——取最内层（document 序最后一个）。
-    const mrow = [...el.querySelectorAll('div.panel')].filter((d) => d.textContent?.includes('mystery-x')).at(-1)!
+    // mystery-x 行的编辑钮（行内第一枚按钮）。票 11：行是 data-model-row（原 .panel 两级取最内层）。
+    const mrow = el.querySelector('[data-model-row="mystery-x"]')!
     const editBtn = mrow.querySelector('button')!
     await act(async () => editBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     const nums = [...el.querySelectorAll('input[type=number]')] as HTMLInputElement[]
@@ -285,7 +290,7 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
       input.dispatchEvent(new Event('input', { bubbles: true }))
     }
     await act(async () => { setVal(nums[0], '32768'); setVal(nums[1], '4096') })
-    const saveBtn = [...el.querySelectorAll('button')].find((b) => /save|保存|儲存|enregistrer|guardar|salvar/i.test(b.textContent ?? '') && b.classList.contains('primary'))!
+    const saveBtn = [...el.querySelectorAll('button')].find((b) => /save|保存|儲存|enregistrer|guardar|salvar/i.test(b.textContent ?? '') && b.dataset.variant === 'primary')!
     await act(async () => saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     const sent = vi.mocked(api.saveProvider).mock.calls.at(-1)![0]
     const m = sent.models?.find((x) => x.id === 'mystery-x')!
@@ -307,7 +312,7 @@ describe('Jev 槽', () => {
     const row = [...el.querySelectorAll('div')].find((d) => d.textContent === 'TypeSafe')!
     await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     const save = [...el.querySelectorAll('button')].filter((b) =>
-      b.classList.contains('primary') && /save|保存|儲存|enregistrer|guardar|salvar/i.test(b.textContent ?? ''),
+      b.dataset.variant === 'primary' && /save|保存|儲存|enregistrer|guardar|salvar/i.test(b.textContent ?? ''),
     ).at(-1)!
     await act(async () => { save.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(bind).toHaveBeenCalledTimes(1)
