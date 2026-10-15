@@ -160,6 +160,10 @@ pub struct MessageRow {
     pub created_at: String,
     /// 模型给出的推理文本（hands-free 票 06）。空串 = 没给，时间线不渲染思考行。
     pub thinking: String,
+    /// 发这条消息时实际用的模型 id（gap B9，迁移 0061）。只有 Agent 回复记录；
+    /// 负责人 / 宿主消息与迁移前的旧消息为 None——界面回退当前模型并标注，不冒充当时的模型。
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// composer 解析出的结构化 token：@点名 / #路径指针。
@@ -395,11 +399,65 @@ impl Db {
         thinking: Option<&str>,
         element_refs: &[crate::browser_elements::ElementRef],
     ) -> Result<i64, TraceError> {
+        self.insert_message(
+            project_id,
+            author,
+            body,
+            tokens,
+            attachments,
+            agent_id,
+            stage_run_id,
+            thinking,
+            element_refs,
+            None,
+        )
+    }
+
+    /// Agent 回复落库并记下发出时实际用的模型（gap B9）。`model` 取
+    /// `ModelProvider::billing_model()`：脚本供应商为 None，与旧消息同样回退。
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_reply(
+        &self,
+        project_id: &str,
+        agent_id: &str,
+        body: &str,
+        stage_run_id: Option<&str>,
+        thinking: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<i64, TraceError> {
+        self.insert_message(
+            project_id,
+            agent_id,
+            body,
+            &[],
+            &[],
+            Some(agent_id),
+            stage_run_id,
+            thinking,
+            &[],
+            model.filter(|m| !m.trim().is_empty()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_message(
+        &self,
+        project_id: &str,
+        author: &str,
+        body: &str,
+        tokens: &[MessageToken],
+        attachments: &[AttachRef],
+        agent_id: Option<&str>,
+        stage_run_id: Option<&str>,
+        thinking: Option<&str>,
+        element_refs: &[crate::browser_elements::ElementRef],
+        model: Option<&str>,
+    ) -> Result<i64, TraceError> {
         let thinking = thinking.filter(|t| !t.is_empty());
         let tx = self.conn().unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO messages (project_id, author, body, tokens, attachments, thinking, element_refs)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO messages (project_id, author, body, tokens, attachments, thinking, element_refs, model)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 project_id,
                 author,
@@ -408,6 +466,7 @@ impl Db {
                 serde_json::to_string(&attachments)?,
                 thinking,
                 serde_json::to_string(element_refs)?,
+                model,
             ],
         )?;
         let msg_id = tx.last_insert_rowid();
@@ -478,7 +537,7 @@ impl Db {
         });
         let sql = format!(
             "SELECT e.id, e.project_id, e.stage_run_id, e.agent_id, e.kind, e.payload, e.created_at,
-                    m.id, m.author, m.body, m.tokens, m.created_at, m.attachments, m.thinking, m.element_refs
+                    m.id, m.author, m.body, m.tokens, m.created_at, m.attachments, m.thinking, m.element_refs, m.model
              FROM events e
              LEFT JOIN messages m
                ON m.id = json_extract(e.payload, '$.message_id')
@@ -520,6 +579,7 @@ impl Db {
                 r.get::<_, Option<String>>(12)?,
                 r.get::<_, Option<String>>(13)?,
                 r.get::<_, Option<String>>(14)?,
+                r.get::<_, Option<String>>(15)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -540,6 +600,7 @@ impl Db {
                 matt,
                 thinking,
                 element_refs,
+                model,
             ) = row?;
             out.push(TimelineItem {
                 event: Event {
@@ -563,6 +624,7 @@ impl Db {
                         element_refs: crate::browser_elements::decode_refs(
                             &element_refs.unwrap_or_else(|| "[]".into()),
                         )?,
+                        model,
                     }),
                     _ => None,
                 },
