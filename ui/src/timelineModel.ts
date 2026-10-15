@@ -176,12 +176,18 @@ const isSysItem = (it: TimelineItem) =>
   !(it.event.kind === 'permission_allowed' && it.event.payload.execution === 'queued') &&
   it.event.payload.kind !== 'tool_execution_started' &&
   it.event.payload.kind !== 'agent_plan' &&
+  it.event.payload.kind !== 'managed_decision' &&
   !TOOL_KINDS.has(it.event.kind) &&
   !SPECIAL_KINDS.has(it.event.kind) &&
   it.message == null &&
   !isHighRiskSys(it)
 
 const SYS_GROUP_MIN = 3
+
+/** ui-redesign 票 08（D9 / interaction §8）：托管决定是一条带作者的决定行（mg-row），
+ * 不是可折的系统注记——不折进系统事件组，在「决策」过滤档里可见。 */
+export const isManagedDecision = (it: TimelineItem) =>
+  it.event.kind === 'system' && it.event.payload?.kind === 'managed_decision'
 
 export type Row =
   | { type: 'item'; item: TimelineItem; idx: number }
@@ -270,7 +276,7 @@ export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<
         })
         continue
       }
-      if (it.message != null || isHighRiskSys(it) || DECISION_KINDS.has(it.event.kind)) {
+      if (it.message != null || isHighRiskSys(it) || DECISION_KINDS.has(it.event.kind) || isManagedDecision(it)) {
         rows.push({ type: 'item', item: it, idx: it.event.id })
       }
     }
@@ -279,7 +285,7 @@ export function buildRows(timeline: TimelineItem[], filter: Filter, page?: Pick<
   const vis = timeline.filter((it) =>
     filter === 'all' ? true
     : filter === 'messages' ? it.message != null
-    : DECISION_KINDS.has(it.event.kind),
+    : DECISION_KINDS.has(it.event.kind) || isManagedDecision(it),
   )
   const rows: Row[] = []
   for (const it of vis) {

@@ -13,7 +13,7 @@ import { api, errText, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useUiStore } from '../store'
-import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
+import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, isManagedDecision, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { Row } from './Row'
@@ -35,6 +35,9 @@ import { ReturnSummaryCard, ReturnSummaryMarker } from './ReturnSummary'
 import { FreshStart } from './FreshStart'
 import { IntakeCard } from './IntakeCard'
 import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
+import { useDelegation } from '../useDelegation'
+import { ManagedRow } from './ManagedRow'
+import { ManagedReport } from './ManagedReport'
 import { parseTime } from '../usage'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
@@ -483,6 +486,7 @@ export const EventRow = memo(function EventRow({
       </Marker>
     )
   }
+  if (isManagedDecision(item)) return <ManagedRow item={item} />
   if (item.message) {
     const isOwner = item.event.kind === 'owner_message' || item.message.author === 'owner'
     return isOwner
@@ -1089,6 +1093,7 @@ export function Timeline() {
   }
 
   const pinned = useMemo(() => pinnedSummary(timeline), [timeline])
+  const delegating = useDelegation().status?.enabled ?? false
   // 完整历史才判首屏：有窗口页就看它没有更早一页；无窗口的旧口径看 legacy 时间线已追平。
   const fullHistory = page != null ? !page.has_before : projectRoot == null && projectEpoch === 0 && timelineCaughtUp && timeline.length > 0
   const fresh = useMemo(() => isFreshProject(timeline, fullHistory), [timeline, fullHistory])
@@ -1115,7 +1120,10 @@ export function Timeline() {
       </div>
       {pinned && (
         <div className="tl-col tl-pin" style={{ width: '100%', boxSizing: 'border-box' }}>
-          <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />
+          {/* 票 08（interaction §7 / §8）：托管期间归来，置顶的是托管报告而不是普通归来摘要 */}
+          {delegating
+            ? <ManagedReport key={pinned.event.id} card />
+            : <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />}
         </div>
       )}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
