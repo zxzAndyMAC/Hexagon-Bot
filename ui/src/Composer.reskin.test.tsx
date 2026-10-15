@@ -97,6 +97,16 @@ describe('D2 建议弹层', () => {
     expect(rows[2].textContent).not.toContain('Asleep')
   })
 
+  // gap B7（2026-10-15）：@ 行显示灰职责（TeamRow.duty）；票 07 时 TeamRow 无职责字段，行内不出
+  it('@ 行在名字后显示灰职责，无职责时不占位', async () => {
+    useUiStore.setState({ team: [{ ...member('QA'), duty: 'Writes test cases' }, member('Dev', 'b1')] })
+    await mount(<Composer />)
+    await type('@')
+    const rows = [...el.querySelectorAll<HTMLElement>('[role=option]')]
+    expect(rows[0].querySelector('.desc')?.textContent).toBe('Writes test cases')
+    expect(rows[1].querySelector('.desc')).toBeNull()
+  })
+
   it('# 首屏出骨架，防抖期间保持旧结果，产物路径标版本', async () => {
     vi.useFakeTimers()
     useUiStore.setState({ artifacts: [{ path: 'docs/plan.md', version: 2 } as never] })

@@ -1,6 +1,6 @@
 // 建议弹层（ui-redesign 票 07，components D2 / A16，composer#mention · composer#path）。
 // A16 菜单形，贴输入条上沿、宽同输入条；焦点留在 textarea，`aria-activedescendant` 指向高亮行。
-// @：分组「点名角色」，行 = 20 头像 + 粗名（多实例带 [id] 等宽 ink-3）+ 右侧在岗绿点 / 「休眠」。
+// @：分组「点名角色」，行 = 20 头像 + 粗名（多实例带 [id] 等宽 ink-3）+ 灰职责（gap B7，TeamRow.duty）+ 右侧在岗绿点 / 「休眠」。
 // #：行 = 目录 / 文件图标 + 路径等宽 + 右侧类型（「目录」/「产物 vN」）；底部「Type to search · 最多 60 条」。
 // 加载：首屏 3 行骨架；防抖期间保持旧结果（调用方不清空 items）。错误：单行红字 + 「重试」。
 import { forwardRef } from 'react'
@@ -42,6 +42,7 @@ export const ComposerSuggestions = forwardRef<HTMLDivElement, {
           {it.kind === '@' ? <>
             <Avatar agentId={it.agentId} role={it.name} size={20} />
             <b>{it.name}{it.inst && <> <span className="inst">[{it.inst}]</span></>}</b>
+            {it.duty && <span className="desc" title={it.duty}>{it.duty}</span>}
             <span className="d">{it.sleeping ? t('composer.sleeping') : <span className="on-dot" aria-label={t('composer.awake')} />}</span>
           </> : <>
             {it.dir ? <Icon name="folder" className="ic-dir" /> : <Icon name={it.artifact != null ? 'file-text' : 'file'} className="ic-file" />}
