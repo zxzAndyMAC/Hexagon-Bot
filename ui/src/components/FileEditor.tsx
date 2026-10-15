@@ -1,23 +1,30 @@
+// 文件编辑器 FileEditor（components D14，canvas#file；interaction §6「文件」）。ui-redesign 票 09 换皮。
+// 子头：面包屑「项目 › 路径」+ warn 点「未保存」+ A7 编辑 / 预览 / 对比 + 保存 ⌘S（primary sm）；保存失败子头红字、保留缓冲。
+// 三态视图：编辑（Monaco/textarea）、预览（仅 md，实时读编辑缓冲区 buf——保存前就可见渲染结果；非 md「预览」禁用写原因）、
+// 对比（当前缓冲区 vs 基线：已保存 / git HEAD / 产物版本链；版本链只对落在 `.hexagon/<path>` 上的文件出现，
+// 因为产物登记的 path 是 .hexagon 相对路径）。
+// 预览与对比用 display:none 藏编辑器而不卸载——保住撤销栈与滚动位（票 09 验收：切换不卸载编辑器）。
+// 测试环境不挂 Monaco（happy-dom 没有 worker）；正文用 textarea，生产路径动态加载 monacoFile。
+// 两路都写同一个 textRef/buf，保存口径一致。项目身份与路径共同作 key：同一路径不能沿用上一项目的缓冲区。
+// 选中文字出选区浮条（D14 selbar）：编辑态取 Monaco / textarea 选区，预览态取 DOM 选区。
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoFileSnapshot } from '../gen/RepoFileSnapshot'
 import { api, errText } from '../api'
-import { bindingFor, formatBinding } from '../keymap'
+import { bindingFor } from '../keymap'
 import { useUiStore } from '../store'
 import { diffLines } from '../diff'
-import { FileTypeIcon } from './FileTypeIcon'
+import { langFor } from '../highlight'
 import { Md } from './Md'
-import { DiffView } from './DiffView'
+import { Icon } from './Icon'
+import { DiffCode } from './canvas/CodeView'
+import { SelectionBar } from './canvas/SelectionBar'
+import { textareaSelection, useDomSelection, type SelectionAnchor } from './canvas/useSelection'
+import { Button } from '@/components/ui/button'
+import { Dot } from '@/components/ui/dot'
+import { ShortcutKbd } from '@/components/ui/kbd'
+import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 
-/// 中栏文件页（票 11 起；预览/对比回归修复见 glossary「内嵌编辑器」）。
-/// 三态视图：编辑（Monaco/textarea）、预览（仅 md，实时读编辑缓冲区
-/// buf——保存前就可见渲染结果）、对比（当前缓冲区 vs 基线：已保存 /
-/// git HEAD / 产物版本链；版本链只对落在 `.hexagon/<path>` 上的文件出现，
-/// 因为产物登记的 path 是 .hexagon 相对路径）。
-/// 预览与对比用 display:none 藏编辑器而不卸载——保住撤销栈与滚动位。
-/// 测试环境不挂 Monaco（happy-dom 没有 worker）；正文用 textarea，
-/// 生产路径动态加载 monacoFile。两路都写同一个 textRef/buf，保存口径一致。
-/// 项目身份与路径共同作 key：同一路径不能沿用上一项目的缓冲区。
 export function FileEditor({ path }: { path: string }) {
   const projectRoot = useUiStore(s => s.projectRoot)
   const projectEpoch = useUiStore(s => s.projectEpoch)
@@ -34,20 +41,26 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
   const saveReq = useUiStore((s) => s.saveFileReq)
   const activeTab = useUiStore((s) => s.activeTab)
   const artifacts = useUiStore((s) => s.artifacts)
+  const projectName = useUiStore((s) => s.projectName)
   const hostRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
   const textRef = useRef('')
   const snapshotRef = useRef<RepoFileSnapshot | null>(null)
   const saving = useRef(false)
   const liveRef = useRef(true)
+  const monacoRef = useRef<{ setValue: (next: string) => void } | null>(null)
   const currentProject = useCallback(() => liveRef.current && useUiStore.getState().projectRoot === projectRoot && useUiStore.getState().projectEpoch === projectEpoch, [projectRoot, projectEpoch])
   useEffect(() => { liveRef.current = true; return () => { liveRef.current = false } }, [])
   const seenSave = useRef(saveReq)
   const saveRef = useRef<() => Promise<boolean>>(async () => false)
+  const discardRef = useRef<() => void>(() => {})
   const editId = useId()
   const setFileEdit = useUiStore(s => s.setFileEdit)
   const [text, setText] = useState<string | null>(null)
   const [buf, setBuf] = useState('')
   const [err, setErr] = useState<string | null>(null)
+  const [saveErr, setSaveErr] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
   const [mode, setMode] = useState<Mode>('edit')
@@ -61,9 +74,22 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
   const curBaseKey = `${typeof base === 'number' ? `v${base}` : base}|${basesEpoch}`
   const testing = import.meta.env.MODE === 'test'
   const isMd = /\.(md|markdown)$/i.test(path)
+  const [anchor, setAnchor] = useState<SelectionAnchor | null>(null)
+  const closeBar = useCallback(() => setAnchor(null), [])
+  const pointer = useRef<{ x: number; y: number } | undefined>(undefined)
+  // textarea 选区用原生 select 事件（React 的 onSelect 走 selectionchange 合成，元素没聚焦时不触发）
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const hasText = text != null
+  useEffect(() => {
+    const ta = taRef.current
+    if (!ta) return
+    const onSelect = () => setAnchor(bodyRef.current ? textareaSelection(ta, path, bodyRef.current, pointer.current) : null)
+    ta.addEventListener('select', onSelect)
+    return () => ta.removeEventListener('select', onSelect)
+  }, [path, hasText])
 
   useEffect(() => {
-    setFileEdit(editId, { path, dirty, save: () => saveRef.current() })
+    setFileEdit(editId, { path, dirty, save: () => saveRef.current(), discard: () => discardRef.current() })
     return () => setFileEdit(editId, null)
   }, [editId, path, dirty, setFileEdit])
 
@@ -97,7 +123,7 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
     const el = hostRef.current
     if (!el) return
     let dead = false
-    let handle: { dispose: () => void } | undefined
+    let handle: { dispose: () => void; setValue: (next: string) => void } | undefined
     void import('./monacoFile').then(({ mountFileEditor }) => {
       if (dead || !hostRef.current) return
       handle = mountFileEditor(hostRef.current, path, text, (next) => {
@@ -105,10 +131,19 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
         // 缓冲区同时进 state：预览/对比是 React 渲染面，ref 不触发重绘。
         setBuf(next)
         setDirty(true)
+      }, (sel) => {
+        const host = hostRef.current
+        const body = bodyRef.current
+        if (!sel || !host || !body) { setAnchor(null); return }
+        const dx = host.getBoundingClientRect().left - body.getBoundingClientRect().left
+        const dy = host.getBoundingClientRect().top - body.getBoundingClientRect().top
+        setAnchor({ sel: { path, text: sel.text, startLine: sel.startLine, endLine: sel.endLine }, x: sel.x + dx, y: sel.y + dy, bottom: sel.bottom + dy })
       })
+      monacoRef.current = handle
     }).catch((e) => setErr(errText(e)))
     return () => {
       dead = true
+      monacoRef.current = null
       handle?.dispose()
     }
   }, [path, text, testing])
@@ -126,13 +161,15 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
       // Editing during a pending save must not clear the newer unsaved text.
       const stillDirty = textRef.current !== saved
       setDirty(stillDirty)
-      setFileEdit(editId, { path, dirty: stillDirty, save: () => saveRef.current() })
+      setSaveErr(null)
+      setFileEdit(editId, { path, dirty: stillDirty, save: () => saveRef.current(), discard: () => discardRef.current() })
       // 保存会改变「已保存」基线；epoch +1 让开着的对比重拉，免得 diff 说反话。
       setBasesEpoch((e) => e + 1)
       pushToast(t('file.saved'), 'ok')
       return !stillDirty
     } catch (e) {
-      if (currentProject()) pushToast(errText(e), 'err')
+      // D14 错误行：保存失败子头红字，缓冲保留
+      if (currentProject()) { setSaveErr(errText(e)); pushToast(errText(e), 'err') }
       return false
     } finally {
       saving.current = false
@@ -140,8 +177,20 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
     }
   }
 
+  /** 「放弃修改」：回到最后一次已知的盘上文本（D17）。 */
+  function discard() {
+    const saved = snapshotRef.current?.content
+    if (saved == null) return
+    textRef.current = saved
+    setBuf(saved)
+    monacoRef.current?.setValue(saved)
+    setDirty(false)
+    setSaveErr(null)
+  }
+
   useEffect(() => {
     saveRef.current = save
+    discardRef.current = discard
   })
 
   useEffect(() => {
@@ -192,82 +241,96 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
   )
   const changed = ops.some((o) => o.type !== 'eq')
 
-  const saveTip = `${t('file.save')} ${formatBinding(bindingFor('saveFile'))}`
+  useDomSelection(previewRef, path, setAnchor, mode === 'preview' && text != null)
+  const switchMode = (next: Mode) => {
+    setAnchor(null)
+    setMode(next)
+    if (next === 'compare') setBasesEpoch((e) => e + 1)
+  }
+
+  const crumbs = path.split('/')
+  const note = (s: string) => <div className="p-3.5 text-[12.5px] text-ink-3">{s}</div>
 
   return (
-    <div data-testid="file-editor" data-path={path} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <div className="row-line" style={{ padding: '6px 14px', display: 'flex', gap: 8, alignItems: 'center' }}>
-        <FileTypeIcon name={path.split('/').pop() ?? path} kind="file" size={13} style={{ flexShrink: 0 }} />
-        <span className="mono" title={path} style={{ fontWeight: 560, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
-        {dirty && <span className="dot warn" title={t('file.unsaved')} style={{ flexShrink: 0 }} />}
-        <div style={{ flex: 1 }} />
+    <div data-testid="file-editor" data-path={path} className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/* 子头（cv-sub） */}
+      <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line-soft px-3.5 py-2.5">
+        <nav aria-label={path} title={path} className="flex min-w-0 items-center gap-1 text-[13px] text-ink-3">
+          {projectName && <span className="truncate">{projectName}</span>}
+          {crumbs.map((c, i) => (
+            <span key={i} className="flex min-w-0 items-center gap-1">
+              {(i > 0 || projectName) && <Icon name="chevron-right" size={12} className="flex-none" />}
+              <span className={i === crumbs.length - 1 ? 'truncate text-ink' : 'truncate'}>{c}</span>
+            </span>
+          ))}
+          {dirty && (
+            <span data-unsaved className="ml-1 flex flex-none items-center gap-1 text-[12px]">
+              <Dot tone="warn" />{t('file.unsaved')}
+            </span>
+          )}
+        </nav>
+        {saveErr && <span role="alert" className="min-w-0 truncate text-[12px] text-red" title={saveErr}>{t('file.saveFailed')}</span>}
+        <span className="flex-1" />
         {text != null && (
-          <div className="seg" role="group" aria-label={t('file.mode')}>
-            <button type="button" className={mode === 'edit' ? 'on' : ''} onClick={() => setMode('edit')}>{t('file.edit')}</button>
-            {isMd && <button type="button" className={mode === 'preview' ? 'on' : ''} onClick={() => setMode('preview')}>{t('file.preview')}</button>}
-            <button type="button" className={mode === 'compare' ? 'on' : ''} onClick={() => { setMode('compare'); setBasesEpoch((e) => e + 1) }}>{t('file.compare')}</button>
-          </div>
+          <Segmented value={mode} onValueChange={(v) => switchMode(v as Mode)} aria-label={t('file.mode')}>
+            <SegmentedItem value="edit">{t('file.edit')}</SegmentedItem>
+            <SegmentedItem value="preview" disabled={!isMd} disabledReason={t('file.previewMdOnly')}>{t('file.preview')}</SegmentedItem>
+            <SegmentedItem value="compare">{t('file.compare')}</SegmentedItem>
+          </Segmented>
         )}
-        <button
-          className="btn primary"
-          type="button"
-          title={saveTip}
-          disabled={text == null || !dirty || busy}
-          onClick={() => void save()}
-          style={{ fontSize: 11, padding: '2px 8px' }}
-        >
+        <Button variant="primary" size="sm" title={t('file.save')} data-file-save
+          disabled={text == null || !dirty} loading={busy} onClick={() => void save()}>
           {busy ? t('file.saving') : t('file.save')}
-        </button>
+          <ShortcutKbd binding={bindingFor('saveFile')} />
+        </Button>
       </div>
       {text != null && mode === 'compare' && (
-        <div className="row-line" style={{ padding: '5px 14px', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span className="dim3" style={{ fontSize: 11 }}>{t('file.base')}</span>
-          <div className="seg" role="group" aria-label={t('file.base')}>
-            <button type="button" className={base === 'saved' ? 'on' : ''} onClick={() => setBase('saved')}>{t('file.baseSaved')}</button>
-            {headText != null && <button type="button" className={base === 'head' ? 'on' : ''} onClick={() => setBase('head')}>HEAD</button>}
-            {versions.map((v) => (
-              <button key={v} type="button" className={base === v ? 'on' : ''} onClick={() => setBase(v)}>{t('file.version', { n: v })}</button>
-            ))}
+        <div className="flex flex-wrap items-center gap-2 border-b border-line-soft px-3.5 py-2">
+          <span className="text-[12px] text-ink-3">{t('file.base')}</span>
+          <Segmented value={String(base)} onValueChange={(v) => setBase(v === 'saved' || v === 'head' ? v : Number(v))} aria-label={t('file.base')}>
+            <SegmentedItem value="saved">{t('file.baseSaved')}</SegmentedItem>
+            {headText != null && <SegmentedItem value="head">HEAD</SegmentedItem>}
+            {versions.map((v) => <SegmentedItem key={v} value={String(v)}>{t('file.version', { n: v })}</SegmentedItem>)}
+          </Segmented>
+          <span className="text-[12px] text-ink-3">→ {t('file.current')}</span>
+        </div>
+      )}
+      <div ref={bodyRef} className="relative flex min-h-0 flex-1 flex-col">
+        {err && note(err)}
+        {text == null && !err && note(t('file.loading'))}
+        {text != null && (
+          <div className="min-h-0 flex-1 flex-col" style={{ display: mode === 'edit' ? 'flex' : 'none' }}>
+            {testing ? (
+              <textarea
+                aria-label={path}
+                value={buf}
+                onChange={(e) => {
+                  textRef.current = e.target.value
+                  setBuf(e.target.value)
+                  setDirty(true)
+                }}
+                ref={taRef}
+                onMouseUp={(e) => { pointer.current = { x: e.clientX, y: e.clientY } }}
+                className="min-h-0 flex-1 resize-none bg-transparent p-3.5 font-mono text-[12px] leading-[1.75] text-ink outline-none"
+              />
+            ) : (
+              <div ref={hostRef} className="min-h-0 flex-1" />
+            )}
           </div>
-          <span className="dim3" style={{ fontSize: 11 }}>→ {t('file.current')}</span>
-        </div>
-      )}
-      {err && <div className="dim3" style={{ padding: 14, fontSize: 12 }}>{err}</div>}
-      {text == null && !err && <div className="dim3" style={{ padding: 14, fontSize: 12 }}>{t('file.loading')}</div>}
-      {text != null && (
-        <div style={{ flex: 1, minHeight: 0, display: mode === 'edit' ? 'flex' : 'none', flexDirection: 'column' }}>
-          {testing ? (
-            <textarea
-              aria-label={path}
-              value={buf}
-              onChange={(e) => {
-                textRef.current = e.target.value
-                setBuf(e.target.value)
-                setDirty(true)
-              }}
-              style={{ flex: 1, minHeight: 0, resize: 'none', border: 'none', background: 'transparent', color: 'inherit', fontFamily: 'inherit', padding: 14 }}
-            />
-          ) : (
-            <div ref={hostRef} style={{ flex: 1, minHeight: 0 }} />
-          )}
-        </div>
-      )}
-      {text != null && mode === 'preview' && (
-        <div className="msg-body" style={{ flex: 1, minHeight: 0, overflowY: 'auto', maxWidth: 'none', margin: '6px 14px 14px' }}>
-          <Md>{buf}</Md>
-        </div>
-      )}
-      {text != null && mode === 'compare' && (
-        baseLoading ? (
-          <div className="dim3" style={{ flex: 1, minHeight: 0, padding: 14, fontSize: 12 }}>…</div>
-        ) : baseText == null ? (
-          <div className="dim3" style={{ flex: 1, minHeight: 0, padding: 14, fontSize: 12 }}>{t('file.noBase')}</div>
-        ) : !changed ? (
-          <div className="dim3" style={{ flex: 1, minHeight: 0, padding: 14, fontSize: 12 }}>{t('file.noChanges')}</div>
-        ) : (
-          <DiffView ops={ops} />
-        )
-      )}
+        )}
+        {text != null && mode === 'preview' && (
+          <div ref={previewRef} data-file-preview className="msg-body md-doc min-h-0 flex-1 overflow-y-auto">
+            <Md>{buf}</Md>
+          </div>
+        )}
+        {text != null && mode === 'compare' && (
+          baseLoading ? note('…')
+            : baseText == null ? note(t('file.noBase'))
+            : !changed ? note(t('file.noChanges'))
+            : <DiffCode ops={ops} before={baseText} after={buf} lang={langFor(path)} label={path} />
+        )}
+        <SelectionBar anchor={anchor} onClose={closeBar} />
+      </div>
     </div>
   )
 }

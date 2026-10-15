@@ -58,13 +58,16 @@ describe('产物清单长名（ADR 0088：右栏页签 → 侧栏「产物」打
     expect(useUiStore.getState().activeTab).toBe('artifacts')
     const canvas = host.querySelector('[data-canvas] [role=tabpanel]:not([hidden])')!
 
-    const name = canvas.querySelector('span.mono[title]') as HTMLElement
-    expect(name.getAttribute('title')).toBe(path)
-    expect(name.style.minWidth).toBe('0')
-
-    const chip = canvas.querySelector('.chip') as HTMLElement
-    expect(chip.style.flexShrink).toBe('0')
-    expect(chip.style.whiteSpace).toBe('nowrap')
+    // 票 09（B7 清单页签换皮）：内联样式换成 Tailwind 类——行 title 给全名，路径 min-w-0 + truncate，
+    // 胶囊 flex-none（A4 Badge 自带 whitespace-nowrap）。断言意图不变：长名截断、胶囊不被挤成竖排。
+    const item = canvas.querySelector('[role=listitem]') as HTMLElement
+    expect(item.getAttribute('title')).toBe(path)
+    const name = [...item.querySelectorAll('span')].find((s) => s.textContent === path) as HTMLElement
+    expect(name.className).toContain('min-w-0')
+    expect(name.className).toContain('truncate')
+    const chip = item.querySelector('[data-slot="badge"]') as HTMLElement
+    expect(chip.className).toContain('flex-none')
+    expect(chip.className).toContain('whitespace-nowrap')
   })
 
   it('materialization conflicts remain visible as pending recovery', async () => {

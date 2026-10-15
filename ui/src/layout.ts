@@ -129,6 +129,22 @@ export function writeCanvasLayout(storage: KV, layout: CanvasLayout) {
   storage.setItem(CANVAS_LAYOUT_KEY, JSON.stringify({ width: layout.width == null ? null : Math.round(layout.width), full: layout.full }))
 }
 
+// ── 画布内文件树（ui-redesign 票 09；components D14，interaction §1「区域尺寸」：210，160–360，停在下限） ──
+
+export const TREE = { default: 210, min: 160, max: 360 } as const
+export const TREE_LAYOUT_KEY = 'hexagon.layout.tree'
+
+/** 读文件树宽度；越界夹回、损坏回默认（同侧栏：布局记忆坏了只花一次重新拖动）。 */
+export function readTreeWidth(storage: KV): number {
+  const n = Number(storage.getItem(TREE_LAYOUT_KEY))
+  if (storage.getItem(TREE_LAYOUT_KEY) == null || !Number.isFinite(n)) return TREE.default
+  return Math.round(clamp(n, TREE.min, TREE.max))
+}
+
+export function writeTreeWidth(storage: KV, width: number) {
+  storage.setItem(TREE_LAYOUT_KEY, String(Math.round(clamp(width, TREE.min, TREE.max))))
+}
+
 /** 主区视图三态（interaction §3）：对话 / 画布全宽 / 用量详情。后两种时对话与输入条一起让出主区。 */
 export type MainView = 'chat' | 'canvas' | 'usage'
 

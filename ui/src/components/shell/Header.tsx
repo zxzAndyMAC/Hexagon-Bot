@@ -26,6 +26,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { bindingFor } from '../../keymap'
 import { cn } from '@/lib/utils'
+import { mainView } from '../../layout'
 
 const CURRENT = new Set(['active', 'waiting_stamp', 'interrupted', 'rejected'])
 
@@ -119,6 +120,7 @@ export function Header({ side }: { side?: 'expanded' | 'collapsed' | 'hidden' } 
   // 票 03：头部开关反映画布是否可见；与 ⌥⌘B 同一动作（store.toggleCanvas）
   const canvasOpen = useUiStore((s) => s.canvasOpen && !s.usageView)
   const screen = useUiStore((s) => s.agentScreenAvailable)
+  const canvasFull = useUiStore((s) => mainView(s) === 'canvas')
   const storedCollapsed = useUiStore((s) => s.sideLayout.collapsed)
   const sideCollapsed = side ? side !== 'expanded' : storedCollapsed
   const st = useUiStore.getState
@@ -142,8 +144,9 @@ export function Header({ side }: { side?: 'expanded' | 'collapsed' | 'hidden' } 
           </Badge>
         )}
       </div>
-      <ComputerControlStatus />
-      <ManagedPill />
+      {/* 票 09：画布全宽时这两件挪到画布页签栏（Canvas.tsx），这里不渲染——只挂一份 */}
+      {!canvasFull && <ComputerControlStatus />}
+      {!canvasFull && <ManagedPill />}
       <span data-tauri-drag-region className="flex-1 self-stretch" />
       {screen && (
         <Tooltip>

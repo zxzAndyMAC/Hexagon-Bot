@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { useUiStore, type ConfirmReq } from '../store'
 import { errText } from '../api'
 import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
+import { LeaveGuard } from './canvas/LeaveGuard'
 
 export function ConfirmDialog({
   title,
@@ -137,6 +138,7 @@ export function ConfirmDialog({
 /** 确认层宿主：读 store.confirmReq，挂 main.tsx 全局可达。
  *  确认后 run + invalidate；失败走 toast 出口并收层（ui-audit 票 03/04）。 */
 export function ConfirmHost() {
+  const { t } = useTranslation()
   const req = useUiStore((s) => s.confirmReq)
   const clear = useUiStore((s) => s.clearConfirm)
   const invalidate = useUiStore((s) => s.invalidate)
@@ -154,6 +156,23 @@ export function ConfirmHost() {
       // An old asynchronous confirmation cannot close a newer dialog.
       if (useUiStore.getState().confirmReq === req) clear(succeeded)
     }
+  }
+  // 票 09（D17）：离开未保存走 LeaveGuard 形制（放弃在左、取消、保存 ⌘S），提交 / 失败口径与通用确认层相同。
+  if (req.variant === 'leave') {
+    return (
+      <LeaveGuard
+        title={req.title}
+        body={req.body}
+        saveLabel={req.confirmLabel ?? t('file.save')}
+        discardLabel={req.alternate?.label ?? t('file.discard')}
+        saveAction={req.confirmAction}
+        discardAction={req.alternate?.action}
+        cancelAction={req.cancelAction}
+        onSave={() => run(() => req.run())}
+        onDiscard={() => run(req.alternate?.run ?? (() => {}))}
+        onCancel={() => clear()}
+      />
+    )
   }
   return (
     <ConfirmDialog

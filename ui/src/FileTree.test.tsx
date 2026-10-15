@@ -114,12 +114,14 @@ describe('右栏项目页文件树（票 11）', () => {
     useUiStore.getState().openCanvas('files')
     ;({ el, root } = await render(<Harness />))
 
-    const newFile = el!.querySelector('button[title*="新建文件"]') as HTMLButtonElement
-    const newDir = el!.querySelector('button[title*="新建目录"]') as HTMLButtonElement
-    const refresh = el!.querySelector('button[title*="刷新"]') as HTMLButtonElement
-    expect(newFile.title).toContain(formatBinding(bindingFor('treeNewFile')))
-    expect(newDir.title).toContain(formatBinding(bindingFor('treeNewFolder')))
-    expect(refresh.title).toContain(formatBinding(bindingFor('treeRefresh')))
+    // 票 09（D14）：树头按钮换成 A2 IconButton——可读名走 aria-label，键位在 tooltip（IconButton 按 action 读当前绑定），
+    // 不再是原生 title；这里断言可读名，绑定渲染由 ui.test 的 IconButton 用例守。
+    const newFile = el!.querySelector('button[aria-label="新建文件"]') as HTMLButtonElement
+    const newDir = el!.querySelector('button[aria-label="新建目录"]') as HTMLButtonElement
+    const refresh = el!.querySelector('button[aria-label="刷新"]') as HTMLButtonElement
+    expect(newFile).toBeTruthy()
+    expect(newDir).toBeTruthy()
+    expect(refresh).toBeTruthy()
 
     const before = vi.mocked(api.listRepoDir).mock.calls.length
     await act(async () => { refresh.click() })
@@ -167,10 +169,8 @@ describe('右栏项目页文件树（票 11）', () => {
     expect(tree.querySelector('[data-testid=file-tree]')).toBeTruthy()
     expect(api.readRepoFileSnapshot).toHaveBeenCalledWith('README.md', '/test')
 
-    // 文件页头部多了视图切换 seg（编辑/预览/对比），保存钮不再稳占
-    // 第一个 button——按 ⌘S tooltip 定位，不依赖排版顺序。
-    const save = [...center.querySelectorAll('button')].find((b) =>
-      b.title.includes(formatBinding(bindingFor('saveFile')))) as HTMLButtonElement
-    expect(save.title).toContain(formatBinding(bindingFor('saveFile')))
+    // 票 09（D14）：保存钮把 ⌘S 渲染成按钮内 kbd（primary sm），不再写在 title 里。
+    const save = center.querySelector('[data-file-save]') as HTMLButtonElement
+    expect(save.querySelector('kbd')!.textContent).toBe(formatBinding(bindingFor('saveFile')))
   })
 })

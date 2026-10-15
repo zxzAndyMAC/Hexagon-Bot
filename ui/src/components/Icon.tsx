@@ -19,6 +19,8 @@ import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircl
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
+// ui-redesign 票 09 画布选区浮条（foundations §7 原型名 wand → wand）
+import { Wand } from 'lucide-react'
 // ui-redesign 票 07 输入条与命令面板（foundations §7 原型名 crosshair / flow→workflow / test→test-tube；focus 为补设计：专注模式）
 import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
 import { createLucideIcon } from 'lucide-react'
@@ -136,6 +138,7 @@ const ICONS = {
   external: ExternalLink,
   image: Image,
   cpu: Cpu,
+  wand: Wand,
   collapse: Minimize2,
   // ---- 输入条与命令面板（票 07） ----
   crosshair: Crosshair,

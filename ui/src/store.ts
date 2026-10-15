@@ -92,12 +92,16 @@ export interface ConfirmReq {
   alternate?: { label: string; action?: import('./keymap').ActionId; run: () => unknown | Promise<unknown> }
   skipRefresh?: boolean
   onClose?: (confirmed: boolean) => void
+  /** 'leave' = 离开未保存（D17 LeaveGuard 形制：放弃修改在左、取消、保存 ⌘S）。票 09。 */
+  variant?: 'leave'
 }
 
 export interface FileEdit {
   path: string
   dirty: boolean
   save: () => Promise<boolean>
+  /** 「放弃修改」：缓冲回到已保存文本、清脏标记（票 09：进设置时编辑器不卸载，只关守卫不回填会留着脏稿）。 */
+  discard?: () => void
 }
 
 export interface WorkTab {
@@ -373,8 +377,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   confirmFileEdits: async (ids) => {
     const selected = () => Object.entries(get().fileEdits).filter(([id]) => !ids || ids.includes(id)).map(([, edit]) => edit)
     if (!selected().some(edit => edit.dirty)) return true
+    const dirtyPaths = selected().filter(edit => edit.dirty).map(edit => edit.path.split('/').pop() ?? edit.path)
+    // D17：标题点名文件（canvas#leave「README.md 有未保存的修改」），多个文件时写个数。
+    const title = dirtyPaths.length === 1 ? i18n.t('file.leaveTitleOne', { name: dirtyPaths[0] }) : i18n.t('file.leaveTitleMany', { count: dirtyPaths.length })
     return new Promise<boolean>(resolve => get().askConfirm({
-      title: i18n.t('file.leaveTitle'), body: i18n.t('file.leaveBody'),
+      title, body: i18n.t('file.leaveBody'), variant: 'leave',
       confirmLabel: i18n.t('file.save'), confirmAction: 'saveFile', cancelAction: 'cancelFileEdits', skipRefresh: true,
       run: async () => {
         for (const edit of selected()) {
@@ -383,7 +390,9 @@ export const useUiStore = create<UiState>((set, get) => ({
         // Saving another file can take time; don't drop a newly edited buffer.
         if (selected().some(edit => edit.dirty)) throw new Error(i18n.t('file.leaveSaveFailed'))
       },
-      alternate: {label: i18n.t('file.discard'), action: 'discardFileEdits', run: () => {}},
+      alternate: {label: i18n.t('file.discard'), action: 'discardFileEdits', run: () => {
+        for (const edit of selected()) if (edit.dirty) edit.discard?.()
+      }},
       onClose: resolve,
     }))
   },
