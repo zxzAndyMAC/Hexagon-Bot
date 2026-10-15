@@ -124,9 +124,9 @@ describe('侧栏待决与团队（B1、B3）', () => {
   it('工作中显示像素格，休眠半透明并写「休眠」；点成员打开该 Agent', async () => {
     useUiStore.setState({
       team: [
-        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null },
-        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null },
-        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null },
+        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null },
+        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null, model: null, duty: null },
+        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null },
       ],
       streams: { a1: { 0: '正在写' } },
     })

@@ -156,6 +156,7 @@ export function AgentFace({ agentId, role }: { agentId: string; role: string }) 
 // C1：Agent 回复不加气泡；头行 名 + 状态胶囊；等网时下方补一句说明（C10）。
 export function LiveReply({
   role,
+  model,
   text,
   thinking,
   generating,
@@ -163,6 +164,8 @@ export function LiveReply({
   avatar,
 }: {
   role: string
+  /// gap B2：当前模型展示名（TeamRow.model），头行 `名 · 模型`
+  model?: string | null
   text: string
   thinking: string
   generating: boolean
@@ -179,6 +182,7 @@ export function LiveReply({
       <div className="tl-grow">
         <div className="tl-who">
           <b>{role}</b>
+          {model && <span className="t" data-who-model="">{model}</span>}
           {waitingNet && <ReconnectChip since={netWaiting} />}
           {generating && netWaiting == null && (
             <span data-generating="" className="chip info">
@@ -439,7 +443,11 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
       <div className="tl-grow">
         <div className="tl-who">
           <b>{title}</b>
-          {time && <span className="t">{time}</span>}
+          {/* gap B2：头行「名 · 模型 · 时间」（workbench#running）。模型是该成员现在的模型，
+              不是这条消息当时的模型——core 不按消息记模型（TeamRow.model 注释）。 */}
+          {(member?.model || time) && (
+            <span className="t">{[member?.model, time].filter(Boolean).join(' · ')}</span>
+          )}
           <CopyMessage text={m.body} />
         </div>
         <ThinkingRow text={m.thinking} />
@@ -800,6 +808,7 @@ function StreamFooter() {
             live={!done && !Object.keys(streams[id] ?? {}).some((call) => Number(call) > 0)} /></div>}
           <LiveReply
             role={member?.role ?? id}
+            model={member?.model}
             text={joinCalls(streams[id])}
             thinking={joinCalls(thinkings[id])}
             generating={!done}

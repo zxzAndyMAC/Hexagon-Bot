@@ -173,7 +173,7 @@ describe('离开未保存（D17）', () => {
 describe('全宽画布露出控制状态与托管胶囊（B7 补设计，票 03 偏差 4）', () => {
   it('全宽时页签栏挂电脑控制状态与托管胶囊，头部不重复挂；回到并排后回到头部', async () => {
     const status = { project_root: '/test', enabled: true, active_project: '/test', active_agent: 'a1', busy: false, paused: false, outcome_unknown: false, screenshot_count: 0, capture_preparation: 'ready' as const }
-    useUiStore.setState({ team: [{ id: 'a1', role: 'QA', model_slot: 'chat', status: 'active', avatar_hash: null }] })
+    useUiStore.setState({ team: [{ id: 'a1', role: 'QA', model_slot: 'chat', status: 'active', avatar_hash: null, model: null, duty: null }] })
     vi.spyOn(api, 'desktopStatus').mockResolvedValue(status)
     vi.spyOn(api, 'browserStatus').mockResolvedValue(null as never)
     vi.spyOn(api, 'projectDelegation').mockResolvedValue({ enabled: true, paused: false, generation: 1, delegation_id: 'd1' } as never)

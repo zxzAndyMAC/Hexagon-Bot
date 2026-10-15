@@ -60,7 +60,7 @@ describe('待决坞（ui-redesign 票 04，ADR 0089）', () => {
     vi.spyOn(api, 'permissionShapeSuggestion').mockResolvedValue(null)
     useUiStore.setState({
       pending: [], reviewRows: [], pendingDialogOpen: false, dismissedPendingKeys: [], hiddenPending: [], pendingError: null,
-      toasts: [], modalScope: 'workbench', confirmReq: null, team: [{ id: 'a0', role: 'QA', status: 'active', model_slot: 'chat', avatar_hash: null }],
+      toasts: [], modalScope: 'workbench', confirmReq: null, team: [{ id: 'a0', role: 'QA', status: 'active', model_slot: 'chat', avatar_hash: null, model: null, duty: null }],
     })
   })
 

@@ -1886,6 +1886,28 @@ pub struct TeamRow {
     pub status: String,
     /// 头像内容哈希（票 07）：随行下发，UI 哈希变了才拉 data URL。
     pub avatar_hash: Option<String>,
+    /// 当前模型展示名（gap B2/B6）：实例槽（空 = `default`）经 `resolve_slot` 解析。
+    /// 是「现在用哪个模型」，不是某条消息当时用的模型；解析不到为 None。
+    pub model: Option<String>,
+    /// 职责首行（gap B6/B7：@ 弹层灰职责、成员悬停卡）。只取首个非空行并截断，
+    /// 全文在角色编辑面；团队接口轮询频繁，不随行下发整段职责。
+    pub duty: Option<String>,
+}
+
+/// 职责摘要长度上限（字符）。
+const DUTY_LINE_MAX: usize = 80;
+
+fn duty_line(duty: &str) -> Option<String> {
+    let line = duty.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line = line.trim_start_matches(['#', '-', '*', ' ']).trim();
+    if line.is_empty() {
+        return None;
+    }
+    if line.chars().count() <= DUTY_LINE_MAX {
+        return Some(line.to_string());
+    }
+    let cut: String = line.chars().take(DUTY_LINE_MAX - 1).collect();
+    Some(format!("{cut}…"))
 }
 
 pub fn team(
@@ -1904,13 +1926,22 @@ pub fn team(
                 model_slot: r.get(2)?,
                 status: r.get(3)?,
                 avatar_hash: None,
+                model: None,
+                duty: None,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let doc = crate::provider_config::load().unwrap_or_default();
     for row in &mut rows {
         // 头像 IO 失败不炸团队接口——哈希缺席=UI 当无头像处理
         // （沿用 avatar 读路 `.catch(() => null)` 的静默降级语义）。
         row.avatar_hash = crate::roles::avatar_hash(repo_root, &row.id).ok().flatten();
+        // 模型 / 职责同样静默降级：读不到只是不显示，不让团队接口失败。
+        let slot = row.model_slot.as_deref().unwrap_or("default");
+        row.model = crate::provider_config::model_label_in(&doc, slot);
+        row.duty = crate::roles::role_def(db, project_id, &row.role)
+            .ok()
+            .and_then(|d| duty_line(&d.duty));
     }
     Ok(rows)
 }
@@ -2279,6 +2310,19 @@ pub fn recovery_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// gap B6/B7：团队行只带职责首行；Markdown 前缀去掉，过长截断加省略号。
+    #[test]
+    fn duty_line_takes_first_line_and_truncates() {
+        assert_eq!(duty_line(""), None);
+        assert_eq!(duty_line("\n  \n"), None);
+        assert_eq!(duty_line("\n## 写规格\n其余"), Some("写规格".into()));
+        assert_eq!(duty_line("- 列验收标准"), Some("列验收标准".into()));
+        let long = "长".repeat(DUTY_LINE_MAX + 10);
+        let got = duty_line(&long).unwrap();
+        assert_eq!(got.chars().count(), DUTY_LINE_MAX);
+        assert!(got.ends_with('…'));
+    }
 
     fn pack() -> PackDef {
         serde_json::from_value(json!({

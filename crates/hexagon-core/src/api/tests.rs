@@ -6461,6 +6461,71 @@ fn discarded_intake_draft_stays_gone_after_reopen() {
     assert!(!again.intake_draft_pending().unwrap());
 }
 
+/// gap B2/B6/B7（ui-redesign 2026-10-15）：团队行带当前模型展示名与职责首行。
+/// 之前只有槽位 id，消息头 / 成员悬停卡 / @ 弹层都显示不了模型和职责。
+#[test]
+fn team_rows_carry_model_label_and_duty_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = open_made(
+        dir.path(),
+        &["项目经理", "产品策划"],
+        Some(intake_pack(&["产品策划"])),
+        None,
+    );
+    let mut doc = intake_doc();
+    doc.providers[0]
+        .models
+        .push(crate::provider_config::ModelEntry {
+            id: "m".into(),
+            name: Some("Model M".into()),
+            ..Default::default()
+        });
+    doc.slots.insert(
+        "default".into(),
+        crate::provider_config::SlotBinding {
+            provider_id: "test-prov".into(),
+            model: "raw-default".into(),
+        },
+    );
+    let _fixture = crate::provider_config::fixture_document(doc);
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE agents SET model_slot='chat' WHERE project_id='p1' AND role='产品策划'",
+            [],
+        )
+        .unwrap();
+    wb.db
+        .conn()
+        .execute(
+            "UPDATE agents SET model_slot=NULL WHERE project_id='p1' AND role='项目经理'",
+            [],
+        )
+        .unwrap();
+    let rows = team(&wb).unwrap();
+    let row = |role: &str| rows.iter().find(|r| r["role"] == role).unwrap().clone();
+    assert_eq!(
+        row("产品策划")["model"],
+        "Model M",
+        "目录里有展示名用展示名"
+    );
+    assert_eq!(
+        row("项目经理")["model"],
+        "raw-default",
+        "实例槽为空走 default；目录无条目用模型 id"
+    );
+    for r in &rows {
+        let duty = r["duty"].as_str().expect("预置角色有职责");
+        assert!(!duty.is_empty() && !duty.contains('\n'));
+    }
+    drop(_fixture);
+    let _empty = crate::provider_config::fixture_document(Default::default());
+    assert!(
+        team(&wb).unwrap().iter().all(|r| r["model"].is_null()),
+        "解析不到模型时不猜"
+    );
+}
+
 #[test]
 fn empty_directory_does_not_run_opening_intake() {
     let root = tempfile::tempdir().unwrap();

@@ -817,6 +817,20 @@ pub fn max_output_for_slot(slot: &str) -> Option<u64> {
     max_output_of(p, &b.model)
 }
 
+/// 槽位 → 模型展示名（gap B2/B6；调用方先 [`load`] 一次再逐行解析：消息头、成员悬停卡）。展示名空则用模型 id；
+/// 链断任一环 → None（界面不显示模型，不猜）。回退仍只走 [`resolve_slot`]（D13）。
+pub(crate) fn model_label_in(doc: &ProviderDoc, slot: &str) -> Option<String> {
+    let b = resolve_slot(&doc.slots, slot)?;
+    let p = doc.providers.iter().find(|p| p.id == b.provider_id)?;
+    let named = p
+        .models
+        .iter()
+        .find(|m| m.id == b.model)
+        .and_then(|m| m.name.clone())
+        .filter(|n| !n.trim().is_empty());
+    Some(named.unwrap_or_else(|| b.model.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1029,17 +1029,19 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'team':
       return [
-        { id: 'a0', role: '产品策划', status: 'active', model_slot: 'chat' },
-        { id: 'a1', role: '架构师', status: 'active', model_slot: 'chat' },
-        { id: 'a2', role: 'UX', status: 'sleeping', model_slot: 'chat' },
-        { id: 'a3', role: '前端', status: 'active', model_slot: 'code' },
-        { id: 'a4', role: '后端', status: 'active', model_slot: 'code' },
-        { id: 'a5', role: 'QA', status: 'active', model_slot: 'chat' },
-        { id: 'a6', role: '后端技术负责人', status: 'sleeping', model_slot: 'chat' },
-        { id: 'a7', role: '运维', status: 'sleeping', model_slot: 'ops' },
+        { id: 'a0', role: '产品策划', status: 'active', model_slot: 'chat', duty: '把一句话需求展开成规格与验收标准' },
+        { id: 'a1', role: '架构师', status: 'active', model_slot: 'chat', duty: '定技术方案、模块边界与接口' },
+        { id: 'a2', role: 'UX', status: 'sleeping', model_slot: 'chat', duty: '信息结构与交互流程' },
+        { id: 'a3', role: '前端', status: 'active', model_slot: 'code', duty: '实现界面与前端逻辑' },
+        { id: 'a4', role: '后端', status: 'active', model_slot: 'code', duty: '实现服务端接口与数据' },
+        { id: 'a5', role: 'QA', status: 'active', model_slot: 'chat', duty: '写测试用例并验证交付' },
+        { id: 'a6', role: '后端技术负责人', status: 'sleeping', model_slot: 'chat', duty: '复审后端提案' },
+        { id: 'a7', role: '运维', status: 'sleeping', model_slot: 'ops', duty: '部署与发布' },
       ].map((r) => ({
         ...r,
         avatar_hash: mockAvatars[r.id] ? mockHash(mockAvatars[r.id]) : null,
+        // gap B2：团队行带解析后的模型展示名（dev 样例对照 workbench#running 消息头）
+        model: ({ chat: 'Claude Sonnet 5.5', code: 'Claude Sonnet 5.5', ops: 'DeepSeek V4' } as Record<string, string>)[r.model_slot] ?? null,
       })) as T
     case 'artifacts':
       return [

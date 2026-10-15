@@ -236,7 +236,7 @@ describe('SettingsPage list|detail 分区', () => {
 
   it('Team（有项目）：选中 Agent 出 RoleEditor；从模板添加走 createRole', async () => {
     vi.spyOn(api, 'team').mockResolvedValue([
-      { id: 'a1', role: 'reviewer', model_slot: 'chat', status: 'active', avatar_hash: null },
+      { id: 'a1', role: 'reviewer', model_slot: 'chat', status: 'active', avatar_hash: null, model: null, duty: null },
     ])
     const detail = vi.spyOn(api, 'agentDetail').mockResolvedValue({
       agent_id: 'a1', role: 'reviewer', status: 'active', model_slot: 'chat', custom: false,
