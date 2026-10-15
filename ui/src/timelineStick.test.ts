@@ -12,7 +12,7 @@ import type { EventKind, TimelineItem } from './api'
 
 const item = (id: number, kind: EventKind, opts: { agent?: string; author?: string; payload?: Record<string, unknown> } = {}): TimelineItem => ({
   event: { id, project_id: 'p', kind, agent_id: opts.agent ?? null, stage_run_id: null, payload: opts.payload ?? {}, created_at: '' },
-  message: opts.author ? { id, author: opts.author, body: 'x', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } : null,
+  message: opts.author ? { id, author: opts.author, body: 'x', tokens: [], attachments: [], element_refs: [], model: null, created_at: '', thinking: '' } : null,
 })
 
 describe('回到底部计数口径（票 06）', () => {

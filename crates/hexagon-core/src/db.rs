@@ -299,6 +299,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0060_worktree_card",
         include_str!("../migrations/0060_worktree_card.sql"),
     ),
+    (
+        "0061_message_model",
+        include_str!("../migrations/0061_message_model.sql"),
+    ),
+    (
+        "0062_intake_draft_discarded",
+        include_str!("../migrations/0062_intake_draft_discarded.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

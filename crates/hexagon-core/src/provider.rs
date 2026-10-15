@@ -666,6 +666,8 @@ pub struct ScriptedProvider {
     calls: Mutex<Vec<ChatRequest>>,
     /// >0 时 stream() 把文本按该字符数切块发 delta（0=整块，票 01 测试驱动）。
     chunk_chars: usize,
+    /// 测试用物理模型 id（gap B9：消息记录实际模型）。默认 None，与旧行为一致。
+    model: Option<String>,
 }
 
 impl ScriptedProvider {
@@ -674,7 +676,14 @@ impl ScriptedProvider {
             script: Mutex::new(script.into()),
             calls: Mutex::new(Vec::new()),
             chunk_chars: 0,
+            model: None,
         }
+    }
+
+    /// 带物理模型 id 的脚本供应商（gap B9 测试：回复消息应记下它）。
+    pub fn with_model(mut self, model: &str) -> Self {
+        self.model = Some(model.to_string());
+        self
     }
 
     /// 分块回放：delta 切块只是展示节奏，最终 ChatResponse 与 complete 一致。
@@ -683,6 +692,7 @@ impl ScriptedProvider {
             script: Mutex::new(script.into()),
             calls: Mutex::new(Vec::new()),
             chunk_chars,
+            model: None,
         }
     }
 
@@ -694,6 +704,9 @@ impl ScriptedProvider {
 impl ModelProvider for ScriptedProvider {
     fn is_scripted(&self) -> bool {
         true
+    }
+    fn billing_model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
         self.calls.lock().unwrap().push(req.clone());

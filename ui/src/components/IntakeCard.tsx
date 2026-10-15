@@ -8,6 +8,8 @@
 // 现在：预览读 `intake_draft`；「编辑」把 inset 换成文本框，保存走 `update_intake_draft`
 // （只改库里的草案，不落盘——写入仍要点头）；「先不写」走 `discard_intake_draft` 持久丢弃，
 // 开场分析消息保留在时间线上。
+// gap B10（2026-10-15）：「先不写」后出 A18 撤销类 toast「已丢弃草案 · 撤销」，撤销走
+// `restore_intake_draft`（core 软删，正文挪回待点头，不落盘）。B1 时丢弃即永久，点错找不回来。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
@@ -19,6 +21,16 @@ import { Button } from './ui/button'
 import { CodeChip } from './ui/code-chip'
 import { ShortcutKbd } from './ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
+
+/** 撤销「先不写」：失败（开场分析已起草了新的 / 已写入）报错，不静默。 */
+async function restoreDiscarded() {
+  try {
+    await api.restoreIntakeDraft()
+    useUiStore.setState({ intakeDraft: true })
+  } catch (e) {
+    useUiStore.getState().pushToast(errText(e), 'err')
+  }
+}
 
 export function IntakeCard() {
   const { t } = useTranslation()
@@ -45,6 +57,10 @@ export function IntakeCard() {
     await api.discardIntakeDraft()
     setEditing(null)
     useUiStore.setState({ intakeDraft: false })
+    useUiStore.getState().pushToast(t('intake.discarded'), 'info', {
+      icon: 'undo',
+      action: { label: t('intake.undo'), run: restoreDiscarded },
+    })
   })
   const save = () => run('save', async () => {
     const next = editing ?? ''

@@ -31,6 +31,8 @@ pub enum AdminError {
 pub use crate::provider_config::{ModelEntry, ProviderDef};
 // gap B4：向导实时密钥检测同走本模块出口。
 pub use crate::provider_probe::{probe_key, KeyProbe};
+// gap B8：向导服务商下拉的内置预设同走本模块出口。
+pub use crate::provider_presets::{presets, ProviderPreset};
 
 /// 供应商的对外视图（ADR 0054）：非密字段平铺 + key_set 只报是否已存
 /// （key 明文永不回传）。

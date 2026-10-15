@@ -443,10 +443,20 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
       <div className="tl-grow">
         <div className="tl-who">
           <b>{title}</b>
-          {/* gap B2：头行「名 · 模型 · 时间」（workbench#running）。模型是该成员现在的模型，
-              不是这条消息当时的模型——core 不按消息记模型（TeamRow.model 注释）。 */}
-          {(member?.model || time) && (
-            <span className="t">{[member?.model, time].filter(Boolean).join(' · ')}</span>
+          {/* gap B2：头行「名 · 模型 · 时间」（workbench#running）。
+              gap B9：模型取这条消息发出时实际用的（MessageRow.model，迁移 0061 起记录）；B2 时 core
+              不按消息记模型，换模型后旧消息头会被改写成新模型。旧消息没有记录时回退成员当前模型并标「当前」，
+              不冒充当时的模型。 */}
+          {(m.model || member?.model || time) && (
+            <span className="t">
+              {m.model
+                ? <span data-msg-model="recorded">{m.model}</span>
+                : member?.model
+                  ? <span data-msg-model="current" title={t('agent.modelFallback.hint')}>{t('agent.modelFallback.label', { model: member.model })}</span>
+                  : null}
+              {(m.model || member?.model) && time ? ' · ' : ''}
+              {time}
+            </span>
           )}
           <CopyMessage text={m.body} />
         </div>

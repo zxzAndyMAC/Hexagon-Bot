@@ -20737,3 +20737,76 @@ fn a_new_instruction_resumes_a_window_closed_host_and_runs() {
     assert_eq!(provider.recorded().len(), 2);
     assert!(!orchestra::is_paused(&wb.db, "p1").unwrap());
 }
+
+/// gap B9（ui-redesign 2026-10-15）：Agent 回复记下发出时实际用的模型；换模型后旧消息不跟着改。
+/// 负责人消息和没有物理模型 id 的供应商（脚本）记 None——界面回退当前模型并标注。
+#[test]
+fn agent_replies_record_the_model_they_were_sent_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = Workbench::for_test(dir.path(), &["worker"], None).unwrap();
+    orchestra::write_agent_status(&wb.db, "p1", "a0", false).unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![text_response("first")]).with_model("model-a")),
+    );
+    wb.run_instance("a0", "go").unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![text_response("second")]).with_model("model-b")),
+    );
+    wb.run_instance("a0", "again").unwrap();
+    wb.register_provider(
+        "default",
+        Arc::new(ScriptedProvider::new(vec![text_response("third")])),
+    );
+    wb.run_instance("a0", "once more").unwrap();
+    let models: Vec<(String, Option<String>)> = wb
+        .db
+        .timeline("p1", None, 200, None)
+        .unwrap()
+        .into_iter()
+        .filter_map(|i| i.message)
+        .filter(|m| m.author == "a0")
+        .map(|m| (m.body, m.model))
+        .collect();
+    assert_eq!(
+        models,
+        vec![
+            ("first".to_string(), Some("model-a".to_string())),
+            ("second".to_string(), Some("model-b".to_string())),
+            ("third".to_string(), None),
+        ]
+    );
+}
+
+/// gap B10（ui-redesign 2026-10-15）：「先不写」是软删，「已丢弃 · 撤销」原样恢复；
+/// 恢复后仍要点头才落盘，确认写入后没有可恢复的正文。
+#[test]
+fn discarded_intake_draft_can_be_restored_until_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = intake_with_draft(dir.path());
+    let draft = wb.intake_draft().unwrap().expect("draft stored");
+    assert!(matches!(
+        wb.restore_intake_draft().unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+    wb.discard_intake_draft().unwrap();
+    wb.discard_intake_draft().unwrap(); // 幂等：不拿 NULL 覆盖已丢弃的正文
+    assert!(!wb.intake_draft_pending().unwrap());
+    wb.restore_intake_draft().unwrap();
+    assert_eq!(wb.intake_draft().unwrap().as_deref(), Some(draft.as_str()));
+    assert!(!dir.path().join("AGENTS.md").exists(), "恢复不落盘");
+    assert!(matches!(
+        wb.restore_intake_draft().unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+
+    wb.discard_intake_draft().unwrap();
+    wb.restore_intake_draft().unwrap();
+    wb.confirm_intake_brief().unwrap();
+    assert!(dir.path().join("AGENTS.md").exists());
+    assert!(matches!(
+        wb.restore_intake_draft().unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+}

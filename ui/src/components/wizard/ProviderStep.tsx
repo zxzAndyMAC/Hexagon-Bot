@@ -1,10 +1,13 @@
 // ① 模型服务商步（票 13，entry#wz-provider）：数据只走 list/save/set_slot_binding，不另起一份供应商存储。
 // 放行 = default 槽指向的供应商已启用且钥匙已存、模型名非空；已就绪不渲染钥匙框，缺钥匙才要输入。
+// gap B8（2026-10-15）：按原型收成三字段「服务商 ▾ / API Key / 默认模型」。下拉 = 已配置供应商 + 未配置的内置预设
+// （core provider_presets）+ 自定义；选预设自动填名称、类型、base URL，只有「自定义」才展开这三个框。
+// 票 10 原先空表时五个框（名称/类型/地址/钥匙/模型）、有供应商时只能在已有里选，两条路径现合为一个表单。
 // gap B4（2026-10-15）：默认模型框实时检测钥匙（probe_provider_key，输入停 600ms 后请求一次模型目录）：
 // 检测中 / 检测通过 · 窗口 / 目录里没有这个模型 / 检测失败 + 原因。检测是建议不是闸——保存仍可点。
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type ProviderView, type ProvidersView } from '../../api'
+import { api, errText, type ProviderDef, type ProviderPreset, type ProviderView, type ProvidersView } from '../../api'
 import { useUiStore } from '../../store'
 import { providerStepReady } from '../../providerGate'
 import { Badge } from '@/components/ui/badge'
@@ -78,8 +81,8 @@ function ModelProbeField({ value, onChange, probe, list }: {
       ? <Badge variant="err" data-probe="failed">{t('wizard.probe.failed')}</Badge>
       : undefined
   return (
-    <Field label={t('providers.model')} error={reason} help={unlisted ? t('wizard.probe.unlistedHelp') : undefined}>
-      <Input aria-label={t('providers.model')} placeholder={t('providers.pickModel')} value={value} list={list}
+    <Field label={t('wizard.providerField.model')} error={reason} help={unlisted ? t('wizard.probe.unlistedHelp') : undefined}>
+      <Input aria-label={t('wizard.providerField.model')} placeholder={t('providers.pickModel')} value={value} list={list}
         aria-invalid={failed || undefined}
         loadingLabel={probe.phase === 'running' ? t('wizard.probe.running') : undefined}
         trailing={chip}
@@ -109,9 +112,7 @@ export function ProviderFirstStep({ doc, loaded, onRefresh }: {
   return (
     <div className="flex max-w-[560px] flex-col gap-3">
       <div className="text-[12.5px] text-orange">{t('wizard.providersBlocked')}</div>
-      {doc.providers.length === 0
-        ? <NewProviderForm onRefresh={onRefresh} />
-        : <FixProviderForm doc={doc} onRefresh={onRefresh} />}
+      <ProviderForm doc={doc} onRefresh={onRefresh} />
       <Button size="sm" variant="ghost" className="self-start" onClick={() => api.openSettings().catch(() => {})}>
         <Icon name="settings" size={14} />{t('wizard.goSettings')}
       </Button>
@@ -119,81 +120,86 @@ export function ProviderFirstStep({ doc, loaded, onRefresh }: {
   )
 }
 
-function NewProviderForm({ onRefresh }: { onRefresh: () => void }) {
+/** 下拉选中项：已配置供应商 / 内置预设 / 自定义。值编码成 `p:<id>` / `preset:<id>` / `custom`。 */
+type Choice = { type: 'provider'; p: ProviderView } | { type: 'preset'; preset: ProviderPreset } | { type: 'custom' }
+
+function usePresets(): ProviderPreset[] {
+  const [presets, setPresets] = useState<ProviderPreset[]>([])
+  useEffect(() => {
+    let live = true
+    // 预设只是填表建议：读不到就只剩已配置 + 自定义，不挡这一步。
+    api.providerPresets().then((p) => { if (live) setPresets(p) }).catch(() => {})
+    return () => { live = false }
+  }, [])
+  return presets
+}
+
+function initialChoice(doc: ProvidersView): string {
+  const id = initialProviderId(doc)
+  return id ? `p:${id}` : ''
+}
+
+function resolveChoice(value: string, doc: ProvidersView, presets: ProviderPreset[]): Choice | null {
+  if (value === 'custom') return { type: 'custom' }
+  if (value.startsWith('p:')) {
+    const p = doc.providers.find((x) => x.id === value.slice(2))
+    return p ? { type: 'provider', p } : null
+  }
+  if (value.startsWith('preset:')) {
+    const preset = presets.find((x) => x.id === value.slice(7))
+    return preset ? { type: 'preset', preset } : null
+  }
+  return null
+}
+
+function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () => void }) {
   const { t } = useTranslation()
+  const presets = usePresets()
+  // 已有同 id 供应商的预设不再列——选它就是选那条已配置的，不另建一份。
+  const freshPresets = presets.filter((x) => !doc.providers.some((p) => p.id === x.id))
+  const [picked, setPicked] = useState(() => initialChoice(doc))
+  // 空表时默认落第一条预设（原型 entry#wz-provider 默认 Anthropic）；预设异步到达前先空着。
+  const value = picked || (freshPresets[0] ? `preset:${freshPresets[0].id}` : 'custom')
+  const choice = resolveChoice(value, doc, presets) ?? { type: 'custom' as const }
+  const [model, setModel] = useState(() => suggestedModel(doc, doc.providers.find((p) => `p:${p.id}` === picked)))
+  const [modelTouched, setModelTouched] = useState(!!picked)
+  const [secret, setSecret] = useState('')
   const [name, setName] = useState('')
   const [kind, setKind] = useState<ProviderView['kind']>('openai')
   const [baseUrl, setBaseUrl] = useState('')
-  const [secret, setSecret] = useState('')
-  const [model, setModel] = useState('')
   const [busy, setBusy] = useState(false)
-  const canApply = !!name.trim() && !!baseUrl.trim() && !!secret.trim() && !!model.trim()
-  const probe = useKeyProbe(
-    baseUrl.trim() && secret.trim() && model.trim()
-      ? { id: providerSlug(name || 'new'), name: name.trim(), kind, base_url: baseUrl.trim(), models: [], enabled: true }
-      : null,
-    secret.trim(), model)
 
-  async function apply() {
-    if (!canApply) return
-    const id = providerSlug(name)
-    setBusy(true)
-    try {
-      await api.saveProvider({ id, name: name.trim(), kind, base_url: baseUrl.trim(), models: [], enabled: true }, secret.trim())
-      await api.setSlotBinding('default', id, model.trim())
-      onRefresh()
-    } catch (e) {
-      useUiStore.getState().pushToast(errText(e), 'err')
-    } finally {
-      setBusy(false)
-    }
+  // 预设异步到达后，第一次落到预设的默认模型（负责人还没动过模型框才填）。
+  const shownModel = !modelTouched && choice.type === 'preset' ? choice.preset.default_model : model
+
+  const def: ProviderDef | null = choice.type === 'provider'
+    ? choice.p
+    : choice.type === 'preset'
+      ? { id: choice.preset.id, name: choice.preset.name, kind: choice.preset.kind, base_url: choice.preset.base_url, models: [], enabled: true }
+      : name.trim() && baseUrl.trim()
+        ? { id: providerSlug(name), name: name.trim(), kind, base_url: baseUrl.trim(), models: [], enabled: true }
+        : null
+  const needsKey = choice.type !== 'provider' || !choice.p.key_set
+  const canApply = !!def && !!shownModel.trim() && (!needsKey || !!secret.trim())
+  const probe = useKeyProbe(
+    def && shownModel.trim() && (!needsKey || secret.trim()) ? def : null,
+    needsKey ? secret.trim() : undefined, shownModel)
+
+  function pick(next: string) {
+    setPicked(next)
+    setSecret('')
+    const c = resolveChoice(next, doc, presets)
+    setModel(c?.type === 'provider' ? suggestedModel(doc, c.p) : c?.type === 'preset' ? c.preset.default_model : '')
+    setModelTouched(true)
   }
 
-  return (
-    <>
-      <Field label={t('providers.name')}>
-        <Input aria-label={t('providers.name')} placeholder={t('providers.name')} value={name} onChange={(e) => setName(e.target.value)} />
-      </Field>
-      <Field label={t('providers.kind')}>
-        <NativeSelect aria-label={t('providers.kind')} value={kind} onChange={(e) => setKind(e.target.value as ProviderView['kind'])}>
-          <option value="openai">openai</option>
-          <option value="anthropic">anthropic</option>
-        </NativeSelect>
-      </Field>
-      <Field label={t('providers.baseUrl')}>
-        <Input aria-label={t('providers.baseUrl')} placeholder={t('providers.baseUrl')} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-      </Field>
-      <KeyInput value={secret} onChange={setSecret} />
-      <ModelProbeField value={model} onChange={setModel} probe={probe} />
-      <Button size="sm" variant="ink" className="self-start" disabled={!canApply} loading={busy} onClick={apply}>
-        {t('wizard.providersApply')}
-      </Button>
-    </>
-  )
-}
-
-function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () => void }) {
-  const { t } = useTranslation()
-  const [pid, setPid] = useState(() => initialProviderId(doc))
-  const provider = doc.providers.find((p) => p.id === pid) ?? doc.providers[0]
-  const [model, setModel] = useState(() => suggestedModel(doc, provider))
-  const [secret, setSecret] = useState('')
-  const [busy, setBusy] = useState(false)
-  const needsKey = !provider?.key_set
-  const probe = useKeyProbe(
-    provider && model.trim() && (!needsKey || secret.trim()) ? provider : null,
-    needsKey ? secret.trim() : undefined, model)
-  if (!provider) return null
-  const canApply = !!model.trim() && (!needsKey || !!secret.trim())
-
   async function apply() {
-    if (!canApply) return
-    const modelId = model.trim()
+    if (!canApply || !def) return
     setBusy(true)
     try {
       // 钥匙已存就不要再送 secret——空 secret 后端会留下原钥匙，但这一步根本不该再问。
-      await api.saveProvider({ ...provider, enabled: true }, needsKey ? secret.trim() : undefined)
-      await api.setSlotBinding('default', provider.id, modelId)
+      await api.saveProvider({ ...def, enabled: true }, needsKey ? secret.trim() : undefined)
+      await api.setSlotBinding('default', def.id, shownModel.trim())
       setSecret('')
       onRefresh()
     } catch (e) {
@@ -203,27 +209,48 @@ function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: ()
     }
   }
 
+  const catalog = choice.type === 'provider' ? choice.p.models : []
   return (
     <>
-      <Field label={t('wizard.providersPick')}>
-        <NativeSelect
-          aria-label={t('wizard.providersPick')}
-          value={provider.id}
-          onChange={(e) => {
-            const id = e.target.value
-            setPid(id)
-            setModel(suggestedModel(doc, doc.providers.find((p) => p.id === id)))
-            setSecret('')
-          }}
-        >
-          {doc.providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      <Field label={t('wizard.providerField.label')}>
+        <NativeSelect aria-label={t('wizard.providerField.label')} value={value} onChange={(e) => pick(e.target.value)}>
+          {doc.providers.length > 0 && (
+            <optgroup label={t('wizard.providerField.configured')}>
+              {doc.providers.map((p) => <option key={p.id} value={`p:${p.id}`}>{p.name}</option>)}
+            </optgroup>
+          )}
+          {freshPresets.length > 0 && (
+            <optgroup label={t('wizard.providerField.presets')}>
+              {freshPresets.map((x) => <option key={x.id} value={`preset:${x.id}`}>{x.name}</option>)}
+            </optgroup>
+          )}
+          <option value="custom">{t('wizard.providerField.custom')}</option>
         </NativeSelect>
       </Field>
-      {needsKey && <KeyInput key={provider.id} value={secret} onChange={setSecret} />}
-      <ModelProbeField value={model} onChange={setModel} probe={probe} list="wizard-default-models" />
-      <datalist id="wizard-default-models">
-        {provider.models.map((m) => <option key={m.id} value={m.id} />)}
-      </datalist>
+      {choice.type === 'custom' && (
+        <>
+          <Field label={t('providers.name')}>
+            <Input aria-label={t('providers.name')} placeholder={t('providers.name')} value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label={t('providers.kind')}>
+            <NativeSelect aria-label={t('providers.kind')} value={kind} onChange={(e) => setKind(e.target.value as ProviderView['kind'])}>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+            </NativeSelect>
+          </Field>
+          <Field label={t('providers.baseUrl')}>
+            <Input aria-label={t('providers.baseUrl')} placeholder={t('providers.baseUrl')} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+          </Field>
+        </>
+      )}
+      {needsKey && <KeyInput key={value} value={secret} onChange={setSecret} />}
+      <ModelProbeField value={shownModel} onChange={(v) => { setModel(v); setModelTouched(true) }} probe={probe}
+        list={catalog.length ? 'wizard-default-models' : undefined} />
+      {catalog.length > 0 && (
+        <datalist id="wizard-default-models">
+          {catalog.map((m) => <option key={m.id} value={m.id} />)}
+        </datalist>
+      )}
       <Button size="sm" variant="ink" className="self-start" disabled={!canApply} loading={busy} onClick={apply}>
         {t('wizard.providersApply')}
       </Button>

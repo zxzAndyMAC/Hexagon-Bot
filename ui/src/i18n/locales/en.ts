@@ -644,6 +644,7 @@ export default {
   exec: { done: 'done', exit: 'exit {{code}}', noOutput: '(no output)', tail: '… showing last 32 KB' },
   agent: {
     stepHostRead: "Read host file",
+    modelFallback: {"label": "{{model}} (current)", "hint": "This message has no record of the model it was sent with; showing the member's current model."},
     stepHostWrite: "Write host file",
     stepHostTrash: "Move host file to Trash",
     stepHostBash: "Run host command",
@@ -747,6 +748,7 @@ export default {
   },
   wizard: {
     keyHelp: "Stored in the system keychain, never in the project folder.",
+    providerField: {"label": "Provider", "configured": "Configured", "presets": "Built-in presets", "custom": "Custom…", "model": "Default model"},
     probe: {"running": "Checking…", "ok": "Key works", "okWindow": "Key works · {{window}} window", "unlisted": "Model not in catalog", "unlistedHelp": "The key works, but the provider does not list this model; you can still save — check the spelling first.", "failed": "Check failed", "failedWith": "The check did not finish: {{reason}}", "reason": {"authentication": "The provider rejected this key. Check that it was copied in full and has not expired.", "quota": "The provider account is out of credit. Check billing in the provider console.", "rate_limited": "The provider is rate limiting. Wait a moment; the check runs again when you edit.", "provider_unavailable": "The provider is temporarily unavailable. Try again later.", "request_rejected": "The provider rejected the request. Check that the provider type is right.", "endpoint_not_found": "There is no model catalog at this address. Check the Base URL (often a missing or extra /v1).", "transport": "Could not reach the provider. Check your network and the Base URL.", "deadline": "The provider did not answer within 30 seconds. Check your network and try again.", "invalid_response": "The provider did not return a model catalog. Check the Base URL and provider type.", "invalid_url": "The Base URL is not a valid address.", "missing_credential": "No key yet. Enter the API key and it is checked automatically."}},
     savedToDraft: "Saved to the wizard draft · this project only",
     shell: {"title": "New project", "cancel": "Cancel", "autosave": "Draft saves automatically", "aiLocked": "AI is generating — locked until it finishes", "qaLocked": "Locked while you answer", "picked": "{{count}} selected"},
@@ -764,7 +766,6 @@ export default {
     providersHint: 'Configure a model provider before picking a directory. Continue needs an enabled provider, a saved key, and a default slot.',
     providersReady: 'Ready',
     providersBlocked: 'An enabled provider, a saved key, and the default slot are all required.',
-    providersPick: 'Provider for the default slot',
     providersApply: 'Save and bind default',
     dirLabel: 'Project directory',
     dirPlaceholder: '/path/to/project',
@@ -1074,7 +1075,7 @@ export default {
     done: 'Done', empty: 'No matches', count: '{{n}} selected',
     title_skills: 'Select skills', title_mcp: 'Select MCP services',
   },
-  intake: {"confirm": "Write AGENTS.md", "confirmHint": "Drafted by the opening analysis. Written to the repository root only after you confirm; existing files are never overwritten.", "title": "Project instructions draft", "unsaved": "Not on disk", "later": "Not now", "laterHint": "Discards this draft for good; the opening analysis message stays in the conversation", "edit": "Edit", "editLabel": "Project instructions draft text", "editHint": "You are editing the draft; it is written to disk only when you choose Write AGENTS.md.", "cancelEdit": "Cancel", "saveEdit": "Save draft"},
+  intake: {"confirm": "Write AGENTS.md", "confirmHint": "Drafted by the opening analysis. Written to the repository root only after you confirm; existing files are never overwritten.", "title": "Project instructions draft", "unsaved": "Not on disk", "later": "Not now", "laterHint": "Discards this draft for good; the opening analysis message stays in the conversation", "edit": "Edit", "editLabel": "Project instructions draft text", "editHint": "You are editing the draft; it is written to disk only when you choose Write AGENTS.md.", "cancelEdit": "Cancel", "saveEdit": "Save draft", "discarded": "Draft discarded", "undo": "Undo"},
   returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} min", "rangeUntil": "until {{to}}", "collapse": "Collapse summary", "toggle": "Collapse or expand the return summary", "headline": "The team finished <b>{{stages}} stage(s)</b> and delivered {{deliveries}} deliverable(s); <o>{{pending}} item(s)</o> are waiting for your decision.", "headlineClear": "The team finished <b>{{stages}} stage(s)</b> and delivered {{deliveries}} deliverable(s); nothing is waiting for you.", "kpiStages": "Stages", "kpiStagesValue": "{{count}} done", "kpiDeliveries": "Delivered", "kpiDeliveriesValue": "{{count}}", "kpiReviews": "Reviews", "kpiReviewsPassed": "{{count}} passed", "kpiReviewsRejected": "{{count}} sent back", "kpiCost": "Spent", "costLoading": "Loading spend", "costUnknown": "Spend while away is unavailable", "needsYou": "Needs you", "handled": "Handled", "nothingNeeded": "Nothing is waiting for you.", "next": "Suggested next steps", "fillHint": "Fills the input; nothing is sent", "collapsedLine": "While you were away · {{minutes}} min · {{count}} waiting for you", "collapsedLineNoTime": "While you were away · {{count}} waiting for you", "suggest": {"rejected": "Explain how to fix the {{count}} sent-back deliverable(s)", "escalated": "Walk me through the {{count}} escalated flag(s)", "delivery": "Summarize what changed in {{path}}", "stage": "Summarize this stage, then move to the next one", "keepGoing": "Continue the current stage"}},
   fresh: {"greeting": "Your team is ready. Where should we start?", "sub": "{{roles}} roles · {{stages}} stages", "specTitle": "Start with a spec", "specDesc": "Turn a one-line idea into acceptance criteria", "specFill": "Write a spec from this idea and list acceptance criteria: ", "repoTitle": "Analyze the existing repository", "repoDesc": "Read the layout, commands and dependencies", "repoFill": "Analyze the existing repository first: layout, commands and dependencies.", "specTitleRole": "Have {{role}} write the {{stage}}", "specFillRole": "{{mention}} Start the {{stage}} from this request and list the acceptance criteria: "},
   keys: {

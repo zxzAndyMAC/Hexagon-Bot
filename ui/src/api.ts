@@ -115,6 +115,7 @@ import type { AgentDetail } from './gen/AgentDetail'
 import type { ModelEntry } from './gen/ModelEntry'
 import type { ProviderDef } from './gen/ProviderDef'
 import type { KeyProbe } from './gen/KeyProbe'
+import type { ProviderPreset } from './gen/ProviderPreset'
 import type { ProviderView } from './gen/ProviderView'
 import type { ProvidersView } from './gen/ProvidersView'
 import type { SlotBinding } from './gen/SlotBinding'
@@ -152,7 +153,7 @@ export type {
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
   PermissionRuleRow, SkillRow, McpServiceRow,
-  AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding,
+  AgentDetail, ModelEntry, ProviderDef, ProviderView, ProvidersView, SlotBinding, ProviderPreset,
   CreateProjectOpts, CreateStepDto, Event, EventKind, MessageRow, MessageToken, ExportFilter,
   RoleTemplate, ExtSkillRow, ImportReport, McpEntryRow, McpSpec, ExtMcpRow,
   RepoEntry, DiagRecord, PromptEntry, TranslateOutcome,
@@ -629,6 +630,8 @@ export const api = {
   // gap B4：向导服务商步实时密钥检测（请求一次模型目录；secret 空 = 用已存钥匙）
   probeProviderKey: (provider: ProviderDef, secret: string | undefined, model: string) =>
     call<KeyProbe>('probe_provider_key', { provider, secret: secret || null, model }),
+  // gap B8：内置服务商预设（向导服务商下拉；静态表，读组）
+  providerPresets: () => call<ProviderPreset[]>('provider_presets'),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
   /// 2026-09-25 答问优化流：qa 携带答问卡收集的答案（可选）。
@@ -652,6 +655,8 @@ export const api = {
   intakeDraft: () => call<string | null>('intake_draft'),
   updateIntakeDraft: (body: string) => call<void>('update_intake_draft', { body }),
   discardIntakeDraft: () => call<void>('discard_intake_draft'),
+  // gap B10：「已丢弃 · 撤销」——把刚丢弃的草案挪回待点头（不落盘）
+  restoreIntakeDraft: () => call<void>('restore_intake_draft'),
   /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
   /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
   /// 票 01：`autonomy` 缺省由核落 L4。非法档位核拒绝且不建项目。
@@ -755,7 +760,8 @@ const mkMsg = (
   author: string, body: string, hhmm: string,
 ): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id, stage_run_id, payload: {}, created_at: `${T0}${hhmm}:00Z` },
-  message: { id, author, body, tokens: [], attachments: [], element_refs: [], created_at: `${T0}${hhmm}:00Z`, thinking: '' },
+  // gap B9：Agent 回复带发出时的模型；负责人消息无模型
+  message: { id, author, body, tokens: [], attachments: [], element_refs: [], model: author === 'owner' ? null : 'deepseek/deepseek-chat', created_at: `${T0}${hhmm}:00Z`, thinking: '' },
 })
 
 const ART_CONTENT: Record<string, Record<number, string>> = {
@@ -982,7 +988,7 @@ const MOCK_MANAGED_EXTERNAL = [
   { event_id: 122, card_id: 'q-m1', kind: 'local_trash', target: '~/Downloads/old-build.zip', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-14 03:58:00', verification: 'host_verified_recoverable', trash_path: '~/.Trash/old-build.zip' },
   { event_id: 123, card_id: 'q-m2', kind: 'mcp', target: 'figma:update_node', action: 'update_node', decision: 'allow', result: 'done', at: '2026-10-14 03:59:00', verification: 'host_unverified_deletion', trash_path: null },
 ]
-const mockIntake: { draft: string | null | undefined } = { draft: undefined }
+const mockIntake: { draft: string | null | undefined; discarded?: string | null } = { draft: undefined }
 const mockIntakeDraft = (): string | null => {
   if (mockIntake.draft === undefined) {
     mockIntake.draft = typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockintake')
@@ -1658,6 +1664,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'create_project':
       return null as T
     case 'list_providers':
+      // gap B8：`?mocknoprovider` 给 dev 一份空供应商表，看向导服务商步三字段表单（对照 entry#wz-provider）
+      if (new URLSearchParams(location.search).has('mocknoprovider')) return { providers: [], slots: {} } as T
       return {
         providers: [
           {
@@ -1690,6 +1698,14 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return (String(args?.secret ?? '').includes('bad')
         ? { ok: false, failure: 'authentication', status: 401, model_listed: null, window: null }
         : { ok: true, failure: null, status: null, model_listed: true, window: 200000 }) as T
+    case 'provider_presets':
+      return [
+        { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },
+        { id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '' },
+        { id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '' },
+        { id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '' },
+        { id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '' },
+      ] as T
     case 'fetch_provider_models':
       return [
         { id: 'deepseek/deepseek-chat', group: 'deepseek', caps: ['tools'] },
@@ -1715,8 +1731,19 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     // gap B1：`?mockintake` 给 dev 一份未落盘草案（对照 workbench#fresh）
     case 'confirm_intake_brief':
-    case 'discard_intake_draft':
       mockIntake.draft = null
+      mockIntake.discarded = null
+      return null as T
+    case 'discard_intake_draft': {
+      const current = mockIntakeDraft()
+      if (current !== null) mockIntake.discarded = current
+      mockIntake.draft = null
+      return null as T
+    }
+    case 'restore_intake_draft':
+      if (mockIntakeDraft() !== null || !mockIntake.discarded) throw { code: 'no_intake_draft', message: 'no intake draft' }
+      mockIntake.draft = mockIntake.discarded
+      mockIntake.discarded = null
       return null as T
     case 'update_intake_draft':
       mockIntake.draft = String(args?.body ?? '')
