@@ -1176,6 +1176,7 @@ export default {
     stageSkip: '跳過當前階段',
     stageStamp: '階段蓋章',
     nodeRail: '聚焦節點軌',
+    focusToasts: "跳到通知",
     dismissPending: '關閉待決彈窗',
     treeNewFile: '新增檔案',
     treeNewFolder: '新增目錄',
@@ -1259,4 +1260,5 @@ export default {
     already_exists: '已經存在',
     not_dir: '不是目錄',
   },
+  feedback: {"region": "通知", "removeRecent": "從最近專案移除", "switchWaitTitle": "切換專案需要等待", "switchWaitBody": "：{{project}} 還有電腦動作沒有排空，排空後才會切換。", "stayHere": "留在此專案", "treeEmptyBody": "這個目錄裡還沒有檔案，新增一個開始。", "searchEmptyBody": "換個關鍵字試試，或清空搜尋看全部。", "pickerEmptyBody": "還沒有可選項；在設定裡新增後會出現在這裡。", "clearSearch": "清空搜尋"},
 }

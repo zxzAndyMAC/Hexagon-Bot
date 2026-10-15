@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Empty } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Icon } from './Icon'
 
@@ -166,7 +167,8 @@ export function EntityPicker({
           {err && <div role="alert" className="px-0.5 py-2 text-[12.5px] text-red">{err}</div>}
           {!err && opts === null && <div className="px-0.5 py-3 text-[12.5px] text-ink-3">…</div>}
           {!err && opts !== null && shown.length === 0 && (
-            <div className="px-0.5 py-3 text-[12.5px] text-ink-3">{t('picker.empty')}</div>
+            <Empty size="sm" icon="search" title={t('picker.empty')} desc={q.trim() ? t('feedback.searchEmptyBody') : t('feedback.pickerEmptyBody')}
+              action={q.trim() ? <Button size="sm" onClick={() => setQ('')}>{t('feedback.clearSearch')}</Button> : undefined} />
           )}
           {shown.map((o) => (
             <label key={o.id} className="flex cursor-pointer items-center gap-2.5 rounded-[7px] px-1.5 py-[7px] live:hover:bg-hover">

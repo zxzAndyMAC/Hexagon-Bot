@@ -11,6 +11,8 @@ import { recentTime } from '../recentTime'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Empty } from '@/components/ui/empty'
+import { toastError } from '../toast'
 import { IconButton } from '@/components/ui/icon-button'
 import { Spinner } from '@/components/ui/spinner'
 import { Wizard } from './Wizard'
@@ -54,8 +56,10 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
       await api.openRecent(d)
       onOpen()
     } catch (e) {
-      // E11 错误态：打开失败 toast 红字；「从最近项目移除」动作待反馈层票（行尾 × 仍在）
-      useUiStore.getState().pushToast(errText(e), 'err')
+      // E11 错误态 / A18（票 13）：打开最近项目失败 toast 带「从最近项目移除」动作；
+      // 从系统目录选择打开的不在最近列表里，不给这个动作。
+      const recent = dir && recents.some((r) => r.dir === dir)
+      toastError(e, recent ? { action: { label: t('feedback.removeRecent'), run: () => remove(dir) } } : {})
     } finally {
       setOpening(null)
     }
@@ -142,12 +146,10 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
 
         <div className="mt-7 w-[640px] max-w-full">
           {loaded && recents.length === 0 ? (
-            <div className="flex flex-col items-center px-5 py-7 text-center">
-              <div className="grid size-11 place-items-center rounded-[12px] bg-canvas text-ink-2 shadow-[inset_0_0_0_1px_var(--line)]"><Icon name="folder" size={20} /></div>
-              <div className="mt-3 text-[14px] font-semibold">{t('launch.emptyTitle')}</div>
-              <div className="mt-1 max-w-[280px] text-[13px] text-ink-3">{t('launch.emptyBody')}</div>
-              {isTauri && <Button size="sm" className="mt-3" onClick={() => { void openDir() }}>{t('launch.openExisting')}</Button>}
-            </div>
+            <Empty icon="folder" title={t('launch.emptyTitle')} desc={t('launch.emptyBody')}
+              action={isTauri
+                ? <Button size="sm" onClick={() => { void openDir() }}>{t('launch.openExisting')}</Button>
+                : <Button size="sm" onClick={() => setWizard({})}>{t('launch.blank')}</Button>} />
           ) : recents.length > 0 && (
             <>
               <div className="flex px-3 pb-1.5 text-[12px] text-ink-3">

@@ -1176,6 +1176,7 @@ export default {
     stageSkip: 'Sauter l’étape',
     stageStamp: 'Tamponner l’étape',
     nodeRail: 'Focaliser le rail de nœuds',
+    focusToasts: "Aller aux notifications",
     dismissPending: 'Fermer le dialogue des décisions',
     treeNewFile: 'Nouveau fichier',
     treeNewFolder: 'Nouveau dossier',
@@ -1259,4 +1260,5 @@ export default {
     already_exists: 'Existe déjà',
     not_dir: 'Pas un dossier',
   },
+  feedback: {"region": "Notifications", "removeRecent": "Retirer des projets récents", "switchWaitTitle": "Le changement de projet doit attendre", "switchWaitBody": " : {{project}} a encore des actions sur l’ordinateur en cours. Le changement aura lieu une fois terminées.", "stayHere": "Rester dans ce projet", "treeEmptyBody": "Ce dossier ne contient encore aucun fichier. Créez-en un pour commencer.", "searchEmptyBody": "Essayez un autre mot-clé ou effacez la recherche pour tout afficher.", "pickerEmptyBody": "Rien à choisir pour l’instant. Les éléments ajoutés dans les Réglages apparaîtront ici.", "clearSearch": "Effacer la recherche"},
 }

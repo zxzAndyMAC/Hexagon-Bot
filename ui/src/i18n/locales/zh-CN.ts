@@ -1176,6 +1176,7 @@ export default {
     stageSkip: '跳过当前阶段',
     stageStamp: '阶段盖章',
     nodeRail: '聚焦节点轨',
+    focusToasts: "跳到通知",
     dismissPending: '关闭待决弹窗',
     treeNewFile: '新建文件',
     treeNewFolder: '新建目录',
@@ -1259,4 +1260,5 @@ export default {
     already_exists: '已经存在',
     not_dir: '不是目录',
   },
+  feedback: {"region": "通知", "removeRecent": "从最近项目移除", "switchWaitTitle": "切换项目需要等待", "switchWaitBody": "：{{project}} 还有电脑动作没有排空，排空后才会切换。", "stayHere": "留在此项目", "treeEmptyBody": "这个目录里还没有文件，新建一个开始。", "searchEmptyBody": "换个关键词试试，或者清空搜索看全部。", "pickerEmptyBody": "还没有可选项；在设置里添加后会出现在这里。", "clearSearch": "清空搜索"},
 }

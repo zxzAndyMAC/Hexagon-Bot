@@ -211,17 +211,7 @@ button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tl .flash-row { animation: tl-flash 1.4s ease-out; }
 @keyframes tl-flash { 0% { background: var(--accent-tint); } 100% { background: transparent; } }
 
-/* ---- A20 骨架（首屏 / 补载更早内容） ---- */
-.tl-skl { display: flex; gap: 12px; padding: 10px 0; }
-.tl-skl i {
-  display: block; height: 10px; border-radius: 6px;
-  background: linear-gradient(90deg, var(--canvas), var(--hover-2), var(--canvas)); background-size: 200% 100%;
-  animation: tl-skl 1.4s linear infinite;
-}
-.tl-skl .av { width: 30px; height: 30px; border-radius: 9px; flex: none; }
-
 @media (prefers-reduced-motion: reduce) {
-  .tl-skl i { animation: none; background: var(--canvas); }
   .tl .net-dot { animation: none; }
 }
 

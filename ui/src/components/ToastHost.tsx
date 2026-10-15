@@ -43,7 +43,7 @@ export function ToastHost() {
   }, [])
 
   // hotkey 交给 keymap（focusToasts），Sonner 自带的 alt+T 关掉，免得与可改绑的键位并存。
-  return <Toaster hotkey={[]} containerAriaLabel={t('toast.region')} />
+  return <Toaster hotkey={[]} containerAriaLabel={t('feedback.region')} />
 }
 
 function show(t: Toast) {
