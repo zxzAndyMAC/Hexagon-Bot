@@ -639,6 +639,10 @@ export const api = {
   runOpeningIntake: () => call<void>('run_opening_intake'),
   confirmIntakeBrief: () => call<void>('confirm_intake_brief'),
   intakeDraftPending: () => call<boolean>('intake_draft_pending'),
+  // gap B1：草案卡 inset 预览 / 编辑后整份写回 / 「先不写」持久丢弃
+  intakeDraft: () => call<string | null>('intake_draft'),
+  updateIntakeDraft: (body: string) => call<void>('update_intake_draft', { body }),
+  discardIntakeDraft: () => call<void>('discard_intake_draft'),
   /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
   /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
   /// 票 01：`autonomy` 缺省由核落 L4。非法档位核拒绝且不建项目。
@@ -969,6 +973,15 @@ const MOCK_MANAGED_EXTERNAL = [
   { event_id: 122, card_id: 'q-m1', kind: 'local_trash', target: '~/Downloads/old-build.zip', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-14 03:58:00', verification: 'host_verified_recoverable', trash_path: '~/.Trash/old-build.zip' },
   { event_id: 123, card_id: 'q-m2', kind: 'mcp', target: 'figma:update_node', action: 'update_node', decision: 'allow', result: 'done', at: '2026-10-14 03:59:00', verification: 'host_unverified_deletion', trash_path: null },
 ]
+const mockIntake: { draft: string | null | undefined } = { draft: undefined }
+const mockIntakeDraft = (): string | null => {
+  if (mockIntake.draft === undefined) {
+    mockIntake.draft = typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockintake')
+      ? '## Purpose\n离线可用的待办 PWA，单用户，本地存储。\n## Commands\nnpm run dev · npm test\n## Layout\n未知\n'
+      : null
+  }
+  return mockIntake.draft
+}
 const mockDesign = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdesign')
 const mockSvg = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="320" height="240" fill="url(#g)"/></svg>`)}`
 const MOCK_DESIGN_OPTIONS = [
@@ -1671,10 +1684,19 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         globs: [],
       })) as T
     case 'run_opening_intake':
+      return null as T
+    // gap B1：`?mockintake` 给 dev 一份未落盘草案（对照 workbench#fresh）
     case 'confirm_intake_brief':
+    case 'discard_intake_draft':
+      mockIntake.draft = null
+      return null as T
+    case 'update_intake_draft':
+      mockIntake.draft = String(args?.body ?? '')
       return null as T
     case 'intake_draft_pending':
-      return false as T
+      return (mockIntakeDraft() !== null) as T
+    case 'intake_draft':
+      return mockIntakeDraft() as T
     // ui-redesign 票 11：设置·权限「已记住的规则」表的 dev 样例（对照 settings#perms）
     case 'permission_rules':
       return [
