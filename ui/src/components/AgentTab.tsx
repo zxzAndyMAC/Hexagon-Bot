@@ -3,10 +3,12 @@
 // 第二行 cpu 胶囊模型 + 状态胶囊（工作中 / 休眠 / 空闲）。→ A7「活动 / 职责 / 用量」。
 // 活动 = Task Rows（agentTasks.ts 分组：一行一个回合，状态圆 + 粗标题 + 灰 meta + 结果胶囊 + ▾，展开子步骤左竖线缩进，右侧等宽时间）；
 // 子步骤仍可展开看原始负载 / 执行明细（ExecBody 同源复用）。底部用量两行：上下文进度（A12）+ 本项目花费。
-// 原型的「出图：未配置」胶囊不画：核心没有出图槽位的读模型（reconciliation 票 09）。
+// 「出图：…」胶囊（功能缺口 C2）：读 core 出图槽位读模型（ProvidersView.image_generation，精确绑定 `image` 槽）。
+// 只显示绑定事实，neutral；Hexagon 尚无出图执行器，tooltip 写明（不暗示 Agent 能出图）。
 import { useLayoutEffect, useMemo, useRef, useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type AgentDetail } from '../api'
+import type { ImageGenerationSlot } from '../gen/ImageGenerationSlot'
 import { useUiStore } from '../store'
 import { CodeBlock, Md } from './Md'
 import { Icon, type IconName } from './Icon'
@@ -65,6 +67,8 @@ export function AgentTab({ agentId }: { agentId: string }) {
   const { t } = useTranslation()
   const { team, timelineFacts, invalidate, pushToast } = useUiStore()
   const providers = useUiStore((s) => s.providers)
+  // 视图字面量（向导 / 设置空视图）可能不带此字段——缺省按未配置读。
+  const image: ImageGenerationSlot = providers?.image_generation ?? { state: 'unconfigured' }
   const avatarUrl = useUiStore((s) => s.avatars[agentId])
   const member = team.find((m) => m.id === agentId)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -135,6 +139,10 @@ export function AgentTab({ agentId }: { agentId: string }) {
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <Badge data-agent-model><Icon name="cpu" size={12} />{slotLabel(member.model_slot, providers, t('agent.dedicatedTag'))}</Badge>
+          <Badge data-agent-image={image.state} title={t('agentDetail.imageHint')}>{t('agentDetail.imageGen', {
+            value: image.state === 'unconfigured' ? t('agentDetail.imageUnconfigured')
+              : image.state === 'unsupported' ? t('agentDetail.imageUnsupported', { model: image.model }) : image.model,
+          })}</Badge>
           {busy ? <Badge variant="ok" data-agent-state="busy"><Dot tone="on" />{t('timeline.working')}</Badge>
             : sleeping ? <Badge data-agent-state="sleeping"><Dot tone="off" />{t('side.sleeping')}</Badge>
             : <Badge data-agent-state="idle">{t('agentDetail.idle')}</Badge>}

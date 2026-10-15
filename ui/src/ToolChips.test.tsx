@@ -145,6 +145,21 @@ it('agent activity preserves unknown across unrelated events', async () => {
   await act(async () => root.unmount())
 })
 
+// 功能缺口 C2：Agent 头卡「出图：…」读 core 出图槽位读模型；视图缺字段按未配置读。
+it('agent header shows the image-generation slot from the host read model', async () => {
+  const saved = useUiStore.getState().providers
+  useUiStore.setState({ providers: { providers: [], slots: {} } })
+  const first = await render(<AgentTab agentId="a1" />)
+  expect(first.el.querySelector('[data-agent-image]')?.textContent).toBe('Images: not set up')
+  await act(async () => first.root.unmount())
+  useUiStore.setState({ providers: { providers: [], slots: {}, image_generation: { state: 'configured', model: 'gpt-image-1' } } })
+  const second = await render(<AgentTab agentId="a1" />)
+  expect(second.el.querySelector('[data-agent-image]')?.textContent).toBe('Images: gpt-image-1')
+  expect(second.el.querySelector('[data-agent-image]')?.getAttribute('data-agent-image')).toBe('configured')
+  await act(async () => second.root.unmount())
+  useUiStore.setState({ providers: saved })
+})
+
 // Benchmark I1: image decoding happens before the IPC token is captured. An A
 // FileReader finishing in B must not use B's valid token to change the same a1.
 it.each([false, true])('avatar file reading respects the originating project (switch=%s)', async (switchProject) => {

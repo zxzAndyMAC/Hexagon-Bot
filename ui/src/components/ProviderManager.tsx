@@ -587,13 +587,15 @@ function SlotRow({
     : isBuiltinSlot(slot)
       ? t(`providers.slot_${slot}`)
       : slot
-  const state = binding ? 'bound' : slot === 'jev' ? 'empty' : 'default'
+  // jev 与 image（出图，功能缺口 C2）只认精确绑定：未绑就是空，不写「回落默认」。
+  const exact = slot === 'jev' || slot === 'image'
+  const state = binding ? 'bound' : exact ? 'empty' : 'default'
   const chip = binding
     ? ready
       ? <Badge variant="ok">{t('settingsUi.slotReady')}</Badge>
       : <Badge variant="warn">{bindingProvider && !bindingProvider.enabled ? t('providers.disabledTag') : t('settingsUi.slotMissingKey')}</Badge>
-    : slot === 'jev'
-      ? <Badge>{t('providers.jevEmpty')}</Badge>
+    : exact
+      ? <Badge>{t(slot === 'jev' ? 'providers.jevEmpty' : 'providers.imageEmpty')}</Badge>
       : slot === 'default'
         ? <Badge variant="warn">{t('providers.unbound')}</Badge>
         : <Badge>{t('settingsUi.slotFallback')}</Badge>

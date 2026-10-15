@@ -36,6 +36,12 @@ describe('modelpick（ui-audit-2 票 01：角色直选模型）', () => {
     expect(sharedSlots(view.slots, 'ops')).toContain('ops')
   })
 
+  // 功能缺口 C2：出图槽绑的是出图模型，不进「跟随谁」的对话模型选项。
+  it('sharedSlots 排除出图槽 image', () => {
+    const slots = { ...view.slots, image: { provider_id: 'p', model: 'gpt-image-1' } }
+    expect(sharedSlots(slots)).not.toContain('image')
+  })
+
   it('slotLabel：专属槽显示模型不裸示内部名；共享槽带槽名前缀', () => {
     expect(slotLabel('agent:a3', view, '专属')).toBe('专属 · claude-4')
     expect(slotLabel('code', view, '专属')).toBe('code · gpt-5')
