@@ -238,5 +238,19 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
     expect(row.el.querySelector('[data-msg-model="recorded"]')?.textContent).toBe('claude-opus-5-5')
     expect(row.el.querySelector('.tl-who')?.textContent).not.toContain('DeepSeek V4')
     row.root.unmount()
+    // gap B11：记录的 id 在服务商目录里有展示名 → 头行显示展示名，悬停给原 id
+    useUiStore.setState({
+      providers: {
+        providers: [{ id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: '', key_set: true, enabled: true,
+          models: [{ id: 'claude-opus-5-5', name: 'Claude Opus 5.5', group: null, caps: [], context_window: null, max_output: null }] }],
+        slots: {},
+      },
+    })
+    const named = await render(<TooltipProvider><EventRow item={item as never} /></TooltipProvider>)
+    const label = named.el.querySelector('[data-msg-model="recorded"]')
+    expect(label?.textContent).toBe('Claude Opus 5.5')
+    expect(label?.getAttribute('title')).toBe('claude-opus-5-5')
+    named.root.unmount()
+    useUiStore.setState({ providers: null })
   })
 })

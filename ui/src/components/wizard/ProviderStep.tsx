@@ -5,16 +5,18 @@
 // 票 10 原先空表时五个框（名称/类型/地址/钥匙/模型）、有供应商时只能在已有里选，两条路径现合为一个表单。
 // gap B4（2026-10-15）：默认模型框实时检测钥匙（probe_provider_key，输入停 600ms 后请求一次模型目录）：
 // 检测中 / 检测通过 · 窗口 / 目录里没有这个模型 / 检测失败 + 原因。检测是建议不是闸——保存仍可点。
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ProviderDef, type ProviderPreset, type ProviderView, type ProvidersView } from '../../api'
 import { useUiStore } from '../../store'
-import { providerStepReady } from '../../providerGate'
+import { providerStepReady, wizardPreset } from '../../providerGate'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Field, Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { Avatar } from '@/components/ui/avatar'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Icon } from '../Icon'
 import { fmtWindow, useKeyProbe, type ProbeState } from '../../keyProbe'
 
@@ -152,11 +154,56 @@ function resolveChoice(value: string, doc: ProvidersView, presets: ProviderPrese
   return null
 }
 
+/** 服务商下拉（gap B12 2026-10-15，entry#wz-provider「A Anthropic ▾」）：选项带 18 字母头像，
+ *  原生 <option> 画不了头像，改走 A9 触发 + A16 弹层的 Select（键盘 / 读屏走 Radix Select）。
+ *  头像确定色按供应商 id 哈希，与设置「模型服务」列表同一色号；「自定义…」用加号图标块。 */
+function ProviderSelect({ value, onChange, providers, presets }: {
+  value: string
+  onChange: (v: string) => void
+  providers: ProviderView[]
+  presets: ProviderPreset[]
+}) {
+  const { t } = useTranslation()
+  // 向导外壳是 z-60 的全屏层，弹层（z 20）挂到 body 会被它盖住——挂进向导层自己（gap B12 实测：打开了但看不见）。
+  const [layer, setLayer] = useState<HTMLElement | null>(null)
+  const findLayer = useCallback((el: HTMLElement | null) => {
+    if (el) setLayer(el.closest<HTMLElement>('[data-wizard]'))
+  }, [])
+  const face = (id: string, name: string) => <Avatar agentId={id} name={name} size={18} />
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger aria-label={t('wizard.providerField.label')} data-provider-select=""
+        ref={findLayer}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent container={layer}>
+        {providers.length > 0 && (
+          <SelectGroup>
+            <SelectLabel>{t('wizard.providerField.configured')}</SelectLabel>
+            {providers.map((p) => <SelectItem key={p.id} value={`p:${p.id}`} icon={face(p.id, p.name)}>{p.name}</SelectItem>)}
+          </SelectGroup>
+        )}
+        {presets.length > 0 && (
+          <SelectGroup>
+            <SelectLabel>{t('wizard.providerField.presets')}</SelectLabel>
+            {presets.map((x) => <SelectItem key={x.id} value={`preset:${x.id}`} icon={face(x.id, x.name)}>{x.name}</SelectItem>)}
+          </SelectGroup>
+        )}
+        <SelectSeparator />
+        <SelectItem value="custom" icon={
+          <span className="grid size-[18px] flex-none place-items-center rounded-[5px] bg-hover-2 text-ink-2"><Icon name="plus" size={12} /></span>
+        }>{t('wizard.providerField.custom')}</SelectItem>
+      </SelectContent>
+    </Select>
+  )
+}
+
 function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () => void }) {
   const { t } = useTranslation()
   const presets = usePresets()
   // 已有同 id 供应商的预设不再列——选它就是选那条已配置的，不另建一份。
-  const freshPresets = presets.filter((x) => !doc.providers.some((p) => p.id === x.id))
+  // gap B13：预设表与设置目录同一份，向导只取能当 default 主对话槽、要钥匙的子集（wizardPreset）。
+  const freshPresets = presets.filter((x) => wizardPreset(x) && !doc.providers.some((p) => p.id === x.id))
   const [picked, setPicked] = useState(() => initialChoice(doc))
   // 空表时默认落第一条预设（原型 entry#wz-provider 默认 Anthropic）；预设异步到达前先空着。
   const value = picked || (freshPresets[0] ? `preset:${freshPresets[0].id}` : 'custom')
@@ -213,19 +260,7 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
   return (
     <>
       <Field label={t('wizard.providerField.label')}>
-        <NativeSelect aria-label={t('wizard.providerField.label')} value={value} onChange={(e) => pick(e.target.value)}>
-          {doc.providers.length > 0 && (
-            <optgroup label={t('wizard.providerField.configured')}>
-              {doc.providers.map((p) => <option key={p.id} value={`p:${p.id}`}>{p.name}</option>)}
-            </optgroup>
-          )}
-          {freshPresets.length > 0 && (
-            <optgroup label={t('wizard.providerField.presets')}>
-              {freshPresets.map((x) => <option key={x.id} value={`preset:${x.id}`}>{x.name}</option>)}
-            </optgroup>
-          )}
-          <option value="custom">{t('wizard.providerField.custom')}</option>
-        </NativeSelect>
+        <ProviderSelect value={value} onChange={pick} providers={doc.providers} presets={freshPresets} />
       </Field>
       {choice.type === 'custom' && (
         <>

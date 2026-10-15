@@ -1675,7 +1675,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
             id: 'openrouter', name: 'OpenRouter', kind: 'openai',
             base_url: 'https://openrouter.ai/api/v1', enabled: true, key_set: true,
             models: [
-              { id: 'deepseek/deepseek-chat', caps: ['tools'] },
+              // gap B11：带展示名，dev 下消息头显示「DeepSeek V3」而不是记录的 id
+              { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', caps: ['tools'] },
               { id: 'google/gemini-2.5-flash', caps: ['vision', 'tools'] },
               { id: 'deepseek/deepseek-r1:free', caps: ['free', 'reasoning', 'tools'] },
             ],
@@ -1708,6 +1709,16 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '' },
         { id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '' },
         { id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '' },
+        // gap B13：设置页目录并进同一份预设（core provider_presets.rs）
+        { id: 'gemini', name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', default_model: '' },
+        { id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', default_model: '' },
+        { id: 'groq', name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1', default_model: '' },
+        { id: 'mistral', name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1', default_model: '' },
+        { id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', default_model: '' },
+        { id: 'zhipu', name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: '' },
+        { id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' },
+        { id: 'lm-studio', name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1', default_model: '' },
+        { id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' },
       ] as T
     case 'fetch_provider_models':
       return [

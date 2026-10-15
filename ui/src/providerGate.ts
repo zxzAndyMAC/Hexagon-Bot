@@ -14,3 +14,13 @@ export function providerStepReady(doc: ProvidersView): boolean {
   const provider = doc.providers.find((p) => p.id === binding.provider_id)
   return !!(provider?.enabled && provider.key_set)
 }
+
+/// 本机端点（不需要钥匙）：设置页状态点与向导预设过滤共用一条判定（gap B13）。
+export const isLocalEndpoint = (url: string): boolean =>
+  /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])/i.test(url)
+
+/// 向导服务商步能列的预设（gap B13，与设置目录同一份 core provider_presets）：
+/// 向导只配 default 主对话槽，且放行要求钥匙已存（见 providerStepReady）——
+/// Jev（执行判定专用）与本机端点（不要钥匙）放到设置页配。
+export const wizardPreset = (p: { kind: string; base_url: string }): boolean =>
+  p.kind !== 'jev' && !isLocalEndpoint(p.base_url)

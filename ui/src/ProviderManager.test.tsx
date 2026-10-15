@@ -321,3 +321,37 @@ describe('Jev 槽', () => {
     root.unmount()
   })
 })
+
+// gap B13（ui-redesign 2026-10-15）：内置目录读 core provider_presets（与向导同一份），不再是 UI 硬编码表
+describe('内置目录 = core provider_presets', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('列出未配置的预设（同 id / 同名已配置的不列），点选按预设填表并以预设 id 保存', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(pv)
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue([
+      { id: 'acme', name: 'Acme', kind: 'openai', base_url: 'https://acme.example/v1', default_model: 'acme-1' },
+      { id: 'a', name: 'Same Id', kind: 'openai', base_url: 'https://a.example', default_model: '' },
+      { id: 'other', name: 'ReadyCo', kind: 'openai', base_url: 'https://r.example', default_model: '' },
+    ])
+    const save = vi.spyOn(api, 'saveProvider').mockResolvedValue(undefined)
+    const { el, root } = await render(<ProviderManager />)
+    const names = [...el.querySelectorAll('div')].map((d) => d.textContent)
+    expect(names).toContain('Acme')
+    expect(names).not.toContain('Same Id')
+    // 旧硬编码目录里的条目不再出现（core 预设没给就没有）
+    expect(names).not.toContain('SiliconFlow')
+    const row = [...el.querySelectorAll('div')].find((d) => d.textContent === 'Acme')!
+    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect((el.querySelector('input[aria-label="Base URL"]') as HTMLInputElement | null)?.value
+      ?? (el.querySelector('input.font-mono') as HTMLInputElement).value).toBe('https://acme.example/v1')
+    const saveBtn = [...el.querySelectorAll('button')].filter((b) =>
+      b.dataset.variant === 'primary' && /save|保存|儲存|enregistrer|guardar|salvar/i.test(b.textContent ?? ''),
+    ).at(-1)!
+    await act(async () => { saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'acme', name: 'Acme', base_url: 'https://acme.example/v1', models: [expect.objectContaining({ id: 'acme-1' })] }),
+      undefined)
+    root.unmount()
+  })
+})

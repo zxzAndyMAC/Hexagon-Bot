@@ -104,7 +104,8 @@ describe('向导先配模型服务商（票 13）', () => {
     expect(el.querySelectorAll('input.btn, textarea.btn, select.btn')).toHaveLength(0)
     // gap B8（2026-10-15）：原型三字段——服务商下拉（默认落第一条内置预设）/ 密钥 / 模型。
     // 票 10 时空表是五个框（名称/类型/地址/密钥/模型）；名称/类型/地址现在只在「自定义」下展开。
-    expect(el.querySelectorAll('[data-slot=input] input, [data-slot=native-select] select')).toHaveLength(3)
+    // gap B12（2026-10-15）：服务商下拉改成带头像的 Select（[data-slot=select] 外壳同 A9），计数不变。
+    expect(el.querySelectorAll('[data-slot=input] input, [data-slot=native-select] select, [data-slot=select] button')).toHaveLength(3)
   })
 
   // gap B8：内置服务商预设（core provider_presets）
@@ -112,12 +113,18 @@ describe('向导先配模型服务商（票 13）', () => {
     { id: 'anthropic', name: 'Anthropic', kind: 'anthropic' as const, base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },
     { id: 'or', name: 'OpenRouter', kind: 'openai' as const, base_url: 'https://openrouter.ai/api/v1', default_model: '' },
   ]
-  const providerSelect = (el: HTMLElement) => el.querySelector('select[aria-label="Provider"]') as HTMLSelectElement
-  async function choose(sel: HTMLSelectElement, value: string) {
-    await act(async () => {
-      sel.value = value
-      sel.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+  // gap B12（2026-10-15）：服务商下拉从原生 <select> 改成带头像的 Select（Radix，role=combobox / option）。
+  // B8 时读 select.value / options；现在读触发器显示的选中项文本、弹层 option 文本。
+  const providerSelect = (el: HTMLElement) => el.querySelector('[data-provider-select]') as HTMLButtonElement
+  const options = () => [...document.querySelectorAll('[role="option"]')] as HTMLElement[]
+  const text = (n: Element | null) => n?.querySelector('[data-select-text]')?.textContent
+  async function openSelect(el: HTMLElement) {
+    await act(async () => { providerSelect(el).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  }
+  async function choose(el: HTMLElement, label: string) {
+    await openSelect(el)
+    const opt = options().find((o) => text(o) === label)!
+    await act(async () => { opt.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
   }
 
   it('选预设自动填类型与地址，只问钥匙和模型', async () => {
@@ -127,7 +134,7 @@ describe('向导先配模型服务商（票 13）', () => {
     const save = vi.spyOn(api, 'saveProvider').mockResolvedValue(undefined)
     const bind = vi.spyOn(api, 'setSlotBinding').mockResolvedValue(undefined)
     const el = await renderWizard()
-    expect(providerSelect(el).value).toBe('preset:anthropic')
+    expect(text(providerSelect(el))).toBe('Anthropic')
     const model = el.querySelector('input[aria-label="Default model"]') as HTMLInputElement
     expect(model.value).toBe('claude-opus-5-5')
     await act(async () => { setInput(password(el) as HTMLInputElement, 'sk-test') })
@@ -143,8 +150,8 @@ describe('向导先配模型服务商（票 13）', () => {
     vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
     const el = await renderWizard()
     expect(el.querySelector('input[aria-label="Base URL"]')).toBeNull()
-    await choose(providerSelect(el), 'custom')
-    expect(el.querySelectorAll('[data-slot=input] input, [data-slot=native-select] select')).toHaveLength(6)
+    await choose(el, 'Custom…')
+    expect(el.querySelectorAll('[data-slot=input] input, [data-slot=native-select] select, [data-slot=select] button')).toHaveLength(6)
     expect(isOff(button(el, 'Save and bind default'))).toBe(true)
   })
 
@@ -152,11 +159,54 @@ describe('向导先配模型服务商（票 13）', () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [prov({ id: 'or', name: 'My OpenRouter', key_set: false })], slots: {} })
     vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
     const el = await renderWizard()
-    const sel = providerSelect(el)
-    expect(sel.value).toBe('p:or')
-    expect([...sel.options].map((o) => o.value)).toEqual(['p:or', 'preset:anthropic', 'custom'])
+    expect(text(providerSelect(el))).toBe('My OpenRouter')
+    expect(providerSelect(el).querySelector('[data-slot=avatar]')).not.toBeNull()
+    await openSelect(el)
+    expect(options().map(text)).toEqual(['My OpenRouter', 'Anthropic', 'Custom…'])
+    // gap B12：每个服务商选项带字母头像（确定色，按供应商 id 哈希）；「自定义」不是服务商，不画头像
+    expect(options().map((o) => !!o.querySelector('[data-slot=avatar]'))).toEqual([true, true, false])
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
     // 已配置但缺钥匙：只补钥匙
     expect(password(el)).not.toBeNull()
+  })
+
+  // gap B13：预设表与设置目录同一份；向导只列能当 default 主对话槽、要钥匙的（Jev、本机端点去设置页配）
+  it('向导不列 Jev 与本机端点预设', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue([
+      ...PRESETS,
+      { id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' },
+      { id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' },
+    ])
+    const el = await renderWizard()
+    await openSelect(el)
+    expect(options().map(text)).toEqual(['Anthropic', 'OpenRouter', 'Custom…'])
+  })
+
+  // gap B12：下拉换成 Select 后键盘与读屏照旧——combobox 触发器、↵ 打开、↓ 移动、↵ 选中、焦点回触发器
+  it('服务商下拉可全键盘操作', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
+    const el = await renderWizard()
+    const trigger = providerSelect(el)
+    expect(trigger.getAttribute('role')).toBe('combobox')
+    expect(trigger.getAttribute('aria-label')).toBe('Provider')
+    const key = (target: Element, k: string) =>
+      act(async () => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }))
+        await new Promise((r) => setTimeout(r, 0)) // Radix 在下一拍挪焦点
+      })
+    trigger.focus()
+    await key(trigger, 'Enter')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    // 弹层挂进向导层（z-60）；挂到 body 会被向导盖住，打开了也看不见
+    expect(document.querySelector('[data-wizard] [role="listbox"]')).not.toBeNull()
+    expect(document.activeElement && text(document.activeElement)).toBe('Anthropic')
+    await key(document.activeElement!, 'ArrowDown')
+    expect(text(document.activeElement)).toBe('OpenRouter')
+    await key(document.activeElement!, 'Enter')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(text(providerSelect(el))).toBe('OpenRouter')
   })
 
   it('已有钥匙时绑定 default 槽走现有 API，且不重传钥匙', async () => {

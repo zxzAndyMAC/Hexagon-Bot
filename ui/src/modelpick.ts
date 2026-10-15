@@ -56,3 +56,17 @@ export function slotLabel(
   if (isDedicatedSlot(slot)) return b ? `${dedicatedTag} · ${b.model}` : dedicatedTag
   return b ? `${slot} · ${b.model}` : slot
 }
+
+/// 模型 id → 展示名（功能缺口 B11）：消息头记录的是模型 id（MessageRow.model），读时按服务商目录
+/// 映射成展示名——与 core provider_config::model_label_in 的「展示名空则用 id」同一回退。
+/// 消息不记服务商，同一 id 可能在多个服务商目录里：先看启用的服务商，再看停用的，取第一个
+/// 有非空展示名的条目；目录里都没有（或视图未载入）→ 原样显示 id，不猜。
+export function modelDisplayName(view: ProvidersView | null | undefined, modelId: string): string {
+  const providers = view?.providers ?? []
+  const ordered = [...providers.filter((p) => p.enabled), ...providers.filter((p) => !p.enabled)]
+  for (const p of ordered) {
+    const name = p.models.find((m) => m.id === modelId)?.name?.trim()
+    if (name) return name
+  }
+  return modelId
+}

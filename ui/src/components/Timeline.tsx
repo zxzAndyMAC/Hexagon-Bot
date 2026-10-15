@@ -25,6 +25,7 @@ import { freshTally, jumpFace, showStickButton, TIMELINE_TAIL_PX } from '../time
 import { JumpAnnouncer, JumpToLatest } from './JumpToLatest'
 import { useJumpOffset } from '../useJumpOffset'
 import { NodeRail } from './NodeRail'
+import { modelDisplayName } from '../modelpick'
 import type { TFunction } from 'i18next'
 import './timeline.css'
 import { Avatar as Face } from './ui/avatar'
@@ -426,6 +427,7 @@ function OwnerMessage({ item, steered, turnBoundary, turnActive, story }: {
 function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) {
   const { t } = useTranslation()
   const team = useUiStore((s) => s.team)
+  const providers = useUiStore((s) => s.providers)
   const openTab = useUiStore((s) => s.openTab)
   const atoms = useAtomOptions(false)
   const m = item.message!
@@ -446,11 +448,12 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
           {/* gap B2：头行「名 · 模型 · 时间」（workbench#running）。
               gap B9：模型取这条消息发出时实际用的（MessageRow.model，迁移 0061 起记录）；B2 时 core
               不按消息记模型，换模型后旧消息头会被改写成新模型。旧消息没有记录时回退成员当前模型并标「当前」，
-              不冒充当时的模型。 */}
+              不冒充当时的模型。
+              gap B11：记录的是模型 id，读时按服务商目录映射成展示名（无目录项显示 id），悬停给原 id。 */}
           {(m.model || member?.model || time) && (
             <span className="t">
               {m.model
-                ? <span data-msg-model="recorded">{m.model}</span>
+                ? <span data-msg-model="recorded" title={m.model}>{modelDisplayName(providers, m.model)}</span>
                 : member?.model
                   ? <span data-msg-model="current" title={t('agent.modelFallback.hint')}>{t('agent.modelFallback.label', { model: member.model })}</span>
                   : null}
