@@ -187,6 +187,11 @@ function ProposalStampCard({ q, top }: { q: PendingQuestion; top: boolean }) {
 function PublishCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const p = q.payload
+  // gap A6：「包含 N 个提交 · N 个阶段的产物」取宿主载荷；提交数未知（null，从未推送）只写阶段，旧卡没有计数不出这一行。
+  const included = [
+    typeof p.commit_count === 'number' ? t('dock.includedCommits', { count: p.commit_count }) : null,
+    typeof p.stage_count === 'number' ? t('dock.includedStages', { count: p.stage_count }) : null,
+  ].filter((part): part is string => part !== null)
   return (
     <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.publish')} sub={t('dock.publishSub')}
       actions={<>
@@ -197,6 +202,7 @@ function PublishCard({ q, top }: { q: PendingQuestion; top: boolean }) {
       <KeyValues rows={[
         [t('dock.kvBaseline'), String(p.baseline ?? 'main'), 'mono'],
         [t('dock.kvTarget'), String(p.remote ?? 'origin'), 'mono'],
+        ...(included.length ? [[t('dock.kvIncluded'), included.join(' · ')] as [string, string]] : []),
       ]} />
       <div className="dock-warn"><Icon name="warn" size={14} />{String(p.warning ?? t('cards.publishWarn'))}</div>
     </DecisionShell>

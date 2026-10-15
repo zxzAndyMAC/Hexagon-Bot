@@ -1240,7 +1240,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
         { id: 'q-stall', kind: 'stall', agent_id: 'a3', payload: { branch: 'no_reply', retry: true, role: '前端', instruction: '把列表过滤修一下' }, state: 'queued' },
-        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
+        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', commit_count: 12, stage_count: 3, warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
         { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
         { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
         { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
