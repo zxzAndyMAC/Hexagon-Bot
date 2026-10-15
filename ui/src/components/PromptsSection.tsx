@@ -6,6 +6,7 @@ import type { PromptTranslation } from '../gen/PromptTranslation'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
 import { cn } from '@/lib/utils'
+import { ModelRecoveryInline } from './ModelRecoveryInline'
 import { Icon } from './Icon'
 import { InlineError, ListDetail } from './settings/kit'
 
@@ -151,11 +152,9 @@ export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
                 <pre className={preCls}>{cur.text}</pre>
               ) : tr?.error ? (
                 <>
-                  <div role="alert" className="flex flex-wrap items-center gap-2 text-[12.5px] text-red">
-                    <Icon name="warn" size={14} className="flex-none" />
-                    <span>{t(tr.cached ? 'settings.prompts_failedCached' : 'settings.prompts_failed', { error: reason(tr.error) })}</span>
-                    {settingsCode(tr.error) && <Button size="xs" onClick={onGoModels}>{t('settings.prompts_goModels')}</Button>}
-                  </div>
+                  {/* 票 08（D11 向导与设置内）：与向导生成失败同组件，页签内红字形 */}
+                  <ModelRecoveryInline form="text" text={t(tr.cached ? 'settings.prompts_failedCached' : 'settings.prompts_failed', { error: reason(tr.error) })}
+                    actions={settingsCode(tr.error) && <Button size="xs" onClick={onGoModels}>{t('settings.prompts_goModels')}</Button>} />
                   {tr.cached && tr.text && <pre data-translation data-cached className={cn(preCls, 'mt-2')}>{tr.text}</pre>}
                 </>
               ) : busy && !tr?.text ? (
