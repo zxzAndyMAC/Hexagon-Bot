@@ -4,6 +4,7 @@
 // 开关状态在 store.flowDialogOpen——它同时决定 modalScope = 'flow'（裁决快捷键据此拦截）。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InModalLayer } from '@/components/ui/layer'
 import { useUiStore } from '../../store'
 import { api, type PackDef } from '../../api'
 import { QualityCommands } from '../QualityCommands'
@@ -35,52 +36,54 @@ export function FlowDialog() {
 
   if (!open) return null
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={t('topbar.viewFlow')}
-      data-flow-dialog
-      style={{
-        position: 'fixed', inset: 0, zIndex: 80,
-        background: 'var(--scrim)',
-        display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 64,
-      }}
-      onClick={close}
-    >
+    <InModalLayer>
       <div
-        className="panel panel-float"
-        style={{ width: 420, maxWidth: 'calc(100% - 32px)', maxHeight: '70vh', overflow: 'auto', padding: 16 }}
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('topbar.viewFlow')}
+        data-flow-dialog
+        style={{
+          position: 'fixed', inset: 0, zIndex: 30, // 模态 30（foundations §4，gap C5；原 80）
+          background: 'var(--scrim)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 64,
+        }}
+        onClick={close}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>
-            {mode === 'fastpath' ? t('topbar.fastpath') : flowPack?.name ?? packName ?? t('topbar.pack')}
-          </span>
-          <div style={{ flex: 1 }} />
-          <button className="btn" style={{ fontSize: 12 }} onClick={close}>{t('topbar.flowClose')}</button>
-        </div>
-        <div className="dim3" style={{ fontSize: 11, marginBottom: 12 }}>{t('topbar.flowMaintainer')}</div>
-        {mode === 'fastpath' ? (
-          <div style={{ fontSize: 13 }}>{t('topbar.flowFast')}</div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {(flowPack?.stages ?? []).map((s) => (
-              <div key={s.name} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 560 }}>{s.name}</span>
-                  {s.stamp_point && <span className="chip amber" style={{ fontSize: 10 }}>{t('topbar.flowStamp')}</span>}
-                </div>
-                {s.roles.length > 0 && (
-                  <div className="dim3" style={{ fontSize: 11, marginTop: 4 }}>{s.roles.join(' · ')}</div>
-                )}
-              </div>
-            ))}
-            {!flowPack && <div className="dim3" style={{ fontSize: 12 }}>{t('sidebar.noStages')}</div>}
-            <QualityCommands key={projectEpoch} />
-            <StageEvidence />
+        <div
+          className="panel panel-float"
+          style={{ width: 420, maxWidth: 'calc(100% - 32px)', maxHeight: '70vh', overflow: 'auto', padding: 16 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>
+              {mode === 'fastpath' ? t('topbar.fastpath') : flowPack?.name ?? packName ?? t('topbar.pack')}
+            </span>
+            <div style={{ flex: 1 }} />
+            <button className="btn" style={{ fontSize: 12 }} onClick={close}>{t('topbar.flowClose')}</button>
           </div>
-        )}
+          <div className="dim3" style={{ fontSize: 11, marginBottom: 12 }}>{t('topbar.flowMaintainer')}</div>
+          {mode === 'fastpath' ? (
+            <div style={{ fontSize: 13 }}>{t('topbar.flowFast')}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {(flowPack?.stages ?? []).map((s) => (
+                <div key={s.name} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 560 }}>{s.name}</span>
+                    {s.stamp_point && <span className="chip amber" style={{ fontSize: 10 }}>{t('topbar.flowStamp')}</span>}
+                  </div>
+                  {s.roles.length > 0 && (
+                    <div className="dim3" style={{ fontSize: 11, marginTop: 4 }}>{s.roles.join(' · ')}</div>
+                  )}
+                </div>
+              ))}
+              {!flowPack && <div className="dim3" style={{ fontSize: 12 }}>{t('sidebar.noStages')}</div>}
+              <QualityCommands key={projectEpoch} />
+              <StageEvidence />
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </InModalLayer>
   )
 }

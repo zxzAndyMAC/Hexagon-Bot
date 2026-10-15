@@ -8,6 +8,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 import { blockBackgroundDecision } from "@/modalDecisionGuard"
 import { guardBusy } from "@/lib/inert"
+import { InModalLayer } from "@/components/ui/layer"
 
 const Dialog = DialogPrimitive.Root
 const DialogTrigger = DialogPrimitive.Trigger
@@ -50,7 +51,7 @@ function DialogContent({
         onPointerDownOutside={guardBusy(busy, onPointerDownOutside)}
         {...props}
       >
-        {children}
+        <InModalLayer>{children}</InModalLayer>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   )

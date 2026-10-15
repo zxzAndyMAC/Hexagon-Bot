@@ -22,7 +22,7 @@ export function WizardShell({ steps, step, locked, onJump, children, foot }: {
     <div
       data-wizard
       data-tauri-drag-region
-      className="fixed inset-0 z-[60] flex justify-center overflow-auto bg-[var(--app-main)] px-4 pt-14 pb-6 text-ink dark:bg-page"
+      className="fixed inset-0 z-[16] flex justify-center overflow-auto bg-[var(--app-main)] px-4 pt-14 pb-6 text-ink dark:bg-page"
     >
       <div className="flex h-fit max-h-[calc(100vh-80px)] min-h-[560px] w-[880px] max-w-full overflow-hidden rounded-[16px] bg-surface shadow-[var(--shadow-overlay)]">
         <nav aria-label={t('wizard.shell.title')} className="w-[210px] flex-none border-r border-line-soft bg-inset px-4 py-[22px]">

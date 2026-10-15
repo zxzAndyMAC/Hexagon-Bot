@@ -17,7 +17,7 @@
 
 /* 菜单（A16，宽 330）：头「工具批准方式 · 本项目」+ 三行高行 + 分隔线后「托管」一节 */
 .approval-mode-menu {
-  position: absolute; bottom: calc(100% + 8px); left: -8px; z-index: 40; width: min(330px, calc(100vw - 48px));
+  position: absolute; bottom: calc(100% + 8px); left: -8px; z-index: 20; width: min(330px, calc(100vw - 48px));
   padding: 5px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink);
 }
 .approval-mode-menu-below { bottom: auto; top: calc(100% + 8px); }

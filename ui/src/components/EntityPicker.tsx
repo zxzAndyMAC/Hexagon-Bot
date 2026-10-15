@@ -4,6 +4,7 @@
 // 弹层外壳复用 ConfirmDialog 模式（fixed 遮罩 + Esc/点遮罩关 + --surface 不透明底）。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InModalLayer } from '@/components/ui/layer'
 import { api, errText } from '../api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -146,45 +147,47 @@ export function EntityPicker({
     })
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-scrim" onClick={onClose} role="presentation">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={heading}
-        className="flex max-h-[70vh] w-[min(520px,92vw)] flex-col rounded-[16px] bg-surface p-4 shadow-[var(--shadow-overlay)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 text-[15px] font-semibold text-ink">{heading}</div>
-        <Input
-          ref={searchRef}
-          leading={<Icon name="search" size={14} />}
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder={t('picker.search')}
-          aria-label={t('picker.search')}
-        />
-        <div className="mt-2 min-h-[120px] flex-1 overflow-y-auto">
-          {err && <div role="alert" className="px-0.5 py-2 text-[12.5px] text-red">{err}</div>}
-          {!err && opts === null && <div className="px-0.5 py-3 text-[12.5px] text-ink-3">…</div>}
-          {!err && opts !== null && shown.length === 0 && (
-            <Empty size="sm" icon="search" title={t('picker.empty')} desc={q.trim() ? t('feedback.searchEmptyBody') : t('feedback.pickerEmptyBody')}
-              action={q.trim() ? <Button size="sm" onClick={() => setQ('')}>{t('feedback.clearSearch')}</Button> : undefined} />
-          )}
-          {shown.map((o) => (
-            <label key={o.id} className="flex cursor-pointer items-center gap-2.5 rounded-[7px] px-1.5 py-[7px] live:hover:bg-hover">
-              <input type="checkbox" className="accent-[var(--accent)]" checked={sel.has(o.id)} onChange={() => toggle(o.id)} />
-              <span data-picker-id className="flex-none font-mono text-[12px] text-ink">{o.id}</span>
-              {o.badge && <Badge variant={o.badgeOk ? 'ok' : 'neutral'} className="h-[18px] px-1.5 text-[11px]">{o.badge}</Badge>}
-              <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{o.desc}</span>
-            </label>
-          ))}
-        </div>
-        <div className="mt-3 flex items-center justify-end gap-2">
-          <span className="mr-auto text-[12px] text-ink-3">{t('picker.count', { n: sel.size })}</span>
-          <Button size="sm" variant="quiet" onClick={onClose}>{t('agent.cancel')}</Button>
-          <Button size="sm" variant="primary" onClick={() => onConfirm([...sel])}>{t('picker.done')}</Button>
+    <InModalLayer>
+      <div className="fixed inset-0 z-30 flex items-center justify-center bg-scrim" onClick={onClose} role="presentation">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={heading}
+          className="flex max-h-[70vh] w-[min(520px,92vw)] flex-col rounded-[16px] bg-surface p-4 shadow-[var(--shadow-overlay)]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="mb-3 text-[15px] font-semibold text-ink">{heading}</div>
+          <Input
+            ref={searchRef}
+            leading={<Icon name="search" size={14} />}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t('picker.search')}
+            aria-label={t('picker.search')}
+          />
+          <div className="mt-2 min-h-[120px] flex-1 overflow-y-auto">
+            {err && <div role="alert" className="px-0.5 py-2 text-[12.5px] text-red">{err}</div>}
+            {!err && opts === null && <div className="px-0.5 py-3 text-[12.5px] text-ink-3">…</div>}
+            {!err && opts !== null && shown.length === 0 && (
+              <Empty size="sm" icon="search" title={t('picker.empty')} desc={q.trim() ? t('feedback.searchEmptyBody') : t('feedback.pickerEmptyBody')}
+                action={q.trim() ? <Button size="sm" onClick={() => setQ('')}>{t('feedback.clearSearch')}</Button> : undefined} />
+            )}
+            {shown.map((o) => (
+              <label key={o.id} className="flex cursor-pointer items-center gap-2.5 rounded-[7px] px-1.5 py-[7px] live:hover:bg-hover">
+                <input type="checkbox" className="accent-[var(--accent)]" checked={sel.has(o.id)} onChange={() => toggle(o.id)} />
+                <span data-picker-id className="flex-none font-mono text-[12px] text-ink">{o.id}</span>
+                {o.badge && <Badge variant={o.badgeOk ? 'ok' : 'neutral'} className="h-[18px] px-1.5 text-[11px]">{o.badge}</Badge>}
+                <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{o.desc}</span>
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <span className="mr-auto text-[12px] text-ink-3">{t('picker.count', { n: sel.size })}</span>
+            <Button size="sm" variant="quiet" onClick={onClose}>{t('agent.cancel')}</Button>
+            <Button size="sm" variant="primary" onClick={() => onConfirm([...sel])}>{t('picker.done')}</Button>
+          </div>
         </div>
       </div>
-    </div>
+    </InModalLayer>
   )
 }

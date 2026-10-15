@@ -199,8 +199,11 @@ describe('向导先配模型服务商（票 13）', () => {
     trigger.focus()
     await key(trigger, 'Enter')
     expect(trigger.getAttribute('aria-expanded')).toBe('true')
-    // 弹层挂进向导层（z-60）；挂到 body 会被向导盖住，打开了也看不见
-    expect(document.querySelector('[data-wizard] [role="listbox"]')).not.toBeNull()
+    // gap C5（2026-10-15，foundations §4）：向导降为全屏视图 16，低于弹层 20，弹层照常挂 body 也看得见；
+    // gap B12 时向导是 z-60，才需要把弹层挂进向导层（已撤）。
+    const lb = document.querySelector<HTMLElement>('[role="listbox"]')!
+    expect(lb.closest('[data-wizard]')).toBeNull()
+    expect(document.querySelector('[data-wizard]')!.className).toContain('z-[16]')
     expect(document.activeElement && text(document.activeElement)).toBe('Anthropic')
     await key(document.activeElement!, 'ArrowDown')
     expect(text(document.activeElement)).toBe('OpenRouter')

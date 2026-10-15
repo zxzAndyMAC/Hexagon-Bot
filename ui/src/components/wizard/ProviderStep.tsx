@@ -5,7 +5,7 @@
 // 票 10 原先空表时五个框（名称/类型/地址/钥匙/模型）、有供应商时只能在已有里选，两条路径现合为一个表单。
 // gap B4（2026-10-15）：默认模型框实时检测钥匙（probe_provider_key，输入停 600ms 后请求一次模型目录）：
 // 检测中 / 检测通过 · 窗口 / 目录里没有这个模型 / 检测失败 + 原因。检测是建议不是闸——保存仍可点。
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ProviderDef, type ProviderPreset, type ProviderView, type ProvidersView } from '../../api'
 import { useUiStore } from '../../store'
@@ -164,19 +164,14 @@ function ProviderSelect({ value, onChange, providers, presets }: {
   presets: ProviderPreset[]
 }) {
   const { t } = useTranslation()
-  // 向导外壳是 z-60 的全屏层，弹层（z 20）挂到 body 会被它盖住——挂进向导层自己（gap B12 实测：打开了但看不见）。
-  const [layer, setLayer] = useState<HTMLElement | null>(null)
-  const findLayer = useCallback((el: HTMLElement | null) => {
-    if (el) setLayer(el.closest<HTMLElement>('[data-wizard]'))
-  }, [])
+  // gap B12 曾把弹层挂进向导层（当时向导 z-60 盖住 z-20 弹层）；gap C5（2026-10-15）把全屏视图降到 16，弹层照常挂 body。
   const face = (id: string, name: string) => <Avatar agentId={id} name={name} size={18} />
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger aria-label={t('wizard.providerField.label')} data-provider-select=""
-        ref={findLayer}>
+      <SelectTrigger aria-label={t('wizard.providerField.label')} data-provider-select="">
         <SelectValue />
       </SelectTrigger>
-      <SelectContent container={layer}>
+      <SelectContent>
         {providers.length > 0 && (
           <SelectGroup>
             <SelectLabel>{t('wizard.providerField.configured')}</SelectLabel>
