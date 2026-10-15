@@ -38,6 +38,8 @@ export type ActionId =
   | 'desktopClear'
   | 'desktopPrepareCapture'
   | 'computerModelSettings'
+  | 'computerModelServices'
+  | 'composerAttach'
   | 'sessionPause'
   | 'sessionReconnect'
   | 'sessionResume'
@@ -154,6 +156,10 @@ const DEFAULTS: Record<ActionId, string> = {
   desktopClear: 'alt+mod+shift+4',
   desktopPrepareCapture: '',
   computerModelSettings: '',
+  // ui-redesign 票 07：预检卡「打开模型服务」（control#readiness）与输入条「+ 附件」（D1）。
+  // 默认无绑定，负责人可在设置·键盘指定；tooltip 跟随当前绑定。
+  computerModelServices: '',
+  composerAttach: '',
   sessionPause: 'alt+mod+shift+9',
   sessionReconnect: 'alt+mod+shift+0',
   sessionResume: 'alt+mod+shift+8',
@@ -316,6 +322,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'desktopClear', labelKey: 'computer.clear_screenshots' },
   { id: 'desktopPrepareCapture', labelKey: 'computer.prepare_capture' },
   { id: 'computerModelSettings', labelKey: 'computer.modelSettings' },
+  { id: 'computerModelServices', labelKey: 'computer.modelServices' },
+  { id: 'composerAttach', labelKey: 'composer.attach' },
   { id: 'sessionPause', labelKey: 'session.pause' },
   { id: 'sessionReconnect', labelKey: 'session.reconnect' },
   { id: 'sessionResume', labelKey: 'session.resume' },

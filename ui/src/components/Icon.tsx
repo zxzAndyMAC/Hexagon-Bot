@@ -9,6 +9,9 @@ import {
   List, Monitor, Moon, Package, PanelRight, Pause, Pencil, Plus, RefreshCw, Rocket, Settings, Shield,
   Stamp, Tag, Terminal, Trash2, TriangleAlert, Wrench, X, Zap, type LucideIcon,
 } from 'lucide-react'
+// ui-redesign 票 11 设置（foundations §7 原型名 keyboard / cpu / users / message2 / book / plug / logs / info / key / sun / moon / image / terminal / filter / external / gauge）
+// cpu / external / image / terminal 已由票 14 / 主线注册，这里不重复导入
+import { Book, Funnel, Gauge, Key, Keyboard, Logs, MessagesSquare, Plug, Sun, Users } from 'lucide-react'
 // 票 10 启动页与向导（foundations §7 映射：sparkle / undo→rotate-ccw / message→message-circle /
 // circleCheck / circleX / info / left→chevron-left / more 竖→ellipsis-vertical）
 import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircle, RotateCcw, Sparkle } from 'lucide-react'
@@ -18,6 +21,8 @@ import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
 // ui-redesign 票 09 画布选区浮条（foundations §7 原型名 wand → wand）
 import { Wand } from 'lucide-react'
+// ui-redesign 票 07 输入条与命令面板（foundations §7 原型名 crosshair / flow→workflow / test→test-tube；focus 为补设计：专注模式）
+import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
 import { createLucideIcon } from 'lucide-react'
 
 // 2026-10-14 负责人裁决（foundations §7 补设计）：侧栏 / 画布开关图标表状态——打开 = 对应一侧窗格实心，
@@ -35,6 +40,18 @@ const PanelRightFilled = createLucideIcon('panel-right-filled', [
 const ICONS = {
   computer: Monitor,
   pause: Pause,
+  // ---- 设置（票 11）：分区导航、数据去向行、主题分段、能力图标、筛选 ----
+  keyboard: Keyboard,
+  users: Users,
+  messages: MessagesSquare,
+  book: Book,
+  plug: Plug,
+  logs: Logs,
+  key: Key,
+  sun: Sun,
+  moon: Moon,
+  filter: Funnel,
+  gauge: Gauge,
   // ---- 导航 / 动作 ----
   close: X,
   'arrow-left': ArrowLeft,
@@ -123,6 +140,11 @@ const ICONS = {
   cpu: Cpu,
   wand: Wand,
   collapse: Minimize2,
+  // ---- 输入条与命令面板（票 07） ----
+  crosshair: Crosshair,
+  flow: Workflow,
+  test: TestTube,
+  focus: Focus,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS

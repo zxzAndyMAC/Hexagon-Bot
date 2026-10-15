@@ -224,10 +224,14 @@ async function keyAt(ta: HTMLTextAreaElement, key: string, at: number) {
   })
 }
 
+// ui-redesign 票 07（components D2，ADR 0090）：弹层行换成「头像 + 粗名 + [实例]」/「图标 + 路径」，
+// 行上不再印带 @ / # 前缀的整段 token；改按行上的 data-label（插入用的 token 文本）找行。
+const popupRow = (el: HTMLElement, label: string) =>
+  [...el.querySelectorAll<HTMLElement>('[role=option]')].find((n) => n.dataset.label === label)
 function clickLabel(el: HTMLElement, label: string) {
-  const node = [...el.querySelectorAll('.mono')].find((n) => n.textContent?.trim() === label)
-  if (!node?.parentElement) throw new Error(`no popup row ${label}`)
-  return act(async () => { node.parentElement!.click() })
+  const node = popupRow(el, label)
+  if (!node) throw new Error(`no popup row ${label}`)
+  return act(async () => { node.click() })
 }
 
 describe('composerAtoms（票 10）', () => {
@@ -330,7 +334,7 @@ describe('Composer 原子块（票 10）', () => {
     try {
     await setComposer(el, '#src')
     await act(async () => { await vi.advanceTimersByTimeAsync(200) })
-    expect(el.textContent).toContain('#src/main.rs') // 弹层可以列出子文件
+    expect(popupRow(el, '#src/main.rs')).toBeTruthy() // 弹层可以列出子文件（票 07：按行 data-label 找）
     await clickLabel(el, '#src/')
     const ta = el.querySelector('textarea')!
     expect(ta.value).toBe('#src/ ')
@@ -515,11 +519,12 @@ describe('Composer 图片放大（票 10）', () => {
     const thumb = el.querySelector('img')
     expect(thumb).toBeTruthy()
     await act(async () => { el.querySelector<HTMLButtonElement>('.attach-thumb')!.click() })
-    const zoom = el.querySelector('.attach-zoom')
+    // 票 07（components A17）：放大改用共享 Dialog，内容挂在 body 的 portal 里，按 document 查
+    const zoom = document.querySelector('.attach-zoom')
     expect(zoom).toBeTruthy()
     expect(zoom?.querySelector('img')?.getAttribute('alt')).toBe('shot.png')
-    await act(async () => { el.querySelector<HTMLButtonElement>('.attach-zoom-close')!.click() })
-    expect(el.querySelector('.attach-zoom')).toBeNull()
+    await act(async () => { document.querySelector<HTMLButtonElement>('.attach-zoom-close')!.click() })
+    expect(document.querySelector('.attach-zoom')).toBeNull()
     expect(el.querySelector('.attach-chip')).toBeTruthy()
     expect(discardSpy).not.toHaveBeenCalled()
     expect(document.activeElement).toBe(el.querySelector('textarea'))
@@ -533,11 +538,11 @@ describe('Composer 图片放大（票 10）', () => {
     const { el, root } = await render(<Composer />)
     await pasteEvent(el, [imgFile()])
     await act(async () => { el.querySelector<HTMLButtonElement>('.attach-thumb')!.click() })
-    expect(el.querySelector('.attach-zoom')).toBeTruthy()
+    expect(document.querySelector('.attach-zoom')).toBeTruthy() // 票 07：Dialog portal，按 document 查
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
-    expect(el.querySelector('.attach-zoom')).toBeNull()
+    expect(document.querySelector('.attach-zoom')).toBeNull()
     expect(document.activeElement).toBe(el.querySelector('textarea'))
     root.unmount()
   })
@@ -604,8 +609,9 @@ describe('实例点名（可靠性 07）', () => {
     const dispatch = vi.spyOn(api, 'dispatch').mockResolvedValue('finished')
     const { el, root } = await render(<Composer />)
     await setComposer(el, '@后端')
-    expect(el.textContent).toContain('@后端[a0]')
-    expect(el.textContent).toContain('@后端[a1]')
+    // 票 07（D2）：同角色多实例行显示「后端 [a0]」，插入的 token 仍是 @后端[a0]
+    expect(popupRow(el, '@后端[a0]')?.textContent).toContain('后端 [a0]')
+    expect(popupRow(el, '@后端[a1]')).toBeTruthy()
     await clickLabel(el, '@后端[a1]')
     const ta = el.querySelector('textarea')!
     expect(ta.value).toBe('@后端[a1] ')
@@ -624,7 +630,8 @@ describe('负责人确认的发送三态', () => {
     let reject!: (reason: Error) => void
     const send = vi.spyOn(api, 'sendMessage').mockImplementation(() => new Promise((_, no) => { reject = no }))
     const { el, root } = await render(<Composer />)
-    const button = el.querySelector<HTMLButtonElement>('.btn.primary')!
+    // 票 07（D1）：发送钮换成 32 圆 .composer-send（不再是旧 .btn.primary）
+    const button = el.querySelector<HTMLButtonElement>('.composer-send')!
     expect(button.disabled).toBe(true)
     await sendText(el, '发送一次')
     expect(button.getAttribute('aria-busy')).toBe('true')

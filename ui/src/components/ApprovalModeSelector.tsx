@@ -4,6 +4,12 @@ import { useTranslation } from 'react-i18next'
 import type { ApprovalMode } from '../gen/ApprovalMode'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { Icon } from './Icon'
+import { Badge } from '@/components/ui/badge'
+import { Spinner } from '@/components/ui/spinner'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogError, AlertDialogFooter, AlertDialogIcon, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { ManagedConfirmation } from './ManagedConfirmation'
 import './ProjectDelegation.css'
 import './ApprovalModeSelector.css'
@@ -42,12 +48,13 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
   const [error, setError] = useState(false)
   const inFlight = useRef(false)
   const restoreFocus = useRef(false)
+  // 票 07：确认层是 Radix AlertDialog，开着时焦点困在里面——回到胶囊要等它卸载后（这里的 effect）再做。
   useEffect(() => {
-    if (!open && !pending && restoreFocus.current) {
+    if (!open && !pending && !confirmBroad && !confirmManaged && restoreFocus.current) {
       restoreFocus.current = false
       trigger.current?.focus()
     }
-  }, [open, pending])
+  }, [open, pending, confirmBroad, confirmManaged])
   useEffect(() => {
     if (!open) return
     const close = (event: PointerEvent) => {
@@ -105,12 +112,13 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
       title={[t('approvalMode.label'), shortcut].filter(Boolean).join(' · ')}
       aria-label={`${t('approvalMode.label')}: ${t(`approvalMode.${value}`)}`}
       onClick={() => { setError(false); setOpen(!open) }}>
-      <Icon name={value === 'broad' ? 'warn' : 'shield'} />
-      <span>{t(`approvalMode.${value}`)}{managed?.enabled && ` | ${t('delegation.short')}`}</span>
-      <Icon name="chevron-down" />
+      {/* components D4：shield 14 + 模式名 + ▾/▴；托管中「帮我批准 | 托管」，托管段 --accent-ink */}
+      <Icon name="shield" />
+      <span>{t(`approvalMode.${value}`)}{managed?.enabled && <><span className="sep"> | </span><span className="managed">{t('delegation.short')}</span></>}</span>
+      <Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} />
     </button>
     {confirmBroad && <BroadConfirmation pending={pending} error={error}
-      onCancel={() => { setConfirmBroad(false); setError(false); trigger.current?.focus() }}
+      onCancel={() => { restoreFocus.current = true; setConfirmBroad(false); setError(false) }}
       onConfirm={() => { void choose('broad', true) }} />}
     {confirmManaged && <ManagedConfirmation pending={managedPending} error={managedError}
       onCancel={() => { setConfirmManaged(false); setManagedError(false); trigger.current?.focus() }}
@@ -126,16 +134,21 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
         if (next >= 0) { event.preventDefault(); buttons[next]?.focus() }
         if (event.key === 'Tab') setOpen(false)
       }}>
+      <div className="approval-mode-sec">{t('approvalMode.menuTitle')}</div>
       {modes.map((mode) => <button key={mode} type="button" role="menuitemradio"
         className="approval-mode-option" aria-checked={value === mode}
         disabled={pending || disabled} onClick={() => { void choose(mode) }}>
+        {/* D4 加载：宿主复验前保持原选择，行内 ring（不乐观更新） */}
+        <span className="tick">{value === mode && (pending ? <Spinner size={12} /> : <Icon name="check" />)}</span>
         <span className="approval-mode-option-copy"><strong>{t(`approvalMode.${mode}`)}</strong>
           <span>{t(`approvalMode.description.${mode}`)}</span></span>
-        {value === mode && <Icon name="check" />}
+        {mode === 'broad' && value !== 'broad' && <Badge variant="warn" className="approval-mode-chip">{t('approvalMode.needsConfirm')}</Badge>}
       </button>)}
-      <p className="approval-mode-boundary">{t('approvalMode.boundary')}</p>
-      {managed && <div className="approval-mode-managed" role="group" aria-label={t('delegation.label')}>
+      {managed && <>
+      <div className="approval-mode-sepline" />
+      <div className="approval-mode-managed" role="group" aria-label={t('delegation.label')}>
         <label className="approval-mode-managed-row">
+          <Icon name="bot" />
           <span className="approval-mode-option-copy"><strong>{t('delegation.label')}</strong>
             <span>{t('delegation.description')}</span></span>
           <input type="checkbox" role="switch" className="switch" checked={managed.enabled}
@@ -149,28 +162,24 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
             }} />
         </label>
         {managedError && !confirmManaged && <p role="alert" className="approval-mode-error">{t('delegation.failed')}</p>}
-      </div>}
+      </div></>}
       {error && <p role="alert" className="approval-mode-error">{t('approvalMode.failed')}</p>}
     </div>}
   </div>
 }
 
 
+/** composer#broad（components A17 AlertDialog 变体）：首焦「取消」，确认默认无快捷键，取消保留 Esc。
+ * 票 07 起由原生 dialog 换成共享 AlertDialog 外壳（Radix 负责焦点困住与首焦 Cancel）；
+ * 背景裁决快捷键由 AlertDialogContent 的 modalDecisionGuard 拦截，重映射的确认 / 取消键仍在这里吃掉。 */
 function BroadConfirmation({ pending, error, onCancel, onConfirm }: {
   pending: boolean; error: boolean; onCancel: () => void; onConfirm: () => void
 }) {
   const { t } = useTranslation()
-  const id = useId()
-  const dialog = useRef<HTMLDialogElement>(null)
-  const cancel = useRef<HTMLButtonElement>(null)
   const current = useRef({ pending, onCancel, onConfirm })
   useLayoutEffect(() => { current.current = { pending, onCancel, onConfirm } }, [pending, onCancel, onConfirm])
   useEffect(() => {
-    if (dialog.current?.showModal) dialog.current.showModal()
-    else dialog.current?.setAttribute('open', '')
-    cancel.current?.focus()
-    // Issue 10: native modality makes the background inert but does not stop
-    // window decision listeners; a shortcut must never grant either permission.
+    // Issue 10: a shortcut must never grant either permission in the background.
     const block = (event: KeyboardEvent) => {
       const action = matches(event, bindingFor('cancelBroadAccess')) ? current.current.onCancel
         : matches(event, bindingFor('confirmBroadAccess')) ? current.current.onConfirm : null
@@ -179,20 +188,32 @@ function BroadConfirmation({ pending, error, onCancel, onConfirm }: {
         if (!current.current.pending) action()
         return
       }
-      if (!blockBackgroundDecision(event)) return
+      blockBackgroundDecision(event)
     }
     window.addEventListener('keydown', block, true)
     return () => window.removeEventListener('keydown', block, true)
   }, [])
-  return <dialog ref={dialog} className="approval-mode-confirm" role="alertdialog" aria-modal="true"
-    aria-labelledby={`${id}-title`} aria-describedby={`${id}-body`} aria-busy={pending}
-    onCancel={event => { event.preventDefault(); if (!pending) onCancel() }}>
-    <h2 id={`${id}-title`}><Icon name="warn" />{t('approvalMode.confirmTitle')}</h2>
-    <div id={`${id}-body`}><p>{t('approvalMode.confirmBody')}</p><p>{t('approvalMode.boundary')}</p></div>
-    {error && <p role="alert" className="approval-mode-error">{t('approvalMode.failed')}</p>}
-    <div className="approval-mode-confirm-actions">
-      <button ref={cancel} type="button" className="btn" disabled={pending} onClick={onCancel} title={[t('agent.cancel'), formatBinding(bindingFor('cancelBroadAccess')) || 'Esc'].join(' · ')}>{t('agent.cancel')}</button>
-      <button type="button" className="btn approval-mode-broad" disabled={pending} onClick={onConfirm} title={[t('approvalMode.confirmAction'), formatBinding(bindingFor('confirmBroadAccess'))].filter(Boolean).join(' · ')}>{t('approvalMode.confirmAction')}</button>
-    </div>
-  </dialog>
+  const confirmKey = formatBinding(bindingFor('confirmBroadAccess'))
+  return <AlertDialog open onOpenChange={(open) => { if (!open && !current.current.pending) current.current.onCancel() }}>
+    <AlertDialogContent busy={pending} className="approval-mode-confirm w-[min(440px,calc(100vw-48px))] gap-0 px-[22px] pt-[22px] pb-4"
+      onCloseAutoFocus={(event) => event.preventDefault()}>
+      <div className="flex items-start gap-3">
+        <AlertDialogIcon tone="warn" className="size-9 rounded-[10px]"><Icon name="shield" /></AlertDialogIcon>
+        <div>
+          <AlertDialogTitle>{t('approvalMode.confirmTitle')}</AlertDialogTitle>
+          <AlertDialogDescription className="mt-1">{t('approvalMode.confirmBody')}</AlertDialogDescription>
+        </div>
+      </div>
+      <ul className="broad-list mt-3">
+        <li><Icon name="check" size={12} />{t('approvalMode.boundary')}</li>
+      </ul>
+      {error && <AlertDialogError className="mt-3">{t('approvalMode.failed')}</AlertDialogError>}
+      <AlertDialogFooter className="mt-5">
+        <AlertDialogCancel size="sm" onClick={(event) => { event.preventDefault(); onCancel() }}
+          title={[t('agent.cancel'), formatBinding(bindingFor('cancelBroadAccess')) || 'Esc'].join(' · ')}>{t('agent.cancel')}</AlertDialogCancel>
+        <AlertDialogAction size="sm" loading={pending} onClick={onConfirm}
+          title={[t('approvalMode.confirmAction'), confirmKey].filter(Boolean).join(' · ')}>{t('approvalMode.confirmAction')}</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 }

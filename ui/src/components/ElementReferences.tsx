@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import { isBrowserReadBusy } from '../browserRead'
@@ -8,6 +8,8 @@ import type { BrowserSession } from '../gen/BrowserSession'
 import { useUiStore } from '../store'
 import { blockBackgroundDecision } from '../modalDecisionGuard'
 import { Icon } from './Icon'
+import { buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import './ElementReferences.css'
 import { DesktopToolDetails } from './DesktopToolDetails'
 
@@ -27,8 +29,14 @@ export function ElementReference({ reference, stale = false }: { reference: Elem
 
 /** A local draft inbox, never a send trigger. Owner message persistence alone
  * consumes the host-minted IDs; navigating cannot retarget an existing chip. */
-export function ElementDraft({ references, onChange, submitting, trailing }: {
+/** ui-redesign 票 07（components D1 / D3）：输入条把「选择网页元素」放进输入条上方的工具行、
+ * 引用卡放进输入条内的引用区，两处共用这一份轮询与草稿状态——传 children 渲染函数取各段；
+ * 不传时按旧版一列渲染（工具在上、引用在下）。 */
+export type ElementDraftParts = { tools: ReactNode; list: ReactNode; preview: ReactNode; status: ReactNode }
+
+export function ElementDraft({ references, onChange, submitting, trailing, children }: {
   references: ElementRef[]; onChange: React.Dispatch<React.SetStateAction<ElementRef[]>>; submitting: boolean; trailing?: React.ReactNode
+  children?: (parts: ElementDraftParts) => ReactNode
 }) {
   const { t } = useTranslation()
   const [session, setSession] = useState<BrowserSession | null>(null)
@@ -97,14 +105,22 @@ export function ElementDraft({ references, onChange, submitting, trailing }: {
     onChange(previous => previous.filter(item => item.id !== reference.id))
     void api.browserSelectionDiscard(reference.project_root,[reference.id]).catch(() => {})
   }
-  return <div className="element-draft">
-    <div className="element-draft-tools">
-    {session?.connected && <button className="btn" type="button" disabled={submitting || starting} onClick={() => void start()}
-      title={`${t('elementContext.select')} · ${formatBinding(bindingFor('selectBrowserElement'))}`}>{t(starting ? 'elementContext.starting' : 'elementContext.select')}</button>}
-    {trailing}
-    </div>
-    {error && <span role="status" className="dim3" style={{ fontSize: 10, marginLeft: 6 }}>{error}</span>}
-    {references.length > 0 && <div className="element-draft-list">
+  const isStale = (reference: ElementRef) => !session || session.session_id !== reference.session_id
+    || session.tab_id !== reference.tab_id || session.navigation_generation !== reference.navigation_generation
+  // components D3：选择中工具行按钮换「选择中… 点击页面元素」+「已连接 · host」
+  const host = (() => { try { return session?.url ? new URL(session.url).host : '' } catch { return '' } })()
+  const tools = session?.connected ? <>
+    {/* 原生 disabled（不是 Button 的 aria-disabled）：发送中 / 开启中这颗钮确实不可再点，测试按 .disabled 断言 */}
+    <button type="button" className={cn(buttonVariants({ size: 'xs' }), 'disabled:cursor-default',
+      starting && 'text-accent-ink [--hx-shadow:0_0_0_1px_var(--accent),var(--shadow-xs)]', submitting && !starting && 'opacity-45')}
+      disabled={submitting || starting} onClick={() => void start()}
+      title={`${t('elementContext.select')} · ${formatBinding(bindingFor('selectBrowserElement'))}`}>
+      <Icon name="crosshair" size={12} />{t(starting ? 'elementContext.selecting' : 'elementContext.select')}
+    </button>
+    {starting && host && <span className="host">{t('elementContext.connectedHost', { host })}</span>}
+  </> : null
+  const status = error ? <span role="status" className="element-draft-status">{error}</span> : null
+  const list = references.length > 0 ? <div className="element-draft-list">
       {references.map(reference => <div className="element-draft-item" key={reference.id} onKeyDown={event => {
         if (matches(event.nativeEvent,bindingFor('removeBrowserElement'))) { event.preventDefault(); event.stopPropagation(); remove(reference) }
       }}>
@@ -113,19 +129,31 @@ export function ElementDraft({ references, onChange, submitting, trailing }: {
           onClick={() => setInspected(reference.id)} onKeyDown={event => {
             if (matches(event.nativeEvent,bindingFor('viewBrowserElement'))) { event.preventDefault(); setInspected(reference.id) }
           }}>
-          <Icon name="web" />
-          <span className="element-draft-copy"><strong>{reference.text || reference.tag || t('elementContext.region')}</strong>
-            <span>{!session || session.session_id !== reference.session_id || session.tab_id !== reference.tab_id || session.navigation_generation !== reference.navigation_generation
-              ? t('elementContext.stale') : reference.source_hint ? `${reference.source_hint.file}:${reference.source_hint.line}` : reference.tag || t('elementContext.region')}</span></span>
+          <span className="eref-th"><Icon name={reference.kind === 'region' ? 'image' : 'crosshair'} /></span>
+          <span className="element-draft-copy"><strong>{referenceTitle(reference, t)}</strong>
+            {isStale(reference) ? <span data-stale="">{t('elementContext.stale')}</span>
+              : <span>{reference.source_hint ? `${reference.source_hint.file}:${reference.source_hint.line}` : t('elementContext.unlocated')}</span>}</span>
         </button>
         <button className="element-draft-remove" type="button" disabled={submitting} onClick={() => remove(reference)} aria-label={t('elementContext.remove')}
-          title={[t('elementContext.remove'),formatBinding(bindingFor('removeBrowserElement'))].filter(Boolean).join(' · ')}><Icon name="close" /></button>
+          title={[t('elementContext.remove'),formatBinding(bindingFor('removeBrowserElement'))].filter(Boolean).join(' · ')}><Icon name="close" size={12} /></button>
       </div>)}
-    </div>}
-    {references.filter(reference => reference.id === inspected).map(reference => <ElementReferencePreview key={reference.id} reference={reference}
-      stale={!session || session.session_id !== reference.session_id || session.tab_id !== reference.tab_id || session.navigation_generation !== reference.navigation_generation}
-      onClose={() => setInspected(null)} />)}
+    </div> : null
+  const preview = references.filter(reference => reference.id === inspected).map(reference => <ElementReferencePreview key={reference.id} reference={reference}
+      stale={isStale(reference)} onClose={() => setInspected(null)} />)
+  if (children) return <>{children({ tools, list, preview, status })}</>
+  return <div className="element-draft">
+    <div className="element-draft-tools">{tools}{trailing}</div>
+    {status}
+    {list}
+    {preview}
   </div>
+}
+
+/** components D3 引用卡标题：元素 = 标签「文字」，区域 = 「区域 宽×高」。 */
+function referenceTitle(reference: ElementRef, t: (key: string, options?: Record<string, unknown>) => string) {
+  if (reference.kind === 'region') return t('elementContext.regionSize', { w: Math.round(reference.rect.width), h: Math.round(reference.rect.height) })
+  if (reference.tag && reference.text) return t('elementContext.titled', { tag: reference.tag, text: reference.text })
+  return reference.text || reference.tag || t('elementContext.element')
 }
 
 /** Owner issue16: full values remain keyboard-accessible instead of relying on

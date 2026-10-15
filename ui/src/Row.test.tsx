@@ -85,7 +85,8 @@ describe('PracticeGround 隔离（票 20 / 方向卡 5）', () => {
     })
     expect(spy).not.toHaveBeenCalled()
     expect(bubbled).toBe(false) // stopPropagation 生效
-    expect(el.textContent).toContain('✓')
+    // ui-redesign 票 11（components E7）：命中反馈从「✓」字符换成 ok chip「⌘↵ 命中」
+    expect(el.querySelector('[data-practice-hit]')).not.toBeNull()
     root.unmount()
   })
 
@@ -99,7 +100,7 @@ describe('PracticeGround 隔离（票 20 / 方向卡 5）', () => {
       card.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', ctrlKey: true, bubbles: true }))
     })
     expect(bubbled).toBe(true)
-    expect(el.textContent).not.toContain('✓')
+    expect(el.querySelector('[data-practice-hit]')).toBeNull() // 票 11：同上，chip 取代 ✓
     root.unmount()
   })
 })
