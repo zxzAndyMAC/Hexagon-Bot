@@ -3332,13 +3332,31 @@ fn confirm_intake_brief(state: ProjectState<'_>) -> Result<(), CmdError> {
 #[tauri::command]
 fn intake_draft_pending(state: tauri::State<AppState>) -> Result<bool, CmdError> {
     with_conn(&state, |db, _| -> Result<bool, hexagon_core::db::DbError> {
-        let draft: Option<String> = db.conn().query_row(
-            "SELECT intake_draft FROM projects WHERE id=?1",
-            [PROJECT_ID],
-            |r| r.get(0),
-        )?;
-        Ok(draft.is_some_and(|s| !s.trim().is_empty()))
+        Ok(hexagon_core::intake::stored_draft(db.conn(), PROJECT_ID)?.is_some())
     })
+}
+
+/// 草案正文（gap B1：草案卡 inset 预览）。read 组：控制连接，不进工作台锁。
+#[tauri::command]
+fn intake_draft(state: tauri::State<AppState>) -> Result<Option<String>, CmdError> {
+    with_conn(
+        &state,
+        |db, _| -> Result<Option<String>, hexagon_core::db::DbError> {
+            Ok(hexagon_core::intake::stored_draft(db.conn(), PROJECT_ID)?)
+        },
+    )
+}
+
+/// 草案卡「编辑」后整份写回库里的草案；不落盘（gap B1）。
+#[tauri::command]
+fn update_intake_draft(state: ProjectState<'_>, body: String) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.update_intake_draft(&body))
+}
+
+/// 草案卡「先不写」：持久丢弃草案（gap B1）。
+#[tauri::command]
+fn discard_intake_draft(state: ProjectState<'_>) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.discard_intake_draft())
 }
 
 #[tauri::command]
@@ -3870,6 +3888,9 @@ pub fn run() {
             run_opening_intake,
             confirm_intake_brief,
             intake_draft_pending,
+            intake_draft,
+            update_intake_draft,
+            discard_intake_draft,
             project_open,
             project_info,
             dispatch,

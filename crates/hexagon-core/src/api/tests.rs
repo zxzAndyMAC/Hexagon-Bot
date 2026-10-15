@@ -6374,6 +6374,93 @@ fn existing_instruction_file_is_cited_and_not_replaced() {
     }
 }
 
+/// gap B1（ui-redesign 2026-10-15）：草案卡的预览、编辑、「先不写」。
+/// 之前没有读草案 / 改草案 / 丢弃草案的门面，卡里预览为空、「编辑」禁用、
+/// 「先不写」只收起本次——重开项目草案又出现。
+fn intake_with_draft(dir: &std::path::Path) -> Workbench {
+    seed_nonempty(dir);
+    let mut wb = open_made(dir, &["项目经理"], Some(intake_pack(&["项目经理"])), None);
+    let chat = std::sync::Arc::new(ScriptedProvider::new(vec![text_response(
+        "这是一个前端小项目。\n",
+    )]));
+    wb.register_provider("chat", chat);
+    assert!(matches!(
+        wb.run_opening_intake().unwrap(),
+        IntakeRun::Posted { draft: true, .. }
+    ));
+    wb
+}
+
+#[test]
+fn intake_draft_reads_edits_then_confirm_writes_the_edited_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = intake_with_draft(dir.path());
+    let draft = wb.intake_draft().unwrap().expect("draft stored");
+    assert!(draft.contains("## Commands"));
+    assert!(draft.contains("- Test: npm run test"));
+
+    assert!(matches!(
+        wb.update_intake_draft("  \n").unwrap_err(),
+        ApiError::BadInput(_)
+    ));
+    let huge = "x".repeat(crate::intake::DRAFT_MAX_BYTES + 1);
+    assert!(matches!(
+        wb.update_intake_draft(&huge).unwrap_err(),
+        ApiError::BadInput(_)
+    ));
+    assert_eq!(wb.intake_draft().unwrap().as_deref(), Some(draft.as_str()));
+
+    wb.update_intake_draft("# Edited\n\n## Purpose\nmine\n")
+        .unwrap();
+    assert!(
+        !dir.path().join("AGENTS.md").exists(),
+        "编辑只改库里的草案，不落盘"
+    );
+    assert_eq!(
+        wb.intake_draft().unwrap().as_deref(),
+        Some("# Edited\n\n## Purpose\nmine\n")
+    );
+    wb.confirm_intake_brief().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+        "# Edited\n\n## Purpose\nmine\n"
+    );
+    assert_eq!(wb.intake_draft().unwrap(), None);
+    assert!(matches!(
+        wb.update_intake_draft("# again\n").unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+}
+
+#[test]
+fn discarded_intake_draft_stays_gone_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = intake_with_draft(dir.path());
+    let n = timeline(&wb, None, 80).unwrap().len();
+    wb.discard_intake_draft().unwrap();
+    wb.discard_intake_draft().unwrap(); // 幂等
+    assert!(!wb.intake_draft_pending().unwrap());
+    assert_eq!(wb.intake_draft().unwrap(), None);
+    assert!(matches!(
+        wb.confirm_intake_brief().unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+    assert!(matches!(
+        wb.update_intake_draft("# back\n").unwrap_err(),
+        ApiError::NoIntakeDraft
+    ));
+    assert!(!dir.path().join("AGENTS.md").exists());
+    assert_eq!(timeline(&wb, None, 80).unwrap().len(), n, "分析消息保留");
+    drop(wb);
+
+    let mut again = crate::setup::open_existing(dir.path()).unwrap();
+    let retry = std::sync::Arc::new(ScriptedProvider::new(vec![text_response("不该再跑")]));
+    again.register_provider("chat", retry.clone());
+    assert_eq!(again.run_opening_intake().unwrap(), IntakeRun::Skipped);
+    assert!(retry.recorded().is_empty(), "丢弃草案不让开场分析重跑");
+    assert!(!again.intake_draft_pending().unwrap());
+}
+
 #[test]
 fn empty_directory_does_not_run_opening_intake() {
     let root = tempfile::tempdir().unwrap();
