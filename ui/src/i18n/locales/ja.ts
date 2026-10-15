@@ -275,6 +275,7 @@ export default {
     system: 'システム',
   },
   sys: {
+    delegation_changed: "委任設定を変更しました",
     session_created: "セッション開始",
     session_transition: "セッション状態の変化",
     session_transition_rejected: "セッション状態の変更を拒否",

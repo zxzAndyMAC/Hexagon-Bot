@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
@@ -7,7 +7,7 @@ import type { ManagedRecord } from '../gen/ManagedRecord'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useManagedHistory } from '../useDelegation'
 import { kindTitleKey } from '../decisions'
-import { delegationSince, parseTraceTime } from '../managedView'
+import { parseTraceTime } from '../managedView'
 import { Icon } from './Icon'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -30,8 +30,6 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
   const [external, setExternal] = useState<ExternalOperation[]>([])
   const [more, setMore] = useState(false)
   const latest = useUiStore(s => s.timelineFacts?.latest_event_id ?? 0)
-  const timeline = useUiStore(s => s.timeline)
-  const since = useMemo(() => delegationSince(timeline), [timeline])
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   useEffect(() => {
@@ -90,13 +88,12 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
             </button>}
           </>}
         </>
-  const sinceAt = since ? since.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
   return <section data-managed-report className={card ? 'rounded-[14px] bg-surface px-[18px] py-4 shadow-[var(--shadow-raised)]' : undefined}
     aria-label={t('delegation.report')}>
     {card && <div className="mb-3 flex items-center gap-2">
       <span className="mg-av"><Icon name="bot" size={12} /></span>
       <b className="text-[15px] font-semibold text-ink">{t('delegation.report')}</b>
-      {sinceAt && <span className="text-[13px] text-ink-3">{t('delegation.since', { time: sinceAt })}</span>}
+      {/* 时段缺宿主开启时刻（功能缺口），不写。 */}
       <span className="flex-1" />
       {onClose && <Button size="xs" variant="ghost" onClick={onClose} title={t('topbar.flowClose')} aria-label={t('topbar.flowClose')}>
         <Icon name="close" size={12} />

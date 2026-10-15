@@ -955,6 +955,17 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
   recover_run: () => 'q-rec', stamp: () => 'q-stamp', reject_stamp: () => 'q-stamp',
 }
 
+const mockManaged = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockmanaged')
+let MOCK_MANAGED = { enabled: true, paused: false }
+const MOCK_MANAGED_HISTORY = [
+  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'no_configured_target', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete' },
+  { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'model_choice', via: 'model', outcome: 'stamped', actor: 'managed:g1:1', result: 'done' },
+  { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done' },
+]
+const MOCK_MANAGED_EXTERNAL = [
+  { event_id: 122, card_id: 'q-m1', kind: 'local_trash', target: '~/Downloads/old-build.zip', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-14 03:58:00', verification: 'host_verified_recoverable', trash_path: '~/.Trash/old-build.zip' },
+  { event_id: 123, card_id: 'q-m2', kind: 'mcp', target: 'figma:update_node', action: 'update_node', decision: 'allow', result: 'done', at: '2026-10-14 03:59:00', verification: 'host_unverified_deletion', trash_path: null },
+]
 const mockDesign = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdesign')
 const mockSvg = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="320" height="240" fill="url(#g)"/></svg>`)}`
 const MOCK_DESIGN_OPTIONS = [
@@ -1188,6 +1199,24 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(119, 'tool_result', 'a4', 'r3', { tool: 'fs_read', ok: true, result: { output: { content: '# 接口说明 v2\n…' } } }, '11:55'),
         mkEv(120, 'tool_called', 'a4', 'r3', { tool: 'bash', input: { cmd: 'cargo test --workspace' }, seq: 'r5:i1' }, '11:56'),
       ]
+      // 票 08 截图比对（managed#running）：`?mockmanaged` 时追加托管开启事实与托管决定行
+      if (mockManaged()) all.push(
+        mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false }, '11:57'),
+        mkEv(122, 'system', 'a4', null, { kind: 'managed_decision', card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: '端到端测试需要浏览器内核，下载落在项目缓存目录，属本项目联网委托。', via: 'model', outcome: 'allowed', actor: 'managed:g1:1' }, '11:58'),
+        mkEv(123, 'system', 'a3', null, { kind: 'managed_decision', card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: '与项目说明「单用户离线工具」一致；另两个方案偏装饰。', via: 'model', outcome: 'stamped', actor: 'managed:g1:1' }, '11:59'),
+        mkEv(124, 'system', 'a5', null, { kind: 'managed_decision', card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: '该目标不是项目已配置的发布目标（新增发布目标不在托管范围内）。', via: 'host', outcome: 'not_published', actor: 'managed:g1:1' }, '12:00'),
+      )
+      // 票 08 截图比对（feedback#model-recovery）：`?mockrecovery` 时追加 D11 ①②③⑥ 四种状态
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockrecovery')) {
+        const fail = (code: string, at: string) => ({ code, model: 'claude-opus-5-5', model_slot: 'decision', request_id: `req-${at}`, http_status: code === 'authentication' ? 401 : code === 'provider_unavailable' ? 503 : null, message: code })
+        const rec = (id: string, state: string, extra: Record<string, unknown>) => ({ recovery_id: id, project_root: '/mock', purpose: 'pm_route', agent_id: 'a0', stage_run_id: null, target_role: '产品策划', state, history: [], can_retry: true, partial_text: null, unfinished: false, retry_deadline_ms: null, instruction: null, last_refusal: null, superseded_reason: null, held_instruction: null, chat_model_slot: null, ...extra })
+        all.push(
+          mkEv(131, 'system', 'a0', null, { kind: 'model_request_retrying', ...rec('mr1', 'retrying', { history: [fail('transport', '1')], retry_deadline_ms: Date.now() + 38000 }) }, '12:01'),
+          mkEv(132, 'system', 'a0', null, { kind: 'model_request_failed', ...rec('mr2', 'stopped', { history: [fail('transport', '1'), fail('provider_unavailable', '2'), fail('provider_unavailable', '3')], chat_model_slot: 'gpt-6' }) }, '12:02'),
+          mkEv(133, 'system', 'a0', null, { kind: 'model_request_failed', ...rec('mr3', 'failed', { history: [fail('authentication', '1')] }) }, '12:03'),
+          mkEv(134, 'system', 'a0', null, { kind: 'model_request_recovered', ...rec('mr4', 'recovered', { history: [fail('transport', '1')] }) }, '12:04'),
+        )
+      }
       const after = args?.after == null ? null : Number(args.after)
       const limit = Number(args?.limit ?? 500)
       return all.filter((i) => after == null || i.event.id > after).slice(0, limit) as T
@@ -1198,6 +1227,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         { kind: 'mcp', endpoint: null, transport: 'stdio', enabled: true },
       ] } as T
     case 'pending_questions':
+      // 票 08：`?mockmanaged` 时托管事项不进人工待决（宿主 owner_pending 同口径）
+      if (mockManaged() && MOCK_MANAGED.enabled && !MOCK_MANAGED.paused) return [] as T
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
         { id: 'q-stall', kind: 'stall', agent_id: 'a3', payload: { branch: 'no_reply', retry: true, role: '前端', instruction: '把列表过滤修一下' }, state: 'queued' },
@@ -1417,17 +1448,25 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'set_approval_mode':
       return { project_id: 'p1', project_root: '/mock', mode: args?.mode } as T
     case 'project_delegation':
+      if (mockManaged()) return { ...MOCK_MANAGED, generation: 1, delegation_id: 'mock-grant' } as T
       return { enabled: false, paused: false, generation: 0, delegation_id: null } as T
     case 'set_project_delegation':
+      if (mockManaged()) MOCK_MANAGED = { enabled: Boolean(args?.enabled), paused: false }
       return { enabled: Boolean(args?.enabled), paused: false, generation: 1, delegation_id: args?.enabled ? 'mock-grant' : null } as T
     case 'set_project_delegation_paused':
+      if (mockManaged()) MOCK_MANAGED = { enabled: true, paused: Boolean(args?.paused) }
       return { enabled: true, paused: Boolean(args?.paused), generation: 2, delegation_id: 'mock-grant' } as T
     case 'stop_model_request':
       return null as T
     case 'managed_history':
+      return (mockManaged() ? MOCK_MANAGED_HISTORY : []) as T
     case 'managed_external_ops':
+      return (mockManaged() ? MOCK_MANAGED_EXTERNAL : []) as T
     case 'managed_processing':
-      return [] as T
+      return (mockManaged() && MOCK_MANAGED.enabled ? [
+        { id: 'q-m4', kind: 'stamp', agent_id: 'a3', payload: { stage: '测试' }, state: 'queued' },
+        { id: 'q-m1', kind: 'permission', agent_id: 'a4', payload: {}, state: 'queued' },
+      ] : []) as T
     case 'design_direction':
       // 票 04 截图比对（decisions#design）：`?mockdesign` 时给一张 D12 视觉方向卡的三套方案；默认关，既有测试依赖空夹具
       if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS } as T

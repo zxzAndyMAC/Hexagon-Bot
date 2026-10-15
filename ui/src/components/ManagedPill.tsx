@@ -1,10 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
 import { useUiStore } from '../store'
 import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
 import { useDelegation, useManagedHistory } from '../useDelegation'
-import { delegationSince, minutesSince } from '../managedView'
 import { Icon } from './Icon'
 import { ManagedReport } from './ManagedReport'
 import { Dot } from './ui/dot'
@@ -77,7 +76,7 @@ export function ManagedPill() {
           <Icon name="chevron-down" size={12} />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[340px] p-1.5" aria-label={label}>
+      <PopoverContent align="start" className="w-[340px] p-1.5" aria-label={label}>
         <PillMenu paused={paused} processing={processing} busy={busy} label={label}
           onReport={() => { setOpen(false); setReport(true) }}
           onPause={() => { void pause(!paused) }} onOff={() => { void disable() }} />
@@ -99,8 +98,6 @@ function PillMenu({ paused, processing, busy, label, onReport, onPause, onOff }:
 }) {
   const { t } = useTranslation()
   const { history } = useManagedHistory()
-  const timeline = useUiStore(s => s.timeline)
-  const since = useMemo(() => delegationSince(timeline), [timeline])
   const [mode, setMode] = useState<string | null>(null)
   useEffect(() => {
     let live = true
@@ -112,7 +109,7 @@ function PillMenu({ paused, processing, busy, label, onReport, onPause, onOff }:
     <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-1.5">
       <span className="mg-av sm"><Icon name="bot" size={12} /></span>
       <b className="flex-1 text-[13px] font-semibold text-ink">{label}</b>
-      {since && <span className="text-[12px] text-ink-3">{t('delegation.elapsed', { count: minutesSince(since) })}</span>}
+      {/* 「已 N 分钟」缺宿主的开启时刻（DelegationStatus 无 enabled_at），功能缺口，不猜。 */}
     </div>
     <div className="m-1 rounded-[10px] bg-inset px-3 py-2.5 text-[12px]">
       <div className="flex"><span className="flex-1 text-ink-3">{t('delegation.kvProcessing')}</span><span>{paused ? t('delegation.pausedNote') : t('delegation.items', { count: processing })}</span></div>

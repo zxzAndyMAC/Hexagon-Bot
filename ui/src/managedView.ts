@@ -2,7 +2,6 @@
 // 只把宿主给的码（ManagedRecord.result / action）映射成界面档位，不从 outcome 文本猜结果——
 // result 由 core `result_of` 一张封闭表算出（test3/23 复审），这里只在 done 内再按动作分「已执行 /
 // 已生效 / 已拒绝」三种外观；failed / incomplete 原样透出。
-import type { TimelineItem } from './api'
 import type { ManagedRecord } from './gen/ManagedRecord'
 
 export type RowChip = 'executed' | 'effective' | 'refused' | 'incomplete' | 'failed'
@@ -26,29 +25,4 @@ export const CHIP_TONE: Record<RowChip, ChipTone> = {
 export function parseTraceTime(at: string): Date | null {
   const parsed = new Date(`${at.replace(' ', 'T')}Z`)
   return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
-/** When the current delegation was turned on, if that fact is in the loaded
- * timeline window (`system.delegation_changed`, enabled). Unknown → null:
- * the pill and report then omit the duration instead of guessing. */
-export function delegationSince(timeline: TimelineItem[]): Date | null {
-  for (let i = timeline.length - 1; i >= 0; i--) {
-    const ev = timeline[i].event
-    if (ev.kind !== 'system' || ev.payload?.kind !== 'delegation_changed') continue
-    return ev.payload.enabled === true ? parseTraceTime(ev.created_at) : null
-  }
-  return null
-}
-
-export function minutesSince(since: Date, now = Date.now()): number {
-  return Math.max(0, Math.floor((now - since.getTime()) / 60000))
-}
-
-/** The newest managed decision row for one card, for the strip's「查看」. */
-export function latestDecisionEvent(timeline: TimelineItem[], cardId: string): number | null {
-  for (let i = timeline.length - 1; i >= 0; i--) {
-    const ev = timeline[i].event
-    if (ev.kind === 'system' && ev.payload?.kind === 'managed_decision' && ev.payload.card_id === cardId) return ev.id
-  }
-  return null
 }

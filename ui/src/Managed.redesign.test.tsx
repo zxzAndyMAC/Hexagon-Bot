@@ -8,7 +8,7 @@ import { useUiStore } from './store'
 import { ManagedStrip } from './components/ManagedStrip'
 import { Timeline } from './components/Timeline'
 import { buildRows } from './timelineModel'
-import { delegationSince, latestDecisionEvent, rowChip } from './managedView'
+import { rowChip } from './managedView'
 import type { DelegationStatus } from './gen/DelegationStatus'
 
 vi.mock('react-virtuoso', () => ({
@@ -47,8 +47,10 @@ it('the strip appears only while delegation is active with items, and jumps to t
     { id: 'q1', kind: 'permission', agent_id: 'a0', payload: {}, state: 'queued' },
     { id: 'q2', kind: 'publish', agent_id: 'a0', payload: {}, state: 'queued' },
   ])
-  vi.spyOn(api, 'managedHistory').mockResolvedValue([])
-  useUiStore.setState({ timeline: [decision(40, 'q1'), decision(41, 'q9')] })
+  vi.spyOn(api, 'managedHistory').mockResolvedValue([
+    { event_id: 41, card_id: 'q9', card_kind: 'permission', action: 'allow', reason: 'r', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done' },
+    { event_id: 40, card_id: 'q1', card_kind: 'permission', action: 'deny', reason: 'r', via: 'model', outcome: 'retry', actor: 'managed:g1:1', result: 'done' },
+  ])
   const jumped: number[] = []
   const listen = (e: Event) => jumped.push((e as CustomEvent<number>).detail)
   window.addEventListener('hexagon:timeline-jump', listen)
@@ -114,9 +116,5 @@ it('managedView maps host results without guessing from outcome text', () => {
   expect(rowChip({ result: 'done', action: 'deny' })).toBe('refused')
   expect(rowChip({ result: 'done', action: 'allow' })).toBe('executed')
   expect(rowChip({ result: 'done', action: 'accept' })).toBe('effective')
-  const tl = [sys(1, { kind: 'delegation_changed', enabled: true }, 'system', '2026-10-14 08:00:00'), decision(2, 'q1'), decision(3, 'q1')]
-  expect(delegationSince(tl)?.toISOString()).toBe('2026-10-14T08:00:00.000Z')
-  expect(delegationSince([...tl, sys(4, { kind: 'delegation_changed', enabled: false })])).toBeNull()
-  expect(latestDecisionEvent(tl, 'q1')).toBe(3)
   expect(buildRows([decision(1, 'a'), decision(2, 'b'), decision(3, 'c')], 'decisions')).toHaveLength(3)
 })

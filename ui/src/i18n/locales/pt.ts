@@ -275,6 +275,7 @@ export default {
     system: 'sistema',
   },
   sys: {
+    delegation_changed: "Delegação alterada",
     session_created: "Sessão iniciada",
     session_transition: "Mudança de estado da sessão",
     session_transition_rejected: "Mudança de sessão recusada",

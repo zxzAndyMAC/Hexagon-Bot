@@ -275,6 +275,7 @@ export default {
     system: '系统',
   },
   sys: {
+    delegation_changed: "托管设置已变更",
     session_created: "会话已建立",
     session_transition: "会话状态变化",
     session_transition_rejected: "会话状态变更被拒",
