@@ -6,6 +6,7 @@ import * as React from "react"
 import { DropdownMenu as MenuPrimitive } from "radix-ui"
 import { Check } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useFloatingZ } from "@/components/ui/layer"
 
 const DropdownMenu = MenuPrimitive.Root
 const DropdownMenuTrigger = MenuPrimitive.Trigger
@@ -17,12 +18,13 @@ const popSurface =
   "z-20 min-w-[220px] overflow-y-auto rounded-[12px] bg-surface p-[5px] text-ink shadow-[var(--shadow-overlay)] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
 
 function DropdownMenuContent({ className, sideOffset = 6, ...props }: React.ComponentProps<typeof MenuPrimitive.Content>) {
+  const z = useFloatingZ("pop")
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
-        className={cn(popSurface, "max-h-(--radix-dropdown-menu-content-available-height)", className)}
+        className={cn(popSurface, z, "max-h-(--radix-dropdown-menu-content-available-height)", className)}
         {...props}
       />
     </MenuPrimitive.Portal>

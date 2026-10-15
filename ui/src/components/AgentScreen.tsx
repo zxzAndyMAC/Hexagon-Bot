@@ -206,7 +206,7 @@ export function AgentScreen() {
   if (!target || !visible) return null
   return <TooltipProvider>
     <aside ref={panel} aria-label={t('control.screenTitle')} data-agent-screen data-expanded={expanded || undefined}
-      className={cn('fixed z-40 rounded-[var(--r-panel)] bg-surface p-2 text-ink shadow-[var(--shadow-overlay)]', dragging && 'opacity-90')}
+      className={cn('fixed z-[19] rounded-[var(--r-panel)] bg-surface p-2 text-ink shadow-[var(--shadow-overlay)]', dragging && 'opacity-90')}
       style={{ left: location.x, top: location.y, width }}>
       <button type="button" data-screen-picture onClick={() => setExpanded(v => !v)}
         aria-label={t(expanded ? 'agentScreen.collapse' : 'agentScreen.expand')}

@@ -10,6 +10,7 @@ import { Check, ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { fieldShell } from "@/components/ui/input"
 import { popSurface } from "@/components/ui/dropdown-menu"
+import { useFloatingZ } from "@/components/ui/layer"
 
 const Select = SelectPrimitive.Root
 const SelectGroup = SelectPrimitive.Group
@@ -31,16 +32,17 @@ function SelectTrigger({ className, children, ...props }: React.ComponentProps<t
 }
 
 function SelectContent({ className, children, sideOffset = 6, container, ...props }: React.ComponentProps<typeof SelectPrimitive.Content> & {
-  /** 弹层挂载点：在 z 序高于弹层 20 的全屏层里（向导 z-60）要挂进那一层，否则被盖住（gap B12 实测）。 */
+  /** 弹层挂载点（默认 body）。gap C5 后向导是 16 层、低于弹层 20，不再需要挂进向导；保留给标本页等静态比对。 */
   container?: HTMLElement | null
 }) {
+  const z = useFloatingZ("pop")
   return (
     <SelectPrimitive.Portal container={container}>
       <SelectPrimitive.Content
         data-slot="select-content"
         position="popper"
         sideOffset={sideOffset}
-        className={cn(popSurface, "max-h-(--radix-select-content-available-height) w-(--radix-select-trigger-width)", className)}
+        className={cn(popSurface, z, "max-h-(--radix-select-content-available-height) w-(--radix-select-trigger-width)", className)}
         {...props}
       >
         <SelectPrimitive.Viewport>{children}</SelectPrimitive.Viewport>

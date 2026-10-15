@@ -169,14 +169,14 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
     <>
       {body}
       {/* 设置钮对启动页与向导全程恒显（owner 2026-09-30：向导期间也要能进
-          设置）。zIndex 70：压过向导层 60；设置覆盖层 80 打开时自然盖住它。 */}
-      <div className="fixed top-2 right-3.5 z-[70]">
+          设置）。z 17：压过全屏视图 16（向导）；设置覆盖 18 打开时盖住它（foundations §4，gap C5）。 */}
+      <div className="fixed top-2 right-3.5 z-[17]">
         <IconButton label={t('launch.settings')} action="settings" data-launch-settings onClick={() => setSettings(true)}>
           <Icon name="settings" size={14} />
         </IconButton>
       </div>
       {settings && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--page)' }}>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 18, background: 'var(--page)' }}>
           <SettingsPage onBack={() => setSettings(false)} projectless />
         </div>
       )}

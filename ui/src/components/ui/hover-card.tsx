@@ -5,6 +5,7 @@ import * as React from "react"
 import { HoverCard as HoverCardPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { popSurface } from "@/components/ui/dropdown-menu"
+import { useFloatingZ } from "@/components/ui/layer"
 
 /** 开合延时（ms）：进 300 比 Tooltip（150）慢一拍，扫过成员列表不连闪；出 120 让指针能移进卡内。 */
 const OPEN_DELAY = 300
@@ -17,13 +18,14 @@ function HoverCard({ openDelay = OPEN_DELAY, closeDelay = CLOSE_DELAY, ...props 
 const HoverCardTrigger = HoverCardPrimitive.Trigger
 
 function HoverCardContent({ className, align = "start", sideOffset = 8, ...props }: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
+  const z = useFloatingZ("pop")
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
         data-slot="hover-card-content"
         align={align}
         sideOffset={sideOffset}
-        className={cn(popSurface, "outline-none", className)}
+        className={cn(popSurface, z, "outline-none", className)}
         {...props}
       />
     </HoverCardPrimitive.Portal>

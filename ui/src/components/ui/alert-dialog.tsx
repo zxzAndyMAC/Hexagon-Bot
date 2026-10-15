@@ -4,6 +4,7 @@
 // busy（提交中）：所有按钮禁用、Esc 无效、主按钮环形加载（aria-busy）。
 import * as React from "react"
 import { AlertDialog as AlertPrimitive } from "radix-ui"
+import { InModalLayer } from "@/components/ui/layer"
 import { cn } from "@/lib/utils"
 import { Button, type ButtonProps } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -34,7 +35,7 @@ function AlertDialogContent({
         onEscapeKeyDown={guardBusy(busy, onEscapeKeyDown)}
         {...props}
       >
-        <Busy.Provider value={busy}>{children}</Busy.Provider>
+        <Busy.Provider value={busy}><InModalLayer>{children}</InModalLayer></Busy.Provider>
       </AlertPrimitive.Content>
     </AlertPrimitive.Portal>
   )

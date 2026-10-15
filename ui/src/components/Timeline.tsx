@@ -1148,7 +1148,7 @@ export function Timeline() {
         </div>}
         {/* Owner 2026-10-02: upward intent loads history; only progress or recovery needs a floating surface. */}
         {viewport.ready && (windowState.olderLoading || windowState.olderError || windowState.tailError) &&
-          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21, background: 'var(--app-main)' }}>
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 14, background: 'var(--app-main)' }}>
             <div className="tl-col">
               {windowState.olderLoading ? <div role="status" aria-busy="true" aria-label={t('timeline.loadingOlder')}><SkeletonRows count={1} /></div>
                 : <InlineError variant="row" title={windowState.tailError ? t('timeline.loadFailed') : t('timeline.olderFailedLabel')}
