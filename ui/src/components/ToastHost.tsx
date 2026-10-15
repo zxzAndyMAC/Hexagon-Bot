@@ -22,7 +22,10 @@ export function ToastHost() {
   // 曾经的写法：固定 bottom 72——多行草稿或附件时 toast 压在输入框上。
   useLayoutEffect(() => {
     if (!toasts.length) return
-    const top = document.querySelector('.composer-box')?.getBoundingClientRect().top ?? 0
+    // 待决坞（票 04）停靠在输入条正上方——toast 再往上，不盖住裁决按钮。
+    const tops = [...document.querySelectorAll('.composer-box, [data-dock]')]
+      .map((el) => el.getBoundingClientRect().top).filter((v) => v > 0)
+    const top = tops.length ? Math.min(...tops) : 0
     setOffset(top > 0 ? Math.max(TOAST_MIN_OFFSET, Math.round(window.innerHeight - top + 8)) : TOAST_MIN_OFFSET)
   }, [toasts])
 
