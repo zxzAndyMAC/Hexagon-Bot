@@ -644,6 +644,7 @@ export default {
   exec: { done: 'concluido', exit: 'exit {{code}}', noOutput: '(sem saída)', tail: '… últimos 32 KB' },
   agent: {
     stepHostRead: "Ler arquivo do computador",
+    modelFallback: {"label": "{{model}} (atual)", "hint": "Esta mensagem não registrou o modelo usado no envio; mostrando o modelo atual do membro."},
     stepHostWrite: "Gravar arquivo do computador",
     stepHostTrash: "Mover para a Lixeira",
     stepHostBash: "Executar comando do computador",

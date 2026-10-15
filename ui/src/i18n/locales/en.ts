@@ -644,6 +644,7 @@ export default {
   exec: { done: 'done', exit: 'exit {{code}}', noOutput: '(no output)', tail: '… showing last 32 KB' },
   agent: {
     stepHostRead: "Read host file",
+    modelFallback: {"label": "{{model}} (current)", "hint": "This message has no record of the model it was sent with; showing the member's current model."},
     stepHostWrite: "Write host file",
     stepHostTrash: "Move host file to Trash",
     stepHostBash: "Run host command",

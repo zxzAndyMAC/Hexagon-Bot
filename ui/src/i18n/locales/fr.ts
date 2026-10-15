@@ -644,6 +644,7 @@ export default {
   exec: { done: 'terminé', exit: 'exit {{code}}', noOutput: '(aucune sortie)', tail: '… 32 derniers Ko' },
   agent: {
     stepHostRead: "Lire un fichier local",
+    modelFallback: {"label": "{{model}} (actuel)", "hint": "Ce message n’a pas enregistré le modèle utilisé à l’envoi ; le modèle actuel du membre est affiché."},
     stepHostWrite: "Écrire un fichier local",
     stepHostTrash: "Placer dans la Corbeille",
     stepHostBash: "Exécuter une commande locale",

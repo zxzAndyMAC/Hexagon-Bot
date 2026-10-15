@@ -758,7 +758,8 @@ const mkMsg = (
   author: string, body: string, hhmm: string,
 ): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id, stage_run_id, payload: {}, created_at: `${T0}${hhmm}:00Z` },
-  message: { id, author, body, tokens: [], attachments: [], element_refs: [], created_at: `${T0}${hhmm}:00Z`, thinking: '' },
+  // gap B9：Agent 回复带发出时的模型；负责人消息无模型
+  message: { id, author, body, tokens: [], attachments: [], element_refs: [], model: author === 'owner' ? null : 'deepseek/deepseek-chat', created_at: `${T0}${hhmm}:00Z`, thinking: '' },
 })
 
 const ART_CONTENT: Record<string, Record<number, string>> = {

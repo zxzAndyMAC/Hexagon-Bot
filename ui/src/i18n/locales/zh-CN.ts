@@ -644,6 +644,7 @@ export default {
   exec: { done: '完成', exit: '退出 {{code}}', noOutput: '（无输出）', tail: '… 仅显示末 32KB' },
   agent: {
     stepHostRead: "读取电脑文件",
+    modelFallback: {"label": "{{model}}（当前）", "hint": "这条消息没有记录当时用的模型，显示的是该成员现在的模型。"},
     stepHostWrite: "写入电脑文件",
     stepHostTrash: "移到废纸篓",
     stepHostBash: "运行电脑命令",

@@ -644,6 +644,7 @@ export default {
   exec: { done: '完了', exit: 'exit {{code}}', noOutput: '（出力なし）', tail: '… 末尾 32KB を表示' },
   agent: {
     stepHostRead: "ホストファイルを読む",
+    modelFallback: {"label": "{{model}}（現在）", "hint": "このメッセージには送信時のモデルが記録されていません。メンバーの現在のモデルを表示しています。"},
     stepHostWrite: "ホストファイルを書く",
     stepHostTrash: "ゴミ箱に移動",
     stepHostBash: "ホストコマンドを実行",

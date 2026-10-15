@@ -644,6 +644,7 @@ export default {
   exec: { done: 'hecho', exit: 'exit {{code}}', noOutput: '(sin salida)', tail: '… últimos 32 KB' },
   agent: {
     stepHostRead: "Leer archivo del equipo",
+    modelFallback: {"label": "{{model}} (actual)", "hint": "Este mensaje no registró el modelo con el que se envió; se muestra el modelo actual del miembro."},
     stepHostWrite: "Escribir archivo del equipo",
     stepHostTrash: "Mover a la Papelera",
     stepHostBash: "Ejecutar comando del equipo",
