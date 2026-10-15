@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Field, Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { Avatar } from '@/components/ui/avatar'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Icon } from '../Icon'
 import { fmtWindow, useKeyProbe, type ProbeState } from '../../keyProbe'
 
@@ -152,6 +154,44 @@ function resolveChoice(value: string, doc: ProvidersView, presets: ProviderPrese
   return null
 }
 
+/** 服务商下拉（gap B12 2026-10-15，entry#wz-provider「A Anthropic ▾」）：选项带 18 字母头像，
+ *  原生 <option> 画不了头像，改走 A9 触发 + A16 弹层的 Select（键盘 / 读屏走 Radix Select）。
+ *  头像确定色按供应商 id 哈希，与设置「模型服务」列表同一色号；「自定义…」用加号图标块。 */
+function ProviderSelect({ value, onChange, providers, presets }: {
+  value: string
+  onChange: (v: string) => void
+  providers: ProviderView[]
+  presets: ProviderPreset[]
+}) {
+  const { t } = useTranslation()
+  const face = (id: string, name: string) => <Avatar agentId={id} name={name} size={18} />
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger aria-label={t('wizard.providerField.label')} data-provider-select="">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {providers.length > 0 && (
+          <SelectGroup>
+            <SelectLabel>{t('wizard.providerField.configured')}</SelectLabel>
+            {providers.map((p) => <SelectItem key={p.id} value={`p:${p.id}`} icon={face(p.id, p.name)}>{p.name}</SelectItem>)}
+          </SelectGroup>
+        )}
+        {presets.length > 0 && (
+          <SelectGroup>
+            <SelectLabel>{t('wizard.providerField.presets')}</SelectLabel>
+            {presets.map((x) => <SelectItem key={x.id} value={`preset:${x.id}`} icon={face(x.id, x.name)}>{x.name}</SelectItem>)}
+          </SelectGroup>
+        )}
+        <SelectSeparator />
+        <SelectItem value="custom" icon={
+          <span className="grid size-[18px] flex-none place-items-center rounded-[5px] bg-hover-2 text-ink-2"><Icon name="plus" size={12} /></span>
+        }>{t('wizard.providerField.custom')}</SelectItem>
+      </SelectContent>
+    </Select>
+  )
+}
+
 function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () => void }) {
   const { t } = useTranslation()
   const presets = usePresets()
@@ -213,19 +253,7 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
   return (
     <>
       <Field label={t('wizard.providerField.label')}>
-        <NativeSelect aria-label={t('wizard.providerField.label')} value={value} onChange={(e) => pick(e.target.value)}>
-          {doc.providers.length > 0 && (
-            <optgroup label={t('wizard.providerField.configured')}>
-              {doc.providers.map((p) => <option key={p.id} value={`p:${p.id}`}>{p.name}</option>)}
-            </optgroup>
-          )}
-          {freshPresets.length > 0 && (
-            <optgroup label={t('wizard.providerField.presets')}>
-              {freshPresets.map((x) => <option key={x.id} value={`preset:${x.id}`}>{x.name}</option>)}
-            </optgroup>
-          )}
-          <option value="custom">{t('wizard.providerField.custom')}</option>
-        </NativeSelect>
+        <ProviderSelect value={value} onChange={pick} providers={doc.providers} presets={freshPresets} />
       </Field>
       {choice.type === 'custom' && (
         <>
