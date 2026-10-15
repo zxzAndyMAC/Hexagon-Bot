@@ -76,6 +76,7 @@ export type ActionId =
   | 'stageRewind'
   | 'stageStamp'
   | 'nodeRail'
+  | 'focusToasts'
   | 'dismissPending'
   | 'treeNewFile'
   | 'treeNewFolder'
@@ -215,6 +216,8 @@ const DEFAULTS: Record<ActionId, string> = {
   stageStamp: 'alt+mod+S',
   // ui-audit 票 12（P2-13）：节点轨键盘入口
   nodeRail: 'mod+J',
+  // ui-redesign 票 13（A18 聚焦态）：F6 跳到通知区——toast 不抢焦点，键盘用户靠它够到「撤回」等动作。
+  focusToasts: 'F6',
   // hands-free 票 05：收起待决弹窗。不用裸 Escape——确认层和命令面板
   // 已经占用它；mod+Escape 进键位表，关闭钮 tooltip 才能显示当前绑定。
   dismissPending: 'mod+Escape',
@@ -350,6 +353,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'stageRewind', labelKey: 'keys.stageRewind' },
   { id: 'stageStamp', labelKey: 'keys.stageStamp' },
   { id: 'nodeRail', labelKey: 'keys.nodeRail' },
+  { id: 'focusToasts', labelKey: 'keys.focusToasts' },
   { id: 'dismissPending', labelKey: 'keys.dismissPending' },
   { id: 'treeNewFile', labelKey: 'keys.treeNewFile' },
   { id: 'treeNewFolder', labelKey: 'keys.treeNewFolder' },

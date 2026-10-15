@@ -1,14 +1,24 @@
-// 应用内确认层（ui-audit 票 01/03）：替代原生 confirm()。
+// 应用内确认层（ui-audit 票 01/03；ui-redesign 票 13 迁到共享 A17 AlertDialog，feedback#confirm）：替代原生 confirm()。
 // 三级确认政策的承载件——L2 流程破坏性操作（rewind/skip）与
-// palette 危险项统一走这里；Esc/点遮罩取消，Enter 确认。
+// palette 危险项统一走这里；Esc 取消，Enter 确认（安全类主按钮首焦 / 输入框内回车）。
 // 出处：原生 confirm 与危险度倒挂（可逆的 sleepAll 弹窗、rewind 裸跑），
 // 且脱离设计语言——ui-audit report P1-8。
+// 首焦（A17 聚焦行）：破坏性（danger）= 取消，安全类（全员休眠，ADR 0056 附录 / 负责人 2026-10-14）= 主按钮。
+// 曾经的写法：一律聚焦确认钮——danger 确认上回车即执行，与「破坏性默认聚焦取消」相反。
+// 键盘不交给 Radix 的 Esc：窗口捕获监听按 keymap 绑定处理（同 LeaveGuard），
+// 原生 <dialog open>（截图放大）在前景时不响应——I1 / 2026-10-06：Esc 关预览不能顺手取消后台确认。
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore, type ConfirmReq } from '../store'
-import { errText } from '../api'
-import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
+import { toastError } from '../toast'
+import { bindingFor, matches, type ActionId } from '../keymap'
 import { LeaveGuard } from './canvas/LeaveGuard'
+import {
+  AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Kbd, ShortcutKbd } from '@/components/ui/kbd'
 
 export function ConfirmDialog({
   title,
@@ -34,17 +44,15 @@ export function ConfirmDialog({
   cancelAction?: ActionId
 }) {
   const { t } = useTranslation()
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'confirm' | 'alternate' | null>(null)
   const [inputVal, setInputVal] = useState('')
   const confirmRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
   const alternateRef = useRef<HTMLButtonElement>(null)
-  const hint = (label: string, action?: ActionId) => {
-    const binding = action ? formatBinding(bindingFor(action)) : ''
-    return binding ? `${label} · ${binding}` : label
-  }
+  const inputRef = useRef<HTMLInputElement>(null)
+  const kbd = (action?: ActionId) => (action && bindingFor(action) ? <ShortcutKbd binding={bindingFor(action)} /> : null)
 
   useEffect(() => {
-    confirmRef.current?.focus()
     const h = (e: KeyboardEvent) => {
       // I1 / 2026-10-06: native previews occupy the browser's top layer.
       // Their dismissal must not also cancel an underlying draft decision.
@@ -65,73 +73,73 @@ export function ConfirmDialog({
   const confirm = async () => {
     if (busy) return // 防双击双发
     if (input?.required && !inputVal.trim()) return // 必填输入不落空理由
-    setBusy(true)
+    setBusy('confirm')
     try {
       await onConfirm(inputVal.trim())
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
+  const runAlternate = async () => {
+    if (busy || !alternate) return
+    setBusy('alternate')
+    try { await alternate.run() } finally { setBusy(null) }
+  }
+  // 安全类且无输入时主按钮首焦，↵ 即确认——键位提示只在这种时候成立。
+  const enterConfirms = !danger && !input
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 80,
-        background: 'rgba(0,0,0,.45)', display: 'flex',
-        alignItems: 'center', justifyContent: 'center',
-      }}
-      onClick={() => { if (!busy) onCancel() }}
-      role="presentation"
-    >
-      <div
-        className="panel panel-float"
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={title}
-        style={{
-          width: 'min(420px, 92vw)', padding: 16,
-          boxShadow: '0 12px 40px rgba(0,0,0,.4)',
+    <AlertDialog open onOpenChange={(open) => { if (!open && !busy) onCancel() }}>
+      <AlertDialogContent
+        busy={busy != null}
+        data-confirm-dialog
+        className="w-[min(430px,calc(100vw-48px))] gap-0 px-5 pt-5 pb-3.5"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          // 有输入框时焦点进框——确认分级靠按钮色，不靠焦点位置
+          const first = input ? inputRef : danger ? cancelRef : confirmRef
+          first.current?.focus()
         }}
-        onClick={(e) => e.stopPropagation()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
       >
-        <div style={{ fontWeight: 560, fontSize: 13 }}>{title}</div>
-        {body && <div className="dim3" style={{ fontSize: 12, marginTop: 6, whiteSpace: 'pre-wrap' }}>{body}</div>}
+        <AlertDialogTitle>{title}</AlertDialogTitle>
+        {body
+          ? <AlertDialogDescription className="mt-1 whitespace-pre-wrap">{body}</AlertDialogDescription>
+          : <AlertDialogDescription className="sr-only">{title}</AlertDialogDescription>}
         {input && (
-          <input
+          <Input
+            ref={inputRef}
             value={inputVal}
             onChange={(e) => setInputVal(e.target.value)}
             placeholder={input.placeholder}
-            className="mono"
-            autoFocus /* 有输入框时焦点进框——确认分级靠按钮色，不靠焦点位置 */
+            className="mt-3 font-mono"
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void confirm() } }}
-            style={{
-              width: '100%', marginTop: 10, fontSize: 12, boxSizing: 'border-box',
-              background: 'var(--bg-2)', border: '1px solid var(--border)',
-              borderRadius: 6, padding: '5px 9px', outline: 'none',
-            }}
           />
         )}
-        <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
-          <button className="btn" title={hint(t('agent.cancel'), cancelAction)} disabled={busy} onClick={onCancel}>
-            {t('agent.cancel')}
-          </button>
-          {alternate && <button ref={alternateRef} className="btn" title={hint(alternate.label, alternate.action)} disabled={busy} onClick={async () => {
-            if (busy) return
-            setBusy(true)
-            try { await alternate.run() } finally { setBusy(false) }
-          }}>{alternate.label}</button>}
-          <button
+        <AlertDialogFooter className="mt-5">
+          <Button ref={cancelRef} size="sm" data-confirm="cancel" disabled={busy != null} onClick={onCancel}>
+            {t('agent.cancel')}{kbd(cancelAction) ?? <Kbd>Esc</Kbd>}
+          </Button>
+          {alternate && (
+            <Button ref={alternateRef} size="sm" data-confirm="alternate" loading={busy === 'alternate'}
+              disabled={busy === 'confirm'} onClick={() => void runAlternate()}>
+              {alternate.label}{kbd(alternate.action)}
+            </Button>
+          )}
+          <Button
             ref={confirmRef}
-            title={hint(confirmLabel ?? t('cards.confirm'), confirmAction)}
-            className={`btn primary${danger ? ' danger' : ''}`}
-            disabled={busy || Boolean(input?.required && !inputVal.trim())}
+            size="sm"
+            data-confirm="confirm"
+            variant={danger ? 'danger' : 'primary'}
+            loading={busy === 'confirm'}
+            disabled={busy === 'alternate' || Boolean(input?.required && !inputVal.trim())}
             onClick={() => void confirm()}
           >
-            {confirmLabel ?? t('cards.confirm')}
-          </button>
-        </div>
-      </div>
-    </div>
+            {confirmLabel ?? t('cards.confirm')}{kbd(confirmAction) ?? (enterConfirms ? <Kbd>↵</Kbd> : null)}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
@@ -142,7 +150,6 @@ export function ConfirmHost() {
   const req = useUiStore((s) => s.confirmReq)
   const clear = useUiStore((s) => s.clearConfirm)
   const invalidate = useUiStore((s) => s.invalidate)
-  const pushToast = useUiStore((s) => s.pushToast)
   if (!req) return null
   const run = async (action: () => unknown | Promise<unknown>) => {
     let succeeded = false
@@ -151,7 +158,7 @@ export function ConfirmHost() {
       if (!req.skipRefresh) await invalidate()
       succeeded = true
     } catch (e) {
-      pushToast(errText(e), 'err')
+      toastError(e)
     } finally {
       // An old asynchronous confirmation cannot close a newer dialog.
       if (useUiStore.getState().confirmReq === req) clear(succeeded)
