@@ -7,6 +7,7 @@ import { useUiStore } from '../store'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { DecisionButton, DecisionShell } from './DecisionShell'
 import { buttonVariants } from './ui/button'
+import { Empty } from './ui/empty'
 import './DesignChoices.css'
 
 // 票 04（components D12 推荐卡，decisions#design）：头（palette 图标块 + 标题 + 副行）+ 方案三列（radio，选中 accent 内环
@@ -68,7 +69,8 @@ export function DesignChoices({ q }: { q: PendingQuestion }) {
       <p>{t('design.intro')}</p>
       {error && <p role="alert" className="design-error">{error}</p>}
       {!direction ? <p role="status">{t('design.loading')}</p> : !current ? <p role="status">{t('design.stale')}</p> : <>
-        {options.length === 0 && <p>{t('design.empty')}</p>}
+        {/* 功能缺口 C3（A19）：没有可给的动作——方案由设计角色交出，写明「等它交」而不是留一句裸文字。 */}
+        {options.length === 0 && <Empty size="sm" icon="palette" title={t('design.emptyTitle')} desc={t('design.empty')} />}
         <div className="design-options" role="radiogroup" aria-label={t('design.title')}>{options.map((option) => {
           const on = option.id === picked
           return <article key={option.id} className="design-option" data-selected={on || undefined}>

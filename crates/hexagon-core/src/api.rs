@@ -5580,8 +5580,16 @@ pub fn desktop_preview_stop() -> Result<(), String> {
     crate::desktop::preview::stop()
 }
 /// Project leave stops the executor which owns the old project's operation.
-pub fn desktop_close_project(root: &Path) -> Result<(), String> {
-    crate::desktop::actions::close_project(root)
+pub fn desktop_close_project(db: &Db, root: &Path) -> Result<(), String> {
+    crate::desktop::actions::close_project(db, root)
+}
+/// Gap C1: owner is switching away — pause this project's computer lane now
+/// and leave a checkpoint to continue from on return.
+pub fn desktop_leave_project(
+    db: &Db,
+    root: &Path,
+) -> Result<crate::desktop::DesktopStatus, String> {
+    crate::desktop::actions::checkpoint::leave_project(db, root)
 }
 pub fn desktop_preview_focus(
     target: &crate::desktop::preview::NativePreviewTarget,

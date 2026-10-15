@@ -4,6 +4,8 @@ import { api, errText } from '../api'
 import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
 import type { ExperienceHistoryKind } from '../gen/ExperienceHistoryKind'
 import type { ExperienceHistoryPage } from '../gen/ExperienceHistoryPage'
+import { Empty } from '@/components/ui/empty'
+import { Button } from '@/components/ui/button'
 
 export function ExperienceHistory({ projectRoot, skill, entryId, onRelated }: {
   projectRoot: string; skill: string; entryId: string; onRelated: (skill: string, entryId: string) => void
@@ -53,7 +55,9 @@ export function ExperienceHistory({ projectRoot, skill, entryId, onRelated }: {
       {(['sources', 'versions', 'related'] as const).map((value) => <option key={value} value={value}>{t(`experience.${value}`)}</option>)}
     </select></label>
     {error && <p role="alert">{error}</p>}
-    {page?.items.length === 0 && <p>{t('experience.emptyHistory')}</p>}
+    {/* 功能缺口 C3（A19）：说明为什么空 + 动作「刷新」（新的评审 / 修订进来后重读）。 */}
+    {page?.items.length === 0 && <Empty size="sm" icon="book" title={t('experience.emptyHistory')} desc={t(`experience.emptyHistoryBody_${kind}`)}
+      action={<Button size="sm" disabled={busy} onClick={() => void load(null)}>{t('experience.refreshHistory')}</Button>} />}
     {page?.items.map((item, index) => <div key={index}>
       {item.kind === 'source' && <div>{item.source.author} · {item.source.artifact_id} · {t('experience.version', { version: item.source.artifact_version })} · {t('experience.review')} {item.source.review_event}
         {item.path && <button type="button" title={title('openExperienceSource', t('experience.openSource'))}

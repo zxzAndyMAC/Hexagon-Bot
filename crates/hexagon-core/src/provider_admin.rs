@@ -50,6 +50,11 @@ pub struct ProviderView {
 pub struct ProvidersView {
     pub providers: Vec<ProviderView>,
     pub slots: std::collections::HashMap<String, provider_config::SlotBinding>,
+    /// 功能缺口 C2：出图槽位读模型（Agent 头卡「出图：…」胶囊）。`list` 总是填；
+    /// TS 侧可选只为兼容既有的手写视图字面量（向导 / 设置的空视图占位），缺省按未配置读。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub image_generation: Option<provider_config::ImageGenerationSlot>,
 }
 
 /// 供应商文档的对外视图：非密字段 + 各供应商 key 是否已存
@@ -70,9 +75,11 @@ pub fn list(store: &dyn CredentialStore) -> Result<ProvidersView, AdminError> {
             })
         })
         .collect::<Result<_, AdminError>>()?;
+    let image_generation = provider_config::image_generation_slot(&doc);
     Ok(ProvidersView {
         providers,
         slots: doc.slots,
+        image_generation: Some(image_generation),
     })
 }
 

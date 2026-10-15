@@ -259,6 +259,48 @@ pub fn caps_for_slot(slot: &str) -> std::collections::HashSet<String> {
     infer_caps(&b.model).into_iter().collect()
 }
 
+/// 出图槽位（ui-redesign 功能缺口 C2；原型 canvas#agent 头卡「出图：未配置」）。
+pub const IMAGE_SLOT: &str = "image";
+
+/// 出图槽位读模型。只读：Hexagon 目前没有出图执行器（见 infer_caps
+/// 「Catalog-only modalities do not imply that Hexagon has an executor」），
+/// `Configured` 只说明绑定的模型声明了出图能力，不代表 Agent 能出图。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub enum ImageGenerationSlot {
+    Unconfigured,
+    /// 绑了模型，但它没有 image_generation 能力。
+    Unsupported {
+        model: String,
+    },
+    Configured {
+        model: String,
+    },
+}
+
+/// 精确绑定，不走 [`resolve_slot`] 的 default 回退：default 是对话模型，
+/// 回退会把每个项目都报成「已配置出图」（假阳性 = 负责人以为能出图；
+/// 假阴性只多一次去设置里绑定）。
+pub fn image_generation_slot(doc: &ProviderDoc) -> ImageGenerationSlot {
+    let Some(b) = resolve_exact(&doc.slots, IMAGE_SLOT) else {
+        return ImageGenerationSlot::Unconfigured;
+    };
+    let caps = doc
+        .providers
+        .iter()
+        .find(|p| p.id == b.provider_id)
+        .and_then(|p| p.models.iter().find(|m| m.id == b.model))
+        .map(|m| m.caps.clone())
+        .unwrap_or_else(|| infer_caps(&b.model));
+    let model = b.model.clone();
+    if caps.iter().any(|c| c == "image_generation") {
+        ImageGenerationSlot::Configured { model }
+    } else {
+        ImageGenerationSlot::Unsupported { model }
+    }
+}
+
 /// 槽位就绪判定（给向导/创建闸）：有绑定 + 供应商存在且启用 + key 已存。
 /// `default` 槽的绑定兜底任何槽。
 pub fn slot_ready(doc: &ProviderDoc, store: &dyn CredentialStore, slot: &str) -> bool {
@@ -1031,6 +1073,49 @@ mod tests {
         // 不在目录也不在表 → None（回落旧默认，不是 0）
         assert_eq!(window_of(&d, "totally-unknown-xyz"), None);
         assert_eq!(max_output_of(&d, "totally-unknown-xyz"), None);
+    }
+
+    /// 功能缺口 C2：出图槽位只认精确绑定的 `image` 槽——default 对话模型不算出图；
+    /// 绑了不支持出图的模型报 Unsupported；目录 caps 或 infer_caps 声明出图才报 Configured。
+    #[test]
+    fn image_slot_reads_exact_binding_and_capability() {
+        let bind = |model: &str| SlotBinding {
+            provider_id: "p".into(),
+            model: model.into(),
+        };
+        let mut doc = ProviderDoc {
+            providers: vec![def("p")],
+            ..ProviderDoc::default()
+        };
+        doc.slots.insert("default".into(), bind("gpt-5"));
+        assert_eq!(
+            image_generation_slot(&doc),
+            ImageGenerationSlot::Unconfigured
+        );
+        doc.slots.insert(IMAGE_SLOT.into(), bind("gpt-5"));
+        assert_eq!(
+            image_generation_slot(&doc),
+            ImageGenerationSlot::Unsupported {
+                model: "gpt-5".into()
+            }
+        );
+        doc.slots.insert(IMAGE_SLOT.into(), bind("gpt-image-1"));
+        assert_eq!(
+            image_generation_slot(&doc),
+            ImageGenerationSlot::Configured {
+                model: "gpt-image-1".into()
+            }
+        );
+        doc.providers[0].models.push(ModelEntry {
+            id: "house-painter".into(),
+            caps: vec!["image_generation".into()],
+            ..ModelEntry::default()
+        });
+        doc.slots.insert(IMAGE_SLOT.into(), bind("house-painter"));
+        assert!(matches!(
+            image_generation_slot(&doc),
+            ImageGenerationSlot::Configured { .. }
+        ));
     }
 
     /// 票 02：槽位级解析链逐级断点——未绑槽走 default 兜底照常解析；

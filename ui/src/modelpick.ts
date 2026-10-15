@@ -18,7 +18,8 @@ export const isDedicatedSlot = (slot: string | null | undefined): boolean =>
 /// + ROLE_DRAFT_SLOT/BRIEF_SLOT/FLOW_DRAFT_SLOT/TRANSLATE_SLOT）；角色自定义槽名（chat/code/…）
 /// 是模板数据，原文照显不翻译。注意：只译绑定列表这一面——角色编辑器/侧栏的
 /// 槽位下拉仍显示原槽名（选择器语境显示的是配置键，与后端 model_slot 值对齐）。
-export const BUILTIN_SLOTS = ['default', 'decision', 'jev', 'role_draft', 'brief', 'flow_draft', 'translate'] as const
+// image：出图槽位（功能缺口 C2），与 jev 一样只认精确绑定，不回落 default（core provider_config::image_generation_slot）。
+export const BUILTIN_SLOTS = ['default', 'decision', 'jev', 'role_draft', 'brief', 'flow_draft', 'translate', 'image'] as const
 export const isBuiltinSlot = (slot: string): boolean =>
   (BUILTIN_SLOTS as readonly string[]).includes(slot)
 
@@ -26,7 +27,8 @@ export const isBuiltinSlot = (slot: string): boolean =>
 /// 不该出现在「跟随谁」的选项里）。default 恒在（后端回退终点）。
 export function sharedSlots(slots: ProvidersView['slots'], current?: string): string[] {
   const names = new Set(
-    Object.keys(slots).filter((k) => !isDedicatedSlot(k)),
+    // 出图槽绑的是出图模型，不能被角色「跟随」成对话模型（功能缺口 C2）。
+    Object.keys(slots).filter((k) => !isDedicatedSlot(k) && k !== 'image'),
   )
   names.add('default')
   if (current && !isDedicatedSlot(current)) names.add(current)

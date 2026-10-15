@@ -64,7 +64,8 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     // 汇总行：default 已绑但缺钥匙。列表里还有 decision、三个起草槽和 jev，共 6 个。
     const text = el.textContent ?? ''
     // prompt-engineering 票 11：内置槽位新增 translate（提示词参考译文），6 → 7。
-    expect(text).toContain('1/7')
+    // 功能缺口 C2：内置槽位新增 image（出图，精确绑定），7 → 8。
+    expect(text).toContain('1/8')
     root.unmount()
   })
 

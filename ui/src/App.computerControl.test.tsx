@@ -94,6 +94,24 @@ it('opens the panels from the chip; while paused, Open is disabled with the reas
   expect(panel.querySelector('[data-browser-action=browserContinueConnection]')?.getAttribute('aria-disabled')).toBe('true')
 })
 
+// 功能缺口 C1（负责人 2026-10-14）：切项目时宿主暂停并留 checkpoint；回来后 chip 写「已暂停 · 可继续」，
+// 面板说明被取消的动作不会重放，「继续」= 显式 resume（绑定当前项目根）。
+it('shows the leave checkpoint on return and continues only through an explicit resume', async () => {
+  const checkpoint = { agent: 'id-QA', interrupted: true, outcome_unknown: true, reason: 'project_switch', event_id: 4 }
+  vi.spyOn(api, 'desktopStatus').mockResolvedValue({ ...status, active_project: null, active_agent: null, paused: true, outcome_unknown: true, checkpoint })
+  vi.spyOn(api, 'browserStatus').mockResolvedValue(null)
+  const control = vi.spyOn(api, 'desktopControl').mockResolvedValue({ ...status, active_project: null, active_agent: null })
+  await mount()
+  expect(header().querySelector('[data-control-chip]')?.textContent).toBe('Computer paused · can continue')
+  await act(async () => header().querySelector<HTMLButtonElement>('[data-control-chip]')!.click())
+  const block = document.querySelector('[data-desktop-checkpoint]')!
+  expect(block.textContent).toContain(i18n.t('control.checkpointBody', { agent: 'QA' }))
+  expect(block.textContent).toContain(i18n.t('control.checkpointInterrupted'))
+  expect(control).not.toHaveBeenCalled()
+  await act(async () => block.querySelector<HTMLButtonElement>('[data-checkpoint-continue]')!.click())
+  expect(control).toHaveBeenCalledWith('resume', '/project-a')
+})
+
 it('keeps the Agent Screen behind the single header Screen button', async () => {
   vi.spyOn(api, 'desktopStatus').mockResolvedValue(status)
   await mount()

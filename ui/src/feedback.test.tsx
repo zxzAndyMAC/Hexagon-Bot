@@ -97,6 +97,32 @@ describe('切换项目阻塞横条（feedback#errors）', () => {
     expect(el!.querySelector('[data-switch-wait]')).toBeNull()
   })
 
+  // 功能缺口 C1：本项目持有电脑通道时先真正暂停 + 留 checkpoint（desktop_leave_project），再等它停下。
+  it('本项目持有通道：先暂停并留 checkpoint，停下后切换', async () => {
+    vi.useFakeTimers()
+    const held = { project_root: '/p/a', active_project: '/p/a', busy: true } as DesktopStatus
+    vi.spyOn(api, 'desktopStatus').mockResolvedValueOnce(held).mockResolvedValue(status(false))
+    const leave = vi.spyOn(api, 'desktopLeaveProject').mockResolvedValue({ ...held, paused: true })
+    const open = vi.spyOn(api, 'openRecent').mockResolvedValue(undefined as never)
+    vi.spyOn(useUiStore.getState(), 'refresh').mockResolvedValue(undefined)
+    let done: Promise<boolean> | undefined
+    await act(async () => { done = switchProject('/p/other') })
+    expect(leave).toHaveBeenCalledWith('/p/a')
+    expect(open).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(SWITCH_POLL_MS) })
+    expect(await done).toBe(true)
+    expect(open).toHaveBeenCalledWith('/p/other')
+  })
+
+  it('别的项目持有通道：不暂停它，也不等', async () => {
+    vi.spyOn(api, 'desktopStatus').mockResolvedValue({ project_root: '/p/a', active_project: '/p/b', busy: false } as DesktopStatus)
+    const leave = vi.spyOn(api, 'desktopLeaveProject')
+    vi.spyOn(api, 'openRecent').mockResolvedValue(undefined as never)
+    vi.spyOn(useUiStore.getState(), 'refresh').mockResolvedValue(undefined)
+    expect(await switchProject('/p/other')).toBe(true)
+    expect(leave).not.toHaveBeenCalled()
+  })
+
   it('「留在此项目」撤回切换，不调 open_recent', async () => {
     vi.useFakeTimers()
     vi.spyOn(api, 'desktopStatus').mockResolvedValue(status(true))

@@ -69,7 +69,7 @@ export function ContextMeter({ agentIds = [] }: { agentIds?: string[] }) {
               <dt>{t('context.window')}</dt><dd>{fmtTokens(value.window_tokens)}</dd>
               <dt>{t('context.compactAt')}</dt><dd title={value.compact_at_tokens.toLocaleString()}>{value.compact_at_tokens.toLocaleString()}</dd>
             </dl>
-          </> : <p>{t('context.empty')}</p>}
+          </> : <p>{t('context.empty')} {t('context.emptyBody')}</p>}
         </div>
       })}
       <p>{t('context.estimate')}</p>

@@ -8,7 +8,7 @@ import { Icon } from './Icon'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { DesktopStatus } from '../gen/DesktopStatus'
+import { useDesktopStatus } from '../useDesktopStatus'
 import type { ComputerModels } from '../gen/ComputerModels'
 
 // 任务前预检（components D19「预检提示」，control#readiness；票 ui-redesign 14 换皮）：卡 = image 图标块 warn + 标题 + 说明
@@ -22,39 +22,36 @@ export function ComputerTaskReadiness({ mentions, onSend }: { mentions: string[]
   const projectEpoch = useUiStore(s => s.projectEpoch)
   const projectRoot = useUiStore(s => s.projectRoot)
   const providers = useUiStore(s => s.providers)
-  const [status, setStatus] = useState<DesktopStatus | null>(null)
+  // 功能缺口 C4：电脑状态来自共享读（useDesktopStatus），不再自开 5 秒定时器；
+  // 角色模型元数据（会读钥匙串）只在进入 / 启用变化 / 焦点 / 状态变更信号时取，不跟每拍轮询。
+  const shared = useDesktopStatus().status
+  const status = shared && projectRoot && shared.project_root === projectRoot ? shared : null
+  const enabled = status?.enabled ?? false
+  const statusRoot = status?.project_root ?? null
   const [models, setModels] = useState<ComputerModels | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [dismissed, setDismissed] = useState<string | null>(null)
   useEffect(() => {
     let active = true
     let inFlight = false
-    setStatus(null); setModels(null); setUnavailable(false)
-    if (!projectRoot) return
-    const current = () => active && useUiStore.getState().projectEpoch === projectEpoch && useUiStore.getState().projectRoot === projectRoot
+    setModels(null); setUnavailable(false)
+    if (!statusRoot || !enabled) return
+    const current = () => active && useUiStore.getState().projectEpoch === projectEpoch && useUiStore.getState().projectRoot === statusRoot
     const refresh = async () => {
       if (inFlight) return
       inFlight = true
+      // Fetch metadata when entering/focusing, never authorize/capture here.
       try {
-        const next = await api.desktopStatus()
-        if (!current() || (projectRoot && next.project_root !== projectRoot)) return
-        setStatus(next)
-        // Fetch metadata when entering/focusing, never authorize/capture here.
-        if (next.enabled) {
-          try {
-            const value = await api.computerModels()
-            if (current()) { setModels(value.project_root === next.project_root ? value : null); setUnavailable(value.project_root !== next.project_root) }
-          } catch { if (current()) { setModels(null); setUnavailable(true) } }
-        } else { setModels(null); setUnavailable(false) }
-      } catch { if (current()) { setStatus(null); setModels(null) } }
+        const value = await api.computerModels()
+        if (current()) { setModels(value.project_root === statusRoot ? value : null); setUnavailable(value.project_root !== statusRoot) }
+      } catch { if (current()) { setModels(null); setUnavailable(true) } }
       finally { inFlight = false }
     }
     void refresh()
-    const tick = window.setInterval(() => { if (!document.hidden) void refresh() }, 5000)
     window.addEventListener('focus', refresh)
     window.addEventListener('hexagon:desktop-status-changed', refresh)
-    return () => { active = false; window.clearInterval(tick); window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
-  }, [team, providers, projectEpoch, projectRoot])
+    return () => { active = false; window.removeEventListener('focus', refresh); window.removeEventListener('hexagon:desktop-status-changed', refresh) }
+  }, [team, providers, projectEpoch, statusRoot, enabled])
   const openModels = useCallback(() => window.dispatchEvent(new Event('hexagon:computer-model-settings')), [])
   // 设置 › 模型服务（App 的 hexagon:open-settings-section 只收 'models' / 'usage'）
   const openServices = useCallback(() => window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: 'models' })), [])

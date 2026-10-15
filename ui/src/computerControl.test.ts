@@ -17,6 +17,12 @@ describe('controlSummary (components D19 头部控制状态)', () => {
   it('reports control held by another project without naming a local role', () => {
     expect(controlSummary({ ...base, active_agent: 'a1', active_project: '/b' }, false, names)).toEqual({ kind: 'elsewhere' })
   })
+  // 功能缺口 C1：离开项目留下的 checkpoint 压过「已暂停」，回来第一眼看到「可继续」。
+  it('an open leave checkpoint wins over paused and idle', () => {
+    const checkpoint = { agent: 'a1', interrupted: true, outcome_unknown: true, reason: 'project_switch', event_id: 9 }
+    expect(controlSummary({ ...base, paused: true, checkpoint }, false, names)).toEqual({ kind: 'checkpoint' })
+    expect(controlSummary({ ...base, checkpoint }, true, names)).toEqual({ kind: 'checkpoint' })
+  })
   it('paused wins over activity; idle when enabled or a browser is connected', () => {
     expect(controlSummary({ ...base, paused: true, active_agent: 'a1', active_project: '/a' }, true, names)).toEqual({ kind: 'paused' })
     expect(controlSummary(base, false, names)).toEqual({ kind: 'idle', target: 'computer' })
