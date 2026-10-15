@@ -65,9 +65,10 @@ export function ComputerControlStatus() {
   const label = summary.kind === 'active' ? t(summary.target === 'browser' ? 'control.activeBrowser' : 'control.activeComputer', { agent: summary.agent })
     : summary.kind === 'elsewhere' ? t('control.elsewhere')
     : summary.kind === 'paused' ? t('control.paused')
+    : summary.kind === 'checkpoint' ? t('control.checkpoint')
     : summary.kind === 'idle' ? t(summary.target === 'browser' ? 'control.idleBrowser' : 'control.idleComputer')
     : t('control.panel')
-  const tone = summary.kind === 'active' || summary.kind === 'elsewhere' ? 'warn' : summary.kind === 'idle' ? 'ok' : 'neutral'
+  const tone = summary.kind === 'active' || summary.kind === 'elsewhere' || summary.kind === 'checkpoint' ? 'warn' : summary.kind === 'idle' ? 'ok' : 'neutral'
   const pause = async () => {
     if (pausing) return
     setPausing(true)
@@ -80,7 +81,7 @@ export function ComputerControlStatus() {
           <button type="button" aria-haspopup="dialog" data-control-chip
             title={t('control.panel')}
             className={cn(badgeVariants({ variant: tone }), 'hx-press hx-focus max-w-[260px] cursor-pointer')}>
-            {tone === 'warn' ? <Dot tone="warn" pulse /> : tone === 'ok' ? <Dot tone="on" /> : <Icon name="pause" size={12} />}
+            {summary.kind === 'checkpoint' ? <Icon name="pause" size={12} /> : tone === 'warn' ? <Dot tone="warn" pulse /> : tone === 'ok' ? <Dot tone="on" /> : <Icon name="pause" size={12} />}
             <span className="truncate">{label}</span>
           </button>
         </PopoverTrigger>

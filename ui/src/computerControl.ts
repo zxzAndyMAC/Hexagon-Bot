@@ -9,11 +9,14 @@ export type ControlSummary =
   | { kind: 'active'; agent: string; target: ControlTarget }
   | { kind: 'elsewhere' }
   | { kind: 'paused' }
+  | { kind: 'checkpoint' }
   | { kind: 'idle'; target: ControlTarget }
 
 /** 头部 chip：谁在控制什么。电脑操作停用且没有浏览器连接时不占头部位置（「可插入控制状态」B5）。 */
 export function controlSummary(status: DesktopStatus | null, browserConnected: boolean, nameOf: (agentId: string) => string): ControlSummary {
   if (!status) return { kind: 'hidden' }
+  // 功能缺口 C1：离开项目时留下的 checkpoint 优先——回来第一眼看到「已暂停 · 可继续」。
+  if (status.checkpoint) return { kind: 'checkpoint' }
   if (status.paused) return { kind: 'paused' }
   if (status.active_agent) {
     // Issue19：别的项目持有控制时不把本项目角色名安到它头上。

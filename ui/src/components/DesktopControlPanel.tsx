@@ -173,6 +173,16 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
             {action('prepare_capture', status.busy || status.capture_preparation === 'preparing')}
           </div>
         )}
+        {status?.checkpoint && (
+          // 功能缺口 C1：离开项目留下的 checkpoint。「继续」= 显式 resume（结清 checkpoint），从不重放被取消的动作。
+          <div role="status" data-desktop-checkpoint className="mx-1 mt-2 rounded-[var(--r-card)] bg-orange-tint p-3 text-[12px]">
+            <b className="block font-semibold text-ink">{t('control.checkpointTitle')}</b>
+            <p className="mt-0.5 text-ink-2">{t('control.checkpointBody', { agent: team.find((m) => m.id === status.checkpoint?.agent)?.role ?? status.checkpoint.agent ?? '—' })}</p>
+            {status.checkpoint.interrupted && <p className="mt-0.5 text-ink-2">{t('control.checkpointInterrupted')}</p>}
+            <ActionButton size="xs" className="mt-1.5" label={t('control.checkpointContinue')} action="desktopResume" data-checkpoint-continue
+              disabled={pending || status.busy} onClick={() => void control('resume')} />
+          </div>
+        )}
         {status?.outcome_unknown && <p role="status" className="px-2.5 pt-2 text-[12px] text-orange">{t('computer.unknown')}</p>}
         {status && <>
           <div className="flex items-center gap-1.5 px-2.5 pt-2.5 pb-1 text-[12px]" data-controller>

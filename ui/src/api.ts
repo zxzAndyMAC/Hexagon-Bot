@@ -402,6 +402,8 @@ export const api = {
   desktopStatus: () => call<DesktopStatus>('desktop_status'),
   computerModels: () => call<ComputerModels>('computer_models'),
   desktopControl: (action: DesktopControl, expectedProjectRoot: string) => call<DesktopStatus>('desktop_control', { action, expectedProjectRoot }),
+  /** 功能缺口 C1：切换项目前暂停本项目电脑操作并留 checkpoint（回来后「继续」= desktop_control resume）。 */
+  desktopLeaveProject: (expectedProjectRoot: string) => call<DesktopStatus>('desktop_leave_project', { expectedProjectRoot }),
   desktopPermissions: () => call<DesktopPermissions>('desktop_permissions'),
   desktopOpenSettings: (permission: DesktopPermission) => call<void>('desktop_open_settings', { permission }),
   sandboxStatus: () => call<SandboxStatus>('sandbox_status'),
@@ -1487,6 +1489,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'desktop_status':
       return { project_root: '/mock', enabled: false, active_project: null, active_agent: null, busy: false, paused: false, outcome_unknown: false, screenshot_count: 0 } as T
     case 'desktop_control':
+    case 'desktop_leave_project':
       throw new Error('Desktop app required')
     case 'desktop_permissions':
       return { host_name: 'Hexagon', supported: false, available: false, accessibility: false, screen_recording: false, input_events: false, ready: false, error: 'Desktop app required' } as T
