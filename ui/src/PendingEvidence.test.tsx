@@ -5,7 +5,9 @@ import i18n from './i18n'
 import { api } from './api'
 import type { ProposalRow } from './gen/ProposalRow'
 import { useUiStore } from './store'
-import { PendingCard, PendingCards } from './components/PendingCards'
+import { PendingCard } from './components/PendingCards'
+import { PendingDock } from './components/PendingDock'
+import { TooltipProvider } from './components/ui/tooltip'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -26,7 +28,7 @@ it('keeps an effective refusal distinct from a task waiting for a configured mod
     expect(el.textContent).toContain('Configure a model, then retry to continue the original task')
     expect(el.textContent).not.toContain('after one retrigger')
     expect(el.textContent).not.toContain('once per stall')
-    const button = [...el.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Try again'))
+    const button = [...el.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Continue original task')) /* 票 04 D8「失速 · 模型不可用」：主钮定名「继续原任务」，动作仍是 stallRetry */
     expect(button).toBeTruthy()
     await act(async () => button?.click())
     expect(retry).toHaveBeenCalledWith('q-resume')
@@ -52,7 +54,7 @@ it('shows stale checks with original exit codes in the acceptance card', async (
   document.body.append(el)
   const root = createRoot(el)
   try {
-    await act(async () => root.render(<PendingCards />))
+    await act(async () => root.render(<TooltipProvider><PendingDock /></TooltipProvider>) /* ADR 0089：坞取代弹窗列表 */)
     expect(el.textContent).toContain('Outdated evidence')
     expect(el.textContent).toContain('verify')
     expect(el.textContent).toContain('Recorded exit code: 0')
@@ -85,9 +87,9 @@ it('refreshes evidence after acceptance is refused without a new timeline event'
   document.body.append(el)
   const root = createRoot(el)
   try {
-    await act(async () => root.render(<PendingCards />))
+    await act(async () => root.render(<TooltipProvider><PendingDock /></TooltipProvider>) /* ADR 0089：坞取代弹窗列表 */)
     expect(el.textContent).toContain('Passed for current delivery')
-    const confirm = [...el.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Confirm'))
+    const confirm = [...el.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Stamp') /* 票 04 D8：盖章卡主钮定名「盖章」 */)
     expect(confirm).toBeTruthy()
     await act(async () => confirm?.click())
     expect(el.textContent).toContain('Outdated evidence')

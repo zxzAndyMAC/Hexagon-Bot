@@ -24,7 +24,9 @@ it('binds abandon to the rendered card project and disables cards without host i
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Owner ends recovery')
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
-  const button = () => el.querySelectorAll('button')[1]!
+  // 票 04（R-03，ADR 0089）：按钮按 data-action 找（卡内多了 A11 复选框按钮），放弃追查先勾确认。
+  const button = () => el.querySelector<HTMLButtonElement>('button[data-action="abandonAction"]')!
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-ack="abandon"]')!.click())
   await act(async () => button().click())
   expect(abandon).toHaveBeenCalledWith('action1090', 'Owner ends recovery', '/project-a')
   expect(invalidate).toHaveBeenCalled()

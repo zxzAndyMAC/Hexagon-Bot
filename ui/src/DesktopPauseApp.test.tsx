@@ -12,7 +12,7 @@ vi.mock('./components/shell/Header', () => ({ Header: () => null }))
 vi.mock('./components/Composer', () => ({ Composer: () => null }))
 vi.mock('./components/shell/Canvas', () => ({ Canvas: () => null }))
 vi.mock('./components/Timeline', () => ({ Timeline: () => null }))
-vi.mock('./components/PendingCards', () => ({ PendingDialog: () => null }))
+vi.mock('./components/PendingDock', () => ({ PendingDock: () => null }))
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 let root: ReturnType<typeof createRoot>
 const el = document.createElement('div')

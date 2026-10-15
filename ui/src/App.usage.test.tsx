@@ -11,7 +11,8 @@ import { useUiStore } from './store'
 import i18n from './i18n'
 import { daysAgo } from './usage'
 
-vi.mock('./components/PendingCards', () => ({ PendingDialog: () => null }))
+// 票 04（ADR 0089）：待决弹窗 PendingDialog 换成待决坞 PendingDock，桩随之改名
+vi.mock('./components/PendingDock', () => ({ PendingDock: () => null }))
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 

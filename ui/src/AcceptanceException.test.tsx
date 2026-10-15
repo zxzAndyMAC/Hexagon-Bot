@@ -34,9 +34,10 @@ it('requires explicit selection and reason, blocks modal shortcuts, and invalida
   const root = createRoot(el)
   try {
     await act(async () => root.render(<PendingCard q={question} top />))
-    const submit = el.querySelector<HTMLButtonElement>('button.primary')!
+    const submit = // ADR 0089（票 04）：决策按钮换成 A1 形，primary 由 data-variant 标出（旧 .btn.primary 类撤掉）
+    el.querySelector<HTMLButtonElement>('button[data-variant="primary"]')!
     expect(submit.disabled).toBe(true)
-    await act(async () => el.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
+    await act(async () => el.querySelector<HTMLButtonElement>('[role="checkbox"]')!.click() /* ADR 0089：A11 Checkbox（Radix，role=checkbox） */)
     expect(submit.disabled).toBe(true)
     await act(async () => {
       const input = el.querySelector('textarea')!

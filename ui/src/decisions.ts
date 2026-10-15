@@ -1,5 +1,5 @@
 // 待决卡的领域逻辑：严重度序 + 各 kind 的批准/驳回分发（ADR 0051）。
-import { api, type PendingQuestion } from './api'
+import { api, errText, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, matches } from './keymap'
 import i18n from './i18n'
@@ -23,6 +23,42 @@ const SEVERITY: Record<string, number> = {
 export function severityOf(q: PendingQuestion): number {
   if (q.kind === 'stamp') return q.payload.proposal_id ? SEVERITY.stamp_proposal : SEVERITY.stamp_stage
   return SEVERITY[q.kind] ?? 9
+}
+
+/** 坞里看得见的卡，按严重度稳定排序（同档保持入队序）。顶卡 = [0] = ⌘↵ / ⌘⌫ 的作用对象；
+ *  「保存即消卡」途中的卡（hiddenPending）不算——键只打在负责人眼前那张上（票 04，ADR 0089）。 */
+export function visiblePending(pending: readonly PendingQuestion[], hidden: readonly string[] = []): PendingQuestion[] {
+  return pending
+    .map((q, order) => ({ q, order }))
+    .filter(({ q }) => !hidden.includes(q.id))
+    .sort((a, b) => severityOf(a.q) - severityOf(b.q) || a.order - b.order)
+    .map(({ q }) => q)
+}
+
+/** 票 04「保存即消卡」（interaction §2、components D6 加载 / 错误态）：裁决一提交，卡先离坞；
+ *  读回（invalidate）后解除隐藏——已解决的卡随 pending 消失，没解决的（如最终验收证据不全）原样回来。
+ *  失败：卡回到坞顶，底栏上方红字原因（pendingError），不再只靠 toast。返回是否成功。 */
+export async function settleDecision(id: string, run: () => Promise<unknown>): Promise<boolean> {
+  const st = useUiStore.getState()
+  st.hidePending(id)
+  let failure: string | null = null
+  let caught: unknown
+  try {
+    await run()
+    if (useUiStore.getState().pendingError?.id === id) useUiStore.getState().notePendingError(null)
+  } catch (e) {
+    caught = e
+    failure = i18n.t('errors.actionFailed', { detail: errText(e) })
+    useUiStore.getState().notePendingError({ id, text: failure })
+  } finally {
+    try { await useUiStore.getState().invalidate() } catch { /* 读回失败由状态轮询的 statusError 呈现 */ }
+    useUiStore.getState().unhidePending(id)
+  }
+  // 失败但卡已不在（例：工作树确认时事实漂移，core 收起了卡——D8 `worktree_binding_drift`）：
+  // 红字无处可挂，原因走 toast，不能静默。
+  // 票 13：toast 写已登记原因码（toastError），漂移时即「…（worktree_binding_drift）」。
+  if (failure && !useUiStore.getState().pending.some((q) => q.id === id)) toastError(caught, { wrap: 'errors.actionFailed' })
+  return failure == null
 }
 
 // Evaluation 16/D14: missing legacy metadata grants no quality authority.
@@ -218,15 +254,13 @@ export async function handlePendingKey(
   }
   adjudicating = true
   try {
-    if (isApprove) {
-      await approveQuestion(q)
-      return 'approved'
-    }
-    await rejectQuestion(q)
-    return 'rejected'
+    const decide = isApprove ? approveQuestion : rejectQuestion
+    // 只提示不裁决的卡（视觉方向、模型恢复二选一…）不经「保存即消卡」：没有提交，卡不该闪一下。
+    if (toastOnly(q, isApprove)) await decide(q)
+    else await settleDecision(q.id, () => decide(q))
+    return isApprove ? 'approved' : 'rejected'
   } catch (e) {
-    // 票 13（SessionHost 影响审查 2026-10-13）：键盘裁决失败与点按钮同一出口——失败 toast（role=alert），
-    // 工作树确认时事实已漂移写原因码 worktree_binding_drift（D8）。
+    // 票 13：只提示类卡（不经 settleDecision）的键盘裁决失败与点按钮同一出口——失败 toast（role=alert）+ 已登记原因码。
     // 曾经的写法：没有 catch，App 的 `void onKey(e)` 把拒绝吞成未处理 Promise，负责人无感知。
     toastError(e, { wrap: 'errors.actionFailed' })
     return 'failed'
@@ -235,9 +269,21 @@ export async function handlePendingKey(
   }
 }
 
-/** 全局待决快捷键：最高严重度卡的 批准/驳回（mod+↵ / mod+⌫） */
+function toastOnly(q: PendingQuestion, approve: boolean): boolean {
+  const p = q.payload
+  if (p.sub === 'design_direction') return true
+  if (!approve) return false
+  const state = (p.view as { state?: unknown } | undefined)?.state
+  return q.kind === 'recovery' && p.sub === 'model_request' && (state === 'needs_choice' || state === 'retrying')
+}
+
+/** 全局待决快捷键：坞顶卡的 批准/驳回（mod+↵ / mod+⌫）。读键按下那一刻的 store，
+ *  不靠渲染快照——「保存即消卡」途中顶卡已经换成下一张（票 04）。 */
+const onPendingKey = (e: KeyboardEvent) => {
+  const st = useUiStore.getState()
+  return handlePendingKey(e, visiblePending(st.pending, st.hiddenPending))
+}
+
 export function usePendingKeys() {
-  const { pending } = useUiStore()
-  const sorted = [...pending].sort((a, b) => severityOf(a) - severityOf(b))
-  return { onKey: (e: KeyboardEvent) => handlePendingKey(e, sorted) }
+  return { onKey: onPendingKey }
 }

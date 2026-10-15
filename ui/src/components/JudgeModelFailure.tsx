@@ -3,15 +3,46 @@ import { useTranslation } from 'react-i18next'
 import { api, errText, type PendingQuestion } from '../api'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { useUiStore } from '../store'
+import { Icon } from './Icon'
+import { DecisionButton } from './DecisionShell'
+
+type Failure = { purpose?: string; code?: string; request_id?: string | null; model_slot?: string }
+
+export function judgeFailureOf(q: PendingQuestion): Failure | undefined {
+  return q.payload.model_failure as Failure | undefined
+}
 
 // MR-06 (test3 10): an internal judge request failed and the card fell back
 // to the owner. Say plainly it is a request failure, not a verdict; the
 // card's own decision buttons stay the owner's path. Re-judge re-checks the
 // original target in core and grants nothing a first success could not.
-export function JudgeModelFailure({ q, top }: { q: PendingQuestion; top: boolean }) {
+// 票 04（components D8「自动判定请求失败」）：卡头改写成「…请求失败，交给你决定」+ 副行「这不是判定结论 · 码」，
+// 「重新判定」是底栏左侧 ghost 次动作（RejudgeButton），本块只留技术细节行。
+export function JudgeModelFailure({ q }: { q: PendingQuestion; top?: boolean }) {
   const { t } = useTranslation()
-  const failure = q.payload.model_failure as { purpose?: string; code?: string; request_id?: string | null; model_slot?: string } | undefined
+  const failure = judgeFailureOf(q)
   const advice = (q.payload.judge_reason as { code?: string; failure?: string } | undefined)
+  if (!failure && advice?.code !== 'model_request_failed') return null
+  if (!failure) {
+    return <div className="dock-hint" data-judge-failure="advice">
+      {t('judgeFailure.advice', { code: advice?.failure ?? '' })}
+    </div>
+  }
+  return <div data-judge-failure={failure.purpose} className="dock-hint">
+    <div>{t('judgeFailure.hint')}</div>
+    <div className="mono">{failure.code} · {failure.model_slot} · {failure.request_id ?? t('modelRecovery.notSent')}</div>
+  </div>
+}
+
+export function judgeFailureTitle(q: PendingQuestion, t: (k: string, o?: Record<string, unknown>) => string): string | null {
+  const failure = judgeFailureOf(q)
+  if (!failure) return null
+  return t('judgeFailure.title', { purpose: t(`judgeFailure.purpose.${failure.purpose}`, { defaultValue: failure.purpose ?? '' }) })
+}
+
+export function RejudgeButton({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const failure = judgeFailureOf(q)
   const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
   const rejudge = async () => {
@@ -37,19 +68,8 @@ export function JudgeModelFailure({ q, top }: { q: PendingQuestion; top: boolean
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
-  if (!failure && advice?.code !== 'model_request_failed') return null
-  if (!failure) {
-    return <div className="dim3" data-judge-failure="advice" style={{fontSize: 11, margin: '4px 0'}}>
-      {t('judgeFailure.advice', { code: advice?.failure ?? '' })}
-    </div>
-  }
-  const label = t('judgeFailure.rejudge')
-  return <div data-judge-failure={failure.purpose} style={{fontSize: 12, margin: '4px 0 8px'}}>
-    <div style={{fontWeight: 510, color: 'var(--legacy-accent)'}}>{t('judgeFailure.title', { purpose: t(`judgeFailure.purpose.${failure.purpose}`, { defaultValue: failure.purpose ?? '' }) })}</div>
-    <div className="dim3" style={{margin: '2px 0 6px'}}>{t('judgeFailure.hint')}</div>
-    <div className="dim3 mono" style={{fontSize: 11, marginBottom: 6}}>{failure.code} · {failure.model_slot} · {failure.request_id ?? t('modelRecovery.notSent')}</div>
-    <button type="button" className="btn" disabled={busy}
-      title={[t('judgeFailure.rejudgeHint'), top ? formatBinding(bindingFor('rejudgeAfterModelFailure')) : ''].filter(Boolean).join(' · ')}
-      onClick={() => { void rejudge() }}>{label}</button>
-  </div>
+  if (!failure) return null
+  return <DecisionButton variant="ghost" busy={busy}
+    title={[t('judgeFailure.rejudgeHint'), top ? formatBinding(bindingFor('rejudgeAfterModelFailure')) : ''].filter(Boolean).join(' · ')}
+    onClick={() => { void rejudge() }}><Icon name="refresh" size={12} />{t('judgeFailure.rejudge')}</DecisionButton>
 }

@@ -1,23 +1,36 @@
-.design-choices { margin: 6px 14px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); }
-.design-choices h3, .design-choices h4 { margin: 0 0 8px; font-weight: 600; }
-.design-choices p { margin: 8px 0; }
-.design-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px; }
-.design-option { padding: 12px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
-.design-option figure { margin: 10px 0; }
-.design-option img { display: block; width: 100%; max-height: 360px; object-fit: contain; border-radius: 4px; }
-.design-option figcaption { margin-top: 4px; color: var(--text-2); font-size: 12px; }
-.design-option dl { margin: 12px 0; font-size: 12px; }
-.design-option dt { font-weight: 600; }
-.design-option dd { margin: 2px 0 8px; overflow-wrap: anywhere; }
-.design-existing { display: grid; gap: 6px; margin: 16px 0 10px; }
-.design-existing textarea { width: 100%; box-sizing: border-box; resize: vertical; }
-.design-error { color: var(--err); }
+/* D12 推荐卡（票 04，decisions#design）：方案三列，选中 = 缩略图 --accent 1.5px 内环 + 「已选」info chip + 实心 radio。
+   截图比对修正（2026-10-14）：内环与 accent-tint 原先落在整列 article 上，tint 底吞掉同色 info chip；按原型改落缩略图，
+   整列只留 hover 底（reconciliation 票 04 记录）。radio 按原型 .radio 自绘（index.css 全局 radio 原语仍吃 --legacy-accent，选中点是旧琥珀色；此处覆盖边框与 ::after）。 */
+.design-choices p { margin: 0 0 8px; }
+.design-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin-top: 4px; }
+.design-option { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-card); min-width: 0; }
+.design-option:hover { background: var(--hover); }
+.design-option figure { position: relative; margin: 0; }
+.design-option img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--r-card); }
+.design-option figure::after { content: ''; position: absolute; inset: 0; border-radius: var(--r-card); box-shadow: inset 0 0 0 1px var(--line); pointer-events: none; }
+.design-option[data-selected] figure::after { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.design-picked { position: absolute; left: 8px; top: 8px; }
+.design-pick { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.design-pick b { font-weight: 500; }
+.design-pick input { appearance: none; width: 16px; height: 16px; margin: 0; flex: none; border-radius: 50%; border: 0; background: transparent; box-shadow: inset 0 0 0 1.5px var(--line-strong); cursor: pointer; }
+.design-pick input::after { content: none; }
+.design-pick input:checked { background: transparent; box-shadow: inset 0 0 0 5px var(--accent); }
+.design-pick input:checked::after { content: none; }
+.design-pick input:focus-visible { outline: none; box-shadow: inset 0 0 0 1.5px var(--line-strong), var(--focus-ring); }
+.design-pick input:checked:focus-visible { box-shadow: inset 0 0 0 5px var(--accent), var(--focus-ring); }
+.design-pick input:disabled { opacity: .5; cursor: default; }
+.design-option p { margin: 0; font-size: 12px; color: var(--ink-3); }
+.design-meta { overflow-wrap: anywhere; }
+.design-existing { margin-top: 12px; font-size: 12px; }
+.design-existing textarea { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; padding: 9px 11px; border: 0; border-radius: var(--r-sm); resize: vertical;
+  background: var(--field); box-shadow: var(--shadow-inset-field), inset 0 0 0 1px var(--line); color: var(--ink); font: inherit; }
+.design-error { color: var(--red); }
 
-.design-mockup-trigger { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; border-radius: 4px; }
-.design-mockup-trigger:focus-visible, .design-preview button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
-.design-preview { width: min(1400px, 94vw); max-width: 94vw; max-height: 94vh; padding: 16px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); color: var(--text); }
-.design-preview::backdrop { background: rgba(0, 0, 0, .65); }
+.design-mockup-trigger { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; border-radius: var(--r-card); }
+.design-mockup-trigger:focus-visible, .design-preview button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.design-preview { width: min(1400px, 94vw); max-width: 94vw; max-height: 94vh; padding: 16px; box-sizing: border-box; border: 0; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
+.design-preview::backdrop { background: oklch(0% 0 0 / .45); }
 .design-preview header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
-.design-preview h3 { margin: 0; overflow-wrap: anywhere; }
+.design-preview h3 { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .design-preview-image { overflow: auto; max-height: calc(94vh - 88px); }
 .design-preview-image img { display: block; width: 100%; max-height: none; object-fit: contain; }

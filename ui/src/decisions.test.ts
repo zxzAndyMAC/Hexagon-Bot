@@ -89,11 +89,12 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).toHaveBeenCalledWith('q1')
   })
 
-  // 票 13：键盘确认失败不再是未处理 Promise——失败 toast + 原因码（D8 worktree_binding_drift）。
-  it('worktree 确认时事实已漂移：返回 failed，失败 toast 写原因码', async () => {
+  // 票 13：工作树确认时事实已漂移、core 收起了卡——红字无处可挂，失败 toast 写原因码（D8 worktree_binding_drift）。
+  it('worktree 确认时事实已漂移：卡已不在，失败 toast 写原因码', async () => {
     vi.spyOn(api, 'confirmWorktree').mockRejectedValue({ code: 'worktree_binding_drift', message: 'worktree HEAD moved' })
+    useUiStore.setState({ pending: [] })
     const wt = card({ kind: 'worktree', payload: { operation: 'create', path: '/w', baseline_commit: 'abc' } })
-    expect(await handlePendingKey(key('Enter'), [wt])).toBe('failed')
+    await handlePendingKey(key('Enter'), [wt])
     expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ tone: 'err', code: 'worktree_binding_drift' })
   })
 
@@ -248,4 +249,33 @@ it('已授权未执行动作恢复原 ID（可靠性 08）', async () => {
   const ready = card({ kind: 'recovery', payload: { sub: 'tool_action_ready', action_id: 'action1' } })
   expect(await handlePendingKey(key('Enter'), [ready])).toBe('approved')
   expect(resume).toHaveBeenCalledWith('action1')
+})
+
+// 票 04（ADR 0089，interaction §2「保存即消卡」）
+describe('visiblePending / settleDecision', () => {
+  it('drops cards being saved and keeps stable severity order', async () => {
+    const { visiblePending } = await import('./decisions')
+    const list = [card({ id: 'p1' }), card({ id: 'w', kind: 'worktree' }), card({ id: 'p2' })]
+    expect(visiblePending(list).map((q) => q.id)).toEqual(['w', 'p1', 'p2'])
+    expect(visiblePending(list, ['w']).map((q) => q.id)).toEqual(['p1', 'p2'])
+  })
+
+  it('hides during the call, re-reads, and reports a failure on the card or by toast when the card is gone', async () => {
+    const { settleDecision } = await import('./decisions')
+    const saved = useUiStore.getState()
+    let seen: string[] = []
+    useUiStore.setState({ pending: [card({ id: 'x' })], hiddenPending: [], pendingError: null, toasts: [], invalidate: async () => {} })
+    try {
+      expect(await settleDecision('x', async () => { seen = useUiStore.getState().hiddenPending })).toBe(true)
+      expect(seen).toEqual(['x'])
+      expect(useUiStore.getState().hiddenPending).toEqual([])
+      expect(await settleDecision('x', async () => { throw new Error('nope') })).toBe(false)
+      expect(useUiStore.getState().pendingError?.id).toBe('x')
+      expect(useUiStore.getState().toasts).toHaveLength(0)
+      // D8 工作树：确认时事实已漂移，core 收起了卡——红字无处可挂，走 toast
+      useUiStore.setState({ invalidate: async () => { useUiStore.setState({ pending: [] }) } })
+      await settleDecision('x', async () => { throw new Error('worktree_binding_drift') })
+      expect(useUiStore.getState().toasts.at(-1)?.text).toContain('worktree_binding_drift')
+    } finally { useUiStore.setState(saved, true) }
+  })
 })
