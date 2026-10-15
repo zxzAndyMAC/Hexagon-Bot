@@ -41,6 +41,16 @@ function load(key: string | null) {
   })
 }
 
+let reloadQueued = false
+/** A view mounting later (e.g. the pill moving into the full-width canvas bar)
+ * re-reads once instead of trusting the cached read; mounts in the same tick
+ * coalesce into one read. */
+function queueReload() {
+  if (reloadQueued) return
+  reloadQueued = true
+  queueMicrotask(() => { reloadQueued = false; if (subscribers > 0) load(null) })
+}
+
 function loadHistory(key: string) {
   if (key === historyKey) return
   historyKey = key
@@ -63,6 +73,7 @@ export function useDelegation() {
   const processingItems = useDelegationStore(s => s.processing)
   const failed = useDelegationStore(s => s.failed)
   useEffect(() => {
+    if (subscribers > 0) queueReload()
     subscribers += 1
     return () => {
       subscribers -= 1
