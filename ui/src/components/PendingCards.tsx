@@ -9,6 +9,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
 import { api, errText, type PendingQuestion } from '../api'
+import { toastError } from '../toast'
 import type { ReconcileReport } from '../gen/ReconcileReport'
 import { useUiStore } from '../store'
 import { extractDiffBlock, parseUnifiedDiff, type DiffOp } from '../diff'
@@ -173,7 +174,6 @@ function Btn({ onClick, primary, danger, title, disabled, children }: {
 }) {
   const [busy, setBusy] = useState(false)
   const invalidate = useUiStore((s) => s.invalidate)
-  const pushToast = useUiStore((s) => s.pushToast)
   return (
     <button
       className={`btn ${primary ? 'primary' : ''} ${danger ? 'danger' : ''}`}
@@ -184,7 +184,8 @@ function Btn({ onClick, primary, danger, title, disabled, children }: {
         // ui-audit 票 04（P1-6）：待决按钮统一错误出口——失败 toast，
         // busy 复位、卡保留原地（后端幂等，重试安全）。
         try { await onClick(); await invalidate() }
-        catch (e) { pushToast(i18n.t('errors.actionFailed', { detail: errText(e) }), 'err') }
+        // 票 13：失败 toast 带已登记原因码（工作树确认漂移 = worktree_binding_drift，D8）
+        catch (e) { toastError(e, { wrap: 'errors.actionFailed' }) }
         finally { setBusy(false) }
       }}
     >

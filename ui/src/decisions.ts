@@ -3,6 +3,7 @@ import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, matches } from './keymap'
 import i18n from './i18n'
+import { toastError } from './toast'
 
 // 严重度序：恢复/失速/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章
 // 失速与恢复同档：两者都是「工作停了，不点不会自己动」（ADR 0074）。
@@ -161,6 +162,7 @@ export type KeyOutcome =
   | 'blocked-policy'
   | 'approved'
   | 'rejected'
+  | 'failed'
 
 export async function handlePendingKey(
   e: KeyboardEvent,
@@ -222,6 +224,12 @@ export async function handlePendingKey(
     }
     await rejectQuestion(q)
     return 'rejected'
+  } catch (e) {
+    // 票 13（SessionHost 影响审查 2026-10-13）：键盘裁决失败与点按钮同一出口——失败 toast（role=alert），
+    // 工作树确认时事实已漂移写原因码 worktree_binding_drift（D8）。
+    // 曾经的写法：没有 catch，App 的 `void onKey(e)` 把拒绝吞成未处理 Promise，负责人无感知。
+    toastError(e, { wrap: 'errors.actionFailed' })
+    return 'failed'
   } finally {
     adjudicating = false
   }
