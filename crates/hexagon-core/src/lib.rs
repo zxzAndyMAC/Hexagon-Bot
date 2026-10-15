@@ -50,6 +50,7 @@ pub mod provenance;
 pub mod provider;
 pub mod provider_admin;
 pub mod provider_config;
+pub mod provider_probe;
 pub mod publish;
 pub mod replay;
 pub mod review;

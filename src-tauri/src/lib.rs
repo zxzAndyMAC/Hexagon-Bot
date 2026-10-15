@@ -3131,6 +3131,23 @@ fn fetch_provider_models(
         .map_err(cmd_err)
 }
 
+/// gap B4：向导服务商步实时检测钥匙（请求一次模型目录，不落盘、不花 token）。
+/// 网络往返最长 30s，走异步池不占渲染线程；不进工作台（项目还不存在）。
+#[tauri::command(async)]
+fn probe_provider_key(
+    provider: hexagon_core::provider_admin::ProviderDef,
+    secret: Option<String>,
+    model: String,
+) -> Result<hexagon_core::provider_admin::KeyProbe, CmdError> {
+    hexagon_core::provider_admin::probe_key(
+        provider,
+        secret,
+        &model,
+        &*hexagon_core::credentials::active(),
+    )
+    .map_err(cmd_err)
+}
+
 #[tauri::command]
 fn agents_md_draft(name: String) -> String {
     hexagon_core::setup::agents_md_draft(&name)
@@ -3877,6 +3894,7 @@ pub fn run() {
             save_search_backend,
             remove_search_backend,
             fetch_provider_models,
+            probe_provider_key,
             agents_md_draft,
             optimize_agents_md,
             brief_questions,
