@@ -48,7 +48,7 @@ const open = async (el: HTMLElement) => {
 beforeEach(() => {
   document.body.innerHTML = ''
   useUiStore.setState({
-    team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null }],
+    team: [{ id: 'a1', role: '后端开发', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null }],
     toolStreams: {},
     tabs: [{ id: 'timeline', kind: 'timeline', title: 'timeline' }] as never,
     activeTab: 'timeline',

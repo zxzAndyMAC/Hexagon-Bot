@@ -125,6 +125,46 @@ describe('向导先配模型服务商（票 13）', () => {
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: 'or', enabled: true }), undefined)
     expect(bind).toHaveBeenCalledWith('default', 'or', 'm1')
   })
+
+  // gap B4（2026-10-15）：服务商步实时检测钥匙（原型「检测通过 · 200K 窗口」）；票 10 时无检测 IPC，不检测
+  const probeDoc = (): ProvidersView => ({
+    providers: [prov({
+      id: 'or', name: 'OpenRouter',
+      models: [{ id: 'm1', name: null, group: null, caps: [], context_window: null, max_output: null }],
+    })],
+    slots: {},
+  })
+  const waitProbe = () => act(async () => { await new Promise((r) => setTimeout(r, 700)) })
+
+  it('已存钥匙 + 模型：停顿后检测一次，通过时显示窗口', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(probeDoc())
+    const probe = vi.spyOn(api, 'probeProviderKey').mockResolvedValue({ ok: true, failure: null, status: null, model_listed: true, window: 200000 })
+    const el = await renderWizard()
+    await waitProbe()
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(probe).toHaveBeenCalledWith(expect.objectContaining({ id: 'or', models: [] }), undefined, 'm1')
+    expect(el.querySelector('[data-probe="ok"]')?.textContent).toContain('200K')
+  })
+
+  it('检测失败写出原因，保存仍可点（检测不是闸）', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(probeDoc())
+    vi.spyOn(api, 'probeProviderKey').mockResolvedValue({ ok: false, failure: 'authentication', status: 401, model_listed: null, window: null })
+    const el = await renderWizard()
+    await waitProbe()
+    expect(el.querySelector('[data-probe="failed"]')).not.toBeNull()
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('rejected this key')
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('HTTP 401')
+    expect(isOff(button(el, 'Save and bind default')!)).toBe(false)
+  })
+
+  it('目录里没有所填模型时提示核对拼写', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(probeDoc())
+    vi.spyOn(api, 'probeProviderKey').mockResolvedValue({ ok: true, failure: null, status: null, model_listed: false, window: null })
+    const el = await renderWizard()
+    await waitProbe()
+    expect(el.querySelector('[data-probe="unlisted"]')).not.toBeNull()
+    expect(el.textContent).toContain('check the spelling')
+  })
 })
 
 describe('向导目录（ADR 0060）', () => {

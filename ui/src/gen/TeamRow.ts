@@ -8,4 +8,18 @@ export type TeamRow = { id: string, role: string, model_slot: string | null, sta
 /**
  * 头像内容哈希（票 07）：随行下发，UI 哈希变了才拉 data URL。
  */
-avatar_hash: string | null, };
+avatar_hash: string | null, 
+/**
+ * 当前模型展示名（gap B2/B6）：实例槽（空 = `default`）经 `resolve_slot` 解析。
+ * 是「现在用哪个模型」，不是某条消息当时用的模型；解析不到为 None。
+ */
+model: string | null, 
+/**
+ * 职责首行（gap B6/B7：@ 弹层灰职责、成员悬停卡）。只取首个非空行并截断，
+ * 全文在角色编辑面；团队接口轮询频繁，不随行下发整段职责。
+ */
+duty: string | null, 
+/**
+ * 上级角色（gap B6：成员悬停卡「上级」）。与提案路由同一解析 `roles::superior_of`。
+ */
+superior: string | null, };

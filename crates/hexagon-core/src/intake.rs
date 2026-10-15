@@ -16,6 +16,24 @@ use crate::provider::{ChatResponse, ContentBlock};
 use serde_json::Value;
 use std::path::Path;
 
+/// 草案正文的长度上限（字节）。负责人在卡里编辑后整份写回；
+/// 超过它多半是误粘贴，拒绝而不是截断——截断会悄悄改掉负责人写的说明。
+pub const DRAFT_MAX_BYTES: usize = 64 * 1024;
+
+/// 库里还等负责人点头的草案正文；空白当作没有。
+/// 读侧与工作台共用一处：壳层 read 组走控制连接，不进工作台锁（D01）。
+pub fn stored_draft(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    let draft: Option<String> = conn.query_row(
+        "SELECT intake_draft FROM projects WHERE id=?1",
+        [project_id],
+        |r| r.get(0),
+    )?;
+    Ok(draft.filter(|s| !s.trim().is_empty()))
+}
+
 /// ADR 0067 开场分析的系统提示词（ADR 0071 修订：英文，回复用界面语言）。
 /// 占位 `{language}`，由 [`intake_prompt`] 填。正文是合同，与 ADR 0067 逐字一致。
 pub const INTAKE_PROMPT: &str = "You have just entered a repository that already contains files. Read only; do not change any file. Write an opening analysis based on the files that actually exist in the repository.

@@ -324,9 +324,61 @@ pub(crate) fn register_document(
     }
 }
 
+const REQUEST_FAILED: &str = "provider request or response failed";
+
+/// 模型目录请求失败的分类（gap B4，ui-redesign 2026-10-15）。`code` 与
+/// `model_failure::failure_code` 同一套词（authentication / quota / rate_limited /
+/// provider_unavailable / request_rejected / transport / deadline / invalid_response），
+/// 另加只在探测里出现的配置类 `endpoint_not_found`（404，多半是地址填错）与 `invalid_url`。
+/// `legacy` 是 [`fetch_models`] 一直以来的安全原因串，设置页沿用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogFailure {
+    pub code: &'static str,
+    pub status: Option<u16>,
+    pub legacy: &'static str,
+}
+
+impl CatalogFailure {
+    fn request(e: &ureq::Error) -> Self {
+        let (code, status) = match e {
+            ureq::Error::StatusCode(s) => (status_class(*s), Some(*s)),
+            ureq::Error::Timeout(_) => ("deadline", None),
+            ureq::Error::BadUri(_) => ("invalid_url", None),
+            _ => ("transport", None),
+        };
+        Self {
+            code,
+            status,
+            legacy: REQUEST_FAILED,
+        }
+    }
+
+    fn invalid(legacy: &'static str) -> Self {
+        Self {
+            code: "invalid_response",
+            status: None,
+            legacy,
+        }
+    }
+}
+
+/// HTTP 状态 → 原因词。404 单列：目录接口不存在几乎总是地址（或协议类型）填错，
+/// 不是「请求被拒」——给负责人的动作不同（改地址 vs 换模型）。
+pub(crate) fn status_class(status: u16) -> &'static str {
+    match status {
+        401 | 403 => "authentication",
+        402 => "quota",
+        404 => "endpoint_not_found",
+        429 => "rate_limited",
+        500..=599 => "provider_unavailable",
+        400..=499 => "request_rejected",
+        _ => "invalid_response",
+    }
+}
+
 /// Jev 没有模型目录接口。用一道最小是非题确认钥匙，目录只放响应里的模型名，
 /// 没有则回落 `jev-latest`。
-fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, ProvidersError> {
+fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, CatalogFailure> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(30)))
         .build()
@@ -342,11 +394,11 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
         .post(crate::provider::systemone_url(&def.base_url))
         .header("Authorization", &format!("Bearer {key}"))
         .send_json(&body)
-        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
+        .map_err(|e| CatalogFailure::request(&e))?;
     let v: Value = resp
         .body_mut()
         .read_json()
-        .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
+        .map_err(|_| CatalogFailure::invalid(REQUEST_FAILED))?;
     let id = v["model"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -366,7 +418,23 @@ fn fetch_jev_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
 /// Reliability 22: ureq BadUri used to echo authentication URLs into UI errors.
 /// Never return raw transport/parser errors, which can contain credentials.
 pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, ProvidersError> {
+    fetch_catalog(def, key).map_err(|f| ProvidersError::Http(f.legacy.into()))
+}
+
+/// 同 [`fetch_models`]，失败带分类（gap B4：向导实时检测要说清原因）。
+/// 分类只看 HTTP 状态与 ureq 错误种类，不带响应正文或 URL（Reliability 22 同理：原文可能含凭据）。
+pub(crate) fn fetch_catalog(
+    def: &ProviderDef,
+    key: &str,
+) -> Result<Vec<ModelEntry>, CatalogFailure> {
     let base = def.base_url.trim_end_matches('/');
+    if url::Url::parse(base).is_err() {
+        return Err(CatalogFailure {
+            code: "invalid_url",
+            status: None,
+            legacy: REQUEST_FAILED,
+        });
+    }
     // Gemini's OpenAI-compatible list omits native metadata. Stay on the exact
     // configured official host; never redirect a proxy's key to another service.
     let google = url::Url::parse(base).ok().is_some_and(|u| {
@@ -411,19 +479,17 @@ pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
             ProviderKind::OpenAi => req.header("Authorization", &format!("Bearer {key}")),
             ProviderKind::Jev => unreachable!("jev returns before the models request"),
         };
-        let mut resp = req
-            .call()
-            .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
+        let mut resp = req.call().map_err(|e| CatalogFailure::request(&e))?;
         let v: Value = resp
             .body_mut()
             .read_json()
-            .map_err(|_| ProvidersError::Http("provider request or response failed".into()))?;
+            .map_err(|_| CatalogFailure::invalid(REQUEST_FAILED))?;
         let page = v
             .get("data")
             .or_else(|| v.get("models"))
             .unwrap_or(&v)
             .as_array()
-            .ok_or_else(|| ProvidersError::Http("invalid model catalog".into()))?;
+            .ok_or_else(|| CatalogFailure::invalid("invalid model catalog"))?;
         models.extend(page.iter().filter_map(catalog_model));
         let next = if google {
             match v["nextPageToken"].as_str().filter(|s| !s.is_empty()) {
@@ -438,11 +504,11 @@ pub fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<ModelEntry>, Pro
             v["last_id"]
                 .as_str()
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| ProvidersError::Http("invalid model catalog cursor".into()))?
+                .ok_or_else(|| CatalogFailure::invalid("invalid model catalog cursor"))?
         };
         if !seen.insert(next.to_owned()) || seen.len() > 100 {
-            return Err(ProvidersError::Http(
-                "model catalog pagination did not finish".into(),
+            return Err(CatalogFailure::invalid(
+                "model catalog pagination did not finish",
             ));
         }
         after = Some(next.to_owned());
@@ -815,6 +881,20 @@ pub fn max_output_for_slot(slot: &str) -> Option<u64> {
     let b = resolve_slot(&doc.slots, slot)?;
     let p = doc.providers.iter().find(|p| p.id == b.provider_id)?;
     max_output_of(p, &b.model)
+}
+
+/// 槽位 → 模型展示名（gap B2/B6；调用方先 [`load`] 一次再逐行解析：消息头、成员悬停卡）。展示名空则用模型 id；
+/// 链断任一环 → None（界面不显示模型，不猜）。回退仍只走 [`resolve_slot`]（D13）。
+pub(crate) fn model_label_in(doc: &ProviderDoc, slot: &str) -> Option<String> {
+    let b = resolve_slot(&doc.slots, slot)?;
+    let p = doc.providers.iter().find(|p| p.id == b.provider_id)?;
+    let named = p
+        .models
+        .iter()
+        .find(|m| m.id == b.model)
+        .and_then(|m| m.name.clone())
+        .filter(|n| !n.trim().is_empty());
+    Some(named.unwrap_or_else(|| b.model.clone()))
 }
 
 #[cfg(test)]

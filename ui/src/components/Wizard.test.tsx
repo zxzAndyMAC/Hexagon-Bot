@@ -104,6 +104,30 @@ describe('向导创建进度（票 14）', () => {
     await act(async () => { root.unmount() })
   })
 
+  // gap B5（2026-10-15）：「写入角色」行带计数（entry#wz-flow「9 / 9」）；票 10 时不显示计数
+  it('写入角色行进行中写 0 / N，完成写 N / N（N = 提交的角色数）', async () => {
+    let proceed: () => void = () => {}
+    let sent = 0
+    vi.spyOn(api, 'createProject').mockImplementation(async (opts, onStep) => {
+      sent = opts.roles.length
+      onStep?.('check_dir')
+      onStep?.('git')
+      await new Promise<void>((resolve) => { proceed = resolve })
+      onStep?.('persist_roles')
+      await new Promise(() => {})
+    })
+    const { el, root } = await render(<Wizard onDone={vi.fn()} />)
+    await reachConfirm(el)
+    await clickButton(el, '创建项目')
+    const count = () => el.querySelector('[data-create-step="persist_roles"] [data-role-count]')?.textContent
+    expect(sent).toBeGreaterThan(0)
+    expect(count()).toBe(`0 / ${sent}`)
+    await act(async () => { proceed() })
+    expect(count()).toBe(`${sent} / ${sent}`)
+    expect(el.querySelector('[data-create-step="git"] [data-role-count]')).toBeNull()
+    await act(async () => { root.unmount() })
+  })
+
   it('五步都完成后才进入工作台', async () => {
     vi.spyOn(api, 'createProject').mockImplementation(async (_opts, onStep) => {
       for (const step of CREATE_STEPS) onStep?.(step)
