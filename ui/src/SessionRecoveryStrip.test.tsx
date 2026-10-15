@@ -148,6 +148,16 @@ describe('SessionHost recovery strip (C12a/C12b)', () => {
     expect(spy).toHaveBeenCalled()
   })
 
+  // 票 13（SessionHost 影响审查 2026-10-13）：工作树动作失败走失败 toast，事实漂移写原因码（D8）。
+  it('surfaces a worktree drift failure as an error toast carrying worktree_binding_drift', async () => {
+    useUiStore.setState({ toasts: [] })
+    vi.spyOn(api, 'sessionVerifyWorktree').mockRejectedValue({ code: 'worktree_binding_drift', message: 'worktree HEAD moved' })
+    await render({ ...base, session: { ...base.session!, worktree_intent: { operation: 'create', question_id: 'q1', path: '/work/demo-worktrees/x', baseline_commit: 'abc', state: 'executing', reason_code: null } }, next_action: 'verify_worktree' })
+    const verify = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Verify result')!
+    await act(async () => { verify.click() })
+    expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ tone: 'err', code: 'worktree_binding_drift' })
+  })
+
   it('derives the default worktree path outside the project root', () => {
     expect(defaultWorktreePath({ project_root: '/work/demo/', session_id: 'session-1a2b3c4d5e' })).toBe('/work/demo-worktrees/1a2b3c4d')
   })

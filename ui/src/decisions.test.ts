@@ -89,6 +89,15 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).toHaveBeenCalledWith('q1')
   })
 
+  // 票 13：工作树确认时事实已漂移、core 收起了卡——红字无处可挂，失败 toast 写原因码（D8 worktree_binding_drift）。
+  it('worktree 确认时事实已漂移：卡已不在，失败 toast 写原因码', async () => {
+    vi.spyOn(api, 'confirmWorktree').mockRejectedValue({ code: 'worktree_binding_drift', message: 'worktree HEAD moved' })
+    useUiStore.setState({ pending: [] })
+    const wt = card({ kind: 'worktree', payload: { operation: 'create', path: '/w', baseline_commit: 'abc' } })
+    await handlePendingKey(key('Enter'), [wt])
+    expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ tone: 'err', code: 'worktree_binding_drift' })
+  })
+
   it('worktree 确认卡：批准键走 confirmWorktree，驳回键走 rejectWorktree，与发布同属最高档', async () => {
     const confirm = vi.spyOn(api, 'confirmWorktree').mockResolvedValue({} as never)
     const reject = vi.spyOn(api, 'rejectWorktree').mockResolvedValue(undefined)

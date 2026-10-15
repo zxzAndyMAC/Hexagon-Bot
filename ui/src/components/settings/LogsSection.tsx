@@ -11,6 +11,7 @@ import { Dot } from '@/components/ui/dot'
 import { IconButton } from '@/components/ui/icon-button'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import { Icon } from '../Icon'
 import { cn } from '@/lib/utils'
 import { Empty } from './kit'
@@ -98,7 +99,8 @@ export function LogsSection({ projectless = false }: { projectless?: boolean }) 
         {needProject ? (
           <Empty icon="folder" title={t('settingsUi.needsProjectTitle')} desc={t('settings.logs_needProject')} />
         ) : rows.length === 0 ? (
-          <Empty icon="logs" title={t('settings.logs_empty')} desc={t('settingsUi.logsEmptyHint')} />
+          <Empty icon="logs" title={t('settings.logs_empty')} desc={t('settingsUi.logsEmptyHint')}
+            action={<Button size="sm" onClick={refresh}>{t('settings.logs_refresh')}</Button>} />
         ) : (
           <table className={tableCls.table}>
             <thead className="sticky top-0 bg-[var(--app-card)]">

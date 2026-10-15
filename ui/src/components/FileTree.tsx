@@ -7,6 +7,7 @@ import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
 import { Row } from './Row'
 import { Button } from '@/components/ui/button'
+import { Empty } from '@/components/ui/empty'
 import { IconButton } from '@/components/ui/icon-button'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -155,7 +156,9 @@ export function FileTree() {
         </form>
       )}
       <div role="tree" aria-label={t('sidebar.files')} className="min-h-0 flex-1 overflow-y-auto">
-        {root?.length === 0 && <div className="px-2 py-3 text-[12.5px] text-ink-3">{t('tree.emptyDir')}</div>}
+        {/* A19 小号（票 13）：说明为什么空 + 一个动作 */}
+        {root?.length === 0 && !creating && <Empty size="sm" icon="folder" title={t('tree.emptyDir')} desc={t('feedback.treeEmptyBody')}
+          action={<Button size="sm" onClick={() => { setCreating('file'); setDraft('') }}>{t('tree.newFile')}</Button>} />}
         {root == null && <div className="flex items-center gap-2 px-2 py-3 text-[12.5px] text-ink-3"><Spinner size={12} />{t('file.loading')}</div>}
         {root && (
           <TreeList

@@ -3,6 +3,7 @@ import { api, errText, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, matches } from './keymap'
 import i18n from './i18n'
+import { toastError } from './toast'
 
 // 严重度序：恢复/失速/发布/安装 > 阶段盖章 > 升级 > 权限 > 提案盖章
 // 失速与恢复同档：两者都是「工作停了，不点不会自己动」（ADR 0074）。
@@ -41,10 +42,12 @@ export async function settleDecision(id: string, run: () => Promise<unknown>): P
   const st = useUiStore.getState()
   st.hidePending(id)
   let failure: string | null = null
+  let caught: unknown
   try {
     await run()
     if (useUiStore.getState().pendingError?.id === id) useUiStore.getState().notePendingError(null)
   } catch (e) {
+    caught = e
     failure = i18n.t('errors.actionFailed', { detail: errText(e) })
     useUiStore.getState().notePendingError({ id, text: failure })
   } finally {
@@ -53,7 +56,8 @@ export async function settleDecision(id: string, run: () => Promise<unknown>): P
   }
   // 失败但卡已不在（例：工作树确认时事实漂移，core 收起了卡——D8 `worktree_binding_drift`）：
   // 红字无处可挂，原因走 toast，不能静默。
-  if (failure && !useUiStore.getState().pending.some((q) => q.id === id)) useUiStore.getState().pushToast(failure, 'err')
+  // 票 13：toast 写已登记原因码（toastError），漂移时即「…（worktree_binding_drift）」。
+  if (failure && !useUiStore.getState().pending.some((q) => q.id === id)) toastError(caught, { wrap: 'errors.actionFailed' })
   return failure == null
 }
 
@@ -194,6 +198,7 @@ export type KeyOutcome =
   | 'blocked-policy'
   | 'approved'
   | 'rejected'
+  | 'failed'
 
 export async function handlePendingKey(
   e: KeyboardEvent,
@@ -254,6 +259,11 @@ export async function handlePendingKey(
     if (toastOnly(q, isApprove)) await decide(q)
     else await settleDecision(q.id, () => decide(q))
     return isApprove ? 'approved' : 'rejected'
+  } catch (e) {
+    // 票 13：只提示类卡（不经 settleDecision）的键盘裁决失败与点按钮同一出口——失败 toast（role=alert）+ 已登记原因码。
+    // 曾经的写法：没有 catch，App 的 `void onKey(e)` 把拒绝吞成未处理 Promise，负责人无感知。
+    toastError(e, { wrap: 'errors.actionFailed' })
+    return 'failed'
   } finally {
     adjudicating = false
   }

@@ -21,15 +21,20 @@ describe('共享原语（ui-audit 票 01）', () => {
     expect(useUiStore.getState().modalScope).toBe('workbench')
   })
 
-  it('pushToast 入栈并按超时自动消退', () => {
+  // 票 13（A18 Sonner 形制，ADR 0051 规范为准）：store 只入栈不计时——约 3.5s 消失与悬停暂停归 ToastHost/Sonner
+  // （见 ToastHost.test「约 3.5s 后出队」）。原断言「store 3.6s 后自动清空」随之改为「不自行清空，dismissToast 出队」。
+  it('pushToast 入栈；寿命归 ToastHost，dismissToast 出队', () => {
     vi.useFakeTimers()
     try {
       const s = useUiStore.getState()
       s.pushToast('失败一', 'err')
-      s.pushToast('完成', 'ok')
+      s.pushToast('完成', 'ok', { action: { label: '撤回', run: () => {} } })
       expect(useUiStore.getState().toasts).toHaveLength(2)
       expect(useUiStore.getState().toasts[0].tone).toBe('err')
+      expect(useUiStore.getState().toasts[1].action?.label).toBe('撤回')
       vi.advanceTimersByTime(3600)
+      expect(useUiStore.getState().toasts).toHaveLength(2)
+      for (const t of useUiStore.getState().toasts) s.dismissToast(t.id)
       expect(useUiStore.getState().toasts).toHaveLength(0)
     } finally {
       vi.useRealTimers()

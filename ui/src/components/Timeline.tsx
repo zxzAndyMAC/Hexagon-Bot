@@ -13,16 +13,18 @@ import { api, errText, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useUiStore } from '../store'
-import { buildRows, expandedAfterPrepend, nodeMarks, NODE_ICONS, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, isManagedDecision, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
+import { buildRows, compactMarks, expandedAfterPrepend, markHighlights, nodeMarks, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, isManagedDecision, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
-import { Row } from './Row'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { pairToolCalls, toolOutcome, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
 import { CallStatus, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
-import { showStickButton, TIMELINE_TAIL_PX } from '../timelineStick'
+import { freshTally, jumpFace, showStickButton, TIMELINE_TAIL_PX } from '../timelineStick'
+import { JumpAnnouncer, JumpToLatest } from './JumpToLatest'
+import { useJumpOffset } from '../useJumpOffset'
+import { NodeRail } from './NodeRail'
 import type { TFunction } from 'i18next'
 import './timeline.css'
 import { Avatar as Face } from './ui/avatar'
@@ -39,6 +41,8 @@ import { useDelegation } from '../useDelegation'
 import { ManagedRow } from './ManagedRow'
 import { ManagedReport } from './ManagedReport'
 import { parseTime } from '../usage'
+import { SkeletonRows } from '@/components/ui/skeleton'
+import { InlineError } from '@/components/ui/inline-error'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
 // console.warn 一次/key，开发期漏译能被看见而不是静默吞掉。
@@ -710,86 +714,6 @@ const TurnSummaryRow = memo(function TurnSummaryRow({
   )
 })
 
-// ---- 语义节点轨（hover 展开 / 点击跳转 / 待决脉动）----
-
-function NodeRail({ marks, onJump }: { marks: NodeMark[]; onJump: (m: NodeMark) => void }) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const listRef = useRef<HTMLDivElement>(null)
-  // ui-audit 票 12（P2-13）：mod+J 键盘入口——pulse 递增即展开轨道
-  // 并聚焦首条刻度（Row 原语：Tab 可达、Enter/Space 激活）。
-  // 渲染期比较（React 派生态模式）而非 effect-setState，避免 lint 噪声。
-  const pulse = useUiStore((s) => s.nodeRailPulse)
-  const [seenPulse, setSeenPulse] = useState(0)
-  if (pulse !== seenPulse) {
-    setSeenPulse(pulse)
-    if (pulse > 0) setOpen(true)
-  }
-  useEffect(() => {
-    if (!pulse) return
-    requestAnimationFrame(() => {
-      listRef.current?.querySelector<HTMLElement>('[tabindex]')?.focus()
-    })
-  }, [pulse])
-  useEffect(() => {
-    if (!open) return
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [open])
-  return (
-    <div
-      data-node-rail
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      style={{
-        position: 'absolute', right: 0, top: 0, bottom: 0, width: open ? 180 : 14,
-        zIndex: 20, display: 'flex', transition: 'width .15s',
-        background: open ? 'var(--popover)' : 'transparent', // 浮层规范（workbench-polish 01）：抽屉叠在事件流上，必须不透明
-        borderLeft: open ? '1px solid var(--border)' : 'none',
-      }}
-    >
-      {!open ? (
-        <div
-          title={`${t('rail.nodes')} ${formatBinding(bindingFor('nodeRail'))}`}
-          style={{ width: 14, height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, paddingTop: 40, overflow: 'hidden' }}
-        >
-          {marks.map((m, i) => (
-            // ADR 0056-3：待决=琥珀 accent（需人注意专色）；
-            // --warn 蓝留给 steering_queued 这类信息性排队态。
-            <span key={i} style={{ color: m.pending ? 'var(--legacy-accent)' : 'var(--text-3)', display: 'inline-flex' }}>
-              <Icon name={m.icon} size={8} />
-            </span>
-          ))}
-        </div>
-      ) : (
-        <div ref={listRef} role="listbox" style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <span className="dim3" style={{ fontSize: 10, fontWeight: 560 }}>{t('rail.nodes')}</span>
-            <button className="icon-btn" style={{ display: 'inline-flex', alignItems: 'center' }} onClick={() => setOpen(false)}><Icon name="close" size={9} /></button>
-          </div>
-          {marks.map((m, i) => (
-            <Row
-              key={i}
-              role="option"
-              onClick={() => { onJump(m); setOpen(false) }}
-              style={{
-                display: 'flex', gap: 6, alignItems: 'center', padding: '3px 4px', borderRadius: 4,
-                cursor: 'pointer', fontSize: 11,
-                color: m.pending ? 'var(--legacy-accent)' : 'var(--text)',
-                animation: m.pending ? 'pulse-amber 1.6s infinite' : undefined,
-              }}
-            >
-              <Icon name={m.icon} size={11} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.label}</span>
-            </Row>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ---- 流式气泡（票 03 + ui-audit 票 08 交接）：回合进行中的瞬时增量挂在
 // 时间线尾部；done 到达不删气泡——原地转落位样式（去掉 streaming 标签，
 // 与持久消息行同构同宽），等 refreshFast 拉到同 agent 持久消息才清除。
@@ -905,6 +829,9 @@ const EMPTY_TIMELINE: TimelineItem[] = []
 
 // ---- 主体 ----
 
+/** 对话列外侧至少留这么宽才显示节点轨（轨宽 36 + 右缘 14，扣掉列内 24 内距后再留一点呼吸）。 */
+const RAIL_SPARE_PX = 36
+
 export function Timeline() {
   const { t } = useTranslation()
   const { timeline: legacyTimeline, timelineCaughtUp, pending, streams, team, projectRoot, projectEpoch, timelineFacts } = useUiStore()
@@ -935,11 +862,28 @@ export function Timeline() {
     olderLoading: windowState.olderLoading, olderError: windowState.olderError,
     loadOlder: windowState.loadOlder, loadLatest: windowState.loadLatest,
     targetEventId: page?.target_event_id ?? null, stickReq })
-  const marks = useMemo(() => projectRoot != null ? [
-    ...(pending.length ? [{ rowIdx: -1, icon: 'warn' as const, label: String(pending.length), pending: true }] : []),
-    ...nodes.map(node => ({ eventId: node.event_id, rowIdx: rows.findIndex(row => rowContainsEvent(row, node.event_id)),
-      icon: NODE_ICONS[node.kind] ?? 'list', label: node.label })),
-  ] : nodeMarks(timeline, rows, pending.length), [projectRoot, nodes, rows, pending.length, timeline])
+  // 票 06（C15）：宿主节点读给完整历史的基础刻度；负责人发言 / 托管决定 / 失败从已加载窗口派生；跟随筛选；超 40 道合并事件刻度。
+  const marks = useMemo(() => compactMarks(nodeMarks(timeline, rows, pending.length,
+    { hostNodes: projectRoot != null ? nodes : undefined, filter })), [projectRoot, nodes, rows, pending.length, timeline, filter])
+  const [range, setRange] = useState<{ start: number; end: number } | null>(null)
+  const highlights = useMemo(() => markHighlights(marks, range), [marks, range])
+  const areaRef = useRef<HTMLDivElement>(null)
+  const jumpBottom = useJumpOffset(areaRef)
+  const [compactRail, setCompactRail] = useState(false)
+  useLayoutEffect(() => {
+    const el = areaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    // 窗口过窄或画布挤占：对话列两侧放不下轨道（右缘 14 + 轨宽 36 + 与列的间距）时收起（C15 禁用态）。
+    const measure = () => {
+      const col = el.querySelector<HTMLElement>('.tl-col')
+      const spare = (el.clientWidth - (col?.offsetWidth ?? 0)) / 2
+      setCompactRail(el.clientWidth > 0 && spare < RAIL_SPARE_PX)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    measure()
+    return () => observer.disconnect()
+  }, [])
   const { steered, turnBoundary } = useMemo(() => {
     const injected = new Set<number>(page?.steered_message_ids ?? [])
     let boundary = timelineFacts?.latest_turn_start_id ?? -1
@@ -957,7 +901,10 @@ export function Timeline() {
   const [seenWatermark, setSeenWatermark] = useState(watermark)
   useEffect(() => { if (viewport.pinned) setSeenWatermark(watermark) }, [viewport.pinned, watermark])
   useEffect(() => { setSeenWatermark(watermark) }, [windowState.generation])
-  const unseen = Math.max(0, watermark - seenWatermark)
+  // 票 06（C14）：计数只算消息 / 决策 / 交付（freshTally）；有流式输出时「某某 正在回复」优先。
+  const streamDone = useUiStore(s => s.streamDone)
+  const replying = Object.keys(streams).filter(agent => !streamDone[agent]).at(-1) ?? null
+  const face = useMemo(() => jumpFace(freshTally(timeline, seenWatermark), replying), [timeline, seenWatermark, replying])
   useEffect(() => { viewport.writeTail() }, [streams, viewport.writeTail])
   useEffect(() => {
     if (jumpTarget == null || filter !== 'all') return
@@ -1024,10 +971,11 @@ export function Timeline() {
     return () => window.removeEventListener(TIMELINE_JUMP_EVENT, handler)
   }, [jumpToEvent])
   const jump = useCallback((mark: NodeMark) => {
-    if (mark.eventId != null) jumpToEvent(mark.eventId)
+    // 票 06：待决刻度代表「现在」，待决在坞里——点它展开坞，而不是跳到时间线顶。
+    if (mark.pending) useUiStore.getState().openPendingDialog()
+    else if (mark.eventId != null) jumpToEvent(mark.eventId)
     else if (mark.rowIdx >= 0) jumpToEvent(rows[mark.rowIdx].idx)
-    else viewport.jumpToRow(0)
-  }, [jumpToEvent, rows, viewport.jumpToRow])
+  }, [jumpToEvent, rows])
   // 轨迹导出（US54）：kind 过滤随当前筛选档；Tauri 走保存对话框，浏览器 dev 合成 Blob 下载
   const doExport = useCallback(async () => {
     const kinds = filter === 'messages' ? ['owner_message', 'agent_message']
@@ -1149,7 +1097,7 @@ export function Timeline() {
             : <ReturnSummaryCard key={pinned.event.id} item={pinned} items={timeline} onJumpEvent={jumpToEvent} />}
         </div>
       )}
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      <div ref={areaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div aria-busy={windowState.loading || !viewport.ready} style={{ height: '100%', visibility: viewport.ready ? 'visible' : 'hidden' }}>
         <Virtuoso
           key={windowState.generation}
@@ -1165,59 +1113,38 @@ export function Timeline() {
           // 不满一屏顶对齐（不要 alignToBottom）。贴底由 writeTail 写 scrollHeight，
           // followOutput 看不见 Footer 里的留白带，会把最新一行贴回输入框。
           followOutput={false}
+          // 票 06（C15 视口内提亮）：可见行范围换算回 rows 下标（firstItemIndex 是前插补偿的偏移）。
+          rangeChanged={({ startIndex, endIndex }) => setRange({ start: startIndex - viewport.firstItemIndex, end: endIndex - viewport.firstItemIndex })}
           itemContent={(_i, row) => <div data-timeline-row={rowKey(row)} data-timeline-event={row.type === 'item' || row.type === 'chapter' ? row.idx : undefined} className={`tl-col${flash === rowKey(row) ? ' flash-row' : ''}`}>{rowContent(row)}</div>}
         />
         </div>
         {/* A20：首屏用骨架；读取失败是 C5 行内错误 + 重试，不伪装成空时间线 */}
-        {!viewport.ready && <div role={windowState.error ? 'alert' : 'status'} aria-label={windowState.error ? undefined : t('timeline.loadingRecent')} style={{ position: 'absolute', inset: 0, background: 'var(--app-main)' }}>
+        {!viewport.ready && <div role={windowState.error ? undefined : 'status'} aria-label={windowState.error ? undefined : t('timeline.loadingRecent')} style={{ position: 'absolute', inset: 0, background: 'var(--app-main)' }}>
           {windowState.error
-            ? <div className="tl-col"><div className="sysrow tl-sys risk"><span className="tl-sys-l">{t('timeline.loadFailed')} · <button type="button" className="tl-link" title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button></span></div></div>
-            : <div className="tl-col"><SkeletonRows /></div>}
+            ? <div className="tl-col pt-3"><InlineError title={t('timeline.loadFailed')} onRetry={() => void windowState.retry()} retryLabel={t('timeline.retry')} retryTitle={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} /></div>
+            : <div className="tl-col" aria-busy="true"><SkeletonRows /></div>}
         </div>}
         {/* Owner 2026-10-02: upward intent loads history; only progress or recovery needs a floating surface. */}
         {viewport.ready && (windowState.olderLoading || windowState.olderError || windowState.tailError) &&
           <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21, background: 'var(--app-main)' }}>
             <div className="tl-col">
-              {windowState.olderLoading ? <div role="status" aria-label={t('timeline.loadingOlder')}><SkeletonRows count={1} /></div>
-                : <div className="sysrow tl-sys" role="alert"><span className="tl-sys-l">
-                    {windowState.tailError ? t('timeline.loadFailed') : t('timeline.olderFailedLabel')} · <button type="button" className="tl-link"
-                      title={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} onClick={() => void windowState.retry()}>{t('timeline.retry')}</button>
-                  </span></div>}
+              {windowState.olderLoading ? <div role="status" aria-busy="true" aria-label={t('timeline.loadingOlder')}><SkeletonRows count={1} /></div>
+                : <InlineError variant="row" title={windowState.tailError ? t('timeline.loadFailed') : t('timeline.olderFailedLabel')}
+                    onRetry={() => void windowState.retry()} retryLabel={t('timeline.retry')} retryTitle={`${t('timeline.retry')} ${formatBinding(bindingFor('timelineRetry'))}`} />}
             </div>
           </div>}
 
-        {/* 松钉且高过窗口才显。不满一屏钉着、按钮藏着。（位置与三态属票 06 回到底部） */}
+        {/* 松钉且高过窗口才显，不满一屏钉着、按钮藏着（贴底语义不变：showStickButton / holdPin）。
+            票 06（C14）：对话列正中、最上一块底部表面上方 12px；三态见 JumpToLatest。 */}
         {viewport.ready && (page?.has_after || showStickButton(viewport.pinned, viewport.overflow)) && (
-          <button
-            className="btn primary"
-            style={{ position: 'absolute', bottom: 12, right: 14, zIndex: 30, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 'var(--r-pill)', boxShadow: '0 4px 14px rgba(0,0,0,.3)' }}
-            title={`${t('timeline.toBottom')} ${formatBinding(bindingFor('timelineLatest'))}`}
-            onClick={viewport.holdPin}
-          >
-            <Icon name="arrow-down" size={11} />{unseen > 0 ? ` ${t('timeline.newEvents', { count: unseen })}` : ''}
-          </button>
+          <JumpToLatest face={face} bottom={jumpBottom} onClick={viewport.holdPin} />
         )}
-        {viewport.ready && <NodeRail marks={marks} onJump={jump} />}
+        <JumpAnnouncer face={face} />
+        {viewport.ready && <NodeRail marks={marks} highlights={highlights} compact={compactRail} onJump={jump} />}
       </div>
     </div>
     </FreshContext.Provider>
     </TooltipProvider>
-  )
-}
-
-/** A20 骨架：头像块 + 三条（feedback#loading「时间线首屏 / 补载更早内容」）。 */
-function SkeletonRows({ count = 3 }: { count?: number }) {
-  return (
-    <>
-      {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="tl-skl" aria-hidden>
-          <i className="av" />
-          <div className="tl-grow" style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
-            <i style={{ width: '40%' }} /><i style={{ width: '90%' }} /><i style={{ width: '70%' }} />
-          </div>
-        </div>
-      ))}
-    </>
   )
 }
 

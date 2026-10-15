@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText } from '../api'
+import { api } from '../api'
+import { toastError } from '../toast'
 import { useUiStore } from '../store'
 import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
 import { useDelegation, useManagedHistory } from '../useDelegation'
@@ -39,7 +40,7 @@ export function ManagedPill() {
       await apply(async root => { await write(root); return api.projectDelegation() })
       return true
     } catch (error) {
-      useUiStore.getState().pushToast(errText(error), 'err')
+      toastError(error)
       return false
     } finally { setBusy(null) }
   }

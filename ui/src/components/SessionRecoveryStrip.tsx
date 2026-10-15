@@ -4,7 +4,8 @@
 import { useEffect, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { api, errText } from '../api'
+import { api } from '../api'
+import { toastError } from '../toast'
 import { bindingFor, matches } from '../keymap'
 import { useUiStore } from '../store'
 import type { CapabilityStatus } from '../gen/CapabilityStatus'
@@ -14,6 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { CodeChip } from '@/components/ui/code-chip'
+import { InlineError } from '@/components/ui/inline-error'
 import { Input } from '@/components/ui/input'
 import { ShortcutKbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -99,7 +101,9 @@ export function SessionRecoveryStrip() {
       if (done) useUiStore.getState().pushToast(t(done))
       await refreshFast()
     } catch (e) {
-      useUiStore.getState().pushToast(errText(e), 'err')
+      // 票 13（SessionHost 影响审查 2026-10-13）：恢复条动作失败统一走失败 toast（role=alert），
+      // 已登记的原因码（如 worktree_binding_drift，D8）随文案写出。
+      toastError(e)
     } finally {
       setBusy(null)
     }
@@ -139,11 +143,9 @@ export function SessionRecoveryStrip() {
   if (!session) {
     return (
       <Card surface="raised" className="mb-2" aria-live="polite" aria-label={t('session.ariaLabel')} data-session-recovery>
-        <CardContent className="flex items-center gap-2" role="alert">
-          <Icon name="warn" size={16} className="text-red" />
-          <span className="text-[13px] font-medium">{t('session.error')}</span>
-          <span className="text-[12px] text-ink-3">{error}</span>
-          <Button size="sm" className="ml-auto" onClick={() => void refreshFast()}>{t('session.retry')}</Button>
+        {/* C12a 错误行 / C5（票 13）：摘要读取失败卡内块形 + 重试；不伪装「无事发生」 */}
+        <CardContent>
+          <InlineError title={t('session.error')} meta={error} onRetry={() => void refreshFast()} retryLabel={t('session.retry')} />
         </CardContent>
       </Card>
     )
