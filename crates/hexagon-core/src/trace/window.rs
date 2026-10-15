@@ -8,6 +8,9 @@ use rusqlite::{params, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod nodes;
+pub use nodes::*;
+
 const SELECT: &str =
     "SELECT e.id,e.project_id,e.stage_run_id,e.agent_id,e.kind,e.payload,e.created_at,
  m.id,m.author,m.body,m.tokens,m.created_at,m.attachments,m.thinking,m.element_refs
@@ -184,30 +187,6 @@ pub struct TimelineLatestPlan {
     pub event_id: i64,
     pub text: String,
 }
-#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../ui/src/gen/")]
-pub struct TimelineNodesRequest {
-    pub expected_project_root: String,
-    #[ts(type = "number | null")]
-    pub after_event_id: Option<i64>,
-}
-#[derive(Debug, Serialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../ui/src/gen/")]
-pub struct TimelineNodesPage {
-    pub project_root: String,
-    #[ts(type = "number")]
-    pub watermark: i64,
-    pub nodes: Vec<TimelineNode>,
-}
-#[derive(Debug, Serialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../ui/src/gen/")]
-pub struct TimelineNode {
-    #[ts(type = "number")]
-    pub event_id: i64,
-    pub kind: EventKind,
-    pub label: String,
-}
-
 fn items(
     db: &Db,
     project: &str,
@@ -637,51 +616,5 @@ fn valid_context(value: &serde_json::Value) -> Option<ContextSnapshot> {
         window_tokens,
         compact_at_tokens: usize::try_from(value.get("compact_at_tokens")?.as_u64()?).ok()?,
         model_slot: value.get("model_slot")?.as_str()?.to_owned(),
-    })
-}
-
-pub fn nodes(
-    db: &Db,
-    project: &str,
-    request: &TimelineNodesRequest,
-) -> Result<TimelineNodesPage, String> {
-    let transaction = db
-        .conn()
-        .unchecked_transaction()
-        .map_err(|e| e.to_string())?;
-    let result = nodes_inner(db, project, request).map_err(|e| e.to_string())?;
-    transaction.commit().map_err(|e| e.to_string())?;
-    Ok(result)
-}
-fn nodes_inner(
-    db: &Db,
-    project: &str,
-    request: &TimelineNodesRequest,
-) -> Result<TimelineNodesPage, TraceError> {
-    let mark = watermark(db, project)?;
-    let mut statement = db.conn().prepare("SELECT id,kind,CAST(COALESCE(json_extract(payload,'$.stage'),json_extract(payload,'$.path'),json_extract(payload,'$.flag_id'),kind) AS TEXT) FROM events WHERE project_id=?1 AND id>?2 AND id<=?3 AND kind IN ('stage_started','stamped','artifact_delivered','flag_submitted','flag_adjudicated','escalated','check_overridden','install_completed') ORDER BY id")?;
-    let rows = statement.query_map(
-        params![project, request.after_event_id.unwrap_or(0), mark],
-        |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        },
-    )?;
-    let mut nodes = Vec::new();
-    for row in rows {
-        let (event_id, kind, label) = row?;
-        nodes.push(TimelineNode {
-            event_id,
-            kind: serde_json::from_value(serde_json::Value::String(kind))?,
-            label,
-        });
-    }
-    Ok(TimelineNodesPage {
-        project_root: request.expected_project_root.clone(),
-        watermark: mark,
-        nodes,
     })
 }

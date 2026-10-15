@@ -5614,6 +5614,9 @@ pub fn timeline_nodes(
 }
 
 #[cfg(test)]
+#[path = "api/timeline_nodes_tests.rs"]
+mod timeline_nodes_tests;
+#[cfg(test)]
 #[path = "api/timeline_window_tests.rs"]
 mod timeline_window_tests;
 
