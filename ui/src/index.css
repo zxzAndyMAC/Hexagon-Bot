@@ -652,6 +652,19 @@ input, textarea { font: inherit; color: var(--text); }
 .msg-body a { color: var(--legacy-accent); text-decoration: underline; text-underline-offset: 2px; }
 .msg-body hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
 .msg-body img { max-width: 100%; border-radius: var(--r-md, 8px); }
+/* 票 09 画布内容：文件 / 产物的 Markdown 预览复用 msg-body 排版，但不是聊天气泡——
+   曾经直接套 msg-body，气泡的 7px 12px 内边距/底色/描边/78% 宽盖掉了 px-7 py-5（未分层 CSS 胜过
+   Tailwind 工具类），预览缩成一只贴边气泡、列表无项目符号。规范 B7 编辑器：16/600 标题、13.5/1.7 段落，
+   原型 padding 22px 28px、正文限宽 640。 */
+.msg-body.md-doc {
+  max-width: none; max-height: none; padding: 22px 28px; border: 0; border-radius: 0;
+  background: transparent; font-size: 13.5px; line-height: 1.7;
+}
+.msg-body.md-doc > * { max-width: 640px; }
+.msg-body.md-doc h1, .msg-body.md-doc h2, .msg-body.md-doc h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+.msg-body.md-doc p { margin: 0 0 10px; }
+.msg-body.md-doc ul { list-style: disc; }
+.msg-body.md-doc ol { list-style: decimal; }
 /* StreamingText 票 06（beautiful-ui 借形）：live 正文——最新块浮入 + 尾端光标。
    粒度=块级：Md 每次整文重渲拿不到词级；:last-child 只标最新挂载块，
    段落边界跨过时新块播一次 stream-in，旧块动画已完不重放（票面接受的妥协）。*/

@@ -208,7 +208,7 @@ export function ArtifactTab({ path }: { path: string }) {
         {mode === 'content'
           ? (textB != null
               ? (isMd && mdView === 'preview'
-                  ? <div className="msg-body min-h-0 flex-1 overflow-y-auto px-7 py-5" style={{ maxWidth: 'none', maxHeight: 'none' }}><Md>{textB}</Md></div>
+                  ? <div className="msg-body md-doc min-h-0 flex-1 overflow-y-auto"><Md>{textB}</Md></div>
                   : <CodeView text={textB} lang={langFor(path)} label={path} />)
               : <div className="p-3.5 text-[12.5px] text-ink-3">{t('art.unavailable')}</div>)
           : (textA != null && textB != null

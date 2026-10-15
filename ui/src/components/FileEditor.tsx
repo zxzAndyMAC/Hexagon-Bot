@@ -319,7 +319,7 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
           </div>
         )}
         {text != null && mode === 'preview' && (
-          <div ref={previewRef} data-file-preview className="msg-body min-h-0 flex-1 overflow-y-auto px-7 py-5" style={{ maxWidth: 'none' }}>
+          <div ref={previewRef} data-file-preview className="msg-body md-doc min-h-0 flex-1 overflow-y-auto">
             <Md>{buf}</Md>
           </div>
         )}
