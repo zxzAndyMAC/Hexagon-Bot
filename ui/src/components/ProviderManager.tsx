@@ -5,7 +5,8 @@
 // 数据语义：非密配置存 providers.json；key 使用 active CredentialStore（provider/<id>）。
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type ModelEntry, type ProviderView, type ProvidersView, type RoleDef } from '../api'
+import { api, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
+import { isLocalEndpoint } from '../providerGate'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
 import { BUILTIN_SLOTS, DEDICATED_PREFIX, isBuiltinSlot, isDedicatedSlot } from '../modelpick'
@@ -20,24 +21,8 @@ import { Switch } from '@/components/ui/switch'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { DetailHead, Empty, ListDetail, SubHead } from './settings/kit'
 
-/// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。
-const PRESETS: { name: string; kind: ProviderView['kind']; base_url: string; model?: string }[] = [
-  { name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', model: 'jev-latest' },
-  { name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1' },
-  { name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com' },
-  { name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1' },
-  { name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com/v1' },
-  { name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1' },
-  { name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4' },
-  { name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1' },
-  { name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1' },
-  { name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1' },
-  { name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1' },
-  { name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai' },
-  { name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1' },
-  { name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1' },
-]
-
+/// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。gap B13（2026-10-15）：原先是这里一份
+/// 14 条硬编码表，与向导读的 core provider_presets（5 条）各说各话；现在两边只读 core 那一份。
 const CAP_ICONS: Record<string, IconName> = {
   web: 'web', vision: 'vision', reasoning: 'reasoning', tools: 'tool', free: 'free',
   text_generation: 'tool', classification: 'tool', ocr: 'vision', json_mode: 'tool',
@@ -66,6 +51,7 @@ export function ProviderManager() {
   const { t } = useTranslation()
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [roles, setRoles] = useState<RoleDef[]>([])
+  const [presets, setPresets] = useState<ProviderPreset[]>([])
   const [sel, setSel] = useState<string>('') // provider id / 'preset:<name>' / 'new'
   const [draft, setDraft] = useState<ProviderView | null>(null)
   const [secret, setSecret] = useState('')
@@ -93,11 +79,15 @@ export function ProviderManager() {
   useEffect(() => {
     reload()
     api.presetRoles().then(setRoles).catch(() => {})
+    // 预设只是填表建议：读不到就只剩已配置 + 「添加供应商」手填，不挡这一页。
+    api.providerPresets().then(setPresets).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 已配置的按 id（预设 id 即保存后的供应商 id）或同名（gap B13 前按名称 slug 存下的旧供应商）排除。
   const configuredNames = useMemo(() => new Set(doc.providers.map((p) => p.name)), [doc])
-  const unconfiguredPresets = PRESETS.filter((p) => !configuredNames.has(p.name))
+  const unconfiguredPresets = presets.filter((p) =>
+    !configuredNames.has(p.name) && !doc.providers.some((x) => x.id === p.id))
   const selConfigured = draft ? doc.providers.some((p) => p.id === draft.id) : false
 
   const pick = (s: string) => {
@@ -109,13 +99,14 @@ export function ProviderManager() {
     if (s === 'new') {
       setDraft(emptyDef())
     } else if (s.startsWith('preset:')) {
-      const p = PRESETS.find((x) => x.name === s.slice(7))
+      const p = presets.find((x) => x.id === s.slice(7))
       setDraft(p ? {
         ...emptyDef(),
+        id: p.id,
         name: p.name,
         kind: p.kind,
         base_url: p.base_url,
-        models: p.model ? [{ ...emptyModel(), id: p.model, name: 'Jev', group: 'typesafe' }] : [],
+        models: p.default_model ? [{ ...emptyModel(), id: p.default_model, name: null, group: null }] : [],
       } : null)
     } else {
       const p = doc.providers.find((x) => x.id === s)
@@ -256,7 +247,7 @@ export function ProviderManager() {
   })()
 
   // ui-audit-2 票 10：本地端点（Ollama/LM Studio）不需要 key——检测不禁用
-  const needsKey = !!draft && !/^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])/i.test(draft.base_url)
+  const needsKey = !!draft && !isLocalEndpoint(draft.base_url)
   const probeDisabled = busy || !draft || (needsKey && !draft.key_set && !secret.trim())
 
   // 槽位绑定汇总：扫一眼知道「还差几步」
@@ -277,12 +268,11 @@ export function ProviderManager() {
   // ui-redesign 票 11（settings#models，components E2 + E3 + A21）：列表 =「已配置 / 内置目录」两组（状态点
   // ● 已存钥匙 / ◐ 缺钥匙橙 / ○ 停用 + 字母头像 + 行内开关），详情 = 头（大字母头像 + 名 + 端点「· 自动推导」+ 删除）、
   // API Key 与「检测并拉取模型」、模型卡（等宽名 + 窗口 chip + 能力图标 + 编辑）、槽位绑定表。
-  type Item = { key: string; preset: boolean; p: ProviderView | (typeof PRESETS)[number] }
+  type Item = { key: string; preset: boolean; p: ProviderView | ProviderPreset }
   const items: Item[] = [
     ...doc.providers.map((p) => ({ key: p.id, preset: false, p })),
-    ...unconfiguredPresets.map((p) => ({ key: `preset:${p.name}`, preset: true, p })),
+    ...unconfiguredPresets.map((p) => ({ key: `preset:${p.id}`, preset: true, p })),
   ]
-  const isLocal = (url: string) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])/i.test(url)
 
   const modelEditor = editModel && (
     <div data-model-editor className="mt-1 mb-2 rounded-[var(--r-card)] bg-surface p-3.5 shadow-[var(--focus-ring)]">
@@ -403,7 +393,7 @@ export function ProviderManager() {
             <>
               <span className="grid size-[18px] flex-none place-items-center rounded-[5px] bg-hover-2 text-[10px] font-semibold text-ink-2">{it.p.name.slice(0, 1)}</span>
               <div className="min-w-0 flex-1 truncate text-ink-3">{it.p.name}</div>
-              {isLocal(it.p.base_url) && <span className="text-[12px] text-ink-3">{t('settingsUi.local')}</span>}
+              {isLocalEndpoint(it.p.base_url) && <span className="text-[12px] text-ink-3">{t('settingsUi.local')}</span>}
             </>
           )
         }
@@ -412,7 +402,7 @@ export function ProviderManager() {
           <>
             {/* 配置状态点：●已配 key / ◐缺 key（橙）/ ○停用——不用点进去就知道能不能用 */}
             <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : t('providers.keyMissing')}>
-              <Dot tone={!p.enabled ? 'off' : p.key_set || isLocal(p.base_url) ? 'on' : 'warn'} />
+              <Dot tone={!p.enabled ? 'off' : p.key_set || isLocalEndpoint(p.base_url) ? 'on' : 'warn'} />
             </span>
             <Avatar agentId={p.id} name={p.name} size={18} />
             <div className="min-w-0 flex-1 truncate">{p.name}</div>

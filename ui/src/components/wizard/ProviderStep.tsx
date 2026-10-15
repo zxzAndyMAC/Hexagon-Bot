@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ProviderDef, type ProviderPreset, type ProviderView, type ProvidersView } from '../../api'
 import { useUiStore } from '../../store'
-import { providerStepReady } from '../../providerGate'
+import { providerStepReady, wizardPreset } from '../../providerGate'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -196,7 +196,8 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
   const { t } = useTranslation()
   const presets = usePresets()
   // 已有同 id 供应商的预设不再列——选它就是选那条已配置的，不另建一份。
-  const freshPresets = presets.filter((x) => !doc.providers.some((p) => p.id === x.id))
+  // gap B13：预设表与设置目录同一份，向导只取能当 default 主对话槽、要钥匙的子集（wizardPreset）。
+  const freshPresets = presets.filter((x) => wizardPreset(x) && !doc.providers.some((p) => p.id === x.id))
   const [picked, setPicked] = useState(() => initialChoice(doc))
   // 空表时默认落第一条预设（原型 entry#wz-provider 默认 Anthropic）；预设异步到达前先空着。
   const value = picked || (freshPresets[0] ? `preset:${freshPresets[0].id}` : 'custom')

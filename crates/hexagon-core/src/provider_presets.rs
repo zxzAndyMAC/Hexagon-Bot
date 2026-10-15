@@ -6,6 +6,13 @@
 //! providers.json，之后与手填的供应商没有区别。预设表只在 core 一处维护，设置页与
 //! 向导读同一份（`provider_presets` 读组命令，静态数据，不碰工作台）。
 //!
+//! gap B13（2026-10-15）：设置「模型服务」的内置目录原先是 UI 里一份 14 条的硬编码表
+//! （ProviderManager PRESETS），与这里的 5 条各说各话（DeepSeek 地址一个带 /v1 一个不带）。
+//! 现在两边只读这一份：设置目录列全部；向导只列「能当 default 主对话槽、且要钥匙」的子集——
+//! Jev（执行判定专用类型）与本地端点（Ollama / LM Studio，不需要钥匙，而向导放行要求钥匙已存）
+//! 由界面过滤掉。否决的替代：DTO 加 `wizard: bool` 标记——过滤条件能从 kind / base_url 推出，
+//! 再存一个布尔就是第二份真相。
+//!
 //! base URL 口径跟 `provider::HttpProvider` 的拼路径规则走：anthropic 类型自带 `/v1/messages`，
 //! 所以只写主机；openai 兼容类型拼 `/chat/completions`，所以写到版本前缀为止。
 
@@ -77,6 +84,73 @@ pub fn presets() -> Vec<ProviderPreset> {
             "https://openrouter.ai/api/v1",
             "",
         ),
+        // 以下来自设置页旧硬编码目录（gap B13 并表，地址原样沿用）。
+        // ai.google.dev/gemini-api/docs/openai：OpenAI 兼容端点。
+        preset(
+            "gemini",
+            "Gemini",
+            ProviderKind::OpenAi,
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "",
+        ),
+        preset(
+            "xai",
+            "xAI",
+            ProviderKind::OpenAi,
+            "https://api.x.ai/v1",
+            "",
+        ),
+        preset(
+            "groq",
+            "Groq",
+            ProviderKind::OpenAi,
+            "https://api.groq.com/openai/v1",
+            "",
+        ),
+        preset(
+            "mistral",
+            "Mistral",
+            ProviderKind::OpenAi,
+            "https://api.mistral.ai/v1",
+            "",
+        ),
+        preset(
+            "siliconflow",
+            "SiliconFlow",
+            ProviderKind::OpenAi,
+            "https://api.siliconflow.cn/v1",
+            "",
+        ),
+        preset(
+            "zhipu",
+            "Zhipu",
+            ProviderKind::OpenAi,
+            "https://open.bigmodel.cn/api/paas/v4",
+            "",
+        ),
+        // 本地端点：不需要钥匙；向导不列（见模块注释）。
+        preset(
+            "ollama",
+            "Ollama",
+            ProviderKind::OpenAi,
+            "http://localhost:11434/v1",
+            "",
+        ),
+        preset(
+            "lm-studio",
+            "LM Studio",
+            ProviderKind::OpenAi,
+            "http://localhost:1234/v1",
+            "",
+        ),
+        // 执行判定（jev 槽）专用；设置页保存时只绑 jev 槽。向导不列（见模块注释）。
+        preset(
+            "typesafe",
+            "TypeSafe",
+            ProviderKind::Jev,
+            "https://api.typesafe.ai",
+            "jev-latest",
+        ),
     ]
 }
 
@@ -100,10 +174,42 @@ mod tests {
                 p.id
             );
             assert!(!p.name.trim().is_empty());
-            assert!(p.base_url.starts_with("https://"), "{}", p.base_url);
+            // 远程端点一律 https；明文 http 只许本机端点（gap B13 并入 Ollama / LM Studio）。
+            assert!(
+                p.base_url.starts_with("https://") || p.base_url.starts_with("http://localhost:"),
+                "{}",
+                p.base_url
+            );
             assert!(!p.base_url.ends_with('/'), "{}", p.base_url);
-            // 不是聊天模型的类型不能进预设（向导只配 default 主对话槽）。
-            assert_ne!(p.kind, ProviderKind::Jev);
+            // Jev 不是聊天模型类型，预设必须自带模型（设置页保存即绑 jev 槽，不能绑空模型）。
+            if p.kind == ProviderKind::Jev {
+                assert!(!p.default_model.is_empty(), "{}", p.id);
+            }
+        }
+    }
+
+    #[test]
+    fn wizard_default_stays_first_and_settings_catalog_is_merged() {
+        // gap B13：向导空表时默认落第一条（原型 entry#wz-provider 是 Anthropic）；
+        // 设置页旧目录里的服务商都在这一份里，不再有 UI 侧第二份表。
+        let all = presets();
+        assert_eq!(all[0].id, "anthropic");
+        for id in [
+            "openai",
+            "deepseek",
+            "moonshot",
+            "openrouter",
+            "gemini",
+            "xai",
+            "groq",
+            "mistral",
+            "siliconflow",
+            "zhipu",
+            "ollama",
+            "lm-studio",
+            "typesafe",
+        ] {
+            assert!(all.iter().any(|p| p.id == id), "missing preset {id}");
         }
     }
 

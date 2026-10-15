@@ -170,6 +170,19 @@ describe('向导先配模型服务商（票 13）', () => {
     expect(password(el)).not.toBeNull()
   })
 
+  // gap B13：预设表与设置目录同一份；向导只列能当 default 主对话槽、要钥匙的（Jev、本机端点去设置页配）
+  it('向导不列 Jev 与本机端点预设', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue([
+      ...PRESETS,
+      { id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' },
+      { id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' },
+    ])
+    const el = await renderWizard()
+    await openSelect(el)
+    expect(options().map(text)).toEqual(['Anthropic', 'OpenRouter', 'Custom…'])
+  })
+
   // gap B12：下拉换成 Select 后键盘与读屏照旧——combobox 触发器、↵ 打开、↓ 移动、↵ 选中、焦点回触发器
   it('服务商下拉可全键盘操作', async () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
