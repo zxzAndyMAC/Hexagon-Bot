@@ -668,6 +668,18 @@ pub struct UsageBucket {
 }
 
 pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<UsageRow>, rusqlite::Error> {
+    summarize_range(db, project_id, None, None)
+}
+
+/// 按时间范围汇总的明细行（ui-redesign 票 12 / 2026-10-14 负责人裁决）：用量详情的模型环与按阶段
+/// 要跟所选范围走（原型 usage#detail），而 `project_summary` 只有项目累计。`from`/`to` 口径与
+/// [`series`] 同：日期串 YYYY-MM-DD、UTC 日界、`to` 含整日；None = 不限。
+pub fn summarize_range(
+    db: &Db,
+    project_id: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<UsageRow>, rusqlite::Error> {
     let mut st = db.conn().prepare(
         "SELECT u.agent_id, u.model, sr.stage_name,
                 SUM(u.prompt_tokens), SUM(u.completion_tokens),
@@ -678,11 +690,13 @@ pub fn summarize(db: &Db, project_id: &str) -> Result<Vec<UsageRow>, rusqlite::E
                 SUM(u.record_kind='legacy' OR (u.record_kind='request' AND u.request_state!='not_sent' AND (u.prompt_known=0 OR u.completion_known=0)))
          FROM usage u LEFT JOIN stage_runs sr ON sr.id = u.stage_run_id
          WHERE u.project_id=?1
+           AND (?2 IS NULL OR u.created_at >= ?2)
+           AND (?3 IS NULL OR u.created_at < date(?3, '+1 day'))
          GROUP BY u.agent_id, u.model, u.stage_run_id
          ORDER BY SUM(u.cost_millicents) DESC",
     )?;
     let rows = st
-        .query_map([project_id], |r| {
+        .query_map(params![project_id, from, to], |r| {
             Ok(UsageRow {
                 agent_id: r.get(0)?,
                 model: r.get(1)?,
@@ -993,6 +1007,39 @@ mod tests {
                                                         // neither provides evidence of an actual individual model request.
         assert_eq!(rows[0]["calls"], 0);
         assert_eq!(rows[0]["legacy_unknown_records"], 2);
+    }
+
+    #[test]
+    fn summarize_range_filters_by_utc_day() {
+        let (db, ctx, _d) = setup(None);
+        let u = Usage {
+            observed_model: None,
+            unpriced: false,
+            prompt_reported: true,
+            completion_reported: true,
+            prompt_tokens: 100,
+            completion_tokens: 0,
+        };
+        record(&db, &ctx, "chat", &u, 0).unwrap();
+        record(&db, &ctx, "chat", &u, 0).unwrap();
+        db.conn()
+            .execute(
+                "UPDATE usage SET created_at='2026-01-02 23:59:00' WHERE rowid=(SELECT MIN(rowid) FROM usage)",
+                [],
+            )
+            .unwrap();
+        let tokens = |from: Option<&str>, to: Option<&str>| -> i64 {
+            summarize_range(&db, "p", from, to)
+                .unwrap()
+                .iter()
+                .map(|r| r.prompt_tokens)
+                .sum()
+        };
+        assert_eq!(tokens(None, None), 200);
+        // `to` 含整日：01-02 23:59 那笔算进 01-02
+        assert_eq!(tokens(Some("2026-01-01"), Some("2026-01-02")), 100);
+        assert_eq!(tokens(Some("2026-01-03"), None), 100);
+        assert_eq!(tokens(Some("2025-12-01"), Some("2025-12-31")), 0);
     }
 
     #[test]

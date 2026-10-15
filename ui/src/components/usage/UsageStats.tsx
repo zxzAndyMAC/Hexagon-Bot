@@ -2,7 +2,7 @@
 // 活跃 Agent（休眠数）· 预算（唯一钱口径 + A12 进度 +「设置上限」就地编辑）。网格 4 列 gap 12。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { UsageBucket } from '../../api'
+import type { UsageBucket, UsageRow } from '../../api'
 import { useUiStore } from '../../store'
 import { LimitEditor, UsageUncertainty } from '../UsageTab'
 import { Delta, StatCard } from './parts'
@@ -10,10 +10,9 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { capReached, centsToMc, daysAgo, fmtTok, fmtYuan, pctChange, sumTokens, tokenShare } from '../../usage'
 
-export function UsageStats({ series, prevSeries }: { series: UsageBucket[]; prevSeries: UsageBucket[] | null }) {
+export function UsageStats({ series, prevSeries, rows }: { series: UsageBucket[]; prevSeries: UsageBucket[] | null; rows: UsageRow[] }) {
   const { t } = useTranslation()
   const total = useUiStore((s) => s.usageTotal)
-  const rows = useUiStore((s) => s.usageRows)
   const team = useUiStore((s) => s.team)
   const series7d = useUiStore((s) => s.usageSeries7d)
   const [editing, setEditing] = useState(false)

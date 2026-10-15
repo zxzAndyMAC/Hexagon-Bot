@@ -19,6 +19,7 @@ vi.mock('./components/PendingDock', () => ({ PendingDock: () => null }))
 let root: ReturnType<typeof createRoot>
 let el: HTMLDivElement
 let series: ReturnType<typeof vi.spyOn>
+let rangeRows: ReturnType<typeof vi.spyOn>
 const initial = useUiStore.getState()
 
 const total = (spent_mc: number, tokens = 0) => ({
@@ -46,6 +47,7 @@ beforeEach(async () => {
   vi.spyOn(useUiStore.getState(), 'refreshFast').mockResolvedValue()
   vi.spyOn(useUiStore.getState(), 'invalidate').mockResolvedValue()
   series = vi.spyOn(api, 'usageSeries').mockResolvedValue([])
+  rangeRows = vi.spyOn(api, 'usageRows').mockResolvedValue([])
   el = document.createElement('div')
   document.body.appendChild(el)
   root = createRoot(el)
@@ -153,15 +155,23 @@ describe('用量详情（E12 / E13 / A23，usage#detail）', () => {
 
   it('消费榜单：团队视图按 Agent 确定色排行；切到模型视图换环形图', async () => {
     series.mockResolvedValue([bucket(daysAgo(2), 'a1', 900), bucket(daysAgo(2), 'a2', 300)])
+    // 2026-10-14 负责人裁决（票 12 偏差 3 结案）：模型环 / 按阶段跟所选范围走，数据来自新 IPC usage_rows(from,to)，
+    // 不再读 store 的项目累计 usageRows——store 里放一行不该出现的模型，断言它不进图。
     await act(async () => useUiStore.setState({ usageRows: [
-      { agent_id: 'a1', model: 'gpt-x', stage: 'spec', prompt_tokens: 900, completion_tokens: 0, tool_output_tokens: 0, cost_mc: 0, calls: 1, unknown_requests: 0, legacy_unknown_records: 0, unknown_token_records: 0 },
+      { agent_id: 'a1', model: 'project-total-only', stage: 'old', prompt_tokens: 5, completion_tokens: 0, tool_output_tokens: 0, cost_mc: 0, calls: 1, unknown_requests: 0, legacy_unknown_records: 0, unknown_token_records: 0 },
     ] }))
+    rangeRows.mockResolvedValue([
+      { agent_id: 'a1', model: 'gpt-x', stage: 'spec', prompt_tokens: 900, completion_tokens: 0, tool_output_tokens: 0, cost_mc: 0, calls: 1, unknown_requests: 0, legacy_unknown_records: 0, unknown_token_records: 0 },
+    ])
     const view = await openDetail()
+    expect(rangeRows).toHaveBeenCalledWith(daysAgo(29), daysAgo(0))
     const rows = [...view.querySelectorAll('[data-usage-board="team"] [data-hbar]')]
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('Frontend'), expect.stringContaining('Backend')])
     expect((rows[0].querySelector('i') as HTMLElement).style.background).toMatch(/--agent-c\d/)
     await act(async () => { btn(view.querySelector('[data-usage-board]')!, 'Model').click() })
     expect(view.querySelector('[data-model-donut]')?.textContent).toContain('gpt-x')
     expect(view.querySelector('[data-usage-stages]')?.textContent).toContain('spec')
+    expect(view.querySelector('[data-model-donut]')?.textContent).not.toContain('project-total-only')
+    expect(view.querySelector('[data-usage-stages]')?.textContent).not.toContain('old')
   })
 })

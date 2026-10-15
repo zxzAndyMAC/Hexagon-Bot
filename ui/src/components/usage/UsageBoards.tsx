@@ -2,11 +2,11 @@
 // 团队视图：所选范围内按 Agent（usage_series 带 agent_id），头像 18 + 名 / 8 高条（Agent 确定色）/ 等宽数值。
 // 模型视图：环形图（Pie Donut，中心总量）。按阶段：「已完成 3 / 6」+ 同形行，条色 chart-1，「未归属阶段」名 ink-3、条 chart-3
 //（票 12 按原型 usage#detail 改正 E12 原写的 --ink：深色主题下白条过亮，规范同步改）。
-// 模型、阶段只有项目累计口径（usage_summary 行不带时间；不改 IPC，spec §176），卡头说明写明「项目累计」。
+// 模型、阶段也按所选范围（2026-10-14 负责人裁决：加 IPC usage_rows(from,to)；原先只有 usage_summary 的项目累计，被否）。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Cell, Label, Pie, PieChart } from 'recharts'
-import type { UsageBucket } from '../../api'
+import type { UsageBucket, UsageRow } from '../../api'
 import { useUiStore } from '../../store'
 import { agentVar } from '../../colors'
 import { ChartCard, HBar, UsageEmpty } from './parts'
@@ -21,12 +21,11 @@ type Board = 'team' | 'model'
 const DONUT = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)']
 const NO_STAGE = '\u0000'
 
-export function Leaderboard({ series }: { series: UsageBucket[] }) {
+export function Leaderboard({ series, rows }: { series: UsageBucket[]; rows: UsageRow[] }) {
   const { t } = useTranslation()
   const [board, setBoard] = useState<Board>('team')
   const team = useUiStore((s) => s.team)
   const avatars = useUiStore((s) => s.avatars)
-  const rows = useUiStore((s) => s.usageRows)
   const roleOf = (id: string) => team.find((m) => m.id === id)?.role ?? id
 
   const byAgent = groupTokens(series, (r) => r.agent_id ?? '—')
@@ -108,9 +107,8 @@ function ModelDonut({ rows }: { rows: { model?: string | null; prompt_tokens?: n
   )
 }
 
-export function StageBreakdown() {
+export function StageBreakdown({ rows }: { rows: UsageRow[] }) {
   const { t } = useTranslation()
-  const rows = useUiStore((s) => s.usageRows)
   const stages = useUiStore((s) => s.stages)
   const byStage = groupTokens(rows, (r) => r.stage || NO_STAGE)
   const { done, total } = stageProgress(stages)

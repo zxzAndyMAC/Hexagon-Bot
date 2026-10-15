@@ -477,6 +477,9 @@ export const api = {
   openBrowserExtensionStore: () => call<void>('open_browser_extension_store'),
   usage: () => call<UsageSummary>('usage'),
   usageContextPressure: () => call<ContextPressure>('usage_context_pressure'),
+  // 票 12（2026-10-14 负责人裁决）：所选范围内的 agent×model×stage 明细，供模型环 / 按阶段用
+  usageRows: (from?: string | null, to?: string | null) =>
+    call<UsageRow[]>('usage_rows', { from: from ?? null, to: to ?? null }),
   usageSeries: (granularity: 'day' | 'hour' = 'day', from?: string | null, to?: string | null) =>
     call<UsageBucket[]>('usage_series', { granularity, from: from ?? null, to: to ?? null }),
   setUsageLimit: (limitCents: number | null) =>
@@ -1222,6 +1225,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         ],
         total: { spent_mc: 81400, limit_cents: 20000, tokens: 286400 },
       } as T
+    case 'usage_rows':
+      return mockReply<UsageSummary>('usage').rows as unknown as T
     case 'usage_context_pressure':
       return { overflow_cards_14d: 1, compactions_14d: 3 } as T
     case 'usage_series': {
