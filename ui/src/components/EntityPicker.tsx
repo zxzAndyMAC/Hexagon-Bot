@@ -5,6 +5,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText } from '../api'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Icon } from './Icon'
+
+// ui-redesign 票 11（components E4「技能（chip 行 + 添加，EntityPicker）」；票 10 偏差 7 留给本票）：
+// 已选值 = line chip（等宽）+ × 图标钮，「添加」= ghost xs；勾选弹窗换成 A17 模态外观（--scrim 遮罩、overlay 面、圆角 16）。
 
 export type PickSource = 'skills' | 'mcp'
 export type Option = { id: string; desc: string; badge: string; badgeOk?: boolean }
@@ -46,24 +53,24 @@ export function EntityChips({
   const [open, setOpen] = useState(false)
   return (
     <>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      <div className="flex flex-wrap items-center gap-1.5">
         {value.map((v) => (
-          <span key={v} className="chip mono" style={{ gap: 5, paddingRight: 5 }}>
+          <Badge key={v} variant="line" data-entity-chip={v} className="pr-1 font-mono">
             {v}
             <button
               type="button"
-              aria-label={t('picker.remove')}
+              aria-label={`${t('picker.remove')} ${v}`}
               title={t('picker.remove')}
               onClick={() => onChange(value.filter((x) => x !== v))}
-              style={{ all: 'unset', cursor: 'pointer', lineHeight: 1, opacity: 0.65, fontSize: 12 }}
+              className="hx-focus grid size-4 cursor-pointer place-items-center rounded-full text-ink-3 live:hover:bg-hover live:hover:text-ink"
             >
-              ×
+              <Icon name="close" size={10} />
             </button>
-          </span>
+          </Badge>
         ))}
-        <button type="button" className="btn" onClick={() => setOpen(true)}>
+        <Button size="xs" variant="ghost" onClick={() => setOpen(true)}>
           {t('picker.add')}
-        </button>
+        </Button>
       </div>
       {open && (
         <EntityPicker
@@ -138,67 +145,42 @@ export function EntityPicker({
     })
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 80,
-        background: 'rgba(0,0,0,.45)', display: 'flex',
-        alignItems: 'center', justifyContent: 'center',
-      }}
-      onClick={onClose}
-      role="presentation"
-    >
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-scrim" onClick={onClose} role="presentation">
       <div
-        className="panel panel-float"
         role="dialog"
         aria-modal="true"
         aria-label={heading}
-        style={{
-          width: 'min(520px, 92vw)', padding: 14, display: 'flex', flexDirection: 'column',
-          boxShadow: '0 12px 40px rgba(0,0,0,.4)',
-          maxHeight: '70vh',
-        }}
+        className="flex max-h-[70vh] w-[min(520px,92vw)] flex-col rounded-[16px] bg-surface p-4 shadow-[var(--shadow-overlay)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ fontWeight: 560, fontSize: 14, marginBottom: 10 }}>
-          {heading}
-        </div>
-        <input
+        <div className="mb-3 text-[15px] font-semibold text-ink">{heading}</div>
+        <Input
           ref={searchRef}
-          className="input"
+          leading={<Icon name="search" size={14} />}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder={t('picker.search')}
-          style={{ width: '100%', boxSizing: 'border-box' }}
+          aria-label={t('picker.search')}
         />
-        <div style={{ flex: 1, overflowY: 'auto', marginTop: 8, minHeight: 120 }}>
-          {err && <div style={{ fontSize: 12, color: 'var(--err)', padding: '8px 2px' }}>{err}</div>}
-          {!err && opts === null && <div className="dim3" style={{ fontSize: 12, padding: '12px 2px' }}>…</div>}
+        <div className="mt-2 min-h-[120px] flex-1 overflow-y-auto">
+          {err && <div role="alert" className="px-0.5 py-2 text-[12.5px] text-red">{err}</div>}
+          {!err && opts === null && <div className="px-0.5 py-3 text-[12.5px] text-ink-3">…</div>}
           {!err && opts !== null && shown.length === 0 && (
-            <div className="dim3" style={{ fontSize: 12, padding: '12px 2px' }}>{t('picker.empty')}</div>
+            <div className="px-0.5 py-3 text-[12.5px] text-ink-3">{t('picker.empty')}</div>
           )}
           {shown.map((o) => (
-            <label
-              key={o.id}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 9, padding: '7px 6px',
-                borderRadius: 7, cursor: 'pointer',
-              }}
-            >
-              <input type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} />
-              <span className="mono" style={{ fontSize: 12, flexShrink: 0 }}>{o.id}</span>
-              {o.badge && <span className={`chip ${o.badgeOk ? 'ok' : ''}`}>{o.badge}</span>}
-              <span className="dim3" style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {o.desc}
-              </span>
+            <label key={o.id} className="flex cursor-pointer items-center gap-2.5 rounded-[7px] px-1.5 py-[7px] live:hover:bg-hover">
+              <input type="checkbox" className="accent-[var(--accent)]" checked={sel.has(o.id)} onChange={() => toggle(o.id)} />
+              <span data-picker-id className="flex-none font-mono text-[12px] text-ink">{o.id}</span>
+              {o.badge && <Badge variant={o.badgeOk ? 'ok' : 'neutral'} className="h-[18px] px-1.5 text-[11px]">{o.badge}</Badge>}
+              <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">{o.desc}</span>
             </label>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end', alignItems: 'center' }}>
-          <span className="dim3" style={{ marginRight: 'auto', fontSize: 12 }}>
-            {t('picker.count', { n: sel.size })}
-          </span>
-          <button className="btn" onClick={onClose}>{t('agent.cancel')}</button>
-          <button className="btn primary" onClick={() => onConfirm([...sel])}>{t('picker.done')}</button>
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <span className="mr-auto text-[12px] text-ink-3">{t('picker.count', { n: sel.size })}</span>
+          <Button size="sm" variant="quiet" onClick={onClose}>{t('agent.cancel')}</Button>
+          <Button size="sm" variant="primary" onClick={() => onConfirm([...sel])}>{t('picker.done')}</Button>
         </div>
       </div>
     </div>
