@@ -392,7 +392,6 @@ export default {
     updateKey: "Update key",
     usageQuota: "Usage and quota",
     recoveredLine: "Recovered · attempt {{count}} succeeded",
-    supersededLine: "Replaced by a newer instruction: {{reason}}",
     unfinishedChip: "Unfinished",
     code: {"transport":"Connection interrupted","rate_limited":"Rate limited","provider_unavailable":"Provider unavailable","invalid_response":"Invalid response","missing_credential":"Key missing","credential_store":"Key store unavailable","authentication":"Key invalid","configuration":"Configuration error","request_rejected":"Request rejected","budget_unavailable":"Budget unavailable","quota":"Quota exhausted","interrupted":"Interrupted","deadline":"Timed out","provider_error":"Provider error"},
     stop: "Stop retrying",

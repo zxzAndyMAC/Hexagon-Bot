@@ -4,12 +4,20 @@ import { api, errText } from '../api'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { useUiStore } from '../store'
 import type { ModelRequestRecovery } from '../gen/ModelRequestRecovery'
+import { cn } from '@/lib/utils'
+import { Icon } from './Icon'
+import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import { ShortcutKbd } from './ui/kbd'
+import { PixelGrid } from './ui/spinner'
 
 // MR-02 failure codes are produced by core `failure_code`; only these have a
 // direct remedy screen. Transient codes (transport, rate_limited,
 // provider_unavailable) and invalid_response retry instead.
 const SETTINGS_CODES = new Set(['missing_credential', 'credential_store', 'authentication', 'configuration', 'request_rejected'])
 const USAGE_CODES = new Set(['budget_unavailable', 'quota'])
+// D11 ③「更新钥匙」只给钥匙类失败；配置 / 请求被拒仍叫「打开模型设置」。
+const KEY_CODES = new Set(['missing_credential', 'credential_store', 'authentication'])
 
 /** Title/hint keys per item state; `turn` items name the role request. */
 function copyKeys(state: string, turn: boolean, intake: boolean): [string, string] {
@@ -27,6 +35,10 @@ function copyKeys(state: string, turn: boolean, intake: boolean): [string, strin
   }
 }
 
+// ui-redesign 票 08（components D11 ①–⑨，feedback#model-recovery）：只换皮——状态块
+// （① 像素格 + 进度 + 停止 · ②⑧ 橙环卡 + 原因 chip + 次数 / 模型 + 尝试历史 · ③ 钥匙行 ·
+// ④ 未完成 chip · ⑤ 两键选择 · ⑥⑦ 收成一行 · ⑨ 托管拒绝行）。按键、动作、宿主调用一律不变；
+// 「改用主对话模型重试」仍只有独立键位，批准键只给「重试」；不加「放弃这次派活」（R-09）。
 // MR-01: both surfaces describe the same persisted item. Only the original
 // failed request can retry; generic stage recovery must never receive it.
 export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; payload: Record<string, unknown>; top?: boolean }) {
@@ -93,37 +105,82 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const refusal = recovery.last_refusal && !['recovered', 'superseded'].includes(state)
     ? t('modelRecovery.lastRefusal', { reason: t(`modelRecovery.refusal.${recovery.last_refusal}`, { defaultValue: recovery.last_refusal }) }) : ''
   const deadline = state === 'retrying' && recovery.retry_deadline_ms != null ? new Date(recovery.retry_deadline_ms).toLocaleTimeString() : null
-  return <div data-model-recovery={id} data-state={state} aria-busy={busy}>
-    <div style={{fontWeight: 510, color: state === 'recovered' ? 'var(--ok)' : 'var(--legacy-accent)'}}>{t(title)}</div>
-    <div className="dim3" style={{fontSize: 12, margin: '4px 0 8px'}}>{reason || (hint && t(hint, { target, instruction: recovery.held_instruction ?? '' }))}</div>
-    {refusal && <div className="dim3" data-refusal style={{fontSize: 12, marginBottom: 8}}>{refusal}</div>}
-    {deadline && <div className="dim3" data-retry-progress style={{fontSize: 12, marginBottom: 8}}>{t('modelRecovery.attempt', { count: (recovery.history?.length ?? 0) + 1, time: deadline })}</div>}
-    {recovery.unfinished && recovery.partial_text && <details className="dim3" style={{fontSize: 11, marginBottom: 8}}><summary>{t('modelRecovery.unfinished')}</summary><div>{t('modelRecovery.partialHint')}</div><div className="mono" style={{whiteSpace:'pre-wrap', marginTop:4}}>{recovery.partial_text}</div></details>}
-    <details className="dim3" style={{fontSize: 11, marginBottom: 8}}>
-      <summary>{t('modelRecovery.details')}</summary>
-      {recovery.instruction && <div style={{whiteSpace:'pre-wrap', marginBottom: 4}}>{t('modelRecovery.instruction', { text: recovery.instruction })}</div>}
-      {(recovery.history ?? []).map((failure, index) => <div key={index} className="mono">
-        {failure.model ?? t('modelRecovery.modelSlot', { slot: failure.model_slot })} · {failure.code} · {failure.request_id ?? t('modelRecovery.notSent')}
-        {failure.http_status != null && ` · HTTP ${failure.http_status}`} · {failure.message}
-      </div>)}
-    </details>
-    {state === 'retrying' && <button type="button" className="btn" data-stop-retry
-      title={[t('modelRecovery.stopHint'), top ? formatBinding(bindingFor('modelRecoveryStop')) : ''].filter(Boolean).join(' · ')}
-      onClick={() => { void stop() }}>{t('modelRecovery.stop')}</button>}
-    {canRetry && <button type="button" className="btn primary" disabled={busy}
-      title={[label,shortcut].filter(Boolean).join(' · ')} onClick={() => { void run(() => intake ? api.runOpeningIntake() : api.retryModelRequest(id, recovery.project_root)) }}>
-      {busy ? t('modelRecovery.retrying') : label}{shortcut && ` ${shortcut}`}
-    </button>}
-    {chatOffer && <button type="button" className="btn" disabled={busy} data-chat-model
-      title={[t('modelRecovery.chatModelHint'), top ? formatBinding(bindingFor('retryWithChatModel')) : ''].filter(Boolean).join(' · ')}
-      onClick={() => { void retryWithChat() }}>{t('modelRecovery.useChatModel', { slot: chatOffer })}</button>}
-    {choosing && <>
-      <button type="button" className="btn primary" disabled={busy} title={[t('modelRecovery.continueOriginal'), formatBinding(bindingFor('continueOriginalTask'))].join(' · ')}
-        onClick={() => { void choose(false) }}>{t('modelRecovery.continueOriginal')}</button>
-      <button type="button" className="btn" disabled={busy} title={[t('modelRecovery.followNew'), formatBinding(bindingFor('followNewInstruction'))].join(' · ')}
-        onClick={() => { void choose(true) }}>{t('modelRecovery.followNew')}</button>
-    </>}
-    {canRetry && latestCode && SETTINGS_CODES.has(latestCode) && <button type="button" className="btn" title={t('modelRecovery.openModels')} onClick={() => openSettings('models')}>{t('modelRecovery.openModels')}</button>}
-    {canRetry && latestCode && USAGE_CODES.has(latestCode) && <button type="button" className="btn" title={t('modelRecovery.openUsage')} onClick={() => openSettings('usage')}>{t('modelRecovery.openUsage')}</button>}
+  const history = recovery.history ?? []
+  const latest = history.at(-1)
+  const codeLabel = latestCode ? t(`modelRecovery.code.${latestCode}`, { defaultValue: latestCode }) : ''
+  // D11 ③：认证 / 配置 / 额度——钥匙行直接给入口。重试按钮保留（宿主 can_retry 仍为真，修好钥匙后
+  // 这是唯一的回路；去掉会把事项卡死），只是不再当主按钮——偏差见 reconciliation「票 08」。
+  const remedy = canRetry && latestCode && (SETTINGS_CODES.has(latestCode) || USAGE_CODES.has(latestCode)) ? latestCode : null
+  const keyRemedy = remedy && KEY_CODES.has(remedy)
+  const historyBlock = <details className="mt-2 text-[12px] text-ink-2" data-attempts>
+    <summary className="hx-focus cursor-pointer rounded-[6px] live:hover:text-ink">{t('modelRecovery.historyTitle', { count: history.length })}</summary>
+    {recovery.instruction && <div className="mt-1 whitespace-pre-wrap">{t('modelRecovery.instruction', { text: recovery.instruction })}</div>}
+    {history.map((failure, index) => <div key={index} className="mt-1 font-mono text-[11.5px] leading-[1.7]">
+      {failure.model ?? t('modelRecovery.modelSlot', { slot: failure.model_slot })} · {failure.code} · {failure.request_id ?? t('modelRecovery.notSent')}
+      {failure.http_status != null && ` · HTTP ${failure.http_status}`} · {failure.message}
+    </div>)}
+  </details>
+  // ⑥ 已恢复 / ⑦ 已失效：块收成一行（原地变化，不新增行）。
+  if (state === 'recovered' || state === 'superseded') {
+    return <div data-model-recovery={id} data-state={state} aria-busy={busy} className="text-[12.5px]">
+      <div className={state === 'recovered' ? 'flex items-center gap-1.5 text-green' : 'text-ink-3'}>
+        {state === 'recovered'
+          ? <><Icon name="circle-check" size={14} />{t('modelRecovery.recoveredLine', { count: history.length + 1 })}</>
+          : <>{t(title)}{reason && ` · ${reason}`}</>}
+      </div>
+      {state === 'recovered' && hint && <div className="mt-0.5 text-[12px] text-ink-3">{t(hint, { target, instruction: recovery.held_instruction ?? '' })}</div>}
+      {state === 'recovered' && history.length > 0 && historyBlock}
+    </div>
+  }
+  const retrying = state === 'retrying'
+  const tone = state === 'unknown' ? 'text-ink-3' : 'text-orange'
+  return <div data-model-recovery={id} data-state={state} aria-busy={busy}
+    className={cn('rounded-[12px] bg-[var(--app-card)] px-3.5 py-3 text-[13px]',
+      retrying ? 'shadow-[var(--shadow-card)]' : 'shadow-[0_0_0_1px_color-mix(in_oklch,var(--orange)_35%,transparent),var(--shadow-card)]')}>
+    <div className="flex items-center gap-2">
+      {retrying ? <PixelGrid /> : <Icon name="warn" size={14} className={cn('flex-none', tone)} />}
+      <b className="min-w-0 flex-1 text-[13px] font-semibold text-ink">{t(title)}</b>
+      {deadline && <span data-retry-progress className="font-mono text-[12px] text-ink-3">{t('modelRecovery.attempt', { count: history.length + 1, time: deadline })}</span>}
+      {!retrying && codeLabel && <Badge>{codeLabel}</Badge>}
+      {retrying && <Button size="xs" variant="ghost" data-stop-retry
+        title={[t('modelRecovery.stopHint'), top ? formatBinding(bindingFor('modelRecoveryStop')) : ''].filter(Boolean).join(' · ')}
+        onClick={() => { void stop() }}>{t('modelRecovery.stop')}</Button>}
+    </div>
+    {hint && <div className={cn('mt-1 text-[12.5px] text-ink-2', retrying && 'ml-[22px]')}>{t(hint, { target, instruction: recovery.held_instruction ?? '' })}</div>}
+    {refusal && <div data-refusal className="mt-1 text-[12px] text-ink-3">{refusal}</div>}
+    {!retrying && history.length > 0 && <div className="mt-1 text-[12px] text-ink-3">
+      {t('modelRecovery.retriedCount', { count: history.length })}
+      {latest && ` · ${latest.model ?? t('modelRecovery.modelSlot', { slot: latest.model_slot })}`}
+    </div>}
+    {recovery.unfinished && recovery.partial_text && <details className="mt-2 text-[12px] text-ink-2">
+      <summary className="hx-focus flex cursor-pointer items-center gap-1.5 rounded-[6px]"><Badge variant="warn">{t('modelRecovery.unfinishedChip')}</Badge>{t('modelRecovery.unfinished')}</summary>
+      <div className="mt-1 text-ink-3">{t('modelRecovery.partialHint')}</div>
+      <div className="mt-1 whitespace-pre-wrap font-mono text-[11.5px]">{recovery.partial_text}</div>
+    </details>}
+    {history.length > 0 && historyBlock}
+    {remedy && <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[10px] bg-red-tint px-3 py-2 text-[12.5px] text-red" data-remedy={remedy}>
+      <Icon name="key" size={14} className="flex-none" />
+      <span className="min-w-0 flex-1"><b className="font-semibold">{codeLabel}</b> · {t('modelRecovery.keyBlocked')}</span>
+      {SETTINGS_CODES.has(remedy) && <Button size="xs" title={t(keyRemedy ? 'modelRecovery.updateKey' : 'modelRecovery.openModels')} onClick={() => openSettings('models')}>
+        {t(keyRemedy ? 'modelRecovery.updateKey' : 'modelRecovery.openModels')}</Button>}
+      {USAGE_CODES.has(remedy) && <Button size="xs" variant="ghost" title={t('modelRecovery.usageQuota')} onClick={() => openSettings('usage')}>{t('modelRecovery.usageQuota')}</Button>}
+    </div>}
+    {(canRetry || chatOffer || choosing) && <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      {canRetry && <Button size="sm" variant={remedy ? 'default' : 'primary'} disabled={busy}
+        title={[label, shortcut].filter(Boolean).join(' · ')}
+        onClick={() => { void run(() => intake ? api.runOpeningIntake() : api.retryModelRequest(id, recovery.project_root)) }}>
+        {busy ? t('modelRecovery.retrying') : label}{shortcut && <ShortcutKbd binding={bindingFor('approve')} />}
+      </Button>}
+      {chatOffer && <Button size="sm" disabled={busy} data-chat-model
+        title={[t('modelRecovery.chatModelHint'), top ? formatBinding(bindingFor('retryWithChatModel')) : ''].filter(Boolean).join(' · ')}
+        onClick={() => { void retryWithChat() }}>{t('modelRecovery.useChatModel', { slot: chatOffer })}</Button>}
+      {choosing && <>
+        <Button size="sm" variant="quiet" disabled={busy} title={[t('modelRecovery.followNew'), formatBinding(bindingFor('followNewInstruction'))].join(' · ')}
+          onClick={() => { void choose(true) }}>{t('modelRecovery.followNew')}</Button>
+        <Button size="sm" variant="primary" disabled={busy} title={[t('modelRecovery.continueOriginal'), formatBinding(bindingFor('continueOriginalTask'))].join(' · ')}
+          onClick={() => { void choose(false) }}>{t('modelRecovery.continueOriginal')}</Button>
+      </>}
+    </div>}
+    {chatOffer && <div className="mt-2 text-[12px] text-ink-3">{t('modelRecovery.chatModelNote')}</div>}
   </div>
 }

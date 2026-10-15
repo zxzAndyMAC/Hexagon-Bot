@@ -392,7 +392,6 @@ export default {
     updateKey: "キーを更新",
     usageQuota: "使用量と上限",
     recoveredLine: "復旧 · {{count}} 回目で成功",
-    supersededLine: "新しい指示に置き換えられました：{{reason}}",
     unfinishedChip: "未完了",
     code: {"transport":"接続が中断","rate_limited":"レート制限","provider_unavailable":"プロバイダー利用不可","invalid_response":"無効な応答","missing_credential":"キーがありません","credential_store":"キーストア利用不可","authentication":"キーが無効","configuration":"設定エラー","request_rejected":"リクエスト拒否","budget_unavailable":"予算を確認できません","quota":"上限に到達","interrupted":"中断","deadline":"タイムアウト","provider_error":"プロバイダーエラー"},
     stop: "再試行を停止",

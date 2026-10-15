@@ -392,7 +392,6 @@ export default {
     updateKey: "Mettre à jour la clé",
     usageQuota: "Utilisation et quota",
     recoveredLine: "Rétabli · la tentative {{count}} a réussi",
-    supersededLine: "Remplacé par une instruction plus récente : {{reason}}",
     unfinishedChip: "Inachevé",
     code: {"transport":"Connexion interrompue","rate_limited":"Limite de débit","provider_unavailable":"Fournisseur indisponible","invalid_response":"Réponse invalide","missing_credential":"Clé manquante","credential_store":"Trousseau indisponible","authentication":"Clé invalide","configuration":"Erreur de configuration","request_rejected":"Requête refusée","budget_unavailable":"Budget indisponible","quota":"Quota épuisé","interrupted":"Interrompu","deadline":"Délai dépassé","provider_error":"Erreur du fournisseur"},
     stop: "Arrêter les relances",

@@ -392,7 +392,6 @@ export default {
     updateKey: "Atualizar chave",
     usageQuota: "Uso e cota",
     recoveredLine: "Recuperado · a tentativa {{count}} deu certo",
-    supersededLine: "Substituído por uma instrução mais recente: {{reason}}",
     unfinishedChip: "Inacabado",
     code: {"transport":"Conexão interrompida","rate_limited":"Limite de taxa","provider_unavailable":"Provedor indisponível","invalid_response":"Resposta inválida","missing_credential":"Chave ausente","credential_store":"Cofre de chaves indisponível","authentication":"Chave inválida","configuration":"Erro de configuração","request_rejected":"Solicitação recusada","budget_unavailable":"Orçamento indisponível","quota":"Cota esgotada","interrupted":"Interrompido","deadline":"Tempo esgotado","provider_error":"Erro do provedor"},
     stop: "Parar tentativas",

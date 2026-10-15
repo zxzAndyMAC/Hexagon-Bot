@@ -392,7 +392,6 @@ export default {
     updateKey: "更新金鑰",
     usageQuota: "用量與額度",
     recoveredLine: "已恢復 · 第 {{count}} 次成功",
-    supersededLine: "已被新指令取代：{{reason}}",
     unfinishedChip: "未完成",
     code: {"transport":"連線中斷","rate_limited":"限流","provider_unavailable":"供應商暫不可用","invalid_response":"回傳無效","missing_credential":"缺少金鑰","credential_store":"金鑰庫不可用","authentication":"金鑰無效","configuration":"設定錯誤","request_rejected":"請求被拒","budget_unavailable":"預算不可用","quota":"額度用盡","interrupted":"被中斷","deadline":"逾時","provider_error":"供應商錯誤"},
     stop: "停止重試",

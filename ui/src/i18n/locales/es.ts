@@ -392,7 +392,6 @@ export default {
     updateKey: "Actualizar clave",
     usageQuota: "Uso y cuota",
     recoveredLine: "Recuperado · el intento {{count}} tuvo éxito",
-    supersededLine: "Reemplazado por una instrucción más reciente: {{reason}}",
     unfinishedChip: "Sin terminar",
     code: {"transport":"Conexión interrumpida","rate_limited":"Límite de frecuencia","provider_unavailable":"Proveedor no disponible","invalid_response":"Respuesta no válida","missing_credential":"Falta la clave","credential_store":"Almacén de claves no disponible","authentication":"Clave no válida","configuration":"Error de configuración","request_rejected":"Solicitud rechazada","budget_unavailable":"Presupuesto no disponible","quota":"Cuota agotada","interrupted":"Interrumpido","deadline":"Tiempo agotado","provider_error":"Error del proveedor"},
     stop: "Detener reintentos",

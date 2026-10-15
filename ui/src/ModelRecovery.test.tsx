@@ -56,8 +56,9 @@ it('offers direct settings entry for a non-retryable credential failure', async 
  const credential={...payload,history:[{...payload.history[0],code:'missing_credential'}]}
  try {
   await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={credential} />))
-  expect(el.textContent).toContain('Open model settings')
-  expect(el.textContent).not.toContain('Open usage')
+  // 票 08（components D11 ③）：钥匙类失败的入口改叫「更新钥匙」，在钥匙行里；仍去模型设置。
+  expect(el.querySelector('[data-remedy="missing_credential"]')!.textContent).toContain('Update key')
+  expect(el.textContent).not.toContain('Usage and quota')
  } finally { await act(async()=>root.unmount()) }
 })
 
