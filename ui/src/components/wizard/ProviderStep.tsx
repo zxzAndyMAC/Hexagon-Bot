@@ -1,5 +1,7 @@
 // ① 模型服务商步（票 13，entry#wz-provider）：数据只走 list/save/set_slot_binding，不另起一份供应商存储。
 // 放行 = default 槽指向的供应商已启用且钥匙已存、模型名非空；已就绪不渲染钥匙框，缺钥匙才要输入。
+// gap B4（2026-10-15）：默认模型框实时检测钥匙（probe_provider_key，输入停 600ms 后请求一次模型目录）：
+// 检测中 / 检测通过 · 窗口 / 目录里没有这个模型 / 检测失败 + 原因。检测是建议不是闸——保存仍可点。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ProviderView, type ProvidersView } from '../../api'
@@ -11,6 +13,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Field, Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Icon } from '../Icon'
+import { fmtWindow, useKeyProbe, type ProbeState } from '../../keyProbe'
 
 // 与 ProviderManager 同一套 slug，避免两个界面对同一名字写出不同 id。
 const providerSlug = (s: string) =>
@@ -46,6 +49,41 @@ function KeyInput({ value, onChange }: { value: string; onChange: (v: string) =>
           </IconButton>
         }
       />
+    </Field>
+  )
+}
+
+/** 默认模型框 + 检测结果（后置胶囊 + 下方原因）。 */
+function ModelProbeField({ value, onChange, probe, list }: {
+  value: string
+  onChange: (v: string) => void
+  probe: ProbeState
+  list?: string
+}) {
+  const { t } = useTranslation()
+  const result = probe.phase === 'done' ? probe.result : null
+  const failed = probe.phase === 'error' || (result !== null && !result.ok)
+  const reason = probe.phase === 'error'
+    ? t('wizard.probe.failedWith', { reason: probe.message })
+    : result && !result.ok
+      ? t(`wizard.probe.reason.${result.failure ?? 'invalid_response'}`, { defaultValue: t('wizard.probe.reason.invalid_response') })
+        + (result.status ? ` (HTTP ${result.status})` : '')
+      : undefined
+  const unlisted = result?.ok && result.model_listed === false
+  const chip = result?.ok
+    ? unlisted
+      ? <Badge variant="warn" data-probe="unlisted">{t('wizard.probe.unlisted')}</Badge>
+      : <Badge variant="ok" data-probe="ok"><Icon name="check" />{result.window ? t('wizard.probe.okWindow', { window: fmtWindow(result.window) }) : t('wizard.probe.ok')}</Badge>
+    : failed
+      ? <Badge variant="err" data-probe="failed">{t('wizard.probe.failed')}</Badge>
+      : undefined
+  return (
+    <Field label={t('providers.model')} error={reason} help={unlisted ? t('wizard.probe.unlistedHelp') : undefined}>
+      <Input aria-label={t('providers.model')} placeholder={t('providers.pickModel')} value={value} list={list}
+        aria-invalid={failed || undefined}
+        loadingLabel={probe.phase === 'running' ? t('wizard.probe.running') : undefined}
+        trailing={chip}
+        onChange={(e) => onChange(e.target.value)} />
     </Field>
   )
 }
@@ -90,6 +128,11 @@ function NewProviderForm({ onRefresh }: { onRefresh: () => void }) {
   const [model, setModel] = useState('')
   const [busy, setBusy] = useState(false)
   const canApply = !!name.trim() && !!baseUrl.trim() && !!secret.trim() && !!model.trim()
+  const probe = useKeyProbe(
+    baseUrl.trim() && secret.trim() && model.trim()
+      ? { id: providerSlug(name || 'new'), name: name.trim(), kind, base_url: baseUrl.trim(), models: [], enabled: true }
+      : null,
+    secret.trim(), model)
 
   async function apply() {
     if (!canApply) return
@@ -121,9 +164,7 @@ function NewProviderForm({ onRefresh }: { onRefresh: () => void }) {
         <Input aria-label={t('providers.baseUrl')} placeholder={t('providers.baseUrl')} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
       </Field>
       <KeyInput value={secret} onChange={setSecret} />
-      <Field label={t('providers.model')}>
-        <Input aria-label={t('providers.model')} placeholder={t('providers.pickModel')} value={model} onChange={(e) => setModel(e.target.value)} />
-      </Field>
+      <ModelProbeField value={model} onChange={setModel} probe={probe} />
       <Button size="sm" variant="ink" className="self-start" disabled={!canApply} loading={busy} onClick={apply}>
         {t('wizard.providersApply')}
       </Button>
@@ -138,8 +179,11 @@ function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: ()
   const [model, setModel] = useState(() => suggestedModel(doc, provider))
   const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState(false)
+  const needsKey = !provider?.key_set
+  const probe = useKeyProbe(
+    provider && model.trim() && (!needsKey || secret.trim()) ? provider : null,
+    needsKey ? secret.trim() : undefined, model)
   if (!provider) return null
-  const needsKey = !provider.key_set
   const canApply = !!model.trim() && (!needsKey || !!secret.trim())
 
   async function apply() {
@@ -176,9 +220,7 @@ function FixProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: ()
         </NativeSelect>
       </Field>
       {needsKey && <KeyInput key={provider.id} value={secret} onChange={setSecret} />}
-      <Field label={t('providers.model')}>
-        <Input aria-label={t('providers.model')} placeholder={t('providers.pickModel')} value={model} list="wizard-default-models" onChange={(e) => setModel(e.target.value)} />
-      </Field>
+      <ModelProbeField value={model} onChange={setModel} probe={probe} list="wizard-default-models" />
       <datalist id="wizard-default-models">
         {provider.models.map((m) => <option key={m.id} value={m.id} />)}
       </datalist>
