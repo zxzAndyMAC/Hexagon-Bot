@@ -160,7 +160,8 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
               if (e.key === 'ArrowUp') { e.preventDefault(); setSel((sel - 1 + ordered.length) % Math.max(ordered.length, 1)); return }
               if (e.key === 'Enter' && ordered[sel]) { e.preventDefault(); void runItem(ordered[sel]) }
             }}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-3"
+            style={{ outline: "none" }}
+            className="min-w-0 flex-1 border-0 bg-transparent text-[15px] text-ink placeholder:text-ink-3"
           />
           <Kbd>Esc</Kbd>
         </div>
