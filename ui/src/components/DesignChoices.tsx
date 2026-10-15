@@ -23,6 +23,8 @@ export function DesignChoices({ q }: { q: PendingQuestion }) {
   const [preview, setPreview] = useState<{ page: string; data_url: string } | null>(null)
   const closePreview = useCallback(() => setPreview(null), [])
   const refresh = useUiStore((s) => s.refresh)
+  // 截图比对修正（2026-10-14，decisions#design 副行「UI · 3 个方案」）：副行显示角色名而非 agent id，同 PendingCards useWho
+  const role = useUiStore((s) => s.team.find((m) => m.id === q.agent_id)?.role) ?? String(q.agent_id ?? '')
   useEffect(() => {
     let cancelled = false
     setPicked(null)
@@ -48,7 +50,7 @@ export function DesignChoices({ q }: { q: PendingQuestion }) {
   const selected = options.find((o) => o.id === picked) ?? null
   const compare = (selected ?? options[0])?.mockups[0]
   return <DecisionShell qid={q.id} cat="info" icon="palette" title={t('design.title')}
-    sub={t('design.sub', { role: String(q.agent_id ?? ''), count: options.length })}
+    sub={t('design.sub', { role, count: options.length })}
     note={current && direction ? t('design.revision', { revision: direction.revision }) : undefined}
     actions={current && direction && options.length > 0 && <>
       <DecisionButton disabled={!compare} onClick={() => compare && setPreview(compare)}

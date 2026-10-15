@@ -19,8 +19,8 @@ import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircl
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
-// ui-redesign 票 04 待决坞（foundations §7 原型名 palette / test→test-tube / key / branch→git-branch）
-import { GitBranch, Key, Palette } from 'lucide-react'
+// ui-redesign 票 04 待决坞（foundations §7 原型名 palette / test→test-tube / key / branch→git-branch；key 已由票 11 注册、test 由票 07 注册）
+import { GitBranch, Palette } from 'lucide-react'
 // ui-redesign 票 07 输入条与命令面板（foundations §7 原型名 crosshair / flow→workflow / test→test-tube；focus 为补设计：专注模式）
 import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
 import { createLucideIcon } from 'lucide-react'
@@ -139,9 +139,8 @@ const ICONS = {
   image: Image,
   cpu: Cpu,
   collapse: Minimize2,
-  // ---- 待决坞决策卡（票 04，components D8 / D12）；test 与票 07 共用 ----
+  // ---- 待决坞决策卡（票 04，components D8 / D12）；key 与票 11、test 与票 07 共用 ----
   palette: Palette,
-  key: Key,
   branch: GitBranch,
   // ---- 输入条与命令面板（票 07） ----
   crosshair: Crosshair,
