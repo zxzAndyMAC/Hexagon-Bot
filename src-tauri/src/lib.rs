@@ -1804,6 +1804,25 @@ fn managed_history(
     })
 }
 
+/// Gap A2/A3 (ui-redesign 2026-10-15): managed session window, project budget
+/// and session spend for the pill popover and the report (read connection).
+#[tauri::command]
+fn managed_summary(
+    state: tauri::State<AppState>,
+) -> Result<hexagon_core::api::ManagedSummary, CmdError> {
+    with_conn(&state, |db, _| {
+        hexagon_core::api::managed_summary(db, PROJECT_ID).map_err(cmd_err)
+    })
+}
+
+/// Gap A4: write the UI-rendered managed report to the path the owner picked
+/// in the save dialog (same contract as export_events). No ledger access.
+#[tauri::command]
+fn export_managed_report(path: String, markdown: String) -> Result<(), CmdError> {
+    hexagon_core::api::export_managed_report(std::path::Path::new(&path), &markdown)
+        .map_err(cmd_err)
+}
+
 /// Managed-followups ticket 05: delegated external operations for the
 /// report (read connection).
 #[tauri::command]
@@ -3148,6 +3167,23 @@ fn fetch_provider_models(
         .map_err(cmd_err)
 }
 
+/// gap B4：向导服务商步实时检测钥匙（请求一次模型目录，不落盘、不花 token）。
+/// 网络往返最长 30s，走异步池不占渲染线程；不进工作台（项目还不存在）。
+#[tauri::command(async)]
+fn probe_provider_key(
+    provider: hexagon_core::provider_admin::ProviderDef,
+    secret: Option<String>,
+    model: String,
+) -> Result<hexagon_core::provider_admin::KeyProbe, CmdError> {
+    hexagon_core::provider_admin::probe_key(
+        provider,
+        secret,
+        &model,
+        &*hexagon_core::credentials::active(),
+    )
+    .map_err(cmd_err)
+}
+
 #[tauri::command]
 fn agents_md_draft(name: String) -> String {
     hexagon_core::setup::agents_md_draft(&name)
@@ -3349,13 +3385,31 @@ fn confirm_intake_brief(state: ProjectState<'_>) -> Result<(), CmdError> {
 #[tauri::command]
 fn intake_draft_pending(state: tauri::State<AppState>) -> Result<bool, CmdError> {
     with_conn(&state, |db, _| -> Result<bool, hexagon_core::db::DbError> {
-        let draft: Option<String> = db.conn().query_row(
-            "SELECT intake_draft FROM projects WHERE id=?1",
-            [PROJECT_ID],
-            |r| r.get(0),
-        )?;
-        Ok(draft.is_some_and(|s| !s.trim().is_empty()))
+        Ok(hexagon_core::intake::stored_draft(db.conn(), PROJECT_ID)?.is_some())
     })
+}
+
+/// 草案正文（gap B1：草案卡 inset 预览）。read 组：控制连接，不进工作台锁。
+#[tauri::command]
+fn intake_draft(state: tauri::State<AppState>) -> Result<Option<String>, CmdError> {
+    with_conn(
+        &state,
+        |db, _| -> Result<Option<String>, hexagon_core::db::DbError> {
+            Ok(hexagon_core::intake::stored_draft(db.conn(), PROJECT_ID)?)
+        },
+    )
+}
+
+/// 草案卡「编辑」后整份写回库里的草案；不落盘（gap B1）。
+#[tauri::command]
+fn update_intake_draft(state: ProjectState<'_>, body: String) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.update_intake_draft(&body))
+}
+
+/// 草案卡「先不写」：持久丢弃草案（gap B1）。
+#[tauri::command]
+fn discard_intake_draft(state: ProjectState<'_>) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.discard_intake_draft())
 }
 
 #[tauri::command]
@@ -3753,6 +3807,8 @@ pub fn run() {
             set_project_delegation,
             managed_history,
             managed_external_ops,
+            managed_summary,
+            export_managed_report,
             managed_processing,
             set_project_delegation_paused,
             stop_model_request,
@@ -3877,6 +3933,7 @@ pub fn run() {
             save_search_backend,
             remove_search_backend,
             fetch_provider_models,
+            probe_provider_key,
             agents_md_draft,
             optimize_agents_md,
             brief_questions,
@@ -3888,6 +3945,9 @@ pub fn run() {
             run_opening_intake,
             confirm_intake_brief,
             intake_draft_pending,
+            intake_draft,
+            update_intake_draft,
+            discard_intake_draft,
             project_open,
             project_info,
             dispatch,

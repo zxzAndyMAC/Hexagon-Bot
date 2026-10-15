@@ -30,6 +30,7 @@ import type { ApprovalMode } from './gen/ApprovalMode'
 import type { ApprovalModeStatus } from './gen/ApprovalModeStatus'
 import type { DelegationStatus } from './gen/DelegationStatus'
 import type { ManagedRecord } from './gen/ManagedRecord'
+import type { ManagedSummary } from './gen/ManagedSummary'
 import type { ExternalOperation } from './gen/ExternalOperation'
 import type { DesktopPermissions } from './gen/DesktopPermissions'
 import type { DesktopPermission } from './gen/DesktopPermission'
@@ -113,6 +114,7 @@ import type { AgentPatch } from './gen/AgentPatch'
 import type { AgentDetail } from './gen/AgentDetail'
 import type { ModelEntry } from './gen/ModelEntry'
 import type { ProviderDef } from './gen/ProviderDef'
+import type { KeyProbe } from './gen/KeyProbe'
 import type { ProviderView } from './gen/ProviderView'
 import type { ProvidersView } from './gen/ProvidersView'
 import type { SlotBinding } from './gen/SlotBinding'
@@ -384,6 +386,10 @@ export const api = {
   setProjectDelegation: (enabled: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation', { enabled, expectedProjectRoot }),
   managedHistory: () => call<ManagedRecord[]>('managed_history'),
   managedExternalOps: () => call<ExternalOperation[]>('managed_external_ops'),
+  /** gap A2/A3：托管时段、项目预算与本次托管花费（read 组）。 */
+  managedSummary: () => call<ManagedSummary>('managed_summary'),
+  /** gap A4：把 UI 生成的托管报告 Markdown 写到负责人在保存对话框里选的路径。 */
+  exportManagedReport: (path: string, markdown: string) => call<null>('export_managed_report', { path, markdown }),
   managedProcessing: () => call<PendingQuestion[]>('managed_processing'),
   setProjectDelegationPaused: (paused: boolean, expectedProjectRoot: string) => call<DelegationStatus>('set_project_delegation_paused', { paused, expectedProjectRoot }),
   stopModelRequest: (questionId: string) => call<null>('stop_model_request', { questionId }),
@@ -622,6 +628,9 @@ export const api = {
     call<void>('set_slot_binding', { slot, providerId, model }),
   removeSlotBinding: (slot: string) => call<void>('remove_slot_binding', { slot }),
   fetchProviderModels: (id: string) => call<ModelEntry[]>('fetch_provider_models', { id }),
+  // gap B4：向导服务商步实时密钥检测（请求一次模型目录；secret 空 = 用已存钥匙）
+  probeProviderKey: (provider: ProviderDef, secret: string | undefined, model: string) =>
+    call<KeyProbe>('probe_provider_key', { provider, secret: secret || null, model }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
   /// 2026-09-25 答问优化流：qa 携带答问卡收集的答案（可选）。
@@ -641,6 +650,10 @@ export const api = {
   runOpeningIntake: () => call<void>('run_opening_intake'),
   confirmIntakeBrief: () => call<void>('confirm_intake_brief'),
   intakeDraftPending: () => call<boolean>('intake_draft_pending'),
+  // gap B1：草案卡 inset 预览 / 编辑后整份写回 / 「先不写」持久丢弃
+  intakeDraft: () => call<string | null>('intake_draft'),
+  updateIntakeDraft: (body: string) => call<void>('update_intake_draft', { body }),
+  discardIntakeDraft: () => call<void>('discard_intake_draft'),
   /// 票 14：`onStep` 在每步真正结束时被调用（Tauri Channel），不是定时器。
   /// 命令拒绝 = 没打开；调用方不得在拒绝之后进入工作台。
   /// 票 01：`autonomy` 缺省由核落 L4。非法档位核拒绝且不建项目。
@@ -963,14 +976,23 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
 const mockManaged = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockmanaged')
 let MOCK_MANAGED = { enabled: true, paused: false }
 const MOCK_MANAGED_HISTORY = [
-  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'no_configured_target', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete' },
-  { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'model_choice', via: 'model', outcome: 'stamped', actor: 'managed:g1:1', result: 'done' },
-  { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done' },
+  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'target_missing', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule' },
+  { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'evidence_complete', via: 'host', outcome: 'stamped', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'real_check' },
+  { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
 ]
 const MOCK_MANAGED_EXTERNAL = [
   { event_id: 122, card_id: 'q-m1', kind: 'local_trash', target: '~/Downloads/old-build.zip', action: 'move_to_trash', decision: 'allow', result: 'done', at: '2026-10-14 03:58:00', verification: 'host_verified_recoverable', trash_path: '~/.Trash/old-build.zip' },
   { event_id: 123, card_id: 'q-m2', kind: 'mcp', target: 'figma:update_node', action: 'update_node', decision: 'allow', result: 'done', at: '2026-10-14 03:59:00', verification: 'host_unverified_deletion', trash_path: null },
 ]
+const mockIntake: { draft: string | null | undefined } = { draft: undefined }
+const mockIntakeDraft = (): string | null => {
+  if (mockIntake.draft === undefined) {
+    mockIntake.draft = typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockintake')
+      ? '## Purpose\n离线可用的待办 PWA，单用户，本地存储。\n## Commands\nnpm run dev · npm test\n## Layout\n未知\n'
+      : null
+  }
+  return mockIntake.draft
+}
 const mockDesign = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdesign')
 const mockSvg = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="320" height="240" fill="url(#g)"/></svg>`)}`
 const MOCK_DESIGN_OPTIONS = [
@@ -1018,17 +1040,20 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'team':
       return [
-        { id: 'a0', role: '产品策划', status: 'active', model_slot: 'chat' },
-        { id: 'a1', role: '架构师', status: 'active', model_slot: 'chat' },
-        { id: 'a2', role: 'UX', status: 'sleeping', model_slot: 'chat' },
-        { id: 'a3', role: '前端', status: 'active', model_slot: 'code' },
-        { id: 'a4', role: '后端', status: 'active', model_slot: 'code' },
-        { id: 'a5', role: 'QA', status: 'active', model_slot: 'chat' },
-        { id: 'a6', role: '后端技术负责人', status: 'sleeping', model_slot: 'chat' },
-        { id: 'a7', role: '运维', status: 'sleeping', model_slot: 'ops' },
+        { id: 'a0', role: '产品策划', status: 'active', model_slot: 'chat', duty: '把一句话需求展开成规格与验收标准' },
+        { id: 'a1', role: '架构师', status: 'active', model_slot: 'chat', duty: '定技术方案、模块边界与接口' },
+        { id: 'a2', role: 'UX', status: 'sleeping', model_slot: 'chat', duty: '信息结构与交互流程' },
+        { id: 'a3', role: '前端', status: 'active', model_slot: 'code', duty: '实现界面与前端逻辑' },
+        { id: 'a4', role: '后端', status: 'active', model_slot: 'code', duty: '实现服务端接口与数据' },
+        { id: 'a5', role: 'QA', status: 'active', model_slot: 'chat', duty: '写测试用例并验证交付' },
+        { id: 'a6', role: '后端技术负责人', status: 'sleeping', model_slot: 'chat', duty: '复审后端提案' },
+        { id: 'a7', role: '运维', status: 'sleeping', model_slot: 'ops', duty: '部署与发布' },
       ].map((r) => ({
         ...r,
         avatar_hash: mockAvatars[r.id] ? mockHash(mockAvatars[r.id]) : null,
+        // gap B2：团队行带解析后的模型展示名（dev 样例对照 workbench#running 消息头）
+        model: ({ chat: 'Claude Sonnet 5.5', code: 'Claude Sonnet 5.5', ops: 'DeepSeek V4' } as Record<string, string>)[r.model_slot] ?? null,
+        superior: ({ 后端: '后端技术负责人', 前端: '架构师', UX: '产品策划', QA: '架构师' } as Record<string, string>)[r.role] ?? null,
       })) as T
     case 'artifacts':
       return [
@@ -1204,6 +1229,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(119, 'tool_result', 'a4', 'r3', { tool: 'fs_read', ok: true, result: { output: { content: '# 接口说明 v2\n…' } } }, '11:55'),
         mkEv(120, 'tool_called', 'a4', 'r3', { tool: 'bash', input: { cmd: 'cargo test --workspace' }, seq: 'r5:i1' }, '11:56'),
       ]
+      // gap B1/B3 截图比对（workbench#fresh）：`?mockintake` 时只留开场三条——负责人还没开口，出首屏 + 草案卡
+      if (mockIntakeDraft() !== null) all.splice(3)
       // 票 08 截图比对（managed#running）：`?mockmanaged` 时追加托管开启事实与托管决定行
       if (mockManaged()) all.push(
         mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false }, '11:57'),
@@ -1237,7 +1264,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
         { id: 'q-stall', kind: 'stall', agent_id: 'a3', payload: { branch: 'no_reply', retry: true, role: '前端', instruction: '把列表过滤修一下' }, state: 'queued' },
-        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
+        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', commit_count: 12, stage_count: 3, warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
         { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
         { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
         { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
@@ -1469,6 +1496,14 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return (mockManaged() ? MOCK_MANAGED_HISTORY : []) as T
     case 'managed_external_ops':
       return (mockManaged() ? MOCK_MANAGED_EXTERNAL : []) as T
+    case 'managed_summary': {
+      const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace('T', ' ')
+      return (mockManaged()
+        ? { started_at: at(42 * 60_000), ended_at: MOCK_MANAGED.enabled ? null : at(0), limit_cents: 10_000, spent_mc: 4_540_000, session_spent_mc: 680_000, cost_unknown: false }
+        : { started_at: null, ended_at: null, limit_cents: null, spent_mc: 0, session_spent_mc: 0, cost_unknown: false }) as T
+    }
+    case 'export_managed_report':
+      return null as T
     case 'managed_processing':
       return (mockManaged() && MOCK_MANAGED.enabled ? [
         { id: 'q-m4', kind: 'stamp', agent_id: 'a3', payload: { stage: '测试' }, state: 'queued' },
@@ -1476,8 +1511,9 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] : []) as T
     case 'design_direction':
       // 票 04 截图比对（decisions#design）：`?mockdesign` 时给一张 D12 视觉方向卡的三套方案；默认关，既有测试依赖空夹具
-      if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS } as T
-      return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null } as T
+      if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS,
+        previous_guidance: { source: 'selected', title: '清爽工具', summary: 'Inter · 蓝灰 · 8px 圆角', recorded_at: '2026-10-01 09:00:00' } } as T
+      return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null, previous_guidance: null } as T
     case 'choose_design_direction':
     case 'desktop_screenshot':
       throw new Error('Desktop app required')
@@ -1652,6 +1688,11 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'set_slot_binding':
     case 'remove_slot_binding':
       return null as T
+    // gap B4：dev 下钥匙含 bad 时模拟服务商拒绝（看失败原因），否则检测通过
+    case 'probe_provider_key':
+      return (String(args?.secret ?? '').includes('bad')
+        ? { ok: false, failure: 'authentication', status: 401, model_listed: null, window: null }
+        : { ok: true, failure: null, status: null, model_listed: true, window: 200000 }) as T
     case 'fetch_provider_models':
       return [
         { id: 'deepseek/deepseek-chat', group: 'deepseek', caps: ['tools'] },
@@ -1674,10 +1715,19 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         globs: [],
       })) as T
     case 'run_opening_intake':
+      return null as T
+    // gap B1：`?mockintake` 给 dev 一份未落盘草案（对照 workbench#fresh）
     case 'confirm_intake_brief':
+    case 'discard_intake_draft':
+      mockIntake.draft = null
+      return null as T
+    case 'update_intake_draft':
+      mockIntake.draft = String(args?.body ?? '')
       return null as T
     case 'intake_draft_pending':
-      return false as T
+      return (mockIntakeDraft() !== null) as T
+    case 'intake_draft':
+      return mockIntakeDraft() as T
     // ui-redesign 票 11：设置·权限「已记住的规则」表的 dev 样例（对照 settings#perms）
     case 'permission_rules':
       return [

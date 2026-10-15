@@ -436,3 +436,80 @@ proptest! {
         prop_assert!(crate::design::guard_write(&wb.db,&ctx,"fs_write",&ignored).unwrap().is_none());
     }
 }
+
+/// Gap A7 (2026-10-15): the owner's confirmed guidance carries to the next
+/// project's open direction (card signal + proposer brief) and stops once
+/// that project confirms; a delegated choice is never recorded as the owner's.
+#[test]
+fn owner_visual_guidance_carries_to_the_next_open_direction() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join(".hexagon/visual-guidance.json");
+    crate::design::GUIDANCE_TEST_PATH.with(|p| *p.borrow_mut() = Some(file.clone()));
+    let first_dir = tempfile::tempdir().unwrap();
+    let first = Workbench::for_test(first_dir.path(), &["UI/UX"], None).unwrap();
+    let ctx = first.ctx_for("a0", None);
+    let open = crate::design::require(&first.db, &first.project_id, "a0").unwrap();
+    assert_eq!(open.previous_guidance, None, "nothing remembered yet");
+    let pending = propose(
+        &first,
+        &ctx,
+        open.revision,
+        vec![option("a", "red"), option("b", "blue")],
+    )
+    .unwrap();
+    choose_design_direction(
+        &first.db,
+        &first.project_id,
+        pending.question_id.as_deref().unwrap(),
+        pending.revision,
+        Some("b"),
+        None,
+    )
+    .unwrap();
+    assert!(file.exists());
+    assert_eq!(
+        design_direction(&first.db, &first.project_id)
+            .unwrap()
+            .previous_guidance,
+        None,
+        "a confirmed direction shows no signal"
+    );
+
+    let next_dir = tempfile::tempdir().unwrap();
+    let next = Workbench::for_test(next_dir.path(), &["UI/UX"], None).unwrap();
+    let carried = design_direction(&next.db, &next.project_id)
+        .unwrap()
+        .previous_guidance
+        .unwrap();
+    assert_eq!(carried.source, "selected");
+    assert_eq!(carried.title.as_deref(), Some("Direction b"));
+    assert!(carried.summary.contains("palette: blue"));
+    let brief = crate::design::brief(&next.db, &next.project_id).unwrap();
+    assert_eq!(brief["previous_owner_guidance"]["title"], "Direction b");
+
+    // A delegated (non-owner) choice does not overwrite the owner's guidance.
+    let nctx = next.ctx_for("a0", None);
+    let open = crate::design::require(&next.db, &next.project_id, "a0").unwrap();
+    let pending = propose(
+        &next,
+        &nctx,
+        open.revision,
+        vec![option("c", "green"), option("d", "gray")],
+    )
+    .unwrap();
+    crate::design::choose_by(
+        &next.db,
+        &next.project_id,
+        pending.question_id.as_deref().unwrap(),
+        pending.revision,
+        Some("c"),
+        None,
+        "managed:g:1",
+    )
+    .unwrap();
+    assert_eq!(crate::design::PreviousGuidance::clone(&carried), {
+        let text = std::fs::read_to_string(&file).unwrap();
+        serde_json::from_str::<crate::design::PreviousGuidance>(&text).unwrap()
+    });
+    crate::design::GUIDANCE_TEST_PATH.with(|p| *p.borrow_mut() = None);
+}

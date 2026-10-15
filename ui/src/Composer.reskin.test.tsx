@@ -19,7 +19,7 @@ import type { TeamRow } from './gen/TeamRow'
 let el: HTMLDivElement
 let root: Root
 const member = (role: string, id = `id-${role}`, status: 'active' | 'sleeping' = 'active'): TeamRow =>
-  ({ id, role, model_slot: 'chat', status, avatar_hash: null })
+  ({ id, role, model_slot: 'chat', status, avatar_hash: null, model: null, duty: null, superior: null })
 
 async function mount(node: React.ReactNode) {
   el = document.createElement('div')
@@ -95,6 +95,16 @@ describe('D2 建议弹层', () => {
     expect(rows[1].textContent).toContain('Dev [b1]')
     expect(rows[1].textContent).toContain('Asleep')
     expect(rows[2].textContent).not.toContain('Asleep')
+  })
+
+  // gap B7（2026-10-15）：@ 行显示灰职责（TeamRow.duty）；票 07 时 TeamRow 无职责字段，行内不出
+  it('@ 行在名字后显示灰职责，无职责时不占位', async () => {
+    useUiStore.setState({ team: [{ ...member('QA'), duty: 'Writes test cases' }, member('Dev', 'b1')] })
+    await mount(<Composer />)
+    await type('@')
+    const rows = [...el.querySelectorAll<HTMLElement>('[role=option]')]
+    expect(rows[0].querySelector('.desc')?.textContent).toBe('Writes test cases')
+    expect(rows[1].querySelector('.desc')).toBeNull()
   })
 
   it('# 首屏出骨架，防抖期间保持旧结果，产物路径标版本', async () => {

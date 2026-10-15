@@ -29,6 +29,8 @@ pub enum AdminError {
 // 壳层供应商面的类型出口也在这里——provider_config:: 直名只许出现在本模块
 // 与 create_project 建档校验（票 05 收口约定，rg 闸=1 针对逻辑直调）。
 pub use crate::provider_config::{ModelEntry, ProviderDef};
+// gap B4：向导实时密钥检测同走本模块出口。
+pub use crate::provider_probe::{probe_key, KeyProbe};
 
 /// 供应商的对外视图（ADR 0054）：非密字段平铺 + key_set 只报是否已存
 /// （key 明文永不回传）。

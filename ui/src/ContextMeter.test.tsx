@@ -46,8 +46,8 @@ it('shows the addressed role even when another role has the latest request', asy
     payload: { kind: 'request_envelope', context: { used_tokens: used, window_tokens: 1_000_000, compact_at_tokens: 800_000, model_slot: 'chat' } },
   } })
   useUiStore.setState({ timeline: [], timelineFacts: mockTimelineFacts([event(1, 'a', 100_000), event(2, 'b', 800_000)], {expected_project_root:'/p',watched_tool_streams:[],watched_message_ids:[]}), team: [
-    { id: 'a', role: 'QA', status: 'active', model_slot: 'chat', avatar_hash: null },
-    { id: 'b', role: '前端', status: 'active', model_slot: 'chat', avatar_hash: null },
+    { id: 'a', role: 'QA', status: 'active', model_slot: 'chat', avatar_hash: null, model: null, duty: null, superior: null },
+    { id: 'b', role: '前端', status: 'active', model_slot: 'chat', avatar_hash: null, model: null, duty: null, superior: null },
   ] })
   root = createRoot(el)
   await act(async () => { root.render(<ContextMeter agentIds={['a']} />) })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRows, compactMarks, deriveWorkbenchStatus, markHighlights, nodeMarks, openTurn, openTurns, stampedByAutonomy, type StatusSources } from './timelineModel'
+import { buildRows, compactMarks, deriveWorkbenchStatus, markHighlights, nodeMarks, openTurn, openTurns, stampedByAutonomy, type HostNode, type StatusSources } from './timelineModel'
 import { severityOf } from './decisions'
 import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api'
 
@@ -201,14 +201,30 @@ describe('nodeMarks', () => {
     expect(types('decisions')).toEqual(['flag', 'pending'])
   })
 
-  it('宿主节点覆盖未加载的历史（rowIdx -1），已加载的补上谁与何时；三类新节点只取已加载窗口', () => {
+  // gap A1（2026-10-15）：三类新节点改由宿主节点读给出、覆盖全历史；原「三类新节点只取已加载窗口」断言随之改写。
+  it('宿主节点覆盖未加载的历史（四类都有，rowIdx -1）；水位之后的新事件从已加载窗口补上', () => {
+    const host = (event_id: number, kind: HostNode['kind'], cls: HostNode['class'], label: string, agent_id: string | null = null): HostNode =>
+      ({ event_id, kind, class: cls, label, summary: null, agent_id, created_at: '2026-10-15 09:00:00' })
     const tl = [{ ...ev(30, 'artifact_delivered', { path: 'a.md' }, 'fe'), message: null }, ev(31, 'owner_message', {}, 'owner')]
-    const marks = nodeMarks(tl, buildRows(tl, 'all'), 0, { hostNodes: [
-      { event_id: 2, kind: 'stage_started', label: '设计' },
-      { event_id: 30, kind: 'artifact_delivered', label: 'a.md' },
+    const marks = nodeMarks(tl, buildRows(tl, 'all'), 0, { hostWatermark: 30, hostNodes: [
+      host(2, 'stage_started', 'milestone', '设计'),
+      host(3, 'owner_message', 'owner', '先做登录'),
+      host(4, 'system', 'managed', 'permission · allow'),
+      host(5, 'turn_failed', 'failed', 'provider 500', 'be'),
+      host(30, 'artifact_delivered', 'milestone', 'a.md', 'fe'),
     ] })
-    expect(marks.map((m) => [m.eventId, m.type, m.rowIdx])).toEqual([[2, 'stage', -1], [30, 'deliver', 0], [31, 'owner', 1]])
-    expect(marks[1].agentId).toBe('fe')
+    expect(marks.map((m) => [m.eventId, m.type, m.tone, m.rowIdx])).toEqual([
+      [2, 'stage', undefined, -1], [3, 'owner', undefined, -1], [4, 'managed', 'mg', -1], [5, 'failed', 'err', -1],
+      [30, 'deliver', undefined, 0], [31, 'owner', undefined, 1],
+    ])
+    expect(marks[3].agentId).toBe('be')
+    expect(marks[4].agentId).toBe('fe')
+  })
+
+  it('宿主未交出的失败（已恢复）不会被窗口派生补回', () => {
+    const tl = [{ ...ev(3, 'turn_failed', { error: 'x' }, 'fe'), message: null }]
+    // 宿主水位 ≥ 3 且没有这个节点 = 宿主判定已恢复 / 已撤掉
+    expect(nodeMarks(tl, buildRows(tl, 'all'), 0, { hostNodes: [], hostWatermark: 9 })).toEqual([])
   })
 })
 

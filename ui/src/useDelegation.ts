@@ -4,6 +4,7 @@ import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import type { DelegationStatus } from './gen/DelegationStatus'
 import type { ManagedRecord } from './gen/ManagedRecord'
+import type { ManagedSummary } from './gen/ManagedSummary'
 
 /** Host-persisted delegation state, shared by every mounted view (pill,
  * strip, approval menu, report, timeline rows). Never optimistic: views
@@ -17,10 +18,12 @@ type DelegationState = {
   failed: boolean
   history: ManagedRecord[] | null
   historyFailed: boolean
+  /** gap A2/A3：托管时段与预算 / 花费；与 status 同一读取键一起读。读失败不影响胶囊，只是不出这两行。 */
+  summary: ManagedSummary | null
 }
 
 const useDelegationStore = create<DelegationState>(() => ({
-  status: null, processing: [], failed: false, history: null, historyFailed: false,
+  status: null, processing: [], failed: false, history: null, historyFailed: false, summary: null,
 }))
 
 let generation = 0
@@ -33,9 +36,10 @@ function load(key: string | null) {
   if (key !== null && key === loadedKey) return
   loadedKey = key
   const current = ++generation
-  void Promise.all([api.projectDelegation(), api.managedProcessing()]).then(([status, held]) => {
+  const summary = api.managedSummary().catch(() => null)
+  void Promise.all([api.projectDelegation(), api.managedProcessing(), summary]).then(([status, held, facts]) => {
     if (current !== generation || subscribers === 0) return
-    useDelegationStore.setState({ status, processing: held, failed: false })
+    useDelegationStore.setState({ status, processing: held, failed: false, summary: facts })
   }).catch(() => {
     if (current === generation && subscribers > 0) useDelegationStore.setState({ failed: true })
   })
@@ -72,6 +76,7 @@ export function useDelegation() {
   const status = useDelegationStore(s => s.status)
   const processingItems = useDelegationStore(s => s.processing)
   const failed = useDelegationStore(s => s.failed)
+  const summary = useDelegationStore(s => s.summary)
   useEffect(() => {
     if (subscribers > 0) queueReload()
     subscribers += 1
@@ -79,7 +84,7 @@ export function useDelegation() {
       subscribers -= 1
       if (subscribers === 0) {
         generation += 1; loadedKey = null
-        useDelegationStore.setState({ status: null, processing: [], failed: false })
+        useDelegationStore.setState({ status: null, processing: [], failed: false, summary: null })
       }
     }
   }, [])
@@ -94,7 +99,7 @@ export function useDelegation() {
     useDelegationStore.setState({ status: saved })
     load(null)
   }, [root])
-  return { status, root, processing: processingItems.length, processingItems, failed, apply, reload }
+  return { status, root, processing: processingItems.length, processingItems, failed, summary, apply, reload }
 }
 
 /** Managed decision records (newest first), shared by the report and the

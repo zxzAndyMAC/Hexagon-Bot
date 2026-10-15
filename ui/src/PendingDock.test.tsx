@@ -60,7 +60,7 @@ describe('待决坞（ui-redesign 票 04，ADR 0089）', () => {
     vi.spyOn(api, 'permissionShapeSuggestion').mockResolvedValue(null)
     useUiStore.setState({
       pending: [], reviewRows: [], pendingDialogOpen: false, dismissedPendingKeys: [], hiddenPending: [], pendingError: null,
-      toasts: [], modalScope: 'workbench', confirmReq: null, team: [{ id: 'a0', role: 'QA', status: 'active', model_slot: 'chat', avatar_hash: null }],
+      toasts: [], modalScope: 'workbench', confirmReq: null, team: [{ id: 'a0', role: 'QA', status: 'active', model_slot: 'chat', avatar_hash: null, model: null, duty: null, superior: null }],
     })
   })
 
@@ -331,5 +331,20 @@ it('写入待决显示绑定目标和变更冲突说明', async () => {
   await act(async () => root.unmount())
   el.remove()
   vi.restoreAllMocks()
+  await i18n.changeLanguage('en')
+})
+
+// gap A6（2026-10-15，decisions#cards）：发布卡「包含 N 个提交 · N 个阶段的产物」取宿主载荷；提交数未知只写阶段，旧卡无计数不出行。
+it('publish card shows what the push includes from the host payload', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const kv = (payload: Record<string, unknown>) => render(<PendingCard q={card({ id: 'pub', kind: 'publish', payload: { remote: 'origin', baseline: 'main', ...payload } })} top />)
+  const full = await kv({ commit_count: 12, stage_count: 3 })
+  expect(full.el.querySelector('.dock-kv')!.textContent).toContain('包含12 个提交 · 3 个阶段的产物')
+  const unknown = await kv({ commit_count: null, stage_count: 2 })
+  expect(unknown.el.querySelector('.dock-kv')!.textContent).toContain('包含2 个阶段的产物')
+  expect(unknown.el.querySelector('.dock-kv')!.textContent).not.toContain('个提交')
+  const legacy = await kv({})
+  expect(legacy.el.querySelector('.dock-kv')!.textContent).not.toContain('包含')
+  for (const r of [full, unknown, legacy]) { await act(async () => r.root.unmount()); r.el.remove() }
   await i18n.changeLanguage('en')
 })

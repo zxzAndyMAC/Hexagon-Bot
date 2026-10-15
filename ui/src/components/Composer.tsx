@@ -151,7 +151,7 @@ export function Composer() {
             const name = mentionName(m)
             return {
               kind: '@' as const, label: mentionTokenText(name), agentId: m.id, name: m.role,
-              inst: name === m.role ? null : m.id, sleeping: m.status === 'sleeping',
+              inst: name === m.role ? null : m.id, sleeping: m.status === 'sleeping', duty: m.duty,
             }
           }),
       })

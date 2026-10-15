@@ -4240,12 +4240,7 @@ impl Workbench {
     /// 不读自治档来决定写不写。L4 自动通过的是提案盖章和项目内安装（票 04），
     /// 不是这份草案。`run_opening_intake` 不调用这里。
     pub fn confirm_intake_brief(&self) -> Result<(), ApiError> {
-        let draft: Option<String> = self.db.conn().query_row(
-            "SELECT intake_draft FROM projects WHERE id=?1",
-            [&self.project_id],
-            |r| r.get(0),
-        )?;
-        let Some(draft) = draft.filter(|s| !s.trim().is_empty()) else {
+        let Some(draft) = crate::intake::stored_draft(self.db.conn(), &self.project_id)? else {
             return Err(ApiError::NoIntakeDraft);
         };
         if crate::intake::instruction_file(&self.repo_root).is_some() {
@@ -4267,12 +4262,48 @@ impl Workbench {
 
     /// 还有没有等人点头的草案。读侧用，不跑分析。
     pub fn intake_draft_pending(&self) -> Result<bool, ApiError> {
-        let draft: Option<String> = self.db.conn().query_row(
-            "SELECT intake_draft FROM projects WHERE id=?1",
-            [&self.project_id],
-            |r| r.get(0),
+        Ok(crate::intake::stored_draft(self.db.conn(), &self.project_id)?.is_some())
+    }
+
+    /// 草案正文（gap B1：卡内 inset 预览与「编辑」的起点）。没有草案时为 `None`。
+    pub fn intake_draft(&self) -> Result<Option<String>, ApiError> {
+        Ok(crate::intake::stored_draft(
+            self.db.conn(),
+            &self.project_id,
+        )?)
+    }
+
+    /// 负责人在草案卡里改过正文后整份写回（gap B1「编辑」）。只改库里的草案，
+    /// 不落盘——落盘仍只走 [`Self::confirm_intake_brief`]，点头这一步不因编辑省掉。
+    /// 没有草案时拒绝：草案已写入或已丢弃，编辑不能把它复活。
+    pub fn update_intake_draft(&self, body: &str) -> Result<(), ApiError> {
+        if body.trim().is_empty() {
+            return Err(ApiError::BadInput("intake draft is empty".into()));
+        }
+        if body.len() > crate::intake::DRAFT_MAX_BYTES {
+            return Err(ApiError::BadInput("intake draft is too long".into()));
+        }
+        let n = self.db.conn().execute(
+            "UPDATE projects SET intake_draft=?1 WHERE id=?2 \
+             AND intake_draft IS NOT NULL AND TRIM(intake_draft) <> ''",
+            rusqlite::params![body, self.project_id],
         )?;
-        Ok(draft.is_some_and(|s| !s.trim().is_empty()))
+        if n == 0 {
+            return Err(ApiError::NoIntakeDraft);
+        }
+        Ok(())
+    }
+
+    /// 「先不写」（gap B1）：持久丢弃草案。之前只在本次打开里收起卡片，
+    /// 重开项目还会再出现——负责人已经说过不要，再问一次是打扰。
+    /// 开场分析状态不回退，不会因此重跑；分析消息留在时间线上，想写时照它手写。
+    /// 幂等：没有草案时什么也不做。
+    pub fn discard_intake_draft(&self) -> Result<(), ApiError> {
+        self.db.conn().execute(
+            "UPDATE projects SET intake_draft=NULL WHERE id=?1",
+            [&self.project_id],
+        )?;
+        Ok(())
     }
 
     fn intake_status(&self) -> Result<String, ApiError> {
@@ -5622,6 +5653,9 @@ pub fn timeline_nodes(
 }
 
 #[cfg(test)]
+#[path = "api/timeline_nodes_tests.rs"]
+mod timeline_nodes_tests;
+#[cfg(test)]
 #[path = "api/timeline_window_tests.rs"]
 mod timeline_window_tests;
 
@@ -5637,8 +5671,9 @@ pub fn timeline_window_metadata(
 mod action_recovery;
 mod managed;
 pub use managed::{
-    managed_decide, managed_external_ops, managed_history, managed_processing, owner_pending,
-    ExternalOperation, ManagedCandidate, ManagedDecision, ManagedRecord, ManagedRoute,
+    classify_managed, export_managed_report, managed_decide, managed_external_ops, managed_history,
+    managed_processing, managed_summary, owner_pending, ExternalOperation, ManagedCandidate,
+    ManagedDecision, ManagedEvidence, ManagedRecord, ManagedRoute, ManagedScope, ManagedSummary,
 };
 mod model_recovery;
 pub use action_recovery::{ReconcileReport, ReconcileVerdict};

@@ -156,6 +156,7 @@ export function AgentFace({ agentId, role }: { agentId: string; role: string }) 
 // C1：Agent 回复不加气泡；头行 名 + 状态胶囊；等网时下方补一句说明（C10）。
 export function LiveReply({
   role,
+  model,
   text,
   thinking,
   generating,
@@ -163,6 +164,8 @@ export function LiveReply({
   avatar,
 }: {
   role: string
+  /// gap B2：当前模型展示名（TeamRow.model），头行 `名 · 模型`
+  model?: string | null
   text: string
   thinking: string
   generating: boolean
@@ -179,6 +182,7 @@ export function LiveReply({
       <div className="tl-grow">
         <div className="tl-who">
           <b>{role}</b>
+          {model && <span className="t" data-who-model="">{model}</span>}
           {waitingNet && <ReconnectChip since={netWaiting} />}
           {generating && netWaiting == null && (
             <span data-generating="" className="chip info">
@@ -439,7 +443,11 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
       <div className="tl-grow">
         <div className="tl-who">
           <b>{title}</b>
-          {time && <span className="t">{time}</span>}
+          {/* gap B2：头行「名 · 模型 · 时间」（workbench#running）。模型是该成员现在的模型，
+              不是这条消息当时的模型——core 不按消息记模型（TeamRow.model 注释）。 */}
+          {(member?.model || time) && (
+            <span className="t">{[member?.model, time].filter(Boolean).join(' · ')}</span>
+          )}
           <CopyMessage text={m.body} />
         </div>
         <ThinkingRow text={m.thinking} />
@@ -800,6 +808,7 @@ function StreamFooter() {
             live={!done && !Object.keys(streams[id] ?? {}).some((call) => Number(call) > 0)} /></div>}
           <LiveReply
             role={member?.role ?? id}
+            model={member?.model}
             text={joinCalls(streams[id])}
             thinking={joinCalls(thinkings[id])}
             generating={!done}
@@ -838,7 +847,7 @@ export function Timeline() {
   const [filter, setFilter] = useState<Filter>('all')
   const windowState = useTimelineWindow(filter)
   const { page } = windowState
-  const { nodes } = useTimelineNodes()
+  const { nodes, watermark: nodesWatermark } = useTimelineNodes()
   const timeline = page?.items ?? (projectRoot == null && projectEpoch === 0 ? legacyTimeline : EMPTY_TIMELINE)
   const callIndex = useMemo(() => new Map(pairToolCalls([...timeline, ...(page?.boundary_pairs ?? [])]
     .sort((a, b) => a.event.id - b.event.id)).map(call => [call.called.event.id, call])), [timeline, page?.boundary_pairs])
@@ -862,9 +871,9 @@ export function Timeline() {
     olderLoading: windowState.olderLoading, olderError: windowState.olderError,
     loadOlder: windowState.loadOlder, loadLatest: windowState.loadLatest,
     targetEventId: page?.target_event_id ?? null, stickReq })
-  // 票 06（C15）：宿主节点读给完整历史的基础刻度；负责人发言 / 托管决定 / 失败从已加载窗口派生；跟随筛选；超 40 道合并事件刻度。
+  // 票 06（C15）+ gap A1：宿主节点读给完整历史的四类刻度（水位之后的新事件先从窗口补）；跟随筛选；超 40 道合并事件刻度。
   const marks = useMemo(() => compactMarks(nodeMarks(timeline, rows, pending.length,
-    { hostNodes: projectRoot != null ? nodes : undefined, filter })), [projectRoot, nodes, rows, pending.length, timeline, filter])
+    { hostNodes: projectRoot != null ? nodes : undefined, hostWatermark: nodesWatermark, filter })), [projectRoot, nodes, nodesWatermark, rows, pending.length, timeline, filter])
   const [range, setRange] = useState<{ start: number; end: number } | null>(null)
   const highlights = useMemo(() => markHighlights(marks, range), [marks, range])
   const areaRef = useRef<HTMLDivElement>(null)

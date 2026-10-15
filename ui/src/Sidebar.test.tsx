@@ -5,7 +5,7 @@
 import { describe, expect, it, afterEach } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import './i18n'
+import i18n from './i18n'
 import { Sidebar } from './components/shell/Sidebar'
 import { Canvas } from './components/shell/Canvas'
 import { TooltipProvider } from './components/ui/tooltip'
@@ -124,9 +124,9 @@ describe('侧栏待决与团队（B1、B3）', () => {
   it('工作中显示像素格，休眠半透明并写「休眠」；点成员打开该 Agent', async () => {
     useUiStore.setState({
       team: [
-        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null },
-        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null },
-        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null },
+        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
+        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null, model: null, duty: null, superior: null },
+        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
       ],
       streams: { a1: { 0: '正在写' } },
     })
@@ -140,6 +140,38 @@ describe('侧栏待决与团队（B1、B3）', () => {
     expect(host.querySelector('[data-member="a3"]')!.getAttribute('data-member-state')).toBe('online')
     await act(async () => { fe.click() })
     expect(useUiStore.getState().activeTab).toBe('agent:a1')
+  })
+})
+
+// gap B6（2026-10-15）：成员悬停名片由过渡期 Tooltip「角色 · 模型」换成 B3 写的 HoverCard
+// （模型 / 上级 / 职责）；聚焦也打开，键盘可读。
+describe('成员悬停名片（B3 HoverCard）', () => {
+  it('聚焦成员行出名片：模型、上级、职责；无上级写直接向你汇报', async () => {
+    await i18n.changeLanguage('zh-CN')
+    useUiStore.setState({
+      team: [
+        { id: 'a1', role: '前端', model_slot: 'code', status: 'active', avatar_hash: null, model: 'Claude Sonnet 5.5', duty: '实现界面与前端逻辑', superior: '架构师' },
+        { id: 'a2', role: '项目经理', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
+      ],
+      streams: {},
+    })
+    const host = await render(sidebar)
+    const open = async (id: string) => {
+      await act(async () => { (host.querySelector(`[data-member="${id}"]`) as HTMLButtonElement).focus() })
+      await act(async () => { await new Promise((r) => setTimeout(r, 400)) })
+      return document.querySelector(`[data-member-card="${id}"]`) as HTMLElement | null
+    }
+    const fe = await open('a1')
+    expect(fe).toBeTruthy()
+    expect(fe!.textContent).toContain('Claude Sonnet 5.5')
+    expect(fe!.textContent).toContain('架构师')
+    expect(fe!.textContent).toContain('实现界面与前端逻辑')
+    await act(async () => { (host.querySelector('[data-member="a1"]') as HTMLButtonElement).blur() })
+    const pm = await open('a2')
+    expect(pm).toBeTruthy()
+    expect(pm!.textContent).toContain('无（直接向你汇报）')
+    expect(pm!.textContent).not.toContain('职责')
+    await i18n.changeLanguage('en')
   })
 })
 
