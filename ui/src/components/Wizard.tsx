@@ -661,7 +661,7 @@ export function Wizard({ onDone, onCancel, seed }: {
       {heading('confirm', t('wizard.lead.confirm'))}
       <ConfirmSummary draft={draft} set={set} pickedRoles={pickedRoles} approvedQuality={approvedQuality} report={report} existingRepoAlign={existingRepoAlign} />
       {(busy || createDone.length > 0 || createFail) && (
-        <CreateProgress name={draft.name} busy={busy} done={createDone} fail={createFail} durations={createMs} />
+        <CreateProgress name={draft.name} busy={busy} done={createDone} fail={createFail} durations={createMs} roleCount={draft.roles.length} />
       )}
     </>),
   }
