@@ -53,7 +53,7 @@ it('blocks unresolved policy recovery through both the button and approval short
   const el = document.createElement('div'); const root = createRoot(el)
   try {
     await act(async () => root.render(<PendingCard q={pending} top />))
-    expect(el.querySelector<HTMLButtonElement>('button.primary')?.disabled).toBe(true)
+    expect(el.querySelector<HTMLButtonElement>('button[data-variant="primary"]' /* ADR 0089：A1 primary 由 data-variant 标出 */)?.disabled).toBe(true)
     expect(el.textContent).toContain('Current files are preserved')
     const event = new KeyboardEvent('keydown', { key: 'Enter', metaKey: isMac, ctrlKey: !isMac })
     expect(await handlePendingKey(event, [pending])).toBe('blocked-policy')
@@ -102,12 +102,12 @@ it('refreshes all quality states and allows only qualified owner adoption', asyn
       const pending = { ...card, payload: { ...card.payload, policy_quality: state } }
       await act(async () => root.render(<PendingCard q={pending} top />))
       expect(el.querySelector('[role="status"]')?.textContent).toContain(phrase)
-      expect(el.querySelector<HTMLButtonElement>('button.primary')?.disabled).toBe(state !== 'qualified')
+      expect(el.querySelector<HTMLButtonElement>('button[data-variant="primary"]' /* ADR 0089：A1 primary 由 data-variant 标出 */)?.disabled).toBe(state !== 'qualified')
       expect(accept).not.toHaveBeenCalled()
     }
     const qualified = { ...card, payload: { ...card.payload, policy_quality: 'qualified' } }
     await act(async () => root.render(<PendingCard q={qualified} top />))
-    await act(async () => el.querySelector<HTMLButtonElement>('button.primary')!.click())
+    await act(async () => el.querySelector<HTMLButtonElement>('button[data-variant="primary"]' /* ADR 0089：A1 primary 由 data-variant 标出 */)!.click())
     expect(accept).toHaveBeenCalledWith('policy-card')
     accept.mockClear()
     useUiStore.setState({ modalScope: 'settings' })

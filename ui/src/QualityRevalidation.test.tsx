@@ -27,7 +27,8 @@ it('binds revalidation to displayed evidence, disables unavailable checks, and u
   const root = createRoot(el)
   try {
     await act(async () => root.render(<PendingCard q={question} top />))
-    const submit = el.querySelector<HTMLButtonElement>('button.primary')!
+    const submit = // ADR 0089（票 04）：决策按钮换成 A1 形，primary 由 data-variant 标出（旧 .btn.primary 类撤掉）
+    el.querySelector<HTMLButtonElement>('button[data-variant="primary"]')!
     expect(submit.disabled).toBe(false)
     expect(el.querySelector('select')).toBeNull()
     await act(async () => submit.click())

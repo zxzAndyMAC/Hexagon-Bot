@@ -25,7 +25,12 @@ it('requires an explicit choice and submits the displayed immutable revision', a
   await act(async () => { root.render(<DesignChoices q={card} />) })
   expect(el.querySelector('img')?.getAttribute('src')).toBe(direction.options[0].mockups[0].data_url)
   expect(choose).not.toHaveBeenCalled()
-  await act(async () => { el.querySelector<HTMLButtonElement>('article button.primary')!.click() })
+  // 票 04（components D12，ADR 0089 换皮）：方案是 radio，选中后由底栏唯一的「用这个方向」提交；未选时主按钮禁用。
+  const use = el.querySelector<HTMLButtonElement>('button[data-variant="primary"]')!
+  expect(use.disabled).toBe(true)
+  await act(async () => { el.querySelector<HTMLInputElement>('article input[type="radio"]')!.click() })
+  expect(el.querySelector('article[data-selected]')).not.toBeNull()
+  await act(async () => { use.click() })
   expect(choose).toHaveBeenCalledWith('q-design', 2, 'calm', undefined)
 })
 it('never offers choices from a superseded card', async () => {

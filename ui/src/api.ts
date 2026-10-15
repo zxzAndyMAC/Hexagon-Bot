@@ -943,7 +943,34 @@ const artLatest = (path: string): string | null => {
   return vs[Math.max(...Object.keys(vs).map(Number))]
 }
 
+// 票 04 黄金标准手测：`?mockdecide` 时 mock 记住已裁决的卡，pending_questions 不再返回它们
+// （默认关：既有测试依赖静态夹具）。键 = 卡 id；recover_run / stamp 按夹具里对应卡反查。
+const MOCK_DECIDED = new Set<string>()
+const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> = {
+  answer_permission: (a) => String(a.questionId), allow_project_permission: (a) => String(a.questionId),
+  confirm_publish: (a) => String(a.qid), reject_publish: (a) => String(a.qid),
+  confirm_worktree: (a) => String(a.qid), reject_worktree: (a) => String(a.qid),
+  adjudicate_flag: (a) => String(a.qid), confirm_proposal: (a) => String(a.qid), reject_proposal: (a) => String(a.qid),
+  stall_retry: (a) => String(a.questionId), stall_ack: (a) => String(a.questionId),
+  recover_run: () => 'q-rec', stamp: () => 'q-stamp', reject_stamp: () => 'q-stamp',
+}
+
+const mockDesign = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdesign')
+const mockSvg = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="320" height="240" fill="url(#g)"/></svg>`)}`
+const MOCK_DESIGN_OPTIONS = [
+  { id: 'crisp', title: '清爽工具', description: 'Inter · 蓝灰 · 8px 圆角', layout: '双栏', typography: 'Inter', palette: '蓝灰', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm1', data_url: mockSvg('#eef4fc', '#d6e4f5') }] },
+  { id: 'night', title: '夜间专注', description: '深色优先 · 紫色强调', layout: '单栏', typography: 'Inter', palette: '深色', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm2', data_url: mockSvg('#2a2a33', '#15151b') }] },
+  { id: 'warm', title: '温暖手账', description: '衬线标题 · 米色纸感', layout: '卡片', typography: '衬线', palette: '米色', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm3', data_url: mockSvg('#fdf0dc', '#f8d6b8') }] },
+]
+
 function mock<T>(cmd: string, args?: Record<string, unknown>): T {
+  if (MOCK_DECIDE_CMDS[cmd] && typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdecide')) {
+    MOCK_DECIDED.add(MOCK_DECIDE_CMDS[cmd](args ?? {}))
+  }
+  return mockReply<T>(cmd, args)
+}
+
+function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
   switch (cmd) {
     case 'core_ping':
       return 'hexagon-core ok' as T
@@ -1180,7 +1207,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
         { id: 'q-perm2', kind: 'permission', agent_id: 'a1', payload: { tool: 'bash', input: { cmd: 'rm -rf target && cargo build' }, reason: '构建产物损坏，安全网必问', safety_net: true }, state: 'queued' },
         { id: 'q-prop', kind: 'stamp', agent_id: 'a1', payload: { proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }, state: 'queued' },
-      ] as T
+        ...(mockDesign() ? [{ id: 'q-design', kind: 'escalation', agent_id: 'a2', payload: { sub: 'design_direction', revision: 1 }, state: 'queued' }] : []),
+      ].filter((q) => !MOCK_DECIDED.has(q.id)) as T
     case 'usage':
       return {
         rows: [
@@ -1401,6 +1429,8 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'managed_processing':
       return [] as T
     case 'design_direction':
+      // 票 04 截图比对（decisions#design）：`?mockdesign` 时给一张 D12 视觉方向卡的三套方案；默认关，既有测试依赖空夹具
+      if (mockDesign()) return { project_id: 'p1', revision: 1, question_id: 'q-design', state: 'pending', selected_option: null, existing_guidance: null, selected_at: null, options: MOCK_DESIGN_OPTIONS } as T
       return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null } as T
     case 'choose_design_direction':
     case 'desktop_screenshot':

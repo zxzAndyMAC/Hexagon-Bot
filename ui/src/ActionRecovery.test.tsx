@@ -58,6 +58,10 @@ it('explains why abandon and new attempt are unavailable and offers continuation
     })
     const retry = el.querySelector('button[data-action="retryAction"]') as HTMLButtonElement
     expect(retry.title).toContain('Accept the duplicate-effect risk first')
+    // 票 04（R-03 拍板，ADR 0089 换皮）：放弃追查另须勾「我了解放弃追查后不会重放该动作」——未勾时仍禁用并写原因。
+    expect((el.querySelector('button[data-action="abandonAction"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(el.querySelector('[data-blocked]')?.textContent).toContain('will not be replayed')
+    await act(async () => (el.querySelector('[data-ack="abandon"]') as HTMLButtonElement).click())
     await act(async () => (el.querySelector('button[data-action="abandonAction"]') as HTMLButtonElement).click())
     expect(abandon).toHaveBeenCalledWith('act1', 'checked by hand', '/project')
     expect(offer).toHaveBeenCalledWith('act1')

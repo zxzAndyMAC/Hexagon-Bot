@@ -19,6 +19,8 @@ import { ChevronLeft, CircleCheck, CircleX, EllipsisVertical, Info, MessageCircl
 import { Clock, Ellipsis, Maximize2, PanelLeft, Search } from 'lucide-react'
 // ui-redesign 票 14 电脑操控（foundations §7 原型名 external / image / cpu；collapse 为补设计；circle-check 票 10 已注册）
 import { Cpu, ExternalLink, Image, Minimize2 } from 'lucide-react'
+// ui-redesign 票 04 待决坞（foundations §7 原型名 palette / test→test-tube / key / branch→git-branch；key 已由票 11 注册、test 由票 07 注册）
+import { GitBranch, Palette } from 'lucide-react'
 // ui-redesign 票 09 画布选区浮条（foundations §7 原型名 wand → wand）
 import { Wand } from 'lucide-react'
 // ui-redesign 票 12 用量（foundations §7 原型名 calendar / trend→trending-up；trend-down 为补设计：环比下降时的对称字形）
@@ -142,6 +144,9 @@ const ICONS = {
   cpu: Cpu,
   wand: Wand,
   collapse: Minimize2,
+  // ---- 待决坞决策卡（票 04，components D8 / D12）；key 与票 11、test 与票 07 共用 ----
+  palette: Palette,
+  branch: GitBranch,
   // ---- 用量（票 12） ----
   calendar: Calendar,
   trend: TrendingUp,

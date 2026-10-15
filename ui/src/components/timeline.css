@@ -249,6 +249,8 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl-rs-list li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--r-card); font-size: 13px; }
 .tl-rs-list li .tl-grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-rs-list li b { font-weight: 600; }
+/* C12 禁用态（票 04 补设计）：已处理的行划除 + ink-3，保留 30 秒后移除 */
+.tl-rs-list li[data-handled] .tl-grow { color: var(--ink-3); text-decoration: line-through; }
 .tl-rs-next { display: flex; flex-direction: column; }
 .tl-rs-next button {
   display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px; margin: 0 -6px; border: 0; border-top: 1px solid var(--line-soft);

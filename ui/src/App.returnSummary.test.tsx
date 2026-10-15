@@ -87,3 +87,22 @@ it('collapses to a single line and expands back', async () => {
   await act(async () => line.click())
   expect(el.querySelector('[data-return-summary] li')).toBeTruthy()
 })
+
+// 票 04（components C12 禁用态，补设计）：处理掉的行划除并转 ink-3，保留 30 秒可读后移除；首行键位交给下一张顶卡。
+it('a handled row is struck through for 30 seconds, then removed', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  try {
+    await act(async () => { useUiStore.setState({ pending: [pending[0]] }) })
+    const card = el.querySelector('[data-return-summary]')!
+    let rows = [...card.querySelectorAll('li')]
+    expect(rows.map((r) => r.hasAttribute('data-handled'))).toEqual([false, true])
+    expect(rows[0].querySelector('kbd')?.textContent).toBe(formatBinding(bindingFor('approve')))
+    expect(rows[1].querySelector('kbd')).toBeNull()
+    await act(async () => { vi.advanceTimersByTime(29_000) })
+    expect(card.querySelectorAll('li[data-handled]')).toHaveLength(1)
+    await act(async () => { vi.advanceTimersByTime(1_100) })
+    rows = [...card.querySelectorAll('li')]
+    expect(rows).toHaveLength(1)
+    expect(rows[0].hasAttribute('data-handled')).toBe(false)
+  } finally { vi.useRealTimers() }
+})

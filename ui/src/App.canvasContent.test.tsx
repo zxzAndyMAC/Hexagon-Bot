@@ -13,7 +13,8 @@ import { useUiStore } from './store'
 import { isMac } from './keymap'
 import i18n from './i18n'
 
-vi.mock('./components/PendingCards', () => ({ PendingDialog: () => null }))
+// 票 04（ADR 0089）：待决弹窗 PendingDialog 换成待决坞 PendingDock，桩随之改名
+vi.mock('./components/PendingDock', () => ({ PendingDock: () => null }))
 vi.mock('./components/SettingsPage', () => ({ SettingsPage: () => <div data-settings-page /> }))
 vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) }))
 

@@ -162,8 +162,17 @@ interface UiState {
      把收起当成销卡会把必须人处理的卡静默丢掉（spec 故事 52/53），所以偏向再弹。
      常驻区的 pendingH / pendingCollapsed 随区一起撤，高度还给中栏和时间线。 */
   reviewRows: ProposalRow[]
+  /* ui-redesign 票 04（ADR 0089）：弹窗换成输入条上方的待决坞。字段名沿用旧名（侧栏、命令面板、
+     证据卡都在调 openPendingDialog，改名只换来跨票冲突），语义平移：
+     pendingDialogOpen = 坞展开（false 且有待决时是「N 件待决」胶囊，不是隐藏）；
+     dismissedPendingKeys = 收起时已见过的 id，新 id 到达自动展开（偏向再弹的理由同上）。 */
   pendingDialogOpen: boolean
   dismissedPendingKeys: string[]
+  /* 票 04「保存即消卡」（interaction §2）：点下裁决到 invalidate 读回之间，这张卡先从坞里拿掉。
+     只在途中有效——读回后无论结果如何都清掉，卡还在 pending 里就回到坞（不臆造已解决）。 */
+  hiddenPending: string[]
+  /* 裁决失败（D6 错误态）：卡回到坞顶，底栏上方红字原因。下一次成功裁决或换项目时清掉。 */
+  pendingError: { id: string; text: string } | null
   usageTotal: UsageTotal | null
   autonomy: string
   /// MCP 还在握手时为 true。工作台已进入，输入先停。
@@ -256,6 +265,9 @@ interface UiState {
   closePendingDialog: () => void
   noteReviewRows: (rows: ProposalRow[]) => void
   syncPendingDialog: () => void
+  hidePending: (id: string) => void
+  unhidePending: (id: string) => void
+  notePendingError: (error: { id: string; text: string } | null) => void
   /// 右栏文件树命令（票 11）：快捷键与按钮共用。n 递增，FileTree 消费一次。
   fileTreeReq: { n: number; action: FileTreeAction } | null
   requestFileTree: (action: FileTreeAction) => void
@@ -319,7 +331,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     set(s => ({ projectRoot: null, projectGeneration: null, projectEpoch: s.projectEpoch + 1,
       // Benchmark I1: p1 is reused across projects. Clear actionable projections
       // at the same identity boundary, before a status poll can fail or arrive late.
-      stages: [], pending: [], reviewRows: [], pendingDialogOpen: false, dismissedPendingKeys: [], statusError: false,
+      stages: [], pending: [], reviewRows: [], pendingDialogOpen: false, dismissedPendingKeys: [], hiddenPending: [], pendingError: null, statusError: false,
       team: [], artifacts: [], avatars: {}, avatarHashes: {}, providers: null,
       usageTotal: null, usageRows: [], usageSeries7d: [], contextPressure: null,
       projectName: '', autonomy: 'L0', mode: 'pack', fastRole: null, packName: null, mcpPending: false,
@@ -342,6 +354,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   reviewRows: [],
   pendingDialogOpen: false,
   dismissedPendingKeys: [],
+  hiddenPending: [],
+  pendingError: null,
   usageTotal: null,
   autonomy: 'L0',
   // 票 15（P3）：未加载时留空串——TopBar 回退 t('app.untitledProject')，
@@ -601,6 +615,9 @@ export const useUiStore = create<UiState>((set, get) => ({
       set({ pendingDialogOpen: true })
     }
   },
+  hidePending: (id) => set((s) => (s.hiddenPending.includes(id) ? s : { hiddenPending: [...s.hiddenPending, id] })),
+  unhidePending: (id) => set((s) => (s.hiddenPending.includes(id) ? { hiddenPending: s.hiddenPending.filter((x) => x !== id) } : s)),
+  notePendingError: (error) => set({ pendingError: error }),
   requestFileTree: (action) => {
     // 文件树快捷键先把树亮出来（票 11）；票 03 起树在画布「项目文件」页签里，不再写旧 `hexagon.rail`。
     // 已在文件页签（树就在左边）时不跳走。
