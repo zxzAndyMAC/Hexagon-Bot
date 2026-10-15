@@ -18,8 +18,6 @@
 .element-reference-preview > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .element-reference { max-width: 320px; }
 .element-reference-preview > .element-reference { max-width: none; }
-.browser-extension-setup { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
-
 /* Owner issue19: contextual controls share one row, selection left, screen right. */
 .element-draft-tools { display: flex; align-items: center; gap: 8px; }
 .element-draft-tools:empty { display: none; }

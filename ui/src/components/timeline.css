@@ -80,8 +80,6 @@ button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tl .tl-sys.risk { color: var(--red); }
 .tl .tl-sys > .tl-sys-l { display: inline-flex; align-items: center; gap: 6px; max-width: 85%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl .tl-sys .dim3 { color: var(--ink-3); }
-.tl .tl-sys button.tl-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent-ink); cursor: pointer; }
-.tl .tl-sys button.tl-link:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 4px; }
 /* 可点的系统行（展开系统事件组）：整行是按钮 */
 .tl button.tl-sys { width: 100%; border: 0; background: none; font: inherit; cursor: pointer; border-radius: 6px; }
 .tl button.tl-sys:hover { color: var(--ink-2); }
