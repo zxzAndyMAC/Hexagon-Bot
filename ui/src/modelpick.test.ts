@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BUILTIN_SLOTS, dedicatedSlot, isDedicatedSlot, resolveBinding, sharedSlots, slotLabel } from './modelpick'
+import { BUILTIN_SLOTS, dedicatedSlot, isDedicatedSlot, modelDisplayName, resolveBinding, sharedSlots, slotLabel } from './modelpick'
 import type { ProvidersView } from './gen/ProvidersView'
 import en from './i18n/locales/en'
 
@@ -57,5 +57,31 @@ describe('modelpick（ui-audit-2 票 01：角色直选模型）', () => {
     for (const s of BUILTIN_SLOTS) {
       expect(providers[`slot_${s}`], `missing providers.slot_${s}`).toBeTruthy()
     }
+  })
+})
+
+// 功能缺口 B11（ui-redesign 2026-10-15）：消息头记录的模型 id 读时映射成目录展示名
+describe('modelDisplayName', () => {
+  const entry = (id: string, name: string | null) => ({ id, name, group: null, caps: [], context_window: null, max_output: null })
+  const provider = (id: string, enabled: boolean, models: ReturnType<typeof entry>[]) =>
+    ({ id, name: id, kind: 'openai' as const, base_url: '', key_set: true, enabled, models })
+  const catalog: ProvidersView = {
+    providers: [
+      provider('off', false, [entry('deepseek-chat', 'Old DeepSeek')]),
+      provider('or', true, [entry('deepseek-chat', 'DeepSeek V4'), entry('blank', '  ')]),
+    ],
+    slots: {},
+  }
+  it('启用的服务商优先，取非空展示名', () => {
+    expect(modelDisplayName(catalog, 'deepseek-chat')).toBe('DeepSeek V4')
+  })
+  it('只有停用服务商有展示名时也映射', () => {
+    const v: ProvidersView = { providers: [provider('off', false, [entry('x', 'X Model')])], slots: {} }
+    expect(modelDisplayName(v, 'x')).toBe('X Model')
+  })
+  it('无目录项 / 展示名空白 / 视图未载入 → 原样显示 id', () => {
+    expect(modelDisplayName(catalog, 'claude-opus-5-5')).toBe('claude-opus-5-5')
+    expect(modelDisplayName(catalog, 'blank')).toBe('blank')
+    expect(modelDisplayName(null, 'm')).toBe('m')
   })
 })
