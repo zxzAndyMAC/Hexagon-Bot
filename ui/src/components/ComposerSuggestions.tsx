@@ -5,7 +5,8 @@
 // 加载：首屏 3 行骨架；防抖期间保持旧结果（调用方不清空 items）。错误：单行红字 + 「重试」。
 import { forwardRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Avatar } from './Avatar'
+import { Avatar } from '@/components/ui/avatar'
+import { useUiStore } from '../store'
 import { Icon } from './Icon'
 import { Button } from '@/components/ui/button'
 
@@ -20,6 +21,7 @@ export const ComposerSuggestions = forwardRef<HTMLDivElement, {
   onRetry: () => void
 }>(function ComposerSuggestions({ id, popup, sel, onPick, onHover, onRetry }, ref) {
   const { t } = useTranslation()
+  const avatars = useUiStore((s) => s.avatars)
   const mention = popup.kind === '@'
   const firstLoad = popup.loading && popup.items.length === 0
   return (
@@ -40,7 +42,7 @@ export const ComposerSuggestions = forwardRef<HTMLDivElement, {
           onMouseEnter={() => onHover(i)}
           onClick={() => onPick(it.label)}>
           {it.kind === '@' ? <>
-            <Avatar agentId={it.agentId} role={it.name} size={20} />
+            <Avatar agentId={it.agentId} name={it.name} size={20} src={it.agentId ? avatars[it.agentId] : undefined} />
             <b>{it.name}{it.inst && <> <span className="inst">[{it.inst}]</span></>}</b>
             <span className="d">{it.sleeping ? t('composer.sleeping') : <span className="on-dot" aria-label={t('composer.awake')} />}</span>
           </> : <>
