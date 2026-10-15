@@ -451,14 +451,6 @@ export function normalizeEvent(e: KeyboardEvent | React.KeyboardEvent): string |
   return [...mods, key].join('+')
 }
 
-/** 绑定冲突检测：b 已被别的 action 占用则返回那个 action id */
-export function conflictFor(a: ActionId, b: string): ActionId | null {
-  for (const { id } of ACTIONS) {
-    if (id !== a && bindingFor(id) === b) return id
-  }
-  return null
-}
-
 /** `mod+Enter` → `⌘↵`（mac）/ `Ctrl+Enter`（其他） */
 export function formatBinding(b: string): string {
   const parts = b.split('+')

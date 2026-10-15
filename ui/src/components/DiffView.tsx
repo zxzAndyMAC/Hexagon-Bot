@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import type { DiffOp } from '../diff'
-import { CodeBlock } from './Md'
 
 const LINE_STYLE: Record<DiffOp['type'], React.CSSProperties> = {
   ins: { background: 'var(--green-tint)', color: 'var(--green)' },
@@ -31,11 +30,3 @@ export function DiffView({ ops }: { ops: DiffOp[] }) {
   )
 }
 
-/** 只读代码视图（Shiki 高亮）。 */
-export function CodeView({ text, lang }: { text: string; lang?: string }) {
-  return (
-    <div className="mono" style={{ flex: 1, overflowY: 'auto', fontSize: 12, lineHeight: 1.55, padding: '8px 14px' }}>
-      <CodeBlock code={text} lang={lang} />
-    </div>
-  )
-}

@@ -411,8 +411,6 @@ const KIND_META: Record<string, KindMeta> = {
   install_completed: { type: 'install', tier: 'e', icon: 'install' },
 }
 
-/** 宿主节点读（timeline_nodes）覆盖的 kind 与图标；现有 kind 全部保留（interaction §5）。 */
-export const NODE_ICONS: Record<string, IconName> = Object.fromEntries(Object.entries(KIND_META).map(([k, m]) => [k, m.icon]))
 
 const isOwnerItem = (it: TimelineItem) => it.event.kind === 'owner_message' || it.message?.author === 'owner'
 const firstLine = (text: string) => text.trim().split('\n')[0].slice(0, 80)
