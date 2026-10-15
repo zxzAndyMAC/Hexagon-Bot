@@ -1,38 +1,107 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from './api'
+import { useCallback, useEffect } from 'react'
+import { create } from 'zustand'
+import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import type { DelegationStatus } from './gen/DelegationStatus'
+import type { ManagedRecord } from './gen/ManagedRecord'
 
-/** Host-persisted delegation state for one mounted view. Never optimistic:
- * callers render only what the host returned, and a response that arrives
- * after a workspace switch (different project root) is dropped. */
-export function useDelegation() {
-  const [status, setStatus] = useState<DelegationStatus | null>(null)
-  // The host-confirmed workspace identity, not a second approval-mode read.
+/** Host-persisted delegation state, shared by every mounted view (pill,
+ * strip, approval menu, report, timeline rows). Never optimistic: views
+ * render only what the host returned, and a response that arrives after a
+ * workspace switch (different project root) or a newer read is dropped.
+ * ui-redesign 票 08：原先每个挂载点各读一遍（胶囊 + 细条 + 时间线行会成倍发
+ * IPC），改成同一份共享读；读取键 = 项目根 + 最新事件 id，没有订阅者时清空。 */
+type DelegationState = {
+  status: DelegationStatus | null
+  processing: PendingQuestion[]
+  failed: boolean
+  history: ManagedRecord[] | null
+  historyFailed: boolean
+}
+
+const useDelegationStore = create<DelegationState>(() => ({
+  status: null, processing: [], failed: false, history: null, historyFailed: false,
+}))
+
+let generation = 0
+let subscribers = 0
+let loadedKey: string | null = null
+let historyKey: string | null = null
+let historySubscribers = 0
+
+function load(key: string | null) {
+  if (key !== null && key === loadedKey) return
+  loadedKey = key
+  const current = ++generation
+  void Promise.all([api.projectDelegation(), api.managedProcessing()]).then(([status, held]) => {
+    if (current !== generation || subscribers === 0) return
+    useDelegationStore.setState({ status, processing: held, failed: false })
+  }).catch(() => {
+    if (current === generation && subscribers > 0) useDelegationStore.setState({ failed: true })
+  })
+}
+
+function loadHistory(key: string) {
+  if (key === historyKey) return
+  historyKey = key
+  void api.managedHistory().then(history => {
+    if (historyKey === key && historySubscribers > 0) useDelegationStore.setState({ history, historyFailed: false })
+  }).catch(() => {
+    if (historyKey === key && historySubscribers > 0) useDelegationStore.setState({ historyFailed: true })
+  })
+}
+
+function useLatestKey() {
   const root = useUiStore(s => s.projectRoot)
-  const [processing, setProcessing] = useState(0)
-  const [failed, setFailed] = useState(false)
   const latest = useUiStore(s => s.timelineFacts?.latest_event_id ?? 0)
-  const generation = useRef(0)
-  const mounted = useRef(true)
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
-  const load = useCallback(() => {
-    const current = ++generation.current
-    void Promise.all([api.projectDelegation(), api.managedProcessing()]).then(([value, held]) => {
-      if (!mounted.current || current !== generation.current) return
-      setStatus(value); setProcessing(held.length); setFailed(false)
-    }).catch(() => { if (mounted.current && current === generation.current) setFailed(true) })
+  return { root, key: `${root ?? ''}:${latest}` }
+}
+
+export function useDelegation() {
+  const { root, key } = useLatestKey()
+  const status = useDelegationStore(s => s.status)
+  const processingItems = useDelegationStore(s => s.processing)
+  const failed = useDelegationStore(s => s.failed)
+  useEffect(() => {
+    subscribers += 1
+    return () => {
+      subscribers -= 1
+      if (subscribers === 0) {
+        generation += 1; loadedKey = null
+        useDelegationStore.setState({ status: null, processing: [], failed: false })
+      }
+    }
   }, [])
-  useEffect(() => { load() }, [latest, root, load])
+  useEffect(() => { load(key) }, [key])
+  const reload = useCallback(() => load(null), [])
   /** Apply a host write; the result only lands for the same project root. */
   const apply = useCallback(async (write: (root: string) => Promise<DelegationStatus>) => {
     if (!root) throw new Error('Workspace identity unavailable')
-    const expected = root
-    const current = ++generation.current
-    const saved = await write(expected)
-    if (!mounted.current || current !== generation.current) return
-    setStatus(saved)
-    load()
-  }, [root, load])
-  return { status, root, processing, failed, apply, reload: load }
+    const current = ++generation
+    const saved = await write(root)
+    if (current !== generation || subscribers === 0) return
+    useDelegationStore.setState({ status: saved })
+    load(null)
+  }, [root])
+  return { status, root, processing: processingItems.length, processingItems, failed, apply, reload }
+}
+
+/** Managed decision records (newest first), shared by the report and the
+ * timeline's managed rows. `null` until the first read lands. */
+export function useManagedHistory() {
+  const { key } = useLatestKey()
+  const history = useDelegationStore(s => s.history)
+  const failed = useDelegationStore(s => s.historyFailed)
+  useEffect(() => {
+    historySubscribers += 1
+    return () => {
+      historySubscribers -= 1
+      if (historySubscribers === 0) {
+        historyKey = null
+        useDelegationStore.setState({ history: null, historyFailed: false })
+      }
+    }
+  }, [])
+  useEffect(() => { loadHistory(key) }, [key])
+  return { history, failed }
 }
