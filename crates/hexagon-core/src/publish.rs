@@ -51,9 +51,11 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
     // publish can refuse a commit that changed after the request.
     // The commit of the branch that is actually pushed, not HEAD (review:
     // checking HEAD while pushing the baseline left a gap).
-    let commit = crate::git::run(&project_dir(db, project_id)?, &["rev-parse", &baseline])
+    let dir = project_dir(db, project_id)?;
+    let commit = crate::git::run(&dir, &["rev-parse", &baseline])
         .map(|out| out.trim().to_string())
         .ok();
+    let (commit_count, stage_count) = included(db, project_id, &dir, remote, &baseline)?;
     let qid = crate::cards::enqueue(
         db,
         project_id,
@@ -63,6 +65,8 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
             "remote": remote,
             "baseline": baseline,
             "commit": commit,
+            "commit_count": commit_count,
+            "stage_count": stage_count,
             "warning": "远程发布不可逆：代码与产物将推送到项目外部",
         }),
         None,
@@ -76,6 +80,37 @@ pub fn request(db: &Db, project_id: &str, remote: &str) -> Result<String, Publis
     )?;
     log::info!("publish requested: remote={remote} qid={qid}");
     Ok(qid)
+}
+
+/// 功能缺口 A6（2026-10-15，decisions#cards 发布卡「包含 N 个提交 · N 个阶段的产物」）：
+/// - 提交数 = 本地远端跟踪分支 `<remote>/<baseline>` 之后、基线上的提交（`rev-list --count`）。
+///   没有跟踪分支（从未推送或未抓取）时无从得知远端已有什么，给 null，UI 不写这一半——不猜。
+/// - 阶段数 = 已完成（done）且留有产物的阶段名去重数。
+fn included(
+    db: &Db,
+    project_id: &str,
+    dir: &std::path::Path,
+    remote: &str,
+    baseline: &str,
+) -> Result<(Option<u64>, u64), PublishError> {
+    let tracking = format!("refs/remotes/{remote}/{baseline}");
+    let commits = crate::git::run(dir, &["rev-parse", "--verify", "--quiet", &tracking])
+        .ok()
+        .and_then(|_| {
+            crate::git::run(
+                dir,
+                &["rev-list", "--count", &format!("{tracking}..{baseline}")],
+            )
+            .ok()
+        })
+        .and_then(|out| out.trim().parse::<u64>().ok());
+    let stages: i64 = db.conn().query_row(
+        "SELECT COUNT(DISTINCT sr.stage_name) FROM artifacts a JOIN stage_runs sr ON sr.id=a.stage_run_id
+         WHERE a.project_id=?1 AND sr.state='done'",
+        [project_id],
+        |r| r.get(0),
+    )?;
+    Ok((commits, u64::try_from(stages).unwrap_or(0)))
 }
 
 /// 发布回执（ADR 0054）。
@@ -277,6 +312,35 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert!(kinds.contains(&"publish_failed".to_string()));
+    }
+
+    #[test]
+    fn publish_card_counts_unpushed_commits_and_delivered_stages() {
+        let (db, work, _r) = setup();
+        let store = MemoryStore::default();
+        store.set("publish/origin", "token-x").unwrap();
+        let first = request(&db, "p", "origin").unwrap();
+        let payload = crate::cards::get(&db, &first).unwrap().payload;
+        // 从未推送：没有跟踪分支，提交数未知（null），不猜。
+        assert!(payload["commit_count"].is_null());
+        assert_eq!(payload["stage_count"], 0);
+        confirm(&db, "p", &first, &store).unwrap();
+        std::fs::write(work.path().join("g.txt"), "y").unwrap();
+        crate::git::commit_all(work.path(), "second").unwrap();
+        db.conn()
+            .execute_batch(
+                "INSERT INTO stage_runs (id,project_id,stage_name,seq,state) VALUES ('s1','p','设计',1,'done'),('s2','p','实现',2,'active');
+                 INSERT INTO artifacts (id,project_id,path,kind,tier,stage_run_id,version) VALUES
+                   ('a1','p','x.md','规格','freeform','s1',1),('a2','p','y.md','规格','freeform','s2',1);",
+            )
+            .unwrap();
+        let second = request(&db, "p", "origin").unwrap();
+        let payload = crate::cards::get(&db, &second).unwrap().payload;
+        assert_eq!(payload["commit_count"], 1);
+        assert_eq!(
+            payload["stage_count"], 1,
+            "only finished stages with artifacts count"
+        );
     }
 
     #[test]

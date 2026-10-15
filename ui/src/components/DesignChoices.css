@@ -34,3 +34,8 @@
 .design-preview h3 { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .design-preview-image { overflow: auto; max-height: calc(94vh - 88px); }
 .design-preview-image img { display: block; width: 100%; max-height: none; object-fit: contain; }
+
+/* gap A7（components D12 底栏信号，decisions#design）：三道 3×10 绿竖条 + 文案。 */
+.design-signal { display: inline-flex; align-items: center; gap: 6px; }
+.design-signal-bars { display: inline-flex; gap: 2px; }
+.design-signal-bars i { width: 3px; height: 10px; border-radius: 1px; background: var(--green); }

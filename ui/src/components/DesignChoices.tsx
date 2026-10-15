@@ -51,7 +51,13 @@ export function DesignChoices({ q }: { q: PendingQuestion }) {
   const compare = (selected ?? options[0])?.mockups[0]
   return <DecisionShell qid={q.id} cat="info" icon="palette" title={t('design.title')}
     sub={t('design.sub', { role, count: options.length })}
-    note={current && direction ? t('design.revision', { revision: direction.revision }) : undefined}
+    note={current && direction ? (direction.previous_guidance
+      // gap A7（decisions#design 底栏）：宿主给出负责人上次确认的视觉指导（跨项目）时出信号；悬停看原文。没有时仍写方案版本。
+      ? <span className="design-signal" data-previous-guidance={direction.previous_guidance.source}
+        title={[direction.previous_guidance.title, direction.previous_guidance.summary].filter(Boolean).join('\n')}>
+        <span className="design-signal-bars" aria-hidden><i /><i /><i /></span>{t('design.previousGuidance')}
+      </span>
+      : t('design.revision', { revision: direction.revision })) : undefined}
     actions={current && direction && options.length > 0 && <>
       <DecisionButton disabled={!compare} onClick={() => compare && setPreview(compare)}
         title={[t('design.preview'), formatBinding(bindingFor('previewDesignMockup'))].filter(Boolean).join(' · ')}>{t('design.compare')}</DecisionButton>
