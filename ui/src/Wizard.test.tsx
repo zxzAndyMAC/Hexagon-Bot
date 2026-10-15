@@ -199,6 +199,8 @@ describe('向导先配模型服务商（票 13）', () => {
     trigger.focus()
     await key(trigger, 'Enter')
     expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    // 弹层挂进向导层（z-60）；挂到 body 会被向导盖住，打开了也看不见
+    expect(document.querySelector('[data-wizard] [role="listbox"]')).not.toBeNull()
     expect(document.activeElement && text(document.activeElement)).toBe('Anthropic')
     await key(document.activeElement!, 'ArrowDown')
     expect(text(document.activeElement)).toBe('OpenRouter')

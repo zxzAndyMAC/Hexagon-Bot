@@ -30,9 +30,12 @@ function SelectTrigger({ className, children, ...props }: React.ComponentProps<t
   )
 }
 
-function SelectContent({ className, children, sideOffset = 6, ...props }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+function SelectContent({ className, children, sideOffset = 6, container, ...props }: React.ComponentProps<typeof SelectPrimitive.Content> & {
+  /** 弹层挂载点：在 z 序高于弹层 20 的全屏层里（向导 z-60）要挂进那一层，否则被盖住（gap B12 实测）。 */
+  container?: HTMLElement | null
+}) {
   return (
-    <SelectPrimitive.Portal>
+    <SelectPrimitive.Portal container={container}>
       <SelectPrimitive.Content
         data-slot="select-content"
         position="popper"

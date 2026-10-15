@@ -1675,7 +1675,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
             id: 'openrouter', name: 'OpenRouter', kind: 'openai',
             base_url: 'https://openrouter.ai/api/v1', enabled: true, key_set: true,
             models: [
-              { id: 'deepseek/deepseek-chat', caps: ['tools'] },
+              // gap B11：带展示名，dev 下消息头显示「DeepSeek V3」而不是记录的 id
+              { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', caps: ['tools'] },
               { id: 'google/gemini-2.5-flash', caps: ['vision', 'tools'] },
               { id: 'deepseek/deepseek-r1:free', caps: ['free', 'reasoning', 'tools'] },
             ],
