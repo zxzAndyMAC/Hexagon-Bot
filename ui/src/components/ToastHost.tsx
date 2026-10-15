@@ -4,18 +4,27 @@
 // store.toasts 是队列（调用方与测试读它）；本宿主把新项交给 Sonner，Sonner 管寿命
 // （约 3.5s、悬停暂停、不抢焦点），关闭（到时 / 动作 / 被挤出）时回调 dismissToast 出队。
 // F6（focusToasts）把焦点送到首条 toast 的动作上（A18 聚焦态：动作可 Tab 到）。
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { toastError } from '../toast'
 import { useUiStore, type Toast } from '../store'
 import { bindingFor, matches } from '../keymap'
-import { Toaster, ToastPill } from '@/components/ui/sonner'
+import { TOAST_MIN_OFFSET, Toaster, ToastPill } from '@/components/ui/sonner'
 
 export function ToastHost() {
   const { t } = useTranslation()
   const toasts = useUiStore((s) => s.toasts)
   const shown = useRef(new Set<number>())
+  const [offset, setOffset] = useState(TOAST_MIN_OFFSET)
+
+  // 浮在输入条上方（A18）：输入框高度随草稿/附件变，出 toast 时量一次它的顶边。
+  // 曾经的写法：固定 bottom 72——多行草稿或附件时 toast 压在输入框上。
+  useLayoutEffect(() => {
+    if (!toasts.length) return
+    const top = document.querySelector('.composer-box')?.getBoundingClientRect().top ?? 0
+    setOffset(top > 0 ? Math.max(TOAST_MIN_OFFSET, Math.round(window.innerHeight - top + 8)) : TOAST_MIN_OFFSET)
+  }, [toasts])
 
   useEffect(() => {
     const live = new Set(toasts.map((x) => x.id))
@@ -43,7 +52,7 @@ export function ToastHost() {
   }, [])
 
   // hotkey 交给 keymap（focusToasts），Sonner 自带的 alt+T 关掉，免得与可改绑的键位并存。
-  return <Toaster hotkey={[]} containerAriaLabel={t('feedback.region')} />
+  return <Toaster offset={offset} hotkey={[]} containerAriaLabel={t('feedback.region')} />
 }
 
 function show(t: Toast) {

@@ -7,18 +7,20 @@ import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { cn } from "@/lib/utils"
 import { Icon } from "@/components/Icon"
 
-/** 输入条上方：底栏输入条约 64 高 + 8 间距（沿用旧 .toast-host 的 bottom: 72px）。 */
-const OFFSET = 72
+/** 无输入条（启动页 / 设置）时的底距；有输入条时 ToastHost 量输入框顶边再加 8（「浮在输入条上方」）。 */
+export const TOAST_MIN_OFFSET = 72
 export const TOAST_DURATION_MS = 3500
 
 function Toaster(props: ToasterProps) {
   return (
     <Sonner
       position="bottom-center"
-      offset={OFFSET}
+      offset={TOAST_MIN_OFFSET}
       duration={TOAST_DURATION_MS}
       gap={8}
       visibleToasts={3}
+      // 同时出现的几条都读得到（feedback#toast 竖排），不折叠成一摞
+      expand
       toastOptions={{ unstyled: true, className: "flex w-full justify-center" }}
       {...props}
     />
@@ -61,7 +63,11 @@ function ToastPill({ tone, icon, text, code, action, onAction, className }: {
         <button
           type="button"
           data-toast-action
-          className="hx-focus ml-3 shrink-0 cursor-pointer rounded-[4px] text-[12px] opacity-60 live:hover:underline live:hover:opacity-100"
+          className={cn(
+            "hx-focus ml-3 shrink-0 cursor-pointer rounded-[4px] text-[12px] live:hover:underline",
+            // 撤销类的「撤回」是补救本身，用 --accent-ink；其余动作 60% 透明（feedback#toast）
+            icon === "undo" ? "text-accent-ink" : "opacity-60 live:hover:opacity-100",
+          )}
           onClick={onAction}
         >
           {action}

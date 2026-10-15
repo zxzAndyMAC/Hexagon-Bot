@@ -29,13 +29,17 @@ function InlineError({ title, code, meta, desc, actions, onRetry, retryLabel, re
     : null
   if (variant === "row") {
     return (
-      <div role="alert" data-slot="inline-error" data-variant="row" className={cn("py-2 text-center text-[12.5px] text-ink-3", className)} {...rest}>
-        <span>{title}</span>
-        {onRetry && retryLabel && <>
-          {" · "}
-          <button type="button" title={retryTitle} className="hx-focus cursor-pointer rounded-[4px] text-accent-ink live:hover:underline disabled:cursor-default"
-            disabled={retrying} aria-busy={retrying || undefined} onClick={onRetry}>{retryLabel}</button>
-        </>}
+      // 行形同时间线系统行（feedback#errors「更早的内容加载失败 · 重试」）：两侧 --line 细线
+      <div role="alert" data-slot="inline-error" data-variant="row"
+        className={cn("flex items-center gap-3 py-2 text-[12.5px] text-ink-3 before:h-px before:flex-1 before:bg-line after:h-px after:flex-1 after:bg-line", className)} {...rest}>
+        <span>
+          {title}
+          {onRetry && retryLabel && <>
+            {" · "}
+            <button type="button" title={retryTitle} className="hx-focus cursor-pointer rounded-[4px] text-accent-ink live:hover:underline disabled:cursor-default"
+              disabled={retrying} aria-busy={retrying || undefined} onClick={onRetry}>{retryLabel}</button>
+          </>}
+        </span>
       </div>
     )
   }
