@@ -1616,6 +1616,14 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return null as T
     case 'intake_draft_pending':
       return false as T
+    // ui-redesign 票 11：设置·权限「已记住的规则」表的 dev 样例（对照 settings#perms）
+    case 'permission_rules':
+      return [
+        { id: 'r1', project_shared: false, agent_id: 'a5', tool: 'bash', shape: 'npx playwright install *', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-10 14:22', network_allowed: true, background_allowed: false, session_name: null },
+        { id: 'r2', project_shared: false, agent_id: 'a2', tool: 'bash', shape: 'npm test *', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-09 18:03', network_allowed: false, background_allowed: false, session_name: null },
+        { id: 'r3', project_shared: true, agent_id: null, tool: 'fs_write', shape: 'src/db/*.ts', domain: null, effect: 'allow', scope: 'project', created_at: '2026-10-08 11:40', network_allowed: false, background_allowed: false, session_name: null },
+        { id: 'r4', project_shared: false, agent_id: 'a3', tool: 'web_fetch', shape: 'developer.mozilla.org', domain: 'developer.mozilla.org', effect: 'allow', scope: 'project', created_at: '2026-10-07 09:12', network_allowed: true, background_allowed: false, session_name: null },
+      ] as T
     default:
       return null as T
   }

@@ -343,8 +343,9 @@ export default function App() {
               // 画布并排时对话列 560，否则 720（interaction §6）；时间线（票 05）读 --col-w
               ['--col-w' as string]: shell.canvas === 'side' ? '560px' : '720px' }}>
             <Header side={shell.side} />
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '10px 14px' }}>
-              {/* C12a：钉在对话列顶部、归来摘要（时间线顶部）上方 */}
+            {/* 票 07：对话列宽只由 --col-w 决定（时间线 .tl-col、恢复条、触顶横幅、输入条同读），主区不再加左右内距 */}
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              {/* C12a：钉在对话列顶部、归来摘要（时间线顶部）上方；与时间线同列对齐（列宽规则在 timeline.css） */}
               <SessionRecoveryStrip />
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <Timeline />
@@ -365,7 +366,7 @@ export default function App() {
         </div>
       </div>
       {!settingsOpen && <FlowDialog />}
-      {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+      {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSettings={openSettings} />}
     </div>
     </TooltipProvider>
   )
