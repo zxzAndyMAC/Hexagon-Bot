@@ -65,7 +65,7 @@ export function FlowDialog() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {(flowPack?.stages ?? []).map((s) => (
-              <div key={s.name} style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+              <div key={s.name} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ fontSize: 13, fontWeight: 560 }}>{s.name}</span>
                   {s.stamp_point && <span className="chip amber" style={{ fontSize: 10 }}>{t('topbar.flowStamp')}</span>}

@@ -176,7 +176,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
         </IconButton>
       </div>
       {settings && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)' }}>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--page)' }}>
           <SettingsPage onBack={() => setSettings(false)} projectless />
         </div>
       )}

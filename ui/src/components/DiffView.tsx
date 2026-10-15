@@ -3,8 +3,8 @@ import type { DiffOp } from '../diff'
 import { CodeBlock } from './Md'
 
 const LINE_STYLE: Record<DiffOp['type'], React.CSSProperties> = {
-  ins: { background: 'var(--ok-soft)', color: 'var(--ok)' },
-  del: { background: 'var(--err-soft)', color: 'var(--err)' },
+  ins: { background: 'var(--green-tint)', color: 'var(--green)' },
+  del: { background: 'var(--red-tint)', color: 'var(--red)' },
   eq: {},
 }
 
