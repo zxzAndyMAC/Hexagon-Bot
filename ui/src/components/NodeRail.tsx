@@ -37,7 +37,7 @@ function whoOf(mark: NodeMark, t: TFunction, roleOf: (id: string) => string): st
 const STATUS = { warn: ['warn', 'rail.statusPending'], err: ['err', 'rail.statusFailed'], mg: ['info', 'rail.statusManaged'] } as const
 
 /** 每道刻度的可读名：「产物交付 src/TodoList.tsx，前端，14:02」（accessibility §4）。 */
-export function tickName(mark: NodeMark, t: TFunction, roleOf: (id: string) => string, locale: string): string {
+function tickName(mark: NodeMark, t: TFunction, roleOf: (id: string) => string, locale: string): string {
   const head = t('rail.name', { type: t(`rail.type.${mark.type}`), title: titleOf(mark, t) })
   const status = mark.tone ? t(STATUS[mark.tone][1]) : ''
   return [head, whoOf(mark, t, roleOf), clock(mark.at, locale), mark.type === 'pending' ? '' : status]
