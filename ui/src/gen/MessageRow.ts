@@ -15,4 +15,9 @@ element_refs: Array<ElementRef>, created_at: string,
 /**
  * 模型给出的推理文本（hands-free 票 06）。空串 = 没给，时间线不渲染思考行。
  */
-thinking: string, };
+thinking: string, 
+/**
+ * 发这条消息时实际用的模型 id（gap B9，迁移 0061）。只有 Agent 回复记录；
+ * 负责人 / 宿主消息与迁移前的旧消息为 None——界面回退当前模型并标注，不冒充当时的模型。
+ */
+model: string | null, };

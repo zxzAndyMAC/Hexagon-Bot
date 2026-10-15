@@ -15,7 +15,7 @@ vi.mock('react-virtuoso', () => ({
 
 const item = (id: number, kind: EventKind, author?: string, payload: Record<string, unknown> = {}): TimelineItem => ({
   event: { id, project_id: 'p', kind, agent_id: author && author !== 'owner' ? author : null, stage_run_id: null, payload, created_at: '2026-10-14T14:02:00Z' },
-  message: author ? { id, author, body: `m${id}`, tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } : null,
+  message: author ? { id, author, body: `m${id}`, tokens: [], attachments: [], element_refs: [], model: null, created_at: '', thinking: '' } : null,
 })
 
 const base = { pending: [], streams: {}, thinkings: {}, plans: {}, streamDone: {}, stages: [], projectRoot: null, projectEpoch: 0, timelineFacts: null,

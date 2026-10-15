@@ -1708,7 +1708,13 @@ fn run_turn_impl(
                         thinking: String::new(),
                     });
                 }
-                persist_visible(db, ctx, &answer, &mut carried_thinking)?;
+                persist_visible(
+                    db,
+                    ctx,
+                    &answer,
+                    &mut carried_thinking,
+                    provider.billing_model(),
+                )?;
                 return Ok(TurnOutcome::Finished);
             }
 
@@ -2112,6 +2118,7 @@ fn persist_visible(
     ctx: &ToolContext,
     text: &str,
     carried: &mut String,
+    model: Option<&str>,
 ) -> Result<(), TurnError> {
     if text.is_empty() && carried.is_empty() {
         return Ok(());
@@ -2125,15 +2132,14 @@ fn persist_visible(
     } else {
         Some(std::mem::take(carried))
     };
-    db.append_message_with(
+    // gap B9：记下这条回复实际用的模型，换模型后旧消息头不随之改写。
+    db.append_reply(
         &ctx.project_id,
         &ctx.agent_id,
         text,
-        &[],
-        &[],
-        Some(&ctx.agent_id),
         ctx.stage_run_id.as_deref(),
         thinking.as_deref(),
+        model,
     )?;
     Ok(())
 }

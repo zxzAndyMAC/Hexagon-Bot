@@ -5,7 +5,7 @@ import type { EventKind, PendingQuestion, QueuedCard, TimelineItem } from './api
 
 const ev = (id: number, kind: EventKind, payload: Record<string, unknown> = {}, author?: string): TimelineItem => ({
   event: { id, project_id: 'p1', kind, agent_id: author ?? null, stage_run_id: null, payload, created_at: '' },
-  message: author ? { id, author, body: 'hi', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } : null,
+  message: author ? { id, author, body: 'hi', tokens: [], attachments: [], element_refs: [], model: null, created_at: '', thinking: '' } : null,
 })
 
 const q = (id: string, kind: QueuedCard['kind'], payload: Record<string, unknown> = {}): PendingQuestion => ({
@@ -144,7 +144,7 @@ describe('nodeMarks', () => {
   it('刻度长度表示层级：阶段 s、负责人发言 m、事件 e', () => {
     const tl = [
       ev(1, 'stage_started', { stage: '实现' }),
-      { ...ev(2, 'owner_message', {}, 'owner'), message: { id: 2, author: 'owner', body: '先做列表页\n再说', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } } as TimelineItem,
+      { ...ev(2, 'owner_message', {}, 'owner'), message: { id: 2, author: 'owner', body: '先做列表页\n再说', tokens: [], attachments: [], element_refs: [], model: null, created_at: '', thinking: '' } } as TimelineItem,
       ev(3, 'artifact_delivered', { path: 'src/TodoList.tsx' }),
       ev(4, 'stamped', { stage: '实现' }),
     ]
@@ -305,7 +305,7 @@ describe('parseUnifiedDiff / extractDiffBlock', () => {
 describe('story 档（ui-audit 票 18 / 方向卡 3）', () => {
   const mk = (id: number, kind: string, msg = false): TimelineItem => ({
     event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload: kind === 'turn_started' ? { stage: 'build' } : {}, created_at: '' },
-    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '' } : null,
+    message: msg ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], element_refs: [], model: null, created_at: '', thinking: '' } : null,
   }) as unknown as TimelineItem
 
   it('toolgroup/sysgroup 全移除；高危子类豁免可见；turn_started 成章', () => {
@@ -334,7 +334,7 @@ describe('回合摘要行（exec-cards 票 03）', () => {
   const t = (id: number, kind: EventKind, at: string, payload: Record<string, unknown> = {}): TimelineItem => ({
     event: { id, project_id: 'p1', kind, agent_id: 'a1', stage_run_id: null, payload, created_at: at },
     message: kind === 'agent_message'
-      ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], element_refs: [], created_at: at, thinking: '' }
+      ? { id, author: 'a1', body: 'hi', tokens: [], attachments: [], element_refs: [], model: null, created_at: at, thinking: '' }
       : null,
   })
 
@@ -456,7 +456,7 @@ describe('deriveWorkbenchStatus（hands-free 票 06）', () => {
       ev(3, 'tool_called', { tool: 'fs_read' }, 'a1'),
     ]
     src.timeline[1].message = {
-      id: 2, author: 'a1', tokens: [], attachments: [], element_refs: [], created_at: '',
+      id: 2, author: 'a1', tokens: [], attachments: [], element_refs: [], model: null, created_at: '',
       body: '计划：阶段是发布，下一步用 fs_write',
       thinking: '',
     }

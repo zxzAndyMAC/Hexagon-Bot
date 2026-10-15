@@ -645,6 +645,7 @@ export default {
   exec: { done: '完成', exit: '退出 {{code}}', noOutput: '（无输出）', tail: '… 仅显示末 32KB' },
   agent: {
     stepHostRead: "读取电脑文件",
+    modelFallback: {"label": "{{model}}（当前）", "hint": "这条消息没有记录当时用的模型，显示的是该成员现在的模型。"},
     stepHostWrite: "写入电脑文件",
     stepHostTrash: "移到废纸篓",
     stepHostBash: "运行电脑命令",
@@ -748,6 +749,7 @@ export default {
   },
   wizard: {
     keyHelp: "存进系统钥匙串，不写入项目目录。",
+    providerField: {"label": "服务商", "configured": "已配置", "presets": "内置预设", "custom": "自定义…", "model": "默认模型"},
     probe: {"running": "检测中…", "ok": "检测通过", "okWindow": "检测通过 · {{window}} 窗口", "unlisted": "目录里没有这个模型", "unlistedHelp": "钥匙可用，但服务商的模型目录里没有这个名字；仍可保存，先确认没有拼错。", "failed": "检测失败", "failedWith": "检测没有完成：{{reason}}", "reason": {"authentication": "服务商拒绝了这把钥匙，检查是否复制完整、是否已过期。", "quota": "服务商账户额度不足，到服务商后台检查账单。", "rate_limited": "服务商正在限流，稍等片刻会自动重新检测。", "provider_unavailable": "服务商暂时不可用，稍后再试。", "request_rejected": "服务商拒绝了这次请求，检查服务商类型是否选对。", "endpoint_not_found": "这个地址上没有模型目录接口，检查 Base URL（常见是少了或多了 /v1）。", "transport": "连不上服务商，检查网络和 Base URL。", "deadline": "服务商 30 秒内没有回应，检查网络后再试。", "invalid_response": "服务商的回应不是模型目录，检查 Base URL 和服务商类型。", "invalid_url": "Base URL 不是有效地址。", "missing_credential": "还没有钥匙，填上 API Key 后会自动检测。"}},
     savedToDraft: "改动已存入向导草稿 · 只作用于本项目",
     shell: {"title": "新建项目", "cancel": "取消", "autosave": "草稿自动保存", "aiLocked": "AI 正在生成，完成前先锁定", "qaLocked": "答问期间先锁定", "picked": "已选 {{count}} 个"},
@@ -765,7 +767,6 @@ export default {
     providersHint: '先配置模型服务商，再选目录。启用的供应商、已存的钥匙和 default 槽三项齐全才能继续。',
     providersReady: '已就绪',
     providersBlocked: '还缺启用的供应商、钥匙或 default 槽，不能进入下一步。',
-    providersPick: 'default 槽使用的供应商',
     providersApply: '保存并绑定 default',
     dirLabel: '项目目录',
     dirPlaceholder: '/path/to/project',
@@ -1080,7 +1081,7 @@ export default {
     done: '确定', empty: '无匹配项', count: '已选 {{n}} 项',
     title_skills: '选择技能', title_mcp: '选择 MCP 服务',
   },
-  intake: {"confirm": "写入 AGENTS.md", "confirmHint": "由开场分析起草；确认后写入仓库根目录，不会覆盖已有文件。", "title": "项目说明草案", "unsaved": "未落盘", "later": "先不写", "laterHint": "丢弃这份草案，不再提示；开场分析消息仍留在对话里", "edit": "编辑", "editLabel": "项目说明草案正文", "editHint": "改的是草案；保存后仍要点「写入 AGENTS.md」才落盘。", "cancelEdit": "取消", "saveEdit": "保存草案"},
+  intake: {"confirm": "写入 AGENTS.md", "confirmHint": "由开场分析起草；确认后写入仓库根目录，不会覆盖已有文件。", "title": "项目说明草案", "unsaved": "未落盘", "later": "先不写", "laterHint": "丢弃这份草案，不再提示；开场分析消息仍留在对话里", "edit": "编辑", "editLabel": "项目说明草案正文", "editHint": "改的是草案；保存后仍要点「写入 AGENTS.md」才落盘。", "cancelEdit": "取消", "saveEdit": "保存草案", "discarded": "已丢弃草案", "undo": "撤销"},
   returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分钟", "rangeUntil": "截至 {{to}}", "collapse": "收起摘要", "toggle": "收起或展开归来摘要", "headline": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；有 <o>{{pending}} 件</o>等你拍板。", "headlineClear": "团队推进了 <b>{{stages}} 个阶段</b>，交付 {{deliveries}} 份产物；没有等你处理的事项。", "kpiStages": "阶段", "kpiStagesValue": "完成 {{count}} 个", "kpiDeliveries": "交付", "kpiDeliveriesValue": "{{count}} 份", "kpiReviews": "复审", "kpiReviewsPassed": "{{count}} 过", "kpiReviewsRejected": "{{count}} 退", "kpiCost": "花费", "costLoading": "正在读取花费", "costUnknown": "离开期间的花费读取不到", "needsYou": "需要你处理", "handled": "已处理", "nothingNeeded": "没有等你处理的事项。", "next": "建议下一步", "fillHint": "填入输入条，不会发送", "collapsedLine": "离开期间 · {{minutes}} 分钟 · {{count}} 件待你处理", "collapsedLineNoTime": "离开期间 · {{count}} 件待你处理", "suggest": {"rejected": "说说被退回的 {{count}} 份产物要怎么改", "escalated": "解释一下升级给我的 {{count}} 条异议", "delivery": "讲讲 {{path}} 这次改了什么", "stage": "总结这一阶段的产出，再推进下一阶段", "keepGoing": "继续推进当前阶段"}},
   fresh: {"greeting": "团队已就位，要从哪里开始？", "sub": "{{roles}} 个角色 · {{stages}} 个阶段", "specTitle": "先写规格", "specDesc": "从一句话需求展开验收标准", "specFill": "从这句需求开始写规格，列出验收标准：", "repoTitle": "先分析现有仓库", "repoDesc": "读目录结构、命令与依赖", "repoFill": "先分析现有仓库：目录结构、命令和依赖。", "specTitleRole": "让{{role}}写{{stage}}", "specFillRole": "{{mention}} 从这句需求开始写{{stage}}，列出验收标准："},
   keys: {

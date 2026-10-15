@@ -102,8 +102,61 @@ describe('向导先配模型服务商（票 13）', () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
     const el = await renderWizard()
     expect(el.querySelectorAll('input.btn, textarea.btn, select.btn')).toHaveLength(0)
-    // 新建供应商表单：名称/类型/地址/密钥/模型
-    expect(el.querySelectorAll('[data-slot=input] input, [data-slot=native-select] select')).toHaveLength(5)
+    // gap B8（2026-10-15）：原型三字段——服务商下拉（默认落第一条内置预设）/ 密钥 / 模型。
+    // 票 10 时空表是五个框（名称/类型/地址/密钥/模型）；名称/类型/地址现在只在「自定义」下展开。
+    expect(el.querySelectorAll('[data-slot=input] input, [data-slot=native-select] select')).toHaveLength(3)
+  })
+
+  // gap B8：内置服务商预设（core provider_presets）
+  const PRESETS = [
+    { id: 'anthropic', name: 'Anthropic', kind: 'anthropic' as const, base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },
+    { id: 'or', name: 'OpenRouter', kind: 'openai' as const, base_url: 'https://openrouter.ai/api/v1', default_model: '' },
+  ]
+  const providerSelect = (el: HTMLElement) => el.querySelector('select[aria-label="Provider"]') as HTMLSelectElement
+  async function choose(sel: HTMLSelectElement, value: string) {
+    await act(async () => {
+      sel.value = value
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+
+  it('选预设自动填类型与地址，只问钥匙和模型', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
+    vi.spyOn(api, 'probeProviderKey').mockResolvedValue({ ok: true, failure: null, status: null, model_listed: true, window: 200000 })
+    const save = vi.spyOn(api, 'saveProvider').mockResolvedValue(undefined)
+    const bind = vi.spyOn(api, 'setSlotBinding').mockResolvedValue(undefined)
+    const el = await renderWizard()
+    expect(providerSelect(el).value).toBe('preset:anthropic')
+    const model = el.querySelector('input[aria-label="Default model"]') as HTMLInputElement
+    expect(model.value).toBe('claude-opus-5-5')
+    await act(async () => { setInput(password(el) as HTMLInputElement, 'sk-test') })
+    await click(button(el, 'Save and bind default'))
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', enabled: true }),
+      'sk-test')
+    expect(bind).toHaveBeenCalledWith('default', 'anthropic', 'claude-opus-5-5')
+  })
+
+  it('「自定义」才展开名称 / 类型 / 地址', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
+    const el = await renderWizard()
+    expect(el.querySelector('input[aria-label="Base URL"]')).toBeNull()
+    await choose(providerSelect(el), 'custom')
+    expect(el.querySelectorAll('[data-slot=input] input, [data-slot=native-select] select')).toHaveLength(6)
+    expect(isOff(button(el, 'Save and bind default'))).toBe(true)
+  })
+
+  it('已配置的供应商与未配置的预设同列；同 id 预设不重复', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [prov({ id: 'or', name: 'My OpenRouter', key_set: false })], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
+    const el = await renderWizard()
+    const sel = providerSelect(el)
+    expect(sel.value).toBe('p:or')
+    expect([...sel.options].map((o) => o.value)).toEqual(['p:or', 'preset:anthropic', 'custom'])
+    // 已配置但缺钥匙：只补钥匙
+    expect(password(el)).not.toBeNull()
   })
 
   it('已有钥匙时绑定 default 槽走现有 API，且不重传钥匙', async () => {

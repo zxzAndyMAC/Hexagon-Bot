@@ -645,6 +645,7 @@ export default {
   exec: { done: '完了', exit: 'exit {{code}}', noOutput: '（出力なし）', tail: '… 末尾 32KB を表示' },
   agent: {
     stepHostRead: "ホストファイルを読む",
+    modelFallback: {"label": "{{model}}（現在）", "hint": "このメッセージには送信時のモデルが記録されていません。メンバーの現在のモデルを表示しています。"},
     stepHostWrite: "ホストファイルを書く",
     stepHostTrash: "ゴミ箱に移動",
     stepHostBash: "ホストコマンドを実行",
@@ -748,6 +749,7 @@ export default {
   },
   wizard: {
     keyHelp: "システムのキーチェーンに保存し、プロジェクトフォルダーには書き込みません。",
+    providerField: {"label": "プロバイダー", "configured": "設定済み", "presets": "組み込みプリセット", "custom": "カスタム…", "model": "デフォルトモデル"},
     probe: {"running": "確認中…", "ok": "確認済み", "okWindow": "確認済み · {{window}} ウィンドウ", "unlisted": "カタログにないモデル", "unlistedHelp": "キーは有効ですが、このモデル名はプロバイダーのカタログにありません。保存はできます。まず綴りを確認してください。", "failed": "確認に失敗", "failedWith": "確認が完了しませんでした：{{reason}}", "reason": {"authentication": "プロバイダーがこのキーを拒否しました。全体をコピーしたか、期限切れでないか確認してください。", "quota": "プロバイダーの残高が不足しています。管理画面で請求を確認してください。", "rate_limited": "プロバイダーがレート制限中です。少し待ってから編集すると再確認します。", "provider_unavailable": "プロバイダーが一時的に利用できません。後でもう一度お試しください。", "request_rejected": "プロバイダーがリクエストを拒否しました。プロバイダー種別を確認してください。", "endpoint_not_found": "このアドレスにモデルカタログがありません。Base URL を確認してください（/v1 の過不足がよくあります）。", "transport": "プロバイダーに接続できません。ネットワークと Base URL を確認してください。", "deadline": "30 秒以内に応答がありませんでした。ネットワークを確認して再試行してください。", "invalid_response": "応答がモデルカタログではありません。Base URL と種別を確認してください。", "invalid_url": "Base URL が有効なアドレスではありません。", "missing_credential": "キーがまだありません。API キーを入力すると自動で確認します。"}},
     savedToDraft: "ウィザードの下書きに保存しました · このプロジェクトのみ",
     shell: {"title": "新規プロジェクト", "cancel": "キャンセル", "autosave": "下書きは自動保存されます", "aiLocked": "AI が生成中です。完了までロックします", "qaLocked": "回答中はロックします", "picked": "{{count}} 件を選択"},
@@ -765,7 +767,6 @@ export default {
     providersHint: 'ディレクトリの前にモデルプロバイダを設定します。有効なプロバイダ、保存済みキー、default スロットが揃うまで進めません。',
     providersReady: '準備完了',
     providersBlocked: '有効なプロバイダ、キー、default スロットのいずれかが不足しています。',
-    providersPick: 'default スロットのプロバイダ',
     providersApply: '保存して default をバインド',
     dirLabel: 'プロジェクトディレクトリ',
     dirPlaceholder: '/path/to/project',
@@ -1080,7 +1081,7 @@ export default {
     done: '完了', empty: '一致する項目がありません', count: '{{n}} 件選択中',
     title_skills: 'スキルを選択', title_mcp: 'MCP サービスを選択',
   },
-  intake: {"confirm": "AGENTS.md に書き込む", "confirmHint": "初回分析が作成した下書きです。確認後にリポジトリ直下へ書き込み、既存ファイルは上書きしません。", "title": "プロジェクト説明の下書き", "unsaved": "未保存", "later": "今は書かない", "laterHint": "この下書きを破棄し、今後は表示しません。初回分析メッセージは会話に残ります", "edit": "編集", "editLabel": "プロジェクト説明の下書き本文", "editHint": "編集するのは下書きです。保存後も「AGENTS.md に書き込む」を押すまでディスクには書きません。", "cancelEdit": "キャンセル", "saveEdit": "下書きを保存"},
+  intake: {"confirm": "AGENTS.md に書き込む", "confirmHint": "初回分析が作成した下書きです。確認後にリポジトリ直下へ書き込み、既存ファイルは上書きしません。", "title": "プロジェクト説明の下書き", "unsaved": "未保存", "later": "今は書かない", "laterHint": "この下書きを破棄し、今後は表示しません。初回分析メッセージは会話に残ります", "edit": "編集", "editLabel": "プロジェクト説明の下書き本文", "editHint": "編集するのは下書きです。保存後も「AGENTS.md に書き込む」を押すまでディスクには書きません。", "cancelEdit": "キャンセル", "saveEdit": "下書きを保存", "discarded": "下書きを破棄しました", "undo": "元に戻す"},
   returnSummary: {"range": "{{from}} – {{to}} · {{minutes}} 分", "rangeUntil": "{{to}} まで", "collapse": "サマリーを折りたたむ", "toggle": "帰還サマリーの折りたたみ／展開", "headline": "チームは <b>{{stages}} 段階</b>を進め、成果物を {{deliveries}} 件納品しました。<o>{{pending}} 件</o>があなたの判断待ちです。", "headlineClear": "チームは <b>{{stages}} 段階</b>を進め、成果物を {{deliveries}} 件納品しました。あなたの対応待ちはありません。", "kpiStages": "段階", "kpiStagesValue": "{{count}} 完了", "kpiDeliveries": "納品", "kpiDeliveriesValue": "{{count}} 件", "kpiReviews": "レビュー", "kpiReviewsPassed": "合格 {{count}}", "kpiReviewsRejected": "差し戻し {{count}}", "kpiCost": "費用", "costLoading": "費用を読み込み中", "costUnknown": "離席中の費用を取得できません", "needsYou": "対応が必要", "handled": "対応済み", "nothingNeeded": "対応待ちの項目はありません。", "next": "次のおすすめ", "fillHint": "入力欄に入れるだけで、送信はしません", "collapsedLine": "離席中 · {{minutes}} 分 · 対応待ち {{count}} 件", "collapsedLineNoTime": "離席中 · 対応待ち {{count}} 件", "suggest": {"rejected": "差し戻された成果物 {{count}} 件の直し方を説明して", "escalated": "エスカレートされた指摘 {{count}} 件を説明して", "delivery": "{{path}} の変更点をまとめて", "stage": "この段階の成果をまとめてから次の段階へ進めて", "keepGoing": "現在の段階を続けて"}},
   fresh: {"greeting": "チームの準備ができました。どこから始めますか？", "sub": "{{roles}} ロール · {{stages}} 段階", "specTitle": "仕様から始める", "specDesc": "一文の要望から受け入れ基準を作る", "specFill": "この要望から仕様を書き、受け入れ基準を挙げて：", "repoTitle": "既存リポジトリを分析", "repoDesc": "構成・コマンド・依存関係を読む", "repoFill": "まず既存リポジトリを分析して：構成、コマンド、依存関係。", "specTitleRole": "{{role}}に{{stage}}を書いてもらう", "specFillRole": "{{mention}} この要望から{{stage}}を書き始め、受け入れ基準を挙げてください："},
   keys: {

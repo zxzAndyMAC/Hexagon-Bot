@@ -176,7 +176,7 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
           stage_run_id: null, payload: {}, created_at: '',
         },
         message: {
-          id: 2, author: 'a1', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '',
+          id: 2, author: 'a1', tokens: [], attachments: [], element_refs: [], model: null, created_at: '', thinking: '',
           body: '计划：阶段是发布，下一步用 fs_write',
         },
       }, {
@@ -210,10 +210,12 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
     })
     const item = {
       event: { id: 9, project_id: 'p1', kind: 'agent_message', agent_id: 'a1', stage_run_id: null, payload: {}, created_at: '' },
-      message: { id: 9, author: 'a1', tokens: [], attachments: [], element_refs: [], created_at: '', thinking: '', body: '好了' },
+      message: { id: 9, author: 'a1', tokens: [], attachments: [], element_refs: [], model: null, created_at: '', thinking: '', body: '好了' },
     } as const
     const row = await render(<TooltipProvider><EventRow item={item as never} /></TooltipProvider>)
     expect(row.el.querySelector('.tl-who')?.textContent).toContain('DeepSeek V4')
+    // gap B9：消息没有记录模型（旧消息）→ 回退当前模型并标「当前」（B2 时不标，当它是当时的模型）
+    expect(row.el.querySelector('[data-msg-model="current"]')?.textContent).toBe('DeepSeek V4（当前）')
     row.root.unmount()
     const live = await render(<LiveReply role="后端开发" model="DeepSeek V4" text="写" thinking="" generating />)
     expect(live.el.querySelector('[data-who-model]')?.textContent).toBe('DeepSeek V4')
@@ -221,5 +223,20 @@ describe('时间线增量与思考（hands-free 票 06）', () => {
     const none = await render(<LiveReply role="后端开发" model={null} text="写" thinking="" generating />)
     expect(none.el.querySelector('[data-who-model]')).toBeNull()
     none.root.unmount()
+  })
+
+  // gap B9（ui-redesign 2026-10-15）：消息头显示发这条消息时实际用的模型，不随成员换模型改写
+  it('消息记录了模型时显示记录的模型，不显示成员当前模型', async () => {
+    useUiStore.setState({
+      team: [{ id: 'a1', role: '后端开发', model_slot: 'code', status: 'active', avatar_hash: null, model: 'DeepSeek V4', duty: null, superior: null }],
+    })
+    const item = {
+      event: { id: 9, project_id: 'p1', kind: 'agent_message', agent_id: 'a1', stage_run_id: null, payload: {}, created_at: '' },
+      message: { id: 9, author: 'a1', tokens: [], attachments: [], element_refs: [], model: 'claude-opus-5-5', created_at: '', thinking: '', body: '好了' },
+    } as const
+    const row = await render(<TooltipProvider><EventRow item={item as never} /></TooltipProvider>)
+    expect(row.el.querySelector('[data-msg-model="recorded"]')?.textContent).toBe('claude-opus-5-5')
+    expect(row.el.querySelector('.tl-who')?.textContent).not.toContain('DeepSeek V4')
+    row.root.unmount()
   })
 })

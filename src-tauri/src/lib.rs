@@ -3184,6 +3184,12 @@ fn probe_provider_key(
     .map_err(cmd_err)
 }
 
+/// gap B8：内置服务商预设（静态表，读组，不碰工作台）。
+#[tauri::command]
+fn provider_presets() -> Vec<hexagon_core::provider_admin::ProviderPreset> {
+    hexagon_core::provider_admin::presets()
+}
+
 #[tauri::command]
 fn agents_md_draft(name: String) -> String {
     hexagon_core::setup::agents_md_draft(&name)
@@ -3410,6 +3416,12 @@ fn update_intake_draft(state: ProjectState<'_>, body: String) -> Result<(), CmdE
 #[tauri::command]
 fn discard_intake_draft(state: ProjectState<'_>) -> Result<(), CmdError> {
     with_wb(&state, |wb| wb.discard_intake_draft())
+}
+
+/// 「已丢弃 · 撤销」：把刚丢弃的草案挪回（gap B10）。control 组：写库走工作台。
+#[tauri::command]
+fn restore_intake_draft(state: ProjectState<'_>) -> Result<(), CmdError> {
+    with_wb(&state, |wb| wb.restore_intake_draft())
 }
 
 #[tauri::command]
@@ -3934,6 +3946,7 @@ pub fn run() {
             remove_search_backend,
             fetch_provider_models,
             probe_provider_key,
+            provider_presets,
             agents_md_draft,
             optimize_agents_md,
             brief_questions,
@@ -3948,6 +3961,7 @@ pub fn run() {
             intake_draft,
             update_intake_draft,
             discard_intake_draft,
+            restore_intake_draft,
             project_open,
             project_info,
             dispatch,

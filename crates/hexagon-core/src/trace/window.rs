@@ -13,7 +13,7 @@ pub use nodes::*;
 
 const SELECT: &str =
     "SELECT e.id,e.project_id,e.stage_run_id,e.agent_id,e.kind,e.payload,e.created_at,
- m.id,m.author,m.body,m.tokens,m.created_at,m.attachments,m.thinking,m.element_refs
+ m.id,m.author,m.body,m.tokens,m.created_at,m.attachments,m.thinking,m.element_refs,m.model
  FROM events e LEFT JOIN messages m ON m.id=json_extract(e.payload,'$.message_id')";
 const DECISIONS: &str = "e.kind IN ('permission_asked','permission_allowed','permission_denied','permission_shape_remembered',
  'stamped','stamp_rejected','flag_submitted','flag_adjudicated','escalated',

@@ -4254,7 +4254,7 @@ impl Workbench {
             Err(e) => return Err(ApiError::BadInput(e.to_string())),
         }
         self.db.conn().execute(
-            "UPDATE projects SET intake_draft=NULL WHERE id=?1",
+            "UPDATE projects SET intake_draft=NULL, intake_draft_discarded=NULL WHERE id=?1",
             [&self.project_id],
         )?;
         Ok(())
@@ -4297,12 +4297,31 @@ impl Workbench {
     /// 「先不写」（gap B1）：持久丢弃草案。之前只在本次打开里收起卡片，
     /// 重开项目还会再出现——负责人已经说过不要，再问一次是打扰。
     /// 开场分析状态不回退，不会因此重跑；分析消息留在时间线上，想写时照它手写。
-    /// 幂等：没有草案时什么也不做。
+    /// 幂等：没有草案时什么也不做（也不覆盖上一份已丢弃的正文）。
+    ///
+    /// gap B10（2026-10-15）：改为软删——正文挪进 `intake_draft_discarded`，供「已丢弃 · 撤销」
+    /// toast 经 [`Self::restore_intake_draft`] 挪回。B1 时直接置 NULL，点错就找不回来。
     pub fn discard_intake_draft(&self) -> Result<(), ApiError> {
         self.db.conn().execute(
-            "UPDATE projects SET intake_draft=NULL WHERE id=?1",
+            "UPDATE projects SET intake_draft_discarded=intake_draft, intake_draft=NULL \
+             WHERE id=?1 AND intake_draft IS NOT NULL",
             [&self.project_id],
         )?;
+        Ok(())
+    }
+
+    /// 撤销「先不写」（gap B10）：把最近丢弃的草案原样挪回待点头。只在当前没有草案时恢复——
+    /// 开场分析又起草了一份新的，旧的就不再复活；没有可恢复的正文时 `NoIntakeDraft`。
+    /// 不落盘：恢复后仍要负责人点「写入 AGENTS.md」。
+    pub fn restore_intake_draft(&self) -> Result<(), ApiError> {
+        let n = self.db.conn().execute(
+            "UPDATE projects SET intake_draft=intake_draft_discarded, intake_draft_discarded=NULL \
+             WHERE id=?1 AND intake_draft IS NULL AND intake_draft_discarded IS NOT NULL",
+            [&self.project_id],
+        )?;
+        if n == 0 {
+            return Err(ApiError::NoIntakeDraft);
+        }
         Ok(())
     }
 
