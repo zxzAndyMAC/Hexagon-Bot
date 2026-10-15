@@ -57,6 +57,13 @@ function ChartContainer({
 
 const ChartTooltip = RechartsPrimitive.Tooltip
 
+/** 提示与图例都按 config 声明序倒排（声明自下而上 → 读自上而下，堆叠顶层在前）；Recharts 的 payload 顺序不可靠。 */
+function byConfigTopDown<T extends { dataKey?: unknown; value?: unknown; type?: string }>(payload: ReadonlyArray<T>, config: ChartConfig): T[] {
+  const order = Object.keys(config)
+  const rank = (p: T) => order.indexOf(String(p.dataKey ?? p.value ?? ""))
+  return payload.filter((p) => p.type !== "none").sort((a, b) => rank(b) - rank(a))
+}
+
 type TooltipItem = { dataKey?: unknown; name?: unknown; value?: unknown; color?: string; type?: string; payload?: { fill?: string } }
 
 /** ctip：日期 500 + 每行色点 + 名 + 等宽值（E13）。值格式由调用方给（token 走 fmtTok）。 */
@@ -80,7 +87,7 @@ function ChartTooltipContent({
   const { config } = useChart()
   if (!active || !payload?.length) return null
   // 堆叠图里 Recharts 的 payload 自下而上；提示从上往下读，与视觉层次一致
-  const rows = [...payload].filter((p) => p.type !== "none").reverse()
+  const rows = byConfigTopDown(payload, config)
   return (
     <div
       data-slot="chart-tooltip"
@@ -111,7 +118,7 @@ function ChartLegendContent({ payload, className }: { payload?: ReadonlyArray<{ 
   const { config } = useChart()
   if (!payload?.length) return null
   // 与提示同序：自上而下（堆叠顶层在前）
-  const items = [...payload].filter((p) => p.type !== "none").reverse()
+  const items = byConfigTopDown(payload, config)
   return (
     <div data-slot="chart-legend" className={cn("flex flex-wrap items-center justify-center gap-4 pt-1.5 pb-3.5 text-[12px] text-ink-2", className)}>
       {items.map((item) => {

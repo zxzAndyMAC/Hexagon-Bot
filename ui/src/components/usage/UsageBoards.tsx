@@ -1,6 +1,7 @@
 // 消费榜单与按阶段（components E12 Leaderboard，usage#detail）。
 // 团队视图：所选范围内按 Agent（usage_series 带 agent_id），头像 18 + 名 / 8 高条（Agent 确定色）/ 等宽数值。
-// 模型视图：环形图（Pie Donut，中心总量）。按阶段：「已完成 3 / 6」+ 同形行，条色 --ink，「未归属阶段」ink-3。
+// 模型视图：环形图（Pie Donut，中心总量）。按阶段：「已完成 3 / 6」+ 同形行，条色 chart-1，「未归属阶段」名 ink-3、条 chart-3
+//（票 12 按原型 usage#detail 改正 E12 原写的 --ink：深色主题下白条过亮，规范同步改）。
 // 模型、阶段只有项目累计口径（usage_summary 行不带时间；不改 IPC，spec §176），卡头说明写明「项目累计」。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -123,7 +124,7 @@ export function StageBreakdown() {
           return (
             <HBar key={stage} label={<span className="truncate">{name}</span>} muted={none}
               value={fmtTok(tok)} exact={`${name} · ${tok.toLocaleString()}`}
-              max={(tok / top) * 100} color={none ? 'var(--ink-3)' : 'var(--ink)'} />
+              max={(tok / top) * 100} color={none ? 'var(--chart-3)' : 'var(--chart-1)'} />
           )
         })}
       </div>

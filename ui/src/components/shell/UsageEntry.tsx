@@ -56,7 +56,7 @@ export function UsageButton() {
       <TooltipContent>{title}</TooltipContent>
     </Tooltip>
       <PopoverContent side="top" align="end" data-usage-popover aria-label={t('usageCard.title')}
-        className={cn('w-[300px] px-4 py-3.5', tier === 'cap' && 'shadow-[0_0_0_1px_color-mix(in_oklch,var(--red)_40%,transparent),var(--shadow-overlay)]')}>
+        className={cn('w-[300px] px-4 py-3.5', tier === 'cap' && 'ring-1 ring-red/40')}>
         <UsageCard onDetail={() => { setOpen(false); openUsageDetail() }} onRaise={() => { setOpen(false); openUsageSettings() }} />
       </PopoverContent>
     </Popover>
@@ -76,7 +76,7 @@ export function CapBanner({ onRaise }: { onRaise: () => void }) {
       <Icon name="warn" size={16} />
       <span className="min-w-0 flex-1">{t('usage.capBanner', { limit: fmtYuan(total.limit_cents * MC_PER_CENT) })}</span>
       <Button size="xs" onClick={() => openUsageDetail()}>{t('usageEntry.view')}</Button>
-      <Button size="xs" onClick={onRaise}>{t('usageEntry.raise')}</Button>
+      <Button size="xs" variant="primary" onClick={onRaise}>{t('usageEntry.raise')}</Button>
     </div>
   )
 }
