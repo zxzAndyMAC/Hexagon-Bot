@@ -591,6 +591,8 @@ impl Registry {
                     // gap D6：电脑动作卡的截图缩略——只带证据引用，查不到即 null，不挡卡
                     let screenshot =
                         crate::desktop::actions::card_screenshot(db, ctx, name, &input);
+                    // gap D8：应用行显示名（本地化应用名 + 窗口标题），同样只读证据、查不到即 null
+                    let app = crate::desktop::actions::card_app(db, ctx, name, &input);
                     // 卡表写口归 cards.rs（arch-review 票 04）
                     let tx = db.conn().unchecked_transaction()?;
                     let qid = crate::cards::enqueue(
@@ -602,7 +604,7 @@ impl Registry {
                             "raw_input": input, "reason": reason, "safety_net": safety_net, "action_id":action.id,
                             "write_targets": tool.write_targets(&input)?,
                             "provenance": prov, "known_world": world,
-                            "remote_delta": delta, "screenshot": screenshot }),
+                            "remote_delta": delta, "screenshot": screenshot, "app": app }),
                         idem_key.as_deref(),
                     )?;
                     crate::actions::set_question(db, ctx, &action.id, &qid)?;

@@ -330,6 +330,9 @@ body {
 .chip.ok { color: var(--green); border-color: color-mix(in oklch, var(--green) calc(28% * var(--tint-ring)), transparent); background: var(--green-tint); }
 .chip.err { color: var(--red); border-color: color-mix(in oklch, var(--red) calc(26% * var(--tint-ring)), transparent); background: var(--red-tint); }
 .chip.flag { color: var(--violet); border-color: color-mix(in oklch, var(--violet) calc(24% * var(--tint-ring)), transparent); background: var(--violet-tint); }
+/* 电脑动作卡缩略上的目标圈（components D8，control#action；ui-redesign gap D8 2026-10-17）：原型形制——22px 圆、
+   2px --red 实环 + 6px --red 25% 晕。位置由 computerTargetRing.ringPoint 换算，不可证即不渲染此元素。 */
+.computer-target-ring { box-shadow: 0 0 0 2px var(--red), 0 0 0 6px color-mix(in oklch, var(--red) 25%, transparent); }
 .chip.warn { color: var(--accent-ink); border-color: color-mix(in oklch, var(--accent) calc(24% * var(--tint-ring)), transparent); background: var(--accent-tint); }
 /* 可交互 chip（workbench-polish 02，owner 报告：顶栏四枚 chip 同貌，看不出谁能点）。
    规范：chip=静态标签；chip-btn=可点/可悬浮——加强描边 + pointer + hover 填充。 */
