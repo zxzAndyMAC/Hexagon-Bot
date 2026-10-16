@@ -1239,7 +1239,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       if (mockIntakeDraft() !== null) all.splice(3)
       // 票 08 截图比对（managed#running）：`?mockmanaged` 时追加托管开启事实与托管决定行
       if (mockManaged()) all.push(
-        mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false }, '11:57'),
+        mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false, change: 'on', approval_mode: 'assisted' }, '11:57'),
         mkEv(122, 'system', 'a4', null, { kind: 'managed_decision', card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: '端到端测试需要浏览器内核，下载落在项目缓存目录，属本项目联网委托。', via: 'model', outcome: 'allowed', actor: 'managed:g1:1' }, '11:58'),
         mkEv(123, 'system', 'a3', null, { kind: 'managed_decision', card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: '与项目说明「单用户离线工具」一致；另两个方案偏装饰。', via: 'model', outcome: 'stamped', actor: 'managed:g1:1' }, '11:59'),
         mkEv(124, 'system', 'a5', null, { kind: 'managed_decision', card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: '该目标不是项目已配置的发布目标（新增发布目标不在托管范围内）。', via: 'host', outcome: 'not_published', actor: 'managed:g1:1' }, '12:00'),

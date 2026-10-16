@@ -257,6 +257,11 @@ export default {
   },
   sys: {
     delegation_changed: "託管設定已變更",
+    delegation_on: "你開啟了託管",
+    delegation_off: "你關閉了託管",
+    delegation_pause: "你暫停了託管",
+    delegation_resume: "你繼續了託管",
+    delegation_mode: "原模式「{{mode}}」",
     session_created: "工作階段已建立",
     session_transition: "工作階段狀態變化",
     session_transition_rejected: "工作階段狀態變更被拒",

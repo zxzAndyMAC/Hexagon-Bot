@@ -257,6 +257,11 @@ export default {
   },
   sys: {
     delegation_changed: "Délégation modifiée",
+    delegation_on: "Vous avez activé la délégation",
+    delegation_off: "Vous avez désactivé la délégation",
+    delegation_pause: "Vous avez mis la délégation en pause",
+    delegation_resume: "Vous avez repris la délégation",
+    delegation_mode: "Le mode reste « {{mode}} »",
     session_created: "Session démarrée",
     session_transition: "Changement d'état de la session",
     session_transition_rejected: "Changement de session refusé",

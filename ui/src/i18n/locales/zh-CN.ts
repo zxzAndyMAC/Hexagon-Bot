@@ -257,6 +257,11 @@ export default {
   },
   sys: {
     delegation_changed: "托管设置已变更",
+    delegation_on: "你开启了托管",
+    delegation_off: "你关闭了托管",
+    delegation_pause: "你暂停了托管",
+    delegation_resume: "你继续了托管",
+    delegation_mode: "原模式「{{mode}}」",
     session_created: "会话已建立",
     session_transition: "会话状态变化",
     session_transition_rejected: "会话状态变更被拒",
