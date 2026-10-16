@@ -130,24 +130,45 @@ fn computer_action_card_carries_reason_and_planned_on_screenshot() {
         if let Some(reason) = reason {
             input["reason"] = json!(reason);
         }
-        let outcome = wb.registry.call(&wb.db, &ctx, "computer_action", input).unwrap();
+        let outcome = wb
+            .registry
+            .call(&wb.db, &ctx, "computer_action", input)
+            .unwrap();
         let crate::tools::CallOutcome::Asked(qid) = outcome else {
             panic!("computer_action must always ask: {outcome:?}");
         };
         (crate::cards::get(&wb.db, &qid).unwrap().payload, path)
     };
 
-    let (payload, path) = card(true, true, "snap-1", Some("verify the screen-recording prompt"));
+    let (payload, path) = card(
+        true,
+        true,
+        "snap-1",
+        Some("verify the screen-recording prompt"),
+    );
     assert_eq!(payload["screenshot"]["screenshot_path"], json!(path));
-    assert_eq!(payload["screenshot"]["bundle_id"], "com.apple.systempreferences");
-    assert_eq!(payload["input"]["reason"], "verify the screen-recording prompt");
+    assert_eq!(
+        payload["screenshot"]["bundle_id"],
+        "com.apple.systempreferences"
+    );
+    assert_eq!(
+        payload["input"]["reason"],
+        "verify the screen-recording prompt"
+    );
     // The permission layer's own reason is unchanged by the model's reason.
-    assert_eq!(payload["reason"], "safety net: desktop action with unverified external effects");
+    assert_eq!(
+        payload["reason"],
+        "safety net: desktop action with unverified external effects"
+    );
     assert_eq!(payload["safety_net"], true);
 
     // Fail toward "no thumbnail": no observation, a different snapshot, or
     // cleared evidence still asks — the card is never blocked by missing pixels.
-    for (seed, keep, snapshot) in [(false, true, "snap-1"), (true, true, "snap-2"), (true, false, "snap-1")] {
+    for (seed, keep, snapshot) in [
+        (false, true, "snap-1"),
+        (true, true, "snap-2"),
+        (true, false, "snap-1"),
+    ] {
         let (payload, _) = card(seed, keep, snapshot, None);
         assert!(payload["screenshot"].is_null(), "{seed} {keep} {snapshot}");
         assert!(payload["input"].get("reason").is_none());
