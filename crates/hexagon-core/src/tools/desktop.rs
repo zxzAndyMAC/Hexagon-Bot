@@ -14,6 +14,15 @@ fn parse(input: &Value, read: bool) -> Result<NativeRequest, ToolError> {
     if let Some(chord) = input.as_object_mut().and_then(|m| m.remove("chord")) {
         input["keys"] = chord;
     }
+    // ui-redesign gap D6 (2026-10-16): `reason` is display-only text for the
+    // owner's approval card. It never reaches the native ABI (NativeRequest is
+    // deny_unknown_fields) and no permission layer reads it — the safety net
+    // asks on the tool name alone, so a missing or persuasive reason can
+    // neither block the ask nor waive it.
+    // Read tools never declare it; their schema still rejects a stray reason.
+    if let Some(map) = input.as_object_mut().filter(|_| !read) {
+        map.remove("reason");
+    }
     let request: NativeRequest =
         serde_json::from_value(input).map_err(|e| ToolError::BadInput(e.to_string()))?;
     let valid = if read {
@@ -86,7 +95,7 @@ impl Tool for ComputerAction {
         // Fullstack QA 2026-10-05: an element ID was repeatedly submitted without
         // coordinates; AX desktop bounds were then mistaken for image pixels.
         // Explain the existing contract rather than relaxing its validation.
-        "Use when a visible macOS interaction requires one explicitly approved action. Do not use to bypass source ownership, perform background tasks, or replay an unknown outcome. Every mutation requires the owner, regardless of approval mode; GUI input cannot attest file ownership or risk. activate needs discovered app_id. Other actions need the latest unused snapshot_id. click and drag require x/y in returned screenshot pixels, even when element_id is supplied. AX element bounds are desktop points: for a window observation convert the element center with x=(center_x-bounds.x)*image_width/bounds.width and y=(center_y-bounds.y)*image_height/bounds.height. Do not send absolute desktop coordinates as image pixels. type sends literal text to the observed focused field; key takes chord such as cmd,a. Source editors, terminals and system credential/permission surfaces are refused. Observe afterward; unknown results must never be replayed."
+        "Use when a visible macOS interaction requires one explicitly approved action. Do not use to bypass source ownership, perform background tasks, or replay an unknown outcome. Every mutation requires the owner, regardless of approval mode; GUI input cannot attest file ownership or risk. activate needs discovered app_id. Other actions need the latest unused snapshot_id. click and drag require x/y in returned screenshot pixels, even when element_id is supplied. AX element bounds are desktop points: for a window observation convert the element center with x=(center_x-bounds.x)*image_width/bounds.width and y=(center_y-bounds.y)*image_height/bounds.height. Do not send absolute desktop coordinates as image pixels. type sends literal text to the observed focused field; key takes chord such as cmd,a. Source editors, terminals and system credential/permission surfaces are refused. Give reason: one short sentence telling the owner why this step is needed; it is shown on the approval card and does not change whether approval is required. Observe afterward; unknown results must never be replayed."
     }
     fn risk(&self) -> RiskClass {
         RiskClass::External
@@ -106,7 +115,8 @@ impl Tool for ComputerAction {
             "direction":{"description":"Scroll direction relative to the observed scrollable element.","type":"string","enum":["up","down","left","right"]},
             "amount":{"description":"Number of bounded scroll steps, from 1 to 20.","type":"integer","minimum":1,"maximum":20},
             "element_id":{"description":"Observed accessibility identifier, required for scroll. Supplying it for click or drag does not replace the required screenshot x/y coordinates.","type":"string","minLength":1,"maxLength":256},
-            "click_type":{"description":"Single, double, or right click.","type":"string","enum":["single","double","right"]}
+            "click_type":{"description":"Single, double, or right click.","type":"string","enum":["single","double","right"]},
+            "reason":{"description":"One short sentence for the owner: why this step is needed. Shown on the approval card only.","type":"string","maxLength":200}
         },"required":["op"]})
     }
     fn precondition(&self, input: &Value, _: &ToolContext) -> Result<(), ToolError> {
