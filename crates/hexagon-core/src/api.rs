@@ -3515,10 +3515,9 @@ impl Workbench {
     }
 
     fn roster(&self) -> Result<Vec<String>, ApiError> {
-        let mut st = self
-            .db
-            .conn()
-            .prepare("SELECT role FROM agents WHERE project_id=?1 AND removed_at IS NULL ORDER BY id")?;
+        let mut st = self.db.conn().prepare(
+            "SELECT role FROM agents WHERE project_id=?1 AND removed_at IS NULL ORDER BY id",
+        )?;
         let rows = st.query_map([&self.project_id], |r| r.get(0))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }

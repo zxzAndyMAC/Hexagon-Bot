@@ -276,9 +276,9 @@ pub fn set_grants(db: &Db, agent_id: &str, kind: &str, names: &[String]) -> Resu
 
 /// 团队角色名单（agents 表）。
 pub fn team_roles(db: &Db, project_id: &str) -> Result<Vec<String>, RoleError> {
-    let mut st = db
-        .conn()
-        .prepare("SELECT role FROM agents WHERE project_id=?1 AND removed_at IS NULL ORDER BY created_at")?;
+    let mut st = db.conn().prepare(
+        "SELECT role FROM agents WHERE project_id=?1 AND removed_at IS NULL ORDER BY created_at",
+    )?;
     let rows = st
         .query_map([project_id.to_string()], |r| r.get(0))?
         .collect::<Result<Vec<String>, _>>()?;

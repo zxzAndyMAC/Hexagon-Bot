@@ -281,6 +281,7 @@ export default {
     trigger_expired: "Continuación vencida",
     trigger_consumed: "Continuación iniciada",
     trigger_cancelled: "Continuación cancelada",
+    agent_removed: "Retirado del equipo",
     performance_baseline_confirmed: "Referencia de rendimiento confirmada",
     quality_commands_changed: "Comandos de calidad del flujo modificados",
     approval_mode_changed: "Modo de aprobación cambiado",
@@ -750,6 +751,8 @@ export default {
     add: 'Añadir', added: '«{{name}}» añadido',
     unselected: 'Selecciona una plantilla a la izquierda', unselectedAgent: 'Selecciona un agente a la izquierda',
     empty: 'Sin plantillas',
+    ownRole: "Creado en este proyecto", remove: "Retirar del equipo", removeTitle: "¿Retirar a «{{name}}» del equipo?",
+    removeBody: "Sale de la lista, las menciones y las asignaciones. Su línea de tiempo, artefactos y uso se conservan. Los permisos y entradas de experiencia no pasan a un rol del mismo nombre añadido después desde una plantilla.", removed: "Se retiró a «{{name}}»",
   },
   wizard: {
     keyHelp: "Se guarda en el llavero del sistema, nunca en la carpeta del proyecto.",
@@ -1111,6 +1114,10 @@ export default {
     confirmIntake: 'Confirmar el borrador de apertura',
   },
   errors: {
+    agent_not_found: "Este agente ya no está en el equipo. Actualiza para ver la lista.",
+    agent_busy: "Este agente sigue trabajando. Ponlo en reposo y espera a que termine su turno.",
+    agent_has_pending: "Este agente tiene tarjetas pendientes de tu decisión. Resuélvelas primero en el panel de pendientes.",
+    agent_is_fastpath: "Este agente es el asignado de la vía rápida. Elige a otro en Autonomía primero.",
     outcome_unknown: "Se desconoce el resultado de una acción anterior. Revísalo en su tarjeta antes de continuar.",
     action_ready: "Hay una acción aprobada que aún no se ha ejecutado. Continúala primero desde la tarjeta pendiente.",
     trigger_not_ready: "Aún no es la hora de continuar, o la hora ya pasó.",

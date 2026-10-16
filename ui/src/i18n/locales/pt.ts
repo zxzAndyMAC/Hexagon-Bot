@@ -281,6 +281,7 @@ export default {
     trigger_expired: "Continuação vencida",
     trigger_consumed: "Continuação iniciada",
     trigger_cancelled: "Continuação cancelada",
+    agent_removed: "Removido da equipe",
     performance_baseline_confirmed: "Referência de desempenho confirmada",
     quality_commands_changed: "Comandos de qualidade do fluxo alterados",
     approval_mode_changed: "Modo de aprovação alterado",
@@ -750,6 +751,8 @@ export default {
     add: 'Adicionar', added: '"{{name}}" adicionado',
     unselected: 'Selecione um modelo à esquerda', unselectedAgent: 'Selecione um agente à esquerda',
     empty: 'Sem modelos',
+    ownRole: "Criado neste projeto", remove: "Remover da equipe", removeTitle: "Remover “{{name}}” da equipe?",
+    removeBody: "Ele sai da lista, das menções e das atribuições. A linha do tempo, os artefatos e o uso ficam guardados. Permissões e entradas de experiência não passam para um papel de mesmo nome adicionado depois a partir de um modelo.", removed: "“{{name}}” removido",
   },
   wizard: {
     keyHelp: "Guardada no chaveiro do sistema, nunca na pasta do projeto.",
@@ -1111,6 +1114,10 @@ export default {
     confirmIntake: 'Confirmar o rascunho de abertura',
   },
   errors: {
+    agent_not_found: "Este agente não está mais na equipe. Atualize para ver a lista.",
+    agent_busy: "Este agente ainda está trabalhando. Coloque-o em repouso e espere o turno terminar.",
+    agent_has_pending: "Este agente tem cartões aguardando sua decisão. Resolva-os primeiro no painel de pendências.",
+    agent_is_fastpath: "Este agente é o designado da via rápida. Escolha outra pessoa em Autonomia primeiro.",
     outcome_unknown: "O resultado de uma ação anterior é desconhecido. Verifique no cartão antes de continuar.",
     action_ready: "Uma ação aprovada ainda não foi executada. Continue-a primeiro pelo cartão pendente.",
     trigger_not_ready: "Ainda não é a hora de continuar, ou a hora já passou.",

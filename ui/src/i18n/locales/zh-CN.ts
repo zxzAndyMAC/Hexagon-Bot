@@ -281,6 +281,7 @@ export default {
     trigger_expired: "稍后继续已到期",
     trigger_consumed: "稍后继续已开始",
     trigger_cancelled: "已取消稍后继续",
+    agent_removed: "已移出团队",
     performance_baseline_confirmed: "性能基准已确认",
     quality_commands_changed: "当前流程检查命令已修改",
     approval_mode_changed: "批准模式已更改",
@@ -750,6 +751,8 @@ export default {
     add: '添加', added: '已添加「{{name}}」',
     unselected: '在左侧选择一个模板', unselectedAgent: '在左侧选择一个 Agent',
     empty: '暂无模板',
+    ownRole: "本项目自建", remove: "移出团队", removeTitle: "把「{{name}}」移出团队？",
+    removeBody: "它不再出现在名单、点名和派活里；已有的时间线、产物和用量记录都保留。授权和经验条目不会带到以后从模板重新添加的同名角色。", removed: "已移出「{{name}}」",
   },
   wizard: {
     keyHelp: "存进系统钥匙串，不写入项目目录。",
@@ -1111,6 +1114,10 @@ export default {
     confirmIntake: '确认开场草案',
   },
   errors: {
+    agent_not_found: "这个 Agent 已不在团队里，刷新后再看。",
+    agent_busy: "这个 Agent 还在工作。先休眠，等它这一回合结束再移出。",
+    agent_has_pending: "这个 Agent 还有待你决定的卡，先在待决坞处理完再移出。",
+    agent_is_fastpath: "这个 Agent 是快速通道的指定人，先在自治设置里换一个人再移出。",
     outcome_unknown: "之前一个动作的结果未知，请先在它的待决卡上核对，再继续。",
     action_ready: "有一个已批准的动作还没执行，请先在待决卡上按「继续」续上它。",
     trigger_not_ready: "这个稍后继续的时间还没到，或者选择的时间已经过去。",

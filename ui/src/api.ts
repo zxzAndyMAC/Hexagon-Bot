@@ -436,6 +436,8 @@ export const api = {
     call<string | null>('artifact_content_at', { path, version }),
   setAgentSleeping: (agentId: string, sleeping: boolean) =>
     call<void>('set_agent_sleeping', { agentId, sleeping }),
+  /** gap D2「移出团队」：core 软删 + 守门（agent_busy / agent_has_pending / agent_is_fastpath / agent_not_found）。 */
+  removeAgent: (agentId: string) => call<void>('remove_agent', { agentId }),
   team: () => call<TeamRow[]>('team'),
   requestAcceptanceException: (expected: string) => call<ExceptionRequest>('request_acceptance_exception', { expected }),
   confirmPerformanceBaseline: (measurement: number, expected: string, reason: string) => call<PerformanceBaselineConfirmation>('confirm_performance_baseline', { measurement, expected, reason }),
@@ -1430,6 +1432,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'session_verify_worktree':
       return null as T
     case 'set_agent_sleeping':
+    case 'remove_agent':
     case 'review_proposal':
     case 'confirm_proposal':
     case 'reject_proposal':

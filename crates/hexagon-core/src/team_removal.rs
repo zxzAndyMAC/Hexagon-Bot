@@ -54,7 +54,11 @@ fn has_open_turn(db: &Db, project_id: &str, agent_id: &str) -> Result<bool, rusq
     )
 }
 
-fn refusal(db: &Db, project_id: &str, agent_id: &str) -> Result<Option<RemoveAgentError>, RemoveAgentError> {
+fn refusal(
+    db: &Db,
+    project_id: &str,
+    agent_id: &str,
+) -> Result<Option<RemoveAgentError>, RemoveAgentError> {
     let row: Option<(String, Option<String>)> = match db.conn().query_row(
         "SELECT status, removed_at FROM agents WHERE project_id=?1 AND id=?2",
         rusqlite::params![project_id, agent_id],
@@ -108,11 +112,11 @@ pub fn remove_agent(db: &Db, project_id: &str, agent_id: &str) -> Result<(), Rem
         );
         return Err(err);
     }
-    let role: String = db.conn().query_row(
-        "SELECT role FROM agents WHERE id=?1",
-        [agent_id],
-        |r| r.get(0),
-    )?;
+    let role: String =
+        db.conn()
+            .query_row("SELECT role FROM agents WHERE id=?1", [agent_id], |r| {
+                r.get(0)
+            })?;
     // 状态写路径只在属主 orchestra（AGENTS.md 接缝规则）；先落休眠再记移出，
     // 此后 write_agent_status 的 `removed_at IS NULL` 守卫让任何激活都碰不到它。
     crate::orchestra::write_agent_status(db, project_id, agent_id, true)?;
@@ -237,12 +241,24 @@ mod tests {
     fn fastpath_assignee_and_unknown_or_removed_are_refused() {
         let db = team(&["前端", "后端"]);
         db.conn()
-            .execute("UPDATE projects SET fastpath_agent_id='a1' WHERE id='p1'", [])
+            .execute(
+                "UPDATE projects SET fastpath_agent_id='a1' WHERE id='p1'",
+                [],
+            )
             .unwrap();
-        assert_eq!(remove_agent(&db, "p1", "a1").unwrap_err().code(), "agent_is_fastpath");
-        assert_eq!(remove_agent(&db, "p1", "zz").unwrap_err().code(), "agent_not_found");
+        assert_eq!(
+            remove_agent(&db, "p1", "a1").unwrap_err().code(),
+            "agent_is_fastpath"
+        );
+        assert_eq!(
+            remove_agent(&db, "p1", "zz").unwrap_err().code(),
+            "agent_not_found"
+        );
         remove_agent(&db, "p1", "a0").unwrap();
-        assert_eq!(remove_agent(&db, "p1", "a0").unwrap_err().code(), "agent_not_found");
+        assert_eq!(
+            remove_agent(&db, "p1", "a0").unwrap_err().code(),
+            "agent_not_found"
+        );
     }
 
     #[test]

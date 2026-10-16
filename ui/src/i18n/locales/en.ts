@@ -281,6 +281,7 @@ export default {
     trigger_expired: "Continue-later due",
     trigger_consumed: "Continue-later started",
     trigger_cancelled: "Continue-later cancelled",
+    agent_removed: "Removed from team",
     performance_baseline_confirmed: "Performance baseline confirmed",
     quality_commands_changed: "Current-flow quality commands changed",
     approval_mode_changed: "Approval mode changed",
@@ -750,6 +751,8 @@ export default {
     add: 'Add', added: 'Added "{{name}}"',
     unselected: 'Select a template on the left', unselectedAgent: 'Select an agent on the left',
     empty: 'No templates',
+    ownRole: "Created in this project", remove: "Remove from team", removeTitle: "Remove “{{name}}” from the team?",
+    removeBody: "It leaves the roster, mentions and assignments. Its timeline, artifacts and usage history stay. Grants and experience entries don’t carry over if you add the same role from a template later.", removed: "Removed “{{name}}”",
   },
   wizard: {
     keyHelp: "Stored in the system keychain, never in the project folder.",
@@ -1111,6 +1114,10 @@ export default {
     confirmIntake: 'Confirm opening draft',
   },
   errors: {
+    agent_not_found: "This agent is no longer on the team. Refresh to see the current roster.",
+    agent_busy: "This agent is still working. Put it to sleep and let its turn finish, then remove it.",
+    agent_has_pending: "This agent has cards waiting for your decision. Handle them in the pending dock first.",
+    agent_is_fastpath: "This agent is the fast-path assignee. Pick someone else in Autonomy settings first.",
     outcome_unknown: "The result of an earlier action is unknown. Check it on its pending card before continuing.",
     action_ready: "An approved action has not run yet. Continue it from the pending card first.",
     trigger_not_ready: "This continue-later time has not come yet, or the time is in the past.",

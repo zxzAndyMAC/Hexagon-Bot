@@ -281,6 +281,7 @@ export default {
     trigger_expired: "後で続けるの時刻",
     trigger_consumed: "後で続けるを開始",
     trigger_cancelled: "後で続けるを取り消し",
+    agent_removed: "チームから外しました",
     performance_baseline_confirmed: "性能基準を確認",
     quality_commands_changed: "現在のフローの品質コマンドを変更",
     approval_mode_changed: "承認モードを変更しました",
@@ -750,6 +751,8 @@ export default {
     add: '追加', added: '「{{name}}」を追加しました',
     unselected: '左からテンプレートを選択', unselectedAgent: '左からエージェントを選択',
     empty: 'テンプレートなし',
+    ownRole: "このプロジェクトで作成", remove: "チームから外す", removeTitle: "「{{name}}」をチームから外しますか？",
+    removeBody: "名簿・メンション・割り当てから外れます。タイムライン、成果物、使用量の記録は残ります。権限と経験エントリは、後でテンプレートから追加する同名ロールには引き継がれません。", removed: "「{{name}}」を外しました",
   },
   wizard: {
     keyHelp: "システムのキーチェーンに保存し、プロジェクトフォルダーには書き込みません。",
@@ -1111,6 +1114,10 @@ export default {
     confirmIntake: '開始草案を確認',
   },
   errors: {
+    agent_not_found: "このエージェントはもうチームにいません。更新して確認してください。",
+    agent_busy: "このエージェントはまだ作業中です。休止させ、このターンが終わってから外してください。",
+    agent_has_pending: "このエージェントにはあなたの判断待ちのカードがあります。先に保留ドックで処理してください。",
+    agent_is_fastpath: "このエージェントはファストパスの担当者です。先に自律設定で別の担当者を選んでください。",
     outcome_unknown: "以前の操作の結果が不明です。続ける前に未決カードで確認してください。",
     action_ready: "承認済みの操作がまだ実行されていません。先に未決カードで「続ける」を押してください。",
     trigger_not_ready: "後で続ける時刻がまだ来ていないか、過去の時刻です。",

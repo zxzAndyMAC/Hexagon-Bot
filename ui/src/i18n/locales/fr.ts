@@ -281,6 +281,7 @@ export default {
     trigger_expired: "Reprise arrivée à échéance",
     trigger_consumed: "Reprise lancée",
     trigger_cancelled: "Reprise annulée",
+    agent_removed: "Retiré de l’équipe",
     performance_baseline_confirmed: "Référence de performance confirmée",
     quality_commands_changed: "Commandes qualité du processus modifiées",
     approval_mode_changed: "Mode d’approbation modifié",
@@ -750,6 +751,8 @@ export default {
     add: 'Ajouter', added: '« {{name}} » ajouté',
     unselected: 'Sélectionnez un modèle à gauche', unselectedAgent: 'Sélectionnez un agent à gauche',
     empty: 'Aucun modèle',
+    ownRole: "Créé dans ce projet", remove: "Retirer de l’équipe", removeTitle: "Retirer « {{name}} » de l’équipe ?",
+    removeBody: "Il quitte la liste, les mentions et les attributions. Sa chronologie, ses artefacts et son usage sont conservés. Les autorisations et entrées d’expérience ne passent pas à un rôle du même nom ajouté plus tard depuis un modèle.", removed: "« {{name}} » retiré",
   },
   wizard: {
     keyHelp: "Stockée dans le trousseau du système, jamais dans le dossier du projet.",
@@ -1111,6 +1114,10 @@ export default {
     confirmIntake: 'Confirmer le brouillon d’ouverture',
   },
   errors: {
+    agent_not_found: "Cet agent ne fait plus partie de l’équipe. Actualisez pour voir la liste.",
+    agent_busy: "Cet agent travaille encore. Mettez-le en veille et attendez la fin de son tour.",
+    agent_has_pending: "Cet agent a des cartes qui attendent votre décision. Traitez-les d’abord dans le dock des décisions.",
+    agent_is_fastpath: "Cet agent est l’assigné de la voie rapide. Choisissez quelqu’un d’autre dans Autonomie d’abord.",
     outcome_unknown: "Le résultat d'une action précédente est inconnu. Vérifiez-le sur sa carte avant de continuer.",
     action_ready: "Une action approuvée n'a pas encore été exécutée. Reprenez-la d'abord depuis la carte en attente.",
     trigger_not_ready: "L'heure de reprise n'est pas encore arrivée ou est déjà passée.",
