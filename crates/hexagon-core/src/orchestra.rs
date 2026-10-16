@@ -401,7 +401,7 @@ pub fn open_stage(
     // 团队名单：项目 agents 表 role 集合
     let mut st = db
         .conn()
-        .prepare("SELECT id, role FROM agents WHERE project_id=?1")?;
+        .prepare("SELECT id, role FROM agents WHERE project_id=?1 AND removed_at IS NULL")?;
     let team: Vec<(String, String)> = st
         .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
@@ -1919,7 +1919,7 @@ pub fn team(
 ) -> Result<Vec<TeamRow>, OrchError> {
     let mut st = db
         .conn()
-        .prepare("SELECT id, role, model_slot, status FROM agents WHERE project_id=?1")?;
+        .prepare("SELECT id, role, model_slot, status FROM agents WHERE project_id=?1 AND removed_at IS NULL")?;
     let mut rows = st
         .query_map([project_id], |r| {
             Ok(TeamRow {
@@ -2064,7 +2064,7 @@ pub fn write_agent_status(
     sleeping: bool,
 ) -> Result<(), rusqlite::Error> {
     db.conn().execute(
-        "UPDATE agents SET status=?1 WHERE id=?2 AND project_id=?3",
+        "UPDATE agents SET status=?1 WHERE id=?2 AND project_id=?3 AND removed_at IS NULL",
         rusqlite::params![
             if sleeping { "sleeping" } else { "active" },
             agent_id,

@@ -244,7 +244,7 @@ pub fn submit_flag(
         }
         Some(ref rr) => {
             let present: bool = db.conn().query_row(
-                "SELECT EXISTS(SELECT 1 FROM agents WHERE project_id=?1 AND role=?2)",
+                "SELECT EXISTS(SELECT 1 FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL)",
                 rusqlite::params![ctx.project_id, rr],
                 |r| r.get(0),
             )?;
@@ -341,7 +341,7 @@ pub fn submit_flag(
     eligible.push("auto_wake");
     if rank >= 2 && pack.knobs.consult_auto_wake() {
         if let Ok(agent_id) = db.conn().query_row(
-            "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
+            "SELECT id FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL ORDER BY created_at, id LIMIT 1",
             rusqlite::params![ctx.project_id, reviewer],
             |r| r.get::<_, String>(0),
         ) {

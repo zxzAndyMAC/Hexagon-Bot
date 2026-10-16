@@ -405,6 +405,21 @@ pub fn count_queued(db: &Db, project_id: &str, kind: Option<CardKind>) -> Result
     Ok(n)
 }
 
+/// 挂在某个 Agent 名下的 queued 卡数（gap D2「移出团队」守门：有待决就拒）。
+pub fn count_queued_for_agent(
+    db: &Db,
+    project_id: &str,
+    agent_id: &str,
+) -> Result<i64, CardsError> {
+    let n = db.conn().query_row(
+        "SELECT COUNT(*) FROM pending_questions
+         WHERE project_id=?1 AND agent_id=?2 AND state='queued'",
+        rusqlite::params![project_id, agent_id],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
 /// queued 卡按 kind 分组计数（autonomy 待办读模型）。
 pub fn queued_kind_counts(db: &Db, project_id: &str) -> Result<Vec<(String, i64)>, CardsError> {
     let mut st = db.conn().prepare(

@@ -307,6 +307,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0062_intake_draft_discarded",
         include_str!("../migrations/0062_intake_draft_discarded.sql"),
     ),
+    (
+        "0063_agent_removed",
+        include_str!("../migrations/0063_agent_removed.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

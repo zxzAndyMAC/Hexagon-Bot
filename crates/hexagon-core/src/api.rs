@@ -1742,7 +1742,7 @@ impl Workbench {
     pub(crate) fn agent_by_role(&self, role: &str) -> Result<String, ApiError> {
         let started = std::time::Instant::now();
         let mut st = self.db.conn().prepare(
-            "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 2",
+            "SELECT id FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL ORDER BY created_at, id LIMIT 2",
         )?;
         let ids = st
             .query_map(rusqlite::params![self.project_id, role], |r| {
@@ -3491,7 +3491,7 @@ impl Workbench {
     }
 
     fn role_instances(&self, role: &str) -> Result<Vec<(String, String)>, ApiError> {
-        let mut st = self.db.conn().prepare("SELECT id, role, model_slot FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at,id")?;
+        let mut st = self.db.conn().prepare("SELECT id, role, model_slot FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL ORDER BY created_at,id")?;
         let rows = st
             .query_map(rusqlite::params![self.project_id, role], |r| {
                 Ok((
@@ -3518,7 +3518,7 @@ impl Workbench {
         let mut st = self
             .db
             .conn()
-            .prepare("SELECT role FROM agents WHERE project_id=?1 ORDER BY id")?;
+            .prepare("SELECT role FROM agents WHERE project_id=?1 AND removed_at IS NULL ORDER BY id")?;
         let rows = st.query_map([&self.project_id], |r| r.get(0))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -3604,7 +3604,7 @@ impl Workbench {
     pub fn run_all_active(&self, input: &str) -> Result<Vec<(String, TurnOutcome)>, ApiError> {
         let instances: Vec<(String, String)> = {
             let mut st = self.db.conn().prepare(
-                "SELECT id, role FROM agents WHERE project_id=?1 AND status='active' ORDER BY created_at, id")?;
+                "SELECT id, role FROM agents WHERE project_id=?1 AND status='active' AND removed_at IS NULL ORDER BY created_at, id")?;
             let rows = st
                 .query_map([&self.project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<Result<_, _>>()?;

@@ -181,8 +181,13 @@ pub fn create_role(db: &Db, project_id: &str, def: &RoleDef) -> Result<String, R
             .ok_or_else(|| RoleError::UnknownReviewer(rev.clone()))?;
     }
     db.conn().execute(
+        // gap D2：移出团队是软删，role_defs 行可能还留着被移出成员的定义。上面的重名
+        // 检查只看在册成员，走到这里说明同名行只属于已移出的 Agent——覆盖它。
+        // 曾经的写法是裸 INSERT：移出「前端」后再从模板添加「前端」撞主键报错。
         "INSERT INTO role_defs (project_id, name, duty, reviewer, model_slot, skills, custom)
-         VALUES (?1,?2,?3,?4,?5,?6,1)",
+         VALUES (?1,?2,?3,?4,?5,?6,1)
+         ON CONFLICT(project_id, name) DO UPDATE SET duty=excluded.duty, reviewer=excluded.reviewer,
+           model_slot=excluded.model_slot, skills=excluded.skills, custom=1",
         rusqlite::params![
             project_id,
             name,
@@ -220,7 +225,7 @@ pub fn spawn_peer(db: &Db, project_id: &str, role: &str) -> Result<String, RoleE
     let (src, model_slot): (String, Option<String>) = db
         .conn()
         .query_row(
-            "SELECT id, model_slot FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
+            "SELECT id, model_slot FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL ORDER BY created_at, id LIMIT 1",
             rusqlite::params![project_id, role],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -273,7 +278,7 @@ pub fn set_grants(db: &Db, agent_id: &str, kind: &str, names: &[String]) -> Resu
 pub fn team_roles(db: &Db, project_id: &str) -> Result<Vec<String>, RoleError> {
     let mut st = db
         .conn()
-        .prepare("SELECT role FROM agents WHERE project_id=?1 ORDER BY created_at")?;
+        .prepare("SELECT role FROM agents WHERE project_id=?1 AND removed_at IS NULL ORDER BY created_at")?;
     let rows = st
         .query_map([project_id.to_string()], |r| r.get(0))?
         .collect::<Result<Vec<String>, _>>()?;

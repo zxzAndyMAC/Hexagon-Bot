@@ -516,7 +516,7 @@ pub fn submit(
     let reviewer = crate::roles::superior_of(db, &ctx.project_id, &author_role).and_then(|r| {
         db.conn()
             .query_row(
-                "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
+                "SELECT id FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL ORDER BY created_at, id LIMIT 1",
                 params![ctx.project_id, r],
                 |r| r.get::<_, String>(0),
             )

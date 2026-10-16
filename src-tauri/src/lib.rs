@@ -2841,6 +2841,15 @@ fn set_agent_sleeping(
     })
 }
 
+/// Control: 「移出团队」（ui-redesign gap D2）。软删，core 守门——在跑 / 有待决 /
+/// 快速通道指定人拒绝并带原因码（team_removal）。与休眠同属干预指令走控制通道。
+#[tauri::command]
+fn remove_agent(state: ProjectState<'_>, agent_id: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |db, _| {
+        hexagon_core::team_removal::remove_agent(db, PROJECT_ID, &agent_id)
+    })
+}
+
 #[tauri::command]
 fn set_usage_limit(state: ProjectState<'_>, limit_cents: Option<i64>) -> Result<(), CmdError> {
     with_project_conn(&state, |db, _| {
@@ -3936,6 +3945,7 @@ pub fn run() {
             agent_avatar,
             artifact_content_at,
             set_agent_sleeping,
+            remove_agent,
             set_usage_limit,
             usage_series,
             usage_rows,
