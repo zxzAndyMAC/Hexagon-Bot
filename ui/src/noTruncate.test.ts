@@ -20,4 +20,8 @@ describe('no truncation on the golden path', () => {
     expect(r).not.toMatch(/text-overflow:\s*ellipsis/)
     expect(r).not.toMatch(/white-space:\s*nowrap/)
   })
+
+  it('timeline scroller shows a focus ring when tabbed to (ticket 16c a11y)', () => {
+    expect(rule(timelineCss, '.tl [data-virtuoso-scroller]:focus-visible')).toMatch(/box-shadow:\s*inset/)
+  })
 })

@@ -314,3 +314,7 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl-intake-pre { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--inset); color: var(--ink-2); font-family: var(--font-mono); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 .tl-intake-edit { display: block; width: 100%; min-height: 160px; resize: vertical; border: none; outline: none; }
 .tl-intake-edit:focus-visible { box-shadow: var(--focus-ring); }
+
+/* 票 16c（可访问性抽查）：时间线滚动容器可 Tab 聚焦（键盘滚动），原先聚焦后无任何焦点环。
+   外环会被列边裁掉，所以用同 --focus-ring 两层的内嵌版。 */
+.tl [data-virtuoso-scroller]:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 0 4px var(--accent-tint); }
