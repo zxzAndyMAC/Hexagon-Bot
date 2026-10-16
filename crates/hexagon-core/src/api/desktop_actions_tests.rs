@@ -226,20 +226,35 @@ fn computer_action_card_names_the_app_and_carries_snapshot_size() {
         };
         crate::cards::get(&wb.db, &qid).unwrap().payload
     };
-    seed("apps", json!({"ok":true,"applications":[
+    seed(
+        "apps",
+        json!({"ok":true,"applications":[
         {"app_id":"rcpt-1","bundle_id":"com.apple.systempreferences","name":"系统设置","windows":[]},
-        {"app_id":"rcpt-2","bundle_id":"com.apple.Safari","name":"Safari","windows":[]}]}));
+        {"app_id":"rcpt-2","bundle_id":"com.apple.Safari","name":"Safari","windows":[]}]}),
+    );
     // Pre-D8 observation: no app_name, no image size → name from the listing.
-    seed("old", json!({"ok":true,"result":{"snapshot_id":"snap-old","screenshot_path":path,
-        "title":"隐私与安全性","bundle_id":"com.apple.systempreferences"}}));
-    seed("new", json!({"ok":true,"result":{"snapshot_id":"snap-new","screenshot_path":path,
+    seed(
+        "old",
+        json!({"ok":true,"result":{"snapshot_id":"snap-old","screenshot_path":path,
+        "title":"隐私与安全性","bundle_id":"com.apple.systempreferences"}}),
+    );
+    seed(
+        "new",
+        json!({"ok":true,"result":{"snapshot_id":"snap-new","screenshot_path":path,
         "title":"隐私与安全性","bundle_id":"com.apple.systempreferences","app_name":"System Settings",
-        "image_width":1600,"image_height":1000}}));
-    seed("screen", json!({"ok":true,"result":{"snapshot_id":"snap-screen","scope":"screen",
+        "image_width":1600,"image_height":1000}}),
+    );
+    seed(
+        "screen",
+        json!({"ok":true,"result":{"snapshot_id":"snap-screen","scope":"screen",
         "screenshot_path":path,"title":"Built-in Retina Display","bundle_id":null,
-        "image_width":1600,"image_height":1000}}));
-    seed("unknown", json!({"ok":true,"result":{"snapshot_id":"snap-unknown","screenshot_path":path,
-        "title":"Window","bundle_id":"com.example.unlisted"}}));
+        "image_width":1600,"image_height":1000}}),
+    );
+    seed(
+        "unknown",
+        json!({"ok":true,"result":{"snapshot_id":"snap-unknown","screenshot_path":path,
+        "title":"Window","bundle_id":"com.example.unlisted"}}),
+    );
 
     let payload = ask(json!({"op":"click","snapshot_id":"snap-new","x":412,"y":288}));
     assert_eq!(

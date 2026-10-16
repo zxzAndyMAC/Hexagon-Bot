@@ -1325,8 +1325,10 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         ...(mockDesign() ? [{ id: 'q-design', kind: 'escalation', agent_id: 'a2', payload: { sub: 'design_direction', revision: 1 }, state: 'queued' }] : []),
         ...mockWorktreeCard(),
         ...(mockComputer() ? [{ id: 'q-computer', kind: 'permission', agent_id: 'a3', payload: { tool: 'computer_action', safety_net: true, reason: 'safety net: desktop action with unverified external effects',
-          input: { op: 'click', app_id: 'com.apple.systempreferences', snapshot_id: 'snap-1', x: 412, y: 288, element_id: 'screen-recording-toggle', reason: '验证截图权限提示' },
-          screenshot: { screenshot_path: '/mock/project/.hexagon/computer-use/screenshots/mock.png', snapshot_id: 'snap-1', title: '隐私与安全性', bundle_id: 'com.apple.systempreferences' } }, state: 'queued' }] : []),
+          // gap D8：点位对准示意图里的绿色开关（1300–1356 × 306–334），载荷带显示名与像素尺寸，目标圈可画
+          input: { op: 'click', snapshot_id: 'snap-1', x: 1328, y: 320, element_id: 'screen-recording-toggle', reason: '验证截图权限提示' },
+          app: { name: '系统设置', title: '隐私与安全性', bundle_id: 'com.apple.systempreferences' },
+          screenshot: { screenshot_path: '/mock/project/.hexagon/computer-use/screenshots/mock.png', snapshot_id: 'snap-1', title: '隐私与安全性', bundle_id: 'com.apple.systempreferences', image_width: 1600, image_height: 1000 } }, state: 'queued' }] : []),
       ].filter((q) => !MOCK_DECIDED.has(q.id)) as T
     case 'usage':
       return {

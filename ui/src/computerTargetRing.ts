@@ -44,3 +44,15 @@ export function sameImageSize(natural: { width: number; height: number }, imageW
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/**
+ * 卡片应用行（gap D8）：载荷 app = {name, title, bundle_id}（core card_app）。显示名缺失时回退 bundle id；
+ * 两者都没有就不出应用行（标题走「{角色} 想{动词}」）。title 是窗口标题，空串视为没有。
+ */
+export function cardApp(app: unknown): { name: string; title: string } | null {
+  if (!app || typeof app !== 'object') return null
+  const a = app as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+  const name = str(a.name) || str(a.bundle_id)
+  return name ? { name, title: str(a.title) } : null
+}
