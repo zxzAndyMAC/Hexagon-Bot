@@ -138,7 +138,9 @@ export function AgentTab({ agentId }: { agentId: string }) {
           </Button>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <Badge data-agent-model><Icon name="cpu" size={12} />{slotLabel(member.model_slot, providers, t('agent.dedicatedTag'))}</Badge>
+          {/* 票 16a（canvas#agent）：写模型展示名（TeamRow.model，与成员悬停卡同源）；解析不到才退回槽位标签。
+              修复即文档：原先只按槽位拼，dev 里显示「code」，看不出是哪个模型。 */}
+          <Badge data-agent-model><Icon name="cpu" size={12} />{member.model ?? slotLabel(member.model_slot, providers, t('agent.dedicatedTag'))}</Badge>
           <Badge data-agent-image={image.state} title={t('agentDetail.imageHint')}>{t('agentDetail.imageGen', {
             value: image.state === 'unconfigured' ? t('agentDetail.imageUnconfigured')
               : image.state === 'unsupported' ? t('agentDetail.imageUnsupported', { model: image.model }) : image.model,
