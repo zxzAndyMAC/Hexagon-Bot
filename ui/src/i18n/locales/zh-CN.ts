@@ -622,7 +622,7 @@ export default {
     budget: '预算',
     overflowCards: "14 天撞限",
     compactions: '机械压缩',
-    overflowHint: '两周内 ≥2 张撞限卡即触发恢复层设计票',
+    overflowHint: '恢复层阈值：上下文到 80% 时先移走最旧的工具记录，仍装不下再出撞限卡请你决定。',
     activeAgents: '活跃 Agent',
     todayTokens: '今日 Token',
     granularity: '粒度',

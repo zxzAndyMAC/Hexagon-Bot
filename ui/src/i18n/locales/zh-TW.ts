@@ -622,7 +622,7 @@ export default {
     budget: '預算',
     overflowCards: "14 天撞限",
     compactions: '機械壓縮',
-    overflowHint: '兩週內 ≥2 張撞限卡即觸發恢復層設計票',
+    overflowHint: '恢復層閾值：上下文到 80% 時先移走最舊的工具記錄，仍裝不下再出撞限卡請你決定。',
     activeAgents: '活躍 Agent',
     todayTokens: '今日 Token',
     granularity: '粒度',

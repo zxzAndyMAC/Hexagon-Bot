@@ -622,7 +622,7 @@ export default {
     budget: '予算',
     overflowCards: "上限超過カード（14 日）",
     compactions: '機械圧縮',
-    overflowHint: '2週間に上限超過カードが2枚以上で復旧層の設計チケットを起票',
+    overflowHint: '復旧しきい値：コンテキストが 80% に達すると古いツール記録から外し、それでも収まらなければ上限超過カードで判断を求めます。',
     activeAgents: 'アクティブなエージェント',
     todayTokens: '今日の Token',
     granularity: '粒度',

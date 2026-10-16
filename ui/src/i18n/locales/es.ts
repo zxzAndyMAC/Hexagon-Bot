@@ -622,7 +622,7 @@ export default {
     budget: 'Presupuesto',
     overflowCards: "Tarjetas de desbordamiento · 14 días",
     compactions: 'Compactaciones',
-    overflowHint: '≥2 tarjetas de desbordamiento en dos semanas genera un ticket de diseño de recuperación',
+    overflowHint: 'Umbral de recuperación: al 80 % del contexto se quitan primero los registros de herramientas más antiguos; si aún no cabe, una tarjeta de desbordamiento te pregunta.',
     activeAgents: 'Agentes activos',
     todayTokens: 'Tokens de hoy',
     granularity: 'Granularidad',

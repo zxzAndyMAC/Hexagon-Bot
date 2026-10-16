@@ -622,7 +622,7 @@ export default {
     budget: 'Budget',
     overflowCards: "Overflow cards · 14 days",
     compactions: 'Compactions',
-    overflowHint: '≥2 overflow cards in two weeks triggers a recovery-design ticket',
+    overflowHint: 'Recovery threshold: at 80% of the context, the oldest tool records are removed first; if it still does not fit, an overflow card asks you.',
     activeAgents: 'Active agents',
     todayTokens: "Today's tokens",
     granularity: 'Granularity',

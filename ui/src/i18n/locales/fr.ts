@@ -622,7 +622,7 @@ export default {
     budget: 'Budget',
     overflowCards: "Cartes de dépassement · 14 jours",
     compactions: 'Compactages',
-    overflowHint: '≥2 cartes de dépassement en deux semaines déclenche un ticket de conception de récupération',
+    overflowHint: 'Seuil de récupération : à 80 % du contexte, les plus anciens enregistrements d’outils sont retirés ; si cela ne suffit pas, une carte de dépassement vous demande.',
     activeAgents: 'Agents actifs',
     todayTokens: 'Tokens du jour',
     granularity: 'Granularité',

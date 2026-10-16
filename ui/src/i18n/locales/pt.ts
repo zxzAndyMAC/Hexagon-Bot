@@ -622,7 +622,7 @@ export default {
     budget: 'Orçamento',
     overflowCards: "Cartões de estouro · 14 dias",
     compactions: 'Compactações',
-    overflowHint: '≥2 cartões de estouro em duas semanas dispara um ticket de design de recuperação',
+    overflowHint: 'Limite de recuperação: a 80% do contexto, os registros de ferramentas mais antigos são removidos primeiro; se ainda não couber, um cartão de estouro pergunta a você.',
     activeAgents: 'Agentes ativos',
     todayTokens: 'Tokens de hoje',
     granularity: 'Granularidade',
