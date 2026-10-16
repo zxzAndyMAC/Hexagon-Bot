@@ -97,3 +97,99 @@ proptest::proptest! {
         }
     }
 }
+
+/// ui-redesign gap D6 (2026-10-16): the computer_action card carries the
+/// model's reason and a reference to the observation it was planned on. Both
+/// are display-only: absent or stale evidence leaves the card asking, never
+/// blocked and never auto-approved (safety net asks on the tool name alone).
+#[test]
+fn computer_action_card_carries_reason_and_planned_on_screenshot() {
+    let card = |seed_observation: bool, keep_file: bool, snapshot: &str, reason: Option<&str>| {
+        let dir = tempfile::tempdir().unwrap();
+        let wb = Workbench::for_test(dir.path(), &["QA"], None).unwrap();
+        let ctx = wb.ctx_for("a0", None);
+        let evidence = dir.path().join(".hexagon/computer-use/screenshots");
+        std::fs::create_dir_all(&evidence).unwrap();
+        let saved = evidence.join("0123456789abcdef0123456789abcdef.png");
+        std::fs::write(&saved, b"png").unwrap();
+        let path = saved.display().to_string();
+        if seed_observation {
+            let output = json!({"ok":true,"result":{"snapshot_id":"snap-1","screenshot_path":path,
+                "title":"Privacy","bundle_id":"com.apple.systempreferences"},
+                "image":{"media_type":"image/png","omitted":"local screenshot; observe again for fresh pixels"}});
+            wb.db.conn().execute(
+                "INSERT INTO tool_actions(id,identity,project_id,agent_id,tool_call_id,tool,input_json,input_digest,state,output_json)
+                 VALUES('obs','obs',?1,'a0','call','computer_observe','{}','d','succeeded',?2)",
+                rusqlite::params![crate::PROJECT_ID, output.to_string()],
+            ).unwrap();
+        }
+        if !keep_file {
+            std::fs::remove_file(&saved).unwrap();
+        }
+        let mut input = json!({"op":"click","snapshot_id":snapshot,"x":412,"y":288});
+        if let Some(reason) = reason {
+            input["reason"] = json!(reason);
+        }
+        let outcome = wb
+            .registry
+            .call(&wb.db, &ctx, "computer_action", input)
+            .unwrap();
+        let crate::tools::CallOutcome::Asked(qid) = outcome else {
+            panic!("computer_action must always ask: {outcome:?}");
+        };
+        (crate::cards::get(&wb.db, &qid).unwrap().payload, path)
+    };
+
+    let (payload, path) = card(
+        true,
+        true,
+        "snap-1",
+        Some("verify the screen-recording prompt"),
+    );
+    assert_eq!(payload["screenshot"]["screenshot_path"], json!(path));
+    assert_eq!(
+        payload["screenshot"]["bundle_id"],
+        "com.apple.systempreferences"
+    );
+    assert_eq!(
+        payload["input"]["reason"],
+        "verify the screen-recording prompt"
+    );
+    // The permission layer's own reason is unchanged by the model's reason.
+    assert_eq!(
+        payload["reason"],
+        "safety net: desktop action with unverified external effects"
+    );
+    assert_eq!(payload["safety_net"], true);
+
+    // Fail toward "no thumbnail": no observation, a different snapshot, or
+    // cleared evidence still asks — the card is never blocked by missing pixels.
+    for (seed, keep, snapshot) in [
+        (false, true, "snap-1"),
+        (true, true, "snap-2"),
+        (true, false, "snap-1"),
+    ] {
+        let (payload, _) = card(seed, keep, snapshot, None);
+        assert!(payload["screenshot"].is_null(), "{seed} {keep} {snapshot}");
+        assert!(payload["input"].get("reason").is_none());
+    }
+}
+
+#[test]
+fn computer_action_reason_never_reaches_the_native_request() {
+    let tool = crate::tools::desktop::ComputerAction;
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["QA"], None).unwrap();
+    let ctx = wb.ctx_for("a0", None);
+    // NativeRequest is deny_unknown_fields: accepting the call proves the
+    // reason was stripped before the ABI request was built.
+    assert!(crate::tools::Tool::precondition(
+        &tool,
+        &json!({"op":"activate","app_id":"com.apple.Safari","reason":"open the docs"}),
+        &ctx
+    )
+    .is_ok());
+    // Read tools never declare it.
+    let schema = crate::tools::Tool::input_schema(&crate::tools::desktop::ComputerObserve);
+    assert!(schema["properties"].get("reason").is_none());
+}

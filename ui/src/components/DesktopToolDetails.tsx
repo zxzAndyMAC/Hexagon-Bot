@@ -7,7 +7,9 @@ import { useUiStore } from '../store'
 import { Button } from '@/components/ui/button'
 import { ShortcutKbd } from '@/components/ui/kbd'
 
-type Props = { output: Record<string, unknown>; projectId?: string; capturedAt?: string }
+// variant 'card'：电脑动作确认卡（components D8，control#action；ui-redesign gap D6）左栏 200 宽缩略，
+// 不带说明行（卡上 kv 已写应用 / 动作），放大仍走同一模态与同一受限读取 IPC。
+type Props = { output: Record<string, unknown>; projectId?: string; capturedAt?: string; variant?: 'card' }
 type ScreenshotResult = { screenshot_path?: string; title?: string; bundle_id?: string }
 
 // 截图证据（components D19「截图证据」，control#screen；票 ui-redesign 14 换皮）：工具行下 120 宽缩略
@@ -20,7 +22,7 @@ export function DesktopToolDetails(props: Props) {
   return <DesktopScreenshotDetails key={`${props.projectId ?? ''}:${result?.screenshot_path ?? ''}`} {...props} />
 }
 
-function DesktopScreenshotDetails({ output, capturedAt }: Props) {
+function DesktopScreenshotDetails({ output, capturedAt, variant }: Props) {
   const { t } = useTranslation()
   const [image, setImage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -72,19 +74,20 @@ function DesktopScreenshotDetails({ output, capturedAt }: Props) {
     return () => observer.disconnect()
   }, [load])
   const label = [result?.bundle_id || t('computer.screenshotUnknownApp'), result?.title,
-    capturedAt ? new Date(capturedAt).toLocaleString() : t('computer.screenshotUnknownTime')].filter(Boolean).join(' · ')
+    capturedAt ? new Date(capturedAt).toLocaleString() : variant === 'card' ? null : t('computer.screenshotUnknownTime')].filter(Boolean).join(' · ')
+  const card = variant === 'card'
   const title = [t('computer.viewScreenshot'), formatBinding(bindingFor('viewDesktopScreenshot'))].filter(Boolean).join(' · ')
-  return <div className="desktop-tool-details mt-1">
+  return <div className={card ? 'desktop-tool-details' : 'desktop-tool-details mt-1'}>
     {output.requires_observation === true && <p role="status" className="text-[12px] text-orange">{t('computer.needsObservation')}</p>}
-    {name && <figure className="mt-1 flex items-center gap-2">
-      <button ref={trigger} className="desktop-screenshot-thumbnail hx-focus grid aspect-[16/10] w-[120px] flex-none cursor-zoom-in place-items-center overflow-hidden rounded-[var(--r-sm)] bg-inset p-0 text-[11px] text-ink-3 shadow-[var(--shadow-card)] disabled:cursor-default disabled:opacity-45"
+    {name && <figure className={card ? 'm-0' : 'mt-1 flex items-center gap-2'}>
+      <button ref={trigger} className={`desktop-screenshot-thumbnail hx-focus grid aspect-[16/10] ${card ? 'w-full' : 'w-[120px]'} rounded-[var(--r-sm)] flex-none cursor-zoom-in place-items-center overflow-hidden bg-inset p-0 text-[11px] text-ink-3 shadow-[var(--shadow-card)] disabled:cursor-default disabled:opacity-45`}
         type="button" disabled={failed} aria-busy={busy}
         aria-label={t('computer.viewScreenshot')} title={title}
         onClick={event => { event.currentTarget.focus(); setPreview(true); if (!image) void load() }}
         onKeyDown={event => { if (matches(event.nativeEvent, bindingFor('viewDesktopScreenshot'))) { event.preventDefault(); event.currentTarget.click() } }}>
         {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" className="size-full object-cover" /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
       </button>
-      <figcaption className="min-w-0 text-[12px] text-ink-3 [overflow-wrap:anywhere]">{t('control.evidence', { label })}<br />{t('control.evidenceHint')}</figcaption>
+      {!card && <figcaption className="min-w-0 text-[12px] text-ink-3 [overflow-wrap:anywhere]">{t('control.evidence', { label })}<br />{t('control.evidenceHint')}</figcaption>}
     </figure>}
     {failed && <p role="status" className="mt-1 text-[12px] text-ink-3">{t('computer.screenshotUnavailable')}</p>}
     {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} />}

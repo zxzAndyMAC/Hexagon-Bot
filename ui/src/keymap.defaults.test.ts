@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 import { ACTIONS, bindingFor } from './keymap'
+import zh from './i18n/locales/zh-CN'
 
 it('never assigns the new computer controls an existing default action binding', () => {
   // 2026-10-01 integration: computer-panel/resume initially collided with
@@ -17,4 +18,18 @@ it('never assigns the new computer controls an existing default action binding',
     expect(occupied.get(binding), `${action.id} conflicts at ${binding}`).toBeUndefined()
     occupied.set(binding, action.id)
   }
+})
+
+it('labels decision and settings actions with the prototype wording (ui-redesign gap D7)', () => {
+  // Gap D7 (ticket 16B deviation 9, 2026-10-16): settings#keys / composer#palette
+  // name these actions 「批准顶部待决卡」「拒绝顶部待决卡」「打开设置」 and the
+  // practice area 「练习场」. Ids stay; only the i18n labels changed, so the
+  // command palette and tooltips (which render labelKey) follow automatically.
+  const label = (id: string) => ACTIONS.find(a => a.id === id)!.labelKey.replace(/^keys\./, '')
+  const keys = zh.keys as Record<string, string>
+  expect(keys[label('approve')]).toBe('批准顶部待决卡')
+  expect(keys[label('reject')]).toBe('拒绝顶部待决卡')
+  expect(keys[label('settings')]).toBe('打开设置')
+  expect(keys[label('dismissPending')]).toBe('收起待决坞')
+  expect(zh.settings.practiceTitle).toBe('练习场')
 })

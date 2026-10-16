@@ -36,6 +36,45 @@ it('renders the computer action card: who/app/verb, kv rows, observe-first note 
   expect(answer).toHaveBeenCalledExactlyOnceWith('q-computer', true)
 })
 
+// ui-redesign gap D6：原型的截图缩略 + 「理由」行。理由来自 computer_action 入参 reason，缩略来自载荷
+// screenshot（动作所依据那次观察的证据引用）；两者缺失时只是不出，卡照常可裁决（不挡、不自动批）。
+it('shows the planned-on screenshot thumbnail and the reason row when the host sends them', async () => {
+  await i18n.changeLanguage('zh-CN')
+  useUiStore.setState({ team: [{ ...(useUiStore.getState().team[0] ?? {}), id: 'a-qa', role: 'QA' } as never] })
+  const read = vi.spyOn(api, 'desktopScreenshot').mockResolvedValue({ data_url: 'data:image/png;base64,AA==' } as never)
+  const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', title: 'Privacy', bundle_id: 'com.apple.systempreferences' }
+  const q: PendingQuestion = { ...card, payload: { ...card.payload, input: { ...(card.payload.input as object), reason: '验证截图权限提示' }, screenshot: shot } }
+  root = createRoot(el)
+  await act(async () => { root.render(<PendingCard q={q} top />) })
+  const rows = [...el.querySelectorAll('.dock-kv-row')].map((r) => r.textContent)
+  expect(rows).toContain('理由验证截图权限提示')
+  const thumb = el.querySelector<HTMLButtonElement>('.computer-action-body .desktop-screenshot-thumbnail')!
+  expect(thumb).not.toBeNull()
+  expect(el.textContent).not.toContain('截图证据') // 卡内不重复说明行
+  await act(async () => thumb.click())
+  expect(read).toHaveBeenCalledExactlyOnceWith('0123.png', '/repo')
+  expect(el.querySelector('dialog.desktop-screenshot-preview')).not.toBeNull()
+  // 放大时裁决快捷键被拦：⌘↵ 不得批准
+  const answer = vi.spyOn(api, 'answerPermission').mockResolvedValue(undefined)
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, ctrlKey: true, bubbles: true })) })
+  expect(answer).not.toHaveBeenCalled()
+})
+
+it('omits the thumbnail and reason row when the host has none, and the card still runs', async () => {
+  await i18n.changeLanguage('zh-CN')
+  useUiStore.setState({ team: [{ ...(useUiStore.getState().team[0] ?? {}), id: 'a-qa', role: 'QA' } as never] })
+  const answer = vi.spyOn(api, 'answerPermission').mockResolvedValue(undefined)
+  vi.spyOn(useUiStore.getState(), 'invalidate').mockResolvedValue(undefined)
+  const q: PendingQuestion = { ...card, payload: { ...card.payload, input: { ...(card.payload.input as object), reason: '   ' }, screenshot: null } }
+  root = createRoot(el)
+  await act(async () => { root.render(<PendingCard q={q} top />) })
+  expect(el.querySelector('.desktop-screenshot-thumbnail')).toBeNull()
+  expect(el.textContent).not.toContain('理由')
+  const run = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('执行这一次'))!
+  await act(async () => run.click())
+  expect(answer).toHaveBeenCalledExactlyOnceWith('q-computer', true)
+})
+
 it('formats the action call for every op', () => {
   expect(computerActionCall({ op: 'click', x: 1.4, y: 2, click_type: 'double' })).toBe('click(1, 2, double)')
   expect(computerActionCall({ op: 'type', text: 'hi' })).toBe('type("hi")')

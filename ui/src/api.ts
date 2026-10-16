@@ -1041,6 +1041,9 @@ const mockIntakeDraft = (): string | null => {
   }
   return mockIntake.draft
 }
+// gap D6 截图比对（control#action）：`?mockcomputer` 时给一张带理由与截图引用的电脑动作卡，desktop_screenshot 回一张示意图；默认关
+const mockComputer = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockcomputer')
+const MOCK_COMPUTER_SHOT = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000"><rect width="1600" height="1000" fill="#c9ced6"/><rect x="160" y="120" width="1280" height="760" rx="18" fill="#f7f7f8"/><rect x="160" y="120" width="1280" height="56" rx="18" fill="#e6e7ea"/><rect x="200" y="220" width="300" height="620" rx="10" fill="#eceef1"/><rect x="560" y="240" width="820" height="40" rx="8" fill="#fff"/><rect x="560" y="300" width="820" height="40" rx="8" fill="#fff"/><rect x="1300" y="306" width="56" height="28" rx="14" fill="#34c759"/></svg>')}`
 const mockDesign = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdesign')
 const mockSvg = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="320" height="240" fill="url(#g)"/></svg>`)}`
 const MOCK_DESIGN_OPTIONS = [
@@ -1321,6 +1324,9 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'q-prop', kind: 'stamp', agent_id: 'a1', payload: { proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }, state: 'queued' },
         ...(mockDesign() ? [{ id: 'q-design', kind: 'escalation', agent_id: 'a2', payload: { sub: 'design_direction', revision: 1 }, state: 'queued' }] : []),
         ...mockWorktreeCard(),
+        ...(mockComputer() ? [{ id: 'q-computer', kind: 'permission', agent_id: 'a3', payload: { tool: 'computer_action', safety_net: true, reason: 'safety net: desktop action with unverified external effects',
+          input: { op: 'click', app_id: 'com.apple.systempreferences', snapshot_id: 'snap-1', x: 412, y: 288, element_id: 'screen-recording-toggle', reason: '验证截图权限提示' },
+          screenshot: { screenshot_path: '/mock/project/.hexagon/computer-use/screenshots/mock.png', snapshot_id: 'snap-1', title: '隐私与安全性', bundle_id: 'com.apple.systempreferences' } }, state: 'queued' }] : []),
       ].filter((q) => !MOCK_DECIDED.has(q.id)) as T
     case 'usage':
       return {
@@ -1585,6 +1591,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return { project_id: 'p1', revision: 0, question_id: null, state: 'unconfirmed', options: [], selected_option: null, existing_guidance: null, selected_at: null, previous_guidance: null } as T
     case 'choose_design_direction':
     case 'desktop_screenshot':
+      if (cmd === 'desktop_screenshot' && mockComputer()) return { name: 'mock.png', data_url: MOCK_COMPUTER_SHOT } as T
       throw new Error('Desktop app required')
     case 'browser_selection_poll': return [] as T
     case 'browser_selection_start':
