@@ -273,8 +273,11 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl-intake-f { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .tl-intake-f .tl-grow { font-size: 12px; color: var(--ink-3); }
 
-/* 钉顶的归来摘要不挤掉时间线：最多占主区一半多一点，超出在卡内滚动 */
-.tl-pin { flex: none; max-height: 55%; overflow-y: auto; overscroll-behavior: contain; }
+/* 钉顶的归来摘要不挤掉时间线：最多占主区一半多一点，超出在卡内滚动（components C12「钉顶卡最多占主区 55% 高，超出卡内滚动」）。
+   修复即文档（票 16a，2026-10-15）：原先滚动条挂在 .tl-pin 外壳上，卡片本身不缩，8 件待决时卡的下沿连同圆角、
+   阴影被外壳裁掉，时间线首行直接贴在半截卡上。现在外壳只限高，卡片（直接子元素）自己缩并在卡内滚动，四边完整。 */
+.tl-pin { flex: none; max-height: 55%; display: flex; flex-direction: column; }
+.tl-pin > * { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 
 /* ---- 回到底部 C14（票 06，workbench#jump）：对话列正中，bottom 由 useJumpOffset 量出（最上一块底部表面上沿 + 12） ---- */
 .tl .jump { position: absolute; left: 50%; transform: translateX(-50%); z-index: 12; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: var(--surface); box-shadow: var(--shadow-overlay); font: inherit; font-size: 13px; color: var(--ink); white-space: nowrap; cursor: pointer; transition: background-color 150ms; animation: tl-jumpin 180ms var(--ease); }
