@@ -440,7 +440,7 @@ export default {
   cards: {
     worktreeCreate: "Crear árbol de trabajo",
     worktreeCleanup: "Limpiar árbol de trabajo",
-    worktreeBaseline: "Base {{baseline}} · {{commit}}",
+    worktreeBaseline: "{{baseline}} · {{commit}}",
     worktreeCleanupNote: "Solo elimina una copia limpia que sigue en el commit base; la rama y los commits se conservan.",
     worktreeCreateConfirm: "Crear",
     worktreeCleanupConfirm: "Limpiar",
