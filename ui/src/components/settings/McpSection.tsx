@@ -4,7 +4,7 @@
 // （宿主生命周期是项目级的）。删除暂用现有直删（票 13 统一换 AlertDialog）。
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, isTauri, type ExtMcpRow, type McpEntryRow, type McpServiceRow } from '../../api'
+import { api, errText, type ExtMcpRow, type McpEntryRow, type McpServiceRow } from '../../api'
 import { useUiStore } from '../../store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -250,7 +250,9 @@ export function McpSection({ projectless }: { projectless: boolean }) {
         <>
           <Button size="xs" className="flex-1" onClick={() => { setCreating(true); setSel(null) }}><Icon name="plus" size={14} />{t('mcp.new')}</Button>
           <Button size="xs" className="flex-1" loading={scanning} onClick={scan}>{scanning ? t('mcp.scanning') : t('mcp.scan')}</Button>
-          {isTauri && <Button size="xs" className="flex-1" onClick={openMarket}><Icon name="external" size={14} />{t('mcp.market')}</Button>}
+          {/* 功能缺口 D5（原型 ld-foot「市场」）：不再只在桌面壳出现——open_mcp_market 宿主命令早已注册（外部浏览器打开
+              市场页），浏览器预览走 mock。title 写明去向：会离开应用打开外部网页。 */}
+          <Button size="xs" className="flex-1" data-mcp-market title={t('mcp.marketTip')} onClick={openMarket}><Icon name="external" size={14} />{t('mcp.market')}</Button>
         </>
       }
       renderItem={(s) => {

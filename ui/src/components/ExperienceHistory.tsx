@@ -5,7 +5,14 @@ import { bindingFor, formatBinding, matches, type ActionId } from '../keymap'
 import type { ExperienceHistoryKind } from '../gen/ExperienceHistoryKind'
 import type { ExperienceHistoryPage } from '../gen/ExperienceHistoryPage'
 import { Empty } from '@/components/ui/empty'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { NativeSelect } from '@/components/ui/native-select'
+
+// 功能缺口 D3（票 16B）：历史面板换 E 系列外观——类别用 A9 NativeSelect、条目逐行 12.5 + --line-soft 分隔、
+// 翻页 / 刷新为 A1 xs。翻页与刷新保持原生 disabled（测试与 stale-cursor 行为按 .disabled 断言）。
+const nativeBtn = buttonVariants({ size: 'xs', variant: 'default' }) + ' disabled:cursor-default disabled:opacity-45'
+const linkBtn = buttonVariants({ size: 'xs', variant: 'ghost' })
+const rowCls = 'border-t border-line-soft py-2 text-[12.5px] text-ink-2 first:border-t-0'
 
 export function ExperienceHistory({ projectRoot, skill, entryId, onRelated }: {
   projectRoot: string; skill: string; entryId: string; onRelated: (skill: string, entryId: string) => void
@@ -51,28 +58,32 @@ export function ExperienceHistory({ projectRoot, skill, entryId, onRelated }: {
       e.preventDefault(); e.stopPropagation(); void load(null)
     }
   }}>
-    <label>{t('experience.history')}<select value={kind} onChange={(e) => setKind(e.target.value as ExperienceHistoryKind)}>
-      {(['sources', 'versions', 'related'] as const).map((value) => <option key={value} value={value}>{t(`experience.${value}`)}</option>)}
-    </select></label>
-    {error && <p role="alert">{error}</p>}
+    <label className="mb-2 flex items-center gap-2 text-[12px] text-ink-3">{t('experience.history')}
+      <NativeSelect className="h-7 w-auto min-w-[160px] text-[12.5px]" value={kind} onChange={(e) => setKind(e.target.value as ExperienceHistoryKind)}>
+        {(['sources', 'versions', 'related'] as const).map((value) => <option key={value} value={value}>{t(`experience.${value}`)}</option>)}
+      </NativeSelect>
+    </label>
+    {error && <p role="alert" className="mb-2 text-[12.5px] text-red">{error}</p>}
     {/* 功能缺口 C3（A19）：说明为什么空 + 动作「刷新」（新的评审 / 修订进来后重读）。 */}
     {page?.items.length === 0 && <Empty size="sm" icon="book" title={t('experience.emptyHistory')} desc={t(`experience.emptyHistoryBody_${kind}`)}
       action={<Button size="sm" disabled={busy} onClick={() => void load(null)}>{t('experience.refreshHistory')}</Button>} />}
-    {page?.items.map((item, index) => <div key={index}>
-      {item.kind === 'source' && <div>{item.source.author} · {item.source.artifact_id} · {t('experience.version', { version: item.source.artifact_version })} · {t('experience.review')} {item.source.review_event}
-        {item.path && <button type="button" title={title('openExperienceSource', t('experience.openSource'))}
+    {page?.items.map((item, index) => <div key={index} className={rowCls}>
+      {item.kind === 'source' && <div className="flex items-center gap-2"><span className="min-w-0 flex-1">{item.source.author} · {item.source.artifact_id} · {t('experience.version', { version: item.source.artifact_version })} · {t('experience.review')} {item.source.review_event}</span>
+        {item.path && <button type="button" className={linkBtn} title={title('openExperienceSource', t('experience.openSource'))}
           onKeyDown={(e) => { if (!e.repeat && matches(e.nativeEvent, bindingFor('openExperienceSource'))) { e.preventDefault(); e.stopPropagation(); void openSource(item.source.review_event) } }}
           onClick={() => void openSource(item.source.review_event)}>{t('experience.openSource')}</button>}
       </div>}
-      {item.kind === 'version' && <div>{t('experience.version', { version: item.entry.revision })} · {t(`experience.${item.state}`)} · {t('experience.sourceCount', { count: item.source_count })}<p>{item.entry.body}</p><p>{item.entry.notes}</p></div>}
-      {item.kind === 'control' && <div>{t(`experience.${item.operation}`)} · {t(`experience.${item.state}`)}<p>{item.operation === 'rollback' ? t('experience.withdrawBody') : item.reason}</p></div>}
-      {item.kind === 'related' && <div>{item.skill} · {item.entry_id} · {t(`experience.${item.state}`)}
-        <button type="button" title={title('openRelatedExperience', t('experience.openRelated'))}
+      {item.kind === 'version' && <div>{t('experience.version', { version: item.entry.revision })} · {t(`experience.${item.state}`)} · {t('experience.sourceCount', { count: item.source_count })}<p className="mt-1 whitespace-pre-wrap text-ink">{item.entry.body}</p>{item.entry.notes && <p className="text-[12px] text-ink-3">{item.entry.notes}</p>}</div>}
+      {item.kind === 'control' && <div>{t(`experience.${item.operation}`)} · {t(`experience.${item.state}`)}<p className="mt-1 text-ink-3">{item.operation === 'rollback' ? t('experience.withdrawBody') : item.reason}</p></div>}
+      {item.kind === 'related' && <div className="flex items-center gap-2"><span className="min-w-0 flex-1">{item.skill} · {item.entry_id} · {t(`experience.${item.state}`)}</span>
+        <button type="button" className={linkBtn} title={title('openRelatedExperience', t('experience.openRelated'))}
           onKeyDown={(e) => { if (!e.repeat && matches(e.nativeEvent, bindingFor('openRelatedExperience'))) { e.preventDefault(); e.stopPropagation(); onRelated(item.skill, item.entry_id) } }}
           onClick={() => onRelated(item.skill, item.entry_id)}>{t('experience.openRelated')}</button></div>}
     </div>)}
-    <button type="button" disabled={busy} title={title('refreshExperienceHistory', t('experience.refreshHistory'))} onClick={() => void load(null)}>{t('experience.refreshHistory')}</button>
-    <button type="button" disabled={busy || !page?.next_cursor} title={title('nextExperiencePage', t('experience.nextPage'))} onClick={() => void load(page?.next_cursor ?? null)}>{t('experience.nextPage')}</button>
-    {source && <pre>{source}</pre>}
+    <div className="mt-2 flex justify-end gap-1.5">
+      <button type="button" className={nativeBtn} disabled={busy} title={title('refreshExperienceHistory', t('experience.refreshHistory'))} onClick={() => void load(null)}>{t('experience.refreshHistory')}</button>
+      <button type="button" className={nativeBtn} disabled={busy || !page?.next_cursor} title={title('nextExperiencePage', t('experience.nextPage'))} onClick={() => void load(page?.next_cursor ?? null)}>{t('experience.nextPage')}</button>
+    </div>
+    {source && <pre className="mt-2 max-h-[30vh] overflow-auto rounded-[var(--r-sm)] bg-inset p-3 font-mono text-[12px] whitespace-pre-wrap text-ink">{source}</pre>}
   </section>
 }
