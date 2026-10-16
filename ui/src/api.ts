@@ -317,6 +317,9 @@ export const api = {
   // turn; IPC only carries the idempotence key and the fire time.
   sessionScheduleOnce: (triggerId: string, fireAt: number) =>
     call<OneTimeTrigger>('session_schedule_once', { triggerId, fireAt }),
+  // Gap D1: retract a booked continue-later; core refuses once it has fired
+  // (`trigger_already_fired`).
+  sessionCancelTrigger: (triggerId: string) => call<OneTimeTrigger>('session_cancel_trigger', { triggerId }),
   sessionContinueTrigger: (triggerId: string) => call<OneTimeTrigger>('session_continue_trigger', { triggerId }),
   // Wayfinder-07 Addendum A: requests only enqueue a `worktree` card; the
   // pending dock's confirm/reject answer it and core owns the git write.
@@ -755,6 +758,9 @@ function mockSessionCmd(cmd: string, args?: Record<string, unknown>): boolean {
     case 'session_schedule_once':
       MOCK_SESSION.triggers = [{ trigger_id: String(args?.triggerId ?? args?.trigger_id ?? 't1'), session_id: 'session-mock', project_root: '/mock/project', baseline: 'main', model_slot: 'default', permission_package: [], fire_at: Number(args?.fireAt ?? args?.fire_at ?? 0), trace_id: 'mock', state: 'scheduled', created_at: '', consumed_at: null }]
       MOCK_SESSION.reason = 'trigger_scheduled'; return true
+    case 'session_cancel_trigger':
+      MOCK_SESSION.triggers = MOCK_SESSION.triggers.map((t) => t.trigger_id === String(args?.triggerId) && t.state === 'scheduled' ? { ...t, state: 'cancelled' as const } : t)
+      MOCK_SESSION.reason = 'trigger_cancelled'; return true
     default: return false
   }
 }

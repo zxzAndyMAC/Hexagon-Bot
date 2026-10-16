@@ -898,6 +898,16 @@ fn session_schedule_once(
     })
 }
 
+/// Control: retract a booked "continue later" before it fires (ui-redesign
+/// gap D1). Only the trigger id crosses IPC; core refuses a fired trigger.
+#[tauri::command(async)]
+fn session_cancel_trigger(
+    state: ProjectState<'_>,
+    trigger_id: String,
+) -> Result<hexagon_core::session_host::OneTimeTrigger, CmdError> {
+    with_wb(&state, |wb| wb.cancel_session_trigger(&trigger_id))
+}
+
 #[tauri::command(async)]
 fn session_continue_trigger(
     state: ProjectState<'_>,
@@ -3753,6 +3763,7 @@ pub fn run() {
             reject_worktree,
             session_verify_worktree,
             session_schedule_once,
+            session_cancel_trigger,
             // SessionHost read lane for expired/scheduled one-time requests.
             session_triggers,
             // SessionHost turn lane: continuation re-enters the Workbench owner.
@@ -4202,6 +4213,7 @@ mod session_host_command_tests {
             })
             .invoke_handler(tauri::generate_handler![
                 session_schedule_once,
+                session_cancel_trigger,
                 session_continue_trigger,
                 session_request_worktree,
                 confirm_worktree,
@@ -4216,6 +4228,7 @@ mod session_host_command_tests {
         let mut blocked = Vec::new();
         for cmd in [
             "session_schedule_once",
+            "session_cancel_trigger",
             "session_continue_trigger",
             "session_request_worktree",
             "confirm_worktree",
