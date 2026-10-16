@@ -70,3 +70,15 @@ export function modelDisplayName(view: ProvidersView | null | undefined, modelId
   }
   return modelId
 }
+
+/// 团队列表行副标（票 16B，settings#team「前端 · Claude Sonnet 5.5」）：显示角色实际会用的模型展示名
+/// （槽位按 resolve_slot 同链回落 default，再经服务商目录映射展示名）；连 default 都未绑时退回 slotLabel，
+/// 让负责人看到是哪个槽空着。槽名本身留在详情的「模型槽」选择里。
+export function agentModelLabel(
+  slot: string | null | undefined,
+  view: ProvidersView | null | undefined,
+  dedicatedTag: string,
+): string {
+  const b = view && slot ? resolveBinding(view.slots, slot) : undefined
+  return b ? modelDisplayName(view, b.model) : slotLabel(slot, view, dedicatedTag)
+}

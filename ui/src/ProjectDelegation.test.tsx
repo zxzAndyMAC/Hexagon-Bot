@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { ProjectApprovalMode } from './components/ProjectApprovalMode'
 import { ManagedPill } from './components/ManagedPill'
 import { ProjectDelegation } from './components/ProjectDelegation'
+import { ManagedConfirmation } from './components/ManagedConfirmation'
 import { Header } from './components/shell/Header'
 import { Sidebar } from './components/shell/Sidebar'
 import { TooltipProvider } from './components/ui/tooltip'
@@ -92,7 +93,9 @@ it('the resident pill wears the accent identity, pauses and turns off through th
   expect(pause).toHaveBeenCalledWith(true, '/proj')
   expect(el.querySelector('[data-managed-state]')!.getAttribute('data-managed-state')).toBe('paused')
   expect(el.querySelector('.managed-pill')!.className).toContain('paused')
-  const offButton = [...document.querySelectorAll('[data-managed-menu] button')].find(b => b.textContent?.startsWith('Turn off project delegation'))!
+  // 票 16B（managed#exit / components D7）：弹层行文按原型「查看托管报告」「关闭托管」，不再复用键位名「关闭项目托管」。
+  expect(document.querySelector('[data-managed-menu]')!.textContent).toContain('View delegation report')
+  const offButton = [...document.querySelectorAll('[data-managed-menu] button')].find(b => b.textContent?.startsWith('Turn off delegation'))!
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(off)
   await act(async () => (offButton as HTMLButtonElement).click())
   expect(disable).toHaveBeenCalledWith(false, '/proj')
@@ -171,4 +174,20 @@ it('the report lists external operations with honest verification and jumps to t
     await act(async () => button.click())
     expect(jumped).toEqual([12])
   } finally { window.removeEventListener('hexagon:timeline-jump', listen) }
+})
+
+// 票 16B（managed#enable）：说明里的预算行在设了项目上限时写剩余额度（上限 − 项目累计花费，
+// 与胶囊弹层同源 managed_summary）；未设上限仍是原句。原实现只有原句，原型写「本月剩余 ¥61.4」。
+it('the enable explanation states the remaining project budget when a cap is set', async () => {
+  vi.spyOn(api, 'projectDelegation').mockResolvedValue(off)
+  const summary = vi.spyOn(api, 'managedSummary').mockResolvedValue({ started_at: null, ended_at: null, limit_cents: 10_000, spent_mc: 3_860_000, session_spent_mc: 0, cost_unknown: false })
+  await mount(<ManagedConfirmation pending={false} error={false} onCancel={() => {}} onConfirm={() => {}} />)
+  await act(async () => { await Promise.resolve() })
+  const line = () => document.querySelector('.managed-confirm [data-managed-budget-info]')!.textContent
+  expect(line()).toMatch(/Still bound by the project usage budget: .*61\.4.* left/)
+  summary.mockResolvedValue({ started_at: null, ended_at: null, limit_cents: null, spent_mc: 3_860_000, session_spent_mc: 0, cost_unknown: false })
+  await act(async () => root.unmount())
+  await mount(<ManagedConfirmation pending={false} error={false} onCancel={() => {}} onConfirm={() => {}} />)
+  await act(async () => { await Promise.resolve() })
+  expect(line()).toBe('Still bound by the project usage budget.')
 })

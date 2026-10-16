@@ -514,6 +514,14 @@ fn pm_budget_runs_on_the_workbench_clock_and_manual_retry_gets_a_fresh_window() 
             .all(|e| e["retry_deadline_ms"].as_i64().is_some()),
         "retrying shows its window"
     );
+    // ui-redesign 16b: the window length rides beside the deadline so the
+    // retrying item can draw elapsed progress (feedback#model-recovery ①).
+    assert!(
+        events_of(&wb, "model_request_retrying")
+            .iter()
+            .all(|e| e["retry_window_ms"].as_i64() == Some(60_000)),
+        "retrying carries the 60 s window length"
+    );
     // Manual retry gets a fresh 60 s window: a failure at 40 s may retry once
     // more, and that second send succeeds inside the new window.
     wb.retry_model_request(&card.id).unwrap();

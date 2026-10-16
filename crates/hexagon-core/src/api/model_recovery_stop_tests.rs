@@ -133,6 +133,9 @@ fn stopping_the_first_wait_leaves_one_stopped_item_and_the_team_running() {
     let card = crate::cards::get(&wb.db, &item).unwrap();
     assert_eq!(card.payload["state"], "stopped");
     assert_eq!(card.payload["stop_requested"], true);
+    // ui-redesign 16b: the first wait published the whole window length
+    // beside its deadline (feedback#model-recovery ① progress bar).
+    assert_eq!(card.payload["retry_window_ms"], 60_000);
     assert!(
         card.payload["checkpoint_event_id"].is_i64(),
         "position kept"

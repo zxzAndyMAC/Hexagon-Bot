@@ -10,6 +10,7 @@ import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { ShortcutKbd } from './ui/kbd'
 import { PixelGrid } from './ui/spinner'
+import { Progress } from './ui/progress'
 
 // MR-02 failure codes are produced by core `failure_code`; only these have a
 // direct remedy screen. Transient codes (transport, rate_limited,
@@ -35,6 +36,24 @@ function copyKeys(state: string, turn: boolean, intake: boolean): [string, strin
   }
 }
 
+/** D11 ① 剩余时间 m:ss（向上取整到秒，归零停在 0:00）。 */
+export function formatRetryLeft(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** 自动重试窗口内每秒走一格的时钟；不在重试中时不起定时器。 */
+function useRetryClock(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+  return now
+}
+
 // ui-redesign 票 08（components D11 ①–⑨，feedback#model-recovery）：只换皮——状态块
 // （① 像素格 + 进度 + 停止 · ②⑧ 橙环卡 + 原因 chip + 次数 / 模型 + 尝试历史 · ③ 钥匙行 ·
 // ④ 未完成 chip · ⑤ 两键选择 · ⑥⑦ 收成一行 · ⑨ 托管拒绝行）。按键、动作、宿主调用一律不变；
@@ -47,6 +66,7 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
   const state = recovery.state
+  const now = useRetryClock(state === 'retrying' && recovery.retry_deadline_ms != null)
   const latestCode = recovery.history?.at(-1)?.code
   const openSettings = (section: 'models' | 'usage') => window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: section }))
   const run = async (action: () => Promise<unknown>) => {
@@ -104,7 +124,11 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const reason = state === 'superseded' && recovery.superseded_reason ? t(`modelRecovery.reason.${recovery.superseded_reason}`, { defaultValue: recovery.superseded_reason }) : ''
   const refusal = recovery.last_refusal && !['recovered', 'superseded'].includes(state)
     ? t('modelRecovery.lastRefusal', { reason: t(`modelRecovery.refusal.${recovery.last_refusal}`, { defaultValue: recovery.last_refusal }) }) : ''
-  const deadline = state === 'retrying' && recovery.retry_deadline_ms != null ? new Date(recovery.retry_deadline_ms).toLocaleTimeString() : null
+  // 票 16B（feedback#model-recovery ①、D11）：原写「自动重试截至 <钟点>」，改为规范的「第 N 次 · 剩余 m:ss」倒计时 +
+  // 已过时间进度条（窗口长度 retry_window_ms 由 core 随截止时刻一起发；旧事件没有窗口长度时只出倒计时）。
+  const leftMs = state === 'retrying' && recovery.retry_deadline_ms != null ? recovery.retry_deadline_ms - now : null
+  const windowMs = recovery.retry_window_ms ?? null
+  const elapsedPct = leftMs != null && windowMs ? Math.round(100 * (1 - Math.max(0, leftMs) / windowMs)) : null
   const history = recovery.history ?? []
   const latest = history.at(-1)
   const codeLabel = latestCode ? t(`modelRecovery.code.${latestCode}`, { defaultValue: latestCode }) : ''
@@ -140,13 +164,14 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
     <div className="flex items-center gap-2">
       {retrying ? <PixelGrid /> : <Icon name="warn" size={14} className={cn('flex-none', tone)} />}
       <b className="min-w-0 flex-1 text-[13px] font-semibold text-ink">{t(title)}</b>
-      {deadline && <span data-retry-progress className="font-mono text-[12px] text-ink-3">{t('modelRecovery.attempt', { count: history.length + 1, time: deadline })}</span>}
+      {leftMs != null && <span data-retry-progress className="font-mono text-[12px] text-ink-3">{t('modelRecovery.attempt', { count: history.length + 1, left: formatRetryLeft(leftMs) })}</span>}
       {!retrying && codeLabel && <Badge>{codeLabel}</Badge>}
       {retrying && <Button size="xs" variant="ghost" data-stop-retry
         title={[t('modelRecovery.stopHint'), top ? formatBinding(bindingFor('modelRecoveryStop')) : ''].filter(Boolean).join(' · ')}
         onClick={() => { void stop() }}>{t('modelRecovery.stop')}</Button>}
     </div>
     {hint && <div className={cn('mt-1 text-[12.5px] text-ink-2', retrying && 'ml-[22px]')}>{t(hint, { target, instruction: recovery.held_instruction ?? '' })}</div>}
+    {elapsedPct != null && <Progress data-retry-bar tone="accent" value={elapsedPct} aria-label={t('modelRecovery.retryWindow')} className="mt-2" />}
     {refusal && <div data-refusal className="mt-1 text-[12px] text-ink-3">{refusal}</div>}
     {!retrying && history.length > 0 && <div className="mt-1 text-[12px] text-ink-3">
       {t('modelRecovery.retriedCount', { count: history.length })}

@@ -42,8 +42,9 @@ describe('UsageTab 撞限压力行（context-window 票 03 / ADR 0068）', () =>
     // 所以断言从「Overflow cards 2」改为「Overflow cards · 14 days 2」——计数口径不变，只是标签补了窗口。
     expect(text).toMatch(/Overflow cards · 14 days\s*2/)
     expect(text).toMatch(/Compactions\s*5/)
-    // 阈值说明：≥2 触发恢复设计票
-    expect(text).toContain('two weeks')
+    // 阈值说明。票 16B（usage#quick 原型「恢复层阈值：上下文 80% 时…」）：原文案「≥2 撞限卡触发恢复设计票」
+    // 是开发度量闸（ADR 0068），改写成用户可读的真实行为——80%（effective_cap）先移走旧工具记录，仍超限出撞限卡
+    expect(text).toContain('Recovery threshold: at 80% of the context')
   })
 
   it('contextPressure 为 null（空项目/未拉到）→ 计数显示 0', async () => {

@@ -5,7 +5,7 @@ import './i18n'
 import { api, type PendingQuestion, type TimelineItem } from './api'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import { PendingCard } from './components/PendingCards'
-import { ModelRecoveryStatus } from './components/ModelRecoveryStatus'
+import { ModelRecoveryStatus, formatRetryLeft } from './components/ModelRecoveryStatus'
 import { Timeline } from './components/Timeline'
 import { approveQuestion } from './decisions'
 import { useUiStore } from './store'
@@ -15,7 +15,7 @@ vi.mock('react-virtuoso', () => ({
   Virtuoso: ({data,itemContent}: {data: unknown[];itemContent: (i:number,row:unknown)=>ReactNode}) => <div>{data.map((r,i)=><div key={i}>{itemContent(i,r)}</div>)}</div>,
 }))
 ;(globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true
-const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true,partial_text:null,unfinished:false,retry_deadline_ms:null,instruction:null,last_refusal:null,superseded_reason:null,held_instruction:null,chat_model_slot:null}
+const view: ModelRequestRecovery = {recovery_id:'q1',purpose:'pm_route',state:'failed',project_root:'/project',agent_id:'pm',stage_run_id:null,target_role:'Product',history:[{code:'transport',model:null,model_slot:'decision',request_id:'request1',http_status:null,message:'unexpected EOF'}],can_retry:true,partial_text:null,unfinished:false,retry_deadline_ms:null,retry_window_ms:null,instruction:null,last_refusal:null,superseded_reason:null,held_instruction:null,chat_model_slot:null}
 const payload={...view,sub:'model_request'}
 const card: PendingQuestion={id:'q1',kind:'recovery',agent_id:'pm',payload,state:'queued'}
 afterEach(()=>vi.restoreAllMocks())
@@ -141,6 +141,32 @@ it('shows why a retired entry can no longer send and offers no action', async ()
   expect(el.textContent).toContain('a new stage started')
   expect(el.querySelectorAll('button')).toHaveLength(0)
  } finally { await act(async()=>root.unmount()) }
+})
+
+// 票 16B（feedback#model-recovery ①、D11）：原为「自动重试截至 <钟点>」且无进度条；改为「第 N 次 · 剩余 m:ss」
+// 每秒走表 + 已过窗口的进度条（窗口长度来自 core 的 retry_window_ms）。
+it('counts the retry window down and fills the elapsed bar', async () => {
+ vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+ vi.setSystemTime(new Date('2026-10-15T10:00:00Z'))
+ const retrying={...payload,state:'retrying',can_retry:false,retry_deadline_ms:Date.now()+38_000,retry_window_ms:60_000}
+ const el=document.createElement('div'); const root=createRoot(el)
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={retrying} />))
+  expect(el.querySelector('[data-retry-progress]')?.textContent).toBe('Attempt 2 · 0:38 left')
+  expect(el.querySelector('[data-retry-bar]')?.getAttribute('aria-valuenow')).toBe('37')
+  await act(async()=>{ vi.advanceTimersByTime(8_000) })
+  expect(el.querySelector('[data-retry-progress]')?.textContent).toBe('Attempt 2 · 0:30 left')
+  expect(el.querySelector('[data-retry-bar]')?.getAttribute('aria-valuenow')).toBe('50')
+  // 旧事件没有窗口长度：只出倒计时，不画假进度
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={{...retrying,retry_window_ms:null}} />))
+  expect(el.querySelector('[data-retry-bar]')).toBeNull()
+ } finally { await act(async()=>root.unmount()); vi.useRealTimers() }
+})
+
+it('formats the remaining time as m:ss and stops at zero', () => {
+ expect(formatRetryLeft(38_000)).toBe('0:38')
+ expect(formatRetryLeft(61_200)).toBe('1:02')
+ expect(formatRetryLeft(-5)).toBe('0:00')
 })
 
 it('marks an attempt interrupted by exit as unknown and keeps the original input', async () => {

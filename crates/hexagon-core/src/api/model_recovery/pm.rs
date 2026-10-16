@@ -160,6 +160,12 @@ impl Workbench {
     ) -> Result<bool, ApiError> {
         let run_id = packet.run_id.as_deref();
         let deadline_ms = Some(retry_deadline_ms(window.remaining()));
+        // Window length first: publish_recovery_state emits the view the UI draws.
+        crate::cards::annotate(
+            &self.db,
+            qid,
+            &[("retry_window_ms", json!(window.budget_ms()))],
+        )?;
         self.publish_recovery_state(qid, &packet.pm_id, run_id, "retrying", deadline_ms)?;
         let next =
             std::time::Instant::now() + self.wait_policy.probe_interval.min(window.remaining());

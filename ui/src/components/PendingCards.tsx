@@ -10,6 +10,7 @@ import { isActivationResumeCard, policyNeedsQuality, rejectReasonWithJudge } fro
 import { ModelRecoveryStatus } from './ModelRecoveryStatus'
 import { JudgeModelFailure, RejudgeButton, judgeFailureTitle } from './JudgeModelFailure'
 import { PermissionActions } from './PermissionActions'
+import { ComputerActionCard } from './ComputerActionCard'
 import { DesignChoices } from './DesignChoices'
 import { ExperienceProposal } from './ExperienceProposal'
 import { StageEvidence } from './StageEvidence'
@@ -74,6 +75,8 @@ function PermissionCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const judgeTitle = judgeFailureTitle(q, t)
   const failure = p.model_failure as { code?: string } | undefined
   const cmd = commandText(p)
+  // 票 16B（control#action）：电脑动作走 D8 专用卡；判定失败卡仍用通用形（标题、重新判定按钮在那里）
+  if (tool === 'computer_action' && !judgeTitle) return <ComputerActionCard q={q} top={top} who={who} />
   return (
     <DecisionShell qid={q.id} cat={judgeTitle ? 'mute' : 'warn'} icon={judgeTitle ? 'warn' : 'shield'}
       title={judgeTitle ?? (who ? t('dock.askTitle', { who, tool }) : t('cards.ask'))}

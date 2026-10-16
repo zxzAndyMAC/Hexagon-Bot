@@ -126,11 +126,25 @@ fn set(
         ],
     )?;
     let after = status(db, project_id);
+    // ui-redesign 16b (managed#running「14:20 · 你开启了托管 · 原模式「帮我批准」」): the row
+    // names what changed and the approval mode the project keeps (delegation never
+    // rewrites it), so the timeline does not have to guess from enabled/paused alone.
+    let change = match (before.enabled, before.paused, after.enabled, after.paused) {
+        (false, _, true, _) => "on",
+        (true, _, false, _) => "off",
+        (true, false, true, true) => "pause",
+        (true, true, true, false) => "resume",
+        _ => "unchanged",
+    };
+    let mode = crate::approval_mode::read(db, project_id)
+        .ok()
+        .map(|status| status.mode.as_str());
     db.append_event(
         project_id,
         crate::trace::EventKind::System,
         serde_json::json!({"kind":"delegation_changed","enabled":after.enabled,"paused":after.paused,
-            "generation":after.generation,"delegation_id":after.delegation_id,"actor":"owner"}),
+            "generation":after.generation,"delegation_id":after.delegation_id,"actor":"owner",
+            "change":change,"approval_mode":mode}),
         None,
         None,
     )?;
@@ -248,6 +262,30 @@ mod tests {
             !actor_is_current(&db, "p1", &grant.actor()),
             "off/on issues a new grant"
         );
+    }
+
+    #[test]
+    fn the_change_fact_names_the_transition_and_the_kept_approval_mode() {
+        let db = db();
+        enable(&db, "p1").unwrap();
+        set_paused(&db, "p1", true).unwrap();
+        set_paused(&db, "p1", false).unwrap();
+        disable(&db, "p1").unwrap();
+        let mut stmt = db
+            .conn()
+            .prepare(
+                "SELECT json_extract(payload,'$.change'), json_extract(payload,'$.approval_mode')
+                 FROM events WHERE json_extract(payload,'$.kind')='delegation_changed' ORDER BY id",
+            )
+            .unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let changes: Vec<&str> = rows.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(changes, ["on", "pause", "resume", "off"]);
+        assert!(rows.iter().all(|(_, m)| !m.is_empty()));
     }
 
     #[test]

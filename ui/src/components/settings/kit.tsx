@@ -84,7 +84,7 @@ export function NeedsProject({ onOpen }: { onOpen?: () => void }) {
   const { t } = useTranslation()
   return (
     <Empty
-      icon="folder"
+      icon="lock"
       title={t('settingsUi.needsProjectTitle')}
       desc={t('settings.needsProject')}
       action={onOpen && <Button size="sm" onClick={onOpen}>{t('settingsUi.openProject')}</Button>}

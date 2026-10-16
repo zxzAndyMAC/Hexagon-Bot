@@ -35,14 +35,16 @@ export function FeedbackSpecimen() {
           <Card><Empty icon="inbox" title="没有待决" desc="需要你拍板的事会停靠在输入条上方。" action={<Button size="sm"><Icon name="keyboard" size={12} />练习裁决快捷键</Button>} /></Card>
           <Card><Empty icon="search" title="没找到「部署」" desc="试试「发布」或「检验」；危险指令也在这里。" action={<Button size="sm">清空搜索</Button>} /></Card>
           <Card><Empty icon="chart-column" title="这段时间没有用量" desc="换一个时间范围，或者等团队开始工作。" action={<Button size="sm">近 30 天</Button>} /></Card>
-          <Card><Empty icon="folder" title="需要先打开项目" desc="权限和用量属于项目状态，无项目时不可用。" action={<Button size="sm" variant="primary">打开项目</Button>} /></Card>
+          <Card><Empty icon="lock" title="需要先打开项目" desc="权限和用量属于项目状态，无项目时不可用。" action={<Button size="sm" variant="primary">打开项目</Button>} /></Card>
           <Card><Empty icon="plug" title="还没有 MCP 服务" desc="从本机已有的客户端导入，或者手动添加。" action={<><Button size="sm">扫描本机</Button><Button size="sm">新建</Button></>} /></Card>
         </div>
       </Sec>
       <Sec id="loading" n="04" title="加载" desc="feedback#loading · A20">
         <div className="grid grid-cols-3 gap-4">
           <Card className="p-4"><div className="mb-3 text-[12px] text-ink-3">首个 token 等待</div>
-            <div className="flex items-center gap-2 text-[13px]"><PixelGrid /><Shimmer>正在思考</Shimmer><span className="font-mono text-ink-3">4.2s</span></div></Card>
+            <div className="flex items-center gap-2 text-[13px]"><PixelGrid /><Shimmer>正在思考</Shimmer><span className="font-mono text-ink-3">4.2s</span>
+              {/* 等网变体（C9 `.tl-wait.net`：标签换橙色「重连中」） */}
+              <PixelGrid /><span className="text-orange">重连中</span><span className="font-mono text-ink-3">0:18</span></div></Card>
           <Card className="p-4"><div className="mb-3 text-[12px] text-ink-3">时间线首屏 / 补载更早内容</div>
             <div role="status" aria-busy="true"><SkeletonRows count={1} className="py-0" /></div></Card>
           <Card className="p-4"><div className="mb-3 text-[12px] text-ink-3">按钮内的异步操作</div>

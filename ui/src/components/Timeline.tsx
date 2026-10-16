@@ -21,6 +21,7 @@ import { pairToolCalls, toolOutcome, toolFilePath, toolInputSummary, TOOL_ICON, 
 import { CallStatus, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
+import { delegationLabel } from '../delegationLabel'
 import { freshTally, jumpFace, showStickButton, TIMELINE_TAIL_PX } from '../timelineStick'
 import { JumpAnnouncer, JumpToLatest } from './JumpToLatest'
 import { useJumpOffset } from '../useJumpOffset'
@@ -266,7 +267,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   const highRisk = (item.event.kind === 'turn_failed' && !stopped) || SYS_HIGH_RISK.has(sub)
   const autoStamp = item.event.kind === 'stamped' && stampedByAutonomy(item.event.payload)
   const savedPermission = item.event.kind === 'permission_allowed' && item.event.payload.execution === 'queued'
-  const label = sub === 'tool_execution_started' ? t('ev.permission_executing', { tool: String(item.event.payload.tool ?? '') }) : savedPermission ? t('ev.permission_saved', { tool: String(item.event.payload.tool ?? '') }) : stopped ? t('ev.turn_interrupted') : autoStamp
+  const label = sub === 'delegation_changed' && delegationLabel(t, item) ? delegationLabel(t, item)! : sub === 'tool_execution_started' ? t('ev.permission_executing', { tool: String(item.event.payload.tool ?? '') }) : savedPermission ? t('ev.permission_saved', { tool: String(item.event.payload.tool ?? '') }) : stopped ? t('ev.turn_interrupted') : autoStamp
     ? t('ev.stamped_auto', { stage: String(item.event.payload?.stage ?? '') })
     : sub
       ? trKey(t, `sys.${sub}`, sub)

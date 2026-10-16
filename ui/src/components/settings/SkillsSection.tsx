@@ -174,7 +174,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
         </div>
       ) : !reading && !readError && (
         <div data-skill-body className="mt-3 rounded-[var(--r-card)] bg-inset px-4 py-3.5 text-[13px] leading-[1.7] shadow-[inset_0_0_0_1px_var(--line-soft)]">
-          {isMd ? <Md>{content}</Md> : <CodeBlock code={content} />}
+          {isMd ? <Md>{skillMarkdownBody(content)}</Md> : <CodeBlock code={content} />}
         </div>
       )}
       {skill.origin === 'project' && (
@@ -378,4 +378,10 @@ export function SkillsSection() {
       )}
     </ListDetail>
   )
+}
+
+/** 票 16B（settings#skills 详情渲染 SKILL.md 正文）：阅读态去掉开头的 YAML frontmatter——名称与描述已在
+ *  详情头和列表里；不去掉时 `---` 被渲染成分隔线、`name: … description: …` 挤成一段正文。编辑态仍是整份原文。 */
+export function skillMarkdownBody(content: string): string {
+  return content.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '')
 }

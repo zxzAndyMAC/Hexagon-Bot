@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import i18n from '../i18n'
 import { api, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
 import type { ExternalOperation } from '../gen/ExternalOperation'
@@ -77,10 +78,10 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
         ? <Empty size="sm" icon="inbox" title={t('delegation.empty')} desc={t('delegation.emptyBody')} data-managed-empty />
         : <>
           <div className="grid grid-cols-4 gap-2.5" data-managed-kpi>
-            <Kpi label={t('delegation.kpiDecisions')} value={records.length} />
-            <Kpi label={t('delegation.kpiDone')} value={done.length} tone="text-green" />
+            <Kpi label={t('delegation.kpiDecisions')} value={t('delegation.kpiTimes', { count: records.length })} />
+            <Kpi label={t('delegation.kpiDone')} value={t('delegation.kpiItems', { count: done.length })} tone="text-green" />
             {/* gap A3（managed#report）：第四格由「失败」换成「花费」（本次托管时段）；失败并入「未完成」。 */}
-            <Kpi label={t('delegation.kpiIncomplete')} value={unfinished.length} tone="text-red" />
+            <Kpi label={t('delegation.kpiIncomplete')} value={t('delegation.kpiItems', { count: unfinished.length })} tone="text-red" />
             <Kpi label={t('delegation.kpiSpend')} value={summary ? spendText(t, summary) : '—'} />
           </div>
           <p className="mt-1.5 text-[12px] text-ink-3">{t('delegation.recent', { count: records.length })}</p>
@@ -142,8 +143,14 @@ function periodText(t: (key: string, opts?: Record<string, unknown>) => string, 
   const minutes = summary ? sessionMinutes(summary.started_at, summary.ended_at) : null
   if (!summary || !from || minutes == null) return null
   const to = summary.ended_at ? parseTraceTime(summary.ended_at) ?? new Date() : new Date()
-  const hm = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const hm = (d: Date) => new Intl.DateTimeFormat(i18n.language, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d)
   return t('delegation.period', { from: hm(from), to: hm(to), count: minutes })
+}
+
+/** 票 16B（managed#report「14:20 – 15:02」）：时刻按界面语言、24 小时制；曾用系统 locale，中文界面出「03:07 PM」。 */
+function opTime(at: string): string {
+  const d = parseTraceTime(at)
+  return d ? new Intl.DateTimeFormat(i18n.language, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d) : at
 }
 
 function Kpi({ label, value, tone }: { label: string; value: number | string; tone?: string }) {
@@ -186,7 +193,7 @@ function ExternalOperations({ ops, onShow }: { ops: ExternalOperation[]; onShow:
             {t(`delegation.verifyChip.${op.verification}`, { defaultValue: op.verification })}
           </Badge>
           {op.trash_path && <span>{t('delegation.trashedTo', { path: op.trash_path })}</span>}
-          <time className="text-[11.5px] text-ink-3" dateTime={op.at}>{parseTraceTime(op.at)?.toLocaleString() ?? op.at}</time>
+          <time className="text-[11.5px] text-ink-3" dateTime={op.at}>{opTime(op.at)}</time>
           <Button size="xs" variant="ghost" title={t('delegation.showInTimeline')} onClick={() => onShow(op.event_id)}>
             {t('delegation.showInTimeline')}
           </Button>
