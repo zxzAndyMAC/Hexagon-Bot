@@ -52,8 +52,10 @@
 .approval-mode .switch:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--line), 0 0 0 2px var(--accent); }
 .approval-mode .switch:disabled { opacity: .45; cursor: default; }
 
-/* 广泛访问确认（A17 AlertDialog 变体 composer#broad）：勾选行 */
-.broad-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0 0 0 48px; list-style: none; font-size: 13px; color: var(--ink); }
+/* 广泛访问确认（A17 AlertDialog 变体 composer#broad）：勾选行。
+   不写 margin（票 16a）：本文件不在 @layer 里，`margin: 0` 会压过组件上的 Tailwind `mt-3`，
+   说明→勾选行的 12 间距曾因此丢失；ul 外边距 preflight 已清零。 */
+.broad-list { display: flex; flex-direction: column; gap: 6px; padding: 0 0 0 48px; list-style: none; font-size: 13px; color: var(--ink); }
 .broad-list li { display: flex; align-items: flex-start; gap: 8px; }
 .broad-list li > svg { margin-top: 3px; color: var(--green); }
 
