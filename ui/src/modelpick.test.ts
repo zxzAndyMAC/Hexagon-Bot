@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BUILTIN_SLOTS, dedicatedSlot, isDedicatedSlot, modelDisplayName, resolveBinding, sharedSlots, slotLabel } from './modelpick'
+import { BUILTIN_SLOTS, agentModelLabel, dedicatedSlot, isDedicatedSlot, modelDisplayName, resolveBinding, sharedSlots, slotLabel } from './modelpick'
 import type { ProvidersView } from './gen/ProvidersView'
 import en from './i18n/locales/en'
 
@@ -48,6 +48,14 @@ describe('modelpick（ui-audit-2 票 01：角色直选模型）', () => {
     expect(slotLabel('unbound', view, '专属')).toBe('unbound · deepseek-chat') // 回落 default
     expect(slotLabel(null, view, '专属')).toBe('—')
     expect(slotLabel('agent:gone', view, '专属')).toBe('专属 · deepseek-chat')
+  })
+
+  // 票 16B（settings#team）：团队列表副标是角色实际用的模型展示名，不是「槽名 · 模型 id」。
+  it('agentModelLabel：解析到的模型显示目录展示名；全未绑退回槽名', () => {
+    const named: ProvidersView = { ...view, providers: [{ id: 'openai', name: 'OpenAI', enabled: true, models: [{ id: 'gpt-5', name: 'GPT-5' }] }] as unknown as ProvidersView['providers'] }
+    expect(agentModelLabel('code', named, '专属')).toBe('GPT-5')
+    expect(agentModelLabel('unbound', named, '专属')).toBe('deepseek-chat') // 回落 default，目录无展示名用 id
+    expect(agentModelLabel('code', { providers: [], slots: {} }, '专属')).toBe('code')
   })
 
   // 守卫：BUILTIN_SLOTS 每个成员都必须有 providers.slot_<name> 文案——
