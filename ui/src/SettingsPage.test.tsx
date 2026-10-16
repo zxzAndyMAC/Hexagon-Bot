@@ -297,6 +297,19 @@ describe('SettingsPage list|detail 分区', () => {
     root.unmount()
   })
 
+  // 票 16B：阅读态不渲染 SKILL.md 的 frontmatter（曾显示成分隔线 +「name: … description: …」一段）。
+  it('skill detail reading view drops the frontmatter', async () => {
+    vi.spyOn(api, 'readSkillFile').mockResolvedValue('---\nname: my-lint\ndescription: d\n---\n# Usage\nbody')
+    const { el, root } = await render(<SettingsPage onBack={() => {}} />)
+    await clickNav(el, 'Skills')
+    await clickText(el, 'my-lint')
+    const body = el.querySelector('[data-skill-detail="my-lint"] [data-skill-body]')!
+    expect(body.textContent).toContain('Usage')
+    expect(body.textContent).not.toContain('name: my-lint')
+    expect(body.querySelector('hr')).toBeNull()
+    root.unmount()
+  })
+
   // 取消=放弃未保存修改：不落盘、不刷新，再进编辑回到原文。
   // 快照必须是 SKILL.md 原文而非当前选中文件——切到 ref.md 签再取消，
   // 不能把 ref.md 正文灌回 SKILL.md 缓冲；保存后快照要跟盘上文本走。
