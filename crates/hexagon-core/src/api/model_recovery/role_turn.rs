@@ -120,7 +120,12 @@ pub(in crate::api) struct TurnWaitItem {
 }
 
 impl TurnWaitItem {
-    fn publish(&self, db: &Db, retry_deadline_ms: i64) -> Result<String, ApiError> {
+    fn publish(
+        &self,
+        db: &Db,
+        retry_deadline_ms: i64,
+        retry_window_ms: i64,
+    ) -> Result<String, ApiError> {
         let origin = origin_turn_id(db, &self.project_id, &self.agent_id)?;
         let dedupe = turn_request_key(origin);
         if let Some(open) = crate::cards::queued_by_key(db, &self.project_id, &dedupe)? {
@@ -147,7 +152,8 @@ impl TurnWaitItem {
             Some(&self.agent_id),
             crate::cards::CardKind::Recovery,
             json!({"sub":"model_request","purpose":"turn","packet":packet,"state":"retrying",
-                "history":[],"retry_deadline_ms":retry_deadline_ms,"task_key":task_key}),
+                "history":[],"retry_deadline_ms":retry_deadline_ms,
+                "retry_window_ms":retry_window_ms,"task_key":task_key}),
             Some(&dedupe),
         )?;
         publish_view(
@@ -163,13 +169,18 @@ impl TurnWaitItem {
 }
 
 impl crate::turn::RecoveryItem for TurnWaitItem {
-    fn locate_or_publish(&self, db: &Db, retry_deadline_ms: i64) -> Option<String> {
+    fn locate_or_publish(
+        &self,
+        db: &Db,
+        retry_deadline_ms: i64,
+        retry_window_ms: i64,
+    ) -> Option<String> {
         if let Some(existing) = &self.existing {
             return Some(existing.clone());
         }
         // A missing item only removes the per-item stop for this wait; the
         // project pause and role sleep still stop it.
-        self.publish(db, retry_deadline_ms)
+        self.publish(db, retry_deadline_ms, retry_window_ms)
             .map_err(|error| log::warn!("model request item not published: {error}"))
             .ok()
     }

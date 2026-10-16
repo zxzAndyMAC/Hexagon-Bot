@@ -65,6 +65,10 @@ pub struct ModelRequestRecovery {
     /// MR-02 progress: end of the automatic retry window while `retrying`.
     #[ts(type = "number | null")]
     pub retry_deadline_ms: Option<i64>,
+    /// Length of the automatic retry window that `retry_deadline_ms` ends;
+    /// with the deadline it gives the elapsed-progress bar (ticket ui-redesign 16b).
+    #[ts(type = "number | null")]
+    pub retry_window_ms: Option<i64>,
     /// The original role instruction, so a missing-material item still keeps
     /// the owner's input (MR-04). PM items show their choice target instead.
     pub instruction: Option<String>,
@@ -119,6 +123,12 @@ impl RetryWindow {
 
     fn elapsed(&self) -> std::time::Duration {
         self.clock.now().saturating_duration_since(self.started)
+    }
+
+    /// Whole window length, published beside the deadline so the UI can draw
+    /// elapsed progress (feedback#model-recovery ①).
+    pub(super) fn budget_ms(&self) -> i64 {
+        i64::try_from(self.budget.as_millis()).unwrap_or(i64::MAX)
     }
 
     pub(super) fn remaining(&self) -> std::time::Duration {
@@ -222,6 +232,7 @@ pub fn model_request_recovery(
         unfinished: partial_text.is_some() && unfinished,
         partial_text,
         retry_deadline_ms: card.payload["retry_deadline_ms"].as_i64(),
+        retry_window_ms: card.payload["retry_window_ms"].as_i64(),
         instruction: card.payload["packet"]["input"].as_str().map(str::to_string),
         last_refusal: card.payload["last_refusal"].as_str().map(str::to_string),
         superseded_reason: card.payload["superseded_reason"]

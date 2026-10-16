@@ -1249,7 +1249,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         const fail = (code: string, at: string) => ({ code, model: 'claude-opus-5-5', model_slot: 'decision', request_id: `req-${at}`, http_status: code === 'authentication' ? 401 : code === 'provider_unavailable' ? 503 : null, message: code })
         const rec = (id: string, state: string, extra: Record<string, unknown>) => ({ recovery_id: id, project_root: '/mock', purpose: 'pm_route', agent_id: 'a0', stage_run_id: null, target_role: '产品策划', state, history: [], can_retry: true, partial_text: null, unfinished: false, retry_deadline_ms: null, instruction: null, last_refusal: null, superseded_reason: null, held_instruction: null, chat_model_slot: null, ...extra })
         all.push(
-          mkEv(131, 'system', 'a0', null, { kind: 'model_request_retrying', ...rec('mr1', 'retrying', { history: [fail('transport', '1')], retry_deadline_ms: Date.now() + 38000 }) }, '12:01'),
+          mkEv(131, 'system', 'a0', null, { kind: 'model_request_retrying', ...rec('mr1', 'retrying', { history: [fail('transport', '1')], retry_deadline_ms: Date.now() + 38000, retry_window_ms: 60000 }) }, '12:01'),
           mkEv(132, 'system', 'a0', null, { kind: 'model_request_failed', ...rec('mr2', 'stopped', { history: [fail('transport', '1'), fail('provider_unavailable', '2'), fail('provider_unavailable', '3')], chat_model_slot: 'gpt-6' }) }, '12:02'),
           mkEv(133, 'system', 'a0', null, { kind: 'model_request_failed', ...rec('mr3', 'failed', { history: [fail('authentication', '1')] }) }, '12:03'),
           mkEv(134, 'system', 'a0', null, { kind: 'model_request_recovered', ...rec('mr4', 'recovered', { history: [fail('transport', '1')] }) }, '12:04'),

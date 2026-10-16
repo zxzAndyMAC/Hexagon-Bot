@@ -7,6 +7,11 @@ export type ModelRequestRecovery = { recovery_id: string, project_root: string, 
  */
 retry_deadline_ms: number | null, 
 /**
+ * Length of the automatic retry window that `retry_deadline_ms` ends;
+ * with the deadline it gives the elapsed-progress bar (ticket ui-redesign 16b).
+ */
+retry_window_ms: number | null, 
+/**
  * The original role instruction, so a missing-material item still keeps
  * the owner's input (MR-04). PM items show their choice target instead.
  */
