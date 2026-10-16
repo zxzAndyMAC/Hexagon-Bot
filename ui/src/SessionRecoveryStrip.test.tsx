@@ -48,6 +48,18 @@ describe('SessionHost recovery strip (C12a/C12b)', () => {
     await i18n.changeLanguage('en')
   })
 
+  it('footer wraps actions onto their own row instead of squeezing next-action text (ticket 16c fr smoke)', async () => {
+    await i18n.changeLanguage('fr')
+    await render(base)
+    const footer = el.querySelector('[data-session-footer]')!
+    expect(footer.className).toContain('flex-wrap')
+    // 「Rien à faire」/ 原因码曾被三颗动作挤成两行与省略号
+    const [label, value] = [...footer.querySelectorAll(':scope > span')]
+    expect(label.className).toContain('whitespace-nowrap')
+    expect(value.className).toContain('whitespace-nowrap')
+    expect(footer.querySelector('[class*="shrink-0"]')?.textContent).toBe('owner_paused')
+  })
+
   it('renders status, turn, pending tier and the resume action in a non-English locale', async () => {
     await i18n.changeLanguage('zh-CN')
     await render(base)
