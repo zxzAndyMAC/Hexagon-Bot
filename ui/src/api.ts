@@ -729,14 +729,14 @@ const MOCK_SESSION_SUMMARY: SessionSummary = {
 // 请求工作树→坞内工作树确认卡→确认后挂上、稍后继续预约。不带标志时保持静态样例（vitest 依赖）。
 const mockSessionOn = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mocksession')
 const MOCK_SESSION = {
-  status: 'running' as SessionSummary['session']['status'], reason: 'session_started',
-  worktree: null as SessionSummary['session']['worktree'],
+  status: 'running' as SessionRecord['status'], reason: 'session_started',
+  worktree: null as SessionRecord['worktree'],
   card: null as null | { id: string; path: string },
   triggers: [] as SessionSummary['triggers'],
 }
 const mockSessionSummary = (): SessionSummary => ({
   ...MOCK_SESSION_SUMMARY,
-  session: { ...MOCK_SESSION_SUMMARY.session, status: MOCK_SESSION.status, last_reason_code: MOCK_SESSION.reason, worktree: MOCK_SESSION.worktree },
+  session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: MOCK_SESSION.status, last_reason_code: MOCK_SESSION.reason, worktree: MOCK_SESSION.worktree },
   triggers: MOCK_SESSION.triggers,
 })
 const mockWorktreeCard = () => MOCK_SESSION.card

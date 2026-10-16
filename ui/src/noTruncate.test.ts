@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // 票 16c（非英文冒烟）：主路径上的关键值/主操作文字不得被省略号吃掉。
 // happy-dom 不排版，量不了 scrollWidth；这里钉住样式规则本身，实测走 Playwright 冒烟（shots/16c）。
 import { describe, expect, it } from 'vitest'
@@ -5,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// css?raw 在 vitest 里被 css 处理吞成空串，直接读源文件。
+// css 的 `?raw` import（含 glob）在 vitest 里被 css 处理吞成空串，直接读源文件；ui tsconfig 默认不带 node 类型，顶部单独引用。
 const timelineCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/timeline.css'), 'utf8')
 
 const rule = (css: string, selector: string): string => {
