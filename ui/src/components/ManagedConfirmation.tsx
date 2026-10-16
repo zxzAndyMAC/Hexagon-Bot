@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { blockBackgroundDecision } from '../modalDecisionGuard'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { useUiStore } from '../store'
+import { useDelegation } from '../useDelegation'
+import { fmtYuan } from '../usage'
 import { Icon } from './Icon'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -22,6 +24,10 @@ export function ManagedConfirmation({ pending, error, onCancel, onConfirm }: {
 }) {
   const { t } = useTranslation()
   const project = useUiStore(s => s.projectName)
+  // 票 16B（managed#enable「仍受项目预算约束：本月剩余 ¥61.4」）：设了项目用量上限就写剩余额度
+  // （上限 − 项目累计花费，与胶囊弹层预算行同源 managed_summary）；未设上限或尚未读到时保持原句。
+  const { summary } = useDelegation()
+  const budgetLeftMc = summary?.limit_cents != null ? Math.max(0, summary.limit_cents * 1000 - summary.spent_mc) : null
   const current = useRef({ pending, onCancel, onConfirm })
   useLayoutEffect(() => { current.current = { pending, onCancel, onConfirm } }, [pending, onCancel, onConfirm])
   useEffect(() => {
@@ -41,7 +47,7 @@ export function ManagedConfirmation({ pending, error, onCancel, onConfirm }: {
   const confirmKey = formatBinding(bindingFor('confirmManaged'))
   const info: { icon: Parameters<typeof Icon>[0]['name']; text: string; attr?: string }[] = [
     { icon: 'refresh', text: t('delegation.infoRounds') },
-    { icon: 'usage', text: t('delegation.infoBudget') },
+    { icon: 'usage', text: budgetLeftMc != null ? t('delegation.infoBudgetLeft', { left: fmtYuan(budgetLeftMc) }) : t('delegation.infoBudget'), attr: 'data-managed-budget-info' },
     { icon: 'flag', text: t('delegation.infoHonest') },
     // ADR0087: the host cannot block deletions inside external apps; say so before turning on.
     { icon: 'warn', text: t('delegation.externalDeletion'), attr: 'data-external-deletion' },
