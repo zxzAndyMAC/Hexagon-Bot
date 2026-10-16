@@ -215,7 +215,14 @@ pub(crate) fn halted(db: &Db, ctx: &ToolContext) -> bool {
 pub(crate) trait RecoveryItem: Send + Sync {
     /// The item this request is (or now becomes) visible as. The first
     /// network wait publishes it as `retrying`; a retry passes its own item.
-    fn locate_or_publish(&self, db: &Db, retry_deadline_ms: i64) -> Option<String>;
+    /// `retry_window_ms` is the whole automatic-retry budget, so the item can
+    /// draw elapsed progress (feedback#model-recovery ①, ticket ui-redesign 16b).
+    fn locate_or_publish(
+        &self,
+        db: &Db,
+        retry_deadline_ms: i64,
+        retry_window_ms: i64,
+    ) -> Option<String>;
     /// The waited-for request went through: close an item the wait opened.
     fn recovered(&self, db: &Db, item: &str);
 }
@@ -481,7 +488,8 @@ fn stream_with_retry(
                         .filter(|_| ctx.subagent.is_none())
                     {
                         let left = ctx.wait.budget.saturating_sub(request_started.elapsed());
-                        item = hook.locate_or_publish(db, deadline_ms(left));
+                        let window = i64::try_from(ctx.wait.budget.as_millis()).unwrap_or(i64::MAX);
+                        item = hook.locate_or_publish(db, deadline_ms(left), window);
                     }
                 } else if emitted {
                     // 等网中某次探针吐了半截又挂：重发前作废它。

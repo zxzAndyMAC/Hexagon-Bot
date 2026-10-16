@@ -61,7 +61,8 @@ export function AreaTrend({
             activeDot={mini ? false : { r: 3.5, stroke: 'var(--surface)', strokeWidth: 2, fill: s.color }}
           />
         ))}
-        {!mini && <ChartLegend verticalAlign="bottom" content={<ChartLegendContent />} />}
+        {/* 迷你版也带图例（usage#quick 用量卡图下「■ Token」；票 16B 原型逐节核对补上，票 12 漏画） */}
+        <ChartLegend verticalAlign="bottom" content={<ChartLegendContent />} />
       </AreaChart>
     </ChartContainer>
   )

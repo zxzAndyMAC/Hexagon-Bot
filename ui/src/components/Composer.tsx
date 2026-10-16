@@ -16,7 +16,8 @@ import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
 import { ContextMeter } from './ContextMeter'
-import { COMPOSER_FILL_EVENT, mergeFill } from '../composerFill'
+import { COMPOSER_FILL_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
+import { visiblePending } from '../decisions'
 import type { AttachRef } from '../gen/AttachRef'
 import {
   atomicDeletion,
@@ -82,6 +83,11 @@ function fit(ta: HTMLTextAreaElement) {
 
 export function Composer() {
   const { t } = useTranslation()
+  const freshShown = useFreshStartShown()
+  // 票 16a（decisions#dock）：坞展开且有卡时，占位改为「先处理上面的待决，或继续给团队发消息」——
+  // 输入条照常可用（团队运行不阻止负责人发言），只提示先看坞；收起成胶囊后回到常规占位（decisions#collapsed）。
+  const dockShown = useUiStore((s) => s.pendingDialogOpen
+    && (s.reviewRows.length > 0 || visiblePending(s.pending, s.hiddenPending).length > 0))
   const team = useUiStore((s) => s.team)
   const invalidate = useUiStore((s) => s.invalidate)
   const pushToast = useUiStore((s) => s.pushToast)
@@ -468,7 +474,7 @@ export function Composer() {
                   setText(next >= 0 ? HISTORY[next] : '')
                 }
               }}
-              placeholder={mcpPending ? t('composer.initializing') : t('composer.placeholder')}
+              placeholder={mcpPending ? t('composer.initializing') : t(dockShown ? 'composer.placeholderPending' : freshShown ? 'composer.placeholderFresh' : 'composer.placeholder')}
               disabled={mcpPending}
               // 票 03：粘贴图片（clipboardData.files）
               onPaste={(e) => {

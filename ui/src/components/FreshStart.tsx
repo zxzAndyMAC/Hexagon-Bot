@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import { useUiStore } from '../store'
-import { fillComposer } from '../composerFill'
+import { fillComposer, useFreshStartMarker } from '../composerFill'
 import { mentionTokenText } from '../composerAtoms'
 import type { PackDef } from '../gen/PackDef'
 import { freshLead } from '../freshLead'
@@ -33,6 +33,7 @@ export function FreshStart() {
     return () => { live = false }
   }, [])
   const lead = freshLead(pack, team)
+  useFreshStartMarker()
   const copy = (key: 'spec' | 'repo', part: 'Title' | 'Fill') =>
     key === 'spec' && lead
       ? t(`fresh.spec${part}Role`, { role: lead.role, stage: lead.stage, mention: mentionTokenText(lead.role) })

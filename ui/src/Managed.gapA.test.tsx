@@ -113,3 +113,20 @@ it('markdown escapes table pipes and states an empty external section', () => {
   expect(text).toContain('x\\|y')
   expect(text).toContain(i18n.t('delegation.externalEmpty'))
 })
+
+// 票 16B（managed#report「14:20 – 15:02 · 42 分钟」「17 次」「5 项」）：时段按界面语言 24 小时制
+// （曾用系统 locale，中文界面出「03:07 PM」），KPI 带单位。
+it('report period follows the interface language in 24-hour time and KPIs carry units', async () => {
+  await i18n.changeLanguage('zh-CN')
+  vi.spyOn(api, 'managedSummary').mockResolvedValue(summary({ started_at: '2026-10-15 06:20:00', ended_at: '2026-10-15 07:02:00' }))
+  vi.spyOn(api, 'managedHistory').mockResolvedValue([record({ event_id: 2 }), record({ event_id: 1, result: 'incomplete', action: 'incomplete' })])
+  await mount(<ManagedReport card onClose={() => {}} />)
+  const report = el.querySelector('[data-managed-report]')!
+  const period = report.querySelector('[data-managed-period]')!.textContent!
+  expect(period).not.toMatch(/AM|PM|上午|下午/)
+  expect(period).toMatch(/^\d{2}:\d{2} – \d{2}:\d{2} · 42 分钟$/)
+  const kpi = report.querySelector('[data-managed-kpi]')!.textContent!
+  expect(kpi).toContain('系统决定2 次')
+  expect(kpi).toContain('完成1 项')
+  expect(kpi).toContain('未完成1 项')
+})

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type AgentDetail, type ProvidersView, type RoleDef, type RoleTemplate, type TeamRow } from '../../api'
 import { useUiStore } from '../../store'
-import { sharedSlots, slotLabel } from '../../modelpick'
+import { agentModelLabel, sharedSlots, slotLabel } from '../../modelpick'
 import { Avatar } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -320,7 +320,7 @@ function ProjectTeam({ head }: { head: React.ReactNode }) {
           <div className="min-w-0 flex-1">
             <div className="truncate">{m.role}</div>
             <div className="truncate text-[12px] text-ink-3">
-              {m.status === 'sleeping' ? t('sidebar.sleeping') : slotLabel(m.model_slot, providers, t('agent.dedicatedTag'))}
+              {m.status === 'sleeping' ? t('sidebar.sleeping') : agentModelLabel(m.model_slot, providers, t('agent.dedicatedTag'))}
             </div>
           </div>
         </>

@@ -160,6 +160,22 @@ it('agent header shows the image-generation slot from the host read model', asyn
   useUiStore.setState({ providers: saved })
 })
 
+// 票 16a 回归（canvas#agent）：头卡 cpu 胶囊写模型展示名（TeamRow.model，gap B2 已解析），
+// 与成员悬停卡同源；原先只按槽位拼「code」/「chat · deepseek/…」，看不出用的是哪个模型。
+it('agent header model chip shows the resolved model display name, slot label only as fallback', async () => {
+  const saved = useUiStore.getState().team
+  useUiStore.setState({ providers: { providers: [], slots: {} },
+    team: [{ ...saved[0], model_slot: 'code', model: 'Claude Sonnet 5.5' }] })
+  const first = await render(<AgentTab agentId="a1" />)
+  expect(first.el.querySelector('[data-agent-model]')?.textContent).toBe('Claude Sonnet 5.5')
+  await act(async () => first.root.unmount())
+  useUiStore.setState({ team: [{ ...saved[0], model_slot: 'code', model: null }] })
+  const second = await render(<AgentTab agentId="a1" />)
+  expect(second.el.querySelector('[data-agent-model]')?.textContent).toBe('code')
+  await act(async () => second.root.unmount())
+  useUiStore.setState({ team: saved })
+})
+
 // Benchmark I1: image decoding happens before the IPC token is captured. An A
 // FileReader finishing in B must not use B's valid token to change the same a1.
 it.each([false, true])('avatar file reading respects the originating project (switch=%s)', async (switchProject) => {

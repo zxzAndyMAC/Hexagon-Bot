@@ -21,6 +21,7 @@ import { pairToolCalls, toolOutcome, toolFilePath, toolInputSummary, TOOL_ICON, 
 import { CallStatus, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
+import { delegationLabel } from '../delegationLabel'
 import { freshTally, jumpFace, showStickButton, TIMELINE_TAIL_PX } from '../timelineStick'
 import { JumpAnnouncer, JumpToLatest } from './JumpToLatest'
 import { useJumpOffset } from '../useJumpOffset'
@@ -266,7 +267,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   const highRisk = (item.event.kind === 'turn_failed' && !stopped) || SYS_HIGH_RISK.has(sub)
   const autoStamp = item.event.kind === 'stamped' && stampedByAutonomy(item.event.payload)
   const savedPermission = item.event.kind === 'permission_allowed' && item.event.payload.execution === 'queued'
-  const label = sub === 'tool_execution_started' ? t('ev.permission_executing', { tool: String(item.event.payload.tool ?? '') }) : savedPermission ? t('ev.permission_saved', { tool: String(item.event.payload.tool ?? '') }) : stopped ? t('ev.turn_interrupted') : autoStamp
+  const label = sub === 'delegation_changed' && delegationLabel(t, item) ? delegationLabel(t, item)! : sub === 'tool_execution_started' ? t('ev.permission_executing', { tool: String(item.event.payload.tool ?? '') }) : savedPermission ? t('ev.permission_saved', { tool: String(item.event.payload.tool ?? '') }) : stopped ? t('ev.turn_interrupted') : autoStamp
     ? t('ev.stamped_auto', { stage: String(item.event.payload?.stage ?? '') })
     : sub
       ? trKey(t, `sys.${sub}`, sub)
@@ -373,8 +374,11 @@ function DeliveryCard({ item }: { item: TimelineItem }) {
   const superseded = useUiStore((s) => version > 0 && s.artifacts.some((a) => a.path === path && a.version > version))
   const chip = superseded ? { tone: '', key: 'timeline.deliverySuperseded' } : deliveryChip(String(p.status ?? ''))
   const sub = [String(p.kind ?? ''), version > 0 ? `v${version}` : ''].filter(Boolean).join(' · ')
+  // 选中态（canvas#artifact，票 16a 补）：该产物正是画布当前页签时 1.5px accent 环，与侧栏成员行「当前打开」同理
+  const current = useUiStore((s) => path !== '' && s.canvasOpen && s.activeTab === `art:${path}`)
   return (
     <button type="button" className="tl-deliver" title={path} data-superseded={superseded ? '' : undefined}
+      data-current={current ? '' : undefined} aria-current={current ? 'true' : undefined}
       onClick={() => path && openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}>
       <span className="fi"><Icon name="file-text" size={16} /></span>
       <span className="tl-grow"><span className="p" style={{ display: 'block' }}>{path}</span>{sub && <span className="s">{sub}</span>}</span>

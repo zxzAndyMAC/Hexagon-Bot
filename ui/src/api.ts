@@ -1282,7 +1282,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       if (mockIntakeDraft() !== null) all.splice(3)
       // 票 08 截图比对（managed#running）：`?mockmanaged` 时追加托管开启事实与托管决定行
       if (mockManaged()) all.push(
-        mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false }, '11:57'),
+        mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false, change: 'on', approval_mode: 'assisted' }, '11:57'),
         mkEv(122, 'system', 'a4', null, { kind: 'managed_decision', card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: '端到端测试需要浏览器内核，下载落在项目缓存目录，属本项目联网委托。', via: 'model', outcome: 'allowed', actor: 'managed:g1:1' }, '11:58'),
         mkEv(123, 'system', 'a3', null, { kind: 'managed_decision', card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: '与项目说明「单用户离线工具」一致；另两个方案偏装饰。', via: 'model', outcome: 'stamped', actor: 'managed:g1:1' }, '11:59'),
         mkEv(124, 'system', 'a5', null, { kind: 'managed_decision', card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: '该目标不是项目已配置的发布目标（新增发布目标不在托管范围内）。', via: 'host', outcome: 'not_published', actor: 'managed:g1:1' }, '12:00'),
@@ -1292,7 +1292,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         const fail = (code: string, at: string) => ({ code, model: 'claude-opus-5-5', model_slot: 'decision', request_id: `req-${at}`, http_status: code === 'authentication' ? 401 : code === 'provider_unavailable' ? 503 : null, message: code })
         const rec = (id: string, state: string, extra: Record<string, unknown>) => ({ recovery_id: id, project_root: '/mock', purpose: 'pm_route', agent_id: 'a0', stage_run_id: null, target_role: '产品策划', state, history: [], can_retry: true, partial_text: null, unfinished: false, retry_deadline_ms: null, instruction: null, last_refusal: null, superseded_reason: null, held_instruction: null, chat_model_slot: null, ...extra })
         all.push(
-          mkEv(131, 'system', 'a0', null, { kind: 'model_request_retrying', ...rec('mr1', 'retrying', { history: [fail('transport', '1')], retry_deadline_ms: Date.now() + 38000 }) }, '12:01'),
+          mkEv(131, 'system', 'a0', null, { kind: 'model_request_retrying', ...rec('mr1', 'retrying', { history: [fail('transport', '1')], retry_deadline_ms: Date.now() + 38000, retry_window_ms: 60000 }) }, '12:01'),
           mkEv(132, 'system', 'a0', null, { kind: 'model_request_failed', ...rec('mr2', 'stopped', { history: [fail('transport', '1'), fail('provider_unavailable', '2'), fail('provider_unavailable', '3')], chat_model_slot: 'gpt-6' }) }, '12:02'),
           mkEv(133, 'system', 'a0', null, { kind: 'model_request_failed', ...rec('mr3', 'failed', { history: [fail('authentication', '1')] }) }, '12:03'),
           mkEv(134, 'system', 'a0', null, { kind: 'model_request_recovered', ...rec('mr4', 'recovered', { history: [fail('transport', '1')] }) }, '12:04'),
@@ -1448,6 +1448,15 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'sleep_all':
     case 'send_message':
       return null as T
+    // 票 16a（composer#attach 比对）：dev 下粘贴 / 拖入 / + 选图能出缩略图——原先 mock 落到 null，
+    // Composer 读 media_type 抛错只弹红 toast，附件区截不到。
+    case 'stage_attachment': {
+      const name = String(args?.name ?? 'image.png')
+      const ext = name.split('.').pop()?.toLowerCase() ?? 'png'
+      const media = ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' } as Record<string, string>)[ext] ?? 'image/png'
+      return { media_type: media, path: `.hexagon/inbox/mock-${Date.now()}.${ext}`, bytes: (args?.bytes as unknown[] | undefined)?.length ?? 0, name } as T
+    }
+    case 'discard_attachments': return null as T
     case 'project_skill_document': return { project_root: '/mock', skill: String(args?.skill), digest: 'mock', content: '# Project skill' } as T
     case 'save_project_skill_document': return args?.document as T
     case 'experience_limits': return { entry_chars: 2000, load_count: 10, load_chars: 8000 } as T
