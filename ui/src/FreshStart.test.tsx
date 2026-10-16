@@ -65,3 +65,25 @@ describe('首屏建议点名角色（gap B3）', () => {
     await i18n.changeLanguage('en')
   })
 })
+
+// 票 16a：workbench#fresh 首屏期间输入条占位是「描述你要做的软件，或者点上面的建议」，首屏消失回到常规占位。
+describe('首屏占位（票 16a）', () => {
+  function Probe() {
+    return <span data-probe={fill.useFreshStartShown() ? 'fresh' : 'normal'} />
+  }
+  it('FreshStart 挂载期间为真，卸载后回落', async () => {
+    useUiStore.setState({ team: [], stages: [] })
+    vi.spyOn(api, 'currentProcessPack').mockRejectedValue(new Error('no pack'))
+    const probeEl = document.createElement('div')
+    document.body.appendChild(probeEl)
+    const probe = createRoot(probeEl)
+    const state = () => probeEl.querySelector('[data-probe]')!.getAttribute('data-probe')
+    await act(async () => { probe.render(<Probe />) })
+    expect(state()).toBe('normal')
+    const { root } = await render()
+    expect(state()).toBe('fresh')
+    await act(async () => { root.unmount() })
+    expect(state()).toBe('normal')
+    probe.unmount()
+  })
+})

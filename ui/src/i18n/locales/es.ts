@@ -588,7 +588,7 @@ export default {
     unsaved: 'Cambios sin guardar',
     version: 'v{{n}}',
   },
-  composer: {"mentionGroup": "Mencionar un rol", "sleeping": "Inactivo", "awake": "Activo", "artifactVersion": "Artefacto v{{version}}", "pathFailed": "No se pudieron cargar las rutas", "retry": "Reintentar", "popKeys": "↑↓ elegir · ↵ insertar · Esc cerrar", "pathFoot": "Escribe para buscar · hasta 60", "attach": "Adjuntar imágenes", "refHint": "Las referencias web se envían con este mensaje; nunca cuentan como tus instrucciones, menciones ni autorizaciones.", "placeholder": "Escribe al equipo, @ para mencionar un rol, # para una ruta",
+  composer: {"mentionGroup": "Mencionar un rol", "sleeping": "Inactivo", "awake": "Activo", "artifactVersion": "Artefacto v{{version}}", "pathFailed": "No se pudieron cargar las rutas", "retry": "Reintentar", "popKeys": "↑↓ elegir · ↵ insertar · Esc cerrar", "pathFoot": "Escribe para buscar · hasta 60", "attach": "Adjuntar imágenes", "refHint": "Las referencias web se envían con este mensaje; nunca cuentan como tus instrucciones, menciones ni autorizaciones.", "placeholderFresh": "Describe el software que quieres crear o elige una sugerencia de arriba", "placeholder": "Escribe al equipo, @ para mencionar un rol, # para una ruta",
     sending: "Enviando…",
     mentionHint: 'mención — entra en su contexto',
     pathHint: 'puntero de ruta — no inyecta el archivo',

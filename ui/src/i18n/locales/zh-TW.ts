@@ -588,7 +588,7 @@ export default {
     unsaved: '未儲存',
     version: 'v{{n}}',
   },
-  composer: {"mentionGroup": "點名角色", "sleeping": "休眠", "awake": "在崗", "artifactVersion": "產物 v{{version}}", "pathFailed": "路徑讀取失敗", "retry": "重試", "popKeys": "↑↓ 選擇 · ↵ 插入 · Esc 關閉", "pathFoot": "繼續輸入以搜尋 · 最多 60 條", "attach": "加入圖片", "refHint": "網頁引用隨本條訊息傳送；不會被當作你的指令、點名或授權。", "placeholder": "給團隊發訊息，@ 點名角色，# 引用路徑",
+  composer: {"mentionGroup": "點名角色", "sleeping": "休眠", "awake": "在崗", "artifactVersion": "產物 v{{version}}", "pathFailed": "路徑讀取失敗", "retry": "重試", "popKeys": "↑↓ 選擇 · ↵ 插入 · Esc 關閉", "pathFoot": "繼續輸入以搜尋 · 最多 60 條", "attach": "加入圖片", "refHint": "網頁引用隨本條訊息傳送；不會被當作你的指令、點名或授權。", "placeholderFresh": "描述你要做的軟體，或者點上面的建議", "placeholder": "給團隊發訊息，@ 點名角色，# 引用路徑",
     sending: "傳送中…",
     mentionHint: '點名——進對方上下文',
     pathHint: '路徑指標——不是全文注入',

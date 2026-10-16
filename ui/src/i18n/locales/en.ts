@@ -588,7 +588,7 @@ export default {
     unsaved: 'Unsaved changes',
     version: 'v{{n}}',
   },
-  composer: {"mentionGroup": "Mention a role", "sleeping": "Asleep", "awake": "Active", "artifactVersion": "Artifact v{{version}}", "pathFailed": "Couldn't load paths", "retry": "Retry", "popKeys": "↑↓ select · ↵ insert · Esc close", "pathFoot": "Type to search · up to 60", "attach": "Attach images", "refHint": "Page references go with this message; they are never treated as your instructions, mentions or approvals.", "placeholder": "Message the team, @ to mention a role, # for a path",
+  composer: {"mentionGroup": "Mention a role", "sleeping": "Asleep", "awake": "Active", "artifactVersion": "Artifact v{{version}}", "pathFailed": "Couldn't load paths", "retry": "Retry", "popKeys": "↑↓ select · ↵ insert · Esc close", "pathFoot": "Type to search · up to 60", "attach": "Attach images", "refHint": "Page references go with this message; they are never treated as your instructions, mentions or approvals.", "placeholderFresh": "Describe the software you want to build, or pick a suggestion above", "placeholder": "Message the team, @ to mention a role, # for a path",
     sending: "Sending…",
     mentionHint: 'mention — enters their context',
     pathHint: 'path pointer — not a full-file inject',

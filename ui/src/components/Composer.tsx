@@ -16,7 +16,7 @@ import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
 import { ContextMeter } from './ContextMeter'
-import { COMPOSER_FILL_EVENT, mergeFill } from '../composerFill'
+import { COMPOSER_FILL_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
 import type { AttachRef } from '../gen/AttachRef'
 import {
   atomicDeletion,
@@ -82,6 +82,7 @@ function fit(ta: HTMLTextAreaElement) {
 
 export function Composer() {
   const { t } = useTranslation()
+  const freshShown = useFreshStartShown()
   const team = useUiStore((s) => s.team)
   const invalidate = useUiStore((s) => s.invalidate)
   const pushToast = useUiStore((s) => s.pushToast)
@@ -468,7 +469,7 @@ export function Composer() {
                   setText(next >= 0 ? HISTORY[next] : '')
                 }
               }}
-              placeholder={mcpPending ? t('composer.initializing') : t('composer.placeholder')}
+              placeholder={mcpPending ? t('composer.initializing') : t(freshShown ? 'composer.placeholderFresh' : 'composer.placeholder')}
               disabled={mcpPending}
               // 票 03：粘贴图片（clipboardData.files）
               onPaste={(e) => {

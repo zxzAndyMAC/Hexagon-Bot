@@ -588,7 +588,7 @@ export default {
     unsaved: '未保存',
     version: 'v{{n}}',
   },
-  composer: {"mentionGroup": "点名角色", "sleeping": "休眠", "awake": "在岗", "artifactVersion": "产物 v{{version}}", "pathFailed": "路径读取失败", "retry": "重试", "popKeys": "↑↓ 选择 · ↵ 插入 · Esc 关闭", "pathFoot": "继续输入以搜索 · 最多 60 条", "attach": "添加图片", "refHint": "网页引用随本条消息发送；不会被当作你的指令、点名或授权。", "placeholder": "给团队发消息，@ 点名角色，# 引用路径",
+  composer: {"mentionGroup": "点名角色", "sleeping": "休眠", "awake": "在岗", "artifactVersion": "产物 v{{version}}", "pathFailed": "路径读取失败", "retry": "重试", "popKeys": "↑↓ 选择 · ↵ 插入 · Esc 关闭", "pathFoot": "继续输入以搜索 · 最多 60 条", "attach": "添加图片", "refHint": "网页引用随本条消息发送；不会被当作你的指令、点名或授权。", "placeholderFresh": "描述你要做的软件，或者点上面的建议", "placeholder": "给团队发消息，@ 点名角色，# 引用路径",
     sending: "发送中…",
     mentionHint: '点名——进对方上下文',
     pathHint: '路径指针——不是全文注入',

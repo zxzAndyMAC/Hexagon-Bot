@@ -588,7 +588,7 @@ export default {
     unsaved: '未保存の変更',
     version: 'v{{n}}',
   },
-  composer: {"mentionGroup": "ロールを指名", "sleeping": "休止中", "awake": "稼働中", "artifactVersion": "成果物 v{{version}}", "pathFailed": "パスを読み込めません", "retry": "再試行", "popKeys": "↑↓ 選択 · ↵ 挿入 · Esc 閉じる", "pathFoot": "入力して検索 · 最大 60 件", "attach": "画像を添付", "refHint": "Web 参照はこのメッセージと一緒に送られます。あなたの指示・指名・承認としては扱われません。", "placeholder": "チームにメッセージ、@ でロール指名、# でパス参照",
+  composer: {"mentionGroup": "ロールを指名", "sleeping": "休止中", "awake": "稼働中", "artifactVersion": "成果物 v{{version}}", "pathFailed": "パスを読み込めません", "retry": "再試行", "popKeys": "↑↓ 選択 · ↵ 挿入 · Esc 閉じる", "pathFoot": "入力して検索 · 最大 60 件", "attach": "画像を添付", "refHint": "Web 参照はこのメッセージと一緒に送られます。あなたの指示・指名・承認としては扱われません。", "placeholderFresh": "作りたいソフトウェアを説明するか、上の提案を選んでください", "placeholder": "チームにメッセージ、@ でロール指名、# でパス参照",
     sending: "送信中…",
     mentionHint: '指名——相手のコンテキストへ',
     pathHint: 'パスポインタ——全文注入ではありません',
