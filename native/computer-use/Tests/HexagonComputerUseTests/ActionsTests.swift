@@ -23,6 +23,22 @@ final class ActionsTests: XCTestCase {
         XCTAssertFalse(focusDispatched)
     }
 
+    // ui-redesign gap D8 (2026-10-17): the approval card's app row reads the
+    // observation's app_name; a screen observation must not invent one.
+    func testObservationCarriesLocalizedAppNameOnlyWhenKnown() throws {
+        let rect = NativeRect(CGRect(x: 0, y: 0, width: 10, height: 10))
+        let window = NativeObservation(snapshot_id: "s", window_id: 1, process_id: 1, bundle_id: "com.apple.systempreferences",
+            app_name: "System Settings", title: "Privacy", bounds: rect, image_width: 20, image_height: 20,
+            mime_type: "image/png", image_base64: "", elements: [], accessibility_warning: nil)
+        let screen = NativeObservation(snapshot_id: "s", scope: "screen", window_id: nil, process_id: nil, bundle_id: nil,
+            title: "Display", bounds: rect, image_width: 20, image_height: 20,
+            mime_type: "image/png", image_base64: "", elements: [], accessibility_warning: nil)
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(window)) as? [String: Any]
+        XCTAssertEqual(encoded?["app_name"] as? String, "System Settings")
+        let bare = try JSONSerialization.jsonObject(with: JSONEncoder().encode(screen)) as? [String: Any]
+        XCTAssertNil(bare?["app_name"] as? String)
+    }
+
     @MainActor
     func testUnconfirmedOrRejectedActivationNeverProceedsToWindowFocus() async {
         var focused = false

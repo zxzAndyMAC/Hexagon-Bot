@@ -193,3 +193,87 @@ fn computer_action_reason_never_reaches_the_native_request() {
     let schema = crate::tools::Tool::input_schema(&crate::tools::desktop::ComputerObserve);
     assert!(schema["properties"].get("reason").is_none());
 }
+
+/// ui-redesign gap D8 (2026-10-17, control#action): the card's app row is a
+/// display name + window title from the agent's own evidence, and the
+/// thumbnail carries the observation's pixel size so the UI can place the
+/// target ring. Names come only from exact matches — a wrong name is worse
+/// than the bundle id the UI falls back to.
+#[test]
+fn computer_action_card_names_the_app_and_carries_snapshot_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let wb = Workbench::for_test(dir.path(), &["QA"], None).unwrap();
+    let ctx = wb.ctx_for("a0", None);
+    let evidence = dir.path().join(".hexagon/computer-use/screenshots");
+    std::fs::create_dir_all(&evidence).unwrap();
+    let saved = evidence.join("0123456789abcdef0123456789abcdef.png");
+    std::fs::write(&saved, b"png").unwrap();
+    let path = saved.display().to_string();
+    let seed = |id: &str, output: serde_json::Value| {
+        wb.db.conn().execute(
+            "INSERT INTO tool_actions(id,identity,project_id,agent_id,tool_call_id,tool,input_json,input_digest,state,output_json)
+             VALUES(?1,?1,?2,'a0','call','computer_observe','{}','d','succeeded',?3)",
+            rusqlite::params![id, crate::PROJECT_ID, output.to_string()],
+        ).unwrap();
+    };
+    let ask = |input: serde_json::Value| {
+        let outcome = wb
+            .registry
+            .call(&wb.db, &ctx, "computer_action", input)
+            .unwrap();
+        let crate::tools::CallOutcome::Asked(qid) = outcome else {
+            panic!("computer_action must always ask: {outcome:?}");
+        };
+        crate::cards::get(&wb.db, &qid).unwrap().payload
+    };
+    seed("apps", json!({"ok":true,"applications":[
+        {"app_id":"rcpt-1","bundle_id":"com.apple.systempreferences","name":"系统设置","windows":[]},
+        {"app_id":"rcpt-2","bundle_id":"com.apple.Safari","name":"Safari","windows":[]}]}));
+    // Pre-D8 observation: no app_name, no image size → name from the listing.
+    seed("old", json!({"ok":true,"result":{"snapshot_id":"snap-old","screenshot_path":path,
+        "title":"隐私与安全性","bundle_id":"com.apple.systempreferences"}}));
+    seed("new", json!({"ok":true,"result":{"snapshot_id":"snap-new","screenshot_path":path,
+        "title":"隐私与安全性","bundle_id":"com.apple.systempreferences","app_name":"System Settings",
+        "image_width":1600,"image_height":1000}}));
+    seed("screen", json!({"ok":true,"result":{"snapshot_id":"snap-screen","scope":"screen",
+        "screenshot_path":path,"title":"Built-in Retina Display","bundle_id":null,
+        "image_width":1600,"image_height":1000}}));
+    seed("unknown", json!({"ok":true,"result":{"snapshot_id":"snap-unknown","screenshot_path":path,
+        "title":"Window","bundle_id":"com.example.unlisted"}}));
+
+    let payload = ask(json!({"op":"click","snapshot_id":"snap-new","x":412,"y":288}));
+    assert_eq!(
+        payload["app"],
+        json!({"name":"System Settings","title":"隐私与安全性","bundle_id":"com.apple.systempreferences"})
+    );
+    assert_eq!(payload["screenshot"]["image_width"], 1600);
+    assert_eq!(payload["screenshot"]["image_height"], 1000);
+
+    let payload = ask(json!({"op":"click","snapshot_id":"snap-old","x":1,"y":1}));
+    assert_eq!(payload["app"]["name"], "系统设置");
+    assert!(payload["screenshot"]["image_width"].is_null());
+
+    // Unlisted bundle: no name invented, bundle id + title survive for fallback.
+    let payload = ask(json!({"op":"click","snapshot_id":"snap-unknown","x":1,"y":1}));
+    assert_eq!(
+        payload["app"],
+        json!({"name":null,"title":"Window","bundle_id":"com.example.unlisted"})
+    );
+
+    // A screen observation's title is a display, not an app: no app row.
+    let payload = ask(json!({"op":"click","snapshot_id":"snap-screen","x":1,"y":1}));
+    assert!(payload["app"].is_null());
+
+    // A snapshot the agent never observed: nothing, never "the latest window".
+    let payload = ask(json!({"op":"click","snapshot_id":"snap-missing","x":1,"y":1}));
+    assert!(payload["app"].is_null());
+
+    // activate resolves its opaque receipt through the latest listing only.
+    let payload = ask(json!({"op":"activate","app_id":"rcpt-2"}));
+    assert_eq!(
+        payload["app"],
+        json!({"name":"Safari","title":null,"bundle_id":"com.apple.Safari"})
+    );
+    let payload = ask(json!({"op":"activate","app_id":"rcpt-stale"}));
+    assert!(payload["app"].is_null());
+}

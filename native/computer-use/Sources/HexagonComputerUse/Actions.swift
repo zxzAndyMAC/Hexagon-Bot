@@ -70,6 +70,10 @@ struct NativeObservation: Encodable, Sendable {
     let window_id: Int?
     let process_id: Int32?
     let bundle_id: String?
+    // ui-redesign gap D8 (2026-10-17): localized app name for the approval
+    // card's app row (「系统设置」, not com.apple.systempreferences). Display
+    // only; nil for screen scope and when the process has already exited.
+    var app_name: String? = nil
     let title: String
     let bounds: NativeRect
     let image_width: Int
@@ -444,9 +448,11 @@ final class ActionExecutor {
             let focused = try? await UIAutomationTarget.exactWindow(exact).pinningCurrentFocusedElement(using: automation).exactWindow?.focusedElement
             receipt = Receipt(id: snapshotID, identity: identity, bounds: bounds, imageSize: size, created: Date(), elementIDs: Set(elements.map(\.id)), focusedElement: focused)
             PreviewExecutor.shared.remember(snapshotID, identity: identity)
+            let running = NSRunningApplication(processIdentifier: identity.ownerProcessIdentifier)
             return NativeObservation(snapshot_id: snapshotID, window_id: window.windowID,
                 process_id: identity.ownerProcessIdentifier,
-                bundle_id: NSRunningApplication(processIdentifier: identity.ownerProcessIdentifier)?.bundleIdentifier,
+                bundle_id: running?.bundleIdentifier,
+                app_name: running?.localizedName.map { String($0.prefix(200)) },
                 title: String(window.title.prefix(500)), bounds: NativeRect(bounds),
                 image_width: Int(size.width), image_height: Int(size.height), mime_type: "image/png",
                 image_base64: png.base64EncodedString(), elements: elements, accessibility_warning: warning)

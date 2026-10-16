@@ -217,8 +217,10 @@ pub struct NativeReply {
     pub outcome: Option<Value>,
 }
 
+mod card;
 pub mod checkpoint;
 mod lease;
+pub(crate) use card::{card_app, card_screenshot};
 
 pub(crate) trait Backend: Send + Sync {
     fn needs_system_lease(&self) -> bool {
@@ -1270,51 +1272,6 @@ pub(crate) fn persisted_result(tool: &str, value: &Value) -> Value {
         result["image"] = json!({"media_type":"image/png","omitted":"local screenshot; observe again for fresh pixels"});
     }
     result
-}
-
-/// ui-redesign gap D6 (2026-10-16, control#action): the computer_action card
-/// shows the observation the action was planned on. Reuses the ticket 07/14
-/// evidence store — a reference (local path + label) to the observation whose
-/// snapshot_id the action names, never pixels, never a new copy. `activate`
-/// carries no snapshot, so it falls back to the caller's latest observation.
-///
-/// Best-effort and display-only, so it fails toward "no thumbnail": any lookup
-/// error, a mismatched snapshot or cleared evidence yields None and the card
-/// still asks. It must never block the ask, and approval never reads it — a
-/// stale picture would only mislead the owner, it cannot spend an action.
-pub(crate) fn card_screenshot(
-    db: &Db,
-    ctx: &crate::tools::ToolContext,
-    tool: &str,
-    input: &Value,
-) -> Option<Value> {
-    if tool != "computer_action" {
-        return None;
-    }
-    let output: String = db
-        .conn()
-        .query_row(
-            "SELECT output_json FROM tool_actions WHERE project_id=?1 AND agent_id=?2
-             AND tool='computer_observe' AND state='succeeded' AND output_json IS NOT NULL
-             AND (?3 IS NULL OR json_extract(output_json,'$.result.snapshot_id')=?3)
-             ORDER BY rowid DESC LIMIT 1",
-            rusqlite::params![ctx.project_id, ctx.agent_id, input["snapshot_id"].as_str()],
-            |row| row.get(0),
-        )
-        .ok()?;
-    let value: Value = serde_json::from_str(&output).ok()?;
-    let result = &value["result"];
-    let path = result["screenshot_path"].as_str()?;
-    let name = Path::new(path).file_name()?;
-    // Cleared evidence (owner Clear) must not resurrect as a broken thumbnail.
-    screenshot_files(&ctx.repo_root)
-        .ok()?
-        .iter()
-        .any(|file| file.file_name() == Some(name))
-        .then(|| {
-            json!({"screenshot_path": path, "snapshot_id": result["snapshot_id"],
-                "title": result["title"], "bundle_id": result["bundle_id"]})
-        })
 }
 
 fn screenshot_dir(root: &Path, create: bool) -> Result<PathBuf, String> {

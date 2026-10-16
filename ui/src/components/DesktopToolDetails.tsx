@@ -6,11 +6,14 @@ import { bindingFor, formatBinding, matches } from '../keymap'
 import { useUiStore } from '../store'
 import { Button } from '@/components/ui/button'
 import { ShortcutKbd } from '@/components/ui/kbd'
+import { sameImageSize } from '../computerTargetRing'
 
 // variant 'card'：电脑动作确认卡（components D8，control#action；ui-redesign gap D6）左栏 200 宽缩略，
 // 不带说明行（卡上 kv 已写应用 / 动作），放大仍走同一模态与同一受限读取 IPC。
-type Props = { output: Record<string, unknown>; projectId?: string; capturedAt?: string; variant?: 'card' }
-type ScreenshotResult = { screenshot_path?: string; title?: string; bundle_id?: string }
+// ring（gap D8）：动作点在缩略框里的比例位置（computerTargetRing.ringPoint 已换算 object-cover 裁切）；
+// 只有加载出的像素尺寸与证据记录的 image_width/height 一致才画——不是同一张图就不画，绝不画错位置。
+type Props = { output: Record<string, unknown>; projectId?: string; capturedAt?: string; variant?: 'card'; ring?: { left: number; top: number } | null }
+type ScreenshotResult = { screenshot_path?: string; title?: string; bundle_id?: string; image_width?: number; image_height?: number }
 
 // 截图证据（components D19「截图证据」，control#screen；票 ui-redesign 14 换皮）：工具行下 120 宽缩略
 // （16:10、--r-sm、card 阴影）+ 说明「截图证据 · 应用 · 时间」「点击放大，Esc 关闭」；放大是居中模态，
@@ -22,12 +25,13 @@ export function DesktopToolDetails(props: Props) {
   return <DesktopScreenshotDetails key={`${props.projectId ?? ''}:${result?.screenshot_path ?? ''}`} {...props} />
 }
 
-function DesktopScreenshotDetails({ output, capturedAt, variant }: Props) {
+function DesktopScreenshotDetails({ output, capturedAt, variant, ring }: Props) {
   const { t } = useTranslation()
   const [image, setImage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
   const [preview, setPreview] = useState(false)
+  const [sizeOk, setSizeOk] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const lifecycle = useRef({ generation: 0, requested: false })
   const result = output.result as ScreenshotResult | undefined
@@ -80,12 +84,16 @@ function DesktopScreenshotDetails({ output, capturedAt, variant }: Props) {
   return <div className={card ? 'desktop-tool-details' : 'desktop-tool-details mt-1'}>
     {output.requires_observation === true && <p role="status" className="text-[12px] text-orange">{t('computer.needsObservation')}</p>}
     {name && <figure className={card ? 'm-0' : 'mt-1 flex items-center gap-2'}>
-      <button ref={trigger} className={`desktop-screenshot-thumbnail hx-focus grid aspect-[16/10] ${card ? 'w-full' : 'w-[120px]'} rounded-[var(--r-sm)] flex-none cursor-zoom-in place-items-center overflow-hidden bg-inset p-0 text-[11px] text-ink-3 shadow-[var(--shadow-card)] disabled:cursor-default disabled:opacity-45`}
+      <button ref={trigger} className={`desktop-screenshot-thumbnail hx-focus grid aspect-[16/10] ${card ? 'relative w-full' : 'w-[120px]'} rounded-[var(--r-sm)] flex-none cursor-zoom-in place-items-center overflow-hidden bg-inset p-0 text-[11px] text-ink-3 shadow-[var(--shadow-card)] disabled:cursor-default disabled:opacity-45`}
         type="button" disabled={failed} aria-busy={busy}
         aria-label={t('computer.viewScreenshot')} title={title}
         onClick={event => { event.currentTarget.focus(); setPreview(true); if (!image) void load() }}
         onKeyDown={event => { if (matches(event.nativeEvent, bindingFor('viewDesktopScreenshot'))) { event.preventDefault(); event.currentTarget.click() } }}>
-        {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" className="size-full object-cover" /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
+        {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" className="size-full object-cover"
+          onLoad={event => setSizeOk(sameImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }, result?.image_width, result?.image_height))} /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
+        {card && ring && image && sizeOk && <span data-testid="computer-target-ring" aria-hidden="true"
+          className="computer-target-ring pointer-events-none absolute size-[22px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+          style={{ left: `${ring.left * 100}%`, top: `${ring.top * 100}%` }} />}
       </button>
       {!card && <figcaption className="min-w-0 text-[12px] text-ink-3 [overflow-wrap:anywhere]">{t('control.evidence', { label })}<br />{t('control.evidenceHint')}</figcaption>}
     </figure>}
