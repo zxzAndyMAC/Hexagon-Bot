@@ -91,7 +91,9 @@ it('the resident pill wears the accent identity, pauses and turns off through th
   expect(pause).toHaveBeenCalledWith(true, '/proj')
   expect(el.querySelector('[data-managed-state]')!.getAttribute('data-managed-state')).toBe('paused')
   expect(el.querySelector('.managed-pill')!.className).toContain('paused')
-  const offButton = [...document.querySelectorAll('[data-managed-menu] button')].find(b => b.textContent?.startsWith('Turn off project delegation'))!
+  // 票 16B（managed#exit / components D7）：弹层行文按原型「查看托管报告」「关闭托管」，不再复用键位名「关闭项目托管」。
+  expect(document.querySelector('[data-managed-menu]')!.textContent).toContain('View delegation report')
+  const offButton = [...document.querySelectorAll('[data-managed-menu] button')].find(b => b.textContent?.startsWith('Turn off delegation'))!
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(off)
   await act(async () => (offButton as HTMLButtonElement).click())
   expect(disable).toHaveBeenCalledWith(false, '/proj')

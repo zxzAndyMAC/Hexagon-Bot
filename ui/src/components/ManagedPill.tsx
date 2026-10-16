@@ -124,8 +124,8 @@ function PillMenu({ paused, processing, busy, label, summary, onReport, onPause,
       {/* gap A3：项目预算 = 项目累计花费 / 项目用量上限（托管「仍受项目用量预算约束」）；未设上限不画进度条。 */}
       {summary && <BudgetRow summary={summary} />}
     </div>
-    <button type="button" className={row} onClick={onReport} title={tip(t('delegation.report'), 'managedReport')}>
-      <Icon name="list" size={16} className="text-ink-2" />{t('delegation.report')}
+    <button type="button" className={row} onClick={onReport} title={tip(t('delegation.menuReport'), 'managedReport')}>
+      <Icon name="list" size={16} className="text-ink-2" />{t('delegation.menuReport')}
     </button>
     <button type="button" className={row} disabled={busy !== null} onClick={onPause}
       title={paused ? tip(t('delegation.resume'), 'managedResume') : tip(t('delegation.pause'), 'managedPause')}>
@@ -134,9 +134,9 @@ function PillMenu({ paused, processing, busy, label, summary, onReport, onPause,
       <span className="ml-auto pl-3 text-[12px] text-ink-3">{paused ? t('delegation.resumeDesc') : t('delegation.pauseDesc')}</span>
     </button>
     <div className="mx-1 my-1 h-px bg-line" />
-    <button type="button" className={`${row} text-red`} disabled={busy !== null} onClick={onOff} title={tip(t('delegation.turnOff'), 'managedDisable')}>
+    <button type="button" className={`${row} text-red`} disabled={busy !== null} onClick={onOff} title={tip(t('delegation.menuTurnOff'), 'managedDisable')}>
       {busy === 'off' ? <Spinner size={16} /> : <Icon name="close" size={16} />}
-      {t('delegation.turnOff')}
+      {t('delegation.menuTurnOff')}
       {mode && <span className="ml-auto pl-3 text-[12px] text-ink-3">{t('delegation.turnOffDesc', { mode: t(`approvalMode.${mode}`) })}</span>}
     </button>
     <p className="px-2.5 pt-1 pb-2 text-[12px] text-ink-3">{t('delegation.exitNote')}</p>
