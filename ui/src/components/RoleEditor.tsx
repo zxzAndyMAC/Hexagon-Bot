@@ -21,7 +21,8 @@ const btnSize = (density: Density) => (density === 'md' ? 'sm' : 'xs') as 'sm' |
 
 /** 角色编辑器（票 30）：项目覆盖行 + 实例字段 + 授权名单。
  *  编辑后下次激活生效；globs/grants 即时按新值判。 */
-export function RoleEditor({ agentId, onClose, density = 'sm' }: { agentId: string; onClose: () => void; density?: Density }) {
+/** footStart：保存行最左的附加动作（gap D2：设置团队详情把「移出团队」放在这里，原型 settings#team）。 */
+export function RoleEditor({ agentId, onClose, density = 'sm', footStart }: { agentId: string; onClose: () => void; density?: Density; footStart?: React.ReactNode }) {
   const { t } = useTranslation()
   const { team, invalidate } = useUiStore()
   const [d, setD] = useState<AgentDetail | null>(null)
@@ -172,6 +173,7 @@ export function RoleEditor({ agentId, onClose, density = 'sm' }: { agentId: stri
       <RoleChips label={t('agent.grantsMcp')}><EntityChips value={csv(mcpG)} onChange={(ids) => setMcpG(ids.join(', '))} source="mcp" /></RoleChips>
       <RoleChips label={t('agent.grantsSkill')}><EntityChips value={csv(skillG)} onChange={(ids) => setSkillG(ids.join(', '))} source="skills" /></RoleChips>
       <div className="flex items-center gap-2">
+        {footStart}
         <Button size={bs} variant="ghost" disabled={busy} onClick={draft}>{t('agent.draftAi')}</Button>
         <span className="flex-1" />
         <Button size={bs} variant="quiet" onClick={onClose}>{t('agent.cancel')}</Button>

@@ -69,6 +69,7 @@ pub mod skills;
 pub mod stallwatch;
 pub mod stampgate;
 pub mod subagent;
+pub mod team_removal;
 pub mod templates;
 pub mod tools;
 pub mod trace;

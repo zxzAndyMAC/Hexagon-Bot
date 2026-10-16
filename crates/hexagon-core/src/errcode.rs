@@ -129,6 +129,7 @@ impl_error_code!(
     Json,
     Db,
 );
+impl_error_code!(crate::team_removal::RemoveAgentError, Cards, Trace, Sqlite);
 impl_error_code!(crate::grants::GrantError, Sqlite, Cards, Trace, Db, Json,);
 impl_error_code!(
     crate::orchestra::OrchError,

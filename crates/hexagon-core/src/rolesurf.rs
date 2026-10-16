@@ -86,7 +86,7 @@ pub fn audit(db: &Db, ctx: &ToolContext, body: &str) -> Result<(), PropError> {
 fn role_agent_ids(db: &Db, project_id: &str, role: &str) -> Result<Vec<String>, PropError> {
     let mut st = db
         .conn()
-        .prepare("SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id")?;
+        .prepare("SELECT id FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL ORDER BY created_at, id")?;
     let ids: Vec<String> = st
         .query_map(rusqlite::params![project_id, role], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
@@ -103,7 +103,7 @@ pub fn apply(db: &Db, ctx: &ToolContext, body: &str, backup: &Path) -> Result<bo
     audit(db, ctx, body)?;
     let role = p["role"].as_str().unwrap_or("").to_string();
     let agent: String = db.conn().query_row(
-        "SELECT id FROM agents WHERE project_id=?1 AND role=?2 ORDER BY created_at, id LIMIT 1",
+        "SELECT id FROM agents WHERE project_id=?1 AND role=?2 AND removed_at IS NULL ORDER BY created_at, id LIMIT 1",
         rusqlite::params![ctx.project_id, role],
         |r| r.get(0),
     )?;

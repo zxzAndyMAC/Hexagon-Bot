@@ -805,6 +805,8 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "trigger_consumed",
     // ui-redesign gap D1：负责人在触发前取消「稍后继续」预约
     "trigger_cancelled",
+    // ui-redesign gap D2：负责人把 Agent 移出团队（软删，team_removal）
+    "agent_removed",
     // stall-watch 票 01–04：重触发 / 调查 / 入卡 / 收场
     "stall_carded",
     "stall_closed",

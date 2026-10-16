@@ -436,6 +436,8 @@ export const api = {
     call<string | null>('artifact_content_at', { path, version }),
   setAgentSleeping: (agentId: string, sleeping: boolean) =>
     call<void>('set_agent_sleeping', { agentId, sleeping }),
+  /** gap D2「移出团队」：core 软删 + 守门（agent_busy / agent_has_pending / agent_is_fastpath / agent_not_found）。 */
+  removeAgent: (agentId: string) => call<void>('remove_agent', { agentId }),
   team: () => call<TeamRow[]>('team'),
   requestAcceptanceException: (expected: string) => call<ExceptionRequest>('request_acceptance_exception', { expected }),
   confirmPerformanceBaseline: (measurement: number, expected: string, reason: string) => call<PerformanceBaselineConfirmation>('confirm_performance_baseline', { measurement, expected, reason }),
@@ -1430,6 +1432,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'session_verify_worktree':
       return null as T
     case 'set_agent_sleeping':
+    case 'remove_agent':
     case 'review_proposal':
     case 'confirm_proposal':
     case 'reject_proposal':
@@ -1460,7 +1463,16 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'set_experience_limits': return args?.limits as T
     case 'recover_experience': return [] as T
     case 'experience_history': return { items: [], next_cursor: null } as T
-    case 'experience_entries': return [] as T
+    // 功能缺口 D3：预览里项目技能 repo-notes 带两条经验（原型 settings#skills 的两行：有效 / 内容变更需复审），其余技能为空。
+    case 'experience_entries': {
+      if (args?.skill !== 'repo-notes') return [] as T
+      const entry = (entry_id: string, body: string, revision: number, author: string) => ({ schema_version: 1, entry_id, revision, project_id: 'mock', skill: 'repo-notes', body, notes: '',
+        conditions: { roles: [], stages: [], paths: [] }, sources: [{ review_event: 12, activation: 3, artifact_id: 'review-12', author, artifact_version: revision, artifact_digest: 'mock' }] })
+      return [
+        { entry: entry('safari-private', 'Safari 隐私模式下 setItem 会抛错', 3, '前端技术负责人复审'), state: 'active', match_reason: 'matched', recovery_pending: false, source_count: 1 },
+        { entry: entry('cache-hash', '缓存名需带构建哈希', 1, 'QA 测试记录'), state: 'changed', match_reason: 'matched', recovery_pending: false, source_count: 1 },
+      ] as T
+    }
     case 'experience_proposal': return null as T
     case 'proposals':
       return [

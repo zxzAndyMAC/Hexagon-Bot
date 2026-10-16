@@ -2,7 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { VirtuosoMockContext } from 'react-virtuoso'
-import './i18n'
+import i18n from './i18n'
 import { api, type SkillRow } from './api'
 import { bindingFor, formatBinding, resetBinding, setBinding, isMac } from './keymap'
 import { SettingsPage } from './components/SettingsPage'
@@ -59,7 +59,8 @@ it('renders a bounded 1024-skill list and searches unmounted names, preserving s
   await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
   expect(api.skillFiles).toHaveBeenLastCalledWith('fixture-1023')
   const searchStart = performance.now()
-  await input(el.querySelector<HTMLInputElement>('input[placeholder="Filter skills…"]')!, 'fixture-1023')
+  // gap D4：占位改为带总数「筛选 N 个技能」（原型 settings#skills），选择器跟着改，不再钉旧文案「Filter skills…」。
+  await input(el.querySelector<HTMLInputElement>(`input[placeholder="${i18n.t('skills.filterN', { count: 1024 })}"]`)!, 'fixture-1023')
   expect(el.textContent).toContain('fixture-1023')
   expect(el.textContent).not.toContain('fixture-0000')
   // 票 11：行内开关是 A10 Switch（role=switch）

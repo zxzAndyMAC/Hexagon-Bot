@@ -5,7 +5,7 @@
 // 「从模板添加」在详情位出模板选择面板（选中即 createRole(def) 复制物化进项目）。
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type ProvidersView, type RoleDef, type RoleTemplate } from '../../api'
+import { api, errText, type AgentDetail, type ProvidersView, type RoleDef, type RoleTemplate, type TeamRow } from '../../api'
 import { useUiStore } from '../../store'
 import { agentModelLabel, sharedSlots, slotLabel } from '../../modelpick'
 import { Avatar } from '@/components/ui/avatar'
@@ -126,6 +126,90 @@ function useTemplates() {
   return { tpls, error, load }
 }
 
+/** 团队详情副行「来自模板「X」· 本项目定制」（原型 settings#team；gap D2）。按名对模板库：
+ *  同名模板存在 → 来自模板，且职责/审阅/模型槽/技能任一不同 → 追加「本项目定制」；
+ *  无同名模板 → 本项目自建。模板在建项目时按名复制物化（ADR 0057），不存来源指针，按名比是唯一依据。 */
+export function templateOrigin(
+  role: string,
+  def: AgentDetail['def'] | null,
+  tpls: RoleTemplate[] | null,
+  t: (k: string, o?: Record<string, unknown>) => string,
+): string | null {
+  if (!tpls || !def) return null
+  const tp = tpls.find((x) => x.def.name === role)
+  if (!tp) return t('teamTpl.ownRole')
+  const same = tp.def.duty === def.duty && (tp.def.reviewer ?? null) === (def.reviewer ?? null)
+    && tp.def.model_slot === def.model_slot && tp.def.skills.join('\n') === def.skills.join('\n')
+  const from = t('wizard.roles.fromTemplate', { name: tp.def.name })
+  return same ? from : `${from} · ${t('wizard.roles.localCustom')}`
+}
+
+/** 项目 Agent 详情（gap D2）：头部「休眠 / 唤醒」，保存行左侧「移出团队」（AlertDialog danger，首焦取消）。
+ *  移出是 core 软删并守门（team_removal：在跑 / 有待决 / 快速通道指定人拒绝，原因码走 errors.*）。 */
+function AgentDetailPane({ member, tpls, onRemoved, onClose }: {
+  member: TeamRow
+  tpls: RoleTemplate[] | null
+  onRemoved: () => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const providers = useUiStore((s) => s.providers)
+  const avatars = useUiStore((s) => s.avatars)
+  const invalidate = useUiStore((s) => s.invalidate)
+  const pushToast = useUiStore((s) => s.pushToast)
+  const askConfirm = useUiStore((s) => s.askConfirm)
+  const [def, setDef] = useState<AgentDetail['def'] | null>(null)
+  const sleeping = member.status === 'sleeping'
+
+  useEffect(() => {
+    let live = true
+    api.agentDetail(member.id).then((d) => { if (live) setDef(d.def) }).catch(() => {})
+    return () => { live = false }
+  }, [member.id])
+
+  const toggleSleep = async () => {
+    try { await api.setAgentSleeping(member.id, !sleeping); await invalidate('team') }
+    catch (e) { pushToast(errText(e), 'err') }
+  }
+  const remove = () =>
+    askConfirm({
+      title: t('teamTpl.removeTitle', { name: member.role }),
+      body: t('teamTpl.removeBody'),
+      danger: true,
+      confirmLabel: t('teamTpl.remove'),
+      run: async () => {
+        try {
+          await api.removeAgent(member.id)
+          pushToast(t('teamTpl.removed', { name: member.role }), 'ok')
+          onRemoved()
+        } catch (e) { pushToast(errText(e), 'err') }
+      },
+    })
+
+  return (
+    <div data-agent-detail className="max-w-[560px]">
+      <DetailHead
+        lead={<Avatar agentId={member.id} name={member.role} size={40} src={avatars[member.id]} />}
+        title={member.role}
+        sub={templateOrigin(member.role, def, tpls, t) ?? slotLabel(member.model_slot, providers, t('agent.dedicatedTag'))}
+        actions={
+          <Button size="sm" data-agent-sleep onClick={() => void toggleSleep()}>
+            <Icon name={sleeping ? 'bolt' : 'sleep'} size={14} />{sleeping ? t('agent.wake') : t('agent.sleep')}
+          </Button>
+        }
+      />
+      <div className="mt-4">
+        <RoleEditor key={member.id} agentId={member.id} density="md" onClose={onClose}
+          footStart={
+            <Button size="sm" variant="ghost" className="text-red" data-agent-remove onClick={remove}>
+              {t('teamTpl.remove')}
+            </Button>
+          } />
+      </div>
+    </div>
+  )
+}
+
 const blank: RoleDef = { name: '', duty: '', reviewer: null, model_slot: 'chat', globs: [], skills: [] }
 
 /** 角色模板库（ADR 0057 + settings-3col 票 03）：内置 ∪ ~/.hexagon/roles.json。 */
@@ -195,7 +279,8 @@ function ProjectTeam({ head }: { head: React.ReactNode }) {
 
   // Launcher 进设置时 team 可能是空的——分区挂载即补拉慢切片。
   useEffect(() => { void refreshSlow(['team']) }, [refreshSlow])
-  useEffect(() => { if (mode === 'addTpl' && tpls === null) load() }, [mode, tpls, load])
+  // 详情副行「来自模板…」也要模板库（gap D2），选中 Agent 时同样补拉。
+  useEffect(() => { if ((mode === 'addTpl' || sel) && tpls === null) load() }, [mode, sel, tpls, load])
 
   const selAgent = team.find((m) => m.id === sel) ?? null
   const addFromTpl = async (tp: RoleTemplate) => {
@@ -270,16 +355,9 @@ function ProjectTeam({ head }: { head: React.ReactNode }) {
           </div>
         </div>
       ) : selAgent ? (
-        <div className="max-w-[560px]">
-          <DetailHead
-            lead={<Avatar agentId={selAgent.id} name={selAgent.role} size={40} src={avatars[selAgent.id]} />}
-            title={selAgent.role}
-            sub={slotLabel(selAgent.model_slot, providers, t('agent.dedicatedTag'))}
-          />
-          <div className="mt-4">
-            <RoleEditor key={selAgent.id} agentId={selAgent.id} density="md" onClose={() => setSel(null)} />
-          </div>
-        </div>
+        <AgentDetailPane member={selAgent} tpls={tpls}
+          onClose={() => setSel(null)}
+          onRemoved={() => { setSel(null); void refreshSlow(['team']) }} />
       ) : (
         <Empty icon="users" title={t('settings.nav_team')} desc={t('teamTpl.unselectedAgent')} />
       )}

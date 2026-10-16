@@ -12,11 +12,12 @@ import { Button } from '@/components/ui/button'
 import { Field, Input, Textarea } from '@/components/ui/input'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { Switch } from '@/components/ui/switch'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuFooter, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ExperienceEntries } from '../ExperienceEntries'
 import { Icon } from '../Icon'
 import { LoadingState } from '../LoadingState'
 import { CodeBlock, Md } from '../Md'
-import { DetailHead, Empty, ListDetail, ScanPanel, SubHead } from './kit'
+import { DetailHead, Empty, ListDetail, ScanPanel } from './kit'
 
 /** 来源徽标（settings#skills）：项目 info / 全局 neutral / 内置 line。 */
 export function OriginBadge({ origin, label }: { origin: string; label: string }) {
@@ -177,12 +178,10 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
           {isMd ? <Md>{skillMarkdownBody(content)}</Md> : <CodeBlock code={content} />}
         </div>
       )}
+      {/* 功能缺口 D3：小节头「经验条目（N）」+「历史」由 ExperienceEntries 自己出（它才知道条数）。 */}
       {skill.origin === 'project' && (
-        <>
-          <SubHead>{t('experience.entries')}</SubHead>
-          <ExperienceEntries key={skill.name} skill={skill.name} documentRevision={readRevision}
-            onRecovered={() => { setReadRevision((n) => n + 1); onSaved() }} />
-        </>
+        <ExperienceEntries key={skill.name} skill={skill.name} documentRevision={readRevision}
+          onRecovered={() => { setReadRevision((n) => n + 1); onSaved() }} />
       )}
     </div>
   )
@@ -280,6 +279,9 @@ export function SkillsSection() {
     } catch (e) { pushToast(errText(e), 'err') } finally { setBusy(false) }
   }
 
+  // 功能缺口 D4（原型 ld-foot「安装…」）：一个按钮开 A16 菜单（文件夹 / ZIP），替代原来并排两个且只在桌面壳
+  // 出现的按钮。安装 ≠ 授权（CONTEXT.md「能力授权」）：装进来只进清单，角色要在团队里勾选才用得上——菜单脚注写明。
+  // 浏览器预览没有本机文件对话框：菜单项禁用并写原因（A16 禁用行描述写原因），不静默无反应。
   const installFrom = async (directory: boolean) => {
     if (!isTauri) return
     try {
@@ -307,18 +309,29 @@ export function SkillsSection() {
       filterText={(s) => `${s.name} ${s.description}`}
       selected={creating ? null : selected}
       onSelect={(k) => { setSelected(k); setCreating(false) }}
-      searchPlaceholder={t('skills.filter')}
+      // 功能缺口 D4：占位带总数「筛选 38 个技能」（原型）；加载中 / 失败时总数未知，回落不带数的占位。
+      searchPlaceholder={skills ? t('skills.filterN', { count: skills.length }) : t('skills.filter')}
       emptyText={t('skills.empty')}
       foot={
         <>
           <Button size="xs" className="flex-1" onClick={() => { setCreating(true); setSelected(null) }}><Icon name="plus" size={14} />{t('skills.new')}</Button>
           <Button size="xs" className="flex-1" loading={scanning} onClick={scan}>{scanning ? t('skills.scanning') : t('skills.scan')}</Button>
-          {isTauri && (
-            <>
-              <Button size="xs" className="flex-1" onClick={() => installFrom(true)}>{t('skills.installDir')}</Button>
-              <Button size="xs" className="flex-1" onClick={() => installFrom(false)}>{t('skills.installZip')}</Button>
-            </>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="xs" className="flex-1" data-skill-install>{t('skills.install')}</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="top">
+              <DropdownMenuItem tall icon={<Icon name="folder" size={16} />} disabled={!isTauri}
+                description={isTauri ? t('skills.installDirHint') : t('skills.installDesktopOnly')} onSelect={() => void installFrom(true)}>
+                {t('skills.installDir')}
+              </DropdownMenuItem>
+              <DropdownMenuItem tall icon={<Icon name="install" size={16} />} disabled={!isTauri}
+                description={isTauri ? t('skills.installZipHint') : t('skills.installDesktopOnly')} onSelect={() => void installFrom(false)}>
+                {t('skills.installZip')}
+              </DropdownMenuItem>
+              <DropdownMenuFooter>{t('skills.installNote')}</DropdownMenuFooter>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </>
       }
       renderItem={(s) => (
