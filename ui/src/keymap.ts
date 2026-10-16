@@ -46,6 +46,7 @@ export type ActionId =
   | 'sessionContinueTrigger'
   | 'sessionCleanupWorktree'
   | 'sessionScheduleOnce'
+  | 'sessionCancelTrigger'
   | 'sessionCreateWorktree'
   | 'sessionVerifyWorktree'
 
@@ -169,6 +170,8 @@ const DEFAULTS: Record<ActionId, string> = {
   sessionContinueTrigger: 'alt+mod+shift+7',
   sessionCleanupWorktree: 'alt+mod+shift+6',
   sessionScheduleOnce: 'alt+mod+shift+5',
+  // ui-redesign gap D1：取消「稍后继续」预约；默认无绑定，负责人可在设置·键盘指定。
+  sessionCancelTrigger: '',
   sessionCreateWorktree: 'alt+mod+shift+w',
   sessionVerifyWorktree: 'alt+mod+shift+k',
 
@@ -339,6 +342,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'sessionContinueTrigger', labelKey: 'session.continue' },
   { id: 'sessionCleanupWorktree', labelKey: 'session.worktreeCleanup' },
   { id: 'sessionScheduleOnce', labelKey: 'session.scheduleLater' },
+  { id: 'sessionCancelTrigger', labelKey: 'session.cancelBooking' },
   { id: 'sessionCreateWorktree', labelKey: 'session.worktreeCreate' },
   { id: 'sessionVerifyWorktree', labelKey: 'session.worktreeVerify' },
 

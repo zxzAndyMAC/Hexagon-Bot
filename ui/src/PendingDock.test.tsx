@@ -112,6 +112,9 @@ describe('待决坞（ui-redesign 票 04，ADR 0089）', () => {
     expect(dock.querySelector('.dock-ic.err')).not.toBeNull()
     expect(dock.textContent).toContain('/tmp/wt')
     expect(dock.textContent).toContain('abcdef12')
+    // 票 16c：基线行值不再重复「基线」标签（kv 左列已写）——曾渲染成「基线 | 基线 main · abcdef12」
+    expect(dock.textContent).toContain('main · abcdef12')
+    expect(dock.textContent).not.toMatch(/基线\s*基线/)
     const create = dock.querySelector<HTMLButtonElement>('button[data-variant="primary"]')!
     expect(create.textContent).toContain(formatBinding(bindingFor('approve')))
     expect(dock.textContent).not.toMatch(/记住/)

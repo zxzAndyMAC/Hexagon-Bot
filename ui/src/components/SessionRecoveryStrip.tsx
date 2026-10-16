@@ -81,6 +81,8 @@ export function SessionRecoveryStrip() {
   const refreshFast = useUiStore((s) => s.refreshFast)
   const [busy, setBusy] = useState<string | null>(null)
   const [laterOpen, setLaterOpen] = useState(false)
+  // Gap D1（2026-10-16）：预设时间只选中，「预约」primary 才落预约；曾经点预设即预约，误点无从撤回。
+  const [laterPick, setLaterPick] = useState<string | null>(null)
   const [treeOpen, setTreeOpen] = useState(false)
   const [treePath, setTreePath] = useState('')
   const session = summary?.session ?? null
@@ -110,10 +112,16 @@ export function SessionRecoveryStrip() {
   }
   // A window-close pause has no interrupted run; resume then lifts the host only.
   const resume = () => act('resume', () => api.sessionResume(summary?.recovery_run_id ?? null))
-  const schedule = (fireAtMs: number) => {
-    setLaterOpen(false)
+  const openLater = (open: boolean) => { setLaterPick(null); setLaterOpen(open) }
+  const schedule = () => {
+    const choice = LATER_CHOICES.find((c) => c.key === laterPick)
+    if (!choice) return
+    // 按确认时刻起算，不按点选时刻——弹层停留期间「5 分钟后」不应缩水。
+    const fireAtMs = choice.at(new Date())
+    openLater(false)
     void act('later', () => api.sessionScheduleOnce(crypto.randomUUID(), Math.floor(fireAtMs / 1000)))
   }
+  const cancelBooking = (triggerId: string) => act('cancel', () => api.sessionCancelTrigger(triggerId), 'session.bookingCancelled')
   const requestCreate = () => {
     setTreeOpen(false)
     void act('tree', () => api.sessionRequestWorktree('create', treePath.trim()), 'session.worktreeRequested')
@@ -130,7 +138,8 @@ export function SessionRecoveryStrip() {
       if (session.status === 'running' && matches(event, bindingFor('sessionPause'))) return run(() => void act('pause', () => api.sessionPause()))
       if (session.status === 'failed' && !exhausted && matches(event, bindingFor('sessionReconnect'))) return run(() => void act('reconnect', () => api.sessionReconnect()))
       if (intent?.state === 'executing' && matches(event, bindingFor('sessionVerifyWorktree'))) return run(() => void verifyTree())
-      if (!terminal && !scheduled && matches(event, bindingFor('sessionScheduleOnce'))) return run(() => setLaterOpen(true))
+      if (!terminal && !scheduled && matches(event, bindingFor('sessionScheduleOnce'))) return run(() => openLater(true))
+      if (scheduled && matches(event, bindingFor('sessionCancelTrigger'))) return run(() => void cancelBooking(scheduled.trigger_id))
       if (!terminal && !session.worktree && !worktreePending && matches(event, bindingFor('sessionCreateWorktree'))) return run(() => { setTreePath(defaultWorktreePath(session)); setTreeOpen(true) })
       if (session.worktree?.created_by_session && !worktreePending && !intent && matches(event, bindingFor('sessionCleanupWorktree'))) return run(() => void requestCleanup())
     }
@@ -205,23 +214,48 @@ export function SessionRecoveryStrip() {
               onClick={() => void act('continue', () => api.sessionContinueTrigger(trigger.trigger_id))}>{t('session.continue')}</ActionButton>
           </div>
         ))}
-        {scheduled && <div className="text-[12px] text-ink-2" data-session-trigger="scheduled">{t('session.scheduledAt', { time: clock(scheduled.fire_at) })}</div>}
+        {scheduled && (
+          <div className="flex items-center gap-2" data-session-trigger="scheduled">
+            <span className="text-[12px] text-ink-2">{t('session.scheduledAt', { time: clock(scheduled.fire_at) })}</span>
+            <ActionButton action="sessionCancelTrigger" variant="ghost" className="ml-auto" loading={busy === 'cancel'}
+              onClick={() => void cancelBooking(scheduled.trigger_id)}>{t('session.cancelBooking')}</ActionButton>
+          </div>
+        )}
       </CardContent>
-      <CardFooter className="justify-start">
-        <span className="text-[12px] text-ink-3">{t('session.nextAction')}</span>
-        <span className="text-[13px]">{summary?.next_action ? label(t, `session.action_${summary.next_action}`, 'session.action_pending') : t('session.none')}</span>
-        {reasonCode && <CodeChip>{reasonCode}</CodeChip>}
-        <span className="ml-auto flex flex-wrap gap-1.5">
+      {/* 票 16c（fr 冒烟）：下一步行在动作放不下时整组换到下一行，而不是把「Rien à faire」挤成两行、原因码挤成省略号。 */}
+      <CardFooter className="flex-wrap justify-start" data-session-footer>
+        <span className="text-[12px] whitespace-nowrap text-ink-3">{t('session.nextAction')}</span>
+        <span className="text-[13px] whitespace-nowrap">{summary?.next_action ? label(t, `session.action_${summary.next_action}`, 'session.action_pending') : t('session.none')}</span>
+        {reasonCode && <CodeChip className="shrink-0">{reasonCode}</CodeChip>}
+        <span className="ml-auto flex flex-wrap justify-end gap-1.5">
           {!terminal && !scheduled && (
-            <Popover open={laterOpen} onOpenChange={setLaterOpen}>
+            <Popover open={laterOpen} onOpenChange={openLater}>
               <PopoverTrigger asChild>
                 <Button size="sm" variant="ghost">{t('session.scheduleLater')}</Button>
               </PopoverTrigger>
               <PopoverContent aria-label={t('session.scheduleTitle')}>
                 <div className="px-2 py-1.5 text-[12px] text-ink-3">{t('session.scheduleTitle')}</div>
-                {LATER_CHOICES.map((choice) => (
-                  <Button key={choice.key} size="sm" variant="ghost" className="w-full justify-start" onClick={() => schedule(choice.at(new Date()))}>{t(`session.${choice.key}`)}</Button>
-                ))}
+                <div role="group" aria-label={t('session.bookPick')}>
+                  {LATER_CHOICES.map((choice) => {
+                    const picked = laterPick === choice.key
+                    return (
+                      <Button key={choice.key} size="sm" variant={picked ? 'quiet' : 'ghost'} aria-pressed={picked} className="w-full justify-start" data-later-choice={choice.key}
+                        onClick={() => setLaterPick(choice.key)}>
+                        {t(`session.${choice.key}`)}
+                        {picked && <Icon name="check" size={14} className="ml-auto text-primary" />}
+                      </Button>
+                    )
+                  })}
+                </div>
+                <div className="flex justify-end px-1 pt-1.5 pb-0.5">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button size="sm" variant="primary" aria-disabled={laterPick ? undefined : true} data-later-confirm
+                        onClick={() => schedule()}>{t('session.schedule')}</Button>
+                    </TooltipTrigger>
+                    {!laterPick && <TooltipContent>{t('session.bookPick')}</TooltipContent>}
+                  </Tooltip>
+                </div>
               </PopoverContent>
             </Popover>
           )}

@@ -48,6 +48,18 @@ describe('SessionHost recovery strip (C12a/C12b)', () => {
     await i18n.changeLanguage('en')
   })
 
+  it('footer wraps actions onto their own row instead of squeezing next-action text (ticket 16c fr smoke)', async () => {
+    await i18n.changeLanguage('fr')
+    await render(base)
+    const footer = el.querySelector('[data-session-footer]')!
+    expect(footer.className).toContain('flex-wrap')
+    // 「Rien à faire」/ 原因码曾被三颗动作挤成两行与省略号
+    const [label, value] = [...footer.querySelectorAll(':scope > span')]
+    expect(label.className).toContain('whitespace-nowrap')
+    expect(value.className).toContain('whitespace-nowrap')
+    expect(footer.querySelector('[class*="shrink-0"]')?.textContent).toBe('owner_paused')
+  })
+
   it('renders status, turn, pending tier and the resume action in a non-English locale', async () => {
     await i18n.changeLanguage('zh-CN')
     await render(base)
@@ -156,6 +168,17 @@ describe('SessionHost recovery strip (C12a/C12b)', () => {
     const verify = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Verify result')!
     await act(async () => { verify.click() })
     expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ tone: 'err', code: 'worktree_binding_drift' })
+  })
+
+  // Gap D1：触发已到点时 core 拒绝取消，失败 toast 带 trigger_already_fired 原因码与已登记文案。
+  it('surfaces a refused cancel as an error toast carrying trigger_already_fired', async () => {
+    useUiStore.setState({ toasts: [] })
+    vi.spyOn(api, 'sessionCancelTrigger').mockRejectedValue({ code: 'trigger_already_fired', message: 'one-time trigger already fired: later-1' })
+    await render({ ...base, session: { ...base.session!, status: 'running' }, triggers: [trigger('scheduled')] })
+    expect(buttons().includes('Continue later…')).toBe(false)
+    const cancel = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Cancel booking')!
+    await act(async () => { cancel.click() })
+    expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ tone: 'err', code: 'trigger_already_fired' })
   })
 
   it('derives the default worktree path outside the project root', () => {

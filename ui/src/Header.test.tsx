@@ -50,6 +50,8 @@ describe('流程入口（ADR 0069；ADR 0088 迁到侧栏与头部 ⋯）', () =
     const host = await render(<><Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} /><FlowDialog /></>)
     expect(host.querySelector('select')).toBeNull()
     expect(host.querySelector('[data-project-block]')?.textContent).toContain('规格驱动')
+    // 票 16c（WCAG 2.5.3 label-in-name）：可读名包含可见的项目名与副标，曾只有「项目菜单 · 名」
+    expect(host.querySelector('[data-project-block]')?.getAttribute('aria-label')).toContain('规格驱动')
     const view = host.querySelector('button[aria-label="View flow"], button[aria-label="查看流程"]') as HTMLButtonElement
     await act(async () => { view.click() })
     const dialog = host.querySelector('[data-flow-dialog]')

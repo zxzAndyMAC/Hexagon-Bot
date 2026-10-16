@@ -44,6 +44,7 @@ import { ManagedReport } from './ManagedReport'
 import { parseTime } from '../usage'
 import { SkeletonRows } from '@/components/ui/skeleton'
 import { InlineError } from '@/components/ui/inline-error'
+import { keepTimelineFocus } from '../timelineFocus'
 
 // ui-audit 票 13（P2-16）：kind/subkind 回退保留但漏 key 必须留痕——
 // console.warn 一次/key，开发期漏译能被看见而不是静默吞掉。
@@ -893,6 +894,12 @@ export function Timeline() {
   const [range, setRange] = useState<{ start: number; end: number } | null>(null)
   const highlights = useMemo(() => markHighlights(marks, range), [marks, range])
   const areaRef = useRef<HTMLDivElement>(null)
+  // 票 16c：虚拟化重挂把聚焦行移出 DOM 时，焦点放回原行（退路：滚动容器），不掉到 body。
+  useEffect(() => {
+    const area = areaRef.current
+    if (!area) return
+    return keepTimelineFocus(area, () => area.querySelector<HTMLElement>('[data-virtuoso-scroller]'))
+  }, [])
   const jumpBottom = useJumpOffset(areaRef)
   const [compactRail, setCompactRail] = useState(false)
   useLayoutEffect(() => {

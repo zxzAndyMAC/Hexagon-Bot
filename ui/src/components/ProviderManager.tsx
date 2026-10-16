@@ -591,9 +591,10 @@ function SlotRow({
         : <Badge>{t('settingsUi.slotFallback')}</Badge>
   return (
     <div data-slot-row={slot} className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.3fr)_112px_92px] items-center gap-2 border-t border-line-soft px-3 py-2 first:border-t-0 live:hover:bg-hover">
-      <code className="min-w-0 truncate font-sans text-[13px] text-ink">
-        {label}
-        {isBuiltinSlot(slot) && <span className="font-mono text-[11px] text-ink-3"> {slot}</span>}
+      {/* 票 16c（fr 冒烟）：槽位名不截断——「Traduction des prompts」曾被省略号吃掉；名占一行可换行，槽位 id 另起一行。 */}
+      <code className="flex min-w-0 flex-col font-sans text-[13px] text-ink" title={isBuiltinSlot(slot) ? `${label} · ${slot}` : label}>
+        <span className="[overflow-wrap:anywhere]">{label}</span>
+        {isBuiltinSlot(slot) && <span className="truncate font-mono text-[11px] text-ink-3">{slot}</span>}
       </code>
       <NativeSelect aria-label={`${label} · ${t('settingsUi.colProvider')}`} className="h-[30px]" value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
         <option value="">{t('providers.pickProvider')}</option>

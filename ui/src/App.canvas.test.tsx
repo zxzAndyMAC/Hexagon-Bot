@@ -266,4 +266,41 @@ describe('SessionHost 恢复条（C12a）随时间线迁入主区', () => {
     expect(conversation().hidden).toBe(true)
     expect(canvas()!.contains(strip)).toBe(false)
   })
+
+  // Gap D1（2026-10-16）：曾经点预设时间即预约、且无法撤回。现在预设只选中，「预约」primary 才落预约；
+  // 已预约行给「取消预约」，走 session_cancel_trigger。
+  it('稍后继续：选预设不预约，「预约」确认后才调 IPC；已预约可取消', async () => {
+    const session = {
+      session_id: 'session-1a2b3c4d5e', project_id: 'p', project_root: '/work/demo', baseline: 'main', status: 'running' as const,
+      current_turn_id: 'run-1', worktree: null, worktree_intent: null, runtime: null, reconnect_attempts: 0, reconnect_budget: 3,
+      is_current: true, created_at: '', updated_at: '', last_branch: null, last_reason_code: null, last_elapsed_ms: 0,
+    }
+    const summary = { session, recovery_run_id: null, pending_count: 0, highest_pending_severity: null, recent_diagnostics: [], capabilities: [], triggers: [], next_action: null }
+    const booked = { trigger_id: 'later-9', session_id: session.session_id, project_root: '/work/demo', baseline: 'main', model_slot: 'default', permission_package: [], fire_at: 1_800_000_000, trace_id: 'turn:1', state: 'scheduled' as const, created_at: '', consumed_at: null }
+    const schedule = vi.spyOn(api, 'sessionScheduleOnce').mockResolvedValue(booked)
+    const cancel = vi.spyOn(api, 'sessionCancelTrigger').mockResolvedValue({ ...booked, state: 'cancelled' })
+    await act(async () => useUiStore.setState({ sessionSummary: summary, toasts: [] }))
+    const button = (text: string) => [...document.querySelectorAll('button')].find((b) => b.textContent === text) as HTMLButtonElement
+    await act(async () => { button('Continue later…').click() })
+    const confirm = document.querySelector('[data-later-confirm]') as HTMLButtonElement
+    expect(confirm.getAttribute('aria-disabled')).toBe('true')
+    await act(async () => { confirm.click() })
+    expect(schedule).not.toHaveBeenCalled()
+    await act(async () => { (document.querySelector('[data-later-choice="in30"]') as HTMLButtonElement).click() })
+    expect(schedule).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-later-choice="in30"]')!.getAttribute('aria-pressed')).toBe('true')
+    const before = Math.floor(Date.now() / 1000)
+    await act(async () => { (document.querySelector('[data-later-confirm]') as HTMLButtonElement).click() })
+    expect(schedule).toHaveBeenCalledTimes(1)
+    const fireAt = schedule.mock.calls[0][1]
+    expect(fireAt).toBeGreaterThanOrEqual(before + 30 * 60 - 1)
+    expect(fireAt).toBeLessThanOrEqual(before + 30 * 60 + 2)
+
+    await act(async () => useUiStore.setState({ sessionSummary: { ...summary, triggers: [booked] } }))
+    expect(el.querySelector('[data-session-trigger="scheduled"]')!.textContent).toContain('Continues at')
+    expect(button('Continue later…')).toBeUndefined()
+    await act(async () => { button('Cancel booking').click() })
+    expect(cancel).toHaveBeenCalledWith('later-9')
+    expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ text: 'Booking cancelled' })
+  })
 })

@@ -110,7 +110,8 @@ export function ApprovalModeSelector({ value, onChange, disabled = false, shortc
     <button ref={trigger} type="button" className={`approval-mode-trigger${value === 'broad' ? ' approval-mode-broad' : ''}`}
       disabled={disabled || pending} aria-haspopup="menu" aria-expanded={open} aria-controls={id}
       title={[t('approvalMode.label'), shortcut].filter(Boolean).join(' · ')}
-      aria-label={`${t('approvalMode.label')}: ${t(`approvalMode.${value}`)}`}
+      // 票 16c（WCAG 2.5.3）：托管段可见时也进可读名，否则读屏名与可见文字对不上。
+      aria-label={`${t('approvalMode.label')}: ${t(`approvalMode.${value}`)}${managed?.enabled ? ` | ${t('delegation.short')}` : ''}`}
       onClick={() => { setError(false); setOpen(!open) }}>
       {/* components D4：shield 14 + 模式名 + ▾/▴；托管中「帮我批准 | 托管」，托管段 --accent-ink */}
       <Icon name="shield" size={14} />
