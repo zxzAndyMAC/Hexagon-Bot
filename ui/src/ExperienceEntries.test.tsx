@@ -89,6 +89,11 @@ it('renders the prototype header, one-line rows and history for the open entry (
   expect([...host.querySelectorAll('[data-experience-disclosure] button')].map((b) => b.getAttribute('aria-expanded'))).toEqual(['false', 'false'])
   // 「历史」看展开的那条
   await act(async () => { rows[1].querySelector<HTMLButtonElement>('button[aria-expanded]')!.click() })
+  // 单行正文 = 标题：展开体不再重复一行同文（截图核对 2026-10-17）；多行正文展开后照常出全文。
+  expect(rows[1].querySelector('[data-experience-body]')!.textContent).not.toContain('Hash cache names')
+  await act(async () => { rows[0].querySelector<HTMLButtonElement>('button[aria-expanded]')!.click() })
+  expect(rows[0].querySelector('[data-experience-body]')!.textContent).toContain('more')
+  await act(async () => { rows[1].querySelector<HTMLButtonElement>('button[aria-expanded]')!.click() })
   const historyBtn = [...host.querySelectorAll('button')].find((b) => b.textContent === i18n.t('experience.historyShort'))!
   await act(async () => { historyBtn.click() })
   expect(historyBtn.getAttribute('aria-pressed')).toBe('true')

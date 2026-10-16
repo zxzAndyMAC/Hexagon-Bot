@@ -144,7 +144,8 @@ export function ExperienceEntries({ skill, onRecovered, selectedEntry, documentR
                 </button>
                 {expanded && (
                   <div data-experience-body className="px-4 pb-3">
-                    <p className="whitespace-pre-wrap text-ink">{entry.body}</p>
+                    {/* 单行经验的正文就是行标题——展开时不再重复一遍（截图核对 2026-10-17 发现标题与正文上下两行同文）。 */}
+                    {entry.body.trim() !== entryTitle(entry) && <p className="whitespace-pre-wrap text-ink">{entry.body}</p>}
                     {entry.notes && <p className="mt-1 text-[12px] text-ink-3">{entry.notes}</p>}
                     {(state === 'active' || state === 'changed') && <div className="mt-2 flex items-center gap-2">
                       <label className="flex min-w-0 flex-1 items-center gap-2 text-[12px] text-ink-3">{t('experience.revokeReason')}<input
