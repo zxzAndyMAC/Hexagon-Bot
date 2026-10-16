@@ -18,7 +18,9 @@ export function PermissionScope({ tool, shape, generalized = false }: { tool: st
  * 票 04（components D6 底栏、decisions#dock）：坞底栏的左说明 + 右按钮组——拒绝（quiet）·
  * 「允许一次 ▾」组合按钮（A1 split）。▾ 只在宿主给出可靠范围时出现；安全网动作只给单次与拒绝。
  * 范围菜单向上弹在坞上方（A16 弹层形），键盘行为沿用 ADR 0079 的自绘菜单。 */
-export function PermissionActions({ q, top = false }: { q: PendingQuestion; top?: boolean }) {
+/** noteText / approveLabel：卡种自定底栏左说明与主按钮文字（票 16B：电脑动作卡「结果不确定时，先观察再继续」·「执行这一次」）；
+ * 语义不变——主按钮仍是 answerPermission(once)。 */
+export function PermissionActions({ q, top = false, noteText, approveLabel }: { q: PendingQuestion; top?: boolean; noteText?: string; approveLabel?: string }) {
   const { t } = useTranslation()
   const [proposal, setProposal] = useState<PermissionShapeSuggestion | null>(null)
   const [ready, setReady] = useState(false)
@@ -58,7 +60,7 @@ export function PermissionActions({ q, top = false }: { q: PendingQuestion; top?
     setBusy(false)
   }
   const input = q.payload.input as Record<string, unknown> | undefined
-  const note = safety ? t('projectPermission.onceRequired') : ready && !proposal ? t('projectPermission.unavailable') : t('dock.onceNote')
+  const note = noteText ?? (safety ? t('projectPermission.onceRequired') : ready && !proposal ? t('projectPermission.unavailable') : t('dock.onceNote'))
   return <div ref={container} className="dock-perm" onKeyDown={(event) => {
     if (proposal && !busy && matches(event.nativeEvent, bindingFor('permissionOptions'))) {
       event.preventDefault(); event.stopPropagation(); setOpen(!open)
@@ -70,7 +72,7 @@ export function PermissionActions({ q, top = false }: { q: PendingQuestion; top?
     <span className="dock-note permission-scope">{note}</span>
     <DecisionButton variant="quiet" busy={busy} action="reject" showKey={top} onClick={() => { void choose('deny') }}>{t('cards.deny')}</DecisionButton>
     <span className="dock-split" data-split={proposal ? '' : undefined}>
-      <DecisionButton variant="primary" busy={busy} action="approve" showKey={top} onClick={() => { void choose('once') }}>{t('cards.allowOnce')}</DecisionButton>
+      <DecisionButton variant="primary" busy={busy} action="approve" showKey={top} onClick={() => { void choose('once') }}>{approveLabel ?? t('cards.allowOnce')}</DecisionButton>
       {proposal && <button ref={trigger} type="button" data-slot="button" data-variant="primary" className="dock-caret" disabled={busy}
         aria-haspopup="menu" aria-expanded={open} aria-controls={menuId}
         aria-label={t('projectPermission.options')} title={[t('projectPermission.options'), formatBinding(bindingFor('permissionOptions'))].filter(Boolean).join(' · ')}

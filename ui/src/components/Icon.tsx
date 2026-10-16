@@ -29,6 +29,8 @@ import { Calendar, TrendingDown, TrendingUp } from 'lucide-react'
 import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
 // ui-redesign 票 16B（foundations §7 原型名 lock）：feedback#empty「需要先打开项目」空态图标；此前误用 folder
 import { Lock } from 'lucide-react'
+// ui-redesign 票 16B（foundations §7 原型名 pointer → mouse-pointer-click）：control#action 电脑动作确认卡图标块
+import { MousePointerClick } from 'lucide-react'
 import { createLucideIcon } from 'lucide-react'
 
 // 2026-10-14 负责人裁决（foundations §7 补设计）：侧栏 / 画布开关图标表状态——打开 = 对应一侧窗格实心，
@@ -147,6 +149,7 @@ const ICONS = {
   cpu: Cpu,
   wand: Wand,
   collapse: Minimize2,
+  pointer: MousePointerClick,
   // ---- 待决坞决策卡（票 04，components D8 / D12）；key 与票 11、test 与票 07 共用 ----
   palette: Palette,
   branch: GitBranch,

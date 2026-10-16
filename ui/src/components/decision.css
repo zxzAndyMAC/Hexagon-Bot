@@ -95,6 +95,8 @@
 
 /* ---- 权限底栏：左说明 + 拒绝 + 「允许一次 ▾」组合按钮（A1 split）+ 向上弹的范围菜单（A16） ---- */
 .dock-perm { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; position: relative; }
+/* 票 16B（control#action 截图比对）：权限底栏自带左说明，外壳的空 .dock-note 也是 flex:1，会把说明挤成两行；有 .dock-perm 时收掉空占位 */
+.dock-f:has(> .dock-perm) > .dock-note:empty { display: none; }
 .dock-split { display: inline-flex; }
 .dock-split[data-split] > [data-variant='primary']:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 8px; }
 .dock-caret { display: inline-grid; place-items: center; height: 28px; padding: 0 8px 0 6px; margin-left: 1px; border: 0;
