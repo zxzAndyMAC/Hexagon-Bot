@@ -149,7 +149,8 @@ export function AgentTab({ agentId }: { agentId: string }) {
             : sleeping ? <Badge data-agent-state="sleeping"><Dot tone="off" />{t('side.sleeping')}</Badge>
             : <Badge data-agent-state="idle">{t('agentDetail.idle')}</Badge>}
         </div>
-        <Segmented className="mt-4" value={page} onValueChange={(v) => setPage(v as Page)} aria-label={t('agentDetail.pages')}>
+        {/* 票 16a（canvas#agent，D16）：卡内页签轨道拉满头卡宽，项仍靠左（原型 .seg 在纵向 flex 里被拉伸，实测 588 宽）。 */}
+        <Segmented className="mt-4 flex w-full" value={page} onValueChange={(v) => setPage(v as Page)} aria-label={t('agentDetail.pages')}>
           <SegmentedItem value="activity">{t('agentDetail.activity')}</SegmentedItem>
           <SegmentedItem value="duty">{t('agentDetail.duty')}</SegmentedItem>
           <SegmentedItem value="usage">{t('agentDetail.usage')}</SegmentedItem>
