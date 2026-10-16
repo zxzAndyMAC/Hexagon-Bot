@@ -914,7 +914,7 @@ export default {
     slot_role_draft: '角色起草', slot_brief: '說明起草', slot_flow_draft: '流程起草', slot_translate: '提示詞翻譯',
   },
   palette: {"canvas": "開關畫布", "settings": "開啟設定", "flow": "查看流程與品質檢查", "checksDesc": "測試 · 效能 · 無障礙", "agentDesc": "Agent", "artifactDesc": "產物", "move": "移動", "run": "執行", "dangerNote": "全員休眠等危險指令需二次確認", "emptyFor": "沒找到「{{q}}」", "title": "命令面板",
-    invariantCheck: '執行不變量體檢',
+    invariantCheck: '不變量檢查',
     invariantDone: '不變量體檢完成——{{count}} 處違規',
     requestPublish: '請求發佈（需在卡內確認）',
     placeholder: '輸入指令或搜尋…',

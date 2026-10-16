@@ -914,7 +914,7 @@ export default {
     slot_role_draft: '角色起草', slot_brief: '说明起草', slot_flow_draft: '流程起草', slot_translate: '提示词翻译',
   },
   palette: {"canvas": "开关画布", "settings": "打开设置", "flow": "查看流程与质量检查", "checksDesc": "测试 · 性能 · 可访问性", "agentDesc": "Agent", "artifactDesc": "产物", "move": "移动", "run": "执行", "dangerNote": "全员休眠等危险指令需二次确认", "emptyFor": "没找到「{{q}}」", "title": "命令面板",
-    invariantCheck: '运行不变量体检',
+    invariantCheck: '不变量检查',
     invariantDone: '不变量体检完成——{{count}} 处违规',
     requestPublish: '请求发布（需在卡内确认）',
     placeholder: '输入指令或搜索…',
