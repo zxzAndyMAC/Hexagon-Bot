@@ -57,7 +57,8 @@ export function EntityChips({
     <>
       <div className="flex flex-wrap items-center gap-1.5">
         {value.map((v) => (
-          <Badge key={v} variant="line" data-entity-chip={v} className="pr-1 font-mono">
+          // 正文字体的 line chip（entry#wz-roles / settings#team 技能行）；票 16B 前用等宽字，与原型不符。选择器列表里的 id 仍是等宽。
+          <Badge key={v} variant="line" data-entity-chip={v} className="pr-1">
             {v}
             <button
               type="button"
