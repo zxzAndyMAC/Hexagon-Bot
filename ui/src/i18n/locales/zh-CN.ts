@@ -461,7 +461,7 @@ export default {
     contextOverflow: '上下文撞限',
     contextHint: '上下文到顶暂停中。放行则以重建+裁剪的上下文续跑。',
     agreeContinue: '同意拨回',
-    rejectContinue: '驳回继续',
+    rejectContinue: '驳回，继续',
     stageStamp: '阶段盖章',
     proposalStamp: '提案盖章',
     publishConfirm: '确认发布',
