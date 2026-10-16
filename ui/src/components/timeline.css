@@ -199,6 +199,9 @@ button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tl-deliver .s { font-size: 12px; color: var(--ink-3); }
 .tl-deliver .tl-grow { min-width: 0; }
 .tl-deliver[data-superseded] { opacity: .6; }
+/* 选中：该产物正在画布当前页签（canvas#artifact `box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-sm)`） */
+.tl-deliver[data-current] { box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-card); }
+.tl-deliver[data-current]:focus-visible { box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-card), var(--focus-ring); }
 .tl-deliver > svg:last-child { color: var(--ink-3); }
 
 /* ---- 异议卡（C5 块形的提示色，无独立组件条目：沿用 flag 胶囊 + inset 卡） ---- */

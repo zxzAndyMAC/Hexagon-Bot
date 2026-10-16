@@ -372,8 +372,11 @@ function DeliveryCard({ item }: { item: TimelineItem }) {
   const superseded = useUiStore((s) => version > 0 && s.artifacts.some((a) => a.path === path && a.version > version))
   const chip = superseded ? { tone: '', key: 'timeline.deliverySuperseded' } : deliveryChip(String(p.status ?? ''))
   const sub = [String(p.kind ?? ''), version > 0 ? `v${version}` : ''].filter(Boolean).join(' · ')
+  // 选中态（canvas#artifact，票 16a 补）：该产物正是画布当前页签时 1.5px accent 环，与侧栏成员行「当前打开」同理
+  const current = useUiStore((s) => path !== '' && s.canvasOpen && s.activeTab === `art:${path}`)
   return (
     <button type="button" className="tl-deliver" title={path} data-superseded={superseded ? '' : undefined}
+      data-current={current ? '' : undefined} aria-current={current ? 'true' : undefined}
       onClick={() => path && openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })}>
       <span className="fi"><Icon name="file-text" size={16} /></span>
       <span className="tl-grow"><span className="p" style={{ display: 'block' }}>{path}</span>{sub && <span className="s">{sub}</span>}</span>
