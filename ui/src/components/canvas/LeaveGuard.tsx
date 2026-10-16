@@ -48,7 +48,9 @@ export function LeaveGuard({ title, body, saveLabel, discardLabel, onSave, onDis
   }, [busy, onCancel, saveAction, discardAction, cancelAction])
   return (
     <AlertDialog open>
-      <AlertDialogContent busy={busy != null} data-leave-guard className="w-[420px]"
+      {/* 票 16a（canvas#leave）：同 ConfirmDialog 去掉外壳 gap / 统一 padding，只留原型的 20 20 14 与子项 mt。
+          修复即文档：原先外壳 gap-3 叠在 mt-1 / mt-5 上，标题→说明、说明→按钮各宽 12，底边宽 6。 */}
+      <AlertDialogContent busy={busy != null} data-leave-guard className="w-[420px] gap-0 px-5 pt-5 pb-3.5"
         onOpenAutoFocus={(e) => { e.preventDefault(); saveRef.current?.focus() }}
         onEscapeKeyDown={(e) => e.preventDefault()}>
         <AlertDialogTitle>{title}</AlertDialogTitle>
