@@ -764,7 +764,7 @@ export default {
     stopGeneration: "Stop generating",
     stopGenerationHint: "Stop this request. A late result is discarded; your input stays.",
     questionsSkipped: "Questions could not be generated ({{reason}}), so the draft was written without them.",
-    providersHint: 'Configure a model provider before picking a directory. Continue needs an enabled provider, a saved key, and a default slot.',
+    providersHint: 'Every role on the team runs on a model. Set up the default model first; you can change it per role later.',
     providersReady: 'Ready',
     providersBlocked: 'An enabled provider, a saved key, and the default slot are all required.',
     providersApply: 'Save and bind default',

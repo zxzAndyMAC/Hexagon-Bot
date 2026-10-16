@@ -764,7 +764,7 @@ export default {
     stopGeneration: "Detener generación",
     stopGenerationHint: "Detiene esta solicitud. Un resultado tardío se descarta; tu entrada se conserva.",
     questionsSkipped: "No se pudieron generar preguntas ({{reason}}), así que el borrador se escribió sin ellas.",
-    providersHint: 'Configura un proveedor de modelo antes de elegir el directorio. Para continuar hacen falta un proveedor activado, una clave guardada y el slot default.',
+    providersHint: 'Cada rol del equipo funciona con un modelo. Configura primero el modelo predeterminado; después puedes cambiarlo por rol.',
     providersReady: 'Listo',
     providersBlocked: 'Falta un proveedor activado, la clave o el slot default.',
     providersApply: 'Guardar y vincular default',

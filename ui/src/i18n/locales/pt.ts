@@ -764,7 +764,7 @@ export default {
     stopGeneration: "Parar geração",
     stopGenerationHint: "Para esta solicitação. Um resultado tardio é descartado; sua entrada permanece.",
     questionsSkipped: "Não foi possível gerar perguntas ({{reason}}), então o rascunho foi escrito sem elas.",
-    providersHint: 'Configure um provedor de modelo antes de escolher o diretório. Para continuar é preciso um provedor ativado, uma chave salva e o slot default.',
+    providersHint: 'Cada papel da equipe funciona com um modelo. Configure primeiro o modelo padrão; depois você pode trocá-lo por papel.',
     providersReady: 'Pronto',
     providersBlocked: 'Falta um provedor ativado, a chave ou o slot default.',
     providersApply: 'Salvar e vincular default',

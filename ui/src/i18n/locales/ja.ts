@@ -764,7 +764,7 @@ export default {
     stopGeneration: "生成を停止",
     stopGenerationHint: "この要求を停止します。遅れて届いた結果は破棄され、入力は残ります。",
     questionsSkipped: "質問を生成できなかったため（{{reason}}）、質問なしで下書きしました。",
-    providersHint: 'ディレクトリの前にモデルプロバイダを設定します。有効なプロバイダ、保存済みキー、default スロットが揃うまで進めません。',
+    providersHint: 'チームの各ロールはモデルで動きます。まずデフォルトモデルを設定してください。あとからロールごとに変更できます。',
     providersReady: '準備完了',
     providersBlocked: '有効なプロバイダ、キー、default スロットのいずれかが不足しています。',
     providersApply: '保存して default をバインド',

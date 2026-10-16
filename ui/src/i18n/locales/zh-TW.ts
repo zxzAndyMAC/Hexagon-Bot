@@ -764,7 +764,7 @@ export default {
     stopGeneration: "停止產生",
     stopGenerationHint: "停止本次請求。遲到的結果會被捨棄，你的輸入保留。",
     questionsSkipped: "未能產生答問（{{reason}}），已直接起草。",
-    providersHint: '先設定模型服務商，再選目錄。啟用的供應商、已存的鑰匙和 default 槽三項齊全才能繼續。',
+    providersHint: '團隊裡每個角色都靠模型驅動。先配好預設模型，之後每個角色都可以單獨換。',
     providersReady: '已就緒',
     providersBlocked: '還缺啟用的供應商、鑰匙或 default 槽，不能進入下一步。',
     providersApply: '儲存並綁定 default',

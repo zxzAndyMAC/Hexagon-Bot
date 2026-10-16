@@ -764,7 +764,7 @@ export default {
     stopGeneration: "Arrêter la génération",
     stopGenerationHint: "Arrête cette requête. Un résultat tardif est ignoré ; votre saisie reste.",
     questionsSkipped: "Les questions n’ont pas pu être générées ({{reason}}) ; le brouillon a été rédigé sans elles.",
-    providersHint: 'Configurez un fournisseur de modèle avant de choisir le dossier. Un fournisseur activé, une clé enregistrée et le slot default sont requis pour continuer.',
+    providersHint: 'Chaque rôle de l’équipe s’appuie sur un modèle. Configurez d’abord le modèle par défaut ; vous pourrez le changer par rôle ensuite.',
     providersReady: 'Prêt',
     providersBlocked: 'Il manque un fournisseur activé, la clé ou le slot default.',
     providersApply: 'Enregistrer et lier default',
