@@ -440,7 +440,7 @@ export default {
   cards: {
     worktreeCreate: "建立工作樹",
     worktreeCleanup: "清理工作樹",
-    worktreeBaseline: "基線 {{baseline}} · {{commit}}",
+    worktreeBaseline: "{{baseline}} · {{commit}}",
     worktreeCleanupNote: "只在乾淨、停在基線 commit 時刪除檢出目錄，分支與提交保留。",
     worktreeCreateConfirm: "建立工作樹",
     worktreeCleanupConfirm: "清理工作樹",

@@ -440,7 +440,7 @@ export default {
   cards: {
     worktreeCreate: "Create worktree",
     worktreeCleanup: "Clean up worktree",
-    worktreeBaseline: "Baseline {{baseline}} · {{commit}}",
+    worktreeBaseline: "{{baseline}} · {{commit}}",
     worktreeCleanupNote: "Removes only a clean checkout still at the baseline commit; the branch and commits stay.",
     worktreeCreateConfirm: "Create worktree",
     worktreeCleanupConfirm: "Clean up worktree",

@@ -207,11 +207,12 @@ export function SessionRecoveryStrip() {
         ))}
         {scheduled && <div className="text-[12px] text-ink-2" data-session-trigger="scheduled">{t('session.scheduledAt', { time: clock(scheduled.fire_at) })}</div>}
       </CardContent>
-      <CardFooter className="justify-start">
-        <span className="text-[12px] text-ink-3">{t('session.nextAction')}</span>
-        <span className="text-[13px]">{summary?.next_action ? label(t, `session.action_${summary.next_action}`, 'session.action_pending') : t('session.none')}</span>
-        {reasonCode && <CodeChip>{reasonCode}</CodeChip>}
-        <span className="ml-auto flex flex-wrap gap-1.5">
+      {/* 票 16c（fr 冒烟）：下一步行在动作放不下时整组换到下一行，而不是把「Rien à faire」挤成两行、原因码挤成省略号。 */}
+      <CardFooter className="flex-wrap justify-start" data-session-footer>
+        <span className="text-[12px] whitespace-nowrap text-ink-3">{t('session.nextAction')}</span>
+        <span className="text-[13px] whitespace-nowrap">{summary?.next_action ? label(t, `session.action_${summary.next_action}`, 'session.action_pending') : t('session.none')}</span>
+        {reasonCode && <CodeChip className="shrink-0">{reasonCode}</CodeChip>}
+        <span className="ml-auto flex flex-wrap justify-end gap-1.5">
           {!terminal && !scheduled && (
             <Popover open={laterOpen} onOpenChange={setLaterOpen}>
               <PopoverTrigger asChild>

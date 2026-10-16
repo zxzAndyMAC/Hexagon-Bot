@@ -440,7 +440,7 @@ export default {
   cards: {
     worktreeCreate: "ワークツリーを作成",
     worktreeCleanup: "ワークツリーを片付け",
-    worktreeBaseline: "ベースライン {{baseline}} · {{commit}}",
+    worktreeBaseline: "{{baseline}} · {{commit}}",
     worktreeCleanupNote: "ベースラインのコミットのままでクリーンな場合だけチェックアウトを削除します。ブランチとコミットは残ります。",
     worktreeCreateConfirm: "作成する",
     worktreeCleanupConfirm: "片付ける",

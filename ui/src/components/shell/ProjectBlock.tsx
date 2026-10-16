@@ -48,7 +48,8 @@ export function ProjectBlock({ onProjectClosed }: { onProjectClosed: () => void 
         <button
           type="button"
           data-project-block
-          aria-label={`${t('sidebar.projectMenu')} · ${name}`}
+          // 票 16c（axe label-content-name-mismatch，WCAG 2.5.3）：可读名必须包含可见文字（项目名 + 副标题），菜单用途放末尾。
+          aria-label={[name, sub, t('sidebar.projectMenu')].filter(Boolean).join(' · ')}
           className="hx-press hx-focus mx-2.5 mt-0.5 mb-2 flex w-[calc(100%-20px)] cursor-pointer items-center gap-2.5 rounded-[var(--r-card)] px-2 py-1.5 text-left live:hover:bg-hover"
         >
           <Hexmark />

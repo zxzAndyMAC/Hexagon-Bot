@@ -725,6 +725,40 @@ const MOCK_SESSION_SUMMARY: SessionSummary = {
   triggers: [], next_action: null,
 }
 
+// 票 16c：`?mocksession` 让 SessionHost 黄金路径在浏览器 dev 里可走——暂停→继续、
+// 请求工作树→坞内工作树确认卡→确认后挂上、稍后继续预约。不带标志时保持静态样例（vitest 依赖）。
+const mockSessionOn = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mocksession')
+const MOCK_SESSION = {
+  status: 'running' as SessionRecord['status'], reason: 'session_started',
+  worktree: null as SessionRecord['worktree'],
+  card: null as null | { id: string; path: string },
+  triggers: [] as SessionSummary['triggers'],
+}
+const mockSessionSummary = (): SessionSummary => ({
+  ...MOCK_SESSION_SUMMARY,
+  session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: MOCK_SESSION.status, last_reason_code: MOCK_SESSION.reason, worktree: MOCK_SESSION.worktree },
+  triggers: MOCK_SESSION.triggers,
+})
+const mockWorktreeCard = () => MOCK_SESSION.card
+  ? [{ id: MOCK_SESSION.card.id, kind: 'worktree', agent_id: null, payload: { operation: 'create', path: MOCK_SESSION.card.path, baseline: 'main', baseline_commit: '3a7bca5e9f01', session_id: 'session-mock' }, state: 'queued' }]
+  : []
+function mockSessionCmd(cmd: string, args?: Record<string, unknown>): boolean {
+  if (!mockSessionOn()) return false
+  switch (cmd) {
+    case 'session_pause': MOCK_SESSION.status = 'paused'; MOCK_SESSION.reason = 'owner_paused'; return true
+    case 'session_resume': MOCK_SESSION.status = 'running'; MOCK_SESSION.reason = 'owner_resumed'; return true
+    case 'session_request_worktree': MOCK_SESSION.card = { id: 'q-tree', path: String(args?.path ?? '/mock/project-worktrees/session') }; return true
+    case 'confirm_worktree':
+      if (MOCK_SESSION.card) MOCK_SESSION.worktree = { path: MOCK_SESSION.card.path, baseline: 'main', baseline_commit: '3a7bca5e9f01', created_by_session: true, cleanup_requested: false }
+      MOCK_SESSION.card = null; MOCK_SESSION.reason = 'worktree_attached'; return true
+    case 'reject_worktree': MOCK_SESSION.card = null; return true
+    case 'session_schedule_once':
+      MOCK_SESSION.triggers = [{ trigger_id: String(args?.triggerId ?? args?.trigger_id ?? 't1'), session_id: 'session-mock', project_root: '/mock/project', baseline: 'main', model_slot: 'default', permission_package: [], fire_at: Number(args?.fireAt ?? args?.fire_at ?? 0), trace_id: 'mock', state: 'scheduled', created_at: '', consumed_at: null }]
+      MOCK_SESSION.reason = 'trigger_scheduled'; return true
+    default: return false
+  }
+}
+
 const mockAvatars: Record<string, string> = {
   // a1 预置自定义头像，走通 agentAvatar data URL 通路
   a1: `data:image/svg+xml;utf8,${encodeURIComponent(
@@ -1011,6 +1045,7 @@ function mock<T>(cmd: string, args?: Record<string, unknown>): T {
   if (MOCK_DECIDE_CMDS[cmd] && typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdecide')) {
     MOCK_DECIDED.add(MOCK_DECIDE_CMDS[cmd](args ?? {}))
   }
+  if (mockSessionCmd(cmd, args)) return null as T
   return mockReply<T>(cmd, args)
 }
 
@@ -1277,6 +1312,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'q-perm2', kind: 'permission', agent_id: 'a1', payload: { tool: 'bash', input: { cmd: 'rm -rf target && cargo build' }, reason: '构建产物损坏，安全网必问', safety_net: true }, state: 'queued' },
         { id: 'q-prop', kind: 'stamp', agent_id: 'a1', payload: { proposal_id: 'p2', surface: '工具白名单', warnings: ['改动基线权限'], warning_text: '改动基线权限' }, state: 'queued' },
         ...(mockDesign() ? [{ id: 'q-design', kind: 'escalation', agent_id: 'a2', payload: { sub: 'design_direction', revision: 1 }, state: 'queued' }] : []),
+        ...mockWorktreeCard(),
       ].filter((q) => !MOCK_DECIDED.has(q.id)) as T
     case 'usage':
       return {
@@ -1376,7 +1412,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
       return (ART_CONTENT[String(args?.path)]?.[Number(args?.version)] ?? null) as T
-    case 'session_summary': return MOCK_SESSION_SUMMARY as T
+    case 'session_summary': return (mockSessionOn() ? mockSessionSummary() : MOCK_SESSION_SUMMARY) as T
     case 'session_pause':
     case 'session_reconnect':
     case 'session_resume':

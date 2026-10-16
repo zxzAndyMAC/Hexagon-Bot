@@ -69,6 +69,17 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     root.unmount()
   })
 
+  it('槽位名不截断：名可换行、槽位 id 另起一行（票 16c fr 冒烟「Traduction des prompts」）', async () => {
+    const { el, root } = await render(<ProviderManager />)
+    const cell = el.querySelector('[data-slot-row="translate"] code')!
+    expect(cell.className).not.toContain('truncate')
+    const [name, id] = [...cell.children]
+    expect(name.className).not.toContain('truncate')
+    expect(id.textContent).toBe('translate')
+    expect(cell.getAttribute('title')).toContain('translate')
+    root.unmount()
+  })
+
   it('解绑读回后清空旧选择，不再把旧模型留在未绑槽中', async () => {
     vi.spyOn(api, 'removeSlotBinding').mockResolvedValue(undefined)
     const { el, root } = await render(<ProviderManager />)
