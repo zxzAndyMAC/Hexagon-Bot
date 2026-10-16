@@ -35,7 +35,7 @@ export function FeedbackSpecimen() {
           <Card><Empty icon="inbox" title="没有待决" desc="需要你拍板的事会停靠在输入条上方。" action={<Button size="sm"><Icon name="keyboard" size={12} />练习裁决快捷键</Button>} /></Card>
           <Card><Empty icon="search" title="没找到「部署」" desc="试试「发布」或「检验」；危险指令也在这里。" action={<Button size="sm">清空搜索</Button>} /></Card>
           <Card><Empty icon="chart-column" title="这段时间没有用量" desc="换一个时间范围，或者等团队开始工作。" action={<Button size="sm">近 30 天</Button>} /></Card>
-          <Card><Empty icon="folder" title="需要先打开项目" desc="权限和用量属于项目状态，无项目时不可用。" action={<Button size="sm" variant="primary">打开项目</Button>} /></Card>
+          <Card><Empty icon="lock" title="需要先打开项目" desc="权限和用量属于项目状态，无项目时不可用。" action={<Button size="sm" variant="primary">打开项目</Button>} /></Card>
           <Card><Empty icon="plug" title="还没有 MCP 服务" desc="从本机已有的客户端导入，或者手动添加。" action={<><Button size="sm">扫描本机</Button><Button size="sm">新建</Button></>} /></Card>
         </div>
       </Sec>

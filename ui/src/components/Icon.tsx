@@ -27,6 +27,8 @@ import { Wand } from 'lucide-react'
 import { Calendar, TrendingDown, TrendingUp } from 'lucide-react'
 // ui-redesign 票 07 输入条与命令面板（foundations §7 原型名 crosshair / flow→workflow / test→test-tube；focus 为补设计：专注模式）
 import { Crosshair, Focus, TestTube, Workflow } from 'lucide-react'
+// ui-redesign 票 16B（foundations §7 原型名 lock）：feedback#empty「需要先打开项目」空态图标；此前误用 folder
+import { Lock } from 'lucide-react'
 import { createLucideIcon } from 'lucide-react'
 
 // 2026-10-14 负责人裁决（foundations §7 补设计）：侧栏 / 画布开关图标表状态——打开 = 对应一侧窗格实心，
@@ -135,6 +137,7 @@ const ICONS = {
   search: Search,
   more: Ellipsis,
   clock: Clock,
+  lock: Lock,
   expand: Maximize2,
   // ui-redesign 票 03 画布（foundations §7：columns → columns-2「与对话并排」；「对话」页签复用票 10 的 message）
   columns: Columns2,

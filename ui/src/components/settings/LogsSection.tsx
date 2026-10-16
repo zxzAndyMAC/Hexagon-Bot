@@ -97,7 +97,7 @@ export function LogsSection({ projectless = false }: { projectless?: boolean }) 
       </div>
       <div data-logs-scroll className="min-h-0 flex-1 overflow-y-auto rounded-[var(--r-card)] bg-[var(--app-card)] shadow-[var(--shadow-card)]">
         {needProject ? (
-          <Empty icon="folder" title={t('settingsUi.needsProjectTitle')} desc={t('settings.logs_needProject')} />
+          <Empty icon="lock" title={t('settingsUi.needsProjectTitle')} desc={t('settings.logs_needProject')} />
         ) : rows.length === 0 ? (
           <Empty icon="logs" title={t('settings.logs_empty')} desc={t('settingsUi.logsEmptyHint')}
             action={<Button size="sm" onClick={refresh}>{t('settings.logs_refresh')}</Button>} />
