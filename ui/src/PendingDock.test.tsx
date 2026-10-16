@@ -130,6 +130,19 @@ describe('待决坞（ui-redesign 票 04，ADR 0089）', () => {
     expect(answer).not.toHaveBeenCalled()
   })
 
+  // 票 16a（decisions#dock / #collapsed）：坞展开时输入条占位提示先处理待决；收起成胶囊回到常规占位。
+  it('App：坞展开时输入条占位「先处理上面的待决…」，收起后回到常规占位', async () => {
+    const view = await render(<App />)
+    root = view.root
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+    expect(view.el.querySelector('[data-dock="open"]')).not.toBeNull()
+    const input = () => view.el.querySelector<HTMLTextAreaElement>('#composer-input')!
+    expect(input().placeholder).toBe('先处理上面的待决，或继续给团队发消息')
+    await act(async () => { useUiStore.getState().closePendingDialog() })
+    expect(view.el.querySelector('[data-dock="collapsed"]')).not.toBeNull()
+    expect(input().placeholder).toBe('给团队发消息，@ 点名角色，# 引用路径')
+  })
+
   it('⌘Esc 收起成胶囊：徽标数不变、不销卡；新卡到达自动展开；点胶囊再展开', async () => {
     const answer = vi.spyOn(api, 'answerPermission').mockResolvedValue()
     useUiStore.setState({ pending: [card(), card({ id: 'pub', kind: 'publish', payload: { remote: 'origin', baseline: 'main' } })] })
@@ -346,5 +359,27 @@ it('publish card shows what the push includes from the host payload', async () =
   const legacy = await kv({})
   expect(legacy.el.querySelector('.dock-kv')!.textContent).not.toContain('包含')
   for (const r of [full, unknown, legacy]) { await act(async () => r.root.unmount()); r.el.remove() }
+  await i18n.changeLanguage('en')
+})
+
+// 票 16a 回归（decisions#dock）：权限卡底栏的「批准后只放行这一次调用」靠左（原型 dock-f 左说明）。
+// 曾经 DecisionShell 无条件渲染空的 .dock-note 弹性占位，与 PermissionActions 的 .dock-perm 各 flex:1 对半分宽，
+// 说明被挤到底栏中间。note={null} = 按钮组自带说明，不再留占位；其余卡（不传 note）占位照旧把按钮推到右侧。
+it('权限卡底栏只有按钮组自带的一处说明，不再有空占位；不传 note 的卡仍留占位', async () => {
+  await i18n.changeLanguage('zh-CN')
+  vi.spyOn(api, 'permissionShapeSuggestion').mockResolvedValue(null)
+  const { el, root } = await render(<PendingCard top q={card()} />)
+  await flush()
+  const foot = el.querySelector('.dock-f')!
+  const notes = foot.querySelectorAll('.dock-note')
+  expect(notes).toHaveLength(1)
+  expect(notes[0].closest('.dock-perm')).not.toBeNull()
+  await act(async () => root.unmount())
+  el.remove()
+  const stall = await render(<PendingCard top q={card({ id: 's1', kind: 'stall', payload: { can_retry: true } })} />)
+  expect(stall.el.querySelector('.dock-f > .dock-note')).not.toBeNull()
+  await act(async () => stall.root.unmount())
+  stall.el.remove()
+  vi.restoreAllMocks()
   await i18n.changeLanguage('en')
 })

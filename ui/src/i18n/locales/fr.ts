@@ -588,7 +588,7 @@ export default {
     unsaved: 'Modifications non enregistrées',
     version: 'v{{n}}',
   },
-  composer: {"mentionGroup": "Mentionner un rôle", "sleeping": "En veille", "awake": "Actif", "artifactVersion": "Artefact v{{version}}", "pathFailed": "Impossible de charger les chemins", "retry": "Réessayer", "popKeys": "↑↓ choisir · ↵ insérer · Échap fermer", "pathFoot": "Tapez pour chercher · 60 au plus", "attach": "Joindre des images", "refHint": "Les références web partent avec ce message ; elles ne valent jamais instruction, mention ni autorisation de votre part.", "placeholderFresh": "Décrivez le logiciel à créer, ou choisissez une suggestion ci-dessus", "placeholder": "Écrivez à l'équipe, @ pour mentionner un rôle, # pour un chemin",
+  composer: {"mentionGroup": "Mentionner un rôle", "sleeping": "En veille", "awake": "Actif", "artifactVersion": "Artefact v{{version}}", "pathFailed": "Impossible de charger les chemins", "retry": "Réessayer", "popKeys": "↑↓ choisir · ↵ insérer · Échap fermer", "pathFoot": "Tapez pour chercher · 60 au plus", "attach": "Joindre des images", "refHint": "Les références web partent avec ce message ; elles ne valent jamais instruction, mention ni autorisation de votre part.", "placeholderPending": "Traitez d'abord la décision ci-dessus, ou continuez à écrire à l'équipe", "placeholderFresh": "Décrivez le logiciel à créer, ou choisissez une suggestion ci-dessus", "placeholder": "Écrivez à l'équipe, @ pour mentionner un rôle, # pour un chemin",
     sending: "Envoi…",
     mentionHint: 'mention — entre dans son contexte',
     pathHint: 'pointeur de chemin — pas d’injection complète',

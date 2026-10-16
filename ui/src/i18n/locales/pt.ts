@@ -588,7 +588,7 @@ export default {
     unsaved: 'Alterações não salvas',
     version: 'v{{n}}',
   },
-  composer: {"mentionGroup": "Mencionar uma função", "sleeping": "Inativo", "awake": "Ativo", "artifactVersion": "Artefato v{{version}}", "pathFailed": "Não foi possível carregar os caminhos", "retry": "Tentar de novo", "popKeys": "↑↓ escolher · ↵ inserir · Esc fechar", "pathFoot": "Digite para buscar · até 60", "attach": "Anexar imagens", "refHint": "As referências web vão com esta mensagem; nunca contam como suas instruções, menções ou autorizações.", "placeholderFresh": "Descreva o software que você quer criar ou escolha uma sugestão acima", "placeholder": "Escreva para a equipe, @ para mencionar uma função, # para um caminho",
+  composer: {"mentionGroup": "Mencionar uma função", "sleeping": "Inativo", "awake": "Ativo", "artifactVersion": "Artefato v{{version}}", "pathFailed": "Não foi possível carregar os caminhos", "retry": "Tentar de novo", "popKeys": "↑↓ escolher · ↵ inserir · Esc fechar", "pathFoot": "Digite para buscar · até 60", "attach": "Anexar imagens", "refHint": "As referências web vão com esta mensagem; nunca contam como suas instruções, menções ou autorizações.", "placeholderPending": "Resolva primeiro a decisão acima ou continue escrevendo para a equipe", "placeholderFresh": "Descreva o software que você quer criar ou escolha uma sugestão acima", "placeholder": "Escreva para a equipe, @ para mencionar uma função, # para um caminho",
     sending: "Enviando…",
     mentionHint: 'menção — entra no contexto dele',
     pathHint: 'ponteiro de caminho — não injeta o arquivo',
