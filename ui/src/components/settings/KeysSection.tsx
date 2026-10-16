@@ -58,7 +58,8 @@ function KeyRow({ id, label, onChanged }: { id: ActionId; label: string; onChang
         ) : (
           <button
             type="button"
-            aria-label={t('settingsUi.recordKey', { action: label })}
+            // 票 16c（WCAG 2.5.3）：可读名以可见键位开头，再说明「点此重录」。
+            aria-label={`${binding ? formatBinding(binding) : t('settingsUi.unbound')} · ${t('settingsUi.recordKey', { action: label })}`}
             onClick={() => { setProblem(null); setCapturing(true) }}
             className="hx-press hx-focus inline-flex h-6 min-w-12 cursor-pointer items-center justify-center rounded-[6px] bg-canvas px-2 font-mono text-[11.5px] font-medium text-ink-2 shadow-[inset_0_0_0_1px_var(--line)] live:hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
           >

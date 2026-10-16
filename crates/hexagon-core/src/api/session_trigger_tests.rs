@@ -484,3 +484,133 @@ fn continue_refused_by_a_pending_decision_names_the_reason() {
         .unwrap_err();
     assert_eq!(crate::errcode::ErrorCode::code(&error), "decision_pending");
 }
+
+fn trigger_state(wb: &Workbench, session_id: &str, trigger_id: &str) -> OneTimeTriggerState {
+    session_host::list_triggers(&wb.db, session_id)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.trigger_id == trigger_id)
+        .unwrap()
+        .state
+}
+
+fn cancel_events(wb: &Workbench) -> i64 {
+    wb.db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE project_id='p1' AND kind='system' AND json_extract(payload,'$.kind')='trigger_cancelled'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// Gap D1 (2026-10-16): the owner books a continue-later, then cancels it
+/// before it fires. The row stays as history in `cancelled`, a second cancel
+/// is a no-op, and the beat never continues it afterwards.
+#[test]
+fn owner_cancels_a_booked_trigger_once_and_the_beat_skips_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, session_id, _) = live_trigger_workbench(dir.path());
+    let provider = Arc::new(ScriptedProvider::new(vec![text_response("never")]));
+    wb.register_provider("default", provider.clone());
+    let later = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 600;
+    wb.schedule_session_trigger("later-cancel", later).unwrap();
+
+    let cancelled = wb.cancel_session_trigger("later-cancel").unwrap();
+    assert_eq!(cancelled.state, OneTimeTriggerState::Cancelled);
+    assert_eq!(cancel_events(&wb), 1);
+
+    let again = wb.cancel_session_trigger("later-cancel").unwrap();
+    assert_eq!(again, cancelled);
+    assert_eq!(
+        cancel_events(&wb),
+        1,
+        "idempotent cancel emits no second event"
+    );
+
+    // Even once its time passes, a cancelled row is neither expired nor run.
+    session_host::expire_due(&wb.db, "p1", later + 1).unwrap();
+    wb.session_trigger_beat().unwrap();
+    assert_eq!(
+        trigger_state(&wb, &session_id, "later-cancel"),
+        OneTimeTriggerState::Cancelled
+    );
+    assert!(provider.recorded().is_empty());
+    assert!(wb.continue_session_trigger_once("later-cancel").is_err());
+}
+
+/// Cancel after the trigger fired is refused with its own code and the fired
+/// row keeps its state; an unknown id reports not_found.
+#[test]
+fn cancel_after_the_trigger_fired_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut wb, session_id, _) = live_trigger_workbench(dir.path());
+    let provider = Arc::new(ScriptedProvider::new(vec![text_response("continued")]));
+    wb.register_provider("default", provider);
+    session_host::schedule_once(
+        &wb.db,
+        &session_id,
+        &dir.path().to_string_lossy(),
+        "main",
+        "fired-1",
+        "default",
+        vec![],
+        0,
+        "trace-fired-1",
+    )
+    .unwrap();
+    wb.session_trigger_beat().unwrap();
+    assert_eq!(
+        trigger_state(&wb, &session_id, "fired-1"),
+        OneTimeTriggerState::Consumed
+    );
+
+    let error = wb.cancel_session_trigger("fired-1").unwrap_err();
+    assert_eq!(
+        crate::errcode::ErrorCode::code(&error),
+        "trigger_already_fired"
+    );
+    assert_eq!(
+        trigger_state(&wb, &session_id, "fired-1"),
+        OneTimeTriggerState::Consumed
+    );
+    assert_eq!(cancel_events(&wb), 0);
+
+    let missing = wb.cancel_session_trigger("nope").unwrap_err();
+    assert_eq!(crate::errcode::ErrorCode::code(&missing), "not_found");
+}
+
+/// A due-but-unconsumed (expired) trigger is already handed to Continue; the
+/// strip shows it as expired, so cancel refuses rather than hiding it.
+#[test]
+fn cancel_of_an_expired_trigger_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wb, session_id, _) = live_trigger_workbench(dir.path());
+    session_host::schedule_once(
+        &wb.db,
+        &session_id,
+        &dir.path().to_string_lossy(),
+        "main",
+        "expired-1",
+        "default",
+        vec![],
+        5,
+        "trace-expired-1",
+    )
+    .unwrap();
+    session_host::expire_due(&wb.db, "p1", 10).unwrap();
+    let error = wb.cancel_session_trigger("expired-1").unwrap_err();
+    assert_eq!(
+        crate::errcode::ErrorCode::code(&error),
+        "trigger_already_fired"
+    );
+    assert_eq!(
+        trigger_state(&wb, &session_id, "expired-1"),
+        OneTimeTriggerState::Expired
+    );
+}

@@ -376,6 +376,11 @@ pub enum SessionError {
     TriggerNotReady(String),
     #[error("one-time trigger is cancelled: {0}")]
     TriggerCancelled(String),
+    /// Cancel arrived after the trigger came due (expired) or was consumed:
+    /// the continuation now belongs to the beat / the owner's Continue, so
+    /// cancel refuses instead of pretending to retract it (gap D1).
+    #[error("one-time trigger already fired: {0}")]
+    TriggerAlreadyFired(String),
     /// A permission or grant card is still waiting for the owner; resume and
     /// trigger continuation answer it first (code `decision_pending`).
     #[error("a permission or grant decision is still pending")]
@@ -1358,6 +1363,71 @@ pub fn schedule_once(
     )
     .map_err(|e| SessionError::Trace(e.to_string()))?;
     Ok(trigger)
+}
+
+/// Owner retracts a "continue later" before it fires (ui-redesign gap D1,
+/// 2026-10-16). Only `scheduled -> cancelled` moves; the UPDATE is guarded on
+/// `state='scheduled'`, so a beat that already expired the row wins and cancel
+/// reports `TriggerAlreadyFired` instead of racing the continuation. Repeating
+/// a cancel returns the cancelled row (idempotent, no second event).
+/// No binding or permission recheck: cancelling removes a future side effect
+/// and never starts one, so a drifted worktree or a pending card must not
+/// block it. Rejected alternative: deleting the row — it stays as history.
+pub fn cancel_once(
+    db: &Db,
+    session_id: &str,
+    trigger_id: &str,
+) -> Result<OneTimeTrigger, SessionError> {
+    let trigger = trigger_row(db, session_id, trigger_id)?;
+    let project_id = get(db, session_id)?.project_id;
+    let refuse = |trace_id: &str| {
+        crate::diag::note(
+            crate::diag::CLASS_REJECT,
+            true,
+            Some(&project_id),
+            None,
+            Some(trace_id),
+            Some(session_id),
+            "trigger_cancel",
+            "trigger_already_fired",
+            std::time::Instant::now(),
+        );
+        SessionError::TriggerAlreadyFired(trigger_id.into())
+    };
+    match trigger.state {
+        OneTimeTriggerState::Cancelled => return Ok(trigger),
+        OneTimeTriggerState::Expired | OneTimeTriggerState::Consumed => {
+            return Err(refuse(&trigger.trace_id))
+        }
+        OneTimeTriggerState::Scheduled => {}
+    }
+    let changed = db.conn().execute(
+        "UPDATE session_triggers SET state='cancelled' WHERE session_id=?1 AND trigger_id=?2 AND state='scheduled'",
+        rusqlite::params![session_id, trigger_id],
+    )?;
+    let current = trigger_row(db, session_id, trigger_id)?;
+    if changed == 0 {
+        return match current.state {
+            OneTimeTriggerState::Cancelled => Ok(current),
+            _ => Err(refuse(&current.trace_id)),
+        };
+    }
+    emit_trigger_diag(
+        &project_id,
+        session_id,
+        Some(&current.trace_id),
+        "trigger_cancel",
+        "trigger_cancelled",
+    );
+    db.append_event(
+        &project_id,
+        EventKind::System,
+        json!({"kind":"trigger_cancelled","session_id":session_id,"trigger_id":trigger_id,"trace_id":current.trace_id}),
+        None,
+        None,
+    )
+    .map_err(|e| SessionError::Trace(e.to_string()))?;
+    Ok(current)
 }
 
 /// Mark due scheduled requests expired. Opening a project may call this; it

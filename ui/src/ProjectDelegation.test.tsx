@@ -67,6 +67,8 @@ it('delegation is a separate switch in the approval menu, explained once, never 
   expect(trigger.textContent).toBe('Help me approve', /* host has not answered yet */)
   await act(async () => resolve(on))
   expect(trigger.textContent).toBe('Help me approve | Delegation')
+  // 票 16c（WCAG 2.5.3 label-in-name）：托管段可见时也进可读名
+  expect(trigger.getAttribute('aria-label')).toContain('Help me approve | Delegation')
 })
 
 it('the resident pill wears the accent identity, pauses and turns off through the host', async () => {

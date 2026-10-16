@@ -230,7 +230,8 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl-rs-kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
 .tl-rs-cell { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-radius: var(--r-card); background: var(--inset); box-shadow: inset 0 0 0 1px var(--line-soft); min-width: 0; }
 .tl-rs-cell > span { font-size: 12px; color: var(--ink-3); }
-.tl-rs-cell > b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 票 16c：值不截断——英/法/日的「2 passed · 1 sent back」在 1440 宽四格里被省略号吃掉复审结论；窄时换行，四格等高由 grid 拉齐。 */
+.tl-rs-cell > b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .tl-rs-skl { display: block; height: 18px; width: 60%; border-radius: 6px; background: linear-gradient(90deg, var(--canvas), var(--hover-2), var(--canvas)); background-size: 200% 100%; animation: tl-skl 1.4s linear infinite; }
 .tl-rs-label { margin: 16px 0 8px; font-size: 12px; color: var(--ink-3); }
 .tl-rs-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -313,3 +314,7 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl-intake-pre { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--inset); color: var(--ink-2); font-family: var(--font-mono); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 .tl-intake-edit { display: block; width: 100%; min-height: 160px; resize: vertical; border: none; outline: none; }
 .tl-intake-edit:focus-visible { box-shadow: var(--focus-ring); }
+
+/* 票 16c（可访问性抽查）：时间线滚动容器可 Tab 聚焦（键盘滚动），原先聚焦后无任何焦点环。
+   外环会被列边裁掉，所以用同 --focus-ring 两层的内嵌版。 */
+.tl [data-virtuoso-scroller]:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 0 4px var(--accent-tint); }

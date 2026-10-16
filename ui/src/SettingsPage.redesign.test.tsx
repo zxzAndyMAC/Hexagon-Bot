@@ -99,8 +99,10 @@ describe('键盘分区（E7）', () => {
   it('录制：冲突就地红字不写入；Esc 取消；新组合写入', async () => {
     await act(async () => root.render(<SettingsPage onBack={() => {}} initialSection="keys" />))
     const row = () => el.querySelector<HTMLElement>('[data-key-row="settings"]')!
-    const record = () => row().querySelector<HTMLButtonElement>('button[aria-label^="Record"]')!
+    // 票 16c（WCAG 2.5.3）：可读名改为「<当前键位> · Record a new shortcut for …」，可见键位在前；按包含匹配。
+    const record = () => row().querySelector<HTMLButtonElement>('button[aria-label*="Record a new shortcut"]')!
     const before = bindingFor('settings')
+    expect(record().getAttribute('aria-label')).toContain(record().textContent!)
     // 冲突：mod+K 已被命令面板占用
     await act(async () => record().click())
     expect(row().querySelector('[data-recording]')).not.toBeNull()
