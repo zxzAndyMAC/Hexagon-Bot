@@ -62,4 +62,20 @@ impl Workbench {
             &format!("turn:{turn_id}"),
         )?)
     }
+
+    /// Gap D1 (2026-10-16): the strip's 「取消预约」. Only the trigger id
+    /// crosses IPC; core resolves it against the current session, so an id
+    /// from another session reports `not_found` instead of touching its row.
+    pub fn cancel_session_trigger(
+        &self,
+        trigger_id: &str,
+    ) -> Result<crate::session_host::OneTimeTrigger, ApiError> {
+        let session = crate::session_host::current(&self.db, &self.project_id)?
+            .ok_or_else(|| crate::session_host::SessionError::NotFound(self.project_id.clone()))?;
+        Ok(crate::session_host::cancel_once(
+            &self.db,
+            &session.session_id,
+            trigger_id,
+        )?)
+    }
 }
