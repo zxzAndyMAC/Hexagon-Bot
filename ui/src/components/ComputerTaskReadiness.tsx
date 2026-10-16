@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useDesktopStatus } from '../useDesktopStatus'
+import { modelDisplayName } from '../modelpick'
 import type { ComputerModels } from '../gen/ComputerModels'
 
 // 任务前预检（components D19「预检提示」，control#readiness；票 ui-redesign 14 换皮）：卡 = image 图标块 warn + 标题 + 说明
@@ -72,6 +73,12 @@ export function ComputerTaskReadiness({ mentions, onSend }: { mentions: string[]
   const capture = status?.enabled && status.capture_preparation && status.capture_preparation !== 'ready' ? status.capture_preparation : null
   const modelIssue = warnings.length > 0 || unavailable
   // 关闭只收起当前这组提示；提示内容一变（换角色、换模型、准备状态变化）就重新出现。只提示，不拦截。
+  // 票 16B（control#readiness「QA 绑定的模型 GPT-6 mini 不支持图像输入…」）：不支持视觉且宿主报了模型 id 时，
+  // 说明写出模型展示名（服务商目录映射，同团队列表副标），并给出「换视觉模型 / 仍然发送」两条路；没有模型 id 时沿用通用句。
+  const modelLine = (role: { role: string }, model: { vision: string; model: string | null }) =>
+    model.vision === 'no_vision' && model.model
+      ? t('computer.model_no_vision_named', { role: role.role, model: modelDisplayName(providers, model.model) })
+      : t(`computer.model_${model.vision}`, { role: role.role })
   const signature = [capture, unavailable, ...warnings.map(({ role, model }) => `${role.id}:${model.vision}`)].join('|')
   if (!status?.enabled || (!capture && !modelIssue) || dismissed === signature) return null
   return <TooltipProvider>
@@ -85,9 +92,9 @@ export function ComputerTaskReadiness({ mentions, onSend }: { mentions: string[]
       <div className="mt-2 space-y-1 text-ink-2">
         {capture && <p role="status">{t(`computer.capture_${capture}`)}</p>}
         {unavailable && <p role="status">{t('computer.modelsUnavailable')}</p>}
-        {warnings.length === 1 && <p role="status">{t(`computer.model_${warnings[0].model.vision}`, { role: warnings[0].role.role })}</p>}
+        {warnings.length === 1 && <p role="status">{modelLine(warnings[0].role, warnings[0].model)}</p>}
         {warnings.length > 1 && <details><summary className="cursor-pointer">{t('computer.modelsNeedReview', { count: warnings.length })}</summary>
-          {warnings.map(({ role, model }) => <p key={role.id}>{t(`computer.model_${model.vision}`, { role: role.role })}</p>)}
+          {warnings.map(({ role, model }) => <p key={role.id}>{modelLine(role, model)}</p>)}
         </details>}
         {modelIssue && models && <p className="text-ink-3">{models.vision_slots.length ? t('computer.visionSlots', { slots: models.vision_slots.join(', ') }) : t('computer.noVisionSlots')}</p>}
       </div>

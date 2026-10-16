@@ -13,6 +13,7 @@ export default {
     "prepare_capture": "Revisar capturas",
     "modelSettings": "Revisar modelos de roles",
     "model_no_vision": "{{role}}: el modelo configurado no admite capturas. Elija un modelo visual en la configuración del equipo.",
+    "model_no_vision_named": "El modelo {{model}} de {{role}} no admite imágenes. Cambie a un modelo visual o envíe de todos modos (solo descripción de texto).",
     "model_unknown": "{{role}}: la capacidad visual es desconocida. Revise el modelo en la configuración del equipo.",
     "model_unconfigured": "{{role}}: modelo sin configurar o proveedor/clave no disponible.",
     "visionSlots": "Ranuras visuales configuradas: {{slots}}",

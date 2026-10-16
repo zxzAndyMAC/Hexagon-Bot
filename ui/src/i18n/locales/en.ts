@@ -13,6 +13,7 @@ export default {
     "prepare_capture": "Recheck screenshots",
     "modelSettings": "Check role models",
     "model_no_vision": "{{role}}: the configured model does not support screenshots. Choose a vision model in team settings.",
+    "model_no_vision_named": "{{role}}'s model {{model}} does not support screenshots (image input). Switch to a vision model, or send anyway with a text description only.",
     "model_unknown": "{{role}}: screenshot capability is unknown. Check the model capability in team settings.",
     "model_unconfigured": "{{role}}: the model is not configured or its provider/key is unavailable.",
     "visionSlots": "Configured vision slots: {{slots}}",

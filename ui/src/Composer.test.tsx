@@ -661,6 +661,8 @@ it('warns about the mentioned role before sending a computer task without changi
     })
     expect(el.textContent).toContain('Preparing screenshots')
     expect(el.textContent).toContain('does not support screenshots')
+    // 票 16B（control#readiness）：说明点名角色绑定的模型（目录无展示名时用 id）
+    expect(el.textContent).toContain("QA's model text-model")
     expect(el.textContent).toContain('vision')
     expect(send).not.toHaveBeenCalled()
     expect(useUiStore.getState().team[0].model_slot).toBe('chat')

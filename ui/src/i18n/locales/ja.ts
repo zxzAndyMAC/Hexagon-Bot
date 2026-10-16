@@ -13,6 +13,7 @@ export default {
     "prepare_capture": "スクリーンショットを再確認",
     "modelSettings": "役割のモデルを確認",
     "model_no_vision": "{{role}}：現在のモデルはスクリーンショットに対応していません。チーム設定で視覚モデルを選んでください。",
+    "model_no_vision_named": "{{role}} に割り当てたモデル {{model}} は画像入力に対応していません。視覚対応モデルに切り替えるか、そのまま送信できます（テキストの説明のみ）。",
     "model_unknown": "{{role}}：スクリーンショット対応が不明です。チーム設定でモデルの能力を確認してください。",
     "model_unconfigured": "{{role}}：モデル未設定、またはプロバイダー・キーが利用できません。",
     "visionSlots": "設定済み視覚スロット：{{slots}}",

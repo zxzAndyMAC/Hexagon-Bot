@@ -13,6 +13,7 @@ export default {
     "prepare_capture": "Verificar capturas novamente",
     "modelSettings": "Verificar modelos das funções",
     "model_no_vision": "{{role}}: o modelo configurado não suporta capturas. Escolha um modelo visual nas definições da equipa.",
+    "model_no_vision_named": "O modelo {{model}} de {{role}} não suporta imagens. Mude para um modelo visual ou envie mesmo assim (apenas descrição em texto).",
     "model_unknown": "{{role}}: a capacidade visual é desconhecida. Verifique o modelo nas definições da equipa.",
     "model_unconfigured": "{{role}}: modelo não configurado ou fornecedor/chave indisponível.",
     "visionSlots": "Slots visuais configurados: {{slots}}",

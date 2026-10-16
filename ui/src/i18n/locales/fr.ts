@@ -13,6 +13,7 @@ export default {
     "prepare_capture": "Revérifier les captures",
     "modelSettings": "Vérifier les modèles des rôles",
     "model_no_vision": "{{role}} : le modèle configuré ne prend pas en charge les captures. Choisissez un modèle visuel dans les paramètres de l’équipe.",
+    "model_no_vision_named": "Le modèle {{model}} de {{role}} ne prend pas en charge les images. Passez à un modèle visuel, ou envoyez quand même (description texte uniquement).",
     "model_unknown": "{{role}} : la capacité visuelle est inconnue. Vérifiez le modèle dans les paramètres de l’équipe.",
     "model_unconfigured": "{{role}} : modèle non configuré ou fournisseur/clé indisponible.",
     "visionSlots": "Emplacements visuels configurés : {{slots}}",

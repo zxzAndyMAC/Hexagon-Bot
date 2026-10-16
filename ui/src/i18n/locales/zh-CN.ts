@@ -13,6 +13,7 @@ export default {
     "prepare_capture": "重新检查截图",
     "modelSettings": "检查角色模型",
     "model_no_vision": "{{role}}：当前模型不支持截图。请在团队设置中选择视觉模型。",
+    "model_no_vision_named": "{{role}} 绑定的模型 {{model}} 不支持图像输入。可以换成支持视觉的模型，或者继续发送（只用文字描述）。",
     "model_unknown": "{{role}}：截图能力未知。请在团队设置中检查模型能力。",
     "model_unconfigured": "{{role}}：模型未配置，或供应商、密钥不可用。",
     "visionSlots": "已配置视觉槽：{{slots}}",
