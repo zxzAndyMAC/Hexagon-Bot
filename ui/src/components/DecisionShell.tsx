@@ -26,8 +26,11 @@ export function DecisionShell({ qid, cat, icon, title, sub, note, lead, actions,
   icon: IconName
   title: ReactNode
   sub?: ReactNode
-  /** 底栏左侧说明（12 ink-3，例「批准后只放行这一次调用」）。 */
-  note?: ReactNode
+  /** 底栏左侧说明（12 ink-3，例「批准后只放行这一次调用」）。不传时留一个空的弹性占位把按钮推到右侧；
+   *  传 `null` = 按钮组自带说明（权限卡 PermissionActions 的 `.dock-perm`），不再留占位。
+   *  修复即文档（票 16a decisions#dock）：曾经无条件渲染占位，它与 `.dock-perm` 各 flex:1 对半分宽，
+   *  「批准后只放行这一次调用」被挤到底栏中间，原型在左缘。 */
+  note?: ReactNode | null
   /** 底栏左侧次动作（ghost：查看 diff、重新判定…）。 */
   lead?: ReactNode
   /** 底栏右侧按钮组（拒绝 / 主动作）。 */
@@ -53,7 +56,7 @@ export function DecisionShell({ qid, cat, icon, title, sub, note, lead, actions,
       {(lead || note || actions) && (
         <div className="dock-f">
           {lead}
-          <span className="dock-note">{note}</span>
+          {note !== null && <span className="dock-note">{note}</span>}
           {actions}
         </div>
       )}

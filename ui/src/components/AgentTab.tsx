@@ -138,7 +138,9 @@ export function AgentTab({ agentId }: { agentId: string }) {
           </Button>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <Badge data-agent-model><Icon name="cpu" size={12} />{slotLabel(member.model_slot, providers, t('agent.dedicatedTag'))}</Badge>
+          {/* 票 16a（canvas#agent）：写模型展示名（TeamRow.model，与成员悬停卡同源）；解析不到才退回槽位标签。
+              修复即文档：原先只按槽位拼，dev 里显示「code」，看不出是哪个模型。 */}
+          <Badge data-agent-model><Icon name="cpu" size={12} />{member.model ?? slotLabel(member.model_slot, providers, t('agent.dedicatedTag'))}</Badge>
           <Badge data-agent-image={image.state} title={t('agentDetail.imageHint')}>{t('agentDetail.imageGen', {
             value: image.state === 'unconfigured' ? t('agentDetail.imageUnconfigured')
               : image.state === 'unsupported' ? t('agentDetail.imageUnsupported', { model: image.model }) : image.model,
@@ -147,7 +149,8 @@ export function AgentTab({ agentId }: { agentId: string }) {
             : sleeping ? <Badge data-agent-state="sleeping"><Dot tone="off" />{t('side.sleeping')}</Badge>
             : <Badge data-agent-state="idle">{t('agentDetail.idle')}</Badge>}
         </div>
-        <Segmented className="mt-4" value={page} onValueChange={(v) => setPage(v as Page)} aria-label={t('agentDetail.pages')}>
+        {/* 票 16a（canvas#agent，D16）：卡内页签轨道拉满头卡宽，项仍靠左（原型 .seg 在纵向 flex 里被拉伸，实测 588 宽）。 */}
+        <Segmented className="mt-4 flex w-full" value={page} onValueChange={(v) => setPage(v as Page)} aria-label={t('agentDetail.pages')}>
           <SegmentedItem value="activity">{t('agentDetail.activity')}</SegmentedItem>
           <SegmentedItem value="duty">{t('agentDetail.duty')}</SegmentedItem>
           <SegmentedItem value="usage">{t('agentDetail.usage')}</SegmentedItem>

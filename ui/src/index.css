@@ -528,6 +528,10 @@ input, textarea { font: inherit; color: var(--ink); }
 .msg-body.md-doc p { margin: 0 0 10px; }
 .msg-body.md-doc ul { list-style: disc; }
 .msg-body.md-doc ol { list-style: decimal; }
+/* 画布选区（components D14「选区 --accent-tint 底」，canvas#file `.hl`）：预览与代码视图里的原生选区，
+   以及浮条打开、焦点进「描述修改…」后由 SelectionBar 钉住的同一段（CSS Custom Highlight，票 16a）。 */
+[data-file-preview] ::selection, [data-code-view] ::selection { background: var(--accent-tint); }
+::highlight(hx-selbar) { background-color: var(--accent-tint); }
 /* StreamingText 票 06（beautiful-ui 借形）：live 正文——最新块浮入 + 尾端光标。
    粒度=块级：Md 每次整文重渲拿不到词级；:last-child 只标最新挂载块，
    段落边界跨过时新块播一次 stream-in，旧块动画已完不重放（票面接受的妥协）。*/

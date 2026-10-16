@@ -12,6 +12,25 @@ import { bindingFor, formatBinding } from '../../keymap'
 
 const BAR_H = 38
 const GAP = 8
+/** 选区高亮名（`::highlight(hx-selbar)`，index.css 定色）。 */
+export const SELBAR_HIGHLIGHT = 'hx-selbar'
+
+/** 浮条打开期间把 DOM 选区钉成 `--accent-tint` 高亮（components D14「选区 accent-tint 底」，canvas#file `.hl`）。
+ *  修复即文档（票 16a）：原先只靠原生 ::selection，焦点一进「描述修改…」输入框选区就消失，负责人看不见自己选了哪段。
+ *  只处理预览 / 代码视图里的 DOM 选区；Monaco 编辑态选区由编辑器自己画（失焦后仍保留非活动选区色）。
+ *  环境没有 CSS Custom Highlight API（jsdom、旧内核）时静默跳过——只是少一层视觉提示，不影响动作。 */
+function usePinnedHighlight(key: string) {
+  useEffect(() => {
+    if (!key || typeof CSS === 'undefined' || !('highlights' in CSS) || typeof Highlight === 'undefined') return
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
+    const range = sel.getRangeAt(0)
+    const host = range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement
+    if (!host?.closest('[data-file-preview], [data-code-view]')) return
+    CSS.highlights.set(SELBAR_HIGHLIGHT, new Highlight(range.cloneRange()))
+    return () => { CSS.highlights.delete(SELBAR_HIGHLIGHT) }
+  }, [key])
+}
 
 export function SelectionBar({ anchor, onClose }: { anchor: SelectionAnchor | null; onClose: () => void }) {
   const { t } = useTranslation()
@@ -21,6 +40,7 @@ export function SelectionBar({ anchor, onClose }: { anchor: SelectionAnchor | nu
   const key = anchor ? `${anchor.sel.path}|${anchor.x}|${anchor.y}|${anchor.sel.text}` : ''
   const [noteKey, setNoteKey] = useState(key)
   if (noteKey !== key) { setNoteKey(key); setNote('') }
+  usePinnedHighlight(key)
   useLayoutEffect(() => {
     if (!anchor || !bar.current) { setPos(null); return }
     const host = bar.current.offsetParent as HTMLElement | null

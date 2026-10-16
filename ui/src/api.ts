@@ -1445,6 +1445,15 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'sleep_all':
     case 'send_message':
       return null as T
+    // 票 16a（composer#attach 比对）：dev 下粘贴 / 拖入 / + 选图能出缩略图——原先 mock 落到 null，
+    // Composer 读 media_type 抛错只弹红 toast，附件区截不到。
+    case 'stage_attachment': {
+      const name = String(args?.name ?? 'image.png')
+      const ext = name.split('.').pop()?.toLowerCase() ?? 'png'
+      const media = ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' } as Record<string, string>)[ext] ?? 'image/png'
+      return { media_type: media, path: `.hexagon/inbox/mock-${Date.now()}.${ext}`, bytes: (args?.bytes as unknown[] | undefined)?.length ?? 0, name } as T
+    }
+    case 'discard_attachments': return null as T
     case 'project_skill_document': return { project_root: '/mock', skill: String(args?.skill), digest: 'mock', content: '# Project skill' } as T
     case 'save_project_skill_document': return args?.document as T
     case 'experience_limits': return { entry_chars: 2000, load_count: 10, load_chars: 8000 } as T

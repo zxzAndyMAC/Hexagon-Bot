@@ -148,6 +148,10 @@ describe('离开未保存（D17）', () => {
     await key(',', mod)
     const dialog = document.querySelector('[data-leave-guard]')!
     expect(dialog.textContent).toContain('README.md has unsaved changes')
+    // 票 16a 回归（canvas#leave）：去掉 A17 外壳的 gap-3 / p-5，间距只由子项 mt 给（原型 padding 20 20 14、标题→说明 4、说明→按钮 20）；
+    // 原先外壳 gap 叠在 mt 上，三段间距各多 12、底边多 6。
+    expect(dialog.className).toMatch(/\bgap-0\b/)
+    expect(dialog.className).toMatch(/\bpb-3\.5\b/)
     expect(el.querySelector('[data-settings-page]')).toBeNull()
     await act(async () => { (document.querySelector('[data-leave="cancel"]') as HTMLButtonElement).click() })
     expect(document.querySelector('[data-leave-guard]')).toBeNull()
