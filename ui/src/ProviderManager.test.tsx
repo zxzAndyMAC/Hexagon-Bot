@@ -237,10 +237,42 @@ describe('ProviderManager 模型窗口元数据（context-window 票 02）', () 
     try {
       await act(async () => [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true })))
-      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('Fetch'))!.click())
+      // review R3：「拉取列表」并入「检测并拉取模型」（原型 settings#models 单个按钮），先检测连接再拉取
+      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Check and fetch models')!.click())
       const saved = vi.mocked(api.saveProvider).mock.calls.at(-1)![0]
       expect(saved.models!.find((m) => m.id === 'mystery-x')?.caps).toEqual([])
       expect(saved.models!.find((m) => m.id === 'new-embedding')?.caps).toEqual(['embedding'])
+    } finally { await act(async () => root.unmount()); el.remove() }
+  })
+
+  // review R3（settings#models「检测并拉取模型」「搜索供应商」）：曾是「检测」+「拉取列表」两个按钮（调同一函数）、
+  // 占位「筛选供应商…」。现在一个按钮两段状态：检测连接 → 拉取模型；检测失败停在原因上，不拉列表。
+  it('检测并拉取模型是一个按钮两段状态，检测失败不拉列表', async () => {
+    let finishProbe!: (v: Awaited<ReturnType<typeof api.probeProviderKey>>) => void
+    const probe = vi.spyOn(api, 'probeProviderKey').mockReturnValue(new Promise((done) => { finishProbe = done }))
+    let finishFetch!: (v: Awaited<ReturnType<typeof api.fetchProviderModels>>) => void
+    const fetch = vi.spyOn(api, 'fetchProviderModels').mockReturnValue(new Promise((done) => { finishFetch = done }))
+    const { el, root } = await render(<ProviderManager />)
+    try {
+      expect(el.querySelector('input[placeholder="Search providers"]')).not.toBeNull()
+      await act(async () => [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true })))
+      const buttons = () => [...el.querySelectorAll('button')].map((b) => b.textContent)
+      expect(buttons().filter((x) => x === 'Check and fetch models')).toHaveLength(1)
+      expect(buttons()).not.toContain('Fetch list')
+      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Check and fetch models')!.click())
+      expect(buttons()).toContain('Checking connection…')
+      await act(async () => finishProbe({ ok: true, failure: null, status: 200, model_listed: null, window: null }))
+      expect(buttons()).toContain('Fetching models…')
+      await act(async () => finishFetch([]))
+      expect(buttons()).toContain('Check and fetch models')
+      expect(el.querySelector('[role="status"]')!.textContent).toBe('0 models fetched')
+
+      probe.mockResolvedValueOnce({ ok: false, failure: 'authentication', status: 401, model_listed: null, window: null })
+      fetch.mockClear()
+      await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Check and fetch models')!.click())
+      expect(fetch).not.toHaveBeenCalled()
+      expect(el.querySelector('[role="status"]')!.className).toContain('text-red')
     } finally { await act(async () => root.unmount()); el.remove() }
   })
 

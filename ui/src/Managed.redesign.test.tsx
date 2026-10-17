@@ -48,8 +48,8 @@ it('the strip appears only while delegation is active with items, and jumps to t
     { id: 'q2', kind: 'publish', agent_id: 'a0', payload: {}, state: 'queued' },
   ])
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    { event_id: 41, card_id: 'q9', card_kind: 'permission', action: 'allow', reason: 'r', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
-    { event_id: 40, card_id: 'q1', card_kind: 'permission', action: 'deny', reason: 'r', via: 'model', outcome: 'retry', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
+    { event_id: 41, card_id: 'q9', card_kind: 'permission', action: 'allow', reason: 'r', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
+    { event_id: 40, card_id: 'q1', card_kind: 'permission', action: 'deny', reason: 'r', via: 'model', outcome: 'retry', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
   ])
   const jumped: number[] = []
   const listen = (e: Event) => jumped.push((e as CustomEvent<number>).detail)
@@ -76,7 +76,7 @@ it('renders a managed decision as an authored row with the host-classified resul
   vi.spyOn(api, 'projectDelegation').mockResolvedValue({ ...on, enabled: false })
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([])
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    { event_id: 40, card_id: 'q1', card_kind: 'permission', action: 'allow', reason: 'project network task', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
+    { event_id: 40, card_id: 'q1', card_kind: 'permission', action: 'allow', reason: 'project network task', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
   ])
   // Three in a row would fold as system events; managed decisions must not.
   // projectRoot null → Timeline reads the store's legacy timeline instead of a host window page.
@@ -97,8 +97,8 @@ it('pins the delegation report instead of the return summary while delegating', 
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([])
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    { event_id: 40, card_id: 'q1', card_kind: 'publish', action: 'deny', reason: 'no_target', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'in_scope', evidence: 'model_choice' },
-    { event_id: 41, card_id: 'q2', card_kind: 'permission', action: 'allow', reason: 'ok', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice' },
+    { event_id: 40, card_id: 'q1', card_kind: 'publish', action: 'deny', reason: 'no_target', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
+    { event_id: 41, card_id: 'q2', card_kind: 'permission', action: 'allow', reason: 'ok', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
   ])
   useUiStore.setState({ projectRoot: null, timeline: [decision(40, 'q1'), sys(50, { away_secs: 1200 }, 'return_summary')] })
   await mount(<Timeline />)

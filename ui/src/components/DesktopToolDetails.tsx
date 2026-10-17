@@ -6,13 +6,15 @@ import { bindingFor, formatBinding, matches } from '../keymap'
 import { useUiStore } from '../store'
 import { Button } from '@/components/ui/button'
 import { ShortcutKbd } from '@/components/ui/kbd'
-import { sameImageSize } from '../computerTargetRing'
+import { ringPoints, sameImageSize, type RingFacts, type TargetRing } from '../computerTargetRing'
 
 // variant 'card'：电脑动作确认卡（components D8，control#action；ui-redesign gap D6）左栏 200 宽缩略，
 // 不带说明行（卡上 kv 已写应用 / 动作），放大仍走同一模态与同一受限读取 IPC。
-// ring（gap D8）：动作点在缩略框里的比例位置（computerTargetRing.ringPoint 已换算 object-cover 裁切）；
+// ringFacts（gap D8 → review R4）：动作点的事实（坐标 / 快照 / 像素尺寸），缩略按 16:10 object-cover 裁切、
+// 放大模态按图本身宽高比各自换算（computerTargetRing.ringPoints；drag 画起点 + 终点）。
 // 只有加载出的像素尺寸与证据记录的 image_width/height 一致才画——不是同一张图就不画，绝不画错位置。
-type Props = { output: Record<string, unknown>; projectId?: string; capturedAt?: string; variant?: 'card'; ring?: { left: number; top: number } | null }
+// review R4 之前放大模态不画圈（reconciliation 偏差 12 剩余差异）。
+type Props = { output: Record<string, unknown>; projectId?: string; capturedAt?: string; variant?: 'card'; ringFacts?: RingFacts | null }
 type ScreenshotResult = { screenshot_path?: string; title?: string; bundle_id?: string; image_width?: number; image_height?: number }
 
 // 截图证据（components D19「截图证据」，control#screen；票 ui-redesign 14 换皮）：工具行下 120 宽缩略
@@ -25,7 +27,7 @@ export function DesktopToolDetails(props: Props) {
   return <DesktopScreenshotDetails key={`${props.projectId ?? ''}:${result?.screenshot_path ?? ''}`} {...props} />
 }
 
-function DesktopScreenshotDetails({ output, capturedAt, variant, ring }: Props) {
+function DesktopScreenshotDetails({ output, capturedAt, variant, ringFacts }: Props) {
   const { t } = useTranslation()
   const [image, setImage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -80,6 +82,12 @@ function DesktopScreenshotDetails({ output, capturedAt, variant, ring }: Props) 
   const label = [result?.bundle_id || t('computer.screenshotUnknownApp'), result?.title,
     capturedAt ? new Date(capturedAt).toLocaleString() : variant === 'card' ? null : t('computer.screenshotUnknownTime')].filter(Boolean).join(' · ')
   const card = variant === 'card'
+  const imageAspect = typeof ringFacts?.imageWidth === 'number' && typeof ringFacts.imageHeight === 'number' && ringFacts.imageHeight > 0
+    ? ringFacts.imageWidth / ringFacts.imageHeight : 0
+  const thumbRings = card && ringFacts && sizeOk ? ringPoints(ringFacts) : null
+  const previewRings = card && ringFacts && sizeOk ? ringPoints(ringFacts, imageAspect) : null
+  const checkSize = (img: HTMLImageElement) =>
+    setSizeOk(sameImageSize({ width: img.naturalWidth, height: img.naturalHeight }, result?.image_width, result?.image_height))
   const title = [t('computer.viewScreenshot'), formatBinding(bindingFor('viewDesktopScreenshot'))].filter(Boolean).join(' · ')
   return <div className={card ? 'desktop-tool-details' : 'desktop-tool-details mt-1'}>
     {output.requires_observation === true && <p role="status" className="text-[12px] text-orange">{t('computer.needsObservation')}</p>}
@@ -90,19 +98,26 @@ function DesktopScreenshotDetails({ output, capturedAt, variant, ring }: Props) 
         onClick={event => { event.currentTarget.focus(); setPreview(true); if (!image) void load() }}
         onKeyDown={event => { if (matches(event.nativeEvent, bindingFor('viewDesktopScreenshot'))) { event.preventDefault(); event.currentTarget.click() } }}>
         {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" className="size-full object-cover"
-          onLoad={event => setSizeOk(sameImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }, result?.image_width, result?.image_height))} /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
-        {card && ring && image && sizeOk && <span data-testid="computer-target-ring" aria-hidden="true"
-          className="computer-target-ring pointer-events-none absolute size-[22px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-          style={{ left: `${ring.left * 100}%`, top: `${ring.top * 100}%` }} />}
+          onLoad={event => checkSize(event.currentTarget)} /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
+        {image && <TargetRings rings={thumbRings} />}
       </button>
       {!card && <figcaption className="min-w-0 text-[12px] text-ink-3 [overflow-wrap:anywhere]">{t('control.evidence', { label })}<br />{t('control.evidenceHint')}</figcaption>}
     </figure>}
     {failed && <p role="status" className="mt-1 text-[12px] text-ink-3">{t('computer.screenshotUnavailable')}</p>}
-    {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} />}
+    {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} rings={previewRings} onImage={checkSize} />}
   </div>
 }
 
-function ScreenshotPreview({ image, label, onClose }: { image: string; label: string; onClose: () => void }) {
+/** 目标圈（components D8）：同一形制，drag 的起点 / 终点各一圈，`data-ring` 标角色。 */
+function TargetRings({ rings }: { rings: TargetRing[] | null }) {
+  return rings?.map(ring => <span key={ring.role} data-testid="computer-target-ring" data-ring={ring.role} aria-hidden="true"
+    className="computer-target-ring pointer-events-none absolute size-[22px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+    style={{ left: `${ring.left * 100}%`, top: `${ring.top * 100}%` }} />) ?? null
+}
+
+function ScreenshotPreview({ image, label, onClose, rings, onImage }: {
+  image: string; label: string; onClose: () => void; rings: TargetRing[] | null; onImage: (img: HTMLImageElement) => void
+}) {
   const { t } = useTranslation()
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
@@ -138,6 +153,11 @@ function ScreenshotPreview({ image, label, onClose }: { image: string; label: st
         {t('computer.closeScreenshot')}<ShortcutKbd binding={bindingFor('closeDesktopScreenshot') || 'Escape'} />
       </Button>
     </header>
-    <img src={image} alt={label} decoding="async" className="block max-h-[calc(90vh-80px)] w-full rounded-[var(--r-sm)] object-contain" />
+    {/* review R4：图框贴合图本身（不再 object-contain 留边），圈按 x/w、y/h 落在同一框里。 */}
+    <div className="relative mx-auto w-fit max-w-full">
+      <img src={image} alt={label} decoding="async" onLoad={event => onImage(event.currentTarget)}
+        className="block h-auto max-h-[calc(90vh-80px)] w-auto max-w-full rounded-[var(--r-sm)]" />
+      <TargetRings rings={rings} />
+    </div>
   </dialog>
 }

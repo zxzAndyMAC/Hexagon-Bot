@@ -5691,7 +5691,8 @@ mod managed;
 pub use managed::{
     classify_managed, export_managed_report, managed_decide, managed_external_ops, managed_history,
     managed_processing, managed_summary, owner_pending, ExternalOperation, ManagedCandidate,
-    ManagedDecision, ManagedEvidence, ManagedRecord, ManagedRoute, ManagedScope, ManagedSummary,
+    ManagedDecision, ManagedEvidence, ManagedNext, ManagedNextKind, ManagedRecord, ManagedRoute,
+    ManagedScope, ManagedSummary,
 };
 mod model_recovery;
 pub use action_recovery::{ReconcileReport, ReconcileVerdict};

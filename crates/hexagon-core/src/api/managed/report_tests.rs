@@ -89,6 +89,58 @@ fn history_records_carry_scope_and_evidence_from_host_codes() {
     );
 }
 
+/// review R2：报告行的下一步读卡的当前状态——仍在等的卡定位卡，已结的授权卡按 grant_kind 指到设置分区。
+#[test]
+fn history_records_carry_an_executable_next_step() {
+    let (_dir, wb) = wb();
+    let enqueue = |payload| {
+        crate::cards::enqueue(
+            &wb.db,
+            crate::PROJECT_ID,
+            None,
+            crate::cards::CardKind::Grant,
+            payload,
+            None,
+        )
+        .unwrap()
+    };
+    let queued = enqueue(json!({"grant_kind":"mcp"}));
+    let ended = enqueue(json!({"grant_kind":"skill"}));
+    crate::cards::answer(&wb.db, &ended, "managed:d:1").unwrap();
+    let decide = |card: &str, reason: &str, outcome: &str| {
+        wb.db
+            .append_event(
+                crate::PROJECT_ID,
+                EventKind::System,
+                json!({"kind":"managed_decision","card_id":card,"card_kind":"grant",
+                    "action":"incomplete","reason":reason,"via":"host","actor":"managed:d:1","outcome":outcome}),
+                None,
+                None,
+            )
+            .unwrap()
+    };
+    decide(
+        &queued,
+        "managed_route_failed:authentication",
+        "failed: provider",
+    );
+    decide(&ended, "capability_not_installed", "incomplete");
+    let done = decide("gone", "x", "granted");
+    let records = managed_history(&wb.db, crate::PROJECT_ID, 10).unwrap();
+    let got: Vec<_> = records
+        .iter()
+        .map(|r| (r.next.kind, r.next.target.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (ManagedNextKind::Timeline, done.to_string()),
+            (ManagedNextKind::Skills, "skills".to_string()),
+            (ManagedNextKind::OpenCard, queued.clone()),
+        ]
+    );
+}
+
 #[test]
 fn export_writes_markdown_only() {
     let dir = tempfile::tempdir().unwrap();

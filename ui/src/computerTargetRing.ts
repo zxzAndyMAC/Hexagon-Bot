@@ -15,6 +15,9 @@ export type RingFacts = {
   op: unknown
   x: unknown
   y: unknown
+  /** drag 的终点（动作入参 to_x / to_y，同一截图像素坐标系）。 */
+  toX?: unknown
+  toY?: unknown
   /** 动作入参里的 snapshot_id。 */
   snapshotId: unknown
   /** 截图引用里的 snapshot_id / 像素尺寸（core card_screenshot）。 */
@@ -23,13 +26,52 @@ export type RingFacts = {
   imageHeight: unknown
 }
 
-/** 动作点在缩略框里的位置（0–1 的比例，左上为原点），不可可靠映射时 null。 */
-export function ringPoint(facts: RingFacts, aspect = THUMB_ASPECT): { left: number; top: number } | null {
+export type TargetPoint = { left: number; top: number }
+/** review R4：drag 画起点 + 终点（原型没有拖拽画法，不加连线；方向由卡上「动作」行的调用式写明）。 */
+export type TargetRing = TargetPoint & { role: 'start' | 'end' }
+
+/** 动作点在缩略框里的位置（0–1 的比例，左上为原点），不可可靠映射时 null。drag 时只算起点。 */
+export function ringPoint(facts: RingFacts, aspect = THUMB_ASPECT): TargetPoint | null {
+  const base = trusted(facts, aspect)
+  return base && inImage(facts.x, facts.y, base) ? mapPoint(facts.x as number, facts.y as number, base) : null
+}
+
+/**
+ * 全部目标圈（review R4）：click 一圈；drag 起点 + 终点两圈。`aspect` = 显示框宽高比——缩略用 16:10
+ * （object-cover 裁切），放大模态按图本身的宽高比（不裁切，点按 x/w、y/h 直接落位）。
+ * 任何一个坐标不可证（含 drag 终点缺失或越界）整组不画；可证但落在缩略裁掉的部分只少这一圈。
+ */
+export function ringPoints(facts: RingFacts, aspect = THUMB_ASPECT): TargetRing[] | null {
+  const base = trusted(facts, aspect)
+  if (!base || !inImage(facts.x, facts.y, base)) return null
+  const points: [unknown, unknown, TargetRing['role']][] = [[facts.x, facts.y, 'start']]
+  if (facts.op === 'drag') {
+    if (!inImage(facts.toX, facts.toY, base)) return null
+    points.push([facts.toX, facts.toY, 'end'])
+  }
+  const rings = points.flatMap(([x, y, role]) => {
+    const point = mapPoint(x as number, y as number, base)
+    return point ? [{ ...point, role }] : []
+  })
+  return rings.length > 0 ? rings : null
+}
+
+type Base = { w: number; h: number; aspect: number }
+
+function trusted(facts: RingFacts, aspect: number): Base | null {
   if (facts.op !== 'click' && facts.op !== 'drag') return null
   if (typeof facts.snapshotId !== 'string' || !facts.snapshotId || facts.snapshotId !== facts.shotSnapshotId) return null
-  const { x, y, imageWidth: w, imageHeight: h } = facts
-  if (!isNum(x) || !isNum(y) || !isNum(w) || !isNum(h) || w <= 0 || h <= 0 || !(aspect > 0)) return null
-  if (x < 0 || y < 0 || x >= w || y >= h) return null
+  const { imageWidth: w, imageHeight: h } = facts
+  if (!isNum(w) || !isNum(h) || w <= 0 || h <= 0 || !(aspect > 0)) return null
+  return { w, h, aspect }
+}
+
+/** 原生 mapPoint 同样拒绝 x >= width。 */
+function inImage(x: unknown, y: unknown, { w, h }: Base): boolean {
+  return isNum(x) && isNum(y) && x >= 0 && y >= 0 && x < w && y < h
+}
+
+function mapPoint(x: number, y: number, { w, h, aspect }: Base): TargetPoint | null {
   // object-cover：等比放大到盖满框，居中裁掉多出的一边。以框高为 1 计：框宽 = aspect。
   const scale = Math.max(aspect / w, 1 / h)
   const left = ((aspect - w * scale) / 2 + x * scale) / aspect

@@ -18,6 +18,7 @@ import { api, type PendingQuestion } from './api'
 import { useUiStore } from './store'
 import { bindingFor, formatBinding, isMac } from './keymap'
 import { usePendingKeys } from './decisions'
+import { LOCATE_PENDING_EVENT } from './managedNext'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -207,6 +208,22 @@ describe('待决坞（ui-redesign 票 04，ADR 0089）', () => {
     expect(el.querySelector('[data-pending-top]')?.getAttribute('data-pending-top')).toBe('q1')
     expect(el.textContent).toContain('$ cargo test')
     expect(el.querySelector('[data-decision-error]')?.textContent).toContain('boom')
+  })
+
+  // review R2：托管报告「定位到卡」——收起的坞展开并翻到那张卡（不是顶卡）。
+  it('定位事件把收起的坞展开并翻到指定卡', async () => {
+    useUiStore.setState({ pending: [card(), card({ id: 'q3', kind: 'stamp', payload: { stage: '实现', run_id: 'r1' } })], dismissedPendingKeys: ['q:q1', 'q:q3'] })
+    const { el, root: r } = await render(<PendingDock />)
+    root = r
+    await flush()
+    await act(async () => useUiStore.getState().closePendingDialog())
+    expect(el.querySelector('[data-dock="collapsed"]')).not.toBeNull()
+    await act(async () => { window.dispatchEvent(new CustomEvent(LOCATE_PENDING_EVENT, { detail: 'q1' })) })
+    const dock = el.querySelector('[data-dock="open"]')!
+    // 盖章卡按 SEVERITY 排在前，权限卡 q1 是第 2 张
+    expect(dock.textContent).toContain('2 / 2')
+    expect(dock.getAttribute('data-pending-top')).toBe('q3')
+    expect(dock.textContent).toContain('bash')
   })
 
   it('托管事项不计入、不进坞、不吃快捷键（宿主的 owner_pending 已排除托管卡）', async () => {

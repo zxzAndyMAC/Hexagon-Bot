@@ -136,6 +136,27 @@ it('draws no ring when the loaded pixels, the snapshot or the recorded size cann
   expect(ringOf(await renderWithLoadedThumb({ ...shot, image_width: undefined, image_height: undefined }, { width: 1600, height: 1000 }))).toBeNull()
 })
 
+// review R4（reconciliation 偏差 12 剩余差异）：放大模态里也画圈（按图本身宽高比，不裁切）；drag 画起点 + 终点。
+it('draws rings in the enlarged preview and both ends of a drag', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', image_width: 1000, image_height: 1000 }
+  // 方图：缩略 16:10 裁掉上下，终点 y=950 落在裁掉的部分，只剩起点；放大模态不裁切，两圈都在
+  await renderWithLoadedThumb(shot, { width: 1000, height: 1000 }, { op: 'drag', snapshot_id: 's1', x: 250, y: 500, to_x: 750, to_y: 950 })
+  const thumb = el.querySelector<HTMLElement>('.computer-action-body .desktop-screenshot-thumbnail')!
+  const rings = (root: Element) => [...root.querySelectorAll<HTMLElement>('[data-testid="computer-target-ring"]')]
+    .map((r) => [r.dataset.ring, r.style.left, r.style.top])
+  expect(rings(thumb)).toEqual([['start', '25%', '50%']])
+  const preview = el.querySelector('dialog.desktop-screenshot-preview')!
+  expect(rings(preview)).toEqual([['start', '25%', '50%'], ['end', '75%', '95%']])
+})
+
+it('draws no drag rings when the end point is unproven', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', image_width: 1600, image_height: 1000 }
+  await renderWithLoadedThumb(shot, { width: 1600, height: 1000 }, { op: 'drag', snapshot_id: 's1', x: 400, y: 500, to_x: 1600, to_y: 500 })
+  expect(el.querySelectorAll('[data-testid="computer-target-ring"]')).toHaveLength(0)
+})
+
 it('formats the action call for every op', () => {
   expect(computerActionCall({ op: 'click', x: 1.4, y: 2, click_type: 'double' })).toBe('click(1, 2, double)')
   expect(computerActionCall({ op: 'type', text: 'hi' })).toBe('type("hi")')
