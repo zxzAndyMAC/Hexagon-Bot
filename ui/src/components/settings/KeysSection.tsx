@@ -51,7 +51,7 @@ function KeyRow({ id, label, onChanged }: { id: ActionId; label: string; onChang
           <span
             data-recording
             role="status"
-            className="inline-flex h-6 items-center rounded-[6px] bg-surface px-2 font-mono text-[12px] text-accent-ink shadow-[var(--focus-ring)]"
+            className="inline-flex h-6 items-center rounded-[var(--r-xs)] bg-surface px-2 font-mono text-[12px] text-accent-ink shadow-[var(--focus-ring)]"
           >
             {t('settings.pressKey')}
           </span>
@@ -61,7 +61,7 @@ function KeyRow({ id, label, onChanged }: { id: ActionId; label: string; onChang
             // 票 16c（WCAG 2.5.3）：可读名以可见键位开头，再说明「点此重录」。
             aria-label={`${binding ? formatBinding(binding) : t('settingsUi.unbound')} · ${t('settingsUi.recordKey', { action: label })}`}
             onClick={() => { setProblem(null); setCapturing(true) }}
-            className="hx-press hx-focus inline-flex h-6 min-w-12 cursor-pointer items-center justify-center rounded-[6px] bg-canvas px-2 font-mono text-[11.5px] font-medium text-ink-2 shadow-[inset_0_0_0_1px_var(--line)] live:hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
+            className="hx-press hx-focus inline-flex h-6 min-w-12 cursor-pointer items-center justify-center rounded-[var(--r-xs)] bg-canvas px-2 font-mono text-[11.5px] font-medium text-ink-2 shadow-[inset_0_0_0_1px_var(--line)] live:hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
           >
             {binding ? formatBinding(binding) : t('settingsUi.unbound')}
           </button>

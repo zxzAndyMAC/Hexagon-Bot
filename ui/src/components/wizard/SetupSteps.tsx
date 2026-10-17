@@ -44,7 +44,7 @@ export function DirStep({ draft, set, report, busy, err, onBrowse, onOpenExistin
       )}
       {report?.dirty && <div className="text-[12.5px] text-ink-2">{t('wizard.dirtyHint')}</div>}
       {report?.has_workbench && (
-        <div className="flex items-center gap-3 rounded-[10px] bg-inset px-3 py-2.5 text-[12.5px] shadow-[inset_0_0_0_1px_var(--line-soft)]">
+        <div className="flex items-center gap-3 rounded-[var(--r-card)] bg-inset px-3 py-2.5 text-[12.5px] shadow-[inset_0_0_0_1px_var(--line-soft)]">
           <span className="flex-1">{t('wizard.openInstead')}</span>
           <Button size="sm" variant="ink" loading={busy} onClick={onOpenExisting}>{t('wizard.openProject')}</Button>
         </div>
@@ -86,7 +86,7 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
         const ready = !!(r && r.provider.enabled && r.provider.key_set)
         const viaDefault = !doc.slots[slot] && !!doc.slots.default
         return (
-          <div key={slot} data-key-slot={slot} className="flex flex-col gap-2 rounded-[10px] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]">
+          <div key={slot} data-key-slot={slot} className="flex flex-col gap-2 rounded-[var(--r-card)] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]">
             <div className="flex items-center gap-2">
               <div className="min-w-0 flex-1">
                 <code className="font-mono text-[12px]">model/{slot}</code>
@@ -197,7 +197,7 @@ export function ConfirmSummary({ draft, set, pickedRoles, approvedQuality, repor
         </NativeSelect>
       )}
       {!draft.fastPath && (
-        <div className="mt-3 rounded-[10px] bg-inset px-3 py-2.5 text-[12.5px] shadow-[inset_0_0_0_1px_var(--line-soft)]">
+        <div className="mt-3 rounded-[var(--r-card)] bg-inset px-3 py-2.5 text-[12.5px] shadow-[inset_0_0_0_1px_var(--line-soft)]">
           <b className="font-medium">{t('quality.setupTitle')}</b>
           <p className="mt-0.5 text-ink-3">{t('quality.setupReview')}</p>
           {Object.entries(approvedQuality).length === 0 ? <p className="mt-1">{t('quality.setupNone')}</p> :
@@ -209,7 +209,7 @@ export function ConfirmSummary({ draft, set, pickedRoles, approvedQuality, repor
         </div>
       )}
       {existingRepoAlign && (
-        <div className="mt-3 rounded-[10px] bg-violet-tint px-3 py-2.5 text-[12.5px] text-violet">{t('wizard.alignHint')}</div>
+        <div className="mt-3 rounded-[var(--r-card)] bg-violet-tint px-3 py-2.5 text-[12.5px] text-violet">{t('wizard.alignHint')}</div>
       )}
     </div>
   )

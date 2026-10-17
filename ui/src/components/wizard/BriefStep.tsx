@@ -119,7 +119,7 @@ export function BriefStep(p: {
                   <button
                     type="button"
                     onClick={() => p.onIndex(x.i)}
-                    className="hx-press hx-focus flex w-full cursor-pointer gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[12.5px] live:hover:bg-hover"
+                    className="hx-press hx-focus flex w-full cursor-pointer gap-2 rounded-[var(--r-sm)] px-2.5 py-1.5 text-left text-[12.5px] live:hover:bg-hover"
                   >
                     <span className="min-w-0 flex-1 truncate text-ink-2">{x.q.question}</span>
                     <span className="truncate font-medium">{x.a}</span>

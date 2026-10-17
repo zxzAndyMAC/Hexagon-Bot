@@ -15,7 +15,7 @@ import {
 
 export function Hexmark() {
   return (
-    <span aria-hidden className="grid size-7 flex-none place-items-center rounded-[8px] bg-ink text-page">
+    <span aria-hidden className="grid size-7 flex-none place-items-center rounded-[var(--r-sm)] bg-ink text-page">
       <Icon name="hex" size={14} />
     </span>
   )

@@ -217,7 +217,7 @@ export function ArtifactTab({ path }: { path: string }) {
         <SelectionBar anchor={anchor} onClose={closeBar} />
       </div>
       {note && (
-        <div data-handoff className="mx-3.5 mb-3.5 rounded-[10px] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]">
+        <div data-handoff className="mx-3.5 mb-3.5 rounded-[var(--r-card)] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]">
           <div className="mb-2 flex items-center gap-1.5 text-[12px] text-ink-3">
             <Icon name="message" size={12} />{author ? t('canvas.handoffBy', { who: author }) : t('canvas.handoff')}
           </div>

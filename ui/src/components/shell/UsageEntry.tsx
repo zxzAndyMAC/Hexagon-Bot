@@ -41,7 +41,7 @@ export function UsageButton() {
           data-usage-tier={tier}
           aria-label={label}
           className={cn(
-            'hx-press hx-focus inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1 rounded-[8px] px-1.5 font-mono text-[11.5px] leading-none font-medium text-ink-2',
+            'hx-press hx-focus inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1 rounded-[var(--r-sm)] px-1.5 font-mono text-[11.5px] leading-none font-medium text-ink-2',
             (tier === 'ok' || tier === 'unknown') && 'live:hover:bg-hover live:hover:text-ink',
             tier === 'warn' && 'bg-orange-tint pr-2 text-orange',
             tier === 'cap' && 'bg-red-tint pr-2 font-sans font-semibold text-red',

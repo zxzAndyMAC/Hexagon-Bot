@@ -32,7 +32,7 @@ function TooltipContent({
         sideOffset={sideOffset}
         className={cn(
           z,
-          "inline-flex w-fit max-w-xs items-center gap-1.5 rounded-[8px] bg-tooltip px-[9px] py-1.5 text-[12px] text-tooltip-fg shadow-[var(--shadow-md)]",
+          "inline-flex w-fit max-w-xs items-center gap-1.5 rounded-[var(--r-sm)] bg-tooltip px-[9px] py-1.5 text-[12px] text-tooltip-fg shadow-[var(--shadow-md)]",
           "data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           className
         )}

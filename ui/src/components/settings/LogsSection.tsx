@@ -123,7 +123,7 @@ export function LogsSection({ projectless = false }: { projectless?: boolean }) 
                       <td className={cn(tableCls.td, 'w-[110px]')}><ClassChip r={r} /></td>
                       <td className={cn(tableCls.td, 'max-w-0')}>
                         <button type="button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : k)}
-                          className="hx-focus flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-[6px] text-left font-mono text-[12px] text-ink">
+                          className="hx-focus flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-[var(--r-xs)] text-left font-mono text-[12px] text-ink">
                           <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} className="flex-none text-ink-3" />
                           <span className="truncate">{r.branch} · {r.code}</span>
                         </button>

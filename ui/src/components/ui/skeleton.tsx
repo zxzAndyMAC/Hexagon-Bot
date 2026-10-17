@@ -10,7 +10,7 @@ function Skeleton({ className, style }: { className?: string; style?: CSSPropert
       data-slot="skeleton"
       aria-hidden
       className={cn(
-        "block h-2.5 rounded-[6px] bg-[linear-gradient(90deg,var(--canvas),var(--hover-2),var(--canvas))] bg-[length:200%_100%] animate-hx-skl motion-reduce:animate-none motion-reduce:bg-canvas",
+        "block h-2.5 rounded-[var(--r-xs)] bg-[linear-gradient(90deg,var(--canvas),var(--hover-2),var(--canvas))] bg-[length:200%_100%] animate-hx-skl motion-reduce:animate-none motion-reduce:bg-canvas",
         className,
       )}
       style={style}

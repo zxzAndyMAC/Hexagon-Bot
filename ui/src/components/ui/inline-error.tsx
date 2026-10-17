@@ -36,7 +36,7 @@ function InlineError({ title, code, meta, desc, actions, onRetry, retryLabel, re
           {title}
           {onRetry && retryLabel && <>
             {" · "}
-            <button type="button" title={retryTitle} className="hx-focus cursor-pointer rounded-[4px] text-accent-ink live:hover:underline disabled:cursor-default"
+            <button type="button" title={retryTitle} className="hx-focus cursor-pointer rounded-[var(--r-xs)] text-accent-ink live:hover:underline disabled:cursor-default"
               disabled={retrying} aria-busy={retrying || undefined} onClick={onRetry}>{retryLabel}</button>
           </>}
         </span>
@@ -46,7 +46,7 @@ function InlineError({ title, code, meta, desc, actions, onRetry, retryLabel, re
   // 有说明时补救按钮另起一行（feedback#errors 块形）；只有标题时按钮跟在标题行尾。
   const footer = Boolean(desc)
   return (
-    <div role="alert" data-slot="inline-error" data-variant="block" className={cn("rounded-[10px] bg-red-tint px-3 py-2.5", className)} {...rest}>
+    <div role="alert" data-slot="inline-error" data-variant="block" className={cn("rounded-[var(--r-card)] bg-red-tint px-3 py-2.5", className)} {...rest}>
       <div className="flex items-center gap-2">
         <Icon name="circle-x" size={16} className="shrink-0 text-red" />
         <b className="min-w-0 flex-1 text-[13px] font-medium text-ink">

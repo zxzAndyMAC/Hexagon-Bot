@@ -199,7 +199,7 @@ function BroadConfirmation({ pending, error, onCancel, onConfirm }: {
     <AlertDialogContent busy={pending} className="approval-mode-confirm w-[min(440px,calc(100vw-48px))] gap-0 px-[22px] pt-[22px] pb-4"
       onCloseAutoFocus={(event) => event.preventDefault()}>
       <div className="flex items-start gap-3">
-        <AlertDialogIcon tone="warn" className="size-9 rounded-[10px]"><Icon name="shield" size={14} /></AlertDialogIcon>
+        <AlertDialogIcon tone="warn" className="size-9 rounded-[var(--r-card)]"><Icon name="shield" size={14} /></AlertDialogIcon>
         <div>
           <AlertDialogTitle>{t('approvalMode.confirmTitle')}</AlertDialogTitle>
           <AlertDialogDescription className="mt-1">{t('approvalMode.confirmBody')}</AlertDialogDescription>

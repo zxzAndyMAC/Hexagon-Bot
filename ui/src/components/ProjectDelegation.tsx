@@ -28,7 +28,7 @@ export function ProjectDelegation() {
       <Badge variant={on && !paused ? 'info' : 'neutral'} data-delegation-state={on ? (paused ? 'paused' : 'on') : 'off'}>{state}</Badge>
     </div>
     <details className="group border-t border-line-soft px-4 py-2.5">
-      <summary className="hx-focus flex cursor-pointer list-none items-center gap-1.5 rounded-[6px] text-[12.5px] text-ink-2 live:hover:text-ink">
+      <summary className="hx-focus flex cursor-pointer list-none items-center gap-1.5 rounded-[var(--r-xs)] text-[12.5px] text-ink-2 live:hover:text-ink">
         <Icon name="chevron-right" size={12} className="transition-transform group-open:rotate-90" />
         {t('settingsUi.managedReport')}
       </summary>

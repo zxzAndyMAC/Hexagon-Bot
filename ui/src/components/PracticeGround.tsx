@@ -46,10 +46,10 @@ export function PracticeGround() {
       role="group"
       aria-label={t('settings.practiceTitle')}
       onKeyDown={onKeyDown}
-      className="hx-focus overflow-hidden rounded-[14px] bg-surface shadow-[var(--shadow-card)] outline-none"
+      className="hx-focus overflow-hidden rounded-[var(--r-panel)] bg-surface shadow-[var(--shadow-card)] outline-none"
     >
       <div className="flex items-center gap-2.5 px-4 pt-3.5 pb-1.5">
-        <span className="grid size-7 flex-none place-items-center rounded-[8px] bg-orange-tint text-orange">
+        <span className="grid size-7 flex-none place-items-center rounded-[var(--r-sm)] bg-orange-tint text-orange">
           <Icon name="shield" size={14} />
         </span>
         <div className="min-w-0 flex-1">
