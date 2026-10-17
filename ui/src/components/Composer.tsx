@@ -512,7 +512,7 @@ export function Composer() {
         {zoom && <DialogContent className="attach-zoom w-auto max-w-[90vw] p-3" aria-describedby={undefined}
           onCloseAutoFocus={(e) => { e.preventDefault(); inputRef.current?.focus() }}>
           <DialogTitle className="sr-only">{t('composer.imageZoom', { name: zoom.name })}</DialogTitle>
-          <img src={zoom.preview} alt={zoom.name} className="block max-h-[80vh] max-w-[86vw] rounded-[10px]" />
+          <img src={zoom.preview} alt={zoom.name} className="block max-h-[80vh] max-w-[86vw] rounded-[var(--r-card)]" />
           <IconButton ref={zoomCloseRef} className="attach-zoom-close absolute top-2 right-2 bg-surface" label={t('composer.previewClose')}
             onClick={() => setZoom(null)}><Icon name="close" size={14} /></IconButton>
         </DialogContent>}

@@ -112,18 +112,18 @@ pub fn remove_agent(db: &Db, project_id: &str, agent_id: &str) -> Result<(), Rem
         );
         return Err(err);
     }
-    let role: String =
-        db.conn()
-            .query_row("SELECT role FROM agents WHERE id=?1", [agent_id], |r| {
-                r.get(0)
-            })?;
-    // 状态写路径只在属主 orchestra（AGENTS.md 接缝规则）；先落休眠再记移出，
-    // 此后 write_agent_status 的 `removed_at IS NULL` 守卫让任何激活都碰不到它。
-    crate::orchestra::write_agent_status(db, project_id, agent_id, true)?;
-    db.conn().execute(
-        "UPDATE agents SET removed_at=datetime('now') WHERE project_id=?1 AND id=?2 AND removed_at IS NULL",
+    // 读角色名也带 project_id（review S3，2026-10-17）：曾只按 id 取，守门判定按
+    // (project_id, id) 过而这里不过滤，读写口径不一致；与 refusal 同口径才算一处判定。
+    let role: String = db.conn().query_row(
+        "SELECT role FROM agents WHERE project_id=?1 AND id=?2",
         rusqlite::params![project_id, agent_id],
+        |r| r.get(0),
     )?;
+    // agents 行的状态 / 移出写路径只在属主 orchestra（AGENTS.md D09，review S3 起
+    // removed_at 也收进属主，check-arch 守）；先落休眠再记移出，此后
+    // write_agent_status 的 `removed_at IS NULL` 守卫让任何激活都碰不到它。
+    crate::orchestra::write_agent_status(db, project_id, agent_id, true)?;
+    crate::orchestra::write_agent_removed(db, project_id, agent_id)?;
     db.append_event(
         project_id,
         EventKind::System,
@@ -277,5 +277,146 @@ mod tests {
         let again = crate::roles::create_role(&db, "p1", &def).unwrap();
         assert_ne!(first, again);
         assert_eq!(listed(&db), vec![again]);
+    }
+
+    // D12（review S3，2026-10-17）：守门判定配属性测试。不变量：
+    // ① 拒绝码按 not_found > busy > pending > fastpath 的优先序唯一确定；
+    // ② 被拒时零副作用（removed_at 不动、不记 agent_removed）；
+    // ③ 放行时恰好落一次移出，且再移同一 id 必拒 not_found（不做幂等成功）；
+    // ④ 别的项目里的同 id Agent 一律 not_found（project_id 过滤）。
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        #[derive(Debug, Clone)]
+        struct Shape {
+            /// 0 = 不存在，1 = 在本项目，2 = 在别的项目
+            home: u8,
+            removed: bool,
+            active: bool,
+            open_turn: bool,
+            pending: u8,
+            fastpath: bool,
+        }
+
+        fn shape() -> impl Strategy<Value = Shape> {
+            (
+                0u8..3,
+                any::<bool>(),
+                any::<bool>(),
+                any::<bool>(),
+                0u8..3,
+                any::<bool>(),
+            )
+                .prop_map(|(home, removed, active, open_turn, pending, fastpath)| {
+                    Shape {
+                        home,
+                        removed,
+                        active,
+                        open_turn,
+                        pending,
+                        fastpath,
+                    }
+                })
+        }
+
+        fn build(s: &Shape) -> Db {
+            let db = team(&[]);
+            db.conn()
+                .execute(
+                    "INSERT INTO projects (id, dir, name, mode) VALUES ('p2','/tmp/y','u','pack')",
+                    [],
+                )
+                .unwrap();
+            let pid = match s.home {
+                0 => return db,
+                1 => "p1",
+                _ => "p2",
+            };
+            db.conn()
+                .execute(
+                    "INSERT INTO agents (id, project_id, role) VALUES ('a0', ?1, '前端')",
+                    [pid],
+                )
+                .unwrap();
+            crate::orchestra::write_agent_status(&db, pid, "a0", !s.active).unwrap();
+            if s.open_turn {
+                db.append_event(pid, EventKind::TurnStarted, json!({}), Some("a0"), None)
+                    .unwrap();
+            }
+            for _ in 0..s.pending {
+                crate::cards::enqueue(&db, pid, Some("a0"), CardKind::Permission, json!({}), None)
+                    .unwrap();
+            }
+            if s.fastpath {
+                db.conn()
+                    .execute(
+                        "UPDATE projects SET fastpath_agent_id='a0' WHERE id=?1",
+                        [pid],
+                    )
+                    .unwrap();
+            }
+            if s.removed {
+                crate::orchestra::write_agent_removed(&db, pid, "a0").unwrap();
+            }
+            db
+        }
+
+        fn expected(s: &Shape) -> Option<&'static str> {
+            if s.home != 1 || s.removed {
+                Some("agent_not_found")
+            } else if s.active || s.open_turn {
+                Some("agent_busy")
+            } else if s.pending > 0 {
+                Some("agent_has_pending")
+            } else if s.fastpath {
+                Some("agent_is_fastpath")
+            } else {
+                None
+            }
+        }
+
+        fn removed_marks(db: &Db) -> (i64, i64) {
+            let rows: i64 = db
+                .conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM agents WHERE removed_at IS NOT NULL",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let events: i64 = db
+                .conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE kind='system' AND json_extract(payload,'$.kind')='agent_removed'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            (rows, events)
+        }
+
+        proptest! {
+            #[test]
+            fn refusal_is_ordered_and_side_effect_free(s in shape()) {
+                let db = build(&s);
+                let before = removed_marks(&db);
+                let judged = refusal(&db, "p1", "a0").unwrap().map(|e| e.code());
+                prop_assert_eq!(judged.as_deref(), expected(&s));
+                match remove_agent(&db, "p1", "a0") {
+                    Err(e) => {
+                        let code = e.code();
+                        prop_assert_eq!(Some(code.as_str()), expected(&s));
+                        prop_assert_eq!(removed_marks(&db), before);
+                    }
+                    Ok(()) => {
+                        prop_assert_eq!(expected(&s), None);
+                        prop_assert_eq!(removed_marks(&db), (before.0 + 1, before.1 + 1));
+                        let again = remove_agent(&db, "p1", "a0").unwrap_err();
+                        prop_assert_eq!(again.code(), "agent_not_found");
+                    }
+                }
+            }
+        }
     }
 }

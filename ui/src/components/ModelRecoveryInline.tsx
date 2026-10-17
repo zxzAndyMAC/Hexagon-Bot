@@ -13,7 +13,7 @@ export function ModelRecoveryInline({ form, text, actions, className, ...rest }:
 } & Record<`data-${string}`, string | undefined>) {
   return <div role={form === 'text' ? 'alert' : undefined} data-recovery-inline={form} {...rest}
     className={cn('flex flex-wrap items-center gap-2 text-[12.5px]',
-      form === 'inset' ? 'mt-3 rounded-[10px] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]' : 'text-red',
+      form === 'inset' ? 'mt-3 rounded-[var(--r-card)] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]' : 'text-red',
       className)}>
     <Icon name="warn" size={14} className={cn('flex-none', form === 'inset' && 'text-orange')} />
     <span className={cn('min-w-0 flex-1', form === 'inset' && 'text-ink-2')}>{text}</span>

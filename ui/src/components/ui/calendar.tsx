@@ -28,9 +28,9 @@ function Calendar({ className, classNames, ...props }: React.ComponentProps<type
         week: "",
         day: "group/day size-8 p-0 text-center text-[12.5px] tabular-nums",
         day_button:
-          "hx-focus size-8 cursor-pointer rounded-[8px] live:hover:bg-hover group-data-[selected=true]/day:hover:bg-transparent disabled:cursor-default",
-        range_start: "rounded-l-[8px] bg-primary text-white",
-        range_end: "rounded-r-[8px] bg-primary text-white",
+          "hx-focus size-8 cursor-pointer rounded-[var(--r-sm)] live:hover:bg-hover group-data-[selected=true]/day:hover:bg-transparent disabled:cursor-default",
+        range_start: "rounded-l-[var(--r-sm)] bg-primary text-white",
+        range_end: "rounded-r-[var(--r-sm)] bg-primary text-white",
         range_middle: "rounded-none bg-accent-tint",
         selected: "",
         today: "font-semibold",

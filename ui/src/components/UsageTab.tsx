@@ -117,7 +117,7 @@ export function UsageCard({ onDetail, onRaise = openUsageSettings }: { onDetail:
   if (capped) {
     return (
       <div data-usage-card="cap">
-        <div className="flex items-center gap-2 rounded-[8px] bg-red-tint px-2.5 py-2 text-[12.5px] text-red">
+        <div className="flex items-center gap-2 rounded-[var(--r-sm)] bg-red-tint px-2.5 py-2 text-[12.5px] text-red">
           <Icon name="warn" size={14} />
           <b className="flex-1 font-semibold">{t('usageEntry.capLabel')}</b>
         </div>

@@ -472,6 +472,8 @@ export default {
     escalation: 'Escaladé — le responsable décide',
     contextOverflow: 'Limite de contexte',
     contextHint: 'Agent en pause au plafond de contexte. Approuver pour reprendre (contexte reconstruit et élagué).',
+    flagRoute: 'Signalement <m>{{flag}}</m> → <m>{{target}}</m>',
+    contextTokens: '~{{est}} / {{cap}} tok',
     agreeContinue: 'Accepter et reculer',
     rejectContinue: 'Rejeter et continuer',
     stageStamp: 'Tampon d’étape',
@@ -878,6 +880,7 @@ export default {
   },
 
   providers: {
+    kindOpenai: 'Compatible OpenAI',
     hint: "Les fournisseurs sont globaux. Les slots choisissent fournisseur et modèle ; default couvre les slots non liés. Les clés utilisent le stockage actif affiché dans Général.",
     filter: 'Rechercher des fournisseurs',
     empty: 'Aucun fournisseur — ajoutez-en un pour que les agents appellent un modèle',
@@ -972,6 +975,7 @@ export default {
     floorsHint: "À tout niveau : l'acceptation finale, les filets de sécurité et les nouvelles permissions attendent le responsable. Les validations plus tôt ne passent seules qu'à partir de L3.",
   },
   mcp: {
+    commandPlaceholder: 'npx / binaire',
     marketTip: "Ouvrir le marché MCP dans le navigateur",
     starting: 'Initialisation…',
     intro: 'Inventaire global ~/.hexagon/mcp.json + projet .hexagon/mcp.json (à nom égal le projet gagne) ; rouvrez le projet après modification.',

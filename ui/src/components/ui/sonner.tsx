@@ -64,7 +64,7 @@ function ToastPill({ tone, icon, text, code, action, onAction, className }: {
           type="button"
           data-toast-action
           className={cn(
-            "hx-focus ml-3 shrink-0 cursor-pointer rounded-[4px] text-[12px] live:hover:underline",
+            "hx-focus ml-3 shrink-0 cursor-pointer rounded-[var(--r-xs)] text-[12px] live:hover:underline",
             // 撤销类的「撤回」是补救本身，用 --accent-ink；其余动作 60% 透明（feedback#toast）
             icon === "undo" ? "text-accent-ink" : "opacity-60 live:hover:opacity-100",
           )}

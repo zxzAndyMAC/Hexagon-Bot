@@ -433,7 +433,7 @@ export default function Specimen() {
   return (
     <div className="h-full overflow-auto bg-page font-sans text-[14px] leading-normal text-ink antialiased">
       <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-line bg-page px-8 py-4">
-        <span className="grid size-7 place-items-center rounded-[8px] bg-ink text-page"><Icon name="hex" size={14} /></span>
+        <span className="grid size-7 place-items-center rounded-[var(--r-sm)] bg-ink text-page"><Icon name="hex" size={14} /></span>
         <h1 className="text-[20px] font-semibold tracking-[-.01em]">组件标本 · components A1–A17</h1>
         <span className="flex-1" />
         <LiveConfirm />

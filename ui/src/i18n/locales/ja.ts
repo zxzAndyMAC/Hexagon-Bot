@@ -472,6 +472,8 @@ export default {
     escalation: 'エスカレーション——オーナー裁定',
     contextOverflow: 'コンテキスト上限',
     contextHint: 'コンテキスト上限で一時停止。承認で再開（再構成+軽量裁剪）。',
+    flagRoute: '差し戻し <m>{{flag}}</m> → <m>{{target}}</m>',
+    contextTokens: '~{{est}} / {{cap}} トークン',
     agreeContinue: '同意して巻き戻し',
     rejectContinue: '否認して続行',
     stageStamp: 'ステージスタンプ',
@@ -878,6 +880,7 @@ export default {
   },
 
   providers: {
+    kindOpenai: 'OpenAI 互換',
     hint: "モデル設定は全体で共有します。スロットはプロバイダーとモデルを選び、default は未割当を補います。キーは一般設定に表示された実際の保存先を使います。",
     filter: 'プロバイダーを検索',
     empty: 'プロバイダ未設定——まず1件追加してください',
@@ -972,6 +975,7 @@ export default {
     floorsHint: 'どのレベルでも：最終検収、セーフティネット、新規権限はオーナー待ちです。それより前のスタンプは L3 以上でのみ自動通過します。',
   },
   mcp: {
+    commandPlaceholder: 'npx / 実行ファイル',
     marketTip: "ブラウザで MCP マーケットを開く",
     starting: '初期化中…',
     intro: 'グローバル ~/.hexagon/mcp.json + プロジェクト .hexagon/mcp.json（同名はプロジェクト優先）。変更はプロジェクト再起動で反映。',

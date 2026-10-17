@@ -155,7 +155,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
               <div className="flex px-3 pb-1.5 text-[12px] text-ink-3">
                 {t('launch.recents')}<span className="flex-1" />{t('launch.recentCount', { count: recents.length })}
               </div>
-              <ul role="list" className="m-0 list-none rounded-[14px] bg-[var(--app-card)] p-1 shadow-[var(--shadow-card)]">
+              <ul role="list" className="m-0 list-none rounded-[var(--r-panel)] bg-[var(--app-card)] p-1 shadow-[var(--shadow-card)]">
                 {recents.map((r) => <RecentRow key={r.dir} r={r} when={recentTime(r.opened_at, now, i18n.language)} opening={opening === r.dir} onOpen={() => { void openDir(r.dir) }} onRemove={() => remove(r.dir)} />)}
               </ul>
             </>
@@ -197,7 +197,7 @@ function RecentRow({ r, when, opening, onOpen, onRemove }: {
   const missing = !r.exists
   const row = 'group/rec flex items-center gap-3 rounded-[var(--r-card)] px-3 py-2.5 [&+&]:shadow-[0_-1px_0_var(--line-soft)] [&:hover+&]:shadow-none'
   const icon = (
-    <span className={cn('grid size-[30px] flex-none place-items-center rounded-[8px]', missing ? 'bg-red-tint text-red' : r.mode === 'fastpath' ? 'bg-hover-2 text-ink' : 'bg-ink text-page')}>
+    <span className={cn('grid size-[30px] flex-none place-items-center rounded-[var(--r-sm)]', missing ? 'bg-red-tint text-red' : r.mode === 'fastpath' ? 'bg-hover-2 text-ink' : 'bg-ink text-page')}>
       <Icon name={missing ? 'warn' : r.mode === 'fastpath' ? 'bolt' : 'hex'} size={12} />
     </span>
   )

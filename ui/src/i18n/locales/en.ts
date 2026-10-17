@@ -472,6 +472,8 @@ export default {
     escalation: 'Escalated — needs owner',
     contextOverflow: 'Context limit hit',
     contextHint: 'Agent paused at context cap. Approve to resume (context rebuilt + trimmed).',
+    flagRoute: 'Flag <m>{{flag}}</m> → <m>{{target}}</m>',
+    contextTokens: '~{{est}} / {{cap}} tok',
     agreeContinue: 'Agree & rewind',
     rejectContinue: 'Reject & continue',
     stageStamp: 'Stage stamp',
@@ -878,6 +880,7 @@ export default {
   },
 
   providers: {
+    kindOpenai: 'OpenAI-compatible',
     hint: "Model providers are global. Slot bindings select a provider and model; default covers unbound slots. Keys use the active credential backend shown in General settings.",
     filter: 'Search providers',
     empty: 'No providers yet — add one so agents can call a model',
@@ -972,6 +975,7 @@ export default {
     floorsHint: 'At every level: final acceptance, safety nets, and new-permission questions wait for the owner. Earlier stamp gates auto-pass only at L3 and above.',
   },
   mcp: {
+    commandPlaceholder: 'npx / binary',
     marketTip: "Open the MCP marketplace in your browser",
     starting: 'Initializing…',
     intro: 'Global inventory ~/.hexagon/mcp.json + project .hexagon/mcp.json (same-name project wins); reopen the project after changes.',

@@ -4,8 +4,7 @@ import ReactMarkdown, { type Options as MdOptions } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
 import { getHighlighter, useTheme } from '../highlight'
-import { errText } from '../api'
-import { useUiStore } from '../store'
+import { useCopyFlash } from '../useCopyFlash'
 import { Icon } from './Icon'
 
 // beautiful-ui 票 08：块级代码头部条（语言标签 + 复制钮）——
@@ -20,11 +19,9 @@ const HIGHLIGHT_CACHE_CAP = 400
 export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const theme = useTheme()
   const { t } = useTranslation()
-  const pushToast = useUiStore((s) => s.pushToast)
   const cacheKey = `${theme}|${lang ?? ''}|${code}`
   const [html, setHtml] = useState<string | null>(() => highlightCache.get(cacheKey) ?? null)
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(null)
+  const { copied, copy: copyText } = useCopyFlash()
   useEffect(() => {
     if (highlightCache.has(cacheKey)) return
     let live = true
@@ -45,17 +42,7 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
       .catch(() => {})
     return () => { live = false }
   }, [cacheKey, code, lang, theme])
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(code.replace(/\n$/, ''))
-      setCopied(true)
-      if (timer.current) clearTimeout(timer.current)
-      timer.current = setTimeout(() => setCopied(false), 1500)
-    } catch (e) {
-      pushToast(errText(e), 'err')
-    }
-  }
+  const copy = () => copyText(code.replace(/\n$/, ''))
   return (
     <div className="code-block">
       <div className="code-head">

@@ -103,7 +103,7 @@ export function RolesStep(p: {
                   data-role-row={name}
                   onClick={() => p.onSelect(name)}
                   className={cn(
-                    'hx-focus mx-2 my-px flex cursor-pointer items-start gap-2.5 rounded-[10px] p-2.5 outline-none',
+                    'hx-focus mx-2 my-px flex cursor-pointer items-start gap-2.5 rounded-[var(--r-card)] p-2.5 outline-none',
                     isSel ? 'bg-accent-tint shadow-[inset_2px_0_0_var(--accent)]' : 'hover:bg-hover',
                     !picked && 'opacity-60',
                   )}

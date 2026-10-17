@@ -472,6 +472,8 @@ export default {
     escalation: 'Escalado — o responsável decide',
     contextOverflow: 'Limite de contexto',
     contextHint: 'Agente pausado no teto de contexto. Aprovar para retomar (contexto reconstruído e podado).',
+    flagRoute: 'Marcação <m>{{flag}}</m> → <m>{{target}}</m>',
+    contextTokens: '~{{est}} / {{cap}} tok',
     agreeContinue: 'Aceitar e retroceder',
     rejectContinue: 'Rejeitar e continuar',
     stageStamp: 'Carimbo de etapa',
@@ -878,6 +880,7 @@ export default {
   },
 
   providers: {
+    kindOpenai: 'Compatível com OpenAI',
     hint: "Provedores são globais. Slots selecionam provedor e modelo; default cobre os não vinculados. Chaves usam o armazenamento ativo mostrado em Geral.",
     filter: 'Pesquisar provedores',
     empty: 'Sem provedores — adicione um para os agentes chamarem o modelo',
@@ -972,6 +975,7 @@ export default {
     floorsHint: 'Em qualquer nível: a aceitação final, redes de segurança e novas permissões esperam o responsável. Carimbos anteriores só passam sozinhos a partir de L3.',
   },
   mcp: {
+    commandPlaceholder: 'npx / binário',
     marketTip: "Abrir o mercado de MCP no navegador",
     starting: 'Inicializando…',
     intro: 'Inventário global ~/.hexagon/mcp.json + projeto .hexagon/mcp.json (mesmo nome vence o projeto); reabra o projeto após mudanças.',

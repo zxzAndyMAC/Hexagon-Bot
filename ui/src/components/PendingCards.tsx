@@ -3,7 +3,7 @@
 // 动作分发与 decisions.ts 的 approveQuestion / rejectQuestion 一一对应：本票只换皮，卡种与动作不增不减（ADR 0089）。
 // 坞本体（分页、收起、modalScope）在 PendingDock.tsx；复杂卡种在 PendingCardParts.tsx。
 import { useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { Trans, useTranslation } from 'react-i18next'
 import { api, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
 import { isActivationResumeCard, policyNeedsQuality, rejectReasonWithJudge } from '../decisions'
@@ -323,12 +323,13 @@ function EscalationCard({ q, top }: { q: PendingQuestion; top: boolean }) {
           <div className="dock-meter">
             <span className="dock-hint" style={{ marginTop: 0, width: 64 }}>{t('dock.estimate')}</span>
             <i>{pct != null && <b style={{ width: `${pct}%` }} />}</i>
-            <span className="mono">~{String(p.est_tokens ?? '?')} / {String(p.cap ?? '?')} tok</span>
+            <span className="mono">{t('cards.contextTokens', { est: String(p.est_tokens ?? '?'), cap: String(p.cap ?? '?') })}</span>
           </div>
           <p className="dock-hint">{t('cards.contextHint')}</p>
         </>
       ) : (
-        <p>flag <span className="mono">{String(p.flag_id ?? '')}</span> → <span className="mono">{String(p.target ?? '')}</span></p>
+        <p><Trans i18nKey="cards.flagRoute" values={{ flag: String(p.flag_id ?? ''), target: String(p.target ?? '') }}
+          components={{ m: <span className="mono" /> }} /></p>
       )}
     </DecisionShell>
   )

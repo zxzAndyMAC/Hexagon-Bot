@@ -22,7 +22,7 @@ export function ArtifactList() {
   if (rows.length === 0) {
     return (
       <div data-artifact-list-empty className="flex flex-1 flex-col items-center justify-center px-5 py-7 text-center">
-        <span className="grid size-9 place-items-center rounded-[10px] bg-canvas text-ink-2 shadow-[inset_0_0_0_1px_var(--line)]">
+        <span className="grid size-9 place-items-center rounded-[var(--r-card)] bg-canvas text-ink-2 shadow-[inset_0_0_0_1px_var(--line)]">
           <Icon name="layers" size={16} />
         </span>
         {/* ui-audit 票 06（P2-14）：空态给一句操作引导，不留纯白板 */}

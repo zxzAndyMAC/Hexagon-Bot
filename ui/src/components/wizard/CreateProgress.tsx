@@ -53,7 +53,7 @@ export function CreateProgress({ name, busy, done, fail, durations, roleCount }:
           )
         })}
       </ul>
-      <div className="mt-4 flex items-center gap-2 rounded-[10px] bg-canvas px-3 py-2.5 text-[12.5px] text-ink-2">
+      <div className="mt-4 flex items-center gap-2 rounded-[var(--r-card)] bg-canvas px-3 py-2.5 text-[12.5px] text-ink-2">
         <Icon name="info" size={14} />{t('wizard.create.note')}
       </div>
     </div>

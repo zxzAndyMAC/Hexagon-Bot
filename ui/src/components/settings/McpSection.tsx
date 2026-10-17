@@ -15,6 +15,7 @@ import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { Switch } from '@/components/ui/switch'
 import { Icon } from '../Icon'
 import { Empty, ListDetail, ScanPanel } from './kit'
+import { useBusyAction } from '../../useBusyAction'
 
 const kv = (o: Record<string, string | undefined>) => Object.entries(o).map(([k, v]) => `${k}=${v ?? ''}`).join('\n')
 const parseKv = (text: string) => {
@@ -47,29 +48,22 @@ function McpServiceForm({ entry, readOnly = false, onDone, onCancel, onDelete }:
   const [envText, setEnvText] = useState(kv(entry?.env ?? {}))
   const [headersText, setHeadersText] = useState(kv(entry?.headers ?? {}))
   const [disabled, setDisabled] = useState(entry?.disabled ?? false)
-  const [busy, setBusy] = useState(false)
+  const { busy, run } = useBusyAction()
 
-  const save = async () => {
-    setBusy(true)
-    try {
-      await api.saveMcpService({
-        name: name.trim(),
-        command: remote ? '' : command.trim(),
-        args: remote ? [] : args.split(/\s+/).filter(Boolean),
-        cwd: !remote && cwd.trim() ? cwd.trim() : null,
-        env: parseKv(envText),
-        headers: parseKv(headersText),
-        disabled,
-        url: remote && url.trim() ? url.trim() : null,
+  const save = () => run(async () => {
+    await api.saveMcpService({
+      name: name.trim(),
+      command: remote ? '' : command.trim(),
+      args: remote ? [] : args.split(/\s+/).filter(Boolean),
+      cwd: !remote && cwd.trim() ? cwd.trim() : null,
+      env: parseKv(envText),
+      headers: parseKv(headersText),
+      disabled,
+      url: remote && url.trim() ? url.trim() : null,
       })
       pushToast(t('mcp.saved'), 'ok')
       onDone()
-    } catch (e) {
-      pushToast(errText(e), 'err')
-    } finally {
-      setBusy(false)
-    }
-  }
+  })
 
   return (
     <div data-mcp-form className="flex flex-col gap-3">
@@ -101,7 +95,7 @@ function McpServiceForm({ entry, readOnly = false, onDone, onCancel, onDelete }:
         ) : (
           <>
             <Field label={t('mcp.fCommand')}>
-              <Input aria-label={t('mcp.fCommand')} className="font-mono text-[12px]" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx / binary" />
+              <Input aria-label={t('mcp.fCommand')} className="font-mono text-[12px]" value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('mcp.commandPlaceholder')} />
             </Field>
             <Field label={t('mcp.fArgs')}>
               <Input aria-label={t('mcp.fArgs')} className="font-mono text-[12px]" value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y pkg …" />
@@ -170,7 +164,7 @@ export function McpSection({ projectless }: { projectless: boolean }) {
   const [scanRows, setScanRows] = useState<ExtMcpRow[] | null>(null)
   const [picked, setPicked] = useState<Set<number>>(new Set())
   const [scanning, setScanning] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const { busy, run } = useBusyAction()
 
   const load = useCallback(async () => {
     setError('')
@@ -200,14 +194,13 @@ export function McpSection({ projectless }: { projectless: boolean }) {
 
   const doImport = async () => {
     if (!scanRows) return
-    setBusy(true)
-    try {
+    await run(async () => {
       const references = [...picked].map((i) => scanRows[i].reference)
       const rep = await api.importMcp(references)
       pushToast(t('mcp.importResult', { n: rep.imported, m: rep.skipped.length }), 'ok')
       setScanRows(null)
       await load()
-    } catch (e) { pushToast(errText(e), 'err') } finally { setBusy(false) }
+    })
   }
 
   const openMarket = async () => {
