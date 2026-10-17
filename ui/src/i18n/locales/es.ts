@@ -879,14 +879,14 @@ export default {
 
   providers: {
     hint: "Los proveedores son globales. Los slots eligen proveedor y modelo; default cubre los no asignados. Las claves usan el almacén activo indicado en General.",
-    filter: 'Filtrar proveedores…',
+    filter: 'Buscar proveedores',
     empty: 'Sin proveedores — añade uno para que los agentes llamen al modelo',
     name: 'Nombre',
     keySet: 'clave guardada', keyMissing: 'sin clave',
     slot: 'Slot', kind: 'Tipo', baseUrl: 'Base URL', model: 'Modelo', key: 'API key',
     keyKeep: 'guardada — vacío para mantener',
-    showKey: 'Mostrar', hideKey: 'Ocultar', check: 'Probar', checkOk: '{{count}} modelos obtenidos',
-    fetch: 'Obtener lista', addModel: 'Añadir',
+    showKey: 'Mostrar', hideKey: 'Ocultar', check: 'Probar y obtener modelos', checking: 'Comprobando la conexión…', checkOk: '{{count}} modelos obtenidos',
+    fetch: 'Obteniendo modelos…', addModel: 'Añadir',
     noModels: 'Sin modelos — obtén o añade manualmente',
     modelId: 'ID de modelo', modelName: 'Nombre', modelGroup: 'Grupo', caps: 'Capacidades',
     cap_text_generation: "Generación de texto",

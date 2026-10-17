@@ -879,14 +879,14 @@ export default {
 
   providers: {
     hint: "モデル設定は全体で共有します。スロットはプロバイダーとモデルを選び、default は未割当を補います。キーは一般設定に表示された実際の保存先を使います。",
-    filter: 'プロバイダーを絞り込み…',
+    filter: 'プロバイダーを検索',
     empty: 'プロバイダ未設定——まず1件追加してください',
     name: '名前',
     keySet: 'キー保存済み', keyMissing: 'キー未設定',
     slot: 'スロット', kind: '種別', baseUrl: 'Base URL', model: 'モデル', key: 'API キー',
     keyKeep: '保存済み——空欄で維持',
-    showKey: '表示', hideKey: '非表示', check: '接続確認', checkOk: '{{count}} 件のモデルを取得',
-    fetch: '一覧を取得', addModel: '追加',
+    showKey: '表示', hideKey: '非表示', check: '接続確認してモデルを取得', checking: '接続を確認中…', checkOk: '{{count}} 件のモデルを取得',
+    fetch: 'モデルを取得中…', addModel: '追加',
     noModels: 'モデルなし——取得または手動追加',
     modelId: 'モデル ID', modelName: '表示名', modelGroup: 'グループ', caps: '機能',
     cap_text_generation: "テキスト生成",

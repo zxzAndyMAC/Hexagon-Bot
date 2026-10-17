@@ -879,14 +879,14 @@ export default {
 
   providers: {
     hint: "Model providers are global. Slot bindings select a provider and model; default covers unbound slots. Keys use the active credential backend shown in General settings.",
-    filter: 'Filter providers…',
+    filter: 'Search providers',
     empty: 'No providers yet — add one so agents can call a model',
     name: 'Name',
     keySet: 'key saved', keyMissing: 'no key configured',
     slot: 'Slot', kind: 'Kind', baseUrl: 'Base URL', model: 'Model', key: 'API key',
     keyKeep: 'saved — leave empty to keep',
-    showKey: 'Show', hideKey: 'Hide', check: 'Check', checkOk: '{{count}} models fetched',
-    fetch: 'Fetch list', addModel: 'Add',
+    showKey: 'Show', hideKey: 'Hide', check: 'Check and fetch models', checking: 'Checking connection…', checkOk: '{{count}} models fetched',
+    fetch: 'Fetching models…', addModel: 'Add',
     noModels: 'No models — fetch or add manually',
     modelId: 'Model ID', modelName: 'Display name', modelGroup: 'Group', caps: 'Capabilities',
     cap_text_generation: "Text generation",

@@ -879,14 +879,14 @@ export default {
 
   providers: {
     hint: "模型供应商是全局配置。槽位绑定选择供应商和模型，default 兜底未绑定槽位。密钥使用「通用」设置显示的实际凭据后端。",
-    filter: '筛选供应商…',
+    filter: '搜索供应商',
     empty: '还没有供应商——先加一条，Agent 才能调模型',
     name: '名称',
     keySet: 'key 已存', keyMissing: '未配置密钥',
     slot: '槽位', kind: '类型', baseUrl: 'Base URL', model: '模型', key: 'API key',
     keyKeep: '已存——留空保持不变',
-    showKey: '显示', hideKey: '隐藏', check: '检测', checkOk: '已拉取 {{count}} 个模型',
-    fetch: '拉取列表', addModel: '添加',
+    showKey: '显示', hideKey: '隐藏', check: '检测并拉取模型', checking: '正在检测连接…', checkOk: '已拉取 {{count}} 个模型',
+    fetch: '正在拉取模型…', addModel: '添加',
     noModels: '暂无模型——拉取或手动添加',
     modelId: '模型 ID', modelName: '显示名', modelGroup: '分组', caps: '能力',
     cap_text_generation: "文本生成",

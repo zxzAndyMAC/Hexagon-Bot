@@ -63,6 +63,7 @@ export function ProviderManager() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [phase, setPhase] = useState<'check' | 'fetch' | null>(null)
 
   const reload = async (keepSel?: string) => {
     try {
@@ -149,14 +150,28 @@ export function ProviderManager() {
     await reload('')
   }
 
-  /// 检测 = 拉一次模型目录；成功顺手合并进 draft.models（保留已有能力标记）。
+  /// review R3（settings#models「检测并拉取模型」，原型一个按钮）：曾是「检测」+ 模型目录头「拉取列表」两个按钮，
+  /// 实际调同一函数。合并为一个按钮两段状态——① 检测连接（要钥匙的端点先 probe 一次，失败就停在原因上，
+  /// 不拉列表；本地端点不需要钥匙，probe 会报 missing_credential，所以跳过）→ ② 拉取模型并合并进 draft.models
+  /// （保留已有能力标记）。
   const probeAndMerge = async () => {
     if (!draft) return
     setBusy(true)
     setProbe(null)
     try {
-      await save(secret.trim() || undefined) // 先落配置+key 再拉
-      const ids = await api.fetchProviderModels(draft.id || slug(draft.name))
+      setPhase('check')
+      await save(secret.trim() || undefined) // 先落配置+key 再检测
+      const id = draft.id || slug(draft.name)
+      if (!isLocalEndpoint(draft.base_url)) {
+        const check = await api.probeProviderKey({ id, name: draft.name, kind: draft.kind, base_url: draft.base_url, models: [], enabled: draft.enabled }, undefined, '')
+        if (!check.ok) {
+          const reason = check.failure ?? 'invalid_response'
+          setProbe({ ok: false, text: t(`wizard.probe.reason.${reason}`, { defaultValue: t('wizard.probe.reason.invalid_response') }) })
+          return
+        }
+      }
+      setPhase('fetch')
+      const ids = await api.fetchProviderModels(id)
       const byId = new Map(draft.models.map((m) => [m.id, m]))
       const merged = ids.map((m) => {
         const old = byId.get(m.id)
@@ -172,6 +187,7 @@ export function ProviderManager() {
       setProbe({ ok: false, text: errText(e) })
     } finally {
       setBusy(false)
+      setPhase(null)
     }
   }
 
@@ -469,7 +485,7 @@ export function ProviderManager() {
                 className="mb-[22px]" disabled={probeDisabled} loading={busy} onClick={probeAndMerge}
                 title={probeDisabled && !busy ? t('providers.checkNeedsKey') : undefined}
               >
-                {!busy && <Icon name="refresh" size={14} />}{t('providers.check')}
+                {!busy && <Icon name="refresh" size={14} />}{t(phase === 'check' ? 'providers.checking' : phase === 'fetch' ? 'providers.fetch' : 'providers.check')}
               </Button>
             </div>
             {probe && (
@@ -479,7 +495,6 @@ export function ProviderManager() {
             {/* ---- 模型目录 ---- */}
             <SubHead aside={
               <>
-                <Button size="xs" variant="ghost" disabled={busy} onClick={probeAndMerge}><Icon name="refresh" size={14} />{t('providers.fetch')}</Button>
                 <Button size="xs" variant="ghost" onClick={() => { setEditingId(null); setEditModel(emptyModel()) }}><Icon name="plus" size={14} />{t('providers.addModel')}</Button>
               </>
             }>{t('settingsUi.modelsN', { count: draft.models.length })}</SubHead>

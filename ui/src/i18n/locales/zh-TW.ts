@@ -879,14 +879,14 @@ export default {
 
   providers: {
     hint: "模型供應商是全域設定。槽位綁定選擇供應商與模型，default 承接未綁定槽位。金鑰使用「一般」設定顯示的實際憑據後端。",
-    filter: '篩選供應商…',
+    filter: '搜尋供應商',
     empty: '還沒有供應商——先加一條，Agent 才能調模型',
     name: '名稱',
     keySet: 'key 已存', keyMissing: '未設定金鑰',
     slot: '槽位', kind: '類型', baseUrl: 'Base URL', model: '模型', key: 'API key',
     keyKeep: '已存——留空保持不變',
-    showKey: '顯示', hideKey: '隱藏', check: '檢測', checkOk: '已拉取 {{count}} 個模型',
-    fetch: '拉取列表', addModel: '新增',
+    showKey: '顯示', hideKey: '隱藏', check: '檢測並拉取模型', checking: '正在檢測連線…', checkOk: '已拉取 {{count}} 個模型',
+    fetch: '正在拉取模型…', addModel: '新增',
     noModels: '暫無模型——拉取或手動新增',
     modelId: '模型 ID', modelName: '顯示名', modelGroup: '分組', caps: '能力',
     cap_text_generation: "文字生成",

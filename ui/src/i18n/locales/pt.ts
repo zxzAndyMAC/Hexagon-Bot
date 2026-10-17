@@ -879,14 +879,14 @@ export default {
 
   providers: {
     hint: "Provedores são globais. Slots selecionam provedor e modelo; default cobre os não vinculados. Chaves usam o armazenamento ativo mostrado em Geral.",
-    filter: 'Filtrar provedores…',
+    filter: 'Pesquisar provedores',
     empty: 'Sem provedores — adicione um para os agentes chamarem o modelo',
     name: 'Nome',
     keySet: 'chave guardada', keyMissing: 'sem chave',
     slot: 'Slot', kind: 'Tipo', baseUrl: 'Base URL', model: 'Modelo', key: 'API key',
     keyKeep: 'guardada — vazio para manter',
-    showKey: 'Mostrar', hideKey: 'Ocultar', check: 'Testar', checkOk: '{{count}} modelos obtidos',
-    fetch: 'Obter lista', addModel: 'Adicionar',
+    showKey: 'Mostrar', hideKey: 'Ocultar', check: 'Testar e obter modelos', checking: 'Verificando a conexão…', checkOk: '{{count}} modelos obtidos',
+    fetch: 'Obtendo modelos…', addModel: 'Adicionar',
     noModels: 'Sem modelos — obtenha ou adicione manualmente',
     modelId: 'ID do modelo', modelName: 'Nome', modelGroup: 'Grupo', caps: 'Capacidades',
     cap_text_generation: "Geração de texto",
