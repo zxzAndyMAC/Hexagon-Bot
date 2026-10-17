@@ -18,6 +18,7 @@ import { Icon } from '../Icon'
 import { LoadingState } from '../LoadingState'
 import { CodeBlock, Md } from '../Md'
 import { DetailHead, Empty, ListDetail, ScanPanel } from './kit'
+import { useBusyAction } from '../../useBusyAction'
 
 /** 来源徽标（settings#skills）：项目 info / 全局 neutral / 内置 line。 */
 export function OriginBadge({ origin, label }: { origin: string; label: string }) {
@@ -46,7 +47,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   // origBody 只装 SKILL.md 原文——content 跟的是当前选中文件（可能不是
   // SKILL.md），取消编辑时拿它恢复会把别文件的正文灌进编辑框。
   const [origBody, setOrigBody] = useState('')
-  const [busy, setBusy] = useState(false)
+  const { busy, run } = useBusyAction()
 
   useEffect(() => {
     let current = true
@@ -86,8 +87,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
   }
 
   const save = async () => {
-    setBusy(true)
-    try {
+    await run(async () => {
       // body 是整份 SKILL.md 原文——直接落盘（不重组 frontmatter，用户可见的就是写的）。
       const m = body.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
       const fmName = m?.[1].match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? skill.name
@@ -113,7 +113,7 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
       setEditing(false)
       setReadRevision((n) => n + 1)
       onSaved()
-    } catch (e) { pushToast(errText(e), 'err') } finally { setBusy(false) }
+    })
   }
 
   // 取消编辑：字段回到最后加载的 SKILL.md 原文，放弃未保存修改。
@@ -189,17 +189,15 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
 
 function NewSkillForm({ onCreated }: { onCreated: (name: string) => Promise<void> }) {
   const { t } = useTranslation()
-  const pushToast = useUiStore((s) => s.pushToast)
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
-  const [busy, setBusy] = useState(false)
+  const { busy, run } = useBusyAction()
   const create = async () => {
     if (!name.trim()) return
-    setBusy(true)
-    try {
+    await run(async () => {
       await api.saveGlobalSkill(name.trim(), desc.trim(), `# ${name.trim()}\n`)
       await onCreated(name.trim())
-    } catch (e) { pushToast(errText(e), 'err') } finally { setBusy(false) }
+    })
   }
   return (
     <div data-new-skill className="flex max-w-[520px] flex-col gap-3">
@@ -223,7 +221,7 @@ export function SkillsSection() {
   const [skills, setSkills] = useState<SkillRow[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const { busy, run } = useBusyAction()
   // 票 04：本机外部技能扫描导入
   const [scanRows, setScanRows] = useState<ExtSkillRow[] | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -270,13 +268,12 @@ export function SkillsSection() {
   }
 
   const doImport = async () => {
-    setBusy(true)
-    try {
+    await run(async () => {
       const rep = await api.importSkills([...picked])
       pushToast(t('skills.importResult', { n: rep.imported, m: rep.skipped.length }), 'ok')
       setScanRows(null)
       await load()
-    } catch (e) { pushToast(errText(e), 'err') } finally { setBusy(false) }
+    })
   }
 
   // 功能缺口 D4（原型 ld-foot「安装…」）：一个按钮开 A16 菜单（文件夹 / ZIP），替代原来并排两个且只在桌面壳

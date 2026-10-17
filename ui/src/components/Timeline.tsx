@@ -13,6 +13,7 @@ import { api, errText, isTauri } from '../api'
 import { Md, CodeBlock, ReasoningMarkdown } from './Md'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
 import { useUiStore } from '../store'
+import { useCopyFlash } from '../useCopyFlash'
 import { buildRows, compactMarks, expandedAfterPrepend, markHighlights, nodeMarks, rowContainsEvent, rowKey, deriveWorkbenchStatus, stampedByAutonomy, isInterruptedTurn, openTurn, DECISION_KINDS, SYS_HIGH_RISK, MODEL_RECOVERY_KINDS, isManagedDecision, type Filter, type NodeMark, type Row as ModelRow } from '../timelineModel'
 import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
@@ -336,16 +337,10 @@ const StageHeader = memo(function StageHeader({ item }: { item: TimelineItem }) 
 /** 复制 ibtn sm（C1/C2 悬停出现；沿用 CodeBlock 复制形制）。 */
 function CopyMessage({ text }: { text: string }) {
   const { t } = useTranslation()
-  const pushToast = useUiStore((s) => s.pushToast)
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(timer)
-  }, [copied])
+  const { copied, copy } = useCopyFlash()
   return (
     <IconButton size="sm" className="tl-copy" label={copied ? t('md.copied') : t('timeline.copyMessage')}
-      onClick={() => { navigator.clipboard.writeText(text).then(() => setCopied(true), (e) => pushToast(errText(e), 'err')) }}>
+      onClick={() => { void copy(text) }}>
       <Icon name={copied ? 'check' : 'copy'} size={12} />
     </IconButton>
   )
