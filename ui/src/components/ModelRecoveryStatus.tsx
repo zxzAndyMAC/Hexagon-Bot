@@ -42,6 +42,22 @@ export function formatRetryLeft(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+/**
+ * ui-redesign review R1（accessibility §4「模型恢复：状态变化 polite」）：只在 state 变化时
+ * 换播报文字。挂载时留空——时间线回放会一次挂上几十条历史事项，挂载即播会刷屏；倒计时
+ * tick 只改可见文字、不进本区，否则读屏每秒念一次。
+ */
+function useStateAnnouncement(state: string, text: string): string {
+  const prev = useRef(state)
+  const [said, setSaid] = useState('')
+  useEffect(() => {
+    if (prev.current === state) return
+    prev.current = state
+    setSaid(text)
+  }, [state, text])
+  return said
+}
+
 /** 自动重试窗口内每秒走一格的时钟；不在重试中时不起定时器。 */
 function useRetryClock(active: boolean): number {
   const [now, setNow] = useState(() => Date.now())
@@ -121,6 +137,9 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const target = recovery.target_role ?? t('modelRecovery.nextRole')
   const intake = recovery.purpose === 'opening_intake'
   const [title, hint] = copyKeys(state, turn, intake)
+  const announcement = useStateAnnouncement(state, t(title))
+  // 播报区与可见块是 Fragment 的同位兄弟：两种块形态切换时区节点不重挂，变化才会被读屏念出。
+  const live = <span role="status" aria-live="polite" className="sr-only" data-recovery-live>{announcement}</span>
   const reason = state === 'superseded' && recovery.superseded_reason ? t(`modelRecovery.reason.${recovery.superseded_reason}`, { defaultValue: recovery.superseded_reason }) : ''
   const refusal = recovery.last_refusal && !['recovered', 'superseded'].includes(state)
     ? t('modelRecovery.lastRefusal', { reason: t(`modelRecovery.refusal.${recovery.last_refusal}`, { defaultValue: recovery.last_refusal }) }) : ''
@@ -146,7 +165,7 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   </details>
   // ⑥ 已恢复 / ⑦ 已失效：块收成一行（原地变化，不新增行）。
   if (state === 'recovered' || state === 'superseded') {
-    return <div data-model-recovery={id} data-state={state} aria-busy={busy} className="text-[12.5px]">
+    return <>{live}<div data-model-recovery={id} data-state={state} aria-busy={busy} className="text-[12.5px]">
       <div className={state === 'recovered' ? 'flex items-center gap-1.5 text-green' : 'text-ink-3'}>
         {state === 'recovered'
           ? <><Icon name="circle-check" size={14} />{t('modelRecovery.recoveredLine', { count: history.length + 1 })}</>
@@ -154,11 +173,11 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
       </div>
       {state === 'recovered' && hint && <div className="mt-0.5 text-[12px] text-ink-3">{t(hint, { target, instruction: recovery.held_instruction ?? '' })}</div>}
       {state === 'recovered' && history.length > 0 && historyBlock}
-    </div>
+    </div></>
   }
   const retrying = state === 'retrying'
   const tone = state === 'unknown' ? 'text-ink-3' : 'text-orange'
-  return <div data-model-recovery={id} data-state={state} aria-busy={busy}
+  return <>{live}<div data-model-recovery={id} data-state={state} aria-busy={busy}
     className={cn('rounded-[12px] bg-[var(--app-card)] px-3.5 py-3 text-[13px]',
       retrying ? 'shadow-[var(--shadow-card)]' : 'shadow-[0_0_0_1px_color-mix(in_oklch,var(--orange)_35%,transparent),var(--shadow-card)]')}>
     <div className="flex items-center gap-2">
@@ -207,5 +226,5 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
       </>}
     </div>}
     {chatOffer && <div className="mt-2 text-[12px] text-ink-3">{t('modelRecovery.chatModelNote')}</div>}
-  </div>
+  </div></>
 }

@@ -163,6 +163,31 @@ it('counts the retry window down and fills the elapsed bar', async () => {
  } finally { await act(async()=>root.unmount()); vi.useRealTimers() }
 })
 
+// ui-redesign review R1（accessibility §4）：状态变化 polite 播报；挂载不播，倒计时 tick 不播，
+// 播报区在「重试中」大块与「已恢复」单行两种形态间不重挂（重挂会让读屏丢掉这次变化）。
+it('announces recovery state changes politely, not countdown ticks', async () => {
+ vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+ vi.setSystemTime(new Date('2026-10-15T10:00:00Z'))
+ const retrying={...payload,state:'retrying',can_retry:false,retry_deadline_ms:Date.now()+38_000,retry_window_ms:60_000}
+ const el=document.createElement('div'); const root=createRoot(el)
+ const live=()=>el.querySelector('[data-recovery-live]')
+ try {
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={retrying} />))
+  const region=live()
+  expect(region?.getAttribute('role')).toBe('status')
+  expect(region?.getAttribute('aria-live')).toBe('polite')
+  expect(region?.textContent).toBe('')
+  await act(async()=>{ vi.advanceTimersByTime(3_000) })
+  expect(live()?.textContent).toBe('')
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={{...retrying,state:'recovered',retry_deadline_ms:null}} />))
+  expect(live()).toBe(region)
+  expect(region?.textContent).toBe('Recovered')
+  await act(async()=>root.render(<ModelRecoveryStatus id="q1" payload={{...retrying,state:'stopped',can_retry:true,retry_deadline_ms:null}} />))
+  expect(live()).toBe(region)
+  expect(region?.textContent).toBe('Stopped')
+ } finally { await act(async()=>root.unmount()); vi.useRealTimers() }
+})
+
 it('formats the remaining time as m:ss and stops at zero', () => {
  expect(formatRetryLeft(38_000)).toBe('0:38')
  expect(formatRetryLeft(61_200)).toBe('1:02')
