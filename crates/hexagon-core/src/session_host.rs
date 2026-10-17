@@ -2035,4 +2035,66 @@ mod tests {
             }
         }
     }
+
+    // D12（review S3，2026-10-17）：cancel_once 的防重判定配属性测试。任意交错
+    // 「撤销 / 到点过期 / 消费」，不变量：
+    // ① 状态离开 scheduled 后不再回来；cancelled 之后永不过期、不被消费；
+    // ② 撤销结果只由撤销前的状态决定——scheduled/cancelled → Ok(cancelled)，
+    //    expired/consumed → TriggerAlreadyFired 且状态不动；
+    // ③ trigger_cancelled 事件至多一条（重复撤销幂等，不记第二条）。
+    proptest! {
+        #[test]
+        fn cancel_once_is_idempotent_and_never_beats_a_fired_trigger(
+            ops in prop::collection::vec(0u8..3, 1..12)
+        ) {
+            let db = db();
+            let session = create(&db, "p1", "/tmp/p", "main", 2).unwrap();
+            let sid = session.session_id.clone();
+            schedule_once(&db, &sid, "/tmp/p", "main", "later-p", "default", vec![], 10, "trace-p")
+                .unwrap();
+            let state = |db: &Db| trigger_row(db, &sid, "later-p").unwrap().state;
+            let mut left_scheduled = false;
+            for op in ops {
+                let before = state(&db);
+                match op {
+                    0 => {
+                        let result = cancel_once(&db, &sid, "later-p");
+                        match before {
+                            OneTimeTriggerState::Scheduled | OneTimeTriggerState::Cancelled => {
+                                prop_assert_eq!(result.unwrap().state, OneTimeTriggerState::Cancelled);
+                            }
+                            OneTimeTriggerState::Expired | OneTimeTriggerState::Consumed => {
+                                prop_assert!(matches!(result, Err(SessionError::TriggerAlreadyFired(_))));
+                                prop_assert_eq!(state(&db), before);
+                            }
+                        }
+                    }
+                    1 => {
+                        expire_due(&db, "p1", 100).unwrap();
+                    }
+                    _ => {
+                        let _ = consume_once(&db, &sid, "/tmp/p", "main", "later-p", PermissionRecheck::confirmed());
+                    }
+                }
+                let after = state(&db);
+                if before == OneTimeTriggerState::Cancelled {
+                    prop_assert_eq!(after, OneTimeTriggerState::Cancelled);
+                }
+                if left_scheduled {
+                    prop_assert_ne!(after, OneTimeTriggerState::Scheduled);
+                }
+                left_scheduled |= after != OneTimeTriggerState::Scheduled;
+            }
+            let cancelled_events: i64 = db
+                .conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE kind='system' AND json_extract(payload,'$.kind')='trigger_cancelled'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            prop_assert!(cancelled_events <= 1);
+            prop_assert_eq!(cancelled_events == 1, state(&db) == OneTimeTriggerState::Cancelled);
+        }
+    }
 }

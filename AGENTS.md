@@ -30,7 +30,7 @@
 
 arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊断卡）。每条附可执行的检查面；检查只剩人工评审的规则不进本节。
 
-- **`pending_questions` 与 `agents.status` 的写路径只出现在属主模块**（`cards.rs` / `orchestra.rs`）。检查：`rg "pending_questions|UPDATE agents SET status" crates/hexagon-core/src` 的 SQL 命中只落属主；合法豁免=测试 helper 名（api/tests.rs）、schema 断言（db.rs）、泄漏扫描标签（credentials.rs `pending_questions:{id}`）、注释（D04/D09）
+- **`pending_questions` 与 `agents.status` / `agents.removed_at` 的写路径只出现在属主模块**（`cards.rs` / `orchestra.rs`；`removed_at` 自 2026-10-17 review S3 起收进 `orchestra::write_agent_removed`，`team_removal` 只做守门判定）。检查：`rg "pending_questions|UPDATE agents SET (status|removed_at)" crates/hexagon-core/src` 的 SQL 命中只落属主；合法豁免=测试 helper 名（api/tests.rs）、schema 断言（db.rs）、泄漏扫描标签（credentials.rs `pending_questions:{id}`）、注释（D04/D09）
 - **core 内部模块不得 `use crate::api`**——门面只被壳层调用。白名单：`scenario.rs`、`setup.rs`、`replay.rs`（回放/向导是门面上方的驱动方，用真门面是设计）；`#[cfg(test)]` 内 `Workbench::for_test` 是合法测试接缝不算依赖；`errcode.rs` 是错误码注册表，按设计必须点名全部错误类型。检查：`scripts/check-arch.sh`——`use crate::api` 只落白名单；`crate::api::` 路径引用除 `Workbench`（`for_test` 测试接缝，`cfg(test)` 编译闸天然兜底）外只落白名单 + `errcode.rs` + `api.rs`（D08，票 09 清零 judge 残留）
 - **IPC 返回值必须是 serde 结构体**：禁止 `Vec<Value>`/`json!` 逐行拼装响应，payload 字段不得嵌字符串化 JSON。检查：`rg 'Result<Vec<Value>|Result<Value' crates/hexagon-core/src/api.rs` 白名单收敛（D06）
 - **跨 IPC 的 DTO 必须 `#[derive(ts_rs::TS)]` + `#[ts(export, export_to = ...)]`**，`export_to` 相对 crate 根：hexagon-core 用 `../../../ui/src/gen/`、src-tauri 用 `../../ui/src/gen/`。重生：`cargo test export_bindings`；64 位整数字段必须钉 `#[ts(type = "number")]`（ts-rs v11 默认 i64/u64→bigint，与 JSON number 不符）。`ui/src/gen/` 入 git，UI 不得手写同名 DTO（D06/ADR 0054）

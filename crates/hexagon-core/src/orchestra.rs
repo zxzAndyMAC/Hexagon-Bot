@@ -2074,6 +2074,22 @@ pub fn write_agent_status(
     Ok(())
 }
 
+/// 移出团队的软删裸写（ui-redesign gap D2；review S3 2026-10-17 从 team_removal
+/// 挪进属主——agents 行的生命周期写只落 orchestra，D09）。守门判定在
+/// `team_removal::refusal`，这里不判；`removed_at IS NULL` 守卫让重复调用无副作用。
+/// 返回是否真的落了一行。
+pub fn write_agent_removed(
+    db: &Db,
+    project_id: &str,
+    agent_id: &str,
+) -> Result<bool, rusqlite::Error> {
+    let n = db.conn().execute(
+        "UPDATE agents SET removed_at=datetime('now') WHERE project_id=?1 AND id=?2 AND removed_at IS NULL",
+        rusqlite::params![project_id, agent_id],
+    )?;
+    Ok(n > 0)
+}
+
 /// 全项目休眠裸写（usage cap 与 sleep_all 共用）。
 pub fn write_team_sleeping(db: &Db, project_id: &str) -> Result<(), rusqlite::Error> {
     db.conn().execute(
