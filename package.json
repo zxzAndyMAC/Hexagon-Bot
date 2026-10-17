@@ -10,6 +10,8 @@
     "test:computer-use": "node --test scripts/prepare-computer-use.test.mjs && node scripts/test-computer-use.mjs",
     "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && bash scripts/check-arch.sh && npm --prefix ui run lint && npm --prefix ui run typecheck && npm --prefix ui run tokens && npm --prefix ui run i18n && bash scripts/check-bindings.sh",
     "build:computer-use": "node scripts/build-computer-use.mjs",
-    "build:browser": "node scripts/prepare-browser-runtime.mjs"
+    "build:browser": "node scripts/prepare-browser-runtime.mjs",
+    "test:visual": "npm --prefix ui run test:visual",
+    "test:visual:update": "npm --prefix ui run test:visual:update"
   }
 }
