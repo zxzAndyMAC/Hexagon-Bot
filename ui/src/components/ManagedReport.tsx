@@ -106,7 +106,7 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
             <h4 className="mt-4 mb-2 text-[12px] font-normal text-ink-3">{t('delegation.groupDone')}</h4>
             <ul className="m-0 flex list-none flex-col p-0 text-[13px]" data-managed-done>
               {shownDone.map(record => <li key={record.event_id} data-managed-record={record.event_id}>
-                <button type="button" className="hx-focus flex h-8 w-full items-center gap-2 rounded-[6px] px-1 text-left live:hover:bg-hover"
+                <button type="button" className="hx-focus flex h-8 w-full items-center gap-2 rounded-[var(--r-xs)] px-1 text-left live:hover:bg-hover"
                   title={t('delegation.showInTimeline')} onClick={() => close(record.event_id)}>
                   <Icon name="circle-check" size={14} className="flex-none text-green" />
                   <span className="min-w-0 flex-1 truncate">{recordTitle(t, record)}</span>
@@ -115,13 +115,13 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
                 </button>
               </li>)}
             </ul>
-            {done.length > DONE_SHOWN && <button type="button" className="hx-focus mt-1 flex items-center gap-1 rounded-[6px] text-[12px] text-ink-2 live:hover:text-ink"
+            {done.length > DONE_SHOWN && <button type="button" className="hx-focus mt-1 flex items-center gap-1 rounded-[var(--r-xs)] text-[12px] text-ink-2 live:hover:text-ink"
               aria-expanded={more} onClick={() => setMore(!more)}>
               <Icon name={more ? 'chevron-up' : 'chevron-down'} size={12} />{t('delegation.more', { count: done.length - DONE_SHOWN })}
             </button>}
           </>}
         </>
-  return <section data-managed-report className={card ? 'rounded-[14px] bg-surface px-[18px] py-4 shadow-[var(--shadow-raised)]' : undefined}
+  return <section data-managed-report className={card ? 'rounded-[var(--r-panel)] bg-surface px-[18px] py-4 shadow-[var(--shadow-raised)]' : undefined}
     aria-label={t('delegation.report')}>
     {card && <div className="mb-3 flex items-center gap-2">
       <span className="mg-av"><Icon name="bot" size={12} /></span>
@@ -157,7 +157,7 @@ function opTime(at: string): string {
 }
 
 function Kpi({ label, value, tone }: { label: string; value: number | string; tone?: string }) {
-  return <div className="rounded-[10px] bg-inset p-3">
+  return <div className="rounded-[var(--r-card)] bg-inset p-3">
     <div className="text-[12px] text-ink-3">{label}</div>
     <div className={`text-[15px] font-semibold tabular-nums ${tone ?? 'text-ink'}`}>{value}</div>
   </div>
@@ -185,7 +185,7 @@ function ExternalOperations({ ops, onShow }: { ops: ExternalOperation[]; onShow:
       ? <p className="delegation-empty">{t('delegation.externalEmpty')}</p>
       : <ul className="m-0 flex list-none flex-col gap-1 p-0 text-[12.5px] text-ink-2">
         {ops.map(op => <li key={op.event_id} data-external-kind={op.kind} data-verification={op.verification}
-          className="flex flex-wrap items-center gap-2 rounded-[8px] px-1 py-1 live:hover:bg-hover">
+          className="flex flex-wrap items-center gap-2 rounded-[var(--r-sm)] px-1 py-1 live:hover:bg-hover">
           <Badge shape="sq">{t(`delegation.externalKind.${op.kind}`, { defaultValue: op.kind })}</Badge>
           <code className="min-w-0 truncate font-mono text-[12px] text-ink">{op.target}</code>
           {/* MCP tool names are the service's own identifiers: shown as is. */}

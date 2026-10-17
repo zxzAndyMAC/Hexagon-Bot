@@ -156,7 +156,7 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   const remedy = canRetry && latestCode && (SETTINGS_CODES.has(latestCode) || USAGE_CODES.has(latestCode)) ? latestCode : null
   const keyRemedy = remedy && KEY_CODES.has(remedy)
   const historyBlock = <details className="mt-2 text-[12px] text-ink-2" data-attempts>
-    <summary className="hx-focus cursor-pointer rounded-[6px] live:hover:text-ink">{t('modelRecovery.historyTitle', { count: history.length })}</summary>
+    <summary className="hx-focus cursor-pointer rounded-[var(--r-xs)] live:hover:text-ink">{t('modelRecovery.historyTitle', { count: history.length })}</summary>
     {recovery.instruction && <div className="mt-1 whitespace-pre-wrap">{t('modelRecovery.instruction', { text: recovery.instruction })}</div>}
     {history.map((failure, index) => <div key={index} className="mt-1 font-mono text-[11.5px] leading-[1.7]">
       {failure.model ?? t('modelRecovery.modelSlot', { slot: failure.model_slot })} · {failure.code} · {failure.request_id ?? t('modelRecovery.notSent')}
@@ -197,12 +197,12 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
       {latest && ` · ${latest.model ?? t('modelRecovery.modelSlot', { slot: latest.model_slot })}`}
     </div>}
     {recovery.unfinished && recovery.partial_text && <details className="mt-2 text-[12px] text-ink-2">
-      <summary className="hx-focus flex cursor-pointer items-center gap-1.5 rounded-[6px]"><Badge variant="warn">{t('modelRecovery.unfinishedChip')}</Badge>{t('modelRecovery.unfinished')}</summary>
+      <summary className="hx-focus flex cursor-pointer items-center gap-1.5 rounded-[var(--r-xs)]"><Badge variant="warn">{t('modelRecovery.unfinishedChip')}</Badge>{t('modelRecovery.unfinished')}</summary>
       <div className="mt-1 text-ink-3">{t('modelRecovery.partialHint')}</div>
       <div className="mt-1 whitespace-pre-wrap font-mono text-[11.5px]">{recovery.partial_text}</div>
     </details>}
     {history.length > 0 && historyBlock}
-    {remedy && <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[10px] bg-red-tint px-3 py-2 text-[12.5px] text-red" data-remedy={remedy}>
+    {remedy && <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--r-card)] bg-red-tint px-3 py-2 text-[12.5px] text-red" data-remedy={remedy}>
       <Icon name="key" size={14} className="flex-none" />
       <span className="min-w-0 flex-1"><b className="font-semibold">{codeLabel}</b> · {t('modelRecovery.keyBlocked')}</span>
       {SETTINGS_CODES.has(remedy) && <Button size="xs" title={t(keyRemedy ? 'modelRecovery.updateKey' : 'modelRecovery.openModels')} onClick={() => openSettings('models')}>
