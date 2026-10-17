@@ -53,6 +53,7 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 - **改原生电脑操控或其 SDK 补丁**：先用 `npm run test:computer-use` 定向反馈；macOS 的 `npm test` 自动包含该门禁。构建/测试入口校验固定 SDK 与补丁前后哈希，直接 `swift test` 不替代干净依赖准备。原生无输入测试不代替实机验收。
 - **无人值守网络重试**（2026-10-04 负责人裁决）：网络中断前两次各等 1 分钟；连续第三次失败后等 5 分钟再试，成功清零。配置/权限/代码错误先诊断，不按网络故障循环。长任务持续更新 `.scratch/fullstack-qa-2026-10-03/handoff.md`；恢复后核实进程及结果，不能凭旧记录重启仍在运行的任务。
 - **改 `#[derive(ts_rs::TS)]` 结构**：重跑 `cargo test export_bindings`（测试名过滤器不是文件名），`ui/src/gen/` diff 随改动同次入提交（D06）
+- **截图回归**（ui-redesign 票 17，单列门禁，不在 `npm test` 内）：改 `ui/src/components/`、`ui/src/index.css`、token、i18n 文案（任一语言）、`ui/src/api.ts` 的 dev mock 数据，或升级 UI 依赖/字体/Playwright 时，交付前跑 `npm run test:visual`（Playwright + 无头 Chromium，Vite dev :1460 + `?mock*` 数据，1440×900、减少动效、固定时钟/时区/语言；深浅两套 + fr 主界面，约 67 张）。出 diff：是本次有意改动 → `npm run test:visual:update` 重拍，逐张看 `ui/visual/__screenshots__/` 的 diff，提交说明写清哪几张为何变；不是有意改动 → 修代码，不准为过门重拍。失败产物在 `ui/test-results/`（`*-diff.png`）。基线绑定 macOS + 锁定的 Playwright Chromium 版本，换机/升 Playwright 后先在干净 main 上重拍一次单独提交。阈值 `maxDiffPixelRatio 0.001`（≈1300 像素，只容抗锯齿噪声）
 - **改 `ui/src/i18n/locales/`**：`node ui/scripts/check-i18n.mjs`（七语言 key 集合对账，已挂 `npm run check`）+ 一种非英文语言手测冒烟
 - **修 bug**：同一次改动附回归测试——修复即文档，commit 会被遗忘，测试跟着代码走；新判定器必须配 proptest（D12）
 - **新 UI 界面/控件**：同步 vitest

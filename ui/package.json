@@ -12,7 +12,9 @@
     "test": "vitest run",
     "tauri": "tauri",
     "tokens": "node scripts/check-tokens.mjs",
-    "i18n": "node scripts/check-i18n.mjs"
+    "i18n": "node scripts/check-i18n.mjs",
+    "test:visual": "playwright test -c playwright.visual.config.ts",
+    "test:visual:update": "playwright test -c playwright.visual.config.ts --update-snapshots"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -43,6 +45,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24.13.3",

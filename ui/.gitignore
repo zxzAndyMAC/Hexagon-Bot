@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 截图回归（票 ui-redesign 17）：失败时的 actual/diff 产物，不入库
+test-results
+playwright-report
