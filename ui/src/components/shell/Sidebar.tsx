@@ -108,7 +108,7 @@ function StatusError() {
     <div role="status" data-status-error className="mx-2.5 mb-1 flex items-center gap-1.5 text-[12px] text-red">
       <Icon name="warn" size={12} />
       <span className="flex-1">{t('sidebar.stateFailed')}</span>
-      <button type="button" className="hx-focus cursor-pointer rounded-[6px] px-1.5 text-ink-2 hover:bg-hover hover:text-ink"
+      <button type="button" className="hx-focus cursor-pointer rounded-[var(--r-xs)] px-1.5 text-ink-2 hover:bg-hover hover:text-ink"
         onClick={() => void useUiStore.getState().refreshFast()}>{t('sidebar.retry')}</button>
     </div>
   )

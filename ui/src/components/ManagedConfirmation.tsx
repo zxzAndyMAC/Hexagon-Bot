@@ -57,18 +57,18 @@ export function ManagedConfirmation({ pending, error, onCancel, onConfirm }: {
     <AlertDialogContent busy={pending} className="managed-confirm w-[min(560px,calc(100vw-48px))] gap-0 px-[22px] pt-[22px] pb-4"
       onCloseAutoFocus={(event) => event.preventDefault()}>
       <div className="flex items-start gap-3">
-        <AlertDialogIcon tone="info" className="size-9 rounded-[10px]"><Icon name="bot" size={14} /></AlertDialogIcon>
+        <AlertDialogIcon tone="info" className="size-9 rounded-[var(--r-card)]"><Icon name="bot" size={14} /></AlertDialogIcon>
         <div className="min-w-0">
           <AlertDialogTitle>{project ? t('delegation.confirmTitleProject', { name: project }) : t('delegation.confirmTitle')}</AlertDialogTitle>
           <AlertDialogDescription className="mt-1">{t('delegation.confirmBody')}</AlertDialogDescription>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2.5">
-        <section className="rounded-[10px] bg-inset p-3">
+        <section className="rounded-[var(--r-card)] bg-inset p-3">
           <h3 className="mb-2 flex items-center gap-1.5 text-[12px] font-medium text-ink"><Icon name="check" size={12} className="text-green" />{t('delegation.canTitle')}</h3>
           <ul className="m-0 list-none p-0 text-[12px] leading-[1.7] text-ink-2">{can.map(line => <li key={line}>{line}</li>)}</ul>
         </section>
-        <section className="rounded-[10px] bg-inset p-3">
+        <section className="rounded-[var(--r-card)] bg-inset p-3">
           <h3 className="mb-2 flex items-center gap-1.5 text-[12px] font-medium text-ink"><Icon name="close" size={12} className="text-red" />{t('delegation.cannotTitle')}</h3>
           <ul className="m-0 list-none p-0 text-[12px] leading-[1.7] text-ink-2">{cannot.map(line => <li key={line}>{line}</li>)}</ul>
         </section>

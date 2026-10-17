@@ -118,7 +118,7 @@ function PillMenu({ paused, processing, busy, label, summary, onReport, onPause,
       {/* gap A2：宿主给的托管开启时刻（managed_summary.started_at，暂停 / 继续不断开）。 */}
       {minutes != null && <span className="text-[12px] text-ink-3" data-managed-elapsed>{t('delegation.elapsed', { count: minutes })}</span>}
     </div>
-    <div className="m-1 rounded-[10px] bg-inset px-3 py-2.5 text-[12px]">
+    <div className="m-1 rounded-[var(--r-card)] bg-inset px-3 py-2.5 text-[12px]">
       <div className="flex"><span className="flex-1 text-ink-3">{t('delegation.kvProcessing')}</span><span>{paused ? t('delegation.pausedNote') : t('delegation.items', { count: processing })}</span></div>
       <div className="mt-1 flex"><span className="flex-1 text-ink-3">{t('delegation.kvDecisions')}</span><span>{history ? t('delegation.times', { count: history.length }) : '—'}</span></div>
       {/* gap A3：项目预算 = 项目累计花费 / 项目用量上限（托管「仍受项目用量预算约束」）；未设上限不画进度条。 */}

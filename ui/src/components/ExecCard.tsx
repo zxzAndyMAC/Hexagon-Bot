@@ -2,10 +2,11 @@
 // （bash/fs_patch/fs_write/artifact_write）共用一壳：头行 [icon] 定名
 // [meta chips] [copy][chevron]，体按工具分体。轻量读系仍走 ToolChipRow——
 // 分层密度是 spec D2 裁决：chip 管扫读、卡管细看。
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText } from '../api'
+import { api } from '../api'
 import { useUiStore } from '../store'
+import { useCopyFlash } from '../useCopyFlash'
 import { diffLines, type DiffOp } from '../diff'
 import { Icon, type IconName } from './Icon'
 import { CodeBlock } from './Md'
@@ -49,20 +50,8 @@ export function CallStatus({ ok }: { ok: ToolOutcome }) {
 
 function CopyBtn({ text }: { text: string }) {
   const { t } = useTranslation()
-  const pushToast = useUiStore((s) => s.pushToast)
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(null)
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      if (timer.current) clearTimeout(timer.current)
-      timer.current = setTimeout(() => setCopied(false), 1500)
-    } catch (e) {
-      pushToast(errText(e), 'err')
-    }
-  }
+  const { copied, copy: copyText } = useCopyFlash()
+  const copy = () => copyText(text)
   return (
     <button
       type="button"

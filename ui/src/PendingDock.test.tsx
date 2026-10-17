@@ -386,3 +386,15 @@ it('权限卡底栏只有按钮组自带的一处说明，不再有空占位；�
   vi.restoreAllMocks()
   await i18n.changeLanguage('en')
 })
+
+// review S1（2026-10-17）：升级卡曾在 JSX 里硬编码 `flag … →` 与 `tok` 后缀，切语言不变；现走 cards.flagRoute / cards.contextTokens。
+it('升级卡文案随界面语言切换（flag 路由与上下文 token 计量）', async () => {
+  await i18n.changeLanguage('ja')
+  const flag = await render(<PendingCard q={card({ kind: 'escalation', payload: { flag_id: 'f-7', target: 'impl' } })} top={false} />)
+  expect(flag.el.textContent).toContain('差し戻し f-7 → impl')
+  expect(flag.el.querySelectorAll('p .mono')).toHaveLength(2)
+  const ctx = await render(<PendingCard q={card({ id: 'q2', kind: 'escalation', payload: { sub: 'context_overflow', est_tokens: 900, cap: 1000 } })} top={false} />)
+  expect(ctx.el.textContent).toContain('~900 / 1000 トークン')
+  for (const r of [flag, ctx]) { await act(async () => r.root.unmount()); r.el.remove() }
+  await i18n.changeLanguage('en')
+})

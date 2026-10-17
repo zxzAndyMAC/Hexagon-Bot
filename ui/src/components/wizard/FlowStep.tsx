@@ -81,7 +81,7 @@ export function FlowDraft({ pack, roles, busy, onChange }: {
               else if (matches(e, bindingFor('moveStageDown'))) { e.preventDefault(); move(i, i + 1) }
             }}
             className={cn(
-              'grid grid-cols-[20px_120px_1fr_64px_28px] items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-[13px] shadow-[inset_0_0_0_1px_var(--line)]',
+              'grid grid-cols-[20px_120px_1fr_64px_28px] items-center gap-2.5 rounded-[var(--r-card)] px-2.5 py-2 text-[13px] shadow-[inset_0_0_0_1px_var(--line)]',
               dragFrom === i && 'bg-surface shadow-[var(--shadow-raised)]',
             )}
           >
@@ -91,7 +91,7 @@ export function FlowDraft({ pack, roles, busy, onChange }: {
               aria-label={t('wizard.flow.drag')}
               title={`${t('wizard.flow.drag')} · ${moveHint}`}
               aria-keyshortcuts={`${bindingFor('moveStageUp')} ${bindingFor('moveStageDown')}`.replaceAll('alt', 'Alt')}
-              className="hx-focus grid h-6 w-5 cursor-grab place-items-center rounded-[6px] text-ink-3 live:hover:bg-hover"
+              className="hx-focus grid h-6 w-5 cursor-grab place-items-center rounded-[var(--r-xs)] text-ink-3 live:hover:bg-hover"
             >
               <Icon name="more-vertical" size={12} />
             </button>
@@ -99,7 +99,7 @@ export function FlowDraft({ pack, roles, busy, onChange }: {
               aria-label={t('wizard.stageName')}
               value={st.name}
               onChange={(e) => patch(i, { name: e.target.value })}
-              className="hx-focus h-7 min-w-0 rounded-[6px] bg-transparent px-1.5 text-[13px] font-semibold text-ink outline-none focus:bg-field"
+              className="hx-focus h-7 min-w-0 rounded-[var(--r-xs)] bg-transparent px-1.5 text-[13px] font-semibold text-ink outline-none focus:bg-field"
             />
             <button
               type="button"
@@ -107,7 +107,7 @@ export function FlowDraft({ pack, roles, busy, onChange }: {
               aria-label={`${t('wizard.stageRoles')}: ${st.roles.join(', ') || '—'}`}
               title={st.roles.join('、') || t('wizard.stageRoles')}
               onClick={() => setPicking(i)}
-              className="hx-press hx-focus flex h-7 min-w-0 cursor-pointer items-center gap-1 justify-self-start rounded-[6px] px-1 live:hover:bg-hover"
+              className="hx-press hx-focus flex h-7 min-w-0 cursor-pointer items-center gap-1 justify-self-start rounded-[var(--r-xs)] px-1 live:hover:bg-hover"
             >
               {st.roles.length > 0 ? (
                 <AvatarStack>{st.roles.map((r) => <Avatar key={r} name={r} size={18} />)}</AvatarStack>

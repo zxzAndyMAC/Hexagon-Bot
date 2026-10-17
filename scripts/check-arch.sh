@@ -30,11 +30,12 @@ done < <(rg -n 'state\.wb' src-tauri/src/lib.rs)
 deny D01 "state.wb hits must carry D01-ok / D01-exempt (same or next line)" \
   "$(printf '%b' "$d01bad")"
 
-# D04/D09 pending_questions 与 agents.status 写路径只落属主模块
-# （cards.rs / orchestra.rs）；合法豁免=测试 helper、schema 断言、
+# D04/D09 pending_questions 与 agents.status / agents.removed_at 写路径只落
+# 属主模块（cards.rs / orchestra.rs；removed_at 自 review S3 2026-10-17 起收进
+# orchestra::write_agent_removed）；合法豁免=测试 helper、schema 断言、
 # credentials.rs 泄漏扫描标签、注释行。
-deny D04_D09 "pending_questions/agents.status writes stay in owner modules" \
-  "$(rg -n 'pending_questions|UPDATE agents SET status' crates/hexagon-core/src \
+deny D04_D09 "pending_questions/agents.status/removed_at writes stay in owner modules" \
+  "$(rg -n 'pending_questions|UPDATE agents SET (status|removed_at)' crates/hexagon-core/src \
      | rg -v 'src/(cards|orchestra|db|credentials)\.rs:|src/api/tests\.rs:' \
      | rg -v ':[0-9]+:\s*//')"
 

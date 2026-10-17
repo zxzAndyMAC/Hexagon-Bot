@@ -281,7 +281,7 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
                       <div key={s.id} data-step={s.kind}>
                         <div className="flex min-h-6 items-center gap-2">
                           <Icon name={s.icon} size={12} className="flex-none text-ink-3" />
-                          <button type="button" className={cn('hx-focus min-w-0 truncate rounded-[4px] text-left text-ink-2', s.detail && 'cursor-pointer live:hover:text-ink')}
+                          <button type="button" className={cn('hx-focus min-w-0 truncate rounded-[var(--r-xs)] text-left text-ink-2', s.detail && 'cursor-pointer live:hover:text-ink')}
                             aria-expanded={s.detail ? stepOpen : undefined} onClick={() => { if (s.detail) toggle() }}>
                             {s.label}
                           </button>
@@ -295,7 +295,7 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
                         </div>
                         {s.message && <div className="msg-body mt-1 text-[12.5px]"><Md>{s.message}</Md></div>}
                         {s.detail && stepOpen && (
-                          <div className="my-1 overflow-x-auto rounded-[8px] text-[11px]">
+                          <div className="my-1 overflow-x-auto rounded-[var(--r-sm)] text-[11px]">
                             {s.execCall ? <ExecBody call={s.execCall} /> : <CodeBlock code={s.detail} lang="json" />}
                           </div>
                         )}

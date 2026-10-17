@@ -183,7 +183,7 @@ function ResizeHandle({
         aria-hidden
         data-slot="resize-grip"
         className={cn(
-          "absolute -left-[2px] h-10 w-1 rounded-[4px] bg-ink-3 opacity-0 transition-opacity duration-150",
+          "absolute -left-[2px] h-10 w-1 rounded-[var(--r-pill)] bg-ink-3 opacity-0 transition-opacity duration-150",
           "group-focus-visible/rz:opacity-100",
           (hover || drag) && "opacity-100",
           drag && "bg-primary",
@@ -203,7 +203,7 @@ function ResizeHandle({
           aria-hidden
           data-slot="resize-tip"
           className={cn(
-            "pointer-events-none absolute z-[25] whitespace-nowrap rounded-[10px] bg-tooltip px-2.5 py-2 text-[13px] text-tooltip-fg shadow-[var(--shadow-lg)]",
+            "pointer-events-none absolute z-[25] whitespace-nowrap rounded-[var(--r-card)] bg-tooltip px-2.5 py-2 text-[13px] text-tooltip-fg shadow-[var(--shadow-lg)]",
             tipLeft ? "left-[18px]" : "right-[18px]",
           )}
           style={{ top: `calc(${gripTop} - 4px)` }}
@@ -220,7 +220,7 @@ function ResizeHandle({
           aria-hidden
           data-slot="resize-badge"
           className={cn(
-            "pointer-events-none absolute top-2.5 z-[25] whitespace-nowrap rounded-[6px] bg-primary px-[7px] py-0.5 font-mono text-[11px] font-medium text-white",
+            "pointer-events-none absolute top-2.5 z-[25] whitespace-nowrap rounded-[var(--r-xs)] bg-primary px-[7px] py-0.5 font-mono text-[11px] font-medium text-white",
             tipLeft ? "left-2" : "right-2",
           )}
         >

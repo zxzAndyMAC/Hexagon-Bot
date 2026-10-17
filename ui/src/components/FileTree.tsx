@@ -209,7 +209,7 @@ function TreeList({ entries, depth, kids, loading, current, onDir, onFile }: {
           selected={on}
           onClick={() => (e.kind === 'dir' ? onDir(e) : e.kind === 'file' ? onFile(e) : undefined)}
           className={cn(
-            'hx-focus flex h-7 items-center gap-1.5 rounded-[6px] pr-1.5 whitespace-nowrap',
+            'hx-focus flex h-7 items-center gap-1.5 rounded-[var(--r-xs)] pr-1.5 whitespace-nowrap',
             on ? 'bg-accent-tint text-ink' : 'text-ink-2 live:hover:bg-hover',
             e.kind === 'link' ? 'cursor-default opacity-55' : 'cursor-pointer',
           )}

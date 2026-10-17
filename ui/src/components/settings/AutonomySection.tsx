@@ -8,29 +8,23 @@ import { useUiStore } from '../../store'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Group, SetHead, SetWrap, SRow } from './kit'
+import { useBusyAction } from '../../useBusyAction'
 
 export function AutonomySection() {
   const { t } = useTranslation()
   const pushToast = useUiStore((s) => s.pushToast)
   const askConfirm = useUiStore((s) => s.askConfirm)
   const [reviewer, setReviewer] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const { busy, run } = useBusyAction()
 
   useEffect(() => {
     api.reviewerMode().then(setReviewer).catch((e) => pushToast(errText(e), 'err'))
   }, [pushToast])
 
-  const apply = async (mode: string) => {
-    setBusy(true)
-    try {
-      await api.setReviewerMode(mode)
-      setReviewer(mode)
-    } catch (e) {
-      pushToast(errText(e), 'err')
-    } finally {
-      setBusy(false)
-    }
-  }
+  const apply = (mode: string) => run(async () => {
+    await api.setReviewerMode(mode)
+    setReviewer(mode)
+  })
 
   const setMode = (mode: 'shadow' | 'live') => {
     if (mode === reviewer) return

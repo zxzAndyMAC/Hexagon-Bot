@@ -111,7 +111,7 @@ export function AdvancedGlobs({ open, onToggle, value, disabled, onChange }: {
         data-globs-toggle
         aria-expanded={open}
         onClick={onToggle}
-        className="hx-press hx-focus inline-flex cursor-pointer items-center gap-1.5 self-start rounded-[6px] text-[13px] text-ink-2"
+        className="hx-press hx-focus inline-flex cursor-pointer items-center gap-1.5 self-start rounded-[var(--r-xs)] text-[13px] text-ink-2"
       >
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
         {t('agent.advanced')}（{t('agent.globsEmpty')}）

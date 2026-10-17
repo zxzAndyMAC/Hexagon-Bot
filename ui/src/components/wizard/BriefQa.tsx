@@ -20,7 +20,7 @@ export function AnsweredRow({ icon, tone, text, children }: {
   children?: ReactNode
 }) {
   return (
-    <div className="flex min-h-9 items-center gap-2 rounded-[10px] bg-inset px-2.5 py-1.5 text-[12.5px] text-ink-2 shadow-[inset_0_0_0_1px_var(--line-soft)]">
+    <div className="flex min-h-9 items-center gap-2 rounded-[var(--r-card)] bg-inset px-2.5 py-1.5 text-[12.5px] text-ink-2 shadow-[inset_0_0_0_1px_var(--line-soft)]">
       <Icon name={icon} size={12} className={tone === 'ok' ? 'text-green' : undefined} />
       <span className="min-w-0 flex-1 truncate">{text}</span>
       {children}
@@ -96,7 +96,7 @@ export function BriefQaCard({ questions, index, answers, onIndex, onAnswer, onCo
               data-qa-option
               onClick={() => { setOther(false); onAnswer(index, opt) }}
               className={cn(
-                'hx-press hx-focus flex min-h-9 cursor-pointer items-center gap-2.5 rounded-[8px] px-2 text-left text-[13px] live:hover:bg-hover',
+                'hx-press hx-focus flex min-h-9 cursor-pointer items-center gap-2.5 rounded-[var(--r-sm)] px-2 text-left text-[13px] live:hover:bg-hover',
                 on && 'bg-hover',
               )}
             >
@@ -129,7 +129,7 @@ export function BriefQaCard({ questions, index, answers, onIndex, onAnswer, onCo
             type="button"
             data-qa-other
             onClick={() => setOther(true)}
-            className="hx-press hx-focus flex min-h-9 cursor-pointer items-center gap-2.5 rounded-[8px] px-2 text-left text-[13px] text-ink-3 live:hover:bg-hover"
+            className="hx-press hx-focus flex min-h-9 cursor-pointer items-center gap-2.5 rounded-[var(--r-sm)] px-2 text-left text-[13px] text-ink-3 live:hover:bg-hover"
           >
             <span aria-hidden className="grid size-[18px] flex-none place-items-center"><Icon name="edit" size={12} /></span>
             {t('wizard.qa.other')}

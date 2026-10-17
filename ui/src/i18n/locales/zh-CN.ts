@@ -472,6 +472,8 @@ export default {
     escalation: '升级——需负责人裁决',
     contextOverflow: '上下文撞限',
     contextHint: '上下文到顶暂停中。放行则以重建+裁剪的上下文续跑。',
+    flagRoute: '打回 <m>{{flag}}</m> → <m>{{target}}</m>',
+    contextTokens: '~{{est}} / {{cap}} tok',
     agreeContinue: '同意拨回',
     rejectContinue: '驳回，继续',
     stageStamp: '阶段盖章',
@@ -878,6 +880,7 @@ export default {
   },
 
   providers: {
+    kindOpenai: 'OpenAI 兼容',
     hint: "模型供应商是全局配置。槽位绑定选择供应商和模型，default 兜底未绑定槽位。密钥使用「通用」设置显示的实际凭据后端。",
     filter: '筛选供应商…',
     empty: '还没有供应商——先加一条，Agent 才能调模型',
@@ -972,6 +975,7 @@ export default {
     floorsHint: '无论哪档：最终验收、安全网、新权限问题等负责人。更早的盖章点只在 L3 及以上自动通过。',
   },
   mcp: {
+    commandPlaceholder: 'npx / 可执行文件',
     marketTip: "在浏览器中打开 MCP 市场",
     starting: '初始化中…',
     intro: '全局清单 ~/.hexagon/mcp.json + 项目 .hexagon/mcp.json（同名项目覆盖）；改动重开项目生效。',
