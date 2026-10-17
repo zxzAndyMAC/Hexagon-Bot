@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import './i18n'
 import { TIMELINE_JUMP_EVENT } from './timelineJump'
+import { LOCATE_PENDING_EVENT } from './managedNext'
 
 import { Timeline } from './components/Timeline'
 import { Sidebar } from './components/shell/Sidebar'
@@ -73,17 +74,21 @@ export default function App() {
     const openSection = (event: Event) => {
       if (projectOpen !== true) return
       const section = (event as CustomEvent<unknown>).detail
-      if (section !== 'models' && section !== 'usage') return
+      // review R2：托管报告行内动作还会指到 MCP / 技能分区（core managed/next.rs 的封闭表）。
+      if (section !== 'models' && section !== 'usage' && section !== 'mcp' && section !== 'skills') return
       void enterSettings(section)
     }
     // Ticket 05: a report entry asked for its timeline row; the timeline jumps.
+    // review R2: locating a pending card also needs the workbench (the dock lives there).
     const toTimeline = () => setSettingsOpen(false)
     window.addEventListener('hexagon:computer-model-settings', openModels)
     window.addEventListener('hexagon:computer-settings', openComputer)
     window.addEventListener('hexagon:open-settings-section', openSection)
     window.addEventListener(TIMELINE_JUMP_EVENT, toTimeline)
+    window.addEventListener(LOCATE_PENDING_EVENT, toTimeline)
     return () => {
       window.removeEventListener(TIMELINE_JUMP_EVENT, toTimeline)
+      window.removeEventListener(LOCATE_PENDING_EVENT, toTimeline)
       window.removeEventListener('hexagon:computer-model-settings', openModels)
       window.removeEventListener('hexagon:computer-settings', openComputer)
       window.removeEventListener('hexagon:open-settings-section', openSection)

@@ -15,6 +15,7 @@ import { IconButton } from './ui/icon-button'
 import { Button } from './ui/button'
 import { Dot } from './ui/dot'
 import { DockChrome } from './DecisionShell'
+import { LOCATE_PENDING_EVENT } from '../managedNext'
 import { PendingCard } from './PendingCards'
 import { ReviewCard } from './PendingCardParts'
 import './decision.css'
@@ -51,6 +52,18 @@ export function PendingDock() {
     setCurrentKey(`q:${error.id}`)
     useUiStore.getState().openPendingDialog()
   }, [error])
+
+  // review R2：托管报告「定位到卡」——翻到这张卡并展开坞（卡不在坞里时调用方已改走时间线）。
+  useEffect(() => {
+    const locate = (event: Event) => {
+      const id = (event as CustomEvent<unknown>).detail
+      if (typeof id !== 'string') return
+      setCurrentKey(`q:${id}`)
+      useUiStore.getState().openPendingDialog()
+    }
+    window.addEventListener(LOCATE_PENDING_EVENT, locate)
+    return () => window.removeEventListener(LOCATE_PENDING_EVENT, locate)
+  }, [])
 
   useEffect(() => {
     if (!open) return

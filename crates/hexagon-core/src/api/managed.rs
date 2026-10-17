@@ -15,9 +15,11 @@ use serde::Serialize;
 
 mod act;
 mod external;
+mod next;
 mod report;
 mod routes;
 pub use external::{managed_external_ops, ExternalOperation};
+pub use next::{ManagedNext, ManagedNextKind};
 pub use report::{
     classify as classify_managed, export_managed_report, managed_summary, ManagedEvidence,
     ManagedScope, ManagedSummary,
@@ -82,6 +84,8 @@ pub struct ManagedRecord {
     /// Gap A5: closed classification from (action, reason, via) — see `report::classify`.
     pub scope: ManagedScope,
     pub evidence: ManagedEvidence,
+    /// review R2: the row's executable next step (closed table, see `next::next_step`).
+    pub next: ManagedNext,
 }
 
 /// Outcomes where the decision was made but the business item did not
@@ -121,27 +125,45 @@ pub fn managed_history(
         .into_iter()
         .filter(|event| event.payload["kind"] == "managed_decision")
         .map(|event| {
+            let p = &event.payload;
             let (scope, evidence) = report::classify(
-                event.payload["action"].as_str().unwrap_or_default(),
-                event.payload["reason"].as_str().unwrap_or_default(),
-                event.payload["via"].as_str().unwrap_or_default(),
+                p["action"].as_str().unwrap_or_default(),
+                p["reason"].as_str().unwrap_or_default(),
+                p["via"].as_str().unwrap_or_default(),
             );
+            let result = result_of(
+                p["action"].as_str().unwrap_or_default(),
+                p["outcome"].as_str().unwrap_or_default(),
+            );
+            // The card's live state decides "locate the card"; an unreadable card is not queued.
+            let card = crate::cards::get(db, p["card_id"].as_str().unwrap_or_default()).ok();
+            let next = next::next_step(&next::NextFacts {
+                event_id: event.id,
+                card_id: p["card_id"].as_str().unwrap_or_default(),
+                card_kind: p["card_kind"].as_str().unwrap_or_default(),
+                reason: p["reason"].as_str().unwrap_or_default(),
+                result,
+                card_queued: card
+                    .as_ref()
+                    .is_some_and(|c| c.state == crate::cards::CardState::Queued),
+                grant_kind: card
+                    .as_ref()
+                    .and_then(|c| c.payload["grant_kind"].as_str())
+                    .unwrap_or_default(),
+            });
             ManagedRecord {
                 event_id: event.id,
-                card_id: text(&event.payload["card_id"]),
-                card_kind: text(&event.payload["card_kind"]),
-                action: text(&event.payload["action"]),
-                reason: text(&event.payload["reason"]),
-                via: text(&event.payload["via"]),
-                outcome: text(&event.payload["outcome"]),
-                actor: text(&event.payload["actor"]),
-                result: result_of(
-                    event.payload["action"].as_str().unwrap_or_default(),
-                    event.payload["outcome"].as_str().unwrap_or_default(),
-                )
-                .into(),
+                card_id: text(&p["card_id"]),
+                card_kind: text(&p["card_kind"]),
+                action: text(&p["action"]),
+                reason: text(&p["reason"]),
+                via: text(&p["via"]),
+                outcome: text(&p["outcome"]),
+                actor: text(&p["actor"]),
+                result: result.into(),
                 scope,
                 evidence,
+                next,
             }
         })
         .collect();

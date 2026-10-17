@@ -24,7 +24,7 @@ const summary = (over: Partial<ManagedSummary> = {}): ManagedSummary => ({
 })
 const record = (over: Partial<ManagedRecord>): ManagedRecord => ({
   event_id: 1, card_id: 'q1', card_kind: 'permission', action: 'allow', reason: 'r', via: 'model', outcome: 'allowed',
-  actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', ...over,
+  actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '1' }, ...over,
 })
 
 beforeEach(async () => {
@@ -129,4 +129,34 @@ it('report period follows the interface language in 24-hour time and KPIs carry 
   expect(kpi).toContain('系统决定2 次')
   expect(kpi).toContain('完成1 项')
   expect(kpi).toContain('未完成1 项')
+})
+
+// review R2（managed#report「配置发布目标 / 查看证据」）：「未完成」行的按钮取宿主给的下一步，接已有入口；
+// 曾经一律「在时间线中查看」（reconciliation 16B 新偏差 3）。定位卡时卡不在坞里（托管仍开）就回时间线。
+it('unfinished rows act on the host next step through existing entries', async () => {
+  vi.spyOn(api, 'managedSummary').mockResolvedValue(summary())
+  vi.spyOn(api, 'managedHistory').mockResolvedValue([
+    record({ event_id: 4, result: 'incomplete', next: { kind: 'add_key', target: 'models' } }),
+    record({ event_id: 3, result: 'incomplete', card_kind: 'stamp', next: { kind: 'evidence', target: '3' } }),
+    record({ event_id: 2, result: 'failed', card_id: 'q5', next: { kind: 'open_card', target: 'q5' } }),
+    record({ event_id: 1, result: 'failed', card_id: 'q6', next: { kind: 'open_card', target: 'q6' } }),
+  ])
+  useUiStore.setState({ pending: [{ id: 'q5', kind: 'permission', agent_id: null, payload: {}, state: 'queued' }] as never })
+  const seen: [string, unknown][] = []
+  const listen = (name: string) => window.addEventListener(name, e => seen.push([name, (e as CustomEvent).detail]))
+  ;['hexagon:open-settings-section', 'hexagon:locate-pending', 'hexagon:timeline-jump'].forEach(listen)
+  const onClose = vi.fn()
+  await mount(<ManagedReport card onClose={onClose} />)
+  const button = (id: number) => el.querySelector<HTMLButtonElement>(`[data-managed-record="${id}"] [data-managed-next]`)!
+  expect(button(4).textContent).toBe('Add key')
+  expect(button(3).textContent).toBe('View evidence')
+  expect(button(2).textContent).toBe('Go to card')
+  for (const id of [4, 3, 2, 1]) await act(async () => button(id).click())
+  expect(seen).toEqual([
+    ['hexagon:open-settings-section', 'models'],
+    ['hexagon:timeline-jump', 3],
+    ['hexagon:locate-pending', 'q5'],
+    ['hexagon:timeline-jump', 1],
+  ])
+  expect(onClose).toHaveBeenCalledTimes(4)
 })

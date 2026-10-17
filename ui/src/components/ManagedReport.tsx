@@ -6,6 +6,7 @@ import { useUiStore } from '../store'
 import type { ExternalOperation } from '../gen/ExternalOperation'
 import type { ManagedRecord } from '../gen/ManagedRecord'
 import { TIMELINE_JUMP_EVENT } from '../timelineJump'
+import { runManagedNext } from '../managedNext'
 import { useDelegation, useManagedHistory } from '../useDelegation'
 import { kindTitleKey } from '../decisions'
 import { parseTraceTime, sessionMinutes } from '../managedView'
@@ -95,7 +96,9 @@ export function ManagedReport({ card = false, onClose }: { card?: boolean; onClo
                   <b className="block text-[13px] font-medium text-ink">{recordTitle(t, record)}</b>
                   <span className="block text-[12.5px] text-ink-2">{t(`delegation.next.${record.result}`)} · <code className="text-[11.5px]">{record.reason}</code></span>
                 </div>
-                <Button size="xs" title={t('delegation.showInTimeline')} onClick={() => close(record.event_id)}>{t('delegation.showInTimeline')}</Button>
+                {/* review R2：行内动作取宿主给的下一步（补钥匙 / 模型服务 / 定位卡 / 查看证据…），不再一律「在时间线中查看」。 */}
+                <Button size="xs" data-managed-next={record.next.kind} title={t(`delegation.nextAction.${record.next.kind}`)}
+                  onClick={() => { onClose?.(); runManagedNext(record.next, record.event_id) }}>{t(`delegation.nextAction.${record.next.kind}`)}</Button>
               </li>)}
             </ul>
           </>}
