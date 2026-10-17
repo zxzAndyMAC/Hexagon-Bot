@@ -25,7 +25,8 @@ import { daysAgo } from './usage'
 import { readCanvasLayout, readSideLayout, writeCanvasLayout, writeSideLayout, type CanvasLayout, type SideLayout } from './layout'
 import i18n from './i18n'
 
-export type ThemePref = 'light' | 'dark' | 'night' | 'system'
+import { themeSlice, type ThemeSlice } from './storeTheme'
+export type { ThemePref } from './storeTheme'
 
 /// 慢通道切片（arch-review 票 07）：invalidate 的失效标签。
 /// usage=账本；artifacts=产物表；team=花名册+头像；info=项目元信息+autonomy。
@@ -137,20 +138,7 @@ export interface FocusSnapshot { canvasOpen: boolean }
 /// 清单页签的标题渲染时走 i18n（sidebar.artifacts / sidebar.files）。
 const paneTab = (pane: CanvasPane): WorkTab => ({ id: pane, kind: pane, title: '' })
 
-function resolve(pref: ThemePref): 'light' | 'dark' | 'night' {
-  if (pref !== 'system') return pref
-  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
-const savedPref = (localStorage.getItem('hexagon.theme') as ThemePref) || 'dark'
-document.documentElement.dataset.theme = resolve(savedPref)
-// system 档跟随 OS 切换
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-  const s = useUiStore.getState()
-  if (s.themePref === 'system') document.documentElement.dataset.theme = resolve('system')
-})
-
-interface UiState {
+interface UiState extends ThemeSlice {
   projectRoot: string | null
   projectGeneration: number | null
   projectEpoch: number
@@ -162,7 +150,6 @@ interface UiState {
   sessionError: string | null
   toolStreamKeys: Record<string, TimelineToolStreamKey>
   refreshFacts: () => Promise<void>
-  themePref: ThemePref
   stages: StageRow[]
   team: TeamRow[]
   artifacts: ArtifactRow[]
@@ -257,7 +244,6 @@ interface UiState {
   /// 都清除——等网只活在「下一次调用还没出声」的窗口里。
   waitingSince: Record<string, number>
   applyToolOutput: (d: ToolOutputDelta) => void
-  setThemePref: (p: ThemePref) => void
   setSideLayout: (next: SideLayout) => void
   toggleSidebar: () => void
   /// 侧栏「产物」并排打开，「项目文件」以全宽打开（canvas#file）。
@@ -357,7 +343,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     priorConfirmation?.onClose?.(false)
   },
   commitProjectIdentity: (identity, epoch) => { if (get().projectEpoch === epoch) set({ projectRoot: identity?.project_root ?? null, projectGeneration: identity?.generation ?? null }) },
-  themePref: savedPref,
+  ...themeSlice(set, () => get().themePref),
   stages: [],
   team: [],
   artifacts: [],
@@ -639,11 +625,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   requestSaveFile: () => set((s) => ({ saveFileReq: s.saveFileReq + 1 })),
   requestTimelineStick: () => set((s) => ({ timelineStickReq: s.timelineStickReq + 1 })),
-  setThemePref: (p) => {
-    localStorage.setItem('hexagon.theme', p)
-    document.documentElement.dataset.theme = resolve(p)
-    set({ themePref: p })
-  },
   refresh: async () => {
     generation++
     const epoch = get().projectEpoch
