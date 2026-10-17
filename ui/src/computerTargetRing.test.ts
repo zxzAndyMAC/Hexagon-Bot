@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardApp, ringPoint, sameImageSize } from './computerTargetRing'
+import { cardApp, ringPoint, ringPoints, sameImageSize } from './computerTargetRing'
 
 // ui-redesign gap D8（control#action）：目标圈画错位置比不画更坏，所以每一项不可证的事实都必须得到 null。
 const base = { op: 'click', x: 800, y: 500, snapshotId: 's1', shotSnapshotId: 's1', imageWidth: 1600, imageHeight: 1000 }
@@ -34,6 +34,28 @@ describe('ringPoint', () => {
     expect(ringPoint({ ...base, x: 1600 })).toBeNull() // native mapPoint rejects x >= width too
     expect(ringPoint({ ...base, y: -1 })).toBeNull()
     expect(ringPoint(base, 0)).toBeNull()
+  })
+})
+
+// review R4：drag 起点 + 终点；放大模态按图本身宽高比（x/w、y/h）；任一坐标不可证整组不画。
+describe('ringPoints', () => {
+  const drag = { ...base, op: 'drag', x: 400, y: 250, toX: 1200, toY: 750 }
+  const round = (rings: ReturnType<typeof ringPoints>) =>
+    rings?.map((r) => ({ ...r, left: Math.round(r.left * 1e6) / 1e6, top: Math.round(r.top * 1e6) / 1e6 })) ?? null
+  it('maps both ends of a drag and the single click point', () => {
+    expect(ringPoints(base)).toEqual([{ left: 0.5, top: 0.5, role: 'start' }])
+    expect(round(ringPoints(drag))).toEqual([{ left: 0.25, top: 0.25, role: 'start' }, { left: 0.75, top: 0.75, role: 'end' }])
+  })
+  it('uses the image aspect for the uncropped preview', () => {
+    const square = { ...drag, imageWidth: 1000, imageHeight: 1000, x: 100, y: 50, toX: 900, toY: 950 }
+    expect(ringPoints(square)).toBeNull() // both ends fall in the cropped bands of the 16:10 thumbnail
+    expect(round(ringPoints(square, 1))).toEqual([{ left: 0.1, top: 0.05, role: 'start' }, { left: 0.9, top: 0.95, role: 'end' }])
+  })
+  it('draws nothing when a drag end is unproven', () => {
+    expect(ringPoints({ ...drag, toX: undefined })).toBeNull()
+    expect(ringPoints({ ...drag, toY: 1000 })).toBeNull()
+    expect(ringPoints({ ...drag, toX: Number.NaN })).toBeNull()
+    expect(ringPoints({ ...drag, shotSnapshotId: 's2' })).toBeNull()
   })
 })
 

@@ -4,7 +4,7 @@ import { DecisionShell, KeyValues } from './DecisionShell'
 import { PermissionActions } from './PermissionActions'
 import { computerActionCall } from '../computerActionCall'
 import { DesktopToolDetails } from './DesktopToolDetails'
-import { cardApp, ringPoint } from '../computerTargetRing'
+import { cardApp, type RingFacts } from '../computerTargetRing'
 
 // 电脑动作确认卡（components D8「电脑动作」，control#action；票 ui-redesign 16B 补齐——此前走通用权限卡，
 // 只写「QA 请求使用 computer_action」+ op=click x=… 原始参数）。
@@ -19,7 +19,8 @@ import { cardApp, ringPoint } from '../computerTargetRing'
 // ui-redesign gap D8（2026-10-17）：
 // - 应用 = 载荷 app（core desktop::actions::card_app：本地化应用名 + 窗口标题，查不到名回退 bundle id）。
 //   D6 曾写 input.app_id——click 时根本没有，activate 时是 list_apps 的不透明回执 UUID，负责人看不懂，故弃用。
-// - 缩略上的红色目标圈 = computerTargetRing.ringPoint；任何一项事实不可证就不画（画错位置比不画更坏）。
+// - 缩略上的红色目标圈 = computerTargetRing.ringPoints；任何一项事实不可证就不画（画错位置比不画更坏）。
+// review R4：放大模态里也画圈（按图本身宽高比换算）；drag 画起点 + 终点两圈。
 
 const VERBS = ['activate', 'click', 'type', 'key', 'scroll', 'drag'] as const
 type Verb = typeof VERBS[number]
@@ -33,14 +34,14 @@ export function ComputerActionCard({ q, top, who }: { q: PendingQuestion; top: b
   const target = typeof input.element_id === 'string' && input.element_id ? input.element_id : ''
   const reason = typeof input.reason === 'string' ? input.reason.trim() : ''
   const shot = q.payload.screenshot && typeof q.payload.screenshot === 'object' ? q.payload.screenshot as Record<string, unknown> : null
-  const ring = shot ? ringPoint({ op, x: input.x, y: input.y, snapshotId: input.snapshot_id,
-    shotSnapshotId: shot.snapshot_id, imageWidth: shot.image_width, imageHeight: shot.image_height }) : null
+  const ringFacts: RingFacts | null = shot ? { op, x: input.x, y: input.y, toX: input.to_x, toY: input.to_y, snapshotId: input.snapshot_id,
+    shotSnapshotId: shot.snapshot_id, imageWidth: shot.image_width, imageHeight: shot.image_height } : null
   const title = app ? t('dock.computerTitle', { who, app: app.name, verb }) : t('dock.computerTitleNoApp', { who, verb })
   return (
     <DecisionShell qid={q.id} cat="err" icon="pointer" title={title} sub={t('dock.computerSub')} note={null}
       actions={<PermissionActions key={q.id} q={q} top={top} noteText={t('dock.computerNote')} approveLabel={t('dock.computerRun')} />}>
       <div className={shot ? 'computer-action-body grid grid-cols-[200px_minmax(0,1fr)] items-start gap-3.5' : 'computer-action-body'}>
-        {shot && <DesktopToolDetails output={{ result: shot }} variant="card" ring={ring} />}
+        {shot && <DesktopToolDetails output={{ result: shot }} variant="card" ringFacts={ringFacts} />}
         <KeyValues rows={[
           ...(app ? [[t('dock.kvApp'), app.title ? `${app.name} · ${app.title}` : app.name] as [string, string]] : []),
           [t('dock.kvAction'), computerActionCall(input), 'mono'],
