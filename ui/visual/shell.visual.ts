@@ -6,14 +6,20 @@ import { boot, settle, snap, store, THEMES, type Lang, type Theme } from './help
 async function jump(page: Page, seq: number) {
   await page.addStyleTag({ content: '.tl-pin { display: none !important }' })
   // 反复跳到落点不再变：第一次跳转时虚拟列表还在量行高，落点随量测进度漂
-  // （同一基线前后差 2% 像素；固定跳两次仍偶发漂，票 17 实测）。连续两次 scrollTop 相同才拍。
-  const top = () => page.evaluate(() => [...document.querySelectorAll('[data-virtuoso-scroller]')].map((e) => e.scrollTop).join(','))
+  // （同一基线前后差 2% 像素；固定跳两次仍偶发漂，票 17 实测）。
+  // 只要求「连续两次读数相同」仍会偶发差一行（约 32px，recovery-model-dark / managed-strip-fr，
+  // 2026-10-17 合并 review 修复后全量门禁实测）：量测在两次读数之间暂停又继续。
+  // 现在读数含 scroller 偏移 + 全部已渲染行的高度签名，连续三次相同才算稳。
+  const probe = () => page.evaluate(() => [...document.querySelectorAll('[data-virtuoso-scroller]')]
+    .map((e) => `${e.scrollTop}:${e.scrollHeight}:${[...e.querySelectorAll('[data-item-index]')].map((r) => (r as HTMLElement).offsetHeight).join('.')}`)
+    .join('|'))
   let prev: string | null = null
-  for (let i = 0; i < 6; i++) {
+  let same = 0
+  for (let i = 0; i < 12 && same < 2; i++) {
     await page.evaluate((d) => window.dispatchEvent(new CustomEvent('hexagon:timeline-jump', { detail: d })), seq)
     await settle(page, 600)
-    const now = await top()
-    if (now === prev) break
+    const now = await probe()
+    same = now === prev ? same + 1 : 0
     prev = now
   }
 }
