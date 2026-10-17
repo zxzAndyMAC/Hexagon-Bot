@@ -472,6 +472,8 @@ export default {
     escalation: 'Escalado — decide el responsable',
     contextOverflow: 'Límite de contexto',
     contextHint: 'Agente en pausa por tope de contexto. Aprobar para reanudar (contexto reconstruido y recortado).',
+    flagRoute: 'Marca <m>{{flag}}</m> → <m>{{target}}</m>',
+    contextTokens: '~{{est}} / {{cap}} tok',
     agreeContinue: 'Aceptar y retroceder',
     rejectContinue: 'Rechazar y continuar',
     stageStamp: 'Sello de etapa',
@@ -878,6 +880,7 @@ export default {
   },
 
   providers: {
+    kindOpenai: 'Compatible con OpenAI',
     hint: "Los proveedores son globales. Los slots eligen proveedor y modelo; default cubre los no asignados. Las claves usan el almacén activo indicado en General.",
     filter: 'Filtrar proveedores…',
     empty: 'Sin proveedores — añade uno para que los agentes llamen al modelo',
@@ -972,6 +975,7 @@ export default {
     floorsHint: 'En todo nivel: la aceptación final, las redes de seguridad y los permisos nuevos esperan al responsable. Los sellos anteriores solo pasan solos desde L3.',
   },
   mcp: {
+    commandPlaceholder: 'npx / binario',
     marketTip: "Abrir el mercado de MCP en el navegador",
     starting: 'Inicializando…',
     intro: 'Inventario global ~/.hexagon/mcp.json + proyecto .hexagon/mcp.json (mismo nombre gana el proyecto); reinicia el proyecto tras cambios.',

@@ -101,7 +101,7 @@ function McpServiceForm({ entry, readOnly = false, onDone, onCancel, onDelete }:
         ) : (
           <>
             <Field label={t('mcp.fCommand')}>
-              <Input aria-label={t('mcp.fCommand')} className="font-mono text-[12px]" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx / binary" />
+              <Input aria-label={t('mcp.fCommand')} className="font-mono text-[12px]" value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('mcp.commandPlaceholder')} />
             </Field>
             <Field label={t('mcp.fArgs')}>
               <Input aria-label={t('mcp.fArgs')} className="font-mono text-[12px]" value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y pkg …" />

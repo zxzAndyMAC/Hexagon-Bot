@@ -439,7 +439,7 @@ export function ProviderManager() {
               <Field label={t('providers.kind')} help={draft.kind === 'jev' ? t('providers.jevHint') : undefined}>
                 <NativeSelect aria-label={t('providers.kind')} value={draft.kind}
                   onChange={(e) => setDraft({ ...draft, kind: e.target.value as ProviderView['kind'] })}>
-                  <option value="openai">OpenAI 兼容</option>
+                  <option value="openai">{t('providers.kindOpenai')}</option>
                   <option value="anthropic">Anthropic</option>
                   <option value="jev">Jev</option>
                 </NativeSelect>

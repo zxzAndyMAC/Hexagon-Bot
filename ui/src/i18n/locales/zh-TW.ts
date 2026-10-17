@@ -472,6 +472,8 @@ export default {
     escalation: '升級——需負責人裁決',
     contextOverflow: '上下文撞限',
     contextHint: '上下文到頂暫停中。放行則以重建+裁剪的上下文續跑。',
+    flagRoute: '打回 <m>{{flag}}</m> → <m>{{target}}</m>',
+    contextTokens: '~{{est}} / {{cap}} tok',
     agreeContinue: '同意撥回',
     rejectContinue: '駁回，繼續',
     stageStamp: '階段蓋章',
@@ -878,6 +880,7 @@ export default {
   },
 
   providers: {
+    kindOpenai: 'OpenAI 相容',
     hint: "模型供應商是全域設定。槽位綁定選擇供應商與模型，default 承接未綁定槽位。金鑰使用「一般」設定顯示的實際憑據後端。",
     filter: '篩選供應商…',
     empty: '還沒有供應商——先加一條，Agent 才能調模型',
@@ -972,6 +975,7 @@ export default {
     floorsHint: '無論哪檔：最終驗收、安全網、新權限問題等負責人。更早的蓋章點只在 L3 及以上自動通過。',
   },
   mcp: {
+    commandPlaceholder: 'npx / 可執行檔',
     marketTip: "在瀏覽器中開啟 MCP 市集",
     starting: '初始化中…',
     intro: '全域清單 ~/.hexagon/mcp.json + 專案 .hexagon/mcp.json（同名專案覆蓋）；改動重開專案生效。',
