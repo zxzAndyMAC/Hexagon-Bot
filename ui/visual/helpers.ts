@@ -12,6 +12,9 @@ type BootOpts = { query?: string; theme?: Theme; lang?: Lang }
 
 export async function boot(page: Page, { query = '', theme = 'light', lang = 'zh-CN' }: BootOpts = {}) {
   await page.clock.setFixedTime(FIXED_NOW)
+  // 标本页（?specimen）的主题默认「跟随系统」，不读 hexagon.theme——只写持久化键时
+  // feedback-*-dark 基线实为浅色、与 light 逐字节相同（2026-10-17 合并时发现）。系统配色一并模拟。
+  await page.emulateMedia({ colorScheme: theme })
   // 主题/语言走持久化键再载入，与真实启动同一条路径（页内切换可能拿到另一份 store 模块实例）
   await page.addInitScript(([th, lg]) => {
     localStorage.setItem('hexagon.theme', th)
