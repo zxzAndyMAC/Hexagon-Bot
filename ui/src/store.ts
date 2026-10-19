@@ -279,6 +279,8 @@ interface UiState extends ThemeSlice {
   requestTimelineStick: () => void
   openTab: (t: WorkTab) => void
   closeTab: (id: string) => void
+  /** 一次关多个页签（A16b「关闭其他 / 关闭右侧」）；未保存的文件合并成一次离开确认。 */
+  closeTabs: (ids: string[]) => void
   setActiveTab: (id: string) => void
   setModalScope: (s: ModalScope) => void
   pushToast: (text: string, tone?: Toast['tone'], opts?: ToastOpts) => void
@@ -469,15 +471,20 @@ export const useUiStore = create<UiState>((set, get) => ({
       usageView: false,
     })),
   // 最后一个页签关闭时画布关闭（interaction §6）。未保存的文件先过离开确认（canvas#leave）。
-  closeTab: (id) => {
+  closeTab: (id) => get().closeTabs([id]),
+  // owner-followups-1015 #05：closeTab 收成 closeTabs 的单元素情形——「关闭其他 / 关闭右侧」若逐个调 closeTab，
+  // 每个脏文件各弹一次离开确认，第二个确认会盖掉第一个的 Promise。当前页签被关时落到剩下的最后一个
+  //（关闭其他 / 关闭右侧时恰好就是右键的目标页签）。
+  closeTabs: (ids) => {
     const current = get()
-    const tab = current.tabs.find(t => t.id === id)
-    const edits = Object.entries(current.fileEdits).filter(([, edit]) => tab?.kind === 'file' && edit.path === tab.path)
+    const gone = new Set(ids)
+    const paths = new Set(current.tabs.filter(t => gone.has(t.id) && t.kind === 'file').map(t => t.path))
+    const edits = Object.entries(current.fileEdits).filter(([, edit]) => paths.has(edit.path))
     const close = () => {
       if (get().projectEpoch !== current.projectEpoch) return
       set(s => {
-        const tabs = s.tabs.filter(t => t.id !== id)
-        const activeTab = s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? null) : s.activeTab
+        const tabs = s.tabs.filter(t => !gone.has(t.id))
+        const activeTab = s.activeTab != null && gone.has(s.activeTab) ? (tabs[tabs.length - 1]?.id ?? null) : s.activeTab
         return { tabs, activeTab, canvasOpen: tabs.length > 0 && s.canvasOpen }
       })
     }
