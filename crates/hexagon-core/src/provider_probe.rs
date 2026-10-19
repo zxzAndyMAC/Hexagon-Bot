@@ -240,6 +240,47 @@ mod tests {
         assert_eq!(got.failure.as_deref(), Some("missing_credential"));
     }
 
+    /// owner-followups-1015 #03：设置页「检测并拉取」曾先 probe 再 fetch，同一目录请求两次；
+    /// 改为只调 `provider_admin::fetch_models` 一次后，失败码必须与连接检测同一套词，
+    /// 界面才能给同样可操作的原因（而不是笼统的「provider request or response failed」）。
+    #[test]
+    fn fetch_models_failures_carry_the_probe_reason() {
+        use crate::errcode::ErrorCode;
+        let dir = tempfile::tempdir().unwrap();
+        let _path = provider_config::fixture_path(dir.path().join("providers.json"));
+        let store = MemoryStore::default();
+        let fetch_code = |url: String, key: Option<&str>| {
+            crate::provider_admin::save(def(url), key.map(Into::into), &store).unwrap();
+            crate::provider_admin::fetch_models("probe", &store)
+                .unwrap_err()
+                .code()
+        };
+
+        assert_eq!(
+            fetch_code("http://127.0.0.1:9".into(), None),
+            "missing_credential"
+        );
+
+        let (url, server) = serve_once("401 Unauthorized", "{}".into());
+        let code = fetch_code(url, Some("k"));
+        server.join().unwrap();
+        assert_eq!(code, "authentication");
+
+        let (url, server) = serve_once("200 OK", r#"{"nope":1}"#.into());
+        let code = fetch_code(url, Some("k"));
+        server.join().unwrap();
+        assert_eq!(code, "invalid_response");
+
+        let (url, server) = serve_once("200 OK", r#"{"data":[{"id":"m-1"}]}"#.into());
+        crate::provider_admin::save(def(url), None, &store).unwrap();
+        let models = crate::provider_admin::fetch_models("probe", &store).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["m-1"]
+        );
+    }
+
     proptest::proptest! {
         /// 状态分类器（D12）：每个状态都落到界面认得的词；钥匙类与服务端类不串档。
         #[test]
