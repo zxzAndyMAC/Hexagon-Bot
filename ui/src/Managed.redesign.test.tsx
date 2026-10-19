@@ -45,7 +45,7 @@ it('the strip appears only while delegation is active with items, and jumps to t
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([
     { id: 'q1', kind: 'permission', agent_id: 'a0', payload: {}, state: 'queued' },
-    { id: 'q2', kind: 'publish', agent_id: 'a0', payload: {}, state: 'queued' },
+    { id: 'q2', kind: 'push', agent_id: 'a0', payload: {}, state: 'queued' },
   ])
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
     { event_id: 41, card_id: 'q9', card_kind: 'permission', action: 'allow', reason: 'r', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
@@ -97,7 +97,7 @@ it('pins the delegation report instead of the return summary while delegating', 
   vi.spyOn(api, 'projectDelegation').mockResolvedValue(on)
   vi.spyOn(api, 'managedProcessing').mockResolvedValue([])
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    { event_id: 40, card_id: 'q1', card_kind: 'publish', action: 'deny', reason: 'no_target', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
+    { event_id: 40, card_id: 'q1', card_kind: 'push', action: 'deny', reason: 'no_target', via: 'host', outcome: 'not_pushed', actor: 'managed:g1:1', result: 'incomplete', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
     { event_id: 41, card_id: 'q2', card_kind: 'permission', action: 'allow', reason: 'ok', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '0' } },
   ])
   useUiStore.setState({ projectRoot: null, timeline: [decision(40, 'q1'), sys(50, { away_secs: 1200 }, 'return_summary')] })

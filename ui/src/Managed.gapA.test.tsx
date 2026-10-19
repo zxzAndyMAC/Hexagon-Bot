@@ -78,7 +78,7 @@ it('without a project limit the budget row shows spend only, no bar', async () =
 it('report header shows the session, spend KPI replaces failed, evidence comes from the host, export writes markdown', async () => {
   vi.spyOn(api, 'managedSummary').mockResolvedValue(summary({ cost_unknown: true }))
   vi.spyOn(api, 'managedHistory').mockResolvedValue([
-    record({ event_id: 3, action: 'incomplete', reason: 'target_missing', via: 'host', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule', card_kind: 'publish' }),
+    record({ event_id: 3, action: 'incomplete', reason: 'target_missing', via: 'host', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule', card_kind: 'push' }),
     record({ event_id: 2, action: 'accept', reason: 'evidence_complete', via: 'host', result: 'done', evidence: 'real_check', card_kind: 'stamp' }),
     record({ event_id: 1, result: 'failed', outcome: 'failed: x' }),
   ])

@@ -149,7 +149,7 @@ describe('待决坞（ui-redesign 票 04，ADR 0089）', () => {
 
   it('⌘Esc 收起成胶囊：徽标数不变、不销卡；新卡到达自动展开；点胶囊再展开', async () => {
     const answer = vi.spyOn(api, 'answerPermission').mockResolvedValue()
-    useUiStore.setState({ pending: [card(), card({ id: 'pub', kind: 'publish', payload: { remote: 'origin', baseline: 'main' } })] })
+    useUiStore.setState({ pending: [card(), card({ id: 'pub', kind: 'push', payload: { remote: 'origin', baseline: 'main' } })] })
     const { el, root: r } = await render(
       <><Sidebar onSearch={() => {}} onSettings={() => {}} onProjectClosed={() => {}} /><PendingDock /></>,
     )
@@ -161,7 +161,7 @@ describe('待决坞（ui-redesign 票 04，ADR 0089）', () => {
     await act(async () => { window.dispatchEvent(press('Escape')) })
     const pill = el.querySelector<HTMLButtonElement>('[data-dock="collapsed"]')!
     expect(pill).not.toBeNull()
-    expect(pill.textContent).toContain('2 件待决 · 最严重：远程发布')
+    expect(pill.textContent).toContain('2 件待决 · 最严重：推送到远端')  // ADR 0093：发布卡改名推送卡，标题随之变
     expect(el.querySelector('[data-pending-count]')?.getAttribute('data-pending-count')).toBe('2')
     expect(answer).not.toHaveBeenCalled()
     expect(useUiStore.getState().pending).toHaveLength(2)
@@ -368,9 +368,9 @@ it('写入待决显示绑定目标和变更冲突说明', async () => {
 })
 
 // gap A6（2026-10-15，decisions#cards）：发布卡「包含 N 个提交 · N 个阶段的产物」取宿主载荷；提交数未知只写阶段，旧卡无计数不出行。
-it('publish card shows what the push includes from the host payload', async () => {
+it('push card shows what the push includes from the host payload', async () => {
   await i18n.changeLanguage('zh-CN')
-  const kv = (payload: Record<string, unknown>) => render(<PendingCard q={card({ id: 'pub', kind: 'publish', payload: { remote: 'origin', baseline: 'main', ...payload } })} top />)
+  const kv = (payload: Record<string, unknown>) => render(<PendingCard q={card({ id: 'pub', kind: 'push', payload: { remote: 'origin', baseline: 'main', ...payload } })} top />)
   const full = await kv({ commit_count: 12, stage_count: 3 })
   expect(full.el.querySelector('.dock-kv')!.textContent).toContain('包含12 个提交 · 3 个阶段的产物')
   const unknown = await kv({ commit_count: null, stage_count: 2 })

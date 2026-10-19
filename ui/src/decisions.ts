@@ -10,7 +10,7 @@ import { toastError } from './toast'
 const SEVERITY: Record<string, number> = {
   recovery: 0,
   stall: 0,
-  publish: 0,
+  push: 0,
   worktree: 0,
   install: 0,
   grant: 0,
@@ -116,7 +116,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'permission') return api.answerPermission(q.id, true)
   if (q.kind === 'stamp' && !p.proposal_id) return api.stamp()
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
-  if (q.kind === 'publish') return api.confirmPublish(q.id)
+  if (q.kind === 'push') return api.confirmPush(q.id)
   if (q.kind === 'worktree') return api.confirmWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
   if (q.kind === 'recovery' && p.sub === 'tool_action_ready') return api.resumeToolAction(String(p.action_id))
@@ -138,7 +138,7 @@ export async function rejectQuestion(q: PendingQuestion) {
   if (q.kind === 'permission') return api.answerPermission(q.id, false)
   if (q.kind === 'stamp' && !p.proposal_id) return api.rejectStamp()
   if (q.kind === 'stamp') return api.rejectProposal(q.id, 'owner rejected')
-  if (q.kind === 'publish') return api.rejectPublish(q.id)
+  if (q.kind === 'push') return api.rejectPush(q.id)
   if (q.kind === 'worktree') return api.rejectWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, false)
   if (q.kind === 'install') return api.resolveInstall(q.id, false)
@@ -168,7 +168,7 @@ export function kindTitleKey(q: PendingQuestion): string {
   if (q.kind === 'stamp' && q.payload.proposal_id && q.payload.surface === 'pack_copy') return 'policy.title'
   if (q.kind === 'permission') return 'cards.ask'
   if (q.kind === 'stamp') return q.payload.proposal_id ? 'cards.proposalStamp' : 'cards.stageStamp'
-  if (q.kind === 'publish') return 'cards.publish'
+  if (q.kind === 'push') return 'cards.push'
   if (q.kind === 'worktree') return q.payload.operation === 'cleanup' ? 'cards.worktreeCleanup' : 'cards.worktreeCreate'
   if (q.kind === 'recovery') return q.payload.sub === 'tool_outcome_unknown' ? 'cards.actionUnknown' : 'cards.recovery'
   if (q.kind === 'stall') return isActivationResumeCard(q) ? 'cards.resumeWaiting' : 'cards.stall'
@@ -183,14 +183,14 @@ export function kindTitleKey(q: PendingQuestion): string {
 // 看不见的顶卡；发布确认与「允许一次」同键，肌肉记忆即推送远端；
 // 焦点停在批准钮上时还存在 Enter 激活 + 快捷键的双发路径。
 // 守卫顺序：先认键（无关键静默放行）→ 无待决则放行 → 查作用域 →
-// 拦 repeat/in-flight（双发）→ 拦 publish（L3 不可逆不吃键盘批准键）。
+// 拦 repeat/in-flight（双发）→ 拦 push（L3 不可逆不吃键盘批准键；原 publish，ADR 0093 改名）。
 let adjudicating = false
 
 export type KeyOutcome =
   | 'none'
   | 'blocked-scope'
   | 'repeat'
-  | 'blocked-publish'
+  | 'blocked-push'
   | 'blocked-final'
   | 'blocked-stall'
   | 'blocked-unknown'
@@ -236,10 +236,10 @@ export async function handlePendingKey(
     useUiStore.getState().pushToast(i18n.t('quality.revalidationHint'))
     return 'blocked-final'
   }
-  if (isApprove && q.kind === 'publish') {
-    // L3 对外不可逆：发布不走键盘批准（ADR 0056 确认分级）
-    useUiStore.getState().pushToast(i18n.t('decisions.publishNeedsClick'))
-    return 'blocked-publish'
+  if (isApprove && q.kind === 'push') {
+    // L3 对外不可逆：推送不走键盘批准（ADR 0056 确认分级）
+    useUiStore.getState().pushToast(i18n.t('decisions.pushNeedsClick'))
+    return 'blocked-push'
   }
   // 票 02：最终验收退回必须写阶段和修改意见，键盘驳回填不了这两项。
   if (isReject && q.kind === 'stamp' && !q.payload.proposal_id && q.payload.final_acceptance === true) {

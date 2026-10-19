@@ -133,19 +133,19 @@ impl Workbench {
                 self.end_card_incomplete(&card)?;
                 "incomplete"
             }
-            ("publish", _, "publish") => {
-                crate::publish::confirm_by(
+            ("push", _, "push") => {
+                crate::push::confirm_by(
                     &self.db,
                     &self.project_id,
                     &card.id,
                     self.creds.as_ref(),
                     &self.decider(),
                 )?;
-                "published"
+                "pushed"
             }
-            ("publish", _, _) => {
-                crate::publish::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
-                "not_published"
+            ("push", _, _) => {
+                crate::push::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
+                "not_pushed"
             }
             // The confirmation rechecks its own facts again at execution.
             ("worktree", _, "confirm") => {

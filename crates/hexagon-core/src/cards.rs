@@ -5,8 +5,9 @@
 //! 本模块收口：enqueue/answer/annotate/queued 四个动词 + 读模型；
 //! `rg "pending_questions"` 在本模块外只允许命中 schema 迁移与注释。
 //!
-//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022）：
-//! kind ∈ {permission, stamp, escalation, publish, recovery, install, grant, stall}
+//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022/0060/0064）：
+//! kind ∈ {permission, stamp, escalation, push, recovery, install, grant, stall, worktree}
+//! （push 原名 publish，ADR 0093 改名，迁移 0064 映射旧行）
 //! state ∈ {queued, answered, expired}
 //!
 //! 注意 kind='stamp' 是过载的：阶段盖章卡（payload={stage,run_id}）与
@@ -41,7 +42,8 @@ pub enum CardKind {
     Escalation,
     Recovery,
     Install,
-    Publish,
+    /// 推送确认卡（原 publish，ADR 0093 / 迁移 0064 改名）。
+    Push,
     /// 技能或 MCP 的授权确认（票 04）。不是权限卡。
     Grant,
     /// 失速卡（stall-watch 票 02 / ADR 0074）：只有「再试一次」「知道了」，
@@ -62,7 +64,7 @@ impl CardKind {
             Self::Escalation => "escalation",
             Self::Recovery => "recovery",
             Self::Install => "install",
-            Self::Publish => "publish",
+            Self::Push => "push",
             Self::Grant => "grant",
             Self::Stall => "stall",
             Self::Worktree => "worktree",
@@ -77,7 +79,7 @@ impl CardKind {
             "escalation" => Ok(Self::Escalation),
             "recovery" => Ok(Self::Recovery),
             "install" => Ok(Self::Install),
-            "publish" => Ok(Self::Publish),
+            "push" => Ok(Self::Push),
             "grant" => Ok(Self::Grant),
             "stall" => Ok(Self::Stall),
             "worktree" => Ok(Self::Worktree),
@@ -222,7 +224,7 @@ pub fn annotate_queued_where(
 pub struct QueuedCard {
     pub id: String,
     #[ts(
-        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'publish' | 'grant' | 'stall' | 'worktree'"
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'grant' | 'stall' | 'worktree'"
     )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,

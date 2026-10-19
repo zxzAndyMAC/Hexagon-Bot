@@ -172,7 +172,7 @@ pub enum ApiError {
     #[error(transparent)]
     Artifact(#[from] crate::artifacts::ArtifactError),
     #[error(transparent)]
-    Publish(#[from] crate::publish::PublishError),
+    Push(#[from] crate::push::PushError),
     #[error(transparent)]
     Autonomy(#[from] crate::autonomy::AutonomyError),
     #[error(transparent)]
@@ -1338,9 +1338,9 @@ impl Workbench {
         Ok(())
     }
 
-    /// 发起远程发布：只入队确认卡，不执行。任何自治档都不自动放行（票 03 / ADR 0034）。
-    pub fn request_publish(&self, remote: &str) -> Result<String, ApiError> {
-        Ok(crate::publish::request(&self.db, &self.project_id, remote)?)
+    /// 发起推送（原「远程发布」，ADR 0093）：只入队确认卡，不执行。任何自治档都不自动放行（票 03 / ADR 0034）。
+    pub fn request_push(&self, remote: &str) -> Result<String, ApiError> {
+        Ok(crate::push::request(&self.db, &self.project_id, remote)?)
     }
 
     /// 自然语言安装：所有模式先确认解析后的新能力方案。
@@ -1601,9 +1601,9 @@ impl Workbench {
         )?)
     }
 
-    /// 确认发布：凭据闸 + push。
-    pub fn confirm_publish(&self, qid: &str) -> Result<crate::publish::PublishOutcome, ApiError> {
-        Ok(crate::publish::confirm(
+    /// 确认推送：凭据闸 + push。
+    pub fn confirm_push(&self, qid: &str) -> Result<crate::push::PushOutcome, ApiError> {
+        Ok(crate::push::confirm(
             &self.db,
             &self.project_id,
             qid,

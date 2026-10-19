@@ -28,7 +28,7 @@ const summary: TimelineItem = {
 }
 const pending = [
   { id: 'perm', kind: 'permission', agent_id: 'a1', payload: { tool: 'bash', input: { cmd: 'npx playwright install' } }, state: 'queued' },
-  { id: 'pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin' }, state: 'queued' },
+  { id: 'pub', kind: 'push', agent_id: 'a0', payload: { remote: 'origin' }, state: 'queued' },
 ] as unknown as PendingQuestion[]
 
 beforeEach(async () => {

@@ -154,10 +154,10 @@ mod tests {
             }),
             ManagedNextKind::Evidence
         );
-        // 发布缺目标：应用里还没有配置发布目标的入口，不造死按钮。
+        // 推送缺目标：应用里还没有配置发布目标的入口，不造死按钮。
         assert_eq!(
             next_step(&NextFacts {
-                card_kind: "publish",
+                card_kind: "push",
                 ..facts("target_missing", "incomplete")
             }),
             ManagedNext {
@@ -185,7 +185,7 @@ mod tests {
                 "managed_route_failed:quota","managed_route_failed:transport","credentials_or_login_required",
                 "capability_not_installed","target_missing","no_active_stage","x"]),
             result in prop::sample::select(vec!["done","incomplete","failed"]),
-            card_kind in prop::sample::select(vec!["permission","stamp","publish","grant","install"]),
+            card_kind in prop::sample::select(vec!["permission","stamp","push","grant","install"]),
             grant_kind in prop::sample::select(vec!["","mcp","skill"]),
             card_queued in any::<bool>(),
             event_id in 1i64..1_000_000,

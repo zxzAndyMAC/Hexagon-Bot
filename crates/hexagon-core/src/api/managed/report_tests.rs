@@ -70,7 +70,7 @@ fn history_records_carry_scope_and_evidence_from_host_codes() {
             .append_event(
                 crate::PROJECT_ID,
                 EventKind::System,
-                json!({"kind":"managed_decision","card_id":"c","card_kind":"publish",
+                json!({"kind":"managed_decision","card_id":"c","card_kind":"push",
                     "action":action,"reason":reason,"via":via,"actor":"managed:d:1","outcome":"ok"}),
                 None,
                 None,
@@ -156,7 +156,7 @@ proptest! {
     /// D12: the classifier never grants evidence or an out-of-scope verdict to a model's own choice.
     #[test]
     fn only_host_codes_earn_evidence_or_out_of_scope(
-        action in prop::sample::select(vec!["accept","adopt","publish","confirm","direct_use","deny","incomplete","run_checks","allow"]),
+        action in prop::sample::select(vec!["accept","adopt","push","confirm","direct_use","deny","incomplete","run_checks","allow"]),
         reason in prop::sample::select(vec!["evidence_complete","independent_quality_qualified","configured_target_accepted_delivery",
             "host_verified_worktree_binding","installed_capability_direct_use","target_missing","credential_missing","checks_missing_or_stale","x"]),
         via in prop::sample::select(vec!["host","model","fallback"]),

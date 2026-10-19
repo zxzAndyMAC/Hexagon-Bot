@@ -59,7 +59,7 @@ pub fn classify(action: &str, reason: &str, via: &str) -> (ManagedScope, Managed
             ManagedEvidence::RealCheck
         }
         ("adopt", "independent_quality_qualified") => ManagedEvidence::QualityEvidence,
-        ("publish", "configured_target_accepted_delivery")
+        ("push", "configured_target_accepted_delivery")
         | ("confirm", "host_verified_worktree_binding") => ManagedEvidence::HostVerified,
         ("direct_use", "installed_capability_direct_use") => ManagedEvidence::InProject,
         _ => ManagedEvidence::HostRule,

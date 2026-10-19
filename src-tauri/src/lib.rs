@@ -682,12 +682,12 @@ fn session_capabilities(
 
 /// Pending dock tier, lower is more severe. Mirrors `ui/src/decisions.ts`
 /// SEVERITY and the CONTEXT「待决坞」ruling (2026-10-12): recovery = stall =
-/// publish = worktree = install = grant, then stage stamp, escalation,
+/// push = worktree = install = grant, then stage stamp, escalation,
 /// permission, proposal stamp. Re-audit 2026-10-13: the earlier ranking
 /// put recovery and stall below permission and mislabelled the summary.
 fn pending_tier(card: &hexagon_core::cards::QueuedCard) -> (u8, &'static str) {
     match card.kind.as_str() {
-        "recovery" | "stall" | "publish" | "worktree" | "install" | "grant" => (0, "critical"),
+        "recovery" | "stall" | "push" | "worktree" | "install" | "grant" => (0, "critical"),
         "stamp"
             if card
                 .payload
@@ -2773,25 +2773,25 @@ fn rollback_proposal(state: ProjectState<'_>, proposal_id: String) -> Result<(),
 }
 
 #[tauri::command]
-fn request_publish(state: ProjectState<'_>, remote: String) -> Result<String, CmdError> {
-    // 发布请求只是入队待决卡（控制组）；push 在 confirm_publish（wb 组，要 creds）
+fn request_push(state: ProjectState<'_>, remote: String) -> Result<String, CmdError> {
+    // 推送请求只是入队待决卡（控制组）；真正的 push 在 confirm_push（wb 组，要 creds）
     with_project_conn(&state, |db, _| {
-        hexagon_core::publish::request(db, PROJECT_ID, &remote).map_err(cmd_err)
+        hexagon_core::push::request(db, PROJECT_ID, &remote).map_err(cmd_err)
     })
 }
 
 #[tauri::command]
-fn confirm_publish(
+fn confirm_push(
     state: ProjectState<'_>,
     qid: String,
-) -> Result<hexagon_core::publish::PublishOutcome, CmdError> {
-    with_wb(&state, |wb| wb.confirm_publish(&qid))
+) -> Result<hexagon_core::push::PushOutcome, CmdError> {
+    with_wb(&state, |wb| wb.confirm_push(&qid))
 }
 
 #[tauri::command]
-fn reject_publish(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+fn reject_push(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
     with_project_conn(&state, |db, _| {
-        hexagon_core::publish::reject(db, PROJECT_ID, &qid).map_err(cmd_err)
+        hexagon_core::push::reject(db, PROJECT_ID, &qid).map_err(cmd_err)
     })
 }
 
@@ -3939,9 +3939,9 @@ pub fn run() {
             invariant_check,
             policydev_propose,
             rollback_proposal,
-            request_publish,
-            confirm_publish,
-            reject_publish,
+            request_push,
+            confirm_push,
+            reject_push,
             set_agent_avatar,
             agent_avatar,
             artifact_content_at,
@@ -4302,9 +4302,7 @@ mod session_host_command_tests {
             payload,
             state: "queued".into(),
         };
-        for kind in [
-            "recovery", "stall", "publish", "worktree", "install", "grant",
-        ] {
+        for kind in ["recovery", "stall", "push", "worktree", "install", "grant"] {
             assert_eq!(
                 pending_tier(&card(kind, serde_json::json!({}))),
                 (0, "critical")

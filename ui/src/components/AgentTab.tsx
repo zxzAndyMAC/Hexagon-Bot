@@ -52,8 +52,8 @@ const STEP_ICON: Record<string, IconName> = {
   review_rejected: 'warn', review_skipped: 'arrow-right', flag_submitted: 'flag', flag_adjudicated: 'flag',
   permission_asked: 'help', permission_allowed: 'check', permission_denied: 'close', permission_shape_remembered: 'check',
   escalated: 'escalate', test_ran: 'check', proposal_queued: 'diff', proposal_reviewed: 'diff', proposal_stamped: 'stamp',
-  proposal_rejected: 'diff', proposal_activated: 'bolt', proposal_rolled_back: 'arrow-left', publish_requested: 'publish',
-  publish_confirmed: 'publish', publish_rejected: 'publish', publish_failed: 'publish', backfill_executed: 'refresh',
+  proposal_rejected: 'diff', proposal_activated: 'bolt', proposal_rolled_back: 'arrow-left', push_requested: 'publish',
+  push_confirmed: 'publish', push_rejected: 'publish', push_failed: 'publish', backfill_executed: 'refresh',
   usage_cap_hit: 'yen', owner_command: 'send', fastpath_dispatched: 'bolt', system: 'list',
 }
 

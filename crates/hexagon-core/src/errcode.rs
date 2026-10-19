@@ -84,7 +84,7 @@ impl_error_code!(
     Turn,
     Tool,
     Artifact,
-    Publish,
+    Push,
     Autonomy,
     Proposal,
     Review,
@@ -180,15 +180,7 @@ impl ErrorCode for crate::provider_admin::AdminError {
     }
 }
 impl_error_code!(crate::provider_config::ProvidersError, Io, Json);
-impl_error_code!(
-    crate::publish::PublishError,
-    Sqlite,
-    Cards,
-    Db,
-    Trace,
-    Cred,
-    Git,
-);
+impl_error_code!(crate::push::PushError, Sqlite, Cards, Db, Trace, Cred, Git,);
 impl_error_code!(
     crate::review::ReviewError,
     Artifact,

@@ -155,7 +155,7 @@ fn assert_no_side_effects(wb: &Workbench, ptr: &[(String, String)]) {
         .count();
     assert_eq!(n, 0, "失速动作不盖章");
     assert_eq!(
-        cards::count_queued(&wb.db, &wb.project_id, Some(CardKind::Publish)).unwrap(),
+        cards::count_queued(&wb.db, &wb.project_id, Some(CardKind::Push)).unwrap(),
         0,
         "失速动作不发起远程发布"
     );
@@ -717,7 +717,7 @@ fn owner_facing_card_is_not_idle_spin() {
     let clock = with_clock(&mut wb);
     scripted(&mut wb, "default", &["要装个依赖"]);
     wb.run_turn("产品策划", "写规格").unwrap();
-    wb.request_publish("origin").unwrap();
+    wb.request_push("origin").unwrap();
     clock.advance(Duration::from_secs(3600));
     assert_eq!(wb.stall_tick().unwrap(), StallTick::Wait("owner_waits"));
 }
