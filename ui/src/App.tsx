@@ -30,7 +30,7 @@ import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
 import { bindingFor, matches } from './keymap'
-import { closeOtherTabs, closeTabsToRight, copyTabPath } from './tabActions'
+import { closeOtherTabs, closeTabsToRight, copyTabPath, stepTab } from './tabActions'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
@@ -289,6 +289,14 @@ export default function App() {
         return
       }
       // owner-followups-1015 #05（A16b）：右键菜单动作的键位入口，默认空绑定（matches 对空串恒假）；同 ⌘W 只在画布可见时作用于当前页签。
+      // owner-followups-1015 #06（A22「溢出」）：⌘⇧] / ⌘⇧[ 按可见顺序切页签；同 ⌘W 只在画布可见时作用。
+      for (const [action, dir] of [['nextTab', 1], ['prevTab', -1]] as const) {
+        if (!matches(e, bindingFor(action))) continue
+        e.preventDefault()
+        const s = useUiStore.getState()
+        if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView) stepTab(dir)
+        return
+      }
       for (const [action, run] of [['closeOtherTabs', closeOtherTabs], ['closeTabsToRight', closeTabsToRight], ['copyPath', copyTabPath]] as const) {
         const b = bindingFor(action)
         if (!b || !matches(e, b)) continue
