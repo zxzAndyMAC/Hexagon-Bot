@@ -55,9 +55,12 @@ pub fn probe_key(
 ) -> Result<KeyProbe, crate::provider_admin::AdminError> {
     let doc = provider_config::load()?;
     let current = doc.providers.iter().find(|p| p.id == def.id);
-    let Ok(base_url) =
-        crate::data_boundary::restore(&def.base_url, current.map(|p| p.base_url.as_str()), true)
-    else {
+    // 票 21：与保存同一道规范化，检测的就是将要保存的那个地址。
+    let Ok(base_url) = crate::provider_url::resolve_input(
+        &def.kind,
+        &def.base_url,
+        current.map(|p| p.base_url.as_str()),
+    ) else {
         return Ok(KeyProbe::failed("invalid_url", None));
     };
     if base_url.trim().is_empty() {
@@ -157,7 +160,8 @@ mod tests {
         )
         .unwrap();
         let request = server.join().unwrap();
-        assert!(request.starts_with("GET /models"));
+        // 票 21：新填的无版本 OpenAI 兼容地址规范化补 `/v1`（曾请求 `/models`）。
+        assert!(request.starts_with("GET /v1/models"), "{request}");
         assert!(request.contains("Bearer sk-typed"));
         assert_eq!(
             got,
@@ -169,6 +173,51 @@ mod tests {
                 window: Some(200000),
             }
         );
+    }
+
+    /// 票 21：检测与保存走同一道规范化——填完整端点也检测那一个服务（不再拼成
+    /// `…/chat/completions/models`）。
+    #[test]
+    fn typed_full_endpoint_probes_its_own_catalog() {
+        let _doc = provider_config::fixture_document(Default::default());
+        let (url, server) = serve_once("200 OK", r#"{"data":[]}"#.into());
+        let got = probe_key(
+            def(format!("{url}/chat/completions")),
+            Some("k".into()),
+            "",
+            &MemoryStore::default(),
+        )
+        .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("GET /models "), "{request}");
+        assert!(got.ok);
+    }
+
+    /// 票 21：保存新填地址时规范化；已存地址（遮蔽形原样送回）不动。
+    #[test]
+    fn save_normalizes_typed_urls_but_keeps_saved_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let _path = provider_config::fixture_path(dir.path().join("providers.json"));
+        let store = MemoryStore::default();
+        let stored = || {
+            provider_config::load().unwrap().providers[0]
+                .base_url
+                .clone()
+        };
+
+        crate::provider_admin::save(def("https://api.deepseek.com/".into()), None, &store).unwrap();
+        assert_eq!(stored(), "https://api.deepseek.com/v1");
+
+        // 升级前存下的无版本地址：界面拿到遮蔽形，原样送回 → 存储值逐字不变。
+        let mut legacy = provider_config::load().unwrap();
+        legacy.providers[0].base_url = "https://api.perplexity.ai".into();
+        provider_config::save_provider(&legacy.providers[0]).unwrap();
+        let shown = crate::provider_admin::list(&store).unwrap().providers[0]
+            .def
+            .base_url
+            .clone();
+        crate::provider_admin::save(def(shown), None, &store).unwrap();
+        assert_eq!(stored(), "https://api.perplexity.ai");
     }
 
     #[test]

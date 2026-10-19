@@ -15,6 +15,8 @@
 //!
 //! base URL 口径跟 `provider::HttpProvider` 的拼路径规则走：anthropic 类型自带 `/v1/messages`，
 //! 所以只写主机；openai 兼容类型拼 `/chat/completions`，所以写到版本前缀为止。
+//! 票 21 起拼路径统一在 `provider_url::request_url`，预设值按旧口径的请求地址逐字不变
+//! （`provider_url` 测试 `saved_providers_keep_their_request_url` 锁住）。
 
 use crate::provider::ProviderKind;
 

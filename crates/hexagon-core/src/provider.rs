@@ -1673,7 +1673,7 @@ impl ModelProvider for HttpProvider {
         let key = self.api_key()?;
         match self.kind {
             ProviderKind::Anthropic => {
-                let url = format!("{}/v1/messages", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 // 票 02：max_tokens 收编进模型元数据，8192 只是缺省旧值。
                 let body = anthropic_shape::to_request(
                     req,
@@ -1693,7 +1693,7 @@ impl ModelProvider for HttpProvider {
                 anthropic_shape::from_response(&v).map(|r| restore_tool_names(req, r))
             }
             ProviderKind::OpenAi => {
-                let url = format!("{}/chat/completions", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
                 // Reliability 13: the same advertised bound must be sent to
@@ -1725,7 +1725,7 @@ impl ModelProvider for HttpProvider {
         let key = self.api_key()?;
         match self.kind {
             ProviderKind::Anthropic => {
-                let url = format!("{}/v1/messages", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 // 票 02：max_tokens 收编进模型元数据，8192 只是缺省旧值。
                 let mut body = anthropic_shape::to_request(
                     req,
@@ -1768,7 +1768,7 @@ impl ModelProvider for HttpProvider {
                     .map_err(|e| e.with_usage(&usage))
             }
             ProviderKind::OpenAi => {
-                let url = format!("{}/chat/completions", self.base_url);
+                let url = crate::provider_url::request_url(&self.kind, &self.base_url);
                 let mut body = openai_shape::to_request(req);
                 body["model"] = serde_json::json!(self.model);
                 // Reliability 13: streaming uses the same enforced bound as complete().
