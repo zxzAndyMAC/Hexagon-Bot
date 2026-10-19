@@ -5,7 +5,7 @@
 //
 // 关着的画布不卸载（hidden）：未保存的文件草稿要留到离开确认能看见（Benchmark I1 同理），
 // 所以 App 只要有页签就渲染本组件，用 open 控制显隐。
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore, type WorkTab } from '../../store'
 import { isMac } from '../../keymap'
@@ -29,6 +29,8 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
 import { cn } from '@/lib/utils'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, tabPath, tabsRightOf } from '../../tabActions'
 
 export type CanvasMode = 'side' | 'full' | 'sheet'
 
@@ -68,6 +70,38 @@ function arrowTabs(e: KeyboardEvent<HTMLDivElement>) {
   next.click()
 }
 
+/** 画布页签右键菜单（A16b 第一批）：关闭 · 关闭其他 · 关闭右侧 · 复制路径（仅文件 / 产物页签）。 */
+function TabContextMenu({ tab, tabs, children }: { tab: WorkTab; tabs: WorkTab[]; children: ReactNode }) {
+  const { t } = useTranslation()
+  const path = tabPath(tab)
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem data-ctx-item="close" action="closeTab" onSelect={() => useUiStore.getState().closeTab(tab.id)}>
+          {t('ctx.close')}
+        </ContextMenuItem>
+        <ContextMenuItem data-ctx-item="closeOthers" action="closeOtherTabs"
+          reason={otherTabs(tabs, tab.id).length ? undefined : t('ctx.noOtherTabs')} onSelect={() => closeOtherTabs(tab.id)}>
+          {t('ctx.closeOthers')}
+        </ContextMenuItem>
+        <ContextMenuItem data-ctx-item="closeRight" action="closeTabsToRight"
+          reason={tabsRightOf(tabs, tab.id).length ? undefined : t('ctx.noTabsRight')} onSelect={() => closeTabsToRight(tab.id)}>
+          {t('ctx.closeRight')}
+        </ContextMenuItem>
+        {path && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem data-ctx-item="copyPath" action="copyPath" onSelect={() => void copyTabPath(tab.id)}>
+              {t('ctx.copyPath')}
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
 function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead: boolean }) {
   const { t } = useTranslation()
   const tabs = useUiStore((s) => s.tabs)
@@ -91,11 +125,13 @@ function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead: boolea
           const on = tab.id === active
           const name = title(tab)
           return (
-            <div key={tab.id} className={tabClass(on)} data-canvas-tab={tab.id}
+            <TabContextMenu key={tab.id} tab={tab} tabs={tabs}>
+            <div className={tabClass(on)} data-canvas-tab={tab.id}
               onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); st().closeTab(tab.id) } }}>
               <button type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1} title={tab.path ?? name}
                 className="flex min-w-0 cursor-pointer items-center gap-1.5 outline-none"
-                onClick={() => st().setActiveTab(tab.id)}>
+                // A16b：macOS ctrl+点击由系统当右键（发 contextmenu 开菜单），不能顺带切页签（「右键不改选中」）。
+                onClick={(e) => { if (!(isMac && e.ctrlKey)) st().setActiveTab(tab.id) }}>
                 <TabIcon tab={tab} />
                 <span className="truncate">{name}</span>
                 {dirty(tab) && <Dot tone="warn" data-unsaved />}
@@ -105,6 +141,7 @@ function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead: boolea
                 <Icon name="close" size={12} />
               </IconButton>
             </div>
+            </TabContextMenu>
           )
         })}
       </div>

@@ -31,6 +31,7 @@ function DropdownMenuContent({ className, sideOffset = 6, ...props }: React.Comp
   )
 }
 
+/** 菜单行（A16 `mi`）；右键菜单 A16b 同用。 */
 const itemBase =
   "hx-press relative flex cursor-pointer items-center gap-[9px] rounded-[7px] px-[9px] text-[13px] outline-none select-none data-highlighted:bg-hover data-disabled:cursor-default data-disabled:opacity-45 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-ink-2"
 
@@ -137,5 +138,6 @@ export {
   DropdownMenuSeparator,
   DropdownMenuSkeleton,
   DropdownMenuTrigger,
+  itemBase as menuItemBase,
   popSurface,
 }
