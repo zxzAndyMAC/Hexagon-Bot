@@ -2801,19 +2801,53 @@ fn set_agent_avatar(
     agent_id: String,
     data_url: String,
 ) -> Result<(), CmdError> {
-    // 纯文件写（avatars/ 目录）——控制通道取 root 即可
+    // 纯文件写（avatars/ 目录）——控制通道取 root 即可。票 17：这是实例覆盖层。
     with_project_conn(&state, |_, root| {
-        hexagon_core::roles::set_agent_avatar(root, &agent_id, &data_url).map_err(cmd_err)
+        hexagon_core::avatars::set_agent_avatar(root, &agent_id, &data_url)
     })
 }
 
+/// 票 17：实例层「恢复默认」——删覆盖，露出角色头像。
+#[tauri::command]
+fn clear_agent_avatar(state: ProjectState<'_>, agent_id: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::avatars::clear_agent_avatar(root, &agent_id)
+    })
+}
+
+/// 生效头像（实例覆盖 > 角色头像）；角色从控制连接的 agents 表取。
 #[tauri::command]
 fn agent_avatar(
     state: tauri::State<AppState>,
     agent_id: String,
 ) -> Result<Option<String>, CmdError> {
+    with_conn(&state, |db, root| {
+        hexagon_core::avatars::agent_avatar(db, root, &agent_id)
+    })
+}
+
+#[tauri::command]
+fn role_avatar(state: tauri::State<AppState>, role: String) -> Result<Option<String>, CmdError> {
     with_conn(&state, |_, root| {
-        hexagon_core::roles::agent_avatar(root, &agent_id).map_err(cmd_err)
+        hexagon_core::avatars::role_avatar(root, &role)
+    })
+}
+
+#[tauri::command]
+fn set_role_avatar(
+    state: ProjectState<'_>,
+    role: String,
+    data_url: String,
+) -> Result<(), CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::avatars::set_role_avatar(root, &role, &data_url)
+    })
+}
+
+#[tauri::command]
+fn clear_role_avatar(state: ProjectState<'_>, role: String) -> Result<(), CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::avatars::clear_role_avatar(root, &role)
     })
 }
 
@@ -3326,6 +3360,11 @@ fn create_project(
             })
             .transpose()?
     };
+    // 票 17：向导里换的角色头像先整单规整（2MB / 可解码 / 中心裁方），不合格在建目录前拒。
+    // 被否决：建好项目后逐张写、坏图跳过——负责人看不到为什么那个角色没换成。
+    let role_avatars =
+        hexagon_core::avatars::prepare_role_avatars(opts.role_avatars.as_deref().unwrap_or(&[]))
+            .map_err(cmd_err)?;
     // 壳层唯一保留的 provider_config:: 直调：create_project 建档校验要文档现状
     let pdoc = hexagon_core::provider_config::load().unwrap_or_default();
     let mut wb = setup::create_project_reporting(
@@ -3345,6 +3384,9 @@ fn create_project(
         },
     )
     .map_err(cmd_err)?;
+    for (role, img) in &role_avatars {
+        hexagon_core::avatars::write_role(&wb.repo_root, role, img).map_err(cmd_err)?;
+    }
     // 接线尾步归 Workbench：凭据库 + 按文档注册运行槽位（票 05）
     wb.attach_providers(hexagon_core::credentials::active());
     let control = open_control(&opts.dir, &wb)?;
@@ -3943,7 +3985,11 @@ pub fn run() {
             confirm_push,
             reject_push,
             set_agent_avatar,
+            clear_agent_avatar,
             agent_avatar,
+            role_avatar,
+            set_role_avatar,
+            clear_role_avatar,
             artifact_content_at,
             set_agent_sleeping,
             remove_agent,
