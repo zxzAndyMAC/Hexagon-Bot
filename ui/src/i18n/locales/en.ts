@@ -890,6 +890,7 @@ export default {
     keyKeep: 'saved — leave empty to keep',
     showKey: 'Show', hideKey: 'Hide', check: 'Check and fetch models', checking: 'Checking connection…', checkOk: '{{count}} models fetched',
     fetch: 'Fetching models…', addModel: 'Add',
+    missingKeyReason: 'No API key is saved for this provider. Enter it above, then check again.',
     noModels: 'No models — fetch or add manually',
     modelId: 'Model ID', modelName: 'Display name', modelGroup: 'Group', caps: 'Capabilities',
     cap_text_generation: "Text generation",

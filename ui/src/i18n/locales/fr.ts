@@ -890,6 +890,7 @@ export default {
     keyKeep: 'enregistrée — vide pour conserver',
     showKey: 'Afficher', hideKey: 'Masquer', check: 'Tester et récupérer les modèles', checking: 'Vérification de la connexion…', checkOk: '{{count}} modèles récupérés',
     fetch: 'Récupération des modèles…', addModel: 'Ajouter',
+    missingKeyReason: 'Aucune clé API n’est enregistrée pour ce fournisseur. Saisissez-la ci-dessus, puis vérifiez à nouveau.',
     noModels: 'Aucun modèle — récupérez ou ajoutez manuellement',
     modelId: 'ID du modèle', modelName: 'Nom affiché', modelGroup: 'Groupe', caps: 'Capacités',
     cap_text_generation: "Génération de texte",

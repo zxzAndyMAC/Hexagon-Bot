@@ -5,7 +5,7 @@
 // 数据语义：非密配置存 providers.json；key 使用 active CredentialStore（provider/<id>）。
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
+import { api, asCmdError, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
 import { isLocalEndpoint } from '../providerGate'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
@@ -48,7 +48,7 @@ function emptyModel(): ModelEntry {
 }
 
 export function ProviderManager() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [roles, setRoles] = useState<RoleDef[]>([])
   const [presets, setPresets] = useState<ProviderPreset[]>([])
@@ -63,7 +63,7 @@ export function ProviderManager() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const [phase, setPhase] = useState<'check' | 'fetch' | null>(null)
+  const [fetching, setFetching] = useState(false)
 
   const reload = async (keepSel?: string) => {
     try {
@@ -150,27 +150,28 @@ export function ProviderManager() {
     await reload('')
   }
 
+  /// 拉取模型目录失败的原因文案。owner-followups-1015 #03：core 的码面与连接检测同词，
+  /// 文案复用向导的 `wizard.probe.reason.*`；缺钥匙单列——向导那句「输入后自动检测」在设置页不成立。
+  const catalogReason = (e: unknown) => {
+    const { code } = asCmdError(e)
+    if (code === 'missing_credential') return t('providers.missingKeyReason')
+    const key = `wizard.probe.reason.${code}`
+    return i18n.exists(key) ? t(key) : errText(e)
+  }
+
   /// review R3（settings#models「检测并拉取模型」，原型一个按钮）：曾是「检测」+ 模型目录头「拉取列表」两个按钮，
-  /// 实际调同一函数。合并为一个按钮两段状态——① 检测连接（要钥匙的端点先 probe 一次，失败就停在原因上，
-  /// 不拉列表；本地端点不需要钥匙，probe 会报 missing_credential，所以跳过）→ ② 拉取模型并合并进 draft.models
-  /// （保留已有能力标记）。
+  /// 实际调同一函数，合为一个。owner-followups-1015 #03：合并后曾分两段——先 probe_provider_key 检测连接、
+  /// 再 fetch_provider_models 拉目录——两段请求的是同一个模型目录，一次点击打两次服务商。现在只拉一次：
+  /// 失败码即连接检测的原因词（core `AdminError::Catalog`），成功合并进 draft.models（保留已有能力 / 手填窗口）。
+  /// 向导只检测不拉取，仍用 probe_provider_key。
   const probeAndMerge = async () => {
     if (!draft) return
     setBusy(true)
+    setFetching(true)
     setProbe(null)
     try {
-      setPhase('check')
-      await save(secret.trim() || undefined) // 先落配置+key 再检测
+      await save(secret.trim() || undefined) // 先落配置+key 再拉取
       const id = draft.id || slug(draft.name)
-      if (!isLocalEndpoint(draft.base_url)) {
-        const check = await api.probeProviderKey({ id, name: draft.name, kind: draft.kind, base_url: draft.base_url, models: [], enabled: draft.enabled }, undefined, '')
-        if (!check.ok) {
-          const reason = check.failure ?? 'invalid_response'
-          setProbe({ ok: false, text: t(`wizard.probe.reason.${reason}`, { defaultValue: t('wizard.probe.reason.invalid_response') }) })
-          return
-        }
-      }
-      setPhase('fetch')
       const ids = await api.fetchProviderModels(id)
       const byId = new Map(draft.models.map((m) => [m.id, m]))
       const merged = ids.map((m) => {
@@ -184,10 +185,10 @@ export function ProviderManager() {
       setProbe({ ok: true, text: t('providers.checkOk', { count: ids.length }) })
       await reload(def.id)
     } catch (e) {
-      setProbe({ ok: false, text: errText(e) })
+      setProbe({ ok: false, text: catalogReason(e) })
     } finally {
       setBusy(false)
-      setPhase(null)
+      setFetching(false)
     }
   }
 
@@ -217,7 +218,7 @@ export function ProviderManager() {
       setEditModel((current) => current?.id === id ? {
         ...current, caps: model.caps, context_window: model.context_window, max_output: model.max_output,
       } : current)
-    } catch (e) { setErr(errText(e)) }
+    } catch (e) { setErr(catalogReason(e)) }
     finally { setBusy(false) }
   }
 
@@ -485,7 +486,7 @@ export function ProviderManager() {
                 className="mb-[22px]" disabled={probeDisabled} loading={busy} onClick={probeAndMerge}
                 title={probeDisabled && !busy ? t('providers.checkNeedsKey') : undefined}
               >
-                {!busy && <Icon name="refresh" size={14} />}{t(phase === 'check' ? 'providers.checking' : phase === 'fetch' ? 'providers.fetch' : 'providers.check')}
+                {!busy && <Icon name="refresh" size={14} />}{t(fetching ? 'providers.fetch' : 'providers.check')}
               </Button>
             </div>
             {probe && (

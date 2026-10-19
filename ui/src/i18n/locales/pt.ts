@@ -890,6 +890,7 @@ export default {
     keyKeep: 'guardada — vazio para manter',
     showKey: 'Mostrar', hideKey: 'Ocultar', check: 'Testar e obter modelos', checking: 'Verificando a conexão…', checkOk: '{{count}} modelos obtidos',
     fetch: 'Obtendo modelos…', addModel: 'Adicionar',
+    missingKeyReason: 'Nenhuma chave de API está salva para este provedor. Insira-a acima e verifique novamente.',
     noModels: 'Sem modelos — obtenha ou adicione manualmente',
     modelId: 'ID do modelo', modelName: 'Nome', modelGroup: 'Grupo', caps: 'Capacidades',
     cap_text_generation: "Geração de texto",

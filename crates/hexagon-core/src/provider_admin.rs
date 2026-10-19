@@ -19,8 +19,16 @@ pub enum AdminError {
     Json(#[from] serde_json::Error),
     #[error("unknown provider: {0}")]
     UnknownProvider(String),
-    #[error("missing API key: provider/{0}")]
-    MissingKey(String),
+    /// owner-followups-1015 #03：拉取模型目录失败。`code` 与连接检测（`KeyProbe::failure`）
+    /// 同一套词（含缺钥匙 `missing_credential`），IPC 码面直接就是这个词，界面按词给原因。
+    /// 曾是 `MissingKey` + 笼统 `ProvidersError::Http("provider request or response failed")`，
+    /// 设置页只好先 probe 一次拿原因再 fetch 一次拿目录——同一目录请求两次。
+    /// Display 只带原因词与状态，不带 URL / 响应正文（Reliability 22：原文可能含凭据）。
+    #[error("model catalog request failed: {code}")]
+    Catalog {
+        code: &'static str,
+        status: Option<u16>,
+    },
     /// 票 16：优化描述要的是主对话模型（default 槽），不是任意一个已配槽。
     #[error("主对话模型未就绪：需要启用的供应商、钥匙和 default 槽")]
     MainChatUnavailable,
@@ -280,7 +288,8 @@ pub fn remove_search() -> Result<(), AdminError> {
     Ok(provider_config::set_search(None)?)
 }
 
-/// 拉取/检测供应商模型目录：GET /models；key 从凭据库现取，缺 key 直报。
+/// 拉取供应商模型目录：GET /models；key 从凭据库现取。设置页「检测并拉取」只调这一次——
+/// 失败即 [`AdminError::Catalog`]，原因词与连接检测相同（缺钥匙 = `missing_credential`）。
 pub fn fetch_models(
     id: &str,
     store: &dyn CredentialStore,
@@ -293,9 +302,16 @@ pub fn fetch_models(
         .ok_or_else(|| AdminError::UnknownProvider(id.into()))?;
     let key = store
         .get(&provider_key_name(&def.id))?
-        .ok_or_else(|| AdminError::MissingKey(def.id.clone()))?;
-    let models = provider_config::fetch_models(def, &key)?;
-    Ok(models)
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .ok_or(AdminError::Catalog {
+            code: "missing_credential",
+            status: None,
+        })?;
+    provider_config::fetch_catalog(def, &key).map_err(|f| AdminError::Catalog {
+        code: f.code,
+        status: f.status,
+    })
 }
 
 /// 票 16：向导优化项目说明用的主对话模型。项目还不存在，不走 Workbench。
