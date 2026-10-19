@@ -12,6 +12,7 @@ import { useUiStore } from '../store'
 import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
+import { closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, tabPath, tabsRightOf } from '../tabActions'
 import { Icon, type IconName } from './Icon'
 import { Avatar } from '@/components/ui/avatar'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -38,7 +39,7 @@ interface Item {
 
 export function CommandPalette({ onClose, onSettings }: { onClose: () => void; onSettings?: () => void }) {
   const { t } = useTranslation()
-  const { team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, closeTab, invalidate, pushToast, pending, setFlowDialogOpen } = useUiStore()
+  const { team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, tabs, closeTab, invalidate, pushToast, pending, setFlowDialogOpen } = useUiStore()
   const [q, setQ] = useState('')
 
   const items = useMemo<Item[]>(() => {
@@ -84,6 +85,20 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         id: 'n-close', group: 'nav' as const, label: t('palette.closeTab'), icon: 'close' as const, hint: bind('closeTab'),
         run: () => closeTab(activeTab),
       }] : []),
+      // owner-followups-1015 #05（A16b「定位」）：右键菜单的动作都要在 ⌘K 找得到；作用于当前页签，
+      // 此刻做不了（没有其他 / 右侧页签）或种类不适用（非文件 / 产物页签无路径）就不列。
+      ...(activeTab && otherTabs(tabs, activeTab).length ? [{
+        id: 'n-close-others', group: 'nav' as const, label: t('palette.closeOtherTabs'), icon: 'close' as const, hint: bind('closeOtherTabs'),
+        run: () => closeOtherTabs(activeTab),
+      }] : []),
+      ...(activeTab && tabsRightOf(tabs, activeTab).length ? [{
+        id: 'n-close-right', group: 'nav' as const, label: t('palette.closeTabsToRight'), icon: 'close' as const, hint: bind('closeTabsToRight'),
+        run: () => closeTabsToRight(activeTab),
+      }] : []),
+      ...(activeTab && tabPath(tabs.find((x) => x.id === activeTab)) ? [{
+        id: 'n-copy-path', group: 'nav' as const, label: t('palette.copyPath'), icon: 'copy' as const, hint: bind('copyPath'),
+        run: () => copyTabPath(activeTab),
+      }] : []),
       // 快速打开：产物（file-text + 等宽路径 +「产物」）、Agent（头像 + 角色名 +「Agent」）
       ...artifacts.map((a) => ({
         id: `o-f-${a.path}-v${a.version}`, group: 'open' as const, mono: true, icon: 'file-text' as const,
@@ -97,7 +112,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       })),
     ]
     return list
-  }, [t, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, pending, pushToast, invalidate, setFlowDialogOpen, onSettings])
+  }, [t, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pending, pushToast, invalidate, setFlowDialogOpen, onSettings])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。

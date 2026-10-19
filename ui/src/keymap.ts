@@ -73,6 +73,9 @@ export type ActionId =
   | 'canvasFullWidth'
   | 'focusMode'
   | 'closeTab'
+  | 'closeOtherTabs'
+  | 'closeTabsToRight'
+  | 'copyPath'
   | 'settings'
   | 'focusComposer'
   | 'stageRewind'
@@ -215,6 +218,9 @@ const DEFAULTS: Record<ActionId, string> = {
   focusMode: 'mod+.',
   // 票 03（ADR 0088）：⌘W 关画布当前页签（时间线不再是页签）。
   closeTab: 'mod+W',
+  // owner-followups-1015 #05（A16b）：右键菜单的新动作默认不绑键位（alt+mod+shift+* 已挤满），
+  // 进命令面板与设置·键盘，负责人自己指定。作用对象 = 当前页签（右键时 = 目标页签）。
+  closeOtherTabs: '', closeTabsToRight: '', copyPath: '',
   settings: 'mod+,',
   focusComposer: 'mod+N',
   // ADR 0056-2：阶段操作键位（alt+mod 组合避开 ⌘ 系常用位）
@@ -355,6 +361,9 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'canvasFullWidth', labelKey: 'keys.canvasFullWidth' },
   { id: 'focusMode', labelKey: 'keys.focusMode' },
   { id: 'closeTab', labelKey: 'keys.closeTab' },
+  { id: 'closeOtherTabs', labelKey: 'keys.closeOtherTabs' },
+  { id: 'closeTabsToRight', labelKey: 'keys.closeTabsToRight' },
+  { id: 'copyPath', labelKey: 'keys.copyPath' },
   { id: 'settings', labelKey: 'keys.settings' },
   { id: 'focusComposer', labelKey: 'keys.composer' },
   { id: 'permissionOptions', labelKey: 'projectPermission.options' },
