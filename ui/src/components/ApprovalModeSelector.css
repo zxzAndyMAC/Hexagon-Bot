@@ -37,7 +37,7 @@
 .approval-mode-managed-row { display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px; border-radius: 7px; cursor: pointer; }
 .approval-mode-managed-row:hover { background: var(--hover); }
 .approval-mode-managed-row > svg { margin-top: 2px; color: var(--ink-2); flex: none; }
-.approval-mode-error { margin: 0; padding: 4px 9px 6px; font-size: 12px; line-height: 1.5; color: var(--red); }
+.approval-mode-error { margin: 0; padding: 4px 9px 6px; font-size: 12px; line-height: 1.5; color: var(--red-ink); }
 /* A10 开关外观（原生 checkbox role=switch 保留：键位 managedEnable 与测试点它）：30×18 轨、14 滑块 */
 .approval-mode .switch {
   appearance: none; position: relative; flex: none; width: 30px; height: 18px; margin: 2px 0 0; border: 0; border-radius: 99px;

@@ -138,13 +138,13 @@ export function ReturnSummaryCard({ item, items, onJumpEvent, pinned = true }: {
         <Trans
           i18nKey={rows.length ? 'returnSummary.headline' : 'returnSummary.headlineClear'}
           values={{ stages: summary.stages.finished, deliveries: summary.deliveries.length, pending: rows.length }}
-          components={{ b: <b className="tl-rs-em" />, o: <b className="tl-rs-em" style={{ color: 'var(--orange)' }} /> }}
+          components={{ b: <b className="tl-rs-em" />, o: <b className="tl-rs-em" style={{ color: 'var(--orange-ink)' }} /> }}
         />
       </p>
       <div className="tl-rs-kpi">
         <div className="tl-rs-cell"><span>{t('returnSummary.kpiStages')}</span><b>{t('returnSummary.kpiStagesValue', { count: summary.stages.finished })}</b></div>
         <div className="tl-rs-cell"><span>{t('returnSummary.kpiDeliveries')}</span><b>{t('returnSummary.kpiDeliveriesValue', { count: summary.deliveries.length })}</b></div>
-        <div className="tl-rs-cell"><span>{t('returnSummary.kpiReviews')}</span><b>{t('returnSummary.kpiReviewsPassed', { count: summary.reviews.passed })}{summary.reviews.rejected > 0 && <> · <span style={{ color: 'var(--red)' }}>{t('returnSummary.kpiReviewsRejected', { count: summary.reviews.rejected })}</span></>}</b></div>
+        <div className="tl-rs-cell"><span>{t('returnSummary.kpiReviews')}</span><b>{t('returnSummary.kpiReviewsPassed', { count: summary.reviews.passed })}{summary.reviews.rejected > 0 && <> · <span style={{ color: 'var(--red-ink)' }}>{t('returnSummary.kpiReviewsRejected', { count: summary.reviews.rejected })}</span></>}</b></div>
         <div className="tl-rs-cell"><span>{t('returnSummary.kpiCost')}</span>
           {cost.loading ? <i className="tl-rs-skl" aria-label={t('returnSummary.costLoading')} /> : <b title={cost.mc == null ? t('returnSummary.costUnknown') : undefined}>{cost.mc == null ? '—' : fmtYuan(cost.mc)}</b>}
         </div>

@@ -92,7 +92,7 @@ function DialogDescription({ className, ...props }: React.ComponentProps<typeof 
 
 /** 底栏上方 role=alert 红字写原因，模态不关。 */
 function DialogError({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="dialog-error" role="alert" className={cn("text-[12.5px] text-red", className)} {...props} />
+  return <div data-slot="dialog-error" role="alert" className={cn("text-[12.5px] text-red-ink", className)} {...props} />
 }
 
 /** 底栏右对齐「取消 Esc」+ 主按钮。 */

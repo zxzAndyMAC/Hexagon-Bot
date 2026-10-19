@@ -3176,8 +3176,9 @@ fn remove_search_backend(state: tauri::State<AppState>) -> Result<(), CmdError> 
     Ok(())
 }
 
-/// 拉取/检测供应商模型目录：GET /models；key 从 keychain 现取，缺 key 直报。
-/// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置。
+/// 拉取供应商模型目录：GET /models；key 从 keychain 现取。
+/// 返回 ModelEntry 表（id + 分组 + 推断能力），UI 合并进供应商配置；失败码与
+/// `probe_provider_key` 的原因词相同（含 `missing_credential`，owner-followups-1015 #03）。
 #[tauri::command]
 fn fetch_provider_models(
     id: String,

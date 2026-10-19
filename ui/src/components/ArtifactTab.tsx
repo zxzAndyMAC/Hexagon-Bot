@@ -150,7 +150,7 @@ export function ArtifactTab({ path }: { path: string }) {
             ref={rollbackButton}
             variant="ghost"
             size="xs"
-            className="text-red"
+            className="text-red-ink"
             disabled={policyRecovery}
             title={experienceProposal ? tip(t('experience.withdraw'), bindingFor('rollbackExperience')) : t('cards.rollbackHint')}
             onClick={() =>
@@ -189,7 +189,7 @@ export function ArtifactTab({ path }: { path: string }) {
         <span className="flex-1" />
         {mode === 'diff' && textA != null && textB != null && (
           <span className="font-mono text-[12px]" data-diff-stats>
-            <span className="text-green">+{stats.add}</span> <span className="text-red">−{stats.del}</span>
+            <span className="text-green-ink">+{stats.add}</span> <span className="text-red-ink">−{stats.del}</span>
           </span>
         )}
         <Button variant="ghost" size="xs" title={tip(t('canvas.copy'), bindingFor('copyArtifact'))} data-artifact-copy

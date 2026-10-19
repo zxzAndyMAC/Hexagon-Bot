@@ -178,7 +178,7 @@ const ROWS: Row[] = [
     ) : s === '加载' ? (
       <Card className="w-44 gap-1.5 p-3"><Progress loading aria-label="加载中" /><Progress loading aria-label="加载中" /></Card>
     ) : s === '错误' ? (
-      <Card className="w-56"><CardHeader><CardTitle>用量</CardTitle></CardHeader><CardContent className="text-red">读取失败 · 重试</CardContent></Card>
+      <Card className="w-56"><CardHeader><CardTitle>用量</CardTitle></CardHeader><CardContent className="text-red-ink">读取失败 · 重试</CardContent></Card>
     ) : '不适用（禁用落在卡内按钮）',
   },
   {
@@ -191,7 +191,7 @@ const ROWS: Row[] = [
             disabled={s === '禁用'}
             aria-invalid={s === '错误' || undefined}
             loadingLabel={s === '加载' ? '检测中…' : undefined}
-            trailing={s === '默认' ? <span className="text-[12px] whitespace-nowrap text-green">检测通过</span> : undefined}
+            trailing={s === '默认' ? <span className="text-[12px] whitespace-nowrap text-green-ink">检测通过</span> : undefined}
           />
         </Field>
         {s === '默认' && <Textarea placeholder="补充说明" rows={2} />}
@@ -206,7 +206,7 @@ const ROWS: Row[] = [
           <Switch aria-label="关" checked={false} disabled={s === '禁用'} loading={s === '加载'} />
           <Switch aria-label="开" checked disabled={s === '禁用'} />
         </div>
-        {s === '错误' && <span className="text-[12px] text-red">托管未能开启</span>}
+        {s === '错误' && <span className="text-[12px] text-red-ink">托管未能开启</span>}
       </div>
     ),
   },
@@ -222,7 +222,7 @@ const ROWS: Row[] = [
             <RadioGroupItem value="b" aria-label="b" />
           </RadioGroup>
         </div>
-        {s === '错误' && <span className="text-[12px] text-red">请先勾选「我了解放弃追查后不会重放」</span>}
+        {s === '错误' && <span className="text-[12px] text-red-ink">请先勾选「我了解放弃追查后不会重放」</span>}
       </div>
     ),
   },

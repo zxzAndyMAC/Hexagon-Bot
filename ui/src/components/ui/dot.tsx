@@ -11,7 +11,8 @@ const dotVariants = cva("inline-block size-[7px] shrink-0 rounded-full", {
       on: "bg-green",
       warn: "bg-orange",
       err: "bg-red",
-      info: "bg-primary",
+      // 票 09（owner-followups-1015）：bg-primary 改映射到更深的 --accent-strong（主按钮白字底），点仍吃 --accent 基色
+      info: "bg-(--accent)",
       off: "bg-transparent shadow-[inset_0_0_0_1.5px_var(--line-strong)]",
     },
     pulse: { true: "animate-hx-pulse", false: "" },

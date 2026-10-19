@@ -527,7 +527,7 @@ export function Wizard({ onDone, onCancel, seed }: {
   const messages = (
     <>
       {note && <div role="status" className="mt-3 text-[12.5px] text-ink-2">{note}</div>}
-      {err && <div role="alert" className="mt-3 text-[12.5px] text-red">{err}</div>}
+      {err && <div role="alert" className="mt-3 text-[12.5px] text-red-ink">{err}</div>}
       <GenerationRetry failure={genFail} step={step} />
     </>
   )

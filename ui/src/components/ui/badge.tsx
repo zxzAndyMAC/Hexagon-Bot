@@ -12,11 +12,11 @@ const badgeVariants = cva(
     variants: {
       variant: {
         neutral: "bg-canvas text-ink-2",
-        ok: cn("bg-green-tint text-green", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--green)_calc(28%*var(--tint-ring)),transparent)]"),
-        warn: cn("bg-orange-tint text-orange", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--orange)_calc(30%*var(--tint-ring)),transparent)]"),
-        err: cn("bg-red-tint text-red", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--red)_calc(26%*var(--tint-ring)),transparent)]"),
+        ok: cn("bg-green-tint text-green-ink", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--green)_calc(28%*var(--tint-ring)),transparent)]"),
+        warn: cn("bg-orange-tint text-orange-ink", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--orange)_calc(30%*var(--tint-ring)),transparent)]"),
+        err: cn("bg-red-tint text-red-ink", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--red)_calc(26%*var(--tint-ring)),transparent)]"),
         info: cn("bg-accent-tint text-accent-ink", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--accent)_calc(24%*var(--tint-ring)),transparent)]"),
-        flag: cn("bg-violet-tint text-violet", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--violet)_calc(24%*var(--tint-ring)),transparent)]"),
+        flag: cn("bg-violet-tint text-violet-ink", "[--hx-shadow:inset_0_0_0_1px_color-mix(in_oklch,var(--violet)_calc(24%*var(--tint-ring)),transparent)]"),
         line: "bg-transparent text-ink-2 [--hx-shadow:inset_0_0_0_1px_var(--line-strong)]",
       },
       shape: { pill: "rounded-full", sq: "rounded-[6px]" },

@@ -168,7 +168,7 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
               disabled={pending || status.busy} onClick={() => void control('resume')} />
           </div>
         )}
-        {status?.outcome_unknown && <p role="status" className="px-2.5 pt-2 text-[12px] text-orange">{t('computer.unknown')}</p>}
+        {status?.outcome_unknown && <p role="status" className="px-2.5 pt-2 text-[12px] text-orange-ink">{t('computer.unknown')}</p>}
         {status && <>
           <div className="flex items-center gap-1.5 px-2.5 pt-2.5 pb-1 text-[12px]" data-controller>
             <span className="flex-1 text-ink-3">{t('control.controller')}</span>
@@ -189,7 +189,7 @@ export function DesktopControlPanel({ inline = false }: { inline?: boolean }) {
             {grants?.host_name && <> · {t('control.host', { host: grants.host_name })}</>}
           </p>
         </>}
-        {shownError && <p role="alert" className="px-2.5 pb-2 text-[12px] text-red">{shownError}</p>}
+        {shownError && <p role="alert" className="px-2.5 pb-2 text-[12px] text-red-ink">{shownError}</p>}
         {shownError && !status && <div className="px-1.5 pb-1.5"><Button size="xs" onClick={() => void refresh()}>{t('desktop.recheck')}</Button></div>}
         {inline && <DesktopPermissions compact />}
       </section>

@@ -165,7 +165,20 @@ impl ErrorCode for crate::provider::ProviderError {
         variant_code(self.cause())
     }
 }
-impl_error_code!(crate::provider_admin::AdminError, Providers, Cred, Json);
+// owner-followups-1015 #03：目录失败的码面就是原因词（authentication / missing_credential …），
+// 与连接检测同词——界面复用 `wizard.probe.reason.*`，不另立 `errors.catalog`。
+impl ErrorCode for crate::provider_admin::AdminError {
+    fn code(&self) -> String {
+        use crate::provider_admin::AdminError as E;
+        match self {
+            E::Providers(e) => e.code(),
+            E::Cred(e) => e.code(),
+            E::Json(e) => e.code(),
+            E::Catalog { code, .. } => (*code).to_string(),
+            _ => variant_code(self),
+        }
+    }
+}
 impl_error_code!(crate::provider_config::ProvidersError, Io, Json);
 impl_error_code!(crate::push::PushError, Sqlite, Cards, Db, Trace, Cred, Git,);
 impl_error_code!(

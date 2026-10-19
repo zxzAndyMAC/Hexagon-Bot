@@ -58,7 +58,7 @@ export function StatCard({ k, v, sub, action, children, ...rest }: {
 export function Delta({ pct }: { pct: number }) {
   const up = pct >= 0
   return (
-    <span className={cn('font-medium', up ? 'text-green' : 'text-ink-2')}>
+    <span className={cn('font-medium', up ? 'text-green-ink' : 'text-ink-2')}>
       {up ? '↑' : '↓'} {Math.abs(pct).toFixed(Math.abs(pct) < 10 ? 1 : 0)}%
     </span>
   )

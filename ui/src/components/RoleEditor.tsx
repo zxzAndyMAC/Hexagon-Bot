@@ -113,7 +113,7 @@ export function RoleEditor({ agentId, onClose, density = 'sm', footStart }: { ag
   const bs = btnSize(density)
   return (
     <div data-role-editor className="flex flex-col gap-3">
-      {err && <div role="alert" className="text-[12.5px] text-red">{err}</div>}
+      {err && <div role="alert" className="text-[12.5px] text-red-ink">{err}</div>}
       {msg && <div role="status"><Badge variant="ok">{msg}</Badge></div>}
       {d?.custom && <div><Badge variant="info">{t('agent.customRole')}</Badge></div>}
       <Field label={t('agent.duty')}>
@@ -230,7 +230,7 @@ export function CreateRoleForm({ onDone, density = 'sm' }: { onDone: () => void;
 
   return (
     <div data-create-role className="flex flex-col gap-3">
-      {err && <div role="alert" className="text-[12.5px] text-red">{err}</div>}
+      {err && <div role="alert" className="text-[12.5px] text-red-ink">{err}</div>}
       <Field label={t('agent.roleName')}>
         <Input aria-label={t('agent.roleName')} className={fc} value={name} onChange={(e) => setName(e.target.value)} />
       </Field>

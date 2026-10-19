@@ -121,7 +121,9 @@ describe('侧栏待决与团队（B1、B3）', () => {
     expect(useUiStore.getState().pendingDialogOpen).toBe(true)
   })
 
-  it('工作中显示像素格，休眠半透明并写「休眠」；点成员打开该 Agent', async () => {
+  // 行为变更（owner-followups-1015 票 09，foundations「对比度」）：休眠行原先整行 opacity .5，名字与「休眠」
+  // 跟着掉到 AA 以下；改为只有头像半透明去饱和，名字照常 --ink。
+  it('工作中显示像素格，休眠只淡化头像并写「休眠」；点成员打开该 Agent', async () => {
     useUiStore.setState({
       team: [
         { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
@@ -136,7 +138,13 @@ describe('侧栏待决与团队（B1、B3）', () => {
     expect(fe.querySelector('[data-slot="pixel-grid"]')).toBeTruthy()
     const qa = host.querySelector('[data-member="a2"]') as HTMLButtonElement
     expect(qa.getAttribute('data-member-state')).toBe('sleeping')
-    expect(qa.className).toContain('opacity-50')
+    expect(qa.className).not.toContain('opacity-50')
+    expect(qa.textContent).toContain(i18n.t('sidebar.sleeping'))
+    const face = qa.querySelector('[data-slot="avatar"]') as HTMLElement
+    expect(face.getAttribute('data-dimmed')).toBe('true')
+    expect(face.className).toContain('opacity-50')
+    expect(face.className).toContain('grayscale')
+    expect(fe.querySelector('[data-slot="avatar"]')!.hasAttribute('data-dimmed')).toBe(false)
     expect(host.querySelector('[data-member="a3"]')!.getAttribute('data-member-state')).toBe('online')
     await act(async () => { fe.click() })
     expect(useUiStore.getState().activeTab).toBe('agent:a1')

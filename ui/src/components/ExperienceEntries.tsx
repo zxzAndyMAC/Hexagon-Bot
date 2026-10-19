@@ -94,7 +94,7 @@ export function ExperienceEntries({ skill, onRecovered, selectedEntry, documentR
     finally { setBusy(false) }
   }
   if (!result || result.skill !== skill) return null
-  if (result.error) return <p role="alert" className="mt-3 text-[12.5px] text-red">{result.error}</p>
+  if (result.error) return <p role="alert" className="mt-3 text-[12.5px] text-red-ink">{result.error}</p>
   const visible = result.entries.filter(({ entry }) => !selectedEntry || selectedEntry === entry.entry_id)
   // 「历史」看的是展开的那条；都没展开时看第一条（历史按条目分页，宿主没有跨条目的总历史）。
   const historyOf = visible.find(({ entry }) => entry.entry_id === open) ?? visible[0]
