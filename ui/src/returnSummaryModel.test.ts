@@ -15,7 +15,7 @@ describe('归来摘要「需要你处理」', () => {
     const rows = attentionRows([
       q('perm', 'permission'),
       q('unk', 'recovery', { sub: 'tool_outcome_unknown' }),
-      q('pub', 'publish'),
+      q('pub', 'push'),
       q('stamp', 'stamp'),
     ])
     expect(rows.map((r) => r.question.id)).toEqual(['unk', 'pub', 'stamp', 'perm'])
@@ -55,7 +55,7 @@ describe('钉顶与区间', () => {
 describe('withHandled（票 04，C12 禁用态）', () => {
   it('keeps a row that left pending for 30 s after its live rows, then drops it', async () => {
     const { withHandled, HANDLED_TTL_MS } = await import('./returnSummaryModel')
-    const a = attentionRows([q('pub', 'publish'), q('perm', 'permission')])
+    const a = attentionRows([q('pub', 'push'), q('perm', 'permission')])
     const first = withHandled([], a, 0)
     expect(first.map((r) => [r.question.id, r.handledAt])).toEqual([['pub', null], ['perm', null]])
     const rest = attentionRows([q('perm', 'permission')])

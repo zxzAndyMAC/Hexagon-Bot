@@ -61,12 +61,12 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       },
       { id: 'c-sleep', group: 'cmd', label: t('palette.sleepAll'), icon: 'sleep', keywords: ['sleep'], run: () => runStageOp('sleepAll') },
       {
-        // L3 不可逆：不直接发布——请求/聚焦发布卡，卡内按钮确认（ADR 0056）。
-        id: 'c-publish', group: 'cmd', label: t('palette.requestPublish'), icon: 'publish', keywords: ['pub', 'publish', 'release'],
+        // L3 不可逆：不直接推送——请求/聚焦推送卡（原发布卡，ADR 0093 改名），卡内按钮确认（ADR 0056）。
+        id: 'c-push', group: 'cmd', label: t('palette.requestPush'), icon: 'publish', keywords: ['push', 'git', 'pub', 'publish'],
         run: async () => {
-          if (!pending.some((x) => x.kind === 'publish')) await api.requestPublish('origin')
+          if (!pending.some((x) => x.kind === 'push')) await api.requestPush('origin')
           await invalidate()
-          // 票 05：待决区已撤，发布卡在弹窗里。invalidate 后的新 id 也会再弹；
+          // 票 05：待决区已撤，推送卡在弹窗里。invalidate 后的新 id 也会再弹；
           // 这里显式打开，覆盖「负责人刚收起过同一张卡」的情况。
           useUiStore.getState().openPendingDialog()
         },

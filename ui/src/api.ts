@@ -89,7 +89,7 @@ import type { CheckOutcome } from './gen/CheckOutcome'
 import type { OverrideOutcome } from './gen/OverrideOutcome'
 import type { InstallOutcome } from './gen/InstallOutcome'
 import type { GrantOutcome } from './gen/GrantOutcome'
-import type { PublishOutcome } from './gen/PublishOutcome'
+import type { PushOutcome } from './gen/PushOutcome'
 import type { FlagOutcome } from './gen/FlagOutcome'
 import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
 import type { ReturnSummary } from './gen/ReturnSummary'
@@ -149,7 +149,7 @@ export type PackStage = StageDef
 export type {
   StageEvidence, CmdError, TurnDelta, ToolOutputDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
   UsageTotal, UsageRow, UsageSummary, UsageBucket, ContextPressure, StageAction, OpenStageOutcome,
-  CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PublishOutcome,
+  CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PushOutcome,
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
   PermissionRuleRow, SkillRow, McpServiceRow,
@@ -544,9 +544,9 @@ export const api = {
     call<void>('reject_proposal', { qid, reason }),
   rollbackProposal: (proposalId: string) =>
     call<void>('rollback_proposal', { proposalId }),
-  requestPublish: (remote: string) => call<string>('request_publish', { remote }),
-  confirmPublish: (qid: string) => call<PublishOutcome>('confirm_publish', { qid }),
-  rejectPublish: (qid: string) => call<void>('reject_publish', { qid }),
+  requestPush: (remote: string) => call<string>('request_push', { remote }),
+  confirmPush: (qid: string) => call<PushOutcome>('confirm_push', { qid }),
+  rejectPush: (qid: string) => call<void>('reject_push', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
@@ -1014,7 +1014,7 @@ const artLatest = (path: string): string | null => {
 const MOCK_DECIDED = new Set<string>()
 const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> = {
   answer_permission: (a) => String(a.questionId), allow_project_permission: (a) => String(a.questionId),
-  confirm_publish: (a) => String(a.qid), reject_publish: (a) => String(a.qid),
+  confirm_push: (a) => String(a.qid), reject_push: (a) => String(a.qid),
   confirm_worktree: (a) => String(a.qid), reject_worktree: (a) => String(a.qid),
   adjudicate_flag: (a) => String(a.qid), confirm_proposal: (a) => String(a.qid), reject_proposal: (a) => String(a.qid),
   stall_retry: (a) => String(a.questionId), stall_ack: (a) => String(a.questionId),
@@ -1024,7 +1024,7 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
 const mockManaged = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockmanaged')
 let MOCK_MANAGED = { enabled: true, paused: false }
 const MOCK_MANAGED_HISTORY = [
-  { event_id: 124, card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: 'target_missing', via: 'host', outcome: 'not_published', actor: 'managed:g1:1', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule', next: { kind: 'timeline', target: '124' } },
+  { event_id: 124, card_id: 'q-m3', card_kind: 'push', action: 'deny', reason: 'target_missing', via: 'host', outcome: 'not_pushed', actor: 'managed:g1:1', result: 'incomplete', scope: 'out_of_scope', evidence: 'host_rule', next: { kind: 'timeline', target: '124' } },
   { event_id: 123, card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: 'evidence_complete', via: 'host', outcome: 'stamped', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'real_check', next: { kind: 'timeline', target: '123' } },
   { event_id: 122, card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: 'model_choice', via: 'model', outcome: 'allowed', actor: 'managed:g1:1', result: 'done', scope: 'in_scope', evidence: 'model_choice', next: { kind: 'timeline', target: '122' } },
 ]
@@ -1237,13 +1237,13 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(89, 'stage_skipped', null, 'r4', { stage: '灰度' }, '11:00'),
         mkEv(90, 'stage_rewound', null, 'r3', { stage: '实现', to_seq: 2 }, '11:02'),
         mkEv(91, 'autonomy_changed', null, null, { from: 'L0', to: 'L1' }, '11:05'),
-        mkEv(92, 'publish_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:08'),
-        mkEv(93, 'publish_failed', null, null, { remote: 'origin', error: '网络超时' }, '11:09'),
-        mkEv(94, 'publish_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:15'),
-        mkEv(95, 'publish_confirmed', null, null, { remote: 'origin', baseline: 'main' }, '11:16'),
+        mkEv(92, 'push_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:08'),
+        mkEv(93, 'push_failed', null, null, { remote: 'origin', error: '网络超时' }, '11:09'),
+        mkEv(94, 'push_requested', null, null, { remote: 'origin', baseline: 'main' }, '11:15'),
+        mkEv(95, 'push_confirmed', null, null, { remote: 'origin', baseline: 'main' }, '11:16'),
         mkEv(96, 'baseline_merged', null, null, { baseline: 'main', commit: 'c4f9a2e' }, '11:17'),
-        mkEv(97, 'publish_requested', null, null, { remote: 'upstream', baseline: 'main' }, '11:20'),
-        mkEv(98, 'publish_rejected', null, null, { remote: 'upstream', by: 'owner' }, '11:21'),
+        mkEv(97, 'push_requested', null, null, { remote: 'upstream', baseline: 'main' }, '11:20'),
+        mkEv(98, 'push_rejected', null, null, { remote: 'upstream', by: 'owner' }, '11:21'),
         mkEv(99, 'usage_cap_hit', null, null, { spent_mc: 40200, limit_cents: 20000 }, '11:25'),
         mkEv(100, 'team_slept', null, null, {}, '11:25'),
         mkEv(101, 'agent_slept', 'a3', null, {}, '11:25'),
@@ -1288,7 +1288,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         mkEv(121, 'system', null, null, { kind: 'delegation_changed', enabled: true, paused: false, change: 'on', approval_mode: 'assisted' }, '11:57'),
         mkEv(122, 'system', 'a4', null, { kind: 'managed_decision', card_id: 'q-m1', card_kind: 'permission', action: 'allow', reason: '端到端测试需要浏览器内核，下载落在项目缓存目录，属本项目联网委托。', via: 'model', outcome: 'allowed', actor: 'managed:g1:1' }, '11:58'),
         mkEv(123, 'system', 'a3', null, { kind: 'managed_decision', card_id: 'q-m2', card_kind: 'stamp', action: 'accept', reason: '与项目说明「单用户离线工具」一致；另两个方案偏装饰。', via: 'model', outcome: 'stamped', actor: 'managed:g1:1' }, '11:59'),
-        mkEv(124, 'system', 'a5', null, { kind: 'managed_decision', card_id: 'q-m3', card_kind: 'publish', action: 'deny', reason: '该目标不是项目已配置的发布目标（新增发布目标不在托管范围内）。', via: 'host', outcome: 'not_published', actor: 'managed:g1:1' }, '12:00'),
+        mkEv(124, 'system', 'a5', null, { kind: 'managed_decision', card_id: 'q-m3', card_kind: 'push', action: 'deny', reason: '该目标不是项目已配置的发布目标（新增发布目标不在托管范围内）。', via: 'host', outcome: 'not_pushed', actor: 'managed:g1:1' }, '12:00'),
       )
       // 票 08 截图比对（feedback#model-recovery）：`?mockrecovery` 时追加 D11 ①②③⑥ 四种状态
       if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockrecovery')) {
@@ -1316,7 +1316,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return [
         { id: 'q-rec', kind: 'recovery', agent_id: 'a1', payload: { run_id: 'r9', stage: '部署演练' }, state: 'queued' },
         { id: 'q-stall', kind: 'stall', agent_id: 'a3', payload: { branch: 'no_reply', retry: true, role: '前端', instruction: '把列表过滤修一下' }, state: 'queued' },
-        { id: 'q-pub', kind: 'publish', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', commit_count: 12, stage_count: 3, warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
+        { id: 'q-pub', kind: 'push', agent_id: 'a0', payload: { remote: 'origin', baseline: 'main', commit_count: 12, stage_count: 3, warning: '不可逆：代码与产物将离开本机' }, state: 'queued' },
         { id: 'q-stamp', kind: 'stamp', agent_id: 'a1', payload: { run_id: 'r3', stage: '实现' }, state: 'queued' },
         { id: 'q-esc', kind: 'escalation', agent_id: 'a1', payload: { flag_id: 'f12', target: 'api/spec.md' }, state: 'queued' },
         { id: 'q-perm', kind: 'permission', agent_id: 'a0', payload: { tool: 'bash', input: { cmd: 'cargo test --workspace' }, reason: '检验前全量回归', safety_net: false }, state: 'queued' },
@@ -1445,9 +1445,9 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'confirm_proposal':
     case 'reject_proposal':
     case 'rollback_proposal':
-    case 'request_publish':
-    case 'confirm_publish':
-    case 'reject_publish':
+    case 'request_push':
+    case 'confirm_push':
+    case 'reject_push':
     case 'reject_stamp':
     case 'adjudicate_flag':
     case 'allow_project_permission':

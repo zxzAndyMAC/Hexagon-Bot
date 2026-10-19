@@ -50,9 +50,9 @@ fn arg(flag: &str) -> Option<String> {
     None
 }
 
-/// owner 策略：批权限/升级/提案/安装/恢复，盖章推进，**发布永远不批**
+/// owner 策略：批权限/升级/提案/安装/恢复，盖章推进，**推送永远不批**
 /// （活测不得产生对外副作用）。返回是否真正销掉了至少一张卡——
-/// 跳过不批的卡不算（否则 publish 卡永远挂着 → 永不收敛）。
+/// 跳过不批的卡不算（否则 push 卡永远挂着 → 永不收敛）。
 fn adjudicate_all(wb: &Workbench) -> bool {
     let Ok(cards) = cards::queued(&wb.db, &wb.project_id) else {
         return false;
@@ -64,7 +64,7 @@ fn adjudicate_all(wb: &Workbench) -> bool {
     did
 }
 
-/// 返回 true = 卡被销掉；false = 跳过留着（publish/未知 kind/裁决报错）。
+/// 返回 true = 卡被销掉；false = 跳过留着（push/未知 kind/裁决报错）。
 fn adjudicate(wb: &Workbench, c: &QueuedCard) -> bool {
     let ctx = hexagon_core::tools::ToolContext::owner(&wb.db, &wb.repo_root);
     let tag = format!("{}#{}", c.kind, &c.id[..c.id.len().min(8)]);
@@ -154,8 +154,8 @@ fn adjudicate(wb: &Workbench, c: &QueuedCard) -> bool {
                 }
             }
         }
-        "publish" => {
-            println!("  [owner] {tag} → 拒绝：活测不发布（留着卡当证据）");
+        "push" => {
+            println!("  [owner] {tag} → 拒绝：活测不推送（留着卡当证据）");
             return false;
         }
         other => {

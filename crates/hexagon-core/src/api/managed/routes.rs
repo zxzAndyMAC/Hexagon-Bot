@@ -102,8 +102,8 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         ("escalation", Some("context_overflow")) => {
             Some(format!("context:{}", p["trigger_turn_id"]))
         }
-        ("publish", _) => Some(format!(
-            "publish:{}:{}",
+        ("push", _) => Some(format!(
+            "push:{}:{}",
             p["remote"].as_str().unwrap_or_default(),
             p["commit"].as_str().unwrap_or(&card.id)
         )),
@@ -405,9 +405,9 @@ pub(super) fn grant_route(p: &serde_json::Value, present: bool, direct: bool) ->
     }
 }
 
-/// Host-verified facts for a delegated publish (no secret values).
+/// Host-verified facts for a delegated push (no secret values).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct PublishFacts {
+pub(crate) struct PushFacts {
     pub target_configured: bool,
     pub credential_present: bool,
     pub delivery_accepted: bool,
@@ -415,13 +415,13 @@ pub(crate) struct PublishFacts {
     pub commit_unchanged: bool,
 }
 
-/// Test3/22 (Q13/Q20): publish only to an existing project target with its
+/// Test3/22 (Q13/Q20): push only to an existing project target with its
 /// project credential, after final acceptance, for the exact version that was
 /// requested. Never a new target, a personal login, or an accepted-by-model
-/// shortcut. Cost model: a false refusal leaves an unpublished but accepted
-/// delivery (visible, retryable by the owner); a false publish is an
+/// shortcut. Cost model: a false refusal leaves an unpushed but accepted
+/// delivery (visible, retryable by the owner); a false push is an
 /// irreversible external effect.
-pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static str) {
+pub(crate) fn push_forced(facts: &PushFacts) -> (&'static str, &'static str) {
     let checks = [
         (facts.target_configured, "target_missing"),
         (facts.credential_present, "credential_missing"),
@@ -431,7 +431,7 @@ pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static st
     ];
     match checks.iter().find(|(ok, _)| !ok) {
         Some((_, reason)) => ("incomplete", reason),
-        None => ("publish", "configured_target_accepted_delivery"),
+        None => ("push", "configured_target_accepted_delivery"),
     }
 }
 
@@ -439,7 +439,7 @@ pub(crate) fn publish_forced(facts: &PublishFacts) -> (&'static str, &'static st
 /// decider may confirm a worktree card only when the host has just rechecked
 /// every bound fact (session, canonical root/path, baseline commit, and for
 /// cleanup ownership, registration and a clean tree). Any failed fact forces
-/// a refusal the model cannot override. Cost model as `publish_forced`: a
+/// a refusal the model cannot override. Cost model as `push_forced`: a
 /// false refusal leaves the owner one more request; a false confirm writes or
 /// deletes a directory on a stale decision.
 pub(crate) fn worktree_forced(check: &Result<(), WorktreeError>) -> (&'static str, &'static str) {
@@ -634,15 +634,15 @@ impl Workbench {
                 fallback: "end",
             },
             ("escalation", _) => flag_route(p),
-            ("publish", _) => {
-                let facts = self.publish_facts(p)?;
+            ("push", _) => {
+                let facts = self.push_facts(p)?;
                 Route {
                     options: opts(&[
-                        ("publish", "push to the configured target"),
-                        ("incomplete", "do not publish"),
+                        ("push", "push to the configured target"),
+                        ("incomplete", "do not push"),
                     ]),
                     state: String::new(),
-                    forced: Some(publish_forced(&facts)),
+                    forced: Some(push_forced(&facts)),
                     fallback: "incomplete",
                 }
             }
@@ -676,7 +676,7 @@ impl Workbench {
         }))
     }
 
-    fn publish_facts(&self, p: &serde_json::Value) -> Result<PublishFacts, ApiError> {
+    fn push_facts(&self, p: &serde_json::Value) -> Result<PushFacts, ApiError> {
         let remote = p["remote"].as_str().unwrap_or_default();
         let git =
             |args: &[&str]| crate::git::run(&self.repo_root, args).map(|o| o.trim().to_string());
@@ -690,11 +690,10 @@ impl Workbench {
             )
             .ok();
         let final_seq = self.pack.as_ref().map(|pack| pack.stages.len() as i64 - 1);
-        Ok(PublishFacts {
+        Ok(PushFacts {
             target_configured: !remote.is_empty() && git(&["remote", "get-url", remote]).is_ok(),
-            credential_present: self
-                .creds
-                .get(&format!("publish/{remote}"))
+            // Same name rule as the push itself, legacy `publish/<remote>` included (ADR 0093).
+            credential_present: crate::push::credential(self.creds.as_ref(), remote)
                 .is_ok_and(|value| value.is_some()),
             delivery_accepted: matches!((latest, final_seq), (Some((seq, state)), Some(last)) if state == "done" && seq == last),
             baseline_unchanged: crate::git::baseline_branch(&self.repo_root)

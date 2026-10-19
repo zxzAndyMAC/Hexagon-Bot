@@ -15,7 +15,7 @@ export type AttentionRow = { question: PendingQuestion; tone: AttentionTone }
  *  顺序完全跟 severityOf，保证首行 = 坞顶卡（⌘↵ 作用对象）。 */
 export function attentionTone(q: PendingQuestion): AttentionTone {
   if (q.payload.sub === 'tool_outcome_unknown') return 'unknown'
-  if (q.kind === 'publish') return 'irreversible'
+  if (q.kind === 'push') return 'irreversible'
   return 'authorize'
 }
 

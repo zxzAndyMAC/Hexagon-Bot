@@ -1,6 +1,6 @@
 //! 凭据钥匙串（票 15）：系统 keychain 存取，核内一律按名字引用。
 //!
-//! - 命名约定：`model/<slot>` 模型 API key、`publish/<target>` 发布凭据；
+//! - 命名约定：`model/<slot>` 模型 API key、`push/<remote>` 推送凭据（ADR 0093 前名 `publish/<remote>`，兼容读取见 push::credential）；
 //! - 明文只在调用瞬间内存中存在——工具层已拦凭据文件读写（is_credential_path），
 //!   scrub_input 保证事件/日志不落敏感值；
 //! - 钥匙串不可用 = 明确错误（不降级写配置文件明文——那是把机密换地方丢）；

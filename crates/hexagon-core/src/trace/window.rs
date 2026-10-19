@@ -18,7 +18,7 @@ const SELECT: &str =
 const DECISIONS: &str = "e.kind IN ('permission_asked','permission_allowed','permission_denied','permission_shape_remembered',
  'stamped','stamp_rejected','flag_submitted','flag_adjudicated','escalated',
  'proposal_queued','proposal_reviewed','proposal_stamped','proposal_rejected','proposal_activated','proposal_rolled_back',
- 'publish_requested','publish_confirmed','publish_rejected','publish_failed',
+ 'push_requested','push_confirmed','push_rejected','push_failed',
  'autonomy_changed','baseline_merged','stage_rewound','pm_routed')";
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, ts_rs::TS)]

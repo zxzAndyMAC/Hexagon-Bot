@@ -96,7 +96,7 @@ const INCOMPLETE_OUTCOMES: &[&str] = &[
     "checks_ran_still_incomplete",
     "kept_checks_required",
     "ended_unexecuted",
-    "not_published",
+    "not_pushed",
     "new_attempt_awaits_permission",
     "ended",
 ];
@@ -531,8 +531,8 @@ mod managed_proposal_tests;
 mod managed_install_tests;
 
 #[cfg(test)]
-#[path = "managed_publish_tests.rs"]
-mod managed_publish_tests;
+#[path = "managed_push_tests.rs"]
+mod managed_push_tests;
 
 #[cfg(test)]
 #[path = "managed_external_tests.rs"]
@@ -588,7 +588,7 @@ mod tests {
             "incomplete"
         );
         assert_eq!(result_of("incomplete", "incomplete"), "incomplete");
-        assert_eq!(result_of("publish", "failed: git"), "failed");
+        assert_eq!(result_of("push", "failed: git"), "failed");
     }
 
     #[test]
@@ -640,17 +640,17 @@ mod tests {
     }
 
     proptest! {
-        // Test3/22: publish iff every host fact holds.
+        // Test3/22: push iff every host fact holds.
         #[test]
-        fn publish_needs_every_host_fact(bits in proptest::collection::vec(any::<bool>(), 5)) {
-            let facts = PublishFacts {
+        fn push_needs_every_host_fact(bits in proptest::collection::vec(any::<bool>(), 5)) {
+            let facts = PushFacts {
                 target_configured: bits[0],
                 credential_present: bits[1],
                 delivery_accepted: bits[2],
                 baseline_unchanged: bits[3],
                 commit_unchanged: bits[4],
             };
-            prop_assert_eq!(publish_forced(&facts).0 == "publish", bits.iter().all(|b| *b));
+            prop_assert_eq!(push_forced(&facts).0 == "push", bits.iter().all(|b| *b));
         }
 
         // Test3/21: any non-empty secret slot (env or headers) means the host

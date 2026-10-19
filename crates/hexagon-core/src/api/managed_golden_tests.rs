@@ -1,6 +1,6 @@
 //! Test3/24 golden path for project delegation, on one real project on disk
 //! (git repo + local bare remote, never a user remote): permission →
-//! unknown recovery → host acceptance → publish to the configured target →
+//! unknown recovery → host acceptance → push to the configured target →
 //! reopen → off. No step leaves an owner card; every effect is real.
 use super::*;
 use crate::provider::ScriptedProvider;
@@ -24,7 +24,7 @@ fn queued(wb: &Workbench) -> usize {
 
 #[cfg(unix)]
 #[test]
-fn delegation_golden_path_from_permission_to_publish_and_reopen() {
+fn delegation_golden_path_from_permission_to_push_and_reopen() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -122,14 +122,15 @@ fn delegation_golden_path_from_permission_to_publish_and_reopen() {
         .unwrap();
     assert_eq!(stamped.last().unwrap().payload["by"], actor.as_str());
 
-    // 4. Publish to the configured target with its project credential.
+    // 4. Push to the configured target with its project credential. Stored
+    //    under the pre-ADR-0093 name on purpose: legacy credentials keep working.
     crate::git::commit_all(root, "delivery").unwrap();
     wb.creds
         .set("publish/origin", "redacted-test-token")
         .unwrap();
-    wb.request_publish("origin").unwrap();
-    let published = wb.managed_tick().unwrap();
-    assert_eq!(published[0].action, "publish", "{published:?}");
+    wb.request_push("origin").unwrap();
+    let pushed = wb.managed_tick().unwrap();
+    assert_eq!(pushed[0].action, "push", "{pushed:?}");
     let head = crate::git::run(root, &["rev-parse", "main"]).unwrap();
     assert_eq!(
         crate::git::run(remote.path(), &["rev-parse", "main"]).unwrap(),

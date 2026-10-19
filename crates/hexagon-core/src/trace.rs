@@ -76,11 +76,11 @@ pub enum EventKind {
     ProposalRejected,
     ProposalActivated,
     ProposalRolledBack,
-    // 发布与系统
-    PublishRequested,
-    PublishConfirmed,
-    PublishRejected,
-    PublishFailed,
+    // 推送与系统（Push* 原 Publish*，ADR 0093 / 迁移 0064 改名）
+    PushRequested,
+    PushConfirmed,
+    PushRejected,
+    PushFailed,
     BaselineMerged,
     UsageCapHit,
     TeamSlept,

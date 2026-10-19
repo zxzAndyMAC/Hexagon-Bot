@@ -255,9 +255,9 @@ describe('markHighlights', () => {
 })
 
 describe('severityOf', () => {
-  it('orders publish > stage stamp > escalation > permission > proposal stamp', () => {
+  it('orders push > stage stamp > escalation > permission > proposal stamp', () => {
     const order = [
-      q('p', 'publish'),
+      q('p', 'push'),
       q('s', 'stamp', { run_id: 'r1' }),
       q('e', 'escalation'),
       q('a', 'permission'),

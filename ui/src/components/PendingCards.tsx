@@ -187,7 +187,7 @@ function ProposalStampCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   )
 }
 
-function PublishCard({ q, top }: { q: PendingQuestion; top: boolean }) {
+function PushCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const p = q.payload
   // gap A6：「包含 N 个提交 · N 个阶段的产物」取宿主载荷；提交数未知（null，从未推送）只写阶段，旧卡没有计数不出这一行。
@@ -196,18 +196,18 @@ function PublishCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     typeof p.stage_count === 'number' ? t('dock.includedStages', { count: p.stage_count }) : null,
   ].filter((part): part is string => part !== null)
   return (
-    <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.publish')} sub={t('dock.publishSub')}
+    <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.push')} sub={t('dock.pushSub')}
       actions={<>
-        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectPublish(q.id)}>{t('cards.reject')}</SettleButton>
-        {/* ui-audit 票 02（P0-2）：L3 不可逆不显示批准键——键盘批准对 publish 无效（decisions.ts 守卫同步拦截） */}
-        <SettleButton qid={q.id} variant="danger" run={() => api.confirmPublish(q.id)}>{t('cards.publishConfirm')}</SettleButton>
+        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectPush(q.id)}>{t('cards.reject')}</SettleButton>
+        {/* ui-audit 票 02（P0-2）：L3 不可逆不显示批准键——键盘批准对 push 无效（decisions.ts 守卫同步拦截） */}
+        <SettleButton qid={q.id} variant="danger" run={() => api.confirmPush(q.id)}>{t('cards.pushConfirm')}</SettleButton>
       </>}>
       <KeyValues rows={[
         [t('dock.kvBaseline'), String(p.baseline ?? 'main'), 'mono'],
         [t('dock.kvTarget'), String(p.remote ?? 'origin'), 'mono'],
         ...(included.length ? [[t('dock.kvIncluded'), included.join(' · ')] as [string, string]] : []),
       ]} />
-      <div className="dock-warn"><Icon name="warn" size={14} />{String(p.warning ?? t('cards.publishWarn'))}</div>
+      <div className="dock-warn"><Icon name="warn" size={14} />{String(p.warning ?? t('cards.pushWarn'))}</div>
     </DecisionShell>
   )
 }
@@ -363,7 +363,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   if (q.kind === 'stamp' && p.sub === 'quality_revalidation') return <QualityRevalidation q={q} top={top} />
   if (q.kind === 'stamp' && !p.proposal_id) return <StageStampCard q={q} top={top} />
   if (q.kind === 'stamp') return <ProposalStampCard q={q} top={top} />
-  if (q.kind === 'publish') return <PublishCard q={q} top={top} />
+  if (q.kind === 'push') return <PushCard q={q} top={top} />
   if (q.kind === 'worktree') return <WorktreeCard q={q} top={top} />
   if (q.kind === 'recovery' && p.sub === 'tool_outcome_unknown') return <ActionRecovery q={q} top={top} />
   if (q.kind === 'recovery') return <RecoveryCard q={q} top={top} />

@@ -1,4 +1,4 @@
-// ui-audit 票 02：键盘裁决守卫——作用域 / publish 禁键 / 双发防护。
+// ui-audit 票 02：键盘裁决守卫——作用域 / push 禁键 / 双发防护。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { handlePendingKey, kindTitleKey, rejectReasonWithJudge, severityOf } from './decisions'
 import { api, type PendingQuestion } from './api'
@@ -63,10 +63,10 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
-  it('P0-2：顶卡为 publish 时批准键无效且提示', async () => {
-    const spy = vi.spyOn(api, 'confirmPublish')
-    const out = await handlePendingKey(key('Enter'), [card({ kind: 'publish' })])
-    expect(out).toBe('blocked-publish')
+  it('P0-2：顶卡为 push 时批准键无效且提示', async () => {
+    const spy = vi.spyOn(api, 'confirmPush')
+    const out = await handlePendingKey(key('Enter'), [card({ kind: 'push' })])
+    expect(out).toBe('blocked-push')
     expect(spy).not.toHaveBeenCalled()
     expect(useUiStore.getState().toasts.length).toBe(1)
   })
@@ -82,9 +82,9 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(useUiStore.getState().toasts.length).toBe(1)
   })
 
-  it('P0-2：publish 卡的驳回键仍可用', async () => {
-    const spy = vi.spyOn(api, 'rejectPublish')
-    const out = await handlePendingKey(key('Backspace'), [card({ kind: 'publish' })])
+  it('P0-2：push 卡的驳回键仍可用', async () => {
+    const spy = vi.spyOn(api, 'rejectPush')
+    const out = await handlePendingKey(key('Backspace'), [card({ kind: 'push' })])
     expect(out).toBe('rejected')
     expect(spy).toHaveBeenCalledWith('q1')
   })
@@ -106,7 +106,7 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(confirm).toHaveBeenCalledWith('q1')
     expect(await handlePendingKey(key('Backspace'), [card({ id: 'q2', kind: 'worktree', payload: { operation: 'create' } })])).toBe('rejected')
     expect(reject).toHaveBeenCalledWith('q2')
-    expect(severityOf(wt)).toBe(severityOf(card({ kind: 'publish' })))
+    expect(severityOf(wt)).toBe(severityOf(card({ kind: 'push' })))
     expect(kindTitleKey(wt)).toBe('cards.worktreeCleanup')
   })
 
@@ -163,16 +163,16 @@ describe('handlePendingKey（ui-audit 票 02）', () => {
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('严重度序：recovery/stall/publish/install 先于 permission', () => {
+  it('严重度序：recovery/stall/push/install 先于 permission', () => {
     const a = card({ id: 'a', kind: 'permission' })
-    const b = card({ id: 'b', kind: 'publish' })
+    const b = card({ id: 'b', kind: 'push' })
     const s = card({ id: 's', kind: 'stall' })
     expect(severityOf(b)).toBeLessThan(severityOf(a))
     expect(severityOf(s)).toBe(severityOf(b))
   })
 })
 
-// QA 委托 TC-U-0001：严重度全序此前只钉了 publish<permission 一格——
+// QA 委托 TC-U-0001：严重度全序此前只钉了 push<permission 一格——
 // 「最严重的是什么」是黄金标准的裁决依据，全序、平级稳定、未知 kind
 // 兜底都得钉死。排序表达式与 usePendingKeys（decisions.ts:117）同款；
 // 平级保持入队序依赖 ES2019 stable sort，这一隐含依赖在此显式钉住。
@@ -183,7 +183,7 @@ describe('severityOf 全序（TC-U-0001）', () => {
   it('恢复/失速/发布/安装/授权 > 阶段盖章 > 升级 > 权限 > 提案盖章', () => {
     expect(sev('recovery')).toBe(0)
     expect(sev('stall')).toBe(0)
-    expect(sev('publish')).toBe(0)
+    expect(sev('push')).toBe(0)
     expect(sev('install')).toBe(0)
     expect(sev('grant')).toBe(0)
     expect(sev('stamp', {})).toBe(1)
@@ -212,7 +212,7 @@ describe('severityOf 全序（TC-U-0001）', () => {
       card({ id: 'perm1', kind: 'permission' }),
       card({ id: 'rec1', kind: 'recovery' }),
       card({ id: 'perm2', kind: 'permission' }),
-      card({ id: 'pub1', kind: 'publish' }),
+      card({ id: 'pub1', kind: 'push' }),
     ]
     const sorted = [...pending].sort((a, b) => severityOf(a) - severityOf(b))
     expect(sorted.map((q) => q.id)).toEqual(['rec1', 'pub1', 'perm1', 'perm2'])

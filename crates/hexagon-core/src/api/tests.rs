@@ -2360,9 +2360,7 @@ fn l3_l4_auto_pass_earlier_stamps_final_still_waits() {
         assert_eq!(owners[0].event.payload["stage"], "合入");
         assert_ne!(owners[0].event.payload["by"], "autonomy");
         assert!(tl.iter().all(|i| i.event.kind != EventKind::BaselineMerged));
-        assert!(tl
-            .iter()
-            .all(|i| i.event.kind != EventKind::PublishConfirmed));
+        assert!(tl.iter().all(|i| i.event.kind != EventKind::PushConfirmed));
     }
 }
 
@@ -2566,9 +2564,7 @@ fn fastpath_l3_l4_does_not_auto_merge_baseline() {
         );
         let tl = timeline(&wb, None, 40).unwrap();
         assert!(tl.iter().all(|i| i.event.kind != EventKind::BaselineMerged));
-        assert!(tl
-            .iter()
-            .all(|i| i.event.kind != EventKind::PublishConfirmed));
+        assert!(tl.iter().all(|i| i.event.kind != EventKind::PushConfirmed));
         assert!(
             crate::git::run(
                 dir.path(),
@@ -2809,26 +2805,26 @@ fn coordinator_low_rank_cannot_release_restricted_permissions() {
     }
 }
 
-/// 票 03 / ADR 0034：远程发布不搭安全网的顺风车。L0–L4 都只入队，不推、不放行。
+/// 票 03 / ADR 0034：推送（原远程发布，ADR 0093）不搭安全网的顺风车。L0–L4 都只入队，不推、不放行。
 #[test]
-fn remote_publish_waits_for_human_at_every_level() {
+fn push_waits_for_human_at_every_level() {
     for lv in ["L0", "L1", "L2", "L3", "L4"] {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         pin_stored_rank(&wb, lv);
-        let qid = wb.request_publish("origin").unwrap();
+        let qid = wb.request_push("origin").unwrap();
         let pend = pending_questions(&wb).unwrap();
         let card = pend.iter().find(|c| c["id"] == qid).expect(lv);
-        assert_eq!(card["kind"], "publish", "{lv}");
+        assert_eq!(card["kind"], "push", "{lv}");
         assert_eq!(card["state"], "queued", "{lv}");
         assert!(
-            events(&wb, Some(&[EventKind::PublishConfirmed]))
+            events(&wb, Some(&[EventKind::PushConfirmed]))
                 .unwrap()
                 .is_empty(),
             "{lv}"
         );
         assert_eq!(
-            events(&wb, Some(&[EventKind::PublishRequested]))
+            events(&wb, Some(&[EventKind::PushRequested]))
                 .unwrap()
                 .len(),
             1,
@@ -2838,7 +2834,7 @@ fn remote_publish_waits_for_human_at_every_level() {
             events(&wb, Some(&[EventKind::PermissionAllowed]))
                 .unwrap()
                 .is_empty(),
-            "{lv} publish must not look like a safety-net release"
+            "{lv} push must not look like a safety-net release"
         );
     }
 }
@@ -6272,9 +6268,9 @@ fn nonempty_repo_gets_one_readonly_intake_and_l4_does_not_write_the_draft() {
         &wb,
         Some(&[
             EventKind::TurnStarted,
-            EventKind::PublishRequested,
-            EventKind::PublishConfirmed,
-            EventKind::PublishFailed,
+            EventKind::PushRequested,
+            EventKind::PushConfirmed,
+            EventKind::PushFailed,
         ])
     )
     .unwrap()
@@ -16322,7 +16318,7 @@ fn experience_native_publish_fixture_requires_explicit_publication_action() {
         &wb.db,
         &wb.project_id,
         Some("a0"),
-        crate::cards::CardKind::Publish,
+        crate::cards::CardKind::Push,
         json!({"summary":"Native publish shortcut guard", "path":"reviewed.txt"}),
         None,
     )
