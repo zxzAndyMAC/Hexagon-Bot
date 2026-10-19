@@ -890,6 +890,7 @@ export default {
     keyKeep: '已存——留空保持不變',
     showKey: '顯示', hideKey: '隱藏', check: '檢測並拉取模型', checking: '正在檢測連線…', checkOk: '已拉取 {{count}} 個模型',
     fetch: '正在拉取模型…', addModel: '新增',
+    missingKeyReason: '這個服務商還沒有儲存金鑰。在上方填入 API Key 後再檢測。',
     noModels: '暫無模型——拉取或手動新增',
     modelId: '模型 ID', modelName: '顯示名', modelGroup: '分組', caps: '能力',
     cap_text_generation: "文字生成",

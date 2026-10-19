@@ -890,6 +890,7 @@ export default {
     keyKeep: '保存済み——空欄で維持',
     showKey: '表示', hideKey: '非表示', check: '接続確認してモデルを取得', checking: '接続を確認中…', checkOk: '{{count}} 件のモデルを取得',
     fetch: 'モデルを取得中…', addModel: '追加',
+    missingKeyReason: 'このプロバイダーにはまだ API キーが保存されていません。上で入力してから、もう一度確認してください。',
     noModels: 'モデルなし——取得または手動追加',
     modelId: 'モデル ID', modelName: '表示名', modelGroup: 'グループ', caps: '機能',
     cap_text_generation: "テキスト生成",
