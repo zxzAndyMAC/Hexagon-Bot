@@ -351,7 +351,7 @@ export function ProviderManager() {
       <SubHead aside={
         <span className="text-[12px] text-ink-3">
           {t('providers.slotsSummary', { bound: slotStats.bound, total: slotStats.total })}
-          {slotStats.missingKey > 0 && <span className="text-orange"> · {t('providers.slotsMissingKey', { count: slotStats.missingKey })}</span>}
+          {slotStats.missingKey > 0 && <span className="text-orange-ink"> · {t('providers.slotsMissingKey', { count: slotStats.missingKey })}</span>}
         </span>
       }>{t('providers.slots')}</SubHead>
       <p className="-mt-1 mb-2 text-[12px] text-ink-3">{t('providers.slotsHint')}</p>
@@ -445,7 +445,7 @@ export function ProviderManager() {
               sub={draft.base_url ? `${previewUrl} · ${t('providers.autoUrl')}` : t('providers.unsaved')}
               mono={!!draft.base_url}
               actions={selConfigured && (
-                <Button size="sm" variant="ghost" className="text-red" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
+                <Button size="sm" variant="ghost" className="text-red-ink" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
               )}
             />
             <div className="mt-4 grid grid-cols-2 gap-3">
@@ -490,7 +490,7 @@ export function ProviderManager() {
               </Button>
             </div>
             {probe && (
-              <div role="status" className={`mt-1 text-[12.5px] ${probe.ok ? 'text-green' : 'text-red'}`}>{probe.text}</div>
+              <div role="status" className={`mt-1 text-[12.5px] ${probe.ok ? 'text-green-ink' : 'text-red-ink'}`}>{probe.text}</div>
             )}
 
             {/* ---- 模型目录 ---- */}
@@ -546,7 +546,7 @@ export function ProviderManager() {
               </div>
             )}
 
-            {err && <div role="alert" className="mt-2 text-[12.5px] text-red">{err}</div>}
+            {err && <div role="alert" className="mt-2 text-[12.5px] text-red-ink">{err}</div>}
             <div className="mt-4 flex items-center gap-2">
               {!selConfigured && <span className="text-[12px] text-ink-3">{t('providers.unsaved')}</span>}
               <span className="flex-1" />

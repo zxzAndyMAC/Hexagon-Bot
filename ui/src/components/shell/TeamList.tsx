@@ -1,5 +1,6 @@
 // 团队成员行 MemberRow（components B3，workbench#running）与侧栏「团队」分组。
-// 34 高：24 头像（含状态点）+ 名 13px + 右侧状态：工作中 = 像素格；休眠 = 「休眠」11 ink-3 且整行 opacity .5。
+// 34 高：24 头像（含状态点）+ 名 13px + 右侧状态：工作中 = 像素格；休眠 = 「休眠」11 ink-3，只头像半透明去饱和
+// （owner-followups-1015 票 09 撤整行 opacity .5：名字与「休眠」字跟着掉到 AA 以下，foundations「对比度」）。
 // 点击打开该 Agent（票 02 仍在中栏页签打开，03 改在画布打开）；当前打开的成员 --hover-2 底。
 // 悬停名片 HoverCard（B3；gap B6 2026-10-15 起替代票 02 的过渡 Tooltip「角色 · 模型」）：
 // 头像 + 角色 + 状态，下列 模型 / 上级 / 职责（TeamRow.model / superior / duty）。聚焦同样打开。
@@ -32,11 +33,10 @@ function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
             onClick={() => openTab({ id: `agent:${m.id}`, kind: 'agent', title: m.role, agentId: m.id, role: m.role })}
             className={cn(
               'hx-press hx-focus mx-2.5 flex h-[34px] w-[calc(100%-20px)] cursor-pointer items-center gap-[9px] rounded-[var(--r-sm)] px-2 text-left text-[13px] text-ink live:hover:bg-hover',
-              sleeping && 'opacity-50',
               current && 'bg-hover-2',
             )}
           >
-            <Avatar agentId={m.id} name={m.role} size={24} src={src} status={sleeping ? 'sleep' : 'online'} />
+            <Avatar agentId={m.id} name={m.role} size={24} src={src} status={sleeping ? 'sleep' : 'online'} dimmed={sleeping} />
             <span className="min-w-0 truncate">{m.role}</span>
             <span className="ml-auto flex shrink-0 items-center text-[11px] text-ink-3">
               {working ? <PixelGrid label={t('sidebar.working')} /> : sleeping ? t('sidebar.sleeping') : null}

@@ -115,7 +115,7 @@ function McpServiceForm({ entry, readOnly = false, onDone, onCancel, onDelete }:
       ) : (
         <div className="flex items-center gap-2">
           {onDelete && (
-            <Button size="sm" variant="ghost" className="text-red" disabled={busy} onClick={onDelete}>
+            <Button size="sm" variant="ghost" className="text-red-ink" disabled={busy} onClick={onDelete}>
               <Icon name="trash" size={14} />{t('mcp.del')}
             </Button>
           )}
@@ -146,7 +146,7 @@ function LiveBlock({ live }: { live: McpServiceRow }) {
           {live.tools.map((n) => <CodeChip key={n}>{n}</CodeChip>)}
         </div>
       )}
-      {live.error && <div role="alert" className="mt-2 text-[12px] text-red">{live.error}</div>}
+      {live.error && <div role="alert" className="mt-2 text-[12px] text-red-ink">{live.error}</div>}
       <div className="mt-2 text-[12px] text-ink-3">{t('settingsUi.mcpToolsNote', { name: live.name })}</div>
     </div>
   )

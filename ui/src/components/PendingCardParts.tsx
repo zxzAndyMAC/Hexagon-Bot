@@ -283,7 +283,7 @@ export function AcceptanceException({ q, top }: { q: PendingQuestion; top: boole
           run={() => api.acceptDeliveryException(q.id, String(q.payload.fingerprint), items.map((item) => item.requirement), reason)}>{t('exceptions.accept')}</SettleButton>
       </>}>
       <p>{t('exceptions.hint')}</p>
-      {error && <div role="alert" className="dock-hint" style={{ color: 'var(--red)' }}>{error}</div>}
+      {error && <div role="alert" className="dock-hint" style={{ color: 'var(--red-ink)' }}>{error}</div>}
       {evidence && !current && <p role="alert">{t('exceptions.stale')}</p>}
       {current && candidates.map((item) => {
         const id = JSON.stringify(item.requirement)
@@ -329,7 +329,7 @@ export function QualityRevalidation({ q, top }: { q: PendingQuestion; top: boole
       <p>{t('quality.revalidationHint')}</p>
       <StageArtifacts runId={String(q.payload.run_id ?? '')} />
       <StageEvidence runId={String(q.payload.run_id ?? '')} />
-      {error && <div role="alert" className="dock-hint" style={{ color: 'var(--red)' }}>{error}</div>}
+      {error && <div role="alert" className="dock-hint" style={{ color: 'var(--red-ink)' }}>{error}</div>}
     </DecisionShell>
   </div>
 }

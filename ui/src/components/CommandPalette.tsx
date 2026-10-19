@@ -169,7 +169,7 @@ function PaletteRow({ item, onRun }: { item: Item; onRun: () => void }) {
   return (
     <CommandItem value={item.id} onSelect={onRun}>
       <span className="grid w-[18px] shrink-0 place-items-center">{lead}</span>
-      <span className={`min-w-0 truncate ${item.mono ? 'font-mono font-normal text-[12.5px]' : ''} ${item.risk === 'danger' ? 'text-red' : ''}`}>{item.label}</span>
+      <span className={`min-w-0 truncate ${item.mono ? 'font-mono font-normal text-[12.5px]' : ''} ${item.risk === 'danger' ? 'text-red-ink' : ''}`}>{item.label}</span>
       <span className="ml-auto flex shrink-0 items-center gap-2 text-[12px] font-normal text-ink-3">
         {item.desc && <span>{item.desc}</span>}
         {item.hint && <Kbd>{item.hint}</Kbd>}

@@ -46,7 +46,7 @@ export function RoleDetail({ def, tplName, names, doc, customized, aiDrafted, ed
             {aiDrafted && <Badge variant="info" className="h-[18px] text-[11px]">{t('wizard.roles.aiChip')}</Badge>}
           </div>
           {edited ? (
-            <div role="status" className="flex items-center gap-1 text-[12px] text-green">
+            <div role="status" className="flex items-center gap-1 text-[12px] text-green-ink">
               <Icon name="check" size={12} />{t('wizard.savedToDraft')}
             </div>
           ) : (

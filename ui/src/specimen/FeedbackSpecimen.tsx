@@ -44,7 +44,7 @@ export function FeedbackSpecimen() {
           <Card className="p-4"><div className="mb-3 text-[12px] text-ink-3">首个 token 等待</div>
             <div className="flex items-center gap-2 text-[13px]"><PixelGrid /><Shimmer>正在思考</Shimmer><span className="font-mono text-ink-3">4.2s</span>
               {/* 等网变体（C9 `.tl-wait.net`：标签换橙色「重连中」） */}
-              <PixelGrid /><span className="text-orange">重连中</span><span className="font-mono text-ink-3">0:18</span></div></Card>
+              <PixelGrid /><span className="text-orange-ink">重连中</span><span className="font-mono text-ink-3">0:18</span></div></Card>
           <Card className="p-4"><div className="mb-3 text-[12px] text-ink-3">时间线首屏 / 补载更早内容</div>
             <div role="status" aria-busy="true"><SkeletonRows count={1} className="py-0" /></div></Card>
           <Card className="p-4"><div className="mb-3 text-[12px] text-ink-3">按钮内的异步操作</div>

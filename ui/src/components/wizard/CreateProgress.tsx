@@ -42,13 +42,13 @@ export function CreateProgress({ name, busy, done, fail, durations, roleCount }:
                 ) : (
                   <span className="size-5 rounded-full shadow-[inset_0_0_0_1.5px_var(--line-strong)]" />
                 )}
-                <span className={cn('flex-1 text-[13px]', running && 'font-medium', failed && 'text-red')}>{t(`wizard.create.${s}`)}</span>
+                <span className={cn('flex-1 text-[13px]', running && 'font-medium', failed && 'text-red-ink')}>{t(`wizard.create.${s}`)}</span>
                 {s === 'persist_roles' && roleCount != null && (running || isDone) && (
                   <span data-role-count="" className="font-mono text-[12px] text-ink-3">{isDone ? roleCount : 0} / {roleCount}</span>
                 )}
                 {isDone && ms !== undefined && <span className="font-mono text-[12px] text-ink-3">{(ms / 1000).toFixed(1)}s</span>}
               </div>
-              {failed && <div className="pb-2 pl-[30px] text-[12.5px] text-red">{fail.reason}</div>}
+              {failed && <div className="pb-2 pl-[30px] text-[12.5px] text-red-ink">{fail.reason}</div>}
             </li>
           )
         })}

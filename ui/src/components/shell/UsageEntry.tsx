@@ -43,8 +43,8 @@ export function UsageButton() {
           className={cn(
             'hx-press hx-focus inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1 rounded-[var(--r-sm)] px-1.5 font-mono text-[11.5px] leading-none font-medium text-ink-2',
             (tier === 'ok' || tier === 'unknown') && 'live:hover:bg-hover live:hover:text-ink',
-            tier === 'warn' && 'bg-orange-tint pr-2 text-orange',
-            tier === 'cap' && 'bg-red-tint pr-2 font-sans font-semibold text-red',
+            tier === 'warn' && 'bg-orange-tint pr-2 text-orange-ink',
+            tier === 'cap' && 'bg-red-tint pr-2 font-sans font-semibold text-red-ink',
           )}
         >
           <Icon name="chart-column" size={14} />
@@ -71,7 +71,7 @@ export function CapBanner({ onRaise }: { onRaise: () => void }) {
     <div
       role="alert"
       data-cap-banner
-      className="mx-auto mb-2 flex w-[calc(100%-48px)] max-w-(--col-w) items-center gap-2 rounded-[12px] bg-red-tint py-2 pr-2 pl-3 text-[13px] text-red"
+      className="mx-auto mb-2 flex w-[calc(100%-48px)] max-w-(--col-w) items-center gap-2 rounded-[12px] bg-red-tint py-2 pr-2 pl-3 text-[13px] text-red-ink"
     >
       <Icon name="warn" size={16} />
       <span className="min-w-0 flex-1">{t('usage.capBanner', { limit: fmtYuan(total.limit_cents * MC_PER_CENT) })}</span>

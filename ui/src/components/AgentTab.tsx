@@ -244,7 +244,7 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
       }}>
       {window.loading && <div className="flex items-center gap-2 py-2 text-[12.5px] text-ink-3"><Spinner size={12} />{t('timeline.loadingRecent')}</div>}
       {window.error && <Button size="xs" onClick={() => void window.retry()} title={[t('timeline.retry'), formatBinding(bindingFor('timelineRetry'))].filter(Boolean).join(' · ')}>{t('timeline.retry')}</Button>}
-      {window.olderError && <p role="status" className="text-[12.5px] text-red">{t('timeline.olderFailed')}</p>}
+      {window.olderError && <p role="status" className="text-[12.5px] text-red-ink">{t('timeline.olderFailed')}</p>}
       {window.olderLoading && <div className="flex items-center gap-2 py-2 text-[12.5px] text-ink-3"><Spinner size={12} />{t('timeline.loadingOlder')}</div>}
       {!window.olderLoading && window.page?.has_before && (
         <Button variant="ghost" size="xs" className="mb-2" onClick={loadOlder}

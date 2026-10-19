@@ -25,8 +25,8 @@ function CodeChip({ children, file, added, removed, missing, missingLabel, onCli
   const body = (
     <>
       <span className="truncate">{children}</span>
-      {added !== undefined && <span className="text-green">+{added}</span>}
-      {removed !== undefined && <span className="text-red">−{removed}</span>}
+      {added !== undefined && <span className="text-green-ink">+{added}</span>}
+      {removed !== undefined && <span className="text-red-ink">−{removed}</span>}
     </>
   )
   const title = missing && missingLabel ? missingLabel : children

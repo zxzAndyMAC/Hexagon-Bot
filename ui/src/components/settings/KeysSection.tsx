@@ -75,7 +75,7 @@ function KeyRow({ id, label, onChanged }: { id: ActionId; label: string; onChang
         )}
       </div>
       {problem && (
-        <div role="alert" className="mt-1 text-[12px] text-red">
+        <div role="alert" className="mt-1 text-[12px] text-red-ink">
           {problem.kind === 'conflict'
             ? t('settingsUi.keyTaken', { action: conflictLabel })
             : t('settingsUi.keyReserved', { key: formatBinding(problem.combo) })}

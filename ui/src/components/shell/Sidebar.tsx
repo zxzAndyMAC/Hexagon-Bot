@@ -105,7 +105,7 @@ function StatusError() {
   const failed = useUiStore((s) => s.statusError)
   if (!failed) return null
   return (
-    <div role="status" data-status-error className="mx-2.5 mb-1 flex items-center gap-1.5 text-[12px] text-red">
+    <div role="status" data-status-error className="mx-2.5 mb-1 flex items-center gap-1.5 text-[12px] text-red-ink">
       <Icon name="warn" size={12} />
       <span className="flex-1">{t('sidebar.stateFailed')}</span>
       <button type="button" className="hx-focus cursor-pointer rounded-[var(--r-xs)] px-1.5 text-ink-2 hover:bg-hover hover:text-ink"
@@ -222,9 +222,9 @@ function SidebarRail({ onSearch, onSettings, pendingCount }: { onSearch: () => v
             <Tooltip>
               <TooltipTrigger asChild>
                 <button type="button" data-member={m.id} aria-label={m.role}
-                  className={cn('hx-press hx-focus cursor-pointer rounded-[7px]', m.status === 'sleeping' && 'opacity-50')}
+                  className="hx-press hx-focus cursor-pointer rounded-[7px]"
                   onClick={() => st().openTab({ id: `agent:${m.id}`, kind: 'agent', title: m.role, agentId: m.id, role: m.role })}>
-                  <Avatar agentId={m.id} name={m.role} size={24} src={avatars[m.id]} status={m.status === 'sleeping' ? 'sleep' : 'online'} />
+                  <Avatar agentId={m.id} name={m.role} size={24} src={avatars[m.id]} status={m.status === 'sleeping' ? 'sleep' : 'online'} dimmed={m.status === 'sleeping'} />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right">

@@ -62,7 +62,7 @@ export function DiffCode({ ops, before, after, lang, label }: {
       {rows.map((r, i) => (
         <div key={i} data-diff={r.type}
           className={cn(LINE, r.type === 'ins' && 'bg-green-tint', r.type === 'del' && 'bg-red-tint')}>
-          <i className={cn(NUM, 'not-italic', r.type === 'ins' && 'text-green', r.type === 'del' && 'text-red')}>{r.line}</i>
+          <i className={cn(NUM, 'not-italic', r.type === 'ins' && 'text-green-ink', r.type === 'del' && 'text-red-ink')}>{r.line}</i>
           {r.type !== 'eq' && <span className="sr-only">{r.type === 'ins' ? '+' : '-'}</span>}
           <span className="whitespace-pre">
             <Tokens tokens={r.type === 'del' ? a?.[r.a!] : b?.[r.b!]} text={r.text} />

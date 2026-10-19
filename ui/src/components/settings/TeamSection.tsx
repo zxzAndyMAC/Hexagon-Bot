@@ -104,7 +104,7 @@ function TemplateEditor({ def, names, isCustom, onDone }: {
       </div>
       <div className="mt-1 flex items-center gap-2">
         {isCustom && (
-          <Button size="sm" variant="ghost" className="text-red" disabled={busy} onClick={del}>
+          <Button size="sm" variant="ghost" className="text-red-ink" disabled={busy} onClick={del}>
             <Icon name="trash" size={14} />{t('teamTpl.delTpl')}
           </Button>
         )}
@@ -201,7 +201,7 @@ function AgentDetailPane({ member, tpls, onRemoved, onClose }: {
       <div className="mt-4">
         <RoleEditor key={member.id} agentId={member.id} density="md" onClose={onClose}
           footStart={
-            <Button size="sm" variant="ghost" className="text-red" data-agent-remove onClick={remove}>
+            <Button size="sm" variant="ghost" className="text-red-ink" data-agent-remove onClick={remove}>
               {t('teamTpl.remove')}
             </Button>
           } />
