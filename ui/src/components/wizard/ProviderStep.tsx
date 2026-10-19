@@ -19,6 +19,8 @@ import { Avatar } from '@/components/ui/avatar'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Icon } from '../Icon'
 import { fmtWindow, useKeyProbe, type ProbeState } from '../../keyProbe'
+import { useRequestUrl } from '../../requestUrl'
+import { RequestUrlNote } from '../RequestUrlNote'
 
 // 与 ProviderManager 同一套 slug，避免两个界面对同一名字写出不同 id。
 const providerSlug = (s: string) =>
@@ -211,6 +213,8 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
   const [kind, setKind] = useState<ProviderView['kind']>('openai')
   const [baseUrl, setBaseUrl] = useState('')
   const [busy, setBusy] = useState(false)
+  // 票 21：自定义地址下方实时显示实际请求地址（core provider_url）。
+  const requestUrl = useRequestUrl(kind, choice.type === 'custom' ? baseUrl : '')
 
   // 预设异步到达后，第一次落到预设的默认模型（负责人还没动过模型框才填）。
   const shownModel = !modelTouched && choice.type === 'preset' ? choice.preset.default_model : model
@@ -269,7 +273,7 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
               <option value="anthropic">anthropic</option>
             </NativeSelect>
           </Field>
-          <Field label={t('providers.baseUrl')}>
+          <Field label={t('providers.baseUrl')} help={requestUrl ? <RequestUrlNote url={requestUrl} /> : undefined}>
             <Input aria-label={t('providers.baseUrl')} placeholder={t('providers.baseUrl')} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
           </Field>
         </>

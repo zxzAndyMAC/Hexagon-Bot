@@ -919,7 +919,7 @@ export default {
     edit: '编辑', delete: '删除', save: '保存', cancel: '取消', add: '添加供应商',
     unsaved: '未保存——保存后才注册', slots: '槽位绑定',
     slotsHint: '把每个角色模型槽绑到 供应商+模型；「default」兜底未绑定槽。',
-    checkNeedsKey: '先填 API key 再检测', autoUrl: '自动推导',
+    checkNeedsKey: '先填 API key 再检测', autoUrl: '自动推导', requestUrl: '实际请求地址：',
     slotsSummary: '{{bound}}/{{total}} 槽位已绑', slotsMissingKey: '{{count}} 个供应商待配 key',
     pickProvider: '选供应商…', pickModel: '模型 ID…',
     bind: '绑定', unbind: '解绑', unbound: '未绑',

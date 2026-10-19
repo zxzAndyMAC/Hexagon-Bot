@@ -919,7 +919,7 @@ export default {
     edit: 'Editar', delete: 'Eliminar', save: 'Guardar', cancel: 'Cancelar', add: 'Añadir proveedor',
     unsaved: 'sin guardar — guarda para registrar', slots: 'Asignación de slots',
     slotsHint: 'Asigna cada slot de rol a proveedor+modelo; «default» cubre los no asignados.',
-    checkNeedsKey: 'Introduce la clave para comprobar', autoUrl: 'derivado',
+    checkNeedsKey: 'Introduce la clave para comprobar', autoUrl: 'derivado', requestUrl: 'URL de solicitud real: ',
     slotsSummary: '{{bound}}/{{total}} slots asignados', slotsMissingKey: '{{count}} proveedor(es) sin clave',
     pickProvider: 'Proveedor…', pickModel: 'id de modelo…',
     bind: 'Asignar', unbind: 'Quitar', unbound: 'sin asignar',

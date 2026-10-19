@@ -639,6 +639,9 @@ export const api = {
     call<KeyProbe>('probe_provider_key', { provider, secret: secret || null, model }),
   // gap B8：内置服务商预设（向导服务商下拉；静态表，读组）
   providerPresets: () => call<ProviderPreset[]>('provider_presets'),
+  /** 票 21：表单「实际请求地址」预览（core provider_url，与保存同一道规范化）；null = 不预览。 */
+  providerRequestUrl: (kind: ProviderView['kind'], baseUrl: string) =>
+    call<string | null>('provider_request_url', { kind, baseUrl }),
   agentsMdDraft: (name: string) => call<string>('agents_md_draft', { name }),
   /// 票 16：空目录的一句话 → 项目说明草稿。不写磁盘。
   /// 2026-09-25 答问优化流：qa 携带答问卡收集的答案（可选）。
@@ -1774,6 +1777,15 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return (String(args?.secret ?? '').includes('bad')
         ? { ok: false, failure: 'authentication', status: 401, model_listed: null, window: null }
         : { ok: true, failure: null, status: null, model_listed: true, window: 200000 }) as T
+    // 票 21：dev 夹具只粗略模仿 core provider_url（真规则与测试在 core）。
+    case 'provider_request_url': {
+      const base = String(args?.baseUrl ?? '').trim().replace(/\/+$/, '')
+      if (!base || base.includes('[stored:')) return null as T
+      const tail = args?.kind === 'anthropic' ? '/messages' : '/chat/completions'
+      if (base.endsWith(tail)) return base as T
+      const versioned = /\/v\d+[a-z0-9]*(\/|$)/i.test(base.replace(/^[a-z]+:\/\/[^/]*/i, ''))
+      return (args?.kind === 'jev' ? `${base}/v1/systemone` : versioned ? `${base}${tail}` : `${base}/v1${tail}`) as T
+    }
     case 'provider_presets':
       return [
         { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },

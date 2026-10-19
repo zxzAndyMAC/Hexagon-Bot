@@ -919,7 +919,7 @@ export default {
     edit: 'Editar', delete: 'Excluir', save: 'Salvar', cancel: 'Cancelar', add: 'Adicionar provedor',
     unsaved: 'não salvo — salve para registrar', slots: 'Vínculos de slot',
     slotsHint: 'Vincule cada slot de papel a provedor+modelo; «default» cobre os não vinculados.',
-    checkNeedsKey: 'Insira a chave para verificar', autoUrl: 'derivado',
+    checkNeedsKey: 'Insira a chave para verificar', autoUrl: 'derivado', requestUrl: 'URL de requisição real: ',
     slotsSummary: '{{bound}}/{{total}} slots vinculados', slotsMissingKey: '{{count}} provedor(es) sem chave',
     pickProvider: 'Provedor…', pickModel: 'id do modelo…',
     bind: 'Vincular', unbind: 'Desvincular', unbound: 'sem vínculo',

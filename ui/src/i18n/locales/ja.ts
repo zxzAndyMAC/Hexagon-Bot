@@ -919,7 +919,7 @@ export default {
     edit: '編集', delete: '削除', save: '保存', cancel: 'キャンセル', add: 'プロバイダ追加',
     unsaved: '未保存——保存で登録', slots: 'スロット割当',
     slotsHint: '各ロールのモデルスロットを プロバイダ+モデル に割当。「default」は未割当の兜底。',
-    checkNeedsKey: '先に APIキーを入力してください', autoUrl: '自動生成',
+    checkNeedsKey: '先に APIキーを入力してください', autoUrl: '自動生成', requestUrl: '実際のリクエスト先：',
     slotsSummary: '{{bound}}/{{total}} スロット割当済み', slotsMissingKey: 'キー未設定のプロバイダ {{count}} 件',
     pickProvider: 'プロバイダ…', pickModel: 'モデル ID…',
     bind: '割当', unbind: '解除', unbound: '未割当',
