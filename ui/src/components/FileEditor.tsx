@@ -269,7 +269,7 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
             </span>
           )}
         </nav>
-        {saveErr && <span role="alert" className="min-w-0 truncate text-[12px] text-red" title={saveErr}>{t('file.saveFailed')}</span>}
+        {saveErr && <span role="alert" className="min-w-0 truncate text-[12px] text-red-ink" title={saveErr}>{t('file.saveFailed')}</span>}
         <span className="flex-1" />
         {text != null && (
           <Segmented value={mode} onValueChange={(v) => switchMode(v as Mode)} aria-label={t('file.mode')}>

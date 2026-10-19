@@ -114,7 +114,7 @@ export function ProviderFirstStep({ doc, loaded, onRefresh }: {
   return (
     // 字段铺满内容区（entry#wz-provider 的服务商 / API Key / 默认模型与说明同宽）；票 16B 前限宽 560，右侧留一截空。
     <div className="flex flex-col gap-3">
-      <div className="text-[12.5px] text-orange">{t('wizard.providersBlocked')}</div>
+      <div className="text-[12.5px] text-orange-ink">{t('wizard.providersBlocked')}</div>
       <ProviderForm doc={doc} onRefresh={onRefresh} />
       <Button size="sm" variant="ghost" className="self-start" onClick={() => api.openSettings().catch(() => {})}>
         <Icon name="settings" size={14} />{t('wizard.goSettings')}

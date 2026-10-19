@@ -74,7 +74,7 @@ function Field({
       {label && <label htmlFor={htmlFor} className="mb-1.5 block text-[12.5px] font-medium text-ink">{label}</label>}
       {control}
       {error ? (
-        <div id={noteId} role="alert" className="mt-[5px] text-[12px] text-red">{error}</div>
+        <div id={noteId} role="alert" className="mt-[5px] text-[12px] text-red-ink">{error}</div>
       ) : help ? (
         <div id={noteId} className="mt-[5px] text-[12px] text-ink-3">{help}</div>
       ) : null}

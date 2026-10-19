@@ -36,6 +36,9 @@ type AvatarProps = {
   size?: keyof typeof SIZES
   src?: string
   status?: "online" | "sleep"
+  /** 休眠：只把头像本体半透明去饱和（状态点与相邻文字不变）。owner-followups-1015 票 09：
+   *  原先整行 opacity .5，名字和「休眠」字一起掉到 AA 以下；规范 foundations「对比度」改为只淡头像。 */
+  dimmed?: boolean
   owner?: boolean
   onChangeImage?: () => void
   changeImageLabel?: string
@@ -49,6 +52,7 @@ function Avatar({
   size = 24,
   src,
   status,
+  dimmed = false,
   owner = false,
   onChangeImage,
   changeImageLabel,
@@ -61,7 +65,8 @@ function Avatar({
     <AvatarPrimitive.Root
       data-slot="avatar"
       data-swatch={swatch}
-      className={cn("relative inline-grid shrink-0 place-items-center font-semibold text-white select-none", shape, SWATCH[swatch - 1])}
+      data-dimmed={dimmed || undefined}
+      className={cn("relative inline-grid shrink-0 place-items-center font-semibold text-white select-none", shape, SWATCH[swatch - 1], dimmed && "opacity-50 grayscale")}
     >
       {src && (
         <AvatarPrimitive.Image

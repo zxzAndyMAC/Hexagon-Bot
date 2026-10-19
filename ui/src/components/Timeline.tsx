@@ -278,7 +278,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // C4 系统行：12px ink-3、两侧细线；高风险子类（SYS_HIGH_RISK / 回合失败）文字 --red。
   return (
     <div className={`sysrow tl-sys${highRisk ? ' risk' : ''}`}>
-      <span className="syslabel tl-sys-l" style={highRisk ? { color: 'var(--red)' } : undefined} title={note ? `${label} · ${note}` : label}>
+      <span className="syslabel tl-sys-l" style={highRisk ? { color: 'var(--red-ink)' } : undefined} title={note ? `${label} · ${note}` : label}>
         {label}
         {note && <span className="dim3"> · {note}</span>}
       </span>

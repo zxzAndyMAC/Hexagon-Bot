@@ -56,7 +56,7 @@ export function LeaveGuard({ title, body, saveLabel, discardLabel, onSave, onDis
         <AlertDialogTitle>{title}</AlertDialogTitle>
         {body ? <AlertDialogDescription className="mt-1">{body}</AlertDialogDescription> : <AlertDialogDescription className="sr-only">{title}</AlertDialogDescription>}
         <AlertDialogFooter className="mt-5 flex items-center gap-2">
-          <Button ref={discardRef} data-leave="discard" variant="ghost" size="sm" className="text-red live:hover:text-red" disabled={busy != null}
+          <Button ref={discardRef} data-leave="discard" variant="ghost" size="sm" className="text-red-ink live:hover:text-red-ink" disabled={busy != null}
             loading={busy === 'discard'} onClick={() => void run('discard')}>{discardLabel}</Button>
           <span className="flex-1" />
           <Button data-leave="cancel" variant="default" size="sm" disabled={busy != null} onClick={onCancel}>

@@ -203,8 +203,8 @@ function RecentRow({ r, when, opening, onOpen, onRemove }: {
   )
   const info = (
     <div className="min-w-0 flex-1 text-left">
-      <div className={cn('truncate text-[13px] font-medium', missing && 'text-red')}>{r.name}</div>
-      <div className={cn('truncate font-mono text-[12px]', missing ? 'text-red' : 'text-ink-3')} title={r.dir}>{r.dir}</div>
+      <div className={cn('truncate text-[13px] font-medium', missing && 'text-red-ink')}>{r.name}</div>
+      <div className={cn('truncate font-mono text-[12px]', missing ? 'text-red-ink' : 'text-ink-3')} title={r.dir}>{r.dir}</div>
     </div>
   )
   const removeBtn = (

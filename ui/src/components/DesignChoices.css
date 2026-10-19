@@ -24,7 +24,7 @@
 .design-existing { margin-top: 12px; font-size: 12px; }
 .design-existing textarea { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; padding: 9px 11px; border: 0; border-radius: var(--r-sm); resize: vertical;
   background: var(--field); box-shadow: var(--shadow-inset-field), inset 0 0 0 1px var(--line); color: var(--ink); font: inherit; }
-.design-error { color: var(--red); }
+.design-error { color: var(--red-ink); }
 
 .design-mockup-trigger { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; border-radius: var(--r-card); }
 .design-mockup-trigger:focus-visible, .design-preview button:focus-visible { outline: none; box-shadow: var(--focus-ring); }

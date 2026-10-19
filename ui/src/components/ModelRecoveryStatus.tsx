@@ -166,7 +166,7 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
   // ⑥ 已恢复 / ⑦ 已失效：块收成一行（原地变化，不新增行）。
   if (state === 'recovered' || state === 'superseded') {
     return <>{live}<div data-model-recovery={id} data-state={state} aria-busy={busy} className="text-[12.5px]">
-      <div className={state === 'recovered' ? 'flex items-center gap-1.5 text-green' : 'text-ink-3'}>
+      <div className={state === 'recovered' ? 'flex items-center gap-1.5 text-green-ink' : 'text-ink-3'}>
         {state === 'recovered'
           ? <><Icon name="circle-check" size={14} />{t('modelRecovery.recoveredLine', { count: history.length + 1 })}</>
           : <>{t(title)}{reason && ` · ${reason}`}</>}
@@ -202,7 +202,7 @@ export function ModelRecoveryStatus({ id, payload, top = false }: { id: string; 
       <div className="mt-1 whitespace-pre-wrap font-mono text-[11.5px]">{recovery.partial_text}</div>
     </details>}
     {history.length > 0 && historyBlock}
-    {remedy && <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--r-card)] bg-red-tint px-3 py-2 text-[12.5px] text-red" data-remedy={remedy}>
+    {remedy && <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--r-card)] bg-red-tint px-3 py-2 text-[12.5px] text-red-ink" data-remedy={remedy}>
       <Icon name="key" size={14} className="flex-none" />
       <span className="min-w-0 flex-1"><b className="font-semibold">{codeLabel}</b> · {t('modelRecovery.keyBlocked')}</span>
       {SETTINGS_CODES.has(remedy) && <Button size="xs" title={t(keyRemedy ? 'modelRecovery.updateKey' : 'modelRecovery.openModels')} onClick={() => openSettings('models')}>

@@ -77,7 +77,7 @@ button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tl .tl-sys { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 12px; color: var(--ink-3); }
 .tl .tl-sys::before, .tl .tl-sys::after { content: ""; flex: 1; min-width: 24px; height: 1px; background: var(--line); }
 .tl .tl-sys.left::before { display: none; }
-.tl .tl-sys.risk { color: var(--red); }
+.tl .tl-sys.risk { color: var(--red-ink); }
 .tl .tl-sys > .tl-sys-l { display: inline-flex; align-items: center; gap: 6px; max-width: 85%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl .tl-sys .dim3 { color: var(--ink-3); }
 /* 可点的系统行（展开系统事件组）：整行是按钮 */
@@ -144,7 +144,7 @@ button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tl .chip.flag { background: var(--violet-tint); color: var(--violet); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--violet) calc(24% * var(--tint-ring)), transparent); }
 /* 工具行右侧的落定状态是纯文字（✓ 耗时 / ✕ 失败），只借 .chip.ok/.err 作钩子 */
 .tl .tl-st .chip { height: auto; padding: 0; background: none; box-shadow: none; font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
-.tl .tl-st .chip.err { color: var(--red); }
+.tl .tl-st .chip.err { color: var(--red-ink); }
 .tl .tl-st .chip.warn { color: var(--ink-2); }
 
 /* ---- C8 执行卡 ---- */
@@ -158,8 +158,8 @@ button.tl-atom.p:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tl .exec-title { font-size: 11.5px; min-width: 0; }
 .tl .exec-chev { color: var(--ink-3); background: none; border: 0; padding: 0; display: inline-flex; cursor: pointer; }
 .tl .exec-stat { font: 500 11.5px var(--mono); }
-.tl .exec-stat.ins { color: var(--green); }
-.tl .exec-stat.del { color: var(--red); }
+.tl .exec-stat.ins { color: var(--green-ink); }
+.tl .exec-stat.del { color: var(--red-ink); }
 .tl .exec-body { background: var(--inset); border-top: 1px solid var(--line-soft); font: 12px/1.65 var(--mono); color: var(--ink-2); }
 .tl .exec-cmd { padding: 10px 12px 0; border: 0; color: var(--ink); font: 12px/1.65 var(--mono); }
 .tl .exec-cmd::before { content: "$ "; color: var(--ink-3); }

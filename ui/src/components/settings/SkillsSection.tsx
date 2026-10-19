@@ -151,10 +151,10 @@ function SkillDetail({ skill, onSaved }: { skill: SkillRow; onSaved: () => void 
           </>
         }
       />
-      {readError && <p role="alert" className="mt-3 text-[12.5px] text-red">{readError}</p>}
+      {readError && <p role="alert" className="mt-3 text-[12.5px] text-red-ink">{readError}</p>}
       {reading && <div className="mt-3"><LoadingState label={t('skills.loadingDetail')} /></div>}
       {!!skill.legacy_experience_blocks && (
-        <p role="status" className="mt-3 text-[12.5px] text-orange">{t('skills.legacyExperience', { count: skill.legacy_experience_blocks })}</p>
+        <p role="status" className="mt-3 text-[12.5px] text-orange-ink">{t('skills.legacyExperience', { count: skill.legacy_experience_blocks })}</p>
       )}
       {editing ? (
         <div data-skill-editor className="mt-4 flex flex-col gap-3">

@@ -90,7 +90,7 @@ function DesktopScreenshotDetails({ output, capturedAt, variant, ringFacts }: Pr
     setSizeOk(sameImageSize({ width: img.naturalWidth, height: img.naturalHeight }, result?.image_width, result?.image_height))
   const title = [t('computer.viewScreenshot'), formatBinding(bindingFor('viewDesktopScreenshot'))].filter(Boolean).join(' · ')
   return <div className={card ? 'desktop-tool-details' : 'desktop-tool-details mt-1'}>
-    {output.requires_observation === true && <p role="status" className="text-[12px] text-orange">{t('computer.needsObservation')}</p>}
+    {output.requires_observation === true && <p role="status" className="text-[12px] text-orange-ink">{t('computer.needsObservation')}</p>}
     {name && <figure className={card ? 'm-0' : 'mt-1 flex items-center gap-2'}>
       <button ref={trigger} className={`desktop-screenshot-thumbnail hx-focus grid aspect-[16/10] ${card ? 'relative w-full' : 'w-[120px]'} rounded-[var(--r-sm)] flex-none cursor-zoom-in place-items-center overflow-hidden bg-inset p-0 text-[11px] text-ink-3 shadow-[var(--shadow-card)] disabled:cursor-default disabled:opacity-45`}
         type="button" disabled={failed} aria-busy={busy}

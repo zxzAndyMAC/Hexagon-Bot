@@ -5,6 +5,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { checkContrast } from './contrast.mjs'
 
 const ui = join(dirname(fileURLToPath(import.meta.url)), '..')
 const css = readFileSync(join(ui, 'src/index.css'), 'utf8')
@@ -39,4 +40,10 @@ if (bad.length) {
   console.error('undeclared design tokens referenced:\n' + bad.map((b) => '  ' + b).join('\n'))
   process.exit(1)
 }
-console.log(`tokens ok — ${defined.size} defined, all references resolve`)
+// 票 09（owner-followups-1015）：对比度断言表——文字 token × 底 token × 阈值，深浅两套实算（表与算法见 contrast.mjs）
+const weak = checkContrast(css)
+if (weak.length) {
+  console.error('contrast below WCAG AA (foundations「对比度」):\n' + weak.map((b) => '  ' + b).join('\n'))
+  process.exit(1)
+}
+console.log(`tokens ok — ${defined.size} defined, all references resolve, contrast table passes (light + dark)`)

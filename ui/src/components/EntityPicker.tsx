@@ -167,7 +167,7 @@ export function EntityPicker({
             aria-label={t('picker.search')}
           />
           <div className="mt-2 min-h-[120px] flex-1 overflow-y-auto">
-            {err && <div role="alert" className="px-0.5 py-2 text-[12.5px] text-red">{err}</div>}
+            {err && <div role="alert" className="px-0.5 py-2 text-[12.5px] text-red-ink">{err}</div>}
             {!err && opts === null && <div className="px-0.5 py-3 text-[12.5px] text-ink-3">…</div>}
             {!err && opts !== null && shown.length === 0 && (
               <Empty size="sm" icon="search" title={t('picker.empty')} desc={q.trim() ? t('feedback.searchEmptyBody') : t('feedback.pickerEmptyBody')}

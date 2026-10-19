@@ -59,7 +59,7 @@
 .dock-check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
 
 /* ---- 错误：底栏上方红字（D6 / D8 错误态） ---- */
-.dock-err { padding: 0 16px 8px 54px; font-size: 12.5px; color: var(--red); }
+.dock-err { padding: 0 16px 8px 54px; font-size: 12.5px; color: var(--red-ink); }
 .dc .dock-err { padding-left: 16px; }
 
 /* ---- 底 ---- */
@@ -100,7 +100,7 @@
 .dock-split { display: inline-flex; }
 .dock-split[data-split] > [data-variant='primary']:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 8px; }
 .dock-caret { display: inline-grid; place-items: center; height: 28px; padding: 0 8px 0 6px; margin-left: 1px; border: 0;
-  border-radius: 0 99px 99px 0; background: var(--accent); color: white; cursor: pointer; }
+  border-radius: 0 99px 99px 0; background: var(--accent-strong); color: white; cursor: pointer; }
 .dock-caret:hover { opacity: .92; }
 .dock-caret:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .dock-caret:disabled { opacity: .45; cursor: default; }
