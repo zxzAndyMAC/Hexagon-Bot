@@ -67,7 +67,7 @@ describe('⌘B 与侧栏分割线（ADR 0088：⌘B 由右栏改为侧栏）', (
   it('图标列保留待决红点与团队头像，图标有可读名', async () => {
     await act(async () => useUiStore.setState({
       pending: [{ id: 'q1', kind: 'permission', agent_id: 'a1', payload: {}, state: 'queued' } as never],
-      team: [{ id: 'a1', role: 'QA', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null }],
+      team: [{ id: 'a1', role: 'QA', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null }],
       sideLayout: { width: 252, collapsed: true },
     }))
     expect(sidebar().querySelector('[data-pending-dot]')).toBeTruthy()

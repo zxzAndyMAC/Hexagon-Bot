@@ -669,7 +669,7 @@ export default {
     stepComputerObserve: "觀察電腦", stepComputerAction: "操作電腦", stepComputerNavigate: "電腦導覽",
     stepLoadSkill: "載入技能", stepSearchSkills: "尋找技能", skillSource: "來源", skillLoaded: "已載入",
  chain: '執行鏈路', sleep: '休眠', wake: '喚醒',
-    noEvents: '該 Agent 還沒有事件', changeAvatar: '更換頭像', openTab: '打開活動頁',
+    noEvents: '該 Agent 還沒有事件', openTab: '打開活動頁',
     avatarTooBig: '圖片超過 2MB——請換小一點的檔案',
     stepRead: '讀檔案', stepWrite: '改檔案', stepBash: '跑指令',
     stepList: '列目錄', stepSearch: '搜尋', stepTool: '工具',
@@ -1142,7 +1142,16 @@ export default {
     saveFile: '儲存檔案',
     confirmIntake: '確認開場草案',
   },
+  // 票 17：头像按角色存 + 实例覆盖（规范 components E4「头像」）
+  avatar: {
+    changeRole: '換角色頭像（所有實例）',
+    changeInstance: '只為這個 Agent 換頭像',
+    restoreDefault: '恢復預設',
+  },
   errors: {
+    avatar_too_large: '圖片超過 2MB——請換小一點的檔案',
+    avatar_unreadable: '這個檔案不是可識別的 PNG、JPEG、WebP 或 GIF 圖片，請換一個檔案。',
+    bad_agent_id: '這個 Agent id 不能用於頭像。重新整理團隊後再試。',
     agent_not_found: "這個 Agent 已不在團隊裡，重新整理後再看。",
     agent_busy: "這個 Agent 還在工作。先休眠，等這一回合結束再移出。",
     agent_has_pending: "這個 Agent 還有待你決定的卡，先在待決塢處理完再移出。",

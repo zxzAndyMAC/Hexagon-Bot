@@ -126,9 +126,9 @@ describe('侧栏待决与团队（B1、B3）', () => {
   it('工作中显示像素格，休眠只淡化头像并写「休眠」；点成员打开该 Agent', async () => {
     useUiStore.setState({
       team: [
-        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
-        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null, model: null, duty: null, superior: null },
-        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
+        { id: 'a1', role: '前端', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
+        { id: 'a2', role: 'QA', model_slot: null, status: 'sleeping', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
+        { id: 'a3', role: '后端', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
       ],
       streams: { a1: { 0: '正在写' } },
     })
@@ -158,8 +158,8 @@ describe('成员悬停名片（B3 HoverCard）', () => {
     await i18n.changeLanguage('zh-CN')
     useUiStore.setState({
       team: [
-        { id: 'a1', role: '前端', model_slot: 'code', status: 'active', avatar_hash: null, model: 'Claude Sonnet 5.5', duty: '实现界面与前端逻辑', superior: '架构师' },
-        { id: 'a2', role: '项目经理', model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null },
+        { id: 'a1', role: '前端', model_slot: 'code', status: 'active', avatar_hash: null, avatar_override: false, model: 'Claude Sonnet 5.5', duty: '实现界面与前端逻辑', superior: '架构师' },
+        { id: 'a2', role: '项目经理', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null },
       ],
       streams: {},
     })

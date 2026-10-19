@@ -594,10 +594,14 @@ export const api = {
       agentId: args.agentId ?? null,
       kinds: args.kinds ?? null,
     }),
-  // ---- 头像 ----
+  // ---- 头像（票 17：角色层 + 实例覆盖；读 agentAvatar 得生效图）----
   setAgentAvatar: (agentId: string, dataUrl: string) =>
     call<void>('set_agent_avatar', { agentId, dataUrl }),
+  clearAgentAvatar: (agentId: string) => call<void>('clear_agent_avatar', { agentId }),
   agentAvatar: (agentId: string) => call<string | null>('agent_avatar', { agentId }),
+  roleAvatar: (role: string) => call<string | null>('role_avatar', { role }),
+  setRoleAvatar: (role: string, dataUrl: string) => call<void>('set_role_avatar', { role, dataUrl }),
+  clearRoleAvatar: (role: string) => call<void>('clear_role_avatar', { role }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => switchProject(source => call<void>('open_recent', { dir, _project: source })),
@@ -681,6 +685,8 @@ export const api = {
       initGit: boolean
       agentsMd?: string | null
       autonomy?: string | null
+      /// 票 17：向导角色详情换的头像（data URL），建项目时按角色写入。
+      roleAvatars?: { role: string; data_url: string }[]
     },
     onStep?: (step: CreateStep) => void,
   ) => {
@@ -696,6 +702,7 @@ export const api = {
         initGit: opts.initGit,
         agentsMd: opts.agentsMd ?? null,
         autonomy: opts.autonomy ?? null,
+        roleAvatars: opts.roleAvatars ?? null,
       },
     }
     if (!isTauri) {
@@ -777,6 +784,11 @@ const mockAvatars: Record<string, string> = {
     '</svg>',
   )}`,
 }
+
+/// 票 17：角色层 mock（按角色名），生效图 = 实例覆盖 > 角色图。
+const mockRoleAvatars: Record<string, string> = {}
+const mockEffective = (id: string, role?: string): string | undefined =>
+  mockAvatars[id] ?? (role ? mockRoleAvatars[role] : undefined)
 
 const T0 = '2026-09-18T'
 
@@ -1102,7 +1114,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         { id: 'a7', role: '运维', status: 'sleeping', model_slot: 'ops', duty: '部署与发布' },
       ].map((r) => ({
         ...r,
-        avatar_hash: mockAvatars[r.id] ? mockHash(mockAvatars[r.id]) : null,
+        avatar_hash: mockEffective(r.id, r.role) ? mockHash(`${!!mockAvatars[r.id]}:${mockEffective(r.id, r.role)}`) : null,
+        avatar_override: !!mockAvatars[r.id],
         // gap B2：团队行带解析后的模型展示名（dev 样例对照 workbench#running 消息头）
         model: ({ chat: 'Claude Sonnet 5.5', code: 'Claude Sonnet 5.5', ops: 'DeepSeek V4' } as Record<string, string>)[r.model_slot] ?? null,
         superior: ({ 后端: '后端技术负责人', 前端: '架构师', UX: '产品策划', QA: '架构师' } as Record<string, string>)[r.role] ?? null,
@@ -1422,8 +1435,22 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'set_agent_avatar':
       mockAvatars[String(args?.agentId)] = String(args?.dataUrl)
       return null as T
-    case 'agent_avatar':
-      return (mockAvatars[String(args?.agentId)] ?? null) as T
+    case 'clear_agent_avatar':
+      delete mockAvatars[String(args?.agentId)]
+      return null as T
+    case 'agent_avatar': {
+      const id = String(args?.agentId)
+      const role = (mock('team') as { id: string; role: string }[]).find((r) => r.id === id)?.role
+      return (mockEffective(id, role) ?? null) as T
+    }
+    case 'role_avatar':
+      return (mockRoleAvatars[String(args?.role)] ?? null) as T
+    case 'set_role_avatar':
+      mockRoleAvatars[String(args?.role)] = String(args?.dataUrl)
+      return null as T
+    case 'clear_role_avatar':
+      delete mockRoleAvatars[String(args?.role)]
+      return null as T
     case 'artifact_content':
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':

@@ -669,7 +669,7 @@ export default {
     stepComputerObserve: "Observer l’ordinateur", stepComputerAction: "Utiliser l’ordinateur", stepComputerNavigate: "Naviguer sur l’ordinateur",
     stepLoadSkill: "Charger une compétence", stepSearchSkills: "Rechercher des compétences", skillSource: "Source", skillLoaded: "Chargée",
  chain: 'Chaîne d’exécution', sleep: 'Suspendre', wake: 'Réveiller',
-    noEvents: "Cet agent n'a pas encore d'événements", changeAvatar: 'Changer d’avatar', openTab: 'Ouvrir l’activité',
+    noEvents: "Cet agent n'a pas encore d'événements", openTab: 'Ouvrir l’activité',
     avatarTooBig: 'L’image dépasse 2 Mo — choisissez un fichier plus petit',
     stepRead: 'Lire fichier', stepWrite: 'Modifier fichier', stepBash: 'Exécuter commande',
     stepList: 'Lister dossier', stepSearch: 'Rechercher', stepTool: 'Outil',
@@ -1142,7 +1142,16 @@ export default {
     saveFile: 'Enregistrer le fichier',
     confirmIntake: 'Confirmer le brouillon d’ouverture',
   },
+  // 票 17：头像按角色存 + 实例覆盖（规范 components E4「头像」）
+  avatar: {
+    changeRole: 'Changer l’avatar du rôle (toutes les instances)',
+    changeInstance: 'Changer l’avatar de cet agent seulement',
+    restoreDefault: 'Rétablir par défaut',
+  },
   errors: {
+    avatar_too_large: 'L’image dépasse 2 Mo — choisissez un fichier plus petit',
+    avatar_unreadable: 'Ce fichier n’est pas une image PNG, JPEG, WebP ou GIF lisible. Choisissez-en un autre.',
+    bad_agent_id: 'Cet identifiant d’agent ne peut pas servir pour un avatar. Actualisez l’équipe et réessayez.',
     agent_not_found: "Cet agent ne fait plus partie de l’équipe. Actualisez pour voir la liste.",
     agent_busy: "Cet agent travaille encore. Mettez-le en veille et attendez la fin de son tour.",
     agent_has_pending: "Cet agent a des cartes qui attendent votre décision. Traitez-les d’abord dans le dock des décisions.",

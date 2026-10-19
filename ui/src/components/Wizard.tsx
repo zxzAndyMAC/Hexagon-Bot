@@ -52,6 +52,9 @@ export function Wizard({ onDone, onCancel, seed }: {
   const [selectedRole, setSelectedRole] = useState<string | null>(null)
   // 本次打开向导后在详情区编辑过的角色：详情头部显示「改动已存入向导草稿」
   const [editedRoles, setEditedRoles] = useState<Set<string>>(new Set())
+  // 票 17：角色详情里换的头像。项目还不存在，图只留在内存（不进 localStorage 草稿：几张 2MB
+  // 图会撑爆配额），建项目时随单下发、核规整后按角色写入；中途退出续做时需重选。
+  const [roleAvatars, setRoleAvatars] = useState<Record<string, string>>({})
   const [doc, setDoc] = useState<ProvidersView>({ providers: [], slots: {} })
   const [providersLoaded, setProvidersLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -462,6 +465,8 @@ export function Wizard({ onDone, onCancel, seed }: {
         fastpathRole: draft.fastPath ? draft.fastRole : null,
         initGit: draft.initGit,
         agentsMd: agentsToWrite(),
+        roleAvatars: pickedRoles.filter((tp) => roleAvatars[tp.def.name])
+          .map((tp) => ({ role: tp.def.name, data_url: roleAvatars[tp.def.name] })),
       }, markStep)
       localStorage.removeItem(DRAFT_KEY)
       onDone()
@@ -614,6 +619,11 @@ export function Wizard({ onDone, onCancel, seed }: {
           setEditedRoles((s) => { const n = new Set(s); n.delete(name); return n })
         }}
         rolesBusy={rolesBusy}
+        avatars={roleAvatars}
+        onAvatar={(name, url) => setRoleAvatars((m) => {
+          const { [name]: _drop, ...rest } = m
+          return url ? { ...rest, [name]: url } : rest
+        })}
         doc={doc}
         aiDraft={{
           label: t(showRedraft ? 'wizard.aiRedraft' : 'wizard.aiDraft'),
