@@ -37,7 +37,8 @@ describe('设置外壳（E1）', () => {
     const back = vi.fn()
     await act(async () => root.render(<SettingsPage onBack={back} />))
     const ids = [...el.querySelectorAll('[data-nav]')].map((b) => b.getAttribute('data-nav'))
-    expect(ids).toEqual(['general', 'keys', 'models', 'team', 'perms', 'autonomy', 'prompts', 'skills', 'mcp', 'usage', 'logs', 'about'])
+    // owner-followups-1015 #14：新增项目级「发布」分区（components E14），排在 MCP 之后
+    expect(ids).toEqual(['general', 'keys', 'models', 'team', 'perms', 'autonomy', 'prompts', 'skills', 'mcp', 'release', 'usage', 'logs', 'about'])
     expect(el.querySelector('[data-nav="general"]')!.getAttribute('aria-current')).toBe('page')
     await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('Back to workbench'))!.click())
     expect(back).toHaveBeenCalled()

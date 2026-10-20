@@ -91,6 +91,8 @@ import type { OverrideOutcome } from './gen/OverrideOutcome'
 import type { InstallOutcome } from './gen/InstallOutcome'
 import type { GrantOutcome } from './gen/GrantOutcome'
 import type { PushOutcome } from './gen/PushOutcome'
+import type { ReleaseTarget } from './gen/ReleaseTarget'
+import type { ReleaseTargetDraft } from './gen/ReleaseTargetDraft'
 import type { FlagOutcome } from './gen/FlagOutcome'
 import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
 import type { ReturnSummary } from './gen/ReturnSummary'
@@ -162,6 +164,7 @@ export type {
   SessionSummary, CapabilityStatus,
   OneTimeTrigger,
   WorktreeAttachment, WorktreeOperation, WorktreeRequest, SessionRecord,
+  ReleaseTarget, ReleaseTargetDraft,
 }
 
 
@@ -550,6 +553,14 @@ export const api = {
   requestPush: (remote: string) => call<string>('request_push', { remote }),
   confirmPush: (qid: string) => call<PushOutcome>('confirm_push', { qid }),
   rejectPush: (qid: string) => call<void>('reject_push', { qid }),
+  // 发布目标（owner-followups-1015 #14）：设置·发布页；凭据明文只经 setReleaseCredential 进钥匙串，读面只回「已存入」。
+  releaseTargets: () => call<ReleaseTarget[]>('release_targets'),
+  saveReleaseTarget: (draft: ReleaseTargetDraft) => call<ReleaseTarget>('save_release_target', { draft }),
+  removeReleaseTarget: (id: string) => call<void>('remove_release_target', { id }),
+  setReleaseCredential: (id: string, credential: string, secret: string) =>
+    call<ReleaseTarget>('set_release_credential', { id, credential, secret }),
+  removeReleaseCredential: (id: string, credential: string) =>
+    call<ReleaseTarget>('remove_release_credential', { id, credential }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
@@ -1101,6 +1112,21 @@ const MOCK_DESIGN_OPTIONS = [
   { id: 'warm', title: '温暖手账', description: '衬线标题 · 米色纸感', layout: '卡片', typography: '衬线', palette: '米色', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm3', data_url: mockSvg('#fdf0dc', '#f8d6b8') }] },
 ]
 
+let MOCK_RELEASE: ReleaseTarget[] = [
+  { id: 'rel-npm', name: 'npm', command: 'npm publish --access public', cwd: 'packages/web', credentials: [{ name: 'NPM_TOKEN', set: true }, { name: 'NPM_OTP_SEED', set: false }] },
+  { id: 'rel-pages', name: 'GitHub Pages', command: 'npm run deploy', cwd: '', credentials: [] },
+]
+function mockSaveRelease(draft: ReleaseTargetDraft): ReleaseTarget {
+  const prev = MOCK_RELEASE.find((r) => r.id === draft.id)
+  const names = [...new Set(draft.credentials.map((c) => c.trim()).filter(Boolean))]
+  const next: ReleaseTarget = {
+    id: prev?.id ?? `rel-${Date.now()}`, name: draft.name.trim(), command: draft.command.trim(), cwd: draft.cwd.trim(),
+    credentials: names.map((name) => ({ name, set: prev?.credentials.find((c) => c.name === name)?.set ?? false })),
+  }
+  MOCK_RELEASE = prev ? MOCK_RELEASE.map((r) => (r.id === prev.id ? next : r)) : [...MOCK_RELEASE, next]
+  return next
+}
+
 function mock<T>(cmd: string, args?: Record<string, unknown>): T {
   if (MOCK_DECIDE_CMDS[cmd] && typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdecide')) {
     MOCK_DECIDED.add(MOCK_DECIDE_CMDS[cmd](args ?? {}))
@@ -1572,6 +1598,17 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'mcp_services':
       return [] as T
+    // owner-followups-1015 #14：设置·发布页预览——两条目标，npm 的令牌已存、OTP 未设置（只回名字与「已存入」）。
+    case 'release_targets': return MOCK_RELEASE.map((r) => ({ ...r, credentials: r.credentials.map((c) => ({ ...c })) })) as T
+    case 'save_release_target': return mockSaveRelease(args?.draft as ReleaseTargetDraft) as T
+    case 'remove_release_target': MOCK_RELEASE = MOCK_RELEASE.filter((r) => r.id !== args?.id); return null as T
+    case 'set_release_credential':
+    case 'remove_release_credential': {
+      const target = MOCK_RELEASE.find((r) => r.id === args?.id)
+      const cred = target?.credentials.find((c) => c.name === args?.credential)
+      if (cred) cred.set = cmd === 'set_release_credential'
+      return target as T
+    }
     case 'list_mcp_entries':
       return [
         { name: 'termius', command: 'ssh-mcp', args: ['--stdio'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },

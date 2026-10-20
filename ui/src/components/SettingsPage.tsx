@@ -24,11 +24,12 @@ import { KeysSection } from './settings/KeysSection'
 import { LogsSection } from './settings/LogsSection'
 import { McpSection } from './settings/McpSection'
 import { PermsSection } from './settings/PermsSection'
+import { ReleaseSection } from './settings/ReleaseSection'
 import { SkillsSection } from './settings/SkillsSection'
 import { TeamSection } from './settings/TeamSection'
 import { Group, NeedsProject, SetHead, SetWrap, SRow } from './settings/kit'
 
-export type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'autonomy' | 'usage' | 'logs' | 'prompts' | 'about'
+export type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'release' | 'autonomy' | 'usage' | 'logs' | 'prompts' | 'about'
 
 /** 导航顺序与图标（proto.js SET 表；autonomy 补在权限后，R-07）。 */
 const NAV: { id: Section; icon: IconName }[] = [
@@ -41,13 +42,15 @@ const NAV: { id: Section; icon: IconName }[] = [
   { id: 'prompts', icon: 'messages' },
   { id: 'skills', icon: 'book' },
   { id: 'mcp', icon: 'plug' },
+  // owner-followups-1015 #14（components E14 补设计）：项目级发布目标，排在 MCP 之后、用量之前
+  { id: 'release', icon: 'publish' },
   { id: 'usage', icon: 'chart-column' },
   { id: 'logs', icon: 'logs' },
   { id: 'about', icon: 'info' },
 ]
 
 /** 列表 | 详情分区铺满右侧（E2），其余平铺表单在右侧滚动。日志自己管滚动（只有表体滚）。 */
-const FILL = new Set<Section>(['team', 'models', 'skills', 'mcp', 'prompts', 'logs'])
+const FILL = new Set<Section>(['team', 'models', 'skills', 'mcp', 'release', 'prompts', 'logs'])
 
 /** 用量分区（ui-audit-2 票 05）：复用 UsageTab，「详情」在设置上下文里回工作台开用量明细。票 12 换皮。 */
 function UsageSection({ onDetail }: { onDetail?: () => void }) {
@@ -151,6 +154,7 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false, i
       case 'perms': return <PermsSection projectless={projectless} onOpenProject={onBack} />
       case 'skills': return <SkillsSection /> // 全局层无项目也可用（ADR 0057）
       case 'mcp': return <McpSection projectless={projectless} /> // 全局清单无项目可配（ADR 0057）
+      case 'release': return gated(<ReleaseSection />) // 项目级登记（ADR 0093），无项目不发必败 IPC
       case 'autonomy': return gated(<AutonomySection />)
       case 'usage': return gated(<UsageSection onDetail={onOpenUsageDetail} />)
       // 日志页不被 gated 吃掉——无项目时宿主记录仍要看（diagnostic-records 票 01）。
