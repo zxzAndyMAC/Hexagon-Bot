@@ -27,6 +27,11 @@ async function jump(page: Page, seq: number) {
 async function shell(page: Page, theme: Theme, lang: Lang, tag: string) {
   await boot(page, { theme, lang })
   await snap(page, `shell-dock-open-${tag}`)
+  // owner-followups-1015 #26：不可逆卡（推送）的红 30% 环线贴合坞的 16 圆角——曾画在直角卡盒上、四角戳出坞外。
+  // 走托管报告「定位到卡」同一事件翻页，不绑页码。
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('hexagon:locate-pending', { detail: 'q-pub' })))
+  await page.locator('.dock-card[data-danger]').waitFor()
+  await snap(page, `shell-dock-danger-${tag}`)
   await store(page, 's.getState().closePendingDialog()')
   await snap(page, `shell-dock-collapsed-${tag}`)
 }
