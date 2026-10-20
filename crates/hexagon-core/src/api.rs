@@ -1860,6 +1860,7 @@ impl Workbench {
             tasks: self.tasks.clone(),
             subagent: None,
             websearch: self.websearch.clone(),
+            images: Some(crate::image_gen::ImageAccess::new(self.creds.clone())),
             embedder: self.embedder.clone(),
             subagent_provider: None,
             reads: Default::default(),
@@ -4938,6 +4939,8 @@ pub fn data_boundary(
     Ok(crate::data_boundary::read(root, store, &doc))
 }
 
+#[cfg(test)]
+mod artist_image_tests;
 #[cfg(test)]
 mod artist_tests;
 #[cfg(test)]

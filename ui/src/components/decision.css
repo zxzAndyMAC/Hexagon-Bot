@@ -9,7 +9,11 @@
   box-shadow: var(--shadow-overlay); display: flex; flex-direction: column; position: relative;
   /* 补设计：坞不挤掉时间线——最高 55% 主区，正文卡内滚动（与 C12 钉顶卡同口径） */
   max-height: 55vh; }
-.dock .dock-card { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.dock .dock-card { display: flex; flex-direction: column; min-height: 0; flex: 1;
+  /* 修复即文档（owner-followups-1015 #26，2026-10-20 负责人截图）：卡曾经没有圆角，危险态红内环画在直角盒上，
+     四角从坞的 16 圆角外戳出来、与坞环线错开像留了缝。继承外壳圆角 = 同一常量、红环贴合坞边；
+     不改用 `.dock { overflow: hidden }` 裁切——那会把焦点环与正文滚动条一起裁掉。 */
+  border-radius: inherit; }
 .dock .dock-card > .dock-b { overflow-y: auto; min-height: 0; flex: 1; }
 
 /* ---- 头 ---- */
@@ -68,7 +72,9 @@
 
 /* ---- D8 独立形 dc（归来摘要、练习场、测试里单独渲染的卡） ---- */
 .dc { border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--shadow-raised); overflow: hidden; }
-.dc[data-danger], .dock-card[data-danger] { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent); }
+/* 危险态（不可逆：推送、清理工作树）环线画在卡本身：坞内是内环（坞的 overlay 环线与投影留在外壳上），
+   独立形是外环替换 raised 环线（`dc` 自身 overflow:hidden 不裁 box-shadow）。两者都跟各自圆角走。 */
+.dock-card[data-danger] { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent); }
 .dc[data-danger] { box-shadow: 0 0 0 1px color-mix(in oklch, var(--red) 30%, transparent), var(--shadow-md); }
 .dc + .dc { margin-top: 12px; }
 

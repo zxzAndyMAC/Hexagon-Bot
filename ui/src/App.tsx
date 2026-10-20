@@ -34,6 +34,8 @@ import { closeOtherTabs, closeTabsToRight, tabPath, stepTab } from './tabActions
 import { copyPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
 import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
+import { dispatchMessageAction, messageTarget } from './messageActions'
+import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, restoreMemberAvatar } from './memberActions'
 import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
 
@@ -288,6 +290,25 @@ export default function App() {
         e.preventDefault()
         const s = useUiStore.getState()
         if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView && s.activeTab) s.closeTab(s.activeTab)
+        return
+      }
+      // owner-followups-1015 #08（A16b 成员行 / 消息）：默认空绑定。消息动作作用于焦点（或选区）所在的消息，
+      // 成员动作作用于焦点成员行；没有目标就只吞掉这次按键（已被负责人绑给这个动作）。
+      for (const [action, verb] of [['copyMessage', 'copy'], ['quoteMessage', 'quote'], ['locateInRail', 'locate']] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const host = useUiStore.getState().modalScope === 'workbench' ? messageTarget() : null
+        if (host) dispatchMessageAction(host, verb)
+        return
+      }
+      for (const [action, run] of [['mentionMember', mentionMember], ['copyMemberName', copyMemberName],
+        ['changeMemberAvatar', changeMemberAvatar], ['restoreMemberAvatar', restoreMemberAvatar]] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const id = useUiStore.getState().modalScope === 'workbench' ? memberRowTarget() : null
+        if (id) void run(id)
         return
       }
       // owner-followups-1015 #05（A16b）：右键菜单动作的键位入口，默认空绑定（matches 对空串恒假）；同 ⌘W 只在画布可见时作用于当前页签。

@@ -3,6 +3,7 @@
 // 长度 = 层级（s 24 / m 16 / e 10），视口内提亮（in / cur），悬停或键盘聚焦出预览卡，点击跳转并闪烁目标行。
 // 键盘：⌘J（nodeRail）聚焦首道刻度，↑↓ 逐道移动并显示预览卡，↵ 跳转，Esc 回输入条。
 // 窗口过窄或画布挤占时 data-compact 收起不可见，键盘聚焦进来时照常显示（⌘J 仍可用）。
+// 鱼眼（票 27）：指针在轨上移动时按距离放大附近刻度，逻辑与取值出处见 railFisheye.ts。
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -13,6 +14,7 @@ import { Icon } from './Icon'
 import { Avatar } from './ui/avatar'
 import { Badge } from './ui/badge'
 import { Kbd } from './ui/kbd'
+import { useRailFisheye } from './railFisheye'
 
 type Highlight = 'cur' | 'in' | undefined
 
@@ -93,6 +95,7 @@ export function NodeRail({ marks, highlights, compact, onJump }: {
   const [active, setActive] = useState<number | null>(null)
   const [cardTop, setCardTop] = useState(0)
   const [focusIndex, setFocusIndex] = useState(0)
+  const fisheye = useRailFisheye(railRef, marks.length)
   const ticks = () => [...(railRef.current?.querySelectorAll<HTMLButtonElement>('[data-tick]') ?? [])]
 
   const show = (index: number) => {
@@ -134,11 +137,14 @@ export function NodeRail({ marks, highlights, compact, onJump }: {
   return (
     <div ref={railRef} className="rail" data-node-rail data-compact={compact || undefined}
       role="toolbar" aria-orientation="vertical" aria-label={binding ? `${t('rail.label')} ${binding}` : t('rail.label')}
-      onMouseLeave={() => setActive(null)} onKeyDown={onKeyDown}
+      onMouseLeave={() => setActive(null)} onKeyDown={onKeyDown} {...fisheye}
       onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActive(null) }}>
       {marks.map((mark, index) => (
         <button key={mark.eventId ?? `${mark.type}-${index}`} type="button" data-tick className="tk"
           data-tier={mark.tier} data-tone={mark.tone} data-hl={highlights[index]}
+          // owner-followups-1015 #08：消息右键「在节点轨中定位」按事件 id 找刻度（合并刻度列出全部）。
+          data-tick-event={mark.merged ? undefined : mark.eventId}
+          data-tick-events={mark.merged?.map(m => m.eventId).filter(id => id != null).join(' ')}
           tabIndex={index === safeFocus ? 0 : -1}
           aria-label={tickName(mark, t, roleOf, i18n.language)}
           onMouseEnter={() => show(index)}

@@ -27,6 +27,8 @@ import { freshTally, jumpFace, showStickButton, TIMELINE_TAIL_PX } from '../time
 import { JumpAnnouncer, JumpToLatest } from './JumpToLatest'
 import { useJumpOffset } from '../useJumpOffset'
 import { NodeRail } from './NodeRail'
+import { MessageContextMenu } from './MessageMenu'
+import { RailEvents } from '../messageActions'
 import { modelDisplayName } from '../modelpick'
 import type { TFunction } from 'i18next'
 import './timeline.css'
@@ -39,6 +41,7 @@ import type { AtomOptions } from '../timelineAtoms'
 import { ReturnSummaryCard, ReturnSummaryMarker } from './ReturnSummary'
 import { FreshStart } from './FreshStart'
 import { ArtistNotice, ARTIST_NOTICE_KIND } from './ArtistNotice'
+import { ArtistProposalCard, ARTIST_PROPOSAL_KIND } from './ArtistProposal'
 import { IntakeCard } from './IntakeCard'
 import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
 import { useDelegation } from '../useDelegation'
@@ -263,6 +266,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
   if (MODEL_RECOVERY_KINDS.includes(sub)) return <ModelRecoveryRow item={item} />
   if (sub === ARTIST_NOTICE_KIND) return <ArtistNotice item={item} />
+  if (sub === ARTIST_PROPOSAL_KIND) return <ArtistProposalCard item={item} />
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>
   }
@@ -401,7 +405,7 @@ function OwnerMessage({ item, steered, turnBoundary, turnActive, story }: {
     if (path) openTab({ id: `file:${path}`, kind: 'file', title: path.split('/').pop() || path, path })
   }
   return (
-    <div className="tl-me" aria-label={t('timeline.owner')}>
+    <MessageContextMenu eventId={item.event.id} body={m.body} className="tl-me" aria-label={t('timeline.owner')}>
       {m.element_refs?.map(reference => <ElementReference key={reference.id} reference={reference} />)}
       {/* 票 03：图片附件引用 chip（D3 只读形，在气泡上方）——字节在 .hexagon/inbox/，渲染引用不渲染图本体 */}
       {m.attachments?.length > 0 && (
@@ -422,7 +426,7 @@ function OwnerMessage({ item, steered, turnBoundary, turnActive, story }: {
           {queued && <span className="chip info">{t('timeline.steeringQueued')}</span>}
         </div>
       )}
-    </div>
+    </MessageContextMenu>
   )
 }
 
@@ -437,7 +441,7 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
   const title = member?.role ?? m.author
   const time = fmtTime(item.event.created_at)
   return (
-    <div className="tl-msg">
+    <MessageContextMenu eventId={item.event.id} body={m.body} className="tl-msg">
       {member && (
         <button type="button" className="tl-face" title={t('agent.openTab')} aria-label={`${t('agent.openTab')} · ${member.role}`}
           onClick={() => openTab({ id: `agent:${member.id}`, kind: 'agent', title: member.role, agentId: member.id, role: member.role })}>
@@ -468,7 +472,7 @@ function AgentMessage({ item, story }: { item: TimelineItem; story?: boolean }) 
         <ThinkingRow text={m.thinking} />
         <CollapsibleBody text={m.body} unclamped={story} atoms={atoms} />
       </div>
-    </div>
+    </MessageContextMenu>
   )
 }
 
@@ -891,6 +895,8 @@ export function Timeline() {
     { hostNodes: projectRoot != null ? nodes : undefined, hostWatermark: nodesWatermark, filter })), [projectRoot, nodes, nodesWatermark, rows, pending.length, timeline, filter])
   const [range, setRange] = useState<{ start: number; end: number } | null>(null)
   const highlights = useMemo(() => markHighlights(marks, range), [marks, range])
+  // owner-followups-1015 #08：消息右键「在节点轨中定位」只对有刻度的消息可用。
+  const railEvents = useMemo(() => new Set(marks.flatMap(m => (m.merged ?? [m]).flatMap(x => x.eventId != null ? [x.eventId] : []))), [marks])
   const areaRef = useRef<HTMLDivElement>(null)
   // 票 16c：虚拟化重挂把聚焦行移出 DOM 时，焦点放回原行（退路：滚动容器），不掉到 body。
   useEffect(() => {
@@ -1102,6 +1108,7 @@ export function Timeline() {
 
   return (
     <TooltipProvider>
+    <RailEvents.Provider value={railEvents}>
     <FreshContext.Provider value={fresh}>
     <div className="tl" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* 过滤（A7 全部 / 消息 / 决策）与导出钮同排，贴在对话列上沿（interaction §1）。
@@ -1174,6 +1181,7 @@ export function Timeline() {
       </div>
     </div>
     </FreshContext.Provider>
+    </RailEvents.Provider>
     </TooltipProvider>
   )
 }
