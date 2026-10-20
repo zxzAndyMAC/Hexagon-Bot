@@ -299,7 +299,10 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl .rail:hover { background: color-mix(in oklch, var(--app-main) 85%, transparent); }
 .tl .rail[data-compact]:not(:focus-within) { opacity: 0; pointer-events: none; }
 .tl .rail .tk { display: block; height: 9px; padding: 0; border: 0; background: none; cursor: pointer; position: relative; border-radius: 2px; }
-.tl .rail .tk::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); border-radius: 2px; background: var(--ink-3); opacity: .55; }
+/* 鱼眼（票 27，interaction §5）：只缩放画在伪元素上的刻度与焦点环，按钮本体（命中区）不动、不触发布局；
+   伪元素不吃指针——否则放大后的刻度伸出按钮会把命中区一起带大，指针在轨道左缘外也算悬停。
+   以右缘为原点向左伸（不推挤轨道外布局，轨道本体不伸长）。倍数由 NodeRail 写行内 --rail-mag。 */
+.tl .rail .tk::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%) scale(var(--rail-mag)); transform-origin: right center; border-radius: 2px; background: var(--ink-3); opacity: .55; pointer-events: none; transition: transform 150ms var(--ease); }
 .tl .rail .tk[data-tier="s"] { width: 24px; }
 .tl .rail .tk[data-tier="m"] { width: 16px; }
 .tl .rail .tk[data-tier="e"] { width: 10px; }
@@ -308,7 +311,9 @@ button.tl-rs-range:focus-visible { outline: none; box-shadow: var(--focus-ring);
 .tl .rail .tk[data-tone="warn"]::before { background: var(--orange); opacity: 1; }
 .tl .rail .tk[data-tone="err"]::before { background: var(--red); opacity: 1; }
 .tl .rail .tk[data-tone="mg"]::before { background: var(--accent); opacity: .9; }
-.tl .rail .tk:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* 焦点环画在 ::after 上与刻度同比缩放，鱼眼下仍贴合（票 27）；倍数为 1 时与原 button 上的 box-shadow 等同。 */
+.tl .rail .tk:focus-visible { outline: none; }
+.tl .rail .tk:focus-visible::after { content: ''; position: absolute; inset: 0; border-radius: 2px; box-shadow: var(--focus-ring); transform: scale(var(--rail-mag)); transform-origin: right center; pointer-events: none; transition: transform 150ms var(--ease); }
 .tl .rail-card { position: absolute; right: calc(100% + 6px); z-index: 13; width: 300px; padding: 12px 14px; border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--shadow-overlay); text-align: left; pointer-events: none; }
 .tl .rail-card-k { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
 .tl .rail-card-t { font-size: 14px; font-weight: 600; margin-top: 6px; color: var(--ink); overflow-wrap: anywhere; }

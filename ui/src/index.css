@@ -101,10 +101,11 @@
      不在此定义，只在 @theme inline 里映射（规范：不得把 Hexagon --accent 改名） */
   --radius: var(--r-card);
   /* 布局与组件局部变量（票 03 / 07）：对话列宽（画布并排时主区覆写为 560，foundations §5）、
-     上下文圆环进度与环色（D5，ContextMeter 行内覆写）。 */
+     上下文圆环进度与环色（D5，ContextMeter 行内覆写）、节点轨鱼眼倍数（C15，NodeRail 逐道行内覆写，票 27）。 */
   --col-w: 720px;
   --p: 0;
   --ring-c: var(--ink-2);
+  --rail-mag: 1;
 }
 
 [data-theme='dark'],
