@@ -99,6 +99,9 @@ pub struct ToolContext {
     pub subagent: Option<crate::subagent::Scope>,
     /// web 搜索摘要槽（票 03）：None = 未配置（工具回报「槽未配置」）。
     pub websearch: Option<Arc<dyn crate::websearch::SearchBackend>>,
+    /// 出图通道（owner-followups-1015 票 20）：Workbench 注入（封装钥匙仓，工具拿不到钥匙）；
+    /// None = 本 ctx 不能出图（临时构造的 ctx、子代理）。
+    pub images: Option<crate::image_gen::ImageAccess>,
     /// 语义索引嵌入器（票 02）：None = 默认本地哈希嵌入器。
     /// 测试注入替身——嵌入向量本身是实现细节，替身只要确定性。
     pub embedder: Option<Arc<dyn crate::semsearch::Embedder>>,
@@ -159,6 +162,7 @@ impl Default for ToolContext {
             tasks: Default::default(),
             subagent: None,
             websearch: None,
+            images: None,
             embedder: None,
             subagent_provider: None,
             reads: Default::default(),

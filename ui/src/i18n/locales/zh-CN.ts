@@ -1185,6 +1185,9 @@ export default {
   errors: {
     avatar_too_large: '图片超过 2MB——请换小一点的文件',
     avatar_unreadable: '这个文件不是可识别的 PNG、JPEG、WebP 或 GIF 图片，请换一个文件。',
+    artist_proposal_missing: "这份头像提案已经不存在。",
+    artist_role_not_in_proposal: "选中的角色在这份提案里没有生成好的图，请换一张或跳过。",
+    image_generation_failed: "出图模型没有返回图片。请检查设置里的出图槽位后重试。",
     bad_agent_id: '这个 Agent id 不能用于头像。刷新团队后再试。',
     agent_not_found: "这个 Agent 已不在团队里，刷新后再看。",
     agent_busy: "这个 Agent 还在工作。先休眠，等它这一回合结束再移出。",
@@ -1270,5 +1273,5 @@ export default {
     reveal_launch: "没能打开文件管理器",
   },
   feedback: {"region": "通知", "removeRecent": "从最近项目移除", "switchWaitTitle": "切换项目需要等待", "switchWaitBody": "：已暂停 {{project}} 的电脑操作，当前动作停下后就切换；回来时可以继续。", "stayHere": "留在此项目", "treeEmptyBody": "这个目录里还没有文件，新建一个开始。", "searchEmptyBody": "换个关键词试试，或者清空搜索看全部。", "pickerEmptyBody": "还没有可选项；在设置里添加后会出现在这里。", "clearSearch": "清空搜索"},
-  artist: {"unconfigured": "给团队画头像需要出图模型，出图槽位还没有绑定。", "unsupported": "给团队画头像需要出图模型，出图槽位绑定的 {{model}} 不能出图。", "bindImageModel": "去设置绑定出图模型"},
+  artist: {"unconfigured": "给团队画头像需要出图模型，出图槽位还没有绑定。", "unsupported": "给团队画头像需要出图模型，出图槽位绑定的 {{model}} 不能出图。", "bindImageModel": "去设置绑定出图模型", "proposalTitle": "头像提案", "proposalSub": "{{count}} 个角色 · {{style}}", "applyNote": "应用后按角色替换头像，该角色的所有成员生效", "applied": "已应用到 {{count}} 个角色", "applyAll": "全部应用", "loading": "正在读取提案…", "avatarOf": "{{role}}的头像", "failed": "这张没有生成出来", "appliedChip": "已应用", "redraw": "换一张", "skip": "跳过", "unskip": "取消跳过", "prompts": "出图提示词"},
 }

@@ -1185,6 +1185,9 @@ export default {
   errors: {
     avatar_too_large: 'L’image dépasse 2 Mo — choisissez un fichier plus petit',
     avatar_unreadable: 'Ce fichier n’est pas une image PNG, JPEG, WebP ou GIF lisible. Choisissez-en un autre.',
+    artist_proposal_missing: "Cette proposition d’avatars n’existe plus.",
+    artist_role_not_in_proposal: "Un rôle choisi n’a pas d’image générée dans cette proposition. Essayez-en une autre ou ignorez-le.",
+    image_generation_failed: "Le modèle d’images n’a renvoyé aucune image. Vérifiez l’emplacement Images dans les Réglages et réessayez.",
     bad_agent_id: 'Cet identifiant d’agent ne peut pas servir pour un avatar. Actualisez l’équipe et réessayez.',
     agent_not_found: "Cet agent ne fait plus partie de l’équipe. Actualisez pour voir la liste.",
     agent_busy: "Cet agent travaille encore. Mettez-le en veille et attendez la fin de son tour.",
@@ -1270,5 +1273,5 @@ export default {
     reveal_launch: "Impossible d’ouvrir le gestionnaire de fichiers",
   },
   feedback: {"region": "Notifications", "removeRecent": "Retirer des projets récents", "switchWaitTitle": "Le changement de projet doit attendre", "switchWaitBody": " : les actions sur l'ordinateur dans {{project}} sont en pause ; le changement aura lieu dès l'arrêt de l'action en cours. Vous pourrez les reprendre à votre retour.", "stayHere": "Rester dans ce projet", "treeEmptyBody": "Ce dossier ne contient encore aucun fichier. Créez-en un pour commencer.", "searchEmptyBody": "Essayez un autre mot-clé ou effacez la recherche pour tout afficher.", "pickerEmptyBody": "Rien à choisir pour l’instant. Les éléments ajoutés dans les Réglages apparaîtront ici.", "clearSearch": "Effacer la recherche"},
-  artist: {"unconfigured": "Pour dessiner les avatars de l’équipe, il faut un modèle d’images, et l’emplacement Images n’est pas encore lié.", "unsupported": "Pour dessiner les avatars de l’équipe, il faut un modèle d’images. {{model}}, lié à l’emplacement Images, ne génère pas d’images.", "bindImageModel": "Lier un modèle d’images dans les Réglages"},
+  artist: {"unconfigured": "Pour dessiner les avatars de l’équipe, il faut un modèle d’images, et l’emplacement Images n’est pas encore lié.", "unsupported": "Pour dessiner les avatars de l’équipe, il faut un modèle d’images. {{model}}, lié à l’emplacement Images, ne génère pas d’images.", "bindImageModel": "Lier un modèle d’images dans les Réglages", "proposalTitle": "Proposition d’avatars", "proposalSub": "{{count}} rôles · {{style}}", "applyNote": "Appliquer remplace l’avatar de chaque rôle pour tous ses membres", "applied": "Appliqué à {{count}} rôles", "applyAll": "Tout appliquer", "loading": "Chargement de la proposition…", "avatarOf": "Avatar de {{role}}", "failed": "Image non générée", "appliedChip": "Appliqué", "redraw": "Une autre", "skip": "Ignorer", "unskip": "Inclure", "prompts": "Prompts utilisés"},
 }

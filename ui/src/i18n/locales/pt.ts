@@ -1185,6 +1185,9 @@ export default {
   errors: {
     avatar_too_large: 'A imagem passa de 2 MB — escolha um arquivo menor',
     avatar_unreadable: 'Este arquivo não é uma imagem PNG, JPEG, WebP ou GIF legível. Escolha outro arquivo.',
+    artist_proposal_missing: "Esta proposta de avatares não existe mais.",
+    artist_role_not_in_proposal: "Uma função escolhida não tem imagem gerada nesta proposta. Tente outra ou pule.",
+    image_generation_failed: "O modelo de imagens não retornou nenhuma imagem. Verifique o slot de imagens nas Configurações e tente de novo.",
     bad_agent_id: 'Este id de agente não pode ser usado para avatar. Atualize a equipe e tente de novo.',
     agent_not_found: "Este agente não está mais na equipe. Atualize para ver a lista.",
     agent_busy: "Este agente ainda está trabalhando. Coloque-o em repouso e espere o turno terminar.",
@@ -1270,5 +1273,5 @@ export default {
     reveal_launch: "Não foi possível abrir o gerenciador de arquivos",
   },
   feedback: {"region": "Notificações", "removeRecent": "Remover dos projetos recentes", "switchWaitTitle": "A troca de projeto precisa esperar", "switchWaitBody": ": as ações no computador em {{project}} estão pausadas; a troca acontece quando a atual parar. Você pode continuá-las ao voltar.", "stayHere": "Ficar neste projeto", "treeEmptyBody": "Esta pasta ainda não tem arquivos. Crie um para começar.", "searchEmptyBody": "Tente outra palavra-chave ou limpe a busca para ver tudo.", "pickerEmptyBody": "Ainda não há opções. Itens adicionados nas Configurações aparecem aqui.", "clearSearch": "Limpar busca"},
-  artist: {"unconfigured": "Para desenhar os avatares da equipe é preciso um modelo de imagens, e o slot de imagens ainda não está vinculado.", "unsupported": "Para desenhar os avatares da equipe é preciso um modelo de imagens. {{model}}, vinculado ao slot de imagens, não gera imagens.", "bindImageModel": "Vincular um modelo de imagens nas Configurações"},
+  artist: {"unconfigured": "Para desenhar os avatares da equipe é preciso um modelo de imagens, e o slot de imagens ainda não está vinculado.", "unsupported": "Para desenhar os avatares da equipe é preciso um modelo de imagens. {{model}}, vinculado ao slot de imagens, não gera imagens.", "bindImageModel": "Vincular um modelo de imagens nas Configurações", "proposalTitle": "Proposta de avatares", "proposalSub": "{{count}} funções · {{style}}", "applyNote": "Aplicar substitui o avatar de cada função para todos os seus membros", "applied": "Aplicado a {{count}} funções", "applyAll": "Aplicar tudo", "loading": "Carregando a proposta…", "avatarOf": "Avatar de {{role}}", "failed": "Imagem não gerada", "appliedChip": "Aplicado", "redraw": "Outra", "skip": "Pular", "unskip": "Incluir", "prompts": "Prompts usados"},
 }

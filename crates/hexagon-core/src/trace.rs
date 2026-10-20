@@ -759,6 +759,11 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "computer_checkpoint",
     // owner-followups-1015 票 19：画师发现出图槽未绑 / 不支持（artist::IMAGE_MODEL_MISSING）
     "artist_image_model_missing",
+    // 票 20：画师每次外发出图请求前（artist_proposal::IMAGE_REQUEST，载荷 = 外发的三样 + 提示词）、
+    // 头像提案出炉（PROPOSAL）、负责人应用（APPLIED）
+    "artist_image_request",
+    "artist_avatar_proposal",
+    "artist_avatars_applied",
     "acceptance_exception",
     "artifact_materialization",
     "policy_recovery",

@@ -1185,6 +1185,9 @@ export default {
   errors: {
     avatar_too_large: 'Image is over 2 MB — pick a smaller file',
     avatar_unreadable: 'This file isn’t a readable PNG, JPEG, WebP or GIF image. Pick another file.',
+    artist_proposal_missing: "This avatar proposal no longer exists.",
+    artist_role_not_in_proposal: "A picked role has no generated image in this proposal. Try another image or skip it.",
+    image_generation_failed: "The image model didn't return an image. Check the image slot in Settings and try again.",
     bad_agent_id: 'This agent id can’t be used for an avatar. Refresh the team and try again.',
     agent_not_found: "This agent is no longer on the team. Refresh to see the current roster.",
     agent_busy: "This agent is still working. Put it to sleep and let its turn finish, then remove it.",
@@ -1270,5 +1273,5 @@ export default {
     reveal_launch: "Couldn’t open the file manager",
   },
   feedback: {"region": "Notifications", "removeRecent": "Remove from recent projects", "switchWaitTitle": "Switching projects has to wait", "switchWaitBody": ": computer actions in {{project}} are paused; switching once the current one stops. You can continue them when you come back.", "stayHere": "Stay in this project", "treeEmptyBody": "This folder has no files yet. Create one to start.", "searchEmptyBody": "Try another keyword, or clear the search to see everything.", "pickerEmptyBody": "Nothing to choose yet. Items added in Settings show up here.", "clearSearch": "Clear search"},
-  artist: {"unconfigured": "Drawing avatars for the team needs an image model, and the image slot isn't bound yet.", "unsupported": "Drawing avatars for the team needs an image model. {{model}}, bound to the image slot, can't generate images.", "bindImageModel": "Bind an image model in Settings"},
+  artist: {"unconfigured": "Drawing avatars for the team needs an image model, and the image slot isn't bound yet.", "unsupported": "Drawing avatars for the team needs an image model. {{model}}, bound to the image slot, can't generate images.", "bindImageModel": "Bind an image model in Settings", "proposalTitle": "Avatar proposal", "proposalSub": "{{count}} roles · {{style}}", "applyNote": "Applying replaces each role's avatar for all its members", "applied": "Applied to {{count}} roles", "applyAll": "Apply all", "loading": "Loading the proposal…", "avatarOf": "Avatar for {{role}}", "failed": "Image not generated", "appliedChip": "Applied", "redraw": "Try another", "skip": "Skip", "unskip": "Include", "prompts": "Prompts used"},
 }
