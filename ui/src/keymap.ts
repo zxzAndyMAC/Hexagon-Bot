@@ -78,6 +78,8 @@ export type ActionId =
   | 'nextTab'
   | 'prevTab'
   | 'copyPath'
+  | 'insertPath'
+  | 'revealPath'
   | 'settings'
   | 'focusComposer'
   | 'stageRewind'
@@ -223,6 +225,8 @@ const DEFAULTS: Record<ActionId, string> = {
   // owner-followups-1015 #05（A16b）：右键菜单的新动作默认不绑键位（alt+mod+shift+* 已挤满），
   // 进命令面板与设置·键盘，负责人自己指定。作用对象 = 当前页签（右键时 = 目标页签）。
   closeOtherTabs: '', closeTabsToRight: '', copyPath: '',
+  // owner-followups-1015 #07（A16b 文件树行）：同上默认空绑定；作用对象 = 焦点文件树行，否则当前文件 / 产物页签。
+  insertPath: '', revealPath: '',
   // owner-followups-1015 #06（A22「溢出」）：页签多到滚出视区后键盘切换，同 VS Code / 浏览器的 ⌘⇧] / ⌘⇧[。
   nextTab: 'mod+shift+]', prevTab: 'mod+shift+[',
   settings: 'mod+,',
@@ -370,6 +374,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'nextTab', labelKey: 'keys.nextTab' },
   { id: 'prevTab', labelKey: 'keys.prevTab' },
   { id: 'copyPath', labelKey: 'keys.copyPath' },
+  { id: 'insertPath', labelKey: 'keys.insertPath' },
+  { id: 'revealPath', labelKey: 'keys.revealPath' },
   { id: 'settings', labelKey: 'keys.settings' },
   { id: 'focusComposer', labelKey: 'keys.composer' },
   { id: 'permissionOptions', labelKey: 'projectPermission.options' },

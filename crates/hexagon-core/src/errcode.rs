@@ -216,6 +216,9 @@ impl_error_code!(
     Artifact,
 );
 impl_error_code!(crate::files::RepoFsError, Io);
+// owner-followups-1015 #07：揭示判定的拒绝原因码（reveal_outside_project / reveal_missing / reveal_launch），
+// 界面走 `errors.<code>`。
+impl_error_code!(crate::reveal::RevealError);
 impl_error_code!(crate::trace::TraceError, Db, Sqlite, Json, Io, Cards,);
 impl_error_code!(
     crate::turn::TurnError,
