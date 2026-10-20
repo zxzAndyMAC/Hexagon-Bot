@@ -670,7 +670,7 @@ export default {
     stepComputerObserve: "コンピューターを観察", stepComputerAction: "コンピューターを操作", stepComputerNavigate: "コンピューターで移動",
     stepLoadSkill: "スキルを読み込む", stepSearchSkills: "スキルを検索", skillSource: "出典", skillLoaded: "読み込み済み",
  chain: '実行チェーン', sleep: 'スリープ', wake: '起こす',
-    noEvents: 'このエージェントのイベントはまだありません', changeAvatar: 'アバターを変更', openTab: 'アクティビティを開く',
+    noEvents: 'このエージェントのイベントはまだありません', openTab: 'アクティビティを開く',
     avatarTooBig: '画像が 2MB を超えています——小さいファイルを選んでください',
     stepRead: 'ファイル読込', stepWrite: 'ファイル変更', stepBash: 'コマンド実行',
     stepList: 'ディレクトリ一覧', stepSearch: '検索', stepTool: 'ツール',
@@ -1149,7 +1149,16 @@ export default {
     saveFile: 'ファイルを保存',
     confirmIntake: '開始草案を確認',
   },
+  // 票 17：头像按角色存 + 实例覆盖（规范 components E4「头像」）
+  avatar: {
+    changeRole: 'ロールのアバターを変更（全インスタンス）',
+    changeInstance: 'このエージェントだけアバターを変更',
+    restoreDefault: 'デフォルトに戻す',
+  },
   errors: {
+    avatar_too_large: '画像が 2MB を超えています——小さいファイルを選んでください',
+    avatar_unreadable: 'PNG・JPEG・WebP・GIF として読み込めないファイルです。別のファイルを選んでください。',
+    bad_agent_id: 'このエージェント ID はアバターに使えません。チームを更新してから再試行してください。',
     agent_not_found: "このエージェントはもうチームにいません。更新して確認してください。",
     agent_busy: "このエージェントはまだ作業中です。休止させ、このターンが終わってから外してください。",
     agent_has_pending: "このエージェントにはあなたの判断待ちのカードがあります。先に保留ドックで処理してください。",

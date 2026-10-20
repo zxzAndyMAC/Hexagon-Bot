@@ -670,7 +670,7 @@ export default {
     stepComputerObserve: "Observe computer", stepComputerAction: "Operate computer", stepComputerNavigate: "Navigate computer",
     stepLoadSkill: "Load skill", stepSearchSkills: "Search skills", skillSource: "Source", skillLoaded: "Loaded",
  chain: 'Execution chain', sleep: 'Sleep', wake: 'Wake',
-    noEvents: 'No events for this agent yet', changeAvatar: 'Change avatar', openTab: 'Open agent tab',
+    noEvents: 'No events for this agent yet', openTab: 'Open agent tab',
     avatarTooBig: 'Image is over 2 MB — pick a smaller file',
     stepRead: 'Read file', stepWrite: 'Write file', stepBash: 'Run command',
     stepList: 'List dir', stepSearch: 'Search', stepTool: 'Tool',
@@ -1149,7 +1149,16 @@ export default {
     saveFile: 'Save file',
     confirmIntake: 'Confirm opening draft',
   },
+  // 票 17：头像按角色存 + 实例覆盖（规范 components E4「头像」）
+  avatar: {
+    changeRole: 'Change role avatar (all instances)',
+    changeInstance: 'Change avatar for this agent only',
+    restoreDefault: 'Restore default',
+  },
   errors: {
+    avatar_too_large: 'Image is over 2 MB — pick a smaller file',
+    avatar_unreadable: 'This file isn’t a readable PNG, JPEG, WebP or GIF image. Pick another file.',
+    bad_agent_id: 'This agent id can’t be used for an avatar. Refresh the team and try again.',
     agent_not_found: "This agent is no longer on the team. Refresh to see the current roster.",
     agent_busy: "This agent is still working. Put it to sleep and let its turn finish, then remove it.",
     agent_has_pending: "This agent has cards waiting for your decision. Handle them in the pending dock first.",

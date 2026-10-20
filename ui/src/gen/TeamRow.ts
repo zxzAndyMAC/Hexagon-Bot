@@ -7,8 +7,13 @@
 export type TeamRow = { id: string, role: string, model_slot: string | null, status: 'active' | 'sleeping', 
 /**
  * 头像内容哈希（票 07）：随行下发，UI 哈希变了才拉 data URL。
+ * 票 17 起是**生效**头像（实例覆盖 > 角色头像）的哈希。
  */
 avatar_hash: string | null, 
+/**
+ * 本实例有自己的覆盖图（票 17）：Agent 详情据此决定「恢复默认」可不可点。
+ */
+avatar_override: boolean, 
 /**
  * 当前模型展示名（gap B2/B6）：实例槽（空 = `default`）经 `resolve_slot` 解析。
  * 是「现在用哪个模型」，不是某条消息当时用的模型；解析不到为 None。

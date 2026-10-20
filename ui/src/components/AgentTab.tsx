@@ -22,6 +22,7 @@ import { useTimelineWindow } from '../useTimelineWindow'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { ExecBody, CallStatus } from './ExecCard'
 import { Avatar } from '@/components/ui/avatar'
+import { RestoreAvatarButton, useAvatarFile } from './AvatarPicker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
@@ -71,7 +72,12 @@ export function AgentTab({ agentId }: { agentId: string }) {
   const image: ImageGenerationSlot = providers?.image_generation ?? { state: 'unconfigured' }
   const avatarUrl = useUiStore((s) => s.avatars[agentId])
   const member = team.find((m) => m.id === agentId)
-  const fileRef = useRef<HTMLInputElement>(null)
+  // 票 17：画布 Agent 详情换的是实例覆盖；「恢复默认」删覆盖、露出角色头像。
+  const avatarFile = useAvatarFile(async (url) => {
+    const epoch = useUiStore.getState().projectEpoch
+    await api.setAgentAvatar(agentId, url)
+    if (useUiStore.getState().projectEpoch === epoch) await invalidate('team')
+  })
   const [page, setPage] = useState<Page>('activity')
   const [detail, setDetail] = useState<AgentDetail | null>(null)
   useEffect(() => {
@@ -97,38 +103,20 @@ export function AgentTab({ agentId }: { agentId: string }) {
   const reviewerName = reviewer ? team.find((m) => m.id === reviewer || m.role === reviewer)?.role ?? reviewer : null
   const sub = [duty, reviewerName ? t('agentDetail.reviewer', { who: reviewerName }) : null].filter(Boolean).join(' · ')
 
-  const pickAvatar = (f: File) => {
-    // ui-audit 票 04（P1-6）：>2MB 本地拒绝不发请求（data URL 会膨胀 ~4/3）；上传失败走 toast。
-    if (f.size > 2 * 1024 * 1024) { pushToast(t('agent.avatarTooBig'), 'err'); return }
-    // Benchmark I1 / 2026-10-06 Spec: a delayed A FileReader previously
-    // fetched B's IPC identity and wrote B's same-named agent avatar.
-    const epoch = useUiStore.getState().projectEpoch
-    const r = new FileReader()
-    r.onload = async () => {
-      if (useUiStore.getState().projectEpoch !== epoch) return
-      try {
-        await api.setAgentAvatar(agentId, String(r.result))
-        if (useUiStore.getState().projectEpoch === epoch) await invalidate('team')
-      } catch (err) {
-        if (useUiStore.getState().projectEpoch === epoch) pushToast(errText(err), 'err')
-      }
-    }
-    r.readAsDataURL(f)
-  }
-
   return (
     <div data-agent-detail className="flex min-h-0 flex-1 flex-col">
       {/* 头卡 */}
       <div className="flex-none px-[18px] pt-[18px]">
         <div className="flex items-center gap-3.5">
           <Avatar agentId={agentId} name={member.role} size={40} src={avatarUrl}
-            onChangeImage={() => fileRef.current?.click()} changeImageLabel={t('agent.changeAvatar')} />
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) pickAvatar(f); e.target.value = '' }} />
+            onChangeImage={avatarFile.open} changeImageLabel={t('avatar.changeInstance')} />
+          {avatarFile.input}
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold text-ink">{member.role}</div>
             {sub && <div className="truncate text-[12.5px] text-ink-2" title={sub}>{sub}</div>}
           </div>
+          <RestoreAvatarButton shown={!!member.avatar_override}
+            onRestore={async () => { await api.clearAgentAvatar(agentId); await invalidate('team') }} />
           <Button size="sm" variant={sleeping ? 'primary' : 'default'} data-agent-sleep
             onClick={async () => {
               try { await api.setAgentSleeping(agentId, !sleeping); await invalidate('team') }

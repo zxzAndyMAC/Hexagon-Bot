@@ -670,7 +670,7 @@ export default {
     stepComputerObserve: "Observar computador", stepComputerAction: "Operar computador", stepComputerNavigate: "Navegar no computador",
     stepLoadSkill: "Carregar habilidade", stepSearchSkills: "Buscar habilidades", skillSource: "Origem", skillLoaded: "Carregada",
  chain: 'Cadeia de execução', sleep: 'Suspender', wake: 'Acordar',
-    noEvents: 'Este agente ainda não tem eventos', changeAvatar: 'Trocar avatar', openTab: 'Abrir atividade',
+    noEvents: 'Este agente ainda não tem eventos', openTab: 'Abrir atividade',
     avatarTooBig: 'A imagem passa de 2 MB — escolha um arquivo menor',
     stepRead: 'Ler arquivo', stepWrite: 'Editar arquivo', stepBash: 'Executar comando',
     stepList: 'Listar diretório', stepSearch: 'Buscar', stepTool: 'Ferramenta',
@@ -1149,7 +1149,16 @@ export default {
     saveFile: 'Salvar arquivo',
     confirmIntake: 'Confirmar o rascunho de abertura',
   },
+  // 票 17：头像按角色存 + 实例覆盖（规范 components E4「头像」）
+  avatar: {
+    changeRole: 'Trocar avatar do papel (todas as instâncias)',
+    changeInstance: 'Trocar avatar só deste agente',
+    restoreDefault: 'Restaurar padrão',
+  },
   errors: {
+    avatar_too_large: 'A imagem passa de 2 MB — escolha um arquivo menor',
+    avatar_unreadable: 'Este arquivo não é uma imagem PNG, JPEG, WebP ou GIF legível. Escolha outro arquivo.',
+    bad_agent_id: 'Este id de agente não pode ser usado para avatar. Atualize a equipe e tente de novo.',
     agent_not_found: "Este agente não está mais na equipe. Atualize para ver a lista.",
     agent_busy: "Este agente ainda está trabalhando. Coloque-o em repouso e espere o turno terminar.",
     agent_has_pending: "Este agente tem cartões aguardando sua decisão. Resolva-os primeiro no painel de pendências.",

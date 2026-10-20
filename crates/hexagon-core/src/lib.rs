@@ -10,6 +10,7 @@ pub mod api;
 pub mod approval_mode;
 pub mod artifacts;
 pub mod autonomy;
+pub mod avatars;
 pub mod browser;
 pub mod browser_elements;
 pub mod capabilities;

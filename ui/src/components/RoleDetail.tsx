@@ -15,8 +15,9 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { EntityChips } from './EntityPicker'
 import { Icon } from './Icon'
 import { CardLoading } from './wizard/CardLoading'
+import { RestoreAvatarButton, useAvatarFile } from './AvatarPicker'
 
-export function RoleDetail({ def, tplName, names, doc, customized, aiDrafted, edited, busy, onChange, onRestore }: {
+export function RoleDetail({ def, tplName, names, doc, customized, aiDrafted, edited, busy, onChange, onRestore, avatarUrl, onAvatar }: {
   def: RoleDef
   /** 来源模板名（向导里与 def.name 相同）。 */
   tplName: string
@@ -31,14 +32,20 @@ export function RoleDetail({ def, tplName, names, doc, customized, aiDrafted, ed
   busy: boolean
   onChange: (def: RoleDef) => void
   onRestore: () => void
+  /** 票 17：向导里换的角色头像（data URL，留在向导内存，建项目时写入）；null = 默认色块。 */
+  avatarUrl: string | null
+  onAvatar: (url: string | null) => void
 }) {
   const { t } = useTranslation()
   const [adv, setAdv] = useState(false)
+  const avatarFile = useAvatarFile((url) => onAvatar(url))
   const upd = (patch: Partial<RoleDef>) => onChange({ ...def, ...patch })
   return (
     <div data-role-customize aria-label={def.name} className="flex flex-col gap-3">
       <div className="flex items-center gap-2.5">
-        <Avatar name={def.name} size={30} />
+        <Avatar name={def.name} size={30} src={avatarUrl ?? undefined}
+          onChangeImage={avatarFile.open} changeImageLabel={t('avatar.changeRole')} />
+        {avatarFile.input}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <b className="truncate text-[14px] font-semibold">{def.name}</b>
@@ -56,6 +63,7 @@ export function RoleDetail({ def, tplName, names, doc, customized, aiDrafted, ed
             </div>
           )}
         </div>
+        <RestoreAvatarButton size="xs" shown={!!avatarUrl} onRestore={() => onAvatar(null)} />
         <Button size="xs" variant="ghost" disabled={!customized && !edited} onClick={onRestore} data-restore-template>
           <Icon name="undo" size={14} />{t('wizard.resetTpl')}
         </Button>
