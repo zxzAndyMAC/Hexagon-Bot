@@ -142,6 +142,9 @@ export function NodeRail({ marks, highlights, compact, onJump }: {
       {marks.map((mark, index) => (
         <button key={mark.eventId ?? `${mark.type}-${index}`} type="button" data-tick className="tk"
           data-tier={mark.tier} data-tone={mark.tone} data-hl={highlights[index]}
+          // owner-followups-1015 #08：消息右键「在节点轨中定位」按事件 id 找刻度（合并刻度列出全部）。
+          data-tick-event={mark.merged ? undefined : mark.eventId}
+          data-tick-events={mark.merged?.map(m => m.eventId).filter(id => id != null).join(' ')}
           tabIndex={index === safeFocus ? 0 : -1}
           aria-label={tickName(mark, t, roleOf, i18n.language)}
           onMouseEnter={() => show(index)}

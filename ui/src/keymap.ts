@@ -75,6 +75,11 @@ export type ActionId =
   | 'closeTab'
   | 'closeOtherTabs'
   | 'closeTabsToRight'
+  | 'copyMessage'
+  | 'quoteMessage'
+  | 'locateInRail'
+  | 'mentionMember'
+  | 'copyMemberName'
   | 'nextTab'
   | 'prevTab'
   | 'copyPath'
@@ -225,6 +230,9 @@ const DEFAULTS: Record<ActionId, string> = {
   // owner-followups-1015 #05（A16b）：右键菜单的新动作默认不绑键位（alt+mod+shift+* 已挤满），
   // 进命令面板与设置·键盘，负责人自己指定。作用对象 = 当前页签（右键时 = 目标页签）。
   closeOtherTabs: '', closeTabsToRight: '', copyPath: '',
+  // owner-followups-1015 #08（A16b 成员行 / 消息）：同上默认空绑定。消息动作作用于焦点所在的消息（或选区所在的消息），
+  // 成员动作作用于焦点成员行；没有目标时什么也不做。
+  copyMessage: '', quoteMessage: '', locateInRail: '', mentionMember: '', copyMemberName: '',
   // owner-followups-1015 #07（A16b 文件树行）：同上默认空绑定；作用对象 = 焦点文件树行，否则当前文件 / 产物页签。
   insertPath: '', revealPath: '',
   // owner-followups-1015 #06（A22「溢出」）：页签多到滚出视区后键盘切换，同 VS Code / 浏览器的 ⌘⇧] / ⌘⇧[。
@@ -371,6 +379,11 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'closeTab', labelKey: 'keys.closeTab' },
   { id: 'closeOtherTabs', labelKey: 'keys.closeOtherTabs' },
   { id: 'closeTabsToRight', labelKey: 'keys.closeTabsToRight' },
+  { id: 'copyMessage', labelKey: 'keys.copyMessage' },
+  { id: 'quoteMessage', labelKey: 'keys.quoteMessage' },
+  { id: 'locateInRail', labelKey: 'keys.locateInRail' },
+  { id: 'mentionMember', labelKey: 'keys.mentionMember' },
+  { id: 'copyMemberName', labelKey: 'keys.copyMemberName' },
   { id: 'nextTab', labelKey: 'keys.nextTab' },
   { id: 'prevTab', labelKey: 'keys.prevTab' },
   { id: 'copyPath', labelKey: 'keys.copyPath' },
