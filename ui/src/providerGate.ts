@@ -22,5 +22,7 @@ export const isLocalEndpoint = (url: string): boolean =>
 /// 向导服务商步能列的预设（gap B13，与设置目录同一份 core provider_presets）：
 /// 向导只配 default 主对话槽，且放行要求钥匙已存（见 providerStepReady）——
 /// Jev（执行判定专用）与本机端点（不要钥匙）放到设置页配。
+/// owner-followups-1015 #22：目录里没有公共地址的条目（GPUStack 等，base_url 为空）同样不列——
+/// 向导选预设不展开 Base URL 框，选了也填不进地址；它们到设置页自填。子集规则本身不变。
 export const wizardPreset = (p: { kind: string; base_url: string }): boolean =>
-  p.kind !== 'jev' && !isLocalEndpoint(p.base_url)
+  p.kind !== 'jev' && p.base_url.trim() !== '' && !isLocalEndpoint(p.base_url)

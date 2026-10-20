@@ -5,6 +5,9 @@ import './i18n'
 import { ProviderManager } from './components/ProviderManager'
 import { api } from './api'
 import type { ProvidersView } from './gen/ProvidersView'
+import type { ProviderPreset } from './gen/ProviderPreset'
+// #22：ProviderPreset 的说明性字段（目录元数据）；旧用例只关心前五个字段。
+const PRESET_META = { icon_key: '', website: '', docs: '', sample_models: [] as string[], origin: 'manual' as const }
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -407,9 +410,9 @@ describe('内置目录 = core provider_presets', () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue(pv)
     vi.spyOn(api, 'presetRoles').mockResolvedValue([])
     vi.spyOn(api, 'providerPresets').mockResolvedValue([
-      { id: 'acme', name: 'Acme', kind: 'openai', base_url: 'https://acme.example/v1', default_model: 'acme-1' },
-      { id: 'a', name: 'Same Id', kind: 'openai', base_url: 'https://a.example', default_model: '' },
-      { id: 'other', name: 'ReadyCo', kind: 'openai', base_url: 'https://r.example', default_model: '' },
+      { id: 'acme', name: 'Acme', kind: 'openai', base_url: 'https://acme.example/v1', default_model: 'acme-1', ...PRESET_META },
+      { id: 'a', name: 'Same Id', kind: 'openai', base_url: 'https://a.example', default_model: '', ...PRESET_META },
+      { id: 'other', name: 'ReadyCo', kind: 'openai', base_url: 'https://r.example', default_model: '', ...PRESET_META },
     ])
     const save = vi.spyOn(api, 'saveProvider').mockResolvedValue(undefined)
     const { el, root } = await render(<ProviderManager />)
@@ -429,6 +432,90 @@ describe('内置目录 = core provider_presets', () => {
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'acme', name: 'Acme', base_url: 'https://acme.example/v1', models: [expect.objectContaining({ id: 'acme-1' })] }),
       undefined)
+    root.unmount()
+  })
+})
+
+// owner-followups-1015 #22：内置目录引入 56 家快照（core provider_catalog），设置左列可搜索、已启用在前，
+// 目录条目不预填模型，详情给官网 / 文档 / 示例模型作说明；无公共地址的留空并提示自填。
+describe('内置服务商目录（#22）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const preset = (p: Partial<ProviderPreset> & Pick<ProviderPreset, 'id' | 'name'>): ProviderPreset => ({
+    kind: 'openai', base_url: `https://${p.id}.example/v1`, default_model: '', icon_key: '', website: '', docs: '',
+    sample_models: [], origin: 'catalog', ...p,
+  })
+  const CATALOG = [
+    preset({ id: 'dashscope', name: 'Bailian', website: 'https://www.aliyun.com/product/bailian', docs: 'https://help.aliyun.com/zh/model-studio/', sample_models: ['deepseek-r1', 'deepseek-v3'] }),
+    preset({ id: 'gpustack', name: 'GPUStack', base_url: '' }),
+    preset({ id: 'perplexity', name: 'Perplexity', base_url: 'https://api.perplexity.ai/chat/completions' }),
+  ]
+  const rowNames = (el: HTMLElement) =>
+    [...el.querySelectorAll('[role=option]')].map((o) => o.textContent ?? '')
+  const clickRow = async (el: HTMLElement, name: string) => {
+    const row = [...el.querySelectorAll('div')].find((d) => d.textContent === name)!
+    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  }
+
+  it('已配置组里已启用的排在停用的前面，同组保持原顺序', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({
+      providers: [prov('c', 'OffCo', true, false), prov('a', 'ReadyCo', true, true), prov('b', 'NoKeyCo', false, true)],
+      slots: {},
+    })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    const { el, root } = await render(<ProviderManager />)
+    const names = rowNames(el)
+    const at = (n: string) => names.findIndex((x) => x.includes(n))
+    expect(at('ReadyCo')).toBeGreaterThanOrEqual(0)
+    expect(at('ReadyCo')).toBeLessThan(at('NoKeyCo'))
+    expect(at('NoKeyCo')).toBeLessThan(at('OffCo'))
+    expect(at('OffCo')).toBeLessThan(at('Bailian'))
+    root.unmount()
+  })
+
+  it('搜索按名称或 id 命中目录条目', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    const { el, root } = await render(<ProviderManager />)
+    const search = el.querySelector('input[placeholder="Search providers"]') as HTMLInputElement
+    const type = async (v: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, v)
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await type('dashscope')
+    expect(rowNames(el)).toEqual([expect.stringContaining('Bailian')])
+    await type('perplex')
+    expect(rowNames(el)).toEqual([expect.stringContaining('Perplexity')])
+    root.unmount()
+  })
+
+  it('目录条目详情：不预填模型，示例模型只作说明，官网 / 文档可见', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    vi.spyOn(api, 'providerRequestUrl').mockResolvedValue(null)
+    const { el, root } = await render(<ProviderManager />)
+    await clickRow(el, 'Bailian')
+    const info = el.querySelector('[data-catalog-info]')!
+    expect(info.textContent).toContain('https://www.aliyun.com/product/bailian')
+    expect(info.textContent).toContain('https://help.aliyun.com/zh/model-studio/')
+    expect(info.querySelector('[data-sample-models]')!.textContent).toContain('deepseek-r1 · deepseek-v3')
+    expect(el.querySelector('[data-model-row]')).toBeNull()
+    root.unmount()
+  })
+
+  it('无公共地址的条目地址留空，并提示自填', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(CATALOG)
+    vi.spyOn(api, 'providerRequestUrl').mockResolvedValue(null)
+    const { el, root } = await render(<ProviderManager />)
+    await clickRow(el, 'GPUStack')
+    const input = el.querySelector('input[aria-label="Base URL"]') as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(input.closest('[data-slot=field]')!.textContent).toContain('no public address')
     root.unmount()
   })
 })
