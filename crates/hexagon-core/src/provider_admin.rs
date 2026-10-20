@@ -306,15 +306,16 @@ pub fn fetch_models(
         .iter()
         .find(|p| p.id == id)
         .ok_or_else(|| AdminError::UnknownProvider(id.into()))?;
-    let key = store
-        .get(&provider_key_name(&def.id))?
-        .map(|k| k.trim().to_string())
-        .filter(|k| !k.is_empty())
-        .ok_or(AdminError::Catalog {
+    // 票 25：本机回环端点没钥匙也拉（不带鉴权头）；其他主机仍缺钥匙即拒。
+    let auth =
+        crate::provider_loopback::decide(store.get(&provider_key_name(&def.id))?, &def.base_url);
+    if auth == crate::provider_loopback::Auth::Missing {
+        return Err(AdminError::Catalog {
             code: "missing_credential",
             status: None,
-        })?;
-    provider_config::fetch_catalog(def, &key).map_err(|f| AdminError::Catalog {
+        });
+    }
+    provider_config::fetch_catalog(def, auth.key()).map_err(|f| AdminError::Catalog {
         code: f.code,
         status: f.status,
     })
@@ -322,8 +323,8 @@ pub fn fetch_models(
 
 /// 票 16：向导优化项目说明用的主对话模型。项目还不存在，不走 Workbench。
 /// 主对话 = default 槽（票 13 向导第一步放行的那一条），不是角色槽。
-/// 缺绑定、供应商不存在、停用、空模型名、没钥匙 → 不发请求。
-/// 槽已解析、供应商启用、模型名非空、钥匙非空。缺一档就不可用。
+/// 缺绑定、供应商不存在、停用、空模型名、没钥匙（本机回环端点除外，票 25）→ 不发请求。
+/// 槽已解析、供应商启用、模型名非空、钥匙非空或回环免钥匙。缺一档就不可用。
 /// 回退链只在 `resolve_slot`。起草槽和主对话槽共用这一段，避免两处钥匙检查分叉。
 fn ready_binding<'a>(
     doc: &'a provider_config::ProviderDoc,
@@ -342,11 +343,8 @@ fn ready_binding<'a>(
         return Err(AdminError::MainChatUnavailable);
     }
     let key = store.get(&provider_key_name(&def.id))?;
-    if key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .is_none()
+    if crate::provider_loopback::decide(key, &def.base_url)
+        == crate::provider_loopback::Auth::Missing
     {
         return Err(AdminError::MainChatUnavailable);
     }
@@ -392,7 +390,8 @@ mod tests {
             id: "p".into(),
             name: "P".into(),
             kind: ProviderKind::OpenAi,
-            base_url: "http://localhost".into(),
+            // 票 25 起回环地址免钥匙；缺钥匙用例需非回环地址。
+            base_url: "https://p.invalid".into(),
             models: vec![],
             enabled,
         });
@@ -435,6 +434,15 @@ mod tests {
         let bare = MemoryStore::default();
         assert!(matches!(
             require_main_chat(&doc_default(true), &bare),
+            Err(AdminError::MainChatUnavailable)
+        ));
+        // 票 25：本机回环端点没钥匙也算主对话槽可用；形似本机的远端仍不可用。
+        let mut local = doc_default(true);
+        local.providers[0].base_url = "http://localhost:11434/v1".into();
+        assert!(require_main_chat(&local, &bare).is_ok());
+        local.providers[0].base_url = "http://localhost.evil.com/v1".into();
+        assert!(matches!(
+            require_main_chat(&local, &bare),
             Err(AdminError::MainChatUnavailable)
         ));
     }
