@@ -1,5 +1,5 @@
 // 截图回归 · 工作台面（票 ui-redesign 17）：外壳、待决坞、画布、托管、用量、恢复。深浅两套 + fr 主界面。
-import { test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { boot, settle, snap, store, THEMES, type Lang, type Theme } from './helpers.ts'
 
 /** 时间线跳到某条事件并藏起钉住条（与票 16 截图同一取景）。 */
@@ -27,13 +27,20 @@ async function jump(page: Page, seq: number) {
 async function shell(page: Page, theme: Theme, lang: Lang, tag: string) {
   await boot(page, { theme, lang })
   await snap(page, `shell-dock-open-${tag}`)
-  // owner-followups-1015 #26：不可逆卡（推送）的红 30% 环线贴合坞的 16 圆角——曾画在直角卡盒上、四角戳出坞外。
-  // 走托管报告「定位到卡」同一事件翻页，不绑页码。
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('hexagon:locate-pending', { detail: 'q-pub' })))
-  await page.locator('.dock-card[data-danger]').waitFor()
-  await snap(page, `shell-dock-danger-${tag}`)
   await store(page, 's.getState().closePendingDialog()')
   await snap(page, `shell-dock-collapsed-${tag}`)
+  // owner-followups-1015 #26：不可逆卡（推送）的红 30% 环线贴合坞的 16 圆角——曾画在直角卡盒上、四角戳出坞外。
+  // 走托管报告「定位到卡」同一事件翻页（同时展开坞），不绑页码；放在收起图之后，
+  // 免得坞变高后时间线滚动落点漂移带进 collapsed 基线（首版放在前面，collapsed-light 差 12px）。
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('hexagon:locate-pending', { detail: 'q-pub' })))
+  // 只拍坞本身（外留 12px 看四角是否戳出）：坞变高后上方时间线会重新量行，整屏拍会把这段量测抖动带进基线。
+  const dock = page.locator('.dock')
+  await page.locator('.dock-card[data-danger]').waitFor()
+  await settle(page, 250)
+  const box = await dock.boundingBox()
+  if (!box) throw new Error('dock not rendered')
+  await expect(page).toHaveScreenshot(`shell-dock-danger-${tag}.png`,
+    { clip: { x: box.x - 12, y: box.y - 12, width: box.width + 24, height: box.height + 24 } })
 }
 
 async function canvas(page: Page, theme: Theme, lang: Lang, tag: string) {
