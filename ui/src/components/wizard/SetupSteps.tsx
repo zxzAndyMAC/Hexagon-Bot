@@ -10,6 +10,7 @@ import { Field, Input } from '@/components/ui/input'
 import { IconButton } from '@/components/ui/icon-button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Icon } from '../Icon'
+import { providerKeyReady } from '../../providerGate'
 import type { Draft } from './draft'
 
 export function DirStep({ draft, set, report, busy, err, onBrowse, onOpenExisting }: {
@@ -77,13 +78,13 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
   }
   const unready = slots.filter((s) => {
     const r = bindingOf(s)
-    return !(r && r.provider.enabled && r.provider.key_set)
+    return !(r && r.provider.enabled && providerKeyReady(r.provider))
   })
   return (
     <div className="flex flex-col gap-2">
       {slots.map((slot) => {
         const r = bindingOf(slot)
-        const ready = !!(r && r.provider.enabled && r.provider.key_set)
+        const ready = !!(r && r.provider.enabled && providerKeyReady(r.provider))
         const viaDefault = !doc.slots[slot] && !!doc.slots.default
         return (
           <div key={slot} data-key-slot={slot} className="flex flex-col gap-2 rounded-[var(--r-card)] bg-inset px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line-soft)]">
@@ -99,7 +100,7 @@ export function KeysStep({ slots, doc, pickedRoles, effDef, busy, onSaveKey }: {
               {ready && <Badge variant="ok"><Icon name="check" size={14} />{t('wizard.keyOk')}</Badge>}
               {r && !r.provider.enabled && <Badge variant="warn">{t('providers.disabledTag')}</Badge>}
             </div>
-            {r && r.provider.enabled && !r.provider.key_set && <KeyRow provider={r.provider} busy={busy} onSave={onSaveKey} />}
+            {r && r.provider.enabled && !providerKeyReady(r.provider) && <KeyRow provider={r.provider} busy={busy} onSave={onSaveKey} />}
             {!r && <div className="text-[12px] text-ink-3">{t('wizard.noProvider', { slot })}</div>}
           </div>
         )
