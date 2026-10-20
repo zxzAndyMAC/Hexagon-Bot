@@ -12,6 +12,16 @@ export function fillComposer(text: string) {
 }
 
 /**
+ * 成员行右键「@ 点名」（owner-followups-1015 #08，A16b）：把点名块插进输入条——未聚焦插到文末、聚焦插在光标处，
+ * 两侧补空白（同路径块的 insertToken）。只填不发，同 fillComposer。
+ */
+export const COMPOSER_MENTION_EVENT = 'hexagon:composer-mention'
+
+export function insertComposerMention(token: string) {
+  window.dispatchEvent(new CustomEvent<string>(COMPOSER_MENTION_EVENT, { detail: token }))
+}
+
+/**
  * 文件树右键「插入到输入条」（owner-followups-1015 #07，A16b；无障碍 §3 拖拽的替代）。
  * 与拖入走同一条插入逻辑（Composer 的 insertPathToken）：未聚焦插到文末、补收束空格；
  * 同 fillComposer 只填不发，草稿留在 Composer 局部态。
