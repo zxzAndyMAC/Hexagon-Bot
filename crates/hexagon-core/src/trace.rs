@@ -757,6 +757,8 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "computer_control",
     // ui-redesign gap C1：切换项目时电脑操控暂停留下的 checkpoint（saved/resumed/released）
     "computer_checkpoint",
+    // owner-followups-1015 票 19：画师发现出图槽未绑 / 不支持（artist::IMAGE_MODEL_MISSING）
+    "artist_image_model_missing",
     "acceptance_exception",
     "artifact_materialization",
     "policy_recovery",
