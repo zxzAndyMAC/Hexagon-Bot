@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "Placer dans la Corbeille",
     stepHostBash: "Exécuter une commande locale",
     stepProposeDesign: "Présenter des options visuelles",
+    stepSummonArtist: "Appeler l’Artiste",
     stepReadDesign: "Lire la direction visuelle",
 
     stepComputerObserve: "Observer l’ordinateur", stepComputerAction: "Utiliser l’ordinateur", stepComputerNavigate: "Naviguer sur l’ordinateur",
@@ -1240,4 +1241,5 @@ export default {
     not_dir: 'Pas un dossier',
   },
   feedback: {"region": "Notifications", "removeRecent": "Retirer des projets récents", "switchWaitTitle": "Le changement de projet doit attendre", "switchWaitBody": " : les actions sur l'ordinateur dans {{project}} sont en pause ; le changement aura lieu dès l'arrêt de l'action en cours. Vous pourrez les reprendre à votre retour.", "stayHere": "Rester dans ce projet", "treeEmptyBody": "Ce dossier ne contient encore aucun fichier. Créez-en un pour commencer.", "searchEmptyBody": "Essayez un autre mot-clé ou effacez la recherche pour tout afficher.", "pickerEmptyBody": "Rien à choisir pour l’instant. Les éléments ajoutés dans les Réglages apparaîtront ici.", "clearSearch": "Effacer la recherche"},
+  artist: {"unconfigured": "Pour dessiner les avatars de l’équipe, il faut un modèle d’images, et l’emplacement Images n’est pas encore lié.", "unsupported": "Pour dessiner les avatars de l’équipe, il faut un modèle d’images. {{model}}, lié à l’emplacement Images, ne génère pas d’images.", "bindImageModel": "Lier un modèle d’images dans les Réglages"},
 }

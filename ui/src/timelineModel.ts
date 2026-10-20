@@ -179,6 +179,8 @@ const isSysItem = (it: TimelineItem) =>
   it.event.payload.kind !== 'tool_execution_started' &&
   it.event.payload.kind !== 'agent_plan' &&
   it.event.payload.kind !== 'managed_decision' &&
+  // 票 19：画师的提示是画师在发言（带名字、头像和按钮），不是可折的系统注记。
+  it.event.payload.kind !== 'artist_image_model_missing' &&
   !TOOL_KINDS.has(it.event.kind) &&
   !SPECIAL_KINDS.has(it.event.kind) &&
   it.message == null &&

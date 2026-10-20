@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "ゴミ箱に移動",
     stepHostBash: "ホストコマンドを実行",
     stepProposeDesign: "デザイン案を提示",
+    stepSummonArtist: "画師を呼ぶ",
     stepReadDesign: "デザイン方針を読む",
 
     stepComputerObserve: "コンピューターを観察", stepComputerAction: "コンピューターを操作", stepComputerNavigate: "コンピューターで移動",
@@ -1240,4 +1241,5 @@ export default {
     not_dir: 'ディレクトリではありません',
   },
   feedback: {"region": "通知", "removeRecent": "最近のプロジェクトから削除", "switchWaitTitle": "プロジェクトの切り替えを待っています", "switchWaitBody": "：{{project}} のコンピューター操作を一時停止しました。実行中の操作が止まりしだい切り替えます。戻ったときに続行できます。", "stayHere": "このプロジェクトにとどまる", "treeEmptyBody": "このフォルダーにはまだファイルがありません。新しく作成して始めましょう。", "searchEmptyBody": "別のキーワードを試すか、検索をクリアしてすべて表示します。", "pickerEmptyBody": "まだ選択肢がありません。設定で追加するとここに表示されます。", "clearSearch": "検索をクリア"},
+  artist: {"unconfigured": "チームのアバターを描くには画像生成モデルが必要ですが、画像生成スロットがまだ割り当てられていません。", "unsupported": "チームのアバターを描くには画像生成モデルが必要です。画像生成スロットの {{model}} は画像を生成できません。", "bindImageModel": "設定で画像生成モデルを割り当てる"},
 }

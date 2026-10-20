@@ -30,7 +30,7 @@ export function toolInputSummary(p: Record<string, unknown>): string {
 // 回退 stepTool/'tool' 图标 + 原始名（不吞新工具）。
 export const TOOL_LABEL: Record<string, string> = {
   host_fs_read: 'stepHostRead', host_fs_write: 'stepHostWrite', host_fs_trash: 'stepHostTrash', host_bash: 'stepHostBash',
-  propose_design: 'stepProposeDesign', read_design_direction: 'stepReadDesign',
+  propose_design: 'stepProposeDesign', read_design_direction: 'stepReadDesign', summon_artist: 'stepSummonArtist',
   computer_observe: 'stepComputerObserve', computer_action: 'stepComputerAction', computer_navigate: 'stepComputerNavigate',
   'fs.read': 'stepRead', 'fs.write': 'stepWrite', 'fs.edit': 'stepWrite',
   'fs.list': 'stepList', 'fs.search': 'stepSearch', bash: 'stepBash',

@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "移到垃圾桶",
     stepHostBash: "執行電腦命令",
     stepProposeDesign: "提交視覺方案",
+    stepSummonArtist: "召喚畫師",
     stepReadDesign: "讀取視覺方向",
 
     stepComputerObserve: "觀察電腦", stepComputerAction: "操作電腦", stepComputerNavigate: "電腦導覽",
@@ -1240,4 +1241,5 @@ export default {
     not_dir: '不是目錄',
   },
   feedback: {"region": "通知", "removeRecent": "從最近專案移除", "switchWaitTitle": "切換專案需要等待", "switchWaitBody": "：已暫停 {{project}} 的電腦操作，目前動作停下後就切換；回來時可以繼續。", "stayHere": "留在此專案", "treeEmptyBody": "這個目錄裡還沒有檔案，新增一個開始。", "searchEmptyBody": "換個關鍵字試試，或清空搜尋看全部。", "pickerEmptyBody": "還沒有可選項；在設定裡新增後會出現在這裡。", "clearSearch": "清空搜尋"},
+  artist: {"unconfigured": "替團隊畫頭像需要出圖模型，出圖槽位還沒有綁定。", "unsupported": "替團隊畫頭像需要出圖模型，出圖槽位綁定的 {{model}} 不能出圖。", "bindImageModel": "前往設定綁定出圖模型"},
 }
