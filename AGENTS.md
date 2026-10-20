@@ -54,6 +54,7 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 - **无人值守网络重试**（2026-10-04 负责人裁决）：网络中断前两次各等 1 分钟；连续第三次失败后等 5 分钟再试，成功清零。配置/权限/代码错误先诊断，不按网络故障循环。长任务持续更新 `.scratch/fullstack-qa-2026-10-03/handoff.md`；恢复后核实进程及结果，不能凭旧记录重启仍在运行的任务。
 - **改 `#[derive(ts_rs::TS)]` 结构**：重跑 `cargo test export_bindings`（测试名过滤器不是文件名），`ui/src/gen/` diff 随改动同次入提交（D06）
 - **截图回归**（ui-redesign 票 17，单列门禁，不在 `npm test` 内）：改 `ui/src/components/`、`ui/src/index.css`、token、i18n 文案（任一语言）、`ui/src/api.ts` 的 dev mock 数据，或升级 UI 依赖/字体/Playwright 时，交付前跑 `npm run test:visual`（Playwright + 无头 Chromium，Vite dev :1460 + `?mock*` 数据，1440×900、减少动效、固定时钟/时区/语言；深浅两套 + fr 主界面，约 67 张）。出 diff：是本次有意改动 → `npm run test:visual:update` 重拍，逐张看 `ui/visual/__screenshots__/` 的 diff，提交说明写清哪几张为何变；不是有意改动 → 修代码，不准为过门重拍。失败产物在 `ui/test-results/`（`*-diff.png`）。基线绑定 macOS + 锁定的 Playwright Chromium 版本，换机/升 Playwright 后先在干净 main 上重拍一次单独提交。阈值 `maxDiffPixelRatio 0.001`（≈1300 像素，只容抗锯齿噪声）
+  - **跑的时机**（2026-10-20 负责人裁决，owner-followups-1015 票 26 起）：小改动（框线、圆角、间距、单个控件的状态或文案这类局部样式修正）不逐票跑全量截图回归，也不逐票重拍；要自查只跑受影响的几张（`npm --prefix ui run test:visual -- -g "<截图名>"`），并在交付说明里记「截图回归推迟」+ 预计会变的截图。一批界面改动全部合入后，在整合分支上统一跑一次全量，有意 diff 重拍并逐张过目。以下仍逐票跑全量：新界面/面板或布局重排、`ui/src/index.css`/token/`foundations.md` 改动、UI 依赖/字体/Playwright 升级。被否决的做法：每个小改动都跑全量——约 67 张、串行占重型锁，换来的只是同一批末尾本来就会看的 diff
 - **改 `ui/src/i18n/locales/`**：`node ui/scripts/check-i18n.mjs`（七语言 key 集合对账，已挂 `npm run check`）+ 一种非英文语言手测冒烟
 - **修 bug**：同一次改动附回归测试——修复即文档，commit 会被遗忘，测试跟着代码走；新判定器必须配 proptest（D12）
 - **新 UI 界面/控件**：同步 vitest
