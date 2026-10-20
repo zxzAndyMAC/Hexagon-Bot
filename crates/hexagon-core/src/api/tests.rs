@@ -1825,7 +1825,9 @@ fn provider_reload_document(
             id: id.into(),
             name: id.into(),
             kind: crate::provider::ProviderKind::OpenAi,
-            base_url: "http://127.0.0.1:9".into(),
+            // 票 25 起回环地址无钥匙会不带头直连；这组用例要「无钥匙 = 不发请求、报
+            // MissingCredential」，所以用非回环地址（.invalid 保证即便误发也解析不到）。
+            base_url: "https://reload-fixture.invalid/v1".into(),
             models: vec![],
             enabled,
         }],

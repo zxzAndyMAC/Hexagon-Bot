@@ -55,6 +55,7 @@ pub mod provider;
 pub mod provider_admin;
 pub mod provider_catalog;
 pub mod provider_config;
+pub mod provider_loopback;
 pub mod provider_presets;
 pub mod provider_probe;
 pub mod provider_url;

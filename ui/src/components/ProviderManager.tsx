@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { api, asCmdError, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
 import { useRequestUrl } from '../requestUrl'
 import { RequestUrlNote } from './RequestUrlNote'
-import { isLocalEndpoint } from '../providerGate'
+import { isLocalEndpoint, providerKeyReady } from '../providerGate'
 import { enabledFirst, presetOf, searchText } from '../providerCatalog'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
@@ -291,9 +291,10 @@ export function ProviderManager() {
       if (!b) continue
       bound += 1
       const p = doc.providers.find((x) => x.id === b.provider_id)
-      if (!p?.enabled || !p.key_set) blocked += 1
+      if (!p?.enabled || !providerKeyReady(p)) blocked += 1
     }
-    const missingKey = doc.providers.filter((p) => p.enabled && !p.key_set).length
+    // 票 25：本机回环端点不算缺钥匙
+    const missingKey = doc.providers.filter((p) => p.enabled && !providerKeyReady(p)).length
     return { total: slotNames.length, bound, blocked, missingKey }
   }, [slotNames, doc])
 
@@ -382,7 +383,7 @@ export function ProviderManager() {
         {slotNames.map((slot) => {
           const b = doc.slots[slot]
           const bp = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
-          const ready = !!(b && bp?.enabled && bp.key_set)
+          const ready = !!(b && bp?.enabled && providerKeyReady(bp))
           // 2026-09-28 重启后固定槽曾显示空白但标已绑：行先于配置挂载，
           // 仅以 slot 作 key 会保留初始空草稿。已保存绑定变化才重置，普通刷新保留编辑。
           return (
@@ -434,8 +435,8 @@ export function ProviderManager() {
         return (
           <>
             {/* 配置状态点：●已配 key / ◐缺 key（橙）/ ○停用——不用点进去就知道能不能用 */}
-            <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : t('providers.keyMissing')}>
-              <Dot tone={!p.enabled ? 'off' : p.key_set || isLocalEndpoint(p.base_url) ? 'on' : 'warn'} />
+            <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : isLocalEndpoint(p.base_url) ? t('settingsUi.local') : t('providers.keyMissing')}>
+              <Dot tone={!p.enabled ? 'off' : providerKeyReady(p) ? 'on' : 'warn'} />
             </span>
             <Avatar agentId={p.id} name={p.name} size={18} />
             <div className="min-w-0 flex-1 truncate">{p.name}</div>
@@ -485,7 +486,7 @@ export function ProviderManager() {
             </Field>
             {catalog && <CatalogInfo preset={catalog} />}
             <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-3">
-              <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : t('providers.keyMissing')}>
+              <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : needsKey ? t('providers.keyMissing') : undefined}>
                 <Input
                   aria-label={t('providers.key')}
                   className="font-mono"

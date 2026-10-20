@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type ProviderDef, type ProviderPreset, type ProviderView, type ProvidersView } from '../../api'
 import { useUiStore } from '../../store'
-import { providerStepReady, wizardPreset } from '../../providerGate'
+import { isLocalEndpoint, providerKeyReady, providerStepReady, wizardPreset } from '../../providerGate'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -36,7 +36,7 @@ function suggestedModel(doc: ProvidersView, p?: ProviderView): string {
 function initialProviderId(doc: ProvidersView): string {
   const bound = doc.slots.default?.provider_id
   if (bound && doc.providers.some((p) => p.id === bound)) return bound
-  return doc.providers.find((p) => p.enabled && p.key_set)?.id ?? doc.providers[0]?.id ?? ''
+  return doc.providers.find((p) => p.enabled && providerKeyReady(p))?.id ?? doc.providers[0]?.id ?? ''
 }
 
 function KeyInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -226,11 +226,15 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
       : name.trim() && baseUrl.trim()
         ? { id: providerSlug(name), name: name.trim(), kind, base_url: baseUrl.trim(), models: [], enabled: true }
         : null
-  const needsKey = choice.type !== 'provider' || !choice.p.key_set
+  // 钥匙框：没存钥匙就显示。票 25：本机回环端点（自填 localhost 地址或已存的本机供应商）
+  // 钥匙可留空——不带鉴权头直连；填了照常带头。
+  const askKey = choice.type !== 'provider' || !choice.p.key_set
+  const needsKey = choice.type === 'provider' ? !providerKeyReady(choice.p) : !(def && isLocalEndpoint(def.base_url))
+  const sentKey = askKey && secret.trim() ? secret.trim() : undefined
   const canApply = !!def && !!shownModel.trim() && (!needsKey || !!secret.trim())
   const probe = useKeyProbe(
     def && shownModel.trim() && (!needsKey || secret.trim()) ? def : null,
-    needsKey ? secret.trim() : undefined, shownModel)
+    sentKey, shownModel)
 
   function pick(next: string) {
     setPicked(next)
@@ -245,7 +249,7 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
     setBusy(true)
     try {
       // 钥匙已存就不要再送 secret——空 secret 后端会留下原钥匙，但这一步根本不该再问。
-      await api.saveProvider({ ...def, enabled: true }, needsKey ? secret.trim() : undefined)
+      await api.saveProvider({ ...def, enabled: true }, sentKey)
       await api.setSlotBinding('default', def.id, shownModel.trim())
       setSecret('')
       onRefresh()
@@ -278,7 +282,7 @@ function ProviderForm({ doc, onRefresh }: { doc: ProvidersView; onRefresh: () =>
           </Field>
         </>
       )}
-      {needsKey && <KeyInput key={value} value={secret} onChange={setSecret} />}
+      {askKey && <KeyInput key={value} value={secret} onChange={setSecret} />}
       <ModelProbeField value={shownModel} onChange={(v) => { setModel(v); setModelTouched(true) }} probe={probe}
         list={catalog.length ? 'wizard-default-models' : undefined} />
       {catalog.length > 0 && (
