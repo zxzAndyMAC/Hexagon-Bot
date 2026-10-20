@@ -178,11 +178,12 @@ describe('向导先配模型服务商（票 13）', () => {
     vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
     const el = await renderWizard()
     expect(text(providerSelect(el))).toBe('My OpenRouter')
-    expect(providerSelect(el).querySelector('[data-slot=avatar]')).not.toBeNull()
+    // #23：字母头像换成服务商图标（A13b）——断言面从 [data-slot=avatar] 改为 [data-provider-icon]
+    expect(providerSelect(el).querySelector('[data-provider-icon]')).not.toBeNull()
     await openSelect(el)
     expect(options().map(text)).toEqual(['My OpenRouter', 'Anthropic', 'Custom…'])
-    // gap B12：每个服务商选项带字母头像（确定色，按供应商 id 哈希）；「自定义」不是服务商，不画头像
-    expect(options().map((o) => !!o.querySelector('[data-slot=avatar]'))).toEqual([true, true, false])
+    // gap B12 / #23：每个服务商选项带服务商图标（无品牌图则中性图标）；「自定义」不是服务商，不画
+    expect(options().map((o) => !!o.querySelector('[data-provider-icon]'))).toEqual([true, true, false])
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
     // 已配置但缺钥匙：只补钥匙
     expect(password(el)).not.toBeNull()
