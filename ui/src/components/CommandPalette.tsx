@@ -13,6 +13,8 @@ import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
 import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
+import { copyMemberName, memberRowTarget, mentionMember } from '../memberActions'
+import { dispatchMessageAction, messageOnRail, messageTarget } from '../messageActions'
 import { Icon, type IconName } from './Icon'
 import { Avatar } from '@/components/ui/avatar'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -41,6 +43,11 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
   const { t } = useTranslation()
   const { team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, tabs, closeTab, invalidate, pushToast, pending, setFlowDialogOpen } = useUiStore()
   const [q, setQ] = useState('')
+  // owner-followups-1015 #08（A16b「定位」）：成员行 / 消息动作作用于打开面板前焦点所在的对象——
+  // 首次渲染时焦点还没进面板，这里记下来；目标不在成员行 / 消息上就不列这些项。
+  const [origin] = useState(() => document.activeElement)
+  const memberTarget = useMemo(() => team.find((m) => m.id === memberRowTarget(origin)), [team, origin])
+  const msgHost = useMemo(() => messageTarget(origin), [origin])
 
   const items = useMemo<Item[]>(() => {
     const bind = (a: ActionId) => formatBinding(bindingFor(a))
@@ -104,6 +111,20 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         id: 'n-copy-path', group: 'nav' as const, label: t('palette.copyPath'), icon: 'copy' as const, hint: bind('copyPath'),
         run: () => copyTabPath(activeTab),
       }] : []),
+      ...(memberTarget ? [
+        { id: 'c-mention-member', group: 'cmd' as const, label: t('palette.mentionMember', { role: memberTarget.role }), icon: 'message' as const,
+          hint: bind('mentionMember'), run: () => mentionMember(memberTarget.id) },
+        { id: 'c-copy-member-name', group: 'cmd' as const, label: t('palette.copyMemberName', { role: memberTarget.role }), icon: 'copy' as const,
+          hint: bind('copyMemberName'), run: () => copyMemberName(memberTarget.id) },
+      ] : []),
+      ...(msgHost ? [
+        { id: 'c-copy-message', group: 'cmd' as const, label: t('palette.copyMessage'), icon: 'copy' as const,
+          hint: bind('copyMessage'), run: () => dispatchMessageAction(msgHost, 'copy') },
+        { id: 'c-quote-message', group: 'cmd' as const, label: t('palette.quoteMessage'), icon: 'message' as const,
+          hint: bind('quoteMessage'), run: () => dispatchMessageAction(msgHost, 'quote') },
+        ...(messageOnRail(msgHost) ? [{ id: 'c-locate-message', group: 'nav' as const, label: t('palette.locateInRail'), icon: 'crosshair' as const,
+          hint: bind('locateInRail'), run: () => dispatchMessageAction(msgHost, 'locate') }] : []),
+      ] : []),
       // 快速打开：产物（file-text + 等宽路径 +「产物」）、Agent（头像 + 角色名 +「Agent」）
       ...artifacts.map((a) => ({
         id: `o-f-${a.path}-v${a.version}`, group: 'open' as const, mono: true, icon: 'file-text' as const,
@@ -117,7 +138,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       })),
     ]
     return list
-  }, [t, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pending, pushToast, invalidate, setFlowDialogOpen, onSettings])
+  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pending, pushToast, invalidate, setFlowDialogOpen, onSettings])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。

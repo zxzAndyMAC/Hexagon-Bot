@@ -16,14 +16,16 @@ import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
 import { ContextMeter } from './ContextMeter'
-import { COMPOSER_FILL_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
+import { COMPOSER_FILL_EVENT, COMPOSER_MENTION_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
 import { visiblePending } from '../decisions'
 import type { AttachRef } from '../gen/AttachRef'
 import {
   atomicDeletion,
   findAtoms,
   insertPathToken,
+  mentionName as mentionNameOf,
   mentionTokenText,
+  insertToken,
   pathFromTreeDrag,
   pathTokenText,
   TREE_DRAG_MIME,
@@ -117,8 +119,7 @@ export function Composer() {
   const pathTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // reliability 07: duplicate roles need stable instance tokens; a role label
   // alone previously sent both menu entries to the first agent.
-  const mentionName = (m: typeof team[number]) => team.filter((peer) => peer.role === m.role).length > 1
-    ? `${m.role}[${m.id}]` : m.role
+  const mentionName = (m: typeof team[number]) => mentionNameOf(m, team)
   const roster = useMemo(() => new Set(team.flatMap((m) => [m.role, `${m.role}[${m.id}]`])), [team])
   const atoms = useMemo(() => findAtoms(text, roster), [text, roster])
 
@@ -326,6 +327,25 @@ export function Composer() {
     }
     window.addEventListener(COMPOSER_FILL_EVENT, onFill)
     return () => window.removeEventListener(COMPOSER_FILL_EVENT, onFill)
+  }, [])
+
+  // owner-followups-1015 #08：成员行右键「@ 点名」——未聚焦插到文末，聚焦插在光标处（同拖入路径块的口径）。
+  useEffect(() => {
+    const onMention = (e: Event) => {
+      const token = (e as CustomEvent<unknown>).detail
+      if (typeof token !== 'string' || !token) return
+      const ta = inputRef.current
+      const caret = ta && document.activeElement === ta ? ta.selectionStart : null
+      setText((draft) => {
+        const next = insertToken(draft, caret ?? draft.length, token)
+        pendingCaret.current = next.caret
+        return next.text
+      })
+      setHistIdx(-1)
+      setPopup(null)
+    }
+    window.addEventListener(COMPOSER_MENTION_EVENT, onMention)
+    return () => window.removeEventListener(COMPOSER_MENTION_EVENT, onMention)
   }, [])
 
   // 票 12：未聚焦时插到文末（拖进来的人多半没把光标点在半截词上）。

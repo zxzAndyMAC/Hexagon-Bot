@@ -11,6 +11,16 @@ export function fillComposer(text: string) {
   window.dispatchEvent(new CustomEvent<string>(COMPOSER_FILL_EVENT, { detail: text }))
 }
 
+/**
+ * 成员行右键「@ 点名」（owner-followups-1015 #08，A16b）：把点名块插进输入条——未聚焦插到文末、聚焦插在光标处，
+ * 两侧补空白（同路径块的 insertToken）。只填不发，同 fillComposer。
+ */
+export const COMPOSER_MENTION_EVENT = 'hexagon:composer-mention'
+
+export function insertComposerMention(token: string) {
+  window.dispatchEvent(new CustomEvent<string>(COMPOSER_MENTION_EVENT, { detail: token }))
+}
+
 /** 已有草稿时追加到新一行，不覆盖负责人写了一半的话。 */
 export function mergeFill(draft: string, fill: string): string {
   return draft.trim() ? `${draft.replace(/\s+$/, '')}\n${fill}` : fill
