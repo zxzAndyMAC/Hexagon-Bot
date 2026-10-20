@@ -5,7 +5,9 @@
 // 悬停名片 HoverCard（B3；gap B6 2026-10-15 起替代票 02 的过渡 Tooltip「角色 · 模型」）：
 // 头像 + 角色 + 状态，下列 模型 / 上级 / 职责（TeamRow.model / superior / duty）。聚焦同样打开。
 // 右键菜单（A16b 第一批「成员行」，owner-followups-1015 #08）：打开详情 · @ 点名 · 复制名字；右键不打开该成员，
-// 菜单开着时悬停名片收起（两层浮层叠在行旁边会互相遮挡）。换头像 / 恢复默认见 #18。
+// 菜单开着时悬停名片收起（两层浮层叠在行旁边会互相遮挡）。
+// #18：分隔后 换头像 · 恢复默认（角色层，同角色详情）；角色没有自定义头像时「恢复默认」禁用写原因（A16b「不可用项」），
+// 有没有要等菜单打开时问一次核（成员行只知道生效图，分不出角色图与实例覆盖）。
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../../store'
@@ -15,10 +17,10 @@ import { useWorkingAgents } from './teamHooks'
 import { Avatar } from '@/components/ui/avatar'
 import { PixelGrid } from '@/components/ui/spinner'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
 import { isMac } from '../../keymap'
-import { copyMemberName, mentionMember, openMemberDetail } from '../../memberActions'
+import { changeMemberAvatar, copyMemberName, memberHasRoleAvatar, mentionMember, openMemberDetail, restoreMemberAvatar } from '../../memberActions'
 
 function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
   const { t } = useTranslation()
@@ -29,11 +31,19 @@ function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
   const sleeping = m.status === 'sleeping'
   const [hover, setHover] = useState(false)
   const [menu, setMenu] = useState(false)
+  // 角色有无自定义头像：菜单打开时问核；问到之前按「没有」（禁用比误删便宜）。
+  const [roleAvatar, setRoleAvatar] = useState(false)
+  const onMenu = (open: boolean) => {
+    setMenu(open)
+    if (!open) return
+    setRoleAvatar(false)
+    void memberHasRoleAvatar(m.id).then(setRoleAvatar)
+  }
   // 「@ 点名」把焦点送去输入条：菜单关闭时不还焦点给成员行。
   const skipRestore = useRef(false)
   return (
     <li>
-      <ContextMenu onOpenChange={setMenu}>
+      <ContextMenu onOpenChange={onMenu}>
       <HoverCard open={hover && !menu} onOpenChange={setHover}>
         <ContextMenuTrigger asChild>
         <HoverCardTrigger asChild>
@@ -84,6 +94,14 @@ function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
           onSelect={() => { skipRestore.current = true; mentionMember(m.id) }}>{t('ctxMember.mention')}</ContextMenuItem>
         <ContextMenuItem data-ctx-item="copyName" action="copyMemberName" onSelect={() => void copyMemberName(m.id)}>
           {t('ctxMember.copyName')}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem data-ctx-item="changeAvatar" action="changeMemberAvatar" onSelect={() => changeMemberAvatar(m.id)}>
+          {t('ctxMember.changeAvatar')}
+        </ContextMenuItem>
+        <ContextMenuItem data-ctx-item="restoreAvatar" action="restoreMemberAvatar"
+          reason={roleAvatar ? undefined : t('ctxMember.noCustomAvatar')} onSelect={() => void restoreMemberAvatar(m.id)}>
+          {t('ctxMember.restoreAvatar')}
         </ContextMenuItem>
       </ContextMenuContent>
       </ContextMenu>
