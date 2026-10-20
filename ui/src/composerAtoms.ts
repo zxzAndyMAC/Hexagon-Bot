@@ -111,10 +111,14 @@ function oneRepoPath(path: string, kind: 'file' | 'dir'): string | null {
   return kind === 'dir' ? `${joined}/` : joined
 }
 
+/** 文件或目录 → 规范化的单条仓内路径（目录补尾 /）；链接 / 怪路径 → null。右键「插入到输入条」与拖入同形（#07）。 */
+export function treeInsertPath(entry: { path: string; kind: string }): string | null {
+  return entry.kind === 'file' || entry.kind === 'dir' ? oneRepoPath(entry.path, entry.kind) : null
+}
+
 /** 文件或目录 → 一条载荷。目录补尾 /，与 repo_paths 的目录形一致。链接返回 null。 */
 export function treeDragPayload(entry: { path: string; kind: string }): { payload: string; token: string } | null {
-  if (entry.kind !== 'file' && entry.kind !== 'dir') return null
-  const path = oneRepoPath(entry.path, entry.kind)
+  const path = treeInsertPath(entry)
   if (!path) return null
   return { payload: JSON.stringify({ path, kind: entry.kind }), token: pathTokenText(path) }
 }

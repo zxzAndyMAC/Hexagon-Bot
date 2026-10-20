@@ -21,6 +21,17 @@ export function insertComposerMention(token: string) {
   window.dispatchEvent(new CustomEvent<string>(COMPOSER_MENTION_EVENT, { detail: token }))
 }
 
+/**
+ * 文件树右键「插入到输入条」（owner-followups-1015 #07，A16b；无障碍 §3 拖拽的替代）。
+ * 与拖入走同一条插入逻辑（Composer 的 insertPathToken）：未聚焦插到文末、补收束空格；
+ * 同 fillComposer 只填不发，草稿留在 Composer 局部态。
+ */
+export const COMPOSER_PATH_EVENT = 'hexagon:composer-path'
+
+export function insertComposerPath(path: string) {
+  window.dispatchEvent(new CustomEvent<string>(COMPOSER_PATH_EVENT, { detail: path }))
+}
+
 /** 已有草稿时追加到新一行，不覆盖负责人写了一半的话。 */
 export function mergeFill(draft: string, fill: string): string {
   return draft.trim() ? `${draft.replace(/\s+$/, '')}\n${fill}` : fill

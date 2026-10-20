@@ -13,6 +13,8 @@ use serde_json::Value;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+mod reveal;
+
 /// IPC 错误信封（ADR 0054，arch-review 票 06）：Tauri 把 `Err` 面序列化成
 /// `{code, message}` 对象，UI 对已知 code 走 `errors.<code>` i18n、未知
 /// code 渲染 message。code 取 `ErrorCode`（变体稳定标识）；壳层自身错误
@@ -2065,6 +2067,17 @@ fn create_repo_dir(state: ProjectState<'_>, path: String) -> Result<(), CmdError
     })
 }
 
+/// 在访达 / 资源管理器 / 文件管理器中显示（控制组，owner-followups-1015 #07，A16b）。
+/// 根约束在 core 判（`reveal::reveal_target`：规范化 + 解链接后必须在项目根内，越界记 Warn）；
+/// 壳层只拿判定后的绝对路径调系统，锁在调系统之前释放（不让外部进程握着 conn）。
+#[tauri::command]
+fn reveal_repo_path(state: ProjectState<'_>, path: String) -> Result<(), CmdError> {
+    let target = with_project_conn(&state, |_db, root| {
+        hexagon_core::reveal::reveal_target(root, &path)
+    })?;
+    reveal::show_in_file_manager(&target).map_err(cmd_err)
+}
+
 /// 小改写回（控制组，落盘）。不写穿符号链接。
 #[tauri::command]
 fn write_repo_file(
@@ -3925,6 +3938,7 @@ pub fn run() {
             create_repo_file,
             create_repo_dir,
             write_repo_file,
+            reveal_repo_path,
             usage,
             usage_context_pressure,
             open_stage,

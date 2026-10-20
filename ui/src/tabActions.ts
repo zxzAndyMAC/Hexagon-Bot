@@ -1,9 +1,8 @@
 // 画布页签的批量 / 路径动作（components A16b 第一批「画布页签」，owner-followups-1015 #05）。
 // 右键菜单、命令面板、keymap 三个入口共用这里——右键不是唯一入口（A16b「定位」）。
 // 「关闭」不在这里：复用 store.closeTab。
-import i18n from './i18n'
 import { isPinnedTab, useUiStore, type WorkTab } from './store'
-import { toastError } from './toast'
+import { copyPath } from './fileActions'
 
 /** 可见顺序（A22「溢出」，#06）：固定页签（产物 / 项目文件）在前，其余保持原序。页签栏、「全部页签」菜单、
  * 「关闭右侧」、上 / 下一个页签都按它走——store 由 openTab 维持同序，这里兜住直接 setState 的旧顺序。 */
@@ -62,14 +61,8 @@ export function stepTab(dir: 1 | -1) {
   if (next) s.setActiveTab(next)
 }
 
-/** 复制页签路径；成功 toast「已复制路径」，失败走 toastError（A16b 错误态：菜单已关）。 */
+/** 复制页签路径（与文件树行同一出口 fileActions.copyPath，#07）。 */
 export async function copyTabPath(id: string) {
   const path = tabPath(tabsNow().find((t) => t.id === id))
-  if (!path) return
-  try {
-    await navigator.clipboard.writeText(path)
-    useUiStore.getState().pushToast(i18n.t('ctx.pathCopied'), 'ok')
-  } catch (e) {
-    toastError(e)
-  }
+  if (path) await copyPath(path)
 }

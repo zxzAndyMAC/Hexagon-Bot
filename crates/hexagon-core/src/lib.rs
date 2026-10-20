@@ -58,6 +58,7 @@ pub mod provider_probe;
 pub mod provider_url;
 pub mod push;
 pub mod replay;
+pub mod reveal;
 pub mod review;
 pub mod reviewer;
 pub mod roles;
