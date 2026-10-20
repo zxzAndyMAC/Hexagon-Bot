@@ -3210,6 +3210,16 @@ fn provider_presets() -> Vec<hexagon_core::provider_admin::ProviderPreset> {
     hexagon_core::provider_admin::presets()
 }
 
+/// 票 21：服务商表单「实际请求地址」预览（纯计算，读组，不碰工作台）。
+/// 遮蔽形（已存地址未改）与空串回 None，界面不显示预览行。
+#[tauri::command]
+fn provider_request_url(
+    kind: hexagon_core::provider::ProviderKind,
+    base_url: String,
+) -> Option<String> {
+    hexagon_core::provider_admin::request_url_preview(&kind, &base_url)
+}
+
 #[tauri::command]
 fn agents_md_draft(name: String) -> String {
     hexagon_core::setup::agents_md_draft(&name)
@@ -3969,6 +3979,7 @@ pub fn run() {
             fetch_provider_models,
             probe_provider_key,
             provider_presets,
+            provider_request_url,
             agents_md_draft,
             optimize_agents_md,
             brief_questions,

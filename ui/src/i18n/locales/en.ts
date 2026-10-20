@@ -920,7 +920,7 @@ export default {
     edit: 'Edit', delete: 'Delete', save: 'Save', cancel: 'Cancel', add: 'Add provider',
     unsaved: 'unsaved — save to register', slots: 'Slot bindings',
     slotsHint: 'Bind each role model slot to a provider + model; "default" covers unbound slots.',
-    checkNeedsKey: 'Enter an API key to check', autoUrl: 'auto-derived',
+    checkNeedsKey: 'Enter an API key to check', autoUrl: 'auto-derived', requestUrl: 'Request URL: ',
     slotsSummary: '{{bound}}/{{total}} slots bound', slotsMissingKey: '{{count}} provider(s) missing key',
     pickProvider: 'Provider…', pickModel: 'model id…',
     bind: 'Bind', unbind: 'Unbind', unbound: 'unbound',

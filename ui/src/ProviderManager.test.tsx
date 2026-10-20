@@ -381,6 +381,28 @@ describe('Jev 槽', () => {
 describe('内置目录 = core provider_presets', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('Base URL 下方实时显示实际请求地址；core 不给（遮蔽的已存地址）就不显示（票 21）', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(pv)
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue([])
+    const preview = vi.spyOn(api, 'providerRequestUrl').mockImplementation(async (kind, base) =>
+      base.startsWith('https://typed') ? `${base}/v1/chat/completions#${kind}` : null)
+    const { el, root } = await render(<ProviderManager />)
+    const row = [...el.querySelectorAll('div')].find((d) => d.textContent === 'ReadyCo')!
+    await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const input = el.querySelector('input[aria-label="Base URL"]') as HTMLInputElement
+    const note = () => input.closest('[data-slot=field]')!.querySelector('[data-request-url]')
+    expect(note()).toBeNull()
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'https://typed.example')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(preview).toHaveBeenLastCalledWith('openai', 'https://typed.example')
+    expect(note()!.textContent).toBe('Request URL: https://typed.example/v1/chat/completions#openai')
+    root.unmount()
+  })
+
   it('列出未配置的预设（同 id / 同名已配置的不列），点选按预设填表并以预设 id 保存', async () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue(pv)
     vi.spyOn(api, 'presetRoles').mockResolvedValue([])

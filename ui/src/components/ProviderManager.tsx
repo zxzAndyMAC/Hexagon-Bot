@@ -6,6 +6,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, asCmdError, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
+import { useRequestUrl } from '../requestUrl'
+import { RequestUrlNote } from './RequestUrlNote'
 import { isLocalEndpoint } from '../providerGate'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
@@ -255,13 +257,8 @@ export function ProviderManager() {
     await reload()
   }
 
-  const previewUrl = (() => {
-    if (!draft) return ''
-    const base = draft.base_url.replace(/\/+$/, '')
-    if (draft.kind === 'anthropic') return `${base}/v1/messages`
-    if (draft.kind === 'jev') return `${base}/v1/systemone`
-    return `${base}/chat/completions`
-  })()
+  // 票 21：实际请求地址由 core provider_url 算（与保存同一道规范化）；遮蔽的已存地址不预览。
+  const previewUrl = useRequestUrl(draft?.kind ?? 'openai', draft?.base_url ?? '')
 
   // ui-audit-2 票 10：本地端点（Ollama/LM Studio）不需要 key——检测不禁用
   const needsKey = !!draft && !isLocalEndpoint(draft.base_url)
@@ -442,7 +439,7 @@ export function ProviderManager() {
             <DetailHead
               lead={<Avatar agentId={draft.id || draft.name} name={draft.name || '?'} size={40} />}
               title={draft.name || t('providers.add')}
-              sub={draft.base_url ? `${previewUrl} · ${t('providers.autoUrl')}` : t('providers.unsaved')}
+              sub={previewUrl ? `${previewUrl} · ${t('providers.autoUrl')}` : draft.base_url || t('providers.unsaved')}
               mono={!!draft.base_url}
               actions={selConfigured && (
                 <Button size="sm" variant="ghost" className="text-red-ink" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
@@ -462,7 +459,7 @@ export function ProviderManager() {
                 </NativeSelect>
               </Field>
             </div>
-            <Field className="mt-3" label={t('providers.baseUrl')}>
+            <Field className="mt-3" label={t('providers.baseUrl')} help={previewUrl ? <RequestUrlNote url={previewUrl} /> : undefined}>
               <Input aria-label={t('providers.baseUrl')} className="font-mono text-[12px]" value={draft.base_url} placeholder="https://…/v1"
                 onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} />
             </Field>

@@ -41,6 +41,8 @@ pub use crate::provider_config::{ModelEntry, ProviderDef};
 pub use crate::provider_probe::{probe_key, KeyProbe};
 // gap B8：向导服务商下拉的内置预设同走本模块出口。
 pub use crate::provider_presets::{presets, ProviderPreset};
+// 票 21：表单下方「实际请求地址」实时预览，与保存同一道规范化。
+pub use crate::provider_url::preview as request_url_preview;
 
 /// 供应商的对外视图（ADR 0054）：非密字段平铺 + key_set 只报是否已存
 /// （key 明文永不回传）。
@@ -230,13 +232,17 @@ pub fn save(
     let mut def = def;
     let doc = provider_config::load()?;
     let current = doc.providers.iter().find(|p| p.id == def.id);
-    def.base_url =
-        crate::data_boundary::restore(&def.base_url, current.map(|p| p.base_url.as_str()), true)
-            .map_err(|_| {
-                AdminError::Providers(provider_config::ProvidersError::EmptyField(
-                    "reload_stored_configuration",
-                ))
-            })?;
+    // 票 21：新填地址在这里规范化（provider_url 模块注释），遮蔽形原样还原。
+    def.base_url = crate::provider_url::resolve_input(
+        &def.kind,
+        &def.base_url,
+        current.map(|p| p.base_url.as_str()),
+    )
+    .map_err(|_| {
+        AdminError::Providers(provider_config::ProvidersError::EmptyField(
+            "reload_stored_configuration",
+        ))
+    })?;
     provider_config::save_provider(&def)?;
     if let Some(s) = secret.filter(|s| !s.trim().is_empty()) {
         store.set(&provider_key_name(&def.id), s.trim())?;

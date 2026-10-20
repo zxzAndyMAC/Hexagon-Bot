@@ -920,7 +920,7 @@ export default {
     edit: 'Modifier', delete: 'Supprimer', save: 'Enregistrer', cancel: 'Annuler', add: 'Ajouter un fournisseur',
     unsaved: 'non enregistré — enregistrez pour activer', slots: 'Liaisons de slots',
     slotsHint: 'Liez chaque slot de rôle à fournisseur+modèle ; « default » couvre les slots non liés.',
-    checkNeedsKey: "Saisissez la clé pour vérifier", autoUrl: 'déduit',
+    checkNeedsKey: "Saisissez la clé pour vérifier", autoUrl: 'déduit', requestUrl: 'Adresse de requête effective : ',
     slotsSummary: '{{bound}}/{{total}} slots liés', slotsMissingKey: '{{count}} fournisseur(s) sans clé',
     pickProvider: 'Fournisseur…', pickModel: 'id du modèle…',
     bind: 'Lier', unbind: 'Délier', unbound: 'non lié',

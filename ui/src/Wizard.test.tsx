@@ -155,6 +155,22 @@ describe('向导先配模型服务商（票 13）', () => {
     expect(isOff(button(el, 'Save and bind default'))).toBe(true)
   })
 
+  it('自定义地址下方实时显示 core 算出的实际请求地址（票 21）', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
+    const preview = vi.spyOn(api, 'providerRequestUrl').mockImplementation(async (kind, base) =>
+      base.trim() ? `${base.trim()}/v1/chat/completions#${kind}` : null)
+    const el = await renderWizard()
+    await choose(el, 'Custom…')
+    const input = el.querySelector('input[aria-label="Base URL"]') as HTMLInputElement
+    const note = () => input.closest('[data-slot=field]')!.querySelector('[data-request-url]')
+    expect(note()).toBeNull()
+    await act(async () => { setInput(input, 'https://api.deepseek.com') })
+    await settle(0)
+    expect(preview).toHaveBeenLastCalledWith('openai', 'https://api.deepseek.com')
+    expect(note()!.textContent).toBe('Request URL: https://api.deepseek.com/v1/chat/completions#openai')
+  })
+
   it('已配置的供应商与未配置的预设同列；同 id 预设不重复', async () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [prov({ id: 'or', name: 'My OpenRouter', key_set: false })], slots: {} })
     vi.spyOn(api, 'providerPresets').mockResolvedValue(PRESETS)
