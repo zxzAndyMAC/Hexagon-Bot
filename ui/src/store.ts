@@ -132,6 +132,18 @@ export interface WorkTab {
   patchText?: string
 }
 
+/** 固定页签（components A22「溢出」，owner-followups-1015 #06）：侧栏「产物」「项目文件」对应的清单页签钉在页签栏最左，
+ * 不进横向滚动区。store 里也排在最前（openTab 插到固定组末尾），「关闭右侧」、上 / 下一个页签与看到的顺序一致。 */
+export const isPinnedTab = (t: Pick<WorkTab, 'kind'>) => t.kind === 'artifacts' || t.kind === 'files'
+
+/** 新页签插入位置：固定页签进固定组末尾，其余追加到最后。 */
+function withTab(tabs: WorkTab[], t: WorkTab): WorkTab[] {
+  if (tabs.some((x) => x.id === t.id)) return tabs
+  if (!isPinnedTab(t)) return [...tabs, t]
+  const at = tabs.filter(isPinnedTab).length
+  return [...tabs.slice(0, at), t, ...tabs.slice(at)]
+}
+
 /// 专注模式（⌘.，R-06）进入前的布局快照；只在内存，不跨重启。
 export interface FocusSnapshot { canvasOpen: boolean }
 
@@ -465,7 +477,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   // 票 03（ADR 0088）：打开页签 = 打开画布；用量详情占着主区时先回到对话（画布要和对话并排或全宽）。
   openTab: (t) =>
     set((s) => ({
-      tabs: s.tabs.some((x) => x.id === t.id) ? s.tabs : [...s.tabs, t],
+      tabs: withTab(s.tabs, t),
       activeTab: t.id,
       canvasOpen: true,
       usageView: false,

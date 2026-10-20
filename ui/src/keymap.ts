@@ -75,6 +75,8 @@ export type ActionId =
   | 'closeTab'
   | 'closeOtherTabs'
   | 'closeTabsToRight'
+  | 'nextTab'
+  | 'prevTab'
   | 'copyPath'
   | 'settings'
   | 'focusComposer'
@@ -221,6 +223,8 @@ const DEFAULTS: Record<ActionId, string> = {
   // owner-followups-1015 #05（A16b）：右键菜单的新动作默认不绑键位（alt+mod+shift+* 已挤满），
   // 进命令面板与设置·键盘，负责人自己指定。作用对象 = 当前页签（右键时 = 目标页签）。
   closeOtherTabs: '', closeTabsToRight: '', copyPath: '',
+  // owner-followups-1015 #06（A22「溢出」）：页签多到滚出视区后键盘切换，同 VS Code / 浏览器的 ⌘⇧] / ⌘⇧[。
+  nextTab: 'mod+shift+]', prevTab: 'mod+shift+[',
   settings: 'mod+,',
   focusComposer: 'mod+N',
   // ADR 0056-2：阶段操作键位（alt+mod 组合避开 ⌘ 系常用位）
@@ -363,6 +367,8 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'closeTab', labelKey: 'keys.closeTab' },
   { id: 'closeOtherTabs', labelKey: 'keys.closeOtherTabs' },
   { id: 'closeTabsToRight', labelKey: 'keys.closeTabsToRight' },
+  { id: 'nextTab', labelKey: 'keys.nextTab' },
+  { id: 'prevTab', labelKey: 'keys.prevTab' },
   { id: 'copyPath', labelKey: 'keys.copyPath' },
   { id: 'settings', labelKey: 'keys.settings' },
   { id: 'focusComposer', labelKey: 'keys.composer' },
@@ -453,6 +459,9 @@ function shortcutKey(e: KeyboardEvent | React.KeyboardEvent): string {
   if (isMac && e.metaKey && e.altKey && /^(Key[A-Z]|Digit[0-9])$/.test(e.code)) {
     return e.code.replace(/^(Key|Digit)/, '').toLowerCase()
   }
+  // owner-followups-1015 #06：Shift 会把 [ ] 改成 { }（美式布局），按 e.key 认则 mod+shift+] 永远不命中、
+  // 设置·键盘录下的也是 mod+shift+}。方括号按物理键位还原，其余符号仍按字符认。
+  if (e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) return e.code === 'BracketLeft' ? '[' : ']'
   return e.key === ' ' ? 'space' : e.key.length === 1 ? e.key.toLowerCase() : e.key
 }
 
