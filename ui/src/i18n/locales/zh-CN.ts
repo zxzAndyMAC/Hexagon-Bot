@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "移到废纸篓",
     stepHostBash: "运行电脑命令",
     stepProposeDesign: "提交视觉方案",
+    stepSummonArtist: "召唤画师",
     stepReadDesign: "读取视觉方向",
 
     stepComputerObserve: "观察电脑", stepComputerAction: "操作电脑", stepComputerNavigate: "电脑导航",
@@ -1244,4 +1245,5 @@ export default {
     not_dir: '不是目录',
   },
   feedback: {"region": "通知", "removeRecent": "从最近项目移除", "switchWaitTitle": "切换项目需要等待", "switchWaitBody": "：已暂停 {{project}} 的电脑操作，当前动作停下后就切换；回来时可以继续。", "stayHere": "留在此项目", "treeEmptyBody": "这个目录里还没有文件，新建一个开始。", "searchEmptyBody": "换个关键词试试，或者清空搜索看全部。", "pickerEmptyBody": "还没有可选项；在设置里添加后会出现在这里。", "clearSearch": "清空搜索"},
+  artist: {"unconfigured": "给团队画头像需要出图模型，出图槽位还没有绑定。", "unsupported": "给团队画头像需要出图模型，出图槽位绑定的 {{model}} 不能出图。", "bindImageModel": "去设置绑定出图模型"},
 }

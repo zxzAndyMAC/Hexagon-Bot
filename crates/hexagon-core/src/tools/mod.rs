@@ -359,6 +359,8 @@ impl Registry {
         r.register(crate::design::ReadDesignDirection);
         r.register(crate::design::ProposeDesign);
         r.register(ProposeExperience);
+        // owner-followups-1015 票 19：调度方召唤画师（exec 内限项目经理）。
+        r.register(crate::artist::SummonArtist);
         r.register(WebFetch);
         r.register(deps::DependencyFetch);
         r.register(verify_browser::BrowserVerify);

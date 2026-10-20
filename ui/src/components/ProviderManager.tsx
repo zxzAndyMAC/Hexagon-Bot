@@ -12,6 +12,7 @@ import { isLocalEndpoint } from '../providerGate'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
 import { BUILTIN_SLOTS, DEDICATED_PREFIX, isBuiltinSlot, isDedicatedSlot } from '../modelpick'
+import { takeSlotFocus } from '../settingsSlotFocus'
 import { Avatar } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -66,11 +67,14 @@ export function ProviderManager() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [fetching, setFetching] = useState(false)
+  // 票 19：配置读回前槽位行会随绑定重挂（SlotRow 的 key 含绑定），聚焦要等首次读回之后。
+  const [loaded, setLoaded] = useState(false)
 
   const reload = async (keepSel?: string) => {
     try {
       const d = await api.listProviders()
       setDoc(d)
+      setLoaded(true)
       const s = keepSel ?? sel
       if (s && !s.startsWith('preset:') && s !== 'new') {
         const p = d.providers.find((x) => x.id === s)
@@ -86,6 +90,16 @@ export function ProviderManager() {
     api.providerPresets().then(setPresets).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 票 19（规范 E3 补设计）：从时间线「去设置绑定出图模型」进来时，目标槽那一行滚入视区、供应商下拉拿焦点。
+  useEffect(() => {
+    if (!loaded) return
+    const slot = takeSlotFocus()
+    if (!slot) return
+    const row = [...document.querySelectorAll<HTMLElement>('[data-slot-row]')].find((el) => el.dataset.slotRow === slot)
+    row?.scrollIntoView?.({ block: 'center' })
+    row?.querySelector('select')?.focus()
+  }, [loaded])
 
   // 已配置的按 id（预设 id 即保存后的供应商 id）或同名（gap B13 前按名称 slug 存下的旧供应商）排除。
   const configuredNames = useMemo(() => new Set(doc.providers.map((p) => p.name)), [doc])

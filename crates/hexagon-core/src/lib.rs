@@ -9,6 +9,7 @@ pub(crate) mod actions;
 pub mod api;
 pub mod approval_mode;
 pub mod artifacts;
+pub mod artist;
 pub mod autonomy;
 pub mod avatars;
 pub mod browser;

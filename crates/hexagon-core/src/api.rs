@@ -4939,6 +4939,8 @@ pub fn data_boundary(
 }
 
 #[cfg(test)]
+mod artist_tests;
+#[cfg(test)]
 mod model_recovery_tests;
 #[cfg(test)]
 mod session_runtime_tests;

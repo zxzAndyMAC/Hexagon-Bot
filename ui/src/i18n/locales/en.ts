@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "Move host file to Trash",
     stepHostBash: "Run host command",
     stepProposeDesign: "Present visual options",
+    stepSummonArtist: "Summon the Artist",
     stepReadDesign: "Read selected visual direction",
 
     stepComputerObserve: "Observe computer", stepComputerAction: "Operate computer", stepComputerNavigate: "Navigate computer",
@@ -1244,4 +1245,5 @@ export default {
     not_dir: 'Not a directory',
   },
   feedback: {"region": "Notifications", "removeRecent": "Remove from recent projects", "switchWaitTitle": "Switching projects has to wait", "switchWaitBody": ": computer actions in {{project}} are paused; switching once the current one stops. You can continue them when you come back.", "stayHere": "Stay in this project", "treeEmptyBody": "This folder has no files yet. Create one to start.", "searchEmptyBody": "Try another keyword, or clear the search to see everything.", "pickerEmptyBody": "Nothing to choose yet. Items added in Settings show up here.", "clearSearch": "Clear search"},
+  artist: {"unconfigured": "Drawing avatars for the team needs an image model, and the image slot isn't bound yet.", "unsupported": "Drawing avatars for the team needs an image model. {{model}}, bound to the image slot, can't generate images.", "bindImageModel": "Bind an image model in Settings"},
 }
