@@ -49,6 +49,13 @@ async function canvas(page: Page, theme: Theme, lang: Lang, tag: string) {
   await page.locator('[data-canvas-all-tabs]').click()
   await page.locator('[data-all-tabs-search]').waitFor()
   await snap(page, `canvas-all-tabs-${tag}`)
+  // owner-followups-1015 #07（A16b 文件树行）：文件行右键 → 打开 · 插入到输入条 · 复制路径 · 在访达中显示（macOS 基线）。
+  await page.keyboard.press('Escape')
+  await store(page, 's.getState().openCanvas("files")')
+  const readme = page.locator('[role="treeitem"]', { hasText: 'README.md' })
+  await readme.click({ button: 'right' })
+  await page.locator('[data-slot="context-menu-content"]').waitFor()
+  await snap(page, `file-tree-menu-${tag}`)
 }
 
 /** 12 个产物页签 + 固定「产物」清单 = 13 条（>10 出搜索）；最后一个是 mock 里有内容的产物。 */

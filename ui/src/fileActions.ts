@@ -1,0 +1,65 @@
+// 项目路径动作（components A16b 第一批「文件树行」，owner-followups-1015 #07）。
+// 右键菜单、命令面板、keymap 三个入口共用这里——右键不是唯一入口（A16b「定位」）。
+// 路径一律项目相对（与树、页签、# 路径块同一形）；「在访达中显示」的根约束在 core 判，这里不判。
+import i18n from './i18n'
+import { api } from './api'
+import { insertComposerPath } from './composerFill'
+import { isMac } from './keymap'
+import { useUiStore } from './store'
+import { toastError } from './toast'
+
+/** 揭示动作的平台名（访达 / 资源管理器 / 文件管理器），只影响文案。 */
+export type RevealPlatform = 'mac' | 'windows' | 'linux'
+
+const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
+export const revealPlatform: RevealPlatform = isMac
+  ? 'mac'
+  : (uaData ? uaData.platform === 'Windows' : /Windows/.test(navigator.userAgent)) ? 'windows' : 'linux'
+
+/** 「在访达中显示」/「在资源管理器中显示」/「在文件管理器中显示」的 i18n key。 */
+export function revealLabelKey(platform: RevealPlatform = revealPlatform): string {
+  return platform === 'mac' ? 'ctx.revealMac' : platform === 'windows' ? 'ctx.revealWindows' : 'ctx.revealLinux'
+}
+
+/** 复制项目相对路径；成功 toast「已复制路径」，失败走 toastError（A16b 错误态：菜单已关）。 */
+export async function copyPath(path: string) {
+  try {
+    await navigator.clipboard.writeText(path)
+    useUiStore.getState().pushToast(i18n.t('ctx.pathCopied'), 'ok')
+  } catch (e) {
+    toastError(e)
+  }
+}
+
+/** 在系统文件管理器中显示。越界 / 不存在由 core 拒（errors.reveal_*），这里只出 toast。 */
+export async function revealPath(path: string) {
+  try {
+    await api.revealRepoPath(path)
+  } catch (e) {
+    toastError(e)
+  }
+}
+
+/**
+ * 插入到输入条（无障碍 §3：拖路径进输入条的替代）。同拖入：一条 # 路径块、不读不展开。
+ * 先回对话（全宽时输入条随对话收起），插入同步生效，聚焦等下一帧（同 sendSelectionToComposer）。
+ */
+export function insertPathToComposer(path: string) {
+  useUiStore.getState().showConversation()
+  insertComposerPath(path)
+  requestAnimationFrame(() => document.getElementById('composer-input')?.focus())
+}
+
+/** 文件树行上挂的路径属性：键位入口据此找焦点行。 */
+export const TREE_PATH_ATTR = 'data-tree-path'
+
+/**
+ * 键位入口的作用对象之一：焦点在文件树行上 → 那一行（路径 + 种类）；否则 null，
+ * 调用方回落到画布当前文件 / 产物页签（tabActions.tabPath）。链接没有一条仓内路径可插。
+ */
+export function treeRowTarget(): { path: string; kind: 'file' | 'dir' | 'link' } | null {
+  const row = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>(`[${TREE_PATH_ATTR}]`)
+  if (!row) return null
+  const kind = row.dataset.treeKind
+  return { path: row.getAttribute(TREE_PATH_ATTR)!, kind: kind === 'dir' || kind === 'link' ? kind : 'file' }
+}

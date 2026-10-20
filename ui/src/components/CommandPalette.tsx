@@ -13,6 +13,8 @@ import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
 import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
+import { insertPathToComposer, revealLabelKey, revealPath } from '../fileActions'
+import { treeInsertPath } from '../composerAtoms'
 import { Icon, type IconName } from './Icon'
 import { Avatar } from '@/components/ui/avatar'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -103,6 +105,14 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       ...(activeTab && tabPath(tabs.find((x) => x.id === activeTab)) ? [{
         id: 'n-copy-path', group: 'nav' as const, label: t('palette.copyPath'), icon: 'copy' as const, hint: bind('copyPath'),
         run: () => copyTabPath(activeTab),
+      }] : []),
+      // owner-followups-1015 #07（A16b 文件树行）：插入到输入条 / 在访达中显示，同样作用于当前文件 / 产物页签。
+      ...(activeTab && tabPath(tabs.find((x) => x.id === activeTab)) ? [{
+        id: 'n-insert-path', group: 'nav' as const, label: t('palette.insertPath'), icon: 'message' as const, hint: bind('insertPath'),
+        run: () => { const p = tabPath(tabs.find((x) => x.id === activeTab)); const ins = p && treeInsertPath({ path: p, kind: 'file' }); if (ins) insertPathToComposer(ins) },
+      }, {
+        id: 'n-reveal-path', group: 'nav' as const, label: t(revealLabelKey()), icon: 'folder' as const, hint: bind('revealPath'),
+        run: () => { const p = tabPath(tabs.find((x) => x.id === activeTab)); if (p) void revealPath(p) },
       }] : []),
       // 快速打开：产物（file-text + 等宽路径 +「产物」）、Agent（头像 + 角色名 +「Agent」）
       ...artifacts.map((a) => ({
