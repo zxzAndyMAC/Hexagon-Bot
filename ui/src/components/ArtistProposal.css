@@ -1,0 +1,18 @@
+/* 头像提案卡（票 20，components D12「头像提案卡」补设计）：D12 推荐卡形，方案列换成头像格。
+   格 = 方形缩略（圆角 --r-card，1px --line 内环）+ 名 13/500 + 两颗 ghost sm；跳过的格缩略降到 .45。 */
+.artist-cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(132px, 100%), 1fr)); gap: 12px; margin-top: 4px; }
+.artist-cell { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-card); min-width: 0; }
+.artist-cell:hover { background: var(--hover); }
+.artist-cell figure { position: relative; margin: 0; }
+.artist-cell img, .artist-missing { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--r-card); }
+.artist-cell figure::after { content: ''; position: absolute; inset: 0; border-radius: var(--r-card); box-shadow: inset 0 0 0 1px var(--line); pointer-events: none; }
+.artist-cell[data-skipped] img { opacity: .45; }
+.artist-missing { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--ink-3); background: var(--hover); }
+.artist-chip { position: absolute; left: 8px; top: 8px; }
+.artist-cell b { font-size: 13px; font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artist-cell-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.artist-prompts { margin-top: 12px; font-size: 12px; }
+.artist-prompts dl { margin: 8px 0 0; display: grid; gap: 6px; }
+.artist-prompts dt { color: var(--ink-2); font-weight: 500; }
+.artist-prompts dd { margin: 0; color: var(--ink-3); overflow-wrap: anywhere; }
+.artist-error { color: var(--red-ink); margin: 0 0 8px; }

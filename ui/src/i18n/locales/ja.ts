@@ -1181,6 +1181,9 @@ export default {
   errors: {
     avatar_too_large: '画像が 2MB を超えています——小さいファイルを選んでください',
     avatar_unreadable: 'PNG・JPEG・WebP・GIF として読み込めないファイルです。別のファイルを選んでください。',
+    artist_proposal_missing: "このアバターの提案はもう存在しません。",
+    artist_role_not_in_proposal: "選んだロールにはこの提案で生成された画像がありません。別の画像にするかスキップしてください。",
+    image_generation_failed: "画像生成モデルが画像を返しませんでした。設定の画像生成スロットを確認して再試行してください。",
     bad_agent_id: 'このエージェント ID はアバターに使えません。チームを更新してから再試行してください。',
     agent_not_found: "このエージェントはもうチームにいません。更新して確認してください。",
     agent_busy: "このエージェントはまだ作業中です。休止させ、このターンが終わってから外してください。",
@@ -1266,5 +1269,5 @@ export default {
     reveal_launch: "ファイルマネージャーを開けませんでした",
   },
   feedback: {"region": "通知", "removeRecent": "最近のプロジェクトから削除", "switchWaitTitle": "プロジェクトの切り替えを待っています", "switchWaitBody": "：{{project}} のコンピューター操作を一時停止しました。実行中の操作が止まりしだい切り替えます。戻ったときに続行できます。", "stayHere": "このプロジェクトにとどまる", "treeEmptyBody": "このフォルダーにはまだファイルがありません。新しく作成して始めましょう。", "searchEmptyBody": "別のキーワードを試すか、検索をクリアしてすべて表示します。", "pickerEmptyBody": "まだ選択肢がありません。設定で追加するとここに表示されます。", "clearSearch": "検索をクリア"},
-  artist: {"unconfigured": "チームのアバターを描くには画像生成モデルが必要ですが、画像生成スロットがまだ割り当てられていません。", "unsupported": "チームのアバターを描くには画像生成モデルが必要です。画像生成スロットの {{model}} は画像を生成できません。", "bindImageModel": "設定で画像生成モデルを割り当てる"},
+  artist: {"unconfigured": "チームのアバターを描くには画像生成モデルが必要ですが、画像生成スロットがまだ割り当てられていません。", "unsupported": "チームのアバターを描くには画像生成モデルが必要です。画像生成スロットの {{model}} は画像を生成できません。", "bindImageModel": "設定で画像生成モデルを割り当てる", "proposalTitle": "アバターの提案", "proposalSub": "{{count}} ロール · {{style}}", "applyNote": "適用するとロールごとにアバターを置き換え、そのロールの全メンバーに反映されます", "applied": "{{count}} ロールに適用済み", "applyAll": "すべて適用", "loading": "提案を読み込んでいます…", "avatarOf": "{{role}}のアバター", "failed": "この画像は生成されませんでした", "appliedChip": "適用済み", "redraw": "別の画像", "skip": "スキップ", "unskip": "含める", "prompts": "使用したプロンプト"},
 }

@@ -1181,6 +1181,9 @@ export default {
   errors: {
     avatar_too_large: 'La imagen supera 2 MB — elige un archivo más pequeño',
     avatar_unreadable: 'Este archivo no es una imagen PNG, JPEG, WebP o GIF legible. Elige otro archivo.',
+    artist_proposal_missing: "Esta propuesta de avatares ya no existe.",
+    artist_role_not_in_proposal: "Un rol elegido no tiene imagen generada en esta propuesta. Prueba otra o omítelo.",
+    image_generation_failed: "El modelo de imágenes no devolvió ninguna imagen. Revisa la ranura de imágenes en Ajustes y vuelve a intentarlo.",
     bad_agent_id: 'Este id de agente no sirve para un avatar. Actualiza el equipo e inténtalo de nuevo.',
     agent_not_found: "Este agente ya no está en el equipo. Actualiza para ver la lista.",
     agent_busy: "Este agente sigue trabajando. Ponlo en reposo y espera a que termine su turno.",
@@ -1266,5 +1269,5 @@ export default {
     reveal_launch: "No se pudo abrir el gestor de archivos",
   },
   feedback: {"region": "Notificaciones", "removeRecent": "Quitar de proyectos recientes", "switchWaitTitle": "El cambio de proyecto debe esperar", "switchWaitBody": ": las acciones del equipo en {{project}} están en pausa; el cambio se hará cuando se detenga la actual. Podrás continuarlas al volver.", "stayHere": "Quedarse en este proyecto", "treeEmptyBody": "Esta carpeta aún no tiene archivos. Crea uno para empezar.", "searchEmptyBody": "Prueba otra palabra clave o borra la búsqueda para ver todo.", "pickerEmptyBody": "Aún no hay opciones. Lo que añadas en Ajustes aparecerá aquí.", "clearSearch": "Borrar búsqueda"},
-  artist: {"unconfigured": "Para dibujar los avatares del equipo hace falta un modelo de imágenes y la ranura de imágenes aún no está vinculada.", "unsupported": "Para dibujar los avatares del equipo hace falta un modelo de imágenes. {{model}}, vinculado a la ranura de imágenes, no genera imágenes.", "bindImageModel": "Vincular un modelo de imágenes en Ajustes"},
+  artist: {"unconfigured": "Para dibujar los avatares del equipo hace falta un modelo de imágenes y la ranura de imágenes aún no está vinculada.", "unsupported": "Para dibujar los avatares del equipo hace falta un modelo de imágenes. {{model}}, vinculado a la ranura de imágenes, no genera imágenes.", "bindImageModel": "Vincular un modelo de imágenes en Ajustes", "proposalTitle": "Propuesta de avatares", "proposalSub": "{{count}} roles · {{style}}", "applyNote": "Al aplicar se reemplaza el avatar de cada rol para todos sus miembros", "applied": "Aplicado a {{count}} roles", "applyAll": "Aplicar todo", "loading": "Cargando la propuesta…", "avatarOf": "Avatar de {{role}}", "failed": "Imagen no generada", "appliedChip": "Aplicado", "redraw": "Otra", "skip": "Omitir", "unskip": "Incluir", "prompts": "Prompts usados"},
 }

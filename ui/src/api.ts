@@ -1,4 +1,5 @@
 import type { ReconcileReport } from './gen/ReconcileReport'
+import type { ArtistProposal } from './gen/ArtistProposal'
 import type { RejudgeOutcome } from './gen/RejudgeOutcome'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
@@ -604,6 +605,10 @@ export const api = {
   roleAvatar: (role: string) => call<string | null>('role_avatar', { role }),
   setRoleAvatar: (role: string, dataUrl: string) => call<void>('set_role_avatar', { role, dataUrl }),
   clearRoleAvatar: (role: string) => call<void>('clear_role_avatar', { role }),
+  // ---- 画师头像提案（票 20；不是待决卡，不走裁决回路）----
+  artistProposal: (id: string) => call<ArtistProposal>('artist_proposal', { id }),
+  artistRegenerate: (id: string, role: string) => call<ArtistProposal>('artist_regenerate', { id, role }),
+  artistApply: (id: string, roles: string[]) => call<ArtistProposal>('artist_apply', { id, roles }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => switchProject(source => call<void>('open_recent', { dir, _project: source })),
@@ -799,6 +804,28 @@ const mockAvatars: Record<string, string> = {
 const mockRoleAvatars: Record<string, string> = {}
 const mockEffective = (id: string, role?: string): string | undefined =>
   mockAvatars[id] ?? (role ? mockRoleAvatars[role] : undefined)
+// 票 20 dev mock：画师头像提案。图是本地拼的 SVG 色块（不出网），第二格模拟一次出图失败。
+const mockArtistProposals: Record<string, ArtistProposal> = {}
+const mockArtistImage = (role: string, rev: number) => {
+  const hue = ([...role].reduce((h, c) => h + c.charCodeAt(0), 0) * 37 + rev * 90) % 360
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="hsl(${hue} 60% 70%)"/><rect x="2" y="2" width="4" height="4" fill="hsl(${hue} 60% 35%)"/></svg>`
+  return `data:image/svg+xml;base64,${btoa(svg)}`
+}
+const mockArtistProposal = (id: string): ArtistProposal => {
+  if (!mockArtistProposals[id]) {
+    const roles = (mock('team') as { role: string }[]).map((r) => r.role)
+    mockArtistProposals[id] = {
+      id, style: 'pixel art', model: 'gpt-image-1', applied: [],
+      items: roles.map((role, i) => ({
+        role,
+        prompt: `pixel art. A square avatar portrait representing the team role "${role}". One centered subject, simple background, no text, no letters, no watermark.`,
+        image: i === 1 ? null : mockArtistImage(role, 0),
+        failure: i === 1 ? 'provider_unavailable' : null,
+      })),
+    }
+  }
+  return mockArtistProposals[id]
+}
 
 const T0 = '2026-09-18T'
 
@@ -1461,6 +1488,24 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'clear_role_avatar':
       delete mockRoleAvatars[String(args?.role)]
       return null as T
+    case 'artist_proposal':
+      return mockArtistProposal(String(args?.id)) as T
+    case 'artist_regenerate': {
+      const p = mockArtistProposal(String(args?.id))
+      mockArtistProposals[p.id] = { ...p, items: p.items.map((it) => it.role === String(args?.role)
+        ? { ...it, image: mockArtistImage(it.role, 1), failure: null } : it) }
+      return mockArtistProposals[p.id] as T
+    }
+    case 'artist_apply': {
+      const p = mockArtistProposal(String(args?.id))
+      const roles = (args?.roles as string[] | undefined) ?? []
+      for (const role of roles) {
+        const img = p.items.find((it) => it.role === role)?.image
+        if (img) mockRoleAvatars[role] = img
+      }
+      mockArtistProposals[p.id] = { ...p, applied: roles }
+      return mockArtistProposals[p.id] as T
+    }
     case 'artifact_content':
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
