@@ -1,5 +1,5 @@
 // 成员行 + 消息右键菜单（components A16b 第一批，owner-followups-1015 #08）。
-// 成员行：打开详情 · @ 点名 · 复制名字；消息：复制 · 引用到输入条 · 在节点轨中定位。
+// 成员行：打开详情 · @ 点名 · 复制名字 ·（#18）换头像 · 恢复默认；消息：复制 · 引用到输入条 · 在节点轨中定位。
 // 有选区落在该消息内时复制 / 引用只作用于选区；消息不在节点轨上时「定位」禁用写原因；
 // 待决卡与裁决按钮上右键不出任何菜单；新动作默认空绑定、进命令面板。
 import { act, type ReactNode } from 'react'
@@ -102,11 +102,13 @@ afterEach(async () => {
 })
 
 describe('成员行右键菜单（A16b 第一批）', () => {
-  it('打开详情 · @ 点名 · 复制名字，依此顺序', async () => {
+  // #18 加了换头像 / 恢复默认两项（分隔后）；角色没有自定义头像时「恢复默认」右侧写原因代替键位。
+  it('打开详情 · @ 点名 · 复制名字 · 换头像 · 恢复默认，依此顺序', async () => {
     await rightClick(memberRow('a1'))
+    await settle()
     expect(menu()).not.toBeNull()
-    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['openDetail', 'mention', 'copyName'])
-    expect(rows().map((r) => r.textContent)).toEqual(['Open details', '@ Mention', 'Copy name'])
+    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['openDetail', 'mention', 'copyName', 'changeAvatar', 'restoreAvatar'])
+    expect(rows().map((r) => r.textContent)).toEqual(['Open details', '@ Mention', 'Copy name', 'Change avatar', 'Restore default avatarNo custom avatar'])
   })
 
   it('右键不改选中：不打开该成员，只给行出焦点环标记', async () => {
@@ -159,6 +161,74 @@ describe('成员行右键菜单（A16b 第一批）', () => {
     await keyOn(memberRow('a1'), { key: 'm', altKey: true, shiftKey: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) })
     await settle()
     expect(composer().value).toBe('@Coder ')
+  })
+})
+
+describe('成员行换头像 / 恢复默认（#18，同角色详情 = 角色层）', () => {
+  it('角色没有自定义头像：恢复默认禁用并写原因', async () => {
+    vi.spyOn(api, 'roleAvatar').mockResolvedValue(null)
+    const clear = vi.spyOn(api, 'clearRoleAvatar').mockResolvedValue()
+    await rightClick(memberRow('a1'))
+    await settle()
+    expect(row('restoreAvatar').getAttribute('aria-disabled')).toBe('true')
+    expect(row('restoreAvatar').querySelector('[data-ctx-hint]')!.textContent).toBe('No custom avatar')
+    await pick('restoreAvatar')
+    expect(clear).not.toHaveBeenCalled()
+  })
+
+  it('角色有自定义头像：恢复默认删角色头像并刷新团队', async () => {
+    vi.spyOn(api, 'roleAvatar').mockResolvedValue('data:image/png;base64,AA==')
+    const clear = vi.spyOn(api, 'clearRoleAvatar').mockResolvedValue()
+    const invalidate = vi.spyOn(useUiStore.getState(), 'invalidate').mockResolvedValue()
+    await rightClick(memberRow('q2'))
+    await settle()
+    expect(row('restoreAvatar').getAttribute('aria-disabled')).toBeNull()
+    await pick('restoreAvatar')
+    await settle()
+    expect(clear).toHaveBeenCalledWith('QA')
+    expect(invalidate).toHaveBeenCalledWith('team')
+  })
+
+  it('换头像：选图 → 写角色头像（不是实例覆盖）', async () => {
+    vi.spyOn(api, 'roleAvatar').mockResolvedValue(null)
+    const setRole = vi.spyOn(api, 'setRoleAvatar').mockResolvedValue()
+    const setAgent = vi.spyOn(api, 'setAgentAvatar').mockResolvedValue()
+    vi.spyOn(useUiStore.getState(), 'invalidate').mockResolvedValue()
+    let picker: HTMLInputElement | null = null
+    vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (this: HTMLInputElement) { picker = this })
+    await rightClick(memberRow('a1'))
+    await pick('changeAvatar')
+    expect(picker!.type).toBe('file')
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'a.png', { type: 'image/png' })
+    Object.defineProperty(picker!, 'files', { value: [file] })
+    await act(async () => { picker!.dispatchEvent(new Event('change')); await new Promise((r) => setTimeout(r, 20)) })
+    expect(setRole).toHaveBeenCalledWith('Coder', expect.stringMatching(/^data:image\/png;base64,/))
+    expect(setAgent).not.toHaveBeenCalled()
+  })
+
+  it('超过 2MB 本地拒绝，不发请求', async () => {
+    const setRole = vi.spyOn(api, 'setRoleAvatar').mockResolvedValue()
+    let picker: HTMLInputElement | null = null
+    vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (this: HTMLInputElement) { picker = this })
+    await rightClick(memberRow('a1'))
+    await pick('changeAvatar')
+    const big = new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' })
+    Object.defineProperty(picker!, 'files', { value: [big] })
+    await act(async () => { picker!.dispatchEvent(new Event('change')) })
+    expect(setRole).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.at(-1)?.tone).toBe('err')
+  })
+
+  it('键位（默认空，绑定后）作用于焦点成员行；没有可恢复的只提示', async () => {
+    vi.spyOn(api, 'roleAvatar').mockResolvedValue(null)
+    const clear = vi.spyOn(api, 'clearRoleAvatar').mockResolvedValue()
+    setBinding('restoreMemberAvatar', 'alt+mod+shift+r')
+    act(() => memberRow('a1').focus())
+    await keyOn(memberRow('a1'), { key: 'r', altKey: true, shiftKey: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) })
+    await settle()
+    expect(clear).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.at(-1)?.text).toBe('No custom avatar')
+    resetBinding('restoreMemberAvatar')
   })
 })
 
@@ -251,6 +321,8 @@ describe('新动作进命令面板（A16b「定位」）', () => {
     const items = await palette()
     expect(items.some((x) => x.startsWith('@ Mention Coder'))).toBe(true)
     expect(items.some((x) => x.startsWith('Copy name: Coder'))).toBe(true)
+    expect(items.some((x) => x.startsWith('Change avatar: Coder'))).toBe(true)
+    expect(items.some((x) => x.startsWith('Restore default avatar: Coder'))).toBe(true)
   })
 
   it('焦点在消息里时面板有复制消息 / 引用 / 定位；焦点在别处则不列', async () => {

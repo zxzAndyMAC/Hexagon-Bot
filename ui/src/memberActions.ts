@@ -1,7 +1,11 @@
 // 侧栏成员行的动作（components A16b 第一批「成员行」，owner-followups-1015 #08）。
 // 右键菜单、命令面板、keymap 三个入口共用这里——右键不是唯一入口（A16b「定位」）：
 // 「打开详情」同点击成员行；「@ 点名」同输入条 @ 弹层的点名块；「复制名字」写角色名。
+// 「换头像 / 恢复默认」（#18）语义同设置·团队 / 向导的角色详情：改的是**角色层**（该角色全部实例生效），
+// 不是画布 Agent 详情的实例覆盖——有实例覆盖的行换完看不到变化，这是规范 E4 的层级定义，不是 bug。
 import i18n from './i18n'
+import { api } from './api'
+import { pickAvatarFile } from './components/AvatarPicker'
 import { insertComposerMention } from './composerFill'
 import { mentionName, mentionTokenText } from './composerAtoms'
 import { useUiStore } from './store'
@@ -41,6 +45,40 @@ export async function copyMemberName(id: string) {
   try {
     await navigator.clipboard.writeText(m.role)
     useUiStore.getState().pushToast(i18n.t('ctxMember.nameCopied'), 'ok')
+  } catch (e) {
+    toastError(e)
+  }
+}
+
+/** 换头像：选图后写角色头像（同角色详情 `setRoleAvatar`），再刷新团队让各行重拉生效图。 */
+export function changeMemberAvatar(id: string) {
+  const m = memberOf(id)
+  if (!m) return
+  pickAvatarFile(async (url) => {
+    await api.setRoleAvatar(m.role, url)
+    await useUiStore.getState().invalidate('team')
+  })
+}
+
+/** 该成员的角色有没有自定义头像（「恢复默认」可用的条件）。读失败按「没有」处理：禁用比误删便宜。 */
+export async function memberHasRoleAvatar(id: string): Promise<boolean> {
+  const m = memberOf(id)
+  if (!m) return false
+  try { return (await api.roleAvatar(m.role)) != null } catch { return false }
+}
+
+/**
+ * 恢复默认：删角色头像（同角色详情 `clearRoleAvatar`）→ 色块首字（有实例覆盖的行仍显示覆盖图）。
+ * 键位 / 命令面板没有菜单的禁用态可看，没有可恢复的就出提示，不发删除。
+ */
+export async function restoreMemberAvatar(id: string) {
+  const m = memberOf(id)
+  if (!m) return
+  const s = useUiStore.getState()
+  if (!(await memberHasRoleAvatar(id))) { s.pushToast(i18n.t('ctxMember.noCustomAvatar'), 'info'); return }
+  try {
+    await api.clearRoleAvatar(m.role)
+    await useUiStore.getState().invalidate('team')
   } catch (e) {
     toastError(e)
   }

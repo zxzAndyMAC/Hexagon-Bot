@@ -13,7 +13,7 @@ import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
 import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
-import { copyMemberName, memberRowTarget, mentionMember } from '../memberActions'
+import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, restoreMemberAvatar } from '../memberActions'
 import { dispatchMessageAction, messageOnRail, messageTarget } from '../messageActions'
 import { insertPathToComposer, revealLabelKey, revealPath } from '../fileActions'
 import { treeInsertPath } from '../composerAtoms'
@@ -118,6 +118,11 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
           hint: bind('mentionMember'), run: () => mentionMember(memberTarget.id) },
         { id: 'c-copy-member-name', group: 'cmd' as const, label: t('palette.copyMemberName', { role: memberTarget.role }), icon: 'copy' as const,
           hint: bind('copyMemberName'), run: () => copyMemberName(memberTarget.id) },
+        // #18：「恢复默认」照列——面板是同步列表，角色有无自定义头像在执行时判（没有则提示，不发删除）。
+        { id: 'c-change-member-avatar', group: 'cmd' as const, label: t('palette.changeMemberAvatar', { role: memberTarget.role }), icon: 'image' as const,
+          hint: bind('changeMemberAvatar'), run: () => changeMemberAvatar(memberTarget.id) },
+        { id: 'c-restore-member-avatar', group: 'cmd' as const, label: t('palette.restoreMemberAvatar', { role: memberTarget.role }), icon: 'undo' as const,
+          hint: bind('restoreMemberAvatar'), run: () => void restoreMemberAvatar(memberTarget.id) },
       ] : []),
       ...(msgHost ? [
         { id: 'c-copy-message', group: 'cmd' as const, label: t('palette.copyMessage'), icon: 'copy' as const,
