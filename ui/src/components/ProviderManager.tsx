@@ -9,6 +9,7 @@ import { api, asCmdError, errText, type ModelEntry, type ProviderPreset, type Pr
 import { useRequestUrl } from '../requestUrl'
 import { RequestUrlNote } from './RequestUrlNote'
 import { isLocalEndpoint } from '../providerGate'
+import { enabledFirst, presetOf, searchText } from '../providerCatalog'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
 import { BUILTIN_SLOTS, DEDICATED_PREFIX, isBuiltinSlot, isDedicatedSlot } from '../modelpick'
@@ -271,6 +272,9 @@ export function ProviderManager() {
     await reload()
   }
 
+  // #22：目录条目的说明（官网 / 文档 / 示例模型）——选中预设，或已按预设 id 存下的供应商。
+  const catalog = presetOf(presets, draft?.id)
+
   // 票 21：实际请求地址由 core provider_url 算（与保存同一道规范化）；遮蔽的已存地址不预览。
   const previewUrl = useRequestUrl(draft?.kind ?? 'openai', draft?.base_url ?? '')
 
@@ -297,8 +301,9 @@ export function ProviderManager() {
   // ● 已存钥匙 / ◐ 缺钥匙橙 / ○ 停用 + 字母头像 + 行内开关），详情 = 头（大字母头像 + 名 + 端点「· 自动推导」+ 删除）、
   // API Key 与「检测并拉取模型」、模型卡（等宽名 + 窗口 chip + 能力图标 + 编辑）、槽位绑定表。
   type Item = { key: string; preset: boolean; p: ProviderView | ProviderPreset }
+  // owner-followups-1015 #22：已配置组里已启用的在前（目录约 59 条，靠搜索找）。
   const items: Item[] = [
-    ...doc.providers.map((p) => ({ key: p.id, preset: false, p })),
+    ...enabledFirst(doc.providers).map((p) => ({ key: p.id, preset: false, p })),
     ...unconfiguredPresets.map((p) => ({ key: `preset:${p.id}`, preset: true, p })),
   ]
 
@@ -404,7 +409,7 @@ export function ProviderManager() {
       label={t('settings.nav_models')}
       items={items}
       itemKey={(it) => it.key}
-      filterText={(it) => it.p.name}
+      filterText={(it) => searchText(it.p)}
       groupOf={(it) => (it.preset ? 'preset' : 'configured')}
       groupLabel={(g) => t(g === 'preset' ? 'settingsUi.providersCatalog' : 'settingsUi.providersConfigured')}
       itemDim={(it) => !it.preset && !(it.p as ProviderView).enabled}
@@ -473,10 +478,12 @@ export function ProviderManager() {
                 </NativeSelect>
               </Field>
             </div>
-            <Field className="mt-3" label={t('providers.baseUrl')} help={previewUrl ? <RequestUrlNote url={previewUrl} /> : undefined}>
+            <Field className="mt-3" label={t('providers.baseUrl')}
+              help={previewUrl ? <RequestUrlNote url={previewUrl} /> : catalog && !draft.base_url.trim() ? t('providers.catalogNoAddress') : undefined}>
               <Input aria-label={t('providers.baseUrl')} className="font-mono text-[12px]" value={draft.base_url} placeholder="https://…/v1"
                 onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} />
             </Field>
+            {catalog && <CatalogInfo preset={catalog} />}
             <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-3">
               <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : t('providers.keyMissing')}>
                 <Input
@@ -645,5 +652,35 @@ function SlotRow({
       {/* data-slot-state 挂在行的直接子元素上：测试按 parentElement 回到行 */}
       <span data-slot-state={state} className="inline-flex justify-end">{chip}</span>
     </div>
+  )
+}
+
+/// 目录条目说明（owner-followups-1015 #22，E3）：官网 / 文档地址（等宽可选中，桌面壳不开外链）
+/// 与登记的示例模型——只作参考，不预填默认模型，模型靠「检测并拉取」。没有任何说明时不出。
+function CatalogInfo({ preset }: { preset: ProviderPreset }) {
+  const { t } = useTranslation()
+  const rows: [string, string][] = [
+    [t('providers.catalogWebsite'), preset.website],
+    [t('providers.catalogDocs'), preset.docs],
+  ].filter((r): r is [string, string] => !!r[1])
+  if (rows.length === 0 && preset.sample_models.length === 0) return null
+  return (
+    <dl data-catalog-info className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px] text-ink-3">
+      {rows.map(([k, v]) => (
+        <Fragment key={k}>
+          <dt>{k}</dt>
+          <dd className="min-w-0 font-mono break-all select-text">{v}</dd>
+        </Fragment>
+      ))}
+      {preset.sample_models.length > 0 && (
+        <>
+          <dt>{t('providers.catalogSamples')}</dt>
+          <dd data-sample-models className="min-w-0">
+            <span className="font-mono break-all">{preset.sample_models.join(' · ')}</span>
+            <span className="block">{t('providers.catalogSamplesHint')}</span>
+          </dd>
+        </>
+      )}
+    </dl>
   )
 }

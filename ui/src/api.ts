@@ -742,6 +742,11 @@ const MOCK_SESSION_SUMMARY: SessionSummary = {
 
 // 票 16c：`?mocksession` 让 SessionHost 黄金路径在浏览器 dev 里可走——暂停→继续、
 // 请求工作树→坞内工作树确认卡→确认后挂上、稍后继续预约。不带标志时保持静态样例（vitest 依赖）。
+// #22：dev 夹具的预设补齐 core ProviderPreset 的说明性字段（手工条目默认无图标 / 无示例）。
+const mockPreset = (p: Partial<ProviderPreset> & Pick<ProviderPreset, 'id' | 'name' | 'kind' | 'base_url'>): ProviderPreset => ({
+  default_model: '', icon_key: '', website: '', docs: '', sample_models: [], origin: 'manual', ...p,
+})
+
 const mockSessionOn = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mocksession')
 const MOCK_SESSION = {
   status: 'running' as SessionRecord['status'], reason: 'session_started',
@@ -1815,21 +1820,25 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     }
     case 'provider_presets':
       return [
-        { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },
-        { id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '' },
-        { id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '' },
-        { id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '' },
-        { id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '' },
+        mockPreset({ id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' }),
+        mockPreset({ id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '' }),
+        mockPreset({ id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '' }),
+        mockPreset({ id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '' }),
+        mockPreset({ id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '' }),
         // gap B13：设置页目录并进同一份预设（core provider_presets.rs）
-        { id: 'gemini', name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', default_model: '' },
-        { id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', default_model: '' },
-        { id: 'groq', name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1', default_model: '' },
-        { id: 'mistral', name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1', default_model: '' },
-        { id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', default_model: '' },
-        { id: 'zhipu', name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: '' },
-        { id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' },
-        { id: 'lm-studio', name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1', default_model: '' },
-        { id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' },
+        mockPreset({ id: 'gemini', name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', default_model: '' }),
+        mockPreset({ id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', default_model: '' }),
+        mockPreset({ id: 'groq', name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1', default_model: '' }),
+        mockPreset({ id: 'mistral', name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1', default_model: '' }),
+        mockPreset({ id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', default_model: '' }),
+        mockPreset({ id: 'zhipu', name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: '' }),
+        mockPreset({ id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' }),
+        mockPreset({ id: 'lm-studio', name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1', default_model: '' }),
+        mockPreset({ id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' }),
+        // #22：目录条目（core provider_catalog；节选三条：无版本段完整端点 / 有版本段 / 无公共地址）
+        mockPreset({ id: 'perplexity', name: 'Perplexity', kind: 'openai', base_url: 'https://api.perplexity.ai/chat/completions', origin: 'catalog', icon_key: 'perplexity', website: 'https://perplexity.ai/', docs: 'https://docs.perplexity.ai/home' }),
+        mockPreset({ id: 'dashscope', name: 'Bailian', kind: 'openai', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', origin: 'catalog', icon_key: 'bailian', website: 'https://www.aliyun.com/product/bailian', docs: 'https://help.aliyun.com/zh/model-studio/getting-started/', sample_models: ['deepseek-r1', 'deepseek-v3', 'deepseek-v3.1'] }),
+        mockPreset({ id: 'gpustack', name: 'GPUStack', kind: 'openai', base_url: '', origin: 'catalog', icon_key: 'gpustack', website: 'https://gpustack.ai/', docs: 'https://docs.gpustack.ai/latest/' }),
       ] as T
     case 'fetch_provider_models':
       return [
