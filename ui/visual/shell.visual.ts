@@ -41,7 +41,21 @@ async function canvas(page: Page, theme: Theme, lang: Lang, tag: string) {
   await page.locator('[data-canvas-tab]').first().click({ button: 'right' })
   await page.locator('[data-slot="context-menu-content"]').waitFor()
   await snap(page, `canvas-tab-menu-${tag}`)
+  // owner-followups-1015 #06（A22「溢出」）：页签放不下 → 压到 96 + 横向滚动，最新打开的滚进视区，固定页签钉左；
+  // 「全部页签」菜单 >10 条出搜索（打开即聚焦）。
+  await page.keyboard.press('Escape')
+  await store(page, `const st = s.getState(); st.toggleCanvasFull(); for (const p of ${JSON.stringify(OVERFLOW_PATHS)}) st.openTab({ id: 'art:' + p, kind: 'artifact', title: p, path: p })`)
+  await snap(page, `canvas-tab-overflow-${tag}`)
+  await page.locator('[data-canvas-all-tabs]').click()
+  await page.locator('[data-all-tabs-search]').waitFor()
+  await snap(page, `canvas-all-tabs-${tag}`)
 }
+
+/** 12 个产物页签 + 固定「产物」清单 = 13 条（>10 出搜索）；最后一个是 mock 里有内容的产物。 */
+const OVERFLOW_PATHS = [
+  'specs/prd.md', 'ui/screens.md', 'api/spec.md', 'tests/qa-report.md', 'reviews/be-spec.md', 'docs/impl-notes.md',
+  'docs/markdown-demo.md', 'proposals/p2.md', 'scripts/seed.py', 'src/recipes.ts', 'crates/core/src/api.rs', 'docs/arch.md',
+]
 
 async function managed(page: Page, theme: Theme, lang: Lang, tag: string) {
   await boot(page, { theme, lang, query: 'mockmanaged' })
