@@ -30,7 +30,9 @@ import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
 import { bindingFor, matches } from './keymap'
-import { closeOtherTabs, closeTabsToRight, copyTabPath, stepTab } from './tabActions'
+import { closeOtherTabs, closeTabsToRight, tabPath, stepTab } from './tabActions'
+import { copyPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
+import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
@@ -297,12 +299,31 @@ export default function App() {
         if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView) stepTab(dir)
         return
       }
-      for (const [action, run] of [['closeOtherTabs', closeOtherTabs], ['closeTabsToRight', closeTabsToRight], ['copyPath', copyTabPath]] as const) {
+      for (const [action, run] of [['closeOtherTabs', closeOtherTabs], ['closeTabsToRight', closeTabsToRight]] as const) {
         const b = bindingFor(action)
         if (!b || !matches(e, b)) continue
         e.preventDefault()
         const s = useUiStore.getState()
         if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView && s.activeTab) void run(s.activeTab)
+        return
+      }
+      // owner-followups-1015 #07（A16b 文件树行）：路径动作（复制 / 插入到输入条 / 在访达中显示）的键位入口，
+      // 默认空绑定；作用对象 = 焦点文件树行，否则画布可见时的当前文件 / 产物页签（#05 的 copyPath 同此扩展）。
+      for (const action of ['copyPath', 'insertPath', 'revealPath'] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const s = useUiStore.getState()
+        if (s.modalScope !== 'workbench') return
+        const tab = s.canvasOpen && !s.usageView ? tabPath(s.tabs.find((x) => x.id === s.activeTab)) : null
+        const target = treeRowTarget() ?? (tab ? { path: tab, kind: 'file' as const } : null)
+        if (!target) return
+        if (action === 'copyPath') void copyPath(target.path)
+        else if (action === 'revealPath') void revealPath(target.path)
+        else {
+          const path = treeInsertPath(target)
+          if (path) insertPathToComposer(path)
+        }
         return
       }
       // ADR 0069：退回/跳过/盖章不再有快捷键。最终验收留在待决卡。

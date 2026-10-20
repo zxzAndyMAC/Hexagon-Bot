@@ -16,7 +16,7 @@ import { useUiStore } from '../store'
 import { api, errText } from '../api'
 import { Icon } from './Icon'
 import { ContextMeter } from './ContextMeter'
-import { COMPOSER_FILL_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
+import { COMPOSER_FILL_EVENT, COMPOSER_PATH_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
 import { visiblePending } from '../decisions'
 import type { AttachRef } from '../gen/AttachRef'
 import {
@@ -338,6 +338,17 @@ export function Composer() {
     commitText(next.text, next.caret)
     ta?.focus()
   }
+  // owner-followups-1015 #07：文件树右键「插入到输入条」与拖入同一条插入（监听只挂一次，经 ref 读最新草稿）。
+  const insertPathRef = useRef(insertDroppedPath)
+  useEffect(() => { insertPathRef.current = insertDroppedPath })
+  useEffect(() => {
+    const onPath = (e: Event) => {
+      const path = (e as CustomEvent<unknown>).detail
+      if (typeof path === 'string' && path) insertPathRef.current(path)
+    }
+    window.addEventListener(COMPOSER_PATH_EVENT, onPath)
+    return () => window.removeEventListener(COMPOSER_PATH_EVENT, onPath)
+  }, [])
 
   const mentionIds = team.filter((member) => atoms.some((atom) => atom.kind === 'mention'
     && (atom.value === member.role || atom.value === `${member.role}[${member.id}]`))).map((member) => member.id)

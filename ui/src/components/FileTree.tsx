@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, errText, type RepoEntry } from '../api'
 import { useUiStore } from '../store'
-import { TREE_DRAG_MIME, treeDragPayload } from '../composerAtoms'
+import { TREE_DRAG_MIME, treeDragPayload, treeInsertPath } from '../composerAtoms'
+import { isMac } from '../keymap'
+import { copyPath, insertPathToComposer, revealLabelKey, revealPath, TREE_PATH_ATTR } from '../fileActions'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
 import { Row } from './Row'
@@ -179,6 +182,39 @@ export function FileTree() {
   )
 }
 
+/**
+ * 文件树行右键菜单（A16b 第一批，owner-followups-1015 #07）：打开 · 插入到输入条 · 复制路径 · 在访达中显示。
+ * 种类不适用不渲染：目录没有「打开」（展开 = 点行本身）；链接不打开、不插入（没有一条仓内路径可指），
+ * 只留复制 / 揭示——揭示指向仓外的链接由 core 拒（errors.reveal_outside_project）。
+ * 右键不改选中、不打开：Trigger 只给行画焦点环（「右键一个没打开的文件时画布不跳走」）。
+ */
+function TreeRowMenu({ entry, onOpen, children }: { entry: RepoEntry; onOpen: () => void; children: ReactNode }) {
+  const { t } = useTranslation()
+  const insert = treeInsertPath(entry)
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        {entry.kind === 'file' && (
+          <ContextMenuItem data-ctx-item="open" onSelect={onOpen}>{t('ctx.open')}</ContextMenuItem>
+        )}
+        {insert && (
+          <ContextMenuItem data-ctx-item="insert" action="insertPath" onSelect={() => insertPathToComposer(insert)}>
+            {t('ctx.insertToComposer')}
+          </ContextMenuItem>
+        )}
+        {(entry.kind === 'file' || insert) && <ContextMenuSeparator />}
+        <ContextMenuItem data-ctx-item="copyPath" action="copyPath" onSelect={() => void copyPath(entry.path)}>
+          {t('ctx.copyPath')}
+        </ContextMenuItem>
+        <ContextMenuItem data-ctx-item="reveal" action="revealPath" onSelect={() => void revealPath(entry.path)}>
+          {t(revealLabelKey())}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
 /** 行（D14 `tn`）：28 高、圆角 6、13px ink-2；当前文件 --accent-tint 底 --ink；悬停 --hover。 */
 function TreeList({ entries, depth, kids, loading, current, onDir, onFile }: {
   entries: RepoEntry[]
@@ -197,8 +233,11 @@ function TreeList({ entries, depth, kids, loading, current, onDir, onFile }: {
     const on = e.kind === 'file' && current === e.path
     return (
       <div key={e.path} role="none">
+        <TreeRowMenu entry={e} onOpen={() => onFile(e)}>
         <Row
           role="treeitem"
+          {...{ [TREE_PATH_ATTR]: e.path }}
+          data-tree-kind={e.kind}
           draggable={drag != null}
           onDragStart={(ev) => {
             if (!drag || !ev.dataTransfer) return
@@ -207,7 +246,12 @@ function TreeList({ entries, depth, kids, loading, current, onDir, onFile }: {
             ev.dataTransfer.effectAllowed = 'copy'
           }}
           selected={on}
-          onClick={() => (e.kind === 'dir' ? onDir(e) : e.kind === 'file' ? onFile(e) : undefined)}
+          // A16b：macOS ctrl+点击由系统当右键（发 contextmenu 开菜单），不能顺带展开 / 打开（「右键不改选中」）。
+          onClick={(ev) => {
+            if (isMac && ev.ctrlKey) return
+            if (e.kind === 'dir') onDir(e)
+            else if (e.kind === 'file') onFile(e)
+          }}
           className={cn(
             'hx-focus flex h-7 items-center gap-1.5 rounded-[var(--r-xs)] pr-1.5 whitespace-nowrap',
             on ? 'bg-accent-tint text-ink' : 'text-ink-2 live:hover:bg-hover',
@@ -224,6 +268,7 @@ function TreeList({ entries, depth, kids, loading, current, onDir, onFile }: {
             : <FileTypeIcon name={e.name} kind={e.kind} open={open} size={14} />}
           <span className="min-w-0 truncate">{e.name}</span>
         </Row>
+        </TreeRowMenu>
         {open && (
           <TreeList
             entries={kids[e.path]}

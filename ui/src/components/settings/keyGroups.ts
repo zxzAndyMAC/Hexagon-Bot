@@ -23,7 +23,7 @@ export function keyGroupOf(id: string): KeyGroup {
   if (id.startsWith('managed') || id === 'confirmManaged' || id === 'approvalMode' || /BroadAccess$/.test(id) || id === 'modelRecoveryStop') return 'managed'
   if (/^(desktop|browser|agentScreen)/.test(id) || /(BrowserElement|DesktopScreenshot)$/.test(id) || id === 'computerModelSettings') return 'computer'
   if (id.startsWith('session')) return 'session'
-  if (id.startsWith('tree') || /FileEdits?$/.test(id) || id === 'saveFile' || id === 'copyPath') return 'files'
+  if (id.startsWith('tree') || /FileEdits?$/.test(id) || id === 'saveFile' || id === 'copyPath' || id === 'insertPath' || id === 'revealPath') return 'files'
   return 'other'
 }
 

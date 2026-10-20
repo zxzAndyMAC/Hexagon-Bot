@@ -383,6 +383,8 @@ export const api = {
   writeRepoFile: (snapshot: RepoFileSnapshot, content: string) => call<void>('write_repo_file', { snapshot, content }),
   createRepoFile: (path: string) => call<void>('create_repo_file', { path }),
   createRepoDir: (path: string) => call<void>('create_repo_dir', { path }),
+  /** owner-followups-1015 #07：在访达 / 资源管理器 / 文件管理器中显示（控制组；根约束在 core，越界 errors.reveal_outside_project）。 */
+  revealRepoPath: (path: string) => call<void>('reveal_repo_path', { path }),
   permissionShapeSuggestion: (questionId: string) => call<PermissionShapeSuggestion | null>('permission_shape_suggestion', { questionId }),
   approvalMode: () => call<ApprovalModeStatus>('approval_mode'),
   setApprovalMode: (mode: ApprovalMode, expectedProjectRoot: string) => call<ApprovalModeStatus>('set_approval_mode', { mode, expectedProjectRoot }),
@@ -1581,6 +1583,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'write_repo_file':
     case 'create_repo_file':
     case 'create_repo_dir':
+    case 'reveal_repo_path':
       return null as T
     case 'permission_shape_suggestion':
       return (args?.questionId === 'q-perm' ? { shape: 'exact:cargo test --workspace', generalized: false, tool: 'bash', project_id: 'p1', agent_id: 'a0' } : null) as T
