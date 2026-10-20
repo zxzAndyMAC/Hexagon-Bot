@@ -13,7 +13,7 @@
 //! （[`provider_config::image_generation_slot`]，不回退 default——default 是对话模型，
 //! 回退 = 拿对话模型凑合出图）。代价模型：误报「没绑」多一次去设置；误报「已绑」
 //! 负责人以为能出图、实际外发到对话模型。偏向报没绑。
-//! 已绑且支持时的出图执行器与头像提案卡是票 20。
+//! 已绑且支持时（票 20）走出图执行器（`image_gen`）出头像提案（`artist_proposal`）。
 
 use crate::db::Db;
 use crate::provider_config::{self, ImageGenerationSlot};
@@ -42,7 +42,10 @@ impl Tool for SummonArtist {
             "roles":{"type":"array","maxItems":32,"items":{"type":"string"},"description":"Optional subset of current team role names; omit for the whole team."}
         }})
     }
-    /// 只读出图槽配置、写一条时间线事件；不碰仓库、不外发（出图外发在票 20）。
+    /// 不碰仓库、不改头像（应用只在负责人点「全部应用」时发生）。会外发出图请求，
+    /// 但外发面只有角色名 / 职责摘要 / 风格描述，且先写轨迹（`image_gen` 模块注释）；
+    /// 召唤本身是负责人在聊天里要求的。仍记 Read：Write/Exec 档会把这次召唤变成
+    /// 权限卡，等于让负责人为自己刚提的要求再批一次。
     fn risk(&self) -> RiskClass {
         RiskClass::Read
     }
@@ -80,9 +83,7 @@ impl Tool for SummonArtist {
             ImageGenerationSlot::Unconfigured => ("unconfigured", None),
             ImageGenerationSlot::Unsupported { model } => ("unsupported", Some(model)),
             ImageGenerationSlot::Configured { model } => {
-                note(crate::diag::CLASS_SLOT, false, "image_executor_pending");
-                return Ok(json!({"state":"configured","model":model,
-                    "note":"image generation is not available in this build yet; tell the owner avatars cannot be generated yet"}));
+                return draw_proposal(db, ctx, &doc, style, &roles, &model, started);
             }
         };
         note(crate::diag::CLASS_SLOT, true, state);
@@ -99,6 +100,67 @@ impl Tool for SummonArtist {
         Ok(json!({"state":state,"model":model,
             "note":"the Artist told the owner an image model must be bound in Settings; do not generate avatars another way"}))
     }
+}
+
+/// 已绑且支持出图（票 20）：解析端点 → 逐角色出图 → 头像提案。端点不可发（非 OpenAI 兼容 /
+/// 供应商停用 / 缺钥匙）按「不支持」回同一句提示——负责人要做的事一样：去设置改出图槽。
+fn draw_proposal(
+    db: &Db,
+    ctx: &ToolContext,
+    doc: &provider_config::ProviderDoc,
+    style: &str,
+    roles: &[String],
+    model: &str,
+    started: std::time::Instant,
+) -> Result<Value, ToolError> {
+    let endpoint = ctx
+        .images
+        .as_ref()
+        .ok_or_else(|| ToolError::Exec("image generation is not wired in this context".into()))
+        .map(|access| access.endpoint(doc))?;
+    let endpoint = match endpoint {
+        Ok(ep) => ep,
+        Err(f) => {
+            crate::diag::note(
+                crate::diag::CLASS_SLOT,
+                true,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "artist_summon",
+                f.code,
+                started,
+            );
+            db.append_event(
+                &ctx.project_id,
+                crate::trace::EventKind::System,
+                json!({"kind":IMAGE_MODEL_MISSING,"speaker":ARTIST_ROLE,"speaker_code":ARTIST_CODE,
+                    "slot":provider_config::IMAGE_SLOT,"state":"unsupported","model":model,
+                    "reason":f.code,"style":style,"roles":roles}),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+            )
+            .map_err(|e| ToolError::Exec(format!("artist notice not recorded: {e}")))?;
+            return Ok(json!({"state":"unsupported","model":model,"reason":f.code,
+                "note":"the Artist told the owner the image slot cannot be used; do not generate avatars another way"}));
+        }
+    };
+    let cx = crate::artist_proposal::DrawCtx {
+        db,
+        root: &ctx.repo_root,
+        project_id: &ctx.project_id,
+        agent_id: Some(&ctx.agent_id),
+        stage_run_id: ctx.stage_run_id.as_deref(),
+    };
+    let proposal = crate::artist_proposal::create(&cx, &endpoint, style, roles)
+        .map_err(|e| ToolError::Exec(format!("avatar proposal failed: {e}")))?;
+    let drawn = proposal.items.iter().filter(|i| i.image.is_some()).count();
+    Ok(
+        json!({"state":"configured","model":model,"proposal_id":proposal.id,
+        "drawn":drawn,"failed":proposal.items.len() - drawn,
+        "note":"the Artist posted an avatar proposal card in the timeline; only the owner applies it. Do not apply or describe the avatars yourself."}),
+    )
 }
 
 /// 目标角色集：缺省 = 全队；给了就必须都是当前团队成员（画师自己不在团队里，自然被拒）。

@@ -2864,6 +2864,50 @@ fn clear_role_avatar(state: ProjectState<'_>, role: String) -> Result<(), CmdErr
     })
 }
 
+/// 票 20：头像提案读面（纯文件，读组，不碰工作台）。
+#[tauri::command]
+fn artist_proposal(
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_conn(&state, |_, root| {
+        hexagon_core::artist_proposal::load(root, &id)
+    })
+}
+
+/// 票 20：提案卡「换一张」。出图是秒级到分钟级的网络 IO：锁内只取 root，锁外自开账本
+/// 连接（同 stage_evidence），控制连接与工作台在此期间都可用；async 免得冻住窗口。
+#[tauri::command(async)]
+fn artist_regenerate(
+    state: ProjectState<'_>,
+    id: String,
+    role: String,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    let root = with_project_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+    let db = hexagon_core::db::Db::open(root.join(".hexagon/state.db")).map_err(cmd_err)?;
+    let access = hexagon_core::image_gen::ImageAccess::new(hexagon_core::credentials::active());
+    let cx = hexagon_core::artist_proposal::DrawCtx {
+        db: &db,
+        root: &root,
+        project_id: PROJECT_ID,
+        agent_id: None,
+        stage_run_id: None,
+    };
+    hexagon_core::artist_proposal::regenerate(&cx, &access, &id, &role).map_err(cmd_err)
+}
+
+/// 票 20：「全部应用」——负责人勾下的格按角色写头像（票 17 写入路径）。纯文件 + 一条轨迹。
+#[tauri::command]
+fn artist_apply(
+    state: ProjectState<'_>,
+    id: String,
+    roles: Vec<String>,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_project_conn(&state, |db, root| {
+        hexagon_core::artist_proposal::apply(db, root, PROJECT_ID, &id, &roles)
+    })
+}
+
 #[tauri::command]
 fn artifact_content_at(
     state: tauri::State<AppState>,
@@ -4014,6 +4058,9 @@ pub fn run() {
             role_avatar,
             set_role_avatar,
             clear_role_avatar,
+            artist_proposal,
+            artist_regenerate,
+            artist_apply,
             artifact_content_at,
             set_agent_sleeping,
             remove_agent,
