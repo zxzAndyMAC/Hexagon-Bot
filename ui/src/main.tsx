@@ -14,6 +14,7 @@ import i18n from './i18n'
 import { syncUiLanguageToCore } from './i18n/syncCore'
 import { api } from './api'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { installContextMenuGuard } from './contextMenuGuard'
 
 // 组件标本页（ui-redesign 票 01）：仅开发环境，`?specimen` 打开，用来和原型 index#tokens / index#type 截图比对。
 // import.meta.env.DEV 在生产构建里是字面量 false，动态导入随分支一起被摇掉。
@@ -22,6 +23,8 @@ const Specimen = import.meta.env.DEV && new URLSearchParams(location.search).has
   : null
 
 syncUiLanguageToCore(i18n, api.setUiLanguage)
+// A16b：整个应用拦掉 WebView 自带右键菜单（输入区与 Monaco 例外），见 contextMenuGuard.ts。
+installContextMenuGuard()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

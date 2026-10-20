@@ -30,6 +30,7 @@ import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
 import { bindingFor, matches } from './keymap'
+import { closeOtherTabs, closeTabsToRight, copyTabPath } from './tabActions'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
@@ -285,6 +286,15 @@ export default function App() {
         e.preventDefault()
         const s = useUiStore.getState()
         if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView && s.activeTab) s.closeTab(s.activeTab)
+        return
+      }
+      // owner-followups-1015 #05（A16b）：右键菜单动作的键位入口，默认空绑定（matches 对空串恒假）；同 ⌘W 只在画布可见时作用于当前页签。
+      for (const [action, run] of [['closeOtherTabs', closeOtherTabs], ['closeTabsToRight', closeTabsToRight], ['copyPath', copyTabPath]] as const) {
+        const b = bindingFor(action)
+        if (!b || !matches(e, b)) continue
+        e.preventDefault()
+        const s = useUiStore.getState()
+        if (s.modalScope === 'workbench' && s.canvasOpen && !s.usageView && s.activeTab) void run(s.activeTab)
         return
       }
       // ADR 0069：退回/跳过/盖章不再有快捷键。最终验收留在待决卡。

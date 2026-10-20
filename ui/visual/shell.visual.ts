@@ -37,6 +37,10 @@ async function canvas(page: Page, theme: Theme, lang: Lang, tag: string) {
   await snap(page, `canvas-side-${tag}`)
   await store(page, 's.getState().toggleCanvasFull()')
   await snap(page, `canvas-full-${tag}`)
+  // owner-followups-1015 #05（A16b）：页签右键菜单；唯一页签 → 关闭其他 / 关闭右侧禁用写原因，列表页签无复制路径。
+  await page.locator('[data-canvas-tab]').first().click({ button: 'right' })
+  await page.locator('[data-slot="context-menu-content"]').waitFor()
+  await snap(page, `canvas-tab-menu-${tag}`)
 }
 
 async function managed(page: Page, theme: Theme, lang: Lang, tag: string) {
