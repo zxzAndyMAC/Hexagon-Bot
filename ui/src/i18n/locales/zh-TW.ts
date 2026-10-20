@@ -920,7 +920,7 @@ export default {
     edit: '編輯', delete: '刪除', save: '儲存', cancel: '取消', add: '新增供應商',
     unsaved: '未儲存——儲存後才註冊', slots: '槽位綁定',
     slotsHint: '把每個角色模型槽綁到 供應商+模型；「default」兜底未綁定槽。',
-    checkNeedsKey: '先填 API key 再檢測', autoUrl: '自動推導',
+    checkNeedsKey: '先填 API key 再檢測', autoUrl: '自動推導', requestUrl: '實際請求地址：',
     slotsSummary: '{{bound}}/{{total}} 槽位已綁', slotsMissingKey: '{{count}} 個供應商待配 key',
     pickProvider: '選供應商…', pickModel: '模型 ID…',
     bind: '綁定', unbind: '解綁', unbound: '未綁',

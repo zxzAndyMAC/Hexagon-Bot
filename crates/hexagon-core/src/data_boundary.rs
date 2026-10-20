@@ -121,6 +121,10 @@ pub(crate) fn hidden_url(raw: &str) -> String {
         .trim()
         .into()
 }
+/// 输入是不是界面拿到的遮蔽形（含 `[stored:` 标记）——即已存值未改动、原样送回。
+pub(crate) fn is_hidden(input: &str) -> bool {
+    input.contains(STORED)
+}
 pub(crate) fn restore(
     input: &str,
     current: Option<&str>,

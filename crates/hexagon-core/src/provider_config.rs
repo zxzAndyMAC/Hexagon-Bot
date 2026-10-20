@@ -482,10 +482,12 @@ pub(crate) fn fetch_catalog(
     let google = url::Url::parse(base).ok().is_some_and(|u| {
         u.host_str() == Some("generativelanguage.googleapis.com") && u.path() == "/v1beta/openai"
     });
+    // 票 21：目录地址与对话请求同根（完整端点存储值先去掉端点尾），见 provider_url。
     let url = match def.kind {
         ProviderKind::OpenAi if google => format!("{}/models", base.trim_end_matches("/openai")),
-        ProviderKind::Anthropic => format!("{base}/v1/models"),
-        ProviderKind::OpenAi => format!("{base}/models"),
+        ProviderKind::Anthropic | ProviderKind::OpenAi => {
+            crate::provider_url::models_url(&def.kind, base)
+        }
         // Jev 没有 /models。用一道最小选择题确认钥匙，模型名以响应为准。
         ProviderKind::Jev => return fetch_jev_models(def, key),
     };

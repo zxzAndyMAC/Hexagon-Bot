@@ -52,6 +52,7 @@ pub mod provider_admin;
 pub mod provider_config;
 pub mod provider_presets;
 pub mod provider_probe;
+pub mod provider_url;
 pub mod push;
 pub mod replay;
 pub mod review;
