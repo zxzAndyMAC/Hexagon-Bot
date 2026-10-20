@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "Mover para a Lixeira",
     stepHostBash: "Executar comando do computador",
     stepProposeDesign: "Apresentar opções visuais",
+    stepSummonArtist: "Chamar o Artista",
     stepReadDesign: "Ler direção visual",
 
     stepComputerObserve: "Observar computador", stepComputerAction: "Operar computador", stepComputerNavigate: "Navegar no computador",
@@ -884,6 +885,9 @@ export default {
     kindOpenai: 'Compatível com OpenAI',
     hint: "Provedores são globais. Slots selecionam provedor e modelo; default cobre os não vinculados. Chaves usam o armazenamento ativo mostrado em Geral.",
     filter: 'Pesquisar provedores',
+    catalogWebsite: 'Site', catalogDocs: 'Documentação', catalogSamples: 'Modelos de exemplo',
+    catalogSamplesHint: 'Apenas referência; não são preenchidos. Use «Testar e obter modelos» para a lista real.',
+    catalogNoAddress: 'Este provedor não tem endereço público. Informe o endereço da sua própria implantação.',
     empty: 'Sem provedores — adicione um para os agentes chamarem o modelo',
     name: 'Nome',
     keySet: 'chave guardada', keyMissing: 'sem chave',
@@ -1250,4 +1254,5 @@ export default {
     reveal_launch: "Não foi possível abrir o gerenciador de arquivos",
   },
   feedback: {"region": "Notificações", "removeRecent": "Remover dos projetos recentes", "switchWaitTitle": "A troca de projeto precisa esperar", "switchWaitBody": ": as ações no computador em {{project}} estão pausadas; a troca acontece quando a atual parar. Você pode continuá-las ao voltar.", "stayHere": "Ficar neste projeto", "treeEmptyBody": "Esta pasta ainda não tem arquivos. Crie um para começar.", "searchEmptyBody": "Tente outra palavra-chave ou limpe a busca para ver tudo.", "pickerEmptyBody": "Ainda não há opções. Itens adicionados nas Configurações aparecem aqui.", "clearSearch": "Limpar busca"},
+  artist: {"unconfigured": "Para desenhar os avatares da equipe é preciso um modelo de imagens, e o slot de imagens ainda não está vinculado.", "unsupported": "Para desenhar os avatares da equipe é preciso um modelo de imagens. {{model}}, vinculado ao slot de imagens, não gera imagens.", "bindImageModel": "Vincular um modelo de imagens nas Configurações"},
 }

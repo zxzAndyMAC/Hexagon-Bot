@@ -20,7 +20,18 @@
 
 use crate::provider::ProviderKind;
 
-/// 一个服务商预设（IPC DTO）。`default_model` 为空表示不替负责人猜模型。
+/// 预设出处（票 22）：手工整理的 14 条 / 固定快照目录。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub enum PresetOrigin {
+    Manual,
+    Catalog,
+}
+
+/// 一个服务商预设（IPC DTO）。`default_model` 为空表示不替负责人猜模型（目录条目一律为空）。
+/// 票 22 起带说明性元数据：图标键（空 = 无品牌图标，界面用中性图标）、官网、文档、示例模型
+/// （只作说明，不预填——模型靠「检测并拉取」）、出处。`base_url` 为空 = 无公共地址，由负责人自填。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/gen/")]
 pub struct ProviderPreset {
@@ -30,6 +41,11 @@ pub struct ProviderPreset {
     pub kind: ProviderKind,
     pub base_url: String,
     pub default_model: String,
+    pub icon_key: String,
+    pub website: String,
+    pub docs: String,
+    pub sample_models: Vec<String>,
+    pub origin: PresetOrigin,
 }
 
 fn preset(id: &str, name: &str, kind: ProviderKind, base_url: &str, model: &str) -> ProviderPreset {
@@ -39,11 +55,75 @@ fn preset(id: &str, name: &str, kind: ProviderKind, base_url: &str, model: &str)
         kind,
         base_url: base_url.into(),
         default_model: model.into(),
+        icon_key: String::new(),
+        website: String::new(),
+        docs: String::new(),
+        sample_models: Vec::new(),
+        origin: PresetOrigin::Manual,
     }
 }
 
-/// 内置预设表（顺序即下拉顺序）。地址出处：各服务商 API 文档的 base URL 段。
+/// 手工条目与目录条目 id 不同名的对照（目录 id → 手工 id）。手工 id 已被存成供应商 id，
+/// 不能改成目录的；否决的替代：按显示名匹配——「Moonshot」在目录里是海外站 moonshot-global，
+/// 手工的 Moonshot 是国内站 moonshot。
+const CATALOG_ALIASES: &[(&str, &str)] = &[
+    ("silicon", "siliconflow"),
+    ("grok", "xai"),
+    ("lmstudio", "lm-studio"),
+];
+
+fn manual_id(catalog_id: &str) -> &str {
+    CATALOG_ALIASES
+        .iter()
+        .find(|(c, _)| *c == catalog_id)
+        .map_or(catalog_id, |(_, m)| m)
+}
+
+fn catalog_id(manual: &str) -> &str {
+    CATALOG_ALIASES
+        .iter()
+        .find(|(_, m)| *m == manual)
+        .map_or(manual, |(c, _)| c)
+}
+
+/// 设置目录与向导读的完整预设表：手工 14 条在前（顺序即下拉顺序，向导默认第一条），
+/// 借同名目录条目的元数据；其后是目录里没被手工覆盖的条目（快照顺序）。
+/// 手工覆盖 = 地址 / 类型 / 默认模型以手工为准（如 OpenAI 仍走 Chat Completions、Jev 不变）。
 pub fn presets() -> Vec<ProviderPreset> {
+    let manual: Vec<ProviderPreset> = manual()
+        .into_iter()
+        .map(|p| match crate::provider_catalog::meta(catalog_id(&p.id)) {
+            Some(m) => ProviderPreset {
+                icon_key: m.icon_key,
+                website: m.website,
+                docs: m.docs,
+                sample_models: m.sample_models,
+                ..p
+            },
+            None => p,
+        })
+        .collect();
+    let catalog = crate::provider_catalog::entries()
+        .into_iter()
+        .filter(|e| !manual.iter().any(|m| m.id == manual_id(&e.id)))
+        .map(|e| ProviderPreset {
+            id: e.id,
+            name: e.name,
+            kind: e.kind,
+            base_url: e.base_url,
+            default_model: String::new(),
+            icon_key: e.meta.icon_key,
+            website: e.meta.website,
+            docs: e.meta.docs,
+            sample_models: e.meta.sample_models,
+            origin: PresetOrigin::Catalog,
+        })
+        .collect::<Vec<_>>();
+    manual.into_iter().chain(catalog).collect()
+}
+
+/// 手工预设表（顺序即下拉顺序）。地址出处：各服务商 API 文档的 base URL 段。
+fn manual() -> Vec<ProviderPreset> {
     vec![
         // docs.anthropic.com/en/api/messages：POST https://api.anthropic.com/v1/messages。
         // 默认模型取原型 entry#wz-provider 所示。
@@ -176,6 +256,11 @@ mod tests {
                 p.id
             );
             assert!(!p.name.trim().is_empty());
+            // 票 22：无公共地址的目录条目（GPUStack 等）留空，由负责人自填。
+            if p.base_url.is_empty() {
+                assert_eq!(p.origin, PresetOrigin::Catalog, "{}", p.id);
+                continue;
+            }
             // 远程端点一律 https；明文 http 只许本机端点（gap B13 并入 Ollama / LM Studio）。
             assert!(
                 p.base_url.starts_with("https://") || p.base_url.starts_with("http://localhost:"),
@@ -221,5 +306,77 @@ mod tests {
         let a = presets().into_iter().find(|p| p.id == "anthropic").unwrap();
         assert_eq!(a.kind, ProviderKind::Anthropic);
         assert!(!a.base_url.ends_with("/v1"));
+    }
+
+    #[test]
+    fn manual_entries_override_same_named_catalog_entries() {
+        // 票 22：手工 14 条覆盖同名目录条目（含 id 不同名的 silicon / grok / lmstudio）。
+        let all = presets();
+        assert_eq!(
+            all.len(),
+            14 + 56 - 11,
+            "14 manual + 56 catalog - 11 overlaps"
+        );
+        for id in [
+            "anthropic",
+            "deepseek",
+            "moonshot",
+            "openrouter",
+            "groq",
+            "mistral",
+            "silicon",
+            "zhipu",
+            "ollama",
+            "lmstudio",
+            "grok",
+        ] {
+            assert!(
+                !all.iter()
+                    .any(|p| p.id == id && p.origin == PresetOrigin::Catalog),
+                "{id} must be covered by its manual entry"
+            );
+        }
+        let manual: Vec<&ProviderPreset> = all
+            .iter()
+            .filter(|p| p.origin == PresetOrigin::Manual)
+            .collect();
+        assert_eq!(manual.len(), 14);
+        assert!(
+            all[..14].iter().all(|p| p.origin == PresetOrigin::Manual),
+            "manual first"
+        );
+        // 覆盖 = 手工地址 / 类型为准，元数据借目录。
+        let ds = all.iter().find(|p| p.id == "deepseek").unwrap();
+        assert_eq!(ds.base_url, "https://api.deepseek.com");
+        assert_eq!(ds.icon_key, "deepseek");
+        let xai = all.iter().find(|p| p.id == "xai").unwrap();
+        assert_eq!(xai.icon_key, "grok");
+        let openai = all.iter().find(|p| p.id == "openai").unwrap();
+        assert_eq!(
+            openai.kind,
+            ProviderKind::OpenAi,
+            "OpenAI stays on Chat Completions"
+        );
+        let jev = all.iter().find(|p| p.id == "typesafe").unwrap();
+        assert_eq!(
+            (jev.kind.clone(), jev.icon_key.as_str()),
+            (ProviderKind::Jev, "")
+        );
+    }
+
+    #[test]
+    fn catalog_entries_never_prefill_a_model() {
+        let all = presets();
+        let catalog: Vec<&ProviderPreset> = all
+            .iter()
+            .filter(|p| p.origin == PresetOrigin::Catalog)
+            .collect();
+        assert_eq!(catalog.len(), 45);
+        for p in catalog {
+            assert_eq!(p.default_model, "", "{}", p.id);
+            assert!(p.sample_models.len() <= 3, "{}", p.id);
+        }
+        let gpustack = all.iter().find(|p| p.id == "gpustack").unwrap();
+        assert_eq!(gpustack.base_url, "", "no public address stays empty");
     }
 }

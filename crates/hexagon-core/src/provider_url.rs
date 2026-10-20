@@ -254,7 +254,12 @@ mod tests {
         for (kind, stored, want) in saved {
             assert_eq!(request_url(&kind, stored), want, "{stored}");
         }
-        for p in crate::provider_presets::presets() {
+        // 只锁手工 14 条（升级前就有、可能已被存下的值）。票 22 的目录条目是新的，其存储值
+        // 可能是完整端点（Perplexity），由 provider_catalog 的 56 家对照表锁最终请求地址。
+        for p in crate::provider_presets::presets()
+            .into_iter()
+            .filter(|p| p.origin == crate::provider_presets::PresetOrigin::Manual)
+        {
             let old = match p.kind {
                 ProviderKind::OpenAi => format!("{}/chat/completions", p.base_url),
                 ProviderKind::Anthropic => format!("{}/v1/messages", p.base_url),

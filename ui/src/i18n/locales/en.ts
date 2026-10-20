@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "Move host file to Trash",
     stepHostBash: "Run host command",
     stepProposeDesign: "Present visual options",
+    stepSummonArtist: "Summon the Artist",
     stepReadDesign: "Read selected visual direction",
 
     stepComputerObserve: "Observe computer", stepComputerAction: "Operate computer", stepComputerNavigate: "Navigate computer",
@@ -884,6 +885,9 @@ export default {
     kindOpenai: 'OpenAI-compatible',
     hint: "Model providers are global. Slot bindings select a provider and model; default covers unbound slots. Keys use the active credential backend shown in General settings.",
     filter: 'Search providers',
+    catalogWebsite: 'Website', catalogDocs: 'Docs', catalogSamples: 'Sample models',
+    catalogSamplesHint: 'For reference only; not prefilled. Use Check and fetch models for the real list.',
+    catalogNoAddress: 'This provider has no public address. Enter your own deployment\'s address.',
     empty: 'No providers yet — add one so agents can call a model',
     name: 'Name',
     keySet: 'key saved', keyMissing: 'no key configured',
@@ -1250,4 +1254,5 @@ export default {
     reveal_launch: "Couldn’t open the file manager",
   },
   feedback: {"region": "Notifications", "removeRecent": "Remove from recent projects", "switchWaitTitle": "Switching projects has to wait", "switchWaitBody": ": computer actions in {{project}} are paused; switching once the current one stops. You can continue them when you come back.", "stayHere": "Stay in this project", "treeEmptyBody": "This folder has no files yet. Create one to start.", "searchEmptyBody": "Try another keyword, or clear the search to see everything.", "pickerEmptyBody": "Nothing to choose yet. Items added in Settings show up here.", "clearSearch": "Clear search"},
+  artist: {"unconfigured": "Drawing avatars for the team needs an image model, and the image slot isn't bound yet.", "unsupported": "Drawing avatars for the team needs an image model. {{model}}, bound to the image slot, can't generate images.", "bindImageModel": "Bind an image model in Settings"},
 }

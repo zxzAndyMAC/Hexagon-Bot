@@ -1,0 +1,12 @@
+[
+  {
+    "code": "artist",
+    "hidden": true,
+    "name": "画师",
+    "duty": "为团队每个角色写统一风格的出图提示词，再用出图模型槽生成头像提案；只在被项目经理召唤时出场，做完退场",
+    "reviewer": null,
+    "model_slot": "chat",
+    "globs": [],
+    "skills": []
+  }
+]

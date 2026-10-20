@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "Mover a la Papelera",
     stepHostBash: "Ejecutar comando del equipo",
     stepProposeDesign: "Presentar opciones visuales",
+    stepSummonArtist: "Llamar al Artista",
     stepReadDesign: "Leer dirección visual",
 
     stepComputerObserve: "Observar ordenador", stepComputerAction: "Operar ordenador", stepComputerNavigate: "Navegar ordenador",
@@ -884,6 +885,9 @@ export default {
     kindOpenai: 'Compatible con OpenAI',
     hint: "Los proveedores son globales. Los slots eligen proveedor y modelo; default cubre los no asignados. Las claves usan el almacén activo indicado en General.",
     filter: 'Buscar proveedores',
+    catalogWebsite: 'Sitio web', catalogDocs: 'Documentación', catalogSamples: 'Modelos de ejemplo',
+    catalogSamplesHint: 'Solo como referencia; no se rellenan. Usa «Probar y obtener modelos» para la lista real.',
+    catalogNoAddress: 'Este proveedor no tiene dirección pública. Introduce la dirección de tu propio despliegue.',
     empty: 'Sin proveedores — añade uno para que los agentes llamen al modelo',
     name: 'Nombre',
     keySet: 'clave guardada', keyMissing: 'sin clave',
@@ -1250,4 +1254,5 @@ export default {
     reveal_launch: "No se pudo abrir el gestor de archivos",
   },
   feedback: {"region": "Notificaciones", "removeRecent": "Quitar de proyectos recientes", "switchWaitTitle": "El cambio de proyecto debe esperar", "switchWaitBody": ": las acciones del equipo en {{project}} están en pausa; el cambio se hará cuando se detenga la actual. Podrás continuarlas al volver.", "stayHere": "Quedarse en este proyecto", "treeEmptyBody": "Esta carpeta aún no tiene archivos. Crea uno para empezar.", "searchEmptyBody": "Prueba otra palabra clave o borra la búsqueda para ver todo.", "pickerEmptyBody": "Aún no hay opciones. Lo que añadas en Ajustes aparecerá aquí.", "clearSearch": "Borrar búsqueda"},
+  artist: {"unconfigured": "Para dibujar los avatares del equipo hace falta un modelo de imágenes y la ranura de imágenes aún no está vinculada.", "unsupported": "Para dibujar los avatares del equipo hace falta un modelo de imágenes. {{model}}, vinculado a la ranura de imágenes, no genera imágenes.", "bindImageModel": "Vincular un modelo de imágenes en Ajustes"},
 }

@@ -8,6 +8,8 @@ import {
   MODEL_DRAFT, advance, backBtn, button, click, clickIn, currentStep, draft, isOff, nextBtn, prov,
   readyDoc, renderWizard, report, setInput, setTextArea, settle, unmount,
 } from './wizardTestUtils'
+// #22：ProviderPreset 的说明性字段（目录元数据）；旧用例只关心前五个字段。
+const PRESET_META = { icon_key: '', website: '', docs: '', sample_models: [] as string[], origin: 'manual' as const }
 
 // ui-redesign 票 10：断言面迁到新外壳（components E9/E10）。步骤以步骤轨 aria-current 判定，
 // 按钮禁用读 aria-disabled（components §0：禁用仍可聚焦以读出原因），表单控件走 A9 Field 外壳。
@@ -110,8 +112,8 @@ describe('向导先配模型服务商（票 13）', () => {
 
   // gap B8：内置服务商预设（core provider_presets）
   const PRESETS = [
-    { id: 'anthropic', name: 'Anthropic', kind: 'anthropic' as const, base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' },
-    { id: 'or', name: 'OpenRouter', kind: 'openai' as const, base_url: 'https://openrouter.ai/api/v1', default_model: '' },
+    { id: 'anthropic', name: 'Anthropic', kind: 'anthropic' as const, base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5', ...PRESET_META },
+    { id: 'or', name: 'OpenRouter', kind: 'openai' as const, base_url: 'https://openrouter.ai/api/v1', default_model: '', ...PRESET_META },
   ]
   // gap B12（2026-10-15）：服务商下拉从原生 <select> 改成带头像的 Select（Radix，role=combobox / option）。
   // B8 时读 select.value / options；现在读触发器显示的选中项文本、弹层 option 文本。
@@ -191,12 +193,29 @@ describe('向导先配模型服务商（票 13）', () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
     vi.spyOn(api, 'providerPresets').mockResolvedValue([
       ...PRESETS,
-      { id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' },
-      { id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' },
+      { id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '', ...PRESET_META },
+      { id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest', ...PRESET_META },
     ])
     const el = await renderWizard()
     await openSelect(el)
     expect(options().map(text)).toEqual(['Anthropic', 'OpenRouter', 'Custom…'])
+  })
+
+  // owner-followups-1015 #22：目录条目进向导下拉（子集规则不变），无公共地址的不列（向导选预设不展开地址框）；
+  // 选目录条目不预填模型。
+  it('向导列目录条目，跳过无公共地址的，且不预填模型', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
+    vi.spyOn(api, 'providerPresets').mockResolvedValue([
+      ...PRESETS,
+      { ...PRESET_META, origin: 'catalog' as const, id: 'dashscope', name: 'Bailian', kind: 'openai', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', default_model: '', sample_models: ['qwen-max'] },
+      { ...PRESET_META, origin: 'catalog' as const, id: 'gpustack', name: 'GPUStack', kind: 'openai', base_url: '', default_model: '' },
+    ])
+    const el = await renderWizard()
+    await openSelect(el)
+    expect(options().map(text)).toEqual(['Anthropic', 'OpenRouter', 'Bailian', 'Custom…'])
+    const opt = options().find((o) => text(o) === 'Bailian')!
+    await act(async () => { opt.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect((el.querySelector('input[aria-label="Default model"]') as HTMLInputElement).value).toBe('')
   })
 
   // gap B12：下拉换成 Select 后键盘与读屏照旧——combobox 触发器、↵ 打开、↓ 移动、↵ 选中、焦点回触发器

@@ -665,6 +665,7 @@ export default {
     stepHostTrash: "移到垃圾桶",
     stepHostBash: "執行電腦命令",
     stepProposeDesign: "提交視覺方案",
+    stepSummonArtist: "召喚畫師",
     stepReadDesign: "讀取視覺方向",
 
     stepComputerObserve: "觀察電腦", stepComputerAction: "操作電腦", stepComputerNavigate: "電腦導覽",
@@ -884,6 +885,9 @@ export default {
     kindOpenai: 'OpenAI 相容',
     hint: "模型供應商是全域設定。槽位綁定選擇供應商與模型，default 承接未綁定槽位。金鑰使用「一般」設定顯示的實際憑據後端。",
     filter: '搜尋供應商',
+    catalogWebsite: '官網', catalogDocs: '文件', catalogSamples: '範例模型',
+    catalogSamplesHint: '僅供參考，不會預填；實際可用模型請用「檢測並拉取模型」。',
+    catalogNoAddress: '該服務商沒有公共位址，請填寫你自己部署的位址。',
     empty: '還沒有供應商——先加一條，Agent 才能調模型',
     name: '名稱',
     keySet: 'key 已存', keyMissing: '未設定金鑰',
@@ -1250,4 +1254,5 @@ export default {
     reveal_launch: "無法開啟檔案管理員",
   },
   feedback: {"region": "通知", "removeRecent": "從最近專案移除", "switchWaitTitle": "切換專案需要等待", "switchWaitBody": "：已暫停 {{project}} 的電腦操作，目前動作停下後就切換；回來時可以繼續。", "stayHere": "留在此專案", "treeEmptyBody": "這個目錄裡還沒有檔案，新增一個開始。", "searchEmptyBody": "換個關鍵字試試，或清空搜尋看全部。", "pickerEmptyBody": "還沒有可選項；在設定裡新增後會出現在這裡。", "clearSearch": "清空搜尋"},
+  artist: {"unconfigured": "替團隊畫頭像需要出圖模型，出圖槽位還沒有綁定。", "unsupported": "替團隊畫頭像需要出圖模型，出圖槽位綁定的 {{model}} 不能出圖。", "bindImageModel": "前往設定綁定出圖模型"},
 }
