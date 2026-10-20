@@ -15,7 +15,7 @@ import type { PackDef } from './gen/PackDef'
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const member = (role: string): TeamRow =>
-  ({ id: `id-${role}`, role, model_slot: null, status: 'active', avatar_hash: null, model: null, duty: null, superior: null })
+  ({ id: `id-${role}`, role, model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null })
 const pack = (roles: string[]) =>
   ({ name: '规格驱动', version: 1, stages: [{ name: '规格', roles, due: ['规格'], stamp_point: true }] }) as unknown as PackDef
 

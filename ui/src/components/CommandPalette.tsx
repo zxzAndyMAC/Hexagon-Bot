@@ -12,7 +12,7 @@ import { useUiStore } from '../store'
 import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
-import { closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, tabPath, tabsRightOf } from '../tabActions'
+import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
 import { Icon, type IconName } from './Icon'
 import { Avatar } from '@/components/ui/avatar'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -95,6 +95,11 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         id: 'n-close-right', group: 'nav' as const, label: t('palette.closeTabsToRight'), icon: 'close' as const, hint: bind('closeTabsToRight'),
         run: () => closeTabsToRight(activeTab),
       }] : []),
+      // owner-followups-1015 #06（A22「溢出」）：上 / 下一个页签，只有一个页签时不列。
+      ...(activeTab && adjacentTab(tabs, activeTab, 1) ? [
+        { id: 'n-next-tab', group: 'nav' as const, label: t('palette.nextTab'), icon: 'chevron-right' as const, hint: bind('nextTab'), run: () => stepTab(1) },
+        { id: 'n-prev-tab', group: 'nav' as const, label: t('palette.prevTab'), icon: 'chevron-left' as const, hint: bind('prevTab'), run: () => stepTab(-1) },
+      ] : []),
       ...(activeTab && tabPath(tabs.find((x) => x.id === activeTab)) ? [{
         id: 'n-copy-path', group: 'nav' as const, label: t('palette.copyPath'), icon: 'copy' as const, hint: bind('copyPath'),
         run: () => copyTabPath(activeTab),

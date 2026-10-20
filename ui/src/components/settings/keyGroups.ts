@@ -13,7 +13,7 @@ const DECIDE = new Set<string>([
 ])
 const LAYOUT = new Set<string>([
   'commandPalette', 'settings', 'toggleSidebar', 'toggleCanvas', 'canvasFullWidth', 'focusMode',
-  'closeTab', 'closeOtherTabs', 'closeTabsToRight', 'focusComposer', 'nodeRail',
+  'closeTab', 'closeOtherTabs', 'closeTabsToRight', 'nextTab', 'prevTab', 'focusComposer', 'nodeRail',
 ])
 
 /** 第一条命中的规则决定分组。 */
