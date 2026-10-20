@@ -1,6 +1,7 @@
 //! 凭据钥匙串（票 15）：系统 keychain 存取，核内一律按名字引用。
 //!
-//! - 命名约定：`model/<slot>` 模型 API key、`push/<remote>` 推送凭据（ADR 0093 前名 `publish/<remote>`，兼容读取见 push::credential）；
+//! - 命名约定：`model/<slot>` 模型 API key、`push/<remote>` 推送凭据（ADR 0093 前名 `publish/<remote>`，兼容读取见 push::credential）、
+//!   `release/<目标 id>/<凭据名>` 发布凭据（owner-followups-1015 #14，见 release_targets::credential_key）；
 //! - 明文只在调用瞬间内存中存在——工具层已拦凭据文件读写（is_credential_path），
 //!   scrub_input 保证事件/日志不落敏感值；
 //! - 钥匙串不可用 = 明确错误（不降级写配置文件明文——那是把机密换地方丢）；
@@ -273,6 +274,19 @@ pub fn leak_scan(db: &Db, project_id: &str, secret: &str) -> Result<Vec<String>,
     // 卡片分片走属主 API（票 04）：表内查询细节不外泄
     for id in crate::cards::ids_with_payload_like(db, project_id, secret)? {
         hits.push(format!("pending_questions:{id}"));
+    }
+    // 发布目标登记（owner-followups-1015 #14）：表里只该有凭据「名」，任一列含值即泄漏。
+    let mut st = db.conn().prepare(
+        "SELECT id FROM release_targets WHERE project_id=?1
+         AND (name LIKE ?2 OR command LIKE ?2 OR cwd LIKE ?2 OR credentials LIKE ?2)",
+    )?;
+    let ids: Vec<String> = st
+        .query_map(rusqlite::params![project_id, format!("%{secret}%")], |r| {
+            r.get::<_, String>(0)
+        })?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        hits.push(format!("release_targets:{id}"));
     }
     Ok(hits)
 }

@@ -814,6 +814,9 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "trigger_cancelled",
     // ui-redesign gap D2：负责人把 Agent 移出团队（软删，team_removal）
     "agent_removed",
+    // owner-followups-1015 #14：负责人登记 / 修改 / 删除发布目标，录入 / 替换 / 移除其凭据（只记名字）
+    "release_target_changed",
+    "release_credential_changed",
     // stall-watch 票 01–04：重触发 / 调查 / 入卡 / 收场
     "stall_carded",
     "stall_closed",
