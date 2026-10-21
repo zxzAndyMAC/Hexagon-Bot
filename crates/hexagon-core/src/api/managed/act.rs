@@ -147,6 +147,23 @@ impl Workbench {
                 crate::push::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
                 "not_pushed"
             }
+            // owner-followups-1015 #15: the confirm gate re-checks the same facts
+            // (target unchanged, credentials present) before it claims the card.
+            ("release", _, "release") => {
+                crate::release::confirm_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    self.creds.as_ref(),
+                    &self.decider(),
+                    crate::release::RELEASE_TIMEOUT,
+                )?;
+                "released"
+            }
+            ("release", _, _) => {
+                crate::release::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
+                "not_released"
+            }
             // The confirmation rechecks its own facts again at execution.
             ("worktree", _, "confirm") => {
                 self.confirm_session_worktree_by(&card.id, &self.decider())?;

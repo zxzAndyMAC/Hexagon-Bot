@@ -21,9 +21,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 mod permission_control;
+mod release;
 mod release_targets;
 #[cfg(test)]
 mod release_targets_tests;
+#[cfg(test)]
+mod release_tests;
 mod session_resume;
 mod session_schedule;
 mod session_worktree;
@@ -178,6 +181,8 @@ pub enum ApiError {
     Push(#[from] crate::push::PushError),
     #[error(transparent)]
     Release(#[from] crate::release_targets::ReleaseError),
+    #[error(transparent)]
+    ReleaseRun(#[from] crate::release::ReleaseRunError),
     #[error(transparent)]
     Autonomy(#[from] crate::autonomy::AutonomyError),
     #[error(transparent)]
