@@ -11,6 +11,7 @@ const SEVERITY: Record<string, number> = {
   recovery: 0,
   stall: 0,
   push: 0,
+  release: 0,
   worktree: 0,
   install: 0,
   grant: 0,
@@ -117,6 +118,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp' && !p.proposal_id) return api.stamp()
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
   if (q.kind === 'push') return api.confirmPush(q.id)
+  if (q.kind === 'release') return api.confirmRelease(q.id)
   if (q.kind === 'worktree') return api.confirmWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
   if (q.kind === 'recovery' && p.sub === 'tool_action_ready') return api.resumeToolAction(String(p.action_id))
@@ -139,6 +141,7 @@ export async function rejectQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp' && !p.proposal_id) return api.rejectStamp()
   if (q.kind === 'stamp') return api.rejectProposal(q.id, 'owner rejected')
   if (q.kind === 'push') return api.rejectPush(q.id)
+  if (q.kind === 'release') return api.rejectRelease(q.id)
   if (q.kind === 'worktree') return api.rejectWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, false)
   if (q.kind === 'install') return api.resolveInstall(q.id, false)
@@ -169,6 +172,7 @@ export function kindTitleKey(q: PendingQuestion): string {
   if (q.kind === 'permission') return 'cards.ask'
   if (q.kind === 'stamp') return q.payload.proposal_id ? 'cards.proposalStamp' : 'cards.stageStamp'
   if (q.kind === 'push') return 'cards.push'
+  if (q.kind === 'release') return 'cards.release'
   if (q.kind === 'worktree') return q.payload.operation === 'cleanup' ? 'cards.worktreeCleanup' : 'cards.worktreeCreate'
   if (q.kind === 'recovery') return q.payload.sub === 'tool_outcome_unknown' ? 'cards.actionUnknown' : 'cards.recovery'
   if (q.kind === 'stall') return isActivationResumeCard(q) ? 'cards.resumeWaiting' : 'cards.stall'
@@ -191,6 +195,7 @@ export type KeyOutcome =
   | 'blocked-scope'
   | 'repeat'
   | 'blocked-push'
+  | 'blocked-release'
   | 'blocked-final'
   | 'blocked-stall'
   | 'blocked-unknown'
@@ -240,6 +245,11 @@ export async function handlePendingKey(
     // L3 对外不可逆：推送不走键盘批准（ADR 0056 确认分级）
     useUiStore.getState().pushToast(i18n.t('decisions.pushNeedsClick'))
     return 'blocked-push'
+  }
+  if (isApprove && q.kind === 'release') {
+    // owner-followups-1015 #15：发布通常不可逆、必问永不记忆——同推送，只认点「确认发布」按钮。
+    useUiStore.getState().pushToast(i18n.t('decisions.releaseNeedsClick'))
+    return 'blocked-release'
   }
   // 票 02：最终验收退回必须写阶段和修改意见，键盘驳回填不了这两项。
   if (isReject && q.kind === 'stamp' && !q.payload.proposal_id && q.payload.final_acceptance === true) {

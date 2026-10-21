@@ -86,6 +86,7 @@ impl_error_code!(
     Artifact,
     Push,
     Release,
+    ReleaseRun,
     Autonomy,
     Proposal,
     Review,
@@ -190,6 +191,16 @@ impl_error_code!(
     Trace,
     Cred,
     Json,
+);
+// owner-followups-1015 #15：执行发布的拒绝 / 失败码（release_target_changed / release_credential_missing /
+// release_command_failed …），界面走 `errors.<code>`；登记判定码递归到 ReleaseError。
+impl_error_code!(
+    crate::release::ReleaseRunError,
+    Target,
+    Cards,
+    Trace,
+    Cred,
+    Sqlite,
 );
 impl_error_code!(
     crate::review::ReviewError,

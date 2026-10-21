@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { api, errText, type ReleaseTarget } from '../../api'
 import { useUiStore } from '../../store'
 import { useBusyAction } from '../../useBusyAction'
+import { RELEASE_FOCUS_EVENT, takeReleaseFocus } from '../../releaseFocus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
@@ -139,8 +140,18 @@ export function ReleaseSection() {
   const askConfirm = useUiStore((s) => s.askConfirm)
   const [targets, setTargets] = useState<ReleaseTarget[] | null>(null)
   const [error, setError] = useState('')
-  const [sel, setSel] = useState<string | null>(null)
+  // owner-followups-1015 #15：托管报告「配置发布目标」/ 发布卡「打开设置·发布」带着目标 id 进来时定位到那一行。
+  const [sel, setSel] = useState<string | null>(() => takeReleaseFocus())
   const [creating, setCreating] = useState(false)
+  useEffect(() => {
+    const focus = (event: Event) => {
+      takeReleaseFocus()
+      setCreating(false)
+      setSel(String((event as CustomEvent<unknown>).detail ?? '') || null)
+    }
+    window.addEventListener(RELEASE_FOCUS_EVENT, focus)
+    return () => window.removeEventListener(RELEASE_FOCUS_EVENT, focus)
+  }, [])
 
   const load = useCallback(() => api.releaseTargets().then(
     (rows) => { setError(''); setTargets(rows) },

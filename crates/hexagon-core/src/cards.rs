@@ -5,9 +5,9 @@
 //! 本模块收口：enqueue/answer/annotate/queued 四个动词 + 读模型；
 //! `rg "pending_questions"` 在本模块外只允许命中 schema 迁移与注释。
 //!
-//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022/0060/0064）：
-//! kind ∈ {permission, stamp, escalation, push, recovery, install, grant, stall, worktree}
-//! （push 原名 publish，ADR 0093 改名，迁移 0064 映射旧行）
+//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022/0060/0064/0066）：
+//! kind ∈ {permission, stamp, escalation, push, release, recovery, install, grant, stall, worktree}
+//! （push 原名 publish，ADR 0093 改名，迁移 0064 映射旧行；release 是发布确认卡，迁移 0066）
 //! state ∈ {queued, answered, expired}
 //!
 //! 注意 kind='stamp' 是过载的：阶段盖章卡（payload={stage,run_id}）与
@@ -44,6 +44,9 @@ pub enum CardKind {
     Install,
     /// 推送确认卡（原 publish，ADR 0093 / 迁移 0064 改名）。
     Push,
+    /// 发布确认卡（owner-followups-1015 #15，迁移 0066）：执行已登记的发布目标。必问、永不记忆——
+    /// 没有任何记住入口（不写 permission_rules、不读记忆层），每次发布都是一张新卡。
+    Release,
     /// 技能或 MCP 的授权确认（票 04）。不是权限卡。
     Grant,
     /// 失速卡（stall-watch 票 02 / ADR 0074）：只有「再试一次」「知道了」，
@@ -65,6 +68,7 @@ impl CardKind {
             Self::Recovery => "recovery",
             Self::Install => "install",
             Self::Push => "push",
+            Self::Release => "release",
             Self::Grant => "grant",
             Self::Stall => "stall",
             Self::Worktree => "worktree",
@@ -80,6 +84,7 @@ impl CardKind {
             "recovery" => Ok(Self::Recovery),
             "install" => Ok(Self::Install),
             "push" => Ok(Self::Push),
+            "release" => Ok(Self::Release),
             "grant" => Ok(Self::Grant),
             "stall" => Ok(Self::Stall),
             "worktree" => Ok(Self::Worktree),
@@ -169,6 +174,27 @@ pub fn answer(db: &Db, qid: &str, by: &str) -> Result<(), CardsError> {
     Ok(())
 }
 
+/// 认领一张卡：queued→answered 的原子条件迁移（同一条 UPDATE 里判 state + kind + project）。
+/// 返回 false = 卡已不在 queued（被别人答过 / 过期 / 不是这个卡种）。
+///
+/// 发布确认卡（owner-followups-1015 #15）用它代替 `get_queued` + `answer` 两步：两步之间负责人连点、
+/// 或负责人与托管同时裁决，会让同一条不可逆发布命令跑两次。代价模型：认领失败只让这次点击报错，
+/// 漏挡一次是一次重复发布——所以只认这条 UPDATE 的受影响行数。
+pub fn claim(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    kind: CardKind,
+    by: &str,
+) -> Result<bool, CardsError> {
+    let n = db.conn().execute(
+        "UPDATE pending_questions SET state='answered', answered_at=datetime('now'), answered_by=?4
+         WHERE id=?1 AND project_id=?2 AND kind=?3 AND state='queued'",
+        rusqlite::params![qid, project_id, kind.as_str(), by],
+    )?;
+    Ok(n == 1)
+}
+
 /// 载荷补丁：把 fields 的键值合进卡 payload（读-改-写，等价于
 /// 历史上 reviewer 的整列覆写与 judge 的 json_set 原地位补丁）。
 pub fn annotate(db: &Db, qid: &str, fields: &[(&str, Value)]) -> Result<(), CardsError> {
@@ -224,7 +250,7 @@ pub fn annotate_queued_where(
 pub struct QueuedCard {
     pub id: String,
     #[ts(
-        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'grant' | 'stall' | 'worktree'"
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'release' | 'grant' | 'stall' | 'worktree'"
     )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,

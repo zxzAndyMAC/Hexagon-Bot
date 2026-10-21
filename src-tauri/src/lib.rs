@@ -684,12 +684,14 @@ fn session_capabilities(
 
 /// Pending dock tier, lower is more severe. Mirrors `ui/src/decisions.ts`
 /// SEVERITY and the CONTEXT「待决坞」ruling (2026-10-12): recovery = stall =
-/// push = worktree = install = grant, then stage stamp, escalation,
+/// push = release = worktree = install = grant, then stage stamp, escalation,
 /// permission, proposal stamp. Re-audit 2026-10-13: the earlier ranking
 /// put recovery and stall below permission and mislabelled the summary.
 fn pending_tier(card: &hexagon_core::cards::QueuedCard) -> (u8, &'static str) {
     match card.kind.as_str() {
-        "recovery" | "stall" | "push" | "worktree" | "install" | "grant" => (0, "critical"),
+        "recovery" | "stall" | "push" | "release" | "worktree" | "install" | "grant" => {
+            (0, "critical")
+        }
         "stamp"
             if card
                 .payload
@@ -2903,6 +2905,32 @@ fn remove_release_credential(
     .map_err(cmd_err)
 }
 
+// ---- 发布执行（owner-followups-1015 #15，control 组，不碰工作台锁）----
+// 发布命令可能跑几分钟（包发布 / 部署）：确认走自开账本连接 + async，不占工作台锁、不冻窗口；
+// 认领卡用 cards::claim 原子迁移，与托管处理器同时裁决也只会跑一次。只有负责人从发布确认卡 /
+// ⌘K 调用；托管经工作台门面走同一个 core 函数。
+#[tauri::command(async)]
+fn request_release(state: ProjectState<'_>, target_id: String) -> Result<String, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release::request(&db, PROJECT_ID, &target_id, "owner").map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn confirm_release(
+    state: ProjectState<'_>,
+    qid: String,
+) -> Result<hexagon_core::release::ReleaseOutcome, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release::confirm(&db, PROJECT_ID, &qid, &*hexagon_core::credentials::active())
+        .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn reject_release(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release::reject(&db, PROJECT_ID, &qid).map_err(cmd_err)
+}
+
 #[tauri::command]
 fn set_agent_avatar(
     state: ProjectState<'_>,
@@ -4154,6 +4182,9 @@ pub fn run() {
             remove_release_target,
             set_release_credential,
             remove_release_credential,
+            request_release,
+            confirm_release,
+            reject_release,
             set_agent_avatar,
             clear_agent_avatar,
             agent_avatar,
@@ -4522,7 +4553,9 @@ mod session_host_command_tests {
             payload,
             state: "queued".into(),
         };
-        for kind in ["recovery", "stall", "push", "worktree", "install", "grant"] {
+        for kind in [
+            "recovery", "stall", "push", "release", "worktree", "install", "grant",
+        ] {
             assert_eq!(
                 pending_tier(&card(kind, serde_json::json!({}))),
                 (0, "critical")
