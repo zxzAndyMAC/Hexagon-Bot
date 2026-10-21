@@ -88,6 +88,7 @@ export type ActionId =
   | 'copyPath'
   | 'insertPath'
   | 'revealPath'
+  | 'openWith'
   | 'settings'
   | 'focusComposer'
   | 'stageRewind'
@@ -242,6 +243,9 @@ const DEFAULTS: Record<ActionId, string> = {
   changeMemberAvatar: '', restoreMemberAvatar: '',
   // owner-followups-1015 #07（A16b 文件树行）：同上默认空绑定；作用对象 = 焦点文件树行，否则当前文件 / 产物页签。
   insertPath: '', revealPath: '',
+  // owner-followups-1015 #31（A16b「打开方式」）：同上默认空绑定；按下打开命令面板的「打开方式」视图，
+  // 作用对象 = 焦点文件树行，否则当前文件 / 产物页签，另列整个项目。
+  openWith: '',
   // owner-followups-1015 #06（A22「溢出」）：页签多到滚出视区后键盘切换，同 VS Code / 浏览器的 ⌘⇧] / ⌘⇧[。
   nextTab: 'mod+shift+]', prevTab: 'mod+shift+[',
   settings: 'mod+,',
@@ -399,6 +403,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'copyPath', labelKey: 'keys.copyPath' },
   { id: 'insertPath', labelKey: 'keys.insertPath' },
   { id: 'revealPath', labelKey: 'keys.revealPath' },
+  { id: 'openWith', labelKey: 'keys.openWith' },
   { id: 'settings', labelKey: 'keys.settings' },
   { id: 'focusComposer', labelKey: 'keys.composer' },
   { id: 'permissionOptions', labelKey: 'projectPermission.options' },
