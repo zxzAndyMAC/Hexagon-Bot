@@ -1,6 +1,8 @@
 // 消息右键菜单（components A16b 第一批「消息 C1 / C2」，owner-followups-1015 #08）：复制 · 引用到输入条 · 在节点轨中定位。
 // - 范围：右键时窗口选区落在该消息内 → 复制 / 引用只作用于选区，否则作用于整条（原文 Markdown）。
-// - 「定位」只对节点轨上有刻度的消息可用（负责人发言是 m 刻度；Agent 消息不上轨）——否则禁用写「不在节点轨上」。
+// - 「定位」只对节点轨上有刻度的消息显示（负责人发言是 m 刻度；Agent 消息不上轨）。票 08 原为常驻、禁用写「不在节点轨上」，
+//   2026-10-20 负责人裁决（票 29）：没有刻度就不显示——同 A16b「该对象种类根本没有这个动作 → 不显示」。
+// - 文案跟范围走（票 29）：右键时有选区 → 「复制所选」「引用所选」；无选区 → 「复制」「引用到输入条」。
 // - 禁区：消息菜单里没有任何裁决项；待决卡 / 裁决按钮不挂右键菜单（A16b「禁区」，误点代价是一次未审副作用）。
 // - 命令面板与键位经 MESSAGE_ACTION_EVENT 让宿主执行（原文只在这里），同一套动作。
 import { useContext, useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from 'react'
@@ -76,15 +78,16 @@ export function MessageContextMenu({ eventId, body, children, ...rest }: {
       <ContextMenuContent data-msg-menu={eventId}
         onCloseAutoFocus={(e) => { if (skipRestore.current) { skipRestore.current = false; e.preventDefault() } }}>
         <ContextMenuItem data-ctx-item="copy" action="copyMessage" onSelect={pick('copy', false)}>
-          {t('ctxMessage.copy')}
+          {t(scoped != null ? 'ctxMessage.copySelection' : 'ctxMessage.copy')}
         </ContextMenuItem>
         <ContextMenuItem data-ctx-item="quote" action="quoteMessage" onSelect={pick('quote', true)}>
-          {t('ctxMessage.quote')}
+          {t(scoped != null ? 'ctxMessage.quoteSelection' : 'ctxMessage.quote')}
         </ContextMenuItem>
-        <ContextMenuItem data-ctx-item="locate" action="locateInRail" reason={onRail ? undefined : t('ctxMessage.notOnRail')}
-          onSelect={pick('locate', true)}>
-          {t('ctxMessage.locate')}
-        </ContextMenuItem>
+        {onRail && (
+          <ContextMenuItem data-ctx-item="locate" action="locateInRail" onSelect={pick('locate', true)}>
+            {t('ctxMessage.locate')}
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )

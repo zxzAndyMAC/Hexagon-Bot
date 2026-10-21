@@ -1,6 +1,7 @@
 // 项目路径动作（components A16b 第一批「文件树行」，owner-followups-1015 #07）。
 // 右键菜单、命令面板、keymap 三个入口共用这里——右键不是唯一入口（A16b「定位」）。
 // 路径一律项目相对（与树、页签、# 路径块同一形）；「在访达中显示」的根约束在 core 判，这里不判。
+// 例外：画布页签的「复制路径」复制绝对路径（票 29，2026-10-20 负责人裁决；票 05 原为相对路径），见 absolutePath。
 import i18n from './i18n'
 import { api } from './api'
 import { insertComposerPath } from './composerFill'
@@ -29,6 +30,17 @@ export async function copyPath(path: string) {
   } catch (e) {
     toastError(e)
   }
+}
+
+/**
+ * 项目根 + 项目相对路径 → 绝对路径（票 29：画布页签「复制路径」）。分隔符跟项目根走：根是 Windows 形
+ * （含反斜杠、不含 `/`）时相对路径的 `/` 也换成反斜杠；根末尾的分隔符不重复。没有项目根时原样返回相对路径。
+ */
+export function absolutePath(root: string | null, rel: string): string {
+  if (!root) return rel
+  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/'
+  const base = root.endsWith(sep) ? root.slice(0, -1) : root
+  return `${base}${sep}${sep === '/' ? rel : rel.replaceAll('/', sep)}`
 }
 
 /** 在系统文件管理器中显示。越界 / 不存在由 core 拒（errors.reveal_*），这里只出 toast。 */

@@ -89,7 +89,7 @@ function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
       </HoverCard>
       <ContextMenuContent data-member-menu={m.id}
         onCloseAutoFocus={(e) => { if (skipRestore.current) { skipRestore.current = false; e.preventDefault() } }}>
-        <ContextMenuItem data-ctx-item="openDetail" onSelect={() => openMemberDetail(m.id)}>{t('ctxMember.openDetail')}</ContextMenuItem>
+        <ContextMenuItem data-ctx-item="openDetail" action="openMemberDetail" onSelect={() => openMemberDetail(m.id)}>{t('ctxMember.openDetail')}</ContextMenuItem>
         <ContextMenuItem data-ctx-item="mention" action="mentionMember"
           onSelect={() => { skipRestore.current = true; mentionMember(m.id) }}>{t('ctxMember.mention')}</ContextMenuItem>
         <ContextMenuItem data-ctx-item="copyName" action="copyMemberName" onSelect={() => void copyMemberName(m.id)}>

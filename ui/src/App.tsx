@@ -30,12 +30,12 @@ import { Icon } from './components/Icon'
 import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
 import { bindingFor, matches } from './keymap'
-import { closeOtherTabs, closeTabsToRight, tabPath, stepTab } from './tabActions'
+import { closeOtherTabs, closeTabsToRight, copyTabPath, tabPath, stepTab } from './tabActions'
 import { copyPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
 import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { dispatchMessageAction, messageTarget } from './messageActions'
-import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, restoreMemberAvatar } from './memberActions'
+import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from './memberActions'
 import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
 
@@ -302,7 +302,7 @@ export default function App() {
         if (host) dispatchMessageAction(host, verb)
         return
       }
-      for (const [action, run] of [['mentionMember', mentionMember], ['copyMemberName', copyMemberName],
+      for (const [action, run] of [['openMemberDetail', openMemberDetail], ['mentionMember', mentionMember], ['copyMemberName', copyMemberName],
         ['changeMemberAvatar', changeMemberAvatar], ['restoreMemberAvatar', restoreMemberAvatar]] as const) {
         const b = bindingFor(action)
         if (!b || !matches(e, b)) continue
@@ -337,9 +337,11 @@ export default function App() {
         const s = useUiStore.getState()
         if (s.modalScope !== 'workbench') return
         const tab = s.canvasOpen && !s.usageView ? tabPath(s.tabs.find((x) => x.id === s.activeTab)) : null
-        const target = treeRowTarget() ?? (tab ? { path: tab, kind: 'file' as const } : null)
+        const row = treeRowTarget()
+        const target = row ?? (tab ? { path: tab, kind: 'file' as const } : null)
         if (!target) return
-        if (action === 'copyPath') void copyPath(target.path)
+        // 作用于页签时与页签右键同口径写绝对路径（票 29）；文件树行仍写相对路径
+        if (action === 'copyPath') void (row ? copyPath(row.path) : copyTabPath(s.activeTab!))
         else if (action === 'revealPath') void revealPath(target.path)
         else {
           const path = treeInsertPath(target)
