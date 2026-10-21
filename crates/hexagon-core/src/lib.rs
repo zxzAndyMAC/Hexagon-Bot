@@ -60,6 +60,7 @@ pub mod provider_presets;
 pub mod provider_probe;
 pub mod provider_url;
 pub mod push;
+pub mod release_targets;
 pub mod replay;
 pub mod reveal;
 pub mod review;

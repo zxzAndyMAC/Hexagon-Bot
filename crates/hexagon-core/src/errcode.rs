@@ -85,6 +85,7 @@ impl_error_code!(
     Tool,
     Artifact,
     Push,
+    Release,
     Autonomy,
     Proposal,
     Review,
@@ -181,6 +182,15 @@ impl ErrorCode for crate::provider_admin::AdminError {
 }
 impl_error_code!(crate::provider_config::ProvidersError, Io, Json);
 impl_error_code!(crate::push::PushError, Sqlite, Cards, Db, Trace, Cred, Git,);
+// owner-followups-1015 #14：登记判定的拒绝码（release_name_invalid / release_cwd_outside /
+// release_secret_in_target …），界面走 `errors.<code>`。
+impl_error_code!(
+    crate::release_targets::ReleaseError,
+    Sqlite,
+    Trace,
+    Cred,
+    Json,
+);
 impl_error_code!(
     crate::review::ReviewError,
     Artifact,

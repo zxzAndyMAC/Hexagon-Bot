@@ -315,6 +315,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0064_push_rename",
         include_str!("../migrations/0064_push_rename.sql"),
     ),
+    (
+        "0065_release_targets",
+        include_str!("../migrations/0065_release_targets.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
