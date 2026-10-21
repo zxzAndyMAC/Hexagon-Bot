@@ -24,7 +24,7 @@ import { Field, Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { DetailHead, Empty, ListDetail, SubHead } from './settings/kit'
+import { DetailHead, DisabledChip, Empty, ListDetail, SubHead } from './settings/kit'
 
 /// 内置常见供应商目录（未配置时灰显在左列，点选即填右栏默认值）。gap B13（2026-10-15）：原先是这里一份
 /// 14 条硬编码表，与向导读的 core provider_presets（5 条）各说各话；现在两边只读 core 那一份。
@@ -155,10 +155,24 @@ export function ProviderManager() {
     }
   }
 
+  /**
+   * 启停只存「已保存的那份」配置的 enabled，不连带详情里未保存的编辑；重新读档后把编辑放回（只同步 enabled）。
+   * owner-followups-1015 #30 第 5 项：开关从列表行移到详情头部后，开关旁就是正在改的表单——曾经的行内写法
+   * `reload()` 会用存档覆盖 draft，在详情里点开关会冲掉没保存的改动。
+   */
   const toggleEnabled = async (p: ProviderView) => {
-    await api.saveProvider({ ...p, enabled: !p.enabled }).catch((e) => setErr(errText(e)))
+    const enabled = !p.enabled
+    try {
+      await api.saveProvider({ ...p, enabled })
+    } catch (e) {
+      setErr(errText(e))
+      return
+    }
+    const editing = draft?.id === p.id ? draft : null
     await reload()
+    if (editing) setDraft({ ...editing, enabled })
   }
+  const savedSel = draft ? doc.providers.find((p) => p.id === draft.id) ?? null : null
 
   const del = async () => {
     if (!draft) return
@@ -415,7 +429,6 @@ export function ProviderManager() {
       filterText={(it) => searchText(it.p)}
       groupOf={(it) => (it.preset ? 'preset' : 'configured')}
       groupLabel={(g) => t(g === 'preset' ? 'settingsUi.providersCatalog' : 'settingsUi.providersConfigured')}
-      itemDim={(it) => !it.preset && !(it.p as ProviderView).enabled}
       selected={sel && sel !== 'new' ? sel : null}
       onSelect={(k) => { if (k) pick(k) }}
       searchPlaceholder={t('providers.filter')}
@@ -443,13 +456,9 @@ export function ProviderManager() {
             {/* #23：品牌图标只按 id 对上预设取 icon_key；自定义供应商（id 不在预设里）一律中性图标 */}
             <ProviderIcon iconKey={iconKeyOf(presets, p.id)} size={20} />
             <div className="min-w-0 flex-1 truncate">{p.name}</div>
-            <Switch
-              aria-label={`${t('providers.enabled')} ${p.name}`}
-              checked={p.enabled}
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
-              onCheckedChange={() => toggleEnabled(p)}
-            />
+            {/* owner-followups-1015 #30（E2「列表行不嵌开关」，票 10 后续）：行内曾嵌 Switch（option 里有可交互后代，
+                axe nested-interactive）且停用行整行 opacity .6；现在行只表状态，开关在详情头部。左侧状态点已表 off，胶囊不再带点。 */}
+            {!p.enabled && <DisabledChip />}
           </>
         )
       }}
@@ -464,8 +473,15 @@ export function ProviderManager() {
               title={draft.name || t('providers.add')}
               sub={previewUrl ? `${previewUrl} · ${t('providers.autoUrl')}` : draft.base_url || t('providers.unsaved')}
               mono={!!draft.base_url}
-              actions={selConfigured && (
-                <Button size="sm" variant="ghost" className="text-red-ink" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
+              actions={savedSel && (
+                <>
+                  {/* #30（E2）：启停开关只在详情头部，存的是已保存配置（见 toggleEnabled）；label 包裹 = 文字也可点（A10 命中区） */}
+                  <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+                    {t('providers.enabled')}
+                    <Switch aria-label={t('providers.enabled')} checked={savedSel.enabled} onCheckedChange={() => toggleEnabled(savedSel)} />
+                  </label>
+                  <Button size="sm" variant="ghost" className="text-red-ink" onClick={del}><Icon name="trash" size={14} />{t('providers.delete')}</Button>
+                </>
               )}
             />
             <div className="mt-4 grid grid-cols-2 gap-3">

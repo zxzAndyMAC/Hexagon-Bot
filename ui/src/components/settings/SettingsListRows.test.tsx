@@ -11,6 +11,8 @@ import type { SkillRow } from '../../gen/SkillRow'
 import type { McpEntryRow } from '../../gen/McpEntryRow'
 import { SkillsSection } from './SkillsSection'
 import { McpSection } from './McpSection'
+import { ProviderManager } from '../ProviderManager'
+import type { ProvidersView } from '../../gen/ProvidersView'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -82,5 +84,58 @@ describe('settings#mcp 列表行（#10）', () => {
     expect(off.querySelector('[data-slot="dot"]')?.getAttribute('data-tone')).toBe('off')
     expect(off.className).not.toMatch(/opacity/)
     expect(chip(options().find((o) => o.textContent?.includes('fs'))!)).toBeNull()
+  })
+})
+
+// owner-followups-1015 #30 第 5 项（2026-10-20 负责人裁决，票 10 后续）：服务商列表行同样按 E2「列表行不嵌开关」——
+// 行内 Switch 撤掉、停用行用「已停用」胶囊（状态点已表 off，胶囊不再带点）、不再 opacity；启停开关移到详情头部。
+const prov = (id: string, name: string, enabled: boolean) => ({
+  id, name, kind: 'openai' as const, base_url: `https://${id}.example`, models: [], enabled, key_set: true,
+})
+const providers = (): ProvidersView => ({ providers: [prov('a', 'ReadyCo', true), prov('c', 'OffCo', false)], slots: {} })
+
+describe('settings#models 服务商列表行（#30）', () => {
+  beforeEach(() => {
+    vi.spyOn(api, 'presetRoles').mockResolvedValue([])
+    vi.spyOn(api, 'providerPresets').mockResolvedValue([])
+  })
+
+  it('option 内无可交互后代；停用行 = 状态点 off + 「已停用」胶囊，不整行半透明；启用行不出胶囊', async () => {
+    vi.spyOn(api, 'listProviders').mockResolvedValue(providers())
+    await act(async () => root.render(<ProviderManager />))
+    const rows = options().filter((o) => /ReadyCo|OffCo/.test(o.textContent ?? ''))
+    expect(rows).toHaveLength(2)
+    for (const o of rows) expect(o.querySelectorAll(INTERACTIVE)).toHaveLength(0)
+    const off = rows.find((o) => o.textContent?.includes('OffCo'))!
+    expect(chip(off)?.textContent).toBe(i18n.t('settingsUi.disabledChip'))
+    expect(off.querySelector('[data-slot="dot"]')?.getAttribute('data-tone')).toBe('off')
+    expect(off.className).not.toMatch(/opacity/)
+    expect(chip(rows.find((o) => o.textContent?.includes('ReadyCo'))!)).toBeNull()
+  })
+
+  it('详情头部开关切换启用：只存已保存的那份配置（不连带未保存的编辑），列表行随之出「已停用」', async () => {
+    let doc = providers()
+    vi.spyOn(api, 'listProviders').mockImplementation(async () => doc)
+    const save = vi.spyOn(api, 'saveProvider').mockImplementation(async (p) => {
+      doc = { ...doc, providers: doc.providers.map((x) => (x.id === p.id ? { ...x, enabled: p.enabled ?? x.enabled } : x)) }
+    })
+    await act(async () => root.render(<ProviderManager />))
+    await act(async () => options().find((o) => o.textContent?.includes('ReadyCo'))!.click())
+    // 未保存的改名不应被开关顺手存进去，也不应被开关的重新读档冲掉
+    const name = el.querySelector<HTMLInputElement>(`input[aria-label="${i18n.t('providers.name')}"]`)!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Renamed')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const sw = el.querySelector<HTMLElement>('[data-provider-detail] [role="switch"]')!
+    expect(sw).not.toBeNull()
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    expect(sw.getAttribute('aria-label')).toBe(i18n.t('providers.enabled'))
+    await act(async () => sw.click())
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0]).toMatchObject({ id: 'a', name: 'ReadyCo', enabled: false })
+    expect(el.querySelector<HTMLElement>('[data-provider-detail] [role="switch"]')!.getAttribute('aria-checked')).toBe('false')
+    expect(name.value).toBe('Renamed')
+    expect(chip(options().find((o) => o.textContent?.includes('ReadyCo'))!)?.textContent).toBe(i18n.t('settingsUi.disabledChip'))
   })
 })
