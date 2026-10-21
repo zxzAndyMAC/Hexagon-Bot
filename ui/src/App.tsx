@@ -35,7 +35,7 @@ import { copyPath, insertPathToComposer, revealPath, treeRowTarget } from './fil
 import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { dispatchMessageAction, messageTarget } from './messageActions'
-import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, restoreMemberAvatar } from './memberActions'
+import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from './memberActions'
 import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
 
@@ -302,7 +302,7 @@ export default function App() {
         if (host) dispatchMessageAction(host, verb)
         return
       }
-      for (const [action, run] of [['mentionMember', mentionMember], ['copyMemberName', copyMemberName],
+      for (const [action, run] of [['openMemberDetail', openMemberDetail], ['mentionMember', mentionMember], ['copyMemberName', copyMemberName],
         ['changeMemberAvatar', changeMemberAvatar], ['restoreMemberAvatar', restoreMemberAvatar]] as const) {
         const b = bindingFor(action)
         if (!b || !matches(e, b)) continue

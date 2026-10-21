@@ -1,6 +1,6 @@
 // 成员行 + 消息右键菜单（components A16b 第一批，owner-followups-1015 #08）。
 // 成员行：打开详情 · @ 点名 · 复制名字 ·（#18）换头像 · 恢复默认；消息：复制 · 引用到输入条 · 在节点轨中定位。
-// 有选区落在该消息内时复制 / 引用只作用于选区；消息不在节点轨上时「定位」禁用写原因；
+// 有选区落在该消息内时复制 / 引用只作用于选区（菜单写「复制所选」「引用所选」）；消息不在节点轨上时不显示「定位」（票 29）；
 // 待决卡与裁决按钮上右键不出任何菜单；新动作默认空绑定、进命令面板。
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -115,6 +115,21 @@ describe('成员行右键菜单（A16b 第一批）', () => {
     await rightClick(memberRow('a1'))
     expect(useUiStore.getState().tabs).toEqual([])
     expect(memberRow('a1').dataset.state).toBe('open')
+  })
+
+  it('打开详情：键位（默认空，绑定后）作用于焦点成员行，菜单行右侧显示绑定（票 29）', async () => {
+    setBinding('openMemberDetail', 'alt+mod+shift+d')
+    try {
+      await rightClick(memberRow('a1'))
+      expect(row('openDetail').querySelector('[data-ctx-hint]')!.textContent).toBe(formatBinding('alt+mod+shift+d'))
+      await keyOn(menu()!, { key: 'Escape' })
+      await settle()
+      act(() => memberRow('a1').focus())
+      await keyOn(memberRow('a1'), { key: 'd', altKey: true, shiftKey: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) })
+      expect(useUiStore.getState().activeTab).toBe('agent:a1')
+    } finally {
+      resetBinding('openMemberDetail')
+    }
   })
 
   it('打开详情 = 在画布打开该 Agent', async () => {
@@ -239,11 +254,21 @@ describe('消息右键菜单（A16b 第一批）', () => {
     expect(row('locate').getAttribute('aria-disabled')).toBeNull()
   })
 
-  it('Agent 消息不在节点轨上：定位禁用并写原因', async () => {
+  // 行为变更（票 29，2026-10-20 负责人裁决）：Agent 消息在节点轨上没有刻度，菜单不显示「定位」；
+  // 原断言是「定位」常驻、禁用并写「不在节点轨上」。
+  it('Agent 消息不在节点轨上：菜单不显示定位', async () => {
     await rightClick(messageEl(12))
-    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['copy', 'quote', 'locate'])
-    expect(row('locate').getAttribute('aria-disabled')).toBe('true')
-    expect(row('locate').textContent).toBe('Locate in node railNot on the node rail')
+    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['copy', 'quote'])
+  })
+
+  it('无选区：菜单项写「复制」「引用到输入条」；有选区落在该消息内：写「复制所选」「引用所选」（票 29）', async () => {
+    await rightClick(messageEl(12))
+    expect(rows().map((r) => r.textContent)).toEqual(['Copy', 'Quote in composer'])
+    await keyOn(menu()!, { key: 'Escape' })
+    await settle()
+    selectIn(textNode(messageEl(12), 'the list'), 6, 14)
+    await rightClick(messageEl(12))
+    expect(rows().map((r) => r.textContent)).toEqual(['Copy selection', 'Quote selection'])
   })
 
   it('无选区：复制整条原文', async () => {
@@ -319,6 +344,7 @@ describe('新动作进命令面板（A16b「定位」）', () => {
   it('焦点在成员行时面板有 @ 点名 / 复制名字', async () => {
     act(() => memberRow('a1').focus())
     const items = await palette()
+    expect(items.some((x) => x.startsWith('Open details: Coder'))).toBe(true)
     expect(items.some((x) => x.startsWith('@ Mention Coder'))).toBe(true)
     expect(items.some((x) => x.startsWith('Copy name: Coder'))).toBe(true)
     expect(items.some((x) => x.startsWith('Change avatar: Coder'))).toBe(true)

@@ -14,7 +14,7 @@ import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
 import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
-import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, restoreMemberAvatar } from '../memberActions'
+import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from '../memberActions'
 import { dispatchMessageAction, messageOnRail, messageTarget } from '../messageActions'
 import { insertPathToComposer, revealLabelKey, revealPath } from '../fileActions'
 import { treeInsertPath } from '../composerAtoms'
@@ -125,6 +125,9 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         run: () => copyTabPath(activeTab),
       }] : []),
       ...(memberTarget ? [
+        // #29：「打开详情」补进面板，与同菜单其他动作一致。
+        { id: 'c-open-member-detail', group: 'cmd' as const, label: t('palette.openMemberDetail', { role: memberTarget.role }), icon: 'agent' as const,
+          hint: bind('openMemberDetail'), run: () => openMemberDetail(memberTarget.id) },
         { id: 'c-mention-member', group: 'cmd' as const, label: t('palette.mentionMember', { role: memberTarget.role }), icon: 'message' as const,
           hint: bind('mentionMember'), run: () => mentionMember(memberTarget.id) },
         { id: 'c-copy-member-name', group: 'cmd' as const, label: t('palette.copyMemberName', { role: memberTarget.role }), icon: 'copy' as const,
