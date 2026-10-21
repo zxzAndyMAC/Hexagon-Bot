@@ -79,6 +79,7 @@ export type ActionId =
   | 'quoteMessage'
   | 'locateInRail'
   | 'mentionMember'
+  | 'openMemberDetail'
   | 'copyMemberName'
   | 'changeMemberAvatar'
   | 'restoreMemberAvatar'
@@ -235,6 +236,8 @@ const DEFAULTS: Record<ActionId, string> = {
   // owner-followups-1015 #08（A16b 成员行 / 消息）：同上默认空绑定。消息动作作用于焦点所在的消息（或选区所在的消息），
   // 成员动作作用于焦点成员行；没有目标时什么也不做。
   copyMessage: '', quoteMessage: '', locateInRail: '', mentionMember: '', copyMemberName: '',
+  // owner-followups-1015 #29：成员菜单「打开详情」补键位入口（2026-10-20 负责人采纳），同上默认空绑定、作用于焦点成员行。
+  openMemberDetail: '',
   // owner-followups-1015 #18（A16b 成员行）：换头像 / 恢复默认，同上默认空绑定、作用于焦点成员行。
   changeMemberAvatar: '', restoreMemberAvatar: '',
   // owner-followups-1015 #07（A16b 文件树行）：同上默认空绑定；作用对象 = 焦点文件树行，否则当前文件 / 产物页签。
@@ -386,6 +389,7 @@ export const ACTIONS: { id: ActionId; labelKey: string }[] = [
   { id: 'copyMessage', labelKey: 'keys.copyMessage' },
   { id: 'quoteMessage', labelKey: 'keys.quoteMessage' },
   { id: 'locateInRail', labelKey: 'keys.locateInRail' },
+  { id: 'openMemberDetail', labelKey: 'keys.openMemberDetail' },
   { id: 'mentionMember', labelKey: 'keys.mentionMember' },
   { id: 'copyMemberName', labelKey: 'keys.copyMemberName' },
   { id: 'changeMemberAvatar', labelKey: 'keys.changeMemberAvatar' },

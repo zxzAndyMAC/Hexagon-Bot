@@ -150,6 +150,34 @@ it('draws rings in the enlarged preview and both ends of a drag', async () => {
   expect(rings(preview)).toEqual([['start', '25%', '50%'], ['end', '75%', '95%']])
 })
 
+// owner-followups-1015 #04（规范 D8 followups 第 11 项，2026-10-17 负责人裁决）：两枚圈长得一样分不清起终点。
+// drag 的起点圈写「1」、终点圈写「2」，缩略与放大模态一致；只剩起点（终点被缩略裁掉）时仍写「1」；仍无连线。
+it('numbers drag rings 1 (start) and 2 (end) in the thumbnail and the preview, with no connector', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', image_width: 1000, image_height: 1000 }
+  await renderWithLoadedThumb(shot, { width: 1000, height: 1000 }, { op: 'drag', snapshot_id: 's1', x: 250, y: 500, to_x: 750, to_y: 950 })
+  const labels = (root: Element) => [...root.querySelectorAll<HTMLElement>('[data-testid="computer-target-ring"]')]
+    .map((r) => [r.dataset.ring, r.textContent])
+  const thumb = el.querySelector<HTMLElement>('.computer-action-body .desktop-screenshot-thumbnail')!
+  expect(labels(thumb)).toEqual([['start', '1']])
+  const preview = el.querySelector('dialog.desktop-screenshot-preview')!
+  expect(labels(preview)).toEqual([['start', '1'], ['end', '2']])
+  // 序号只是视觉；读屏走 kv「动作」调用式，圈整组仍 aria-hidden
+  for (const r of preview.querySelectorAll('[data-testid="computer-target-ring"]')) expect(r.getAttribute('aria-hidden')).toBe('true')
+  expect(preview.querySelector('[data-testid="computer-target-link"], line, path.computer-target')).toBeNull()
+})
+
+it('keeps a click to one unnumbered ring', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', image_width: 1600, image_height: 1000 }
+  await renderWithLoadedThumb(shot, { width: 1600, height: 1000 }, { op: 'click', snapshot_id: 's1', x: 400, y: 750 })
+  for (const root of [el.querySelector('.computer-action-body .desktop-screenshot-thumbnail')!, el.querySelector('dialog.desktop-screenshot-preview')!]) {
+    const rings = root.querySelectorAll<HTMLElement>('[data-testid="computer-target-ring"]')
+    expect(rings).toHaveLength(1)
+    expect(rings[0].textContent).toBe('')
+  }
+})
+
 it('draws no drag rings when the end point is unproven', async () => {
   await i18n.changeLanguage('zh-CN')
   const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', image_width: 1600, image_height: 1000 }

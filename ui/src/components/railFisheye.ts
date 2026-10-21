@@ -58,8 +58,10 @@ export function useRailFisheye(railRef: RefObject<HTMLElement | null>, count: nu
   useEffect(() => () => { if (frame.current) cancelAnimationFrame(frame.current) }, [])
 
   const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
-    // 触摸没有悬停；按住键 = 拖拽（选区 / 拖放）进行中，暂停并复位（票 27）；减少动效下关闭（interaction §5）
-    if (event.pointerType === 'touch' || event.buttons !== 0 || reducedMotion()) {
+    // 触摸没有悬停；减少动效下关闭（interaction §5）。
+    // 不看 event.buttons：票 27 曾在按住键（选区 / 拖放）时暂停并复位，2026-10-20 负责人裁决
+    // 鱼眼没有「拖动时暂停」（票 29），按住键移动与悬停移动一样放大。
+    if (event.pointerType === 'touch' || reducedMotion()) {
       if (pointerY.current != null) reset()
       return
     }
