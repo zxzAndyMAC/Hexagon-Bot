@@ -79,7 +79,12 @@
 .dc + .dc { margin-top: 12px; }
 
 /* ---- 收起态：输入条上沿一枚胶囊行（圆角 12，overlay；橙点 + 「N 件待决 · 最严重：…」+ ▴） ---- */
-.dock-pill-row { display: flex; justify-content: center; margin: 0 auto 10px; max-width: 720px; width: 100%; }
+.dock-pill-row { display: flex; justify-content: center; margin: 0 auto 10px; max-width: 720px; width: 100%;
+  /* 修复即文档（owner-followups-1015 #01，2026-10-15 负责人截图）：胶囊行曾经不是定位元素，紧贴其上的时间线 `.tl`
+     是 relative + 铺底色，定位层画在流内容之上，把胶囊橙环与投影向上外扩的那几像素盖掉，看着像上沿被裁。
+     与展开态 `.dock` 同样进定位层（树序在 .tl 之后，z-index 仍 auto）。被否决：加 margin-top 让出空隙——
+     会改输入条上方的竖向节奏（D6 下距 10），且下一处贴边的定位邻居还会再盖一次。 */
+  position: relative; }
 .dock-pill { box-shadow: 0 0 0 1px color-mix(in oklch, var(--orange) 40%, transparent), var(--shadow-sm); }
 
 /* ---- 卡内旧子组件换皮（只在坞 / dc 作用域） ---- */
