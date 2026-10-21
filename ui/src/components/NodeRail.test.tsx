@@ -8,7 +8,7 @@ import type { NodeMark } from '../timelineModel'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
-// 票 27（owner-followups-1015）：节点轨鱼眼——只对指针，键盘聚焦不放大，离开复位，拖拽中与减少动效下关闭。
+// 票 27（owner-followups-1015）：节点轨鱼眼——只对指针，键盘聚焦不放大，离开复位，触摸与减少动效下关闭（拖动不暂停，票 29）。
 const mark = (i: number): NodeMark => ({ eventId: i, rowIdx: i, icon: 'check', label: `n${i}`, tier: 's', type: 'stamp' })
 const PITCH = 9 // C15：刻度按钮 9 高
 
@@ -74,13 +74,14 @@ describe('NodeRail 鱼眼（票 27）', () => {
     ticks.forEach(tick => expect(mag(tick)).toBe(1))
   })
 
-  it('按键按住（拖拽进行中）暂停鱼眼并复位', async () => {
+  // 行为变更（票 29，2026-10-20 负责人裁决）：鱼眼没有「拖动时暂停」。原断言是按住键移动复位为 1；
+  // 现在按住键移动与悬停移动同样放大——不再看 event.buttons。
+  it('按住鼠标键移动照常放大（无拖动暂停，票 29）', async () => {
     const { rail, ticks } = await mount()
-    pointer(rail, 'pointermove', { clientY: PITCH / 2 })
-    await frame()
     pointer(rail, 'pointermove', { clientY: PITCH / 2, buttons: 1 })
     await frame()
-    ticks.forEach(tick => expect(mag(tick)).toBe(1))
+    expect(mag(ticks[0])).toBeCloseTo(FISHEYE.max)
+    expect(mag(ticks[1])).toBeGreaterThan(1)
   })
 
   it('触摸指针不放大', async () => {

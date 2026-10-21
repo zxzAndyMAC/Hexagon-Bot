@@ -138,14 +138,33 @@ describe('画布页签右键菜单（A16b 第一批）', () => {
     expect(row('Close others').querySelector('[data-ctx-hint]')!.textContent).toBe(formatBinding('alt+mod+shift+o'))
   })
 
-  it('复制路径：写入页签的项目相对路径并出回执', async () => {
+  // 行为变更（票 29，2026-10-20 负责人裁决）：页签「复制路径」写绝对路径（项目根 + 相对路径）；
+  // 原断言是项目相对路径 'src/main.rs'。文件树行的「复制路径」不在这次裁决内，仍是相对路径。
+  it('复制路径：写入页签的绝对路径并出回执', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    useUiStore.setState({ projectRoot: '/Users/me/todo' })
     await openTabs([art, file], art.id)
     await rightClick(tabEl(file.id))
     await pick('Copy path')
-    expect(writeText).toHaveBeenCalledWith('src/main.rs')
+    expect(writeText).toHaveBeenCalledWith('/Users/me/todo/src/main.rs')
     expect(useUiStore.getState().toasts.at(-1)?.text).toBe('Path copied')
+  })
+
+  it('复制路径：copyPath 键位作用于当前页签时同样写绝对路径（票 29）', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    useUiStore.setState({ projectRoot: '/Users/me/todo/' })
+    await openTabs([art, file], art.id)
+    setBinding('copyPath', 'alt+mod+shift+c')
+    try {
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', bubbles: true, cancelable: true, altKey: true, shiftKey: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) }))
+      })
+      expect(writeText).toHaveBeenLastCalledWith('/Users/me/todo/docs/spec.md')
+    } finally {
+      resetBinding('copyPath')
+    }
   })
 
   it('Shift+F10 / Menu 键在焦点页签上打开菜单；Esc 关闭后焦点回到该页签', async () => {

@@ -588,7 +588,13 @@ fn safety_net_ask_survives_any_memory() {
         )
         .unwrap();
     let out = reg
-        .call(&db, &ctx, "bash", json!({"cmd": "git push origin main"}))
+        // #13: force push is the safety net; an ordinary push is a push card keyed by remote + branch.
+        .call(
+            &db,
+            &ctx,
+            "bash",
+            json!({"cmd": "git push --force origin main"}),
+        )
         .unwrap();
     // Owner Q3: critical operations always ask, even with a matching allow.
     assert!(matches!(out, CallOutcome::Asked(_)), "{out:?}");

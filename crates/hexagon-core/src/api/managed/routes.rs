@@ -51,6 +51,19 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
     let p = &card.payload;
     let action = || p["action_id"].as_str().map(str::to_string);
     match (card.kind.as_str(), p["sub"].as_str()) {
+        // owner-followups-1015 #13 (ADR 0093 follow-up ruling): a force push
+        // stays a safety net the delegation never answers — not even "deny" —
+        // so the card stays with the owner. Read from the persisted raw input
+        // (the bytes that run), not a payload label. Ordinary pushes are taken over.
+        ("permission", _)
+            if p["tool"] == "bash"
+                && matches!(
+                    crate::push_class::classify(p["raw_input"]["cmd"].as_str().unwrap_or("")),
+                    crate::push_class::PushClass::Force(_)
+                ) =>
+        {
+            None
+        }
         ("permission", _) => Some(format!(
             "permission:{}",
             action().unwrap_or_else(|| card.id.clone())

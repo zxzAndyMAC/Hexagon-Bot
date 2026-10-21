@@ -5,15 +5,16 @@
 // → 分组（组标题 11.5 ink-3）→ 底栏（inset 底：↑↓ 移动 ↵ 执行 + 危险指令说明）。
 // 2026-10-14 负责人裁决引入 cmdk（shadcn Command）：键盘 ↑↓↵、选中态、option 语义交给 cmdk；
 // 过滤仍走 filterPaletteItems（shouldFilter=false）——keywords 匹配与最近使用置顶（ui-audit 票 09）是本仓语义，cmdk 的模糊打分会打乱。
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText, type ReleaseTarget } from '../api'
+import type { TFunction } from 'i18next'
+import { api, errText, type PushTargets, type ReleaseTarget } from '../api'
 import { useUiStore } from '../store'
 import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
 import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
-import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, restoreMemberAvatar } from '../memberActions'
+import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from '../memberActions'
 import { dispatchMessageAction, messageOnRail, messageTarget } from '../messageActions'
 import { insertPathToComposer, revealLabelKey, revealPath } from '../fileActions'
 import { treeInsertPath } from '../composerAtoms'
@@ -70,6 +71,26 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
     api.releaseTargets().then((rows) => { if (live) setReleases(rows) }, () => { if (live) setReleases([]) })
     return () => { live = false }
   }, [])
+  // owner-followups-1015 #13（ADR 0093 后续裁决）：推送目标 = 基线分支的上游远程，不再写死 origin；
+  // 没有上游时列出每个远程让负责人选。读失败不挡面板：「推送」项执行时再读一次，失败走 toast。
+  const [pushTargets, setPushTargets] = useState<PushTargets | null>(null)
+  useEffect(() => {
+    let active = true
+    api.pushTargets().then((v) => { if (active) setPushTargets(v) }, () => { /* 执行时重读，错误在那里出 toast */ })
+    return () => { active = false }
+  }, [])
+  const startPush = useCallback(async (remote: string) => {
+    // L3 不可逆：不直接推送——请求/聚焦推送卡（原发布卡，ADR 0093 改名），卡内按钮确认（ADR 0056）；
+    // 唯一例外是负责人在推送卡上「允许本项目」过同一远程 + 分支（#13），宿主当场推送并回执。
+    if (!pending.some((x) => x.kind === 'push')) {
+      const req = await api.requestPush(remote)
+      if (req.pushed) { pushToast(t('palette.pushed', { remote: req.pushed.remote, branch: req.pushed.baseline }), 'ok'); return }
+    }
+    await invalidate()
+    // 票 05：待决区已撤，推送卡在弹窗里。invalidate 后的新 id 也会再弹；
+    // 这里显式打开，覆盖「负责人刚收起过同一张卡」的情况。
+    useUiStore.getState().openPendingDialog()
+  }, [pending, invalidate, pushToast, t])
 
   const items = useMemo<Item[]>(() => {
     const bind = (a: ActionId) => formatBinding(bindingFor(a))
@@ -106,17 +127,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         },
       },
       { id: 'c-sleep', group: 'cmd', label: t('palette.sleepAll'), icon: 'sleep', keywords: ['sleep'], run: () => runStageOp('sleepAll') },
-      {
-        // L3 不可逆：不直接推送——请求/聚焦推送卡（原发布卡，ADR 0093 改名），卡内按钮确认（ADR 0056）。
-        id: 'c-push', group: 'cmd', label: t('palette.requestPush'), icon: 'publish', keywords: ['push', 'git', 'pub', 'publish'],
-        run: async () => {
-          if (!pending.some((x) => x.kind === 'push')) await api.requestPush('origin')
-          await invalidate()
-          // 票 05：待决区已撤，推送卡在弹窗里。invalidate 后的新 id 也会再弹；
-          // 这里显式打开，覆盖「负责人刚收起过同一张卡」的情况。
-          useUiStore.getState().openPendingDialog()
-        },
-      },
+      ...pushItems(t, pushTargets, startPush, pushToast),
       releaseItem(),
       // 导航：ADR 0088（票 02）⌘B 开关左侧栏；票 03（R-04 / R-06）分屏撤掉 → 画布全宽 ↔ 并排、专注模式；
       // 票 07（D18）补「开关画布」「查看流程与质量检查」「打开设置」，同步新动作。
@@ -151,6 +162,9 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         run: () => copyTabPath(activeTab),
       }] : []),
       ...(memberTarget ? [
+        // #29：「打开详情」补进面板，与同菜单其他动作一致。
+        { id: 'c-open-member-detail', group: 'cmd' as const, label: t('palette.openMemberDetail', { role: memberTarget.role }), icon: 'agent' as const,
+          hint: bind('openMemberDetail'), run: () => openMemberDetail(memberTarget.id) },
         { id: 'c-mention-member', group: 'cmd' as const, label: t('palette.mentionMember', { role: memberTarget.role }), icon: 'message' as const,
           hint: bind('mentionMember'), run: () => mentionMember(memberTarget.id) },
         { id: 'c-copy-member-name', group: 'cmd' as const, label: t('palette.copyMemberName', { role: memberTarget.role }), icon: 'copy' as const,
@@ -190,7 +204,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       })),
     ]
     return list
-  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pending, pushToast, invalidate, setFlowDialogOpen, onSettings, releases, picking])
+  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pushToast, setFlowDialogOpen, onSettings, pushTargets, startPush, invalidate, releases, picking])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。
@@ -255,6 +269,30 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       </DialogContent>
     </Dialog>
   )
+}
+
+/** #13 推送项：有上游（或还没读到目标）= 一项「推送」，描述写目标远程；
+ *  没有上游 = 每个远程一项「推送到 X」，由负责人选；一个远程都没有 = 一项，执行时说明原因。 */
+function pushItems(
+  t: TFunction, targets: PushTargets | null, startPush: (remote: string) => Promise<void>,
+  pushToast: (msg: string, tone?: 'ok' | 'err') => void,
+): Item[] {
+  const keywords = ['push', 'git', 'pub', 'publish']
+  if (targets && !targets.upstream && targets.remotes.length > 0) {
+    return targets.remotes.map((remote) => ({
+      id: `c-push-${remote}`, group: 'cmd' as const, label: t('palette.pushTo', { remote }), desc: t('palette.pushNoUpstream'),
+      icon: 'publish' as const, keywords: [...keywords, remote], run: () => startPush(remote),
+    }))
+  }
+  return [{
+    id: 'c-push', group: 'cmd', label: t('palette.requestPush'), icon: 'publish', keywords,
+    desc: targets?.upstream ? targets.upstream : undefined,
+    run: async () => {
+      const current = targets ?? await api.pushTargets()
+      if (current.upstream) return startPush(current.upstream)
+      pushToast(t(current.remotes.length ? 'palette.pushChooseRemote' : 'palette.pushNoRemote'), 'err')
+    },
+  }]
 }
 
 /** D18 行 = 图标 + 名 13/500 + 灰描述 + 右侧 kbd；高亮 = --hover 底（cmdk data-selected，同 A16 mi.on）。 */

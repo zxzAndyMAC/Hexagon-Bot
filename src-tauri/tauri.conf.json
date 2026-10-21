@@ -27,7 +27,8 @@
   "bundle": {
     "active": false,
     "resources": {
-      "resources/browser/": "browser/"
+      "resources/browser/": "browser/",
+      "../THIRD-PARTY-NOTICES": "THIRD-PARTY-NOTICES"
     }
   }
 }

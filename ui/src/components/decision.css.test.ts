@@ -38,3 +38,18 @@ describe('危险态待决卡描边（#26）', () => {
     expect(body).not.toMatch(/inset/)
   })
 })
+
+// owner-followups-1015 #01 回归（2026-10-15 负责人截图：收起胶囊「N 件待决 · 最严重：…」上沿少一截描边）：
+// 胶囊行紧贴时间线下沿（实测 .tl 下沿 = 胶囊上沿 = 740）。`.tl` 是定位元素（relative）且铺满底色，
+// 按 CSS 绘制顺序定位层画在全部非定位流内容之上——胶囊 1px 橙环与 shadow-sm 向上外扩的几像素被 .tl 底色盖住。
+// 展开态 `.dock` 自己是 relative，所以一直完整；收起行原本没有定位。守住：胶囊行进定位层（树序在 .tl 之后 → 画在其上）。
+describe('收起胶囊描边不被时间线盖住（#01）', () => {
+  it('胶囊行与展开坞一样是定位元素', () => {
+    expect(rule('.dock')).toMatch(/position:\s*relative/)
+    expect(rule('.dock-pill-row')).toMatch(/position:\s*relative/)
+  })
+
+  it('胶囊行与胶囊都不裁切（描边与投影向外画）', () => {
+    for (const sel of ['.dock-pill-row', '.dock-pill']) expect(rule(sel)).not.toMatch(/overflow:\s*(hidden|clip)/)
+  })
+})

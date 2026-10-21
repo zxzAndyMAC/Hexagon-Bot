@@ -2788,19 +2788,32 @@ fn rollback_proposal(state: ProjectState<'_>, proposal_id: String) -> Result<(),
 }
 
 #[tauri::command]
-fn request_push(state: ProjectState<'_>, remote: String) -> Result<String, CmdError> {
-    // 推送请求只是入队待决卡（控制组）；真正的 push 在 confirm_push（wb 组，要 creds）
-    with_project_conn(&state, |db, _| {
-        hexagon_core::push::request(db, PROJECT_ID, &remote).map_err(cmd_err)
-    })
+fn request_push(
+    state: ProjectState<'_>,
+    remote: String,
+) -> Result<hexagon_core::push::PushRequest, CmdError> {
+    // owner-followups-1015 #13：入队推送卡；本项目已允许同一（远程, 分支）时当场推送，
+    // 要 creds——所以从控制组移到 wb 组（原先只入队，走 with_project_conn）。
+    with_wb(&state, |wb| wb.request_push(&remote))
 }
 
 #[tauri::command]
 fn confirm_push(
     state: ProjectState<'_>,
     qid: String,
+    remember: Option<bool>,
 ) -> Result<hexagon_core::push::PushOutcome, CmdError> {
-    with_wb(&state, |wb| wb.confirm_push(&qid))
+    with_wb(&state, |wb| {
+        wb.confirm_push(&qid, remember.unwrap_or(false))
+    })
+}
+
+/// ⌘K「推送」目标候选（#13）：只读 git 远程配置，不碰 wb。
+#[tauri::command]
+fn push_targets(state: ProjectState<'_>) -> Result<hexagon_core::push::PushTargets, CmdError> {
+    with_project_conn(&state, |db, _| {
+        hexagon_core::push::targets(db, PROJECT_ID).map_err(cmd_err)
+    })
 }
 
 #[tauri::command]
@@ -4162,6 +4175,7 @@ pub fn run() {
             request_push,
             confirm_push,
             reject_push,
+            push_targets,
             // 发布目标（owner-followups-1015 #14）：control 组，锁外自开账本连接。
             release_targets,
             save_release_target,
