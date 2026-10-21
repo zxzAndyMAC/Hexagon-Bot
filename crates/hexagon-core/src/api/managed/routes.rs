@@ -107,6 +107,14 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
             p["remote"].as_str().unwrap_or_default(),
             p["commit"].as_str().unwrap_or(&card.id)
         )),
+        // owner-followups-1015 #15: one budget per release card. A release has no
+        // business identity beyond the owner's request (no commit to bind to), and
+        // a new request is a new decision.
+        ("release", _) => Some(format!(
+            "release:{}:{}",
+            p["target_id"].as_str().unwrap_or_default(),
+            card.id
+        )),
         // One business decision per session/operation/path, across new cards.
         ("worktree", _) => Some(format!(
             "worktree:{}:{}:{}",
@@ -435,6 +443,39 @@ pub(crate) fn push_forced(facts: &PushFacts) -> (&'static str, &'static str) {
     }
 }
 
+/// Host-verified facts for a delegated release (no secret values).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ReleaseFacts {
+    /// The card's target is still registered.
+    pub target_registered: bool,
+    /// Name, command, working directory and credential names still match the card.
+    pub target_unchanged: bool,
+    /// Every declared credential is stored in the keychain.
+    pub credentials_present: bool,
+}
+
+/// owner-followups-1015 #15 (ADR 0093 follow-up ruling; CONTEXT.md 托管:
+/// 发布限已有目标与可用项目凭据): delegation may confirm a release card only for
+/// a target the owner already registered, unchanged since the card was asked,
+/// with every credential stored. It never registers or edits a target (no
+/// route reaches `release_targets::save`). Unlike push there is no acceptance
+/// gate: the owner ruling limits delegated releases to existing targets and
+/// credentials, nothing more. Cost model as `push_forced`: a false refusal
+/// leaves one unreleased card (visible; the report points to Settings ·
+/// Release); a false release is an irreversible external effect, so every
+/// fact must hold.
+pub(crate) fn release_forced(facts: &ReleaseFacts) -> (&'static str, &'static str) {
+    let checks = [
+        (facts.target_registered, "target_missing"),
+        (facts.target_unchanged, "target_changed"),
+        (facts.credentials_present, "credential_missing"),
+    ];
+    match checks.iter().find(|(ok, _)| !ok) {
+        Some((_, reason)) => ("incomplete", reason),
+        None => ("release", "registered_target_credentials_present"),
+    }
+}
+
 /// Wayfinder-07 Addendum A (owner ruling 2026-10-12): under delegation the
 /// decider may confirm a worktree card only when the host has just rechecked
 /// every bound fact (session, canonical root/path, baseline commit, and for
@@ -646,6 +687,18 @@ impl Workbench {
                     fallback: "incomplete",
                 }
             }
+            ("release", _) => {
+                let facts = self.release_facts(p)?;
+                Route {
+                    options: opts(&[
+                        ("release", "run the registered release command"),
+                        ("incomplete", "do not release"),
+                    ]),
+                    state: String::new(),
+                    forced: Some(release_forced(&facts)),
+                    fallback: "incomplete",
+                }
+            }
             ("worktree", _) => {
                 let check = self.recheck_worktree_card(&card.id).map(|_| ());
                 Route {
@@ -701,6 +754,35 @@ impl Workbench {
             commit_unchanged: p["commit"].is_string()
                 && git(&["rev-parse", p["baseline"].as_str().unwrap_or("HEAD")])
                     .is_ok_and(|tip| p["commit"] == tip.as_str()),
+        })
+    }
+
+    fn release_facts(&self, p: &serde_json::Value) -> Result<ReleaseFacts, ApiError> {
+        let id = p["target_id"].as_str().unwrap_or_default();
+        let target = match crate::release_targets::row(&self.db, &self.project_id, id) {
+            Ok(t) => t,
+            Err(crate::release_targets::ReleaseError::ReleaseTargetUnknown(_)) => {
+                return Ok(ReleaseFacts::default())
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let asked: Vec<&str> = p["credentials"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let declared: Vec<&str> = target.credentials.iter().map(String::as_str).collect();
+        Ok(ReleaseFacts {
+            target_registered: true,
+            target_unchanged: p["command"] == target.command.as_str()
+                && p["cwd"] == target.cwd.as_str()
+                && p["name"] == target.name.as_str()
+                && asked == declared,
+            // Presence only; the value is dropped on this line (same rule as the confirm gate).
+            credentials_present: target.credentials.iter().all(|c| {
+                self.creds
+                    .get(&crate::release_targets::credential_key(&target.id, c))
+                    .is_ok_and(|v| v.is_some_and(|v| !v.is_empty()))
+            }),
         })
     }
 

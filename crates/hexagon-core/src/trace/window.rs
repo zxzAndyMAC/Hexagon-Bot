@@ -19,6 +19,7 @@ const DECISIONS: &str = "e.kind IN ('permission_asked','permission_allowed','per
  'stamped','stamp_rejected','flag_submitted','flag_adjudicated','escalated',
  'proposal_queued','proposal_reviewed','proposal_stamped','proposal_rejected','proposal_activated','proposal_rolled_back',
  'push_requested','push_confirmed','push_rejected','push_failed',
+ 'release_requested','release_confirmed','release_rejected','release_failed',
  'autonomy_changed','baseline_merged','stage_rewound','pm_routed')";
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, ts_rs::TS)]

@@ -32,10 +32,12 @@ pub enum ManagedEvidence {
     HostRule,
 }
 
-/// 宿主拒绝「超出托管授权」的原因码：缺发布目标 / 凭据（托管不会新增目标、不碰账号）、
+/// 宿主拒绝「超出托管授权」的原因码：缺发布目标 / 目标在卡发出后被改过（票 15 发布卡）/ 凭据
+/// （托管不会新增或改动目标、不碰账号）、
 /// 需要登录、宿主无法证明不删外部内容、绝不降低验收标准。其余拒绝是范围内的判断。
 const OUT_OF_SCOPE_REASONS: &[&str] = &[
     "target_missing",
+    "target_changed",
     "credential_missing",
     "credentials_or_login_required",
     "host_shell_cannot_exclude_external_deletion",
@@ -60,6 +62,7 @@ pub fn classify(action: &str, reason: &str, via: &str) -> (ManagedScope, Managed
         }
         ("adopt", "independent_quality_qualified") => ManagedEvidence::QualityEvidence,
         ("push", "configured_target_accepted_delivery")
+        | ("release", "registered_target_credentials_present")
         | ("confirm", "host_verified_worktree_binding") => ManagedEvidence::HostVerified,
         ("direct_use", "installed_capability_direct_use") => ManagedEvidence::InProject,
         _ => ManagedEvidence::HostRule,
