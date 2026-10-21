@@ -40,7 +40,7 @@ import { TooltipProvider } from './ui/tooltip'
 import type { AtomOptions } from '../timelineAtoms'
 import { ReturnSummaryCard, ReturnSummaryMarker } from './ReturnSummary'
 import { FreshStart } from './FreshStart'
-import { ArtistNotice, ARTIST_NOTICE_KIND } from './ArtistNotice'
+import { ArtistNotice, ARTIST_NOTICE_KIND, ARTIST_PROMPT_FAILED_KIND } from './ArtistNotice'
 import { ArtistProposalCard, ARTIST_PROPOSAL_KIND } from './ArtistProposal'
 import { IntakeCard } from './IntakeCard'
 import { isFreshProject, pinnedSummary } from '../returnSummaryModel'
@@ -265,7 +265,7 @@ function SystemRow({ item }: { item: TimelineItem }) {
   // 词表外子类回退原始 kind 文本（自文档化，不吞新类）。
   const sub = item.event.kind === 'system' ? String(item.event.payload?.kind ?? '') : ''
   if (MODEL_RECOVERY_KINDS.includes(sub)) return <ModelRecoveryRow item={item} />
-  if (sub === ARTIST_NOTICE_KIND) return <ArtistNotice item={item} />
+  if (sub === ARTIST_NOTICE_KIND || sub === ARTIST_PROMPT_FAILED_KIND) return <ArtistNotice item={item} />
   if (sub === ARTIST_PROPOSAL_KIND) return <ArtistProposalCard item={item} />
   if (sub === 'agent_plan' && typeof item.event.payload.text === 'string') {
     return <div className="plan-row"><ThinkingRow text={item.event.payload.text} plan /></div>

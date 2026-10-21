@@ -181,6 +181,8 @@ const isSysItem = (it: TimelineItem) =>
   it.event.payload.kind !== 'managed_decision' &&
   // 票 19：画师的提示是画师在发言（带名字、头像和按钮），不是可折的系统注记。
   it.event.payload.kind !== 'artist_image_model_missing' &&
+  // 票 28：画师写不出出图提示词的那一句同理。
+  it.event.payload.kind !== 'artist_prompt_failed' &&
   // 票 20：头像提案卡同理（画师发言 + 负责人要点的按钮）。
   it.event.payload.kind !== 'artist_avatar_proposal' &&
   !TOOL_KINDS.has(it.event.kind) &&
