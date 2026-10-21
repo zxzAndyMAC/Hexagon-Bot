@@ -98,6 +98,31 @@ describe('阶段进度（ADR 0069 只读；ADR 0088：右栏「阶段」页签 �
     expect(list.querySelector('[data-stage-state="active"]')).toBeTruthy()
     expect(list.querySelector('[data-stage-state="waiting_stamp"]')).toBeTruthy()
   })
+
+  // owner-followups-1015 #02 回归（2026-10-15 负责人：深浅两套下阶段圆圈粗细不匀）：
+  // 曾是 15px 圆点 + 1.5px 内环（+ 1.5px 连线在左 6.5）。实测（Playwright，沿圆周每 3° 径向积分）
+  // 描边视觉粗细的相对极差 DPR1 ≈ 25%、DPR2 ≈ 15%；16px + 2px 降到 ≈ 17% / 8%，贴近 SVG 抗锯齿底噪（13% / 9%）。
+  // 守住：圆点、环、连线都是整数像素，偶数圆点让行内居中（28 高）落整数，连线中心对准圆心。
+  it('阶段圆点 / 环 / 连线都是整数像素，连线居中对准圆心（#02）', async () => {
+    const all: StageRow['state'][] = ['done', 'active', 'waiting_stamp', 'interrupted', 'rejected', 'skipped', 'pending']
+    useUiStore.setState({ stages: all.map((state, i) => ({ run_id: `r${i}`, stage: state, seq: i, state })) })
+    const host = await render(sidebar)
+    const px = (cls: string, re: RegExp) => { const m = cls.match(re); expect(m, `${re} in ${cls}`).toBeTruthy(); return Number(m![1]) }
+    const int = (n: number) => expect(Number.isInteger(n), `${n}px 不是整数像素`).toBe(true)
+    for (const li of host.querySelectorAll<HTMLElement>('[data-stage-list] li')) {
+      const dot = li.querySelector<HTMLElement>('span.rounded-full')!
+      const size = px(dot.className, /size-\[([\d.]+)px\]/)
+      int(size)
+      expect(size % 2, '偶数圆点：28 高行内居中落整数').toBe(0)
+      if (li.dataset.stageState !== 'done') int(px(dot.className, /inset_0_0_0_([\d.]+)px/))
+      const link = li.querySelector<HTMLElement>('span[aria-hidden]')
+      if (link) {
+        const w = px(link.className, /w-\[([\d.]+)px\]/), left = px(link.className, /left-\[([\d.]+)px\]/)
+        int(w); int(left)
+        expect(left + w / 2).toBe(size / 2)
+      }
+    }
+  })
 })
 
 const card = (id: string): PendingQuestion => ({ id, kind: 'permission', agent_id: 'a1', payload: {}, state: 'queued' } as PendingQuestion)

@@ -99,24 +99,33 @@ function DesktopScreenshotDetails({ output, capturedAt, variant, ringFacts }: Pr
         onKeyDown={event => { if (matches(event.nativeEvent, bindingFor('viewDesktopScreenshot'))) { event.preventDefault(); event.currentTarget.click() } }}>
         {image ? <img src={image} alt={result?.title || t('computer.screenshotAlt')} decoding="async" className="size-full object-cover"
           onLoad={event => checkSize(event.currentTarget)} /> : <span>{t(busy ? 'computer.screenshotLoading' : 'computer.viewScreenshot')}</span>}
-        {image && <TargetRings rings={thumbRings} />}
+        {image && <TargetRings rings={thumbRings} ordered={ringFacts?.op === 'drag'} />}
       </button>
       {!card && <figcaption className="min-w-0 text-[12px] text-ink-3 [overflow-wrap:anywhere]">{t('control.evidence', { label })}<br />{t('control.evidenceHint')}</figcaption>}
     </figure>}
     {failed && <p role="status" className="mt-1 text-[12px] text-ink-3">{t('computer.screenshotUnavailable')}</p>}
-    {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} rings={previewRings} onImage={checkSize} />}
+    {preview && image && <ScreenshotPreview image={image} label={label} onClose={close} rings={previewRings} ordered={ringFacts?.op === 'drag'} onImage={checkSize} />}
   </div>
 }
 
-/** 目标圈（components D8）：同一形制，drag 的起点 / 终点各一圈，`data-ring` 标角色。 */
-function TargetRings({ rings }: { rings: TargetRing[] | null }) {
+/** drag 圈内序号（components D8 followups 第 11 项）：起点「1」、终点「2」，不随语言，不走 i18n。 */
+const RING_ORDINAL: Record<TargetRing['role'], string> = { start: '1', end: '2' }
+
+/**
+ * 目标圈（components D8）：同一形制，drag 的起点 / 终点各一圈，`data-ring` 标角色。
+ * owner-followups-1015 #04（2026-10-17 负责人裁决）：两枚圈曾长得一样，审批拖拽时分不清起终点、可能把方向看反；
+ * drag 的圈内写「1」/「2」（11px tabular-nums `--red`），缩略与放大模态同一组件所以一致。终点被缩略裁掉时
+ * 只剩起点圈，仍写「1」。仍不加连线（规范 D8：原型没有拖拽画法，方向由 kv「动作」调用式写明）；序号只是视觉，
+ * 圈整组 aria-hidden（读屏读调用式）。click 一圈不写序号。
+ */
+function TargetRings({ rings, ordered }: { rings: TargetRing[] | null; ordered: boolean }) {
   return rings?.map(ring => <span key={ring.role} data-testid="computer-target-ring" data-ring={ring.role} aria-hidden="true"
-    className="computer-target-ring pointer-events-none absolute size-[22px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-    style={{ left: `${ring.left * 100}%`, top: `${ring.top * 100}%` }} />) ?? null
+    className="computer-target-ring pointer-events-none absolute grid size-[22px] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full text-[11px] leading-none tabular-nums text-red"
+    style={{ left: `${ring.left * 100}%`, top: `${ring.top * 100}%` }}>{ordered ? RING_ORDINAL[ring.role] : null}</span>) ?? null
 }
 
-function ScreenshotPreview({ image, label, onClose, rings, onImage }: {
-  image: string; label: string; onClose: () => void; rings: TargetRing[] | null; onImage: (img: HTMLImageElement) => void
+function ScreenshotPreview({ image, label, onClose, rings, ordered, onImage }: {
+  image: string; label: string; onClose: () => void; rings: TargetRing[] | null; ordered: boolean; onImage: (img: HTMLImageElement) => void
 }) {
   const { t } = useTranslation()
   const dialog = useRef<HTMLDialogElement>(null)
@@ -157,7 +166,7 @@ function ScreenshotPreview({ image, label, onClose, rings, onImage }: {
     <div className="relative mx-auto w-fit max-w-full">
       <img src={image} alt={label} decoding="async" onLoad={event => onImage(event.currentTarget)}
         className="block h-auto max-h-[calc(90vh-80px)] w-auto max-w-full rounded-[var(--r-sm)]" />
-      <TargetRings rings={rings} />
+      <TargetRings rings={rings} ordered={ordered} />
     </div>
   </dialog>
 }
