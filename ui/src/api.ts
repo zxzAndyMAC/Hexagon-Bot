@@ -793,6 +793,21 @@ const mockSessionSummary = (): SessionSummary => ({
   session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: MOCK_SESSION.status, last_reason_code: MOCK_SESSION.reason, worktree: MOCK_SESSION.worktree },
   triggers: MOCK_SESSION.triggers,
 })
+// owner-followups-1015 #11（C12a「改为头部胶囊」）：`?mocksessionalert` = 会话失败 + 同 kind 多项能力（MCP 3/6），
+// 截图用例「会话异常 + 坞展开」用它确认胶囊出在头部、归来摘要「需要你处理」不再被常驻会话卡挤裁。
+const mockSessionAlertOn = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mocksessionalert')
+const mockMcp = (id: string, health: SessionSummary['capabilities'][number]['health'], last_error: string | null = null) => (
+  { kind: 'mcp' as const, id, available: true, granted: false, health, last_error, requires_user_action: health === 'unavailable', binding_hint: 'project:/mock/project' })
+const mockSessionAlertSummary = (): SessionSummary => ({
+  ...MOCK_SESSION_SUMMARY,
+  session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: 'failed', last_reason_code: 'turn_failed' },
+  capabilities: [
+    ...MOCK_SESSION_SUMMARY.capabilities.filter((c) => c.kind !== 'mcp'),
+    mockMcp('docs', 'unavailable', 'mcp_worker_exited'), mockMcp('git', 'healthy'), mockMcp('fs', 'degraded', 'mcp_slow_start'),
+    mockMcp('search', 'healthy'), mockMcp('db', 'reconnecting'), mockMcp('figma', 'healthy'),
+  ],
+  next_action: 'inspect_failure',
+})
 const mockWorktreeCard = () => MOCK_SESSION.card
   ? [{ id: MOCK_SESSION.card.id, kind: 'worktree', agent_id: null, payload: { operation: 'create', path: MOCK_SESSION.card.path, baseline: 'main', baseline_commit: '3a7bca5e9f01', session_id: 'session-mock' }, state: 'queued' }]
   : []
@@ -1553,7 +1568,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
       return (ART_CONTENT[String(args?.path)]?.[Number(args?.version)] ?? null) as T
-    case 'session_summary': return (mockSessionOn() ? mockSessionSummary() : MOCK_SESSION_SUMMARY) as T
+    case 'session_summary': return (mockSessionAlertOn() ? mockSessionAlertSummary() : mockSessionOn() ? mockSessionSummary() : MOCK_SESSION_SUMMARY) as T
     case 'session_pause':
     case 'session_reconnect':
     case 'session_resume':

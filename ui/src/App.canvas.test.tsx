@@ -254,17 +254,22 @@ describe('用量详情占满主区（interaction §10，ADR 0090）', () => {
   })
 })
 
-describe('SessionHost 恢复条（C12a）随时间线迁入主区', () => {
-  it('钉在对话列顶部（时间线与归来摘要之上），画布全宽时随对话一起隐藏', async () => {
+// owner-followups-1015 #11（C12a「改为头部胶囊」）：会话卡曾钉在对话列顶部，1440×900 下把归来摘要压到约 170px。
+// 现在只在异常时出头部胶囊；画布全宽时换挂到页签栏状态槽，同一时刻只挂一份（会话键位由它注册，挂两份会执行两次）。
+describe('SessionHost 会话胶囊（C12a）挂在头部 / 画布全宽状态槽', () => {
+  it('健康时不出胶囊、时间线顶部不再有会话卡；异常时出在头部，全宽时只挂在页签栏状态槽', async () => {
+    const pills = () => [...el.querySelectorAll('[data-session-pill]')]
+    expect(pills()).toHaveLength(0)
     await act(async () => useUiStore.setState({ sessionError: 'boom' }))
-    const strip = el.querySelector('[data-session-recovery]') as HTMLElement
-    expect(conversation().contains(strip)).toBe(true)
-    expect(strip.parentElement!.firstElementChild).toBe(strip)
-    const timelineSlot = strip.nextElementSibling as HTMLElement
-    expect(timelineSlot.compareDocumentPosition(el.querySelector('#composer-input')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(pills()).toHaveLength(1)
+    expect(el.querySelector('[data-header]')!.contains(pills()[0])).toBe(true)
+    expect(conversation().querySelector('[data-session-recovery]')).toBeNull()
     await act(async () => { useUiStore.getState().openTab(art); useUiStore.getState().toggleCanvasFull() })
-    expect(conversation().hidden).toBe(true)
-    expect(canvas()!.contains(strip)).toBe(false)
+    expect(pills()).toHaveLength(1)
+    expect(el.querySelector('[data-canvas-status]')!.contains(pills()[0])).toBe(true)
+    await act(async () => useUiStore.getState().toggleCanvasFull())
+    expect(pills()).toHaveLength(1)
+    expect(el.querySelector('[data-header]')!.contains(pills()[0])).toBe(true)
   })
 
   // Gap D1（2026-10-16）：曾经点预设时间即预约、且无法撤回。现在预设只选中，「预约」primary 才落预约；
@@ -281,7 +286,16 @@ describe('SessionHost 恢复条（C12a）随时间线迁入主区', () => {
     const cancel = vi.spyOn(api, 'sessionCancelTrigger').mockResolvedValue({ ...booked, state: 'cancelled' })
     await act(async () => useUiStore.setState({ sessionSummary: summary, toasts: [] }))
     const button = (text: string) => [...document.querySelectorAll('button')].find((b) => b.textContent === text) as HTMLButtonElement
-    await act(async () => { button('Continue later…').click() })
+    // #11（C12a）：健康运行时没有胶囊，「稍后继续…」从头部 ⋯ 菜单进（同 ⌘K），时间弹层挂在会话状态槽上
+    expect(el.querySelector('[data-session-pill]')).toBeNull()
+    const openMore = async () => {
+      const more = el.querySelector('[data-header-more]') as HTMLButtonElement
+      await act(async () => { more.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' })) })
+    }
+    await openMore()
+    await act(async () => { (document.querySelector('[data-header-later]') as HTMLElement).click() })
+    // 菜单关闭把焦点还给 ⋯ 时弹层曾被「焦点移出」同拍关掉
+    expect(useUiStore.getState().sessionLaterOpen).toBe(true)
     const confirm = document.querySelector('[data-later-confirm]') as HTMLButtonElement
     expect(confirm.getAttribute('aria-disabled')).toBe('true')
     await act(async () => { confirm.click() })
@@ -297,8 +311,16 @@ describe('SessionHost 恢复条（C12a）随时间线迁入主区', () => {
     expect(fireAt).toBeLessThanOrEqual(before + 30 * 60 + 2)
 
     await act(async () => useUiStore.setState({ sessionSummary: { ...summary, triggers: [booked] } }))
-    expect(el.querySelector('[data-session-trigger="scheduled"]')!.textContent).toContain('Continues at')
-    expect(button('Continue later…')).toBeUndefined()
+    // 有预约 → 胶囊出现（neutral「已预约」），弹层里是预约行；⋯ 菜单项灰显写原因
+    await openMore()
+    const later = document.querySelector('[data-header-later]') as HTMLElement
+    expect(later.hasAttribute('data-disabled')).toBe(true)
+    expect(later.textContent).toContain('Already booked')
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    // 菜单关闭后 radix 晚一拍把焦点还给 ⋯；等它落定再点胶囊，否则还焦点会被当成「焦点移出」关掉刚开的卡
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    await act(async () => { (el.querySelector('[data-session-pill]') as HTMLButtonElement).click() })
+    expect(document.querySelector('[data-session-trigger="scheduled"]')!.textContent).toContain('Continues at')
     await act(async () => { button('Cancel booking').click() })
     expect(cancel).toHaveBeenCalledWith('later-9')
     expect(useUiStore.getState().toasts.at(-1)).toMatchObject({ text: 'Booking cancelled' })
