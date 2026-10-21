@@ -7,6 +7,6 @@
     "reviewer": null,
     "model_slot": "chat",
     "globs": [],
-    "skills": []
+    "skills": ["image-prompt"]
   }
 ]

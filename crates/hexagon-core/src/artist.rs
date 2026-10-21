@@ -13,7 +13,8 @@
 //! （[`provider_config::image_generation_slot`]，不回退 default——default 是对话模型，
 //! 回退 = 拿对话模型凑合出图）。代价模型：误报「没绑」多一次去设置；误报「已绑」
 //! 负责人以为能出图、实际外发到对话模型。偏向报没绑。
-//! 已绑且支持时（票 20）走出图执行器（`image_gen`）出头像提案（`artist_proposal`）。
+//! 已绑且支持时（票 20）走出图执行器（`image_gen`）出头像提案（`artist_proposal`）；
+//! 每个角色的提示词先由画师的主对话模型配内置「出图提示词」技能撰写（票 28，`artist_prompt`）。
 
 use crate::db::Db;
 use crate::provider_config::{self, ImageGenerationSlot};
@@ -26,6 +27,19 @@ pub const ARTIST_ROLE: &str = "画师";
 pub const ARTIST_CODE: &str = "artist";
 /// 出图模型缺位时画师那一句的 System 子类（登记于 `trace::SYSTEM_SUBKINDS`）。
 pub const IMAGE_MODEL_MISSING: &str = "artist_image_model_missing";
+
+/// 画师的主对话槽（隐藏预置角色的 `model_slot`；读不到按 `chat`）。票 28：写提示词用。
+pub fn artist_chat_slot() -> &'static str {
+    static SLOT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| {
+        crate::presets::hidden_roles()
+            .ok()
+            .and_then(|roles| roles.into_iter().find(|r| r.code == ARTIST_CODE))
+            .map(|r| r.role.model_slot.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "chat".into())
+    })
+}
 
 pub struct SummonArtist;
 
@@ -146,6 +160,33 @@ fn draw_proposal(
                 "note":"the Artist told the owner the image slot cannot be used; do not generate avatars another way"}));
         }
     };
+    // 票 28：提示词由画师的主对话模型配内置「出图提示词」技能撰写。写不出来就明说、
+    // 一张图都不出——不退回票 20 的固定模板（2026-10-20 负责人裁决；模块注释见 artist_prompt）。
+    let briefs: Vec<_> = roles
+        .iter()
+        .map(|role| crate::artist_prompt::RoleBrief {
+            role: role.clone(),
+            duty_summary: crate::artist_proposal::duty_summary_of(db, &ctx.project_id, role),
+        })
+        .collect();
+    let model_ref = ctx.images.as_ref().and_then(|a| a.prompt_model());
+    let prompts = match crate::artist_prompt::write(db, ctx, model_ref, style, &briefs) {
+        Ok(p) => p,
+        Err(f) => {
+            db.append_event(
+                &ctx.project_id,
+                crate::trace::EventKind::System,
+                json!({"kind":crate::artist_prompt::PROMPT_FAILED,"speaker":ARTIST_ROLE,
+                    "speaker_code":ARTIST_CODE,"reason":f.code(),"slot":artist_chat_slot(),
+                    "style":style,"roles":roles}),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+            )
+            .map_err(|e| ToolError::Exec(format!("artist notice not recorded: {e}")))?;
+            return Ok(json!({"state":"prompt_failed","reason":f.code(),
+                "note":"the Artist could not write the image prompts and told the owner; nothing was sent to the image model. Do not write prompts or generate avatars another way."}));
+        }
+    };
     let cx = crate::artist_proposal::DrawCtx {
         db,
         root: &ctx.repo_root,
@@ -153,7 +194,7 @@ fn draw_proposal(
         agent_id: Some(&ctx.agent_id),
         stage_run_id: ctx.stage_run_id.as_deref(),
     };
-    let proposal = crate::artist_proposal::create(&cx, &endpoint, style, roles)
+    let proposal = crate::artist_proposal::create(&cx, &endpoint, style, &prompts)
         .map_err(|e| ToolError::Exec(format!("avatar proposal failed: {e}")))?;
     let drawn = proposal.items.iter().filter(|i| i.image.is_some()).count();
     Ok(

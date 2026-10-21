@@ -764,6 +764,8 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     "artist_image_request",
     "artist_avatar_proposal",
     "artist_avatars_applied",
+    // 票 28：画师的主对话模型写不出出图提示词（artist_prompt::PROMPT_FAILED，载荷 reason/slot）
+    "artist_prompt_failed",
     "acceptance_exception",
     "artifact_materialization",
     "policy_recovery",

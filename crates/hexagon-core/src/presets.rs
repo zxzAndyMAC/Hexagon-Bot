@@ -172,8 +172,33 @@ pub fn hidden_roles() -> Result<Vec<HiddenRoleDef>, PresetError> {
         if !r.hidden || visible.iter().any(|v| v.name == r.role.name) {
             return Err(PresetError::DuplicateRole(r.role.name.clone()));
         }
+        for s in &r.role.skills {
+            if hidden_skill_doc(s).is_none() {
+                return Err(PresetError::UnknownSkill {
+                    role: r.role.name.clone(),
+                    skill: s.clone(),
+                });
+            }
+        }
     }
     Ok(roles)
+}
+
+/// 隐藏角色专用的内置技能（owner-followups-1015 票 28：画师的「出图提示词」）。
+/// 不进 [`SKILL_FILES`]：那张表是技能加载器的内置层，所有角色的技能目录、`search_skills`
+/// 与设置·技能页都读它——放进去 = 每个 Agent 都能发现并加载画师的技能，彩蛋在目录里露面。
+/// 与 [`hidden_roles`] 分文件同一条理由：分开存放没有可漏的过滤点。
+const HIDDEN_SKILL_FILES: &[(&str, &str)] = &[(
+    "image-prompt",
+    include_str!("../presets/hidden_skills/image-prompt/SKILL.md"),
+)];
+
+/// 隐藏技能名 → SKILL.md 原文。
+pub fn hidden_skill_doc(name: &str) -> Option<&'static str> {
+    HIDDEN_SKILL_FILES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, d)| *d)
 }
 
 /// 角色名是否属于隐藏预置角色。

@@ -4,10 +4,11 @@
 //! （[`provider_config::image_generation_slot`] 判能力，这里只解析供应商与钥匙），不回退
 //! default——default 是对话模型，回退 = 拿对话模型凑合出图（票 19 同一条代价模型）。
 //!
-//! 外发边界（规格用户故事 73）：请求体只有 `model` / `prompt` / `n` / `size`；`prompt` 只由
-//! [`avatar_prompt`] 用角色名、职责摘要、风格描述拼成，不含项目文件与对话内容。调用方在发出
-//! **之前**把这三样写进轨迹（`artist_image_request`）。被否决：把画师整段对话上下文交给出图
-//! 模型「自由发挥」——外发面不可审计。
+//! 外发边界（规格用户故事 73）：请求体只有 `model` / `prompt` / `n` / `size`；`prompt` 由画师的
+//! 主对话模型配内置「出图提示词」技能撰写（`artist_prompt`，票 28），而那次对话请求的输入只有
+//! 角色名、职责摘要、风格描述，不含项目文件与对话内容。调用方在发出**之前**把这三样与提示词
+//! 写进轨迹（`artist_image_request`）。被否决：把画师整段对话上下文交给出图模型「自由发挥」
+//! ——外发面不可审计。票 20 的固定模板（风格 + 角色名 + 职责首句）已撤（2026-10-20 负责人裁决）。
 //!
 //! 钥匙只在 [`ImageAccess`] 里取、只进 Authorization 头；结果图若是 URL，下载时**不带**钥匙
 //! （URL 可能指向另一台主机）。失败只带分类码与 HTTP 状态，不带响应正文（Reliability 22：
@@ -62,15 +63,39 @@ pub struct Generated {
     pub usage: Option<(u64, u64)>,
 }
 
-/// 工具上下文里的出图通道：只封装钥匙仓，工具拿不到钥匙本身。
+/// 工具上下文里的出图通道：只封装钥匙仓，工具拿不到钥匙本身。另带画师的主对话模型
+/// （票 28：写提示词用），由 Workbench 按画师的模型槽经 `resolve_slot` 解析后注入。
 #[derive(Clone)]
 pub struct ImageAccess {
     creds: Arc<dyn CredentialStore>,
+    prompt_model: Option<PromptModel>,
+}
+
+/// 画师写提示词用的主对话模型：请求上记的槽名 + 解析到的供应商。
+#[derive(Clone)]
+pub struct PromptModel {
+    pub slot: String,
+    pub provider: Arc<dyn crate::provider::ModelProvider>,
+    /// 画师的槽没绑、经 `resolve_slot` 落到了 default（正常回退，记 Debug 诊断）。
+    pub fell_back: bool,
 }
 
 impl ImageAccess {
     pub fn new(creds: Arc<dyn CredentialStore>) -> Self {
-        Self { creds }
+        Self {
+            creds,
+            prompt_model: None,
+        }
+    }
+
+    /// 挂上画师的主对话模型。None = 画师的槽与 default 都没有模型（写不了提示词）。
+    pub fn with_prompt_model(mut self, model: Option<PromptModel>) -> Self {
+        self.prompt_model = model;
+        self
+    }
+
+    pub fn prompt_model(&self) -> Option<&PromptModel> {
+        self.prompt_model.as_ref()
     }
 
     /// 解析出图槽的供应商端点。能力判定（模型能不能出图）在调用方用
@@ -116,6 +141,7 @@ pub fn images_url(stored: &str) -> String {
 }
 
 /// 职责摘要：第一句（中英文句读），再截到 [`DUTY_SUMMARY_CHARS`]。
+/// 画师写提示词时交给主对话模型的就是这一句（不是整段职责，免得把协作线索外发）。
 pub fn duty_summary(duty: &str) -> String {
     let first = duty
         .split(['。', '；', '\n', '.', ';'])
@@ -123,20 +149,6 @@ pub fn duty_summary(duty: &str) -> String {
         .find(|s| !s.is_empty())
         .unwrap_or("");
     first.chars().take(DUTY_SUMMARY_CHARS).collect()
-}
-
-/// 画师的「出图提示词」：统一风格前缀 + 角色名 + 职责摘要。全队同一前缀 = 画风一致。
-/// 外发内容只有这三样（见模块注释）。
-pub fn avatar_prompt(style: &str, role: &str, duty: &str) -> String {
-    let summary = duty_summary(duty);
-    let what = if summary.is_empty() {
-        format!("the team role \"{role}\"")
-    } else {
-        format!("the team role \"{role}\" ({summary})")
-    };
-    format!(
-        "{style}. A square avatar portrait representing {what}. One centered subject, simple background, no text, no letters, no watermark."
-    )
 }
 
 /// 发一次出图请求并规整结果。
@@ -238,16 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn prompt_carries_only_style_role_and_first_duty_sentence() {
-        let p = avatar_prompt(
-            "pixel art",
-            "后端",
-            "负责服务端接口与数据。与前端对齐契约；不碰界面",
-        );
-        assert!(p.starts_with("pixel art."));
-        assert!(p.contains("后端"));
-        assert!(p.contains("负责服务端接口与数据"));
-        assert!(!p.contains("与前端对齐契约"), "只取第一句: {p}");
+    fn duty_summary_keeps_only_the_first_sentence() {
+        let s = duty_summary("负责服务端接口与数据。与前端对齐契约；不碰界面");
+        assert_eq!(s, "负责服务端接口与数据");
     }
 
     #[test]

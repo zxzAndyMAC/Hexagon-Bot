@@ -549,9 +549,9 @@ pub fn record_tools(
 pub const ARTIST_PURPOSE: &str = "artist_image";
 /// 汇总读面上画师的归属键（= 画师代码名 `artist::ARTIST_CODE`）。
 pub const ARTIST_ACTOR: &str = "artist";
-/// 汇总读面的归属列：Agent 行照旧，画师出图行归 `artist`。
-const ACTOR_SQL: &str =
-    "COALESCE(u.agent_id, CASE WHEN u.purpose='artist_image' THEN 'artist' END)";
+/// 汇总读面的归属列：Agent 行照旧，画师出图行与写提示词行（票 28，
+/// `artist_prompt::PROMPT_PURPOSE`，主对话槽）归 `artist`。
+const ACTOR_SQL: &str = "COALESCE(u.agent_id, CASE WHEN u.purpose IN ('artist_image','artist_prompt') THEN 'artist' END)";
 
 /// 记一次出图请求。价格按 `image` 槽查 `.hexagon/prices.json`；供应商不报 token
 /// （dall-e 系）或没定价 → 未知费用，不当免费（Reliability 12 同口径）。

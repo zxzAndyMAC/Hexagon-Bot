@@ -90,3 +90,50 @@ describe('画师提示（票 19）', () => {
     expect(rows.some((r) => r.type === 'item' && r.item.event.payload.kind === 'artist_image_model_missing')).toBe(true)
   })
 })
+
+// 票 28：画师的主对话模型写不出出图提示词时，同一形制说明；没有对话模型才给按钮（聚焦画师的主对话槽），
+// 调用失败 / 输出不可用没有可去的设置，只说明。
+const promptFailed = (reason: string) => sys(7, {
+  kind: 'artist_prompt_failed', speaker: '画师', speaker_code: 'artist', reason, slot: 'chat',
+  style: 'pixel art', roles: ['后端'],
+})
+
+describe('画师写不出出图提示词（票 28）', () => {
+  it('没有对话模型：说明且按钮打开设置·模型服务', async () => {
+    await i18n.changeLanguage('zh-CN')
+    const sections: unknown[] = []
+    const onSection = (e: Event) => sections.push((e as CustomEvent).detail)
+    window.addEventListener('hexagon:open-settings-section', onSection)
+    const { el, unmount } = await render(<EventRow item={promptFailed('chat_model_missing')} />)
+    const row = el.querySelector('[data-artist-notice="prompt_no_model"]')!
+    expect(row).not.toBeNull()
+    expect(row.querySelector('.tl-who b')!.textContent).toBe('画师')
+    const button = row.querySelector('button')!
+    expect(button).not.toBeNull()
+    await act(async () => { button.click() })
+    window.removeEventListener('hexagon:open-settings-section', onSection)
+    expect(sections).toEqual(['models'])
+    unmount()
+  })
+
+  it('调用失败 / 输出不可用：只说明，不给按钮', async () => {
+    await i18n.changeLanguage('zh-CN')
+    for (const reason of ['chat_model_failed', 'invalid_prompts', 'budget_exhausted']) {
+      const { el, unmount } = await render(<EventRow item={promptFailed(reason)} />)
+      const row = el.querySelector('[data-artist-notice="prompt_failed"]')!
+      expect(row).not.toBeNull()
+      expect(row.querySelector('button')).toBeNull()
+      expect(row.textContent).toContain(i18n.t('artist.promptFailed'))
+      unmount()
+    }
+  })
+
+  it('不折进系统事件组', () => {
+    const rows = buildRows([
+      sys(1, { kind: 'known_world' }),
+      promptFailed('invalid_prompts'),
+      sys(6, { kind: 'known_world' }),
+    ], 'all')
+    expect(rows.some((r) => r.type === 'item' && r.item.event.payload.kind === 'artist_prompt_failed')).toBe(true)
+  })
+})
