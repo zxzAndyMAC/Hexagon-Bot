@@ -7,6 +7,9 @@
 // （Playwright 沿圆周每 3° 径向积分，真页面深浅两套）相对极差 DPR1 ≈ 25%、DPR2 ≈ 15%，改 16/2 后 ≈ 17% / 8%，
 // 贴近 SVG 抗锯齿底噪（13% / 9%）。被否决：15/1 或 14/1——同样整数但比原型细一档，且 1px 环 DPR1 极差反更大（≈ 35%）；
 // 改 border 画环——Chromium 把 1.5px border 下取整成 1px。尺寸/描边都钉整数，Sidebar.test 守。
+// owner-followups-1015 #30 第 2 项（2026-10-20 负责人裁决）：圆点内 stamp / warn / close 图标曾是 9px，(16 − 9) / 2 = 3.5
+// 落半像素，DPR1 下字形糊且偏半格；改 10px（与 done 的勾同档），16 内居中落整数 3。被否决：保留 9px 改 translate
+// 微调——要按图标逐个配偏移，且 2× 下反而偏。Sidebar.test 守「图标与圆点同奇偶」。
 import { useTranslation } from 'react-i18next'
 import { useUiStore } from '../../store'
 import type { StageRow } from '../../gen/StageRow'
@@ -42,11 +45,11 @@ function StageDot({ state }: { state: State }) {
         </span>
       )
     case 'waiting_stamp':
-      return <span className={cn(base, 'text-orange shadow-[inset_0_0_0_2px_var(--orange)]')}><Icon name="stamp" size={9} /></span>
+      return <span className={cn(base, 'text-orange shadow-[inset_0_0_0_2px_var(--orange)]')}><Icon name="stamp" size={10} /></span>
     case 'interrupted':
-      return <span className={cn(base, 'text-orange shadow-[inset_0_0_0_2px_var(--orange)]')}><Icon name="warn" size={9} /></span>
+      return <span className={cn(base, 'text-orange shadow-[inset_0_0_0_2px_var(--orange)]')}><Icon name="warn" size={10} /></span>
     case 'rejected':
-      return <span className={cn(base, 'text-red shadow-[inset_0_0_0_2px_var(--red)]')}><Icon name="close" size={9} /></span>
+      return <span className={cn(base, 'text-red shadow-[inset_0_0_0_2px_var(--red)]')}><Icon name="close" size={10} /></span>
     default:
       return <span className={cn(base, 'shadow-[inset_0_0_0_2px_var(--line-strong)]')} />
   }

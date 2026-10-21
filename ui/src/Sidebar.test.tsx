@@ -123,6 +123,21 @@ describe('阶段进度（ADR 0069 只读；ADR 0088：右栏「阶段」页签 �
       }
     }
   })
+
+  // owner-followups-1015 #30 第 2 项（2026-10-20 负责人裁决）：#02 之后圆点内图标仍 9px，(16 − 9) / 2 = 3.5，
+  // 落在半像素上，DPR1 下勾 / 戳 / 叉被抗锯齿成一团且偏半格。守住：圆点内图标与圆点同奇偶（16 内放 10），居中落整数。
+  it('阶段圆点内的图标与圆点同奇偶，居中落整像素（#30）', async () => {
+    const all: StageRow['state'][] = ['done', 'waiting_stamp', 'interrupted', 'rejected']
+    useUiStore.setState({ stages: all.map((state, i) => ({ run_id: `r${i}`, stage: state, seq: i, state })) })
+    const host = await render(sidebar)
+    for (const li of host.querySelectorAll<HTMLElement>('[data-stage-list] li')) {
+      const dot = li.querySelector<HTMLElement>('span.rounded-full')!
+      const size = Number(dot.className.match(/size-\[(\d+)px\]/)![1])
+      const icon = dot.querySelector('svg')!
+      const w = Number(icon.getAttribute('width'))
+      expect((size - w) / 2, `${li.dataset.stageState}: ${w}px 图标在 ${size}px 圆点内`).toSatisfy(Number.isInteger)
+    }
+  })
 })
 
 const card = (id: string): PendingQuestion => ({ id, kind: 'permission', agent_id: 'a1', payload: {}, state: 'queued' } as PendingQuestion)
