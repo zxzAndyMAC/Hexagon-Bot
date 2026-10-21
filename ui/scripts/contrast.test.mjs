@@ -44,6 +44,7 @@ describe('index.css 对比度断言表', () => {
     const fgs = new Set(CONTRAST_TABLE.map((r) => `${r.fg}@${r.bg}`))
     expect(fgs.has('--ink-3@--surface')).toBe(true)
     expect(fgs.has('white@--accent-strong')).toBe(true)
+    expect(fgs.has('white@--red-strong')).toBe(true)
     for (const c of ['green', 'orange', 'red', 'violet']) expect(fgs.has(`--${c}-ink@--${c}-tint`)).toBe(true)
   })
 
@@ -55,6 +56,14 @@ describe('index.css 对比度断言表', () => {
   it('把深色主按钮底改回 --accent 即报红', () => {
     const bad = checkContrast(patch(css, "[data-theme='dark'],", '--accent-strong', 'var(--accent)'))
     expect(bad).toContainEqual(expect.stringMatching(/^dark: white on --accent-strong = 2\.\d\d:1/))
+  })
+
+  // 票 24：危险按钮底若退回 --red 本体（票 09 前的写法，白字浅 3.98 / 深 3.31:1），两套都要红。
+  it('把危险按钮底改回 --red 即报红（深浅两套）', () => {
+    const lightBad = checkContrast(patch(css, ':root,', '--red-strong', 'var(--red)'))
+    expect(lightBad).toContainEqual(expect.stringMatching(/^light: white on --red-strong = 3\.\d\d:1/))
+    const darkBad = checkContrast(patch(css, "[data-theme='dark'],", '--red-strong', 'var(--red)'))
+    expect(darkBad).toContainEqual(expect.stringMatching(/^dark: white on --red-strong = 3\.\d\d:1/))
   })
 
   it('表里写了未定义的 token 直接抛错，不当通过', () => {

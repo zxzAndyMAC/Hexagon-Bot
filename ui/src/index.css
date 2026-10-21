@@ -59,6 +59,9 @@
   --red: oklch(62.1% .192 23.042);
   --red-ink: oklch(55.5% .192 23.042);
   --red-tint: oklch(95.6% .017 17.462);
+  /* 票 24（2026-10-18 负责人裁决）：实心危险按钮底（白字），仿 --accent-strong。浅色就是 --red-ink（5.2:1）；
+     --red 本体（点、图标、填充、目标圈）不动——白字在它上面浅 3.98 / 深 3.31:1，所以危险按钮不再吃它。 */
+  --red-strong: var(--red-ink);
   --violet: oklch(58% .19 292);
   --violet-ink: oklch(55.5% .19 292);
   --violet-tint: oklch(96% .02 292);
@@ -142,6 +145,8 @@
   --red: oklch(66.6% .18 21.433);
   --red-ink: oklch(70.5% .18 21.433);
   --red-tint: oklch(66.6% .18 21.433 / .14);
+  /* 深色 --red-ink 是浅字色（70.5%），白字压不上去；同色相同色度压到 56.5%（与 --accent-strong 同档），白字 5.0:1。 */
+  --red-strong: oklch(56.5% .18 21.433);
   --violet: oklch(72% .14 292);
   --violet-ink: oklch(72% .14 292);
   --violet-tint: oklch(72% .14 292 / .15);
@@ -179,7 +184,7 @@
   --color-border: var(--line);
   --color-input: var(--line-strong);
   --color-ring: var(--accent);
-  --color-destructive: var(--red);
+  --color-destructive: var(--red-strong);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -213,6 +218,7 @@
   --color-red: var(--red);
   --color-red-ink: var(--red-ink);
   --color-red-tint: var(--red-tint);
+  --color-red-strong: var(--red-strong);
   --color-violet: var(--violet);
   --color-violet-ink: var(--violet-ink);
   --color-violet-tint: var(--violet-tint);
@@ -420,7 +426,7 @@ button.btn {
 }
 button.btn:hover { background: var(--hover); color: var(--ink); }
 button.btn.primary { color: white; background: var(--accent-strong); border-color: transparent; }
-button.btn.primary.danger { color: white; background: var(--red); }
+button.btn.primary.danger { color: white; background: var(--red-strong); }
 button.btn.danger { color: var(--red-ink); }
 button.btn:disabled { opacity: 0.4; cursor: default; }
 

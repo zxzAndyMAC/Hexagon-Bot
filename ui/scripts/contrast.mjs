@@ -106,7 +106,7 @@ const SEMANTIC = ['green', 'orange', 'red', 'violet']
 
 /**
  * 「文字 token × 底 token × 阈值」表（深浅两套共用一张，token 值各取各的）。
- * 覆盖面按规范 foundations「对比度」：辅助文字 --ink-3 落在三种主要底上；主按钮白字；
+ * 覆盖面按规范 foundations「对比度」：辅助文字 --ink-3 落在三种主要底上；主按钮与危险按钮白字；
  * 语义 -ink 落在胶囊淡底（叠在卡片面上）与卡片面本身（行内语义文字）；--accent-ink 同理。
  * 豁免（不进表）：分割线、装饰线、禁用控件；基色 --green 等只给点 / 图标 / 填充，图标的 3:1 不在本表。
  */
@@ -117,6 +117,8 @@ export const CONTRAST_TABLE = [
   // 与 --ink-2（.506）挤成一档，规范裁决「刚好达标、--ink-2 不动」取 L≈.56。深色主区就是 --canvas，必须进表。
   { fg: '--ink-3', bg: '--canvas', min: AA, themes: ['dark'] },
   { fg: 'white', bg: '--accent-strong', min: AA },
+  // 票 24：实心危险按钮（A1 danger）白字底。--red 本体白字浅 3.98 / 深 3.31:1（票 09 报告），所以另起一档。
+  { fg: 'white', bg: '--red-strong', min: AA },
   { fg: '--accent-ink', bg: '--accent-tint', min: AA },
   { fg: '--accent-ink', bg: '--surface', min: AA },
   ...SEMANTIC.flatMap((c) => [

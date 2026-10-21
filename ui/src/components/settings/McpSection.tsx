@@ -14,7 +14,7 @@ import { Field, Input, Textarea } from '@/components/ui/input'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { Switch } from '@/components/ui/switch'
 import { Icon } from '../Icon'
-import { Empty, ListDetail, ScanPanel } from './kit'
+import { DisabledChip, Empty, ListDetail, ScanPanel } from './kit'
 import { useBusyAction } from '../../useBusyAction'
 
 const kv = (o: Record<string, string | undefined>) => Object.entries(o).map(([k, v]) => `${k}=${v ?? ''}`).join('\n')
@@ -207,24 +207,14 @@ export function McpSection({ projectless }: { projectless: boolean }) {
     try { await api.openMcpMarket() } catch (e) { pushToast(errText(e), 'err') }
   }
 
-  // 行内启停：仅全局 stdio 行可切（project 层文件手改；remote 一期不 spawn）
-  const toggle = async (s: McpEntryRow) => {
-    try {
-      await api.saveMcpService({
-        name: s.name, command: s.command, args: s.args, env: s.env,
-        cwd: s.cwd, disabled: !s.disabled, url: s.url, headers: s.headers,
-      })
-      await load()
-    } catch (e) { pushToast(errText(e), 'err') }
-  }
-
   const liveOf = (e: McpEntryRow) => rows?.find((r) => r.name === e.name)
   const selEntry = entries?.find((e) => `${e.origin}:${e.name}` === sel) ?? null
   const selLive = selEntry ? liveOf(selEntry) : undefined
   const sub = (e: McpEntryRow) => {
     const n = Object.keys(e.headers ?? {}).length
     const transport = e.transport === 'remote' ? t('settingsUi.transportRemote') : 'stdio'
-    return [transport, n > 0 ? t('mcp.headersN', { n }) : '', e.disabled ? t('mcp.disabledTag') : ''].filter(Boolean).join(' · ')
+    // #10：停用改由行尾「已停用」胶囊表达，副行不再重复写
+    return [transport, n > 0 ? t('mcp.headersN', { n }) : ''].filter(Boolean).join(' · ')
   }
 
   return (
@@ -260,11 +250,8 @@ export function McpSection({ projectless }: { projectless: boolean }) {
             <Badge variant={s.origin === 'project' ? 'info' : 'neutral'} className="h-[18px] px-1.5 text-[11px]">
               {s.origin === 'global' ? t('mcp.origin_global') : t('mcp.origin_project')}
             </Badge>
-            {s.origin === 'global' && s.transport === 'stdio' && (
-              <Switch aria-label={`${t('mcp.enabled')} ${s.name}`} checked={!s.disabled}
-                onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
-                onCheckedChange={() => void toggle(s)} />
-            )}
+            {/* #10（E2）：行内不嵌开关（option 内无可交互后代），启用改在详情表单；行只表状态 */}
+            {s.disabled && <DisabledChip />}
           </>
         )
       }}

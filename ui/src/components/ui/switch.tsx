@@ -1,6 +1,9 @@
 // 开关 Switch（components A10）：30×18 轨，14 白滑块 + 0 1px 2px 阴影；关态轨 --hover-2 + --line 内环；
 // 开态 --accent、滑块右移 12（200ms --ease）。悬停关态内环转 --line-strong；按下滑块 scale(.98)。
 // 加载 = 宿主确认前不乐观翻转：保持原位、旁置 ring（如托管开启）；错误回原位由调用方旁置红字。
+// 命中区（owner-followups-1015 #10，2026-10-17 负责人裁决 followups 第 8 项，WCAG 2.5.8）：外观 30×18 不变，
+// 透明 ::before 上下各外扩 3px → 30×24 可点（伪元素的点击归宿主按钮）。不用外包 label/padding 容器——
+// 那样每个调用点都要改、且无可见标签的开关（列表行、表格）会漏；放进组件本体一处兜住全部开关。
 import * as React from "react"
 import { Switch as SwitchPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
@@ -22,6 +25,7 @@ function Switch({
       onClick={guardInert(disabled || loading, onClick)}
       className={cn(
         "group/switch hx-focus relative inline-flex h-[18px] w-[30px] shrink-0 cursor-pointer items-center rounded-full transition-[background-color] duration-150 ease-hx",
+        "before:absolute before:inset-x-0 before:-inset-y-[3px] before:content-['']",
         "bg-hover-2 [--hx-shadow:inset_0_0_0_1px_var(--line)] live:hover:data-[state=unchecked]:[--hx-shadow:inset_0_0_0_1px_var(--line-strong)]",
         "data-[state=checked]:bg-primary data-[state=checked]:[--hx-shadow:0_0_#0000]",
         "aria-disabled:cursor-default aria-disabled:opacity-45 aria-busy:cursor-default",
