@@ -15,6 +15,7 @@ import { DesignChoices } from './DesignChoices'
 import { ExperienceProposal } from './ExperienceProposal'
 import { StageEvidence } from './StageEvidence'
 import { Icon } from './Icon'
+import { Checkbox } from './ui/checkbox'
 import { DecisionButton, DecisionShell, KeyValues, SettleButton } from './DecisionShell'
 import { AcceptanceException, ActionRecovery, InlineDiff, PolicyReport, QualityRevalidation, StageArtifacts } from './PendingCardParts'
 
@@ -77,6 +78,9 @@ function PermissionCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const cmd = commandText(p)
   // 票 16B（control#action）：电脑动作走 D8 专用卡；判定失败卡仍用通用形（标题、重新判定按钮在那里）
   if (tool === 'computer_action' && !judgeTitle) return <ComputerActionCard q={q} top={top} who={who} />
+  // owner-followups-1015 #13：Agent 终端 `git push` 画推送卡形（与 ⌘K 推送同一张卡的样子）；判定失败卡仍用通用形。
+  const push = p.push as AgentPushFacts | null | undefined
+  if (push && !judgeTitle) return <AgentPushCard q={q} top={top} who={who} push={push} />
   return (
     <DecisionShell qid={q.id} cat={judgeTitle ? 'mute' : 'warn'} icon={judgeTitle ? 'warn' : 'shield'}
       title={judgeTitle ?? (who ? t('dock.askTitle', { who, tool }) : t('cards.ask'))}
@@ -94,6 +98,36 @@ function PermissionCard({ q, top }: { q: PendingQuestion; top: boolean }) {
         {t('cards.writeTargets')} <span className="mono">{p.write_targets.filter((v): v is string => typeof v === 'string').join(' · ')}</span>
       </p>}
       <ProvenanceLines payload={p} />
+      <JudgeModelFailure q={q} top={top} />
+    </DecisionShell>
+  )
+}
+
+/** 宿主载荷 `push`（`push_class::card_facts`）：普通推送带远程 + 分支，强推带原因码。只用于展示。 */
+type AgentPushFacts = { force?: boolean; remote?: string; branch?: string; code?: string }
+
+/** #13：Agent 终端推送。普通推送 = 推送卡形 + 权限底栏（「允许本项目」记 远程 + 分支，宿主给范围时才有 ▾）；
+ *  强推 = 安全网：必问、无范围菜单、托管不代批，卡上写明会改写远端历史。 */
+function AgentPushCard({ q, top, who, push }: { q: PendingQuestion; top: boolean; who: string; push: AgentPushFacts }) {
+  const { t } = useTranslation()
+  const force = push.force === true
+  const cmd = commandText(q.payload)
+  return (
+    <DecisionShell qid={q.id} cat="err" icon="publish" danger
+      title={who ? t('cards.agentPush', { who }) : t('cards.push')}
+      sub={[t('dock.pushSub'), t('cards.pushFromTerminal'), force ? t('cards.askSafetyNet') : ''].filter(Boolean).join(' · ')}
+      lead={<RejudgeButton q={q} top={top} />}
+      note={null}
+      actions={<PermissionActions key={q.id} q={q} top={top} />}>
+      {cmd && <code className="dock-cmd">{cmd}</code>}
+      {force ? <>
+        <div className="dock-row"><span className="chip err">{t('cards.pushForce')}</span></div>
+        <div className="dock-warn"><Icon name="warn" size={14} />{t('cards.pushForceWarn')}</div>
+      </> : <KeyValues rows={[
+        [t('dock.kvTarget'), String(push.remote ?? ''), 'mono'],
+        [t('dock.kvBranch'), String(push.branch ?? ''), 'mono'],
+      ]} />}
+      <ProvenanceLines payload={q.payload} />
       <JudgeModelFailure q={q} top={top} />
     </DecisionShell>
   )
@@ -195,19 +229,26 @@ function PushCard({ q, top }: { q: PendingQuestion; top: boolean }) {
     typeof p.commit_count === 'number' ? t('dock.includedCommits', { count: p.commit_count }) : null,
     typeof p.stage_count === 'number' ? t('dock.includedStages', { count: p.stage_count }) : null,
   ].filter((part): part is string => part !== null)
+  // owner-followups-1015 #13（ADR 0093 后续裁决）：推送是日常操作，可「允许本项目」——记 远程 + 基线分支，
+  // 之后 ⌘K 与 Agent 终端推送同一目标不再问。默认不勾（默认每次问）；键盘批准仍对推送无效。
+  const [remember, setRemember] = useState(false)
+  const remote = String(p.remote ?? 'origin')
+  const baseline = String(p.baseline ?? 'main')
   return (
     <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.push')} sub={t('dock.pushSub')}
       actions={<>
         <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectPush(q.id)}>{t('cards.reject')}</SettleButton>
         {/* ui-audit 票 02（P0-2）：L3 不可逆不显示批准键——键盘批准对 push 无效（decisions.ts 守卫同步拦截） */}
-        <SettleButton qid={q.id} variant="danger" run={() => api.confirmPush(q.id)}>{t('cards.pushConfirm')}</SettleButton>
+        <SettleButton qid={q.id} variant="danger" run={() => api.confirmPush(q.id, remember)}>{t('cards.pushConfirm')}</SettleButton>
       </>}>
       <KeyValues rows={[
-        [t('dock.kvBaseline'), String(p.baseline ?? 'main'), 'mono'],
-        [t('dock.kvTarget'), String(p.remote ?? 'origin'), 'mono'],
+        [t('dock.kvBaseline'), baseline, 'mono'],
+        [t('dock.kvTarget'), remote, 'mono'],
         ...(included.length ? [[t('dock.kvIncluded'), included.join(' · ')] as [string, string]] : []),
       ]} />
       <div className="dock-warn"><Icon name="warn" size={14} />{String(p.warning ?? t('cards.pushWarn'))}</div>
+      <label className="dock-check"><Checkbox data-remember="push" checked={remember} onCheckedChange={(v) => setRemember(v === true)} />
+        {t('cards.pushRemember', { remote, branch: baseline })}</label>
     </DecisionShell>
   )
 }

@@ -28,6 +28,14 @@ pub(crate) fn suggest(tool: &str, input: &Value) -> Option<(String, bool)> {
     if target.is_empty() {
         return None;
     }
+    // owner-followups-1015 #13: an ordinary push is remembered by (remote,
+    // branch) — the same key the owner's ⌘K push card records. Force pushes
+    // never get here (safety net above).
+    if tool == "bash" {
+        if let crate::push_class::PushClass::Ordinary(t) = crate::push_class::classify(target) {
+            return Some((crate::permissions::push_shape(&t.remote, &t.branch), true));
+        }
+    }
     let candidate = match tool {
         "web_fetch" => {
             let url = url::Url::parse(target).ok()?;

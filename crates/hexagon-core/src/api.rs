@@ -1343,9 +1343,15 @@ impl Workbench {
         Ok(())
     }
 
-    /// 发起推送（原「远程发布」，ADR 0093）：只入队确认卡，不执行。任何自治档都不自动放行（票 03 / ADR 0034）。
-    pub fn request_push(&self, remote: &str) -> Result<String, ApiError> {
-        Ok(crate::push::request(&self.db, &self.project_id, remote)?)
+    /// 发起推送（原「远程发布」，ADR 0093）：入队确认卡。任何自治档都不自动放行（票 03 / ADR 0034）；
+    /// 唯一的免卡路径是负责人自己在推送卡上「允许本项目」过同一（远程, 分支）（#13）。
+    pub fn request_push(&self, remote: &str) -> Result<crate::push::PushRequest, ApiError> {
+        Ok(crate::push::request_or_push(
+            &self.db,
+            &self.project_id,
+            remote,
+            self.creds.as_ref(),
+        )?)
     }
 
     /// 自然语言安装：所有模式先确认解析后的新能力方案。
@@ -1606,14 +1612,24 @@ impl Workbench {
         )?)
     }
 
-    /// 确认推送：凭据闸 + push。
-    pub fn confirm_push(&self, qid: &str) -> Result<crate::push::PushOutcome, ApiError> {
-        Ok(crate::push::confirm(
-            &self.db,
-            &self.project_id,
-            qid,
-            self.creds.as_ref(),
-        )?)
+    /// 确认推送：凭据闸 + push。`remember` = 推送卡上的「允许本项目」（#13）：
+    /// 记（远程, 基线分支），之后 ⌘K 与 Agent 终端推送同一目标不再问。
+    pub fn confirm_push(
+        &self,
+        qid: &str,
+        remember: bool,
+    ) -> Result<crate::push::PushOutcome, ApiError> {
+        let store = self.creds.as_ref();
+        Ok(if remember {
+            crate::push::confirm_remembering(&self.db, &self.project_id, qid, store)?
+        } else {
+            crate::push::confirm(&self.db, &self.project_id, qid, store)?
+        })
+    }
+
+    /// ⌘K「推送」的目标候选：基线上游远程 + 已配置远程（#13）。
+    pub fn push_targets(&self) -> Result<crate::push::PushTargets, ApiError> {
+        Ok(crate::push::targets(&self.db, &self.project_id)?)
     }
 
     /// 升级卡裁决：payload 取 flag_id → review::adjudicate_flag；标记问题已答。
@@ -5402,6 +5418,8 @@ pub fn permission_shape_suggestion(
 }
 #[cfg(test)]
 mod permission_suggestion_tests;
+#[cfg(test)]
+mod push_card_tests;
 
 #[cfg(test)]
 mod quality_tests;

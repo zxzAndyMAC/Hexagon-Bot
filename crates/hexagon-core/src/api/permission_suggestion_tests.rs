@@ -79,7 +79,8 @@ fn permission_suggestion_exact_shell_does_not_generalize_test_into_any_command()
         "bash",
         &json!({"cmd":"npm publish"})
     ));
-    assert!(suggestion(&wb, "bash", json!({"cmd":"git push origin main"})).is_none());
+    // #13: an ordinary push now suggests its (remote, branch) key; a force push suggests nothing.
+    assert!(suggestion(&wb, "bash", json!({"cmd":"git push --force origin main"})).is_none());
     assert!(suggestion(&wb, "mcp:mail:send", json!({"body":"hello"})).is_none());
     assert!(crate::permissions::persist_rule(
         &wb.db,

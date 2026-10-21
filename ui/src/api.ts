@@ -91,6 +91,8 @@ import type { OverrideOutcome } from './gen/OverrideOutcome'
 import type { InstallOutcome } from './gen/InstallOutcome'
 import type { GrantOutcome } from './gen/GrantOutcome'
 import type { PushOutcome } from './gen/PushOutcome'
+import type { PushRequest } from './gen/PushRequest'
+import type { PushTargets } from './gen/PushTargets'
 import type { ReleaseTarget } from './gen/ReleaseTarget'
 import type { ReleaseTargetDraft } from './gen/ReleaseTargetDraft'
 import type { FlagOutcome } from './gen/FlagOutcome'
@@ -152,7 +154,7 @@ export type PackStage = StageDef
 export type {
   StageEvidence, CmdError, TurnDelta, ToolOutputDelta, StageRow, TimelineItem, QueuedCard, TeamRow, ArtifactRow,
   UsageTotal, UsageRow, UsageSummary, UsageBucket, ContextPressure, StageAction, OpenStageOutcome,
-  CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PushOutcome,
+  CheckResult, CheckOutcome, OverrideOutcome, InstallOutcome, PushOutcome, PushRequest, PushTargets,
   FlagOutcome, AdjudicateOutcome, ReturnSummary, ProposalRow, ProjectInfo,
   RecentProject, TurnOutcome, DirReport, RoleDef, PackDef, StageDef, AgentPatch,
   PermissionRuleRow, SkillRow, McpServiceRow,
@@ -550,8 +552,12 @@ export const api = {
     call<void>('reject_proposal', { qid, reason }),
   rollbackProposal: (proposalId: string) =>
     call<void>('rollback_proposal', { proposalId }),
-  requestPush: (remote: string) => call<string>('request_push', { remote }),
-  confirmPush: (qid: string) => call<PushOutcome>('confirm_push', { qid }),
+  // owner-followups-1015 #13：已「允许本项目」同一（远程, 基线分支）时宿主当场推送，pushed 为回执。
+  requestPush: (remote: string) => call<PushRequest>('request_push', { remote }),
+  /** remember = 推送卡上的「允许本项目」（记 远程 + 分支）。 */
+  confirmPush: (qid: string, remember = false) => call<PushOutcome>('confirm_push', { qid, remember }),
+  /** ⌘K「推送」目标：基线上游远程；无上游时由负责人在 remotes 里选。 */
+  pushTargets: () => call<PushTargets>('push_targets'),
   rejectPush: (qid: string) => call<void>('reject_push', { qid }),
   // 发布目标（owner-followups-1015 #14）：设置·发布页；凭据明文只经 setReleaseCredential 进钥匙串，读面只回「已存入」。
   releaseTargets: () => call<ReleaseTarget[]>('release_targets'),
@@ -1547,13 +1553,16 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'reject_worktree':
     case 'session_verify_worktree':
       return null as T
+    case 'push_targets':
+      return { baseline: 'main', upstream: 'origin', remotes: ['origin'] } as T
+    case 'request_push':
+      return { question_id: 'q-pub', pushed: null } as T
     case 'set_agent_sleeping':
     case 'remove_agent':
     case 'review_proposal':
     case 'confirm_proposal':
     case 'reject_proposal':
     case 'rollback_proposal':
-    case 'request_push':
     case 'confirm_push':
     case 'reject_push':
     case 'reject_stamp':

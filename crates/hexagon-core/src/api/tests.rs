@@ -2814,7 +2814,7 @@ fn push_waits_for_human_at_every_level() {
         let dir = tempfile::tempdir().unwrap();
         let wb = Workbench::for_test(dir.path(), &["后端"], None).unwrap();
         pin_stored_rank(&wb, lv);
-        let qid = wb.request_push("origin").unwrap();
+        let qid = wb.request_push("origin").unwrap().question_id;
         let pend = pending_questions(&wb).unwrap();
         let card = pend.iter().find(|c| c["id"] == qid).expect(lv);
         assert_eq!(card["kind"], "push", "{lv}");

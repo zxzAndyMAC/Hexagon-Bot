@@ -104,17 +104,26 @@ pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
             {
                 return Some("potentially destructive command");
             }
+            // owner-followups-1015 #13 (ADR 0093 follow-up ruling 2026-10-17):
+            // an ordinary push the classifier fully reads is a push card, not a
+            // safety net — it may be remembered per (remote, branch). Force and
+            // doubtful pushes stay here. Cost model in push_class: a false force
+            // costs one more question; a false ordinary is an unreviewed rewrite.
+            match crate::push_class::classify(raw) {
+                crate::push_class::PushClass::Force(_) => return Some("force push"),
+                // Ordinary means one plain `git push` with only safe options, so
+                // none of the patterns below can apply to it.
+                crate::push_class::PushClass::Ordinary(_) => return None,
+                crate::push_class::PushClass::NotPush => {}
+            }
             if words
                 .iter()
                 .any(|word| matches!(word.rsplit('/').next(), Some("git")))
-                && words
-                    .iter()
-                    .any(|word| matches!(word.as_str(), "push" | "send-email"))
+                && words.iter().any(|word| word == "send-email")
             {
-                return Some("remote publish / external message");
+                return Some("external message");
             }
             const PATTERNS: &[(&str, &str)] = &[
-                ("git push", "remote publish"),
                 ("git merge", "baseline merge"),
                 ("git rebase", "baseline rewrite"),
                 ("git reset --hard", "worktree rewrite"),
@@ -150,6 +159,64 @@ pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
     }
 }
 
+/// 推送记住键的形状前缀（owner-followups-1015 #13 / ADR 0093 后续裁决）：
+/// `push:<远程> <分支>`。Agent 终端推送与负责人 ⌘K 推送共用这一行规则。
+pub const PUSH_SHAPE_PREFIX: &str = "push:";
+
+pub fn push_shape(remote: &str, branch: &str) -> String {
+    format!("{PUSH_SHAPE_PREFIX}{remote} {branch}")
+}
+
+/// The (remote, branch) of an Agent's ordinary terminal push, if this call is one.
+pub fn push_target(tool: &str, input: &Value) -> Option<crate::push_class::PushTarget> {
+    if tool != "bash" {
+        return None;
+    }
+    match crate::push_class::classify(input["cmd"].as_str().unwrap_or("")) {
+        crate::push_class::PushClass::Ordinary(t) => Some(t),
+        _ => None,
+    }
+}
+
+/// 「允许本项目」记下的推送规则 id（项目共享 allow 行）。⌘K 推送据此跳过推送卡；
+/// Agent 终端推送走 L4 记忆层的同一行（`shape_matches` 的 `push:` 分支）。
+pub fn push_remembered(
+    db: &Db,
+    project_id: &str,
+    remote: &str,
+    branch: &str,
+) -> Result<Option<String>, rusqlite::Error> {
+    use rusqlite::OptionalExtension;
+    db.conn()
+        .query_row(
+            "SELECT id FROM permission_rules WHERE project_id=?1 AND tool='bash' AND effect='allow'
+             AND scope='project' AND project_shared=1 AND shape=?2 ORDER BY id LIMIT 1",
+            rusqlite::params![project_id, push_shape(remote, branch)],
+            |r| r.get(0),
+        )
+        .optional()
+}
+
+/// 负责人在推送卡上选「允许本项目」：写项目共享 allow 行（已有则复用）。
+/// 推送本身要网络，规则按联网记，否则 Agent 联网推送同一目标仍会再问。
+pub fn remember_push(
+    db: &Db,
+    project_id: &str,
+    remote: &str,
+    branch: &str,
+) -> Result<String, crate::db::DbError> {
+    if let Some(id) = push_remembered(db, project_id, remote, branch)? {
+        return Ok(id);
+    }
+    let id = format!("pr{}", db.next_id("pr")?);
+    db.conn().execute(
+        "INSERT INTO permission_rules (id, project_id, tool, shape, domain, effect, scope, stage_run_id, agent_id, network_allowed, background_allowed, session_name, project_shared)
+         VALUES (?1,?2,'bash',?3,NULL,'allow','project',NULL,NULL,1,0,NULL,1)",
+        rusqlite::params![id, project_id, push_shape(remote, branch)],
+    )?;
+    Ok(id)
+}
+
 /// 形状匹配：`npm install *` / `npm install *@registry.npmjs.org` / 路径 glob。
 /// `@domain` 后缀把规则绑到域名：命令必须实际引用该域。
 pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
@@ -161,6 +228,22 @@ pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
         }
         _ => return false,
     };
+    // owner-followups-1015 #13: a push is remembered only by its (remote,
+    // branch) key, never by a command shape. Before the ruling every push was
+    // a safety net, so a broad shape such as `git *` (remembered for
+    // `git status`) could never reach one; now that ordinary pushes leave the
+    // safety net, such a shape would silently allow pushes to any branch.
+    // Rejected alternative: matching `push:` keys and command shapes side by
+    // side. False negative: one more push card; false positive: an unreviewed push.
+    if tool == "bash" {
+        let class = crate::push_class::classify(target);
+        if let Some(key) = shape.strip_prefix(PUSH_SHAPE_PREFIX) {
+            return matches!(class, crate::push_class::PushClass::Ordinary(t) if push_shape(&t.remote, &t.branch) == format!("{PUSH_SHAPE_PREFIX}{key}"));
+        }
+        if class != crate::push_class::PushClass::NotPush {
+            return false;
+        }
+    }
     // Q12 exact fallback: literal '*' and '@' remain data, not pattern syntax.
     // Bash still obeys the existing opaque/inline/compound eligibility guard.
     if let Some(exact) = shape.strip_prefix("exact:") {
@@ -666,6 +749,13 @@ fn release_in_approval_mode(
     if safety_net {
         return Ok(Decision::Ask { reason, safety_net });
     }
+    // owner-followups-1015 #13: an ordinary push left the safety net to become
+    // a push card the owner answers (or remembers per remote + branch), not an
+    // approval-mode release — broad access's fenced exec would otherwise run an
+    // offline push to a local remote without any card.
+    if push_target(tool_name, input).is_some() {
+        return Ok(Decision::Ask { reason, safety_net });
+    }
     let mode = crate::approval_mode::read(db, &ctx.project_id)?.mode;
     use crate::approval_mode::ApprovalMode;
     if let Some(child) = &ctx.subagent {
@@ -862,6 +952,13 @@ fn evaluate_layers(
             via: AllowVia::Remembered { shape, scope },
         });
     }
+    // #13 推送卡：没记住的普通推送必问，理由写明目标（卡上显示远程 + 分支）。
+    if let Some(t) = push_target(tool_name, input) {
+        return Ok(Decision::Ask {
+            reason: format!("push: {} {}", t.remote, t.branch),
+            safety_net: false,
+        });
+    }
     // L5 类级默认（票 08 数据驱动）：读/本地写默认放行，
     // 执行/外发/外部服务默认必问。
     match tool.risk() {
@@ -893,6 +990,27 @@ pub fn evaluate_logged(
 ) -> Result<Decision, crate::tools::ToolError> {
     let started = std::time::Instant::now();
     let d = evaluate(db, ctx, tool, tool_name, input)?;
+    // #13: which push branch the classifier took (judge = Debug).
+    if tool_name == "bash" {
+        let code = match crate::push_class::classify(input["cmd"].as_str().unwrap_or("")) {
+            crate::push_class::PushClass::NotPush => None,
+            crate::push_class::PushClass::Ordinary(_) => Some("ordinary"),
+            crate::push_class::PushClass::Force(code) => Some(code),
+        };
+        if let Some(code) = code {
+            crate::diag::note(
+                crate::diag::CLASS_JUDGE,
+                false,
+                Some(&ctx.project_id),
+                Some(&ctx.agent_id),
+                ctx.stage_run_id.as_deref(),
+                None,
+                "push_class",
+                code,
+                started,
+            );
+        }
+    }
     let code = match &d {
         Decision::Deny { layer, reason } => {
             log::info!("perm deny [{layer}] {tool_name}: {reason}");
@@ -1178,7 +1296,9 @@ pub fn persist_rule(
             "permission shape does not safely match this action".into(),
         ));
     }
-    if tool == "bash" && !shape.starts_with("exact:") {
+    // A `push:` key names no executable; shape_matches above already proved it
+    // is exactly this ordinary push's (remote, branch).
+    if tool == "bash" && !shape.starts_with("exact:") && !shape.starts_with(PUSH_SHAPE_PREFIX) {
         let command = input["cmd"].as_str().unwrap_or("");
         let executable = shell_words(command)
             .ok()
@@ -1223,7 +1343,10 @@ pub fn persist_rule(
             scope,
             srid,
             if project_shared { None } else { Some(&ctx.agent_id) },
-            tool == "bash" && input["net"].as_bool().unwrap_or(false),
+            // #13: a remembered push is network by nature (same row as remember_push).
+            tool == "bash"
+                && (input["net"].as_bool().unwrap_or(false)
+                    || shape.starts_with(PUSH_SHAPE_PREFIX)),
             tool == "bash" && input["background"].as_bool().unwrap_or(false),
             if tool == "bash" { input["session"].as_str() } else { None },
             project_shared
@@ -1446,6 +1569,8 @@ mod tests {
                 [],
             )
             .unwrap();
+        // #13: an ordinary push is no longer a safety net, yet a broad `git *`
+        // shape still cannot cover it — pushes match only `push:` keys.
         let push = bash_ctx(&db, &ctx, "git push origin main");
         assert!(matches!(push, Decision::Ask { .. }), "{push:?}");
         let merge = bash_ctx(&db, &ctx, "git merge hexagon/work");
@@ -2181,7 +2306,8 @@ mod tests {
         /// 安全网命令：不触凭据词（否则 L1 先拦，测不到 L2 语义）。
         const NET: &[&str] = &[
             "rm -rf build/",
-            "git push origin main",
+            // #13: ordinary pushes left the safety net (push card); force stays.
+            "git push --force origin main",
             "git merge feature",
             "git reset --hard HEAD~1",
             "git clean -fd",
@@ -2337,7 +2463,8 @@ mod tests {
         fn boundary_action() -> impl Strategy<Value = Boundary> {
             sample::select(vec![
                 Boundary::SafetyBash("rm -rf build"),
-                Boundary::SafetyBash("git push origin main"),
+                // #13: ordinary pushes are push cards now; force pushes stay a safety net.
+                Boundary::SafetyBash("git push --force origin main"),
                 Boundary::SafetyBash("git update-ref HEAD"),
                 Boundary::SafetyWrite(".git/config"),
                 Boundary::NewAsk("echo hi"),
