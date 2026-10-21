@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardApp, ringPoint, ringPoints, sameImageSize } from './computerTargetRing'
+import { cardApp, ordinalCorner, ringPoint, ringPoints, sameImageSize } from './computerTargetRing'
 
 // ui-redesign gap D8（control#action）：目标圈画错位置比不画更坏，所以每一项不可证的事实都必须得到 null。
 const base = { op: 'click', x: 800, y: 500, snapshotId: 's1', shotSnapshotId: 's1', imageWidth: 1600, imageHeight: 1000 }
@@ -73,4 +73,19 @@ it('cardApp prefers the display name and falls back to the bundle id', () => {
   expect(cardApp({ name: null, title: 'Window', bundle_id: null })).toBeNull()
   expect(cardApp(null)).toBeNull()
   expect(cardApp('System Settings')).toBeNull()
+})
+
+// owner-followups-1015 #30 第 1 项（2026-10-20 负责人裁决）：序号底衬挂在圈外的一角，朝截图中心那一角，
+// 这样贴边的圈序号也不会被缩略框 overflow-hidden 裁掉；圈内（目标本身）始终不被遮。
+describe('ordinalCorner', () => {
+  it('points the ordinal badge toward the image centre', () => {
+    expect(ordinalCorner({ left: 0.1, top: 0.1 })).toBe('bottom-right')
+    expect(ordinalCorner({ left: 0.9, top: 0.1 })).toBe('bottom-left')
+    expect(ordinalCorner({ left: 0.1, top: 0.9 })).toBe('top-right')
+    expect(ordinalCorner({ left: 0.9, top: 0.95 })).toBe('top-left')
+  })
+  it('keeps the default top-right corner at or left of / below the centre', () => {
+    expect(ordinalCorner({ left: 0.5, top: 0.5 })).toBe('top-right')
+    expect(ordinalCorner({ left: 0, top: 1 })).toBe('top-right')
+  })
 })
