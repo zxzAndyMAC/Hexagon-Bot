@@ -151,6 +151,110 @@ pub struct PushOutcome {
     pub output: String,
 }
 
+/// 负责人发起推送的结果（owner-followups-1015 #13）：总有一张推送卡；
+/// 本项目已允许同一远程 + 分支时宿主当场确认，`pushed` 是回执。
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct PushRequest {
+    pub question_id: String,
+    pub pushed: Option<PushOutcome>,
+}
+
+/// ⌘K「推送」的目标候选（#13，ADR 0093：不再写死 origin）。
+/// `upstream` = 基线分支的上游远程（`branch.<基线>.remote`，且是已配置的远程）；
+/// 没有时由负责人在 `remotes` 里选。
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/gen/")]
+pub struct PushTargets {
+    pub baseline: String,
+    pub upstream: Option<String>,
+    pub remotes: Vec<String>,
+}
+
+pub fn targets(db: &Db, project_id: &str) -> Result<PushTargets, PushError> {
+    let dir = project_dir(db, project_id)?;
+    let baseline = crate::git::baseline_branch(&dir).unwrap_or_else(|_| "main".into());
+    let remotes: Vec<String> = crate::git::run(&dir, &["remote"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_string)
+        .collect();
+    // `branch.<b>.remote` 可以是 "."（本地跟踪）或已删掉的远程名——都不是可推的上游，
+    // 当没有上游处理，让负责人选；不猜 origin（ADR 0093 后续裁决）。
+    let upstream = crate::git::run(
+        &dir,
+        &["config", "--get", &format!("branch.{baseline}.remote")],
+    )
+    .ok()
+    .map(|r| r.trim().to_string())
+    .filter(|r| remotes.contains(r));
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(project_id),
+        None,
+        None,
+        None,
+        "push_target",
+        if upstream.is_some() {
+            "baseline_upstream"
+        } else {
+            "owner_chooses"
+        },
+        std::time::Instant::now(),
+    );
+    Ok(PushTargets {
+        baseline,
+        upstream,
+        remotes,
+    })
+}
+
+/// 负责人发起推送（#13）：入队推送卡；本项目已「允许本项目」同一（远程, 基线分支）时
+/// 宿主以该规则为裁决人当场确认（凭据闸照旧，失败照旧落 PushFailed、不重发）。
+/// Agent 终端推送命中同一规则走权限 L4 记忆层——两边一套记住规则。
+pub fn request_or_push(
+    db: &Db,
+    project_id: &str,
+    remote: &str,
+    store: &dyn CredentialStore,
+) -> Result<PushRequest, PushError> {
+    let started = std::time::Instant::now();
+    let question_id = request(db, project_id, remote)?;
+    let baseline = crate::cards::get(db, &question_id)?.payload["baseline"]
+        .as_str()
+        .unwrap_or("main")
+        .to_string();
+    let rule = crate::permissions::push_remembered(db, project_id, remote, &baseline)?;
+    crate::diag::note(
+        crate::diag::CLASS_JUDGE,
+        false,
+        Some(project_id),
+        None,
+        None,
+        None,
+        "push_card",
+        if rule.is_some() { "remembered" } else { "ask" },
+        started,
+    );
+    let pushed = match rule {
+        Some(id) => Some(confirm_by(
+            db,
+            project_id,
+            &question_id,
+            store,
+            &format!("project_permission:{id}"),
+        )?),
+        None => None,
+    };
+    Ok(PushRequest {
+        question_id,
+        pushed,
+    })
+}
+
 /// 确认推送：凭据闸 + git push。确认事实先落轨迹，失败单独落 PushFailed。
 pub fn confirm(
     db: &Db,
@@ -159,6 +263,33 @@ pub fn confirm(
     store: &dyn CredentialStore,
 ) -> Result<PushOutcome, PushError> {
     confirm_by(db, project_id, qid, store, "owner")
+}
+
+/// 负责人在推送卡上选「允许本项目」（#13）：先记（远程, 基线分支）规则，再照常确认推送。
+/// 记住的是负责人的同意，不随这次推送成败撤回（缺凭据补录后下次直接推）。
+/// 只负责人可记：托管走 `confirm_by`，没有这条路（托管不得新增授权，ADR 0086）。
+pub fn confirm_remembering(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    store: &dyn CredentialStore,
+) -> Result<PushOutcome, PushError> {
+    let card = crate::cards::get_queued(db, qid, crate::cards::CardKind::Push)
+        .ok()
+        .filter(|c| c.project_id == project_id)
+        .ok_or_else(|| PushError::UnknownQuestion(qid.into()))?;
+    let remote = card.payload["remote"].as_str().unwrap_or("origin");
+    let baseline = card.payload["baseline"].as_str().unwrap_or("main");
+    let rule_id = crate::permissions::remember_push(db, project_id, remote, baseline)?;
+    db.append_event(
+        project_id,
+        EventKind::PermissionShapeRemembered,
+        json!({ "tool": "bash", "shape": crate::permissions::push_shape(remote, baseline),
+                "scope": "project", "project_shared": true, "rule_id": rule_id, "question_id": qid }),
+        None,
+        None,
+    )?;
+    confirm(db, project_id, qid, store)
 }
 
 /// Test3/22: the same push by a non-owner decider (project delegation).

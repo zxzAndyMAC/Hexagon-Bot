@@ -48,7 +48,7 @@ proptest! {
     #[test]
     fn approval_mode_preserves_credentials_ownership_and_critical_confirmation(
         mode in prop::sample::select(vec![ApprovalMode::Restricted, ApprovalMode::Assisted, ApprovalMode::Broad]),
-        cmd in prop::sample::select(vec!["git push origin main", "rm -rf src", "npm publish", "stripe payments create", "sendmail user@example.com"]),
+        cmd in prop::sample::select(vec!["git push --force origin main" /* #13: ordinary push is a push card now */, "rm -rf src", "npm publish", "stripe payments create", "sendmail user@example.com"]),
         remembered in any::<bool>(),
     ) {
         let dir = tempfile::tempdir().unwrap();
