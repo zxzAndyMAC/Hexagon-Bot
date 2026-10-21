@@ -116,9 +116,11 @@ describe('画师写不出出图提示词（票 28）', () => {
     unmount()
   })
 
+  // 行为变更（owner-followups-1015 #30 第 4 项，2026-10-20 负责人裁决）：budget_exhausted 原与调用失败同走
+  // 「再问一次」文案，但用量触顶时再问一次仍被同一闸拒，误导。它改走单独文案 + 用量设置按钮（见下一条），移出本组。
   it('调用失败 / 输出不可用：只说明，不给按钮', async () => {
     await i18n.changeLanguage('zh-CN')
-    for (const reason of ['chat_model_failed', 'invalid_prompts', 'budget_exhausted']) {
+    for (const reason of ['chat_model_failed', 'invalid_prompts']) {
       const { el, unmount } = await render(<EventRow item={promptFailed(reason)} />)
       const row = el.querySelector('[data-artist-notice="prompt_failed"]')!
       expect(row).not.toBeNull()
@@ -126,6 +128,31 @@ describe('画师写不出出图提示词（票 28）', () => {
       expect(row.textContent).toContain(i18n.t('artist.promptFailed'))
       unmount()
     }
+  })
+
+  // owner-followups-1015 #30 第 4 项：用量上限触顶时说明上限已到、怎么恢复（设置 › 用量提高或取消上限后再问），
+  // 不提示「再问一次」；按钮打开设置 › 用量。七语言都有该 key（check-i18n 守）。
+  it('用量触顶：单独说明上限已到并指向用量设置，不提示再问一次', async () => {
+    const sections: unknown[] = []
+    const onSection = (e: Event) => sections.push((e as CustomEvent).detail)
+    window.addEventListener('hexagon:open-settings-section', onSection)
+    try {
+      for (const lng of ['zh-CN', 'en']) {
+        await i18n.changeLanguage(lng)
+        const { el, unmount } = await render(<EventRow item={promptFailed('budget_exhausted')} />)
+        const row = el.querySelector('[data-artist-notice="prompt_budget"]')!
+        expect(row).not.toBeNull()
+        expect(row.querySelector('.msg-body')!.textContent).toBe(i18n.t('artist.promptBudget'))
+        expect(row.textContent).not.toContain(i18n.t('artist.promptFailed'))
+        const button = row.querySelector('button')!
+        expect(button.textContent).toBe(i18n.t('artist.openUsage'))
+        await act(async () => { button.click() })
+        unmount()
+      }
+    } finally {
+      window.removeEventListener('hexagon:open-settings-section', onSection)
+    }
+    expect(sections).toEqual(['usage', 'usage'])
   })
 
   it('不折进系统事件组', () => {
