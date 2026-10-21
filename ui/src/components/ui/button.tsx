@@ -19,7 +19,8 @@ const buttonVariants = cva(
         primary:
           "bg-primary text-white [--hx-shadow:0_1px_2px_oklch(0%_0_0/.12),inset_0_1px_0_oklch(100%_0_0/.14)] live:hover:opacity-92",
         ink: "bg-ink text-page live:hover:opacity-92",
-        danger: "bg-red text-white live:hover:opacity-92",
+        // 票 24：底吃 --red-strong（白字 ≥4.5:1）；--red 本体白字只有浅 3.98 / 深 3.31:1。
+        danger: "bg-red-strong text-white live:hover:opacity-92",
         ghost: "bg-transparent text-ink-2 live:hover:bg-hover live:hover:text-ink",
         quiet: "bg-canvas text-ink-2 live:hover:bg-hover",
       },
