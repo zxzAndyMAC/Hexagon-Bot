@@ -9,6 +9,8 @@ import { bindingFor, formatBinding, matches, type ActionId } from '../../keymap'
 import { Icon, type IconName } from '../Icon'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Dot } from '@/components/ui/dot'
 import { Empty } from '@/components/ui/empty'
 import { InlineError as SharedInlineError } from '@/components/ui/inline-error'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -283,6 +285,22 @@ export function DetailHead({ lead, title, sub, mono = false, actions }: {
       </div>
       {actions && <div className="flex flex-none items-center gap-2">{actions}</div>}
     </div>
+  )
+}
+
+/**
+ * E2 停用行状态胶囊「已停用」（owner-followups-1015 #10，2026-10-17 负责人裁决 followups 第 8 项）：取代原行内开关位。
+ * 行（role=option）内曾嵌 A10 开关——option 里有可交互后代，读屏读不出（axe nested-interactive），30×18 也点不准；
+ * 开关挪到详情，行只表状态，启用不出东西。也不再整行 opacity .6（压低文字对比度，foundations「对比度」）。
+ * `dot`：行里没有别的状态点时（技能）胶囊内带 off 点；已有左侧状态点的（MCP）不重复。
+ */
+export function DisabledChip({ dot = false }: { dot?: boolean }) {
+  const { t } = useTranslation()
+  return (
+    <Badge data-disabled-chip className="h-[18px] px-1.5 text-[11px]">
+      {dot && <Dot tone="off" />}
+      {t('settingsUi.disabledChip')}
+    </Badge>
   )
 }
 
