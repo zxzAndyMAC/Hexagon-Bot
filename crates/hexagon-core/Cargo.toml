@@ -35,7 +35,11 @@ zip = { version = "2.4", default-features = false }
 # Managed-followups ticket 02: host_fs_trash uses the system Trash API so
 # "Put Back" works; only macOS is supported (ADR0087).
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSString", "NSURL", "NSBundle", "NSArray", "NSDictionary", "NSData", "NSEnumerator", "NSGeometry", "objc2-core-foundation"] }
+# owner-followups-1015 #31「打开方式」：NSWorkspace 探测能打开某路径的应用 + 取应用图标。
+# objc2 / objc2-app-kit 已随 tauri（wry/tao）在锁文件里，同版本直接依赖，不引新包。
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSGraphics", "objc2-core-foundation"] }
 
 [dev-dependencies]
 proptest = "1.11.0"

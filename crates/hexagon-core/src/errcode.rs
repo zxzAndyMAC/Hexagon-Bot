@@ -238,6 +238,8 @@ impl_error_code!(crate::files::RepoFsError, Io);
 // owner-followups-1015 #07：揭示判定的拒绝原因码（reveal_outside_project / reveal_missing / reveal_launch），
 // 界面走 `errors.<code>`。
 impl_error_code!(crate::reveal::RevealError);
+// owner-followups-1015 #31：「打开方式」拒绝 / 失败码（open_with_outside_project / _missing / _unsupported / _launch）。
+impl_error_code!(crate::open_with::OpenWithError);
 impl_error_code!(crate::trace::TraceError, Db, Sqlite, Json, Io, Cards,);
 impl_error_code!(
     crate::turn::TurnError,
