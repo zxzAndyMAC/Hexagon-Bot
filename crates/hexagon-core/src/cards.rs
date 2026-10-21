@@ -250,7 +250,7 @@ pub fn annotate_queued_where(
 pub struct QueuedCard {
     pub id: String,
     #[ts(
-        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'grant' | 'stall' | 'worktree'"
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'release' | 'grant' | 'stall' | 'worktree'"
     )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,

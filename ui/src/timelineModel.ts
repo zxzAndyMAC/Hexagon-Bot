@@ -15,6 +15,7 @@ export const DECISION_KINDS = new Set([
   'proposal_queued', 'proposal_reviewed', 'proposal_stamped', 'proposal_rejected',
   'proposal_activated', 'proposal_rolled_back',
   'push_requested', 'push_confirmed', 'push_rejected', 'push_failed',
+  'release_requested', 'release_confirmed', 'release_rejected', 'release_failed',
   'autonomy_changed', 'baseline_merged', 'stage_rewound',
   'pm_routed',
 ])

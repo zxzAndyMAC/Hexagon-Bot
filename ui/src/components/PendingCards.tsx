@@ -7,6 +7,7 @@ import { Trans, useTranslation } from 'react-i18next'
 import { api, type PendingQuestion } from '../api'
 import { useUiStore } from '../store'
 import { isActivationResumeCard, policyNeedsQuality, rejectReasonWithJudge } from '../decisions'
+import { openReleaseSettings } from '../releaseFocus'
 import { ModelRecoveryStatus } from './ModelRecoveryStatus'
 import { JudgeModelFailure, RejudgeButton, judgeFailureTitle } from './JudgeModelFailure'
 import { PermissionActions } from './PermissionActions'
@@ -212,6 +213,39 @@ function PushCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   )
 }
 
+function ReleaseCard({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const pushToast = useUiStore((s) => s.pushToast)
+  const p = q.payload
+  const name = String(p.name ?? '')
+  const cwd = String(p.cwd ?? '')
+  const credentials = Array.isArray(p.credentials) ? p.credentials.map(String) : []
+  // owner-followups-1015 #15（components D8「发布确认」）：执行负责人登记的发布目标。必问、永不记忆——卡上没有
+  // 「允许本项目」，键盘批准无效（decisions.ts 同步拦截），只认点「确认发布」。卡面抄的是请求时的命令；
+  // 登记在此之后被改过，宿主拒绝执行（release_target_changed），负责人批的必须是他看到的那条。
+  // 左侧「打开设置·发布」只是导航（补凭据 / 看命令），不是裁决。
+  return (
+    <DecisionShell qid={q.id} cat="err" icon="publish" danger title={t('cards.release')} sub={t('dock.releaseSub')}
+      lead={<DecisionButton variant="ghost" data-release-open onClick={() => openReleaseSettings(String(p.target_id ?? ''))}>
+        <Icon name="settings" size={12} />{t('dock.openRelease')}</DecisionButton>}
+      actions={<>
+        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectRelease(q.id)}>{t('cards.reject')}</SettleButton>
+        <SettleButton qid={q.id} variant="danger" data-release-confirm run={async () => {
+          await api.confirmRelease(q.id)
+          pushToast(t('cards.released', { name }), 'ok')
+        }}>{t('cards.releaseConfirm')}</SettleButton>
+      </>}>
+      <KeyValues rows={[
+        [t('dock.kvTarget'), name],
+        [t('dock.kvCommand'), String(p.command ?? ''), 'mono'],
+        [t('dock.kvCwd'), cwd || t('release.cwdRoot'), cwd ? 'mono' : undefined],
+        [t('dock.kvCredentials'), credentials.length ? credentials.join(' · ') : t('dock.credentialsNone'), credentials.length ? 'mono' : undefined],
+      ]} />
+      <div className="dock-warn"><Icon name="warn" size={14} />{t('cards.releaseWarn')}</div>
+    </DecisionShell>
+  )
+}
+
 function WorktreeCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const p = q.payload
@@ -364,6 +398,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   if (q.kind === 'stamp' && !p.proposal_id) return <StageStampCard q={q} top={top} />
   if (q.kind === 'stamp') return <ProposalStampCard q={q} top={top} />
   if (q.kind === 'push') return <PushCard q={q} top={top} />
+  if (q.kind === 'release') return <ReleaseCard q={q} top={top} />
   if (q.kind === 'worktree') return <WorktreeCard q={q} top={top} />
   if (q.kind === 'recovery' && p.sub === 'tool_outcome_unknown') return <ActionRecovery q={q} top={top} />
   if (q.kind === 'recovery') return <RecoveryCard q={q} top={top} />

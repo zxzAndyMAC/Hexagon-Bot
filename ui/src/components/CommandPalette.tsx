@@ -5,9 +5,9 @@
 // → 分组（组标题 11.5 ink-3）→ 底栏（inset 底：↑↓ 移动 ↵ 执行 + 危险指令说明）。
 // 2026-10-14 负责人裁决引入 cmdk（shadcn Command）：键盘 ↑↓↵、选中态、option 语义交给 cmdk；
 // 过滤仍走 filterPaletteItems（shouldFilter=false）——keywords 匹配与最近使用置顶（ui-audit 票 09）是本仓语义，cmdk 的模糊打分会打乱。
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, errText } from '../api'
+import { api, errText, type ReleaseTarget } from '../api'
 import { useUiStore } from '../store'
 import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
@@ -38,7 +38,18 @@ interface Item {
   risk?: 'danger'
   /// 参与匹配的额外关键词（英文动词/缩写），不进显示（ui-audit 票 09）。
   keywords?: string[]
+  /// owner-followups-1015 #15：此刻做不了——灰显、不可选，desc 写原因（「发布…」没有发布目标）。
+  disabled?: boolean
+  /// 执行后不关面板（「发布…」有多个目标时先进选择步）。
+  keepOpen?: boolean
   run: () => unknown
+}
+
+/** 发起发布：只入队发布确认卡（必问、永不记忆），再把卡弹出来——同推送，不在面板里直接执行。 */
+async function requestRelease(targetId: string, invalidate: () => Promise<void>) {
+  await api.requestRelease(targetId)
+  await invalidate()
+  useUiStore.getState().openPendingDialog()
 }
 
 export function CommandPalette({ onClose, onSettings }: { onClose: () => void; onSettings?: () => void }) {
@@ -50,9 +61,34 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
   const [origin] = useState(() => document.activeElement)
   const memberTarget = useMemo(() => team.find((m) => m.id === memberRowTarget(origin)), [team, origin])
   const msgHost = useMemo(() => messageTarget(origin), [origin])
+  // owner-followups-1015 #15（ADR 0093 后续裁决「⌘K 拆推送 / 发布…」）：打开面板时读一次发布目标。
+  // null = 还在读；读失败按 0 个处理（灰显写因，不出死项）。picking = 多个目标时的选择步。
+  const [releases, setReleases] = useState<ReleaseTarget[] | null>(null)
+  const [picking, setPicking] = useState(false)
+  useEffect(() => {
+    let live = true
+    api.releaseTargets().then((rows) => { if (live) setReleases(rows) }, () => { if (live) setReleases([]) })
+    return () => { live = false }
+  }, [])
 
   const items = useMemo<Item[]>(() => {
     const bind = (a: ActionId) => formatBinding(bindingFor(a))
+    // 「发布…」：0 个目标灰显写因、1 个直接发起、多个先选（选择步列出每个目标，名 + 命令）。
+    const releaseItem = (): Item => {
+      const base = { id: 'c-release', group: 'cmd' as const, label: t('palette.requestRelease'), icon: 'publish' as const,
+        keywords: ['release', 'publish', 'deploy', '发布', '发版'] }
+      if (releases === null) return { ...base, disabled: true, desc: t('palette.releaseLoading'), run: () => {} }
+      if (releases.length === 0) return { ...base, disabled: true, desc: t('palette.releaseNone'), run: () => {} }
+      if (releases.length === 1) return { ...base, desc: releases[0].name, run: () => requestRelease(releases[0].id, invalidate) }
+      return { ...base, desc: t('palette.releaseCount', { count: releases.length }), keepOpen: true,
+        run: () => { setPicking(true); setQ('') } }
+    }
+    if (picking && releases) {
+      return releases.map((r) => ({
+        id: `r-${r.id}`, group: 'cmd' as const, label: r.name, desc: r.command, icon: 'publish' as const,
+        keywords: [r.command], run: () => requestRelease(r.id, invalidate),
+      }))
+    }
     const list: Item[] = [
       // 指令：与 composer /verb 同一命令通道
       // ui-audit 票 03（ADR 0056-2）：rewind/skip 标 danger——
@@ -81,6 +117,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
           useUiStore.getState().openPendingDialog()
         },
       },
+      releaseItem(),
       // 导航：ADR 0088（票 02）⌘B 开关左侧栏；票 03（R-04 / R-06）分屏撤掉 → 画布全宽 ↔ 并排、专注模式；
       // 票 07（D18）补「开关画布」「查看流程与质量检查」「打开设置」，同步新动作。
       { id: 'n-sidebar', group: 'nav', label: t('palette.sidebar'), icon: 'panel-left', hint: bind('toggleSidebar'), run: () => toggleSidebar() },
@@ -153,7 +190,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       })),
     ]
     return list
-  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pending, pushToast, invalidate, setFlowDialogOpen, onSettings])
+  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pending, pushToast, invalidate, setFlowDialogOpen, onSettings, releases, picking])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。
@@ -162,11 +199,13 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
   })
   const filtered = useMemo(() => filterPaletteItems(items, q, recents), [items, q, recents])
   const groups: { key: Item['group']; title: string }[] = [
-    { key: 'cmd', title: t('palette.commands') },
+    { key: 'cmd', title: picking ? t('palette.releaseChoose') : t('palette.commands') },
     { key: 'nav', title: t('palette.nav') },
     { key: 'open', title: t('palette.open') },
   ]
   const runItem = async (i: Item) => {
+    if (i.disabled) return
+    if (i.keepOpen) { i.run(); return }
     onClose()
     // 票 09：执行失败走 toast 出口而非静默
     try {
@@ -186,7 +225,9 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         className="top-[90px] w-[min(560px,calc(100vw-48px))] translate-y-0 gap-0 overflow-hidden p-0">
         <DialogTitle className="sr-only">{t('palette.title')}</DialogTitle>
         <Command shouldFilter={false} loop label={t('palette.title')}>
-          <CommandInput autoFocus value={q} onValueChange={setQ} placeholder={t('palette.placeholder')} trailing={<Kbd>Esc</Kbd>} />
+          {/* 选择步（发布目标）：空输入框上按退格回到全部指令 */}
+          <CommandInput autoFocus value={q} onValueChange={setQ} placeholder={picking ? t('palette.releaseChoose') : t('palette.placeholder')} trailing={<Kbd>Esc</Kbd>}
+            onKeyDown={(e) => { if (picking && e.key === 'Backspace' && !q) { e.preventDefault(); setPicking(false) } }} />
           <CommandList aria-label={t('palette.title')}>
             {/* A19 空态小号（feedback#empty） */}
             <CommandEmpty>
@@ -223,7 +264,7 @@ function PaletteRow({ item, onRun }: { item: Item; onRun: () => void }) {
   if (item.agent) lead = <Avatar agentId={item.agent.id} name={item.agent.role} size={18} src={avatars[item.agent.id]} />
   else if (item.icon) lead = <Icon name={item.icon} className="text-ink-2" size={14} />
   return (
-    <CommandItem value={item.id} onSelect={onRun}>
+    <CommandItem value={item.id} onSelect={onRun} disabled={item.disabled} data-palette-item={item.id}>
       <span className="grid w-[18px] shrink-0 place-items-center">{lead}</span>
       <span className={`min-w-0 truncate ${item.mono ? 'font-mono font-normal text-[12.5px]' : ''} ${item.risk === 'danger' ? 'text-red-ink' : ''}`}>{item.label}</span>
       <span className="ml-auto flex shrink-0 items-center gap-2 text-[12px] font-normal text-ink-3">
