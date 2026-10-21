@@ -606,7 +606,9 @@ impl Registry {
                             "raw_input": input, "reason": reason, "safety_net": safety_net, "action_id":action.id,
                             "write_targets": tool.write_targets(&input)?,
                             "provenance": prov, "known_world": world,
-                            "remote_delta": delta, "screenshot": screenshot, "app": app }),
+                            "remote_delta": delta, "screenshot": screenshot, "app": app,
+                            // owner-followups-1015 #13：推送卡形的展示事实（判定不读它）
+                            "push": crate::push_class::card_facts(name, &input) }),
                         idem_key.as_deref(),
                     )?;
                     crate::actions::set_question(db, ctx, &action.id, &qid)?;

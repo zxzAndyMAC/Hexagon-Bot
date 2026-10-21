@@ -9,6 +9,9 @@ import { DecisionButton } from './DecisionShell'
 
 export function PermissionScope({ tool, shape, generalized = false }: { tool: string; shape: string; generalized?: boolean }) {
   const { t } = useTranslation()
+  // owner-followups-1015 #13：推送按（远程, 分支）记，形状 `push:<远程> <分支>`。
+  const push = tool === 'bash' && shape.startsWith('push:') ? shape.slice(5).split(' ') : null
+  if (push) return <span className="permission-scope">{t('projectPermission.action_push', { remote: push[0] ?? '', branch: push.slice(1).join(' ') })}</span>
   const target = shape.startsWith('exact:') ? shape.slice(6) : generalized ? shape.replace(/\*$/, '') : shape
   return <span className="permission-scope">{t(`projectPermission.action_${tool}`, { target })}</span>
 }
