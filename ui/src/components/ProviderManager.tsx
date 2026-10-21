@@ -8,13 +8,14 @@ import { useTranslation } from 'react-i18next'
 import { api, asCmdError, errText, type ModelEntry, type ProviderPreset, type ProviderView, type ProvidersView, type RoleDef } from '../api'
 import { useRequestUrl } from '../requestUrl'
 import { RequestUrlNote } from './RequestUrlNote'
-import { isLocalEndpoint } from '../providerGate'
+import { isLocalEndpoint, providerKeyReady } from '../providerGate'
 import { enabledFirst, presetOf, searchText } from '../providerCatalog'
+import { iconKeyOf } from '../providerIcons'
+import { ProviderIcon } from './ProviderIcon'
 import { Icon, type IconName } from './Icon'
 import { useUiStore } from '../store'
 import { BUILTIN_SLOTS, DEDICATED_PREFIX, isBuiltinSlot, isDedicatedSlot } from '../modelpick'
 import { takeSlotFocus } from '../settingsSlotFocus'
-import { Avatar } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
@@ -291,9 +292,10 @@ export function ProviderManager() {
       if (!b) continue
       bound += 1
       const p = doc.providers.find((x) => x.id === b.provider_id)
-      if (!p?.enabled || !p.key_set) blocked += 1
+      if (!p?.enabled || !providerKeyReady(p)) blocked += 1
     }
-    const missingKey = doc.providers.filter((p) => p.enabled && !p.key_set).length
+    // 票 25：本机回环端点不算缺钥匙
+    const missingKey = doc.providers.filter((p) => p.enabled && !providerKeyReady(p)).length
     return { total: slotNames.length, bound, blocked, missingKey }
   }, [slotNames, doc])
 
@@ -382,7 +384,7 @@ export function ProviderManager() {
         {slotNames.map((slot) => {
           const b = doc.slots[slot]
           const bp = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
-          const ready = !!(b && bp?.enabled && bp.key_set)
+          const ready = !!(b && bp?.enabled && providerKeyReady(bp))
           // 2026-09-28 重启后固定槽曾显示空白但标已绑：行先于配置挂载，
           // 仅以 slot 作 key 会保留初始空草稿。已保存绑定变化才重置，普通刷新保留编辑。
           return (
@@ -392,6 +394,7 @@ export function ProviderManager() {
               binding={b}
               bindingProvider={bp}
               providers={doc.providers}
+              iconKey={(id) => iconKeyOf(presets, id)}
               ready={ready}
               onBind={bind}
               onUnbind={async (s) => { await api.removeSlotBinding(s).catch(() => {}); await reload() }}
@@ -424,7 +427,7 @@ export function ProviderManager() {
         if (it.preset) {
           return (
             <>
-              <span className="grid size-[18px] flex-none place-items-center rounded-[5px] bg-hover-2 text-[10px] font-semibold text-ink-2">{it.p.name.slice(0, 1)}</span>
+              <ProviderIcon iconKey={(it.p as ProviderPreset).icon_key} size={20} />
               <div className="min-w-0 flex-1 truncate text-ink-3">{it.p.name}</div>
               {isLocalEndpoint(it.p.base_url) && <span className="text-[12px] text-ink-3">{t('settingsUi.local')}</span>}
             </>
@@ -434,10 +437,11 @@ export function ProviderManager() {
         return (
           <>
             {/* 配置状态点：●已配 key / ◐缺 key（橙）/ ○停用——不用点进去就知道能不能用 */}
-            <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : t('providers.keyMissing')}>
-              <Dot tone={!p.enabled ? 'off' : p.key_set || isLocalEndpoint(p.base_url) ? 'on' : 'warn'} />
+            <span className="inline-flex" title={!p.enabled ? t('providers.disabledTag') : p.key_set ? t('providers.keySet') : isLocalEndpoint(p.base_url) ? t('settingsUi.local') : t('providers.keyMissing')}>
+              <Dot tone={!p.enabled ? 'off' : providerKeyReady(p) ? 'on' : 'warn'} />
             </span>
-            <Avatar agentId={p.id} name={p.name} size={18} />
+            {/* #23：品牌图标只按 id 对上预设取 icon_key；自定义供应商（id 不在预设里）一律中性图标 */}
+            <ProviderIcon iconKey={iconKeyOf(presets, p.id)} size={20} />
             <div className="min-w-0 flex-1 truncate">{p.name}</div>
             <Switch
               aria-label={`${t('providers.enabled')} ${p.name}`}
@@ -456,7 +460,7 @@ export function ProviderManager() {
         ) : (
           <>
             <DetailHead
-              lead={<Avatar agentId={draft.id || draft.name} name={draft.name || '?'} size={40} />}
+              lead={<ProviderIcon iconKey={catalog?.icon_key ?? ''} size={28} />}
               title={draft.name || t('providers.add')}
               sub={previewUrl ? `${previewUrl} · ${t('providers.autoUrl')}` : draft.base_url || t('providers.unsaved')}
               mono={!!draft.base_url}
@@ -485,7 +489,7 @@ export function ProviderManager() {
             </Field>
             {catalog && <CatalogInfo preset={catalog} />}
             <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-3">
-              <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : t('providers.keyMissing')}>
+              <Field label={t('providers.key')} help={draft.key_set ? t('providers.keyKeep') : needsKey ? t('providers.keyMissing') : undefined}>
                 <Input
                   aria-label={t('providers.key')}
                   className="font-mono"
@@ -586,12 +590,13 @@ export function ProviderManager() {
 /// 一个槽位的绑定行（A21 行形）：槽名 code + 供应商下拉 + 模型输入（datalist 供选）+ 绑定 / 解绑 + 状态。
 /// 状态：就绪 ok · 绑定的供应商缺钥匙或停用 warn · default 未绑 warn · 其他未绑走默认回退 neutral。
 function SlotRow({
-  slot, binding, bindingProvider, providers, ready, onBind, onUnbind,
+  slot, binding, bindingProvider, providers, iconKey, ready, onBind, onUnbind,
 }: {
   slot: string
   binding?: { provider_id: string; model: string }
   bindingProvider?: ProviderView
   providers: ProviderView[]
+  iconKey: (providerId: string) => string
   ready: boolean
   onBind: (slot: string, providerId: string, model: string) => void
   onUnbind: (slot: string) => void
@@ -630,12 +635,16 @@ function SlotRow({
         <span className="[overflow-wrap:anywhere]">{label}</span>
         {isBuiltinSlot(slot) && <span className="truncate font-mono text-[11px] text-ink-3">{slot}</span>}
       </code>
-      <NativeSelect aria-label={`${label} · ${t('settingsUi.colProvider')}`} className="h-[30px]" value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
-        <option value="">{t('providers.pickProvider')}</option>
-        {enabled.map((p) => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </NativeSelect>
+      {/* #23：原生 <option> 画不了图，槽位表把所选服务商的 16 图标挂在下拉前；未选不画 */}
+      <span className="flex min-w-0 items-center gap-1.5">
+        {pid && <ProviderIcon iconKey={iconKey(pid)} size={16} />}
+        <NativeSelect aria-label={`${label} · ${t('settingsUi.colProvider')}`} className="h-[30px] min-w-0 flex-1" value={pid} onChange={(e) => { setPid(e.target.value); setModel('') }}>
+          <option value="">{t('providers.pickProvider')}</option>
+          {enabled.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </NativeSelect>
+      </span>
       <Input
         aria-label={`${label} · ${t('providers.model')}`}
         className="h-[30px] font-mono text-[12px]" list={`models-${slot}`}

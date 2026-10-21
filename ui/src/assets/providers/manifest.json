@@ -1,0 +1,418 @@
+{
+  "repository": "https://github.com/CherryHQ/cherry-studio",
+  "commit": "9d1bf05fe2c78231d43e383118d5131f8ad5f49f",
+  "providerCount": 66,
+  "assets": [
+    {
+      "file": "cherryin-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/cherryin.svg",
+      "sha256": "23a7eb1444082c2a2b6e6d5324d2ab035959e4eafc43d57a504ffe5b82f09a07"
+    },
+    {
+      "file": "silicon-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/silicon.svg",
+      "sha256": "d5c77fd1773e30ff33c05956d96a6dfb5c93f2216efa55632344e454e452f8e2"
+    },
+    {
+      "file": "aihubmix-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/aihubmix.svg",
+      "sha256": "b7334a44ed3fef294695a6d49e29eee8ca8ce7acc7619beffaafa84352bb65ff"
+    },
+    {
+      "file": "intel-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/intel.svg",
+      "sha256": "073ad93d2c9e6d256a6c9b8de0761a66271a86b251c9e701011295d0a32552f8"
+    },
+    {
+      "file": "ocoolai-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/ocoolai.svg",
+      "sha256": "c7a9cd5c75fe7c3578f5416f94240908c869a6f7394f38c1216b73119ca6e293"
+    },
+    {
+      "file": "ocoolai-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/ocoolai.svg",
+      "sha256": "116cc03a3ac392059931f4ae13117d475696cbaeaf5ab1704e74d0a25fcf714d"
+    },
+    {
+      "file": "zhipu-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/zhipu.svg",
+      "sha256": "5c3d3bb12846e994408dc80f6f6729129b00b6bdac4da54473398ff8ba691efd"
+    },
+    {
+      "file": "deepseek-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/deepseek.svg",
+      "sha256": "c5fd001564b504e8328531b64e7634756ae889b001791a802099eb70df84f554"
+    },
+    {
+      "file": "alayanew-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/alayanew.svg",
+      "sha256": "7c1c38a40a33233d692c774069f8e34470a8cb66c25c18f9cd32bb917884c512"
+    },
+    {
+      "file": "dmxapi-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/dmxapi.svg",
+      "sha256": "b0871c26d8820f6ac2fec5127e737fe28870ca911817f3d8235bb3a5172c778f"
+    },
+    {
+      "file": "ai-only-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/ai-only.svg",
+      "sha256": "945a3d3637778dbe5637e5b8d8c20d6f42f0d88c4142a14037e114779e244149"
+    },
+    {
+      "file": "burncloud-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/burncloud.svg",
+      "sha256": "a11279e0f58770edc4fd65da443187f3c327f984c538ee3e1e853448e2b32c92"
+    },
+    {
+      "file": "302ai-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/302ai.svg",
+      "sha256": "ead64039eed6c6d56e8c3da84fd184c836894901437eb49bfdc267077bb56f66"
+    },
+    {
+      "file": "lanyun-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/lanyun.svg",
+      "sha256": "9fcb30b74e2667d9464139a54b076f40ae0957e9ddf6d37aa3d10d7c76311ee0"
+    },
+    {
+      "file": "ph8-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/ph8.svg",
+      "sha256": "0a1fb58ab13a6d6bbf8620b938187956d0bf0323ed25ba0549dd148b0a48ea49"
+    },
+    {
+      "file": "sophnet-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/sophnet.svg",
+      "sha256": "5dd823ac790bae668ba33aaf943fa203978e504ccdd448d913c4403cf7e90d6d"
+    },
+    {
+      "file": "ppio-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/ppio.svg",
+      "sha256": "ac6b1ef28eb33fcaebd56a8965c37fca1df4e758ee997686c4682f126b1fc00e"
+    },
+    {
+      "file": "qiniu-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/qiniu.svg",
+      "sha256": "3f2a04736490800fa9c385a8e3f8c2c45e91069989de6e2b677205b8678e503c"
+    },
+    {
+      "file": "openrouter-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/openrouter.svg",
+      "sha256": "ad0e5a00aba5f5b5ec61d7ab78c7224aab48b3a979a3596a4c77089c5ff06188"
+    },
+    {
+      "file": "openrouter-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/openrouter.svg",
+      "sha256": "efdae7b1e85ed3b961f5ad5d40d8dd736dead6b9141ba675c1f14a87f8dcbac0"
+    },
+    {
+      "file": "ollama-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/ollama.svg",
+      "sha256": "3480e7a7a65c5315078fa201815a35da84e3945ccce9b6d29c339ad97626a0a5"
+    },
+    {
+      "file": "ollama-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/ollama.svg",
+      "sha256": "3348adf24aa67b23e74ae5e210879a8be8199b7c152211557d656628840f2fc5"
+    },
+    {
+      "file": "radeon-cloud-light.svg",
+      "upstream_path": "packages/ui/src/components/icons/providers/radeon-cloud/light.tsx",
+      "sha256": "7052101a4739561162fa23d13c4c8eb60709fbdbd943f26119f489b34a120a57",
+      "derived": true,
+      "upstream_sha256": "7fe9a1832ad79e07b67ebce95bed5b7db5bc8b117af59009676f71b976ccd63a"
+    },
+    {
+      "file": "tokendance-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/tokendance.svg",
+      "sha256": "d0c541598a71efc3723531ba1fb811455948b7612c12ca55512bb2bc5d5c3b9e"
+    },
+    {
+      "file": "newapi-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/newapi.svg",
+      "sha256": "4a239e2b51aae835608058b79665eac88b77305f8db9467a0a94a1f7b2f9be6d"
+    },
+    {
+      "file": "lmstudio.svg",
+      "upstream_path": "packages/ui/icons/providers/light/lmstudio.svg",
+      "sha256": "d10bf2d4c863e694f2f9478765e55b3ec8505ec3c9ce6da78ca2169e1f14aa7e"
+    },
+    {
+      "file": "litellm-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/litellm.svg",
+      "sha256": "8e06e57b4093d12be1b90cbb9658a7d810e54d8c3a283f62a627410da7c159f9"
+    },
+    {
+      "file": "litellm-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/litellm.svg",
+      "sha256": "248548316b2f9e17c2ee34e8243b7c8cb7388c1bbf8e51674a5c938ee2701632"
+    },
+    {
+      "file": "anthropic.svg",
+      "upstream_path": "packages/ui/icons/providers/light/anthropic.svg",
+      "sha256": "0fcecc820e5cb850a5695bb5e33a302a660eae434d5ae2d5ef91c528e7585ec1"
+    },
+    {
+      "file": "anthropic-dark.svg",
+      "upstream_path": "packages/ui/icons/models/dark/anthropic.svg",
+      "sha256": "b1c6e53f27564ba8593a2a0289ca5680195e7badd78c7eb7fed0d212f84a39d9"
+    },
+    {
+      "file": "claude-code-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/claude-code.svg",
+      "sha256": "118fbe6f230512cb70823c8121a65a322f3b72eaa24e8b0afca4545f911fce79"
+    },
+    {
+      "file": "openai-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/openai.svg",
+      "sha256": "8886b1f6ca31eb2563a96a63a6d85414a587095d3d67830686a8f0eee5f4d1be"
+    },
+    {
+      "file": "openai-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/openai.svg",
+      "sha256": "7fc65a52fb36a702d07b5f09c67becfe15f38ab5df02b6cbabb718a8ba8812b5"
+    },
+    {
+      "file": "grok-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/grok.svg",
+      "sha256": "6e3446f6d225e56686a4cd9a46a39ee24c0884f91199b9ecea1d7a0da818221e"
+    },
+    {
+      "file": "grok-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/grok.svg",
+      "sha256": "83197af8dae55950e1ff667201e9b21ab16490bccb6f4ef8a3c4e99ac280c032"
+    },
+    {
+      "file": "omlx-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/omlx.svg",
+      "sha256": "b79c0dcfebdf8fe2d10849cee8d41ad928b037e1d047b89b4ced67b5fb69f7c9"
+    },
+    {
+      "file": "opencode-light.svg",
+      "upstream_path": "packages/ui/src/components/icons/general/open-code.tsx",
+      "sha256": "42f304c9e3a6107e258e45c3fa1b5d61323e2019efdbe1303054e1e46458d1ac",
+      "derived": true,
+      "upstream_sha256": "c3a93c715545d6d8087011fdb74f1e97d3b511e55feb1e737f3cb20f6f8a66c0"
+    },
+    {
+      "file": "opencode-dark.svg",
+      "upstream_path": "packages/ui/src/components/icons/general/open-code.tsx",
+      "sha256": "cc757f65fb57ea9dd0e2aac328cf2e86ef27e0095318063c56cdbfb346d466cc",
+      "derived": true,
+      "upstream_sha256": "c3a93c715545d6d8087011fdb74f1e97d3b511e55feb1e737f3cb20f6f8a66c0"
+    },
+    {
+      "file": "azureai-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/azureai.svg",
+      "sha256": "463f397ea208a5bf6a1ffecbd4c796af9abe003e2d0233fef6ca99d9b6d8ef62"
+    },
+    {
+      "file": "google.svg",
+      "upstream_path": "packages/ui/icons/providers/light/google.svg",
+      "sha256": "d962fb164bf9273d80537be574933c0d3f5589a0956d9c2a33f5e17cb70416ef"
+    },
+    {
+      "file": "vertexai-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/vertexai.svg",
+      "sha256": "3f1d5db324ab1d38eaf7e7c990078340c17b3ab4d6ae4cf019ad06aceb241677"
+    },
+    {
+      "file": "github-copilot-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/github-copilot.svg",
+      "sha256": "ff0fe0c67b6bea2b744e8f98d00ba2d485e5f0ffe72efceebe4af8ac5666a0f9"
+    },
+    {
+      "file": "github-copilot-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/github-copilot.svg",
+      "sha256": "a217f9ade0284fea532cd43031ef8057cb4c3af63d4a17c682bcf4cdce29ae42"
+    },
+    {
+      "file": "moonshot-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/moonshot.svg",
+      "sha256": "5c687837abf78fb1358da99b8a9a1e06b0def5f201e0c6937a2302895389b3eb"
+    },
+    {
+      "file": "moonshot-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/moonshot.svg",
+      "sha256": "8902b103b2fd6385afd4e9b0cbddf1a88b32ae50069afea4a47cde32573d55ff"
+    },
+    {
+      "file": "baichuan-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/baichuan.svg",
+      "sha256": "cae46f50489fd7f648b8074008ad6f48b51d945233809f4a7ba84d0144817cca"
+    },
+    {
+      "file": "bailian-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/bailian.svg",
+      "sha256": "5528beb39501a30fa0e252b90e1b6931f306593e47e902e929ac1fcf8cd68706"
+    },
+    {
+      "file": "step-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/step.svg",
+      "sha256": "457153e80fa99ebd44f0501cfdc813f65c7778c0649ab4c93a1f6895fef0e4f6"
+    },
+    {
+      "file": "volcengine-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/volcengine.svg",
+      "sha256": "e4c363e0cfbb169723768c5a6d9695b510d7ebbd62c524a467844a020052c003"
+    },
+    {
+      "file": "minimax-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/minimax.svg",
+      "sha256": "857b9b2c4a92ce23ce6be9464df982041440fdc89682a0be293ad982d775fc07"
+    },
+    {
+      "file": "minimax-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/minimax.svg",
+      "sha256": "5d3b70441c26790222842a3ced7f06b4c1451551e9bb51daa1ff06aa2b900f9d"
+    },
+    {
+      "file": "groq-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/groq.svg",
+      "sha256": "1c3549972908f4a444beed2efd915782309e74f2552b49d61bfc9ee1efe43ced"
+    },
+    {
+      "file": "together-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/together.svg",
+      "sha256": "87473c20f44789fbae2fa5f894d583ca21f2fc36208cfdfe681bce87e354c433"
+    },
+    {
+      "file": "fireworks-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/fireworks.svg",
+      "sha256": "497bba247ff0fa13f72970831c8b5123619679ac59d37927ac1e917603521705"
+    },
+    {
+      "file": "nvidia-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/nvidia.svg",
+      "sha256": "7218d0bb4ac73d171417e907b4f11a76df37fed2c6cb9432f8ac629cf9f89c99"
+    },
+    {
+      "file": "mistral-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/mistral.svg",
+      "sha256": "0049d314f1a388da7f88aed5d549ff35a5323872ffc721fd9b1dbd26746cce19"
+    },
+    {
+      "file": "jina-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/jina.svg",
+      "sha256": "652afc89570c0a9144d6cebd9e1e0c48b67ecd372439855f239415e75ce4f9ff"
+    },
+    {
+      "file": "jina-dark.svg",
+      "upstream_path": "packages/ui/icons/models/dark/jina.svg",
+      "sha256": "47e2c58362222253a085ebb2d0681099983280bf312937314c981eb6beba8d80"
+    },
+    {
+      "file": "perplexity-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/perplexity.svg",
+      "sha256": "9f0c9939e6856f0558149944a52543016b3c45e3d235754013fe4cee76fa9ce5"
+    },
+    {
+      "file": "modelscope-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/modelscope.svg",
+      "sha256": "d6c596ad9c749e478f1dd6d409083f9b122ee10c229387c1cd1915655176707c"
+    },
+    {
+      "file": "xirang-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/xirang.svg",
+      "sha256": "f66d275ed46cc7aea0a2c45471a51dd0d64f2801cc11bdd1db08bd1bc2a95001"
+    },
+    {
+      "file": "tencent-cloud-ti-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/tencent-cloud-ti.svg",
+      "sha256": "e10b826d9fa66e19387d1e5087ee5525d8a9b773e626b747b2176c375cbcdf3d"
+    },
+    {
+      "file": "baidu-cloud-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/baidu-cloud.svg",
+      "sha256": "37b195c5652131b1f885e34f0f39541d16df6e6abd1adfdcff2901575137495c"
+    },
+    {
+      "file": "gpustack-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/gpustack.svg",
+      "sha256": "295fc8edb979364a319de1fd52892afaa2ee329b08563fb58b21aa69e5ba92ac"
+    },
+    {
+      "file": "voyage-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/voyage.svg",
+      "sha256": "bb182b884ea3a1a3bca2c6a0781f0014b9dedbb0058958cb6f260e362cf74fd9"
+    },
+    {
+      "file": "voyage-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/voyage.svg",
+      "sha256": "96b6d4465088e083d1ca9b02c7b1a099d71a53c44d693457849a3daa09f3edb4"
+    },
+    {
+      "file": "aws-bedrock-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/aws-bedrock.svg",
+      "sha256": "a30edff1a7f6495c4cd9bbf7ef525107bf479287c39b452416118da92fb2c322"
+    },
+    {
+      "file": "poe-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/poe.svg",
+      "sha256": "72ab2b2c94056eaefe9143ebbc98f6957accbdab3186ba633458d4e1a9b5c839"
+    },
+    {
+      "file": "poe-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/poe.svg",
+      "sha256": "46420b844f3aa0c3a62b3acaef30339e29cba93738ecd65476f34c4b43c465d9"
+    },
+    {
+      "file": "longcat-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/longcat.svg",
+      "sha256": "119e0e09806c19581b7fabad31361edd946382edce147663e1955699d8158491"
+    },
+    {
+      "file": "longcat-dark.svg",
+      "upstream_path": "packages/ui/icons/models/dark/longcat.svg",
+      "sha256": "6753e1cab7f55bc09cebe1e5b30f3456ce65a9a4a7513c45de6b6bd4340aa293"
+    },
+    {
+      "file": "huggingface-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/huggingface.svg",
+      "sha256": "b5f8bb691b5fd61a43d437f869fe91ad36f3b36e3133270a3c65a7c63ad65bf6"
+    },
+    {
+      "file": "vercel-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/vercel.svg",
+      "sha256": "06dfa05030f00f5281ab689e09c982c22210db5992ab7ef888800b24512c89d3"
+    },
+    {
+      "file": "vercel-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/vercel.svg",
+      "sha256": "348216d9067728590d731b6b93d6cc3226bb0236a8d9e7a29bc04e4cfd730971"
+    },
+    {
+      "file": "cerebras-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/cerebras.svg",
+      "sha256": "9e98f0ef55e2c69b3b9010d96011e176bfb0a3fa1fd30369984054ddd7fe3dd7"
+    },
+    {
+      "file": "cerebras-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/cerebras.svg",
+      "sha256": "5141b2775507b94fda7d49fca5fabc5318ac19c4af1c9e7dabe0e991f3e261b8"
+    },
+    {
+      "file": "comfyui-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/comfyui.svg",
+      "sha256": "0e9dfaa0385964b3b318436e9ac086b4817315cda37525a29cef75f2703192c6"
+    },
+    {
+      "file": "mimo-light.svg",
+      "upstream_path": "packages/ui/icons/models/light/mimo.svg",
+      "sha256": "ae96e147decea078ee347ae73d0cfc2c3aa9db1fd2781f4ebe2f1cb8dcbef011"
+    },
+    {
+      "file": "mimo-dark.svg",
+      "upstream_path": "packages/ui/icons/models/dark/mimo.svg",
+      "sha256": "57a2a3d9dcb1276a90a6bb0da7690623759a6e573c32d9ee214c04847cb1dc57"
+    },
+    {
+      "file": "z-ai-light.svg",
+      "upstream_path": "packages/ui/icons/providers/light/z-ai.svg",
+      "sha256": "2f887f1a88b6a159f8eb59fa32058c9bcadbec22ab1d9a96a63e961e332bd34a"
+    },
+    {
+      "file": "z-ai-dark.svg",
+      "upstream_path": "packages/ui/icons/providers/dark/z-ai.svg",
+      "sha256": "6b0cfcaa37b679d300d41f4d6080b704ce9df01e421a1264b31d4f890679a2bd"
+    }
+  ]
+}

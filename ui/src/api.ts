@@ -1,4 +1,5 @@
 import type { ReconcileReport } from './gen/ReconcileReport'
+import type { ArtistProposal } from './gen/ArtistProposal'
 import type { RejudgeOutcome } from './gen/RejudgeOutcome'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
@@ -92,6 +93,8 @@ import type { GrantOutcome } from './gen/GrantOutcome'
 import type { PushOutcome } from './gen/PushOutcome'
 import type { PushRequest } from './gen/PushRequest'
 import type { PushTargets } from './gen/PushTargets'
+import type { ReleaseTarget } from './gen/ReleaseTarget'
+import type { ReleaseTargetDraft } from './gen/ReleaseTargetDraft'
 import type { FlagOutcome } from './gen/FlagOutcome'
 import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
 import type { ReturnSummary } from './gen/ReturnSummary'
@@ -163,6 +166,7 @@ export type {
   SessionSummary, CapabilityStatus,
   OneTimeTrigger,
   WorktreeAttachment, WorktreeOperation, WorktreeRequest, SessionRecord,
+  ReleaseTarget, ReleaseTargetDraft,
 }
 
 
@@ -555,6 +559,14 @@ export const api = {
   /** ⌘K「推送」目标：基线上游远程；无上游时由负责人在 remotes 里选。 */
   pushTargets: () => call<PushTargets>('push_targets'),
   rejectPush: (qid: string) => call<void>('reject_push', { qid }),
+  // 发布目标（owner-followups-1015 #14）：设置·发布页；凭据明文只经 setReleaseCredential 进钥匙串，读面只回「已存入」。
+  releaseTargets: () => call<ReleaseTarget[]>('release_targets'),
+  saveReleaseTarget: (draft: ReleaseTargetDraft) => call<ReleaseTarget>('save_release_target', { draft }),
+  removeReleaseTarget: (id: string) => call<void>('remove_release_target', { id }),
+  setReleaseCredential: (id: string, credential: string, secret: string) =>
+    call<ReleaseTarget>('set_release_credential', { id, credential, secret }),
+  removeReleaseCredential: (id: string, credential: string) =>
+    call<ReleaseTarget>('remove_release_credential', { id, credential }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
@@ -610,6 +622,10 @@ export const api = {
   roleAvatar: (role: string) => call<string | null>('role_avatar', { role }),
   setRoleAvatar: (role: string, dataUrl: string) => call<void>('set_role_avatar', { role, dataUrl }),
   clearRoleAvatar: (role: string) => call<void>('clear_role_avatar', { role }),
+  // ---- 画师头像提案（票 20；不是待决卡，不走裁决回路）----
+  artistProposal: (id: string) => call<ArtistProposal>('artist_proposal', { id }),
+  artistRegenerate: (id: string, role: string) => call<ArtistProposal>('artist_regenerate', { id, role }),
+  artistApply: (id: string, roles: string[]) => call<ArtistProposal>('artist_apply', { id, roles }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => switchProject(source => call<void>('open_recent', { dir, _project: source })),
@@ -805,6 +821,28 @@ const mockAvatars: Record<string, string> = {
 const mockRoleAvatars: Record<string, string> = {}
 const mockEffective = (id: string, role?: string): string | undefined =>
   mockAvatars[id] ?? (role ? mockRoleAvatars[role] : undefined)
+// 票 20 dev mock：画师头像提案。图是本地拼的 SVG 色块（不出网），第二格模拟一次出图失败。
+const mockArtistProposals: Record<string, ArtistProposal> = {}
+const mockArtistImage = (role: string, rev: number) => {
+  const hue = ([...role].reduce((h, c) => h + c.charCodeAt(0), 0) * 37 + rev * 90) % 360
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="hsl(${hue} 60% 70%)"/><rect x="2" y="2" width="4" height="4" fill="hsl(${hue} 60% 35%)"/></svg>`
+  return `data:image/svg+xml;base64,${btoa(svg)}`
+}
+const mockArtistProposal = (id: string): ArtistProposal => {
+  if (!mockArtistProposals[id]) {
+    const roles = (mock('team') as { role: string }[]).map((r) => r.role)
+    mockArtistProposals[id] = {
+      id, style: 'pixel art', model: 'gpt-image-1', applied: [],
+      items: roles.map((role, i) => ({
+        role,
+        prompt: `pixel art. A square avatar portrait representing the team role "${role}". One centered subject, simple background, no text, no letters, no watermark.`,
+        image: i === 1 ? null : mockArtistImage(role, 0),
+        failure: i === 1 ? 'provider_unavailable' : null,
+      })),
+    }
+  }
+  return mockArtistProposals[id]
+}
 
 const T0 = '2026-09-18T'
 
@@ -1079,6 +1117,21 @@ const MOCK_DESIGN_OPTIONS = [
   { id: 'night', title: '夜间专注', description: '深色优先 · 紫色强调', layout: '单栏', typography: 'Inter', palette: '深色', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm2', data_url: mockSvg('#2a2a33', '#15151b') }] },
   { id: 'warm', title: '温暖手账', description: '衬线标题 · 米色纸感', layout: '卡片', typography: '衬线', palette: '米色', mockups: [{ page: '首页', mime: 'image/svg+xml', digest: 'm3', data_url: mockSvg('#fdf0dc', '#f8d6b8') }] },
 ]
+
+let MOCK_RELEASE: ReleaseTarget[] = [
+  { id: 'rel-npm', name: 'npm', command: 'npm publish --access public', cwd: 'packages/web', credentials: [{ name: 'NPM_TOKEN', set: true }, { name: 'NPM_OTP_SEED', set: false }] },
+  { id: 'rel-pages', name: 'GitHub Pages', command: 'npm run deploy', cwd: '', credentials: [] },
+]
+function mockSaveRelease(draft: ReleaseTargetDraft): ReleaseTarget {
+  const prev = MOCK_RELEASE.find((r) => r.id === draft.id)
+  const names = [...new Set(draft.credentials.map((c) => c.trim()).filter(Boolean))]
+  const next: ReleaseTarget = {
+    id: prev?.id ?? `rel-${Date.now()}`, name: draft.name.trim(), command: draft.command.trim(), cwd: draft.cwd.trim(),
+    credentials: names.map((name) => ({ name, set: prev?.credentials.find((c) => c.name === name)?.set ?? false })),
+  }
+  MOCK_RELEASE = prev ? MOCK_RELEASE.map((r) => (r.id === prev.id ? next : r)) : [...MOCK_RELEASE, next]
+  return next
+}
 
 function mock<T>(cmd: string, args?: Record<string, unknown>): T {
   if (MOCK_DECIDE_CMDS[cmd] && typeof location !== 'undefined' && new URLSearchParams(location.search).has('mockdecide')) {
@@ -1467,6 +1520,24 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'clear_role_avatar':
       delete mockRoleAvatars[String(args?.role)]
       return null as T
+    case 'artist_proposal':
+      return mockArtistProposal(String(args?.id)) as T
+    case 'artist_regenerate': {
+      const p = mockArtistProposal(String(args?.id))
+      mockArtistProposals[p.id] = { ...p, items: p.items.map((it) => it.role === String(args?.role)
+        ? { ...it, image: mockArtistImage(it.role, 1), failure: null } : it) }
+      return mockArtistProposals[p.id] as T
+    }
+    case 'artist_apply': {
+      const p = mockArtistProposal(String(args?.id))
+      const roles = (args?.roles as string[] | undefined) ?? []
+      for (const role of roles) {
+        const img = p.items.find((it) => it.role === role)?.image
+        if (img) mockRoleAvatars[role] = img
+      }
+      mockArtistProposals[p.id] = { ...p, applied: roles }
+      return mockArtistProposals[p.id] as T
+    }
     case 'artifact_content':
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
@@ -1536,6 +1607,17 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       ] as T
     case 'mcp_services':
       return [] as T
+    // owner-followups-1015 #14：设置·发布页预览——两条目标，npm 的令牌已存、OTP 未设置（只回名字与「已存入」）。
+    case 'release_targets': return MOCK_RELEASE.map((r) => ({ ...r, credentials: r.credentials.map((c) => ({ ...c })) })) as T
+    case 'save_release_target': return mockSaveRelease(args?.draft as ReleaseTargetDraft) as T
+    case 'remove_release_target': MOCK_RELEASE = MOCK_RELEASE.filter((r) => r.id !== args?.id); return null as T
+    case 'set_release_credential':
+    case 'remove_release_credential': {
+      const target = MOCK_RELEASE.find((r) => r.id === args?.id)
+      const cred = target?.credentials.find((c) => c.name === args?.credential)
+      if (cred) cred.set = cmd === 'set_release_credential'
+      return target as T
+    }
     case 'list_mcp_entries':
       return [
         { name: 'termius', command: 'ssh-mcp', args: ['--stdio'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },
@@ -1832,20 +1914,20 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     }
     case 'provider_presets':
       return [
-        mockPreset({ id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5' }),
-        mockPreset({ id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '' }),
-        mockPreset({ id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '' }),
-        mockPreset({ id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '' }),
-        mockPreset({ id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '' }),
+        mockPreset({ id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com', default_model: 'claude-opus-5-5', icon_key: 'anthropic' }),
+        mockPreset({ id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', default_model: '', icon_key: 'openai' }),
+        mockPreset({ id: 'deepseek', name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com', default_model: '', icon_key: 'deepseek' }),
+        mockPreset({ id: 'moonshot', name: 'Moonshot', kind: 'openai', base_url: 'https://api.moonshot.cn/v1', default_model: '', icon_key: 'moonshot' }),
+        mockPreset({ id: 'openrouter', name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', default_model: '', icon_key: 'openrouter' }),
         // gap B13：设置页目录并进同一份预设（core provider_presets.rs）
-        mockPreset({ id: 'gemini', name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', default_model: '' }),
-        mockPreset({ id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', default_model: '' }),
-        mockPreset({ id: 'groq', name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1', default_model: '' }),
-        mockPreset({ id: 'mistral', name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1', default_model: '' }),
-        mockPreset({ id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', default_model: '' }),
-        mockPreset({ id: 'zhipu', name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: '' }),
-        mockPreset({ id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '' }),
-        mockPreset({ id: 'lm-studio', name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1', default_model: '' }),
+        mockPreset({ id: 'gemini', name: 'Gemini', kind: 'openai', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', default_model: '', icon_key: 'google' }),
+        mockPreset({ id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', default_model: '', icon_key: 'grok' }),
+        mockPreset({ id: 'groq', name: 'Groq', kind: 'openai', base_url: 'https://api.groq.com/openai/v1', default_model: '', icon_key: 'groq' }),
+        mockPreset({ id: 'mistral', name: 'Mistral', kind: 'openai', base_url: 'https://api.mistral.ai/v1', default_model: '', icon_key: 'mistral' }),
+        mockPreset({ id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', default_model: '', icon_key: 'silicon' }),
+        mockPreset({ id: 'zhipu', name: 'Zhipu', kind: 'openai', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: '', icon_key: 'zhipu' }),
+        mockPreset({ id: 'ollama', name: 'Ollama', kind: 'openai', base_url: 'http://localhost:11434/v1', default_model: '', icon_key: 'ollama' }),
+        mockPreset({ id: 'lm-studio', name: 'LM Studio', kind: 'openai', base_url: 'http://localhost:1234/v1', default_model: '', icon_key: 'lmstudio' }),
         mockPreset({ id: 'typesafe', name: 'TypeSafe', kind: 'jev', base_url: 'https://api.typesafe.ai', default_model: 'jev-latest' }),
         // #22：目录条目（core provider_catalog；节选三条：无版本段完整端点 / 有版本段 / 无公共地址）
         mockPreset({ id: 'perplexity', name: 'Perplexity', kind: 'openai', base_url: 'https://api.perplexity.ai/chat/completions', origin: 'catalog', icon_key: 'perplexity', website: 'https://perplexity.ai/', docs: 'https://docs.perplexity.ai/home' }),

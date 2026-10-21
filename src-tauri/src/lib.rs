@@ -2821,6 +2821,88 @@ fn reject_push(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
     })
 }
 
+// ---- 发布目标（owner-followups-1015 #14，control 组，不碰工作台锁）----
+// 钥匙串读写可能等系统（QA readiness 2026-10-06：凭据查询会卡在 OS 上）：锁内只取 root，
+// 锁外自开账本连接（同 stage_evidence / artist_regenerate），暂停电脑操作要用的控制连接
+// 在此期间一直可用；async 免得冻住窗口。只有负责人从设置·发布页调用，Agent 没有入口。
+fn release_db(state: &ProjectState<'_>) -> Result<hexagon_core::db::Db, CmdError> {
+    let root = with_project_conn(state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+    hexagon_core::db::Db::open(root.join(".hexagon/state.db")).map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn release_targets(
+    state: ProjectState<'_>,
+) -> Result<Vec<hexagon_core::release_targets::ReleaseTarget>, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::list(&db, PROJECT_ID, &*hexagon_core::credentials::active())
+        .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn save_release_target(
+    state: ProjectState<'_>,
+    draft: hexagon_core::release_targets::ReleaseTargetDraft,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::save(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &draft,
+    )
+    .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn remove_release_target(state: ProjectState<'_>, id: String) -> Result<(), CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::remove(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &id,
+    )
+    .map_err(cmd_err)
+}
+
+/// 凭据明文只经这一条入参进钥匙串：不记日志、不回传（返回值只有「已存入」）。
+#[tauri::command(async)]
+fn set_release_credential(
+    state: ProjectState<'_>,
+    id: String,
+    credential: String,
+    secret: String,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::set_credential(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &id,
+        &credential,
+        &secret,
+    )
+    .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn remove_release_credential(
+    state: ProjectState<'_>,
+    id: String,
+    credential: String,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_targets::remove_credential(
+        &db,
+        PROJECT_ID,
+        &*hexagon_core::credentials::active(),
+        &id,
+        &credential,
+    )
+    .map_err(cmd_err)
+}
+
 #[tauri::command]
 fn set_agent_avatar(
     state: ProjectState<'_>,
@@ -2874,6 +2956,50 @@ fn set_role_avatar(
 fn clear_role_avatar(state: ProjectState<'_>, role: String) -> Result<(), CmdError> {
     with_project_conn(&state, |_, root| {
         hexagon_core::avatars::clear_role_avatar(root, &role)
+    })
+}
+
+/// 票 20：头像提案读面（纯文件，读组，不碰工作台）。
+#[tauri::command]
+fn artist_proposal(
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_conn(&state, |_, root| {
+        hexagon_core::artist_proposal::load(root, &id)
+    })
+}
+
+/// 票 20：提案卡「换一张」。出图是秒级到分钟级的网络 IO：锁内只取 root，锁外自开账本
+/// 连接（同 stage_evidence），控制连接与工作台在此期间都可用；async 免得冻住窗口。
+#[tauri::command(async)]
+fn artist_regenerate(
+    state: ProjectState<'_>,
+    id: String,
+    role: String,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    let root = with_project_conn(&state, |_, root| Ok::<_, CmdError>(root.to_path_buf()))?;
+    let db = hexagon_core::db::Db::open(root.join(".hexagon/state.db")).map_err(cmd_err)?;
+    let access = hexagon_core::image_gen::ImageAccess::new(hexagon_core::credentials::active());
+    let cx = hexagon_core::artist_proposal::DrawCtx {
+        db: &db,
+        root: &root,
+        project_id: PROJECT_ID,
+        agent_id: None,
+        stage_run_id: None,
+    };
+    hexagon_core::artist_proposal::regenerate(&cx, &access, &id, &role).map_err(cmd_err)
+}
+
+/// 票 20：「全部应用」——负责人勾下的格按角色写头像（票 17 写入路径）。纯文件 + 一条轨迹。
+#[tauri::command]
+fn artist_apply(
+    state: ProjectState<'_>,
+    id: String,
+    roles: Vec<String>,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_project_conn(&state, |db, root| {
+        hexagon_core::artist_proposal::apply(db, root, PROJECT_ID, &id, &roles)
     })
 }
 
@@ -4022,12 +4148,21 @@ pub fn run() {
             confirm_push,
             reject_push,
             push_targets,
+            // 发布目标（owner-followups-1015 #14）：control 组，锁外自开账本连接。
+            release_targets,
+            save_release_target,
+            remove_release_target,
+            set_release_credential,
+            remove_release_credential,
             set_agent_avatar,
             clear_agent_avatar,
             agent_avatar,
             role_avatar,
             set_role_avatar,
             clear_role_avatar,
+            artist_proposal,
+            artist_regenerate,
+            artist_apply,
             artifact_content_at,
             set_agent_sleeping,
             remove_agent,

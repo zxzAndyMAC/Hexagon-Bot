@@ -71,16 +71,15 @@ pub fn probe_key(
         .filter(|s| !s.is_empty());
     let key = match typed {
         Some(k) => Some(k),
-        None => store
-            .get(&provider_key_name(&def.id))?
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty()),
+        None => store.get(&provider_key_name(&def.id))?,
     };
-    let Some(key) = key else {
+    // 票 25：判定看规范化后的地址——检测的就是将要保存、将要请求的那一个。
+    let auth = crate::provider_loopback::decide(key, &base_url);
+    if auth == crate::provider_loopback::Auth::Missing {
         return Ok(KeyProbe::failed("missing_credential", None));
-    };
+    }
     let def = ProviderDef { base_url, ..def };
-    let catalog = match provider_config::fetch_catalog(&def, &key) {
+    let catalog = match provider_config::fetch_catalog(&def, auth.key()) {
         Ok(c) => c,
         Err(f) => return Ok(KeyProbe::failed(f.code, f.status)),
     };
@@ -279,8 +278,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got.failure.as_deref(), Some("invalid_url"));
+        // 票 25：缺钥匙只对非回环主机成立（回环免钥匙，见 keyless_* 用例）。
         let got = probe_key(
-            def("http://127.0.0.1:9".into()),
+            def("http://remote.invalid:9".into()),
             None,
             "m",
             &MemoryStore::default(),
@@ -306,7 +306,7 @@ mod tests {
         };
 
         assert_eq!(
-            fetch_code("http://127.0.0.1:9".into(), None),
+            fetch_code("http://remote.invalid:9".into(), None),
             "missing_credential"
         );
 
@@ -328,6 +328,64 @@ mod tests {
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
             ["m-1"]
         );
+    }
+
+    /// 票 25：回环 + 无钥匙 → 检测与拉取都直接请求、不带鉴权头（曾报 missing_credential，
+    /// 本机 Ollama / LM Studio 只能填假钥匙）；回环 + 有钥匙照常带头；非回环无钥匙仍拒。
+    #[test]
+    fn loopback_without_key_probes_and_fetches_without_auth_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let _path = provider_config::fixture_path(dir.path().join("providers.json"));
+        let store = MemoryStore::default();
+        let body = || serde_json::json!({"data":[{"id":"llama3"}]}).to_string();
+
+        let (url, server) = serve_once("200 OK", body());
+        let got = probe_key(def(url.clone()), None, "llama3", &store).unwrap();
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(got.ok, "{got:?}");
+        assert_eq!(got.model_listed, Some(true));
+        assert!(!request.contains("authorization"), "{request}");
+
+        let (url, server) = serve_once("200 OK", body());
+        crate::provider_admin::save(def(url), None, &store).unwrap();
+        let models = crate::provider_admin::fetch_models("probe", &store).unwrap();
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert_eq!(models[0].id, "llama3");
+        assert!(!request.contains("authorization"), "{request}");
+
+        // 回环 + 有钥匙：照常带头（免钥匙只在没钥匙时生效）。
+        let (url, server) = serve_once("200 OK", body());
+        crate::provider_admin::save(def(url), Some("sk-local".into()), &store).unwrap();
+        crate::provider_admin::fetch_models("probe", &store).unwrap();
+        assert!(server.join().unwrap().contains("Bearer sk-local"));
+
+        // 主机名形似回环的远端：仍 missing_credential，不发请求。
+        let got = probe_key(
+            def("http://localhost.evil.invalid:9".into()),
+            None,
+            "m",
+            &MemoryStore::default(),
+        )
+        .unwrap();
+        assert_eq!(got.failure.as_deref(), Some("missing_credential"));
+    }
+
+    /// 票 25：主对话槽「缺密钥不能激活」对回环服务商放宽——slot_ready 与对话请求同口径。
+    #[test]
+    fn loopback_slot_is_ready_without_key_but_remote_is_not() {
+        let mut doc = provider_config::ProviderDoc::default();
+        doc.providers.push(def("http://127.0.0.1:11434".into()));
+        doc.slots.insert(
+            "default".into(),
+            provider_config::SlotBinding {
+                provider_id: "probe".into(),
+                model: "llama3".into(),
+            },
+        );
+        let store = MemoryStore::default();
+        assert!(provider_config::slot_ready(&doc, &store, "default"));
+        doc.providers[0].base_url = "https://api.example.com/v1".into();
+        assert!(!provider_config::slot_ready(&doc, &store, "default"));
     }
 
     proptest::proptest! {

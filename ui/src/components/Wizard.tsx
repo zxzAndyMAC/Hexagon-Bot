@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { api, asCmdError, errText, isTauri, type BriefQA, type BriefQuestion, type DirReport, type ProviderView, type ProvidersView, type RoleDef, type RoleTemplate } from '../api'
 import { applyCreateFailure, type CreateStep } from '../createProgress'
 import { useUiStore } from '../store'
-import { providerStepReady } from '../providerGate'
+import { providerKeyReady, providerStepReady } from '../providerGate'
 import { Button } from '@/components/ui/button'
 import { Icon } from './Icon'
 import { GenerationRetry, StopGeneration, type GenerationFailure } from './WizardGeneration'
@@ -199,12 +199,12 @@ export function Wizard({ onDone, onCancel, seed }: {
     if (step === 'roles' && !providersLoaded) recheckKeys()
   }, [step, providersLoaded, recheckKeys])
 
-  // 槽就绪 = 绑定存在 && 供应商启用 && key 已存（本槽 → default 兜底，同回合内核解析序）
+  // 槽就绪 = 绑定存在 && 供应商启用 && key 已存或本机回环端点（票 25；本槽 → default 兜底，同回合内核解析序）
   const slotReady = useCallback(
     (slot: string) => {
       const b = doc.slots[slot] ?? doc.slots.default
       const provider = b ? doc.providers.find((p) => p.id === b.provider_id) : undefined
-      return !!(provider && provider.enabled && provider.key_set)
+      return !!(provider && provider.enabled && providerKeyReady(provider))
     },
     [doc],
   )

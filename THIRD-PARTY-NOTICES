@@ -1,0 +1,81 @@
+Hexagon third-party notices
+
+These notices apply to the third-party materials named below, not to Hexagon as
+a whole. Hexagon itself is licensed under the MIT License in LICENSE.
+
+
+1. Model provider catalog data (Cherry Studio provider registry)
+
+Files:    crates/hexagon-core/data/provider-catalog/providers.json
+          crates/hexagon-core/data/provider-catalog/extras.json (derived: icon
+          keys and up to three registered sample models per provider)
+Source:   https://github.com/CherryHQ/cherry-studio/tree/9d1bf05fe2c78231d43e383118d5131f8ad5f49f/packages/provider-registry
+Revision: 9d1bf05fe2c78231d43e383118d5131f8ad5f49f (pinned snapshot, not updated online)
+License:  MIT. The upstream package license is kept verbatim in
+          crates/hexagon-core/data/provider-catalog/LICENSE and reproduced here:
+
+MIT License
+
+Copyright (c) Cherry Studio contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+2. Model provider brand icons (Cherry Studio packages/ui)
+
+Files:    ui/src/assets/providers/*.svg (81 files) and manifest.json
+Source:   https://github.com/CherryHQ/cherry-studio/tree/9d1bf05fe2c78231d43e383118d5131f8ad5f49f/packages/ui
+Revision: 9d1bf05fe2c78231d43e383118d5131f8ad5f49f
+License:  The upstream package.json declares license "MIT" and author
+          "Cherry Studio"; the upstream README also declares MIT. No standalone
+          LICENSE file or per-icon copyright notice was found in that package at
+          the pinned revision, so no copyright line is asserted for it here.
+          License declarations:
+          https://github.com/CherryHQ/cherry-studio/blob/9d1bf05fe2c78231d43e383118d5131f8ad5f49f/packages/ui/package.json
+          https://github.com/CherryHQ/cherry-studio/blob/9d1bf05fe2c78231d43e383118d5131f8ad5f49f/packages/ui/README.md#license
+          The MIT permission and warranty terms reproduced in section 1 are the
+          terms corresponding to that declaration.
+
+Integrity: 78 files are unchanged upstream SVGs. Three files were converted
+from two upstream icon components (radeon-cloud-light.svg from
+radeon-cloud/light.tsx; opencode-light.svg and opencode-dark.svg from
+general/open-code.tsx) without redrawing paths. manifest.json records the
+upstream path and SHA-256 of every file (and the upstream SHA-256 of the
+converted sources); the test ui/src/providerIcons.assets.test.ts verifies them.
+
+The Cherry Studio repository root is separately licensed under AGPL-3.0. That
+root license is kept for reference in ui/src/assets/providers/UPSTREAM-ROOT-LICENSE
+together with the registry license (UPSTREAM-REGISTRY-LICENSE). No Cherry Studio
+application code is included in Hexagon, and the root license is not applied as
+a replacement for the packages' own MIT declarations.
+
+Trademarks: Provider names and logos are trademarks of their respective owners.
+They are shown only to identify each provider in Hexagon's settings and setup
+screens. Their use does not imply endorsement of Hexagon by, or affiliation
+with, any provider. The MIT declaration of the icon package does not establish
+rights in third-party trademarks, and the rights chain of each logo has not
+been verified item by item.
+
+
+3. File type icons (Material Icon Theme)
+
+Files:    ui/src/assets/fileicons/*.svg
+Source:   Material Icon Theme v5.38.1 (Material Extensions)
+License:  MIT, Copyright (c) 2025 Material Extensions. The full license text is
+          kept verbatim in ui/src/assets/fileicons/LICENSE.

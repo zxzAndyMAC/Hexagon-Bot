@@ -21,6 +21,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 mod permission_control;
+mod release_targets;
+#[cfg(test)]
+mod release_targets_tests;
 mod session_resume;
 mod session_schedule;
 mod session_worktree;
@@ -173,6 +176,8 @@ pub enum ApiError {
     Artifact(#[from] crate::artifacts::ArtifactError),
     #[error(transparent)]
     Push(#[from] crate::push::PushError),
+    #[error(transparent)]
+    Release(#[from] crate::release_targets::ReleaseError),
     #[error(transparent)]
     Autonomy(#[from] crate::autonomy::AutonomyError),
     #[error(transparent)]
@@ -1876,6 +1881,7 @@ impl Workbench {
             tasks: self.tasks.clone(),
             subagent: None,
             websearch: self.websearch.clone(),
+            images: Some(crate::image_gen::ImageAccess::new(self.creds.clone())),
             embedder: self.embedder.clone(),
             subagent_provider: None,
             reads: Default::default(),
@@ -4954,6 +4960,8 @@ pub fn data_boundary(
     Ok(crate::data_boundary::read(root, store, &doc))
 }
 
+#[cfg(test)]
+mod artist_image_tests;
 #[cfg(test)]
 mod artist_tests;
 #[cfg(test)]

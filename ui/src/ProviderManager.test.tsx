@@ -148,6 +148,29 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     root.unmount()
   })
 
+  it('本机回环端点未存钥匙：状态点为 on、不显示缺少钥匙、default 槽算就绪、检测可用（票 25）', async () => {
+    const local = { ...prov('ollama', 'Ollama', false, true), base_url: 'http://localhost:11434/v1' }
+    const lookalike = { ...prov('evil', 'EvilCo', false, true), base_url: 'http://localhost.evil.com/v1' }
+    vi.mocked(api.listProviders).mockResolvedValue({ providers: [local, lookalike], slots: { default: { provider_id: 'ollama', model: 'llama3' } } })
+    const { el, root } = await render(<ProviderManager />)
+    // 本机 on，形似本机的远端仍 warn
+    expect(el.querySelectorAll('[data-slot="dot"][data-tone="on"]')).toHaveLength(1)
+    expect(el.querySelectorAll('[data-slot="dot"][data-tone="warn"]')).toHaveLength(1)
+    expect(el.querySelector('[data-slot-state="bound"]')!.textContent).toBe('Ready')
+    expect(el.textContent).not.toContain('Missing key')
+    const row = (name: string) =>
+      [...el.querySelectorAll('div')].find((d) => d.textContent === name)!.closest('div')!
+    const checkBtn = () =>
+      [...el.querySelectorAll('button')].find((b) => /check|检测/i.test(b.textContent ?? ''))!
+    await act(async () => row('Ollama').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(el.textContent).not.toContain('no key configured')
+    expect(checkBtn().getAttribute('aria-disabled')).toBeNull()
+    await act(async () => row('EvilCo').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(el.textContent).toContain('no key configured')
+    expect(checkBtn().getAttribute('aria-disabled')).toBe('true')
+    root.unmount()
+  })
+
   // 固定槽是 UI 词表（providers.slot_*）——显示本地化名 + 原槽名参照；
   // 角色自定义槽名是模板数据，原文照显不翻译。
   it('槽位名本地化：固定槽显示本地化名+原键，自定义槽原文', async () => {
