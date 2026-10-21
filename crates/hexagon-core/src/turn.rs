@@ -2019,6 +2019,7 @@ fn persist_activation_observation(
     call: usize,
     content: &[ContentBlock],
 ) -> Result<(), TurnError> {
+    let content = crate::release_chat::scrub_observation(content);
     db.append_event(
         &ctx.project_id,
         EventKind::System,

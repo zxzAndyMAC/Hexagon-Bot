@@ -365,6 +365,9 @@ impl Registry {
         r.register(ProposeExperience);
         // owner-followups-1015 票 19：调度方召唤画师（exec 内限项目经理）。
         r.register(crate::artist::SummonArtist);
+        // owner-followups-1015 票 16：聊天里拟登记发布目标 / 发起发布——只产卡，负责人批准才生效。
+        r.register(crate::release_chat::ProposeReleaseTarget);
+        r.register(crate::release_chat::RequestRelease);
         r.register(WebFetch);
         r.register(deps::DependencyFetch);
         r.register(verify_browser::BrowserVerify);

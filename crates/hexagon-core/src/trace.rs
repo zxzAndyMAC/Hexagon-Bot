@@ -825,6 +825,9 @@ pub(crate) const SYSTEM_SUBKINDS: &[&str] = &[
     // owner-followups-1015 #14：负责人登记 / 修改 / 删除发布目标，录入 / 替换 / 移除其凭据（只记名字）
     "release_target_changed",
     "release_credential_changed",
+    // owner-followups-1015 #16：Agent 在聊天里拟登记发布目标（出卡）/ 负责人批准·驳回该卡（只记名字）
+    "release_target_proposed",
+    "release_target_proposal_answered",
     // stall-watch 票 01–04：重触发 / 调查 / 入卡 / 收场
     "stall_carded",
     "stall_closed",

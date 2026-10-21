@@ -64,6 +64,12 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         {
             None
         }
+        // owner-followups-1015 #16 (ADR 0093 follow-up ruling: delegation may not
+        // register release targets): a Register release target card stays with the
+        // owner — not even "end" — so a model-drafted command is only ever registered
+        // by the owner's own approval. Cost model: a held card waits for the owner;
+        // a delegated approval registers a command delegation may then release.
+        ("release_target", _) => None,
         ("permission", _) => Some(format!(
             "permission:{}",
             action().unwrap_or_else(|| card.id.clone())

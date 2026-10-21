@@ -323,6 +323,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0066_release_card",
         include_str!("../migrations/0066_release_card.sql"),
     ),
+    (
+        "0067_release_target_card",
+        include_str!("../migrations/0067_release_target_card.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]

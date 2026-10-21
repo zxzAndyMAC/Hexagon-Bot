@@ -5,9 +5,9 @@
 //! 本模块收口：enqueue/answer/annotate/queued 四个动词 + 读模型；
 //! `rg "pending_questions"` 在本模块外只允许命中 schema 迁移与注释。
 //!
-//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022/0060/0064/0066）：
-//! kind ∈ {permission, stamp, escalation, push, release, recovery, install, grant, stall, worktree}
-//! （push 原名 publish，ADR 0093 改名，迁移 0064 映射旧行；release 是发布确认卡，迁移 0066）
+//! 词表对齐 schema CHECK（migrations 0001/0006/0007/0017/0022/0060/0064/0066/0067）：
+//! kind ∈ {permission, stamp, escalation, push, release, release_target, recovery, install, grant, stall, worktree}
+//! （push 原名 publish，ADR 0093 改名，迁移 0064 映射旧行；release 是发布确认卡，迁移 0066；release_target 是登记发布目标卡，迁移 0067）
 //! state ∈ {queued, answered, expired}
 //!
 //! 注意 kind='stamp' 是过载的：阶段盖章卡（payload={stage,run_id}）与
@@ -47,6 +47,10 @@ pub enum CardKind {
     /// 发布确认卡（owner-followups-1015 #15，迁移 0066）：执行已登记的发布目标。必问、永不记忆——
     /// 没有任何记住入口（不写 permission_rules、不读记忆层），每次发布都是一张新卡。
     Release,
+    /// 「登记发布目标」卡（owner-followups-1015 #16，迁移 0067）：Agent 在聊天里拟的发布目标，负责人批准才
+    /// 写入登记表。托管不代批（managed `decision_key` 不接管）。被否决：搭 release 卡种加 sub——托管可确认
+    /// release 卡，同卡种让托管路由按 sub 分叉，漏判一处就是托管替负责人登记了一条命令。
+    ReleaseTarget,
     /// 技能或 MCP 的授权确认（票 04）。不是权限卡。
     Grant,
     /// 失速卡（stall-watch 票 02 / ADR 0074）：只有「再试一次」「知道了」，
@@ -69,6 +73,7 @@ impl CardKind {
             Self::Install => "install",
             Self::Push => "push",
             Self::Release => "release",
+            Self::ReleaseTarget => "release_target",
             Self::Grant => "grant",
             Self::Stall => "stall",
             Self::Worktree => "worktree",
@@ -85,6 +90,7 @@ impl CardKind {
             "install" => Ok(Self::Install),
             "push" => Ok(Self::Push),
             "release" => Ok(Self::Release),
+            "release_target" => Ok(Self::ReleaseTarget),
             "grant" => Ok(Self::Grant),
             "stall" => Ok(Self::Stall),
             "worktree" => Ok(Self::Worktree),
@@ -250,7 +256,7 @@ pub fn annotate_queued_where(
 pub struct QueuedCard {
     pub id: String,
     #[ts(
-        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'release' | 'grant' | 'stall' | 'worktree'"
+        type = "'permission' | 'stamp' | 'escalation' | 'recovery' | 'install' | 'push' | 'release' | 'release_target' | 'grant' | 'stall' | 'worktree'"
     )]
     // schema CHECK 词表钉死（migrations/*.sql / CardKind::as_str）
     pub kind: String,

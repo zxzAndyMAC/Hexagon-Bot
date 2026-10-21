@@ -684,14 +684,13 @@ fn session_capabilities(
 
 /// Pending dock tier, lower is more severe. Mirrors `ui/src/decisions.ts`
 /// SEVERITY and the CONTEXT「待决坞」ruling (2026-10-12): recovery = stall =
-/// push = release = worktree = install = grant, then stage stamp, escalation,
+/// push = release = release_target = worktree = install = grant, then stage stamp, escalation,
 /// permission, proposal stamp. Re-audit 2026-10-13: the earlier ranking
 /// put recovery and stall below permission and mislabelled the summary.
 fn pending_tier(card: &hexagon_core::cards::QueuedCard) -> (u8, &'static str) {
     match card.kind.as_str() {
-        "recovery" | "stall" | "push" | "release" | "worktree" | "install" | "grant" => {
-            (0, "critical")
-        }
+        "recovery" | "stall" | "push" | "release" | "release_target" | "worktree" | "install"
+        | "grant" => (0, "critical"),
         "stamp"
             if card
                 .payload
@@ -2931,6 +2930,31 @@ fn reject_release(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> 
     hexagon_core::release::reject(&db, PROJECT_ID, &qid).map_err(cmd_err)
 }
 
+// ---- 登记发布目标卡（owner-followups-1015 #16，control 组）----
+// Agent 在聊天里拟的发布目标：负责人在卡上批准才写入登记表；裁决人钉死 "owner"——
+// 这两个命令只从负责人的卡按钮调用，托管不接管本卡种（core managed decision_key）。
+#[tauri::command(async)]
+fn approve_release_target_card(
+    state: ProjectState<'_>,
+    qid: String,
+) -> Result<hexagon_core::release_targets::ReleaseTarget, CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_chat::approve(
+        &db,
+        PROJECT_ID,
+        &qid,
+        &*hexagon_core::credentials::active(),
+        "owner",
+    )
+    .map_err(cmd_err)
+}
+
+#[tauri::command(async)]
+fn reject_release_target_card(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
+    let db = release_db(&state)?;
+    hexagon_core::release_chat::reject(&db, PROJECT_ID, &qid, "owner").map_err(cmd_err)
+}
+
 #[tauri::command]
 fn set_agent_avatar(
     state: ProjectState<'_>,
@@ -4185,6 +4209,8 @@ pub fn run() {
             request_release,
             confirm_release,
             reject_release,
+            approve_release_target_card,
+            reject_release_target_card,
             set_agent_avatar,
             clear_agent_avatar,
             agent_avatar,
@@ -4554,7 +4580,14 @@ mod session_host_command_tests {
             state: "queued".into(),
         };
         for kind in [
-            "recovery", "stall", "push", "release", "worktree", "install", "grant",
+            "recovery",
+            "stall",
+            "push",
+            "release",
+            "release_target",
+            "worktree",
+            "install",
+            "grant",
         ] {
             assert_eq!(
                 pending_tier(&card(kind, serde_json::json!({}))),
