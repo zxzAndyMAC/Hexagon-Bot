@@ -167,6 +167,28 @@ it('numbers drag rings 1 (start) and 2 (end) in the thumbnail and the preview, w
   expect(preview.querySelector('[data-testid="computer-target-link"], line, path.computer-target')).toBeNull()
 })
 
+// owner-followups-1015 #30 第 1 项（2026-10-20 负责人裁决）：#04 的序号是裸 11px `--red` 字，落在彩色 / 绿色控件上认不出。
+// 改为圈外一角的实心底衬：`--red-strong` 底白字（白字 5.0:1 起，与底下截图无关）+ 1px `--surface` 描边与同色底分开；
+// 底衬朝截图中心那一角，不遮圈内目标、贴边也不被裁。缩略与放大模态同一组件。
+it('backs each drag ordinal with a solid red-strong badge outside the ring, toward the image centre', async () => {
+  await i18n.changeLanguage('zh-CN')
+  const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', image_width: 1000, image_height: 1000 }
+  await renderWithLoadedThumb(shot, { width: 1000, height: 1000 }, { op: 'drag', snapshot_id: 's1', x: 250, y: 500, to_x: 750, to_y: 950 })
+  for (const root of [el.querySelector('.computer-action-body .desktop-screenshot-thumbnail')!, el.querySelector('dialog.desktop-screenshot-preview')!]) {
+    for (const ring of root.querySelectorAll<HTMLElement>('[data-testid="computer-target-ring"]')) {
+      const badge = ring.querySelector<HTMLElement>('[data-ring-ordinal]')!
+      expect(badge).not.toBeNull()
+      expect(badge.className).toContain('bg-red-strong')
+      expect(badge.className).toContain('text-white')
+      expect(badge.className).toContain('border-surface')
+      expect(badge.className).not.toContain('text-red ')
+    }
+  }
+  const preview = el.querySelector('dialog.desktop-screenshot-preview')!
+  expect([...preview.querySelectorAll<HTMLElement>('[data-ring-ordinal]')].map((b) => [b.textContent, b.dataset.corner]))
+    .toEqual([['1', 'top-right'], ['2', 'top-left']])
+})
+
 it('keeps a click to one unnumbered ring', async () => {
   await i18n.changeLanguage('zh-CN')
   const shot = { screenshot_path: '/repo/.hexagon/computer-use/screenshots/0123.png', snapshot_id: 's1', image_width: 1600, image_height: 1000 }
@@ -175,6 +197,7 @@ it('keeps a click to one unnumbered ring', async () => {
     const rings = root.querySelectorAll<HTMLElement>('[data-testid="computer-target-ring"]')
     expect(rings).toHaveLength(1)
     expect(rings[0].textContent).toBe('')
+    expect(rings[0].querySelector('[data-ring-ordinal]')).toBeNull()
   }
 })
 

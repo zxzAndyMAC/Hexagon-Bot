@@ -49,6 +49,7 @@ beforeEach(async () => {
   vi.spyOn(api, 'projectOpen').mockResolvedValue(true)
   vi.spyOn(api, 'runOpeningIntake').mockResolvedValue()
   vi.spyOn(api, 'mcpServices').mockResolvedValue([])
+  vi.spyOn(api, 'openWithCandidates').mockResolvedValue([])
   vi.spyOn(useUiStore.getState(), 'refresh').mockResolvedValue()
   vi.spyOn(useUiStore.getState(), 'refreshFast').mockResolvedValue()
   el = document.createElement('div')
@@ -71,7 +72,8 @@ describe('画布页签右键菜单（A16b 第一批）', () => {
     await openTabs([art, file, agent], art.id)
     await rightClick(tabEl(art.id))
     expect(menu()).not.toBeNull()
-    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['close', 'closeOthers', 'closeRight', 'copyPath'])
+    // #31：文件 / 产物页签末尾加「打开方式 ▸」子菜单触发行（也是 menuitem）。
+    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['close', 'closeOthers', 'closeRight', 'copyPath', 'openWith'])
   })
 
   it('Agent 页签没有「复制路径」（种类不适用 → 不渲染）', async () => {
@@ -93,7 +95,7 @@ describe('画布页签右键菜单（A16b 第一批）', () => {
     await act(async () => { await i18n.changeLanguage('zh-CN') })
     await openTabs([art], art.id)
     await rightClick(tabEl(art.id))
-    expect(rows().map((r) => r.textContent)).toEqual(['关闭' + formatBinding('mod+W'), '关闭其他没有其他页签', '关闭右侧右侧没有页签', '复制路径'])
+    expect(rows().map((r) => r.textContent)).toEqual(['关闭' + formatBinding('mod+W'), '关闭其他没有其他页签', '关闭右侧右侧没有页签', '复制路径', '打开方式'])  // #31 子菜单触发行
   })
 
   it('右键不改选中：非当前页签不激活，只给目标出焦点环标记', async () => {

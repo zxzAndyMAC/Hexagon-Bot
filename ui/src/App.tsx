@@ -20,7 +20,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { Composer } from './components/Composer'
 import { SettingsPage, type Section } from './components/SettingsPage'
 import { Launcher } from './components/Launcher'
-import { CommandPalette } from './components/CommandPalette'
+import { CommandPalette, type PaletteScope } from './components/CommandPalette'
 import { api, errText, onTurnDelta, onToolOutput } from './api'
 import { confirmIntakeDraft } from './intakeDraft'
 import { useUiStore } from './store'
@@ -31,7 +31,7 @@ import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
 import { bindingFor, matches } from './keymap'
 import { closeOtherTabs, closeTabsToRight, copyTabPath, tabPath, stepTab } from './tabActions'
-import { copyPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
+import { copyProjectPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
 import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { dispatchMessageAction, messageTarget } from './messageActions'
@@ -48,6 +48,8 @@ export default function App() {
   useEffect(() => { settingsOpenRef.current = settingsOpen }, [settingsOpen])
   const [computerSettings, setComputerSettings] = useState<Section>('general')
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // #31：openWith 键位打开的是面板的「打开方式」视图；⌘K 打开全量视图。
+  const [paletteScope, setPaletteScope] = useState<PaletteScope>('all')
   const flowDialogOpen = useUiStore((s) => s.flowDialogOpen)
   // ADR 0088 / 0090（票 03）：主区视图三态——对话 / 画布全宽 / 用量详情；后两种时对话与输入条一起让出主区。
   const view = useUiStore(mainView)
@@ -233,6 +235,7 @@ export default function App() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (matches(e, bindingFor('commandPalette'))) {
         e.preventDefault()
+        setPaletteScope('all')
         setPaletteOpen((v) => !v)
         return
       }
@@ -331,6 +334,15 @@ export default function App() {
       }
       // owner-followups-1015 #07（A16b 文件树行）：路径动作（复制 / 插入到输入条 / 在访达中显示）的键位入口，
       // 默认空绑定；作用对象 = 焦点文件树行，否则画布可见时的当前文件 / 产物页签（#05 的 copyPath 同此扩展）。
+      // owner-followups-1015 #31（A16b「打开方式」）：默认空绑定；打开命令面板的「打开方式」视图，
+      // 面板按打开前的焦点（文件树行）或当前文件 / 产物页签列编辑器，另列整个项目。
+      if (matches(e, bindingFor('openWith')) && bindingFor('openWith')) {
+        e.preventDefault()
+        if (useUiStore.getState().modalScope !== 'workbench') return
+        setPaletteScope('openWith')
+        setPaletteOpen(true)
+        return
+      }
       for (const action of ['copyPath', 'insertPath', 'revealPath'] as const) {
         const b = bindingFor(action)
         if (!b || !matches(e, b)) continue
@@ -341,8 +353,8 @@ export default function App() {
         const row = treeRowTarget()
         const target = row ?? (tab ? { path: tab, kind: 'file' as const } : null)
         if (!target) return
-        // 作用于页签时与页签右键同口径写绝对路径（票 29）；文件树行仍写相对路径
-        if (action === 'copyPath') void (row ? copyPath(row.path) : copyTabPath(s.activeTab!))
+        // 页签与文件树行都写绝对路径（票 29 页签、#30 文件树行；2026-10-20 负责人裁决两处统一）
+        if (action === 'copyPath') void (row ? copyProjectPath(row.path) : copyTabPath(s.activeTab!))
         else if (action === 'revealPath') void revealPath(target.path)
         else {
           const path = treeInsertPath(target)
@@ -404,14 +416,14 @@ export default function App() {
               setSettingsOpen(false)
             }}
           />
-          {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+          {paletteOpen && <CommandPalette scope={paletteScope} onClose={() => setPaletteOpen(false)} />}
         </div>
       )}
     <div aria-hidden={settingsOpen || undefined} data-workbench data-main-view={view} data-focus-mode={focusMode || undefined}
       style={{ height: '100%', display: settingsOpen ? 'none' : 'flex' }}>
       {!settingsOpen && shell.side !== 'hidden' && (
         <>
-          <Sidebar onSearch={() => setPaletteOpen(true)} onSettings={openSettings} onProjectClosed={() => setProjectOpen(false)}
+          <Sidebar onSearch={() => { setPaletteScope('all'); setPaletteOpen(true) }} onSettings={openSettings} onProjectClosed={() => setProjectOpen(false)}
             forceCollapsed={shell.sideForced} />
           <SidebarHandle forced={shell.sideForced} />
         </>
@@ -452,7 +464,7 @@ export default function App() {
         </div>
       </div>
       {!settingsOpen && <FlowDialog />}
-      {!settingsOpen && paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSettings={openSettings} />}
+      {!settingsOpen && paletteOpen && <CommandPalette scope={paletteScope} onClose={() => setPaletteOpen(false)} onSettings={openSettings} />}
     </div>
     </TooltipProvider>
   )

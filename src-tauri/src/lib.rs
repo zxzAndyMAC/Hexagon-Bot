@@ -2079,6 +2079,36 @@ fn reveal_repo_path(state: ProjectState<'_>, path: String) -> Result<(), CmdErro
     reveal::show_in_file_manager(&target).map_err(cmd_err)
 }
 
+/// 「打开方式」候选（owner-followups-1015 #31，A16b）：白名单 ∩ 系统登记、按目标种类过滤，
+/// 判定全在 core（`open_with::candidates`）。只读项目根，不碰工作台。
+// D01 read: only the current control connection for the project root; no workbench/turn lock.
+#[tauri::command(async)]
+fn open_with_candidates(
+    state: ProjectState<'_>,
+    path: String,
+) -> Result<Vec<hexagon_core::open_with::OpenWithApp>, CmdError> {
+    with_project_conn(&state, |_db, root| {
+        hexagon_core::open_with::candidates(hexagon_core::open_with::system_catalog(), root, &path)
+    })
+}
+
+/// 用指定应用打开项目内路径（控制组，#31）：core 重判根约束 + 白名单 + 当下候选后才启动，
+/// 参数逐个交给系统、不经 shell。
+#[tauri::command]
+fn open_with(state: ProjectState<'_>, path: String, app_id: String) -> Result<(), CmdError> {
+    let root = with_project_conn(&state, |_db, root| {
+        Ok::<_, hexagon_core::open_with::OpenWithError>(root.to_path_buf())
+    })?;
+    // 锁在启动外部进程之前释放（同 reveal_repo_path）。
+    hexagon_core::open_with::open_with(
+        hexagon_core::open_with::system_catalog(),
+        &root,
+        &path,
+        &app_id,
+    )
+    .map_err(cmd_err)
+}
+
 /// 小改写回（控制组，落盘）。不写穿符号链接。
 #[tauri::command]
 fn write_repo_file(
@@ -4130,6 +4160,8 @@ pub fn run() {
             create_repo_dir,
             write_repo_file,
             reveal_repo_path,
+            open_with_candidates,
+            open_with,
             usage,
             usage_context_pressure,
             open_stage,

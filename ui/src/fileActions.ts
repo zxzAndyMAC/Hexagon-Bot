@@ -1,7 +1,8 @@
 // 项目路径动作（components A16b 第一批「文件树行」，owner-followups-1015 #07）。
 // 右键菜单、命令面板、keymap 三个入口共用这里——右键不是唯一入口（A16b「定位」）。
 // 路径一律项目相对（与树、页签、# 路径块同一形）；「在访达中显示」的根约束在 core 判，这里不判。
-// 例外：画布页签的「复制路径」复制绝对路径（票 29，2026-10-20 负责人裁决；票 05 原为相对路径），见 absolutePath。
+// 例外：「复制路径」复制绝对路径——画布页签自票 29、文件树行自 #30（2026-10-20 负责人裁决：两处曾一相对一绝对，
+// 同一文件复制出两种形；票 05 / #07 原为相对路径）。两处都走 copyProjectPath（= absolutePath + copyPath）。
 import i18n from './i18n'
 import { api } from './api'
 import { insertComposerPath } from './composerFill'
@@ -22,7 +23,7 @@ export function revealLabelKey(platform: RevealPlatform = revealPlatform): strin
   return platform === 'mac' ? 'ctx.revealMac' : platform === 'windows' ? 'ctx.revealWindows' : 'ctx.revealLinux'
 }
 
-/** 复制项目相对路径；成功 toast「已复制路径」，失败走 toastError（A16b 错误态：菜单已关）。 */
+/** 把给定路径原样写入剪贴板；成功 toast「已复制路径」，失败走 toastError（A16b 错误态：菜单已关）。 */
 export async function copyPath(path: string) {
   try {
     await navigator.clipboard.writeText(path)
@@ -41,6 +42,11 @@ export function absolutePath(root: string | null, rel: string): string {
   const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/'
   const base = root.endsWith(sep) ? root.slice(0, -1) : root
   return `${base}${sep}${sep === '/' ? rel : rel.replaceAll('/', sep)}`
+}
+
+/** 复制项目内路径的绝对形（文件树行与画布页签共用，#30）：项目根 + 相对路径，没有项目根时退回相对路径。 */
+export async function copyProjectPath(rel: string) {
+  await copyPath(absolutePath(useUiStore.getState().projectRoot, rel))
 }
 
 /** 在系统文件管理器中显示。越界 / 不存在由 core 拒（errors.reveal_*），这里只出 toast。 */

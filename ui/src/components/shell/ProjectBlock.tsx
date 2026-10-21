@@ -9,6 +9,8 @@ import { switchProject } from '../../projectSwitch'
 import { toastError } from '../../toast'
 import type { RecentProject } from '../../gen/RecentProject'
 import { Icon } from '../Icon'
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { OpenWithSubmenu } from '../OpenWithMenu'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -43,7 +45,11 @@ export function ProjectBlock({ onProjectClosed }: { onProjectClosed: () => void 
   const others = recents.filter((r) => r.exists && r.name !== projectName)
 
   return (
+    // #31（A16b「打开方式」）：项目块右键 = 只有「打开方式 ▸」，IDE 以文件夹加载整个项目（路径空串 = 项目根）；
+    // 左键照旧开项目菜单。同一入口在命令面板「打开方式…」与 openWith 键位里也有。
+    <ContextMenu>
     <DropdownMenu onOpenChange={(open) => { if (open) api.recentProjects().then(setRecents).catch(() => setRecents([])) }}>
+      <ContextMenuTrigger asChild>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -60,6 +66,7 @@ export function ProjectBlock({ onProjectClosed }: { onProjectClosed: () => void 
           <Icon name="chevron-down" size={14} className="text-ink-3" />
         </button>
       </DropdownMenuTrigger>
+      </ContextMenuTrigger>
       <DropdownMenuContent align="start" className="w-[240px]">
         {others.length > 0 && (
           <>
@@ -77,5 +84,9 @@ export function ProjectBlock({ onProjectClosed }: { onProjectClosed: () => void 
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+      <ContextMenuContent>
+        <OpenWithSubmenu path="" />
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
