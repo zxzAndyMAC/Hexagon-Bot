@@ -4,7 +4,7 @@ import { api, errText, type RepoEntry } from '../api'
 import { useUiStore } from '../store'
 import { TREE_DRAG_MIME, treeDragPayload, treeInsertPath } from '../composerAtoms'
 import { isMac } from '../keymap'
-import { copyPath, insertPathToComposer, revealLabelKey, revealPath, TREE_PATH_ATTR } from '../fileActions'
+import { copyProjectPath, insertPathToComposer, revealLabelKey, revealPath, TREE_PATH_ATTR } from '../fileActions'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
@@ -204,7 +204,7 @@ function TreeRowMenu({ entry, onOpen, children }: { entry: RepoEntry; onOpen: ()
           </ContextMenuItem>
         )}
         {(entry.kind === 'file' || insert) && <ContextMenuSeparator />}
-        <ContextMenuItem data-ctx-item="copyPath" action="copyPath" onSelect={() => void copyPath(entry.path)}>
+        <ContextMenuItem data-ctx-item="copyPath" action="copyPath" onSelect={() => void copyProjectPath(entry.path)}>
           {t('ctx.copyPath')}
         </ContextMenuItem>
         <ContextMenuItem data-ctx-item="reveal" action="revealPath" onSelect={() => void revealPath(entry.path)}>

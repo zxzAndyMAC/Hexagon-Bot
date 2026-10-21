@@ -2,7 +2,7 @@
 // 右键菜单、命令面板、keymap 三个入口共用这里——右键不是唯一入口（A16b「定位」）。
 // 「关闭」不在这里：复用 store.closeTab。
 import { isPinnedTab, useUiStore, type WorkTab } from './store'
-import { absolutePath, copyPath } from './fileActions'
+import { copyProjectPath } from './fileActions'
 
 /** 可见顺序（A22「溢出」，#06）：固定页签（产物 / 项目文件）在前，其余保持原序。页签栏、「全部页签」菜单、
  * 「关闭右侧」、上 / 下一个页签都按它走——store 由 openTab 维持同序，这里兜住直接 setState 的旧顺序。 */
@@ -62,10 +62,10 @@ export function stepTab(dir: 1 | -1) {
 }
 
 /**
- * 复制页签路径（与文件树行同一出口 fileActions.copyPath，#07）。右键菜单、命令面板、copyPath 键位共用。
- * 写绝对路径：票 05 原写项目相对路径，2026-10-20 负责人裁决改为绝对路径（票 29）；文件树行仍是相对路径。
+ * 复制页签路径（与文件树行同一出口 fileActions.copyProjectPath，#07 / #30）。右键菜单、命令面板、copyPath 键位共用。
+ * 写绝对路径：票 05 原写项目相对路径，2026-10-20 负责人裁决改为绝对路径（票 29）；文件树行随后同改（#30）。
  */
 export async function copyTabPath(id: string) {
   const path = tabPath(tabsNow().find((t) => t.id === id))
-  if (path) await copyPath(absolutePath(useUiStore.getState().projectRoot, path))
+  if (path) await copyProjectPath(path)
 }

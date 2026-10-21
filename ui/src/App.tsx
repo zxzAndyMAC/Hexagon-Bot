@@ -31,7 +31,7 @@ import { usePendingKeys } from './decisions'
 import { SwitchWaitBanner } from './components/SwitchWaitBanner'
 import { bindingFor, matches } from './keymap'
 import { closeOtherTabs, closeTabsToRight, copyTabPath, tabPath, stepTab } from './tabActions'
-import { copyPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
+import { copyProjectPath, insertPathToComposer, revealPath, treeRowTarget } from './fileActions'
 import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { dispatchMessageAction, messageTarget } from './messageActions'
@@ -341,8 +341,8 @@ export default function App() {
         const row = treeRowTarget()
         const target = row ?? (tab ? { path: tab, kind: 'file' as const } : null)
         if (!target) return
-        // 作用于页签时与页签右键同口径写绝对路径（票 29）；文件树行仍写相对路径
-        if (action === 'copyPath') void (row ? copyPath(row.path) : copyTabPath(s.activeTab!))
+        // 页签与文件树行都写绝对路径（票 29 页签、#30 文件树行；2026-10-20 负责人裁决两处统一）
+        if (action === 'copyPath') void (row ? copyProjectPath(row.path) : copyTabPath(s.activeTab!))
         else if (action === 'revealPath') void revealPath(target.path)
         else {
           const path = treeInsertPath(target)

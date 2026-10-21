@@ -128,15 +128,34 @@ describe('文件树行右键菜单（A16b 第一批）', () => {
     expect(composer().value).toBe('#README.md #src/ ')
   })
 
-  it('复制路径：写入项目相对路径并出回执', async () => {
+  // 行为变更（owner-followups-1015 #30 第 3 项，2026-10-20 负责人裁决）：#07 起文件树行写项目相对路径，
+  // 票 29 把画布页签改成绝对路径后两处不一致（同一文件右键两处复制出两种形）。文件树行也改写绝对路径，
+  // 与页签同走 fileActions.absolutePath。项目根 = 测试里的 '/test'。
+  it('复制路径：写入绝对路径并出回执（与画布页签同口径，#30）', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     await act(async () => { treeitem('src').click() })
     await flush()
     await rightClick(treeitem('main.ts'))
     await pick('copyPath')
-    expect(writeText).toHaveBeenCalledWith('src/main.ts')
+    expect(writeText).toHaveBeenCalledWith('/test/src/main.ts')
     expect(useUiStore.getState().toasts.at(-1)?.text).toBe('Path copied')
+  })
+
+  it('复制路径：copyPath 键位在焦点文件树行上同样写绝对路径（#30）', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    setBinding('copyPath', 'alt+mod+shift+c')
+    try {
+      const row = treeitem('README.md')
+      act(() => row.focus())
+      await act(async () => {
+        row.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', altKey: true, shiftKey: true, bubbles: true, cancelable: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) }))
+      })
+      expect(writeText).toHaveBeenLastCalledWith('/test/README.md')
+    } finally {
+      resetBinding('copyPath')
+    }
   })
 
   it('在访达中显示：交给宿主命令；越界被 core 拒时出 errors.reveal_outside_project', async () => {
