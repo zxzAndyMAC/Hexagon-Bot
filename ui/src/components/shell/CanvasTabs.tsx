@@ -11,6 +11,7 @@ import { Icon, type IconName } from '../Icon'
 import { FileTypeIcon } from '../FileTypeIcon'
 import { ComputerControlStatus } from '../ComputerControlStatus'
 import { ManagedPill } from '../ManagedPill'
+import { SessionPill } from '../SessionPill'
 import { IconButton, iconButtonVariants } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Dot } from '@/components/ui/dot'
@@ -238,6 +239,8 @@ export function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead:
         <div data-canvas-status className="flex flex-none items-center gap-1.5 pr-1">
           <ComputerControlStatus />
           <ManagedPill />
+          {/* owner-followups-1015 #11（C12a）：会话胶囊同挂全宽状态槽，Header 此时不渲染它 */}
+          <SessionPill />
         </div>
       )}
       {tabs.length > 0 && <AllTabsMenu tabs={tabs} active={active} title={title} />}

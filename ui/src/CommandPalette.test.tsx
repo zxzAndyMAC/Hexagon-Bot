@@ -42,3 +42,43 @@ it.each(['检查', '测试', '检验'])('lets a Chinese owner find and execute q
     else localStorage.setItem('hexagon.palette.recents', recents)
   }
 })
+
+// owner-followups-1015 #11（C12a）：会话卡收成胶囊后，「稍后继续…」常驻入口在 ⌘K（同头部 ⋯ 菜单）；
+// 做不了时灰显写原因，可做时显示 sessionScheduleOnce 的当前键位，执行即打开挂在会话状态槽上的时间弹层。
+it('lists Continue later… with its binding, disabled with a reason once a booking exists', async () => {
+  const saved = useUiStore.getState()
+  const session = {
+    session_id: 's', project_id: 'p', project_root: '/p', baseline: 'main', status: 'running' as const, current_turn_id: null, worktree: null,
+    worktree_intent: null, runtime: null, reconnect_attempts: 0, reconnect_budget: 3, is_current: true, created_at: '', updated_at: '',
+    last_branch: null, last_reason_code: null, last_elapsed_ms: 0,
+  }
+  const summary = { session, recovery_run_id: null, pending_count: 0, highest_pending_severity: null, recent_diagnostics: [], capabilities: [], triggers: [], next_action: null }
+  useUiStore.setState({ team: [], artifacts: [], pending: [], invalidate: async () => {}, sessionSummary: summary, sessionLaterOpen: false })
+  vi.spyOn(api, 'releaseTargets').mockResolvedValue([])
+  vi.spyOn(api, 'pushTargets').mockRejectedValue(new Error('none'))
+  const el = document.createElement('div')
+  document.body.append(el)
+  const root = createRoot(el)
+  const row = () => document.querySelector('[data-palette-item="c-session-later"]')!
+  try {
+    await act(async () => root.render(<CommandPalette onClose={() => {}} />))
+    expect(row().textContent).toContain('Continue later…')
+    expect(row().getAttribute('aria-disabled')).not.toBe('true')
+    await act(async () => { (row() as HTMLElement).click() })
+    expect(useUiStore.getState().sessionLaterOpen).toBe(true)
+    await act(async () => root.unmount())
+    useUiStore.setState({ sessionLaterOpen: false, sessionSummary: { ...summary, triggers: [{
+      trigger_id: 't', session_id: 's', project_root: '/p', baseline: 'main', model_slot: 'default', permission_package: [], fire_at: 1,
+      trace_id: 'x', state: 'scheduled', created_at: '', consumed_at: null,
+    }] } })
+    const again = createRoot(el)
+    await act(async () => again.render(<CommandPalette onClose={() => {}} />))
+    expect(row().getAttribute('aria-disabled')).toBe('true')
+    expect(row().textContent).toContain('Already booked')
+    await act(async () => again.unmount())
+  } finally {
+    el.remove()
+    vi.restoreAllMocks()
+    useUiStore.setState(saved, true)
+  }
+})

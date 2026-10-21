@@ -230,6 +230,9 @@ interface UiState extends ThemeSlice {
   activeTab: string | null
   modalScope: ModalScope
   flowDialogOpen: boolean
+  /// owner-followups-1015 #11（C12a）：「稍后继续…」时间弹层。入口在头部 ⋯ 菜单、⌘K 与会话胶囊弹层，
+  /// 弹层由会话胶囊宿主（SessionPill）挂一份——胶囊健康时不出现，入口不能跟着它消失。
+  sessionLaterOpen: boolean
   toasts: Toast[]
   confirmReq: ConfirmReq | null
   fileEdits: Record<string, FileEdit>
@@ -272,6 +275,7 @@ interface UiState extends ThemeSlice {
   /// ⌘.（`focusMode`）：只留对话与输入条，再按恢复进入前的布局。
   toggleFocusMode: () => void
   setFlowDialogOpen: (v: boolean) => void
+  setSessionLaterOpen: (v: boolean) => void
   requestAgentScreen: () => void
   openPendingDialog: () => void
   closePendingDialog: () => void
@@ -349,7 +353,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       team: [], artifacts: [], avatars: {}, avatarHashes: {}, providers: null,
       usageTotal: null, usageRows: [], usageSeries7d: [], contextPressure: null,
       projectName: '', autonomy: 'L0', mode: 'pack', fastRole: null, packName: null, mcpPending: false,
-      tabs: [], activeTab: null, canvasOpen: false, usageView: false, flowDialogOpen: false,
+      tabs: [], activeTab: null, canvasOpen: false, usageView: false, flowDialogOpen: false, sessionLaterOpen: false,
       fileEdits: {}, fileTreeReq: null, confirmReq: null, intakeDraft: false, away: false,
       evidenceRevision: s.evidenceRevision + 1,
       timelineFacts: null, factsError: null, sessionSummary: null, sessionError: null, timeline: [], timelineCaughtUp: false,
@@ -400,6 +404,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   activeTab: null,
   modalScope: 'workbench',
   flowDialogOpen: false,
+  sessionLaterOpen: false,
   confirmReq: null,
   fileEdits: {},
   confirmFileEdits: async (ids) => {
@@ -606,6 +611,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     else set({ focusSnapshot: { canvasOpen: s.canvasOpen }, canvasOpen: false, usageView: false })
   },
   setFlowDialogOpen: (v) => set({ flowDialogOpen: v }),
+  setSessionLaterOpen: (v) => set({ sessionLaterOpen: v }),
   requestAgentScreen: () => set((s) => ({ agentScreenReq: s.agentScreenReq + 1 })),
   openPendingDialog: () => set({ pendingDialogOpen: true }),
   closePendingDialog: () => {

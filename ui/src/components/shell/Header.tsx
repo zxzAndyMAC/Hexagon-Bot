@@ -13,6 +13,8 @@ import { runStageOp } from '../../stageops'
 import { exportTrace } from '../../traceExport'
 import { Icon } from '../Icon'
 import { ManagedPill } from '../ManagedPill'
+import { SessionPill } from '../SessionPill'
+import { laterBlockedReason } from '../../sessionPill'
 // 票 14（D19）：头部控制状态 + 暂停电脑操作；Agent Screen 浮窗随头部挂载（输入条旁的重复入口撤掉）
 import { ComputerControlStatus } from '../ComputerControlStatus'
 import { AgentScreen } from '../AgentScreen'
@@ -24,7 +26,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuFooter, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { bindingFor } from '../../keymap'
+import { bindingFor, formatBinding } from '../../keymap'
 import { cn } from '@/lib/utils'
 import { mainView } from '../../layout'
 
@@ -44,6 +46,7 @@ function MoreMenu() {
   const { t } = useTranslation()
   const away = useUiStore((s) => s.away)
   const projectName = useUiStore((s) => s.projectName)
+  const laterBlocked = useUiStore((s) => laterBlockedReason(s.sessionSummary))
   const [sandbox, setSandbox] = useState<SandboxStatus | null>(null)
   // 票 06：沙箱实况——纯平台探测，同项目内不变
   useEffect(() => { api.sandboxStatus().then(setSandbox).catch(() => setSandbox(null)) }, [projectName])
@@ -74,6 +77,11 @@ function MoreMenu() {
         <DropdownMenuItem icon={<Icon name="sleep" size={14} />} onSelect={() => runStageOp('sleepAll')}>{t('header.sleepAll')}</DropdownMenuItem>
         <DropdownMenuItem icon={<Icon name="export" size={14} />} onSelect={() => void doExport()}>{t('header.exportTrace')}</DropdownMenuItem>
         <DropdownMenuItem icon={<Icon name="expand" size={14} />} onSelect={() => st().setFlowDialogOpen(true)}>{t('sidebar.viewFlow')}</DropdownMenuItem>
+        {/* owner-followups-1015 #11（C12a）：「稍后继续…」常驻入口——会话卡收成胶囊后健康时看不见，入口不能跟着消失。
+            时间弹层挂在会话胶囊的状态槽上；做不了时灰显、灰描述写原因（A16 禁用行），可做时灰描述写当前键位。 */}
+        <DropdownMenuItem icon={<Icon name="clock" size={14} />} disabled={!!laterBlocked} data-header-later
+          description={laterBlocked ? t(laterBlocked) : formatBinding(bindingFor('sessionScheduleOnce'))}
+          onSelect={() => st().setSessionLaterOpen(true)}>{t('session.scheduleLater')}</DropdownMenuItem>
         <DropdownMenuSeparator />
         {/* 票 16（方向卡 1）：值守切换。失焦 60 秒自动值守，回焦自动归来；这里是手动入口 */}
         <DropdownMenuItem icon={<Icon name="sleep" size={14} />} description={t('topbar.awayHint')} tall
@@ -147,6 +155,8 @@ export function Header({ side }: { side?: 'expanded' | 'collapsed' | 'hidden' } 
       {/* 票 09：画布全宽时这两件挪到画布页签栏（Canvas.tsx），这里不渲染——只挂一份 */}
       {!canvasFull && <ComputerControlStatus />}
       {!canvasFull && <ManagedPill />}
+      {/* owner-followups-1015 #11（C12a）：会话胶囊同排；全宽时挂画布页签栏状态槽，只挂一份（会话键位由它注册） */}
+      {!canvasFull && <SessionPill />}
       <span data-tauri-drag-region className="flex-1 self-stretch" />
       {screen && (
         <Tooltip>

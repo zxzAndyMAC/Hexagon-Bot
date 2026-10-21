@@ -232,6 +232,8 @@
   --animate-hx-sh: hx-sh 2s linear infinite;
   --animate-hx-spin: hx-spin .8s linear infinite;
   --animate-hx-pulse: hx-pulse 1.6s ease-in-out infinite;
+  /* 单次脉冲（foundations §6，owner-followups-1015 #11）：会话胶囊转入 failed / reconnecting 时提醒一次，不循环 */
+  --animate-hx-pulse-once: hx-pulse 1s ease-in-out 1;
   --animate-hx-skl: hx-skl 1.4s linear infinite;
   --animate-hx-jumpin: hx-jumpin 180ms var(--ease) both;
   @keyframes hx-px { 0%, 100% { opacity: .2; } 40% { opacity: 1; } }

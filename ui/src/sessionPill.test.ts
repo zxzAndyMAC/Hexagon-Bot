@@ -1,6 +1,6 @@
 // 会话胶囊显示条件表驱动测试（components C12a「改为头部胶囊」，owner-followups-1015 #11）。
 import { describe, expect, it } from 'vitest'
-import { alertTransition, groupCapabilities, sessionPillView } from './sessionPill'
+import { alertTransition, groupCapabilities, laterBlockedReason, sessionPillView } from './sessionPill'
 import type { CapabilityStatus } from './gen/CapabilityStatus'
 import type { OneTimeTrigger } from './gen/OneTimeTrigger'
 import type { SessionStatus } from './gen/SessionStatus'
@@ -84,5 +84,20 @@ describe('alertTransition（转入 failed / reconnecting 播报一次）', () =>
   ]
   it.each(rows)('%s → %s', (prev, next, expected) => {
     expect(alertTransition(prev, next)).toBe(expected)
+  })
+})
+
+describe('laterBlockedReason（「稍后继续…」可用性）', () => {
+  const rows: [string, SessionSummary | null, string | null][] = [
+    ['无会话', null, 'session.laterNoSession'],
+    ['运行中', summary('running'), null],
+    ['暂停可约', summary('paused'), null],
+    ['已完成', summary('completed'), 'session.laterEnded'],
+    ['已失败', summary('failed'), 'session.laterEnded'],
+    ['已有预约', summary('running', [], [trig('scheduled')]), 'session.laterBooked'],
+    ['只有过期预约仍可约', summary('running', [], [trig('expired')]), null],
+  ]
+  it.each(rows)('%s', (_name, input, expected) => {
+    expect(laterBlockedReason(input)).toBe(expected)
   })
 })

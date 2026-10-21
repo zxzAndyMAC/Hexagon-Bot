@@ -87,3 +87,13 @@ export function alertTransition(prev: SessionStatus | null | undefined, next: Se
   if (prev === undefined || prev === next) return null
   return next === 'failed' || next === 'reconnecting' ? next : null
 }
+
+/** 「稍后继续…」此刻做不了的原因（i18n key）；null = 可约。⋯ 菜单 / ⌘K / 键位 / 胶囊弹层共用一处判定（C12a #11）：
+ * 没有会话、会话已结束（completed / failed）、已有一次预约（一次只挂一个，取消在胶囊弹层里）。 */
+export function laterBlockedReason(summary: SessionSummary | null): string | null {
+  const session = summary?.session ?? null
+  if (!session) return 'session.laterNoSession'
+  if (session.status === 'completed' || session.status === 'failed') return 'session.laterEnded'
+  if (summary?.triggers.some((t) => t.state === 'scheduled')) return 'session.laterBooked'
+  return null
+}

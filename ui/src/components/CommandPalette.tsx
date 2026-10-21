@@ -13,6 +13,7 @@ import { useUiStore } from '../store'
 import { bindingFor, formatBinding, type ActionId } from '../keymap'
 import { runStageOp } from '../stageops'
 import { filterPaletteItems, pushRecent } from '../paletteModel'
+import { laterBlockedReason } from '../sessionPill'
 import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
 import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from '../memberActions'
 import { dispatchMessageAction, messageOnRail, messageTarget } from '../messageActions'
@@ -55,7 +56,8 @@ async function requestRelease(targetId: string, invalidate: () => Promise<void>)
 
 export function CommandPalette({ onClose, onSettings }: { onClose: () => void; onSettings?: () => void }) {
   const { t } = useTranslation()
-  const { team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, tabs, closeTab, invalidate, pushToast, pending, setFlowDialogOpen } = useUiStore()
+  const { team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, tabs, closeTab, invalidate, pushToast, pending, setFlowDialogOpen, setSessionLaterOpen, sessionSummary } = useUiStore()
+  const laterBlocked = laterBlockedReason(sessionSummary)
   const [q, setQ] = useState('')
   // owner-followups-1015 #08（A16b「定位」）：成员行 / 消息动作作用于打开面板前焦点所在的对象——
   // 首次渲染时焦点还没进面板，这里记下来；目标不在成员行 / 消息上就不列这些项。
@@ -129,6 +131,12 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       { id: 'c-sleep', group: 'cmd', label: t('palette.sleepAll'), icon: 'sleep', keywords: ['sleep'], run: () => runStageOp('sleepAll') },
       ...pushItems(t, pushTargets, startPush, pushToast),
       releaseItem(),
+      // owner-followups-1015 #11（C12a）：「稍后继续…」——会话卡收成胶囊后健康时看不见，入口进 ⌘K 与头部 ⋯ 菜单。
+      // 面板关闭后由会话胶囊的状态槽弹出时间弹层；做不了（无会话 / 已结束 / 已有预约）灰显写原因。
+      { id: 'c-session-later', group: 'cmd', label: t('session.scheduleLater'), icon: 'clock', hint: bind('sessionScheduleOnce'),
+        keywords: ['later', 'schedule', 'resume', '稍后', '预约', '继续'],
+        ...(laterBlocked ? { disabled: true, desc: t(laterBlocked) } : {}),
+        run: () => setSessionLaterOpen(true) },
       // 导航：ADR 0088（票 02）⌘B 开关左侧栏；票 03（R-04 / R-06）分屏撤掉 → 画布全宽 ↔ 并排、专注模式；
       // 票 07（D18）补「开关画布」「查看流程与质量检查」「打开设置」，同步新动作。
       { id: 'n-sidebar', group: 'nav', label: t('palette.sidebar'), icon: 'panel-left', hint: bind('toggleSidebar'), run: () => toggleSidebar() },
@@ -204,7 +212,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       })),
     ]
     return list
-  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pushToast, setFlowDialogOpen, onSettings, pushTargets, startPush, invalidate, releases, picking])
+  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pushToast, setFlowDialogOpen, setSessionLaterOpen, laterBlocked, onSettings, pushTargets, startPush, invalidate, releases, picking])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。
