@@ -58,6 +58,7 @@ beforeEach(async () => {
   vi.spyOn(api, 'mcpServices').mockResolvedValue([])
   vi.spyOn(api, 'listRepoDir').mockImplementation(async (rel = '') => TREE[rel] ?? [])
   vi.spyOn(api, 'revealRepoPath').mockResolvedValue(undefined)
+  vi.spyOn(api, 'openWithCandidates').mockResolvedValue([])
   vi.spyOn(useUiStore.getState(), 'refresh').mockResolvedValue()
   vi.spyOn(useUiStore.getState(), 'refreshFast').mockResolvedValue()
   el = document.createElement('div')
@@ -81,13 +82,15 @@ afterEach(async () => {
 describe('文件树行右键菜单（A16b 第一批）', () => {
   it('文件：打开 · 插入到输入条 · 复制路径 · 在访达中显示，依此顺序', async () => {
     await rightClick(treeitem('README.md'))
-    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['open', 'insert', 'copyPath', 'reveal'])
+    // #31：末尾加「打开方式 ▸」子菜单触发行。
+    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['open', 'insert', 'copyPath', 'reveal', 'openWith'])
     expect(item('reveal').textContent).toBe(i18n.t(revealLabelKey()))
   })
 
   it('目录没有「打开」；链接只有复制 / 揭示（种类不适用 → 不渲染）', async () => {
     await rightClick(treeitem('src'))
-    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['insert', 'copyPath', 'reveal'])
+    // #31：目录也有「打开方式」（只列能打开文件夹的应用）；链接没有。
+    expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['insert', 'copyPath', 'reveal', 'openWith'])
     await keyOn(menu()!, { key: 'Escape' })
     await rightClick(treeitem('vendor'))
     expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['copyPath', 'reveal'])

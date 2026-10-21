@@ -5,6 +5,7 @@ import { useUiStore } from '../store'
 import { TREE_DRAG_MIME, treeDragPayload, treeInsertPath } from '../composerAtoms'
 import { isMac } from '../keymap'
 import { copyPath, insertPathToComposer, revealLabelKey, revealPath, TREE_PATH_ATTR } from '../fileActions'
+import { OpenWithSubmenu } from './OpenWithMenu'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
@@ -183,7 +184,7 @@ export function FileTree() {
 }
 
 /**
- * 文件树行右键菜单（A16b 第一批，owner-followups-1015 #07）：打开 · 插入到输入条 · 复制路径 · 在访达中显示。
+ * 文件树行右键菜单（A16b 第一批，owner-followups-1015 #07）：打开 · 插入到输入条 · 复制路径 · 在访达中显示 · 打开方式 ▸（#31）。
  * 种类不适用不渲染：目录没有「打开」（展开 = 点行本身）；链接不打开、不插入（没有一条仓内路径可指），
  * 只留复制 / 揭示——揭示指向仓外的链接由 core 拒（errors.reveal_outside_project）。
  * 右键不改选中、不打开：Trigger 只给行画焦点环（「右键一个没打开的文件时画布不跳走」）。
@@ -210,6 +211,8 @@ function TreeRowMenu({ entry, onOpen, children }: { entry: RepoEntry; onOpen: ()
         <ContextMenuItem data-ctx-item="reveal" action="revealPath" onSelect={() => void revealPath(entry.path)}>
           {t(revealLabelKey())}
         </ContextMenuItem>
+        {/* #31「打开方式」：链接没有一条仓内路径可交给编辑器（指向仓外的由 core 拒），不显示 */}
+        {entry.kind !== 'link' && <OpenWithSubmenu path={entry.path} />}
       </ContextMenuContent>
     </ContextMenu>
   )

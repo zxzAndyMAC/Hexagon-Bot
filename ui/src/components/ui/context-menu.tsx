@@ -12,6 +12,7 @@ import { ContextMenu as MenuPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { useFloatingZ } from "@/components/ui/layer"
 import { menuItemBase, popSurface } from "@/components/ui/dropdown-menu"
+import { Icon } from "@/components/Icon"
 import { bindingFor, formatBinding, type ActionId } from "@/keymap"
 
 const TriggerRef = React.createContext<React.RefObject<HTMLElement | null> | null>(null)
@@ -118,4 +119,41 @@ function ContextMenuSeparator({ className, ...props }: React.ComponentProps<type
   return <MenuPrimitive.Separator data-slot="context-menu-separator" className={cn("mx-0.5 my-1 h-px bg-line", className)} {...props} />
 }
 
-export { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuTrigger }
+// 子菜单（A16b「打开方式 ▸」，owner-followups-1015 #31）：行同 A16 `mi`，右侧当前绑定 + chevron-right ink-3；
+// 展开时触发行保持 --hover 底（data-state=open）。子层外壳同 pop，贴父菜单右缘、首行与触发行对齐
+// （alignOffset = -pop padding 5），最宽 280（名称省略）。键盘：→ / ↵ / 空格展开并聚焦首行，← 收起回触发行，
+// Esc 关整棵菜单（radix 原生 roving）。
+const ContextMenuSub = MenuPrimitive.Sub
+
+function ContextMenuSubTrigger({ className, action, children, ...props }: React.ComponentProps<typeof MenuPrimitive.SubTrigger> & { action?: ActionId }) {
+  const binding = action ? bindingFor(action) : ""
+  return (
+    <MenuPrimitive.SubTrigger data-slot="context-menu-sub-trigger" className={cn(menuItemBase, "h-8 data-[state=open]:bg-hover", className)} {...props}>
+      {children}
+      <span className="ml-auto flex items-center gap-1.5 pl-3 text-[12px] text-ink-3">
+        {binding && <span data-ctx-hint>{formatBinding(binding)}</span>}
+        <Icon name="chevron-right" size={14} className="text-ink-3" />
+      </span>
+    </MenuPrimitive.SubTrigger>
+  )
+}
+
+function ContextMenuSubContent({ className, ...props }: React.ComponentProps<typeof MenuPrimitive.SubContent>) {
+  const z = useFloatingZ("pop")
+  return (
+    <MenuPrimitive.Portal>
+      <MenuPrimitive.SubContent
+        data-slot="context-menu-sub-content"
+        sideOffset={2}
+        alignOffset={-5}
+        className={cn(popSurface, z, "max-w-[280px] max-h-(--radix-context-menu-content-available-height)", className)}
+        {...props}
+      />
+    </MenuPrimitive.Portal>
+  )
+}
+
+export {
+  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub,
+  ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger,
+}
