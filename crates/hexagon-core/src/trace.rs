@@ -81,6 +81,12 @@ pub enum EventKind {
     PushConfirmed,
     PushRejected,
     PushFailed,
+    // 发布（owner-followups-1015 #15）：执行已登记的发布目标。Confirmed = 命令跑完且退出码 0；
+    // Failed 带 `executed`（false = 前置闸拦下、什么都没跑；true = 跑了但失败 / 超时）。
+    ReleaseRequested,
+    ReleaseConfirmed,
+    ReleaseRejected,
+    ReleaseFailed,
     BaselineMerged,
     UsageCapHit,
     TeamSlept,

@@ -6,6 +6,18 @@ use super::*;
 use crate::release_targets::{self as release, ReleaseTarget, ReleaseTargetDraft};
 
 impl Workbench {
+    /// 写面守门（owner-followups-1015 #15，ADR 0093 后续裁决「托管不得新登记、改命令或凭据」）：
+    /// 裁决人不是负责人（托管 `managed:<grant>:<gen>` 等）时拒绝。今天没有托管路径会走到这里，
+    /// 守门是为了以后加路径时默认拒绝。代价模型：误拒只让负责人以外的调用方报错；漏放是托管
+    /// 自己改了它随后要代批执行的命令。
+    fn owner_only(&self) -> Result<(), ApiError> {
+        if self.decider() == "owner" {
+            Ok(())
+        } else {
+            Err(release::ReleaseError::ReleaseOwnerOnly.into())
+        }
+    }
+
     pub fn release_targets(&self) -> Result<Vec<ReleaseTarget>, ApiError> {
         Ok(release::list(
             &self.db,
@@ -18,6 +30,7 @@ impl Workbench {
         &self,
         draft: &ReleaseTargetDraft,
     ) -> Result<ReleaseTarget, ApiError> {
+        self.owner_only()?;
         Ok(release::save(
             &self.db,
             &self.project_id,
@@ -27,6 +40,7 @@ impl Workbench {
     }
 
     pub fn remove_release_target(&self, id: &str) -> Result<(), ApiError> {
+        self.owner_only()?;
         Ok(release::remove(
             &self.db,
             &self.project_id,
@@ -41,6 +55,7 @@ impl Workbench {
         credential: &str,
         secret: &str,
     ) -> Result<ReleaseTarget, ApiError> {
+        self.owner_only()?;
         Ok(release::set_credential(
             &self.db,
             &self.project_id,
@@ -56,6 +71,7 @@ impl Workbench {
         id: &str,
         credential: &str,
     ) -> Result<ReleaseTarget, ApiError> {
+        self.owner_only()?;
         Ok(release::remove_credential(
             &self.db,
             &self.project_id,

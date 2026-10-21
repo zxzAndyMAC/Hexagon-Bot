@@ -2,7 +2,7 @@
 //! 及其所需凭据。不是 git 远程（那是推送，见 push.rs）。
 //!
 //! - 只有负责人经设置·发布页登记 / 修改 / 删除（宿主 control 组命令）；Agent 没有写入口，
-//!   托管不扩大这项授权（CONTEXT.md「托管」：新增发布目标不扩大授权）。执行在票 15。
+//!   托管不扩大这项授权（CONTEXT.md「托管」：新增发布目标不扩大授权）。执行见 `crate::release`（票 15）。
 //! - 持久化在 `release_targets` 表（迁移 0065）：名称、命令行、工作目录（相对项目根）、凭据名列表。
 //! - 凭据值只进钥匙串 `release/<目标 id>/<凭据名>`（[`credential_key`]）。表、轨迹、诊断、错误文案
 //!   只出现名字；读面只回「已存入 / 未设置」，存后不回显。
@@ -49,6 +49,9 @@ pub enum ReleaseError {
         "a stored credential value appears in the release target; keep secrets out of the command"
     )]
     ReleaseSecretInTarget,
+    /// 只有负责人能登记 / 修改 / 删除目标与凭据（owner-followups-1015 #15：托管可确认发布卡，但不能改登记）。
+    #[error("only the owner can change release targets and their credentials")]
+    ReleaseOwnerOnly,
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("trace: {0}")]
@@ -195,12 +198,13 @@ fn normalize_credentials(raw: &[String]) -> Result<Vec<String>, ReleaseError> {
     Ok(out)
 }
 
-struct Row {
-    id: String,
-    name: String,
-    command: String,
-    cwd: String,
-    credentials: Vec<String>,
+/// 登记行原样（不碰钥匙串）：执行发布（`crate::release`，票 15）按它比对卡面、取命令与凭据名。
+pub(crate) struct Row {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) command: String,
+    pub(crate) cwd: String,
+    pub(crate) credentials: Vec<String>,
 }
 
 fn rows(db: &Db, project_id: &str, id: Option<&str>) -> Result<Vec<Row>, ReleaseError> {
@@ -232,7 +236,7 @@ fn rows(db: &Db, project_id: &str, id: Option<&str>) -> Result<Vec<Row>, Release
         .collect()
 }
 
-fn row(db: &Db, project_id: &str, id: &str) -> Result<Row, ReleaseError> {
+pub(crate) fn row(db: &Db, project_id: &str, id: &str) -> Result<Row, ReleaseError> {
     rows(db, project_id, Some(id))?
         .pop()
         .ok_or_else(|| ReleaseError::ReleaseTargetUnknown(id.to_string()))

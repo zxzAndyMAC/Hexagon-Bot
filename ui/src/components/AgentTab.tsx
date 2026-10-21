@@ -55,6 +55,7 @@ const STEP_ICON: Record<string, IconName> = {
   escalated: 'escalate', test_ran: 'check', proposal_queued: 'diff', proposal_reviewed: 'diff', proposal_stamped: 'stamp',
   proposal_rejected: 'diff', proposal_activated: 'bolt', proposal_rolled_back: 'arrow-left', push_requested: 'publish',
   push_confirmed: 'publish', push_rejected: 'publish', push_failed: 'publish', backfill_executed: 'refresh',
+  release_requested: 'publish', release_confirmed: 'publish', release_rejected: 'publish', release_failed: 'publish',
   usage_cap_hit: 'yen', owner_command: 'send', fastpath_dispatched: 'bolt', system: 'list',
 }
 

@@ -94,6 +94,7 @@ import type { PushOutcome } from './gen/PushOutcome'
 import type { PushRequest } from './gen/PushRequest'
 import type { PushTargets } from './gen/PushTargets'
 import type { ReleaseTarget } from './gen/ReleaseTarget'
+import type { ReleaseOutcome } from './gen/ReleaseOutcome'
 import type { ReleaseTargetDraft } from './gen/ReleaseTargetDraft'
 import type { FlagOutcome } from './gen/FlagOutcome'
 import type { AdjudicateOutcome } from './gen/AdjudicateOutcome'
@@ -166,7 +167,7 @@ export type {
   SessionSummary, CapabilityStatus,
   OneTimeTrigger,
   WorktreeAttachment, WorktreeOperation, WorktreeRequest, SessionRecord,
-  ReleaseTarget, ReleaseTargetDraft,
+  ReleaseTarget, ReleaseTargetDraft, ReleaseOutcome,
 }
 
 
@@ -567,6 +568,10 @@ export const api = {
     call<ReleaseTarget>('set_release_credential', { id, credential, secret }),
   removeReleaseCredential: (id: string, credential: string) =>
     call<ReleaseTarget>('remove_release_credential', { id, credential }),
+  // 发布执行（owner-followups-1015 #15）：发起只入队发布确认卡（必问、永不记忆）；确认后宿主跑登记的命令。
+  requestRelease: (targetId: string) => call<string>('request_release', { targetId }),
+  confirmRelease: (qid: string) => call<ReleaseOutcome>('confirm_release', { qid }),
+  rejectRelease: (qid: string) => call<void>('reject_release', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
@@ -1081,6 +1086,7 @@ const MOCK_DECIDED = new Set<string>()
 const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> = {
   answer_permission: (a) => String(a.questionId), allow_project_permission: (a) => String(a.questionId),
   confirm_push: (a) => String(a.qid), reject_push: (a) => String(a.qid),
+  confirm_release: (a) => String(a.qid), reject_release: (a) => String(a.qid),
   confirm_worktree: (a) => String(a.qid), reject_worktree: (a) => String(a.qid),
   adjudicate_flag: (a) => String(a.qid), confirm_proposal: (a) => String(a.qid), reject_proposal: (a) => String(a.qid),
   stall_retry: (a) => String(a.questionId), stall_ack: (a) => String(a.questionId),
@@ -1618,6 +1624,12 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       if (cred) cred.set = cmd === 'set_release_credential'
       return target as T
     }
+    case 'request_release': return 'q-rel' as T
+    case 'confirm_release': {
+      const target = MOCK_RELEASE.find((r) => r.id === 'rel-npm')
+      return { target_id: target?.id ?? '', name: target?.name ?? '', output: '', duration_ms: 0 } as T
+    }
+    case 'reject_release': return null as T
     case 'list_mcp_entries':
       return [
         { name: 'termius', command: 'ssh-mcp', args: ['--stdio'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },

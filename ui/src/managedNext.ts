@@ -4,6 +4,7 @@
 import type { ManagedNext } from './gen/ManagedNext'
 import { TIMELINE_JUMP_EVENT } from './timelineJump'
 import { useUiStore } from './store'
+import { openReleaseSettings } from './releaseFocus'
 
 /** 待决坞翻到指定卡并展开（PendingDock 监听；App 同时关掉设置页）。detail = 卡 id。 */
 export const LOCATE_PENDING_EVENT = 'hexagon:locate-pending'
@@ -17,6 +18,10 @@ export function runManagedNext(next: ManagedNext, eventId: number) {
     case 'add_key': case 'model_services': case 'usage': case 'mcp': case 'skills':
       if (!SETTINGS_SECTIONS.has(next.target)) return jump()
       window.dispatchEvent(new CustomEvent('hexagon:open-settings-section', { detail: next.target }))
+      return
+    // owner-followups-1015 #15：发布卡缺目标 / 目标被改 / 缺凭据 → 设置 · 发布，定位到这个目标（target = 目标 id）。
+    case 'release_targets':
+      openReleaseSettings(next.target)
       return
     case 'open_card':
       // 托管仍开着时卡不进坞（owner_pending 排除托管事项）：坞里找不到就回时间线，不出死按钮。

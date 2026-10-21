@@ -7,8 +7,8 @@
 //! 所以只认宿主写下的原因码与卡的当前状态，认不出的一律落 `Timeline`（永远可达的兜底）。
 use super::*;
 
-/// 下一步动作的种类（封闭集）。`target` 的含义随种类：设置类 = 设置分区 id，`OpenCard` = 卡 id，
-/// `Evidence` / `Timeline` = 该条决定的轨迹事件 id。
+/// 下一步动作的种类（封闭集）。`target` 的含义随种类：设置类 = 设置分区 id，`ReleaseTargets` = 发布目标 id，
+/// `OpenCard` = 卡 id，`Evidence` / `Timeline` = 该条决定的轨迹事件 id。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../../ui/src/gen/")]
@@ -23,6 +23,9 @@ pub enum ManagedNextKind {
     Mcp,
     /// 技能未安装：设置 · 技能。
     Skills,
+    /// 发布卡缺目标 / 目标被改过 / 缺凭据（owner-followups-1015 #15，原型「配置发布目标」）：
+    /// 设置 · 发布并定位到这个目标。`target` = 发布目标 id（目标已删时为空，只开分区）。
+    ReleaseTargets,
     /// 卡仍在等负责人（托管关闭后回到待决坞）：定位到这张卡。
     OpenCard,
     /// 验收没走完：看这条决定的证据（时间线定位）。
@@ -51,7 +54,12 @@ pub(crate) struct NextFacts<'a> {
     pub card_queued: bool,
     /// 授权卡的 `grant_kind`（mcp | skill）；其余卡为空。
     pub grant_kind: &'a str,
+    /// 发布卡的 `target_id`；其余卡为空。
+    pub release_target: &'a str,
 }
+
+/// 发布卡里能在设置 · 发布修好的原因码（`routes::release_forced` + 确认闸同名码）。
+const RELEASE_FIX_REASONS: &[&str] = &["target_missing", "target_changed", "credential_missing"];
 
 /// 与 `ModelRecoveryStatus` 的 SETTINGS_CODES / KEY_CODES 同口径（model_failure::failure_code 的码）。
 const KEY_CODES: &[&str] = &["missing_credential", "credential_store", "authentication"];
@@ -88,6 +96,12 @@ pub(crate) fn next_step(facts: &NextFacts) -> ManagedNext {
             return settings(ManagedNextKind::Usage, "usage");
         }
     }
+    if facts.card_kind == "release" && RELEASE_FIX_REASONS.contains(&facts.reason) {
+        return ManagedNext {
+            kind: ManagedNextKind::ReleaseTargets,
+            target: facts.release_target.into(),
+        };
+    }
     match (facts.card_kind, facts.reason, facts.grant_kind) {
         (_, "credentials_or_login_required", _) | (_, "capability_not_installed", "mcp") => {
             settings(ManagedNextKind::Mcp, "mcp")
@@ -118,6 +132,7 @@ mod tests {
             result,
             card_queued: false,
             grant_kind: "",
+            release_target: "",
         }
     }
 
@@ -154,7 +169,8 @@ mod tests {
             }),
             ManagedNextKind::Evidence
         );
-        // 推送缺目标：应用里还没有配置发布目标的入口，不造死按钮。
+        // 推送缺目标 = 推送的 git 远程没配（ADR 0093：推送目标是 git 远程，不是发布目标），
+        // 设置 · 发布修不好它，不指过去；回时间线。
         assert_eq!(
             next_step(&NextFacts {
                 card_kind: "push",
@@ -164,6 +180,30 @@ mod tests {
                 kind: ManagedNextKind::Timeline,
                 target: "7".into()
             }
+        );
+        // owner-followups-1015 #15：发布卡缺目标 / 目标被改 / 缺凭据 → 设置 · 发布，定位到目标。
+        for reason in ["target_missing", "target_changed", "credential_missing"] {
+            assert_eq!(
+                next_step(&NextFacts {
+                    card_kind: "release",
+                    release_target: "abc",
+                    ..facts(reason, "incomplete")
+                }),
+                ManagedNext {
+                    kind: ManagedNextKind::ReleaseTargets,
+                    target: "abc".into()
+                },
+                "{reason}"
+            );
+        }
+        assert_eq!(
+            next_step(&NextFacts {
+                card_kind: "release",
+                ..facts("registered_target_credentials_present", "failed")
+            })
+            .kind,
+            ManagedNextKind::Timeline,
+            "a release that ran and failed is read in the timeline"
         );
         assert_eq!(
             next_step(&NextFacts {
@@ -183,20 +223,22 @@ mod tests {
         fn every_next_step_points_at_a_reachable_entry(
             reason in prop::sample::select(vec!["managed_route_failed:authentication","managed_route_failed:no_model",
                 "managed_route_failed:quota","managed_route_failed:transport","credentials_or_login_required",
-                "capability_not_installed","target_missing","no_active_stage","x"]),
+                "capability_not_installed","target_missing","target_changed","credential_missing","no_active_stage","x"]),
             result in prop::sample::select(vec!["done","incomplete","failed"]),
-            card_kind in prop::sample::select(vec!["permission","stamp","push","grant","install"]),
+            card_kind in prop::sample::select(vec!["permission","stamp","push","release","grant","install"]),
+            release_target in prop::sample::select(vec!["","abc"]),
             grant_kind in prop::sample::select(vec!["","mcp","skill"]),
             card_queued in any::<bool>(),
             event_id in 1i64..1_000_000,
         ) {
-            let f = NextFacts { event_id, card_id: "q1", card_kind, reason, result, card_queued, grant_kind };
+            let f = NextFacts { event_id, card_id: "q1", card_kind, reason, result, card_queued, grant_kind, release_target };
             let next = next_step(&f);
             match next.kind {
                 ManagedNextKind::AddKey | ManagedNextKind::ModelServices => prop_assert_eq!(next.target.as_str(), "models"),
                 ManagedNextKind::Usage => prop_assert_eq!(next.target.as_str(), "usage"),
                 ManagedNextKind::Mcp => prop_assert_eq!(next.target.as_str(), "mcp"),
                 ManagedNextKind::Skills => prop_assert_eq!(next.target.as_str(), "skills"),
+                ManagedNextKind::ReleaseTargets => prop_assert!(card_kind == "release" && next.target == release_target),
                 ManagedNextKind::OpenCard => prop_assert!(card_queued && result != "done" && next.target == "q1"),
                 ManagedNextKind::Evidence | ManagedNextKind::Timeline => prop_assert_eq!(next.target.clone(), event_id.to_string()),
             }

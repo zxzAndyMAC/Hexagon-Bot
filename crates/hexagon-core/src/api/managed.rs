@@ -97,6 +97,7 @@ const INCOMPLETE_OUTCOMES: &[&str] = &[
     "kept_checks_required",
     "ended_unexecuted",
     "not_pushed",
+    "not_released",
     "new_attempt_awaits_permission",
     "ended",
 ];
@@ -149,6 +150,10 @@ pub fn managed_history(
                 grant_kind: card
                     .as_ref()
                     .and_then(|c| c.payload["grant_kind"].as_str())
+                    .unwrap_or_default(),
+                release_target: card
+                    .as_ref()
+                    .and_then(|c| c.payload["target_id"].as_str())
                     .unwrap_or_default(),
             });
             ManagedRecord {
@@ -651,6 +656,23 @@ mod tests {
                 commit_unchanged: bits[4],
             };
             prop_assert_eq!(push_forced(&facts).0 == "push", bits.iter().all(|b| *b));
+        }
+
+        // owner-followups-1015 #15 (D12): delegation releases iff every host fact
+        // holds; any refusal names a reason the report can route to Settings · Release.
+        #[test]
+        fn release_needs_every_host_fact(bits in proptest::collection::vec(any::<bool>(), 3)) {
+            let facts = ReleaseFacts {
+                target_registered: bits[0],
+                target_unchanged: bits[1],
+                credentials_present: bits[2],
+            };
+            let (action, reason) = release_forced(&facts);
+            prop_assert_eq!(action == "release", bits.iter().all(|b| *b));
+            if action != "release" {
+                prop_assert_eq!(action, "incomplete");
+                prop_assert!(["target_missing", "target_changed", "credential_missing"].contains(&reason));
+            }
         }
 
         // Test3/21: any non-empty secret slot (env or headers) means the host
