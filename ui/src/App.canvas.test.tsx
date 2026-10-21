@@ -317,6 +317,8 @@ describe('SessionHost 会话胶囊（C12a）挂在头部 / 画布全宽状态槽
     expect(later.hasAttribute('data-disabled')).toBe(true)
     expect(later.textContent).toContain('Already booked')
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    // 菜单关闭后 radix 晚一拍把焦点还给 ⋯；等它落定再点胶囊，否则还焦点会被当成「焦点移出」关掉刚开的卡
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
     await act(async () => { (el.querySelector('[data-session-pill]') as HTMLButtonElement).click() })
     expect(document.querySelector('[data-session-trigger="scheduled"]')!.textContent).toContain('Continues at')
     await act(async () => { button('Cancel booking').click() })
