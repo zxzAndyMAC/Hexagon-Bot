@@ -1881,7 +1881,22 @@ impl Workbench {
             tasks: self.tasks.clone(),
             subagent: None,
             websearch: self.websearch.clone(),
-            images: Some(crate::image_gen::ImageAccess::new(self.creds.clone())),
+            // 票 28：画师写提示词的主对话模型 = 画师模型槽经 resolve_slot 解析（与回合同一回退链）。
+            images: Some(
+                crate::image_gen::ImageAccess::new(self.creds.clone()).with_prompt_model({
+                    let slot = crate::artist::artist_chat_slot();
+                    crate::provider_config::resolve_slot(&self.providers, slot).map(|p| {
+                        crate::image_gen::PromptModel {
+                            slot: slot.to_string(),
+                            provider: p.clone(),
+                            fell_back: crate::provider_config::fell_back_to_default(
+                                &self.providers,
+                                slot,
+                            ),
+                        }
+                    })
+                }),
+            ),
             embedder: self.embedder.clone(),
             subagent_provider: None,
             reads: Default::default(),

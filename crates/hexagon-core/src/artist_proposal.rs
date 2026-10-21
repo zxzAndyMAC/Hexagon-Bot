@@ -153,20 +153,26 @@ fn image_url(root: &Path, id: &str, file: &str) -> Result<Option<String>, Artist
     )))
 }
 
+/// 角色的职责摘要（交给画师主对话模型的那一句，也记进出图轨迹的 `outbound`）。
+pub fn duty_summary_of(db: &Db, project_id: &str, role: &str) -> String {
+    let duty = crate::roles::role_def(db, project_id, role)
+        .map(|d| d.duty)
+        .unwrap_or_default();
+    image_gen::duty_summary(&duty)
+}
+
 /// 一次出图：先写轨迹（外发的三样 + 提示词），再发，再记账（画师名下），再落图。
+/// `prompt` 是画师主对话模型为该角色写的那条（票 28，`artist_prompt`），原样外发。
 fn draw(
     cx: &DrawCtx,
     ep: &ImageEndpoint,
     proposal_id: &str,
     style: &str,
     role: &str,
+    prompt: &str,
     revision: u32,
 ) -> Result<ItemRec, ArtistError> {
-    let duty = crate::roles::role_def(cx.db, cx.project_id, role)
-        .map(|d| d.duty)
-        .unwrap_or_default();
-    let summary = image_gen::duty_summary(&duty);
-    let prompt = image_gen::avatar_prompt(style, role, &duty);
+    let summary = duty_summary_of(cx.db, cx.project_id, role);
     cx.db.append_event(
         cx.project_id,
         EventKind::System,
@@ -184,7 +190,7 @@ fn draw(
             status: None,
         })
     } else {
-        let r = image_gen::generate(ep, &prompt);
+        let r = image_gen::generate(ep, prompt);
         crate::usage::record_artist_image(
             cx.db,
             cx.root,
@@ -198,7 +204,7 @@ fn draw(
     };
     let mut rec = ItemRec {
         role: role.into(),
-        prompt,
+        prompt: prompt.into(),
         image: None,
         failure: None,
         revision,
@@ -239,18 +245,19 @@ fn note(cx: &DrawCtx, started: std::time::Instant, warn: bool, code: &str) {
     );
 }
 
-/// 新提案：逐个角色出图，落盘 + 一条 `artist_avatar_proposal`。返回提案 id。
+/// 新提案：按画师写好的 `(角色, 提示词)` 逐个出图，落盘 + 一条 `artist_avatar_proposal`。
 pub fn create(
     cx: &DrawCtx,
     ep: &ImageEndpoint,
     style: &str,
-    roles: &[String],
+    prompts: &[(String, String)],
 ) -> Result<ArtistProposal, ArtistError> {
     let id = format!("ap{}", cx.db.next_id("artist_proposal")?);
-    let mut items = Vec::with_capacity(roles.len());
-    for role in roles {
-        items.push(draw(cx, ep, &id, style, role, 0)?);
+    let mut items = Vec::with_capacity(prompts.len());
+    for (role, prompt) in prompts {
+        items.push(draw(cx, ep, &id, style, role, prompt, 0)?);
     }
+    let roles: Vec<&String> = prompts.iter().map(|(r, _)| r).collect();
     let m = Manifest {
         id: id.clone(),
         style: style.into(),
@@ -300,7 +307,9 @@ pub fn load(root: &Path, id: &str) -> Result<ArtistProposal, ArtistError> {
     view(root, &read_manifest(root, id)?)
 }
 
-/// 「换一张」（负责人在提案卡上点）：同一风格再出一张，替换该格（旧图留在目录里不读）。
+/// 「换一张」（负责人在提案卡上点）：同一条提示词再出一张，替换该格（旧图留在目录里不读）。
+/// 不再找主对话模型改写提示词（票 28）：负责人要的是同一描述的另一张图，改写会让同一格
+/// 前后画风漂移、也让卡上折叠的提示词与外发对不上。
 /// 出图槽在召唤之后被改掉 / 解绑时同样精确检查，不回退 default。
 pub fn regenerate(
     cx: &DrawCtx,
@@ -338,7 +347,8 @@ fn redraw(
         .ok_or_else(|| ArtistError::ArtistRoleNotInProposal(role.into()))?;
     let next = m.items[idx].revision + 1;
     let style = m.style.clone();
-    let rec = draw(cx, ep, id, &style, role, next)?;
+    let prompt = m.items[idx].prompt.clone();
+    let rec = draw(cx, ep, id, &style, role, &prompt, next)?;
     m.items[idx] = rec;
     m.model = ep.model.clone();
     write_manifest(cx.root, &m)?;

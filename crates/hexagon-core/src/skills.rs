@@ -374,6 +374,13 @@ fn parse_skill_source(md: &Path, header_only: bool) -> Option<Skill> {
     parse_skill_text(&text, fallback, md.parent()?.to_path_buf())
 }
 
+/// 隐藏内置技能（[`crate::presets::hidden_skill_doc`]）的正文：与加载器同一个解析器，
+/// frontmatter 不进正文。不在加载器里登记（票 28：只给画师这条一次性请求用）。
+pub(crate) fn hidden_skill_instructions(name: &str) -> Option<String> {
+    let text = crate::presets::hidden_skill_doc(name)?;
+    parse_skill_text(text, name, PathBuf::new()).map(|s| s.instructions)
+}
+
 /// 正文解析（内置技能从常量字符串来，`path` 传空路径作 builtin 标记）。
 fn parse_skill_text(text: &str, fallback_name: &str, path: PathBuf) -> Option<Skill> {
     let mut name = fallback_name.to_string();
