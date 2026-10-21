@@ -17,7 +17,9 @@ import { laterBlockedReason } from '../sessionPill'
 import { adjacentTab, closeOtherTabs, closeTabsToRight, copyTabPath, otherTabs, stepTab, tabPath, tabsRightOf } from '../tabActions'
 import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from '../memberActions'
 import { dispatchMessageAction, messageOnRail, messageTarget } from '../messageActions'
-import { insertPathToComposer, revealLabelKey, revealPath } from '../fileActions'
+import { insertPathToComposer, revealLabelKey, revealPath, treeRowTarget } from '../fileActions'
+import { openPathWith, useOpenWithCandidates, type OpenWithApp, type OpenWithState } from '../openWith'
+import { AppIcon } from './OpenWithMenu'
 import { treeInsertPath } from '../composerAtoms'
 import { Icon, type IconName } from './Icon'
 import { Avatar } from '@/components/ui/avatar'
@@ -25,9 +27,12 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 
+/** 面板视图：全量 / 「打开方式」（#31：openWith 键位或「打开方式…」项进入，只列编辑器）。 */
+export type PaletteScope = 'all' | 'openWith'
+
 interface Item {
   id: string
-  group: 'cmd' | 'nav' | 'open'
+  group: 'cmd' | 'nav' | 'open' | 'openWith'
   label: string
   /** 行右侧灰描述（D18：名 + 灰描述 + 右侧 kbd） */
   desc?: string
@@ -35,6 +40,8 @@ interface Item {
   icon?: IconName
   /** 快速打开 Agent 行用头像代替图标 */
   agent?: { id: string; role: string }
+  /** #31「打开方式」行用系统应用图标代替图标 */
+  app?: OpenWithApp
   mono?: boolean
   /// ADR 0056-2（ui-audit 票 03）：'danger' 项渲染分级 + 执行前过确认层。
   risk?: 'danger'
@@ -42,7 +49,7 @@ interface Item {
   keywords?: string[]
   /// owner-followups-1015 #15：此刻做不了——灰显、不可选，desc 写原因（「发布…」没有发布目标）。
   disabled?: boolean
-  /// 执行后不关面板（「发布…」有多个目标时先进选择步）。
+  /// 执行后不关面板（「发布…」有多个目标时先进选择步；#31「打开方式…」切到编辑器视图）。
   keepOpen?: boolean
   run: () => unknown
 }
@@ -54,7 +61,7 @@ async function requestRelease(targetId: string, invalidate: () => Promise<void>)
   useUiStore.getState().openPendingDialog()
 }
 
-export function CommandPalette({ onClose, onSettings }: { onClose: () => void; onSettings?: () => void }) {
+export function CommandPalette({ onClose, onSettings, scope: initialScope = 'all' }: { onClose: () => void; onSettings?: () => void; scope?: PaletteScope }) {
   const { t } = useTranslation()
   const { team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, activeTab, tabs, closeTab, invalidate, pushToast, pending, setFlowDialogOpen, setSessionLaterOpen, sessionSummary } = useUiStore()
   const laterBlocked = laterBlockedReason(sessionSummary)
@@ -64,6 +71,16 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
   const [origin] = useState(() => document.activeElement)
   const memberTarget = useMemo(() => team.find((m) => m.id === memberRowTarget(origin)), [team, origin])
   const msgHost = useMemo(() => messageTarget(origin), [origin])
+  // owner-followups-1015 #31（A16b「打开方式」）：作用对象 = 打开面板前的焦点文件树行（链接除外），
+  // 否则当前文件 / 产物页签；另列整个项目（路径空串）。只在「打开方式」视图读候选。
+  const [scope, setScope] = useState<PaletteScope>(initialScope)
+  const [openTarget] = useState(() => {
+    const row = treeRowTarget()
+    if (row) return row.kind === 'link' ? null : row.path
+    return tabPath(tabs.find((x) => x.id === activeTab))
+  })
+  const targetApps = useOpenWithCandidates(scope === 'openWith' ? openTarget : null).state
+  const projectApps = useOpenWithCandidates(scope === 'openWith' ? '' : null).state
   // owner-followups-1015 #15（ADR 0093 后续裁决「⌘K 拆推送 / 发布…」）：打开面板时读一次发布目标。
   // null = 还在读；读失败按 0 个处理（灰显写因，不出死项）。picking = 多个目标时的选择步。
   const [releases, setReleases] = useState<ReleaseTarget[] | null>(null)
@@ -96,6 +113,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
 
   const items = useMemo<Item[]>(() => {
     const bind = (a: ActionId) => formatBinding(bindingFor(a))
+    if (scope === 'openWith') return openWithItems(t, openTarget, targetApps, projectApps)
     // 「发布…」：0 个目标灰显写因、1 个直接发起、多个先选（选择步列出每个目标，名 + 命令）。
     const releaseItem = (): Item => {
       const base = { id: 'c-release', group: 'cmd' as const, label: t('palette.requestRelease'), icon: 'publish' as const,
@@ -199,6 +217,9 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
         id: 'n-reveal-path', group: 'nav' as const, label: t(revealLabelKey()), icon: 'folder' as const, hint: bind('revealPath'),
         run: () => { const p = tabPath(tabs.find((x) => x.id === activeTab)); if (p) void revealPath(p) },
       }] : []),
+      // #31：「打开方式…」切到只列编辑器的视图（同 openWith 键位），不关面板。
+      { id: 'n-open-with', group: 'nav', label: t('palette.openWith'), icon: 'external', hint: bind('openWith'), keepOpen: true,
+        keywords: ['open with', 'ide', 'editor', 'vscode', 'xcode', '编辑器'], run: () => { setScope('openWith'); setQ('') } },
       // 快速打开：产物（file-text + 等宽路径 +「产物」）、Agent（头像 + 角色名 +「Agent」）
       ...artifacts.map((a) => ({
         id: `o-f-${a.path}-v${a.version}`, group: 'open' as const, mono: true, icon: 'file-text' as const,
@@ -212,7 +233,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       })),
     ]
     return list
-  }, [t, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pushToast, setFlowDialogOpen, setSessionLaterOpen, laterBlocked, onSettings, pushTargets, startPush, invalidate, releases, picking])
+  }, [t, scope, openTarget, targetApps, projectApps, memberTarget, msgHost, team, artifacts, openTab, toggleSidebar, toggleCanvas, toggleCanvasFull, showConversation, toggleFocusMode, closeTab, activeTab, tabs, pushToast, setFlowDialogOpen, setSessionLaterOpen, laterBlocked, onSettings, pushTargets, startPush, invalidate, releases, picking])
 
   // ui-audit 票 09（P3-19）：keywords 参与匹配（英文动词/缩写），
   // 最近使用项置顶（localStorage hexagon.palette.recents）。
@@ -224,6 +245,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
     { key: 'cmd', title: picking ? t('palette.releaseChoose') : t('palette.commands') },
     { key: 'nav', title: t('palette.nav') },
     { key: 'open', title: t('palette.open') },
+    { key: 'openWith', title: t('ctx.openWith') },
   ]
   const runItem = async (i: Item) => {
     if (i.disabled) return
@@ -255,7 +277,7 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
             <CommandEmpty>
               <span className="flex flex-col items-center gap-1.5">
                 <Icon name="search" size={20} />
-                <span>{q.trim() ? t('palette.emptyFor', { q: q.trim() }) : t('palette.empty')}</span>
+                <span>{q.trim() ? t('palette.emptyFor', { q: q.trim() }) : scope === 'openWith' ? t(openWithEmptyKey(targetApps, projectApps)) : t('palette.empty')}</span>
               </span>
             </CommandEmpty>
             {/* 显示顺序 = 分组顺序；组内保持 filterPaletteItems 的排序（最近使用在前） */}
@@ -277,6 +299,32 @@ export function CommandPalette({ onClose, onSettings }: { onClose: () => void; o
       </DialogContent>
     </Dialog>
   )
+}
+
+/** #31「打开方式」视图：目标（文件 / 目录）的编辑器在前，整个项目的在后；名称不翻译。 */
+function openWithItems(t: TFunction, target: string | null, targetApps: OpenWithState, projectApps: OpenWithState): Item[] {
+  const name = target ? target.split('/').filter(Boolean).pop() ?? target : ''
+  const rows: Item[] = []
+  if (target && targetApps.kind === 'ready') {
+    for (const app of targetApps.apps) {
+      rows.push({ id: `w-${app.id}-${target}`, group: 'openWith', app, label: t('palette.openWithApp', { app: app.name }), desc: name,
+        keywords: [app.id, target], run: () => openPathWith(target, app.id) })
+    }
+  }
+  if (projectApps.kind === 'ready') {
+    for (const app of projectApps.apps) {
+      rows.push({ id: `wp-${app.id}`, group: 'openWith', app, label: t('palette.openProjectWith', { app: app.name }), desc: t('palette.wholeProject'),
+        keywords: [app.id], run: () => openPathWith('', app.id) })
+    }
+  }
+  return rows
+}
+
+/** 「打开方式」视图没有行时说清为什么：还在读 / 读失败 / 本机没有可用编辑器。 */
+function openWithEmptyKey(a: OpenWithState, b: OpenWithState): string {
+  if (a.kind === 'error' || b.kind === 'error') return 'ctx.openWithError'
+  if (b.kind === 'loading') return 'ctx.openWithLoading'
+  return 'ctx.openWithEmpty'
 }
 
 /** #13 推送项：有上游（或还没读到目标）= 一项「推送」，描述写目标远程；
@@ -307,7 +355,8 @@ function pushItems(
 function PaletteRow({ item, onRun }: { item: Item; onRun: () => void }) {
   const avatars = useUiStore((s) => s.avatars)
   let lead: ReactNode = null
-  if (item.agent) lead = <Avatar agentId={item.agent.id} name={item.agent.role} size={18} src={avatars[item.agent.id]} />
+  if (item.app) lead = <AppIcon app={item.app} />
+  else if (item.agent) lead = <Avatar agentId={item.agent.id} name={item.agent.role} size={18} src={avatars[item.agent.id]} />
   else if (item.icon) lead = <Icon name={item.icon} className="text-ink-2" size={14} />
   return (
     <CommandItem value={item.id} onSelect={onRun} disabled={item.disabled} data-palette-item={item.id}>

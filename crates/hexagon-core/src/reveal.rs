@@ -79,7 +79,7 @@ fn looks_absolute(rel: &str) -> bool {
 /// 拒绝记 Warn 诊断（分类「拒绝」，分支 `reveal_path`，码 = 错误码）。
 pub fn reveal_target(root: &Path, rel: &str) -> Result<PathBuf, RevealError> {
     let started = std::time::Instant::now();
-    let out = judge(root, rel);
+    let out = resolve_in_root(root, rel);
     if let Err(e) = &out {
         crate::diag::note(
             crate::diag::CLASS_REJECT,
@@ -96,7 +96,8 @@ pub fn reveal_target(root: &Path, rel: &str) -> Result<PathBuf, RevealError> {
     out
 }
 
-fn judge(root: &Path, rel: &str) -> Result<PathBuf, RevealError> {
+/// 同一根约束判定，不写诊断——给别的入口复用（#31「打开方式」用它判路径，诊断分支记自己的）。
+pub fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, RevealError> {
     let shown = || rel.trim().to_string();
     let segs =
         normalize_rel(rel.trim()).ok_or_else(|| RevealError::RevealOutsideProject(shown()))?;

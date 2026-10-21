@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Dot } from '@/components/ui/dot'
 import { cn } from '@/lib/utils'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { OpenWithSubmenu } from '../OpenWithMenu'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuFooter, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -65,7 +66,7 @@ function arrowTabs(e: KeyboardEvent<HTMLDivElement>) {
   next.click()
 }
 
-/** 画布页签右键菜单（A16b 第一批）：关闭 · 关闭其他 · 关闭右侧 · 复制路径（仅文件 / 产物页签）。 */
+/** 画布页签右键菜单（A16b 第一批）：关闭 · 关闭其他 · 关闭右侧 · 复制路径 · 打开方式 ▸（后两项仅文件 / 产物页签；#31）。 */
 function TabContextMenu({ tab, tabs, children }: { tab: WorkTab; tabs: WorkTab[]; children: ReactNode }) {
   const { t } = useTranslation()
   const path = tabPath(tab)
@@ -90,6 +91,7 @@ function TabContextMenu({ tab, tabs, children }: { tab: WorkTab; tabs: WorkTab[]
             <ContextMenuItem data-ctx-item="copyPath" action="copyPath" onSelect={() => void copyTabPath(tab.id)}>
               {t('ctx.copyPath')}
             </ContextMenuItem>
+            <OpenWithSubmenu path={path} />
           </>
         )}
       </ContextMenuContent>

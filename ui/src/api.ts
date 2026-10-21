@@ -1,4 +1,5 @@
 import type { ReconcileReport } from './gen/ReconcileReport'
+import type { OpenWithApp } from './gen/OpenWithApp'
 import type { ArtistProposal } from './gen/ArtistProposal'
 import type { RejudgeOutcome } from './gen/RejudgeOutcome'
 import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
@@ -392,6 +393,10 @@ export const api = {
   createRepoDir: (path: string) => call<void>('create_repo_dir', { path }),
   /** owner-followups-1015 #07：在访达 / 资源管理器 / 文件管理器中显示（控制组；根约束在 core，越界 errors.reveal_outside_project）。 */
   revealRepoPath: (path: string) => call<void>('reveal_repo_path', { path }),
+  /** owner-followups-1015 #31「打开方式」：本机可打开该路径的 IDE / 编辑器（白名单 ∩ 系统登记；空串 = 项目根）。 */
+  openWithCandidates: (path: string) => call<OpenWithApp[]>('open_with_candidates', { path }),
+  /** 用指定应用打开（控制组）；core 重判根约束 + 白名单，越界 errors.open_with_outside_project。 */
+  openWith: (path: string, appId: string) => call<void>('open_with', { path, appId }),
   permissionShapeSuggestion: (questionId: string) => call<PermissionShapeSuggestion | null>('permission_shape_suggestion', { questionId }),
   approvalMode: () => call<ApprovalModeStatus>('approval_mode'),
   setApprovalMode: (mode: ApprovalMode, expectedProjectRoot: string) => call<ApprovalModeStatus>('set_approval_mode', { mode, expectedProjectRoot }),
@@ -1707,7 +1712,11 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'create_repo_file':
     case 'create_repo_dir':
     case 'reveal_repo_path':
+    case 'open_with':
       return null as T
+    // #31：mock 机器上装了两个编辑器，图标取不到（中性图标）。
+    case 'open_with_candidates':
+      return [{ id: 'com.microsoft.VSCode', name: 'Visual Studio Code', icon: null }, { id: 'dev.zed.Zed', name: 'Zed', icon: null }] as T
     case 'permission_shape_suggestion':
       return (args?.questionId === 'q-perm' ? { shape: 'exact:cargo test --workspace', generalized: false, tool: 'bash', project_id: 'p1', agent_id: 'a0' } : null) as T
     case 'approval_mode':
