@@ -14,7 +14,8 @@ import { CodeBlock } from './Md'
 import { DiffView } from './DiffView'
 import { SpinnerRing } from './SpinnerRing'
 import { CodeChip } from './ui/code-chip'
-import { FileContextMenu, useProjectFileTarget } from './FileMenu'
+import { FileContextMenu } from './FileMenu'
+import { useProjectFileTarget } from '../fileMenuTarget'
 import { toolInputSummary, toolOutcome, TOOL_ICON, TOOL_LABEL, type ToolCall, type ToolOutcome } from '../agentSteps'
 
 // 渲染上限（票 04）：实时流/结果体只渲末 32KB——长输出（cargo test 全量）

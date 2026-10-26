@@ -30,7 +30,8 @@ import { Progress } from '@/components/ui/progress'
 import { Spinner } from '@/components/ui/spinner'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
-import { FileContextMenu, useProjectFileTarget } from './FileMenu'
+import { FileContextMenu } from './FileMenu'
+import { useProjectFileTarget } from '../fileMenuTarget'
 
 type Step = {
   id: number

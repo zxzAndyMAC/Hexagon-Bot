@@ -16,7 +16,8 @@ import {
 } from '../messageActions'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { useUiStore } from '../store'
-import { FileMenuItems, useProjectFileTarget } from './FileMenu'
+import { FileMenuItems } from './FileMenu'
+import { useProjectFileTarget } from '../fileMenuTarget'
 
 /** 右键 mousedown 记下的选区多久内算数（之后到的 contextmenu 用它；键盘打开的没有 mousedown，现读选区）。 */
 const SNAPSHOT_MS = 1000

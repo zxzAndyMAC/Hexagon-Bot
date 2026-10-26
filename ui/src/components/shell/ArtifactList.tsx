@@ -11,7 +11,8 @@ import { Icon } from '../Icon'
 import { Row } from '../Row'
 import { artifactTone } from '../canvas/artifactMeta'
 import { Badge } from '@/components/ui/badge'
-import { FileContextMenu, useProjectFileTarget } from '../FileMenu'
+import { FileContextMenu } from '../FileMenu'
+import { useProjectFileTarget } from '../../fileMenuTarget'
 import type { ArtifactRow } from '../../gen/ArtifactRow'
 
 export function ArtifactList() {
