@@ -76,7 +76,12 @@ function ExecHeadMenu({ file, children }: { file?: { path: string; open: 'file' 
   return <FileContextMenu {...target}>{children}</FileContextMenu>
 }
 
-function openExecFile({ path, open }: { path: string; open: 'file' | 'artifact' }) {
+/**
+ * 打开工具调用涉及的文件：产物写入（artifact_write，路径是 `.hexagon/` 内相对）开产物页签，其余（fs_read / fs_write /
+ * fs_patch 的仓库路径）开文件页签。执行卡卡头与时间线文件 chip 共用这一处（#33 L4：chip 曾一律开 `art:`，
+ * 仓库文件被当产物打开，产物视图找不到它）。
+ */
+export function openExecFile({ path, open }: { path: string; open: 'file' | 'artifact' }) {
   const root = useUiStore.getState().projectRoot
   const rel = projectRelPath(path, root) ?? path
   useUiStore.getState().openTab(open === 'artifact'
