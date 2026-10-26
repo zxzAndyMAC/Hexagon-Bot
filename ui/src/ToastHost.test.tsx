@@ -48,6 +48,15 @@ describe('ToastHost（A18）', () => {
     expect(document.activeElement).toBe(before)
   })
 
+  // 2026-10-26 回归：多行错误 toast 曾用 rounded-full，两侧成半圆；改 19px 组件常量（foundations §3）。
+  it('多行 toast 不用全圆胶囊角', async () => {
+    await act(async () => { useUiStore.getState().pushToast('mcp initialization failed\nline two\nline three', 'err') })
+    await flush()
+    const el = pill('mcp initialization failed')
+    expect(el.className).not.toContain('rounded-full')
+    expect(el.className).toContain('rounded-[19px]')
+  })
+
   it('原因码随失败文案出现（D8：worktree_binding_drift）', async () => {
     const drift = { code: 'worktree_binding_drift', message: 'worktree HEAD moved' }
     expect(reasonCode(drift)).toBe('worktree_binding_drift')

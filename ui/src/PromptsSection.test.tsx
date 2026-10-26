@@ -12,11 +12,11 @@ const CATALOG = [
   { id: 'tool.fs_patch', group: 'tools', text: 'Replace an exact string', hash: 'b' },
 ]
 
-async function render(onGoModels = () => {}) {
+async function render(onGoModels = () => {}, onGoSlots = () => {}) {
   const el = document.createElement('div')
   document.body.appendChild(el)
   const root = createRoot(el)
-  await act(async () => { root.render(<PromptsSection onGoModels={onGoModels} />) })
+  await act(async () => { root.render(<PromptsSection onGoModels={onGoModels} onGoSlots={onGoSlots} />) })
   await act(async () => { await Promise.resolve() })
   return { el, root }
 }
@@ -86,15 +86,16 @@ describe('PromptsSection（prompt-engineering 票 11）', () => {
     act(() => root.unmount())
   })
 
-  it('没有可用模型：整页英文 + 去模型设置；单条失败只在该条译文页签提示', async () => {
+  // 2026-10-26：缺的是翻译槽/默认槽绑定，入口改去「槽位绑定」分区（从模型服务拆出），不再去模型服务
+  it('没有可用模型：整页英文 + 去槽位绑定；单条失败只在该条译文页签提示', async () => {
     await i18n.changeLanguage('ja')
     vi.spyOn(api, 'promptCatalog').mockResolvedValue(CATALOG)
     vi.spyOn(api, 'translatePrompts').mockResolvedValue({ no_model: true, entries: [] })
     const go = vi.fn()
-    const first = await render(go)
+    const first = await render(() => {}, go)
     expect(first.el.textContent).toContain('# Hexagon workbench')
     expect(first.el.querySelector('[data-translation]')).toBeNull()
-    const btn = [...first.el.querySelectorAll('button')].find((b) => b.textContent === 'モデルサービスを開く')!
+    const btn = [...first.el.querySelectorAll('button')].find((b) => b.textContent === 'スロット割当を開く')!
     await act(async () => { btn.click() })
     expect(go).toHaveBeenCalled()
     act(() => first.root.unmount())

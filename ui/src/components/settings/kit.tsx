@@ -162,6 +162,8 @@ export function ListDetail<T>(p: ListDetailProps<T>) {
   const { t } = useTranslation()
   const [q, setQ] = React.useState('')
   const [width, setWidth] = React.useState(() => readSettingsListWidth(localStorage))
+  // 虚拟列表的滚动容器（SettingsVirtualList customScrollParent）；回调 ref 让挂载后重渲染一次拿到元素。
+  const [scroller, setScroller] = React.useState<HTMLDivElement | null>(null)
   const commit = (w: number) => { setWidth(w); writeSettingsListWidth(localStorage, w) }
   const shown = p.items.filter((it) => !q || p.filterText(it).toLowerCase().includes(q.toLowerCase()))
   const groups: { key: string; items: T[] }[] = []
@@ -226,7 +228,7 @@ export function ListDetail<T>(p: ListDetailProps<T>) {
               aria-label={p.searchPlaceholder}
             />
           )}
-          <div role="listbox" aria-label={p.label} onKeyDown={listKey} className={cn('min-h-0 flex-1 overflow-y-auto pb-2', !p.searchPlaceholder && !p.head && 'pt-3')}>
+          <div ref={setScroller} role="listbox" aria-label={p.label} onKeyDown={listKey} className={cn('min-h-0 flex-1 overflow-y-auto pb-2', !p.searchPlaceholder && !p.head && 'pt-3')}>
             {p.error ? (
               <InlineError {...p.error} />
             ) : p.loading && p.items.length === 0 ? (
@@ -235,7 +237,7 @@ export function ListDetail<T>(p: ListDetailProps<T>) {
               <div className="px-[18px] py-3 text-[12.5px] text-ink-3">{p.emptyText ?? t('settingsUi.noMatches')}</div>
             ) : p.virtualized && shown.length > 100 ? (
               <SettingsVirtualList key={q} items={shown} itemKey={p.itemKey} selected={p.selected}
-                onSelect={p.onSelect} renderItem={p.renderItem} itemClass={ldItemCls} />
+                onSelect={p.onSelect} renderItem={p.renderItem} itemClass={ldItemCls} scrollParent={scroller} />
             ) : (
               groups.map((g, gi) => (
                 <div key={g.key || gi} role={g.key ? 'group' : undefined} aria-label={g.key ? p.groupLabel?.(g.key) ?? g.key : undefined}>

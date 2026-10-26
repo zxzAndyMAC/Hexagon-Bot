@@ -82,7 +82,7 @@ export default function App() {
       const section = (event as CustomEvent<unknown>).detail
       // review R2：托管报告行内动作还会指到 MCP / 技能分区（core managed/next.rs 的封闭表）。
       // owner-followups-1015 #15：发布卡 / ⌘K「发布…」写因 / 托管报告「配置发布目标」→ 设置·发布。
-      if (section !== 'models' && section !== 'usage' && section !== 'mcp' && section !== 'skills' && section !== 'release') return
+      if (section !== 'models' && section !== 'slots' && section !== 'usage' && section !== 'mcp' && section !== 'skills' && section !== 'release') return
       void enterSettings(section)
     }
     // Ticket 05: a report entry asked for its timeline row; the timeline jumps.

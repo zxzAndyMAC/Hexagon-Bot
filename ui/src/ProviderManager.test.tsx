@@ -3,6 +3,8 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import './i18n'
 import { ProviderManager } from './components/ProviderManager'
+// 2026-10-26：槽位绑定表从模型服务拆到独立分区；槽位用例改挂 SlotsSection，断言不变
+import { SlotsSection } from './components/settings/SlotsSection'
 import { api } from './api'
 import type { ProvidersView } from './gen/ProvidersView'
 import type { ProviderPreset } from './gen/ProviderPreset'
@@ -44,7 +46,7 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     for (let opening = 0; opening < 2; opening++) {
       let resolve!: (value: ProvidersView) => void
       vi.mocked(api.listProviders).mockReturnValueOnce(new Promise((done) => { resolve = done }))
-      const { el, root } = await render(<ProviderManager />)
+      const { el, root } = await render(<SlotsSection />)
       try {
         await act(async () => { resolve(pv) })
         const row = el.querySelector('[data-slot-state="bound"]')!.parentElement!
@@ -64,16 +66,18 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     expect(el.querySelectorAll('[data-slot="dot"][data-tone="on"]')).toHaveLength(1)
     expect(el.querySelectorAll('[data-slot="dot"][data-tone="warn"]')).toHaveLength(1)
     expect(el.querySelectorAll('[data-slot="dot"][data-tone="off"]')).toHaveLength(1)
+    root.unmount()
+    // 2026-10-26：槽位汇总随槽位表拆进 SlotsSection（负责人裁决），断言跟着搬过去。
     // 汇总行：default 已绑但缺钥匙。列表里还有 decision、三个起草槽和 jev，共 6 个。
-    const text = el.textContent ?? ''
     // prompt-engineering 票 11：内置槽位新增 translate（提示词参考译文），6 → 7。
     // 功能缺口 C2：内置槽位新增 image（出图，精确绑定），7 → 8。
-    expect(text).toContain('1/8')
-    root.unmount()
+    const slots = await render(<SlotsSection />)
+    expect(slots.el.textContent ?? '').toContain('1/8')
+    slots.root.unmount()
   })
 
   it('槽位名不截断：名可换行、槽位 id 另起一行（票 16c fr 冒烟「Traduction des prompts」）', async () => {
-    const { el, root } = await render(<ProviderManager />)
+    const { el, root } = await render(<SlotsSection />)
     const cell = el.querySelector('[data-slot-row="translate"] code')!
     expect(cell.className).not.toContain('truncate')
     const [name, id] = [...cell.children]
@@ -85,7 +89,7 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
 
   it('解绑读回后清空旧选择，不再把旧模型留在未绑槽中', async () => {
     vi.spyOn(api, 'removeSlotBinding').mockResolvedValue(undefined)
-    const { el, root } = await render(<ProviderManager />)
+    const { el, root } = await render(<SlotsSection />)
     try {
       const row = el.querySelector('[data-slot-state="bound"]')!.parentElement!
       vi.mocked(api.listProviders).mockResolvedValue({ ...pv, slots: {} })
@@ -107,7 +111,7 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     vi.spyOn(api, 'setSlotBinding').mockResolvedValue(undefined)
     const loaded = { ...pv, slots: { ...pv.slots, chat: { provider_id: 'a', model: 'chat-model' } } }
     vi.mocked(api.listProviders).mockResolvedValue(loaded)
-    const { el, root } = await render(<ProviderManager />)
+    const { el, root } = await render(<SlotsSection />)
     try {
       const row = (slot: string) => [...el.querySelectorAll('code')]
         .find((c) => c.textContent?.endsWith(slot))!.parentElement!
@@ -156,8 +160,11 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     // 本机 on，形似本机的远端仍 warn
     expect(el.querySelectorAll('[data-slot="dot"][data-tone="on"]')).toHaveLength(1)
     expect(el.querySelectorAll('[data-slot="dot"][data-tone="warn"]')).toHaveLength(1)
-    expect(el.querySelector('[data-slot-state="bound"]')!.textContent).toBe('Ready')
     expect(el.textContent).not.toContain('Missing key')
+    const slots = await render(<SlotsSection />)
+    expect(slots.el.querySelector('[data-slot-state="bound"]')!.textContent).toBe('Ready')
+    expect(slots.el.textContent).not.toContain('Missing key')
+    slots.root.unmount()
     const row = (name: string) =>
       [...el.querySelectorAll('div')].find((d) => d.textContent === name)!.closest('div')!
     const checkBtn = () =>
@@ -177,7 +184,7 @@ describe('ProviderManager 面板清扫（ui-audit-2 票 10）', () => {
     vi.mocked(api.presetRoles).mockResolvedValue([
       { name: '后端', duty: '', reviewer: null, model_slot: 'chat', globs: [], skills: [] },
     ])
-    const { el, root } = await render(<ProviderManager />)
+    const { el, root } = await render(<SlotsSection />)
     const codes = [...el.querySelectorAll('code')].map((c) => c.textContent ?? '')
     expect(codes.some((c) => c.includes('Default (fallback)') && c.includes('default'))).toBe(true)
     expect(codes.some((c) => c.includes('Decision') && c.includes('decision'))).toBe(true)

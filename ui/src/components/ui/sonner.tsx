@@ -44,13 +44,16 @@ function ToastPill({ tone, icon, text, code, action, onAction, className }: {
     : tone === "ok" ? <Icon name="circle-check" size={16} className="text-green" />
     : tone === "err" ? <Icon name="circle-x" size={16} className="text-red" />
     : null
+  // 2026-10-26 负责人反馈「多行错误 toast 左右圆角太夸张」：原 rounded-full 在多行时两侧变成半圆。
+  // 圆角取最小高 38 的一半（foundations §3 组件常量 19px）：单行仍是完整胶囊，多行只留 19px 角。
+  // 被否决：换 --r-card / --r-panel——单行 toast 会丢掉胶囊外形（feedback#toast 原型）。
   return (
     <div
       data-slot="toast"
       data-tone={tone}
       role={tone === "err" ? "alert" : "status"}
       className={cn(
-        "pointer-events-auto inline-flex min-h-[38px] max-w-[min(560px,80vw)] animate-hx-jumpin items-center gap-2 rounded-full bg-tooltip py-2 pr-3.5 pl-3 text-[13px] leading-[18px] text-tooltip-fg shadow-[var(--shadow-lg)]",
+        "pointer-events-auto inline-flex min-h-[38px] max-w-[min(560px,80vw)] animate-hx-jumpin items-center gap-2 rounded-[19px] bg-tooltip py-2 pr-3.5 pl-3 text-[13px] leading-[18px] text-tooltip-fg shadow-[var(--shadow-lg)]",
         className,
       )}
     >

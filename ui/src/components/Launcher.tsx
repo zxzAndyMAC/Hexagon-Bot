@@ -85,8 +85,11 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
   const body = wizard ? (
     <Wizard onDone={onOpen} onCancel={() => setWizard(null)} seed={wizard.seed} />
   ) : (
-    <div data-tauri-drag-region className="fixed inset-0 overflow-auto bg-[var(--app-main)] text-ink">
-      <div className="flex flex-col items-center px-4 pt-[110px] pb-16">
+    // 2026-10-26 负责人反馈「向导第一步应固定不滚动，最近项目列表自己滚」：整页钉在视口高度，
+    // 只有最近项目列表 overflow；窗口矮到放不下首屏（min-h）时才退回整页滚动。
+    // 被否决：整页随列表长高再整页滚——项目多了一句话输入框会被推出视区。
+    <div data-tauri-drag-region className="fixed inset-0 overflow-y-auto bg-[var(--app-main)] text-ink">
+      <div className="flex h-full min-h-[480px] flex-col items-center px-4 pt-[110px] pb-16">
         <div className="grid size-10 place-items-center rounded-[12px] bg-ink text-page"><Icon name="hex" size={20} /></div>
         <h1 className="mt-[18px] mb-1.5 text-[28px] font-medium tracking-[-.02em]">{t('launch.heading')}</h1>
         <div className="text-[12.5px] text-ink-3">Hexagon-Bot · {t('launch.title')}</div>
@@ -146,7 +149,7 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
           <Button size="sm" data-blank-new onClick={() => setWizard({})}><Icon name="plus" size={14} />{t('launch.blank')}</Button>
         </div>
 
-        <div className="mt-7 w-[640px] max-w-full">
+        <div className="mt-7 flex min-h-0 w-[640px] max-w-full flex-1 flex-col">
           {loaded && recents.length === 0 ? (
             <Empty icon="folder" title={t('launch.emptyTitle')} desc={t('launch.emptyBody')}
               action={isTauri
@@ -154,10 +157,10 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
                 : <Button size="sm" onClick={() => setWizard({})}>{t('launch.blank')}</Button>} />
           ) : recents.length > 0 && (
             <>
-              <div className="flex px-3 pb-1.5 text-[12px] text-ink-3">
+              <div className="flex flex-none px-3 pb-1.5 text-[12px] text-ink-3">
                 {t('launch.recents')}<span className="flex-1" />{t('launch.recentCount', { count: recents.length })}
               </div>
-              <ul role="list" className="m-0 list-none rounded-[var(--r-panel)] bg-[var(--app-card)] p-1 shadow-[var(--shadow-card)]">
+              <ul role="list" data-launch-recents className="m-0 min-h-0 list-none overflow-y-auto rounded-[var(--r-panel)] bg-[var(--app-card)] p-1 shadow-[var(--shadow-card)]">
                 {recents.map((r) => <RecentRow key={r.dir} r={r} when={recentTime(r.opened_at, now, i18n.language)} opening={opening === r.dir} onOpen={() => { void openDir(r.dir) }} onRemove={() => remove(r.dir)} />)}
               </ul>
             </>
@@ -170,6 +173,11 @@ export function Launcher({ onOpen }: { onOpen: () => void }) {
   return (
     <>
       {body}
+      {/* 2026-10-26 负责人反馈「启动页 / 向导时拖不动窗口」：Tauri 的裸 data-tauri-drag-region 只认
+          「点在这个元素本身」（drag.js isDragRegion），而启动页内容列铺满整个底板、向导卡外只剩窄边，
+          实际几乎没有可拖的像素。顶部补一条 44 高的拖动条（同设置页 h-11），z 16 与向导同层、靠 DOM
+          序压在其上，低于右上设置钮 17。被否决：底板改 "deep"——向导正文与输入区的文字选择会变成拖窗。 */}
+      <div data-tauri-drag-region data-launch-drag className="fixed inset-x-0 top-0 z-[16] h-11" />
       {/* 设置钮对启动页与向导全程恒显（owner 2026-09-30：向导期间也要能进
           设置）。z 17：压过全屏视图 16（向导）；设置覆盖 18 打开时盖住它（foundations §4，gap C5）。 */}
       <div className="fixed top-2 right-3.5 z-[17]">

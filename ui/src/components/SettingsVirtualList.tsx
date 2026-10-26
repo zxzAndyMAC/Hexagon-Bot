@@ -4,8 +4,10 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 /** Issue09: bounded DOM for installed skills. Navigation reaches unmounted rows;
  * their names, descriptions and switches retain the existing list presentation.
  * ui-redesign 票 11（components E2）：行是 listbox 的 option，外观由 ListDetail 传入（ld-item）。 */
-export function SettingsVirtualList<T>({ items, itemKey, selected, onSelect, renderItem, itemClass }: {
+export function SettingsVirtualList<T>({ items, itemKey, selected, onSelect, renderItem, itemClass, scrollParent }: {
   items: T[]
+  /** ListDetail 的 listbox：虚拟列表借它滚动，高度随列表栏铺满（见下方 Virtuoso 注释）。 */
+  scrollParent: HTMLElement | null
   itemKey: (item: T) => string
   selected: string | null
   onSelect: (key: string | null) => void
@@ -26,8 +28,11 @@ export function SettingsVirtualList<T>({ items, itemKey, selected, onSelect, ren
     onSelect(key)
     list.current?.scrollIntoView({ index: next, behavior: 'auto', done: () => nodes.current.get(key)?.focus() })
   }}>
+    {/* 2026-10-26 负责人反馈「设置·技能列表高度不对」：原先自带 style 高 min(480, n×60) 且封顶 52vh，
+        技能超过 100 个走虚拟列表时列表栏下半截空着、还套了第二层滚动。改为借 listbox 当滚动容器，
+        高度跟列表栏走。被否决：height 100%——listbox 有 pb-2，会多出一层几像素的外滚动。 */}
     <Virtuoso ref={list} data={items} computeItemKey={(_index, item) => itemKey(item)}
-      fixedItemHeight={60} increaseViewportBy={120} style={{ height: Math.min(480, items.length * 60), maxHeight: '52vh' }}
+      fixedItemHeight={60} increaseViewportBy={120} customScrollParent={scrollParent ?? undefined}
       itemContent={(_index, item) => {
         const key = itemKey(item)
         const active = key === selected

@@ -19,6 +19,7 @@ import { DesktopControlPanel } from '../DesktopControlPanel'
 import { DesktopPermissions } from '../DesktopPermissions'
 import { PermissionScope } from '../PermissionActions'
 import { ProjectDelegation } from '../ProjectDelegation'
+import { ReviewerModeRow } from './ReviewerModeRow'
 import { Empty, Group, InlineError, NeedsProject, SetHead, SetWrap, SkeletonRows, SRow } from './kit'
 import { tableCls } from './styles'
 
@@ -166,6 +167,8 @@ export function PermsSection({ projectless, onOpenProject }: { projectless: bool
             <div data-srow className="border-t border-line-soft px-4 py-[13px]"><BrowserControlPanel inline /></div>
           </Group>
           <ProjectDelegation />
+          {/* 原「自治」分区并入（2026-10-26 负责人裁决，见 ReviewerModeRow 头注释） */}
+          <ReviewerModeRow />
           <RulesTable />
         </>
       )}

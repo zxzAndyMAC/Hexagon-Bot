@@ -66,7 +66,8 @@ describe('SettingsPage projectless 门（收口回归）', () => {
     expect(el.textContent).toContain('termius')
     expect(el.textContent).not.toContain('needs an open project')
     expect(mcpEntries).toHaveBeenCalled()
-    for (const label of ['Permissions', 'Autonomy', 'Usage']) {
+    // 2026-10-26：「自治」并入权限页，不再单列导航。
+    for (const label of ['Permissions', 'Usage']) {
       await clickNav(el, label)
       expect(el.textContent).toContain('needs an open project')
     }

@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import i18n from './i18n'
 import { api } from './api'
 import { ProviderManager } from './components/ProviderManager'
+import { SlotsSection } from './components/settings/SlotsSection'
 import { ProviderIcon } from './components/ProviderIcon'
 import { iconKeyOf, providerIconAsset } from './providerIcons'
 import type { ProviderPreset } from './gen/ProviderPreset'
@@ -140,11 +141,14 @@ describe('设置「模型服务」：列表 / 详情 / 槽位表的图标', () =
     const head = el.querySelector('[data-provider-detail] [data-provider-icon]')!
     expect(head.getAttribute('data-provider-icon')).toBe('deepseek')
     expect(head.className).toContain('size-7')
-    const slotIcon = (slot: string) => el.querySelector(`[data-slot-row="${slot}"] [data-provider-icon]`)
+    root.unmount()
+    // 2026-10-26：槽位表拆到独立分区 SlotsSection，图标规则不变
+    const slots = await render(<SlotsSection />)
+    const slotIcon = (slot: string) => slots.el.querySelector(`[data-slot-row="${slot}"] [data-provider-icon]`)
     expect(slotIcon('default')!.getAttribute('data-provider-icon')).toBe('deepseek')
     expect(slotIcon('default')!.className).toContain('size-4')
     expect(slotIcon('chat')!.getAttribute('data-provider-icon')).toBe('neutral')
-    root.unmount()
+    slots.root.unmount()
   })
 })
 

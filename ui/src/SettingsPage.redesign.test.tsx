@@ -33,12 +33,14 @@ const nav = async (id: string) => {
 }
 
 describe('设置外壳（E1）', () => {
-  it('导航含「自治」（R-07），当前分区 aria-current，返回走 onBack', async () => {
+  it('导航不再含「自治」（2026-10-26 并入权限），当前分区 aria-current，返回走 onBack', async () => {
     const back = vi.fn()
     await act(async () => root.render(<SettingsPage onBack={back} />))
     const ids = [...el.querySelectorAll('[data-nav]')].map((b) => b.getAttribute('data-nav'))
     // owner-followups-1015 #14：新增项目级「发布」分区（components E14），排在 MCP 之后
-    expect(ids).toEqual(['general', 'keys', 'models', 'team', 'perms', 'autonomy', 'prompts', 'skills', 'mcp', 'release', 'usage', 'logs', 'about'])
+    // 2026-10-26：「自治」只剩审查者开关，并入权限页，导航去掉该项
+    // 2026-10-26 负责人裁决：槽位绑定拆成独立分区，紧跟模型服务之下。
+    expect(ids).toEqual(['general', 'keys', 'models', 'slots', 'team', 'perms', 'prompts', 'skills', 'mcp', 'release', 'usage', 'logs', 'about'])
     expect(el.querySelector('[data-nav="general"]')!.getAttribute('aria-current')).toBe('page')
     await act(async () => [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('Back to workbench'))!.click())
     expect(back).toHaveBeenCalled()
@@ -47,7 +49,8 @@ describe('设置外壳（E1）', () => {
   it('无项目时项目态分区显示 A19 空态，动作「打开项目」回启动页', async () => {
     const back = vi.fn()
     await act(async () => root.render(<SettingsPage onBack={back} projectless />))
-    await nav('autonomy')
+    // 原用「自治」探 gated 占位；该分区已并入权限，改用同为 gated 的「用量」
+    await nav('usage')
     const empty = el.querySelector('[data-empty]')!
     expect(empty.textContent).toContain('Open a project first')
     await act(async () => [...empty.querySelectorAll('button')].find((b) => b.textContent === 'Open project')!.click())
@@ -135,12 +138,12 @@ describe('键盘分区（E7）', () => {
   })
 })
 
-describe('自治（R-07：E1 行 + Switch）', () => {
+describe('审查者模式（原「自治」，现位于权限页；R-07：E1 行 + Switch）', () => {
   it('切到 live 先走确认，不乐观翻转；确认后才写入', async () => {
     vi.spyOn(api, 'reviewerMode').mockResolvedValue('shadow')
     const set = vi.spyOn(api, 'setReviewerMode').mockResolvedValue(undefined)
-    await act(async () => root.render(<SettingsPage onBack={() => {}} initialSection="autonomy" />))
-    const sw = el.querySelector<HTMLButtonElement>('[role="switch"]')!
+    await act(async () => root.render(<SettingsPage onBack={() => {}} initialSection="perms" />))
+    const sw = el.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${i18n.t('auto.mode_live')}"]`)!
     expect(sw.getAttribute('aria-checked')).toBe('false')
     await act(async () => sw.click())
     expect(set).not.toHaveBeenCalled()

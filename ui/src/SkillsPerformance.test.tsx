@@ -55,6 +55,8 @@ it('renders a bounded 1024-skill list and searches unmounted names, preserving s
   expect(rendered).toBeGreaterThan(0)
   expect(rendered).toBeLessThan(25)
   expect(el.textContent).not.toContain('fixture-1023')
+  // 2026-10-26 回归：虚拟列表曾自带 min(480, n×60)/52vh 的固定高，列表栏下半截空着；现借 listbox 滚动，不再自定高。
+  expect([...el.querySelectorAll<HTMLElement>('[role="listbox"] *')].some((n) => n.style.maxHeight === '52vh')).toBe(false)
   const first = el.querySelector<HTMLElement>('[data-item-index] [role="option"]')!
   await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
   expect(api.skillFiles).toHaveBeenLastCalledWith('fixture-1023')

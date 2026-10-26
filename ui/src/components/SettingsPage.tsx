@@ -18,7 +18,6 @@ import { DesktopPauseButton } from './DesktopPauseButton'
 import { ProviderManager } from './ProviderManager'
 import { PromptsSection } from './PromptsSection'
 import { UsageTab } from './UsageTab'
-import { AutonomySection } from './settings/AutonomySection'
 import { GeneralSection } from './settings/GeneralSection'
 import { KeysSection } from './settings/KeysSection'
 import { LogsSection } from './settings/LogsSection'
@@ -26,19 +25,21 @@ import { McpSection } from './settings/McpSection'
 import { PermsSection } from './settings/PermsSection'
 import { ReleaseSection } from './settings/ReleaseSection'
 import { SkillsSection } from './settings/SkillsSection'
+import { SlotsSection } from './settings/SlotsSection'
 import { TeamSection } from './settings/TeamSection'
 import { Group, NeedsProject, SetHead, SetWrap, SRow } from './settings/kit'
 
-export type Section = 'general' | 'keys' | 'team' | 'models' | 'perms' | 'skills' | 'mcp' | 'release' | 'autonomy' | 'usage' | 'logs' | 'prompts' | 'about'
+export type Section = 'general' | 'keys' | 'team' | 'models' | 'slots' | 'perms' | 'skills' | 'mcp' | 'release' | 'usage' | 'logs' | 'prompts' | 'about'
 
-/** 导航顺序与图标（proto.js SET 表；autonomy 补在权限后，R-07）。 */
+/** 导航顺序与图标（proto.js SET 表；R-07 补的「自治」2026-10-26 并入权限，见 ReviewerModeRow）。 */
 const NAV: { id: Section; icon: IconName }[] = [
   { id: 'general', icon: 'settings' },
   { id: 'keys', icon: 'keyboard' },
   { id: 'models', icon: 'cpu' },
+  // 2026-10-26：槽位绑定从模型服务详情栏拆出，紧跟其下（见 SlotsSection 头注释）
+  { id: 'slots', icon: 'layers' },
   { id: 'team', icon: 'users' },
   { id: 'perms', icon: 'shield' },
-  { id: 'autonomy', icon: 'gauge' },
   { id: 'prompts', icon: 'messages' },
   { id: 'skills', icon: 'book' },
   { id: 'mcp', icon: 'plug' },
@@ -151,16 +152,16 @@ export function SettingsPage({ onBack, onOpenUsageDetail, projectless = false, i
       case 'keys': return <KeysSection />
       case 'team': return <TeamSection projectless={projectless} />
       case 'models': return <ProviderManager /> // 全局 providers.json，无项目也可用
+      case 'slots': return <SlotsSection /> // 同上，槽位也在全局 providers.json
       case 'perms': return <PermsSection projectless={projectless} onOpenProject={onBack} />
       case 'skills': return <SkillsSection /> // 全局层无项目也可用（ADR 0057）
       case 'mcp': return <McpSection projectless={projectless} /> // 全局清单无项目可配（ADR 0057）
       case 'release': return gated(<ReleaseSection />) // 项目级登记（ADR 0093），无项目不发必败 IPC
-      case 'autonomy': return gated(<AutonomySection />)
       case 'usage': return gated(<UsageSection onDetail={onOpenUsageDetail} />)
       // 日志页不被 gated 吃掉——无项目时宿主记录仍要看（diagnostic-records 票 01）。
       case 'logs': return <LogsSection projectless={projectless} />
       // 提示词页是宿主级（翻译槽在全局 providers.json），无项目也可用（ADR 0071）。
-      case 'prompts': return <PromptsSection onGoModels={() => setSection('models')} />
+      case 'prompts': return <PromptsSection onGoModels={() => setSection('models')} onGoSlots={() => setSection('slots')} />
       case 'about': return <AboutSection />
     }
   })()

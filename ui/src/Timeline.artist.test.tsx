@@ -6,7 +6,8 @@ import { createRoot } from 'react-dom/client'
 import './i18n'
 import i18n from './i18n'
 import { EventRow } from './components/Timeline'
-import { ProviderManager } from './components/ProviderManager'
+// 2026-10-26：槽位绑定拆为独立分区，聚焦落在 SlotsSection、事件目标改为 'slots'
+import { SlotsSection } from './components/settings/SlotsSection'
 import { buildRows } from './timelineModel'
 import { api } from './api'
 import type { TimelineItem } from './api'
@@ -61,20 +62,20 @@ describe('画师提示（票 19）', () => {
     const button = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('去设置绑定出图模型'))!
     await act(async () => { button.click() })
     window.removeEventListener('hexagon:open-settings-section', onSection)
-    expect(sections).toEqual(['models'])
+    expect(sections).toEqual(['slots'])
     unmount()
 
     vi.spyOn(api, 'listProviders').mockResolvedValue({ providers: [], slots: {} })
     vi.spyOn(api, 'presetRoles').mockResolvedValue([])
     vi.spyOn(api, 'providerPresets').mockResolvedValue([])
-    const settings = await render(<ProviderManager />)
+    const settings = await render(<SlotsSection />)
     await act(async () => {})
     const imageRow = settings.el.querySelector('[data-slot-row="image"]')!
     expect(imageRow.contains(document.activeElement)).toBe(true)
     settings.unmount()
 
     // 只聚焦一次：之后正常打开设置不再抢焦点。
-    const again = await render(<ProviderManager />)
+    const again = await render(<SlotsSection />)
     await act(async () => {})
     expect(again.el.querySelector('[data-slot-row="image"]')!.contains(document.activeElement)).toBe(false)
     again.unmount()
@@ -112,7 +113,7 @@ describe('画师写不出出图提示词（票 28）', () => {
     expect(button).not.toBeNull()
     await act(async () => { button.click() })
     window.removeEventListener('hexagon:open-settings-section', onSection)
-    expect(sections).toEqual(['models'])
+    expect(sections).toEqual(['slots'])
     unmount()
   })
 

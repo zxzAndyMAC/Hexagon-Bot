@@ -106,6 +106,21 @@ describe('启动页最近项目：已删目录容错（owner 反馈）', () => {
     expect(el!.textContent).toContain('还没有项目')
     expect(el!.querySelector('.recent-row')).toBeNull()
   })
+
+  // 2026-10-26 负责人反馈：启动页 / 向导拖不动窗口（裸 drag-region 只认点在元素本身，内容列铺满底板）；
+  // 最近项目多了整页变高滚动。jsdom 不排版，这里钉结构：顶部独立拖动条、列表自身是滚动容器。
+  it('顶部有独立拖动条（向导期仍在）；最近项目列表自己滚动', async () => {
+    vi.spyOn(api, 'recentProjects').mockResolvedValue(RECENTS)
+    ;({ el, root } = await render(<Launcher onOpen={() => {}} />))
+    await act(async () => { await Promise.resolve() })
+    const drag = el!.querySelector<HTMLElement>('[data-launch-drag]')!
+    expect(drag.hasAttribute('data-tauri-drag-region')).toBe(true)
+    expect(drag.children).toHaveLength(0)
+    expect(el!.querySelector('[data-launch-recents]')!.className).toContain('overflow-y-auto')
+    await act(async () => { el!.querySelector<HTMLElement>('[data-blank-new]')!.click() })
+    expect(el!.querySelector('[data-wizard]')).not.toBeNull()
+    expect(el!.querySelector('[data-launch-drag]')).not.toBeNull()
+  })
 })
 
 describe('一句话开局带入向导（票 10，interaction §11）', () => {

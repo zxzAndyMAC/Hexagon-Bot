@@ -56,7 +56,7 @@ function PromptTabs({ tab, hasTr, onTab }: { tab: Tab; hasTr: boolean; onTab: (t
 
 const preCls = 'm-0 whitespace-pre-wrap rounded-[var(--r-card)] bg-inset p-3 font-mono text-[12px] leading-[1.7] text-ink-2 shadow-[inset_0_0_0_1px_var(--line-soft)]'
 
-export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
+export function PromptsSection({ onGoModels, onGoSlots }: { onGoModels: () => void; onGoSlots: () => void }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const english = lang === 'en'
@@ -137,7 +137,8 @@ export function PromptsSection({ onGoModels }: { onGoModels: () => void }) {
           <div role="alert" className="mb-4 flex items-center gap-2.5 rounded-[var(--r-card)] bg-orange-tint px-3 py-2 text-[12.5px] text-ink">
             <Icon name="warn" size={14} className="flex-none text-orange" />
             <span className="min-w-0 flex-1">{t('settings.prompts_noModel')}</span>
-            <Button size="xs" onClick={onGoModels}>{t('settings.prompts_goModels')}</Button>
+            {/* 缺的是翻译槽/默认槽的绑定，去槽位绑定分区（2026-10-26 拆出）；钥匙类失败仍去模型服务 */}
+            <Button size="xs" onClick={onGoSlots}>{t('settings.prompts_goSlots')}</Button>
           </div>
         )}
         {failure && <InlineError text={t('settings.prompts_failed', { error: failure })} />}
