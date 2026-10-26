@@ -409,7 +409,11 @@ pub fn save(
         ));
     }
     if let Some(old) = &existing {
-        for dropped in old.credentials.iter().filter(|c| !f.credentials.contains(c)) {
+        for dropped in old
+            .credentials
+            .iter()
+            .filter(|c| !f.credentials.contains(c))
+        {
             store.delete(&credential_key(&id, dropped))?;
         }
     }
