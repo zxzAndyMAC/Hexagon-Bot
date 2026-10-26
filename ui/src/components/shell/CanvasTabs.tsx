@@ -188,6 +188,34 @@ function AllTabsMenu({ tabs, active, title }: { tabs: WorkTab[]; active: string 
   )
 }
 
+/** A22「溢出」：激活页签（含新打开的）滚入视区。只动页签列自己的 scrollLeft，不用 scrollIntoView——
+ *  它会连带滚动画布 / 主区等祖先容器。 */
+function useRevealActive(active: string | null, count: number) {
+  const scroller = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const view = scroller.current
+    const node = active ? view?.querySelector<HTMLElement>(`[data-canvas-tab="${CSS.escape(active)}"]`) : null
+    if (!view || !node) return
+    const delta = revealDelta(view.getBoundingClientRect(), node.getBoundingClientRect())
+    if (delta) view.scrollLeft += delta
+  }, [active, count])
+  return scroller
+}
+
+/** 票 09（协调裁决：票 03 偏差 4）：全宽时头部随对话收起，电脑控制状态与托管胶囊挪到页签栏右侧，
+ *  Agent 操控电脑、托管开着时负责人在任何主区视图都看得见。Header 在全宽时不渲染这两件，免得双挂
+ *  （ManagedPill 注册全局暂停 / 关闭键，挂两份会一键执行两次）。 */
+function FullWidthStatus() {
+  return (
+    <div data-canvas-status className="flex flex-none items-center gap-1.5 pr-1">
+      <ComputerControlStatus />
+      <ManagedPill />
+      {/* owner-followups-1015 #11（C12a）：会话胶囊同挂全宽状态槽，Header 此时不渲染它 */}
+      <SessionPill />
+    </div>
+  )
+}
+
 export function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead: boolean }) {
   const { t } = useTranslation()
   const tabs = useUiStore((s) => s.tabs)
@@ -195,19 +223,10 @@ export function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead:
   const fileEdits = useUiStore((s) => s.fileEdits)
   const title = useTabTitle()
   const st = useUiStore.getState
-  const scroller = useRef<HTMLDivElement>(null)
   const dirty = (tab: WorkTab) => tab.kind === 'file' && Object.values(fileEdits).some((e) => e.dirty && e.path === tab.path)
   const pinned = tabs.filter(isPinnedTab)
   const rest = tabs.filter((tab) => !isPinnedTab(tab))
-  // A22「溢出」：激活页签（含新打开的）滚入视区。只动页签列自己的 scrollLeft，不用 scrollIntoView——
-  // 它会连带滚动画布 / 主区等祖先容器。
-  useLayoutEffect(() => {
-    const view = scroller.current
-    const node = active ? view?.querySelector<HTMLElement>(`[data-canvas-tab="${CSS.escape(active)}"]`) : null
-    if (!view || !node) return
-    const delta = revealDelta(view.getBoundingClientRect(), node.getBoundingClientRect())
-    if (delta) view.scrollLeft += delta
-  }, [active, tabs.length])
+  const scroller = useRevealActive(active, tabs.length)
   // 竖向滚轮转横向（触控板横扫本来就是横向，不动它）。
   const onWheel = (e: WheelEvent<HTMLDivElement>) => {
     if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
@@ -234,17 +253,7 @@ export function CanvasTabs({ mode, narrowLead }: { mode: CanvasMode; narrowLead:
         </div>
       </div>
       <span data-tauri-drag-region className="flex-1 self-stretch" />
-      {/* 票 09（协调裁决：票 03 偏差 4）：全宽时头部随对话收起，电脑控制状态与托管胶囊挪到页签栏右侧，
-          Agent 操控电脑、托管开着时负责人在任何主区视图都看得见。Header 在全宽时不渲染这两件，免得双挂
-          （ManagedPill 注册全局暂停 / 关闭键，挂两份会一键执行两次）。 */}
-      {mode === 'full' && (
-        <div data-canvas-status className="flex flex-none items-center gap-1.5 pr-1">
-          <ComputerControlStatus />
-          <ManagedPill />
-          {/* owner-followups-1015 #11（C12a）：会话胶囊同挂全宽状态槽，Header 此时不渲染它 */}
-          <SessionPill />
-        </div>
-      )}
+      {mode === 'full' && <FullWidthStatus />}
       {tabs.length > 0 && <AllTabsMenu tabs={tabs} active={active} title={title} />}
       {mode === 'full' ? (
         <IconButton size="sm" label={t('canvas.sideBySide')} action="canvasFullWidth" data-canvas-side-by-side onClick={() => st().toggleCanvasFull()}>
