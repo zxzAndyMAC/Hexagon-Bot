@@ -52,8 +52,6 @@ pub fn classify(cmd: &str) -> PushClass {
     }
 }
 
-/// 宽松识别「这条命令可能在推送」：宁可多认（多认只会走到严格解析再判强推）。
-/// 覆盖面不小于改动前的安全网条件（任一词 basename 为 git 且任一词为 push）。
 /// 权限卡载荷里的推送事实（UI 据此画推送卡形）：普通推送给远程 + 分支，强推给原因码，
 /// 不是推送为 null。只是展示；判定与托管都从 raw_input 重新分类，不信这个字段。
 pub fn card_facts(tool: &str, input: &serde_json::Value) -> serde_json::Value {
@@ -69,6 +67,9 @@ pub fn card_facts(tool: &str, input: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// 宽松识别「这条命令可能在推送」：宁可多认（多认只会走到严格解析再判强推）。
+/// 覆盖面不小于改动前的安全网条件（任一词 basename 为 git 且任一词为 push）。
+/// （ticket 33 / 2026-10-25 批次审查 S9：这两行曾错挂在 `card_facts` 上。）
 fn push_like(cmd: &str) -> bool {
     let lower = cmd.to_lowercase();
     if lower.contains("git push") || lower.contains("git-push") {
