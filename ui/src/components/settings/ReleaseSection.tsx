@@ -70,12 +70,8 @@ function TargetForm({ target, onSaved, onCancel }: {
 }
 
 /** 一条凭据：名（等宽）+ 状态胶囊 + 密文框 + 存入 / 替换 + 已存时「移除」。 */
-function CredentialRow({ target, name, set, onChanged }: {
-  target: ReleaseTarget
-  name: string
-  set: boolean
-  onChanged: (t: ReleaseTarget) => void
-}) {
+/** 凭据的存入 / 移除：存后清空密文框；移除走 A17 danger 确认。 */
+function useCredentialActions(target: ReleaseTarget, name: string, onChanged: (t: ReleaseTarget) => void) {
   const { t } = useTranslation()
   const pushToast = useUiStore((s) => s.pushToast)
   const askConfirm = useUiStore((s) => s.askConfirm)
@@ -100,6 +96,18 @@ function CredentialRow({ target, name, set, onChanged }: {
       onChanged(next)
     },
   })
+
+  return { secret, setSecret, busy, store, remove }
+}
+
+function CredentialRow({ target, name, set, onChanged }: {
+  target: ReleaseTarget
+  name: string
+  set: boolean
+  onChanged: (t: ReleaseTarget) => void
+}) {
+  const { t } = useTranslation()
+  const { secret, setSecret, busy, store, remove } = useCredentialActions(target, name, onChanged)
 
   return (
     <div data-release-cred={name} className="border-t border-line-soft px-3.5 py-3 first:border-t-0">
@@ -134,7 +142,63 @@ function CredentialRow({ target, name, set, onChanged }: {
   )
 }
 
-export function ReleaseSection() {
+/** 选中目标的详情：表头（删除）+ 登记表单 + 凭据区。 */
+function TargetDetail({ target, onChanged, onDelete, onClose }: {
+  target: ReleaseTarget
+  onChanged: (t: ReleaseTarget) => void
+  onDelete: () => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div data-release-detail>
+      <DetailHead
+        lead={<Icon name="publish" size={18} className="flex-none text-ink-2" />}
+        title={target.name}
+        sub={target.cwd || t('release.cwdRoot')}
+        mono={Boolean(target.cwd)}
+        actions={
+          <Button size="sm" variant="ghost" className="text-red-ink" data-release-delete onClick={onDelete}>
+            <Icon name="trash" size={14} />{t('release.delete')}
+          </Button>
+        }
+      />
+      <div className="mt-5">
+        {/* key=id：表单字段由 useState 首挂载初始化，换行要换表单 */}
+        <TargetForm key={target.id} target={target} onSaved={onChanged} onCancel={onClose} />
+      </div>
+      <SubHead>{t('release.credsTitle')}</SubHead>
+      {target.credentials.length === 0 ? (
+        <div className="py-2 text-[12.5px] text-ink-3">{t('release.credsNone')}</div>
+      ) : (
+        <div className="rounded-[var(--r-card)] bg-[var(--app-card)] shadow-[var(--shadow-card)]">
+          {target.credentials.map((c) => (
+            <CredentialRow key={`${target.id}:${c.name}`} target={target} name={c.name} set={c.set} onChanged={onChanged} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 列表行：缺凭据时琥珀点 + 「缺 N 项」。 */
+function TargetItem({ target }: { target: ReleaseTarget }) {
+  const { t } = useTranslation()
+  const n = missing(target)
+  return (
+    <>
+      <Dot tone={n > 0 ? 'warn' : 'neutral'} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate">{target.name}</div>
+        <div className="truncate font-mono text-[12px] text-ink-3">{target.command}</div>
+      </div>
+      {n > 0 && <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">{t('release.missingN', { n })}</Badge>}
+    </>
+  )
+}
+
+/** 发布目标读面 + 选中 / 新建状态 + 删除；外部「定位到某目标」事件也落在这里。 */
+function useReleaseTargets() {
   const { t } = useTranslation()
   const pushToast = useUiStore((s) => s.pushToast)
   const askConfirm = useUiStore((s) => s.askConfirm)
@@ -182,6 +246,13 @@ export function ReleaseSection() {
     },
   })
 
+  return { targets, error, sel, setSel, creating, setCreating, load, upsert, selected, removeTarget }
+}
+
+export function ReleaseSection() {
+  const { t } = useTranslation()
+  const { targets, error, sel, setSel, creating, setCreating, load, upsert, selected, removeTarget } = useReleaseTargets()
+
   return (
     <ListDetail<ReleaseTarget>
       label={t('settings.nav_release')}
@@ -200,19 +271,7 @@ export function ReleaseSection() {
           <Icon name="plus" size={14} />{t('release.new')}
         </Button>
       }
-      renderItem={(r) => {
-        const n = missing(r)
-        return (
-          <>
-            <Dot tone={n > 0 ? 'warn' : 'neutral'} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate">{r.name}</div>
-              <div className="truncate font-mono text-[12px] text-ink-3">{r.command}</div>
-            </div>
-            {n > 0 && <Badge variant="warn" className="h-[18px] px-1.5 text-[11px]">{t('release.missingN', { n })}</Badge>}
-          </>
-        )
-      }}
+      renderItem={(r) => <TargetItem target={r} />}
     >
       <div className="max-w-[600px]">
         {creating ? (
@@ -225,33 +284,7 @@ export function ReleaseSection() {
             />
           </>
         ) : selected ? (
-          <div data-release-detail>
-            <DetailHead
-              lead={<Icon name="publish" size={18} className="flex-none text-ink-2" />}
-              title={selected.name}
-              sub={selected.cwd || t('release.cwdRoot')}
-              mono={Boolean(selected.cwd)}
-              actions={
-                <Button size="sm" variant="ghost" className="text-red-ink" data-release-delete onClick={() => removeTarget(selected)}>
-                  <Icon name="trash" size={14} />{t('release.delete')}
-                </Button>
-              }
-            />
-            <div className="mt-5">
-              {/* key=id：表单字段由 useState 首挂载初始化，换行要换表单 */}
-              <TargetForm key={selected.id} target={selected} onSaved={upsert} onCancel={() => setSel(null)} />
-            </div>
-            <SubHead>{t('release.credsTitle')}</SubHead>
-            {selected.credentials.length === 0 ? (
-              <div className="py-2 text-[12.5px] text-ink-3">{t('release.credsNone')}</div>
-            ) : (
-              <div className="rounded-[var(--r-card)] bg-[var(--app-card)] shadow-[var(--shadow-card)]">
-                {selected.credentials.map((c) => (
-                  <CredentialRow key={`${selected.id}:${c.name}`} target={selected} name={c.name} set={c.set} onChanged={upsert} />
-                ))}
-              </div>
-            )}
-          </div>
+          <TargetDetail target={selected} onChanged={upsert} onDelete={() => removeTarget(selected)} onClose={() => setSel(null)} />
         ) : (
           <Empty icon="publish" title={t('settings.nav_release')} desc={t('release.intro')} />
         )}
