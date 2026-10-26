@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolutePath } from './fileActions'
+import { absolutePath, projectRelPath } from './fileActions'
 
 // 票 29（owner-followups-1015）：画布页签「复制路径」写绝对路径——项目根 + 项目相对路径。
 describe('absolutePath', () => {
@@ -15,5 +15,24 @@ describe('absolutePath', () => {
 
   it('没有项目根：原样返回相对路径', () => {
     expect(absolutePath(null, 'src/main.rs')).toBe('src/main.rs')
+  })
+})
+
+// #32（owner-followups-1015）：表面上的路径（相对或绝对）→ 项目相对；根外 / 无根的绝对路径 → null（不出路径类项）。
+describe('projectRelPath', () => {
+  it('根内绝对路径 → 相对；根本身 → 空串', () => {
+    expect(projectRelPath('/Users/me/todo/src/main.rs', '/Users/me/todo')).toBe('src/main.rs')
+    expect(projectRelPath('/Users/me/todo', '/Users/me/todo/')).toBe('')
+    expect(projectRelPath('C:\\work\\todo\\src\\a.rs', 'C:\\work\\todo')).toBe('src/a.rs')
+  })
+  it('根外 / 前缀相同的兄弟目录 / 无根 → null', () => {
+    expect(projectRelPath('/Users/me/other/a.md', '/Users/me/todo')).toBeNull()
+    expect(projectRelPath('/Users/me/todo2/a.md', '/Users/me/todo')).toBeNull()
+    expect(projectRelPath('/etc/passwd', null)).toBeNull()
+  })
+  it('相对路径原样（去 ./），含 .. 段 → null', () => {
+    expect(projectRelPath('./docs/plan.md', '/r')).toBe('docs/plan.md')
+    expect(projectRelPath('docs/plan.md', null)).toBe('docs/plan.md')
+    expect(projectRelPath('../secret', '/r')).toBeNull()
   })
 })

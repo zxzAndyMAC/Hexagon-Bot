@@ -6,7 +6,9 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
-import { copyProjectPath, insertPathToComposer, revealLabelKey, revealPath } from '../fileActions'
+import { copyProjectPath, insertPathToComposer, projectRelPath, revealLabelKey, revealPath } from '../fileActions'
+import { treeInsertPath } from '../composerAtoms'
+import { useUiStore } from '../store'
 import { OpenWithSubmenu } from './OpenWithMenu'
 
 export interface FileMenuTarget {
@@ -17,6 +19,17 @@ export interface FileMenuTarget {
   onOpen?: () => void
   /** 「插入到输入条」的路径（`treeInsertPath` 形）；不传 / null = 不显示。 */
   insert?: string | null
+}
+
+/**
+ * 表面上显示的一条文件路径（相对或绝对）→ 菜单目标：在项目根内才给路径类项 / 打开方式 / 插入（#32）。
+ * `onOpen` 原样透传（「打开」不依赖路径在根内——例如产物页签按记录打开）。
+ */
+export function useProjectFileTarget(raw: string | null | undefined, opts: { onOpen?: () => void; kind?: 'file' | 'dir' } = {}): FileMenuTarget {
+  const root = useUiStore((s) => s.projectRoot)
+  const kind = opts.kind ?? 'file'
+  const path = raw ? projectRelPath(raw, root) : null
+  return { path, kind, onOpen: opts.onOpen, insert: path ? treeInsertPath({ path, kind }) : null }
 }
 
 /** 菜单里一项都不剩？（调用方据此决定挂不挂菜单） */
