@@ -6,6 +6,7 @@ import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
 import type { TimelineWindowMetadata } from './gen/TimelineWindowMetadata'
 import { mockTimelineWindow, mockTimelineFacts, mockTimelineNodes } from './timelineMock'
+import { artifactRegisteredPath } from './artifactLayout'
 import { useUiStore } from './store'
 import type { ProjectTurnDelta } from './gen/ProjectTurnDelta'
 import type { ProjectToolOutputDelta } from './gen/ProjectToolOutputDelta'
@@ -1713,7 +1714,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       const p = String(args?.path)
       // .hexagon/ 下的产物磁盘版与 ART_CONTENT 最新版对齐，
       // 浏览器预览里「文件页 vs 版本基线」才有真实差异可看。
-      const artPath = p.startsWith('.hexagon/') ? p.slice('.hexagon/'.length) : null
+      const artPath = artifactRegisteredPath(p)
       const art = artPath ? artLatest(artPath) : null
       if (art != null) return art as T
       if (p.endsWith('.md')) {

@@ -10,6 +10,8 @@ import { isMac } from './keymap'
 import { useUiStore } from './store'
 import { toastError } from './toast'
 
+export { artifactRepoPath } from './artifactLayout'
+
 /** 揭示动作的平台名（访达 / 资源管理器 / 文件管理器），只影响文案。 */
 export type RevealPlatform = 'mac' | 'windows' | 'linux'
 
@@ -39,9 +41,17 @@ export async function copyPath(path: string) {
  */
 export function absolutePath(root: string | null, rel: string): string {
   if (!root) return rel
-  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/'
-  const base = root.endsWith(sep) ? root.slice(0, -1) : root
+  const { sep, base } = splitRoot(root)
   return `${base}${sep}${sep === '/' ? rel : rel.replaceAll('/', sep)}`
+}
+
+/**
+ * 项目根的分隔符（Windows 形 = 含反斜杠、不含 `/`）与去掉末尾分隔符的根。absolutePath / projectRelPath 共用
+ * （ticket 33 S12，2026-10-25 批次审查：两处曾各写一遍同一判定）。
+ */
+function splitRoot(root: string): { sep: string; base: string } {
+  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/'
+  return { sep, base: root.endsWith(sep) ? root.slice(0, -1) : root }
 }
 
 /**
@@ -56,22 +66,11 @@ export function projectRelPath(path: string, root: string | null): string | null
     return rel.split(/[\\/]/).includes('..') ? null : rel
   }
   if (!root) return null
-  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/'
-  const base = root.endsWith(sep) ? root.slice(0, -1) : root
+  const { sep, base } = splitRoot(root)
   if (path === base) return ''
   if (!path.startsWith(base + sep)) return null
   const rel = path.slice(base.length + 1)
   return sep === '/' ? rel : rel.replaceAll('\\', '/')
-}
-
-/**
- * 产物登记路径 → 仓内路径：产物落在 `.hexagon/<path>`（core artifacts::content / deliver），登记的 path 是 `.hexagon/` 内相对。
- * 修复即文档（#32 2026-10-25）：#29 / #31 的产物页签「复制路径」「打开方式」直接用登记 path，指到项目根下同名路径
- * （不存在 → errors.open_with_missing，或复制出一条错路径）。绝对形 / 已带 `.hexagon/` 的原样返回。
- */
-export function artifactRepoPath(path: string): string {
-  if (path.startsWith('/') || path.startsWith('.hexagon/')) return path
-  return `.hexagon/${path.replace(/^\.\//, '')}`
 }
 
 /** 复制项目内路径的绝对形（文件树行与画布页签共用，#30）：项目根 + 相对路径，没有项目根时退回相对路径。 */
