@@ -287,6 +287,36 @@ function ReleaseCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   )
 }
 
+function ReleaseTargetCard({ q, top }: { q: PendingQuestion; top: boolean }) {
+  const { t } = useTranslation()
+  const pushToast = useUiStore((s) => s.pushToast)
+  const p = q.payload
+  const name = String(p.name ?? '')
+  const cwd = String(p.cwd ?? '')
+  const credentials = Array.isArray(p.credentials) ? p.credentials.map(String) : []
+  // owner-followups-1015 #16（components D8「登记发布目标」）：Agent 在聊天里拟的发布目标。批准前不落库；托管不代批
+  // （卡留在负责人坞里）。键盘批准无效（decisions.ts 同步拦截），只认点「登记」——登记后托管可代批执行这条命令。
+  // 卡面只有凭据名：值不从聊天里取，批准后到设置·发布录入。
+  return (
+    <DecisionShell qid={q.id} cat="warn" icon="publish" title={t('cards.releaseTarget')} sub={t('dock.releaseTargetSub')}
+      actions={<>
+        <SettleButton qid={q.id} variant="quiet" action="reject" showKey={top} run={() => api.rejectReleaseTargetCard(q.id)}>{t('cards.reject')}</SettleButton>
+        <SettleButton qid={q.id} variant="primary" data-release-target-approve run={async () => {
+          await api.approveReleaseTargetCard(q.id)
+          pushToast(t('cards.releaseTargetRegistered', { name }), 'ok')
+        }}>{t('cards.releaseTargetApprove')}</SettleButton>
+      </>}>
+      <KeyValues rows={[
+        [t('dock.kvTarget'), name],
+        [t('dock.kvCommand'), String(p.command ?? ''), 'mono'],
+        [t('dock.kvCwd'), cwd || t('release.cwdRoot'), cwd ? 'mono' : undefined],
+        [t('dock.kvCredentials'), credentials.length ? credentials.join(' · ') : t('dock.credentialsNone'), credentials.length ? 'mono' : undefined],
+      ]} />
+      <p className="dock-hint">{t('cards.releaseTargetHint')}</p>
+    </DecisionShell>
+  )
+}
+
 function WorktreeCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   const { t } = useTranslation()
   const p = q.payload
@@ -440,6 +470,7 @@ export function PendingCard({ q, top }: { q: PendingQuestion; top: boolean }) {
   if (q.kind === 'stamp') return <ProposalStampCard q={q} top={top} />
   if (q.kind === 'push') return <PushCard q={q} top={top} />
   if (q.kind === 'release') return <ReleaseCard q={q} top={top} />
+  if (q.kind === 'release_target') return <ReleaseTargetCard q={q} top={top} />
   if (q.kind === 'worktree') return <WorktreeCard q={q} top={top} />
   if (q.kind === 'recovery' && p.sub === 'tool_outcome_unknown') return <ActionRecovery q={q} top={top} />
   if (q.kind === 'recovery') return <RecoveryCard q={q} top={top} />

@@ -239,6 +239,10 @@ pub(crate) fn scrub_input(tool: &str, input: &Value) -> Value {
             "old": clip4k(input["old"].as_str()),
             "new": clip4k(input["new"].as_str()),
         }),
+        // owner-followups-1015 #16：聊天里疑似凭据不进轨迹——拟登记 / 发起发布的入参按疑似凭据判定脱敏。
+        crate::release_chat::PROPOSE_TOOL | crate::release_chat::REQUEST_TOOL => {
+            crate::release_chat::scrub(&redact(input))
+        }
         _ => redact(input),
     }
 }

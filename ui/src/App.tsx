@@ -36,7 +36,6 @@ import { treeInsertPath } from './composerAtoms'
 import { pauseDesktop, resumeDesktop } from './desktopPause'
 import { dispatchMessageAction, messageTarget } from './messageActions'
 import { changeMemberAvatar, copyMemberName, memberRowTarget, mentionMember, openMemberDetail, restoreMemberAvatar } from './memberActions'
-import { SessionRecoveryStrip } from './components/SessionRecoveryStrip'
 
 
 export default function App() {
@@ -441,8 +440,8 @@ export default function App() {
             <SwitchWaitBanner />
             {/* 票 07：对话列宽只由 --col-w 决定（时间线 .tl-col、恢复条、触顶横幅、输入条同读），主区不再加左右内距 */}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              {/* C12a：钉在对话列顶部、归来摘要（时间线顶部）上方；与时间线同列对齐（列宽规则在 timeline.css） */}
-              <SessionRecoveryStrip />
+              {/* owner-followups-1015 #11（C12a「改为头部胶囊」）：会话卡不再钉在这里——常驻时把归来摘要压到约 170px、
+                  「需要你处理」被裁；现在异常时收成头部 / 画布页签栏状态槽里的「会话」胶囊（SessionPill）。 */}
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <Timeline />
               </div>

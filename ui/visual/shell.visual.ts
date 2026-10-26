@@ -1,4 +1,4 @@
-// 截图回归 · 工作台面（票 ui-redesign 17）：外壳、待决坞、画布、托管、用量、恢复。深浅两套 + fr 主界面。
+// 截图回归 · 工作台面（票 ui-redesign 17）：外壳、待决坞、画布、托管、用量、恢复、会话异常（of1015 #11）。深浅两套 + fr 主界面。
 import { expect, test, type Page } from '@playwright/test'
 import { boot, settle, snap, store, THEMES, type Lang, type Theme } from './helpers.ts'
 
@@ -100,8 +100,24 @@ async function usage(page: Page, theme: Theme, lang: Lang, tag: string, quick = 
   await snap(page, `usage-detail-${tag}`)
 }
 
+/** owner-followups-1015 #11（C12a 第 9 项）：会话异常 + 坞展开。会话卡曾常驻钉在时间线顶部，1440×900 下
+ * 把钉住的归来摘要压到约 170px、「需要你处理」被裁；收成头部胶囊后这一段必须整段落在视区与钉顶区内。 */
+async function sessionAlert(page: Page, theme: Theme, lang: Lang, tag: string) {
+  await boot(page, { theme, lang, query: 'mocksessionalert' })
+  await page.locator('[data-header] [data-session-pill="err"]').waitFor()
+  await page.locator('.dock').waitFor()
+  const label = page.locator('.tl-pin .tl-rs-label').first()
+  await label.waitFor()
+  const [pin, box] = await Promise.all([page.locator('.tl-pin').boundingBox(), label.boundingBox()])
+  if (!pin || !box) throw new Error('return summary not rendered')
+  expect(box.y).toBeGreaterThanOrEqual(pin.y)
+  expect(box.y + box.height).toBeLessThanOrEqual(pin.y + pin.height)
+  await snap(page, `session-alert-dock-${tag}`)
+}
+
 for (const theme of THEMES) {
   test.describe(`workbench ${theme}`, () => {
+    test('session alert + dock open', ({ page }) => sessionAlert(page, theme, 'zh-CN', theme))
     test('shell + pending dock', ({ page }) => shell(page, theme, 'zh-CN', theme))
     test('canvas side-by-side + full width', ({ page }) => canvas(page, theme, 'zh-CN', theme))
     test('managed strip + report', ({ page }) => managed(page, theme, 'zh-CN', theme))

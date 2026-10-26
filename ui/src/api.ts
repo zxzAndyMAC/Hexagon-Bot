@@ -581,6 +581,9 @@ export const api = {
   requestRelease: (targetId: string) => call<string>('request_release', { targetId }),
   confirmRelease: (qid: string) => call<ReleaseOutcome>('confirm_release', { qid }),
   rejectRelease: (qid: string) => call<void>('reject_release', { qid }),
+  // 登记发布目标卡（owner-followups-1015 #16）：Agent 在聊天里拟的目标，负责人批准才写入登记表。
+  approveReleaseTargetCard: (qid: string) => call<ReleaseTarget>('approve_release_target_card', { qid }),
+  rejectReleaseTargetCard: (qid: string) => call<void>('reject_release_target_card', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
@@ -796,6 +799,21 @@ const mockSessionSummary = (): SessionSummary => ({
   ...MOCK_SESSION_SUMMARY,
   session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: MOCK_SESSION.status, last_reason_code: MOCK_SESSION.reason, worktree: MOCK_SESSION.worktree },
   triggers: MOCK_SESSION.triggers,
+})
+// owner-followups-1015 #11（C12a「改为头部胶囊」）：`?mocksessionalert` = 会话失败 + 同 kind 多项能力（MCP 3/6），
+// 截图用例「会话异常 + 坞展开」用它确认胶囊出在头部、归来摘要「需要你处理」不再被常驻会话卡挤裁。
+const mockSessionAlertOn = () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('mocksessionalert')
+const mockMcp = (id: string, health: SessionSummary['capabilities'][number]['health'], last_error: string | null = null) => (
+  { kind: 'mcp' as const, id, available: true, granted: false, health, last_error, requires_user_action: health === 'unavailable', binding_hint: 'project:/mock/project' })
+const mockSessionAlertSummary = (): SessionSummary => ({
+  ...MOCK_SESSION_SUMMARY,
+  session: { ...(MOCK_SESSION_SUMMARY.session as SessionRecord), status: 'failed', last_reason_code: 'turn_failed' },
+  capabilities: [
+    ...MOCK_SESSION_SUMMARY.capabilities.filter((c) => c.kind !== 'mcp'),
+    mockMcp('docs', 'unavailable', 'mcp_worker_exited'), mockMcp('git', 'healthy'), mockMcp('fs', 'degraded', 'mcp_slow_start'),
+    mockMcp('search', 'healthy'), mockMcp('db', 'reconnecting'), mockMcp('figma', 'healthy'),
+  ],
+  next_action: 'inspect_failure',
 })
 const mockWorktreeCard = () => MOCK_SESSION.card
   ? [{ id: MOCK_SESSION.card.id, kind: 'worktree', agent_id: null, payload: { operation: 'create', path: MOCK_SESSION.card.path, baseline: 'main', baseline_commit: '3a7bca5e9f01', session_id: 'session-mock' }, state: 'queued' }]
@@ -1096,6 +1114,7 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
   answer_permission: (a) => String(a.questionId), allow_project_permission: (a) => String(a.questionId),
   confirm_push: (a) => String(a.qid), reject_push: (a) => String(a.qid),
   confirm_release: (a) => String(a.qid), reject_release: (a) => String(a.qid),
+  approve_release_target_card: (a) => String(a.qid), reject_release_target_card: (a) => String(a.qid),
   confirm_worktree: (a) => String(a.qid), reject_worktree: (a) => String(a.qid),
   adjudicate_flag: (a) => String(a.qid), confirm_proposal: (a) => String(a.qid), reject_proposal: (a) => String(a.qid),
   stall_retry: (a) => String(a.questionId), stall_ack: (a) => String(a.questionId),
@@ -1557,7 +1576,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
       return (ART_CONTENT[String(args?.path)]?.[Number(args?.version)] ?? null) as T
-    case 'session_summary': return (mockSessionOn() ? mockSessionSummary() : MOCK_SESSION_SUMMARY) as T
+    case 'session_summary': return (mockSessionAlertOn() ? mockSessionAlertSummary() : mockSessionOn() ? mockSessionSummary() : MOCK_SESSION_SUMMARY) as T
     case 'session_pause':
     case 'session_reconnect':
     case 'session_resume':
@@ -1639,6 +1658,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return { target_id: target?.id ?? '', name: target?.name ?? '', output: '', duration_ms: 0 } as T
     }
     case 'reject_release': return null as T
+    case 'approve_release_target_card': return (MOCK_RELEASE[0] ?? null) as T
+    case 'reject_release_target_card': return null as T
     case 'list_mcp_entries':
       return [
         { name: 'termius', command: 'ssh-mcp', args: ['--stdio'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },

@@ -1,6 +1,7 @@
-// SessionHost 恢复条（components C12a/C12b，补设计）：raised 卡钉在时间线顶部。
-// 头行状态 + 当前回合 + 待决档；能力行只表健康（授权已证明才加盾形图标）；
-// 工作树行与稍后继续行的动作都只入队负责人确认卡或调用 core，界面不执行 git。
+// SessionHost 恢复卡（components C12a/C12b，补设计）。owner-followups-1015 #11（C12a「改为头部胶囊」）起
+// 不再钉时间线顶部：本文件只出卡内容（头行 / 能力 / 工作树 / 预约 / 下一步）与动作钩子，
+// 由头部「会话」胶囊（SessionPill）在 A16 弹层里渲染；键位也由胶囊宿主挂一份，与胶囊是否出现无关。
+// 能力行只表健康（授权已证明才加盾形图标）；工作树行与预约行的动作都只入队负责人确认卡或调用 core，界面不执行 git。
 import { useEffect, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
@@ -8,18 +9,21 @@ import { api } from '../api'
 import { toastError } from '../toast'
 import { bindingFor, matches } from '../keymap'
 import { useUiStore } from '../store'
+import { groupCapabilities, laterBlockedReason, type CapabilityGroup } from '../sessionPill'
 import type { CapabilityStatus } from '../gen/CapabilityStatus'
 import type { SessionRecord } from '../gen/SessionRecord'
 import type { SessionStatus } from '../gen/SessionStatus'
-import { Badge } from '@/components/ui/badge'
+import { Badge, badgeVariants } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { CodeChip } from '@/components/ui/code-chip'
 import { InlineError } from '@/components/ui/inline-error'
 import { Input } from '@/components/ui/input'
 import { ShortcutKbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { cn } from '@/lib/utils'
 import { Icon } from './Icon'
 import type { ActionId } from '../keymap'
 
@@ -30,19 +34,11 @@ const STATUS_VARIANT: Record<SessionStatus, BadgeVariant> = {
   reconnecting: 'warn', completed: 'ok', failed: 'err',
 }
 
-const HEALTH_VARIANT: Record<CapabilityStatus['health'], BadgeVariant> = {
+export const HEALTH_VARIANT: Record<CapabilityStatus['health'], BadgeVariant> = {
   healthy: 'ok', degraded: 'warn', reconnecting: 'warn', unavailable: 'err', unknown: 'line',
 }
 
-// 规范 C12a：时间选择四档；fire_at 是 unix 秒。
-const LATER_CHOICES: { key: string; at: (now: Date) => number }[] = [
-  { key: 'in5', at: (now) => now.getTime() + 5 * 60_000 },
-  { key: 'in30', at: (now) => now.getTime() + 30 * 60_000 },
-  { key: 'in120', at: (now) => now.getTime() + 120 * 60_000 },
-  { key: 'tomorrow9', at: (now) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9).getTime() },
-]
-
-function label(t: TFunction, key: string, fallback: string): string {
+export function label(t: TFunction, key: string, fallback: string): string {
   return t(key, { defaultValue: t(fallback) })
 }
 
@@ -73,27 +69,24 @@ function ActionButton({ action, disabledReason, children, ...props }: React.Comp
   )
 }
 
-export function SessionRecoveryStrip() {
+/** 会话事实 + 动作（卡按钮与键位共用一份 busy，免得键位与按钮并发同一动作）。 */
+export function useSessionActions() {
   const { t } = useTranslation()
   const summary = useUiStore((s) => s.sessionSummary)
   const error = useUiStore((s) => s.sessionError)
-  const modalScope = useUiStore((s) => s.modalScope)
   const refreshFast = useUiStore((s) => s.refreshFast)
+  const pending = useUiStore((s) => s.pending)
   const [busy, setBusy] = useState<string | null>(null)
-  const [laterOpen, setLaterOpen] = useState(false)
-  // Gap D1（2026-10-16）：预设时间只选中，「预约」primary 才落预约；曾经点预设即预约，误点无从撤回。
-  const [laterPick, setLaterPick] = useState<string | null>(null)
-  const [treeOpen, setTreeOpen] = useState(false)
-  const [treePath, setTreePath] = useState('')
   const session = summary?.session ?? null
-  const reasonCode = session?.last_reason_code ?? summary?.recent_diagnostics[0]?.code ?? null
   const expired = summary?.triggers.filter((trigger) => trigger.state === 'expired') ?? []
   const scheduled = summary?.triggers.find((trigger) => trigger.state === 'scheduled') ?? null
   const intent = session?.worktree_intent ?? null
-  const worktreePending = (useUiStore((s) => s.pending)).some((q) => q.kind === 'worktree')
+  const worktreePending = pending.some((q) => q.kind === 'worktree')
   const terminal = session?.status === 'completed' || session?.status === 'failed'
   // Exhausted budget is terminal for the chain; core refuses reconnect, so do not offer it.
   const exhausted = session?.last_reason_code === 'reconnect_budget_exhausted'
+  // 「稍后继续…」可用：有会话、未结束、尚无预约（规范 C12a；不可用时 ⋯ 菜单 / ⌘K 灰显写原因，判定共用 laterBlockedReason）
+  const laterBlocked = laterBlockedReason(summary)
 
   const act = async (name: string, run: () => Promise<unknown>, done?: string) => {
     if (busy) return
@@ -103,71 +96,127 @@ export function SessionRecoveryStrip() {
       if (done) useUiStore.getState().pushToast(t(done))
       await refreshFast()
     } catch (e) {
-      // 票 13（SessionHost 影响审查 2026-10-13）：恢复条动作失败统一走失败 toast（role=alert），
+      // 票 13（SessionHost 影响审查 2026-10-13）：恢复卡动作失败统一走失败 toast（role=alert），
       // 已登记的原因码（如 worktree_binding_drift，D8）随文案写出。
       toastError(e)
     } finally {
       setBusy(null)
     }
   }
-  // A window-close pause has no interrupted run; resume then lifts the host only.
-  const resume = () => act('resume', () => api.sessionResume(summary?.recovery_run_id ?? null))
-  const openLater = (open: boolean) => { setLaterPick(null); setLaterOpen(open) }
-  const schedule = () => {
-    const choice = LATER_CHOICES.find((c) => c.key === laterPick)
-    if (!choice) return
-    // 按确认时刻起算，不按点选时刻——弹层停留期间「5 分钟后」不应缩水。
-    const fireAtMs = choice.at(new Date())
-    openLater(false)
-    void act('later', () => api.sessionScheduleOnce(crypto.randomUUID(), Math.floor(fireAtMs / 1000)))
+  return {
+    summary, error, session, expired, scheduled, intent, worktreePending, terminal, exhausted, laterBlocked, busy,
+    retry: () => void refreshFast(),
+    pause: () => act('pause', () => api.sessionPause()),
+    reconnect: () => act('reconnect', () => api.sessionReconnect()),
+    // A window-close pause has no interrupted run; resume then lifts the host only.
+    resume: () => act('resume', () => api.sessionResume(summary?.recovery_run_id ?? null)),
+    continueTrigger: (id: string) => act('continue', () => api.sessionContinueTrigger(id)),
+    scheduleAt: (fireAtMs: number) => act('later', () => api.sessionScheduleOnce(crypto.randomUUID(), Math.floor(fireAtMs / 1000))),
+    cancelBooking: (id: string) => act('cancel', () => api.sessionCancelTrigger(id), 'session.bookingCancelled'),
+    requestCreate: (path: string) => act('tree', () => api.sessionRequestWorktree('create', path.trim()), 'session.worktreeRequested'),
+    requestCleanup: () => act('tree', () => api.sessionRequestWorktree('cleanup'), 'session.worktreeRequested'),
+    verifyTree: () => act('tree', () => api.sessionVerifyWorktree()),
   }
-  const cancelBooking = (triggerId: string) => act('cancel', () => api.sessionCancelTrigger(triggerId), 'session.bookingCancelled')
-  const requestCreate = () => {
-    setTreeOpen(false)
-    void act('tree', () => api.sessionRequestWorktree('create', treePath.trim()), 'session.worktreeRequested')
-  }
-  const requestCleanup = () => act('tree', () => api.sessionRequestWorktree('cleanup'), 'session.worktreeRequested')
-  const verifyTree = () => act('tree', () => api.sessionVerifyWorktree())
+}
 
+export type SessionActions = ReturnType<typeof useSessionActions>
+
+/** 会话键位（interaction §键位表：只在 modalScope = workbench 且该动作此刻可做时生效）。
+ * #11 起由胶囊宿主挂一份：胶囊健康时不出现，但键位规则不变——「暂停会话」在运行中照样能按。 */
+export function useSessionKeys(a: SessionActions, ui: { openLater: () => void; openTree: () => void }) {
+  const modalScope = useUiStore((s) => s.modalScope)
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const { session, expired, scheduled, intent, worktreePending, terminal, exhausted, laterBlocked } = a
       if (modalScope !== 'workbench' || event.defaultPrevented || event.repeat || !session) return
       const run = (fn: () => void) => { event.preventDefault(); fn() }
-      if (expired[0] && matches(event, bindingFor('sessionContinueTrigger'))) return run(() => void act('continue', () => api.sessionContinueTrigger(expired[0].trigger_id)))
-      if (session.status === 'paused' && matches(event, bindingFor('sessionResume'))) return run(() => void resume())
-      if (session.status === 'running' && matches(event, bindingFor('sessionPause'))) return run(() => void act('pause', () => api.sessionPause()))
-      if (session.status === 'failed' && !exhausted && matches(event, bindingFor('sessionReconnect'))) return run(() => void act('reconnect', () => api.sessionReconnect()))
-      if (intent?.state === 'executing' && matches(event, bindingFor('sessionVerifyWorktree'))) return run(() => void verifyTree())
-      if (!terminal && !scheduled && matches(event, bindingFor('sessionScheduleOnce'))) return run(() => openLater(true))
-      if (scheduled && matches(event, bindingFor('sessionCancelTrigger'))) return run(() => void cancelBooking(scheduled.trigger_id))
-      if (!terminal && !session.worktree && !worktreePending && matches(event, bindingFor('sessionCreateWorktree'))) return run(() => { setTreePath(defaultWorktreePath(session)); setTreeOpen(true) })
-      if (session.worktree?.created_by_session && !worktreePending && !intent && matches(event, bindingFor('sessionCleanupWorktree'))) return run(() => void requestCleanup())
+      if (expired[0] && matches(event, bindingFor('sessionContinueTrigger'))) return run(() => void a.continueTrigger(expired[0].trigger_id))
+      if (session.status === 'paused' && matches(event, bindingFor('sessionResume'))) return run(() => void a.resume())
+      if (session.status === 'running' && matches(event, bindingFor('sessionPause'))) return run(() => void a.pause())
+      if (session.status === 'failed' && !exhausted && matches(event, bindingFor('sessionReconnect'))) return run(() => void a.reconnect())
+      if (intent?.state === 'executing' && matches(event, bindingFor('sessionVerifyWorktree'))) return run(() => void a.verifyTree())
+      if (!laterBlocked && matches(event, bindingFor('sessionScheduleOnce'))) return run(ui.openLater)
+      if (scheduled && matches(event, bindingFor('sessionCancelTrigger'))) return run(() => void a.cancelBooking(scheduled.trigger_id))
+      if (!terminal && !session.worktree && !intent && !worktreePending && matches(event, bindingFor('sessionCreateWorktree'))) return run(ui.openTree)
+      if (session.worktree?.created_by_session && !worktreePending && !intent && matches(event, bindingFor('sessionCleanupWorktree'))) return run(() => void a.requestCleanup())
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
+}
 
-  if (!session && !error) return null
+/** 能力行（C12a #11）：按 kind 合并为一枚「MCP 3/6 正常」，色取最差；点开（aria-expanded）逐项列 id + health，
+ * 悬停 title 也列。曾经每项一枚同名胶囊并排（「MCP · 正常」「MCP · 不可用」…），分不清是哪个服务。 */
+function CapabilityGroups({ groups }: { groups: CapabilityGroup[] }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState<string | null>(null)
+  const kindName = (kind: string) => label(t, `session.capability_${kind}`, 'session.capability_other')
+  const shown = groups.find((g) => g.kind === open)
+  return (
+    <div className="flex flex-col gap-1.5" data-session-capabilities>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[12px] text-ink-3">{t('session.capabilities')}</span>
+        {groups.map((g) => {
+          const kind = kindName(g.kind)
+          const expanded = open === g.kind
+          return (
+            <button key={g.kind} type="button" data-session-capability-group={g.kind} data-variant={HEALTH_VARIANT[g.worst]}
+              aria-expanded={expanded} aria-label={`${t('session.capGroup', { kind, healthy: g.healthy, total: g.total })} · ${t('session.capGroupItems', { kind })}`}
+              title={g.items.map((c) => `${c.id} · ${t(`session.health.${c.health}`)}`).join('\n')}
+              className={cn(badgeVariants({ variant: HEALTH_VARIANT[g.worst] }), 'hx-press hx-focus cursor-pointer')}
+              onClick={() => setOpen(expanded ? null : g.kind)}>
+              {t('session.capGroup', { kind, healthy: g.healthy, total: g.total })}
+              <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} />
+            </button>
+          )
+        })}
+      </div>
+      {shown && (
+        <ul className="flex flex-wrap gap-1.5" data-session-capability-items={shown.kind}>
+          {shown.items.map((cap) => (
+            <li key={`${cap.kind}:${cap.id}`}>
+              <Badge variant={HEALTH_VARIANT[cap.health]} loading={cap.health === 'reconnecting'} title={cap.last_error ?? cap.binding_hint}>
+                {cap.id} · {t(`session.health.${cap.health}`)}
+                {cap.granted && <span aria-label={t('session.granted')}><Icon name="shield" size={12} /></span>}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** 卡内容（弹层里渲染，外壳由 A16 弹层承担，不再叠一层 raised 卡）。 */
+export function SessionRecoveryCard({ actions: a, treeOpen, onTreeOpen }: {
+  actions: SessionActions; treeOpen: boolean; onTreeOpen: (open: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const [treePath, setTreePath] = useState('')
+  const { summary, session, error, expired, scheduled, intent, worktreePending, terminal, exhausted, busy } = a
+  useEffect(() => { if (treeOpen && session) setTreePath(defaultWorktreePath(session)) }, [treeOpen, session])
 
   if (!session) {
     return (
-      <Card surface="raised" className="mb-2" aria-live="polite" aria-label={t('session.ariaLabel')} data-session-recovery>
-        {/* C12a 错误行 / C5（票 13）：摘要读取失败卡内块形 + 重试；不伪装「无事发生」 */}
+      <div aria-label={t('session.ariaLabel')} data-session-recovery>
+        {/* C12a 错误行 / C5（票 13）：摘要读取失败块形 + 重试；不伪装「无事发生」 */}
         <CardContent>
-          <InlineError title={t('session.error')} meta={error} onRetry={() => void refreshFast()} retryLabel={t('session.retry')} />
+          <InlineError title={t('session.error')} meta={error} onRetry={a.retry} retryLabel={t('session.retry')} />
         </CardContent>
-      </Card>
+      </div>
     )
   }
 
+  const reasonCode = session.last_reason_code ?? summary?.recent_diagnostics[0]?.code ?? null
   const tier = summary?.highest_pending_severity
   const worktreeState = intent?.state === 'executing' ? 'wt_unknown'
     : worktreePending ? 'wt_awaiting'
       : intent?.state === 'failed' ? 'wt_failed' : 'wt_attached'
   const worktreeVariant: BadgeVariant = worktreeState === 'wt_attached' ? 'ok' : worktreeState === 'wt_awaiting' ? 'neutral' : 'warn'
+  const requestCreate = () => { onTreeOpen(false); void a.requestCreate(treePath) }
 
   return (
-    <Card surface="raised" className="mb-2" aria-live="polite" aria-label={t('session.ariaLabel')} data-session-recovery>
+    <div aria-label={t('session.ariaLabel')} data-session-recovery>
       <CardHeader>
         <CardTitle title={session.session_id}>{t('session.title')}</CardTitle>
         <Badge variant={STATUS_VARIANT[session.status]} loading={session.status === 'reconnecting'}>{t(`session.status_${session.status}`)}</Badge>
@@ -177,17 +226,7 @@ export function SessionRecoveryStrip() {
         )}
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
-        {summary && summary.capabilities.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5" data-session-capabilities>
-            <span className="text-[12px] text-ink-3">{t('session.capabilities')}</span>
-            {summary.capabilities.map((cap) => (
-              <Badge key={`${cap.kind}:${cap.id}`} variant={HEALTH_VARIANT[cap.health]} loading={cap.health === 'reconnecting'} title={cap.last_error ?? cap.binding_hint}>
-                {label(t, `session.capability_${cap.kind}`, 'session.capability_other')} · {t(`session.health.${cap.health}`)}
-                {cap.granted && <span aria-label={t('session.granted')}><Icon name="shield" size={12} /></span>}
-              </Badge>
-            ))}
-          </div>
-        )}
+        {summary && summary.capabilities.length > 0 && <CapabilityGroups groups={groupCapabilities(summary.capabilities)} />}
         {(session.worktree || intent) && (
           <Card surface="inset" className="flex-row flex-wrap items-center gap-2 px-3 py-2" data-session-worktree>
             <span className="text-[12px] text-ink-3">{t('session.worktree')}</span>
@@ -197,11 +236,11 @@ export function SessionRecoveryStrip() {
             {intent?.reason_code && <CodeChip>{intent.reason_code}</CodeChip>}
             <span className="ml-auto flex gap-1.5">
               {intent?.state === 'executing'
-                ? <ActionButton action="sessionVerifyWorktree" loading={busy === 'tree'} onClick={() => void verifyTree()}>{t('session.worktreeVerify')}</ActionButton>
+                ? <ActionButton action="sessionVerifyWorktree" loading={busy === 'tree'} onClick={() => void a.verifyTree()}>{t('session.worktreeVerify')}</ActionButton>
                 : session.worktree && !worktreePending && (
                   <ActionButton action="sessionCleanupWorktree" loading={busy === 'tree'}
                     disabledReason={session.worktree.created_by_session ? undefined : t('session.worktreeExternal')}
-                    onClick={() => session.worktree?.created_by_session && void requestCleanup()}>{t('session.worktreeCleanup')}</ActionButton>
+                    onClick={() => session.worktree?.created_by_session && void a.requestCleanup()}>{t('session.worktreeCleanup')}</ActionButton>
                 )}
             </span>
           </Card>
@@ -211,56 +250,26 @@ export function SessionRecoveryStrip() {
             <Badge variant="warn">{t('session.expired')}</Badge>
             <span className="text-[12px] text-ink-2">{t('session.expiredAt', { time: clock(trigger.fire_at) })}</span>
             <ActionButton action="sessionContinueTrigger" className="ml-auto" loading={busy === 'continue'}
-              onClick={() => void act('continue', () => api.sessionContinueTrigger(trigger.trigger_id))}>{t('session.continue')}</ActionButton>
+              onClick={() => void a.continueTrigger(trigger.trigger_id)}>{t('session.continue')}</ActionButton>
           </div>
         ))}
         {scheduled && (
           <div className="flex items-center gap-2" data-session-trigger="scheduled">
             <span className="text-[12px] text-ink-2">{t('session.scheduledAt', { time: clock(scheduled.fire_at) })}</span>
             <ActionButton action="sessionCancelTrigger" variant="ghost" className="ml-auto" loading={busy === 'cancel'}
-              onClick={() => void cancelBooking(scheduled.trigger_id)}>{t('session.cancelBooking')}</ActionButton>
+              onClick={() => void a.cancelBooking(scheduled.trigger_id)}>{t('session.cancelBooking')}</ActionButton>
           </div>
         )}
       </CardContent>
-      {/* 票 16c（fr 冒烟）：下一步行在动作放不下时整组换到下一行，而不是把「Rien à faire」挤成两行、原因码挤成省略号。 */}
+      {/* 票 16c（fr 冒烟）：下一步行在动作放不下时整组换到下一行，而不是把「Rien à faire」挤成两行、原因码挤成省略号。
+          #11：「稍后继续…」移到头部 ⋯ 菜单与 ⌘K（规范 C12a），卡里只留已预约 / 已过期行。 */}
       <CardFooter className="flex-wrap justify-start" data-session-footer>
         <span className="text-[12px] whitespace-nowrap text-ink-3">{t('session.nextAction')}</span>
         <span className="text-[13px] whitespace-nowrap">{summary?.next_action ? label(t, `session.action_${summary.next_action}`, 'session.action_pending') : t('session.none')}</span>
         {reasonCode && <CodeChip className="shrink-0">{reasonCode}</CodeChip>}
         <span className="ml-auto flex flex-wrap justify-end gap-1.5">
-          {!terminal && !scheduled && (
-            <Popover open={laterOpen} onOpenChange={openLater}>
-              <PopoverTrigger asChild>
-                <Button size="sm" variant="ghost">{t('session.scheduleLater')}</Button>
-              </PopoverTrigger>
-              <PopoverContent aria-label={t('session.scheduleTitle')}>
-                <div className="px-2 py-1.5 text-[12px] text-ink-3">{t('session.scheduleTitle')}</div>
-                <div role="group" aria-label={t('session.bookPick')}>
-                  {LATER_CHOICES.map((choice) => {
-                    const picked = laterPick === choice.key
-                    return (
-                      <Button key={choice.key} size="sm" variant={picked ? 'quiet' : 'ghost'} aria-pressed={picked} className="w-full justify-start" data-later-choice={choice.key}
-                        onClick={() => setLaterPick(choice.key)}>
-                        {t(`session.${choice.key}`)}
-                        {picked && <Icon name="check" size={14} className="ml-auto text-primary" />}
-                      </Button>
-                    )
-                  })}
-                </div>
-                <div className="flex justify-end px-1 pt-1.5 pb-0.5">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button size="sm" variant="primary" aria-disabled={laterPick ? undefined : true} data-later-confirm
-                        onClick={() => schedule()}>{t('session.schedule')}</Button>
-                    </TooltipTrigger>
-                    {!laterPick && <TooltipContent>{t('session.bookPick')}</TooltipContent>}
-                  </Tooltip>
-                </div>
-              </PopoverContent>
-            </Popover>
-          )}
           {!terminal && !session.worktree && !intent && !worktreePending && (
-            <Popover open={treeOpen} onOpenChange={(open) => { if (open) setTreePath(defaultWorktreePath(session)); setTreeOpen(open) }}>
+            <Popover open={treeOpen} onOpenChange={onTreeOpen}>
               <PopoverTrigger asChild>
                 <Button size="sm" variant="ghost">{t('session.worktreeCreate')}</Button>
               </PopoverTrigger>
@@ -274,14 +283,13 @@ export function SessionRecoveryStrip() {
               </PopoverContent>
             </Popover>
           )}
-          {session.status === 'running' && <ActionButton action="sessionPause" loading={busy === 'pause'} onClick={() => void act('pause', () => api.sessionPause())}>{t('session.pause')}</ActionButton>}
-          {session.status === 'failed' && !exhausted && <ActionButton action="sessionReconnect" loading={busy === 'reconnect'} onClick={() => void act('reconnect', () => api.sessionReconnect())}>{t('session.reconnect')}</ActionButton>}
+          {session.status === 'running' && <ActionButton action="sessionPause" loading={busy === 'pause'} onClick={() => void a.pause()}>{t('session.pause')}</ActionButton>}
+          {session.status === 'failed' && !exhausted && <ActionButton action="sessionReconnect" loading={busy === 'reconnect'} onClick={() => void a.reconnect()}>{t('session.reconnect')}</ActionButton>}
           {session.status === 'paused' && (
-            <ActionButton action="sessionResume" loading={busy === 'resume'}
-              onClick={() => void resume()}>{t('session.resume')}</ActionButton>
+            <ActionButton action="sessionResume" loading={busy === 'resume'} onClick={() => void a.resume()}>{t('session.resume')}</ActionButton>
           )}
         </span>
       </CardFooter>
-    </Card>
+    </div>
   )
 }

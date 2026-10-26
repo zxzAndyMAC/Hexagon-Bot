@@ -12,6 +12,7 @@ const SEVERITY: Record<string, number> = {
   stall: 0,
   push: 0,
   release: 0,
+  release_target: 0,
   worktree: 0,
   install: 0,
   grant: 0,
@@ -119,6 +120,7 @@ export async function approveQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp') return api.confirmProposal(q.id)
   if (q.kind === 'push') return api.confirmPush(q.id)
   if (q.kind === 'release') return api.confirmRelease(q.id)
+  if (q.kind === 'release_target') return api.approveReleaseTargetCard(q.id)
   if (q.kind === 'worktree') return api.confirmWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, true)
   if (q.kind === 'recovery' && p.sub === 'tool_action_ready') return api.resumeToolAction(String(p.action_id))
@@ -142,6 +144,7 @@ export async function rejectQuestion(q: PendingQuestion) {
   if (q.kind === 'stamp') return api.rejectProposal(q.id, 'owner rejected')
   if (q.kind === 'push') return api.rejectPush(q.id)
   if (q.kind === 'release') return api.rejectRelease(q.id)
+  if (q.kind === 'release_target') return api.rejectReleaseTargetCard(q.id)
   if (q.kind === 'worktree') return api.rejectWorktree(q.id)
   if (q.kind === 'escalation') return api.adjudicateFlag(q.id, false)
   if (q.kind === 'install') return api.resolveInstall(q.id, false)
@@ -173,6 +176,7 @@ export function kindTitleKey(q: PendingQuestion): string {
   if (q.kind === 'stamp') return q.payload.proposal_id ? 'cards.proposalStamp' : 'cards.stageStamp'
   if (q.kind === 'push') return 'cards.push'
   if (q.kind === 'release') return 'cards.release'
+  if (q.kind === 'release_target') return 'cards.releaseTarget'
   if (q.kind === 'worktree') return q.payload.operation === 'cleanup' ? 'cards.worktreeCleanup' : 'cards.worktreeCreate'
   if (q.kind === 'recovery') return q.payload.sub === 'tool_outcome_unknown' ? 'cards.actionUnknown' : 'cards.recovery'
   if (q.kind === 'stall') return isActivationResumeCard(q) ? 'cards.resumeWaiting' : 'cards.stall'
@@ -249,6 +253,12 @@ export async function handlePendingKey(
   if (isApprove && q.kind === 'release') {
     // owner-followups-1015 #15：发布通常不可逆、必问永不记忆——同推送，只认点「确认发布」按钮。
     useUiStore.getState().pushToast(i18n.t('decisions.releaseNeedsClick'))
+    return 'blocked-release'
+  }
+  if (isApprove && q.kind === 'release_target') {
+    // owner-followups-1015 #16：登记的是 Agent 从聊天拟的命令，托管之后可以代批执行它——只认点「登记」按钮，
+    // 不吃键盘批准（离开归来连按 ⌘↵ 不能顺手登记一条没看过的命令）。代价：多点一下。
+    useUiStore.getState().pushToast(i18n.t('decisions.releaseTargetNeedsClick'))
     return 'blocked-release'
   }
   // 票 02：最终验收退回必须写阶段和修改意见，键盘驳回填不了这两项。
