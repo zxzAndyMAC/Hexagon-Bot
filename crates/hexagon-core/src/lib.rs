@@ -64,6 +64,8 @@ pub mod provider_url;
 pub mod push;
 pub mod push_class;
 pub mod release;
+pub mod release_chat;
+pub mod release_secret;
 pub mod release_targets;
 pub mod replay;
 pub mod reveal;

@@ -3,6 +3,8 @@
 //!
 //! - 只有负责人经设置·发布页登记 / 修改 / 删除（宿主 control 组命令）；Agent 没有写入口，
 //!   托管不扩大这项授权（CONTEXT.md「托管」：新增发布目标不扩大授权）。执行见 `crate::release`（票 15）。
+//!   聊天里 Agent 只能拟稿（`crate::release_chat`，票 16）：拟稿进「登记发布目标」卡，负责人亲手批准时
+//!   才经本模块 [`save`] 落库——写入口仍只有负责人这一个。
 //! - 持久化在 `release_targets` 表（迁移 0065）：名称、命令行、工作目录（相对项目根）、凭据名列表。
 //! - 凭据值只进钥匙串 `release/<目标 id>/<凭据名>`（[`credential_key`]）。表、轨迹、诊断、错误文案
 //!   只出现名字；读面只回「已存入 / 未设置」，存后不回显。
@@ -181,7 +183,7 @@ pub fn normalize_credential_name(raw: &str) -> Result<String, ReleaseError> {
     Ok(name.to_string())
 }
 
-fn normalize_credentials(raw: &[String]) -> Result<Vec<String>, ReleaseError> {
+pub(crate) fn normalize_credentials(raw: &[String]) -> Result<Vec<String>, ReleaseError> {
     let mut out: Vec<String> = Vec::new();
     for r in raw {
         if r.trim().is_empty() {
@@ -234,6 +236,42 @@ fn rows(db: &Db, project_id: &str, id: Option<&str>) -> Result<Vec<Row>, Release
             })
         })
         .collect()
+}
+
+/// 按 id 或登记名（去首尾空白后精确相等）找目标；聊天发起发布（票 16）只认这两种写法，
+/// 不做模糊匹配——「差不多像」的名字选错目标就是一次发错的不可逆发布。
+pub(crate) fn find(db: &Db, project_id: &str, key: &str) -> Result<Option<Row>, ReleaseError> {
+    let key = key.trim();
+    Ok(rows(db, project_id, None)?
+        .into_iter()
+        .find(|r| r.id == key || r.name == key))
+}
+
+/// 全部登记的名字（登记顺序）：拒绝时告诉模型能选哪些。
+pub(crate) fn names(db: &Db, project_id: &str) -> Result<Vec<String>, ReleaseError> {
+    Ok(rows(db, project_id, None)?
+        .into_iter()
+        .map(|r| r.name)
+        .collect())
+}
+
+/// 已存的全部发布凭据值（各目标、各凭据名）。只给批准拟稿时的泄漏比对用，值不出调用方。
+pub(crate) fn stored_secrets(
+    db: &Db,
+    project_id: &str,
+    store: &dyn CredentialStore,
+) -> Result<Vec<String>, ReleaseError> {
+    let mut out = Vec::new();
+    for r in rows(db, project_id, None)? {
+        for name in &r.credentials {
+            if let Some(v) = store.get(&credential_key(&r.id, name))? {
+                if !v.is_empty() {
+                    out.push(v);
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn row(db: &Db, project_id: &str, id: &str) -> Result<Row, ReleaseError> {

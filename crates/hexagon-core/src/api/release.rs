@@ -28,6 +28,30 @@ impl Workbench {
         )?)
     }
 
+    /// 批准「登记发布目标」卡（票 16）：只有负责人（`release_chat::approve` 守门）；批准才落库。
+    pub fn approve_release_target_card(
+        &self,
+        qid: &str,
+    ) -> Result<crate::release_targets::ReleaseTarget, ApiError> {
+        Ok(crate::release_chat::approve(
+            &self.db,
+            &self.project_id,
+            qid,
+            self.creds.as_ref(),
+            &self.decider(),
+        )?)
+    }
+
+    /// 驳回「登记发布目标」卡：什么都不登记。
+    pub fn reject_release_target_card(&self, qid: &str) -> Result<(), ApiError> {
+        Ok(crate::release_chat::reject(
+            &self.db,
+            &self.project_id,
+            qid,
+            &self.decider(),
+        )?)
+    }
+
     pub fn reject_release(&self, qid: &str) -> Result<(), ApiError> {
         Ok(release::reject_by(
             &self.db,

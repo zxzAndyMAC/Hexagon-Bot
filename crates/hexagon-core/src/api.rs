@@ -22,6 +22,8 @@ use std::sync::Mutex;
 
 mod permission_control;
 mod release;
+#[cfg(test)]
+mod release_chat_tests;
 mod release_targets;
 #[cfg(test)]
 mod release_targets_tests;

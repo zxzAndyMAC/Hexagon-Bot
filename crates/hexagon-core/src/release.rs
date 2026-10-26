@@ -3,7 +3,7 @@
 //!
 //! - **必问、永不记忆**：发布通常不可逆。卡上没有「允许本项目」，本模块不写 `permission_rules`、
 //!   不读记忆层；每次发布都是一张新卡、一次亲手批准（或托管在宿主事实全部成立时代批，见
-//!   `api/managed/routes.rs` 的 `release_forced`）。没有 Agent 工具入口（聊天发起在票 16，仍落这张卡）。
+//!   `api/managed/routes.rs` 的 `release_forced`）。聊天发起（票 16，`release_chat::RequestRelease`）也只落这张卡。
 //! - **卡面即授权范围**：卡载荷抄下请求时的命令、工作目录、凭据名。确认时与登记表逐项比对，
 //!   登记在卡发出后被改过就拒绝（`release_target_changed`），负责人批的必须是他看到的那条命令。
 //! - **前置闸 fail-closed**：目标还在、未改动、工作目录在项目内且存在、每个所需凭据都已存入——
@@ -61,6 +61,13 @@ pub enum ReleaseRunError {
     ReleaseCommandFailed(Option<i32>),
     #[error("release command timed out after {0}s")]
     ReleaseTimedOut(u64),
+    /// 聊天拟登记（票 16）：拟稿疑似夹着凭据值。文案不回显任何字段。
+    #[error("this looks like it contains a credential value; list the credential by name (like NPM_TOKEN) and have the owner enter the value in Settings · Release")]
+    ReleaseSecretSuspected,
+    #[error("unknown release target proposal: {0}")]
+    ReleaseProposalUnknown(String),
+    #[error("release target proposal {0} was already answered")]
+    ReleaseProposalAnswered(String),
     #[error(transparent)]
     Target(#[from] ReleaseError),
     #[error(transparent)]

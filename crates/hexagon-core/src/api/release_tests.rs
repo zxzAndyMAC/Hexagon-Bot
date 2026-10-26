@@ -359,8 +359,17 @@ fn only_the_owner_changes_release_targets() {
 }
 
 #[test]
-fn release_is_not_an_agent_tool() {
-    // Chat-triggered release is ticket 16; until then no tool reaches a release card.
+fn release_agent_tools_only_draft_or_request() {
+    // Behaviour changed in owner-followups-1015 #16: chat-triggered release added exactly two
+    // agent tools (draft a registration card / request a release card). No tool confirms a
+    // release or edits the registry; see release_chat_tests.rs for their card-only behaviour.
     let reg = crate::tools::Registry::builtin();
-    assert!(!reg.defs().iter().any(|d| d.name.contains("release")));
+    let mut names: Vec<String> = reg
+        .defs()
+        .into_iter()
+        .map(|d| d.name)
+        .filter(|n| n.contains("release"))
+        .collect();
+    names.sort();
+    assert_eq!(names, ["propose_release_target", "request_release"]);
 }

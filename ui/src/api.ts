@@ -577,6 +577,9 @@ export const api = {
   requestRelease: (targetId: string) => call<string>('request_release', { targetId }),
   confirmRelease: (qid: string) => call<ReleaseOutcome>('confirm_release', { qid }),
   rejectRelease: (qid: string) => call<void>('reject_release', { qid }),
+  // 登记发布目标卡（owner-followups-1015 #16）：Agent 在聊天里拟的目标，负责人批准才写入登记表。
+  approveReleaseTargetCard: (qid: string) => call<ReleaseTarget>('approve_release_target_card', { qid }),
+  rejectReleaseTargetCard: (qid: string) => call<void>('reject_release_target_card', { qid }),
   // ---- 崩溃恢复（票 37）----
   recoverRun: (runId: string) => call<void>('recover_run', { runId }),
   reconcileToolAction: (actionId: string) => call<ReconcileReport>('reconcile_tool_action', { actionId }),
@@ -1107,6 +1110,7 @@ const MOCK_DECIDE_CMDS: Record<string, (a: Record<string, unknown>) => string> =
   answer_permission: (a) => String(a.questionId), allow_project_permission: (a) => String(a.questionId),
   confirm_push: (a) => String(a.qid), reject_push: (a) => String(a.qid),
   confirm_release: (a) => String(a.qid), reject_release: (a) => String(a.qid),
+  approve_release_target_card: (a) => String(a.qid), reject_release_target_card: (a) => String(a.qid),
   confirm_worktree: (a) => String(a.qid), reject_worktree: (a) => String(a.qid),
   adjudicate_flag: (a) => String(a.qid), confirm_proposal: (a) => String(a.qid), reject_proposal: (a) => String(a.qid),
   stall_retry: (a) => String(a.questionId), stall_ack: (a) => String(a.questionId),
@@ -1650,6 +1654,8 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       return { target_id: target?.id ?? '', name: target?.name ?? '', output: '', duration_ms: 0 } as T
     }
     case 'reject_release': return null as T
+    case 'approve_release_target_card': return (MOCK_RELEASE[0] ?? null) as T
+    case 'reject_release_target_card': return null as T
     case 'list_mcp_entries':
       return [
         { name: 'termius', command: 'ssh-mcp', args: ['--stdio'], env: {}, cwd: null, disabled: false, transport: 'stdio', url: null, origin: 'global' },
