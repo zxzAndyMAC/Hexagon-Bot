@@ -643,6 +643,8 @@ export const api = {
   artistProposal: (id: string) => call<ArtistProposal>('artist_proposal', { id }),
   artistRegenerate: (id: string, role: string) => call<ArtistProposal>('artist_regenerate', { id, role }),
   artistApply: (id: string, roles: string[]) => call<ArtistProposal>('artist_apply', { id, roles }),
+  /** ticket 33 P3：跳过 / 取消跳过落盘，重载后照旧。 */
+  artistSkip: (id: string, role: string, skipped: boolean) => call<ArtistProposal>('artist_skip', { id, role, skipped }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => switchProject(source => call<void>('open_recent', { dir, _project: source })),
@@ -864,7 +866,7 @@ const mockArtistProposal = (id: string): ArtistProposal => {
   if (!mockArtistProposals[id]) {
     const roles = (mock('team') as { role: string }[]).map((r) => r.role)
     mockArtistProposals[id] = {
-      id, style: 'pixel art', model: 'gpt-image-1', applied: [],
+      id, style: 'pixel art', model: 'gpt-image-1', applied: [], skipped: [],
       items: roles.map((role, i) => ({
         role,
         prompt: `pixel art. A square avatar portrait representing the team role "${role}". One centered subject, simple background, no text, no letters, no watermark.`,
@@ -1570,6 +1572,13 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
         if (img) mockRoleAvatars[role] = img
       }
       mockArtistProposals[p.id] = { ...p, applied: roles }
+      return mockArtistProposals[p.id] as T
+    }
+    case 'artist_skip': {
+      const p = mockArtistProposal(String(args?.id))
+      const role = String(args?.role)
+      const rest = p.skipped.filter((r) => r !== role)
+      mockArtistProposals[p.id] = { ...p, skipped: args?.skipped ? [...rest, role] : rest }
       return mockArtistProposals[p.id] as T
     }
     case 'artifact_content':

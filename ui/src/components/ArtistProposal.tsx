@@ -1,6 +1,8 @@
 // 头像提案卡（owner-followups-1015 票 20，规范 components D12「头像提案卡」补设计，CONTEXT.md「画师」）。
 // core `artist_proposal::PROPOSAL` System 事件的渲染：画师发言（C1 头行，同 ArtistNotice）+ D12 形卡——
 // 每格角色名 + 生成图，「换一张 / 跳过」；底部「全部应用」；提示词折叠。
+// 跳过落盘（ticket 33 P3，2026-10-25 批次审查）：原是组件内状态，重载 / 重启后被跳过的格又回来，
+// 「全部应用」会把跳过的头像也换上；现在读写提案的 `skipped`。
 // 不是待决卡（2026-10-17 负责人裁决）：不进待决坞、托管不处理、不吃裁决键——这里不注册任何 keymap
 // 动作，也不经 settleDecision；只有负责人点「全部应用」才按角色写头像（core 走票 17 写入路径）。
 import { useCallback, useEffect, useState } from 'react'
@@ -25,7 +27,6 @@ export function ArtistProposalCard({ item }: { item: TimelineItem }) {
   const invalidate = useUiStore((s) => s.invalidate)
   const [proposal, setProposal] = useState<Proposal | null>(null)
   const [error, setError] = useState('')
-  const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set())
   const [redrawing, setRedrawing] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
 
@@ -38,15 +39,18 @@ export function ArtistProposalCard({ item }: { item: TimelineItem }) {
   useEffect(load, [load])
 
   const applied = (proposal?.applied.length ?? 0) > 0
+  const skipped = new Set(proposal?.skipped ?? [])
+  const [skipping, setSkipping] = useState<string | null>(null)
   const picked = (proposal?.items ?? []).filter((it) => it.image && !skipped.has(it.role)).map((it) => it.role)
-  const busy = applying || redrawing !== null
+  const busy = applying || redrawing !== null || skipping !== null
 
-  const toggleSkip = (role: string) => setSkipped((s) => {
-    const next = new Set(s)
-    if (next.has(role)) next.delete(role)
-    else next.add(role)
-    return next
-  })
+  const toggleSkip = async (role: string) => {
+    setSkipping(role)
+    setError('')
+    try { setProposal(await api.artistSkip(id, role, !skipped.has(role))) }
+    catch (e) { setError(errText(e)) }
+    finally { setSkipping(null) }
+  }
   const redraw = async (role: string) => {
     setRedrawing(role)
     setError('')
@@ -76,7 +80,7 @@ export function ArtistProposalCard({ item }: { item: TimelineItem }) {
           sub={t('artist.proposalSub', { count: proposal?.items.length ?? 0, style: proposal?.style ?? String(p.style ?? '') })}
           note={applied ? t('artist.applied', { count: proposal!.applied.length }) : t('artist.applyNote')}
           actions={proposal && !applied && (
-            <DecisionButton variant="primary" busy={applying} disabled={picked.length === 0 || redrawing !== null}
+            <DecisionButton variant="primary" busy={applying} disabled={picked.length === 0 || redrawing !== null || skipping !== null}
               onClick={() => void apply()}>{t('artist.applyAll')}</DecisionButton>
           )}>
           {error && <p role="alert" className="artist-error">{error}</p>}
@@ -99,8 +103,8 @@ export function ArtistProposalCard({ item }: { item: TimelineItem }) {
                       <div className="artist-cell-actions">
                         <DecisionButton variant="ghost" busy={redrawing === it.role} disabled={busy}
                           onClick={() => void redraw(it.role)}>{t('artist.redraw')}</DecisionButton>
-                        <DecisionButton variant="ghost" disabled={busy || !it.image} aria-pressed={skip}
-                          onClick={() => toggleSkip(it.role)}>{skip ? t('artist.unskip') : t('artist.skip')}</DecisionButton>
+                        <DecisionButton variant="ghost" busy={skipping === it.role} disabled={busy || !it.image} aria-pressed={skip}
+                          onClick={() => void toggleSkip(it.role)}>{skip ? t('artist.unskip') : t('artist.skip')}</DecisionButton>
                       </div>
                     )}
                   </article>

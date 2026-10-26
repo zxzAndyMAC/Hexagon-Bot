@@ -3092,6 +3092,19 @@ fn artist_apply(
     })
 }
 
+/// ticket 33 P3：提案卡「跳过 / 取消跳过」落盘（纯文件，控制组）。
+#[tauri::command]
+fn artist_skip(
+    state: ProjectState<'_>,
+    id: String,
+    role: String,
+    skipped: bool,
+) -> Result<hexagon_core::artist_proposal::ArtistProposal, CmdError> {
+    with_project_conn(&state, |_, root| {
+        hexagon_core::artist_proposal::set_skipped(root, &id, &role, skipped)
+    })
+}
+
 #[tauri::command]
 fn artifact_content_at(
     state: tauri::State<AppState>,
@@ -4299,6 +4312,7 @@ pub fn run() {
             artist_proposal,
             artist_regenerate,
             artist_apply,
+            artist_skip,
             artifact_content_at,
             set_agent_sleeping,
             remove_agent,

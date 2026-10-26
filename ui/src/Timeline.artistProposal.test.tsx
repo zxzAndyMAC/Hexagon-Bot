@@ -22,7 +22,7 @@ const sys = (id: number, payload: Record<string, unknown>): TimelineItem => ({
 })
 const event = sys(9, { kind: 'artist_avatar_proposal', speaker: '画师', speaker_code: 'artist', proposal_id: 'ap1', style: 'pixel art', model: 'gpt-image-1', roles: ['后端', '前端', '测试'] })
 const proposal = (over: Partial<ArtistProposal> = {}): ArtistProposal => ({
-  id: 'ap1', style: 'pixel art', model: 'gpt-image-1', applied: [],
+  id: 'ap1', style: 'pixel art', model: 'gpt-image-1', applied: [], skipped: [],
   items: [
     { role: '后端', prompt: 'pixel art. backend', image: IMG, failure: null },
     { role: '前端', prompt: 'pixel art. frontend', image: IMG, failure: null },
@@ -67,6 +67,8 @@ describe('头像提案卡（票 20）', () => {
     await i18n.changeLanguage('zh-CN')
     vi.spyOn(api, 'artistProposal').mockResolvedValue(proposal())
     const apply = vi.spyOn(api, 'artistApply').mockResolvedValue(proposal({ applied: ['后端'] }))
+    // ticket 33 P3：跳过改为落盘——点「跳过」走 artistSkip，格的状态取回执里的 skipped（原为组件内状态）。
+    const skip = vi.spyOn(api, 'artistSkip').mockResolvedValue(proposal({ skipped: ['前端'] }))
     const invalidate = vi.fn(async () => {})
     const original = useUiStore.getState().invalidate
     useUiStore.setState({ invalidate })
@@ -74,6 +76,7 @@ describe('头像提案卡（票 20）', () => {
     const { el, unmount } = await render(<EventRow item={event} />)
     const front = el.querySelector('[data-role="前端"]')!
     await act(async () => { button(front, '跳过').click() })
+    expect(skip).toHaveBeenCalledWith('ap1', '前端', true)
     expect(front.hasAttribute('data-skipped')).toBe(true)
     expect(button(front, '取消跳过').getAttribute('aria-pressed')).toBe('true')
     // 失败格不能跳过（本来就不会应用）。
@@ -86,6 +89,25 @@ describe('头像提案卡（票 20）', () => {
     expect(useUiStore.getState().pending).toBe(pendingBefore)
     unmount()
     useUiStore.setState({ invalidate: original })
+  })
+
+  it('跳过状态来自落盘的提案：重载后仍跳过，取消跳过写回（ticket 33 P3）', async () => {
+    await i18n.changeLanguage('zh-CN')
+    vi.spyOn(api, 'artistProposal').mockResolvedValue(proposal({ skipped: ['前端'] }))
+    const skip = vi.spyOn(api, 'artistSkip').mockResolvedValue(proposal())
+    const apply = vi.spyOn(api, 'artistApply').mockResolvedValue(proposal({ applied: ['后端'] }))
+    const { el, unmount } = await render(<EventRow item={event} />)
+    const front = el.querySelector('[data-role="前端"]')!
+    expect(front.hasAttribute('data-skipped')).toBe(true)
+    await act(async () => { button(el, '全部应用').click() })
+    expect(apply).toHaveBeenCalledWith('ap1', ['后端'])
+    unmount()
+    const again = await render(<EventRow item={event} />)
+    const front2 = again.el.querySelector('[data-role="前端"]')!
+    await act(async () => { button(front2, '取消跳过').click() })
+    expect(skip).toHaveBeenCalledWith('ap1', '前端', false)
+    expect(front2.hasAttribute('data-skipped')).toBe(false)
+    again.unmount()
   })
 
   it('换一张只重画那一格', async () => {

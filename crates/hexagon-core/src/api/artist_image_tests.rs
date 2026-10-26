@@ -404,6 +404,46 @@ fn apply_writes_role_avatars_for_the_picked_cells_only() {
 }
 
 #[test]
+fn skipped_cells_survive_a_reload() {
+    // ticket 33（2026-10-25 批次审查 P3，原票 #20 遗留）：跳过曾只在界面状态里，重载后复原。
+    let dir = tempfile::tempdir().unwrap();
+    let mut wb = bench(dir.path());
+    let (base, _seen, server) = serve(vec![Reply::Png, Reply::Png]);
+    let _doc = crate::provider_config::fixture_document(image_doc(&base));
+    summon(&mut wb);
+    server.join().unwrap();
+    let id = system(&wb, "artist_avatar_proposal")[0]["proposal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let root = &wb.repo_root;
+    assert!(crate::artist_proposal::load(root, &id)
+        .unwrap()
+        .skipped
+        .is_empty());
+    let p = crate::artist_proposal::set_skipped(root, &id, "项目经理", true).unwrap();
+    assert_eq!(p.skipped, vec!["项目经理"]);
+    // 重复跳过不叠；重新读盘（= 重载 / 重启）仍是跳过
+    crate::artist_proposal::set_skipped(root, &id, "项目经理", true).unwrap();
+    assert_eq!(
+        crate::artist_proposal::load(root, &id).unwrap().skipped,
+        vec!["项目经理"]
+    );
+    // 取消跳过
+    let p = crate::artist_proposal::set_skipped(root, &id, "项目经理", false).unwrap();
+    assert!(p.skipped.is_empty());
+    assert!(crate::artist_proposal::load(root, &id)
+        .unwrap()
+        .skipped
+        .is_empty());
+    // 不在提案里的角色拒
+    assert!(matches!(
+        crate::artist_proposal::set_skipped(root, &id, "不存在", true),
+        Err(crate::artist_proposal::ArtistError::ArtistRoleNotInProposal(_))
+    ));
+}
+
+#[test]
 fn proposal_ids_cannot_walk_out_of_the_artist_directory() {
     let dir = tempfile::tempdir().unwrap();
     for id in ["../avatars", "ap", "ap1/../../x", "x1"] {
