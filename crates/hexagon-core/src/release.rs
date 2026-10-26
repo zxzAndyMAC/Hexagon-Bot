@@ -464,6 +464,9 @@ pub(crate) fn redact(output: &str, secrets: &[(String, String)]) -> String {
         .fold(output.to_string(), |acc, v| acc.replace(v, REDACTED))
 }
 
+/// 一路子进程输出管道及其独立缓冲（stdout / stderr 各一，S13 分缓冲各自脱敏）。
+type Pipe = (Box<dyn Read + Send>, Arc<Mutex<Stream>>);
+
 /// 一路输出（stdout 或 stderr）的捕获：只留最新的 [`CAPTURE_BYTES`]，`truncated` = 开头被丢过。
 #[derive(Default)]
 struct Stream {
@@ -555,7 +558,7 @@ fn run_command(
     let (done_tx, done_rx) = mpsc::channel::<()>();
     let out_buf = Arc::new(Mutex::new(Stream::default()));
     let err_buf = Arc::new(Mutex::new(Stream::default()));
-    let pipes: Vec<(Box<dyn Read + Send>, Arc<Mutex<Stream>>)> = [
+    let pipes: Vec<Pipe> = [
         child
             .stdout
             .take()
