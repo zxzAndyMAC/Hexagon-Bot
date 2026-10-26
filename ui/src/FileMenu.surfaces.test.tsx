@@ -14,6 +14,7 @@ import { MessageContextMenu } from './components/MessageMenu'
 import { Timeline, ToolGroupRow } from './components/Timeline'
 import type { TimelineItem } from './api'
 import { ToolExecCard } from './components/ExecCard'
+import { AgentTab } from './components/AgentTab'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, scrollerRef }: { data: unknown[]; itemContent: (i: number, row: unknown) => ReactNode; scrollerRef: (node: HTMLElement | null) => void }) =>
@@ -186,5 +187,23 @@ describe('执行卡卡头路径（#32 表面 7）', () => {
     await flush()
     await rightClick(host.querySelector('[data-bash] .exec-head')!)
     expect(menu()).toBeNull()
+  })
+})
+
+describe('Agent 详情步骤路径链接（#32 表面 8）', () => {
+  it('右键 = 全套；「打开」开产物页签', async () => {
+    // 步骤来自分页窗口（dev mock 的 Agent 活动），挑第一条带路径的步骤
+    useUiStore.setState({
+      team: [{ id: 'a1', role: 'dev', model_slot: null, status: 'active', avatar_hash: null, avatar_override: false, model: null, duty: null, superior: null }] as never,
+    })
+    const host = await render(<AgentTab agentId="a1" />)
+    await flush()
+    for (const g of host.querySelectorAll<HTMLElement>('[aria-expanded="false"]')) await act(async () => { g.click() })
+    const link = host.querySelector<HTMLElement>('[data-step-path]')!
+    expect(link).not.toBeNull()
+    await rightClick(link)
+    expect(items()).toEqual(FULL)
+    await act(async () => { menu()!.querySelector<HTMLElement>('[data-ctx-item="open"]')!.click() })
+    expect(useUiStore.getState().activeTab).toBe(`art:${link.title}`)
   })
 })

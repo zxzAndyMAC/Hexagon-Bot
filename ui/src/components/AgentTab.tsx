@@ -30,6 +30,7 @@ import { Progress } from '@/components/ui/progress'
 import { Spinner } from '@/components/ui/spinner'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
+import { FileContextMenu, useProjectFileTarget } from './FileMenu'
 
 type Step = {
   id: number
@@ -275,7 +276,7 @@ function Activity({ agentId, busy }: { agentId: string; busy: boolean }) {
                             {s.label}
                           </button>
                           {s.summary && (s.path
-                            ? <button type="button" className="hx-focus min-w-0 truncate font-mono text-[11.5px] text-accent-ink live:hover:underline" title={s.path} onClick={() => openPath(s.path!)}>{s.summary}</button>
+                            ? <StepPathLink path={s.path} label={s.summary} onOpen={() => openPath(s.path!)} />
                             : <span className="min-w-0 truncate font-mono text-[11.5px] text-ink-3" title={s.summary}>{s.summary}</span>)}
                           <span className="flex-1" />
                           {/* 票 05 TaskRows 状态机：tool_called 无 result=在途运行环；落定翻 check/X */}
@@ -383,5 +384,15 @@ function UsageFooter({ agentId }: { agentId: string }) {
         <span className="font-mono tabular-nums">{fmtYuan(spend.mc, i18n.language)} · {fmtK(spend.tokens)} tokens</span>
       </div>
     </div>
+  )
+}
+
+/** 步骤行路径链接；右键 = 共用文件菜单（A16b，owner-followups-1015 #32，2026-10-21 负责人裁决）。根外的绝对路径只留「打开」。 */
+function StepPathLink({ path, label, onOpen }: { path: string; label: string; onOpen: () => void }) {
+  const target = useProjectFileTarget(path, { onOpen })
+  return (
+    <FileContextMenu {...target}>
+      <button type="button" data-step-path className="hx-focus min-w-0 truncate font-mono text-[11.5px] text-accent-ink live:hover:underline" title={path} onClick={onOpen}>{label}</button>
+    </FileContextMenu>
   )
 }
