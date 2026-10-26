@@ -123,7 +123,7 @@ export function StageArtifacts({ runId }: { runId: string }) {
  * 待恢复（盘上未写成）的行一项不剩 → 不挂菜单。
  */
 function StageArtifactRow({ a }: { a: ArtifactRow }) {
-  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path)
+  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path, { artifact: true })
   return (
     <FileContextMenu {...target}>
       <div data-stage-artifact>

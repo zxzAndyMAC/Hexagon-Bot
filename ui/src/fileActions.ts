@@ -64,6 +64,16 @@ export function projectRelPath(path: string, root: string | null): string | null
   return sep === '/' ? rel : rel.replaceAll('\\', '/')
 }
 
+/**
+ * 产物登记路径 → 仓内路径：产物落在 `.hexagon/<path>`（core artifacts::content / deliver），登记的 path 是 `.hexagon/` 内相对。
+ * 修复即文档（#32 2026-10-25）：#29 / #31 的产物页签「复制路径」「打开方式」直接用登记 path，指到项目根下同名路径
+ * （不存在 → errors.open_with_missing，或复制出一条错路径）。绝对形 / 已带 `.hexagon/` 的原样返回。
+ */
+export function artifactRepoPath(path: string): string {
+  if (path.startsWith('/') || path.startsWith('.hexagon/')) return path
+  return `.hexagon/${path.replace(/^\.\//, '')}`
+}
+
 /** 复制项目内路径的绝对形（文件树行与画布页签共用，#30）：项目根 + 相对路径，没有项目根时退回相对路径。 */
 export async function copyProjectPath(rel: string) {
   await copyPath(absolutePath(useUiStore.getState().projectRoot, rel))

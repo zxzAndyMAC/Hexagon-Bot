@@ -80,7 +80,7 @@ function TreePane() {
 /** 空态最近产物一行；右键 = 共用文件菜单（A16b，#32，2026-10-21 负责人裁决；待恢复的只给「打开」，同产物清单）。 */
 function RecentArtifact({ a }: { a: ArtifactRow }) {
   const open = () => useUiStore.getState().openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })
-  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path, { onOpen: open })
+  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path, { onOpen: open, artifact: true })
   return (
     <FileContextMenu {...target}>
       <button type="button" data-canvas-recent className="hx-focus flex h-8 w-full cursor-pointer items-center gap-2 rounded-[var(--r-sm)] px-2 text-[13px] text-ink-2 hover:bg-hover hover:text-ink"

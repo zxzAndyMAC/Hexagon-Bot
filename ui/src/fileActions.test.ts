@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolutePath, projectRelPath } from './fileActions'
+import { absolutePath, artifactRepoPath, projectRelPath } from './fileActions'
 
 // 票 29（owner-followups-1015）：画布页签「复制路径」写绝对路径——项目根 + 项目相对路径。
 describe('absolutePath', () => {
@@ -34,5 +34,14 @@ describe('projectRelPath', () => {
     expect(projectRelPath('./docs/plan.md', '/r')).toBe('docs/plan.md')
     expect(projectRelPath('docs/plan.md', null)).toBe('docs/plan.md')
     expect(projectRelPath('../secret', '/r')).toBeNull()
+  })
+})
+
+// #32 修复：产物登记路径是 .hexagon/ 内相对，盘上仓内路径 = .hexagon/<path>。
+describe('artifactRepoPath', () => {
+  it('登记路径补 .hexagon/；已带前缀或绝对形原样', () => {
+    expect(artifactRepoPath('specs/prd.md')).toBe('.hexagon/specs/prd.md')
+    expect(artifactRepoPath('.hexagon/specs/prd.md')).toBe('.hexagon/specs/prd.md')
+    expect(artifactRepoPath('/abs/x.md')).toBe('/abs/x.md')
   })
 })

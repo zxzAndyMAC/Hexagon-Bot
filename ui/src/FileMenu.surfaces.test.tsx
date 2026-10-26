@@ -76,7 +76,8 @@ describe('产物清单行（#32 表面 1）', () => {
     const host = await render(<ArtifactList />)
     await rightClick(host.querySelector('[role=listitem]')!)
     expect(items()).toEqual(FULL)
-    expect(api.openWithCandidates).toHaveBeenCalledWith('docs/plan.pdf')
+    // 产物登记路径是 .hexagon/ 内相对，盘上路径 = .hexagon/<path>
+    expect(api.openWithCandidates).toHaveBeenCalledWith('.hexagon/docs/plan.pdf')
     await act(async () => { menu()!.querySelector<HTMLElement>('[data-ctx-item="open"]')!.click() })
     expect(useUiStore.getState().activeTab).toBe('art:docs/plan.pdf')
   })
@@ -149,7 +150,7 @@ describe('交付卡 C11（#32 表面 3）', () => {
     // Timeline 挂载时 dev mock 可能并入别的交付卡，按路径挑
     await rightClick(host.querySelector('.tl-deliver[title="deck/q4.pptx"]')!)
     expect(items()).toEqual(FULL)
-    expect(api.openWithCandidates).toHaveBeenCalledWith('deck/q4.pptx')
+    expect(api.openWithCandidates).toHaveBeenCalledWith('.hexagon/deck/q4.pptx')
     await act(async () => { menu()!.querySelector<HTMLElement>('[data-ctx-item="open"]')!.click() })
     expect(useUiStore.getState().activeTab).toBe('art:deck/q4.pptx')
   })

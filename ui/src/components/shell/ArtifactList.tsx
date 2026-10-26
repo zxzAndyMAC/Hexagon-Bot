@@ -44,7 +44,7 @@ function ArtifactListRow({ a }: { a: ArtifactRow }) {
   const { t } = useTranslation()
   const openTab = useUiStore((s) => s.openTab)
   const open = () => openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })
-  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path, { onOpen: open })
+  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path, { onOpen: open, artifact: true })
   return (
     <FileContextMenu {...target}>
       <Row

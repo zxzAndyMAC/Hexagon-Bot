@@ -71,7 +71,7 @@ function CopyBtn({ text }: { text: string }) {
  * 「打开」= 文件写入开文件页签、产物写入开产物页签；根外的绝对路径只留「打开」；没有文件的卡不挂菜单。
  */
 function ExecHeadMenu({ file, children }: { file?: { path: string; open: 'file' | 'artifact' }; children: ReactNode }) {
-  const target = useProjectFileTarget(file?.path || null, { onOpen: file?.path ? () => openExecFile(file) : undefined })
+  const target = useProjectFileTarget(file?.path || null, { onOpen: file?.path ? () => openExecFile(file) : undefined, artifact: file?.open === 'artifact' })
   return <FileContextMenu {...target}>{children}</FileContextMenu>
 }
 

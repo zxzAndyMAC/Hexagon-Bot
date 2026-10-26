@@ -2,7 +2,7 @@
 // 右键菜单、命令面板、keymap 三个入口共用这里——右键不是唯一入口（A16b「定位」）。
 // 「关闭」不在这里：复用 store.closeTab。
 import { isPinnedTab, useUiStore, type WorkTab } from './store'
-import { copyProjectPath } from './fileActions'
+import { artifactRepoPath, copyProjectPath } from './fileActions'
 
 /** 可见顺序（A22「溢出」，#06）：固定页签（产物 / 项目文件）在前，其余保持原序。页签栏、「全部页签」菜单、
  * 「关闭右侧」、上 / 下一个页签都按它走——store 由 openTab 维持同序，这里兜住直接 setState 的旧顺序。 */
@@ -30,9 +30,14 @@ export function otherTabs(tabs: readonly WorkTab[], id: string): string[] {
   return tabs.some((t) => t.id === id) ? tabs.filter((t) => t.id !== id).map((t) => t.id) : []
 }
 
-/** 可复制的项目相对路径：只有文件 / 产物页签有（Agent、diff、列表页签 → null，菜单项不渲染）。 */
+/**
+ * 可复制的项目相对路径：只有文件 / 产物页签有（Agent、diff、列表页签 → null，菜单项不渲染）。
+ * 产物页签换成盘上仓内路径 `.hexagon/<path>`（#32 修复，见 fileActions.artifactRepoPath）。
+ */
 export function tabPath(tab: WorkTab | undefined): string | null {
-  return tab && (tab.kind === 'file' || tab.kind === 'artifact') && tab.path ? tab.path : null
+  if (!tab || !tab.path) return null
+  if (tab.kind === 'file') return tab.path
+  return tab.kind === 'artifact' ? artifactRepoPath(tab.path) : null
 }
 
 /** 页签列滚动（A22「溢出」，#06）：把页签拉进视区要给 scrollLeft 加多少：左边露不全 → 负（左缘对齐）；右边露不全 → 正（右缘对齐）；比视区宽 → 左缘对齐。 */
