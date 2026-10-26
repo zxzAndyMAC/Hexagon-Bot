@@ -299,7 +299,9 @@ function openWithItems(t: TFunction, target: string | null, targetApps: OpenWith
   const rows: Item[] = []
   if (target && targetApps.kind === 'ready') {
     for (const app of targetApps.apps) {
-      rows.push({ id: `w-${app.id}-${target}`, group: 'openWith', app, label: t('palette.openWithApp', { app: app.name }), desc: name,
+      rows.push({ id: `w-${app.id}-${target}`, group: 'openWith', app, label: t('palette.openWithApp', { app: app.name }),
+        // #32：系统默认应用在灰描述后标「（默认）」，同子菜单
+        desc: app.is_default ? `${name} ${t('ctx.openWithDefault')}` : name,
         keywords: [app.id, target], run: () => openPathWith(target, app.id) })
     }
   }
