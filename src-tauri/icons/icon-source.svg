@@ -1,0 +1,9 @@
+<!-- 应用图标源（2026-10-26 负责人要求与启动页品牌标一致：Launcher 40 方块 rounded-[12px] bg-ink + Lucide Hexagon 20 / 描边 1.75）。
+     比例照搬：圆角 = 边长 30%，六边形框 = 边长 1/2；颜色取浅色主题 ink / page 两个 token。四周留 100 像素（macOS 图标网格）。
+     重生：npx tauri icon src-tauri/icons/icon-source.svg -o src-tauri/icons -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect x="100" y="100" width="824" height="824" rx="247.2" fill="#1f2124"/>
+  <g transform="translate(306 306) scale(17.1667)" fill="none" stroke="#fafafb" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+  </g>
+</svg>

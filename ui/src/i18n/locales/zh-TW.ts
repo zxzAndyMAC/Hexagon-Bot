@@ -785,7 +785,7 @@ export default {
     logs_f_trace: '軌跡',
     pressKey: '按新鍵位…',
     resetKey: '重置',
-    aboutLine: '本地優先的受控虛擬軟體團隊工作台',
+    aboutLine: '本地優先的受控虛擬團隊工作台',
     needsProject: '此分區需要打開的專案——先回啟動頁進入一個專案',
   },
   teamTpl: {
@@ -898,7 +898,7 @@ export default {
     launch: '建立專案',
   },
   launch: {
-    heading: "今天要做什麼軟體？",
+    heading: "今天想做點什麼？",
     prompt: "描述你要做的軟體",
     start: "開始新建",
     pickDir: "選擇目錄",
@@ -908,7 +908,7 @@ export default {
     recentCount: "{{count}} 個",
     emptyTitle: "還沒有專案",
     emptyBody: "在上方描述要做的軟體，或開啟一個既有目錄。",
-    title: '受控虛擬軟體團隊 · 本地工作台',
+    title: '受控虛擬團隊 · 本地工作台',
     recents: '最近專案',
     mode_pack: '流程包',
     mode_fastpath: '快速通道',

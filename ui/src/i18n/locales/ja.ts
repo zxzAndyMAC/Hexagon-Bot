@@ -785,7 +785,7 @@ export default {
     logs_f_trace: 'トレース',
     pressKey: 'キーを押してください…',
     resetKey: 'リセット',
-    aboutLine: '制御された仮想ソフトウェアチームのローカルファースト・ワークベンチ',
+    aboutLine: '制御された仮想チームのローカルファースト・ワークベンチ',
     needsProject: 'このセクションには開いているプロジェクトが必要です——先にランチャーからプロジェクトを開いてください',
   },
   teamTpl: {
@@ -898,7 +898,7 @@ export default {
     launch: 'プロジェクト作成',
   },
   launch: {
-    heading: "今日はどんなソフトを作りますか？",
+    heading: "今日は何をしましょう？",
     prompt: "作りたいソフトを説明してください",
     start: "新規作成を開始",
     pickDir: "フォルダーを選択",
@@ -908,7 +908,7 @@ export default {
     recentCount: "{{count}} 件",
     emptyTitle: "まだプロジェクトはありません",
     emptyBody: "上で作りたいソフトを説明するか、既存のフォルダーを開いてください。",
-    title: '制御された仮想ソフトウェアチーム · ローカルワークベンチ',
+    title: '制御された仮想チーム · ローカルワークベンチ',
     recents: '最近のプロジェクト',
     mode_pack: 'プロセスパック',
     mode_fastpath: 'ファストパス',

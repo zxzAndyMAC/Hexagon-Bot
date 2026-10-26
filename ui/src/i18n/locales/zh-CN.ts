@@ -785,7 +785,7 @@ export default {
     logs_f_trace: '轨迹',
     pressKey: '按新键位…',
     resetKey: '重置',
-    aboutLine: '本地优先的受控虚拟软件团队工作台',
+    aboutLine: '本地优先的受控虚拟团队工作台',
     needsProject: '此分区需要打开的项目——先回启动页进入一个项目',
   },
   teamTpl: {
@@ -898,7 +898,7 @@ export default {
     launch: '创建项目',
   },
   launch: {
-    heading: "今天要做什么软件？",
+    heading: "今天想干点什么？",
     prompt: "描述你要做的软件",
     start: "开始新建",
     pickDir: "选择目录",
@@ -908,7 +908,7 @@ export default {
     recentCount: "{{count}} 个",
     emptyTitle: "还没有项目",
     emptyBody: "在上方描述要做的软件，或打开一个已有目录。",
-    title: '受控虚拟软件团队 · 本地工作台',
+    title: '受控虚拟团队 · 本地工作台',
     recents: '最近项目',
     mode_pack: '流程包',
     mode_fastpath: '快速通道',

@@ -785,7 +785,7 @@ export default {
     logs_f_trace: 'rastro',
     pressKey: 'Pressione teclas…',
     resetKey: 'Redefinir',
-    aboutLine: 'Uma bancada local para uma equipe virtual de software controlada',
+    aboutLine: 'Uma bancada local para uma equipe virtual controlada',
     needsProject: 'Esta seção precisa de um projeto aberto — abra um na tela inicial',
   },
   teamTpl: {
@@ -898,7 +898,7 @@ export default {
     launch: 'Criar projeto',
   },
   launch: {
-    heading: "Que software vamos fazer hoje?",
+    heading: "O que vamos fazer hoje?",
     prompt: "Descreva o software que você quer",
     start: "Começar projeto",
     pickDir: "Escolher pasta",
@@ -908,7 +908,7 @@ export default {
     recentCount: "{{count}}",
     emptyTitle: "Ainda não há projetos",
     emptyBody: "Descreva o software acima ou abra uma pasta existente.",
-    title: 'Uma equipe virtual de software controlada · bancada local',
+    title: 'Uma equipe virtual controlada · bancada local',
     recents: 'Projetos recentes',
     mode_pack: 'pack de processo',
     mode_fastpath: 'via rápida',

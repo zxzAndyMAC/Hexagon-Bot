@@ -785,7 +785,7 @@ export default {
     logs_f_trace: 'traza',
     pressKey: 'Pulsa teclas…',
     resetKey: 'Restablecer',
-    aboutLine: 'Un banco local para un equipo virtual de software controlado',
+    aboutLine: 'Un banco local para un equipo virtual controlado',
     needsProject: 'Esta sección necesita un proyecto abierto — abre uno desde el inicio',
   },
   teamTpl: {
@@ -898,7 +898,7 @@ export default {
     launch: 'Crear proyecto',
   },
   launch: {
-    heading: "¿Qué software hacemos hoy?",
+    heading: "¿Qué quieres hacer hoy?",
     prompt: "Describe el software que quieres",
     start: "Empezar proyecto",
     pickDir: "Elegir carpeta",
@@ -908,7 +908,7 @@ export default {
     recentCount: "{{count}}",
     emptyTitle: "Aún no hay proyectos",
     emptyBody: "Describe el software arriba o abre una carpeta existente.",
-    title: 'Un equipo virtual de software controlado · banco local',
+    title: 'Un equipo virtual controlado · banco local',
     recents: 'Proyectos recientes',
     mode_pack: 'pack de proceso',
     mode_fastpath: 'vía rápida',

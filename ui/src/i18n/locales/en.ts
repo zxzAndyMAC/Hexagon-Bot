@@ -785,7 +785,7 @@ export default {
     logs_f_trace: 'trace',
     pressKey: 'Press keys…',
     resetKey: 'Reset',
-    aboutLine: 'A local-first workbench for a controlled virtual software team',
+    aboutLine: 'A local-first workbench for a controlled virtual team',
     needsProject: 'This section needs an open project — open one from the launcher first',
   },
   teamTpl: {
@@ -898,7 +898,7 @@ export default {
     launch: 'Create project',
   },
   launch: {
-    heading: "What are we building today?",
+    heading: "What do you want to do today?",
     prompt: "Describe the software you want",
     start: "Start new project",
     pickDir: "Choose folder",
@@ -908,7 +908,7 @@ export default {
     recentCount: "{{count}}",
     emptyTitle: "No projects yet",
     emptyBody: "Describe the software above, or open an existing folder.",
-    title: 'A controlled virtual software team · local workbench',
+    title: 'A controlled virtual team · local workbench',
     recents: 'Recent projects',
     mode_pack: 'process pack',
     mode_fastpath: 'fast path',

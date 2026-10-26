@@ -785,7 +785,7 @@ export default {
     logs_f_trace: 'trace',
     pressKey: 'Tapez les touches…',
     resetKey: 'Réinitialiser',
-    aboutLine: 'Un atelier local pour une équipe logicielle virtuelle contrôlée',
+    aboutLine: 'Un atelier local pour une équipe virtuelle contrôlée',
     needsProject: 'Cette section requiert un projet ouvert — ouvrez-en un depuis le lanceur',
   },
   teamTpl: {
@@ -898,7 +898,7 @@ export default {
     launch: 'Créer le projet',
   },
   launch: {
-    heading: "Quel logiciel créons-nous aujourd’hui ?",
+    heading: "Que voulez-vous faire aujourd’hui ?",
     prompt: "Décrivez le logiciel souhaité",
     start: "Démarrer le projet",
     pickDir: "Choisir un dossier",
@@ -908,7 +908,7 @@ export default {
     recentCount: "{{count}}",
     emptyTitle: "Aucun projet pour l’instant",
     emptyBody: "Décrivez le logiciel ci-dessus ou ouvrez un dossier existant.",
-    title: 'Une équipe logicielle virtuelle contrôlée · atelier local',
+    title: 'Une équipe virtuelle contrôlée · atelier local',
     recents: 'Projets récents',
     mode_pack: 'pack de processus',
     mode_fastpath: 'voie rapide',
