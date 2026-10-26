@@ -77,3 +77,11 @@ export function FileContextMenu({ children, ...target }: FileMenuTarget & { chil
     </ContextMenu>
   )
 }
+
+/** 一条表面路径 + 右键文件菜单（[`useProjectFileTarget`] + [`FileContextMenu`] 合一，给条件渲染的位置用）。 */
+export function ProjectFileMenu({ path, artifact, onOpen, kind, children }: {
+  path: string | null; artifact?: boolean; onOpen?: () => void; kind?: 'file' | 'dir'; children: ReactNode
+}) {
+  const target = useProjectFileTarget(path, { onOpen, kind, artifact })
+  return <FileContextMenu {...target}>{children}</FileContextMenu>
+}

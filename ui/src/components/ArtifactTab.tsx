@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
+import { ProjectFileMenu } from './FileMenu'
 
 const unifiedText = (ops: DiffOp[]) => ops.map((o) => `${o.type === 'ins' ? '+' : o.type === 'del' ? '-' : ' '}${o.text}`).join('\n')
 
@@ -136,7 +137,10 @@ export function ArtifactTab({ path }: { path: string }) {
       {/* 子头（cv-sub） */}
       <div className="flex flex-wrap items-center gap-2 border-b border-line-soft px-3.5 py-2.5">
         <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-[13px] text-ink" title={path}>{path}</div>
+          {/* #32：子头路径右键 = 文件菜单（此页即已打开，无「打开」；待恢复 = 盘上未写成，不挂） */}
+          <ProjectFileMenu path={latest?.materialization === 'pending_recovery' ? null : path} artifact>
+            <div data-art-header-path className="truncate font-mono text-[13px] text-ink" title={path}>{path}</div>
+          </ProjectFileMenu>
           {meta && <div className="truncate text-[12px] text-ink-3">{meta}</div>}
         </div>
         {latest && (

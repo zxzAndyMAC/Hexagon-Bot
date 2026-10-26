@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Dot } from '@/components/ui/dot'
 import { ShortcutKbd } from '@/components/ui/kbd'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
+import { ProjectFileMenu } from './FileMenu'
 
 export function FileEditor({ path }: { path: string }) {
   const projectRoot = useUiStore(s => s.projectRoot)
@@ -255,6 +256,8 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
     <div data-testid="file-editor" data-path={path} className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* 子头（cv-sub） */}
       <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line-soft px-3.5 py-2.5">
+        {/* #32：面包屑右键 = 文件菜单（此页即已打开，无「打开」） */}
+        <ProjectFileMenu path={path}>
         <nav aria-label={path} title={path} className="flex min-w-0 items-center gap-1 text-[13px] text-ink-3">
           {projectName && <span className="truncate">{projectName}</span>}
           {crumbs.map((c, i) => (
@@ -269,6 +272,7 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
             </span>
           )}
         </nav>
+        </ProjectFileMenu>
         {saveErr && <span role="alert" className="min-w-0 truncate text-[12px] text-red-ink" title={saveErr}>{t('file.saveFailed')}</span>}
         <span className="flex-1" />
         {text != null && (

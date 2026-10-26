@@ -16,6 +16,8 @@ import type { TimelineItem } from './api'
 import { ToolExecCard } from './components/ExecCard'
 import { AgentTab } from './components/AgentTab'
 import { StageArtifacts } from './components/PendingCardParts'
+import { ArtifactTab } from './components/ArtifactTab'
+import { FileEditor } from './components/FileEditor'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, scrollerRef }: { data: unknown[]; itemContent: (i: number, row: unknown) => ReactNode; scrollerRef: (node: HTMLElement | null) => void }) =>
@@ -222,5 +224,29 @@ describe('盖章卡阶段产物证据行（#32 表面 9）', () => {
     await flush()
     await rightClick(rows[1])
     expect(menu()).toBeNull()
+  })
+})
+
+describe('产物页子头路径 / 文件页面包屑（#32 表面 10）', () => {
+  it('产物页子头：无「打开」的文件菜单，按 .hexagon/ 盘上路径', async () => {
+    useUiStore.setState({ artifacts: [artifact('notes/brief.pdf')] })
+    vi.spyOn(api, 'proposals').mockResolvedValue([])
+    vi.spyOn(api, 'artifactContent').mockResolvedValue('x')
+    vi.spyOn(api, 'artifactContentAt').mockResolvedValue('x')
+    const host = await render(<ArtifactTab path="notes/brief.pdf" />)
+    await rightClick(host.querySelector('[data-art-header-path]')!)
+    expect(items()).toEqual(NO_OPEN)
+    expect(api.openWithCandidates).toHaveBeenCalledWith('.hexagon/notes/brief.pdf')
+  })
+  it('文件页面包屑：无「打开」的文件菜单', async () => {
+    useUiStore.setState({ fileEdits: {} })
+    vi.spyOn(api, 'readRepoFile').mockResolvedValue('const a = 1\n')
+    vi.spyOn(api, 'repoFileHead').mockResolvedValue(null)
+    vi.spyOn(api, 'readRepoFileSnapshot').mockImplementation(async (path, project_root) => ({ path, project_root, generation: 1, content: 'const a = 1\n' }))
+    const host = await render(<FileEditor path="src/a.ts" />)
+    await flush()
+    await rightClick(host.querySelector('nav[aria-label="src/a.ts"]')!)
+    expect(items()).toEqual(NO_OPEN)
+    expect(api.openWithCandidates).toHaveBeenCalledWith('src/a.ts')
   })
 })
