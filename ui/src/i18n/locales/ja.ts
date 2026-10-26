@@ -971,7 +971,7 @@ export default {
     slot_image: "画像生成",
     slot_role_draft: 'ロール起草', slot_brief: '説明起草', slot_flow_draft: 'フロー起草', slot_translate: 'プロンプト翻訳',
   },
-  ctxMember: {"openDetail":"詳細を開く","mention":"@ 指名","copyName":"名前をコピー","nameCopied":"名前をコピーしました","changeAvatar":"アバターを変更","restoreAvatar":"デフォルトに戻す","noCustomAvatar":"カスタムアバターなし"},
+  ctxMember: {"openDetail":"詳細を開く","mention":"@ 指名","copyName":"名前をコピー","nameCopied":"名前をコピーしました","changeAvatar":"アバターを変更","restoreAvatar":"デフォルトに戻す","noRoleAvatar":"ロールのアバターなし","instanceAvatarShown":"ロールのアバターを更新しました。このメンバーは独自のアバターを表示しています。エージェントの詳細でデフォルトに戻すとロールのアバターが表示されます。"},
   ctxMessage: {"copy":"コピー","quote":"入力欄に引用","copySelection":"選択範囲をコピー","quoteSelection":"選択範囲を引用","locate":"ノードレールで位置を表示","messageCopied":"メッセージをコピーしました","selectionCopied":"選択範囲をコピーしました"},
   palette: {"requestRelease": "リリース…", "releaseNone": "リリース先がありません。設定 · リリースで登録してください", "releaseLoading": "リリース先を読み込み中…", "releaseChoose": "リリース先を選択", "releaseCount": "{{count}} 件のリリース先", "canvas": "キャンバスの表示切替", "settings": "設定を開く", "flow": "フローと品質チェックを見る", "checksDesc": "テスト · 性能 · アクセシビリティ", "agentDesc": "Agent", "artifactDesc": "成果物", "move": "移動", "run": "実行", "dangerNote": "全員休止などの危険な指令は再確認が必要", "emptyFor": "「{{q}}」は見つかりません", "title": "コマンドパレット",
     invariantCheck: '不変条件チェックを実行',

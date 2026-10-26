@@ -971,7 +971,7 @@ export default {
     slot_image: "出圖",
     slot_role_draft: '角色起草', slot_brief: '說明起草', slot_flow_draft: '流程起草', slot_translate: '提示詞翻譯',
   },
-  ctxMember: {"openDetail":"開啟詳情","mention":"@ 點名","copyName":"複製名字","nameCopied":"已複製名字","changeAvatar":"換頭像","restoreAvatar":"恢復預設","noCustomAvatar":"沒有自訂頭像"},
+  ctxMember: {"openDetail":"開啟詳情","mention":"@ 點名","copyName":"複製名字","nameCopied":"已複製名字","changeAvatar":"換頭像","restoreAvatar":"恢復預設","noRoleAvatar":"沒有角色頭像","instanceAvatarShown":"已更新角色頭像。該成員用的是自己的頭像，在 Agent 詳情裡恢復預設後才顯示角色頭像。"},
   ctxMessage: {"copy":"複製","quote":"引用到輸入列","copySelection":"複製所選","quoteSelection":"引用所選","locate":"在節點軌中定位","messageCopied":"已複製訊息","selectionCopied":"已複製選取文字"},
   palette: {"requestRelease": "發布…", "releaseNone": "還沒有發布目標，去設定·發布登記", "releaseLoading": "正在讀取發布目標…", "releaseChoose": "選擇發布目標", "releaseCount": "{{count}} 個目標", "canvas": "開關畫布", "settings": "開啟設定", "flow": "查看流程與品質檢查", "checksDesc": "測試 · 效能 · 無障礙", "agentDesc": "Agent", "artifactDesc": "產物", "move": "移動", "run": "執行", "dangerNote": "全員休眠等危險指令需二次確認", "emptyFor": "沒找到「{{q}}」", "title": "命令面板",
     invariantCheck: '不變量檢查',

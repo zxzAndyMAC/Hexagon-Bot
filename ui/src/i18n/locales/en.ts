@@ -971,7 +971,7 @@ export default {
     slot_image: "Image generation",
     slot_role_draft: 'Role drafting', slot_brief: 'Brief drafting', slot_flow_draft: 'Flow drafting', slot_translate: 'Prompt translation',
   },
-  ctxMember: {"openDetail":"Open details","mention":"@ Mention","copyName":"Copy name","nameCopied":"Name copied","changeAvatar":"Change avatar","restoreAvatar":"Restore default avatar","noCustomAvatar":"No custom avatar"},
+  ctxMember: {"openDetail":"Open details","mention":"@ Mention","copyName":"Copy name","nameCopied":"Name copied","changeAvatar":"Change avatar","restoreAvatar":"Restore default avatar","noRoleAvatar":"No role avatar","instanceAvatarShown":"Role avatar updated. This member shows its own avatar; restore it in the agent details to see the role avatar."},
   ctxMessage: {"copy":"Copy","quote":"Quote in composer","copySelection":"Copy selection","quoteSelection":"Quote selection","locate":"Locate in node rail","messageCopied":"Message copied","selectionCopied":"Selection copied"},
   palette: {"requestRelease": "Release…", "releaseNone": "No release targets — register one in Settings · Release", "releaseLoading": "Reading release targets…", "releaseChoose": "Choose a release target", "releaseCount": "{{count}} targets", "canvas": "Toggle canvas", "settings": "Open settings", "flow": "View flow and quality checks", "checksDesc": "Tests · performance · accessibility", "agentDesc": "Agent", "artifactDesc": "Artifact", "move": "move", "run": "run", "dangerNote": "Risky commands like Sleep all ask to confirm", "emptyFor": "Nothing found for “{{q}}”", "title": "Command palette",
     invariantCheck: 'Run invariant check',
