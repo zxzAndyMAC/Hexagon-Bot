@@ -8,14 +8,23 @@
 //! 3. **系统登记**：应用位置只取 LaunchServices 的答复（[`AppCatalog`]），不拼路径、不猜
 //!    `/Applications/X.app`；启动时参数逐个交给进程，不经 shell。
 //!
-//! 文件 = 系统登记的「能打开这个文件」的应用 ∩ 白名单；目录（含项目根）= 白名单里
-//! （系统登记能打开该目录 ∪ 已装且标了 `opens_dirs`）的应用——只列支持打开目录的。
+//! 候选按目标**类型**分三类（#32，2026-10-21 负责人裁决「候选随文件类型变」）：
+//! - **目录**（含项目根）= 白名单里（系统登记能打开该目录 ∪ 已装且标了 `opens_dirs`）的应用——只列支持打开目录的。
+//! - **文本 / 代码 / 脚本 / 可执行**（UTI 符合 [`TEXT_TYPES`] 或 [`EXEC_TYPES`]）= 系统登记的「能打开这个文件」的应用 ∩ 白名单（#31 原口径）。
+//! - **其余**（pdf、演示稿、文稿、表格、图片、音视频……，以及系统给不出 UTI 的未知类型）= 系统登记的应用，
+//!   同访达「打开方式」：系统默认应用排第一并标 `is_default`，其余按显示名，去重、最多 [`MAX_SYSTEM_APPS`] 个；
+//!   不额外补 IDE（系统自己登记了才出现），也不走白名单——但剔掉 [`LAUNCHER_DENY`]（终端 / 脚本运行器 / 安装器）。
+//!   分类走 UTI 符合关系（[`AppCatalog::type_of`] / [`AppCatalog::conforms`]，macOS = LaunchServices），不只看扩展名：
+//!   `.command`、无扩展名但可执行的文件、`.jsonc` 这类扩展名表漏掉的类型都由系统判。
+//!
 //! 启动前按同一规则**重算一次**候选：界面传来的 app id 不在当下候选里就拒（防止拿文件的候选去开目录、
 //! 或界面缓存了已卸载的应用）。
 //!
 //! 代价模型（fail-closed）：false negative（少列一个能用的编辑器）= 负责人自己去访达里拖一次；
 //! false positive（放行非白名单应用或根外路径）= 一次未审的外部程序启动。实现偏向拒绝：
-//! 探测失败一律当「没有」，路径判不了一律拒。
+//! 探测失败一律当「没有」，路径判不了一律拒。「其余」类放开白名单是负责人 #32 裁决（看 pdf 要的是预览 / Keynote，
+//! 不是 IDE）；代价面靠两道收住——脚本 / 可执行类型永远走白名单（交给终端就是执行），系统列表再剔一遍 [`LAUNCHER_DENY`]。
+//! 被否决：按扩展名表分类（`.command`、无扩展名脚本会落进「其余」被交给终端）；「其余」类也只列白名单（看不了 pdf）。
 //!
 //! 探测在 [`AppCatalog`] 接缝后面：测试注入假目录，从不真启动应用；macOS 用 NSWorkspace，
 //! 其他平台返回空（未做，见 [`system_catalog`]）。
@@ -89,6 +98,57 @@ pub fn editor(bundle_id: &str) -> Option<&'static EditorEntry> {
     EDITORS.iter().find(|e| e.bundle_id == bundle_id)
 }
 
+/// UTI 符合其一 = 文本 / 代码类：候选只列白名单编辑器（#31 口径）。`public.text` 已涵盖 plain-text /
+/// source-code / json / xml 的大多数，其余逐个列出是防系统登记表里某个类型只声明了其中一支。
+pub const TEXT_TYPES: &[&str] = &[
+    "public.text",
+    "public.plain-text",
+    "public.source-code",
+    "public.script",
+    "public.shell-script",
+    "public.json",
+    "public.xml",
+    "public.yaml",
+    "net.daringfireball.markdown",
+];
+
+/// UTI 符合其一 = 可执行 / 应用包：同文本类只列白名单编辑器——系统登记能「打开」它们的是终端、安装器，打开即执行。
+pub const EXEC_TYPES: &[&str] = &[
+    "public.executable",
+    "public.unix-executable",
+    "com.apple.application",
+    "com.apple.installer-package-archive",
+    "com.microsoft.windows-executable",
+];
+
+/// 「其余」类系统列表里剔掉的启动器：系统可能登记它们能开某个未知类型（或 `public.data`），交过去就是执行。
+pub const LAUNCHER_DENY: &[&str] = &[
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "com.mitchellh.ghostty",
+    "dev.warp.Warp-Stable",
+    "net.kovidgoyal.kitty",
+    "io.alacritty",
+    "com.apple.ScriptEditor2",
+    "com.apple.Automator",
+    "com.apple.automator.runner",
+    "com.apple.installer",
+];
+
+/// 「其余」类最多列几个（访达式，长尾留给访达；默认应用总在内）。
+pub const MAX_SYSTEM_APPS: usize = 12;
+
+/// 目标分类（[`classify`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetClass {
+    /// 目录 / 项目根。
+    Folder,
+    /// 文本、代码、脚本、可执行：白名单编辑器。
+    Text,
+    /// 其余：系统登记列表（默认在前）。
+    Other,
+}
+
 /// 系统登记的一个应用（LaunchServices 答复）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledApp {
@@ -105,6 +165,12 @@ pub trait AppCatalog: Send + Sync {
     fn handlers(&self, target: &Path) -> Vec<InstalledApp>;
     /// 按 bundle id 找已装应用（系统首选的那一份）。
     fn installed(&self, bundle_id: &str) -> Option<InstalledApp>;
+    /// 系统对该文件的默认打开应用（「其余」类排第一）；取不到 `None`。
+    fn default_handler(&self, target: &Path) -> Option<InstalledApp>;
+    /// 文件的 UTI；系统给不出 → `None`（按「其余」类走系统列表）。
+    fn type_of(&self, target: &Path) -> Option<String>;
+    /// UTI 符合关系（`ty` 是否符合 `to`，含自身）。
+    fn conforms(&self, ty: &str, to: &str) -> bool;
     /// 应用图标 → `data:image/png;base64,…`（菜单行 16pt @2x = 32px）；取不到 `None` → 界面中性图标。
     fn icon_data_url(&self, app: &InstalledApp) -> Option<String>;
     /// 用该应用打开 `target`（已判过根的绝对路径）。
@@ -121,6 +187,8 @@ pub struct OpenWithApp {
     pub name: String,
     /// PNG data URL；`null` = 中性图标。
     pub icon: Option<String>,
+    /// 系统默认打开应用（只在「其余」类标；界面在名后加「（默认）」，#32）。
+    pub is_default: bool,
 }
 
 /// 拒绝 / 失败原因（IPC 码面见 `errcode.rs`，界面走 `errors.<code>`）。
@@ -149,9 +217,49 @@ fn resolve(root: &Path, rel: &str) -> Result<PathBuf, OpenWithError> {
     })
 }
 
-/// 白名单 ∩ 系统登记，按显示名排序（同名按 bundle id）。纯判定，不写诊断。
-fn eligible(catalog: &dyn AppCatalog, target: &Path) -> Vec<InstalledApp> {
-    let is_dir = target.is_dir();
+fn by_name(a: &InstalledApp, b: &InstalledApp) -> std::cmp::Ordering {
+    a.name
+        .to_lowercase()
+        .cmp(&b.name.to_lowercase())
+        .then_with(|| a.bundle_id.cmp(&b.bundle_id))
+}
+
+/// 目标分类：普通目录（`public.folder` / `public.directory`）→ Folder；UTI 符合文本 / 可执行类 → Text；
+/// 其余、系统给不出 UTI、`dyn.*`（无登记的动态类型）→ Other。
+/// 文档包（`.key` / `.pages` / `.numbers` / `.rtfd`……）在磁盘上是目录，但 UTI 符合 `com.apple.package`——
+/// 系统当一个文件，按 Other 列 Keynote / Pages（只看 `is_dir` 会给 pdf 一样的 Keynote 稿列一排 IDE）；
+/// 应用包同时符合可执行类，仍走白名单目录口径。
+pub fn classify(catalog: &dyn AppCatalog, target: &Path) -> TargetClass {
+    let ty = catalog.type_of(target).filter(|t| !t.starts_with("dyn."));
+    let is = |to: &str| ty.as_deref().is_some_and(|t| catalog.conforms(t, to));
+    let editor_only = TEXT_TYPES.iter().chain(EXEC_TYPES).any(|to| is(to));
+    if target.is_dir() {
+        if is("com.apple.package") && !editor_only {
+            return TargetClass::Other;
+        }
+        return TargetClass::Folder;
+    }
+    if editor_only {
+        TargetClass::Text
+    } else {
+        TargetClass::Other
+    }
+}
+
+/// 一行候选 + 是否系统默认。
+type Eligible = (InstalledApp, bool);
+
+/// 按分类算候选。纯判定，不写诊断；`open_with` 启动前用同一函数重算。
+fn eligible(catalog: &dyn AppCatalog, target: &Path) -> Vec<Eligible> {
+    match classify(catalog, target) {
+        TargetClass::Other => system_list(catalog, target),
+        class => editor_list(catalog, target, class == TargetClass::Folder),
+    }
+}
+
+/// 白名单 ∩ 系统登记（目录另补已装且 `opens_dirs`），按显示名排序（同名按 bundle id）。
+/// `is_dir` 取分类结果（Folder），不是 `Path::is_dir`——文档包已在 [`classify`] 分去 Other。
+fn editor_list(catalog: &dyn AppCatalog, target: &Path, is_dir: bool) -> Vec<Eligible> {
     let mut seen = HashSet::new();
     let mut out: Vec<InstalledApp> = Vec::new();
     for app in catalog.handlers(target) {
@@ -174,12 +282,31 @@ fn eligible(catalog: &dyn AppCatalog, target: &Path) -> Vec<InstalledApp> {
             }
         }
     }
-    out.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.bundle_id.cmp(&b.bundle_id))
-    });
+    out.sort_by(by_name);
+    out.into_iter().map(|a| (a, false)).collect()
+}
+
+/// 「其余」类：系统登记列表去重、剔启动器，默认应用排第一，其余按名，截到 [`MAX_SYSTEM_APPS`]。
+/// 默认应用只在它也出现在系统登记列表里时才算（不变量：列出的每一项都是系统对这个文件报过的）。
+fn system_list(catalog: &dyn AppCatalog, target: &Path) -> Vec<Eligible> {
+    let mut seen = HashSet::new();
+    let mut apps: Vec<InstalledApp> = catalog
+        .handlers(target)
+        .into_iter()
+        .filter(|a| !LAUNCHER_DENY.contains(&a.bundle_id.as_str()))
+        .filter(|a| seen.insert(a.bundle_id.clone()))
+        .collect();
+    apps.sort_by(by_name);
+    let default_id = catalog.default_handler(target).map(|a| a.bundle_id);
+    let mut out: Vec<Eligible> = Vec::with_capacity(apps.len());
+    if let Some(i) = default_id
+        .as_deref()
+        .and_then(|id| apps.iter().position(|a| a.bundle_id == id))
+    {
+        out.push((apps.remove(i), true));
+    }
+    out.extend(apps.into_iter().map(|a| (a, false)));
+    out.truncate(MAX_SYSTEM_APPS);
     out
 }
 
@@ -219,10 +346,11 @@ pub fn candidates(
     };
     let list: Vec<OpenWithApp> = eligible(catalog, &target)
         .into_iter()
-        .map(|app| OpenWithApp {
+        .map(|(app, is_default)| OpenWithApp {
             icon: catalog.icon_data_url(&app),
             id: app.bundle_id,
             name: app.name,
+            is_default,
         })
         .collect();
     let code = if list.is_empty() { "empty" } else { "listed" };
@@ -248,6 +376,7 @@ pub fn open_with(
         let target = resolve(root, rel)?;
         let app = eligible(catalog, &target)
             .into_iter()
+            .map(|(a, _)| a)
             .find(|a| a.bundle_id == app_id)
             .ok_or_else(|| OpenWithError::OpenWithUnsupported(app_id.to_string()))?;
         catalog
@@ -271,6 +400,56 @@ pub fn open_with(
         ),
     }
     out
+}
+
+/// 启动页最近项目的根（#32，2026-10-21 负责人裁决「启动页最近项目右键加打开方式，路径校验以该项目根为界」）：
+/// `dir` 必须逐字等于 app 自己的最近记录（壳层读 `recent_projects.json` 传入 `known`）里的一条，根取**记录里那一条**，
+/// 不取界面传来的字符串；之后走与项目内同一套根约束（`rel` 恒为空串 = 项目根，只列能开目录的应用）。
+/// 被否决：接受任意绝对路径再判「是目录」——启动页没打开项目，没有根可依，等于把启动面放宽到全盘。
+fn recent_root<'a>(known: &'a [PathBuf], dir: &str) -> Option<&'a Path> {
+    known
+        .iter()
+        .find(|k| k.as_os_str() == std::ffi::OsStr::new(dir))
+        .map(PathBuf::as_path)
+}
+
+fn not_recent(branch: &str, dir: &str, started: std::time::Instant) -> OpenWithError {
+    let e = OpenWithError::OpenWithOutsideProject(dir.to_string());
+    note(
+        crate::diag::CLASS_REJECT,
+        true,
+        branch,
+        &crate::errcode::variant_code(&e),
+        started,
+    );
+    e
+}
+
+/// 启动页最近项目的「打开方式」候选（项目级，目录口径）。不在最近记录里 → 拒（Warn，分支 `open_with_recent_candidates`）。
+pub fn recent_candidates(
+    catalog: &dyn AppCatalog,
+    known: &[PathBuf],
+    dir: &str,
+) -> Result<Vec<OpenWithApp>, OpenWithError> {
+    let started = std::time::Instant::now();
+    match recent_root(known, dir) {
+        Some(root) => candidates(catalog, root, ""),
+        None => Err(not_recent("open_with_recent_candidates", dir, started)),
+    }
+}
+
+/// 用 `app_id` 打开最近项目 `dir`：先认最近记录，再走 [`open_with`] 的重算候选闸。
+pub fn recent_open_with(
+    catalog: &dyn AppCatalog,
+    known: &[PathBuf],
+    dir: &str,
+    app_id: &str,
+) -> Result<(), OpenWithError> {
+    let started = std::time::Instant::now();
+    match recent_root(known, dir) {
+        Some(root) => open_with(catalog, root, "", app_id),
+        None => Err(not_recent("open_with_recent", dir, started)),
+    }
 }
 
 /// 本机系统目录。macOS = NSWorkspace / LaunchServices；其他平台未做，恒空（菜单显示空态）。
@@ -298,6 +477,15 @@ impl AppCatalog for EmptyCatalog {
     }
     fn installed(&self, _: &str) -> Option<InstalledApp> {
         None
+    }
+    fn default_handler(&self, _: &Path) -> Option<InstalledApp> {
+        None
+    }
+    fn type_of(&self, _: &Path) -> Option<String> {
+        None
+    }
+    fn conforms(&self, _: &str, _: &str) -> bool {
+        false
     }
     fn icon_data_url(&self, _: &InstalledApp) -> Option<String> {
         None

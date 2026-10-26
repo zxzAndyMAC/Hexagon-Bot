@@ -15,4 +15,8 @@ name: string,
 /**
  * PNG data URL；`null` = 中性图标。
  */
-icon: string | null, };
+icon: string | null, 
+/**
+ * 系统默认打开应用（只在「其余」类标；界面在名后加「（默认）」，#32）。
+ */
+is_default: boolean, };

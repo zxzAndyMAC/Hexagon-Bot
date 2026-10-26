@@ -24,8 +24,8 @@ const TREE: Record<string, RepoEntry[]> = {
   ],
 }
 const APPS: OpenWithApp[] = [
-  { id: 'com.todesktop.230313mzl4w4u92', name: 'Cursor', icon: 'data:image/png;base64,AAAA' },
-  { id: 'dev.zed.Zed', name: 'Zed', icon: null },
+  { id: 'com.todesktop.230313mzl4w4u92', name: 'Cursor', icon: 'data:image/png;base64,AAAA', is_default: false },
+  { id: 'dev.zed.Zed', name: 'Zed', icon: null, is_default: false },
 ]
 
 let root: ReturnType<typeof createRoot>
