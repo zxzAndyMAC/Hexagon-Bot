@@ -17,6 +17,8 @@ import { DiffView } from '../DiffView'
 import { FileEditor } from '../FileEditor'
 import { FileTree } from '../FileTree'
 import { ArtifactList } from './ArtifactList'
+import { FileContextMenu, useProjectFileTarget } from '../FileMenu'
+import type { ArtifactRow } from '../../gen/ArtifactRow'
 // 页签栏（含票 09 全宽状态槽、#06 溢出）在 CanvasTabs.tsx。
 import { CanvasTabs, type CanvasMode } from './CanvasTabs'
 import { TREE, readTreeWidth, writeTreeWidth } from '../../layout'
@@ -75,6 +77,21 @@ function TreePane() {
   )
 }
 
+/** 空态最近产物一行；右键 = 共用文件菜单（A16b，#32，2026-10-21 负责人裁决；待恢复的只给「打开」，同产物清单）。 */
+function RecentArtifact({ a }: { a: ArtifactRow }) {
+  const open = () => useUiStore.getState().openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })
+  const target = useProjectFileTarget(a.materialization === 'pending_recovery' ? null : a.path, { onOpen: open })
+  return (
+    <FileContextMenu {...target}>
+      <button type="button" data-canvas-recent className="hx-focus flex h-8 w-full cursor-pointer items-center gap-2 rounded-[var(--r-sm)] px-2 text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
+        onClick={open}>
+        <FileTypeIcon name={a.path.split('/').pop() ?? a.path} kind="file" size={14} />
+        <span className="truncate font-mono text-[12.5px]">{a.path}</span>
+      </button>
+    </FileContextMenu>
+  )
+}
+
 /** 空态（A19，interaction §6 补设计）：说明为什么空 + 一个动作（打开项目文件）+ 最近产物。 */
 function CanvasEmpty() {
   const { t } = useTranslation()
@@ -94,13 +111,7 @@ function CanvasEmpty() {
       {recent.length > 0 && (
         <div className="mt-6 w-full max-w-[320px] text-left">
           <div className="mb-1 px-2 text-[12px] text-ink-3">{t('canvas.recent')}</div>
-          {recent.map((a) => (
-            <button key={a.id} type="button" className="hx-focus flex h-8 w-full cursor-pointer items-center gap-2 rounded-[var(--r-sm)] px-2 text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
-              onClick={() => st().openTab({ id: `art:${a.path}`, kind: 'artifact', title: a.path, path: a.path })}>
-              <FileTypeIcon name={a.path.split('/').pop() ?? a.path} kind="file" size={14} />
-              <span className="truncate font-mono text-[12.5px]">{a.path}</span>
-            </button>
-          ))}
+          {recent.map((a) => <RecentArtifact key={a.id} a={a} />)}
         </div>
       )}
     </div>

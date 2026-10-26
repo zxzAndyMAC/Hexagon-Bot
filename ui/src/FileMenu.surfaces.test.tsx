@@ -9,6 +9,7 @@ import { api } from './api'
 import { useUiStore } from './store'
 import { TooltipProvider } from './components/ui/tooltip'
 import { ArtifactList } from './components/shell/ArtifactList'
+import { Canvas } from './components/shell/Canvas'
 import type { ArtifactRow } from './gen/ArtifactRow'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -77,3 +78,18 @@ describe('产物清单行（#32 表面 1）', () => {
   })
 })
 
+
+describe('画布空态最近产物（#32 表面 2）', () => {
+  it('右键 = 全套；项目根外的绝对路径产物只剩「打开」', async () => {
+    useUiStore.setState({ artifacts: [artifact('/elsewhere/x.md'), artifact('report.pptx')], canvasOpen: true, tabs: [], activeTab: null })
+    const host = await render(<Canvas open mode="side" width={600} />)
+    const rows = [...host.querySelectorAll<HTMLElement>('[data-canvas-recent]')]
+    expect(rows.map((r) => r.textContent)).toEqual(['report.pptx', '/elsewhere/x.md'])
+    await rightClick(rows[0])
+    expect(items()).toEqual(FULL)
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await flush()
+    await rightClick(rows[1])
+    expect(items()).toEqual(['open'])
+  })
+})
