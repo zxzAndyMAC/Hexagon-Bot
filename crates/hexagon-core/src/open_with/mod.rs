@@ -251,8 +251,9 @@ pub const LAUNCHER_DENY: &[&str] = &[
     "com.apple.CertificateAssistant",
 ];
 
-/// 「其余」类最多列几个（访达式，长尾留给访达；默认应用总在内）。
-pub const MAX_SYSTEM_APPS: usize = 12;
+/// 「其余」类最多列几个（访达式，长尾留给访达；默认应用总在内）。ticket 33 L3（2026-10-25 批次审查，#32 修复项
+/// 「system-list cap/order」）由 12 调到 20——12 个在装了多套办公 / 图像软件的机器上把 Apple 自带的查看器截掉了；菜单超高滚动。
+pub const MAX_SYSTEM_APPS: usize = 20;
 
 /// 目标分类（[`classify`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -409,7 +410,12 @@ fn editor_list(catalog: &dyn AppCatalog, target: &Path, is_dir: bool) -> Vec<Eli
     out.into_iter().map(|a| (a, false)).collect()
 }
 
-/// 「其余」类：系统登记列表去重、剔启动器，默认应用排第一，其余按名，截到 [`MAX_SYSTEM_APPS`]。
+/// Apple 系统应用（`com.apple.*`）排在第三方之前（ticket 33 L3：默认 → Apple 系统应用 → 其余按名）。
+fn is_apple(a: &InstalledApp) -> bool {
+    a.bundle_id.starts_with("com.apple.")
+}
+
+/// 「其余」类：系统登记列表去重、剔启动器，默认应用排第一，再 Apple 系统应用、其余各按名，截到 [`MAX_SYSTEM_APPS`]。
 /// 默认应用只在它也出现在系统登记列表里时才算（不变量：列出的每一项都是系统对这个文件报过的）。
 fn system_list(catalog: &dyn AppCatalog, target: &Path) -> Vec<Eligible> {
     let mut seen = HashSet::new();
@@ -419,7 +425,7 @@ fn system_list(catalog: &dyn AppCatalog, target: &Path) -> Vec<Eligible> {
         .filter(|a| !LAUNCHER_DENY.contains(&a.bundle_id.as_str()))
         .filter(|a| seen.insert(a.bundle_id.clone()))
         .collect();
-    apps.sort_by(by_name);
+    apps.sort_by(|a, b| is_apple(b).cmp(&is_apple(a)).then_with(|| by_name(a, b)));
     let default_id = catalog.default_handler(target).map(|a| a.bundle_id);
     let mut out: Vec<Eligible> = Vec::with_capacity(apps.len());
     if let Some(i) = default_id

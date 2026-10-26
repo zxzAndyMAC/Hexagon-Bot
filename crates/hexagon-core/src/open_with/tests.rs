@@ -391,6 +391,8 @@ fn candidates_follow_file_type() {
         // 其余：系统列表、默认在前、去重、剔终端、不补 IDE
         ("doc.pdf", TargetClass::Other, &[PREVIEW, CHROME], Some(0)),
         // 默认应用不在系统给这个类型的列表里 → 不标、不硬塞
+        // ticket 33 L3：默认 → Apple 系统应用（com.apple.*）→ 其余按名——Keynote 在 PowerPoint 前本来就按名成立，
+        // 这里排序理由改成「Apple 优先」，期望不变
         ("deck.pptx", TargetClass::Other, &[KEYNOTE, PPT], None),
         ("pic.png", TargetClass::Other, &[PREVIEW, VSCODE], Some(0)),
         // 文档包在磁盘上是目录，按其余类
@@ -399,7 +401,8 @@ fn candidates_follow_file_type() {
         (
             "blob.zzz",
             TargetClass::Other,
-            &[COT, "com.apple.TextEdit"],
+            // ticket 33 L3 改了这条期望：原按名 CotEditor 在 TextEdit 前；现 Apple 系统应用（TextEdit）排第三方前
+            &["com.apple.TextEdit", COT],
             None,
         ),
         // 文本 / 代码：白名单 ∩ 系统登记（#31 口径不变，无默认标）
@@ -449,6 +452,38 @@ fn system_list_is_capped_and_keeps_the_default() {
     assert_eq!(list.len(), MAX_SYSTEM_APPS);
     assert_eq!(list[0].id, "x.app29");
     assert!(list[0].is_default);
+}
+
+#[test]
+fn system_list_orders_default_then_apple_then_rest_and_caps_at_20() {
+    // ticket 33 L3（2026-10-25 批次审查，#32 修复项）：上限 20；默认 → com.apple.* → 其余，各组内按名。
+    // Apple 应用排在长尾之后被截掉是原 bug（12 个上限 + 纯按名）。
+    let (_t, root) = fixture();
+    let mut many: Vec<InstalledApp> = (0..30)
+        .map(|i| app(&format!("x.app{i:02}"), &format!("A{i:02}")))
+        .collect();
+    many.push(app("com.apple.Preview", "Preview"));
+    many.push(app("com.apple.QuickTimePlayerX", "QuickTime Player"));
+    many.push(app("com.apple.TextEdit", "TextEdit"));
+    let f = Fake {
+        by_ext: vec![("pdf", many)],
+        default: Some("x.app29"),
+        ..fake()
+    };
+    let list = candidates(&f, &root, "doc.pdf").unwrap();
+    assert_eq!(MAX_SYSTEM_APPS, 20);
+    assert_eq!(list.len(), 20);
+    assert_eq!(
+        ids(&list)[..5],
+        [
+            "x.app29",
+            "com.apple.Preview",
+            "com.apple.QuickTimePlayerX",
+            "com.apple.TextEdit",
+            "x.app00"
+        ]
+    );
+    assert_eq!(list[19].id, "x.app15");
 }
 
 #[test]

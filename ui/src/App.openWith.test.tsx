@@ -142,6 +142,17 @@ describe('「打开方式」子菜单（A16b）', () => {
     expect(subRows().map((r) => r.textContent)).toEqual(['Cursor', 'Zed'])
   })
 
+  it('系统列表满 20 项：全部渲染，子菜单超出可用高度时内滚（ticket 33 L3）', async () => {
+    const many: OpenWithApp[] = Array.from({ length: 20 }, (_, i) => ({ id: `x.app${i}`, name: `App ${i}`, icon: null, is_default: i === 0 }))
+    vi.mocked(api.openWithCandidates).mockResolvedValue(many)
+    await rightClick(treeitem('README.md'))
+    await openSub()
+    expect(subRows()).toHaveLength(20)
+    // 高度上限 = radix 给的可用高度，超出内滚（A16 外壳 popSurface 的 overflow-y-auto）
+    expect(sub()!.className).toContain('overflow-y-auto')
+    expect(sub()!.className).toContain('max-h-(--radix-context-menu-content-available-height)')
+  })
+
   it('越界被 core 拒：出 errors.open_with_outside_project toast', async () => {
     vi.mocked(api.openWith).mockRejectedValueOnce({ code: 'open_with_outside_project', message: 'path is outside the project: x' })
     await rightClick(treeitem('README.md'))
