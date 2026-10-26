@@ -15,6 +15,8 @@ struct Fake {
     installed: Vec<InstalledApp>,
     launched: Mutex<Vec<(String, PathBuf)>>,
     fail_launch: bool,
+    /// 系统给不出 UTI（探测失败）——#32 裁决：按「其余」类走系统列表。
+    no_uti: bool,
 }
 
 /// 扩展名 → UTI（假的 LaunchServices；不在表里 = 系统给出 `dyn.*`）。
@@ -95,6 +97,9 @@ impl AppCatalog for Fake {
             .or_else(|| Some(app(id, id)))
     }
     fn type_of(&self, target: &Path) -> Option<String> {
+        if self.no_uti {
+            return None;
+        }
         if let Some((_, u)) = UTI.iter().find(|(e, _)| *e == ext_of(target)) {
             return Some((*u).to_string());
         }
@@ -481,6 +486,69 @@ fn recent_project_root_comes_from_the_recents_record() {
 }
 
 #[test]
+fn deny_list_is_disjoint_from_allowlist_and_covers_executing_handlers() {
+    // ticket 33（2026-10-25 批次审查 S1）：「其余」类 = 系统列表减 deny 列表，deny 表内必须有这些
+    // 「打开即执行 / 安装所开文件」的处理程序；白名单编辑器不得同时出现在 deny 表里（否则文本类与其余类口径互相打架）。
+    for id in [
+        "com.apple.JarLauncher",
+        "com.apple.JavaLauncher",
+        "com.apple.installer",
+        "com.apple.shortcuts",
+        "com.apple.ScriptEditor2",
+        "com.apple.DiskImageMounter",
+        "com.apple.systempreferences",
+        "com.apple.Terminal",
+        "com.apple.archiveutility",
+    ] {
+        assert!(
+            LAUNCHER_DENY.contains(&id),
+            "{id} missing from LAUNCHER_DENY"
+        );
+    }
+    for e in EDITORS {
+        assert!(
+            !LAUNCHER_DENY.contains(&e.bundle_id),
+            "{} both allowed and denied",
+            e.bundle_id
+        );
+    }
+    let mut seen = HashSet::new();
+    for id in LAUNCHER_DENY {
+        assert!(seen.insert(id), "duplicate deny {id}");
+    }
+}
+
+#[test]
+fn unknown_type_lists_system_handlers_minus_deny_list() {
+    // #32 裁决：UTI 探测失败 → 其余类（系统列表）；ticket 33 S1：deny 表内的执行类处理程序剔掉、也启动不了。
+    let (_t, root) = fixture();
+    let f = Fake {
+        by_ext: vec![(
+            "zzz",
+            vec![
+                app("com.apple.JavaLauncher", "Jar Launcher"),
+                app("com.apple.installer", "Installer"),
+                app("com.apple.DiskImageMounter", "DiskImageMounter"),
+                app(PREVIEW, "Preview"),
+            ],
+        )],
+        default: Some("com.apple.installer"),
+        no_uti: true,
+        ..fake()
+    };
+    let target = resolve(&root, "blob.zzz").unwrap();
+    assert_eq!(classify(&f, &target), TargetClass::Other);
+    let list = candidates(&f, &root, "blob.zzz").unwrap();
+    assert_eq!(ids(&list), vec![PREVIEW]);
+    assert!(
+        !list[0].is_default,
+        "denied default must not promote anything"
+    );
+    assert!(open_with(&f, &root, "blob.zzz", "com.apple.installer").is_err());
+    assert!(f.launched.lock().unwrap().is_empty());
+}
+
+#[test]
 fn allowlist_ids_are_unique() {
     let mut seen = HashSet::new();
     for e in EDITORS {
@@ -606,5 +674,44 @@ proptest! {
         }
         let allowed = open_with(&f, &root, rel, pick).is_ok();
         prop_assert_eq!(allowed, list.iter().any(|a| a.id == pick));
+    }
+}
+
+fn any_handler() -> impl Strategy<Value = InstalledApp> {
+    let ids: Vec<&'static str> = LAUNCHER_DENY
+        .iter()
+        .copied()
+        .chain([VSCODE, COT, ZED, PREVIEW, "x.viewer"])
+        .collect();
+    (prop::sample::select(ids), "[A-Za-z ]{1,8}").prop_map(|(id, name)| app(id, &name))
+}
+
+proptest! {
+    // ticket 33（2026-10-25 批次审查 S1）判定面属性测试：无论系统给什么处理程序、默认是谁、UTI 能否探测、
+    // 目标是哪一类，LAUNCHER_DENY 内的 bundle id 永不出现在候选里，也永远启动不了。
+    #[test]
+    fn deny_listed_ids_never_surface(
+        handlers in prop::collection::vec(any_handler(), 0..24),
+        default in prop::option::of(prop::sample::select(LAUNCHER_DENY.to_vec())),
+        no_uti in any::<bool>(),
+        rel in prop::sample::select(vec!["", "src", "src/main.rs", "README.md", "doc.pdf", "pic.png", "blob.zzz", "talk.key", "app.ts", "run.sh"]),
+        pick in prop::sample::select(LAUNCHER_DENY.to_vec()),
+    ) {
+        let (_t, root) = fixture();
+        let f = Fake {
+            file_handlers: handlers.clone(),
+            dir_handlers: handlers.clone(),
+            by_ext: ["pdf", "png", "zzz", "key"].into_iter().map(|e| (e, handlers.clone())).collect(),
+            installed: handlers.clone(),
+            default,
+            no_uti,
+            ..Fake::default()
+        };
+        let list = candidates(&f, &root, rel).unwrap();
+        for a in &list {
+            prop_assert!(!LAUNCHER_DENY.contains(&a.id.as_str()), "denied {} listed for {rel}", a.id);
+        }
+        prop_assert!(open_with(&f, &root, rel, pick).is_err());
+        prop_assert!(f.launched.lock().unwrap().is_empty());
     }
 }
