@@ -44,6 +44,36 @@ export function absolutePath(root: string | null, rel: string): string {
   return `${base}${sep}${sep === '/' ? rel : rel.replaceAll('/', sep)}`
 }
 
+/**
+ * 绝对路径 → 项目相对（#32 文件菜单：时间线 / 执行卡 / 附件里的路径有的是绝对形）。在根内 → 相对（根本身 = 空串）；
+ * 根外、没有项目根、或本来就是相对形 → 相对形原样返回、绝对形返回 null（null = 不出路径类项与「打开方式」；
+ * 根约束仍由 core 判，这里只决定显不显示）。分隔符同 absolutePath 跟项目根走。
+ */
+export function projectRelPath(path: string, root: string | null): string | null {
+  const isAbs = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
+  if (!isAbs) {
+    const rel = path.replace(/^\.\//, '')
+    return rel.split(/[\\/]/).includes('..') ? null : rel
+  }
+  if (!root) return null
+  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/'
+  const base = root.endsWith(sep) ? root.slice(0, -1) : root
+  if (path === base) return ''
+  if (!path.startsWith(base + sep)) return null
+  const rel = path.slice(base.length + 1)
+  return sep === '/' ? rel : rel.replaceAll('\\', '/')
+}
+
+/**
+ * 产物登记路径 → 仓内路径：产物落在 `.hexagon/<path>`（core artifacts::content / deliver），登记的 path 是 `.hexagon/` 内相对。
+ * 修复即文档（#32 2026-10-25）：#29 / #31 的产物页签「复制路径」「打开方式」直接用登记 path，指到项目根下同名路径
+ * （不存在 → errors.open_with_missing，或复制出一条错路径）。绝对形 / 已带 `.hexagon/` 的原样返回。
+ */
+export function artifactRepoPath(path: string): string {
+  if (path.startsWith('/') || path.startsWith('.hexagon/')) return path
+  return `.hexagon/${path.replace(/^\.\//, '')}`
+}
+
 /** 复制项目内路径的绝对形（文件树行与画布页签共用，#30）：项目根 + 相对路径，没有项目根时退回相对路径。 */
 export async function copyProjectPath(rel: string) {
   await copyPath(absolutePath(useUiStore.getState().projectRoot, rel))

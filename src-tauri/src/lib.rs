@@ -3235,6 +3235,43 @@ fn remove_recent(app: tauri::AppHandle, dir: String) {
     }
 }
 
+/// 启动页最近项目的「打开方式」候选（owner-followups-1015 #32，A16b）：项目级、目录口径。
+/// 根只取 app 自己的 recents 记录（`read_recents`），界面传来的 `dir` 必须逐字等于其中一条——判定在 core
+/// （`open_with::recent_candidates`），不碰工作台、不开项目库。
+// D01 read: app-level recents JSON only; no project state, no workbench/turn lock.
+#[tauri::command(async)]
+fn recent_open_with_candidates(
+    app: tauri::AppHandle,
+    dir: String,
+) -> Result<Vec<hexagon_core::open_with::OpenWithApp>, CmdError> {
+    let known: Vec<std::path::PathBuf> = read_recents(&app)
+        .into_iter()
+        .map(|r| r.dir.into())
+        .collect();
+    hexagon_core::open_with::recent_candidates(
+        hexagon_core::open_with::system_catalog(),
+        &known,
+        &dir,
+    )
+    .map_err(cmd_err)
+}
+
+/// 用指定应用打开最近项目（控制组，#32）：core 先认 recents 记录，再按项目内同一规则重算候选才启动。
+#[tauri::command]
+fn recent_open_with(app: tauri::AppHandle, dir: String, app_id: String) -> Result<(), CmdError> {
+    let known: Vec<std::path::PathBuf> = read_recents(&app)
+        .into_iter()
+        .map(|r| r.dir.into())
+        .collect();
+    hexagon_core::open_with::recent_open_with(
+        hexagon_core::open_with::system_catalog(),
+        &known,
+        &dir,
+        &app_id,
+    )
+    .map_err(cmd_err)
+}
+
 /// 重新打开已有项目：钉住的包副本恢复 pack，fastpath 项目无副本即 None。
 /// 2026-09-22：不标 async 时整段打开堵在主线程，启动页和向导都会卡死。
 #[tauri::command(async)]
@@ -4162,6 +4199,8 @@ pub fn run() {
             reveal_repo_path,
             open_with_candidates,
             open_with,
+            recent_open_with_candidates,
+            recent_open_with,
             usage,
             usage_context_pressure,
             open_stage,

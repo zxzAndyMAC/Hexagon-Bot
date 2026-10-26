@@ -2,6 +2,11 @@
 //! NSWorkspace 图标画进 32×32 位图转 PNG；启动走 `/usr/bin/open -a <系统给的应用包> <路径>`，
 //! 参数逐个交给进程、不经 shell。
 //!
+//! 文件类型（#32，2026-10-21 负责人裁决「候选随文件类型变、按 UTI 符合关系分类」）：UTI 取
+//! `NSWorkspace typeOfFile:error:`、符合关系取 `type:conformsToType:`，默认应用取 `URLForApplicationToOpenURL:`。
+//! 被否决：`NSURLContentTypeKey` + `UTType conformsToType:`（非弃用面）——要引 objc2-uniform-type-identifiers，
+//! 锁文件里没有，不为两次查询引新包；两个弃用方法在当前 macOS 仍由 LaunchServices 应答，换 UTType 时只改这三处。
+//!
 //! 被否决：`NSWorkspace openURLs:withApplicationAtURL:configuration:completionHandler:`——
 //! 要引 block2 且结果异步回调，壳层同步命令拿不到失败；`open -a` 同样走 LaunchServices，
 //! 同步返回退出码。图标走 `TIFFRepresentation`——会把 1024px 全套表示编进去再取第一张，慢且大。
@@ -103,6 +108,26 @@ impl AppCatalog for MacCatalog {
         let url = NSWorkspace::sharedWorkspace()
             .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))?;
         app_from_url(&url)
+    }
+
+    fn default_handler(&self, target: &Path) -> Option<InstalledApp> {
+        let url = NSURL::from_file_path(target)?;
+        let app = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url)?;
+        app_from_url(&app)
+    }
+
+    #[allow(deprecated)] // 见模块注释：UTType 面要引新包
+    fn type_of(&self, target: &Path) -> Option<String> {
+        NSWorkspace::sharedWorkspace()
+            .typeOfFile_error(&NSString::from_str(&target.to_string_lossy()))
+            .ok()
+            .map(|t| t.to_string())
+    }
+
+    #[allow(deprecated)] // 见模块注释：UTType 面要引新包
+    fn conforms(&self, ty: &str, to: &str) -> bool {
+        NSWorkspace::sharedWorkspace()
+            .type_conformsToType(&NSString::from_str(ty), &NSString::from_str(to))
     }
 
     fn icon_data_url(&self, app: &InstalledApp) -> Option<String> {

@@ -24,8 +24,8 @@ const TREE: Record<string, RepoEntry[]> = {
   ],
 }
 const APPS: OpenWithApp[] = [
-  { id: 'com.todesktop.230313mzl4w4u92', name: 'Cursor', icon: 'data:image/png;base64,AAAA' },
-  { id: 'dev.zed.Zed', name: 'Zed', icon: null },
+  { id: 'com.todesktop.230313mzl4w4u92', name: 'Cursor', icon: 'data:image/png;base64,AAAA', is_default: false },
+  { id: 'dev.zed.Zed', name: 'Zed', icon: null, is_default: false },
 ]
 
 let root: ReturnType<typeof createRoot>
@@ -161,7 +161,9 @@ describe('「打开方式」子菜单（A16b）', () => {
     await flush()
     await rightClick(document.querySelector('[data-canvas-tab="art:docs/spec.md"]')!)
     expect(trigger()).not.toBeNull()
-    expect(api.openWithCandidates).toHaveBeenCalledWith('docs/spec.md')
+    // 行为变更（#32 修复，2026-10-25）：产物落在 .hexagon/<path>，页签的打开方式按盘上仓内路径读候选；
+    // 原断言 'docs/spec.md' 指向项目根下同名路径（不存在 → open_with_missing）。
+    expect(api.openWithCandidates).toHaveBeenCalledWith('.hexagon/docs/spec.md')
   })
 
   it('项目块右键：只有「打开方式」，作用于整个项目（空路径）', async () => {

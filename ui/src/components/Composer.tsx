@@ -19,6 +19,7 @@ import { ContextMeter } from './ContextMeter'
 import { COMPOSER_FILL_EVENT, COMPOSER_MENTION_EVENT, COMPOSER_PATH_EVENT, mergeFill, useFreshStartShown } from '../composerFill'
 import { visiblePending } from '../decisions'
 import type { AttachRef } from '../gen/AttachRef'
+import { ProjectFileMenu } from './FileMenu'
 import {
   atomicDeletion,
   findAtoms,
@@ -419,7 +420,9 @@ export function Composer() {
         {(attachments.length > 0 || list) && (
           <div className="composer-refs">
             {attachments.map((a) => (
-              <div key={a.path} className="attach-chip">
+              // #32：右键 = 文件菜单（复制路径 · 在访达中显示 · 打开方式）；已在输入条里，不给「插入」，也没有「打开」（点缩略图 = 放大）
+              <ProjectFileMenu key={a.path} path={a.path} noInsert>
+              <div data-attach-path={a.path} className="attach-chip">
                 <button type="button" className="attach-thumb" aria-label={t('composer.imageZoom', { name: a.name })} onClick={() => setZoom(a)}>
                   <img src={a.preview} alt={a.name} />
                 </button>
@@ -427,6 +430,7 @@ export function Composer() {
                   <Icon name="close" size={12} />
                 </button>
               </div>
+              </ProjectFileMenu>
             ))}
             {list}
           </div>

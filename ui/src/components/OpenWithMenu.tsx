@@ -1,5 +1,6 @@
 // 右键菜单「打开方式 ▸」子菜单（components A16b，owner-followups-1015 #31）。
-// 行 = 16px 系统应用图标（取不到用中性 external 图标 ink-3）+ 系统显示名（不翻译，过长省略）；
+// 行 = 16px 系统应用图标（取不到用中性 external 图标 ink-3）+ 系统显示名（不翻译，过长省略）
+// + 系统默认应用名后 --ink-3「（默认）」（#32，名省略时标记不省略）；
 // 读取中 = 3 行骨架（A16 加载态）；空 = 一行禁用「未找到可用的编辑器」；失败 = 一行 --red 文案 + 右侧「重试」（A16 错误态）。
 // 键盘：→ 展开、← 收起、Esc 关闭（radix Sub）。动作 openWith 默认空绑定，触发行右侧显示当前绑定。
 import { useTranslation } from 'react-i18next'
@@ -15,10 +16,14 @@ export function AppIcon({ app }: { app: OpenWithApp }) {
     : <Icon name="external" size={16} className="text-ink-3" />
 }
 
-/** `path` 项目相对；空串 = 项目根（IDE 以文件夹加载整个项目，只列支持打开目录的应用）。 */
-export function OpenWithSubmenu({ path }: { path: string }) {
+/**
+ * `path` 项目相对；空串 = 项目根（IDE 以文件夹加载整个项目，只列支持打开目录的应用）。
+ * `recent` = 启动页最近项目（#32）：`path` 是 recents 记录里的目录，根约束由 core 按记录判。
+ * 候选随文件类型变（#32，2026-10-21 负责人裁决）：非文本类给系统列表，系统默认应用在第一行、名后加「（默认）」。
+ */
+export function OpenWithSubmenu({ path, recent = false }: { path: string; recent?: boolean }) {
   const { t } = useTranslation()
-  const { state, retry } = useOpenWithCandidates(path)
+  const { state, retry } = useOpenWithCandidates(path, recent)
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger data-ctx-item="openWith" action="openWith">{t('ctx.openWith')}</ContextMenuSubTrigger>
@@ -43,8 +48,9 @@ export function OpenWithSubmenu({ path }: { path: string }) {
           <ContextMenuItem data-open-with-empty disabled>{t('ctx.openWithEmpty')}</ContextMenuItem>
         )}
         {state.kind === 'ready' && state.apps.map((app) => (
-          <ContextMenuItem key={app.id} data-open-with-app={app.id} icon={<AppIcon app={app} />} onSelect={() => void openPathWith(path, app.id)}>
+          <ContextMenuItem key={app.id} data-open-with-app={app.id} icon={<AppIcon app={app} />} onSelect={() => void openPathWith(path, app.id, recent)}>
             <span className="min-w-0 truncate" title={app.name}>{app.name}</span>
+            {app.is_default && <span data-open-with-default className="shrink-0 text-ink-3">{t('ctx.openWithDefault')}</span>}
           </ContextMenuItem>
         ))}
       </ContextMenuSubContent>

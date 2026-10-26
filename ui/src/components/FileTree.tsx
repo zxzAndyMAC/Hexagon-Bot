@@ -4,9 +4,8 @@ import { api, errText, type RepoEntry } from '../api'
 import { useUiStore } from '../store'
 import { TREE_DRAG_MIME, treeDragPayload, treeInsertPath } from '../composerAtoms'
 import { isMac } from '../keymap'
-import { copyProjectPath, insertPathToComposer, revealLabelKey, revealPath, TREE_PATH_ATTR } from '../fileActions'
-import { OpenWithSubmenu } from './OpenWithMenu'
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { TREE_PATH_ATTR } from '../fileActions'
+import { FileContextMenu } from './FileMenu'
 import { FileTypeIcon } from './FileTypeIcon'
 import { Icon } from './Icon'
 import { Row } from './Row'
@@ -185,36 +184,16 @@ export function FileTree() {
 
 /**
  * 文件树行右键菜单（A16b 第一批，owner-followups-1015 #07）：打开 · 插入到输入条 · 复制路径 · 在访达中显示 · 打开方式 ▸（#31）。
- * 种类不适用不渲染：目录没有「打开」（展开 = 点行本身）；链接不打开、不插入（没有一条仓内路径可指），
- * 只留复制 / 揭示——揭示指向仓外的链接由 core 拒（errors.reveal_outside_project）。
+ * #32 起菜单本体在 `FileMenu`（所有文件表面同序复用）。种类不适用不渲染：目录没有「打开」（展开 = 点行本身）；
+ * 链接不打开、不插入（没有一条仓内路径可指），只留复制 / 揭示——揭示指向仓外的链接由 core 拒（errors.reveal_outside_project）。
  * 右键不改选中、不打开：Trigger 只给行画焦点环（「右键一个没打开的文件时画布不跳走」）。
  */
 function TreeRowMenu({ entry, onOpen, children }: { entry: RepoEntry; onOpen: () => void; children: ReactNode }) {
-  const { t } = useTranslation()
-  const insert = treeInsertPath(entry)
+  const kind = entry.kind === 'dir' || entry.kind === 'link' ? entry.kind : 'file'
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        {entry.kind === 'file' && (
-          <ContextMenuItem data-ctx-item="open" onSelect={onOpen}>{t('ctx.open')}</ContextMenuItem>
-        )}
-        {insert && (
-          <ContextMenuItem data-ctx-item="insert" action="insertPath" onSelect={() => insertPathToComposer(insert)}>
-            {t('ctx.insertToComposer')}
-          </ContextMenuItem>
-        )}
-        {(entry.kind === 'file' || insert) && <ContextMenuSeparator />}
-        <ContextMenuItem data-ctx-item="copyPath" action="copyPath" onSelect={() => void copyProjectPath(entry.path)}>
-          {t('ctx.copyPath')}
-        </ContextMenuItem>
-        <ContextMenuItem data-ctx-item="reveal" action="revealPath" onSelect={() => void revealPath(entry.path)}>
-          {t(revealLabelKey())}
-        </ContextMenuItem>
-        {/* #31「打开方式」：链接没有一条仓内路径可交给编辑器（指向仓外的由 core 拒），不显示 */}
-        {entry.kind !== 'link' && <OpenWithSubmenu path={entry.path} />}
-      </ContextMenuContent>
-    </ContextMenu>
+    <FileContextMenu path={entry.path} kind={kind} onOpen={kind === 'file' ? onOpen : undefined} insert={treeInsertPath(entry)}>
+      {children}
+    </FileContextMenu>
   )
 }
 

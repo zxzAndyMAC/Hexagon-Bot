@@ -397,6 +397,10 @@ export const api = {
   openWithCandidates: (path: string) => call<OpenWithApp[]>('open_with_candidates', { path }),
   /** 用指定应用打开（控制组）；core 重判根约束 + 白名单，越界 errors.open_with_outside_project。 */
   openWith: (path: string, appId: string) => call<void>('open_with', { path, appId }),
+  /** #32：启动页最近项目的「打开方式」候选（项目级、目录口径；`dir` 必须是 recents 记录里的一条，core 判）。 */
+  recentOpenWithCandidates: (dir: string) => call<OpenWithApp[]>('recent_open_with_candidates', { dir }),
+  /** #32：用指定应用打开最近项目（控制组；core 先认 recents 记录，再重算候选）。 */
+  recentOpenWith: (dir: string, appId: string) => call<void>('recent_open_with', { dir, appId }),
   permissionShapeSuggestion: (questionId: string) => call<PermissionShapeSuggestion | null>('permission_shape_suggestion', { questionId }),
   approvalMode: () => call<ApprovalModeStatus>('approval_mode'),
   setApprovalMode: (mode: ApprovalMode, expectedProjectRoot: string) => call<ApprovalModeStatus>('set_approval_mode', { mode, expectedProjectRoot }),
@@ -1719,10 +1723,17 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
     case 'create_repo_dir':
     case 'reveal_repo_path':
     case 'open_with':
+    case 'recent_open_with':
       return null as T
-    // #31：mock 机器上装了两个编辑器，图标取不到（中性图标）。
+    // #31：mock 机器上装了两个编辑器，图标取不到（中性图标）。#32：非文本类（pdf / 图片……）给系统列表、默认在前。
     case 'open_with_candidates':
-      return [{ id: 'com.microsoft.VSCode', name: 'Visual Studio Code', icon: null }, { id: 'dev.zed.Zed', name: 'Zed', icon: null }] as T
+    case 'recent_open_with_candidates':
+      if (/\.(pdf|pptx?|key|docx?|xlsx?|png|jpe?g|gif|mp4|mov|mp3)$/i.test(String(args?.path ?? ''))) {
+        return [{ id: 'com.apple.Preview', name: 'Preview', icon: null, is_default: true },
+          { id: 'com.google.Chrome', name: 'Google Chrome', icon: null, is_default: false }] as T
+      }
+      return [{ id: 'com.microsoft.VSCode', name: 'Visual Studio Code', icon: null, is_default: false },
+        { id: 'dev.zed.Zed', name: 'Zed', icon: null, is_default: false }] as T
     case 'permission_shape_suggestion':
       return (args?.questionId === 'q-perm' ? { shape: 'exact:cargo test --workspace', generalized: false, tool: 'bash', project_id: 'p1', agent_id: 'a0' } : null) as T
     case 'approval_mode':

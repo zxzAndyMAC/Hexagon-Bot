@@ -163,7 +163,8 @@ describe('画布页签右键菜单（A16b 第一批）', () => {
       await act(async () => {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', bubbles: true, cancelable: true, altKey: true, shiftKey: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) }))
       })
-      expect(writeText).toHaveBeenLastCalledWith('/Users/me/todo/docs/spec.md')
+      // 行为变更（#32 修复，2026-10-25）：产物页签复制盘上路径 .hexagon/<登记 path>；原断言少了 .hexagon/（指到不存在的路径）
+      expect(writeText).toHaveBeenLastCalledWith('/Users/me/todo/.hexagon/docs/spec.md')
     } finally {
       resetBinding('copyPath')
     }
