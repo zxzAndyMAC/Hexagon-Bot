@@ -45,20 +45,22 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 
 2026-09 从 0 到 1 全面 QA 委托沉淀（委托提示词与用例库：`.scratch/qa-alloy/`）。任何代码改动交付前按改动类型过门；说不清自己触发了哪条 = 没过门。
 
+**测试/编译、截图、打包、验收或证据复用前，先读 [测试工作流](docs/agents/testing-workflow.md)。** 2026-10-23 负责人裁决：单票快速反馈；有界集成窗口共用全量/视觉；候选制品集中验收。逐票保留判据映射，不逐票重建、重签、重拍或请求主任务验收。执行批表的一行不自动触发一整套检查；以下专项覆盖仍须满足。
+
 - **按影响选门禁**（2026-10-13 负责人裁决，替代“任何代码改动都全量”）：先检查 diff、调用者和受影响边界，再选以下最小充分检查；记录选择理由、源码快照、命令和结果。不要仅凭扩展名或改动行数决定测试范围。
   - **无行为变化**：纯文档、普通注释、空格和格式整理只做 diff 审查及适用的格式/生成物一致性检查，不跑 `npm run check` 或 `npm test`。先确认没有改变字符串、缩进语义、编译指令、可执行示例或配置；生成文件保持生成器原样输出。
   - **局部行为变化**：影响范围可证明局限于单模块、内部契约未变时，跑能复现问题的回归测试、受影响模块测试及对应 lint/typecheck/编译检查；通过即可交付，不因文件是 Rust 而自动升为全量。下面的 DTO、i18n、原生操控、裁决回路等专项门禁仍适用。
-  - **全量触发**：跨模块行为变化、公共 API/IPC/持久化协议变化、依赖或构建链变化、权限/副作用边界变化、并发或生命周期变化，以及无法界定影响范围的修改，批次结束跑 `npm run check` + `npm test`；发现系统性风险时提前跑。全量成功必须覆盖本批最后一次相关行为变化，定向成功不能代替。
+  - **全量触发**：跨模块行为变化、公共 API/IPC/持久化协议变化、依赖或构建链变化、权限/副作用边界变化、并发或生命周期变化，以及无法界定影响范围的修改，在覆盖该变化的有界集成窗口冻结点跑 `npm run check` + `npm test`；独立交付及明确风险停止点提前关闭窗口。全量成功必须覆盖最后一次相关行为变化，定向成功不能代替；窗口不得因换票无限延长，边界见测试工作流。
 - **复用有效结果**：全量通过后只有已确认无行为变化的整理时，保留该次结果并补轻量检查；局部行为变化补受影响检查；再次触发全量条件才重跑全量。失败的门禁修复后重跑对应门禁，不能用定向绿覆盖全量红。重型构建/全量测试串行，恢复任务前先查进程，避免重复启动。
+- **实施子任务自主验证**（2026-10-23 负责人裁决）：已授权分工内的测试、编译、lint/typecheck、生成绑定、诊断和修复复验自主执行，无需主任务逐次批准；重型检查按批次自动排队、取得资源后执行，指定验证者负责最终快照，主任务处理范围和语义冲突。产品内只读子代理另遵 ADR 0070/0102，不由本条获得写源码权限。批次与证据复用见 `.scratch/agent-execution-2026-10-23/README.md`。
 - **改原生电脑操控或其 SDK 补丁**：先用 `npm run test:computer-use` 定向反馈；macOS 的 `npm test` 自动包含该门禁。构建/测试入口校验固定 SDK 与补丁前后哈希，直接 `swift test` 不替代干净依赖准备。原生无输入测试不代替实机验收。
-- **无人值守网络重试**（2026-10-04 负责人裁决）：网络中断前两次各等 1 分钟；连续第三次失败后等 5 分钟再试，成功清零。配置/权限/代码错误先诊断，不按网络故障循环。长任务持续更新 `.scratch/fullstack-qa-2026-10-03/handoff.md`；恢复后核实进程及结果，不能凭旧记录重启仍在运行的任务。
+- **无人值守网络重试**（2026-10-04 负责人裁决）：网络中断前两次各等 1 分钟；连续第三次失败后等 5 分钟再试，成功清零。配置/权限/代码错误先诊断，不按网络故障循环。长任务在当前执行批的唯一运行记录维护快照、进程、日志及下一步；`.scratch/fullstack-qa-2026-10-03/handoff.md` 仅服务原 QA 任务，其他入口只链接当前记录。恢复后核实进程及结果，不能凭旧记录重启仍在运行的任务。
 - **改 `#[derive(ts_rs::TS)]` 结构**：重跑 `cargo test export_bindings`（测试名过滤器不是文件名），`ui/src/gen/` diff 随改动同次入提交（D06）
-- **截图回归**（ui-redesign 票 17，单列门禁，不在 `npm test` 内）：改 `ui/src/components/`、`ui/src/index.css`、token、i18n 文案（任一语言）、`ui/src/api.ts` 的 dev mock 数据，或升级 UI 依赖/字体/Playwright 时，交付前跑 `npm run test:visual`（Playwright + 无头 Chromium，Vite dev :1460 + `?mock*` 数据，1440×900、减少动效、固定时钟/时区/语言；深浅两套 + fr 主界面，约 67 张）。出 diff：是本次有意改动 → `npm run test:visual:update` 重拍，逐张看 `ui/visual/__screenshots__/` 的 diff，提交说明写清哪几张为何变；不是有意改动 → 修代码，不准为过门重拍。失败产物在 `ui/test-results/`（`*-diff.png`）。基线绑定 macOS + 锁定的 Playwright Chromium 版本，换机/升 Playwright 后先在干净 main 上重拍一次单独提交。阈值 `maxDiffPixelRatio 0.001`（≈1300 像素，只容抗锯齿噪声）
-  - **跑的时机**（2026-10-20 负责人裁决，owner-followups-1015 票 26 起）：小改动（框线、圆角、间距、单个控件的状态或文案这类局部样式修正）不逐票跑全量截图回归，也不逐票重拍；要自查只跑受影响的几张（`npm --prefix ui run test:visual -- -g "<截图名>"`），并在交付说明里记「截图回归推迟」+ 预计会变的截图。一批界面改动全部合入后，在整合分支上统一跑一次全量，有意 diff 重拍并逐张过目。以下仍逐票跑全量：新界面/面板或布局重排、`ui/src/index.css`/token/`foundations.md` 改动、UI 依赖/字体/Playwright 升级。被否决的做法：每个小改动都跑全量——约 67 张、串行占重型锁，换来的只是同一批末尾本来就会看的 diff
+- **截图回归**（ui-redesign 票 17，单列门禁，不在 `npm test` 内）：改 `ui/src/components/`、`ui/src/index.css`、token、i18n 文案（任一语言）、`ui/src/api.ts` 的 dev mock 数据，或升级 UI 依赖/字体/Playwright 时，实施中按风险跑受影响用例，最终集成窗口统一跑 `npm run test:visual`，多票引用同一次结果；后续交付无相关变化则复用（Playwright + 无头 Chromium，Vite dev :1460 + `?mock*` 数据，1440×900、减少动效、固定时钟/时区/语言；深浅两套 + fr 主界面，约 67 张）。出 diff：是本次有意改动 → 用 `npm run test:visual:update` 的定向选择入口仅更新对应基线，逐张看 `ui/visual/__screenshots__/` 的实际变更 diff，提交说明写清哪几张为何变；不是有意改动 → 修代码，不准为过门重拍。失败产物在 `ui/test-results/`（`*-diff.png`）。基线绑定 macOS + 锁定的 Playwright Chromium 版本，换机/升 Playwright 后先在干净 main 上重拍一次单独提交。阈值 `maxDiffPixelRatio 0.001`（≈1300 像素，只容抗锯齿噪声）。更新命令不代替最终普通比较；不为每票制作重复截图报告
 - **改 `ui/src/i18n/locales/`**：`node ui/scripts/check-i18n.mjs`（七语言 key 集合对账，已挂 `npm run check`）+ 一种非英文语言手测冒烟
 - **修 bug**：同一次改动附回归测试——修复即文档，commit 会被遗忘，测试跟着代码走；新判定器必须配 proptest（D12）
 - **新 UI 界面/控件**：同步 vitest
-- **裁决回路改动**（`decisions.ts`/`PendingCards`/`stageops`/`TopBar`/`store.ts` 的 pending|streams|modalScope 面）：过黄金标准手测——离开 20 分钟归来，30 秒内看清「发生了什么、哪些在等拍板、最严重的是什么」并完成第一笔裁决。5 分钟跑法：造一张待决卡 → ①设置页打开按 ⌘↵ 应被拦+提示；②回工作台 ⌘↵ 裁决成功；③顶卡为 publish 时 ⌘↵ 只出提示不出裁决
+- **裁决回路改动**（`decisions.ts`/`PendingCards`/`stageops`/`TopBar`/`store.ts` 的 pending|streams|modalScope 面）：过黄金标准手测——离开 20 分钟归来，30 秒内看清「发生了什么、哪些在等拍板、最严重的是什么」并完成第一笔裁决。该路径在最终相关版本按工作台用户旅程集中跑，多票各映射判据，不逐票重演；实现过程中的裁决风险及时验证。5 分钟跑法：造一张待决卡 → ①设置页打开按 ⌘↵ 应被拦+提示；②回工作台 ⌘↵ 裁决成功；③顶卡为 publish 时 ⌘↵ 只出提示不出裁决
 - **E2E 纪律**：E2E 只留黄金标准路径（启动→向导→首指令→首卡→裁决→推进→归来摘要）；下层已测的不重复上浮；无 e2e 设施期间用半自动跑法（`.scratch/qa-alloy/cases.md` TC-E-0001）
 - **行为变更触及既有测试断言**：改测试与改代码同次提交，并在测试 diff 处注释说明行为为何变；静默删测试视为未过门
 
@@ -90,6 +92,8 @@ arch-review 2026-09 治理沉淀（依据 `.scratch/arch-review/report.md` 诊�
 ### Issue tracker
 
 Issues live as markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+实施、接续或验收 Hooks、Runtime hardening、Computer Use SDK、运行记录、子代理受控验证票据时，先读[总执行指南](.scratch/agent-execution-2026-10-23/README.md)，再按当前票加载规格与验证要求。
 
 ### Triage labels
 
