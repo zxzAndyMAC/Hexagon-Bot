@@ -2071,7 +2071,8 @@ fn create_repo_dir(state: ProjectState<'_>, path: String) -> Result<(), CmdError
 /// 在访达 / 资源管理器 / 文件管理器中显示（控制组，owner-followups-1015 #07，A16b）。
 /// 根约束在 core 判（`reveal::reveal_target`：规范化 + 解链接后必须在项目根内，越界记 Warn）；
 /// 壳层只拿判定后的绝对路径调系统，锁在调系统之前释放（不让外部进程握着 conn）。
-#[tauri::command]
+/// async（ticket 33 / 2026-10-25 批次审查 S11）：`open -R` 要等子进程退出，同步命令跑在主线程上会卡住界面。
+#[tauri::command(async)]
 fn reveal_repo_path(state: ProjectState<'_>, path: String) -> Result<(), CmdError> {
     let target = with_project_conn(&state, |_db, root| {
         hexagon_core::reveal::reveal_target(root, &path)
@@ -2093,8 +2094,8 @@ fn open_with_candidates(
 }
 
 /// 用指定应用打开项目内路径（控制组，#31）：core 重判根约束 + 白名单 + 当下候选后才启动，
-/// 参数逐个交给系统、不经 shell。
-#[tauri::command]
+/// 参数逐个交给系统、不经 shell。async 同 `reveal_repo_path`（ticket 33 S11：`open -a` 等子进程退出，不占主线程）。
+#[tauri::command(async)]
 fn open_with(state: ProjectState<'_>, path: String, app_id: String) -> Result<(), CmdError> {
     let root = with_project_conn(&state, |_db, root| {
         Ok::<_, hexagon_core::open_with::OpenWithError>(root.to_path_buf())
@@ -3257,7 +3258,8 @@ fn recent_open_with_candidates(
 }
 
 /// 用指定应用打开最近项目（控制组，#32）：core 先认 recents 记录，再按项目内同一规则重算候选才启动。
-#[tauri::command]
+/// async 同 `open_with`（ticket 33 S11）。
+#[tauri::command(async)]
 fn recent_open_with(app: tauri::AppHandle, dir: String, app_id: String) -> Result<(), CmdError> {
     let known: Vec<std::path::PathBuf> = read_recents(&app)
         .into_iter()
@@ -5082,6 +5084,27 @@ mod project_identity_tests {
             );
             replace_project(&state, None, None, &Some(identity(current_root, 22))).unwrap();
             assert!(state.conn.lock().unwrap().is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod launch_commands_off_main_thread_tests {
+    /// ticket 33（2026-10-25 批次审查 S11）：起外部进程并等它退出的命令（`open -R` / `open -a`）
+    /// 不得是同步命令——同步 tauri 命令跑在主线程，等子进程期间整个界面冻住。钉源码属性，
+    /// 因为 tauri 宏展开后在运行期看不出同步 / 异步。
+    #[test]
+    fn launching_commands_are_async() {
+        let src = include_str!("lib.rs");
+        for name in ["reveal_repo_path", "open_with", "recent_open_with"] {
+            let sig = format!("\nfn {name}(");
+            let at = src.find(&sig).unwrap_or_else(|| panic!("{name} not found"));
+            let head = &src[..at];
+            let attr = head.rfind("#[tauri::command").expect("attribute");
+            assert!(
+                head[attr..].starts_with("#[tauri::command(async)]"),
+                "{name} must be #[tauri::command(async)]"
+            );
         }
     }
 }
