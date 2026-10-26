@@ -20,6 +20,7 @@ struct Fake {
 /// 扩展名 → UTI（假的 LaunchServices；不在表里 = 系统给出 `dyn.*`）。
 const UTI: &[(&str, &str)] = &[
     ("rs", "public.rust-source"),
+    // ts 不在表里 → dyn.*（真机上 .rs 也是这样，#32 本机核对），靠 TEXT_EXTS 补缺
     ("md", "net.daringfireball.markdown"),
     ("sh", "public.shell-script"),
     ("pdf", "com.adobe.pdf"),
@@ -137,6 +138,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf) {
         "README.md",
         "blob.zzz",
         "run.sh",
+        "app.ts",
     ] {
         fs::write(root.join(f), "x").unwrap();
     }
@@ -399,6 +401,8 @@ fn candidates_follow_file_type() {
         ("src/main.rs", TargetClass::Text, &[COT, VSCODE], None),
         ("README.md", TargetClass::Text, &[COT, VSCODE], None),
         ("run.sh", TargetClass::Text, &[COT, VSCODE], None),
+        // UTI 缺位（dyn.*）但扩展名是代码 → 文本类，不落系统杂项
+        ("app.ts", TargetClass::Text, &[COT, VSCODE], None),
         ("src", TargetClass::Folder, &[VSCODE, ZED], None),
         ("", TargetClass::Folder, &[VSCODE, ZED], None),
     ];
@@ -559,7 +563,7 @@ proptest! {
         typed_h in prop::collection::vec(any_app(), 0..16),
         inst in prop::collection::vec(any_app(), 0..5),
         default in prop::option::of(prop::sample::select(vec![VSCODE, PREVIEW, "com.apple.Terminal", "x.evil"])),
-        rel in prop::sample::select(vec!["", "src", "src/main.rs", "README.md", "doc.pdf", "pic.png", "blob.zzz", "talk.key"]),
+        rel in prop::sample::select(vec!["", "src", "src/main.rs", "README.md", "doc.pdf", "pic.png", "blob.zzz", "talk.key", "app.ts"]),
         pick in prop::sample::select(vec![VSCODE, COT, ZED, PREVIEW, "com.apple.Terminal", "x.evil"]),
     ) {
         let (_t, root) = fixture();

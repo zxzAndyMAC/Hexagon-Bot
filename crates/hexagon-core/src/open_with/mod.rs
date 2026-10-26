@@ -121,6 +121,83 @@ pub const EXEC_TYPES: &[&str] = &[
     "com.microsoft.windows-executable",
 ];
 
+/// 系统没登记 UTI（`dyn.*` / 取不到）时的补充：这些扩展名按文本 / 代码类。只在 UTI 缺位时用，不覆盖系统已给的类型。
+/// 出处：#32 本机核对（2026-10-25 `list_this_machine`）——这台机器上 `.rs` 的 UTI 是 `dyn.ah62d4rv4ge81e62`
+/// （装的 IDE 都没声明 `public.rust-source`），纯 UTI 分类把 Rust 源码落进「其余」、丢掉 Xcode 等白名单项。
+/// 负责人裁决「不只看扩展名」= UTI 为主、扩展名补缺；被否决：缺位一律当「其余」（源码文件列成系统杂项）、
+/// 嗅探内容判文本（读盘、且二进制前缀不可靠）。
+pub const TEXT_EXTS: &[&str] = &[
+    "rs",
+    "ts",
+    "tsx",
+    "mts",
+    "cts",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "go",
+    "py",
+    "rb",
+    "java",
+    "kt",
+    "kts",
+    "swift",
+    "c",
+    "h",
+    "cc",
+    "cpp",
+    "hpp",
+    "m",
+    "mm",
+    "cs",
+    "php",
+    "lua",
+    "zig",
+    "dart",
+    "scala",
+    "ex",
+    "exs",
+    "hs",
+    "toml",
+    "yaml",
+    "yml",
+    "json",
+    "jsonc",
+    "json5",
+    "ini",
+    "cfg",
+    "conf",
+    "env",
+    "lock",
+    "md",
+    "mdx",
+    "txt",
+    "csv",
+    "tsv",
+    "log",
+    "sql",
+    "graphql",
+    "proto",
+    "css",
+    "scss",
+    "less",
+    "html",
+    "vue",
+    "svelte",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "gradle",
+    "cmake",
+    "make",
+    "mk",
+    "dockerfile",
+    "gitignore",
+];
+
 /// 「其余」类系统列表里剔掉的启动器：系统可能登记它们能开某个未知类型（或 `public.data`），交过去就是执行。
 pub const LAUNCHER_DENY: &[&str] = &[
     "com.apple.Terminal",
@@ -225,14 +302,21 @@ fn by_name(a: &InstalledApp, b: &InstalledApp) -> std::cmp::Ordering {
 }
 
 /// 目标分类：普通目录（`public.folder` / `public.directory`）→ Folder；UTI 符合文本 / 可执行类 → Text；
-/// 其余、系统给不出 UTI、`dyn.*`（无登记的动态类型）→ Other。
+/// 其余 → Other；系统给不出 UTI / `dyn.*`（无登记的动态类型）时扩展名在 [`TEXT_EXTS`] → Text，否则 Other。
 /// 文档包（`.key` / `.pages` / `.numbers` / `.rtfd`……）在磁盘上是目录，但 UTI 符合 `com.apple.package`——
 /// 系统当一个文件，按 Other 列 Keynote / Pages（只看 `is_dir` 会给 pdf 一样的 Keynote 稿列一排 IDE）；
 /// 应用包同时符合可执行类，仍走白名单目录口径。
 pub fn classify(catalog: &dyn AppCatalog, target: &Path) -> TargetClass {
     let ty = catalog.type_of(target).filter(|t| !t.starts_with("dyn."));
     let is = |to: &str| ty.as_deref().is_some_and(|t| catalog.conforms(t, to));
-    let editor_only = TEXT_TYPES.iter().chain(EXEC_TYPES).any(|to| is(to));
+    let ext_text = || {
+        target
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| TEXT_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+    };
+    let editor_only =
+        TEXT_TYPES.iter().chain(EXEC_TYPES).any(|to| is(to)) || (ty.is_none() && ext_text());
     if target.is_dir() {
         if is("com.apple.package") && !editor_only {
             return TargetClass::Other;
