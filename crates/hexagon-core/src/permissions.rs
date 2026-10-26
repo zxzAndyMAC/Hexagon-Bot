@@ -112,63 +112,7 @@ pub fn is_safety_net_with(tool: &str, input: &Value, push: &PushClass) -> Option
         "computer_action" | "browser_action" => {
             Some("desktop action with unverified external effects")
         }
-        "bash" => {
-            let raw = input["cmd"].as_str().unwrap_or("");
-            // Owner Q3 / 2026-10-01: whitespace or quoted argv must not turn
-            // `git push` into a remembered ordinary command. Shell parsing
-            // uncertainty is itself a reason for fresh owner confirmation.
-            let Ok(words) = shell_words(raw) else {
-                return Some("opaque shell command");
-            };
-            let cmd = words.join(" ").to_lowercase();
-            if words
-                .iter()
-                .any(|word| matches!(word.as_str(), "-delete" | "-exec" | "-execdir"))
-            {
-                return Some("potentially destructive command");
-            }
-            // owner-followups-1015 #13 (ADR 0093 follow-up ruling 2026-10-17):
-            // an ordinary push the classifier fully reads is a push card, not a
-            // safety net — it may be remembered per (remote, branch). Force and
-            // doubtful pushes stay here. Cost model in push_class: a false force
-            // costs one more question; a false ordinary is an unreviewed rewrite.
-            // Ticket 33 P1: `push` comes from the decision entry (classified once,
-            // with the caller's repo); an implicit target that resolves is ordinary.
-            match push {
-                PushClass::Force(_) => return Some("force push"),
-                // Ordinary means one plain `git push` with only safe options, so
-                // none of the patterns below can apply to it.
-                PushClass::Ordinary(_) => return None,
-                PushClass::NotPush => {}
-            }
-            if words
-                .iter()
-                .any(|word| matches!(word.rsplit('/').next(), Some("git")))
-                && words.iter().any(|word| word == "send-email")
-            {
-                return Some("external message");
-            }
-            const PATTERNS: &[(&str, &str)] = &[
-                ("git merge", "baseline merge"),
-                ("git rebase", "baseline rewrite"),
-                ("git reset --hard", "worktree rewrite"),
-                ("git update-ref", "git internals"),
-                ("git filter-branch", "history rewrite"),
-                ("git checkout --", "worktree rewrite"),
-                ("git clean", "worktree rewrite"),
-                ("rm ", "destructive delete"),
-                ("rmdir ", "destructive delete"),
-                ("npm publish", "remote publish"),
-                ("cargo publish", "remote publish"),
-                ("gh release", "remote publish"),
-                ("sendmail", "external message"),
-                ("stripe ", "payment"),
-            ];
-            PATTERNS
-                .iter()
-                .find(|(p, _)| cmd.contains(p))
-                .map(|(_, label)| *label)
-        }
+        "bash" => bash_safety_net(input, push),
         "fs_write" | "fs_patch" | "artifact_write" => {
             let p = input["path"].as_str().unwrap_or("");
             if p == "." || p == "/" || p.starts_with(".git/") || p == ".git" {
@@ -182,6 +126,67 @@ pub fn is_safety_net_with(tool: &str, input: &Value, push: &PushClass) -> Option
         "remote_publish" => Some("remote publish"),
         _ => None,
     }
+}
+
+/// `bash` 命令子串 → 安全网标签（按序取第一个命中）。
+const BASH_SAFETY_NET_PATTERNS: &[(&str, &str)] = &[
+    ("git merge", "baseline merge"),
+    ("git rebase", "baseline rewrite"),
+    ("git reset --hard", "worktree rewrite"),
+    ("git update-ref", "git internals"),
+    ("git filter-branch", "history rewrite"),
+    ("git checkout --", "worktree rewrite"),
+    ("git clean", "worktree rewrite"),
+    ("rm ", "destructive delete"),
+    ("rmdir ", "destructive delete"),
+    ("npm publish", "remote publish"),
+    ("cargo publish", "remote publish"),
+    ("gh release", "remote publish"),
+    ("sendmail", "external message"),
+    ("stripe ", "payment"),
+];
+
+/// `bash` 的安全网判定（自 [`is_safety_net_with`] 拆出，票 34）。
+fn bash_safety_net(input: &Value, push: &PushClass) -> Option<&'static str> {
+    let raw = input["cmd"].as_str().unwrap_or("");
+    // Owner Q3 / 2026-10-01: whitespace or quoted argv must not turn
+    // `git push` into a remembered ordinary command. Shell parsing
+    // uncertainty is itself a reason for fresh owner confirmation.
+    let Ok(words) = shell_words(raw) else {
+        return Some("opaque shell command");
+    };
+    let cmd = words.join(" ").to_lowercase();
+    if words
+        .iter()
+        .any(|word| matches!(word.as_str(), "-delete" | "-exec" | "-execdir"))
+    {
+        return Some("potentially destructive command");
+    }
+    // owner-followups-1015 #13 (ADR 0093 follow-up ruling 2026-10-17):
+    // an ordinary push the classifier fully reads is a push card, not a
+    // safety net — it may be remembered per (remote, branch). Force and
+    // doubtful pushes stay here. Cost model in push_class: a false force
+    // costs one more question; a false ordinary is an unreviewed rewrite.
+    // Ticket 33 P1: `push` comes from the decision entry (classified once,
+    // with the caller's repo); an implicit target that resolves is ordinary.
+    match push {
+        PushClass::Force(_) => return Some("force push"),
+        // Ordinary means one plain `git push` with only safe options, so
+        // none of the patterns below can apply to it.
+        PushClass::Ordinary(_) => return None,
+        PushClass::NotPush => {}
+    }
+    if words
+        .iter()
+        .any(|word| matches!(word.rsplit('/').next(), Some("git")))
+        && words.iter().any(|word| word == "send-email")
+    {
+        return Some("external message");
+    }
+    BASH_SAFETY_NET_PATTERNS
+        .iter()
+        .find(|(p, _)| cmd.contains(p))
+        .map(|(_, label)| *label)
 }
 
 /// 推送记住键的形状前缀（owner-followups-1015 #13 / ADR 0093 后续裁决）：

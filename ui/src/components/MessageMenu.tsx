@@ -8,7 +8,7 @@
 //   （`data-atom-path`）或附件 chip（`data-file-path`）上 → 这一次菜单换成共用文件菜单（FileMenu），不出消息项；
 //   被否决：在路径块里再套一层 ContextMenu——contextmenu 冒泡会把外层消息菜单一起打开，两层菜单叠在指针处。
 // - 命令面板与键位经 MESSAGE_ACTION_EVENT 让宿主执行（原文只在这里），同一套动作。
-import { useContext, useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from 'react'
+import { useContext, useEffect, useRef, useState, type HTMLAttributes, type ReactNode, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { isMac } from '../keymap'
 import {
@@ -28,7 +28,6 @@ export function MessageContextMenu({ eventId, body, children, ...rest }: {
   body: string
   children: ReactNode
 } & HTMLAttributes<HTMLDivElement>) {
-  const { t } = useTranslation()
   const onRail = useContext(RailEvents).has(eventId)
   const hostRef = useRef<HTMLDivElement>(null)
   const snapshot = useRef<{ text: string | null; at: number } | null>(null)
@@ -43,21 +42,7 @@ export function MessageContextMenu({ eventId, body, children, ...rest }: {
     else if (action === 'quote') quoteMessage(selected ?? body)
     else if (onRail) locateInRail(eventId)
   }
-  // 宿主上的 DOM 监听只挂一次，经 ref 读最新的原文 / 上轨状态。
-  const runRef = useRef(run)
-  useEffect(() => { runRef.current = run })
-
-  // 命令面板 / 键位入口：选区在执行时现读。
-  useEffect(() => {
-    const host = hostRef.current
-    if (!host) return
-    const onAction = (e: Event) => {
-      const action = (e as CustomEvent<unknown>).detail
-      if (action === 'copy' || action === 'quote' || action === 'locate') runRef.current(action, selectionWithin(host))
-    }
-    host.addEventListener(MESSAGE_ACTION_EVENT, onAction)
-    return () => host.removeEventListener(MESSAGE_ACTION_EVENT, onAction)
-  }, [])
+  useHostActions(hostRef, run)
 
   const pick = (action: MessageAction, movesFocus: boolean) => () => {
     skipRestore.current = movesFocus
@@ -87,21 +72,49 @@ export function MessageContextMenu({ eventId, body, children, ...rest }: {
       </ContextMenuTrigger>
       <ContextMenuContent data-msg-menu={eventId}
         onCloseAutoFocus={(e) => { if (skipRestore.current) { skipRestore.current = false; e.preventDefault() } }}>
-        {fileHit ? <MessageFileItems hit={fileHit} /> : <>
-        <ContextMenuItem data-ctx-item="copy" action="copyMessage" onSelect={pick('copy', false)}>
-          {t(scoped != null ? 'ctxMessage.copySelection' : 'ctxMessage.copy')}
-        </ContextMenuItem>
-        <ContextMenuItem data-ctx-item="quote" action="quoteMessage" onSelect={pick('quote', true)}>
-          {t(scoped != null ? 'ctxMessage.quoteSelection' : 'ctxMessage.quote')}
-        </ContextMenuItem>
-        {onRail && (
-          <ContextMenuItem data-ctx-item="locate" action="locateInRail" onSelect={pick('locate', true)}>
-            {t('ctxMessage.locate')}
-          </ContextMenuItem>
-        )}
-        </>}
+        {fileHit ? <MessageFileItems hit={fileHit} /> : <MessageItems scoped={scoped != null} onRail={onRail} pick={pick} />}
       </ContextMenuContent>
     </ContextMenu>
+  )
+}
+
+/** 命令面板 / 键位入口（MESSAGE_ACTION_EVENT）：选区在执行时现读。宿主上的 DOM 监听只挂一次，经 ref 读最新的原文 / 上轨状态。 */
+function useHostActions(hostRef: RefObject<HTMLDivElement | null>, run: (action: MessageAction, selected: string | null) => void) {
+  const runRef = useRef(run)
+  useEffect(() => { runRef.current = run })
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    const onAction = (e: Event) => {
+      const action = (e as CustomEvent<unknown>).detail
+      if (action === 'copy' || action === 'quote' || action === 'locate') runRef.current(action, selectionWithin(host))
+    }
+    host.addEventListener(MESSAGE_ACTION_EVENT, onAction)
+    return () => host.removeEventListener(MESSAGE_ACTION_EVENT, onAction)
+  }, [hostRef])
+}
+
+/** 消息项：文案跟范围走（scoped = 右键时有选区）；「定位」只在上轨时出现。 */
+function MessageItems({ scoped, onRail, pick }: {
+  scoped: boolean
+  onRail: boolean
+  pick: (action: MessageAction, movesFocus: boolean) => () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <ContextMenuItem data-ctx-item="copy" action="copyMessage" onSelect={pick('copy', false)}>
+        {t(scoped ? 'ctxMessage.copySelection' : 'ctxMessage.copy')}
+      </ContextMenuItem>
+      <ContextMenuItem data-ctx-item="quote" action="quoteMessage" onSelect={pick('quote', true)}>
+        {t(scoped ? 'ctxMessage.quoteSelection' : 'ctxMessage.quote')}
+      </ContextMenuItem>
+      {onRail && (
+        <ContextMenuItem data-ctx-item="locate" action="locateInRail" onSelect={pick('locate', true)}>
+          {t('ctxMessage.locate')}
+        </ContextMenuItem>
+      )}
+    </>
   )
 }
 

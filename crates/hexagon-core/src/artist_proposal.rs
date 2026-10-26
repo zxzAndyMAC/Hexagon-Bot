@@ -188,25 +188,7 @@ fn draw(
         cx.stage_run_id,
     )?;
     let started = std::time::Instant::now();
-    let budget_hit = crate::usage::enforce_cap(cx.db, cx.project_id)?;
-    let result = if budget_hit {
-        Err(image_gen::ImageFailure {
-            code: "budget_exhausted",
-            status: None,
-        })
-    } else {
-        let r = image_gen::generate(ep, prompt);
-        crate::usage::record_artist_image(
-            cx.db,
-            cx.root,
-            cx.project_id,
-            cx.stage_run_id,
-            &ep.model,
-            r.is_ok(),
-            r.as_ref().ok().and_then(|g| g.usage),
-        )?;
-        r
-    };
+    let result = generate_metered(cx, ep, prompt)?;
     let mut rec = ItemRec {
         role: role.into(),
         prompt: prompt.into(),
@@ -216,16 +198,7 @@ fn draw(
     };
     match result {
         Ok(g) => {
-            use base64::Engine;
-            let b64 = g.data_url.trim_start_matches("data:image/png;base64,");
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| ArtistError::ImageGenerationFailed(e.to_string()))?;
-            let name = format!("{}-{revision}.png", file_key(role));
-            let d = dir(cx.root, proposal_id);
-            std::fs::create_dir_all(&d)?;
-            std::fs::write(d.join(&name), bytes)?;
-            rec.image = Some(name);
+            rec.image = Some(save_image(cx, proposal_id, role, revision, &g.data_url)?);
             note(cx, started, false, "image_generated");
         }
         Err(f) => {
@@ -234,6 +207,51 @@ fn draw(
         }
     }
     Ok(rec)
+}
+
+/// 用量上限触顶就不发（按 `budget_exhausted` 失败）；发了就记账（画师名下），成败都记。
+fn generate_metered(
+    cx: &DrawCtx,
+    ep: &ImageEndpoint,
+    prompt: &str,
+) -> Result<Result<image_gen::Generated, image_gen::ImageFailure>, ArtistError> {
+    if crate::usage::enforce_cap(cx.db, cx.project_id)? {
+        return Ok(Err(image_gen::ImageFailure {
+            code: "budget_exhausted",
+            status: None,
+        }));
+    }
+    let r = image_gen::generate(ep, prompt);
+    crate::usage::record_artist_image(
+        cx.db,
+        cx.root,
+        cx.project_id,
+        cx.stage_run_id,
+        &ep.model,
+        r.is_ok(),
+        r.as_ref().ok().and_then(|g| g.usage),
+    )?;
+    Ok(r)
+}
+
+/// 把出图结果落到提案目录，返回文件名（`<角色键>-<修订号>.png`）。
+fn save_image(
+    cx: &DrawCtx,
+    proposal_id: &str,
+    role: &str,
+    revision: u32,
+    data_url: &str,
+) -> Result<String, ArtistError> {
+    use base64::Engine;
+    let b64 = data_url.trim_start_matches("data:image/png;base64,");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| ArtistError::ImageGenerationFailed(e.to_string()))?;
+    let name = format!("{}-{revision}.png", file_key(role));
+    let d = dir(cx.root, proposal_id);
+    std::fs::create_dir_all(&d)?;
+    std::fs::write(d.join(&name), bytes)?;
+    Ok(name)
 }
 
 fn note(cx: &DrawCtx, started: std::time::Instant, warn: bool, code: &str) {

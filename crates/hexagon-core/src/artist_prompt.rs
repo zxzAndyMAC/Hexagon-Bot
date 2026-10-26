@@ -87,29 +87,7 @@ pub fn write(
             started,
         );
     }
-    let instructions = crate::skills::hidden_skill_instructions(SKILL)
-        .expect("hidden image-prompt skill is embedded");
-    let input = json!({
-        "style": style,
-        "roles": briefs.iter().map(|b| json!({"role": b.role, "duty_summary": b.duty_summary}))
-            .collect::<Vec<_>>(),
-    });
-    let req = ChatRequest {
-        model_slot: model.slot.clone(),
-        messages: vec![
-            Message {
-                role: Role::System,
-                content: vec![ContentBlock::Text { text: instructions }],
-            },
-            Message {
-                role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: input.to_string(),
-                }],
-            },
-        ],
-        tools: vec![],
-    };
+    let req = request(&model.slot, style, briefs);
     // 画师不是 agents 表成员：空 agent_id 让账本行落 NULL（同项目级请求），
     // purpose 把它归到画师名下。
     let mut artist_ctx = ctx.clone();
@@ -148,6 +126,33 @@ pub fn write(
             note(ctx, started, true, PromptFailure::InvalidPrompts.code());
             Err(PromptFailure::InvalidPrompts)
         }
+    }
+}
+
+/// 撰写请求：系统消息 = 内置「出图提示词」技能，用户消息 = 风格 + 各角色职责摘要（JSON）。
+fn request(slot: &str, style: &str, briefs: &[RoleBrief]) -> ChatRequest {
+    let instructions = crate::skills::hidden_skill_instructions(SKILL)
+        .expect("hidden image-prompt skill is embedded");
+    let input = json!({
+        "style": style,
+        "roles": briefs.iter().map(|b| json!({"role": b.role, "duty_summary": b.duty_summary}))
+            .collect::<Vec<_>>(),
+    });
+    ChatRequest {
+        model_slot: slot.to_string(),
+        messages: vec![
+            Message {
+                role: Role::System,
+                content: vec![ContentBlock::Text { text: instructions }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: input.to_string(),
+                }],
+            },
+        ],
+        tools: vec![],
     }
 }
 

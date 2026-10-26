@@ -101,19 +101,29 @@ impl Tool for SummonArtist {
             }
         };
         note(crate::diag::CLASS_SLOT, true, state);
-        db.append_event(
-            &ctx.project_id,
-            crate::trace::EventKind::System,
+        artist_notice(
+            db,
+            ctx,
             json!({"kind":IMAGE_MODEL_MISSING,"speaker":ARTIST_ROLE,"speaker_code":ARTIST_CODE,
                 "slot":provider_config::IMAGE_SLOT,"state":state,"model":model,
                 "style":style,"roles":roles}),
-            Some(&ctx.agent_id),
-            ctx.stage_run_id.as_deref(),
-        )
-        .map_err(|e| ToolError::Exec(format!("artist notice not recorded: {e}")))?;
+        )?;
         Ok(json!({"state":state,"model":model,
             "note":"the Artist told the owner an image model must be bound in Settings; do not generate avatars another way"}))
     }
+}
+
+/// 画师在时间线上的一条系统通知（缺槽 / 端点不可用 / 提示词失败）。
+fn artist_notice(db: &Db, ctx: &ToolContext, payload: Value) -> Result<(), ToolError> {
+    db.append_event(
+        &ctx.project_id,
+        crate::trace::EventKind::System,
+        payload,
+        Some(&ctx.agent_id),
+        ctx.stage_run_id.as_deref(),
+    )
+    .map_err(|e| ToolError::Exec(format!("artist notice not recorded: {e}")))?;
+    Ok(())
 }
 
 /// 已绑且支持出图（票 20）：解析端点 → 逐角色出图 → 头像提案。端点不可发（非 OpenAI 兼容 /
@@ -146,46 +156,20 @@ fn draw_proposal(
                 f.code,
                 started,
             );
-            db.append_event(
-                &ctx.project_id,
-                crate::trace::EventKind::System,
+            artist_notice(
+                db,
+                ctx,
                 json!({"kind":IMAGE_MODEL_MISSING,"speaker":ARTIST_ROLE,"speaker_code":ARTIST_CODE,
                     "slot":provider_config::IMAGE_SLOT,"state":"unsupported","model":model,
                     "reason":f.code,"style":style,"roles":roles}),
-                Some(&ctx.agent_id),
-                ctx.stage_run_id.as_deref(),
-            )
-            .map_err(|e| ToolError::Exec(format!("artist notice not recorded: {e}")))?;
+            )?;
             return Ok(json!({"state":"unsupported","model":model,"reason":f.code,
                 "note":"the Artist told the owner the image slot cannot be used; do not generate avatars another way"}));
         }
     };
-    // 票 28：提示词由画师的主对话模型配内置「出图提示词」技能撰写。写不出来就明说、
-    // 一张图都不出——不退回票 20 的固定模板（2026-10-20 负责人裁决；模块注释见 artist_prompt）。
-    let briefs: Vec<_> = roles
-        .iter()
-        .map(|role| crate::artist_prompt::RoleBrief {
-            role: role.clone(),
-            duty_summary: crate::artist_proposal::duty_summary_of(db, &ctx.project_id, role),
-        })
-        .collect();
-    let model_ref = ctx.images.as_ref().and_then(|a| a.prompt_model());
-    let prompts = match crate::artist_prompt::write(db, ctx, model_ref, style, &briefs) {
+    let prompts = match write_prompts(db, ctx, style, roles)? {
         Ok(p) => p,
-        Err(f) => {
-            db.append_event(
-                &ctx.project_id,
-                crate::trace::EventKind::System,
-                json!({"kind":crate::artist_prompt::PROMPT_FAILED,"speaker":ARTIST_ROLE,
-                    "speaker_code":ARTIST_CODE,"reason":f.code(),"slot":artist_chat_slot(),
-                    "style":style,"roles":roles}),
-                Some(&ctx.agent_id),
-                ctx.stage_run_id.as_deref(),
-            )
-            .map_err(|e| ToolError::Exec(format!("artist notice not recorded: {e}")))?;
-            return Ok(json!({"state":"prompt_failed","reason":f.code(),
-                "note":"the Artist could not write the image prompts and told the owner; nothing was sent to the image model. Do not write prompts or generate avatars another way."}));
-        }
+        Err(reply) => return Ok(reply),
     };
     let cx = crate::artist_proposal::DrawCtx {
         db,
@@ -202,6 +186,39 @@ fn draw_proposal(
         "drawn":drawn,"failed":proposal.items.len() - drawn,
         "note":"the Artist posted an avatar proposal card in the timeline; only the owner applies it. Do not apply or describe the avatars yourself."}),
     )
+}
+
+/// 写出图提示词；写不出来时落通知并给出回给调度方的工具结果（内层 `Err`）。
+fn write_prompts(
+    db: &Db,
+    ctx: &ToolContext,
+    style: &str,
+    roles: &[String],
+) -> Result<Result<Vec<(String, String)>, Value>, ToolError> {
+    // 票 28：提示词由画师的主对话模型配内置「出图提示词」技能撰写。写不出来就明说、
+    // 一张图都不出——不退回票 20 的固定模板（2026-10-20 负责人裁决；模块注释见 artist_prompt）。
+    let briefs: Vec<_> = roles
+        .iter()
+        .map(|role| crate::artist_prompt::RoleBrief {
+            role: role.clone(),
+            duty_summary: crate::artist_proposal::duty_summary_of(db, &ctx.project_id, role),
+        })
+        .collect();
+    let model_ref = ctx.images.as_ref().and_then(|a| a.prompt_model());
+    match crate::artist_prompt::write(db, ctx, model_ref, style, &briefs) {
+        Ok(p) => Ok(Ok(p)),
+        Err(f) => {
+            artist_notice(
+                db,
+                ctx,
+                json!({"kind":crate::artist_prompt::PROMPT_FAILED,"speaker":ARTIST_ROLE,
+                    "speaker_code":ARTIST_CODE,"reason":f.code(),"slot":artist_chat_slot(),
+                    "style":style,"roles":roles}),
+            )?;
+            Ok(Err(json!({"state":"prompt_failed","reason":f.code(),
+                "note":"the Artist could not write the image prompts and told the owner; nothing was sent to the image model. Do not write prompts or generate avatars another way."})))
+        }
+    }
 }
 
 /// 目标角色集：缺省 = 全队；给了就必须都是当前团队成员（画师自己不在团队里，自然被拒）。

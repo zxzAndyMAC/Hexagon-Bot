@@ -18,12 +18,8 @@ import './ArtistProposal.css'
 
 export const ARTIST_PROPOSAL_KIND = 'artist_avatar_proposal'
 
-export function ArtistProposalCard({ item }: { item: TimelineItem }) {
-  const { t } = useTranslation()
-  const p = item.event.payload
-  const id = String(p.proposal_id ?? '')
-  const speaker = String(p.speaker ?? '')
-  const time = fmtTime(item.event.created_at)
+/** 提案读面 + 换一张 / 跳过 / 全部应用；三种动作互斥（任一在途时其余禁用）。 */
+function useProposal(id: string) {
   const invalidate = useUiStore((s) => s.invalidate)
   const [proposal, setProposal] = useState<Proposal | null>(null)
   const [error, setError] = useState('')
@@ -68,6 +64,54 @@ export function ArtistProposalCard({ item }: { item: TimelineItem }) {
     finally { setApplying(false) }
   }
 
+  return { proposal, error, redrawing, skipping, applying, applied, skipped, picked, busy, toggleSkip, redraw, apply }
+}
+
+type Item = Proposal['items'][number]
+
+/** 一格：生成图（失败占位）+ 角色名 + 未应用时「换一张 / 跳过」。 */
+function ProposalCell({ it, skip, done, applied, busy, redrawing, skipping, onRedraw, onToggleSkip }: {
+  it: Item
+  skip: boolean
+  done: boolean
+  applied: boolean
+  busy: boolean
+  redrawing: boolean
+  skipping: boolean
+  onRedraw: () => void
+  onToggleSkip: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <article className="artist-cell" data-role={it.role}
+      data-skipped={skip || undefined} data-applied={done || undefined} aria-busy={redrawing || undefined}>
+      <figure>
+        {it.image
+          ? <img src={it.image} alt={t('artist.avatarOf', { role: it.role })} />
+          : <span className="artist-missing"><Icon name="image" size={18} />{t('artist.failed')}</span>}
+        {done && <span className="chip info artist-chip">{t('artist.appliedChip')}</span>}
+      </figure>
+      <b>{it.role}</b>
+      {!applied && (
+        <div className="artist-cell-actions">
+          <DecisionButton variant="ghost" busy={redrawing} disabled={busy}
+            onClick={onRedraw}>{t('artist.redraw')}</DecisionButton>
+          <DecisionButton variant="ghost" busy={skipping} disabled={busy || !it.image} aria-pressed={skip}
+            onClick={onToggleSkip}>{skip ? t('artist.unskip') : t('artist.skip')}</DecisionButton>
+        </div>
+      )}
+    </article>
+  )
+}
+
+export function ArtistProposalCard({ item }: { item: TimelineItem }) {
+  const { t } = useTranslation()
+  const p = item.event.payload
+  const id = String(p.proposal_id ?? '')
+  const speaker = String(p.speaker ?? '')
+  const time = fmtTime(item.event.created_at)
+  const { proposal, error, redrawing, skipping, applying, applied, skipped, picked, busy, toggleSkip, redraw, apply } = useProposal(id)
+
   return (
     <div className="tl-msg" data-artist-proposal={id}>
       <Face agentId={String(p.speaker_code ?? speaker)} name={speaker} size={30} />
@@ -86,30 +130,11 @@ export function ArtistProposalCard({ item }: { item: TimelineItem }) {
           {error && <p role="alert" className="artist-error">{error}</p>}
           {!proposal ? (!error && <p role="status">{t('artist.loading')}</p>) : <>
             <div className="artist-cells">
-              {proposal.items.map((it) => {
-                const skip = skipped.has(it.role)
-                const done = proposal.applied.includes(it.role)
-                return (
-                  <article key={it.role} className="artist-cell" data-role={it.role}
-                    data-skipped={skip || undefined} data-applied={done || undefined} aria-busy={redrawing === it.role || undefined}>
-                    <figure>
-                      {it.image
-                        ? <img src={it.image} alt={t('artist.avatarOf', { role: it.role })} />
-                        : <span className="artist-missing"><Icon name="image" size={18} />{t('artist.failed')}</span>}
-                      {done && <span className="chip info artist-chip">{t('artist.appliedChip')}</span>}
-                    </figure>
-                    <b>{it.role}</b>
-                    {!applied && (
-                      <div className="artist-cell-actions">
-                        <DecisionButton variant="ghost" busy={redrawing === it.role} disabled={busy}
-                          onClick={() => void redraw(it.role)}>{t('artist.redraw')}</DecisionButton>
-                        <DecisionButton variant="ghost" busy={skipping === it.role} disabled={busy || !it.image} aria-pressed={skip}
-                          onClick={() => void toggleSkip(it.role)}>{skip ? t('artist.unskip') : t('artist.skip')}</DecisionButton>
-                      </div>
-                    )}
-                  </article>
-                )
-              })}
+              {proposal.items.map((it) => (
+                <ProposalCell key={it.role} it={it} skip={skipped.has(it.role)} done={proposal.applied.includes(it.role)}
+                  applied={applied} busy={busy} redrawing={redrawing === it.role} skipping={skipping === it.role}
+                  onRedraw={() => void redraw(it.role)} onToggleSkip={() => void toggleSkip(it.role)} />
+              ))}
             </div>
             <details className="artist-prompts">
               <summary>{t('artist.prompts')}</summary>

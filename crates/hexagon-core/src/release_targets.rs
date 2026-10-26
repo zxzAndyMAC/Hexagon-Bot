@@ -377,27 +377,14 @@ pub fn save(
     draft: &ReleaseTargetDraft,
 ) -> Result<ReleaseTarget, ReleaseError> {
     let started = std::time::Instant::now();
-    let checked = (|| {
-        let name = normalize_name(&draft.name)?;
-        let command = normalize_command(&draft.command)?;
-        let cwd = normalize_cwd(&draft.cwd)?;
-        let credentials = normalize_credentials(&draft.credentials)?;
-        Ok::<_, ReleaseError>((name, command, cwd, credentials))
-    })();
-    let (name, command, cwd, credentials) =
-        checked.map_err(|e| reject(e, "release_target_save", started))?;
+    let f = normalized(draft).map_err(|e| reject(e, "release_target_save", started))?;
     let existing = match draft.id.as_deref() {
         Some(id) => Some(row(db, project_id, id)?),
         None => None,
     };
-    let taken: bool = db.conn().query_row(
-        "SELECT EXISTS(SELECT 1 FROM release_targets WHERE project_id=?1 AND name=?2 AND id<>?3)",
-        rusqlite::params![project_id, name, draft.id.as_deref().unwrap_or("")],
-        |r| r.get(0),
-    )?;
-    if taken {
+    if name_taken(db, project_id, &f.name, draft.id.as_deref())? {
         return Err(reject(
-            ReleaseError::ReleaseNameTaken(name),
+            ReleaseError::ReleaseNameTaken(f.name),
             "release_target_save",
             started,
         ));
@@ -407,7 +394,13 @@ pub fn save(
         None => new_id()?,
     };
     if existing.is_some()
-        && secret_visible(store, &id, &credentials, &[&name, &command, &cwd], None)?
+        && secret_visible(
+            store,
+            &id,
+            &f.credentials,
+            &[&f.name, &f.command, &f.cwd],
+            None,
+        )?
     {
         return Err(reject(
             ReleaseError::ReleaseSecretInTarget,
@@ -416,22 +409,69 @@ pub fn save(
         ));
     }
     if let Some(old) = &existing {
-        for dropped in old.credentials.iter().filter(|c| !credentials.contains(c)) {
+        for dropped in old
+            .credentials
+            .iter()
+            .filter(|c| !f.credentials.contains(c))
+        {
             store.delete(&credential_key(&id, dropped))?;
         }
     }
-    let creds_json = serde_json::to_string(&credentials)?;
-    if existing.is_some() {
+    write_row(db, project_id, &id, &f, existing.is_some())?;
+    get(db, project_id, store, &id)
+}
+
+/// 规整后的登记字段。
+struct Fields {
+    name: String,
+    command: String,
+    cwd: String,
+    credentials: Vec<String>,
+}
+
+fn normalized(draft: &ReleaseTargetDraft) -> Result<Fields, ReleaseError> {
+    Ok(Fields {
+        name: normalize_name(&draft.name)?,
+        command: normalize_command(&draft.command)?,
+        cwd: normalize_cwd(&draft.cwd)?,
+        credentials: normalize_credentials(&draft.credentials)?,
+    })
+}
+
+/// 本项目里已有别的目标（不是 `own_id` 自己）叫这个名字。
+fn name_taken(
+    db: &Db,
+    project_id: &str,
+    name: &str,
+    own_id: Option<&str>,
+) -> Result<bool, ReleaseError> {
+    Ok(db.conn().query_row(
+        "SELECT EXISTS(SELECT 1 FROM release_targets WHERE project_id=?1 AND name=?2 AND id<>?3)",
+        rusqlite::params![project_id, name, own_id.unwrap_or("")],
+        |r| r.get(0),
+    )?)
+}
+
+/// 写登记表（新增或更新）并落 `release_target_changed` 轨迹。
+fn write_row(
+    db: &Db,
+    project_id: &str,
+    id: &str,
+    f: &Fields,
+    update: bool,
+) -> Result<(), ReleaseError> {
+    let creds_json = serde_json::to_string(&f.credentials)?;
+    if update {
         db.conn().execute(
             "UPDATE release_targets SET name=?3, command=?4, cwd=?5, credentials=?6,
              updated_at=datetime('now') WHERE project_id=?1 AND id=?2",
-            rusqlite::params![project_id, id, name, command, cwd, creds_json],
+            rusqlite::params![project_id, id, f.name, f.command, f.cwd, creds_json],
         )?;
     } else {
         db.conn().execute(
             "INSERT INTO release_targets (id, project_id, name, command, cwd, credentials)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![id, project_id, name, command, cwd, creds_json],
+            rusqlite::params![id, project_id, f.name, f.command, f.cwd, creds_json],
         )?;
     }
     // 轨迹只记名字：命令行原文留在表里，事件里不重复（命令可能带私有路径，读面已有）。
@@ -440,16 +480,16 @@ pub fn save(
         EventKind::System,
         json!({
             "kind": "release_target_changed",
-            "action": if existing.is_some() { "updated" } else { "added" },
+            "action": if update { "updated" } else { "added" },
             "target_id": id,
-            "name": name,
-            "credentials": credentials,
+            "name": f.name,
+            "credentials": f.credentials,
             "by": "owner",
         }),
         None,
         None,
     )?;
-    get(db, project_id, store, &id)
+    Ok(())
 }
 
 /// 删除一个发布目标：先删它在钥匙串里的全部凭据，再删登记。
@@ -521,21 +561,39 @@ pub fn set_credential(
     let key = credential_key(id, &declared);
     let replaced = store.get(&key)?.is_some();
     store.set(&key, secret)?;
+    credential_changed(
+        db,
+        project_id,
+        &target,
+        &declared,
+        if replaced { "replaced" } else { "set" },
+    )?;
+    get(db, project_id, store, id)
+}
+
+/// `release_credential_changed` 轨迹：只记凭据名与动作，值永不入轨迹。
+fn credential_changed(
+    db: &Db,
+    project_id: &str,
+    target: &Row,
+    credential: &str,
+    action: &str,
+) -> Result<(), ReleaseError> {
     db.append_event(
         project_id,
         EventKind::System,
         json!({
             "kind": "release_credential_changed",
-            "action": if replaced { "replaced" } else { "set" },
-            "target_id": id,
+            "action": action,
+            "target_id": target.id,
             "target": target.name,
-            "credential": declared,
+            "credential": credential,
             "by": "owner",
         }),
         None,
         None,
     )?;
-    get(db, project_id, store, id)
+    Ok(())
 }
 
 /// 移除一条凭据（钥匙串删除；名字仍留在目标的所需凭据列表里，显示「未设置」）。
@@ -551,20 +609,7 @@ pub fn remove_credential(
     let declared = declared(&target, credential)
         .map_err(|e| reject(e, "release_credential_remove", started))?;
     store.delete(&credential_key(id, &declared))?;
-    db.append_event(
-        project_id,
-        EventKind::System,
-        json!({
-            "kind": "release_credential_changed",
-            "action": "removed",
-            "target_id": id,
-            "target": target.name,
-            "credential": declared,
-            "by": "owner",
-        }),
-        None,
-        None,
-    )?;
+    credential_changed(db, project_id, &target, &declared, "removed")?;
     get(db, project_id, store, id)
 }
 

@@ -100,16 +100,7 @@ pub fn propose(
     }
     // ticket 33（2026-10-25 批次审查 S4，原票 #16）：拒绝分支都记 Warn（AGENTS「诊断记录」：门面拒绝记 Warn），
     // 原先只有疑似凭据一支有记录，形状不合 / 重名拒绝在手测时对不上「走了哪一支」。
-    let shaped = (|| -> Result<ReleaseTargetDraft, ReleaseError> {
-        Ok(ReleaseTargetDraft {
-            id: None,
-            name: targets::normalize_name(&raw.name)?,
-            command: targets::normalize_command(&raw.command)?,
-            cwd: targets::normalize_cwd(&raw.cwd)?,
-            credentials: targets::normalize_credentials(&raw.credentials)?,
-        })
-    })();
-    let draft = match shaped {
+    let draft = match shaped(raw) {
         Ok(d) => d,
         Err(e) => {
             let code = crate::errcode::variant_code(&e);
@@ -134,14 +125,47 @@ pub fn propose(
         "credentials": draft.credentials,
         "proposed_by": agent_id,
     });
-    if let Some(open) = crate::cards::queued(db, project_id)?.into_iter().find(|c| {
-        c.kind == CardKind::ReleaseTarget.as_str()
-            && ["name", "command", "cwd", "credentials"]
-                .iter()
-                .all(|k| c.payload[*k] == payload[*k])
-    }) {
-        return Ok(open.id);
+    if let Some(open) = open_proposal(db, project_id, &payload)? {
+        return Ok(open);
     }
+    enqueue_proposal(db, project_id, agent_id, &draft, payload)
+}
+
+/// 拟稿的形状校验（名称 / 命令 / 工作目录 / 凭据名各自规整）。
+fn shaped(raw: &ReleaseTargetDraft) -> Result<ReleaseTargetDraft, ReleaseError> {
+    Ok(ReleaseTargetDraft {
+        id: None,
+        name: targets::normalize_name(&raw.name)?,
+        command: targets::normalize_command(&raw.command)?,
+        cwd: targets::normalize_cwd(&raw.cwd)?,
+        credentials: targets::normalize_credentials(&raw.credentials)?,
+    })
+}
+
+/// 同一拟稿（名称 / 命令 / 工作目录 / 凭据名全同）已有的待决卡。
+fn open_proposal(
+    db: &Db,
+    project_id: &str,
+    payload: &Value,
+) -> Result<Option<String>, ReleaseRunError> {
+    Ok(crate::cards::queued(db, project_id)?
+        .into_iter()
+        .find(|c| {
+            c.kind == CardKind::ReleaseTarget.as_str()
+                && ["name", "command", "cwd", "credentials"]
+                    .iter()
+                    .all(|k| c.payload[*k] == payload[*k])
+        })
+        .map(|c| c.id))
+}
+
+fn enqueue_proposal(
+    db: &Db,
+    project_id: &str,
+    agent_id: &str,
+    draft: &ReleaseTargetDraft,
+    payload: Value,
+) -> Result<String, ReleaseRunError> {
     let qid = crate::cards::enqueue(
         db,
         project_id,
@@ -206,31 +230,40 @@ pub fn approve(
 ) -> Result<ReleaseTarget, ReleaseRunError> {
     let by = decider.label();
     let card = card(db, project_id, qid)?;
+    let draft = draft_of(&card.payload);
+    approve_guards(db, project_id, qid, store, decider, &draft)?;
+    if !crate::cards::claim(db, project_id, qid, CardKind::ReleaseTarget, by)? {
+        approve_denied(qid, "release_proposal_answered");
+        return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));
+    }
+    register(db, project_id, qid, store, by, &draft)
+}
+
+fn approve_denied(qid: &str, code: &str) {
+    note("release_proposal_approve", true, None, Some(qid), code);
+}
+
+/// 批准前的守门（认领前，任一不成立卡就留在待决里）。
+fn approve_guards(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    store: &dyn CredentialStore,
+    decider: &Decider,
+    draft: &ReleaseTargetDraft,
+) -> Result<(), ReleaseRunError> {
     // ADR 0093 后续裁决「托管不得新登记」：裁决人不是负责人（`managed:<grant>:<gen>` 等）一律拒绝。
     // 今天托管路径到不了这里（decision_key 不接管本卡种）；这一道是以后加路径时的默认拒绝。
     // 代价模型：误拒只让非负责人的调用报错；漏放是托管登记了一条它随后可以代批执行的命令。
     // ticket 33 S6：按类型判，不比较标签字符串（`Delegate("owner")` 也拒）。
     if *decider != Decider::Owner {
-        note(
-            "release_proposal_approve",
-            true,
-            None,
-            Some(qid),
-            "release_owner_only",
-        );
+        approve_denied(qid, "release_owner_only");
         return Err(ReleaseError::ReleaseOwnerOnly.into());
     }
-    let draft = draft_of(&card.payload);
-    let visible = fields(&draft);
+    let visible = fields(draft);
     // 卡载荷入队前已判过；这里再判一次，免得旧卡 / 手改的载荷绕过。
     if crate::release_secret::any_suspected(visible.iter().copied()) {
-        note(
-            "release_proposal_approve",
-            true,
-            None,
-            Some(qid),
-            "release_secret_suspected",
-        );
+        approve_denied(qid, "release_secret_suspected");
         return Err(ReleaseRunError::ReleaseSecretSuspected);
     }
     // 沿用 release_secret_in_target：已存的任一发布凭据值出现在拟稿里就拒绝（Agent 从聊天里抄到了值）。
@@ -239,38 +272,28 @@ pub fn approve(
         .iter()
         .any(|s| visible.iter().any(|f| f.contains(s.as_str())))
     {
-        note(
-            "release_proposal_approve",
-            true,
-            None,
-            Some(qid),
-            "release_secret_in_target",
-        );
+        approve_denied(qid, "release_secret_in_target");
         return Err(ReleaseError::ReleaseSecretInTarget.into());
     }
     drop(stored);
     // ticket 33 S4：重名 / 认领失败两支拒绝补 Warn。
     if targets::names(db, project_id)?.contains(&draft.name) {
-        note(
-            "release_proposal_approve",
-            true,
-            None,
-            Some(qid),
-            "release_name_taken",
-        );
-        return Err(ReleaseError::ReleaseNameTaken(draft.name).into());
+        approve_denied(qid, "release_name_taken");
+        return Err(ReleaseError::ReleaseNameTaken(draft.name.clone()).into());
     }
-    if !crate::cards::claim(db, project_id, qid, CardKind::ReleaseTarget, by)? {
-        note(
-            "release_proposal_approve",
-            true,
-            None,
-            Some(qid),
-            "release_proposal_answered",
-        );
-        return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));
-    }
-    match targets::save(db, project_id, store, &draft) {
+    Ok(())
+}
+
+/// 认领后登记：写登记表并落「拟稿已裁决」轨迹（成功 / 失败各一）。
+fn register(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    store: &dyn CredentialStore,
+    by: &str,
+    draft: &ReleaseTargetDraft,
+) -> Result<ReleaseTarget, ReleaseRunError> {
+    match targets::save(db, project_id, store, draft) {
         Ok(target) => {
             answered(
                 db,
@@ -299,7 +322,7 @@ pub fn approve(
                 by,
                 json!({"decision": "failed", "error": code}),
             )?;
-            note("release_proposal_approve", true, None, Some(qid), &code);
+            approve_denied(qid, &code);
             Err(e.into())
         }
     }

@@ -49,6 +49,27 @@ function useAlertOnTransition(status: SessionStatus | null) {
   return { announce, pulse, clearPulse: () => setPulse(0) }
 }
 
+/** 胶囊本体：色随最严重项；转入异常时单次脉冲，动画结束清掉。 */
+function PillTrigger({ tone, pulse, label, onPulseEnd }: {
+  tone: PillTone
+  pulse: boolean
+  label: string
+  onPulseEnd: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <PopoverTrigger asChild>
+      <button type="button" aria-haspopup="dialog" data-session-pill={tone}
+        data-session-pulse={pulse || undefined} title={t('session.ariaLabel')}
+        onAnimationEnd={(e) => { if (e.target === e.currentTarget) onPulseEnd() }}
+        className={cn(badgeVariants({ variant: tone }), 'hx-press hx-focus max-w-[260px] cursor-pointer', pulse && 'animate-hx-pulse-once')}>
+        <Dot tone={DOT_TONE[tone]} />
+        <span className="truncate">{label}</span>
+      </button>
+    </PopoverTrigger>
+  )
+}
+
 export function SessionPill() {
   const { t } = useTranslation()
   const actions = useSessionActions()
@@ -76,15 +97,7 @@ export function SessionPill() {
           <span className="inline-flex flex-none" data-session-slot>
             {shown && (
               <Popover open={cardOpen} onOpenChange={(open) => { setCardOpen(open); if (!open) setTreeOpen(false) }}>
-                <PopoverTrigger asChild>
-                  <button type="button" aria-haspopup="dialog" data-session-pill={tone}
-                    data-session-pulse={pulse > 0 || undefined} title={t('session.ariaLabel')}
-                    onAnimationEnd={(e) => { if (e.target === e.currentTarget) clearPulse() }}
-                    className={cn(badgeVariants({ variant: tone }), 'hx-press hx-focus max-w-[260px] cursor-pointer', pulse > 0 && 'animate-hx-pulse-once')}>
-                    <Dot tone={DOT_TONE[tone]} />
-                    <span className="truncate">{pillLabel}</span>
-                  </button>
-                </PopoverTrigger>
+                <PillTrigger tone={tone} pulse={pulse > 0} label={pillLabel} onPulseEnd={clearPulse} />
                 <PopoverContent align="start" aria-label={t('session.ariaLabel')}
                   className="w-[460px] max-w-[calc(100vw-48px)] max-h-[calc(100vh-80px)] overflow-y-auto p-0">
                   <SessionRecoveryCard actions={actions} treeOpen={treeOpen} onTreeOpen={setTreeOpen} />
