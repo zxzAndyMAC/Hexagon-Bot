@@ -105,13 +105,25 @@ describe('ToolGroupRow（beautiful-ui 票 02）', () => {
     root.unmount()
   })
 
-  it('文件片点开产物 tab（去重）', async () => {
+  // #33 L4：行为变了——fs_read / fs_write 的仓库路径曾一律开 `art:` 产物页签（产物视图找不到它），现开文件页签；
+  // 只有 artifact_write 的路径仍开产物页签。
+  it('文件片：仓库路径开文件 tab（去重），不开产物 tab', async () => {
     const { el, root } = await render(<ToolGroupRow items={CALLS} expanded idx={0} onToggle={() => {}} />)
     const chips = el.querySelectorAll('.tchip-files .chip-btn')
     expect(chips.length).toBe(2) // brief.md + prd.md 去重；bash 无 path
     await act(async () => { chips[1].dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    const tabs = useUiStore.getState().tabs
-    expect(tabs.some((t) => t.id === 'art:specs/prd.md')).toBe(true)
+    await act(async () => { chips[0].dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const ids = useUiStore.getState().tabs.map((t) => t.id)
+    expect(ids).toEqual(expect.arrayContaining(['file:specs/prd.md', 'file:docs/brief.md']))
+    expect(ids.some((id) => id.startsWith('art:'))).toBe(false)
+    root.unmount()
+  })
+
+  it('文件片：产物写入仍开产物 tab', async () => {
+    const items = [ev(1, 'tool_called', { tool: 'artifact_write', input: { path: 'specs/prd.md' } })]
+    const { el, root } = await render(<ToolGroupRow items={items} expanded idx={0} onToggle={() => {}} />)
+    await act(async () => { el.querySelector('.tchip-files .chip-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(useUiStore.getState().tabs.some((t) => t.id === 'art:specs/prd.md')).toBe(true)
     root.unmount()
   })
 })

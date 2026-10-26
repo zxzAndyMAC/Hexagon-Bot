@@ -6,8 +6,26 @@
 
 use crate::db::Db;
 use crate::orchestra::PackDef;
+use crate::push_class::PushClass;
 use crate::tools::{glob_match, Tool, ToolContext};
 use serde_json::Value;
+
+/// 一次判定里的推送分类（ticket 33 S8 / P1，2026-10-25 批次审查）：判定入口带上调用方仓库（`ctx.repo_root`）
+/// 分类一次，结果传给安全网 / 记忆匹配 / 推送卡 / 诊断——原先这四处各自从命令字节重分类，有了仓库解析
+/// （隐式目标推送，#13 负责人裁决 A）后各处结论还可能不一致。`repo = None` = 无仓库上下文（偏安全网）。
+pub fn push_class_of(tool: &str, input: &Value, repo: Option<&std::path::Path>) -> PushClass {
+    if tool != "bash" {
+        return PushClass::NotPush;
+    }
+    crate::push_class::classify_in(input["cmd"].as_str().unwrap_or(""), repo)
+}
+
+fn ordinary(push: &PushClass) -> Option<&crate::push_class::PushTarget> {
+    match push {
+        PushClass::Ordinary(t) => Some(t),
+        _ => None,
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Decision {
@@ -62,6 +80,11 @@ pub enum AllowVia {
 /// Owner Q3: safety-net commands and paths always require owner confirmation,
 /// in every approval mode. They can never become remembered grants.
 pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
+    is_safety_net_with(tool, input, &push_class_of(tool, input, None))
+}
+
+/// [`is_safety_net`] with the decision's push classification passed in (ticket 33 S8 / P1).
+pub fn is_safety_net_with(tool: &str, input: &Value, push: &PushClass) -> Option<&'static str> {
     // Owner Q3/Q6: arbitrary host shell and existing-file replacement never
     // become remembered blanket host authority, even in Broad mode.
     if tool == "host_bash" {
@@ -109,12 +132,14 @@ pub fn is_safety_net(tool: &str, input: &Value) -> Option<&'static str> {
             // safety net — it may be remembered per (remote, branch). Force and
             // doubtful pushes stay here. Cost model in push_class: a false force
             // costs one more question; a false ordinary is an unreviewed rewrite.
-            match crate::push_class::classify(raw) {
-                crate::push_class::PushClass::Force(_) => return Some("force push"),
+            // Ticket 33 P1: `push` comes from the decision entry (classified once,
+            // with the caller's repo); an implicit target that resolves is ordinary.
+            match push {
+                PushClass::Force(_) => return Some("force push"),
                 // Ordinary means one plain `git push` with only safe options, so
                 // none of the patterns below can apply to it.
-                crate::push_class::PushClass::Ordinary(_) => return None,
-                crate::push_class::PushClass::NotPush => {}
+                PushClass::Ordinary(_) => return None,
+                PushClass::NotPush => {}
             }
             if words
                 .iter()
@@ -220,6 +245,11 @@ pub fn remember_push(
 /// 形状匹配：`npm install *` / `npm install *@registry.npmjs.org` / 路径 glob。
 /// `@domain` 后缀把规则绑到域名：命令必须实际引用该域。
 pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
+    shape_matches_with(shape, tool, input, &push_class_of(tool, input, None))
+}
+
+/// [`shape_matches`] with the decision's push classification passed in (ticket 33 S8 / P1).
+pub fn shape_matches_with(shape: &str, tool: &str, input: &Value, push: &PushClass) -> bool {
     let target = match tool {
         "bash" => input["cmd"].as_str().unwrap_or(""),
         "web_fetch" => input["url"].as_str().unwrap_or(""),
@@ -236,11 +266,10 @@ pub fn shape_matches(shape: &str, tool: &str, input: &Value) -> bool {
     // Rejected alternative: matching `push:` keys and command shapes side by
     // side. False negative: one more push card; false positive: an unreviewed push.
     if tool == "bash" {
-        let class = crate::push_class::classify(target);
         if let Some(key) = shape.strip_prefix(PUSH_SHAPE_PREFIX) {
-            return matches!(class, crate::push_class::PushClass::Ordinary(t) if push_shape(&t.remote, &t.branch) == format!("{PUSH_SHAPE_PREFIX}{key}"));
+            return matches!(push, PushClass::Ordinary(t) if push_shape(&t.remote, &t.branch) == format!("{PUSH_SHAPE_PREFIX}{key}"));
         }
-        if class != crate::push_class::PushClass::NotPush {
+        if *push != PushClass::NotPush {
             return false;
         }
     }
@@ -627,6 +656,7 @@ fn pre_memory_guards(
     tool: &dyn Tool,
     tool_name: &str,
     input: &Value,
+    push: &PushClass,
 ) -> Result<GuardVerdict, crate::tools::ToolError> {
     // L0 授权闸门：mcp:<service>:<tool> 调用方必须在 grants 表里有该服务授权，
     // 缺席即硬拒（授权注册表是边界，不走规则、不可记忆）。
@@ -710,14 +740,14 @@ fn pre_memory_guards(
         });
     }
     // L2 安全网必问（永不进记忆）
-    if let Some(label) = is_safety_net(tool_name, input) {
+    if let Some(label) = is_safety_net_with(tool_name, input, push) {
         return Ok(GuardVerdict::ReferHuman {
             reason: format!("safety net: {label}"),
             safety_net: true,
         });
     }
     // L3 项目级 deny（压过记忆 allow）
-    if let Some(shape) = matching_rule(db, ctx, tool_name, input, "deny")? {
+    if let Some(shape) = matching_rule_with(db, ctx, tool_name, input, "deny", push)? {
         return Ok(GuardVerdict::Deny {
             reason: format!("project deny rule: {shape}"),
             layer: "project_deny",
@@ -736,11 +766,12 @@ fn release_in_approval_mode(
     tool_name: &str,
     input: &Value,
     decision: Decision,
+    push: &PushClass,
 ) -> Result<Decision, crate::tools::ToolError> {
     let Decision::Ask { reason, safety_net } = decision else {
         return Ok(decision);
     };
-    if let Some(shape) = matching_rule(db, ctx, tool_name, input, "deny")? {
+    if let Some(shape) = matching_rule_with(db, ctx, tool_name, input, "deny", push)? {
         return Ok(Decision::Deny {
             reason: format!("project deny rule: {shape}"),
             layer: "project_deny",
@@ -753,7 +784,7 @@ fn release_in_approval_mode(
     // a push card the owner answers (or remembers per remote + branch), not an
     // approval-mode release — broad access's fenced exec would otherwise run an
     // offline push to a local remote without any card.
-    if push_target(tool_name, input).is_some() {
+    if ordinary(push).is_some() {
         return Ok(Decision::Ask { reason, safety_net });
     }
     let mode = crate::approval_mode::read(db, &ctx.project_id)?.mode;
@@ -894,8 +925,21 @@ pub fn evaluate(
     tool_name: &str,
     input: &Value,
 ) -> Result<Decision, crate::tools::ToolError> {
-    let decision = evaluate_layers(db, ctx, tool, tool_name, input)?;
-    release_in_approval_mode(db, ctx, tool_name, input, decision)
+    let push = push_class_of(tool_name, input, Some(&ctx.repo_root));
+    evaluate_with(db, ctx, tool, tool_name, input, &push)
+}
+
+/// [`evaluate`] with the push classification computed once by the caller (ticket 33 S8).
+fn evaluate_with(
+    db: &Db,
+    ctx: &ToolContext,
+    tool: &dyn Tool,
+    tool_name: &str,
+    input: &Value,
+    push: &PushClass,
+) -> Result<Decision, crate::tools::ToolError> {
+    let decision = evaluate_layers(db, ctx, tool, tool_name, input, push)?;
+    release_in_approval_mode(db, ctx, tool_name, input, decision, push)
 }
 
 fn evaluate_layers(
@@ -904,8 +948,9 @@ fn evaluate_layers(
     tool: &dyn Tool,
     tool_name: &str,
     input: &Value,
+    push: &PushClass,
 ) -> Result<Decision, crate::tools::ToolError> {
-    if let Some(d) = pre_memory_guards(db, ctx, tool, tool_name, input)?.into_decision() {
+    if let Some(d) = pre_memory_guards(db, ctx, tool, tool_name, input, push)?.into_decision() {
         return Ok(d);
     }
     // 派遣域（code-search 票 06）：子代理回合里 mcp:* 按「本次勾选集」判——
@@ -928,7 +973,9 @@ fn evaluate_layers(
         }
     }
     // L4 形状化记忆 allow
-    if let Some((shape, scope)) = matching_rule_scoped(db, ctx, tool_name, input, "allow", None)? {
+    if let Some((shape, scope)) =
+        matching_rule_scoped(db, ctx, tool_name, input, "allow", None, push)?
+    {
         // External 地板（票 08）：mcp:* 语义由第三方服务器自定，名字只是
         // 标签不是证据——记忆 allow 对本类永不生效，每次调用都是一次外发
         // 判定。（persist_rule 侧同样拒写 mcp 规则，双保险。）
@@ -953,7 +1000,7 @@ fn evaluate_layers(
         });
     }
     // #13 推送卡：没记住的普通推送必问，理由写明目标（卡上显示远程 + 分支）。
-    if let Some(t) = push_target(tool_name, input) {
+    if let Some(t) = ordinary(push) {
         return Ok(Decision::Ask {
             reason: format!("push: {} {}", t.remote, t.branch),
             safety_net: false,
@@ -989,13 +1036,15 @@ pub fn evaluate_logged(
     input: &Value,
 ) -> Result<Decision, crate::tools::ToolError> {
     let started = std::time::Instant::now();
-    let d = evaluate(db, ctx, tool, tool_name, input)?;
+    // Ticket 33 S8: one classification per decision, shared by every layer and this record.
+    let push = push_class_of(tool_name, input, Some(&ctx.repo_root));
+    let d = evaluate_with(db, ctx, tool, tool_name, input, &push)?;
     // #13: which push branch the classifier took (judge = Debug).
     if tool_name == "bash" {
-        let code = match crate::push_class::classify(input["cmd"].as_str().unwrap_or("")) {
-            crate::push_class::PushClass::NotPush => None,
-            crate::push_class::PushClass::Ordinary(_) => Some("ordinary"),
-            crate::push_class::PushClass::Force(code) => Some(code),
+        let code = match &push {
+            PushClass::NotPush => None,
+            PushClass::Ordinary(_) => Some("ordinary"),
+            PushClass::Force(code) => Some(*code),
         };
         if let Some(code) = code {
             crate::diag::note(
@@ -1115,7 +1164,19 @@ pub(crate) fn matching_rule(
     input: &Value,
     effect: &str,
 ) -> Result<Option<String>, crate::tools::ToolError> {
-    Ok(matching_rule_scoped(db, ctx, tool, input, effect, None)?.map(|(s, _)| s))
+    let push = push_class_of(tool, input, Some(&ctx.repo_root));
+    matching_rule_with(db, ctx, tool, input, effect, &push)
+}
+
+fn matching_rule_with(
+    db: &Db,
+    ctx: &ToolContext,
+    tool: &str,
+    input: &Value,
+    effect: &str,
+    push: &PushClass,
+) -> Result<Option<String>, crate::tools::ToolError> {
+    Ok(matching_rule_scoped(db, ctx, tool, input, effect, None, push)?.map(|(s, _)| s))
 }
 
 pub(crate) fn matches_project_permission(
@@ -1125,7 +1186,8 @@ pub(crate) fn matches_project_permission(
     input: &Value,
     rule_id: &str,
 ) -> Result<bool, crate::tools::ToolError> {
-    Ok(matching_rule_scoped(db, ctx, tool, input, "allow", Some(rule_id))?.is_some())
+    let push = push_class_of(tool, input, Some(&ctx.repo_root));
+    Ok(matching_rule_scoped(db, ctx, tool, input, "allow", Some(rule_id), &push)?.is_some())
 }
 
 fn matching_rule_scoped(
@@ -1135,6 +1197,7 @@ fn matching_rule_scoped(
     input: &Value,
     effect: &str,
     shared_rule_id: Option<&str>,
+    push: &PushClass,
 ) -> Result<Option<(String, String)>, crate::tools::ToolError> {
     let mut st = db.conn().prepare(
         "SELECT shape, scope, stage_run_id, domain, network_allowed, background_allowed, session_name, id FROM permission_rules
@@ -1188,7 +1251,7 @@ fn matching_rule_scoped(
                 .subagent
                 .as_ref()
                 .is_none_or(|child| child.permission_rules.contains(&id));
-        let shape_ok = shape_matches(&shape, tool, input);
+        let shape_ok = shape_matches_with(&shape, tool, input, push);
         if scope_ok && shape_ok && (!execution_ok || !inherited) {
             crate::diag::note(
                 crate::diag::CLASS_REJECT,
@@ -1225,7 +1288,10 @@ pub fn persist_rule(
     _pack: Option<&PackDef>,
 ) -> Result<Option<String>, crate::tools::ToolError> {
     let started = std::time::Instant::now();
-    if is_safety_net(tool, input).is_some() {
+    // Ticket 33 S8 / P1: classify once with the caller's repo (an implicit-target
+    // push resolved at ask time resolves the same way here, so it may be remembered).
+    let push = push_class_of(tool, input, Some(&ctx.repo_root));
+    if is_safety_net_with(tool, input, &push).is_some() {
         return Ok(None);
     }
     // External 地板另一半（票 08）：mcp:* 规则根本写不进记忆层——
@@ -1239,7 +1305,7 @@ pub fn persist_rule(
     let shape = shape.to_string();
     let project_shared = scope == "project_shared";
     if project_shared
-        && crate::permission_suggestion::suggest(tool, input)
+        && crate::permission_suggestion::suggest_with(tool, input, &push)
             .is_none_or(|(suggested, _)| suggested != shape)
     {
         crate::diag::note(
@@ -1279,7 +1345,7 @@ pub fn persist_rule(
     // cover the very action being approved; false negative costs another ask.
     if shape.trim().is_empty()
         || shape.trim().chars().all(|c| c == '*')
-        || !shape_matches(&shape, tool, input)
+        || !shape_matches_with(&shape, tool, input, &push)
     {
         crate::diag::note(
             crate::diag::CLASS_REJECT,

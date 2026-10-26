@@ -39,6 +39,29 @@ const CAPTURE_BYTES: usize = 1 << 20;
 /// 凭据值在输出里的替换文。
 pub const REDACTED: &str = "[redacted]";
 
+/// 裁决人（发布 / 登记拟稿的确认与驳回入口共用）。ticket 33（2026-10-25 批次审查 S6，原票 #16「托管不得新登记」）：
+/// 「只有负责人」原先靠 `by != "owner"` 字符串比较——任何把字面量 `owner` 当裁决人标签传进来的路径（托管 actor 名、
+/// 手拼的 `managed:*`）都能冒充负责人。改成类型：负责人只有壳层的负责人按钮与工作台无托管作用域时构造，
+/// 托管作用域下一律是 [`Decider::Delegate`]，标签只用于认领与轨迹，不参与判定。
+/// 代价模型：误拒 = 非负责人的调用报 `release_owner_only`；漏放 = 托管登记一条随后可代批执行的命令。偏向拒。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decider {
+    /// 负责人亲手裁决。
+    Owner,
+    /// 代理裁决人（托管 `managed:<grant>:<gen>` 等），携带轨迹标签。
+    Delegate(String),
+}
+
+impl Decider {
+    /// 认领与轨迹里的 `by` 字样。
+    pub fn label(&self) -> &str {
+        match self {
+            Decider::Owner => "owner",
+            Decider::Delegate(actor) => actor,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ReleaseRunError {
     #[error("unknown release question: {0}")]
@@ -265,7 +288,7 @@ pub fn confirm(
     qid: &str,
     store: &dyn CredentialStore,
 ) -> Result<ReleaseOutcome, ReleaseRunError> {
-    confirm_by(db, project_id, qid, store, "owner", RELEASE_TIMEOUT)
+    confirm_by(db, project_id, qid, store, &Decider::Owner, RELEASE_TIMEOUT)
 }
 
 /// 确认发布（负责人或托管裁决人）：前置闸 → 原子认领 → 执行 → 落轨迹。
@@ -274,13 +297,13 @@ pub fn confirm_by(
     project_id: &str,
     qid: &str,
     store: &dyn CredentialStore,
-    by: &str,
+    decider: &Decider,
     timeout: Duration,
 ) -> Result<ReleaseOutcome, ReleaseRunError> {
+    let by = decider.label();
     let started = Instant::now();
-    let card = crate::cards::get(db, qid)
-        .ok()
-        .filter(|c| c.kind == CardKind::Release.as_str() && c.project_id == project_id)
+    // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张发布卡才是「未知」。
+    let card = crate::cards::get_kind(db, project_id, qid, CardKind::Release)?
         .ok_or_else(|| ReleaseRunError::ReleaseQuestionUnknown(qid.into()))?;
     if card.state != CardState::Queued {
         return Err(ReleaseRunError::ReleaseAlreadyAnswered(qid.into()));
@@ -323,7 +346,7 @@ pub fn confirm_by(
     let result: Result<String, RunFailure> = match run {
         Err(e) => Err(e.into()),
         Ok(r) => {
-            let output = tail(&redact(&r.output, &secrets), OUTPUT_TAIL_CHARS);
+            let output = tail(&assemble(&r, &secrets), OUTPUT_TAIL_CHARS);
             match r.status {
                 RunStatus::Exited(Some(0)) => Ok(output),
                 RunStatus::Exited(code) => Err(RunFailure {
@@ -397,13 +420,18 @@ impl From<ReleaseRunError> for RunFailure {
 
 /// 驳回发布：认领 + 轨迹。
 pub fn reject(db: &Db, project_id: &str, qid: &str) -> Result<(), ReleaseRunError> {
-    reject_by(db, project_id, qid, "owner")
+    reject_by(db, project_id, qid, &Decider::Owner)
 }
 
-pub fn reject_by(db: &Db, project_id: &str, qid: &str, by: &str) -> Result<(), ReleaseRunError> {
-    let card = crate::cards::get(db, qid)
-        .ok()
-        .filter(|c| c.kind == CardKind::Release.as_str() && c.project_id == project_id)
+pub fn reject_by(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    decider: &Decider,
+) -> Result<(), ReleaseRunError> {
+    let by = decider.label();
+    // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张发布卡才是「未知」。
+    let card = crate::cards::get_kind(db, project_id, qid, CardKind::Release)?
         .ok_or_else(|| ReleaseRunError::ReleaseQuestionUnknown(qid.into()))?;
     if !crate::cards::claim(db, project_id, qid, CardKind::Release, by)? {
         return Err(ReleaseRunError::ReleaseAlreadyAnswered(qid.into()));
@@ -436,6 +464,44 @@ pub(crate) fn redact(output: &str, secrets: &[(String, String)]) -> String {
         .fold(output.to_string(), |acc, v| acc.replace(v, REDACTED))
 }
 
+/// 一路子进程输出管道及其独立缓冲（stdout / stderr 各一，S13 分缓冲各自脱敏）。
+type Pipe = (Box<dyn Read + Send>, Arc<Mutex<Stream>>);
+
+/// 一路输出（stdout 或 stderr）的捕获：只留最新的 [`CAPTURE_BYTES`]，`truncated` = 开头被丢过。
+#[derive(Default)]
+struct Stream {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+/// 一路输出脱敏：截断过就先丢掉第一行残段（截断点可能落在凭据值中间，留下的后半截
+/// [`redact`] 认不出），再整段替换凭据值。
+fn clean_stream(s: &Stream, secrets: &[(String, String)]) -> String {
+    let text = String::from_utf8_lossy(&s.bytes);
+    let kept = if s.truncated {
+        text.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        &text
+    };
+    redact(kept, secrets)
+}
+
+/// 轨迹里的输出 = stdout 脱敏 + stderr 脱敏（各自成段，stdout 在前）。
+/// ticket 33（2026-10-25 批次审查 S13，原票 #15）修复即文档：两路曾合流进同一个缓冲再脱敏——
+/// 读线程按块交错写入，stdout 的一个凭据值中间可以插进一块 stderr，合流后的文本里凭据不再连续，
+/// `redact` 认不出，两半各自原样进了轨迹；截断点落在凭据值中间时同理。被否决：合流后按行脱敏
+/// （交错不按行发生，一行里照样能插进另一路的字节）；保留交错顺序（顺序对排错有用，但值不能为它冒泄漏）。
+fn assemble(r: &Run, secrets: &[(String, String)]) -> String {
+    let out = clean_stream(&r.stdout, secrets);
+    let err = clean_stream(&r.stderr, secrets);
+    match (out.is_empty(), err.is_empty()) {
+        (_, true) => out,
+        (true, false) => err,
+        (false, false) if out.ends_with('\n') => out + &err,
+        (false, false) => out + "\n" + &err,
+    }
+}
+
 fn tail(s: &str, chars: usize) -> String {
     let n = s.chars().count();
     if n <= chars {
@@ -452,12 +518,13 @@ enum RunStatus {
 
 struct Run {
     status: RunStatus,
-    output: String,
+    stdout: Stream,
+    stderr: Stream,
 }
 
 /// 跑一条登记的命令行：unix `sh -c`（自成进程组，超时整组杀），Windows `cmd /C`。
-/// stdin 关闭（发布命令不能停下来等输入，等就是卡死）；stdout / stderr 合流只留最新的
-/// [`CAPTURE_BYTES`]。凭据作为环境变量交给子进程。
+/// stdin 关闭（发布命令不能停下来等输入，等就是卡死）；stdout / stderr 各自一个缓冲、各留最新的
+/// [`CAPTURE_BYTES`]（分开脱敏，见 [`assemble`]）。凭据作为环境变量交给子进程。
 fn run_command(
     command: &str,
     dir: &Path,
@@ -488,24 +555,24 @@ fn run_command(
     let mut child = c
         .spawn()
         .map_err(|e| ReleaseRunError::ReleaseSpawn(format!("{:?}", e.kind())))?;
-    let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     let (done_tx, done_rx) = mpsc::channel::<()>();
-    let pipes: Vec<Box<dyn Read + Send>> = [
+    let out_buf = Arc::new(Mutex::new(Stream::default()));
+    let err_buf = Arc::new(Mutex::new(Stream::default()));
+    let pipes: Vec<Pipe> = [
         child
             .stdout
             .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            .map(|p| (Box::new(p) as Box<dyn Read + Send>, out_buf.clone())),
         child
             .stderr
             .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            .map(|p| (Box::new(p) as Box<dyn Read + Send>, err_buf.clone())),
     ]
     .into_iter()
     .flatten()
     .collect();
     let readers = pipes.len();
-    for mut pipe in pipes {
-        let buf = buf.clone();
+    for (mut pipe, buf) in pipes {
         let done = done_tx.clone();
         std::thread::spawn(move || {
             let mut chunk = [0u8; 8192];
@@ -514,10 +581,11 @@ fn run_command(
                     break;
                 }
                 let mut b = buf.lock().unwrap_or_else(|p| p.into_inner());
-                b.extend_from_slice(&chunk[..n]);
-                if b.len() > CAPTURE_BYTES {
-                    let cut = b.len() - CAPTURE_BYTES;
-                    b.drain(..cut);
+                b.bytes.extend_from_slice(&chunk[..n]);
+                if b.bytes.len() > CAPTURE_BYTES {
+                    let cut = b.bytes.len() - CAPTURE_BYTES;
+                    b.bytes.drain(..cut);
+                    b.truncated = true;
                 }
             }
             let _ = done.send(());
@@ -547,9 +615,13 @@ fn run_command(
             break;
         }
     }
-    let output =
-        String::from_utf8_lossy(&buf.lock().unwrap_or_else(|p| p.into_inner())).to_string();
-    Ok(Run { status, output })
+    let take =
+        |b: &Arc<Mutex<Stream>>| std::mem::take(&mut *b.lock().unwrap_or_else(|p| p.into_inner()));
+    Ok(Run {
+        status,
+        stdout: take(&out_buf),
+        stderr: take(&err_buf),
+    })
 }
 
 fn kill_tree(child: &mut std::process::Child) {
@@ -583,6 +655,49 @@ mod tests {
         );
     }
 
+    fn stream(text: &str, truncated: bool) -> Stream {
+        Stream {
+            bytes: text.as_bytes().to_vec(),
+            truncated,
+        }
+    }
+
+    #[test]
+    fn truncated_stream_drops_the_partial_first_line() {
+        // ticket 33 S13：截断点落在凭据值中间，留下的后半截不得进轨迹。
+        let secrets = vec![("TOKEN".to_string(), "token-123".to_string())];
+        let s = stream("en-123 tail\nnext token-123\n", true);
+        assert_eq!(clean_stream(&s, &secrets), format!("next {REDACTED}\n"));
+        assert_eq!(
+            clean_stream(&stream("en-123 no newline", true), &secrets),
+            ""
+        );
+        assert_eq!(
+            clean_stream(&stream("en-123\n", false), &secrets),
+            "en-123\n",
+            "untruncated output is kept as is"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_split_by_interleaved_stderr_is_still_redacted() {
+        // ticket 33（2026-10-25 批次审查 S13）回归：stdout 写凭据前半 → stderr 插一块 → stdout 写后半。
+        // 合流缓冲时轨迹里是「tok<stderr>en-123」，两半都漏；分路后 stdout 连续、整值替换。
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = vec![("TOKEN".to_string(), "token-123".to_string())];
+        let run = run_command(
+            "printf tok; sleep 0.2; printf X >&2; sleep 0.2; printf 'en-123\\n'",
+            dir.path(),
+            &secrets,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let out = assemble(&run, &secrets);
+        assert_eq!(out, format!("{REDACTED}\nX"));
+        assert!(!out.contains("tok") && !out.contains("en-123"), "{out}");
+    }
+
     #[test]
     fn tail_keeps_the_end() {
         assert_eq!(tail("abcdef", 3), "def");
@@ -598,6 +713,23 @@ mod tests {
         ) {
             let output = parts.join(&secret);
             let cleaned = redact(&output, &[("TOKEN".into(), secret.clone())]);
+            prop_assert!(!cleaned.contains(&secret) || REDACTED.contains(&secret));
+        }
+
+        /// ticket 33 S13：stdout / stderr 分路后，任一路里的凭据值（无论被拆成几次写入）都不留在合成输出里。
+        #[test]
+        fn assembled_output_never_contains_a_secret(
+            secret in "[A-Za-z0-9_-]{4,24}",
+            out_parts in proptest::collection::vec("[ -~]{0,16}", 0..4),
+            err_parts in proptest::collection::vec("[ -~]{0,16}", 0..4),
+            truncated in any::<bool>(),
+        ) {
+            let run = Run {
+                status: RunStatus::Exited(Some(0)),
+                stdout: stream(&out_parts.join(&secret), truncated),
+                stderr: stream(&err_parts.join(&secret), false),
+            };
+            let cleaned = assemble(&run, &[("TOKEN".into(), secret.clone())]);
             prop_assert!(!cleaned.contains(&secret) || REDACTED.contains(&secret));
         }
     }

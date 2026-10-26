@@ -169,6 +169,15 @@ fn delegation_never_approves_a_registration_card() {
             "release_owner_only"
         );
     }
+    // ticket 33（2026-10-25 批次审查 S6）：owner-only 按类型判。原先 `by != "owner"` 字符串比较，
+    // 作用域标签恰好写作 `owner` 的代理就能过闸；现在作用域内一律是 Decider::Delegate。
+    {
+        let _acting = wb.acting_as("owner");
+        assert_eq!(
+            wb.approve_release_target_card(&qid).unwrap_err().code(),
+            "release_owner_only"
+        );
+    }
     assert!(wb.release_targets().unwrap().is_empty());
     assert_eq!(cards_of(&wb, "release_target").len(), 1);
 }
@@ -306,4 +315,54 @@ fn both_release_tools_are_registered_for_roles_not_subagents() {
         .map(|d| d.name)
         .collect();
     assert!(!sub.iter().any(|n| n.contains("release")));
+}
+
+#[test]
+fn refusals_write_warn_diagnostic_records() {
+    // ticket 33（2026-10-25 批次审查 S4，原票 #16）：拟稿 / 批准 / 驳回的拒绝分支都记 Warn（分类「拒绝」），
+    // 码 = 错误码。原先重名、形状不合、认领失败三支不留记录，手测对不上走了哪一支。
+    let _g = crate::diag::TEST_LEVEL_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    log::set_max_level(log::LevelFilter::Warn);
+    let dir = tempfile::tempdir().unwrap();
+    let wb = workbench(&dir);
+    let db = &wb.db;
+    let pid = crate::PROJECT_ID;
+    let store = wb.creds.as_ref();
+    let hit = |branch: &str, code: &str| {
+        crate::diag::records(Some(pid), Some(crate::diag::CLASS_REJECT))
+            .iter()
+            .rev()
+            .any(|r| r.branch == branch && r.code == code && r.level == "warn")
+    };
+    let draft = |name: &str| ReleaseTargetDraft {
+        id: None,
+        name: name.into(),
+        command: "npm run deploy".into(),
+        cwd: String::new(),
+        credentials: vec![],
+    };
+    register(&wb, "site", "npm run deploy", &[]);
+    // 重名
+    let e = crate::release_chat::propose(db, pid, "a0", &draft("site")).unwrap_err();
+    assert_eq!(e.code(), "release_name_taken");
+    assert!(hit("release_propose", "release_name_taken"));
+    // 形状不合（空命令）
+    let mut bad = draft("pages");
+    bad.command = String::new();
+    let code = crate::release_chat::propose(db, pid, "a0", &bad)
+        .unwrap_err()
+        .code();
+    assert!(hit("release_propose", &code), "{code}");
+    // 批准时名字已被占
+    let qid = crate::release_chat::propose(db, pid, "a0", &draft("docs")).unwrap();
+    register(&wb, "docs", "npm run docs", &[]);
+    assert_eq!(
+        crate::release_chat::approve(db, pid, &qid, store, &crate::release::Decider::Owner)
+            .unwrap_err()
+            .code(),
+        "release_name_taken"
+    );
+    assert!(hit("release_proposal_approve", "release_name_taken"));
 }

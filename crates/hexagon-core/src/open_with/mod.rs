@@ -13,18 +13,24 @@
 //! - **文本 / 代码 / 脚本 / 可执行**（UTI 符合 [`TEXT_TYPES`] 或 [`EXEC_TYPES`]）= 系统登记的「能打开这个文件」的应用 ∩ 白名单（#31 原口径）。
 //! - **其余**（pdf、演示稿、文稿、表格、图片、音视频……，以及系统给不出 UTI 的未知类型）= 系统登记的应用，
 //!   同访达「打开方式」：系统默认应用排第一并标 `is_default`，其余按显示名，去重、最多 [`MAX_SYSTEM_APPS`] 个；
-//!   不额外补 IDE（系统自己登记了才出现），也不走白名单——但剔掉 [`LAUNCHER_DENY`]（终端 / 脚本运行器 / 安装器）。
+//!   不额外补 IDE（系统自己登记了才出现），也不走白名单——但剔掉 [`LAUNCHER_DENY`]（终端 / 脚本运行器 / 安装器 / 挂载 / 描述文件……）。
 //!   分类走 UTI 符合关系（[`AppCatalog::type_of`] / [`AppCatalog::conforms`]，macOS = LaunchServices），不只看扩展名：
 //!   `.command`、无扩展名但可执行的文件、`.jsonc` 这类扩展名表漏掉的类型都由系统判。
 //!
 //! 启动前按同一规则**重算一次**候选：界面传来的 app id 不在当下候选里就拒（防止拿文件的候选去开目录、
 //! 或界面缓存了已卸载的应用）。
 //!
-//! 代价模型（fail-closed）：false negative（少列一个能用的编辑器）= 负责人自己去访达里拖一次；
-//! false positive（放行非白名单应用或根外路径）= 一次未审的外部程序启动。实现偏向拒绝：
-//! 探测失败一律当「没有」，路径判不了一律拒。「其余」类放开白名单是负责人 #32 裁决（看 pdf 要的是预览 / Keynote，
-//! 不是 IDE）；代价面靠两道收住——脚本 / 可执行类型永远走白名单（交给终端就是执行），系统列表再剔一遍 [`LAUNCHER_DENY`]。
-//! 被否决：按扩展名表分类（`.command`、无扩展名脚本会落进「其余」被交给终端）；「其余」类也只列白名单（看不了 pdf）。
+//! 代价模型（两类不对称，ticket 33 / 2026-10-25 批次审查 S1 把注释改成与代码一致）：
+//! - **文本 / 目录类 = 白名单（fail-closed）**：false negative（少列一个能用的编辑器）= 负责人自己去访达里拖一次；
+//!   false positive（放行非白名单应用或根外路径）= 一次未审的外部程序启动。实现偏向拒绝：探测失败当「没有」，路径判不了一律拒。
+//! - **其余类 = 系统列表减 deny 列表（fail-open 于 deny 之外）**：负责人 #32 裁决（2026-10-21）——看 pdf 要的是预览 / Keynote，
+//!   不是 IDE；**UTI 探测失败 / 未知类型也走这一类**（系统给什么列什么），所以这里的 false positive 是「系统登记的某个
+//!   会执行 / 安装所开文件的处理程序被列出并启动」，false negative 是「少列一个无害的查看器」。收口靠两道：脚本 / 可执行类型
+//!   永远走白名单（交给终端就是执行），系统列表再剔一遍 [`LAUNCHER_DENY`]（以 bundle id，见那张表）。deny 列表注定不完备——
+//!   漏一个执行类处理程序就是一次未审的副作用，所以宁可多挡（Archive Utility、磁盘映像挂载这类「开即落盘」的也挡）。
+//!
+//! 被否决：按扩展名表分类（`.command`、无扩展名脚本会落进「其余」被交给终端）；「其余」类也只列白名单（看不了 pdf）；
+//! 未知类型一律空列表（违背 #32 裁决「未知类型走系统列表」）。
 //!
 //! 探测在 [`AppCatalog`] 接缝后面：测试注入假目录，从不真启动应用；macOS 用 NSWorkspace，
 //! 其他平台返回空（未做，见 [`system_catalog`]）。
@@ -34,7 +40,7 @@
 #[cfg(target_os = "macos")]
 mod macos;
 
-use crate::reveal::{resolve_in_root, RevealError};
+use crate::reveal::{resolve_in_root, InRootError};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -198,22 +204,57 @@ pub const TEXT_EXTS: &[&str] = &[
     "gitignore",
 ];
 
-/// 「其余」类系统列表里剔掉的启动器：系统可能登记它们能开某个未知类型（或 `public.data`），交过去就是执行。
+/// 「其余」类系统列表里剔掉的处理程序：系统可能登记它们能开某个未知类型（或 `public.data`），交过去就是执行 / 安装 /
+/// 改系统状态。以 bundle id 判（显示名可冒充、可本地化）。出处：#32 原表（终端 / 脚本运行器 / 安装器）；
+/// ticket 33（2026-10-25 批次审查 S1）补齐「打开即执行 / 安装所开文件」的系统处理程序——bundle id 取本机
+/// `/System/Library/CoreServices`、`/System/Applications` 下各应用 Info.plist 的 `CFBundleIdentifier`（macOS 26 核对），
+/// Jar Launcher 新旧两个 id 都列。加一项 = 改这张表 + glossary；属性测试钉「表内 id 永不出现在任何候选里、也启动不了」。
 pub const LAUNCHER_DENY: &[&str] = &[
+    // 终端：打开即执行脚本
     "com.apple.Terminal",
     "com.googlecode.iterm2",
     "com.mitchellh.ghostty",
     "dev.warp.Warp-Stable",
     "net.kovidgoyal.kitty",
     "io.alacritty",
+    "com.github.wez.wezterm",
+    "co.zeit.hyper",
+    // 脚本 / 自动化运行器
     "com.apple.ScriptEditor2",
+    "com.apple.ScriptMenuApp",
+    "com.apple.ScriptMonitor",
+    "com.apple.AppleScriptUtility",
+    "com.apple.FolderActionsSetup",
     "com.apple.Automator",
     "com.apple.automator.runner",
+    "com.apple.Automator.Automator-Application-Stub",
+    "com.apple.AutomatorInstaller",
+    "com.apple.shortcuts",
+    "com.apple.shortcuts.droplet",
+    "com.apple.shortcuts.events",
+    "com.apple.ShortcutsActions",
+    "org.python.PythonLauncher",
+    // Java 归档运行器（.jar 打开即执行）
+    "com.apple.JarLauncher",
+    "com.apple.JavaLauncher",
+    // 安装器（.pkg / .ipa / 命令行工具）
     "com.apple.installer",
+    "com.apple.Installer-Progress",
+    "com.apple.IPAInstaller",
+    "com.apple.dt.CommandLineTools.installondemand",
+    // 挂载 / 解包：打开即落盘
+    "com.apple.DiskImageMounter",
+    "com.apple.archiveutility",
+    // 描述文件 / 证书 / 钥匙串：打开即安装或导入信任
+    "com.apple.systempreferences",
+    "com.apple.mcx.ProfileHelper",
+    "com.apple.keychainaccess",
+    "com.apple.CertificateAssistant",
 ];
 
-/// 「其余」类最多列几个（访达式，长尾留给访达；默认应用总在内）。
-pub const MAX_SYSTEM_APPS: usize = 12;
+/// 「其余」类最多列几个（访达式，长尾留给访达；默认应用总在内）。ticket 33 L3（2026-10-25 批次审查，#32 修复项
+/// 「system-list cap/order」）由 12 调到 20——12 个在装了多套办公 / 图像软件的机器上把 Apple 自带的查看器截掉了；菜单超高滚动。
+pub const MAX_SYSTEM_APPS: usize = 20;
 
 /// 目标分类（[`classify`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,11 +327,10 @@ pub enum OpenWithError {
 }
 
 fn resolve(root: &Path, rel: &str) -> Result<PathBuf, OpenWithError> {
+    // ticket 33 S10：判定只会给越界 / 缺失两种，穷尽映射（原先借 RevealError，要把 RevealLaunch 硬映成「缺失」）。
     resolve_in_root(root, rel).map_err(|e| match e {
-        RevealError::RevealOutsideProject(p) => OpenWithError::OpenWithOutsideProject(p),
-        RevealError::RevealMissing(p) | RevealError::RevealLaunch(p) => {
-            OpenWithError::OpenWithMissing(p)
-        }
+        InRootError::Outside(p) => OpenWithError::OpenWithOutsideProject(p),
+        InRootError::Missing(p) => OpenWithError::OpenWithMissing(p),
     })
 }
 
@@ -370,7 +410,12 @@ fn editor_list(catalog: &dyn AppCatalog, target: &Path, is_dir: bool) -> Vec<Eli
     out.into_iter().map(|a| (a, false)).collect()
 }
 
-/// 「其余」类：系统登记列表去重、剔启动器，默认应用排第一，其余按名，截到 [`MAX_SYSTEM_APPS`]。
+/// Apple 系统应用（`com.apple.*`）排在第三方之前（ticket 33 L3：默认 → Apple 系统应用 → 其余按名）。
+fn is_apple(a: &InstalledApp) -> bool {
+    a.bundle_id.starts_with("com.apple.")
+}
+
+/// 「其余」类：系统登记列表去重、剔启动器，默认应用排第一，再 Apple 系统应用、其余各按名，截到 [`MAX_SYSTEM_APPS`]。
 /// 默认应用只在它也出现在系统登记列表里时才算（不变量：列出的每一项都是系统对这个文件报过的）。
 fn system_list(catalog: &dyn AppCatalog, target: &Path) -> Vec<Eligible> {
     let mut seen = HashSet::new();
@@ -380,7 +425,7 @@ fn system_list(catalog: &dyn AppCatalog, target: &Path) -> Vec<Eligible> {
         .filter(|a| !LAUNCHER_DENY.contains(&a.bundle_id.as_str()))
         .filter(|a| seen.insert(a.bundle_id.clone()))
         .collect();
-    apps.sort_by(by_name);
+    apps.sort_by(|a, b| is_apple(b).cmp(&is_apple(a)).then_with(|| by_name(a, b)));
     let default_id = catalog.default_handler(target).map(|a| a.bundle_id);
     let mut out: Vec<Eligible> = Vec::with_capacity(apps.len());
     if let Some(i) = default_id

@@ -19,7 +19,7 @@ import { Icon } from './Icon'
 import { LoadingState } from './LoadingState'
 import { bindingFor, formatBinding, matches } from '../keymap'
 import { pairToolCalls, toolOutcome, toolFilePath, toolInputSummary, TOOL_ICON, TOOL_LABEL, EXEC_CARD_TOOLS, type ToolCall } from '../agentSteps'
-import { CallStatus, ToolExecCard } from './ExecCard'
+import { CallStatus, openExecFile, ToolExecCard } from './ExecCard'
 import i18n from '../i18n'
 import { fmtTime } from '../usage'
 import { delegationLabel } from '../delegationLabel'
@@ -678,9 +678,12 @@ export const ToolGroupRow = memo(function ToolGroupRow({ items, callIndex, expan
   )
 })
 
-/** 工具调用文件 chip（C7 文件 chip 行）；右键 = 共用文件菜单（#32）。根外的绝对路径只留「打开」。 */
+/**
+ * 工具调用文件 chip（C7 文件 chip 行）；右键 = 共用文件菜单（#32）。根外的绝对路径只留「打开」。
+ * 点开：产物写入开产物页签，仓库路径（fs_read / fs_write）开文件页签——同执行卡卡头（#33 L4）。
+ */
 function ToolFileChip({ path, artifact, delayIdx }: { path: string; artifact: boolean; delayIdx: number | null }) {
-  const open = () => useUiStore.getState().openTab({ id: `art:${path}`, kind: 'artifact', title: path, path })
+  const open = () => openExecFile({ path, open: artifact ? 'artifact' : 'file' })
   const target = useProjectFileTarget(path, { onOpen: open, artifact })
   return (
     <FileContextMenu {...target}>

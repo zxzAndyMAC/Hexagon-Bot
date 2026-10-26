@@ -23,7 +23,7 @@ impl Workbench {
             &self.project_id,
             qid,
             self.creds.as_ref(),
-            &self.decider(),
+            &self.release_decider(),
             release::RELEASE_TIMEOUT,
         )?)
     }
@@ -38,7 +38,7 @@ impl Workbench {
             &self.project_id,
             qid,
             self.creds.as_ref(),
-            &self.decider(),
+            &self.release_decider(),
         )?)
     }
 
@@ -48,7 +48,7 @@ impl Workbench {
             &self.db,
             &self.project_id,
             qid,
-            &self.decider(),
+            &self.release_decider(),
         )?)
     }
 
@@ -57,7 +57,21 @@ impl Workbench {
             &self.db,
             &self.project_id,
             qid,
-            &self.decider(),
+            &self.release_decider(),
         )?)
+    }
+
+    /// 发布 / 登记拟稿裁决的类型化裁决人（ticket 33 S6）：无托管作用域 = 负责人；作用域内一律代理，
+    /// 哪怕作用域标签恰好写作 `owner`。
+    pub(crate) fn release_decider(&self) -> release::Decider {
+        match self
+            .decider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            None => release::Decider::Owner,
+            Some(actor) => release::Decider::Delegate(actor),
+        }
     }
 }

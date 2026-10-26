@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use crate::cards::{CardKind, CardState};
 use crate::credentials::CredentialStore;
 use crate::db::Db;
-use crate::release::ReleaseRunError;
+use crate::release::{Decider, ReleaseRunError};
 use crate::release_targets::{self as targets, ReleaseError, ReleaseTarget, ReleaseTargetDraft};
 use crate::tools::{RiskClass, Tool, ToolContext, ToolError};
 use crate::trace::EventKind;
@@ -98,14 +98,33 @@ pub fn propose(
         );
         return Err(ReleaseRunError::ReleaseSecretSuspected);
     }
-    let draft = ReleaseTargetDraft {
-        id: None,
-        name: targets::normalize_name(&raw.name)?,
-        command: targets::normalize_command(&raw.command)?,
-        cwd: targets::normalize_cwd(&raw.cwd)?,
-        credentials: targets::normalize_credentials(&raw.credentials)?,
+    // ticket 33（2026-10-25 批次审查 S4，原票 #16）：拒绝分支都记 Warn（AGENTS「诊断记录」：门面拒绝记 Warn），
+    // 原先只有疑似凭据一支有记录，形状不合 / 重名拒绝在手测时对不上「走了哪一支」。
+    let shaped = (|| -> Result<ReleaseTargetDraft, ReleaseError> {
+        Ok(ReleaseTargetDraft {
+            id: None,
+            name: targets::normalize_name(&raw.name)?,
+            command: targets::normalize_command(&raw.command)?,
+            cwd: targets::normalize_cwd(&raw.cwd)?,
+            credentials: targets::normalize_credentials(&raw.credentials)?,
+        })
+    })();
+    let draft = match shaped {
+        Ok(d) => d,
+        Err(e) => {
+            let code = crate::errcode::variant_code(&e);
+            note("release_propose", true, Some(agent_id), None, &code);
+            return Err(e.into());
+        }
     };
     if targets::names(db, project_id)?.contains(&draft.name) {
+        note(
+            "release_propose",
+            true,
+            Some(agent_id),
+            None,
+            "release_name_taken",
+        );
         return Err(ReleaseError::ReleaseNameTaken(draft.name).into());
     }
     let payload = json!({
@@ -151,9 +170,8 @@ pub fn propose(
 }
 
 fn card(db: &Db, project_id: &str, qid: &str) -> Result<crate::cards::Card, ReleaseRunError> {
-    let card = crate::cards::get(db, qid)
-        .ok()
-        .filter(|c| c.kind == CardKind::ReleaseTarget.as_str() && c.project_id == project_id)
+    // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张拟稿卡才是「未知」。
+    let card = crate::cards::get_kind(db, project_id, qid, CardKind::ReleaseTarget)?
         .ok_or_else(|| ReleaseRunError::ReleaseProposalUnknown(qid.into()))?;
     if card.state != CardState::Queued {
         return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));
@@ -184,13 +202,15 @@ pub fn approve(
     project_id: &str,
     qid: &str,
     store: &dyn CredentialStore,
-    by: &str,
+    decider: &Decider,
 ) -> Result<ReleaseTarget, ReleaseRunError> {
+    let by = decider.label();
     let card = card(db, project_id, qid)?;
     // ADR 0093 后续裁决「托管不得新登记」：裁决人不是负责人（`managed:<grant>:<gen>` 等）一律拒绝。
     // 今天托管路径到不了这里（decision_key 不接管本卡种）；这一道是以后加路径时的默认拒绝。
     // 代价模型：误拒只让非负责人的调用报错；漏放是托管登记了一条它随后可以代批执行的命令。
-    if by != "owner" {
+    // ticket 33 S6：按类型判，不比较标签字符串（`Delegate("owner")` 也拒）。
+    if *decider != Decider::Owner {
         note(
             "release_proposal_approve",
             true,
@@ -229,10 +249,25 @@ pub fn approve(
         return Err(ReleaseError::ReleaseSecretInTarget.into());
     }
     drop(stored);
+    // ticket 33 S4：重名 / 认领失败两支拒绝补 Warn。
     if targets::names(db, project_id)?.contains(&draft.name) {
+        note(
+            "release_proposal_approve",
+            true,
+            None,
+            Some(qid),
+            "release_name_taken",
+        );
         return Err(ReleaseError::ReleaseNameTaken(draft.name).into());
     }
     if !crate::cards::claim(db, project_id, qid, CardKind::ReleaseTarget, by)? {
+        note(
+            "release_proposal_approve",
+            true,
+            None,
+            Some(qid),
+            "release_proposal_answered",
+        );
         return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));
     }
     match targets::save(db, project_id, store, &draft) {
@@ -271,9 +306,22 @@ pub fn approve(
 }
 
 /// 驳回拟稿：认领 + 轨迹，什么都不登记。
-pub fn reject(db: &Db, project_id: &str, qid: &str, by: &str) -> Result<(), ReleaseRunError> {
+pub fn reject(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    decider: &Decider,
+) -> Result<(), ReleaseRunError> {
+    let by = decider.label();
     let card = card(db, project_id, qid)?;
     if !crate::cards::claim(db, project_id, qid, CardKind::ReleaseTarget, by)? {
+        note(
+            "release_proposal_reject",
+            true,
+            None,
+            Some(qid),
+            "release_proposal_answered",
+        );
         return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));
     }
     let name = card.payload["name"]

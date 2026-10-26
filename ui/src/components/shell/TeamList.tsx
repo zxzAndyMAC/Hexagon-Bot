@@ -100,7 +100,7 @@ function MemberRow({ m, working }: { m: TeamRow; working: boolean }) {
           {t('ctxMember.changeAvatar')}
         </ContextMenuItem>
         <ContextMenuItem data-ctx-item="restoreAvatar" action="restoreMemberAvatar"
-          reason={roleAvatar ? undefined : t('ctxMember.noCustomAvatar')} onSelect={() => void restoreMemberAvatar(m.id)}>
+          reason={roleAvatar ? undefined : t('ctxMember.noRoleAvatar')} onSelect={() => void restoreMemberAvatar(m.id)}>
           {t('ctxMember.restoreAvatar')}
         </ContextMenuItem>
       </ContextMenuContent>

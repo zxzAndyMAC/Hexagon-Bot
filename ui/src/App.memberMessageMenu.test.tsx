@@ -108,7 +108,7 @@ describe('成员行右键菜单（A16b 第一批）', () => {
     await settle()
     expect(menu()).not.toBeNull()
     expect(rows().map((r) => r.dataset.ctxItem)).toEqual(['openDetail', 'mention', 'copyName', 'changeAvatar', 'restoreAvatar'])
-    expect(rows().map((r) => r.textContent)).toEqual(['Open details', '@ Mention', 'Copy name', 'Change avatar', 'Restore default avatarNo custom avatar'])
+    expect(rows().map((r) => r.textContent)).toEqual(['Open details', '@ Mention', 'Copy name', 'Change avatar', 'Restore default avatarNo role avatar'])
   })
 
   it('右键不改选中：不打开该成员，只给行出焦点环标记', async () => {
@@ -186,7 +186,7 @@ describe('成员行换头像 / 恢复默认（#18，同角色详情 = 角色层�
     await rightClick(memberRow('a1'))
     await settle()
     expect(row('restoreAvatar').getAttribute('aria-disabled')).toBe('true')
-    expect(row('restoreAvatar').querySelector('[data-ctx-hint]')!.textContent).toBe('No custom avatar')
+    expect(row('restoreAvatar').querySelector('[data-ctx-hint]')!.textContent).toBe('No role avatar')
     await pick('restoreAvatar')
     expect(clear).not.toHaveBeenCalled()
   })
@@ -221,6 +221,35 @@ describe('成员行换头像 / 恢复默认（#18，同角色详情 = 角色层�
     expect(setAgent).not.toHaveBeenCalled()
   })
 
+  // #33 P5：行上显示的是实例覆盖时，禁用理由不能说「没有自定义头像」（明明有一张），改完角色层要说清看不到变化的原因。
+  it('有实例覆盖、角色无头像：禁用理由写「没有角色头像」', async () => {
+    useUiStore.setState({ team: [{ ...coder, avatar_override: true }, qa1, qa2] })
+    vi.spyOn(api, 'roleAvatar').mockResolvedValue(null)
+    await rightClick(memberRow('a1'))
+    await settle()
+    expect(row('restoreAvatar').getAttribute('aria-disabled')).toBe('true')
+    expect(row('restoreAvatar').querySelector('[data-ctx-hint]')!.textContent).toBe('No role avatar')
+  })
+
+  it('有实例覆盖：恢复角色默认后提示本行仍显示实例头像；无覆盖不提示', async () => {
+    useUiStore.setState({ team: [coder, qa1, { ...qa2, avatar_override: true }] })
+    vi.spyOn(api, 'roleAvatar').mockResolvedValue('data:image/png;base64,AA==')
+    const clear = vi.spyOn(api, 'clearRoleAvatar').mockResolvedValue()
+    vi.spyOn(useUiStore.getState(), 'invalidate').mockResolvedValue()
+    const shown = i18n.t('ctxMember.instanceAvatarShown')
+    await rightClick(memberRow('q1'))
+    await settle()
+    await pick('restoreAvatar')
+    await settle()
+    expect(useUiStore.getState().toasts.some((t) => t.text === shown)).toBe(false)
+    await rightClick(memberRow('q2'))
+    await settle()
+    await pick('restoreAvatar')
+    await settle()
+    expect(clear).toHaveBeenCalledTimes(2)
+    expect(useUiStore.getState().toasts.at(-1)?.text).toBe(shown)
+  })
+
   it('超过 2MB 本地拒绝，不发请求', async () => {
     const setRole = vi.spyOn(api, 'setRoleAvatar').mockResolvedValue()
     let picker: HTMLInputElement | null = null
@@ -242,7 +271,7 @@ describe('成员行换头像 / 恢复默认（#18，同角色详情 = 角色层�
     await keyOn(memberRow('a1'), { key: 'r', altKey: true, shiftKey: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) })
     await settle()
     expect(clear).not.toHaveBeenCalled()
-    expect(useUiStore.getState().toasts.at(-1)?.text).toBe('No custom avatar')
+    expect(useUiStore.getState().toasts.at(-1)?.text).toBe('No role avatar')
     resetBinding('restoreMemberAvatar')
   })
 })

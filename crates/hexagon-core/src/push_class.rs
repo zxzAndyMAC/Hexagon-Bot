@@ -11,8 +11,11 @@
 //! ——`-uf`、`--force-with-lease=…`、`git -c alias…`、`origin :main`（删除远端分支）
 //! 都能绕过黑名单。
 //!
-//! 纯函数，无 IO：不读 git 配置推断隐式目标（`git push` 不带参数时推到哪取决于
-//! push.default / 上游 / pushRemote，读配置的判定与真正执行之间可被改写）。
+//! [`classify`] 是纯函数，无 IO：隐式目标（`git push` 不带参数时推到哪取决于 push.default / 上游 /
+//! pushRemote）一律 `Force("implicit_target")`。ticket 33 P1（#13 负责人 2026-10-25 裁决选项 A）起，
+//! 判定入口用 [`classify_in`] 带上仓库：隐式目标能确定解出时（`crate::push_resolve`）改判普通推送，
+//! 解不出照旧安全网。原「读配置的判定与真正执行之间可被改写」的顾虑见 `push_resolve` 残余风险一节。
+//! 每次判定只分类一次、结果往下传（ticket 33 S8：原先一次判定里安全网 / 记忆匹配 / 推送卡 / 诊断各自重分类）。
 
 use crate::permissions::shell_words;
 
@@ -52,15 +55,65 @@ pub fn classify(cmd: &str) -> PushClass {
     }
 }
 
-/// 宽松识别「这条命令可能在推送」：宁可多认（多认只会走到严格解析再判强推）。
-/// 覆盖面不小于改动前的安全网条件（任一词 basename 为 git 且任一词为 push）。
+/// 带仓库上下文的分类（ticket 33 P1）：只有 [`classify`] 判成 `Force("implicit_target")` 的命令才去仓库里解目标，
+/// 其余结论一字不改（强推、读不懂的命令不会因为有仓库而放宽）。`repo = None` 等同 [`classify`]。
+/// 代价模型同模块顶：解析任何一步不确定都留在 `implicit_target`（偏多问一次）。
+pub fn classify_in(cmd: &str, repo: Option<&std::path::Path>) -> PushClass {
+    let class = classify(cmd);
+    let (PushClass::Force("implicit_target"), Some(repo)) = (&class, repo) else {
+        return class;
+    };
+    // implicit_target 只在整条命令已过 shell 结构 / 引号 / 选项白名单之后才给出，这里重读的词与 strict 一致。
+    let Ok(words) = shell_words(cmd) else {
+        return class;
+    };
+    let positional: Vec<&str> = words
+        .get(2..)
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .filter(|w| !w.starts_with('-'))
+        .collect();
+    match crate::push_resolve::read_facts(repo)
+        .and_then(|facts| crate::push_resolve::resolve(&positional, &facts))
+    {
+        Some(target) => PushClass::Ordinary(target),
+        None => class,
+    }
+}
+
+/// 待决卡上的推送分类（托管、记住范围建议这些拿不到仓库的地方用）：从持久化的 raw_input 重新分类；
+/// 唯一放宽的是 `implicit_target`——入卡时宿主已带仓库解过（[`card_facts`] 写进载荷的 `push`），
+/// 载荷说解出了普通目标就用那个目标。载荷只由宿主写（`tools::mod` 入卡），模型碰不到；
+/// 其余结论（强推、读不懂）仍只看执行的字节。旧卡（P1 之前入卡）载荷是 `force: true`，照旧安全网。
+pub fn from_card(cmd: &str, facts: &serde_json::Value) -> PushClass {
+    let class = classify(cmd);
+    if class != PushClass::Force("implicit_target") || facts["force"] != false {
+        return class;
+    }
+    match (facts["remote"].as_str(), facts["branch"].as_str()) {
+        (Some(remote), Some(branch)) if named_remote(remote) && plain_branch(branch) => {
+            PushClass::Ordinary(PushTarget {
+                remote: remote.into(),
+                branch: branch.into(),
+            })
+        }
+        _ => class,
+    }
+}
+
 /// 权限卡载荷里的推送事实（UI 据此画推送卡形）：普通推送给远程 + 分支，强推给原因码，
-/// 不是推送为 null。只是展示；判定与托管都从 raw_input 重新分类，不信这个字段。
-pub fn card_facts(tool: &str, input: &serde_json::Value) -> serde_json::Value {
+/// 不是推送为 null。判定从 raw_input 重新分类；只有隐式目标的解析结果经 [`from_card`] 被托管 / 记住建议采信
+/// （ticket 33 P1：那两处拿不到仓库）。`repo` = 发起调用的仓库（`ToolContext::repo_root`）。
+pub fn card_facts(
+    tool: &str,
+    input: &serde_json::Value,
+    repo: Option<&std::path::Path>,
+) -> serde_json::Value {
     if tool != "bash" {
         return serde_json::Value::Null;
     }
-    match classify(input["cmd"].as_str().unwrap_or("")) {
+    match classify_in(input["cmd"].as_str().unwrap_or(""), repo) {
         PushClass::NotPush => serde_json::Value::Null,
         PushClass::Ordinary(t) => {
             serde_json::json!({"force": false, "remote": t.remote, "branch": t.branch})
@@ -69,6 +122,9 @@ pub fn card_facts(tool: &str, input: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// 宽松识别「这条命令可能在推送」：宁可多认（多认只会走到严格解析再判强推）。
+/// 覆盖面不小于改动前的安全网条件（任一词 basename 为 git 且任一词为 push）。
+/// （ticket 33 / 2026-10-25 批次审查 S9：这两行曾错挂在 `card_facts` 上。）
 fn push_like(cmd: &str) -> bool {
     let lower = cmd.to_lowercase();
     if lower.contains("git push") || lower.contains("git-push") {
@@ -165,6 +221,16 @@ fn option_code(opt: &str) -> &'static str {
     } else {
         "unknown_option"
     }
+}
+
+/// 命名远程（不是 URL / 路径）。
+pub(crate) fn named_remote(s: &str) -> bool {
+    valid_remote(s)
+}
+
+/// 普通分支名，且不是字面 `HEAD`（`HEAD` 作目标会推到远端 `refs/heads/HEAD`，见 `push_resolve`）。
+pub(crate) fn plain_branch(s: &str) -> bool {
+    valid_branch(s) && s != "HEAD"
 }
 
 fn valid_remote(s: &str) -> bool {

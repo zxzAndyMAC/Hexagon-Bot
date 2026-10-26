@@ -8,4 +8,8 @@ export type ArtistProposal = { id: string, style: string, model: string, items: 
 /**
  * 已应用的角色（空 = 尚未应用）。
  */
-applied: Array<string>, };
+applied: Array<string>, 
+/**
+ * 负责人跳过的角色（落盘，重载后照样跳过；ticket 33 P3）。
+ */
+skipped: Array<string>, };

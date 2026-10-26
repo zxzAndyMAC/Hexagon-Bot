@@ -25,6 +25,7 @@ import { Dot } from '@/components/ui/dot'
 import { ShortcutKbd } from '@/components/ui/kbd'
 import { Segmented, SegmentedItem } from '@/components/ui/toggle-group'
 import { ProjectFileMenu } from './FileMenu'
+import { artifactRegisteredPath } from '../artifactLayout'
 
 export function FileEditor({ path }: { path: string }) {
   const projectRoot = useUiStore(s => s.projectRoot)
@@ -95,7 +96,7 @@ function FileBody({ path, projectRoot, projectEpoch }: { path: string; projectRo
   }, [editId, path, dirty, setFileEdit])
 
   // `.hexagon/specs/x.md` ↔ 产物 path `specs/x.md`：文件页直接给出版本链基线。
-  const artPath = path.startsWith('.hexagon/') ? path.slice('.hexagon/'.length) : null
+  const artPath = artifactRegisteredPath(path)
   const versions = useMemo(
     () =>
       artPath

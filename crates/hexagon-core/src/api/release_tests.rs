@@ -253,7 +253,7 @@ fn a_hung_release_is_killed_at_the_timeout() {
         crate::PROJECT_ID,
         &qid,
         fx.wb.creds.as_ref(),
-        "owner",
+        &crate::release::Decider::Owner,
         std::time::Duration::from_millis(300),
     )
     .unwrap_err();
@@ -372,4 +372,44 @@ fn release_agent_tools_only_draft_or_request() {
         .collect();
     names.sort();
     assert_eq!(names, ["propose_release_target", "request_release"]);
+}
+
+#[test]
+fn a_card_read_failure_is_reported_not_called_unknown() {
+    // ticket 33（2026-10-25 批次审查 S2，原票 #15 / #16）：裁决入口曾 `cards::get(..).ok()`，读库失败被报成
+    // 「未知卡」。现在读失败如实上抛（Cards），只有真没有这张卡（或卡种 / 项目不符）才是 unknown。
+    let fx = fixture();
+    let id = register(&fx, "site", "printf ok > ran.txt", &[]);
+    let qid = fx.wb.request_release(&id).unwrap();
+    let db = &fx.wb.db;
+    let store = fx.wb.creds.as_ref();
+    let pid = crate::PROJECT_ID;
+    // 卡种不符：发布卡交给拟稿裁决 → 拟稿未知；不存在的卡 → 发布未知
+    assert_eq!(
+        crate::release_chat::approve(db, pid, &qid, store, &crate::release::Decider::Owner)
+            .unwrap_err()
+            .code(),
+        "release_proposal_unknown"
+    );
+    assert_eq!(
+        crate::release::reject(db, pid, "q-nope")
+            .unwrap_err()
+            .code(),
+        "release_question_unknown"
+    );
+    crate::cards::break_reads_for_test(db);
+    let errs = [
+        crate::release::confirm(db, pid, &qid, store).unwrap_err(),
+        crate::release::reject(db, pid, &qid).unwrap_err(),
+        crate::release_chat::approve(db, pid, &qid, store, &crate::release::Decider::Owner)
+            .unwrap_err(),
+        crate::release_chat::reject(db, pid, &qid, &crate::release::Decider::Owner).unwrap_err(),
+    ];
+    for e in errs {
+        assert!(
+            matches!(e, crate::release::ReleaseRunError::Cards(_)),
+            "read failure must surface, got {e:?}"
+        );
+    }
+    assert!(!marker(&fx, "ran.txt"), "nothing ran");
 }

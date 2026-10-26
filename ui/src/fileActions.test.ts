@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { absolutePath, artifactRepoPath, projectRelPath } from './fileActions'
+import { ARTIFACT_DIR, artifactRegisteredPath } from './artifactLayout'
 
 // 票 29（owner-followups-1015）：画布页签「复制路径」写绝对路径——项目根 + 项目相对路径。
 describe('absolutePath', () => {
@@ -43,5 +44,15 @@ describe('artifactRepoPath', () => {
     expect(artifactRepoPath('specs/prd.md')).toBe('.hexagon/specs/prd.md')
     expect(artifactRepoPath('.hexagon/specs/prd.md')).toBe('.hexagon/specs/prd.md')
     expect(artifactRepoPath('/abs/x.md')).toBe('/abs/x.md')
+  })
+})
+
+// ticket 33 S12：产物布局只在 artifactLayout 一处；登记路径 ↔ 仓内路径互逆。
+describe('artifactRegisteredPath', () => {
+  it('仓内产物路径 → 登记路径；产物目录外 → null；与 artifactRepoPath 互逆', () => {
+    expect(ARTIFACT_DIR).toBe('.hexagon/')
+    expect(artifactRegisteredPath('.hexagon/specs/prd.md')).toBe('specs/prd.md')
+    expect(artifactRegisteredPath('src/main.rs')).toBeNull()
+    expect(artifactRegisteredPath(artifactRepoPath('specs/prd.md'))).toBe('specs/prd.md')
   })
 })

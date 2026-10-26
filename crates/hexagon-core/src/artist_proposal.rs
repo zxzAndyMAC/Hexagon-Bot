@@ -67,6 +67,9 @@ struct Manifest {
     items: Vec<ItemRec>,
     #[serde(default)]
     applied: Vec<String>,
+    /// 负责人在卡上「跳过」的角色（ticket 33 P3：原只在界面状态里，重载 / 重启就复原了）。
+    #[serde(default)]
+    skipped: Vec<String>,
 }
 
 /// 提案卡读面（IPC）。
@@ -79,6 +82,8 @@ pub struct ArtistProposal {
     pub items: Vec<ArtistProposalItem>,
     /// 已应用的角色（空 = 尚未应用）。
     pub applied: Vec<String>,
+    /// 负责人跳过的角色（落盘，重载后照样跳过；ticket 33 P3）。
+    pub skipped: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -264,6 +269,7 @@ pub fn create(
         model: ep.model.clone(),
         items,
         applied: vec![],
+        skipped: vec![],
     };
     write_manifest(cx.root, &m)?;
     cx.db.append_event(
@@ -299,6 +305,7 @@ fn view(root: &Path, m: &Manifest) -> Result<ArtistProposal, ArtistError> {
         model: m.model.clone(),
         items,
         applied: m.applied.clone(),
+        skipped: m.skipped.clone(),
     })
 }
 
@@ -353,6 +360,28 @@ fn redraw(
     m.model = ep.model.clone();
     write_manifest(cx.root, &m)?;
     view(cx.root, &m)
+}
+
+/// 「跳过 / 取消跳过」一格（负责人在提案卡上点）。ticket 33（2026-10-25 批次审查 P3，原票 #20 遗留
+/// 「Skip state not persisted」）：跳过原来只是界面状态，重载时间线 / 重启后被跳过的格又回到「待应用」，
+/// 负责人点「全部应用」会把明明跳过的头像也换上。现在写进提案 manifest，读面带回。不写轨迹（不是业务事实，
+/// 只是负责人在卡上的勾选）；角色不在提案里拒。
+pub fn set_skipped(
+    root: &Path,
+    id: &str,
+    role: &str,
+    skipped: bool,
+) -> Result<ArtistProposal, ArtistError> {
+    let mut m = read_manifest(root, id)?;
+    if !m.items.iter().any(|it| it.role == role) {
+        return Err(ArtistError::ArtistRoleNotInProposal(role.into()));
+    }
+    m.skipped.retain(|r| r != role);
+    if skipped {
+        m.skipped.push(role.to_string());
+    }
+    write_manifest(root, &m)?;
+    view(root, &m)
 }
 
 /// 「全部应用」：负责人勾下的格（未跳过、有图）按角色写头像。任何一格没图或不在提案里

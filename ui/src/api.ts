@@ -6,6 +6,7 @@ import type { ModelRequestRecovery } from './gen/ModelRequestRecovery'
 import type { TimelineWindowMetadataRequest } from './gen/TimelineWindowMetadataRequest'
 import type { TimelineWindowMetadata } from './gen/TimelineWindowMetadata'
 import { mockTimelineWindow, mockTimelineFacts, mockTimelineNodes } from './timelineMock'
+import { artifactRegisteredPath } from './artifactLayout'
 import { useUiStore } from './store'
 import type { ProjectTurnDelta } from './gen/ProjectTurnDelta'
 import type { ProjectToolOutputDelta } from './gen/ProjectToolOutputDelta'
@@ -643,6 +644,8 @@ export const api = {
   artistProposal: (id: string) => call<ArtistProposal>('artist_proposal', { id }),
   artistRegenerate: (id: string, role: string) => call<ArtistProposal>('artist_regenerate', { id, role }),
   artistApply: (id: string, roles: string[]) => call<ArtistProposal>('artist_apply', { id, roles }),
+  /** ticket 33 P3：跳过 / 取消跳过落盘，重载后照旧。 */
+  artistSkip: (id: string, role: string, skipped: boolean) => call<ArtistProposal>('artist_skip', { id, role, skipped }),
   // ---- 启动页 / 最近项目（票 29）----
   recentProjects: () => call<RecentProject[]>('recent_projects'),
   openRecent: (dir: string) => switchProject(source => call<void>('open_recent', { dir, _project: source })),
@@ -864,7 +867,7 @@ const mockArtistProposal = (id: string): ArtistProposal => {
   if (!mockArtistProposals[id]) {
     const roles = (mock('team') as { role: string }[]).map((r) => r.role)
     mockArtistProposals[id] = {
-      id, style: 'pixel art', model: 'gpt-image-1', applied: [],
+      id, style: 'pixel art', model: 'gpt-image-1', applied: [], skipped: [],
       items: roles.map((role, i) => ({
         role,
         prompt: `pixel art. A square avatar portrait representing the team role "${role}". One centered subject, simple background, no text, no letters, no watermark.`,
@@ -1572,6 +1575,13 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       mockArtistProposals[p.id] = { ...p, applied: roles }
       return mockArtistProposals[p.id] as T
     }
+    case 'artist_skip': {
+      const p = mockArtistProposal(String(args?.id))
+      const role = String(args?.role)
+      const rest = p.skipped.filter((r) => r !== role)
+      mockArtistProposals[p.id] = { ...p, skipped: args?.skipped ? [...rest, role] : rest }
+      return mockArtistProposals[p.id] as T
+    }
     case 'artifact_content':
       return artLatest(String(args?.path)) as T
     case 'artifact_content_at':
@@ -1704,7 +1714,7 @@ function mockReply<T>(cmd: string, args?: Record<string, unknown>): T {
       const p = String(args?.path)
       // .hexagon/ 下的产物磁盘版与 ART_CONTENT 最新版对齐，
       // 浏览器预览里「文件页 vs 版本基线」才有真实差异可看。
-      const artPath = p.startsWith('.hexagon/') ? p.slice('.hexagon/'.length) : null
+      const artPath = artifactRegisteredPath(p)
       const art = artPath ? artLatest(artPath) : null
       if (art != null) return art as T
       if (p.endsWith('.md')) {
