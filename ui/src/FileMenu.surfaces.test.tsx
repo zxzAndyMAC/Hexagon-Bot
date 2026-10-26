@@ -19,6 +19,7 @@ import { StageArtifacts } from './components/PendingCardParts'
 import { ArtifactTab } from './components/ArtifactTab'
 import { FileEditor } from './components/FileEditor'
 import { Composer } from './components/Composer'
+import { Launcher } from './components/Launcher'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, scrollerRef }: { data: unknown[]; itemContent: (i: number, row: unknown) => ReactNode; scrollerRef: (node: HTMLElement | null) => void }) =>
@@ -266,5 +267,52 @@ describe('输入条附件 chip（#32 表面 11）', () => {
     await rightClick(host.querySelector('[data-attach-path]')!)
     expect(items()).toEqual(['copyPath', 'reveal', 'openWith'])
     expect(api.openWithCandidates).toHaveBeenCalledWith('.hexagon/inbox/att-1-x.png')
+  })
+})
+
+describe('启动页最近项目（#32 表面 12）', () => {
+  it('右键 = 打开 · 打开方式（项目级，走 recent_* 命令）；目录已删的行不挂菜单；选中应用即启动', async () => {
+    vi.spyOn(api, 'recentProjects').mockResolvedValue([
+      { dir: '/tmp/ok-proj', name: 'ok-proj', mode: 'pack', opened_at: 1, exists: true },
+      { dir: '/gone/dead', name: 'dead', mode: 'fastpath', opened_at: 0, exists: false },
+    ])
+    const cands = vi.spyOn(api, 'recentOpenWithCandidates').mockResolvedValue([{ id: 'dev.zed.Zed', name: 'Zed', icon: null, is_default: false }])
+    const launch = vi.spyOn(api, 'recentOpenWith').mockResolvedValue(undefined)
+    const host = await render(<Launcher onOpen={() => {}} />)
+    await flush()
+    const row = (name: string) => [...host.querySelectorAll<HTMLElement>('.recent-row')].find((n) => n.textContent?.includes(name))!
+    await rightClick(row('ok-proj'))
+    expect(items()).toEqual(['open', 'openWith'])
+    expect(cands).toHaveBeenCalledWith('/tmp/ok-proj')
+    expect(api.openWithCandidates).not.toHaveBeenCalled()
+    const trig = menu()!.querySelector<HTMLElement>('[data-ctx-item="openWith"]')!
+    act(() => trig.focus())
+    await act(async () => { trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) })
+    await flush()
+    await act(async () => { document.querySelector<HTMLElement>('[data-open-with-app="dev.zed.Zed"]')!.click() })
+    expect(launch).toHaveBeenCalledWith('/tmp/ok-proj', 'dev.zed.Zed')
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await flush()
+    await rightClick(row('dead'))
+    expect(menu()).toBeNull()
+  })
+})
+
+describe('打开方式子菜单 · 系统默认标记（#32 文件类型口径）', () => {
+  it('is_default 的行名后显示「(default)」，其余行不显示', async () => {
+    vi.mocked(api.openWithCandidates).mockResolvedValue([
+      { id: 'com.apple.Preview', name: 'Preview', icon: null, is_default: true },
+      { id: 'com.google.Chrome', name: 'Google Chrome', icon: null, is_default: false },
+    ])
+    useUiStore.setState({ artifacts: [artifact('docs/plan.pdf')] })
+    const host = await render(<ArtifactList />)
+    await rightClick(host.querySelector('[role=listitem]')!)
+    const trig = menu()!.querySelector<HTMLElement>('[data-ctx-item="openWith"]')!
+    act(() => trig.focus())
+    await act(async () => { trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) })
+    await flush()
+    const marks = [...document.querySelectorAll<HTMLElement>('[data-open-with-default]')]
+    expect(marks.map((m) => m.closest('[data-open-with-app]')!.getAttribute('data-open-with-app'))).toEqual(['com.apple.Preview'])
+    expect(marks[0].textContent).toBe('(default)')
   })
 })
