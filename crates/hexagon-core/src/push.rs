@@ -316,19 +316,7 @@ pub fn confirm_by(
             .query_row("SELECT dir FROM projects WHERE id=?1", [project_id], |r| {
                 r.get(0)
             })?;
-    let repo = std::path::Path::new(&dir);
-    let result = (|| -> Result<PushOutcome, PushError> {
-        // 凭据闸：push/<remote>（或旧名）必须存在于钥匙串（值只验证存在，不进命令行/日志）
-        credential(store, &remote)?
-            .ok_or_else(|| crate::credentials::CredError::Missing(credential_name(&remote)))?;
-        let out = crate::git::run(repo, &["push", "-u", &remote, &baseline])?;
-        Ok(PushOutcome {
-            remote: remote.clone(),
-            baseline: baseline.clone(),
-            output: out,
-        })
-    })();
-
+    let result = run_push(std::path::Path::new(&dir), store, &remote, &baseline);
     match result {
         Ok(v) => {
             db.append_event(
@@ -353,6 +341,24 @@ pub fn confirm_by(
             Err(e)
         }
     }
+}
+
+/// 凭据闸 + `git push -u <remote> <baseline>`。
+fn run_push(
+    repo: &std::path::Path,
+    store: &dyn CredentialStore,
+    remote: &str,
+    baseline: &str,
+) -> Result<PushOutcome, PushError> {
+    // 凭据闸：push/<remote>（或旧名）必须存在于钥匙串（值只验证存在，不进命令行/日志）
+    credential(store, remote)?
+        .ok_or_else(|| crate::credentials::CredError::Missing(credential_name(remote)))?;
+    let out = crate::git::run(repo, &["push", "-u", remote, baseline])?;
+    Ok(PushOutcome {
+        remote: remote.to_string(),
+        baseline: baseline.to_string(),
+        output: out,
+    })
 }
 
 /// 拒绝推送：标记已答 + 轨迹。

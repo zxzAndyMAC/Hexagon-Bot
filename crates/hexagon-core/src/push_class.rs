@@ -143,6 +143,19 @@ fn push_like(cmd: &str) -> bool {
 }
 
 fn strict(cmd: &str) -> Result<PushTarget, &'static str> {
+    let words = plain_git_push(cmd)?;
+    let (remote, refspec) = safe_positional(&words[2..])?;
+    if !valid_remote(remote) {
+        return Err("remote_not_named");
+    }
+    Ok(PushTarget {
+        remote: remote.to_string(),
+        branch: refspec_branch(refspec)?.to_string(),
+    })
+}
+
+/// 读回字面上的 `git push …`：没有 shell 结构、能解析、读回的词与原文逐字一致、前两词正是 `git push`。
+fn plain_git_push(cmd: &str) -> Result<Vec<String>, &'static str> {
     if cmd.contains(SHELL_CONSTRUCTS) {
         return Err("shell_construct");
     }
@@ -156,12 +169,16 @@ fn strict(cmd: &str) -> Result<PushTarget, &'static str> {
         words.first().map(String::as_str),
         words.get(1).map(String::as_str),
     ) {
-        (Some("git"), Some("push")) => {}
-        (Some("git"), _) => return Err("git_global_option"),
-        _ => return Err("not_plain_git"),
+        (Some("git"), Some("push")) => Ok(words),
+        (Some("git"), _) => Err("git_global_option"),
+        _ => Err("not_plain_git"),
     }
+}
+
+/// `git push` 之后的词：选项只许 [`SAFE_OPTIONS`]，非选项词必须恰好两个（远端 + refspec）。
+fn safe_positional(args: &[String]) -> Result<(&str, &str), &'static str> {
     let mut positional = Vec::new();
-    for w in &words[2..] {
+    for w in args {
         if w.starts_with('-') {
             if !SAFE_OPTIONS.contains(&w.as_str()) {
                 return Err(option_code(w));
@@ -170,16 +187,15 @@ fn strict(cmd: &str) -> Result<PushTarget, &'static str> {
             positional.push(w.as_str());
         }
     }
-    let [remote, refspec] = positional[..] else {
-        return Err(if positional.len() < 2 {
-            "implicit_target"
-        } else {
-            "multiple_refspecs"
-        });
-    };
-    if !valid_remote(remote) {
-        return Err("remote_not_named");
+    match positional[..] {
+        [remote, refspec] => Ok((remote, refspec)),
+        _ if positional.len() < 2 => Err("implicit_target"),
+        _ => Err("multiple_refspecs"),
     }
+}
+
+/// refspec 推到的目标分支：只认普通分支（可带 `refs/heads/`），源是 HEAD 或普通分支。
+fn refspec_branch(refspec: &str) -> Result<&str, &'static str> {
     if refspec.starts_with('+') {
         return Err("plus_refspec");
     }
@@ -201,10 +217,7 @@ fn strict(cmd: &str) -> Result<PushTarget, &'static str> {
     if !(valid_branch(dst) && (src == "HEAD" || valid_branch(src))) {
         return Err("branch_not_plain");
     }
-    Ok(PushTarget {
-        remote: remote.to_string(),
-        branch: dst.to_string(),
-    })
+    Ok(dst)
 }
 
 fn option_code(opt: &str) -> &'static str {

@@ -119,19 +119,29 @@ pub fn resolve(positional: &[&str], facts: &RepoFacts) -> Option<PushTarget> {
         (Some(_), Some(None)) => return None,
         _ => None,
     };
+    default_branch(facts, current, remote, upstream).and_then(target)
+}
+
+/// 无 refspec 时按 `push.default`（缺省 simple）推到的分支。`upstream` = (上游远端, 上游分支)。
+fn default_branch<'a>(
+    facts: &RepoFacts,
+    current: &'a str,
+    remote: &str,
+    upstream: Option<(&str, &'a str)>,
+) -> Option<&'a str> {
     let mode = facts
         .get("push.default")
         .map(str::to_ascii_lowercase)
         .unwrap_or_else(|| "simple".into());
     match mode.as_str() {
-        "current" => target(current),
+        "current" => Some(current),
         "simple" => match upstream {
-            Some((r, b)) if r == remote => (b == current).then(|| target(current)).flatten(),
-            Some(_) => target(current),
+            Some((r, b)) if r == remote => (b == current).then_some(current),
+            Some(_) => Some(current),
             None => None,
         },
         "upstream" | "tracking" => match upstream {
-            Some((r, b)) if r == remote => target(b),
+            Some((r, b)) if r == remote => Some(b),
             _ => None,
         },
         _ => None,
