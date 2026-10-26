@@ -98,14 +98,33 @@ pub fn propose(
         );
         return Err(ReleaseRunError::ReleaseSecretSuspected);
     }
-    let draft = ReleaseTargetDraft {
-        id: None,
-        name: targets::normalize_name(&raw.name)?,
-        command: targets::normalize_command(&raw.command)?,
-        cwd: targets::normalize_cwd(&raw.cwd)?,
-        credentials: targets::normalize_credentials(&raw.credentials)?,
+    // ticket 33（2026-10-25 批次审查 S4，原票 #16）：拒绝分支都记 Warn（AGENTS「诊断记录」：门面拒绝记 Warn），
+    // 原先只有疑似凭据一支有记录，形状不合 / 重名拒绝在手测时对不上「走了哪一支」。
+    let shaped = (|| -> Result<ReleaseTargetDraft, ReleaseError> {
+        Ok(ReleaseTargetDraft {
+            id: None,
+            name: targets::normalize_name(&raw.name)?,
+            command: targets::normalize_command(&raw.command)?,
+            cwd: targets::normalize_cwd(&raw.cwd)?,
+            credentials: targets::normalize_credentials(&raw.credentials)?,
+        })
+    })();
+    let draft = match shaped {
+        Ok(d) => d,
+        Err(e) => {
+            let code = crate::errcode::variant_code(&e);
+            note("release_propose", true, Some(agent_id), None, &code);
+            return Err(e.into());
+        }
     };
     if targets::names(db, project_id)?.contains(&draft.name) {
+        note(
+            "release_propose",
+            true,
+            Some(agent_id),
+            None,
+            "release_name_taken",
+        );
         return Err(ReleaseError::ReleaseNameTaken(draft.name).into());
     }
     let payload = json!({
@@ -228,10 +247,25 @@ pub fn approve(
         return Err(ReleaseError::ReleaseSecretInTarget.into());
     }
     drop(stored);
+    // ticket 33 S4：重名 / 认领失败两支拒绝补 Warn。
     if targets::names(db, project_id)?.contains(&draft.name) {
+        note(
+            "release_proposal_approve",
+            true,
+            None,
+            Some(qid),
+            "release_name_taken",
+        );
         return Err(ReleaseError::ReleaseNameTaken(draft.name).into());
     }
     if !crate::cards::claim(db, project_id, qid, CardKind::ReleaseTarget, by)? {
+        note(
+            "release_proposal_approve",
+            true,
+            None,
+            Some(qid),
+            "release_proposal_answered",
+        );
         return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));
     }
     match targets::save(db, project_id, store, &draft) {
@@ -273,6 +307,13 @@ pub fn approve(
 pub fn reject(db: &Db, project_id: &str, qid: &str, by: &str) -> Result<(), ReleaseRunError> {
     let card = card(db, project_id, qid)?;
     if !crate::cards::claim(db, project_id, qid, CardKind::ReleaseTarget, by)? {
+        note(
+            "release_proposal_reject",
+            true,
+            None,
+            Some(qid),
+            "release_proposal_answered",
+        );
         return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));
     }
     let name = card.payload["name"]
