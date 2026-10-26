@@ -324,9 +324,9 @@ function openWithItems(t: TFunction, target: string | null, targetApps: OpenWith
 
 /** 「打开方式」视图没有行时说清为什么：还在读 / 读失败 / 本机没有可用编辑器。 */
 function openWithEmptyKey(a: OpenWithState, b: OpenWithState): string {
-  if (a.kind === 'error' || b.kind === 'error') return 'ctx.openWithError'
-  if (b.kind === 'loading') return 'ctx.openWithLoading'
-  return 'ctx.openWithEmpty'
+  if (a.kind === 'error' || b.kind === 'error') return 'ctx.openWithAppsError'
+  if (b.kind === 'loading') return 'ctx.openWithAppsLoading'
+  return 'ctx.openWithNoApps'
 }
 
 /** #13 推送项：有上游（或还没读到目标）= 一项「推送」，描述写目标远程；

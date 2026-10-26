@@ -118,14 +118,15 @@ describe('「打开方式」子菜单（A16b）', () => {
     expect(menu()).toBeNull()
   })
 
-  it('空列表：一行禁用「未找到可用的编辑器」', async () => {
+  it('空列表：一行禁用「未找到可用的应用」', async () => {
     vi.mocked(api.openWithCandidates).mockResolvedValue([])
     await act(async () => { await i18n.changeLanguage('zh-CN') })
     await rightClick(treeitem('src'))
     expect(api.openWithCandidates).toHaveBeenCalledWith('src')
     await openSub()
     const row = sub()!.querySelector<HTMLElement>('[data-open-with-empty]')!
-    expect(row.textContent).toBe('未找到可用的编辑器')
+    // ticket 33 L2（2026-10-25 批次审查，#32 修复项）：文案「编辑器」→「应用」，#32 起候选含系统列表里的非编辑器
+    expect(row.textContent).toBe('未找到可用的应用')
     expect(row.dataset.disabled).toBe('')
   })
 
@@ -134,7 +135,8 @@ describe('「打开方式」子菜单（A16b）', () => {
     await rightClick(treeitem('README.md'))
     await openSub()
     const err = sub()!.querySelector<HTMLElement>('[data-open-with-error]')!
-    expect(err.textContent).toBe('Couldn’t list editorsRetry')
+    // ticket 33 L2：「editors」→「apps」，同上
+    expect(err.textContent).toBe('Couldn’t list appsRetry')
     expect(err.className).toContain('text-red-ink')
     await act(async () => { err.click() })
     await flush()
