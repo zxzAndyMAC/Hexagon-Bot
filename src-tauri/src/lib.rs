@@ -2975,7 +2975,7 @@ fn approve_release_target_card(
         PROJECT_ID,
         &qid,
         &*hexagon_core::credentials::active(),
-        "owner",
+        &hexagon_core::release::Decider::Owner,
     )
     .map_err(cmd_err)
 }
@@ -2983,7 +2983,13 @@ fn approve_release_target_card(
 #[tauri::command(async)]
 fn reject_release_target_card(state: ProjectState<'_>, qid: String) -> Result<(), CmdError> {
     let db = release_db(&state)?;
-    hexagon_core::release_chat::reject(&db, PROJECT_ID, &qid, "owner").map_err(cmd_err)
+    hexagon_core::release_chat::reject(
+        &db,
+        PROJECT_ID,
+        &qid,
+        &hexagon_core::release::Decider::Owner,
+    )
+    .map_err(cmd_err)
 }
 
 #[tauri::command]

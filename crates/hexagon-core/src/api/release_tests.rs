@@ -253,7 +253,7 @@ fn a_hung_release_is_killed_at_the_timeout() {
         crate::PROJECT_ID,
         &qid,
         fx.wb.creds.as_ref(),
-        "owner",
+        &crate::release::Decider::Owner,
         std::time::Duration::from_millis(300),
     )
     .unwrap_err();
@@ -386,7 +386,7 @@ fn a_card_read_failure_is_reported_not_called_unknown() {
     let pid = crate::PROJECT_ID;
     // 卡种不符：发布卡交给拟稿裁决 → 拟稿未知；不存在的卡 → 发布未知
     assert_eq!(
-        crate::release_chat::approve(db, pid, &qid, store, "owner")
+        crate::release_chat::approve(db, pid, &qid, store, &crate::release::Decider::Owner)
             .unwrap_err()
             .code(),
         "release_proposal_unknown"
@@ -401,8 +401,9 @@ fn a_card_read_failure_is_reported_not_called_unknown() {
     let errs = [
         crate::release::confirm(db, pid, &qid, store).unwrap_err(),
         crate::release::reject(db, pid, &qid).unwrap_err(),
-        crate::release_chat::approve(db, pid, &qid, store, "owner").unwrap_err(),
-        crate::release_chat::reject(db, pid, &qid, "owner").unwrap_err(),
+        crate::release_chat::approve(db, pid, &qid, store, &crate::release::Decider::Owner)
+            .unwrap_err(),
+        crate::release_chat::reject(db, pid, &qid, &crate::release::Decider::Owner).unwrap_err(),
     ];
     for e in errs {
         assert!(

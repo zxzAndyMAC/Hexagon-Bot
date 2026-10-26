@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use crate::cards::{CardKind, CardState};
 use crate::credentials::CredentialStore;
 use crate::db::Db;
-use crate::release::ReleaseRunError;
+use crate::release::{Decider, ReleaseRunError};
 use crate::release_targets::{self as targets, ReleaseError, ReleaseTarget, ReleaseTargetDraft};
 use crate::tools::{RiskClass, Tool, ToolContext, ToolError};
 use crate::trace::EventKind;
@@ -202,13 +202,15 @@ pub fn approve(
     project_id: &str,
     qid: &str,
     store: &dyn CredentialStore,
-    by: &str,
+    decider: &Decider,
 ) -> Result<ReleaseTarget, ReleaseRunError> {
+    let by = decider.label();
     let card = card(db, project_id, qid)?;
     // ADR 0093 后续裁决「托管不得新登记」：裁决人不是负责人（`managed:<grant>:<gen>` 等）一律拒绝。
     // 今天托管路径到不了这里（decision_key 不接管本卡种）；这一道是以后加路径时的默认拒绝。
     // 代价模型：误拒只让非负责人的调用报错；漏放是托管登记了一条它随后可以代批执行的命令。
-    if by != "owner" {
+    // ticket 33 S6：按类型判，不比较标签字符串（`Delegate("owner")` 也拒）。
+    if *decider != Decider::Owner {
         note(
             "release_proposal_approve",
             true,
@@ -304,7 +306,13 @@ pub fn approve(
 }
 
 /// 驳回拟稿：认领 + 轨迹，什么都不登记。
-pub fn reject(db: &Db, project_id: &str, qid: &str, by: &str) -> Result<(), ReleaseRunError> {
+pub fn reject(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    decider: &Decider,
+) -> Result<(), ReleaseRunError> {
+    let by = decider.label();
     let card = card(db, project_id, qid)?;
     if !crate::cards::claim(db, project_id, qid, CardKind::ReleaseTarget, by)? {
         note(

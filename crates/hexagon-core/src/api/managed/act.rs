@@ -155,13 +155,18 @@ impl Workbench {
                     &self.project_id,
                     &card.id,
                     self.creds.as_ref(),
-                    &self.decider(),
+                    &self.release_decider(),
                     crate::release::RELEASE_TIMEOUT,
                 )?;
                 "released"
             }
             ("release", _, _) => {
-                crate::release::reject_by(&self.db, &self.project_id, &card.id, &self.decider())?;
+                crate::release::reject_by(
+                    &self.db,
+                    &self.project_id,
+                    &card.id,
+                    &self.release_decider(),
+                )?;
                 "not_released"
             }
             // The confirmation rechecks its own facts again at execution.

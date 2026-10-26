@@ -169,6 +169,15 @@ fn delegation_never_approves_a_registration_card() {
             "release_owner_only"
         );
     }
+    // ticket 33（2026-10-25 批次审查 S6）：owner-only 按类型判。原先 `by != "owner"` 字符串比较，
+    // 作用域标签恰好写作 `owner` 的代理就能过闸；现在作用域内一律是 Decider::Delegate。
+    {
+        let _acting = wb.acting_as("owner");
+        assert_eq!(
+            wb.approve_release_target_card(&qid).unwrap_err().code(),
+            "release_owner_only"
+        );
+    }
     assert!(wb.release_targets().unwrap().is_empty());
     assert_eq!(cards_of(&wb, "release_target").len(), 1);
 }
@@ -350,7 +359,7 @@ fn refusals_write_warn_diagnostic_records() {
     let qid = crate::release_chat::propose(db, pid, "a0", &draft("docs")).unwrap();
     register(&wb, "docs", "npm run docs", &[]);
     assert_eq!(
-        crate::release_chat::approve(db, pid, &qid, store, "owner")
+        crate::release_chat::approve(db, pid, &qid, store, &crate::release::Decider::Owner)
             .unwrap_err()
             .code(),
         "release_name_taken"

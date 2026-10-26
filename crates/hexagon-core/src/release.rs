@@ -39,6 +39,29 @@ const CAPTURE_BYTES: usize = 1 << 20;
 /// 凭据值在输出里的替换文。
 pub const REDACTED: &str = "[redacted]";
 
+/// 裁决人（发布 / 登记拟稿的确认与驳回入口共用）。ticket 33（2026-10-25 批次审查 S6，原票 #16「托管不得新登记」）：
+/// 「只有负责人」原先靠 `by != "owner"` 字符串比较——任何把字面量 `owner` 当裁决人标签传进来的路径（托管 actor 名、
+/// 手拼的 `managed:*`）都能冒充负责人。改成类型：负责人只有壳层的负责人按钮与工作台无托管作用域时构造，
+/// 托管作用域下一律是 [`Decider::Delegate`]，标签只用于认领与轨迹，不参与判定。
+/// 代价模型：误拒 = 非负责人的调用报 `release_owner_only`；漏放 = 托管登记一条随后可代批执行的命令。偏向拒。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decider {
+    /// 负责人亲手裁决。
+    Owner,
+    /// 代理裁决人（托管 `managed:<grant>:<gen>` 等），携带轨迹标签。
+    Delegate(String),
+}
+
+impl Decider {
+    /// 认领与轨迹里的 `by` 字样。
+    pub fn label(&self) -> &str {
+        match self {
+            Decider::Owner => "owner",
+            Decider::Delegate(actor) => actor,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ReleaseRunError {
     #[error("unknown release question: {0}")]
@@ -265,7 +288,7 @@ pub fn confirm(
     qid: &str,
     store: &dyn CredentialStore,
 ) -> Result<ReleaseOutcome, ReleaseRunError> {
-    confirm_by(db, project_id, qid, store, "owner", RELEASE_TIMEOUT)
+    confirm_by(db, project_id, qid, store, &Decider::Owner, RELEASE_TIMEOUT)
 }
 
 /// 确认发布（负责人或托管裁决人）：前置闸 → 原子认领 → 执行 → 落轨迹。
@@ -274,9 +297,10 @@ pub fn confirm_by(
     project_id: &str,
     qid: &str,
     store: &dyn CredentialStore,
-    by: &str,
+    decider: &Decider,
     timeout: Duration,
 ) -> Result<ReleaseOutcome, ReleaseRunError> {
+    let by = decider.label();
     let started = Instant::now();
     // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张发布卡才是「未知」。
     let card = crate::cards::get_kind(db, project_id, qid, CardKind::Release)?
@@ -396,10 +420,16 @@ impl From<ReleaseRunError> for RunFailure {
 
 /// 驳回发布：认领 + 轨迹。
 pub fn reject(db: &Db, project_id: &str, qid: &str) -> Result<(), ReleaseRunError> {
-    reject_by(db, project_id, qid, "owner")
+    reject_by(db, project_id, qid, &Decider::Owner)
 }
 
-pub fn reject_by(db: &Db, project_id: &str, qid: &str, by: &str) -> Result<(), ReleaseRunError> {
+pub fn reject_by(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    decider: &Decider,
+) -> Result<(), ReleaseRunError> {
+    let by = decider.label();
     // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张发布卡才是「未知」。
     let card = crate::cards::get_kind(db, project_id, qid, CardKind::Release)?
         .ok_or_else(|| ReleaseRunError::ReleaseQuestionUnknown(qid.into()))?;
