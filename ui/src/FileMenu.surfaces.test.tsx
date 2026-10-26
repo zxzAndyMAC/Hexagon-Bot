@@ -13,6 +13,7 @@ import { Canvas } from './components/shell/Canvas'
 import { MessageContextMenu } from './components/MessageMenu'
 import { Timeline, ToolGroupRow } from './components/Timeline'
 import type { TimelineItem } from './api'
+import { ToolExecCard } from './components/ExecCard'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent, scrollerRef }: { data: unknown[]; itemContent: (i: number, row: unknown) => ReactNode; scrollerRef: (node: HTMLElement | null) => void }) =>
@@ -167,5 +168,23 @@ describe('工具调用文件 chip（#32 表面 4）', () => {
     await flush()
     await rightClick(chips[1])
     expect(items()).toEqual(['open'])
+  })
+})
+
+describe('执行卡卡头路径（#32 表面 7）', () => {
+  const call = (tool: string, input: Record<string, unknown>) => ({
+    called: ev(1, 'tool_called', { tool, input, seq: 'r1:i0' }),
+    result: ev(2, 'tool_result', { tool, ok: true, result: { output: {} } }),
+  })
+  it('fs_patch：卡头右键 = 全套，「打开」开文件页签；bash 卡不挂文件菜单', async () => {
+    const host = await render(<><ToolExecCard call={call('fs_patch', { path: '/proj/src/a.ts', old: 'a', new: 'b' })} />
+      <div data-bash><ToolExecCard call={call('bash', { cmd: 'ls' })} /></div></>)
+    await rightClick(host.querySelector('.exec-head')!)
+    expect(items()).toEqual(FULL)
+    await act(async () => { menu()!.querySelector<HTMLElement>('[data-ctx-item="open"]')!.click() })
+    expect(useUiStore.getState().activeTab).toBe('file:src/a.ts')
+    await flush()
+    await rightClick(host.querySelector('[data-bash] .exec-head')!)
+    expect(menu()).toBeNull()
   })
 })
