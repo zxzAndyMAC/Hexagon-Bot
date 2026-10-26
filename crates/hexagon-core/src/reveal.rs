@@ -40,6 +40,27 @@ pub enum RevealError {
     RevealLaunch(String),
 }
 
+/// 根约束判定本身的拒绝原因（[`resolve_in_root`]）。只有两种——越界、不存在；不含「启动失败」，
+/// 那是揭示 / 打开方式各自宿主侧的事。ticket 33（2026-10-25 批次审查 S10）：原来直接返 [`RevealError`]，
+/// 「打开方式」复用时不得不把 `RevealLaunch` 这个判定永远不会产生的变体也映射一遍（映到「缺失」，语义是错的）。
+/// 不进 IPC，调用方各自映射到自己的错误面（`reveal_*` / `open_with_*`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InRootError {
+    /// 规范化后不在项目根内（含绝对路径、`..` 越根、符号链接指向仓外）。
+    Outside(String),
+    /// 项目内没有这条路径（或根本身读不到）。
+    Missing(String),
+}
+
+impl From<InRootError> for RevealError {
+    fn from(e: InRootError) -> Self {
+        match e {
+            InRootError::Outside(p) => RevealError::RevealOutsideProject(p),
+            InRootError::Missing(p) => RevealError::RevealMissing(p),
+        }
+    }
+}
+
 /// 词法规范化：`rel` 相对根，返回消解 `.` / `..` 后的段；越根、绝对、含 NUL → `None`。
 /// 空串 / `.` = 根本身（`Some(vec![])`）。分隔符 `/` 与 `\` 同等对待（Windows 树路径）。
 pub fn normalize_rel(rel: &str) -> Option<Vec<String>> {
@@ -79,7 +100,7 @@ fn looks_absolute(rel: &str) -> bool {
 /// 拒绝记 Warn 诊断（分类「拒绝」，分支 `reveal_path`，码 = 错误码）。
 pub fn reveal_target(root: &Path, rel: &str) -> Result<PathBuf, RevealError> {
     let started = std::time::Instant::now();
-    let out = resolve_in_root(root, rel);
+    let out = resolve_in_root(root, rel).map_err(RevealError::from);
     if let Err(e) = &out {
         crate::diag::note(
             crate::diag::CLASS_REJECT,
@@ -97,22 +118,21 @@ pub fn reveal_target(root: &Path, rel: &str) -> Result<PathBuf, RevealError> {
 }
 
 /// 同一根约束判定，不写诊断——给别的入口复用（#31「打开方式」用它判路径，诊断分支记自己的）。
-pub fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, RevealError> {
+pub fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, InRootError> {
     let shown = || rel.trim().to_string();
-    let segs =
-        normalize_rel(rel.trim()).ok_or_else(|| RevealError::RevealOutsideProject(shown()))?;
-    let base = std::fs::canonicalize(root).map_err(|_| RevealError::RevealMissing(shown()))?;
+    let segs = normalize_rel(rel.trim()).ok_or_else(|| InRootError::Outside(shown()))?;
+    let base = std::fs::canonicalize(root).map_err(|_| InRootError::Missing(shown()))?;
     let mut lexical = base.clone();
     lexical.extend(&segs);
     let real = match std::fs::canonicalize(&lexical) {
         Ok(p) => p,
         // 悬空链接 / 不存在：区分不出来也不必区分——都没有东西可揭示。
-        Err(_) => return Err(RevealError::RevealMissing(shown())),
+        Err(_) => return Err(InRootError::Missing(shown())),
     };
     if real.starts_with(&base) {
         Ok(real)
     } else {
-        Err(RevealError::RevealOutsideProject(shown()))
+        Err(InRootError::Outside(shown()))
     }
 }
 
@@ -186,6 +206,25 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn root_guard_reports_only_outside_or_missing() {
+        // ticket 33（2026-10-25 批次审查 S10）：根约束判定有自己的错误类型，只有越界 / 缺失；
+        // 揭示把它映到 reveal_*，「打开方式」映到 open_with_*，谁都不再借对方的「启动失败」变体。
+        let (_t, root) = fixture();
+        assert_eq!(
+            resolve_in_root(&root, "../outside"),
+            Err(InRootError::Outside("../outside".into()))
+        );
+        assert_eq!(
+            resolve_in_root(&root, "nope.txt"),
+            Err(InRootError::Missing("nope.txt".into()))
+        );
+        assert_eq!(
+            crate::errcode::variant_code(&RevealError::from(InRootError::Missing("x".into()))),
+            "reveal_missing"
+        );
+    }
+
     #[test]
     fn symlinks_are_judged_after_resolution() {
         let (_t, root) = fixture();

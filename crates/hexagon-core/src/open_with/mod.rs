@@ -39,7 +39,7 @@
 #[cfg(target_os = "macos")]
 mod macos;
 
-use crate::reveal::{resolve_in_root, RevealError};
+use crate::reveal::{resolve_in_root, InRootError};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -326,11 +326,10 @@ pub enum OpenWithError {
 }
 
 fn resolve(root: &Path, rel: &str) -> Result<PathBuf, OpenWithError> {
+    // ticket 33 S10：判定只会给越界 / 缺失两种，穷尽映射（原先借 RevealError，要把 RevealLaunch 硬映成「缺失」）。
     resolve_in_root(root, rel).map_err(|e| match e {
-        RevealError::RevealOutsideProject(p) => OpenWithError::OpenWithOutsideProject(p),
-        RevealError::RevealMissing(p) | RevealError::RevealLaunch(p) => {
-            OpenWithError::OpenWithMissing(p)
-        }
+        InRootError::Outside(p) => OpenWithError::OpenWithOutsideProject(p),
+        InRootError::Missing(p) => OpenWithError::OpenWithMissing(p),
     })
 }
 
