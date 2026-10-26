@@ -410,7 +410,8 @@ function OwnerMessage({ item, steered, turnBoundary, turnActive, story }: {
       {/* 票 03：图片附件引用 chip（D3 只读形，在气泡上方）——字节在 .hexagon/inbox/，渲染引用不渲染图本体 */}
       {m.attachments?.length > 0 && (
         <div className="tl-me-files">
-          {m.attachments.map((a) => <CodeChip key={a.path} file>{a.name}</CodeChip>)}
+          {/* #32：data-file-path 让消息菜单在 chip 上右键时换成文件菜单（MessageMenu） */}
+          {m.attachments.map((a) => <span key={a.path} data-file-path={a.path} className="contents"><CodeChip file>{a.name}</CodeChip></span>)}
         </div>
       )}
       <div className="tl-me-row">

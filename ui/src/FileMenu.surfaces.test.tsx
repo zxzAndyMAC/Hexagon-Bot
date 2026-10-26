@@ -10,6 +10,7 @@ import { useUiStore } from './store'
 import { TooltipProvider } from './components/ui/tooltip'
 import { ArtifactList } from './components/shell/ArtifactList'
 import { Canvas } from './components/shell/Canvas'
+import { MessageContextMenu } from './components/MessageMenu'
 import type { ArtifactRow } from './gen/ArtifactRow'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -91,5 +92,35 @@ describe('画布空态最近产物（#32 表面 2）', () => {
     await flush()
     await rightClick(rows[1])
     expect(items()).toEqual(['open'])
+  })
+})
+
+describe('时间线消息里的 # 路径块与附件 chip（#32 表面 5、6）', () => {
+  const msg = (
+    <MessageContextMenu eventId={7} body="see #src/a.rs">
+      <span data-file-path=".hexagon/inbox/shot.png"><span data-chip>shot.png</span></span>
+      <button type="button" data-atom-path="src/a.rs">#src/a.rs</button>
+      <button type="button" data-atom-path="docs/">#docs/</button>
+      <p data-plain>plain text</p>
+    </MessageContextMenu>
+  )
+  it('路径块上右键 = 文件菜单（含「打开」，不出消息项）；目录块无「打开」', async () => {
+    const host = await render(msg)
+    await rightClick(host.querySelector('[data-atom-path="src/a.rs"]')!)
+    expect(items()).toEqual(FULL)
+    await act(async () => { menu()!.querySelector<HTMLElement>('[data-ctx-item="open"]')!.click() })
+    expect(useUiStore.getState().activeTab).toBe('file:src/a.rs')
+    await rightClick(host.querySelector('[data-atom-path="docs/"]')!)
+    expect(items()).toEqual(NO_OPEN)
+  })
+  it('附件 chip 上右键 = 无「打开」的文件菜单；正文空白处仍是消息菜单', async () => {
+    const host = await render(msg)
+    await rightClick(host.querySelector('[data-chip]')!)
+    expect(items()).toEqual(NO_OPEN)
+    expect(api.openWithCandidates).toHaveBeenCalledWith('.hexagon/inbox/shot.png')
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await flush()
+    await rightClick(host.querySelector('[data-plain]')!)
+    expect(items()).toEqual(['copy', 'quote'])
   })
 })
