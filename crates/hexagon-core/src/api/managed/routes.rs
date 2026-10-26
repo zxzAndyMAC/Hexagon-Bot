@@ -55,10 +55,16 @@ pub(crate) fn decision_key(card: &crate::cards::QueuedCard) -> Option<String> {
         // stays a safety net the delegation never answers — not even "deny" —
         // so the card stays with the owner. Read from the persisted raw input
         // (the bytes that run), not a payload label. Ordinary pushes are taken over.
+        // Ticket 33 P1 (#13 owner ruling A, 2026-10-25): an implicit-target push the
+        // host resolved to one branch at ask time follows ordinary-push rules; the
+        // only payload fact trusted is that host-written resolution (from_card).
         ("permission", _)
             if p["tool"] == "bash"
                 && matches!(
-                    crate::push_class::classify(p["raw_input"]["cmd"].as_str().unwrap_or("")),
+                    crate::push_class::from_card(
+                        p["raw_input"]["cmd"].as_str().unwrap_or(""),
+                        &p["push"]
+                    ),
                     crate::push_class::PushClass::Force(_)
                 ) =>
         {

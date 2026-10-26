@@ -160,7 +160,13 @@ fn force_push_always_asks_is_never_remembered_and_delegation_leaves_it() {
         "git push --force-with-lease origin main",
         "git push origin +main",
         "git push origin :main",
+        // Ticket 33 P1 changed what this row means: an implicit target is now
+        // resolved from the repo (#13 owner ruling A, 2026-10-25). This fixture's
+        // current branch has no upstream, so bare `git push` still cannot be
+        // resolved and stays the safety net (see the implicit-target test below).
         "git push",
+        // Resolvable remote, but HEAD:HEAD pushes to a literal refs/heads/HEAD.
+        "git push origin HEAD:HEAD",
     ] {
         let card = asked(wb, cmd).unwrap_or_else(|| panic!("{cmd} must ask"));
         assert_eq!(card.payload["safety_net"], true, "{cmd}");
@@ -239,4 +245,77 @@ fn push_targets_follow_the_baseline_upstream_or_let_the_owner_choose() {
     // An upstream naming a remote that no longer exists is no upstream.
     crate::git::run(fx.work.path(), &["config", "branch.main.remote", "gone"]).unwrap();
     assert_eq!(wb.push_targets().unwrap().upstream, None);
+}
+
+fn current_branch(work: &std::path::Path) -> String {
+    crate::git::run(work, &["symbolic-ref", "--short", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// Give the current branch a same-name upstream on `origin`, push.default=simple.
+fn track_origin(work: &std::path::Path) -> String {
+    let cur = current_branch(work);
+    crate::git::run(work, &["config", "push.default", "simple"]).unwrap();
+    crate::git::run(work, &["push", "-q", "origin", &format!("{cur}:{cur}")]).unwrap();
+    crate::git::run(
+        work,
+        &["branch", "-q", &format!("--set-upstream-to=origin/{cur}")],
+    )
+    .unwrap();
+    cur
+}
+
+#[test]
+fn implicit_target_push_that_resolves_is_an_ordinary_push_card() {
+    // Ticket 33 P1 (#13 owner ruling A, 2026-10-25): bare `git push`, `git push
+    // origin` and `git push -u origin HEAD` whose target resolves to one branch
+    // are the same push card, remembered under the same push: key, and taken
+    // over by delegation like an ordinary push.
+    let fx = fixture();
+    let wb = &fx.wb;
+    let cur = track_origin(fx.work.path());
+    let card = asked(wb, "git push").expect("an unremembered push asks");
+    assert_eq!(
+        card.payload["safety_net"], false,
+        "resolved: not a safety net"
+    );
+    assert_eq!(card.payload["reason"], format!("push: origin {cur}"));
+    assert_eq!(
+        card.payload["push"],
+        json!({"force": false, "remote": "origin", "branch": cur})
+    );
+    let proposal = permission_shape_suggestion(&wb.db, &wb.project_id, &card.id)
+        .unwrap()
+        .expect("a resolved push can be allowed for the project");
+    assert_eq!(proposal.shape, format!("push:origin {cur}"));
+    wb.allow_project_permission(&card.id).unwrap();
+    for cmd in [
+        "git push".to_string(),
+        "git push origin".to_string(),
+        "git push -u origin HEAD".to_string(),
+        format!("git push origin {cur}"),
+    ] {
+        assert!(asked(wb, &cmd).is_none(), "{cmd}: same push: key, no card");
+    }
+    assert!(
+        asked(wb, "git push backup").is_some(),
+        "no upstream on backup"
+    );
+
+    // Delegation takes a resolved implicit-target push over like an ordinary one.
+    let fx = fixture();
+    let wb = &fx.wb;
+    track_origin(fx.work.path());
+    let implicit = asked(wb, "git push").unwrap();
+    crate::delegation::enable(&wb.db, &wb.project_id).unwrap();
+    assert!(owner_pending(&wb.db, &wb.project_id).unwrap().is_empty());
+    let planned: Vec<String> = wb
+        .managed_plan()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.card_id)
+        .collect();
+    assert!(planned.contains(&implicit.id), "{planned:?}");
 }

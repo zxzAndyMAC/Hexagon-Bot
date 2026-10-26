@@ -615,7 +615,7 @@ impl Registry {
                             "provenance": prov, "known_world": world,
                             "remote_delta": delta, "screenshot": screenshot, "app": app,
                             // owner-followups-1015 #13：推送卡形的展示事实（判定不读它）
-                            "push": crate::push_class::card_facts(name, &input) }),
+                            "push": crate::push_class::card_facts(name, &input, Some(&ctx.repo_root)) }),
                         idem_key.as_deref(),
                     )?;
                     crate::actions::set_question(db, ctx, &action.id, &qid)?;

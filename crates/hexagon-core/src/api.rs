@@ -5408,10 +5408,17 @@ pub fn permission_shape_suggestion(
     if !card.payload["input"].is_null() && card.payload["input"][target_key] != input[target_key] {
         return Ok(None);
     }
+    // Ticket 33 P1: no repo here; a resolved implicit-target push takes the target the
+    // host recorded at ask time (push_class::from_card), everything else re-reads the bytes.
+    let push = if tool == "bash" {
+        crate::push_class::from_card(input["cmd"].as_str().unwrap_or(""), &card.payload["push"])
+    } else {
+        crate::push_class::PushClass::NotPush
+    };
     let proposal = if card.payload["safety_net"] == true {
         None
     } else {
-        crate::permission_suggestion::suggest(tool, input)
+        crate::permission_suggestion::suggest_with(tool, input, &push)
     };
     crate::diag::note(
         crate::diag::CLASS_JUDGE,

@@ -63,6 +63,7 @@ pub mod provider_probe;
 pub mod provider_url;
 pub mod push;
 pub mod push_class;
+pub mod push_resolve;
 pub mod release;
 pub mod release_chat;
 pub mod release_secret;
