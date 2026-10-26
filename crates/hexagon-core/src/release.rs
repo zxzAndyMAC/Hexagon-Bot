@@ -278,9 +278,8 @@ pub fn confirm_by(
     timeout: Duration,
 ) -> Result<ReleaseOutcome, ReleaseRunError> {
     let started = Instant::now();
-    let card = crate::cards::get(db, qid)
-        .ok()
-        .filter(|c| c.kind == CardKind::Release.as_str() && c.project_id == project_id)
+    // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张发布卡才是「未知」。
+    let card = crate::cards::get_kind(db, project_id, qid, CardKind::Release)?
         .ok_or_else(|| ReleaseRunError::ReleaseQuestionUnknown(qid.into()))?;
     if card.state != CardState::Queued {
         return Err(ReleaseRunError::ReleaseAlreadyAnswered(qid.into()));
@@ -401,9 +400,8 @@ pub fn reject(db: &Db, project_id: &str, qid: &str) -> Result<(), ReleaseRunErro
 }
 
 pub fn reject_by(db: &Db, project_id: &str, qid: &str, by: &str) -> Result<(), ReleaseRunError> {
-    let card = crate::cards::get(db, qid)
-        .ok()
-        .filter(|c| c.kind == CardKind::Release.as_str() && c.project_id == project_id)
+    // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张发布卡才是「未知」。
+    let card = crate::cards::get_kind(db, project_id, qid, CardKind::Release)?
         .ok_or_else(|| ReleaseRunError::ReleaseQuestionUnknown(qid.into()))?;
     if !crate::cards::claim(db, project_id, qid, CardKind::Release, by)? {
         return Err(ReleaseRunError::ReleaseAlreadyAnswered(qid.into()));

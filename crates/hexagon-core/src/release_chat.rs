@@ -151,9 +151,8 @@ pub fn propose(
 }
 
 fn card(db: &Db, project_id: &str, qid: &str) -> Result<crate::cards::Card, ReleaseRunError> {
-    let card = crate::cards::get(db, qid)
-        .ok()
-        .filter(|c| c.kind == CardKind::ReleaseTarget.as_str() && c.project_id == project_id)
+    // ticket 33 S2：读失败如实上抛（`Cards`），只有真没有这张拟稿卡才是「未知」。
+    let card = crate::cards::get_kind(db, project_id, qid, CardKind::ReleaseTarget)?
         .ok_or_else(|| ReleaseRunError::ReleaseProposalUnknown(qid.into()))?;
     if card.state != CardState::Queued {
         return Err(ReleaseRunError::ReleaseProposalAnswered(qid.into()));

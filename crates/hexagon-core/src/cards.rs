@@ -342,6 +342,58 @@ pub fn get(db: &Db, qid: &str) -> Result<Card, CardsError> {
         )
 }
 
+/// 按 id 取某一卡种、属于 `project_id` 的卡（任意状态）：没有这张卡、卡种或项目不符 → `Ok(None)`；
+/// 数据库读失败如实上抛。ticket 33（2026-10-25 批次审查 S2，原票 #15 / #16）：发布与登记拟稿的裁决入口
+/// 曾写 `get(..).ok()`，把锁表 / I/O 这类读失败当成「未知卡」报给负责人（`release_question_unknown`），
+/// 掩盖了真正的故障；[`get`] 自身也把所有读错映成 `NotFound`，所以另起这个助手而不是在调用方 `.ok()`。
+pub fn get_kind(
+    db: &Db,
+    project_id: &str,
+    qid: &str,
+    kind: CardKind,
+) -> Result<Option<Card>, CardsError> {
+    use rusqlite::OptionalExtension;
+    let row = db
+        .conn()
+        .query_row(
+            "SELECT id, agent_id, payload, state, idem_key, answered_by
+             FROM pending_questions WHERE id=?1 AND project_id=?2 AND kind=?3",
+            rusqlite::params![qid, project_id, kind.as_str()],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row.map(
+        |(id, agent_id, payload, state, idem_key, answered_by)| Card {
+            id,
+            project_id: project_id.to_string(),
+            kind: kind.as_str().to_string(),
+            agent_id,
+            payload: serde_json::from_str(&payload).unwrap_or_default(),
+            state: CardState::from_str(&state),
+            idem_key,
+            answered_by,
+        },
+    ))
+}
+
+/// 测试接缝：让之后的卡读取全部失败（表改名），用来钉「读失败如实上抛」（ticket 33 S2）。
+/// 放在属主模块里，测试不在别处直接写 pending_questions（D04）。
+#[cfg(test)]
+pub(crate) fn break_reads_for_test(db: &Db) {
+    db.conn()
+        .execute_batch("ALTER TABLE pending_questions RENAME TO pending_questions_gone")
+        .unwrap();
+}
+
 /// The queued card holding one idempotency key, if any (managed-followups
 /// ticket 03: a role's model-request item is located by its request key).
 pub fn queued_by_key(db: &Db, project_id: &str, key: &str) -> Result<Option<String>, CardsError> {
@@ -604,6 +656,38 @@ mod tests {
             )
             .unwrap();
         db
+    }
+
+    #[test]
+    fn get_kind_separates_absent_from_read_failure() {
+        // ticket 33（2026-10-25 批次审查 S2）：不存在 / 卡种不符 / 项目不符 = Ok(None)；读库失败 = Err。
+        let db = db();
+        let qid = enqueue(
+            &db,
+            "p1",
+            Some("a1"),
+            CardKind::Release,
+            serde_json::json!({"target_id":"t1"}),
+            None,
+        )
+        .unwrap();
+        let card = get_kind(&db, "p1", &qid, CardKind::Release)
+            .unwrap()
+            .unwrap();
+        assert_eq!(card.kind, "release");
+        assert_eq!(card.state, CardState::Queued);
+        assert_eq!(card.payload["target_id"], "t1");
+        assert!(get_kind(&db, "p1", &qid, CardKind::ReleaseTarget)
+            .unwrap()
+            .is_none());
+        assert!(get_kind(&db, "p2", &qid, CardKind::Release)
+            .unwrap()
+            .is_none());
+        assert!(get_kind(&db, "p1", "q-nope", CardKind::Release)
+            .unwrap()
+            .is_none());
+        break_reads_for_test(&db);
+        assert!(get_kind(&db, "p1", &qid, CardKind::Release).is_err());
     }
 
     #[test]
